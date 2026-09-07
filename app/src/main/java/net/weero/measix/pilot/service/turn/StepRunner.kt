@@ -11,6 +11,9 @@ import net.weero.measix.pilot.data.ai.TurnUsageAccumulator
 import net.weero.measix.pilot.data.ai.tools.LocatedToolCall
 import net.weero.measix.pilot.data.ai.tools.PendingToolInteraction
 import net.weero.measix.pilot.data.ai.tools.ToolCallRuntime
+import me.rerere.ai.ui.StepModelResult
+import me.rerere.ai.ui.StepUsage
+import net.weero.measix.pilot.service.runtime.TurnTransition
 
 import android.content.Context
 import android.util.Log
@@ -72,8 +75,7 @@ internal class StepRunner(
     private val toolCallRuntime: ToolCallRuntime,
 ) {
     suspend fun run(state: TurnRunState): StepExecutionResult {
-        state.accumulator.beginStep()
-        state.sendPhase("preparing")
+        state.sendPhase(TurnRunPhase.PREPARING)
         val provider = mergeProviderTransportCredentials(
             frozen = state.frozenProvider,
             live = state.turnContext.model.transportLease.acquire(),
@@ -89,7 +91,7 @@ internal class StepRunner(
                 state.replaceMessages(updatedMessages)
                 state.handoffDraft()
                 state.replaceMessages(
-                    state.messages.transforms(
+                    listOf(state.messages.last()).transforms(
                         transformers = state.outputTransformers,
                         context = state.context,
                         model = state.model,
@@ -97,7 +99,7 @@ internal class StepRunner(
                         promptInputs = state.promptInputs,
                         requestOrigins = state.outputOrigins,
                         registerUnpublishedResource = state.unpublishedResources::register,
-                    )
+                    ).let { state.messages.withAssistant(it.single()) }
                 )
                 state.publishStreamingProjection()
             },
@@ -118,10 +120,10 @@ internal class StepRunner(
             durableLocators = state.durableMessageLocators,
         )
         state.replaceMessages(state.finishStreamingLast(state.messages))
-        state.replaceMessages(state.messages.slice(0 until state.messages.lastIndex) + state.messages.last().copy(
+        state.replaceMessages(state.messages.withAssistant(state.messages.last().copy(
             finishedAt = Clock.System.now()
                 .toLocalDateTime(TimeZone.currentSystemDefault())
-        ))
+        )))
         val compactionPlan = compactionPlanner.planAfterSuccessfulRequest(state.messages, receipt)
         val stagedCompaction = toolOutputStore.stageCompaction(compactionPlan)
         stagedCompaction.lease?.let(state.unpublishedResources::register)
@@ -152,14 +154,14 @@ internal class StepRunner(
             return StepExecutionResult.Final
         }
         // 有 Tool Call：进入 batch 准备（解析参数、可用性/审批门禁），Turn live phase = TOOL_PREPARING。
-        state.sendPhase("tool_preparing")
+        state.sendPhase(TurnRunPhase.TOOL_PREPARING)
         val preparation = toolCallRuntime.prepareBatch(
             messageId = lastMessage.id,
             calls = replayPendingOrdinals.map { LocatedToolCall(it, messageTools[it]) },
             toolIndex = state.toolsByName,
             availability = state.interactionAvailability,
         )
-        val preparedMessages = if (preparation.replacements.isEmpty()) {
+        val preparedMessages = (if (preparation.replacements.isEmpty()) {
             checkpointMessages
         } else {
             checkpointMessages.dropLast(1) + lastMessage.copy(
@@ -168,6 +170,7 @@ internal class StepRunner(
                 },
             )
         }
+        ).let { it.withAssistant(TurnTransition.advanceCompletedToolStep(it.last())) }
         val hasPending = preparation.pending.isNotEmpty()
         state.commitModelResponse(
             publishResources = true,
@@ -206,7 +209,7 @@ internal class StepRunner(
         assistantMessageId: Uuid? = null,
         registerUnpublishedResource: (ToolResourceLease) -> Unit,
         mediaCapabilities: RequestMediaCapabilities,
-        onPhase: (suspend (String) -> Unit)? = null,
+        onPhase: (suspend (TurnRunPhase) -> Unit)? = null,
         providerSessionId: String? = null,
         modelContextEntries: List<ConversationModelContextEntry> = emptyList(),
         durableLocators: Map<Uuid, DurableMessageLocator> = emptyMap(),
@@ -215,7 +218,7 @@ internal class StepRunner(
             durableMessages = messages.filterNot { message ->
                 message.id == assistantMessageId &&
                     message.role == MessageRole.ASSISTANT &&
-                    message.parts.isEmpty()
+                    message.parts.all { it is UIMessagePart.Step }
             },
             durableLocators = durableLocators,
             modelContextEntries = modelContextEntries,
@@ -302,9 +305,7 @@ internal class StepRunner(
         val requestUsage = RequestUsageReducer(turnUsage.nextRequestOrdinal())
 
         fun attachUsage(usage: me.rerere.ai.core.TokenUsage) {
-            messages = messages.mapIndexed { index, message ->
-                if (index == messages.lastIndex) message.copy(usage = usage) else message
-            }
+            messages = messages.withAssistant(messages.last().copy(usage = usage))
         }
 
         val params = TextGenerationParams(
@@ -326,7 +327,7 @@ internal class StepRunner(
             mediaCapabilities = mediaCapabilities,
         )
         // 请求构建完成，进入等待模型响应阶段
-        onPhase?.invoke("model_waiting")
+        onPhase?.invoke(TurnRunPhase.MODEL_WAITING)
         attachUsage(turnUsage.recordRequestStarted(estimatedRequestContextTokens))
         onUpdateMessages(messages)
         val requestStarted = TimeSource.Monotonic.markNow()
@@ -338,6 +339,13 @@ internal class StepRunner(
                 timeToFirstOutputMillis = observed
                 attachUsage(turnUsage.recordFirstOutput(observed))
             }
+        }
+        var finishReason: String? = null
+        var stepProviderMetadata: kotlinx.serialization.json.JsonObject? = null
+        fun observeProviderMetadata(chunk: MessageChunk) {
+            val choice = chunk.choices.firstOrNull() ?: return
+            val message = choice.delta ?: choice.message ?: return
+            stepProviderMetadata = me.rerere.ai.ui.mergeMessageMetadata(stepProviderMetadata, message.providerMetadata)
         }
         var requestOutcome = ProviderRequestOutcome.FAILED
         var providerFailure: Throwable? = null
@@ -352,8 +360,10 @@ internal class StepRunner(
                     params = params
                 ).collect { chunk ->
                     responseEstablished = true
+                    observeProviderMetadata(chunk)
+                    chunk.choices.firstOrNull()?.finishReason?.let { finishReason = it }
                     observeFirstOutput(chunk)
-                    messages = accumulator.accumulate(messages, chunk, model)
+                    messages = messages.withAssistant(accumulator.accumulate(messages.last(), chunk, model))
                     // Provider usage 只在请求关闭时原子并入 turn；流式快照不改写累计账本。
                     chunk.usage?.let(requestUsage::accept)
                     // Phase uses the same accumulated-message semantics as the output projection.
@@ -365,7 +375,7 @@ internal class StepRunner(
                         } || tagPhase?.hasReasoning == true
                         if (hasReasoning) {
                             reasoningPhaseSent = true
-                            onPhase?.invoke("reasoning_streaming")
+                            onPhase?.invoke(TurnRunPhase.REASONING_STREAMING)
                         }
                     }
                     if (!answerPhaseSent) {
@@ -379,7 +389,7 @@ internal class StepRunner(
                         }
                         if (hasText) {
                             answerPhaseSent = true
-                            onPhase?.invoke("answer_streaming")
+                            onPhase?.invoke(TurnRunPhase.ANSWER_STREAMING)
                         }
                     }
                     onUpdateMessages(messages)
@@ -393,13 +403,17 @@ internal class StepRunner(
                         params = params,
                     )
                 } catch (error: ProviderResponseException) {
+                    finishReason = error.response.choices.firstOrNull()?.finishReason
+                    observeProviderMetadata(error.response)
                     observeFirstOutput(error.response)
-                    messages = accumulator.accumulate(messages, error.response, model)
+                    messages = messages.withAssistant(accumulator.accumulate(messages.last(), error.response, model))
                     error.response.usage?.let(requestUsage::accept)
                     throw error
                 }
+                finishReason = chunk.choices.firstOrNull()?.finishReason
+                observeProviderMetadata(chunk)
                 observeFirstOutput(chunk)
-                messages = accumulator.accumulate(messages, chunk, model)
+                messages = messages.withAssistant(accumulator.accumulate(messages.last(), chunk, model))
                 chunk.usage?.let(requestUsage::accept)
                 onUpdateMessages(messages)
             }
@@ -424,6 +438,27 @@ internal class StepRunner(
                 Log.w(TAG, "Provider usage normalization diagnostics: ${usageDiagnostics.joinToString()}")
             }
             attachUsage(appliedUsage.usage)
+            val snapshot = completedUsage.snapshot
+            val step = messages.last().parts.filterIsInstance<UIMessagePart.Step>().last()
+            messages = messages.withAssistant(TurnTransition.recordModelResult(
+                messages.last(), step.stepId, StepModelResult(
+                    finishReason = finishReason,
+                    usage = StepUsage(
+                        inputTokens = snapshot?.inputTokens,
+                        outputTokens = snapshot?.outputTokens,
+                        cacheReadInputTokens = snapshot?.cacheReadInputTokens,
+                        cacheWriteInputTokens = snapshot?.cacheWriteInputTokens,
+                        reasoningOutputTokens = snapshot?.reasoningOutputTokens,
+                        toolUseInputTokens = snapshot?.toolUseInputTokens,
+                        totalTokens = snapshot?.totalTokens,
+                    ),
+                    providerRequestCount = 1,
+                    timeToFirstOutputMillis = completedUsage.timeToFirstOutputMillis,
+                    requestDurationMillis = completedUsage.providerRequestDurationMillis,
+                    usageCompleteness = completedUsage.coreCompleteness,
+                    providerMetadata = stepProviderMetadata,
+                ),
+            ))
             try {
                 onUpdateMessages(messages)
             } catch (updateError: Throwable) {

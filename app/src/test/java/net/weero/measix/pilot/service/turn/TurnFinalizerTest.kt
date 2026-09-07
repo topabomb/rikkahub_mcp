@@ -39,6 +39,43 @@ import org.junit.Test
 
 class TurnFinalizerTest {
     @Test
+    fun `child commit failure and timeout propagate infrastructure without staging parent metadata`() = runTest {
+        for (timeout in listOf(false, true)) {
+            val childId = Uuid.random()
+            val turnId = Uuid.random()
+            val message = UIMessage(role = MessageRole.ASSISTANT, parts = listOf(net.weero.measix.pilot.service.runtime.TurnTransition.openStep(0)))
+            val child = Conversation.ofId(childId).copy(messageNodes = listOf(MessageNode.of(message))).toSnapshot()
+            val repository = mockk<ConversationRepository>(relaxed = true)
+            val coordinator = mockk<ConversationCommandCoordinator>()
+            val runtime = mockk<ConversationRuntime>()
+            io.mockk.every { runtime.snapshot } returns kotlinx.coroutines.flow.MutableStateFlow(
+                ConversationRuntimeSnapshot(child, TurnStreamProjection(1, turnId, message.id, message)),
+            )
+            coEvery { repository.getConversationHeader(childId) } returns child.header
+            coEvery { coordinator.load(childId) } returns runtime
+            coEvery { coordinator.executeOrThrow(childId, any()) } coAnswers {
+                if (timeout) kotlinx.coroutines.awaitCancellation() else error("child database commit failed")
+            }
+            var metadataStaged = false
+            val context = me.rerere.ai.core.ToolExecutionContext(
+                locator = me.rerere.ai.core.ToolCallLocator(Uuid.random(), Uuid.random(), Uuid.random()),
+                providerCallId = "parent-call", reportMetadata = { _, _ -> metadataStaged = true },
+                resolveAttachments = { me.rerere.ai.core.ToolAttachmentResolution() }, reportChildRun = {},
+                registerUnpublishedResource = {},
+            )
+            val finalizer = TurnFinalizer(repository, mockk(relaxed = true), coordinator, Json)
+            val terminal = net.weero.measix.pilot.data.ai.subassistant.buildInitialSubAssistantCallMetadata("run", Uuid.random(), "Child")
+                .copy(state = net.weero.measix.pilot.data.ai.subassistant.SubAssistantCallState.STOPPED)
+            val failure = runCatching {
+                finalizer.finalizeSubAssistantRun(childId, turnId, "user_stop", context, terminal)
+            }.exceptionOrNull()
+            assertTrue(failure is net.weero.measix.pilot.data.ai.tools.ToolRuntimeInfrastructureException)
+            org.junit.Assert.assertFalse(metadataStaged)
+            assertEquals(null, runtime.snapshot.value.durable.currentMessages().last().parts.filterIsInstance<UIMessagePart.Step>().single().outcome)
+        }
+    }
+
+    @Test
     fun `failure preparation marks only unpersisted base64 and preserves published file parts`() = runTest {
         val conversationId = Uuid.random()
         val turnId = Uuid.random()
@@ -49,7 +86,7 @@ class TurnFinalizerTest {
             UIMessagePart.Tool(localCallId = Uuid.random(), stepId = Uuid.random(), providerCallId = "call", toolName = "image_tool", input = "{}", output = listOf(
                 localImage,
                 UIMessagePart.Image("data:image/png;base64,unfinished-tool-image"),
-            )),
+            ), resultStatus = me.rerere.ai.ui.ToolResultStatus.COMPLETED),
         ))
         val base = Conversation.ofId(conversationId).copy(messageNodes = listOf(MessageNode.of(assistant))).toSnapshot()
         val handle = TurnHandle(conversationId, 1, turnId, assistant.id)
@@ -60,7 +97,7 @@ class TurnFinalizerTest {
         val finalization = TurnFinalizer(mockk(relaxed = true), mockk(relaxed = true), mockk(relaxed = true), Json)
 
         val prepared = finalization.prepareOwnedAssistantForFailure(
-            snapshot, handle, assistant, "user_stop", true,
+            snapshot, handle, assistant, "user_stop",
         )!!
 
         assertEquals(localImage, prepared.parts[0])
@@ -114,7 +151,7 @@ class TurnFinalizerTest {
             handle = handle,
             latestAssistant = streamedAssistant,
             reason = "provider_error",
-            cancelledByUser = false,
+
         )!!
 
         assertEquals(
@@ -129,7 +166,7 @@ class TurnFinalizerTest {
                 handle = handle.copy(epoch = handle.epoch + 1),
                 latestAssistant = streamedAssistant,
                 reason = "provider_error",
-                cancelledByUser = false,
+
             )
         }.exceptionOrNull()
         assertTrue(staleFailure is IllegalArgumentException)
@@ -157,7 +194,7 @@ class TurnFinalizerTest {
         val finalization = TurnFinalizer(mockk(relaxed = true), mockk(relaxed = true), mockk(relaxed = true), Json)
 
         val prepared = finalization.prepareOwnedAssistantForFailure(
-            snapshot, handle, assistant, "provider_error", cancelledByUser = false,
+            snapshot, handle, assistant, "provider_error",
         )!!
 
         // interrupt 语义：写入 interrupted output（hasReplayResult=true），保留原 interactionState
@@ -240,12 +277,15 @@ class TurnFinalizerTest {
     fun `approval-paused turn is cancelled before a replacement turn starts`() = runTest {
         val conversationId = Uuid.random()
         val turnId = Uuid.random()
+        val step = net.weero.measix.pilot.service.runtime.TurnTransition.openStep(0)
         val assistant = UIMessage(
             role = MessageRole.ASSISTANT,
             parts = listOf(
+                step,
                 UIMessagePart.Tool(
-                    localCallId = Uuid.random(), stepId = Uuid.random(), providerCallId = "pending-call",
+                    localCallId = Uuid.random(), stepId = step.stepId, providerCallId = "pending-call",
                     toolName = "pending_tool",
+                    interactionState = ToolInteractionState.AwaitingApproval,
                     input = "{}",
                 ),
             ),
@@ -309,7 +349,9 @@ class TurnFinalizerTest {
     fun `partial text turn without tools is also cancelled before replacement`() = runTest {
         val conversationId = Uuid.random()
         val turnId = Uuid.random()
-        val assistant = UIMessage.assistant("partial answer")
+        val assistant = UIMessage.assistant("partial answer").let {
+            it.copy(parts = listOf(net.weero.measix.pilot.service.runtime.TurnTransition.openStep(0)) + it.parts)
+        }
         val base = Conversation.ofId(conversationId).copy(
             messageNodes = listOf(
                 MessageNode.of(UIMessage.user("question")),

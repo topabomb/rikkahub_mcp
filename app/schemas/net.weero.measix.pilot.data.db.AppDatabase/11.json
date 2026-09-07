@@ -2,7 +2,7 @@
   "formatVersion": 1,
   "database": {
     "version": 11,
-    "identityHash": "04b00edc79e99d0f5fcd72647f19f523",
+    "identityHash": "8da7af999ea720b34902c9b4f924ba25",
     "entities": [
       {
         "tableName": "ConversationEntity",
@@ -973,24 +973,6 @@
             "createSql": "CREATE INDEX IF NOT EXISTS `index_tool_execution_child_conversation_id` ON `${TABLE_NAME}` (`child_conversation_id`)"
           },
           {
-            "name": "index_tool_execution_child_turn_id",
-            "unique": false,
-            "columnNames": [
-              "child_turn_id"
-            ],
-            "orders": [],
-            "createSql": "CREATE INDEX IF NOT EXISTS `index_tool_execution_child_turn_id` ON `${TABLE_NAME}` (`child_turn_id`)"
-          },
-          {
-            "name": "index_tool_execution_sub_assistant_run_id",
-            "unique": false,
-            "columnNames": [
-              "sub_assistant_run_id"
-            ],
-            "orders": [],
-            "createSql": "CREATE INDEX IF NOT EXISTS `index_tool_execution_sub_assistant_run_id` ON `${TABLE_NAME}` (`sub_assistant_run_id`)"
-          },
-          {
             "name": "index_tool_execution_turn_id_local_call_id",
             "unique": true,
             "columnNames": [
@@ -1096,7 +1078,7 @@
     ],
     "setupQueries": [
       "CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)",
-      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, '04b00edc79e99d0f5fcd72647f19f523')"
+      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, '8da7af999ea720b34902c9b4f924ba25')"
     ]
   }
 }

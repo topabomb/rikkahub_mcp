@@ -33,6 +33,7 @@ import me.rerere.ai.ui.TurnTerminalReasons
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessageChoice
 import me.rerere.ai.ui.UIMessagePart
+import me.rerere.ai.ui.ToolResultStatus
 import me.rerere.ai.ui.OpenRouterReasoningMetadata
 import me.rerere.ai.ui.toMetadata
 import kotlin.uuid.Uuid
@@ -57,6 +58,17 @@ import org.junit.Test
  * usage 解析在 `ChatCompletionsAPIUsageTest`。
  */
 class ChatCompletionsAPISerializerTest {
+
+    @Test
+    fun `tool only Steps retain alternating calls and results`() {
+        val wire = invokeBuildMessages(me.rerere.ai.testsupport.consecutiveToolSteps())
+        assertEquals(listOf("assistant", "tool", "assistant", "tool"), wire.map {
+            it.jsonObject["role"]!!.jsonPrimitive.content
+        })
+        assertEquals(listOf("call_1", "call_2"), listOf(wire[0], wire[2]).map {
+            it.jsonObject["tool_calls"]!!.jsonArray.single().jsonObject["id"]!!.jsonPrimitive.content
+        })
+    }
 
     private lateinit var api: ChatCompletionsAPI
 
@@ -121,6 +133,7 @@ class ChatCompletionsAPISerializerTest {
                         localCallId = Uuid.random(), stepId = Uuid.random(), providerCallId = "call_1",
                         toolName = "generate_image",
                         input = "{}",
+                        resultStatus = ToolResultStatus.COMPLETED,
                         output = listOf(UIMessagePart.Text(toolFact)),
                     ),
                 ),
@@ -141,6 +154,7 @@ class ChatCompletionsAPISerializerTest {
             localCallId = Uuid.random(), stepId = Uuid.random(), providerCallId = "image",
             toolName = "generate_image",
             input = "{}",
+            resultStatus = ToolResultStatus.COMPLETED,
             output = listOf(UIMessagePart.Image("file:///tmp/generated.png")),
         )
         val error = assertThrows(IllegalStateException::class.java) {
@@ -405,7 +419,7 @@ class ChatCompletionsAPISerializerTest {
         val executed = parsed.copy(
             parts = parsed.parts.map { part ->
                 if (part is UIMessagePart.Tool) {
-                    part.copy(output = listOf(UIMessagePart.Text("lookup result")))
+                    part.copy(resultStatus = ToolResultStatus.COMPLETED, output = listOf(UIMessagePart.Text("lookup result")))
                 } else {
                     part
                 }
@@ -550,6 +564,7 @@ class ChatCompletionsAPISerializerTest {
                         localCallId = Uuid.random(), stepId = Uuid.random(), providerCallId = "call_1",
                         toolName = "lookup",
                         input = "{}",
+                        resultStatus = ToolResultStatus.COMPLETED,
                         output = listOf(
                             UIMessagePart.Text("[Attachment path=/upload/abc123.png type=image input=reference_only]"),
                         ),
@@ -1415,6 +1430,19 @@ class ChatCompletionsAPISerializerTest {
 
     // ==================== Chat Request-Level Terminal Replay Tests ====================
 
+    private fun terminalStep(ordinal: Int, complete: Boolean) = UIMessagePart.Step(
+        stepId = Uuid.parse("00000000-0000-0000-0000-${(ordinal + 1).toString().padStart(12, '0')}"),
+        ordinal = ordinal,
+        startedAt = kotlin.time.Instant.fromEpochMilliseconds(0),
+        finishedAt = kotlin.time.Instant.fromEpochMilliseconds(1),
+        outcome = if (complete) me.rerere.ai.ui.StepOutcome.Continue else me.rerere.ai.ui.StepOutcome.Interrupted,
+        modelResult = me.rerere.ai.ui.StepModelResult(
+            finishReason = "stop", usage = me.rerere.ai.ui.StepUsage(), providerRequestCount = 1,
+            timeToFirstOutputMillis = null, requestDurationMillis = null,
+            usageCompleteness = me.rerere.ai.core.UsageCompleteness.NONE, providerMetadata = null,
+        ),
+    )
+
     private fun terminalAssistantWithCompleteStep(
         completeReasoning: String,
         completeText: String,
@@ -1425,14 +1453,17 @@ class ChatCompletionsAPISerializerTest {
             localCallId = Uuid.random(), stepId = Uuid.random(), providerCallId = "call-1",
             toolName = "search",
             input = "{}",
+            resultStatus = ToolResultStatus.COMPLETED,
             output = listOf(UIMessagePart.Text("result")),
         )
         return UIMessage(
             role = MessageRole.ASSISTANT,
             parts = listOf(
+                terminalStep(0, complete = true),
                 UIMessagePart.Reasoning(reasoning = completeReasoning),
                 UIMessagePart.Text(completeText),
-                completedTool,
+                completedTool.copy(stepId = terminalStep(0, true).stepId, resultStatus = ToolResultStatus.COMPLETED),
+                terminalStep(1, complete = false),
                 UIMessagePart.Reasoning(reasoning = tailReasoning),
                 UIMessagePart.Text(tailText),
             ),
@@ -1499,6 +1530,7 @@ class ChatCompletionsAPISerializerTest {
         val terminal = UIMessage(
             role = MessageRole.ASSISTANT,
             parts = listOf(
+                terminalStep(0, complete = false),
                 UIMessagePart.Reasoning(reasoning = "unfinished"),
                 UIMessagePart.Text("partial"),
             ),
@@ -1533,23 +1565,28 @@ class ChatCompletionsAPISerializerTest {
             localCallId = Uuid.random(), stepId = Uuid.random(), providerCallId = "call-1",
             toolName = "search",
             input = "{}",
+            resultStatus = ToolResultStatus.COMPLETED,
             output = listOf(UIMessagePart.Text("result1")),
         )
         val tool2 = UIMessagePart.Tool(
             localCallId = Uuid.random(), stepId = Uuid.random(), providerCallId = "call-2",
             toolName = "calculate",
             input = "{}",
+            resultStatus = ToolResultStatus.COMPLETED,
             output = listOf(UIMessagePart.Text("result2")),
         )
         val terminal = UIMessage(
             role = MessageRole.ASSISTANT,
             parts = listOf(
+                terminalStep(0, complete = true),
                 UIMessagePart.Reasoning(reasoning = "First reasoning"),
                 UIMessagePart.Text("First content"),
-                tool1,
+                tool1.copy(stepId = terminalStep(0, true).stepId, resultStatus = ToolResultStatus.COMPLETED),
+                terminalStep(1, complete = true),
                 UIMessagePart.Reasoning(reasoning = "Second reasoning"),
                 UIMessagePart.Text("Second content"),
-                tool2,
+                tool2.copy(stepId = terminalStep(1, true).stepId, resultStatus = ToolResultStatus.COMPLETED),
+                terminalStep(2, complete = false),
                 UIMessagePart.Reasoning(reasoning = "Tail reasoning"),
                 UIMessagePart.Text("Tail text"),
             ),
@@ -1557,7 +1594,7 @@ class ChatCompletionsAPISerializerTest {
             terminalReason = TurnTerminalReasons.PROVIDER_FAILED,
         )
         val projected = terminal.replaySafeProjection()!!
-        assertEquals(6, projected.providerReplayProjection!!.completePartCount)
+        assertEquals(8, projected.providerReplayProjection!!.completePartCount)
 
         val messages = listOf(
             UIMessage.user("Use tools"),

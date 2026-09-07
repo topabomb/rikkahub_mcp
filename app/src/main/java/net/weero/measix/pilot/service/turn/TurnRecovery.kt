@@ -2,30 +2,26 @@ package net.weero.measix.pilot.service.turn
 
 import kotlinx.serialization.json.Json
 import me.rerere.ai.core.MessageRole
-import me.rerere.ai.ui.MessageTerminalStatus
 import me.rerere.ai.ui.StepOutcome
-import me.rerere.ai.ui.ToolInteractionState
 import me.rerere.ai.ui.ToolResultStatus
 import me.rerere.ai.ui.TurnTerminalReasons
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
-import me.rerere.ai.ui.finishReasoning
 import net.weero.measix.pilot.data.ai.subassistant.getSubAssistantCallMetadata
 import net.weero.measix.pilot.data.datastore.SettingsStore
+import net.weero.measix.pilot.data.db.entity.ToolExecutionEntity
 import net.weero.measix.pilot.data.db.entity.ToolExecutionStatus
 import net.weero.measix.pilot.data.db.entity.TurnExecutionStatus
-import net.weero.measix.pilot.data.model.Conversation
 import net.weero.measix.pilot.data.model.MessageNode
 import net.weero.measix.pilot.data.repository.ConversationRepository
 import net.weero.measix.pilot.service.subassistant.SubAssistantRunGate
 import net.weero.measix.pilot.service.subassistant.finalizeSubAssistantToolsAfterInterruption
 import net.weero.measix.pilot.service.subassistant.reconcileMasterSubAssistantCalls
+import net.weero.measix.pilot.service.subassistant.resolveValidChildSnapshotLineage
 import net.weero.measix.pilot.service.runtime.ConversationAggregateSnapshot
 import net.weero.measix.pilot.service.runtime.ConversationCommandCoordinator
 import net.weero.measix.pilot.service.runtime.ConversationTransition
 import net.weero.measix.pilot.service.runtime.RecoverInterruptedTurn
-import net.weero.measix.pilot.service.runtime.ReplaceMessageTree
-import net.weero.measix.pilot.service.runtime.toSnapshot
 import kotlin.time.Clock
 import kotlin.time.Instant
 import kotlin.uuid.Uuid
@@ -50,8 +46,8 @@ class TurnRecovery(
     /**
      * 子助手 run 收口（定点链路）。输入 = 非终态 turn 事实行（JOIN 会话表区分
      * Master/Child）——恢复成本与库大小解耦：
-     *  - Master 行 → 定点加载 → 收口树中 stale 调用（metadata 非 terminal → stopped）
-     *  - 被引用 Child → 定点加载 → 收口（finishReasoning + 工具中断 + turn 事实）
+     *  - Master 行 → 定点加载并校验 Child 链接，暂不发布父级终态
+     *  - 被引用 Child → 定点加载并先收口；父级 metadata 随后与其 Turn/Tool 终态同事务提交
      *
      * 孤儿 Child 清理由 v7 自引用 FK CASCADE 结构性杜绝（存量在 Migration_6_7 收敛）。
      */
@@ -102,6 +98,16 @@ class TurnRecovery(
             }
         }
 
+        scoped.filter { !it.isChild }.forEach { scopedExecution ->
+            val master = masters.single { it.conversationId.toString() == scopedExecution.execution.conversationId }
+            val executions = conversationRepo.getToolExecutions(scopedExecution.execution.turnId)
+            val owningMessage = requireNotNull(master.locateAssistant(scopedExecution.execution.assistantMessageId?.let(Uuid::parse))) {
+                "Non-terminal master has no owning Assistant"
+            }.second
+            validatedStartedToolIds(owningMessage, executions)
+            loadLinkedChildren(master, executions)
+        }
+
         val childStopReasons = mutableMapOf<Uuid, String>()
 
         masters.forEach { master ->
@@ -115,9 +121,6 @@ class TurnRecovery(
             )
             result.childStopReasons.forEach { (childId, reason) ->
                 childStopReasons.putIfAbsent(childId, reason)
-            }
-            if (result.masterNodes != master.nodes) {
-                submitRecoveredTree(master.conversationId, result.masterNodes)
             }
         }
 
@@ -152,12 +155,18 @@ class TurnRecovery(
                         "in conversation $conversationId"
                 }
                 val (_, message) = located
-                val startedTools = conversationRepo.getToolExecutions(execution.turnId)
-                    .filter { it.status == ToolExecutionStatus.STARTED }
-                val startedLocalCallIds = startedTools.mapNotNull {
-                    runCatching { Uuid.parse(it.localCallId) }.getOrNull()
-                }.toSet()
-                val recoveredMessage = closeOpenTurnForProcessRestart(message, startedLocalCallIds)
+                val toolExecutions = conversationRepo.getToolExecutions(execution.turnId)
+                val startedLocalCallIds = validatedStartedToolIds(message, toolExecutions)
+                val children = loadLinkedChildren(snapshot, toolExecutions)
+                val reconciled = reconcileMasterSubAssistantCalls(
+                    masterId = conversationId,
+                    masterAssistantId = snapshot.header.assistantId,
+                    masterNodes = listOf(MessageNode.of(message)),
+                    settings = settingsStore.effectiveSettings.value.settings,
+                    childrenById = children,
+                    json = json,
+                ).masterNodes.single().messages.single()
+                val recoveredMessage = closeOpenTurnForProcessRestart(reconciled, startedLocalCallIds)
                 commandCoordinator.executeRecovery(
                     conversationId,
                     RecoverInterruptedTurn(
@@ -171,12 +180,51 @@ class TurnRecovery(
         }
     }
 
-    /** 恢复树写入与普通树命令共享同一 durable command 协议。 */
-    private suspend fun submitRecoveredTree(
-        conversationId: Uuid,
-        recoveredNodes: List<MessageNode>,
-    ) {
-        commandCoordinator.executeRecovery(conversationId, ReplaceMessageTree(recoveredNodes))
+    private suspend fun loadLinkedChildren(
+        master: ConversationAggregateSnapshot,
+        executions: List<ToolExecutionEntity>,
+    ): Map<Uuid, ConversationAggregateSnapshot> {
+        val metadataChildren = master.nodes.flatMap { it.messages }.flatMap { it.getTools() }
+            .mapNotNull { it.getSubAssistantCallMetadata(json)?.childConversationId }.map(Uuid::parse)
+        val linkedChildren = executions.mapNotNull { it.childConversationId }.map(Uuid::parse)
+        val children = (metadataChildren + linkedChildren).distinct().mapNotNull { id ->
+            conversationRepo.getConversationSnapshotById(id)?.let { id to it }
+        }.toMap()
+        executions.filter { it.childConversationId != null }.forEach { execution ->
+            val childId = Uuid.parse(requireNotNull(execution.childConversationId))
+            val child = requireNotNull(children[childId]) { "Execution references missing child $childId" }
+            check(child.header.parentConversationId == master.conversationId) { "Execution child has a different parent" }
+            val tool = master.nodes.flatMap { it.messages }.flatMap { it.getTools() }
+                .single { it.localCallId.toString() == execution.localCallId }
+            val metadata = requireNotNull(tool.getSubAssistantCallMetadata(json)) { "Child execution has no run metadata" }
+            check(metadata.childConversationId == execution.childConversationId) { "Child execution and metadata disagree" }
+            requireNotNull(resolveValidChildSnapshotLineage(master.conversationId, metadata, children)) {
+                "Execution Child lineage does not match its target and task"
+            }
+            if (execution.subAssistantRunId != null) {
+                check(metadata.runId == execution.subAssistantRunId) { "Child execution belongs to a different run" }
+            }
+            execution.childTurnId?.let { rawTurnId ->
+                val turnId = Uuid.parse(rawTurnId)
+                check(execution.subAssistantRunId != null) { "Child Turn link has no run identity" }
+                // Absence is legal only before the allocated Child START has been committed.
+                conversationRepo.getTurnExecutions(childId).firstOrNull { it.turnId == turnId.toString() }?.let { childTurn ->
+                    check(childTurn.conversationId == childId.toString()) { "Linked Child Turn has a different owner" }
+                }
+            }
+        }
+        return children
+    }
+
+    private fun validatedStartedToolIds(message: UIMessage, executions: List<ToolExecutionEntity>): Set<Uuid> {
+        val tools = message.getTools().associateBy { it.localCallId }
+        return executions.mapNotNull { execution ->
+            val localCallId = Uuid.parse(execution.localCallId)
+            val stepId = Uuid.parse(execution.stepId)
+            val tool = requireNotNull(tools[localCallId]) { "Execution references missing Tool $localCallId" }
+            check(tool.stepId == stepId) { "Execution references a different Tool Step" }
+            localCallId.takeIf { execution.status == ToolExecutionStatus.STARTED }
+        }.toSet()
     }
 
     private suspend fun recoverInterruptedChildTurn(
@@ -198,11 +246,8 @@ class TurnRecovery(
                         "in conversation $childId"
                 }
                 val (_, message) = located
-                val startedTools = conversationRepo.getToolExecutions(execution.turnId)
-                    .filter { it.status == ToolExecutionStatus.STARTED }
-                val startedLocalCallIds = startedTools.mapNotNull {
-                    runCatching { Uuid.parse(it.localCallId) }.getOrNull()
-                }.toSet()
+                val startedLocalCallIds = validatedStartedToolIds(message,
+                    conversationRepo.getToolExecutions(execution.turnId))
                 val recoveredMessage = closeOpenTurnForProcessRestart(
                     message = message.finalizeSubAssistantToolsAfterInterruption(reason),
                     startedToolLocalCallIds = startedLocalCallIds,
@@ -264,24 +309,16 @@ internal fun closeOpenTurnForProcessRestart(
                             )
                         ),
                         resultStatus = ToolResultStatus.INTERRUPTED,
-                        // 挂起的审批/追问在重启后不可能再被应答：与 Child 收口一致落 Denied，
-                        // 否则 Tool.isPending 永久为真，TTS 自动播放与 CoT 会一直等待。
-                        interactionState = if (part.isPending) {
-                            ToolInteractionState.Denied("app_restarted")
-                        } else {
-                            part.interactionState
-                        },
                     )
-                } else if (part.resultStatus == null && (part.output.singleOrNull() as? UIMessagePart.Text)?.text?.contains(""""status":"interrupted"""") == true) {
-                    part.copy(resultStatus = ToolResultStatus.INTERRUPTED)
                 } else {
                     part
                 }
             }
+            is UIMessagePart.Reasoning -> if (part.finishedAt == null) part.copy(finishedAt = now) else part
             else -> part
         }
     }
-    return message.copy(parts = updatedParts).finishReasoning()
+    return message.copy(parts = updatedParts)
 }
 
 // ---- 恢复域私有扩展 ----

@@ -26,8 +26,10 @@ object RegexOutputTransformer : OutputMessageTransformer, StreamingMessageTransf
             MessageRole.ASSISTANT -> AssistantAffectScope.ASSISTANT
             else -> return message // Skip non-assistant messages
         }
+        val start = message.openStepPartsStart() ?: return message
         return message.copy(
-            parts = message.parts.map { part ->
+            parts = message.parts.mapIndexed { index, part ->
+                if (index < start) return@mapIndexed part
                 when (part) {
                     is UIMessagePart.Text -> {
                         part.copy(text = part.text.replaceRegexes(assistant.regexes, scope, visual = false))

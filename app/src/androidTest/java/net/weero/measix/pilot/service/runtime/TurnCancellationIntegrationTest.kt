@@ -12,6 +12,8 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import java.io.File
 import java.nio.file.Files
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Deferred
+import kotlinx.coroutines.selects.select
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
@@ -193,7 +195,7 @@ class TurnCancellationIntegrationTest {
         )
 
         try {
-            withTimeout(5_000) { checkpointCommitted.await() }
+            fixture.awaitEvent(checkpointCommitted)
             fixture.worker.cancel(CancellationException("cancel after durable tool checkpoint"))
         } finally {
             releaseCheckpoint.complete(Unit)
@@ -228,7 +230,7 @@ class TurnCancellationIntegrationTest {
         }
 
         val fixture = startResumedToolTurn(tool = tool)
-        val owned = withTimeout(5_000) { artifactCreated.await() }
+        val owned = fixture.awaitEvent(artifactCreated)
         val file = artifactStore.file(owned.localRef)
 
         fixture.worker.cancel(CancellationException("cancel before durable tool checkpoint"))
@@ -247,7 +249,7 @@ class TurnCancellationIntegrationTest {
         assertTrue(durableTool.output.none { part ->
             part is UIMessagePart.Image && part.url == owned.uri.toString()
         })
-        assertEquals(ToolExecutionStatus.CANCELLED, repository.getToolExecutions(fixture.turnId.toString()).single().status)
+        assertEquals(ToolExecutionStatus.UNKNOWN, repository.getToolExecutions(fixture.turnId.toString()).single().status)
         assertNull(fixture.runtime.snapshot.value.stream)
     }
 
@@ -312,22 +314,26 @@ class TurnCancellationIntegrationTest {
                     turnFinalizer = turnFinalizer,
                 )
                 turnCommitter = started.turnCommitter
-                // 该 turn 的 owner Assistant slot 携带一个尚未回放结果的 ToolCall；
-                // TurnRunner 直接进入执行阶段，不提前发起下一 step provider 请求。
-                val currentMessages = runtime.snapshot.value.toPresentationSnapshot().currentMessages().dropLast(1) + UIMessage(
-                    id = started.assistantMessageId,
-                    role = MessageRole.ASSISTANT,
-                    parts = listOf(
-                        UIMessagePart.Tool(
-                            localCallId = Uuid.random(),
-                            stepId = Uuid.random(),
-                            providerCallId = "call-${tool.name}",
-                            toolName = tool.name,
-                            input = "{}",
-                            output = emptyList(),
-                        ),
+                val initialAssistant = runtime.durable.currentMessages().last()
+                val step = initialAssistant.parts.filterIsInstance<UIMessagePart.Step>().single()
+                val sampled = TurnTransition.recordModelResult(
+                    initialAssistant.copy(parts = initialAssistant.parts + UIMessagePart.Tool(
+                        localCallId = Uuid.random(), stepId = step.stepId,
+                        providerCallId = "call-${tool.name}", toolName = tool.name,
+                        input = "{}", output = emptyList(),
+                    )),
+                    step.stepId,
+                    me.rerere.ai.ui.StepModelResult(
+                        finishReason = "tool_calls", usage = me.rerere.ai.ui.StepUsage(), providerRequestCount = 1,
+                        timeToFirstOutputMillis = null, requestDurationMillis = null,
+                        usageCompleteness = me.rerere.ai.core.UsageCompleteness.NONE, providerMetadata = null,
                     ),
                 )
+                started.turnCommitter.onCheckpoint(ModelResponseCheckpoint(
+                    turn = started.handle, step = StepHandle(step.stepId), assistantMessage = sampled,
+                    turnStatus = TurnExecutionStatus.RUNNING,
+                ))
+                val currentMessages = runtime.durable.currentMessages()
                 turnRunner.run(
                     TurnRunInputs(
                         turnContext = turnContext,
@@ -368,6 +374,13 @@ class TurnCancellationIntegrationTest {
         workers += worker
         registry.installAndStartTurnWorker(conversationId, turnId, worker)
         return fixture
+    }
+
+    private suspend fun <T> RunningTurnFixture.awaitEvent(event: Deferred<T>): T = withTimeout(5_000) {
+        select {
+            event.onAwait { it }
+            worker.onJoin { throw AssertionError("Turn ended before the expected checkpoint", failure) }
+        }
     }
 
     private class RunningTurnFixture(

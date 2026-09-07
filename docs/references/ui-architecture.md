@@ -1,7 +1,6 @@
 # 界面架构与自适应布局参考
 
-> 本文档以 Measix Pilot 当前代码为准，完整描述项目的 UI 架构层次、导航体系、主题系统、自适应布局策略以及核心组件流程。
-> 文档同时记录了窄屏 / 宽屏 / 折叠屏三种形态下的实际适配方案，供后续界面迭代参考。
+本文描述 Compose 页面边界、导航、主题、自适应布局和覆盖层。消息节点渲染见 [消息渲染管线](message-rendering-pipeline.md)，执行与持久化协议见 [Turn/Step 执行链路](turn-step-execution.md)。
 
 ---
 
@@ -512,8 +511,7 @@ reason 对应的短状态，取消使用中性色而不冒充错误；失败或�
 ### 7.1 ViewModel 层
 
 页面通过 Koin 注入 ViewModel。ViewModel 只持有页面状态、调用 application command 并消费 query/read model，不得直连
-DAO、Repository、Runtime Registry 或持久化 owner。`ChatVM` 不持有 Runtime Job；`SubAssistantDetailVM` 只消费由
-Master 消息投影出的只读详情；设置、统计、工作区、备份等页面也必须经各自的 typed application/query port。
+DAO、Repository、Runtime Registry 或持久化 owner。`ChatVM` 不持有 Runtime Job；`SubAssistantDetailVM` 只消费专用 query port 输出的只读详情；设置、统计、工作区、备份等页面也必须经各自的 typed application/query port。
 
 ### 7.2 依赖注入
 
@@ -524,8 +522,8 @@ Compose 暴露 application/query service；恢复由 `ApplicationRecoveryCoordin
 
 ### 7.3 会话助手归属
 
-`Conversation.assistantId` 是已创建会话的助手权威来源。聊天页通过
-`Settings.getConversationAssistant(conversation.assistantId)` 解析助手，并将同一对象传给标题、背景、模型、搜索、推理、快捷消息、文件能力和生成前检查；只有会话引用的助手已被删除时，才回退到当前全局助手。
+已创建会话的助手归属来自查询 snapshot 的 `header.assistantId`。聊天页通过
+`Settings.getConversationAssistant(snapshot.header.assistantId)` 解析助手，并将同一对象传给标题、背景、模型、搜索、推理、快捷消息、文件能力和生成前检查；只有会话引用的助手已被删除时，才回退到当前全局助手。
 
 切换会话助手时，`ChatVM.switchConversationAssistant` 负责更新会话的 `assistantId` 和目标模型。全局 `Settings.assistantId` 只表示新建会话等全局入口的当前选择，不应直接驱动已有会话的聊天界面。
 
@@ -651,49 +649,23 @@ ChatList (LazyColumn)
 [消息渲染管线](message-rendering-pipeline.md)，生成侧见 [Turn/Step 执行链路](turn-step-execution.md)。
 
 `ChatMessageNerdLine` 使用低对比度单行摘要与最多两行展开详情。聊天列表顶层 item 间距和同一消息主要区块均为 4dp，
-统计详情与芯片换行使用 2dp；被动统计摘要不再叠加纵向 padding。消息末尾的操作栏、Workspace 产出文件与 usage 组成一个
+统计详情与芯片换行使用 2dp；被动统计摘要没有额外纵向 padding。消息末尾的操作栏、Workspace 产出文件与 usage 组成一个
 footer，footer 内部只保留 2dp 区块间距；操作栏和分支按钮保留 8dp 横向内边距，纵向内边距统一为 4dp。终态提示和 Workspace 文件芯片
 使用紧凑的 4dp 纵向内边距。`ChainOfThought` 只收紧卡片外沿与展开内容的重复留白，步骤和折叠控制仍保留原有点击行内边距；
 子助手卡使用 8dp 上下内边距和 4dp 区块间距，子助手详情中的消息 item 同样使用 4dp；审批按钮、媒体缩略图、气泡正文与
 弹层内容仍保留原有可读空间。只有确实显示头像或名称时才创建消息 Header，避免关闭身份信息后
-留下空 Header 间距。`ChatList` 原有独立
-loading/审批状态行不改变归属、组件或判断，只将自身上下留白保持为 2dp 以靠近消息统计；
+留下空 Header 间距。`ChatList` 的独立 loading/审批状态行使用 2dp 上下留白；
 它不进入 usage 行。`ChatSizeChecker` 与 `StatsVM`
 各自只消费 application/query 投影。Compose 不解析四种线协议、不累计 token，也不从 UI 状态推断完整性；精确口径见
 [`token-usage-accounting.md`](token-usage-accounting.md)。
 
 ---
 
-## 12. Message Transformer 管道
+## 12. 显示投影与生成管道的边界
 
-消息在发送前和接收后经过 Transformer 管道处理：
+UI 消费 `ConversationPresentation` 的消息、typed phase、工具 locator 和附件预览映射，不持有 Runtime Job，也不据显示列表反推 durable 写入。工具交互经 application port 提交；`resultStatus` 表达结果存在性，不能代替活跃执行 phase 或详情页访问门禁。
 
-### 输入管道（InputMessageTransformer）
-
-| Transformer | 作用 |
-|-------------|------|
-| TimeReminderTransformer | 按助手设置注入时间提醒 |
-| PromptInjectionTransformer | 合并助手与会话启用的提示注入 |
-| PlaceholderTransformer | 处理消息中的占位符 |
-| DocumentAsPromptTransformer | 文档附件转文本提示 |
-| TemplateTransformer | 应用 Pebble 模板 |
-| WorkspaceReminderTransformer | 注入 Workspace 上下文提醒 |
-| ToolArtifactReplayTransformer | 按 artifact metadata 重写历史 Tool Result 路径与 Image URL |
-| AttachmentProjectionTransformer | 按本次请求的 `RequestMediaCapabilities` 投影附件，固定为最后一个 input transformer |
-
-顺序由 `TurnPipelineFactory` 唯一定义；Master 额外在附件投影之前装配 `ToolArtifactReplayTransformer`，Target 不装配它。附件之后不得再运行会新增、移动或删除媒体 part 的 transformer。完整生成链路见
-[Turn/Step 执行链路](turn-step-execution.md)，投影语义见 [多模态上下文与 Turn 持久化](multimodal-context-and-turn-durability.md)。
-
-### 输出管道（OutputMessageTransformer）
-
-| Transformer | 作用 |
-|-------------|------|
-| ThinkTagTransformer | 提取 `<think>` 标签转为推理部分 |
-| Base64ImageToLocalFileTransformer | 生成完成后将 Base64 图片转为本地文件引用 |
-| RegexOutputTransformer | 正则替换助手响应 |
-
-输出 Transformer 的 `transforms()` 处理进入生成循环的消息，`visualTransform()` 只形成流式 UI 投影，
-`onGenerationFinish()` 在单步完成时收口推理和文件引用。只有持久化路径的结果可以改变会话事实。
+`visualTransform()` 只形成流式显示投影，输入转换和终态输出处理归生成管道。Transformer 装配、顺序与提交时机统一见 [Turn/Step 执行链路](turn-step-execution.md)；图片请求表示与资源交接见 [多模态上下文与资源持久化](multimodal-context-and-turn-durability.md)。
 
 ---
 
@@ -721,7 +693,7 @@ Tabletop、无效或多个铰链，以及 Dialog 的 scrim、内容区和底部�
 
 ---
 
-## 15. 子助手 UI
+## 15. 子助手入口与语音控制
 
 Assistant 配置页提供 Target 类别、全局可见与 Caller 访问范围设置；关闭 Target 类别时会原子清理全局可见和反向授权。普通选择器默认隐藏 Target，可通过筛选显式显示；搜索同时匹配名称与路由描述。
 

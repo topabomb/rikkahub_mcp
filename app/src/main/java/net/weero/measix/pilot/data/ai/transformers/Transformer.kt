@@ -140,3 +140,11 @@ suspend fun List<UIMessage>.transforms(
         transformer.transform(ctx, acc)
     }
 }
+
+/** Output transforms may change only the currently open sampling region, never committed Step content. */
+internal fun UIMessage.openStepPartsStart(): Int? {
+    if (role != me.rerere.ai.core.MessageRole.ASSISTANT) return null
+    val marker = parts.indexOfLast { it is me.rerere.ai.ui.UIMessagePart.Step }
+    require(marker >= 0) { "Assistant output requires an explicit Step" }
+    return (marker + 1).takeIf { (parts[marker] as me.rerere.ai.ui.UIMessagePart.Step).outcome == null }
+}

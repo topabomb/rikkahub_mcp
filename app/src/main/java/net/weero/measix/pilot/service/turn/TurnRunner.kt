@@ -1,4 +1,5 @@
 package net.weero.measix.pilot.service.turn
+import me.rerere.ai.ui.UIMessagePart
 
 import android.content.Context
 import android.util.Log
@@ -63,8 +64,8 @@ internal data class TurnRunInputs(
     val onCheckpoint: suspend (TurnCheckpoint) -> Unit,
     /** 流式投影：对末位 Assistant 应用 streaming delta（永不落库）并做 turn-owned 呈现。 */
     val onStreamDelta: suspend (UIMessage) -> Unit,
-    /** 生成阶段变化；phase 使用稳定英文枚举字符串，toolName 仅 tool_executing 携带。 */
-    val onPhase: suspend (String, String?) -> Unit = { _, _ -> },
+    /** 生成阶段变化；phase 使用 typed TurnRunPhase，toolName 仅 TOOL_EXECUTING 携带。 */
+    val onPhase: suspend (TurnRunPhase, String?) -> Unit = { _, _ -> },
     /** 结果提交：把 [TurnRunResult] 交给 turn owner——终态落 FinalizeTurn；暂停时 loop 已落 AWAITING_USER checkpoint。 */
     val onResult: suspend (TurnRunResult) -> Unit,
     /** worker 被取消时读取用户停止原因；返回 null 表示非用户主动停止。 */
@@ -125,7 +126,7 @@ class TurnRunner(
                 inputs.onResult(result)
                 if (result is TurnOutcome.Completed) {
                     // durable rooting 完成：把带本地文件的终态草稿交给 durable 槽，再发布其租约。
-                    result.assistantMessage?.let { inputs.onAssistantObserved(it) }
+                    inputs.onAssistantObserved(result.assistantMessage)
                     state.unpublishedResources.publishAll()
                 }
             }
@@ -143,14 +144,15 @@ class TurnRunner(
     }
 
     private suspend fun runLoop(state: TurnRunState): TurnRunResult {
-        for (stepIndex in 0 until state.maxSteps) {
-            Log.i(TAG, "streamText: start step #$stepIndex (${state.model.id})")
+        while (true) {
+            val step = state.messages.last().parts.filterIsInstance<UIMessagePart.Step>().last()
+            if (step.ordinal >= state.maxSteps) break
+            Log.i(TAG, "streamText: start step #${step.ordinal} (${state.model.id})")
             state.latestStreamingProjection = null
 
-            val hasToolsAwaitingReplay =
-                state.messages.lastOrNull()?.getTools()?.any { !it.hasReplayResult } == true
-            // 没有上一轮待处理 ToolCall 时才请求模型；审批恢复时绝不提前发起下一 step。
-            if (!hasToolsAwaitingReplay) {
+            check(step.outcome == null) { "A closed Step cannot run" }
+            // The committed model result distinguishes sampling from same-Step tool continuation.
+            if (step.modelResult == null) {
                 when (val stepOutcome = stepRunner.run(state)) {
                     is StepExecutionResult.Final -> {
                         // 无 Tool：唯一 durable 写是携带终态 Assistant 与末批压缩 patch 的 FinalizeTurn。
@@ -175,7 +177,7 @@ class TurnRunner(
                     state.result = TurnPause(outcome.pending)
                     break
                 }
-                ToolBatchOutcome.Executed -> state.sendPhase("between_steps")
+                ToolBatchOutcome.Executed -> state.sendPhase(TurnRunPhase.BETWEEN_STEPS)
                 ToolBatchOutcome.ImmediateOnly -> Unit
             }
         }

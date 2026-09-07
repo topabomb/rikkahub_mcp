@@ -362,11 +362,7 @@ class ConversationRepository(
             if (execution.status.isTerminal()) {
                 toolExecutionDAO.transitionStartedByTurn(
                     turnId = execution.turnId,
-                    targetStatus = if (execution.status == TurnExecutionStatus.CANCELLED) {
-                        ToolExecutionStatus.CANCELLED
-                    } else {
-                        ToolExecutionStatus.UNKNOWN
-                    },
+                    targetStatus = ToolExecutionStatus.UNKNOWN,
                     reason = execution.reason,
                     updatedAt = execution.updatedAt,
                 )

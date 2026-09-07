@@ -1,5 +1,7 @@
 package net.weero.measix.pilot.service.runtime
 
+import net.weero.measix.pilot.testkit.sampledModelResult
+
 import me.rerere.ai.core.MessageRole
 import me.rerere.ai.core.ToolCallLocator
 import me.rerere.ai.core.ToolOutputPolicy
@@ -32,7 +34,13 @@ internal abstract class ConversationTransitionTestBase {
     )
 
     protected fun assistant(id: Uuid, parts: List<UIMessagePart> = listOf(UIMessagePart.Text("hi"))): UIMessage =
-        UIMessage(id = id, role = MessageRole.ASSISTANT, parts = parts)
+        UIMessage(id = id, role = MessageRole.ASSISTANT, parts = listOf(
+            UIMessagePart.Step(
+                stepId = parts.filterIsInstance<UIMessagePart.Tool>().firstOrNull()?.stepId ?: id,
+                ordinal = 0, startedAt = kotlin.time.Instant.DISTANT_PAST,
+                modelResult = sampledModelResult(),
+            ),
+        ) + parts)
 
     protected fun user(id: Uuid): UIMessage =
         UIMessage(id = id, role = MessageRole.USER, parts = listOf(UIMessagePart.Text("q")))
@@ -79,7 +87,9 @@ internal abstract class ConversationTransitionTestBase {
             ),
         )
         val activeReplacement = started.nodes.last().currentMessage.copy(
-            parts = listOf(UIMessagePart.Text("current step")),
+            parts = started.nodes.last().currentMessage.parts.map {
+                if (it is UIMessagePart.Step) it.copy(modelResult = sampledModelResult("stop")) else it
+            } + UIMessagePart.Text("current step"),
         )
         val archive = ToolOutputArchive(
             ref = 74,
@@ -94,7 +104,7 @@ internal abstract class ConversationTransitionTestBase {
             buildToolOutputMarker(durableArchive, "completed", inlineText)
         })
         val historicalProjection = historical.copy(
-            parts = listOf(
+            parts = historical.parts.take(1) + listOf(
                 historicalTool.copy(
                     output = listOf(marker),
                     runtimeState = historicalTool.runtimeState.copy(archive = durableArchive),
@@ -107,7 +117,7 @@ internal abstract class ConversationTransitionTestBase {
             activeReplacement = activeReplacement,
             command = ModelResponseCheckpoint(
                 turn = TurnHandle(conversationId, 1, turnId, activeId),
-                step = StepHandle(Uuid.random()),
+                step = StepHandle(activeReplacement.parts.filterIsInstance<UIMessagePart.Step>().last().stepId),
                 assistantMessage = activeReplacement,
                 turnStatus = TurnExecutionStatus.RUNNING,
                 toolOutputCompactionPatches = listOf(
@@ -159,7 +169,7 @@ internal abstract class ConversationTransitionTestBase {
             resultStatus = ToolResultStatus.COMPLETED,
             runtimeState = ToolRuntimeState(ToolOutputPolicy.REGENERABLE_TEXT),
         )
-        val sourceMessage = started.nodes.last().currentMessage.copy(parts = listOf(tool))
+        val sourceMessage = assistant(activeId, listOf(tool))
         val sourceMessages = started.currentMessages().dropLast(1) + sourceMessage
         val durableNode = started.nodes.last().let { node ->
             node.copy(messages = node.messages.toMutableList().apply {
@@ -171,13 +181,13 @@ internal abstract class ConversationTransitionTestBase {
         )
         val marker = UIMessagePart.Text(markerText)
         val projectedAssistant = sourceMessage.copy(
-            parts = listOf(tool.copy(output = listOf(marker))),
+            parts = sourceMessage.parts.take(1) + tool.copy(output = listOf(marker)),
         )
         return ActiveCompactionScenario(
             started = source,
             command = ModelResponseCheckpoint(
                 turn = TurnHandle(conversationId, 1, turnId, activeId),
-                step = StepHandle(Uuid.random()),
+                step = StepHandle(projectedAssistant.parts.filterIsInstance<UIMessagePart.Step>().last().stepId),
                 assistantMessage = projectedAssistant,
                 turnStatus = TurnExecutionStatus.RUNNING,
                 toolOutputCompactionPatches = listOf(

@@ -243,7 +243,10 @@ class SubAssistantRunCoordinatorTest {
         val childAnswer = UIMessage(
             id = Uuid.random(),
             role = MessageRole.ASSISTANT,
-            parts = listOf(UIMessagePart.Text("child final answer")),
+            parts = listOf(
+                UIMessagePart.Step(Uuid.random(), 0, kotlin.time.Instant.fromEpochMilliseconds(1), outcome = me.rerere.ai.ui.StepOutcome.Final),
+                UIMessagePart.Text("child final answer"),
+            ),
         )
         val inputsSlot = slot<TurnRunInputs>()
         val runner = mockk<TurnRunner>()
@@ -271,17 +274,21 @@ class SubAssistantRunCoordinatorTest {
         }
         coEvery { harness.commandCoordinator.executeOrThrow(any(), any()) } just Runs
 
+        var linkedRun: me.rerere.ai.core.ToolChildRunLink? = null
         val result = harness.coordinator.executeCall(
             callerAssistantId = callerId,
             masterConversationId = masterId,
             targetAssistantId = targetId,
             task = "summarize",
-            execContext = executionContext(),
+            execContext = executionContext(reportChild = { linkedRun = it }),
             attachments = emptyList(),
         )
 
         // Child delegates to the shared runner exactly once, with Child-only interaction capability.
         coVerify(exactly = 1) { runner.run(any()) }
+        assertEquals(created.captured.id, linkedRun!!.childConversationId)
+        assertEquals(inputsSlot.captured.handle.turnId, linkedRun!!.childTurnId)
+        assertTrue(linkedRun!!.subAssistantRunId.isNotBlank())
         assertEquals(TurnInteractionCapability.USER_INPUT_ONLY, inputsSlot.captured.interactionAvailability)
         // The committed Child answer surfaces as the Parent tool result.
         val parentText = result.filterIsInstance<UIMessagePart.Text>().joinToString("\n") { it.text }
@@ -290,12 +297,12 @@ class SubAssistantRunCoordinatorTest {
 
     private fun executionContext(
         reportMetadata: suspend (JsonObject, ToolMetadataDelivery) -> Unit = { _, _ -> },
-        reportChild: suspend (String) -> Unit = { },
+        reportChild: suspend (me.rerere.ai.core.ToolChildRunLink) -> Unit = { },
     ) = ToolExecutionContext(
         locator = ToolCallLocator(currentMessageId, currentToolStepId, currentToolLocalCallId), providerCallId = "call",
         reportMetadata = reportMetadata,
         resolveAttachments = { ToolAttachmentResolution() },
-        reportChildConversation = reportChild,
+        reportChildRun = reportChild,
         registerUnpublishedResource = { },
     )
 
@@ -446,7 +453,8 @@ class SubAssistantRunCoordinatorTest {
         val tools = recovered.getTools()
 
         assertTrue(tools.all { it.hasReplayResult })
-        assertEquals(ToolInteractionState.Denied("app_restarted"), tools[0].interactionState)
+        assertEquals(ToolInteractionState.AwaitingApproval, tools[0].interactionState)
+        assertTrue(!tools[0].isPending)
         assertEquals(ToolInteractionState.NotRequired, tools[1].interactionState)
         assertTrue((tools[0].output.single() as UIMessagePart.Text).text.contains("app_restarted"))
     }
@@ -462,7 +470,8 @@ class SubAssistantRunCoordinatorTest {
         val tool = recovered.getTools().single()
 
         assertTrue(tool.hasReplayResult)
-        assertEquals(ToolInteractionState.Denied("user_cancelled"), tool.interactionState)
+        assertEquals(ToolInteractionState.AwaitingApproval, tool.interactionState)
+        assertTrue(!tool.isPending)
         assertTrue((tool.output.single() as UIMessagePart.Text).text.contains("user_cancelled"))
     }
 

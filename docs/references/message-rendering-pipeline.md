@@ -7,23 +7,6 @@
 
 ---
 
-## 目录
-
-1. [架构总览](#1-架构总览)
-   - [关键架构文件](#11-关键架构文件)
-2. [第一层：Part 分组与分发](#2-第一层part-分组与分发)
-3. [第二层：Markdown 解析与节点分发](#3-第二层markdown-解析与节点分发)
-4. [代码块渲染](#4-代码块渲染highlightcodeblock)
-5. [Mermaid WebView 渲染](#5-mermaid-webview-渲染)
-6. [HTML/SVG 代码预览](#6-htmlsvg-代码预览)
-7. [WebView 核心封装层](#7-webview-核心封装层)
-8. [全屏 WebView 页面](#8-全屏-webview-页面)
-9. [Markdown 全文预览](#9-markdown-全文预览)
-10. [渲染方式汇总](#10-渲染方式汇总)
-11. [关键设计决策](#11-关键设计决策)
-
----
-
 ## 1. 架构总览
 
 LLM 回复渲染经过 **两层分发**：
@@ -32,38 +15,11 @@ LLM 回复渲染经过 **两层分发**：
 UIMessage.parts[]
   │
   ├─ 第一层: ChatMessage.kt → groupMessageParts() 分组
-  │     将 parts 分为 ThinkingBlock（推理+工具）和 ContentBlock（文本/图片等）
+  │     将 parts 分为 ThinkingBlock（推理+普通工具）、SubAssistantCallBlock 与 ContentBlock（正文/媒体）
   │
   └─ 第二层: MarkdownBlock / MarkdownNew → AST 或 HTML DOM 逐节点分发
         Text part 的文本被解析为 Markdown，再按节点类型分发到各渲染组件
 ```
-
-### 流程图
-
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│                        UIMessage.parts                              │
-└──────────────────────────────┬──────────────────────────────────────┘
-                               │
-                  groupMessageParts()
-                               │
-         ┌─────────────────────┼─────────────────────┐
-         ▼                     ▼                     ▼
-  ThinkingBlock          ContentBlock           ContentBlock
-  (Reasoning+Tool)       (Text)                 (Image/Audio/...)
-         │                     │
-         ▼                     ▼
-  ChainOfThought        MarkdownBlock
-  (折叠卡片)                  │
-                    ┌────────┴────────┐
-                    │ containsHtml?   │
-                    ▼                 ▼
-               路径 A: AST        路径 B: HTML DOM
-              (Markdown.kt)      (MarkdownNew.kt)
-               逐节点分发          逐节点分发
-```
-
----
 
 ## 1.1 关键架构文件
 
@@ -80,7 +36,9 @@ UIMessage.parts[]
 
 ### 2.1 分组逻辑
 
-`groupMessageParts()`（`ChatMessageCot.kt`）将 `parts` 列表按顺序遍历，连续的 `Reasoning` 和 `Tool` 合并为一个 `ThinkingBlock`，其他类型各自成为独立的 `ContentBlock`。
+`groupMessageParts()`（`ChatMessageCot.kt`）按可见内容顺序将连续 `Reasoning` 和普通 `Tool` 合并为一个 `ThinkingBlock`；`assistant_call` 使用独立的 `SubAssistantCallBlock`，其余内容使用 `ContentBlock`。`UIMessagePart.Step` 是不可见执行标记，既不渲染也不切断折叠时间线。
+
+流式消息由查询层投影，保留其他 variants 与 `selectIndex`，UI 不改写历史节点。工具卡片 identity 使用 `localCallId`；`ToolLivePhase` 决定运行与交互呈现，不能以 Provider call ID、UI ordinal 或 output 是否为空代替。
 
 ```
 输入: [Reasoning, Tool, Tool, Text, Image, Reasoning, Text]
@@ -106,19 +64,9 @@ UIMessage.parts[]
 `List<UIMessagePart>.isEmptyUIMessage()` 把 `UIMessagePart.Tool` 判为可见：工具调用本身有卡片与操作入口，
 与是否执行、是否产出无关；真正空白 Text 仍为空。`isEmptyInputMessage()` 是独立的"用户可输入内容"判定，不受影响。
 
-> **会话级时序相册**：聊天内的明确图片（用户附件、工具产物）由会话宿主
-> （`ChatList` / `SubAssistantDetailPage` / `AssistantPromptPage`）按消息顺序经
-> `collectMessageImageUrls`（`ChatMessageCot.kt`，含顶层 Image part 与 Tool.output
-> 的 Image）展平成 `LocalConversationImages` 下发；消息区、工具缩略行与工具详情
-> Preview 点击任意图进入全屏 `ImagePreviewDialog`，从该张开始左右翻页浏览整个
-> 会话的图片时间流；未提供相册或相册为空时回退单图模式。
-> 聊天宿主同时下发 `LocalImagePreviewActions` 与 `LocalImagePreviewOverlay`
-> （当前会话助手「设为背景」+ 确认框），`ZoomableAsyncImage` 透传给查看器；
-> 文生图工具详情可复制完整提示词，「调用详情」展开后与默认工具卡共用 `ToolCallJsonDetails`。
-> 流式 loading 占位（空白 url 或 base64 空壳，由 `isImagePartLoading` 判定）被过滤并
-> 渲染为 shimmer 方块、不参与点击。Markdown/HTML 正文图不在 part 层，仍单张打开。
-> 查看器手势、注入槽与非聊天入口见 [界面架构](ui-architecture.md) §4.8。
+会话宿主通过 `LocalConversationImages` 提供点击时求值的时序相册。`collectMessageImageUrls` 按原顺序递归收集顶层与 Tool.output 图片，过滤 loading 占位；本地媒体必须经 `LocalAttachmentPreview` 解析，不能回退为原始 `file:` URI。占位图片显示 shimmer 且不可点击。Markdown/HTML 正文图不进入 part 相册，仍单张浏览。
 
+`ZoomableAsyncImage` 透传宿主的操作和覆盖层；查看器手势、设背景、删除与非聊天入口统一见 [界面架构](ui-architecture.md)。文生图工具详情可复制完整提示词，调用 JSON 使用共用 `ToolCallJsonDetails`。
 > 用户消息（`MessageRole.USER`）的 Text 额外包一层 `Surface`（primaryContainer 气泡）；
 > 助手消息可选气泡（`showAssistantBubble` 设置项）。
 
@@ -145,7 +93,7 @@ Text part 在传入 `MarkdownBlock` 之前，先经过 `replaceRegexes()` 处理
 - `ReasoningStep` → `ChatMessageReasoningStep`（推理文本）
 - `ToolStep` → `ChatMessageToolStep`（工具调用卡片，含输入/输出/审批）
 
-折叠只隐藏普通的早期步骤。`isPending`（`ToolInteractionState.AwaitingApproval` / `AwaitingInput`）的 Tool step 与 `generate_image` 都被固定
+折叠只隐藏普通的早期步骤。`isPending`（无结果且 interaction 为 `AwaitingApproval` / `AwaitingInput`）的 Tool step 与 `generate_image` 都被固定
 展示，且不计入隐藏数量。前者保证 HITL 审批不会被「再显示 N 步」收走；后者保证穿插在搜索/读写/
 shell 中间的文生图结果仍留在时间线原位。`generate_image` 不拆成 `SubAssistantCallBlock`：它没有
 Child 会话身份和导航，只是普通 Tool step。
@@ -196,7 +144,7 @@ Flow 异步收集。
 | 围栏代码块 | `CODE_FENCE` | `<pre>` | → `HighlightCodeBlock`（见第 4 节） |
 | 缩进代码块 | `CODE_BLOCK` | — | 原生 `Text`（无语法高亮） |
 | 行内代码 | `CODE_SPAN` | `<code>` | 原生 `Text`（JetbrainsMono） |
-| 行内公式 | `INLINE_MATH` | `<span class="math" inline="true">` | → `MathInline`（原生 Canvas） |
+| 行内公式 | `INLINE_MATH` | `<span class="math" inline="true">` | 原生 Canvas；AST 使用 inline drawable，DOM 使用 `MathInline` |
 | 块级公式 | `BLOCK_MATH` | `<span class="math" inline!="true">` | → `MathBlock`（原生 Canvas） |
 | 图片 | `IMAGE` | `<img>` | → `ZoomableAsyncImage`（Coil3） |
 | 表格 | `TABLE` | `<table>` | → `DataTable`（原生 Compose） |
@@ -214,6 +162,8 @@ Flow 异步收集。
 >
 > **流式安全性**：`CODE_FENCE` 节点通过检查 `CODE_FENCE_END` token 判断代码块是否完整（`completeCodeBlock`），
 > 传入 `HighlightCodeBlock`。流式生成中未闭合的代码块不会触发 Mermaid/HTML 预览，避免渲染半成品。
+
+`LatexText` 使用 JLatexMath 在原生 Canvas 绘制公式；Markdown AST 的行内公式通过 `splitLatex()` 按顶层运算符拆分以支持文本流换行，拆分失败回退为单体内联公式。块级公式通过 `MathBlock` 支持横向滚动。
 
 两条路径共用紧凑的块级纵向节奏：相邻段落保留半个正文 font size，标题按级别使用 3–8dp，块级公式、表格和 HTML
 图片外沿使用 4dp，分割线使用 8dp。代码块、WebView、表格、媒体和工具详情内部仍各自保留可读 padding；这里收紧的是
@@ -303,7 +253,7 @@ HighlightCodeBlock(code, language, completeCodeBlock)
 - 内联预览：`Modifier.height(200.dp)` 固定高度
 - `useWideViewPort = true` + `loadWithOverviewMode = true` 自适应内容宽度
 - 圆角裁剪：`Modifier.clip(RoundedCornerShape(4.dp))`
-- View 与导出入口均归入代码块 Header；200dp WebView 内没有覆盖层，也不再在预览下方增加第二行高度
+- View 与导出入口归代码块 Header；200dp WebView 内没有覆盖层，预览下方没有第二行操作栏
 - 调试页与消息正文均通过 `HighlightCodeBlock(language = "mermaid")` 接入，复用同一套全屏与导出操作。
 
 ---
@@ -353,7 +303,7 @@ WebViewState
 | 创建 | `factory` | 创建 WebView，配置 WebSettings（JS、DOM Storage、缩放等），注入 JS 接口，设置 Client |
 | 更新 | `update` | 内容变化时通过 `loadDataWithBaseURL` 或 `loadUrl` 加载；重新注入 JS 接口 |
 | 重置 | `onReset` | 停止加载、移除 JS 接口（AndroidView 从组合中移除但未释放时） |
-| 释放 | `onRelease` | 同 onReset + 清除 Client + 置空 `state.webView` 引用 |
+| 释放 | `onRelease` | 仅清空匹配实例的 `state.webView`，停止加载并移除接口、清除 Client，加载空白页、清历史与子 View，最后 `destroy()` |
 
 ### 7.3 防重复加载机制
 
@@ -423,26 +373,3 @@ WebViewState
 | HTML 块 | 原生 | `SimpleHtmlBlock` / `MarkdownNew` | Jsoup → Compose |
 | 全屏预览 | WebView | `WebViewPage` | 独立页面 |
 | Markdown 全文预览 | WebView | `mark.html` 模板 | markdown-it + KaTeX + Mermaid + highlight.js |
-
----
-
-## 11. 关键设计决策
-
-1. **双路径 Markdown 渲染**：纯 Markdown 走 AST 路径（性能更好），含 HTML 走 DOM 路径（表达力更强）。通过 `containsHtml()` 检查自动切换。路径 B 传入原始内容由 `MarkdownNew` 独立预处理。
-
-2. **异步 AST 解析**：`MarkdownBlock` 在后台线程（`Dispatchers.Default`）解析 AST，通过 `snapshotFlow` + `mapLatest` 响应内容变化，避免流式更新时主线程阻塞。
-
-3. **流式安全降级**：`SelectionContainer` 在流式期间禁用（防 `ConcurrentModificationException`）；`completeCodeBlock` 在代码围栏未闭合时禁用 WebView 预览，统一走原生渲染。
-
-4. **LaTeX 原生渲染而非 WebView**：使用 JLatexMath 在 Compose Canvas 上绘制，避免 WebView 的性能开销。行内公式通过 `splitLatex()` 按顶层运算符拆分，实现文本流内换行。
-
-5. **WebView 固定高度 + 全屏切换**：内联场景统一 200dp 高度，通过全屏页面获得完整交互。避免 WebView 在 LazyColumn 中动态测量高度的性能问题。
-
-6. **配色 CSS 变量注入**：Compose `ColorScheme` → `toCssHex()` → CSS 变量 / Mermaid themeVariables，实现主题实时同步。
-
-7. **防重复加载**：`WebViewState` 通过 `lastLoadedData` 和 `forceReload` 机制，避免 Compose 重组时重复触发 `loadDataWithBaseURL`。
-
-8. **JS 接口安全**：`@JavascriptInterface` 仅暴露必要方法，在 `onReset`/`onRelease` 时主动 `removeJavascriptInterface` 清理。
-
-9. **代码块 Mermaid 离线可用**：内联与从代码块 Header 打开的全屏预览复用同一 HTML，Mermaid 脚本均从本地 assets
-   加载（`WEB_VIEW_ASSET_URL`），不依赖 CDN。Markdown 全文预览仍由自身模板加载 Mermaid 依赖。

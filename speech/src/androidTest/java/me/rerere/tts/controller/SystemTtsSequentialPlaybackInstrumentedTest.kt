@@ -9,6 +9,7 @@ import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
@@ -38,13 +39,13 @@ class SystemTtsSequentialPlaybackInstrumentedTest {
                 it.setProvider(TTSProviderSetting.SystemTTS(speechRate = 2.0f))
             }
         }
-        val playedSources = mutableListOf<String>()
+        val playedSources = MutableStateFlow<List<String>>(emptyList())
         val collector = launch(Dispatchers.Main) {
             controller.activeSource.combine(controller.playbackState) { source, state ->
                 source to state.status
             }.collect { (source, status) ->
                 if (status == PlaybackStatus.Playing && source is String) {
-                    if (playedSources.lastOrNull() != source) playedSources += source
+                    if (playedSources.value.lastOrNull() != source) playedSources.value += source
                 }
             }
         }
@@ -63,7 +64,7 @@ class SystemTtsSequentialPlaybackInstrumentedTest {
             assertEquals(PlaybackStatus.Paused, controller.playbackState.value.status)
             assertEquals("master-paused", controller.activeSource.value)
             assertEquals(1.5f, controller.playbackState.value.speed)
-            assertTrue("No source may start playing while toolbar is paused", playedSources.isEmpty())
+            assertTrue("No source may start playing while toolbar is paused", playedSources.value.isEmpty())
 
             withContext(Dispatchers.Main) { controller.resume() }
             withTimeout(CONTROLLER_TIMEOUT_MS) {
@@ -71,9 +72,8 @@ class SystemTtsSequentialPlaybackInstrumentedTest {
                     state.status == PlaybackStatus.Ended && currentChunk == 2
                 }.first { it }
             }
-            delay(100)
-
-            assertEquals(listOf("master-paused", "target-queued"), playedSources)
+            val observed = withTimeout(CONTROLLER_TIMEOUT_MS) { playedSources.first { it.size >= 2 } }
+            assertEquals(listOf("master-paused", "target-queued"), observed)
         } finally {
             collector.cancelAndJoin()
             withContext(Dispatchers.Main) { controller.dispose() }
@@ -196,13 +196,13 @@ class SystemTtsSequentialPlaybackInstrumentedTest {
         val controller = withContext(Dispatchers.Main) {
             TtsController(context, TTSManager(context)).also { it.setProvider(setting) }
         }
-        val playedSources = mutableListOf<String>()
+        val playedSources = MutableStateFlow<List<String>>(emptyList())
         val collector = launch(Dispatchers.Main) {
             controller.activeSource.combine(controller.playbackState) { source, state ->
                 source to state.status
             }.collect { (source, status) ->
-                if (status == PlaybackStatus.Playing && source is String && playedSources.lastOrNull() != source) {
-                    playedSources += source
+                if (status == PlaybackStatus.Playing && source is String && playedSources.value.lastOrNull() != source) {
+                    playedSources.value += source
                 }
             }
         }
@@ -220,10 +220,8 @@ class SystemTtsSequentialPlaybackInstrumentedTest {
                     state.status == PlaybackStatus.Ended && currentChunk == 4
                 }.first { it }
             }
-            // Give the state collector one dispatch turn after the terminal transition.
-            delay(100)
-
-            assertEquals(listOf("master-1", "target-1", "target-2", "master-2"), playedSources)
+            val observed = withTimeout(CONTROLLER_TIMEOUT_MS) { playedSources.first { it.size >= 4 } }
+            assertEquals(listOf("master-1", "target-1", "target-2", "master-2"), observed)
         } finally {
             collector.cancelAndJoin()
             withContext(Dispatchers.Main) { controller.dispose() }

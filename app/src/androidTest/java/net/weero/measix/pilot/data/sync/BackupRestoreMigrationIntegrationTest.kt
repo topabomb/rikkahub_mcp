@@ -87,14 +87,19 @@ class BackupRestoreMigrationIntegrationTest {
     }
 
     @Test
-    fun durableV4Db9RestoreUpgradesStagingToV11AndLoadsThroughRepository() = runBlocking {
+    fun durableV4Db8RestoreUpgradesStagingToV11AndLoadsThroughRepository() = assertLegacyRestorePreservesMessages(8)
+
+    @Test
+    fun durableV4Db9RestoreUpgradesStagingToV11AndLoadsThroughRepository() = assertLegacyRestorePreservesMessages(9)
+
+    private fun assertLegacyRestorePreservesMessages(sourceVersion: Int) = runBlocking {
         val anchor = UIMessage.user("preserved request").copy(id = anchorMessageId)
         val owner = UIMessage(
             id = ownerMessageId,
             role = MessageRole.ASSISTANT,
             parts = listOf(UIMessagePart.Text("preserved answer")),
         )
-        migrationHelper.createDatabase(sourceName, 9).use { db ->
+        migrationHelper.createDatabase(sourceName, sourceVersion).use { db ->
             db.execSQL(
                 "INSERT INTO ConversationEntity(id, assistant_id, title, create_at, update_at, suggestions, " +
                     "is_pinned, custom_system_prompt, mode_injection_ids, workspace_cwd, tags, folder_id, " +

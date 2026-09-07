@@ -17,7 +17,15 @@ internal class RequestAssembler {
 
     fun assemble(projectedMessages: List<UIMessage>): AssembledRequest {
         val providerVisible = projectedMessages.map { message ->
-            message.copy(parts = message.parts.filterNot { it is UIMessagePart.Step })
+            message.copy(
+                parts = message.parts.filterNot { it is UIMessagePart.Step },
+                providerReplayProjection = message.providerReplayProjection?.let { replay ->
+                    replay.copy(
+                        completePartCount = message.parts.take(replay.completePartCount)
+                            .count { it !is UIMessagePart.Step },
+                    )
+                },
+            )
         }
         return AssembledRequest(
             providerVisibleMessages = providerVisible,

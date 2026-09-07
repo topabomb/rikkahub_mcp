@@ -87,9 +87,11 @@ common/       通用工具
 | [界面架构参考](docs/references/ui-architecture.md) | UI 架构层次、导航体系、自适应布局策略、折叠屏适配方案 |
 | [消息渲染管线](docs/references/message-rendering-pipeline.md) | UIMessage.parts 到像素的完整渲染管线、Markdown 双路径、WebView 封装 |
 | [助手配置参考](docs/references/assistant-configuration.md) | Assistant 字段、默认模板、解析/持久化规则与配置消费边界 |
-| [Android 配置架构与企业下发清单](docs/references/android-configuration-architecture.md) | Android 完整配置目录、持久化/引用架构、企业下发边界与 S0.2 Snapshot 映射 |
+| [Android 配置架构与资源边界](docs/references/android-configuration-architecture.md) | 当前配置目录、有效投影、持久化、资源与引用边界 |
+| [测试策略](docs/references/testing-strategy.md) | 测试分层、owner、确定性与验证门禁 |
+| [请求上下文](docs/references/request-context.md) | 条数窗口、滚动压缩、披露与手动摘要 |
 | [Turn/Step 执行链路](docs/references/turn-step-execution.md) | 从用户发送到模型回复落盘的完整数据流 |
-| [多模态与持久化](docs/references/multimodal-context-and-turn-durability.md) | 附件身份、文件路径、请求投影与 Turn/Tool 持久化 |
+| [多模态与持久化](docs/references/multimodal-context-and-turn-durability.md) | 附件身份、文件路径、请求投影与资源持久化 |
 | [AI 协议参考](docs/references/protocol-reference.md) | 四类基础协议规范、Provider 差异映射、模型级适配 |
 | [Token 与缓存统计](docs/references/token-usage-accounting.md) | 请求、turn 累计、上下文与缓存展示口径 |
 | [MCP 架构](docs/references/mcp-architecture.md) | 工具目录、连接运行态、OAuth 与审批边界 |
@@ -104,6 +106,7 @@ common/       通用工具
 
 | 文档 | 说明 |
 |------|------|
+| [Android 企业集成计划](docs/dev/android-enterprise-integration-plan.md) | 下一步企业阶段、平台映射与运行接入约束 |
 | [版本变更记录](docs/dev/changelog.md) | 各发布版本的功能与修复摘要 |
 | [Fork 精简计划](docs/dev/fork-simplification-plan.md) | Fork 精简规划与落地记录（已归档） |
 | [原始架构文档](docs/dev/original-architecture.md) | Fork 前 RikkaHub 架构详解（已归档） |

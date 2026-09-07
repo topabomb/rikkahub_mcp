@@ -43,6 +43,8 @@ internal data class StartTurn(
     /** 合法 canonical Disclosure envelope；内容相对目标分支 baseline 变化才追加 entry。 */
     val modelContextCandidate: String,
     val epoch: Long = 0L,
+    /** Allocated once with the command; reducing the same START preserves identity and time. */
+    val initialStep: me.rerere.ai.ui.UIMessagePart.Step = TurnTransition.openStep(0),
 ) : ConversationCommand
 
 /**

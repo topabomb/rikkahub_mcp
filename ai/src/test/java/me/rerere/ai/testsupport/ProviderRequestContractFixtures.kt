@@ -3,6 +3,7 @@ package me.rerere.ai.testsupport
 import me.rerere.ai.core.MessageRole
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
+import me.rerere.ai.ui.ToolResultStatus
 import kotlin.uuid.Uuid
 
 /**
@@ -17,12 +18,14 @@ fun executedTool(
     name: String,
     input: String,
     output: String,
+    stepId: Uuid = Uuid.parse("00000000-0000-0000-0000-000000000001"),
 ): UIMessagePart.Tool = UIMessagePart.Tool(
     localCallId = Uuid.random(),
-    stepId = Uuid.random(),
+    stepId = stepId,
     providerCallId = callId,
     toolName = name,
     input = input,
+    resultStatus = ToolResultStatus.COMPLETED,
     output = listOf(UIMessagePart.Text(output)),
 )
 
@@ -39,8 +42,19 @@ fun canonicalMultiRoundToolTurn(): List<UIMessage> = listOf(
             UIMessagePart.Text("Let me search"),
             executedTool("call_1", "search", """{"query": "test"}""", "Search result"),
             UIMessagePart.Text("Now calculating"),
-            executedTool("call_2", "calculate", """{"expr": "2+2"}""", "4"),
+            executedTool("call_2", "calculate", """{"expr": "2+2"}""", "4", stepId = Uuid.random()),
             UIMessagePart.Text("The answer is 4"),
+        ),
+    ),
+)
+
+/** No prose separates these Steps: the durable tool identity must retain their causal order. */
+fun consecutiveToolSteps(): List<UIMessage> = listOf(
+    UIMessage(
+        role = MessageRole.ASSISTANT,
+        parts = listOf(
+            executedTool("call_1", "lookup", "{}", "one", stepId = Uuid.random()),
+            executedTool("call_2", "lookup", "{}", "two", stepId = Uuid.random()),
         ),
     ),
 )

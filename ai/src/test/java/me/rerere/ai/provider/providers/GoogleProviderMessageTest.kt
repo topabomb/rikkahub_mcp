@@ -29,6 +29,7 @@ import me.rerere.ai.provider.TextGenerationParams
 import me.rerere.ai.ui.GoogleThoughtMetadata
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
+import me.rerere.ai.ui.ToolResultStatus
 import me.rerere.ai.ui.metadataAs
 import me.rerere.ai.ui.toMetadata
 import me.rerere.ai.util.ProviderTerminalStatus
@@ -94,7 +95,6 @@ class GoogleProviderMessageTest {
         jsonObject = part,
         sourceModelId = testModelId,
         sourceProfile = testSourceProfile,
-        providerStepId = "test-step",
     )
 
     @Test
@@ -112,6 +112,7 @@ class GoogleProviderMessageTest {
                         localCallId = Uuid.random(), stepId = Uuid.random(), providerCallId = "call_1",
                         toolName = "generate_image",
                         input = "{}",
+                        resultStatus = ToolResultStatus.COMPLETED,
                         output = listOf(UIMessagePart.Text(toolFact)),
                     ),
                 ),
@@ -696,7 +697,7 @@ class GoogleProviderMessageTest {
             })
             put("thoughtSignature", "tool_signature")
         }) as UIMessagePart.Tool
-        val executed = parsed.copy(output = listOf(UIMessagePart.Text("result")))
+        val executed = parsed.copy(resultStatus = ToolResultStatus.COMPLETED, output = listOf(UIMessagePart.Text("result")))
 
         assertEquals("server_call_1", parsed.providerCallId)
         assertEquals("server_call_1", parsed.metadataAs<GoogleThoughtMetadata>()?.functionCallId)
@@ -717,18 +718,17 @@ class GoogleProviderMessageTest {
 
     @Test
     fun `adjacent tools from distinct gemini response steps remain sequential`() {
-        fun tool(id: String, step: String) = executedTool(id, "lookup", "{}", id).copy(
+        fun tool(id: String, step: Uuid) = executedTool(id, "lookup", "{}", id, stepId = step).copy(
             metadata = GoogleThoughtMetadata(
                 functionCallId = id,
                 thoughtSignature = "signature-$id",
-                providerStepId = step,
-            ).toMetadata(),
+            ).toMetadata().let { JsonObject(it + ("providerStepId" to JsonPrimitive("same-old-step"))) },
         )
         val contents = invokeBuildContents(
             listOf(
                 UIMessage(
                     role = MessageRole.ASSISTANT,
-                    parts = listOf(tool("call-1", "step-1"), tool("call-2", "step-2")),
+                    parts = listOf(tool("call-1", Uuid.random()), tool("call-2", Uuid.random())),
                 )
             )
         )
@@ -746,7 +746,6 @@ class GoogleProviderMessageTest {
             metadata = GoogleThoughtMetadata(
                 functionCallId = id,
                 thoughtSignature = if (id == "call-1") "signature" else null,
-                providerStepId = "shared-step",
             ).toMetadata(),
         )
         val contents = invokeBuildContents(
@@ -771,7 +770,6 @@ class GoogleProviderMessageTest {
             thoughtSignature = "opaque-signature",
             sourceModelId = "gemini-3-flash",
             sourceProfile = "google:developer:generativelanguage.googleapis.com",
-            providerStepId = "step-1",
         ).toMetadata()
         val message = UIMessage(
             role = MessageRole.ASSISTANT,
@@ -830,20 +828,17 @@ class GoogleProviderMessageTest {
             metadata = GoogleThoughtMetadata(
                 thoughtSignature = "signature",
                 functionCallId = "call-1",
-                providerStepId = "step-1",
             ).toMetadata(),
         )
         val delta = UIMessagePart.Tool(
             localCallId = Uuid.random(), stepId = Uuid.random(), providerCallId = "call-1",
             toolName = "",
             input = "}",
-            metadata = GoogleThoughtMetadata(providerStepId = "step-1").toMetadata(),
         )
 
         val merged = first.merge(delta).metadataAs<GoogleThoughtMetadata>()!!
         assertEquals("signature", merged.thoughtSignature)
         assertEquals("call-1", merged.functionCallId)
-        assertEquals("step-1", merged.providerStepId)
     }
 
     @Test

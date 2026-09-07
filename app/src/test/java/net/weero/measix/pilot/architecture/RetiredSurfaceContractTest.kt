@@ -2,7 +2,6 @@ package net.weero.measix.pilot.architecture
 
 import java.io.File
 import org.junit.Assert.assertFalse
-import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
@@ -14,6 +13,7 @@ class RetiredSurfaceContractTest {
     fun `removed compatibility surfaces cannot return`() {
         listOf(
             "ConversationAggregateSnapshot.toConversation(",
+            "ToolSetRunMode",
             "updateConversationState",
             "updatePersistedConversation",
             "submitHeaderUpdate",
@@ -73,17 +73,6 @@ class RetiredSurfaceContractTest {
         assertFalse(File(architectureSourceRoot, "data/files/ManagedLocalArtifactStore.kt").exists())
         assertFalse(File(architectureSourceRoot, "data/ai/mcp/transport/SseClientTransport.kt").exists())
         assertFalse(File(architectureSourceRoot, "data/ai/mcp/transport/StreamableHttpClientTransport.kt").exists())
-    }
-
-    @Test
-    fun `turn run classification is a single TurnKind with no ToolSetRunMode`() {
-        val protocol = File(architectureSourceRoot, "service/runtime/TurnProtocol.kt").readText()
-        assertTrue(protocol.contains("enum class TurnKind"))
-        assertTrue(protocol.contains("USER,"))
-        assertTrue(protocol.contains("SUB_ASSISTANT,"))
-        val factory = File(architectureSourceRoot, "data/ai/tools/TurnToolSetFactory.kt").readText()
-        assertFalse("ToolSetRunMode must be physically deleted", factory.contains("ToolSetRunMode"))
-        assertTrue("tool assembly classifies by TurnKind", factory.contains("turnKind: TurnKind"))
     }
 
     @Test

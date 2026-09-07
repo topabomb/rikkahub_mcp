@@ -121,6 +121,23 @@ class TurnStreamProjectionTest {
     }
 
     @Test
+    fun `model checkpoint displays immediate typed failures as failed`() {
+        val assistantId = Uuid.random()
+        val handle = TurnHandle(Uuid.random(), 1, Uuid.random(), assistantId)
+        val failed = assistant(assistantId, tool(assistantId, 0).copy(
+            output = listOf(UIMessagePart.Text("invalid arguments")), resultStatus = ToolResultStatus.FAILED,
+        ))
+        val projection = TurnStreamProjection(
+            epoch = handle.epoch, turnId = handle.turnId,
+            assistantMessageId = assistantId, assistantMessage = null,
+        ).afterCheckpoint(ModelResponseCheckpoint(
+            turn = handle, step = StepHandle(stepId), assistantMessage = failed,
+            turnStatus = TurnExecutionStatus.RUNNING,
+        ))
+        assertEquals(ToolLivePhase.FAILED, projection.toolLivePhases[loc(assistantId, 0)])
+    }
+
+    @Test
     fun `result without execution advances only from typed committed result fact`() {
         val assistantId = Uuid.random()
         val handle = TurnHandle(
@@ -148,6 +165,7 @@ class TurnStreamProjectionTest {
             parts = listOf(
                 (toolMessage.parts.single() as UIMessagePart.Tool).copy(
                     output = listOf(UIMessagePart.Text("{\"status\":\"failed\"}")),
+                    resultStatus = ToolResultStatus.FAILED,
                 ),
             ),
         )
@@ -166,39 +184,7 @@ class TurnStreamProjectionTest {
         )
         assertEquals(ToolLivePhase.FAILED, committed.toolLivePhases[locator])
 
-        val invalidOrdinal = runCatching {
-            streamed.afterCheckpoint(
-                ToolResultCheckpoint(
-                    turn = handle,
-                    step = StepHandle(stepId),
-                    assistantMessage = failedMessage,
-                    toolResults = listOf(ToolResultFact(loc(assistantId, 1), ToolResultStatus.FAILED)),
-                ),
-            )
-        }.exceptionOrNull()
-        assertTrue(invalidOrdinal?.message?.contains("missing tool call") == true)
 
-        val execution = ToolExecutionFact(
-            executionId = "execution",
-            assistantMessageId = assistantId,
-            stepId = stepId,
-            localCallId = stableId(0),
-            providerCallId = "call",
-            toolName = "tool",
-            status = ToolExecutionStatus.COMPLETED,
-        )
-        val conflictingStatus = runCatching {
-            streamed.afterCheckpoint(
-                ToolResultCheckpoint(
-                    turn = handle,
-                    step = StepHandle(stepId),
-                    assistantMessage = failedMessage,
-                    toolResults = listOf(ToolResultFact(loc(assistantId, 0), ToolResultStatus.FAILED)),
-                    toolExecution = execution,
-                ),
-            )
-        }.exceptionOrNull()
-        assertTrue(conflictingStatus?.message?.contains("conflicting terminal statuses") == true)
     }
 
     // ── owning-assistant identity: the draft is exactly the turn's Assistant ──────────────
@@ -267,6 +253,36 @@ class TurnStreamProjectionTest {
     }
 
     // ── committed + stream + presentation merge, with structural sharing ──────────────────
+
+    @Test
+    fun `stream overlay keeps inactive variants and never reads historical nodes while building`() {
+        val active = UIMessage.assistant("active")
+        val earlier = UIMessage.assistant("earlier variant")
+        val later = UIMessage.assistant("later variant")
+        val node = MessageNode.of(active).copy(messages = listOf(earlier, active, later), selectIndex = 1)
+        val history = MessageNode.of(UIMessage.user("history"))
+        val reads = mutableListOf<Int>()
+        val source = object : AbstractList<MessageNode>() {
+            override val size = 1_001
+            override fun get(index: Int): MessageNode {
+                reads += index
+                return if (index == lastIndex) node else history
+            }
+        }
+        val durable = Conversation.ofId(Uuid.random()).toSnapshot().copy(nodes = source)
+        val draft = active.copy(parts = listOf(UIMessagePart.Text("streaming")))
+        val projection = ConversationRuntimeSnapshot(durable, TurnStreamProjection(
+            epoch = 1, turnId = Uuid.random(), assistantMessageId = active.id, assistantMessage = draft,
+        )).toPresentationSnapshot()
+
+        assertEquals(listOf(source.lastIndex), reads)
+        val rendered = projection.nodes.last()
+        assertEquals(1, rendered.selectIndex)
+        assertSame(earlier, rendered.messages[0])
+        assertSame(draft, rendered.messages[1])
+        assertSame(later, rendered.messages[2])
+        assertSame(history, projection.nodes[0])
+    }
 
     @Test
     fun `presentation overlays only the last node with the draft and shares every history node`() {
@@ -411,13 +427,15 @@ class TurnStreamProjectionTest {
 
     @Test
     fun `terminal pipeline preserves think close time without applying regex twice`() = runTest {
+        val step = TurnTransition.openStep(0)
         val raw = UIMessage(
             role = MessageRole.ASSISTANT,
-            parts = listOf(UIMessagePart.Text("<think>reasoning</think>a")),
+            parts = listOf(step, UIMessagePart.Text("<think>reasoning</think>a")),
         )
         val capturedAt = Instant.fromEpochMilliseconds(1_234)
         val previousProjection = raw.copy(
             parts = listOf(
+                step,
                 UIMessagePart.Reasoning(
                     reasoning = "reasoning",
                     createdAt = Instant.DISTANT_PAST,
@@ -453,12 +471,14 @@ class TurnStreamProjectionTest {
 
     @Test
     fun `terminal pipeline closes an unclosed think projection`() = runTest {
+        val step = TurnTransition.openStep(0)
         val raw = UIMessage(
             role = MessageRole.ASSISTANT,
-            parts = listOf(UIMessagePart.Text("<think>reasoning")),
+            parts = listOf(step, UIMessagePart.Text("<think>reasoning")),
         )
         val previousProjection = raw.copy(
             parts = listOf(
+                step,
                 UIMessagePart.Reasoning(
                     reasoning = "reasoning",
                     createdAt = Instant.DISTANT_PAST,

@@ -1,8 +1,6 @@
-# 多模态上下文与 Turn 持久化
+# 多模态上下文与资源持久化
 
-> 定位：会话中的多媒体附件如何成为持久事实（stable attachment ref + Artifact）、如何在每次生成请求中按模型能力投影（`AttachmentProjectionTransformer` / `inspect_attachments`）、以及一轮生成（Turn）如何以执行事实落库并在崩溃后恢复。
->
-> 分工：总体 owner 与分层边界见 [application-architecture.md](application-architecture.md)；`inspect_attachments` 的模型可见描述与失败 reason 表见 [prompts-and-tools.md](prompts-and-tools.md)；Resolver 的受管读取 / 魔数 / 去重细节与子助手附件链路见 [sub-assistant-multimodal.md](sub-assistant-multimodal.md)；生成主链路与 Transformer 顺序见 [turn-step-execution.md](turn-step-execution.md)；数据层结构见 [../dev/persistent-records-and-sync.md](../dev/persistent-records-and-sync.md)。
+本文描述附件身份、请求级媒体投影、Artifact 与工具输出资源的持久化交接。Turn/Step、审批、取消与恢复的通用协议见 [turn-step-execution.md](turn-step-execution.md)；请求预算与披露见 [request-context.md](request-context.md)；子助手入站和交付物见 [sub-assistant-multimodal.md](sub-assistant-multimodal.md)；模型可见参数与失败 reason 见 [prompts-and-tools.md](prompts-and-tools.md)。
 
 ## 1. 行为总览
 
@@ -22,9 +20,9 @@ AttachmentProjectionTransformer（按本次 RequestMediaCapabilities）
     inspect_attachments(attachments, request)
         → ToolExecutionContext.resolveAttachments → 识别模型（单次多图调用）→ Text
     ▼
-Turn / Tool 执行事实（TurnCheckpoint / FinalizeTurn 命令 → ConversationRepository.commit(ConversationWrite)，Room 事务）
+Tool Result checkpoint（消息与 Artifact 引用同事务）
     ▼
-崩溃恢复（INTERRUPTED / UNKNOWN）与 replay-safe 回放
+提交成功后发布资源；失败或取消精确回滚未发布资源
 ```
 
 关键性质：投影是**请求级、无状态、非破坏**——durable Conversation 永远保存原图与 ref，Model View 每次按当次模型重算；模型切换（视觉 ↔ 文本）不需要迁移消息，下一次请求自然回放对应形态。
@@ -74,7 +72,7 @@ Turn / Tool 执行事实（TurnCheckpoint / FinalizeTurn 命令 → Conversation
 | 托管文件路径 | `/upload/<file>` | 识别、委托与 workspace 读取使用同一路径；前两者不依赖工作区 | `[Attachment path=...]`、Tool Result `file.path`、子助手 `artifacts[].path` |
 | 工作产物路径 | `/workspace/...` | workspace 工具族读写 | workspace 工具结果；不属于附件识别输入 |
 
-`/upload` 挂载会话共享的只读文件（用户上传与生成媒体）。内部数据库 id（如已移除的 `media_id`）不进入模型可见 JSON。
+`/upload` 挂载会话共享的只读文件（用户上传与生成媒体）。内部数据库 id 不进入模型可见 JSON。
 
 新托管文件由 `AssetFileNames.candidates()` 生成四个随机候选主体，顺序固定为 base36 的 6、7、8 位及 base62 的 8 位。字符集分别为 `0-9a-z` 与 `0-9a-zA-Z`；每档使用 `ThreadLocalRandom.current().nextLong(bound)` 整体取样后定宽编码，不查重、不做 IO。候选、最终落盘文件名和模型引用均无来源前缀，来源继续由既有 `ArtifactOrigin` metadata 表达。扩展名经 `FileUtils.safeExtension` 校验，生图按实际图片格式确定。
 
@@ -84,7 +82,7 @@ Turn / Tool 执行事实（TurnCheckpoint / FinalizeTurn 命令 → Conversation
 
 图库原件与聊天副本各自归原 owner，允许有不同短名；模型只披露聊天副本的真实 `/upload` 路径，不再重复披露 `name` 或混入图库原名。用户可见的原始上传名称仍保存在现有 displayName。已有文件、UUID、metadata 字段与内容均不改；旧长路径按同一规则使用，不建别名、不按相似名称或忽略大小写纠错。
 
-路径查重沿用 Artifact 的 `relative_path` 唯一索引，图库使用 `GenMediaEntity.path` 普通索引。Room v8→v9 是[索引补全迁移](database-indexing.md)，不重建表、不增加业务字段，也不对历史重复路径施加新约束。完整备份的 v8/v9 数据库沿用同一归档校验流程，恢复后由 Room 执行适用的迁移，备份 manifest 结构不变。
+路径查重沿用 Artifact 的 `relative_path` 唯一索引；图库使用 `GenMediaEntity.path` 普通索引。schema、索引与备份升级边界见 [database-indexing.md](database-indexing.md)。
 
 ### 2.4 文件可用性
 
@@ -179,12 +177,7 @@ Turn / Tool 执行事实（TurnCheckpoint / FinalizeTurn 命令 → Conversation
 模型图片能力唯一来源于 `Model.inputModalities`；`RequestMediaCapabilities` 负责协议容器映射，不负责禁止按需读取。
 不按 endpoint host 再次否决 IMAGE 能力；真实远端不兼容由 Provider 分类失败表达。
 
-工具集合在每个新 `START` 时从那一份 Effective Settings 冻结为有序 `FrozenToolDefinition` 与同名
-`ToolExecutionBinding`；同一 Turn 的后续 Provider step、审批 / `ask_user` continuation 与重试复用这套
-wire 与执行索引，不得重读 Settings 来增删名称、改 Schema 或改顺序。执行前仍由 owner 对权限、资源与远端
-状态 live fail-closed。审批继续、恢复或历史 ToolCall 若已不在该冻结集合，统一通过结果 checkpoint 持久化
-带标准错误标记的 `tool_not_available`，不恢复已撤销工具。未实际执行的拒绝只有消息中的失败结果，不创建
-`tool_execution` 记录或伪造 STARTED 阶段。配置变化只影响下一次新 `START`。
+工具在新 `START` 冻结；后续 step、用户交互继续与重试复用同一工具定义和执行索引。执行期凭据、权限和资源重验见 [turn-step-execution.md](turn-step-execution.md)。
 
 ### 4.2 附件解析接口（`ToolExecutionContext.resolveAttachments`）
 
@@ -224,95 +217,25 @@ wire 与执行索引，不得重读 Settings 来增删名称、改 Schema 或改
 | `generate_image` 产出 | 成功时 Image part 落入本次 Tool.output 并盖章；下一个 step 的请求由投影管线回放（原图或引用行）。识别这张图 = 把它的 `file.path` 传给 `inspect_attachments` |
 | Target（`assistant_call`） | Child 拥有完整 Assistant 级 transformer 链 + 自己的 resolved model；入站只校验 path / 资产，视觉能力由 Target run 自己的投影与工具集表达；`AttachmentProjectionTransformer` 同样位于动态模板之后、Provider 序列化之前 |
 
-会话披露使用独立的 `conversation_model_context` durable 表：一条 entry 由 Assistant request variant 的
-`owner_message_id/owner_node_id` 拥有，并锚定其因果 USER 的 `anchor_message_id/anchor_node_id`。它不进入
-`ConversationEntity` 大 JSON，也不暴露给 Presentation/UI。打开会话只验证 envelope 形状（未知 format、非法 JSON、
-错误角色与重复 owner 仍 fail-closed），不把已提交 bytes 再做 canonical round-trip；逐字 canonical 只在 render 与
-`StartTurn` 写入时强制。每个新 START 在结构变换后的 selected branch 上生成 canonical candidate，
-仅在内容相对 retained baseline 变化时随同一个 `StartTurn` 原子插入；审批/ask-user continuation 不创建第二 entry。
-Fork / Child clone 按复制后的整棵 node 树 remap entry，未选中但已被复制的 Assistant owner 仍带走 baseline。
-Master 与 Child 都在 `StartTurn` 提交后把 `TurnModelContextProjection` 绑到该 Turn 的 active worker；continuation 只复用同一引用。
-编辑 USER 后发送会截断到该 USER 并走新的 `START`；纯编辑（长按发送）只提交新 USER variant，不创建 entry。
-regenerate 同一 USER 创建新 Assistant owner，不复制 USER；旧 owner 先退出目标分支再判等，相同 live
-content 也可能由新 owner 重新落一条 entry，避免丢掉基线。
-请求规划仍只有 `RequestContextPlanner`：transformers 完成后，把选中的 canonical snapshots 聚合为第一个 part，
-与原用户 text/image/document/audio/video 组成一个 durable USER model turn，不伪造 ASSISTANT 或额外相邻 USER。
-完整 candidate 超过 renderer 的 256KiB UTF-8 上限时 `StartTurn` fail-closed，不得写入截断信封。
-四层请求策略见 [`request-context.md`](request-context.md)。
+披露快照、条数窗口和请求规划由 [request-context.md](request-context.md) 定义；附件投影只处理已有媒体事实，不生成披露 entry 或会话摘要。
 
-## 6. Turn / Tool 执行事实
+## 6. 资源提交与恢复
 
-### 6.1 实体与状态
+`ToolResultCheckpoint` 提交 output transformers 完成后的消息，消息、执行事实与 typed Artifact 引用进入同一 Room 事务。资源发布必须等待该 durable root 已包含本地引用；不能发布资源却持久化转换前消息。
 
-| 实体 | 状态枚举 | 说明 |
-|------|----------|------|
-| `TurnExecutionEntity` | `RUNNING` / `AWAITING_USER` / `COMPLETED` / `CANCELLED` / `FAILED` / `INCOMPLETE` / `INTERRUPTED` | 一轮用户输入到最终 Assistant 消息 |
-| `ToolExecutionEntity` | `STARTED` / `COMPLETED` / `FAILED` / `CANCELLED` / `UNKNOWN` | Turn 内单次工具调用 |
+同一次 base64 output transform 产生的多个 Artifact 只注册一个 `unpublishedBatchLease`。`ArtifactStore.publishAllUnpublished` 在交接前验证整批 durable roots 与 ownership token；失败或取消精确清理该 owner 取得的未发布资源，不留下半批发布状态。
 
-Schema 见 [../dev/persistent-records-and-sync.md](../dev/persistent-records-and-sync.md)（DB v5 起）。
+Artifact metadata、引用和生命周期归 `ArtifactStore`；`ArtifactPayloadStore` 只处理磁盘 IO。启动时按 CREATING / ACTIVE / DELETING 状态与 durable roots 收口，不能仅凭 payload 存在认领资源。图库生成媒体由 `GeneratedMediaStore` 独立恢复；全局恢复门禁在两者完成前阻止文件查询和写入。
 
-### 6.2 checkpoint 与 finalize
+工具副作用之前的 STARTED、checkpoint、终态 CAS、UNKNOWN 与父子恢复顺序统一见 [turn-step-execution.md](turn-step-execution.md)。资源 durability 复用这条提交链，不建立第二张执行表或旁路写协议。
 
-- `StartTurn` 单事务写 assistant 槽与 RUNNING turn fact，返回唯一 `TurnHandle`。
-- `TurnCheckpoint` 命令（`TurnCommitter.onCheckpoint` 提交）：工具循环内以 Room 事务提交 changed-node delta、执行事实、artifact reference 与 FTS delta。`ToolResultCheckpoint` 直接提交 output transformers 完成后的消息；只有该 durable root 已含本地资源引用才发布对应 lease，禁止发布资源却持久化 transform 前消息。同一次 base64 output transform 产生的多个 Artifact 只注册一个 `unpublishedBatchLease`，由 `ArtifactStore.publishAllUnpublished` 在交接前验证整批 durable roots 与 ownership token，不能逐项发布出半批状态。
-- `FinalizeTurn` 命令（`TurnCommitter.commitRunResult` 在 `TurnOutcome` 终态提交）：同一事务先收口 STARTED tool fact，再 CAS turn 终态；失败整体回滚。
-- 非成功 Master/Child 消息在同一 `FinalizeTurn` 中写入 `terminalStatus`、细分稳定 `terminalReason` 与可空的脱敏
-  `terminalDetail`。详情属于消息 JSON，不改变 Room 表结构；它用于进程重启后重新打开诊断，不参与状态机或 Provider 回放。
-- 工具执行期间崩溃：从最近 checkpoint 恢复，丢失窗口 = 当前工具 step。
-- `TurnStreamProjection.toolLivePhases` 只投影当前 turn 的调用装配、审批和执行阶段；`ToolExecutionStartedCheckpoint` 与结果终态必须在对应事实提交成功后推进，结束 turn 时随 active projection 一同释放，不形成第二张 durable 执行表。
+## 7. 媒体回放边界
 
-### 6.3 定位与副作用顺序
-
-- 工具执行在 Assistant 消息内的唯一 locator 是 `ToolCallLocator(assistantMessageId, stepId, localCallId)`（`toolCallId` 只供 Provider 协议使用，重试后会变；ordinal 只是流式游标，不参与身份）。
-- 工具产生副作用（文件、数据库、外部调用）前必须先落 `STARTED`——副作用可观测时 DB 中必有记录。
-- 同一 Assistant 消息的多个 ToolCall 在审批屏障结束后按 transcript 调用顺序串行处理。
-- Master 的新 turn 启动与用户交互继续使用不同 typed entry：只有 START 可在 active turn 建立前执行消息树清理和附件引用回填；批准、拒绝与回答由 `applyToolUserDecision` 提交决定后只进入 `CONTINUE_USER_INTERACTION` 继续原 owner，不执行结构维护。回填计划只从 durable `ConversationAggregateSnapshot.nodes` 生成精确 part-path assignment，`ConversationPresentationSnapshot.nodes` 不参与持久化判断。
-
-### 6.4 终态收口
-
-- 正常终态只由 `FinalizeTurn` command 写入；工具循环内只写非终态（`RUNNING` / `AWAITING_USER`）。
-- stop/supersede 归 `TurnFinalizer`，进程恢复归 `TurnRecovery`；两者都经 CommandCoordinator 与同一 CAS 状态机。等待工具审批的 turn 不触发标题 / 建议等完成副作用。
-
-## 7. 崩溃恢复与回放
-
-### 7.1 重启恢复（`TurnRecovery.recoverInterruptedTurns`）
-
-| 重启时状态 | 恢复动作 | 默认失败原因 |
-|-----------|----------|--------------|
-| Turn 为 `CREATED` / `RUNNING` | 置 `INTERRUPTED`，工具占位按中断渲染 | `process_restarted` |
-| 非终态 Turn 的 owning Assistant 消息已不存在 | 恢复进入 `Failed`，不发布不完整会话 | 完整性错误 |
-| Tool 为 `STARTED` | 置 `UNKNOWN`（副作用可能已发生，结果不可判定，禁止标记为成功或失败） | — |
-
-non-terminal execution 的 owning message 缺失是持久化完整性错误，恢复进入 `Failed`，不伪造 owner 或改写终态。消息分片缺失、长度不符或 JSON 损坏同样使恢复进入 `Failed`，不得发布不完整会话。
-
-### 7.2 回放安全
-
-非成功 Assistant 历史在再次发给 Provider 前经过 `replaySafeProjection()`（`me.rerere.ai.ui` 扩展）。
-terminal messages 按完整 Provider step 原子回放：
-
-1. 连续的 Content（Reasoning/Text/Image）+ 具有合法 call envelope 和可回放 result output 的 Tool 组成完整
-   replay 前缀：保留 Text、持久化成功的 Image、Reasoning 和 source metadata，并保留 call/result 配对；
-2. pending、未执行、参数损坏或无安全 envelope 的 Tool 仍删除；
-3. 最后一个完整 Tool step 之后的尾部：Text/Image 按现有规则保留为辅助上下文，Reasoning 与不透明 provider metadata 删除，
-   追加 `[Previous assistant response did not complete.]` 标记，从该尾部开始不计入 `completePartCount`；
-4. message-level `providerMetadata` 在 terminal message 上清除；
-5. `terminalStatus`、`terminalReason`、`terminalDetail` 继续不进入 Provider wire。
-
-这里的 `UIMessagePart.Tool.hasReplayResult` / `Tool.output` 只表示 Provider 可回放结果，不表示实时执行状态，也不代替 turn checkpoint/phase owner。工具合法返回空 part 列表时，结果 owner 将其规范化为非空结构化 replay envelope，避免把已经产生副作用的工具重新识别为待执行。
-如果 parts 出现"unsafe/pending tool 之后又有带结果 Tool"的非连续结构，投影 fail-closed：只保留第一个不安全边界
-之前的完整前缀，不能跨越不完整 step 拼接后续内容。
-
-投影返回的 `UIMessage` 携带 request-only `providerReplayProjection: ProviderReplayProjection`（`@Transient`，不持久化）：
-- `completePartCount`：具有完整 Provider call/result 回放配对的前缀 part 数量；
-- `hasIncompleteTail`：是否存在未完成尾部。
-
-严格协议由 `TerminalAssistantReplay.COMPLETE_STEP_PREFIX` 显式选择，只序列化
-`parts.take(completePartCount)`，
-不发送 partial assistant tail。`completePartCount == 0` 时该 terminal Assistant 不进入严格历史。
-其他协议维持现有 partial text + marker 兼容行为。不修改持久化会话中的部分文本和终态诊断。
-
-- 模型切换后的历史回放由统一投影负责（§3），无迁移逻辑。
-- `ToolArtifactReplayTransformer` 按 metadata 恢复历史 Tool Result 的路径与 Image URL（会话 fork / 恢复 / 文件迁移后仍指向有效文件）。
+- 请求级附件投影保留来源容器与 durable 原文，模型切换无需迁移消息。
+- `ToolArtifactReplayTransformer` 按 artifact metadata 重新物化历史工具产物路径与 Image URL。
+- 历史 Assistant 的 replay-safe 投影移除未持久化图片与媒体保存失败占位；Tool.output 中以媒体失败文本表达，不伪造可读取路径。识图工具的内存 data URI 输入属于独立请求，不受此历史回放规则限制。
+- `resultStatus` 表示 Tool Result 存在，合法空 output 原样保留。媒体缺失不改变执行事实，也不能触发自动重执行。
+- 未成功 Assistant 的完整 Step 前缀、尾部处理及 Provider 严格回放策略见 [turn-step-execution.md](turn-step-execution.md) 和 [protocol-reference.md](protocol-reference.md)。
 
 ## 8. 组件与职责
 
@@ -323,49 +246,21 @@ terminal messages 按完整 Provider step 原子回放：
 | `AttachmentProjectionTransformer` | 请求级投影（本文件 §3） |
 | `AttachmentInspectionTool` / `shouldInjectAttachmentInspection` | `inspect_attachments` 工具与注入判定 |
 | `ToolExecutionContext` / `ToolAttachmentResolution` | ai 模块最小只读附件能力接口 |
-| `TurnRunner` / `StepRunner` / `ToolBatchRunner` / `TurnRunState` | 多 Step 循环、单 Step 采样、工具批次与 `resolveAttachments` 注入；`TurnRunState` 持有 checkpoint 与投影写协议 |
-| ToolCallRuntime | ToolCall 一次参数准备、typed interaction gate、通用执行包装与结果规范化 |
-| RequestContextPlanner | 请求窗口（纯函数，仅请求前） |
-| ToolOutputCompactionPlanner | 成功消费后的纯文本 Tool Result 归档候选（纯函数，仅请求成功后） |
 | ToolOutputStore | Artifact-backed Tool Output staging、marker、conversation-scoped bounded read/grep |
-| `ConversationApplicationService` / `ConversationTurnService` / `SubAssistantRunCoordinator` | 盖章时机、Master/Target 工具集 |
-| `TurnFinalizer` | 正常 stop/supersede 与中断结果终态 |
-| `TurnRecovery` | 仅重启恢复（Master/Child/tool 定点链路） |
-| `ConversationCommandCoordinator` / `ConversationRepository.commit(ConversationWrite)` | durable command 唯一入口与 Room 事务 |
-| `TurnExecutionStatus` / `ToolExecutionStatus` | 执行事实状态枚举 |
+| `ArtifactStore` / `ArtifactPayloadStore` | 附件 metadata、引用与生命周期 / 受管磁盘 IO |
+| `GeneratedMediaStore` | 图库生成媒体的 canonical row、payload 与删除恢复 |
+| `ConversationApplicationService` / `ConversationTurnService` / `SubAssistantRunCoordinator` | 各消息入口的附件盖章与资源交接 |
 | `SettingsOcrMigration` / `migrateLegacySettingsJson` | 旧 OCR 设置迁移边界 |
 
 ## 9. Tool Output 压缩 durability
 
-归档 Tool Result 不建立新表或第二 checkpoint。执行完成的完整 output 先随 `ToolResultCheckpoint` 持久化；下一次成功
-Provider 请求从最终 request projection 生成保守 `ModelRequestReceipt` 后，`ToolOutputCompactionPlanner` 才可选择历史 `ARCHIVABLE_TEXT` 或
-`REGENERABLE_TEXT` 纯文本结果。inline Tool 文本达到 48K estimated tokens 才启动，尽量降到 16K，整批至少预计净回收
-24K estimated tokens；单结果净回收至少 128 estimated tokens。最近两个 typed tool-call 批次和最近 8K estimated tokens
-受保护，不额外冻结整个已完成 USER turn。估算按每个 Tool Result 独立计算：ASCII 字母与空白约每 4 个 code point 1 token，
-连续 ASCII 数字段约每 3 位 1 token，连续 ASCII 符号段约每 2 个 1 token，其他 Unicode code point 各计 1。
-`ToolOutputStore` 对 `ARCHIVABLE_TEXT` 创建 unpublished `tool_outputs` Artifact，并写稳定 marker 与
-`runtimeState.archive`；对 `REGENERABLE_TEXT` 只写固定 folded marker，不创建 Artifact。历史 marker 通过 locator、marker
-与可空 archive 的 `toolOutputCompactionPatches` typed delta 和当前 Assistant 一起由 `ModelResponseCheckpoint` 同事务写入；该 delta
-覆盖历史与当前 owning Assistant，Reducer 对两者执行相同的 policy、marker 和最小净回收校验；
-当前 Assistant 的校验原文来自已提交的 selected durable node，不读取 transient streaming projection；
-`ModelResponseCheckpoint` 还逐 ordinal 比较 durable message 中全部既有 Tool 与应用 typed patches 后的 expected Tool，未携带 patch 的
-既有 Tool 必须原样保留，只允许 Provider 在尾部追加新 ToolCall，因此不能靠省略 patch 绕过压缩校验；
-归档候选同时重建 typed `artifact_reference`（`TOOL_OUTPUT`）并在成功后 publish lease，checkpoint 失败则保留原 inline output，
-精确 discard 已暂存的 Artifact。
+归档与折叠的触发阈值、保护窗口、净回收要求和成功消费 receipt 统一见 [request-context.md](request-context.md)。本领域只执行资源 staging 与提交交接：
+
+- `ARCHIVABLE_TEXT` 由 `ToolOutputStore` 创建未发布的 `tool_outputs` Artifact，并生成 marker 与 `runtimeState.archive`；`REGENERABLE_TEXT` 只写固定 folded marker，`PRESERVE` 保留原文。
+- `ModelResponseCheckpoint` 将历史 `toolOutputCompactionPatches`、当前 Assistant 和 typed `artifact_reference` 同事务提交；无工具 Final Step 的同类 patch 随 `FinalizeTurn` 提交。Reducer 使用已提交 durable 原文校验 patch，不从 streaming projection 获取历史事实。
+- 提交成功后 publish lease；失败保留原 inline output 并精确 discard 暂存 Artifact。归档不建立新表或第二 checkpoint。
 
 `ArtifactStore.withToolOutputText` 在 lifecycle lock 内同时验证 ACTIVE、`tool_outputs` folder、`text/plain`、当前 conversation
 的 `TOOL_OUTPUT` reference 并取得 retention pin，锁外流式读取，finally 释放。ref 猜测、其他会话、payload 缺失都统一
 fail-closed。fork 的节点引用同一 Artifact；删除任一会话只移除自己的 reference，最后引用消失后才允许 GC。backup/restore
 包含 `tool_outputs` durable directory，启动恢复按 Artifact 既有 CREATING/DELETING 协议收口。
-
-## 10. 易错点
-
-| 易错 | 正确做法 |
-|------|----------|
-| 在投影或工具里改写 / 删除 durable 消息 | 投影只产生请求副本；ref 在持久化时锚定，工具结果显式写入 |
-| 期望 `inspect_attachments` 有缓存或自动触发 | 识别只有模型显式调用一条路径；无缓存 |
-| 能力不足当成附件失败 | 入站只校验 path / 资产；`attachment_not_found` 是解析失败，能力不足由投影与工具集表达 |
-| 向 Tool 暴露会话消息或内部 id | 识图工具只拿 `resolveAttachments` 只读能力；对外附件位置只有 `/upload` 的 path，Workspace 路径另归工作区工具 |
-| 工具副作用前未写 `STARTED` | 副作用可观测时 DB 必须已有记录，否则恢复后无法判定 |
-| 把 `toolCallId` 当持久 locator | 重试后 id 会变；用 `ToolCallLocator(assistantMessageId, stepId, localCallId)` |
-| Target run 内期望设置变更立即生效 | 工具集合在 Child `START` 时冻结；本 Turn 的后续 step / continuation 不重读 Settings 改 wire。撤权在执行期 live fail-closed，配置变化只影响下一次新 `START` |

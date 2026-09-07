@@ -1,10 +1,11 @@
 package net.weero.measix.pilot.data.ai.mcp
 
 import kotlinx.coroutines.async
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.cancelAndJoin
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
@@ -219,25 +220,31 @@ class McpOAuthCallbackServerTest {
     }
 
     @Test
-    fun `timeout returns null promptly`() {
+    fun `timeout closes the callback session at its deadline`() = runTest {
         val server = startedServer()
-        val started = System.currentTimeMillis()
-        val callback = runBlocking { server.awaitCallback(300.milliseconds) }
-        val elapsed = System.currentTimeMillis() - started
-        assertNull(callback)
-        assertTrue("timeout must fire promptly, took $elapsed ms", elapsed < 5_000)
-        server.close()
+        try {
+            assertNull(server.awaitCallback(300.milliseconds))
+            assertEquals(300L, testScheduler.currentTime)
+            assertNull(server.awaitCallback(60.seconds))
+            assertEquals(300L, testScheduler.currentTime)
+        } finally {
+            server.close()
+        }
     }
 
     @Test
     fun `cancellation releases the accept thread and close is idempotent`() {
         val server = startedServer()
-        runBlocking {
-            val job = launch { server.awaitCallback(60.seconds) }
-            delay(50)
-            job.cancelAndJoin()
+        try {
+            runBlocking {
+                val job = launch(start = CoroutineStart.UNDISPATCHED) { server.awaitCallback(60.seconds) }
+                job.cancelAndJoin()
+                assertTrue(job.isCancelled)
+                assertNull(server.awaitCallback(60.seconds))
+            }
+        } finally {
+            server.close()
+            server.close()
         }
-        server.close()
-        server.close()
     }
 }

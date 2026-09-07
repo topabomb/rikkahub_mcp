@@ -1,6 +1,8 @@
 @file:Suppress("UNNECESSARY_SAFE_CALL")
 package me.rerere.ai.provider.providers
 
+import me.rerere.ai.util.ProviderTerminalStatus
+import me.rerere.ai.ui.ProviderToolCallSlot
 import android.content.Context
 import android.util.Log
 import kotlinx.coroutines.Dispatchers
@@ -239,7 +241,6 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
                             message = candidateObject,
                             sourceModelId = params.model.modelId,
                             sourceProfile = replaySourceProfile,
-                            providerStepId = Uuid.random().toString(),
                         )
                     } else {
                         check(terminalError != null) { "Gemini returned no content" }
@@ -264,7 +265,7 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
     ): Flow<MessageChunk> = callbackFlow {
         val replaySourceProfile = googleReplaySourceProfile(providerSetting)
         val requestBody = buildCompletionRequestBody(messages, params, replaySourceProfile)
-        val candidateStepIds = mutableMapOf<Int, String>()
+        val nextToolSlots = mutableMapOf<Int, Int>()
         var terminalObserved = false
 
         val url = buildUrl(
@@ -338,14 +339,17 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
                                     groundingMetadata?.let { groundingMetadata ->
                                         put("groundingMetadata", groundingMetadata)
                                     }
-                                }, params.model.modelId, replaySourceProfile, candidateStepIds.getOrPut(candidateIndex) {
-                                    Uuid.random().toString()
-                                })
+                                }, params.model.modelId, replaySourceProfile)
                             }
 
                             UIMessageChoice(
                                 index = candidateIndex,
                                 delta = message,
+                                toolCallSlots = message?.getTools().orEmpty().map {
+                                    val slot = nextToolSlots.getOrDefault(candidateIndex, 0)
+                                    nextToolSlots[candidateIndex] = slot + 1
+                                    ProviderToolCallSlot.Index(slot)
+                                },
                                 message = null,
                                 finishReason = finishReason
                             )
@@ -399,7 +403,7 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
                     close(
                         HttpException(
                             message = "Gemini stream closed before a terminal finishReason",
-                            terminalStatus = me.rerere.ai.util.ProviderTerminalStatus.INCOMPLETE,
+                            terminalStatus = ProviderTerminalStatus.INCOMPLETE,
                         )
                     )
                 }
@@ -586,14 +590,13 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
         message: JsonObject,
         sourceModelId: String,
         sourceProfile: String,
-        providerStepId: String,
     ): UIMessage {
         val role = googleRoleToCommonRole(
             message["role"]?.jsonPrimitive?.contentOrNull ?: "model"
         )
         val content = message["content"]?.jsonObject ?: error("No content")
         val parts = content["parts"]?.jsonArray?.map { part ->
-            parseMessagePart(part.jsonObject, sourceModelId, sourceProfile, providerStepId)
+            parseMessagePart(part.jsonObject, sourceModelId, sourceProfile)
         } ?: emptyList()
 
         val groundingMetadata = message["groundingMetadata"]?.jsonObject
@@ -627,7 +630,6 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
         jsonObject: JsonObject,
         sourceModelId: String,
         sourceProfile: String,
-        providerStepId: String,
     ): UIMessagePart {
         return when {
             jsonObject.containsKey("text") -> {
@@ -640,7 +642,6 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
                         thought = if (thought) true else null,
                         sourceModelId = sourceModelId.takeIf { it.isNotBlank() },
                         sourceProfile = sourceProfile.takeIf { it.isNotBlank() },
-                        providerStepId = providerStepId.takeIf { it.isNotBlank() },
                     ).toMetadata()
                 } else {
                     null
@@ -676,7 +677,6 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
                         functionCallId = functionCallId,
                         sourceModelId = sourceModelId.takeIf { it.isNotBlank() },
                         sourceProfile = sourceProfile.takeIf { it.isNotBlank() },
-                        providerStepId = providerStepId.takeIf { it.isNotBlank() },
                     ).toMetadata()
                 )
             }
@@ -702,7 +702,6 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
                             inlineData = inlineData,
                             sourceModelId = sourceModelId.takeIf { it.isNotBlank() },
                             sourceProfile = sourceProfile.takeIf { it.isNotBlank() },
-                            providerStepId = providerStepId.takeIf { it.isNotBlank() },
                         ).toMetadata(),
                     )
                 }
@@ -713,7 +712,6 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
                             thoughtSignature = it,
                             sourceModelId = sourceModelId.takeIf { it.isNotBlank() },
                             sourceProfile = sourceProfile.takeIf { it.isNotBlank() },
-                            providerStepId = providerStepId.takeIf { it.isNotBlank() },
                         ).toMetadata()
                     },
                 )
@@ -762,26 +760,24 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
 
                 is PartGroup.Tools -> {
                     // 添加 functionCall 到 parts 缓冲
-                    group.tools.splitGoogleProviderSteps().forEach { stepTools ->
-                        stepTools.forEach {
-                            partsBuffer.add(it.toFunctionCallPart(modelId, sourceProfile))
-                        }
-
-                        add(buildJsonObject {
-                            put("role", "model")
-                            putJsonArray("parts") { partsBuffer.forEach { add(it) } }
-                        })
-                        partsBuffer.clear()
-
-                        add(buildJsonObject {
-                            put("role", "user")
-                            putJsonArray("parts") {
-                                stepTools.forEach {
-                                    add(it.toFunctionResponsePart(mediaCapabilities, modelId, sourceProfile))
-                                }
-                            }
-                        })
+                    group.tools.forEach {
+                        partsBuffer.add(it.toFunctionCallPart(modelId, sourceProfile))
                     }
+
+                    add(buildJsonObject {
+                        put("role", "model")
+                        putJsonArray("parts") { partsBuffer.forEach { add(it) } }
+                    })
+                    partsBuffer.clear()
+
+                    add(buildJsonObject {
+                        put("role", "user")
+                        putJsonArray("parts") {
+                            group.tools.forEach {
+                                add(it.toFunctionResponsePart(mediaCapabilities, modelId, sourceProfile))
+                            }
+                        }
+                    })
                 }
             }
         }
@@ -988,23 +984,6 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
         })
     }
 
-    private fun List<UIMessagePart.Tool>.splitGoogleProviderSteps(): List<List<UIMessagePart.Tool>> {
-        if (isEmpty()) return emptyList()
-        val steps = mutableListOf<MutableList<UIMessagePart.Tool>>()
-        for (tool in this) {
-            val stepId = tool.metadataAs<GoogleThoughtMetadata>()?.providerStepId
-            val current = steps.lastOrNull()
-            val currentStepId = current?.firstOrNull()
-                ?.metadataAs<GoogleThoughtMetadata>()?.providerStepId
-            if (current == null || (stepId != currentStepId && (stepId != null || currentStepId != null))) {
-                steps += mutableListOf(tool)
-            } else {
-                current += tool
-            }
-        }
-        return steps
-    }
-
     internal fun parseUsageMeta(jsonObject: JsonObject?): ProviderUsageSnapshot? {
         if (jsonObject == null) {
             return null
@@ -1068,9 +1047,9 @@ private fun validateGeminiFinishReason(finishReason: String?) {
 internal fun geminiFinishReasonException(finishReason: String?): HttpException? {
     if (finishReason == "STOP") return null
     val status = if (finishReason == "MAX_TOKENS") {
-        me.rerere.ai.util.ProviderTerminalStatus.INCOMPLETE
+        ProviderTerminalStatus.INCOMPLETE
     } else {
-        me.rerere.ai.util.ProviderTerminalStatus.FAILED
+        ProviderTerminalStatus.FAILED
     }
     return HttpException(
         message = "Gemini generation terminated with finishReason=${finishReason ?: "missing"}",

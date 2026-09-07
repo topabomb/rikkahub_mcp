@@ -16,7 +16,7 @@
 | `conversation_folder` | `(assistant_id, sort_index, create_at)` 支持助手文件夹排序 |
 | `favorites` | 保留 `ref_key` 唯一索引与 `(created_at)`；`(type, created_at)` 支持分类后的时间排序 |
 | `turn_execution` | 保留 `(conversation_id)` 与 `(status)`，分别支持归属查询、非终态恢复 |
-| `tool_execution` | 保留 `(turn_id)`、`(status)` 与 `(child_conversation_id)`，支持 turn 归属、非终态恢复和 Child 关系 |
+| `tool_execution` | `(turn_id)` 支持归属查询；唯一 `(turn_id, local_call_id)` 约束调用身份；`(child_conversation_id)` 保留 Child 关系查询。恢复按 `turn_id` 读取执行事实并验证 Child Turn/run，不为无独立查询的 `child_turn_id`、`sub_assistant_run_id` 建索引；无全局 status 查询，不建 status 索引 |
 | `workspaces` | 保留 `root` 唯一索引与 `(updated_at)`，支持路径唯一性和列表排序；主键用于 Workspace 点查 |
 | `system_meta` | 现有主键满足 key 点查，无额外业务筛选索引 |
 
@@ -30,6 +30,8 @@
 
 `Migration_9_10` 只新增 `conversation_model_context` 及其 `anchor_node_id` 索引，不扫描或回填历史会话。
 
-迁移由 Room 在事务内执行，新安装直接使用同构 schema。备份校验接受受支持的历史数据库，恢复后由同一 Room migration 链升级，不为旧文件名引入额外读取路径。
+`Migration_10_11` 将旧 Assistant transcript 转成显式 Step 与稳定 Tool locator，新增 `transcript_schema = 3`，重建 `tool_execution`，并转换等待用户与未开始的 turn 状态。消息按 SQLite 字符切片读取，避免大 tool output 超过 CursorWindow；转换后验证 Step/Tool 身份、顺序和终态，仅 `Continue` 可接后续 Step，Tool output 不得嵌套 Step。已转换内容只验证、不重复改写。
 
-架构相关入口：`AppDatabase`、`DataSourceModule`、各 `*Entity` / `*DAO`、`Migration_8_9`、`Migration_9_10`、`BackupArchiveService`。迁移验证覆盖历史链、新旧 schema、数据与约束保全，并用 Android SQLite 的 `EXPLAIN QUERY PLAN` 检查主要查询的索引和排序行为；查询计划验证不等于设备耗时基准。
+迁移由 Room 在事务内执行，新安装直接使用同构 schema。所有角色的消息均须可解码；旧字段的显式 null 按既有缺省语义处理，错误类型、未知 turn 状态或未知消息 part 必须中止迁移，不得置空后继续。备份校验接受受支持的历史数据库，在 staging 内由同一 Room migration 链升级到当前版本并验证后才发布 pending；当前版本在 staging 移除派生的 `room_master_table`，使 Room 打开时执行生成的 schema 校验并重建标记，不能仅凭既有 identity hash 信任表、列和索引。所有版本另行校验外键和 transcript；当前版本不转换 transcript，不为旧文件名引入额外读取路径。
+
+架构相关入口：`AppDatabase`、`AppDatabaseFactory`、各 `*Entity` / `*DAO`、`Migration_8_9`、`Migration_9_10`、`Migration_10_11`、`BackupArchiveService`。迁移验证覆盖历史链、新旧 schema、数据与约束保全，并用 Android SQLite 的 `EXPLAIN QUERY PLAN` 检查主要查询的索引和排序行为；查询计划验证不等于设备耗时基准。

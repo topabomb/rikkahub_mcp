@@ -1,6 +1,10 @@
 @file:Suppress("UNNECESSARY_SAFE_CALL")
 package me.rerere.ai.provider.providers
 
+import me.rerere.ai.provider.ProviderResponseException
+import me.rerere.ai.util.ProviderTerminalStatus
+import me.rerere.ai.util.HttpException
+import me.rerere.ai.ui.ProviderToolCallSlot
 import android.content.Context
 import android.util.Log
 import kotlinx.coroutines.Dispatchers
@@ -220,10 +224,10 @@ class ClaudeProvider(private val client: OkHttpClient, context: Context? = null)
         val id = bodyJson["id"]?.jsonPrimitive?.contentOrNull ?: ""
         val model = bodyJson["model"]?.jsonPrimitive?.contentOrNull ?: ""
         val content = bodyJson["content"]?.jsonArray ?: JsonArray(emptyList())
-        val stopReason = bodyJson["stop_reason"]?.jsonPrimitive?.contentOrNull ?: "unknown"
+        val stopReason = bodyJson["stop_reason"]?.jsonPrimitive?.contentOrNull
         val usage = parseTokenUsage(bodyJson)
 
-        MessageChunk(
+        val chunk = MessageChunk(
             id = id,
             model = model,
             choices = listOf(
@@ -236,6 +240,8 @@ class ClaudeProvider(private val client: OkHttpClient, context: Context? = null)
             ),
             usage = usage
         )
+        claudeStopReasonError(stopReason)?.let { throw ProviderResponseException(chunk, it) }
+        chunk
     }
 
     override suspend fun streamText(
@@ -260,6 +266,7 @@ class ClaudeProvider(private val client: OkHttpClient, context: Context? = null)
             Log.i(TAG, "streamText: $it")
         }
 
+        val streamState = ClaudeStreamState()
         val listener = object : EventSourceListener() {
             override fun onEvent(
                 eventSource: EventSource,
@@ -272,47 +279,18 @@ class ClaudeProvider(private val client: OkHttpClient, context: Context? = null)
                     return
                 }
 
-                val dataJson = json.parseToJsonElement(data).jsonObject
-                val deltaMessage = parseMessage(buildJsonArray {
-                    val contentBlockObj = dataJson["content_block"]?.jsonObject
-                    val deltaObj = dataJson["delta"]?.jsonObject
-                    if (contentBlockObj != null) {
-                        add(contentBlockObj)
+                try {
+                    val dataJson = json.parseToJsonElement(data).jsonObject
+                    val eventType = dataJson["type"]?.jsonPrimitive?.contentOrNull ?: type
+                    val chunk = parseStreamEvent(dataJson, streamState)
+                    trySend(chunk).onFailure { e -> Log.w(TAG, "onEvent: chunk dropped (${e?.message})") }
+                    when (eventType) {
+                        "message_stop" -> close(streamState.completionError())
+                        "error" -> close(dataJson["error"]?.parseErrorDetail()
+                            ?: HttpException("Claude stream error without detail"))
                     }
-                    if (deltaObj != null) {
-                        add(deltaObj)
-                    }
-                })
-                val tokenUsage = parseTokenUsage(dataJson)
-                val messageChunk = MessageChunk(
-                    id = id ?: "",
-                    model = "",
-                    choices = listOf(
-                        UIMessageChoice(
-                            index = 0,
-                            delta = deltaMessage,
-                            message = null,
-                            finishReason = null
-                        )
-                    ),
-                    usage = tokenUsage
-                )
-
-                trySend(messageChunk).onFailure { e ->
-                    Log.w(TAG, "onEvent: chunk dropped (${e?.message})")
-                }
-
-                when (type) {
-                    "message_stop" -> {
-                        Log.d(TAG, "Stream ended")
-                        close()
-                    }
-
-                    "error" -> {
-                        val eventData = json.parseToJsonElement(data).jsonObject
-                        val error = eventData["error"]?.parseErrorDetail()
-                        close(error)
-                    }
+                } catch (error: Throwable) {
+                    close(error)
                 }
             }
 
@@ -333,12 +311,12 @@ class ClaudeProvider(private val client: OkHttpClient, context: Context? = null)
                     Log.w(TAG, "onFailure: failed to parse from $bodyRaw")
                     e.printStackTrace()
                 } finally {
-                    close(exception)
+                    close(exception ?: streamState.completionError() ?: HttpException("Claude stream transport failed"))
                 }
             }
 
             override fun onClosed(eventSource: EventSource) {
-                close()
+                close(streamState.completionError())
             }
         }
 
@@ -617,6 +595,27 @@ class ClaudeProvider(private val client: OkHttpClient, context: Context? = null)
         }
     }
 
+    internal fun parseStreamEvent(data: JsonObject, state: ClaudeStreamState): MessageChunk {
+        val type = data["type"]?.jsonPrimitive?.contentOrNull
+        val reason = data["delta"]?.jsonObject?.get("stop_reason")?.jsonPrimitive?.contentOrNull
+        state.observe(type, reason)
+        val delta = parseMessage(buildJsonArray {
+            data["content_block"]?.jsonObject?.let { add(it) }
+            data["delta"]?.jsonObject?.let { add(it) }
+        })
+        return MessageChunk(
+            id = "", model = "", usage = parseTokenUsage(data),
+            choices = listOf(UIMessageChoice(
+                index = 0, delta = delta, message = null, finishReason = reason,
+                toolCallSlots = delta.getTools().map {
+                    ProviderToolCallSlot.Index(requireNotNull(data["index"]?.jsonPrimitive?.intOrNull) {
+                        "Claude Tool delta is missing content index"
+                    })
+                },
+            )),
+        )
+    }
+
     private fun parseMessage(content: JsonArray): UIMessage {
         val parts = mutableListOf<UIMessagePart>()
 
@@ -767,3 +766,30 @@ internal val CLAUDE_MESSAGES_OWNERSHIP = RequestBodyOwnership(
         "stream",
     ),
 )
+
+internal class ClaudeStreamState {
+    @Volatile private var stopped = false
+    @Volatile private var stopReason: String? = null
+
+    fun observe(type: String?, reason: String?) {
+        if (reason != null) stopReason = reason
+        if (type == "message_stop") stopped = true
+    }
+
+    fun completionError(): HttpException? = if (!stopped) {
+        HttpException(
+            "Claude stream closed before message_stop",
+            terminalStatus = ProviderTerminalStatus.INCOMPLETE,
+        )
+    } else claudeStopReasonError(stopReason)
+}
+
+internal fun claudeStopReasonError(reason: String?): HttpException? = when (reason) {
+    "end_turn", "stop_sequence", "tool_use" -> null
+    else -> HttpException(
+        message = "Claude generation ended with stop_reason=${reason ?: "missing"}",
+        terminalStatus = if (reason == null || reason == "max_tokens" || reason == "pause_turn") {
+            ProviderTerminalStatus.INCOMPLETE
+        } else ProviderTerminalStatus.FAILED,
+    )
+}

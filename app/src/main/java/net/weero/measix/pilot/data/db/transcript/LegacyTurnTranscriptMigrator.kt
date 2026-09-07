@@ -1,7 +1,5 @@
 package net.weero.measix.pilot.data.db.transcript
 
-import kotlinx.serialization.SerialName
-import kotlinx.serialization.Serializable
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
@@ -9,12 +7,14 @@ import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonPrimitive
-import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.put
+import me.rerere.ai.core.UsageCompleteness
 import me.rerere.ai.core.ToolOutputPolicy
+import me.rerere.ai.ui.StepModelResult
+import me.rerere.ai.ui.StepUsage
 import me.rerere.ai.ui.StepOutcome
 import me.rerere.ai.ui.ToolInteractionState
 import me.rerere.ai.ui.ToolOutputArchive
@@ -40,7 +40,6 @@ object LegacyTurnTranscriptMigrator {
     const val UUID5_NAMESPACE = "6b1c0e2a-7f3d-5a14-9c8e-2d4f1a0b7e65"
 
     private const val TOOL_METADATA_RESERVED_KEY = "tool_runtime"
-    private const val INTERACTION_APPROVAL = "approval"
     private const val INTERACTION_USER_INPUT = "user_input"
 
     /**
@@ -56,7 +55,11 @@ object LegacyTurnTranscriptMigrator {
     ): String {
         val messages = json.decodeFromString<List<JsonObject>>(messagesJson)
         val converted = messages.map { message -> convertMessage(json, message, turnStatusByAssistantMessageId) }
-        return json.encodeToString(converted)
+        val result = json.encodeToString(converted)
+        V3TranscriptValidator.validateNode(result, json, turnStatusByAssistantMessageId.filterValues {
+            TurnTerminality.of(it, hasTurnRow = true).isNonTerminal
+        }.keys.mapTo(mutableSetOf()) { it.toString() })
+        return result
     }
 
     private fun convertMessage(
@@ -66,12 +69,7 @@ object LegacyTurnTranscriptMigrator {
     ): JsonObject {
         val role = message["role"]?.jsonPrimitive?.contentOrNullSafe() ?: return message
         if (!role.equals("assistant", ignoreCase = true)) return message
-        val parts = message["parts"]?.arrayOrNullSafe() ?: return message
-        if (parts.any { it.jsonObject["type"]?.jsonPrimitive?.contentOrNullSafe() == "step" }) {
-            // Already V3: the presence of a Step part is the marker; leave it untouched (idempotent).
-            return message
-        }
-
+        val parts = requireNotNull(message["parts"]?.arrayOrNullSafe()) { "Assistant parts must be an array" }
         val messageId = Uuid.parse(
             requireNotNull(message["id"]?.jsonPrimitive?.contentOrNullSafe()) {
                 "Assistant message is missing id during transcript migration"
@@ -80,47 +78,48 @@ object LegacyTurnTranscriptMigrator {
         val turnStatus = turnStatusByAssistantMessageId[messageId]
         val terminality = TurnTerminality.of(turnStatus, hasTurnRow = turnStatusByAssistantMessageId.containsKey(messageId))
 
-        val tools = parts.filterIsInstance<JsonObject>().filter { it["type"]?.jsonPrimitive?.contentOrNullSafe() == "tool" }
-        val toolOrdinalByPart = HashMap<JsonObject, Int>()
-        tools.forEachIndexed { ordinal, tool -> toolOrdinalByPart[tool] = ordinal }
-
-        val outParts = buildJsonArray {
-            var stepOrdinal = 0
-            var lastToolHadResult = false
-            var contentSinceCompletedTool = false
-            var lastBatchOrdinal: Int? = null
-            add(json.encodeToJsonElement(UIMessagePart.serializer(), stepPart(messageId, 0)))
-            for (raw in parts) {
-                val obj = raw.jsonObject
-                when (obj["type"]?.jsonPrimitive?.contentOrNullSafe()) {
-                    "reasoning", "text" -> {
-                        if (lastToolHadResult) contentSinceCompletedTool = true
-                        add(raw)
+        if (parts.any { it.jsonObject["type"]?.jsonPrimitive?.contentOrNullSafe() == "step" }) {
+            return message
+        }
+        // Ordinals belong to positions: identical calls still have distinct identities.
+        val outParts = mutableListOf<JsonElement>()
+        var stepOrdinal = 0
+        var toolOrdinal = 0
+        var lastToolHadResult = false
+        var lastBatchOrdinal: Int? = null
+        outParts += json.encodeToJsonElement(UIMessagePart.serializer(), stepPart(messageId, 0))
+        for (raw in parts) {
+            val obj = raw.jsonObject
+            when (obj["type"]?.jsonPrimitive?.contentOrNullSafe()) {
+                "reasoning", "text", "image", "video", "audio", "document" -> {
+                    // Content after a consumed result is a later model response, including its final answer.
+                    if (lastToolHadResult) {
+                        stepOrdinal++
+                        outParts += json.encodeToJsonElement(UIMessagePart.serializer(), stepPart(messageId, stepOrdinal))
+                        lastToolHadResult = false
+                        lastBatchOrdinal = null
                     }
-
-                    "tool" -> {
-                        // Sole split criterion: (a) a different resultBatchOrdinal, or
-                        // (b) new Reasoning/Text after a replay-result Tool before the next Tool.
-                        val batchOrdinal = resultBatchOrdinalOf(obj)
-                        val splitByBatch = batchOrdinal != null && lastBatchOrdinal != null && batchOrdinal != lastBatchOrdinal
-                        if (contentSinceCompletedTool || splitByBatch) {
-                            stepOrdinal += 1
-                            contentSinceCompletedTool = false
-                            lastToolHadResult = false
-                            add(json.encodeToJsonElement(UIMessagePart.serializer(), stepPart(messageId, stepOrdinal)))
-                        }
-                        val ordinal = toolOrdinalByPart.getValue(obj)
-                        val v3Tool = convertTool(json, obj, messageId, ordinal, stepOrdinal, terminality)
-                        add(json.encodeToJsonElement(UIMessagePart.serializer(), v3Tool))
-                        lastToolHadResult = v3Tool.hasReplayResult
-                        if (batchOrdinal != null) lastBatchOrdinal = batchOrdinal
-                    }
-
-                    else -> add(raw)
+                    outParts += raw
                 }
+                "tool" -> {
+                    val batchOrdinal = resultBatchOrdinalOf(obj)
+                    val hasResult = obj["output"]?.arrayOrNullSafe()?.isNotEmpty() == true ||
+                        obj["approvalState"]?.objectOrNullSafe()?.get("type")?.jsonPrimitive?.content in setOf("denied", "answered")
+                    val splitByBatch = batchOrdinal != null && lastBatchOrdinal != null && batchOrdinal != lastBatchOrdinal
+                    val pendingAfterBatch = lastToolHadResult && !hasResult && (batchOrdinal == null || batchOrdinal != lastBatchOrdinal)
+                    if (splitByBatch || pendingAfterBatch) {
+                        stepOrdinal++
+                        outParts += json.encodeToJsonElement(UIMessagePart.serializer(), stepPart(messageId, stepOrdinal))
+                        lastBatchOrdinal = null
+                    }
+                    val converted = convertTool(json, obj, messageId, toolOrdinal++, stepOrdinal, terminality)
+                    outParts += json.encodeToJsonElement(UIMessagePart.serializer(), converted)
+                    lastToolHadResult = hasResult
+                    if (batchOrdinal != null) lastBatchOrdinal = batchOrdinal
+                }
+                else -> outParts += raw
             }
         }
-
         val closed = closeMigratedSteps(json, outParts, terminality)
         return JsonObject(message.toMutableMap().apply { put("parts", JsonArray(closed)) })
     }
@@ -155,7 +154,11 @@ object LegacyTurnTranscriptMigrator {
         }.orEmpty()
         val approval = legacy["approvalState"]?.objectOrNullSafe()
         val approvalType = approval?.get("type")?.jsonPrimitive?.contentOrNullSafe() ?: "auto"
-        val runtime = legacy["metadata"]?.objectOrNullSafe()?.get(TOOL_METADATA_RESERVED_KEY)?.objectOrNullSafe()
+        val metadata = legacy["metadata"]?.objectOrNullSafe()
+        val runtime = metadata?.get(TOOL_METADATA_RESERVED_KEY)?.objectOrNullSafe()
+        require(metadata?.containsKey(TOOL_METADATA_RESERVED_KEY) != true || runtime != null) {
+            "legacy tool_runtime must be an object"
+        }
         requireValidToolRuntime(json, runtime)
         val hasResult = output.isNotEmpty()
 
@@ -174,16 +177,7 @@ object LegacyTurnTranscriptMigrator {
 
         val terminalStatusToken = runtime?.get("terminalStatus")?.jsonPrimitive?.contentOrNullSafe()
         val resultStatus = resolveResultStatus(interaction, hasResult, terminalStatusToken, terminality)
-        // A terminal or turn-less history may not leave a call still awaiting the user. The
-        // result stays INTERRUPTED (the upgrade interrupted it) but the interaction records that the
-        // user never answered, so the projection is DENIED and no dead call can be resumed.
-        val closedInteraction = if (!terminality.isNonTerminal &&
-            (interaction is ToolInteractionState.AwaitingApproval || interaction is ToolInteractionState.AwaitingInput)
-        ) {
-            ToolInteractionState.Denied("schema_upgrade")
-        } else {
-            interaction
-        }
+        // The interaction records the original gate; resultStatus closes interrupted calls.
         // requireValidToolRuntime 已保证 present 时合法；缺省走 ARCHIVABLE_TEXT。
         val outputPolicy = runtime?.get("outputPolicy")?.jsonPrimitive?.contentOrNullSafe()
             ?.let { ToolOutputPolicy.valueOf(it) }
@@ -194,7 +188,7 @@ object LegacyTurnTranscriptMigrator {
 
         val cleanedMetadata = legacy["metadata"]?.objectOrNullSafe()?.let { meta ->
             JsonObject(meta.filterKeys { it != TOOL_METADATA_RESERVED_KEY })
-                .let { upgradeSubAssistantInteraction(it, messageId, toolOrdinal) }
+                .let { upgradeSubAssistantInteraction(it) }
                 .takeIf { it.isNotEmpty() }
         }
 
@@ -205,7 +199,7 @@ object LegacyTurnTranscriptMigrator {
             toolName = toolName,
             input = input,
             output = output,
-            interactionState = closedInteraction,
+            interactionState = interaction,
             resultStatus = resultStatus,
             runtimeState = ToolRuntimeState(outputPolicy = outputPolicy, archive = archive),
             metadata = cleanedMetadata,
@@ -219,6 +213,16 @@ object LegacyTurnTranscriptMigrator {
      */
     private fun requireValidToolRuntime(json: Json, runtime: JsonObject?) {
         if (runtime == null) return
+        require(runtime.keys.all { it in setOf("version", "interaction", "outputPolicy", "terminalStatus", "resultBatchOrdinal", "archive") }) {
+            "legacy tool_runtime contains unknown fields"
+        }
+        runtime["version"]?.let { require(it is JsonPrimitive && !it.isString && it.intOrNull == 1) { "Invalid runtime version" } }
+        runtime["resultBatchOrdinal"]?.takeUnless { it is JsonNull }?.let {
+            require(it is JsonPrimitive && !it.isString && it.intOrNull != null) { "Invalid resultBatchOrdinal" }
+        }
+        listOf("interaction", "outputPolicy", "terminalStatus").forEach { key ->
+            runtime[key]?.takeUnless { it is JsonNull }?.let { require(it is JsonPrimitive && it.isString) { "Invalid runtime $key" } }
+        }
         val version = runtime["version"]
         if (version != null && version !is JsonNull && version.jsonPrimitive.intOrNull != 1) {
             error("legacy tool_runtime has unsupported version: $version")
@@ -266,30 +270,36 @@ object LegacyTurnTranscriptMigrator {
         val fromTerminalToken = when (terminalStatusToken) {
             "completed" -> ToolResultStatus.COMPLETED
             "failed" -> ToolResultStatus.FAILED
+            "denied" -> ToolResultStatus.DENIED
+            "answered" -> ToolResultStatus.ANSWERED
             else -> null
         }
         if (terminality.isNonTerminal) {
             // RUNNING / AWAITING_USER: keep open/pending exactly as-is; recovery closes them at startup.
-            return if (hasResult) fromTerminalToken ?: ToolResultStatus.COMPLETED else null
+            return fromTerminalToken ?: if (hasResult) ToolResultStatus.COMPLETED else null
         }
         // Terminal or historical: never leave an open/pending call.
         return when {
             interaction is ToolInteractionState.AwaitingApproval ||
                 interaction is ToolInteractionState.AwaitingInput -> ToolResultStatus.INTERRUPTED
 
-            hasResult -> fromTerminalToken ?: ToolResultStatus.COMPLETED
+            fromTerminalToken != null -> fromTerminalToken
+            hasResult -> ToolResultStatus.COMPLETED
             else -> ToolResultStatus.INTERRUPTED
         }
     }
 
     /** Rewrite `sub_assistant_call.user_interaction` from `tool_ordinal` to `local_call_id`, bump schema to 2. */
-    private fun upgradeSubAssistantInteraction(metadata: JsonObject, messageId: Uuid, toolOrdinal: Int): JsonObject {
+    private fun upgradeSubAssistantInteraction(metadata: JsonObject): JsonObject {
         val call = metadata["sub_assistant_call"]?.objectOrNullSafe() ?: return metadata
         val ui = call["user_interaction"]?.objectOrNullSafe() ?: return metadata.copyWith(
             "sub_assistant_call",
             JsonObject(call + ("schema_version" to JsonPrimitive(2))),
         )
-        val localCallId = uuid5("$messageId/tool/$toolOrdinal")
+        val childMessageId = Uuid.parse(requireNotNull(ui["message_id"]?.jsonPrimitive?.contentOrNullSafe()))
+        val childOrdinal = requireNotNull(ui["tool_ordinal"]?.jsonPrimitive?.intOrNull)
+        require(childOrdinal >= 0) { "Invalid child interaction tool ordinal" }
+        val localCallId = uuid5("$childMessageId/tool/$childOrdinal")
         val newUi = JsonObject(ui.filterKeys { it != "tool_ordinal" } + ("local_call_id" to JsonPrimitive(localCallId.toString())))
         return metadata.copyWith(
             "sub_assistant_call",
@@ -298,7 +308,7 @@ object LegacyTurnTranscriptMigrator {
     }
 
     /**
-     * 迁移后的 transcript 必须满足 §6.2 不变量：任何其后还有 Step 的 Step 一律 `Continue`；尾部
+     * 迁移后的 transcript 必须满足边界不变量：任何其后还有 Step 的 Step 一律 `Continue`；尾部
      * Step 仅在终态（或历史）turn 落定为对应 [TurnTerminality.stepOutcome]，非终态留给
      * `TurnRecovery`。已带 outcome 的 Step 不重开，保证幂等。
      */
@@ -317,32 +327,64 @@ object LegacyTurnTranscriptMigrator {
             val stepObj = part.jsonObject
             val existing = stepObj["outcome"]
             if (existing != null && existing !is JsonNull) return@mapIndexed part
+            val segment = parts.subList(index + 1, stepIndices.filter { it > index }.minOrNull() ?: parts.size)
+            val tools = segment.filter { it.jsonObject["type"]?.jsonPrimitive?.content == "tool" }
+                .map { json.decodeFromJsonElement(UIMessagePart.Tool.serializer(), it) }
+            val hasInterruptedTool = tools.any { it.resultStatus == ToolResultStatus.INTERRUPTED }
             val outcome = when {
                 index != trailingIndex -> StepOutcome.Continue
                 terminality.isNonTerminal -> null
-                else -> terminality.stepOutcome(hasVisibleTextAfterStep(parts, index))
-            } ?: return@mapIndexed part
-            JsonObject(stepObj + ("outcome" to json.encodeToJsonElement(StepOutcome.serializer(), outcome)))
+                terminality == TurnTerminality.HISTORICAL && hasInterruptedTool -> StepOutcome.Interrupted
+                else -> terminality.stepOutcome(hasVisibleContentAfterStep(parts, index))
+            }
+            val result = if (outcome != null || tools.isNotEmpty()) StepModelResult(
+                finishReason = null, usage = StepUsage(), providerRequestCount = 0,
+                timeToFirstOutputMillis = null, requestDurationMillis = null,
+                usageCompleteness = UsageCompleteness.LEGACY, providerMetadata = null,
+            ) else null
+            JsonObject(stepObj + mapOf(
+                "outcome" to (outcome?.let { json.encodeToJsonElement(StepOutcome.serializer(), it) } ?: JsonNull),
+                "modelResult" to (result?.let { json.encodeToJsonElement(StepModelResult.serializer(), it) } ?: JsonNull),
+            ))
         }
     }
 
-    private fun hasVisibleTextAfterStep(parts: List<JsonElement>, stepIndex: Int): Boolean =
-        parts.drop(stepIndex + 1).any { it.jsonObject["type"]?.jsonPrimitive?.contentOrNullSafe() == "text" }
+    private fun hasVisibleContentAfterStep(parts: List<JsonElement>, stepIndex: Int): Boolean =
+        parts.drop(stepIndex + 1).any {
+            val part = it.jsonObject
+            when (part["type"]?.jsonPrimitive?.contentOrNullSafe()) {
+                "text" -> !part["text"]?.jsonPrimitive?.contentOrNullSafe().isNullOrBlank()
+                "image", "video", "audio", "document" -> true
+                else -> false
+            }
+        }
 
     private fun JsonObject.copyWith(key: String, value: JsonElement): JsonObject = JsonObject(toMutableMap().apply { put(key, value) })
 
-    private fun JsonPrimitive.contentOrNullSafe(): String? = if (this is kotlinx.serialization.json.JsonNull) null else content
+    private fun JsonPrimitive.contentOrNullSafe(): String? {
+        if (this is JsonNull) return null
+        require(isString) { "Legacy string field has a non-string value" }
+        return content
+    }
 
     /**
      * `?.jsonObject` only guards an *absent* key; a legacy transcript may carry an explicit
      * `"metadata": null` / `"user_interaction": null` (kotlinx `explicitNulls`), which is a
-     * [JsonNull] and would throw "JsonNull is not a JsonObject". This returns null for any
-     * non-object element so the converter treats a null field exactly like an absent one.
+     * [JsonNull] and would throw "JsonNull is not a JsonObject". Only explicit null is treated
+     * as absent; a different value type is corruption and must never erase durable content.
      */
-    private fun JsonElement.objectOrNullSafe(): JsonObject? = this as? JsonObject
+    private fun JsonElement.objectOrNullSafe(): JsonObject? {
+        if (this is JsonNull) return null
+        require(this is JsonObject) { "Legacy object field has a non-object value" }
+        return this
+    }
 
     /** Same guard for array-valued legacy fields (`output`, `parts`): a `JsonNull` is treated as absent. */
-    private fun JsonElement.arrayOrNullSafe(): JsonArray? = this as? JsonArray
+    private fun JsonElement.arrayOrNullSafe(): JsonArray? {
+        if (this is JsonNull) return null
+        require(this is JsonArray) { "Legacy array field has a non-array value" }
+        return this
+    }
 
     // ---- RFC 4122 UUID v5 (SHA-1) ----
 
@@ -411,7 +453,7 @@ object LegacyTurnTranscriptMigrator {
                     "FAILED" -> FAILED
                     "INCOMPLETE" -> INCOMPLETE
                     "CREATED", "INTERRUPTED" -> INTERRUPTED
-                    else -> HISTORICAL
+                    else -> error("Unknown legacy turn status: $status")
                 }
             }
         }

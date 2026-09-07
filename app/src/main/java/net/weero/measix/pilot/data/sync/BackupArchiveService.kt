@@ -35,6 +35,8 @@ import net.weero.measix.pilot.data.ai.mcp.validated
 import net.weero.measix.pilot.data.db.AppDatabase
 import net.weero.measix.pilot.data.db.APP_DATABASE_VERSION
 import net.weero.measix.pilot.data.db.createAppDatabase
+import net.weero.measix.pilot.data.db.transcript.V3TranscriptValidator
+import net.weero.measix.pilot.data.db.transcript.readTranscriptPayload
 import net.weero.measix.pilot.data.files.FileFolders
 import net.weero.measix.pilot.data.files.ArtifactStore
 import net.weero.measix.pilot.data.files.BackupSnapshotBarrier
@@ -204,9 +206,9 @@ class BackupArchiveService(
                         val restoredSettings = validateSettings(staging)
                         if (selection.includeDurableAggregate) {
                             val modern = File(staging, MANIFEST_ENTRY).isFile
-                            if (modern) validateModernManifest(staging, archiveFiles)
+                            val manifest = if (modern) validateModernManifest(staging, archiveFiles) else null
                             normalizeAndValidateDatabase(staging)
-                            if (modern) validateModernAggregate(staging) else validateLegacyAggregate(staging)
+                            if (modern) validateModernAggregate(staging, requireNotNull(manifest).version) else validateLegacyAggregate(staging)
                             // A pre-v11 aggregate must be carried to the current schema by the
                             // same Room chain (including Migration_10_11) inside staging and verified
                             // before it may be published. An un-upgraded database is never swapped into
@@ -323,19 +325,36 @@ class BackupArchiveService(
      * Carry a pre-current staging database forward through the same Room migration chain the
      * app opens with — including `Migration_10_11` and its [net.weero.measix.pilot.data.db.transcript.LegacyTurnTranscriptMigrator]
      * transcript conversion — and fail closed unless it lands exactly on [APP_DATABASE_VERSION]. A
-     * database already at the current version is left untouched: its transcripts are already V3 and
-     * must never be re-converted. Any failure propagates so the caller discards staging and keeps the
+     * database already at the current version is opened and validated without transcript conversion. Any failure propagates so the caller discards staging and keeps the
      * original live database, never swapping an un-upgraded or half-upgraded aggregate into live.
      */
     private fun upgradeStagingDatabaseToCurrentSchema(staging: File) {
         val main = File(staging, DATABASE_ENTRY)
-        val current = SQLiteDatabase.openDatabase(main.absolutePath, null, SQLiteDatabase.OPEN_READONLY).use { it.version }
-        if (current >= APP_DATABASE_VERSION) return
+        SQLiteDatabase.openDatabase(main.absolutePath, null, SQLiteDatabase.OPEN_READWRITE).use { staged ->
+            if (staged.version == APP_DATABASE_VERSION) {
+                // A matching identity hash bypasses Room's physical schema validation on ordinary open.
+                // Only staging discards this derived marker; Room validates and recreates it from its schema.
+                staged.execSQL("DROP TABLE IF EXISTS room_master_table")
+            }
+        }
         val database = createAppDatabase(context, main.absolutePath)
         try {
-            val upgraded = database.openHelper.writableDatabase.version
+            val db = database.openHelper.writableDatabase
+            val upgraded = db.version
             check(upgraded == APP_DATABASE_VERSION) {
                 "Restore staging upgrade did not reach schema version $APP_DATABASE_VERSION (got $upgraded)"
+            }
+            db.query("PRAGMA foreign_key_check").use { check(!it.moveToFirst()) { "Restore has broken foreign keys" } }
+            val nonTerminalMessages = buildSet {
+                db.query("SELECT assistant_message_id FROM turn_execution WHERE status IN ('RUNNING','AWAITING_USER')").use { cursor ->
+                    while (cursor.moveToNext()) if (!cursor.isNull(0)) add(cursor.getString(0))
+                }
+            }
+            db.query("SELECT id, transcript_schema FROM message_node").use { cursor ->
+                while (cursor.moveToNext()) {
+                    check(cursor.getInt(1) == 3) { "Restore has unsupported transcript schema" }
+                    V3TranscriptValidator.validateNode(readTranscriptPayload(db, cursor.getString(0)), json, nonTerminalMessages)
+                }
             }
         } finally {
             database.close()
@@ -404,7 +423,7 @@ class BackupArchiveService(
         }
     }
 
-    private fun validateModernManifest(staging: File, archiveFiles: Set<String>) {
+    private fun validateModernManifest(staging: File, archiveFiles: Set<String>): DurableBackupManifest {
         val manifest = try {
             json.decodeFromString<DurableBackupManifest>(File(staging, MANIFEST_ENTRY).readText(Charsets.UTF_8))
         } catch (error: Exception) {
@@ -418,7 +437,7 @@ class BackupArchiveService(
         require(SETTINGS_ENTRY in declared && DATABASE_ENTRY in declared) {
             "Backup manifest is missing the durable roots"
         }
-        if (manifest.version == MANIFEST_VERSION) {
+        if (manifest.version != "rikkahub-durable-v3") {
             require(MCP_CATALOGS_ENTRY in declared) { "Backup manifest is missing MCP catalogs" }
         }
         require(archiveFiles == declared.keys + MANIFEST_ENTRY) {
@@ -431,12 +450,16 @@ class BackupArchiveService(
                 "Backup entry failed manifest verification: ${entry.path}"
             }
         }
+        return manifest
     }
 
-    /** A v2 manifest is accepted only when every durable database row has its payload. */
-    private fun validateModernAggregate(staging: File) {
+    /** Modern manifests require all managed payloads; v5 additionally promises the current Room schema. */
+    private fun validateModernAggregate(staging: File, manifestVersion: String) {
         val db = SQLiteDatabase.openDatabase(File(staging, DATABASE_ENTRY).absolutePath, null, SQLiteDatabase.OPEN_READONLY)
         try {
+            require(manifestVersion != MANIFEST_VERSION || db.version == APP_DATABASE_VERSION) {
+                "Current backup manifest requires database version $APP_DATABASE_VERSION"
+            }
             require(db.version in 8..APP_DATABASE_VERSION) {
                 "Unsupported modern backup database version: ${db.version}"
             }

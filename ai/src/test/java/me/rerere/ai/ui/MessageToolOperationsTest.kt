@@ -47,12 +47,13 @@ class MessageToolOperationsTest {
     }
 
     @Test
-    fun `hasReplayResult is true when tool has output`() {
+    fun `result status makes even an empty result replayable`() {
         val tool = UIMessagePart.Tool(
             localCallId = Uuid.random(), stepId = Uuid.random(), providerCallId = "tc1",
             toolName = "search_web",
             input = """{"query":"test"}""",
-            output = listOf(UIMessagePart.Text("result"))
+            resultStatus = ToolResultStatus.COMPLETED,
+            output = emptyList()
         )
         assertTrue(tool.hasReplayResult)
     }
@@ -128,6 +129,7 @@ class MessageToolOperationsTest {
             localCallId = Uuid.random(), stepId = Uuid.random(), providerCallId = "tc1",
             toolName = "search_web",
             input = """{"query":"test"}""",
+            resultStatus = ToolResultStatus.COMPLETED,
             output = listOf(UIMessagePart.Text("result")),
             interactionState = ToolInteractionState.Approved
         )
@@ -196,7 +198,7 @@ class MessageToolOperationsTest {
     }
 
     @Test
-    fun `tool copy with output marks as executed`() {
+    fun `output alone does not create a result`() {
         val original = UIMessagePart.Tool(
             localCallId = Uuid.random(), stepId = Uuid.random(), providerCallId = "tc1",
             toolName = "eval_javascript",
@@ -205,7 +207,7 @@ class MessageToolOperationsTest {
         val executed = original.copy(
             output = listOf(UIMessagePart.Text("2"))
         )
-        assertTrue(executed.hasReplayResult)
+        assertFalse(executed.hasReplayResult)
         assertFalse(executed.canResumeResultAssembly)
     }
 
@@ -236,6 +238,7 @@ class MessageToolOperationsTest {
 
         val updated = message.finishPendingTools { tool ->
             tool.copy(
+                resultStatus = ToolResultStatus.DENIED,
                 output = listOf(UIMessagePart.Text("cancelled")),
                 interactionState = ToolInteractionState.Denied("cancelled")
             )
@@ -259,6 +262,7 @@ class MessageToolOperationsTest {
             localCallId = Uuid.random(), stepId = Uuid.random(), providerCallId = "executed",
             toolName = "search_web",
             input = """{"query":"test"}""",
+            resultStatus = ToolResultStatus.COMPLETED,
             output = listOf(UIMessagePart.Text("result")),
             interactionState = ToolInteractionState.AwaitingApproval  // Pending 但已执行
         )
@@ -270,6 +274,7 @@ class MessageToolOperationsTest {
 
         val updated = message.finishPendingTools { tool ->
             tool.copy(
+                resultStatus = ToolResultStatus.COMPLETED,
                 output = listOf(UIMessagePart.Text("should not happen")),
                 interactionState = ToolInteractionState.Denied("should not happen")
             )
@@ -286,6 +291,7 @@ class MessageToolOperationsTest {
             localCallId = Uuid.random(), stepId = Uuid.random(), providerCallId = "executed",
             toolName = "search_web",
             input = """{"query":"test"}""",
+            resultStatus = ToolResultStatus.COMPLETED,
             output = listOf(UIMessagePart.Text("result"))
         )
 
@@ -295,7 +301,7 @@ class MessageToolOperationsTest {
         )
 
         val updated = message.finishPendingTools { tool ->
-            tool.copy(output = listOf(UIMessagePart.Text("should not happen")))
+            tool.copy(resultStatus = ToolResultStatus.COMPLETED, output = listOf(UIMessagePart.Text("should not happen")))
         }
 
         // 没有 Pending 未执行的工具，应返回原消息
@@ -321,6 +327,7 @@ class MessageToolOperationsTest {
 
         val updated = message.finishInterruptedTools { tool ->
             tool.copy(
+                resultStatus = ToolResultStatus.INTERRUPTED,
                 output = listOf(UIMessagePart.Text("""{"status":"interrupted"}"""))
             )
         }
@@ -347,6 +354,7 @@ class MessageToolOperationsTest {
 
         val updated = message.finishInterruptedTools { tool ->
             tool.copy(
+                resultStatus = ToolResultStatus.INTERRUPTED,
                 output = listOf(UIMessagePart.Text("""{"status":"interrupted"}"""))
             )
         }
@@ -372,6 +380,7 @@ class MessageToolOperationsTest {
 
         val updated = message.finishInterruptedTools { tool ->
             tool.copy(
+                resultStatus = ToolResultStatus.COMPLETED,
                 output = listOf(UIMessagePart.Text("should not happen"))
             )
         }
@@ -387,6 +396,7 @@ class MessageToolOperationsTest {
             localCallId = Uuid.random(), stepId = Uuid.random(), providerCallId = "executed",
             toolName = "search_web",
             input = """{"query":"test"}""",
+            resultStatus = ToolResultStatus.COMPLETED,
             output = listOf(UIMessagePart.Text("result")),
             interactionState = ToolInteractionState.NotRequired
         )
@@ -397,7 +407,7 @@ class MessageToolOperationsTest {
         )
 
         val updated = message.finishInterruptedTools { tool ->
-            tool.copy(output = listOf(UIMessagePart.Text("should not happen")))
+            tool.copy(resultStatus = ToolResultStatus.COMPLETED, output = listOf(UIMessagePart.Text("should not happen")))
         }
 
         assertEquals(message, updated)
@@ -427,6 +437,7 @@ class MessageToolOperationsTest {
         // 先处理 Pending → 只处理 pendingTool
         val afterPending = message.finishPendingTools { tool ->
             tool.copy(
+                resultStatus = ToolResultStatus.DENIED,
                 output = listOf(UIMessagePart.Text("cancelled by user")),
                 interactionState = ToolInteractionState.Denied("cancelled")
             )
@@ -435,6 +446,7 @@ class MessageToolOperationsTest {
         // 再处理中断 → 只处理 autoTool
         val afterInterrupted = afterPending.finishInterruptedTools { tool ->
             tool.copy(
+                resultStatus = ToolResultStatus.INTERRUPTED,
                 output = listOf(UIMessagePart.Text("""{"status":"interrupted"}"""))
             )
         }

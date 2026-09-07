@@ -237,6 +237,40 @@ class ConversationStartAtomicityTest {
         appScope.cancel()
     }
 
+    @Test
+    fun `turn insert failure rolls back START slot context and runtime publication`() = runTest {
+        val userNode = MessageNode.of(UIMessage.user("preserved request"))
+        repository.insertConversation(Conversation.ofId(conversationId).copy(messageNodes = listOf(userNode)))
+        database.openHelper.writableDatabase.execSQL(
+            "CREATE TRIGGER reject_start BEFORE INSERT ON turn_execution BEGIN SELECT RAISE(ABORT, 'injected turn insert failure'); END",
+        )
+        val appScope = AppScope(StandardTestDispatcher(testScheduler))
+        try {
+            val locks = ConversationOperationLocks()
+            val registry = ConversationRuntimeRegistry(appScope, repository, locks)
+            val coordinator = ConversationCommandCoordinator(
+                registry, repository, ApplicationRecoveryGate().apply { ready() }, locks,
+            )
+            val runtime = coordinator.load(conversationId)
+            val turnId = Uuid.random()
+            runtime.installTurnWorker(turnId, Job())
+            val before = runtime.snapshot.value
+            val command = TurnTransition.buildStartTurnCommand(runtime.durable, turnId, canonicalContent())
+
+            val failure = runCatching { coordinator.startTurn(conversationId, command) }.exceptionOrNull()
+
+            assertNotNull(failure)
+            org.junit.Assert.assertSame(before, runtime.snapshot.value)
+            assertEquals(listOf(userNode.id.toString()), database.messageNodeDao()
+                .getNodeHeadersOfConversation(conversationId.toString()).map { it.id })
+            assertEquals(emptyList<ConversationModelContextEntity>(), database.conversationModelContextDao()
+                .getEntriesOfConversation(conversationId.toString()))
+            assertNull(database.turnExecutionDao().getById(turnId.toString()))
+        } finally {
+            appScope.cancel()
+        }
+    }
+
     private suspend fun insertConversationHeader() {
         database.conversationDao().insert(
             ConversationEntity(

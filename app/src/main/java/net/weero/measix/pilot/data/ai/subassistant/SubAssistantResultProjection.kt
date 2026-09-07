@@ -1,5 +1,7 @@
 package net.weero.measix.pilot.data.ai.subassistant
 
+import net.weero.measix.pilot.service.turn.TurnRunPhase
+
 import java.io.File
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -337,36 +339,18 @@ internal fun guessMime(path: String, fallback: String): String {
     }
 }
 
-/**
- * 从 Child 会话消息中提取 final answer。
- *
- * 优先取最后一个 Target ASSISTANT step 中、最后一个“工作工具”
- * 之后的顶层可见 Text。`text_to_speech` 等副作用工具不挡住答案。
- * 最后一步只有 Reasoning/空 Text 时，回退到更早 step 的 post-tool 文本；
- * 仍为空时取最后一条有文本的 ASSISTANT 消息的末段 Text island，避免主助手拿到空 content。
- */
+/** The final Step outcome owns the answer; earlier sampling text is not a fallback answer. */
 internal fun extractFinalAnswerInternal(
     messages: List<UIMessage>,
     childTaskNodeId: Uuid,
 ): String {
     val range = messagesInRunRange(messages, childTaskNodeId) ?: return ""
-    val assistants = range.filter { it.role == MessageRole.ASSISTANT }
-    if (assistants.isEmpty()) return ""
-
-    extractTextAfterLastWorkTool(assistants.last())
-        .takeIf { it.isNotBlank() }
-        ?.let { return it }
-
-    for (i in assistants.lastIndex - 1 downTo 0) {
-        extractTextAfterLastWorkTool(assistants[i])
-            .takeIf { it.isNotBlank() }
-            ?.let { return it }
-    }
-
-    for (msg in assistants.asReversed()) {
-        lastTextIsland(msg).takeIf { it.isNotBlank() }?.let { return it }
-    }
-    return ""
+    val assistant = range.lastOrNull { it.role == MessageRole.ASSISTANT } ?: return ""
+    val index = assistant.parts.indexOfLast { it is UIMessagePart.Step }
+    val step = assistant.parts.getOrNull(index) as? UIMessagePart.Step ?: return ""
+    if (step.outcome != me.rerere.ai.ui.StepOutcome.Final) return ""
+    return assistant.parts.drop(index + 1).filterIsInstance<UIMessagePart.Text>()
+        .joinToString("\n") { it.text }.trim()
 }
 
 internal data class SubAssistantCallCollectedOutputs(
@@ -418,38 +402,6 @@ private fun parseTtsInputText(input: String): String? = runCatching {
     val obj = kotlinx.serialization.json.Json.parseToJsonElement(input) as? JsonObject
     obj?.get("text")?.let { it as? JsonPrimitive }?.content?.trim()
 }.getOrNull()?.takeIf { it.isNotEmpty() }
-
-private val SUB_ASSISTANT_SIDE_EFFECT_TOOLS = setOf("text_to_speech")
-
-private fun extractTextAfterLastWorkTool(message: UIMessage): String {
-    val parts = message.parts
-    var lastWorkToolEnd = 0
-    for ((idx, part) in parts.withIndex()) {
-        if (part is UIMessagePart.Tool &&
-            part.hasReplayResult &&
-            part.toolName !in SUB_ASSISTANT_SIDE_EFFECT_TOOLS
-        ) {
-            lastWorkToolEnd = idx + 1
-        }
-    }
-    return parts.drop(lastWorkToolEnd)
-        .filterIsInstance<UIMessagePart.Text>()
-        .joinToString("\n") { it.text }
-        .trim()
-}
-
-private fun lastTextIsland(message: UIMessage): String {
-    val parts = message.parts
-    var end = parts.lastIndex
-    while (end >= 0 && parts[end] !is UIMessagePart.Text) end--
-    if (end < 0) return ""
-    var start = end
-    while (start >= 0 && parts[start] is UIMessagePart.Text) start--
-    return parts.subList(start + 1, end + 1)
-        .filterIsInstance<UIMessagePart.Text>()
-        .joinToString("\n") { it.text }
-        .trim()
-}
 
 // ---- 工具结果形状（Tool Result 构建） ----
 
@@ -559,14 +511,14 @@ internal suspend fun reportSubAssistantMetadataPatch(
 }
 
 /** 流式 phase 事件 → 卡片 phase 枚举。 */
-internal fun mapSubAssistantCallPhase(phase: String): SubAssistantCallPhase? = when (phase) {
-    "preparing" -> SubAssistantCallPhase.PREPARING
-    "model_waiting" -> SubAssistantCallPhase.MODEL_WAITING
-    "reasoning_streaming" -> SubAssistantCallPhase.REASONING_STREAMING
-    "answer_streaming" -> SubAssistantCallPhase.ANSWER_STREAMING
-    "tool_executing" -> SubAssistantCallPhase.TOOL_EXECUTING
-    "between_steps" -> SubAssistantCallPhase.BETWEEN_STEPS
-    else -> null
+internal fun mapSubAssistantCallPhase(phase: TurnRunPhase): SubAssistantCallPhase = when (phase) {
+    TurnRunPhase.PREPARING -> SubAssistantCallPhase.PREPARING
+    TurnRunPhase.MODEL_WAITING -> SubAssistantCallPhase.MODEL_WAITING
+    TurnRunPhase.REASONING_STREAMING -> SubAssistantCallPhase.REASONING_STREAMING
+    TurnRunPhase.ANSWER_STREAMING -> SubAssistantCallPhase.ANSWER_STREAMING
+    TurnRunPhase.TOOL_EXECUTING -> SubAssistantCallPhase.TOOL_EXECUTING
+    TurnRunPhase.BETWEEN_STEPS -> SubAssistantCallPhase.BETWEEN_STEPS
+    TurnRunPhase.TOOL_PREPARING -> SubAssistantCallPhase.PREPARING
 }
 
 // ---- 入站任务投影 ----

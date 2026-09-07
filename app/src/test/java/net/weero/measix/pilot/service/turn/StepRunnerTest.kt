@@ -1,5 +1,7 @@
 package net.weero.measix.pilot.service.turn
 
+import net.weero.measix.pilot.service.turn.TurnRunPhase
+
 import android.content.Context
 import io.mockk.coEvery
 import io.mockk.every
@@ -153,7 +155,7 @@ class StepRunnerTest {
 
         val phases = capture.phases.map { it.first }
         assertEquals(
-            listOf("preparing", "model_waiting", "reasoning_streaming", "answer_streaming"),
+            listOf(TurnRunPhase.PREPARING, TurnRunPhase.MODEL_WAITING, TurnRunPhase.REASONING_STREAMING, TurnRunPhase.ANSWER_STREAMING),
             phases,
         )
         val firstProjection = capture.streamDeltas.first()
@@ -192,13 +194,17 @@ class StepRunnerTest {
     @Test
     fun `provider input replays only sanitized terminal assistant transcript`() = runTest {
         val harness = createProviderHarness()
+        val terminalStep = net.weero.measix.pilot.service.runtime.TurnTransition.openStep(0).copy(
+            outcome = me.rerere.ai.ui.StepOutcome.Cancelled, finishedAt = kotlin.time.Instant.fromEpochMilliseconds(1),
+        )
         val terminalDraft = UIMessage(
             role = MessageRole.ASSISTANT,
             parts = listOf(
+                terminalStep,
                 UIMessagePart.Text("visible partial draft"),
                 UIMessagePart.Reasoning(reasoning = "unsafe reasoning"),
                 UIMessagePart.Tool(
-                    localCallId = Uuid.random(), stepId = Uuid.random(), providerCallId = "open-call",
+                    localCallId = Uuid.random(), stepId = terminalStep.stepId, providerCallId = "open-call",
                     toolName = "unfinished_tool",
                     input = "{",
                 ),
@@ -241,20 +247,32 @@ class StepRunnerTest {
     @Test
     fun `provider input applies replay safety after input transformers`() = runTest {
         val harness = createProviderHarness()
+        val completeStep = net.weero.measix.pilot.service.runtime.TurnTransition.openStep(0).copy(
+            outcome = me.rerere.ai.ui.StepOutcome.Continue, finishedAt = kotlin.time.Instant.fromEpochMilliseconds(1),
+            modelResult = me.rerere.ai.ui.StepModelResult(
+                finishReason = "tool_calls", usage = me.rerere.ai.ui.StepUsage(), providerRequestCount = 1,
+                timeToFirstOutputMillis = null, requestDurationMillis = null,
+                usageCompleteness = me.rerere.ai.core.UsageCompleteness.NONE, providerMetadata = null,
+            ),
+        )
+        val incompleteStep = net.weero.measix.pilot.service.runtime.TurnTransition.openStep(1).copy(
+            outcome = me.rerere.ai.ui.StepOutcome.Incomplete, finishedAt = kotlin.time.Instant.fromEpochMilliseconds(2),
+        )
         val terminal = UIMessage(
             role = MessageRole.ASSISTANT,
-            parts = listOf(UIMessagePart.Text("original")),
+            parts = listOf(incompleteStep.copy(ordinal = 0), UIMessagePart.Text("original")),
             terminalStatus = MessageTerminalStatus.INCOMPLETE,
             terminalReason = "provider_incomplete",
         )
         val completeTool = UIMessagePart.Tool(
-            localCallId = Uuid.random(), stepId = Uuid.random(), providerCallId = "complete-call",
+            localCallId = Uuid.random(), stepId = completeStep.stepId, providerCallId = "complete-call",
             toolName = "lookup",
             input = "{}",
             output = listOf(UIMessagePart.Text("result")),
+            resultStatus = me.rerere.ai.ui.ToolResultStatus.COMPLETED,
         )
         val unsafeTool = UIMessagePart.Tool(
-            localCallId = Uuid.random(), stepId = Uuid.random(), providerCallId = "unsafe-call",
+            localCallId = Uuid.random(), stepId = incompleteStep.stepId, providerCallId = "unsafe-call",
             toolName = "lookup",
             input = "{",
         )
@@ -266,8 +284,10 @@ class StepRunnerTest {
                 if (message.id == terminal.id) {
                     message.copy(
                         parts = listOf(
+                            completeStep,
                             UIMessagePart.Text("transformed"),
                             completeTool,
+                            incompleteStep,
                             UIMessagePart.Reasoning("unsafe transformed reasoning"),
                             unsafeTool,
                         ),
@@ -519,6 +539,7 @@ class StepRunnerTest {
             UIMessageChoice(
                 index = 0,
                 delta = UIMessage(role = MessageRole.ASSISTANT, parts = parts),
+                toolCallSlots = parts.filterIsInstance<UIMessagePart.Tool>().indices.map { me.rerere.ai.ui.ProviderToolCallSlot.Index(it) },
                 message = null,
                 finishReason = null,
             )

@@ -94,58 +94,19 @@ Target 当次模型不支持图片不是入站失败，后续请求由统一投�
 任何一项失败都不注入部分图片、不开始 Target run。Resolver 不下载 URL；
 `SafeRemoteMediaFetcher` 仍由其他需要下载的功能使用，不是附件工具的备用入口。
 
-## 4. 三种来源的统一请求投影
+## 4. 委托请求的媒体投影
 
-`AttachmentProjectionTransformer` 是请求级、无状态、非破坏投影。它不创建文件、不改 durable metadata、
-不替换 Provider 不透明状态，也不为子助手建立专用视觉流程。
+Master 与 Target 使用同一个 `AttachmentProjectionTransformer`。委托输入属于 Child USER；显式取回的交付图片属于 Caller Tool.output，二者分别使用 `RequestMediaCapabilities.userImages` 与 `toolOutputImages`，不能因 Caller 支持 USER 图片就推断它能读取 Tool.output 图片。
 
-| 图片来源 | 通用消息归属 | 能力字段 |
-| --- | --- | --- |
-| 用户上传或委托输入 | 原 USER parts | `userImages` |
-| 工具产图或显式取回的 Child 图片 | 原 Tool.output | `toolOutputImages` |
-| 模型原生产图 | 原 ASSISTANT parts | `assistantImages` |
+原来源容器、native/reference-only 事实行、无路径处理及 Responses 不透明回放规则统一见 [多模态上下文与资源持久化](multimodal-context-and-turn-durability.md) 和 [Provider 协议](protocol-reference.md)。投影不创建文件、不自动识图、不改 durable metadata。`generate_image` 的 `file.path` 与图片事实行指向同一聊天副本。
 
-每个来源独立判定：
-
-- `STRUCTURED`：保留 Image，并前插 `[Attachment path=/upload/abc123.png type=image input=native]`。
-- 其他能力、有可用路径：只保留 `[Attachment path=/upload/abc123.png type=image input=reference_only]`。
-- 没有可用路径：省略 path，原生时为 `[Attachment type=image input=native]` 加图片，否则为
-  `[Attachment type=image input=unavailable]`。
-
-路径由 ArtifactStore 校验后从 `LocalArtifactRef.toolPath()` 派生，不以 `attachment_ref` 存在为前提。
-远程或非 upload 资源不暴露内部 UUID，也不伪造本地路径。事实行不重复 name，不带行为指令；
-Document / Audio / Video 只在有路径时添加事实行，并保留原 part。
-
-四种协议各自编码原来源容器：Chat Completions 的 tool 文本、Responses 的 function_call_output、
-Claude 的 tool_result、Gemini 的 functionResponse 不会被改造成用户上传消息。
-Responses 的 `OPAQUE_REPLAY_ONLY` 不表示普通 Image 可结构化编码；匹配的原始 output 仍无损回放，
-request-only 附件事实在其后追加，不重复普通回答。具体协议映射见 [protocol-reference.md](protocol-reference.md)。
-
-Master 与 Target 使用同一投影器，位置在动态模板、Workspace 等输入处理之后、Provider 序列化之前。
-`generate_image` 的 JSON `file.path` 与 Image 事实行的 path 指向同一个聊天副本。
-Target 的 `generate_image` 仍要求启用 `TextToImage` 且文生图模型可解析，并遵守启动快照与当前工具权限交集。
-`set_as_background=true` 继续走审批；非交互 Target 不绕过权限。模型原生产图不依赖该工具。
+Target 的 `generate_image` 要求启用 `TextToImage` 且文生图模型可解析，并遵守执行期权限重验。`set_as_background=true` 需要审批，非交互 Target 不绕过该门禁；模型原生产图不依赖该工具。
 
 ## 5. 按需识图
 
-`shouldInjectAttachmentInspection(settings)` 只检查已配置识图模型存在、Provider 可用且声明 IMAGE 输入。
-当前模型是否能看图、当前请求是否带图、有没有 READY Workspace 都不构成额外限制。
+`inspect_attachments` 的注入条件、冻结配置、受保护读取和 Provider 请求由 [多模态上下文与资源持久化](multimodal-context-and-turn-durability.md) 定义。它不因 Target/Caller 当前模型具备原生视觉能力而隐藏，也不依赖 Workspace。
 
-Master/Target 在各自新 `START` 时冻结同一套 `FrozenToolDefinition` 与执行索引，供该 Turn 全部 step 的
-schema、审批与执行。配置撤销后不复活旧工具，待执行调用按 `tool_not_available` 失败。
-
-`inspect_attachments` 接收 1–4 张图片路径和非空 request。与委托的去重语义不同，识图保持每个输入位置，
-包括重复路径，以确保多图比较的顺序确定。读取调用 `AttachmentResolver.readImages(paths)`：
-
-- 同样通过 ArtifactStore 的受保护有界读取。
-- 内存快照复用 FileEncoder 的压缩、EXIF 方向和格式转换后构造 data URI；Provider 不依赖可能已被清理的 file URI。
-- 不复制磁盘文件、不创建 Artifact，不写入会话或设置。
-- 发给识图模型的内容是独立固定 System instruction、按序 `[Image N path=...]`、图片和 request；
-  不携带主会话历史或主 Assistant system prompt。
-- 一次调用处理全部图片；成功返回 Text，失败返回稳定 reason，取消不转换为普通错误。
-
-有效识图配置只提供能力，不触发自动识别。工具参数的完整文案与 Provider 错误分类见
-[prompts-and-tools.md](prompts-and-tools.md)。
+委托输入按路径去重；识图保留每个输入位置，包括重复路径，以支持顺序确定的多图比较。识图结果作为显式 Text Tool Result 返回，不注入 Child USER，也不替代原始附件。默认仅收到交付清单的 Caller 可直接使用 `artifacts[].path` 识图，无需重新执行产图委托。
 
 ## 6. 出站协议：Target → Caller
 
@@ -159,7 +120,7 @@ schema、审批与执行。配置撤销后不复活旧工具，待执行调用�
 
 按消息/part 顺序提取，通过内部逻辑身份或规范化文件去重。最多保存 `MAX_ASSISTANT_CALL_ATTACHMENTS`
 个可持久化项，超出部分计入省略数。内部 metadata 可以保留 upload/images 范围的文件；
-无法形成合法 `LocalArtifactRef` 的项只影响 `has_non_text_output`，不披露假路径。
+无法形成合法 `LocalArtifactRef` 的项只影响 `has_non_text_output`，不披露假路径。Coordinator 在写入 metadata 前再经 `validateDeliverableArtifacts` 校验受管登记、文件和 Image 预览；输出 URL 必须与 canonical Artifact 一致，失效项不发布，既有省略计数保留。
 
 completed 的模型结果通过 `buildSubAssistantArtifactManifest` 从内部 metadata 派生：
 
@@ -199,7 +160,7 @@ failed/stopped/unavailable 不返回交付物清单或 `has_non_text_output`。
 
 ## 7. UI、生命周期与复制
 
-内部 `SubAssistantCallMetadata` 保留现有 schema：
+`SubAssistantCallMetadata` 的交付物字段：
 
 ```text
 artifacts: [{ ref: "attachment:<uuid>", type: "image", mime: "image/png", artifact: LocalArtifactRef? }]

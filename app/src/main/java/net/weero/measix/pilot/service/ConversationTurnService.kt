@@ -465,7 +465,7 @@ class ConversationTurnService(
                 runtime.awaitPreviousWorker(turnId)
                 turnFinalizer.finalizeSupersededTurn(conversationId, runtime.previousTurnId(turnId))
 
-                val snapshot = subAssistantLifecycle.finalizeRunsBeforeTreeMutation(runtime.durable)
+                val snapshot = subAssistantLifecycle.requireClosedRunsBeforeTreeMutation(runtime.durable)
                 val nodeIndex = snapshot.nodes.indexOfFirst { node ->
                     node.messages.any { it.id == messageId }
                 }
@@ -545,7 +545,7 @@ class ConversationTurnService(
                 recoveryGate.awaitReady()
                 runtime.awaitPreviousWorker(turnId)
                 turnFinalizer.finalizeSupersededTurn(conversationId, runtime.previousTurnId(turnId))
-                val snapshot = subAssistantLifecycle.finalizeRunsBeforeTreeMutation(runtime.durable)
+                val snapshot = subAssistantLifecycle.requireClosedRunsBeforeTreeMutation(runtime.durable)
 
                 if (message.role == MessageRole.USER) {
                     // 如果是用户消息，则截止到当前消息（TruncateToNodeIndex，会话树 delta 落库）
@@ -934,7 +934,7 @@ class ConversationTurnService(
                     handle = started.handle,
                     reportProcessingText = runtime.processingReporter(),
                     // loop 的 typed 阶段推进本 Turn 的进程内 live phase（本会话不再忽略 onPhase）。
-                    onPhase = { phase, _ -> turnLivePhaseOf(phase)?.let(phaseReporter) },
+                    onPhase = { phase, _ -> phaseReporter(turnLivePhaseOf(phase)) },
                     messages = generationMessages,
                     assistantMessageId = started.assistantMessageId,
                     providerSessionId = conversationId.toString(),

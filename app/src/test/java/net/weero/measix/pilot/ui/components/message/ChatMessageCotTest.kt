@@ -30,6 +30,23 @@ class ChatMessageCotTest {
     )
 
     @Test
+    fun `execution step markers preserve the visible thinking timeline`() {
+        val first = tool("search_web").copy(stepId = Uuid.parse("00000000-0000-0000-0000-000000000001"))
+        val second = tool("read_file", pending = true).copy(stepId = Uuid.parse("00000000-0000-0000-0000-000000000002"))
+        val reasoning = UIMessagePart.Reasoning("continue searching")
+        val blocks = listOf(
+            UIMessagePart.Step(stepId = first.stepId, ordinal = 0, startedAt = kotlin.time.Instant.fromEpochMilliseconds(0)),
+            first,
+            UIMessagePart.Step(stepId = second.stepId, ordinal = 1, startedAt = kotlin.time.Instant.fromEpochMilliseconds(1)),
+            reasoning,
+            second,
+        ).groupMessageParts()
+
+        assertEquals(listOf(first, reasoning, second).groupMessageParts(), blocks)
+        assertEquals(3, (blocks.single() as MessagePartBlock.ThinkingBlock).steps.size)
+    }
+
+    @Test
     fun `generate_image stays in the thinking timeline instead of a child-run card`() {
         val blocks = listOf(
             UIMessagePart.Reasoning("plan"),

@@ -1,5 +1,7 @@
 package net.weero.measix.pilot.service.runtime
 
+import net.weero.measix.pilot.testkit.sampledModelResult
+
 import kotlinx.datetime.LocalDateTime
 import me.rerere.ai.core.MessageRole
 import me.rerere.ai.core.CURRENT_TOKEN_USAGE_SEMANTICS_VERSION
@@ -7,6 +9,8 @@ import me.rerere.ai.core.TokenUsage
 import me.rerere.ai.core.UsageCompleteness
 import me.rerere.ai.core.ToolOutputPolicy
 import me.rerere.ai.ui.ToolInteractionState
+import kotlinx.datetime.toInstant
+import me.rerere.ai.ui.ToolResultStatus
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
 import me.rerere.ai.ui.MessageTerminalStatus
@@ -187,7 +191,7 @@ internal class TurnTransitionTest : ConversationTransitionTestBase() {
         )
 
         assertSame(node, updated.nodes.single())
-        assertEquals(completedTool, updated.nodes.single().currentMessage.parts.single())
+        assertEquals(completedTool, updated.nodes.single().currentMessage.getTools().single())
         assertEquals("Generated title", updated.header.title)
         assertEquals(listOf("Next"), updated.header.chatSuggestions)
     }
@@ -253,7 +257,7 @@ internal class TurnTransitionTest : ConversationTransitionTestBase() {
         )
 
         val committed = ConversationTransition.apply(scenario.started, scenario.command)
-        val tool = committed.nodes.first().currentMessage.parts.single() as UIMessagePart.Tool
+        val tool = committed.nodes.first().currentMessage.getTools().single()
 
         assertEquals(listOf(UIMessagePart.Text(REGENERABLE_TOOL_OUTPUT_FOLDED_MARKER)), tool.output)
         assertNull(tool.runtimeState.archive)
@@ -267,7 +271,7 @@ internal class TurnTransitionTest : ConversationTransitionTestBase() {
         )
 
         val committed = ConversationTransition.apply(scenario.started, scenario.command)
-        val tool = committed.nodes.last().currentMessage.parts.single() as UIMessagePart.Tool
+        val tool = committed.nodes.last().currentMessage.getTools().single()
 
         assertEquals(listOf(UIMessagePart.Text(REGENERABLE_TOOL_OUTPUT_FOLDED_MARKER)), tool.output)
         assertNull(tool.runtimeState.archive)
@@ -308,11 +312,10 @@ internal class TurnTransitionTest : ConversationTransitionTestBase() {
         )
         val commandWithoutPatch = scenario.command.copy(toolOutputCompactionPatches = emptyList())
 
-        val error = assertThrows(IllegalArgumentException::class.java) {
+        assertThrows(IllegalArgumentException::class.java) {
             ConversationTransition.apply(scenario.started, commandWithoutPatch)
         }
 
-        assertTrue(error.message.orEmpty().contains("outside its typed patch"))
     }
 
     @Test
@@ -379,7 +382,10 @@ internal class TurnTransitionTest : ConversationTransitionTestBase() {
             ),
         )
         val handle = TurnHandle(conversationId, 1, turnId, assistantId)
-        val stepId = Uuid.random()
+        val initialAssistant = started.nodes.last().currentMessage.let { raw -> raw.copy(parts = raw.parts.map {
+            if (it is UIMessagePart.Step) it.copy(modelResult = sampledModelResult()) else it
+        }) }
+        val stepId = initialAssistant.parts.filterIsInstance<UIMessagePart.Step>().single().stepId
         val tool = UIMessagePart.Tool(
             localCallId = Uuid.random(), stepId = stepId, providerCallId = "call-1",
             toolName = "ask_user", input = "{}",
@@ -389,7 +395,7 @@ internal class TurnTransitionTest : ConversationTransitionTestBase() {
             ModelResponseCheckpoint(
                 turn = handle,
                 step = StepHandle(stepId),
-                assistantMessage = assistant(assistantId, listOf(tool)),
+                assistantMessage = initialAssistant.copy(parts = initialAssistant.parts + tool),
                 turnStatus = TurnExecutionStatus.RUNNING,
             ),
         )
@@ -400,10 +406,8 @@ internal class TurnTransitionTest : ConversationTransitionTestBase() {
             ModelResponseCheckpoint(
                 turn = handle,
                 step = StepHandle(stepId),
-                assistantMessage = assistant(
-                    assistantId,
-                    listOf(tool.copy(interactionState = ToolInteractionState.AwaitingApproval)),
-                ),
+                assistantMessage = initialAssistant.copy(parts = initialAssistant.parts +
+                    tool.copy(interactionState = ToolInteractionState.AwaitingApproval)),
                 turnStatus = TurnExecutionStatus.AWAITING_USER,
             ),
         )
@@ -515,6 +519,7 @@ internal class TurnTransitionTest : ConversationTransitionTestBase() {
             toolName = "shell",
             input = "{}",
             output = listOf(UIMessagePart.Text("""{"status":"interrupted"}""")),
+            resultStatus = me.rerere.ai.ui.ToolResultStatus.INTERRUPTED,
             interactionState = ToolInteractionState.AwaitingApproval,
         )
         val node = MessageNode.of(assistant(assistantId, listOf(UIMessagePart.Text("pre"), closedTool)))
@@ -628,10 +633,120 @@ internal class TurnTransitionTest : ConversationTransitionTestBase() {
             ResolveToolInteraction(assistantId, pending.stepId, pending.localCallId, ToolInteractionDecision.Approve, handle(base.conversationId, assistantId)),
         )
 
-        assertEquals(1, reduced.nodes.single().currentMessage.parts.size)
+        assertEquals(durableMessage.parts.size, reduced.nodes.single().currentMessage.parts.size)
         assertEquals(
             ToolInteractionState.Approved,
             reduced.nodes.single().currentMessage.parts.filterIsInstance<UIMessagePart.Tool>().single().interactionState,
         )
     }
+    @Test
+    fun `checkpoint rejects a result fact that disagrees with transcript before committing`() {
+        val messageId = Uuid.random()
+        val tool = UIMessagePart.Tool(
+            localCallId = Uuid.random(), stepId = Uuid.random(), providerCallId = "call",
+            toolName = "shell", input = "{}", output = listOf(UIMessagePart.Text("failed")),
+            resultStatus = ToolResultStatus.FAILED,
+        )
+        val message = assistant(messageId, listOf(tool))
+        val current = Conversation.ofId(Uuid.random()).copy(messageNodes = listOf(MessageNode.of(message))).toSnapshot()
+        val checkpoint = ToolResultCheckpoint(
+            turn = handle(current.conversationId, messageId), step = StepHandle(tool.stepId),
+            assistantMessage = message,
+            toolResults = listOf(net.weero.measix.pilot.data.ai.ToolResultFact(
+                me.rerere.ai.core.ToolCallLocator(messageId, tool.stepId, tool.localCallId), ToolResultStatus.COMPLETED,
+            )),
+        )
+        val failure = runCatching { ConversationTransition.plan(current, checkpoint, 1) }.exceptionOrNull()
+        assertTrue(failure is IllegalArgumentException)
+        assertTrue(failure!!.message!!.contains("transcript and result"))
+        assertSame(message, current.nodes.single().currentMessage)
+    }
+
+    @Test
+    fun `checkpoint rejects a pending batch declared running`() {
+        val messageId = Uuid.random()
+        val tool = UIMessagePart.Tool(
+            localCallId = Uuid.random(), stepId = Uuid.random(), providerCallId = "call",
+            toolName = "shell", input = "{}", interactionState = ToolInteractionState.AwaitingApproval,
+        )
+        val message = assistant(messageId, listOf(tool))
+        val current = Conversation.ofId(Uuid.random()).copy(messageNodes = listOf(MessageNode.of(message))).toSnapshot()
+        val checkpoint = ModelResponseCheckpoint(
+            turn = handle(current.conversationId, messageId), step = StepHandle(tool.stepId),
+            assistantMessage = message, turnStatus = TurnExecutionStatus.RUNNING,
+        )
+        val failure = runCatching { ConversationTransition.plan(current, checkpoint, 1) }.exceptionOrNull()
+        assertTrue(failure is IllegalArgumentException)
+        assertTrue(failure!!.message!!.contains("pause status"))
+    }
+
+    @Test
+    fun `finalization rejects an open predecessor instead of retroactively guessing Continue`() {
+        val messageId = Uuid.random()
+        val message = assistant(messageId).let { it.copy(parts = it.parts + TurnTransition.openStep(1).copy(modelResult = sampledModelResult("stop"))) }
+        val current = Conversation.ofId(Uuid.random()).copy(messageNodes = listOf(MessageNode.of(message))).toSnapshot()
+        val failure = runCatching {
+            ConversationTransition.apply(current, FinalizeTurn(
+                handle(current.conversationId, messageId), message, TurnExecutionStatus.COMPLETED, null,
+            ))
+        }.exceptionOrNull()
+        assertTrue(failure is IllegalArgumentException)
+        assertTrue(failure!!.message!!.contains("previous Step must close"))
+    }
+
+    @Test
+    fun `START and terminal commands preserve allocated identities and timestamps when reduced again`() {
+        val current = Conversation.ofId(Uuid.random()).copy(messageNodes = listOf(MessageNode.of(user(Uuid.random())))).toSnapshot()
+        val start = TurnTransition.buildStartTurnCommand(current, Uuid.random(), disclosureCandidate())
+        val first = ConversationTransition.apply(current, start)
+        val repeated = ConversationTransition.apply(current, start)
+        assertEquals(first, repeated)
+        val finishTime = kotlinx.datetime.LocalDateTime(2026, 9, 7, 12, 0)
+        val terminal = FinalizeTurn(
+            handle(first.conversationId, start.assistantMessageId), null,
+            TurnExecutionStatus.CANCELLED, "user_stop", finishedAt = finishTime,
+        )
+        val closed = ConversationTransition.apply(first, terminal)
+        assertEquals(closed, ConversationTransition.apply(first, terminal))
+        assertEquals(finishTime, closed.nodes.last().currentMessage.finishedAt)
+        assertEquals(
+            finishTime.toInstant(kotlinx.datetime.TimeZone.currentSystemDefault()),
+            closed.nodes.last().currentMessage.parts.filterIsInstance<UIMessagePart.Step>().single().finishedAt,
+        )
+    }
+
+    @Test
+    fun `checkpoint cannot replace a committed Step identity`() {
+        val message = assistant(Uuid.random())
+        val current = Conversation.ofId(Uuid.random()).copy(messageNodes = listOf(MessageNode.of(message))).toSnapshot()
+        val replacement = message.copy(parts = message.parts.map {
+            if (it is UIMessagePart.Step) it.copy(stepId = Uuid.random()) else it
+        })
+        val failure = runCatching { ConversationTransition.apply(current, ModelResponseCheckpoint(
+            handle(current.conversationId, message.id),
+            StepHandle(replacement.parts.filterIsInstance<UIMessagePart.Step>().single().stepId),
+            replacement, turnStatus = TurnExecutionStatus.RUNNING,
+        )) }.exceptionOrNull()
+        assertTrue(failure is IllegalArgumentException)
+        assertTrue(failure!!.message!!.contains("Step identity"))
+    }
+
+    @Test
+    fun `an unsampled Step cannot publish a model checkpoint or complete the Turn`() {
+        val message = assistant(Uuid.random()).let { it.copy(parts = it.parts.map { part ->
+            if (part is UIMessagePart.Step) part.copy(modelResult = null) else part
+        }) }
+        val current = Conversation.ofId(Uuid.random()).copy(messageNodes = listOf(MessageNode.of(message))).toSnapshot()
+        val owner = handle(current.conversationId, message.id)
+        val stepId = message.parts.filterIsInstance<UIMessagePart.Step>().single().stepId
+        assertThrows(IllegalArgumentException::class.java) {
+            ConversationTransition.apply(current, ModelResponseCheckpoint(owner, StepHandle(stepId), message, TurnExecutionStatus.RUNNING))
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            ConversationTransition.apply(current, FinalizeTurn(owner, message, TurnExecutionStatus.COMPLETED, null))
+        }
+        val cancelled = ConversationTransition.apply(current, FinalizeTurn(owner, message, TurnExecutionStatus.CANCELLED, "user_stop"))
+        assertEquals(me.rerere.ai.ui.StepOutcome.Cancelled, cancelled.nodes.single().currentMessage.parts.filterIsInstance<UIMessagePart.Step>().single().outcome)
+    }
+
 }

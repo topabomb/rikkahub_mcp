@@ -103,6 +103,18 @@ enum class ToolMetadataDelivery {
     DEFERRED,
 }
 
+/** One delegated run's durable lineage, allocated before publishing the parent link. */
+data class ToolChildRunLink(
+    val childConversationId: Uuid,
+    val childTurnId: Uuid,
+    val subAssistantRunId: String,
+) {
+    init {
+        require(childConversationId != Uuid.NIL && childTurnId != Uuid.NIL)
+        require(subAssistantRunId.isNotBlank())
+    }
+}
+
 /**
  * 通用工具执行上下文，提供 metadata 回写能力。
  * 不引入 App 的 Conversation 类型，保持 ai 模块的平台无关性。
@@ -120,8 +132,8 @@ data class ToolExecutionContext(
     val reportMetadata: suspend (patch: JsonObject, delivery: ToolMetadataDelivery) -> Unit,
     /** 按受管文件路径读取请求级图片内容，不创建持久化副本。 */
     val resolveAttachments: suspend (paths: List<String>) -> ToolAttachmentResolution,
-    /** 委派类工具在派生会话确定后回写其 id，并入本次工具执行的 durable 事实。 */
-    val reportChildConversation: suspend (childConversationId: String) -> Unit,
+    /** 委派类工具在派生执行确定后回写完整 lineage，并入本次工具执行的 durable 事实。 */
+    val reportChildRun: suspend (link: ToolChildRunLink) -> Unit,
     /** Transfers an unpublished output resource to the generation/checkpoint owner. */
     val registerUnpublishedResource: (ToolResourceLease) -> Unit,
     /** Derived from this call's committed approval decision, never from model arguments. */

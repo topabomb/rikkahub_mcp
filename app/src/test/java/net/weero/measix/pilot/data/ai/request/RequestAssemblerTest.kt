@@ -72,8 +72,30 @@ class RequestAssemblerTest {
         assertEquals(MessageRole.ASSISTANT, provider.role)
         assertEquals(modelId, provider.modelId)
         assertEquals(metadata, provider.providerMetadata)
-        assertEquals(2, provider.providerReplayProjection?.completePartCount)
+        assertEquals(1, provider.providerReplayProjection?.completePartCount)
         assertTrue(provider.providerReplayProjection?.hasIncompleteTail == true)
+    }
+
+    @Test
+    fun `dropping Step markers does not promote an incomplete tail into the safe prefix`() {
+        val complete = UIMessagePart.Text("completed prefix")
+        val tail = UIMessagePart.Reasoning("unfinished private reasoning")
+        val message = UIMessage(
+            role = MessageRole.ASSISTANT,
+            parts = listOf(step(0), complete, step(1), tail),
+            providerReplayProjection = me.rerere.ai.ui.ProviderReplayProjection(
+                completePartCount = 2,
+                hasIncompleteTail = true,
+            ),
+        )
+
+        val assembled = assembler.assemble(listOf(message))
+        val provider = assembled.providerMessages.single()
+
+        assertEquals(listOf(complete, tail), provider.parts)
+        assertEquals(1, provider.providerReplayProjection?.completePartCount)
+        assertEquals(listOf(complete), provider.parts.take(requireNotNull(provider.providerReplayProjection).completePartCount))
+        assertEquals(provider.providerReplayProjection, assembled.providerVisibleMessages.single().providerReplayProjection)
     }
 
     @Test

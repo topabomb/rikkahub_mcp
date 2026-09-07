@@ -11,6 +11,7 @@ import kotlinx.serialization.json.jsonPrimitive
 import me.rerere.ai.ui.UIMessagePart
 import net.weero.measix.pilot.data.db.entity.MessageNodeEntity
 import net.weero.measix.pilot.data.db.transcript.LegacyTurnTranscriptMigrator
+import net.weero.measix.pilot.data.db.transcript.readTranscriptPayload
 import kotlin.uuid.Uuid
 
 /**
@@ -61,14 +62,13 @@ val Migration_10_11 = object : Migration(10, 11) {
 
     private fun convertTranscripts(db: SupportSQLiteDatabase, turnStatus: Map<Uuid, String>) {
         val hasColumn = columnExists(db, "message_node", "transcript_schema")
-        // §11.3：游标逐行读取 (id, messages) 并就地改写，峰值内存 = 单行 transcript，绝不一次装入全库。
+        // 逐行读取 ID，分段加载单行 transcript 后就地改写，避免整库载入与 CursorWindow 溢出。
         // UPDATE 只命中已读过的行（按主键），不改变 rowid 扫描顺序，故游标继续安全前进。
-        db.query("SELECT id, messages FROM message_node").use { c ->
+        db.query("SELECT id FROM message_node").use { c ->
             val idColumn = c.getColumnIndexOrThrow("id")
-            val messagesColumn = c.getColumnIndexOrThrow("messages")
             while (c.moveToNext()) {
                 val id = c.getString(idColumn)
-                val messages = c.getString(messagesColumn)
+                val messages = readTranscriptPayload(db, id)
                 val converted = LegacyTurnTranscriptMigrator.convertNode(messages, turnStatus, json)
                 if (converted != messages) {
                     db.execSQL("UPDATE message_node SET messages = ? WHERE id = ?", arrayOf(converted, id))
@@ -175,7 +175,7 @@ val Migration_10_11 = object : Migration(10, 11) {
                 dropped++
                 continue
             }
-            val runId = tool.subAssistantRunId()
+            val runId = tool.subAssistantRunId
             db.execSQL(
                 "INSERT INTO tool_execution_v3 (execution_id, turn_id, step_id, local_call_id, status, reason, " +
                     "child_conversation_id, child_turn_id, sub_assistant_run_id, created_at, updated_at) " +
@@ -195,7 +195,7 @@ val Migration_10_11 = object : Migration(10, 11) {
             )
             inserted++
         }
-        // §11.6：DROP+RENAME 前校验临时表实有行数 = 映射保留行数，且每条旧行都被计入（映射或删除）。
+        // DROP+RENAME 前校验临时表实有行数 = 映射保留行数，且每条旧行都被计入（映射或删除）。
         val v3RowCount = db.query("SELECT COUNT(*) FROM tool_execution_v3").use { c ->
             c.moveToFirst()
             c.getInt(0)
@@ -211,25 +211,30 @@ val Migration_10_11 = object : Migration(10, 11) {
         createToolExecutionIndexes(db)
     }
 
-    // The rebuild inserts every mapped row into the temp table *before* dropping the old table, and
-    // any row it cannot map fails the migration outright. So when the old table is already gone, the
-    // surviving temp table necessarily holds the complete, fully-mapped set — presence of the two new
-    // locator columns is the discriminator that this run built the V3 shape (not a legacy leftover).
-    private fun tempIsComplete(db: SupportSQLiteDatabase): Boolean =
-        columnExists(db, "tool_execution_v3", "local_call_id") && columnExists(db, "tool_execution_v3", "step_id")
+    private fun tempIsComplete(db: SupportSQLiteDatabase): Boolean {
+        if (!columnExists(db, "tool_execution_v3", "local_call_id") ||
+            !columnExists(db, "tool_execution_v3", "step_id")) return false
+        val toolsByMessage = readAssistantToolsByMessageId(db)
+        db.query(
+            "SELECT e.local_call_id, e.step_id, t.assistant_message_id FROM tool_execution_v3 e " +
+                "LEFT JOIN turn_execution t ON t.turn_id = e.turn_id",
+        ).use { cursor ->
+            while (cursor.moveToNext()) {
+                if (cursor.isNull(2)) return false
+                val tool = toolsByMessage[cursor.getString(2)]?.firstOrNull {
+                    it.localCallId.toString() == cursor.getString(0)
+                } ?: return false
+                if (tool.stepId.toString() != cursor.getString(1)) return false
+            }
+        }
+        return true
+    }
 
     private fun createToolExecutionIndexes(db: SupportSQLiteDatabase) {
         db.execSQL("CREATE INDEX IF NOT EXISTS `index_tool_execution_turn_id` ON `tool_execution` (`turn_id`)")
         db.execSQL(
             "CREATE INDEX IF NOT EXISTS `index_tool_execution_child_conversation_id` " +
                 "ON `tool_execution` (`child_conversation_id`)",
-        )
-        db.execSQL(
-            "CREATE INDEX IF NOT EXISTS `index_tool_execution_child_turn_id` ON `tool_execution` (`child_turn_id`)",
-        )
-        db.execSQL(
-            "CREATE INDEX IF NOT EXISTS `index_tool_execution_sub_assistant_run_id` " +
-                "ON `tool_execution` (`sub_assistant_run_id`)",
         )
         db.execSQL(
             "CREATE UNIQUE INDEX IF NOT EXISTS `index_tool_execution_turn_id_local_call_id` " +
@@ -244,18 +249,19 @@ val Migration_10_11 = object : Migration(10, 11) {
      * must be that message id — never the `message_node` row id — and the list must be scoped to a
      * single message, not flattened across every message in the node.
      */
-    private fun readAssistantToolsByMessageId(db: SupportSQLiteDatabase): Map<String, List<UIMessagePart.Tool>> {
-        val map = HashMap<String, List<UIMessagePart.Tool>>()
-        db.query("SELECT messages FROM message_node").use { c ->
+    private fun readAssistantToolsByMessageId(db: SupportSQLiteDatabase): Map<String, List<ConvertedToolLocator>> {
+        val map = HashMap<String, List<ConvertedToolLocator>>()
+        db.query("SELECT id FROM message_node").use { c ->
             while (c.moveToNext()) {
-                val messages = json.parseToJsonElement(c.getString(0)).jsonArray
+                val messages = json.parseToJsonElement(readTranscriptPayload(db, c.getString(0))).jsonArray
                 for (message in messages) {
                     val obj = message.jsonObject
                     val messageId = obj["id"]?.jsonPrimitive?.content ?: continue
                     val tools = obj["parts"]?.jsonArray?.mapNotNull { part ->
                         val p = part.jsonObject
                         if (p["type"]?.jsonPrimitive?.content == "tool") {
-                            json.decodeFromJsonElement(UIMessagePart.Tool.serializer(), p)
+                            val tool = json.decodeFromJsonElement(UIMessagePart.Tool.serializer(), p)
+                            ConvertedToolLocator(tool.localCallId, tool.stepId, tool.subAssistantRunId())
                         } else {
                             null
                         }
@@ -322,3 +328,5 @@ private data class OldToolRow(
     val createdAt: Long,
     val updatedAt: Long,
 )
+
+private data class ConvertedToolLocator(val localCallId: Uuid, val stepId: Uuid, val subAssistantRunId: String?)

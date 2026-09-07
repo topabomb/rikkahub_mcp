@@ -4,6 +4,7 @@ import me.rerere.ai.core.MessageRole
 import me.rerere.ai.ui.ToolInteractionState
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
+import me.rerere.ai.ui.ToolResultStatus
 import net.weero.measix.pilot.data.model.Conversation
 import net.weero.measix.pilot.data.model.toMessageNode
 import net.weero.measix.pilot.service.runtime.ConversationPresentationSnapshot
@@ -58,6 +59,7 @@ class TTSAutoPlayTest {
                     localCallId = Uuid.random(), stepId = Uuid.random(), providerCallId = "tts-1",
                     toolName = "text_to_speech",
                     input = """{"text":"The answer is 42."}""",
+                    resultStatus = ToolResultStatus.COMPLETED,
                     output = listOf(UIMessagePart.Text("""{"success":true}""")),
                 ),
             ),

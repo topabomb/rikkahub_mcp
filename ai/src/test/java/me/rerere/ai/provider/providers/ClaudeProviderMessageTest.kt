@@ -19,6 +19,7 @@ import me.rerere.ai.testsupport.toModelRequest
 import me.rerere.ai.testsupport.toModelRequests
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
+import me.rerere.ai.ui.ToolResultStatus
 import me.rerere.ai.ui.metadataAs
 import me.rerere.ai.ui.toMetadata
 import okhttp3.OkHttpClient
@@ -39,6 +40,17 @@ import kotlin.uuid.Uuid
  * - thinking blocks for reasoning
  */
 class ClaudeProviderMessageTest {
+
+    @Test
+    fun `tool only Steps retain alternating calls and results`() {
+        val wire = invokeBuildMessages(me.rerere.ai.testsupport.consecutiveToolSteps())
+        assertEquals(listOf("assistant", "user", "assistant", "user"), wire.map {
+            it.jsonObject["role"]!!.jsonPrimitive.content
+        })
+        assertEquals(listOf("tool_use", "tool_result", "tool_use", "tool_result"), wire.map {
+            it.jsonObject["content"]!!.jsonArray.single().jsonObject["type"]!!.jsonPrimitive.content
+        })
+    }
 
     private lateinit var provider: ClaudeProvider
 
@@ -94,6 +106,7 @@ class ClaudeProviderMessageTest {
                         localCallId = Uuid.random(), stepId = Uuid.random(), providerCallId = "call_1",
                         toolName = "generate_image",
                         input = "{}",
+                        resultStatus = ToolResultStatus.COMPLETED,
                         output = listOf(UIMessagePart.Text(toolFact)),
                     ),
                 ),

@@ -165,7 +165,7 @@ class ImageGenerationToolCompensationTest {
                     locator = ToolCallLocator(Uuid.random(), Uuid.random(), Uuid.random()), providerCallId = "call",
                     reportMetadata = { _, _ -> },
                     resolveAttachments = { ToolAttachmentResolution(failureReason = "not_used") },
-                    reportChildConversation = { },
+                    reportChildRun = { },
                     registerUnpublishedResource = resources::add,
                 ),
                 buildJsonObject {
@@ -233,7 +233,7 @@ class ImageGenerationToolCompensationTest {
                 locator = ToolCallLocator(Uuid.random(), Uuid.random(), Uuid.random()), providerCallId = "call",
                 reportMetadata = { patch, delivery -> metadataPatches += patch to delivery },
                 resolveAttachments = { ToolAttachmentResolution(failureReason = "not_used") },
-                reportChildConversation = { },
+                reportChildRun = { },
                 registerUnpublishedResource = resources::add,
             ),
             buildJsonObject {

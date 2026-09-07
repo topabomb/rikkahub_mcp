@@ -1,6 +1,9 @@
 @file:Suppress("UNNECESSARY_SAFE_CALL")
 package me.rerere.ai.provider.providers.openai
 
+import me.rerere.ai.provider.ProviderResponseException
+import me.rerere.ai.util.ProviderTerminalStatus
+import me.rerere.ai.ui.ProviderToolCallSlot
 import android.util.Log
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.Channel
@@ -86,6 +89,11 @@ private const val TAG = "ChatCompletionsAPI"
  */
 internal class ChatCompletionsStreamState {
     private val toolCallIdsByIndex = mutableMapOf<Int, String>()
+    @Volatile private var finishReason: String? = null
+
+    fun observeFinishReason(reason: String?) { if (reason != null) finishReason = reason }
+
+    fun completionError(): HttpException? = chatFinishReasonError(finishReason)
 
     fun resolveToolCallId(index: Int?, announcedId: String?): String? {
         if (index != null && !announcedId.isNullOrBlank()) {
@@ -139,11 +147,11 @@ class ChatCompletionsAPI(
         val finishReason = choice["finish_reason"]
             ?.jsonPrimitive
             ?.content
-            ?: "unknown"
+            ?.takeUnless { it == "null" }
         val endpointVendor = resolveOpenAIEndpointVendor(providerSetting.baseUrl.toHttpUrl().host)
         val usage = parseTokenUsage(bodyJson["usage"] as? JsonObject, endpointVendor)
 
-        MessageChunk(
+        val chunk = MessageChunk(
             id = id,
             model = model,
             choices = listOf(
@@ -156,6 +164,8 @@ class ChatCompletionsAPI(
             ),
             usage = usage
         )
+        chatFinishReasonError(finishReason)?.let { throw ProviderResponseException(chunk, it) }
+        chunk
     }
 
     override suspend fun streamText(
@@ -192,7 +202,7 @@ class ChatCompletionsAPI(
                 data: String
             ) {
                 if (data == "[DONE]") {
-                    close()
+                    close(streamState.completionError())
                     return
                 }
                 try {
@@ -242,7 +252,7 @@ class ChatCompletionsAPI(
             }
 
             override fun onClosed(eventSource: EventSource) {
-                close()
+                close(streamState.completionError())
             }
         }
 
@@ -800,15 +810,23 @@ class ChatCompletionsAPI(
         val choices = payload["choices"]?.jsonArrayOrNull ?: JsonArray(emptyList())
         val choiceList = buildList {
             val choice = choices.firstOrNull()?.jsonObjectOrNull ?: return@buildList
+            val finishReason = choice["finish_reason"]?.jsonPrimitiveOrNull?.contentOrNull
+            streamState?.observeFinishReason(finishReason)
             val message = choice["delta"]?.jsonObjectOrNull
                 ?: choice["message"]?.jsonObjectOrNull
-                ?: return@buildList
-            val finishReason = choice["finish_reason"]?.jsonPrimitiveOrNull?.contentOrNull
-                ?: "unknown"
+                ?: if (finishReason != null) JsonObject(emptyMap()) else return@buildList
+            val slots = message["tool_calls"]?.jsonArrayOrNull.orEmpty().mapNotNull { it.jsonObjectOrNull }
+                .mapIndexed { ordinal, call ->
+                    val index = if (choice["delta"] is JsonObject) {
+                        requireNotNull(call["index"]?.jsonPrimitiveOrNull?.intOrNull) { "Streaming Tool delta is missing index" }
+                    } else ordinal
+                    ProviderToolCallSlot.Index(index)
+                }
             add(
                 UIMessageChoice(
                     index = 0,
                     delta = parseMessage(message, streamState),
+                    toolCallSlots = slots,
                     message = null,
                     finishReason = finishReason,
                 )
@@ -995,3 +1013,13 @@ internal val CHAT_COMPLETIONS_OWNERSHIP = RequestBodyOwnership(
         "session_id",
     ),
 )
+
+internal fun chatFinishReasonError(reason: String?): HttpException? = when (reason) {
+    "stop", "tool_calls", "function_call" -> null
+    else -> HttpException(
+        message = "Chat completion ended with finish_reason=${reason ?: "missing"}",
+        terminalStatus = if (reason == null || reason == "length") {
+            ProviderTerminalStatus.INCOMPLETE
+        } else ProviderTerminalStatus.FAILED,
+    )
+}

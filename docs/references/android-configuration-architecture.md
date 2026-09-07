@@ -1,63 +1,16 @@
-# Android 配置架构与企业下发边界
+# Android 配置架构与资源边界
 
-> 当前实现事实以 Android 代码为准；尚未落地的 S0.2 企业边界以外部平台契约为准，不在本文中冒充已实现能力。
-> 平台架构权威：`topabomb/measix-architecture` 的 S0.2 Enterprise Realm & Experience Contract、S0.4 Android Managed Runtime Integration Contract 与 S0 Control Protocol
-> Executable wire：`topabomb/measix-platform-core/api/client/client-control.openapi.yaml`
+本文定义 Android 当前配置的 owner、持久化载体、字段目录、引用关系和内部签名 overlay 边界。Assistant 逐字段运行语义见 [助手配置](assistant-configuration.md)，总体依赖与启动恢复见 [应用架构](application-architecture.md)。待实现的企业阶段、字段映射与验证要求见 [企业集成计划](../dev/android-enterprise-integration-plan.md)。
 
-本文回答两个不同问题：
-
-1. Android 当前有哪些配置、默认值、引用和持久化边界；
-2. 其中哪些属于企业下发，哪些必须保持本地，哪些只是状态或服务端内部事实。
-
-本文是 Android 实现结构的总目录。Assistant 的逐字段运行语义仍以
-[助手配置参考](assistant-configuration.md) 为权威；跨组件 Managed Snapshot 字段仍以 MEASIX Control Protocol 和冻结后的
-Client OpenAPI 为权威，本文不反向发明 wire 字段。
-
-## 1. 先给结论
-
-Android 的“完整配置”不是一份可整体下发的 `Settings JSON`，而是五类不同 owner 的事实：
+## 1. 配置组成
 
 ```text
-Built-in Defaults
-       +
-Local Settings / Local Resources
-       +
-Applied Managed Snapshot
-       ↓
-Effective Configuration / Runtime View
-       ↓
-Assistant / Model / TTS / ASR / MCP / Search / UI consumers
-
-Enterprise Binding + Credential + Managed State
-       └── 只负责身份、同步和 Managed interaction correctness
+Built-in defaults + Local shadow + 已验证的 Managed overlay
+  → SettingsStore.effectiveSettings
+      → 配置、生成与 UI consumers
 ```
 
-外部平台契约的分阶段边界是：
-
-```text
-S0.1 Snapshot v1
-  └─ Provider / Model / TTS / ASR / Direct MCP / Policy
-S0.2 Snapshot v2
-  └─ v1 + Managed Assistant / Memory Seed / Assistant Starter
-S0.3 Snapshot v3
-  └─ v2 + Enterprise Tool Gateway
-S0.4 Android integration
-  └─ 消费冻结后的完整 profile
-```
-
-因此：
-
-- **Snapshot v2**：保留 v1 的 Managed Provider/Model/TTS/HTTP-ASR/Direct MCP/Policy，并增加
-  `ManagedAssistantDefinition`、其中的 Managed Memory Seed 和 `AssistantStarterDefinition`；
-- **必须独立保存但不是能力配置**：Enterprise Binding、Refresh Credential、Applied Snapshot payload/元数据；
-- **仍保持本地或属于后续阶段**：Personal Assistant/Prompt/Memory、Search、Skill、Workspace、主题/显示、备份、
-  快捷消息、图片生成和实时 ASR；Enterprise Local Assistant Memory 是 User Data，不进入 Snapshot；
-- **禁止下发到 Android**：`UpstreamDefinition`、`upstreamId`、base/internal URL、企业 API Key/Secret、RuntimeBinding、
-  `runtimeRouteId`、Pricing；这不包含客户端必须接收的 `upstreamModelKey`；
-- **禁止实现方式**：把服务端 payload 直接反序列化为 `Settings`，或把 Enterprise Token 写入本地 Provider/MCP credential 字段。
-
-当前 Android 只有内部签名 overlay 原型，没有 ClientRealm、Enrollment/Session、Snapshot v2/v3 generated DTO、
-Enterprise Update/Portal 或生产同步入口；不能把该原型表述为已完成 S0.2/S0.4 集成。
+完整配置分属 DataStore、轻量 UI preferences、Room、资源文件和可重建缓存，不能整体替换为远端 Settings JSON。当前 ManagedConfigurationEnvelope 是内部签名 overlay；生产 Realm、Enrollment/Session、平台 Snapshot 和同步入口尚未实现，不能复用本地 Provider/MCP 凭据冒充企业身份。
 
 ## 2. 配置 owner 与读写架构
 
@@ -71,10 +24,6 @@ Enterprise Update/Portal 或生产同步入口；不能把该原型表述为已�
 | Local durable resource | Room + `filesDir` | Workspace、Skill、会话级覆盖、资源文件 | 仅备份协议明确包含的域 |
 | Local runtime cache | `cacheDir/lru_key_roulette.json` 等 | 可重建的 key 轮换/发现缓存；不是配置真源 | 否 |
 | Managed prototype | `filesDir/managed_configuration/` | 当前代码中的签名通用 overlay 原型 | 否 |
-| Enterprise Binding | 当前 Android 未实现 | Deployment/User/Device/Session binding | 否 |
-| Enterprise credential | 当前 Android 未实现 | Refresh Credential；Access Token 仅内存 | 否 |
-| Applied Managed State | 当前 Android 未实现 | Snapshot payload + generation/hash/schema/release | 否；与 credential 分离 |
-| Server runtime owner | Control Hub / Runtime Relay | Upstream、Secret、RuntimeBinding、route、pricing | 永不进入 Android 本地配置 |
 
 `lru_key_roulette.json` 当前以原始 API key 作为 map key 保存轮换时间。它虽然不是配置真源也不进入手工备份，仍是
 未加密 secret 副本；企业 credential 不能复用这条缓存协议。
@@ -312,7 +261,7 @@ SearchServiceOptions
   SearXNGOptions  { id, url, engines, language, username, password }
 ```
 
-Search 包含用户 API key/URL/账号，S0.2 不下发，也不能复用为 Managed Model/MCP 路由。
+Search 包含本地用户 API key/URL/账号，不作为 Model/MCP 路由或企业凭据载体。
 当前 `SearchServiceOptions.DEFAULT` 在类加载时由 `BingLocalOptions()` 产生随机 UUID，不具备跨安装/跨设备稳定性。
 
 ### 4.5 TTS
@@ -337,8 +286,7 @@ Search 包含用户 API key/URL/账号，S0.2 不下发，也不能复用为 Man
 | `OpenAIRealtime` | `id, name, apiKey, websocketUrl, model, language, prompt, sampleRate, vadThreshold, prefixPaddingMs, silenceDurationMs` |
 | `DashScope` | `id, name, apiKey, websocketUrl, model, language, sampleRate, vadThreshold, silenceDurationMs` |
 
-当前 Local ASR 全是 WebSocket/realtime controller 配置；S0.2 Managed ASR 是 HTTP multipart transcription，不能把
-Managed `runtimePath/model/language` 强塞进这些 realtime 类型，也不能伪造 VAD/sample-rate 字段。
+当前 Local ASR 使用 WebSocket/realtime controller 配置，HTTP transcription 不由这些 realtime 类型承载。
 
 ### 4.7 MCP
 
@@ -423,7 +371,7 @@ Workspace 文件系统另有代码内置的 `WorkspaceConfig` 运行限制：`ma
 `maxWriteBytes=2 MiB`、`maxListEntries=500`、`maxSearchResults=100`。它们当前不是持久化字段，也没有
 企业下发入口；如果以后改成策略，必须先明确由 Local、Managed Policy 还是 Runtime owner 持有。
 
-这些都是 Local durable/user data。S0.2 明确不包含 Agent Space、server-side conversation 或 User Sync。
+这些事实归本地配置或用户数据 owner，不属于当前内部 overlay 的远端会话同步协议。
 
 ### 5.3 Skills 与文件资源
 
@@ -432,8 +380,11 @@ Workspace 文件系统另有代码内置的 `WorkspaceConfig` 运行限制：`ma
 - `Assistant.enabledSkills` 只保存 Skill 名称引用；
 - 自定义字体、Assistant 头像/背景、上传和生成图片分别由自己的文件 owner 管理。
 
-Skill/Workspace/Assistant asset 不属于 S0.2 Snapshot。以后若要企业下发，必须先定义签名内容、稳定 ID、引用完整性、
-版本、删除/回滚和本地同名冲突协议，不能继续扩展自由形态 `JsonObject records`。
+`SkillManager` 是 Skill 目录身份、文件树、读取、校验和发布的唯一 owner，UI 与工具只持有 typed metadata/file/result，不取得宿主路径。`SkillFrontmatterParser` 使用 SafeConstructor 与 loader limits，拒绝重复键并限制 alias、嵌套和文档大小。
+
+Skill 文本在 owner 边界先做 4 MiB bounded byte read，再 strict UTF-8 解码；超限、非法编码和 IO 分别返回 typed failure。写主文档/支持文件及删除支持文件时，先复制完整已发布目录到 staging，拒绝 symlink/path escape，校验 frontmatter 与预期 name 后 rename 发布。更新 SKILL.md 保留支持文件；中断 backup 由下一次 owner 访问恢复或清理，歧义时拒绝继续。
+
+ZIP bundle 完整解析并拒绝重复 Skill name 后，复制整个 Skill root、一次 root swap 提交，失败或取消不留下部分更新；root backup 同样可恢复。导入上限为 16 MiB 输入、512 entries、单文件 4 MiB、累计解压 32 MiB。GitHub 导入保留支持文件原字节，仅主文档 strict UTF-8 解码，因此二进制资源不被文本化。SKILL.md 不能作为普通支持文件删除，整项删除经 deleteSkill 与 enabledSkills 引用清理协议。
 
 ## 6. 当前引用图与运行依赖
 
@@ -480,28 +431,13 @@ Conversation.folderId            → Folder.id
 读取物化会补齐 Built-in Provider/Assistant/System TTS、按 ID 去重，并清理部分失效引用；它不会把清理结果静默写回磁盘。
 跨记录删除、授权清理和默认选择修正仍需由对应 application service 在同一次 `updateLocal` transform 中完成。
 
-## 7. 企业集成边界
+## 7. 内部受管配置边界
 
-现行平台契约以 S0.2 Snapshot v2 增加 Managed Assistant、Managed Memory Seed 与 Assistant Starter；S0.3 再增加
-Enterprise Tool Gateway，S0.4 才完成 Android 对冻结 profile 的完整集成。Enterprise Update 使用独立 Feed，不进入
-Snapshot；Enterprise Local Assistant Memory 属于 User Data，也不进入 Snapshot。
+`ManagedConfigurationEnvelope` 使用 `schemaVersion=1`，具备签名校验、generation 单调、asset staging、Local shadow、effective projection 和写门禁。其保存与校验归 ManagedConfigurationStorage，唯一有效状态仍由 SettingsStore 发布。
 
-当前 Android 的 `ManagedConfigurationEnvelope` 是 `schemaVersion=1` 的内部签名 overlay 原型。它具备签名校验、
-generation 单调、asset staging、Local shadow、effective projection 和写门禁，但没有 ClientRealm、Enrollment/Session、
-Snapshot v2/v3 generated DTO、Enterprise Update/Portal 或生产同步入口。因此：
+Local shadow 不因同 ID overlay 覆盖而删除；overlay 移除后恢复本地值。UI disabled 仅表达投影，受管 mutation 必须在提交边界拒绝。受管文件不进入普通本地备份，不能成为绕过 SettingsStore 的第二写入口。
 
-- 它不能冒充 S0.2/S0.4 实现，也不能通过 adapter 与未来平台协议并存为双 source of truth；
-- Enterprise Binding、credential 与 Applied Snapshot 必须独立于 Local Settings、普通备份和 Provider/MCP credential；
-- Local shadow 不因 Managed overlay 删除；Managed remove/disconnect 后恢复；
-- Managed Assistant 与 Personal Assistant 必须保留 origin/provenance，不能把平台 ID hash 或转写为 Local UUID；
-- 服务端 upstream、secret、runtime route 和 pricing 永不进入 Android Snapshot；
-- UI disabled 只是投影，Managed mutation 必须在 command/commit boundary 拒绝；
-- 新协议落地时应替换旧原型的传输与 owner 路径，物理删除无调用的旧协议，不保留兼容旁路。
-
-Assistant 的当前 Local 字段和 S0.2 映射见
-[助手配置参考](assistant-configuration.md)。平台 Snapshot、Realm、Gateway 和 Android full-profile 的精确 wire/阶段边界
-以 MEASIX Architecture、冻结后的 Control Protocol 与 generated OpenAPI 为准；本仓库参考只登记已经实现的 Android
-owner、持久化和消费边界，不复制阶段性 fixture、commit/hash 或 Freeze 待办。
+当前没有 ClientRealm、Enterprise Binding/Session、平台 Snapshot DTO、Managed Memory Seed store 或生产下发入口。后续接入必须明确身份、凭据、generation、资源引用与撤销合同，并替换内部原型的传输路径，不能混用平台 ID 与 Local UUID，不能把服务端 upstream/secret/route 写入本地能力配置。
 
 ## 8. 关键架构文件
 
@@ -529,5 +465,4 @@ owner、持久化和消费边界，不复制阶段性 fixture、commit/hash 或 
 - 删除与恢复在 Provider、Assistant、MCP、TTS、ASR、Search 和文件引用之间保持原子；
 - UI 与运行时只消费同一个 effective read model，不建立第二 owner。
 
-构建/JVM 验证不能表述为真实 Enrollment、Keystore、后台同步、网络失败、428/revoke 或设备集成验收。相关生产路径
-落地后，必须按冻结平台契约补齐真实 emulator/device 与服务端互操作验证。
+构建/JVM 验证不替代真实平台存储、签名资源和恢复场景的设备验收。新增生产同步路径时，应补充对应的服务端互操作验证。

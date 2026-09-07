@@ -12,7 +12,7 @@ Durable Conversation、Conversation Presentation 和 Model Request Plan 是三�
 成为第二持久化事实源。`conversation_model_context` 属于 Conversation aggregate，不进入
 Presentation / FTS / UI。
 
-## 1. 四层
+## 上下文策略
 
 | 层 | 目的 | 改 durable 会话 | 默认 |
 | --- | --- | --- | --- |
@@ -27,27 +27,43 @@ Presentation / FTS / UI。
 前缀失效是预期代价。Agent 自动链路不得为了「影响面小」改写更早前缀。UI 只描述降低失效频率，
 实际命中以响应里的 cache read 为准。
 
-### 1.1 条数窗口
+### 条数窗口
 
 `Assistant.contextMessageLimit` 默认 `0`（关闭）。启用后由 `effectiveContextMessageLimit()` 归一化到
 `40..512`，UI 重新打开开关写入默认 `80`。持久化仍保存原始字段；导入或异常备份不会绕过该归一化。
-旧 `contextMessageSize` 已删除，由 `ignoreUnknownKeys` 忽略，不会静默打开新策略。
 
 超限时 `RequestContextPlanner` 内部 `limitContext` 按 50% 保留比例一次前移较大步幅，再
 `findUserTurnStart()` 回退到完整 USER 轮次。工具调用与结果在同一个 `UIMessagePart.Tool` 里，因此
-可靠边界是最近的 USER，而不是按 `toolCallId` 向前配对未执行 Tool。旧逐条滑动窗口每增加一条消息就
-挪起点，会持续打断从请求开头建立的提示缓存。
+窗口边界回退到最近的 USER，不按 `providerCallId` 配对工具。
 
-`80` 而不是 `40` 作为启用默认值，是因为一轮通常新增 USER + ASSISTANT 两条；40 条约每 10 次请求
-移动一次锚点，80 条才接近「约 95% 请求保持同一前缀起点」的量级。这只解释失效频率，不承诺命中率。
+### 滚动压缩
 
-### 1.2 滚动压缩
+`ToolOutputCompactionPlanner.planAfterSuccessfulRequest` 只规划本次成功请求确实可见且模型已消费的
+历史 inline Tool Result。输入资格来自 `ModelRequestReceipt`；规划阶段没有消息或文件写入。
 
-生产阈值只来自 `ContextBudget`。完整规则、marker、Artifact 与 receipt 见
-[`turn-step-execution.md`](turn-step-execution.md)
-与 [`multimodal-context-and-turn-durability.md`](multimodal-context-and-turn-durability.md)。
+全部阈值只来自 `ContextBudget`：inline Tool 正文达到 48 × 1024 estimated tokens 才触发，目标低水位
+16 × 1024，整批至少净回收 24 × 1024。最近两个 Step 工具批次与最近 8 × 1024 estimated tokens
+受保护；单个结果净回收至少 128。不额外保护整个已完成 USER 轮次，也不使用 Provider input/cache 指标决策。
 
-### 1.3 Disclosure Snapshot
+候选须有 COMPLETED / FAILED Result、纯文本 output 与可压缩策略。已归档结果、PRESERVE、混合媒体、
+Provider opaque replay、Denied / Answered 和无终态调用不参与。整批回收不足时不改历史。
+
+| `ToolOutputPolicy` | 处理 |
+| --- | --- |
+| `ARCHIVABLE_TEXT` | 原文通过 Artifact owner 归档，inline 替换为 `[Archived tool result: ref=...]` marker |
+| `REGENERABLE_TEXT` | 只替换固定 `[Derived tool result folded]`，不复制 payload；原工具输入保留 |
+| `PRESERVE` | 完整保留 |
+
+`ToolOutputStore.stageCompaction` 暂存归档并返回窄替换与 lease。active 与历史 Tool patch 随
+`ModelResponseCheckpoint` 提交；无工具 Final Step 则随 `FinalizeTurn` 提交。提交后发布 lease，
+失败或提交前取消保留原 inline output 并回滚未发布 Artifact。每个成功非空批次只累计一次裁剪计数。
+资源交接见 [Turn / Step 执行](turn-step-execution.md)，Artifact 归属见
+[多模态与持久化](multimodal-context-and-turn-durability.md)。
+
+模型通过 `read_tool_output` / `grep_tool_output` 回查；注册名、参数、输出上限及工具策略见
+[提示词与工具](prompts-and-tools.md)。回查仍校验当前 conversation 的 TOOL_OUTPUT reference，ref 不是授权。
+
+### Disclosure Snapshot
 
 每个新 `START` 从同一份 Effective Settings 与一次 `ORDER BY id ASC` 的 Memory 查询捕获完整
 candidate；与结构变换后目标 selected branch 上最近适用 entry 做逐字比较，不同才随新 Assistant
@@ -62,13 +78,17 @@ entry，不会丢基线。
 重跑适用性。有 Snapshot 时，窗口内每条消息必须已有 `DurableMessageLocator`；
 `applyContextProjections` 只附着 Durable USER，anchor 缺失、重复或变成 synthetic 时请求失败。
 
-### 1.4 手动摘要
+### 手动摘要
 
-`ConversationApplicationService.compress()` 是用户触发、持久化且不可撤销的摘要，切点对齐完整
-USER 轮次，与滚动压缩、条数窗口独立。分块与 `targetTokens` 语义见
-[`turn-step-execution.md`](turn-step-execution.md)。
+`ConversationApplicationService.compress()` 经 `GenerationSideEffects.compressConversation()` 生成摘要，
+再以 durable tree command 替换历史。它由用户显式触发、持久化且不可撤销，不挂到自动发送链路。
+保留最近消息的切点回退到完整 USER 轮次，因此配置数量是最低保留量；可压缩前缀为空则报错。
 
-## 2. 组装顺序
+待摘要消息超过 256 条时递归分块，中点优先回退到 USER；没有可用的前置 USER 切点时按原中点分开。
+每条消息通过 `summaryAsText(maxLength = 2000)` 提供正文摘要，Step 标记不参与；这不是附件全文或
+工具 output 的无损备份。`targetTokens` 只进入摘要提示，不是本地硬校验。
+
+## 组装顺序
 
 请求前由 `RequestContextPlanner` 纯规划，请求成功后由 `ToolOutputCompactionPlanner` 纯规划压缩。每次真实 Provider 调用：
 
@@ -78,7 +98,9 @@ durable selected branch
   → limitContext（条数窗口，对齐完整 USER 轮次）
   → Input Transformers（不重读 Settings / 时钟 / Locale / Workspace）
   → applyContextProjections：把选中 Snapshot 作为 durable USER 的第一个 Text part
-  → RequestAssembler.assemble：丢弃 Step，产出 ModelRequestMessage（Provider 唯一输入）与保守 receipt  → 发送 ModelRequestMessage
+  → RequestAssembler.assemble：丢弃 Step，产出 ModelRequestMessage 与对应 providerVisibleMessages
+  → RequestContextPlanner.receiptOf：从 providerVisibleMessages 生成保守 receipt
+  → 估算请求 token 并发送 ModelRequestMessage
   → 成功后再由 ToolOutputCompactionPlanner.planAfterSuccessfulRequest（只认本次 receipt 里仍 inline 的 Tool Result）
 ```
 
@@ -90,7 +112,7 @@ messageTemplate、Placeholder、Time / Workspace Reminder、DocumentAsPrompt 或
 用同一条 `estimateStableTextTokens`，但只加本次可见的 inline tool 正文，不看整包请求估算或
 Provider `input_tokens`。`ChatSizeChecker` 的预警读取最近一次发送前估算，也不参与压缩决策。
 
-## 3. 叠加
+## 策略叠加
 
 - **窗口开**：压缩器只看见后缀里发出去的 tool；窗口外的全文仍在库里，本轮不归档。
 - **窗口内压缩**：改请求中间的历史 tool 正文，从被改处打断缓存；更早的 System / USER 仍可能命中。
@@ -100,9 +122,7 @@ Provider `input_tokens`。`ChatSizeChecker` 的预警读取最近一次发送前
 - **窗口外旧 Snapshot**：不发送。retained 第一条真实 USER 之前（含同位置）最近一条适用 Snapshot
   作为 window baseline，投影到该 USER；窗口内更晚的 Snapshot 保持在各自因果 USER 前。
 
-旧逐条滑动窗口已删除：每增加一条消息就挪起点会持续打前缀。现行台阶在越过阈值时一次前移较大步幅。
-
-### 3.1 提示缓存：什么保持稳定，什么会变
+### 前缀稳定条件
 
 有利于前缀稳定的条件：
 
@@ -122,18 +142,12 @@ Provider `input_tokens`。`ChatSizeChecker` 的预警读取最近一次发送前
 - 到达下一裁剪台阶，或滚动压缩改写了窗口内历史 tool 正文。
 - Provider 自身的缓存最小 token 数、TTL 或路由变化。
 
-## 4. 为什么 Snapshot 是 append-only entry，不是 Conversation 头部快照
+## Disclosure 所有权与窗口基线
 
-把「当前 Memory / Catalog」反复覆盖进 Conversation 头部，再用 generation 解释后面的旧 Tool Result，
-会把后发生的状态搬到历史开头，并在 Fork 与窗口裁剪时失去该点之前的真实 baseline。append-only
-entry 由本次 `START` 的 Assistant request variant 拥有、锚定其因果 USER：
-
-- 时间顺序保持 `Snapshot A → 工具 A→B → Snapshot B`，模型不需要学代际覆盖算法。
-- Fork 按 owner / anchor node 映射复制；切回旧 Assistant variant 恢复它所拥有的历史 baseline。
-- 不需要 `MutationOrigin`、Settings revision 或 Memory revision 表。无论变化来自 Agent、用户还是
-  有效配置切换，只在下一自然 `START` 比较完整 candidate。
-- 即使旧 Tool mutation 已离开条数窗口，下一 START 的完整 Snapshot 已经作为尾部 context 保存，
-  模型不会退回过期的 A。
+Snapshot entry 由 START 的 Assistant variant 拥有，并锚定它之前最后一条真实 USER。
+已提交内容 append-only；新 START 只比较完整 candidate，不因工具修改 Memory / Catalog 而回写旧 entry。
+Fork 按 owner / anchor node 映射复制；variant 选择决定适用 baseline。窗口外旧 entry 不直接发送，
+但 retained 第一条 USER 前最近适用 entry 会作为窗口基线投影到该 USER。
 
 适用谓词只有一个 `ConversationModelContextApplicability`：owner Assistant 在目标 selected branch
 （含 active owner）、anchor USER 也在同一 branch、anchor 是 owner 之前最后一条真实 USER。START
@@ -143,7 +157,7 @@ canonical envelope 形状见 [`prompts-and-tools.md`](prompts-and-tools.md)。�
 256KiB UTF-8 时 `StartTurn` fail-closed，不得写入或发送截断信封。已提交 entry 永不后台改写；
 未知 format 装载 fail-closed。Snapshot 是模型认知，不是授权。
 
-## 5. 为什么是一个 USER turn，而不是相邻两条 USER
+## Disclosure 的请求形状
 
 Provider-neutral 语义是：
 
@@ -153,22 +167,19 @@ USER TURN
   part 1..n: original transformed user parts
 ```
 
-Anthropic Messages 会把连续同 role 输入合并成一个 turn；Gemini 官方多轮结构要求 `user` / `model`
-交替。跨协议合同因此主动构造一个有序 USER part 列表，不依赖「两条相邻 USER 永远保持两个独立语义
-turn」。TimeReminder 与 USER 角色注入仍可以是独立 synthetic USER 消息（以便跳过 `messageTemplate`）；
+跨协议统一构造一个有序 USER part 列表，不依赖相邻同角色消息保留独立边界。TimeReminder 与 USER 角色注入仍可以是独立 synthetic USER 消息（以便跳过 `messageTemplate`）；
 Gemini `contents` 在编码后合并相邻同 role，见 [`protocol-reference.md`](protocol-reference.md)。
 
-## 6. 明确不做
+## 估算与未实现边界
 
 - `Model` 没有可信 `contextWindowTokens`。不得用 `Assistant.maxTokens`（输出上限）或消息条数冒充
-  输入窗口，也不得按估算值 fail-closed 挡 START。自动按模型窗口裁剪或自动摘要，仍要求注册表默认值
-  + 用户覆盖的窗口元数据、序列化后的 token 估算，以及可审计的 opt-in 摘要；当前未实现。
+  输入窗口，也不得按估算值 fail-closed 挡 START。自动按模型窗口裁剪或自动语义摘要当前未实现。
 - 估算是稳定启发式，不是计费 token：拉丁字母与空白约 4 字 / token，连续 ASCII 数字段约 3 位 /
   token，连续 ASCII 符号段约 2 字 / token，其他 Unicode code point 各 1。
 - Provider 报窗口错误时保留原始错误，引导用户开条数窗口或手动摘要；不得为了重发静默覆盖历史。
 - 不为缓存失效判断增加 Settings revision、Memory revision 或 Conversation 头部 disclosure 字段。
 
-## 7. 实现入口
+## 实现入口
 
 | 边界 | 符号 |
 | --- | --- |

@@ -7,6 +7,10 @@ import androidx.test.core.app.ApplicationProvider
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.mockk
+import io.mockk.every
+import io.mockk.mockkStatic
+import io.mockk.unmockkStatic
+import net.weero.measix.pilot.data.db.createAppDatabase
 import java.io.File
 import java.io.FileOutputStream
 import java.security.MessageDigest
@@ -62,6 +66,12 @@ class BackupArchiveServiceTest {
     @Before
     fun setUp() {
         context = ApplicationProvider.getApplicationContext()
+        // JVM exercises Room and restore semantics; native FTS loading is covered on device.
+        mockkStatic("net.weero.measix.pilot.data.db.AppDatabaseFactoryKt")
+        every { createAppDatabase(any(), any()) } answers {
+            Room.databaseBuilder(firstArg<Context>(), AppDatabase::class.java, secondArg<String>())
+                .setJournalMode(androidx.room.RoomDatabase.JournalMode.TRUNCATE).build()
+        }
         work = File(System.getProperty("java.io.tmpdir"), "backup-test-${System.nanoTime()}").apply { mkdirs() }
         File(context.noBackupFilesDir, "backup_restore").deleteRecursively()
         deleteLiveRestoreComponents()
@@ -80,6 +90,7 @@ class BackupArchiveServiceTest {
 
     @After
     fun tearDown() {
+        unmockkStatic("net.weero.measix.pilot.data.db.AppDatabaseFactoryKt")
         work.deleteRecursively()
         File(context.noBackupFilesDir, "backup_restore").deleteRecursively()
         deleteLiveRestoreComponents()
@@ -479,7 +490,11 @@ class BackupArchiveServiceTest {
         val ownerMessage = me.rerere.ai.ui.UIMessage(
             id = kotlin.uuid.Uuid.parse(ownerMessageId),
             role = me.rerere.ai.core.MessageRole.ASSISTANT,
-            parts = listOf(me.rerere.ai.ui.UIMessagePart.Text("answer")),
+            parts = listOf(
+                me.rerere.ai.ui.UIMessagePart.Step(kotlin.uuid.Uuid.random(), 0,
+                    kotlin.time.Instant.fromEpochMilliseconds(1), outcome = me.rerere.ai.ui.StepOutcome.Final),
+                me.rerere.ai.ui.UIMessagePart.Text("answer"),
+            ),
         )
         room.messageNodeDao().insertAll(
             listOf(
@@ -544,14 +559,55 @@ class BackupArchiveServiceTest {
         version: Int = APP_DATABASE_VERSION,
     ) {
         file.parentFile?.mkdirs()
+        val room = Room.databaseBuilder(context, AppDatabase::class.java, file.absolutePath)
+            .setJournalMode(androidx.room.RoomDatabase.JournalMode.TRUNCATE)
+            .allowMainThreadQueries().build()
+        try { room.openHelper.writableDatabase } finally { room.close() }
         val db = SQLiteDatabase.openOrCreateDatabase(file, null)
         db.version = version
         db.execSQL("CREATE TABLE marker(value TEXT NOT NULL)")
         db.execSQL("INSERT INTO marker VALUES(?)", arrayOf(marker))
-        db.execSQL("CREATE TABLE artifact(relative_path TEXT NOT NULL, state TEXT NOT NULL)")
-        db.execSQL("CREATE TABLE GenMediaEntity(path TEXT NOT NULL)")
-        artifactPath?.let { db.execSQL("INSERT INTO artifact VALUES(?, 'ACTIVE')", arrayOf(it)) }
+        artifactPath?.let { insertArtifact(db, it) }
         db.close()
+    }
+
+    private fun insertArtifact(db: SQLiteDatabase, path: String) {
+        db.execSQL("INSERT INTO artifact(folder, relative_path, display_name, mime_type, size_bytes, created_at, updated_at, state, origin) " +
+            "VALUES('upload', ?, 'fixture', 'text/plain', 1, 1, 1, 'ACTIVE', 'USER')", arrayOf(path))
+    }
+
+    @Test
+    fun `current schema marker cannot publish invalid schema or transcript over live data`() = runTest {
+        val live = context.getDatabasePath("measix_pilot")
+        createDatabase(live, "live")
+        for (fault in listOf("missing_unique_index", "missing_column", "invalid_transcript")) {
+            val source = File(work, "$fault.sqlite")
+            createDatabase(source, "invalid")
+            SQLiteDatabase.openDatabase(source.absolutePath, null, SQLiteDatabase.OPEN_READWRITE).use { db ->
+                when (fault) {
+                    "missing_unique_index" -> db.execSQL("DROP INDEX index_tool_execution_turn_id_local_call_id")
+                    "missing_column" -> db.execSQL("ALTER TABLE ConversationEntity RENAME COLUMN title TO damaged_title")
+                    else -> {
+                        db.execSQL("INSERT INTO ConversationEntity(id, assistant_id, title, create_at, update_at, suggestions, " +
+                            "is_pinned, custom_system_prompt, mode_injection_ids, workspace_cwd, tags, folder_id, parent_conversation_id) " +
+                            "VALUES('c','a','t',1,1,'[]',0,'','[]','','','',NULL)")
+                        db.execSQL("INSERT INTO message_node(id, conversation_id, node_index, messages, select_index, transcript_schema) " +
+                            "VALUES('n','c',0,?,0,3)", arrayOf("""[{"role":"assistant","parts":[{"type":"text","text":"no step"}]}]"""))
+                    }
+                }
+            }
+            val failure = runCatching {
+                service.stageRestore(modernArchive(source, emptyMap()), BackupSelection(true, true))
+            }.exceptionOrNull()
+            assertTrue("$fault must fail staging", failure != null)
+            if (fault != "invalid_transcript") {
+                assertTrue("$fault must reach Room schema validation: $failure",
+                    failure?.message.orEmpty().contains("invalid schema"))
+            }
+            assertEquals("live", databaseMarker(live))
+            assertFalse(PendingBackupRestore.pendingDir(context).exists())
+            assertFalse(PendingBackupRestore.stagingDir(context).exists())
+        }
     }
 
     private fun sha256(bytes: ByteArray): String = MessageDigest.getInstance("SHA-256")

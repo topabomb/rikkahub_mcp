@@ -10,6 +10,8 @@ import me.rerere.ai.ui.StepOutcome
 import me.rerere.ai.ui.ToolInteractionState
 import me.rerere.ai.ui.ToolResultStatus
 import me.rerere.ai.ui.UIMessagePart
+import me.rerere.ai.ui.UIMessage
+import net.weero.measix.pilot.data.model.collectArtifactReferences
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -139,6 +141,7 @@ class LegacyTurnTranscriptMigratorTest {
         val steps = parts.filterIsInstance<UIMessagePart.Step>()
         assertEquals(2, steps.size)
         assertEquals(Uuid.parse(step1), steps[1].stepId)
+        assertTrue(parts.indexOf(steps[1]) < parts.indexOfFirst { it is UIMessagePart.Reasoning })
         assertIs<UIMessagePart.Tool>(parts.last()).also { assertEquals(Uuid.parse(step1), it.stepId) }
     }
 
@@ -172,16 +175,15 @@ class LegacyTurnTranscriptMigratorTest {
     }
 
     @Test
-    fun `terminal turn closes trailing pending as denied interrupted`() {
+    fun `terminal turn preserves original gate and closes its result as interrupted`() {
         val parts = convert(
             """[{"type":"tool","toolCallId":"a","toolName":"t","input":"{}","output":[],""" +
                 """"approvalState":{"type":"pending"},"metadata":{"tool_runtime":{"interaction":"approval"}}}]""",
             turnStatus = mapOf(messageId to "COMPLETED"),
         )
         val tool = assertIs<UIMessagePart.Tool>(parts[1])
-        // A terminal turn never leaves a call awaiting the user — the interaction records the
-        // user never answered (Denied) while the result marks the upgrade interruption.
-        assertEquals(ToolInteractionState.Denied("schema_upgrade"), tool.interactionState)
+        assertEquals(ToolInteractionState.AwaitingApproval, tool.interactionState)
+        assertFalse(tool.isPending)
         assertEquals(ToolResultStatus.INTERRUPTED, tool.resultStatus)
         val step = assertIs<UIMessagePart.Step>(parts[0])
         assertEquals(StepOutcome.Final, step.outcome)
@@ -216,7 +218,7 @@ class LegacyTurnTranscriptMigratorTest {
             """[{"type":"tool","toolCallId":"a","toolName":"assistant_call","input":"{}",""" +
                 """"output":[{"type":"text","text":"r"}],"approvalState":{"type":"auto"},""" +
                 """"metadata":{"sub_assistant_call":{"schema_version":1,"run_id":"r1",""" +
-                """"user_interaction":{"interaction_id":"i","message_id":"m","tool_ordinal":0,""" +
+                """"user_interaction":{"interaction_id":"i","message_id":"11111111-2222-3333-4444-555555555555","tool_ordinal":1,""" +
                 """"tool_name":"ask_user","input":"q"}}}}]""",
         )
         val tool = assertIs<UIMessagePart.Tool>(parts[1])
@@ -224,7 +226,7 @@ class LegacyTurnTranscriptMigratorTest {
         assertEquals(2, call["schema_version"]!!.jsonPrimitive.content.toInt())
         val ui = call["user_interaction"]!!.jsonObject
         assertFalse("tool_ordinal" in ui)
-        assertEquals(tool0, ui["local_call_id"]!!.jsonPrimitive.content)
+        assertEquals(tool1, ui["local_call_id"]!!.jsonPrimitive.content)
     }
 
     @Test
@@ -290,5 +292,119 @@ class LegacyTurnTranscriptMigratorTest {
         val tool = assertIs<UIMessagePart.Tool>(parts[1])
         val call = tool.metadata?.get("sub_assistant_call")?.jsonObject!!
         assertEquals(2, call["schema_version"]!!.jsonPrimitive.content.toInt())
+    }
+
+    @Test
+    fun `identical legacy calls retain separate positional identities`() {
+        val call = """{"type":"tool","toolCallId":"","toolName":"t","input":"{}","output":[{"type":"text","text":"same"}]}"""
+        val parts = convert("[$call,$call]")
+        assertEquals(listOf(tool0, tool1), parts.filterIsInstance<UIMessagePart.Tool>().map { it.localCallId.toString() })
+        val result = parts.filterIsInstance<UIMessagePart.Step>().single().modelResult!!
+        assertEquals(me.rerere.ai.core.UsageCompleteness.LEGACY, result.usageCompleteness)
+        assertEquals(0, result.providerRequestCount)
+        assertEquals(null, result.requestDurationMillis)
+    }
+
+    @Test
+    fun `pending tail after a consumed batch has its own open step`() {
+        val parts = convert(
+            """[{"type":"tool","toolName":"a","output":[{"type":"text","text":"done"}],"metadata":{"tool_runtime":{"resultBatchOrdinal":0}}},
+                {"type":"text","text":"next"},
+                {"type":"tool","toolName":"b","output":[],"approvalState":{"type":"pending"}}]""",
+            mapOf(messageId to "RUNNING"),
+        )
+        val steps = parts.filterIsInstance<UIMessagePart.Step>()
+        assertEquals(2, steps.size)
+        assertEquals(StepOutcome.Continue, steps.first().outcome)
+        assertEquals(null, steps.last().outcome)
+        assertTrue(parts.indexOf(steps.last()) < parts.indexOfFirst { it is UIMessagePart.Text })
+    }
+
+    @Test
+    fun `historical text with unfinished call is interrupted rather than final`() {
+        val parts = convert("""[{"type":"text","text":"starting"},{"type":"tool","toolName":"a","output":[]}]""")
+        assertEquals(StepOutcome.Interrupted, parts.filterIsInstance<UIMessagePart.Step>().single().outcome)
+    }
+
+    @Test
+    fun `malformed reserved runtime facts fail closed`() {
+        listOf("null", "[]", "42", "{\"version\":null}", "{\"version\":\"1\"}",
+            "{\"resultBatchOrdinal\":\"0\"}", "{\"unexpected\":true}").forEach { runtime ->
+            val error = runCatching {
+                convert("""[{"type":"tool","toolName":"a","metadata":{"tool_runtime":$runtime}}]""")
+            }.exceptionOrNull()
+            assertTrue("runtime $runtime must fail", error != null)
+        }
+    }
+
+    @Test
+    fun `malformed legacy fields cannot be silently replaced with empty defaults`() {
+        listOf(
+            "\"output\":{\"type\":\"text\",\"text\":\"preserve me\"}",
+            "\"metadata\":[]",
+            "\"approvalState\":false",
+            "\"input\":42",
+            "\"toolCallId\":42",
+            "\"metadata\":{\"sub_assistant_call\":[]}",
+            "\"metadata\":{\"sub_assistant_call\":{\"user_interaction\":[]}}",
+        ).forEach { field ->
+            assertTrue(field, runCatching { convert("""[{"type":"tool","toolName":"a",$field}]""") }.isFailure)
+        }
+        val absent = convert("""[{"type":"tool","toolName":"a"}]""")
+        val explicitNull = convert("""[{"type":"tool","toolName":"a","output":null,"metadata":null,"approvalState":null}]""")
+        assertEquals(absent, explicitNull)
+    }
+
+    @Test
+    fun `unreadable non assistant content and unknown turn statuses fail migration`() {
+        listOf("user", "system").forEach { role ->
+            assertTrue(runCatching {
+                LegacyTurnTranscriptMigrator.convertNode(
+                    legacyMessage("""[{"type":"unknown","text":"preserve me"}]""", role), emptyMap(), json,
+                )
+            }.isFailure)
+        }
+        assertTrue(runCatching { convert("[]", mapOf(messageId to "UNKNOWN")) }.isFailure)
+    }
+
+    @Test
+    fun `already converted mixed or invalid locators fail closed`() {
+        val converted = LegacyTurnTranscriptMigrator.convertNode(
+            legacyMessage("""[{"type":"tool","toolName":"a","output":[{"type":"text","text":"ok"}]}]"""),
+            emptyMap(), json,
+        )
+        val wrongLocator = converted.replace("\"stepId\":\"$step0\",\"providerCallId\"", "\"stepId\":\"$step1\",\"providerCallId\"")
+        assertTrue(wrongLocator != converted)
+        assertTrue(runCatching { LegacyTurnTranscriptMigrator.convertNode(wrongLocator, emptyMap(), json) }.isFailure)
+        val mixed = converted.replace("\"providerCallId\"", "\"toolCallId\":\"old\",\"providerCallId\"")
+        assertTrue(runCatching { LegacyTurnTranscriptMigrator.convertNode(mixed, emptyMap(), json) }.isFailure)
+    }
+
+    @Test
+    fun `archive and attachment references survive conversion with opaque provider metadata`() {
+        val parts = convert("""[
+            {"type":"image","url":"file:///data/user/0/example/files/upload/input.png"},
+            {"type":"tool","toolName":"read","output":[{"type":"text","text":"[Archived tool result: ref=41]"}],
+             "metadata":{"thoughtSignature":"opaque","tool_runtime":{"archive":{"ref":41,
+             "artifact":{"relativePath":"tool_outputs/old.txt","mimeType":"text/plain"},"characters":123,"lines":3}}}}
+        ]""")
+        val tool = parts.filterIsInstance<UIMessagePart.Tool>().single()
+        assertEquals("opaque", tool.metadata!!["thoughtSignature"]!!.jsonPrimitive.content)
+        val refs = listOf(UIMessage(role = me.rerere.ai.core.MessageRole.ASSISTANT, parts = parts)).collectArtifactReferences()
+        assertEquals(setOf("file:///data/user/0/example/files/upload/input.png", "tool_outputs/old.txt"), refs.map { it.token }.toSet())
+        assertEquals(41L, refs.single { it.token == "tool_outputs/old.txt" }.expectedArtifactId)
+        assertEquals(net.weero.measix.pilot.data.db.entity.ArtifactReferenceType.TOOL_OUTPUT,
+            refs.single { it.token == "tool_outputs/old.txt" }.type)
+    }
+
+    @Test
+    fun `final model content after consumed tools belongs to the next step`() {
+        val parts = convert("""[{"type":"tool","toolName":"a","output":[{"type":"text","text":"done"}]},
+            {"type":"text","text":"final answer"},{"type":"image","url":"upload/final.png"}]""")
+        val steps = parts.filterIsInstance<UIMessagePart.Step>()
+        assertEquals(2, steps.size)
+        assertEquals(StepOutcome.Continue, steps.first().outcome)
+        assertEquals(StepOutcome.Final, steps.last().outcome)
+        assertTrue(parts.indexOf(steps.last()) < parts.indexOfFirst { it is UIMessagePart.Text })
     }
 }

@@ -40,6 +40,8 @@ interface ToolExecutionDAO {
             "AND status = 'STARTED' " +
             "AND (:childConversationId IS NULL OR child_conversation_id IS NULL " +
             "OR child_conversation_id = :childConversationId) " +
+            "AND (:childTurnId IS NULL OR child_turn_id IS NULL OR child_turn_id = :childTurnId) " +
+            "AND (:subAssistantRunId IS NULL OR sub_assistant_run_id IS NULL OR sub_assistant_run_id = :subAssistantRunId) " +
             "AND EXISTS (SELECT 1 FROM turn_execution " +
             "WHERE turn_id = :turnId AND status IN ('RUNNING', 'AWAITING_USER'))"
     )
@@ -62,7 +64,9 @@ interface ToolExecutionDAO {
             "WHERE execution_id = :executionId AND turn_id = :turnId AND local_call_id = :localCallId " +
             "AND status IN (:sourceStatuses) " +
             "AND ((:childConversationId IS NULL AND child_conversation_id IS NULL) " +
-            "OR child_conversation_id = :childConversationId)"
+            "OR child_conversation_id = :childConversationId) " +
+            "AND ((:childTurnId IS NULL AND child_turn_id IS NULL) OR child_turn_id = :childTurnId) " +
+            "AND ((:subAssistantRunId IS NULL AND sub_assistant_run_id IS NULL) OR sub_assistant_run_id = :subAssistantRunId)"
     )
     suspend fun transition(
         executionId: String,

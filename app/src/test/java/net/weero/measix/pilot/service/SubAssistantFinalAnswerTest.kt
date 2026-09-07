@@ -50,14 +50,19 @@ class SubAssistantFinalAnswerTest {
     private fun assistantMessage(vararg parts: UIMessagePart) = UIMessage(
         id = Uuid.random(),
         role = MessageRole.ASSISTANT,
-        parts = parts.toList(),
+        parts = if (parts.firstOrNull() is UIMessagePart.Step) parts.toList() else listOf(step()) + parts,
+
     )
+
+    private fun step(ordinal: Int = 0, outcome: me.rerere.ai.ui.StepOutcome? = me.rerere.ai.ui.StepOutcome.Final) =
+        UIMessagePart.Step(Uuid.random(), ordinal, kotlin.time.Instant.fromEpochMilliseconds(1), outcome = outcome)
 
     private fun executedTool(name: String = "search") = UIMessagePart.Tool(
         localCallId = Uuid.random(), stepId = Uuid.random(), providerCallId = Uuid.random().toString(),
         toolName = name,
         input = "{}",
         output = listOf(UIMessagePart.Text("tool result")),
+        resultStatus = me.rerere.ai.ui.ToolResultStatus.COMPLETED,
     )
 
     private fun pendingTool(name: String = "search") = UIMessagePart.Tool(
@@ -66,201 +71,47 @@ class SubAssistantFinalAnswerTest {
         input = "{}",
     )
 
-    // ---- extractFinalAnswerInternal ----
-
     @Test
-    fun `single assistant message no tools returns all text`() {
-        val messages = listOf(
-            taskMessage("do something"),
-            assistantMessage(UIMessagePart.Text("Here is the answer.")),
-        )
-
-        val result = extractFinalAnswerInternal(messages, childTaskNodeId)
-        assertEquals("Here is the answer.", result)
+    fun `final step owns the answer and excludes earlier reasoning and tool sampling text`() {
+        val first = step(outcome = me.rerere.ai.ui.StepOutcome.Continue)
+        val final = step(1)
+        val messages = listOf(taskMessage("task"), assistantMessage(
+            first, UIMessagePart.Text("Searching"), executedTool().copy(stepId = first.stepId),
+            final, UIMessagePart.Reasoning("private"), UIMessagePart.Text("Answer 42"), UIMessagePart.Text("Details"),
+        ))
+        assertEquals("Answer 42\nDetails", extractFinalAnswerInternal(messages, childTaskNodeId))
     }
 
     @Test
-    fun `text after executed tool only - no pre-tool text included`() {
-        val messages = listOf(
-            taskMessage("do something"),
-            assistantMessage(
-                UIMessagePart.Text("Let me search for that."),
-                executedTool(),
-                UIMessagePart.Text("Based on the results, the answer is 42."),
-            ),
-        )
-
-        val result = extractFinalAnswerInternal(messages, childTaskNodeId)
-        assertEquals("Based on the results, the answer is 42.", result)
+    fun `unfinished and interrupted steps cannot fabricate final answers`() {
+        for (outcome in listOf(null, me.rerere.ai.ui.StepOutcome.Continue, me.rerere.ai.ui.StepOutcome.Interrupted)) {
+            val messages = listOf(taskMessage("task"), assistantMessage(step(outcome = outcome), UIMessagePart.Text("Working")))
+            assertEquals("", extractFinalAnswerInternal(messages, childTaskNodeId))
+        }
     }
 
     @Test
-    fun `multiple assistant steps returns last step text only`() {
-        val messages = listOf(
-            taskMessage("do something"),
-            assistantMessage(
-                UIMessagePart.Text("Searching..."),
-                executedTool(),
-                UIMessagePart.Text("Found something, let me refine."),
-            ),
-            assistantMessage(
-                UIMessagePart.Text("Final answer: 42."),
-            ),
-        )
-
-        val result = extractFinalAnswerInternal(messages, childTaskNodeId)
-        assertEquals("Final answer: 42.", result)
+    fun `empty final step does not reuse an earlier sampling answer`() {
+        val messages = listOf(taskMessage("task"), assistantMessage(
+            step(outcome = me.rerere.ai.ui.StepOutcome.Continue), UIMessagePart.Text("Draft"),
+            step(1), UIMessagePart.Reasoning("no visible output"), UIMessagePart.Text(" "),
+        ))
+        assertEquals("", extractFinalAnswerInternal(messages, childTaskNodeId))
     }
 
     @Test
-    fun `multiple executed tools in final step - text after last tool only`() {
-        val messages = listOf(
-            taskMessage("do something"),
-            assistantMessage(
-                UIMessagePart.Text("Let me check."),
-                executedTool("search"),
-                UIMessagePart.Text("Now let me verify."),
-                executedTool("verify"),
-                UIMessagePart.Text("Confirmed: the answer is 42."),
-            ),
-        )
-
-        val result = extractFinalAnswerInternal(messages, childTaskNodeId)
-        assertEquals("Confirmed: the answer is 42.", result)
+    fun `range ends before the next user task`() {
+        val messages = listOf(taskMessage("first"), assistantMessage(UIMessagePart.Text("First answer")),
+            userMessage("second"), assistantMessage(UIMessagePart.Text("Second answer")))
+        assertEquals("First answer", extractFinalAnswerInternal(messages, childTaskNodeId))
+        assertEquals("", extractFinalAnswerInternal(emptyList(), childTaskNodeId))
     }
 
     @Test
-    fun `no assistant message returns empty`() {
-        val messages = listOf(
-            taskMessage("do something"),
-        )
-
-        val result = extractFinalAnswerInternal(messages, childTaskNodeId)
-        assertEquals("", result)
-    }
-
-    @Test
-    fun `assistant with only blank text returns empty`() {
-        val messages = listOf(
-            taskMessage("do something"),
-            assistantMessage(UIMessagePart.Text("   ")),
-        )
-
-        val result = extractFinalAnswerInternal(messages, childTaskNodeId)
-        assertEquals("", result)
-    }
-
-    @Test
-    fun `text before pending tool is not included`() {
-        val messages = listOf(
-            taskMessage("do something"),
-            assistantMessage(
-                UIMessagePart.Text("I will search for that."),
-                pendingTool(),
-                // Tool is not executed, so text after it is still "final answer"
-                // but lastExecutedToolEnd stays 0, so all text is included
-            ),
-        )
-
-        val result = extractFinalAnswerInternal(messages, childTaskNodeId)
-        // No executed tool → lastExecutedToolEnd = 0 → all Text parts included
-        assertEquals("I will search for that.", result)
-    }
-
-    @Test
-    fun `range ends at next user message`() {
-        val nextUserTaskId = Uuid.random()
-        val messages = listOf(
-            taskMessage("do something"),
-            assistantMessage(UIMessagePart.Text("Answer from first run.")),
-            UIMessage(
-                id = nextUserTaskId,
-                role = MessageRole.USER,
-                parts = listOf(UIMessagePart.Text("new question")),
-            ),
-            assistantMessage(UIMessagePart.Text("This should not be included.")),
-        )
-
-        val result = extractFinalAnswerInternal(messages, childTaskNodeId)
-        assertEquals("Answer from first run.", result)
-    }
-
-    @Test
-    fun `multiple text parts after tool are joined with newline`() {
-        val messages = listOf(
-            taskMessage("do something"),
-            assistantMessage(
-                executedTool(),
-                UIMessagePart.Text("First paragraph."),
-                UIMessagePart.Text("Second paragraph."),
-            ),
-        )
-
-        val result = extractFinalAnswerInternal(messages, childTaskNodeId)
-        assertEquals("First paragraph.\nSecond paragraph.", result)
-    }
-
-    @Test
-    fun `text before trailing text_to_speech is kept`() {
-        val messages = listOf(
-            taskMessage("summarize"),
-            assistantMessage(
-                UIMessagePart.Text("Here is the analysis."),
-                executedTool("text_to_speech"),
-            ),
-        )
-
-        val result = extractFinalAnswerInternal(messages, childTaskNodeId)
-        assertEquals("Here is the analysis.", result)
-    }
-
-    @Test
-    fun `work tool then answer then tts keeps post-tool answer`() {
-        val messages = listOf(
-            taskMessage("do something"),
-            assistantMessage(
-                UIMessagePart.Text("Let me search."),
-                executedTool("search"),
-                UIMessagePart.Text("The answer is 42."),
-                executedTool("text_to_speech"),
-            ),
-        )
-
-        val result = extractFinalAnswerInternal(messages, childTaskNodeId)
-        assertEquals("The answer is 42.", result)
-    }
-
-    @Test
-    fun `empty last assistant falls back to previous post-tool text`() {
-        val messages = listOf(
-            taskMessage("do something"),
-            assistantMessage(
-                UIMessagePart.Text("Let me search."),
-                executedTool(),
-                UIMessagePart.Text("Based on results, 42."),
-            ),
-            assistantMessage(
-                UIMessagePart.Reasoning("Nothing more to add."),
-                UIMessagePart.Text(""),
-            ),
-        )
-
-        val result = extractFinalAnswerInternal(messages, childTaskNodeId)
-        assertEquals("Based on results, 42.", result)
-    }
-
-    @Test
-    fun `work tool without post-tool text falls back to last text island`() {
-        val messages = listOf(
-            taskMessage("do something"),
-            assistantMessage(
-                UIMessagePart.Text("The complete answer is 42."),
-                executedTool("verify"),
-            ),
-        )
-
-        val result = extractFinalAnswerInternal(messages, childTaskNodeId)
-        assertEquals("The complete answer is 42.", result)
+    fun `last assistant final step is authoritative`() {
+        val messages = listOf(taskMessage("task"), assistantMessage(UIMessagePart.Text("Old answer")),
+            assistantMessage(UIMessagePart.Text("Final answer")))
+        assertEquals("Final answer", extractFinalAnswerInternal(messages, childTaskNodeId))
     }
 
     // ---- collectRunToolCalls / collectRunTtsTexts ----
@@ -437,6 +288,7 @@ class SubAssistantFinalAnswerTest {
                 UIMessagePart.Tool(
                     localCallId = Uuid.random(), stepId = Uuid.random(), providerCallId = "g1",
                     toolName = "generate_image",
+                    resultStatus = me.rerere.ai.ui.ToolResultStatus.COMPLETED,
                     input = "{}",
                     output = listOf(
                         UIMessagePart.Text("""{"status":"completed"}"""),

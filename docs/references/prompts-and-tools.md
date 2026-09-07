@@ -19,7 +19,7 @@
 ## 1. 一次请求里的上下文顺序
 
 `generateInternal()` 使用 START 时冻结的 `TurnContext`（`TurnPromptSnapshot` +
-`FrozenToolDefinition`）装配请求；同一 Turn 的所有 step、审批与重试逐字复用。Master 当前装配顺序为：
+`FrozenToolDefinition`）装配请求；同一 Turn 的 Step、审批与重试复用这些冻结输入，历史消息和工具结果随 checkpoint 推进。Master 装配顺序为：
 
 ```text
 System（合成消息，标记 SyntheticMessageKind.SYSTEM_PROMPT）
@@ -44,9 +44,8 @@ Transformer 全部完成后：
   turn 的第一个 Text part 注入；不经过任何模板、占位符、提醒或附件投影改写。
 ```
 
-Target 复用相同模型可见语义，但 Transformer 装配由 `SubAssistantRunCoordinator` 独立负责；完整顺序见
-[`turn-step-execution.md`](turn-step-execution.md) 与
-[`sub-assistant-multimodal.md`](sub-assistant-multimodal.md)。
+Target 与 Master 共用 `TurnPipelineFactory`，输入顺序仅少 `ToolArtifactReplayTransformer`，其余一致。
+Child 附件投影见 [子助手多模态](sub-assistant-multimodal.md)，执行 owner 见 [Turn / Step 执行](turn-step-execution.md)。
 
 工具 schema（name、description、parameters）是 START 时 `Tool.freeze()` 物化的
 `FrozenToolDefinition.parameters`，随 `TextGenerationParams.tools` 另发，与 System 同屏。
@@ -99,12 +98,29 @@ Target 复用相同模型可见语义，但 Transformer 装配由 `SubAssistantR
 
 ## 3. 静态注入与 Disclosure Snapshot
 
+`ConversationDisclosureSnapshotService` 生成固定键序的紧凑 JSON。以下展示关闭状态的字段形状；
+实际发送不带排版空白：
+
+```json
+{
+  "type": "conversation_disclosure_snapshot",
+  "format": 1,
+  "memory": { "enabled": false, "scope": "disabled", "header": ["id", "content"], "rows": [] },
+  "sub_assistants": { "mode": "disabled", "header": ["id", "name", "description"], "rows": [] }
+}
+```
+
+memory scope 为 local / global / disabled，子助手 mode 为 management_only / delegation_only / both / disabled。
+内容不包含捕获时间、Locale 或 revision；关闭的 section 也保留固定形状。完整性、大小上限、baseline
+与窗口适用规则见 [请求上下文](request-context.md)。
+
+
 ### 3.1 记忆：Disclosure Snapshot 的 memory section
 
-动态 Memory System 注入已删除。Memory 内容的唯一披露路径是每次新 `START` 前由
+Memory 内容的唯一披露路径是每次新 `START` 前由
 `ConversationDisclosureSnapshotService.captureCandidate()` 从固定 effective-settings 快照与一次
 `ORDER BY id ASC` 的有序 Memory 查询渲染的 canonical Snapshot；内容变化才随新 Assistant owner
-追加 entry（见 [`turn-step-execution.md`](turn-step-execution.md)）。memory section
+追加 entry（见 [请求上下文](request-context.md)）。memory section
 形状（`enabled` / `scope` / `header` / `rows`）由该 service 的 canonical renderer 唯一定义；关闭时仍输出
 固定形状，不写日期、Locale 或 revision，相同业务数据必须逐字相同。
 
@@ -113,7 +129,7 @@ Snapshot 中是否存在某条 Memory 不代表它仍可写，也不妨碍按真
 
 ### 3.2 子助手：Disclosure Snapshot 的 sub_assistants section
 
-`assistant_manage` / `assistant_call` 的动态 Catalog systemPrompt 已删除。可见子助手集合
+可见子助手集合
 （`id` / `name` / `description`）作为 canonical Snapshot 的 `sub_assistants` section 披露；
 `mode` 由 caller 的 `AssistantManagement` / `AssistantDelegation` 开关决定，关闭时是固定
 `disabled` 形状。列表来自 `SubAssistantAccessPolicy.accessibleSubAssistants()`，排除 caller，
@@ -124,9 +140,10 @@ Snapshot 中是否存在某条 Memory 不代表它仍可写，也不妨碍按真
 
 ### 3.3 技能 `use_skill` contribution
 
-`SkillFrontmatterParser` 使用 SnakeYAML `SafeConstructor` 和 loader limits（禁止重复键、限制 alias/nesting depth/collection size/code points）解析 `SKILL.md` frontmatter，返回 typed `SkillDocument(frontmatter: SkillFrontmatter, body: String)` 或 typed parse error。`SkillFrontmatter` 只含 `name`、`description`、`compatibility`；`allowedTools` 已删除（无执行消费者，保留会形成假权限协议）。
-
-`SkillManager` 是 Skill 目录身份、文件树、读取、frontmatter 校验和发布的唯一 owner。UI 与 `use_skill` 只取得 `SkillMetadata`、`SkillFile`、`SkillFileNode` 和 typed result，不取得宿主 `File` 或目录路径。任何模型/UI 可读文本都在 owner 边界先做 4 MiB bounded byte read，再用 strict UTF-8 解码；超限、非法编码与 IO 分别返回 typed failure，不能先 `readText()` 整文件后才检查。任何主文档/支持文件写入和支持文件删除都先复制完整已发布目录到 staging，拒绝 symlink/path escape，重新校验 typed frontmatter 与预期 name，再通过 rename 发布；更新中断留下的 hidden backup 会在下一次 owner 访问时恢复旧目录或清理已过期 backup，歧义时 fail-closed。更新 `SKILL.md` 保留支持文件；ZIP bundle 先完整解析、拒绝重复 Skill name，再复制整个 Skill root 并通过一次 root swap 提交，第二项失败或取消不会留下部分更新，root backup 同样有重启恢复协议。文件导入固定限制为 16 MiB 输入、512 entries、单文件 4 MiB、累计解压 32 MiB；GitHub 下载以 bounded `ByteArray` 保存所有支持文件，只对 `SKILL.md` strict UTF-8 解码/typed parse，因此 PNG、PDF、字体和其他二进制资产按原字节发布。`SKILL.md` 不允许作为普通支持文件删除，整项删除只能走 `deleteSkill` 及其 enabled-skills 清理协议。
+`SkillFrontmatterParser` 解析 `name`、`description`、`compatibility` 与正文；模型可见列表只使用
+name / description。`SkillManager` 是 Skill 文件树和读取 owner，`use_skill` 只通过 typed result
+获得文本。文本读取先限制为 4 MiB，再 strict UTF-8 解码；超限、非法编码和 IO 错误明确返回。
+文件导入、原子发布与中断恢复见 [Android 配置架构](android-configuration-architecture.md)。
 
 `enabledSkills` 非空时：
 
@@ -183,22 +200,14 @@ Snapshot 中是否存在某条 Memory 不代表它仍可写，也不妨碍按真
 
 ## 5. 工具描述与参数
 
-主会话的基础工具装配顺序见 `ConversationTurnService` / `TurnToolSetFactory`：搜索、Local Tools、最近会话、Workspace、技能、
-Assistant Tools、MCP；运行时 `inspect_attachments` 由 `TurnToolSetFactory` 按 START 解析的 model 与设置条件加入；Memory Tools
-同样由 Master/Target owner 在 START 前按该 Assistant 的固定 namespace 装配，不进入 System。
-主/子 run 必须显式传入实际 resolved model；`assistant_inspect` 显式解析目标助手的配置模型。
-不允许用缺省或可空模型开启更宽的工具集。`AssistantToolFactory` 的委派与工具集依赖均为必填构造参数。
-Target Run 在 START 前只装配一次工具集合，并永久过滤 `assistant_manage`、`assistant_inspect`、`assistant_call` 以及历史名
-`assistant_memory_list`，保留并桥接 `ask_user`。`generate_image` 不再永久过滤：Target 已开启 `TextToImage` 且默认文生图模型可解析时才会注册。
+`TurnToolSetFactory` 依次装配回查、搜索、附件识别、Local、Conversation、Workspace、Skill、调用方
+追加工具与 MCP；Memory 和 Assistant 工具在 START 装配链中加入。同名 definitions / execution bindings
+在 `freezeToolSet` 物化，空名或重名失败关闭。schema 与 System contribution 脱离可变 backing map，
+同一 Turn 不因 live 配置变化改写工具名、描述或顺序；执行时仍复核实际权限与资源。
 
-`freezeToolSet` 在 START 前拒绝空名和重名，并从同一有序列表物化 Provider 唯一可见的 `FrozenToolDefinition` 与执行专用
-`ToolExecutionBinding` 索引。`Tool.freeze()` 在唯一求值点立即将 parameters JSON serialize→parse，脱离工具可能持有的 mutable backing map；`systemPromptContribution` 同时按值捕获。Master/Target 的后续 Provider step、审批 continuation 与 `ask_user` continuation 都复用同一对象；
-配置变化只影响下一次新 START。工具执行前仍由 owner 重验权限、文件/Workspace/MCP 资源、Memory namespace 与远端状态，撤销时
-live fail-closed，但不得借此改写当前 Turn 的工具名称、描述、Schema 或顺序。
-所有工具先校验合法 JSON object，再调用自身纯参数校验；空参数缓冲按无参 `{}` 解释，非空损坏 JSON 不当成空 object，也不先询问用户。
-纯参数校验只返回领域错误，`ToolArgumentsException` 保留其字段并补齐 `error` 与 `type:"error"`。工具撤销或审批不可用
-同样带标准错误标记，使历史重读仍显示 FAILED；未执行的拒绝不创建 `tool_execution` 记录或伪造 STARTED。
-正常执行返回的领域失败保持原有信封，不因此变成执行失败。MCP 本地只检查 JSON object，远端 schema 与业务校验仍归 Server。
+Target 禁止 Assistant 管理/委托工具以保持单层调用，保留 `ask_user` 并由父调用卡片桥接。Target 启用
+TextToImage 且模型有效时可使用 `generate_image`。运行和检查均显式传入 resolved model；参数校验、
+审批及 execution / Result 的通用协议见 [Turn / Step 执行](turn-step-execution.md)。
 
 下列 description 为源码中的英文原文（动态日期/时区用占位标明）。
 
@@ -206,7 +215,7 @@ live fail-closed，但不得借此改写当前 Turn 的工具名称、描述、S
 
 启用：`shouldUseExternalWebSearch(assistant, model)`。助手打开外挂搜索，且当前模型未带 `BuiltInTools.Search`。
 
-描述同样是常量文本，不再内嵌当前日期（与 `memory_tool` 同一条缓存约束）。
+描述使用常量文本，不内嵌日期。
 
 > Search the web for current or specific facts. Use focused keywords; run multiple searches if needed.
 > Cite with `[citation,domain](id)` after the sentence.
@@ -464,7 +473,7 @@ read：`{"text":"..."}`。write：`{"success":true}`。
 描述是常量文本：工具名称、描述、Schema 与列表排序共同构成 Provider 请求的可缓存前缀，
 描述里没有当前日期（原先的 `Today is ...` 会让整条前缀每天被击穿一次）。
 当前时间只由 `TimeReminderTransformer` 与 `{{cur_date}}` 负责。
-Memory 行的顺序由 DAO 的 `ORDER BY id ASC` 固定，读取路径不再依赖 SQLite 的默认返回次序。
+Memory 行的顺序由 DAO 的 `ORDER BY id ASC` 固定。
 
 > Store long-term notes across conversations (create/edit/delete).
 > Merge similar records; prefer edit over create.
@@ -562,7 +571,7 @@ unified diff 只进 part metadata，不进发给模型的文本。
 
 ### `assistant_inspect`
 
-启用：同上。只读。历史工具名 `assistant_memory_list` 不再注册。
+启用：同上。只读。
 
 > Inspect a sub-assistant's configuration before updating or deleting it.
 > Returns profile by default; request additional sections if needed.
@@ -583,7 +592,7 @@ caller 自身返回 `target_is_caller`。
 
 ### `assistant_call`
 
-启用：`LocalToolOption.AssistantDelegation`。同步：返回前主助手当前 Tool Loop 不继续。
+启用：`LocalToolOption.AssistantDelegation`。同步：返回前父工具批次等待该 Child。
 
 > Delegate a self-contained request to a catalog sub-assistant (sub-agent). Do not prescribe how it must work.
 
@@ -604,14 +613,14 @@ caller 自身返回 `target_is_caller`。
 
 已跑过 Child 且调用过 `text_to_speech` 时，默认另带精简 `tts_stats`（`calls` 次数、`chars` 朗读字符合计）。体积较大或需 Caller 主动取回的段只在 `extras` 点名后返回：
 
-- `artifacts`：把本次可持久化 Image 交付物追加为带 stable `attachment_ref` 的 Image parts。它不在这里做能力判断或视觉识别；Caller 下一次请求统一由 `AttachmentProjectionTransformer` 按当次 resolved model 投影为原图 + `input=native` 事实，或仅 `input=reference_only` 事实。需要视觉细节时由模型显式调用 `inspect_attachments`。没有 `DERIVED`、自动 observation 或 `artifact_delivery` 字段。
+- `artifacts`：把本次可持久化 Image 交付物追加为带 stable `attachment_ref` 的 Image parts。它不在这里做能力判断或视觉识别；Caller 下一次请求统一由 `AttachmentProjectionTransformer` 按当次 resolved model 投影为原图 + `input=native` 事实，或仅 `input=reference_only` 事实。需要视觉细节时由模型显式调用 `inspect_attachments`。
 - `tool_calls`：本次 run 范围内每个工具的发出次数（`header+rows`，首次出现序）
 - `tts`：按调用顺序的朗读文本表
 
 `unavailable` 不加这些段。通过共用 JSON object 校验后的委托领域参数错误也使用同一信封（`status=unavailable` + `reason`）。附件相关 reason：`invalid_attachments`、`attachment_not_found`、`unsupported_attachment_type`、`attachment_too_large`、`attachment_read_failed`。聊天模型 / Target 不接收 IMAGE 本身不是 attachment failure。
 
-`content` 取本次 run 范围内：优先最后一条 ASSISTANT 在最后一个工作工具之后的顶层 Text；
-`text_to_speech` 不算工作工具；最后一步为空则回退更早 step，再回退最后一段 Text island。
+`content` 只取本次 run 范围内最后一条 Assistant 的最后一个 `StepOutcome.Final` Step 之后的顶层 Text，
+按换行拼接并 trim。没有 Final Step 或正文时为空，不回退工具前文字、更早 Step 或 text island。
 
 ### `mcp__<server>__<tool>`
 
@@ -637,25 +646,13 @@ content、`structured_content` 或经裁剪的 message；调用承诺后未取�
 
 ## 6. 工具输出归档与回查
 
-所有本地、Workspace、Memory、Assistant 与 MCP 工具先由 `TurnToolSetFactory` 装配，再统一经过
-`ToolCallRuntime.prepareBatch` / `execute`。Runtime 对同一连续调用只解析一次 JSON object，并集中处理 definition lookup、
-纯参数校验、typed interaction gate、timeout/异常/空结果规范化；生成循环（`TurnRunner` 多 Step 编排、`StepRunner` 采样、`ToolBatchRunner` 批次）只编排 Provider step、批次屏障、顺序和 checkpoint。
+工具结果的压缩资格与预算由 [请求上下文](request-context.md) 定义；此处只说明模型能看到的策略与回查接口。
+`ARCHIVABLE_TEXT` 在成功请求消费后可变为 `[Archived tool result: ref=...]`；`REGENERABLE_TEXT` 只变为
+固定 `[Derived tool result folded]`，原参数仍在调用中；`PRESERVE` 完整保留。返回时不立即裁剪。
 
-`ToolOutputPolicy.ARCHIVABLE_TEXT` 表示纯文本结果在一次成功 Provider 请求实际读取后可由
-`ToolOutputCompactionPlanner` 滚动归档；`REGENERABLE_TEXT` 表示派生文本可滚动折叠，但不得复制为新 Artifact。
-两者都不表示工具返回时立即裁剪。归档内容由 `ToolOutputStore` 通过 `ArtifactStore` 保存为 `TOOL_OUTPUT` reference；
-可再生结果只留下 `[Derived tool result folded]`，原 Tool 输入仍保留。`PRESERVE`、混合媒体和 Provider opaque replay 始终完整保留。
-所有工具结果都经过同一 Planner，但只有 runtime metadata 为可压缩纯文本、显式 `completed` / `failed`，且
-`originalEstimatedTokens - markerEstimatedTokens >= 128` 时才成为候选；`denied`、`answered` 和缺失终态不压缩。
-只要调用登记过 unpublished Artifact，Runtime 会在成功和失败收口时统一强制 `PRESERVE`；文生图、MCP/Workspace 图片以及
-带 `artifacts` manifest 的 `assistant_call` 不依赖普通文本候选规则保存交付引用。
-`assistant_call` 静态默认仍为 `PRESERVE`；只有单 Text、`status=completed`、`assistant_name` / `content` 为字符串且没有
-`artifacts` manifest 的结果，才会在 Runtime 收口时解析为 `ARCHIVABLE_TEXT`。带交付 manifest、混合媒体、非完成态或
-损坏结果继续保留。
-压缩只由 inline Tool 文本达到 48K estimated tokens 触发，尽量降到 16K，整批至少净回收 24K estimated tokens；
-最近两个 typed 批次和最近 8K estimated tokens 受保护，不额外冻结整个已完成 USER turn。估算规则按每个 Tool Result
-独立计算：ASCII 字母与空白约每 4 个 code point 1 token，连续 ASCII 数字段约每 3 位 1 token，连续 ASCII 符号段约每 2 个 1 token，其他 Unicode code point 各计 1。阈值只来自 `ContextBudget.kt`，
-Provider input token 与 cache 百分比都不参与决策。
+登记过 unpublished Artifact 的工具结果在成功与失败时都强制 PRESERVE。`assistant_call` 静态默认
+PRESERVE；只有单 Text、status=completed、assistant_name / content 为字符串且没有 artifacts manifest
+的结果才可改为 ARCHIVABLE_TEXT。带交付物、混合媒体、非完成态或损坏结果继续保留。
 
 `read_tool_output` 与 `grep_tool_output` 始终随 Master 和 Target 注册，均为无交互、`REGENERABLE_TEXT`、32 KiB 有界结果。
 它们接受 marker 中的正整数 `ref`，但每次读取仍必须验证当前 conversation 的 `TOOL_OUTPUT` reference；
@@ -667,8 +664,8 @@ Provider input token 与 cache 百分比都不参与决策。
 ref 不授予权限，也不会暴露 relative path、`file://` 或 App 私有路径。原 ref 对应的归档正文保持不可变；回查结果满足
 统一阈值后只折叠 marker，不再归档，不建立复制链或递归读取协议。
 
-内建工具成功时直接返回领域数据，由 Runtime metadata 提交 `completed`；通用领域失败通过 `ToolExecutionFailure` 返回短小
-`status=failed` / `reason` / 可选 `detail`，并提交 `failed`。参数校验拒绝、`denied`、`answered` 不伪装成执行失败。
+内建工具成功时直接返回领域数据，由 typed `ToolResultStatus` 提交 COMPLETED；通用领域失败通过 `ToolExecutionFailure` 返回短小
+`status=failed` / `reason` / 可选 `detail`，并提交 FAILED。参数校验拒绝、Denied、Answered 不创建执行行。
 MCP 远端正文保持原协议，不强制套用内建信封，但其 typed 终态、输出策略与裁剪资格仍由同一 Runtime/Planner 决定。
 
 ---

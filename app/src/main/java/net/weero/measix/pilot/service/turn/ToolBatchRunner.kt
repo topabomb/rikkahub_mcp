@@ -1,9 +1,11 @@
 package net.weero.measix.pilot.service.turn
 import net.weero.measix.pilot.data.ai.ToolExecutionFact
 import net.weero.measix.pilot.data.ai.ToolResultFact
+import net.weero.measix.pilot.service.runtime.TurnTransition
 
 import android.util.Log
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import me.rerere.ai.core.ToolAttachmentResolution
 import me.rerere.ai.core.ToolCallLocator
 import me.rerere.ai.core.ToolMetadataDelivery
@@ -47,7 +49,7 @@ internal class ToolBatchRunner(
     suspend fun run(state: TurnRunState): ToolBatchOutcome {
         // 本批的门控/可用性/审批准备（含续跑恢复）：Turn live phase = TOOL_PREPARING，
         // 直到逐工具执行才转 TOOL_EXECUTING。
-        state.sendPhase("tool_preparing")
+        state.sendPhase(TurnRunPhase.TOOL_PREPARING)
         val messageTools = state.messages.last().getTools()
         val replayPendingOrdinals = messageTools.mapIndexedNotNull { ordinal, tool ->
             ordinal.takeIf { !tool.hasReplayResult }
@@ -80,8 +82,11 @@ internal class ToolBatchRunner(
         }
 
         if (preparation.immediateResults.isNotEmpty()) {
+            state.replaceMessages(state.messages.withAssistant(
+                TurnTransition.advanceCompletedToolStep(state.messages.last()),
+            ))
             state.commitToolResult(toolResults = preparation.immediateResults)
-            state.publishStreamingProjection()
+            state.publishMessages(state.messages)
         }
 
         if (preparation.resolvedCalls.isEmpty()) {
@@ -91,14 +96,13 @@ internal class ToolBatchRunner(
         // tool_executing phase with registered tool name is emitted per-tool below
         for (resolved in preparation.resolvedCalls) {
             var executionEvent: ToolExecutionFact? = null
-            var executionFailed = false
             val completedTool: UIMessagePart.Tool
             when (resolved) {
                 is ResolvedToolCall.Denied -> completedTool = resolved.result
                 is ResolvedToolCall.Answered -> completedTool = resolved.result
                 is ResolvedToolCall.Executable -> {
                     val call = resolved.call
-                    state.sendPhase("tool_executing", call.definition.name)
+                    state.sendPhase(TurnRunPhase.TOOL_EXECUTING, call.definition.name)
                     val startedFact = ToolExecutionFact(
                         executionId = call.executionId,
                         assistantMessageId = call.locator.assistantMessageId,
@@ -110,7 +114,7 @@ internal class ToolBatchRunner(
                     )
                     executionEvent = startedFact
                     state.commitToolExecutionStarted(startedFact)
-                    state.publishStreamingProjection()
+                    state.publishMessages(state.messages)
                     Log.i(
                         TAG,
                         "generateText: executing tool ${call.definition.name} with args: ${call.arguments}",
@@ -152,36 +156,48 @@ internal class ToolBatchRunner(
                                     p
                                 }
                             }
-                            state.replaceMessages(state.messages.dropLast(1) + lastMsg.copy(parts = newParts))
+                            state.replaceMessages(state.messages.withAssistant(lastMsg.copy(parts = newParts)))
                             when (delivery) {
                                 ToolMetadataDelivery.DEFERRED -> Unit
-                                ToolMetadataDelivery.STREAMING -> state.publishStreamingProjection()
+                                ToolMetadataDelivery.STREAMING -> state.publishMessages(state.messages)
                                 ToolMetadataDelivery.CHECKPOINT -> {
                                     // Metadata-only update carries no execution fact yet; bind the
                                     // checkpoint to the tool's own step so it is never step-NIL even
                                     // when this batch is resumed after approval (no beginStep ran).
                                     state.commitToolStateUpdated(stepId = updatedTool.stepId)
-                                    state.publishStreamingProjection()
+                                    state.publishMessages(state.messages)
                                 }
                             }
                         },
-                        // Delegation tools report the derived child conversation id into this
-                        // execution's durable fact.
-                        reportChildConversation = { childConversationId ->
-                            executionEvent = executionEvent?.copy(
-                                childConversationId = childConversationId,
-                            )
-                            if (executionEvent != null) {
-                                state.commitToolStateUpdated(toolExecution = executionEvent)
-                                state.handoffDraft()
+                        reportChildRun = { link ->
+                            val current = requireNotNull(executionEvent) { "Child run link requires a started execution" }
+                            check(current.childTurnId == null || (
+                                current.childTurnId == link.childTurnId.toString() &&
+                                    current.childConversationId == link.childConversationId.toString() &&
+                                    current.subAssistantRunId == link.subAssistantRunId)) {
+                                "A tool execution cannot change its child run"
                             }
+                            val tool = state.messages.last().getTools().single { it.localCallId == call.locator.localCallId }
+                            val metadata = requireNotNull(tool.metadata?.get("sub_assistant_call") as? JsonObject) {
+                                "Child execution link requires deferred run metadata"
+                            }
+                            check(metadata["run_id"]?.jsonPrimitive?.content == link.subAssistantRunId &&
+                                metadata["child_conversation_id"]?.jsonPrimitive?.content == link.childConversationId.toString()) {
+                                "Child execution link and deferred metadata disagree"
+                            }
+                            executionEvent = current.copy(
+                                childConversationId = link.childConversationId.toString(),
+                                childTurnId = link.childTurnId.toString(),
+                                subAssistantRunId = link.subAssistantRunId,
+                            )
+                            state.commitToolStateUpdated(toolExecution = executionEvent)
+                            state.handoffDraft()
                         },
                         registerUnpublishedResource = state.unpublishedResources::register,
 
                     )
 
                     val outcome = toolCallRuntime.execute(call, hooks)
-                    executionFailed = outcome.executionFailed
                     // Re-read by stable localCallId so metadata reported during execution is retained.
                     val latestTool = state.messages.last().getTools()
                         .firstOrNull { it.localCallId == call.locator.localCallId } ?: call.source
@@ -196,7 +212,7 @@ internal class ToolBatchRunner(
             }
 
             val completedLocalCallId = completedTool.localCallId
-            state.replaceMessages(state.messages.dropLast(1) + state.messages.last().let { msg ->
+            state.replaceMessages(state.messages.withAssistant(state.messages.last().let { msg ->
                 msg.copy(parts = msg.parts.map { p ->
                     if (p is UIMessagePart.Tool && p.localCallId == completedLocalCallId) {
                         completedTool
@@ -204,8 +220,8 @@ internal class ToolBatchRunner(
                         p
                     }
                 })
-            })
-            val presentationMessages = state.messages.transforms(
+            }))
+            val presentationMessages = listOf(state.messages.last()).transforms(
                 transformers = state.outputTransformers,
                 context = state.context,
                 model = state.model,
@@ -213,13 +229,15 @@ internal class ToolBatchRunner(
                 promptInputs = state.promptInputs,
                 requestOrigins = state.outputOrigins,
                 registerUnpublishedResource = state.unpublishedResources::register,
-            )
+            ).let { state.messages.withAssistant(
+                TurnTransition.advanceCompletedToolStep(it.single()),
+            ) }
             state.commitToolResult(
                 toolExecution = executionEvent?.copy(
-                    status = if (executionFailed) {
-                        ToolExecutionStatus.FAILED
-                    } else {
-                        ToolExecutionStatus.COMPLETED
+                    status = when (completedTool.resultStatus) {
+                        ToolResultStatus.FAILED -> ToolExecutionStatus.FAILED
+                        ToolResultStatus.COMPLETED -> ToolExecutionStatus.COMPLETED
+                        else -> error("An executed Tool must have a completed or failed result")
                     },
                 ),
                 toolResults = listOf(
@@ -229,12 +247,7 @@ internal class ToolBatchRunner(
                             stepId = completedTool.stepId,
                             localCallId = completedTool.localCallId,
                         ),
-                        status = when {
-                            resolved is ResolvedToolCall.Denied -> ToolResultStatus.DENIED
-                            resolved is ResolvedToolCall.Answered -> ToolResultStatus.ANSWERED
-                            executionFailed -> ToolResultStatus.FAILED
-                            else -> ToolResultStatus.COMPLETED
-                        },
+                        status = requireNotNull(completedTool.resultStatus),
                     )
                 ),
                 publishResources = true,

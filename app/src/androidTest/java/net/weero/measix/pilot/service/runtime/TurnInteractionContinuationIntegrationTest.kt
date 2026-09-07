@@ -158,7 +158,6 @@ class TurnInteractionContinuationIntegrationTest {
 
         val conversationId = Uuid.random()
         val turnId = Uuid.random()
-        val toolStepId = Uuid.random()
         val toolLocalCallId = Uuid.random()
         val userMessage = UIMessage.user("Run the approved tool")
         val runtime = coordinator.create(
@@ -207,13 +206,20 @@ class TurnInteractionContinuationIntegrationTest {
                     TurnTransition.projectTurnModelContext(runtime.durable),
                 )
                 startedTurn = started
+                val initialStep = runtime.durable.currentMessages().last().parts.filterIsInstance<UIMessagePart.Step>().single()
+                val sampledStep = initialStep.copy(modelResult = me.rerere.ai.ui.StepModelResult(
+                    finishReason = "tool_calls", usage = me.rerere.ai.ui.StepUsage(), providerRequestCount = 1,
+                    timeToFirstOutputMillis = null, requestDurationMillis = null,
+                    usageCompleteness = me.rerere.ai.core.UsageCompleteness.NONE, providerMetadata = null,
+                ))
                 val waitingMessage = UIMessage(
                     id = started.assistantMessageId,
                     role = MessageRole.ASSISTANT,
                     parts = listOf(
+                        sampledStep,
                         UIMessagePart.Tool(
                             localCallId = toolLocalCallId,
-                            stepId = toolStepId,
+                            stepId = initialStep.stepId,
                             providerCallId = "call-revocable",
                             toolName = revocableTool.name,
                             input = "{}",

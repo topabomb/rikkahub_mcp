@@ -34,8 +34,6 @@ enum class ToolExecutionStatus {
     indices = [
         Index("turn_id"),
         Index("child_conversation_id"),
-        Index("child_turn_id"),
-        Index("sub_assistant_run_id"),
         Index(value = ["turn_id", "local_call_id"], unique = true),
     ],
 )

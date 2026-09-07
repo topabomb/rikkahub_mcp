@@ -120,7 +120,9 @@ DisplaySetting.areUpdateChecksEnabled()
 `.github/workflows/release.yml` 支持版本 tag 和手动触发：
 
 ```text
-checkout（含 submodule）
+复用 verify.yml：JVM、Debug/Release、lint、schema 与设备门禁
+  -> build job（仅 verify 成功后）
+  -> checkout（含 submodule）
   -> JDK / Gradle
   -> 准备可选签名与 Google Services 文件
   -> 正式发布时强制校验签名 Secrets

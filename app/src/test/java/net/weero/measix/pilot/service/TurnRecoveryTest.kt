@@ -109,7 +109,7 @@ class TurnRecoveryTest {
     }
 
     @Test
-    fun `master recovery closes open steps, STARTED tools, and pending tools according to section 7`() = runTest {
+    fun `master recovery closes open steps, STARTED tools, and pending tools using typed outcomes`() = runTest {
         val conversationId = Uuid.random()
         val turnId = Uuid.random()
         val assistantMessageId = Uuid.random()
@@ -215,7 +215,7 @@ class TurnRecoveryTest {
     }
 
     @Test
-    fun `child recovery closes open steps, STARTED tools, and pending tools according to section 7`() = runTest {
+    fun `child recovery closes open steps, STARTED tools, and pending tools using typed outcomes`() = runTest {
         val masterId = Uuid.random()
         val childId = Uuid.random()
         val turnId = Uuid.random()
@@ -316,13 +316,108 @@ class TurnRecoveryTest {
         val startedOutput = (startedTool.output.single() as UIMessagePart.Text).text
         assertTrue(startedOutput.contains(""""status":"unknown""""))
 
-        // 3. Pending Tool -> Interrupted result and Denied interaction state for child lineage
+        // 3. The interrupted result closes the call while preserving its original input gate.
         val pendingTool = parts.filterIsInstance<UIMessagePart.Tool>().first { it.localCallId == pendingCallId }
         assertEquals(ToolResultStatus.INTERRUPTED, pendingTool.resultStatus)
         assertTrue(pendingTool.hasReplayResult)
-        assertEquals(ToolInteractionState.Denied("app_restarted"), pendingTool.interactionState)
+        assertEquals(ToolInteractionState.AwaitingInput, pendingTool.interactionState)
         val pendingOutput = (pendingTool.output.single() as UIMessagePart.Text).text
         assertTrue(pendingOutput.contains(""""status":"interrupted""""))
+    }
+
+    @Test
+    fun `child recovery commits before parent terminal metadata and child failure leaves parent untouched`() = runTest {
+        for (failChild in listOf(false, true)) {
+            val masterId = Uuid.random()
+            val childId = Uuid.random()
+            val task = UIMessage.user("child task")
+            val childStep = UIMessagePart.Step(Uuid.random(), 0, Clock.System.now())
+            val childMessage = UIMessage(role = MessageRole.ASSISTANT, parts = listOf(childStep))
+            val childTurn = execution(childId, childMessage.id.toString())
+            val parentStep = UIMessagePart.Step(Uuid.random(), 0, Clock.System.now())
+            val metadata = net.weero.measix.pilot.data.ai.subassistant.SubAssistantCallMetadata(
+                runId = "run", targetAssistantId = Uuid.random().toString(), targetNameSnapshot = "child",
+                childConversationId = childId.toString(), childTaskNodeId = task.id.toString(),
+                state = net.weero.measix.pilot.data.ai.subassistant.SubAssistantCallState.RUNNING,
+            )
+            val tool = UIMessagePart.Tool(Uuid.random(), parentStep.stepId, "call", "assistant_call", "{}",
+                metadata = kotlinx.serialization.json.buildJsonObject {
+                    put("sub_assistant_call", Json.encodeToJsonElement(
+                        net.weero.measix.pilot.data.ai.subassistant.SubAssistantCallMetadata.serializer(), metadata))
+                })
+            val parentMessage = UIMessage(role = MessageRole.ASSISTANT, parts = listOf(parentStep, tool))
+            val parentTurn = execution(masterId, parentMessage.id.toString())
+            val parent = Conversation.ofId(masterId).copy(messageNodes = listOf(MessageNode.of(parentMessage)))
+            val child = Conversation.ofId(childId).copy(parentConversationId = masterId,
+                assistantId = Uuid.parse(metadata.targetAssistantId),
+                messageNodes = listOf(MessageNode.of(task), MessageNode.of(childMessage)))
+            val linked = ToolExecutionEntity("tool:${tool.localCallId}", parentTurn.turnId, parentStep.stepId.toString(),
+                tool.localCallId.toString(), ToolExecutionStatus.STARTED, null, childId.toString(), childTurn.turnId, "run", 1, 1)
+            val repository = mockk<ConversationRepository>(relaxed = true)
+            val coordinator = mockk<ConversationCommandCoordinator>(relaxed = true)
+            coEvery { repository.getNonTerminalTurnExecutionsWithScope() } returns listOf(
+                ScopedTurnExecution(parentTurn, false, null), ScopedTurnExecution(childTurn, true, masterId.toString()))
+            coEvery { repository.getRecoverableTurnExecutionsByConversation() } returns mapOf(masterId to listOf(parentTurn))
+            coEvery { repository.getConversationSnapshotById(masterId) } returns parent.toSnapshot()
+            coEvery { repository.getConversationSnapshotById(childId) } returns child.toSnapshot()
+            coEvery { repository.getTurnExecutions(childId) } returns listOf(childTurn)
+            coEvery { repository.getToolExecutions(parentTurn.turnId) } returns listOf(linked)
+            coEvery { repository.getToolExecutions(childTurn.turnId) } returns emptyList()
+            val scope = CoroutineScope(Job())
+            coEvery { coordinator.load(masterId) } returns ConversationRuntime(masterId, parent.toSnapshot(), scope, {})
+            val committed = mutableListOf<Pair<Uuid, RecoverInterruptedTurn>>()
+            coEvery { coordinator.executeRecovery(any(), any()) } coAnswers {
+                val id = firstArg<Uuid>()
+                if (id == childId && failChild) error("child write failed")
+                committed += id to (secondArg<ConversationCommand>() as RecoverInterruptedTurn)
+            }
+            try {
+                val recovery = recovery(repository, coordinator)
+                val outcome = runCatching { recovery.recoverInterruptedRuns(); recovery.recoverInterruptedTurns() }
+                if (failChild) {
+                    assertTrue(outcome.isFailure)
+                    assertTrue(committed.isEmpty())
+                } else {
+                    outcome.getOrThrow()
+                    assertEquals(listOf(childId, masterId), committed.map { it.first })
+                    val recoveredTool = committed.last().second.assistantMessage!!.getTools().single()
+                    assertEquals(ToolResultStatus.UNKNOWN, recoveredTool.resultStatus)
+                    val recoveredMetadata = Json.decodeFromJsonElement(
+                        net.weero.measix.pilot.data.ai.subassistant.SubAssistantCallMetadata.serializer(),
+                        recoveredTool.metadata!!.getValue("sub_assistant_call"))
+                    assertEquals(net.weero.measix.pilot.data.ai.subassistant.SubAssistantCallState.STOPPED, recoveredMetadata.state)
+                }
+            } finally { scope.cancel() }
+        }
+    }
+
+    @Test
+    fun `malformed and mismatched execution locators stop recovery without publishing a terminal`() = runTest {
+        val id = Uuid.random()
+        val step = UIMessagePart.Step(Uuid.random(), 0, Clock.System.now())
+        val tool = UIMessagePart.Tool(Uuid.random(), step.stepId, "call", "bash", "{}")
+        val message = UIMessage(role = MessageRole.ASSISTANT, parts = listOf(step, tool))
+        val snapshot = Conversation.ofId(id).copy(messageNodes = listOf(MessageNode.of(message))).toSnapshot()
+        val turn = execution(id, message.id.toString())
+        val fact = ToolExecutionEntity("execution", turn.turnId, step.stepId.toString(), tool.localCallId.toString(),
+            ToolExecutionStatus.STARTED, null, createdAt = 1, updatedAt = 1)
+        for (invalid in listOf(fact.copy(localCallId = "invalid"), fact.copy(stepId = Uuid.random().toString()))) {
+            val repository = mockk<ConversationRepository>(relaxed = true)
+            val coordinator = mockk<ConversationCommandCoordinator>(relaxed = true)
+            val scope = CoroutineScope(Job())
+            val runtime = ConversationRuntime(id, snapshot, scope, {})
+            coEvery { repository.getRecoverableTurnExecutionsByConversation() } returns mapOf(id to listOf(turn))
+            coEvery { repository.getConversationSnapshotById(id) } returns snapshot
+            coEvery { repository.getToolExecutions(turn.turnId) } returns listOf(invalid)
+            coEvery { coordinator.load(id) } returns runtime
+            try {
+                assertTrue(runCatching { recovery(repository, coordinator).recoverInterruptedTurns() }.isFailure)
+                org.junit.Assert.assertSame(snapshot, runtime.durable)
+                coVerify(exactly = 0) { coordinator.executeRecovery(any(), any()) }
+            } finally {
+                scope.cancel()
+            }
+        }
     }
 
     private fun recovery(

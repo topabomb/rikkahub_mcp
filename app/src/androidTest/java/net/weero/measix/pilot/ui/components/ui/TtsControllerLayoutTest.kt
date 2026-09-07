@@ -1,5 +1,12 @@
 package net.weero.measix.pilot.ui.components.ui
 
+import android.Manifest
+import android.os.Build
+import android.provider.Settings as AndroidSettings
+import android.view.inputmethod.InputMethodManager
+import android.view.WindowManager
+import androidx.activity.ComponentActivity
+import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
@@ -37,7 +44,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.click
 import androidx.compose.ui.test.captureToImage
-import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
@@ -69,7 +76,6 @@ import net.weero.measix.pilot.ui.hooks.CustomTtsState
 import net.weero.measix.pilot.ui.adaptive.AdaptiveLayoutDefaults
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
-import org.junit.Assume
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -77,7 +83,7 @@ import org.junit.runner.RunWith
 @RunWith(AndroidJUnit4::class)
 class TtsControllerLayoutTest {
     @get:Rule
-    val compose = createComposeRule()
+    val compose = createAndroidComposeRule<ComponentActivity>()
 
     private val tts = TestTtsState()
     private val height = mutableStateOf(400.dp)
@@ -182,23 +188,16 @@ class TtsControllerLayoutTest {
         assertAboveInput()
     }
 
-    /**
-     * 真实 IME 用例：只有当设备确实能弹出软键盘时才有意义。带物理键盘的模拟器/设备会接受
-     * show 请求并报告 `Type.ime()` 可见，但 IME 窗口高度恒为 0（`showSoftInput(SHOW_FORCED)`
-     * 返回 true、inset bottom 仍为 0），此时"键盘不遮挡输入面板"无从观察，按设备能力跳过而不是伪造通过。
-     */
     @Test
-    fun clickingInputAndOpeningRealKeyboardNeverCoversInputPanel() {
+    fun clickingInputAndOpeningRealKeyboardNeverCoversInputPanel() = withDockedKeyboardMode {
+        compose.runOnUiThread {
+            compose.activity.enableEdgeToEdge()
+            compose.activity.window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
+        }
         showToolbar(aboveInput = true, realKeyboard = true)
         assertAboveInput()
         compose.onNodeWithTag("input_field").performClick()
-        val keyboardShown = runCatching {
-            compose.waitUntil(timeoutMillis = 10_000) { currentImeBottom() > 0 }
-        }.isSuccess
-        Assume.assumeTrue(
-            "device exposes no soft-keyboard height (hardware keyboard present); real-IME layout unverifiable",
-            keyboardShown,
-        )
+        compose.waitUntil(timeoutMillis = 10_000) { currentImeBottom() > 0 }
         assertAboveInput()
         val singleLineHeight = compose.onNodeWithTag("input_panel").fetchSemanticsNode().boundsInRoot.height
         compose.onNodeWithTag("input_field").performTextReplacement("first line\nsecond line\nthird line")
@@ -286,6 +285,41 @@ class TtsControllerLayoutTest {
             control(R.string.tts_controller_stop).performScrollTo().assertIsDisplayed()
             control(R.string.tts_controller_expand).performScrollTo().assertIsDisplayed().performClick()
             assertAtBottom()
+        }
+    }
+
+    private fun withDockedKeyboardMode(block: () -> Unit) {
+        if (Build.VERSION.SDK_INT < 34) {
+            block()
+            return
+        }
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        val resolver = instrumentation.targetContext.contentResolver
+        val automation = instrumentation.uiAutomation
+        val key = "stylus_handwriting_enabled"
+        val original = AndroidSettings.Secure.getString(resolver, key)
+        fun setMode(value: String?) {
+            try {
+                automation.adoptShellPermissionIdentity(Manifest.permission.WRITE_SECURE_SETTINGS)
+                if (value == null) {
+                    resolver.delete(AndroidSettings.Secure.getUriFor(key), null, null)
+                } else {
+                    assertTrue("Could not set the test keyboard mode", AndroidSettings.Secure.putString(resolver, key, value))
+                }
+            } finally {
+                automation.dropShellPermissionIdentity()
+            }
+        }
+        try {
+            // Select the system keyboard mode without changing the production editor's capabilities.
+            setMode("0")
+            val inputMethod = requireNotNull(instrumentation.targetContext.getSystemService(InputMethodManager::class.java))
+            compose.waitUntil(timeoutMillis = 5_000) { !inputMethod.isStylusHandwritingAvailable }
+            block()
+        } finally {
+            // A null original removes the setting, preserving the platform's default behavior.
+            setMode(original)
+            assertEquals("Keyboard mode must be restored", original, AndroidSettings.Secure.getString(resolver, key))
         }
     }
 

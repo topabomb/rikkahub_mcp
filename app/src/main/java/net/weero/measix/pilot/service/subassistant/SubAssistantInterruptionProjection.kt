@@ -32,11 +32,7 @@ internal fun UIMessage.finalizeSubAssistantToolsAfterInterruption(reason: String
                 """{"status":"interrupted","reason":"$reason"}"""
             )
         ),
-        interactionState = if (tool.isPending) {
-            ToolInteractionState.Denied(reason)
-        } else {
-            tool.interactionState
-        },
+        resultStatus = me.rerere.ai.ui.ToolResultStatus.INTERRUPTED,
     )
     return finishPendingTools(::markInterrupted).finishInterruptedTools(::markInterrupted)
 }
@@ -127,6 +123,7 @@ internal fun reconcileMasterSubAssistantCalls(
             )
             replacements[Triple(occurrence.nodeIndex, occurrence.messageIndex, occurrence.partIndex)] =
                 occurrence.tool.mergeSubAssistantCallMetadata(json, stopped).copy(
+                    resultStatus = me.rerere.ai.ui.ToolResultStatus.INTERRUPTED,
                     output = listOf(
                         UIMessagePart.Text(
                             buildSubAssistantCallResult(

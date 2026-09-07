@@ -14,7 +14,9 @@ fun UIMessage.toModelRequest(): ModelRequestMessage = ModelRequestMessage(
     parts = parts.filterNot { it is UIMessagePart.Step },
     modelId = modelId,
     providerMetadata = providerMetadata,
-    providerReplayProjection = providerReplayProjection,
+    providerReplayProjection = providerReplayProjection?.let { replay ->
+        replay.copy(completePartCount = parts.take(replay.completePartCount).count { it !is UIMessagePart.Step })
+    },
 )
 
 fun List<UIMessage>.toModelRequests(): List<ModelRequestMessage> = map { it.toModelRequest() }

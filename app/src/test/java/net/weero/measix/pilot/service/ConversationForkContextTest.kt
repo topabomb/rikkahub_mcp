@@ -135,7 +135,7 @@ class ConversationForkContextTest {
         val created = slot<ConversationAggregateSnapshot>()
         coEvery { commandCoordinator.createTree(capture(created), any()) } returns runtime
         val lifecycle = mockk<SubAssistantLifecycle>()
-        coEvery { lifecycle.finalizeRunsBeforeTreeMutation(snapshot) } returns snapshot
+        coEvery { lifecycle.requireClosedRunsBeforeTreeMutation(snapshot) } returns snapshot
         val repository = mockk<ConversationRepository>()
         coEvery { repository.getChildConversationSnapshots(sourceId) } returns emptyList()
         val artifactStore = mockk<ArtifactStore>(relaxed = true)

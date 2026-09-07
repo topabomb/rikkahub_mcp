@@ -1,33 +1,6 @@
 # 助手配置参考
 
-> 企业边界：MEASIX S0.2 已正式包含 `ManagedAssistantDefinition + Memory Seed + AssistantStarterDefinition`，
-> 但 Android 当前内部签名 overlay 仍是 `schemaVersion=1` 的通用 Local-record 原型，没有 ClientRealm 或生产下发入口，
-> 不是 S0.2 Snapshot v2。目标范围以 `measix-architecture` 的 Enterprise Realm & Experience Contract/Control Protocol 为准；
-> Android 映射总览见 [Android 配置架构与企业下发边界](android-configuration-architecture.md)。
-
-本文说明 `Assistant` 的持久化字段、默认值、解析规则和配置消费边界。完整生成过程见
-[Turn/Step 执行链路](turn-step-execution.md)，模型可见提示与工具契约见
-[提示词、上下文注入与工具描述](prompts-and-tools.md)，子助手运行语义见
-[子助手架构与执行流程参考](sub-assistant-architecture.md)。
-
-## 0. 当前 `Assistant` 与 S0.2 Managed Assistant 的关系
-
-当前 `Assistant` 是 Local 持久化聚合，使用 `Uuid`，包含完整的个人运行与 UI 配置。S0.2
-`ManagedAssistantDefinition` 是平台 `asd_*` 身份的窄范围、只读 Definition。两者可以复用 UI 和生成消费边界，但不能直接
-互相序列化、复制 ID 或共用持久记录。
-
-| S0.2 字段/对象 | 当前可复用边界 | 不能直接复用的当前结构 |
-|---|---|---|
-| `displayName` / `description` / `systemPrompt` | Assistant 展示与 prompt 消费 | 不把完整 `Assistant` 作为 wire DTO |
-| `modelId: mdl_*` | 模型 readiness/生成选择边界 | `Assistant.chatModelId: Uuid?` 只能引用 Local Model |
-| `mcpServerIds: mcp_*[]` | MCP discovery/tool loop | `Assistant.mcpServers: Set<Uuid>` 只能引用 Local MCP |
-| `memorySeed[]` | memory prompt injection | 当前 `MemoryEntity` 是可变 Local User Data，不是 seed store |
-| `AssistantStarterDefinition: str_*` | Quick Message 列表和向输入草稿追加文本 | `QuickMessage.id: Uuid` 是 Local identity，不能承载 `str_*` |
-| `enabled` | Managed catalog availability/readiness | 当前 `Assistant` 没有同义字段 |
-
-S0.2 不下发 `localTools`、Skill、Workspace、custom headers/body、Regex、Mode Injection、子助手关系、完整
-`presetMessages`、头像/背景等 Local schema。后续若扩展 Definition，必须先修改平台 contract，不能因为当前 `Assistant` 已有字段就
-自动暴露。
+本文说明 Assistant 的持久化字段、默认值、解析规则和配置消费边界。内部受管 overlay 与本地 shadow 的关系统一见 [Android 配置架构](android-configuration-architecture.md)；生成协议见 [Turn/Step 执行](turn-step-execution.md)，子助手运行见 [子助手架构](sub-assistant-architecture.md)。
 
 ## 1. 数据归属与解析
 
@@ -102,9 +75,7 @@ S0.2 不下发 `localTools`、Skill、Workspace、custom headers/body、Regex、
 关闭记忆不会删除已有数据。`useGlobalMemory` 只改变读取和写入的命名空间。
 
 当前 `memory_tool` 对 `MemoryEntity` 执行 create/edit/delete；`MemoryEntity` 只有自增 `id`、String `assistantId` 和 `content`，
-没有 realm、deployment、managedGeneration 或 provenance。S0.2 Memory Seed 必须使用独立 generation-bound 只读 projection；
-未来有效记忆是 `Managed Seed + Enterprise Local Assistant Memory`，但工具只能修改后者。现有 Room 记录在补齐 realm/provenance
-与 migration 前不能被表述为已满足企业记忆回流。
+没有 realm、deployment、managedGeneration 或 provenance；它是可变本地记忆，不承担受管 Memory Seed。
 
 ### 工具与扩展
 
@@ -124,8 +95,6 @@ Memory Tools 与其他工具一样在新 Turn START 前按固定 namespace 装�
 `generate_image` 在 Assistant 已开启 `TextToImage`、且默认文生图模型当前有效时注册；Master 与 Target Run 同一规则。
 
 当前 Quick Message 点击调用 `ChatInputState.appendText(quickMessage.content)`，只向输入草稿追加内容，不触发发送或工具执行。
-这符合 S0.2 Starter 的交互语义；但 Managed Starter 仍需独立 `str_*` projection、assistant reference、排序和 enabled 状态，不能写入
-`Settings.quickMessages` 或转换成随机 `Uuid`。
 
 ### 文本变换与请求覆盖
 
@@ -221,14 +190,13 @@ code point 限制长度。关闭 `allowAsSubAssistant` 时，`normalizeForPersis
 
 ## 5. 更新与持久化边界
 
-本节先描述当前代码事实。现有 `ManagedConfigurationEnvelope(schemaVersion=1)` 把完整 `Assistant`、`QuickMessage` 等
+现有 `ManagedConfigurationEnvelope(schemaVersion=1)` 把完整 `Assistant`、`QuickMessage` 等
 Local DTO 放进 `records[]`，使用 Android UUID，并由全局 `EffectiveSettingsResolver` 合并 Built-in/Local/Managed；
 `SettingsStore.applyManagedSnapshot()` 目前只有测试调用，没有 Enrollment/Sync 生产入口。该原型没有 Personal/Enterprise Realm，
-不能被描述为 S0.2 Managed Assistant 已实现。
+生产企业配置尚未接入；阶段与目标映射见 [企业集成计划](../dev/android-enterprise-integration-plan.md)。
 
 `SettingsStore.updateLocal()` 在互斥区内读取最新 Local shadow 的读取模型、执行 transform，并以有效快照中的 lock
-规则校验变化；随后统一执行持久化归一化、DataStore 标量规范化和 `commitSettings` 的“落盘后发布”顺序。发布的是
-Local shadow，`EffectiveSettingsResolver` 再把 Built-in、Local 与已验证 managed overlay 合并为唯一
+规则校验变化；随后统一执行持久化归一化、DataStore 标量规范化和 `commitSettings` 的“落盘后发布”顺序。Store 更新内部 Local shadow，`EffectiveSettingsResolver` 把 Built-in、Local 与已验证 managed overlay 合并为唯一对外的
 `effectiveSettings` 快照。跨助手的权限清理、选择项修正和删除 tombstone 必须在同一个 transform 中完成，不能先发布内存状态再补写磁盘。
 
 已验证 managed Assistant 以稳定 ID 覆盖同 ID 的 Local shadow；用户和备份不会改写 managed envelope。受管 Assistant 的模型、
@@ -236,10 +204,6 @@ Tag、MCP、Mode Injection、Quick Message 和子助手引用必须由 verifier 
 等明确拥有内置默认项的类型会额外允许对应 Built-in ID，不能因为 Local shadow 碰巧有同 ID 就绑定。未被受管协议表示的 Skill 引用会明确拒绝。
 头像和背景仅能通过同 generation 的签名 asset binding 附着。
 原助手页会显示 Built-in/Local/Managed 来源及 lock 原因；命中 lock 的整个本地提交会失败，撤回更高 generation 后才重新显示 Local shadow。
-
-以上 overlay/shadow 行为只属于当前内部原型。S0.2 目标规则是：Personal Realm 不出现企业助手；Enterprise Realm 使用 Managed
-Assistant 与 policy-allowed Enterprise Local，Personal Local 不自动进入；平台 ID 原样保存；Snapshot v2 whole-state commit；
-Memory Seed、Starter 和 Enterprise Local Memory 分 owner。实施时必须替换原型协议/全局 merge，不能在其外再套兼容层。
 
 `Settings.normalizeForPersistence()` 在每次写入前运行，只负责规范化
 `Assistant.description`、在未开启子助手类别时强制关闭全局可见、按 `assistantId` 去重
@@ -259,9 +223,7 @@ Settings owner。会话助手归属只经 `ConversationApplicationService` 迁�
 创建、修改和删除归 `AssistantManagementService`。子助手的运行过滤、执行与恢复分别归 `SubAssistantRunPolicy`、
 `SubAssistantRunCoordinator`、`TurnRecovery` 和 `ApplicationRecoveryCoordinator`。
 
-UI 和 Provider adapter 只能消费上述 typed 配置与有效读模型，不能成为第二 owner。当前不存在的 S0.2 owner 不能冒充
-已实现能力，包括 ClientRealm、Enterprise Binding/Session、Snapshot v2 generated DTO、Managed Memory Seed store、
-Starter projection 和 Enterprise Update/Portal；它们落地时必须在同一变更中补充真实 owner、消费边界和验证。
+UI 和 Provider adapter 只消费 typed 配置与有效读模型，不成为配置写入 owner。
 
 维护配置时应从“持久化默认值 → UI/工具创建入口 → 解析与归一化 → 请求消费 → 测试/文档”完整检查，
 避免只修改数据类或单一页面。

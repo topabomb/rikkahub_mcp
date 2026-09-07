@@ -22,6 +22,19 @@ import kotlin.uuid.Uuid
  */
 class MessageTest {
 
+    private fun step(ordinal: Int = 0, outcome: StepOutcome = StepOutcome.Interrupted) = UIMessagePart.Step(
+        stepId = Uuid.parse("00000000-0000-0000-0000-${(ordinal + 1).toString().padStart(12, '0')}"),
+        ordinal = ordinal,
+        startedAt = kotlin.time.Instant.fromEpochMilliseconds(0),
+        finishedAt = kotlin.time.Instant.fromEpochMilliseconds(1),
+        outcome = outcome,
+        modelResult = StepModelResult(
+            finishReason = "stop", usage = StepUsage(), providerRequestCount = 1,
+            timeToFirstOutputMillis = null, requestDurationMillis = null,
+            usageCompleteness = me.rerere.ai.core.UsageCompleteness.NONE, providerMetadata = null,
+        ),
+    )
+
     private fun toolPart(
         providerCallId: String = "call-1",
         name: String = "search",
@@ -30,13 +43,70 @@ class MessageTest {
         interaction: ToolInteractionState = ToolInteractionState.NotRequired,
     ): UIMessagePart.Tool = UIMessagePart.Tool(
         localCallId = Uuid.random(),
-        stepId = Uuid.random(),
+        stepId = step().stepId,
         providerCallId = providerCallId,
         toolName = name,
         input = input,
         output = output,
+        resultStatus = if (output.isEmpty()) null else ToolResultStatus.COMPLETED,
         interactionState = interaction,
     )
+
+    @Test
+    fun `replay preserves empty results and replaces only failed media`() {
+        val image = UIMessagePart.Image("data:image/png;base64,broken")
+        val failure = UIMessagePart.Text("{\"status\":\"failed\",\"error\":\"Image bytes could not be persisted and are unavailable.\"}")
+        val outputs = listOf(
+            emptyList<UIMessagePart>() to emptyList(),
+            listOf(UIMessagePart.Text("")) to listOf(UIMessagePart.Text("")),
+            listOf(image) to listOf(failure),
+            listOf(mediaPersistenceFailurePart(image)) to listOf(failure),
+        )
+        for ((output, expected) in outputs) {
+            for (terminal in listOf(null, MessageTerminalStatus.FAILED)) {
+                val tool = toolPart(output = output).copy(resultStatus = ToolResultStatus.COMPLETED)
+                val message = UIMessage(
+                    role = MessageRole.ASSISTANT,
+                    parts = listOf(step(outcome = StepOutcome.Continue), tool) +
+                        if (terminal != null) listOf(step(1), UIMessagePart.Text("partial")) else emptyList(),
+                    terminalStatus = terminal,
+                )
+                val replayed = message.replaySafeProjection()!!.getTools().single()
+                assertEquals("output=$output terminal=$terminal", expected, replayed.output)
+                assertEquals(ToolResultStatus.COMPLETED, replayed.resultStatus)
+            }
+        }
+    }
+
+    @Test
+    fun `Step-only assistants are not uploaded or turned into interruption markers`() {
+        val empty = UIMessage(role = MessageRole.ASSISTANT, parts = listOf(step()))
+        assertFalse(empty.isValidToUpload())
+        assertNull(empty.replaySafeProjection())
+        assertNull(empty.copy(terminalStatus = MessageTerminalStatus.CANCELLED).replaySafeProjection())
+        val text = UIMessage.assistant("visible")
+        val marked = text.copy(parts = listOf(step(), UIMessagePart.Text("visible")))
+        assertEquals(text.toText(), marked.toText())
+        assertEquals(text.summaryAsText(), marked.summaryAsText())
+    }
+
+    @Test
+    fun `one incomplete call excludes the whole explicit Step from replay`() {
+        val completed = toolPart(output = listOf(UIMessagePart.Text("committed side effect")))
+        val pending = toolPart(providerCallId = "call-2", interaction = ToolInteractionState.AwaitingApproval)
+        val terminal = UIMessage(
+            role = MessageRole.ASSISTANT,
+            parts = listOf(step(), UIMessagePart.Reasoning("private reasoning"),
+                UIMessagePart.Text("partial answer"), completed, pending),
+            terminalStatus = MessageTerminalStatus.CANCELLED,
+        )
+
+        val projected = requireNotNull(terminal.replaySafeProjection())
+        assertEquals(0, projected.providerReplayProjection?.completePartCount)
+        assertTrue(projected.getTools().isEmpty())
+        assertTrue(projected.parts.none { it is UIMessagePart.Reasoning })
+        assertTrue(projected.toText().contains("partial answer"))
+    }
 
     @Test
     fun `findUserTurnStart should preserve complete turns`() {
@@ -118,6 +188,7 @@ class MessageTest {
         val terminal = UIMessage(
             role = MessageRole.ASSISTANT,
             parts = listOf(
+                step(),
                 UIMessagePart.Text("partial answer"),
                 UIMessagePart.Reasoning(reasoning = "unfinished reasoning", finishedAt = null),
                 openTool,
@@ -147,9 +218,11 @@ class MessageTest {
         val terminal = UIMessage(
             role = MessageRole.ASSISTANT,
             parts = listOf(
+                step(outcome = StepOutcome.Continue),
                 UIMessagePart.Reasoning(reasoning = "Step 1 reasoning"),
                 UIMessagePart.Text("Calling search"),
                 completedTool,
+                step(1),
                 UIMessagePart.Reasoning(reasoning = "Incomplete final reasoning"),
                 UIMessagePart.Text("Partial final answer"),
             ),
@@ -161,9 +234,9 @@ class MessageTest {
         val projection = projected.providerReplayProjection
         assertNotNull(projection)
         assertTrue(projection!!.hasIncompleteTail)
-        assertEquals(3, projection.completePartCount)
-        assertTrue(projected.parts.take(3).any { it is UIMessagePart.Reasoning })
-        val tailParts = projected.parts.drop(3)
+        assertEquals(4, projection.completePartCount)
+        assertTrue(projected.parts.take(4).any { it is UIMessagePart.Reasoning })
+        val tailParts = projected.parts.drop(4)
         assertTrue(tailParts.none { it is UIMessagePart.Reasoning })
         assertTrue(tailParts.any { it is UIMessagePart.Text && it.text.contains("Partial final answer") })
     }
@@ -172,7 +245,7 @@ class MessageTest {
     fun `terminal replay with only partial reasoning and text has zero complete prefix`() {
         val terminal = UIMessage(
             role = MessageRole.ASSISTANT,
-            parts = listOf(UIMessagePart.Reasoning(reasoning = "unfinished"), UIMessagePart.Text("partial")),
+            parts = listOf(step(), UIMessagePart.Reasoning(reasoning = "unfinished"), UIMessagePart.Text("partial")),
             terminalStatus = MessageTerminalStatus.INCOMPLETE,
             terminalReason = TurnTerminalReasons.PROVIDER_INCOMPLETE,
         )
@@ -191,7 +264,6 @@ class MessageTest {
                 thoughtSignature = "text-signature",
                 sourceModelId = "gemini-3-flash",
                 sourceProfile = "google:developer:example",
-                providerStepId = "step-1",
             ).toMetadata().forEach { (key, value) -> put(key, value) }
             AttachmentProjectionTextMetadata(attachmentProjectionText = true).toMetadata().forEach { (key, value) -> put(key, value) }
         }
@@ -199,11 +271,11 @@ class MessageTest {
             thoughtSignature = "image-signature",
             sourceModelId = "gemini-3-flash",
             sourceProfile = "google:developer:example",
-            providerStepId = "step-1",
         ).toMetadata()
         val terminal = UIMessage(
             role = MessageRole.ASSISTANT,
             parts = listOf(
+                step(),
                 UIMessagePart.Text("partial", textMetadata),
                 UIMessagePart.Image("https://example.com/image.png", imageMetadata),
             ),
@@ -225,9 +297,11 @@ class MessageTest {
         val terminal = UIMessage(
             role = MessageRole.ASSISTANT,
             parts = listOf(
+                step(outcome = StepOutcome.Continue),
                 UIMessagePart.Reasoning(reasoning = "First reasoning"),
                 UIMessagePart.Text("First content"),
                 safeTool,
+                step(1),
                 UIMessagePart.Reasoning(reasoning = "Second reasoning"),
                 UIMessagePart.Text("Second content"),
                 unsafeTool,
@@ -239,7 +313,7 @@ class MessageTest {
         )
         val projected = terminal.replaySafeProjection()!!
         val projection = projected.providerReplayProjection!!
-        assertEquals(3, projection.completePartCount)
+        assertEquals(4, projection.completePartCount)
         assertTrue(projection.hasIncompleteTail)
         assertTrue(projected.parts.none { it is UIMessagePart.Tool && it.providerCallId == "later-safe" })
         assertTrue(projected.parts.any { it is UIMessagePart.Tool && it.providerCallId == "safe-1" })
@@ -251,9 +325,11 @@ class MessageTest {
         val terminal = UIMessage(
             role = MessageRole.ASSISTANT,
             parts = listOf(
+                step(outcome = StepOutcome.Continue),
                 UIMessagePart.Reasoning(reasoning = "Step reasoning"),
                 UIMessagePart.Text("Calling search"),
                 completedTool,
+                step(1),
                 UIMessagePart.Reasoning(reasoning = "Tail reasoning"),
                 UIMessagePart.Text("Partial answer"),
             ),
@@ -270,7 +346,7 @@ class MessageTest {
     fun `provider replay projection is not persisted through serialization`() {
         val terminal = UIMessage(
             role = MessageRole.ASSISTANT,
-            parts = listOf(UIMessagePart.Text("partial")),
+            parts = listOf(step(), UIMessagePart.Text("partial")),
             terminalStatus = MessageTerminalStatus.FAILED,
             terminalReason = TurnTerminalReasons.PROVIDER_FAILED,
         )

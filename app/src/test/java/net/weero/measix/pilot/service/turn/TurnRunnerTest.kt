@@ -1,5 +1,7 @@
 package net.weero.measix.pilot.service.turn
 
+import net.weero.measix.pilot.service.turn.TurnRunPhase
+
 import android.content.Context
 import io.mockk.coEvery
 import io.mockk.every
@@ -138,12 +140,12 @@ class TurnRunnerTest {
             )
         )
 
-        assertTrue(capture.phases.contains("tool_executing" to "metadata_tool"))
+        assertTrue(capture.phases.contains(TurnRunPhase.TOOL_EXECUTING to "metadata_tool"))
         val phaseNames = capture.phases.map { it.first }
-        assertTrue("tool batch preparation must emit tool_preparing", phaseNames.contains("tool_preparing"))
+        assertTrue("tool batch preparation must emit tool_preparing", phaseNames.contains(TurnRunPhase.TOOL_PREPARING))
         assertTrue(
             "tool_preparing must precede tool_executing",
-            phaseNames.indexOf("tool_preparing") < phaseNames.indexOf("tool_executing"),
+            phaseNames.indexOf(TurnRunPhase.TOOL_PREPARING) < phaseNames.indexOf(TurnRunPhase.TOOL_EXECUTING),
         )
         assertTrue(persistedBeforeExecute.get())
         val finalTool = capture.streamDeltas.last().getTools().single()
@@ -246,6 +248,19 @@ class TurnRunnerTest {
         )
 
         val usage = capture.streamDeltas.last().usage
+        val resultCheckpoint = capture.checkpoints.filterIsInstance<ToolResultCheckpoint>().single()
+        val committedSteps = resultCheckpoint.assistantMessage.parts.filterIsInstance<UIMessagePart.Step>()
+        assertEquals(listOf(0, 1), committedSteps.map { it.ordinal })
+        assertEquals(me.rerere.ai.ui.StepOutcome.Continue, committedSteps.first().outcome)
+        assertTrue(committedSteps.first().finishedAt != null)
+        assertNull(committedSteps.last().modelResult)
+        assertNull(committedSteps.last().outcome)
+        val completed = capture.result as TurnOutcome.Completed
+        val sampledSteps = completed.assistantMessage!!.parts.filterIsInstance<UIMessagePart.Step>()
+        assertEquals(listOf(100L, 200L), sampledSteps.map { it.modelResult!!.usage.inputTokens })
+        assertEquals(listOf(1, 1), sampledSteps.map { it.modelResult!!.providerRequestCount })
+        assertEquals(listOf("tool_calls", "stop"), sampledSteps.map { it.modelResult!!.finishReason })
+        assertEquals(committedSteps.last().stepId, sampledSteps.last().stepId)
         assertEquals(300L, usage?.inputTokens)
         assertEquals(30L, usage?.outputTokens)
         assertEquals(50L, usage?.cacheReadInputTokens)

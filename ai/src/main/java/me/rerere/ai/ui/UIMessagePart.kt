@@ -101,12 +101,12 @@ sealed class UIMessagePart {
          * waiting for approval or executing remotely while [output] is still empty. Active
          * lifecycle presentation is owned by the turn projection.
          */
-        val hasReplayResult: Boolean get() = output.isNotEmpty()
+        val hasReplayResult: Boolean get() = resultStatus != null
 
         /** Whether the call is paused for a user gate (approval or user-input collection). */
         val isPending: Boolean
-            get() = interactionState is ToolInteractionState.AwaitingApproval ||
-                interactionState is ToolInteractionState.AwaitingInput
+            get() = !hasReplayResult && (interactionState is ToolInteractionState.AwaitingApproval ||
+                interactionState is ToolInteractionState.AwaitingInput)
 
         /** Whether a resolved gate can resume assembly of the Provider replay result. */
         val canResumeResultAssembly: Boolean

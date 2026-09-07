@@ -1,7 +1,5 @@
 package net.weero.measix.pilot.data.ai.transformers
 
-import kotlinx.datetime.TimeZone
-import kotlinx.datetime.toInstant
 import me.rerere.ai.core.MessageRole
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
@@ -50,7 +48,7 @@ object ThinkTagTransformer : OutputMessageTransformer, StreamingMessageTransform
         message = message,
         hidePendingPrefix = true,
         previousClosedAt = previousProjection
-            ?.takeIf { it.id == message.id }
+            ?.takeIf { it.id == message.id && it.currentStepId() == message.currentStepId() }
             ?.currentStepParts()
             ?.filterIsInstance<UIMessagePart.Reasoning>()
             ?.firstOrNull()
@@ -64,7 +62,7 @@ object ThinkTagTransformer : OutputMessageTransformer, StreamingMessageTransform
     ): UIMessage = handleThinkTag(
         message = message,
         previousClosedAt = previousProjection
-            ?.takeIf { it.id == message.id }
+            ?.takeIf { it.id == message.id && it.currentStepId() == message.currentStepId() }
             ?.currentStepParts()
             ?.filterIsInstance<UIMessagePart.Reasoning>()
             ?.firstOrNull()
@@ -74,7 +72,7 @@ object ThinkTagTransformer : OutputMessageTransformer, StreamingMessageTransform
 
     /**
      * Extract think-tag reasoning from the first non-whitespace Text part of the current assistant
-     * step (the parts after the last executed Tool).
+     * Step (the parts after the final explicit Step marker).
      *
      * - Only the first non-whitespace Text part is examined; literal tags in later parts are never
      *   mistaken for reasoning.
@@ -94,6 +92,7 @@ object ThinkTagTransformer : OutputMessageTransformer, StreamingMessageTransform
     ): UIMessage {
         if (message.role != MessageRole.ASSISTANT) return message
         val stepStart = message.currentStepStart()
+        if ((message.parts[stepStart - 1] as UIMessagePart.Step).outcome != null) return message
         val currentStep = message.parts.subList(stepStart, message.parts.size)
         if (currentStep.none { it is UIMessagePart.Text }) return message
         // Suppress tag-derived reasoning only when this Provider step already has native reasoning.
@@ -119,7 +118,7 @@ object ThinkTagTransformer : OutputMessageTransformer, StreamingMessageTransform
 
         val reasoningPart = UIMessagePart.Reasoning(
             reasoning = reasoningText,
-            createdAt = message.createdAt.toInstant(timeZone = TimeZone.currentSystemDefault()),
+            createdAt = (message.parts[stepStart - 1] as UIMessagePart.Step).startedAt,
             finishedAt = effectiveFinishedAt,
         )
         val replacementTextPart = if (strippedText.isEmpty()) null else firstTextPart.copy(text = strippedText)
@@ -143,9 +142,14 @@ object ThinkTagTransformer : OutputMessageTransformer, StreamingMessageTransform
         return candidate.length < THINKING_OPEN_TAG.length && THINKING_OPEN_TAG.startsWith(candidate)
     }
 
-    private fun UIMessage.currentStepStart(): Int =
-        parts.indexOfLast { it is UIMessagePart.Tool && it.hasReplayResult } + 1
+    private fun UIMessage.currentStepStart(): Int {
+        val marker = parts.indexOfLast { it is UIMessagePart.Step }
+        require(marker >= 0) { "Assistant output requires an explicit Step" }
+        return marker + 1
+    }
 
     private fun UIMessage.currentStepParts(): List<UIMessagePart> =
         parts.subList(currentStepStart(), parts.size)
+
+    private fun UIMessage.currentStepId() = (parts[currentStepStart() - 1] as UIMessagePart.Step).stepId
 }

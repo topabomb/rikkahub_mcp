@@ -20,13 +20,10 @@ import net.weero.measix.pilot.data.model.Assistant
 import net.weero.measix.pilot.data.model.Conversation
 import net.weero.measix.pilot.data.model.toMessageNode
 import net.weero.measix.pilot.service.runtime.toSnapshot
-import net.weero.measix.pilot.service.turn.InterruptedRunFinalizationFailures
 import net.weero.measix.pilot.service.turn.finalizeInterruptedRunSafely
 import net.weero.measix.pilot.utils.JsonInstant
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
-import org.junit.Assert.assertNull
-import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import kotlin.uuid.Uuid
@@ -42,31 +39,48 @@ class SubAssistantFinalizationIntegrationTest {
     // ── finalizeInterruptedRunSafely：Child 超时与 durable 失败收口 ──
 
     @Test
-    fun `child timeout is contained and terminal metadata is still persisted`() = runTest {
-        var metadataPersisted = false
-
-        val failures = finalizeInterruptedRunSafely(
-            timeoutMillis = 100,
-            finalizeChild = { awaitCancellation() },
-            finalizeMetadata = { metadataPersisted = true },
-        )
-
-        assertTrue(failures.child is TimeoutCancellationException)
-        assertNull(failures.metadata)
-        assertTrue(metadataPersisted)
+    fun `child timeout prevents terminal parent metadata from advancing`() = runTest {
+        var metadataStaged = false
+        val failure = runCatching {
+            finalizeInterruptedRunSafely(
+                timeoutMillis = 100,
+                finalizeChild = { awaitCancellation() },
+                finalizeMetadata = { metadataStaged = true },
+            )
+        }.exceptionOrNull()
+        assertTrue(failure is TimeoutCancellationException)
+        assertFalse(metadataStaged)
     }
 
     @Test
-    fun `durable finalization failure is propagated with both causes`() {
-        val child = IllegalStateException("child")
-        val metadata = IllegalArgumentException("metadata")
-        val thrown = assertThrows(IllegalStateException::class.java) {
-            InterruptedRunFinalizationFailures(child, metadata)
-                .throwIfAny(kotlin.uuid.Uuid.random(), "run")
+    fun `child commit failure prevents metadata and metadata failure preserves committed child`() = runTest {
+        for (failChild in listOf(true, false)) {
+            val events = mutableListOf<String>()
+            val childFailure = IllegalStateException("child commit failed")
+            val metadataFailure = IllegalArgumentException("metadata staging failed")
+            val failure = runCatching {
+                finalizeInterruptedRunSafely(
+                    timeoutMillis = 100,
+                    finalizeChild = {
+                        events += "child-attempt"
+                        if (failChild) throw childFailure
+                        events += "child-committed"
+                    },
+                    finalizeMetadata = {
+                        events += "metadata-attempt"
+                        throw metadataFailure
+                    },
+                )
+            }.exceptionOrNull()
+            val expectedFailure = if (failChild) childFailure else metadataFailure
+            assertEquals(expectedFailure.javaClass, failure?.javaClass)
+            assertEquals(expectedFailure.message, failure?.message)
+            assertEquals(
+                if (failChild) listOf("child-attempt")
+                else listOf("child-attempt", "child-committed", "metadata-attempt"),
+                events,
+            )
         }
-
-        assertTrue(thrown.cause === child)
-        assertTrue(thrown.suppressed.single() === metadata)
     }
 
     // ── reconcileMasterSubAssistantCalls：重启恢复投影 ──

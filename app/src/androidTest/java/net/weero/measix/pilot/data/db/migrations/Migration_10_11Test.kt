@@ -51,12 +51,26 @@ class Migration_10_11Test {
     fun historicalChainReachesFreshV11Schema() {
         val name = "migration-v1-v11-schema"
         context.deleteDatabase(name)
-        helper.createDatabase(name, 1).close()
+        helper.createDatabase(name, 1).use { db ->
+            db.execSQL("INSERT INTO ConversationEntity(id,title,nodes,create_at,update_at) VALUES('old-c','old title','[]',11,12)")
+            db.execSQL("INSERT INTO message_node(id,conversation_id,node_index,messages,select_index) VALUES('old-n','old-c',0,?,0)",
+                arrayOf(legacyAssistantTranscript()))
+            db.execSQL("INSERT INTO MemoryEntity(assistant_id,content) VALUES('old-a','preserved memory')")
+            db.execSQL("INSERT INTO managed_files(folder,relative_path,display_name,mime_type,size_bytes,created_at,updated_at) " +
+                "VALUES('upload','upload/old.png','old.png','image/png',123,11,12)")
+            db.execSQL("INSERT INTO GenMediaEntity(path,model_id,prompt,create_at) VALUES('images/old.png','old-model','old prompt',11)")
+        }
         val migrated = helper.runMigrationsAndValidate(
             name, 11, true,
             Migration_1_2, Migration_2_3, Migration_3_4, Migration_4_5, Migration_5_6,
             Migration_6_7, Migration_7_8, Migration_8_9, Migration_9_10, Migration_10_11,
         )
+        assertEquals("old title", single(migrated, "SELECT title FROM ConversationEntity WHERE id = 'old-c'"))
+        assertEquals("preserved memory", single(migrated, "SELECT content FROM MemoryEntity"))
+        assertEquals("upload/old.png", single(migrated, "SELECT relative_path FROM artifact"))
+        assertEquals("images/old.png", single(migrated, "SELECT path FROM GenMediaEntity"))
+        assertTrue(single(migrated, "SELECT messages FROM message_node WHERE id = 'old-n'").contains("call_1"))
+        assertTrue(rows(migrated, "PRAGMA foreign_key_check").isEmpty())
         val fresh = helper.createDatabase("migration-v11-fresh-schema", 11)
         assertEquals(tableNames(fresh), tableNames(migrated))
         tableNames(fresh).forEach { table ->
@@ -167,9 +181,78 @@ class Migration_10_11Test {
         )
         // A STARTED execution on a live turn that cannot be mapped to a transcript Tool must
         // fail the migration rather than silently drop the durable execution fact.
-        assertThrows(IllegalStateException::class.java) { Migration_10_11.migrate(v10) }
         v10.close()
+        assertThrows(IllegalStateException::class.java) {
+            helper.runMigrationsAndValidate(name, 11, true, Migration_10_11)
+        }
+        android.database.sqlite.SQLiteDatabase.openDatabase(context.getDatabasePath(name).absolutePath, null,
+            android.database.sqlite.SQLiteDatabase.OPEN_READONLY).use { unchanged ->
+            assertEquals(10, unchanged.version)
+            unchanged.rawQuery("SELECT messages FROM message_node", null).use { cursor ->
+                assertTrue(cursor.moveToFirst())
+                assertFalse(cursor.getString(0).contains("\"type\":\"step\""))
+            }
+            unchanged.rawQuery("SELECT tool_ordinal FROM tool_execution", null).use { cursor ->
+                assertTrue(cursor.moveToFirst())
+                assertEquals(0, cursor.getInt(0))
+            }
+        }
         context.deleteDatabase(name)
+    }
+
+    @Test
+    fun largeTranscriptSurvivesCursorWindowAndToolMapping() {
+        val name = "migration-large-transcript"
+        context.deleteDatabase(name)
+        val payload = "😀 retained output ".repeat(200_000)
+        helper.createDatabase(name, 10).use { db ->
+            seedV10(db)
+            db.execSQL("UPDATE message_node SET messages = ? WHERE id = 'node-assistant'",
+                arrayOf(legacyAssistantTranscript().replace("\"r\"", "\"$payload\"")))
+        }
+        helper.runMigrationsAndValidate(name, 11, true, Migration_10_11).use { db ->
+            val converted = net.weero.measix.pilot.data.db.transcript.readTranscriptPayload(db, "node-assistant")
+            assertTrue(converted.contains(payload))
+            assertEquals(1, scalar(db, "SELECT COUNT(*) FROM tool_execution"))
+            assertTrue(rows(db, "PRAGMA foreign_key_check").isEmpty())
+        }
+        context.deleteDatabase(name)
+    }
+
+    @Test
+    fun rebuildRecoversEachDurableBoundaryAndRejectsWrongTemporaryLocator() {
+        listOf("empty", "partial", "filled", "dropped", "renamed").forEach { boundary ->
+            val name = "migration-boundary-$boundary"
+            context.deleteDatabase(name)
+            helper.createDatabase(name, 10).use { db -> seedV10(db) }
+            helper.runMigrationsAndValidate(name, 11, true, Migration_10_11).use { db ->
+                // Reconstruct each persisted rebuild boundary from one valid converted transcript.
+                when (boundary) {
+                    "dropped" -> db.execSQL("ALTER TABLE tool_execution RENAME TO tool_execution_v3")
+                    "empty", "partial", "filled" -> {
+                        db.execSQL("ALTER TABLE tool_execution RENAME TO tool_execution_v3")
+                        db.execSQL("CREATE TABLE tool_execution(execution_id TEXT NOT NULL PRIMARY KEY, turn_id TEXT NOT NULL, " +
+                            "tool_ordinal INTEGER NOT NULL, status TEXT NOT NULL, reason TEXT, child_conversation_id TEXT, " +
+                            "created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)")
+                        db.execSQL("INSERT INTO tool_execution VALUES ('legacy','turn-await',0,'COMPLETED',NULL,NULL,1,1)")
+                        if (boundary == "empty") db.execSQL("DELETE FROM tool_execution_v3")
+                        if (boundary == "partial") db.execSQL("UPDATE tool_execution_v3 SET local_call_id = 'invalid'")
+                    }
+                    else -> Unit
+                }
+                Migration_10_11.migrate(db)
+                assertEquals(1, scalar(db, "SELECT COUNT(*) FROM tool_execution"))
+                assertEquals(convertedToolLocalCallId(db), single(db, "SELECT local_call_id FROM tool_execution"))
+                assertTrue(rows(db, "PRAGMA foreign_key_check").isEmpty())
+                if (boundary == "dropped") {
+                    db.execSQL("ALTER TABLE tool_execution RENAME TO tool_execution_v3")
+                    db.execSQL("UPDATE tool_execution_v3 SET local_call_id = 'invalid'")
+                    assertThrows(IllegalStateException::class.java) { Migration_10_11.migrate(db) }
+                    assertEquals(1, scalar(db, "SELECT COUNT(*) FROM tool_execution_v3"))
+                }
+            }
+            context.deleteDatabase(name)
+        }
     }
 
     // ---- fixtures ----
@@ -182,7 +265,7 @@ class Migration_10_11Test {
         )
         db.execSQL(
             "INSERT INTO message_node(id, conversation_id, node_index, messages, select_index) VALUES " +
-                "('node-user','conv-1',0,'[{\"id\":\"msg-user\",\"role\":\"user\",\"parts\":[{\"type\":\"text\",\"text\":\"hi\"}]}]',0)",
+                "('node-user','conv-1',0,'[{\"id\":\"11111111-1111-1111-1111-111111111111\",\"role\":\"user\",\"parts\":[{\"type\":\"text\",\"text\":\"hi\"}]}]',0)",
         )
         db.execSQL(
             "INSERT INTO message_node(id, conversation_id, node_index, messages, select_index) VALUES " +

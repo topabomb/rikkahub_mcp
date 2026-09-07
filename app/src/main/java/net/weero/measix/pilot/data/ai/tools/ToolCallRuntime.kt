@@ -14,6 +14,7 @@ import kotlinx.serialization.json.put
 import me.rerere.ai.core.ToolArgumentsException
 import me.rerere.ai.core.ToolAttachmentResolution
 import me.rerere.ai.core.ToolCallLocator
+import me.rerere.ai.core.ToolChildRunLink
 import me.rerere.ai.core.ToolExecutionContext
 import me.rerere.ai.core.ToolExecutionFailure
 import me.rerere.ai.core.ToolInteractionRequirement
@@ -125,13 +126,12 @@ internal data class ToolBatchPreparation(
 internal data class ToolExecutionHooks(
     val resolveAttachments: suspend (List<String>) -> ToolAttachmentResolution,
     val reportMetadata: suspend (JsonObject, ToolMetadataDelivery) -> Unit,
-    val reportChildConversation: suspend (String) -> Unit,
+    val reportChildRun: suspend (ToolChildRunLink) -> Unit,
     val registerUnpublishedResource: (ToolResourceLease) -> Unit,
 )
 
 internal data class ToolCallOutcome(
     val output: List<UIMessagePart>,
-    val executionFailed: Boolean,
     /** Typed terminal fact merged into the Tool part before the result checkpoint. */
     val resultStatus: ToolResultStatus,
     /** Typed output policy resolved once at completion; drives rolling-compaction eligibility. */
@@ -391,8 +391,8 @@ internal class ToolCallRuntime(
             resolveAttachments = { paths ->
                 runtimeCapability { hooks.resolveAttachments(paths) }
             },
-            reportChildConversation = { childConversationId ->
-                runtimeCapability { hooks.reportChildConversation(childConversationId) }
+            reportChildRun = { link ->
+                runtimeCapability { hooks.reportChildRun(link) }
             },
             registerUnpublishedResource = { resource ->
                 try {
@@ -412,7 +412,6 @@ internal class ToolCallRuntime(
             )
             ToolCallOutcome(
                 output = output,
-                executionFailed = false,
                 resultStatus = ToolResultStatus.COMPLETED,
                 outputPolicy = if (registeredArtifact) {
                     ToolOutputPolicy.PRESERVE
@@ -426,7 +425,6 @@ internal class ToolCallRuntime(
                     failure.output,
                     emptyStatus = EmptyToolResultStatus.FAILED,
                 ),
-                executionFailed = true,
                 resultStatus = ToolResultStatus.FAILED,
                 outputPolicy = artifactSafeOutputPolicy(call, registeredArtifact),
             )
@@ -440,7 +438,6 @@ internal class ToolCallRuntime(
                         "{\"status\":\"failed\",\"reason\":\"tool_timeout\"}",
                     ),
                 ),
-                executionFailed = true,
                 resultStatus = ToolResultStatus.FAILED,
                 outputPolicy = artifactSafeOutputPolicy(call, registeredArtifact),
             )
@@ -457,7 +454,6 @@ internal class ToolCallRuntime(
                         "{\"status\":\"failed\",\"reason\":\"tool_failed\"}",
                     ),
                 ),
-                executionFailed = true,
                 resultStatus = ToolResultStatus.FAILED,
                 outputPolicy = artifactSafeOutputPolicy(call, registeredArtifact),
             )

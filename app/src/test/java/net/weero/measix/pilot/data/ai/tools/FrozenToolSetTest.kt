@@ -87,7 +87,7 @@ class FrozenToolSetTest {
             locator = ToolCallLocator(kotlin.uuid.Uuid.random(), Uuid.random(), Uuid.random()), providerCallId = "call",
             reportMetadata = { _, _ -> },
             resolveAttachments = { ToolAttachmentResolution() },
-            reportChildConversation = {},
+            reportChildRun = {},
             registerUnpublishedResource = {},
         )
 

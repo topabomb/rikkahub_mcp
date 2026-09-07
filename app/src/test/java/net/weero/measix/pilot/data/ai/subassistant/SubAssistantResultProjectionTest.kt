@@ -388,6 +388,7 @@ class SubAssistantResultProjectionTest {
             localCallId = Uuid.random(), stepId = Uuid.random(), providerCallId = "g1",
             toolName = GENERATE_IMAGE_TOOL_NAME,
             input = "{}",
+            resultStatus = if (status == "completed") me.rerere.ai.ui.ToolResultStatus.COMPLETED else me.rerere.ai.ui.ToolResultStatus.FAILED,
             output = listOf(
                 UIMessagePart.Text("""{"status":"$status"}"""),
                 env.image(env.png, ref),

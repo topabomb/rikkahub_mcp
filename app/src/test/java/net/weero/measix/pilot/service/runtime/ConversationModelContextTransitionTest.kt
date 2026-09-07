@@ -11,6 +11,7 @@ import net.weero.measix.pilot.data.model.ConversationModelContextEntry
 import net.weero.measix.pilot.data.model.MessageNode
 import net.weero.measix.pilot.service.ConversationDisclosureSnapshotService
 import net.weero.measix.pilot.service.DisclosureContentException
+import net.weero.measix.pilot.testkit.sampledModelResult
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
@@ -48,6 +49,9 @@ class ConversationModelContextTransitionTest {
     }
 
     private fun finalize(snapshot: ConversationAggregateSnapshot, assistantMessageId: Uuid): ConversationAggregateSnapshot {
+        val assistant = snapshot.currentMessages().single { it.id == assistantMessageId }
+        val step = assistant.parts.filterIsInstance<UIMessagePart.Step>().last()
+        val sampled = TurnTransition.recordModelResult(assistant, step.stepId, sampledModelResult("stop"))
         return ConversationTransition.apply(
             snapshot,
             FinalizeTurn(
@@ -57,7 +61,7 @@ class ConversationModelContextTransitionTest {
                     turnId = Uuid.random(),
                     assistantMessageId = assistantMessageId,
                 ),
-                assistantMessage = null,
+                assistantMessage = sampled.copy(parts = sampled.parts + UIMessagePart.Text("answer")),
                 terminalStatus = TurnExecutionStatus.COMPLETED,
                 terminalReason = null,
                 finishedAt = turnFinishedAt,

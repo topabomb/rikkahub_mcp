@@ -1,0 +1,88 @@
+name: Verify
+
+on:
+  pull_request:
+  push:
+    branches: [master, main]
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  jvm:
+    name: JVM, architecture, schema and builds
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: recursive
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Verify source formatting
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          if [ -n "$BASE_SHA" ] && git cat-file -e "$BASE_SHA^{commit}" 2>/dev/null; then
+            git diff --check "$BASE_SHA" HEAD
+          else
+            git show --format= --check HEAD
+          fi
+      - name: Compile, test and lint
+        run: bash gradlew test assembleDebug lintDebug assembleRelease --no-parallel --max-workers=1
+      - name: Verify Room schema matches generated output
+        run: |
+          git diff --exit-code -- app/schemas
+          test -z "$(git ls-files --others --exclude-standard app/schemas)"
+      - name: Upload verification reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: jvm-verification
+          path: |
+            **/build/reports/tests/
+            **/build/test-results/
+            **/build/reports/lint-results*
+
+  android:
+    name: Android persistence and interaction
+    runs-on: ubuntu-latest
+    needs: jvm
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Enable emulator acceleration
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Run migration, Room, backup, runtime and Compose integration
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 36
+          target: google_apis
+          arch: x86_64
+          enable-hw-keyboard: false
+          disable-animations: true
+          script: bash gradlew connectedDebugAndroidTest --no-parallel --max-workers=1
+      - name: Upload Android reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-verification
+          path: |
+            **/build/reports/androidTests/
+            **/build/outputs/androidTest-results/

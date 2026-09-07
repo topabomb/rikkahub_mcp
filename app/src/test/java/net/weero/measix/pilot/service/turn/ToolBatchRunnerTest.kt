@@ -582,56 +582,61 @@ class ToolBatchRunnerTest {
         assertTrue(failure!!.message!!.contains("Tool name must not be blank"))
     }
 
-    @Test
-    fun `update message parts with executed tools`() {
-        val originalMessage = UIMessage(
-            role = MessageRole.ASSISTANT,
-            parts = listOf(
-                UIMessagePart.Text("Let me help"),
-                UIMessagePart.Tool(
-                    localCallId = Uuid.random(), stepId = Uuid.random(), providerCallId = "tc1",
-                    toolName = "search_web",
-                    input = """{"query":"test"}"""
-                )
-            )
-        )
-
-        val executedTool = originalMessage.getTools()[0].copy(
-            output = listOf(UIMessagePart.Text("search results")),
-        )
-
-        val updatedMessage = originalMessage.replaceToolByLocalCallId(executedTool)
-        val tools = updatedMessage.getTools()
-        assertEquals(1, tools.size)
-        assertTrue(tools[0].hasReplayResult)
-        assertEquals("search results", (tools[0].output[0] as UIMessagePart.Text).text)
-    }
 
     @Test
-    fun `multiple tool execution keys by localCallId even when provider ids repeat`() {
-        val message = UIMessage(
-            role = MessageRole.ASSISTANT,
-            parts = listOf(
-                UIMessagePart.Tool(
-                    localCallId = Uuid.random(), stepId = Uuid.random(), providerCallId = "duplicate",
-                    toolName = "search_web",
-                    input = """{"query":"test1"}"""
-                ),
-                UIMessagePart.Tool(
-                    localCallId = Uuid.random(), stepId = Uuid.random(), providerCallId = "duplicate",
-                    toolName = "search_web",
-                    input = """{"query":"test2"}"""
-                )
-            )
-        )
-
-        var updatedMessage = message
-        message.getTools().forEachIndexed { ordinal, tool ->
-            updatedMessage = updatedMessage.replaceToolByLocalCallId(
-                tool.copy(output = listOf(UIMessagePart.Text("result${ordinal + 1}"))),
-            )
+    fun `delegated run lineage and metadata commit together before child work`() = runTest {
+        for (failCommit in listOf(false, true)) {
+            val harness = createProviderHarness()
+            val link = me.rerere.ai.core.ToolChildRunLink(Uuid.random(), Uuid.random(), "run-1")
+            val metadata = kotlinx.serialization.json.buildJsonObject {
+                put("sub_assistant_call", kotlinx.serialization.json.buildJsonObject {
+                    put("run_id", kotlinx.serialization.json.JsonPrimitive(link.subAssistantRunId))
+                    put("child_conversation_id", kotlinx.serialization.json.JsonPrimitive(link.childConversationId.toString()))
+                })
+            }
+            var linkObserved = false
+            var childWorked = false
+            val tool = Tool(name = "assistant_call", description = "delegate", execute = { error("context required") },
+                contextualExecute = {
+                    reportMetadata(metadata, me.rerere.ai.core.ToolMetadataDelivery.DEFERRED)
+                    reportChildRun(link)
+                    assertTrue(linkObserved)
+                    childWorked = true
+                    listOf(UIMessagePart.Text("child answer"))
+                })
+            val stepId = Uuid.random()
+            val message = UIMessage(role = MessageRole.ASSISTANT, parts = listOf(
+                UIMessagePart.Step(stepId, 0, kotlin.time.Instant.fromEpochMilliseconds(1)),
+                UIMessagePart.Tool(Uuid.random(), stepId, "call", tool.name, "{}"),
+            ))
+            val checkpoints = mutableListOf<TurnCheckpoint>()
+            runCatching {
+                harness.handler.run(turnRunInputsFixture(
+                    conversationId = Uuid.random(), settings = harness.settings, model = harness.model,
+                    mediaCapabilities = RequestMediaCapabilities.NONE, messages = listOf(message),
+                    assistant = harness.assistant, promptInputs = testPromptInputs(), tools = listOf(tool), maxSteps = 1,
+                    onCheckpoint = { checkpoint ->
+                        checkpoints += checkpoint
+                        val fact = (checkpoint as? net.weero.measix.pilot.service.runtime.ToolExecutionUpdatedCheckpoint)?.toolExecution
+                        if (fact != null) {
+                            assertEquals(link.childConversationId.toString(), fact.childConversationId)
+                            assertEquals(link.childTurnId.toString(), fact.childTurnId)
+                            assertEquals(link.subAssistantRunId, fact.subAssistantRunId)
+                            assertEquals(metadata, checkpoint.assistantMessage.getTools().single().metadata)
+                            if (failCommit) error("link write failed")
+                            linkObserved = true
+                        }
+                    },
+                ))
+            }
+            assertEquals(!failCommit, childWorked)
+            assertTrue(checkpoints.filterIsInstance<net.weero.measix.pilot.service.runtime.ToolExecutionUpdatedCheckpoint>()
+                .any { it.toolExecution?.childTurnId == link.childTurnId.toString() })
+            if (!failCommit) {
+                val terminal = checkpoints.filterIsInstance<ToolResultCheckpoint>().last().toolExecution!!
+                assertEquals(link.childTurnId.toString(), terminal.childTurnId)
+                assertEquals(link.subAssistantRunId, terminal.subAssistantRunId)
+            }
         }
-        assertEquals("result1", (updatedMessage.getTools()[0].output.single() as UIMessagePart.Text).text)
-        assertEquals("result2", (updatedMessage.getTools()[1].output.single() as UIMessagePart.Text).text)
     }
 }

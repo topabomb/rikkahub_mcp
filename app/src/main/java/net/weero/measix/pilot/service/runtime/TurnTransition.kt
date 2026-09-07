@@ -1,4 +1,8 @@
 package net.weero.measix.pilot.service.runtime
+import me.rerere.ai.ui.StepModelResult
+import net.weero.measix.pilot.data.db.entity.ToolExecutionStatus
+import net.weero.measix.pilot.data.db.transcript.V3TranscriptValidator
+import kotlinx.datetime.LocalDateTime
 
 import me.rerere.ai.core.MessageRole
 import me.rerere.ai.core.ToolCallLocator
@@ -9,7 +13,6 @@ import me.rerere.ai.ui.ToolInteractionState
 import me.rerere.ai.ui.ToolResultStatus
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
-import me.rerere.ai.ui.finishReasoning
 import net.weero.measix.pilot.data.ai.request.ContextBudget
 import net.weero.measix.pilot.data.ai.request.DurableMessageLocator
 import net.weero.measix.pilot.data.ai.ToolExecutionFact
@@ -27,6 +30,10 @@ import net.weero.measix.pilot.data.model.ConversationModelContextApplicability
 import net.weero.measix.pilot.data.model.ConversationModelContextEntry
 import net.weero.measix.pilot.data.model.MessageNode
 import net.weero.measix.pilot.service.ConversationDisclosureSnapshotService
+import kotlinx.datetime.TimeZone
+import kotlinx.datetime.toInstant
+import kotlinx.datetime.toLocalDateTime
+import kotlin.time.Instant
 import kotlin.time.Clock
 import kotlin.uuid.Uuid
 
@@ -36,6 +43,41 @@ import kotlin.uuid.Uuid
  * 两者由同一个 [ConversationCommandCoordinator] 分发，仍是一个写入口、一个事务。
  */
 internal object TurnTransition {
+
+    /** Allocate Step facts while preparing commands, before the pure reducer executes. */
+    internal fun openStep(ordinal: Int, stepId: Uuid = Uuid.random()) = UIMessagePart.Step(
+        stepId = stepId,
+        ordinal = ordinal,
+        startedAt = Clock.System.now(),
+    )
+
+    internal fun recordModelResult(
+        message: UIMessage,
+        stepId: Uuid,
+        result: StepModelResult,
+    ): UIMessage {
+        val step = message.parts.filterIsInstance<UIMessagePart.Step>().last()
+        require(step.stepId == stepId && step.outcome == null && step.modelResult == null) {
+            "Model result must belong to the unsampled open Step"
+        }
+        return message.copy(parts = message.parts.map {
+            if (it === step) step.copy(modelResult = result) else it
+        })
+    }
+
+    /** The last result and the next sampling boundary are rooted by the same checkpoint. */
+    internal fun advanceCompletedToolStep(message: UIMessage): UIMessage {
+        val index = message.parts.indexOfLast { it is UIMessagePart.Step }
+        require(index >= 0) { "A Turn must have a Step before executing tools" }
+        val step = message.parts[index] as UIMessagePart.Step
+        val tools = message.parts.drop(index + 1).filterIsInstance<UIMessagePart.Tool>()
+        if (step.outcome != null || step.modelResult == null || tools.isEmpty() || tools.any { !it.hasReplayResult }) {
+            return message
+        }
+        return message.copy(parts = message.parts.mapIndexed { partIndex, part ->
+            if (partIndex == index) step.copy(outcome = StepOutcome.Continue, finishedAt = Clock.System.now()) else part
+        } + openStep(step.ordinal + 1))
+    }
 
     /** 把一条 Turn 命令归约到新的 transcript 快照；结构命令不在此列。 */
     internal fun reduce(
@@ -265,7 +307,9 @@ internal object TurnTransition {
         // 命令协议只接受合法 canonical envelope；畸形内容不得进入 durable 历史。
         ConversationDisclosureSnapshotService.requireCanonical(command.modelContextCandidate)
 
-        val slot = openAssistantMessage(command.assistantMessageId)
+        require(command.initialStep.ordinal == 0 && command.initialStep.outcome == null && command.initialStep.modelResult == null)
+        require(command.initialStep.stepId != Uuid.NIL)
+        val slot = openAssistantMessage(command.assistantMessageId, command.initialStep)
         val nodes = current.nodes.toMutableList()
         if (target.appendVariantToExistingAssistantNode) {
             val last = nodes[nodes.lastIndex]
@@ -313,7 +357,14 @@ internal object TurnTransition {
             "Tool Output compaction patches contain duplicate locators"
         }
         val activePatches = patches.filter { it.locator.assistantMessageId == assistantMessageId }
+        if (command.terminalStatus == TurnExecutionStatus.COMPLETED) {
+            val finalAssistant = command.assistantMessage ?: requireNotNull(current.findMessage(assistantMessageId))
+            require(finalAssistant.parts.filterIsInstance<UIMessagePart.Step>().lastOrNull()?.modelResult != null) {
+                "A completed Turn requires a sampled Final Step"
+            }
+        }
         command.assistantMessage?.let { projected ->
+            validateStepEvolution(requireNotNull(current.findMessage(assistantMessageId)), projected, activePatches)
             // 只有 COMPLETED 终态是 model-output rooting：取消/失败终态会关闭未完工具（无 patch），不参与压缩守卫。
             if (command.terminalStatus == TurnExecutionStatus.COMPLETED) {
                 validateActiveCompactionProjection(current, assistantMessageId, projected, activePatches)
@@ -323,7 +374,7 @@ internal object TurnTransition {
         patches.filterNot { it.locator.assistantMessageId == assistantMessageId }.forEach { patch ->
             result = applyHistoricalToolOutputCompactionPatch(result, patch)
         }
-        result = result.finishReasoning(assistantMessageId)
+        result = result.finishReasoning(assistantMessageId, command.finishedAt.toInstant(TimeZone.currentSystemDefault()))
         toMessageTerminalStatus(command.terminalStatus)?.let { status ->
             result = result.markAssistantTerminalInternal(
                 assistantMessageId,
@@ -334,8 +385,15 @@ internal object TurnTransition {
         }
         result = result.markAssistantFinishedAt(assistantMessageId, command.finishedAt)
         // 收口唯一仍开放的尾部 Step：COMPLETED→Final，其余终态映射到对应 StepOutcome；
-        // 其间任何未闭合的前序 Step 一并落 Continue（§6.2 不变量）。
-        return result.closingStepsInPlace(assistantMessageId, stepOutcomeForTerminal(command.terminalStatus))
+        // 前序 Step 必须已由最后一个 Tool Result checkpoint 关闭。
+        val closed = result.closingStepsInPlace(
+            assistantMessageId, stepOutcomeForTerminal(command.terminalStatus),
+            command.finishedAt.toInstant(TimeZone.currentSystemDefault()),
+        )
+        V3TranscriptValidator.validateParts(
+            requireNotNull(closed.findMessage(assistantMessageId)).parts, allowOpen = false,
+        )
+        return closed
     }
 
     private fun recoverInterruptedTurn(
@@ -351,12 +409,14 @@ internal object TurnTransition {
         }
         val targetMessage = result.findMessage(command.assistantMessageId)
         if (targetMessage != null) {
-            val closedMessage = net.weero.measix.pilot.service.turn.closeOpenTurnForProcessRestart(targetMessage, emptySet())
+            val closedMessage = net.weero.measix.pilot.service.turn.closeOpenTurnForProcessRestart(
+                targetMessage, emptySet(), now = command.finishedAt.toInstant(TimeZone.currentSystemDefault()),
+            )
             if (closedMessage !== targetMessage) {
                 result = result.replaceMessageById(command.assistantMessageId, closedMessage, requireLastNode = false)
             }
         }
-        result = result.finishReasoning(command.assistantMessageId)
+        result = result.finishReasoning(command.assistantMessageId, command.finishedAt.toInstant(TimeZone.currentSystemDefault()))
         result = result.markAssistantTerminalInternal(
             command.assistantMessageId,
             MessageTerminalStatus.INTERRUPTED,
@@ -368,16 +428,18 @@ internal object TurnTransition {
     /** 所有终态统一覆盖中间 step 时间，确保消息 Total 表示完整 turn 生命周期。 */
     private fun ConversationAggregateSnapshot.markAssistantFinishedAt(
         messageId: Uuid,
-        finishedAt: kotlinx.datetime.LocalDateTime,
+        finishedAt: LocalDateTime,
     ): ConversationAggregateSnapshot {
         val message = findMessage(messageId) ?: return this
         return replaceMessageById(messageId, message.copy(finishedAt = finishedAt), requireLastNode = false)
     }
 
-    private fun ConversationAggregateSnapshot.finishReasoning(messageId: Uuid): ConversationAggregateSnapshot {
+    private fun ConversationAggregateSnapshot.finishReasoning(messageId: Uuid, finishedAt: Instant): ConversationAggregateSnapshot {
         val message = findMessage(messageId) ?: return this
         val unfinished = message.parts.any { it is UIMessagePart.Reasoning && it.finishedAt == null }
-        return if (unfinished) replaceMessageById(messageId, message.finishReasoning(), false) else this
+        return if (unfinished) replaceMessageById(messageId, message.copy(parts = message.parts.map {
+            if (it is UIMessagePart.Reasoning && it.finishedAt == null) it.copy(finishedAt = finishedAt) else it
+        }), false) else this
     }
 
     private fun toMessageTerminalStatus(status: TurnExecutionStatus): MessageTerminalStatus? = when (status) {
@@ -397,22 +459,19 @@ internal object TurnTransition {
         else -> error("finalizeTurn received non-terminal status $status")
     }
 
-    /**
-     * 关闭 transcript 中仍开放的 Step：非尾部一律 `Continue`，尾部按 [trailingOutcome] 落定。
-     * [trailingOutcome] 为 null 表示 checkpoint 阶段——尾部 Step 仍开放，等待下一次采样或终态。
-     * 已闭合的 Step 不重开，保证幂等重放。
-     */
-    private fun UIMessage.closingSteps(trailingOutcome: StepOutcome?): UIMessage {
+    /** Close only the trailing open Step at the command's stable terminal time. */
+    private fun UIMessage.closingSteps(trailingOutcome: StepOutcome, finishedAt: Instant): UIMessage {
         val stepIndices = parts.indices.filter { parts[it] is UIMessagePart.Step }
-        if (stepIndices.isEmpty()) return this
+        require(stepIndices.isNotEmpty()) { "A Turn must have a Step" }
         val trailingIndex = stepIndices.last()
         var changed = false
         val updated = parts.mapIndexed { index, part ->
             val step = part as? UIMessagePart.Step ?: return@mapIndexed part
             if (step.outcome != null) return@mapIndexed part
-            val outcome = if (index == trailingIndex) trailingOutcome ?: return@mapIndexed part else StepOutcome.Continue
+            require(index == trailingIndex) { "A previous Step must close before the next Step opens" }
+            val outcome = trailingOutcome
             changed = true
-            step.copy(outcome = outcome)
+            step.copy(outcome = outcome, finishedAt = finishedAt)
         }
         return if (changed) copy(parts = updated) else this
     }
@@ -420,9 +479,10 @@ internal object TurnTransition {
     private fun ConversationAggregateSnapshot.closingStepsInPlace(
         messageId: Uuid,
         trailingOutcome: StepOutcome,
+        finishedAt: Instant,
     ): ConversationAggregateSnapshot {
         val message = findMessage(messageId) ?: return this
-        val closed = message.closingSteps(trailingOutcome)
+        val closed = message.closingSteps(trailingOutcome, finishedAt)
         return if (closed === message) this else replaceMessageById(messageId, closed, requireLastNode = false)
     }
 
@@ -443,6 +503,13 @@ internal object TurnTransition {
         current: ConversationAggregateSnapshot,
         command: TurnCheckpoint,
     ): ConversationAggregateSnapshot {
+        validateCheckpointFacts(command)
+        validateStepEvolution(
+            requireNotNull(current.findMessage(command.turn.assistantMessageId)),
+            command.assistantMessage,
+            (command as? ModelResponseCheckpoint)?.toolOutputCompactionPatches.orEmpty()
+                .filter { it.locator.assistantMessageId == command.turn.assistantMessageId },
+        )
         val patches = if (command is ModelResponseCheckpoint) command.toolOutputCompactionPatches else emptyList()
         require(patches.map { it.locator }.distinct().size == patches.size) {
             "Tool Output compaction patches contain duplicate locators"
@@ -455,15 +522,101 @@ internal object TurnTransition {
         if (command is ModelResponseCheckpoint && command.turnStatus == TurnExecutionStatus.RUNNING) {
             validateActiveCompactionProjection(current, assistantMessageId, command.assistantMessage, activePatches)
         }
+        V3TranscriptValidator.validateParts(
+            command.assistantMessage.parts, allowOpen = true,
+        )
+        require(command.assistantMessage.parts.filterIsInstance<UIMessagePart.Step>().any { it.stepId == command.step.stepId }) {
+            "Checkpoint Step does not belong to its Assistant"
+        }
         var replaced = current.replaceMessageById(
             assistantMessageId,
-            command.assistantMessage.closingSteps(trailingOutcome = null),
+            command.assistantMessage,
             requireLastNode = true,
         )
         patches.filterNot { it.locator.assistantMessageId == assistantMessageId }.forEach { patch ->
             replaced = applyHistoricalToolOutputCompactionPatch(replaced, patch)
         }
         return replaced
+    }
+
+    /** A checkpoint may advance the open Step; committed identities and closed history are immutable. */
+    private fun validateStepEvolution(
+        source: UIMessage,
+        projected: UIMessage,
+        patches: List<ToolOutputCompactionPatch>,
+    ) {
+        val before = source.parts.filterIsInstance<UIMessagePart.Step>()
+        val after = projected.parts.filterIsInstance<UIMessagePart.Step>()
+        require(before.isNotEmpty() && after.size >= before.size) { "A Turn cannot lose its committed Steps" }
+        before.forEachIndexed { index, step ->
+            val next = after[index]
+            require(next.stepId == step.stepId && next.ordinal == step.ordinal && next.startedAt == step.startedAt) {
+                "A committed Step identity or start time cannot change"
+            }
+            if (step.modelResult != null) require(next.modelResult == step.modelResult) { "A sampled Step cannot be sampled again" }
+            if (step.outcome != null) require(next == step) { "A closed Step cannot change" }
+        }
+        val expected = patches.fold(source) { message, patch -> applyToolOutputCompactionPatch(message, patch) }
+        val openStart = expected.parts.indexOfLast { it is UIMessagePart.Step }
+        require(projected.parts.take(openStart) == expected.parts.take(openStart)) {
+            "Closed Step contents may change only through a typed Tool Output compaction patch"
+        }
+        val tools = projected.getTools().associateBy { it.localCallId }
+        expected.getTools().forEach { previous ->
+            val next = requireNotNull(tools[previous.localCallId]) { "A committed Tool Call cannot disappear" }
+            require(next.stepId == previous.stepId && next.providerCallId == previous.providerCallId &&
+                next.toolName == previous.toolName && next.input == previous.input) {
+                "A committed Tool Call identity and arguments cannot change"
+            }
+            if (previous.hasReplayResult) require(next == previous) { "A committed Tool Result cannot change" }
+        }
+    }
+
+    /** Validate execution/transcript consistency before the transaction, never during UI publication. */
+    private fun validateCheckpointFacts(command: TurnCheckpoint) {
+        require(command.assistantMessage.id == command.turn.assistantMessageId)
+        val sampledStep = command.assistantMessage.parts.filterIsInstance<UIMessagePart.Step>()
+            .singleOrNull { it.stepId == command.step.stepId }
+        require(sampledStep?.modelResult != null) { "Checkpoint requires a completed model sampling result for its Step" }
+        val tools = command.assistantMessage.getTools()
+        val execution = (command as? ToolExecutionCheckpoint)?.toolExecution
+        execution?.let { fact ->
+            require(fact.assistantMessageId == command.turn.assistantMessageId && fact.stepId == command.step.stepId)
+            val tool = tools.singleOrNull { it.stepId == fact.stepId && it.localCallId == fact.localCallId }
+                ?: error("Execution fact does not resolve to its Tool Call")
+            require(tool.providerCallId == fact.providerCallId && tool.toolName == fact.toolName)
+            if (command is ToolExecutionStartedCheckpoint) {
+                require(fact.status == ToolExecutionStatus.STARTED && !tool.hasReplayResult)
+                require(tool.interactionState == ToolInteractionState.NotRequired || tool.interactionState == ToolInteractionState.Approved)
+            }
+        }
+        if (command is ModelResponseCheckpoint) {
+            val pending = tools.any { it.isPending }
+            require(command.turnStatus == if (pending) TurnExecutionStatus.AWAITING_USER else TurnExecutionStatus.RUNNING) {
+                "Model-response pause status must match its complete Tool batch"
+            }
+        }
+        if (command is ToolResultCheckpoint) {
+            require(command.toolResults.isNotEmpty()) { "Tool result checkpoint is empty" }
+            require(command.toolResults.map { it.locator }.distinct().size == command.toolResults.size)
+            command.toolResults.forEach { fact ->
+                require(fact.locator.assistantMessageId == command.turn.assistantMessageId && fact.locator.stepId == command.step.stepId)
+                val tool = tools.singleOrNull { it.localCallId == fact.locator.localCallId && it.stepId == fact.locator.stepId }
+                    ?: error("Result fact does not resolve to its Tool Call")
+                require(tool.resultStatus == fact.status) { "Tool transcript and result fact disagree" }
+            }
+            execution?.let { fact ->
+                require(command.toolResults.size == 1 && command.toolResults.single().locator.localCallId == fact.localCallId)
+                val expected = when (fact.status) {
+                    ToolExecutionStatus.COMPLETED -> ToolResultStatus.COMPLETED
+                    ToolExecutionStatus.FAILED -> ToolResultStatus.FAILED
+                    ToolExecutionStatus.CANCELLED -> ToolResultStatus.CANCELLED
+                    ToolExecutionStatus.UNKNOWN -> ToolResultStatus.UNKNOWN
+                    else -> error("Tool result has a nonterminal execution fact")
+                }
+                require(command.toolResults.single().status == expected)
+            }
+        }
     }
 
     /**
@@ -636,18 +789,15 @@ internal object TurnTransition {
 
     /**
      * START 与首个 [UIMessagePart.Step] 同事务落库：已提交 Turn 至少有一个 Step，模型首字前的
-     * 失败也有显式 Step 可收口。首个采样复用该 Step（accumulator 从草稿尾部 Step 播种）。
+     * 失败也有显式 Step 可收口。首个采样直接使用该 Step。
      */
-    private fun openAssistantMessage(id: Uuid): UIMessage = UIMessage(
+    private fun openAssistantMessage(id: Uuid, initialStep: UIMessagePart.Step): UIMessage = UIMessage(
         id = id,
         role = MessageRole.ASSISTANT,
         parts = listOf(
-            UIMessagePart.Step(
-                stepId = Uuid.random(),
-                ordinal = 0,
-                startedAt = Clock.System.now(),
-            ),
+            initialStep,
         ),
+        createdAt = initialStep.startedAt.toLocalDateTime(TimeZone.currentSystemDefault()),
     )
 
     private fun ConversationAggregateSnapshot.findMessage(messageId: Uuid): UIMessage? {
@@ -713,16 +863,6 @@ internal data class StartTurnTarget(
     val anchorMessageId: Uuid,
     val selectedPrefixMessageIds: List<Uuid>,
     val appendVariantToExistingAssistantNode: Boolean,
-)
-
-internal fun cancelPendingToolByUser(tool: UIMessagePart.Tool): UIMessagePart.Tool = tool.copy(
-    output = listOf(
-        UIMessagePart.Text(
-            """{"status":"cancelled","error":"Generation cancelled by user before tool execution completed."}""",
-        ),
-    ),
-    interactionState = ToolInteractionState.Denied("Generation cancelled by user"),
-    resultStatus = ToolResultStatus.CANCELLED,
 )
 
 internal fun interruptPendingTool(tool: UIMessagePart.Tool): UIMessagePart.Tool = tool.copy(

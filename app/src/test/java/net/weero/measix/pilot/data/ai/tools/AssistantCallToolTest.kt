@@ -72,7 +72,7 @@ class AssistantCallToolTest {
         providerCallId = "provider-call",
         reportMetadata = { _, _ -> },
         resolveAttachments = { ToolAttachmentResolution(failureReason = "not_used") },
-        reportChildConversation = { },
+        reportChildRun = { },
         registerUnpublishedResource = {},
     )
 

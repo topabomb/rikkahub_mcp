@@ -33,6 +33,7 @@ import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.testsupport.toModelRequest
 import me.rerere.ai.testsupport.toModelRequests
 import me.rerere.ai.ui.UIMessagePart
+import me.rerere.ai.ui.ToolResultStatus
 import me.rerere.ai.ui.mergeMessageMetadata
 import me.rerere.ai.ui.metadataAs
 import me.rerere.ai.ui.toMetadata
@@ -53,6 +54,17 @@ import org.junit.Test
  * 纯响应解析契约在 `ResponseAPIParserTest`。
  */
 class ResponseAPISerializerTest {
+
+    @Test
+    fun `tool only Steps retain alternating calls and results`() {
+        val wire = invokeBuildMessages(me.rerere.ai.testsupport.consecutiveToolSteps())
+        assertEquals(listOf("function_call", "function_call_output", "function_call", "function_call_output"), wire.map {
+            it.jsonObject["type"]!!.jsonPrimitive.content
+        })
+        assertEquals(listOf("call_1", "call_1", "call_2", "call_2"), wire.map {
+            it.jsonObject["call_id"]!!.jsonPrimitive.content
+        })
+    }
 
     private lateinit var api: ResponseAPI
 
@@ -566,6 +578,7 @@ class ResponseAPISerializerTest {
                     localCallId = Uuid.random(), stepId = Uuid.random(), providerCallId = "call_image",
                     toolName = "capture",
                     input = "{}",
+                    resultStatus = ToolResultStatus.COMPLETED,
                     output = listOf(
                         UIMessagePart.Text("Captured image"),
                         UIMessagePart.Text("[Attachment path=/upload/abc123.png type=image input=reference_only]"),
@@ -594,6 +607,7 @@ class ResponseAPISerializerTest {
                     localCallId = Uuid.random(), stepId = Uuid.random(), providerCallId = "call_image",
                     toolName = "capture",
                     input = "{}",
+                    resultStatus = ToolResultStatus.COMPLETED,
                     output = listOf(
                         UIMessagePart.Text("Captured image"),
                         UIMessagePart.Image("data:image/png;base64,AQ=="),
@@ -670,7 +684,7 @@ class ResponseAPISerializerTest {
         ).choices.single().message!!
         val executedParts = parsed.parts.map { part ->
             if (part is UIMessagePart.Tool) {
-                part.copy(output = listOf(UIMessagePart.Text("result")))
+                part.copy(resultStatus = ToolResultStatus.COMPLETED, output = listOf(UIMessagePart.Text("result")))
             } else {
                 part
             }
@@ -737,7 +751,7 @@ class ResponseAPISerializerTest {
         val executed = parsed.copy(
             parts = parsed.parts.map { part ->
                 if (part is UIMessagePart.Tool) {
-                    part.copy(output = listOf(UIMessagePart.Text("tool result")))
+                    part.copy(resultStatus = ToolResultStatus.COMPLETED, output = listOf(UIMessagePart.Text("tool result")))
                 } else {
                     part
                 }
@@ -792,6 +806,7 @@ class ResponseAPISerializerTest {
                     localCallId = Uuid.random(), stepId = Uuid.random(), providerCallId = "call_1",
                     toolName = "generate_image",
                     input = "{}",
+                    resultStatus = ToolResultStatus.COMPLETED,
                     output = listOf(UIMessagePart.Text(toolMarker, metadata = projectionMetadata)),
                 ),
                 UIMessagePart.Text(assistantMarker, metadata = projectionMetadata),
@@ -908,7 +923,7 @@ class ResponseAPISerializerTest {
         val executed = parsed.copy(
             parts = parsed.parts.map { part ->
                 if (part is UIMessagePart.Tool) {
-                    part.copy(output = listOf(UIMessagePart.Text("${part.toolName} result")))
+                    part.copy(resultStatus = ToolResultStatus.COMPLETED, output = listOf(UIMessagePart.Text("${part.toolName} result")))
                 } else {
                     part
                 }
@@ -949,7 +964,7 @@ class ResponseAPISerializerTest {
         val firstMessage = firstChunk.choices.single().message!!.copy(
             parts = firstChunk.choices.single().message!!.parts.map { part ->
                 if (part is UIMessagePart.Tool) {
-                    part.copy(output = listOf(UIMessagePart.Text("${part.toolName} result")))
+                    part.copy(resultStatus = ToolResultStatus.COMPLETED, output = listOf(UIMessagePart.Text("${part.toolName} result")))
                 } else {
                     part
                 }
@@ -1079,52 +1094,48 @@ class ResponseAPISerializerTest {
     }
 
     @Test
-    fun `responses streaming function call should persist call id instead of output item id`() {
-        val streamState = ResponseStreamState()
-        val events = listOf(
-            """
-            {
-              "type": "response.output_item.added",
-              "item": {
-                "id": "fc_123",
-                "call_id": "call_123",
-                "type": "function_call",
-                "name": "lookup",
-                "arguments": ""
-              }
+    fun `response tool arguments are emitted once and preserve wire call id across event forms`() {
+        val arguments = "{\"query\":\"test\"}"
+        for (source in listOf("added", "delta", "done")) {
+            val streamState = ResponseStreamState()
+            val added = buildJsonObject {
+                put("type", "response.output_item.added")
+                put("item", buildJsonObject {
+                    put("id", "fc_123")
+                    put("call_id", "call_123")
+                    put("type", "function_call")
+                    put("name", "lookup")
+                    put("arguments", if (source == "added") arguments else "")
+                })
             }
-            """,
-            """
-            {
-              "type": "response.function_call_arguments.done",
-              "item_id": "fc_123",
-              "arguments": "{\"query\":\"test\"}"
+            val deltas = if (source == "delta") listOf("{\"query\":", "\"test\"}").map { delta ->
+                buildJsonObject {
+                    put("type", "response.function_call_arguments.delta")
+                    put("item_id", "fc_123")
+                    put("delta", delta)
+                }
+            } else emptyList()
+            val done = buildJsonObject {
+                put("type", "response.function_call_arguments.done")
+                put("item_id", "fc_123")
+                put("arguments", arguments)
             }
-            """
-        ).mapNotNull { event ->
-            api.parseResponseDelta(Json.parseToJsonElement(event.trimIndent()).jsonObject, streamState)
+            val chunks = (listOf(added) + deltas + done).mapNotNull { event ->
+                api.parseResponseDelta(event, streamState)
+            }
+            val tools = chunks.flatMap { it.choices.single().delta!!.getTools() }
+            assertEquals(source, arguments, tools.joinToString("") { it.input })
+            assertTrue(source, tools.all { it.providerCallId == "call_123" })
+            assertEquals("lookup", tools.first().toolName)
+            assertTrue(chunks.all {
+                it.choices.single().toolCallSlots.single() == me.rerere.ai.ui.ProviderToolCallSlot.Item("fc_123")
+            })
+            val replay = invokeBuildMessages(listOf(UIMessage(role = MessageRole.ASSISTANT, parts = listOf(
+                tools.first().copy(input = arguments, resultStatus = ToolResultStatus.COMPLETED,
+                    output = listOf(UIMessagePart.Text("result")))),
+            )))
+            assertEquals(listOf("call_123", "call_123"), replay.map { it.jsonObject["call_id"]?.jsonPrimitive?.content })
         }
-
-        // Parser contract: the call_id (not the fc_* item id) is what the parser stamps on every
-        // function_call delta, the added event carries the name, and the done event carries the full
-        // arguments. Cross-event assembly is the app StepOutputAccumulator's contract.
-        val tools = events.flatMap { it.choices.single().delta!!.parts }.filterIsInstance<UIMessagePart.Tool>()
-        assertTrue(tools.isNotEmpty())
-        assertTrue(tools.all { it.providerCallId == "call_123" })
-        assertEquals("lookup", tools.first().toolName)
-        assertEquals("{\"query\":\"test\"}", tools.last().input)
-
-        val mergedTool = tools.first().copy(
-            input = "{\"query\":\"test\"}",
-            output = listOf(UIMessagePart.Text("result")),
-        )
-        val replay = invokeBuildMessages(
-            listOf(UIMessage(role = MessageRole.ASSISTANT, parts = listOf(mergedTool)))
-        )
-        assertEquals(
-            listOf("call_123", "call_123"),
-            replay.map { it.jsonObject["call_id"]?.jsonPrimitive?.content }
-        )
     }
 
     @Test

@@ -1,5 +1,7 @@
 package net.weero.measix.pilot.service.runtime
 
+import net.weero.measix.pilot.testkit.sampledModelResult
+
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -59,10 +61,15 @@ class ConversationRuntimeTest {
         UIMessage(id = Uuid.random(), role = MessageRole.USER, parts = listOf(UIMessagePart.Text(text)))
 
     // Deterministic call identity so tests can reference a tool by its position within a message.
-    private val stepId = Uuid.random()
+    private val stepId = Uuid.parse("10000000-0000-0000-0000-000000000001")
     private fun stableId(ordinal: Int): Uuid =
-        Uuid.parse("00000000-0000-0000-0000-" + ordinal.toLong().toString(16).padStart(12, '0'))
+        Uuid.parse("00000000-0000-0000-0000-" + (ordinal + 1).toLong().toString(16).padStart(12, '0'))
     private fun loc(messageId: Uuid, ordinal: Int) = ToolCallLocator(messageId, stepId, stableId(ordinal))
+
+    private fun step(sampled: Boolean = true) = UIMessagePart.Step(
+        stepId, 0, kotlin.time.Instant.DISTANT_PAST,
+        modelResult = if (sampled) sampledModelResult() else null,
+    )
 
     private val commandLock = Mutex()
 
@@ -70,7 +77,7 @@ class ConversationRuntimeTest {
         commandLock.withLock {
             val old = snapshot.value.durable
             if (command is StartTurn) {
-                val started = command.copy(epoch = nextTurnEpoch())
+                val started = command.copy(epoch = nextTurnEpoch(), initialStep = step(sampled = false))
                 validateConversationCommandOwner(id, snapshot.value.stream, started, currentGenerationTurnId())
                 val change = ConversationTransition.plan(old, started, old.header.updateAt)
                 val snapshot = (change as ConversationChange.Durable).snapshot
@@ -232,7 +239,7 @@ class ConversationRuntimeTest {
         val scope = CoroutineScope(Job())
         val rt = runtime(scope)
         val first = rt.startTurn(Uuid.random(), Uuid.random())
-        rt.applyCommand(FinalizeTurn(first, null, TurnExecutionStatus.COMPLETED, null))
+        rt.applyCommand(FinalizeTurn(first, null, TurnExecutionStatus.CANCELLED, null))
         val second = rt.startTurn(Uuid.random(), Uuid.random())
 
         assertEquals(
@@ -375,6 +382,7 @@ class ConversationRuntimeTest {
             id = handle.assistantMessageId,
             role = MessageRole.ASSISTANT,
             parts = listOf(
+                step(),
                 UIMessagePart.Tool(
                     localCallId = stableId(0), stepId = stepId, providerCallId = "approval",
                     toolName = "approval_tool",
@@ -437,6 +445,7 @@ class ConversationRuntimeTest {
             id = handle.assistantMessageId,
             role = MessageRole.ASSISTANT,
             parts = listOf(
+                step(),
                 UIMessagePart.Tool(
                     localCallId = stableId(0), stepId = stepId, providerCallId = "approval",
                     toolName = "approval_tool",
@@ -450,7 +459,8 @@ class ConversationRuntimeTest {
 
         val pending = streamed.copy(
             parts = listOf(
-                (streamed.parts.single() as UIMessagePart.Tool).copy(
+                step(),
+                streamed.getTools().single().copy(
                     interactionState = ToolInteractionState.AwaitingApproval,
                 )
             ),
@@ -516,11 +526,12 @@ class ConversationRuntimeTest {
             id = handle.assistantMessageId,
             role = MessageRole.ASSISTANT,
             parts = listOf(
+                step(),
                 UIMessagePart.Tool(
                     localCallId = stableId(0), stepId = stepId, providerCallId = "ask",
                     toolName = "ask_user",
                     input = "{}",
-                    interactionState = ToolInteractionState.AwaitingApproval,
+                    interactionState = ToolInteractionState.AwaitingInput,
                 )
             ),
         )
@@ -591,6 +602,7 @@ class ConversationRuntimeTest {
             id = handle.assistantMessageId,
             role = MessageRole.ASSISTANT,
             parts = listOf(
+                step(),
                 UIMessagePart.Tool(
                     localCallId = stableId(1), stepId = stepId, providerCallId = "image",
                     toolName = "generate_image",
@@ -654,6 +666,7 @@ class ConversationRuntimeTest {
             id = handle.assistantMessageId,
             role = MessageRole.ASSISTANT,
             parts = listOf(
+                step(),
                 UIMessagePart.Tool(
                     localCallId = stableId(0), stepId = stepId, providerCallId = "call-1",
                     toolName = "generate_image",
@@ -666,7 +679,7 @@ class ConversationRuntimeTest {
         assertEquals(ToolLivePhase.CALL_STREAMING, rt.snapshot.value.stream?.toolLivePhases?.get(locator))
 
         val ready = assembling.copy(
-            parts = listOf((assembling.parts.single() as UIMessagePart.Tool).copy(input = "{\"prompt\":\"sky\"}")),
+            parts = listOf(step(), assembling.getTools().single().copy(input = "{\"prompt\":\"sky\"}")),
         )
         rt.applyCommand(ModelResponseCheckpoint(
                 turn = handle,
@@ -697,8 +710,10 @@ class ConversationRuntimeTest {
 
         val result = ready.copy(
             parts = listOf(
-                (ready.parts.single() as UIMessagePart.Tool).copy(
+                step(),
+                ready.getTools().single().copy(
                     output = listOf(UIMessagePart.Text("{\"status\":\"completed\"}")),
+                    resultStatus = ToolResultStatus.COMPLETED,
                 ),
             ),
         )
@@ -729,6 +744,7 @@ class ConversationRuntimeTest {
             id = handle.assistantMessageId,
             role = MessageRole.ASSISTANT,
             parts = listOf(
+                step(),
                 UIMessagePart.Tool(localCallId = stableId(0), stepId = stepId, providerCallId = "call-1", toolName = "first", input = "{}"),
                 UIMessagePart.Tool(localCallId = stableId(1), stepId = stepId, providerCallId = "call-2", toolName = "second", input = "{}"),
             ),
@@ -764,8 +780,8 @@ class ConversationRuntimeTest {
 
         val failedMessage = message.copy(
             parts = message.parts.mapIndexed { index, part ->
-                if (index == 1 && part is UIMessagePart.Tool) {
-                    part.copy(output = listOf(UIMessagePart.Text("{\"status\":\"failed\"}")))
+                if (part is UIMessagePart.Tool && part.localCallId == stableId(1)) {
+                    part.copy(output = listOf(UIMessagePart.Text("{\"status\":\"failed\"}")), resultStatus = ToolResultStatus.FAILED)
                 } else {
                     part
                 }
@@ -795,6 +811,7 @@ class ConversationRuntimeTest {
             id = handle.assistantMessageId,
             role = MessageRole.ASSISTANT,
             parts = listOf(
+                step(),
                 UIMessagePart.Tool(
                     localCallId = stableId(0), stepId = stepId, providerCallId = "question",
                     toolName = "ask_user",

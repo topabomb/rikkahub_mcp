@@ -54,8 +54,7 @@ fun List<UIMessagePart>.groupMessageParts(): List<MessagePartBlock> {
             }
 
             is UIMessagePart.Step -> {
-                // Step 是结构标记，不渲染；它只界定模型采样边界。
-                flushThinkingSteps()
+                // 执行边界不参与可见内容分组，连续思考与工具保持同一条折叠时间线。
             }
 
             is UIMessagePart.Tool -> {

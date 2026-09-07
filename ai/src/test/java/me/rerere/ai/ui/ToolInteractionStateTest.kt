@@ -23,7 +23,9 @@ class ToolInteractionStateTest {
             ToolInteractionState.AwaitingInput,
             ToolInteractionState.Approved,
             ToolInteractionState.Denied("user rejected"),
+            ToolInteractionState.Denied(""),
             ToolInteractionState.Answered("""{"result":"ok"}"""),
+            ToolInteractionState.Answered(""),
         )
         for (state in states) {
             val encoded = json.encodeToString(ToolInteractionState.serializer(), state)
@@ -40,13 +42,6 @@ class ToolInteractionStateTest {
         assertTrue(json.encodeToString(ToolInteractionState.serializer(), ToolInteractionState.Approved).contains("approved"))
         assertTrue(json.encodeToString(ToolInteractionState.serializer(), ToolInteractionState.Denied("r")).contains("denied"))
         assertTrue(json.encodeToString(ToolInteractionState.serializer(), ToolInteractionState.Answered("a")).contains("answered"))
-    }
-
-    @Test
-    fun `denied and answered preserve their payloads`() {
-        assertEquals("Security concern", ToolInteractionState.Denied("Security concern").reason)
-        assertEquals("", ToolInteractionState.Denied("").reason)
-        assertEquals("""{"q":"a"}""", ToolInteractionState.Answered("""{"q":"a"}""").answer)
     }
 
     private fun tool(interaction: ToolInteractionState, output: List<UIMessagePart> = emptyList()) = UIMessagePart.Tool(
@@ -81,7 +76,7 @@ class ToolInteractionStateTest {
 
     @Test
     fun `a replay result always blocks re-assembly`() {
-        val withResult = tool(ToolInteractionState.Approved, output = listOf(UIMessagePart.Text("done")))
+        val withResult = tool(ToolInteractionState.Approved).copy(resultStatus = ToolResultStatus.COMPLETED)
         assertTrue(withResult.hasReplayResult)
         assertFalse(withResult.canResumeResultAssembly)
     }

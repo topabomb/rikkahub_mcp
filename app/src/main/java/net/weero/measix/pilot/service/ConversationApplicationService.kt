@@ -304,7 +304,7 @@ class ConversationApplicationService(
 
     suspend fun forkAtMessage(conversationId: Uuid, messageId: Uuid): Uuid {
         turnFinalizer.stopTurn(conversationId)
-        val current = subAssistantLifecycle.finalizeRunsBeforeTreeMutation(liveSnapshot(conversationId))
+        val current = subAssistantLifecycle.requireClosedRunsBeforeTreeMutation(liveSnapshot(conversationId))
         val targetIndex = current.nodes.indexOfFirst { node -> node.messages.any { it.id == messageId } }
         if (targetIndex < 0) throw NoSuchElementException("Message not found")
 
@@ -406,7 +406,7 @@ class ConversationApplicationService(
 
     suspend fun deleteMessage(conversationId: Uuid, messageId: Uuid, failIfMissing: Boolean = true) {
         turnFinalizer.stopTurn(conversationId)
-        subAssistantLifecycle.finalizeRunsBeforeTreeMutation(liveSnapshot(conversationId))
+        subAssistantLifecycle.requireClosedRunsBeforeTreeMutation(liveSnapshot(conversationId))
         val runtime = runtimeRegistry.requireRuntime(conversationId)
         val before = runtime.snapshot.value
         commandCoordinator.executeOrThrow(conversationId, DeleteMessage(messageId))

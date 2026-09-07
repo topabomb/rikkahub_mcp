@@ -64,6 +64,27 @@ import kotlin.uuid.Uuid
 
 class TurnFinalizationAssistantCallTest {
     @Test
+    fun `parent failure cannot publish a stopped result while its linked child turn is still running`() = runTest {
+        val childId = Uuid.random()
+        val call = UIMessagePart.Tool(Uuid.random(), Uuid.random(), "call", "assistant_call", "{}")
+            .mergeSubAssistantCallMetadata(Json, buildInitialSubAssistantCallMetadata("run", Uuid.random(), "Child")
+                .copy(state = SubAssistantCallState.RUNNING, childConversationId = childId.toString()))
+        val assistant = UIMessage(role = MessageRole.ASSISTANT, parts = listOf(call))
+        val harness = harness(assistant, ToolExecutionStatus.STARTED, childId.toString())
+        coEvery { harness.repository.getTurnExecutions(childId) } returns listOf(
+            net.weero.measix.pilot.data.db.entity.TurnExecutionEntity(
+                Uuid.random().toString(), childId.toString(), Uuid.random().toString(), TurnExecutionStatus.RUNNING, null, 1, 1,
+            ),
+        )
+
+        val failure = runCatching { harness.prepare(assistant) }.exceptionOrNull()
+
+        assertTrue(failure is IllegalStateException)
+        assertTrue(harness.commands.isEmpty())
+        assertEquals(call, harness.snapshot.durable.currentMessages().last().getTools().single())
+    }
+
+    @Test
     fun `call without metadata can be interrupted before a child link is committed`() = runTest {
         for (status in listOf(null, ToolExecutionStatus.STARTED)) {
             val call = UIMessagePart.Tool(localCallId = Uuid.random(), stepId = Uuid.random(), providerCallId = "call", toolName = "assistant_call", input = "{\"task\":\"partial")
@@ -142,6 +163,7 @@ class TurnFinalizationAssistantCallTest {
                 model = model.modelId,
                 choices = listOf(UIMessageChoice(
                     index = 0,
+                    toolCallSlots = listOf(me.rerere.ai.ui.ProviderToolCallSlot.Index(0)),
                     delta = UIMessage(role = MessageRole.ASSISTANT, parts = listOf(
                         UIMessagePart.Tool(localCallId = Uuid.random(), stepId = Uuid.random(), providerCallId = "call", toolName = "assistant_call", input = "{\"task\":\"partial"),
                     )),
@@ -242,7 +264,7 @@ class TurnFinalizationAssistantCallTest {
         val registry = mockk<ConversationRuntimeRegistry>()
         every { registry.findRuntime(any()) } returns null
         val finalization = TurnFinalizer(repository, registry, coordinator, Json)
-        return Harness(handle, snapshot, runtime, coordinator, finalization, commands)
+        return Harness(handle, snapshot, runtime, coordinator, finalization, commands, repository)
     }
 
     private data class Harness(
@@ -252,9 +274,10 @@ class TurnFinalizationAssistantCallTest {
         val coordinator: ConversationCommandCoordinator,
         val finalization: TurnFinalizer,
         val commands: List<ConversationCommand>,
+        val repository: ConversationRepository,
     ) {
         suspend fun prepare(assistant: UIMessage): UIMessage = finalization.prepareOwnedAssistantForFailure(
-            snapshot, handle, assistant, "user_stop", true,
+            snapshot, handle, assistant, "user_stop",
         )!!
     }
 }

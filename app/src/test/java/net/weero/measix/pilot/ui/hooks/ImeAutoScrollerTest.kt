@@ -5,16 +5,15 @@ import org.junit.Test
 
 class ImeAutoScrollerTest {
     @Test
-    fun `ime expansion scrolls by positive delta and reset is observed`() {
-        assertEquals(240, imeScrollDelta(previousImeBottom = 0, currentImeBottom = 240))
-        assertEquals(0, imeScrollDelta(previousImeBottom = 240, currentImeBottom = 0))
-        assertEquals(240, imeScrollDelta(previousImeBottom = 0, currentImeBottom = 240))
-    }
-
-    @Test
-    fun `ime dismissal and shrinking animation never reverse scroll`() {
-        assertEquals(0, imeScrollDelta(previousImeBottom = 240, currentImeBottom = 180))
-        assertEquals(0, imeScrollDelta(previousImeBottom = 180, currentImeBottom = 0))
-        assertEquals(20, imeScrollDelta(previousImeBottom = 180, currentImeBottom = 200))
+    fun `only keyboard expansion produces a forward scroll delta`() {
+        listOf(
+            Triple(0, 240, 240),
+            Triple(180, 200, 20),
+            Triple(240, 240, 0),
+            Triple(240, 180, 0),
+            Triple(180, 0, 0),
+        ).forEach { (previous, current, expected) ->
+            assertEquals("IME $previous -> $current", expected, imeScrollDelta(previous, current))
+        }
     }
 }

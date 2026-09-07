@@ -103,10 +103,9 @@ internal class TurnRunState(
     var messages: List<UIMessage> = inputs.messages
         private set
 
-    val accumulator = StepOutputAccumulator.fromDraft(
-        assistantMessageId = assistantMessageId ?: Uuid.NIL,
-        activeMessage = messages.lastOrNull(),
-    )
+    val accumulator = StepOutputAccumulator()
+    val currentStepId: Uuid
+        get() = messages.last().parts.filterIsInstance<UIMessagePart.Step>().last().stepId
     val unpublishedResources = UnpublishedResourceScope()
     var latestStreamingProjection: UIMessage? = null
     val outputOrigins = RequestMessageOriginTracker()
@@ -139,7 +138,7 @@ internal class TurnRunState(
     }
 
     /** 阶段变化：转发给 turn owner 的 onPhase 汇。 */
-    suspend fun sendPhase(phase: String, toolName: String? = null) = inputs.onPhase(phase, toolName)
+    suspend fun sendPhase(phase: TurnRunPhase, toolName: String? = null) = inputs.onPhase(phase, toolName)
 
     suspend fun publishMessages(next: List<UIMessage>) {
         inputs.onAssistantObserved(next.last())
@@ -194,7 +193,7 @@ internal class TurnRunState(
         turnStatus: TurnExecutionStatus = TurnExecutionStatus.RUNNING,
         publishResources: Boolean = false,
         checkpointMessages: List<UIMessage> = messages,
-        stepId: Uuid = accumulator.currentStepId,
+        stepId: Uuid = currentStepId,
     ) = commit(
         ModelResponseCheckpoint(
             turn = handle,
@@ -227,7 +226,7 @@ internal class TurnRunState(
     suspend fun commitToolStateUpdated(
         toolExecution: ToolExecutionFact? = null,
         checkpointMessages: List<UIMessage> = messages,
-        stepId: Uuid = accumulator.currentStepId,
+        stepId: Uuid = currentStepId,
     ) = commit(
         ToolExecutionUpdatedCheckpoint(
             turn = handle,
@@ -251,7 +250,7 @@ internal class TurnRunState(
             step = StepHandle(
                 toolResults.firstOrNull()?.locator?.stepId
                     ?: toolExecution?.stepId
-                    ?: accumulator.currentStepId,
+                    ?: currentStepId,
             ),
             assistantMessage = checkpointMessages.last(),
             toolResults = toolResults,
@@ -285,7 +284,7 @@ internal class TurnRunState(
         }
         latestStreamingProjection = last
         if (last === current.last()) return current
-        return current.dropLast(1) + last
+        return current.withAssistant(last)
     }
 
     // 终态收口：step 完成时对最后一条消息应用 onStreamingFinish（reasoning 补时戳、base64 落盘）
@@ -299,16 +298,16 @@ internal class TurnRunState(
             transformers = outputTransformers,
         )
         if (last === current.last()) return current
-        return current.dropLast(1) + last
+        return current.withAssistant(last)
     }
 
     fun applyReplacements(replacements: Map<Uuid, UIMessagePart.Tool>) {
         if (replacements.isEmpty()) return
-        replaceMessages(messages.dropLast(1) + messages.last().let { msg ->
+        replaceMessages(messages.withAssistant(messages.last().let { msg ->
             msg.copy(parts = msg.parts.map { p ->
                 if (p is UIMessagePart.Tool) replacements[p.localCallId] ?: p else p
             })
-        })
+        }))
     }
 }
 

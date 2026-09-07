@@ -1,5 +1,7 @@
 package net.weero.measix.pilot.service.runtime
 
+import net.weero.measix.pilot.service.turn.TurnRunPhase
+
 import me.rerere.ai.core.ToolCallLocator
 import me.rerere.ai.ui.ToolInteractionState
 import me.rerere.ai.ui.ToolResultStatus
@@ -41,13 +43,13 @@ internal fun ConversationRuntimeSnapshot.toPresentationSnapshot(): ConversationP
     val rendered = if (draft == null || durable.nodes.isEmpty()) {
         durable.nodes
     } else {
-        val lastIndex = durable.nodes.lastIndex
-        durable.nodes.mapIndexed { index, node ->
-            if (index != lastIndex) node else node.copy(
-                messages = listOf(draft),
-                selectIndex = 0,
-            )
-        }
+        val node = durable.nodes.last()
+        require(node.currentMessage.id == draft.id) { "Stream must overlay the selected Assistant variant" }
+        TailNodeOverlay(durable.nodes, node.copy(
+            messages = node.messages.mapIndexed { index, message ->
+                if (index == node.selectIndex) draft else message
+            },
+        ))
     }
     return ConversationPresentationSnapshot(
         conversationId = durable.conversationId,
@@ -55,6 +57,19 @@ internal fun ConversationRuntimeSnapshot.toPresentationSnapshot(): ConversationP
         nodes = rendered,
         stream = stream,
     )
+}
+
+/** A read-only overlay shares the durable history without enumerating it for each chunk. */
+private class TailNodeOverlay(
+    private val base: List<MessageNode>,
+    private val tail: MessageNode,
+) : AbstractList<MessageNode>() {
+    override val size: Int get() = base.size
+
+    override fun get(index: Int): MessageNode {
+        if (index !in indices) throw IndexOutOfBoundsException("index: $index, size: $size")
+        return if (index == lastIndex) tail else base[index]
+    }
 }
 
 /**
@@ -84,8 +99,8 @@ val ToolLivePhase.isBusy: Boolean
 
 /**
  * Turn-level display state. [AWAITING_USER] covers both authorization approval and user-input
- * collection; the per-call [ToolLivePhase] distinguishes them. The durable Room encoding keeps
- * its historical AWAITING_APPROVAL name — this projection is the application-level meaning.
+ * collection; the per-call [ToolLivePhase] distinguishes them. Room records the durable pause as
+ * AWAITING_USER; this enum also includes transient preparation and streaming phases.
  *
  * 没有 IDLE 值：没有 active presentation（[ConversationPresentation.phase] 为 null）即 idle。
  */
@@ -99,19 +114,14 @@ enum class TurnLivePhase {
     STOPPING,
 }
 
-/**
- * loop 的字符串阶段词汇 → 进程内 [TurnLivePhase]。reasoning/answer 在 Turn 级合并为
- * [TurnLivePhase.MODEL_STREAMING]（子助手卡片仍保留更细的 SubAssistantCallPhase）。
- * 未知词汇返回 null（不改变当前 phase），绝不合并回一个笼统的 GENERATING。
- */
-internal fun turnLivePhaseOf(phase: String): TurnLivePhase? = when (phase) {
-    "preparing" -> TurnLivePhase.PREPARING
-    "model_waiting" -> TurnLivePhase.MODEL_WAITING
-    "reasoning_streaming", "answer_streaming" -> TurnLivePhase.MODEL_STREAMING
-    "tool_preparing" -> TurnLivePhase.TOOL_PREPARING
-    "tool_executing" -> TurnLivePhase.TOOL_EXECUTING
-    "between_steps" -> TurnLivePhase.PREPARING
-    else -> null
+/** Map transient runner progress to the coarser Turn presentation. */
+internal fun turnLivePhaseOf(phase: TurnRunPhase): TurnLivePhase = when (phase) {
+    TurnRunPhase.PREPARING -> TurnLivePhase.PREPARING
+    TurnRunPhase.MODEL_WAITING -> TurnLivePhase.MODEL_WAITING
+    TurnRunPhase.REASONING_STREAMING, TurnRunPhase.ANSWER_STREAMING -> TurnLivePhase.MODEL_STREAMING
+    TurnRunPhase.TOOL_PREPARING -> TurnLivePhase.TOOL_PREPARING
+    TurnRunPhase.TOOL_EXECUTING -> TurnLivePhase.TOOL_EXECUTING
+    TurnRunPhase.BETWEEN_STEPS -> TurnLivePhase.PREPARING
 }
 
 /**
@@ -213,6 +223,7 @@ internal fun TurnStreamProjection.afterCheckpoint(command: TurnCheckpoint): Turn
             val locator = ToolCallLocator(assistantMessageId, tool.stepId, tool.localCallId)
             val existing = phases[locator]
             val phase = when {
+                tool.resultStatus != null -> phaseOfResultStatus(requireNotNull(tool.resultStatus))
                 tool.isPending -> pendingPhaseOf(tool)
                 tool.interactionState is ToolInteractionState.Denied -> ToolLivePhase.DENIED
                 tool.interactionState is ToolInteractionState.Answered -> ToolLivePhase.ANSWERED
@@ -235,57 +246,12 @@ internal fun TurnStreamProjection.afterCheckpoint(command: TurnCheckpoint): Turn
             }
         }
 
-        is ToolResultCheckpoint -> {
-            require(command.toolResults.isNotEmpty()) {
-                "tool-result checkpoint requires typed result facts"
-            }
-            require(command.toolResults.map { it.locator }.distinct().size == command.toolResults.size) {
-                "tool-result checkpoint contains duplicate tool locators"
-            }
-            val tools = assistant.getTools()
-            command.toolResults.forEach { result ->
-                require(result.locator.assistantMessageId == assistantMessageId) {
-                    "tool-result checkpoint targets a different assistant message"
-                }
-                val target = tools.firstOrNull {
-                    it.stepId == result.locator.stepId && it.localCallId == result.locator.localCallId
-                } ?: error("tool-result checkpoint targets a missing tool call")
-                require(target.hasReplayResult) {
-                    "tool-result checkpoint requires a Provider replay result"
-                }
-                phases[result.locator] = when (result.status) {
-                    ToolResultStatus.COMPLETED -> ToolLivePhase.COMPLETED
-                    ToolResultStatus.FAILED -> ToolLivePhase.FAILED
-                    ToolResultStatus.DENIED -> ToolLivePhase.DENIED
-                    ToolResultStatus.ANSWERED -> ToolLivePhase.ANSWERED
-                    ToolResultStatus.CANCELLED -> ToolLivePhase.CANCELLED
-                    ToolResultStatus.INTERRUPTED -> ToolLivePhase.INTERRUPTED
-                    ToolResultStatus.UNKNOWN -> ToolLivePhase.FAILED
-                }
-            }
-            command.toolExecution?.let { execution ->
-                require(command.toolResults.size == 1 &&
-                    command.toolResults.single().locator.localCallId == execution.localCallId
-                ) {
-                    "tool execution and result checkpoint target different tools"
-                }
-                val expected = when (execution.status) {
-                    ToolExecutionStatus.COMPLETED -> ToolResultStatus.COMPLETED
-                    ToolExecutionStatus.FAILED -> ToolResultStatus.FAILED
-                    ToolExecutionStatus.STARTED,
-                    ToolExecutionStatus.CANCELLED,
-                    ToolExecutionStatus.UNKNOWN,
-                    -> error("tool-result checkpoint contains a non-result execution status")
-                }
-                require(command.toolResults.single().status == expected) {
-                    "tool execution and result checkpoint have conflicting terminal statuses"
-                }
-            }
+        is ToolResultCheckpoint -> command.toolResults.forEach { result ->
+            phases[result.locator] = phaseOfResultStatus(result.status)
         }
     }
-    // 修复 "tool interaction is no longer pending"：此前只同步 toolLivePhases，草稿的
-    // Assistant 停留在流式版本（暂停工具仍是旧版），用户决策会读到非 Pending 状态而误报。
-    // checkpoint 携带的 Assistant 是 committed 权威投影，流式草稿必须一并对齐；勿回退为仅同步 phases。
+    // The committed Assistant and its phases advance together so interaction readers cannot see
+    // a pending phase paired with the preceding streaming draft.
     return copy(assistantMessage = assistant, toolLivePhases = phases)
 }
 

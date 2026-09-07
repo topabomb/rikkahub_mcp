@@ -52,7 +52,7 @@ data class UIMessage(
 ) {
 
     fun summaryAsText(maxLength: Int = Int.MAX_VALUE): String {
-        val text = "[${role.name}]: " + parts.joinToString(separator = "\n") { part ->
+        val text = "[${role.name}]: " + parts.filterNot { it is UIMessagePart.Step }.joinToString(separator = "\n") { part ->
             when (part) {
                 is UIMessagePart.Text -> part.text
                 else -> ""
@@ -240,6 +240,7 @@ object TurnTerminalReasons {
 /** Shared part-level predicate behind `UIMessage.isValidToUpload` and `ModelRequestMessage.isValidToUpload`. */
 fun partsAreValidToUpload(parts: List<UIMessagePart>): Boolean = parts.any { part ->
     when (part) {
+        is UIMessagePart.Step -> false
         is UIMessagePart.Text -> part.text.isNotBlank()
         is UIMessagePart.Image -> part.url.isNotBlank()
         is UIMessagePart.Video -> part.url.isNotBlank()
@@ -251,7 +252,7 @@ fun partsAreValidToUpload(parts: List<UIMessagePart>): Boolean = parts.any { par
 }
 
 /** Shared part-level projection behind `UIMessage.toText` and `ModelRequestMessage.toText`. */
-fun partsToText(parts: List<UIMessagePart>): String = parts.joinToString(separator = "\n") { part ->
+fun partsToText(parts: List<UIMessagePart>): String = parts.filterNot { it is UIMessagePart.Step }.joinToString(separator = "\n") { part ->
     when (part) {
         is UIMessagePart.Text -> part.text
         else -> ""
@@ -315,10 +316,9 @@ private const val TERMINAL_REPLAY_MARKER = "[Previous assistant response did not
  * completed call. Valid text/media and fully paired tool facts remain available, followed by an
  * explicit request-only marker so partial text is not presented as a normal completed answer.
  *
- * Terminal messages are projected atomically by replay-safe provider steps: a contiguous prefix
- * of Content (Text/Image/Reasoning) followed by Tools with a valid call envelope and replayable
- * result output forms a complete wire pair. This does not describe live tool execution state.
- * Reasoning within a complete step is preserved; the incomplete tail after the last safe Tool
+ * Terminal messages are projected atomically by explicit completed Steps. Every tool in a Step
+ * must have a valid call envelope and typed replay result; one unsafe call excludes the entire batch.
+ * Reasoning within a complete Step is preserved; the incomplete tail after the last safe Step
  * keeps its Text/Image for context but loses Reasoning and opaque metadata. An unsafe/pending
  * Tool boundary causes fail-closed truncation: nothing past that boundary is replayed, preventing
  * partial steps from being spliced together.
@@ -344,7 +344,9 @@ fun UIMessage.replaySafeProjection(): UIMessage? {
     val projectedTail = tailParts.replaySafeTailParts()
     val projectedParts = (projectedComplete + projectedTail).toMutableList()
     val hasIncompleteTail = tailParts.isNotEmpty()
-    if (projectedParts.isNotEmpty() && hasIncompleteTail) {
+    if (partsAreValidToUpload(projectedParts) && hasIncompleteTail &&
+        (projectedParts.lastOrNull() as? UIMessagePart.Text)?.text != TERMINAL_REPLAY_MARKER
+    ) {
         projectedParts += UIMessagePart.Text(TERMINAL_REPLAY_MARKER)
     }
     val completePartCount = projectedComplete.size
@@ -398,46 +400,27 @@ fun UIMessage.confirmedReplayableToolOrdinals(): Set<Int> {
  * Splits the parts of a terminal assistant message into a replay-safe call/result prefix and an
  * incomplete tail.
  *
- * A replay-safe provider step is: Content (Reasoning/Text/Image) followed by Tools with valid
- * call envelopes and replayable result output.
- * The split happens at the first unsafe boundary: a pending, unexecuted, or envelope-damaged Tool
- * causes fail-closed truncation — everything from that point is the incomplete tail, even if a
- * a later Tool with output appears (non-contiguous structure).
+ * A completed Step is replayable only as a whole batch. A completed first call cannot make the
+ * reasoning or later pending calls in that same Step a safe prefix.
  */
 private fun splitTerminalCompletePrefix(
     parts: List<UIMessagePart>,
 ): Pair<List<UIMessagePart>, List<UIMessagePart>> {
-    var splitIndex = parts.size
-    for (i in parts.indices) {
-        val part = parts[i]
-        if (part is UIMessagePart.Tool && (!part.hasReplayResult || !part.hasReplaySafeEnvelope())) {
-            splitIndex = i
-            break
-        }
+    if (parts.isEmpty()) return emptyList<UIMessagePart>() to emptyList()
+    require(parts.first() is UIMessagePart.Step) { "Terminal Assistant transcript must start with a Step" }
+    val starts = parts.indices.filter { parts[it] is UIMessagePart.Step }
+    var completeEnd = 0
+    for ((ordinal, start) in starts.withIndex()) {
+        val step = parts[start] as UIMessagePart.Step
+        val end = starts.getOrNull(ordinal + 1) ?: parts.size
+        val tools = parts.subList(start + 1, end).filterIsInstance<UIMessagePart.Tool>()
+        val completed = step.outcome == StepOutcome.Continue || step.outcome == StepOutcome.Final
+        if (!completed || step.modelResult == null || tools.any {
+            it.stepId != step.stepId || !it.hasReplayResult || !it.hasReplaySafeEnvelope()
+        }) break
+        completeEnd = end
     }
-    // The complete prefix includes the Content and safe Tools up to (not including) the unsafe
-    // boundary. If the split is at a Tool boundary, we must also ensure that Content parts
-    // immediately before an unsafe Tool are still part of the tail (they belong to the
-    // incomplete step), not the complete prefix.
-    // Walk back from splitIndex to exclude trailing Content parts that belong to the
-    // incomplete step (the unsafe Tool's own preceding reasoning/text).
-    var completeEnd = splitIndex
-    while (completeEnd > 0) {
-        val prev = parts[completeEnd - 1]
-        if (prev is UIMessagePart.Tool && prev.hasReplayResult && prev.hasReplaySafeEnvelope()) {
-            break
-        }
-        if (prev is UIMessagePart.Tool) {
-            // Another unsafe tool earlier — shouldn't happen since we break at first, but guard.
-            break
-        }
-        // This is a Content part (Reasoning/Text/Image/etc) trailing before the unsafe boundary.
-        // It belongs to the incomplete step, not a complete one.
-        completeEnd--
-    }
-    val complete = parts.subList(0, completeEnd)
-    val tail = parts.subList(completeEnd, parts.size)
-    return complete to tail
+    return parts.subList(0, completeEnd) to parts.subList(completeEnd, parts.size)
 }
 
 private fun List<UIMessagePart>.replaySafeParts(
@@ -468,13 +451,7 @@ private fun List<UIMessagePart>.replaySafeParts(
             val output = part.output.replaySafeParts(
                 toolOutput = true,
             )
-            part.copy(
-                output = if (part.hasReplayResult && output.isEmpty()) {
-                    listOf(UIMessagePart.Text(MEDIA_FAILURE_TOOL_RESULT))
-                } else {
-                    output
-                },
-            )
+            part.copy(output = output)
         }
 
         else -> part
@@ -488,6 +465,7 @@ private fun List<UIMessagePart>.replaySafeParts(
  */
 private fun List<UIMessagePart>.replaySafeTailParts(): List<UIMessagePart> = mapNotNull { part ->
     when (part) {
+        is UIMessagePart.Step -> part
         is UIMessagePart.Text -> {
             if (part.mediaFailureMetadataOrNull() == null) {
                 part.copy(metadata = part.metadata.withoutOpaqueReplayMetadata())
@@ -592,10 +570,27 @@ data class MessageChunk(
     val usage: ProviderUsageSnapshot? = null,
 )
 
+/** Transport identity within one Provider response; never stored in UIMessage or Tool JSON. */
+@Serializable
+sealed interface ProviderToolCallSlot {
+    @Serializable
+    data class Index(val index: Int) : ProviderToolCallSlot {
+        init { require(index >= 0) }
+    }
+
+    @Serializable
+    data class Item(val itemId: String) : ProviderToolCallSlot {
+        init { require(itemId.isNotBlank()) }
+    }
+}
+
 @Serializable
 data class UIMessageChoice(
     val index: Int,
     val delta: UIMessage?,
     val message: UIMessage?,
-    val finishReason: String?
+    val finishReason: String?,
+    /** One slot for each Tool part, in that choice's Tool order. Complete messages have array identity. */
+    val toolCallSlots: List<ProviderToolCallSlot> = message?.getTools()?.indices
+        ?.map { ProviderToolCallSlot.Index(it) }.orEmpty(),
 )

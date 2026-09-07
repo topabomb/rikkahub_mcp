@@ -69,6 +69,7 @@ class ImagePreviewDialogTest {
     fun horizontalSwipeChangesPageAndVerticalDragDismisses() {
         openViewer()
         compose.onNodeWithText("1 / 2").assertExists()
+        compose.waitUntil(5_000) { imageCoverage(red = true) > 0.1f }
         compose.onNode(isDialog()).performTouchInput {
             swipe(Offset(width * 0.8f, height * 0.5f), Offset(width * 0.2f, height * 0.5f), 400)
         }
@@ -76,6 +77,7 @@ class ImagePreviewDialogTest {
             compose.onAllNodes(androidx.compose.ui.test.hasText("2 / 2"))
                 .fetchSemanticsNodes().isNotEmpty()
         }
+        compose.waitUntil(5_000) { imageCoverage(red = false) > 0.1f }
         compose.onNode(isDialog()).performTouchInput {
             swipe(Offset(width * 0.5f, height * 0.3f), Offset(width * 0.5f, height * 0.8f), 600)
         }
@@ -105,10 +107,10 @@ class ImagePreviewDialogTest {
     @Test
     fun doubleTapZoomsAndVerticalPanDoesNotDismiss() {
         openViewer()
-        compose.waitUntil(5_000) { redImageCoverage() > 0.1f }
-        val initialCoverage = redImageCoverage()
+        compose.waitUntil(5_000) { imageCoverage(red = true) > 0.1f }
+        val initialCoverage = imageCoverage(red = true)
         compose.onNode(isDialog()).performTouchInput { doubleClick(center) }
-        compose.waitUntil(5_000) { redImageCoverage() > initialCoverage + 0.05f }
+        compose.waitUntil(5_000) { imageCoverage(red = true) > initialCoverage + 0.05f }
         compose.onNode(isDialog()).performTouchInput {
             swipe(Offset(width * 0.5f, height * 0.3f), Offset(width * 0.5f, height * 0.8f), 600)
         }
@@ -117,17 +119,19 @@ class ImagePreviewDialogTest {
         compose.onNodeWithText("1 / 2").assertExists()
     }
 
-    private fun redImageCoverage(): Float {
+    private fun imageCoverage(red: Boolean): Float {
         val pixels = compose.onNode(isDialog()).captureToImage().toPixelMap()
-        var redSamples = 0
+        var imageSamples = 0
         val samples = 20
         repeat(samples) { x ->
             repeat(samples) { y ->
                 val pixel = pixels[(x * pixels.width / samples), (y * pixels.height / samples)]
-                if (pixel.red > 0.8f && pixel.green < 0.2f && pixel.blue < 0.2f) redSamples++
+                val matches = if (red) pixel.red > 0.8f && pixel.blue < 0.2f
+                    else pixel.blue > 0.8f && pixel.red < 0.2f
+                if (matches && pixel.green < 0.2f) imageSamples++
             }
         }
-        return redSamples.toFloat() / (samples * samples)
+        return imageSamples.toFloat() / (samples * samples)
     }
 
     private fun openViewer(nested: Boolean = false) {

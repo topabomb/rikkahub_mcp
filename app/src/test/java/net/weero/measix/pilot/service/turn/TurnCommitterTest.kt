@@ -106,7 +106,7 @@ class TurnCommitterTest {
         val handle = TurnHandle(id, 1, Uuid.random(), Uuid.random())
         val finalization = mockk<TurnFinalizer>()
         coEvery {
-            finalization.prepareOwnedAssistantForFailure(any(), any(), any(), any(), any())
+            finalization.prepareOwnedAssistantForFailure(any(), any(), any(), any())
         } coAnswers {
             thirdArg<UIMessage?>()
         }
@@ -631,10 +631,11 @@ class TurnCommitterTest {
                         toolName = "historical_tool",
                         input = "{}",
                         output = listOf(UIMessagePart.Text("large result")),
+                        resultStatus = me.rerere.ai.ui.ToolResultStatus.COMPLETED,
                     ),
                 ),
             )
-            val harness = createProviderHarness(responseMessage = response, toolOutputStore = store)
+            val harness = createProviderHarness(responseMessage = UIMessage.assistant("done"), toolOutputStore = store)
             var durable: UIMessage? = null
             runCatching {
                 harness.handler.run(
@@ -645,11 +646,11 @@ class TurnCommitterTest {
                         mediaCapabilities = RequestMediaCapabilities.NONE,
                         messages = listOf(
                             UIMessage.user("continue"),
-                            UIMessage(id = assistantMessageId, role = MessageRole.ASSISTANT, parts = emptyList()),
+                            response.copy(id = assistantMessageId),
                         ),
                         assistant = harness.assistant,
                         promptInputs = testPromptInputs(),
-                        maxSteps = 1,
+                        maxSteps = 2,
                         assistantMessageId = assistantMessageId,
                         onResult = { result ->
                             // 无 Tool Final step 的窄压缩只随唯一终态 rooting 变 durable。
@@ -705,6 +706,7 @@ class TurnCommitterTest {
                     choices = listOf(UIMessageChoice(
                         index = 0,
                         delta = UIMessage(role = MessageRole.ASSISTANT, parts = listOf(part)),
+                        toolCallSlots = if (part is UIMessagePart.Tool) listOf(me.rerere.ai.ui.ProviderToolCallSlot.Index(0)) else emptyList(),
                         message = null,
                         finishReason = null,
                     )),

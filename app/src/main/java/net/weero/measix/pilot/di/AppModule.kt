@@ -337,8 +337,6 @@ val appModule = module {
             conversationRepository = get(),
             runtimeRegistry = get(),
             commandCoordinator = get(),
-            settingsStore = get(),
-            turnFinalizer = get(),
             json = get(),
         )
     }

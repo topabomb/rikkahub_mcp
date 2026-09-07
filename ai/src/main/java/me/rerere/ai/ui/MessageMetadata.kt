@@ -20,7 +20,7 @@ import me.rerere.common.http.jsonPrimitiveOrNull
  *
  * metadata 在序列化层仍然是 [JsonObject], 这里只是为读写提供编译期类型:
  * - 读: `part.metadataAs<ClaudeReasoningMetadata>()?.signature`
- * - 写: `part.metadata = ClaudeReasoningMetadata(signature = ...).toMetadata()`
+ * - 写: `part.copy(metadata = JsonObject(part.metadata.orEmpty() + typedMetadata.toMetadata()))`
  *
  * 所有字段必须可空且 key 与历史数据保持一致(必要时用 [SerialName]),
  * 否则旧会话中持久化的 metadata 将无法解析
@@ -128,8 +128,6 @@ data class GoogleThoughtMetadata(
     val sourceModelId: String? = null,
     /** Endpoint/profile identity that produced the opaque signature. */
     val sourceProfile: String? = null,
-    /** One Gemini candidate response step; parallel calls share this identity. */
-    val providerStepId: String? = null,
 ) : PartMetadata
 
 /**

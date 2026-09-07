@@ -1,5 +1,6 @@
 package net.weero.measix.pilot.service.turn
 
+import me.rerere.ai.ui.ProviderToolCallSlot
 import me.rerere.ai.provider.Model
 import me.rerere.ai.ui.ClaudeReasoningMetadata
 import me.rerere.ai.ui.GoogleThoughtMetadata
@@ -14,120 +15,39 @@ import me.rerere.ai.ui.renderableImageUrl
 import kotlin.time.Clock
 import kotlin.uuid.Uuid
 
-/**
- * The single streaming merge owner for one durable Turn's active Assistant message.
- *
- * It replaces the old `UIMessage.appendChunk` / `handleMessageChunk` free functions and makes the
- * Step boundary explicit: [beginStep] opens a new logical model Step (one Provider sampling), and
- * every merged chunk lands inside the current Step region. A pending Tool Call is stamped with the
- * current `stepId` and a freshly assigned random `localCallId` the first time its `providerCallId`
- * is seen within the Step; later deltas for the same call merge into that identity. Providers only
- * ever emit `stepId = Uuid.NIL` / `localCallId = Uuid.NIL` placeholders — real ids exist solely here
- * and in the committed transcript, never in a transient delta that reaches storage.
- *
- * The class is stateful across one Step and reused across the Turn; it owns no coroutine and touches
- * no durable store.
- */
-internal class StepOutputAccumulator(
-    private val assistantMessageId: Uuid,
-    initialStepId: Uuid = Uuid.NIL,
-    initialStepOrdinal: Int = -1,
-    initialStepOpened: Boolean = false,
-    private var preopenedStepPending: Boolean = false,
-) {
-    private var stepId: Uuid = initialStepId
-    private var stepOrdinal: Int = initialStepOrdinal
-    private var stepOpened = initialStepOpened
-
-    /**
-     * Open the next logical Step. When `START` pre-opened the trailing Step and it has not yet been
-     * sampled, the first call reuses that Step (no new `Step` part is emitted); every later call
-     * advances the ordinal and assigns a fresh id, so ordinals stay strictly increasing across
-     * continuations instead of restarting at 0.
-     */
-    fun beginStep() {
-        if (preopenedStepPending) {
-            preopenedStepPending = false
-            return
-        }
-        stepOrdinal += 1
-        stepId = Uuid.random()
-        stepOpened = false
-    }
-
-    /** The id of the Step currently being streamed; `NIL` before the first [beginStep]. */
-    val currentStepId: Uuid get() = stepId
-
-    companion object {
-        /**
-         * Seed the accumulator from the durable Assistant transcript already present in the draft.
-         * A `START`-pre-opened, still-empty trailing Step is reused for the first sampling; otherwise
-         * the ordinal continues after the last committed Step so a continuation never re-emits an
-         * existing ordinal.
-         */
-        fun fromDraft(assistantMessageId: Uuid, activeMessage: UIMessage?): StepOutputAccumulator {
-            val parts = activeMessage?.parts.orEmpty()
-            val lastStepIndex = parts.indexOfLast { it is UIMessagePart.Step }
-            if (lastStepIndex < 0) {
-                return StepOutputAccumulator(assistantMessageId)
-            }
-            val step = parts[lastStepIndex] as UIMessagePart.Step
-            val preopenedAndUnsampled = parts.drop(lastStepIndex + 1).isEmpty() && step.outcome == null
-            return StepOutputAccumulator(
-                assistantMessageId = assistantMessageId,
-                initialStepId = step.stepId,
-                initialStepOrdinal = step.ordinal,
-                initialStepOpened = true,
-                preopenedStepPending = preopenedAndUnsampled,
-            )
-        }
-    }
-
-    /**
-     * Merge one Provider chunk into the active Assistant message (the last element of [messages]).
-     * Historical messages are immutable and never re-scanned: only the trailing Assistant variant is
-     * copied and rebuilt, so a chunk costs O(current Step parts), not O(branch).
-     */
-    fun accumulate(messages: List<UIMessage>, chunk: MessageChunk, model: Model?): List<UIMessage> {
-        require(messages.isNotEmpty()) { "messages must not be empty" }
-        val active = messages.last()
-        return messages.dropLast(1) + mergeIntoAssistant(active, chunk, model)
-    }
-
-    private fun mergeIntoAssistant(active: UIMessage, chunk: MessageChunk, model: Model?): UIMessage {
-        val choice = chunk.choices.getOrNull(0) ?: return active
+/** Merges Provider deltas into the already-open Step of the active Assistant only. */
+internal class StepOutputAccumulator {
+    private var currentStepId: Uuid? = null
+    private val localCallsBySlot = mutableMapOf<ProviderToolCallSlot, Uuid>()
+    fun accumulate(active: UIMessage, chunk: MessageChunk, model: Model?): UIMessage {
+        require(active.role == me.rerere.ai.core.MessageRole.ASSISTANT)
+        val step = active.parts.filterIsInstance<UIMessagePart.Step>().last()
+        require(step.outcome == null && step.modelResult == null) { "Sampling requires an unsampled open Step" }
+        val choice = chunk.choices.firstOrNull() ?: return active
         val delta = choice.delta ?: choice.message ?: return active
-
-        var parts = active.parts
-        if (!stepOpened) {
-            parts = parts + UIMessagePart.Step(
-                stepId = stepId,
-                ordinal = stepOrdinal,
-                startedAt = Clock.System.now(),
-            )
-            stepOpened = true
+        if (currentStepId != step.stepId) {
+            currentStepId = step.stepId
+            localCallsBySlot.clear()
         }
-
-        parts = delta.parts.fold(parts) { acc, deltaPart -> mergePart(acc, deltaPart) }
-
-        // Close reasoning that stopped receiving deltas this chunk.
-        if (active.parts.filterIsInstance<UIMessagePart.Reasoning>().isNotEmpty() &&
-            delta.parts.filterIsInstance<UIMessagePart.Reasoning>().isEmpty()
-        ) {
-            parts = parts.map { part ->
-                if (part is UIMessagePart.Reasoning && part.finishedAt == null) {
+        require(choice.toolCallSlots.size == delta.getTools().size) { "Provider Tool deltas require explicit transport slots" }
+        var toolOrdinal = 0
+        var parts = delta.parts.fold(active.parts) { acc, part ->
+            if (part is UIMessagePart.Tool) {
+                mergeTool(acc, acc.currentStepStart(), part, choice.toolCallSlots[toolOrdinal++])
+            } else mergePart(acc, part)
+        }
+        if (delta.parts.none { it is UIMessagePart.Reasoning }) {
+            val stepStart = parts.currentStepStart()
+            parts = parts.mapIndexed { index, part ->
+                if (index >= stepStart && part is UIMessagePart.Reasoning && part.finishedAt == null) {
                     part.copy(finishedAt = Clock.System.now())
-                } else {
-                    part
-                }
+                } else part
             }
         }
-
-        val annotations = delta.annotations.ifEmpty { active.annotations }
         return active.copy(
             modelId = active.modelId ?: model?.id,
             parts = parts,
-            annotations = annotations,
+            annotations = delta.annotations.ifEmpty { active.annotations },
             providerMetadata = mergeMessageMetadata(active.providerMetadata, delta.providerMetadata),
         )
     }
@@ -221,9 +141,11 @@ internal class StepOutputAccumulator(
                 }
             }
 
-            is UIMessagePart.Tool -> mergeTool(acc, stepStart, deltaPart)
+            is UIMessagePart.Tool -> error("Tool merge requires a transport slot")
 
-            else -> acc
+            is UIMessagePart.Audio, is UIMessagePart.Video, is UIMessagePart.Document ->
+                acc.insertAt(acc.firstPendingToolIndex(stepStart), deltaPart)
+            is UIMessagePart.Step -> error("Provider output cannot create a durable Step")
         }
     }
 
@@ -231,24 +153,18 @@ internal class StepOutputAccumulator(
         acc: List<UIMessagePart>,
         stepStart: Int,
         deltaPart: UIMessagePart.Tool,
+        slot: ProviderToolCallSlot,
     ): List<UIMessagePart> {
-        if (deltaPart.providerCallId.isBlank()) {
-            // A blank-ID delta continues the latest pending tool in this Step.
-            val lastTool = acc.subList(stepStart, acc.size)
-                .lastOrNull { it is UIMessagePart.Tool && !it.hasReplayResult } as? UIMessagePart.Tool
-            return if (lastTool != null) {
-                acc.map { part -> if (part === lastTool) part.merge(deltaPart) else part }
-            } else {
-                acc + stampNewTool(deltaPart)
-            }
-        }
-        // Has an id: only merge inside the current Step; an executed tool from an earlier Step is
-        // immutable history and must never be reopened.
-        val existingIndex = (stepStart until acc.size).firstOrNull { index ->
-            (acc[index] as? UIMessagePart.Tool)?.providerCallId == deltaPart.providerCallId
+        val localCallId = localCallsBySlot[slot]
+        val existingIndex = localCallId?.let { id ->
+            (stepStart until acc.size).firstOrNull { index ->
+                (acc[index] as? UIMessagePart.Tool)?.localCallId == id
+            } ?: error("Transport slot lost its active Tool owner")
         }
         return if (existingIndex == null) {
-            acc + stampNewTool(deltaPart)
+            val stamped = stampNewTool(deltaPart, (acc[stepStart - 1] as UIMessagePart.Step).stepId)
+            localCallsBySlot[slot] = stamped.localCallId
+            acc + stamped
         } else {
             acc.mapIndexed { index, part ->
                 if (index == existingIndex) {
@@ -261,7 +177,7 @@ internal class StepOutputAccumulator(
     }
 
     /** Assign the current Step id and a fresh random local call id to a newly seen tool call. */
-    private fun stampNewTool(tool: UIMessagePart.Tool): UIMessagePart.Tool =
+    private fun stampNewTool(tool: UIMessagePart.Tool, stepId: Uuid): UIMessagePart.Tool =
         tool.copy(stepId = stepId, localCallId = Uuid.random())
 
     private fun List<UIMessagePart>.currentStepStart(): Int =

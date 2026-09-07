@@ -1,5 +1,7 @@
 package net.weero.measix.pilot.service.turn
 
+import net.weero.measix.pilot.testkit.sampledModelResult
+
 import me.rerere.ai.core.MessageRole
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
@@ -33,16 +35,18 @@ class TurnPersistenceDeltaTest {
         val active = UIMessage(
             id = assistantId,
             role = MessageRole.ASSISTANT,
-            parts = listOf(UIMessagePart.Text("before")),
+            parts = listOf(net.weero.measix.pilot.service.runtime.TurnTransition.openStep(0), UIMessagePart.Text("before")),
         )
         val old = net.weero.measix.pilot.data.model.Conversation.ofId(conversationId)
             .copy(messageNodes = historical + MessageNode.of(active))
             .toSnapshot()
-        val updated = active.copy(parts = listOf(UIMessagePart.Text("after")))
+        val updated = active.copy(parts = listOf(
+            (active.parts.first() as UIMessagePart.Step).copy(modelResult = sampledModelResult("stop")), UIMessagePart.Text("after"),
+        ))
         val handle = TurnHandle(conversationId, 1L, Uuid.random(), assistantId)
         val command = ModelResponseCheckpoint(
             turn = handle,
-            step = StepHandle(Uuid.random()),
+            step = StepHandle(active.parts.filterIsInstance<UIMessagePart.Step>().single().stepId),
             assistantMessage = updated,
             turnStatus = TurnExecutionStatus.RUNNING,
         )
@@ -66,12 +70,14 @@ class TurnPersistenceDeltaTest {
         val active = UIMessage(
             id = assistantId,
             role = MessageRole.ASSISTANT,
-            parts = listOf(UIMessagePart.Text("answer")),
+            parts = listOf(net.weero.measix.pilot.service.runtime.TurnTransition.openStep(0), UIMessagePart.Text("answer")),
         )
         val old = net.weero.measix.pilot.data.model.Conversation.ofId(conversationId)
             .copy(messageNodes = historical + MessageNode.of(active))
             .toSnapshot()
-        val terminal = active.copy(parts = listOf(UIMessagePart.Text("answer final")))
+        val terminal = active.copy(parts = listOf(
+            (active.parts.first() as UIMessagePart.Step).copy(modelResult = sampledModelResult("stop")), UIMessagePart.Text("answer final"),
+        ))
         val handle = TurnHandle(conversationId, 1L, Uuid.random(), assistantId)
         val command = FinalizeTurn(
             handle = handle,

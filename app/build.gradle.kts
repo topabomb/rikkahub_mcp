@@ -126,9 +126,6 @@ android {
         compose = true
         buildConfig = true
     }
-    sourceSets {
-        getByName("androidTest").assets.srcDirs("$projectDir/schemas")
-    }
     androidResources {
         generateLocaleConfig = true
     }
@@ -180,6 +177,14 @@ tasks.register("buildAll") {
 
 ksp {
     arg("room.schemaLocation", "$projectDir/schemas")
+}
+
+androidComponents.finalizeDsl {
+    // Baseline Profile copies release source sets during DSL finalization; configure the workload after that copy.
+    it.sourceSets.getByName("benchmarkRelease").apply {
+        assets.srcDirs("$projectDir/schemas")
+        manifest.srcFile("$projectDir/src/benchmarkRelease/AndroidManifest.xml")
+    }
 }
 
 kotlin {

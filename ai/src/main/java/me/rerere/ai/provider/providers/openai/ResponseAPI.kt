@@ -1,6 +1,7 @@
 @file:Suppress("UNNECESSARY_SAFE_CALL")
 package me.rerere.ai.provider.providers.openai
 
+import me.rerere.ai.ui.ProviderToolCallSlot
 import android.util.Log
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.channels.awaitClose
@@ -82,7 +83,7 @@ private const val TAG = "ResponseAPI"
 
 internal class ResponseStreamState {
     val toolCallIdsByItemId = mutableMapOf<String, String>()
-    val toolArgumentDeltasSeenByItemId = mutableSetOf<String>()
+    val toolArgumentsEmittedByItemId = mutableSetOf<String>()
     val reasoningTextEmittedByItemId = mutableSetOf<String>()
     private val outputItemsById = linkedMapOf<String, JsonObject>()
     private val terminalSeen = AtomicBoolean(false)
@@ -205,7 +206,8 @@ class ResponseAPI(
                     buildResponseOutputStateChunk(
                         outputItems = streamState.outputItems(),
                         endpointProfile = endpointProfile,
-                    )?.let { chunk ->
+                        finishReason = "done",
+                    ).let { chunk ->
                         trySend(chunk).onFailure { e ->
                             Log.w(TAG, "onEvent: terminal protocol state dropped (${e?.message})")
                         }
@@ -674,6 +676,32 @@ class ResponseAPI(
         jsonObject: JsonObject,
         streamState: ResponseStreamState = ResponseStreamState(),
         endpointProfile: ResponseEndpointProfile = ResponseEndpointProfile.OPENAI,
+    ): MessageChunk? = parseResponseDeltaParts(jsonObject, streamState, endpointProfile)?.let { chunk ->
+        val terminalReason = jsonObject["type"]?.jsonPrimitive?.contentOrNull
+            ?.takeIf { it in setOf("response.completed", "response.incomplete", "response.failed") }
+            ?.removePrefix("response.")
+        val choices = chunk.choices.ifEmpty {
+            if (terminalReason == null) emptyList() else listOf(UIMessageChoice(
+                index = 0, delta = null, message = null, finishReason = terminalReason,
+            ))
+        }
+        chunk.copy(choices = choices.map { choice ->
+            val calls = choice.delta?.getTools().orEmpty()
+            val slots = if (calls.isEmpty()) choice.toolCallSlots else {
+                val itemId = jsonObject["item_id"]?.jsonPrimitive?.contentOrNull
+                    ?: jsonObject["item"]?.jsonObject?.get("id")?.jsonPrimitive?.contentOrNull
+                calls.map {
+                    ProviderToolCallSlot.Item(requireNotNull(itemId) { "Responses Tool delta is missing item identity" })
+                }
+            }
+            choice.copy(toolCallSlots = slots, finishReason = terminalReason ?: choice.finishReason)
+        })
+    }
+
+    private fun parseResponseDeltaParts(
+        jsonObject: JsonObject,
+        streamState: ResponseStreamState = ResponseStreamState(),
+        endpointProfile: ResponseEndpointProfile = ResponseEndpointProfile.OPENAI,
     ): MessageChunk? {
         val chunkType = jsonObject["type"]?.jsonPrimitive?.content ?: error("chunk type not found")
 
@@ -728,6 +756,9 @@ class ResponseAPI(
                 if (type == "function_call") {
                     val callId = item["call_id"]?.jsonPrimitive?.contentOrNull ?: id
                     streamState.toolCallIdsByItemId[id] = callId
+                    if (!item["arguments"]?.jsonPrimitive?.contentOrNull.isNullOrEmpty()) {
+                        streamState.toolArgumentsEmittedByItemId += id
+                    }
                     return MessageChunk(
                         id = id,
                         model = "",
@@ -739,7 +770,7 @@ class ResponseAPI(
                                     role = MessageRole.ASSISTANT,
                                     parts = listOf(
                                         UIMessagePart.Tool(
-                                            // UIMessagePart.Tool 持久化的是协议关联 ID；item_id 只用于定位 SSE 输出项。
+                                            // call_id is the wire correlation; item_id identifies the transient output slot.
                                             localCallId = Uuid.NIL,
                                             stepId = Uuid.NIL,
                                             providerCallId = callId,
@@ -866,12 +897,11 @@ class ResponseAPI(
             "response.function_call_arguments.done" -> {
                 val itemId = jsonObject["item_id"]?.jsonPrimitive?.content ?: error("item_id not found")
                 val toolCallId = streamState.toolCallIdsByItemId.remove(itemId) ?: itemId
-                val receivedDeltas = streamState.toolArgumentDeltasSeenByItemId.remove(itemId)
+                val argumentsAlreadyEmitted = streamState.toolArgumentsEmittedByItemId.remove(itemId)
                 val arguments =
                     jsonObject["arguments"]?.jsonPrimitive?.content ?: error("arguments not found")
-                // 官方流会先发送参数 delta，再在 done 中给出完整参数。Tool.merge() 采用字符串追加，
-                // 所以已消费 delta 时不能再次追加完整值；没有 delta 的兼容服务仍用 done 兜底。
-                if (receivedDeltas) return null
+                // added 或 delta 已发出的参数不能再追加 done 的完整副本；仅 done 提供正文时才发出。
+                if (argumentsAlreadyEmitted) return null
                 return MessageChunk(
                     id = itemId,
                     model = "",
@@ -922,7 +952,7 @@ class ResponseAPI(
                 val toolCallId = streamState.toolCallIdsByItemId[itemId] ?: itemId
                 val delta = jsonObject["delta"]?.jsonPrimitive?.contentOrNull.orEmpty()
                 if (delta.isNotEmpty()) {
-                    streamState.toolArgumentDeltasSeenByItemId += itemId
+                    streamState.toolArgumentsEmittedByItemId += itemId
                 }
                 return MessageChunk(
                     id = itemId,
@@ -963,7 +993,7 @@ class ResponseAPI(
                         outputItems = outputItems,
                         endpointProfile = endpointProfile,
                         usage = usage,
-                    ) ?: MessageChunk(id = "", model = "", choices = emptyList(), usage = usage)
+                    )
                 } else {
                     MessageChunk(id = "", model = "", choices = emptyList(), usage = usage)
                 }
@@ -978,8 +1008,8 @@ class ResponseAPI(
         outputItems: List<JsonObject>,
         endpointProfile: ResponseEndpointProfile,
         usage: ProviderUsageSnapshot? = null,
-    ): MessageChunk? {
-        if (outputItems.isEmpty()) return null
+        finishReason: String = "completed",
+    ): MessageChunk {
         return MessageChunk(
             id = responseId,
             model = "",
@@ -989,14 +1019,16 @@ class ResponseAPI(
                     delta = UIMessage(
                         role = MessageRole.ASSISTANT,
                         parts = emptyList(),
-                        providerMetadata = OpenAIResponseMetadata(
-                            wireFormat = endpointProfile.wireFormat,
-                            outputItemGroups = listOf(outputItems),
-                            sourceProfile = endpointProfile.sourceProfile,
-                        ).toMetadata(),
+                        providerMetadata = outputItems.takeIf { it.isNotEmpty() }?.let {
+                            OpenAIResponseMetadata(
+                                wireFormat = endpointProfile.wireFormat,
+                                outputItemGroups = listOf(it),
+                                sourceProfile = endpointProfile.sourceProfile,
+                            ).toMetadata()
+                        },
                     ),
                     message = null,
-                    finishReason = null,
+                    finishReason = finishReason,
                 )
             ),
             usage = usage,
@@ -1148,7 +1180,7 @@ class ResponseAPI(
                             sourceProfile = endpointProfile.sourceProfile,
                         ).toMetadata(),
                     ),
-                    finishReason = null,
+                    finishReason = jsonObject["status"]?.jsonPrimitive?.contentOrNull,
                     delta = null
                 )
             ),

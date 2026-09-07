@@ -17,7 +17,6 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.cancel
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
 import me.rerere.ai.core.MessageRole
@@ -569,34 +568,39 @@ class ConversationCommandCoordinatorTest {
     @Test
     fun `one hundred commands for one id are serialized without loss`() = runTest {
         val id = Uuid.random()
-        val scope = CoroutineScope(Dispatchers.Default)
-        val runtime = ConversationRuntime(id, Conversation.ofId(id).toSnapshot(), scope, {})
+        val runtime = ConversationRuntime(id, Conversation.ofId(id).toSnapshot(), backgroundScope, {})
         val registry = mockk<ConversationRuntimeRegistry>()
         val repository = mockk<ConversationRepository>()
         every { registry.findRuntime(id) } returns runtime
         every { registry.isDraft(id) } returns false
         val inFlight = AtomicInteger()
         val maximum = AtomicInteger()
+        val releaseCommit = CompletableDeferred<Unit>()
         coEvery { repository.commit(any()) } coAnswers {
             val current = inFlight.incrementAndGet()
             maximum.updateAndGet { maxOf(it, current) }
-            delay(1)
+            releaseCommit.await()
             inFlight.decrementAndGet()
             true
         }
         val coordinator = coordinator(registry, repository)
 
-        (0 until 100).map { index ->
-            async(Dispatchers.Default) {
+        // Every command reaches either the commit barrier or the coordinator mutex before
+        // the first transaction is released; a missing mutex deterministically overlaps writes.
+        val commands = (0 until 100).map { index ->
+            async(start = CoroutineStart.UNDISPATCHED) {
                 coordinator.executeOrThrow(id, AppendUserMessage(UIMessage.user("message-$index")))
             }
-        }.awaitAll()
+        }
+        assertEquals(1, inFlight.get())
+        assertTrue(runtime.snapshot.value.durable.nodes.isEmpty())
+        releaseCommit.complete(Unit)
+        commands.awaitAll()
 
         assertEquals(1, maximum.get())
         assertEquals(100, runtime.snapshot.value.durable.nodes.size)
         val text = runtime.snapshot.value.durable.nodes.map { it.currentMessage.toText() }.toSet()
         assertFalse((0 until 100).any { "message-$it" !in text })
-        scope.cancel()
     }
 
     @Test

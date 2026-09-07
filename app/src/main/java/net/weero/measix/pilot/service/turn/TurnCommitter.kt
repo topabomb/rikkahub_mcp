@@ -227,7 +227,7 @@ class TurnCommitter(
             handle = handle,
             latestAssistant = lastAssistant,
             reason = requireNotNull(outcome.terminalReason),
-            cancelledByUser = outcome.terminalReason == TurnTerminalReasons.USER_STOP,
+
         )
     }
 }

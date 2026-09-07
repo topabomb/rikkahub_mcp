@@ -147,6 +147,7 @@ fun deltaChunk(
         UIMessageChoice(
             index = 0,
             delta = UIMessage(id = Uuid.random(), role = MessageRole.ASSISTANT, parts = parts),
+            toolCallSlots = parts.filterIsInstance<UIMessagePart.Tool>().indices.map { me.rerere.ai.ui.ProviderToolCallSlot.Index(it) },
             message = null,
             finishReason = null,
         ),

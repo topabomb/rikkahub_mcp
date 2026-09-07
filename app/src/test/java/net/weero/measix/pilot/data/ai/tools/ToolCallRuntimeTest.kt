@@ -356,7 +356,7 @@ class ToolCallRuntimeTest {
     fun `arbitrary business result shapes cannot crash historical phase projection`() {
         listOf("[]", "text", "{\"status\":[]}", "{\"error\":{},\"type\":{}}", "{\"error\":{}}")
             .forEach { output ->
-                val tool = tool("a", "remote", "{}", output = listOf(UIMessagePart.Text(output)))
+                val tool = tool("a", "remote", "{}", output = listOf(UIMessagePart.Text(output))).copy(resultStatus = ToolResultStatus.COMPLETED)
                 assertEquals(ToolLivePhase.COMPLETED, resolveToolLivePhase(tool, null))
             }
         listOf("error", "timeout").forEach { type ->
@@ -371,7 +371,7 @@ class ToolCallRuntimeTest {
     fun `generic implementation error becomes a compact stable failure`() = runTest {
         val outcome = runtime.execute(prepared(Tool("boom", "boom", execute = { error("secret path") })), hooks())
 
-        assertTrue(outcome.executionFailed)
+        assertEquals(me.rerere.ai.ui.ToolResultStatus.FAILED, outcome.resultStatus)
         assertEquals(
             "{\"status\":\"failed\",\"reason\":\"tool_failed\"}",
             (outcome.output.single() as UIMessagePart.Text).text,
@@ -390,7 +390,7 @@ class ToolCallRuntimeTest {
 
         val outcome = runtime.execute(prepared(tool), hooks())
 
-        assertTrue(outcome.executionFailed)
+        assertEquals(me.rerere.ai.ui.ToolResultStatus.FAILED, outcome.resultStatus)
         assertEquals(expected, outcome.output)
         assertEquals(ToolOutputPolicy.ARCHIVABLE_TEXT, outcome.outputPolicy)
         assertEquals(ToolResultStatus.FAILED, outcome.resultStatus)
@@ -522,7 +522,7 @@ class ToolCallRuntimeTest {
     ) = ToolExecutionHooks(
         resolveAttachments = { ToolAttachmentResolution() },
         reportMetadata = reportMetadata,
-        reportChildConversation = {},
+        reportChildRun = {},
         registerUnpublishedResource = registerUnpublishedResource,
     )
 }

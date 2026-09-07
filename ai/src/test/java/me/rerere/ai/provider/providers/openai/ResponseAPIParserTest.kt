@@ -178,7 +178,7 @@ class ResponseAPIParserTest {
         assertEquals("lookup", tools.first().toolName)
         assertEquals("{\"query\":\"test\"}", tools.drop(1).joinToString(separator = "") { it.input })
         assertTrue(streamState.toolCallIdsByItemId.isEmpty())
-        assertTrue(streamState.toolArgumentDeltasSeenByItemId.isEmpty())
+        assertTrue(streamState.toolArgumentsEmittedByItemId.isEmpty())
     }
 
     @Test

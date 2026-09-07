@@ -37,6 +37,7 @@ import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.Json
 import me.rerere.ai.core.MessageRole
 import me.rerere.ai.core.Tool
+import me.rerere.ai.core.ToolChildRunLink
 import me.rerere.ai.core.ToolExecutionContext
 import me.rerere.ai.core.ToolMetadataDelivery
 import me.rerere.ai.ui.UIMessage
@@ -490,9 +491,8 @@ class SubAssistantRunCoordinator(
             val runJob = child.runJob
             childRunJob = runJob
 
-            // 调用↔Child 关系归位：本次工具执行的 durable 事实携带 child id
-            // （崩溃恢复经 turn_execution(status) → child_conversation_id 定点收口）。
-            // 初始 metadata（start link）
+            val allocatedChildTurnId = Uuid.random()
+            // The parent checkpoint owns the complete run identity before Child START can occur.
             val initialMeta = buildInitialSubAssistantCallMetadata(
                 runId = ready.runId,
                 targetAssistantId = targetAssistantId,
@@ -512,10 +512,14 @@ class SubAssistantRunCoordinator(
             var childLinkCommitted = false
             try {
                 // 先只更新内存投影，再由 child link 的单次 checkpoint 原子提交
-                // messages + tool_execution.child_conversation_id。不得拆成两个 durable 提交。
+                // messages + tool_execution 的完整 Child/run locator。不得拆成两个 durable 提交。
                 withContext(NonCancellable) {
                     reportSubAssistantMetadataPatch(json, execContext, initialMeta, delivery = ToolMetadataDelivery.DEFERRED)
-                    execContext.reportChildConversation(childConversationId.toString())
+                    execContext.reportChildRun(ToolChildRunLink(
+                        childConversationId = childConversationId,
+                        childTurnId = allocatedChildTurnId,
+                        subAssistantRunId = ready.runId,
+                    ))
                     childLinkCommitted = true
                     artifactStore.publishAllUnpublished(child.createdArtifacts)
                 }
@@ -543,7 +547,7 @@ class SubAssistantRunCoordinator(
 
             // Durable link 成功后才把 lease Job 安装进 Child Runtime；否则失败补偿会被
             // active runtime 自己阻断，留下未关联 Child 与克隆 artifact。
-            val installedChildTurnId = Uuid.random()
+            val installedChildTurnId = allocatedChildTurnId
             childTurnId = installedChildTurnId
             runtimeRegistry.installAndStartTurnWorker(
                 conversationId = childConversationId,
@@ -1114,7 +1118,7 @@ class SubAssistantRunCoordinator(
                     },
                     // 立即更新 card 状态；phase/tool 未变则不回写 Master。
                     onPhase = { phase, toolName ->
-                        mapSubAssistantCallPhase(phase)?.let { mapped ->
+                        mapSubAssistantCallPhase(phase).let { mapped ->
                             val before = runState.snapshot()
                             val meta = runState.updatePhase(mapped, toolName)
                             if (meta !== before) {
