@@ -156,11 +156,6 @@ class SubAssistantRunCoordinator internal constructor(
         runGate.cancelRunsForAssistant(assistantId)
     }
 
-    /** 主聊天 UI 回答子助手当前 ask_user；过期或重复 interaction 会被拒绝。 */
-    fun answerUserInteraction(runId: String, interactionId: String, answer: String): Boolean {
-        return runGate.completeAnswer(runId, interactionId, answer)
-    }
-
     /** preflight 产物：放行（含 lease）或拒绝（含结果 parts）。 */
     private sealed interface Preflight {
         data class Ready(
@@ -1157,6 +1152,7 @@ class SubAssistantRunCoordinator internal constructor(
                 break
             }
             val resumedMessages = awaitPendingAskUser(
+                realmAccess = realmAccess,
                 runtime = runtime,
                 childTaskNodeId = childTaskNodeId,
                 runId = runId,
@@ -1177,6 +1173,7 @@ class SubAssistantRunCoordinator internal constructor(
     }
 
     private suspend fun awaitPendingAskUser(
+        realmAccess: net.weero.measix.pilot.data.enterprise.RealmAccess,
         runtime: ConversationRuntime,
         childTaskNodeId: Uuid,
         runId: String,
@@ -1196,27 +1193,33 @@ class SubAssistantRunCoordinator internal constructor(
         val tool = message.getTools().firstOrNull { it.localCallId == localCallId }
             ?: error("pending user-input locator $localCallId is outside the owning assistant message")
         val interactionId = "${runId}_${message.id}_$localCallId"
-        val answer = runGate.registerPendingInteraction(runId, interactionId)
-
-        val userInteraction = net.weero.measix.pilot.data.ai.subassistant.SubAssistantUserInteraction(
+        val answer = runGate.registerPendingInteraction(
+            masterConversationId = requireNotNull(runtime.durable.header.parentConversationId),
+            realmAccess = realmAccess,
+            runId = runId,
             interactionId = interactionId,
-            messageId = message.id.toString(),
-            localCallId = localCallId.toString(),
-            toolName = tool.toolName,
-            input = tool.input,
+            owner = requireNotNull(kotlinx.coroutines.currentCoroutineContext()[Job]),
         )
-        val waitingMetadata = runState.awaitUserInteraction(
-            interaction = userInteraction,
-            preview = computeSubAssistantPreview(messages, childTaskNodeId).ifEmpty { null },
-        )
-        reportSubAssistantMetadataPatch(json, execContext, waitingMetadata, delivery = ToolMetadataDelivery.CHECKPOINT)
-        val owner = requireNotNull(runtime.snapshot.value.stream) {
-            "ask_user wait has no active turn owner"
-        }
-        val handle = TurnHandle(runtime.id, owner.epoch, owner.turnId, owner.assistantMessageId)
-        runtime.retainAwaitingUser(handle)
 
         return try {
+            val userInteraction = net.weero.measix.pilot.data.ai.subassistant.SubAssistantUserInteraction(
+                interactionId = interactionId,
+                messageId = message.id.toString(),
+                localCallId = localCallId.toString(),
+                toolName = tool.toolName,
+                input = tool.input,
+            )
+            val waitingMetadata = runState.awaitUserInteraction(
+                interaction = userInteraction,
+                preview = computeSubAssistantPreview(messages, childTaskNodeId).ifEmpty { null },
+            )
+            reportSubAssistantMetadataPatch(json, execContext, waitingMetadata, delivery = ToolMetadataDelivery.CHECKPOINT)
+            val owner = requireNotNull(runtime.snapshot.value.stream) {
+                "ask_user wait has no active turn owner"
+            }
+            val handle = TurnHandle(runtime.id, owner.epoch, owner.turnId, owner.assistantMessageId)
+            runtime.retainAwaitingUser(handle)
+
             val answered = answer.await()
             // 应答 = ResolveToolInteraction(Answer) 命令（与 Master HITL 同一命令路径）
             val before = runtime.snapshot.value
@@ -1250,7 +1253,7 @@ class SubAssistantRunCoordinator internal constructor(
             runtime.markRunning(handle)
             runtime.durable.currentMessages()
         } finally {
-            runGate.unregisterPendingInteraction(runId)
+            runGate.unregisterPendingInteraction(runId, answer)
         }
     }
 

@@ -271,6 +271,75 @@ class ConversationCommandAccessTest {
         }
     }
 
+    @Test fun `child answer requires the original root and pending Session`() = runTest {
+        fixture { f ->
+            val target = f.page.commandTarget
+            val answer = f.runGate.registerPendingInteraction(f.rootId, target.selection.access, "run", "ask", Job())
+            val otherRoot = ConversationCommandTarget(f.put(f.scope), target.selection) {}
+            assertFalse(f.application.answerSubAssistant(otherRoot, "run", "ask", "foreign"))
+            assertFalse(f.application.answerSubAssistant(target, "run", "old-ask", "stale"))
+            assertFalse(answer.isCompleted)
+            assertTrue(f.application.answerSubAssistant(target, "run", "ask", "accepted"))
+            assertFalse(f.application.answerSubAssistant(target, "run", "ask", "duplicate"))
+            assertEquals("accepted", answer.await())
+            f.runGate.unregisterPendingInteraction("run", answer)
+        }
+    }
+
+    @Test fun `relogin cannot answer the previous Session pending even from a new page`() = runTest {
+        fixture { f ->
+            val original = f.page.commandTarget
+            val answer = f.runGate.registerPendingInteraction(f.rootId, original.selection.access, "run", "ask", Job())
+            f.sessions.finishExit(requireNotNull(f.sessions.beginExit()))
+            f.sessions.enrollFixture(exampleEnterprisePackage())
+            rejects<EnterpriseConfigurationException> { f.application.answerSubAssistant(original, "run", "ask", "old page") }
+            val selected = f.sessions.observeSelectedRealmSelection().first { it != null }!!
+            val reopened = ConversationViewLease(f.rootId, selected.access, selected.revision) {}
+            try {
+                assertFalse(f.application.answerSubAssistant(reopened.commandTarget, "run", "ask", "new session"))
+                assertFalse(answer.isCompleted)
+            } finally { reopened.close(); f.runGate.unregisterPendingInteraction("run", answer) }
+        }
+    }
+
+    @Test fun `switching back permits a fresh page to answer the same original background run`() = runTest {
+        fixture { f ->
+            val target = f.page.commandTarget
+            val answer = f.runGate.registerPendingInteraction(f.rootId, target.selection.access, "run", "ask", Job())
+            f.sessions.switchToPersonal()
+            f.sessions.switchToEnterprise()
+            rejects<EnterpriseConfigurationException> { f.application.answerSubAssistant(target, "run", "ask", "old page") }
+            val selected = f.sessions.observeSelectedRealmSelection().first { it != null }!!
+            val reopened = ConversationViewLease(f.rootId, selected.access, selected.revision) {}
+            try {
+                assertTrue(f.application.answerSubAssistant(reopened.commandTarget, "run", "ask", "resumed"))
+                assertEquals("resumed", answer.await())
+            } finally { reopened.close(); f.runGate.unregisterPendingInteraction("run", answer) }
+        }
+    }
+
+    @Test fun `closing or cancelling a queued child answer cannot complete its waiter`() = runTest {
+        for (cancel in listOf(false, true)) fixture { f ->
+            val target = f.page.commandTarget
+            val answer = f.runGate.registerPendingInteraction(f.rootId, target.selection.access, "run", "ask", Job())
+            val entered = CompletableDeferred<Unit>()
+            val release = CompletableDeferred<Unit>()
+            val lockOwner = launch { f.locks.withLock(f.rootId) { entered.complete(Unit); release.await() } }
+            entered.await()
+            val command = launch {
+                if (cancel) f.application.answerSubAssistant(target, "run", "ask", "queued")
+                else rejects<IllegalStateException> { f.application.answerSubAssistant(target, "run", "ask", "closed") }
+            }
+            runCurrent()
+            if (cancel) command.cancel() else f.page.close()
+            release.complete(Unit)
+            command.join()
+            lockOwner.join()
+            assertFalse(answer.isCompleted)
+            f.runGate.unregisterPendingInteraction("run", answer)
+        }
+    }
+
     private suspend fun TestScope.fixture(action: suspend (Fixture) -> Unit) {
         val f = Fixture(this)
         try { f.initialize(); action(f) }
@@ -293,8 +362,9 @@ class ConversationCommandAccessTest {
         val finalizer = TurnFinalizer(repository, registry, coordinator, JsonInstant)
         val lifecycle = SubAssistantLifecycle(repository, registry, coordinator, JsonInstant)
         val effects = mockk<GenerationSideEffects>()
+        val runGate = net.weero.measix.pilot.service.subassistant.SubAssistantRunGate()
         val application = ConversationApplicationService(settings, repository, mockk(), registry, coordinator, gate,
-            lifecycle, effects, artifactStore, mockk(), finalizer, JsonInstant, mockk(), ConversationTitleCoordinator(), sessions)
+            lifecycle, effects, artifactStore, mockk(), finalizer, JsonInstant, mockk(), ConversationTitleCoordinator(), sessions, runGate)
         val rootId = put(scope)
         lateinit var runtime: ConversationRuntime
         lateinit var page: ConversationViewLease

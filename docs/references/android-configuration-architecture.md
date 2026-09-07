@@ -110,7 +110,7 @@ Conversation、ConversationHeader、aggregate snapshot 与列表记录之间的�
 
 Memory 已通过 MemoryAddress/MemoryService 按原域、主体与 Session 进行查询和写入；共享记忆仅在本域主体内共享，详情编辑和工具卡删除保存原授权上下文。完整 owner、取消与订阅协议见 [运行记忆](memory-architecture.md)。
 
-会话/文件夹列表、分页、最近聊天、FTS 与统计按完整 scope 查询。UI 跟随选中域及原 Session，切域清空旧投影并失效分页源；助手的 recent_chats/conversation_search 工具保持创建时的原 RealmAccess，切回个人不改写在途企业工具的归属，退出重登也不能恢复旧工具授权。抽屉持续跟踪文件夹并在域变化时清除文件夹筛选。文件夹目录和会话分页行携带同一 Session owner 签发的 RealmSelection（原 RealmAccess 与进程内选择版本）；快速切域再返回也失效旧目录和惰性分页，新的目录不能给旧行重新授权。文件夹创建显式保存 scope 并验证当前助手准入，重命名、删除和移动由 ConversationApplicationService 在原选择锁内验证完整主体与助手。移动还需验证根会话和目录的选择版本一致；关闭或重登后的旧弹窗不能操作新空间。普通会话操作通过页面 lease 或目录行的 ConversationCommandTarget 保留原选择，最终会话锁内校验主体、根会话和页面生命周期；停止后树操作重新授权，撤销 token 不可跨选择复用。具体协议见 [会话操作](turn-step-execution.md)。START/继续、辅助模型生成、文件访问和恢复/备份尚未全面接入，不能据此宣称全部企业数据已经隔离；Workspace 仍是用户可选择的共享资源。
+会话/文件夹列表、分页、最近聊天、FTS 与统计按完整 scope 查询。UI 跟随选中域及原 Session，切域清空旧投影并失效分页源；助手的 recent_chats/conversation_search 工具保持创建时的原 RealmAccess，切回个人不改写在途企业工具的归属，退出重登也不能恢复旧工具授权。抽屉持续跟踪文件夹并在域变化时清除文件夹筛选。文件夹目录和会话分页行携带同一 Session owner 签发的 RealmSelection（原 RealmAccess 与进程内选择版本）；快速切域再返回也失效旧目录和惰性分页，新的目录不能给旧行重新授权。文件夹创建显式保存 scope 并验证当前助手准入，重命名、删除和移动由 ConversationApplicationService 在原选择锁内验证完整主体与助手。移动还需验证根会话和目录的选择版本一致；关闭或重登后的旧弹窗不能操作新空间。普通会话操作通过页面 lease 或目录行的 ConversationCommandTarget 保留原选择，最终会话锁内校验主体、根会话和页面生命周期；停止后树操作重新授权，撤销 token 不可跨选择复用。具体协议见 [会话操作](turn-step-execution.md)。子助手回答也使用原页面命令目标，并在 pending owner 内匹配原 Master 与执行 Session；UI 等待原回答被接受后才禁用提交，拒绝可重试，页面回收取消尚未被接受的提交。此接收结果不等同于 Child 后续持久化或模型执行成功。主聊天 START/继续、辅助模型生成、文件访问和恢复/备份尚未全面接入，不能据此宣称全部企业数据已经隔离；Workspace 仍是用户可选择的共享资源。
 
 ## 3. Local Settings 顶层结构
 

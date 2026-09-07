@@ -185,7 +185,7 @@ Target 在新 Child Turn 的 START 前，从同一份有效 Settings、Target、
 - 除 `ask_user` 外，所有需审批工具在非交互 Target 模式自动拒绝，返回
   `tool_not_permitted` + `approval_unavailable`。`approval_unavailable` 表示“需要审批但当前
   运行环境无法提供审批，不要原样重试”，是 ToolCall 级可恢复错误，不会终止整个 Run。
-- `ask_user` 由 Coordinator 按 Child `ToolCallLocator(assistantMessageId, stepId, localCallId)` 持久化到 Master 卡片；回答也用 `run_id + interaction_id` 精确匹配，防止重复或过期提交。
+- `ask_user` 由 Coordinator 按 Child `ToolCallLocator(assistantMessageId, stepId, localCallId)` 持久化到 Master 卡片。`SubAssistantRunGate` 登记原 Master 与执行时的 `RealmAccess`，pending deferred 依附原等待 Job；取消立即使其不可回答，finally 按具体登记清理，迟到清理不能移除后续交互。原生回答通过 `ConversationApplicationService.answerSubAssistant`，在原页面 `ConversationCommandTarget` 的选择、Session、根会话与生命周期校验后，原子匹配 Master、原 Session、`run_id` 和 `interaction_id`，只接受一次。退出重登不能用新 Session 回答旧 pending；单纯切域往返后，新页面可以回答仍属于原 Session 的后台运行。
 - Target run 暂停时，`TurnPause` 携带 `pendingInteractions: List<PendingToolInteraction>`（每项为
   `ToolCallLocator` + `ToolInteractionState`，按 transcript 调用顺序、非空）。Coordinator 直接消费这份列表定位
   待应答工具，**不扫描消息、不依赖任何已落盘的运行时元数据**。一批存在多个挂起交互时逐个处理，

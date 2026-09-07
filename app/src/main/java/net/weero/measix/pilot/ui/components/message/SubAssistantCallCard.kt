@@ -79,7 +79,7 @@ fun SubAssistantCallCard(
     tool: UIMessagePart.Tool,
     masterConversationId: Uuid?,
     modifier: Modifier = Modifier,
-    onAnswer: ((runId: String, interactionId: String, answer: String) -> Boolean)? = null,
+    onAnswer: (suspend (runId: String, interactionId: String, answer: String) -> Boolean)? = null,
 ) {
     val json = JsonInstant
     val metadata = remember(tool.metadata) {

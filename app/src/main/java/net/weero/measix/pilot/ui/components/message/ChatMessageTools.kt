@@ -30,10 +30,13 @@ import androidx.compose.material3.SheetValue
 import androidx.compose.material3.rememberBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.key
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import kotlinx.coroutines.launch
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.draw.clip
@@ -336,7 +339,19 @@ fun ChainOfThoughtScope.ChatMessageToolStep(
 internal fun ChainOfThoughtScope.AskUserToolStep(
     tool: UIMessagePart.Tool,
     phase: ToolLivePhase,
-    onAnswer: ((answer: String) -> Boolean)?,
+    onAnswer: (suspend (answer: String) -> Boolean)?,
+) {
+    key(tool.localCallId, tool.stepId, tool.providerCallId, tool.input) {
+        AskUserQuestionContent(tool, phase, onAnswer)
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun ChainOfThoughtScope.AskUserQuestionContent(
+    tool: UIMessagePart.Tool,
+    phase: ToolLivePhase,
+    onAnswer: (suspend (answer: String) -> Boolean)?,
 ) {
     // 控件只服从严格投影出的 typed phase；持久化 payload 仅在 ANSWERED 阶段读取。
     val isPending = phase == ToolLivePhase.AWAITING_INPUT
@@ -363,7 +378,9 @@ internal fun ChainOfThoughtScope.AskUserToolStep(
     val answers = remember(tool.localCallId, tool.input) { mutableStateMapOf<String, String>() }
     // Track selected options for multi questions
     val multiAnswers = remember(tool.localCallId, tool.input) { mutableStateMapOf<String, Set<String>>() }
-    var submitted by remember(tool.localCallId, tool.input) { mutableStateOf(false) }
+    var submitted by remember { mutableStateOf(false) }
+    var submitting by remember { mutableStateOf(false) }
+    val answerScope = rememberCoroutineScope()
 
     val firstQuestion = questions.firstOrNull()?.question ?: "..."
 
@@ -527,9 +544,15 @@ internal fun ChainOfThoughtScope.AskUserToolStep(
                                     }
                                 })
                             }
-                            submitted = onAnswer(answerPayload.toString())
+                            if (!submitting && !submitted) {
+                                submitting = true
+                                answerScope.launch {
+                                    try { submitted = onAnswer(answerPayload.toString()) }
+                                    finally { submitting = false }
+                                }
+                            }
                         },
-                        enabled = !submitted && questions.all { q ->
+                        enabled = !submitted && !submitting && questions.all { q ->
                             when (q.selectionType) {
                                 "multi" -> !multiAnswers[q.id].isNullOrEmpty()
                                 else -> !answers[q.id].isNullOrBlank()

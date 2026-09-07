@@ -133,6 +133,7 @@ class SubAssistantTurnIntegrationTest {
             val pipeline = mockk<TurnPipelineFactory>()
             every { pipeline.input(any()) } returns emptyList()
             every { pipeline.output() } returns emptyList()
+            val runGate = SubAssistantRunGate()
             val childRuns = SubAssistantRunCoordinator(
                 turnRunner = runner, conversationRepo = repository, runtimeRegistry = registry,
                 commandCoordinator = commands, toolSetFactory = tools, settingsStore = settingsStore,
@@ -143,7 +144,7 @@ class SubAssistantTurnIntegrationTest {
                 turnContextFactory = TurnContextFactory(mockk(relaxed = true)), artifactStore = artifacts,
                 toolArtifactRewriter = mockk(relaxed = true), json = JsonInstant,
                 attachmentResolver = resolver, context = mockk(relaxed = true), turnFinalizer = finalizer,
-                runGate = SubAssistantRunGate(),
+                runGate = runGate,
             )
             val runtime = commands.create(Conversation(assistantId = parent.id, messageNodes = listOf(UIMessage.user("Delegate the choice").toMessageNode())))
             masterId = runtime.id
@@ -192,8 +193,8 @@ class SubAssistantTurnIntegrationTest {
                             pausedStepId = ask.stepId
                             pausedLocalCallId = ask.localCallId
                             assertEquals(ToolInteractionState.AwaitingInput, ask.interactionState)
-                            assertTrue(childRuns.answerUserInteraction(metadata.runId, interaction.interactionId, "blue"))
-                            assertFalse(childRuns.answerUserInteraction(metadata.runId, interaction.interactionId, "red"))
+                            assertTrue(runGate.completeAnswer(runtime.id, net.weero.measix.pilot.data.enterprise.RealmAccess.Personal, metadata.runId, interaction.interactionId, "blue"))
+                            assertFalse(runGate.completeAnswer(runtime.id, net.weero.measix.pilot.data.enterprise.RealmAccess.Personal, metadata.runId, interaction.interactionId, "red"))
                         }
                     },
                 ))

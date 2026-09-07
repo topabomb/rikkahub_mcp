@@ -122,6 +122,7 @@ class ConversationForkContextTest {
             toolArtifactRewriter = mockk<ToolArtifactRewriter>(),
             titleCoordinator = mockk<ConversationTitleCoordinator>(),
             sessions = sessions,
+            subAssistantRunGate = mockk(),
         )
 
         try {

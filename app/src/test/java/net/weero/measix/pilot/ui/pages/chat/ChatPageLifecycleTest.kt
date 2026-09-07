@@ -5,7 +5,6 @@ import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.ViewModelStore
-import androidx.test.core.app.ApplicationProvider
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.every
@@ -173,6 +172,31 @@ class ChatPageLifecycleTest {
         } finally { fixture.store.clear(); Dispatchers.resetMain() }
     }
 
+    @Test fun `answer handler retains its original page across retry and reports a rejected answer`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val fixture = Fixture()
+        try {
+            val vm = fixture.create()
+            runCurrent()
+            val oldHandler = requireNotNull(vm.subAssistantAnswerHandler())
+            val nextLease = ConversationViewLease(fixture.request.id, fixture.request.access, 1) {}
+            coEvery { fixture.application.initialize(fixture.request) } returns nextLease
+            vm.retryConversationLoad()
+            runCurrent()
+            coEvery { fixture.application.answerSubAssistant(any(), "run", "ask", "answer") } coAnswers {
+                firstArg<ConversationCommandTarget>() === nextLease.commandTarget
+            }
+            assertFalse(oldHandler("run", "ask", "answer"))
+            coVerify { fixture.application.answerSubAssistant(fixture.lease.commandTarget, "run", "ask", "answer") }
+            assertEquals(1, fixture.errors.errors.value.size)
+            assertTrue(requireNotNull(vm.subAssistantAnswerHandler())("run", "ask", "answer"))
+            coEvery { fixture.application.answerSubAssistant(any(), "run", "ask", "answer") } throws kotlinx.coroutines.CancellationException("cancelled")
+            try { requireNotNull(vm.subAssistantAnswerHandler())("run", "ask", "answer"); fail("Cancellation must propagate") }
+            catch (_: kotlinx.coroutines.CancellationException) { }
+            assertEquals(1, fixture.errors.errors.value.size)
+        } finally { fixture.store.clear(); Dispatchers.resetMain() }
+    }
+
     private class Fixture(draft: Boolean = true) {
         val store = ViewModelStore()
         val request = ConversationOpenRequest.NewDraft(Uuid.random(), RealmAccess.Personal, ConfigurationReference.random())
@@ -184,7 +208,7 @@ class ChatPageLifecycleTest {
         val favorites = mockk<FavoriteService>()
         val access = MutableStateFlow(true)
         private val settings = mockk<SettingsStore>()
-        private val errors = mockk<ChatErrorStore>()
+        val errors = ChatErrorStore()
         private val updater = mockk<UpdateChecker>()
         init {
             coEvery { application.initialize(request) } returns lease
@@ -196,7 +220,6 @@ class ChatPageLifecycleTest {
             })
             every { updater.updateState } returns MutableStateFlow(UiState.Idle)
             every { favorites.observeNodeIds(request.id) } returns flowOf(setOf(Uuid.random()))
-            every { errors.errorsFor(request.id) } returns flowOf(emptyList())
             every { query.observeViewAccess(any()) } returns access
             every { query.observeForView<Any?>(any(), any(), any()) } answers { thirdArg<() -> Flow<Any?>>()() }
             val snapshot = ConversationRuntimeSnapshot(
@@ -210,7 +233,7 @@ class ChatPageLifecycleTest {
         fun create(): ChatVM = ViewModelProvider(store, object : ViewModelProvider.Factory {
             @Suppress("UNCHECKED_CAST")
             override fun <T : ViewModel> create(modelClass: Class<T>): T = ChatVM(
-                request, ApplicationProvider.getApplicationContext<Application>(), settings, mockk(), application,
+                request, mockk<Application> { every { getString(net.weero.measix.pilot.R.string.error_title_operation) } returns "Operation failed" }, settings, mockk(), application,
                 query, updater, artifacts, favorites, errors,
             ) as T
         })[ChatVM::class.java]

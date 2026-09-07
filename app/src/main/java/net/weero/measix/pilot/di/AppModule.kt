@@ -413,6 +413,7 @@ val appModule = module {
             toolArtifactRewriter = get(),
             titleCoordinator = get(),
             sessions = get(),
+            subAssistantRunGate = get(),
         )
     }
 

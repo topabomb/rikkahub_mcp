@@ -258,7 +258,7 @@ class ConversationFolderAccessTest {
         val coordinator = ConversationCommandCoordinator(registry, repository, gate, locks)
         val application = ConversationApplicationService(
             settings, repository, folderRepository, registry, coordinator, gate, mockk(), mockk(), mockk(),
-            mockk(), mockk(), JsonInstant, mockk(), mockk(), sessions,
+            mockk(), mockk(), JsonInstant, mockk(), mockk(), sessions, mockk(),
         )
         val query = ConversationQueryService(repository, registry, folderRepository, mockk(), mockk(), sessions, gate)
 

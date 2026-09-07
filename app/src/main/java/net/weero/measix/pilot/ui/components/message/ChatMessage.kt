@@ -118,7 +118,7 @@ fun ChatMessage(
     isFavorite: Boolean = false,
     onToggleFavorite: (() -> Unit)? = null,
     onToolDecision: ((locator: ToolCallLocator, decision: ToolInteractionDecision) -> Unit)? = null,
-    onSubAssistantAnswer: ((runId: String, interactionId: String, answer: String) -> Boolean)? = null,
+    onSubAssistantAnswer: (suspend (runId: String, interactionId: String, answer: String) -> Boolean)? = null,
     toolLivePhases: Map<ToolCallLocator, ToolLivePhase> = emptyMap(),
     onShowTerminalError: ((UIMessage) -> Unit)? = null,
     readOnly: Boolean = false,
@@ -385,7 +385,7 @@ private fun MessagePartsBlock(
     annotations: List<UIMessageAnnotation>,
     loading: Boolean,
     onToolDecision: ((locator: ToolCallLocator, decision: ToolInteractionDecision) -> Unit)? = null,
-    onSubAssistantAnswer: ((runId: String, interactionId: String, answer: String) -> Boolean)? = null,
+    onSubAssistantAnswer: (suspend (runId: String, interactionId: String, answer: String) -> Boolean)? = null,
     toolLivePhases: Map<ToolCallLocator, ToolLivePhase>,
     onUserMessageClick: (() -> Unit)? = null,
 ) {

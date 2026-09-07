@@ -66,6 +66,7 @@ class ConversationApplicationService internal constructor(
     private val toolArtifactRewriter: ToolArtifactRewriter,
     private val titleCoordinator: ConversationTitleCoordinator,
     private val sessions: EnterpriseSessionController,
+    private val subAssistantRunGate: net.weero.measix.pilot.service.subassistant.SubAssistantRunGate,
 ) {
     /** One-use undo ownership. Discard cannot release retention already claimed by restore. */
     class RestoreToken internal constructor(
@@ -108,6 +109,15 @@ class ConversationApplicationService internal constructor(
                 operation()
             }
         }
+
+    suspend fun answerSubAssistant(
+        target: ConversationCommandTarget,
+        runId: String,
+        interactionId: String,
+        answer: String,
+    ): Boolean = withRootCommand(target) {
+        subAssistantRunGate.completeAnswer(target.conversationId, target.selection.access, runId, interactionId, answer)
+    }
 
     suspend fun newDraftRequest(
         access: RealmAccess,

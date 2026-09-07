@@ -420,8 +420,18 @@ class ChatVM(
         turnService.submitToolDecision(_conversationId, locator, decision)
     }
 
-    fun handleSubAssistantAnswer(runId: String, interactionId: String, answer: String): Boolean =
-        turnService.handleSubAssistantAnswer(runId, interactionId, answer)
+    fun subAssistantAnswerHandler(): (suspend (String, String, String) -> Boolean)? {
+        val target = (page.value as? PageState.Open)?.lease?.commandTarget ?: return null
+        return { runId, interactionId, answer ->
+            try {
+                check(conversationApplicationService.answerSubAssistant(target, runId, interactionId, answer)) {
+                    "sub_assistant_interaction_unavailable"
+                }
+                true
+            } catch (cancelled: CancellationException) { throw cancelled }
+            catch (error: Exception) { reportCommandError(target.conversationId, error); false }
+        }
+    }
 
     private fun launchCommand(target: ConversationCommandTarget, action: suspend () -> Unit): Job = viewModelScope.launch {
         try { action() }

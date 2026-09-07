@@ -674,10 +674,6 @@ class ConversationTurnService internal constructor(
         }
     }
 
-    fun handleSubAssistantAnswer(runId: String, interactionId: String, answer: String): Boolean {
-        return subAssistantRunCoordinator.answerUserInteraction(runId, interactionId, answer)
-    }
-
     // ---- 处理消息补全 ----
 
     private suspend fun launchRun(

@@ -158,7 +158,7 @@ internal fun ChatList(
     onManageAssistant: () -> Unit,
     onMemoryClick: () -> Unit,
     onToolDecision: ((locator: ToolCallLocator, decision: ToolInteractionDecision) -> Unit)? = null,
-    onSubAssistantAnswer: ((runId: String, interactionId: String, answer: String) -> Boolean)? = null,
+    onSubAssistantAnswer: (suspend (runId: String, interactionId: String, answer: String) -> Boolean)? = null,
     onToggleFavorite: ((MessageNode) -> Unit)? = null,
     onConversationSystemPromptChange: ((String?) -> Unit)? = null,
 ) {
@@ -251,7 +251,7 @@ private fun ChatListNormal(
     onMemoryClick: () -> Unit,
     animatedVisibilityScope: AnimatedVisibilityScope,
     onToolDecision: ((locator: ToolCallLocator, decision: ToolInteractionDecision) -> Unit)? = null,
-    onSubAssistantAnswer: ((runId: String, interactionId: String, answer: String) -> Boolean)? = null,
+    onSubAssistantAnswer: (suspend (runId: String, interactionId: String, answer: String) -> Boolean)? = null,
     onToggleFavorite: ((MessageNode) -> Unit)? = null,
     onConversationSystemPromptChange: ((String?) -> Unit)? = null,
 ) {

@@ -226,7 +226,7 @@ class ConversationPageAccessTest {
         settings: SettingsStore = mockk(),
     ) = ConversationApplicationService(
         settings, repository, mockk(), mockk(), coordinator, gate(), mockk(), mockk(), mockk(),
-        mockk(), mockk(), JsonInstant, mockk(), mockk(), sessions,
+        mockk(), mockk(), JsonInstant, mockk(), mockk(), sessions, mockk(),
     )
 
     private suspend inline fun <reified T : Throwable> assertFails(block: suspend () -> Unit) {

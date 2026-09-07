@@ -805,9 +805,7 @@ private fun ChatPageContent(
                 onSubAssistantAnswer = if (turnPresentation.phase == TurnLivePhase.STOPPING) {
                     null
                 } else {
-                    { runId, interactionId, answer ->
-                        vm.handleSubAssistantAnswer(runId, interactionId, answer)
-                    }
+                    vm.subAssistantAnswerHandler()
                 },
                 onToggleFavorite = { node ->
                     vm.toggleMessageFavorite(node)

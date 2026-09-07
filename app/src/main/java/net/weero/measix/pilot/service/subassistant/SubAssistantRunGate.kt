@@ -3,6 +3,7 @@ package net.weero.measix.pilot.service.subassistant
 import me.rerere.common.configuration.ConfigurationReference
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Job
+import net.weero.measix.pilot.data.enterprise.RealmAccess
 import kotlinx.coroutines.cancel
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
@@ -44,12 +45,15 @@ class SubAssistantRunGate {
     }
 
     private data class PendingUserInteraction(
+        val masterConversationId: Uuid,
+        val realmAccess: RealmAccess,
         val interactionId: String,
-        val answer: CompletableDeferred<String> = CompletableDeferred(),
+        val answer: CompletableDeferred<String>,
     )
 
     private val leases = ConcurrentHashMap<SubAssistantRunKey, SubAssistantRunLease>()
-    private val pendingUserInteractions = ConcurrentHashMap<String, PendingUserInteraction>()
+    private val interactionLock = Any()
+    private val pendingUserInteractions = mutableMapOf<String, PendingUserInteraction>()
 
     internal fun isBusy(key: SubAssistantRunKey): Boolean = leases.containsKey(key)
 
@@ -100,29 +104,45 @@ class SubAssistantRunGate {
      * 登记一个待应答交互；同一 run 已存在 pending 时抛出（防重复桥接）。
      * 返回的 deferred 由 [completeAnswer] 完成或 [cancelPendingInteractions] 取消。
      */
-    fun registerPendingInteraction(runId: String, interactionId: String): CompletableDeferred<String> {
-        val pending = PendingUserInteraction(interactionId)
-        check(pendingUserInteractions.putIfAbsent(runId, pending) == null) {
-            "Run $runId already has a pending user interaction"
+    internal fun registerPendingInteraction(
+        masterConversationId: Uuid,
+        realmAccess: RealmAccess,
+        runId: String,
+        interactionId: String,
+        owner: Job,
+    ): CompletableDeferred<String> = synchronized(interactionLock) {
+        check(runId !in pendingUserInteractions) { "Run $runId already has a pending user interaction" }
+        val pending = PendingUserInteraction(masterConversationId, realmAccess, interactionId, CompletableDeferred(owner))
+        pendingUserInteractions[runId] = pending
+        pending.answer
+    }
+
+    /** Cleanup belongs to this exact registration; stale cleanup cannot remove its replacement. */
+    internal fun unregisterPendingInteraction(runId: String, answer: CompletableDeferred<String>) = synchronized(interactionLock) {
+        if (pendingUserInteractions[runId]?.answer === answer) {
+            pendingUserInteractions.remove(runId)
+            answer.cancel()
         }
-        return pending.answer
     }
 
-    /** 应答/取消路径的 finally 清理：移除该 run 的挂起登记。 */
-    fun unregisterPendingInteraction(runId: String) {
-        pendingUserInteractions.remove(runId)
-    }
-
-    /** 主聊天 UI 应答当前 ask_user；过期或重复 interaction 被拒绝。 */
-    fun completeAnswer(runId: String, interactionId: String, answer: String): Boolean {
+    /** Complete only the original root, Session and pending interaction, at most once. */
+    internal fun completeAnswer(
+        masterConversationId: Uuid,
+        realmAccess: RealmAccess,
+        runId: String,
+        interactionId: String,
+        answer: String,
+    ): Boolean = synchronized(interactionLock) {
         val pending = pendingUserInteractions[runId] ?: return false
-        if (pending.interactionId != interactionId) return false
-        return pending.answer.complete(answer)
+        if (pending.masterConversationId != masterConversationId || pending.realmAccess != realmAccess ||
+            pending.interactionId != interactionId) return false
+        pending.answer.complete(answer)
     }
 
-    /** 启动恢复：取消全部挂起交互（awaiter 收到 CancellationException）。 */
-    fun cancelPendingInteractions() {
-        pendingUserInteractions.values.forEach { it.answer.cancel() }
+    /** Startup recovery cancels every registered waiter before dropping its ownership. */
+    fun cancelPendingInteractions() = synchronized(interactionLock) {
+        val pending = pendingUserInteractions.values.toList()
         pendingUserInteractions.clear()
+        pending.forEach { it.answer.cancel() }
     }
 }
