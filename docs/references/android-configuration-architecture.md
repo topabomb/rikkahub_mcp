@@ -67,7 +67,7 @@ updateLocal(latest Local shadow transform)
 | `dynamicColor` | `Boolean` | `dynamic_color` | `true` | Android 动态色 |
 | `themeId` | `String` | `theme_id` | 首个预设主题 ID | 非动态色时的主题 |
 | `customThemes` | `List<CustomTheme>` | `custom_themes` | `[]` | 用户自定义主题 |
-| `developerMode` | `Boolean` | `developer_mode` | `false` | 开发者入口开关 |
+| `developerMode` | `Boolean` | `developer_mode` | `false` | 当前仅持久化读写，无功能消费者；不控制 Debug 标记或入口 |
 | `displaySetting` | `DisplaySetting` | `display_setting` | `DisplaySetting()` | 聊天显示、通知、TTS 播放和输入偏好 |
 
 ### 3.2 模型选择、提示与派生任务

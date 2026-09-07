@@ -207,7 +207,7 @@ Tool Result checkpoint（消息与 Artifact 引用同事务）
 ### 4.3 设置与迁移
 
 - `Settings.attachmentInspectionModelId: Uuid? = null`；DataStore key `attachment_inspection_model`；未配置即关闭工具。设置页选择器只列出声明 IMAGE 输入的 Chat 模型。
-- 旧 `ocr_model` / `ocr_prompt` 只存在于一次性迁移边界（`SettingsOcrMigration`）：新 key 优先；有效旧视觉模型（Provider 存在且声明 IMAGE 输入）映射到新字段；旧 Prompt 丢弃；旧 key 清除；旧 observation cache best-effort 清理。备份恢复（S3 / WebDav）在导入 settings.json 前同样应用 `migrateLegacySettingsJson()` 旧键映射，见 [../dev/persistent-records-and-sync.md](../dev/persistent-records-and-sync.md)。
+- 旧 `ocr_model` / `ocr_prompt` 只存在于一次性迁移边界（`SettingsOcrMigration`）：新 key 优先；有效旧视觉模型（Provider 存在且声明 IMAGE 输入）映射到新字段；旧 Prompt 丢弃；旧 key 清除；旧 observation cache best-effort 清理。备份恢复（S3 / WebDav）在导入 settings.json 前同样应用 `migrateLegacySettingsJson()` 旧键映射，见 [Android 配置架构](android-configuration-architecture.md)。
 
 ## 5. 投影时序（三条链路）
 

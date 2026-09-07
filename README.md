@@ -106,7 +106,8 @@ common/       通用工具
 
 | 文档 | 说明 |
 |------|------|
-| [Android 企业集成计划](docs/dev/android-enterprise-integration-plan.md) | 下一步企业阶段、平台映射与运行接入约束 |
+| [Android 企业域本期实施方案](docs/dev/android-enterprise-integration-plan.md) | 0.0.20 架构、配置迁移、正式 UI、本地企业服务及完整验收 |
+| [Android 真实企业服务接入规划](docs/dev/android-enterprise-production-integration-roadmap.md) | 后续真实认证、配置下发、运行服务与 Portal 接入；不阻塞本期 |
 | [版本变更记录](docs/dev/changelog.md) | 各发布版本的功能与修复摘要 |
 | [Fork 精简计划](docs/dev/fork-simplification-plan.md) | Fork 精简规划与落地记录（已归档） |
 | [原始架构文档](docs/dev/original-architecture.md) | Fork 前 RikkaHub 架构详解（已归档） |
