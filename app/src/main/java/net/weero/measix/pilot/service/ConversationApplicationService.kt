@@ -30,9 +30,10 @@ import net.weero.measix.pilot.data.repository.ConversationRepository
 import net.weero.measix.pilot.data.repository.FolderRepository
 import net.weero.measix.pilot.data.configuration.ConfigurationScope
 import net.weero.measix.pilot.data.enterprise.EnterpriseSessionController
+import net.weero.measix.pilot.data.enterprise.RealmAccess
+import net.weero.measix.pilot.data.configuration.ConfigurationCategory
 import net.weero.measix.pilot.service.runtime.ConversationCommandCoordinator
 import net.weero.measix.pilot.service.runtime.ConversationCommandConflictException
-import net.weero.measix.pilot.service.runtime.ConversationNotFoundException
 import net.weero.measix.pilot.service.runtime.ConversationRuntimeRegistry
 import net.weero.measix.pilot.service.runtime.ConversationAggregateSnapshot
 import net.weero.measix.pilot.service.runtime.DeleteMessage
@@ -47,13 +48,6 @@ import net.weero.measix.pilot.service.runtime.UpdateHeader
 import net.weero.measix.pilot.service.runtime.currentTurnPresentation
 import kotlinx.serialization.json.Json
 import kotlin.uuid.Uuid
-
-/** Opaque page-lifetime ownership; UI cannot access Runtime capabilities through this handle. */
-class ConversationViewLease internal constructor(
-    private val closeAction: () -> Unit,
-) : AutoCloseable {
-    override fun close() = closeAction()
-}
 
 /** 用户会话命令、创建、删除与 fork 的唯一 Application owner。 */
 class ConversationApplicationService internal constructor(
@@ -84,18 +78,86 @@ class ConversationApplicationService internal constructor(
         override fun close() = artifactRetention.close()
     }
 
-    suspend fun initialize(conversationId: Uuid): ConversationViewLease {
+    suspend fun newDraftRequest(
+        access: RealmAccess,
+        assistantId: ConfigurationReference? = null,
+    ): ConversationOpenRequest.NewDraft {
         recoveryGate.awaitReady()
-        val settings = settingsStore.effectiveSettings.first().settings
-        val assistant = settings.getCurrentAssistant()
-        val conversation = Conversation.ofId(
-            id = conversationId,
-            assistantId = assistant.id,
-            newConversation = true,
-        ).updateCurrentMessages(assistant.presetMessages)
-        val runtime = commandCoordinator.loadOrRegisterDraft(conversation)
-        val lease = runtimeRegistry.acquireRegisteredRuntime(conversationId, runtime)
-        return ConversationViewLease(lease::close)
+        return sessions.withSelectedRealmAccess(access) {
+            settingsStore.withResolvedConfiguration(access.scope, sessions.state.value) { configuration ->
+                val selected = requireNotNull(assistantId ?: configuration.selections.assistantId) { "conversation_assistant_missing" }
+                check(configuration.selection(ConfigurationCategory.ASSISTANT, selected).isAvailable) { "conversation_assistant_unavailable" }
+                ConversationOpenRequest.NewDraft(Uuid.random(), access, selected)
+            }
+        }
+    }
+
+    suspend fun initialize(request: ConversationOpenRequest): ConversationViewLease {
+        recoveryGate.awaitReady()
+        return sessions.withSelectedRealmAccess(request.access) {
+            val draft = (request as? ConversationOpenRequest.NewDraft)?.let { creation ->
+                settingsStore.withResolvedConfiguration(creation.access.scope, sessions.state.value) { configuration ->
+                    configuration.assistants[creation.assistantId]
+                        ?.takeIf { configuration.selection(ConfigurationCategory.ASSISTANT, it.id).isAvailable }
+                        ?.let { assistant ->
+                            Conversation.ofId(id = creation.id, assistantId = assistant.id, newConversation = true)
+                                .copy(scope = creation.access.scope)
+                                .updateCurrentMessages(assistant.presetMessages)
+                        }
+                }
+            }
+            val lease = commandCoordinator.openForView(request, draft)
+            ConversationViewLease(request.id, request.access, sessions.selectionRevision.value, lease::close)
+        }
+    }
+
+    suspend fun selectAssistantRequest(
+        access: RealmAccess,
+        assistantId: ConfigurationReference,
+        createNew: Boolean,
+    ): ConversationOpenRequest {
+        recoveryGate.awaitReady()
+        return sessions.withSelectedRealmAccess(access) {
+            settingsStore.withResolvedConfiguration(access.scope, sessions.state.value) { configuration ->
+                check(configuration.selection(ConfigurationCategory.ASSISTANT, assistantId).isAvailable) {
+                    "conversation_assistant_unavailable"
+                }
+            }
+            when (access) {
+                RealmAccess.Personal -> settingsStore.updateLocal { it.copy(assistantId = assistantId) }
+                is RealmAccess.Enterprise -> settingsStore.updateResourceSelections(
+                    access.scope,
+                    sessions.state.value as net.weero.measix.pilot.data.enterprise.EnterpriseState.Available,
+                ) { it.copy(assistantId = assistantId) }
+            }
+            val recent = if (createNew) null else conversationRepo
+                .getRecentConversationRecords(access.scope, assistantId, 1).firstOrNull()
+            if (recent != null) ConversationOpenRequest.OpenExisting(recent.id, access)
+            else settingsStore.withResolvedConfiguration(access.scope, sessions.state.value) { configuration ->
+                check(configuration.selection(ConfigurationCategory.ASSISTANT, assistantId).isAvailable) {
+                    "conversation_assistant_unavailable"
+                }
+                ConversationOpenRequest.NewDraft(Uuid.random(), access, assistantId)
+            }
+        }
+    }
+
+    suspend fun initialRequest(createNew: Boolean): ConversationOpenRequest {
+        recoveryGate.awaitReady()
+        val access = sessions.captureSelectedRealmAccess()
+        val existing = sessions.withSelectedRealmAccess(access) { settingsStore.lastConversation(access.scope) }
+        return if (!createNew && existing != null) ConversationOpenRequest.OpenExisting(existing, access)
+            else newDraftRequest(access)
+    }
+
+    suspend fun rememberConversation(lease: ConversationViewLease) {
+        sessions.withSelectedRealmAccess(lease.access) {
+            lease.requireOpen()
+            check(lease.selectionRevision == sessions.selectionRevision.value) { "conversation_view_revoked" }
+            val header = conversationRepo.getConversationHeader(lease.conversationId) ?: return@withSelectedRealmAccess
+            check(header.scope == lease.access.scope && header.parentConversationId == null) { "conversation_scope_mismatch" }
+            settingsStore.rememberConversation(header.scope, lease.conversationId)
+        }
     }
 
     suspend fun updateTitle(conversationId: Uuid, title: String) {

@@ -69,8 +69,21 @@ class Navigator(private val backStack: MutableList<NavKey>) {
 
 `Screen` 的密封层次与 `RouteActivity` 的 `entry<Screen.*>` 注册是路由清单的唯一权威来源。
 路由按职责分为聊天/分享、历史与收藏、助手配置、设置、扩展与 Workspace，以及 WebView、备份、
-图片生成和调试页面。带业务身份的页面把 ID 放入可序列化路由参数；例如聊天使用会话 ID，
+图片生成和调试页面。带业务身份的页面把 ID 放入可序列化路由参数；聊天使用 `ConversationOpenRequest`，
 子助手详情使用 `masterConversationId + runId`，工作区文件编辑使用 Workspace ID、区域和路径。
+
+`ConversationOpenRequest.NewDraft` 固定会话 ID、原 `RealmAccess` 与助手引用；`OpenExisting` 只打开已有根会话。
+历史、搜索、收藏和通知使用已有会话请求；分享和新建按钮显式创建 Draft。`rememberChatNavigation` 的回调保留渲染时的域，
+助手切换由 `selectAssistantRequest` 在同一授权边界完成选择和最近会话查询，等待后不重新捕获 Session。
+冷启动的 `Screen.Startup` 在恢复完成后读取本域的最近会话或生成新请求，再替换为稳定的聊天导航项。
+
+`ChatVM` 在 `initialize` 成功取得 `ConversationViewLease` 后才订阅聊天、收藏、错误与附件预览，并创建附件导入作用域。
+切域、退出、到期或关闭 lease 会清空页面投影；同主体重登不能复活旧请求。Missing/Failed 页面提供重试和显式新建按钮，
+不会把失效的历史 ID 当作新聊天。分享初始输入由 ViewModel 串行消费一次，保留 ViewModel 的旋转不会重复导入或覆盖用户编辑；
+若恢复的请求已对应持久聊天则不重放输入。未发送 Draft 不另行持久化。
+页面失效或重试会清空旧导入作用域拥有的未提交输入，新作用域重新接收分享输入；不跨已关闭的 owner 复用附件 URI。
+Session owner 的进程内 `selectionRevision` 记录实际选中域/Session 的变化，页面 lease 必须仍匹配该值，
+因此即使 StateFlow 合并快速离开再返回的中间状态，也不会恢复旧页面权限。它不属于配置 generation 或 Feed revision。
 
 新增路由必须同时补齐 `Screen` 定义、entry 注册、参数恢复和返回行为；不要在参考文档维护一份易漂移的逐项副本。
 

@@ -72,6 +72,11 @@ Tool 的 `stepId` 指向前方最近的 Step，`localCallId` 在 owning Assistan
 ## START 与交互继续
 
 新聊天先是非持久化 Draft，首条 `AppendUserMessage` 单事务创建会话并原位晋升 Ready。
+页面打开通过 `ConversationApplicationService.initialize` 校验原 selected RealmAccess，再由 `openForView` 在会话锁内先检查
+resident/Room header 的完整 scope 与根会话身份，之后才加载消息树或安装显式 Draft。已有会话不存在时返回 Missing，禁止回退新建。
+已晋升聊天保留原 Runtime 与导航项；恢复的 `NewDraft` 请求若已有持久 header，就读取已提交内容，不重放助手 preset。
+页面 Query 只接受成功打开的 `ConversationViewLease`，每次发布复验原 Session；关闭的 lease 永不重新激活。
+最近聊天偏好只在观察到持久 Ready 并复查 Room header 后保存，空 Draft 不写最近聊天 ID。
 空 Draft 不进入数据库、列表或 Turn。发送先结束旧 owner、预处理输入和稳定附件，再提交 USER。
 START 前准备失败可以留下已提交 USER，但不能伪造已经开始的 Assistant Turn。
 

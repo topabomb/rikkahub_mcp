@@ -44,6 +44,8 @@ class RetiredSurfaceContractTest {
             "retainedChildren",
             "getConversationHeaderSnapshot",
             "getConversationFlow(",
+            "loadOrRegisterDraft",
+            "navigateToChatPage",
             "getConversationsOfAssistantPaging",
             "getConversationsOfAssistantPage",
             "searchConversationsOfAssistantPage",

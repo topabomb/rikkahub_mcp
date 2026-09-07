@@ -2,6 +2,7 @@
 
 package net.weero.measix.pilot
 
+import androidx.compose.runtime.getValue
 import me.rerere.common.configuration.ConfigurationReference
 import android.annotation.SuppressLint
 import android.content.Intent
@@ -34,7 +35,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
-import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -44,6 +46,12 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.testTagsAsResourceId
 import androidx.compose.ui.unit.dp
 import androidx.core.net.toUri
+import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.CancellationException
+import net.weero.measix.pilot.service.ConversationApplicationService
+import net.weero.measix.pilot.service.ConversationOpenRequest
+import net.weero.measix.pilot.service.ConversationQueryService
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.navigation3.rememberViewModelStoreNavEntryDecorator
 import androidx.navigation3.runtime.NavKey
@@ -84,7 +92,6 @@ import net.weero.measix.pilot.ui.context.LocalToaster
 import net.weero.measix.pilot.ui.context.Navigator
 import net.weero.measix.pilot.ui.hooks.getCurrentAppLanguage
 import net.weero.measix.pilot.ui.hooks.readBooleanPreference
-import net.weero.measix.pilot.ui.hooks.readStringPreference
 import net.weero.measix.pilot.ui.hooks.rememberCustomAsrState
 import net.weero.measix.pilot.ui.hooks.rememberCustomTtsState
 import net.weero.measix.pilot.ui.hooks.wrapWithLocale
@@ -142,12 +149,15 @@ import okhttp3.OkHttpClient
 import org.koin.android.ext.android.inject
 import org.koin.compose.koinInject
 import kotlin.uuid.Uuid
+import androidx.compose.runtime.setValue
 
 private const val TAG = "RouteActivity"
 
 class RouteActivity : ComponentActivity() {
     private val okHttpClient by inject<OkHttpClient>()
     private val settingsStore by inject<SettingsStore>()
+    private val conversations by inject<ConversationApplicationService>()
+    private val conversationQueries by inject<ConversationQueryService>()
     private var navStack: MutableList<NavKey>? = null
 
     // Volume key listener registry — last registered handler wins
@@ -240,10 +250,18 @@ class RouteActivity : ComponentActivity() {
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
-        // Navigate to the chat screen if a conversation ID is provided
-        intent.getStringExtra("conversationId")?.let { text ->
-            navStack?.add(Screen.Chat(text))
-        }    }
+        val id = intent.getStringExtra("conversationId")?.let(Uuid::parseOrNull) ?: return
+        lifecycleScope.launch {
+            try {
+                val access = conversationQueries.captureCurrentAccess()
+                navStack?.add(Screen.Chat(ConversationOpenRequest.OpenExisting(id, access)))
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                android.widget.Toast.makeText(this@RouteActivity, R.string.error_title_operation, android.widget.Toast.LENGTH_LONG).show()
+            }
+        }
+    }
 
     @OptIn(ExperimentalComposeUiApi::class, ExperimentalCoilApi::class)
     @Suppress("OPT_IN_IS_NOT_ENABLED")
@@ -275,18 +293,7 @@ class RouteActivity : ComponentActivity() {
         }
         val migrationState by DatabaseMigrationTracker.state.collectAsStateWithLifecycle()
 
-        val startScreen = Screen.Chat(
-            id = if (readBooleanPreference("create_new_conversation_on_start", true)) {
-                Uuid.random().toString()
-            } else {
-                readStringPreference(
-                    "lastConversationId",
-                    Uuid.random().toString()
-                ) ?: Uuid.random().toString()
-            }
-        )
-
-        val backStack = rememberNavBackStack(startScreen)
+        val backStack = rememberNavBackStack(Screen.Startup)
         val adaptiveLayoutInfo = rememberAdaptiveLayoutInfo()
         SideEffect { this@RouteActivity.navStack = backStack }
 
@@ -340,12 +347,18 @@ class RouteActivity : ComponentActivity() {
                                 slideOutHorizontally { it }
                         },
                         entryProvider = entryProvider {
+                            entry<Screen.Startup> {
+                                InitialConversationContent { request ->
+                                    val index = backStack.indexOf(Screen.Startup)
+                                    if (index >= 0) backStack[index] = Screen.Chat(request)
+                                }
+                            }
                             entry<Screen.Chat>(
                                 metadata = NavDisplay.transitionSpec { fadeIn() togetherWith fadeOut() }
                                         + NavDisplay.popTransitionSpec { fadeIn() togetherWith fadeOut() }
                             ) { key ->
                                 ChatPage(
-                                    id = Uuid.parse(key.id),
+                                    request = key.request,
                                     text = key.text,
                                     files = key.files.map { it.toUri() },
                                     nodeId = key.nodeId?.let { Uuid.parse(it) },
@@ -603,6 +616,32 @@ class RouteActivity : ComponentActivity() {
     }
 
     @Composable
+    private fun InitialConversationContent(onReady: (ConversationOpenRequest) -> Unit) {
+        var retry by remember { mutableIntStateOf(0) }
+        var failure by remember { mutableStateOf<Throwable?>(null) }
+        LaunchedEffect(retry) {
+            failure = null
+            try {
+                val notification = intent.getStringExtra("conversationId")?.let(Uuid::parseOrNull)
+                val request = if (notification != null) {
+                    ConversationOpenRequest.OpenExisting(notification, conversationQueries.captureCurrentAccess())
+                } else conversations.initialRequest(readBooleanPreference("create_new_conversation_on_start", true))
+                onReady(request)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                failure = error
+            }
+        }
+        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            if (failure == null) CircularProgressIndicator() else Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Text(stringResource(R.string.chat_conversation_load_failed_title))
+                Button(onClick = { retry++ }) { Text(stringResource(R.string.application_recovery_retry)) }
+            }
+        }
+    }
+
+    @Composable
     private fun ApplicationRecoveryContent(
         state: ApplicationRecoveryState,
         onRetry: () -> Unit,
@@ -642,8 +681,10 @@ class RouteActivity : ComponentActivity() {
 
 sealed interface Screen : NavKey {
     @Serializable
+    data object Startup : Screen
+    @Serializable
     data class Chat(
-        val id: String,
+        val request: ConversationOpenRequest,
         val text: String? = null,
         val files: List<String> = emptyList(),
         val nodeId: String? = null

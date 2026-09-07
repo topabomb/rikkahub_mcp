@@ -39,6 +39,10 @@ UI / ViewModel
 
 UI 不持有 DAO、ConversationRepository、Runtime Registry、Artifact/GeneratedMedia Store、payload 层或 Provider 容器。Query 组合只读事实，不反向发起 mutation；application service 负责编排，不创建第二套持久化协议。
 
+聊天页面通过携带原域授权的 `ConversationOpenRequest` 显式区分新建与打开已有会话，Application 校验成功后交付
+`ConversationViewLease`。Query 以该 lease 约束页面投影，ViewModel 负责关闭页面导入资源；域或 Session 变化使旧页面失效。
+此页面边界与会话命令、Turn 和文件 owner 各自的授权职责分开，不能用页面检查替代执行时的授权。
+
 边界按事实所有权和操作语义选择：单 owner 的操作直接扩展既有 typed contract；跨 owner、补偿或外部 SDK 流程才增加 application 编排。SettingsStore 和 SkillManager 可通过各自 typed contract 服务配置编辑；不能为了层数增加无语义的透传 facade。页面草稿、弹窗和选择态归 UI，跨页面存活的 Job、session 与资源归 application owner。
 
 ## 事实与唯一 owner
@@ -128,7 +132,7 @@ pending backup restore
 
 未被领域 owner 收口的恢复异常进入 Failed，全局 durable write 门禁保持关闭；retry 重跑同一幂等顺序。企业配置校验失败由 EnterpriseSessionController 发布，个人数据恢复继续；取消仍向上传播。文件 command/query 同样等待门禁，不能在删除状态和孤儿 payload 尚未收口时访问托管文件。TurnRecovery 只查询非终态执行事实；缺 owning message 或损坏 payload 是完整性错误，不以空树、默认对象或 best-effort 写入伪装 Ready。
 
-恢复顺序归应用 coordinator，各领域恢复算法仍归原 owner。TurnFinalizer 不接管启动恢复，SubAssistantLifecycle 不另建生成或 Turn 终态写链。
+恢复顺序归应用 coordinator，各领域恢复算法仍归原 owner。恢复链在可注入的 IO dispatcher 执行；助手清理服务使用同一 DI singleton 的 Lazy 引用，在原清理步骤首次解析，避免进程主线程为启动门禁提前构造完整生成依赖链。失败与重试仍经过同一 gate。TurnFinalizer 不接管启动恢复，SubAssistantLifecycle 不另建生成或 Turn 终态写链。
 
 ## 持久化与演进
 

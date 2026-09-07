@@ -1,8 +1,6 @@
 package net.weero.measix.pilot.service.runtime
 
 import me.rerere.common.configuration.ConfigurationReference
-
-
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.every
@@ -256,7 +254,7 @@ class ConversationCommandCoordinatorTest {
         val registry = ConversationRuntimeRegistry(appScope, repository, locks)
         val gate = ApplicationRecoveryGate().apply { ready() }
         val coordinator = ConversationCommandCoordinator(registry, repository, gate, locks)
-        val draft = coordinator.loadOrRegisterDraft(Conversation.ofId(id, newConversation = true))
+        val draft = registry.installDraft(Conversation.ofId(id, newConversation = true))
 
         coVerify(exactly = 0) { repository.insertConversation(any()) }
         assertTrue(registry.isDraft(id))
@@ -298,7 +296,7 @@ class ConversationCommandCoordinatorTest {
             ApplicationRecoveryGate().apply { ready() },
             locks,
         )
-        coordinator.loadOrRegisterDraft(Conversation.ofId(id, newConversation = true))
+        registry.installDraft(Conversation.ofId(id, newConversation = true))
 
         val result = coordinator.execute(id, TogglePinned)
 
@@ -323,7 +321,7 @@ class ConversationCommandCoordinatorTest {
             ApplicationRecoveryGate().apply { ready() },
             locks,
         )
-        val draft = coordinator.loadOrRegisterDraft(Conversation.ofId(id, newConversation = true))
+        val draft = registry.installDraft(Conversation.ofId(id, newConversation = true))
 
         val failure = runCatching { coordinator.create(Conversation.ofId(id)) }.exceptionOrNull()
 
@@ -349,7 +347,7 @@ class ConversationCommandCoordinatorTest {
             ApplicationRecoveryGate().apply { ready() },
             locks,
         )
-        coordinator.loadOrRegisterDraft(Conversation.ofId(childId, newConversation = true))
+        registry.installDraft(Conversation.ofId(childId, newConversation = true))
 
         val failure = runCatching {
             coordinator.createTree(

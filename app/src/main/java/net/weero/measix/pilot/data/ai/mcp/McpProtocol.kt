@@ -15,15 +15,24 @@ import io.modelcontextprotocol.kotlin.sdk.client.StreamableHttpError
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.encodeToJsonElement
 import kotlinx.serialization.json.jsonObject
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 
-/** Creates MCP SDK clients and transports; it owns no runtime connection state. */
+/** Owns the process-shared HTTP client, but no per-server connection state. */
 internal class McpProtocolClientFactory(
-    private val httpClient: HttpClient,
+    createHttpClient: () -> HttpClient,
     private val transportOverride: ((McpServerConfig) -> AbstractTransport)? = null,
     private val clientOverride: ((McpServerConfig) -> Client)? = null,
 ) {
-    fun createTransport(config: McpServerConfig): AbstractTransport =
-        transportOverride?.invoke(config) ?: defaultTransport(config)
+    private val httpClient by lazy(LazyThreadSafetyMode.SYNCHRONIZED, createHttpClient)
+
+    suspend fun createTransport(config: McpServerConfig): AbstractTransport {
+        currentCoroutineContext().ensureActive()
+        transportOverride?.let { return it(config) }
+        val sharedClient = httpClient
+        currentCoroutineContext().ensureActive()
+        return defaultTransport(config, sharedClient)
+    }
 
     fun createClient(config: McpServerConfig): Client =
         clientOverride?.invoke(config) ?: Client(
@@ -31,7 +40,7 @@ internal class McpProtocolClientFactory(
             options = ClientOptions(capabilities = ClientCapabilities()),
         )
 
-    private fun defaultTransport(config: McpServerConfig): AbstractTransport {
+    private fun defaultTransport(config: McpServerConfig, httpClient: HttpClient): AbstractTransport {
         val customHeaders = StringValues.build {
             config.resolvedConnectionHeaders().forEach { append(it.first, it.second) }
         }

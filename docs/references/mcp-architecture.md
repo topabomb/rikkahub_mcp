@@ -30,13 +30,19 @@ MCP 的“工具能力”和“当前能否连通”是两类正交事实：
 | 跨 server 注册表、触发汇流和并发预算 | `McpRuntimeCoordinator` | AppScope 内存 | application / turn |
 | client、generation、授权 Job、刷新与恢复调度、连接健康 | 每 server 一个 `McpServerRuntime` | AppScope 内存 | `McpRuntimeStateStore` |
 | OAuth 网络流程、refresh single-flight 与 Settings CAS | `McpOAuthCoordinator` | AppScope + Settings | `McpServerRuntime` / invocation admission |
-| transport/client 创建与完整分页发现 | `McpProtocolClientFactory` / `McpCatalogDiscovery` | 无状态 | `McpServerRuntime` |
+| transport/client 创建与完整分页发现 | `McpProtocolClientFactory` / `McpCatalogDiscovery` | 工厂持有进程内共享 HTTP client，发现无独立状态 | `McpServerRuntime` |
 | 已承诺工具调用和结果/Artifact 补偿 | `McpToolCallExecutor` | invocation 内存 | Coordinator |
 | 单个 run 的 Provider 工具集合 | `TurnMcpCapabilitySnapshot` | run 内存 | `TurnToolSetFactory` |
 | UI command / joined read model | `McpApplicationService` / `McpQueryService` | 无独立状态 | Compose / ViewModel |
 
 `McpCommonOptions.toolPolicies` 只保存工具名、enable 和 needsApproval。远端 description/input schema 不写回
 Settings；导入、编辑、OAuth 更新也无权覆盖 Catalog。
+
+`McpProtocolClientFactory` 在首次真实 transport 创建时同步且唯一地初始化共享 Ktor client，调用位于现有 server 的 IO 连接任务；
+不在 Application/DI 构造阶段初始化 Ktor，也不为测试 override 初始化真实 transport。初始化返回后复查取消，超时/取消的连接
+不取得新 transport；已创建的共享 HTTP client 继续由工厂持有，单个 server 关闭或重连不能关闭它。
+
+协调器可以从恢复 IO 线程构造；ProcessLifecycleOwner 观察者通过 AppScope 的主线程任务注册，不能在构造调用线程直接注册。
 
 编辑或同名导入只在 transport、canonical resource 和静态 headers 都未变化时保留原 OAuth 状态。任一信任边界变化都会
 清除旧 access/refresh token 与 client secret，避免旧资源凭据发送到新 endpoint。`definitionDigest` 包含全部静态 headers

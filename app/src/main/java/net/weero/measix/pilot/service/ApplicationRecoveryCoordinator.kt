@@ -2,6 +2,9 @@ package net.weero.measix.pilot.service
 import net.weero.measix.pilot.service.turn.TurnRecovery
 
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -59,12 +62,13 @@ class ApplicationRecoveryCoordinator(
     private val generatedMediaStore: GeneratedMediaStore,
     private val conversationRepository: ConversationRepository,
     private val turnRecovery: TurnRecovery,
-    private val assistantManagementService: AssistantManagementService,
+    private val assistantManagementService: Lazy<AssistantManagementService>,
     private val gate: ApplicationRecoveryGate,
     private val recoverEnterpriseConfiguration: suspend () -> Unit,
     private val restorePendingBackup: suspend () -> Unit = {},
     private val completePendingBackup: () -> Unit = {},
     private val postRecoveryMaintenance: suspend () -> Unit = {},
+    private val recoveryDispatcher: CoroutineDispatcher = Dispatchers.IO,
     startImmediately: Boolean = true,
 ) {
     private val runMutex = Mutex()
@@ -91,7 +95,7 @@ class ApplicationRecoveryCoordinator(
         }
     }
 
-    internal suspend fun recoverNow() {
+    internal suspend fun recoverNow() = withContext(recoveryDispatcher) {
         runMutex.withLock {
             gate.loading()
             try {
@@ -108,7 +112,7 @@ class ApplicationRecoveryCoordinator(
                 conversationRepository.ensureSearchProjection()
                 turnRecovery.recoverInterruptedRuns()
                 turnRecovery.recoverInterruptedTurns()
-                assistantManagementService.performPendingDeletionCleanupDuringRecovery()
+                assistantManagementService.value.performPendingDeletionCleanupDuringRecovery()
                 postRecoveryMaintenance()
                 completePendingBackup()
                 gate.ready()

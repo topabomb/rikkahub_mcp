@@ -8,6 +8,7 @@ import net.weero.measix.pilot.data.model.Conversation
 import net.weero.measix.pilot.data.repository.ConversationRepository
 import net.weero.measix.pilot.data.repository.ExecutionStateConflictException
 import net.weero.measix.pilot.service.ApplicationRecoveryGate
+import net.weero.measix.pilot.service.ConversationOpenRequest
 import kotlin.coroutines.coroutineContext
 import kotlin.uuid.Uuid
 
@@ -54,14 +55,27 @@ class ConversationCommandCoordinator(
             runtime
         } }
 
-    suspend fun loadOrRegisterDraft(conversation: Conversation): ConversationRuntime =
-        gated { operationLocks.withLocks(conversation.lockIds()) {
-            if (repository.existsConversationById(conversation.id)) {
-                registry.loadRuntime(conversation.id)
-            } else {
-                registry.installDraft(conversation)
+    internal suspend fun openForView(
+        request: ConversationOpenRequest,
+        draft: Conversation?,
+    ): ConversationRuntimeLease = gated { operationLocks.withLock(request.id) {
+        val header = registry.findRuntime(request.id)?.durable?.header ?: repository.getConversationHeader(request.id)
+        if (header != null) {
+            check(header.scope == request.access.scope) { "conversation_scope_mismatch" }
+            check(header.parentConversationId == null) { "child_conversation_requires_detail_access" }
+            if (request is ConversationOpenRequest.OpenExisting && registry.isDraft(request.id)) {
+                throw ConversationNotFoundException(request.id)
             }
-        } }
+        } else if (request is ConversationOpenRequest.OpenExisting) {
+            throw ConversationNotFoundException(request.id)
+        }
+        val runtime = if (header != null) registry.loadRuntime(request.id) else {
+            val candidate = requireNotNull(draft) { "conversation_draft_assistant_unavailable" }
+            check(candidate.id == request.id && candidate.scope == request.access.scope)
+            registry.installDraft(candidate)
+        }
+        registry.acquireRegisteredRuntime(request.id, runtime)
+    } }
 
     internal suspend fun createTree(
         master: ConversationAggregateSnapshot,

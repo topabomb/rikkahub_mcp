@@ -80,6 +80,7 @@ private val Context.settingsStore by preferencesDataStore(
             SearchSelectionMigration(),
             McpLegacyCatalogSettingsMigration(),
             UserSettingsMigration(),
+            ConversationHistoryPreferenceMigration(context),
         )
     },
 )
@@ -238,6 +239,15 @@ class SettingsStore internal constructor(
             JsonInstant.decodeFromString<UserSettingsDocument>(encoded)
         }
         .distinctUntilChanged()
+
+    internal suspend fun lastConversation(scope: ConfigurationScope): kotlin.uuid.Uuid? =
+        userDocuments.first().preferences.lastConversation(scope)
+
+    internal suspend fun rememberConversation(scope: ConfigurationScope, id: kotlin.uuid.Uuid) = updateMutex.withLock {
+        commitAuthorizedPreferences { document ->
+            document.copy(preferences = document.preferences.withLastConversation(scope, id))
+        }
+    }
 
     private val localSettingsRaw = userDocuments
         .map { document ->

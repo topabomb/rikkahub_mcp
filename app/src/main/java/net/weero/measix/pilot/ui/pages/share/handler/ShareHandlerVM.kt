@@ -1,6 +1,5 @@
 package net.weero.measix.pilot.ui.pages.share.handler
 
-import me.rerere.common.configuration.ConfigurationReference
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.flow.SharingStarted
@@ -17,7 +16,4 @@ class ShareHandlerVM(
     val settings = settingsStore.effectiveSettings.map { it.settings }
         .stateIn(viewModelScope, SharingStarted.Eagerly, Settings.dummy())
 
-    suspend fun updateAssistant(assistantId: ConfigurationReference) {
-        settingsStore.updateLocal { settings -> settings.copy(assistantId = assistantId) }
-    }
 }

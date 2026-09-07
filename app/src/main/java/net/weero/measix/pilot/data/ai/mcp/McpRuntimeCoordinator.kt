@@ -119,20 +119,21 @@ class McpRuntimeCoordinator(
         logger = ::logMcp,
     )
 
-    private val ktorClient = HttpClient(OkHttp) {
-        engine {
-            preconfigured = okHttpClient
-        }
-        install(ContentNegotiation) {
-            json(Json {
-                prettyPrint = true
-                isLenient = true
-            })
-        }
-        install(SSE)
-    }
     private val protocolClientFactory = McpProtocolClientFactory(
-        httpClient = ktorClient,
+        createHttpClient = {
+            HttpClient(OkHttp) {
+                engine {
+                    preconfigured = okHttpClient
+                }
+                install(ContentNegotiation) {
+                    json(Json {
+                        prettyPrint = true
+                        isLenient = true
+                    })
+                }
+                install(SSE)
+            }
+        },
         transportOverride = transportOverride,
         clientOverride = clientOverride,
     )
@@ -201,9 +202,11 @@ class McpRuntimeCoordinator(
         }
 
         // 链 2: 前台恢复只恢复已激活 runtime；durable enabled 不等于移动端常驻连接。
-        foregroundObserver.onForegroundStarted {
-            if (!runtimeState.isEmpty) {
-                appScope.launch { recoverActivatedConnections(refreshTools = false) }
+        appScope.launch {
+            foregroundObserver.onForegroundStarted {
+                if (!runtimeState.isEmpty) {
+                    appScope.launch { recoverActivatedConnections(refreshTools = false) }
+                }
             }
         }
 

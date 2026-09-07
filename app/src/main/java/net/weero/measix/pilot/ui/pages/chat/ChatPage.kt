@@ -1,5 +1,7 @@
 package net.weero.measix.pilot.ui.pages.chat
 
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import android.net.Uri
 import android.util.Log
 import androidx.activity.compose.BackHandler
@@ -45,14 +47,12 @@ import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.DisposableEffect
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.saveable.rememberSaveable
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -71,7 +71,6 @@ import dev.chrisbanes.haze.hazeSource
 import dev.chrisbanes.haze.rememberHazeState
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.filterNotNull
@@ -106,7 +105,6 @@ import net.weero.measix.pilot.service.ConversationUiModel
 import net.weero.measix.pilot.service.runtime.ConversationPresentation
 import net.weero.measix.pilot.service.runtime.ConversationPresentationSnapshot
 import net.weero.measix.pilot.service.runtime.TurnLivePhase
-import net.weero.measix.pilot.service.runtime.ToolInteractionDecision
 import net.weero.measix.pilot.ui.theme.ProvideChatSurfacePolicy
 import net.weero.measix.pilot.ui.theme.hasVisibleChatBackground
 import net.weero.measix.pilot.ui.adaptive.AdaptiveLayoutDefaults
@@ -135,9 +133,8 @@ import net.weero.measix.pilot.ui.hooks.rememberSharedPreferenceBoolean
 import net.weero.measix.pilot.ui.hooks.useEditState
 import net.weero.measix.pilot.ui.pages.assistant.detail.mergeAssistantDelta
 import net.weero.measix.pilot.utils.ImageUtils
-import net.weero.measix.pilot.utils.base64Decode
 import net.weero.measix.pilot.utils.isAllowedFileType
-import net.weero.measix.pilot.utils.navigateToChatPage
+import net.weero.measix.pilot.ui.context.rememberChatNavigation
 import org.koin.androidx.compose.koinViewModel
 import org.koin.compose.koinInject
 import net.weero.measix.pilot.service.McpQueryService
@@ -147,19 +144,21 @@ import kotlin.uuid.Uuid
 
 @Composable
 fun ChatPage(
-    id: Uuid,
+    request: net.weero.measix.pilot.service.ConversationOpenRequest,
     text: String?,
     files: List<Uri>,
     isActiveRoute: Boolean,
     nodeId: Uuid? = null,
 ) {
+    val id = request.id
     val vm: ChatVM = koinViewModel(
         parameters = {
-            parametersOf(id.toString())
+            parametersOf(request)
         }
     )
     val artifactUseCase: ArtifactUseCase = koinInject()
     val navController = LocalNavController.current
+    val chatNavigation = rememberChatNavigation(navController)
     val toaster = LocalToaster.current
     val scope = rememberCoroutineScope()
     val fileReadFailedFormat = stringResource(R.string.chat_input_file_read_failed)
@@ -180,6 +179,7 @@ fun ChatPage(
                     title = stringResource(R.string.chat_conversation_missing_title),
                     message = stringResource(R.string.chat_conversation_missing_message),
                     onRetry = vm::retryConversationLoad,
+                    onNewChat = { chatNavigation.newChat() },
                 )
                 if (isActiveRoute) TTSController()
             }
@@ -192,6 +192,7 @@ fun ChatPage(
                     title = stringResource(R.string.chat_conversation_load_failed_title),
                     message = stringResource(R.string.chat_conversation_load_failed_message, diagnostic),
                     onRetry = vm::retryConversationLoad,
+                    onNewChat = { chatNavigation.newChat() },
                 )
                 if (isActiveRoute) TTSController()
             }
@@ -254,32 +255,17 @@ fun ChatPage(
     val inputState = vm.inputState
 
     // 初始化输入状态（处理传入的 files 和 text 参数）
-    LaunchedEffect(files, text) {
-        if (files.isNotEmpty()) {
-            try {
-                val imported = vm.artifactDraftScope.importUrisOrThrow(files)
-                inputState.messageContent = imported.mapNotNull { artifact ->
-                    when {
-                        artifact.mimeType.startsWith("image/") -> UIMessagePart.Image(url = artifact.uri.toString())
-                        artifact.mimeType.startsWith("video/") -> UIMessagePart.Video(url = artifact.uri.toString())
-                        artifact.mimeType.startsWith("audio/") -> UIMessagePart.Audio(url = artifact.uri.toString())
-                        else -> null
-                    }
-                }
-            } catch (cancelled: CancellationException) {
-                throw cancelled
-            } catch (error: Exception) {
-                val displayName = artifactUseCase.displayName(files.first())
-                    ?: files.first().lastPathSegment
-                    ?: files.first().toString()
-                Log.e("ChatPage", "Failed to import initial attachment", error)
-                toaster.show(fileReadFailedFormat.format(displayName), type = ToastType.Error)
-            }
-        }
-        text?.base64Decode()?.let { decodedText ->
-            if (decodedText.isNotEmpty()) {
-                inputState.setMessageText(decodedText)
-            }
+    LaunchedEffect(files, text, currentSnapshot.header.newConversation) {
+        try {
+            vm.initializeInput(text, files)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Exception) {
+            val displayName = files.firstOrNull()?.let { uri ->
+                artifactUseCase.displayName(uri) ?: uri.lastPathSegment ?: uri.toString()
+            }.orEmpty()
+            Log.e("ChatPage", "Failed to initialize shared input", error)
+            toaster.show(fileReadFailedFormat.format(displayName), type = ToastType.Error)
         }
     }
 
@@ -440,6 +426,7 @@ private fun ConversationUnavailable(
     title: String,
     message: String,
     onRetry: () -> Unit,
+    onNewChat: () -> Unit,
 ) {
     Column(
         modifier = Modifier.fillMaxSize(),
@@ -456,6 +443,9 @@ private fun ConversationUnavailable(
         Spacer(Modifier.height(4.dp))
         TextButton(onClick = onRetry) {
             Text(stringResource(R.string.application_recovery_retry))
+        }
+        TextButton(onClick = onNewChat) {
+            Text(stringResource(R.string.chat_page_new_chat))
         }
     }
 }
@@ -480,6 +470,7 @@ private fun ChatPageContent(
     onDismissError: (Uuid) -> Unit,
     onClearAllErrors: () -> Unit,
 ) {
+    val chatNavigation = rememberChatNavigation(navController)
     KeepScreenOn(enabled = turnPresentation.isActive)
 
     val scope = rememberCoroutineScope()
@@ -614,7 +605,7 @@ private fun ChatPageContent(
                     loading = turnPresentation.isActive,
                     previewMode = previewMode,
                     onNewChat = {
-                        navigateToChatPage(navController)
+                        chatNavigation.newChat()
                     },
                     onClickMenu = {
                         previewMode = !previewMode
@@ -782,7 +773,7 @@ private fun ChatPageContent(
                 onForkMessage = {
                     scope.launch {
                         val fork = vm.forkMessage(message = it)
-                        navigateToChatPage(navController, chatId = fork)
+                        chatNavigation.existingChat(chatId = fork)
                     }
                 },
                 onDelete = {

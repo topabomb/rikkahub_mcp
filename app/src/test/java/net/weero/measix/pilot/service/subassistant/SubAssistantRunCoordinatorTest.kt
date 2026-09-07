@@ -297,6 +297,7 @@ class SubAssistantRunCoordinatorTest {
 
         val harness = harness(AttachmentResolveResult.Success(emptyList()), turnRunner = runner)
         val childRuntime = mockk<ConversationRuntime>(relaxed = true)
+        every { childRuntime.processingReporter() } returns { }
         val created = slot<Conversation>()
         coEvery { harness.commandCoordinator.create(capture(created)) } coAnswers {
             val child = created.captured
@@ -328,6 +329,7 @@ class SubAssistantRunCoordinatorTest {
         )
 
         // Child delegates to the shared runner exactly once, with Child-only interaction capability.
+        assertTrue("Child did not reach the runner: $result", inputsSlot.isCaptured)
         coVerify(exactly = 1) { runner.run(any()) }
         assertEquals(created.captured.id, linkedRun!!.childConversationId)
         assertEquals(inputsSlot.captured.handle.turnId, linkedRun!!.childTurnId)

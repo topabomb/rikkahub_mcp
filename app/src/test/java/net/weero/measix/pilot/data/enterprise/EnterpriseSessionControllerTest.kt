@@ -70,9 +70,11 @@ class EnterpriseSessionControllerTest {
         val controller = EnterpriseSessionController(EnterpriseAppliedStore(root))
         val original = withCredential(exampleEnterprisePackage(), "first-private-key")
         controller.enrollFixture(original)
+        val selectionRevision = controller.selectionRevision.value
         val old = controller.captureBindings(original.identity.scope)
         val changed = withCredential(original, "second-private-key")
         controller.synchronize(RealmAccess.Enterprise(original.identity.scope, old.sessionId), changed)
+        assertEquals(selectionRevision, controller.selectionRevision.value)
         val newer = controller.captureBindings(original.identity.scope)
         assertEquals("first-private-key", old.binding("mdl_chat").credential)
         assertEquals("second-private-key", newer.binding("mdl_chat").credential)

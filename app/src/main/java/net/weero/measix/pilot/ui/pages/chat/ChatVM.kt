@@ -3,18 +3,28 @@ package net.weero.measix.pilot.ui.pages.chat
 import me.rerere.common.configuration.ConfigurationReference
 import android.app.Application
 import android.net.Uri
-import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.filter
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.cancelChildren
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import me.rerere.ai.core.ToolCallLocator
 import me.rerere.ai.provider.Model
 import me.rerere.ai.ui.UIMessage
@@ -47,15 +57,14 @@ import net.weero.measix.pilot.service.runtime.ToolInteractionDecision
 import net.weero.measix.pilot.ui.components.ai.SearchMode
 import net.weero.measix.pilot.ui.components.ai.searchModeEnablesBuiltIn
 import net.weero.measix.pilot.ui.components.ai.searchModeEnablesLocal
-import net.weero.measix.pilot.ui.hooks.writeStringPreference
 import net.weero.measix.pilot.ui.hooks.ChatInputState
 import net.weero.measix.pilot.utils.UpdateChecker
+import net.weero.measix.pilot.utils.base64Decode
 import kotlin.uuid.Uuid
 import java.util.concurrent.atomic.AtomicBoolean
-import java.util.concurrent.atomic.AtomicReference
 
 class ChatVM(
-    id: String,
+    private val request: net.weero.measix.pilot.service.ConversationOpenRequest,
     private val context: Application,
     private val settingsStore: SettingsStore,
     private val turnService: ConversationTurnService,
@@ -66,75 +75,161 @@ class ChatVM(
     private val favoriteService: FavoriteService,
     private val chatErrorStore: ChatErrorStore,
 ) : ViewModel() {
-    private val _conversationId: Uuid = Uuid.parse(id)
-    private val cleared = AtomicBoolean(false)
-    private val viewLease = AtomicReference<ConversationViewLease?>(null)
-    private val initializationOwner = Any()
-    private var initializationJob: Job? = null
-
-    val conversationState: StateFlow<ConversationReadState> = conversationQueryService
-        .observeConversation(_conversationId)
-        .stateIn(viewModelScope, SharingStarted.Eagerly, ConversationReadState.Loading)
-
-    // 唯一内部事实流（presentation：durable nodes + header + 流式投影）；仅 Ready 状态产生投影。
-    val snapshot: StateFlow<ConversationPresentationSnapshot?> = conversationState
-        .map { state -> (state as? ConversationReadState.Ready)?.snapshot }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, null)
-
-    val favoriteNodeIds: StateFlow<Set<Uuid>> = favoriteService
-        .observeNodeIds(_conversationId)
-        .stateIn(viewModelScope, SharingStarted.Eagerly, emptySet())
-
-    fun currentSnapshot(): ConversationPresentationSnapshot = requireNotNull(snapshot.value)
-
-    // 聊天输入状态 - 保存在 ViewModel 中避免 TransactionTooLargeException
-    val inputState = ChatInputState()
-    val artifactDraftScope: ArtifactDraftScope = artifactUseCase.openDraftScope()
-
-    // UI consumes the runtime's typed turn projection; coroutine ownership remains inside Runtime.
-    val turnPresentation: StateFlow<ConversationPresentation> =
-        conversationQueryService
-            .turnPresentation(_conversationId)
-            .stateIn(viewModelScope, SharingStarted.Eagerly, ConversationPresentation.IDLE)
-
-    /** Correlated snapshot/presentation read model for receipt-bound UI effects. */
-    val conversationUiModel: StateFlow<ConversationUiModel?> = conversationQueryService
-        .conversationUiModel(_conversationId)
-        .stateIn(viewModelScope, SharingStarted.Eagerly, null)
-
-    init {
-        acquireViewLease()
-
-        // 记住对话ID, 方便下次启动恢复
-        context.writeStringPreference("lastConversationId", _conversationId.toString())
+    private val _conversationId: Uuid = request.id
+    private sealed interface PageState {
+        data object Loading : PageState
+        data object Missing : PageState
+        data class Failed(val error: Throwable) : PageState
+        data class Open(val lease: ConversationViewLease, val imports: ArtifactDraftScope) : PageState {
+            fun close() { imports.close(); lease.close() }
+        }
     }
 
+    private val cleared = AtomicBoolean(false)
+    private val page = MutableStateFlow<PageState>(PageState.Loading)
+    private val initializationOwner = Any()
+    private var initializationJob: Job? = null
+    private var initializationAttempt = 0L
+
+    private fun <T> fromPage(empty: T, source: (PageState.Open) -> Flow<T>): Flow<T> =
+        page.flatMapLatest { state -> if (state is PageState.Open) source(state) else flowOf(empty) }
+
+    val conversationState: StateFlow<ConversationReadState> = page.flatMapLatest { state ->
+        when (state) {
+            PageState.Loading -> flowOf(ConversationReadState.Loading)
+            PageState.Missing -> flowOf(ConversationReadState.Missing)
+            is PageState.Failed -> flowOf(ConversationReadState.Failed(state.error))
+            is PageState.Open -> conversationQueryService.observeConversation(state.lease)
+        }
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, ConversationReadState.Loading)
+
+    val snapshot: StateFlow<ConversationPresentationSnapshot?> = conversationState
+        .map { (it as? ConversationReadState.Ready)?.snapshot }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, null)
+
+    val favoriteNodeIds: StateFlow<Set<Uuid>> = fromPage(emptySet()) { state ->
+        conversationQueryService.observeForView(state.lease, emptySet()) {
+            favoriteService.observeNodeIds(_conversationId)
+        }
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, emptySet())
+
+    private fun requirePage(): PageState.Open = (page.value as? PageState.Open)
+        ?.also { it.lease.requireOpen() } ?: error("conversation_view_unavailable")
+
+    fun currentSnapshot(): ConversationPresentationSnapshot {
+        requirePage()
+        return requireNotNull(snapshot.value)
+    }
+
+    val inputState = ChatInputState()
+    val artifactDraftScope: ArtifactDraftScope get() = requirePage().imports
+    private val initialInputMutex = Mutex()
+    private var initialInputConsumed = false
+
+    suspend fun initializeInput(text: String?, files: List<Uri>) = initialInputMutex.withLock {
+        if (initialInputConsumed) return@withLock
+        val current = requirePage()
+        if (!currentSnapshot().header.newConversation) {
+            initialInputConsumed = true
+            return@withLock
+        }
+        val decoded = text?.base64Decode()
+        val imported = current.imports.importUrisOrThrow(files)
+        check(requirePage() === current) { "conversation_view_unavailable" }
+        if (files.isNotEmpty()) {
+            inputState.messageContent = imported.mapNotNull { artifact ->
+                when {
+                    artifact.mimeType.startsWith("image/") -> UIMessagePart.Image(url = artifact.uri.toString())
+                    artifact.mimeType.startsWith("video/") -> UIMessagePart.Video(url = artifact.uri.toString())
+                    artifact.mimeType.startsWith("audio/") -> UIMessagePart.Audio(url = artifact.uri.toString())
+                    else -> null
+                }
+            }
+        }
+        if (!decoded.isNullOrEmpty()) inputState.setMessageText(decoded)
+        initialInputConsumed = true
+    }
+
+    val turnPresentation: StateFlow<ConversationPresentation> = fromPage(ConversationPresentation.IDLE) { state ->
+        conversationQueryService.turnPresentation(state.lease)
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, ConversationPresentation.IDLE)
+
+    val conversationUiModel: StateFlow<ConversationUiModel?> = fromPage<ConversationUiModel?>(null) { state ->
+        conversationQueryService.conversationUiModel(state.lease)
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, null)
+
+    init { acquireViewLease() }
+
     fun retryConversationLoad() {
-        if (viewLease.get() == null) acquireViewLease()
+        synchronized(initializationOwner) {
+            initializationJob?.cancel()
+            (page.value as? PageState.Open)?.close()
+            discardInput()
+            page.value = PageState.Loading
+            initializationJob = null
+            acquireViewLease()
+        }
     }
 
     private fun acquireViewLease(): Job = synchronized(initializationOwner) {
-        initializationJob?.takeIf(Job::isActive) ?: viewModelScope.launch {
-            try {
-                val acquired = conversationApplicationService.initialize(_conversationId)
-                if (!viewLease.compareAndSet(null, acquired)) acquired.close()
-                if (cleared.get()) viewLease.getAndSet(null)?.close()
-            } catch (cancelled: CancellationException) {
-                throw cancelled
-            } catch (error: Exception) {
-                // ConversationReadState.Failed is the user-visible authority; this log preserves diagnostics.
-                Log.e("ChatVM", "Failed to initialize conversation $_conversationId", error)
+        initializationJob?.takeIf(Job::isActive) ?: run {
+            val attempt = ++initializationAttempt
+            fun publish(next: PageState): Boolean = synchronized(initializationOwner) {
+                if (cleared.get() || attempt != initializationAttempt) false else {
+                    page.value = next
+                    true
+                }
             }
-        }.also { initializationJob = it }
+            viewModelScope.launch {
+                var opened: PageState.Open? = null
+                try {
+                    val lease = conversationApplicationService.initialize(request)
+                    val imports = try { artifactUseCase.openDraftScope() } catch (error: Throwable) {
+                        lease.close()
+                        throw error
+                    }
+                    val state = PageState.Open(lease, imports)
+                    opened = state
+                    if (!publish(state)) return@launch
+                    coroutineScope {
+                        launch {
+                            conversationQueryService.observeConversation(lease)
+                                .map { it is ConversationReadState.Ready && !it.snapshot.header.newConversation }
+                                .distinctUntilChanged().filter { it }.collect {
+                                    conversationApplicationService.rememberConversation(lease)
+                                }
+                        }
+                        conversationQueryService.observeViewAccess(lease).first { !it }
+                        page.compareAndSet(state, PageState.Failed(IllegalStateException("conversation_view_unavailable")))
+                        coroutineContext.cancelChildren()
+                    }
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (_: net.weero.measix.pilot.service.runtime.ConversationNotFoundException) {
+                    publish(PageState.Missing)
+                } catch (error: Exception) {
+                    publish(PageState.Failed(error))
+                } finally {
+                    opened?.close()
+                    synchronized(initializationOwner) {
+                        if (attempt == initializationAttempt) discardInput()
+                    }
+                }
+            }.also { initializationJob = it }
+        }
     }
 
     override fun onCleared() {
         cleared.set(true)
-        viewLease.getAndSet(null)?.close()
-        artifactDraftScope.close()
+        (page.value as? PageState.Open)?.close()
+        discardInput()
     }
 
-    // 用户设置
+    private fun discardInput() {
+        inputState.clearInput()
+        initialInputConsumed = false
+    }
+
     val settings: StateFlow<Settings> =
         settingsStore.effectiveSettings.map { it.settings }.stateIn(viewModelScope, SharingStarted.Eagerly, Settings.dummy())
 
@@ -146,8 +241,9 @@ class ChatVM(
     }.stateIn(viewModelScope, SharingStarted.Eagerly, false)
 
     // 错误状态
-    val errors: StateFlow<List<ChatError>> = chatErrorStore.errorsFor(_conversationId)
-        .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+    val errors: StateFlow<List<ChatError>> = fromPage(emptyList()) { state ->
+        conversationQueryService.observeForView(state.lease, emptyList()) { chatErrorStore.errorsFor(_conversationId) }
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
 
     fun dismissError(id: Uuid) = chatErrorStore.dismiss(id)
 
@@ -165,13 +261,18 @@ class ChatVM(
         )?.let(chatErrorStore::add)
     }
 
-    // 生成完成
-    val generationDoneFlow: SharedFlow<Uuid> = turnService.generationDoneFlow
+    val generationDoneFlow: Flow<Uuid> = fromPage<Uuid?>(null) { state ->
+        conversationQueryService.observeForView<Uuid?>(state.lease, null) {
+            turnService.generationDoneFlow.filter { it == _conversationId }
+        }
+    }.filterNotNull()
 
-    fun getTtsQueueSessionId(conversationId: Uuid): String? =
-        conversationQueryService.ttsQueueSessionId(conversationId)
+    suspend fun getTtsQueueSessionId(conversationId: Uuid): String? {
+        val current = requirePage()
+        check(conversationId == current.lease.conversationId) { "conversation_view_mismatch" }
+        return conversationQueryService.ttsQueueSessionId(current.lease)
+    }
 
-    // 更新设置
     fun updateSettings(transform: (Settings) -> Settings): Job {
         return viewModelScope.launch {
             try {

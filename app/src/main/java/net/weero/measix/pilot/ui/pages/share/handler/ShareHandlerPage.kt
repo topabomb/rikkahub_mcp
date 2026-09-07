@@ -1,7 +1,8 @@
-﻿package net.weero.measix.pilot.ui.pages.share.handler
+package net.weero.measix.pilot.ui.pages.share.handler
 
+import androidx.compose.runtime.getValue
+import net.weero.measix.pilot.utils.plus
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
@@ -17,8 +18,6 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
@@ -26,15 +25,10 @@ import androidx.compose.ui.unit.dp
 import androidx.core.net.toUri
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil3.compose.AsyncImage
-import com.dokar.sonner.ToastType
-import kotlinx.coroutines.launch
 import net.weero.measix.pilot.R
-import net.weero.measix.pilot.data.datastore.SettingsLockedException
 import net.weero.measix.pilot.ui.context.LocalNavController
-import net.weero.measix.pilot.ui.context.LocalToaster
 import net.weero.measix.pilot.utils.base64Encode
-import net.weero.measix.pilot.utils.navigateToChatPage
-import net.weero.measix.pilot.utils.plus
+import net.weero.measix.pilot.ui.context.rememberChatNavigation
 import org.koin.androidx.compose.koinViewModel
 import org.koin.core.parameter.parametersOf
 
@@ -42,10 +36,8 @@ import org.koin.core.parameter.parametersOf
 fun ShareHandlerPage(text: String, image: String?) {
     val vm: ShareHandlerVM = koinViewModel(parameters = { parametersOf(text) })
     val settings by vm.settings.collectAsStateWithLifecycle()
-    val scope = rememberCoroutineScope()
     val navController = LocalNavController.current
-    val toaster = LocalToaster.current
-    val lockedMessage = stringResource(R.string.managed_configuration_locked, "{reason}")
+    val chatNavigation = rememberChatNavigation(navController)
     Scaffold(
         topBar = {
             TopAppBar(
@@ -88,22 +80,11 @@ fun ShareHandlerPage(text: String, image: String?) {
             items(settings.assistants) { assistant ->
                 Surface(
                     onClick = {
-                        scope.launch {
-                            try {
-                                vm.updateAssistant(assistant.id)
-                            } catch (error: SettingsLockedException) {
-                                toaster.show(
-                                    message = lockedMessage.replace("{reason}", error.reason),
-                                    type = ToastType.Error,
-                                )
-                                return@launch
-                            }
-                            navigateToChatPage(
-                                navigator = navController,
-                                initText = vm.shareText.base64Encode(),
-                                initFiles = image?.let { listOf(it.toUri()) } ?: emptyList()
-                            )
-                        }
+                        chatNavigation.newChat(
+                            assistantId = assistant.id,
+                            initText = vm.shareText.base64Encode(),
+                            initFiles = image?.let { listOf(it.toUri()) } ?: emptyList(),
+                        )
                     },
                     tonalElevation = 4.dp,
                     shape = MaterialTheme.shapes.medium

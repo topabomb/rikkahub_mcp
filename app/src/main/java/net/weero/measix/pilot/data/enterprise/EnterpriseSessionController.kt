@@ -65,6 +65,8 @@ internal class EnterpriseSessionController(
     private val leases = mutableMapOf<String, EnterpriseBindingLease>()
     private val _state = MutableStateFlow<EnterpriseState>(EnterpriseState.Loading)
     val state: StateFlow<EnterpriseState> = _state.asStateFlow()
+    private val _selectionRevision = MutableStateFlow(0L)
+    val selectionRevision: StateFlow<Long> = _selectionRevision.asStateFlow()
 
     suspend fun recover(): EnterpriseState = mutex.withLock {
         try {
@@ -73,7 +75,7 @@ internal class EnterpriseSessionController(
             throw cancelled
         } catch (error: Exception) {
             loaded = null
-            _state.value = EnterpriseState.Failed(safeReason(error))
+            publishState(EnterpriseState.Failed(safeReason(error)))
         }
         state.value
     }
@@ -379,7 +381,7 @@ internal class EnterpriseSessionController(
             val recovered = withContext(Dispatchers.IO) { store.load() }
             prune(recovered.manifest)
             loaded = recovered
-            _state.value = EnterpriseState.Available(recovered.manifest, recovered.configuration)
+            publishState(EnterpriseState.Available(recovered.manifest, recovered.configuration))
         }
         return requireNotNull(loaded)
     }
@@ -395,8 +397,19 @@ internal class EnterpriseSessionController(
             } else {
                 leases.values.filter { it.sessionId != manifest.session?.id }.forEach(EnterpriseBindingLease::revoke)
             }
-            EnterpriseState.Available(manifest, configuration).also { _state.value = it }
+            EnterpriseState.Available(manifest, configuration).also(::publishState)
         }
+    }
+
+    /** A page must notice leaving its selection even when observers conflate a quick round trip. */
+    private fun publishState(next: EnterpriseState) {
+        fun identity(state: EnterpriseState): Pair<ConfigurationScope, String?> {
+            val manifest = (state as? EnterpriseState.Available)?.manifest
+            val scope = manifest?.selectedScope ?: ConfigurationScope.Personal
+            return scope to manifest?.session?.id?.takeIf { scope is ConfigurationScope.Enterprise }
+        }
+        if (identity(_state.value) != identity(next)) _selectionRevision.value++
+        _state.value = next
     }
 
     private suspend fun prune(manifest: EnterpriseManifest) = withContext(Dispatchers.IO) {

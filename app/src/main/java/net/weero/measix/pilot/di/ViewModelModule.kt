@@ -30,7 +30,7 @@ import org.koin.dsl.module
 val viewModelModule = module {
     viewModel<ChatVM> { params ->
         ChatVM(
-            id = params.get(),
+            request = params.get(),
             context = get(),
             settingsStore = get(),
             turnService = get(),

@@ -6,10 +6,15 @@ import io.mockk.coVerify
 import io.mockk.coVerifySequence
 import io.mockk.every
 import io.mockk.mockk
+import java.util.concurrent.Executors
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runCurrent
+import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runTest
 import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.datastore.ManagedConfigurationState
@@ -27,7 +32,9 @@ class ApplicationRecoveryCoordinatorTest {
     fun `recovery executes the only valid order before opening the gate`() = runTest {
         val env = Env(this)
 
+        org.junit.Assert.assertFalse(env.assistantDependency.isInitialized())
         env.coordinator.recoverNow()
+        assertTrue(env.assistantDependency.isInitialized())
 
         assertEquals(ApplicationRecoveryState.Ready, env.gate.state.value)
         coVerifySequence {
@@ -94,6 +101,7 @@ class ApplicationRecoveryCoordinatorTest {
         assertEquals(failure, failed.error)
         assertTrue(runCatching { env.gate.awaitReady() }.exceptionOrNull() is ApplicationRecoveryUnavailableException)
         coVerify(exactly = 0) { env.repository.ensureSearchProjection() }
+        org.junit.Assert.assertFalse(env.assistantDependency.isInitialized())
 
         coEvery { env.artifactStore.ensureReferenceProjection() } returns Unit
         env.coordinator.recoverNow()
@@ -157,8 +165,25 @@ class ApplicationRecoveryCoordinatorTest {
         coVerify(exactly = 1) { env.artifactStore.reconcileStartup() }
     }
 
+    @Test
+    fun `assistant graph is initialized by the recovery dispatcher before ready`() = runTest {
+        Executors.newSingleThreadExecutor { task -> Thread(task, "recovery-test") }
+            .asCoroutineDispatcher().use { dispatcher ->
+                var initializedOn: String? = null
+                val env = Env(this, recoveryDispatcher = dispatcher, onAssistantInitialization = {
+                    initializedOn = Thread.currentThread().name
+                })
+                org.junit.Assert.assertNull(initializedOn)
+                env.coordinator.recoverNow()
+                assertEquals("recovery-test", initializedOn)
+                assertEquals(ApplicationRecoveryState.Ready, env.gate.state.value)
+            }
+    }
+
     private class Env(
-        scope: kotlinx.coroutines.CoroutineScope,
+        scope: TestScope,
+        recoveryDispatcher: CoroutineDispatcher = StandardTestDispatcher(scope.testScheduler),
+        onAssistantInitialization: () -> Unit = {},
         restorePendingBackup: suspend () -> Unit = {},
         recoverEnterpriseConfiguration: suspend () -> Unit = {},
         completePendingBackup: () -> Unit = {},
@@ -172,6 +197,7 @@ class ApplicationRecoveryCoordinatorTest {
         val turnRecovery = mockk<TurnRecovery>()
         val assistantManagement = mockk<AssistantManagementService>()
         private val settingsStore = mockk<SettingsStore>()
+        val assistantDependency = lazy { onAssistantInitialization(); assistantManagement }
         val coordinator: ApplicationRecoveryCoordinator
 
         init {
@@ -191,7 +217,8 @@ class ApplicationRecoveryCoordinatorTest {
                 generatedMediaStore = generatedMediaStore,
                 conversationRepository = repository,
                 turnRecovery = turnRecovery,
-                assistantManagementService = assistantManagement,
+                assistantManagementService = assistantDependency,
+                recoveryDispatcher = recoveryDispatcher,
                 gate = gate,
                 restorePendingBackup = restorePendingBackup,
                 recoverEnterpriseConfiguration = recoverEnterpriseConfiguration,

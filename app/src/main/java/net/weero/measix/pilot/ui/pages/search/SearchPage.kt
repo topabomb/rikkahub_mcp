@@ -1,5 +1,8 @@
 package net.weero.measix.pilot.ui.pages.search
 
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
+import net.weero.measix.pilot.utils.plus
 import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.Refresh01
 import me.rerere.hugeicons.stroke.Sorting01
@@ -15,7 +18,6 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -33,10 +35,8 @@ import androidx.compose.material3.RadioButton
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
@@ -54,17 +54,15 @@ import net.weero.measix.pilot.data.db.fts.MessageSearchSort
 import net.weero.measix.pilot.ui.components.nav.BackButton
 import net.weero.measix.pilot.ui.context.LocalNavController
 import net.weero.measix.pilot.ui.theme.CustomColors
-import net.weero.measix.pilot.utils.navigateToChatPage
-import net.weero.measix.pilot.utils.plus
+import net.weero.measix.pilot.ui.context.rememberChatNavigation
 import net.weero.measix.pilot.utils.toLocalDateTime
 import org.koin.androidx.compose.koinViewModel
-import java.time.ZoneId
-import java.time.format.DateTimeFormatter
 import kotlin.uuid.Uuid
 
 @Composable
 fun SearchPage(vm: SearchVM = koinViewModel()) {
     val navController = LocalNavController.current
+    val chatNavigation = rememberChatNavigation(navController)
     val focusRequester = remember { FocusRequester() }
     var showRebuildDialog by remember { mutableStateOf(false) }
     val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
@@ -221,8 +219,7 @@ fun SearchPage(vm: SearchVM = koinViewModel()) {
                                 SearchResultItem(
                                     result = result,
                                     onClick = {
-                                        navigateToChatPage(
-                                            navController,
+                                        chatNavigation.existingChat(
                                             chatId = Uuid.parse(result.conversationId),
                                             nodeId = Uuid.parse(result.nodeId),
                                         )

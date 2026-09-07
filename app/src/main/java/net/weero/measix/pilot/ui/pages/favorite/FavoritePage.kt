@@ -1,5 +1,6 @@
 package net.weero.measix.pilot.ui.pages.favorite
 
+import net.weero.measix.pilot.utils.plus
 import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.Delete01
 import androidx.compose.foundation.background
@@ -15,7 +16,6 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LargeFlexibleTopAppBar
 import androidx.compose.material3.MaterialTheme
@@ -45,8 +45,7 @@ import net.weero.measix.pilot.ui.components.nav.BackButton
 import net.weero.measix.pilot.ui.context.LocalNavController
 import net.weero.measix.pilot.ui.theme.CustomColors
 import net.weero.measix.pilot.service.NodeFavoriteItem
-import net.weero.measix.pilot.utils.navigateToChatPage
-import net.weero.measix.pilot.utils.plus
+import net.weero.measix.pilot.ui.context.rememberChatNavigation
 import net.weero.measix.pilot.utils.toLocalDateTime
 import org.koin.androidx.compose.koinViewModel
 import java.time.Instant
@@ -55,6 +54,7 @@ import java.time.Instant
 fun FavoritePage(vm: FavoriteVM = koinViewModel()) {
     val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
     val navController = LocalNavController.current
+    val chatNavigation = rememberChatNavigation(navController)
     val scope = rememberCoroutineScope()
     val snackbarHostState = remember { SnackbarHostState() }
     val favorites = vm.nodeFavorites.collectAsStateWithLifecycle().value
@@ -103,7 +103,7 @@ fun FavoritePage(vm: FavoriteVM = koinViewModel()) {
             items(favorites, key = { it.id }) { item ->
                 SwipeableFavoriteCard(
                     item = item,
-                    onClick = { navigateToChatPage(navController, item.conversationId, nodeId = item.nodeId) },
+                    onClick = { chatNavigation.existingChat(item.conversationId, nodeId = item.nodeId) },
                     onDelete = {
                         scope.launch {
                             val restoreToken = vm.removeForUndo(item.refKey) ?: return@launch

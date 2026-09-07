@@ -204,6 +204,7 @@ internal data class ScopedUserPreferences(
     val selections: ResourceSelections = ResourceSelections(),
     val assistantUsage: List<AssistantUsagePreferences> = emptyList(),
     val gateways: List<GatewayPreference> = emptyList(),
+    val lastConversationId: kotlin.uuid.Uuid? = null,
 ) {
     init {
         require(scope is ConfigurationScope.Enterprise || assistantUsage.isEmpty()) { "personal_assistants_use_shared_definitions" }
@@ -234,6 +235,14 @@ internal data class UserPreferences(
 
     fun forScope(scope: ConfigurationScope): ResourceSelections =
         scopes.singleOrNull { it.scope == scope }?.selections ?: ResourceSelections()
+
+    fun lastConversation(scope: ConfigurationScope): kotlin.uuid.Uuid? =
+        scopes.singleOrNull { it.scope == scope }?.lastConversationId
+
+    fun withLastConversation(scope: ConfigurationScope, id: kotlin.uuid.Uuid): UserPreferences {
+        val existing = scopes.singleOrNull { it.scope == scope } ?: ScopedUserPreferences(scope)
+        return copy(scopes = scopes.filterNot { it.scope == scope } + existing.copy(lastConversationId = id))
+    }
 
     fun gateway(scope: ConfigurationScope.Enterprise, reference: ConfigurationReference.Enterprise): GatewayPreference? =
         scopes.singleOrNull { it.scope == scope }?.gateways?.singleOrNull { it.gateway == reference }
@@ -415,7 +424,8 @@ internal data class UserSettingsDocument(
                     ),
                 ),
                 scopes = preferences.scopes.filterNot { it.scope == ConfigurationScope.Personal } +
-                    ScopedUserPreferences(ConfigurationScope.Personal, personal),
+                    (preferences.scopes.singleOrNull { it.scope == ConfigurationScope.Personal }
+                        ?: ScopedUserPreferences(ConfigurationScope.Personal)).copy(selections = personal),
             ),
             internalState = SettingsInternalState(
                 launchCount = settings.launchCount,

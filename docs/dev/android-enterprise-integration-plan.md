@@ -206,6 +206,8 @@ UserConfiguration + UserPreferences + Applied Enterprise State
 | 授权失效/撤销 | 撤销资格，收口企业任务/Portal，回个人，提示重新接入 |
 | Portal 过期 | 只重建网页会话，不退出企业 |
 | 退出接入 | 原生确认，阻断新企业动作，收口该域运行/采集，清活动绑定/凭据/企业配置/网页会话，回个人；保留封存数据 |
+
+正式退出由应用层统一编排：确认时捕获原主体和 Session，提交时复验，旧确认不能退出新接入。先撤销准入，再释放 Session 锁，调用既有主/子运行与媒体 owner 按原企业域取消并等待终态，最后完成退出；不得以 binding lease 为空代替运行清理。流程由应用作用域持有，页面销毁或重复点击不产生第二退出操作，也不能遗留无人收口的 CLOSING。企业状态页直接投影 Session；待配置或停留个人空间时，同步目标仍是已接入的企业 Session。
 | 清除示例企业数据 | 独立确认，仅清该示例主体数据/导航，不删个人配置/历史/共享 Workspace |
 
 正常本地 source 不依赖设备互联网，“网络失败”是主动场景。source/deployment/user 是恢复身份边界；本期没有 live fallback，模拟凭据永远不能交给真实服务。网页退出调用同一个原生退出命令，网页打不开也能退出。
@@ -318,6 +320,16 @@ Portal 本地读取存在两项需要架构侧确认的 Android 平台限制：
 - 移除旧签名 envelope/global merge/path lock 和无消费者 facade；原型文件不迁成正式身份；仅保留真实历史迁移需要的解码边界。
 
 ## 10. 完整变更清单与批次
+
+C4 的聊天页面打开已接入原域授权：可序列化请求明确区分 NewDraft/OpenExisting，先验证选中主体与 Session，再在会话锁内检查 header，已有聊天缺失不回退新建。页面在 lease 成功后才订阅投影、收藏、错误和创建导入作用域；退出重登或切域使旧 lease 失效。Session owner 的进程内 selectionRevision 防止快速切出再切回被 StateFlow 合并而复活页面，不推进配置或 Feed 版本。Draft 首消息提交后保持原 Runtime/导航项，恢复不重放 preset 或分享输入。页面回收同时清理未提交输入，重试不能复用旧导入 owner 的附件。
+
+启动、通知、历史、搜索、收藏、分享与助手切换已使用明确请求；不可用页提供重试和新建按钮。最近聊天归 ScopedUserPreferences，旧 SharedPreferences 键在 DataStore 成功提交后一次性清理并归个人域；空 Draft 不保存最近 ID，个人设置更新保全企业偏好。普通按 ID 命令、START/继续、文件授权及正式企业入口仍按 C4/C6/U1 继续，不以页面检查代替执行授权。
+
+该页面批次 74 项定向 JVM 回归通过；Pixel_10_Pro_Fold / Android 17 的 5 项 DataStore/SharedPreferences 迁移与域偏好测试在 6 分 11 秒内通过，验证失败重试、重开、个人历史归属与企业值保全。审查发现的重复导入、重试残留附件、查询撤销异常及快速切域通知合并问题均已修正并补充测试。页面批次首次完整门禁在 9 分 52 秒内通过；随后启动检查发现的问题及最终变更验证见下段，尚未计作完整 C4、Portal 或 0.0.20 验收。
+
+设备启动检查发现 Debug 在 Application 的 eager 依赖构造阶段发生 ANR。恢复链现由 IO dispatcher 执行，助手清理依赖在原恢复步骤首次解析同一 singleton；MCP 的共享 Ktor client 在首次真实连接任务中初始化，前台观察者仍在 Main 注册。独立审查及恢复/MCP 定向测试通过。该模拟器上未预编译的 Debug 冷启动仍未通过，最新堆栈停在 Settings 构造；执行设备 `cmd package compile -m speed -f` 后，Debug 在约 21 秒内打开缺失会话页，并实际通过“新聊天”进入空 Draft。先前 Release 构建的对应页面流程通过；安装最终 Release 后首次启动超时，退出 Activity 后 warm 重开约 10 秒进入缺失会话页，并实际通过“新聊天”进入空 Draft。最终产物的冷启动稳定性仍需继续排查，不能把预编译或 warm 页面验证表述为原始冷启动验收通过。
+
+本批最终完整 `test assembleDebug lintDebug assembleRelease --no-parallel --max-workers=1 --no-configuration-cache` 在 9 分 52 秒内通过：App 1,908 项 JVM 测试无失败或跳过，lint 为 0 errors、272 warnings、5 hints，Debug/Release 构建成功。两次前置全量运行暴露子助手测试对 Function1 使用 relaxed proxy 的失败，改为显式 processingReporter lambda 后通过，未修改子助手生产行为；清理无调用测试 stub 后，21 项子助手/恢复/MCP 工厂定向测试再次通过。Workspace 45 项中 11 项 Windows 宿主测试仍跳过。本批不构成正式企业入口、Portal、完整域执行或 0.0.20 验收，版本维持 0.0.19。
 
 C4 的目录查询隔离已进入代码：列表/最近聊天/置顶/文件夹/分页/FTS/统计在 SQL 内过滤完整主体，FTS 在排序与限额前排除外域及 Child；消息/Token 沿用既有主子统计口径。ConversationQueryService 从 Session owner 派生选中域订阅，实际 Pager 的每次惰性加载验证原选择/Session，切域和停止订阅失效旧 source。Search/Stats 清除旧结果；抽屉持续观察文件夹，域变化清除筛选和滚动位置。助手查询工具沿用原 RealmAccess，不随全局选中域或重新接入更换身份。没有 schema 变化或第二搜索投影。按 ID 的页面 lease、Draft/Open、命令及文件授权继续作为 C4/C6 后续工作，本批不构成完整域访问验收。
 

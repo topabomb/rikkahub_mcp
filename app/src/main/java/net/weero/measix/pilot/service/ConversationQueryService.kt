@@ -19,6 +19,8 @@ import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.flow.onStart
 import kotlinx.coroutines.flow.catch
+import kotlinx.coroutines.flow.onEach
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.CancellationException
 import net.weero.measix.pilot.data.enterprise.EnterpriseSessionController
 import net.weero.measix.pilot.data.enterprise.EnterpriseConfigurationException
@@ -121,7 +123,47 @@ class ConversationQueryService internal constructor(
         return sessions.withRealmAccess(access, query)
     }
 
-    fun observeConversation(conversationId: Uuid): Flow<ConversationReadState> =
+    fun observeViewAccess(lease: ConversationViewLease): Flow<Boolean> = combine(
+        observeCurrentAccess(), lease.closed, sessions.selectionRevision,
+    ) { selected, closed, revision -> !closed && selected == lease.access && revision == lease.selectionRevision }
+        .distinctUntilChanged()
+        .onEach { active -> if (!active) lease.close() }
+
+    /** Only a successfully opened page can subscribe; every publication retains its original session. */
+    fun <T> observeForView(lease: ConversationViewLease, empty: T, source: () -> Flow<T>): Flow<T> =
+        observeViewAccess(lease).flatMapLatest { active ->
+            if (!active) flowOf(empty) else flow {
+                val values = withViewAccess(lease) { source() }
+                emitAll(values.map { value -> withViewAccess(lease) { value } })
+            }.catch { error ->
+                if (error is CancellationException) throw error
+                lease.close()
+                emit(empty)
+            }
+        }
+
+    private suspend fun <T> withViewAccess(lease: ConversationViewLease, action: () -> T): T =
+        sessions.withSelectedRealmAccess(lease.access) {
+            lease.requireOpen()
+            check(lease.selectionRevision == sessions.selectionRevision.value) { "conversation_view_revoked" }
+            action()
+        }
+
+    fun observeConversation(lease: ConversationViewLease): Flow<ConversationReadState> =
+        observeForView(lease, ConversationReadState.Failed(IllegalStateException("conversation_view_unavailable"))) {
+            observeRegisteredConversation(lease.conversationId).map { state ->
+                if (state is ConversationReadState.Ready) requireViewSnapshot(lease, state.snapshot)
+                state
+            }
+        }
+
+    private fun requireViewSnapshot(lease: ConversationViewLease, snapshot: ConversationPresentationSnapshot) {
+        check(snapshot.conversationId == lease.conversationId && snapshot.header.scope == lease.access.scope) {
+            "conversation_scope_mismatch"
+        }
+    }
+
+    private fun observeRegisteredConversation(conversationId: Uuid): Flow<ConversationReadState> =
         runtimeRegistry.observeRuntimeState(conversationId).flatMapLatest { state ->
             when (state) {
                 is ConversationRuntimeState.Draft -> state.runtime.snapshot.map { it.toPresentationSnapshot() }.map(ConversationReadState::Ready)
@@ -132,20 +174,22 @@ class ConversationQueryService internal constructor(
             }
         }
 
-    fun turnPresentation(conversationId: Uuid): Flow<ConversationPresentation> =
-        runtimeRegistry.getTurnPresentationFlow(conversationId)
+    fun turnPresentation(lease: ConversationViewLease): Flow<ConversationPresentation> =
+        observeForView(lease, ConversationPresentation.IDLE) { runtimeRegistry.getTurnPresentationFlow(lease.conversationId) }
 
-    fun conversationUiModel(conversationId: Uuid): Flow<ConversationUiModel> =
-        runtimeRegistry.getConversationUiFlow(conversationId)
+    fun conversationUiModel(lease: ConversationViewLease): Flow<ConversationUiModel?> =
+        observeForView<ConversationUiModel?>(lease, null) { runtimeRegistry.getConversationUiFlow(lease.conversationId)
             .combine(attachmentPreviewProjector.lifecycleChanges()) { joined, _ -> joined }
             .mapLatest { (aggregate, presentation) ->
                 val snapshot = aggregate.toPresentationSnapshot()
+                requireViewSnapshot(lease, snapshot)
                 ConversationUiModel(
                     snapshot = snapshot,
                     presentation = presentation,
                     attachmentPreviews = attachmentPreviewProjector.project(snapshot),
                 )
             }
+        }
 
     suspend fun attachmentPreviews(snapshot: ConversationPresentationSnapshot): Map<String, String> =
         attachmentPreviewProjector.project(snapshot)
@@ -153,8 +197,15 @@ class ConversationQueryService internal constructor(
     /** Re-emits query models when ArtifactStore invalidates or removes a referenced payload. */
     fun attachmentPreviewChanges(): Flow<Unit> = attachmentPreviewProjector.lifecycleChanges()
 
-    fun ttsQueueSessionId(conversationId: Uuid): String? =
-        runtimeRegistry.findRuntime(conversationId)?.peekTtsQueueSessionId()
+    suspend fun ttsQueueSessionId(lease: ConversationViewLease): String? =
+        withViewAccess(lease) {
+            runtimeRegistry.findRuntime(lease.conversationId)?.let { runtime ->
+                check(runtime.snapshot.value.durable.header.scope == lease.access.scope) {
+                    "conversation_scope_mismatch"
+                }
+                runtime.peekTtsQueueSessionId()
+            }
+        }
 
     fun conversationActivities(): Flow<Map<Uuid, Set<ConversationActivity>>> = combine(
         runtimeRegistry.getConversationTurnPresentations(),

@@ -1,5 +1,8 @@
 package net.weero.measix.pilot.ui.pages.history
 
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
+import net.weero.measix.pilot.utils.plus
 import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.Pin
 import me.rerere.hugeicons.stroke.PinOff
@@ -36,11 +39,9 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
@@ -53,14 +54,14 @@ import net.weero.measix.pilot.Screen
 import net.weero.measix.pilot.service.ConversationSummary
 import net.weero.measix.pilot.ui.components.nav.BackButton
 import net.weero.measix.pilot.ui.context.LocalNavController
-import net.weero.measix.pilot.utils.navigateToChatPage
-import net.weero.measix.pilot.utils.plus
+import net.weero.measix.pilot.ui.context.rememberChatNavigation
 import net.weero.measix.pilot.utils.toLocalDateTime
 import org.koin.androidx.compose.koinViewModel
 
 @Composable
 fun HistoryPage(vm: HistoryVM = koinViewModel()) {
     val navController = LocalNavController.current
+    val chatNavigation = rememberChatNavigation(navController)
     val scope = rememberCoroutineScope()
     val snackbarHostState = remember { SnackbarHostState() }
     var showDeleteAllDialog by remember { mutableStateOf(false) }
@@ -111,7 +112,7 @@ fun HistoryPage(vm: HistoryVM = koinViewModel()) {
                 SwipeableConversationItem(
                     conversation = conversation,
                     onClick = {
-                        navigateToChatPage(navController, conversation.id)
+                        chatNavigation.existingChat(conversation.id)
                     },
                     onDelete = {
                         scope.launch {

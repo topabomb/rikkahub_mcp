@@ -1,5 +1,7 @@
 package net.weero.measix.pilot.ui.pages.chat
 
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.LocalActivity
 import androidx.compose.foundation.clickable
@@ -39,11 +41,9 @@ import androidx.compose.material3.rememberBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -58,7 +58,6 @@ import androidx.paging.compose.collectAsLazyPagingItems
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.distinctUntilChanged
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.ChartColumn
@@ -67,7 +66,6 @@ import me.rerere.hugeicons.stroke.Folder01
 import me.rerere.hugeicons.stroke.FolderAdd
 import me.rerere.hugeicons.stroke.Image02
 import me.rerere.hugeicons.stroke.InLove
-import me.rerere.hugeicons.stroke.LanguageCircle
 import me.rerere.hugeicons.stroke.PencilEdit01
 import me.rerere.hugeicons.stroke.PanelLeftClose
 import me.rerere.hugeicons.stroke.Search01
@@ -95,7 +93,7 @@ import net.weero.measix.pilot.ui.hooks.readBooleanPreference
 import net.weero.measix.pilot.ui.hooks.rememberIsPlayStoreVersion
 import net.weero.measix.pilot.ui.hooks.useEditState
 import net.weero.measix.pilot.ui.modifier.onClick
-import net.weero.measix.pilot.utils.navigateToChatPage
+import net.weero.measix.pilot.ui.context.rememberChatNavigation
 import net.weero.measix.pilot.utils.toDp
 import org.koin.androidx.compose.koinViewModel
 import org.koin.compose.koinInject
@@ -113,6 +111,7 @@ fun ChatDrawerContent(
     navigateFromDrawer: ((() -> Unit) -> Unit) = { navigate -> navigate() },
 ) {
     val scope = rememberCoroutineScope()
+    val chatNavigation = rememberChatNavigation(navController)
     val context = LocalContext.current
     val toaster = LocalToaster.current
     val isPlayStore = rememberIsPlayStoreVersion()
@@ -307,7 +306,7 @@ fun ChatDrawerContent(
                     .weight(1f),
                 onClick = {
                     navigateFromDrawer {
-                        navigateToChatPage(navController, it.id)
+                        chatNavigation.existingChat(it.id)
                     }
                 },
                 onRegenerateTitle = {
@@ -319,7 +318,7 @@ fun ChatDrawerContent(
                         conversations.refresh()
                         if (it.id == currentConversationId) {
                             navigateFromDrawer {
-                                navigateToChatPage(navController)
+                                chatNavigation.newChat()
                             }
                         }
                     }
@@ -341,19 +340,11 @@ fun ChatDrawerContent(
             AssistantPicker(
                 settings = settings,
                 onSelectAssistant = { selectedAssistantId ->
-                    val updateJob = vm.updateSettings { it.copy(assistantId = selectedAssistantId) }
-                    scope.launch {
-                        updateJob.join()
-                        val id = if (context.readBooleanPreference("create_new_conversation_on_start", true)) {
-                            Uuid.random()
-                        } else {
-                            conversationQueryService.recentConversations(conversationQueryService.captureCurrentAccess(), selectedAssistantId, 1)
-                                .firstOrNull()
-                                ?.id ?: Uuid.random()
-                        }
-                        navigateFromDrawer {
-                            navigateToChatPage(navigator = navController, chatId = id)
-                        }
+                    navigateFromDrawer {
+                        chatNavigation.selectAssistant(
+                            selectedAssistantId,
+                            context.readBooleanPreference("create_new_conversation_on_start", true),
+                        )
                     }
                 },
                 modifier = Modifier.fillMaxWidth(),

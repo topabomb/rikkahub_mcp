@@ -25,6 +25,11 @@ Built-in defaults + Local shadow + 已验证的 Managed overlay
 | Local runtime cache | `cacheDir/lru_key_roulette.json` 等 | 可重建的 key 轮换/发现缓存；不是配置真源 | 否 |
 | Managed prototype | `filesDir/managed_configuration/` | 当前代码中的签名通用 overlay 原型 | 否 |
 
+最近聊天 ID 位于 `ScopedUserPreferences.lastConversationId`，按个人域或完整来源/Deployment/User 保存。
+`ConversationHistoryPreferenceMigration` 在旧 Settings 键迁移之后，把已发行的 SharedPreferences `lastConversationId`
+一次性归入个人域；已有域内值优先，DataStore 提交成功后才删除旧键，失败可重试。运行时不再读取全局旧键。
+普通个人配置更新保留各域最近聊天与企业使用偏好；新聊天 Draft 不写入最近聊天，删除后恢复缺失会话由页面明确处理。
+
 `lru_key_roulette.json` 当前以原始 API key 作为 map key 保存轮换时间。它虽然不是配置真源也不进入手工备份，仍是
 未加密 secret 副本；企业 credential 不能复用这条缓存协议。
 
