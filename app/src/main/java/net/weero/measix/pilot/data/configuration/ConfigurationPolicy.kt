@@ -108,7 +108,7 @@ enum class GatewayEnablementPolicy {
     USER_CONTROLLABLE_DEFAULT_ON,
 }
 
-/** The authority partitions identical gateway IDs from unrelated local or platform sources. */
+/** Stored inside a principal's scoped preferences; REQUIRED never overwrites the user's saved choice. */
 @Serializable
 data class GatewayPreference(
     val gateway: ConfigurationReference.Enterprise,

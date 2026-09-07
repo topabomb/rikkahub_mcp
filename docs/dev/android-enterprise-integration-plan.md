@@ -143,6 +143,8 @@ UserConfiguration + UserPreferences + Applied Enterprise State
 - 一个 AppDatabase；Conversation、Memory、Artifact、GenMedia、Folder/Favorite 等独立根保存必要 scope。MessageNode/Turn/Tool/Disclosure 从可靠外键派生，不新增平行可变真源。
 - 旧数据全归 PERSONAL，原 ID/内容/排序/引用/文件不变；旧选择只进入个人偏好。Draft 首消息事务和 Child lineage 不变。新企业记录创建时确定域/主体。
 - 查询/命令/FTS/统计/收藏/最近聊天/文件/deep link/通知/SAF/子助手都校验 scope，不先全量读取再 UI 过滤。
+- C4 的会话入口明确区分创建 Draft 与打开既有记录；不存在的既有 ID 返回 Missing，外域 ID 返回拒绝，不能借 loadOrRegisterDraft 变成新聊天。ConversationViewLease 携带从持久 header 或已注册 Draft 捕获的原 RealmAccess；ChatVM 先取得页面授权，再订阅会话、turn、附件、收藏和活动，关闭或授权撤销时清空投影。lastConversationId 移入按域偏好，旧 SharedPreferences 值只迁入个人域，构造 ViewModel 时不再直接写全局值。
+- C4 的命令授权覆盖 resident、仅 header 和完整加载三个分支，并与提交/发布保持同一顺序；新增 START 与继续用户交互沿用原授权。停止后删除分成校验并请求取消、释放锁等待任务结束、用原授权重新提交三个步骤，不能持有 Session 锁等待仍需记忆/配置授权的任务。已取得 TurnHandle 的终态收口与恢复继续使用现有 typed owner，不能新增通用跳过授权开关。Memory 等已持 Session 锁的调用使用明确的内部已授权读取边界，避免重复获取不可重入锁。
 - Child 从父会话复制 scope；创建、导入和 fork 都验证父子同域。移动到 Folder 同时验证 scope 与 assistant reference；收藏必须由原会话 owner 核实节点归属，不能信任 UI 传来的快照。撤销 token、缓存和已加载 Runtime 保留原 scope 并复验授权，不能因避开 DAO 而跳过隔离。
 - Workspace 为用户显式选择的共享空间，目录不随切域复制或清空，UI 标明共享。共享目录不等于内容隔离；`/upload` 及会话资源挂载必须按调用主体限制，不能暴露整个个人上传目录。Skill/字体属于选择使用的共享配置资产。
 - Artifact 的数据归属与共享配置资产的读取用途分开。旧行仍归个人；头像/背景等共享配置预览由原 Artifact owner 验证持久配置 root，不能因此向其他域的工具开放原路径。配置资产进入另一域聊天时按既有 lease/创建协议生成目标域附件，不修改源行归属。GC/删除检查所有主体的持久配置 roots；不能仅看当前生效配置。聊天引用投影发现跨域 Artifact 时拒绝，不静默丢失引用。
@@ -316,6 +318,10 @@ Portal 本地读取存在两项需要架构侧确认的 Android 平台限制：
 - 移除旧签名 envelope/global merge/path lock 和无消费者 facade；原型文件不迁成正式身份；仅保留真实历史迁移需要的解码边界。
 
 ## 10. 完整变更清单与批次
+
+Gateway 使用偏好已移入既有 ScopedUserPreferences，按完整主体保存，删除无 userId 的顶层原型字段；保留已发布个人配置迁移协议。EnterpriseGateway 删除第二个 enabled 位，对齐定义存在即发布、撤销通过候选移除的语义。Resolver 统一派生完整工具对的生效开关与可切换性，REQUIRED 保留但不使用原 false，恢复可控后恢复原偏好。配置应用命令只接受捕获的 RealmAccess.Enterprise，同主体重登后旧页面不能继续修改使用偏好。该批 Gateway 执行消费者与 UI 尚未接通，不代表 Gateway 运行功能已验收。
+
+该偏好批次 39 项定向 JVM 测试通过；新增断言首次误用包含引用相等对象的整文档 equals，改为对比完整序列化内容后通过，未修改产品逻辑规避。Pixel_10_Pro_Fold / Android 17 的 ScopedConfigurationAndroidTest 在 2 分 27 秒内通过，使用实际 DataStore/企业存储重开验证偏好保留、用户隔离与个人配置保全。完整 `test assembleDebug lintDebug assembleRelease --no-parallel --max-workers=1 --no-configuration-cache` 在 8 分 13 秒内通过：App 1,885 项 JVM 测试无失败或跳过，lint 为 0 errors、272 warnings、5 hints，Debug/Release 均构建成功。Workspace 45 项测试中 11 项 Windows 宿主跳过，不算相应能力验收。独立审查无剩余本批阻塞项；版本仍为 0.0.19 开发基线，Portal 读取协议待确认，会话隔离、执行消费者、正式页面和完整 0.0.20 交付继续实施。
 
 本地来源候选与统一同步已实现：安装目录独立保存来源/Deployment/User 身份、generation 和内容摘要引用，随包文件仅初始化；场景发布使用来源 revision CAS，不直接改客户端 Applied。原生完整文件可显式安装其他本地主体，短资料只查询已安装来源，由票据确定用户，消费前检查 Session 冲突。EnterpriseSynchronizationService 合并同原 Session 的同步，失败保留 Applied 和成功时间，同版本成功检查复用 Applied revision，提交期间到期不创建新 Session。有效来源发布后客户端失败返回待接入/待同步；来源文件损坏可显式导入更高 generation 修复。旧 updateLocalPackage 与安装包/Applied 回退分支已删除，未新增客户端 enterprise_local 配置区。
 

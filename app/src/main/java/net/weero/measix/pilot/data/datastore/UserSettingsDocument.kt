@@ -203,10 +203,16 @@ internal data class ScopedUserPreferences(
     val scope: ConfigurationScope,
     val selections: ResourceSelections = ResourceSelections(),
     val assistantUsage: List<AssistantUsagePreferences> = emptyList(),
+    val gateways: List<GatewayPreference> = emptyList(),
 ) {
     init {
         require(scope is ConfigurationScope.Enterprise || assistantUsage.isEmpty()) { "personal_assistants_use_shared_definitions" }
         require(assistantUsage.map { it.assistantId }.distinct().size == assistantUsage.size) { "duplicate_assistant_usage" }
+        require(gateways.isEmpty() || scope is ConfigurationScope.Enterprise) { "gateway_preferences_require_enterprise_scope" }
+        require(gateways.all { scope is ConfigurationScope.Enterprise && it.gateway.authority == scope.authority }) {
+            "foreign_gateway_in_scope_preferences"
+        }
+        require(gateways.map { it.gateway }.distinct().size == gateways.size) { "duplicate_gateway_preference" }
     }
 }
 
@@ -214,7 +220,6 @@ internal data class ScopedUserPreferences(
 internal data class UserPreferences(
     val common: CommonUserPreferences = CommonUserPreferences(),
     val scopes: List<ScopedUserPreferences> = listOf(ScopedUserPreferences(ConfigurationScope.Personal)),
-    val gateways: List<GatewayPreference> = emptyList(),
 ) {
     init {
         require(scopes.map { it.scope }.distinct().size == scopes.size) { "duplicate_preference_scope" }
@@ -225,11 +230,19 @@ internal data class UserPreferences(
                         reference is ConfigurationReference.Enterprise && reference.authority == scoped.scope.authority)
             }) { "foreign_reference_in_scope_preferences" }
         }
-        require(gateways.map { it.gateway }.distinct().size == gateways.size) { "duplicate_gateway_preference" }
     }
 
     fun forScope(scope: ConfigurationScope): ResourceSelections =
         scopes.singleOrNull { it.scope == scope }?.selections ?: ResourceSelections()
+
+    fun gateway(scope: ConfigurationScope.Enterprise, reference: ConfigurationReference.Enterprise): GatewayPreference? =
+        scopes.singleOrNull { it.scope == scope }?.gateways?.singleOrNull { it.gateway == reference }
+
+    fun withGateway(scope: ConfigurationScope.Enterprise, preference: GatewayPreference): UserPreferences {
+        val existing = scopes.singleOrNull { it.scope == scope } ?: ScopedUserPreferences(scope)
+        val updated = existing.copy(gateways = existing.gateways.filterNot { it.gateway == preference.gateway } + preference)
+        return copy(scopes = scopes.filterNot { it.scope == scope } + updated)
+    }
 
     fun withSelections(scope: ConfigurationScope, selections: ResourceSelections): UserPreferences {
         val existing = scopes.singleOrNull { it.scope == scope } ?: ScopedUserPreferences(scope)

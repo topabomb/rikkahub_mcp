@@ -59,7 +59,7 @@ updateLocal(latest Local shadow transform)
 `UserSettingsDocument` 的 `schemaVersion`、`configuration`、`preferences`、`internalState` 为必需字段，缺失或版本不支持时拒绝读取；其 schema 与 Room、应用和备份版本独立。
 
 - `UserConfiguration` 保存现有 Provider/Model、TTS/ASR、MCP、Search、Assistant、注入/QuickMessage/标签、辅助提示词、备份连接及 UserProfile。用户昵称/头像不重复放入显示偏好。
-- `UserPreferences.common` 保存 DataStore 原有的外观、DisplayPreferences、播放速度和提醒；`scopes` 以 ConfigurationScope 保存 ResourceSelections 和企业域的 AssistantUsagePreferences，`gateways` 保存按来源和企业标识区分的 Gateway 偏好。SharedPreferences 表中的偏好仍由原 owner 管理。
+- `UserPreferences.common` 保存 DataStore 原有的外观、DisplayPreferences、播放速度和提醒；`scopes` 以完整 ConfigurationScope 保存 ResourceSelections、企业域的 AssistantUsagePreferences 和 GatewayPreference。Gateway 偏好随来源、Deployment、User 与资源 ID 隔离，未交付的顶层 gateways 字段已删除，不将无用户归属的原型偏好猜测归入某个主体。SharedPreferences 表中的偏好仍由原 owner 管理。
 - `common.configuration.ConfigurationReference` 保留原用户 UUID 或企业来源/原始字符串 ID，不生成替代 UUID。个人引用的 JSON 仍是原 UUID 字符串；企业引用序列化为 `managed~来源类型~来源标识~deploymentId~资源ID`，完整保留来源和原始资源 ID。ConfigurationScope 企业身份包括 sourceNamespace/deploymentId/userId，本地与平台来源不相交。当前实际 Settings 消费链只投影个人选择，正式企业接入尚未接通。
 - `UserSettingsMigration` 在旧 OCR/Search/MCP 迁移之后，将旧键转换并在同一次 DataStore 迁移提交中移除；MCP Catalog 的 pending staging 保留给 Catalog owner。旧资源或 tombstone 解码失败会中止迁移，原输入不变。正常读写只访问新文档，没有旧键 fallback。
 - 用户定义及其配置绑定只接受 User 引用；按企业保存的选择允许 User 或同 authority 的 Enterprise 引用，拒绝外域引用。会话、Message、Turn、文件与 Workspace 的自身 ID 继续使用 UUID。
@@ -90,9 +90,10 @@ PrepareEnterpriseExampleAssets 从公开完整模板派生 enterprise.local.iden
 - 内置定义通过 withBuiltInDefinitions 补齐，显式失效的模型、MCP、注入和快捷消息引用保留。模型选择同时校验用途类型；找不到或被策略排除时返回原因，不按名称或首项替换。企业选择为空时只继承企业默认，不继承个人选择。
 - 重复导入 Provider 可能保留相同模型 ID；新目录将该模型标为引用歧义，不任意选择凭据 owner，也不使其他资源目录整体失败。原用户定义保持不变。
 - AssistantUsagePreferences 只保存企业主体内的显式覆盖。字段缺失继承原定义，UsageValue 中显式 null 清除可空字段；个人助手仍只保存一份共享定义。企业助手使用自身固定核心与普通字段默认值，本域偏好不能改写固定模型、系统提示词或移除固定 MCP/子助手引用。
-- ConfigurationApplicationService 等待应用恢复门禁，再由企业 session owner 持有授权锁，调用 SettingsStore 的 DataStore 最新值事务；固定锁序为 enterprise session → Settings。transform 开始和交给 writer 前检查原调用者取消状态；已取得提交所有权后不可取消地等待 DataStore actor 的最终 ack，再传播取消，避免写盘期间提前释放锁。策略更新、退出不能穿插偏好提交。
+- ConfigurationApplicationService 接收页面或调用者捕获的 RealmAccess.Enterprise，等待恢复门禁后由企业 session owner 校验原 Session 与完整主体，持有授权锁调用 SettingsStore 的 DataStore 最新值事务；不在命令内部按 scope 重取登录资格，同主体退出重登不能复活旧写操作。固定锁序为 enterprise session → Settings。transform 开始和交给 writer 前检查原调用者取消状态；已取得提交所有权后不可取消地等待 DataStore actor 的最终 ack，再传播取消，避免写盘期间提前释放锁。策略更新、退出不能穿插偏好提交。
 - ResourceSelectionSlot 对应模型角色、助手、Search、TTS、ASR 选择；收藏及建议开关使用同一偏好写协议。新增选择校验身份、类别准入、启用状态和模型用途；清除覆盖始终允许，且不会隐式修复仍失效的其他选择。
 - 助手 MCP 修改只校验新增引用，允许逐项移除已有失效引用。写失败/取消不发布提前生效的内存值；个人定义编辑保留企业主体偏好，同企业不同用户不继承对方的使用选择。
+- Gateway 定义存在即已发布，不含第二个 enabled 位；撤销由来源候选删除定义表达。Resolver 为目录项派生完整 discover/invoke 工具对的 gatewayEnablement，统一决定生效开关与可切换性。REQUIRED 强制开启、拒绝开关写入，但保留原 false；恢复 USER_CONTROLLABLE_DEFAULT_ON 后原 false 再生效，无偏好则默认开启。setGatewayEnabled 使用同一授权与偏好提交协议，拒绝缺失或异主体资源，不更改配置 generation。该目录决策不代表 Session、连接或工具 surface 已通过执行校验；Gateway 执行装配和正式 UI 尚未接通。
 
 上述 application/query ports 已注册 DI；实际页面与执行链的接入和旧 Managed 原型退休尚未完成。
 

@@ -63,6 +63,9 @@ import me.rerere.search.SearchServiceOptions
 import me.rerere.tts.provider.TTSProviderSetting
 import net.weero.measix.pilot.data.configuration.AssistantUsagePreferences
 import net.weero.measix.pilot.data.configuration.ConfigurationResolver
+import net.weero.measix.pilot.data.configuration.ConfigurationCategory
+import net.weero.measix.pilot.data.configuration.ConfigurationKey
+import net.weero.measix.pilot.data.configuration.GatewayPreference
 import net.weero.measix.pilot.data.configuration.ConfigurationScope
 import net.weero.measix.pilot.data.configuration.ResolvedConfiguration
 import net.weero.measix.pilot.data.enterprise.EnterpriseState
@@ -332,6 +335,25 @@ class SettingsStore internal constructor(
             val updated = document.copy(preferences = document.preferences.withSelections(scope, proposed))
             requireResourceSelectionsWriteAllowed(before, proposed, ConfigurationResolver.resolve(updated, scope, enterpriseState))
             updated
+        }
+    }
+
+    /** Gateway definition and effective usage remain separate; the resolver owns the enablement decision. */
+    internal suspend fun updateGatewayPreference(
+        scope: ConfigurationScope.Enterprise,
+        enterpriseState: EnterpriseState.Available,
+        gateway: ConfigurationReference.Enterprise,
+        enabled: Boolean,
+    ) = updateMutex.withLock {
+        require(enterpriseState.manifest.session?.identity?.scope == scope) { "gateway_preference_principal_mismatch" }
+        commitAuthorizedPreferences { document ->
+            val resolved = ConfigurationResolver.resolve(document, scope, enterpriseState)
+            val item = resolved.catalog[ConfigurationKey(ConfigurationCategory.GATEWAY, gateway)]
+            if (item?.gatewayEnablement?.canChange != true) {
+                throw SettingsLockedException("gateways/${gateway.id}",
+                    item?.access?.unavailableReason?.name ?: "gateway_enablement_not_controllable")
+            }
+            document.copy(preferences = document.preferences.withGateway(scope, GatewayPreference(gateway, enabled)))
         }
     }
 

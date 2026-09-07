@@ -23,6 +23,7 @@ import net.weero.measix.pilot.data.enterprise.EnterprisePackageCodec
 import net.weero.measix.pilot.data.enterprise.EnterpriseSessionController
 import net.weero.measix.pilot.data.enterprise.LocalEnterpriseSource
 import net.weero.measix.pilot.data.enterprise.reference
+import net.weero.measix.pilot.data.enterprise.RealmAccess
 import net.weero.measix.pilot.data.model.Assistant
 import net.weero.measix.pilot.service.ApplicationRecoveryGate
 import net.weero.measix.pilot.service.ConfigurationApplicationService
@@ -49,11 +50,13 @@ class ScopedConfigurationAndroidTest {
                     Settings(providers = listOf(provider), assistants = listOf(assistant), assistantId = assistant.id, chatModelId = model.id)
                 }
                 env.sessions.enrollLocal(packet.identity, { packet.identity }, { packet })
-                env.commands.selectResource(packet.identity.scope, ResourceSelectionSlot.ASSISTANT, assistant.id)
-                env.commands.selectResource(packet.identity.scope, ResourceSelectionSlot.CHAT_MODEL, packet.identity.reference("mdl_chat"))
-                env.commands.updateAssistantUsage(packet.identity.scope, assistant.id) {
+                val access = env.sessions.captureRealmAccess(packet.identity.scope) as RealmAccess.Enterprise
+                env.commands.selectResource(access, ResourceSelectionSlot.ASSISTANT, assistant.id)
+                env.commands.selectResource(access, ResourceSelectionSlot.CHAT_MODEL, packet.identity.reference("mdl_chat"))
+                env.commands.updateAssistantUsage(access, assistant.id) {
                     AssistantUsagePreferences(assistant.id, chatModelId = UsageValue(packet.identity.reference("mdl_chat")))
                 }
+                env.commands.setGatewayEnabled(access, packet.identity.reference("gw_optional"), false)
             }
             withEnvironment(app, root) { env ->
                 val enterprise = env.queries.observeCurrent().first()
@@ -61,6 +64,9 @@ class ScopedConfigurationAndroidTest {
                 assertEquals(assistant.id, enterprise.selection(ResourceSelectionSlot.ASSISTANT).reference)
                 assertEquals(packet.identity.reference("mdl_chat"), enterprise.assistantModel(assistant.id).reference)
                 val document = env.document()
+                assertFalse(document.preferences.gateway(packet.identity.scope, packet.identity.reference("gw_optional"))!!.enabled)
+                val gateway = enterprise.catalog.getValue(ConfigurationKey(ConfigurationCategory.GATEWAY, packet.identity.reference("gw_optional")))
+                assertEquals(ResolvedGatewayEnablement(false, true), gateway.gatewayEnablement)
                 assertEquals(provider, document.configuration.providers.single { it.id == provider.id })
                 assertEquals(model.id, document.configuration.assistants.single { it.id == assistant.id }.chatModelId)
                 assertFalse(document.configuration.assistants.any { it.id is me.rerere.common.configuration.ConfigurationReference.Enterprise })
@@ -74,6 +80,9 @@ class ScopedConfigurationAndroidTest {
                 val bob = packet.copy(identity = packet.identity.copy(userId = "bob"))
                 env.sessions.enrollLocal(bob.identity, { bob.identity }, { bob })
                 assertNull(env.document().preferences.assistantUsage(bob.identity.scope, assistant.id))
+                assertNull(env.document().preferences.gateway(bob.identity.scope, bob.identity.reference("gw_optional")))
+                assertTrue(env.queries.observeCurrent().first().catalog.getValue(
+                    ConfigurationKey(ConfigurationCategory.GATEWAY, bob.identity.reference("gw_optional"))).gatewayEnablement!!.enabled)
                 assertEquals(model.id, env.queries.observeCurrent().first().assistantModel(assistant.id).reference)
             }
         } finally { root.deleteRecursively() }

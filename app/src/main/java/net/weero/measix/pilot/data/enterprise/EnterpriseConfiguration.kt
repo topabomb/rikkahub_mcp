@@ -89,7 +89,6 @@ internal data class EnterpriseStarter(val id: String, val assistantId: String, v
 internal data class EnterpriseGateway(
     val id: String,
     val name: String,
-    val enabled: Boolean = true,
     val enablement: GatewayEnablementPolicy,
 )
 

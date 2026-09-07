@@ -8,6 +8,8 @@ import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.jsonObject
 import net.weero.measix.pilot.data.configuration.ConfigurationScope
+import net.weero.measix.pilot.data.configuration.GatewayPreference
+import kotlinx.serialization.encodeToString
 import me.rerere.common.configuration.EnterpriseAuthority
 import net.weero.measix.pilot.utils.JsonInstant
 import org.junit.Assert.assertEquals
@@ -142,17 +144,42 @@ class UserSettingsMigrationTest {
         val enterprise = ScopedUserPreferences(
             ConfigurationScope.Enterprise(authority, "usr_one"),
             ResourceSelections(chatModelId = ConfigurationReference.Enterprise(authority, "mdl_example")),
+            gateways = listOf(GatewayPreference(ConfigurationReference.Enterprise(authority, "gw_example"), false)),
         )
         val before = UserSettingsDocument.empty(preferences = UserPreferences(scopes = listOf(enterprise)))
         val after = before.withPersonalSettings(golden())
         assertEquals(enterprise, after.preferences.scopes.single { it.scope == enterprise.scope })
         assertEquals(2, after.preferences.scopes.size)
         assertEquals(golden().providers.map { it.id }, after.configuration.providers.map { it.id })
+        val encoded = JsonInstant.encodeToString(after)
+        assertEquals(encoded, JsonInstant.encodeToString(JsonInstant.decodeFromString<UserSettingsDocument>(encoded)))
         assertThrows(IllegalArgumentException::class.java) {
             after.copy(preferences = UserPreferences(scopes = listOf(
                 enterprise.copy(scope = ConfigurationScope.Personal),
             )))
         }
+    }
+
+    @Test
+    fun `gateway preferences require one matching enterprise principal and reject duplicate resource entries`() {
+        val authority = EnterpriseAuthority("local:example", "dep_example")
+        val scope = ConfigurationScope.Enterprise(authority, "alice")
+        val preference = GatewayPreference(ConfigurationReference.Enterprise(authority, "gw_example"), false)
+        assertThrows(IllegalArgumentException::class.java) {
+            ScopedUserPreferences(ConfigurationScope.Personal, gateways = listOf(preference))
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            ScopedUserPreferences(scope.copy(authority = authority.copy(sourceNamespace = "platform:example")), gateways = listOf(preference))
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            ScopedUserPreferences(scope, gateways = listOf(preference, preference))
+        }
+        val preferences = UserPreferences(scopes = listOf(
+            ScopedUserPreferences(scope, gateways = listOf(preference)),
+            ScopedUserPreferences(scope.copy(userId = "bob"), gateways = listOf(preference.copy(enabled = true))),
+        ))
+        assertFalse(preferences.gateway(scope, preference.gateway)!!.enabled)
+        assertTrue(preferences.gateway(scope.copy(userId = "bob"), preference.gateway)!!.enabled)
     }
 
     @Test

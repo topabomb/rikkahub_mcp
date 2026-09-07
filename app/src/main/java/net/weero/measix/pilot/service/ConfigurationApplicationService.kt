@@ -2,11 +2,11 @@ package net.weero.measix.pilot.service
 
 import me.rerere.common.configuration.ConfigurationReference
 import net.weero.measix.pilot.data.configuration.AssistantUsagePreferences
-import net.weero.measix.pilot.data.configuration.ConfigurationScope
 import net.weero.measix.pilot.data.configuration.ResourceSelectionSlot
 import net.weero.measix.pilot.data.datastore.ResourceSelections
 import net.weero.measix.pilot.data.datastore.SettingsStore
 import net.weero.measix.pilot.data.enterprise.EnterpriseSessionController
+import net.weero.measix.pilot.data.enterprise.RealmAccess
 
 internal class ConfigurationApplicationService(
     private val settings: SettingsStore,
@@ -14,33 +14,40 @@ internal class ConfigurationApplicationService(
     private val recoveryGate: ApplicationRecoveryGate,
 ) {
     suspend fun selectResource(
-        scope: ConfigurationScope.Enterprise,
+        access: RealmAccess.Enterprise,
         slot: ResourceSelectionSlot,
         reference: ConfigurationReference?,
-    ) = updateSelections(scope) { slot.replace(it, reference) }
+    ) = updateSelections(access) { slot.replace(it, reference) }
 
-    suspend fun setModelFavorite(scope: ConfigurationScope.Enterprise, reference: ConfigurationReference, favorite: Boolean) =
-        updateSelections(scope) { current ->
+    suspend fun setModelFavorite(access: RealmAccess.Enterprise, reference: ConfigurationReference, favorite: Boolean) =
+        updateSelections(access) { current ->
             current.copy(favoriteModels = if (favorite) (current.favoriteModels + reference).distinct()
                 else current.favoriteModels.filterNot { it == reference })
         }
 
-    suspend fun setSuggestionEnabled(scope: ConfigurationScope.Enterprise, enabled: Boolean) =
-        updateSelections(scope) { it.copy(enableSuggestion = enabled) }
+    suspend fun setSuggestionEnabled(access: RealmAccess.Enterprise, enabled: Boolean) =
+        updateSelections(access) { it.copy(enableSuggestion = enabled) }
 
-    private suspend fun updateSelections(scope: ConfigurationScope.Enterprise, transform: (ResourceSelections) -> ResourceSelections) {
+    private suspend fun updateSelections(access: RealmAccess.Enterprise, transform: (ResourceSelections) -> ResourceSelections) {
         recoveryGate.awaitReady()
-        enterpriseSessions.withAppliedConfiguration(scope) { applied -> settings.updateResourceSelections(scope, applied, transform) }
+        enterpriseSessions.withAppliedConfiguration(access) { applied -> settings.updateResourceSelections(access.scope, applied, transform) }
+    }
+
+    suspend fun setGatewayEnabled(access: RealmAccess.Enterprise, gateway: ConfigurationReference.Enterprise, enabled: Boolean) {
+        recoveryGate.awaitReady()
+        enterpriseSessions.withAppliedConfiguration(access) { applied ->
+            settings.updateGatewayPreference(access.scope, applied, gateway, enabled)
+        }
     }
 
     suspend fun updateAssistantUsage(
-        scope: ConfigurationScope.Enterprise,
+        access: RealmAccess.Enterprise,
         assistantId: ConfigurationReference,
         transform: (AssistantUsagePreferences?) -> AssistantUsagePreferences?,
     ) {
         recoveryGate.awaitReady()
-        enterpriseSessions.withAppliedConfiguration(scope) { applied ->
-            settings.updateAssistantUsage(scope, applied, assistantId, transform)
+        enterpriseSessions.withAppliedConfiguration(access) { applied ->
+            settings.updateAssistantUsage(access.scope, applied, assistantId, transform)
         }
     }
 }

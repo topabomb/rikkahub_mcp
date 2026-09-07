@@ -21,7 +21,11 @@ internal data class ConfigurationCatalogItem(
     val key: ConfigurationKey,
     val name: String,
     val access: ConfigurationAccess,
+    val gatewayEnablement: ResolvedGatewayEnablement? = null,
 )
+
+/** One enablement decision applies to the gateway's complete discover/invoke pair. */
+internal data class ResolvedGatewayEnablement(val enabled: Boolean, val canChange: Boolean)
 
 internal data class ResolvedModelConfiguration(
     val model: Model,
@@ -152,7 +156,19 @@ internal object ConfigurationResolver {
             enterprise.tts.forEach { add(ConfigurationCategory.TTS, identity.reference(it.id), it.name, it.enabled) }
             enterprise.asr.forEach { add(ConfigurationCategory.ASR, identity.reference(it.id), it.name, it.enabled) }
             enterprise.mcpServers.forEach { add(ConfigurationCategory.MCP, identity.reference(it.id), it.name, it.enabled) }
-            enterprise.gateways.forEach { add(ConfigurationCategory.GATEWAY, identity.reference(it.id), it.name, it.enabled) }
+            enterprise.gateways.forEach { definition ->
+                val reference = identity.reference(definition.id)
+                val preference = document.preferences.gateway(identity.scope, reference)
+                val enabled = effectiveGatewayEnabled(definition.enablement, preference, reference)
+                add(ConfigurationCategory.GATEWAY, reference, definition.name, enabled)
+                val key = ConfigurationKey(ConfigurationCategory.GATEWAY, reference)
+                val item = catalog.getValue(key)
+                catalog[key] = item.copy(
+                    access = item.access.copy(requiredEnabled = enabled && definition.enablement == GatewayEnablementPolicy.REQUIRED),
+                    gatewayEnablement = ResolvedGatewayEnablement(enabled,
+                        definition.enablement == GatewayEnablementPolicy.USER_CONTROLLABLE_DEFAULT_ON),
+                )
+            }
             enterprise.memorySeeds.forEach { add(ConfigurationCategory.MEMORY_SEED, identity.reference(it.id), it.id) }
             enterprise.starters.forEach { add(ConfigurationCategory.STARTER, identity.reference(it.id), it.title) }
             enterprise.assistants.forEach { definition ->

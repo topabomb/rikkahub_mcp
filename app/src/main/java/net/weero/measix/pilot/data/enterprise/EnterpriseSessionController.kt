@@ -246,11 +246,11 @@ internal class EnterpriseSessionController(
 
     /** Lock order is enterprise session, then user configuration; policy cannot change during a scoped write. */
     suspend fun <T> withAppliedConfiguration(
-        scope: ConfigurationScope.Enterprise,
+        access: RealmAccess.Enterprise,
         operation: suspend (EnterpriseState.Available) -> T,
     ): T = mutex.withLock {
         val current = requireSession(allowOffline = true)
-        if (current.manifest.session?.identity?.scope != scope) fail("enterprise_principal_mismatch")
+        if (!allowsDataAccess(current.manifest, access)) fail("enterprise_data_access_unavailable")
         operation(EnterpriseState.Available(current.manifest, current.configuration))
     }
 

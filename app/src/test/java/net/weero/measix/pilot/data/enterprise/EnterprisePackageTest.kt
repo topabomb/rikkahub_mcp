@@ -3,6 +3,9 @@ package net.weero.measix.pilot.data.enterprise
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.jsonArray
 import org.junit.Assert.*
 import org.junit.Test
 
@@ -14,6 +17,22 @@ internal suspend fun EnterpriseSessionController.enrollFixture(packet: Enterpris
     enrollLocal(packet.identity, redeem = { packet.identity }, configuration = { packet })
 
 class EnterprisePackageTest {
+    @Test
+    fun `published gateway rejects a second enabled bit and requires an explicit known policy`() {
+        val root = EnterprisePackageCodec.json.parseToJsonElement(
+            EnterprisePackageCodec.encode(exampleEnterprisePackage()).decodeToString()).jsonObject
+        val config = root.getValue("configuration").jsonObject
+        val gateways = config.getValue("gateways").jsonArray
+        val gateway = gateways.first().jsonObject
+        val invalid = listOf(JsonObject(gateway + ("enabled" to JsonPrimitive(false))),
+            JsonObject(gateway - "enablement"), JsonObject(gateway + ("enablement" to JsonPrimitive("UNKNOWN"))))
+        invalid.forEach { item ->
+            val candidate = JsonObject(root + ("configuration" to JsonObject(config +
+                ("gateways" to JsonArray(listOf(item) + gateways.drop(1))))))
+            assertThrows(EnterpriseConfigurationException::class.java) { EnterprisePackageCodec.decode(candidate.toString().encodeToByteArray()) }
+        }
+    }
+
     @Test
     fun `bundled example is a complete credential-free graph`() {
         val example = exampleEnterprisePackage()
