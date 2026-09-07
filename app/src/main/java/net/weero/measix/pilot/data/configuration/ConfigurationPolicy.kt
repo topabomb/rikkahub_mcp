@@ -56,7 +56,9 @@ enum class ConfigurationUnavailableReason {
     DIFFERENT_ENTERPRISE,
     ENTERPRISE_RESOURCE_IN_PERSONAL_SCOPE,
     RESOURCE_DISABLED,
+    RESOURCE_CAPABILITY_MISMATCH,
     REFERENCE_MISSING,
+    REFERENCE_AMBIGUOUS,
 }
 
 /** Definition management and admission to a realm are intentionally separate decisions. */

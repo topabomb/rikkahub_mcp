@@ -4,6 +4,7 @@ import me.rerere.common.configuration.ConfigurationReference
 import android.content.Context
 import android.util.Log
 import androidx.datastore.core.DataMigration
+import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.floatPreferencesKey
@@ -12,8 +13,13 @@ import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
@@ -55,6 +61,11 @@ import net.weero.measix.pilot.utils.toMutableStateFlow
 import me.rerere.search.SearchCommonOptions
 import me.rerere.search.SearchServiceOptions
 import me.rerere.tts.provider.TTSProviderSetting
+import net.weero.measix.pilot.data.configuration.AssistantUsagePreferences
+import net.weero.measix.pilot.data.configuration.ConfigurationResolver
+import net.weero.measix.pilot.data.configuration.ConfigurationScope
+import net.weero.measix.pilot.data.configuration.ResolvedConfiguration
+import net.weero.measix.pilot.data.enterprise.EnterpriseState
 
 private const val TAG = "SettingsStore"
 
@@ -125,18 +136,13 @@ internal class SearchSelectionMigration : DataMigration<Preferences> {
     override suspend fun cleanUp() = Unit
 }
 
-class SettingsStore private constructor(
+class SettingsStore internal constructor(
     private val appContext: Context,
     private val scope: AppScope,
-    runtime: ManagedConfigurationRuntime,
+    runtime: ManagedConfigurationRuntime = managedConfigurationRuntime(),
+    private val dataStore: DataStore<Preferences> = appContext.settingsStore,
 ) {
     private val nowMillis = runtime.nowMillis
-
-    constructor(appContext: Context, scope: AppScope) : this(
-        appContext = appContext,
-        scope = scope,
-        runtime = managedConfigurationRuntime(),
-    )
 
     companion object {
         internal fun forManagedStateTest(
@@ -217,18 +223,21 @@ class SettingsStore private constructor(
         val PENDING_ASSISTANT_DELETIONS = stringPreferencesKey("pending_assistant_deletions")
     }
 
-    private val dataStore = appContext.settingsStore
-
     /**
      * 串行化“读取最新值 → 修改 → DataStore 提交”，避免工具操作与用户设置并发时
      * 由整份旧 Settings 覆盖新值。
      */
     private val updateMutex = Mutex()
 
-    private val localSettingsRaw = dataStore.data
+    private val userDocuments = dataStore.data
         .map { preferences ->
             val encoded = requireNotNull(preferences[USER_SETTINGS]) { "user_settings_migration_incomplete" }
-            val document = JsonInstant.decodeFromString<UserSettingsDocument>(encoded)
+            JsonInstant.decodeFromString<UserSettingsDocument>(encoded)
+        }
+        .distinctUntilChanged()
+
+    private val localSettingsRaw = userDocuments
+        .map { document ->
             val selected = document.preferences.forScope(
                 net.weero.measix.pilot.data.configuration.ConfigurationScope.Personal,
             )
@@ -269,6 +278,72 @@ class SettingsStore private constructor(
 
     /** The aggregate's only externally visible configuration read model. */
     internal val effectiveSettings: StateFlow<EffectiveSettingsSnapshot> = _effectiveSettings.asStateFlow()
+
+    internal fun observeConfiguration(
+        enterpriseState: StateFlow<EnterpriseState>,
+        requestedScope: ConfigurationScope? = null,
+    ): Flow<ResolvedConfiguration> = combine(userDocuments, enterpriseState) { document, enterprise ->
+        val selectedScope = (enterprise as? EnterpriseState.Available)?.manifest?.selectedScope ?: ConfigurationScope.Personal
+        ConfigurationResolver.resolve(document, requestedScope ?: selectedScope, enterprise)
+    }.distinctUntilChanged()
+
+    /** Called while the enterprise session owner holds its authorization boundary. */
+    internal suspend fun updateAssistantUsage(
+        scope: ConfigurationScope.Enterprise,
+        enterpriseState: EnterpriseState.Available,
+        assistantId: ConfigurationReference,
+        transform: (AssistantUsagePreferences?) -> AssistantUsagePreferences?,
+    ) = updateMutex.withLock {
+        require(enterpriseState.manifest.session?.identity?.scope == scope) { "assistant_usage_principal_mismatch" }
+        commitAuthorizedPreferences { document ->
+            val before = document.preferences.assistantUsage(scope, assistantId)
+            val proposed = transform(before)
+            require(proposed == null || proposed.assistantId == assistantId) { "assistant_usage_identity_mismatch" }
+            val updatedPreferences = if (proposed == null) document.preferences.resetAssistantUsage(scope, assistantId)
+                else document.preferences.withAssistantUsage(scope, proposed)
+            val updated = document.copy(preferences = updatedPreferences)
+            requireAssistantUsageWriteAllowed(
+                before, proposed, assistantId, ConfigurationResolver.resolve(document, scope, enterpriseState),
+                ConfigurationResolver.resolve(updated, scope, enterpriseState),
+            )
+            updated
+        }
+    }
+
+    /** The session owner serializes authorization changes through the entire preference commit. */
+    internal suspend fun updateResourceSelections(
+        scope: ConfigurationScope.Enterprise,
+        enterpriseState: EnterpriseState.Available,
+        transform: (ResourceSelections) -> ResourceSelections,
+    ) = updateMutex.withLock {
+        require(enterpriseState.manifest.session?.identity?.scope == scope) { "resource_selection_principal_mismatch" }
+        commitAuthorizedPreferences { document ->
+            val before = document.preferences.forScope(scope)
+            val proposed = transform(before)
+            val updated = document.copy(preferences = document.preferences.withSelections(scope, proposed))
+            requireResourceSelectionsWriteAllowed(before, proposed, ConfigurationResolver.resolve(updated, scope, enterpriseState))
+            updated
+        }
+    }
+
+    /** Both authorization locks remain owned until DataStore's independent writer acknowledges completion. */
+    private suspend fun commitAuthorizedPreferences(transform: (UserSettingsDocument) -> UserSettingsDocument) {
+        val caller = currentCoroutineContext()
+        caller.ensureActive()
+        withContext(NonCancellable) {
+            dataStore.edit { preferences ->
+                caller.ensureActive()
+                val document = JsonInstant.decodeFromString<UserSettingsDocument>(
+                    requireNotNull(preferences[USER_SETTINGS]) { "user_settings_migration_incomplete" },
+                )
+                val encoded = JsonInstant.encodeToString(transform(document))
+                // Before handing the value to the writer, cancellation can still abandon this mutation.
+                caller.ensureActive()
+                preferences[USER_SETTINGS] = encoded
+            }
+        }
+        caller.ensureActive()
+    }
 
     init {
         scope.launch {

@@ -115,6 +115,7 @@ Settings 与文件删除跨 owner 时，使用可恢复暂存和同一 Settings 
 ```text
 pending backup restore
   → Settings/effectiveSettings（BLOCKED 时停止）
+  → 企业配置恢复（企业错误保留为企业不可用状态）
   → Artifact reconcile → GeneratedMedia reconcile
   → reference projection → FTS projection
   → Child run recovery → Master turn recovery
@@ -123,7 +124,7 @@ pending backup restore
   → Ready
 ```
 
-任一步失败进入 Failed，全局 durable write 门禁保持关闭；retry 重跑同一幂等顺序。文件 command/query 同样等待门禁，不能在删除状态和孤儿 payload 尚未收口时访问托管文件。TurnRecovery 只查询非终态执行事实；缺 owning message 或损坏 payload 是完整性错误，不以空树、默认对象或 best-effort 写入伪装 Ready。
+未被领域 owner 收口的恢复异常进入 Failed，全局 durable write 门禁保持关闭；retry 重跑同一幂等顺序。企业配置校验失败由 EnterpriseSessionController 发布，个人数据恢复继续；取消仍向上传播。文件 command/query 同样等待门禁，不能在删除状态和孤儿 payload 尚未收口时访问托管文件。TurnRecovery 只查询非终态执行事实；缺 owning message 或损坏 payload 是完整性错误，不以空树、默认对象或 best-effort 写入伪装 Ready。
 
 恢复顺序归应用 coordinator，各领域恢复算法仍归原 owner。TurnFinalizer 不接管启动恢复，SubAssistantLifecycle 不另建生成或 Turn 终态写链。
 

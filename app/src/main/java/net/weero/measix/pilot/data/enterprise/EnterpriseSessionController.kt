@@ -135,6 +135,16 @@ internal class EnterpriseSessionController(
         publish(current.manifest.copy(selectedScope = ConfigurationScope.Personal), current.configuration)
     }
 
+    /** Lock order is enterprise session, then user configuration; policy cannot change during a scoped write. */
+    suspend fun <T> withAppliedConfiguration(
+        scope: ConfigurationScope.Enterprise,
+        operation: suspend (EnterpriseState.Available) -> T,
+    ): T = mutex.withLock {
+        val current = requireSession(allowOffline = true)
+        if (current.manifest.session?.identity?.scope != scope) fail("enterprise_principal_mismatch")
+        operation(EnterpriseState.Available(current.manifest, current.configuration))
+    }
+
     suspend fun switchToEnterprise() = mutex.withLock {
         val current = requireSession(allowOffline = true)
         val scope = requireNotNull(current.manifest.session).identity.scope

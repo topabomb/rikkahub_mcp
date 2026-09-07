@@ -5,14 +5,8 @@ import me.rerere.ai.provider.ProviderSetting
 import me.rerere.search.SearchServiceOptions
 import net.weero.measix.pilot.data.ai.mcp.normalizeMcpDefinitions
 
-/**
- * 把 DataStore 中的持久化快照物化为应用实际消费的 Settings。
- *
- * 这里有意与 [Settings.normalizeForPersistence] 分离：内置项补齐、运行时属性恢复、去重和失效引用
- * 清理属于读取模型，不应静默改写磁盘。写入成功后的内存发布也必须走同一函数，避免手工发布值与
- * 随后的 DataStore 回读值不一致。
- */
-internal fun Settings.materializeForRead(): Settings {
+/** Restores built-in definitions and runtime attributes without rewriting stored choices or references. */
+internal fun Settings.withBuiltInDefinitions(): Settings {
     val materializedProviders = providers.mergeDefaults(DEFAULT_PROVIDERS, ProviderSetting::id) { provider ->
         DEFAULT_PROVIDERS.find { it.id == provider.id }?.let { default ->
             provider.copyProvider(
@@ -25,13 +19,17 @@ internal fun Settings.materializeForRead(): Settings {
     val materializedAssistants = assistants.mergeDefaults(DEFAULT_ASSISTANTS, { it.id }) { it.copy() }
     val materializedTtsProviders = ttsProviders.mergeDefaults(DEFAULT_TTS_PROVIDERS, { it.id }) { it.copyProvider() }
 
-    val withDefaults = copy(
+    return copy(
         providers = materializedProviders,
         assistants = materializedAssistants,
         ttsProviders = materializedTtsProviders,
         mcpServers = mcpServers.normalizeMcpDefinitions(),
     )
+}
 
+/** Materializes the Settings projection without persisting its reference cleanup. */
+internal fun Settings.materializeForRead(): Settings {
+    val withDefaults = withBuiltInDefinitions()
     val validMcpServerIds = withDefaults.mcpServers.mapTo(HashSet()) { it.id }
     val validModeInjectionIds = withDefaults.modeInjections.mapTo(HashSet()) { it.id }
     val validQuickMessageIds = withDefaults.quickMessages.mapTo(HashSet()) { it.id }

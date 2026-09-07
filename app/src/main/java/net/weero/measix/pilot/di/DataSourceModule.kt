@@ -13,6 +13,10 @@ import net.weero.measix.pilot.data.ai.RequestLoggingInterceptor
 import net.weero.measix.pilot.service.turn.TurnRunner
 import net.weero.measix.pilot.data.ai.transformers.TemplateTransformer
 import net.weero.measix.pilot.data.datastore.SettingsStore
+import net.weero.measix.pilot.data.enterprise.EnterpriseAppliedStore
+import net.weero.measix.pilot.data.enterprise.EnterpriseSessionController
+import net.weero.measix.pilot.data.enterprise.LocalEnterpriseSource
+import java.io.File
 import net.weero.measix.pilot.data.db.AppDatabase
 import net.weero.measix.pilot.data.db.fts.MessageFtsManager
 import net.weero.measix.pilot.data.db.createAppDatabase
@@ -36,6 +40,14 @@ import java.util.Locale
 import java.util.concurrent.TimeUnit
 
 val dataSourceModule = module {
+    single {
+        EnterpriseAppliedStore(File(get<Context>().noBackupFilesDir, "enterprise"))
+    }
+    single { EnterpriseSessionController(get()) }
+    single {
+        val context = get<Context>()
+        LocalEnterpriseSource(openExample = { context.assets.open(LocalEnterpriseSource.EXAMPLE_ASSET) }, sessions = get())
+    }
     single {
         SettingsStore(appContext = get(), scope = get())
     }

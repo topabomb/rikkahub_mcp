@@ -12,6 +12,7 @@ import net.weero.measix.pilot.data.ai.prompts.DEFAULT_SUGGESTION_PROMPT
 import net.weero.measix.pilot.data.ai.prompts.DEFAULT_TITLE_PROMPT
 import me.rerere.common.configuration.ConfigurationReference
 import net.weero.measix.pilot.data.configuration.ConfigurationScope
+import net.weero.measix.pilot.data.configuration.AssistantUsagePreferences
 import net.weero.measix.pilot.data.configuration.GatewayPreference
 import net.weero.measix.pilot.data.model.Assistant
 import net.weero.measix.pilot.data.model.Avatar
@@ -201,7 +202,13 @@ internal data class ResourceSelections(
 internal data class ScopedUserPreferences(
     val scope: ConfigurationScope,
     val selections: ResourceSelections = ResourceSelections(),
-)
+    val assistantUsage: List<AssistantUsagePreferences> = emptyList(),
+) {
+    init {
+        require(scope is ConfigurationScope.Enterprise || assistantUsage.isEmpty()) { "personal_assistants_use_shared_definitions" }
+        require(assistantUsage.map { it.assistantId }.distinct().size == assistantUsage.size) { "duplicate_assistant_usage" }
+    }
+}
 
 @Serializable
 internal data class UserPreferences(
@@ -212,7 +219,7 @@ internal data class UserPreferences(
     init {
         require(scopes.map { it.scope }.distinct().size == scopes.size) { "duplicate_preference_scope" }
         scopes.forEach { scoped ->
-            require(scoped.selections.references().all { reference ->
+            require((scoped.selections.references() + scoped.assistantUsage.flatMap { it.references() }).all { reference ->
                 reference is ConfigurationReference.User ||
                     (scoped.scope is ConfigurationScope.Enterprise &&
                         reference is ConfigurationReference.Enterprise && reference.authority == scoped.scope.authority)
@@ -223,6 +230,25 @@ internal data class UserPreferences(
 
     fun forScope(scope: ConfigurationScope): ResourceSelections =
         scopes.singleOrNull { it.scope == scope }?.selections ?: ResourceSelections()
+
+    fun withSelections(scope: ConfigurationScope, selections: ResourceSelections): UserPreferences {
+        val existing = scopes.singleOrNull { it.scope == scope } ?: ScopedUserPreferences(scope)
+        return copy(scopes = scopes.filterNot { it.scope == scope } + existing.copy(selections = selections))
+    }
+
+    fun assistantUsage(scope: ConfigurationScope, assistantId: ConfigurationReference): AssistantUsagePreferences? =
+        scopes.singleOrNull { it.scope == scope }?.assistantUsage?.singleOrNull { it.assistantId == assistantId }
+
+    fun withAssistantUsage(scope: ConfigurationScope.Enterprise, usage: AssistantUsagePreferences): UserPreferences {
+        val existing = scopes.singleOrNull { it.scope == scope } ?: ScopedUserPreferences(scope)
+        val updated = existing.copy(assistantUsage = existing.assistantUsage.filterNot { it.assistantId == usage.assistantId } + usage)
+        return copy(scopes = scopes.filterNot { it.scope == scope } + updated)
+    }
+
+    fun resetAssistantUsage(scope: ConfigurationScope.Enterprise, assistantId: ConfigurationReference): UserPreferences =
+        copy(scopes = scopes.map { scoped ->
+            if (scoped.scope == scope) scoped.copy(assistantUsage = scoped.assistantUsage.filterNot { it.assistantId == assistantId }) else scoped
+        })
 }
 
 @Serializable

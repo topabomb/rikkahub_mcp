@@ -47,6 +47,7 @@ class ApplicationRecoveryCoordinatorTest {
         val env = Env(
             scope = this,
             restorePendingBackup = { events += "restore" },
+            recoverEnterpriseConfiguration = { events += "enterprise" },
             postRecoveryMaintenance = { events += "maintenance" },
             completePendingBackup = { events += "complete" },
         )
@@ -65,6 +66,7 @@ class ApplicationRecoveryCoordinatorTest {
         assertEquals(
             listOf(
                 "restore",
+                "enterprise",
                 "artifact",
                 "generated",
                 "references",
@@ -158,6 +160,7 @@ class ApplicationRecoveryCoordinatorTest {
     private class Env(
         scope: kotlinx.coroutines.CoroutineScope,
         restorePendingBackup: suspend () -> Unit = {},
+        recoverEnterpriseConfiguration: suspend () -> Unit = {},
         completePendingBackup: () -> Unit = {},
         postRecoveryMaintenance: suspend () -> Unit = {},
         managedState: ManagedConfigurationState = ManagedConfigurationState.ABSENT,
@@ -191,6 +194,7 @@ class ApplicationRecoveryCoordinatorTest {
                 assistantManagementService = assistantManagement,
                 gate = gate,
                 restorePendingBackup = restorePendingBackup,
+                recoverEnterpriseConfiguration = recoverEnterpriseConfiguration,
                 completePendingBackup = completePendingBackup,
                 postRecoveryMaintenance = postRecoveryMaintenance,
                 startImmediately = false,

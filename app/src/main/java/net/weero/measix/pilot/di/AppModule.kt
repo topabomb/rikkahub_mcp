@@ -30,6 +30,9 @@ import net.weero.measix.pilot.service.ConversationTitleCoordinator
 import net.weero.measix.pilot.service.MediaExportService
 import net.weero.measix.pilot.service.ApplicationRecoveryCoordinator
 import net.weero.measix.pilot.service.ApplicationRecoveryGate
+import net.weero.measix.pilot.service.ConfigurationApplicationService
+import net.weero.measix.pilot.service.ConfigurationQueryService
+import net.weero.measix.pilot.data.enterprise.EnterpriseSessionController
 import net.weero.measix.pilot.service.ChatNotificationManager
 import net.weero.measix.pilot.service.BackupRestoreApplicationService
 import net.weero.measix.pilot.service.ConversationTurnService
@@ -69,6 +72,8 @@ val appModule = module {
     single<Json> { JsonInstant }
 
     single { ApplicationRecoveryGate() }
+    single { ConfigurationApplicationService(get(), get(), get()) }
+    single { ConfigurationQueryService(get(), get()) }
     single { ArtifactUseCase(get(), get()) }
     single { FileManagementApplicationService(get(), get(), get()) }
     single { FileManagementQueryService(get(), get(), get()) }
@@ -309,6 +314,7 @@ val appModule = module {
                     get(),
                 )
             },
+            recoverEnterpriseConfiguration = { get<EnterpriseSessionController>().recover() },
             completePendingBackup = {
                 net.weero.measix.pilot.data.sync.PendingBackupRestore.complete(get())
             },

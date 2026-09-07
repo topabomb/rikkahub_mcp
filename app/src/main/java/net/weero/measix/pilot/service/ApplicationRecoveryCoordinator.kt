@@ -49,7 +49,7 @@ class ApplicationRecoveryGate internal constructor() {
 }
 
 /**
- * 唯一启动恢复入口。顺序固定为 Settings → artifact/generated-media reconcile → projection →
+ * 唯一启动恢复入口。顺序固定为 Settings → enterprise configuration → artifact/generated-media reconcile → projection →
  * interrupted run/turn → pending assistant deletion；任一步失败都保持 fail-closed，可显式 retry。
  */
 class ApplicationRecoveryCoordinator(
@@ -61,6 +61,7 @@ class ApplicationRecoveryCoordinator(
     private val turnRecovery: TurnRecovery,
     private val assistantManagementService: AssistantManagementService,
     private val gate: ApplicationRecoveryGate,
+    private val recoverEnterpriseConfiguration: suspend () -> Unit,
     private val restorePendingBackup: suspend () -> Unit = {},
     private val completePendingBackup: () -> Unit = {},
     private val postRecoveryMaintenance: suspend () -> Unit = {},
@@ -99,6 +100,8 @@ class ApplicationRecoveryCoordinator(
                 if (effective.managedState == ManagedConfigurationState.BLOCKED) {
                     throw ManagedConfigurationBlockedException(effective.managedFailureReason)
                 }
+                // Enterprise validation failure is published by its owner; personal data recovery remains independent.
+                recoverEnterpriseConfiguration()
                 artifactStore.reconcileStartup()
                 generatedMediaStore.reconcile()
                 artifactStore.ensureReferenceProjection()

@@ -83,7 +83,7 @@ Policy 横切 A/B/C，不是第四种业务内容。是否含 API Key 不决定 
 
 企业 Direct MCP `enabled=true` 自动加入企业目录并启用，用户无关闭/编辑/删除入口，命令也拒绝。`allowLocalMcp` 只控制额外的用户 MCP。服务启用不等于所有助手自动取得全部工具：企业助手按固定绑定，用户助手在本域选择可用服务。
 
-Gateway 是独立受管资源，不出现普通 MCP URL/Header/OAuth 编辑器。`REQUIRED` 强制整对工具开启；`USER_CONTROLLABLE_DEFAULT_ON` 默认开启且可成对关闭。偏好按 `(deploymentId, toolGatewayId)` 保存；REQUIRED 保留旧 false 但不生效，恢复可控时恢复。变更只影响新执行。
+Gateway 是独立受管资源，不出现普通 MCP URL/Header/OAuth 编辑器。`REQUIRED` 强制整对工具开启；`USER_CONTROLLABLE_DEFAULT_ON` 默认开启且可成对关闭。使用偏好按 `(sourceNamespace, deploymentId, userId, toolGatewayId)` 保存，不继承同企业其他用户的选择；REQUIRED 保留旧 false 但不生效，恢复可控时恢复。变更只影响新执行。
 
 本地 Gateway 经标准发现、固定 discover/invoke pair、surface 校验及调用流程；工具卡显示真实业务动作。业务 Catalog/发布后台不在本期，不通过客户端拼接业务工具或 Direct MCP fallback 冒充 Gateway。
 
@@ -143,10 +143,12 @@ UserConfiguration + UserPreferences + Applied Enterprise State
 - 一个 AppDatabase；Conversation、Memory、Artifact、GenMedia、Folder/Favorite 等独立根保存必要 scope。MessageNode/Turn/Tool/Disclosure 从可靠外键派生，不新增平行可变真源。
 - 旧数据全归 PERSONAL，原 ID/内容/排序/引用/文件不变；旧选择只进入个人偏好。Draft 首消息事务和 Child lineage 不变。新企业记录创建时确定域/主体。
 - 查询/命令/FTS/统计/收藏/最近聊天/文件/deep link/通知/SAF/子助手都校验 scope，不先全量读取再 UI 过滤。
+- Child 从父会话复制 scope；创建、导入和 fork 都验证父子同域。移动到 Folder 同时验证 scope 与 assistant reference；收藏必须由原会话 owner 核实节点归属，不能信任 UI 传来的快照。撤销 token、缓存和已加载 Runtime 保留原 scope 并复验授权，不能因避开 DAO 而跳过隔离。
 - Workspace 为用户显式选择的共享空间，目录不随切域复制或清空，UI 标明共享。共享目录不等于内容隔离；`/upload` 及会话资源挂载必须按调用主体限制，不能暴露整个个人上传目录。Skill/字体属于选择使用的共享配置资产。
+- Artifact 的数据归属与共享配置资产的读取用途分开。旧行仍归个人；头像/背景等共享配置预览由原 Artifact owner 验证持久配置 root，不能因此向其他域的工具开放原路径。配置资产进入另一域聊天时按既有 lease/创建协议生成目标域附件，不修改源行归属。GC/删除检查所有主体的持久配置 roots；不能仅看当前生效配置。聊天引用投影发现跨域 Artifact 时拒绝，不静默丢失引用。
 - 用户配置与偏好一次 DataStore edit 迁移；SharedPreferences 读取在提交前，完成标记同事务，旧 key 清理幂等。跨 Room/文件升级由启动恢复协调器排序；未完成不开放新写入，重启可恢复。成功后删除旧读写路径。
 - 提供显式 Room migration、fresh schema 同构和真实历史升级测试，覆盖复杂引用、tombstone、凭据和用户值。Room 版本、App 20、本地资料 schema 不混淆。
-- 普通备份含用户配置、公用/个人偏好和个人数据，不含企业凭据/企业配置/企业数据。恢复在 staging 只替换个人闭合子图并保全企业图，校验主键/路径冲突后走既有发布，不全库覆盖。
+- 普通备份含用户配置、公用/个人偏好和个人数据，不含企业凭据/企业配置/企业数据。归档 payload 清单从个人闭合图和共享配置资产根产生，不扫描整份 upload/images。恢复继续使用既有 staging/swap/rollback；最终待发布图在冷启动、live Room 尚未开放时合并“最新企业图 + 备份个人图”，不能在用户点击恢复时提前冻结企业图而丢失重启前的新写入。主键或路径冲突整体验证后拒绝，不以 REPLACE 覆盖企业记录；重建验证 FTS/Artifact 引用投影并保留企业生命周期待办。
 - 旧备份进入同一迁移协议，更新 manifest 明确新范围；Auto Backup/device transfer 不复制未经 scope 过滤的企业存储/共享 DB。
 - 已授权企业数据保留原手工编辑、复制/分享和单文件导出能力；本期不发明“禁止复制全文”或远端 DLP。显式导出不等于跨域自动合并或整库备份。退出封存企业数据，同主体重新授权后恢复；清除走原 owner 可恢复命令。
 - 删除用户助手定义对所有域后续使用生效，确认界面说明共享影响；原个人数据清理由 PERSONAL tombstone 精确执行，不按 assistantId 无域删除 Memory/Conversation。企业记录（含封存记录）保留，引用失效显示“助手已删除”，允许查看历史；继续执行必须由用户显式重选本域助手，经原会话命令修改引用，不回退当前助手。旧 tombstone 迁移为 PERSONAL，旧清理函数与 getConversationAssistant 静默回退同时退出。
@@ -275,7 +277,11 @@ LocalEnterpriseSource（身份/配置/动态/场景）
 
 D0 已由 `c2745a1d` 独立提交完成。C1/C2 正在实施：用户配置/偏好文档及旧键迁移、跨模块配置引用已进入代码；正式企业 source、域数据隔离、UI 与完整模拟能力尚未完成。下表保留全部交付范围，单项基础测试通过不代表 C1/C2 或整期完成。
 
-C3/M1 的本地资料与持久状态基础已进入代码：完整公开示例、短接入资料校验、整包/绑定原子提交、会话切换/退出/损坏恢复、按 revision 更新及在途绑定 lease。19 项定向 JVM 测试和 3 项模拟器持久化测试通过，独立审查所发现的提交失败误发布、损坏配置无法退出、离线编辑误恢复在线已修复并复核。完整 `test assembleDebug lintDebug assembleRelease --no-parallel --max-workers=1` 通过，lint 无错误；两种 APK 的示例内容与公开模板一致且未打包私有文件。当前尚未接入 DI/启动、正式页面、生效解析和实际企业 adapters，不计作 C3、U1 或 M1 完成，版本仍为开发基线 0.0.19。
+C3/M1 的本地资料与持久状态基础已进入代码：完整公开示例、短接入资料校验、整包/绑定原子提交、会话切换/退出/损坏恢复、按 revision 更新及在途绑定 lease。19 项定向 JVM 测试和 3 项模拟器持久化测试通过，独立审查所发现的提交失败误发布、损坏配置无法退出、离线编辑误恢复在线已修复并复核。该基础批次完整 `test assembleDebug lintDebug assembleRelease --no-parallel --max-workers=1` 通过，lint 无错误；两种 APK 的示例内容与公开模板一致且未打包私有文件。
+
+当前配置批次已接入 DI/启动恢复，增加按主体的 ConfigurationResolver/application/query ports、资源选择与助手使用偏好写入。用户定义保留单份；失效引用不静默清理，新增选择校验五项准入及模型类型，重复模型 ID 明确不可用。独立审查发现的 DataStore actor 写盘取消竞态已修复：取得提交所有权后等待最终 ack，策略更新/退出不能抢在未完成的偏好提交之前。真实 Serializer 写盘暂停/失败测试及提交前取消测试通过，最终审查无剩余阻塞项。
+
+该批次完整 `test assembleDebug lintDebug assembleRelease --no-parallel --max-workers=1` 通过，App 1,798 项 JVM 测试无失败、lint 无错误；Windows 环境下 Workspace 的 11 项 HostShellRunner JVM 测试跳过，不作宿主 shell 行为验收。Pixel_10_Pro_Fold / Android 17 模拟器的 6 项定向 instrumentation 全部通过，覆盖两个存储重开后的企业选择、个人定义/凭据保全、不同用户隔离、企业原子提交/退出及旧配置迁移。正式页面、域数据隔离及执行 adapters 尚未接通，旧 Managed 原型尚未退休，不计作 C1、C3、U1 或 M1 完成，版本仍为开发基线 0.0.19。
 
 配置基础变更的已执行验证（不替代 E01–E12 整期验收）：
 
