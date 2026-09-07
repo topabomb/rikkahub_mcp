@@ -164,7 +164,7 @@ UserConfiguration + UserPreferences + Applied Enterprise State
 | Settings 企业接入 | 始终可见，包括离线/网页失败；不依赖 Debug/About 长按 |
 | 接入页 | 体验示例企业、粘贴、扫码；提供测试资料/二维码，错误明确 |
 | 企业状态 | 企业/用户、授权/配置状态、版本/最近更新、同步、工作台、切回个人、退出 |
-| 工作台 | 本地 HTML 信息/动态、Starter、相机/录音；关闭仅关闭网页 |
+| 工作台 | 固定 Portal 包信息/动态、Starter、相机/录音；关闭仅关闭网页 |
 | 示例企业配置场景 | 本地企业服务管理：五项策略、资源变化、故障/过期/撤销/恢复，不是普通用户绕过真实 policy 的入口 |
 
 初始/升级进入 PERSONAL，不自动接入。体验示例企业走同一接入校验和提交，不能直接赋值 READY。一键生成的资料、扫码解码结果和粘贴文本均进入 EnrollmentMaterialParser 与同一来源分流。未知、不完整、过期或错误凭据不留下半绑定。
@@ -177,24 +177,14 @@ UserConfiguration + UserPreferences + Applied Enterprise State
 | LOCAL_EXAMPLE_ENROLLMENT | formatVersion、kind、sourceNamespace、deploymentId、code、expiresAt |
 
 - 原文最多 2048 UTF-8 字节，先计入首尾空白再去除空白；拒绝重复键（包括转义后同名）、未知字段/版本/kind、缺失/null、错误类型。旧 userId/enrollmentCode/expiresAtMillis 资料没有 fallback。
-- expiresAt 是 RFC3339 UTC 字符串，只用于客户端到期预检查；来源保存的到期和消费状态仍是兑换权威。code 与本地 sourceNamespace/deploymentId 各为 1–128 个 Unicode 字符，不修改其内容。
+- expiresAt 是 RFC3339 UTC 字符串，接受小写 t/z 与 +00:00，小数秒仅 1–9 位；拒绝超精度、闰秒、-00:00、非 UTC 和错误日期，输出统一大写 T/Z。只用于客户端到期预检查；来源保存的到期和消费状态仍是兑换权威。code 与本地 sourceNamespace/deploymentId 各为 1–128 个 Unicode 字符，不修改其内容。
 - platformUrl 最多 1024 字符，只接受 HTTPS origin，无 userinfo/query/fragment/非根 path；根 `/` 和默认端口可规范化。HTTP 只在明确启用的 loopback 开发/测试策略下接受，正式来源不启用该例外。本期解析后明确返回 platform_enrollment_not_supported，不加载本地示例、不联网、不建立身份；后续真实接入必须展示目标 origin，Discovery/API base/Enrollment 固定同源且禁止跨 origin 重定向，code 不进入 Discovery URL。
 - 本地资料不携带 userId/platformUrl。身份只由随包安装的本地来源提供，资料不能注册来源、加载脚本或指定网络地址。完整配置文件继续由原生文件选择器走独立 4 MiB 导入校验，不修改其身份与私有 binding 格式。
 - 本地示例资料在运行时由 LocalEnrollmentAuthority 领取随机短期一次性 code，再序列化为上述格式；不打包固定可重用 code。模拟服务的摘要/到期/消费账本位于 noBackupFilesDir/local_enterprise_service，独立于客户端 Session，不进入普通备份。
 - 接入锁序固定为 Session owner → LocalEnrollmentAuthority。主体冲突/正在退出在消费前拒绝；成功消费后客户端落盘失败、取消或死亡不能回滚 code，需要重新领取资料。客户端一次发布 READY 或 CONFIGURATION_PENDING；后者仅用于可信身份已验证而配置缺失/错误，不把凭据或持久化失败当作待配置成功。
 - PrepareEnterpriseExampleAssets 从唯一公开完整模板派生独立身份目录，运行时先验证安装目录身份、兑换后才读取配置；配置文件缺失/截断也可进入待配置，无法读取或验证身份目录则拒绝。同主体重新接入若安装包配置版本低于已确认 Applied 版本，保留较新配置及绑定，仅更新 Session；不退回旧策略。
 
-本次核对的平台共享正例只有 api/fixtures/enrollment/platform-v1.json，Android 测试消费其注明来源的副本，溯源与验证边界见 [接入资料契约](../references/enrollment-material-contract.md)。下列跨端样例交平台统一维护，不能把 Android 本地测试表述为平台已有共享覆盖：
-
-| 待补共享样例 | 必需内容 |
-| --- | --- |
-| local-v1.json | 无 userId 的本地资料；code 仅测试，不作为跨安装通用凭据 |
-| duplicate-key 原始文本 | code/kind 重复、转义后同名；不能从 Map 生成 |
-| strict-fields | 旧 userId/enrollmentCode/expiresAtMillis、混合 kind、额外/缺失/null/错误类型/未知版本 |
-| utf8-boundaries | 中文与 supplementary 字符，原始 2048/2049 字节、首尾空白计入上限 |
-| origin-invalid | HTTP、userinfo、path/query/fragment、端口及显式 loopback 例外 |
-| expiry-invalid | 非 UTC、非法日期、到期边界；固定时钟和权威消费说明 |
-| source-routing | 未安装来源、平台不得进入本地、完整配置不得作为接入资料 |
+平台现已提供 platform-v1.json、local-v1.json 和原始 cases.json。Android 从 api/generated/android/portal 验证摘要后固定消费副本，以固定 now/installedSources 执行真实解析、到期与来源预检查；共享 code 不作为安装来源的真实登录凭据。来源清单、摘要和验证边界见 [接入资料契约](../references/enrollment-material-contract.md)。Native/Feed 案例须在对应实际消费者接通后分别验收。
 
 ```text
 个人空间 → 接入企业 → 体验示例企业（或扫码/粘贴）
@@ -270,6 +260,10 @@ LocalEnterpriseSource（身份/配置/动态/场景）
 
 ### 7.2 私有配置文件
 
+来源候选与客户端 Applied 是两个事实：LocalEnterpriseSource 在 local_enterprise_service 持久保存本地来源当前发布的配置，安装包仅负责初始值；场景编辑按来源 revision 做 CAS，不能直接改客户端 Applied。EnterpriseSessionController 继续唯一管理母 Session、Applied 和执行 binding lease。清理 updateLocalPackage 的混合职责及“安装包旧版本时保留 Applied”的特殊接入分支，重启/重入均读来源当前版本。
+
+原生同步与 Portal refresh 共用命令：捕获原主体/Session，读取来源候选，完整校验，在原 Session 内原子应用后返回。同步不得创建新 Session、续期或切域；同版本成功检查也可更新成功时间，失败保留已应用配置和上次成功时间。来源发布与客户端应用分开可观察；私有导入先完整验证再发布候选，应用失败应显示待同步。并发请求合并同步工作，取消单个等待者不回滚已提交结果。此流程仍为本地模拟，不要求真实平台网络接入。
+
 交付完整无秘密模板 `docs/examples/enterprise.local.example.json`，根目录 `/enterprise.local.json` 加入 Git ignore。用户可修改私有文件提供真实端点/凭据；不打印秘密，不进源码/测试/提交。模板和示例不得只包含空占位资源。
 
 本地文件使用独立 `formatVersion`，包含 source/deployment/user、完整五项 policy、资源/助手/seed/starter/gateway/动态，以及独立 `runtimeBindings`。endpoint/credential 是本地 source 私有实现，不属于平台 client-safe Managed Snapshot，不混进用户资源配置。
@@ -280,15 +274,29 @@ LocalEnterpriseSource（身份/配置/动态/场景）
 
 整包发布由企业应用状态提交协调者负责：先暂存不可变的定义、binding revision 和必要资源，校验闭合关系；最后一次原子持久提交 manifest 指针，包含完整 source/principal、配置 generation 与 binding revision。此提交是可见状态的唯一发布点；Session owner 只有在该主体的 manifest 可恢复后才发布企业可用状态。崩溃恢复只接受完整已提交组合，未提交资料回收；旧 binding 由在途 lease 持有，最后引用释放后清理。退出先撤销 session 执行资格，再按同一恢复协议移除活动 manifest/凭据，不允许配置已换而仍调用旧凭据。
 
+### 7.3 独立企业动态（待实现）
+
+按 Control Protocol §8/§10.16 将 Feed 从 EnterpriseConfiguration 移出：完整文件升为 v2，顶层 feedSeed 携带企业时区与动态初值；应用 manifest 使用独立 Feed 存储引用、摘要和公开 revision。配置/绑定与 Feed 复用同一原子 manifest 发布协议，Feed 的领域命令负责草稿、发布、撤回和查询，不增加第二写锁或状态流。仅编辑不可见草稿不推进公开 revision；发布/撤回改变可见表示时推进 Feed revision，配置 applied/generation 和配置同步时间不变。
+
+Seed 只初始化尚未建立的主体 Feed。同步、重入与重复导入不能覆盖已发布/撤回状态；导入结果明确提示已有 Feed 不被 seed 替换。动态保留来源/Deployment/User 归属，退出后仍保存但不可读取，重登不重新播种。
+
+公开 DTO、eup_UUIDv4 标识和枚举直接遵守 Client OpenAPI。查询统一处理日期、默认/范围 limit、truncated 和 publishedAt 降序，时间相同以稳定 ID 排序。日期使用企业时区日历的首日零点至末日下一日零点，覆盖 DST；ETag 包含主体、公开 revision、时区和规范化查询，start-only 包含本次解析的企业当前日期。主体/Session/document 授权先于内容及 304 返回；withRealmAccess 的历史数据授权不能代替 Portal 当前 selectedScope 校验。
+
+0.0.20 是个人域/企业域的第一个入口版本。企业接入、Portal、完整配置及本地企业存储只执行本期最新契约；外部旧完整文件明确拒绝并提示使用新模板，不为分阶段开发的企业原型保留双格式解析、旧 HTML、旧桥接或专用历史迁移/归档。清理未交付的旧企业实现，以及与其绑定的临时/过时文件、旧模板、无效测试和文档；保留当前有效的共享消费契约与必要交付材料。已发布个人配置、Room 数据和个人备份的迁移与保全要求仍有效。
+
+共享 feed-vectors.json 必须执行实际查询组件，另验证动态/配置版本独立、撤回后重入、会话撤销后的 ETag 请求及持久提交失败/重开恢复。Portal 的正式页面测试在宿主接通后执行，不以这批领域测试替代。
+
 ## 8. Portal 与手机能力
 
-随包本地企业 HTML 使用专属受信 origin，只给专用企业宿主 bridge；普通外链/模型生成 HTML 不能取得企业权限。正式宿主管 document/session，后续换远端来源不换业务 owner。
+本期接入已交付 Portal dist-local 包，核验并固定资源摘要，使用 https://local.measix.invalid/portal/。清理配置内 HTML 和旧桥接路径；旧企业原型文件明确拒绝，不静默丢弃旧字段或兼容执行。宿主管 document/session，普通外链和模型生成 HTML 不取得企业权限。此段为待实现要求。
 
-本期 typed bridge 使用 requestId/method/params 与成功/typed error，支持状态、关闭、刷新、退出请求、批准外链、拍照、录音开始/停止/取消。退出调用原生命令和确认。没有直接写 Settings/Room、读取 Refresh Credential、任意文件路径的能力。
+采用 Control Protocol Bridge v2：window.MeasixHost.postMessage 请求含 bridgeVersion=2/requestId/method/params，通过 measix:host-response 返回关联结果。支持 getStatus、refresh、close、logout、openExternal、capturePhoto、recordAudio、readMedia、releaseMedia、cancel；不保留旧方法别名。退出由原生确认，关闭仅关闭页面。固定路径拦截 context/Feed，验证主体、Session 与 document 后才返回数据或 304，不访问 DNS 或启动本地监听服务。
 
 每次请求绑定当前顶层 origin、document identity、企业主体和 session。导航/关闭/切域/失效/退出立即取消采集、丢弃迟到结果；并发采集明确 busy/cancel，不后台静默录音。相机真实拍摄、录音真实采集，拒绝权限可解释可恢复。
 
-媒体由原生 owner 管理，bridge 返回受限句柄/元数据，通过受限资源访问预览，不暴露宿主路径/无限 base64，不自动上传。未交接资源取消后回收，保留到会话经 Artifact 原协议。原生扫码在登录前可用，一键/扫码/粘贴共用接入验证。生产 grant/Cookie/CSRF 只在后续真实接入规定，本地会话不冒充生产授权。
+媒体由统一原生 owner 管理，仅用于本页预览，不自动上传或保存到聊天/Artifact。照片为 JPEG、录音为 audio/mp4，recordAudio 包含原生开始/停止 UI，时长参数 1–60 秒。单项最多 10 MiB、每文档两项/合计 20 MiB、最多保留五分钟；readMedia 只按句柄返回最多 65536 字节的 base64 分块，不暴露 URI 或路径。普通请求十秒、采集请求 120 秒的期限由原生独立保证。释放、超时、导航、切域、退出、会话失效及进程恢复均清理临时文件与迟到结果，旧文档句柄不能复活。
+
+context 从当前原生身份产生，documentId 不可预测，文档期限最多十分钟且不超过母 Session；不使用 fixture 身份或时钟。getStatus/refresh 返回真实已应用状态与实际能力，未知值为 null。context/detail 使用 no-store，动态列表 private/no-cache，所有授权先于缓存判断。原生扫码在登录前可用，一键/扫码/粘贴共用接入验证。生产 grant/Cookie/CSRF 只在后续真实接入规定，本地会话不冒充生产授权。
 
 ## 9. 执行、更新、恢复不变量
 
@@ -307,6 +315,12 @@ C6 的运行记忆已按域接通：MemoryAddress 固定 scope 与共享/助手 
 该记忆批次 87 项定向 JVM 测试全部通过；Pixel_10_Pro_Fold / Android 17 的 9 项定向 instrumentation 全部通过，涵盖实际 Room 的多主体/owner 隔离、错误地址拒绝、提交前取消回滚、提交决定后授权锁保持，以及域偏好和主子会话交互回归。删除了以假 DAO 重复 SQL 行为的旧 MemoryRepositoryOwnershipTest，替换为真实 Room 验证。会话列表/命令、文件、备份、正式企业入口和全部执行 adapters 仍未完成，本项不代表 C4、C5、C6 或 E08 整体验收通过。
 
 该记忆批次完整 `test assembleDebug lintDebug assembleRelease --no-parallel --max-workers=1 --no-configuration-cache` 在 11 分 38 秒内通过：App 1,820 项 JVM 测试无失败或跳过，lint 无错误，Debug/Release 均构建成功；Workspace 的 11 项 Windows 宿主测试仍跳过。独立审查无剩余阻塞项。此批不修改版本号，不作为 Release 企业页面或真实平台互操作验收。
+
+接入时间精度与共享案例已完成第二次对齐：接受 +00:00 与小写 t/z，拒绝超过 9 位小数及闰秒，不截断输入；三份 core 导出输入原样固定并校验摘要。EnrollmentMaterialParserTest、EnrollmentSharedCasesTest、LocalEnterpriseSourceTest 共 58 项定向测试通过，其中 34 项直接消费原始共享案例。没有独立的 LocalEnrollmentAuthorityTest；票据真实消费、并发、取消、重开与失败覆盖归 LocalEnterpriseSourceTest。独立审查无阻塞项。Native/Feed 消费、正式页面和真实平台互操作仍待完成。
+
+MCP Catalog 修复已纳入本期：初始化、目录提交/恢复及投影发布由同一 owner 排序，坏目录不冒充空备份；有效整包恢复可修复目录读取失败。持久提交取得所有权后等待写盘确认，Runtime 在取消前完成接收或精确补偿，取消/超时不能把已接收的新目录回退为旧状态。五组 MCP 定向测试共 62 项通过。Pixel_10_Pro_Fold / Android 17 上，McpCatalogPersistenceTest 和 LocalEnrollmentAndroidTest 的 3 项设备测试通过，分别验证实际 DataStore 重开/恢复/删除，以及接入消费重开和配置缺失待就绪。设备命令限定 :app:connectedDebugAndroidTest；首次根任务错误地向其他模块传递 App 类过滤条件而失败，不属于业务场景失败。
+
+上述 MCP 与接入时间/共享案例批次的完整 test assembleDebug lintDebug assembleRelease --no-parallel --max-workers=1 --no-configuration-cache 在 10 分 52 秒内通过：App 1,865 项 JVM 测试无失败或跳过，lint 无错误，Debug/Release 均构建成功。Workspace 的 Windows 宿主跳过项不算已验收。当前 APK 仍是 0.0.19 开发基线；本批不代表 0.0.20 正式企业入口、Portal/媒体或真实平台互操作完成。
 
 接入资料协议修正已进入代码：两种 kind 的严格解析、平台明确分流、独立安装身份目录、一次性 code 账本和单次客户端状态发布。35 项定向 JVM 测试通过，覆盖平台共享正例、一键/粘贴/二维码库解码的统一接入、UTF-8 边界、原始重复键、旧格式拒绝、固定时钟到期、来源/凭据/消费、并发与取消、提交失败和缺配置待就绪。Pixel_10_Pro_Fold / Android 17 的 6 项定向 instrumentation 通过，其中 2 项新增测试验证随包身份与完整模板一致、真实 AtomicFile 消费重开以及配置缺失后的持久待配置状态；其余 4 项验证已有企业状态和域偏好回归。独立审查无剩余阻塞项。该证据不包含正式扫码/粘贴页面、相机扫码或真实平台互操作。
 
@@ -344,7 +358,7 @@ C3/M1 的本地资料与持久状态基础已进入代码：完整公开示例�
 | C7 | BackupArchiveService/PendingBackupRestore/Recovery、系统 backup rules | 个人恢复保全企业图，失败可恢复，无整库覆盖 |
 | U1 | RouteActivity/Screen、Chat 空间入口、Settings 企业页面/VM | 两种构建正式入口、一键/扫码/粘贴/切域/退出 |
 | U2 | 全部 Settings/Assistant/Extensions/Speech/MCP/Model/Prompt/Backup 页面和 pickers | §6 每行有实际行为，UI 与命令/执行一致 |
-| U3 | Portal 宿主/HTML/动态、相机/录音/扫码/受限媒体句柄 | 真机权限、取消、结果与来源隔离 |
+| U3 | Portal 宿主/固定资源包/动态、相机/录音/扫码/受限媒体句柄 | 真机权限、取消、结果与来源隔离 |
 | M1 | 完整示例、确定性 adapters、场景管理、私有模板/导入/.gitignore | 零凭据完整体验，私有文件可替换真实服务，无秘密进 Git |
 | R1 | 删除旧原型/无效 developerMode/全局消费者，更新 references/静态约束 | 无双路径/假 UUID/无消费者接口，文档忠实代码 |
 | V1 | build.gradle.kts、changelog、报告、APK/说明 | 20/0.0.20，完整门禁与设备体验，最终提交 |

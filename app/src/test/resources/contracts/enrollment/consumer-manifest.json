@@ -1,0 +1,19 @@
+{
+  "sourceRepository": "measix-platform-core",
+  "exportPath": "api/generated/android/portal",
+  "exportManifestSha256": "2c9a6a68efb3770f4ee2733bdae9edb495d5e65b22a78a6036e46594eb78a6cc",
+  "artifacts": {
+    "platform-v1.json": {
+      "source": "api/fixtures/enrollment/platform-v1.json",
+      "sha256": "3ac391412640d571dd03220fbfd88487e1d1e47a6b1d6f8a86ee09ae821d340a"
+    },
+    "local-v1.json": {
+      "source": "api/fixtures/enrollment/local-v1.json",
+      "sha256": "7f9b81d153b3b5394d54e74a1778138dabb486b7d423cba1e45c90babcf9e2b1"
+    },
+    "cases.json": {
+      "source": "api/fixtures/enrollment/cases.json",
+      "sha256": "71e50a526bde376a3b5511564589cf9ed1cac68d0798348abded54449dbf1bf4"
+    }
+  }
+}

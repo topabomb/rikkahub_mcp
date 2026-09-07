@@ -73,10 +73,9 @@ internal class EnrollmentMaterialParser(private val allowLoopbackHttp: Boolean =
 
     private fun parseUtc(value: String): Instant {
         if (!UTC_TIMESTAMP.matches(value)) fail("invalid_enterprise_enrollment_time")
-        // RFC3339 permits arbitrary fractional precision; internal Instant retains nanoseconds.
         val canonical = value.uppercase(Locale.ROOT).removeSuffix("+00:00").let {
             if (it.endsWith('Z')) it else "${it}Z"
-        }.replace(FRACTION) { ".${it.groupValues[1].take(9)}" }
+        }
         return try { Instant.parse(canonical) } catch (_: Exception) { fail("invalid_enterprise_enrollment_time") }
     }
 
@@ -151,8 +150,7 @@ internal class EnrollmentMaterialParser(private val allowLoopbackHttp: Boolean =
         const val PLATFORM = "PLATFORM_ENROLLMENT"
         const val LOCAL = "LOCAL_EXAMPLE_ENROLLMENT"
         private val INTEGER = Regex("-?(0|[1-9][0-9]*)")
-        private val FRACTION = Regex("\\.(\\d+)")
-        private val UTC_TIMESTAMP = Regex("\\d{4}-\\d{2}-\\d{2}[Tt](?:[01]\\d|2[0-3]):[0-5]\\d:(?:[0-5]\\d|60)(?:\\.\\d+)?(?:[Zz]|\\+00:00)")
+        private val UTC_TIMESTAMP = Regex("\\d{4}-\\d{2}-\\d{2}[Tt](?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d{1,9})?(?:[Zz]|\\+00:00)")
 
         fun encodeLocal(material: EnrollmentMaterial.LocalExample): String = Json.encodeToString(buildJsonObject {
             put("formatVersion", 1)

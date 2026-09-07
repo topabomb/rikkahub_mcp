@@ -23,12 +23,12 @@ internal class LocalEnterpriseSource(
     /** One-click, pasted text and a decoded QR all enter through this parser and source validator. */
     suspend fun enroll(text: String): EnterpriseState.Available {
         val material = parser.parse(text)
-        if (material.expiresAt <= Instant.ofEpochMilli(nowMillis())) fail("enterprise_enrollment_expired")
+        requireEnrollmentNotExpired(material, Instant.ofEpochMilli(nowMillis()))
         if (material is EnrollmentMaterial.Platform) fail("platform_enrollment_not_supported")
         material as EnrollmentMaterial.LocalExample
         val identity = installedIdentity()
-        if (material.sourceNamespace != identity.authority.sourceNamespace ||
-            material.deploymentId != identity.authority.deploymentId) fail("unknown_local_enterprise_source")
+        requireInstalledEnrollmentSource(material, setOf(identity.authority.sourceNamespace))
+        if (material.deploymentId != identity.authority.deploymentId) fail("unknown_local_enterprise_source")
         return sessions.enrollLocal(
             installedIdentity = identity,
             redeem = { enrollmentAuthority.redeem(material, identity) },
@@ -70,4 +70,12 @@ internal class LocalEnterpriseSource(
         const val EXAMPLE_ASSET = "enterprise.local.example.json"
         const val IDENTITY_ASSET = "enterprise.local.identity.json"
     }
+}
+
+internal fun requireEnrollmentNotExpired(material: EnrollmentMaterial, now: Instant) {
+    if (material.expiresAt <= now) throw EnterpriseConfigurationException("enterprise_enrollment_expired")
+}
+
+internal fun requireInstalledEnrollmentSource(material: EnrollmentMaterial.LocalExample, installedSources: Set<String>) {
+    if (material.sourceNamespace !in installedSources) throw EnterpriseConfigurationException("unknown_local_enterprise_source")
 }

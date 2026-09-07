@@ -10,6 +10,24 @@ class EnrollmentMaterialParserTest {
     private val text get() = EnrollmentMaterialParser.encodeLocal(local)
 
     @Test
+    fun `shared artifacts match the pinned upstream digests and local sample stays input only`() {
+        fun bytes(name: String) = requireNotNull(javaClass.getResourceAsStream("/contracts/enrollment/$name")).use { it.readBytes() }
+        val manifest = kotlinx.serialization.json.Json.parseToJsonElement(bytes("consumer-manifest.json").toString(Charsets.UTF_8))
+            as kotlinx.serialization.json.JsonObject
+        val artifacts = manifest.getValue("artifacts") as kotlinx.serialization.json.JsonObject
+        assertEquals(setOf("platform-v1.json", "local-v1.json", "cases.json"), artifacts.keys)
+        artifacts.forEach { (name, metadata) ->
+            val expected = ((metadata as kotlinx.serialization.json.JsonObject).getValue("sha256") as kotlinx.serialization.json.JsonPrimitive).content
+            val actual = java.security.MessageDigest.getInstance("SHA-256").digest(bytes(name)).joinToString("") { "%02x".format(it) }
+            assertEquals(name, expected, actual)
+        }
+        val sample = parser.parse(bytes("local-v1.json").toString(Charsets.UTF_8)) as EnrollmentMaterial.LocalExample
+        assertEquals("local.example", sample.sourceNamespace)
+        assertEquals("dep_example", sample.deploymentId)
+        assertFalse(sample.toString().contains(sample.code))
+    }
+
+    @Test
     fun `canonical platform fixture is consumed as a distinct typed origin`() {
         val raw = requireNotNull(javaClass.getResourceAsStream("/contracts/enrollment/platform-v1.json")).bufferedReader().use { it.readText() }
         val value = parser.parse(raw) as EnrollmentMaterial.Platform
@@ -91,9 +109,12 @@ class EnrollmentMaterialParserTest {
     fun `expiry must be a real RFC3339 UTC timestamp`() {
         fun wire(time: String) = text.replace("2030-01-01T00:00:00Z", time)
         listOf("not-a-time", "2030-02-30T00:00:00Z", "2030-01-01", "2030-01-01T24:00:00Z",
-            "2030-01-01T00:00:00+08:00", "2030-01-01T00:00:00-00:00", "2030-01-01 00:00:00Z").forEach { assertRejected(wire(it)) }
+            "2030-01-01T00:00:00+08:00", "2030-01-01T00:00:00-00:00", "2030-01-01 00:00:00Z",
+            "2030-01-01T00:00:60Z", "2030-01-01T00:00:00.1234567891Z").forEach { assertRejected(wire(it)) }
         assertEquals(local.expiresAt, parser.parse(wire("2030-01-01t00:00:00+00:00")).expiresAt)
-        assertEquals(Instant.parse("2030-01-01T00:00:00.123456789Z"), parser.parse(wire("2030-01-01T00:00:00.1234567891Z")).expiresAt)
+        val nanoseconds = parser.parse(wire("2030-01-01t00:00:00.123456789z")) as EnrollmentMaterial.LocalExample
+        assertEquals(Instant.parse("2030-01-01T00:00:00.123456789Z"), nanoseconds.expiresAt)
+        assertTrue(EnrollmentMaterialParser.encodeLocal(nanoseconds).contains("2030-01-01T00:00:00.123456789Z"))
     }
 
     @Test

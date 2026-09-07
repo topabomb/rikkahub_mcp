@@ -16,16 +16,16 @@ PrepareEnterpriseExampleAssets 从同一公开模板派生 enterprise.local.iden
 
 ## 平台样例与 Android 消费副本
 
-平台 canonical 正例：measix-platform-core/api/fixtures/enrollment/platform-v1.json。
+平台消费导出目录：measix-platform-core/api/generated/android/portal。Android 已导入 platform-v1.json、local-v1.json 和 cases.json，来源摘要记录于 [consumer-manifest.json](../../app/src/test/resources/contracts/enrollment/consumer-manifest.json)。普通 Android 构建不依赖 sibling checkout。
 
-Android 消费副本：[platform-v1.json](../../app/src/test/resources/contracts/enrollment/platform-v1.json)。它只用于离线契约测试，不能独立演进为第二份 canonical fixture。同步时从平台原样导入并核对 Client OpenAPI 的 PlatformEnrollmentMaterial；不要求普通 Android 构建依赖另一份仓库 checkout。当前输入原始字节 SHA256 为 `3ac391412640d571dd03220fbfd88487e1d1e47a6b1d6f8a86ee09ae821d340a`（原始 LF 文件；Git checkout 换行可影响字节 hash）。
+这些文件只用于离线契约测试，不能独立演进为第二份 canonical fixture。同步时先验证导出 manifest，再原样复制；Git 对该目录 JSON 禁用换行转换，测试验证消费副本 SHA256。平台正例摘要为 `3ac391412640d571dd03220fbfd88487e1d1e47a6b1d6f8a86ee09ae821d340a`。
 
-本次核对的平台输入未提供本地正例及完整共享反例。交平台补齐的清单记录在 [本期实施方案](../dev/android-enterprise-integration-plan.md) 的接入资料段。
+EnrollmentSharedCasesTest 直接使用 cases.json 的原始 raw、固定 now 和 installedSources。invalid 由真实解析器拒绝；expired 和 unknown_source 分别调用生产到期预检查与安装来源校验。本地正例只验证格式和来源字段，不把共享测试 code 当作已安装 Android 来源的有效凭据。
 
 Android 的代码内本地反例只证明 Android 当前行为，不算平台共享 fixture 或平台验收已完成。
 
 ## 验证边界
 
-EnrollmentMaterialParserTest 消费平台正例，并测试严格字段、原始重复键、UTF-8/字符限制、UTC 与 origin。LocalEnterpriseSourceTest 覆盖一键、粘贴、二维码库编码/解码、来源分流、并发/重开后的消费、到期权威、持久化失败、冲突不消费、配置待就绪与独立文件导入。
+EnrollmentMaterialParserTest 消费两类正例并核验摘要，测试严格字段、原始重复键、UTF-8/字符限制、UTC 与 origin。时间接受小写 t/z 与 +00:00；小数秒只能为 1–9 位，拒绝超精度、闰秒、-00:00、其他偏移和错误日期，不截断输入。输出统一大写 T/Z。LocalEnterpriseSourceTest 覆盖一键、粘贴、二维码库编码/解码、来源分流、并发/重开后的消费、到期权威、持久化失败、冲突不消费、配置待就绪与独立文件导入。
 
 二维码库 round-trip 不是 Android 相机扫码设备验收。正式扫码/粘贴 UI、页面错误呈现、真实 Discovery/重定向/Enrollment 与平台互操作尚未交付，验收须分别报告。

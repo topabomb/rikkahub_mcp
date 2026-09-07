@@ -1,0 +1,8 @@
+{
+  "formatVersion": 1,
+  "kind": "LOCAL_EXAMPLE_ENROLLMENT",
+  "sourceNamespace": "local.example",
+  "deploymentId": "dep_example",
+  "code": "fixture-local-code",
+  "expiresAt": "2030-01-01T00:10:00Z"
+}

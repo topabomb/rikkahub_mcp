@@ -1,0 +1,178 @@
+{
+  "now": "2030-01-01T00:00:00Z",
+  "installedSources": [
+    "local.example"
+  ],
+  "cases": [
+    {
+      "name": "platform",
+      "raw": "{\"formatVersion\":1,\"kind\":\"PLATFORM_ENROLLMENT\",\"platformUrl\":\"https://platform.example\",\"code\":\"fixture-enrollment-code\",\"expiresAt\":\"2030-01-01T00:10:00Z\"}",
+      "result": "valid"
+    },
+    {
+      "name": "local",
+      "raw": "{\"formatVersion\":1,\"kind\":\"LOCAL_EXAMPLE_ENROLLMENT\",\"sourceNamespace\":\"local.example\",\"deploymentId\":\"dep_example\",\"code\":\"fixture-local-code\",\"expiresAt\":\"2030-01-01T00:10:00Z\"}",
+      "result": "valid"
+    },
+    {
+      "name": "trim-whitespace",
+      "raw": " \n{\"formatVersion\":1,\"kind\":\"PLATFORM_ENROLLMENT\",\"platformUrl\":\"https://platform.example\",\"code\":\"fixture-enrollment-code\",\"expiresAt\":\"2030-01-01T00:10:00Z\"}\t",
+      "result": "valid"
+    },
+    {
+      "name": "duplicate-key",
+      "raw": "{\"formatVersion\":1,\"formatVersion\":1,\"kind\":\"PLATFORM_ENROLLMENT\",\"platformUrl\":\"https://platform.example\",\"code\":\"fixture-enrollment-code\",\"expiresAt\":\"2030-01-01T00:10:00Z\"}",
+      "result": "invalid"
+    },
+    {
+      "name": "unknown-field",
+      "raw": "{\"formatVersion\":1,\"kind\":\"PLATFORM_ENROLLMENT\",\"platformUrl\":\"https://platform.example\",\"code\":\"fixture-enrollment-code\",\"expiresAt\":\"2030-01-01T00:10:00Z\",\"userId\":\"u\"}",
+      "result": "invalid"
+    },
+    {
+      "name": "wrong-version",
+      "raw": "{\"formatVersion\":2,\"kind\":\"PLATFORM_ENROLLMENT\",\"platformUrl\":\"https://platform.example\",\"code\":\"fixture-enrollment-code\",\"expiresAt\":\"2030-01-01T00:10:00Z\"}",
+      "result": "invalid"
+    },
+    {
+      "name": "wrong-type",
+      "raw": "{\"formatVersion\":1,\"kind\":\"PLATFORM_ENROLLMENT\",\"platformUrl\":\"https://platform.example\",\"code\":123,\"expiresAt\":\"2030-01-01T00:10:00Z\"}",
+      "result": "invalid"
+    },
+    {
+      "name": "wrong-kind",
+      "raw": "{\"formatVersion\":1,\"kind\":\"PLATFORM_ENROLLMENT\",\"sourceNamespace\":\"local.example\",\"deploymentId\":\"dep_example\",\"code\":\"fixture-local-code\",\"expiresAt\":\"2030-01-01T00:10:00Z\"}",
+      "result": "invalid"
+    },
+    {
+      "name": "missing-code",
+      "raw": "{\"formatVersion\":1,\"kind\":\"LOCAL_EXAMPLE_ENROLLMENT\",\"sourceNamespace\":\"local.example\",\"deploymentId\":\"dep_example\",\"expiresAt\":\"2030-01-01T00:10:00Z\"}",
+      "result": "invalid"
+    },
+    {
+      "name": "unsafe-origin",
+      "raw": "{\"formatVersion\":1,\"kind\":\"PLATFORM_ENROLLMENT\",\"platformUrl\":\"https://user:secret@platform.example\",\"code\":\"fixture-enrollment-code\",\"expiresAt\":\"2030-01-01T00:10:00Z\"}",
+      "result": "invalid"
+    },
+    {
+      "name": "http-production",
+      "raw": "{\"formatVersion\":1,\"kind\":\"PLATFORM_ENROLLMENT\",\"platformUrl\":\"http://127.0.0.1:8080\",\"code\":\"fixture-enrollment-code\",\"expiresAt\":\"2030-01-01T00:10:00Z\"}",
+      "result": "invalid"
+    },
+    {
+      "name": "origin-path",
+      "raw": "{\"formatVersion\":1,\"kind\":\"PLATFORM_ENROLLMENT\",\"platformUrl\":\"https://platform.example/portal/\",\"code\":\"fixture-enrollment-code\",\"expiresAt\":\"2030-01-01T00:10:00Z\"}",
+      "result": "invalid"
+    },
+    {
+      "name": "invalid-date",
+      "raw": "{\"formatVersion\":1,\"kind\":\"LOCAL_EXAMPLE_ENROLLMENT\",\"sourceNamespace\":\"local.example\",\"deploymentId\":\"dep_example\",\"code\":\"fixture-local-code\",\"expiresAt\":\"2030-02-30T00:00:00Z\"}",
+      "result": "invalid"
+    },
+    {
+      "name": "old-local-format",
+      "raw": "{\"formatVersion\":1,\"sourceNamespace\":\"local.example\",\"deploymentId\":\"dep_example\",\"userId\":\"u\",\"enrollmentCode\":\"c\",\"expiresAtMillis\":1893456600000}",
+      "result": "invalid"
+    },
+    {
+      "name": "over-byte-limit",
+      "raw": "{\"formatVersion\":1,\"kind\":\"PLATFORM_ENROLLMENT\",\"platformUrl\":\"https://platform.example\",\"code\":\"测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测\",\"expiresAt\":\"2030-01-01T00:10:00Z\"}",
+      "result": "invalid"
+    },
+    {
+      "name": "expired",
+      "raw": "{\"formatVersion\":1,\"kind\":\"PLATFORM_ENROLLMENT\",\"platformUrl\":\"https://platform.example\",\"code\":\"fixture-enrollment-code\",\"expiresAt\":\"2029-12-31T23:59:59Z\"}",
+      "result": "expired"
+    },
+    {
+      "name": "unknown-local-source",
+      "raw": "{\"formatVersion\":1,\"kind\":\"LOCAL_EXAMPLE_ENROLLMENT\",\"sourceNamespace\":\"not-installed\",\"deploymentId\":\"dep_example\",\"code\":\"fixture-local-code\",\"expiresAt\":\"2030-01-01T00:10:00Z\"}",
+      "result": "unknown_source"
+    },
+    {
+      "name": "local-cannot-target-network",
+      "raw": "{\"formatVersion\":1,\"kind\":\"LOCAL_EXAMPLE_ENROLLMENT\",\"sourceNamespace\":\"local.example\",\"deploymentId\":\"dep_example\",\"code\":\"fixture-local-code\",\"expiresAt\":\"2030-01-01T00:10:00Z\",\"platformUrl\":\"https://platform.example\"}",
+      "result": "invalid"
+    },
+    {
+      "name": "bare-code",
+      "raw": "fixture-enrollment-code",
+      "result": "invalid"
+    },
+    {
+      "name": "trailing-json",
+      "raw": "{\"formatVersion\":1,\"kind\":\"LOCAL_EXAMPLE_ENROLLMENT\",\"sourceNamespace\":\"local.example\",\"deploymentId\":\"dep_example\",\"code\":\"fixture-local-code\",\"expiresAt\":\"2030-01-01T00:10:00Z\"}{}",
+      "result": "invalid"
+    },
+    {
+      "name": "local-utc-zero-offset",
+      "raw": "{\"formatVersion\":1,\"kind\":\"LOCAL_EXAMPLE_ENROLLMENT\",\"sourceNamespace\":\"local.example\",\"deploymentId\":\"dep_example\",\"code\":\"fixture-local-code\",\"expiresAt\":\"2030-01-01T00:10:00+00:00\"}",
+      "result": "valid"
+    },
+    {
+      "name": "platform-utc-zero-offset",
+      "raw": "{\"formatVersion\":1,\"kind\":\"PLATFORM_ENROLLMENT\",\"platformUrl\":\"https://platform.example\",\"code\":\"fixture-enrollment-code\",\"expiresAt\":\"2030-01-01T00:10:00+00:00\"}",
+      "result": "valid"
+    },
+    {
+      "name": "local-utc-lowercase",
+      "raw": "{\"formatVersion\":1,\"kind\":\"LOCAL_EXAMPLE_ENROLLMENT\",\"sourceNamespace\":\"local.example\",\"deploymentId\":\"dep_example\",\"code\":\"fixture-local-code\",\"expiresAt\":\"2030-01-01t00:10:00z\"}",
+      "result": "valid"
+    },
+    {
+      "name": "platform-utc-lowercase",
+      "raw": "{\"formatVersion\":1,\"kind\":\"PLATFORM_ENROLLMENT\",\"platformUrl\":\"https://platform.example\",\"code\":\"fixture-enrollment-code\",\"expiresAt\":\"2030-01-01t00:10:00z\"}",
+      "result": "valid"
+    },
+    {
+      "name": "local-nanoseconds",
+      "raw": "{\"formatVersion\":1,\"kind\":\"LOCAL_EXAMPLE_ENROLLMENT\",\"sourceNamespace\":\"local.example\",\"deploymentId\":\"dep_example\",\"code\":\"fixture-local-code\",\"expiresAt\":\"2030-01-01T00:10:00.123456789Z\"}",
+      "result": "valid"
+    },
+    {
+      "name": "platform-nanoseconds",
+      "raw": "{\"formatVersion\":1,\"kind\":\"PLATFORM_ENROLLMENT\",\"platformUrl\":\"https://platform.example\",\"code\":\"fixture-enrollment-code\",\"expiresAt\":\"2030-01-01T00:10:00.123456789Z\"}",
+      "result": "valid"
+    },
+    {
+      "name": "local-excess-precision",
+      "raw": "{\"formatVersion\":1,\"kind\":\"LOCAL_EXAMPLE_ENROLLMENT\",\"sourceNamespace\":\"local.example\",\"deploymentId\":\"dep_example\",\"code\":\"fixture-local-code\",\"expiresAt\":\"2030-01-01T00:10:00.1234567891Z\"}",
+      "result": "invalid"
+    },
+    {
+      "name": "platform-excess-precision",
+      "raw": "{\"formatVersion\":1,\"kind\":\"PLATFORM_ENROLLMENT\",\"platformUrl\":\"https://platform.example\",\"code\":\"fixture-enrollment-code\",\"expiresAt\":\"2030-01-01T00:10:00.1234567891Z\"}",
+      "result": "invalid"
+    },
+    {
+      "name": "local-leap-second",
+      "raw": "{\"formatVersion\":1,\"kind\":\"LOCAL_EXAMPLE_ENROLLMENT\",\"sourceNamespace\":\"local.example\",\"deploymentId\":\"dep_example\",\"code\":\"fixture-local-code\",\"expiresAt\":\"2030-01-01T00:10:60Z\"}",
+      "result": "invalid"
+    },
+    {
+      "name": "platform-leap-second",
+      "raw": "{\"formatVersion\":1,\"kind\":\"PLATFORM_ENROLLMENT\",\"platformUrl\":\"https://platform.example\",\"code\":\"fixture-enrollment-code\",\"expiresAt\":\"2030-01-01T00:10:60Z\"}",
+      "result": "invalid"
+    },
+    {
+      "name": "local-unknown-offset",
+      "raw": "{\"formatVersion\":1,\"kind\":\"LOCAL_EXAMPLE_ENROLLMENT\",\"sourceNamespace\":\"local.example\",\"deploymentId\":\"dep_example\",\"code\":\"fixture-local-code\",\"expiresAt\":\"2030-01-01T00:10:00-00:00\"}",
+      "result": "invalid"
+    },
+    {
+      "name": "platform-unknown-offset",
+      "raw": "{\"formatVersion\":1,\"kind\":\"PLATFORM_ENROLLMENT\",\"platformUrl\":\"https://platform.example\",\"code\":\"fixture-enrollment-code\",\"expiresAt\":\"2030-01-01T00:10:00-00:00\"}",
+      "result": "invalid"
+    },
+    {
+      "name": "local-non-utc",
+      "raw": "{\"formatVersion\":1,\"kind\":\"LOCAL_EXAMPLE_ENROLLMENT\",\"sourceNamespace\":\"local.example\",\"deploymentId\":\"dep_example\",\"code\":\"fixture-local-code\",\"expiresAt\":\"2030-01-01T00:10:00+08:00\"}",
+      "result": "invalid"
+    },
+    {
+      "name": "platform-non-utc",
+      "raw": "{\"formatVersion\":1,\"kind\":\"PLATFORM_ENROLLMENT\",\"platformUrl\":\"https://platform.example\",\"code\":\"fixture-enrollment-code\",\"expiresAt\":\"2030-01-01T00:10:00+08:00\"}",
+      "result": "invalid"
+    }
+  ]
+}

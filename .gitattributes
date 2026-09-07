@@ -7,3 +7,6 @@ highlight/src/test/resources/hljs/**/*.tokens text eol=lf
 
 # POSIX rebuild scripts must keep an executable shebang and shell syntax on Linux/WSL.
 workspace/tools/*.sh text eol=lf
+
+# Upstream contract inputs are pinned by SHA256 and retain their original bytes.
+app/src/test/resources/contracts/enrollment/*.json -text
