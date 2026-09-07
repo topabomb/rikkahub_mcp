@@ -66,7 +66,9 @@ class AssistantCallToolTest {
             json = Json,
             subAssistantRunCoordinator = coordinator,
             toolSetFactory = mockk(relaxed = true),
-        ).buildTools(caller, masterConversationId).single { it.name == "assistant_call" }
+            memoryService = mockk(relaxed = true),
+            configurations = mockk(relaxed = true),
+        ).buildTools(caller, masterConversationId, net.weero.measix.pilot.data.enterprise.RealmAccess.Personal).single { it.name == "assistant_call" }
     }
 
     private fun executionContext() = ToolExecutionContext(
@@ -200,7 +202,7 @@ class AssistantCallToolTest {
         }
         assertEquals("failed", payload["status"]?.jsonPrimitive?.content)
         assertEquals("request_required", payload["reason"]?.jsonPrimitive?.content)
-        coVerify(exactly = 0) { coordinator.executeCall(any(), any(), any(), any(), any()) }
+        coVerify(exactly = 0) { coordinator.executeCall(any(), any(), any(), any(), any(), any()) }
     }
 
     @Test
@@ -218,7 +220,7 @@ class AssistantCallToolTest {
             )
         }
         assertEquals("request_required", payload["reason"]?.jsonPrimitive?.content)
-        coVerify(exactly = 0) { coordinator.executeCall(any(), any(), any(), any(), any()) }
+        coVerify(exactly = 0) { coordinator.executeCall(any(), any(), any(), any(), any(), any()) }
     }
 
     @Test
@@ -243,7 +245,7 @@ class AssistantCallToolTest {
         }
         assertEquals("failed", payload["status"]?.jsonPrimitive?.content)
         assertEquals("invalid_attachments", payload["reason"]?.jsonPrimitive?.content)
-        coVerify(exactly = 0) { coordinator.executeCall(any(), any(), any(), any(), any()) }
+        coVerify(exactly = 0) { coordinator.executeCall(any(), any(), any(), any(), any(), any()) }
     }
 
     @Test
@@ -265,7 +267,7 @@ class AssistantCallToolTest {
         }
         assertEquals("failed", payload["status"]?.jsonPrimitive?.content)
         assertEquals("invalid_attachments", payload["reason"]?.jsonPrimitive?.content)
-        coVerify(exactly = 0) { coordinator.executeCall(any(), any(), any(), any(), any()) }
+        coVerify(exactly = 0) { coordinator.executeCall(any(), any(), any(), any(), any(), any()) }
     }
 
     @Test
@@ -276,6 +278,7 @@ class AssistantCallToolTest {
         val path = "/upload/b.png"
         coEvery {
             coordinator.executeCall(
+            realmAccess = net.weero.measix.pilot.data.enterprise.RealmAccess.Personal,
                 callerAssistantId = callerId,
                 masterConversationId = masterConversationId,
                 targetAssistantId = targetId,
@@ -327,6 +330,7 @@ class AssistantCallToolTest {
         val expected = completedOutput()
         coEvery {
             coordinator.executeCall(
+            realmAccess = net.weero.measix.pilot.data.enterprise.RealmAccess.Personal,
                 callerAssistantId = callerId,
                 masterConversationId = masterConversationId,
                 targetAssistantId = targetId,
@@ -345,7 +349,7 @@ class AssistantCallToolTest {
 
         assertEquals(expected, result)
         coVerify(exactly = 1) {
-            coordinator.executeCall(callerId, masterConversationId, targetId, "Do the work", any())
+            coordinator.executeCall(callerId, masterConversationId, net.weero.measix.pilot.data.enterprise.RealmAccess.Personal, targetId, "Do the work", any())
         }
     }
 
@@ -356,6 +360,7 @@ class AssistantCallToolTest {
         val expected = completedOutput()
         coEvery {
             coordinator.executeCall(
+            realmAccess = net.weero.measix.pilot.data.enterprise.RealmAccess.Personal,
                 callerAssistantId = callerId,
                 masterConversationId = masterConversationId,
                 targetAssistantId = targetId,
@@ -382,6 +387,7 @@ class AssistantCallToolTest {
         assertEquals(expected, result)
         coVerify(exactly = 1) {
             coordinator.executeCall(
+            realmAccess = net.weero.measix.pilot.data.enterprise.RealmAccess.Personal,
                 callerAssistantId = callerId,
                 masterConversationId = masterConversationId,
                 targetAssistantId = targetId,

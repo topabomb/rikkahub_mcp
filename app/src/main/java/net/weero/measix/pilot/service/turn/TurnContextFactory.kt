@@ -10,7 +10,6 @@ import net.weero.measix.pilot.data.ai.transformers.buildWorkspacePrompt
 import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.model.Assistant
 import net.weero.measix.pilot.data.model.effectiveContextMessageLimit
-import net.weero.measix.pilot.data.repository.MemoryRepository
 import net.weero.measix.pilot.data.repository.WorkspaceRepository
 import net.weero.measix.pilot.service.runtime.ProviderTransportLease
 import net.weero.measix.pilot.service.runtime.freezeProviderWireShape
@@ -202,10 +201,4 @@ private fun placeholderValues(
         "description" to assistant.description,
         "user" to nickname,
     )
-}
-
-/** Resolves the Memory namespace captured at START and rechecked before each live write. */
-internal fun resolveMemoryOwnerId(assistant: Assistant?): String? {
-    if (assistant?.enableMemory != true) return null
-    return if (assistant.useGlobalMemory) MemoryRepository.GLOBAL_MEMORY_ID else assistant.id.toString()
 }

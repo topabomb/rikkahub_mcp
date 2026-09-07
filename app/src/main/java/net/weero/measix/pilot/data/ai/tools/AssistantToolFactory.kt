@@ -96,7 +96,7 @@ internal fun parseAssistantManageArguments(args: kotlinx.serialization.json.Json
  * ConversationDisclosureSnapshotService 在每次新 START 写入 canonical Snapshot；
  * 执行时授权仍由 SubAssistantAccessPolicy 按 live Settings fail-closed。
  */
-class AssistantToolFactory(
+class AssistantToolFactory internal constructor(
     private val settingsStore: SettingsStore,
     private val assistantManagementService: AssistantManagementService,
     private val json: Json,
@@ -104,6 +104,8 @@ class AssistantToolFactory(
     private val subAssistantRunCoordinator: SubAssistantRunCoordinator,
     /** 提供 Target Run 可注册工具名；memory_tool 由 TurnRunner 另加，listing 时需补上。 */
     private val toolSetFactory: TurnToolSetFactory,
+    private val memoryService: net.weero.measix.pilot.service.MemoryService,
+    private val configurations: net.weero.measix.pilot.service.ConfigurationQueryService,
 ) {
     /**
      * 按 caller Assistant 的 LocalTool 配置构建工具。
@@ -111,6 +113,7 @@ class AssistantToolFactory(
     fun buildTools(
         callerAssistant: Assistant,
         masterConversationId: Uuid,
+        realmAccess: net.weero.measix.pilot.data.enterprise.RealmAccess,
         ttsPlaybackContext: TtsToolPlaybackContext? = null,
     ): List<Tool> {
         val enableManagement = LocalToolOption.AssistantManagement in callerAssistant.localTools
@@ -121,12 +124,13 @@ class AssistantToolFactory(
         return buildList {
             if (enableManagement) {
                 add(buildAssistantManageTool(callerAssistant.id))
-                add(buildAssistantInspectTool(callerAssistant.id, masterConversationId))
+                add(buildAssistantInspectTool(callerAssistant.id, masterConversationId, realmAccess))
             }
             if (enableDelegation) {
                 add(buildAssistantCallTool(
                     callerAssistantId = callerAssistant.id,
                     masterConversationId = masterConversationId,
+                    realmAccess = realmAccess,
                     ttsPlaybackContext = ttsPlaybackContext,
                 ))
             }
@@ -276,6 +280,7 @@ class AssistantToolFactory(
     private fun buildAssistantInspectTool(
         callerAssistantId: ConfigurationReference,
         masterConversationId: Uuid,
+        realmAccess: net.weero.measix.pilot.data.enterprise.RealmAccess,
     ): Tool = Tool(
         name = TOOL_ASSISTANT_INSPECT,
         description = "Inspect a sub-assistant's configuration before updating or deleting it. " +
@@ -308,7 +313,7 @@ class AssistantToolFactory(
             )
         },
         execute = { args ->
-            executeAssistantInspect(args, callerAssistantId, masterConversationId)
+            executeAssistantInspect(args, callerAssistantId, masterConversationId, realmAccess)
         },
     )
 
@@ -316,6 +321,7 @@ class AssistantToolFactory(
         args: kotlinx.serialization.json.JsonElement,
         callerAssistantId: ConfigurationReference,
         masterConversationId: Uuid,
+        realmAccess: net.weero.measix.pilot.data.enterprise.RealmAccess,
     ): List<UIMessagePart> {
         val obj = args as? JsonObject ?: return errorResult("invalid_arguments")
         val assistantIdStr = obj["assistant_id"]?.let { (it as? JsonPrimitive)?.content }
@@ -327,32 +333,33 @@ class AssistantToolFactory(
             return errorResult("target_is_caller")
         }
 
-        val settings = settingsStore.effectiveSettings.value.settings
-        val caller = settings.assistants.find { it.id == callerAssistantId }
+        val configuration = try { configurations.read(realmAccess) }
+        catch (cancelled: CancellationException) { throw cancelled }
+        catch (_: Exception) { return errorResult("tool_not_permitted") }
+        val caller = configuration.assistants[callerAssistantId]
             ?: return errorResult("tool_not_permitted")
-        if (LocalToolOption.AssistantManagement !in caller.localTools) {
+        if (!configuration.access(net.weero.measix.pilot.data.configuration.ConfigurationCategory.ASSISTANT, callerAssistantId).canExecute ||
+            LocalToolOption.AssistantManagement !in caller.localTools) {
             return errorResult("tool_not_permitted")
         }
-        val target = settings.getAssistantById(assistantId)
+        val target = configuration.assistants[assistantId]
             ?: return errorResult("assistant_not_found")
-        if (!SubAssistantAccessPolicy.canAccess(caller, target)) {
+        if (!configuration.access(net.weero.measix.pilot.data.configuration.ConfigurationCategory.ASSISTANT, assistantId).canExecute ||
+            !SubAssistantAccessPolicy.canAccess(caller, target)) {
             return errorResult("target_not_allowed")
         }
 
         val sections = parseInspectSections(obj)
         val toolNames = if (INSPECT_SECTION_TOOLS in sections) {
-            listTargetToolNames(target, settings, masterConversationId)
+            listTargetToolNames(target, settingsStore.effectiveSettings.value.settings, masterConversationId,
+                configuration.assistantModel(target.id).reference?.let { configuration.models[it]?.model })
         } else {
             emptyList()
         }
         val memory = if (INSPECT_SECTION_MEMORY in sections) {
-            assistantManagementService.listAssistantMemory(assistantId).getOrElse { error ->
-                val reason = when (error) {
-                    is NoSuchElementException -> "assistant_not_found"
-                    else -> "operation_failed"
-                }
-                return errorResult(reason)
-            }
+            try { memoryService.inspect(realmAccess, callerAssistantId, assistantId) }
+            catch (cancelled: CancellationException) { throw cancelled }
+            catch (_: Exception) { return errorResult("operation_failed") }
         } else {
             null
         }
@@ -404,12 +411,13 @@ class AssistantToolFactory(
         target: Assistant,
         settings: Settings,
         masterConversationId: Uuid,
+        capabilityModel: me.rerere.ai.provider.Model?,
     ): List<String> {
         val built = toolSetFactory.buildTools(
             assistant = target,
             conversationId = masterConversationId,
             settings = settings,
-            capabilityModel = settings.getChatModel(target),
+            capabilityModel = capabilityModel,
             turnKind = TurnKind.SUB_ASSISTANT,
             mcpCapabilities = toolSetFactory.captureMcpCapabilities(target),
         ).map { it.name }
@@ -438,6 +446,7 @@ class AssistantToolFactory(
     private fun buildAssistantCallTool(
         callerAssistantId: ConfigurationReference,
         masterConversationId: Uuid,
+        realmAccess: net.weero.measix.pilot.data.enterprise.RealmAccess,
         ttsPlaybackContext: TtsToolPlaybackContext? = null,
     ): Tool = Tool(
         name = TOOL_ASSISTANT_CALL,
@@ -499,7 +508,7 @@ class AssistantToolFactory(
             )
         },
         contextualExecute = { args ->
-            executeAssistantCall(callerAssistantId, masterConversationId, this, args, ttsPlaybackContext)
+            executeAssistantCall(callerAssistantId, masterConversationId, realmAccess, this, args, ttsPlaybackContext)
         },
         execute = { _ ->
             // assistant_call 必须由带 durable locator 与 metadata 回写能力的执行器调用。
@@ -539,6 +548,7 @@ class AssistantToolFactory(
     private suspend fun executeAssistantCall(
         callerAssistantId: ConfigurationReference,
         masterConversationId: Uuid,
+        realmAccess: net.weero.measix.pilot.data.enterprise.RealmAccess,
         context: ToolExecutionContext,
         args: kotlinx.serialization.json.JsonElement,
         ttsPlaybackContext: TtsToolPlaybackContext? = null,
@@ -561,6 +571,7 @@ class AssistantToolFactory(
         val output = subAssistantRunCoordinator.executeCall(
             callerAssistantId = callerAssistantId,
             masterConversationId = masterConversationId,
+            realmAccess = realmAccess,
             targetAssistantId = targetId,
             task = task,
             execContext = context,

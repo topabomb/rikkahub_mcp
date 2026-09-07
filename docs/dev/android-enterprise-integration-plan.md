@@ -302,6 +302,12 @@ LocalEnterpriseSource（身份/配置/动态/场景）
 
 ## 10. 完整变更清单与批次
 
+C6 的运行记忆已按域接通：MemoryAddress 固定 scope 与共享/助手 owner；MemoryService 统一编排原 Session、当前配置权限和 UI 记录上下文，Repository 持有真实 Room 事务直到提交或回滚结束。主助手、子助手、assistant_inspect、记忆编辑页和工具结果删除均使用原域；退出重登不能复活旧操作，共享模式切换不会把旧编辑写到新 namespace。企业 Seed 配置与运行记忆仍分开，没有新增配置副本或修改 schema。独立审查发现的旧查询终止订阅、子助手重取 Session、工具卡旧来源及授权拒绝后 lease 未释放均已修复并补充验证。
+
+该记忆批次 87 项定向 JVM 测试全部通过；Pixel_10_Pro_Fold / Android 17 的 9 项定向 instrumentation 全部通过，涵盖实际 Room 的多主体/owner 隔离、错误地址拒绝、提交前取消回滚、提交决定后授权锁保持，以及域偏好和主子会话交互回归。删除了以假 DAO 重复 SQL 行为的旧 MemoryRepositoryOwnershipTest，替换为真实 Room 验证。会话列表/命令、文件、备份、正式企业入口和全部执行 adapters 仍未完成，本项不代表 C4、C5、C6 或 E08 整体验收通过。
+
+该记忆批次完整 `test assembleDebug lintDebug assembleRelease --no-parallel --max-workers=1 --no-configuration-cache` 在 11 分 38 秒内通过：App 1,820 项 JVM 测试无失败或跳过，lint 无错误，Debug/Release 均构建成功；Workspace 的 11 项 Windows 宿主测试仍跳过。独立审查无剩余阻塞项。此批不修改版本号，不作为 Release 企业页面或真实平台互操作验收。
+
 接入资料协议修正已进入代码：两种 kind 的严格解析、平台明确分流、独立安装身份目录、一次性 code 账本和单次客户端状态发布。35 项定向 JVM 测试通过，覆盖平台共享正例、一键/粘贴/二维码库解码的统一接入、UTF-8 边界、原始重复键、旧格式拒绝、固定时钟到期、来源/凭据/消费、并发与取消、提交失败和缺配置待就绪。Pixel_10_Pro_Fold / Android 17 的 6 项定向 instrumentation 通过，其中 2 项新增测试验证随包身份与完整模板一致、真实 AtomicFile 消费重开以及配置缺失后的持久待配置状态；其余 4 项验证已有企业状态和域偏好回归。独立审查无剩余阻塞项。该证据不包含正式扫码/粘贴页面、相机扫码或真实平台互操作。
 
 该接入批次完整 `test assembleDebug lintDebug assembleRelease --no-parallel --max-workers=1 --no-configuration-cache` 在 13 分 20 秒内通过：App 1,822 项 JVM 测试无失败或跳过，lint 无错误，Debug/Release 均构建成功；Workspace 的 11 项 Windows 宿主测试仍跳过。协议修正没有改变完整企业配置文件格式、版本号或本期其余功能的完成状态。

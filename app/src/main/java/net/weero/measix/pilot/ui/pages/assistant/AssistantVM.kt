@@ -16,13 +16,13 @@ import net.weero.measix.pilot.data.datastore.SettingsStore
 import net.weero.measix.pilot.data.datastore.SettingsLockedException
 import net.weero.measix.pilot.data.model.Assistant
 import net.weero.measix.pilot.data.model.Avatar
-import net.weero.measix.pilot.data.repository.MemoryRepository
+import net.weero.measix.pilot.service.MemoryService
 import net.weero.measix.pilot.service.AssistantManagementService
 import net.weero.measix.pilot.service.ArtifactUseCase
 
 class AssistantVM(
     private val settingsStore: SettingsStore,
-    private val memoryRepository: MemoryRepository,
+    private val memoryService: MemoryService,
     private val assistantManagementService: AssistantManagementService,
     private val artifactUseCase: ArtifactUseCase,
 ) : ViewModel() {
@@ -100,10 +100,7 @@ class AssistantVM(
         }
     }
 
-    fun getMemories(assistant: Assistant) =
-        if (assistant.useGlobalMemory) {
-            memoryRepository.getGlobalMemoriesFlow()
-        } else {
-            memoryRepository.getMemoriesOfAssistantFlow(assistant.id.toString())
-        }
+    fun getMemories(assistant: Assistant) = memoryService.observeCurrent(assistant.id).map { view ->
+        view.records.map { net.weero.measix.pilot.data.model.AssistantMemory(it.id, it.content) }
+    }
 }

@@ -45,7 +45,6 @@ import me.rerere.ai.ui.UIMessagePart
 import me.rerere.ai.ui.TurnTerminalReasons
 import net.weero.measix.pilot.service.turn.TurnRunner
 import net.weero.measix.pilot.service.turn.TurnRunInputs
-import net.weero.measix.pilot.service.turn.resolveMemoryOwnerId
 import net.weero.measix.pilot.data.ai.mcp.McpServerCapabilityState
 import net.weero.measix.pilot.data.ai.mcp.TurnMcpCapabilitySnapshot
 import net.weero.measix.pilot.data.ai.subassistant.SubAssistantCallMetadata
@@ -105,7 +104,7 @@ import net.weero.measix.pilot.data.model.ConversationModelContextApplicability
 import net.weero.measix.pilot.data.model.toMessageNode
 import net.weero.measix.pilot.data.db.entity.TurnExecutionStatus
 import net.weero.measix.pilot.data.repository.ConversationRepository
-import net.weero.measix.pilot.data.repository.MemoryRepository
+import net.weero.measix.pilot.service.MemoryService
 import net.weero.measix.pilot.data.repository.WorkspaceRepository
 import net.weero.measix.pilot.service.ConversationDisclosureSnapshotService
 import net.weero.measix.pilot.service.turn.TurnFinalizer
@@ -132,14 +131,15 @@ private data class TargetGenerationResult(
  * 正常终态归 [TurnFinalizer]，结果形状归 SubAssistantResultProjection，并发门禁归
  * [SubAssistantRunGate]。
  */
-class SubAssistantRunCoordinator(
+class SubAssistantRunCoordinator internal constructor(
     private val turnRunner: TurnRunner,
     private val conversationRepo: ConversationRepository,
     private val runtimeRegistry: ConversationRuntimeRegistry,
     private val commandCoordinator: ConversationCommandCoordinator,
     private val toolSetFactory: TurnToolSetFactory,
     private val settingsStore: SettingsStore,
-    private val memoryRepository: MemoryRepository,
+    private val memoryService: MemoryService,
+    private val configurations: net.weero.measix.pilot.service.ConfigurationQueryService,
     private val turnPipelineFactory: TurnPipelineFactory,
     private val turnContextFactory: TurnContextFactory,
     private val artifactStore: ArtifactStore,
@@ -449,6 +449,7 @@ class SubAssistantRunCoordinator(
     suspend fun executeCall(
         callerAssistantId: ConfigurationReference,
         masterConversationId: Uuid,
+        realmAccess: net.weero.measix.pilot.data.enterprise.RealmAccess,
         targetAssistantId: ConfigurationReference,
         task: String,
         execContext: ToolExecutionContext,
@@ -476,6 +477,8 @@ class SubAssistantRunCoordinator(
         var childRunJob: Job? = null
         var runState: SubAssistantRunStateReducer? = null
         try {
+            configurations.requireAccess(realmAccess)
+            check(conversationRepo.getConversationHeader(masterConversationId)?.scope == realmAccess.scope) { "sub_assistant_realm_mismatch" }
             val materialized = materializeChild(
                 preflight = ready,
                 masterConversationId = masterConversationId,
@@ -573,6 +576,7 @@ class SubAssistantRunCoordinator(
             runJob.ensureActive()
             val genResult = withContext(runJob) {
                 runTargetGeneration(
+                    realmAccess = realmAccess,
                     settings = ready.settings,
                     target = target,
                     model = model,
@@ -957,6 +961,7 @@ class SubAssistantRunCoordinator(
     }
 
     private suspend fun runTargetGeneration(
+        realmAccess: net.weero.measix.pilot.data.enterprise.RealmAccess,
         settings: Settings,
         target: Assistant,
         model: me.rerere.ai.provider.Model,
@@ -973,6 +978,7 @@ class SubAssistantRunCoordinator(
     ): TargetGenerationResult {
         val runtime = commandCoordinator.load(childConversationId)
         val snapshot = runtime.durable
+        configurations.requireAccess(realmAccess)
 
         // 复用 turn-level TtsToolPlaybackContext 的 sessionId，使整轮 turn 内的 Master 和
         // 所有 Target 的 TTS 调用归属同一条播放队列；无 turnTtsContext 时回退独立 context。
@@ -984,10 +990,12 @@ class SubAssistantRunCoordinator(
         )
         val mediaCapabilities = turnRunner.resolveRequestMediaCapabilities(settings, model)
         val providerSetting = model.findProvider(settings.providers) ?: error("Provider not found")
+        check(snapshot.header.scope == realmAccess.scope) { "sub_assistant_realm_mismatch" }
+        val memoryAccess = memoryService.captureExecution(realmAccess, target)
         val disclosureCandidate = ConversationDisclosureSnapshotService.captureCandidate(
             settings = settings,
             assistant = target,
-            memoryRepository = memoryRepository,
+            memories = memoryAccess?.let { memoryService.read(it) }.orEmpty(),
         )
         val mcpCapabilities = toolSetFactory.prepareMcpCapabilities(target)
         targetMcpPreparationFailure(mcpCapabilities)?.let(::error)
@@ -1001,19 +1009,14 @@ class SubAssistantRunCoordinator(
             ttsPlaybackContext = ttsPlaybackContext,
             mcpCapabilities = mcpCapabilities,
         )
-        val memoryOwnerId = resolveMemoryOwnerId(target)
         val tools = buildList {
-            if (memoryOwnerId != null) {
+            if (memoryAccess != null) {
                 addAll(
                     buildMemoryTools(
-                        onCreation = { content -> memoryRepository.addMemory(memoryOwnerId, content) },
-                        onUpdate = { id, content -> memoryRepository.updateContent(id, content, memoryOwnerId) },
-                        onDelete = { id -> memoryRepository.deleteMemory(id, memoryOwnerId) },
-                        isStillAllowed = {
-                            resolveMemoryOwnerId(
-                                settingsStore.effectiveSettings.value.settings.getAssistantById(target.id),
-                            ) == memoryOwnerId
-                        },
+                        onCreation = { content -> memoryService.add(memoryAccess, content) },
+                        onUpdate = { id, content -> memoryService.update(memoryAccess, id, content) },
+                        onDelete = { id -> memoryService.delete(memoryAccess, id) },
+                        isStillAllowed = { memoryService.isAllowed(memoryAccess) },
                     ),
                 )
             }

@@ -119,17 +119,21 @@ class SubAssistantTurnIntegrationTest {
             val childRuns = SubAssistantRunCoordinator(
                 turnRunner = runner, conversationRepo = repository, runtimeRegistry = registry,
                 commandCoordinator = commands, toolSetFactory = tools, settingsStore = settingsStore,
-                memoryRepository = mockk(relaxed = true), turnPipelineFactory = pipeline,
+                memoryService = mockk<net.weero.measix.pilot.service.MemoryService> {
+                    coEvery { captureExecution(any(), any()) } returns null
+                }, turnPipelineFactory = pipeline,
+                configurations = mockk(relaxed = true),
                 turnContextFactory = TurnContextFactory(mockk(relaxed = true)), artifactStore = artifacts,
                 toolArtifactRewriter = mockk(relaxed = true), json = JsonInstant,
                 attachmentResolver = resolver, context = mockk(relaxed = true), turnFinalizer = finalizer,
                 runGate = SubAssistantRunGate(),
             )
             val runtime = commands.create(Conversation(assistantId = parent.id, messageNodes = listOf(UIMessage.user("Delegate the choice").toMessageNode())))
+            coEvery { repository.getConversationHeader(runtime.id) } coAnswers { runtime.durable.header }
             val parentTool = Tool(
                 name = "assistant_call", description = "Delegate a choice", execute = { emptyList() },
                 contextualExecute = {
-                    childRuns.executeCall(parent.id, runtime.id, child.id, "Choose a color", this)
+                    childRuns.executeCall(parent.id, runtime.id, net.weero.measix.pilot.data.enterprise.RealmAccess.Personal, child.id, "Choose a color", this)
                 },
             )
             val turnId = Uuid.random()

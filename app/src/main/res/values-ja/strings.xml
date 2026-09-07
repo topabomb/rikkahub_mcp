@@ -1597,4 +1597,6 @@
   <string name="mcp_refresh_continuing">%1$d 台の MCP サーバーをバックグラウンドで更新しています</string>
   <string name="mcp_enabled_tools_count">%1$d/%2$d 件のツール</string>
   <string name="chat_message_tool_output_archived_summary">アーカイブ済みツール出力：%1$d 行、%2$d 文字</string>
+  <string name="memory_access_unavailable">現在のスペースまたはセッションではメモリにアクセスできません。アクセスの復旧後にこのページを開き直してください。</string>
+  <string name="memory_operation_failed">メモリを変更できませんでした。このページを開き直して再試行してください。</string>
 </resources>

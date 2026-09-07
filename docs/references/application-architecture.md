@@ -57,6 +57,7 @@ UI 不持有 DAO、ConversationRepository、Runtime Registry、Artifact/Generate
 | 子助手 run / lineage 与 retention | `SubAssistantRunCoordinator` / `SubAssistantLifecycle`；run 并发归 `SubAssistantRunGate` |
 | 标题 | `ConversationTitleCoordinator`；模型结果与手动标题串行，token + expected-title CAS |
 | 会话读模型 | `ConversationQueryService` 与专用 reader/query port |
+| 运行记忆 | `MemoryRepository` 唯一写入；`MemoryService` 编排原域 Session、配置授权和 UI 投影，见 [运行记忆](memory-architecture.md) |
 | Artifact metadata、reference、生命周期 | `ArtifactStore`；`ArtifactPayloadStore` 只做磁盘 IO，不持有 DAO |
 | Settings 图片 roots | `ArtifactSettingsCoordinator`；与 Settings、Artifact owner 交接 |
 | 图库生成媒体 row、payload 与删除恢复 | `GeneratedMediaStore` |

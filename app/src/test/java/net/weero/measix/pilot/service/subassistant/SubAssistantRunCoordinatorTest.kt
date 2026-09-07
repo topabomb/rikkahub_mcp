@@ -58,7 +58,7 @@ import me.rerere.common.configuration.EnterpriseAuthority
 import net.weero.measix.pilot.data.configuration.ConfigurationScope
 import net.weero.measix.pilot.data.model.toMessageNode
 import net.weero.measix.pilot.data.repository.ConversationRepository
-import net.weero.measix.pilot.data.repository.MemoryRepository
+import net.weero.measix.pilot.service.MemoryService
 import net.weero.measix.pilot.data.repository.WorkspaceRepository
 import net.weero.measix.pilot.service.runtime.ConversationCommandCoordinator
 import net.weero.measix.pilot.service.runtime.ConversationAggregateSnapshot
@@ -78,6 +78,8 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import kotlin.uuid.Uuid
 
+@org.junit.runner.RunWith(org.robolectric.RobolectricTestRunner::class)
+@org.robolectric.annotation.Config(sdk = [34])
 class SubAssistantRunCoordinatorTest {
     private val callerId = ConfigurationReference.random()
     private val targetId = ConfigurationReference.random()
@@ -85,6 +87,32 @@ class SubAssistantRunCoordinatorTest {
     private val currentMessageId = Uuid.random()
     private val currentToolStepId = Uuid.random()
     private val currentToolLocalCallId = Uuid.random()
+
+    @Test
+    fun `queued delegation cannot acquire a new session after parent logout and reenrollment`() = runTest {
+        val root = java.nio.file.Files.createTempDirectory("child-realm-test").toFile()
+        try {
+            val sessions = net.weero.measix.pilot.data.enterprise.EnterpriseSessionController(
+                net.weero.measix.pilot.data.enterprise.EnterpriseAppliedStore(root),
+            )
+            val packet = net.weero.measix.pilot.data.enterprise.exampleEnterprisePackage()
+            sessions.applyPackage(net.weero.measix.pilot.data.enterprise.EnterprisePackageCodec.encode(packet))
+            val queries = net.weero.measix.pilot.service.ConfigurationQueryService(mockk(), sessions,
+                net.weero.measix.pilot.service.ApplicationRecoveryGate().also { it.ready() })
+            val original = queries.captureAccess(packet.identity.scope)
+            sessions.finishExit(requireNotNull(sessions.beginExit()))
+            sessions.applyPackage(net.weero.measix.pilot.data.enterprise.EnterprisePackageCodec.encode(packet))
+            val harness = harness(AttachmentResolveResult.Success(emptyList()), configurationScope = packet.identity.scope, configurations = queries)
+            try {
+                harness.coordinator.executeCall(callerId, masterId, original, targetId, "queued work", executionContext())
+                org.junit.Assert.fail("old parent session must not create a child")
+            } catch (error: net.weero.measix.pilot.data.enterprise.EnterpriseConfigurationException) {
+                assertEquals("enterprise_data_access_unavailable", error.reason)
+            }
+            coVerify(exactly = 0) { harness.commandCoordinator.create(any()) }
+            coVerify(exactly = 0) { harness.commandCoordinator.createSnapshot(any()) }
+        } finally { root.deleteRecursively() }
+    }
 
     @Test
     fun `text target materializes durable image parts and link failure compensates the exact child`() = runTest {
@@ -101,6 +129,7 @@ class SubAssistantRunCoordinatorTest {
         )
 
         harness.coordinator.executeCall(
+            realmAccess = net.weero.measix.pilot.data.enterprise.RealmAccess.Enterprise(realm, "unit-session"),
             callerAssistantId = callerId,
             masterConversationId = masterId,
             targetAssistantId = targetId,
@@ -130,6 +159,7 @@ class SubAssistantRunCoordinatorTest {
         val harness = harness(AttachmentResolveResult.Failure(AttachmentFailureReasons.ATTACHMENT_NOT_FOUND))
 
         val result = harness.coordinator.executeCall(
+            realmAccess = net.weero.measix.pilot.data.enterprise.RealmAccess.Personal,
             callerAssistantId = callerId,
             masterConversationId = masterId,
             targetAssistantId = targetId,
@@ -154,6 +184,7 @@ class SubAssistantRunCoordinatorTest {
         }
         val patches = mutableListOf<JsonObject>()
         val result = harness.coordinator.executeCall(
+            realmAccess = net.weero.measix.pilot.data.enterprise.RealmAccess.Personal,
             callerAssistantId = callerId, masterConversationId = masterId, targetAssistantId = targetId,
             task = "Describe the image",
             execContext = executionContext(
@@ -187,6 +218,7 @@ class SubAssistantRunCoordinatorTest {
         val created = slot<Conversation>()
         coEvery { harness.commandCoordinator.create(capture(created)) } coAnswers {
             every { childRuntime.id } returns created.captured.id
+            every { childRuntime.durable } returns created.captured.toSnapshot()
             every { childRuntime.snapshot } returns MutableStateFlow(
                 ConversationRuntimeSnapshot(durable = created.captured.toSnapshot(), stream = null),
             )
@@ -196,6 +228,7 @@ class SubAssistantRunCoordinatorTest {
 
         val execution = async {
             harness.coordinator.executeCall(
+            realmAccess = net.weero.measix.pilot.data.enterprise.RealmAccess.Personal,
                 callerAssistantId = callerId,
                 masterConversationId = masterId,
                 targetAssistantId = targetId,
@@ -228,6 +261,7 @@ class SubAssistantRunCoordinatorTest {
         coEvery { harness.commandCoordinator.deleteOrThrow(any()) } just Runs
 
         val result = harness.coordinator.executeCall(
+            realmAccess = net.weero.measix.pilot.data.enterprise.RealmAccess.Personal,
             callerAssistantId = callerId,
             masterConversationId = masterId,
             targetAssistantId = targetId,
@@ -283,6 +317,7 @@ class SubAssistantRunCoordinatorTest {
 
         var linkedRun: me.rerere.ai.core.ToolChildRunLink? = null
         val result = harness.coordinator.executeCall(
+            realmAccess = net.weero.measix.pilot.data.enterprise.RealmAccess.Personal,
             callerAssistantId = callerId,
             masterConversationId = masterId,
             targetAssistantId = targetId,
@@ -319,6 +354,7 @@ class SubAssistantRunCoordinatorTest {
         preparationGate: Pair<CompletableDeferred<Unit>, CompletableDeferred<Unit>>? = null,
         turnRunner: TurnRunner = mockk(relaxed = true),
         configurationScope: ConfigurationScope = ConfigurationScope.Personal,
+        configurations: net.weero.measix.pilot.service.ConfigurationQueryService = mockk(relaxed = true),
     ): Harness {
         val modelId = ConfigurationReference.random()
         val model = Model(
@@ -422,7 +458,8 @@ class SubAssistantRunCoordinatorTest {
             commandCoordinator = commandCoordinator,
             toolSetFactory = toolSetFactory,
             settingsStore = settingsStore,
-            memoryRepository = mockk<MemoryRepository>(relaxed = true),
+            memoryService = mockk<MemoryService>(relaxed = true),
+            configurations = configurations,
             turnPipelineFactory = mockk<TurnPipelineFactory>(relaxed = true),
             turnContextFactory = mockk(relaxed = true),
             artifactStore = artifactStore,

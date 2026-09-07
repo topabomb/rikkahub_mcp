@@ -9,6 +9,11 @@ import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -164,6 +169,49 @@ internal class EnterpriseSessionController(
         val current = ensureLoaded()
         publish(current.manifest.copy(selectedScope = ConfigurationScope.Personal), current.configuration)
     }
+
+    suspend fun captureRealmAccess(scope: ConfigurationScope): RealmAccess = when (scope) {
+        ConfigurationScope.Personal -> RealmAccess.Personal
+        is ConfigurationScope.Enterprise -> mutex.withLock {
+            val current = ensureLoaded()
+            val session = current.manifest.session ?: fail("enterprise_session_required")
+            val access = RealmAccess.Enterprise(scope, session.id)
+            if (!allowsDataAccess(current.manifest, access)) fail("enterprise_data_access_unavailable")
+            access
+        }
+    }
+
+    /** Session changes wait for the complete operation, including its durable commit or rollback. */
+    suspend fun <T> withRealmAccess(access: RealmAccess, operation: suspend () -> T): T = when (access) {
+        RealmAccess.Personal -> operation()
+        is RealmAccess.Enterprise -> mutex.withLock {
+            if (!allowsDataAccess(ensureLoaded().manifest, access)) fail("enterprise_data_access_unavailable")
+            operation()
+        }
+    }
+
+    /** A captured subscription expires even when no command changes the manifest. New sessions cannot revive it. */
+    fun observeRealmAccess(access: RealmAccess): Flow<Boolean> = state.flatMapLatest { published ->
+        flow {
+            if (access == RealmAccess.Personal) {
+                emit(true)
+            } else {
+                val manifest = (published as? EnterpriseState.Available)?.manifest
+                val allowed = manifest != null && allowsDataAccess(manifest, access as RealmAccess.Enterprise)
+                emit(allowed)
+                if (allowed) {
+                    delay((requireNotNull(manifest?.session).expiresAtMillis - nowMillis()).coerceAtLeast(1))
+                    emit(false)
+                }
+            }
+        }
+    }.distinctUntilChanged()
+
+    private fun allowsDataAccess(manifest: EnterpriseManifest, access: RealmAccess.Enterprise): Boolean =
+        manifest.session?.let { session ->
+            session.id == access.sessionId && session.identity.scope == access.scope && session.expiresAtMillis > nowMillis() &&
+                manifest.phase in setOf(EnterpriseSessionPhase.READY, EnterpriseSessionPhase.OFFLINE, EnterpriseSessionPhase.CONFIGURATION_PENDING)
+        } == true
 
     /** Lock order is enterprise session, then user configuration; policy cannot change during a scoped write. */
     suspend fun <T> withAppliedConfiguration(

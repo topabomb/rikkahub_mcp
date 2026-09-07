@@ -20,9 +20,9 @@ import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.core.ModelRequestMessage
 import me.rerere.ai.ui.UIMessageChoice
 import net.weero.measix.pilot.data.ai.attachments.AttachmentResolver
+import net.weero.measix.pilot.data.ai.tools.ToolOutputStore
 import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.model.Assistant
-import net.weero.measix.pilot.data.repository.MemoryRepository
 import net.weero.measix.pilot.test.testPromptInputs
 import net.weero.measix.pilot.test.turnRunInputsFixture
 import org.junit.Assert.assertEquals
@@ -31,32 +31,10 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * Memory owner 策略：START 冻结的 memory owner id 由 [resolveMemoryOwnerId] 唯一决定，
- * 且 Memory 内容不进入 System prompt——START 只冻结 memory 工具 definition，
+ * Memory 内容不进入 System prompt——START 只冻结 memory 工具 definition，
  * 无 memory 能力时连工具 schema 也不注入。
  */
 class MemoryOwnerPolicyTest {
-    @Test
-    fun `memory owner policy derives START owner and rejects live namespace drift`() {
-        val assistant = Assistant(enableMemory = false, useGlobalMemory = false)
-
-        assertEquals(null, resolveMemoryOwnerId(assistant))
-        assertEquals(assistant.id.toString(), resolveMemoryOwnerId(assistant.copy(enableMemory = true)))
-        assertEquals(
-            MemoryRepository.GLOBAL_MEMORY_ID,
-            resolveMemoryOwnerId(assistant.copy(enableMemory = true, useGlobalMemory = true)),
-        )
-
-        val targetStartDisabled = assistant
-        assertEquals(null, resolveMemoryOwnerId(targetStartDisabled))
-        val targetStartLocal = assistant.copy(enableMemory = true)
-        val capturedOwner = resolveMemoryOwnerId(targetStartLocal)
-        assertEquals(targetStartLocal.id.toString(), capturedOwner)
-        assertEquals(null, resolveMemoryOwnerId(targetStartLocal.copy(enableMemory = false)))
-        // The write-time guard compares the captured owner with a fresh policy result.
-        assertFalse(resolveMemoryOwnerId(targetStartLocal.copy(useGlobalMemory = true)) == capturedOwner)
-    }
-
     @Test
     fun `START frozen memory tool never injects Memory system text`() = runTest {
         val model = Model(modelId = "test-model", displayName = "Test Model")
@@ -79,7 +57,7 @@ class MemoryOwnerPolicyTest {
             providerManager = providerManager,
             json = Json,
             attachmentResolver = mockk<AttachmentResolver>(relaxed = true),
-            toolOutputStore = io.mockk.mockk(relaxed = true),
+            toolOutputStore = ToolOutputStore(mockk()),
         )
 
         loop.run(

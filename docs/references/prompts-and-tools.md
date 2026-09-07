@@ -118,8 +118,9 @@ memory scope 为 local / global / disabled，子助手 mode 为 management_only 
 ### 3.1 记忆：Disclosure Snapshot 的 memory section
 
 Memory 内容的唯一披露路径是每次新 `START` 前由
-`ConversationDisclosureSnapshotService.captureCandidate()` 从固定 effective-settings 快照与一次
-`ORDER BY id ASC` 的有序 Memory 查询渲染的 canonical Snapshot；内容变化才随新 Assistant owner
+`MemoryService` 按会话原域、Session 与助手权限读取一次 `ORDER BY id ASC` 的有序 Memory，
+再交给纯渲染入口 `ConversationDisclosureSnapshotService.captureCandidate()`，与固定配置快照生成
+canonical Snapshot；内容变化才随新 Assistant owner
 追加 entry（见 [请求上下文](request-context.md)）。memory section
 形状（`enabled` / `scope` / `header` / `rows`）由该 service 的 canonical renderer 唯一定义；关闭时仍输出
 固定形状，不写日期、Locale 或 revision，相同业务数据必须逐字相同。

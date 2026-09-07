@@ -73,6 +73,8 @@ class AssistantManageToolTest {
             json = json,
             subAssistantRunCoordinator = mockk(relaxed = true),
             toolSetFactory = mockk(relaxed = true),
+            memoryService = mockk(relaxed = true),
+            configurations = mockk(relaxed = true),
         )
     }
 
@@ -91,7 +93,7 @@ class AssistantManageToolTest {
     )
 
     private fun manageTool(factory: AssistantToolFactory, caller: Assistant): Tool =
-        factory.buildTools(caller, Uuid.random()).single { it.name == "assistant_manage" }
+        factory.buildTools(caller, Uuid.random(), net.weero.measix.pilot.data.enterprise.RealmAccess.Personal).single { it.name == "assistant_manage" }
 
     private fun parseResult(parts: List<UIMessagePart>): JsonObject =
         json.parseToJsonElement((parts.first() as UIMessagePart.Text).text).jsonObject
@@ -155,7 +157,7 @@ class AssistantManageToolTest {
         val settingsStore = mockk<SettingsStore>()
         val service = mockk<AssistantManagementService>()
         val factory = AssistantToolFactory(
-            settingsStore, service, json, mockk(), mockk(),
+            settingsStore, service, json, mockk(), mockk(), mockk(), mockk(),
         )
         val tool = manageTool(factory, caller())
         val invalid = listOf(
@@ -229,7 +231,7 @@ class AssistantManageToolTest {
         )
         val service = mockk<AssistantManagementService>()
         coEvery { service.deleteAssistant(any(), any()) } returns Result.failure(cancellation)
-        val tool = manageTool(AssistantToolFactory(settingsStore, service, json, mockk(), mockk()), caller())
+        val tool = manageTool(AssistantToolFactory(settingsStore, service, json, mockk(), mockk(), mockk(), mockk()), caller())
         try {
             tool.execute(buildJsonObject {
                 put("action", "DELETE")

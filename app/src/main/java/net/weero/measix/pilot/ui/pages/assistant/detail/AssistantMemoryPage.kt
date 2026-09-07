@@ -1,4 +1,4 @@
-﻿package net.weero.measix.pilot.ui.pages.assistant.detail
+package net.weero.measix.pilot.ui.pages.assistant.detail
 
 import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.PencilEdit01
@@ -44,7 +44,8 @@ import androidx.compose.ui.util.fastForEach
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import net.weero.measix.pilot.R
 import net.weero.measix.pilot.data.model.Assistant
-import net.weero.measix.pilot.data.model.AssistantMemory
+import net.weero.measix.pilot.service.MemoryRecord
+import net.weero.measix.pilot.service.MemoryView
 import net.weero.measix.pilot.ui.components.nav.BackButton
 import net.weero.measix.pilot.ui.components.ui.CardGroup
 import net.weero.measix.pilot.ui.components.ui.ConfirmDialog
@@ -62,6 +63,11 @@ fun AssistantMemoryPage(id: String) {
         }
     )
     AssistantLockedChangeEffect(vm)
+    val toaster = net.weero.measix.pilot.ui.context.LocalToaster.current
+    val memoryFailureMessage = stringResource(R.string.memory_operation_failed)
+    androidx.compose.runtime.LaunchedEffect(vm, memoryFailureMessage) {
+        vm.memoryFailures.collect { toaster.show(memoryFailureMessage, type = com.dokar.sonner.ToastType.Error) }
+    }
     val assistant by vm.assistant.collectAsStateWithLifecycle()
     val memories by vm.memories.collectAsStateWithLifecycle()
     val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
@@ -98,20 +104,20 @@ fun AssistantMemoryPage(id: String) {
 private fun AssistantMemoryContent(
     innerPadding: PaddingValues,
     assistant: Assistant,
-    memories: List<AssistantMemory>,
+    memories: MemoryView,
     onUpdateAssistant: (Assistant) -> Unit,
-    onAddMemory: (AssistantMemory) -> Unit,
-    onUpdateMemory: (AssistantMemory) -> Unit,
-    onDeleteMemory: (AssistantMemory) -> Unit,
+    onAddMemory: (MemoryRecord) -> Unit,
+    onUpdateMemory: (MemoryRecord) -> Unit,
+    onDeleteMemory: (MemoryRecord) -> Unit,
 ) {
-    val memoryDialogState = useEditState<AssistantMemory> {
+    val memoryDialogState = useEditState<MemoryRecord> {
         if (it.id == 0) {
             onAddMemory(it)
         } else {
             onUpdateMemory(it)
         }
     }
-    var pendingDeleteMemory by remember { mutableStateOf<AssistantMemory?>(null) }
+    var pendingDeleteMemory by remember { mutableStateOf<MemoryRecord?>(null) }
 
     // 记忆对话框
     memoryDialogState.EditStateContent { memory, update ->
@@ -264,8 +270,9 @@ private fun AssistantMemoryContent(
 
             IconButton(
                 onClick = {
-                    memoryDialogState.open(AssistantMemory(0, ""))
+                    memories.access?.let { memoryDialogState.open(MemoryRecord(it, 0, "")) }
                 },
+                enabled = memories.access != null,
                 modifier = Modifier.align(Alignment.CenterEnd)
             ) {
                 Icon(
@@ -275,7 +282,10 @@ private fun AssistantMemoryContent(
             }
         }
 
-        memories.fastForEach { memory ->
+        if (memories.unavailableReason != null) {
+            Text(stringResource(R.string.memory_access_unavailable), color = MaterialTheme.colorScheme.error)
+        }
+        memories.records.fastForEach { memory ->
             key(memory.id) {
                 MemoryItem(
                     memory = memory,
@@ -312,9 +322,9 @@ private fun AssistantMemoryContent(
 
 @Composable
 private fun MemoryItem(
-    memory: AssistantMemory,
-    onEditMemory: (AssistantMemory) -> Unit,
-    onDeleteMemory: (AssistantMemory) -> Unit
+    memory: MemoryRecord,
+    onEditMemory: (MemoryRecord) -> Unit,
+    onDeleteMemory: (MemoryRecord) -> Unit
 ) {
     Card(
         modifier = Modifier.fillMaxWidth(),

@@ -9,7 +9,7 @@
 | `ConversationEntity` | `(assistant_id, parent_conversation_id, is_pinned, update_at)` 支持助手列表与最近会话；`(assistant_id, parent_conversation_id, folder_id, is_pinned, update_at)` 支持未归档分页；`(folder_id, parent_conversation_id, is_pinned, update_at)` 支持文件夹分页；`(parent_conversation_id, is_pinned, update_at)` 支持置顶列表、子会话查找与外键级联 |
 | `message_node` | `(conversation_id, node_index)` 按会话读取有序消息节点，同时覆盖会话外键 |
 | `conversation_model_context` | 主键 `(owner_node_id, owner_message_id)` 覆盖按 owner 点查与 insert-once；`(anchor_node_id)` 覆盖按因果 USER node 收口。按会话装载走 `owner_node_id JOIN message_node` 并按 `message_node.conversation_id` 过滤，由 `message_node(conversation_id, node_index)` 覆盖，不在 context 行重复保存 `conversation_id` |
-| `MemoryEntity` | `(assistant_id)` 支持按助手读取记忆 |
+| `MemoryEntity` | `(assistant_id)` 缩小 owner 范围，列表/修改同时约束 `scope`，列表按 `id ASC` |
 | `GenMediaEntity` | `(path)` 支持文件名查重；`(create_at)` 支持图库时间排序与清理候选 |
 | `artifact` | 保留 `relative_path` 唯一索引；`(folder, created_at)` 支持分目录列表与清理；`(state, created_at)` 支持生命周期候选。目录查询的状态条件可作为剩余过滤，不破坏全状态清理的时间顺序 |
 | `artifact_reference` | 保留 `(artifact_id, node_id, reference_type)` 唯一索引与 `(node_id)`；唯一索引的左前缀同时覆盖附件引用检查与外键，不另存同列普通索引 |

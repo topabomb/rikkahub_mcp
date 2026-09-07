@@ -1597,4 +1597,6 @@
   <string name="mcp_refresh_continuing">MCP 서버 %1$d개를 백그라운드에서 계속 새로고침하고 있습니다</string>
   <string name="mcp_enabled_tools_count">%1$d/%2$d개 도구</string>
   <string name="chat_message_tool_output_archived_summary">보관된 도구 출력: %1$d줄, %2$d자</string>
+  <string name="memory_access_unavailable">현재 공간 또는 세션에서 메모리에 접근할 수 없습니다. 접근이 복구되면 이 페이지를 다시 여세요.</string>
+  <string name="memory_operation_failed">메모리를 변경하지 못했습니다. 이 페이지를 다시 열고 시도하세요.</string>
 </resources>

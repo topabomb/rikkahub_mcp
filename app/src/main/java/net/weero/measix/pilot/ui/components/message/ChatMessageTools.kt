@@ -118,7 +118,8 @@ fun ChainOfThoughtScope.ChatMessageToolStep(
             )
         } ?: ToolOutputProjection.Inline(displayTool.output)
     }
-    val context = remember(displayTool, resolvedPhase, parsedArguments, outputProjection) {
+    val toolConversationId = net.weero.measix.pilot.ui.components.message.tools.LocalToolConversationId.current
+    val context = remember(displayTool, resolvedPhase, parsedArguments, outputProjection, toolConversationId, locator) {
         ToolUIContext(
             tool = displayTool,
             arguments = parsedArguments.getOrElse { JsonObject(emptyMap()) },
@@ -134,6 +135,8 @@ fun ChainOfThoughtScope.ChatMessageToolStep(
             },
             phase = resolvedPhase,
             outputProjection = outputProjection,
+            conversationId = toolConversationId,
+            locator = locator,
         )
     }
 

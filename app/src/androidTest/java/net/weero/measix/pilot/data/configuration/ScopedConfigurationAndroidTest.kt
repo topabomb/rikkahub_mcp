@@ -103,7 +103,7 @@ class ScopedConfigurationAndroidTest {
         val sessions = EnterpriseSessionController(EnterpriseAppliedStore(File(root, "enterprise")))
         val gate = ApplicationRecoveryGate()
         val commands = ConfigurationApplicationService(settings, sessions, gate)
-        val queries = ConfigurationQueryService(settings, sessions)
+        val queries = ConfigurationQueryService(settings, sessions, gate)
         suspend fun document(): UserSettingsDocument = JsonInstant.decodeFromString(preferences.data.first()[SettingsStore.USER_SETTINGS]!!)
     }
 }

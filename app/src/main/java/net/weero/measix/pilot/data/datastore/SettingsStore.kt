@@ -287,6 +287,15 @@ class SettingsStore internal constructor(
         ConfigurationResolver.resolve(document, requestedScope ?: selectedScope, enterprise)
     }.distinctUntilChanged()
 
+    /** Lock order is session, user configuration, then the caller's durable data transaction. */
+    internal suspend fun <T> withResolvedConfiguration(
+        scope: ConfigurationScope,
+        enterpriseState: EnterpriseState,
+        operation: suspend (ResolvedConfiguration) -> T,
+    ): T = updateMutex.withLock {
+        operation(ConfigurationResolver.resolve(userDocuments.first(), scope, enterpriseState))
+    }
+
     /** Called while the enterprise session owner holds its authorization boundary. */
     internal suspend fun updateAssistantUsage(
         scope: ConfigurationScope.Enterprise,

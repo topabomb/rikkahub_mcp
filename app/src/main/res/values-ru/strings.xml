@@ -1597,4 +1597,6 @@
   <string name="mcp_refresh_continuing">Серверы MCP (%1$d) продолжают обновляться в фоновом режиме</string>
   <string name="mcp_enabled_tools_count">%1$d/%2$d инструментов</string>
   <string name="chat_message_tool_output_archived_summary">Архивированный вывод инструмента: %1$d строк, %2$d символов</string>
+  <string name="memory_access_unavailable">Память недоступна в этом пространстве или сеансе. После восстановления доступа откройте страницу заново.</string>
+  <string name="memory_operation_failed">Не удалось изменить память. Откройте страницу заново и повторите попытку.</string>
 </resources>

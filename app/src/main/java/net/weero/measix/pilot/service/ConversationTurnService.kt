@@ -48,7 +48,6 @@ import net.weero.measix.pilot.data.event.AppEvent
 import net.weero.measix.pilot.data.event.AppEventBus
 import net.weero.measix.pilot.service.turn.TurnRunner
 import net.weero.measix.pilot.service.turn.TurnRunInputs
-import net.weero.measix.pilot.service.turn.resolveMemoryOwnerId
 import net.weero.measix.pilot.data.db.entity.ToolExecutionStatus
 import net.weero.measix.pilot.data.ai.tools.shouldUseExternalWebSearch
 import net.weero.measix.pilot.data.ai.subassistant.SubAssistantCallState
@@ -76,7 +75,7 @@ import net.weero.measix.pilot.data.model.Assistant
 import net.weero.measix.pilot.data.model.AssistantAffectScope
 import net.weero.measix.pilot.data.model.replaceRegexes
 import net.weero.measix.pilot.data.model.toMessageNode
-import net.weero.measix.pilot.data.repository.MemoryRepository
+import net.weero.measix.pilot.service.MemoryService
 import net.weero.measix.pilot.data.repository.WorkspaceRepository
 import java.time.Instant
 import java.util.Locale
@@ -286,12 +285,13 @@ data class SendMessageReceipt(
     val userMessageId: Uuid,
 )
 
-class ConversationTurnService(
+class ConversationTurnService internal constructor(
     private val context: Application,
     private val appScope: AppScope,
     private val appEventBus: AppEventBus,
     private val settingsStore: SettingsStore,
-    private val memoryRepository: MemoryRepository,
+    private val memoryService: MemoryService,
+    private val configurations: ConfigurationQueryService,
     private val turnRunner: TurnRunner,
     private val turnPipelineFactory: TurnPipelineFactory,
     private val mcpManager: McpRuntimeCoordinator,
@@ -728,15 +728,17 @@ class ConversationTurnService(
                 TurnEntry.START -> {
                     val settings = (launch as TurnLaunch.Start).settings
                     val assistant = settings.getAssistantById(snapshot.header.assistantId)
-                        ?: settings.getCurrentAssistant()
+                        ?: error("conversation_assistant_unavailable")
                     val model = settings.getChatModel(assistant)
                         ?: error("No chat model is configured for assistant ${assistant.id}")
                     val providerSetting = model.findProvider(settings.providers) ?: error("Provider not found")
                     val mediaCapabilities = turnRunner.resolveRequestMediaCapabilities(settings, model)
+                    val realmAccess = configurations.captureAccess(snapshot.header.scope)
+                    val memoryAccess = memoryService.captureExecution(realmAccess, assistant)
                     startDisclosureCandidate = ConversationDisclosureSnapshotService.captureCandidate(
                         settings = settings,
                         assistant = assistant,
-                        memoryRepository = memoryRepository,
+                        memories = memoryAccess?.let { memoryService.read(it) }.orEmpty(),
                     )
                     val mcpCapabilities = mcpManager.prepareTurnCapabilities(assistant)
                     val unavailableMcp = mcpCapabilities.serverOutcomes.filter {
@@ -785,6 +787,7 @@ class ConversationTurnService(
                         additionalToolsBeforeMcp = assistantToolFactory.buildTools(
                             callerAssistant = assistant,
                             masterConversationId = conversationId,
+                            realmAccess = realmAccess,
                             ttsPlaybackContext = turnTtsContext,
                         ),
                         onInvalidMcpServerNames = { invalidNames ->
@@ -799,19 +802,14 @@ class ConversationTurnService(
                             )
                         },
                     )
-                    val memoryOwnerId = resolveMemoryOwnerId(assistant)
                     val tools = buildList {
-                        if (memoryOwnerId != null) {
+                        if (memoryAccess != null) {
                             addAll(
                                 buildMemoryTools(
-                                    onCreation = { content -> memoryRepository.addMemory(memoryOwnerId, content) },
-                                    onUpdate = { id, content -> memoryRepository.updateContent(id, content, memoryOwnerId) },
-                                    onDelete = { id -> memoryRepository.deleteMemory(id, memoryOwnerId) },
-                                    isStillAllowed = {
-                                        resolveMemoryOwnerId(
-                                            settingsStore.effectiveSettings.value.settings.getAssistantById(assistant.id),
-                                        ) == memoryOwnerId
-                                    },
+                                    onCreation = { content -> memoryService.add(memoryAccess, content) },
+                                    onUpdate = { id, content -> memoryService.update(memoryAccess, id, content) },
+                                    onDelete = { id -> memoryService.delete(memoryAccess, id) },
+                                    isStillAllowed = { memoryService.isAllowed(memoryAccess) },
                                 ),
                             )
                         }

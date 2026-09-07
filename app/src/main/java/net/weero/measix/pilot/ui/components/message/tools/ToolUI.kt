@@ -61,7 +61,12 @@ data class ToolUIContext(
     val phase: ToolLivePhase,
     /** Inline 保持现有 renderer；Archived 只展示 durable 裁剪摘要。 */
     val outputProjection: ToolOutputProjection = ToolOutputProjection.Inline(tool.output),
+    val conversationId: kotlin.uuid.Uuid? = null,
+    val locator: me.rerere.ai.core.ToolCallLocator? = null,
 )
+
+/** Standalone message previews have no authority to mutate a conversation's tool result. */
+val LocalToolConversationId = androidx.compose.runtime.staticCompositionLocalOf<kotlin.uuid.Uuid?> { null }
 
 /** Tool Result 的展示投影：完整内联，或已归档为 durable 摘要。 */
 sealed interface ToolOutputProjection {

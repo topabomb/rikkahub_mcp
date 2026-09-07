@@ -68,7 +68,7 @@ class ConfigurationScopePersistenceTest {
                 scopes.forEachIndexed { index, scope ->
                     val id = index + 1
                     assertEquals(scope, db.conversationDao().getConversationById("conversation-$id")?.scope)
-                    assertEquals(scope, db.memoryDao().getMemoryById(id)?.scope)
+                    assertEquals(scope, db.memoryDao().find(scope, id)?.scope)
                     assertEquals(scope, db.artifactDao().getById(id.toLong())?.scope)
                     assertEquals(scope, db.genMediaDao().getById(id)?.scope)
                     assertEquals(scope, db.folderDao().getFolderById("folder-$id")?.scope)

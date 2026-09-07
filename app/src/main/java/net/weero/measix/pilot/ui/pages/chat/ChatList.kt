@@ -369,6 +369,7 @@ private fun ChatListNormal(
         val previewActions = remember(backgroundHost.action) { listOf(backgroundHost.action) }
 
         CompositionLocalProvider(
+            net.weero.measix.pilot.ui.components.message.tools.LocalToolConversationId provides snapshot.header.id,
             LocalConversationImages provides conversationAlbum,
             LocalAttachmentPreview provides attachmentPreviewProvider,
             LocalImagePreviewActions provides previewActions,

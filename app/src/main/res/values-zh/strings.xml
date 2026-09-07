@@ -1597,4 +1597,6 @@
   <string name="mcp_refresh_continuing">仍有 %1$d 个 MCP 服务器在后台刷新</string>
   <string name="mcp_enabled_tools_count">%1$d/%2$d 个工具</string>
   <string name="chat_message_tool_output_archived_summary">已归档工具输出：%1$d 行，%2$d 个字符</string>
+  <string name="memory_access_unavailable">当前空间或登录状态下无法访问记忆。恢复访问后请重新打开此页面。</string>
+  <string name="memory_operation_failed">无法修改记忆，请重新打开此页面后再试。</string>
 </resources>

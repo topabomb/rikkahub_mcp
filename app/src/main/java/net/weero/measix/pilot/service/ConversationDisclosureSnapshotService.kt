@@ -18,7 +18,6 @@ import net.weero.measix.pilot.data.ai.tools.local.LocalToolOption
 import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.model.Assistant
 import net.weero.measix.pilot.data.model.AssistantMemory
-import net.weero.measix.pilot.data.repository.MemoryRepository
 import me.rerere.common.configuration.ConfigurationReference
 
 /** canonical envelope 非法：装载或提交必须失败，不得静默把模型基线降级为"没有 context"。 */
@@ -111,26 +110,17 @@ object ConversationDisclosureSnapshotService {
 
     /**
      * 一次 `START` 边界的捕获入口：从**一份已复制的 effective Settings** 与**一次已排序的
-     * Memory 读取**渲染 canonical candidate。Memory 的披露 namespace 沿用 Assistant 自身的
-     * scope 策略（global / local），与工具写权限的 owner 解析同源但不共享 live 重读。
+     * Memory 读取**渲染 canonical candidate。调用方通过 MemoryService 使用原会话的
+     * realm/session 与助手 memory 模式完成授权读取，再将不可变结果交给本纯渲染入口。
      *
      * Master 与 Child 都只经由此入口捕获；调用方拿到结果后交给 `StartTurn` 命令，本服务
      * 不接触 durable 写协议。
      */
-    suspend fun captureCandidate(
+    fun captureCandidate(
         settings: Settings,
         assistant: Assistant,
-        memoryRepository: MemoryRepository,
+        memories: List<AssistantMemory>,
     ): String {
-        val memories = if (assistant.enableMemory) {
-            if (assistant.useGlobalMemory) {
-                memoryRepository.getGlobalMemories()
-            } else {
-                memoryRepository.getMemoriesOfAssistant(assistant.id.toString())
-            }
-        } else {
-            emptyList()
-        }
         return render(Candidate(assistant = assistant, allAssistants = settings.assistants, memories = memories))
     }
 

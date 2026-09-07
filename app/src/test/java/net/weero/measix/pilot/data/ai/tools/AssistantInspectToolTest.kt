@@ -56,8 +56,19 @@ class AssistantInspectToolTest {
         every { settingsStore.effectiveSettings } returns effectiveSettings
 
         val managementService = mockk<AssistantManagementService>()
+        val memoryService = mockk<net.weero.measix.pilot.service.MemoryService>()
+        val configurations = mockk<net.weero.measix.pilot.service.ConfigurationQueryService>()
+        coEvery { configurations.read(any()) } answers {
+            net.weero.measix.pilot.data.configuration.ConfigurationResolver.resolve(
+                net.weero.measix.pilot.data.datastore.UserSettingsDocument.empty().copy(
+                    configuration = net.weero.measix.pilot.data.datastore.UserConfiguration(assistants = effectiveSettings.value.settings.assistants),
+                ),
+                net.weero.measix.pilot.data.configuration.ConfigurationScope.Personal,
+                net.weero.measix.pilot.data.enterprise.EnterpriseState.Loading,
+            )
+        }
         if (memoryResult != null) {
-            coEvery { managementService.listAssistantMemory(any()) } returns memoryResult
+            coEvery { memoryService.inspect(any(), any(), any()) } answers { memoryResult.getOrThrow() }
         }
 
         return AssistantToolFactory(
@@ -66,6 +77,8 @@ class AssistantInspectToolTest {
             json = json,
             subAssistantRunCoordinator = mockk(relaxed = true),
             toolSetFactory = toolSetFactory,
+            memoryService = memoryService,
+            configurations = configurations,
         )
     }
 
@@ -94,7 +107,7 @@ class AssistantInspectToolTest {
     )
 
     private fun inspectTool(factory: AssistantToolFactory, caller: Assistant): Tool {
-        val tools = factory.buildTools(caller, Uuid.random())
+        val tools = factory.buildTools(caller, Uuid.random(), net.weero.measix.pilot.data.enterprise.RealmAccess.Personal)
         return tools.single { it.name == "assistant_inspect" }
     }
 
@@ -342,6 +355,7 @@ class AssistantInspectToolTest {
         val tool = factory.buildTools(
             caller.copy(localTools = listOf(LocalToolOption.AssistantManagement)),
             Uuid.random(),
+            net.weero.measix.pilot.data.enterprise.RealmAccess.Personal,
         ).single { it.name == "assistant_inspect" }
         val result = failureResult(tool, args())
         assertEquals("tool_not_permitted", result["reason"]!!.jsonPrimitive.content)

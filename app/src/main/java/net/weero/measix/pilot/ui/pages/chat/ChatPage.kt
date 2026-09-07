@@ -98,7 +98,7 @@ import net.weero.measix.pilot.data.datastore.getChatModel
 import net.weero.measix.pilot.data.datastore.getConversationAssistant
 import net.weero.measix.pilot.service.ArtifactUseCase
 import net.weero.measix.pilot.data.model.Assistant
-import net.weero.measix.pilot.data.repository.MemoryRepository
+import net.weero.measix.pilot.service.MemoryService
 import net.weero.measix.pilot.service.workspace.WorkspaceQueryService
 import net.weero.measix.pilot.service.ChatError
 import net.weero.measix.pilot.service.ConversationReadState
@@ -523,17 +523,9 @@ private fun ChatPageContent(
                 ?.let { it to workspace.name }
         }.toMap()
     }
-    val memoryRepository: MemoryRepository = koinInject()
-    val memoryCountFlow = remember(assistant.id, assistant.enableMemory, assistant.useGlobalMemory) {
-        if (assistant.enableMemory) {
-            if (assistant.useGlobalMemory) {
-                memoryRepository.getGlobalMemoriesFlow()
-            } else {
-                memoryRepository.getMemoriesOfAssistantFlow(assistant.id.toString())
-            }.map { it.size }
-        } else {
-            emptyFlow()
-        }
+    val memoryService: MemoryService = koinInject()
+    val memoryCountFlow = remember(snapshot.header.scope, assistant.id) {
+        memoryService.observe(snapshot.header.scope, assistant.id, enabledOnly = true).map { it.records.size }
     }
     val memoryCount by memoryCountFlow.collectAsStateWithLifecycle(initialValue = 0)
     val imageSelectionResolver: ImageGenerationSelectionResolver = koinInject()

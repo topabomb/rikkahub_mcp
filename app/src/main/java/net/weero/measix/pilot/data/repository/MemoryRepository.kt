@@ -1,84 +1,62 @@
 package net.weero.measix.pilot.data.repository
 
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.withContext
+import net.weero.measix.pilot.data.db.DatabaseTransactionRunner
 import net.weero.measix.pilot.data.db.dao.MemoryDAO
 import net.weero.measix.pilot.data.db.entity.MemoryEntity
 import net.weero.measix.pilot.data.model.AssistantMemory
+import net.weero.measix.pilot.data.model.MemoryAddress
+import net.weero.measix.pilot.data.model.MemoryOwner
+import net.weero.measix.pilot.data.configuration.ConfigurationScope
+import net.weero.measix.pilot.data.model.storageId
 
-class MemoryRepository(private val memoryDAO: MemoryDAO) {
-    companion object {
-        const val GLOBAL_MEMORY_ID = "__global__"
-    }
-
-    fun getMemoriesOfAssistantFlow(assistantId: String): Flow<List<AssistantMemory>> =
-        memoryDAO.getMemoriesOfAssistantFlow(assistantId)
-            .map { entities ->
-                entities.map { AssistantMemory(it.id, it.content) }
-            }
-
-    suspend fun getMemoriesOfAssistant(assistantId: String): List<AssistantMemory> {
-        return memoryDAO.getMemoriesOfAssistant(assistantId)
-            .map { AssistantMemory(it.id, it.content) }
-    }
-
-    fun getGlobalMemoriesFlow(): Flow<List<AssistantMemory>> =
-        memoryDAO.getMemoriesOfAssistantFlow(GLOBAL_MEMORY_ID)
-            .map { entities ->
-                entities.map { AssistantMemory(it.id, it.content) }
-            }
-
-    suspend fun getGlobalMemories(): List<AssistantMemory> {
-        return memoryDAO.getMemoriesOfAssistant(GLOBAL_MEMORY_ID)
-            .map { AssistantMemory(it.id, it.content) }
-    }
-
-    suspend fun deleteMemoriesOfAssistant(assistantId: String) {
-        memoryDAO.deleteMemoriesOfAssistant(assistantId)
-    }
-
-    suspend fun updateContent(id: Int, content: String, assistantId: String): AssistantMemory {
-        val affected = memoryDAO.updateMemoryContent(id, content, assistantId)
-        if (affected == 0) {
-            // owner + id 约束不满足：记录不存在或不属于该助手
-            error("Memory record #$id does not belong to assistant $assistantId or does not exist")
+class MemoryRepository(private val dao: MemoryDAO, private val transactions: DatabaseTransactionRunner) {
+    internal suspend fun findToolResult(scope: ConfigurationScope, id: Int): Pair<MemoryAddress, AssistantMemory>? =
+        dao.find(scope, id)?.let { row ->
+            MemoryAddress(row.scope, MemoryOwner.fromStorageId(row.assistantId)) to AssistantMemory(row.id, row.content)
         }
-        return AssistantMemory(
-            id = id,
-            content = content,
-        )
-    }
 
-    suspend fun addMemory(assistantId: String, content: String): AssistantMemory {
-        val memory = AssistantMemory(
-            id = 0,
-            content = content,
-        )
-        val newMemory = memory.copy(
-            id = memoryDAO.insertMemory(
-                MemoryEntity(
-                    assistantId = assistantId,
-                    content = memory.content
-                )
-            ).toInt()
-        )
-        return newMemory
-    }
+    fun observe(address: MemoryAddress): Flow<List<AssistantMemory>> =
+        dao.observe(address.scope, address.owner.storageId).map { rows -> rows.map { AssistantMemory(it.id, it.content) } }
 
-    suspend fun deleteMemory(id: Int, assistantId: String) {
-        val affected = memoryDAO.deleteMemory(id, assistantId)
-        if (affected == 0) {
-            // owner + id 约束不满足：记录不存在或不属于该助手
-            error("Memory record #$id does not belong to assistant $assistantId or does not exist")
+    suspend fun read(address: MemoryAddress): List<AssistantMemory> =
+        dao.read(address.scope, address.owner.storageId).map { AssistantMemory(it.id, it.content) }
+
+    suspend fun add(address: MemoryAddress, content: String): AssistantMemory {
+        var id = 0
+        commit {
+            id = dao.insertMemory(MemoryEntity(assistantId = address.owner.storageId, content = content, scope = address.scope)).toInt()
         }
+        return AssistantMemory(id, content)
     }
 
-    /**
-     * UI 专用：按 ID 删除记忆，先查询 owner 再走约束删除。
-     * LLM 工具必须使用 [deleteMemory] 携带 assistantId，不能使用此方法。
-     */
-    suspend fun deleteMemoryById(id: Int) {
-        val memory = memoryDAO.getMemoryById(id) ?: return
-        memoryDAO.deleteMemory(id, memory.assistantId)
+    suspend fun update(address: MemoryAddress, id: Int, content: String): AssistantMemory {
+        commit { check(dao.update(address.scope, address.owner.storageId, id, content) == 1) { "memory_not_found_in_namespace" } }
+        return AssistantMemory(id, content)
+    }
+
+    suspend fun delete(address: MemoryAddress, id: Int) = commit {
+        check(dao.delete(address.scope, address.owner.storageId, id) == 1) { "memory_not_found_in_namespace" }
+    }
+
+    suspend fun deleteAll(address: MemoryAddress) = commit { dao.deleteAll(address.scope, address.owner.storageId) }
+
+    /** Keep the caller's authorization locks until Room has finished committing or rolling back. */
+    private suspend fun commit(write: suspend () -> Unit) {
+        val caller = currentCoroutineContext()
+        caller.ensureActive()
+        withContext(NonCancellable) {
+            transactions.run {
+                caller.ensureActive()
+                write()
+                caller.ensureActive()
+            }
+        }
+        caller.ensureActive()
     }
 }

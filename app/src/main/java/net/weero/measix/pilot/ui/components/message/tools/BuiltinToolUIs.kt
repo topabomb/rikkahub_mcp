@@ -65,7 +65,9 @@ import me.rerere.hugeicons.stroke.VolumeHigh
 import net.weero.measix.pilot.R
 import net.weero.measix.pilot.data.event.AppEvent
 import net.weero.measix.pilot.data.event.AppEventBus
-import net.weero.measix.pilot.data.repository.MemoryRepository
+import net.weero.measix.pilot.service.MemoryService
+import net.weero.measix.pilot.service.MemoryToolRecord
+import androidx.compose.runtime.getValue
 import net.weero.measix.pilot.ui.components.richtext.MarkdownBlock
 import net.weero.measix.pilot.ui.components.ui.Favicon
 import net.weero.measix.pilot.ui.components.ui.FaviconRow
@@ -125,18 +127,32 @@ object MemoryToolUI : ToolUIRenderer {
 
     @Composable
     override fun Preview(context: ToolUIContext, onDismissRequest: () -> Unit) {
-        val memoryRepo: MemoryRepository = koinInject()
+        val memoryService: MemoryService = koinInject()
         val scope = rememberCoroutineScope()
-        val memoryId = (context.content as? JsonObject)?.get("id")?.jsonPrimitiveOrNull?.intOrNull
+        val toaster = net.weero.measix.pilot.ui.context.LocalToaster.current
+        val memoryFailureMessage = stringResource(R.string.memory_operation_failed)
+        val candidate by androidx.compose.runtime.produceState<MemoryToolRecord?>(null, context.conversationId, context.locator) {
+            val conversationId = context.conversationId
+            val locator = context.locator
+            if (conversationId != null && locator != null) {
+                value = try { memoryService.captureToolRecord(conversationId, locator) }
+                catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+                catch (_: Exception) { null }
+            }
+        }
+        val record = candidate?.takeIf { it.matches(context.conversationId, context.locator) }
         DefaultToolPreview(
             context = context,
-            headerActions = if (action(context) in listOf(ACTION_CREATE, ACTION_EDIT) && memoryId != null) {
+            headerActions = if (record != null) {
                 {
                     IconButton(
                         onClick = {
                             scope.launch {
-                                memoryRepo.deleteMemoryById(memoryId)
-                                onDismissRequest()
+                                try {
+                                    record?.let { memoryService.deleteToolRecord(it) }
+                                    onDismissRequest()
+                                } catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+                                catch (_: Exception) { toaster.show(memoryFailureMessage, type = com.dokar.sonner.ToastType.Error) }
                             }
                         }
                     ) {

@@ -277,40 +277,6 @@ class AssistantManagementService(
         }
     }
 
-    /**
-     * 读取指定 Assistant 的 Local Memory。
-     * 只有 active_memory == local 时读取 Target 的 Local namespace；
-     * global 或 disabled 均返回空 rows，既不暴露共享 Global Memory，
-     * 也不把当前不会生效的旧局部记录误报为该角色正在使用的记忆。
-     */
-    suspend fun listAssistantMemory(assistantId: ConfigurationReference): Result<MemoryListResult> {
-        val settings = settingsStore.effectiveSettings.value.settings
-        val assistant = settings.getAssistantById(assistantId)
-            ?: return Result.failure(NoSuchElementException("assistant_not_found"))
-
-        val scope = when {
-            !assistant.enableMemory -> "disabled"
-            assistant.useGlobalMemory -> "global"
-            else -> "local"
-        }
-
-        // 只有 local 模式才读取记忆；global/disabled 返回空列表
-        val memories = if (scope == "local") {
-            memoryRepository.getMemoriesOfAssistant(assistant.id.toString())
-        } else {
-            emptyList()
-        }
-
-        return Result.success(
-            MemoryListResult(
-                assistantId = assistant.id.toString(),
-                assistantName = assistant.name,
-                delegatedMemoryScope = scope,
-                memories = memories.map { MemoryItem(it.id, it.content) },
-            )
-        )
-    }
-
     private suspend fun cleanupPendingDeletion(tombstone: PendingAssistantDeletion): Boolean {
         val latestSettings = settingsStore.effectiveSettings.value.settings
         if (latestSettings.assistants.any { it.id == tombstone.assistantId }) {
@@ -332,7 +298,10 @@ class AssistantManagementService(
                     reason = "assistant_removed",
                 )
             }
-            memoryRepository.deleteMemoriesOfAssistant(tombstone.assistantId.toString())
+            memoryRepository.deleteAll(net.weero.measix.pilot.data.model.MemoryAddress(
+                net.weero.measix.pilot.data.configuration.ConfigurationScope.Personal,
+                net.weero.measix.pilot.data.model.MemoryOwner.Assistant(tombstone.assistantId),
+            ))
             conversationApplicationService.deleteOfAssistantFromPendingCleanup(tombstone.assistantId)
             artifactStore.collectGarbage(protectionWindowMillis = 0)
             null
@@ -369,16 +338,4 @@ class PendingAssistantCleanupException(assistantId: ConfigurationReference) :
 data class AssistantDeletionResult(
     val assistant: Assistant,
     val cleanupPending: Boolean,
-)
-
-data class MemoryListResult(
-    val assistantId: String,
-    val assistantName: String,
-    val delegatedMemoryScope: String,
-    val memories: List<MemoryItem>,
-)
-
-data class MemoryItem(
-    val id: Int,
-    val content: String,
 )

@@ -102,7 +102,10 @@ class AssistantManagementServiceTest {
         coVerifyOrder {
             env.coordinator.cancelRunsForAssistant(target.id)
             env.registry.cancelGenerationsForAssistant(target.id, "assistant_removed")
-            env.memory.deleteMemoriesOfAssistant(target.id.toString())
+            env.memory.deleteAll(net.weero.measix.pilot.data.model.MemoryAddress(
+                net.weero.measix.pilot.data.configuration.ConfigurationScope.Personal,
+                net.weero.measix.pilot.data.model.MemoryOwner.Assistant(target.id),
+            ))
             env.conversations.deleteOfAssistantFromPendingCleanup(target.id)
             env.artifacts.collectGarbage(protectionWindowMillis = 0)
         }

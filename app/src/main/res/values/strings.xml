@@ -1598,4 +1598,6 @@
   <string name="mcp_refresh_continuing">%1$d MCP servers are still refreshing in the background</string>
   <string name="mcp_enabled_tools_count">%1$d/%2$d tools</string>
   <string name="chat_message_tool_output_archived_summary">Archived tool output: %1$d lines, %2$d characters</string>
+  <string name="memory_access_unavailable">Memory is unavailable in this space or session. Reopen this page after access is restored.</string>
+  <string name="memory_operation_failed">Could not change memory. Reopen this page and try again.</string>
 </resources>

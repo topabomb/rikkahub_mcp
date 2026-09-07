@@ -27,7 +27,9 @@ import net.weero.measix.pilot.data.model.Assistant
 import net.weero.measix.pilot.data.model.AssistantMemory
 import net.weero.measix.pilot.data.model.Avatar
 import net.weero.measix.pilot.data.model.Tag
-import net.weero.measix.pilot.data.repository.MemoryRepository
+import net.weero.measix.pilot.service.MemoryService
+import net.weero.measix.pilot.service.MemoryRecord
+import net.weero.measix.pilot.service.MemoryView
 import net.weero.measix.pilot.service.workspace.WorkspaceQueryService
 import net.weero.measix.pilot.service.workspace.WorkspaceUiModel
 
@@ -36,7 +38,7 @@ private const val TAG = "AssistantDetailVM"
 class AssistantDetailVM(
     private val id: String,
     private val settingsStore: SettingsStore,
-    private val memoryRepository: MemoryRepository,
+    private val memoryService: MemoryService,
     private val artifactUseCase: ArtifactUseCase,
     private val skillManager: SkillManager,
     workspaceQueryService: WorkspaceQueryService,
@@ -45,6 +47,8 @@ class AssistantDetailVM(
 
     private val _lockedSettingsChanges = MutableSharedFlow<SettingsLockedException>(extraBufferCapacity = 1)
     val lockedSettingsChanges = _lockedSettingsChanges.asSharedFlow()
+    private val _memoryFailures = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
+    val memoryFailures = _memoryFailures.asSharedFlow()
 
     private val _skills = MutableStateFlow<List<SkillMetadata>>(emptyList())
     val skills = _skills.asStateFlow()
@@ -66,16 +70,9 @@ class AssistantDetailVM(
             scope = viewModelScope, started = SharingStarted.Eagerly, initialValue = Assistant()
         )
 
-    val memories = assistant
-        .flatMapLatest { currentAssistant ->
-            if (currentAssistant.useGlobalMemory) {
-                memoryRepository.getGlobalMemoriesFlow()
-            } else {
-                memoryRepository.getMemoriesOfAssistantFlow(assistantId.toString())
-            }
-        }
+    val memories = memoryService.observeCurrent(assistantId)
         .stateIn(
-            scope = viewModelScope, started = SharingStarted.Eagerly, initialValue = emptyList()
+            scope = viewModelScope, started = SharingStarted.Eagerly, initialValue = MemoryView.Loading
         )
 
     val providers = settingsStore
@@ -235,41 +232,15 @@ class AssistantDetailVM(
         }
     }
 
-    fun addMemory(memory: AssistantMemory) {
-        viewModelScope.launch {
-            val memoryAssistantId = if (assistant.value.useGlobalMemory) {
-                MemoryRepository.GLOBAL_MEMORY_ID
-            } else {
-                assistantId.toString()
-            }
-            memoryRepository.addMemory(
-                assistantId = memoryAssistantId,
-                content = memory.content
-            )
-        }
-    }
+    fun addMemory(memory: MemoryRecord) = mutateMemory { memoryService.add(memory.access, memory.content) }
+    fun updateMemory(memory: MemoryRecord) = mutateMemory { memoryService.update(memory) }
+    fun deleteMemory(memory: MemoryRecord) = mutateMemory { memoryService.delete(memory) }
 
-    fun updateMemory(memory: AssistantMemory) {
+    private fun mutateMemory(operation: suspend () -> Unit) {
         viewModelScope.launch {
-            val current = assistant.value
-            val memoryId = if (current.useGlobalMemory) {
-                MemoryRepository.GLOBAL_MEMORY_ID
-            } else {
-                assistantId.toString()
-            }
-            memoryRepository.updateContent(id = memory.id, content = memory.content, assistantId = memoryId)
-        }
-    }
-
-    fun deleteMemory(memory: AssistantMemory) {
-        viewModelScope.launch {
-            val current = assistant.value
-            val memoryId = if (current.useGlobalMemory) {
-                MemoryRepository.GLOBAL_MEMORY_ID
-            } else {
-                assistantId.toString()
-            }
-            memoryRepository.deleteMemory(id = memory.id, assistantId = memoryId)
+            try { operation() }
+            catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+            catch (_: Exception) { _memoryFailures.emit(Unit) }
         }
     }
 

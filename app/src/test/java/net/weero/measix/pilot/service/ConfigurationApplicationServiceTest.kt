@@ -307,7 +307,7 @@ class ConfigurationApplicationServiceTest {
         val sessions = EnterpriseSessionController(EnterpriseAppliedStore(File(root, "enterprise")))
         private val gate = ApplicationRecoveryGate()
         val commands = ConfigurationApplicationService(settings, sessions, gate)
-        val queries = ConfigurationQueryService(settings, sessions)
+        val queries = ConfigurationQueryService(settings, sessions, gate)
         val model = Model(modelId = "personal")
         val mcp = McpServerConfig.StreamableHTTPServer(commonOptions = McpCommonOptions(name = "Mine"), url = "https://example.invalid")
         val assistant = Assistant(name = "User", chatModelId = model.id)
