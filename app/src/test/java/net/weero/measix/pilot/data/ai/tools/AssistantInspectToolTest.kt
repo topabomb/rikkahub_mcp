@@ -208,6 +208,7 @@ class AssistantInspectToolTest {
             net.weero.measix.pilot.data.ai.mcp.TurnMcpCapabilitySnapshot.EMPTY
         coEvery {
             toolSetFactory.buildTools(
+                realmAccess = any(),
                 assistant = any(),
                 conversationId = any(),
                 settings = any(),

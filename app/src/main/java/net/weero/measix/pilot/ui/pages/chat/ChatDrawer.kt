@@ -347,8 +347,7 @@ fun ChatDrawerContent(
                         val id = if (context.readBooleanPreference("create_new_conversation_on_start", true)) {
                             Uuid.random()
                         } else {
-                            conversationQueryService.conversationsOfAssistant(selectedAssistantId)
-                                .first()
+                            conversationQueryService.recentConversations(conversationQueryService.captureCurrentAccess(), selectedAssistantId, 1)
                                 .firstOrNull()
                                 ?.id ?: Uuid.random()
                         }

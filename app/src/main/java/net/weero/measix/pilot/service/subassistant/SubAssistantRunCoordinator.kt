@@ -1000,6 +1000,7 @@ class SubAssistantRunCoordinator internal constructor(
         val mcpCapabilities = toolSetFactory.prepareMcpCapabilities(target)
         targetMcpPreparationFailure(mcpCapabilities)?.let(::error)
         val regularTools = toolSetFactory.buildTools(
+            realmAccess = realmAccess,
             assistant = target,
             conversationId = childConversationId,
             settings = settings,

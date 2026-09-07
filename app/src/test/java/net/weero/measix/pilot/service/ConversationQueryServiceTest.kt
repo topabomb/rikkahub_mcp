@@ -68,6 +68,8 @@ class ConversationQueryServiceTest {
             folderRepository = mockk<FolderRepository>(relaxed = true),
             titleCoordinator = mockk<ConversationTitleCoordinator>(relaxed = true),
             attachmentPreviewProjector = mockk(relaxed = true),
+            sessions = mockk(),
+            recoveryGate = ApplicationRecoveryGate().also { it.ready() },
         )
     }
 }

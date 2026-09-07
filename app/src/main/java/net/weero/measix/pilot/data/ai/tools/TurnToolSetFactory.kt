@@ -65,6 +65,7 @@ class TurnToolSetFactory(
      * @param turnKind 运行分类；SUB_ASSISTANT 时过滤 Assistant Tools，ask_user 保留给 Coordinator 桥接
      */
     suspend fun buildTools(
+        realmAccess: net.weero.measix.pilot.data.enterprise.RealmAccess,
         assistant: Assistant,
         conversationId: Uuid = Uuid.random(),
         settings: Settings,
@@ -116,7 +117,7 @@ class TurnToolSetFactory(
             )
 
             if (assistant.enableRecentChatsReference) {
-                addAll(createConversationTools(conversationQueryService, assistant.id))
+                addAll(createConversationTools(conversationQueryService, assistant.id, realmAccess))
             }
 
             addAll(createWorkspaceToolsIfReady(assistant.workspaceId?.toString(), workspaceCwd))

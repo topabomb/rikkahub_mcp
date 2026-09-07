@@ -777,6 +777,7 @@ class ConversationTurnService internal constructor(
                         sourceType = TtsPlaybackSource.SourceType.NORMAL,
                     )
                     val regularTools = toolSetFactory.buildTools(
+                        realmAccess = realmAccess,
                         assistant = assistant,
                         conversationId = conversationId,
                         settings = settings,

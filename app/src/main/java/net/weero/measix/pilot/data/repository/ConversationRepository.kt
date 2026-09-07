@@ -3,10 +3,7 @@ package net.weero.measix.pilot.data.repository
 import net.weero.measix.pilot.data.configuration.ConfigurationScope
 
 import me.rerere.common.configuration.ConfigurationReference
-import androidx.paging.Pager
-import androidx.paging.PagingConfig
-import androidx.paging.PagingData
-import androidx.paging.map
+import androidx.paging.PagingSource
 import androidx.room.withTransaction
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
@@ -73,48 +70,27 @@ class ConversationRepository(
     private val modelContextDAO: ConversationModelContextDAO,
     private val artifactStore: ArtifactStore,
 ) {
-    companion object {
-        private const val PAGE_SIZE = 20
-        private const val INITIAL_LOAD_SIZE = 40
-    }
-
     suspend fun getRecentConversationRecords(
+        scope: ConfigurationScope,
         assistantId: ConfigurationReference,
         limit: Int = 10,
     ): List<ConversationListRecord> = conversationDAO.getRecentConversationsOfAssistant(
+        scope = scope,
         assistantId = assistantId.toString(),
         limit = limit,
     ).map(::conversationEntityToListRecord)
 
-    fun getConversationsOfAssistant(assistantId: ConfigurationReference): Flow<List<ConversationListRecord>> {
+    fun getConversationsOfAssistant(scope: ConfigurationScope, assistantId: ConfigurationReference): Flow<List<ConversationListRecord>> {
         return conversationDAO
-            .getConversationsOfAssistant(assistantId.toString())
+            .getConversationsOfAssistant(scope, assistantId.toString())
             .map { entities -> entities.map(::conversationEntityToListRecord) }
     }
 
-    fun getUnfiledConversationsOfAssistantPaging(
-        assistantId: ConfigurationReference,
-    ): Flow<PagingData<ConversationListRecord>> = Pager(
-        config = PagingConfig(
-            pageSize = PAGE_SIZE,
-            initialLoadSize = INITIAL_LOAD_SIZE,
-            enablePlaceholders = false
-        ),
-        pagingSourceFactory = { conversationDAO.getUnfiledConversationsOfAssistantPaging(assistantId.toString()) }
-    ).flow.map { pagingData ->
-        pagingData.map(::lightEntityToListRecord)
-    }
+    fun unfiledPagingSource(scope: ConfigurationScope, assistantId: ConfigurationReference): PagingSource<Int, LightConversationEntity> =
+        conversationDAO.getUnfiledConversationsOfAssistantPaging(scope, assistantId.toString())
 
-    fun getConversationsOfFolderPaging(folderId: Uuid): Flow<PagingData<ConversationListRecord>> = Pager(
-        config = PagingConfig(
-            pageSize = PAGE_SIZE,
-            initialLoadSize = INITIAL_LOAD_SIZE,
-            enablePlaceholders = false
-        ),
-        pagingSourceFactory = { conversationDAO.getConversationsOfFolderPaging(folderId.toString()) }
-    ).flow.map { pagingData ->
-        pagingData.map(::lightEntityToListRecord)
-    }
+    fun folderPagingSource(scope: ConfigurationScope, folderId: Uuid): PagingSource<Int, LightConversationEntity> =
+        conversationDAO.getConversationsOfFolderPaging(scope, folderId.toString())
 
     suspend fun getConversationById(uuid: Uuid): Conversation? = database.withTransaction {
         val entity = conversationDAO.getConversationById(uuid.toString()) ?: return@withTransaction null
@@ -135,8 +111,8 @@ class ConversationRepository(
         return conversationDAO.existsById(uuid.toString())
     }
 
-    suspend fun countConversations(): Int {
-        return conversationDAO.countAll()
+    suspend fun countConversations(scope: ConfigurationScope): Int {
+        return conversationDAO.countAll(scope)
     }
 
     internal suspend fun insertConversation(conversation: Conversation) {
@@ -590,15 +566,17 @@ class ConversationRepository(
     }
 
     suspend fun searchMessages(
+        scope: ConfigurationScope,
         keyword: String,
         sort: MessageSearchSort = MessageSearchSort.RELEVANCE,
-    ) = messageFtsManager.search(keyword, sort)
+    ) = messageFtsManager.search(scope, keyword, sort)
 
     suspend fun searchMessagesOfAssistant(
+        scope: ConfigurationScope,
         assistantId: ConfigurationReference,
         keyword: String,
         sort: MessageSearchSort = MessageSearchSort.RELEVANCE,
-    ) = messageFtsManager.search(keyword, sort, assistantId.toString())
+    ) = messageFtsManager.search(scope, keyword, sort, assistantId.toString())
 
     internal suspend fun rebuildAllIndexes(onProgress: (current: Int, total: Int) -> Unit = { _, _ -> }) {
         database.withTransaction {
@@ -702,9 +680,9 @@ class ConversationRepository(
         )
     }
 
-    fun getPinnedConversations(): Flow<List<ConversationListRecord>> {
+    fun getPinnedConversations(scope: ConfigurationScope): Flow<List<ConversationListRecord>> {
         return conversationDAO
-            .getPinnedConversations()
+            .getPinnedConversations(scope)
             .map { entities -> entities.map(::conversationEntityToListRecord) }
     }
 
@@ -717,18 +695,6 @@ class ConversationRepository(
             createAt = Instant.ofEpochMilli(entity.createAt),
             updateAt = Instant.ofEpochMilli(entity.updateAt),
             folderId = entity.folderId.ifEmpty { null }?.let(Uuid::parse),
-            scope = entity.scope,
-        )
-
-    private fun lightEntityToListRecord(entity: LightConversationEntity): ConversationListRecord =
-        ConversationListRecord(
-            id = Uuid.parse(entity.id),
-            assistantId = ConfigurationReference.parse(entity.assistantId),
-            title = entity.title,
-            isPinned = entity.isPinned,
-            createAt = Instant.ofEpochMilli(entity.createAt),
-            updateAt = Instant.ofEpochMilli(entity.updateAt),
-            folderId = entity.folderId.ifEmpty { null }?.let { Uuid.parse(it) },
             scope = entity.scope,
         )
 

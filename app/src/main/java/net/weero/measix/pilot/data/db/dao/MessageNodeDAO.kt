@@ -9,6 +9,8 @@ import androidx.room.Transaction
 import androidx.sqlite.db.SimpleSQLiteQuery
 import androidx.sqlite.db.SupportSQLiteQuery
 import net.weero.measix.pilot.data.db.entity.MessageNodeEntity
+import net.weero.measix.pilot.data.configuration.ConfigurationScope
+import net.weero.measix.pilot.data.configuration.storageKey
 
 @Dao
 interface MessageNodeDAO {
@@ -145,7 +147,7 @@ private const val MESSAGE_PAYLOAD_SLICE_CHARS = 256 * 1024
 data class MessageDayCount(val day: String, val count: Int)
 
 // SQLite json_each() 展开 messages JSON 数组，json_extract() 提取 Token 字段并聚合
-private val TOKEN_STATS_SQL = SimpleSQLiteQuery(
+private const val TOKEN_STATS_SQL =
     "SELECT COUNT(CASE WHEN c.parent_conversation_id IS NULL THEN 1 END) AS totalMessages, " +
         "COALESCE(SUM(CAST(json_extract(j.value, '$.usage.promptTokens') AS INTEGER)), 0) AS inputTokens, " +
         "COALESCE(SUM(CAST(json_extract(j.value, '$.usage.completionTokens') AS INTEGER)), 0) AS outputTokens, " +
@@ -158,13 +160,13 @@ private val TOKEN_STATS_SQL = SimpleSQLiteQuery(
         "THEN 1 ELSE 0 END), 0) AS cacheReadNonExactMessages " +
         "FROM message_node mn " +
         "JOIN conversationentity c ON c.id = mn.conversation_id, " +
-        "json_each(mn.messages) j"
-)
+        "json_each(mn.messages) j WHERE c.scope = ?"
 
-suspend fun MessageNodeDAO.getTokenStats(): MessageTokenStats = getTokenStatsRaw(TOKEN_STATS_SQL)
+suspend fun MessageNodeDAO.getTokenStats(scope: ConfigurationScope): MessageTokenStats =
+    getTokenStatsRaw(SimpleSQLiteQuery(TOKEN_STATS_SQL, arrayOf(scope.storageKey())))
 
 // 按用户消息的 createdAt 字段（LocalDateTime ISO 字符串前10位即日期）统计每日消息数
-suspend fun MessageNodeDAO.getMessageCountPerDay(startDate: String): List<MessageDayCount> =
+suspend fun MessageNodeDAO.getMessageCountPerDay(scope: ConfigurationScope, startDate: String): List<MessageDayCount> =
     getMessageCountPerDayRaw(
         SimpleSQLiteQuery(
             "SELECT substr(json_extract(j.value, '$.createdAt'), 1, 10) AS day, " +
@@ -172,11 +174,11 @@ suspend fun MessageNodeDAO.getMessageCountPerDay(startDate: String): List<Messag
                 "FROM message_node mn " +
                 "JOIN conversationentity c ON c.id = mn.conversation_id, " +
                 "json_each(mn.messages) j " +
-                "WHERE c.parent_conversation_id IS NULL " +
+                "WHERE c.scope = ? AND c.parent_conversation_id IS NULL " +
                 "AND json_extract(j.value, '$.role') = 'user' " +
                 "AND json_extract(j.value, '$.createdAt') >= ? " +
                 "GROUP BY day",
-            arrayOf(startDate)
+            arrayOf(scope.storageKey(), startDate)
         )
     )
 

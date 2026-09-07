@@ -2,6 +2,11 @@ package net.weero.measix.pilot.service
 
 import me.rerere.common.configuration.ConfigurationReference
 import androidx.paging.PagingData
+import androidx.paging.Pager
+import androidx.paging.PagingConfig
+import androidx.paging.PagingSource
+import net.weero.measix.pilot.data.db.dao.LightConversationEntity
+import android.util.Log
 import androidx.paging.map
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.StateFlow
@@ -10,6 +15,14 @@ import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.mapLatest
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.emitAll
+import kotlinx.coroutines.flow.onStart
+import kotlinx.coroutines.flow.catch
+import kotlinx.coroutines.CancellationException
+import net.weero.measix.pilot.data.enterprise.EnterpriseSessionController
+import net.weero.measix.pilot.data.enterprise.EnterpriseConfigurationException
+import net.weero.measix.pilot.data.enterprise.RealmAccess
 import net.weero.measix.pilot.data.db.fts.MessageSearchSort
 import net.weero.measix.pilot.data.repository.ConversationListRecord
 import net.weero.measix.pilot.data.repository.ConversationRepository
@@ -70,13 +83,44 @@ private fun ConversationListRecord.toSummary() = ConversationSummary(
 )
 
 /** UI read port: persisted/resident 选择被封装在 service 边界内。 */
-class ConversationQueryService(
+class ConversationQueryService internal constructor(
     private val repository: ConversationRepository,
     private val runtimeRegistry: ConversationRuntimeRegistry,
     private val folderRepository: FolderRepository,
     private val titleCoordinator: ConversationTitleCoordinator,
     private val attachmentPreviewProjector: ConversationAttachmentPreviewProjector,
+    private val sessions: EnterpriseSessionController,
+    private val recoveryGate: ApplicationRecoveryGate,
 ) {
+    suspend fun captureCurrentAccess(): RealmAccess {
+        recoveryGate.awaitReady()
+        return sessions.captureSelectedRealmAccess()
+    }
+
+    fun observeCurrentAccess(): Flow<RealmAccess?> = flow {
+        recoveryGate.awaitReady()
+        emitAll(sessions.observeSelectedRealmAccess())
+    }
+
+    private fun <T> selectedRows(empty: T, query: (RealmAccess) -> Flow<T>): Flow<T> =
+        observeCurrentAccess().flatMapLatest { access ->
+            if (access == null) flowOf(empty) else query(access)
+                .map { rows -> sessions.withSelectedRealmAccess(access) { rows } }
+                .onStart { emit(empty) }
+                .catch { error ->
+                    if (error is CancellationException) throw error
+                    if (error !is EnterpriseConfigurationException) {
+                        Log.e("ConversationQuery", "Directory query failed", error)
+                    }
+                    emit(empty)
+                }
+        }
+
+    private suspend fun <T> read(access: RealmAccess, query: suspend () -> T): T {
+        recoveryGate.awaitReady()
+        return sessions.withRealmAccess(access, query)
+    }
+
     fun observeConversation(conversationId: Uuid): Flow<ConversationReadState> =
         runtimeRegistry.observeRuntimeState(conversationId).flatMapLatest { state ->
             when (state) {
@@ -122,19 +166,72 @@ class ConversationQueryService(
     }
 
     fun unfiledPaging(assistantId: ConfigurationReference): Flow<PagingData<ConversationSummary>> =
-        repository.getUnfiledConversationsOfAssistantPaging(assistantId).map { paging -> paging.map { it.toSummary() } }
+        observeCurrentAccess().flatMapLatest { access ->
+            if (access == null) flowOf(PagingData.empty()) else paging(access) {
+                repository.unfiledPagingSource(access.scope, assistantId)
+            }
+        }
 
     fun folderPaging(folderId: Uuid): Flow<PagingData<ConversationSummary>> =
-        repository.getConversationsOfFolderPaging(folderId).map { paging -> paging.map { it.toSummary() } }
+        observeCurrentAccess().flatMapLatest { access ->
+            if (access == null) flowOf(PagingData.empty()) else paging(access) {
+                repository.folderPagingSource(access.scope, folderId)
+            }
+        }
+
+    private fun paging(
+        access: RealmAccess,
+        source: () -> PagingSource<Int, LightConversationEntity>,
+    ): Flow<PagingData<ConversationSummary>> = flow {
+        val owner = Any()
+        val active = mutableSetOf<PagingSource<Int, LightConversationEntity>>()
+        var closed = false
+        try {
+            emit(PagingData.empty())
+            val pager = Pager(PagingConfig(pageSize = 20, initialLoadSize = 40, enablePlaceholders = false)) {
+                synchronized(owner) {
+                    SelectedRealmPagingSource(source(), sessions, access).also { page ->
+                        if (closed) page.invalidate() else {
+                            active.add(page)
+                            page.registerInvalidatedCallback { synchronized(owner) { active.remove(page) } }
+                        }
+                    }
+                }
+            }
+            emitAll(pager.flow.map { data ->
+                data.map { row ->
+                    ConversationSummary(
+                        id = Uuid.parse(row.id),
+                        assistantId = ConfigurationReference.parse(row.assistantId),
+                        title = row.title,
+                        folderId = row.folderId.takeIf(String::isNotEmpty)?.let(Uuid::parse),
+                        isPinned = row.isPinned,
+                        createAt = Instant.ofEpochMilli(row.createAt),
+                        updateAt = Instant.ofEpochMilli(row.updateAt),
+                    )
+                }
+            })
+        } finally {
+            synchronized(owner) {
+                closed = true
+                active.toList().forEach { it.invalidate() }
+                active.clear()
+            }
+        }
+    }
 
     fun conversationsOfAssistant(assistantId: ConfigurationReference): Flow<List<ConversationSummary>> =
-        repository.getConversationsOfAssistant(assistantId).map { list -> list.map { it.toSummary() } }
+        selectedRows(emptyList()) { access ->
+            repository.getConversationsOfAssistant(access.scope, assistantId).map { list -> list.map { it.toSummary() } }
+        }
 
     fun pinnedConversations(): Flow<List<ConversationSummary>> =
-        repository.getPinnedConversations().map { list -> list.map { it.toSummary() } }
+        selectedRows(emptyList()) { access ->
+            repository.getPinnedConversations(access.scope).map { list -> list.map { it.toSummary() } }
+        }
 
     fun foldersOfAssistant(assistantId: ConfigurationReference): Flow<List<Folder>> =
-        folderRepository.getFoldersOfAssistant(assistantId)
+        selectedRows(emptyList()) { access -> folderRepository.getFoldersOfAssistant(access.scope, assistantId) }
 
     /**
      * internal 聚合读端口：只有 command / turn planning 需要它（含 model context）。
@@ -147,19 +244,27 @@ class ConversationQueryService(
     internal fun residentRuntimeSnapshot(conversationId: Uuid): StateFlow<ConversationRuntimeSnapshot>? =
         runtimeRegistry.findRuntime(conversationId)?.snapshot
 
-    suspend fun count(): Int = repository.countConversations()
+    suspend fun count(): Int {
+        val access = captureCurrentAccess()
+        return read(access) { repository.countConversations(access.scope) }
+    }
 
-    suspend fun searchMessages(keyword: String, sort: MessageSearchSort) =
-        repository.searchMessages(keyword, sort)
+    suspend fun searchMessages(access: RealmAccess, keyword: String, sort: MessageSearchSort) =
+        read(access) { repository.searchMessages(access.scope, keyword, sort) }
 
-    suspend fun recentConversations(assistantId: ConfigurationReference, limit: Int): List<ConversationSummary> =
-        repository.getRecentConversationRecords(assistantId, limit).map { it.toSummary() }
+    suspend fun recentConversations(
+        access: RealmAccess,
+        assistantId: ConfigurationReference,
+        limit: Int,
+    ): List<ConversationSummary> =
+        read(access) { repository.getRecentConversationRecords(access.scope, assistantId, limit).map { it.toSummary() } }
 
     suspend fun searchMessagesOfAssistant(
+        access: RealmAccess,
         assistantId: ConfigurationReference,
         keyword: String,
         sort: MessageSearchSort,
-    ) = repository.searchMessagesOfAssistant(assistantId, keyword, sort)
+    ) = read(access) { repository.searchMessagesOfAssistant(access.scope, assistantId, keyword, sort) }
 }
 
 internal fun mergeConversationActivities(

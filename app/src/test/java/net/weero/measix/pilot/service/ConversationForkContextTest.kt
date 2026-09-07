@@ -157,6 +157,7 @@ class ConversationForkContextTest {
             json = Json,
             toolArtifactRewriter = mockk<ToolArtifactRewriter>(),
             titleCoordinator = mockk<ConversationTitleCoordinator>(),
+            sessions = mockk(),
         )
 
         service.forkAtMessage(sourceId, owner.id)
@@ -193,5 +194,6 @@ class ConversationForkContextTest {
         json = Json,
         toolArtifactRewriter = mockk(),
         titleCoordinator = mockk(),
+        sessions = mockk(),
     )
 }

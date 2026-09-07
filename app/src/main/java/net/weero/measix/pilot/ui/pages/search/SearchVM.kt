@@ -8,6 +8,8 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.combine
+import net.weero.measix.pilot.data.enterprise.RealmAccess
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -64,9 +66,17 @@ class SearchVM(
 
     init {
         viewModelScope.launch {
-            searchRequests.collectLatest { request ->
+            combine(searchRequests, conversationQueryService.observeCurrentAccess()) { request, access ->
+                request to access
+            }.collectLatest { (request, access) ->
+                results = emptyList()
+                if (access == null) {
+                    isLoading = false
+                    failure = null
+                    return@collectLatest
+                }
                 if (request.debounce) delay(300L)
-                performSearch(request.query, request.sort)
+                performSearch(access, request.query, request.sort)
             }
         }
     }
@@ -116,7 +126,7 @@ class SearchVM(
         )
     }
 
-    private suspend fun performSearch(query: String, sort: MessageSearchSort) {
+    private suspend fun performSearch(access: RealmAccess, query: String, sort: MessageSearchSort) {
         if (query.isBlank()) {
             results = emptyList()
             failure = null
@@ -125,7 +135,7 @@ class SearchVM(
         isLoading = true
         failure = null
         try {
-            results = conversationQueryService.searchMessages(query, sort)
+            results = conversationQueryService.searchMessages(access, query, sort)
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (_: Exception) {

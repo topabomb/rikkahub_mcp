@@ -8,6 +8,8 @@ import net.weero.measix.pilot.data.db.dao.MessageNodeDAO
 import net.weero.measix.pilot.data.db.dao.getMessageCountPerDay
 import net.weero.measix.pilot.data.db.dao.getTokenStats
 import net.weero.measix.pilot.data.datastore.SettingsStore
+import net.weero.measix.pilot.data.enterprise.EnterpriseSessionController
+import net.weero.measix.pilot.data.enterprise.RealmAccess
 
 data class StatsSnapshot(
     val totalConversations: Int,
@@ -22,29 +24,34 @@ data class StatsSnapshot(
 )
 
 /** Query port that keeps Room and Settings aggregation out of the UI layer. */
-class StatsQueryService(
+class StatsQueryService internal constructor(
     private val conversationDAO: ConversationDAO,
     private val messageNodeDAO: MessageNodeDAO,
     private val settingsStore: SettingsStore,
+    private val sessions: EnterpriseSessionController,
+    private val recoveryGate: ApplicationRecoveryGate,
 ) {
-    suspend fun load(startDate: LocalDate): StatsSnapshot = withContext(Dispatchers.IO) {
-        val conversationsPerDay = messageNodeDAO
-            .getMessageCountPerDay(startDate.toString())
-            .mapNotNull { entry ->
-                runCatching { LocalDate.parse(entry.day) to entry.count }.getOrNull()
-            }
-            .toMap()
-        val tokenStats = messageNodeDAO.getTokenStats()
-        StatsSnapshot(
-            totalConversations = conversationDAO.countAll(),
-            totalMessages = tokenStats.totalMessages,
-            totalInputTokens = tokenStats.inputTokens,
-            totalOutputTokens = tokenStats.outputTokens,
-            totalCacheReadInputTokens = tokenStats.cacheReadInputTokens,
-            coreNonExactMessages = tokenStats.coreNonExactMessages,
-            cacheReadNonExactMessages = tokenStats.cacheReadNonExactMessages,
-            conversationsPerDay = conversationsPerDay,
-            launchCount = settingsStore.effectiveSettings.value.settings.launchCount,
-        )
+    suspend fun load(access: RealmAccess, startDate: LocalDate): StatsSnapshot = withContext(Dispatchers.IO) {
+        recoveryGate.awaitReady()
+        sessions.withSelectedRealmAccess(access) {
+            val conversationsPerDay = messageNodeDAO
+                .getMessageCountPerDay(access.scope, startDate.toString())
+                .mapNotNull { entry ->
+                    runCatching { LocalDate.parse(entry.day) to entry.count }.getOrNull()
+                }
+                .toMap()
+            val tokenStats = messageNodeDAO.getTokenStats(access.scope)
+            StatsSnapshot(
+                totalConversations = conversationDAO.countAll(access.scope),
+                totalMessages = tokenStats.totalMessages,
+                totalInputTokens = tokenStats.inputTokens,
+                totalOutputTokens = tokenStats.outputTokens,
+                totalCacheReadInputTokens = tokenStats.cacheReadInputTokens,
+                coreNonExactMessages = tokenStats.coreNonExactMessages,
+                cacheReadNonExactMessages = tokenStats.cacheReadNonExactMessages,
+                conversationsPerDay = conversationsPerDay,
+                launchCount = settingsStore.effectiveSettings.value.settings.launchCount,
+            )
+        }
     }
 }

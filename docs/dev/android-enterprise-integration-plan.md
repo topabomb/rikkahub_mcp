@@ -319,6 +319,10 @@ Portal 本地读取存在两项需要架构侧确认的 Android 平台限制：
 
 ## 10. 完整变更清单与批次
 
+C4 的目录查询隔离已进入代码：列表/最近聊天/置顶/文件夹/分页/FTS/统计在 SQL 内过滤完整主体，FTS 在排序与限额前排除外域及 Child；消息/Token 沿用既有主子统计口径。ConversationQueryService 从 Session owner 派生选中域订阅，实际 Pager 的每次惰性加载验证原选择/Session，切域和停止订阅失效旧 source。Search/Stats 清除旧结果；抽屉持续观察文件夹，域变化清除筛选和滚动位置。助手查询工具沿用原 RealmAccess，不随全局选中域或重新接入更换身份。没有 schema 变化或第二搜索投影。按 ID 的页面 lease、Draft/Open、命令及文件授权继续作为 C4/C6 后续工作，本批不构成完整域访问验收。
+
+该查询批次 33 项定向 JVM 测试通过，覆盖实际 Pager、旧工具 Session、到期及取消。Pixel_10_Pro_Fold / Android 17 的 7 项定向 instrumentation 在 3 分 18 秒内通过，包含生产数据库工厂的 Requery/simple/Jieba 中文搜索、完整主体过滤、限额前过滤和实际 Room 统计。两轮独立审查无剩余本批阻塞项。完整 `test assembleDebug lintDebug assembleRelease --no-parallel --max-workers=1 --no-configuration-cache` 在 9 分 2 秒内通过：App 1,892 项 JVM 测试无失败或跳过，其中新增统计页用例验证切域取消及失败清空；lint 为 0 errors、272 warnings、5 hints，Debug/Release 均构建成功。Workspace 45 项中 11 项 Windows 宿主测试仍跳过。版本仍为 0.0.19 开发基线，正式入口、Portal 与完整 0.0.20 交付继续实施。
+
 Gateway 使用偏好已移入既有 ScopedUserPreferences，按完整主体保存，删除无 userId 的顶层原型字段；保留已发布个人配置迁移协议。EnterpriseGateway 删除第二个 enabled 位，对齐定义存在即发布、撤销通过候选移除的语义。Resolver 统一派生完整工具对的生效开关与可切换性，REQUIRED 保留但不使用原 false，恢复可控后恢复原偏好。配置应用命令只接受捕获的 RealmAccess.Enterprise，同主体重登后旧页面不能继续修改使用偏好。该批 Gateway 执行消费者与 UI 尚未接通，不代表 Gateway 运行功能已验收。
 
 该偏好批次 39 项定向 JVM 测试通过；新增断言首次误用包含引用相等对象的整文档 equals，改为对比完整序列化内容后通过，未修改产品逻辑规避。Pixel_10_Pro_Fold / Android 17 的 ScopedConfigurationAndroidTest 在 2 分 27 秒内通过，使用实际 DataStore/企业存储重开验证偏好保留、用户隔离与个人配置保全。完整 `test assembleDebug lintDebug assembleRelease --no-parallel --max-workers=1 --no-configuration-cache` 在 8 分 13 秒内通过：App 1,885 项 JVM 测试无失败或跳过，lint 为 0 errors、272 warnings、5 hints，Debug/Release 均构建成功。Workspace 45 项测试中 11 项 Windows 宿主跳过，不算相应能力验收。独立审查无剩余本批阻塞项；版本仍为 0.0.19 开发基线，Portal 读取协议待确认，会话隔离、执行消费者、正式页面和完整 0.0.20 交付继续实施。

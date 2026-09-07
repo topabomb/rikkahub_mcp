@@ -351,7 +351,7 @@ class AssistantToolFactory internal constructor(
 
         val sections = parseInspectSections(obj)
         val toolNames = if (INSPECT_SECTION_TOOLS in sections) {
-            listTargetToolNames(target, settingsStore.effectiveSettings.value.settings, masterConversationId,
+            listTargetToolNames(realmAccess, target, settingsStore.effectiveSettings.value.settings, masterConversationId,
                 configuration.assistantModel(target.id).reference?.let { configuration.models[it]?.model })
         } else {
             emptyList()
@@ -408,12 +408,14 @@ class AssistantToolFactory internal constructor(
     }
 
     private suspend fun listTargetToolNames(
+        realmAccess: net.weero.measix.pilot.data.enterprise.RealmAccess,
         target: Assistant,
         settings: Settings,
         masterConversationId: Uuid,
         capabilityModel: me.rerere.ai.provider.Model?,
     ): List<String> {
         val built = toolSetFactory.buildTools(
+            realmAccess = realmAccess,
             assistant = target,
             conversationId = masterConversationId,
             settings = settings,

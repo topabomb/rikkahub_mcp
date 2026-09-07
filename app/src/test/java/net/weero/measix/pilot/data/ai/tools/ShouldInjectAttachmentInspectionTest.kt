@@ -109,6 +109,7 @@ class ShouldInjectAttachmentInspectionTest {
         listOf(inspection, model(listOf(Modality.TEXT)), null).forEach { currentModel ->
             TurnKind.entries.forEach { mode ->
                 val tools = factory.buildTools(
+            realmAccess = net.weero.measix.pilot.data.enterprise.RealmAccess.Personal,
                     assistant = Assistant(workspaceId = null),
                     settings = settings,
                     capabilityModel = currentModel,

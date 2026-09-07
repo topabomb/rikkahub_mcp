@@ -2,7 +2,11 @@ package net.weero.measix.pilot.ui.pages.stats
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import kotlinx.coroutines.delay
+import android.util.Log
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.flow.collectLatest
+import net.weero.measix.pilot.service.ConversationQueryService
+import net.weero.measix.pilot.data.enterprise.RealmAccess
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
@@ -13,6 +17,7 @@ import java.time.temporal.TemporalAdjusters
 
 data class AppStats(
     val isLoading: Boolean = true,
+    val hasFailed: Boolean = false,
     val totalConversations: Int = 0,
     val totalMessages: Int = 0,
     val totalInputTokens: Long = 0L,
@@ -26,22 +31,37 @@ data class AppStats(
 
 class StatsVM(
     private val statsQueryService: StatsQueryService,
+    private val conversationQueryService: ConversationQueryService,
 ) : ViewModel() {
 
     private val _stats = MutableStateFlow(AppStats())
     val stats = _stats.asStateFlow()
 
     init {
-        viewModelScope.launch { loadStats() }
+        viewModelScope.launch {
+            conversationQueryService.observeCurrentAccess().collectLatest { access ->
+                _stats.value = AppStats()
+                if (access == null) {
+                    _stats.value = AppStats(isLoading = false, hasFailed = true)
+                    return@collectLatest
+                }
+                try {
+                    loadStats(access)
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (error: Exception) {
+                    Log.e("StatsVM", "Statistics query failed", error)
+                    _stats.value = AppStats(isLoading = false, hasFailed = true)
+                }
+            }
+        }
     }
 
-    private suspend fun loadStats() {
-        delay(50)
-
+    private suspend fun loadStats(access: RealmAccess) {
         val startDate = LocalDate.now()
             .with(TemporalAdjusters.previousOrSame(DayOfWeek.SUNDAY))
             .minusWeeks(52)
-        val snapshot = statsQueryService.load(startDate)
+        val snapshot = statsQueryService.load(access, startDate)
 
         _stats.value = AppStats(
             isLoading = false,

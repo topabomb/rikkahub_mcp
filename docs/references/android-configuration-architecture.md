@@ -103,7 +103,9 @@ Room 的 Conversation、Memory、Artifact、生成媒体、会话文件夹和收
 
 Conversation、ConversationHeader、aggregate snapshot 与列表记录之间的映射保留 scope，Draft 首消息物化也沿用原 header。ConversationHeaderPatch 不提供改域操作。子会话创建继承父会话域，分支克隆校验源子会话与父主体一致；Repository 在普通创建、snapshot 创建和树导入时拒绝父子跨域。Folder 模型与 Entity 双向保留 scope。
 
-Memory 已通过 MemoryAddress/MemoryService 按原域、主体与 Session 进行查询和写入；共享记忆仅在本域主体内共享，详情编辑和工具卡删除保存原授权上下文。完整 owner、取消与订阅协议见 [运行记忆](memory-architecture.md)。其余会话列表/按 ID 查询、文件访问、恢复/备份和页面授权尚未全面接入域过滤，不能据此宣称全部企业数据已经隔离；Workspace 仍是用户可选择的共享资源。
+Memory 已通过 MemoryAddress/MemoryService 按原域、主体与 Session 进行查询和写入；共享记忆仅在本域主体内共享，详情编辑和工具卡删除保存原授权上下文。完整 owner、取消与订阅协议见 [运行记忆](memory-architecture.md)。
+
+会话/文件夹列表、分页、最近聊天、FTS 与统计按完整 scope 查询。UI 跟随选中域及原 Session，切域清空旧投影并失效分页源；助手的 recent_chats/conversation_search 工具保持创建时的原 RealmAccess，切回个人不改写在途企业工具的归属，退出重登也不能恢复旧工具授权。抽屉持续跟踪文件夹并在域变化时清除文件夹筛选。按 ID 查询/命令、文件访问、恢复/备份和页面授权尚未全面接入，不能据此宣称全部企业数据已经隔离；Workspace 仍是用户可选择的共享资源。
 
 ## 3. Local Settings 顶层结构
 

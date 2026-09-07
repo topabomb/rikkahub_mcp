@@ -1,5 +1,6 @@
 package net.weero.measix.pilot.data.db.dao
 
+import net.weero.measix.pilot.data.configuration.ConfigurationScope
 import androidx.room.Dao
 import androidx.room.Delete
 import androidx.room.Insert
@@ -11,8 +12,8 @@ import net.weero.measix.pilot.data.db.entity.FolderEntity
 
 @Dao
 interface FolderDAO {
-    @Query("SELECT * FROM conversation_folder WHERE assistant_id = :assistantId ORDER BY sort_index ASC, create_at ASC")
-    fun getFoldersOfAssistant(assistantId: String): Flow<List<FolderEntity>>
+    @Query("SELECT * FROM conversation_folder WHERE scope = :scope AND assistant_id = :assistantId ORDER BY sort_index ASC, create_at ASC")
+    fun getFoldersOfAssistant(scope: ConfigurationScope, assistantId: String): Flow<List<FolderEntity>>
 
     @Query("SELECT * FROM conversation_folder WHERE id = :id")
     suspend fun getFolderById(id: String): FolderEntity?

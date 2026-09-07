@@ -48,6 +48,7 @@ class TurnToolSetFactoryMcpTest {
         val schema = Json.parseToJsonElement("""{"type":"object","${'$'}ref":"#/${'$'}defs/input","${'$'}defs":{"input":{"required":["remote_field"]}}}""")
             as kotlinx.serialization.json.JsonObject
         val tool = factory.buildTools(
+            realmAccess = net.weero.measix.pilot.data.enterprise.RealmAccess.Personal,
             assistant = Assistant(), settings = Settings(), capabilityModel = null,
             mcpCapabilities = TurnMcpCapabilitySnapshot(tools = listOf(
                 availableTool(ConfigurationReference.random(), "remote", schema).copy(needsApproval = true),
@@ -78,6 +79,7 @@ class TurnToolSetFactoryMcpTest {
         val serverId = ConfigurationReference.random()
         val schema = buildJsonObject { put("type", "object") }
         val tools = factory.buildTools(
+            realmAccess = net.weero.measix.pilot.data.enterprise.RealmAccess.Personal,
             assistant = Assistant(),
             settings = Settings(),
             capabilityModel = null,
@@ -109,6 +111,7 @@ class TurnToolSetFactoryMcpTest {
         )
         val schema = buildJsonObject { put("type", "object") }
         val tools = factory.buildTools(
+            realmAccess = net.weero.measix.pilot.data.enterprise.RealmAccess.Personal,
             assistant = Assistant(),
             settings = Settings(),
             capabilityModel = null,
@@ -142,6 +145,7 @@ class TurnToolSetFactoryMcpTest {
 
         val failure = runCatching {
             factory.buildTools(
+            realmAccess = net.weero.measix.pilot.data.enterprise.RealmAccess.Personal,
                 assistant = Assistant(),
                 settings = Settings(),
                 capabilityModel = null,

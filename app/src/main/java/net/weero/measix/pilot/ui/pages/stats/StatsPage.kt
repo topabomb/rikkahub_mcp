@@ -79,6 +79,10 @@ fun StatsPage(vm: StatsVM = koinViewModel()) {
             ) {
                 CircularProgressIndicator()
             }
+        } else if (stats.hasFailed) {
+            Box(Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.Center) {
+                Text(stringResource(R.string.error_title_operation))
+            }
         } else {
             LazyColumn(
                 modifier = Modifier.fillMaxSize(),

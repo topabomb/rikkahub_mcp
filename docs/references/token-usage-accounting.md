@@ -222,9 +222,11 @@ nullable usage 字段缺失时默认 `null`。Turn 累计字段不猜测回填�
 
 ### Stats
 
-Stats 表示“当前数据库仍保留的 Provider usage”，不是账户终身账单：
+Stats 表示“当前域在数据库仍保留的 Provider usage”，不是账户终身账单：
 
 - token 汇总包含主会话、Child conversation 和仍保留的 regenerated variants，因为它们都真实发起过请求。
+- 会话数、可见消息数和每日消息数只计本域主会话；Token 汇总按所属会话 scope 包含本域 Child，不因复用同一个个人助手而合并企业与个人用量。应用启动次数仍为全局值。
+- StatsQueryService 在原选中域/Session 授权内读取；StatsVM 切域时清空旧统计并取消旧查询，查询失败显示失败状态，不继续展示旧值或把零值作为成功结果。
 - 删除会话或节点后，对应 usage 从 retained-history 汇总中消失。
 - cache 只累计 cache read，不把 cache write 称为命中或节省。
 - core/cache-read 非精确记录分别计数；存在 legacy、partial、none 或缺失 usage 时，以一行短说明标明统计包含旧版或不完整记录。

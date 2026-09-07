@@ -1,11 +1,12 @@
 package net.weero.measix.pilot.data.db.fts
 
-import android.util.Log
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
 import net.weero.measix.pilot.data.db.AppDatabase
+import net.weero.measix.pilot.data.configuration.ConfigurationScope
+import net.weero.measix.pilot.data.configuration.storageKey
 import net.weero.measix.pilot.data.model.Conversation
 import net.weero.measix.pilot.data.model.MessageNode
 import java.time.Instant
@@ -24,8 +25,6 @@ enum class MessageSearchSort(val orderBy: String) {
     NEWEST_FIRST("update_at DESC, rank"),
     OLDEST_FIRST("update_at ASC, rank"),
 }
-
-private const val TAG = "MessageFtsManager"
 
 class MessageFtsManager(private val database: AppDatabase) {
 
@@ -137,34 +136,27 @@ class MessageFtsManager(private val database: AppDatabase) {
     }
 
     suspend fun search(
+        scope: ConfigurationScope,
         keyword: String,
         sort: MessageSearchSort = MessageSearchSort.RELEVANCE,
         assistantId: String? = null,
     ): List<MessageSearchResult> = withContext(Dispatchers.IO) {
         val results = mutableListOf<MessageSearchResult>()
-        val scopeClause = if (assistantId == null) {
-            ""
-        } else {
-            """
-            AND conversation_id IN (
-                SELECT id FROM ConversationEntity
-                WHERE assistant_id = ? AND parent_conversation_id IS NULL
-            )
-            """.trimIndent()
-        }
+        val assistantClause = if (assistantId == null) "" else "AND assistant_id = ?"
         val cursor = db.query(
             """
             SELECT node_id, message_id, conversation_id, title, update_at,
                    simple_snippet(message_fts, 0, '[', ']', '...', 30) AS snippet
             FROM message_fts
             WHERE text MATCH jieba_query(?)
-            $scopeClause
+            AND conversation_id IN (
+                SELECT id FROM conversationentity WHERE scope = ? AND parent_conversation_id IS NULL $assistantClause
+            )
             ORDER BY ${sort.orderBy}
             LIMIT 50
             """.trimIndent(),
-            if (assistantId == null) arrayOf(keyword) else arrayOf(keyword, assistantId)
+            if (assistantId == null) arrayOf(keyword, scope.storageKey()) else arrayOf(keyword, scope.storageKey(), assistantId)
         )
-        Log.i(TAG, "search: $keyword")
         cursor.use {
             while (it.moveToNext()) {
                 results.add(

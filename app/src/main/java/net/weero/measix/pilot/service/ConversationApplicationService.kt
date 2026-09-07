@@ -28,6 +28,8 @@ import net.weero.measix.pilot.data.model.MessageNode
 import net.weero.measix.pilot.data.model.replaceRegexes
 import net.weero.measix.pilot.data.repository.ConversationRepository
 import net.weero.measix.pilot.data.repository.FolderRepository
+import net.weero.measix.pilot.data.configuration.ConfigurationScope
+import net.weero.measix.pilot.data.enterprise.EnterpriseSessionController
 import net.weero.measix.pilot.service.runtime.ConversationCommandCoordinator
 import net.weero.measix.pilot.service.runtime.ConversationCommandConflictException
 import net.weero.measix.pilot.service.runtime.ConversationNotFoundException
@@ -54,7 +56,7 @@ class ConversationViewLease internal constructor(
 }
 
 /** 用户会话命令、创建、删除与 fork 的唯一 Application owner。 */
-class ConversationApplicationService(
+class ConversationApplicationService internal constructor(
     private val settingsStore: SettingsStore,
     private val conversationRepo: ConversationRepository,
     private val folderRepository: FolderRepository,
@@ -69,6 +71,7 @@ class ConversationApplicationService(
     private val json: Json,
     private val toolArtifactRewriter: ToolArtifactRewriter,
     private val titleCoordinator: ConversationTitleCoordinator,
+    private val sessions: EnterpriseSessionController,
 ) {
     private enum class DeleteAuthority { APPLICATION, PENDING_CLEANUP }
 
@@ -255,15 +258,15 @@ class ConversationApplicationService(
 
     suspend fun deleteOfAssistant(assistantId: ConfigurationReference) {
         recoveryGate.awaitReady()
-        deleteOfAssistantCommitted(assistantId, DeleteAuthority.APPLICATION)
+        deleteOfAssistantCommitted(sessions.captureSelectedRealmAccess().scope, assistantId, DeleteAuthority.APPLICATION)
     }
 
     internal suspend fun deleteOfAssistantFromPendingCleanup(assistantId: ConfigurationReference) {
-        deleteOfAssistantCommitted(assistantId, DeleteAuthority.PENDING_CLEANUP)
+        deleteOfAssistantCommitted(ConfigurationScope.Personal, assistantId, DeleteAuthority.PENDING_CLEANUP)
     }
 
-    private suspend fun deleteOfAssistantCommitted(assistantId: ConfigurationReference, authority: DeleteAuthority) {
-        conversationRepo.getConversationsOfAssistant(assistantId).first().forEach {
+    private suspend fun deleteOfAssistantCommitted(scope: ConfigurationScope, assistantId: ConfigurationReference, authority: DeleteAuthority) {
+        conversationRepo.getConversationsOfAssistant(scope, assistantId).first().forEach {
             stopAndDelete(it.id, authority)
         }
     }

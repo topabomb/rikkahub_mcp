@@ -1,5 +1,7 @@
 package net.weero.measix.pilot.data.db.dao
 
+import net.weero.measix.pilot.data.configuration.ConfigurationScope
+
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -64,7 +66,7 @@ class MessageNodeTokenStatsIntegrationTest {
 
     @Test
     fun tokenStatsExecuteLegacyCompletePartialAndMissingUsageSemantics() = runBlocking {
-        val stats = database.messageNodeDao().getTokenStats()
+        val stats = database.messageNodeDao().getTokenStats(ConfigurationScope.Personal)
 
         assertEquals(5, stats.totalMessages)
         assertEquals(67L, stats.inputTokens)

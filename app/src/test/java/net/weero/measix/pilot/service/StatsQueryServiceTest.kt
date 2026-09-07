@@ -15,14 +15,26 @@ import net.weero.measix.pilot.data.db.dao.MessageNodeDAO
 import net.weero.measix.pilot.data.db.dao.MessageTokenStats
 import org.junit.Assert.assertEquals
 import org.junit.Test
+import org.junit.Rule
+import org.junit.rules.TemporaryFolder
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
+import net.weero.measix.pilot.data.configuration.ConfigurationScope
+import net.weero.measix.pilot.data.enterprise.EnterpriseSessionController
+import net.weero.measix.pilot.data.enterprise.EnterpriseAppliedStore
+import net.weero.measix.pilot.data.enterprise.RealmAccess
 
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [34])
 class StatsQueryServiceTest {
+    @get:Rule val temporary = TemporaryFolder()
     @Test
     fun `load propagates exactness counts from token projection`() = runTest {
         val conversationDao = mockk<ConversationDAO>()
         val messageNodeDao = mockk<MessageNodeDAO>()
         val settingsStore = mockk<SettingsStore>()
-        coEvery { conversationDao.countAll() } returns 3
+        coEvery { conversationDao.countAll(ConfigurationScope.Personal) } returns 3
         coEvery { messageNodeDao.getMessageCountPerDayRaw(any()) } returns listOf(
             MessageDayCount("2026-08-29", 4)
         )
@@ -38,8 +50,10 @@ class StatsQueryServiceTest {
             Settings(launchCount = 9).toEffectiveSettingsSnapshot()
         )
 
-        val result = StatsQueryService(conversationDao, messageNodeDao, settingsStore)
-            .load(LocalDate.of(2026, 1, 1))
+        val result = StatsQueryService(conversationDao, messageNodeDao, settingsStore,
+            EnterpriseSessionController(EnterpriseAppliedStore(temporary.newFolder())),
+            ApplicationRecoveryGate().apply { ready() })
+            .load(RealmAccess.Personal, LocalDate.of(2026, 1, 1))
 
         assertEquals(3, result.totalConversations)
         assertEquals(8, result.totalMessages)

@@ -19,7 +19,6 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
-import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import net.weero.measix.pilot.R
@@ -52,7 +51,7 @@ class ChatDrawerVM(
     // 当前助手的文件夹列表（Room Flow，增删改自动刷新）
     val folders: StateFlow<List<Folder>> = assistantIdFlow
         .flatMapLatest { conversationQueryService.foldersOfAssistant(it) }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+        .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
 
     val conversationActivities: StateFlow<Map<Uuid, Set<ConversationActivity>>> =
         conversationQueryService.conversationActivities()
@@ -128,11 +127,13 @@ class ChatDrawerVM(
     val scrollOffset: Int get() = savedStateHandle["scrollOffset"] ?: 0
 
     init {
-        // 助手切换时重置文件夹筛选，回到「聊天」视图，
-        // 避免继续显示上一个助手文件夹内的会话（文件夹是助手内分组）
+        // A shared personal assistant does not make a folder selection portable across realms.
         viewModelScope.launch {
-            assistantIdFlow.collect {
+            combine(assistantIdFlow, conversationQueryService.observeCurrentAccess()) { assistant, access ->
+                assistant to access
+            }.collect {
                 _selectedFolderId.value = null
+                saveScrollPosition(0, 0)
             }
         }
     }

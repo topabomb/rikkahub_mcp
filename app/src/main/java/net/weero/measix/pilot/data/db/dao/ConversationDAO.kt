@@ -10,17 +10,17 @@ import net.weero.measix.pilot.data.configuration.ConfigurationScope
 
 @Dao
 interface ConversationDAO {
-    @Query("SELECT * FROM conversationentity WHERE parent_conversation_id IS NULL AND assistant_id = :assistantId ORDER BY is_pinned DESC, update_at DESC")
-    fun getConversationsOfAssistant(assistantId: String): Flow<List<ConversationEntity>>
+    @Query("SELECT * FROM conversationentity WHERE scope = :scope AND parent_conversation_id IS NULL AND assistant_id = :assistantId ORDER BY is_pinned DESC, update_at DESC")
+    fun getConversationsOfAssistant(scope: ConfigurationScope, assistantId: String): Flow<List<ConversationEntity>>
 
-    @Query("SELECT id, assistant_id as assistantId, title, is_pinned as isPinned, create_at as createAt, update_at as updateAt, folder_id as folderId, scope FROM conversationentity WHERE parent_conversation_id IS NULL AND assistant_id = :assistantId AND folder_id = '' ORDER BY is_pinned DESC, update_at DESC")
-    fun getUnfiledConversationsOfAssistantPaging(assistantId: String): PagingSource<Int, LightConversationEntity>
+    @Query("SELECT id, assistant_id as assistantId, title, is_pinned as isPinned, create_at as createAt, update_at as updateAt, folder_id as folderId, scope FROM conversationentity WHERE scope = :scope AND parent_conversation_id IS NULL AND assistant_id = :assistantId AND folder_id = '' ORDER BY is_pinned DESC, update_at DESC")
+    fun getUnfiledConversationsOfAssistantPaging(scope: ConfigurationScope, assistantId: String): PagingSource<Int, LightConversationEntity>
 
-    @Query("SELECT id, assistant_id as assistantId, title, is_pinned as isPinned, create_at as createAt, update_at as updateAt, folder_id as folderId, scope FROM conversationentity WHERE parent_conversation_id IS NULL AND folder_id = :folderId ORDER BY is_pinned DESC, update_at DESC")
-    fun getConversationsOfFolderPaging(folderId: String): PagingSource<Int, LightConversationEntity>
+    @Query("SELECT id, assistant_id as assistantId, title, is_pinned as isPinned, create_at as createAt, update_at as updateAt, folder_id as folderId, scope FROM conversationentity WHERE scope = :scope AND parent_conversation_id IS NULL AND folder_id = :folderId ORDER BY is_pinned DESC, update_at DESC")
+    fun getConversationsOfFolderPaging(scope: ConfigurationScope, folderId: String): PagingSource<Int, LightConversationEntity>
 
-    @Query("SELECT * FROM conversationentity WHERE parent_conversation_id IS NULL AND assistant_id = :assistantId ORDER BY is_pinned DESC, update_at DESC LIMIT :limit")
-    suspend fun getRecentConversationsOfAssistant(assistantId: String, limit: Int): List<ConversationEntity>
+    @Query("SELECT * FROM conversationentity WHERE scope = :scope AND parent_conversation_id IS NULL AND assistant_id = :assistantId ORDER BY is_pinned DESC, update_at DESC LIMIT :limit")
+    suspend fun getRecentConversationsOfAssistant(scope: ConfigurationScope, assistantId: String, limit: Int): List<ConversationEntity>
 
     @Query("SELECT id FROM conversationentity WHERE parent_conversation_id IS NULL")
     suspend fun getAllIds(): List<String>
@@ -43,8 +43,8 @@ interface ConversationDAO {
     @Query("DELETE FROM conversationentity WHERE id = :id")
     suspend fun deleteById(id: String)
 
-    @Query("SELECT * FROM conversationentity WHERE parent_conversation_id IS NULL AND is_pinned = 1 ORDER BY update_at DESC")
-    fun getPinnedConversations(): Flow<List<ConversationEntity>>
+    @Query("SELECT * FROM conversationentity WHERE scope = :scope AND parent_conversation_id IS NULL AND is_pinned = 1 ORDER BY update_at DESC")
+    fun getPinnedConversations(scope: ConfigurationScope): Flow<List<ConversationEntity>>
 
     @Query("UPDATE conversationentity SET is_pinned = :isPinned WHERE id = :id")
     suspend fun updatePinStatus(id: String, isPinned: Boolean)
@@ -70,8 +70,8 @@ interface ConversationDAO {
     @Query("UPDATE conversationentity SET workspace_cwd = :cwd WHERE id = :id")
     suspend fun updateWorkspaceCwd(id: String, cwd: String)
 
-    @Query("SELECT COUNT(*) FROM conversationentity WHERE parent_conversation_id IS NULL")
-    suspend fun countAll(): Int
+    @Query("SELECT COUNT(*) FROM conversationentity WHERE scope = :scope AND parent_conversation_id IS NULL")
+    suspend fun countAll(scope: ConfigurationScope): Int
 
     // ---- Child Conversation 查询 ----
 

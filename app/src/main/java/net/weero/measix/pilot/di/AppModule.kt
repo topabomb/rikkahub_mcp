@@ -79,7 +79,7 @@ val appModule = module {
     single { FileManagementApplicationService(get(), get(), get()) }
     single { FileManagementQueryService(get(), get(), get()) }
     single { MediaExportService(get()) }
-    single { StatsQueryService(get(), get(), get()) }
+    single { StatsQueryService(get(), get(), get(), get(), get()) }
     single { ChatErrorStore() }
     single { BackupRestoreApplicationService(get(), get(), get()) }
     single { ProviderSettingsApplicationService(get(), get()) }
@@ -412,11 +412,12 @@ val appModule = module {
             json = get(),
             toolArtifactRewriter = get(),
             titleCoordinator = get(),
+            sessions = get(),
         )
     }
 
     single { ConversationAttachmentPreviewProjector(get()) }
-    single { ConversationQueryService(get(), get(), get(), get(), get()) }
+    single { ConversationQueryService(get(), get(), get(), get(), get(), get(), get()) }
     single { CustomChatFontService(get(), get()) }
     single { SearchIndexMaintenanceService(get(), get()) }
     single { FavoriteService(get(), get()) }

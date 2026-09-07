@@ -14,6 +14,7 @@ import me.rerere.ai.core.Tool
 import me.rerere.ai.ui.UIMessagePart
 import net.weero.measix.pilot.data.db.fts.MessageSearchSort
 import net.weero.measix.pilot.service.ConversationQueryService
+import net.weero.measix.pilot.data.enterprise.RealmAccess
 import net.weero.measix.pilot.utils.JsonInstantPretty
 import net.weero.measix.pilot.utils.toLocalDate
 
@@ -24,6 +25,7 @@ import net.weero.measix.pilot.utils.toLocalDate
 fun createConversationTools(
     conversationQueryService: ConversationQueryService,
     assistantId: ConfigurationReference,
+    realmAccess: RealmAccess,
 ): List<Tool> = listOf(
     Tool(
         name = "recent_chats",
@@ -47,6 +49,7 @@ fun createConversationTools(
         execute = {
             val limit = (it.jsonObject["limit"]?.jsonPrimitive?.intOrNull ?: 10).coerceIn(1, 30)
             val recent = conversationQueryService.recentConversations(
+                access = realmAccess,
                 assistantId = assistantId,
                 limit = limit,
             )
@@ -91,7 +94,7 @@ fun createConversationTools(
                 ?: error("query is required")
             val limit = (it.jsonObject["limit"]?.jsonPrimitive?.intOrNull ?: 15).coerceIn(1, 50)
             val results = conversationQueryService
-                .searchMessagesOfAssistant(assistantId, query, MessageSearchSort.RELEVANCE)
+                .searchMessagesOfAssistant(realmAccess, assistantId, query, MessageSearchSort.RELEVANCE)
                 .take(limit)
             val payload = buildJsonArray {
                 results.forEach { result ->

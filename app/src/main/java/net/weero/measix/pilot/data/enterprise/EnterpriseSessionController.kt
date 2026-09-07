@@ -12,6 +12,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.delay
@@ -212,6 +214,31 @@ internal class EnterpriseSessionController(
         }
     }
 
+    suspend fun captureSelectedRealmAccess(): RealmAccess = mutex.withLock {
+        if (state.value is EnterpriseState.Failed) return@withLock RealmAccess.Personal
+        val manifest = ensureLoaded().manifest
+        if (manifest.selectedScope == ConfigurationScope.Personal) return@withLock RealmAccess.Personal
+        val session = manifest.session ?: fail("enterprise_session_required")
+        val access = RealmAccess.Enterprise(session.identity.scope, session.id)
+        if (!allowsDataAccess(manifest, access)) fail("enterprise_data_access_unavailable")
+        access
+    }
+
+    /** UI directory subscriptions follow the selected realm; expiry revokes the original session. */
+    fun observeSelectedRealmAccess(): Flow<RealmAccess?> = state.flatMapLatest { published ->
+        val manifest = (published as? EnterpriseState.Available)?.manifest
+        when {
+            published is EnterpriseState.Failed -> flowOf(RealmAccess.Personal)
+            manifest == null -> flowOf(null)
+            manifest.selectedScope == ConfigurationScope.Personal -> flowOf(RealmAccess.Personal)
+            manifest.session == null -> flowOf(null)
+            else -> {
+                val access = RealmAccess.Enterprise(manifest.session.identity.scope, manifest.session.id)
+                observeRealmAccess(access).map { allowed -> access.takeIf { allowed } }
+            }
+        }
+    }.distinctUntilChanged()
+
     /** Session changes wait for the complete operation, including its durable commit or rollback. */
     suspend fun <T> withRealmAccess(access: RealmAccess, operation: suspend () -> T): T = when (access) {
         RealmAccess.Personal -> operation()
@@ -219,6 +246,15 @@ internal class EnterpriseSessionController(
             if (!allowsDataAccess(ensureLoaded().manifest, access)) fail("enterprise_data_access_unavailable")
             operation()
         }
+    }
+
+    /** Current-space UI reads cannot continue using an old selection after a realm switch. */
+    suspend fun <T> withSelectedRealmAccess(access: RealmAccess, operation: suspend () -> T): T = mutex.withLock {
+        if (state.value is EnterpriseState.Failed && access == RealmAccess.Personal) return@withLock operation()
+        val manifest = ensureLoaded().manifest
+        if (manifest.selectedScope != access.scope ||
+            (access is RealmAccess.Enterprise && !allowsDataAccess(manifest, access))) fail("enterprise_data_access_unavailable")
+        operation()
     }
 
     /** A captured subscription expires even when no command changes the manifest. New sessions cannot revive it. */

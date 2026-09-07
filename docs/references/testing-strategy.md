@@ -63,6 +63,7 @@
 | Room V3 migration / backup | `Migration_10_11Test`、backup restore instrumentation |
 | 域身份持久化 / 主子一致性 | `Migration_11_12Test`、`ConfigurationScopePersistenceTest`、`ConversationRepositoryTreeIntegrationTest`、`ConversationTransitionTest`；不替代查询授权、文件隔离与企业 UI 验收 |
 | 运行记忆域与 Session | `RealmAccessTest`、`MemoryServiceTest` 与真实 Room 的 `ScopedMemoryRepositoryAndroidTest`；验证旧 Session、模式变化、工具结果归属、事务取消及个人助手清理范围 |
+| 会话目录、FTS 与统计域过滤 | `ScopedConversationQueryTest`、`SelectedRealmPagingSourceTest` 验证原 Session 工具、列表恢复及实际 Pager 失效；`ConversationDAOIntegrationTest` 和使用生产数据库工厂的 `ScopedMessageSearchAndroidTest` 验证真实 Room/Requery/Jieba 的完整主体过滤与限额前过滤，不替代按 ID 页面/命令授权验收 |
 
 ## 4. Provider contract suite（两层）
 
