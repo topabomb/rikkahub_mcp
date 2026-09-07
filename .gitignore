@@ -23,6 +23,7 @@ node_modules/
 *.key
 app/app.key
 app/google-services.json
+/enterprise.local.json
 
 # ---- AI Agent 配置 ----
 .codebuddy

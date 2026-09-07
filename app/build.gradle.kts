@@ -3,9 +3,12 @@ import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 import org.jetbrains.kotlin.gradle.tasks.KotlinCompile
 import org.gradle.api.DefaultTask
 import org.gradle.api.file.DirectoryProperty
+import org.gradle.api.file.RegularFileProperty
 import org.gradle.api.provider.Property
 import org.gradle.api.tasks.Input
 import org.gradle.api.tasks.InputDirectory
+import org.gradle.api.tasks.InputFile
+import org.gradle.api.tasks.OutputDirectory
 import org.gradle.api.tasks.TaskAction
 import java.io.File
 import java.io.FileInputStream
@@ -35,6 +38,27 @@ plugins {
     alias(libs.plugins.baselineprofile)
 }
 
+abstract class PrepareEnterpriseExampleAssets : DefaultTask() {
+    @get:InputFile
+    abstract val exampleFile: RegularFileProperty
+
+    @get:OutputDirectory
+    abstract val outputDirectory: DirectoryProperty
+
+    @TaskAction
+    fun prepare() {
+        val directory = outputDirectory.get().asFile
+        directory.mkdirs()
+        exampleFile.get().asFile.copyTo(File(directory, "enterprise.local.example.json"), overwrite = true)
+    }
+}
+
+// Package only the public example; private local imports never become build inputs.
+val enterpriseExampleAssets = tasks.register<PrepareEnterpriseExampleAssets>("prepareEnterpriseExampleAssets") {
+    exampleFile.set(rootProject.layout.projectDirectory.file("docs/examples/enterprise.local.example.json"))
+    outputDirectory.set(layout.buildDirectory.dir("generated/enterpriseExampleAssets"))
+}
+
 android {
     namespace = "net.weero.measix.pilot"
     compileSdk = 37
@@ -54,6 +78,7 @@ android {
     }
 
     sourceSets {
+        getByName("test").resources.srcDir(layout.buildDirectory.dir("generated/enterpriseExampleAssets").get().asFile)
         // Room MigrationTestHelper（androidTest 插桩迁移测试）需要 schema JSON 作为插桩测试 assets
         getByName("androidTest").assets.srcDirs("$projectDir/schemas")
     }
@@ -155,6 +180,11 @@ android {
         compilerOptions.optIn.add("kotlin.time.ExperimentalTime")
         compilerOptions.optIn.add("kotlinx.coroutines.ExperimentalCoroutinesApi")
     }
+}
+
+tasks.named("preBuild").configure { dependsOn(enterpriseExampleAssets) }
+androidComponents.onVariants { variant ->
+    variant.sources.assets?.addGeneratedSourceDirectory(enterpriseExampleAssets, PrepareEnterpriseExampleAssets::outputDirectory)
 }
 
 // Rename APK output: app-arm64-v8a-release.apk → MeasixPilot_<version>_arm64-v8a-release.apk

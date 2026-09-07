@@ -275,6 +275,8 @@ LocalEnterpriseSource（身份/配置/动态/场景）
 
 D0 已由 `c2745a1d` 独立提交完成。C1/C2 正在实施：用户配置/偏好文档及旧键迁移、跨模块配置引用已进入代码；正式企业 source、域数据隔离、UI 与完整模拟能力尚未完成。下表保留全部交付范围，单项基础测试通过不代表 C1/C2 或整期完成。
 
+C3/M1 的本地资料与持久状态基础已进入代码：完整公开示例、短接入资料校验、整包/绑定原子提交、会话切换/退出/损坏恢复、按 revision 更新及在途绑定 lease。19 项定向 JVM 测试和 3 项模拟器持久化测试通过，独立审查所发现的提交失败误发布、损坏配置无法退出、离线编辑误恢复在线已修复并复核。完整 `test assembleDebug lintDebug assembleRelease --no-parallel --max-workers=1` 通过，lint 无错误；两种 APK 的示例内容与公开模板一致且未打包私有文件。当前尚未接入 DI/启动、正式页面、生效解析和实际企业 adapters，不计作 C3、U1 或 M1 完成，版本仍为开发基线 0.0.19。
+
 配置基础变更的已执行验证（不替代 E01–E12 整期验收）：
 
 - `test assembleDebug lintDebug assembleRelease --no-parallel --max-workers=1` 通过；lint 无错误。

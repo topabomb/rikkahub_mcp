@@ -66,6 +66,16 @@ updateLocal(latest Local shadow transform)
 - 已删除无功能消费者的 developerMode 字段；迁移清除旧 developer_mode 键，旧备份中的字段由 JSON codec 忽略。构建类型标记不使用此配置。
 - 写个人配置会保留其他主体的偏好；EffectiveSettingsSnapshot 仍为只读内存投影，不另落盘。
 
+### 2.4 本地企业接入基础
+
+`data/enterprise` 已提供独立的企业配置、接入资料及持久状态组件；尚未接入应用 DI、启动恢复、Settings 生效解析与正式页面，因此当前应用仍使用上文的个人投影和旧 Managed 原型。
+
+- `EnterprisePackageCodec` 校验完整本地资料：显式五项准入、资源/助手引用、默认选择与完整运行绑定。该格式独立于生产平台协议。定义与运行连接分开；异常不带可能含凭据的原始反序列化错误。
+- `EnterpriseAppliedStore` 在调用者指定的私有目录暂存不可变配置和绑定，以单个 manifest 原子发布身份、版本和当前空间。提交显式同步文件并核验实际 manifest，不能把 AtomicFile 仅记录日志的失败当作成功。
+- `EnterpriseSessionController` 是上述存储的串行写 owner。支持待配置、就绪、离线、退出和重新认证；切换保留登录，退出撤销资格后等待在途 lease 释放。配置损坏时仍能依靠已验证身份退出；恢复不接受不闭合的活动文件。
+- 配置更新按 revision 校验旧编辑状态，定义与绑定同包校验；同会话更新保留离线状态。在途 lease 保留捕获的旧绑定直至释放；lease 不充当执行授权，运行链接入时还需统一准入门禁。
+- `LocalEnterpriseSource` 统一验证一键、粘贴和扫码解析后的公开示例接入资料，并支持私有整包导入。`docs/examples/enterprise.local.example.json` 是唯一公开示例输入，通过构建任务进入 assets；根目录 `enterprise.local.json` 被 Git 忽略且不参与打包。示例 HTML 的手机能力仍等待正式 Portal 宿主接通。
+
 ## 3. Local Settings 顶层结构
 
 下表的 DataStore key 列记录旧迁移输入键，正常落盘已统一为 `user_settings` 的类型化结构。下表中的“读取默认”以空 DataStore 的真实迁移/读取/物化结果为准，不以 `Settings()` 中为序列化兼容而存在的随机 UUID
