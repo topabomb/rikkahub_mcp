@@ -16,27 +16,16 @@ import me.rerere.ai.core.ToolAttachmentResolution
 import me.rerere.ai.core.ToolExecutionFailure
 import me.rerere.ai.core.ToolExecutionContext
 import me.rerere.ai.provider.Modality
-import me.rerere.ai.provider.Model
-import me.rerere.ai.provider.Provider
 import me.rerere.ai.provider.ProviderManager
-import me.rerere.ai.provider.ProviderSetting
 import me.rerere.ai.provider.RequestImageSupport
-import me.rerere.ai.provider.RequestMediaCapabilities
 import me.rerere.ai.provider.TextGenerationParams
 import me.rerere.ai.ui.UIMessagePart
 import me.rerere.ai.util.classifyProviderFailure
 import net.weero.measix.pilot.data.ai.attachments.AttachmentFailureReasons
 import net.weero.measix.pilot.data.ai.attachments.AttachmentRefs
 import net.weero.measix.pilot.data.ai.attachments.MAX_INSPECTION_ATTACHMENTS
-import net.weero.measix.pilot.data.datastore.Settings
-import net.weero.measix.pilot.data.datastore.findModelById
-import net.weero.measix.pilot.data.datastore.findProvider
+import net.weero.measix.pilot.service.turn.generateText
 import net.weero.measix.pilot.data.files.LocalToolPath
-import net.weero.measix.pilot.service.runtime.ProviderCredentialOwnerLocator
-import net.weero.measix.pilot.service.runtime.captureProviderCredentialOwner
-import net.weero.measix.pilot.service.runtime.freezeProviderWireShape
-import net.weero.measix.pilot.service.runtime.mergeProviderTransportCredentials
-import net.weero.measix.pilot.service.runtime.resolveProviderTransportOwner
 
 const val ATTACHMENT_INSPECTION_TOOL_NAME = "inspect_attachments"
 
@@ -62,44 +51,17 @@ private const val INSPECTION_SYSTEM_INSTRUCTION =
  * - 成功返回普通 Text Tool Result；失败返回带机器可判别 reason 的 JSON；
  * - 无 cache；不写回 Conversation。
  *
- * 工具构造时解析并捕获 inspection model、provider setting 与派生的媒体映射；
- * 执行时不再通过 Settings 重找模型，也不再以 endpoint host 二次裁决图片能力。
+ * 模型及媒体映射与主模型在同一次原域捕获中冻结；工具只借用原 Turn 的请求权限，
+ * 不读取 Settings、不持有凭据或释放共享 binding，也不按 endpoint host 二次裁决图片能力。
  * 构造阶段只断言 Provider 已遵守 IMAGE 模型必须提供结构化 USER 图片编码的静态契约；
  * 远端真实不兼容由 Provider 请求返回的分类错误表达。
  */
-internal data class AttachmentInspectionTransport(
-    val frozenProviderShape: net.weero.measix.pilot.service.runtime.FrozenProviderWireShape,
-    val credentialLease: net.weero.measix.pilot.service.runtime.ProviderTransportLease,
-    val providerManager: ProviderManager,
-)
-
-fun createAttachmentInspectionTool(
-    settings: Settings,
+internal fun createAttachmentInspectionTool(
+    captured: net.weero.measix.pilot.service.ModelExecutionSnapshot,
     providerManager: ProviderManager,
-    liveSettingsProvider: () -> Settings,
 ): Tool {
-    // Resolve and capture at construction time. shouldInjectAttachmentInspection already
-    // validated these facts; this is the single owner boundary for the inspection contract.
-    val inspectionModel = settings.findModelById(settings.attachmentInspectionModelId)
-        ?: error("Attachment inspection model is not configured")
-    val providerSetting = inspectionModel.findProvider(settings.providers)
-        ?: error("Attachment inspection model provider not found")
-    if (!inspectionModel.inputModalities.contains(Modality.IMAGE)) {
-        error("Attachment inspection model does not support IMAGE input")
-    }
-    val provider = providerManager.getProviderByType(providerSetting)
-    val mediaCapabilities = provider.requestMediaCapabilities(providerSetting, inspectionModel)
-    val frozenInspectionModel = inspectionModel.copy(providerOverwrite = null)
-    val frozenProviderShape = freezeProviderWireShape(providerSetting, frozenInspectionModel)
-    val credentialOwner = captureProviderCredentialOwner(settings, inspectionModel, providerSetting)
-    val transport = AttachmentInspectionTransport(
-        frozenProviderShape = frozenProviderShape,
-        credentialLease = net.weero.measix.pilot.service.runtime.ProviderTransportLease {
-            resolveProviderTransportOwner(liveSettingsProvider(), credentialOwner)
-        },
-        providerManager = providerManager,
-    )
-    check(mediaCapabilities.userImages == RequestImageSupport.STRUCTURED) {
+    check(Modality.IMAGE in captured.model.inputModalities) { "Attachment inspection model does not support IMAGE input" }
+    check(captured.mediaCapabilities.userImages == RequestImageSupport.STRUCTURED) {
         "Provider contract violation: IMAGE model cannot encode structured USER images"
     }
 
@@ -156,9 +118,8 @@ fun createAttachmentInspectionTool(
         contextualExecute = { args ->
             executeInspection(
                 args = args,
-                inspectionModel = frozenInspectionModel,
-                transport = transport,
-                mediaCapabilities = mediaCapabilities,
+                captured = captured,
+                providerManager = providerManager,
                 resolveAttachments = this.resolveAttachments,
             )
         },
@@ -171,9 +132,8 @@ fun createAttachmentInspectionTool(
 
 internal suspend fun executeInspection(
     args: kotlinx.serialization.json.JsonElement,
-    inspectionModel: Model,
-    transport: AttachmentInspectionTransport,
-    mediaCapabilities: RequestMediaCapabilities,
+    captured: net.weero.measix.pilot.service.ModelExecutionSnapshot,
+    providerManager: ProviderManager,
     resolveAttachments: suspend (paths: List<String>) -> ToolAttachmentResolution,
 ): List<UIMessagePart> {
     val obj = args as? JsonObject
@@ -219,27 +179,22 @@ internal suspend fun executeInspection(
     }
 
     return try {
-        val providerSetting = mergeProviderTransportCredentials(
-            transport.frozenProviderShape,
-            transport.credentialLease.acquire(),
-        )
-        val provider = transport.providerManager.getProviderByType(providerSetting)
-        val result = provider.generateText(
-            providerSetting = providerSetting,
+        val result = captured.requests.execute { target -> target.generateText(
+            providers = providerManager,
             messages = listOf(
                 ModelRequestMessage.system(INSPECTION_SYSTEM_INSTRUCTION),
                 ModelRequestMessage(role = MessageRole.USER, parts = userParts),
             ),
             params = TextGenerationParams(
-                model = inspectionModel,
+                model = captured.model,
                 // 内部识别调用不表达「关闭推理」：AUTO 让 Provider 使用模型默认推理档，
                 // 避免 OFF 在 Gemini 3 系列上映射为 minimal（3.1 Pro / 3.7 Flash 不支持，直接 400）。
                 reasoningLevel = ReasoningLevel.AUTO,
-                customHeaders = inspectionModel.customHeaders,
-                customBody = inspectionModel.customBodies,
-                mediaCapabilities = mediaCapabilities,
+                customHeaders = captured.model.customHeaders,
+                customBody = captured.model.customBodies,
+                mediaCapabilities = captured.mediaCapabilities,
             ),
-        )
+        ) }
         val text = result.choices.firstOrNull()?.message?.toText()?.trim().orEmpty()
         if (text.isEmpty()) {
             inspectionFailure(AttachmentFailureReasons.INSPECTION_FAILED)
@@ -257,8 +212,7 @@ internal suspend fun executeInspection(
         val classified = classifyProviderFailure(e)
         Log.w(
             TAG,
-            "Attachment inspection failed: provider=${transport.frozenProviderShape::class.simpleName}, " +
-                "model=${inspectionModel.modelId}, reason=${classified.kind.reason}",
+            "Attachment inspection failed: model=${captured.model.modelId}, reason=${classified.kind.reason}",
             e,
         )
         inspectionFailure(

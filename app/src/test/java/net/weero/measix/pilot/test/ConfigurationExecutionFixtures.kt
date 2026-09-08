@@ -53,6 +53,10 @@ internal fun testModelExecutionService(store: SettingsStore, sessions: Enterpris
     val providers = mockk<ProviderManager>()
     val provider = mockk<Provider<ProviderSetting>>()
     every { providers.getProviderByType(any<ProviderSetting>()) } returns provider
-    every { provider.requestMediaCapabilities(any(), any()) } returns RequestMediaCapabilities.NONE
+    every { provider.requestMediaCapabilities(any(), any()) } answers {
+        if (me.rerere.ai.provider.Modality.IMAGE in secondArg<me.rerere.ai.provider.Model>().inputModalities)
+            RequestMediaCapabilities(userImages = me.rerere.ai.provider.RequestImageSupport.STRUCTURED)
+        else RequestMediaCapabilities.NONE
+    }
     return ModelExecutionService(store, sessions, gate, providers)
 }

@@ -1020,6 +1020,7 @@ class SubAssistantRunCoordinator internal constructor(
             conversationId = childConversationId,
             settings = settings,
             capabilityModel = model,
+            inspectionModel = captured.inspectionModel,
             workspaceCwd = snapshot.header.workspaceCwd,
             turnKind = TurnKind.SUB_ASSISTANT,
             ttsPlaybackContext = ttsPlaybackContext,

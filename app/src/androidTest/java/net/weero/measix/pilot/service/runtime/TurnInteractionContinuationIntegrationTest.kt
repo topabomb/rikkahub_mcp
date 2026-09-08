@@ -191,7 +191,7 @@ class TurnInteractionContinuationIntegrationTest {
             try {
                 val worker = requireNotNull(coroutineContext[Job])
                 assertSame(worker, runtime.currentWorker())
-                runtime.bindModelExecution(turnId, worker, turnContext.assistant.id, turnContext.model.executionLease)
+                runtime.bindModelExecution(turnId, worker, turnContext.assistant.id, turnContext.model.requests as net.weero.measix.pilot.service.runtime.ModelExecutionLease)
                 runtime.bindTurnContext(turnId, worker, turnContext)
                 val started = TurnCommitter.start(
                     commandCoordinator = coordinator,

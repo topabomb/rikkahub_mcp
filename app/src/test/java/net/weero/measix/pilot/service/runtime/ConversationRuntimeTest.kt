@@ -48,6 +48,7 @@ import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Assert.assertThrows
+import org.junit.Assert.fail
 import org.junit.Test
 import kotlin.uuid.Uuid
 
@@ -398,7 +399,9 @@ class ConversationRuntimeTest {
             assistant = assistant,
         )
 
-        rt.bindModelExecution(turnId, initialWorker, context.assistant.id, context.model.executionLease)
+        val owner = context.model.requests as ModelExecutionLease
+        val inspection = owner.borrow { it(ModelRequestTarget.LocalExample) }
+        rt.bindModelExecution(turnId, initialWorker, context.assistant.id, owner)
         rt.bindTurnContext(turnId, initialWorker, context)
         val projection = TurnModelContextProjection(entries = emptyList(), locators = emptyMap())
         rt.bindModelContextProjection(turnId, initialWorker, projection)
@@ -422,6 +425,12 @@ class ConversationRuntimeTest {
         rt.continueAwaitingUser(handle, continuationWorker)
         assertSame(context, rt.requireTurnContext(turnId, continuationWorker))
         assertSame(projection, rt.requireTurnModelContextProjection(turnId, continuationWorker))
+        rt.releaseTurnWorker(turnId, initialWorker, false)
+        assertTrue(inspection.execute { it === ModelRequestTarget.LocalExample })
+        continuationWorker.cancel()
+        rt.releaseTurnWorker(turnId, continuationWorker, false)
+        try { inspection.execute { fail("released continuation reached I/O") }; fail("closed inspection accepted") }
+        catch (error: IllegalStateException) { assertEquals("model_execution_lease_closed", error.message) }
         scope.cancel()
     }
 
@@ -441,7 +450,7 @@ class ConversationRuntimeTest {
             model = model,
             assistant = assistant,
         )
-        rt.bindModelExecution(turnId, worker, context.assistant.id, context.model.executionLease)
+        rt.bindModelExecution(turnId, worker, context.assistant.id, context.model.requests as net.weero.measix.pilot.service.runtime.ModelExecutionLease)
         rt.bindTurnContext(turnId, worker, context)
         rt.requestCancel(turnId, "target_access_revoked")
         assertEquals(TurnLivePhase.STOPPING, rt.currentTurnPresentation().phase)
@@ -480,7 +489,7 @@ class ConversationRuntimeTest {
             settings = Settings(providers = listOf(provider), assistants = listOf(assistant)),
             model = model, assistant = assistant,
         )
-        rt.bindModelExecution(turnId, worker, context.assistant.id, context.model.executionLease)
+        rt.bindModelExecution(turnId, worker, context.assistant.id, context.model.requests as net.weero.measix.pilot.service.runtime.ModelExecutionLease)
         rt.bindTurnContext(turnId, worker, context)
         rt.retainAwaitingUser(handle)
 

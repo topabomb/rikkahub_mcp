@@ -349,7 +349,7 @@ class ConversationRuntime internal constructor(
             "turn context owner does not match turn $turnId"
         }
         check(current.assistantId == context.assistant.id) { "turn_context_assistant_changed" }
-        check(!current.releaseStarted && current.modelExecutionLease === context.model.executionLease) {
+        check(!current.releaseStarted && current.modelExecutionLease?.owns(context.model.requests) == true) {
             "turn_context_execution_owner_mismatch"
         }
         current.bindTurnContext(context)

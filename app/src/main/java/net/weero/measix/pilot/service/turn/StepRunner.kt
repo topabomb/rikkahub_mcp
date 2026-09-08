@@ -43,7 +43,7 @@ import net.weero.measix.pilot.data.ai.transformers.transforms
 import net.weero.measix.pilot.data.db.entity.TurnExecutionStatus
 import net.weero.measix.pilot.data.model.ConversationModelContextEntry
 import net.weero.measix.pilot.service.ConversationDisclosureSnapshotService
-import net.weero.measix.pilot.service.runtime.ModelExecutionLease
+import net.weero.measix.pilot.service.runtime.ModelRequests
 import kotlin.time.Clock
 import kotlin.time.TimeSource
 import kotlin.uuid.Uuid
@@ -104,7 +104,7 @@ internal class StepRunner(
             transformers = state.inputTransformers,
             accumulator = state.accumulator,
             model = state.model,
-            executionLease = state.turnContext.model.executionLease,
+            executionLease = state.turnContext.model.requests,
             toolDefinitions = state.toolDefinitions,
             stream = state.assistant.streamOutput,
             reportProcessingText = state.reportProcessingText,
@@ -199,7 +199,7 @@ internal class StepRunner(
         accumulator: StepOutputAccumulator,
         transformers: List<MessageTransformer>,
         model: Model,
-        executionLease: ModelExecutionLease,
+        executionLease: ModelRequests,
         toolDefinitions: List<FrozenToolDefinition>,
         stream: Boolean,
         reportProcessingText: (String?) -> Unit = {},

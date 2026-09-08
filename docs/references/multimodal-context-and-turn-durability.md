@@ -196,10 +196,7 @@ Tool Result checkpoint（消息与 Artifact 引用同事务）
 
 ### 4.1 注入条件
 
-工具注入判定 `shouldInjectAttachmentInspection(settings)`（`TurnToolSetFactory`）只要求：
-
-1. `Settings.attachmentInspectionModelId` 能解析到模型，且 Provider 可用；
-2. 该识图模型 `inputModalities` 含 IMAGE。
+`ModelExecutionService` 从原域 `ResolvedConfiguration.modelSelection(ATTACHMENT_INSPECTION)` 解析可执行的 Chat 视觉模型，与主模型在同次用户配置和企业 binding 捕获中冻结。未配置、引用失效或策略不允许时不装配识图工具；不回退到其他模型。`TurnToolSetFactory` 只接收已捕获的模型请求视图，不再次读取 Settings。
 
 不依赖当前会话是否含图、当前模型的图片容器覆盖或工作区状态。模型具备原生视觉能力，不代表上下文已经携带文件清单中的图片。
 子助手默认清单只有 `artifacts[].path/type/mime`，没有 Image 或附件事实行；后续仍可直接按路径调用识图。
@@ -223,10 +220,9 @@ Tool Result checkpoint（消息与 Artifact 引用同事务）
 → Text Tool Result
 ```
 
-- 识别调用由 `AttachmentInspectionTool` 直接持有 Provider 请求边界，不经过 `TurnRunner`；
-  工具构造时（`createAttachmentInspectionTool`）一次性解析 inspection model，冻结无凭据的 Provider wire shape、exact credential-owner locator 与派生的 `RequestMediaCapabilities`。执行时只从该 exact owner 刷新 secret，不能重找模型或改变 endpoint/protocol/cache shape，owner 被删除、替换或复制时 fail-closed；也不按 endpoint host 二次裁决图片能力。构造时仅断言 IMAGE 模型具有结构化 USER 图片编码映射。若远端实际不兼容，Provider 请求返回的
-  真实分类错误（如 `provider_error`）表达，而不是预先伪装为 `inspection_model_unavailable`。
-  不得依赖参数默认值或把引用行当作识别输入。
+- `AttachmentInspectionTool` 通过捕获的 `ModelRequests` 发起独立识图请求；借用视图只提供执行能力，原 Runtime 的 `ModelExecutionLease` 唯一持有并释放共享企业 binding，关闭后全部角色立即不可再准入。工具不持有另一份凭据 owner。
+  各请求复验原助手、原模型及 Child caller/target 授权，保持原 endpoint/protocol/model shape。企业助手固定聊天绑定只约束 CHAT；识图使用本域识图选择。用户凭据从原 owner 刷新，企业私有 header/凭据走相同受管请求边界。
+  `RequestMediaCapabilities` 在捕获时冻结，IMAGE 模型必须提供结构化 USER 图片编码；远端不兼容由真实 Provider 分类错误表达。企业本地示例接收同样的图片请求并明确返回模拟结果，不调用网络或声称真实识图。
 - paths 与产出 1:1、顺序稳定，重复路径保留对应图片位置；内部标签使用原请求路径。识图与委托入口均不接受 UUID、HTTP(S)、file URI、workspace 或越界路径，不提供旧参数兼容入口。
 - `ArtifactStore` 在同一 lifecycle lock 内校验原操作 scope、ACTIVE/已发布并取得既有 retention pin，锁外读取；成功、失败和取消都在 finally 释放。
   识图内存快照复用 FileEncoder 的压缩、EXIF 方向和格式转换，不以 raw data URI 绕过现有图片编码；网络调用不持有磁盘文件，也不创建副本。
@@ -236,7 +232,7 @@ Tool Result checkpoint（消息与 Artifact 引用同事务）
 
 ### 4.3 设置与迁移
 
-- `Settings.attachmentInspectionModelId: Uuid? = null`；DataStore key `attachment_inspection_model`；未配置即关闭工具。设置页选择器只列出声明 IMAGE 输入的 Chat 模型。
+- `ResourceSelections.attachmentInspectionModelId` 保存本域的类型化配置引用；设置页只允许选择当前域可用且声明 IMAGE 输入的 Chat 模型。用户定义保持一份，企业策略只限制本域使用。
 - 旧 `ocr_model` / `ocr_prompt` 只存在于一次性迁移边界（`SettingsOcrMigration`）：新 key 优先；有效旧视觉模型（Provider 存在且声明 IMAGE 输入）映射到新字段；旧 Prompt 丢弃；旧 key 清除；旧 observation cache best-effort 清理。备份恢复（S3 / WebDav）在导入 settings.json 前同样应用 `migrateLegacySettingsJson()` 旧键映射，见 [Android 配置架构](android-configuration-architecture.md)。
 
 ## 5. 投影时序（三条链路）
@@ -274,7 +270,7 @@ Artifact metadata、引用和生命周期归 `ArtifactStore`；`ArtifactPayloadS
 | `AttachmentRefs` | ref 前缀、metadata 键、merge / ensure / backfill、file URL |
 | `AttachmentResolver` | path → 识图内存快照 / Child 本地 Image；只通过 ArtifactStore 读取 |
 | `AttachmentProjectionTransformer` | 请求级投影（本文件 §3） |
-| `AttachmentInspectionTool` / `shouldInjectAttachmentInspection` | `inspect_attachments` 工具与注入判定 |
+| `AttachmentInspectionTool` / `ModelExecutionService` | `inspect_attachments` 工具、原域捕获与逐请求准入 |
 | `ToolExecutionContext` / `ToolAttachmentResolution` | ai 模块最小只读附件能力接口 |
 | ToolOutputStore | Artifact-backed Tool Output staging、marker、conversation-scoped bounded read/grep |
 | `ArtifactStore` / `ArtifactPayloadStore` | 附件 metadata、引用与生命周期 / 受管磁盘 IO |

@@ -36,6 +36,7 @@ import net.weero.measix.pilot.data.ai.subassistant.resolveSubAssistantRunSpec
 import net.weero.measix.pilot.data.ai.subassistant.resolvePreWriteBlockReason
 import net.weero.measix.pilot.data.ai.subassistant.resolveActiveRunStopReason
 import net.weero.measix.pilot.service.runtime.ConversationRuntime
+import net.weero.measix.pilot.service.runtime.ModelRequests
 import net.weero.measix.pilot.service.runtime.ModelExecutionLease
 import net.weero.measix.pilot.service.runtime.ModelRequestTarget
 import net.weero.measix.pilot.service.runtime.captureProviderCredentialOwner
@@ -49,17 +50,20 @@ import kotlin.uuid.Uuid
 /** Frozen request shape shared by chat and auxiliary execution; credentials remain with the lease owner. */
 internal data class ModelExecutionSnapshot(
     val model: Model,
-    val executionLease: ModelExecutionLease,
+    val requests: ModelRequests,
     val userRevision: String,
     val enterpriseVersion: EnterpriseAppliedVersion?,
+    val mediaCapabilities: RequestMediaCapabilities = RequestMediaCapabilities.NONE,
 )
 
 internal class CapturedModelConfiguration(
     val userSettings: Settings,
     val assistant: Assistant,
     val model: ModelExecutionSnapshot,
-    val mediaCapabilities: RequestMediaCapabilities,
-)
+    val inspectionModel: ModelExecutionSnapshot? = null,
+) {
+    val mediaCapabilities: RequestMediaCapabilities get() = model.mediaCapabilities
+}
 
 internal data class ChildModelAdmission(val callerAssistantId: ConfigurationReference, val runSpec: SubAssistantRunSpec)
 
@@ -141,64 +145,81 @@ internal class ModelExecutionService(
                 spec.assistant
             }
             check(assistant.id == assistantId) { "model_execution_assistant_changed" }
-            val selection = if (role == ModelSelectionRole.CHAT) configuration.assistantModel(assistant)
-                else configuration.auxiliaryModel(role, assistant)
-            check(selection.isAvailable) { "model_selection_unavailable:${role.name}:${selection.unavailableReason}" }
-            val modelId = requireNotNull(selection.reference)
-            requireAvailable(configuration, ConfigurationCategory.MODEL, modelId)
-            if (role == ModelSelectionRole.CHAT) requireFixedBinding(configuration, assistantId, modelId)
-            val selected = configuration.models[modelId]?.model ?: error("chat_model_unavailable")
-            check(selected.type == ModelType.CHAT) { "chat_model_capability_mismatch" }
-            val model = selected.copy(
-                customHeaders = selected.customHeaders.toList(), customBodies = selected.customBodies.toList(),
-                inputModalities = selected.inputModalities.toList(), outputModalities = selected.outputModalities.toList(),
-                abilities = selected.abilities.toList(), tools = selected.tools.toSet(), providerOverwrite = null,
-            ).let { if (role == ModelSelectionRole.CHAT) it.withAssistantSearch(assistant) else it.copy(tools = emptySet()) }
-            val privateBinding = (modelId as? ConfigurationReference.Enterprise)?.let {
-                requireNotNull(originalBindings) { "enterprise_binding_owner_missing" }.binding(it.id)
-            }
-            val initialTarget = if (privateBinding != null) enterpriseTarget(privateBinding, model)
-                else ModelRequestTarget.Remote(selected.findProvider(snapshot.userSettings.providers)
-                    ?: error("model_provider_unavailable"))
-            check(BuiltInTools.Search !in model.tools ||
-                (initialTarget is ModelRequestTarget.Remote && supportsBuiltInSearch(initialTarget.provider))) {
-                "model_builtin_search_not_supported"
-            }
-            val frozenShape = (initialTarget as? ModelRequestTarget.Remote)?.let { freezeProviderWireShape(it.provider, model) }
-            val credentialOwner = if (privateBinding == null) {
-                captureProviderCredentialOwner(snapshot.userSettings, selected, (initialTarget as ModelRequestTarget.Remote).provider)
-            } else null
-            val media = when (initialTarget) {
-                ModelRequestTarget.LocalExample -> if (Modality.IMAGE in model.inputModalities) {
-                    RequestMediaCapabilities(RequestImageSupport.STRUCTURED, RequestImageSupport.STRUCTURED, RequestImageSupport.STRUCTURED)
-                } else RequestMediaCapabilities.NONE
-                is ModelRequestTarget.Remote -> providers.getProviderByType(initialTarget.provider)
-                    .requestMediaCapabilities(initialTarget.provider, model)
-            }
-            admission = { accept ->
-                withConfiguration(access) { latest ->
-                    currentCoroutineContext().ensureActive()
-                    child?.let {
-                        resolveActiveRunStopReason(latest.configuration, it.callerAssistantId, assistantId, it.runSpec)?.let { reason ->
-                            runtime.requestCancel(requireNotNull(turnId), reason)
-                            throw CancellationException(reason)
-                        }
-                    }
-                    requireAvailable(latest.configuration, ConfigurationCategory.ASSISTANT, assistantId)
-                    requireAvailable(latest.configuration, ConfigurationCategory.MODEL, modelId)
-                    if (role == ModelSelectionRole.CHAT) requireFixedBinding(latest.configuration, assistantId, modelId)
-                    val target = if (privateBinding != null) {
-                        // The original lease checks revocation; replacement bindings belong to new Turns.
-                        enterpriseTarget(requireNotNull(originalBindings).binding(modelId.id), model)
-                    } else ModelRequestTarget.Remote(mergeProviderTransportCredentials(
-                        requireNotNull(frozenShape),
-                        resolveProviderTransportOwner(latest.userSettings, requireNotNull(credentialOwner)),
-                    ))
-                    accept(target)
+            fun captureSelected(
+                selectedRole: ModelSelectionRole,
+                selection: net.weero.measix.pilot.data.configuration.ConfigurationSelection,
+                requestView: (suspend ((ModelRequestTarget) -> Unit) -> Unit) -> ModelRequests,
+            ): ModelExecutionSnapshot {
+                check(selection.isAvailable) { "model_selection_unavailable:${selectedRole.name}:${selection.unavailableReason}" }
+                val modelId = requireNotNull(selection.reference)
+                requireAvailable(configuration, ConfigurationCategory.MODEL, modelId)
+                if (selectedRole == ModelSelectionRole.CHAT) requireFixedBinding(configuration, assistantId, modelId)
+                val selected = configuration.models[modelId]?.model ?: error("chat_model_unavailable")
+                check(selected.type == ModelType.CHAT) { "chat_model_capability_mismatch" }
+                val model = selected.copy(
+                    customHeaders = selected.customHeaders.toList(), customBodies = selected.customBodies.toList(),
+                    inputModalities = selected.inputModalities.toList(), outputModalities = selected.outputModalities.toList(),
+                    abilities = selected.abilities.toList(), tools = selected.tools.toSet(), providerOverwrite = null,
+                ).let { if (selectedRole == ModelSelectionRole.CHAT) it.withAssistantSearch(assistant) else it.copy(tools = emptySet()) }
+                val privateBinding = (modelId as? ConfigurationReference.Enterprise)?.let {
+                    requireNotNull(originalBindings) { "enterprise_binding_owner_missing" }.binding(it.id)
                 }
+                val initialTarget = if (privateBinding != null) enterpriseTarget(privateBinding, model)
+                    else ModelRequestTarget.Remote(selected.findProvider(snapshot.userSettings.providers)
+                        ?: error("model_provider_unavailable"))
+                check(BuiltInTools.Search !in model.tools ||
+                    (initialTarget is ModelRequestTarget.Remote && supportsBuiltInSearch(initialTarget.provider))) {
+                    "model_builtin_search_not_supported"
+                }
+                val frozenShape = (initialTarget as? ModelRequestTarget.Remote)?.let { freezeProviderWireShape(it.provider, model) }
+                val credentialOwner = if (privateBinding == null) {
+                    captureProviderCredentialOwner(snapshot.userSettings, selected, (initialTarget as ModelRequestTarget.Remote).provider)
+                } else null
+                val media = when (initialTarget) {
+                    ModelRequestTarget.LocalExample -> if (Modality.IMAGE in model.inputModalities) {
+                        RequestMediaCapabilities(RequestImageSupport.STRUCTURED, RequestImageSupport.STRUCTURED, RequestImageSupport.STRUCTURED)
+                    } else RequestMediaCapabilities.NONE
+                    is ModelRequestTarget.Remote -> providers.getProviderByType(initialTarget.provider)
+                        .requestMediaCapabilities(initialTarget.provider, model)
+                }
+                val modelAdmission: suspend ((ModelRequestTarget) -> Unit) -> Unit = { accept ->
+                    withConfiguration(access) { latest ->
+                        currentCoroutineContext().ensureActive()
+                        child?.let {
+                            resolveActiveRunStopReason(latest.configuration, it.callerAssistantId, assistantId, it.runSpec)?.let { reason ->
+                                runtime.requestCancel(requireNotNull(turnId), reason)
+                                throw CancellationException(reason)
+                            }
+                        }
+                        requireAvailable(latest.configuration, ConfigurationCategory.ASSISTANT, assistantId)
+                        requireAvailable(latest.configuration, ConfigurationCategory.MODEL, modelId)
+                        if (selectedRole == ModelSelectionRole.CHAT) requireFixedBinding(latest.configuration, assistantId, modelId)
+                        val target = if (privateBinding != null) {
+                            // The original lease checks revocation; replacement bindings belong to new Turns.
+                            enterpriseTarget(requireNotNull(originalBindings).binding(modelId.id), model)
+                        } else ModelRequestTarget.Remote(mergeProviderTransportCredentials(
+                            requireNotNull(frozenShape),
+                            resolveProviderTransportOwner(latest.userSettings, requireNotNull(credentialOwner)),
+                        ))
+                        accept(target)
+                    }
+                }
+                if (selectedRole == ModelSelectionRole.ATTACHMENT_INSPECTION) {
+                    check(media.userImages == RequestImageSupport.STRUCTURED) {
+                        "Provider contract violation: IMAGE model cannot encode structured USER images"
+                    }
+                }
+                return ModelExecutionSnapshot(model, requestView(modelAdmission), snapshot.userRevision, originalBindings?.version, media)
             }
-            CapturedModelConfiguration(snapshot.userSettings, assistant,
-                ModelExecutionSnapshot(model, execution, snapshot.userRevision, originalBindings?.version), media)
+            val selected = if (role == ModelSelectionRole.CHAT) configuration.assistantModel(assistant)
+                else configuration.auxiliaryModel(role, assistant)
+            val primary = captureSelected(role, selected) { admission = it; execution }
+            val inspection = if (role == ModelSelectionRole.CHAT) {
+                configuration.modelSelection(ModelSelectionRole.ATTACHMENT_INSPECTION).takeIf { it.isAvailable }?.let {
+                    captureSelected(ModelSelectionRole.ATTACHMENT_INSPECTION, it, execution::borrow)
+                }
+            } else null
+            CapturedModelConfiguration(snapshot.userSettings, assistant, primary, inspection)
         }
     }
 

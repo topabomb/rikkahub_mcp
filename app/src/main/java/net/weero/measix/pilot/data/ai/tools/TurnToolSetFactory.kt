@@ -6,7 +6,6 @@ import android.util.Log
 import me.rerere.ai.core.Tool
 import me.rerere.ai.core.ToolInteractionRequirement
 import me.rerere.ai.provider.BuiltInTools
-import me.rerere.ai.provider.Modality
 import me.rerere.ai.provider.Model
 import me.rerere.ai.provider.ProviderManager
 import me.rerere.ai.ui.UIMessagePart
@@ -19,8 +18,6 @@ import net.weero.measix.pilot.data.ai.tools.local.LocalTools
 import net.weero.measix.pilot.data.ai.tools.local.TtsToolPlaybackContext
 import net.weero.measix.pilot.data.ai.tts.TtsPlaybackSource
 import net.weero.measix.pilot.data.datastore.Settings
-import net.weero.measix.pilot.data.datastore.findModelById
-import net.weero.measix.pilot.data.datastore.findProvider
 import net.weero.measix.pilot.data.files.SkillManager
 import net.weero.measix.pilot.data.files.ArtifactStore
 import net.weero.measix.pilot.data.model.Assistant
@@ -48,7 +45,6 @@ class TurnToolSetFactory(
     private val providerManager: ProviderManager,
     private val artifactStore: ArtifactStore,
     private val toolOutputStore: ToolOutputStore = ToolOutputStore(artifactStore),
-    private val liveSettingsProvider: () -> Settings = { error("live Settings provider is unavailable") },
 ) {
 
     fun captureMcpCapabilities(assistant: Assistant): TurnMcpCapabilitySnapshot =
@@ -66,12 +62,13 @@ class TurnToolSetFactory(
      * @param workspaceCwd 工作目录（可覆盖会话级别）
      * @param turnKind 运行分类；SUB_ASSISTANT 时过滤 Assistant Tools，ask_user 保留给 Coordinator 桥接
      */
-    suspend fun buildTools(
+    internal suspend fun buildTools(
         realmAccess: net.weero.measix.pilot.data.enterprise.RealmAccess,
         assistant: Assistant,
         conversationId: Uuid = Uuid.random(),
         settings: Settings,
         capabilityModel: Model?,
+        inspectionModel: net.weero.measix.pilot.service.ModelExecutionSnapshot? = null,
         workspaceCwd: String? = null,
         turnKind: TurnKind = TurnKind.USER,
         ttsPlaybackContext: TtsToolPlaybackContext? = null,
@@ -87,9 +84,7 @@ class TurnToolSetFactory(
                 addAll(createSearchTools(settings))
             }
 
-            if (shouldInjectAttachmentInspection(settings)) {
-                add(createAttachmentInspectionTool(settings, providerManager, liveSettingsProvider))
-            }
+            inspectionModel?.let { add(createAttachmentInspectionTool(it, providerManager)) }
 
             val localToolOptions = if (turnKind == TurnKind.SUB_ASSISTANT) {
                 filterTargetLocalTools(assistant.localTools)
@@ -250,20 +245,4 @@ class TurnToolSetFactory(
  */
 fun shouldUseExternalWebSearch(assistant: Assistant, model: Model?): Boolean {
     return assistant.enableWebSearch && model?.tools?.contains(BuiltInTools.Search) != true
-}
-
-/**
- * 配置了有效的 IMAGE 识别模型即可按需读取图片，不依赖工作区或当前模型的图片能力。
- * 原生视觉能力不表示当前请求已携带所需图片；文件清单本身不包含图片内容。
- */
-fun shouldInjectAttachmentInspection(
-    settings: Settings,
-): Boolean {
-    val inspectionModel = settings.findModelById(settings.attachmentInspectionModelId) ?: return false
-    inspectionModel.findProvider(settings.providers) ?: return false
-    if (!inspectionModel.inputModalities.contains(Modality.IMAGE)) return false
-
-    // The inspection model's own host is not vetoed here: if the gateway genuinely rejects
-    // images, the Provider call inside executeInspection will surface a real classified error.
-    return true
 }

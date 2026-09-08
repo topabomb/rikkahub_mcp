@@ -17,7 +17,7 @@ class ModelExecutionLeaseTest {
         val finish = CompletableDeferred<Unit>()
         val lease = ModelExecutionLease { it(ModelRequestTarget.LocalExample) }
         val worker = launch {
-            lease.execute {
+            lease.borrow { it(ModelRequestTarget.LocalExample) }.execute {
                 entered.complete(Unit)
                 try { awaitCancellation() }
                 finally { withContext(NonCancellable) { cleaning.complete(Unit); finish.await() } }
@@ -47,4 +47,29 @@ class ModelExecutionLeaseTest {
         assertEquals(0, requests)
         lease.release()
     }
+    @Test fun `borrowed roles share closure and retry one failed binding cleanup`() = runBlocking {
+        var releases = 0
+        val owner = ModelExecutionLease(releaseOwner = { if (++releases == 1) error("cleanup_failed") }) {
+            it(ModelRequestTarget.LocalExample)
+        }
+        var admitted = 0
+        val inspection = owner.borrow { admitted++; it(ModelRequestTarget.LocalExample) }
+        val image = owner.borrow { admitted++; it(ModelRequestTarget.LocalExample) }
+        assertTrue(owner.owns(inspection))
+        assertTrue(owner.owns(image))
+        inspection.execute { Unit }
+        image.execute { Unit }
+        try { owner.release(); fail("expected cleanup failure") } catch (error: IllegalStateException) {
+            assertEquals("cleanup_failed", error.message)
+        }
+        for (view in listOf<ModelRequests>(owner, inspection, image)) {
+            try { view.execute { fail("closed owner reached I/O") }; fail("closed view accepted") }
+            catch (error: IllegalStateException) { assertEquals("model_execution_lease_closed", error.message) }
+        }
+        assertEquals(2, admitted)
+        owner.release()
+        owner.release()
+        assertEquals(2, releases)
+    }
+
 }

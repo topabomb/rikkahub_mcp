@@ -338,7 +338,7 @@ Android 媒体接线按下列所有权完成：`PortalMediaStore` 管理独占�
 
 | 收口工作包 | 当前事实与剩余工作 |
 | --- | --- |
-| 模型消费者（C5） | 主/子模型 lease 和辅助任务取消 owner 已有；标题/建议/摘要、识图、图片生成仍需全部使用原域模型准入与 binding |
+| 模型消费者（C5） | 主/子、标题/建议/摘要及附件识别已使用原域模型准入与 binding；图片生成仍需接入同一捕获与请求链 |
 | MCP / Gateway（C5、U2） | 企业固定选择已有 UI；仍需接通原 MCP runtime/catalog/OAuth owner、企业 binding 与示例实际工具执行 |
 | 语音（C5、U2） | 仍需 TTS/ASR 的企业/用户目录、私有 binding、原请求准入及本地音频/转写 adapter |
 | 文件与 Workspace（C6） | 会话/记忆隔离、创建引用、目录删除、请求保留和子助手详情已有对应验证；图片查看/保存/背景、共享配置资产复制、外部打开及 Workspace 全局 upload 挂载仍需收口 |
@@ -534,6 +534,8 @@ C6 的文件创建与引用边界已接通：上传、粘贴文本、输出图�
 本批定向设备复验 39 项通过，包括实际查看器手势、GIF 编码保全、pending 清理和共享配置根撤销。完整设备扫描发现旧迁移测试夹具没有注册既有 Migration_11_12，已修正为当前生产迁移链；查看器测试安装生产图片组件，相册测试显式查询 pending，复验通过。完整门禁中的 JVM、Debug/Release 构建和 lint 已通过：App 2,065 项 JVM 测试无失败/跳过，lint 0 错误、286 警告，Workspace 保留 11 项 Windows 条件跳过。完整 Android 17 扫描 169 项中 168 项通过，真实键盘用例在 Gboard 展开接近十秒时超时；改用真实触摸并延长系统 IME 等待后，该组 8 项设备复验全部通过，未再重跑整套 169 项。取消补偿的 2 项 JVM 复验通过，保留原取消异常及清理失败诊断。独立审查无剩余本批实质问题；分层证据见 `build/reports/enterprise/image-viewer-verification.json`。真实平台互操作、Release 设备与版本 20 整体验收仍未完成。
 
 辅助模型接线批次：标题、建议和手动摘要已复用 `ModelExecutionService` 的原域捕获、冻结 binding 和逐请求准入，删除直接查全局个人 Provider 的旧路径。原 Runtime 保存任务登记时的助手身份和模型 lease，会话移交不重定向原任务；删除助手按原 owner 停止并保留有界等待，清理失败可重试。摘要先释放模型资源，再原子提交历史，建议的清空和最终提交均复验原助手/节点。独立复审发现的身份窗口与提交后失败问题已修正。完整门禁的 JVM、Debug/Release 构建及 lint 通过：App 2,073 项无失败/跳过，lint 0 错误、286 警告，Workspace 保留 11 项 Windows 条件跳过。设备源集三处旧接口已同步，随后 Android 17 模拟器完整 169 项测试全部通过；包含原 Turn 取消/暂停继续、真实 Room、WebView、文件与键盘布局验证。分层结果见 `build/reports/enterprise/auxiliary-model-verification.json`。图片生成、附件识别、MCP/Gateway、Speech、其余文件出口和备份仍继续实施，不据此将 C5/C6 或版本 20 标为完成。
+
+附件识别已接入原域模型捕获：与 CHAT 共享同次用户配置和企业 binding，`ModelRequests` 只提供执行，Runtime 仍持有唯一释放 owner。主/子装配消费捕获结果，`assistant_inspect` 从本域目录描述可用性，旧 Settings/ProviderTransportLease 路径删除。本地示例走相同结构化图片请求，返回明确模拟结果。复审未发现实质缺陷，补充 Child 撤权与暂停继续的借用请求断言。完整串行 `test assembleDebug lintDebug assembleRelease :app:compileDebugAndroidTestKotlin` 在 10 分 4 秒内通过：App 2,072 项 JVM 无失败/跳过，lint 0 错误、286 警告；Workspace 保留 11 项 Windows 条件跳过。Android 17 模拟器三个实际 Room/Turn 取消与审批继续用例全部通过；此前辅助模型基线的整套 169 项设备通过单独保留，本批不冒称重新运行全部设备用例。证据见 `build/reports/enterprise/inspection-model-verification.json`。图片生成、MCP/Gateway、Speech、其余文件出口和备份继续实施。
 
 ## 11. 验收证据
 

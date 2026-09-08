@@ -210,7 +210,7 @@ class GenerationSideEffects internal constructor(
         captured: CapturedModelConfiguration,
         prompt: String,
     ): String? {
-        val result = captured.model.executionLease.execute { target ->
+        val result = captured.model.requests.execute { target ->
             target.generateText(providerManager, listOf(ModelRequestMessage.user(prompt)),
                 backgroundTextGenerationParams(captured.model.model))
         }

@@ -352,7 +352,8 @@ class AssistantToolFactory internal constructor(
         val sections = parseInspectSections(obj)
         val toolNames = if (INSPECT_SECTION_TOOLS in sections) {
             listTargetToolNames(realmAccess, target, settingsStore.effectiveSettings.value.settings, masterConversationId,
-                configuration.assistantModel(target.id).reference?.let { configuration.models[it]?.model })
+                configuration.assistantModel(target.id).reference?.let { configuration.models[it]?.model },
+                configuration.modelSelection(net.weero.measix.pilot.data.configuration.ModelSelectionRole.ATTACHMENT_INSPECTION).isAvailable)
         } else {
             emptyList()
         }
@@ -413,6 +414,7 @@ class AssistantToolFactory internal constructor(
         settings: Settings,
         masterConversationId: Uuid,
         capabilityModel: me.rerere.ai.provider.Model?,
+        inspectionAvailable: Boolean,
     ): List<String> {
         val built = toolSetFactory.buildTools(
             realmAccess = realmAccess,
@@ -425,6 +427,7 @@ class AssistantToolFactory internal constructor(
         ).map { it.name }
         return buildList {
             addAll(built)
+            if (inspectionAvailable) add(ATTACHMENT_INSPECTION_TOOL_NAME)
             if (target.enableMemory && "memory_tool" !in built) {
                 add("memory_tool")
             }

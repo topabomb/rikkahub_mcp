@@ -545,7 +545,7 @@ class ConversationCommandAccessTest {
                 every { realmAccess } returns originalAccess
                 every { assistant } returns net.weero.measix.pilot.service.turn.resolveTurnAssistantSnapshot(
                     net.weero.measix.pilot.data.model.Assistant(id = f.runtime.durable.header.assistantId))
-                every { model } returns mockk { every { executionLease } returns lease }
+                every { model } returns mockk { every { requests } returns lease }
             })
             f.runtime.retainAwaitingUser(started.handle)
             worker.complete()

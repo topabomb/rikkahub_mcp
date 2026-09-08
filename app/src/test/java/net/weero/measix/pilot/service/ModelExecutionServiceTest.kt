@@ -99,14 +99,14 @@ class ModelExecutionServiceTest {
             env.settings.updateLocal { settings -> settings.copy(providers = listOf(env.provider.copy(
                 baseUrl = "https://replacement.test/v2", apiKey = "rotated", models = listOf(env.model.copy(modelId = "replacement")),
             ))) }
-            val target = captured.model.executionLease.execute { it as ModelRequestTarget.Remote }
+            val target = captured.model.requests.execute { it as ModelRequestTarget.Remote }
             val provider = target.provider as ProviderSetting.OpenAI
             assertEquals(env.provider.baseUrl, provider.baseUrl)
             assertEquals("rotated", provider.apiKey)
             assertEquals(env.model.modelId, captured.model.model.modelId)
             assertNotEquals(captured.model.userRevision, env.service.read(RealmAccess.Personal).userRevision)
             env.settings.updateLocal { it.copy(providers = emptyList()) }
-            rejected { captured.model.executionLease.execute { fail("removed owner reached I/O") } }
+            rejected { captured.model.requests.execute { fail("removed owner reached I/O") } }
         }
     }
 
@@ -116,12 +116,12 @@ class ModelExecutionServiceTest {
             env.sessions.enrollFixture(packet)
             val access = env.sessions.captureSelectedRealmAccess() as RealmAccess.Enterprise
             val captured = env.capture(access)
-            assertTrue(captured.model.executionLease.execute { it } is ModelRequestTarget.Remote)
+            assertTrue(captured.model.requests.execute { it } is ModelRequestTarget.Remote)
             env.sessions.synchronize(access, packet.copy(configuration = packet.configuration.copy(
                 generation = 2, policy = packet.configuration.policy.copy(allowLocalProviders = false))))
-            rejected { captured.model.executionLease.execute { fail("revoked provider reached I/O") } }
+            rejected { captured.model.requests.execute { fail("revoked provider reached I/O") } }
             val personal = env.capture(RealmAccess.Personal)
-            assertTrue(personal.model.executionLease.execute { it } is ModelRequestTarget.Remote)
+            assertTrue(personal.model.requests.execute { it } is ModelRequestTarget.Remote)
         }
     }
 
@@ -139,17 +139,17 @@ class ModelExecutionServiceTest {
             env.sessions.synchronize(access, first.copy(runtimeBindings = first.runtimeBindings.map {
                 if (it.resourceId == "mdl_chat") it.copy(endpoint = "https://second.test/v1", credential = "second") else it
             }))
-            val target = captured.model.executionLease.execute { it as ModelRequestTarget.Remote }
+            val target = captured.model.requests.execute { it as ModelRequestTarget.Remote }
             assertEquals("https://first.test/v1", (target.provider as ProviderSetting.OpenAI).baseUrl)
             assertEquals("", target.provider.apiKey)
             assertEquals(2, env.root.resolve("enterprise/revisions").listFiles()!!.size)
             val exit = env.sessions.beginExit(requireNotNull(env.sessions.captureExitRequest()))
-            rejected { captured.model.executionLease.execute { fail("closing session reached I/O") } }
+            rejected { captured.model.requests.execute { fail("closing session reached I/O") } }
             env.releaseAll()
             env.sessions.finishExit(exit)
             env.sessions.enrollFixture(first)
             rejected { env.service.read(access) }
-            rejected { captured.model.executionLease.execute { fail("old turn revived") } }
+            rejected { captured.model.requests.execute { fail("old turn revived") } }
         }
     }
 
@@ -157,13 +157,17 @@ class ModelExecutionServiceTest {
         environment { env ->
             val child = env.assistant.copy(id = ConfigurationReference.random(), name = "Child", allowAsSubAssistant = true)
             val caller = env.assistant.copy(localTools = listOf(LocalToolOption.AssistantDelegation), allowedSubAssistantIds = setOf(child.id))
-            env.settings.updateLocal { it.copy(assistants = listOf(caller, child)) }
+            val vision = env.model.copy(inputModalities = listOf(me.rerere.ai.provider.Modality.IMAGE))
+            env.settings.updateLocal { it.copy(assistants = listOf(caller, child),
+                providers = listOf(env.provider.copy(models = listOf(vision))), attachmentInspectionModelId = vision.id) }
             val configuration = env.service.read(RealmAccess.Personal).configuration
             val spec = (resolveSubAssistantRunSpec(configuration::availableChatModel, caller, child) as SubAssistantRunSpecResolution.Ready).spec
             val captured = env.capture(RealmAccess.Personal, child.id, ChildModelAdmission(caller.id, spec))
             env.settings.updateLocal { it.copy(assistants = listOf(caller.copy(allowedSubAssistantIds = emptySet()), child)) }
-            try { captured.model.executionLease.execute { fail("revoked caller reached I/O") }; fail("revocation accepted") }
-            catch (error: CancellationException) { assertEquals("target_access_revoked", error.message) }
+            for (requests in listOf(captured.model.requests, requireNotNull(captured.inspectionModel).requests)) {
+                try { requests.execute { fail("revoked caller reached I/O") }; fail("revocation accepted") }
+                catch (error: CancellationException) { assertEquals("target_access_revoked", error.message) }
+            }
         }
     }
 
@@ -203,15 +207,15 @@ class ModelExecutionServiceTest {
             env.sessions.synchronize(access, packet.copy(configuration = packet.configuration.copy(generation = 2,
                 models = packet.configuration.models.map { if (it.id == title.id) it.copy(modelId = "title-replacement") else it }),
                 runtimeBindings = packet.runtimeBindings.map { if (it.resourceId == title.id) it.copy(endpoint = "https://replacement.test/v1") else it }))
-            val target = captured.model.executionLease.execute { it as ModelRequestTarget.Remote }
+            val target = captured.model.requests.execute { it as ModelRequestTarget.Remote }
             assertEquals("title-original", captured.model.model.modelId)
             assertEquals("https://title-original.test/v1", (target.provider as ProviderSetting.OpenAI).baseUrl)
             val exit = env.sessions.beginExit(requireNotNull(env.sessions.captureExitRequest()))
-            rejected { captured.model.executionLease.execute { fail("closing auxiliary reached I/O") } }
+            rejected { captured.model.requests.execute { fail("closing auxiliary reached I/O") } }
             env.releaseAll()
             env.sessions.finishExit(exit)
             env.sessions.enrollFixture(packet)
-            rejected { captured.model.executionLease.execute { fail("old auxiliary revived") } }
+            rejected { captured.model.requests.execute { fail("old auxiliary revived") } }
         }
     }
 
@@ -251,6 +255,82 @@ class ModelExecutionServiceTest {
         }
     }
 
+    @Test fun `inspection shares the original capture and private binding without changing fixed chat`() = runBlocking {
+        environment { env ->
+            val base = exampleEnterprisePackage()
+            val vision = base.configuration.models.first { it.id == "mdl_chat" }.copy(id = "mdl_inspection",
+                modelId = "vision-original", inputModalities = listOf(me.rerere.ai.provider.Modality.IMAGE))
+            val binding = base.runtimeBindings.first { it.resourceId == "mdl_chat" }.copy(resourceId = vision.id,
+                protocol = EnterpriseRuntimeProtocol.OPENAI_CHAT, endpoint = "https://vision-original.test/v1", credential = "vision")
+            val packet = base.copy(configuration = base.configuration.copy(models = base.configuration.models + vision,
+                defaults = base.configuration.defaults.copy(attachmentInspectionModelId = vision.id)), runtimeBindings = base.runtimeBindings + binding)
+            env.sessions.enrollFixture(packet)
+            val access = env.sessions.captureSelectedRealmAccess() as RealmAccess.Enterprise
+            val captured = env.capture(access, packet.identity.reference(packet.configuration.defaults.assistantId!!))
+            val inspection = requireNotNull(captured.inspectionModel)
+            assertEquals(captured.model.userRevision, inspection.userRevision)
+            assertEquals(captured.model.enterpriseVersion, inspection.enterpriseVersion)
+            assertNotEquals(captured.model.model.id, inspection.model.id)
+            env.sessions.synchronize(access, packet.copy(configuration = packet.configuration.copy(generation = 2,
+                models = packet.configuration.models.map { if (it.id == vision.id) it.copy(modelId = "replacement") else it }),
+                runtimeBindings = packet.runtimeBindings.map { if (it.resourceId == vision.id) it.copy(endpoint = "https://replacement.test/v1") else it }))
+            val target = inspection.requests.execute { it as ModelRequestTarget.Remote }
+            assertEquals("https://vision-original.test/v1", (target.provider as ProviderSetting.OpenAI).baseUrl)
+            assertEquals("vision-original", inspection.model.modelId)
+            env.releaseAll()
+            rejected { inspection.requests.execute { fail("released Turn inspection reached I/O") } }
+            env.sessions.finishExit(env.sessions.beginExit(requireNotNull(env.sessions.captureExitRequest())))
+        }
+    }
+
+    @Test fun `inspection policy revocation blocks borrowed requests but does not change personal configuration`() = runBlocking {
+        environment { env ->
+            val vision = env.model.copy(id = ConfigurationReference.random(), inputModalities = listOf(me.rerere.ai.provider.Modality.IMAGE))
+            env.settings.updateLocal { it.copy(providers = listOf(env.provider.copy(models = listOf(env.model, vision))), attachmentInspectionModelId = vision.id) }
+            val packet = exampleEnterprisePackage()
+            env.sessions.enrollFixture(packet)
+            val access = env.sessions.captureSelectedRealmAccess() as RealmAccess.Enterprise
+            env.preferences.edit { stored ->
+                val document = net.weero.measix.pilot.utils.JsonInstant.decodeFromString<net.weero.measix.pilot.data.datastore.UserSettingsDocument>(stored[SettingsStore.USER_SETTINGS]!!)
+                stored[SettingsStore.USER_SETTINGS] = net.weero.measix.pilot.utils.JsonInstant.encodeToString(document.copy(
+                    preferences = document.preferences.withSelections(access.scope,
+                        document.preferences.forScope(access.scope).copy(attachmentInspectionModelId = vision.id))))
+            }
+            val captured = env.capture(access, packet.identity.reference(packet.configuration.defaults.assistantId!!))
+            val inspection = requireNotNull(captured.inspectionModel)
+            inspection.requests.execute { assertTrue(it is ModelRequestTarget.Remote) }
+            env.sessions.synchronize(access, packet.copy(configuration = packet.configuration.copy(generation = 2,
+                policy = packet.configuration.policy.copy(allowLocalProviders = false))))
+            rejected { inspection.requests.execute { fail("revoked inspection reached I/O") } }
+            assertNotNull(env.capture(RealmAccess.Personal).inspectionModel)
+            assertNull(env.capture(access, captured.assistant.id).inspectionModel)
+        }
+    }
+
+    @Test fun `failure preparing inspection retains the registered owner until binding cleanup`() = runBlocking {
+        environment { env ->
+            val base = exampleEnterprisePackage()
+            val vision = base.configuration.models.first { it.id == "mdl_chat" }.copy(id = "mdl_inspection",
+                inputModalities = listOf(me.rerere.ai.provider.Modality.IMAGE))
+            val binding = base.runtimeBindings.first { it.resourceId == "mdl_chat" }.copy(resourceId = vision.id,
+                protocol = EnterpriseRuntimeProtocol.OPENAI_CHAT, endpoint = "https://vision.test/v1", credential = "vision")
+            val packet = base.copy(configuration = base.configuration.copy(models = base.configuration.models + vision,
+                defaults = base.configuration.defaults.copy(attachmentInspectionModelId = vision.id)), runtimeBindings = base.runtimeBindings + binding)
+            val providers = io.mockk.mockk<me.rerere.ai.provider.ProviderManager>()
+            val provider = io.mockk.mockk<me.rerere.ai.provider.Provider<ProviderSetting>>()
+            io.mockk.every { providers.getProviderByType(any<ProviderSetting>()) } returns provider
+            io.mockk.every { provider.requestMediaCapabilities(any(), any()) } returns me.rerere.ai.provider.RequestMediaCapabilities.NONE
+            env.service = ModelExecutionService(env.settings, env.sessions, env.gate, providers)
+            env.sessions.enrollFixture(packet)
+            val access = env.sessions.captureSelectedRealmAccess() as RealmAccess.Enterprise
+            rejected { env.capture(access, packet.identity.reference(packet.configuration.defaults.assistantId!!)) }
+            val exit = env.sessions.beginExit(requireNotNull(env.sessions.captureExitRequest()))
+            rejected { env.sessions.finishExit(exit) }
+            env.releaseAll()
+            env.sessions.finishExit(exit)
+        }
+    }
+
     private suspend fun environment(block: suspend (Environment) -> Unit) {
         val env = Environment(temporary.newFolder())
         try {
@@ -276,7 +356,7 @@ class ModelExecutionServiceTest {
         val settings = SettingsStore(context, scope, dataStore = preferences)
         val sessions = EnterpriseSessionController(EnterpriseAppliedStore(root.resolve("enterprise")))
         val gate = ApplicationRecoveryGate()
-        val service = testModelExecutionService(settings, sessions, gate)
+        var service = testModelExecutionService(settings, sessions, gate)
         private val owners = mutableListOf<Triple<ConversationRuntime, Uuid, Job>>()
         private val auxiliary = mutableListOf<Pair<ConversationRuntime, Job>>()
         suspend fun captureAuxiliary(access: RealmAccess, role: ModelSelectionRole,

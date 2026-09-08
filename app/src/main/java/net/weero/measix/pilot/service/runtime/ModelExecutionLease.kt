@@ -26,17 +26,39 @@ internal sealed interface ModelRequestTarget {
     data object LocalExample : ModelRequestTarget
 }
 
+/** A request view can execute against its original owner but cannot release shared resources. */
+internal sealed interface ModelRequests {
+    suspend fun <T> execute(operation: suspend (ModelRequestTarget) -> T): T
+}
+
 /** The Turn owner retains this lease across user pauses and awaits release outside admission locks. */
 internal class ModelExecutionLease(
     private val releaseOwner: suspend () -> Unit = {},
     private val admit: suspend ((ModelRequestTarget) -> Unit) -> Unit,
-) {
+) : ModelRequests {
     private val closed = AtomicBoolean(false)
     private val releaseMutex = Mutex()
     private var released = false
 
+    fun borrow(admit: suspend ((ModelRequestTarget) -> Unit) -> Unit): ModelRequests = Borrowed(this, admit)
+
+    fun owns(requests: ModelRequests): Boolean = requests === this || requests is Borrowed && requests.owner === this
+
+    private class Borrowed(
+        val owner: ModelExecutionLease,
+        val admit: suspend ((ModelRequestTarget) -> Unit) -> Unit,
+    ) : ModelRequests {
+        override suspend fun <T> execute(operation: suspend (ModelRequestTarget) -> T): T = owner.executeWith(admit, operation)
+    }
+
+    override suspend fun <T> execute(operation: suspend (ModelRequestTarget) -> T): T = executeWith(admit, operation)
+
     /** Admission starts the original worker's child request; no network wait holds the policy lock. */
-    suspend fun <T> execute(operation: suspend (ModelRequestTarget) -> T): T = coroutineScope {
+    private suspend fun <T> executeWith(
+        admit: suspend ((ModelRequestTarget) -> Unit) -> Unit,
+        operation: suspend (ModelRequestTarget) -> T,
+    ): T = coroutineScope {
+        check(!closed.get()) { "model_execution_lease_closed" }
         val requestContext = currentCoroutineContext()
         var request: Deferred<T>? = null
         admit { target ->

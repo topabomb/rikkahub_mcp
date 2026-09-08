@@ -26,7 +26,7 @@ internal fun testTurnContext(
         assistant = resolveTurnAssistantSnapshot(assistant),
         model = ModelExecutionSnapshot(
             model = model,
-            executionLease = net.weero.measix.pilot.service.runtime.ModelExecutionLease { accept ->
+            requests = net.weero.measix.pilot.service.runtime.ModelExecutionLease { accept ->
                 accept(net.weero.measix.pilot.service.runtime.ModelRequestTarget.Remote(model.findProvider(settings.providers) ?: error("Provider not found in test Settings")))
             },
             userRevision = "test",

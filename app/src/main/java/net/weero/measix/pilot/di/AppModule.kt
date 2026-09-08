@@ -206,7 +206,6 @@ val appModule = module {
     single { ToolOutputStore(get()) }
 
     single {
-        val settingsStore = get<net.weero.measix.pilot.data.datastore.SettingsStore>()
         TurnToolSetFactory(
             localTools = get(),
             conversationQueryService = get(),
@@ -217,7 +216,6 @@ val appModule = module {
             providerManager = get(),
             artifactStore = get(),
             toolOutputStore = get(),
-            liveSettingsProvider = { settingsStore.effectiveSettings.value.settings },
         )
     }
 

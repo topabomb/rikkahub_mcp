@@ -308,7 +308,7 @@ class TurnCancellationIntegrationTest {
             try {
                 val activeWorker = requireNotNull(coroutineContext[Job])
                 assertSame(activeWorker, runtime.currentWorker())
-                runtime.bindModelExecution(turnId, activeWorker, turnContext.assistant.id, turnContext.model.executionLease)
+                runtime.bindModelExecution(turnId, activeWorker, turnContext.assistant.id, turnContext.model.requests as net.weero.measix.pilot.service.runtime.ModelExecutionLease)
                 runtime.bindTurnContext(turnId, activeWorker, turnContext)
                 val started = TurnCommitter.start(
                     commandCoordinator = coordinator,
