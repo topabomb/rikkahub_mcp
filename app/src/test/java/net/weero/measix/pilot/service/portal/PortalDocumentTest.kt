@@ -1,6 +1,8 @@
 package net.weero.measix.pilot.service.portal
 
 import java.time.Instant
+import android.content.Context
+import io.mockk.verify
 import java.util.concurrent.Executors
 import io.mockk.coEvery
 import io.mockk.coVerify
@@ -388,6 +390,103 @@ class PortalDocumentTest {
         } finally { release.complete(Unit); holder.cancelAndJoin(); doc.close() }
     }
 
+    @Test
+    fun `approved Portal logout uses native confirmation and finishes despite cancelling its own request`() = runBlocking(Dispatchers.Main) {
+        val h = harness(this)
+        val appScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+        val conversations = mockk<ConversationApplicationService>()
+        coEvery { conversations.stopEnterpriseWork(any()) } returns Unit
+        val exit = EnterpriseExitService(h.sessions, h.sync, conversations,
+            ApplicationRecoveryGate().apply { ready() }, appScope, h.registry)
+        lateinit var native: PortalNativeActions
+        val doc = h.open(createNative = { PortalNativeActions(mockk(), it, h.sessions, exit).also { native = it } })
+        try {
+            val status = h.call(doc, "getStatus").getValue("result").jsonObject
+            assertTrue(status.getValue("capabilities").jsonArray.contains(JsonPrimitive("logout")))
+            var replies = 0
+            val request = requireNotNull(doc.receive(h.raw(doc, "logout"), PortalProtocol.LOCAL_ORIGIN, true) { replies++ })
+            val prompt = native.prompt.first { it != null } as PortalNativePrompt.Logout
+            assertEquals((h.sessions.state.value as EnterpriseState.Available).manifest.session!!.identity.enterpriseName, prompt.enterpriseName)
+            assertEquals(EnterpriseSessionPhase.READY, (h.sessions.state.value as EnterpriseState.Available).manifest.phase)
+            native.decide(prompt, true)
+            withTimeout(5_000) {
+                h.sessions.state.first { it is EnterpriseState.Available && it.manifest.phase == EnterpriseSessionPhase.SIGNED_OUT }
+                request.join()
+                doc.awaitClosed()
+            }
+            assertTrue(doc.isClosed)
+            assertNull(native.prompt.value)
+            assertEquals(0, replies)
+            coVerify(exactly = 1) { conversations.stopEnterpriseWork(any()) }
+        } finally { doc.close(); appScope.coroutineContext[Job]!!.cancelAndJoin() }
+    }
+
+    @Test
+    fun `declined timed out and stale native confirmations never perform external or exit actions`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val h = harness(backgroundScope)
+        val context = mockk<Context>(relaxed = true)
+        val exit = mockk<EnterpriseExitService>()
+        lateinit var native: PortalNativeActions
+        val doc = h.open(createNative = { PortalNativeActions(context, it, h.sessions, exit).also { native = it } })
+        val params = buildJsonObject { put("url", "https://example.com/approved-path") }
+        try {
+            val declined = async { h.call(doc, "openExternal", params) }
+            val first = requireNotNull(native.prompt.first { it != null })
+            assertEquals("resource_limit", h.call(doc, "openExternal", params).getValue("error").jsonObject.getValue("code").jsonPrimitive.content)
+            native.decide(first, false)
+            assertEquals("user_cancelled", declined.await().getValue("error").jsonObject.getValue("code").jsonPrimitive.content)
+            val timedOut = async { h.call(doc, "openExternal", params) }
+            val second = requireNotNull(native.prompt.first { it != null })
+            native.decide(first, true)
+            runCurrent()
+            assertFalse(timedOut.isCompleted)
+            advanceTimeBy(10_000); runCurrent()
+            assertEquals("timeout", timedOut.await().getValue("error").jsonObject.getValue("code").jsonPrimitive.content)
+            native.decide(second, true)
+            assertNull(native.prompt.value)
+            verify(exactly = 0) { context.startActivity(any()) }
+            val accepted = async { h.call(doc, "openExternal", params) }
+            val third = requireNotNull(native.prompt.first { it != null })
+            native.decide(third, true)
+            assertTrue(accepted.await().containsKey("result"))
+            verify(exactly = 1) { context.startActivity(match { it.data.toString() == "https://example.com/approved-path" }) }
+            var lateReplies = 0
+            val cancelled = requireNotNull(doc.receive(h.raw(doc, "openExternal", params), PortalProtocol.LOCAL_ORIGIN, true) { lateReplies++ })
+            val fourth = requireNotNull(native.prompt.first { it != null })
+            doc.close()
+            native.decide(fourth, true)
+            cancelled.join()
+            assertEquals(0, lateReplies)
+            verify(exactly = 1) { context.startActivity(any()) }
+            coVerify(exactly = 0) { exit.exit(any()) }
+        } finally { doc.close() }
+    }
+
+    @Test
+    fun `native confirmation rechecks document expiry even when the scheduled close has not run`() = runBlocking(Dispatchers.Main) {
+        val h = harness(this)
+        val exit = mockk<EnterpriseExitService>()
+        coEvery { exit.captureRequest() } coAnswers { h.sessions.captureExitRequest() }
+        val context = mockk<Context>(relaxed = true)
+        for (method in listOf("openExternal", "logout")) {
+            lateinit var native: PortalNativeActions
+            val doc = h.open(createNative = { PortalNativeActions(context, it, h.sessions, exit).also { native = it } })
+            try {
+                val result = async { h.call(doc, method,
+                    if (method == "openExternal") buildJsonObject { put("url", "https://example.com") } else buildJsonObject {}) }
+                val prompt = requireNotNull(native.prompt.first { it != null })
+                now += 600_000
+                assertFalse(doc.isClosed)
+                native.decide(prompt, true)
+                assertEquals("session_expired", result.await().getValue("error").jsonObject.getValue("code").jsonPrimitive.content)
+                assertEquals(EnterpriseSessionPhase.READY, (h.sessions.state.value as EnterpriseState.Available).manifest.phase)
+                verify(exactly = 0) { context.startActivity(any()) }
+                coVerify(exactly = 0) { exit.exit(any()) }
+            } finally { doc.close(); doc.awaitClosed() }
+        }
+    }
+
     private suspend fun harness(scope: CoroutineScope): Harness {
         val sessions = EnterpriseSessionController(EnterpriseAppliedStore(temporary.newFolder())) { now }
         val sourceRoot = temporary.newFolder()
@@ -406,9 +505,10 @@ class PortalDocumentTest {
         val registry = PortalDocumentRegistry()
         private var nextRequest = 0
         suspend fun open(synchronization: EnterpriseSynchronizationService = sync,
-            closeHost: () -> Unit = {}, onClosed: (PortalClosure) -> Unit = {}) =
+            closeHost: () -> Unit = {}, createNative: ((PortalDocumentContext) -> PortalNativeActions)? = null,
+            onClosed: (PortalClosure) -> Unit = {}) =
             PortalDocument.open(requireNotNull(sessions.observeSelectedRealmSelection().first()), sessions, synchronization,
-                scope, registry, { now }, { closeHost(); CompletableDeferred(Unit) }, onClosed)
+                scope, registry, { now }, { closeHost(); CompletableDeferred(Unit) }, createNative, onClosed)
         fun raw(doc: PortalDocument, method: String, params: JsonObject = buildJsonObject {}, requestId: String = "r${nextRequest++}") =
             buildJsonObject { put("bridgeVersion", 3); put("documentId", doc.id); put("requestId", requestId); put("method", method); put("params", params) }.toString()
         suspend fun call(doc: PortalDocument, method: String, params: JsonObject = buildJsonObject {}): JsonObject {

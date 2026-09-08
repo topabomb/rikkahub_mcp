@@ -211,13 +211,14 @@ internal class PortalWebView private constructor(
 
         suspend fun open(context: Context, selection: RealmSelection, sessions: EnterpriseSessionController,
             synchronization: EnterpriseSynchronizationService, scope: CoroutineScope,
-            registry: PortalDocumentRegistry, onClosed: (PortalClosure) -> Unit): PortalWebView {
+            registry: PortalDocumentRegistry, createNative: ((PortalDocumentContext) -> PortalNativeActions)? = null,
+            onClosed: (PortalClosure) -> Unit): PortalWebView {
             check(Looper.myLooper() == Looper.getMainLooper())
             if (!supported()) throw PortalFailure("source_unavailable")
             val assets = PortalAssets.load(context)
             var host: PortalWebView? = null
             val document = PortalDocument.open(selection, sessions, synchronization, scope, registry,
-                closeHost = { host?.destroy() ?: CompletableDeferred(Unit) }, onClosed = onClosed)
+                closeHost = { host?.destroy() ?: CompletableDeferred(Unit) }, createNative = createNative, onClosed = onClosed)
             try {
                 if (document.isClosed) throw kotlinx.coroutines.CancellationException("Portal document unavailable")
                 return PortalWebView(WebView(context), document, assets).also {

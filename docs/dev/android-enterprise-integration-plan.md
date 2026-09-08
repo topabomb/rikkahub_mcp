@@ -210,7 +210,7 @@ UserConfiguration + UserPreferences + Applied Enterprise State
 
 正式退出由应用层统一编排：原生确认同时冻结企业 RealmAccess 与当前 RealmSelection，并在同一 Session 锁内复验。停留个人空间也能退出企业，不能仅凭个人 selection 推断目标 Session；旧确认不能退出新接入。授权到期/撤销按原企业 Session 收口，不要求用户仍选中企业或该授权仍有效。
 
-先持久发布 CLOSING 撤销准入，再释放 Session 锁，调用既有主/子运行、Runtime 内标题/建议任务与媒体 owner 按原企业域取消并等待终态，最后凭原退出 token 完成退出；不得以 binding lease 为空或 Job.join 返回代替运行终态提交。流程由应用作用域持有，页面销毁或重复点击不产生第二退出操作；失败保留 CLOSING 和可重试状态，重试不复验已经被退出动作改变的页面选择。重启恢复先保留 CLOSING，完成现有 Child/主 TurnRecovery 后、恢复 gate ready 前完成原退出 token；不能在恢复任务成功前假报退出完成，也不能让恢复等待自己的 ready gate。企业状态页直接投影 Session；待配置或停留个人空间时，同步目标仍是已接入的企业 Session。当前 EnterpriseExitService 已实现 Portal 文档、同步与会话取消、终态核验、到期观察和启动恢复；正式原生入口、Portal logout 及媒体 owner 接线仍待完成，不作为 Portal 读取批次的完成事实。
+先持久发布 CLOSING 撤销准入，再释放 Session 锁，调用既有主/子运行、Runtime 内标题/建议任务与媒体 owner 按原企业域取消并等待终态，最后凭原退出 token 完成退出；不得以 binding lease 为空或 Job.join 返回代替运行终态提交。流程由应用作用域持有，页面销毁或重复点击不产生第二退出操作；失败保留 CLOSING 和可重试状态，重试不复验已经被退出动作改变的页面选择。重启恢复先保留 CLOSING，完成现有 Child/主 TurnRecovery 后、恢复 gate ready 前完成原退出 token；不能在恢复任务成功前假报退出完成，也不能让恢复等待自己的 ready gate。企业状态页直接投影 Session；待配置或停留个人空间时，同步目标仍是已接入的企业 Session。当前 EnterpriseExitService 已实现 Portal 文档、同步与会话取消、终态核验、到期观察和启动恢复；正式原生入口与 Portal logout 已接通；媒体 owner 接线继续实施，各批次验收分别记录。
 
 退出原因随 CLOSING 写入同一个 manifest，原退出 token 保留该原因；主动退出完成为 SIGNED_OUT，到期/撤销完成为 REAUTH_REQUIRED。自动触发由应用生命周期观察已接入 Session，不能依赖企业页面是否打开。Session 锁内只撤销准入，不等待运行任务或配置同步；同一原 Session 的同步由既有同步 owner 取消并等待。终态提交后的文件清理失败由存储维护收口，不把已退出状态报告成仍在 CLOSING，也不让重试误作用于新 Session。
 
@@ -300,7 +300,7 @@ Seed 只初始化尚未建立的主体 Feed。同步、重入与重复导入不�
 
 2026-09-08 上游已裁决采用 Control Protocol §8 的 **Native Bridge v3 / 本地读取 v2**。固定 https://local.measix.invalid/portal/ 只承载经过摘要校验的随包静态资源；context/Feed 通过同一个 MeasixHost 类型化消息通道读取。废止本地 GET/document header/304 方案，不保留旧 Bridge v2、CustomEvent 或另一套工作台页面。远端 Hub HTTP、Cookie、CSRF、ETag/304 协议保持独立，本期不实现真实后台接入。
 
-core 与 Portal 的新版可执行契约和资源包均已交付，Android 已核验并固定 Bridge v3/localReadVersion=2 的原始包、manifest 和全部八份共享输入，删除旧 v2 JavaScript 与重复的消费清单。PortalProtocol、PortalDocument、PortalWebView 已进入实现与测试；正式入口、退出及媒体能力继续接线。不得改写固定网页脚本或把资源入包当作完整设备验收。enrollment 与 context 的 formatVersion=1 不变；已完成的接入与 Feed 领域规则继续复用。
+core 与 Portal 的新版可执行契约和资源包均已交付，Android 已核验并固定 Bridge v3/localReadVersion=2 的原始包、manifest 和全部八份共享输入，删除旧 v2 JavaScript 与重复的消费清单。PortalProtocol、PortalDocument、PortalWebView、正式入口与原生退出已实现并有分层验证；媒体能力继续接线。不得改写固定网页脚本或把资源入包当作完整设备验收。enrollment 与 context 的 formatVersion=1 不变；已完成的接入与 Feed 领域规则继续复用。
 
 原生在批准的顶层文档运行脚本前提供 window.MeasixPortalDocument={bridgeVersion:3,documentId}。documentId 至少具有 128 bit 随机性、非空且最多 128 字符，绑定本次文档、来源/Deployment/User、原母 Session 和期限；网页授权最多十分钟且不超过母 Session，读取不续期。不能可靠提供启动绑定或真实消息 origin/frame 能力时，明确显示宿主不可用，不降级。Android 每个批准文档独占新 WebView：先注册监听器和 document-start bootstrap，再首次加载；重开/重载先撤销旧 owner 和媒体，再创建新实例。旧实例不得加载第二份 Portal HTML，导航回调与静态主文档拦截共同拒绝；导航回调不能被当作替换当前文档启动脚本的时序保证。
 
@@ -313,6 +313,8 @@ core 与 Portal 的新版可执行契约和资源包均已交付，Android 已�
 其他方法为 getStatus、refresh、close、logout、openExternal、capturePhoto、recordAudio、readMedia、releaseMedia、cancel，按 Control Protocol 的严格 params/result 执行，不保留旧别名。getStatus/refresh 返回真实已应用状态与实际 capabilities，未知值为 null。refresh 共用原生 EnterpriseSynchronizationService，提交完成才成功；Feed 刷新独立，不改变配置 generation 或续期。close 仅关闭工作台；logout 通过原生确认和同一退出命令，完成后销毁文档，不依赖 JS 回调来撤销授权。正式原生状态与退出入口在 Portal 不可用时仍可使用。一键、扫码、粘贴共用原生接入验证，私有完整文件仍由原生文件选择器导入。
 
 媒体由统一原生 owner 管理，仅用于本页预览，不自动上传或保存到聊天/Artifact。照片为 JPEG、录音为 audio/mp4，recordAudio 包含原生开始/停止 UI，时长参数 1–60 秒。单项最多 10 MiB、每文档两项/合计 20 MiB、最多保留五分钟；readMedia 按不透明句柄返回最多 65536 字节的 base64 分块，不暴露 URI 或路径。普通请求十秒、采集请求 120 秒的期限由原生独立保证，页面不能靠崩溃或超时留下后台录音。释放、取消、期限、导航、切域、退出、会话失效及进程恢复都清理临时文件与迟到结果；取消未知/已结束请求无副作用，不能取消其他文档请求。
+
+Android 媒体接线按下列所有权完成：`PortalMediaStore` 管理独占临时目录，每个文档取得独立 Session，预留时占额度，写入者停止后才发布为不可变句柄；进程恢复通过现有恢复编排清理遗留目录。`PortalNativeActions` 负责原文档的采集请求与原生 UI 交互，硬件适配器控制 CameraX 预览和 MediaRecorder 开始/停止，UI 不接触路径或 Store。相机在应用内展示可取消预览，避免外部相机 Activity 使 Portal 进入后台后仍继续写入。媒体请求取消或文档关闭时先停止硬件并等待原保存回调，再丢弃预留文件；已发布结果的过期扫描不得删除仍在采集的文件。原生媒体清理回执需纳入现有宿主关闭屏障，完成前不能发布新选中空间；请求收尾仍在 Session 锁外等待。拍摄、录音、权限与迟到写入的设备验证完成前不声明这些 capabilities。
 
 验收分开记录：共享 v3 案例由真实 Android 消费者执行；文档启动、来源/frame、原回复代理、同源导航/旧文档拒绝以及权限/扫码/拍照/录音/句柄释放执行设备验证；生产 Portal 使用新包联调。浏览器替身、纯解析测试、资源打包和本地示例均不代表真实平台互操作或 S0.2 Freeze。原 GET/304 两项限制已由上游消息方案解决，不再列为待裁决事项。
 
@@ -425,6 +427,10 @@ Portal 关闭屏障已接入企业退出：文档在原 Session 授权锁内登�
 正式切域已使用发布前关闭屏障：冻结原 RealmSelection 与目标 Session，Session 锁内阻止旧文档新准入，确认宿主及浏览状态清理后才提交新空间；原请求在锁外等待。WebStorageCompat.deleteBrowsingDataForSite 的系统回调确认 Cookie、缓存及站点存储清理，超时只结束等待，重试复用同一不可取消的系统操作。Registry 阻止旧清理完成前打开新宿主。关闭或写盘失败保持原空间，已撤销文档不复活；切域不退出登录、不停止原域生成。此前 7 项设备证据仍只属于原关闭阶段，新增清理确认与入口证据另行记录。
 
 正式原生入口已接入聊天顶部、抽屉和设置页。EnterprisePage 经 EnterpriseApplicationService 提供示例体验、扫码、粘贴、示例码、状态、同步、Portal、空间切换和原 Session 退出确认；返回聊天重新取得本域访问请求。页面退到后台会取消尚未交接的 Portal 打开，旧回调不改新页面。配置损坏时仍可通过原生入口验证 manifest 并发起退出。本阶段 App 1,998 项 JVM 测试通过，Debug/Release 构建及 lint 无错误。Pixel_10_Pro_Fold / Android 17 的 13 项设备测试通过：4 项真实 Portal WebView、5 项原生页面与生命周期、4 项企业持久化。新增设备覆盖实际 Cookie（含私有路径 HttpOnly）与 localStorage 清理、保留无关站点、停止页面后迟到宿主清理、原退出请求和显示名称冻结。另在实际 Debug 安装包手动走通聊天入口 → 一键示例 → Portal 状态/动态 → 关闭工作台 → 切个人 → 原生确认退出 → 未登录；这条路径使用实际 Koin 和本地来源。扫码摄像头、Release 设备路径、Portal logout、媒体、配置规则 UI、完整资源适配和 0.0.20 整体验收继续实施。版本仍为 0.0.19 开发基线；日志、设备证据与完整门禁记录见 build/reports/enterprise/realm-entry-verification.json。
+
+Portal 原生操作批次已接通 logout 与 openExternal：每次文档创建绑定同一 PortalDocumentContext，网页退出通过原生确认复用 EnterpriseExitService；确认前过期不发起退出，已接受退出继续由应用作用域收口。外链在确认后的 Session 锁内复验原文档期限，旧提示、取消和十秒超时不能打开地址。新增 PortalMediaStore 提供按文档隔离的预留、冻结发布、分块读取、过期与失败清理组件，13 项真实临时文件测试通过；尚未接入硬件和宿主，不声明媒体 capabilities。独立审查提出的确认期限与媒体扫描内存问题均已修正，未保留旧回调路径。
+
+本批完整门禁 test、assembleDebug、lintDebug、assembleRelease 与相关 connectedDebugAndroidTest 串行通过。App 2,014 项 JVM 测试无失败，其他模块无失败，Workspace 保留 11 项 Windows 条件跳过；lint 无错误。Android 17 的 14 项设备回归通过，新增随包 Portal → Bridge → Compose 原生确认 → 实际 Session/store/Exit 的取消与确认退出验证。另在实际 Debug 包使用完整 Koin 服务走通网页原生退出、未登录状态和个人新聊天，并观察到过时确认超时且不退出。日志与分类证据见 build/reports/enterprise/portal-native-verification.json。硬件权限/采集/迟到写入、Release 设备体验、剩余资源与配置规则 UI、私有整包导入界面和 0.0.20 最终验收继续实施；当前版本号不变，未宣称真实平台互操作完成。
 
 | 编号 | 变更 owner / 文件范围 | 完成要求 |
 | --- | --- | --- |

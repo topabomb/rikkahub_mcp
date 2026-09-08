@@ -72,7 +72,8 @@ internal class EnterpriseApplicationService(
 
     suspend fun openPortal(context: Context, selection: RealmSelection, onClosed: (PortalClosure) -> Unit): PortalWebView {
         recovery.awaitReady()
-        return PortalWebView.open(context, selection, sessions, synchronization, scope, portals, onClosed)
+        return PortalWebView.open(context, selection, sessions, synchronization, scope, portals,
+            { document -> PortalNativeActions(context, document, sessions, exit) }, onClosed)
     }
 
     suspend fun switchRealm(request: RealmSwitchRequest): RealmSelection {

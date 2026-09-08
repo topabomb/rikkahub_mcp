@@ -1631,4 +1631,6 @@
   <string name="enterprise_current_space">Текущее пространство: %1$s</string>
   <string name="enterprise_platform_unavailable">Подключение к реальному корпоративному серверу пока не поддерживается. Можно попробовать локальный пример организации.</string>
   <string name="enterprise_invalid_enrollment">Данные подключения недействительны, просрочены, уже использованы или не принимаются установленным источником.</string>
+  <string name="enterprise_external_open">Открыть внешний сайт</string>
+  <string name="enterprise_external_confirm">Открыть этот адрес в другом приложении?\n\n%1$s</string>
 </resources>

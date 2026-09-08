@@ -13,18 +13,32 @@ import kotlin.coroutines.EmptyCoroutineContext
 internal enum class PortalCloseReason { USER_REQUEST, HOST_DISPOSED, DOCUMENT_REPLACED, DOCUMENT_EXPIRED, AUTHORIZATION_REVOKED, HOST_FAILURE }
 internal data class PortalClosure(val documentId: String, val reason: PortalCloseReason)
 
-/** One approved top-level document owns its requests; all calls and callbacks run on the UI dispatcher. */
-internal class PortalDocument private constructor(
+/** Immutable identity and deadline shared by bridge dispatch and this document's native actions. */
+internal class PortalDocumentContext(
     val id: String,
     val selection: RealmSelection,
-    private val expiresAtMillis: Long,
+    val expiresAtMillis: Long,
+    val nowMillis: () -> Long,
+) {
+    fun requireUnexpired() {
+        if (nowMillis() >= expiresAtMillis) throw PortalFailure("session_expired")
+    }
+}
+
+/** One approved top-level document owns its requests; all calls and callbacks run on the UI dispatcher. */
+internal class PortalDocument private constructor(
+    private val context: PortalDocumentContext,
     private val sessions: EnterpriseSessionController,
     private val synchronization: EnterpriseSynchronizationService,
     parentScope: CoroutineScope,
-    private val nowMillis: () -> Long,
     private val closeHost: () -> Deferred<Unit>,
+    val native: PortalNativeActions?,
     private val onClosed: (PortalClosure) -> Unit,
 ) : AutoCloseable {
+    val id get() = context.id
+    val selection get() = context.selection
+    private val expiresAtMillis get() = context.expiresAtMillis
+    private val nowMillis get() = context.nowMillis
     private val lifetime = SupervisorJob(parentScope.coroutineContext[Job])
     private val scope = CoroutineScope(parentScope.coroutineContext + lifetime + Dispatchers.Main.immediate)
     private var closed = false
@@ -148,9 +162,13 @@ internal class PortalDocument private constructor(
             status()
         }
         PortalCommand.Close -> { close(PortalCloseReason.USER_REQUEST); buildJsonObject {} }
+        PortalCommand.Logout -> { nativeActions().logout(); buildJsonObject {} }
+        is PortalCommand.OpenExternal -> { nativeActions().openExternal(command.url); buildJsonObject {} }
         is PortalCommand.Cancel -> { requests[command.targetRequestId]?.cancel(); buildJsonObject {} }
         else -> throw PortalFailure("unsupported_method")
     }
+
+    private fun nativeActions(): PortalNativeActions = native ?: throw PortalFailure("unsupported_method")
 
     private suspend fun status(): JsonObject {
         val state = sessions.portalState(selection)
@@ -160,13 +178,13 @@ internal class PortalDocument private constructor(
             put("appliedManagedGeneration", state.manifest.applied?.generation?.let(::JsonPrimitive) ?: JsonNull)
             put("lastConfigurationSync", state.manifest.lastConfigurationSyncMillis?.let { JsonPrimitive(Instant.ofEpochMilli(it).toString()) } ?: JsonNull)
             put("lastEnterpriseUpdateRefresh", lastFeedRefresh?.let { JsonPrimitive(Instant.ofEpochMilli(it).toString()) } ?: JsonNull)
-            putJsonArray("capabilities") { CAPABILITIES.forEach { add(it) } }
+            putJsonArray("capabilities") { (CAPABILITIES + native?.capabilities.orEmpty()).forEach { add(it) } }
         }
     }
 
     private suspend fun authorize() {
         if (closed) throw CancellationException("Portal document closed")
-        if (nowMillis() >= expiresAtMillis) throw PortalFailure("session_expired")
+        context.requireUnexpired()
         sessions.withSelectedRealmSelection(selection) { Unit }
     }
 
@@ -214,6 +232,7 @@ internal class PortalDocument private constructor(
             requests.clear()
             seen.clear()
             lastFeedRefresh = null
+            native?.close()
             lifetime.cancel()
         }
         if (hostClosed || hostClosing?.isActive == true) return
@@ -269,6 +288,7 @@ internal class PortalDocument private constructor(
             registry: PortalDocumentRegistry,
             nowMillis: () -> Long = System::currentTimeMillis,
             closeHost: () -> Deferred<Unit> = { CompletableDeferred(Unit) },
+            createNative: ((PortalDocumentContext) -> PortalNativeActions)? = null,
             onClosed: (PortalClosure) -> Unit,
         ): PortalDocument {
             var created: PortalDocument? = null
@@ -281,8 +301,8 @@ internal class PortalDocument private constructor(
                     val id = Base64.getUrlEncoder().withoutPadding().encodeToString(ByteArray(32).also { SecureRandom().nextBytes(it) })
                     sessions.withSelectedRealmSelection(selection) {
                         registry.requireHostAvailable()
-                        PortalDocument(id, selection, minOf(session.expiresAtMillis, nowMillis() + 600_000),
-                            sessions, synchronization, scope, nowMillis, closeHost, onClosed).also {
+                        val context = PortalDocumentContext(id, selection, minOf(session.expiresAtMillis, nowMillis() + 600_000), nowMillis)
+                        PortalDocument(context, sessions, synchronization, scope, closeHost, createNative?.invoke(context), onClosed).also {
                             created = it
                             if (it.isClosed || !it.lifetime.isActive) throw CancellationException("Portal document unavailable")
                             registry.register(it)

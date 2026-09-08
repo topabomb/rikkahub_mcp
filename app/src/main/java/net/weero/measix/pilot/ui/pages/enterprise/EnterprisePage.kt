@@ -31,6 +31,8 @@ import net.weero.measix.pilot.Screen
 import net.weero.measix.pilot.data.enterprise.EnterpriseSessionPhase
 import net.weero.measix.pilot.data.enterprise.RealmAccess
 import net.weero.measix.pilot.service.portal.PortalWebView
+import net.weero.measix.pilot.service.portal.PortalNativeActions
+import net.weero.measix.pilot.service.portal.PortalNativePrompt
 import net.weero.measix.pilot.ui.components.ui.QRCode
 import net.weero.measix.pilot.ui.context.LocalNavController
 import org.koin.androidx.compose.koinViewModel
@@ -197,6 +199,28 @@ private fun EnterprisePortal(original: PortalPresentation, vm: EnterpriseVM, mod
         onDispose { lifecycle.removeObserver(observer); opening.cancel(); host?.close() }
     }
     val page = host
-    if (page != null) AndroidView(factory = { page.view }, modifier = modifier)
+    if (page != null) {
+        AndroidView(factory = { page.view }, modifier = modifier)
+        page.document.native?.let { PortalNativeConfirmation(it) }
+    }
     else Box(modifier) { CircularProgressIndicator() }
+}
+
+@Composable
+internal fun PortalNativeConfirmation(actions: PortalNativeActions) {
+    val prompt by actions.prompt.collectAsStateWithLifecycle()
+    val original = prompt ?: return
+    AlertDialog(
+        onDismissRequest = { actions.decide(original, false) },
+        title = { Text(stringResource(when (original) {
+            is PortalNativePrompt.Logout -> R.string.enterprise_exit
+            is PortalNativePrompt.External -> R.string.enterprise_external_open
+        })) },
+        text = { Text(when (original) {
+            is PortalNativePrompt.Logout -> stringResource(R.string.enterprise_exit_confirm, original.enterpriseName)
+            is PortalNativePrompt.External -> stringResource(R.string.enterprise_external_confirm, original.url.toASCIIString())
+        }) },
+        confirmButton = { TextButton(onClick = { actions.decide(original, true) }) { Text(stringResource(R.string.confirm)) } },
+        dismissButton = { TextButton(onClick = { actions.decide(original, false) }) { Text(stringResource(R.string.cancel)) } },
+    )
 }

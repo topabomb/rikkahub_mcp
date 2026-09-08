@@ -1631,4 +1631,6 @@
   <string name="enterprise_current_space">現在のスペース：%1$s</string>
   <string name="enterprise_platform_unavailable">実際の企業サーバーへの接続にはまだ対応していません。端末内のサンプル企業をお試しください。</string>
   <string name="enterprise_invalid_enrollment">接続情報が無効、期限切れ、使用済み、またはインストール済みの接続元で受け付けられません。</string>
+  <string name="enterprise_external_open">外部サイトを開く</string>
+  <string name="enterprise_external_confirm">このアドレスを別のアプリで開きますか？\n\n%1$s</string>
 </resources>

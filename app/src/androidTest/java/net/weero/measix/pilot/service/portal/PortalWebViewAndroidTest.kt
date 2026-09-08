@@ -5,6 +5,8 @@ import android.webkit.CookieManager
 import androidx.activity.ComponentActivity
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.ComposeTimeoutException
+import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.performClick
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
@@ -22,6 +24,11 @@ import kotlinx.coroutines.flow.first
 import kotlinx.serialization.json.*
 import net.weero.measix.pilot.data.enterprise.*
 import net.weero.measix.pilot.service.EnterpriseSynchronizationService
+import net.weero.measix.pilot.service.EnterpriseExitService
+import net.weero.measix.pilot.service.ApplicationRecoveryGate
+import net.weero.measix.pilot.service.ConversationApplicationService
+import net.weero.measix.pilot.ui.pages.enterprise.PortalNativeConfirmation
+import net.weero.measix.pilot.R
 import org.junit.Assert.*
 import org.junit.Rule
 import org.junit.Test
@@ -255,6 +262,62 @@ class PortalWebViewAndroidTest {
                 check(root.deleteRecursively())
             }
         }
+    }
+
+    @Test
+    fun deliveredPortalLogoutRequiresNativeConfirmationAndCompletesWithoutPageReply() = runBlocking<Unit> {
+        val root = File(context.noBackupFilesDir, "portal-webview-test-${Uuid.random()}").apply { check(mkdirs()) }
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+        val registry = PortalDocumentRegistry()
+        val hosts = mutableListOf<PortalWebView>()
+        try {
+            val sessions = EnterpriseSessionController(EnterpriseAppliedStore(File(root, "client")))
+            val source = source(root, sessions)
+            val enrolled = source.enrollExample()
+            val selection = requireNotNull(sessions.observeSelectedRealmSelection().first())
+            val sync = EnterpriseSynchronizationService(sessions, source, scope)
+            val conversations = mockk<ConversationApplicationService>()
+            coEvery { conversations.stopEnterpriseWork(any()) } returns Unit
+            val exit = EnterpriseExitService(sessions, sync, conversations,
+                ApplicationRecoveryGate().apply { ready() }, scope, registry)
+            lateinit var native: PortalNativeActions
+            var displayed by mutableStateOf<PortalWebView?>(null)
+            val closed = CompletableDeferred<Unit>()
+            val host = withContext(Dispatchers.Main) {
+                PortalWebView.open(compose.activity, selection, sessions, sync, scope, registry,
+                    { PortalNativeActions(compose.activity, it, sessions, exit).also { native = it } }) {
+                    displayed = null
+                    closed.complete(Unit)
+                }.also { hosts += it; displayed = it }
+            }
+            compose.setContent { displayed?.let { page ->
+                AndroidView(factory = { page.view })
+                PortalNativeConfirmation(native)
+            } }
+            awaitPage(host) { it["text"]?.jsonPrimitive?.content?.contains("退出企业登录") == true }
+            suspend fun clickLogout() {
+                assertTrue(evaluatePageJson(host,
+                    "JSON.stringify({clicked:(()=>{const b=Array.from(document.querySelectorAll('button')).find(b=>b.textContent.includes('退出企业登录')&&!b.disabled);if(!b)return false;b.click();return true;})()})")
+                    .getValue("clicked").jsonPrimitive.boolean)
+                withTimeout(5_000) { native.prompt.first { it is PortalNativePrompt.Logout } }
+            }
+            clickLogout()
+            compose.onNodeWithText(context.getString(R.string.enterprise_exit_confirm, enrolled.manifest.session!!.identity.enterpriseName)).assertExists()
+            compose.onNodeWithText(context.getString(R.string.cancel)).performClick()
+            withTimeout(5_000) { native.prompt.first { it == null } }
+            assertEquals(EnterpriseSessionPhase.READY, (sessions.state.value as EnterpriseState.Available).manifest.phase)
+            assertFalse(host.document.isClosed)
+            awaitPage(host) { it["text"]?.jsonPrimitive?.content?.contains("已取消") == true }
+            clickLogout()
+            compose.onNodeWithText(context.getString(R.string.confirm)).performClick()
+            withTimeout(15_000) {
+                closed.await()
+                sessions.state.first { it is EnterpriseState.Available && it.manifest.phase == EnterpriseSessionPhase.SIGNED_OUT }
+                host.document.awaitClosed()
+            }
+            assertTrue(host.document.isClosed)
+            assertEquals(RealmAccess.Personal, sessions.readPresentation().selection?.access)
+        } finally { closeHosts(hosts, scope); check(root.deleteRecursively()) }
     }
 
     private suspend fun closeHosts(hosts: List<PortalWebView>, scope: CoroutineScope) {

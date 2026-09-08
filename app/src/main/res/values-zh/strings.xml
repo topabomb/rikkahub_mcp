@@ -1631,4 +1631,6 @@
   <string name="enterprise_current_space">当前空间：%1$s</string>
   <string name="enterprise_platform_unavailable">暂不支持接入真实企业服务器，可以先体验本机示例企业。</string>
   <string name="enterprise_invalid_enrollment">接入资料无效、已过期、已使用，或不被已安装的来源接受。</string>
+  <string name="enterprise_external_open">打开外部网站</string>
+  <string name="enterprise_external_confirm">在其他应用中打开此地址？\n\n%1$s</string>
 </resources>

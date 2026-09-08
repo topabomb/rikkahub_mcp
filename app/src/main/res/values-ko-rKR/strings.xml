@@ -1631,4 +1631,6 @@
   <string name="enterprise_current_space">현재 공간: %1$s</string>
   <string name="enterprise_platform_unavailable">실제 기업 서버 접속은 아직 지원하지 않습니다. 로컬 예시 기업을 체험할 수 있습니다.</string>
   <string name="enterprise_invalid_enrollment">접속 정보가 잘못되었거나 만료 또는 사용되었거나 설치된 소스에서 허용되지 않습니다.</string>
+  <string name="enterprise_external_open">외부 웹사이트 열기</string>
+  <string name="enterprise_external_confirm">다른 앱에서 이 주소를 여시겠습니까?\n\n%1$s</string>
 </resources>

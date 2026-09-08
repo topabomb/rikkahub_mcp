@@ -107,6 +107,10 @@ checkpoint 写放大是行为事实，归 `service/turn/TurnPersistenceDeltaTest
 
 `PortalDocumentTest` 使用真实 Session、Registry 和退出 service 验证退出等待原网页请求收尾、CLOSING 拒绝新文档、旧 Session 不关闭新登录文档；两份文档的关闭测试以显式门阻挡第二份请求，验证首份清理失败不能提前结束全体等待，失败可重试且 UI 通知异常不阻塞退出。`PortalWebViewAndroidTest` 消费实际 Portal 包和 Android WebView，核实导航关闭通知携带原文档原因且发生在 detach 后，并通过 `awaitClosed` 等待迟到请求。
 
+网页原生操作同样由 `PortalDocumentTest` 验证：真实退出 owner 在取消发起请求后继续完成，拒绝/超时/旧提示不能执行外部操作，固定时钟推进超过文档期限时即使关闭定时任务未执行也拒绝确认。`PortalWebViewAndroidTest` 的网页退出用随包页面触发真实 Bridge、Compose 原生确认、Session/store/Exit owner；只替换会话运行停止 port，分别核实取消保留登录及确认后关闭并退出，不以这一用例替代真实会话运行停止的独立集成测试。
+
+`PortalMediaStoreTest` 使用真实临时文件和注入时钟验证文档归属、预留额度、格式与分块、五分钟期限、仍在写入的文件保留、取消回交、删除失败后的额度/所有权和重试。大 MP4 brand 表只验证容器扫描的有界实现与发布，不替代音频解码或硬件采集测试。该组件尚未接入 Portal 的媒体请求，设备权限、拍摄、录音和生命周期清理仍须由实际消费者验收。
+
 企业退出由 `EnterpriseExitServiceTest` 验证调用者取消、重复请求、到期准入写盘失败、清理失败及重试；坏企业 manifest 使用真实恢复编排验证个人启动不被阻断。`ConversationCommandAccessTest` 使用真实会话 owner 验证按域停止、辅助任务等待、终态提交失败与空闲 Runtime 淘汰竞态。`SubAssistantTurnIntegrationTest` 在真实主/子 Runner 链的 Child 创建、父 link 提交及 Child START 提交窗口触发真实退出，验证原 Session 拒绝迟到 START、lease 释放、存留 Child 的完整 link 及子运行终态失败重试；IO double 从成功提交记录归并最新事实，不能以默认空集合绕过退出核验。`EnterpriseSessionControllerTest` 与设备上的 `EnterpriseAppliedStateAndroidTest` 验证退出原因、CLOSING 重开及当前磁盘 manifest 重开保全及旧原型版本拒绝；`ConversationRepositoryTreeIntegrationTest` 验证真实 Room 的未完成主/子运行按完整主体计数。这些测试不代表正式页面、媒体或真实平台退出已验收。
 
 - **禁止 wall-clock 等待**：不用 `Thread.sleep`、固定 `delay` 后猜状态、轮询到 timeout。用 `runTest`、`CompletableDeferred`、`Channel`、`Mutex` barrier、`TestCoroutineScheduler`、`advanceUntilIdle`。
