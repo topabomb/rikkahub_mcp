@@ -75,7 +75,7 @@ val appModule = module {
     single { ConfigurationQueryService(get(), get(), get()) }
     single { net.weero.measix.pilot.service.ModelExecutionService(get(), get(), get(), get()) }
     single { net.weero.measix.pilot.service.MemoryService(get(), get(), get(), get(), get()) }
-    single { ArtifactUseCase(get(), get()) }
+    single { ArtifactUseCase(get(), get(), get()) }
     single { FileManagementApplicationService(get(), get(), get(), get()) }
     single { FileManagementQueryService(get(), get(), get(), get()) }
     single { MediaExportService(get()) }
@@ -424,7 +424,7 @@ val appModule = module {
         )
     }
 
-    single { ConversationAttachmentPreviewProjector(get()) }
+    single { ConversationAttachmentPreviewProjector(get(), get()) }
     single { ConversationQueryService(get(), get(), get(), get(), get(), get(), get(), get(), get()) }
     single { CustomChatFontService(get(), get()) }
     single { SearchIndexMaintenanceService(get(), get()) }

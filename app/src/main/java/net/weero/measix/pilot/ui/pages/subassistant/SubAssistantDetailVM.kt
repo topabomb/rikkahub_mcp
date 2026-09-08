@@ -22,6 +22,6 @@ class SubAssistantDetailVM(
     val settings = settingsStore.effectiveSettings.map { it.settings }
         .stateIn(viewModelScope, SharingStarted.Eagerly, Settings.dummy())
 
-    fun attachmentPreviews(): Map<String, String> =
+    fun attachmentPreviews(): Map<String, net.weero.measix.pilot.service.AttachmentPreview> =
         (uiState.value as? SubAssistantDetailUiState.Ready)?.attachmentPreviews.orEmpty()
 }

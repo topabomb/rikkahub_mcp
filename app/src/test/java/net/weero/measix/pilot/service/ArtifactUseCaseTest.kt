@@ -35,7 +35,7 @@ class ArtifactUseCaseTest {
         val id = kotlin.uuid.Uuid.random()
         val view = ConversationViewLease(id, net.weero.measix.pilot.data.enterprise.RealmAccess.Personal, 1L, {})
         val replacement = ConversationViewLease(id, net.weero.measix.pilot.data.enterprise.RealmAccess.Personal, 2L, {})
-        val draft = ArtifactUseCase(store, ApplicationRecoveryGate().apply { ready() }).openDraftScope(view)
+        val draft = ArtifactUseCase(store, ApplicationRecoveryGate().apply { ready() }, mockk()).openDraftScope(view)
         org.junit.Assert.assertTrue(runCatching { draft.claimSubmission(replacement.commandTarget, emptyList()) }
             .exceptionOrNull() is IllegalStateException)
         coVerify(exactly = 0) { store.retainInputUris(any(), any()) }
@@ -75,6 +75,7 @@ class ArtifactUseCaseTest {
         val scope = ArtifactUseCase(
             store,
             ApplicationRecoveryGate().apply { ready() },
+            mockk(),
         ).openDraftScope(net.weero.measix.pilot.service.ConversationViewLease(
             kotlin.uuid.Uuid.random(), net.weero.measix.pilot.data.enterprise.RealmAccess.Personal, 0L, {}))
 
@@ -117,6 +118,7 @@ class ArtifactUseCaseTest {
         val scope = ArtifactUseCase(
             store,
             ApplicationRecoveryGate().apply { ready() },
+            mockk(),
         ).openDraftScope(net.weero.measix.pilot.service.ConversationViewLease(
             kotlin.uuid.Uuid.random(), net.weero.measix.pilot.data.enterprise.RealmAccess.Personal, 0L, {}))
 
@@ -165,6 +167,7 @@ class ArtifactUseCaseTest {
         val useCase = ArtifactUseCase(
             store,
             ApplicationRecoveryGate().apply { ready() },
+            mockk(),
         )
 
         var failure: IllegalStateException? = null
@@ -211,7 +214,7 @@ class ArtifactUseCaseTest {
         } returns owned
         every { store.file(entity) } returns payload
         coEvery { store.discardUnpublished(owned) } returns ArtifactDeleteResult.Completed(entity.id)
-        val useCase = ArtifactUseCase(store, ApplicationRecoveryGate().apply { ready() })
+        val useCase = ArtifactUseCase(store, ApplicationRecoveryGate().apply { ready() }, mockk())
 
         val failure = runCatching {
             useCase.importSettingsImage(source) { current, _ -> current }

@@ -56,6 +56,26 @@ class FileManagementServicesTest {
 
     @After fun tearDown() { root.deleteRecursively() }
 
+    @Test fun `closing the original page during image work rejects the result`() = runTest {
+        for (checkOnly in listOf(true, false)) {
+            val artifacts = mockk<ArtifactStore>()
+            val service = FileManagementApplicationService(artifacts, mockk(), ApplicationRecoveryGate().apply { ready() }, sessions)
+            val view = ConversationViewLease(kotlin.uuid.Uuid.random(), selection.access, selection.revision) {}
+            val source = service.conversationImageSource(view, 1)
+            assertEquals(source, service.conversationImageSource(view, 1))
+            val entered = kotlinx.coroutines.CompletableDeferred<Unit>()
+            val resume = kotlinx.coroutines.CompletableDeferred<Unit>()
+            suspend fun ownerWork() { entered.complete(Unit); resume.await() }
+            coEvery { artifacts.requireImageAccess(ConfigurationScope.Personal, 1) } coAnswers { ownerWork() }
+            coEvery { artifacts.readImage(ConfigurationScope.Personal, 1) } coAnswers { ownerWork(); byteArrayOf(1) }
+            val reading = async { runCatching { if (checkOnly) source.requireAccess() else source.readBytes() } }
+            entered.await()
+            view.close()
+            resume.complete(Unit)
+            assertEquals("conversation_view_closed", reading.await().exceptionOrNull()?.message)
+        }
+    }
+
     @Test fun `image authorization and bytes cannot return after expiry during owner work`() = runTest {
         for (artifact in listOf(true, false)) for (checkOnly in listOf(true, false)) {
             var now = 1_800_000_000_000L
@@ -73,7 +93,7 @@ class FileManagementServicesTest {
             coEvery { generated.requireImageAccess(any(), any()) } coAnswers { ownerWork() }
             coEvery { artifacts.readImage(any(), any()) } coAnswers { ownerWork(); byteArrayOf(1) }
             coEvery { generated.readImage(any(), any()) } coAnswers { ownerWork(); byteArrayOf(1) }
-            val read = async { runCatching { if (checkOnly) service.requireImageAccess(key) else service.readImage(key) } }
+            val read = async { runCatching { if (checkOnly) service.imageSource(key).requireAccess() else service.imageSource(key).readBytes() } }
             entered.await()
             now = requireNotNull(ready.manifest.session).expiresAtMillis
             resume.complete(Unit)
@@ -172,8 +192,8 @@ class FileManagementServicesTest {
             assertTrue(runCatching { application.deleteGenerated(ManagedFileKey.Generated(1, old)) }.exceptionOrNull() is EnterpriseConfigurationException)
             assertTrue(runCatching { application.cleanup(old, FileCleanupCategory.UPLOAD, FileCleanupRange.All) }.exceptionOrNull() is EnterpriseConfigurationException)
             for (key in listOf(ManagedFileKey.Artifact(1, old), ManagedFileKey.Generated(1, old))) {
-                assertTrue(runCatching { application.requireImageAccess(key) }.exceptionOrNull() is EnterpriseConfigurationException)
-                assertTrue(runCatching { application.readImage(key) }.exceptionOrNull() is EnterpriseConfigurationException)
+                assertTrue(runCatching { application.imageSource(key).requireAccess() }.exceptionOrNull() is EnterpriseConfigurationException)
+                assertTrue(runCatching { application.imageSource(key).readBytes() }.exceptionOrNull() is EnterpriseConfigurationException)
             }
             assertTrue(runCatching { query.inspectArtifact(ManagedFileKey.Artifact(1, old)) }.exceptionOrNull() is EnterpriseConfigurationException)
             assertTrue(runCatching { query.candidateCount(old, FileCleanupCategory.GENERATED_IMAGES, FileCleanupRange.All) }.exceptionOrNull() is EnterpriseConfigurationException)

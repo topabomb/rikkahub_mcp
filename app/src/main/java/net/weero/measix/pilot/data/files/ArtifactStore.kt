@@ -195,6 +195,8 @@ class ArtifactProjectionException(message: String, cause: Throwable? = null) :
 
 class ArtifactDataIntegrityException(message: String) : IllegalStateException(message)
 
+data class ArtifactMediaPreview(val artifactId: Long, val uri: String)
+
 /**
  * 托管 artifact 元数据、引用与 payload 生命周期的唯一领域服务。
  *
@@ -262,9 +264,18 @@ class ArtifactStore(
         withLifecycleLock { requireReadableImage(scope, artifactId); Unit }
     }
 
-    internal suspend fun readImage(scope: ConfigurationScope, artifactId: Long): ByteArray = withContext(Dispatchers.IO) {
+    internal suspend fun requireOwnedImageAccess(scope: ConfigurationScope, artifact: OwnedArtifact) = withContext(Dispatchers.IO) {
+        withLifecycleLock { requireReadableImage(scope, artifact.entity.id, artifact); Unit }
+    }
+
+    internal suspend fun readOwnedImage(scope: ConfigurationScope, artifact: OwnedArtifact): ByteArray =
+        readImage(scope, artifact.entity.id, artifact)
+
+    internal suspend fun readImage(scope: ConfigurationScope, artifactId: Long): ByteArray = readImage(scope, artifactId, null)
+
+    private suspend fun readImage(scope: ConfigurationScope, artifactId: Long, owner: OwnedArtifact?): ByteArray = withContext(Dispatchers.IO) {
         withLifecycleLock {
-            val entity = requireReadableImage(scope, artifactId)
+            val entity = requireReadableImage(scope, artifactId, owner)
             val bytes = payloadStore.readBytes(entity.relativePath, GeneratedMediaStore.MAX_IMAGE_BYTES.toLong())
             check(!ImageMime.isUnsupportedNonImage(bytes, entity.mimeType) && ImageMime.isAcceptedImage(bytes)) {
                 "artifact_image_invalid"
@@ -273,11 +284,15 @@ class ArtifactStore(
         }
     }
 
-    private suspend fun requireReadableImage(scope: ConfigurationScope, artifactId: Long): ArtifactEntity {
+    private suspend fun requireReadableImage(scope: ConfigurationScope, artifactId: Long, owner: OwnedArtifact? = null): ArtifactEntity {
         val entity = artifactDAO.getById(artifactId) ?: error("artifact_image_unavailable")
         requireArtifactScope(entity, scope)
         check(entity.state == ArtifactState.ACTIVE.name && entity.mimeType.substringBefore(';').trim().startsWith("image/", ignoreCase = true)) { "artifact_image_unavailable" }
-        check(!synchronized(unpublishedPins) { unpublishedPins.containsKey(entity.id) }) { "artifact_image_not_published" }
+        if (owner == null) {
+            check(!synchronized(unpublishedPins) { unpublishedPins.containsKey(entity.id) }) { "artifact_image_not_published" }
+        } else {
+            check(owner.entity.id == entity.id && isPinnedBy(owner)) { "artifact_image_owner_released" }
+        }
         val file = payloadStore.file(entity.relativePath)
         check(file.isFile && (LocalToolPath.isInsideDirectory(file, payloadStore.file(FileFolders.UPLOAD)) ||
             LocalToolPath.isInsideDirectory(file, payloadStore.file("images")))) { "artifact_image_unavailable" }
@@ -301,23 +316,23 @@ class ArtifactStore(
     }
 
     /** Projection validates the original data scope; the returned URL is not a later read grant. */
-    suspend fun resolveImagePreviewForFile(scope: ConfigurationScope, file: File): String? = withContext(Dispatchers.IO) {
+    suspend fun resolveImagePreviewForFile(scope: ConfigurationScope, file: File): ArtifactMediaPreview? = withContext(Dispatchers.IO) {
         val path = payloadStore.relativePathForFile(file) ?: return@withContext null
         resolveActivePreview(scope, path, expectedMime = null, image = true)
     }
 
-    suspend fun resolveImagePreviewForArtifact(scope: ConfigurationScope, ref: LocalArtifactRef): String? = withContext(Dispatchers.IO) {
+    suspend fun resolveImagePreviewForArtifact(scope: ConfigurationScope, ref: LocalArtifactRef): ArtifactMediaPreview? = withContext(Dispatchers.IO) {
         if (ref.version != LocalArtifactRef.CURRENT_VERSION) return@withContext null
         resolveActivePreview(scope, ref.relativePath, expectedMime = ref.mimeType, image = true)
     }
 
-    suspend fun resolveMediaPreviewForFile(scope: ConfigurationScope, file: File, expectedMime: String? = null): String? =
+    suspend fun resolveMediaPreviewForFile(scope: ConfigurationScope, file: File, expectedMime: String? = null): ArtifactMediaPreview? =
         withContext(Dispatchers.IO) {
             val path = payloadStore.relativePathForFile(file) ?: return@withContext null
             resolveActivePreview(scope, path, expectedMime, image = false)
         }
 
-    suspend fun resolveMediaPreviewForArtifact(scope: ConfigurationScope, ref: LocalArtifactRef): String? =
+    suspend fun resolveMediaPreviewForArtifact(scope: ConfigurationScope, ref: LocalArtifactRef): ArtifactMediaPreview? =
         withContext(Dispatchers.IO) {
             if (ref.version != LocalArtifactRef.CURRENT_VERSION) return@withContext null
             resolveActivePreview(scope, ref.relativePath, expectedMime = ref.mimeType, image = false)
@@ -328,7 +343,7 @@ class ArtifactStore(
         relativePath: String,
         expectedMime: String?,
         image: Boolean,
-    ): String? = withLifecycleLock {
+    ): ArtifactMediaPreview? = withLifecycleLock {
         val entity = artifactDAO.getByPathAndState(relativePath.replace('\\', '/'), ArtifactState.ACTIVE.name)
             ?: return@withLifecycleLock null
         requireArtifactScope(entity, scope)
@@ -344,7 +359,7 @@ class ArtifactStore(
                 return@withLifecycleLock null
             }
         }
-        AttachmentRefs.fileToFileUrl(file)
+        ArtifactMediaPreview(entity.id, AttachmentRefs.fileToFileUrl(file))
     }
 
     fun displayName(uri: Uri): String? = payloadStore.displayName(uri)

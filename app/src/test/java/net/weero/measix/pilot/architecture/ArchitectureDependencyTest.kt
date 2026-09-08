@@ -158,6 +158,17 @@ class ArchitectureDependencyTest {
     }
 
     @Test
+    fun `image read capabilities are issued by their existing application owners`() {
+        val allowed = setOf("service/ImageSource.kt", "service/FileManagementApplicationService.kt", "service/ArtifactUseCase.kt")
+        val constructor = Regex("""(?<![\w])ImageSource\s*\(""")
+        val violations = architectureSources.filter { constructor.containsMatchIn(it.readText()) }
+            .map { it.relativeTo(architectureSourceRoot).invariantSeparatorsPath }.filterNot(allowed::contains)
+        assertTrue("UI and data owners must not create image capabilities: $violations", violations.isEmpty())
+        assertNoHits("ManagedImageInterceptor")
+        assertNoHits("ManagedImageFetcherFactory")
+    }
+
+    @Test
     fun `all UI generated media access goes through application and query ports`() {
         assertNoHits("data.imggen.GeneratedMediaStore", sourcesUnder("ui"))
         assertNoHits("data.repository.GenMediaRepository", sourcesUnder("ui"))

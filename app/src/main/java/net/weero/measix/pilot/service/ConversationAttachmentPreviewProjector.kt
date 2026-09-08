@@ -10,38 +10,44 @@ import me.rerere.ai.ui.UIMessagePart
 import net.weero.measix.pilot.data.ai.attachments.AttachmentReferenceLookup
 import net.weero.measix.pilot.data.ai.attachments.AttachmentReferenceTarget
 import net.weero.measix.pilot.data.ai.attachments.AttachmentRefs
+import net.weero.measix.pilot.data.files.ArtifactMediaPreview
 import net.weero.measix.pilot.data.files.ArtifactStore
 import net.weero.measix.pilot.data.files.LocalToolPath
 import net.weero.measix.pilot.utils.JsonInstant
 import net.weero.measix.pilot.service.runtime.ConversationPresentationSnapshot
 
+data class AttachmentPreview(val uri: String, val image: ImageSource?)
+
 /**
- * Query-side projection from attachment handles and disclosed upload paths to preview URLs.
- *
- * Preview resolution is suspend because ArtifactStore is the lifecycle owner: every local URL
- * and managed artifact is checked against its original scope, publication state and allowed root;
- * image previews also validate MIME and signature
- * before a payload URL is returned. There is intentionally no snapshot-only cache because an
- * artifact can be deleted or replaced without changing the conversation snapshot.
+ * Resolves attachment handles and disclosed upload paths through their original page and realm.
+ * ArtifactStore validates publication, scope, root and MIME; image readers retain the validated ID
+ * and page authority. Artifact lifecycle changes invalidate this projection independently of messages.
  */
 class ConversationAttachmentPreviewProjector(
     private val artifactStore: ArtifactStore,
+    private val files: FileManagementApplicationService,
 ) {
     /** Invalidates previews when attachment metadata or creation handoff changes. */
     fun lifecycleChanges(): Flow<Unit> = artifactStore.lifecycleChanges()
 
-    suspend fun project(snapshot: ConversationPresentationSnapshot): Map<String, String> {
-        val durable = projectMessages(snapshot.header.scope, snapshot.nodes.map { it.currentMessage })
+    suspend fun project(snapshot: ConversationPresentationSnapshot, source: ConversationViewLease): Map<String, AttachmentPreview> {
+        source.requireOpen()
+        check(snapshot.header.scope == source.access.scope &&
+            (snapshot.conversationId == source.conversationId || snapshot.header.parentConversationId == source.conversationId)) {
+            "attachment_preview_source_mismatch"
+        }
+        val durable = projectMessages(source, snapshot.nodes.map { it.currentMessage })
         val active = snapshot.stream ?: return durable
         val assistant = active.assistantMessage ?: return durable
-        val overlay = projectMessages(snapshot.header.scope, listOf(assistant))
+        val overlay = projectMessages(source, listOf(assistant))
         return if (overlay.isEmpty()) durable else durable + overlay
     }
 
-    private suspend fun projectMessages(scope: ConfigurationScope, messages: List<me.rerere.ai.ui.UIMessage>): Map<String, String> {
-        val projected = LinkedHashMap<String, String>()
+    private suspend fun projectMessages(source: ConversationViewLease, messages: List<me.rerere.ai.ui.UIMessage>): Map<String, AttachmentPreview> {
+        val scope = source.access.scope
+        val projected = LinkedHashMap<String, AttachmentPreview>()
         for ((ref, target) in AttachmentReferenceLookup.index(messages).entries()) {
-            val url = when (target) {
+            val resolved = when (target) {
                 is AttachmentReferenceTarget.MessagePart -> {
                     val part = target.part
                     val raw = when (part) {
@@ -74,12 +80,18 @@ class ConversationAttachmentPreviewProjector(
 
                 AttachmentReferenceTarget.Conflict -> null
             }
-            if (url != null) {
-                projected[ref] = url
+            if (resolved != null) {
+                val image = when (target) {
+                    is AttachmentReferenceTarget.MessagePart -> target.part is UIMessagePart.Image
+                    is AttachmentReferenceTarget.ManagedArtifact -> target.type == "image"
+                    AttachmentReferenceTarget.Conflict -> false
+                }
+                val preview = AttachmentPreview(resolved.uri, if (image) files.conversationImageSource(source, resolved.artifactId) else null)
+                projected[ref] = preview
                 val toolPath = when (target) {
                     is AttachmentReferenceTarget.ManagedArtifact -> target.artifact.toolPath()
                     is AttachmentReferenceTarget.MessagePart -> try {
-                        AttachmentRefs.parseFileUrl(url)?.let { file ->
+                        AttachmentRefs.parseFileUrl(resolved.uri)?.let { file ->
                             artifactStore.resolveManagedReference(file)?.toolPath()
                         }
                     } catch (cancelled: CancellationException) {
@@ -89,7 +101,7 @@ class ConversationAttachmentPreviewProjector(
                     }
                     AttachmentReferenceTarget.Conflict -> null
                 }
-                if (toolPath != null) projected[toolPath] = url
+                if (toolPath != null) projected[toolPath] = preview
             }
         }
         // Tool input paths may intentionally reference a file absent from this conversation.
@@ -106,7 +118,9 @@ class ConversationAttachmentPreviewProjector(
                 if (LocalToolPath.parseUploadToolPath(path) == null || path in projected) continue
                 try {
                     val file = artifactStore.resolveToolPath(path) ?: continue
-                    artifactStore.resolveImagePreviewForFile(scope, file)?.let { projected[path] = it }
+                    artifactStore.resolveImagePreviewForFile(scope, file)?.let {
+                        projected[path] = AttachmentPreview(it.uri, files.conversationImageSource(source, it.artifactId))
+                    }
                 } catch (cancelled: CancellationException) {
                     throw cancelled
                 } catch (_: Exception) {
@@ -117,7 +131,7 @@ class ConversationAttachmentPreviewProjector(
         return projected
     }
 
-    private suspend fun resolveManagedPreview(scope: ConfigurationScope, target: AttachmentReferenceTarget.ManagedArtifact): String? {
+    private suspend fun resolveManagedPreview(scope: ConfigurationScope, target: AttachmentReferenceTarget.ManagedArtifact): ArtifactMediaPreview? {
         return try {
             if (target.type == "image") {
                 artifactStore.resolveImagePreviewForArtifact(scope, target.artifact)

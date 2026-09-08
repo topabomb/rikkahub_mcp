@@ -20,6 +20,8 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.key
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
@@ -51,7 +53,8 @@ internal fun MediaFileInputRow(
 ) {
     val scope = rememberCoroutineScope()
     val parts = state.messageContent
-    val displayNameByUri by produceState(emptyMap<String, String>(), artifactDraftScope, parts) {
+    val inputRevision by artifactDraftScope.inputRevision.collectAsState()
+    val previews by produceState(emptyMap<String, net.weero.measix.pilot.service.ArtifactInputPreview>(), artifactDraftScope, parts, inputRevision) {
         value = emptyMap()
         value = try {
             artifactDraftScope.describeInputs(parts)
@@ -62,6 +65,8 @@ internal fun MediaFileInputRow(
             emptyMap()
         }
     }
+
+    val displayNameByUri = remember(previews) { previews.mapValues { it.value.displayName } }
 
     fun removePart(part: UIMessagePart, url: String) {
         state.messageContent = state.messageContent.filterNot { it == part }
@@ -92,12 +97,14 @@ internal fun MediaFileInputRow(
                                 shape = RoundedCornerShape(10.dp),
                                 color = MaterialTheme.colorScheme.surfaceContainerHigh,
                             ) {
-                                AsyncImage(
-                                    model = part.url,
-                                    contentDescription = null,
-                                    contentScale = ContentScale.Crop,
-                                    modifier = Modifier.fillMaxSize()
-                                )
+                                key(inputRevision) {
+                                    AsyncImage(
+                                        model = previews[part.url]?.image,
+                                        contentDescription = null,
+                                        contentScale = ContentScale.Crop,
+                                        modifier = Modifier.fillMaxSize()
+                                    )
+                                }
                             }
                         },
                         onRemove = { removePart(part, part.url) }

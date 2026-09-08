@@ -72,7 +72,7 @@ data class ConversationFolderDirectory(
 data class ConversationUiModel internal constructor(
     val snapshot: ConversationPresentationSnapshot,
     val presentation: ConversationPresentation,
-    val attachmentPreviews: Map<String, String> = emptyMap(),
+    val attachmentPreviews: Map<String, AttachmentPreview> = emptyMap(),
     internal val configuration: ConversationConfigurationUiModel? = null,
 ) {
     val turnFeedback: ConversationTurnFeedback? = projectConversationTurnFeedback(snapshot, presentation)
@@ -216,20 +216,20 @@ class ConversationQueryService internal constructor(
                 ConversationUiModel(
                     snapshot = snapshot,
                     presentation = presentation,
-                    attachmentPreviews = attachmentPreviewProjector.project(snapshot),
+                    attachmentPreviews = attachmentPreviewProjector.project(snapshot, lease),
                     configuration = resolved.conversationConfiguration(ConversationAssistantTarget(lease.commandTarget, snapshot.header.assistantId)),
                 )
             }
         }
 
-    internal suspend fun attachmentPreviews(source: ConversationViewLease, snapshot: ConversationPresentationSnapshot): Map<String, String> {
+    internal suspend fun attachmentPreviews(source: ConversationViewLease, snapshot: ConversationPresentationSnapshot): Map<String, AttachmentPreview> {
         withViewAccess(source) {
             check(snapshot.header.scope == source.access.scope &&
                 (snapshot.conversationId == source.conversationId || snapshot.header.parentConversationId == source.conversationId)) {
                 "sub_assistant_preview_scope_mismatch"
             }
         }
-        val previews = attachmentPreviewProjector.project(snapshot)
+        val previews = attachmentPreviewProjector.project(snapshot, source)
         return withViewAccess(source) { previews }
     }
 

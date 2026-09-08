@@ -2,6 +2,9 @@ package net.weero.measix.pilot.data.files
 
 import net.weero.measix.pilot.data.configuration.ConfigurationScope
 
+import androidx.compose.ui.test.captureToImage
+import androidx.compose.ui.test.onRoot
+import androidx.compose.ui.graphics.toPixelMap
 import android.content.Context
 import android.content.ContextWrapper
 import androidx.room.Room
@@ -60,6 +63,9 @@ import org.junit.runner.RunWith
 /** Android filesystem publication and real Room uniqueness, not a mocked DAO contract. */
 @RunWith(AndroidJUnit4::class)
 class ManagedFileCreationIntegrationTest {
+    @get:org.junit.Rule
+    val compose = androidx.compose.ui.test.junit4.v2.createAndroidComposeRule<androidx.activity.ComponentActivity>()
+
     private lateinit var root: File
     private lateinit var database: AppDatabase
     private lateinit var appScope: AppScope
@@ -104,6 +110,114 @@ class ManagedFileCreationIntegrationTest {
         check(root.deleteRecursively())
     }
 
+    @OptIn(coil3.annotation.DelicateCoilApi::class)
+    @Test
+    fun mountedInputThumbnailRecoversWhenRejectedSubmissionReturnsOwnership() {
+        val sessions = EnterpriseSessionController(EnterpriseAppliedStore(File(root, "input-painter")))
+        val selected = runBlocking { sessions.recover(); requireNotNull(sessions.observeSelectedRealmSelection().first()) }
+        val view = ConversationViewLease(kotlin.uuid.Uuid.random(), selected.access, selected.revision) {}
+        val draft = ArtifactUseCase(store, ApplicationRecoveryGate().apply { ready() }, sessions).openDraftScope(view)
+        val input = File(root, "red.png")
+        android.graphics.Bitmap.createBitmap(2, 2, android.graphics.Bitmap.Config.ARGB_8888).let { bitmap ->
+            try {
+                bitmap.eraseColor(android.graphics.Color.RED)
+                input.outputStream().use { check(bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it)) }
+            } finally { bitmap.recycle() }
+        }
+        val imported = runBlocking { draft.importUrisOrThrow(listOf(android.net.Uri.fromFile(input))).single() }
+        val part = UIMessagePart.Image(imported.uri.toString())
+        val state = net.weero.measix.pilot.ui.hooks.ChatInputState().apply { messageContent = listOf(part) }
+        val entered = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val resume = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val finished = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val first = java.util.concurrent.atomic.AtomicBoolean(true)
+        val original = coil3.SingletonImageLoader.get(payloadContext)
+        val loader = coil3.ImageLoader.Builder(payloadContext).components {
+            add(coil3.intercept.Interceptor { chain ->
+                if (chain.request.data is ImageSource && first.compareAndSet(true, false)) {
+                    entered.complete(Unit)
+                    try { resume.await(); chain.proceed() } finally { finished.complete(Unit) }
+                } else chain.proceed()
+            })
+            add(ImageSourceInterceptor); add(ImageSourceKeyer); add(ImageSourceFetcherFactory)
+        }.build()
+        coil3.SingletonImageLoader.setUnsafe(loader)
+        try {
+            compose.setContent { androidx.compose.material3.MaterialTheme {
+                net.weero.measix.pilot.ui.components.ai.MediaFileInputRow(state, draft)
+            } }
+            compose.waitUntil(30_000) { entered.isCompleted }
+            val submission = runBlocking { draft.claimSubmission(draft.target, listOf(part)) }
+            resume.complete(Unit)
+            compose.waitUntil(30_000) { finished.isCompleted }
+            compose.waitForIdle()
+            runBlocking { draft.returnUnaccepted(submission) }
+            compose.waitUntil(30_000) {
+                val pixels = compose.onRoot().captureToImage().toPixelMap()
+                var red = 0
+                for (y in 0 until pixels.height step 4) for (x in 0 until pixels.width step 4) {
+                    val color = pixels[x, y]
+                    if (color.red > 0.8f && color.green < 0.2f && color.blue < 0.2f) red++
+                }
+                red > 30
+            }
+            compose.runOnIdle { assertEquals(listOf(part), state.messageContent) }
+        } finally {
+            resume.complete(Unit)
+            coil3.SingletonImageLoader.setUnsafe(original)
+            loader.shutdown(); draft.close(); view.close()
+        }
+    }
+
+    @Test
+    fun draftImageReadsFollowCreationOwnershipAndRejectCachedReadsAfterRelease() = runBlocking {
+        store.ensureReferenceProjection()
+        val packet = payloadContext.assets.open(LocalEnterpriseSource.EXAMPLE_ASSET).use(EnterprisePackageCodec::decode)
+        val sessions = EnterpriseSessionController(EnterpriseAppliedStore(File(root, "draft-images")))
+        sessions.enrollLocal(packet.identity, { packet.identity }, { packet })
+        val selected = requireNotNull(sessions.observeSelectedRealmSelection().first())
+        val view = ConversationViewLease(kotlin.uuid.Uuid.random(), selected.access, selected.revision) {}
+        val draft = ArtifactUseCase(store, ApplicationRecoveryGate().apply { ready() }, sessions).openDraftScope(view)
+        val png = pngBytes()
+        val input = File(root, "input.png").apply { writeBytes(png) }
+        val imported = draft.importUrisOrThrow(listOf(android.net.Uri.fromFile(input))).single()
+        val part = UIMessagePart.Image(imported.uri.toString())
+        val image = requireNotNull(draft.describeInputs(listOf(part))[part.url]?.image)
+        assertEquals(image, draft.describeInputs(listOf(part))[part.url]?.image)
+        val loader = coil3.ImageLoader.Builder(payloadContext).components {
+            add(ImageSourceInterceptor); add(ImageSourceKeyer); add(ImageSourceFetcherFactory)
+        }.build()
+        val request = coil3.request.ImageRequest.Builder(payloadContext).data(image).size(2, 2).build()
+        try {
+            assertArrayEquals(png, image.readBytes())
+            assertTrue(loader.execute(request) is coil3.request.SuccessResult)
+            assertEquals(coil3.decode.DataSource.MEMORY_CACHE, (loader.execute(request) as coil3.request.SuccessResult).dataSource)
+            val artifact = requireNotNull(store.resolveManagedReference(net.weero.measix.pilot.data.ai.attachments.AttachmentRefs.parseFileUrl(part.url)!!))
+            assertEquals(null, store.resolveImagePreviewForArtifact(selected.access.scope, artifact))
+            val submission = draft.claimSubmission(draft.target, listOf(part))
+            assertTrue(runCatching { image.readBytes() }.isFailure)
+            assertTrue(loader.execute(request) is coil3.request.ErrorResult)
+            draft.returnUnaccepted(submission)
+            assertArrayEquals(png, image.readBytes())
+            draft.discard(imported.uri)
+            assertTrue(runCatching { image.readBytes() }.isFailure)
+            assertTrue(loader.execute(request) is coil3.request.ErrorResult)
+
+            val existing = store.createFromBytes(selected.access.scope, png, "existing.png", "image/png", origin = ArtifactOrigin.USER)
+            store.abandonUnpublished(existing)
+            val foreign = store.createFromBytes(ConfigurationScope.Personal, png, "foreign.png", "image/png", origin = ArtifactOrigin.USER)
+            store.abandonUnpublished(foreign)
+            val inputs = listOf(UIMessagePart.Image(existing.uri.toString()), UIMessagePart.Image(foreign.uri.toString()), UIMessagePart.Image(android.net.Uri.fromFile(input).toString()))
+            val previews = draft.describeInputs(inputs)
+            assertEquals(setOf(existing.uri.toString()), previews.keys)
+            val borrowed = requireNotNull(previews[existing.uri.toString()]?.image)
+            assertArrayEquals(png, borrowed.readBytes())
+            draft.close()
+            assertTrue(runCatching { borrowed.readBytes() }.isFailure)
+            assertArrayEquals(png, store.readImage(selected.access.scope, existing.entity.id))
+        } finally { loader.shutdown(); draft.close(); view.close() }
+    }
+
     @Test
     fun publicationRefreshesAnAlreadyObservedPreviewWithoutAnotherDatabaseWrite() = runBlocking {
         store.ensureReferenceProjection()
@@ -122,7 +236,7 @@ class ManagedFileCreationIntegrationTest {
         )))
         val previews = kotlinx.coroutines.channels.Channel<String?>(kotlinx.coroutines.channels.Channel.UNLIMITED)
         val observer = launch {
-            store.lifecycleChanges().collect { previews.send(store.resolveImagePreviewForArtifact(enterprise, image.localRef)) }
+            store.lifecycleChanges().collect { previews.send(store.resolveImagePreviewForArtifact(enterprise, image.localRef)?.uri) }
         }
         try {
             kotlinx.coroutines.withTimeout(20_000) { assertEquals(null, previews.receive()) }
@@ -136,7 +250,14 @@ class ManagedFileCreationIntegrationTest {
     @Test
     fun conversationPreviewsAndChildDeliverablesRejectForeignOrUnpublishedMedia() = runBlocking {
         store.ensureReferenceProjection()
-        val enterprise = scopeFor(1)
+        val packet = payloadContext.assets.open(LocalEnterpriseSource.EXAMPLE_ASSET).use(EnterprisePackageCodec::decode)
+        val sessions = EnterpriseSessionController(EnterpriseAppliedStore(File(root, "preview-session")))
+        sessions.enrollLocal(packet.identity, { packet.identity }, { packet })
+        val selected = requireNotNull(sessions.observeSelectedRealmSelection().first())
+        val enterprise = selected.access.scope
+        val files = FileManagementApplicationService(store,
+            GeneratedMediaStore(root, GenMediaRepository(database.genMediaDao()), store),
+            ApplicationRecoveryGate().apply { ready() }, sessions)
         val png = pngBytes()
         val personal = store.createFromBytes(ConfigurationScope.Personal, png, "personal.png", "image/png", origin = ArtifactOrigin.USER)
         val own = store.createFromBytes(enterprise, png, "enterprise.png", "image/png", origin = ArtifactOrigin.USER)
@@ -144,8 +265,8 @@ class ManagedFileCreationIntegrationTest {
         assertEquals(null, store.resolveImagePreviewForArtifact(enterprise, own.localRef))
         assertEquals(null, store.resolveMediaPreviewForArtifact(enterprise, document.localRef))
         listOf(personal, own, document).forEach { store.abandonUnpublished(it) }
-        assertEquals(own.uri.toString(), store.resolveImagePreviewForArtifact(enterprise, own.localRef))
-        assertEquals(document.uri.toString(), store.resolveMediaPreviewForFile(enterprise, store.file(document.entity), "text/plain"))
+        assertEquals(own.uri.toString(), store.resolveImagePreviewForArtifact(enterprise, own.localRef)?.uri)
+        assertEquals(document.uri.toString(), store.resolveMediaPreviewForFile(enterprise, store.file(document.entity), "text/plain")?.uri)
         assertEquals(null, store.resolveMediaPreviewForArtifact(enterprise, document.localRef.copy(mimeType = "application/pdf")))
         assertTrue(runCatching { store.resolveImagePreviewForArtifact(enterprise, personal.localRef) }.exceptionOrNull() is ArtifactProjectionException)
         assertTrue(runCatching { store.resolveMediaPreviewForFile(ConfigurationScope.Personal, store.file(document.entity)) }.exceptionOrNull() is ArtifactProjectionException)
@@ -168,11 +289,23 @@ class ManagedFileCreationIntegrationTest {
             messages = listOf(message, tool).map { it.toMessageNode() },
         ).copy(scope = enterprise)
         val snapshot = ConversationRuntimeSnapshot(conversation.toSnapshot(), null).toPresentationSnapshot()
-        val previews = ConversationAttachmentPreviewProjector(store).project(snapshot)
-        assertTrue(own.uri.toString() in previews.values)
-        assertFalse(personal.uri.toString() in previews.values)
+        val view = ConversationViewLease(conversation.id, selected.access, selected.revision) {}
+        val projector = ConversationAttachmentPreviewProjector(store, files)
+        val previews = projector.project(snapshot, view)
+        assertTrue(own.uri.toString() in previews.values.map { it.uri })
+        assertFalse(personal.uri.toString() in previews.values.map { it.uri })
         assertTrue(own.localRef.toolPath() in previews.keys)
         assertFalse(personal.localRef.toolPath() in previews.keys)
+        val imageSource = requireNotNull(previews[own.localRef.toolPath()]?.image)
+        assertEquals(imageSource, projector.project(snapshot, view)[own.localRef.toolPath()]?.image)
+        assertArrayEquals(png, imageSource.readBytes())
+        view.close()
+        assertTrue(runCatching { imageSource.requireAccess() }.isFailure)
+        assertTrue(runCatching { imageSource.readBytes() }.isFailure)
+        val reopened = ConversationViewLease(conversation.id, selected.access, selected.revision) {}
+        val reopenedSource = requireNotNull(projector.project(snapshot, reopened)[own.localRef.toolPath()]?.image)
+        assertFalse(imageSource == reopenedSource)
+        assertArrayEquals(png, reopenedSource.readBytes())
         fun deliverable(artifact: OwnedArtifact) = net.weero.measix.pilot.data.ai.subassistant.SubAssistantExtractedArtifacts(
             artifacts = listOf(net.weero.measix.pilot.data.ai.subassistant.SubAssistantDeliverableArtifact(
                 ref = net.weero.measix.pilot.data.ai.attachments.AttachmentRefs.format(kotlin.uuid.Uuid.random()),
@@ -182,7 +315,7 @@ class ManagedFileCreationIntegrationTest {
         assertEquals(1, net.weero.measix.pilot.data.ai.subassistant.validateDeliverableArtifacts(enterprise, deliverable(document), store).artifacts.size)
         assertTrue(runCatching { net.weero.measix.pilot.data.ai.subassistant.validateDeliverableArtifacts(ConfigurationScope.Personal, deliverable(document), store) }.exceptionOrNull() is ArtifactProjectionException)
         assertTrue(store.deleteUserRequested(enterprise, own.entity.id) is ArtifactDeleteResult.Completed)
-        assertTrue(ConversationAttachmentPreviewProjector(store).project(snapshot).isEmpty())
+        assertTrue(projector.project(snapshot, reopened).isEmpty())
     }
 
     @Test
@@ -205,19 +338,19 @@ class ManagedFileCreationIntegrationTest {
         }
         val foreign = createKeys(ConfigurationScope.Personal)
         val keys = createKeys(selected.access.scope)
-        for (key in foreign) assertTrue(runCatching { commands.readImage(key) }.isFailure)
+        for (key in foreign) assertTrue(runCatching { commands.imageSource(key).readBytes() }.isFailure)
         val unpublished = store.createFromBytes(selected.access.scope, bytes, "pending.png", "image/png", origin = ArtifactOrigin.USER)
-        assertTrue(runCatching { commands.readImage(ManagedFileKey.Artifact(unpublished.entity.id, selected)) }.isFailure)
+        assertTrue(runCatching { commands.imageSource(ManagedFileKey.Artifact(unpublished.entity.id, selected)).readBytes() }.isFailure)
         store.discardUnpublished(unpublished).requireDiscarded("test cleanup")
         val loader = coil3.ImageLoader.Builder(payloadContext).components {
-            add(net.weero.measix.pilot.service.ManagedImageInterceptor(commands))
-            add(net.weero.measix.pilot.service.ManagedImageKeyer)
-            add(net.weero.measix.pilot.service.ManagedImageFetcherFactory(commands))
+            add(net.weero.measix.pilot.service.ImageSourceInterceptor)
+            add(net.weero.measix.pilot.service.ImageSourceKeyer)
+            add(net.weero.measix.pilot.service.ImageSourceFetcherFactory)
         }.build()
-        fun request(key: ManagedFileKey) = coil3.request.ImageRequest.Builder(payloadContext).data(key).size(2, 2).build()
+        fun request(key: ManagedFileKey) = coil3.request.ImageRequest.Builder(payloadContext).data(commands.imageSource(key)).size(2, 2).build()
         try {
             for (key in keys) {
-                assertArrayEquals(bytes, commands.readImage(key))
+                assertArrayEquals(bytes, commands.imageSource(key).readBytes())
                 assertTrue(loader.execute(request(key)) is coil3.request.SuccessResult)
                 val hit = loader.execute(request(key)) as coil3.request.SuccessResult
                 assertEquals(coil3.decode.DataSource.MEMORY_CACHE, hit.dataSource)

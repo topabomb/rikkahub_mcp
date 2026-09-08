@@ -123,7 +123,9 @@ Tool Result checkpoint（消息与 Artifact 引用同事务）
 
 ### 2.5 范围清理与恢复
 
-文件目录与图库缩略图通过 `ManagedFileKey.Artifact` / `Generated` 保存原 RealmSelection 和稳定文件 ID。`FileManagementApplicationService` 在原 Session 内调用文件 owner 验证归属、状态和文件边界，并在 owner 操作结束后复验原选择。Artifact lifecycle lock 与 GeneratedMedia persist lock 各自保护有界读取，解码使用返回的字节，不持有 owner 锁；共用 `FileUtils.readBoundedBytes` 按实际读入字节限制大小并传播取消。`ManagedImageInterceptor` 在 Coil 内存缓存命中前及解码结果回交前复验权限，缓存键包含原选择身份；未发布、已删除或跨域资源不能靠旧缓存恢复显示。该入口不创建新的 durable 状态或文件 owner。
+文件目录与图库缩略图将 `ManagedFileKey.Artifact` / `Generated` 交给 `FileManagementApplicationService.imageSource`，取得携带原 RealmSelection 和稳定文件身份的 `ImageSource`。该对象只借用原 owner 的校验和有界读取能力，不管理文件生命周期或 Job；UI 不直接构造它。文件服务在原 Session 内调用文件 owner 验证归属、状态和文件边界，并在 owner 操作结束后复验原选择。Artifact lifecycle lock 与 GeneratedMedia persist lock 各自保护有界读取，解码使用返回的字节，不持有 owner 锁；共用 `FileUtils.readBoundedBytes` 按实际读入字节限制大小并传播取消。`ImageSourceInterceptor` 在 Coil 内存缓存命中前及解码结果回交前复验权限，缓存键包含原选择身份；未发布、已删除或跨域资源不能靠旧缓存恢复显示。该入口不创建新的 durable 状态或文件 owner。
+
+会话预览由 `ConversationAttachmentPreviewProjector` 携带原 `ConversationViewLease` 解析。`ArtifactMediaPreview` 在 Store 锁内同时取得稳定 ID 与 URI；`AttachmentPreview` 中的图片读取对象由文件 application port 绑定该 ID 和原页面，后续读取不重新按同路径认领文件。同一页面重复投影使用同一缓存身份；原页面关闭后不可读，新页面即使打开同一会话也取得独立身份。当前会话投影已保留该对象；会话大图、导出与背景消费者的统一接线仍在实施方案中跟踪。
 
 上传 Artifact 与图库生成媒体保持独立 owner，不存在共享目录扫描删除器：
 
@@ -136,7 +138,7 @@ Tool Result checkpoint（消息与 Artifact 引用同事务）
 - 两个领域分别返回结构化结果。`FileManagementApplicationService` 只映射为 UI 所需的 `deleted`、`cleanupPending`、`skippedInProgress` 与 `failed`，不把部分成功压成 Boolean，也不为没有该状态的领域伪造结果；
 - `FileManagementApplicationService` 的 owner 命令与 `FileManagementQueryService` 中会读取 row/payload 状态的列表、分页、统计和检查均等待全局 `ApplicationRecoveryGate`。纯 canonical-root 路径分类不读取 row 或 payload 状态，只用于本地图片来源标签。`ApplicationRecoveryCoordinator` 在发布文件读写能力前依次完成 Artifact 与 GeneratedMedia reconcile，页面不会观察或操作尚未收口的 tombstone、staging 或孤儿 payload。
 
-输入框附件名称只经原 ArtifactDraftScope 查询当前输入中的 URI；按规范化路径和 scope 匹配，不订阅全局上传目录，也不按 basename 反查其他文件。名称读取失败可回退显示，取消继续传播。图像页取消沿 enqueue 的原请求收口，Coordinator 的取消返回前等待真实执行结束；下个页面请求等待旧协程完成，旧图片投影不能跨选择继续展示。
+输入框由原 `ArtifactDraftScope.describeInputs` 同时投影附件名称和图片 `ImageSource`；按规范化路径和 scope 匹配，不订阅全局上传目录，也不按 basename 反查其他文件。草稿新导入的图片必须同时通过原 draft 所有权和 Artifact 创建 token 校验；编辑已有图片则验证同域已发布 ID，不能读取其他创建者尚未发布的文件。读取遵守 Session → Draft → Artifact 锁序，返回前复验原页面、选择和草稿状态。提交认领后原草稿不能读取已交出的图片；拒绝退回由同一 owner 恢复原创建权。`inputRevision` 仅通知同一草稿的所有权变更，驱动查询与输入缩略图重试，不保存第二份附件事实，也不推进企业配置 generation。名称读取失败可回退显示，取消继续传播。图像页取消沿 enqueue 的原请求收口，Coordinator 的取消返回前等待真实执行结束；下个页面请求等待旧协程完成，旧图片投影不能跨选择继续展示。
 
 ## 3. 请求级投影（`AttachmentProjectionTransformer`）
 

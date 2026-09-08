@@ -628,7 +628,7 @@ class ConfigurationApplicationServiceTest {
 
         init {
             every { preview.lifecycleChanges() } returns flowOf(Unit)
-            coEvery { preview.project(any()) } returns emptyMap()
+            coEvery { preview.project(any(), any()) } returns emptyMap()
             coEvery { repository.getConversationHeader(any()) } answers { headers[firstArg()] }
             coEvery { repository.commit(any()) } answers {
                 val mutation = (firstArg<ConversationWrite>() as ConversationWrite.Mutate).mutation

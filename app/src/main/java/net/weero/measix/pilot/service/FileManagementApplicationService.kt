@@ -55,26 +55,34 @@ class FileManagementApplicationService internal constructor(
         file.writeBytes(bytes)
     },
 ) {
-    suspend fun requireImageAccess(key: ManagedFileKey) {
-        recoveryGate.awaitReady()
-        sessions.withSelectedRealmSelection(key.selection) {
+    fun imageSource(key: ManagedFileKey): ImageSource = createImageSource("managed", key) { }
+
+    internal fun conversationImageSource(view: ConversationViewLease, artifactId: Long): ImageSource = createImageSource(
+        "conversation:${view.imageReadIdentity}",
+        ManagedFileKey.Artifact(artifactId, RealmSelection(view.access, view.selectionRevision)),
+        view::requireOpen,
+    )
+
+    private fun createImageSource(contextIdentity: String, key: ManagedFileKey, requireOwner: () -> Unit): ImageSource = ImageSource(
+        cacheIdentity = "$contextIdentity:$key",
+        verifyAccess = { withImageAccess(key, requireOwner) {
             when (key) {
                 is ManagedFileKey.Artifact -> artifactStore.requireImageAccess(key.selection.access.scope, key.artifactId)
                 is ManagedFileKey.Generated -> generatedMediaStore.requireImageAccess(key.selection.access.scope, key.mediaId)
             }
-        }
-        sessions.withSelectedRealmSelection(key.selection) { }
-    }
-
-    suspend fun readImage(key: ManagedFileKey): ByteArray {
-        recoveryGate.awaitReady()
-        val bytes = sessions.withSelectedRealmSelection(key.selection) {
+        } },
+        readPayload = { withImageAccess(key, requireOwner) {
             when (key) {
                 is ManagedFileKey.Artifact -> artifactStore.readImage(key.selection.access.scope, key.artifactId)
                 is ManagedFileKey.Generated -> generatedMediaStore.readImage(key.selection.access.scope, key.mediaId)
             }
-        }
-        return sessions.withSelectedRealmSelection(key.selection) { bytes }
+        } },
+    )
+
+    private suspend fun <T> withImageAccess(key: ManagedFileKey, requireOwner: () -> Unit, action: suspend () -> T): T {
+        recoveryGate.awaitReady()
+        val result = sessions.withSelectedRealmSelection(key.selection) { requireOwner(); action() }
+        return sessions.withSelectedRealmSelection(key.selection) { requireOwner(); result }
     }
 
     suspend fun cleanup(selection: RealmSelection, category: FileCleanupCategory, range: FileCleanupRange): FileCleanupResult {

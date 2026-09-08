@@ -36,6 +36,7 @@ class ConversationViewLease internal constructor(
     internal val selectionRevision: Long,
     private val closeAction: () -> Unit,
 ) : AutoCloseable {
+    internal val imageReadIdentity = Uuid.random()
     val commandTarget = ConversationCommandTarget(conversationId, RealmSelection(access, selectionRevision), ::requireOpen)
     private val closedOnce = AtomicBoolean(false)
     private val _closed = MutableStateFlow(false)

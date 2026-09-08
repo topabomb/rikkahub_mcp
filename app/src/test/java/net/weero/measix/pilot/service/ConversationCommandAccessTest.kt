@@ -781,7 +781,7 @@ class ConversationCommandAccessTest {
             ConversationTurnService(context, appScope, mockk(relaxed = true), settings, net.weero.measix.pilot.test.testModelExecutionService(settings, sessions, gate), memory, sessions, runner, mockk(relaxed = true),
                 mcp, mockk(relaxed = true), net.weero.measix.pilot.service.turn.TurnContextFactory(mockk()),
                 mockk(relaxed = true), mockk(), finalizer, lifecycle, registry, coordinator, gate,
-                errors, effects, ArtifactUseCase(artifactStore, gate), ConversationTitleCoordinator())
+                errors, effects, ArtifactUseCase(artifactStore, gate, sessions), ConversationTitleCoordinator())
         }
         val runGate = net.weero.measix.pilot.service.subassistant.SubAssistantRunGate()
         val application = ConversationApplicationService(settings, repository, mockk(), registry, coordinator, gate,

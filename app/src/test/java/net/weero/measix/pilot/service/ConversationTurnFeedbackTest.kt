@@ -69,7 +69,7 @@ class ConversationTurnFeedbackTest {
                 nodes = listOf(MessageNode.of(unrelated)),
                 header = original.snapshot.header.copy(title = "changed"),
             ),
-            attachmentPreviews = mapOf("irrelevant" to "preview"),
+            attachmentPreviews = mapOf("irrelevant" to AttachmentPreview("preview", null)),
         )
         assertEquals(original.turnFeedback, changed.turnFeedback)
     }

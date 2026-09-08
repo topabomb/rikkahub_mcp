@@ -133,7 +133,7 @@ internal fun ChatList(
     favoriteNodeIds: Set<Uuid>,
     state: LazyListState,
     turnPresentation: ConversationPresentation,
-    attachmentPreviews: Map<String, String>,
+    attachmentPreviews: Map<String, net.weero.measix.pilot.service.AttachmentPreview>,
     previewMode: Boolean,
     settings: Settings,
     readiness: ConversationReadiness,
@@ -231,7 +231,7 @@ private fun ChatListNormal(
     favoriteNodeIds: Set<Uuid>,
     state: LazyListState,
     turnPresentation: ConversationPresentation,
-    attachmentPreviews: Map<String, String>,
+    attachmentPreviews: Map<String, net.weero.measix.pilot.service.AttachmentPreview>,
     settings: Settings,
     readiness: ConversationReadiness,
     assistant: Assistant?,
@@ -354,7 +354,7 @@ private fun ChatListNormal(
         }
 
         val attachmentPreviewProvider = remember(attachmentPreviews) {
-            { ref: String -> attachmentPreviews[ref] }
+            { ref: String -> attachmentPreviews[ref]?.uri }
         }
         // 会话级时序相册：点击期读取最新节点，并只使用查询端口已校验的本地图片 URL。
         val conversationAlbum = remember(attachmentPreviewProvider) {

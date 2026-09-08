@@ -147,7 +147,7 @@ sealed interface SubAssistantDetailUiState {
         val link: SubAssistantDetailLink,
         val child: ConversationPresentationSnapshot,
         val timeline: List<MessageNode>,
-        val attachmentPreviews: Map<String, String> = emptyMap(),
+        val attachmentPreviews: Map<String, net.weero.measix.pilot.service.AttachmentPreview> = emptyMap(),
     ) : SubAssistantDetailUiState
 }
 

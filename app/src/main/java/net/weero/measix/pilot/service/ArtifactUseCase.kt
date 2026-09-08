@@ -1,6 +1,8 @@
 package net.weero.measix.pilot.service
 
 import net.weero.measix.pilot.data.configuration.ConfigurationScope
+import net.weero.measix.pilot.data.enterprise.EnterpriseSessionController
+import net.weero.measix.pilot.data.ai.attachments.AttachmentRefs
 
 import android.net.Uri
 import android.util.Log
@@ -8,6 +10,9 @@ import androidx.core.net.toUri
 import java.io.File
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.sync.Mutex
@@ -43,6 +48,8 @@ data class ArtifactDraftItem(
     val mimeType: String,
 )
 
+data class ArtifactInputPreview(val displayName: String, val image: ImageSource?)
+
 sealed interface ArtifactDeleteOutcome {
     data object Deleted : ArtifactDeleteOutcome
     data object CleanupPending : ArtifactDeleteOutcome
@@ -52,13 +59,14 @@ sealed interface ArtifactDeleteOutcome {
 }
 
 /** UI/Application 的 artifact 端口；调用方看不到 DAO、payload 或删除状态机。 */
-class ArtifactUseCase(
+class ArtifactUseCase internal constructor(
     private val store: ArtifactStore,
     private val recoveryGate: ApplicationRecoveryGate,
+    private val sessions: EnterpriseSessionController,
 ) {
     internal fun openDraftScope(view: ConversationViewLease): ArtifactDraftScope {
         view.requireOpen()
-        return ArtifactDraftScope(store, recoveryGate, view.commandTarget)
+        return ArtifactDraftScope(store, recoveryGate, sessions, view.commandTarget)
     }
 
     /** 验证并创建 Settings 图像 artifact，由同一挂起所有者提交 durable root。 */
@@ -145,12 +153,18 @@ internal fun ArtifactDeleteResult.toOutcome(): ArtifactDeleteOutcome = when (thi
 class ArtifactDraftScope internal constructor(
     private val store: ArtifactStore,
     private val recoveryGate: ApplicationRecoveryGate,
+    private val sessions: EnterpriseSessionController,
     internal val target: ConversationCommandTarget,
 ) : AutoCloseable {
     internal val scope: ConfigurationScope get() = target.selection.access.scope
     private val closeRequested = AtomicBoolean(false)
     private val mutex = Mutex()
     private val owned = linkedMapOf<String, OwnedArtifact>()
+    private val imageReadIdentity = kotlin.uuid.Uuid.random()
+    private val _inputRevision = MutableStateFlow(0L)
+    val inputRevision = _inputRevision.asStateFlow()
+
+    private fun inputsChanged() { _inputRevision.update { it + 1 } }
 
     suspend fun importUrisOrThrow(uris: List<Uri>): List<ArtifactDraftItem> = withOwnershipLock {
         target.requireOpen()
@@ -168,6 +182,7 @@ class ArtifactDraftScope internal constructor(
                 created += artifact
             }
             created.forEach { artifact -> owned[artifact.uri.toString()] = artifact }
+            if (created.isNotEmpty()) inputsChanged()
             created.map { artifact ->
                 ArtifactDraftItem(
                     uri = artifact.uri,
@@ -181,15 +196,54 @@ class ArtifactDraftScope internal constructor(
         }
     }
 
-    suspend fun describeInputs(parts: List<UIMessagePart>): Map<String, String> = withOwnershipLock {
-        target.requireOpen()
-        store.describeInput(scope, parts.collectArtifactUris().map(Uri::parse))
+    suspend fun describeInputs(parts: List<UIMessagePart>): Map<String, ArtifactInputPreview> {
+        recoveryGate.awaitReady()
+        return sessions.withSelectedRealmSelection(target.selection) { withOwnershipLock {
+            target.requireOpen()
+            val names = store.describeInput(scope, parts.collectArtifactUris().map(Uri::parse))
+            val images = parts.filterIsInstance<UIMessagePart.Image>().mapTo(hashSetOf()) { it.url }
+            names.mapValues { (uri, name) ->
+                val image = if (uri in images) {
+                    val artifact = owned[uri]
+                    if (artifact != null) inputImageSource(uri, artifact.entity.id, artifact)
+                    else AttachmentRefs.parseFileUrl(uri)?.let { file ->
+                        store.resolveImagePreviewForFile(scope, file)?.let { inputImageSource(uri, it.artifactId, null) }
+                    }
+                } else null
+                ArtifactInputPreview(name, image)
+            }.also { ensureOpen(); target.requireOpen() }
+        } }
+    }
+
+    private fun inputImageSource(uri: String, artifactId: Long, artifact: OwnedArtifact?): ImageSource = ImageSource(
+        cacheIdentity = "draft:$imageReadIdentity:$artifactId:${artifact?.ownershipToken}",
+        verifyAccess = { withImageAccess(uri, artifact) {
+            if (artifact == null) store.requireImageAccess(scope, artifactId)
+            else store.requireOwnedImageAccess(scope, artifact)
+        } },
+        readPayload = { withImageAccess(uri, artifact) {
+            if (artifact == null) store.readImage(scope, artifactId)
+            else store.readOwnedImage(scope, artifact)
+        } },
+    )
+
+    private suspend fun <T> withImageAccess(uri: String, artifact: OwnedArtifact?, action: suspend () -> T): T {
+        recoveryGate.awaitReady()
+        return sessions.withSelectedRealmSelection(target.selection) { withOwnershipLock {
+            target.requireOpen()
+            if (artifact != null) check(owned[uri] === artifact) { "artifact_draft_image_released" }
+            action().also { ensureOpen(); target.requireOpen() }
+        } }.also { sessions.withSelectedRealmSelection(target.selection) { withOwnershipLock {
+            target.requireOpen()
+            if (artifact != null) check(owned[uri] === artifact) { "artifact_draft_image_released" }
+        } } }
     }
 
     suspend fun createTextDocument(text: String): UIMessagePart.Document = withOwnershipLock {
         target.requireOpen()
         val artifact = store.createText(scope, text)
         owned[artifact.uri.toString()] = artifact
+        inputsChanged()
         UIMessagePart.Document(
             url = artifact.uri.toString(),
             fileName = artifact.entity.displayName,
@@ -206,7 +260,9 @@ class ArtifactDraftScope internal constructor(
         requireTarget(requestTarget)
         val uris = parts.collectArtifactUris()
         val retention = store.retainInputUris(scope, uris)
-        ArtifactSubmission(store, uris.mapNotNull(owned::remove), retention)
+        val claimed = uris.mapNotNull(owned::remove)
+        if (claimed.isNotEmpty()) inputsChanged()
+        ArtifactSubmission(store, claimed, retention)
     }
 
     internal suspend fun returnUnaccepted(submission: ArtifactSubmission) = withContext(NonCancellable) {
@@ -216,6 +272,7 @@ class ArtifactDraftScope internal constructor(
             else artifacts.forEach { artifact ->
                 check(owned.put(artifact.uri.toString(), artifact) == null) { "artifact draft ownership duplicated" }
             }
+            if (artifacts.isNotEmpty()) inputsChanged()
         }
     }
 
@@ -223,7 +280,7 @@ class ArtifactDraftScope internal constructor(
         val key = uri.toString()
         val artifact = owned[key] ?: return@withOwnershipLock
         val result = store.discardUnpublished(artifact)
-        if (result.isDiscardTerminal()) owned.remove(key)
+        if (result.isDiscardTerminal()) { owned.remove(key); inputsChanged() }
     }
 
     /**
@@ -235,12 +292,14 @@ class ArtifactDraftScope internal constructor(
             val committed = parts.collectArtifactUris().mapNotNull(owned::get)
             if (committed.isNotEmpty()) store.publishAllUnpublished(committed)
             committed.forEach { owned.remove(it.uri.toString()) }
+            if (committed.isNotEmpty()) inputsChanged()
             if (closeRequested.get()) releasePinsLocked()
         }
     }
 
     override fun close() {
         if (!closeRequested.compareAndSet(false, true)) return
+        inputsChanged()
         if (mutex.tryLock()) {
             try {
                 releasePinsLocked()

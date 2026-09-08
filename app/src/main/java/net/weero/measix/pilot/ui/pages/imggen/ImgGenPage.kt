@@ -573,6 +573,7 @@ private fun ImageGalleryScreen(
     vm: ImgGenVM,
 ) {
     val generatedImages = vm.generatedImages.collectAsLazyPagingItems()
+    val files: net.weero.measix.pilot.service.FileManagementApplicationService = koinInject()
     val context = LocalContext.current
     val resources = LocalResources.current
     val mediaExportService: MediaExportService = koinInject()
@@ -686,7 +687,9 @@ private fun ImageGalleryScreen(
                         ) {
                             Column {
                                 AsyncImage(
-                                    model = net.weero.measix.pilot.service.ManagedFileKey.Generated(it.id, it.selection),
+                                    model = remember(it.id, it.selection, files) {
+                                        files.imageSource(net.weero.measix.pilot.service.ManagedFileKey.Generated(it.id, it.selection))
+                                    },
                                     contentDescription = null,
                                     modifier = Modifier
                                         .fillMaxWidth()

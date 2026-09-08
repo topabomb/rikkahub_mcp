@@ -1,6 +1,6 @@
 # Android 企业域本期实施方案（0.0.20）
 
-> 状态：实施基线，待开发与验收。本文是 `versionName=0.0.20` / `versionCode=20` 的需求、架构、UI、变更与验收权威。
+> 状态：实施中，尚未完成整期开发与验收。本文是 `versionName=0.0.20` / `versionCode=20` 的需求、架构、UI、变更与验收权威。
 > 本期交付正式企业域功能与本地模拟企业服务，Debug 和 Release 均有完整入口，不依赖真实企业后台或 Debug 开关。
 > 后续真实接入见 [真实企业服务接入规划](android-enterprise-production-integration-roadmap.md)。`docs/references/` 只描述已实现事实。
 
@@ -334,6 +334,19 @@ Android 媒体接线按下列所有权完成：`PortalMediaStore` 管理独占�
 
 ## 10. 完整变更清单与批次
 
+当前进度以此表和最终验收结果为准。下方早期批次记录是当时的实现与验证快照，其中“继续实施”的入口、聊天配置、主/子模型 lease、辅助任务生命周期、Portal 退出和媒体 owner 已在后续批次接通，不重复建设；`developerMode` 已退休。
+
+| 收口工作包 | 当前事实与剩余工作 |
+| --- | --- |
+| 模型消费者（C5） | 主/子模型 lease 和辅助任务取消 owner 已有；标题/建议/摘要、识图、图片生成仍需全部使用原域模型准入与 binding |
+| MCP / Gateway（C5、U2） | 企业固定选择已有 UI；仍需接通原 MCP runtime/catalog/OAuth owner、企业 binding 与示例实际工具执行 |
+| 语音（C5、U2） | 仍需 TTS/ASR 的企业/用户目录、私有 binding、原请求准入及本地音频/转写 adapter |
+| 文件与 Workspace（C6） | 会话/记忆隔离、创建引用、目录删除、请求保留和子助手详情已有对应验证；图片查看/保存/背景、共享配置资产复制、外部打开及 Workspace 全局 upload 挂载仍需收口 |
+| 个人备份（C7） | 个人 Settings 保全已实现；备份仍需个人闭合图导出、恢复合并保全最新企业图和系统备份边界，不能用 Settings 测试代表数据保全 |
+| 完整示例与 UI（M1、U2） | 正式企业入口、Portal、公开模板和私有文件 ignore 已有；仍需原生整包导入/场景管理、工具批次 mock、Starter 预填及剩余资源/助手页面 |
+| 退休与发行（R1、V1） | 消费者完成后删除旧 managed overlay 链，再做 E01–E12、Release/硬件验收和版本 20 交付；真实后台属于下一阶段 |
+
+
 聊天配置与抽屉接线已实现：原页面 query 同时提供助手、模型目录、搜索与传输能力；字段命令复用 Session/Settings/会话 owner，删除无消费者的通用 usage 写入口。企业固定模型/MCP 不可修改，用户助手可本域重选、跟随域默认或恢复定义；失效定义不再静默回退。Workspace 目录、系统提示和附件迟到结果绑定原目标，写盘取消等待实际 ack。抽屉助手、目录、分页和筛选共用原 ConversationFolderAccess，旧目标不自动转入新空间；会话移动等待实际提交，换助手同时清 folder/cwd。此次没有增加配置存储区或持久化镜像。
 
 两位独立复审提出的原目标、取消与最新文档写入问题已收口。Pixel_10_Pro_Fold / Android 17 的 ScopedConfigurationAndroidTest、ModelCatalogAndroidTest、EnterprisePageAndroidTest、EnterpriseAppliedStateAndroidTest 共 11 项通过，耗时 2 分 25 秒。另在实际 Debug/Koin 页面走通示例企业聊天、固定 MCP 勾选且不可关闭、重启后从抽屉重开企业历史、企业域内移动到用户助手、模型继承选项，以及切回个人后历史/模型不混用。固定 MCP 尚无已验证工具，此处不算工具执行验收。设备旧消息中的 mock 原始回显保留为历史，新的 mock 回复已去除原始请求回显。
@@ -511,6 +524,10 @@ C6 的文件创建与引用边界已接通：上传、粘贴文本、输出图�
 会话附件预览与子助手终态交付已补齐原 scope 检查：图片、文档等媒体共用 Artifact lifecycle lock 下的主体、发布状态、MIME 和 upload/images canonical 根校验，删除未调用的 URI 入口。创建 pin 解除通过原 owner 的失效通知刷新预览，不需要额外数据库写入。子助手详情将 Child snapshot 与附件变化合为一条可取消投影，删除重复监听及旧 CAS helper，回交前检查取消，避免首次 Loading 时丢失发布通知或短暂显示旧结果。返回 URL 仍不构成后续解码/导出权限，完整类型化图片来源链继续实施。
 
 该批完整串行 `test assembleDebug lintDebug assembleRelease :app:connectedDebugAndroidTest` 在 8 分 23 秒内通过：App 2,073 项 JVM 测试无失败/跳过，lint 0 错误、287 警告，Workspace 保留 11 项 Windows 条件跳过。Android 17 模拟器 16 项测试全部通过，新增真实 Room/文件的跨域与非附件目录拒绝、未发布媒体拒绝、子助手文档归属检查及无额外数据库写入的发布刷新。确定性 Reader 测试逐个检查已交付状态，覆盖发布/新 Child 期间的迟到预览，替换旧 helper 的低价值镜像测试。独立审查发现的目录边界、通知与取消窗口已修复并复核。首次设备 PNG 静态夹具未被实际 Android 校验接受，改用 Bitmap 编码夹具后复验通过，未放宽生产校验。证据见 `build/reports/enterprise/scoped-preview-verification.json`。版本仍为 0.0.19，本批不代表完整 C6、Release 设备或 0.0.20 整期验收。
+
+图片读取对象已统一为进程内 `ImageSource`，旧 `ManagedImageLoader` 机制删除。文件目录/图库缩略图及输入框图片使用相同 Coil 校验边界；会话预览投影保留稳定文件 ID 和原页面授权。草稿输入沿既有创建 pin 与提交/退回协议读取，所有权变更通知使发送失败后的缩略图能够自动恢复，不新增附件 owner 或持久化结构。真实 Room/Coil 验证创建权认领、退回、丢弃、已发布输入及外域拒绝；Compose 设备用例验证首次图片读取中提交后拒绝退回，原输入不变且挂载组件恢复像素。完整查看器、保存、背景及其他来源消费者尚未完成，本批不代表 C6 或版本 20 验收。
+
+本批完整串行 `test assembleDebug lintDebug assembleRelease :app:connectedDebugAndroidTest` 在 8 分 39 秒内通过；App 2,075 项 JVM 测试无失败/跳过，lint 0 错误、287 警告，Workspace 保留 11 项 Windows 条件跳过。Android 17 模拟器 18 项全部通过，包括实际挂载输入组件的发送失败恢复。独立复审无剩余本批实质问题，证据见 `build/reports/enterprise/image-source-verification.json`；Release 构建通过不等于 Release 设备验收。
 
 ## 11. 验收证据
 

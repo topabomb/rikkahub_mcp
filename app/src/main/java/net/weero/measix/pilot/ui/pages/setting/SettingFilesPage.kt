@@ -809,10 +809,12 @@ private fun MediaThumb(
     deleteEnabled: Boolean = true,
     onClick: (() -> Unit)? = null,
 ) {
+    val files: FileManagementApplicationService = koinInject()
+    val source = remember(model, files) { model?.let(files::imageSource) }
     Box(modifier = Modifier.fillMaxWidth()) {
         if (model != null) {
             AsyncImage(
-                model = model,
+                model = source,
                 contentDescription = contentDescription,
                 modifier = Modifier
                     .fillMaxWidth()

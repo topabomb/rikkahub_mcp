@@ -240,7 +240,7 @@ internal class ArtifactReferenceProjectionTest : ArtifactStoreLifecycleTestBase(
         store.abandonUnpublished(owned)
         assertEquals(
             AttachmentRefs.fileToFileUrl(store.file(owned.entity)),
-            store.resolveImagePreviewForArtifact(net.weero.measix.pilot.data.configuration.ConfigurationScope.Personal, owned.localRef),
+            store.resolveImagePreviewForArtifact(net.weero.measix.pilot.data.configuration.ConfigurationScope.Personal, owned.localRef)?.uri,
         )
         assertTrue(store.deleteUserRequested(ConfigurationScope.Personal, owned.entity.id) is ArtifactDeleteResult.Completed)
         assertNull(store.resolveImagePreviewForArtifact(net.weero.measix.pilot.data.configuration.ConfigurationScope.Personal, owned.localRef))

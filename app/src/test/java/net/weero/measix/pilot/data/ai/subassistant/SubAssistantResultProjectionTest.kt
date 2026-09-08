@@ -361,7 +361,7 @@ class SubAssistantResultProjectionTest {
         coEvery { store.materialize(local) } returns local
         every { store.file(local) } returns File.createTempFile("managed", ".pdf")
 
-        coEvery { store.resolveMediaPreviewForArtifact(net.weero.measix.pilot.data.configuration.ConfigurationScope.Personal, local) } returns "file:///managed/document.pdf"
+        coEvery { store.resolveMediaPreviewForArtifact(net.weero.measix.pilot.data.configuration.ConfigurationScope.Personal, local) } returns net.weero.measix.pilot.data.files.ArtifactMediaPreview(1, "file:///managed/document.pdf")
         val validated = validateDeliverableArtifacts(net.weero.measix.pilot.data.configuration.ConfigurationScope.Personal, extracted, store)
 
         assertEquals(3, validated.artifacts.size)

@@ -153,7 +153,7 @@ fun SubAssistantDetailPage(
 private fun DetailContent(
     state: SubAssistantDetailUiState.Ready,
     targetAssistant: Assistant?,
-    attachmentPreviews: Map<String, String>,
+    attachmentPreviews: Map<String, net.weero.measix.pilot.service.AttachmentPreview>,
     modifier: Modifier = Modifier,
 ) {
     val listState = rememberLazyListState()
@@ -178,7 +178,7 @@ private fun DetailContent(
     // 会话级时序相册: 稳定的点击期求值 lambda, 组合期零扫描
     val timelineState = rememberUpdatedState(state.timeline)
     val attachmentPreviewProvider = remember(attachmentPreviews) {
-        { ref: String -> attachmentPreviews[ref] }
+        { ref: String -> attachmentPreviews[ref]?.uri }
     }
     val timelineAlbum = remember(attachmentPreviewProvider) {
         {

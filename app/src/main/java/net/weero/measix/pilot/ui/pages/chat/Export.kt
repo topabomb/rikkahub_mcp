@@ -113,7 +113,7 @@ fun ChatExportSheet(
     onDismissRequest: () -> Unit,
     conversationTitle: String,
     selectedMessages: List<UIMessage>,
-    attachmentPreviews: Map<String, String> = emptyMap(),
+    attachmentPreviews: Map<String, net.weero.measix.pilot.service.AttachmentPreview> = emptyMap(),
 ) {
     val context = LocalContext.current
     val toaster = LocalToaster.current
@@ -122,7 +122,7 @@ fun ChatExportSheet(
     val settings = LocalSettings.current
     val mediaExportService: MediaExportService = org.koin.compose.koinInject()
     val attachmentPreview = remember(attachmentPreviews) {
-        { ref: String -> attachmentPreviews[ref] }
+        { ref: String -> attachmentPreviews[ref]?.uri }
     }
     var imageExportOptions by remember { mutableStateOf(ImageExportOptions()) }
     var exporting by remember { mutableStateOf(false) }

@@ -86,7 +86,7 @@ class SubAssistantDetailReaderTest {
         assertEquals(SubAssistantDetailUiState.Unavailable, states.last())
         assertFalse(f.source.closed.value)
         coVerify(exactly = 0) { f.registry.loadRuntime(f.child.id) }
-        coVerify(exactly = 0) { f.projector.project(any()) }
+        coVerify(exactly = 0) { f.projector.project(any(), any()) }
     }
 
     @Test fun `parent and child deletion invalidate detail without revoking an otherwise open parent`() = runTest {
@@ -113,12 +113,12 @@ class SubAssistantDetailReaderTest {
             val entered = CompletableDeferred<Unit>()
             val release = CompletableDeferred<Unit>()
             var reads = 0
-            coEvery { f.projector.project(any()) } coAnswers {
+            coEvery { f.projector.project(any(), any()) } coAnswers {
                 if (++reads == 1) {
                     entered.complete(Unit)
                     withContext(NonCancellable) { release.await() }
                     emptyMap()
-                } else mapOf("attachment:published" to "file:///published")
+                } else mapOf("attachment:published" to AttachmentPreview("file:///published", null))
             }
             val states = mutableListOf<SubAssistantDetailUiState>()
             val observing = backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) {
@@ -135,7 +135,7 @@ class SubAssistantDetailReaderTest {
             runCurrent()
             assertTrue(states.last() is SubAssistantDetailUiState.Ready)
             states.filterIsInstance<SubAssistantDetailUiState.Ready>().forEach { ready ->
-                assertEquals(mapOf("attachment:published" to "file:///published"), ready.attachmentPreviews)
+                assertEquals(mapOf("attachment:published" to AttachmentPreview("file:///published", null)), ready.attachmentPreviews)
                 if (!publish) assertEquals(f.childSnapshots.value.durable.nodes.size, ready.child.nodes.size)
             }
             observing.cancelAndJoin()
@@ -146,7 +146,7 @@ class SubAssistantDetailReaderTest {
         val f = fixture()
         val entered = CompletableDeferred<Unit>()
         val release = CompletableDeferred<Unit>()
-        coEvery { f.projector.project(any()) } coAnswers { entered.complete(Unit); release.await(); emptyMap() }
+        coEvery { f.projector.project(any(), any()) } coAnswers { entered.complete(Unit); release.await(); emptyMap() }
         val states = mutableListOf<SubAssistantDetailUiState>()
         backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { f.reader.observe(f.source, "run").toList(states) }
         entered.await()
@@ -165,10 +165,10 @@ class SubAssistantDetailReaderTest {
         val f = fixture()
         val entered = CompletableDeferred<Unit>()
         val release = CompletableDeferred<Unit>()
-        coEvery { f.projector.project(any()) } coAnswers {
+        coEvery { f.projector.project(any(), any()) } coAnswers {
             entered.complete(Unit)
             withContext(NonCancellable) { release.await() }
-            mapOf("attachment:old" to "file:///old")
+            mapOf("attachment:old" to AttachmentPreview("file:///old", null))
         }
         val states = mutableListOf<SubAssistantDetailUiState>()
         backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { f.reader.observe(f.source, "run").toList(states) }
@@ -275,7 +275,7 @@ class SubAssistantDetailReaderTest {
             coEvery { registry.loadRuntime(childId) } returns childRuntime
             coEvery { registry.acquireRegisteredRuntime(childId, childRuntime) } returns childLease
             every { projector.lifecycleChanges() } returns MutableStateFlow(Unit)
-            coEvery { projector.project(any()) } returns emptyMap()
+            coEvery { projector.project(any(), any()) } returns emptyMap()
         }
 
         fun call(state: SubAssistantCallState = SubAssistantCallState.RUNNING) = UIMessagePart.Tool(
