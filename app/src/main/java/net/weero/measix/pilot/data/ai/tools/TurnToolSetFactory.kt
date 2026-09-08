@@ -1,4 +1,6 @@
 package net.weero.measix.pilot.data.ai.tools
+import net.weero.measix.pilot.data.enterprise.RealmAccess
+
 
 import android.util.Log
 import me.rerere.ai.core.Tool
@@ -110,6 +112,7 @@ class TurnToolSetFactory(
                     options = localToolOptions,
                     ttsPlaybackContext = ttsContext,
                     buildContext = AssistantToolBuildContext(
+                        realmAccess = realmAccess,
                         ownerAssistantId = assistant.id,
                         settings = settings,
                     ),
@@ -120,7 +123,7 @@ class TurnToolSetFactory(
                 addAll(createConversationTools(conversationQueryService, assistant.id, realmAccess))
             }
 
-            addAll(createWorkspaceToolsIfReady(assistant.workspaceId?.toString(), workspaceCwd))
+            addAll(createWorkspaceToolsIfReady(realmAccess, assistant.workspaceId?.toString(), workspaceCwd))
 
             if (assistant.enabledSkills.isNotEmpty()) {
                 addAll(
@@ -180,6 +183,7 @@ class TurnToolSetFactory(
                             execute = { error("MCP tools require ToolExecutionContext") },
                             contextualExecute = {
                                 mcpManager.callTool(
+                                    realmAccess = realmAccess,
                                     serverId = tool.serverId,
                                     toolName = tool.name,
                                     expectedDefinitionDigest = tool.definitionDigest,
@@ -219,7 +223,7 @@ class TurnToolSetFactory(
             MCP_PROVIDER_TOOL_NAME.matches(providerToolName(serverName, toolName))
     }
 
-    private suspend fun createWorkspaceToolsIfReady(workspaceId: String?, cwd: String? = null): List<Tool> {
+    private suspend fun createWorkspaceToolsIfReady(realmAccess: RealmAccess, workspaceId: String?, cwd: String? = null): List<Tool> {
         if (workspaceId.isNullOrBlank()) return emptyList()
         val workspace = workspaceQueryService.getWorkspace(workspaceId) ?: return emptyList()
         if (workspace.shellStatus != WorkspaceShellStatus.READY) {
@@ -230,6 +234,7 @@ class TurnToolSetFactory(
             return emptyList()
         }
         return createWorkspaceTools(
+            realmAccess = realmAccess,
             workspaceId = workspaceId,
             workspaceApplicationService = workspaceApplicationService,
             approvalOverrides = workspace.toolApprovalOverrides,

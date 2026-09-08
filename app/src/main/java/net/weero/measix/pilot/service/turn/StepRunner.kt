@@ -1,4 +1,6 @@
 package net.weero.measix.pilot.service.turn
+
+import net.weero.measix.pilot.data.enterprise.RealmAccess
 import net.weero.measix.pilot.data.ai.request.RequestContextPlanner
 import net.weero.measix.pilot.data.ai.request.DurableMessageLocator
 import net.weero.measix.pilot.data.ai.request.ModelRequestReceipt
@@ -75,6 +77,7 @@ internal class StepRunner(
     suspend fun run(state: TurnRunState): StepExecutionResult {
         state.sendPhase(TurnRunPhase.PREPARING)
         val receipt = generateInternal(
+            realmAccess = state.turnContext.realmAccess,
             assistant = state.assistant,
             promptInputs = state.promptInputs,
             messages = state.messages,
@@ -85,6 +88,7 @@ internal class StepRunner(
                 state.handoffDraft()
                 state.replaceMessages(
                     listOf(state.messages.last()).transforms(
+                        realmAccess = state.turnContext.realmAccess,
                         transformers = state.outputTransformers,
                         context = state.context,
                         model = state.model,
@@ -117,7 +121,7 @@ internal class StepRunner(
                 .toLocalDateTime(TimeZone.currentSystemDefault())
         )))
         val compactionPlan = compactionPlanner.planAfterSuccessfulRequest(state.messages, receipt)
-        val stagedCompaction = toolOutputStore.stageCompaction(compactionPlan)
+        val stagedCompaction = toolOutputStore.stageCompaction(state.turnContext.realmAccess.scope, compactionPlan)
         stagedCompaction.lease?.let(state.unpublishedResources::register)
         val checkpointMessages = applyToolOutputCompactionBatchToCheckpoint(
             state.messages,
@@ -186,6 +190,7 @@ internal class StepRunner(
     }
 
     private suspend fun generateInternal(
+        realmAccess: RealmAccess,
         assistant: TurnAssistantSnapshot,
         promptInputs: TurnPromptSnapshot,
         messages: List<UIMessage>,
@@ -262,6 +267,7 @@ internal class StepRunner(
             })
         }
         val transformedMessages = requestMessages.transforms(
+            realmAccess = realmAccess,
             transformers = transformers,
             context = context,
             model = model,

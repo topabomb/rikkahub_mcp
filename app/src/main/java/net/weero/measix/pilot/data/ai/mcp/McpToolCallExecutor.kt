@@ -1,5 +1,7 @@
 package net.weero.measix.pilot.data.ai.mcp
 
+import net.weero.measix.pilot.data.configuration.ConfigurationScope
+
 import io.modelcontextprotocol.kotlin.sdk.client.Client
 import io.modelcontextprotocol.kotlin.sdk.shared.RequestOptions
 import io.modelcontextprotocol.kotlin.sdk.types.CallToolRequest
@@ -55,6 +57,7 @@ internal class McpToolCallExecutor(
     private val artifactStore: ArtifactStore,
 ) {
     suspend fun execute(
+        scope: ConfigurationScope,
         lease: McpInvocationLease,
         toolName: String,
         args: JsonObject,
@@ -71,7 +74,7 @@ internal class McpToolCallExecutor(
             val projected = result.content.map {
                 when (it) {
                     is TextContent -> UIMessagePart.Text(it.text)
-                    is ImageContent -> convertImageContentToFilePart(it, createdArtifacts::add)
+                    is ImageContent -> convertImageContentToFilePart(scope, it, createdArtifacts::add)
                     else -> UIMessagePart.Text(JsonInstant.encodeToString(it))
                 }
             }
@@ -147,6 +150,7 @@ internal class McpToolCallExecutor(
     }
 
     private suspend fun convertImageContentToFilePart(
+        scope: ConfigurationScope,
         image: ImageContent,
         onArtifactCreated: (OwnedArtifact) -> Unit,
     ): UIMessagePart.Image {
@@ -160,6 +164,7 @@ internal class McpToolCallExecutor(
         val ext = android.webkit.MimeTypeMap.getSingleton()
             .getExtensionFromMimeType(detectedMime) ?: "bin"
         val owned = artifactStore.createFromBytes(
+            scope = scope,
             bytes = bytes,
             displayName = "mcp_image.$ext",
             mimeType = detectedMime,

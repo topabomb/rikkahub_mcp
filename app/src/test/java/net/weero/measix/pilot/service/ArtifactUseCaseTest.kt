@@ -1,5 +1,7 @@
 package net.weero.measix.pilot.service
 
+import net.weero.measix.pilot.data.configuration.ConfigurationScope
+
 import android.net.Uri
 import io.mockk.coEvery
 import io.mockk.coVerify
@@ -28,6 +30,23 @@ import org.junit.Test
 @OptIn(ExperimentalCoroutinesApi::class)
 class ArtifactUseCaseTest {
     @Test
+    fun `draft cannot be submitted by another view even with the same principal and conversation`() = runTest {
+        val store = mockk<ArtifactStore>()
+        val id = kotlin.uuid.Uuid.random()
+        val view = ConversationViewLease(id, net.weero.measix.pilot.data.enterprise.RealmAccess.Personal, 1L, {})
+        val replacement = ConversationViewLease(id, net.weero.measix.pilot.data.enterprise.RealmAccess.Personal, 2L, {})
+        val draft = ArtifactUseCase(store, ApplicationRecoveryGate().apply { ready() }).openDraftScope(view)
+        org.junit.Assert.assertTrue(runCatching { draft.claimSubmission(replacement.commandTarget, emptyList()) }
+            .exceptionOrNull() is IllegalStateException)
+        coVerify(exactly = 0) { store.retainInputUris(any(), any()) }
+        view.close()
+        org.junit.Assert.assertTrue(runCatching { draft.createTextDocument("closed view") }
+            .exceptionOrNull() is IllegalStateException)
+        coVerify(exactly = 0) { store.createText(any(), any(), any(), any(), any(), any()) }
+        draft.close()
+    }
+
+    @Test
     fun `closing a draft releases its pin without starting a database deletion`() = runTest {
         val store = mockk<ArtifactStore>()
         val source = mockk<Uri>()
@@ -51,12 +70,13 @@ class ArtifactUseCaseTest {
             uri = ownedUri,
             localRef = LocalArtifactRef(relativePath = entity.relativePath, mimeType = entity.mimeType),
         )
-        coEvery { store.createFromUri(source) } returns owned
+        coEvery { store.createFromUri(ConfigurationScope.Personal, source) } returns owned
         every { store.abandonUnpublished(owned) } just Runs
         val scope = ArtifactUseCase(
             store,
             ApplicationRecoveryGate().apply { ready() },
-        ).openDraftScope()
+        ).openDraftScope(net.weero.measix.pilot.service.ConversationViewLease(
+            kotlin.uuid.Uuid.random(), net.weero.measix.pilot.data.enterprise.RealmAccess.Personal, 0L, {}))
 
         val imported = scope.importUrisOrThrow(listOf(source)).single()
         assertEquals(ownedUri, imported.uri)
@@ -92,12 +112,13 @@ class ArtifactUseCaseTest {
             uri = ownedUri,
             localRef = LocalArtifactRef(relativePath = entity.relativePath, mimeType = entity.mimeType),
         )
-        coEvery { store.createFromUri(source) } returns owned
+        coEvery { store.createFromUri(ConfigurationScope.Personal, source) } returns owned
         every { store.abandonUnpublished(owned) } just Runs
         val scope = ArtifactUseCase(
             store,
             ApplicationRecoveryGate().apply { ready() },
-        ).openDraftScope()
+        ).openDraftScope(net.weero.measix.pilot.service.ConversationViewLease(
+            kotlin.uuid.Uuid.random(), net.weero.measix.pilot.data.enterprise.RealmAccess.Personal, 0L, {}))
 
         scope.importUrisOrThrow(listOf(source))
         scope.close()
@@ -133,7 +154,7 @@ class ArtifactUseCaseTest {
         val settings = Settings.dummy()
         val payload = kotlin.io.path.createTempFile(suffix = ".png").toFile().apply { writeBytes(TINY_PNG) }
         coEvery {
-            store.createFromUri(source, maxBytes = GeneratedMediaStore.MAX_IMAGE_BYTES.toLong())
+            store.createFromUri(ConfigurationScope.Personal, source, maxBytes = GeneratedMediaStore.MAX_IMAGE_BYTES.toLong())
         } returns owned
         every { store.file(entity) } returns payload
         coEvery { store.updateSettingsReferences(any()) } answers {
@@ -186,7 +207,7 @@ class ArtifactUseCaseTest {
             writeText("not an image")
         }
         coEvery {
-            store.createFromUri(source, maxBytes = GeneratedMediaStore.MAX_IMAGE_BYTES.toLong())
+            store.createFromUri(ConfigurationScope.Personal, source, maxBytes = GeneratedMediaStore.MAX_IMAGE_BYTES.toLong())
         } returns owned
         every { store.file(entity) } returns payload
         coEvery { store.discardUnpublished(owned) } returns ArtifactDeleteResult.Completed(entity.id)

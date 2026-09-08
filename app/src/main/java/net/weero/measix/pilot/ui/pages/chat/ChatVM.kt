@@ -186,7 +186,7 @@ class ChatVM internal constructor(
                 var opened: PageState.Open? = null
                 try {
                     val lease = conversationApplicationService.initialize(request)
-                    val imports = try { artifactUseCase.openDraftScope() } catch (error: Throwable) {
+                    val imports = try { artifactUseCase.openDraftScope(lease) } catch (error: Throwable) {
                         lease.close()
                         throw error
                     }

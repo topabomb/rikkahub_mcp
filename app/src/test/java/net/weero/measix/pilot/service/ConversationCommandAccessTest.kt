@@ -841,7 +841,7 @@ class ConversationCommandAccessTest {
                 val snapshot = firstArg<ConversationAggregateSnapshot>()
                 rows[snapshot.conversationId] = snapshot
             }
-            coEvery { artifactStore.retainNodesForUndo(any()) } answers { ArtifactRetentionLease { retentionReleased++ } }
+            coEvery { artifactStore.retainNodesForUndo(any(), any()) } answers { ArtifactRetentionLease { retentionReleased++ } }
             every { effects.clearTitleTracking(any()) } returns Unit
         }
 

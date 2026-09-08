@@ -1,5 +1,6 @@
 package net.weero.measix.pilot.data.ai.tools
 
+
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.every
@@ -46,7 +47,7 @@ class WorkspaceToolArgumentsTest {
 
     @Test
     fun assembledToolsRejectMissingPathBeforeApprovalAndHonorNormalizedPolicy() = runTest {
-        val tools = createWorkspaceTools("workspace", mockk(), emptyMap(), mockk())
+        val tools = createWorkspaceTools(net.weero.measix.pilot.data.enterprise.RealmAccess.Personal, "workspace", mockk(), emptyMap(), mockk())
         val missingPath = UIMessagePart.Tool(localCallId = Uuid.random(), stepId = Uuid.random(), providerCallId = "bad", toolName = "workspace_write_file", input = """{"text":"x"}""")
         val rejected = pendingBatch(tools, listOf(missingPath))
         assertTrue(rejected.pending.isEmpty())
@@ -71,7 +72,7 @@ class WorkspaceToolArgumentsTest {
             secondArg<suspend WorkspaceToolSession.() -> WorkspaceFileEntry>().invoke(session)
         }
         coEvery { session.writeRootfsText(any(), any(), any(), any()) } returns WorkspaceFileEntry("/etc/a", "a", false, 1, 1)
-        val tool = createWorkspaceTools("workspace", service, emptyMap(), mockk<ArtifactStore>())
+        val tool = createWorkspaceTools(net.weero.measix.pilot.data.enterprise.RealmAccess.Personal, "workspace", service, emptyMap(), mockk<ArtifactStore>())
             .single { it.name == "workspace_write_file" }
         val args = Json.parseToJsonElement("""{"path":"/tmp/../etc/a","text":"x","approvedByUser":true}""")
         tool.executeWithContext(context, args)

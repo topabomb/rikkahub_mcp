@@ -1,5 +1,6 @@
 package net.weero.measix.pilot.service.runtime
 
+
 import me.rerere.common.configuration.ConfigurationReference
 
 
@@ -500,7 +501,7 @@ class TurnStreamProjectionTest {
         assertNotNull(result.parts.filterIsInstance<UIMessagePart.Reasoning>().single().finishedAt)
     }
 
-    private fun terminalTransformerContext(assistant: Assistant) = TransformerContext(
+    private fun terminalTransformerContext(assistant: Assistant) = TransformerContext(net.weero.measix.pilot.data.enterprise.RealmAccess.Personal,
         context = mockk<Context>(relaxed = true),
         model = Model(modelId = "test", displayName = "Test"),
         assistant = resolveTurnAssistantSnapshot(assistant),

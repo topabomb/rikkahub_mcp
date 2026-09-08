@@ -1,5 +1,7 @@
 package net.weero.measix.pilot.data.ai.transformers
 
+import net.weero.measix.pilot.data.configuration.ConfigurationScope
+
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.every
@@ -36,12 +38,12 @@ class OutputStepIsolationTest {
         val owned = mockk<OwnedArtifact>()
         val lease = mockk<ToolResourceLease>()
         val projected = slot<UIMessage>()
-        coEvery { store.persistBase64Images(capture(projected)) } coAnswers {
-            PersistedMessageArtifacts(firstArg<UIMessage>().copy(parts = listOf(local)), listOf(owned))
+        coEvery { store.persistBase64Images(ConfigurationScope.Personal, capture(projected)) } coAnswers {
+            PersistedMessageArtifacts(secondArg<UIMessage>().copy(parts = listOf(local)), listOf(owned))
         }
         every { store.unpublishedBatchLease(listOf(owned)) } returns lease
         val registered = mutableListOf<ToolResourceLease>()
-        val context = TransformerContext(
+        val context = TransformerContext(net.weero.measix.pilot.data.enterprise.RealmAccess.Personal,
             context = mockk(relaxed = true), model = Model(modelId = "test"),
             assistant = resolveTurnAssistantSnapshot(Assistant()), promptInputs = testPromptInputs(),
             requestOrigins = RequestMessageOriginTracker(), registerUnpublishedResource = { registered += it },
@@ -56,6 +58,6 @@ class OutputStepIsolationTest {
         assertEquals(listOf(lease), registered)
         val terminal = message.copy(parts = listOf(closed, oldImage))
         assertSame(terminal, transformer.onStreamingFinish(context, terminal, null))
-        coVerify(exactly = 1) { store.persistBase64Images(any()) }
+        coVerify(exactly = 1) { store.persistBase64Images(any(), any()) }
     }
 }

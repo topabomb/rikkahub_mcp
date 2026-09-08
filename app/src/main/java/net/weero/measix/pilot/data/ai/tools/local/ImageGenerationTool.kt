@@ -1,5 +1,7 @@
 package net.weero.measix.pilot.data.ai.tools.local
 
+import net.weero.measix.pilot.data.enterprise.RealmAccess
+
 import me.rerere.common.configuration.ConfigurationReference
 import java.io.File
 import kotlinx.coroutines.NonCancellable
@@ -105,6 +107,7 @@ internal fun failedResult(reason: String, detail: String? = null): Nothing =
     )
 
 data class AssistantToolBuildContext(
+    val realmAccess: RealmAccess,
     val ownerAssistantId: ConfigurationReference,
     val settings: Settings,
 )
@@ -164,6 +167,7 @@ class ImageGenerationToolFactory(
             execute = { failedResult("invalid_arguments") },
             contextualExecute = { args ->
                 executeGenerateImage(
+                    realmAccess = context.realmAccess,
                     context = this,
                     args = args,
                     ownerAssistantId = ownerAssistantId,
@@ -183,6 +187,7 @@ class ImageGenerationToolFactory(
 }
 
 private suspend fun executeGenerateImage(
+    realmAccess: RealmAccess,
     context: ToolExecutionContext,
     args: JsonElement,
     ownerAssistantId: ConfigurationReference,
@@ -221,6 +226,7 @@ private suspend fun executeGenerateImage(
 
     var lastPhaseOrdinal = -1
     val request = ImageGenerationRequest(
+        realmAccess = realmAccess,
         source = ImageGenerationSource.Tool(
             ownerAssistantId = ownerAssistantId,
             revalidate = { frozen ->

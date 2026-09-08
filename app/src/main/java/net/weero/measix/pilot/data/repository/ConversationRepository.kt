@@ -118,7 +118,7 @@ class ConversationRepository(
     internal suspend fun insertConversation(conversation: Conversation) {
         artifactStore.withLifecycleLock {
             val referenceDelta = artifactStore.prepareReferenceDelta(
-                conversation.messageNodes,
+                conversation.scope, conversation.messageNodes,
                 emptyList(),
             )
             database.withTransaction {
@@ -137,7 +137,7 @@ class ConversationRepository(
     internal suspend fun insertConversationSnapshot(snapshot: ConversationAggregateSnapshot) {
         val conversation = snapshotToConversation(snapshot)
         artifactStore.withLifecycleLock {
-            val referenceDelta = artifactStore.prepareReferenceDelta(snapshot.nodes, emptyList())
+            val referenceDelta = artifactStore.prepareReferenceDelta(snapshot.header.scope, snapshot.nodes, emptyList())
             database.withTransaction {
                 requireValidParent(conversation)
                 conversationDAO.insert(conversationToConversationEntity(conversation))
@@ -207,9 +207,9 @@ class ConversationRepository(
         val masterConversation = snapshotToConversation(master)
         val childConversations = children.associate { it.conversationId to snapshotToConversation(it) }
         artifactStore.withLifecycleLock {
-            val masterReferences = artifactStore.prepareReferenceDelta(master.nodes, emptyList())
+            val masterReferences = artifactStore.prepareReferenceDelta(master.header.scope, master.nodes, emptyList())
             val childReferences = children.associate { child ->
-                child.conversationId to artifactStore.prepareReferenceDelta(child.nodes, emptyList())
+                child.conversationId to artifactStore.prepareReferenceDelta(child.header.scope, child.nodes, emptyList())
             }
             database.withTransaction {
                 conversationDAO.insert(conversationToConversationEntity(masterConversation))
@@ -310,6 +310,7 @@ class ConversationRepository(
             )
         }
         val referenceDelta = if (hasNodeChange) artifactStore.prepareReferenceDelta(
+            requireNotNull(conversationDAO.getConversationById(conversationId)) { "conversation_not_found" }.scope,
             mutation.upsertedNodes, mutation.deletedNodeIds,
         ) else null
         return {

@@ -1,5 +1,7 @@
 package net.weero.measix.pilot.data.ai.tools
 
+import net.weero.measix.pilot.data.configuration.ConfigurationScope
+
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.JsonObjectBuilder
 import kotlinx.serialization.json.put
@@ -31,6 +33,7 @@ fun resolveWorkspaceToolApproval(name: String, overrides: Map<String, Boolean>):
     overrides[name] ?: WorkspaceToolDefaultApprovals[name] ?: false
 
 suspend fun createWorkspaceTools(
+    realmAccess: net.weero.measix.pilot.data.enterprise.RealmAccess,
     workspaceId: String?,
     workspaceApplicationService: WorkspaceApplicationService,
     approvalOverrides: Map<String, Boolean>,
@@ -43,7 +46,7 @@ suspend fun createWorkspaceTools(
     val shellCwd = cwd?.let(::normalizeWorkspaceCwd)
 
     return listOf(
-        createReadFileTool(workspaceId, ::approvalRequired, workspaceApplicationService, artifactStore),
+        createReadFileTool(realmAccess.scope, workspaceId, ::approvalRequired, workspaceApplicationService, artifactStore),
         createWriteFileTool(workspaceId, ::approvalRequired, workspaceApplicationService),
         createEditFileTool(workspaceId, ::approvalRequired, workspaceApplicationService),
         createShellTool(workspaceId, ::approvalRequired, workspaceApplicationService, shellCwd),
@@ -61,6 +64,7 @@ private fun String.isImagePath(): Boolean =
     substringAfterLast('.', "").lowercase() in IMAGE_EXTENSIONS
 
 private fun createReadFileTool(
+    scope: ConfigurationScope,
     workspaceId: String,
     approvalRequired: (String) -> Boolean,
     workspaceApplicationService: WorkspaceApplicationService,
@@ -92,6 +96,7 @@ private fun createReadFileTool(
         workspaceApplicationService.executeTool(workspaceId) {
             if (path.isImagePath()) {
                 readImageInRootfs(
+                    scope = scope,
                     path,
                     artifactStore,
                     onArtifactCreated = registerArtifact,
@@ -296,6 +301,7 @@ private suspend fun WorkspaceToolSession.readTextInRootfs(path: String): String 
     readRootfsBytes(path, MAX_READ_FILE_BYTES).toString(Charsets.UTF_8)
 
 private suspend fun WorkspaceToolSession.readImageInRootfs(
+    scope: ConfigurationScope,
     path: String,
     artifactStore: ArtifactStore,
     onArtifactCreated: (net.weero.measix.pilot.data.files.OwnedArtifact) -> Unit,
@@ -304,6 +310,7 @@ private suspend fun WorkspaceToolSession.readImageInRootfs(
 
     // 工具读取沙箱文件产生的副本——系统产物
     val owned = artifactStore.createFromBytes(
+        scope = scope,
         bytes = bytes,
         displayName = "image.png",
         mimeType = "image/png",

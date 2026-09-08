@@ -1,4 +1,6 @@
 package net.weero.measix.pilot.service.runtime
+
+import net.weero.measix.pilot.data.configuration.ConfigurationScope
 import net.weero.measix.pilot.service.turn.TurnCommitter
 import net.weero.measix.pilot.service.turn.androidTestTurnContext
 import net.weero.measix.pilot.service.turn.disclosureCandidate
@@ -264,7 +266,7 @@ class TurnCancellationIntegrationTest {
     )
 
     private suspend fun createOwnedImage(displayName: String): OwnedArtifact =
-        artifactStore.createFromBytes(
+        artifactStore.createFromBytes(ConfigurationScope.Personal,
             bytes = Base64.decode(
                 "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNgYAAAAAMAASsJTYQAAAAASUVORK5CYII=",
                 Base64.NO_WRAP,

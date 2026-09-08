@@ -1,5 +1,6 @@
 package net.weero.measix.pilot.data.ai.transformers
 
+
 import net.weero.measix.pilot.service.turn.resolveTurnAssistantSnapshot
 
 import net.weero.measix.pilot.test.testPromptInputs
@@ -27,7 +28,7 @@ class DocumentAsPromptTransformerTest {
     private val model = mockk<Model>(relaxed = true)
     private val assistant = Assistant()
 
-    private fun contextFor() = TransformerContext(
+    private fun contextFor() = TransformerContext(net.weero.measix.pilot.data.enterprise.RealmAccess.Personal,
         context = context,
         model = model,
         assistant = resolveTurnAssistantSnapshot(assistant),

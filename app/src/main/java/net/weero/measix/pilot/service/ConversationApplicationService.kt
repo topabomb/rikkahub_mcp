@@ -363,7 +363,7 @@ class ConversationApplicationService internal constructor(
         try {
             return withTreeCommand(target) {
                 val deleted = commandCoordinator.deleteCapturingTree(target.conversationId) { tree ->
-                    retention = artifactStore.retainNodesForUndo((listOf(tree.root) + tree.children).map { it.nodes })
+                    retention = artifactStore.retainNodesForUndo(tree.root.header.scope, (listOf(tree.root) + tree.children).map { it.nodes })
                 }
                 (deleted.children.map { it.conversationId } + deleted.root.conversationId).forEach(sideEffects::clearTitleTracking)
                 RestoreToken(deleted.root, deleted.children, target.selection, requireNotNull(retention))
@@ -487,6 +487,7 @@ class ConversationApplicationService internal constructor(
         artifactDraftScope: ArtifactDraftScope? = null,
     ) {
         if (parts.isEmptyInputMessage()) return
+        artifactDraftScope?.requireTarget(target)
         withCommandTarget(target) {
             settingsStore.withResolvedConfiguration(target.selection.access.scope, sessions.state.value) { configuration ->
                 commandCoordinator.withRootHeaders(target.selection.access.scope, listOf(target.conversationId)) {

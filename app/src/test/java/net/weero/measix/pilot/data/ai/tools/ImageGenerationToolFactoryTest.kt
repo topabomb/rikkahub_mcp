@@ -60,7 +60,7 @@ class ImageGenerationToolFactoryTest {
     @Test
     fun `unavailable selection does not register the tool`() {
         val tool = factory(ImageGenerationSelection.Unavailable("image_model_unavailable")).create(
-            AssistantToolBuildContext(ownerId, Settings()),
+            AssistantToolBuildContext(net.weero.measix.pilot.data.enterprise.RealmAccess.Personal, ownerId, Settings()),
         )
         assertNull(tool)
     }
@@ -68,7 +68,7 @@ class ImageGenerationToolFactoryTest {
     @Test
     fun `available selection registers generate_image with captured owner and prompt`() {
         val tool = factory(available()).create(
-            AssistantToolBuildContext(
+            AssistantToolBuildContext(net.weero.measix.pilot.data.enterprise.RealmAccess.Personal,
                 ownerAssistantId = ownerId,
                 settings = Settings(
                     assistants = listOf(Assistant(id = ownerId, localTools = listOf(LocalToolOption.TextToImage))),

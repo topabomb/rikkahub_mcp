@@ -1,5 +1,7 @@
 package net.weero.measix.pilot.data.imggen
 
+import net.weero.measix.pilot.data.configuration.ConfigurationScope
+
 import me.rerere.common.configuration.ConfigurationReference
 
 import android.content.Context
@@ -84,7 +86,7 @@ class AssistantBackgroundServiceTest {
         val env = Env()
         env.settingsUpdateSucceeds()
         coEvery {
-            env.store.createFromBytes(TINY_PNG, "background.png", "image/png", any(), ArtifactOrigin.USER)
+            env.store.createFromBytes(ConfigurationScope.Personal, TINY_PNG, "background.png", "image/png", any(), ArtifactOrigin.USER)
         } returns env.owned
         val encoded = java.util.Base64.getEncoder().encodeToString(TINY_PNG)
 
@@ -95,7 +97,7 @@ class AssistantBackgroundServiceTest {
 
         assertTrue(result.updated)
         coVerify(exactly = 1) {
-            env.store.createFromBytes(TINY_PNG, "background.png", "image/png", any(), ArtifactOrigin.USER)
+            env.store.createFromBytes(ConfigurationScope.Personal, TINY_PNG, "background.png", "image/png", any(), ArtifactOrigin.USER)
         }
         env.close()
     }
@@ -108,7 +110,7 @@ class AssistantBackgroundServiceTest {
         val result = env.service.replaceUserSelectedBackground(env.assistant.id, "https://example.com/image.png")
 
         assertEquals("background_copy_failed", result.reason)
-        coVerify(exactly = 0) { env.store.createFromBytes(any(), any(), any(), any(), any()) }
+        coVerify(exactly = 0) { env.store.createFromBytes(any(), any(), any(), any(), any(), any()) }
         env.close()
     }
 
@@ -126,7 +128,7 @@ class AssistantBackgroundServiceTest {
         init {
             every { context.applicationContext } returns context
             service = AssistantBackgroundService(store, context, fetcher)
-            coEvery { store.copyFile(source, "image/png", source.name, any(), ArtifactOrigin.GENERATED) } returns owned
+            coEvery { store.copyFile(ConfigurationScope.Personal, source, "image/png", source.name, any(), ArtifactOrigin.GENERATED) } returns owned
             coEvery { store.discardUnpublished(owned) } returns ArtifactDeleteResult.Completed(owned.entity.id)
             coEvery { store.collectGarbage(any()) } returns emptyList()
         }

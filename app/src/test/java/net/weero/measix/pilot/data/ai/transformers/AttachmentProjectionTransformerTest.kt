@@ -1,5 +1,6 @@
 package net.weero.measix.pilot.data.ai.transformers
 
+
 import me.rerere.common.configuration.ConfigurationReference
 
 import net.weero.measix.pilot.service.turn.resolveTurnAssistantSnapshot
@@ -81,7 +82,7 @@ class AttachmentProjectionTransformerTest {
         RequestMediaCapabilities.NONE
     }
 
-    private fun ctxFor(model: Model, capabilities: RequestMediaCapabilities = capabilitiesFor(model)) = TransformerContext(
+    private fun ctxFor(model: Model, capabilities: RequestMediaCapabilities = capabilitiesFor(model)) = TransformerContext(net.weero.measix.pilot.data.enterprise.RealmAccess.Personal,
         context = context,
         model = model,
         assistant = assistant,
@@ -351,7 +352,7 @@ class AttachmentProjectionTransformerTest {
                 sourceProfile = OpenAIResponseSourceProfile.OPENAI,
             ).toMetadata(),
         )
-        val ctx = TransformerContext(
+        val ctx = TransformerContext(net.weero.measix.pilot.data.enterprise.RealmAccess.Personal,
             context = context,
             model = visionModel,
             assistant = assistant,

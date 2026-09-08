@@ -1,5 +1,7 @@
 package net.weero.measix.pilot.data.files
 
+import net.weero.measix.pilot.data.configuration.ConfigurationScope
+
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
@@ -24,7 +26,7 @@ internal class ArtifactDeletionTest : ArtifactStoreLifecycleTestBase() {
     fun `folder deletion resumes mixed active and creating lifecycle states`() = runTest {
         val folder = folder()
         settingsFlow.value = Settings(assistants = listOf(Assistant()))
-        val active = store.createFromBytes(
+        val active = store.createFromBytes(ConfigurationScope.Personal,
             byteArrayOf(7),
             "active.bin",
             folder = folder,
@@ -79,7 +81,7 @@ internal class ArtifactDeletionTest : ArtifactStoreLifecycleTestBase() {
     @Test
     fun `scoped folder deletion skips live ownership instead of discarding it`() = runTest {
         val folder = folder()
-        val owned = store.createFromBytes(
+        val owned = store.createFromBytes(ConfigurationScope.Personal,
             bytes = byteArrayOf(3),
             displayName = "in-flight.bin",
             folder = folder,
@@ -101,7 +103,7 @@ internal class ArtifactDeletionTest : ArtifactStoreLifecycleTestBase() {
         val assistant = Assistant()
         settingsFlow.value = Settings(assistants = listOf(assistant))
         store.ensureReferenceProjection()
-        val owned = store.createFromBytes(byteArrayOf(3), "avatar.bin", folder = folder, origin = ArtifactOrigin.USER)
+        val owned = store.createFromBytes(ConfigurationScope.Personal, byteArrayOf(3), "avatar.bin", folder = folder, origin = ArtifactOrigin.USER)
         val lockAcquired = CompletableDeferred<Unit>()
         val release = CompletableDeferred<Unit>()
         val holder = async {
@@ -132,7 +134,7 @@ internal class ArtifactDeletionTest : ArtifactStoreLifecycleTestBase() {
         val folder = folder()
         val assistant = Assistant()
         settingsFlow.value = Settings(assistants = listOf(assistant))
-        val owned = store.createFromBytes(byteArrayOf(4), "root.bin", folder = folder, origin = ArtifactOrigin.USER)
+        val owned = store.createFromBytes(ConfigurationScope.Personal, byteArrayOf(4), "root.bin", folder = folder, origin = ArtifactOrigin.USER)
         store.updateSettingsReferences { current ->
             current.copy(assistants = current.assistants.map { it.copy(background = owned.uri.toString()) })
         }
@@ -152,7 +154,7 @@ internal class ArtifactDeletionTest : ArtifactStoreLifecycleTestBase() {
     fun `live unpublished ownership blocks garbage collection and explicit deletion`() = runTest {
         val folder = folder()
         store.ensureReferenceProjection()
-        val owned = store.createFromBytes(byteArrayOf(6), "draft.bin", folder = folder, origin = ArtifactOrigin.USER)
+        val owned = store.createFromBytes(ConfigurationScope.Personal, byteArrayOf(6), "draft.bin", folder = folder, origin = ArtifactOrigin.USER)
 
         assertTrue(store.collectGarbage(0).isEmpty())
         val deletion = store.deleteUserRequested(owned.entity.id)

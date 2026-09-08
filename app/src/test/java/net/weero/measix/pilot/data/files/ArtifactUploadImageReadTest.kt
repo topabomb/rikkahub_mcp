@@ -1,5 +1,7 @@
 package net.weero.measix.pilot.data.files
 
+import net.weero.measix.pilot.data.configuration.ConfigurationScope
+
 import android.content.Context
 import android.content.ContextWrapper
 import androidx.room.Room
@@ -113,7 +115,7 @@ class ArtifactUploadImageReadTest {
         File(root, "upload/orphan.png").apply { parentFile!!.mkdirs(); writeBytes(TINY_PNG) }
         register("missing.png").also { File(root, it.relativePath).delete() }
         register("deleting.png", state = ArtifactState.DELETING)
-        val unpublished = store.createFromBytes(TINY_PNG, "new.png", "image/png", origin = ArtifactOrigin.USER)
+        val unpublished = store.createFromBytes(ConfigurationScope.Personal, TINY_PNG, "new.png", "image/png", origin = ArtifactOrigin.USER)
         val paths = listOf("/upload/orphan.png", "/upload/missing.png", "/upload/deleting.png", unpublished.localRef.toolPath()!!)
         paths.forEach { assertFailure(ArtifactImageReadResult.Reason.NOT_FOUND, read(listOf(it))) }
         assertTrue(store.discardUnpublished(unpublished) is ArtifactDeleteResult.Completed)

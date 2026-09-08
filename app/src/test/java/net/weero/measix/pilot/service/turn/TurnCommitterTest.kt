@@ -614,7 +614,7 @@ class TurnCommitterTest {
                 characters = 10,
                 lines = 1,
             )
-            coEvery { store.stageCompaction(any()) } returns ToolOutputStore.StagedCompactionBatch(
+            coEvery { store.stageCompaction(any(), any()) } returns ToolOutputStore.StagedCompactionBatch(
                 replacements = mapOf(
                     ToolCallLocator(assistantMessageId, trimStepId, trimLocalCallId) to ToolOutputStore.CompactionReplacement(
                         marker = UIMessagePart.Text("[archived]"),

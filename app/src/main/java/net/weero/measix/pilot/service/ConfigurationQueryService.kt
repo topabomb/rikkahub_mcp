@@ -68,6 +68,11 @@ internal class ConfigurationQueryService(
         enterpriseSessions.withRealmAccess(access) { }
     }
 
+    suspend fun requireSelection(selection: RealmSelection) {
+        recoveryGate.awaitReady()
+        enterpriseSessions.withSelectedRealmSelection(selection) { }
+    }
+
     internal suspend fun read(access: RealmAccess): ResolvedConfiguration {
         recoveryGate.awaitReady()
         return enterpriseSessions.withRealmAccess(access) {

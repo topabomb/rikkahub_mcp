@@ -1,5 +1,7 @@
 package net.weero.measix.pilot.data.files
 
+import net.weero.measix.pilot.data.configuration.ConfigurationScope
+
 import me.rerere.common.configuration.ConfigurationReference
 
 import androidx.core.net.toUri
@@ -72,7 +74,7 @@ internal class ArtifactRecoveryTest : ArtifactStoreLifecycleTestBase() {
     @Test
     fun `startup resumes deleting and removes both payload and metadata`() = runTest {
         val folder = folder()
-        val owned = store.createFromBytes(byteArrayOf(7), "delete.bin", folder = folder, origin = ArtifactOrigin.USER)
+        val owned = store.createFromBytes(ConfigurationScope.Personal, byteArrayOf(7), "delete.bin", folder = folder, origin = ArtifactOrigin.USER)
         assertEquals(
             1,
             database.artifactDao().compareAndSetState(
@@ -187,7 +189,7 @@ internal class ArtifactRecoveryTest : ArtifactStoreLifecycleTestBase() {
     @Test
     fun `startup fails closed when a message root points to missing active payload`() = runTest {
         val folder = folder()
-        val owned = store.createFromBytes(byteArrayOf(4), "rooted.bin", folder = folder, origin = ArtifactOrigin.USER)
+        val owned = store.createFromBytes(ConfigurationScope.Personal, byteArrayOf(4), "rooted.bin", folder = folder, origin = ArtifactOrigin.USER)
         val conversationId = Uuid.random().toString()
         val nodeId = Uuid.random().toString()
         database.conversationDao().insert(
@@ -232,7 +234,7 @@ internal class ArtifactRecoveryTest : ArtifactStoreLifecycleTestBase() {
         val folder = folder()
         val assistant = Assistant()
         settingsFlow.value = Settings(assistants = listOf(assistant))
-        val owned = store.createFromBytes(byteArrayOf(5), "background.bin", folder = folder, origin = ArtifactOrigin.USER)
+        val owned = store.createFromBytes(ConfigurationScope.Personal, byteArrayOf(5), "background.bin", folder = folder, origin = ArtifactOrigin.USER)
         store.updateSettingsReferences { current ->
             current.copy(assistants = current.assistants.map { it.copy(background = owned.uri.toString()) })
         }
@@ -248,7 +250,7 @@ internal class ArtifactRecoveryTest : ArtifactStoreLifecycleTestBase() {
     fun `startup deleting recovery detaches settings root before payload removal`() = runTest {
         val folder = folder()
         settingsFlow.value = Settings(assistants = listOf(Assistant()))
-        val owned = store.createFromBytes(byteArrayOf(8), "rooted-delete.bin", folder = folder, origin = ArtifactOrigin.USER)
+        val owned = store.createFromBytes(ConfigurationScope.Personal, byteArrayOf(8), "rooted-delete.bin", folder = folder, origin = ArtifactOrigin.USER)
         store.updateSettingsReferences { current ->
             current.copy(assistants = current.assistants.map { it.copy(background = owned.uri.toString()) })
         }
@@ -273,7 +275,7 @@ internal class ArtifactRecoveryTest : ArtifactStoreLifecycleTestBase() {
     fun `explicit delete resumes an interrupted deleting state`() = runTest {
         val folder = folder()
         settingsFlow.value = Settings(assistants = listOf(Assistant()))
-        val owned = store.createFromBytes(
+        val owned = store.createFromBytes(ConfigurationScope.Personal,
             bytes = byteArrayOf(9),
             displayName = "retry-delete.bin",
             folder = folder,

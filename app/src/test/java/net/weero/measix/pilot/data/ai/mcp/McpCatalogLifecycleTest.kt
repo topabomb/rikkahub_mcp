@@ -1,5 +1,6 @@
 package net.weero.measix.pilot.data.ai.mcp
 
+
 import me.rerere.common.configuration.ConfigurationReference
 
 import io.mockk.coEvery
@@ -322,7 +323,7 @@ internal class McpCatalogLifecycleTest : McpRuntimeCoordinatorTestBase() {
             listOf("refreshed"),
             manager.captureTurnCapabilities(Assistant(mcpServers = setOf(SERVER_ID))).tools.map { it.name },
         )
-        val oldRunResult = manager.callTool(
+        val oldRunResult = manager.callTool(net.weero.measix.pilot.data.enterprise.RealmAccess.Personal,
             serverId = frozen.serverId,
             toolName = frozen.name,
             expectedDefinitionDigest = frozen.definitionDigest,
@@ -460,7 +461,7 @@ internal class McpCatalogLifecycleTest : McpRuntimeCoordinatorTestBase() {
         }
 
         val failure = runCatching {
-            manager.callTool(
+            manager.callTool(net.weero.measix.pilot.data.enterprise.RealmAccess.Personal,
                 serverId = tool.serverId,
                 toolName = tool.name,
                 expectedDefinitionDigest = tool.definitionDigest,
@@ -482,7 +483,7 @@ internal class McpCatalogLifecycleTest : McpRuntimeCoordinatorTestBase() {
         every { client.serverCapabilities } returns ServerCapabilities()
 
         val failure = runCatching {
-            manager.callTool(
+            manager.callTool(net.weero.measix.pilot.data.enterprise.RealmAccess.Personal,
                 serverId = tool.serverId,
                 toolName = tool.name,
                 expectedDefinitionDigest = tool.definitionDigest,
@@ -506,7 +507,7 @@ internal class McpCatalogLifecycleTest : McpRuntimeCoordinatorTestBase() {
         callToolResponder = { throw McpException(code = -32_001, message = "Remote validation failed") }
 
         val failure = runCatching {
-            manager.callTool(
+            manager.callTool(net.weero.measix.pilot.data.enterprise.RealmAccess.Personal,
                 serverId = tool.serverId,
                 toolName = tool.name,
                 expectedDefinitionDigest = tool.definitionDigest,
@@ -530,7 +531,7 @@ internal class McpCatalogLifecycleTest : McpRuntimeCoordinatorTestBase() {
         callToolResponder = { throw java.io.IOException("connection reset") }
 
         val failure = runCatching {
-            manager.callTool(
+            manager.callTool(net.weero.measix.pilot.data.enterprise.RealmAccess.Personal,
                 serverId = tool.serverId,
                 toolName = tool.name,
                 expectedDefinitionDigest = tool.definitionDigest,

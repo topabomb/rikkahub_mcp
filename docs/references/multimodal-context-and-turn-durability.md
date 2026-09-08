@@ -86,6 +86,12 @@ Tool Result checkpoint（消息与 Artifact 引用同事务）
 
 ### 2.4 文件可用性
 
+`ArtifactStore` 的创建入口显式接收 `ConfigurationScope`，在 CREATING 行写入后一直保留该归属；`copyFilePreservingOrigin` 保留源文件的域与 origin。聊天输入的 `ArtifactDraftScope` 绑定原 `ConversationCommandTarget`，提交和消息编辑不能借用另一个页面的 draft，即使它们属于同一用户或会话。关闭后的补偿仍归原 lease。
+
+模型输出转换、MCP/Workspace 图片、rolling compaction 归档沿原 Turn 传递 scope；`ImageGenerationRequest` 固定本次操作的 scope，`GeneratedMediaStore` 将同一归属写入图库原件及聊天副本。共享助手定义的头像/背景导入仍创建个人配置资产。这些创建规则不代表文件列表、预览、工具读取或 Workspace 挂载已经全部完成域授权。
+
+会话写入在原 Artifact lifecycle lock 内，用 durable header 的 scope 准备引用 delta；跨域文件使提交失败，不静默删除引用。启动时 `ensureReferenceProjection` 同样核验归属，并在全量准备成功后才事务替换投影与完成标记。v19 迁移将既有行归为个人，保留文件、ID 和路径。
+
 - 文件被清理后，历史消息仍保留 Image part 与 ref；请求投影不为失效本地资源披露可用路径。历史文本中的旧引用若被再次调用，Resolver 按真实可用性失败，不伪造内容。
 - 模型读到 `[Attachment path=...]` 表示投影时存在可用受管路径，不保证后续调用时文件仍然存在；工具执行必须重新校验。
 - `AttachmentReferenceLookup` 只负责 message part 与 `assistant_call` 交付物 metadata 的内部 handle 索引。

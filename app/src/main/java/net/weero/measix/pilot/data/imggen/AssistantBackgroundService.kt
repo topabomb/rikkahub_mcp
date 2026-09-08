@@ -1,5 +1,7 @@
 package net.weero.measix.pilot.data.imggen
 
+import net.weero.measix.pilot.data.configuration.ConfigurationScope
+
 import me.rerere.common.configuration.ConfigurationReference
 import android.content.Context
 import android.net.Uri
@@ -48,6 +50,7 @@ class AssistantBackgroundService(
         mimeType: String,
     ): BackgroundUpdateResult = replaceBackground(assistantId) {
         artifactStore.copyFile(
+            scope = ConfigurationScope.Personal,
             source = source,
             mimeType = mimeType,
             displayName = source.name,
@@ -152,6 +155,7 @@ class AssistantBackgroundService(
             else -> readLocalImage(source)
         } ?: return null
         return artifactStore.createFromBytes(
+            scope = ConfigurationScope.Personal,
             bytes = materialized.bytes,
             displayName = materialized.displayName,
             mimeType = materialized.mimeType,

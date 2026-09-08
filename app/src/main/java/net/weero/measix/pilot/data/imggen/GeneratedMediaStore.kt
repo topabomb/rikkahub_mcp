@@ -1,5 +1,7 @@
 package net.weero.measix.pilot.data.imggen
 
+import net.weero.measix.pilot.data.configuration.ConfigurationScope
+
 import android.util.Log
 import androidx.paging.PagingSource
 import java.io.File
@@ -80,6 +82,7 @@ class GeneratedMediaStore(
     suspend fun <T> withPersistLock(block: suspend () -> T): T = persistMutex.withLock { block() }
 
     suspend fun commit(
+        scope: ConfigurationScope,
         item: ImageGenerationItem,
         prompt: String,
         modelLabel: String,
@@ -87,11 +90,12 @@ class GeneratedMediaStore(
         sourcePaths: String? = null,
         consumerPlan: GeneratedMediaConsumerPlan = GeneratedMediaConsumerPlan.NONE,
     ): CommittedGeneratedMedia = withPersistLock {
-        commitLocked(item, prompt, modelLabel, kind, sourcePaths, consumerPlan)
+        commitLocked(scope, item, prompt, modelLabel, kind, sourcePaths, consumerPlan)
     }
 
     @OptIn(ExperimentalEncodingApi::class)
     private suspend fun commitLocked(
+        scope: ConfigurationScope,
         item: ImageGenerationItem,
         prompt: String,
         modelLabel: String,
@@ -121,6 +125,7 @@ class GeneratedMediaStore(
                     if (GeneratedMediaConsumer.CHAT_TOOL_RESULT in consumerPlan.consumers) {
                         // 生成媒体在聊天域的副本——诞生方式为生成派生
                         chatArtifact = artifactStore.copyFile(
+                            scope = scope,
                             source = finalFile,
                             mimeType = mimeType,
                             displayName = fileName,
@@ -130,6 +135,7 @@ class GeneratedMediaStore(
                     val relativePath = "$IMAGES_DIR/${finalFile.name}"
                     val mediaId = genMediaRepository.insertMedia(
                         GenMediaEntity(
+                            scope = scope,
                             path = relativePath,
                             modelId = modelLabel,
                             prompt = prompt,

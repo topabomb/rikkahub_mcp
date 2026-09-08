@@ -1,5 +1,6 @@
 package net.weero.measix.pilot.data.ai.transformers
 
+
 import me.rerere.common.configuration.ConfigurationReference
 
 
@@ -69,7 +70,7 @@ class RequestMessageOriginTest {
             messageTemplate = wrapTemplate,
         ),
     ) = mockk<android.content.Context>(relaxed = true).let { androidContext ->
-        TransformerContext(
+        TransformerContext(net.weero.measix.pilot.data.enterprise.RealmAccess.Personal,
             context = androidContext,
             model = Model(modelId = "test", displayName = "Test"),
             assistant = resolveTurnAssistantSnapshot(assistant),

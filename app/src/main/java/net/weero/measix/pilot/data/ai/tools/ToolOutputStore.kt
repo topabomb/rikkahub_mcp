@@ -1,5 +1,7 @@
 package net.weero.measix.pilot.data.ai.tools
 
+import net.weero.measix.pilot.data.configuration.ConfigurationScope
+
 import com.google.re2j.Pattern
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.currentCoroutineContext
@@ -34,7 +36,7 @@ class ToolOutputStore(private val artifactStore: ArtifactStore) {
     )
 
     /** 暂存全部压缩候选；只有可归档文本创建 Artifact，可再生回查结果只生成 marker。 */
-    internal suspend fun stageCompaction(plan: ToolOutputCompactionPlan): StagedCompactionBatch {
+    internal suspend fun stageCompaction(scope: ConfigurationScope, plan: ToolOutputCompactionPlan): StagedCompactionBatch {
         if (plan.candidates.isEmpty()) return StagedCompactionBatch(emptyMap(), null)
         require(plan.candidates.map { it.locator }.distinct().size == plan.candidates.size) {
             "Tool output compaction plan contains duplicate locators"
@@ -81,6 +83,7 @@ class ToolOutputStore(private val artifactStore: ArtifactStore) {
                 val canonical = canonicalizeToolOutput(candidate.text)
                 val archive = if (candidate.outputPolicy == ToolOutputPolicy.ARCHIVABLE_TEXT) {
                     val artifact = artifactStore.createText(
+                        scope = scope,
                         text = canonical,
                         displayName = "tool_output.txt",
                         mimeType = MIME_TYPE,

@@ -60,7 +60,7 @@ class ConversationWriteDeltaIntegrationTest {
         coEvery { nodeDAO.upsertAll(capture(upserts)) } just runs
 
         val artifactStore = mockk<ArtifactStore>()
-        coEvery { artifactStore.prepareReferenceDelta(any(), any()) } returns
+        coEvery { artifactStore.prepareReferenceDelta(any(), any(), any()) } returns
             ArtifactReferenceDelta(emptyList(), emptyList(), emptyList())
         coEvery { artifactStore.withLifecycleLock<Any>(any()) } coAnswers {
             firstArg<suspend () -> Any>().invoke()
@@ -79,6 +79,10 @@ class ConversationWriteDeltaIntegrationTest {
             artifactStore = artifactStore,
         )
         val conversationId = Uuid.random()
+        database.conversationDao().insert(net.weero.measix.pilot.data.db.entity.ConversationEntity(
+            id = conversationId.toString(), assistantId = me.rerere.common.configuration.ConfigurationReference.random().toString(),
+            title = "delta", createAt = 0, updateAt = 0, chatSuggestions = "[]", isPinned = false,
+        ))
 
         // Seed a 50-node tree (positions 0..49).
         val tree = (0 until 50).map { MessageNode.of(UIMessage.user("node-$it")) }

@@ -1,5 +1,6 @@
 package net.weero.measix.pilot.data.ai.transformers
 
+
 import net.weero.measix.pilot.service.turn.resolveTurnAssistantSnapshot
 import kotlin.uuid.Uuid
 
@@ -29,7 +30,7 @@ class ThinkTagTransformerTest {
         startedAt = Instant.fromEpochMilliseconds(0),
     )
 
-    private val ctx = TransformerContext(
+    private val ctx = TransformerContext(net.weero.measix.pilot.data.enterprise.RealmAccess.Personal,
         context = mockk<android.content.Context>(relaxed = true),
         model = Model(modelId = "test", displayName = "Test"),
         assistant = resolveTurnAssistantSnapshot(Assistant()),

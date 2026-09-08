@@ -1,5 +1,7 @@
 package net.weero.measix.pilot.data.imggen
 
+import net.weero.measix.pilot.data.configuration.ConfigurationScope
+
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.every
@@ -45,7 +47,7 @@ class GeneratedMediaStoreTest {
                 }
                 every { repository.insertMedia(any()) } returns 1L
                 val store = GeneratedMediaStore(directory, repository, mockk(relaxed = true), fileNameCandidates = { candidates })
-                val committed = store.commit(item(TINY_PNG, "image/png"), "cat", "model")
+                val committed = store.commit(ConfigurationScope.Personal, item(TINY_PNG, "image/png"), "cat", "model")
                 assertEquals("images/${candidates[freeIndex]}.png", committed.canonicalRelativePath)
                 candidates.drop(freeIndex + 1).forEach { stem ->
                     coVerify(exactly = 0) { repository.existsByPath("images/$stem.png") }
@@ -65,7 +67,7 @@ class GeneratedMediaStoreTest {
             coEvery { repository.existsByPath(any()) } answers { firstArg<String>() != "images/aaaaaa-3.png" }
             every { repository.insertMedia(any()) } returns 1L
             val store = GeneratedMediaStore(filesDir, repository, mockk(relaxed = true), fileNameCandidates = { candidates })
-            val committed = store.commit(item(TINY_PNG, "image/png"), "cat", "model")
+            val committed = store.commit(ConfigurationScope.Personal, item(TINY_PNG, "image/png"), "cat", "model")
             assertEquals("images/aaaaaa-3.png", committed.canonicalRelativePath)
             coVerify(exactly = 1) { repository.existsByPath("images/cccccccc.png") }
             coVerify(exactly = 1) { repository.existsByPath("images/aaaaaa-2.png") }
@@ -86,7 +88,7 @@ class GeneratedMediaStoreTest {
             every { repository.insertMedia(any()) } returns 1L
             val store = GeneratedMediaStore(filesDir, repository, mockk(relaxed = true), fileNameCandidates = { List(4) { "000000" } })
 
-            val committed = store.commit(item(TINY_PNG, "image/png"), "cat", "model")
+            val committed = store.commit(ConfigurationScope.Personal, item(TINY_PNG, "image/png"), "cat", "model")
 
             assertEquals("images/000000-5.png", committed.canonicalRelativePath)
             existingNames.forEach { assertEquals(it, File(images, it).readText()) }
@@ -103,7 +105,7 @@ class GeneratedMediaStoreTest {
             every { repository.insertMedia(any()) } returns 1L
             val store = GeneratedMediaStore(filesDir, repository, mockk(relaxed = true), fileNameCandidates = { List(4) { "000000" } })
             val committed = (0 until 10).map {
-                async(Dispatchers.Default) { store.commit(item(TINY_PNG, "image/png"), "cat", "model") }
+                async(Dispatchers.Default) { store.commit(ConfigurationScope.Personal, item(TINY_PNG, "image/png"), "cat", "model") }
             }.awaitAll()
             assertEquals(10, committed.map { it.canonicalRelativePath }.toSet().size)
             committed.forEach { assertTrue(it.canonicalFile.readBytes().contentEquals(TINY_PNG)) }
@@ -123,7 +125,7 @@ class GeneratedMediaStoreTest {
             val repository = mockk<GenMediaRepository> { coEvery { existsByPath(any()) } returns false }
             every { repository.insertMedia(any()) } throws CancellationException("cancel insert")
             val store = GeneratedMediaStore(filesDir, repository, mockk(relaxed = true), fileNameCandidates = { List(4) { "000000" } })
-            val failure = runCatching { store.commit(item(TINY_PNG, "image/png"), "cat", "model") }.exceptionOrNull()
+            val failure = runCatching { store.commit(ConfigurationScope.Personal, item(TINY_PNG, "image/png"), "cat", "model") }.exceptionOrNull()
             assertTrue(failure is CancellationException)
             assertEquals(existingNames.sorted(), images.listFiles().orEmpty().map { it.name }.sorted())
             existingNames.forEach { assertEquals(it, File(images, it).readText()) }
@@ -158,10 +160,10 @@ class GeneratedMediaStoreTest {
             mimeType = "image/png",
         )
         coEvery {
-            artifactStore.copyFile(any(), any(), any(), any(), any())
+            artifactStore.copyFile(any(), any(), any(), any(), any(), any())
         } returns owned
         val store = GeneratedMediaStore(filesDir, repository, artifactStore)
-        val committed = store.commit(
+        val committed = store.commit(ConfigurationScope.Personal,
             item = item(TINY_PNG, "image/png"),
             prompt = "cat",
             modelLabel = "GPT Image",
@@ -183,7 +185,7 @@ class GeneratedMediaStoreTest {
         every { repository.insertMedia(any()) } throws IllegalStateException("db")
         val store = GeneratedMediaStore(filesDir, repository, mockk(relaxed = true))
         runCatching {
-            store.commit(
+            store.commit(ConfigurationScope.Personal,
                 item = item(TINY_PNG, "image/png"),
                 prompt = "cat",
                 modelLabel = "model",
@@ -201,12 +203,12 @@ class GeneratedMediaStoreTest {
         every { repository.insertMedia(any()) } throws CancellationException("persist cancelled")
         val artifactStore = mockk<ArtifactStore>()
         val owned = mockk<OwnedArtifact>()
-        coEvery { artifactStore.copyFile(any(), any(), any(), any(), any()) } returns owned
+        coEvery { artifactStore.copyFile(any(), any(), any(), any(), any(), any()) } returns owned
         coEvery { artifactStore.discardUnpublished(owned) } returns ArtifactDeleteResult.Completed(7L)
         val store = GeneratedMediaStore(filesDir, repository, artifactStore)
         val result = async {
             runCatching {
-                store.commit(
+                store.commit(ConfigurationScope.Personal,
                     item = item(TINY_PNG, "image/png"),
                     prompt = "cat",
                     modelLabel = "model",
@@ -236,12 +238,12 @@ class GeneratedMediaStoreTest {
             relativePath = "upload/chat.png",
             mimeType = "image/png",
         )
-        coEvery { artifactStore.copyFile(any(), any(), any(), any(), any()) } returns owned
+        coEvery { artifactStore.copyFile(any(), any(), any(), any(), any(), any()) } returns owned
         coEvery { artifactStore.discardUnpublished(owned) } returns ArtifactDeleteResult.Completed(7L)
         val store = GeneratedMediaStore(filesDir, repository, artifactStore)
         val result = runCatching {
             CoroutineScope(coroutineContext + cancellationJob).async {
-                store.commit(
+                store.commit(ConfigurationScope.Personal,
                     item = item(TINY_PNG, "image/png"),
                     prompt = "cat",
                     modelLabel = "model",
@@ -359,7 +361,7 @@ class GeneratedMediaStoreTest {
         val repository = mockk<GenMediaRepository> { coEvery { existsByPath(any()) } returns false }
         every { repository.insertMedia(any()) } returns 8L
         val store = GeneratedMediaStore(filesDir, repository, mockk(relaxed = true))
-        val committed = store.commit(
+        val committed = store.commit(ConfigurationScope.Personal,
             item = item(TINY_PNG, "image/jpeg"),
             prompt = "cat",
             modelLabel = "model",
@@ -375,7 +377,7 @@ class GeneratedMediaStoreTest {
         val repository = mockk<GenMediaRepository> { coEvery { existsByPath(any()) } returns false }
         every { repository.insertMedia(any()) } returns 9L
         val store = GeneratedMediaStore(filesDir, repository, mockk(relaxed = true))
-        val committed = store.commit(
+        val committed = store.commit(ConfigurationScope.Personal,
             item = item(TINY_PNG, "application/octet-stream"),
             prompt = "cat",
             modelLabel = "model",
@@ -391,7 +393,7 @@ class GeneratedMediaStoreTest {
         val repository = mockk<GenMediaRepository> { coEvery { existsByPath(any()) } returns false }
         val store = GeneratedMediaStore(filesDir, repository, mockk(relaxed = true))
         val result = runCatching {
-            store.commit(
+            store.commit(ConfigurationScope.Personal,
                 item = item("hello".toByteArray(), "image/png"),
                 prompt = "cat",
                 modelLabel = "model",

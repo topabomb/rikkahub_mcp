@@ -53,7 +53,7 @@ class ChatPageLifecycleTest {
             val vm = fixture.create()
             runCurrent()
             assertSame(ConversationReadState.Loading, vm.conversationState.value)
-            verify(exactly = 0) { fixture.artifacts.openDraftScope() }
+            verify(exactly = 0) { fixture.artifacts.openDraftScope(any()) }
             verify(exactly = 0) { fixture.query.observeConversation(any()) }
             verify(exactly = 0) { fixture.favorites.observeNodeIds(any()) }
             pending.complete(fixture.lease)
@@ -161,7 +161,7 @@ class ChatPageLifecycleTest {
                 ArtifactDraftItem(Uri.parse("file:///owned/new"), "image", "image/png"),
             )
             coEvery { fixture.application.initialize(fixture.request) } returns nextLease
-            every { fixture.artifacts.openDraftScope() } returns nextImports
+            every { fixture.artifacts.openDraftScope(any()) } returns nextImports
             fixture.access.value = true
             vm.retryConversationLoad()
             runCurrent()
@@ -238,7 +238,7 @@ class ChatPageLifecycleTest {
         init {
             coEvery { application.initialize(request) } returns lease
             coEvery { application.rememberConversation(lease) } returns Unit
-            every { artifacts.openDraftScope() } returns imports
+            every { artifacts.openDraftScope(any()) } returns imports
             every { imports.close() } returns Unit
             every { settings.effectiveSettings } returns MutableStateFlow(mockk {
                 every { this@mockk.settings } returns net.weero.measix.pilot.data.datastore.Settings.dummy()

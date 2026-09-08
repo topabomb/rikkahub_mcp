@@ -1,5 +1,6 @@
 package net.weero.measix.pilot.data.ai.mcp
 
+
 import me.rerere.common.configuration.ConfigurationReference
 
 import io.mockk.coEvery
@@ -60,7 +61,7 @@ internal class McpTurnCapabilitySnapshotTest : McpRuntimeCoordinatorTestBase() {
         var artifactPublished = false
 
         val call = async {
-            manager.callTool(
+            manager.callTool(net.weero.measix.pilot.data.enterprise.RealmAccess.Personal,
                 serverId = tool.serverId,
                 toolName = tool.name,
                 expectedDefinitionDigest = tool.definitionDigest,
@@ -142,7 +143,7 @@ internal class McpTurnCapabilitySnapshotTest : McpRuntimeCoordinatorTestBase() {
         callToolGate = gate
 
         val call = async {
-            manager.callTool(
+            manager.callTool(net.weero.measix.pilot.data.enterprise.RealmAccess.Personal,
                 serverId = tool.serverId,
                 toolName = tool.name,
                 expectedDefinitionDigest = tool.definitionDigest,
@@ -196,7 +197,7 @@ internal class McpTurnCapabilitySnapshotTest : McpRuntimeCoordinatorTestBase() {
 
         val call = async {
             runCatching {
-                manager.callTool(
+                manager.callTool(net.weero.measix.pilot.data.enterprise.RealmAccess.Personal,
                     serverId = tool.serverId,
                     toolName = tool.name,
                     expectedDefinitionDigest = tool.definitionDigest,
@@ -234,7 +235,7 @@ internal class McpTurnCapabilitySnapshotTest : McpRuntimeCoordinatorTestBase() {
         runCurrent()
 
         val failure = runCatching {
-            manager.callTool(
+            manager.callTool(net.weero.measix.pilot.data.enterprise.RealmAccess.Personal,
                 serverId = tool.serverId,
                 toolName = tool.name,
                 expectedDefinitionDigest = tool.definitionDigest,
@@ -323,7 +324,7 @@ internal class McpTurnCapabilitySnapshotTest : McpRuntimeCoordinatorTestBase() {
         runCurrent()
         val call = async {
             runCatching {
-                isolatedManager.callTool(
+                isolatedManager.callTool(net.weero.measix.pilot.data.enterprise.RealmAccess.Personal,
                     serverId = tool.serverId,
                     toolName = tool.name,
                     expectedDefinitionDigest = tool.definitionDigest,

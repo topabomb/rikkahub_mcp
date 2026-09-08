@@ -1,5 +1,7 @@
 package net.weero.measix.pilot.data.files
 
+import net.weero.measix.pilot.data.configuration.ConfigurationScope
+
 import android.net.Uri
 import android.util.Log
 import android.graphics.BitmapFactory
@@ -409,12 +411,13 @@ class ArtifactStore(
     }
 
     suspend fun copyFile(
+        scope: ConfigurationScope,
         source: File,
         mimeType: String,
         displayName: String,
         folder: String = FileFolders.UPLOAD,
         origin: ArtifactOrigin,
-    ): OwnedArtifact = createFromUri(source.toUri(), folder, displayName, mimeType, origin)
+    ): OwnedArtifact = createFromUri(scope, source.toUri(), folder, displayName, mimeType, origin)
 
     suspend fun copyFilePreservingOrigin(
         source: File,
@@ -422,6 +425,9 @@ class ArtifactStore(
         displayName: String,
         folder: String = FileFolders.UPLOAD,
     ): OwnedArtifact = copyFile(
+        scope = requireNotNull(payloadStore.relativePathForFile(source)?.let { getByRelativePath(it) }) {
+            "artifact_copy_source_not_active"
+        }.scope,
         source = source,
         mimeType = mimeType,
         displayName = displayName,
@@ -454,6 +460,7 @@ class ArtifactStore(
     }
 
     suspend fun createFromUri(
+        scope: ConfigurationScope,
         uri: Uri,
         folder: String = FileFolders.UPLOAD,
         displayName: String? = null,
@@ -467,10 +474,11 @@ class ArtifactStore(
         val staged = stageNamedPayload(folder, resolvedName, resolvedMime) { reserved ->
             payloadStore.stageFromUri(reserved, uri, maxBytes)
         }
-        return activateStaged(staged, resolvedName, resolvedMime, inheritedOrigin)
+        return activateStaged(scope, staged, resolvedName, resolvedMime, inheritedOrigin)
     }
 
     suspend fun createFromBytes(
+        scope: ConfigurationScope,
         bytes: ByteArray,
         displayName: String,
         mimeType: String = "application/octet-stream",
@@ -480,10 +488,11 @@ class ArtifactStore(
         val staged = stageNamedPayload(folder, displayName, mimeType) { reserved ->
             payloadStore.stageFromBytes(reserved, bytes)
         }
-        return activateStaged(staged, displayName, mimeType, origin)
+        return activateStaged(scope, staged, displayName, mimeType, origin)
     }
 
     suspend fun createText(
+        scope: ConfigurationScope,
         text: String,
         displayName: String = "pasted_text.txt",
         mimeType: String = "text/plain",
@@ -493,7 +502,7 @@ class ArtifactStore(
         val staged = stageNamedPayload(folder, displayName, mimeType) { reserved ->
             payloadStore.stageText(reserved, text)
         }
-        return activateStaged(staged, displayName, mimeType, origin)
+        return activateStaged(scope, staged, displayName, mimeType, origin)
     }
 
     private suspend fun stageNamedPayload(
@@ -524,11 +533,11 @@ class ArtifactStore(
     }
 
     @OptIn(ExperimentalEncodingApi::class)
-    suspend fun persistBase64Images(message: UIMessage): PersistedMessageArtifacts {
+    suspend fun persistBase64Images(scope: ConfigurationScope, message: UIMessage): PersistedMessageArtifacts {
         val ownedArtifacts = mutableListOf<OwnedArtifact>()
         return try {
             PersistedMessageArtifacts(
-                message = message.copy(parts = persistBase64Parts(message.parts, ownedArtifacts)),
+                message = message.copy(parts = persistBase64Parts(scope, message.parts, ownedArtifacts)),
                 ownedArtifacts = ownedArtifacts.toList(),
             )
         } catch (error: Throwable) {
@@ -546,19 +555,21 @@ class ArtifactStore(
     }
 
     private suspend fun persistBase64Parts(
+        scope: ConfigurationScope,
         parts: List<UIMessagePart>,
         ownedArtifacts: MutableList<OwnedArtifact>,
     ): List<UIMessagePart> =
         parts.map { part ->
             when (part) {
-                is UIMessagePart.Image -> persistBase64Image(part, ownedArtifacts)
-                is UIMessagePart.Tool -> part.copy(output = persistBase64Parts(part.output, ownedArtifacts))
+                is UIMessagePart.Image -> persistBase64Image(scope, part, ownedArtifacts)
+                is UIMessagePart.Tool -> part.copy(output = persistBase64Parts(scope, part.output, ownedArtifacts))
                 else -> part
             }
         }
 
     @OptIn(ExperimentalEncodingApi::class)
     private suspend fun persistBase64Image(
+        scope: ConfigurationScope,
         part: UIMessagePart.Image,
         ownedArtifacts: MutableList<OwnedArtifact>,
     ): UIMessagePart {
@@ -582,6 +593,7 @@ class ArtifactStore(
                 bitmap.recycle()
             }
             val owned = createFromBytes(
+                scope = scope,
                 bytes = pngBytes,
                 displayName = "image.png",
                 mimeType = "image/png",
@@ -617,6 +629,7 @@ class ArtifactStore(
     )
 
     private suspend fun activateStaged(
+        scope: ConfigurationScope,
         staged: ArtifactPayloadStore.StagedPayload,
         displayName: String,
         mimeType: String,
@@ -628,6 +641,7 @@ class ArtifactStore(
             withLifecycleLock {
                 val now = System.currentTimeMillis()
                 val creating = ArtifactEntity(
+                    scope = scope,
                     folder = staged.folder,
                     relativePath = staged.relativePath,
                     displayName = displayName,
@@ -770,24 +784,29 @@ class ArtifactStore(
         }
     }
 
-    suspend fun retainForUndo(conversations: List<Conversation>): ArtifactRetentionLease =
-        retainNodesForUndo(conversations.map { it.messageNodes })
+    suspend fun retainForUndo(conversations: List<Conversation>): ArtifactRetentionLease = withLifecycleLock {
+        retainIds(conversations.flatMap { buildMutableReferencesForNodes(it.scope, it.messageNodes) }
+            .mapTo(linkedSetOf(), ArtifactReferenceEntity::artifactId))
+    }
 
     /** Retains aggregate message trees without exposing internal model context through Conversation. */
     internal suspend fun retainNodesForUndo(
+        scope: ConfigurationScope,
         nodeGroups: List<List<net.weero.measix.pilot.data.model.MessageNode>>,
     ): ArtifactRetentionLease = withLifecycleLock {
-        val ids = buildMutableReferencesForNodes(nodeGroups.flatten())
+        val ids = buildMutableReferencesForNodes(scope, nodeGroups.flatten())
             .map(ArtifactReferenceEntity::artifactId)
             .toSet()
         retainIds(ids)
     }
 
     /** Input requests retain existing payloads independently of their editor's creation ownership. */
-    internal suspend fun retainInputUris(uris: Set<String>): ArtifactRetentionLease = withLifecycleLock {
+    internal suspend fun retainInputUris(scope: ConfigurationScope, uris: Set<String>): ArtifactRetentionLease = withLifecycleLock {
         val ids = uris.mapNotNull { uri ->
             val relativePath = payloadStore.relativePathForUri(Uri.parse(uri)) ?: return@mapNotNull null
-            artifactDAO.getByPathAndState(relativePath, ArtifactState.ACTIVE.name)?.id
+            artifactDAO.getByPathAndState(relativePath, ArtifactState.ACTIVE.name)?.also {
+                requireArtifactScope(it, scope)
+            }?.id
         }.toSet()
         retainIds(ids)
     }
@@ -814,6 +833,7 @@ class ArtifactStore(
      *  - deletedNodeIds：同事务显式清理投影，不依赖于延后重建
      */
     internal suspend fun prepareReferenceDelta(
+        scope: ConfigurationScope,
         upsertedNodes: List<MessageNode>,
         deletedNodeIds: List<Uuid>,
     ): ArtifactReferenceDelta {
@@ -821,7 +841,7 @@ class ArtifactStore(
         return ArtifactReferenceDelta(
             replacedNodeIds = upsertedNodes.map { it.id.toString() },
             deletedNodeIds = deletedNodeIds.map { it.toString() },
-            references = buildMutableReferencesForNodes(upsertedNodes),
+            references = buildMutableReferencesForNodes(scope, upsertedNodes),
         )
     }
 
@@ -863,7 +883,7 @@ class ArtifactStore(
                             error,
                         )
                     }
-                    inserted.addAll(resolveNodeReferenceEntities(header.id, messages))
+                    inserted.addAll(resolveNodeReferenceEntities(conversationEntity.scope, header.id, messages))
                 }
             }
         } catch (cancelled: CancellationException) {
@@ -1182,10 +1202,10 @@ class ArtifactStore(
 
     // ---- 私有 ----
 
-    private suspend fun buildMutableReferencesForNodes(nodes: List<MessageNode>): List<ArtifactReferenceEntity> {
+    private suspend fun buildMutableReferencesForNodes(scope: ConfigurationScope, nodes: List<MessageNode>): List<ArtifactReferenceEntity> {
         val refs = mutableListOf<ArtifactReferenceEntity>()
         nodes.forEach { node ->
-            refs.addAll(resolveNodeReferenceEntities(node.id.toString(), node.messages))
+            refs.addAll(resolveNodeReferenceEntities(scope, node.id.toString(), node.messages))
         }
         return refs
     }
@@ -1204,7 +1224,7 @@ class ArtifactStore(
      * 相对路径，相对路径 token 直用；引用类型按来源语义登记（ATTACHMENT / TOOL_OUTPUT），
      * metadata-only 引用（generate_image artifact 等）同样登记、阻止 GC 回收。
      */
-    private suspend fun resolveNodeReferenceEntities(nodeId: String, messages: List<UIMessage>): List<ArtifactReferenceEntity> {
+    private suspend fun resolveNodeReferenceEntities(scope: ConfigurationScope, nodeId: String, messages: List<UIMessage>): List<ArtifactReferenceEntity> {
         val refs = mutableListOf<ArtifactReferenceEntity>()
         val seen = mutableSetOf<Pair<Long, String>>()
         messages.collectArtifactReferences().forEach { reference ->
@@ -1217,6 +1237,7 @@ class ArtifactStore(
                 ?.takeIf { artifact ->
                     reference.expectedArtifactId == null || reference.expectedArtifactId == artifact.id
                 }?.let { artifact ->
+                requireArtifactScope(artifact, scope)
                 if (seen.add(artifact.id to reference.type.name)) {
                     refs.add(
                         ArtifactReferenceEntity(
@@ -1229,6 +1250,10 @@ class ArtifactStore(
             }
         }
         return refs
+    }
+
+    private fun requireArtifactScope(artifact: ArtifactEntity, scope: ConfigurationScope) {
+        if (artifact.scope != scope) throw ArtifactProjectionException("artifact_scope_mismatch: artifact=${artifact.id}")
     }
 
     private fun buildFileUri(artifact: ArtifactEntity): String {
@@ -1300,6 +1325,6 @@ class ArtifactStore(
     companion object {
         private const val TAG = "ArtifactStore"
         private const val MAX_BASE64_IMAGE_CHARS = 32 * 1024 * 1024
-        const val REFERENCE_PROJECTION_VERSION_KEY = "artifact_reference_projection_transactional_v2"
+        const val REFERENCE_PROJECTION_VERSION_KEY = "artifact_reference_projection_scoped_v3"
     }
 }

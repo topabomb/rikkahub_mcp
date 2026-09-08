@@ -68,7 +68,7 @@ class ConversationStartAtomicityTest {
         coEvery { artifactStore.withLifecycleLock<Any>(any()) } coAnswers {
             firstArg<suspend () -> Any>().invoke()
         }
-        coEvery { artifactStore.prepareReferenceDelta(any(), any()) } returns
+        coEvery { artifactStore.prepareReferenceDelta(any(), any(), any()) } returns
             ArtifactReferenceDelta(emptyList(), emptyList(), emptyList())
         coJustRun { artifactStore.applyReferenceDeltaInTransaction(any()) }
         repository = ConversationRepository(

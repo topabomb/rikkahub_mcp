@@ -261,6 +261,7 @@ internal class TurnRunState(
 
     // 流式/终态输出变换不参与请求来源跟踪；请求级 tracker 只属于 generateInternal 的输入链。
     fun resourceTrackingTransformerContext() = TransformerContext(
+        realmAccess = turnContext.realmAccess,
         context = context,
         model = model,
         assistant = assistant,

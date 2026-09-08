@@ -1,5 +1,6 @@
 package net.weero.measix.pilot.data.ai.mcp
 
+
 import me.rerere.common.configuration.ConfigurationReference
 
 
@@ -540,7 +541,7 @@ internal class McpConnectionLifecycleTest : McpRuntimeCoordinatorTestBase() {
 
         val frozen = manager.captureTurnCapabilities(Assistant(mcpServers = setOf(SERVER_ID))).tools.single()
         val failure = runCatching {
-            manager.callTool(
+            manager.callTool(net.weero.measix.pilot.data.enterprise.RealmAccess.Personal,
                 serverId = frozen.serverId,
                 toolName = frozen.name,
                 expectedDefinitionDigest = frozen.definitionDigest,

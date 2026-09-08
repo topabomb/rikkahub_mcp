@@ -123,7 +123,7 @@ internal fun createUsageStreamHarness(
     }
     val assistant = Assistant(enableMemory = false, streamOutput = true)
     val toolOutputStore = mockk<ToolOutputStore>()
-    coEvery { toolOutputStore.stageCompaction(any()) } returns ToolOutputStore.StagedCompactionBatch(
+    coEvery { toolOutputStore.stageCompaction(any(), any()) } returns ToolOutputStore.StagedCompactionBatch(
         replacements = emptyMap(),
         lease = null,
     )

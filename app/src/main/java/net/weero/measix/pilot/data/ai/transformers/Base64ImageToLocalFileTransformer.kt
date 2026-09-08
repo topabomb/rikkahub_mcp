@@ -19,7 +19,7 @@ class Base64ImageToLocalFileTransformer(
         previousProjection: UIMessage?,
     ): UIMessage {
         val start = message.openStepPartsStart() ?: return message
-        val persisted = artifactStore.persistBase64Images(message.copy(parts = message.parts.drop(start)))
+        val persisted = artifactStore.persistBase64Images(ctx.realmAccess.scope, message.copy(parts = message.parts.drop(start)))
         if (persisted.ownedArtifacts.isNotEmpty()) {
             ctx.registerUnpublishedResource(artifactStore.unpublishedBatchLease(persisted.ownedArtifacts))
         }

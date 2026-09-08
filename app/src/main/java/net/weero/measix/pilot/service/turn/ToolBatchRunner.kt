@@ -222,6 +222,7 @@ internal class ToolBatchRunner(
                 })
             }))
             val presentationMessages = listOf(state.messages.last()).transforms(
+                realmAccess = state.turnContext.realmAccess,
                 transformers = state.outputTransformers,
                 context = state.context,
                 model = state.model,

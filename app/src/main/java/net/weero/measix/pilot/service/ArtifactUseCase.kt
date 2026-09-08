@@ -1,5 +1,7 @@
 package net.weero.measix.pilot.service
 
+import net.weero.measix.pilot.data.configuration.ConfigurationScope
+
 import android.net.Uri
 import android.util.Log
 import androidx.core.net.toUri
@@ -74,7 +76,10 @@ class ArtifactUseCase(
     private val store: ArtifactStore,
     private val recoveryGate: ApplicationRecoveryGate,
 ) {
-    fun openDraftScope(): ArtifactDraftScope = ArtifactDraftScope(store, recoveryGate)
+    internal fun openDraftScope(view: ConversationViewLease): ArtifactDraftScope {
+        view.requireOpen()
+        return ArtifactDraftScope(store, recoveryGate, view.commandTarget)
+    }
 
     fun observeUploads(): Flow<List<ArtifactUiModel>> =
         store.observe(FileFolders.UPLOAD).map { artifacts -> artifacts.map(::toUiModel) }
@@ -82,7 +87,7 @@ class ArtifactUseCase(
     /** 验证并创建 Settings 图像 artifact，由同一挂起所有者提交 durable root。 */
     suspend fun importSettingsImage(uri: Uri, transform: (Settings, Uri) -> Settings): Uri {
         recoveryGate.awaitReady()
-        val owned = store.createFromUri(uri, maxBytes = GeneratedMediaStore.MAX_IMAGE_BYTES.toLong())
+        val owned = store.createFromUri(ConfigurationScope.Personal, uri, maxBytes = GeneratedMediaStore.MAX_IMAGE_BYTES.toLong())
         var ownershipTransferred = false
         return try {
             withContext(Dispatchers.IO) {
@@ -212,18 +217,21 @@ private fun ArtifactDeleteResult.toOutcome(): ArtifactDeleteOutcome = when (this
 class ArtifactDraftScope internal constructor(
     private val store: ArtifactStore,
     private val recoveryGate: ApplicationRecoveryGate,
+    internal val target: ConversationCommandTarget,
 ) : AutoCloseable {
+    internal val scope: ConfigurationScope get() = target.selection.access.scope
     private val closeRequested = AtomicBoolean(false)
     private val mutex = Mutex()
     private val owned = linkedMapOf<String, OwnedArtifact>()
 
     suspend fun importUrisOrThrow(uris: List<Uri>): List<ArtifactDraftItem> = withOwnershipLock {
+        target.requireOpen()
         if (uris.isEmpty()) return@withOwnershipLock emptyList()
         val created = mutableListOf<OwnedArtifact>()
         try {
             uris.forEach { uri ->
                 val artifact = try {
-                    store.createFromUri(uri)
+                    store.createFromUri(scope, uri)
                 } catch (cancelled: CancellationException) {
                     throw cancelled
                 } catch (error: Throwable) {
@@ -246,7 +254,8 @@ class ArtifactDraftScope internal constructor(
     }
 
     suspend fun createTextDocument(text: String): UIMessagePart.Document = withOwnershipLock {
-        val artifact = store.createText(text)
+        target.requireOpen()
+        val artifact = store.createText(scope, text)
         owned[artifact.uri.toString()] = artifact
         UIMessagePart.Document(
             url = artifact.uri.toString(),
@@ -255,9 +264,15 @@ class ArtifactDraftScope internal constructor(
         )
     }
 
-    internal suspend fun claimSubmission(parts: List<UIMessagePart>): ArtifactSubmission = withOwnershipLock {
+    internal fun requireTarget(requestTarget: ConversationCommandTarget) {
+        target.requireOpen()
+        check(target === requestTarget) { "artifact_draft_owner_mismatch" }
+    }
+
+    internal suspend fun claimSubmission(requestTarget: ConversationCommandTarget, parts: List<UIMessagePart>): ArtifactSubmission = withOwnershipLock {
+        requireTarget(requestTarget)
         val uris = parts.collectArtifactUris()
-        val retention = store.retainInputUris(uris)
+        val retention = store.retainInputUris(scope, uris)
         ArtifactSubmission(store, uris.mapNotNull(owned::remove), retention)
     }
 

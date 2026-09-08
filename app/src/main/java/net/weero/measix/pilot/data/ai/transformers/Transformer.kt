@@ -1,4 +1,6 @@
 package net.weero.measix.pilot.data.ai.transformers
+
+import net.weero.measix.pilot.data.enterprise.RealmAccess
 import net.weero.measix.pilot.service.turn.TurnAssistantSnapshot
 import net.weero.measix.pilot.service.turn.TurnPromptSnapshot
 
@@ -59,6 +61,7 @@ class RequestMessageOriginTracker {
 }
 
 class TransformerContext(
+    val realmAccess: RealmAccess,
     val context: Context,
     val model: Model,
     val assistant: TurnAssistantSnapshot,
@@ -116,6 +119,7 @@ interface StreamingMessageTransformer {
 }
 
 suspend fun List<UIMessage>.transforms(
+    realmAccess: RealmAccess,
     transformers: List<MessageTransformer>,
     context: Context,
     model: Model,
@@ -127,6 +131,7 @@ suspend fun List<UIMessage>.transforms(
     registerUnpublishedResource: (ToolResourceLease) -> Unit,
 ): List<UIMessage> {
     val ctx = TransformerContext(
+        realmAccess = realmAccess,
         context = context,
         model = model,
         assistant = assistant,

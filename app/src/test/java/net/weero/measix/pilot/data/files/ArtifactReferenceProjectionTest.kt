@@ -1,5 +1,7 @@
 package net.weero.measix.pilot.data.files
 
+import net.weero.measix.pilot.data.configuration.ConfigurationScope
+
 import me.rerere.common.configuration.ConfigurationReference
 
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -38,7 +40,7 @@ import org.robolectric.annotation.Config
 internal class ArtifactReferenceProjectionTest : ArtifactStoreLifecycleTestBase() {
     @Test
     fun `tool output retained read is conversation scoped and fails closed for missing payload`() = runTest {
-        val owned = store.createText(
+        val owned = store.createText(ConfigurationScope.Personal,
             text = "one\ntwo\nthree\n",
             displayName = "tool_output.txt",
             mimeType = "text/plain",
@@ -92,7 +94,7 @@ internal class ArtifactReferenceProjectionTest : ArtifactStoreLifecycleTestBase(
     @Test
     fun `shared tool output survives source deletion and is reclaimed after the last fork reference`() = runTest {
         val archivedText = "shared archived output"
-        val owned = store.createText(
+        val owned = store.createText(ConfigurationScope.Personal,
             text = archivedText,
             displayName = "tool_output.txt",
             mimeType = "text/plain",
@@ -166,7 +168,7 @@ internal class ArtifactReferenceProjectionTest : ArtifactStoreLifecycleTestBase(
     @Test
     fun `tool output paging and grep stay bounded across giant physical lines`() = runTest {
         val text = (1..20).joinToString("\n") { line -> "Hit-$line-${"界".repeat(30_000)}" }
-        val owned = store.createText(
+        val owned = store.createText(ConfigurationScope.Personal,
             text = text,
             displayName = "tool_output.txt",
             mimeType = "text/plain",
@@ -227,7 +229,7 @@ internal class ArtifactReferenceProjectionTest : ArtifactStoreLifecycleTestBase(
 
     @Test
     fun `image preview port rejects artifact after lifecycle deletion`() = runTest {
-        val owned = store.createFromBytes(
+        val owned = store.createFromBytes(ConfigurationScope.Personal,
             bytes = TINY_PNG,
             displayName = "preview.png",
             mimeType = "image/png",
@@ -252,10 +254,10 @@ internal class ArtifactReferenceProjectionTest : ArtifactStoreLifecycleTestBase(
     @Test
     fun `read port exposes only active artifacts`() = runTest {
         val folder = folder()
-        val active = store.createFromBytes(byteArrayOf(1), "active.bin", folder = folder, origin = ArtifactOrigin.USER)
+        val active = store.createFromBytes(ConfigurationScope.Personal, byteArrayOf(1), "active.bin", folder = folder, origin = ArtifactOrigin.USER)
         val staging = stageBytes(folder, byteArrayOf(2), "creating.bin")
         database.artifactDao().insert(entity(staging.relativePath, folder, ArtifactState.CREATING, staging.stagingToken))
-        val deleting = store.createFromBytes(byteArrayOf(3), "deleting.bin", folder = folder, origin = ArtifactOrigin.USER)
+        val deleting = store.createFromBytes(ConfigurationScope.Personal, byteArrayOf(3), "deleting.bin", folder = folder, origin = ArtifactOrigin.USER)
         database.artifactDao().compareAndSetState(
             deleting.entity.id,
             ArtifactState.ACTIVE.name,

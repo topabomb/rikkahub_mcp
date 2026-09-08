@@ -1,5 +1,7 @@
 package net.weero.measix.pilot.data.files
 
+import net.weero.measix.pilot.data.configuration.ConfigurationScope
+
 import android.content.Context
 import android.content.ContextWrapper
 import android.graphics.Bitmap
@@ -84,10 +86,11 @@ class ArtifactUploadImageReadIntegrationTest {
     @Test
     fun replacingARequestWithTheSameInputKeepsAnIndependentRetentionPin() = runBlocking {
         val draft = net.weero.measix.pilot.service.ArtifactUseCase(store,
-            net.weero.measix.pilot.service.ApplicationRecoveryGate().apply { ready() }).openDraftScope()
+            net.weero.measix.pilot.service.ApplicationRecoveryGate().apply { ready() }).openDraftScope(net.weero.measix.pilot.service.ConversationViewLease(
+            kotlin.uuid.Uuid.random(), net.weero.measix.pilot.data.enterprise.RealmAccess.Personal, 0L, {}))
         val document = draft.createTextDocument("shared input")
-        val first = draft.claimSubmission(listOf(document))
-        val second = draft.claimSubmission(listOf(document))
+        val first = draft.claimSubmission(draft.target, listOf(document))
+        val second = draft.claimSubmission(draft.target, listOf(document))
         draft.close()
         val artifact = store.list().single()
         first.close()
@@ -99,9 +102,10 @@ class ArtifactUploadImageReadIntegrationTest {
     @Test
     fun acceptedSubmissionKeepsCreationPinAfterEditorClosesUntilRequestReleasesIt() = runBlocking {
         val draft = net.weero.measix.pilot.service.ArtifactUseCase(store,
-            net.weero.measix.pilot.service.ApplicationRecoveryGate().apply { ready() }).openDraftScope()
+            net.weero.measix.pilot.service.ApplicationRecoveryGate().apply { ready() }).openDraftScope(net.weero.measix.pilot.service.ConversationViewLease(
+            kotlin.uuid.Uuid.random(), net.weero.measix.pilot.data.enterprise.RealmAccess.Personal, 0L, {}))
         val document = draft.createTextDocument("accepted input")
-        val submission = draft.claimSubmission(listOf(document))
+        val submission = draft.claimSubmission(draft.target, listOf(document))
         draft.close()
         val artifact = store.list().single()
         assertTrue(store.deleteUserRequested(artifact.id) is ArtifactDeleteResult.Rejected)
@@ -113,9 +117,10 @@ class ArtifactUploadImageReadIntegrationTest {
     fun unacceptedSubmissionReturnsToEditorOrReleasesWhenEditorAlreadyClosed() = runBlocking {
         for (closed in listOf(false, true)) {
             val draft = net.weero.measix.pilot.service.ArtifactUseCase(store,
-                net.weero.measix.pilot.service.ApplicationRecoveryGate().apply { ready() }).openDraftScope()
+                net.weero.measix.pilot.service.ApplicationRecoveryGate().apply { ready() }).openDraftScope(net.weero.measix.pilot.service.ConversationViewLease(
+            kotlin.uuid.Uuid.random(), net.weero.measix.pilot.data.enterprise.RealmAccess.Personal, 0L, {}))
             val document = draft.createTextDocument("unaccepted input")
-            val submission = draft.claimSubmission(listOf(document))
+            val submission = draft.claimSubmission(draft.target, listOf(document))
             val artifact = store.list().single()
             if (closed) draft.close()
             draft.returnUnaccepted(submission)
@@ -195,7 +200,7 @@ class ArtifactUploadImageReadIntegrationTest {
         )
         assertTrue(store.deleteUserRequested(first.id) is ArtifactDeleteResult.Completed)
         assertTrue(store.deleteUserRequested(second.id) is ArtifactDeleteResult.Completed)
-        val owned = store.createFromBytes(png, "unpublished.png", "image/png", origin = ArtifactOrigin.USER)
+        val owned = store.createFromBytes(ConfigurationScope.Personal, png, "unpublished.png", "image/png", origin = ArtifactOrigin.USER)
         assertEquals(
             AttachmentResolveResult.Failure("attachment_not_found"),
             resolver.readImages(listOf(owned.localRef.toolPath()!!)),

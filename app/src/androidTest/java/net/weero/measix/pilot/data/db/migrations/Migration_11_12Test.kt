@@ -1,6 +1,22 @@
 package net.weero.measix.pilot.data.db.migrations
 
 import android.content.Context
+import android.content.ContextWrapper
+import androidx.room.Room
+import androidx.core.net.toUri
+import java.io.File
+import java.nio.file.Files
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.cancel
+import me.rerere.ai.ui.UIMessage
+import me.rerere.ai.ui.UIMessagePart
+import net.weero.measix.pilot.AppScope
+import net.weero.measix.pilot.data.datastore.SettingsStore
+import net.weero.measix.pilot.data.db.RoomDatabaseTransactionRunner
+import net.weero.measix.pilot.data.files.ArtifactPayloadStore
+import net.weero.measix.pilot.data.files.ArtifactSettingsCoordinator
+import net.weero.measix.pilot.data.files.ArtifactStore
+import net.weero.measix.pilot.utils.JsonInstant
 import android.database.sqlite.SQLiteDatabase
 import androidx.room.migration.Migration
 import androidx.room.testing.MigrationTestHelper
@@ -22,6 +38,53 @@ class Migration_11_12Test {
     )
     private val context: Context get() = ApplicationProvider.getApplicationContext()
     private val roots = listOf("ConversationEntity", "MemoryEntity", "artifact", "GenMediaEntity", "conversation_folder", "favorites")
+
+    @Test
+    fun migratedAttachmentSurvivesRealOwnerRecoveryAndProjectionRebuild() = runBlocking {
+        val name = "migration-scope-artifact-consumer"
+        context.deleteDatabase(name)
+        val root = Files.createTempDirectory(context.cacheDir.toPath(), "scope-migration-").toFile()
+        val payload = File(root, "upload/kept.png").apply {
+            parentFile!!.mkdirs()
+            writeBytes(byteArrayOf(1, 2, 3, 4))
+        }
+        val payloadContext = object : ContextWrapper(context) { override fun getFilesDir(): File = root }
+        val messages = JsonInstant.encodeToString(listOf(UIMessage.user("kept attachment").copy(parts = listOf(
+            UIMessagePart.Document(payload.toUri().toString(), "kept.png", "image/png"),
+        ))))
+        helper.createDatabase(name, 11).use { db ->
+            seed(db)
+            db.execSQL("UPDATE message_node SET messages = ? WHERE id = 'node'", arrayOf(messages))
+            db.execSQL("INSERT INTO artifact_reference(artifact_id,node_id,reference_type) VALUES(9,'node','ATTACHMENT')")
+        }
+        helper.runMigrationsAndValidate(name, 12, true, Migration_11_12).close()
+        val database = Room.databaseBuilder(context, AppDatabase::class.java, name).build()
+        val appScope = AppScope()
+        try {
+            val store = ArtifactStore(
+                ArtifactPayloadStore(payloadContext), database.artifactDao(), database.artifactReferenceDao(),
+                database.systemMetaDao(), database.conversationDao(), database.messageNodeDao(),
+                ArtifactSettingsCoordinator(SettingsStore(context, appScope)), RoomDatabaseTransactionRunner(database),
+            )
+            repeat(2) {
+                store.reconcileStartup()
+                store.ensureReferenceProjection()
+                val artifact = requireNotNull(database.artifactDao().getById(9))
+                assertEquals(net.weero.measix.pilot.data.configuration.ConfigurationScope.Personal, artifact.scope)
+                assertEquals("upload/kept.png", artifact.relativePath)
+                assertArrayEquals(byteArrayOf(1, 2, 3, 4), store.file(artifact).readBytes())
+                assertTrue(database.artifactReferenceDao().existsInConversation(9, "parent", "ATTACHMENT"))
+                assertTrue(store.isReferenceProjectionCurrent())
+                assertEquals(listOf(listOf(messages)), rows(database.openHelper.readableDatabase,
+                    "SELECT messages FROM message_node WHERE id = 'node'"))
+            }
+        } finally {
+            appScope.cancel()
+            database.close()
+            context.deleteDatabase(name)
+            check(root.deleteRecursively())
+        }
+    }
 
     @Test
     fun existingRootsAndReferencesKeepTheirValuesAndReceivePersonalScope() {

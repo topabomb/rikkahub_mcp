@@ -75,7 +75,7 @@ class ImageGenerationToolCompensationTest {
             coordinator = coordinator, backgroundService = mockk(), artifactStore = artifactStore,
             rewriter = ToolArtifactRewriter(File("unused"), artifactStore),
         )
-        val tool = factory.create(AssistantToolBuildContext(ownerId, settings))!!
+        val tool = factory.create(AssistantToolBuildContext(net.weero.measix.pilot.data.enterprise.RealmAccess.Personal, ownerId, settings))!!
         val failure = assertThrows(ToolArgumentsException::class.java) { tool.parseArguments("{}", Json) }
         val replay = Json.parseToJsonElement((failure.output.single() as UIMessagePart.Text).text).jsonObject
         val domainFailure = requireNotNull(tool.validateArguments(buildJsonObject {}))
@@ -158,7 +158,7 @@ class ImageGenerationToolCompensationTest {
             artifactStore = artifactStore,
             rewriter = ToolArtifactRewriter(filesDir, artifactStore),
         )
-        val tool = factory.create(AssistantToolBuildContext(ownerId, settings))!!
+        val tool = factory.create(AssistantToolBuildContext(net.weero.measix.pilot.data.enterprise.RealmAccess.Personal, ownerId, settings))!!
         val resources = mutableListOf<ToolResourceLease>()
         val result = runCatching {
             tool.executeWithContext(
@@ -226,7 +226,7 @@ class ImageGenerationToolCompensationTest {
             artifactStore = artifactStore,
             rewriter = ToolArtifactRewriter(filesDir, artifactStore),
         )
-        val tool = factory.create(AssistantToolBuildContext(ownerId, settings))!!
+        val tool = factory.create(AssistantToolBuildContext(net.weero.measix.pilot.data.enterprise.RealmAccess.Personal, ownerId, settings))!!
         val resources = mutableListOf<ToolResourceLease>()
         val metadataPatches = mutableListOf<Pair<JsonObject, ToolMetadataDelivery>>()
         val parts = tool.executeWithContext(

@@ -394,7 +394,7 @@ class ConversationTurnService internal constructor(
         operation: suspend (ConversationRuntime, Uuid, ArtifactSubmission?) -> Unit,
     ): Uuid {
         recoveryGate.awaitReady()
-        val submission = artifactDraftScope?.claimSubmission(content)
+        val submission = artifactDraftScope?.claimSubmission(target, content)
         val turnId = Uuid.random()
         var accepted = false
         val ready = CompletableDeferred<Pair<ConversationRuntime, InstalledTurnWorker>?>()

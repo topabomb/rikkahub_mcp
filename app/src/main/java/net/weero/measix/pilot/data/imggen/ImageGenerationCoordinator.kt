@@ -1,5 +1,7 @@
 package net.weero.measix.pilot.data.imggen
 
+import net.weero.measix.pilot.data.enterprise.RealmAccess
+
 import me.rerere.common.configuration.ConfigurationReference
 import android.util.Log
 import java.util.UUID
@@ -36,6 +38,7 @@ enum class ImageGenerationPhase {
 }
 
 data class ImageGenerationRequest(
+    val realmAccess: RealmAccess,
     val id: String = UUID.randomUUID().toString(),
     val source: ImageGenerationSource,
     val selection: ImageGenerationSelection.Available,
@@ -192,6 +195,7 @@ class ImageGenerationCoordinator(
         val committed = try {
             finals.map { item ->
                 mediaStore.commit(
+                    scope = request.realmAccess.scope,
                     item = item,
                     prompt = request.prompt,
                     modelLabel = modelLabel,

@@ -60,7 +60,7 @@ private fun GeneratedMediaUiModel.toGeneratedImage(): GeneratedImage {
     )
 }
 
-class ImgGenVM(
+class ImgGenVM internal constructor(
     context: Application,
     private val settingsStore: SettingsStore,
     val providerManager: ProviderManager,
@@ -68,7 +68,10 @@ class ImgGenVM(
     private val coordinator: ImageGenerationCoordinator,
     private val fileManagementQueryService: FileManagementQueryService,
     private val fileManagementApplicationService: FileManagementApplicationService,
+    private val configurationQueryService: net.weero.measix.pilot.service.ConfigurationQueryService,
 ) : AndroidViewModel(context) {
+    private val modelCatalog = configurationQueryService.observeModelCatalog()
+        .stateIn(viewModelScope, SharingStarted.Eagerly, net.weero.measix.pilot.service.ModelCatalogReadState.Loading)
     val settings: StateFlow<Settings> = settingsStore.effectiveSettings
         .map { it.settings }
         .stateIn(viewModelScope, SharingStarted.Eagerly, Settings.dummy())
@@ -158,6 +161,8 @@ class ImgGenVM(
 
     fun generateImage() {
         if(prompt.value.isBlank()) return
+        val realmSelection = (modelCatalog.value as? net.weero.measix.pilot.service.ModelCatalogReadState.Available)
+            ?.catalog?.selection ?: return
         cancelJob?.cancel()
         cancelJob = viewModelScope.launch {
             var previewFile: File? = null
@@ -167,6 +172,8 @@ class ImgGenVM(
                 _currentGeneratedImages.value = emptyList()
                 coordinator.cancelPageSession(pageSessionId)
 
+                configurationQueryService.requireSelection(realmSelection)
+
                 val settings = settingsStore.effectiveSettings.first().settings
                 val selection = selectionResolver.resolve(settings)
                 if (selection !is ImageGenerationSelection.Available) {
@@ -175,6 +182,7 @@ class ImgGenVM(
                 }
                 val requestPrompt = _prompt.value
                 val request = ImageGenerationRequest(
+                    realmAccess = realmSelection.access,
                     source = ImageGenerationSource.Page(pageSessionId),
                     selection = selection,
                     prompt = requestPrompt,
@@ -233,6 +241,8 @@ class ImgGenVM(
 
     fun editImage() {
         if (prompt.value.isBlank() || referenceImages.value.isEmpty()) return
+        val realmSelection = (modelCatalog.value as? net.weero.measix.pilot.service.ModelCatalogReadState.Available)
+            ?.catalog?.selection ?: return
         cancelJob?.cancel()
         cancelJob = viewModelScope.launch {
             var previewFile: File? = null
@@ -241,6 +251,8 @@ class ImgGenVM(
                 _error.value = null
                 _currentGeneratedImages.value = emptyList()
                 coordinator.cancelPageSession(pageSessionId)
+
+                configurationQueryService.requireSelection(realmSelection)
 
                 val settings = settingsStore.effectiveSettings.first().settings
                 val selection = selectionResolver.resolve(settings)
@@ -252,6 +264,7 @@ class ImgGenVM(
                 val requestPrompt = _prompt.value
                 val sourceImages = _referenceImages.value
                 val request = ImageGenerationRequest(
+                    realmAccess = realmSelection.access,
                     source = ImageGenerationSource.Page(pageSessionId),
                     selection = selection,
                     prompt = requestPrompt,

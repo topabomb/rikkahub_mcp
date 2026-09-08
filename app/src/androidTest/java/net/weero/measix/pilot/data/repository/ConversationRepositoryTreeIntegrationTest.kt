@@ -102,7 +102,7 @@ class ConversationRepositoryTreeIntegrationTest {
     @Test
     fun summaryTreeCommitRollsBackMasterAndProjectionsWhenChildDeletionFails() = runBlocking<Unit> {
         val assistant = ConfigurationReference.random()
-        val owned = artifactStore.createFromBytes(byteArrayOf(1, 2, 3), "summary.txt", origin = ArtifactOrigin.USER)
+        val owned = artifactStore.createFromBytes(ConfigurationScope.Personal, byteArrayOf(1, 2, 3), "summary.txt", origin = ArtifactOrigin.USER)
         val attachment = UIMessagePart.Document(owned.uri.toString(), "summary.txt", "text/plain")
         val user = UIMessage(role = MessageRole.USER, parts = listOf(UIMessagePart.Text("request"), attachment)).toMessageNode()
         val answer = UIMessage.assistant("answer").toMessageNode()
@@ -228,7 +228,7 @@ class ConversationRepositoryTreeIntegrationTest {
     fun treeDeleteAndRestoreKeepScopedNodesAndArtifactReferencesAtomic() = runBlocking {
         val masterId = Uuid.random()
         val assistantId = ConfigurationReference.random()
-        val owned = artifactStore.createFromBytes(
+        val owned = artifactStore.createFromBytes(ConfigurationScope.Personal,
             byteArrayOf(1, 2, 3),
             "tree.txt",
             origin = ArtifactOrigin.USER,
@@ -264,7 +264,7 @@ class ConversationRepositoryTreeIntegrationTest {
         try {
             val deleted = coordinator.withRootTree(scope, master.id) {
                 coordinator.deleteCapturingTree(master.id) { tree ->
-                    retention = artifactStore.retainNodesForUndo((listOf(tree.root) + tree.children).map { it.nodes })
+                    retention = artifactStore.retainNodesForUndo(ConfigurationScope.Personal, (listOf(tree.root) + tree.children).map { it.nodes })
                 }
             }
             assertNull(repository.getConversationById(master.id))
@@ -286,7 +286,7 @@ class ConversationRepositoryTreeIntegrationTest {
     @Test
     fun messagePublicationQueuedBeforeGarbageCollectionWinsTheLifecycleLock() = runBlocking {
         artifactStore.ensureReferenceProjection()
-        val owned = artifactStore.createFromBytes(
+        val owned = artifactStore.createFromBytes(ConfigurationScope.Personal,
             byteArrayOf(4, 5, 6),
             "race.txt",
             origin = ArtifactOrigin.USER,

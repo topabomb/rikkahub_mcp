@@ -1,5 +1,7 @@
 package net.weero.measix.pilot.data.files
 
+import net.weero.measix.pilot.data.configuration.ConfigurationScope
+
 import android.content.Context
 import android.content.ContextWrapper
 import androidx.room.Room
@@ -78,7 +80,7 @@ class ManagedFileCreationIntegrationTest {
         }
         val results = (0 until 12).map { index ->
             async(Dispatchers.IO) {
-                index to store.createFromBytes(
+                index to store.createFromBytes(scopeFor(index),
                     "payload-$index".toByteArray(), "original.txt", "text/plain", origin = ArtifactOrigin.USER,
                 )
             }
@@ -87,6 +89,7 @@ class ManagedFileCreationIntegrationTest {
         assertEquals(12, results.map { it.second.localRef.relativePath }.toSet().size)
         results.forEach { (index, owned) ->
             assertEquals(ArtifactState.ACTIVE.name, database.artifactDao().getById(owned.entity.id)!!.state)
+            assertEquals(scopeFor(index), newStore().get(owned.entity.id)?.scope)
             assertArrayEquals("payload-$index".toByteArray(), store.file(owned.localRef).readBytes())
             assertEquals(store.file(owned.localRef), store.resolveToolPath(owned.localRef.toolPath()!!))
         }
@@ -100,13 +103,16 @@ class ManagedFileCreationIntegrationTest {
         assertTrue(File(root, ArtifactPayloadStore.STAGING_FOLDER).listFiles().orEmpty().isEmpty())
     }
 
+    private fun scopeFor(index: Int): ConfigurationScope = if (index % 2 == 0) ConfigurationScope.Personal else
+        ConfigurationScope.Enterprise(me.rerere.common.configuration.EnterpriseAuthority("local:example", "deployment"), "user-$index")
+
     @Test
     fun metadataWithoutPayloadStillReservesItsName() = runBlocking {
-        val first = store.createFromBytes(byteArrayOf(1), "a.txt", "text/plain", origin = ArtifactOrigin.USER)
+        val first = store.createFromBytes(ConfigurationScope.Personal, byteArrayOf(1), "a.txt", "text/plain", origin = ArtifactOrigin.USER)
         assertTrue(store.file(first.localRef).delete())
         assertTrue(database.artifactDao().existsByPath(first.localRef.relativePath))
 
-        val second = store.createFromBytes(byteArrayOf(2), "b.txt", "text/plain", origin = ArtifactOrigin.USER)
+        val second = store.createFromBytes(ConfigurationScope.Personal, byteArrayOf(2), "b.txt", "text/plain", origin = ArtifactOrigin.USER)
 
         assertEquals("upload/bbbbbbb.txt", second.localRef.relativePath)
         assertFalse(store.file(first.localRef).exists())

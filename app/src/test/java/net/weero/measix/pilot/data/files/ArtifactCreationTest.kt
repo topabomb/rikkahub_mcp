@@ -1,5 +1,7 @@
 package net.weero.measix.pilot.data.files
 
+import net.weero.measix.pilot.data.configuration.ConfigurationScope
+
 import me.rerere.common.configuration.ConfigurationReference
 
 import android.content.Context
@@ -75,7 +77,7 @@ internal class ArtifactCreationTest : ArtifactStoreLifecycleTestBase() {
             candidates = candidates,
             netReclaimedEstimatedTokens = candidates.sumOf { it.netReclaimEstimatedTokens },
         )
-        val staged = ToolOutputStore(store).stageCompaction(plan)
+        val staged = ToolOutputStore(store).stageCompaction(ConfigurationScope.Personal, plan)
         val lease = requireNotNull(staged.lease)
         val artifactIds = staged.replacements.values.map { requireNotNull(it.archive).ref }
 
@@ -111,11 +113,11 @@ internal class ArtifactCreationTest : ArtifactStoreLifecycleTestBase() {
             netReclaimedEstimatedTokens = candidate.netReclaimEstimatedTokens,
         )
         val below = candidate(minimum - 1)
-        val belowFailure = runCatching { ToolOutputStore(store).stageCompaction(plan(below)) }.exceptionOrNull()
+        val belowFailure = runCatching { ToolOutputStore(store).stageCompaction(ConfigurationScope.Personal, plan(below)) }.exceptionOrNull()
         assertTrue(belowFailure is IllegalArgumentException)
 
         val candidate = candidate(minimum)
-        val staged = ToolOutputStore(store).stageCompaction(plan(candidate))
+        val staged = ToolOutputStore(store).stageCompaction(ConfigurationScope.Personal, plan(candidate))
 
         val replacement = staged.replacements.getValue(candidate.locator)
         assertEquals(minimum, candidate.netReclaimEstimatedTokens)
@@ -135,7 +137,7 @@ internal class ArtifactCreationTest : ArtifactStoreLifecycleTestBase() {
         val archivedText = "stable output ".repeat(200)
         val originalTokens = estimateStableTextTokens(archivedText)
         val markerTokens = estimatedToolOutputMarkerTokens("completed", archivedText)
-        val staged = ToolOutputStore(store).stageCompaction(
+        val staged = ToolOutputStore(store).stageCompaction(ConfigurationScope.Personal,
             ToolOutputCompactionPlan(
                 candidates = listOf(
                     ToolOutputCompactionCandidate(
@@ -190,7 +192,7 @@ internal class ArtifactCreationTest : ArtifactStoreLifecycleTestBase() {
                 ),
             ),
         )
-        val delta = store.prepareReferenceDelta(listOf(node), emptyList())
+        val delta = store.prepareReferenceDelta(ConfigurationScope.Personal, listOf(node), emptyList())
         assertEquals(
             archive.ref,
             delta.references.single().artifactId,
@@ -217,7 +219,7 @@ internal class ArtifactCreationTest : ArtifactStoreLifecycleTestBase() {
                 payloadStore.file("$folder/$stem.bin").apply { parentFile!!.mkdirs(); writeText(stem) }
             }
             val selectingStore = testStore(payloadStore, candidates)
-            val owned = selectingStore.createFromBytes(byteArrayOf(1), "sample.bin", folder = folder, origin = ArtifactOrigin.USER)
+            val owned = selectingStore.createFromBytes(ConfigurationScope.Personal, byteArrayOf(1), "sample.bin", folder = folder, origin = ArtifactOrigin.USER)
             assertEquals("$folder/${candidates[freeIndex]}.bin", owned.entity.relativePath)
             candidates.take(freeIndex).forEach { stem ->
                 assertEquals(stem, payloadStore.file("$folder/$stem.bin").readText())
@@ -232,7 +234,7 @@ internal class ArtifactCreationTest : ArtifactStoreLifecycleTestBase() {
         (candidates + "aaaaaa-2").forEach { stem ->
             payloadStore.file("$folder/$stem.bin").apply { parentFile!!.mkdirs(); writeText(stem) }
         }
-        val owned = testStore(payloadStore, candidates).createFromBytes(
+        val owned = testStore(payloadStore, candidates).createFromBytes(ConfigurationScope.Personal,
             byteArrayOf(1), "sample.bin", folder = folder, origin = ArtifactOrigin.USER,
         )
         assertEquals("$folder/aaaaaa-3.bin", owned.entity.relativePath)
@@ -246,7 +248,7 @@ internal class ArtifactCreationTest : ArtifactStoreLifecycleTestBase() {
             payloadStore.file("$folder/$stem.bin").apply { parentFile!!.mkdirs(); writeText(stem) }
         }
         val counted = spyk(payloadStore)
-        val owned = testStore(counted, candidates).createFromBytes(
+        val owned = testStore(counted, candidates).createFromBytes(ConfigurationScope.Personal,
             byteArrayOf(1), "sample.bin", folder = folder, origin = ArtifactOrigin.USER,
         )
         assertEquals("$folder/aaaaaa-2.bin", owned.entity.relativePath)
@@ -265,7 +267,7 @@ internal class ArtifactCreationTest : ArtifactStoreLifecycleTestBase() {
             database.artifactDao().insert(entity("$folder/000000-${index + 3}.png", folder, state, null))
         }
 
-        val owned = store.createFromBytes(TINY_PNG, "image.png", "image/png", folder, ArtifactOrigin.USER)
+        val owned = store.createFromBytes(ConfigurationScope.Personal, TINY_PNG, "image.png", "image/png", folder, ArtifactOrigin.USER)
 
         assertEquals("$folder/000000-6.png", owned.entity.relativePath)
         assertEquals("existing", existing.readText())
@@ -280,7 +282,7 @@ internal class ArtifactCreationTest : ArtifactStoreLifecycleTestBase() {
         val folder = folder()
         val created = (0 until 20).map { value ->
             async(Dispatchers.Default) {
-                value to store.createFromBytes(byteArrayOf(value.toByte()), "sample.bin", folder = folder, origin = ArtifactOrigin.USER)
+                value to store.createFromBytes(ConfigurationScope.Personal, byteArrayOf(value.toByte()), "sample.bin", folder = folder, origin = ArtifactOrigin.USER)
             }
         }.awaitAll()
         assertEquals(20, created.map { it.second.entity.relativePath }.toSet().size)
@@ -292,8 +294,8 @@ internal class ArtifactCreationTest : ArtifactStoreLifecycleTestBase() {
     fun `structural copies preserve source origin while allocating a distinct short name`() = runTest {
         val folder = folder()
         ArtifactOrigin.entries.forEach { origin ->
-            val source = store.createFromBytes(byteArrayOf(1), "source.bin", folder = folder, origin = origin)
-            val copy = store.createFromUri(source.uri, folder, origin = ArtifactOrigin.USER)
+            val source = store.createFromBytes(ConfigurationScope.Personal, byteArrayOf(1), "source.bin", folder = folder, origin = origin)
+            val copy = store.createFromUri(ConfigurationScope.Personal, source.uri, folder, origin = ArtifactOrigin.USER)
             assertEquals(origin.name, copy.entity.origin)
             assertTrue(source.entity.relativePath != copy.entity.relativePath)
         }
@@ -318,7 +320,7 @@ internal class ArtifactCreationTest : ArtifactStoreLifecycleTestBase() {
         val folder = folder()
         val existing = stageBytes(folder, byteArrayOf(7), "000000.bin")
         val source = payloadStore.file("$folder/source.bin").apply { parentFile!!.mkdirs(); writeBytes(byteArrayOf(1, 2, 3)) }
-        val result = runCatching { store.createFromUri(source.toUri(), folder, maxBytes = 1) }
+        val result = runCatching { store.createFromUri(ConfigurationScope.Personal, source.toUri(), folder, maxBytes = 1) }
         assertTrue(result.isFailure)
         assertEquals(listOf(existing.stagingToken), payloadStore.listStagingTokens())
         assertTrue(database.artifactDao().listAllStatesByFolder(folder).first().isEmpty())
@@ -346,7 +348,7 @@ internal class ArtifactCreationTest : ArtifactStoreLifecycleTestBase() {
             fileNameCandidates = { List(4) { "000000" } },
         )
         val failure = runCatching {
-            guardedStore.createFromBytes(byteArrayOf(1), "sample.bin", folder = folder, origin = ArtifactOrigin.USER)
+            guardedStore.createFromBytes(ConfigurationScope.Personal, byteArrayOf(1), "sample.bin", folder = folder, origin = ArtifactOrigin.USER)
         }.exceptionOrNull()
         assertTrue(failure is IllegalStateException)
         assertEquals("other owner", payloadStore.file("$folder/000000.bin").readText())
@@ -392,7 +394,7 @@ internal class ArtifactCreationTest : ArtifactStoreLifecycleTestBase() {
         every { testContext.contentResolver } returns resolver
         val ioStore = testStore(ArtifactPayloadStore(testContext))
         val first = async(Dispatchers.Default) {
-            ioStore.createFromUri(android.net.Uri.parse("content://test/source"), folder, "sample.bin", "application/octet-stream")
+            ioStore.createFromUri(ConfigurationScope.Personal, android.net.Uri.parse("content://test/source"), folder, "sample.bin", "application/octet-stream")
         }
         try {
             kotlinx.coroutines.withContext(Dispatchers.IO) {
@@ -400,7 +402,7 @@ internal class ArtifactCreationTest : ArtifactStoreLifecycleTestBase() {
             }
             val second = kotlinx.coroutines.withContext(Dispatchers.Default) {
                 kotlinx.coroutines.withTimeout(5_000) {
-                    ioStore.createFromBytes(byteArrayOf(4), "sample.bin", folder = folder, origin = ArtifactOrigin.USER)
+                    ioStore.createFromBytes(ConfigurationScope.Personal, byteArrayOf(4), "sample.bin", folder = folder, origin = ArtifactOrigin.USER)
                 }
             }
             assertEquals("$folder/000000-2.bin", second.entity.relativePath)
@@ -422,7 +424,7 @@ internal class ArtifactCreationTest : ArtifactStoreLifecycleTestBase() {
         }
         val ioStore = testStore(guarded)
         val creation = async {
-            ioStore.createFromBytes(byteArrayOf(1), "sample.bin", folder = folder, origin = ArtifactOrigin.USER)
+            ioStore.createFromBytes(ConfigurationScope.Personal, byteArrayOf(1), "sample.bin", folder = folder, origin = ArtifactOrigin.USER)
         }
         val failure = runCatching { creation.await() }.exceptionOrNull()
         assertTrue(failure is kotlin.coroutines.cancellation.CancellationException)
@@ -434,7 +436,7 @@ internal class ArtifactCreationTest : ArtifactStoreLifecycleTestBase() {
     fun `create publishes active metadata and payload together`() = runTest {
         val folder = folder()
 
-        val owned = store.createFromBytes(
+        val owned = store.createFromBytes(ConfigurationScope.Personal,
             bytes = byteArrayOf(1, 2, 3),
             displayName = "sample.bin",
             folder = folder,
@@ -461,7 +463,7 @@ internal class ArtifactCreationTest : ArtifactStoreLifecycleTestBase() {
         }
         lockAcquired.await()
         val creator = async {
-            store.createFromBytes(byteArrayOf(1), "cancelled.bin", folder = folder, origin = ArtifactOrigin.USER)
+            store.createFromBytes(ConfigurationScope.Personal, byteArrayOf(1), "cancelled.bin", folder = folder, origin = ArtifactOrigin.USER)
         }
         runCurrent()
         assertTrue(payloadStore.listStagingTokens().isEmpty())
@@ -477,13 +479,13 @@ internal class ArtifactCreationTest : ArtifactStoreLifecycleTestBase() {
     @Test
     fun `batch publication validates every root before consuming any ownership token`() = runTest {
         val folder = folder()
-        val rooted = store.createFromBytes(
+        val rooted = store.createFromBytes(ConfigurationScope.Personal,
             byteArrayOf(1),
             "rooted.bin",
             folder = folder,
             origin = ArtifactOrigin.USER,
         )
-        val unrooted = store.createFromBytes(
+        val unrooted = store.createFromBytes(ConfigurationScope.Personal,
             byteArrayOf(2),
             "unrooted.bin",
             folder = folder,

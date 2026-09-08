@@ -309,6 +309,7 @@ class McpRuntimeCoordinator(
     }
 
     suspend fun callTool(
+        realmAccess: net.weero.measix.pilot.data.enterprise.RealmAccess,
         serverId: ConfigurationReference,
         toolName: String,
         expectedDefinitionDigest: String,
@@ -380,7 +381,7 @@ class McpRuntimeCoordinator(
             serverName = preparation.serverName,
             generation = preparation.generation,
         )
-        return when (val outcome = toolCallExecutor.execute(lease, toolName, args, onArtifactCreated)) {
+        return when (val outcome = toolCallExecutor.execute(realmAccess.scope, lease, toolName, args, onArtifactCreated)) {
             is McpInvocationOutcome.Succeeded -> outcome.content.also {
                 logMcp(preparation.serverName, "Tool '$toolName' succeeded")
             }
