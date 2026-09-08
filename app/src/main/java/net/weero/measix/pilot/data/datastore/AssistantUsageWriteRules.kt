@@ -19,7 +19,7 @@ internal fun requireAssistantUsageWriteAllowed(
     // Reset is a preference deletion, not an implicit selection of a replacement resource.
     if (proposed == null) return
     requireSelectable(ConfigurationCategory.ASSISTANT, assistantId)
-    if (proposed.chatModelId != before?.chatModelId) {
+    if (proposed.chatModelId != before?.chatModelId && proposed.chatModelId?.value != null) {
         val selected = resolved.assistantModel(assistantId)
         if (!selected.isAvailable) throw SettingsLockedException(
             "assistantUsage/$assistantId/chatModelId", selected.unavailableReason?.name ?: "model_selection_required",

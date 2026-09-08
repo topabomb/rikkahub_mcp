@@ -3,6 +3,7 @@ package net.weero.measix.pilot.service
 import android.content.Context
 import android.content.ContextWrapper
 import androidx.datastore.preferences.core.PreferenceDataStoreFactory
+import androidx.datastore.preferences.core.edit
 import androidx.test.core.app.ApplicationProvider
 import java.io.File
 import kotlinx.coroutines.CancellationException
@@ -58,8 +59,11 @@ class ModelExecutionServiceTest {
             assertEquals(personal.model.model.tools, personal.userSettings.getChatModel(personal.assistant)!!.tools)
             env.sessions.enrollFixture(exampleEnterprisePackage())
             val access = env.sessions.captureSelectedRealmAccess() as RealmAccess.Enterprise
-            ConfigurationApplicationService(env.settings, env.sessions, env.gate).updateAssistantUsage(access, env.assistant.id) {
-                AssistantUsagePreferences(env.assistant.id, builtInSearch = UsageValue(false), enableWebSearch = UsageValue(true))
+            env.preferences.edit { stored ->
+                val document = net.weero.measix.pilot.utils.JsonInstant.decodeFromString<net.weero.measix.pilot.data.datastore.UserSettingsDocument>(stored[SettingsStore.USER_SETTINGS]!!)
+                stored[SettingsStore.USER_SETTINGS] = net.weero.measix.pilot.utils.JsonInstant.encodeToString(document.copy(
+                    preferences = document.preferences.withAssistantUsage(access.scope,
+                        AssistantUsagePreferences(env.assistant.id, builtInSearch = UsageValue(false), enableWebSearch = UsageValue(true)))))
             }
             val enterprise = env.capture(access)
             assertTrue(enterprise.assistant.enableWebSearch)
@@ -182,8 +186,9 @@ class ModelExecutionServiceTest {
             override fun getApplicationContext(): Context = this
             override fun getFilesDir(): File = root.resolve("files").apply { mkdirs() }
         }
-        val settings = SettingsStore(context, scope, dataStore = PreferenceDataStoreFactory.create(
-            migrations = listOf(UserSettingsMigration()), scope = scope, produceFile = { root.resolve("settings.preferences_pb") }))
+        val preferences = PreferenceDataStoreFactory.create(
+            migrations = listOf(UserSettingsMigration()), scope = scope, produceFile = { root.resolve("settings.preferences_pb") })
+        val settings = SettingsStore(context, scope, dataStore = preferences)
         val sessions = EnterpriseSessionController(EnterpriseAppliedStore(root.resolve("enterprise")))
         val gate = ApplicationRecoveryGate()
         val service = testModelExecutionService(settings, sessions, gate)

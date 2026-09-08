@@ -1655,4 +1655,6 @@
   <string name="configuration_follow_fast_model">Использовать быструю модель, затем модель чата</string>
   <string name="configuration_remove_favorite">Убрать из избранного</string>
   <string name="search_picker_model_unavailable">Эта модель не поддерживает встроенный поиск. Выберите другой режим поиска или модель.</string>
+  <string name="workspace_preference_partial_failure">Рабочий каталог сброшен, но выбор рабочего пространства не сохранён. Остаётся выбрано прежнее пространство. Повторите попытку.</string>
+  <string name="assistant_use_definition_model">Использовать модель из определения моего ассистента</string>
 </resources>

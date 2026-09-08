@@ -26,7 +26,11 @@ import kotlin.uuid.Uuid
 
 internal sealed interface EnterpriseState {
     data object Loading : EnterpriseState
-    data class Available(val manifest: EnterpriseManifest, val configuration: EnterpriseConfiguration?) : EnterpriseState
+    data class Available(
+        val manifest: EnterpriseManifest,
+        val configuration: EnterpriseConfiguration?,
+        val modelCapabilities: Map<String, me.rerere.ai.provider.ChatTransportCapabilities> = emptyMap(),
+    ) : EnterpriseState
     data class Failed(val reason: String) : EnterpriseState
 }
 
@@ -118,7 +122,7 @@ internal class EnterpriseSessionController(
             applyValidated(candidate, enter = true, replaceSession = true)
         } else {
             val session = EnterpriseSession(Uuid.random().toString(), installedIdentity, nowMillis() + SESSION_LIFETIME_MILLIS)
-            publish(EnterpriseManifest(ENTERPRISE_MANIFEST_SCHEMA_VERSION, EnterpriseSessionPhase.CONFIGURATION_PENDING, session, null, ConfigurationScope.Personal, installedIdentity, current.manifest.feeds), null)
+            publish(EnterpriseManifest(ENTERPRISE_MANIFEST_SCHEMA_VERSION, EnterpriseSessionPhase.CONFIGURATION_PENDING, session, null, ConfigurationScope.Personal, installedIdentity, current.manifest.feeds))
         }
     }
 
@@ -182,7 +186,7 @@ internal class EnterpriseSessionController(
             } else EnterpriseSessionPhase.READY, session, version,
             if (enter) candidate.identity.scope else ConfigurationScope.Personal, candidate.identity, feeds, nowMillis(),
         )
-        return publish(next, candidate.configuration)
+        return publish(next)
     }
 
     suspend fun readPresentation(): EnterprisePresentation = mutex.withLock {
@@ -210,7 +214,7 @@ internal class EnterpriseSessionController(
         }
         if (request.target == selected.access) return@withLock selected
         closePreviousHost(selected.access)
-        val next = publish(current.manifest.copy(selectedScope = request.target.scope), current.configuration)
+        val next = publish(current.manifest.copy(selectedScope = request.target.scope))
         exitSelection(next.manifest)
     }
 
@@ -222,7 +226,7 @@ internal class EnterpriseSessionController(
         val next = withContext(Dispatchers.IO) {
             store.prepareFeed(access.scope, EnterpriseFeed.change(store.readFeed(previous), command, Instant.ofEpochMilli(nowMillis())))
         }
-        publish(current.manifest.copy(feeds = current.manifest.feeds.map { if (it.scope == access.scope) next else it }), current.configuration)
+        publish(current.manifest.copy(feeds = current.manifest.feeds.map { if (it.scope == access.scope) next else it }))
         next
     }
 
@@ -252,7 +256,7 @@ internal class EnterpriseSessionController(
 
     suspend fun portalState(selection: RealmSelection): EnterpriseState.Available = mutex.withLock {
         val current = requirePortalSelection(selection)
-        EnterpriseState.Available(current.manifest, current.configuration)
+        current.toAvailable()
     }
 
     private suspend fun requirePortalSelection(selection: RealmSelection): LoadedEnterpriseState {
@@ -384,12 +388,12 @@ internal class EnterpriseSessionController(
     ): T = mutex.withLock {
         val current = requireSession(allowOffline = true)
         if (!allowsDataAccess(current.manifest, access)) fail("enterprise_data_access_unavailable")
-        operation(EnterpriseState.Available(current.manifest, current.configuration))
+        operation(current.toAvailable())
     }
 
     suspend fun setOffline(offline: Boolean) = mutex.withLock {
         val current = requireSession(allowOffline = true)
-        publish(current.manifest.copy(phase = if (offline) EnterpriseSessionPhase.OFFLINE else EnterpriseSessionPhase.READY), current.configuration)
+        publish(current.manifest.copy(phase = if (offline) EnterpriseSessionPhase.OFFLINE else EnterpriseSessionPhase.READY))
     }
 
     suspend fun captureExitRequest(): EnterpriseExitRequest? = mutex.withLock {
@@ -458,7 +462,7 @@ internal class EnterpriseSessionController(
     private suspend fun beginClosing(manifest: EnterpriseManifest, reason: EnterpriseExitReason): EnterpriseExitToken {
         val closing = manifest.copy(phase = EnterpriseSessionPhase.CLOSING, applied = null,
             selectedScope = ConfigurationScope.Personal, lastConfigurationSyncMillis = null, exitReason = reason)
-        publish(closing, null)
+        publish(closing)
         return closingToken(closing)
     }
 
@@ -471,7 +475,7 @@ internal class EnterpriseSessionController(
         if (manifest.phase != EnterpriseSessionPhase.CLOSING || closingToken(manifest) != token) fail("stale_enterprise_exit")
         if (leases.values.any { it.sessionId == token.access.sessionId }) fail("enterprise_executions_pending")
         val phase = if (token.reason == EnterpriseExitReason.USER_REQUEST) EnterpriseSessionPhase.SIGNED_OUT else EnterpriseSessionPhase.REAUTH_REQUIRED
-        publish(EnterpriseManifest.signedOut(requireNotNull(manifest.session).identity, manifest.feeds).copy(phase = phase), null)
+        publish(EnterpriseManifest.signedOut(requireNotNull(manifest.session).identity, manifest.feeds).copy(phase = phase))
     }
 
     suspend fun pruneUnusedRevisions() = mutex.withLock { prune(manifestForExit()) }
@@ -515,30 +519,30 @@ internal class EnterpriseSessionController(
         val session = manifest.session
         if (manifest.phase == EnterpriseSessionPhase.CLOSING) {
             loaded = LoadedEnterpriseState(manifest, null)
-            publishState(EnterpriseState.Available(manifest, null))
+            publishState(requireNotNull(loaded).toAvailable())
         } else if (session != null && session.expiresAtMillis <= nowMillis()) {
             beginClosing(manifest, EnterpriseExitReason.AUTHORIZATION_EXPIRED)
         } else {
             val recovered = withContext(Dispatchers.IO) { store.load() }
             prune(recovered.manifest)
             loaded = recovered
-            publishState(EnterpriseState.Available(recovered.manifest, recovered.configuration))
+            publishState(recovered.toAvailable())
         }
         return requireNotNull(loaded)
     }
 
     /** Once staging succeeds, commit and publication are one owned, cancellation-safe boundary. */
-    private suspend fun publish(manifest: EnterpriseManifest, configuration: EnterpriseConfiguration?): EnterpriseState.Available {
+    private suspend fun publish(manifest: EnterpriseManifest): EnterpriseState.Available {
         currentCoroutineContext().ensureActive()
         return withContext(NonCancellable + Dispatchers.IO) {
-            store.commit(manifest)
-            loaded = LoadedEnterpriseState(manifest, configuration)
+            val committed = store.commit(manifest)
+            loaded = committed
             if (manifest.phase !in setOf(EnterpriseSessionPhase.READY, EnterpriseSessionPhase.OFFLINE)) {
                 leases.values.forEach(EnterpriseBindingLease::revoke)
             } else {
                 leases.values.filter { it.sessionId != manifest.session?.id }.forEach(EnterpriseBindingLease::revoke)
             }
-            EnterpriseState.Available(manifest, configuration).also(::publishState)
+            committed.toAvailable().also(::publishState)
         }
     }
 

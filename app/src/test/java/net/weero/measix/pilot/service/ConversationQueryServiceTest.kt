@@ -70,6 +70,7 @@ class ConversationQueryServiceTest {
             attachmentPreviewProjector = mockk(relaxed = true),
             sessions = EnterpriseSessionController(EnterpriseAppliedStore(temporary.newFolder())).apply { recover() },
             recoveryGate = ApplicationRecoveryGate().also { it.ready() },
+            settings = mockk(),
         )
     }
 }

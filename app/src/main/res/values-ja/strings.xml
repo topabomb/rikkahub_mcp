@@ -1655,4 +1655,6 @@
   <string name="configuration_follow_fast_model">高速モデルに従い、未設定ならチャットモデルに従う</string>
   <string name="configuration_remove_favorite">お気に入りから削除</string>
   <string name="search_picker_model_unavailable">このモデルは組み込み検索に対応していません。別の検索方法またはモデルを選択してください。</string>
+  <string name="workspace_preference_partial_failure">作業ディレクトリはリセットされましたが、ワークスペースの選択を保存できませんでした。以前のワークスペースが選択されたままです。再試行してください。</string>
+  <string name="assistant_use_definition_model">自分のアシスタント定義のモデルを使用</string>
 </resources>

@@ -22,13 +22,11 @@ import kotlin.uuid.Uuid
 class ChatNavigation internal constructor(
     private val create: (ConfigurationReference?, String?, List<Uri>) -> Unit,
     private val open: (Uuid, Uuid?) -> Unit,
-    private val select: (ConfigurationReference, Boolean) -> Unit,
 ) {
     fun newChat(assistantId: ConfigurationReference? = null, initText: String? = null, initFiles: List<Uri> = emptyList()) =
         create(assistantId, initText, initFiles)
 
     fun existingChat(chatId: Uuid, nodeId: Uuid? = null) = open(chatId, nodeId)
-    fun selectAssistant(assistantId: ConfigurationReference, createNew: Boolean) = select(assistantId, createNew)
 }
 
 /** Click handlers retain the rendered realm; delayed navigation never recaptures a newer session. */
@@ -60,19 +58,6 @@ fun rememberChatNavigation(navigator: Navigator = LocalNavController.current): C
                 val original = capturedAccess
                 if (original == null) toaster.show(failure, type = ToastType.Error) else {
                     navigator.clearAndNavigate(Screen.Chat(ConversationOpenRequest.OpenExisting(id, original), nodeId = node?.toString()))
-                }
-            },
-            select = { assistant, createNew ->
-                val original = capturedAccess
-                if (original == null) toaster.show(failure, type = ToastType.Error) else scope.launch {
-                    try {
-                        val request = application.selectAssistantRequest(original, assistant, createNew)
-                        navigator.clearAndNavigate(Screen.Chat(request))
-                    } catch (cancelled: CancellationException) {
-                        throw cancelled
-                    } catch (_: Exception) {
-                        toaster.show(failure, type = ToastType.Error)
-                    }
                 }
             },
         )

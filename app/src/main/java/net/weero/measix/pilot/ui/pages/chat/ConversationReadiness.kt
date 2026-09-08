@@ -48,7 +48,9 @@ import net.weero.measix.pilot.ui.adaptive.LocalAdaptiveLayoutInfo
 import net.weero.measix.pilot.ui.components.ui.UIAvatar
 import net.weero.measix.pilot.ui.theme.LocalChatFontSizeRatio
 import net.weero.measix.pilot.ui.theme.asChatChrome
-import net.weero.measix.pilot.service.McpServerPresentation
+import net.weero.measix.pilot.service.AssistantMcpChoice
+import me.rerere.ai.provider.Model
+import net.weero.measix.pilot.data.model.Avatar
 import kotlin.uuid.Uuid
 
 internal enum class ModelReadiness {
@@ -83,6 +85,7 @@ internal enum class MemoryReadiness {
 internal data class ConversationReadiness(
     val modelState: ModelReadiness,
     val modelName: String?,
+    val modelUnavailableReason: net.weero.measix.pilot.data.configuration.ConfigurationUnavailableReason? = null,
     val mcpState: McpReadiness,
     val selectedMcpCount: Int,
     val readyMcpCount: Int,
@@ -102,31 +105,31 @@ internal data class ConversationReadiness(
 }
 
 internal fun Settings.effectiveLocalToolCount(
-    assistant: Assistant,
+    assistant: Assistant?,
     imageGenerationAvailable: Boolean,
-): Int = assistant.localTools.distinct().count { option ->
+): Int = assistant?.localTools.orEmpty().distinct().count { option ->
     option != LocalToolOption.TextToImage || imageGenerationAvailable
 }
 
 internal fun Settings.buildConversationReadiness(
-    assistant: Assistant,
+    assistant: Assistant?,
     workspaceNamesById: Map<Uuid, String>,
     memoryCount: Int,
     imageGenerationAvailable: Boolean = false,
-    mcpServers: List<McpServerPresentation> = emptyList(),
+    mcpServers: List<AssistantMcpChoice> = emptyList(),
+    selectedModel: Model?,
+    hasAvailableChatModel: Boolean,
+    modelUnavailableReason: net.weero.measix.pilot.data.configuration.ConfigurationUnavailableReason? = null,
 ): ConversationReadiness {
-    val hasAvailableChatModel = providers.any { provider ->
-        provider.enabled && provider.models.any { it.type == ModelType.CHAT }
-    }
-    val selectedModel = getChatModel(assistant)
     val modelState = when {
+        assistant == null -> ModelReadiness.NOT_SELECTED
         !hasAvailableChatModel -> ModelReadiness.NOT_CONFIGURED
         selectedModel == null -> ModelReadiness.NOT_SELECTED
         else -> ModelReadiness.READY
     }
 
-    val enabledMcpServers = mcpServers.filter { it.enabled }
-    val selectedMcpServers = enabledMcpServers.filter { it.serverId in assistant.mcpServers }
+    val enabledMcpServers = mcpServers.filter { it.unavailableReason == null }
+    val selectedMcpServers = enabledMcpServers.filter { it.selected }
     val selectedMcpCount = selectedMcpServers.size
     val readyMcpCount = selectedMcpServers.count { it.isReady }
     val selectedStatuses = selectedMcpServers.map { it.status }
@@ -148,24 +151,25 @@ internal fun Settings.buildConversationReadiness(
         else -> McpReadiness.READY
     }
 
-    val workspaceName = assistant.workspaceId?.let(workspaceNamesById::get)
+    val workspaceName = assistant?.workspaceId?.let(workspaceNamesById::get)
     val workspaceState = when {
         workspaceNamesById.isEmpty() -> WorkspaceReadiness.NOT_CONFIGURED
         workspaceName == null -> WorkspaceReadiness.NOT_BOUND
         else -> WorkspaceReadiness.READY
     }
 
-    val memoryState = if (assistant.enableMemory) MemoryReadiness.READY else MemoryReadiness.DISABLED
+    val memoryState = if (assistant?.enableMemory == true) MemoryReadiness.READY else MemoryReadiness.DISABLED
 
     return ConversationReadiness(
         modelState = modelState,
         modelName = selectedModel?.displayName?.ifBlank { selectedModel.modelId },
+        modelUnavailableReason = modelUnavailableReason,
         mcpState = mcpState,
         selectedMcpCount = selectedMcpCount,
         readyMcpCount = readyMcpCount,
         enabledMcpCount = enabledMcpServers.size,
         localToolCount = effectiveLocalToolCount(assistant, imageGenerationAvailable),
-        persistedLocalToolCount = assistant.localTools.distinct().size,
+        persistedLocalToolCount = assistant?.localTools.orEmpty().distinct().size,
         memoryState = memoryState,
         memoryCount = memoryCount,
         workspaceState = workspaceState,
@@ -176,7 +180,7 @@ internal fun Settings.buildConversationReadiness(
 @Composable
 internal fun ConversationReadinessCard(
     readiness: ConversationReadiness,
-    assistant: Assistant,
+    assistant: Assistant?,
     compact: Boolean,
     onSwitchAssistant: () -> Unit,
     onManageAssistant: () -> Unit,
@@ -212,7 +216,7 @@ internal fun ConversationReadinessCard(
             ReadinessRow(
                 icon = HugeIcons.Settings03,
                 label = stringResource(R.string.chat_readiness_model_title),
-                status = when (readiness.modelState) {
+                status = readiness.modelUnavailableReason?.let { net.weero.measix.pilot.ui.components.ai.configurationUnavailableText(it) } ?: when (readiness.modelState) {
                     ModelReadiness.NOT_CONFIGURED ->
                         stringResource(R.string.chat_readiness_model_not_configured)
 
@@ -461,13 +465,13 @@ private fun ReadinessStatus(
 
 @Composable
 private fun ReadinessTitleRow(
-    assistant: Assistant,
+    assistant: Assistant?,
     scale: Float,
     onSwitchAssistant: () -> Unit,
     onManageAssistant: () -> Unit,
 ) {
     val defaultAssistantName = stringResource(R.string.assistant_page_default_assistant)
-    val displayName = assistant.name.ifEmpty { defaultAssistantName }
+    val displayName = assistant?.name?.ifEmpty { defaultAssistantName } ?: stringResource(R.string.configuration_reason_missing)
     val titlePrefix = stringResource(R.string.chat_readiness_title_prefix)
     val titleSuffix = stringResource(R.string.chat_readiness_title_suffix)
     val titleStyle = MaterialTheme.typography.titleMedium.copy(
@@ -510,12 +514,12 @@ private fun ReadinessTitleRow(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(4.dp),
             ) {
-                val hideAvatar = assistant.useAssistantAvatar &&
+                val hideAvatar = assistant?.useAssistantAvatar == true &&
                     LocalAdaptiveLayoutInfo.current.chatLayoutMode == ChatLayoutMode.ListDetail
                 if (!hideAvatar) {
                     UIAvatar(
                         name = displayName,
-                        value = assistant.avatar,
+                        value = assistant?.avatar ?: Avatar.Dummy,
                         modifier = Modifier.size((20 * scale).dp),
                     )
                 }
@@ -540,6 +544,7 @@ private fun ReadinessTitleRow(
         // 右侧：配置助手按钮，右对齐
         FilledTonalIconButton(
             onClick = onManageAssistant,
+            enabled = assistant?.id is me.rerere.common.configuration.ConfigurationReference.User,
             modifier = Modifier.size(30.dp),
         ) {
             Icon(

@@ -81,7 +81,7 @@ class ModelCatalogAndroidTest {
             sessions.enrollLocal(packet.identity, { packet.identity }, { packet })
             val gate = ApplicationRecoveryGate().apply { ready() }
             val queries = ConfigurationQueryService(settings, sessions, gate)
-            val commands = ConfigurationApplicationService(settings, sessions, gate)
+            val commands = ConfigurationApplicationService(settings, sessions, gate, io.mockk.mockk(), io.mockk.mockk())
             val catalog = (queries.observeModelCatalog().first { it is ModelCatalogReadState.Available }
                 as ModelCatalogReadState.Available).catalog
             val managed = catalog.groups.single { it.userProviderId == null }.models.first { it.model.type == ModelType.CHAT }.model

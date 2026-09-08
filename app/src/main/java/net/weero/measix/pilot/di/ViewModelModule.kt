@@ -42,6 +42,7 @@ val viewModelModule = module {
             artifactUseCase = get(),
             favoriteService = get(),
             chatErrorStore = get(),
+            configurationApplicationService = get(),
         )
     }
     viewModelOf(::ChatDrawerVM)

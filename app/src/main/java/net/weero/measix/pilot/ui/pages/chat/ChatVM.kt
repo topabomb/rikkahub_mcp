@@ -34,11 +34,14 @@ import net.weero.measix.pilot.R
 import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.datastore.SettingsLockedException
 import net.weero.measix.pilot.data.datastore.SettingsStore
-import net.weero.measix.pilot.data.datastore.getConversationAssistant
 import net.weero.measix.pilot.data.model.Assistant
 import net.weero.measix.pilot.data.model.Avatar
 import net.weero.measix.pilot.data.model.MessageNode
 import net.weero.measix.pilot.service.ChatError
+import net.weero.measix.pilot.service.ConfigurationApplicationService
+import net.weero.measix.pilot.service.ConversationAssistantTarget
+import net.weero.measix.pilot.data.configuration.AssistantPreferenceChange
+import net.weero.measix.pilot.data.configuration.ResourceSelectionSlot
 import net.weero.measix.pilot.service.ChatErrorStore
 import net.weero.measix.pilot.service.terminalChatError
 import net.weero.measix.pilot.service.ConversationTurnService
@@ -55,16 +58,13 @@ import net.weero.measix.pilot.service.FavoriteService
 import net.weero.measix.pilot.service.runtime.ConversationPresentation
 import net.weero.measix.pilot.service.runtime.ConversationPresentationSnapshot
 import net.weero.measix.pilot.service.runtime.ToolInteractionDecision
-import net.weero.measix.pilot.ui.components.ai.SearchMode
-import net.weero.measix.pilot.ui.components.ai.searchModeEnablesBuiltIn
-import net.weero.measix.pilot.ui.components.ai.searchModeEnablesLocal
 import net.weero.measix.pilot.ui.hooks.ChatInputState
 import net.weero.measix.pilot.utils.UpdateChecker
 import net.weero.measix.pilot.utils.base64Decode
 import kotlin.uuid.Uuid
 import java.util.concurrent.atomic.AtomicBoolean
 
-class ChatVM(
+class ChatVM internal constructor(
     private val request: net.weero.measix.pilot.service.ConversationOpenRequest,
     private val context: Application,
     private val settingsStore: SettingsStore,
@@ -75,6 +75,7 @@ class ChatVM(
     private val artifactUseCase: ArtifactUseCase,
     private val favoriteService: FavoriteService,
     private val chatErrorStore: ChatErrorStore,
+    private val configurationApplicationService: ConfigurationApplicationService,
 ) : ViewModel() {
     private val _conversationId: Uuid = request.id
     private sealed interface PageState {
@@ -234,13 +235,6 @@ class ChatVM(
     val settings: StateFlow<Settings> =
         settingsStore.effectiveSettings.map { it.settings }.stateIn(viewModelScope, SharingStarted.Eagerly, Settings.dummy())
 
-    // 网络搜索(每个助手独立)
-    val enableWebSearch = combine(settings, snapshot) { currentSettings, currentSnapshot ->
-        currentSnapshot?.let { snapshot ->
-            currentSettings.getConversationAssistant(snapshot.header.assistantId).enableWebSearch
-        } ?: false
-    }.stateIn(viewModelScope, SharingStarted.Eagerly, false)
-
     // 错误状态
     val errors: StateFlow<List<ChatError>> = fromPage(emptyList()) { state ->
         conversationQueryService.observeForView(state.lease, emptyList()) { chatErrorStore.errorsFor(_conversationId) }
@@ -303,41 +297,39 @@ class ChatVM(
         if (previousAvatar != Avatar.Image(committedUri.toString())) artifactUseCase.maintainStorage()
     }
 
-    fun updateSearchMode(assistantId: ConfigurationReference, mode: SearchMode) {
-        viewModelScope.launch {
-            val enableWebSearch = searchModeEnablesLocal(mode)
-            val enableBuiltIn = searchModeEnablesBuiltIn(mode)
-            try {
-                settingsStore.updateLocal { settings ->
-                    settings.copy(assistants = settings.assistants.map { assistant ->
-                        if (assistant.id == assistantId) assistant.copy(
-                            enableWebSearch = enableWebSearch,
-                            builtInSearch = enableBuiltIn,
-                        ) else assistant
-                    })
-                }
-            } catch (error: SettingsLockedException) {
-                reportLockedSettingsChange(error)
-            }
+    internal suspend fun changeAssistantPreference(target: ConversationAssistantTarget, change: AssistantPreferenceChange): Boolean =
+        runConfigurationCommand(target) { configurationApplicationService.changeAssistantPreference(target, change) }
+
+    internal suspend fun selectSearchService(target: ConversationAssistantTarget, reference: ConfigurationReference): Boolean =
+        runConfigurationCommand(target) {
+            configurationApplicationService.selectConversationSearch(target, reference)
+        }
+
+    private suspend fun runConfigurationCommand(target: ConversationAssistantTarget, action: suspend () -> Unit): Boolean = try {
+        requireConfigurationTarget(target)
+        action()
+        true
+    } catch (cancelled: CancellationException) {
+        throw cancelled
+    } catch (error: Exception) {
+        if ((page.value as? PageState.Open)?.lease?.commandTarget === target.conversation) {
+            val visibleError = if (error is net.weero.measix.pilot.service.WorkspacePreferenceException)
+                IllegalStateException(context.getString(R.string.workspace_preference_partial_failure), error) else error
+            chatErrorStore.add(error = visibleError, conversationId = target.conversation.conversationId,
+                title = context.getString(R.string.error_title_operation))
+        }
+        false
+    }
+
+    internal fun requireConfigurationTarget(target: ConversationAssistantTarget) {
+        val opened = requirePage()
+        check(opened.lease.commandTarget === target.conversation && snapshot.value?.header?.assistantId == target.assistantId) {
+            "conversation_configuration_target_changed"
         }
     }
 
-    // 设置聊天模型
-    fun setChatModel(assistant: Assistant, model: Model) {
-        viewModelScope.launch {
-            try {
-                settingsStore.updateLocal { settings ->
-                    settings.copy(
-                        assistants = settings.assistants.map {
-                            if (it.id == assistant.id) it.copy(chatModelId = model.id) else it
-                        },
-                    )
-                }
-            } catch (error: SettingsLockedException) {
-                reportLockedSettingsChange(error)
-            }
-        }
-    }
+    internal fun importsFor(target: ConversationAssistantTarget): ArtifactDraftScope? =
+        (page.value as? PageState.Open)?.takeIf { it.lease.commandTarget === target.conversation }?.imports
 
     private fun reportLockedSettingsChange(error: SettingsLockedException) {
         chatErrorStore.add(
@@ -471,18 +463,10 @@ class ChatVM(
         launchCommand(target) { conversationApplicationService.togglePin(target) }
     }
 
-    fun moveConversationToAssistant(targetAssistantId: ConfigurationReference) {
-        launchPageCommand { opened ->
-            conversationApplicationService.moveToAssistant(opened.lease.commandTarget, targetAssistantId, selectForNewChats = true)
+    internal suspend fun moveConversationToAssistant(target: ConversationAssistantTarget, targetAssistantId: ConfigurationReference): Boolean =
+        runConfigurationCommand(target) {
+            conversationApplicationService.moveToAssistant(target, targetAssistantId, selectForNewChats = true)
         }
-    }
-
-    fun moveConversationToAssistant(conversation: ConversationSummary, targetAssistantId: ConfigurationReference) {
-        val target = conversation.commandTarget
-        launchCommand(target) {
-            conversationApplicationService.moveToAssistant(target, targetAssistantId, selectForNewChats = conversation.id == _conversationId)
-        }
-    }
 
     fun generateTitle(conversation: ConversationSummary, force: Boolean = false) {
         val target = conversation.commandTarget
@@ -495,17 +479,14 @@ class ChatVM(
         launchPageCommand { opened -> conversationApplicationService.selectNode(opened.lease.commandTarget, nodeId, selectIndex) }
     }
 
-    fun updateCustomSystemPrompt(prompt: String?) {
-        launchPageCommand { opened -> conversationApplicationService.updateCustomSystemPrompt(opened.lease.commandTarget, prompt) }
-    }
+    internal suspend fun updateCustomSystemPrompt(target: ConversationAssistantTarget, prompt: String?): Boolean =
+        runConfigurationCommand(target) { conversationApplicationService.updateCustomSystemPrompt(target, prompt) }
 
-    fun updateModeInjectionIds(ids: Set<ConfigurationReference>) {
-        launchPageCommand { opened -> conversationApplicationService.updateModeInjectionIds(opened.lease.commandTarget, ids) }
-    }
+    internal suspend fun updateModeInjectionIds(target: ConversationAssistantTarget, ids: Set<ConfigurationReference>): Boolean =
+        runConfigurationCommand(target) { conversationApplicationService.updateModeInjectionIds(target, ids) }
 
-    fun updateWorkspaceCwd(cwd: String?) {
-        launchPageCommand { opened -> conversationApplicationService.updateWorkspaceCwd(opened.lease.commandTarget, cwd) }
-    }
+    internal suspend fun updateWorkspaceCwd(target: ConversationAssistantTarget, expectedWorkspaceId: Uuid?, cwd: String?): Boolean =
+        runConfigurationCommand(target) { conversationApplicationService.updateWorkspaceCwd(target, expectedWorkspaceId, cwd) }
 
     fun toggleMessageFavorite(node: MessageNode) {
         viewModelScope.launch {

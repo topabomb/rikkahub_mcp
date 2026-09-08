@@ -50,13 +50,14 @@ class ConversationCommandAccessTest {
                 { f.application.updateTitle(target, "changed") },
                 { f.application.generateTitle(target, true) },
                 { f.application.compress(target, "", 100, 0) },
-                { f.application.updateCustomSystemPrompt(target, "changed") },
-                { f.application.updateModeInjectionIds(target, emptySet()) },
-                { f.application.updateWorkspaceCwd(target, "changed") },
+                { f.application.updateCustomSystemPrompt(ConversationAssistantTarget(target, DEFAULT_ASSISTANT_ID), "changed") },
+                { f.application.updateModeInjectionIds(ConversationAssistantTarget(target, DEFAULT_ASSISTANT_ID), emptySet()) },
+                { f.application.updateWorkspaceCwd(ConversationAssistantTarget(target, DEFAULT_ASSISTANT_ID), null, "changed") },
+                { f.application.selectAssistantRequest(target.selection, DEFAULT_ASSISTANT_ID, false) },
                 { f.application.togglePin(target) },
                 { f.application.selectNode(target, Uuid.random(), 0) },
                 { f.application.editMessage(target, Uuid.random(), listOf(UIMessagePart.Text("changed"))) },
-                { f.application.moveToAssistant(target, DEFAULT_ASSISTANT_ID, false) },
+                { f.application.moveToAssistant(ConversationAssistantTarget(target, DEFAULT_ASSISTANT_ID), DEFAULT_ASSISTANT_ID, false) },
                 { f.application.stopGeneration(target) },
                 { f.application.delete(target) },
                 { f.application.deleteForUndo(target) },
@@ -73,10 +74,11 @@ class ConversationCommandAccessTest {
 
     @Test fun `manual header and message edits use the authorized root and close with their page`() = runTest {
         fixture { f ->
+            f.configureAssistant(net.weero.measix.pilot.data.model.Assistant(id = DEFAULT_ASSISTANT_ID, allowConversationSystemPrompt = true))
             val target = f.page.commandTarget
             f.application.updateTitle(target, "renamed")
-            f.application.updateCustomSystemPrompt(target, "system")
-            f.application.updateWorkspaceCwd(target, "workspace")
+            f.application.updateCustomSystemPrompt(ConversationAssistantTarget(target, DEFAULT_ASSISTANT_ID), "system")
+            f.application.updateWorkspaceCwd(ConversationAssistantTarget(target, DEFAULT_ASSISTANT_ID), null, "workspace")
             f.application.togglePin(target)
             val message = f.runtime.durable.nodes.single().currentMessage
             f.application.editMessage(target, message.id, listOf(UIMessagePart.Text("edited")))
@@ -88,6 +90,49 @@ class ConversationCommandAccessTest {
             f.page.close()
             rejects<IllegalStateException> { f.application.togglePin(target) }
             assertTrue(f.runtime.durable.header.isPinned)
+        }
+    }
+
+    @Test fun `assistant-dependent commands reject the former assistant without changing the current conversation`() = runTest {
+        fixture { f ->
+            val stale = ConversationAssistantTarget(f.page.commandTarget, ConfigurationReference.random())
+            val before = f.runtime.durable
+            rejects<IllegalStateException> { f.application.updateWorkspaceCwd(stale, null, "stale-directory") }
+            rejects<IllegalStateException> { f.application.updateModeInjectionIds(stale, emptySet()) }
+            rejects<IllegalStateException> { f.application.moveToAssistant(stale, DEFAULT_ASSISTANT_ID, false) }
+            assertEquals(before, f.runtime.durable)
+            coVerify(exactly = 0) { f.repository.commit(any()) }
+        }
+    }
+
+    @Test fun `directory from a former workspace cannot overwrite the current workspace root`() = runTest {
+        fixture { f ->
+            val oldWorkspace = Uuid.random()
+            val currentWorkspace = Uuid.random()
+            val target = ConversationAssistantTarget(f.page.commandTarget, DEFAULT_ASSISTANT_ID)
+            f.configureAssistant(net.weero.measix.pilot.data.model.Assistant(id = DEFAULT_ASSISTANT_ID, workspaceId = currentWorkspace))
+            rejects<IllegalStateException> { f.application.updateWorkspaceCwd(target, oldWorkspace, "/workspace/old") }
+            assertNull(f.runtime.durable.header.workspaceCwd)
+            coVerify(exactly = 0) { f.repository.commit(any()) }
+            f.application.updateWorkspaceCwd(target, currentWorkspace, "/workspace/current")
+            assertEquals("/workspace/current", f.runtime.durable.header.workspaceCwd)
+        }
+    }
+
+    @Test fun `closing conversation prompt permissions rejects late edits without replacing saved values`() = runTest {
+        fixture { f ->
+            val assistant = net.weero.measix.pilot.data.model.Assistant(id = DEFAULT_ASSISTANT_ID,
+                allowConversationSystemPrompt = true, allowConversationPromptInjection = true)
+            f.configureAssistant(assistant)
+            val target = ConversationAssistantTarget(f.page.commandTarget, assistant.id)
+            val selected = setOf(ConfigurationReference.random())
+            f.application.updateCustomSystemPrompt(target, "accepted")
+            f.application.updateModeInjectionIds(target, selected)
+            f.configureAssistant(assistant.copy(allowConversationSystemPrompt = false, allowConversationPromptInjection = false))
+            rejects<IllegalStateException> { f.application.updateCustomSystemPrompt(target, "late") }
+            rejects<IllegalStateException> { f.application.updateModeInjectionIds(target, emptySet()) }
+            assertEquals("accepted", f.runtime.durable.header.customSystemPrompt)
+            assertEquals(selected, f.runtime.durable.header.modeInjectionIds)
         }
     }
 
@@ -139,8 +184,8 @@ class ConversationCommandAccessTest {
             f.registry.evictRuntime(f.rootId)
             f.rows[f.rootId] = f.rows.getValue(f.rootId).copy(header = header)
             f.runtime = f.registry.registerSnapshot(f.rows.getValue(f.rootId))
-            rejects<IllegalStateException> { f.application.updateCustomSystemPrompt(f.page.commandTarget, "override") }
-            rejects<IllegalStateException> { f.application.moveToAssistant(f.page.commandTarget, ConfigurationReference.random(), false) }
+            rejects<IllegalStateException> { f.application.updateCustomSystemPrompt(ConversationAssistantTarget(f.page.commandTarget, f.runtime.durable.header.assistantId), "override") }
+            rejects<IllegalStateException> { f.application.moveToAssistant(ConversationAssistantTarget(f.page.commandTarget, DEFAULT_ASSISTANT_ID), ConfigurationReference.random(), false) }
             coVerify(exactly = 0) { f.repository.commit(any()) }
         }
     }
@@ -798,10 +843,12 @@ class ConversationCommandAccessTest {
             }
             coEvery { artifactStore.retainNodesForUndo(any()) } answers { ArtifactRetentionLease { retentionReleased++ } }
             every { effects.clearTitleTracking(any()) } returns Unit
-            coEvery { settings.withResolvedConfiguration<Unit>(any(), any(), any()) } coAnswers {
-                val configuration = ConfigurationResolver.resolve(UserSettingsDocument.empty(), firstArg(), secondArg())
-                thirdArg<suspend (ResolvedConfiguration) -> Unit>()(configuration)
-            }
+        }
+
+        fun configureAssistant(assistant: net.weero.measix.pilot.data.model.Assistant) {
+            val current = settings.effectiveSettings.value
+            every { settings.effectiveSettings } returns kotlinx.coroutines.flow.MutableStateFlow(current.copy(
+                settings = current.settings.copy(assistants = listOf(assistant))))
         }
 
         fun enableGeneration() {

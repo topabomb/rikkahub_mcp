@@ -14,6 +14,8 @@ import io.mockk.every
 import io.mockk.mockk
 import java.time.Instant
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.StandardTestDispatcher
@@ -129,8 +131,9 @@ class ScopedConversationQueryTest {
             mainDispatcher = dispatcher,
             workerDispatcher = dispatcher,
         )
+        val target = kotlinx.coroutines.flow.MutableStateFlow(ConversationFolderAccess(requireNotNull(sessions.observeSelectedRealmSelection().first()), assistant))
         val job = backgroundScope.launch {
-            service(repository, sessions).unfiledPaging(assistant).collectLatest(differ::submitData)
+            target.flatMapLatest { service(repository, sessions).unfiledPaging(it) }.collectLatest(differ::submitData)
         }
         runCurrent()
         assertEquals(1, sources.size)
@@ -139,10 +142,16 @@ class ScopedConversationQueryTest {
         sessions.selectPersonalFixture()
         runCurrent()
         assertTrue(original.invalid)
+        assertTrue(differ.snapshot().items.isEmpty())
+        target.value = ConversationFolderAccess(requireNotNull(sessions.observeSelectedRealmSelection().first()), assistant)
+        runCurrent()
         assertEquals(listOf("personal"), differ.snapshot().items.map { it.title })
         sessions.selectEnterpriseFixture()
         runCurrent()
         assertTrue(original.invalid)
+        assertTrue(differ.snapshot().items.isEmpty())
+        target.value = ConversationFolderAccess(requireNotNull(sessions.observeSelectedRealmSelection().first()), assistant)
+        runCurrent()
         assertEquals(3, sources.size)
         assertEquals(listOf("enterprise"), differ.snapshot().items.map { it.title })
         val oldRow = differ.snapshot().items.single()
@@ -151,6 +160,9 @@ class ScopedConversationQueryTest {
         sessions.selectEnterpriseFixture()
         runCurrent()
         assertTrue(oldSource.invalid)
+        assertTrue(differ.snapshot().items.isEmpty())
+        target.value = ConversationFolderAccess(requireNotNull(sessions.observeSelectedRealmSelection().first()), assistant)
+        runCurrent()
         assertTrue(sources.dropLast(1).all { it.invalid })
         assertNotEquals(oldRow.selection, differ.snapshot().items.single().selection)
         job.cancel()
@@ -160,7 +172,7 @@ class ScopedConversationQueryTest {
 
     private fun sessions() = EnterpriseSessionController(EnterpriseAppliedStore(temporary.newFolder()))
     private fun service(repository: ConversationRepository, sessions: EnterpriseSessionController) = ConversationQueryService(
-        repository, mockk(), mockk(), mockk(), mockk(), sessions, ApplicationRecoveryGate().apply { ready() },
+        repository, mockk(), mockk(), mockk(), mockk(), sessions, ApplicationRecoveryGate().apply { ready() }, mockk(),
     )
     private fun row(scope: ConfigurationScope, title: String) = ConversationListRecord(
         Uuid.random(), assistant, title, null, false, Instant.EPOCH, Instant.EPOCH, scope,

@@ -47,23 +47,23 @@ import me.rerere.hugeicons.stroke.Clock02
 import me.rerere.hugeicons.stroke.Settings03
 import net.weero.measix.pilot.R
 import net.weero.measix.pilot.data.ai.mcp.McpStatus
-import net.weero.measix.pilot.data.model.Assistant
+import me.rerere.common.configuration.ConfigurationReference
+import net.weero.measix.pilot.service.AssistantMcpChoice
 import net.weero.measix.pilot.service.McpServerPresentation
 import net.weero.measix.pilot.ui.adaptive.AdaptiveModal
 import net.weero.measix.pilot.ui.components.ui.Tag
 import net.weero.measix.pilot.ui.components.ui.TagType
 
 @Composable
-fun McpPickerListItem(
-    assistant: Assistant,
-    servers: List<McpServerPresentation>,
+internal fun McpPickerListItem(
+    servers: List<AssistantMcpChoice>,
     modifier: Modifier = Modifier,
     onNavigateToSettings: () -> Unit,
-    onUpdateAssistant: (Assistant) -> Unit
+    onToggle: (ConfigurationReference, Boolean) -> Unit
 ) {
     var showMcpPicker by remember { mutableStateOf(false) }
     val enabledServers = servers.fastFilter {
-        it.enabled && assistant.mcpServers.contains(it.serverId)
+        it.selected
     }
     val loading = enabledServers.any { it.isBusy }
 
@@ -101,9 +101,8 @@ fun McpPickerListItem(
 
     if (showMcpPicker) {
         McpPickerSheet(
-            assistant = assistant,
-            servers = servers,
-            onUpdateAssistant = onUpdateAssistant,
+                    servers = servers,
+            onToggle = onToggle,
             onNavigateToSettings = onNavigateToSettings,
             onDismiss = { showMcpPicker = false },
         )
@@ -112,17 +111,16 @@ fun McpPickerListItem(
 
 @Composable
 internal fun McpPickerSheet(
-    assistant: Assistant,
-    servers: List<McpServerPresentation>,
-    onUpdateAssistant: (Assistant) -> Unit,
+    servers: List<AssistantMcpChoice>,
+    onToggle: (ConfigurationReference, Boolean) -> Unit,
     onNavigateToSettings: () -> Unit,
     onDismiss: () -> Unit,
 ) {
     val selectedServers = servers.fastFilter {
-        it.enabled && assistant.mcpServers.contains(it.serverId)
+        it.selected
     }
     val loading = selectedServers.any { it.isBusy }
-    val hasEnabledServers = servers.any { it.enabled }
+    val hasEnabledServers = servers.isNotEmpty()
     AdaptiveModal(
         onDismissRequest = onDismiss,
     ) {
@@ -175,9 +173,8 @@ internal fun McpPickerSheet(
             }
             if (hasEnabledServers) {
                 McpPicker(
-                    assistant = assistant,
-                    servers = servers,
-                    onUpdateAssistant = onUpdateAssistant,
+                                    servers = servers,
+                    onToggle = onToggle,
                     modifier = Modifier
                         .fillMaxWidth()
                         .weight(1f)
@@ -207,19 +204,18 @@ internal fun McpPickerSheet(
 }
 
 @Composable
-fun McpPicker(
-    assistant: Assistant,
-    servers: List<McpServerPresentation>,
+internal fun McpPicker(
+    servers: List<AssistantMcpChoice>,
     modifier: Modifier = Modifier,
     contentPadding: PaddingValues = PaddingValues(0.dp),
-    onUpdateAssistant: (Assistant) -> Unit
+    onToggle: (ConfigurationReference, Boolean) -> Unit
 ) {
     LazyColumn(
         modifier = modifier.fillMaxSize(),
         contentPadding = contentPadding,
         verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
-        items(servers.fastFilter { it.enabled }, key = { it.serverId.toString() }) { server ->
+        items(servers, key = { it.serverId.toString() }) { server ->
             val status = server.status
             Card {
                 Row(
@@ -315,29 +311,11 @@ fun McpPicker(
                             }
                         }
                     }
+                    server.unavailableReason?.let { reason -> Text(configurationUnavailableText(reason)) }
                     Switch(
-                        checked = server.serverId in assistant.mcpServers,
-                        onCheckedChange = {
-                            if (it) {
-                                val newServers = assistant.mcpServers.toMutableSet()
-                                newServers.add(server.serverId)
-                                newServers.removeIf { selectedId -> servers.none { it.serverId == selectedId } }
-                                onUpdateAssistant(
-                                    assistant.copy(
-                                        mcpServers = newServers.toSet()
-                                    )
-                                )
-                            } else {
-                                val newServers = assistant.mcpServers.toMutableSet()
-                                newServers.remove(server.serverId)
-                                newServers.removeIf { selectedId -> servers.none { it.serverId == selectedId } }
-                                onUpdateAssistant(
-                                    assistant.copy(
-                                        mcpServers = newServers.toSet()
-                                    )
-                                )
-                            }
-                        }
+                        checked = server.selected,
+                        enabled = server.canToggle,
+                        onCheckedChange = { onToggle(server.serverId, it) },
                     )
                 }
             }

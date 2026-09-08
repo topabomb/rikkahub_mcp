@@ -8,6 +8,7 @@ import androidx.test.core.app.ApplicationProvider
 import java.io.File
 import kotlin.io.path.createTempDirectory
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceTimeBy
@@ -98,7 +99,7 @@ class SettingsStoreManagedStateTest {
             advanceTimeBy(1_000)
             advanceUntilIdle()
 
-            val effective = environment.store.effectiveSettings.value
+            val effective = environment.store.effectiveSettings.first { it.managedState == ManagedConfigurationState.DEGRADED }
             assertEquals(ManagedConfigurationState.DEGRADED, effective.managedState)
             assertEquals("managed", effective.settings.assistants.single { it.id == assistantId }.name)
             assertEquals("Managed assistant is read-only", effective.access.reasonFor("records/assistants/$assistantId"))

@@ -51,6 +51,9 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.Job
+import net.weero.measix.pilot.data.configuration.AssistantPreferenceChange
+import me.rerere.ai.provider.ChatTransportCapabilities
+import net.weero.measix.pilot.service.AssistantMcpChoice
 import me.rerere.ai.provider.ProviderSetting
 import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.Camera01
@@ -91,9 +94,11 @@ internal fun FilesPicker(
     messageNodeCount: Int,
     workspaceCwd: String?,
     assistant: Assistant,
+    transportCapabilities: ChatTransportCapabilities,
+    mcpServers: List<AssistantMcpChoice>,
     state: ChatInputState,
     onCompressContext: (additionalPrompt: String, targetTokens: Int, keepRecentMessages: Int) -> Job,
-    onUpdateAssistant: (Assistant) -> Unit,
+    onPreferenceChange: (AssistantPreferenceChange) -> Unit,
     onUpdateConversationModeInjectionIds: (Set<ConfigurationReference>) -> Unit,
     onUpdateWorkspaceCwd: (String?) -> Unit,
     showInjectionSheet: Boolean,
@@ -108,12 +113,9 @@ internal fun FilesPicker(
     onPickFile: () -> Unit,
 ) {
     val settings = LocalSettings.current
-    val provider = settings.getChatModel(assistant)?.findProvider(providers = settings.providers)
     val navController = LocalNavController.current
     val workspaceQueryService: WorkspaceQueryService = koinInject()
     val workspaces by workspaceQueryService.observeWorkspaces().collectAsState(initial = emptyList())
-    val mcpQueryService: McpQueryService = koinInject()
-    val mcpServers by mcpQueryService.servers.collectAsState()
 
     Column(
         modifier = Modifier
@@ -130,11 +132,8 @@ internal fun FilesPicker(
 
             ImagePickButton(onClick = onPickImage)
 
-            if (provider != null && provider is ProviderSetting.Google) {
-                VideoPickButton(onClick = onPickVideo)
-
-                AudioPickButton(onClick = onPickAudio)
-            }
+            if (transportCapabilities.videoInput) VideoPickButton(onClick = onPickVideo)
+            if (transportCapabilities.audioInput) AudioPickButton(onClick = onPickAudio)
 
             FilePickButton(onClick = onPickFile)
         }
@@ -148,7 +147,7 @@ internal fun FilesPicker(
                 assistant = assistant,
                 workspaceCwd = workspaceCwd,
                 workspaces = workspaces,
-                onUpdateAssistant = onUpdateAssistant,
+                onPreferenceChange = onPreferenceChange,
                 onUpdateWorkspaceCwd = onUpdateWorkspaceCwd,
                 onNavigateToDetail = { id ->
                     onDismiss()
@@ -166,13 +165,12 @@ internal fun FilesPicker(
         }
 
         McpPickerListItem(
-            assistant = assistant,
             servers = mcpServers,
             onNavigateToSettings = {
                 onDismiss()
                 navController.navigate(Screen.SettingMcp)
             },
-            onUpdateAssistant = onUpdateAssistant,
+            onToggle = { id, enabled -> onPreferenceChange(AssistantPreferenceChange.Mcp(id, enabled)) },
         )
 
         // Extensions (Quick Messages + Prompt Injections + Skills)
@@ -248,7 +246,7 @@ internal fun FilesPicker(
             workspaces.find { it.id == assistant.workspaceId?.toString() }
         }
         if (boundWorkspace != null && boundWorkspace.shellStatus == WorkspaceShellStatus.READY) {
-            var showCwdSheet by remember { mutableStateOf(false) }
+            var showCwdSheet by remember(boundWorkspace.id) { mutableStateOf(false) }
             TextButton(
                 onClick = { showCwdSheet = true },
                 modifier = Modifier.fillMaxWidth(),
@@ -285,7 +283,7 @@ internal fun FilesPicker(
             conversationModeInjectionIds = conversationModeInjectionIds,
             assistant = assistant,
             settings = settings,
-            onUpdateAssistant = onUpdateAssistant,
+            onPreferenceChange = onPreferenceChange,
             onUpdateConversationModeInjectionIds = onUpdateConversationModeInjectionIds,
             onDismiss = { onShowInjectionSheetChange(false) },
             onDismissAll = onDismiss,
@@ -308,7 +306,7 @@ private fun WorkspacePickerListItem(
     assistant: Assistant,
     workspaceCwd: String?,
     workspaces: List<WorkspaceUiModel>,
-    onUpdateAssistant: (Assistant) -> Unit,
+    onPreferenceChange: (AssistantPreferenceChange) -> Unit,
     onUpdateWorkspaceCwd: (String?) -> Unit,
     onNavigateToDetail: (String) -> Unit,
     onNavigateToTerminal: (String) -> Unit,
@@ -371,12 +369,7 @@ private fun WorkspacePickerListItem(
             workspaces = workspaces,
             onSelect = { workspaceId ->
                 val newId = workspaceId?.let { Uuid.parse(it) }
-                if (newId != assistant.workspaceId) {
-                    onUpdateAssistant(assistant.copy(workspaceId = newId))
-                    if (workspaceCwd != null) {
-                        onUpdateWorkspaceCwd(null)
-                    }
-                }
+                onPreferenceChange(AssistantPreferenceChange.Workspace(newId))
                 showSheet = false
             },
             onManage = {
@@ -393,7 +386,7 @@ private fun InjectionQuickConfigSheet(
     conversationModeInjectionIds: Set<ConfigurationReference>,
     assistant: Assistant,
     settings: Settings,
-    onUpdateAssistant: (Assistant) -> Unit,
+    onPreferenceChange: (AssistantPreferenceChange) -> Unit,
     onUpdateConversationModeInjectionIds: (Set<ConfigurationReference>) -> Unit,
     onDismiss: () -> Unit,
     onDismissAll: () -> Unit,
@@ -412,7 +405,7 @@ private fun InjectionQuickConfigSheet(
             ExtensionSelector(
                 assistant = assistant,
                 settings = settings,
-                onUpdate = onUpdateAssistant,
+                onPreferenceChange = onPreferenceChange,
                 conversationModeInjectionIds = conversationModeInjectionIds,
                 onUpdateConversationModeInjectionIds = onUpdateConversationModeInjectionIds,
                 modifier = Modifier.weight(1f),

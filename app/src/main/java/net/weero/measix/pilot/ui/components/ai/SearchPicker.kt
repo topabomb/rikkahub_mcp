@@ -1,6 +1,6 @@
 package net.weero.measix.pilot.ui.components.ai
 
-import me.rerere.ai.provider.supportsBuiltInSearch
+import net.weero.measix.pilot.data.configuration.AssistantSearchMode
 import androidx.compose.material3.LocalContentColor
 
 import me.rerere.common.configuration.ConfigurationReference
@@ -52,9 +52,6 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import me.rerere.ai.provider.BuiltInTools
-import me.rerere.ai.provider.Model
-import me.rerere.ai.provider.ProviderSetting
 import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.AiSearch02
 import me.rerere.hugeicons.stroke.ArrowLeft01
@@ -67,57 +64,39 @@ import me.rerere.hugeicons.stroke.Settings03
 import net.weero.measix.pilot.R
 import net.weero.measix.pilot.Screen
 import net.weero.measix.pilot.data.datastore.Settings
-import net.weero.measix.pilot.data.datastore.findProvider
 import net.weero.measix.pilot.ui.adaptive.AdaptiveModal
 import net.weero.measix.pilot.ui.components.ui.AutoAIIcon
 import net.weero.measix.pilot.ui.components.ui.ToggleSurface
 import net.weero.measix.pilot.ui.context.LocalNavController
 import net.weero.measix.pilot.ui.pages.setting.SearchAbilityTagLine
 
-enum class SearchMode {
-    OFF,
-    LOCAL,
-    BUILT_IN,
-}
-
 internal fun resolveDisplayedSearchMode(
     enableSearch: Boolean,
     hasBuiltInSearchEnabled: Boolean,
-): SearchMode = when {
-    hasBuiltInSearchEnabled -> SearchMode.BUILT_IN
-    enableSearch -> SearchMode.LOCAL
-    else -> SearchMode.OFF
-}
-
-internal fun searchModeEnablesLocal(mode: SearchMode): Boolean = mode == SearchMode.LOCAL
-
-internal fun searchModeEnablesBuiltIn(mode: SearchMode): Boolean = mode == SearchMode.BUILT_IN
-
-internal fun supportsProviderBuiltInSearch(
-    model: Model?,
-    providers: List<ProviderSetting>,
-): Boolean {
-    val provider = model?.findProvider(providers) ?: return false
-    return supportsBuiltInSearch(provider)
+): AssistantSearchMode = when {
+    hasBuiltInSearchEnabled -> AssistantSearchMode.BUILT_IN
+    enableSearch -> AssistantSearchMode.LOCAL
+    else -> AssistantSearchMode.OFF
 }
 
 @Composable
 fun SearchPickerButton(
     enableSearch: Boolean,
     settings: Settings,
+    selectedSearchServiceId: ConfigurationReference?,
     modifier: Modifier = Modifier,
-    onUpdateSearchMode: (SearchMode) -> Unit,
+    onUpdateSearchMode: (AssistantSearchMode) -> Unit,
     onUpdateSearchService: (ConfigurationReference) -> Unit,
-    model: Model?,
+    builtInSearchEnabled: Boolean,
+    supportsBuiltInSearch: Boolean,
 ) {
     var showSearchPicker by remember { mutableStateOf(false) }
-    val currentService = settings.searchServices.find { it.id == settings.selectedSearchServiceId }
-    val searchUnavailable = model?.tools?.contains(BuiltInTools.Search) == true &&
-        !supportsProviderBuiltInSearch(model, settings.providers)
+    val currentService = settings.searchServices.find { it.id == selectedSearchServiceId }
+    val searchUnavailable = builtInSearchEnabled && !supportsBuiltInSearch
 
     ToggleSurface(
         modifier = modifier,
-        checked = enableSearch || model?.tools?.contains(BuiltInTools.Search) == true,
+        checked = enableSearch || builtInSearchEnabled,
         onClick = {
             showSearchPicker = true
         }
@@ -132,7 +111,7 @@ fun SearchPickerButton(
                 modifier = Modifier.size(24.dp),
                 contentAlignment = Alignment.Center
             ) {
-                if (model?.tools?.contains(BuiltInTools.Search) == true) {
+                if (builtInSearchEnabled) {
                     Icon(
                         imageVector = HugeIcons.AiSearch02,
                         contentDescription = stringResource(if (searchUnavailable)
@@ -175,6 +154,7 @@ fun SearchPickerButton(
                 if (selecting) {
                     SearchProviderPicker(
                         settings = settings,
+                        selectedSearchServiceId = selectedSearchServiceId,
                         onUpdateSearchService = { serviceId ->
                             onUpdateSearchService(serviceId)
                             selectingProvider = false
@@ -185,8 +165,10 @@ fun SearchPickerButton(
                     SearchPicker(
                         enableSearch = enableSearch,
                         settings = settings,
+                        selectedSearchServiceId = selectedSearchServiceId,
                         onUpdateSearchMode = onUpdateSearchMode,
-                        model = model,
+                        hasBuiltInSearchEnabled = builtInSearchEnabled,
+                        supportsBuiltInSearch = supportsBuiltInSearch,
                         onSelectProvider = { selectingProvider = true },
                         onDismiss = { showSearchPicker = false }
                     )
@@ -201,18 +183,18 @@ fun SearchPickerButton(
 private fun SearchPicker(
     enableSearch: Boolean,
     settings: Settings,
-    model: Model?,
-    onUpdateSearchMode: (SearchMode) -> Unit,
+    selectedSearchServiceId: ConfigurationReference?,
+    hasBuiltInSearchEnabled: Boolean,
+    supportsBuiltInSearch: Boolean,
+    onUpdateSearchMode: (AssistantSearchMode) -> Unit,
     onSelectProvider: () -> Unit,
     onDismiss: () -> Unit,
 ) {
     val navBackStack = LocalNavController.current
 
-    val supportsBuiltInSearch = supportsProviderBuiltInSearch(model, settings.providers)
-    val hasBuiltInSearchEnabled = model?.tools?.contains(BuiltInTools.Search) == true
-    val showModelSearch = model != null && (supportsBuiltInSearch || hasBuiltInSearchEnabled)
+    val showModelSearch = supportsBuiltInSearch || hasBuiltInSearchEnabled
     val displayedMode = resolveDisplayedSearchMode(enableSearch, hasBuiltInSearchEnabled)
-    val isLocalSearchSelected = displayedMode == SearchMode.LOCAL
+    val isLocalSearchSelected = displayedMode == AssistantSearchMode.LOCAL
 
     Column(
         modifier = Modifier
@@ -254,7 +236,7 @@ private fun SearchPicker(
                 selected = isLocalSearchSelected,
                 onClick = {
                     onUpdateSearchMode(
-                        if (isLocalSearchSelected) SearchMode.OFF else SearchMode.LOCAL
+                        if (isLocalSearchSelected) AssistantSearchMode.OFF else AssistantSearchMode.LOCAL
                     )
                 },
                 modifier = Modifier
@@ -269,7 +251,7 @@ private fun SearchPicker(
                     selected = hasBuiltInSearchEnabled,
                     onClick = {
                         onUpdateSearchMode(
-                            if (hasBuiltInSearchEnabled) SearchMode.OFF else SearchMode.BUILT_IN
+                            if (hasBuiltInSearchEnabled) AssistantSearchMode.OFF else AssistantSearchMode.BUILT_IN
                         )
                     },
                     modifier = Modifier
@@ -287,13 +269,13 @@ private fun SearchPicker(
             )
         }
 
-        if (displayedMode != SearchMode.OFF) {
+        if (displayedMode != AssistantSearchMode.OFF) {
             FlowRow(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.Center
             ) {
                 if (isLocalSearchSelected) {
-                    val currentService = settings.searchServices.find { it.id == settings.selectedSearchServiceId }
+                    val currentService = settings.searchServices.find { it.id == selectedSearchServiceId }
                     TextButton(onClick = onSelectProvider) {
                         Text(
                             text = buildString {
@@ -313,7 +295,7 @@ private fun SearchPicker(
                     }
                 }
                 TextButton(
-                    onClick = { onUpdateSearchMode(SearchMode.OFF) },
+                    onClick = { onUpdateSearchMode(AssistantSearchMode.OFF) },
                     colors = ButtonDefaults.textButtonColors(
                         contentColor = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -419,6 +401,7 @@ private fun SearchModeCard(
 @Composable
 private fun SearchProviderPicker(
     settings: Settings,
+    selectedSearchServiceId: ConfigurationReference?,
     onUpdateSearchService: (ConfigurationReference) -> Unit,
     onBack: () -> Unit,
 ) {
@@ -453,14 +436,14 @@ private fun SearchProviderPicker(
         ) {
             itemsIndexed(settings.searchServices) { _, service ->
                 val containerColor = animateColorAsState(
-                    if (settings.selectedSearchServiceId == service.id) {
+                    if (selectedSearchServiceId == service.id) {
                         MaterialTheme.colorScheme.primaryContainer
                     } else {
                         MaterialTheme.colorScheme.surface
                     }
                 )
                 val textColor = animateColorAsState(
-                    if (settings.selectedSearchServiceId == service.id) {
+                    if (selectedSearchServiceId == service.id) {
                         MaterialTheme.colorScheme.onPrimaryContainer
                     } else {
                         MaterialTheme.colorScheme.onSurface

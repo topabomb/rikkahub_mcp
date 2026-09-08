@@ -83,6 +83,7 @@ class Navigator(private val backStack: MutableList<NavKey>) {
 `ConversationOpenRequest.NewDraft` 固定会话 ID、原 `RealmAccess` 与助手引用；`OpenExisting` 只打开已有根会话。
 历史、搜索、收藏和通知使用已有会话请求；分享和新建按钮显式创建 Draft。`rememberChatNavigation` 的回调保留渲染时的域，
 助手切换由 `selectAssistantRequest` 在同一授权边界完成选择和最近会话查询，等待后不重新捕获 Session。
+抽屉切换使用助手目录捕获的 `RealmSelection`，由 `ChatDrawerVM` 等待命令后导航；不通过另一条全局助手状态或导航写入分支。
 冷启动的 `Screen.Startup` 在恢复完成后读取本域的最近会话或生成新请求，再替换为稳定的聊天导航项。
 
 `ChatVM` 在 `initialize` 成功取得 `ConversationViewLease` 后才订阅聊天、收藏、错误与附件预览，并创建附件导入作用域。
@@ -549,10 +550,15 @@ Compose 暴露 application/query service；恢复由 `ApplicationRecoveryCoordin
 
 ### 7.3 会话助手归属
 
-已创建会话的助手归属来自查询 snapshot 的 `header.assistantId`。聊天页通过
-`Settings.getConversationAssistant(snapshot.header.assistantId)` 解析助手，并将同一对象传给标题、背景、模型、搜索、推理、快捷消息、文件能力和生成前检查；只有会话引用的助手已被删除时，才回退到当前全局助手。
+已创建会话的助手归属来自 `ConversationUiModel.snapshot.header.assistantId`。`ConversationQueryService` 在原页面 lease 的 Session → Settings 边界捕获配置，随同一会话投影提供 `ConversationConfigurationUiModel`。标题、背景、模型、搜索、推理、快捷消息、MCP 和生成前检查共用这个助手；定义删除或撤权时保留历史和不可用原因，不回退到全局助手。
 
-切换会话助手时，`ChatVM.switchConversationAssistant` 负责更新会话的 `assistantId` 和目标模型。全局 `Settings.assistantId` 只表示新建会话等全局入口的当前选择，不应直接驱动已有会话的聊天界面。
+聊天模型目录按用途与准入显示；用户助手可选择本域模型、跟随本域默认，或在企业域恢复继承自己的定义。企业助手固定模型不提供改选入口。搜索保留用户开关，即使当前模型失效也显示已选而不可用；传输能力来自模型实际 binding，UI 不读取企业地址或凭据。MCP 显示目录准入与真实 runtime 状态，固定绑定不可移除，已有失效引用可取消。
+
+`ConversationAssistantTarget` 冻结原页面和助手。模型弹窗、助手/工具弹层及输入导入按原目标持有状态；字段命令只更新最新值中的指定字段。会话系统提示、注入与目录仍由 `ConversationApplicationService` 写原会话，提交时复验助手；目录还核对原 Workspace。实际换助手在同一会话命令清空 folder 与 cwd，重新选择同一助手不清空。导入结果在交给输入框前再次验证原目标，失效或取消只释放本批新文件。
+
+本地工具使用既有 `AssistantLocalToolContent`，个人定义编辑和聊天本域使用分别调用各自命令。聊天本域子助手引用目前只读；完整使用参数、额外子助手授权、企业头像/背景资产编辑和其余资源消费者尚未全部接通。新建会话的默认选择不直接驱动已有会话。
+
+抽屉的助手选择、文件夹和会话列表来自同一个按域助手目录。`ChatDrawerVM` 保留原 `ConversationFolderAccess`，筛选也绑定该目标；切域或换助手先丢弃旧筛选，旧目录不能在新空间继续查询。移动到助手复用同一选择组件，展示企业候选与准入原因，等待原会话命令成功后关闭；提交期间禁用重复选择和定义管理。
 
 ### 7.4 更新检查状态流
 

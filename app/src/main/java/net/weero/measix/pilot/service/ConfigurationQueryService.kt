@@ -12,6 +12,13 @@ import net.weero.measix.pilot.data.configuration.ConfigurationScope
 import net.weero.measix.pilot.data.configuration.ResolvedConfiguration
 import net.weero.measix.pilot.data.datastore.SettingsStore
 import net.weero.measix.pilot.data.enterprise.EnterpriseSessionController
+import net.weero.measix.pilot.data.enterprise.RealmSelection
+import net.weero.measix.pilot.data.configuration.ConfigurationCategory
+import net.weero.measix.pilot.data.configuration.ConfigurationSelection
+import net.weero.measix.pilot.data.configuration.ConfigurationCatalogItem
+import net.weero.measix.pilot.data.configuration.ResourceSelectionSlot
+import net.weero.measix.pilot.data.model.Assistant
+import me.rerere.common.configuration.ConfigurationReference
 import net.weero.measix.pilot.data.enterprise.RealmAccess
 
 internal class ConfigurationQueryService(
@@ -22,19 +29,31 @@ internal class ConfigurationQueryService(
     fun observePersonalModelFavorites() = settings.observeConfiguration(enterpriseSessions.state, ConfigurationScope.Personal)
         .map { it.selections.favoriteModels }
 
-    fun observeModelCatalog(): Flow<ModelCatalogReadState> = flow {
+    fun observeModelCatalog(): Flow<ModelCatalogReadState> = observeSelected(
+        { ModelCatalogReadState.Unavailable(it) },
+        { configuration, selection -> ModelCatalogReadState.Available(configuration.modelCatalog(selection)) },
+    )
+
+    fun observeAssistantCatalog(): Flow<AssistantCatalogUiModel?> = observeSelected(
+        { null },
+        { configuration, selection -> AssistantCatalogUiModel(selection,
+            configuration.selection(ResourceSelectionSlot.ASSISTANT), configuration.assistants,
+            configuration.catalog.values.filter { it.key.category == ConfigurationCategory.ASSISTANT }) },
+    )
+
+    private fun <T> observeSelected(unavailable: (String) -> T, project: (ResolvedConfiguration, RealmSelection) -> T): Flow<T> = flow {
         recoveryGate.awaitReady()
         emitAll(enterpriseSessions.observeSelectedRealmSelection().flatMapLatest { selection ->
-            if (selection == null) flowOf(ModelCatalogReadState.Unavailable("configuration_view_unavailable"))
+            if (selection == null) flowOf(unavailable("configuration_view_unavailable"))
             else settings.observeConfiguration(enterpriseSessions.state, selection.access.scope)
-                .map<ResolvedConfiguration, ModelCatalogReadState> { enterpriseSessions.withSelectedRealmSelection(selection) {
+                .map { enterpriseSessions.withSelectedRealmSelection(selection) {
                     settings.withResolvedConfiguration(selection.access.scope, enterpriseSessions.state.value) { configuration ->
-                        ModelCatalogReadState.Available(configuration.modelCatalog(selection))
+                        project(configuration, selection)
                     }
                 } }
                 .catch { error ->
                     if (error is CancellationException) throw error
-                    emit(ModelCatalogReadState.Unavailable(error.message ?: "configuration_view_unavailable"))
+                    emit(unavailable(error.message ?: "configuration_view_unavailable"))
                 }
         })
     }
@@ -61,3 +80,10 @@ internal class ConfigurationQueryService(
     fun observe(scope: ConfigurationScope): Flow<ResolvedConfiguration> =
         settings.observeConfiguration(enterpriseSessions.state, scope)
 }
+
+internal data class AssistantCatalogUiModel(
+    val selection: RealmSelection,
+    val selected: ConfigurationSelection,
+    val assistants: Map<ConfigurationReference, Assistant>,
+    val resources: List<ConfigurationCatalogItem>,
+)

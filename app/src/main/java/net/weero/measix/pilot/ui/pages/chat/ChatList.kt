@@ -136,7 +136,8 @@ internal fun ChatList(
     previewMode: Boolean,
     settings: Settings,
     readiness: ConversationReadiness,
-    assistant: Assistant,
+    assistant: Assistant?,
+    modelById: Map<me.rerere.common.configuration.ConfigurationReference, me.rerere.ai.provider.Model>,
     hazeState: HazeState,
     errors: List<ChatError> = emptyList(),
     onDismissError: (Uuid) -> Unit = {},
@@ -190,6 +191,7 @@ internal fun ChatList(
                 settings = settings,
                 readiness = readiness,
                 assistant = assistant,
+                modelById = modelById,
                 hazeState = hazeState,
                 errors = errors,
                 onDismissError = onDismissError,
@@ -229,7 +231,8 @@ private fun ChatListNormal(
     attachmentPreviews: Map<String, String>,
     settings: Settings,
     readiness: ConversationReadiness,
-    assistant: Assistant,
+    assistant: Assistant?,
+    modelById: Map<me.rerere.common.configuration.ConfigurationReference, me.rerere.ai.provider.Model>,
     hazeState: HazeState,
     errors: List<ChatError>,
     onDismissError: (Uuid) -> Unit,
@@ -307,14 +310,7 @@ private fun ChatListNormal(
         )
     }
 
-    val messageAssistant = remember(settings.assistants, snapshot.header.assistantId) {
-        settings.getAssistantById(snapshot.header.assistantId)
-    }
-    val modelById = remember(settings.providers) {
-        settings.providers
-            .flatMap { it.models }
-            .associateBy { it.id }
-    }
+    val messageAssistant = assistant
     // 消息列表数据源来自 snapshot.nodes（未变节点引用相同；流式期间
     // 仅末节点由流式投影覆盖 → Compose skip 生效）。key = node.id 不变。
     val snapshotNodes = snapshot.nodes
@@ -365,8 +361,10 @@ private fun ChatListNormal(
                 }
             }
         }
-    val backgroundHost = rememberImageBackgroundHost(settings, assistant.id)
-        val previewActions = remember(backgroundHost.action) { listOf(backgroundHost.action) }
+    val backgroundHost = rememberImageBackgroundHost(settings, snapshot.header.assistantId)
+        val previewActions = remember(backgroundHost.action, assistant, snapshot.header.scope) {
+            if (assistant != null && snapshot.header.scope == net.weero.measix.pilot.data.configuration.ConfigurationScope.Personal) listOf(backgroundHost.action) else emptyList()
+        }
 
         CompositionLocalProvider(
             net.weero.measix.pilot.ui.components.message.tools.LocalToolConversationId provides snapshot.header.id,
@@ -498,7 +496,7 @@ private fun ChatListNormal(
                         messageAssistant?.allowConversationSystemPrompt == true &&
                         onConversationSystemPromptChange != null
                     if (showsSystemPromptItem) {
-                        item(key = "ConversationSystemPrompt") {
+                        item(key = "ConversationSystemPrompt:${snapshot.conversationId}:${snapshot.header.assistantId}") {
                             ConversationSystemPromptButton(
                                 customSystemPrompt = snapshot.header.customSystemPrompt,
                                 onSystemPromptChange = onConversationSystemPromptChange,

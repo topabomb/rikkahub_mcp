@@ -57,10 +57,9 @@ class ScopedConfigurationAndroidTest {
                 val selection = requireNotNull(env.sessions.observeSelectedRealmSelection().first())
                 env.commands.selectResource(selection, ResourceSelectionSlot.ASSISTANT, assistant.id)
                 env.commands.selectResource(selection, ResourceSelectionSlot.CHAT_MODEL, packet.identity.reference("mdl_chat"))
-                env.commands.updateAssistantUsage(access, assistant.id) {
-                    AssistantUsagePreferences(assistant.id, chatModelId = UsageValue(packet.identity.reference("mdl_chat")),
-                        builtInSearch = UsageValue(false), enableWebSearch = UsageValue(true))
-                }
+                val target = env.assistantTarget(assistant.id)
+                env.commands.changeAssistantPreference(target, AssistantPreferenceChange.Model(packet.identity.reference("mdl_chat")))
+                env.commands.changeAssistantPreference(target, AssistantPreferenceChange.Search(AssistantSearchMode.LOCAL))
                 env.commands.setGatewayEnabled(access, packet.identity.reference("gw_optional"), false)
             }
             withEnvironment(app, root) { env ->
@@ -121,7 +120,18 @@ class ScopedConfigurationAndroidTest {
         val settings = SettingsStore(context, scope, dataStore = preferences)
         val sessions = EnterpriseSessionController(EnterpriseAppliedStore(File(root, "enterprise")))
         val gate = ApplicationRecoveryGate()
-        val commands = ConfigurationApplicationService(settings, sessions, gate)
+        private val repository = io.mockk.mockk<net.weero.measix.pilot.data.repository.ConversationRepository>()
+        private val locks = net.weero.measix.pilot.service.runtime.ConversationOperationLocks()
+        private val registry = net.weero.measix.pilot.service.runtime.ConversationRuntimeRegistry(scope, repository, locks)
+        private val coordinator = net.weero.measix.pilot.service.runtime.ConversationCommandCoordinator(registry, repository, gate, locks)
+        val commands = ConfigurationApplicationService(settings, sessions, gate, coordinator, io.mockk.mockk())
+        suspend fun assistantTarget(id: me.rerere.common.configuration.ConfigurationReference): net.weero.measix.pilot.service.ConversationAssistantTarget {
+            val selection = requireNotNull(sessions.observeSelectedRealmSelection().first())
+            val draft = net.weero.measix.pilot.data.model.Conversation(assistantId = id, scope = selection.access.scope, newConversation = true, messageNodes = emptyList())
+            registry.installDraft(draft)
+            return net.weero.measix.pilot.service.ConversationAssistantTarget(
+                net.weero.measix.pilot.service.ConversationCommandTarget(draft.id, selection) {}, id)
+        }
         val queries = ConfigurationQueryService(settings, sessions, gate)
         suspend fun document(): UserSettingsDocument = JsonInstant.decodeFromString(preferences.data.first()[SettingsStore.USER_SETTINGS]!!)
     }

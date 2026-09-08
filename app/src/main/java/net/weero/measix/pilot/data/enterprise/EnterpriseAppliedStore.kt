@@ -10,6 +10,7 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import net.weero.measix.pilot.data.configuration.ConfigurationScope
 import kotlin.uuid.Uuid
+import me.rerere.ai.provider.ChatTransportCapabilities
 
 @Serializable
 internal enum class EnterpriseSessionPhase { SIGNED_OUT, CONFIGURATION_PENDING, READY, OFFLINE, CLOSING, REAUTH_REQUIRED }
@@ -75,7 +76,23 @@ private data class StoredEnterpriseConfiguration(
 @Serializable
 private data class StoredEnterpriseBindings(val revision: String, val bindings: List<EnterpriseRuntimeBinding>)
 
-internal data class LoadedEnterpriseState(val manifest: EnterpriseManifest, val configuration: EnterpriseConfiguration?)
+internal data class LoadedEnterpriseState(
+    val manifest: EnterpriseManifest,
+    val configuration: EnterpriseConfiguration?,
+    val modelCapabilities: Map<String, ChatTransportCapabilities> = emptyMap(),
+) {
+    fun toAvailable() = EnterpriseState.Available(manifest, configuration, modelCapabilities)
+}
+
+private fun EnterprisePackage?.loaded(manifest: EnterpriseManifest) = LoadedEnterpriseState(
+    manifest, this?.configuration, this?.runtimeBindings?.filter { binding ->
+        configuration.models.any { it.id == binding.resourceId }
+    }?.associate { binding -> binding.resourceId to when (binding.protocol) {
+        EnterpriseRuntimeProtocol.GOOGLE_GENERATE -> ChatTransportCapabilities.GOOGLE
+        EnterpriseRuntimeProtocol.OPENAI_RESPONSES -> ChatTransportCapabilities.RESPONSES
+        else -> ChatTransportCapabilities.BASIC
+    } }.orEmpty(),
+)
 
 internal enum class EnterpriseStorageCheckpoint {
     CONFIGURATION_STAGED, BINDINGS_STAGED, FEED_STAGED, BEFORE_MANIFEST_COMMIT, MANIFEST_WRITTEN,
@@ -97,7 +114,7 @@ internal class EnterpriseAppliedStore(
     fun load(): LoadedEnterpriseState {
         val manifest = readManifest()
         val packageValue = manifest.applied?.let { readPackage(manifest, it) }
-        return LoadedEnterpriseState(manifest, packageValue?.configuration)
+        return packageValue.loaded(manifest)
     }
 
     fun readManifest(): EnterpriseManifest {
@@ -124,12 +141,13 @@ internal class EnterpriseAppliedStore(
         return EnterpriseAppliedVersion(revision, value.configuration.generation, hash(configuration), hash(bindings))
     }
 
-    fun commit(manifest: EnterpriseManifest) {
+    fun commit(manifest: EnterpriseManifest): LoadedEnterpriseState {
         validateManifest(manifest)
-        manifest.applied?.let { readPackage(manifest, it) }
+        val packageValue = manifest.applied?.let { readPackage(manifest, it) }
         val previousFeeds = readManifest().feeds.associateBy { it.scope }
         manifest.feeds.filter { previousFeeds[it.scope] != it }.forEach(::readFeed)
         writeManifest(manifest)
+        return packageValue.loaded(manifest)
     }
 
     private fun writeManifest(manifest: EnterpriseManifest) {

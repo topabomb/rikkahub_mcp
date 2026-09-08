@@ -163,7 +163,8 @@ fun rememberImageBackgroundHost(
             if (pick != null) {
                 AssistantPickerSheet(
                     settings = settingsState.value,
-                    currentAssistant = settingsState.value.getCurrentAssistant(),
+                    currentAssistantId = settingsState.value.getCurrentAssistant().id,
+                    assistants = settingsState.value.assistants,
                     title = pickerTitle,
                     forceDialog = true,
                     allowManage = false,

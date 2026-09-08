@@ -23,6 +23,19 @@ internal fun appliedConfiguration(packet: EnterprisePackage): EnterpriseState.Av
 )
 
 class ConfigurationResolverTest {
+    @Test
+    fun `chat capabilities follow the model transport override instead of the containing provider`() {
+        val model = Model(modelId = "overridden", providerOverwrite = ProviderSetting.Google())
+        val parent = ProviderSetting.OpenAI(models = listOf(model))
+        val document = UserSettingsDocument.empty().withPersonalSettings(Settings(providers = listOf(parent)))
+        val resolved = ConfigurationResolver.resolve(document, ConfigurationScope.Personal, appliedConfiguration(exampleEnterprisePackage()))
+        assertEquals(me.rerere.ai.provider.ChatTransportCapabilities.GOOGLE, resolved.models.getValue(model.id).transportCapabilities)
+        val plain = model.copy(providerOverwrite = ProviderSetting.OpenAI(useResponseApi = false))
+        val replaced = document.copy(configuration = document.configuration.copy(providers = listOf(ProviderSetting.Google(models = listOf(plain)))))
+        assertEquals(me.rerere.ai.provider.ChatTransportCapabilities.BASIC,
+            ConfigurationResolver.resolve(replaced, ConfigurationScope.Personal, appliedConfiguration(exampleEnterprisePackage())).models.getValue(model.id).transportCapabilities)
+    }
+
     private val userModel = Model(modelId = "personal", displayName = "Shared name")
     private val userProvider = ProviderSetting.OpenAI(models = listOf(userModel), apiKey = "personal-key")
     private val userMcp = McpServerConfig.StreamableHTTPServer(commonOptions = McpCommonOptions(name = "Enterprise-like name"), url = "https://example.invalid")

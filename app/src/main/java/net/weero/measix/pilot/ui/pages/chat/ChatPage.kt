@@ -90,13 +90,22 @@ import net.weero.measix.pilot.R
 import net.weero.measix.pilot.ui.components.ui.TTSController
 import net.weero.measix.pilot.Screen
 import net.weero.measix.pilot.data.datastore.Settings
-import net.weero.measix.pilot.data.imggen.ImageGenerationSelectionResolver
 import net.weero.measix.pilot.data.datastore.findProvider
 import net.weero.measix.pilot.data.datastore.getAssistantById
 import net.weero.measix.pilot.data.datastore.getChatModel
-import net.weero.measix.pilot.data.datastore.getConversationAssistant
 import net.weero.measix.pilot.service.ArtifactUseCase
 import net.weero.measix.pilot.data.model.Assistant
+import net.weero.measix.pilot.data.model.Avatar
+import net.weero.measix.pilot.data.configuration.AssistantPreferenceChange
+import net.weero.measix.pilot.service.ConversationConfigurationUiModel
+import net.weero.measix.pilot.service.ConversationAssistantTarget
+import net.weero.measix.pilot.service.ModelCatalogUiModel
+import net.weero.measix.pilot.service.mcpChoices
+import net.weero.measix.pilot.ui.components.ai.configurationUnavailableText
+import androidx.compose.runtime.key
+import androidx.compose.foundation.layout.PaddingValues
+import net.weero.measix.pilot.service.importInputUris
+import net.weero.measix.pilot.ui.pages.assistant.detail.AssistantLocalToolContent
 import net.weero.measix.pilot.service.MemoryService
 import net.weero.measix.pilot.service.workspace.WorkspaceQueryService
 import net.weero.measix.pilot.service.ChatError
@@ -131,7 +140,6 @@ import net.weero.measix.pilot.ui.hooks.ChatInputState
 import net.weero.measix.pilot.ui.hooks.EditStateContent
 import net.weero.measix.pilot.ui.hooks.rememberSharedPreferenceBoolean
 import net.weero.measix.pilot.ui.hooks.useEditState
-import net.weero.measix.pilot.ui.pages.assistant.detail.mergeAssistantDelta
 import net.weero.measix.pilot.utils.ImageUtils
 import net.weero.measix.pilot.utils.isAllowedFileType
 import net.weero.measix.pilot.ui.context.rememberChatNavigation
@@ -216,7 +224,6 @@ fun ChatPage(
         conversationId = currentSnapshot.conversationId,
         updates = turnFeedbackUpdates,
     )
-    val enableWebSearch by vm.enableWebSearch.collectAsStateWithLifecycle()
     val errors by vm.errors.collectAsStateWithLifecycle()
     val favoriteNodeIds by vm.favoriteNodeIds.collectAsStateWithLifecycle()
 
@@ -343,7 +350,7 @@ fun ChatPage(
                             navController = navController,
                             vm = vm,
                             chatListState = chatListState,
-                            enableWebSearch = enableWebSearch,
+
                             navigationAction = if (canCollapseSidebar && !sidebarExpanded) {
                                 ChatNavigationAction.ExpandSidebar
                             } else {
@@ -388,7 +395,7 @@ fun ChatPage(
                         navController = navController,
                         vm = vm,
                         chatListState = chatListState,
-                        enableWebSearch = enableWebSearch,
+
                         navigationAction = ChatNavigationAction.OpenDrawer,
                         errors = errors,
                         onDismissError = { vm.dismissError(it) },
@@ -464,7 +471,6 @@ private fun ChatPageContent(
     navController: Navigator,
     vm: ChatVM,
     chatListState: LazyListState,
-    enableWebSearch: Boolean,
     errors: List<ChatError>,
     onNavigationClick: (() -> Unit)? = null,
     onDismissError: (Uuid) -> Unit,
@@ -489,24 +495,19 @@ private fun ChatPageContent(
         .collectAsStateWithLifecycle(initialValue = emptyList())
     var previewMode by rememberSaveable { mutableStateOf(false) }
     val hazeState = rememberHazeState()
-    val assistant = setting.getConversationAssistant(snapshot.header.assistantId)
-    val updateAssistantConfiguration: (Assistant) -> Unit = { updatedAssistant ->
-        vm.updateSettings { current ->
-            current.copy(
-                assistants = current.assistants.map { latestAssistant ->
-                    if (latestAssistant.id == updatedAssistant.id) {
-                        mergeAssistantDelta(assistant, updatedAssistant, latestAssistant)
-                    } else {
-                        latestAssistant
-                    }
-                }
-            )
-        }
+    val configuration = conversationUiModel?.configuration
+    val target = configuration?.target
+    val assistant = configuration?.assistant
+    val inputImports = target?.let(vm::importsFor)
+    val changePreference: (AssistantPreferenceChange) -> Unit = { change ->
+        if (target != null) scope.launch { vm.changeAssistantPreference(target, change) }
     }
-    var showFilesSheet by remember { mutableStateOf(false) }
-    var showMcpPicker by remember { mutableStateOf(false) }
-    var showWorkspaceSheet by remember { mutableStateOf(false) }
-    var showAssistantPicker by remember { mutableStateOf(false) }
+    val mcpChoices = configuration?.mcpChoices(mcpPresentations).orEmpty()
+    var showFilesSheet by remember(target) { mutableStateOf(false) }
+    var showMcpPicker by remember(target) { mutableStateOf(false) }
+    var showLocalTools by remember(target) { mutableStateOf(false) }
+    var showWorkspaceSheet by remember(target) { mutableStateOf(false) }
+    var showAssistantPicker by remember(target) { mutableStateOf(false) }
     val workspaceNamesById = remember(workspaces) {
         workspaces.mapNotNull { workspace ->
             runCatching { Uuid.parse(workspace.id) }
@@ -515,37 +516,40 @@ private fun ChatPageContent(
         }.toMap()
     }
     val memoryService: MemoryService = koinInject()
-    val memoryCountFlow = remember(snapshot.header.scope, assistant.id) {
-        memoryService.observe(snapshot.header.scope, assistant.id, enabledOnly = true).map { it.records.size }
+    val memoryCountFlow = remember(snapshot.header.scope, snapshot.header.assistantId) {
+        memoryService.observe(snapshot.header.scope, snapshot.header.assistantId, enabledOnly = true).map { it.records.size }
     }
     val memoryCount by memoryCountFlow.collectAsStateWithLifecycle(initialValue = 0)
-    val imageSelectionResolver: ImageGenerationSelectionResolver = koinInject()
-    val imageGenerationAvailable = remember(setting) { imageSelectionResolver.isAvailable(setting) }
+    val imageGenerationAvailable = configuration?.imageGenerationAvailable == true
     val readiness = remember(
         setting,
         assistant,
         workspaceNamesById,
         memoryCount,
         imageGenerationAvailable,
-        mcpPresentations,
+        mcpChoices,
+        configuration,
     ) {
         setting.buildConversationReadiness(
             assistant = assistant,
             workspaceNamesById = workspaceNamesById,
             memoryCount = memoryCount,
             imageGenerationAvailable = imageGenerationAvailable,
-            mcpServers = mcpPresentations,
+            mcpServers = mcpChoices,
+            selectedModel = configuration?.model,
+            modelUnavailableReason = configuration?.assistantUnavailableReason ?: configuration?.modelSelection?.unavailableReason,
+            hasAvailableChatModel = configuration?.modelCatalog?.groups?.any { group -> group.models.any { it.canSelect && it.model.type == ModelType.CHAT } } == true,
         )
     }
     val latestReadiness by rememberUpdatedState(readiness)
     val latestAllowConversationSystemPrompt by rememberUpdatedState(
-        setting.getAssistantById(snapshot.header.assistantId)?.allowConversationSystemPrompt == true,
+        assistant?.allowConversationSystemPrompt == true,
     )
-    val modelListState = rememberModelListState(
-        modelId = assistant.chatModelId ?: setting.chatModelId,
-        catalog = net.weero.measix.pilot.service.userDefinitionModelCatalog(setting.providers),
+    val modelListState = key(target) { rememberModelListState(
+        modelId = configuration?.modelSelection?.reference,
+        catalog = configuration?.modelCatalog ?: ModelCatalogUiModel(emptyList()),
         type = ModelType.CHAT,
-    )
+    ) }
     val modelRequiredMessage = stringResource(R.string.chat_readiness_model_required_toast)
 
     fun requestAppendScroll(requestContext: AppendScrollContext) {
@@ -567,8 +571,8 @@ private fun ChatPageContent(
         }
     }
 
-    val completionProviders = remember(assistant.workspaceId, snapshot.header.workspaceCwd, workspaceQueryService) {
-        assistant.workspaceId?.let { workspaceId ->
+    val completionProviders = remember(assistant?.workspaceId, snapshot.header.workspaceCwd, workspaceQueryService) {
+        assistant?.workspaceId?.let { workspaceId ->
             listOf(
                 WorkspaceCompletionProvider(
                     workspaceId = workspaceId.toString(),
@@ -594,7 +598,7 @@ private fun ChatPageContent(
             contentWindowInsets = WindowInsets(0),
             topBar = {
                 TopBar(
-                    settings = setting,
+                    model = configuration?.model,
                     assistant = assistant,
                     snapshot = snapshot,
                     navigationAction = navigationAction,
@@ -620,28 +624,40 @@ private fun ChatPageContent(
                     modifier = Modifier.fillMaxWidth(),
                     contentAlignment = Alignment.Center,
                 ) {
+                    if (assistant != null && configuration != null && inputImports != null) key(configuration.target) {
                     ChatInput(
                         modifier = Modifier
                             .widthIn(max = AdaptiveLayoutDefaults.ReadableContentMaxWidth)
                             .fillMaxWidth(),
                         state = inputState,
-                        artifactDraftScope = vm.artifactDraftScope,
+                        artifactDraftScope = inputImports,
+                        requireInputOwner = { vm.requireConfigurationTarget(configuration.target) },
                         loading = turnPresentation.isActive,
                         settings = setting,
                         assistant = assistant,
+                        model = configuration.model,
+                        supportsBuiltInSearch = configuration.transportCapabilities.builtInSearch,
+                        builtInSearchEnabled = configuration.builtInSearchEnabled,
+                        selectedSearchServiceId = configuration.searchSelection.reference,
+                        canChangeModel = configuration.canChangeModel,
+                        modelSelectionActions = buildList {
+                            add(net.weero.measix.pilot.ui.components.ai.ModelSelectionAction(stringResource(R.string.assistant_page_follow_default_model)) {
+                                check(vm.changeAssistantPreference(configuration.target, AssistantPreferenceChange.Model(null)))
+                            })
+                            if (snapshot.header.scope is net.weero.measix.pilot.data.configuration.ConfigurationScope.Enterprise) {
+                                add(net.weero.measix.pilot.ui.components.ai.ModelSelectionAction(stringResource(R.string.assistant_use_definition_model)) {
+                                    check(vm.changeAssistantPreference(configuration.target, AssistantPreferenceChange.InheritModel))
+                                })
+                            }
+                        },
                         modelListState = modelListState,
                         hazeState = hazeState,
                         completionProviders = completionProviders,
                         onCancelClick = {
                             vm.stopGeneration()
                         },
-                        enableSearch = enableWebSearch,
-                        onUpdateSearchMode = { mode ->
-                            vm.updateSearchMode(
-                                assistantId = assistant.id,
-                                mode = mode,
-                            )
-                        },
+                        enableSearch = assistant.enableWebSearch,
+                        onUpdateSearchMode = { mode -> changePreference(AssistantPreferenceChange.Search(mode)) },
                         onSendClick = {
                             if (!readiness.canSend) {
                                 toaster.show(modelRequiredMessage, type = ToastType.Error)
@@ -720,29 +736,23 @@ private fun ChatPageContent(
                             }
                             inputState.clearInput()
                         },
-                        onUpdateChatModel = {
-                            vm.setChatModel(assistant = assistant, model = it)
-                        },
-                        onUpdateAssistant = { updatedAssistant ->
-                            vm.updateSettings { current ->
-                                current.copy(
-                                    assistants = current.assistants.map { latestAssistant ->
-                                        if (latestAssistant.id == updatedAssistant.id) {
-                                            mergeAssistantDelta(assistant, updatedAssistant, latestAssistant)
-                                        } else {
-                                            latestAssistant
-                                        }
-                                    }
-                                )
-                            }
-                        },
-                        onUpdateSearchService = { serviceId ->
-                            vm.updateSettings { it.copy(selectedSearchServiceId = serviceId) }
-                        },
+                        onUpdateChatModel = { check(vm.changeAssistantPreference(configuration.target, AssistantPreferenceChange.Model(it.id))) },
+                        onUpdateReasoning = { changePreference(AssistantPreferenceChange.Reasoning(it)) },
+                        onUpdateSearchService = { id -> scope.launch { vm.selectSearchService(configuration.target, id) } },
                         onMoreClick = {
                             showFilesSheet = true
                         },
                     )
+                    } else {
+                        Row {
+                            TextButton(onClick = { showAssistantPicker = true }, enabled = target != null) {
+                                Text(stringResource(R.string.safe_mode_switch_assistant))
+                            }
+                            if (turnPresentation.isActive) TextButton(onClick = vm::stopGeneration) {
+                                Text(stringResource(R.string.cancel))
+                            }
+                        }
+                    }
                 }
             },
             containerColor = Color.Transparent,
@@ -758,12 +768,13 @@ private fun ChatPageContent(
                 settings = setting,
                 readiness = readiness,
                 assistant = assistant,
+                modelById = configuration?.modelCatalog?.groups.orEmpty().flatMap { it.models }.associate { it.model.id to it.model },
                 hazeState = hazeState,
                 errors = errors,
                 onDismissError = onDismissError,
                 onClearAllErrors = onClearAllErrors,
                 onRegenerate = {
-                    vm.regenerateAtMessage(it)
+                    if (readiness.canSend) vm.regenerateAtMessage(it)
                 },
                 onEdit = {
                     inputState.editingMessage = it.id
@@ -810,29 +821,29 @@ private fun ChatPageContent(
                     vm.toggleMessageFavorite(node)
                 },
                 onConversationSystemPromptChange = { newPrompt ->
-                    vm.updateCustomSystemPrompt(newPrompt)
+                    target?.let { original -> scope.launch { vm.updateCustomSystemPrompt(original, newPrompt) } }
                 },
                 onProviderConfigClick = {
                     navController.navigate(Screen.SettingProvider)
                 },
                 onReadinessModelClick = {
-                    modelListState.open()
+                    if (configuration?.canChangeModel == true) modelListState.open()
                 },
                 onReadinessMcpClick = {
                     showMcpPicker = true
                 },
                 onReadinessLocalToolsClick = {
-                    navController.navigate(Screen.AssistantLocalTool(assistant.id.toString()))
+                    showLocalTools = true
                 },
                 onReadinessWorkspaceClick = {
                     showWorkspaceSheet = true
                 },
                 onSwitchAssistant = { showAssistantPicker = true },
                 onManageAssistant = {
-                    navController.navigate(Screen.AssistantDetail(assistant.id.toString()))
+                    navController.navigate(Screen.AssistantDetail(snapshot.header.assistantId.toString()))
                 },
                 onMemoryClick = {
-                    navController.navigate(Screen.AssistantMemory(assistant.id.toString()))
+                    navController.navigate(Screen.AssistantMemory(snapshot.header.assistantId.toString()))
                 },
             )
             if (isActiveRoute) {
@@ -841,29 +852,31 @@ private fun ChatPageContent(
                         modifier = Modifier.widthIn(max = AdaptiveLayoutDefaults.ReadableContentMaxWidth),
                         contentPadding = innerPadding,
                         hazeState = hazeState,
-                        hasVisibleBackground = assistant.hasVisibleChatBackground(),
+                        hasVisibleBackground = assistant?.hasVisibleChatBackground() == true,
                     )
                 }
             }
         }
 
-        if (showFilesSheet) {
+        if (showFilesSheet && assistant != null && configuration != null && inputImports != null) key(configuration.target) {
             ChatFilesPickerSheet(
                 inputState = inputState,
                 setting = setting,
                 snapshot = snapshot,
                 assistant = assistant,
                 vm = vm,
-                onUpdateAssistant = updateAssistantConfiguration,
+                configuration = configuration,
+                originalImports = inputImports,
+                mcpChoices = mcpChoices,
+                onPreferenceChange = changePreference,
                 onDismiss = { showFilesSheet = false },
             )
         }
 
-        if (showMcpPicker) {
+        if (showMcpPicker && assistant != null && configuration != null) key(configuration.target) {
             McpPickerSheet(
-                assistant = assistant,
-                servers = mcpPresentations,
-                onUpdateAssistant = updateAssistantConfiguration,
+                servers = mcpChoices,
+                onToggle = { id, enabled -> changePreference(AssistantPreferenceChange.Mcp(id, enabled)) },
                 onNavigateToSettings = {
                     showMcpPicker = false
                     navController.navigate(Screen.SettingMcp)
@@ -872,37 +885,45 @@ private fun ChatPageContent(
             )
         }
 
-        if (showAssistantPicker) {
+        if (showAssistantPicker && configuration != null) key(configuration.target) {
             AssistantPickerSheet(
                 settings = setting,
-                currentAssistant = assistant,
+                currentAssistantId = snapshot.header.assistantId,
+                assistants = configuration.assistants.values.toList(),
+                unavailableReasons = configuration.resources.filter { it.key.category == net.weero.measix.pilot.data.configuration.ConfigurationCategory.ASSISTANT }
+                    .associate { it.key.reference to it.access.unavailableReason },
                 onAssistantSelected = { newAssistant ->
-                    showAssistantPicker = false
-                    vm.moveConversationToAssistant(newAssistant.id)
+                    scope.launch {
+                        if (vm.moveConversationToAssistant(configuration.target, newAssistant.id)) showAssistantPicker = false
+                    }
                 },
                 onDismiss = { showAssistantPicker = false },
             )
         }
 
-        if (showWorkspaceSheet) {
+        if (showLocalTools && assistant != null && configuration != null) key(configuration.target) {
+            AdaptiveModal(onDismissRequest = { showLocalTools = false }) {
+                AssistantLocalToolContent(
+                    innerPadding = PaddingValues(0.dp),
+                    assistant = assistant,
+                    subAssistants = configuration.assistants.values.toList(),
+                    imageGenerationAvailable = imageGenerationAvailable,
+                    onToggleLocalTool = { option, enabled -> changePreference(AssistantPreferenceChange.LocalTool(option, enabled)) },
+                    onUpdateSubAssistantIds = null,
+                )
+            }
+        }
+
+        if (showWorkspaceSheet && assistant != null && configuration != null) key(configuration.target) {
             WorkspaceSelectSheet(
                 assistant = assistant,
                 workspaces = workspaces,
                 onSelect = { workspaceId ->
-                    val selectedWorkspaceId = workspaceId?.let { Uuid.parse(it) }
-                    if (selectedWorkspaceId != assistant.workspaceId) {
-                        vm.updateSettings { current ->
-                            current.copy(
-                                assistants = current.assistants.map {
-                                    if (it.id == assistant.id) it.copy(workspaceId = selectedWorkspaceId) else it
-                                }
-                            )
-                        }
-                        if (snapshot.header.workspaceCwd != null) {
-                            vm.updateWorkspaceCwd(null)
+                    scope.launch {
+                        if (vm.changeAssistantPreference(configuration.target, AssistantPreferenceChange.Workspace(workspaceId?.let(Uuid::parse)))) {
+                            showWorkspaceSheet = false
                         }
                     }
-                    showWorkspaceSheet = false
                 },
                 onManage = {
                     showWorkspaceSheet = false
@@ -1042,7 +1063,10 @@ private fun ChatFilesPickerSheet(
     snapshot: ConversationPresentationSnapshot,
     assistant: Assistant,
     vm: ChatVM,
-    onUpdateAssistant: (Assistant) -> Unit,
+    configuration: ConversationConfigurationUiModel,
+    originalImports: net.weero.measix.pilot.service.ArtifactDraftScope,
+    mcpChoices: List<net.weero.measix.pilot.service.AssistantMcpChoice>,
+    onPreferenceChange: (AssistantPreferenceChange) -> Unit,
     onDismiss: () -> Unit,
 ) {
     val context = LocalContext.current
@@ -1053,6 +1077,7 @@ private fun ChatFilesPickerSheet(
     var showCompressDialog by remember { mutableStateOf(false) }
     val fileReadFailedFormat = stringResource(R.string.chat_input_file_read_failed)
     val unsupportedFileTypeFormat = stringResource(R.string.chat_input_unsupported_file_type)
+    val originalTarget = remember { configuration.target }
 
     fun dismissAll() {
         showInjectionSheet = false
@@ -1065,8 +1090,7 @@ private fun ChatFilesPickerSheet(
         ?: uri.toString()
 
     suspend fun importAttachments(uris: List<Uri>): List<Uri>? = try {
-        vm.artifactDraftScope.importUrisOrThrow(uris)
-            .map { it.uri }
+        originalImports.importInputUris(uris) { vm.requireConfigurationTarget(originalTarget) }.map { it.uri }
     } catch (cancelled: CancellationException) {
         throw cancelled
     } catch (error: Exception) {
@@ -1150,6 +1174,12 @@ private fun ChatFilesPickerSheet(
     }
 
     var preCropTempFile by remember { mutableStateOf<File?>(null) }
+    DisposableEffect(originalTarget) {
+        onDispose {
+            cameraOutputFile?.delete()
+            preCropTempFile?.delete()
+        }
+    }
     val (_, launchImageCrop) = useCropLauncher(
         onCroppedImageReady = { croppedUri ->
             scope.launch {
@@ -1286,12 +1316,14 @@ private fun ChatFilesPickerSheet(
             onCompressContext = { additionalPrompt, targetTokens, keepRecentMessages ->
                 vm.handleCompressContext(additionalPrompt, targetTokens, keepRecentMessages)
             },
-            onUpdateAssistant = onUpdateAssistant,
+            onPreferenceChange = onPreferenceChange,
+            transportCapabilities = configuration.transportCapabilities,
+            mcpServers = mcpChoices,
             onUpdateConversationModeInjectionIds = { ids ->
-                vm.updateModeInjectionIds(ids)
+                scope.launch { vm.updateModeInjectionIds(originalTarget, ids) }
             },
             onUpdateWorkspaceCwd = { cwd ->
-                vm.updateWorkspaceCwd(cwd)
+                scope.launch { vm.updateWorkspaceCwd(originalTarget, assistant.workspaceId, cwd) }
             },
             showInjectionSheet = showInjectionSheet,
             onShowInjectionSheetChange = { showInjectionSheet = it },
@@ -1315,8 +1347,8 @@ private enum class ChatNavigationAction {
 
 @Composable
 private fun TopBar(
-    settings: Settings,
-    assistant: Assistant,
+    model: me.rerere.ai.provider.Model?,
+    assistant: Assistant?,
     snapshot: ConversationPresentationSnapshot,
     navigationAction: ChatNavigationAction,
     onNavigationClick: () -> Unit,
@@ -1367,7 +1399,7 @@ private fun TopBar(
                 },
                 color = Color.Transparent,
             ) {
-                val showAvatar = assistant.useAssistantAvatar &&
+                val showAvatar = assistant?.useAssistantAvatar == true &&
                     LocalAdaptiveLayoutInfo.current.chatLayoutMode == ChatLayoutMode.ListDetail
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
@@ -1375,24 +1407,22 @@ private fun TopBar(
                 ) {
                     if (showAvatar) {
                         UIAvatar(
-                            name = assistant.name,
-                            value = assistant.avatar,
+                            name = assistant?.name.orEmpty(),
+                            value = assistant?.avatar ?: Avatar.Dummy,
                             modifier = Modifier.size(40.dp),
                             loading = loading,
                         )
                     }
                     Column {
-                        val model = settings.getChatModel(assistant)
-                        val provider = model?.findProvider(providers = settings.providers, checkOverwrite = false)
                         Text(
                             text = snapshot.header.title.ifBlank { stringResource(R.string.chat_page_new_chat) },
                             maxLines = 1,
                             style = MaterialTheme.typography.titleMedium,
                             overflow = TextOverflow.Ellipsis,
                         )
-                        if (model != null && provider != null) {
+                        if (model != null && assistant != null) {
                             Text(
-                                text = "${assistant.name.ifBlank { stringResource(R.string.assistant_page_default_assistant) }} / ${model.displayName} (${provider.name})",
+                                text = "${assistant.name.ifBlank { stringResource(R.string.assistant_page_default_assistant) }} / ${model.displayName}",
                                 overflow = TextOverflow.Ellipsis,
                                 maxLines = 1,
                                 color = LocalContentColor.current.copy(0.65f),

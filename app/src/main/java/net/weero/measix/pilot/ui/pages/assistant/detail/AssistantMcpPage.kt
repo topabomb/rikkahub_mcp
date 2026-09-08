@@ -1,4 +1,4 @@
-﻿package net.weero.measix.pilot.ui.pages.assistant.detail
+package net.weero.measix.pilot.ui.pages.assistant.detail
 
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.calculateEndPadding
@@ -24,6 +24,7 @@ import org.koin.androidx.compose.koinViewModel
 import org.koin.compose.koinInject
 import org.koin.core.parameter.parametersOf
 import net.weero.measix.pilot.service.McpQueryService
+import net.weero.measix.pilot.service.assistantChoices
 
 @Composable
 fun AssistantMcpPage(id: String) {
@@ -63,9 +64,8 @@ fun AssistantMcpPage(id: String) {
                 end = innerPadding.calculateEndPadding(layoutDirection) + 16.dp,
                 bottom = innerPadding.calculateBottomPadding() + 16.dp,
             ),
-            assistant = assistant,
-            servers = mcpServers,
-            onUpdateAssistant = { vm.update(it) }
+            servers = mcpServers.assistantChoices(assistant),
+            onToggle = { id, enabled -> vm.update(assistant.copy(mcpServers = if (enabled) assistant.mcpServers + id else assistant.mcpServers - id)) }
         )
     }
 }

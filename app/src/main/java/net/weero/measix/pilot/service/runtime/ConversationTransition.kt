@@ -162,7 +162,7 @@ internal object ConversationTransition {
         is MoveToAssistant -> if (old.assistantId == command.assistantId) {
             old
         } else {
-            old.copy(assistantId = command.assistantId, folderId = null)
+            old.copy(assistantId = command.assistantId, folderId = null, workspaceCwd = null)
         }
         TogglePinned -> old.copy(isPinned = !old.isPinned)
     }
@@ -396,6 +396,7 @@ internal object ConversationTransition {
         is MoveToAssistant -> ConversationHeaderPatch(
             assistantId = command.assistantId,
             folderId = OptionalFolderId.Clear,
+            workspaceCwd = OptionalString.Set(null),
         ).takeIf { oldHeader.assistantId != command.assistantId }
         TogglePinned -> ConversationHeaderPatch(isPinned = !oldHeader.isPinned)
     }

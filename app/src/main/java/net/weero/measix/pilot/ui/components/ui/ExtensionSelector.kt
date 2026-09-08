@@ -22,6 +22,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import net.weero.measix.pilot.data.configuration.AssistantPreferenceChange
 import net.weero.measix.pilot.R
 import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.files.SkillManager
@@ -38,7 +41,7 @@ fun ExtensionSelector(
     modifier: Modifier = Modifier,
     assistant: Assistant,
     settings: Settings,
-    onUpdate: (Assistant) -> Unit,
+    onPreferenceChange: (AssistantPreferenceChange) -> Unit,
     conversationModeInjectionIds: Set<ConfigurationReference>? = null,
     onUpdateConversationModeInjectionIds: ((Set<ConfigurationReference>) -> Unit)? = null,
     onNavigateToQuickMessages: () -> Unit = {},
@@ -49,9 +52,7 @@ fun ExtensionSelector(
     var skills by remember { mutableStateOf<List<SkillMetadata>>(emptyList()) }
 
     LaunchedEffect(Unit) {
-        // 打开扩展面板时清理运行时被删除的技能（残留的 enabledSkills 引用），
-        // prune 顺带返回现存技能列表，避免重复读盘
-        skills = skillManager.pruneOrphanedEnabledSkills()
+        skills = withContext(Dispatchers.IO) { skillManager.listSkills() }
     }
 
     val useConversationInjections =
@@ -111,12 +112,7 @@ fun ExtensionSelector(
                             quickMessages = settings.quickMessages,
                             selectedIds = assistant.quickMessageIds,
                             onToggle = { id, checked ->
-                                val newIds = if (checked) {
-                                    assistant.quickMessageIds + id
-                                } else {
-                                    assistant.quickMessageIds - id
-                                }
-                                onUpdate(assistant.copy(quickMessageIds = newIds))
+                                onPreferenceChange(AssistantPreferenceChange.QuickMessage(id, checked))
                             },
                             onManage = onNavigateToQuickMessages,
                         )
@@ -143,7 +139,7 @@ fun ExtensionSelector(
                                 if (useConversationInjections) {
                                     requireNotNull(onUpdateConversationModeInjectionIds)(newIds)
                                 } else {
-                                    onUpdate(assistant.copy(modeInjectionIds = newIds))
+                                    onPreferenceChange(AssistantPreferenceChange.PromptInjection(id, checked))
                                 }
                             },
                             onManage = onNavigateToPrompts,
@@ -163,12 +159,7 @@ fun ExtensionSelector(
                             skills = skills,
                             enabledSkills = assistant.enabledSkills,
                             onToggle = { name, checked ->
-                                val newSkills = if (checked) {
-                                    assistant.enabledSkills + name
-                                } else {
-                                    assistant.enabledSkills - name
-                                }
-                                onUpdate(assistant.copy(enabledSkills = newSkills))
+                                onPreferenceChange(AssistantPreferenceChange.Skill(name, checked))
                             },
                             onManage = onNavigateToSkills,
                         )

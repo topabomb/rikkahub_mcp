@@ -241,7 +241,7 @@ class TurnToolSetFactory(
 
 /**
  * Local search tools stay off when the selected model already has provider built-in search.
- * SearchMode UI is exclusive, but older settings or Target snapshots can still have both flags.
+ * AssistantSearchMode UI is exclusive, but older settings or Target snapshots can still have both flags.
  */
 fun shouldUseExternalWebSearch(assistant: Assistant, model: Model?): Boolean {
     return assistant.enableWebSearch && model?.tools?.contains(BuiltInTools.Search) != true

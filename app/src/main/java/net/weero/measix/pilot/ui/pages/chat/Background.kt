@@ -13,7 +13,8 @@ import coil3.compose.AsyncImage
 import net.weero.measix.pilot.data.model.Assistant
 
 @Composable
-fun AssistantBackground(assistant: Assistant, modifier: Modifier) {
+fun AssistantBackground(assistant: Assistant?, modifier: Modifier) {
+    if (assistant == null) return
     if (assistant.useGradientBackground) {
         MeshGradientBackground(modifier = modifier)
         return

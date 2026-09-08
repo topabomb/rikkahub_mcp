@@ -334,6 +334,14 @@ Android 媒体接线按下列所有权完成：`PortalMediaStore` 管理独占�
 
 ## 10. 完整变更清单与批次
 
+聊天配置与抽屉接线已实现：原页面 query 同时提供助手、模型目录、搜索与传输能力；字段命令复用 Session/Settings/会话 owner，删除无消费者的通用 usage 写入口。企业固定模型/MCP 不可修改，用户助手可本域重选、跟随域默认或恢复定义；失效定义不再静默回退。Workspace 目录、系统提示和附件迟到结果绑定原目标，写盘取消等待实际 ack。抽屉助手、目录、分页和筛选共用原 ConversationFolderAccess，旧目标不自动转入新空间；会话移动等待实际提交，换助手同时清 folder/cwd。此次没有增加配置存储区或持久化镜像。
+
+两位独立复审提出的原目标、取消与最新文档写入问题已收口。Pixel_10_Pro_Fold / Android 17 的 ScopedConfigurationAndroidTest、ModelCatalogAndroidTest、EnterprisePageAndroidTest、EnterpriseAppliedStateAndroidTest 共 11 项通过，耗时 2 分 25 秒。另在实际 Debug/Koin 页面走通示例企业聊天、固定 MCP 勾选且不可关闭、重启后从抽屉重开企业历史、企业域内移动到用户助手、模型继承选项，以及切回个人后历史/模型不混用。固定 MCP 尚无已验证工具，此处不算工具执行验收。设备旧消息中的 mock 原始回显保留为历史，新的 mock 回复已去除原始请求回显。
+
+本批最终串行 `test assembleDebug lintDebug assembleRelease --no-parallel --max-workers=1 --no-configuration-cache` 在 13 分 35 秒内通过：App 2,049 项、AI 366 项 JVM 测试无失败/跳过，lint 0 errors、284 warnings；Workspace 保留 11 项 Windows 宿主条件跳过。前置全量分别发现旧 mock 回显断言及抽屉两处 Compose 文案读取，均已修正，不通过忽略检查放行。设备业务回归发生在最后文案读取调整前，该调整由最终构建/lint 验证；另重新安装 Debug 后实际发送数字消息，确认新 mock 不回显内部请求且会话进入企业抽屉。分类证据、日志和截图见 `build/reports/enterprise/chat-configuration-verification.json`。
+
+完整助手使用参数、额外子助手引用编辑、企业配置资产、其余 Speech/MCP/辅助生成执行、文件/备份与完整示例继续实施；本批不代表 U2、Release 设备、真实平台互操作或 0.0.20 整期完成，版本保持 0.0.19 开发基线。
+
 聊天搜索配置的前置整理已进入代码：`Assistant.builtInSearch` 与企业同名 usage 保存选择，唯一模型派生保留原模型的其他工具；
 关闭/外挂/内建搜索同时修改助手的两个开关，不再改共享 `Model.tools`。Child 借用 Caller 模型后重新按 Target 偏好解析。
 旧无字段个人 JSON 继承原模型，经过生产 key 迁移与备份恢复验证；企业偏好不改变个人定义。

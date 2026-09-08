@@ -202,10 +202,13 @@ fun ModelSelectorButton(
     }
 }
 
+internal data class ModelSelectionAction(val label: String, val commit: suspend () -> Unit)
+
 @Composable
 internal fun ModelListSheet(
     state: ModelListState,
     onSelect: suspend (Model) -> Unit,
+    additionalActions: List<ModelSelectionAction> = emptyList(),
     configurationCommands: ConfigurationApplicationService = koinInject(),
     configurationQueries: ConfigurationQueryService = koinInject(),
 ) {
@@ -216,6 +219,24 @@ internal fun ModelListSheet(
 
     fun dismiss() {
         state.close()
+    }
+
+    fun submit(commit: suspend () -> Unit) {
+        if (submitting) return
+        submitting = true
+        selectionError = null
+        scope.launch {
+            try {
+                commit()
+                dismiss()
+            } catch (error: kotlinx.coroutines.CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                selectionError = error.message ?: "configuration_change_failed"
+            } finally {
+                submitting = false
+            }
+        }
     }
 
     AdaptiveModal(
@@ -231,6 +252,9 @@ internal fun ModelListSheet(
             verticalArrangement = Arrangement.spacedBy(4.dp)
         ) {
             selectionError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+            additionalActions.forEach { action ->
+                TextButton(enabled = !submitting, onClick = { submit(action.commit) }) { Text(action.label) }
+            }
             ModelList(
                 currentModel = state.modelId,
                 providers = state.filteredGroups,
@@ -239,24 +263,7 @@ internal fun ModelListSheet(
                 configurationQueries = configurationQueries,
                 modelType = state.type,
                 selectionEnabled = !submitting,
-                onSelect = {
-                    if (!submitting) {
-                        submitting = true
-                        selectionError = null
-                        scope.launch {
-                            try {
-                                onSelect(it)
-                                dismiss()
-                            } catch (error: kotlinx.coroutines.CancellationException) {
-                                throw error
-                            } catch (error: Exception) {
-                                selectionError = error.message ?: "configuration_change_failed"
-                            } finally {
-                                submitting = false
-                            }
-                        }
-                    }
-                },
+                onSelect = { model -> submit { onSelect(model) } },
                 onDismiss = {
                     dismiss()
                 }

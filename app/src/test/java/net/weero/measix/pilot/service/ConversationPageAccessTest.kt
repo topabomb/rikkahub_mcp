@@ -120,6 +120,7 @@ class ConversationPageAccessTest {
         val packet = exampleEnterprisePackage()
         sessions.enrollFixture(packet)
         val original = sessions.captureSelectedRealmAccess()
+        val originalSelection = requireNotNull(sessions.observeSelectedRealmSelection().first())
         val request: ConversationOpenRequest = ConversationOpenRequest.OpenExisting(Uuid.random(), original)
         val restored = JsonInstant.decodeFromString<ConversationOpenRequest>(JsonInstant.encodeToString(request))
         assertEquals(request, restored)
@@ -131,7 +132,7 @@ class ConversationPageAccessTest {
         coVerify(exactly = 0) { repository.getConversationHeader(any()) }
         coVerify(exactly = 0) { coordinator.openForView(any(), any()) }
         assertFails<EnterpriseConfigurationException> {
-            application(repository, coordinator, sessions).selectAssistantRequest(original, ConfigurationReference.random(), false)
+            application(repository, coordinator, sessions).selectAssistantRequest(originalSelection, ConfigurationReference.random(), false)
         }
         coVerify(exactly = 0) { repository.getRecentConversationRecords(any(), any(), any()) }
     }
@@ -220,7 +221,7 @@ class ConversationPageAccessTest {
     private fun gate() = ApplicationRecoveryGate().apply { ready() }
     private fun sessions() = EnterpriseSessionController(EnterpriseAppliedStore(temporary.newFolder()))
     private fun query(sessions: EnterpriseSessionController) = ConversationQueryService(
-        mockk(), mockk(), mockk(), mockk(), mockk(), sessions, gate(),
+        mockk(), mockk(), mockk(), mockk(), mockk(), sessions, gate(), mockk(),
     )
     private fun application(
         repository: ConversationRepository,

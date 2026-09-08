@@ -1655,4 +1655,6 @@
   <string name="configuration_follow_fast_model">빠른 모델을 따르고, 미설정 시 채팅 모델을 따름</string>
   <string name="configuration_remove_favorite">즐겨찾기 해제</string>
   <string name="search_picker_model_unavailable">이 모델은 내장 검색을 지원하지 않습니다. 다른 검색 방식이나 모델을 선택하세요.</string>
+  <string name="workspace_preference_partial_failure">작업 디렉터리는 초기화되었지만 작업 공간 선택을 저장하지 못했습니다. 이전 작업 공간이 선택되어 있습니다. 다시 시도하세요.</string>
+  <string name="assistant_use_definition_model">내 어시스턴트 정의의 모델 사용</string>
 </resources>

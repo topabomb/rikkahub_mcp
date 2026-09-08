@@ -26,6 +26,37 @@ import org.robolectric.annotation.Config
 class EnterpriseSessionControllerTest {
     @get:Rule val temporary = TemporaryFolder()
 
+    @Test
+    fun `transport capabilities follow the committed binding revision through failure restart and closing`() = runTest {
+        val root = temporary.newFolder()
+        var failCommit = false
+        val controller = EnterpriseSessionController(EnterpriseAppliedStore(root) {
+            if (failCommit && it == EnterpriseStorageCheckpoint.BEFORE_MANIFEST_COMMIT) throw IOException("injected")
+        })
+        val packet = exampleEnterprisePackage()
+        val first = controller.enrollFixture(packet)
+        val access = controller.captureSelectedRealmAccess() as RealmAccess.Enterprise
+        assertFalse(first.modelCapabilities.getValue("mdl_chat").builtInSearch)
+        val google = packet.copy(runtimeBindings = packet.runtimeBindings.map { binding ->
+            if (binding.resourceId == "mdl_chat") binding.copy(protocol = EnterpriseRuntimeProtocol.GOOGLE_GENERATE,
+                endpoint = "https://generativelanguage.googleapis.com", credential = "fixture-key") else binding
+        })
+        failCommit = true
+        expectFailure<IOException> { controller.synchronize(access, google) }
+        assertEquals(first, controller.available())
+        failCommit = false
+        controller.synchronize(access, google)
+        val current = controller.available()
+        assertEquals(first.manifest.applied!!.generation, current.manifest.applied!!.generation)
+        assertNotEquals(first.manifest.applied!!.revision, current.manifest.applied!!.revision)
+        assertTrue(current.modelCapabilities.getValue("mdl_chat").audioInput)
+        assertTrue(current.modelCapabilities.getValue("mdl_chat").builtInSearch)
+        val reopened = EnterpriseSessionController(EnterpriseAppliedStore(root))
+        assertEquals(current, reopened.recover())
+        reopened.beginExit(requireNotNull(reopened.captureExitRequest()))
+        assertTrue(reopened.available().modelCapabilities.isEmpty())
+    }
+
     @Test fun `obsolete enterprise manifest is rejected without rewriting stored facts`() = runTest {
         val root = temporary.newFolder()
         val controller = EnterpriseSessionController(EnterpriseAppliedStore(root)) { 1000L }

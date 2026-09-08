@@ -52,12 +52,12 @@ fun Color.withOverlayAlpha(alpha: Float): Color {
 
 @Composable
 fun ProvideChatSurfacePolicy(
-    assistant: Assistant,
+    assistant: Assistant?,
     displaySetting: DisplaySetting,
     content: @Composable () -> Unit,
 ) {
     val alpha = ChatSurfacePolicy.chromeAlpha(
-        hasVisibleBackground = assistant.hasVisibleChatBackground(),
+        hasVisibleBackground = assistant?.hasVisibleChatBackground() == true,
         bubbleOpacity = displaySetting.bubbleOpacity,
     )
     CompositionLocalProvider(LocalChatChromeAlpha provides alpha, content = content)

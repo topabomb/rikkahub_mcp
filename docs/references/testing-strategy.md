@@ -72,6 +72,12 @@
 | 聊天页面打开与生命周期 | `ConversationPageAccessTest` 验证显式 Draft/Existing、原 Session、header 前置检查与投影撤销；`ChatPageLifecycleTest` 验证实际 ViewModel 的授权先行、取消/回收、分享输入消费；`UserSettingsMigrationAndroidTest` 验证实际 DataStore/SharedPreferences 的最近聊天迁移、失败重试和保全；不替代普通命令/Turn 或正式企业 UI 验收 |
 | Portal 消息与文档授权 | `PortalProtocolTest` 核验完整共享输入摘要，执行全部 BridgeRequest 案例和原始重复键；`PortalDocumentTest` 使用真实本地 Session/Feed owner 验证原文档、ETag、配置同步、切域往返、文档替换及迟到同步结果；`PortalWebViewAndroidTest` 覆盖随包网页首次读取、实际 bootstrap、页内导航、重载后新页面、快速切域和旧同步错误隔离。设备验证结果见实施方案；请求解析不代表共享响应反例全部消费，页面测试不替代媒体、扫码或真实平台验收 |
 
+企业聊天配置由 `ConfigurationApplicationServiceTest` 验证实际字段命令、DataStore 失败/取消与根会话锁，
+`AssistantPreferenceMutationTest` 验证固定 MCP 与旧显式偏好的保全。`ConversationCommandAccessTest` 验证原助手、
+Workspace 和会话提示权限；分页/目录测试分别由 `ScopedConversationQueryTest`、`ConversationFolderAccessTest`
+验证旧选择失效，不能自动改用新域。`InputArtifactImportTest` 只检查原输入失效后的精确补偿。
+设备 `ScopedConfigurationAndroidTest` 使用真实 DataStore、Applied 重开与实际字段命令；它不替代聊天 Compose、扫码或 Release 验收。
+
 ## 4. Provider contract suite（两层）
 
 配置模型目录由 `ConfigurationApplicationServiceTest` 验证真实 Session/DataStore 的原选择提交、切域往返失效、覆盖清除及图片连接覆盖能力；`ModelCatalogUiModelTest` 验证默认行为与失效收藏引用投影，`ModelSettingsVMTest` 验证旧选择迟到错误不能覆盖当前错误。`ModelCatalogAndroidTest` 使用实际配置 owner 渲染 Compose 选择器，覆盖企业选择、禁用个人候选仍可进入原 Provider 管理、提交挂起时重复点击与失败重试；其失败注入位于 UI 提交边界，不证明设备磁盘写失败。持久化失败仍由 Store 测试负责。

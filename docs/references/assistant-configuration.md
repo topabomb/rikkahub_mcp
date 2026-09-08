@@ -11,7 +11,7 @@
 - Assistant 身份及模型、MCP、子助手等配置引用使用 `ConfigurationReference`；个人资源序列化保持原 UUID，企业资源保留 authority 与原始资源 ID。用户定义中的引用只能指向 User，企业域使用选择由独立偏好表达。
 - `Settings.assistantId` 只是全局当前选择。
 - 已创建会话以 `Conversation.assistantId` 为助手归属权威来源。
-- `Settings.getConversationAssistant()` 优先解析会话引用；只有引用的助手已被删除时才回退到当前助手。
+- 聊天由 `ConversationQueryService` 按原域与 `header.assistantId` 解析。定义删除或撤权保留历史与不可用原因，不回退到当前全局助手；聊天使用选择通过 `AssistantPreferenceChange` 修改指定字段。
 - `Settings.getChatModel(assistant)` 优先使用 `assistant.chatModelId`，为空时回退到全局 `Settings.chatModelId`；只在已启用 Provider 的 Chat 模型中解析。
 - 会话迁移到另一个助手必须显式更新 `Conversation.assistantId`，不能仅切换全局助手。
 

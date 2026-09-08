@@ -1,5 +1,6 @@
 package net.weero.measix.pilot.ui.components.ai
 
+import net.weero.measix.pilot.data.configuration.AssistantSearchMode
 import me.rerere.common.configuration.ConfigurationReference
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.EnterTransition
@@ -100,6 +101,8 @@ import net.weero.measix.pilot.data.datastore.getChatModel
 import net.weero.measix.pilot.data.datastore.getQuickMessagesOfAssistant
 import net.weero.measix.pilot.data.model.Assistant
 import net.weero.measix.pilot.data.model.QuickMessage
+import net.weero.measix.pilot.service.importInputUris
+import net.weero.measix.pilot.service.createInputText
 import net.weero.measix.pilot.service.ArtifactDraftScope
 import net.weero.measix.pilot.ui.components.ai.completion.ChatCompletionContext
 import net.weero.measix.pilot.ui.components.ai.completion.ChatCompletionItem
@@ -120,20 +123,27 @@ import org.koin.compose.koinInject
 import kotlin.time.Duration.Companion.seconds
 
 @Composable
-fun ChatInput(
+internal fun ChatInput(
     state: ChatInputState,
     artifactDraftScope: ArtifactDraftScope,
+    requireInputOwner: () -> Unit,
     loading: Boolean,
     settings: Settings,
     assistant: Assistant,
+    model: Model?,
+    supportsBuiltInSearch: Boolean,
+    builtInSearchEnabled: Boolean,
+    selectedSearchServiceId: ConfigurationReference?,
+    canChangeModel: Boolean,
+    modelSelectionActions: List<ModelSelectionAction>,
     modelListState: ModelListState,
     hazeState: HazeState,
     enableSearch: Boolean,
-    onUpdateSearchMode: (SearchMode) -> Unit,
+    onUpdateSearchMode: (AssistantSearchMode) -> Unit,
     modifier: Modifier = Modifier,
     completionProviders: List<ChatCompletionProvider> = emptyList(),
-    onUpdateChatModel: (Model) -> Unit,
-    onUpdateAssistant: (Assistant) -> Unit,
+    onUpdateChatModel: suspend (Model) -> Unit,
+    onUpdateReasoning: (me.rerere.ai.core.ReasoningLevel) -> Unit,
     onUpdateSearchService: (ConfigurationReference) -> Unit,
     onMoreClick: () -> Unit,
     onCancelClick: () -> Unit,
@@ -257,43 +267,31 @@ fun ChatInput(
                             horizontalArrangement = Arrangement.spacedBy(2.dp)
                         ) {
                             // Model Picker：sheet 在输入区稳定根级组合，不随 action row 显隐离开组合
+                            if (canChangeModel) {
                             ModelSelectorButton(
                                 state = modelListState,
                                 onlyIcon = true,
                                 modifier = Modifier,
                             )
+                            }
 
                             // Search
-                            val enableSearchMsg = stringResource(R.string.web_search_enabled)
-                            val disableSearchMsg = stringResource(R.string.web_search_disabled)
-                            val chatModel = settings.getChatModel(assistant)
                             SearchPickerButton(
                                 enableSearch = enableSearch,
                                 settings = settings,
-                                onUpdateSearchMode = { mode ->
-                                    onUpdateSearchMode(mode)
-                                    val enabled = mode != SearchMode.OFF
-                                    toaster.show(
-                                        message = if (enabled) enableSearchMsg else disableSearchMsg,
-                                        duration = 1.seconds,
-                                        type = if (enabled) {
-                                            ToastType.Success
-                                        } else {
-                                            ToastType.Normal
-                                        }
-                                    )
-                                },
+                                onUpdateSearchMode = onUpdateSearchMode,
+                                supportsBuiltInSearch = supportsBuiltInSearch,
+                                selectedSearchServiceId = selectedSearchServiceId,
                                 onUpdateSearchService = onUpdateSearchService,
-                                model = chatModel,
+                                builtInSearchEnabled = builtInSearchEnabled,
                             )
 
                             // Reasoning
-                            val model = settings.getChatModel(assistant)
                             if (model?.abilities?.contains(ModelAbility.REASONING) == true) {
                                 ReasoningButton(
                                     reasoningLevel = assistant.reasoningLevel,
                                     onUpdateReasoningLevel = {
-                                        onUpdateAssistant(assistant.copy(reasoningLevel = it))
+                                        onUpdateReasoning(it)
                                     },
                                     onlyIcon = true,
                                 )
@@ -356,6 +354,7 @@ fun ChatInput(
                             TextInputRow(
                                 state = state,
                                 artifactDraftScope = artifactDraftScope,
+                                requireInputOwner = requireInputOwner,
                                 assistant = assistant,
                                 completionProviders = completionProviders,
                                 onSendMessage = { sendMessage() },
@@ -369,6 +368,7 @@ fun ChatInput(
                         TextInputRow(
                             state = state,
                             artifactDraftScope = artifactDraftScope,
+                            requireInputOwner = requireInputOwner,
                             assistant = assistant,
                             completionProviders = completionProviders,
                             onSendMessage = { sendMessage() },
@@ -387,9 +387,10 @@ fun ChatInput(
 
             // 模型 sheet 与 action row 解耦：IME 目标变化时 action row 会离开组合，
             // sheet 若在那个子树内会在搜索框刚获得焦点时被一起移除。
-            ModelListSheet(
+            if (canChangeModel) ModelListSheet(
                 state = modelListState,
                 onSelect = onUpdateChatModel,
+                additionalActions = modelSelectionActions,
             )
         }
     }
@@ -469,6 +470,7 @@ private fun ActionIconButton(
 private fun TextInputRow(
     state: ChatInputState,
     artifactDraftScope: ArtifactDraftScope,
+    requireInputOwner: () -> Unit,
     assistant: Assistant,
     completionProviders: List<ChatCompletionProvider>,
     onSendMessage: () -> Unit,
@@ -515,6 +517,7 @@ private fun TextInputRow(
         var isFullScreen by remember { mutableStateOf(false) }
         var completionList by remember { mutableStateOf<ChatCompletionList?>(null) }
         val receiveContentListener = remember(
+            artifactDraftScope, state, requireInputOwner,
             settings.displaySetting.pasteLongTextAsFile, settings.displaySetting.pasteLongTextThreshold
         ) {
             ReceiveContentListener { transferableContent ->
@@ -525,11 +528,8 @@ private fun TextInputRow(
                             if (uri != null) {
                                 scope.launch {
                                     try {
-                                        state.addImages(
-                                            artifactDraftScope.importUrisOrThrow(
-                                                listOf(uri)
-                                            ).map { it.uri }
-                                        )
+                                        val imported = artifactDraftScope.importInputUris(listOf(uri), requireInputOwner).map { it.uri }
+                                        state.addImages(imported)
                                     } catch (cancelled: CancellationException) {
                                         throw cancelled
                                     } catch (_: Exception) {
@@ -547,7 +547,8 @@ private fun TextInputRow(
                             if (text != null && text.length > settings.displaySetting.pasteLongTextThreshold) {
                                 scope.launch {
                                     try {
-                                        state.addFiles(listOf(artifactDraftScope.createTextDocument(text)))
+                                        val imported = artifactDraftScope.createInputText(text, requireInputOwner)
+                                        state.addFiles(listOf(imported))
                                     } catch (cancelled: CancellationException) {
                                         throw cancelled
                                     } catch (_: Exception) {

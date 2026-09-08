@@ -155,12 +155,13 @@ class ConversationApplicationService internal constructor(
     }
 
     suspend fun selectAssistantRequest(
-        access: RealmAccess,
+        selection: RealmSelection,
         assistantId: ConfigurationReference,
         createNew: Boolean,
     ): ConversationOpenRequest {
         recoveryGate.awaitReady()
-        return sessions.withSelectedRealmAccess(access) {
+        return sessions.withSelectedRealmSelection(selection) {
+            val access = selection.access
             settingsStore.withResolvedConfiguration(access.scope, sessions.state.value) { configuration ->
                 check(configuration.selection(ConfigurationCategory.ASSISTANT, assistantId).isAvailable) {
                     "conversation_assistant_unavailable"
@@ -206,21 +207,34 @@ class ConversationApplicationService internal constructor(
         }
     }
 
-    suspend fun updateCustomSystemPrompt(target: ConversationCommandTarget, prompt: String?) = withCommandTarget(target) {
-        commandCoordinator.withRootHeaders(target.selection.access.scope, listOf(target.conversationId)) { headers ->
-            target.requireOpen()
-            check(headers.single().assistantId !is ConfigurationReference.Enterprise) { "managed_assistant_system_prompt_is_fixed" }
-            commandCoordinator.executeOrThrow(target.conversationId, UpdateHeader(customSystemPrompt = OptionalString.Set(prompt)))
+    suspend fun updateCustomSystemPrompt(target: ConversationAssistantTarget, prompt: String?) = withAssistantCommand(target) { assistant ->
+        check(target.assistantId !is ConfigurationReference.Enterprise) { "managed_assistant_system_prompt_is_fixed" }
+        check(assistant.allowConversationSystemPrompt) { "conversation_system_prompt_disabled" }
+        commandCoordinator.executeOrThrow(target.conversation.conversationId, UpdateHeader(customSystemPrompt = OptionalString.Set(prompt)))
+    }
+
+    suspend fun updateModeInjectionIds(target: ConversationAssistantTarget, ids: Set<ConfigurationReference>) = withAssistantCommand(target) { assistant ->
+        check(assistant.allowConversationPromptInjection) { "conversation_prompt_injection_disabled" }
+        commandCoordinator.executeOrThrow(target.conversation.conversationId, UpdateHeader(modeInjectionIds = OptionalConfigurationReferenceSet.Set(ids)))
+    }
+
+    suspend fun updateWorkspaceCwd(target: ConversationAssistantTarget, expectedWorkspaceId: Uuid?, cwd: String?) = withAssistantCommand(target) { assistant ->
+        check(assistant.workspaceId == expectedWorkspaceId) { "conversation_workspace_changed" }
+        commandCoordinator.executeOrThrow(target.conversation.conversationId, UpdateHeader(workspaceCwd = OptionalString.Set(cwd)))
+    }
+
+    private suspend fun <T> withAssistantCommand(target: ConversationAssistantTarget, action: suspend (Assistant) -> T): T =
+        withCommandTarget(target.conversation) {
+            settingsStore.withResolvedConfiguration(target.conversation.selection.access.scope, sessions.state.value) { configuration ->
+                check(configuration.selection(ConfigurationCategory.ASSISTANT, target.assistantId).isAvailable) { "conversation_assistant_unavailable" }
+                val assistant = requireNotNull(configuration.assistants[target.assistantId])
+                commandCoordinator.withRootHeaders(target.conversation.selection.access.scope, listOf(target.conversation.conversationId)) { headers ->
+                    target.conversation.requireOpen()
+                    check(headers.single().assistantId == target.assistantId) { "conversation_assistant_changed" }
+                    action(assistant)
+                }
+            }
         }
-    }
-
-    suspend fun updateModeInjectionIds(target: ConversationCommandTarget, ids: Set<ConfigurationReference>) = withRootCommand(target) {
-        commandCoordinator.executeOrThrow(target.conversationId, UpdateHeader(modeInjectionIds = OptionalConfigurationReferenceSet.Set(ids)))
-    }
-
-    suspend fun updateWorkspaceCwd(target: ConversationCommandTarget, cwd: String?) = withRootCommand(target) {
-        commandCoordinator.executeOrThrow(target.conversationId, UpdateHeader(workspaceCwd = OptionalString.Set(cwd)))
-    }
 
     suspend fun generateTitle(target: ConversationCommandTarget, force: Boolean = false) {
         withRootCommand(target) {
@@ -316,18 +330,22 @@ class ConversationApplicationService internal constructor(
     }
 
     suspend fun moveToAssistant(
-        target: ConversationCommandTarget,
+        assistantTarget: ConversationAssistantTarget,
         assistantId: ConfigurationReference,
         selectForNewChats: Boolean,
-    ) = withCommandTarget(target) {
+    ) {
+        val target = assistantTarget.conversation
+        withCommandTarget(target) {
         settingsStore.withResolvedConfiguration(target.selection.access.scope, sessions.state.value) { configuration ->
             check(configuration.selection(ConfigurationCategory.ASSISTANT, assistantId).isAvailable) { "conversation_assistant_unavailable" }
-            commandCoordinator.withRootHeaders(target.selection.access.scope, listOf(target.conversationId)) {
+            commandCoordinator.withRootHeaders(target.selection.access.scope, listOf(target.conversationId)) { headers ->
                 target.requireOpen()
+                check(headers.single().assistantId == assistantTarget.assistantId) { "conversation_assistant_changed" }
                 commandCoordinator.executeOrThrow(target.conversationId, MoveToAssistant(assistantId))
             }
         }
         if (selectForNewChats) writeSelectedAssistant(target.selection.access, assistantId)
+        }
     }
 
     suspend fun delete(target: ConversationCommandTarget) {

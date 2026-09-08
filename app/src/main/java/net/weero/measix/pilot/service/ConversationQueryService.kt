@@ -41,6 +41,7 @@ import net.weero.measix.pilot.service.runtime.toPresentationSnapshot
 import net.weero.measix.pilot.service.runtime.TurnLivePhase
 import java.time.Instant
 import kotlin.uuid.Uuid
+import net.weero.measix.pilot.data.datastore.SettingsStore
 
 /** Stable list/read model; message trees never cross the query port for list rendering. */
 data class ConversationSummary(
@@ -70,10 +71,12 @@ data class ConversationFolderDirectory(
 )
 
 /** Snapshot and process-local presentation observed from one Runtime projection. */
-data class ConversationUiModel(
+@ConsistentCopyVisibility
+data class ConversationUiModel internal constructor(
     val snapshot: ConversationPresentationSnapshot,
     val presentation: ConversationPresentation,
     val attachmentPreviews: Map<String, String> = emptyMap(),
+    internal val configuration: ConversationConfigurationUiModel? = null,
 ) {
     val turnFeedback: ConversationTurnFeedback? = projectConversationTurnFeedback(snapshot, presentation)
 }
@@ -111,6 +114,7 @@ class ConversationQueryService internal constructor(
     private val attachmentPreviewProjector: ConversationAttachmentPreviewProjector,
     private val sessions: EnterpriseSessionController,
     private val recoveryGate: ApplicationRecoveryGate,
+    private val settings: SettingsStore,
 ) {
     suspend fun captureCurrentAccess(): RealmAccess {
         recoveryGate.awaitReady()
@@ -165,7 +169,7 @@ class ConversationQueryService internal constructor(
             }
         }
 
-    private suspend fun <T> withViewAccess(lease: ConversationViewLease, action: () -> T): T =
+    private suspend fun <T> withViewAccess(lease: ConversationViewLease, action: suspend () -> T): T =
         sessions.withSelectedRealmAccess(lease.access) {
             lease.requireOpen()
             check(lease.selectionRevision == sessions.selectionRevision.value) { "conversation_view_revoked" }
@@ -203,13 +207,19 @@ class ConversationQueryService internal constructor(
     fun conversationUiModel(lease: ConversationViewLease): Flow<ConversationUiModel?> =
         observeForView<ConversationUiModel?>(lease, null) { runtimeRegistry.getConversationUiFlow(lease.conversationId)
             .combine(attachmentPreviewProjector.lifecycleChanges()) { joined, _ -> joined }
-            .mapLatest { (aggregate, presentation) ->
+            .combine(settings.observeConfiguration(sessions.state, lease.access.scope).map {
+                withViewAccess(lease) {
+                    settings.withResolvedConfiguration(lease.access.scope, sessions.state.value) { resolved -> resolved }
+                }
+            }) { joined, resolved -> Triple(joined.first, joined.second, resolved) }
+            .mapLatest { (aggregate, presentation, resolved) ->
                 val snapshot = aggregate.toPresentationSnapshot()
                 requireViewSnapshot(lease, snapshot)
                 ConversationUiModel(
                     snapshot = snapshot,
                     presentation = presentation,
                     attachmentPreviews = attachmentPreviewProjector.project(snapshot),
+                    configuration = resolved.conversationConfiguration(ConversationAssistantTarget(lease.commandTarget, snapshot.header.assistantId)),
                 )
             }
         }
@@ -239,17 +249,26 @@ class ConversationQueryService internal constructor(
         mergeConversationActivities(turnPresentations, titleGenerationIds)
     }
 
-    fun unfiledPaging(assistantId: ConfigurationReference): Flow<PagingData<ConversationSummary>> =
+    fun unfiledPaging(target: ConversationFolderAccess): Flow<PagingData<ConversationSummary>> =
         observeCurrentSelection().flatMapLatest { access ->
-            if (access == null) flowOf(PagingData.empty()) else paging(access) {
-                repository.unfiledPagingSource(access.access.scope, assistantId)
+            if (access != target.selection) flowOf(PagingData.empty()) else paging(target.selection) {
+                repository.unfiledPagingSource(target.selection.access.scope, target.assistantId)
             }
         }
 
-    fun folderPaging(folderId: Uuid): Flow<PagingData<ConversationSummary>> =
+    fun folderPaging(target: ConversationFolderAccess, folderId: Uuid): Flow<PagingData<ConversationSummary>> =
         observeCurrentSelection().flatMapLatest { access ->
-            if (access == null) flowOf(PagingData.empty()) else paging(access) {
-                repository.folderPagingSource(access.access.scope, folderId)
+            if (access != target.selection) flowOf(PagingData.empty()) else flow {
+                val belongs = sessions.withSelectedRealmSelection(target.selection) {
+                    folderRepository.getFolder(folderId)?.let { it.scope == target.selection.access.scope && it.assistantId == target.assistantId } == true
+                }
+                if (!belongs) emit(PagingData.empty()) else emitAll(paging(target.selection) {
+                    repository.folderPagingSource(target.selection.access.scope, folderId)
+                })
+            }.catch { error ->
+                if (error is CancellationException) throw error
+                if (error !is EnterpriseConfigurationException) throw error
+                emit(PagingData.empty())
             }
         }
 
@@ -305,16 +324,16 @@ class ConversationQueryService internal constructor(
             repository.getPinnedConversations(access.access.scope).map { list -> list.map { it.toSummary(access) } }
         }
 
-    fun foldersOfAssistant(assistantId: ConfigurationReference): Flow<ConversationFolderDirectory?> = flow {
+    fun foldersOfAssistant(target: ConversationFolderAccess): Flow<ConversationFolderDirectory?> = flow {
         recoveryGate.awaitReady()
         emitAll(sessions.observeSelectedRealmSelection().flatMapLatest { selection ->
-            if (selection == null) flowOf(null) else flow<ConversationFolderDirectory?> {
+            if (selection != target.selection) flowOf(null) else flow<ConversationFolderDirectory?> {
                 val source = sessions.withSelectedRealmSelection(selection) {
-                    folderRepository.getFoldersOfAssistant(selection.access.scope, assistantId)
+                    folderRepository.getFoldersOfAssistant(target.selection.access.scope, target.assistantId)
                 }
                 emitAll(source.map { folders ->
                     sessions.withSelectedRealmSelection(selection) {
-                        ConversationFolderDirectory(ConversationFolderAccess(selection, assistantId), folders)
+                        ConversationFolderDirectory(target, folders)
                     }
                 })
             }.onStart { emit(null) }.catch { error ->

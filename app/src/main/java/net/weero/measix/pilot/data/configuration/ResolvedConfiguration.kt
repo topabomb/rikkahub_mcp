@@ -1,6 +1,8 @@
 package net.weero.measix.pilot.data.configuration
 
 import me.rerere.ai.provider.Model
+import me.rerere.ai.provider.ChatTransportCapabilities
+import me.rerere.ai.provider.chatTransportCapabilities
 import me.rerere.ai.provider.ModelType
 import me.rerere.ai.provider.Modality
 import me.rerere.ai.provider.supportsImageGeneration
@@ -34,6 +36,7 @@ internal data class ResolvedModelConfiguration(
     val model: Model,
     val userProviderId: ConfigurationReference.User?,
     val imageGenerationSupported: Boolean,
+    val transportCapabilities: ChatTransportCapabilities,
 )
 
 /** An explicit invalid reference remains visible; it never turns into a different selection. */
@@ -148,7 +151,7 @@ internal object ConfigurationResolver {
                     val (provider, model) = only
                     add(ConfigurationCategory.MODEL, id, model.displayName, provider.enabled)
                     models[id] = ResolvedModelConfiguration(model, provider.id as ConfigurationReference.User,
-                        supportsImageGeneration(model.providerOverwrite ?: provider))
+                        supportsImageGeneration(model.providerOverwrite ?: provider), chatTransportCapabilities(model.providerOverwrite ?: provider))
                 } else {
                     // Imported providers can retain model IDs. No owner may be chosen arbitrarily.
                     val key = ConfigurationKey(ConfigurationCategory.MODEL, id)
@@ -176,6 +179,7 @@ internal object ConfigurationResolver {
                         inputModalities = definition.inputModalities, outputModalities = definition.outputModalities, abilities = definition.abilities),
                     null,
                     true,
+                    available.modelCapabilities[definition.id] ?: ChatTransportCapabilities.BASIC,
                 )
             }
             enterprise.tts.forEach { add(ConfigurationCategory.TTS, identity.reference(it.id), it.name, it.enabled) }

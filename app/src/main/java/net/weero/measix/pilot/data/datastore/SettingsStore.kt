@@ -253,7 +253,7 @@ class SettingsStore internal constructor(
         userDocuments.first().preferences.lastConversation(scope)
 
     internal suspend fun rememberConversation(scope: ConfigurationScope, id: kotlin.uuid.Uuid) = updateMutex.withLock {
-        commitAuthorizedPreferences { document ->
+        commitUserDocument { document ->
             document.copy(preferences = document.preferences.withLastConversation(scope, id))
         }
     }
@@ -335,25 +335,20 @@ class SettingsStore internal constructor(
     }
 
     /** Called while the enterprise session owner holds its authorization boundary. */
-    internal suspend fun updateAssistantUsage(
-        scope: ConfigurationScope.Enterprise,
-        enterpriseState: EnterpriseState.Available,
+    internal suspend fun changeAssistantPreference(
+        scope: ConfigurationScope,
+        enterpriseState: EnterpriseState,
         assistantId: ConfigurationReference,
-        transform: (AssistantUsagePreferences?) -> AssistantUsagePreferences?,
+        change: net.weero.measix.pilot.data.configuration.AssistantPreferenceChange,
+        requireOwner: () -> Unit,
+        withCommit: suspend (suspend () -> Unit) -> Unit,
     ) = updateMutex.withLock {
-        require(enterpriseState.manifest.session?.identity?.scope == scope) { "assistant_usage_principal_mismatch" }
-        commitAuthorizedPreferences { document ->
-            val before = document.preferences.assistantUsage(scope, assistantId)
-            val proposed = transform(before)
-            require(proposed == null || proposed.assistantId == assistantId) { "assistant_usage_identity_mismatch" }
-            val updatedPreferences = if (proposed == null) document.preferences.resetAssistantUsage(scope, assistantId)
-                else document.preferences.withAssistantUsage(scope, proposed)
-            val updated = document.copy(preferences = updatedPreferences)
-            requireAssistantUsageWriteAllowed(
-                before, proposed, assistantId, ConfigurationResolver.resolve(document, scope, enterpriseState),
-                ConfigurationResolver.resolve(updated, scope, enterpriseState),
-            )
-            updated
+        requireOwner()
+        userDocuments.first().changeAssistantPreference(scope, enterpriseState, assistantId, change)
+        withCommit {
+            commitUserDocument(requireOwner) { document ->
+                document.changeAssistantPreference(scope, enterpriseState, assistantId, change)
+            }
         }
     }
 
@@ -361,6 +356,8 @@ class SettingsStore internal constructor(
     internal suspend fun updateResourceSelections(
         scope: ConfigurationScope,
         enterpriseState: EnterpriseState,
+        requireOwner: () -> Unit = {},
+        withCommit: suspend (suspend () -> Unit) -> Unit = { it() },
         transform: (ResourceSelections) -> ResourceSelections,
     ) = updateMutex.withLock {
         if (scope is ConfigurationScope.Enterprise) {
@@ -368,13 +365,13 @@ class SettingsStore internal constructor(
                 "resource_selection_principal_mismatch"
             }
         }
-        commitAuthorizedPreferences { document ->
+        withCommit { commitUserDocument(requireOwner) { document ->
             val before = document.preferences.forScope(scope)
             val proposed = transform(before)
             val updated = document.copy(preferences = document.preferences.withSelections(scope, proposed))
             requireResourceSelectionsWriteAllowed(before, proposed, ConfigurationResolver.resolve(updated, scope, enterpriseState))
             updated
-        }
+        } }
     }
 
     /** Gateway definition and effective usage remain separate; the resolver owns the enablement decision. */
@@ -385,7 +382,7 @@ class SettingsStore internal constructor(
         enabled: Boolean,
     ) = updateMutex.withLock {
         require(enterpriseState.manifest.session?.identity?.scope == scope) { "gateway_preference_principal_mismatch" }
-        commitAuthorizedPreferences { document ->
+        commitUserDocument { document ->
             val resolved = ConfigurationResolver.resolve(document, scope, enterpriseState)
             val item = resolved.catalog[ConfigurationKey(ConfigurationCategory.GATEWAY, gateway)]
             if (item?.gatewayEnablement?.canChange != true) {
@@ -397,18 +394,23 @@ class SettingsStore internal constructor(
     }
 
     /** Both authorization locks remain owned until DataStore's independent writer acknowledges completion. */
-    private suspend fun commitAuthorizedPreferences(transform: (UserSettingsDocument) -> UserSettingsDocument) {
+    private suspend fun commitUserDocument(
+        requireOwner: () -> Unit = {},
+        transform: (UserSettingsDocument) -> UserSettingsDocument,
+    ) {
         val caller = currentCoroutineContext()
         caller.ensureActive()
         withContext(NonCancellable) {
             dataStore.edit { preferences ->
                 caller.ensureActive()
+                requireOwner()
                 val document = JsonInstant.decodeFromString<UserSettingsDocument>(
                     requireNotNull(preferences[USER_SETTINGS]) { "user_settings_migration_incomplete" },
                 )
                 val encoded = JsonInstant.encodeToString(transform(document))
                 // Before handing the value to the writer, cancellation can still abandon this mutation.
                 caller.ensureActive()
+                requireOwner()
                 preferences[USER_SETTINGS] = encoded
             }
         }
@@ -437,7 +439,7 @@ class SettingsStore internal constructor(
      */
     suspend fun restoreLocal(settings: Settings): Settings =
         updateMutex.withLock {
-            val current = localSettings.first { !it.settings.init }.settings
+            val current = localSettingsRaw.first().settings
             val restored = updateInternal(
                 current = current,
                 proposed = settings.withInternalStateFrom(current),
@@ -449,7 +451,7 @@ class SettingsStore internal constructor(
         }
 
     suspend fun updateLocal(transform: (Settings) -> Settings): Settings = updateMutex.withLock {
-        val localSnapshot = localSettings.first { !it.settings.init }
+        val localSnapshot = localSettingsRaw.first()
         val local = localSnapshot.settings
         val localReadModel = local.materializeForRead()
         val effective = EffectiveSettingsResolver.resolve(
@@ -471,7 +473,7 @@ class SettingsStore internal constructor(
     }
 
     /** Backup is a durable format boundary and exports only the Local shadow. */
-    internal suspend fun snapshotLocal(): Settings = localSettings.first { !it.settings.init }.settings.materializeForRead()
+    internal suspend fun snapshotLocal(): Settings = localSettingsRaw.first().settings.materializeForRead()
 
     internal suspend fun pendingMcpCatalogMigration(): PendingMcpCatalogMigration? =
         dataStore.data.first()[PENDING_MCP_CATALOG_MIGRATION]?.let { encoded ->
@@ -505,7 +507,7 @@ class SettingsStore internal constructor(
     /** Serializes time-driven degradation with local writes and managed generation changes. */
     private suspend fun publishManagedSnapshot(snapshot: ManagedConfigurationSnapshot) {
         managedSnapshot.value = snapshot
-        publishEffectiveSnapshot(localSettings.first { !it.settings.init }, snapshot)
+        publishEffectiveSnapshot(localSettingsRaw.first(), snapshot)
         managedExpiryJob?.cancel()
         val expiresAt = snapshot.expiresAtEpochMillis ?: return
         if (snapshot.state != ManagedConfigurationState.ACTIVE) return
@@ -554,14 +556,7 @@ class SettingsStore internal constructor(
         return commitSettings(
             proposed = proposed,
             persist = { normalizedSettings ->
-                dataStore.edit { preferences ->
-                    val currentDocument = JsonInstant.decodeFromString<UserSettingsDocument>(
-                        requireNotNull(preferences[USER_SETTINGS]) { "user_settings_migration_incomplete" },
-                    )
-                    preferences[USER_SETTINGS] = JsonInstant.encodeToString(
-                        currentDocument.withPersonalSettings(normalizedSettings),
-                    )
-                }
+                commitUserDocument { it.withPersonalSettings(normalizedSettings) }
             },
             // persist 正常返回后才发布，避免写盘失败时内存状态领先于持久化状态。
             publish = { committed ->
@@ -787,10 +782,6 @@ fun Settings.getCurrentAssistant(): Assistant {
 fun Settings.getAssistantById(id: ConfigurationReference): Assistant? {
     return this.assistants.find { it.id == id }
 }
-
-/** Resolves the assistant owned by a conversation, falling back only if it was deleted. */
-fun Settings.getConversationAssistant(assistantId: ConfigurationReference): Assistant =
-    getAssistantById(assistantId) ?: getCurrentAssistant()
 
 fun Settings.getQuickMessagesOfAssistant(assistant: Assistant) =
     quickMessages.filter { it.id in assistant.quickMessageIds }

@@ -21,7 +21,11 @@ import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import net.weero.measix.pilot.R
-import net.weero.measix.pilot.data.datastore.SettingsStore
+import net.weero.measix.pilot.service.ConfigurationQueryService
+import net.weero.measix.pilot.data.enterprise.RealmSelection
+import me.rerere.common.configuration.ConfigurationReference
+import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.onEach
 import net.weero.measix.pilot.service.ConversationSummary
 import net.weero.measix.pilot.service.ConversationFolderAccess
 import net.weero.measix.pilot.service.ConversationFolderDirectory
@@ -33,25 +37,38 @@ import java.time.LocalDate
 import java.time.ZoneId
 import kotlin.uuid.Uuid
 
-class ChatDrawerVM(
+class ChatDrawerVM internal constructor(
     private val context: Application,
-    private val settingsStore: SettingsStore,
+    configurationQueryService: ConfigurationQueryService,
     private val conversationQueryService: ConversationQueryService,
     private val conversationApplicationService: ConversationApplicationService,
     private val savedStateHandle: SavedStateHandle,
 ) : ViewModel() {
 
-    private val assistantIdFlow = settingsStore.effectiveSettings.map { it.settings }
-        .map { it.assistantId }
-        .distinctUntilChanged()
+    internal val assistantCatalog = configurationQueryService.observeAssistantCatalog()
+        .stateIn(viewModelScope, SharingStarted.Eagerly, null)
 
-    // 当前选中的文件夹筛选，null 表示「未归类」视图
-    private val _selectedFolderId = MutableStateFlow<Uuid?>(null)
-    val selectedFolderId: StateFlow<Uuid?> = _selectedFolderId.asStateFlow()
+    private val selectedFolder = MutableStateFlow<Pair<ConversationFolderAccess, Uuid>?>(null)
+    private val assistantTarget = assistantCatalog.map { catalog ->
+        catalog?.selected?.reference?.let { ConversationFolderAccess(catalog.selection, it) }
+    }.distinctUntilChanged().onEach {
+        selectedFolder.value = null
+        saveScrollPosition(0, 0)
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, null)
 
-    // 当前助手的文件夹列表（Room Flow，增删改自动刷新）
-    val folderDirectory: StateFlow<ConversationFolderDirectory?> = assistantIdFlow
-        .flatMapLatest { conversationQueryService.foldersOfAssistant(it) }
+    val selectedFolderId: StateFlow<Uuid?> = combine(assistantTarget, selectedFolder) { target, selected ->
+        selected?.takeIf { it.first == target }?.second
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, null)
+
+    internal suspend fun selectAssistant(selection: RealmSelection, assistantId: ConfigurationReference, createNew: Boolean) =
+        conversationApplicationService.selectAssistantRequest(selection, assistantId, createNew)
+
+    internal suspend fun moveToAssistant(conversation: ConversationSummary, assistantId: ConfigurationReference, selectForNewChats: Boolean) =
+        conversationApplicationService.moveToAssistant(
+            net.weero.measix.pilot.service.ConversationAssistantTarget(conversation.commandTarget, conversation.assistantId), assistantId, selectForNewChats)
+
+    val folderDirectory: StateFlow<ConversationFolderDirectory?> = assistantTarget
+        .flatMapLatest { if (it == null) flowOf(null) else conversationQueryService.foldersOfAssistant(it) }
         .stateIn(viewModelScope, SharingStarted.Eagerly, null)
 
     val conversationActivities: StateFlow<Map<Uuid, Set<ConversationActivity>>> =
@@ -59,16 +76,15 @@ class ChatDrawerVM(
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyMap())
 
     val conversations: Flow<PagingData<ConversationListItem>> =
-        combine(assistantIdFlow, _selectedFolderId) { assistantId, folderId ->
-            assistantId to folderId
-        }
-            .flatMapLatest { (assistantId, folderId) ->
-                if (folderId == null) {
-                    conversationQueryService.unfiledPaging(assistantId)
-                } else {
-                    conversationQueryService.folderPaging(folderId)
+        assistantTarget.flatMapLatest { target ->
+            if (target == null) flowOf(PagingData.empty<ConversationSummary>()) else selectedFolder
+                .map { selected -> selected?.takeIf { it.first == target }?.second }
+                .distinctUntilChanged()
+                .flatMapLatest { folderId ->
+                    if (folderId == null) conversationQueryService.unfiledPaging(target)
+                    else conversationQueryService.folderPaging(target, folderId)
                 }
-            }
+        }
             .map { pagingData ->
                 pagingData
                     .map { ConversationListItem.Item(it) }
@@ -127,25 +143,14 @@ class ChatDrawerVM(
     val scrollIndex: Int get() = savedStateHandle["scrollIndex"] ?: 0
     val scrollOffset: Int get() = savedStateHandle["scrollOffset"] ?: 0
 
-    init {
-        // A shared personal assistant does not make a folder selection portable across realms.
-        viewModelScope.launch {
-            combine(assistantIdFlow, conversationQueryService.observeCurrentSelection()) { assistant, access ->
-                assistant to access
-            }.collect {
-                _selectedFolderId.value = null
-                saveScrollPosition(0, 0)
-            }
-        }
-    }
-
     fun saveScrollPosition(index: Int, offset: Int) {
         savedStateHandle["scrollIndex"] = index
         savedStateHandle["scrollOffset"] = offset
     }
 
-    fun selectFolder(folderId: Uuid?) {
-        _selectedFolderId.value = folderId
+    fun selectFolder(access: ConversationFolderAccess?, folderId: Uuid?) {
+        if (access == null || access != assistantTarget.value) return
+        selectedFolder.value = folderId?.let { access to it }
     }
 
     suspend fun createFolder(access: ConversationFolderAccess, name: String) =
@@ -156,7 +161,7 @@ class ChatDrawerVM(
 
     suspend fun deleteFolder(access: ConversationFolderAccess, folderId: Uuid) {
         conversationApplicationService.deleteFolder(access, folderId)
-        if (_selectedFolderId.value == folderId) _selectedFolderId.value = null
+        if (selectedFolderId.value == folderId) selectedFolder.value = null
     }
 
     suspend fun moveConversationToFolder(access: ConversationFolderAccess, conversation: ConversationSummary, folderId: Uuid?) =

@@ -54,7 +54,8 @@ class ModelRequestTransportTest {
         val streamed = target.streamText(providers, messages, params).toList()
         assertEquals(plain.choices.single().message!!.toText(), streamed.flatMap { it.choices }.joinToString("") { it.delta?.toText().orEmpty() })
         assertEquals("stop", streamed.last().choices.single().finishReason)
-        assertTrue(plain.choices.single().message!!.toText().contains("hello"))
+        assertFalse(plain.choices.single().message!!.toText().contains("hello"))
+        assertTrue(plain.choices.single().message!!.toText().contains("1 张图片"))
         assertTrue(streamed.all { it.usage == null })
         io.mockk.verify { providers wasNot io.mockk.Called }
     }

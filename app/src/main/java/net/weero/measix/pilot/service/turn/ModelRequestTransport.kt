@@ -65,8 +65,7 @@ private fun exampleResponse(messages: List<ModelRequestMessage>): String {
     return buildString {
         append("企业本地示例已收到你的请求。")
         if (images > 0) append("已接收 $images 张图片；本地示例返回模拟结果。")
-        val text = user?.toText().orEmpty().take(240)
-        if (text.isNotBlank()) append("\n\n$text")
+        append("这是一条本地模拟回复，用于验证企业空间中的对话流程。")
     }
 }
 

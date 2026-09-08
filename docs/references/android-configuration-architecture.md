@@ -103,6 +103,8 @@ PrepareEnterpriseExampleAssets 从公开完整模板派生 enterprise.local.iden
 
 私有请求带无身份、无凭据的 `PrivateRequest` 标记，现有 HTTP 日志入口跳过该请求。共享网络边界在 OkHttp 跟随跨 origin 重定向前拒绝请求，避免 Google/Claude 与自定义私有 header 被转发；个人请求保持原日志和重定向行为。Speech、MCP、辅助模型及附件识别尚未全部迁入模型准入链。
 
+企业 Applied 提交/恢复从同一已验证 package 派生模型传输能力，随 configuration 和 revision 一起发布；失败不提前替换能力。用户模型能力来自实际 providerOverwrite 或其 Provider。聊天只取得音频、视频、内建搜索等无秘密能力信息，不制造带假凭据的 Provider。
+
 ### 2.5 按主体解析与使用偏好
 
 `ConfigurationQueryService` 通过 SettingsStore 组合唯一用户文档与 EnterpriseSessionController 的已发布状态；ConfigurationResolver 纯派生当前空间或明确指定主体的 ResolvedConfiguration，不持久化第三份镜像。目录携带资源来源、显示名称、编辑权限、准入与不可用原因；企业连接和凭据不进入该目录。
@@ -110,12 +112,13 @@ PrepareEnterpriseExampleAssets 从公开完整模板派生 enterprise.local.iden
 - 内置定义通过 withBuiltInDefinitions 补齐，显式失效的模型、MCP、注入和快捷消息引用保留。模型选择同时校验用途类型；找不到或被策略排除时返回原因，不按名称或首项替换。企业选择为空时只继承企业默认，不继承个人选择。
 - 重复导入 Provider 可能保留相同模型 ID；新目录将该模型标为引用歧义，不任意选择凭据 owner，也不使其他资源目录整体失败。原用户定义保持不变。
 - AssistantUsagePreferences 只保存企业主体内的显式覆盖。字段缺失继承原定义，UsageValue 中显式 null 清除可空字段；个人助手仍只保存一份共享定义。企业助手使用自身固定核心与普通字段默认值，本域偏好不能改写固定模型、系统提示词或移除固定 MCP/子助手引用。
-- ConfigurationApplicationService 的资源选择、收藏和建议开关命令接收页面捕获的 RealmSelection，同时校验原 Session、主体与选择版本；切出再切回也不能恢复旧页面的写资格。共享用户定义编辑中的收藏显式使用个人偏好目标，不冒充当前企业选择。Gateway 与助手使用偏好命令仍接收 RealmAccess.Enterprise。固定锁序为 enterprise session → Settings，持有授权锁调用 DataStore 最新值事务；不在命令内部按 scope 重取登录资格。transform 开始和交给 writer 前检查原调用者取消状态；已取得提交所有权后不可取消地等待 DataStore actor 的最终 ack，再传播取消，避免写盘期间提前释放锁。策略更新、退出不能穿插偏好提交。
+- ConfigurationApplicationService 的资源选择、收藏和建议开关接收页面捕获的 RealmSelection；Gateway 接收原 RealmAccess.Enterprise。聊天字段命令使用 ConversationAssistantTarget，包含原页面命令目标和助手 ID。切出再切回不会恢复旧页面资格。锁序为 Session → Settings → 根会话；只写最新文档中的目标字段，DataStore actor 确认后才释放已取得的提交所有权并传播取消。通用助手 usage transform 写入口已删除。
+- Settings 更新以 cold DataStore 文档为基线，不能把异步显示 StateFlow 当作最新值。commitUserDocument 统一等待实际写入 ack，个人 aggregate 编辑保留企业偏好。Workspace 使用选择先通过原会话命令清空 cwd，再提交偏好；第二步失败明确报告目录已重置，保留原选择供重试，不声称两个存储具有联合事务。目录选择另核对发起时的 Workspace，切助手也在原 Room patch 中清 cwd。
 - ResourceSelectionSlot 对应模型角色、助手、Search、TTS、ASR 选择；收藏及建议开关使用同一偏好写协议。新增选择校验身份、类别准入、启用状态和模型用途；清除覆盖始终允许，且不会隐式修复仍失效的其他选择。
 - 助手 MCP 修改只校验新增引用，允许逐项移除已有失效引用。写失败/取消不发布提前生效的内存值；个人定义编辑保留企业主体偏好，同企业不同用户不继承对方的使用选择。
 - Gateway 定义存在即已发布，不含第二个 enabled 位；撤销由来源候选删除定义表达。Resolver 为目录项派生完整 discover/invoke 工具对的 gatewayEnablement，统一决定生效开关与可切换性。REQUIRED 强制开启、拒绝开关写入，但保留原 false；恢复 USER_CONTROLLABLE_DEFAULT_ON 后原 false 再生效，无偏好则默认开启。setGatewayEnabled 使用同一授权与偏好提交协议，拒绝缺失或异主体资源，不更改配置 generation。该目录决策不代表 Session、连接或工具 surface 已通过执行校验；Gateway 执行装配和正式 UI 尚未接通。
 
-`observeModelCatalog` 在 Session → Settings 锁序下捕获同一原选择的目录，Settings 流只作为失效通知；返回 Loading、Available 或 Unavailable。`ModelCatalogUiModel` 分开保留原覆盖、有效选择和用途不可用原因，企业目录不携带私有 binding。模型默认设置页已消费该投影，其他助手使用页面与资源执行链仍在接线。
+`observeModelCatalog` 在 Session → Settings 锁序下捕获同一原选择的目录，Settings 流只作为失效通知；返回 Loading、Available 或 Unavailable。`ModelCatalogUiModel` 分开保留原覆盖、有效选择和用途不可用原因，企业目录不携带私有 binding。模型默认设置页与聊天模型选择器消费该投影，完整助手使用页面与其余资源执行链仍在接线。
 
 Provider 余额仍在共享用户定义编辑目录沿用既有读取路径；按域模型目录暂未展示余额，需继续通过真实用户 Provider ID 接入现有余额 owner，不向目录加入连接凭据。
 

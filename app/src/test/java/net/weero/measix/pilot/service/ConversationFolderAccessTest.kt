@@ -167,21 +167,23 @@ class ConversationFolderAccessTest {
         }
     }
 
-    @Test fun `directory reissues authority after conflated round trip and does not revive old emissions`() = runTest {
+    @Test fun `directory requires a new target after conflated round trip and does not revive old emissions`() = runTest {
         fixture { f ->
             var latest: ConversationFolderDirectory? = null
-            val job = backgroundScope.launch { f.query.foldersOfAssistant(DEFAULT_ASSISTANT_ID).collect { latest = it } }
+            val target = f.directory().access
+            val job = backgroundScope.launch { f.query.foldersOfAssistant(target).collect { latest = it } }
             runCurrent()
             val original = requireNotNull(latest).access
             f.sessions.selectPersonalFixture()
             f.sessions.selectEnterpriseFixture()
             runCurrent()
-            val newer = requireNotNull(latest).access
+            assertNull(latest)
+            val newer = f.directory().access
             assertNotEquals(original, newer)
             rejects<EnterpriseConfigurationException> { f.application.createFolder(original, "stale") }
             f.application.createFolder(newer, "current")
             runCurrent()
-            assertEquals("current", requireNotNull(latest).folders.single().name)
+            assertEquals("current", f.directory().folders.single().name)
             job.cancel()
         }
     }
@@ -260,7 +262,7 @@ class ConversationFolderAccessTest {
             settings, repository, folderRepository, registry, coordinator, gate, mockk(), mockk(), mockk(),
             mockk(), mockk(), JsonInstant, mockk(), mockk(), sessions, mockk(),
         )
-        val query = ConversationQueryService(repository, registry, folderRepository, mockk(), mockk(), sessions, gate)
+        val query = ConversationQueryService(repository, registry, folderRepository, mockk(), mockk(), sessions, gate, mockk())
 
         init {
             every { folderDao.getFoldersOfAssistant(any(), any()) } answers {
@@ -305,7 +307,7 @@ class ConversationFolderAccessTest {
                 java.time.Instant.ofEpochMilli(header.createAt), java.time.Instant.ofEpochMilli(header.updateAt), access.selection)
         }
 
-        suspend fun directory(): ConversationFolderDirectory = query.foldersOfAssistant(DEFAULT_ASSISTANT_ID).first { it != null }!!
+        suspend fun directory(): ConversationFolderDirectory = query.foldersOfAssistant(ConversationFolderAccess(requireNotNull(sessions.observeSelectedRealmSelection().first()), DEFAULT_ASSISTANT_ID)).first { it != null }!!
 
         fun addConversation(scope: ConfigurationScope, folderId: Uuid? = null): Uuid {
             val conversation = Conversation.ofId(Uuid.random(), DEFAULT_ASSISTANT_ID).copy(scope = scope, folderId = folderId)

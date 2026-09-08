@@ -259,7 +259,7 @@ class ChatPageLifecycleTest {
             @Suppress("UNCHECKED_CAST")
             override fun <T : ViewModel> create(modelClass: Class<T>): T = ChatVM(
                 request, mockk<Application> { every { getString(net.weero.measix.pilot.R.string.error_title_operation) } returns "Operation failed" }, settings, turns, application,
-                query, updater, artifacts, favorites, errors,
+                query, updater, artifacts, favorites, errors, mockk(),
             ) as T
         })[ChatVM::class.java]
     }

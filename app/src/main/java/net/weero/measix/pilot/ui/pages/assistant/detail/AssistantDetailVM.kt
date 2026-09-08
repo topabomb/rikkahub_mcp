@@ -176,6 +176,20 @@ class AssistantDetailVM(
         }
     }
 
+    fun toggleLocalTool(option: net.weero.measix.pilot.data.ai.tools.local.LocalToolOption, enabled: Boolean) {
+        viewModelScope.launch {
+            runSettingsChange {
+                settingsStore.updateLocal { current ->
+                    check(current.assistants.any { it.id == assistantId }) { "assistant_not_found" }
+                    current.copy(assistants = current.assistants.map { definition ->
+                        if (definition.id == assistantId) definition.copy(localTools = if (enabled)
+                            (definition.localTools + option).distinct() else definition.localTools - option) else definition
+                    })
+                }
+            }
+        }
+    }
+
     fun update(assistant: Assistant) {
         val pageSnapshot = this.assistant.value
         viewModelScope.launch {

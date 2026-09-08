@@ -79,6 +79,11 @@ fun AssistantLocalToolPage(id: String) {
     )
     AssistantLockedChangeEffect(vm)
     val assistant by vm.assistant.collectAsStateWithLifecycle()
+    val settingsStore: net.weero.measix.pilot.data.datastore.SettingsStore = koinInject()
+    val effectiveSettings by settingsStore.effectiveSettings.collectAsStateWithLifecycle()
+    val settings = effectiveSettings.settings
+    val imageSelectionResolver: ImageGenerationSelectionResolver = koinInject()
+    val imageGenerationAvailable = remember(settings) { imageSelectionResolver.isAvailable(settings) }
     val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
 
     Scaffold(
@@ -100,29 +105,30 @@ fun AssistantLocalToolPage(id: String) {
         AssistantLocalToolContent(
             innerPadding = innerPadding,
             assistant = assistant,
-            onUpdate = { vm.update(it) }
+            subAssistants = settings.assistants,
+            imageGenerationAvailable = imageGenerationAvailable,
+            onToggleLocalTool = vm::toggleLocalTool,
+            onUpdateSubAssistantIds = { vm.update(assistant.copy(allowedSubAssistantIds = it)) },
         )
     }
 }
 
 @Composable
-private fun AssistantLocalToolContent(
+internal fun AssistantLocalToolContent(
     innerPadding: PaddingValues,
     assistant: Assistant,
-    onUpdate: (Assistant) -> Unit
+    subAssistants: List<Assistant>,
+    imageGenerationAvailable: Boolean,
+    onToggleLocalTool: (LocalToolOption, Boolean) -> Unit,
+    onUpdateSubAssistantIds: ((Set<ConfigurationReference>) -> Unit)?,
 ) {
     val context = LocalContext.current
     val toaster = LocalToaster.current
     val navController = LocalNavController.current
-    val settingsStore: net.weero.measix.pilot.data.datastore.SettingsStore = koinInject()
-    val effectiveSettings by settingsStore.effectiveSettings.collectAsStateWithLifecycle()
-    val settings = effectiveSettings.settings
-    val imageSelectionResolver: ImageGenerationSelectionResolver = koinInject()
-    val imageGenerationAvailable = remember(settings) { imageSelectionResolver.isAvailable(settings) }
     val textToImageEnabled = assistant.localTools.contains(LocalToolOption.TextToImage)
     var showAccessScopeDialog by remember { mutableStateOf(false) }
-    val eligibleTargetIds = remember(settings.assistants, assistant.id) {
-        eligibleSubAssistantIds(settings, assistant.id)
+    val eligibleTargetIds = remember(subAssistants, assistant.id) {
+        subAssistants.filter { it.id != assistant.id && it.allowAsSubAssistant }.mapTo(mutableSetOf()) { it.id }
     }
     val permissionRequiredText =
         stringResource(R.string.assistant_page_local_tools_screen_time_permission_required)
@@ -155,12 +161,7 @@ private fun AssistantLocalToolContent(
             calendarPermissionState.requestPermissions()
             return
         }
-        val newLocalTools = if (enabled) {
-            assistant.localTools + option
-        } else {
-            assistant.localTools - option
-        }
-        onUpdate(assistant.copy(localTools = newLocalTools))
+        onToggleLocalTool(option, enabled)
     }
 
     Column(
@@ -370,8 +371,8 @@ private fun AssistantLocalToolContent(
     // 子助手访问范围多选对话框
     if (showAccessScopeDialog) {
         var accessSearchQuery by remember(showAccessScopeDialog) { mutableStateOf("") }
-        val candidateSubAssistants = remember(settings, assistant.id) {
-            settings.assistants.filter {
+        val candidateSubAssistants = remember(subAssistants, assistant.id) {
+            subAssistants.filter {
                 it.id != assistant.id && it.allowAsSubAssistant
             }
         }
@@ -416,7 +417,7 @@ private fun AssistantLocalToolContent(
                         SubAssistantScopeItem(
                             sub = sub,
                             checked = sub.id in selectedIds.value,
-                            onCheckedChange = { checked ->
+                            onCheckedChange = if (onUpdateSubAssistantIds == null) null else { checked ->
                                 selectedIds.value = (if (checked) {
                                     selectedIds.value + sub.id
                                 } else {
@@ -442,13 +443,7 @@ private fun AssistantLocalToolContent(
             },
             confirmButton = {
                 TextButton(onClick = {
-                    onUpdate(
-                        assistant.copy(
-                            allowedSubAssistantIds = selectedIds.value.filterTo(mutableSetOf()) {
-                                it in eligibleTargetIds
-                            }
-                        )
-                    )
+                    onUpdateSubAssistantIds?.invoke(selectedIds.value.filterTo(mutableSetOf()) { it in eligibleTargetIds })
                     showAccessScopeDialog = false
                 }) { Text(stringResource(android.R.string.ok)) }
             },
@@ -473,13 +468,13 @@ private fun AssistantLocalToolContent(
 private fun SubAssistantScopeItem(
     sub: Assistant,
     checked: Boolean,
-    onCheckedChange: (Boolean) -> Unit,
+    onCheckedChange: ((Boolean) -> Unit)?,
 ) {
     Row(
         verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier
             .fillMaxWidth()
-            .clickable { onCheckedChange(!checked) }
+            .clickable(enabled = onCheckedChange != null) { onCheckedChange?.invoke(!checked) }
             .padding(vertical = 4.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {

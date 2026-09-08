@@ -42,6 +42,8 @@ ConversationTurnService / SubAssistantRunCoordinator
 
 `ConversationQueryService.foldersOfAssistant` 发布 `ConversationFolderDirectory`，即使目录为空也保留原助手及
 `RealmSelection`。抽屉在打开创建、重命名、删除或移动界面时固定此授权；确认不重新读取全局选中域。
+目录及分页的输入均为原 `ConversationFolderAccess`；切出再切回不会给旧输入重新授权，必须由新目录目标重新订阅。
+文件夹筛选也绑定该目标；先核对文件夹所属域和助手，再建立分页源，不把旧 folder 与新助手组合查询。
 分页行携带自身原选择，移动时必须与目标目录一致。工具使用的只读会话摘要不带当前 UI 选择，不能据此执行文件夹移动。
 
 文件夹写入沿 `ConversationApplicationService` → 原 Session/选择锁 → `ConversationCommandCoordinator.withRootHeaders`
@@ -51,6 +53,7 @@ ConversationTurnService / SubAssistantRunCoordinator
 删除取得完整成员锁集合，在任何 detach 前复查成员与活动 turn；任一成员仍在运行则拒绝整个操作。
 每次 detach 仍是原会话命令事务。某次提交失败时保留文件夹，重试只处理剩余成员；全部清空后才删除 metadata。
 UI 等待命令结果后关闭对话框，错误可见，取消继续传播。
+移动到另一助手沿原 `MoveToAssistant` 同时清空 folder 和 Workspace cwd；重新选择同一助手不清空。
 
 ## 普通会话操作授权
 

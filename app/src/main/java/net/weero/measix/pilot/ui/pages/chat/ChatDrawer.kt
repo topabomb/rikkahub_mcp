@@ -36,8 +36,6 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.SheetValue
-import androidx.compose.material3.rememberBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -84,6 +82,10 @@ import net.weero.measix.pilot.service.ConversationSummary
 import net.weero.measix.pilot.data.model.Folder
 import net.weero.measix.pilot.service.ConversationQueryService
 import net.weero.measix.pilot.ui.components.ai.AssistantPicker
+import androidx.compose.runtime.key
+import androidx.compose.material3.rememberBottomSheetState
+import androidx.compose.material3.SheetValue
+import me.rerere.common.configuration.ConfigurationReference
 import net.weero.measix.pilot.ui.components.ui.BackupReminderCard
 import net.weero.measix.pilot.ui.components.ui.Greeting
 import net.weero.measix.pilot.ui.components.ui.Tooltip
@@ -125,6 +127,7 @@ fun ChatDrawerContent(
         ?: error("ChatDrawerContent requires a ComponentActivity host")
     val drawerVm: ChatDrawerVM = koinViewModel(viewModelStoreOwner = activity)
 
+    val assistantCatalog by drawerVm.assistantCatalog.collectAsStateWithLifecycle()
     val conversations = drawerVm.conversations.collectAsLazyPagingItems()
     val folderDirectory = drawerVm.folderDirectory.collectAsStateWithLifecycle().value
     val folders = folderDirectory?.folders.orEmpty()
@@ -171,7 +174,6 @@ fun ChatDrawerContent(
     // 移动对话状态
     var showMoveToAssistantSheet by remember { mutableStateOf(false) }
     var conversationToMove by remember { mutableStateOf<ConversationSummary?>(null) }
-    val bottomSheetState = rememberBottomSheetState(initialValue = SheetValue.Hidden)
 
     // 文件夹相关状态
     var showMoveToFolderSheet by remember { mutableStateOf(false) }
@@ -183,7 +185,7 @@ fun ChatDrawerContent(
     var folderToDelete by remember { mutableStateOf<Pair<ConversationFolderAccess, Folder>?>(null) }
 
     var folderOperationRunning by remember { mutableStateOf(false) }
-    val folderFailureText = stringResource(R.string.error_title_operation)
+    val operationFailureText = stringResource(R.string.error_title_operation)
     val folderBusyText = stringResource(R.string.chat_page_delete_folder_generating)
     val runFolderOperation: (suspend () -> Unit) -> Unit = { operation ->
         if (!folderOperationRunning) {
@@ -195,7 +197,7 @@ fun ChatDrawerContent(
                     throw cancelled
                 } catch (error: Exception) {
                     android.util.Log.e("ChatDrawer", "Folder command failed", error)
-                    toaster.show(if (error is ConversationFolderBusyException) folderBusyText else folderFailureText, type = ToastType.Warning)
+                    toaster.show(if (error is ConversationFolderBusyException) folderBusyText else operationFailureText, type = ToastType.Warning)
                 } finally {
                     folderOperationRunning = false
                 }
@@ -319,7 +321,7 @@ fun ChatDrawerContent(
                 access = folderDirectory?.access,
                 folders = folders,
                 selectedFolderId = selectedFolderId,
-                onSelect = { drawerVm.selectFolder(it) },
+                onSelect = { drawerVm.selectFolder(folderDirectory?.access, it) },
                 onCreate = { createFolderAccess = folderDirectory?.access },
                 onRename = { folder -> folderToRename = folderDirectory?.access?.let { it to folder } },
                 onDelete = { folder -> folderToDelete = folderDirectory?.access?.let { it to folder } },
@@ -366,25 +368,30 @@ fun ChatDrawerContent(
                 }
             )
 
-            // 助手选择器
-            AssistantPicker(
-                settings = settings,
-                onSelectAssistant = { selectedAssistantId ->
-                    navigateFromDrawer {
-                        chatNavigation.selectAssistant(
-                            selectedAssistantId,
-                            context.readBooleanPreference("create_new_conversation_on_start", true),
-                        )
-                    }
-                },
-                modifier = Modifier.fillMaxWidth(),
-                onManageAssistant = {
-                    val currentAssistantId = settings.assistantId
-                    navigateFromDrawer {
-                        navController.navigate(Screen.AssistantDetail(id = currentAssistantId.toString()))
-                    }
-                }
-            )
+            assistantCatalog?.let { catalog -> key(catalog.selection) {
+                AssistantPicker(
+                    settings = settings,
+                    currentAssistantId = catalog.selected.reference,
+                    assistants = catalog.assistants,
+                    unavailableReasons = catalog.resources.associate { it.key.reference to it.access.unavailableReason },
+                    onSelectAssistant = { selectedAssistantId ->
+                        try {
+                            val request = drawerVm.selectAssistant(catalog.selection, selectedAssistantId,
+                                context.readBooleanPreference("create_new_conversation_on_start", true))
+                            navigateFromDrawer { navController.clearAndNavigate(Screen.Chat(request)) }
+                            true
+                        } catch (cancelled: CancellationException) { throw cancelled }
+                        catch (_: Exception) {
+                            toaster.show(operationFailureText, type = ToastType.Error)
+                            false
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    onManageAssistant = (catalog.selected.reference as? ConfigurationReference.User)?.let { id -> {
+                        navigateFromDrawer { navController.navigate(Screen.AssistantDetail(id = id.toString())) }
+                    } },
+                )
+            } }
 
             Row(
                 horizontalArrangement = Arrangement.SpaceAround,
@@ -707,51 +714,36 @@ fun ChatDrawerContent(
         )
     }
 
-    // 移动到助手 Bottom Sheet
-    if (showMoveToAssistantSheet) {
-        AdaptiveModal(
-            onDismissRequest = {
-                showMoveToAssistantSheet = false
-                conversationToMove = null
-            },
-            sheetState = bottomSheetState
-        ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .heightIn(max = 400.dp)
-                    .padding(16.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                Text(
-                    text = stringResource(R.string.chat_page_move_to_assistant),
-                    style = MaterialTheme.typography.titleLarge,
-                    modifier = Modifier.padding(bottom = 8.dp)
-                )
-
-                LazyColumn(
-                    verticalArrangement = Arrangement.spacedBy(4.dp),
-                ) {
-                    items(settings.assistants) { assistant ->
-                        AssistantItem(
-                            assistant = assistant,
-                            isCurrentAssistant = assistant.id == conversationToMove?.assistantId,
-                            onClick = {
-                                conversationToMove?.let { conversation ->
-                                    vm.moveConversationToAssistant(conversation, assistant.id)
-                                    scope.launch {
-                                        bottomSheetState.hide()
-                                        showMoveToAssistantSheet = false
-                                        conversationToMove = null
-                                    }
-                                }
-                            }
-                        )
+    if (showMoveToAssistantSheet) conversationToMove?.let { original -> key(original) {
+        val moveScope = rememberCoroutineScope()
+        var submitting by remember { mutableStateOf(false) }
+        val catalog = assistantCatalog?.takeIf { it.selection == original.selection }
+        net.weero.measix.pilot.ui.components.ai.AssistantPickerSheet(
+            settings = settings,
+            currentAssistantId = original.assistantId,
+            assistants = catalog?.assistants?.values?.toList().orEmpty(),
+            unavailableReasons = catalog?.resources?.associate { it.key.reference to it.access.unavailableReason }.orEmpty(),
+            allowManage = false,
+            enabled = !submitting,
+            title = stringResource(R.string.chat_page_move_to_assistant),
+            onDismiss = { showMoveToAssistantSheet = false; conversationToMove = null },
+            onAssistantSelected = { assistant ->
+                if (!submitting) {
+                    submitting = true
+                    moveScope.launch {
+                        try {
+                            drawerVm.moveToAssistant(original, assistant.id, original.id == currentConversationId)
+                            showMoveToAssistantSheet = false
+                            conversationToMove = null
+                        } catch (cancelled: CancellationException) { throw cancelled }
+                        catch (_: Exception) { toaster.show(operationFailureText, type = ToastType.Error) }
+                        finally { submitting = false }
                     }
                 }
-            }
-        }
-    }
+            },
+        )
+    } }
+
 }
 
 @Composable
@@ -851,56 +843,6 @@ private fun DrawerAction(
                     .size(20.dp),
             ) {
                 icon()
-            }
-        }
-    }
-}
-
-@Composable
-private fun AssistantItem(
-    assistant: Assistant,
-    isCurrentAssistant: Boolean,
-    onClick: () -> Unit
-) {
-    Surface(
-        onClick = onClick,
-        modifier = Modifier.fillMaxWidth(),
-        shape = MaterialTheme.shapes.medium,
-        color = if (isCurrentAssistant) {
-            MaterialTheme.colorScheme.surfaceVariant
-        } else {
-            MaterialTheme.colorScheme.surface
-        },
-        tonalElevation = if (isCurrentAssistant) 2.dp else 0.dp
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(16.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(10.dp)
-        ) {
-            UIAvatar(
-                name = assistant.name,
-                value = assistant.avatar,
-                modifier = Modifier.size(40.dp),
-            )
-            Column(
-                modifier = Modifier.weight(1f)
-            ) {
-                Text(
-                    text = assistant.name.ifBlank { stringResource(R.string.assistant_page_default_assistant) },
-                    style = MaterialTheme.typography.titleMedium,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-                if (isCurrentAssistant) {
-                    Text(
-                        text = stringResource(R.string.assistant_page_current_assistant),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
             }
         }
     }

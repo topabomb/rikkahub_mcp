@@ -48,16 +48,23 @@ import net.weero.measix.pilot.ui.components.ui.Tag
 import net.weero.measix.pilot.ui.components.ui.TagType
 import net.weero.measix.pilot.ui.components.ui.UIAvatar
 import net.weero.measix.pilot.ui.context.LocalNavController
-import net.weero.measix.pilot.ui.hooks.rememberAssistantState
+import net.weero.measix.pilot.data.model.Avatar
+import kotlinx.coroutines.launch
+import androidx.compose.runtime.rememberCoroutineScope
 
 @Composable
-fun AssistantPicker(
+internal fun AssistantPicker(
     settings: Settings,
-    onSelectAssistant: (ConfigurationReference) -> Unit,
+    currentAssistantId: ConfigurationReference?,
+    assistants: Map<ConfigurationReference, Assistant>,
+    unavailableReasons: Map<ConfigurationReference, net.weero.measix.pilot.data.configuration.ConfigurationUnavailableReason?>,
+    onSelectAssistant: suspend (ConfigurationReference) -> Boolean,
     modifier: Modifier = Modifier,
-    onManageAssistant: () -> Unit,
+    onManageAssistant: (() -> Unit)?,
 ) {
-    val state = rememberAssistantState(settings, onSelectAssistant)
+    val currentAssistant = assistants[currentAssistantId]
+    val scope = rememberCoroutineScope()
+    var submitting by remember { mutableStateOf(false) }
     val defaultAssistantName = stringResource(R.string.assistant_page_default_assistant)
     var showPicker by remember { mutableStateOf(false) }
 
@@ -76,14 +83,14 @@ fun AssistantPicker(
                 modifier = Modifier
                     .weight(1f)
                     .clip(MaterialTheme.shapes.medium)
-                    .clickable { showPicker = true }
+                    .clickable(enabled = !submitting) { showPicker = true }
                     .padding(horizontal = 8.dp, vertical = 6.dp),
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 UIAvatar(
-                    name = state.currentAssistant.name.ifEmpty { defaultAssistantName },
-                    value = state.currentAssistant.avatar,
+                    name = currentAssistant?.name?.ifEmpty { defaultAssistantName } ?: stringResource(R.string.safe_mode_switch_assistant),
+                    value = currentAssistant?.avatar ?: Avatar.Dummy,
                     modifier = Modifier.size(36.dp),
                 )
                 Column(
@@ -97,7 +104,7 @@ fun AssistantPicker(
                         maxLines = 1,
                     )
                     Text(
-                        text = state.currentAssistant.name.ifEmpty { defaultAssistantName },
+                        text = currentAssistant?.name?.ifEmpty { defaultAssistantName } ?: stringResource(R.string.safe_mode_switch_assistant),
                         style = MaterialTheme.typography.bodyMedium,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
@@ -110,8 +117,9 @@ fun AssistantPicker(
                     modifier = Modifier.size(18.dp),
                 )
             }
-            FilledTonalIconButton(
+            if (onManageAssistant != null) FilledTonalIconButton(
                 onClick = onManageAssistant,
+                enabled = !submitting,
                 modifier = Modifier.size(40.dp),
             ) {
                 Icon(
@@ -126,10 +134,18 @@ fun AssistantPicker(
     if (showPicker) {
         AssistantPickerSheet(
             settings = settings,
-            currentAssistant = state.currentAssistant,
+            currentAssistantId = currentAssistantId,
+            assistants = assistants.values.toList(),
+            unavailableReasons = unavailableReasons,
+            enabled = !submitting,
             onAssistantSelected = { assistant ->
-                showPicker = false
-                state.setSelectAssistant(assistant)
+                if (!submitting) {
+                    submitting = true
+                    scope.launch {
+                        try { if (onSelectAssistant(assistant.id)) showPicker = false }
+                        finally { submitting = false }
+                    }
+                }
             },
             onDismiss = {
                 showPicker = false
@@ -139,14 +155,17 @@ fun AssistantPicker(
 }
 
 @Composable
-fun AssistantPickerSheet(
+internal fun AssistantPickerSheet(
     settings: Settings,
-    currentAssistant: Assistant,
+    currentAssistantId: ConfigurationReference?,
+    assistants: List<Assistant>,
+    unavailableReasons: Map<ConfigurationReference, net.weero.measix.pilot.data.configuration.ConfigurationUnavailableReason?> = emptyMap(),
     onAssistantSelected: (Assistant) -> Unit,
     onDismiss: () -> Unit,
     title: String? = null,
     forceDialog: Boolean = false,
     allowManage: Boolean = true,
+    enabled: Boolean = true,
 ) {
     val defaultAssistantName = stringResource(R.string.assistant_page_default_assistant)
     val sheetTitle = title ?: stringResource(R.string.safe_mode_switch_assistant)
@@ -158,14 +177,14 @@ fun AssistantPickerSheet(
 
     // "显示子助手"筛选状态
     // 当前会话直接使用子助手时默认开启；不存在普通 Assistant 时自动显示全部
-    val hasNormalAssistants = settings.assistants.any { !it.allowAsSubAssistant }
+    val hasNormalAssistants = assistants.any { !it.allowAsSubAssistant }
     var showSubAssistants by remember {
-        mutableStateOf(currentAssistant.allowAsSubAssistant || !hasNormalAssistants)
+        mutableStateOf((assistants.find { it.id == currentAssistantId }?.allowAsSubAssistant == true) || !hasNormalAssistants)
     }
 
     // 类型筛选先执行，再叠加 name/description 搜索和 Tag 筛选
-    val filteredAssistants = remember(settings.assistants, selectedTagIds, searchQuery, showSubAssistants) {
-        settings.assistants.filter { assistant ->
+    val filteredAssistants = remember(assistants, selectedTagIds, searchQuery, showSubAssistants) {
+        assistants.filter { assistant ->
             val matchesType = showSubAssistants || !assistant.allowAsSubAssistant
             val matchesSearch = searchQuery.isBlank() ||
                 assistant.name.contains(searchQuery, ignoreCase = true) ||
@@ -229,9 +248,10 @@ fun AssistantPickerSheet(
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 items(filteredAssistants, key = { it.id.toString() }) { assistant ->
-                    val checked = assistant.id == currentAssistant.id
+                    val checked = assistant.id == currentAssistantId
                     Card(
                         onClick = { onAssistantSelected(assistant) },
+                        enabled = enabled && unavailableReasons[assistant.id] == null,
                         modifier = Modifier.animateItem(),
                         shape = MaterialTheme.shapes.large,
                         colors = CardDefaults.cardColors(
@@ -239,10 +259,13 @@ fun AssistantPickerSheet(
                             contentColor = if (checked) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface,
                         ),
                     ) {
+                        unavailableReasons[assistant.id]?.let { reason ->
+                            Text(configurationUnavailableText(reason), modifier = Modifier.padding(8.dp), color = MaterialTheme.colorScheme.error)
+                        }
                         AssistantItem(
                             assistant = assistant,
                             defaultAssistantName = defaultAssistantName,
-                            onEdit = if (allowManage) {
+                            onEdit = if (enabled && allowManage && assistant.id is ConfigurationReference.User) {
                                 {
                                     onDismiss()
                                     navController.navigate(Screen.AssistantDetail(assistant.id.toString()))
