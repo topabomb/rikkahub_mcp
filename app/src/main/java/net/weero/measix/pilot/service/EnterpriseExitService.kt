@@ -11,10 +11,13 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.supervisorScope
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import net.weero.measix.pilot.data.enterprise.*
+import net.weero.measix.pilot.service.portal.PortalCloseReason
+import net.weero.measix.pilot.service.portal.PortalDocumentRegistry
 
 internal sealed interface EnterpriseExitFailure {
     val reason: String
@@ -34,6 +37,7 @@ internal class EnterpriseExitService(
     private val conversations: ConversationApplicationService,
     private val recoveryGate: ApplicationRecoveryGate,
     private val scope: CoroutineScope,
+    private val portals: PortalDocumentRegistry,
 ) {
     private val mutex = Mutex()
     private val active = mutableMapOf<RealmAccess.Enterprise, Deferred<EnterpriseExitResult>>()
@@ -140,8 +144,24 @@ internal class EnterpriseExitService(
     }
 
     private suspend fun finish(token: EnterpriseExitToken, duringRecovery: Boolean): EnterpriseExitResult {
-        synchronization.cancelAndAwait(token.access)
-        if (duringRecovery) conversations.requireEnterpriseStopped(token) else conversations.stopEnterpriseWork(token)
+        supervisorScope {
+            val cleanup = listOf(
+                async { portals.closeAndAwait(token.access, PortalCloseReason.AUTHORIZATION_REVOKED) },
+                async { synchronization.cancelAndAwait(token.access) },
+                async {
+                    if (duringRecovery) conversations.requireEnterpriseStopped(token) else conversations.stopEnterpriseWork(token)
+                },
+            )
+            var failure: Exception? = null
+            cleanup.forEach { pending ->
+                try { pending.await() }
+                catch (cancelled: CancellationException) { throw cancelled }
+                catch (error: Exception) {
+                    if (failure == null) failure = error else if (error !== failure) failure?.addSuppressed(error)
+                }
+            }
+            failure?.let { throw it }
+        }
         sessions.finishExit(token)
         _failure.value = null
         return try {

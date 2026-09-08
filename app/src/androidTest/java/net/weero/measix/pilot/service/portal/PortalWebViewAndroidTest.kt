@@ -43,10 +43,12 @@ class PortalWebViewAndroidTest {
             val enrolled = source.enrollExample()
             val selection = requireNotNull(sessions.observeSelectedRealmSelection().first())
             val sync = EnterpriseSynchronizationService(sessions, source, scope)
-            val closed = CompletableDeferred<Unit>()
+            val closed = CompletableDeferred<Pair<PortalClosure, Boolean>>()
             host = withContext(Dispatchers.Main) {
                 assertTrue("Installed WebView lacks required v3 features: ${WebViewCompat.getCurrentWebViewPackage(context)}", PortalWebView.supported())
-                PortalWebView.open(compose.activity, selection, sessions, sync, scope) { closed.complete(Unit) }
+                PortalWebView.open(compose.activity, selection, sessions, sync, scope, PortalDocumentRegistry()) {
+                    closed.complete(it to (host?.view?.parent == null))
+                }
             }
             val original = requireNotNull(host)
             var displayed by mutableStateOf<PortalWebView?>(original)
@@ -65,11 +67,14 @@ class PortalWebViewAndroidTest {
             awaitPage(original) { it["url"]?.jsonPrimitive?.content?.endsWith("#within-document") == true }
             assertFalse(original.document.isClosed)
             withContext(Dispatchers.Main) { original.view.reload() }
-            withTimeout(15_000) { closed.await() }
+            val (closure, detachedBeforeNotification) = withTimeout(15_000) { closed.await() }
+            assertEquals(PortalClosure(original.document.id, PortalCloseReason.DOCUMENT_REPLACED), closure)
+            assertTrue("Navigation was notified before the old WebView was detached", detachedBeforeNotification)
+            original.document.awaitClosed()
             assertTrue(original.document.isClosed)
             assertEquals(enrolled.manifest.session, (sessions.state.value as EnterpriseState.Available).manifest.session)
             val replacement = withContext(Dispatchers.Main) {
-                PortalWebView.open(compose.activity, selection, sessions, sync, scope) {}
+                PortalWebView.open(compose.activity, selection, sessions, sync, scope, PortalDocumentRegistry()) {}
             }
             try {
                 assertNotEquals(original.document.id, replacement.document.id)
@@ -96,7 +101,7 @@ class PortalWebViewAndroidTest {
             val closed = CompletableDeferred<Unit>()
             val selection = requireNotNull(sessions.observeSelectedRealmSelection().first())
             host = withContext(Dispatchers.Main) {
-                PortalWebView.open(compose.activity, selection, sessions, EnterpriseSynchronizationService(sessions, source, scope), scope) {
+                PortalWebView.open(compose.activity, selection, sessions, EnterpriseSynchronizationService(sessions, source, scope), scope, PortalDocumentRegistry()) {
                     closed.complete(Unit)
                 }
             }
@@ -137,9 +142,8 @@ class PortalWebViewAndroidTest {
             }
             val originalScope = CoroutineScope(SupervisorJob(scope.coroutineContext[Job]) + Dispatchers.Main.immediate)
             val original = withContext(Dispatchers.Main) {
-                PortalWebView.open(compose.activity, selection, sessions, delayed, originalScope) {}
+                PortalWebView.open(compose.activity, selection, sessions, delayed, originalScope, PortalDocumentRegistry()) {}
             }
-            val originalLifetime = requireNotNull(originalScope.coroutineContext[Job]).children.single()
             host = original
             var displayed by mutableStateOf<PortalWebView?>(original)
             compose.setContent { displayed?.let { page -> key(page.document.id) { AndroidView(factory = { page.view }) } } }
@@ -152,7 +156,7 @@ class PortalWebViewAndroidTest {
             withContext(Dispatchers.Main) { original.view.reload() }
             compose.waitUntil(10_000) { compose.runOnUiThread { original.document.isClosed } }
             val replacement = withContext(Dispatchers.Main) {
-                PortalWebView.open(compose.activity, selection, sessions, EnterpriseSynchronizationService(sessions, source, scope), scope) {}
+                PortalWebView.open(compose.activity, selection, sessions, EnterpriseSynchronizationService(sessions, source, scope), scope, PortalDocumentRegistry()) {}
             }
             host = replacement
             withContext(Dispatchers.Main) { displayed = replacement }
@@ -163,7 +167,7 @@ class PortalWebViewAndroidTest {
             }
             awaitPage(replacement) { it["observing"]?.jsonPrimitive?.boolean == true }
             release.complete(Unit)
-            try { withTimeout(10_000) { originalLifetime.join() } }
+            try { withTimeout(10_000) { original.document.awaitClosed() } }
             catch (failure: kotlinx.coroutines.TimeoutCancellationException) { throw AssertionError("Revoked document did not finish its original synchronization", failure) }
             withContext(Dispatchers.Main) {
                 replacement.view.evaluateJavascript("MeasixHost.postMessage(JSON.stringify({bridgeVersion:3,documentId:MeasixPortalDocument.documentId,requestId:'replacement-probe',method:'getStatus',params:{}}))", null)

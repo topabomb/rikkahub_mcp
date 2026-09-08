@@ -94,6 +94,42 @@ class EnterpriseExitServiceTest {
         }
     }
 
+    @Test fun `synchronization cleanup failure still awaits conversation cleanup before reporting a retryable exit`() = runTest {
+        fixture(virtualTime = true) { f ->
+            f.sessions.enrollFixture(exampleEnterprisePackage())
+            f.gate.ready()
+            val request = requireNotNull(f.service.captureRequest())
+            val entered = CompletableDeferred<Unit>()
+            val release = CompletableDeferred<Unit>()
+            val expected = IOException("Synchronization cleanup failed")
+            var conversationCancelled = false
+            coEvery { f.sync.cancelAndAwait(request.access) } throws expected
+            f.cleanup = {
+                entered.complete(Unit)
+                try { release.await() }
+                catch (cancelled: CancellationException) { conversationCancelled = true; throw cancelled }
+            }
+            val pending = async {
+                try { f.service.exit(request); null } catch (error: IOException) { error }
+            }
+            try {
+                entered.await()
+                runCurrent()
+                assertFalse(pending.isCompleted)
+                assertFalse(conversationCancelled)
+                assertEquals(EnterpriseSessionPhase.CLOSING, f.manifest.phase)
+                release.complete(Unit)
+                assertSame(expected, generateSequence<Throwable>(requireNotNull(pending.await())) { it.cause }.last())
+                val failure = f.service.failure.value as EnterpriseExitFailure.Closing
+                coVerify(exactly = 1) { f.conversations.stopEnterpriseWork(failure.token) }
+                coEvery { f.sync.cancelAndAwait(request.access) } returns Unit
+                f.cleanup = {}
+                f.service.retry(failure)
+                assertEquals(EnterpriseSessionPhase.SIGNED_OUT, f.manifest.phase)
+            } finally { release.complete(Unit); pending.cancelAndJoin() }
+        }
+    }
+
     @Test fun `old personal confirmation cannot exit a replacement pending session`() = runTest {
         fixture { f ->
             val identity = exampleEnterprisePackage().identity
@@ -186,7 +222,7 @@ class EnterpriseExitServiceTest {
             coEvery { sync.cancelAndAwait(any()) } returns Unit
             coEvery { conversations.stopEnterpriseWork(any()) } coAnswers { cleanup(firstArg()) }
             coEvery { conversations.requireEnterpriseStopped(any()) } returns Unit
-            service = EnterpriseExitService(sessions, sync, conversations, gate, scope)
+            service = EnterpriseExitService(sessions, sync, conversations, gate, scope, net.weero.measix.pilot.service.portal.PortalDocumentRegistry())
         }
 
         fun recovery(): ApplicationRecoveryCoordinator = ApplicationRecoveryCoordinator(

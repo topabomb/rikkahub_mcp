@@ -3,6 +3,7 @@ package net.weero.measix.pilot.service.portal
 import java.time.Instant
 import java.util.concurrent.Executors
 import io.mockk.coEvery
+import io.mockk.coVerify
 import io.mockk.mockk
 import kotlinx.coroutines.*
 import kotlinx.coroutines.test.setMain
@@ -15,6 +16,9 @@ import kotlinx.coroutines.flow.first
 import kotlinx.serialization.json.*
 import net.weero.measix.pilot.data.enterprise.*
 import net.weero.measix.pilot.service.EnterpriseSynchronizationService
+import net.weero.measix.pilot.service.EnterpriseExitService
+import net.weero.measix.pilot.service.ApplicationRecoveryGate
+import net.weero.measix.pilot.service.ConversationApplicationService
 import org.junit.Assert.*
 import org.junit.Rule
 import org.junit.Test
@@ -160,7 +164,121 @@ class PortalDocumentTest {
     }
 
     @Test
-    fun `cancellation at dispatcher return releases the newly created document`() = runBlocking(Dispatchers.Main) {
+    fun `enterprise exit waits for original Portal cleanup and rejects a late document admission`() = runBlocking(Dispatchers.Main) {
+        val h = harness(this)
+        val started = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val hostClosed = CompletableDeferred<Unit>()
+        val delayed = mockk<EnterpriseSynchronizationService>()
+        coEvery { delayed.synchronize(any()) } coAnswers {
+            started.complete(Unit)
+            withContext(NonCancellable) { release.await() }
+            h.sessions.state.value as EnterpriseState.Available
+        }
+        val doc = h.open(delayed, closeHost = { hostClosed.complete(Unit) })
+        val original = doc.selection
+        var replies = 0
+        doc.receive(h.raw(doc, "refresh"), PortalProtocol.LOCAL_ORIGIN, true) { replies++ }
+        val appScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+        val conversations = mockk<ConversationApplicationService>()
+        coEvery { conversations.stopEnterpriseWork(any()) } returns Unit
+        val exit = EnterpriseExitService(h.sessions, h.sync, conversations,
+            ApplicationRecoveryGate().apply { ready() }, appScope, h.registry)
+        try {
+            started.await()
+            val request = requireNotNull(exit.captureRequest())
+            val completion = async { exit.exit(request) }
+            h.sessions.state.first { it is EnterpriseState.Available && it.manifest.phase == EnterpriseSessionPhase.CLOSING }
+            hostClosed.await()
+            assertTrue(doc.isClosed)
+            assertFalse(completion.isCompleted)
+            try {
+                PortalDocument.open(original, h.sessions, h.sync, this, h.registry, { now }) {}
+                fail("A closing Session must reject a new document")
+            } catch (_: EnterpriseConfigurationException) { }
+            release.complete(Unit)
+            completion.await()
+            doc.awaitClosed()
+            assertEquals(0, replies)
+            assertEquals(EnterpriseSessionPhase.SIGNED_OUT, (h.sessions.state.value as EnterpriseState.Available).manifest.phase)
+            coVerify(exactly = 1) { conversations.stopEnterpriseWork(any()) }
+        } finally {
+            release.complete(Unit)
+            doc.close()
+            doc.awaitClosed()
+            appScope.coroutineContext[Job]!!.cancelAndJoin()
+        }
+    }
+
+    @Test
+    fun `registry drains every document and retries host failure without treating UI notification as cleanup`() = runBlocking<Unit>(Dispatchers.Main) {
+        val h = harness(this)
+        val expected = java.io.IOException("Host teardown failed")
+        var failHost = true
+        var notifications = 0
+        val secondClosed = CompletableDeferred<Unit>()
+        val first = h.open(closeHost = { if (failHost) throw expected }) {
+            notifications++
+            throw IllegalStateException("Navigation no longer present")
+        }
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val delayed = mockk<EnterpriseSynchronizationService>()
+        coEvery { delayed.synchronize(any()) } coAnswers {
+            entered.complete(Unit)
+            withContext(NonCancellable) { release.await() }
+            h.sessions.state.value as EnterpriseState.Available
+        }
+        val second = h.open(delayed, closeHost = { secondClosed.complete(Unit) })
+        second.receive(h.raw(second, "refresh"), PortalProtocol.LOCAL_ORIGIN, true) { fail("Closed document replied") }
+        try {
+            entered.await()
+            val token = h.sessions.beginExit(requireNotNull(h.sessions.captureExitRequest()))
+            val pending = async {
+                try { h.registry.closeAndAwait(token.access, PortalCloseReason.AUTHORIZATION_REVOKED); null }
+                catch (error: java.io.IOException) { error }
+            }
+            secondClosed.await()
+            assertTrue(first.isClosed)
+            assertTrue(second.isClosed)
+            assertFalse("The first failure must not skip the second owner's cleanup", pending.isCompleted)
+            assertEquals(0, notifications)
+            release.complete(Unit)
+            assertSame(expected, pending.await())
+            failHost = false
+            h.registry.closeAndAwait(token.access, PortalCloseReason.AUTHORIZATION_REVOKED)
+            assertEquals(1, notifications)
+            h.registry.closeAndAwait(token.access, PortalCloseReason.AUTHORIZATION_REVOKED)
+            assertEquals(1, notifications)
+            h.sessions.finishExit(token)
+        } finally {
+            failHost = false
+            release.complete(Unit)
+            first.close(); second.close()
+            first.awaitClosed(); second.awaitClosed()
+        }
+    }
+
+    @Test
+    fun `closing an old Session registry lease cannot close the newly enrolled document`() = runBlocking(Dispatchers.Main) {
+        val h = harness(this)
+        val old = h.open()
+        val oldAccess = old.selection.access as RealmAccess.Enterprise
+        val token = h.sessions.beginExit(requireNotNull(h.sessions.captureExitRequest()))
+        h.registry.closeAndAwait(oldAccess, PortalCloseReason.AUTHORIZATION_REVOKED)
+        h.sessions.finishExit(token)
+        h.source.enrollExample()
+        val current = h.open()
+        try {
+            h.registry.closeAndAwait(oldAccess, PortalCloseReason.AUTHORIZATION_REVOKED)
+            assertFalse(current.isClosed)
+            assertNotEquals(oldAccess, current.selection.access)
+            assertEquals(current.id, h.call(current, "getStatus").getValue("documentId").jsonPrimitive.content)
+        } finally { current.close(); current.awaitClosed() }
+    }
+
+    @Test
+    fun `dispatcher return cancellation is preserved when host cleanup fails and can be retried`() = runBlocking(Dispatchers.Main) {
         val h = harness(this)
         val independent = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
         val returning = CompletableDeferred<Runnable>()
@@ -172,10 +290,18 @@ class PortalDocumentTest {
         }
         var closed = false
         var delivered = false
+        var cleanupAttempts = 0
+        var observedFailure: Exception? = null
+        val cleanupFailure = java.io.IOException("Host cleanup failed")
         val selection = requireNotNull(h.sessions.observeSelectedRealmSelection().first())
         val opener = launch(returnDispatcher, start = CoroutineStart.UNDISPATCHED) {
-            PortalDocument.open(selection, h.sessions, h.sync, independent, { now }) { closed = true }
-            delivered = true
+            try {
+                PortalDocument.open(selection, h.sessions, h.sync, independent, h.registry, { now }, closeHost = {
+                    cleanupAttempts++
+                    if (cleanupAttempts == 1) throw cleanupFailure
+                }) { closed = true }
+                delivered = true
+            } catch (error: Exception) { observedFailure = error; throw error }
         }
         try {
             val resume = returning.await()
@@ -184,8 +310,15 @@ class PortalDocumentTest {
             opener.cancel()
             resume.run()
             opener.join()
-            assertTrue(closed)
+            assertFalse(closed)
             assertFalse(delivered)
+            assertTrue(observedFailure is CancellationException)
+            val suppressed = requireNotNull(observedFailure).suppressed.single()
+            assertSame(cleanupFailure, generateSequence(suppressed) { it.cause }.last())
+            h.sessions.switchToPersonal()
+            h.registry.closeAndAwait(selection.access as RealmAccess.Enterprise, PortalCloseReason.AUTHORIZATION_REVOKED)
+            assertTrue(closed)
+            assertEquals(2, cleanupAttempts)
         } finally { intercept = false; independent.cancel(); opener.cancelAndJoin() }
     }
 
@@ -231,9 +364,12 @@ class PortalDocumentTest {
 
     private inner class Harness(val sessions: EnterpriseSessionController, val source: LocalEnterpriseSource,
         val sync: EnterpriseSynchronizationService, val scope: CoroutineScope) {
+        val registry = PortalDocumentRegistry()
         private var nextRequest = 0
-        suspend fun open(synchronization: EnterpriseSynchronizationService = sync) =
-            PortalDocument.open(requireNotNull(sessions.observeSelectedRealmSelection().first()), sessions, synchronization, scope, { now }) {}
+        suspend fun open(synchronization: EnterpriseSynchronizationService = sync,
+            closeHost: () -> Unit = {}, onClosed: (PortalClosure) -> Unit = {}) =
+            PortalDocument.open(requireNotNull(sessions.observeSelectedRealmSelection().first()), sessions, synchronization,
+                scope, registry, { now }, closeHost, onClosed)
         fun raw(doc: PortalDocument, method: String, params: JsonObject = buildJsonObject {}, requestId: String = "r${nextRequest++}") =
             buildJsonObject { put("bridgeVersion", 3); put("documentId", doc.id); put("requestId", requestId); put("method", method); put("params", params) }.toString()
         suspend fun call(doc: PortalDocument, method: String, params: JsonObject = buildJsonObject {}): JsonObject {

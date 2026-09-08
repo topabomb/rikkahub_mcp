@@ -95,14 +95,14 @@ internal class PortalWebView private constructor(
                 callback.invoke(origin, false, false)
             }
         }
-        view.setDownloadListener { _, _, _, _, _ -> document.close() }
+        view.setDownloadListener { _, _, _, _, _ -> document.close(PortalCloseReason.DOCUMENT_REPLACED) }
         view.webViewClient = object : WebViewClient() {
             override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
                 // Fragment changes stay in the approved document; no other navigation can replace it.
                 val url = request.url
                 if (request.isForMainFrame && url.buildUpon().fragment(null).build().toString() == PortalProtocol.LOCAL_ENTRY &&
                     url.fragment != null) return false
-                if (request.isForMainFrame) document.close()
+                if (request.isForMainFrame) document.close(PortalCloseReason.DOCUMENT_REPLACED)
                 return true
             }
             override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse {
@@ -118,10 +118,10 @@ internal class PortalWebView private constructor(
                 return assets.response(uri.path.orEmpty()) ?: denied()
             }
             override fun onReceivedError(view: WebView, request: WebResourceRequest, error: WebResourceError) {
-                if (request.isForMainFrame) document.close()
+                if (request.isForMainFrame) document.close(PortalCloseReason.HOST_FAILURE)
             }
             override fun onRenderProcessGone(view: WebView, detail: RenderProcessGoneDetail): Boolean {
-                document.close()
+                document.close(PortalCloseReason.HOST_FAILURE)
                 return true
             }
         }
@@ -132,9 +132,9 @@ internal class PortalWebView private constructor(
                 if (navigation.isSameDocument) return
                 if (initialNavigation && navigation.url == PortalProtocol.LOCAL_ENTRY && !navigation.wasInitiatedByPage()) {
                     initialNavigation = false
-                } else document.close()
+                } else document.close(PortalCloseReason.DOCUMENT_REPLACED)
             }
-            override fun onNavigationRedirected(navigation: Navigation) { document.close() }
+            override fun onNavigationRedirected(navigation: Navigation) { document.close(PortalCloseReason.DOCUMENT_REPLACED) }
         })
         val origins = setOf(PortalProtocol.LOCAL_ORIGIN)
         WebViewCompat.addWebMessageListener(view, "MeasixHost", origins) { _, message, sourceOrigin, isMainFrame, originalReply ->
@@ -149,19 +149,59 @@ internal class PortalWebView private constructor(
 
     private fun revokeFromIo() {
         active.set(false)
-        main.post { document.close() }
+        main.post { document.close(PortalCloseReason.DOCUMENT_REPLACED) }
     }
 
-    override fun close() {
-        if (destroyed) return
-        destroyed = true
+    override fun close() = document.close()
+
+    private val viewTeardown by lazy {
+        mutableListOf<() -> Unit>(
+            { view.stopLoading() },
+            { WebViewCompat.removeWebMessageListener(view, "MeasixHost") },
+            { view.clearHistory() },
+            { view.clearCache(true) },
+            { (view.parent as? android.view.ViewGroup)?.removeView(view) },
+        )
+    }
+    private val browserTeardown by lazy {
+        mutableListOf<() -> Unit>(
+            { WebStorage.getInstance().deleteOrigin(PortalProtocol.LOCAL_ORIGIN) },
+            { clearCookies() },
+        )
+    }
+    private var destroyed = false
+
+    private fun destroy() {
         active.set(false)
-        document.close()
-        view.stopLoading()
-        WebViewCompat.removeWebMessageListener(view, "MeasixHost")
-        view.clearHistory()
-        view.clearCache(true)
-        WebStorage.getInstance().deleteOrigin(PortalProtocol.LOCAL_ORIGIN)
+        var failure = attemptTeardown(viewTeardown)
+        attemptTeardown(browserTeardown)?.let { error ->
+            if (failure == null) failure = error else if (error !== failure) failure?.addSuppressed(error)
+        }
+        // WebView methods cannot be retried after destroy, which also requires a detached view.
+        if (viewTeardown.isEmpty() && !destroyed) {
+            try { view.destroy(); destroyed = true }
+            catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+            catch (error: Exception) {
+                if (failure == null) failure = error else if (error !== failure) failure?.addSuppressed(error)
+            }
+        }
+        failure?.let { throw it }
+    }
+
+    private fun attemptTeardown(steps: MutableList<() -> Unit>): Exception? {
+        var failure: Exception? = null
+        val remaining = steps.iterator()
+        while (remaining.hasNext()) {
+            try { remaining.next().invoke(); remaining.remove() }
+            catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+            catch (error: Exception) {
+                if (failure == null) failure = error else if (error !== failure) failure?.addSuppressed(error)
+            }
+        }
+        return failure
+    }
+
+    private fun clearCookies() {
         val cookies = CookieManager.getInstance()
         cookies.getCookie(PortalProtocol.LOCAL_ENTRY)?.split(';')?.forEach { cookie ->
             val name = cookie.substringBefore('=').trim()
@@ -171,22 +211,21 @@ internal class PortalWebView private constructor(
                 }
             }
         }
-        (view.parent as? android.view.ViewGroup)?.removeView(view)
-        view.destroy()
     }
-    private var destroyed = false
 
     companion object {
         fun supported(): Boolean = listOf(WebViewFeature.WEB_MESSAGE_LISTENER, WebViewFeature.DOCUMENT_START_SCRIPT,
             WebViewFeature.NAVIGATION_LISTENER).all(WebViewFeature::isFeatureSupported)
 
         suspend fun open(context: Context, selection: RealmSelection, sessions: EnterpriseSessionController,
-            synchronization: EnterpriseSynchronizationService, scope: CoroutineScope, onClosed: () -> Unit): PortalWebView {
+            synchronization: EnterpriseSynchronizationService, scope: CoroutineScope,
+            registry: PortalDocumentRegistry, onClosed: (PortalClosure) -> Unit): PortalWebView {
             check(Looper.myLooper() == Looper.getMainLooper())
             if (!supported()) throw PortalFailure("source_unavailable")
             val assets = PortalAssets.load(context)
             var host: PortalWebView? = null
-            val document = PortalDocument.open(selection, sessions, synchronization, scope) { host?.close(); onClosed() }
+            val document = PortalDocument.open(selection, sessions, synchronization, scope, registry,
+                closeHost = { host?.destroy() }, onClosed = onClosed)
             try {
                 return PortalWebView(WebView(context), document, assets).also {
                     host = it
@@ -194,8 +233,8 @@ internal class PortalWebView private constructor(
                     it.load()
                 }
             } catch (failure: Exception) {
-                document.close()
-                host?.close()
+                try { document.close(); host?.destroy() }
+                catch (cleanup: Exception) { if (cleanup !== failure) failure.addSuppressed(cleanup) }
                 throw failure
             }
         }

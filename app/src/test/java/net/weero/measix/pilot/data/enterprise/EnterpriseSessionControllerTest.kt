@@ -25,27 +25,23 @@ import org.robolectric.annotation.Config
 class EnterpriseSessionControllerTest {
     @get:Rule val temporary = TemporaryFolder()
 
-    @Test fun `manifest migration preserves closing identity and retries an interrupted atomic write`() = runTest {
+    @Test fun `obsolete enterprise manifest is rejected without rewriting stored facts`() = runTest {
         val root = temporary.newFolder()
         val controller = EnterpriseSessionController(EnterpriseAppliedStore(root)) { 1000L }
         controller.enrollFixture(exampleEnterprisePackage())
-        val token = controller.beginExit(requireNotNull(controller.captureExitRequest()))
+        controller.beginExit(requireNotNull(controller.captureExitRequest()))
         val current = controller.available().manifest
         val fields = EnterprisePackageCodec.json.encodeToJsonElement(current).jsonObject.toMutableMap()
         fields["schemaVersion"] = JsonPrimitive(2)
         fields.remove("exitReason")
         val originalBytes = JsonObject(fields).toString().toByteArray()
         File(root, "manifest.json").writeBytes(originalBytes)
-        val failing = EnterpriseAppliedStore(root) {
-            if (it == EnterpriseStorageCheckpoint.BEFORE_MANIFEST_COMMIT) throw IOException("migration interrupted")
-        }
-        expectFailure<IOException> { failing.readManifest() }
+        val store = EnterpriseAppliedStore(root) { error("Obsolete input must never be committed") }
+        assertEquals("unsupported_enterprise_manifest", expectFailure<EnterpriseStorageException> { store.readManifest() }.reason)
         assertArrayEquals(originalBytes, File(root, "manifest.json").readBytes())
         val reopened = EnterpriseSessionController(EnterpriseAppliedStore(root)) { 1000L }
-        assertEquals(current, (reopened.recover() as EnterpriseState.Available).manifest)
-        assertEquals(token, reopened.pendingExit())
-        assertEquals(ENTERPRISE_MANIFEST_SCHEMA_VERSION, EnterpriseAppliedStore(root).readManifest().schemaVersion)
-        assertFalse(originalBytes.contentEquals(File(root, "manifest.json").readBytes()))
+        assertEquals(EnterpriseState.Failed("unsupported_enterprise_manifest"), reopened.recover())
+        assertArrayEquals(originalBytes, File(root, "manifest.json").readBytes())
     }
 
     @Test fun `closing reason is immutable and missing reason in current storage is rejected`() = runTest {

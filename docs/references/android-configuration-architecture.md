@@ -76,9 +76,9 @@ updateLocal(latest Local shadow transform)
 `data/enterprise` 提供独立的企业配置、接入资料及持久状态组件。DataSourceModule 注册其单例，私有存储位于 noBackupFilesDir/enterprise；ApplicationRecoveryCoordinator 在 Settings 就绪之后恢复企业状态。企业校验错误由企业 owner 发布，不阻塞个人数据恢复。正式页面与执行消费者尚未改接企业域，仍使用上文的个人投影和旧 Managed 原型。
 
 - `EnterprisePackageCodec` 校验 formatVersion=2 的完整本地资料：显式五项准入、资源/助手引用、默认选择与完整运行绑定，顶层可携带 feedSeed 初值。该格式独立于接入资料和平台 Snapshot；旧企业原型格式拒绝，不保留双格式兼容。定义与运行连接分开；异常不带可能含凭据的原始反序列化错误。
-- `EnterpriseAppliedStore` 在调用者指定的私有目录暂存不可变配置、绑定及独立 Feed 文件，以 schemaVersion=3 的单个 manifest 原子发布身份、版本、当前空间及退出原因。磁盘版本 2 显式原子迁移，原 CLOSING 归为主动退出；保留身份、Applied 和 Feed 指针，失败保持原文件以便重试。此版本不改变接入资料或企业配置协议。Feed 指针按来源/Deployment/User 保存，退出保留且不可跨主体读取。提交显式同步文件并核验实际 manifest，不能把 AtomicFile 仅记录日志的失败当作成功。
+- `EnterpriseAppliedStore` 在调用者指定的私有目录暂存不可变配置、绑定及独立 Feed 文件，以 schemaVersion=3 的单个 manifest 原子发布身份、版本、当前空间及退出原因。只接受当前企业格式，未交付原型的旧版本明确拒绝，不自动改写身份或推断退出原因；接入资料和完整配置使用各自独立版本。Feed 指针按来源/Deployment/User 保存，退出保留且不可跨主体读取。提交显式同步文件并核验实际 manifest，不能把 AtomicFile 仅记录日志的失败当作成功。
 - `EnterpriseSessionController` 是上述存储的串行写 owner。enrollLocal 处理已验证接入（配置不可用时待配置），importLocal 处理显式原生安装后的应用，synchronize 只接受原 Session 的候选。无 registerIdentity/applyPackage 通用旁路。主动退出复验原企业 Session 与确认时的 RealmSelection；到期/撤销绑定原 Session，不依赖当前选中空间。beginExit/beginInvalidation 先发布 CLOSING 并撤销新动作及 binding lease；finishExit 只接受原 token，在 lease 全部释放后发布 SIGNED_OUT 或 REAUTH_REQUIRED。配置损坏时仍能依靠已验证身份退出；重启保留 CLOSING，不能在运行恢复前假报已退出。
-- `EnterpriseExitService` 在应用作用域持有已接受的退出任务并合并重复请求；页面取消不取消退出。释放 Session 锁后依次取消并等待原 Session 同步、主/子 Runtime 与辅助生成，通过既有 TurnFinalizer 提交终态，并核验该域没有未完成运行事实后才完成 Session 退出。清理失败保留原 CLOSING 和可显式重试的失败投影；到期准入写盘失败单独记录原授权与原因，不假报已接受。自动观察器与重试共享同一任务准入锁。退出成功后的版本文件清理失败单独返回维护结果。此 owner 已接入启动恢复与授权到期观察；正式入口、Portal logout 和媒体收口尚待接通。
+- `EnterpriseExitService` 在应用作用域持有已接受的退出任务并合并重复请求；页面取消不取消退出。释放 Session 锁后并发取消并等待原 Session 的 Portal、同步、主/子 Runtime 与辅助生成，通过既有 TurnFinalizer 提交终态，并核验该域没有未完成运行事实后才完成 Session 退出。任一非取消失败不跳过其他 owner 的收口，失败保留原 CLOSING 和可显式重试的投影；到期准入写盘失败单独记录原授权与原因，不假报已接受。自动观察器与重试共享同一任务准入锁。退出成功后的版本文件清理失败单独返回维护结果。此 owner 已接入启动恢复与授权到期观察；正式入口、Portal logout 和媒体收口尚待接通。
 - LocalEnterpriseSource 通过 LocalEnterpriseConfigurationStore 唯一管理 noBackupFilesDir/local_enterprise_service 中的安装目录和来源配置。这是模拟服务的来源事实，不是第四个客户端配置区或 enterprise_local。目录按完整主体保存身份、generation 与内容摘要引用，配置使用独立不可变文件；身份读取不依赖配置可读。场景修改按来源 revision 做 CAS 并推进 generation，尚未同步时客户端 Applied 保持原值。损坏来源不能静默重置为随包示例；显式完整文件导入可以在 CAS 校验后以更高 generation 修复。
 - EnterpriseSynchronizationService 在 Session 准入锁内登记并合并同一主体/Session 的同步请求，读取来源候选后交给 Session owner 复核原授权并原子应用，不创建、续期或切换 Session。成功提交同时保存 lastConfigurationSyncMillis；同版本检查复用 Applied revision，失败保留原配置和成功时间。取消等待者不会回滚或重放同步；退出通过 cancelAndAwait 取消原 Session 的在途同步，在 Session 锁外等待。同步同会话更新保留离线状态。在途 lease 保留捕获的旧绑定直至释放；lease 不充当执行授权，运行链接入时还需统一准入门禁。
 - `LocalEnterpriseSource` 统一验证一键、粘贴和扫码解析后的公开示例接入资料，并支持私有整包导入。`docs/examples/enterprise.local.example.json` 是唯一公开示例输入，通过构建任务进入 assets；根目录 `enterprise.local.json` 被 Git 忽略且不参与打包。配置内 HTML 与 EnterprisePortal 原型已删除。Portal local 消费包固定在 app/src/main/enterprisePortal，保留上游 build-identity.json；PrepareEnterprisePortalAssets 检查来源、版本、完整文件集合和 SHA256 后，为全部构建生成 enterprise_portal assets。普通构建不依赖 sibling checkout；当前随包协议为 Bridge v3 / 本地读取 v2，原生宿主见下节。
@@ -122,6 +122,10 @@ Memory 已通过 MemoryAddress/MemoryService 按原域、主体与 Session 进�
 `PortalDocument` 在 Main dispatcher 管理单个文档、在途请求与原回复通道，冻结原 RealmSelection、母 Session 和最多十分钟期限。快速切出再切回、重登、到期或关闭均不能恢复旧文档。每次读取和回复重新经过 Session owner 授权；十秒请求期限涵盖授权、执行及回复等待，超时后只能以非等待授权检查返回错误。请求 ID 在文档内不复用，迟到结果不转投新页面。配置刷新复用 EnterpriseSynchronizationService；列表的 notModified 仅在授权成功后比较 ETag，且不携带正文。
 
 `PortalWebView` 为每个批准文档新建实例，在首次加载前注册原生消息监听和 document-start bootstrap。固定 origin 只读取经过版本与摘要校验的 PortalAssets，入口为 text/html；其他地址本地拒绝，网络、文件、content URI、网页直接媒体权限均关闭。静态主文档只交付一次，重载和跨文档导航撤销旧实例，页内导航保留当前文档。响应仅经原 JavaScriptReplyProxy；关闭时撤销请求、销毁 WebView 并清理该 origin 的浏览状态。
+
+文档创建在原 Session 的选中授权锁内登记到 `PortalDocumentRegistry`；它只索引活动 owner，不另存会话状态。`close` 立即撤权并取消请求，`awaitClosed` 供外部 owner 等待原请求收尾及宿主清理，不能由文档自身请求等待。关闭原因保留首次值；WebView 清理全部步骤成功后才发送带原 documentId 的界面通知，通知异常不占据退出屏障。宿主清理逐项尝试，失败项保留重试；依赖 WebView 的前置清理及 detach 全部成功后才 destroy，销毁后只允许重试独立 Cookie/WebStorage 清理。Registry 按完整原 RealmAccess 关闭所有已捕获文档，全部等待后再汇总失败；成功完成才移除登记，旧 Session 清理不关闭新登录文档。创建交接被取消时仍收口已取得的文档，补偿失败附加到原异常，不覆盖取消原因。
+
+`EnterpriseExitService` 在 CLOSING 提交且释放 Session 锁后，并发调用 Portal、同步和会话的既有清理入口；非取消失败不跳过其他 owner，所有收口成功后才完成持久退出。启动恢复复用该流程。正式原生切域和 Portal logout 的 UI 接线仍在实施。
 
 当前宿主声明 getStatus、refresh、close、cancel 和三个本地读取方法；状态中的动态刷新时间只表示当前文档已完成的读取，未知时为 null。logout、外链、拍照/录音及媒体句柄尚未接线，不声明对应能力，正式企业 UI 入口仍在实施。以上实现不代表设备媒体验收或真实平台接入。
 

@@ -9,6 +9,9 @@ import kotlinx.serialization.json.*
 import net.weero.measix.pilot.data.enterprise.*
 import net.weero.measix.pilot.service.EnterpriseSynchronizationService
 
+internal enum class PortalCloseReason { USER_REQUEST, HOST_DISPOSED, DOCUMENT_REPLACED, DOCUMENT_EXPIRED, AUTHORIZATION_REVOKED, HOST_FAILURE }
+internal data class PortalClosure(val documentId: String, val reason: PortalCloseReason)
+
 /** One approved top-level document owns its requests; all calls and callbacks run on the UI dispatcher. */
 internal class PortalDocument private constructor(
     val id: String,
@@ -18,11 +21,17 @@ internal class PortalDocument private constructor(
     private val synchronization: EnterpriseSynchronizationService,
     parentScope: CoroutineScope,
     private val nowMillis: () -> Long,
-    private val onClosed: () -> Unit,
+    private val closeHost: () -> Unit,
+    private val onClosed: (PortalClosure) -> Unit,
 ) : AutoCloseable {
     private val lifetime = SupervisorJob(parentScope.coroutineContext[Job])
     private val scope = CoroutineScope(parentScope.coroutineContext + lifetime + Dispatchers.Main.immediate)
     private var closed = false
+    private var closeFailure: Exception? = null
+    private var closure: PortalClosure? = null
+    @Volatile private var hostClosed = false
+    private var notified = false
+    private val completion = CompletableDeferred<Unit>()
     private val seen = mutableSetOf<String>()
     private val requests = mutableMapOf<String, Job>()
     private var lastFeedRefresh: Long? = null
@@ -30,15 +39,18 @@ internal class PortalDocument private constructor(
     val isClosed: Boolean get() = closed
 
     init {
+        lifetime.invokeOnCompletion { completeClosure() }
         scope.launch(start = CoroutineStart.UNDISPATCHED) {
-            try { awaitCancellation() } finally { close() }
+            try { awaitCancellation() } finally { if (!closed) close(PortalCloseReason.HOST_DISPOSED) }
         }
         scope.launch {
-            sessions.observeSelectedRealmSelection().collect { current -> if (current != selection) close() }
+            sessions.observeSelectedRealmSelection().collect { current ->
+                if (current != selection) close(PortalCloseReason.AUTHORIZATION_REVOKED)
+            }
         }
         scope.launch {
             delay((expiresAtMillis - nowMillis()).coerceAtLeast(1))
-            close()
+            close(PortalCloseReason.DOCUMENT_EXPIRED)
         }
     }
 
@@ -133,7 +145,7 @@ internal class PortalDocument private constructor(
             synchronization.synchronize(selection.access as RealmAccess.Enterprise)
             status()
         }
-        PortalCommand.Close -> { close(); buildJsonObject {} }
+        PortalCommand.Close -> { close(PortalCloseReason.USER_REQUEST); buildJsonObject {} }
         is PortalCommand.Cancel -> { requests[command.targetRequestId]?.cancel(); buildJsonObject {} }
         else -> throw PortalFailure("unsupported_method")
     }
@@ -179,26 +191,65 @@ internal class PortalDocument private constructor(
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (_: EnterpriseConfigurationException) {
-            close()
+            close(PortalCloseReason.AUTHORIZATION_REVOKED)
         }
     }
 
     private fun deliver(reply: (String) -> Unit, response: String) {
         try { reply(response) }
         catch (cancelled: CancellationException) { throw cancelled }
-        catch (_: Exception) { close() }
+        catch (_: Exception) { close(PortalCloseReason.HOST_FAILURE) }
     }
 
     @MainThread
-    override fun close() {
-        if (closed) return
-        closed = true
-        lifetime.cancel()
-        requests.clear()
-        seen.clear()
-        lastFeedRefresh = null
-        onClosed()
+    override fun close() = close(PortalCloseReason.HOST_DISPOSED)
+
+    @MainThread
+    fun close(reason: PortalCloseReason) {
+        if (!closed) {
+            closed = true
+            closure = PortalClosure(id, reason)
+            requests.clear()
+            seen.clear()
+            lastFeedRefresh = null
+        }
+        try {
+            if (!hostClosed) {
+                closeHost()
+                closeFailure = null
+                hostClosed = true
+            }
+        } catch (cancelled: CancellationException) {
+            closeFailure = cancelled
+            throw cancelled
+        } catch (failure: Exception) {
+            closeFailure = failure
+        } finally {
+            lifetime.cancel()
+            completeClosure()
+        }
+        if (hostClosed && !notified) {
+            notified = true
+            try { onClosed(requireNotNull(closure)) }
+            catch (cancelled: CancellationException) { throw cancelled }
+            catch (failure: Exception) {
+                android.util.Log.e("PortalDocument", "Portal close notification failed", failure)
+            }
+        }
     }
+
+    private fun completeClosure() {
+        if (hostClosed && lifetime.isCompleted) completion.complete(Unit)
+    }
+
+    /** Called by an external lifecycle owner, never by a request belonging to this document. */
+    suspend fun awaitClosed() {
+        lifetime.join()
+        closeFailure?.let { throw it }
+        completion.await()
+    }
+
+    internal fun invokeOnCompletion(handler: () -> Unit) { completion.invokeOnCompletion { handler() } }
 
     companion object {
         private val CAPABILITIES = listOf("getStatus", "refresh", "close", "cancel", "getLocalContext", "listLocalUpdates", "getLocalUpdate")
@@ -207,8 +258,10 @@ internal class PortalDocument private constructor(
             sessions: EnterpriseSessionController,
             synchronization: EnterpriseSynchronizationService,
             scope: CoroutineScope,
+            registry: PortalDocumentRegistry,
             nowMillis: () -> Long = System::currentTimeMillis,
-            onClosed: () -> Unit,
+            closeHost: () -> Unit = {},
+            onClosed: (PortalClosure) -> Unit,
         ): PortalDocument {
             var created: PortalDocument? = null
             try {
@@ -217,15 +270,23 @@ internal class PortalDocument private constructor(
                     val session = requireNotNull(state.manifest.session)
                     if (!session.identity.authority.isLocal) throw PortalFailure("source_forbidden")
                     val id = Base64.getUrlEncoder().withoutPadding().encodeToString(ByteArray(32).also { SecureRandom().nextBytes(it) })
-                    PortalDocument(id, selection, minOf(session.expiresAtMillis, nowMillis() + 600_000),
-                        sessions, synchronization, scope, nowMillis, onClosed).also {
-                        created = it
-                        if (it.isClosed || !it.lifetime.isActive) throw CancellationException("Portal document unavailable")
+                    sessions.withSelectedRealmSelection(selection) {
+                        PortalDocument(id, selection, minOf(session.expiresAtMillis, nowMillis() + 600_000),
+                            sessions, synchronization, scope, nowMillis, closeHost, onClosed).also {
+                            created = it
+                            if (it.isClosed || !it.lifetime.isActive) throw CancellationException("Portal document unavailable")
+                            registry.register(it)
+                        }
                     }
                 }
             } catch (failure: Exception) {
                 // A dispatcher return can reject ownership after the independent document has been created.
-                withContext(NonCancellable + Dispatchers.Main.immediate) { created?.close() }
+                try {
+                    withContext(NonCancellable + Dispatchers.Main.immediate) {
+                        created?.close()
+                        created?.awaitClosed()
+                    }
+                } catch (cleanup: Exception) { if (cleanup !== failure) failure.addSuppressed(cleanup) }
                 throw failure
             }
         }

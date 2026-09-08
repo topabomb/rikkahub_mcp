@@ -354,7 +354,8 @@ val appModule = module {
 
     single { ConversationTitleCoordinator() }
 
-    single { net.weero.measix.pilot.service.EnterpriseExitService(get(), get(), get(), get(), get<AppScope>()) }
+    single { net.weero.measix.pilot.service.portal.PortalDocumentRegistry() }
+    single { net.weero.measix.pilot.service.EnterpriseExitService(get(), get(), get(), get(), get<AppScope>(), get()) }
 
     single {
         GenerationSideEffects(

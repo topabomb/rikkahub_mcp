@@ -103,14 +103,8 @@ internal class EnterpriseAppliedStore(
         } else {
             EnterpriseManifest.signedOut()
         }
-        val current = if (manifest.schemaVersion == 2) {
-            if (manifest.exitReason != null) throw EnterpriseStorageException("invalid_enterprise_storage")
-            manifest.copy(schemaVersion = ENTERPRISE_MANIFEST_SCHEMA_VERSION,
-                exitReason = EnterpriseExitReason.USER_REQUEST.takeIf { manifest.phase == EnterpriseSessionPhase.CLOSING })
-        } else manifest
-        validateManifest(current)
-        if (current != manifest) writeManifest(current)
-        return current
+        validateManifest(manifest)
+        return manifest
     }
 
     fun prepare(value: EnterprisePackage): EnterpriseAppliedVersion {
