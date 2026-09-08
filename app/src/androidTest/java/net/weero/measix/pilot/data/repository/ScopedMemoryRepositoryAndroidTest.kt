@@ -170,7 +170,7 @@ class ScopedMemoryRepositoryAndroidTest {
                         withTimeout(10_000) { commitDecided.await() }
                         writer.cancel()
                         val exit = async(start = CoroutineStart.UNDISPATCHED) {
-                            sessions.beginExit().also { assertTrue(transactionFinished.get()) }
+                            sessions.beginExit(requireNotNull(sessions.captureExitRequest())).also { assertTrue(transactionFinished.get()) }
                         }
                         exitJob = exit
                         assertFalse(writer.isCompleted)

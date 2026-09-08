@@ -19,6 +19,13 @@ data class ScopedTurnExecution(
 
 @Dao
 interface TurnExecutionDAO {
+    @Query("SELECT COUNT(*) FROM turn_execution t JOIN ConversationEntity c ON c.id = t.conversation_id " +
+        "WHERE c.scope = :scope AND t.status IN (:statuses)")
+    suspend fun countByScopeAndStatuses(
+        scope: net.weero.measix.pilot.data.configuration.ConfigurationScope,
+        statuses: List<TurnExecutionStatus>,
+    ): Int
+
     @Insert(onConflict = OnConflictStrategy.IGNORE)
     suspend fun insert(execution: TurnExecutionEntity): Long
 

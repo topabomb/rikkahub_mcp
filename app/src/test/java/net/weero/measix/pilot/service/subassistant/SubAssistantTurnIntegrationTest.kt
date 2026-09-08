@@ -7,11 +7,16 @@ import io.mockk.coEvery
 import io.mockk.every
 import io.mockk.mockk
 import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
 import me.rerere.ai.core.Tool
 import me.rerere.ai.ui.StepOutcome
 import me.rerere.ai.ui.ToolInteractionState
@@ -37,6 +42,9 @@ import net.weero.measix.pilot.data.model.Assistant
 import net.weero.measix.pilot.data.model.Conversation
 import net.weero.measix.pilot.data.model.toMessageNode
 import net.weero.measix.pilot.data.repository.ConversationRepository
+import net.weero.measix.pilot.data.configuration.ConfigurationScope
+import net.weero.measix.pilot.data.enterprise.*
+import net.weero.measix.pilot.service.*
 import net.weero.measix.pilot.service.ApplicationRecoveryGate
 import net.weero.measix.pilot.service.runtime.ConversationCommandCoordinator
 import net.weero.measix.pilot.service.runtime.ConversationOperationLocks
@@ -45,6 +53,7 @@ import net.weero.measix.pilot.service.runtime.currentTurnPresentation
 import net.weero.measix.pilot.service.runtime.ConversationWrite
 import net.weero.measix.pilot.service.runtime.TurnExecutionOperation
 import net.weero.measix.pilot.service.runtime.disclosureCandidate
+import net.weero.measix.pilot.service.runtime.toSnapshot
 import net.weero.measix.pilot.service.turn.TurnCommitter
 import net.weero.measix.pilot.service.turn.TurnContextFactory
 import net.weero.measix.pilot.service.turn.TurnFinalizer
@@ -67,6 +76,8 @@ import java.util.Collections
 import kotlin.uuid.Uuid
 
 /** Real parent/child runners and command reducers; only provider and transaction IO are doubles. */
+@org.junit.runner.RunWith(org.robolectric.RobolectricTestRunner::class)
+@org.robolectric.annotation.Config(sdk = [34])
 class SubAssistantTurnIntegrationTest {
     @Test(timeout = 30_000)
     fun `child ask user resumes original turn and parent atomically retains complete execution link`() = runScenario(false)
@@ -74,9 +85,31 @@ class SubAssistantTurnIntegrationTest {
     @Test(timeout = 30_000)
     fun `child terminal commit failure retains its pending runtime through actual run cleanup`() = runScenario(true)
 
-    private fun runScenario(failChildTerminal: Boolean) = runBlocking {
+    @Test(timeout = 30_000)
+    fun `enterprise exit waits for child creation and leaves no unfinished execution`() = runScenario(false, ExitWindow.CREATE)
+
+    @Test(timeout = 30_000)
+    fun `enterprise exit waits for committed child link before completing`() = runScenario(false, ExitWindow.LINK)
+
+    @Test(timeout = 30_000)
+    fun `enterprise exit stops a started child before completing`() = runScenario(false, ExitWindow.CHILD_START)
+
+    @Test(timeout = 30_000)
+    fun `enterprise exit retains closing when child terminal commit fails and retries original workers`() = runScenario(true, ExitWindow.CHILD_START)
+
+    private enum class ExitWindow { CREATE, LINK, CHILD_START }
+
+    private fun runScenario(failChildTerminal: Boolean, exitWindow: ExitWindow? = null) = runBlocking {
         val appScope = AppScope(Dispatchers.Default)
+        val root = java.nio.file.Files.createTempDirectory("child-exit-test").toFile()
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
         try {
+            val sessions = EnterpriseSessionController(EnterpriseAppliedStore(root))
+            val access = if (exitWindow == null) RealmAccess.Personal else {
+                sessions.enrollFixture(exampleEnterprisePackage())
+                sessions.captureSelectedRealmAccess()
+            }
             val model = me.rerere.ai.provider.Model(modelId = "scripted-model")
             val providerSetting = me.rerere.ai.provider.ProviderSetting.OpenAI(models = listOf(model))
             val child = Assistant(name = "Child", allowAsSubAssistant = true, chatModelId = model.id, enableMemory = false)
@@ -96,18 +129,48 @@ class SubAssistantTurnIntegrationTest {
             every { settingsStore.effectiveSettings } returns MutableStateFlow(settings.toEffectiveSettingsSnapshot())
             val repository = mockk<ConversationRepository>(relaxed = true)
             val writes = Collections.synchronizedList(mutableListOf<ConversationWrite.Mutate>())
+            val headers = java.util.concurrent.ConcurrentHashMap<Uuid, net.weero.measix.pilot.service.runtime.ConversationHeader>()
+            coEvery { repository.insertConversation(any()) } coAnswers {
+                val conversation = firstArg<Conversation>()
+                headers[conversation.id] = conversation.toSnapshot().header
+                if (exitWindow == ExitWindow.CREATE && conversation.parentConversationId != null) {
+                    entered.complete(Unit)
+                    release.await()
+                }
+            }
+            coEvery { repository.deleteConversation(any()) } coAnswers { headers.remove(firstArg<Uuid>()); Unit }
+            coEvery { repository.getTurnExecutions(any()) } coAnswers {
+                val id = firstArg<Uuid>().toString()
+                synchronized(writes) { writes.mapNotNull { it.executionFacts?.turn }.associateBy { it.turnId }.values.filter { it.conversationId == id } }
+            }
+            coEvery { repository.getToolExecutions(any()) } coAnswers {
+                val id = firstArg<String>()
+                synchronized(writes) { writes.mapNotNull { it.executionFacts?.toolExecution }.associateBy { it.executionId }.values.filter { it.turnId == id } }
+            }
+            coEvery { repository.countUnfinishedTurns(any()) } coAnswers {
+                val scope = firstArg<ConfigurationScope>()
+                synchronized(writes) { writes.mapNotNull { it.executionFacts?.turn }.associateBy { it.turnId }.values.count {
+                    headers[Uuid.parse(it.conversationId)]?.scope == scope && it.status in setOf(TurnExecutionStatus.RUNNING, TurnExecutionStatus.AWAITING_USER)
+                } }
+            }
             var masterId: Uuid? = null
             var failedChildId: Uuid? = null
+            var rejectChildTerminal = failChildTerminal
             coEvery { repository.commit(any()) } coAnswers {
                 (firstArg<ConversationWrite>() as? ConversationWrite.Mutate)?.let { write ->
                     val terminal = write.executionFacts?.turn?.status?.let {
                         it !in setOf(TurnExecutionStatus.RUNNING, TurnExecutionStatus.AWAITING_USER)
                     } == true
-                    if (failChildTerminal && terminal && write.mutation.conversationId != masterId) {
+                    if (rejectChildTerminal && terminal && write.mutation.conversationId != masterId) {
                         failedChildId = write.mutation.conversationId
                         throw java.io.IOException("child terminal commit failed")
                     }
                     writes += write
+                    if (exitWindow == ExitWindow.CHILD_START && write.mutation.conversationId != masterId &&
+                        write.executionFacts?.turnOperation == TurnExecutionOperation.START) {
+                        entered.complete(Unit)
+                        release.await()
+                    }
                 }
                 true
             }
@@ -140,13 +203,13 @@ class SubAssistantTurnIntegrationTest {
                 memoryService = mockk<net.weero.measix.pilot.service.MemoryService> {
                     coEvery { captureExecution(any(), any()) } returns null
                 }, turnPipelineFactory = pipeline,
-                configurations = mockk(relaxed = true),
+                configurations = if (exitWindow == null) mockk(relaxed = true) else ConfigurationQueryService(settingsStore, sessions, ApplicationRecoveryGate().apply { ready() }),
                 turnContextFactory = TurnContextFactory(mockk(relaxed = true)), artifactStore = artifacts,
                 toolArtifactRewriter = mockk(relaxed = true), json = JsonInstant,
                 attachmentResolver = resolver, context = mockk(relaxed = true), turnFinalizer = finalizer,
                 runGate = runGate,
             )
-            val runtime = commands.create(Conversation(assistantId = parent.id, messageNodes = listOf(UIMessage.user("Delegate the choice").toMessageNode())))
+            val runtime = commands.create(Conversation(assistantId = parent.id, scope = access.scope, messageNodes = listOf(UIMessage.user("Delegate the choice").toMessageNode())))
             masterId = runtime.id
             coEvery { repository.getConversationHeader(any()) } coAnswers { registry.findRuntime(firstArg())?.durable?.header }
             coEvery { repository.getTurnExecution(any()) } coAnswers {
@@ -156,7 +219,7 @@ class SubAssistantTurnIntegrationTest {
             val parentTool = Tool(
                 name = "assistant_call", description = "Delegate a choice", execute = { emptyList() },
                 contextualExecute = {
-                    childRuns.executeCall(parent.id, runtime.id, net.weero.measix.pilot.data.enterprise.RealmAccess.Personal, child.id, "Choose a color", this)
+                    childRuns.executeCall(parent.id, runtime.id, access, child.id, "Choose a color", this)
                 },
             )
             val turnId = Uuid.random()
@@ -182,9 +245,14 @@ class SubAssistantTurnIntegrationTest {
                     onResult = started.turnCommitter::commitRunResult,
                     onCheckpoint = { checkpoint ->
                         started.turnCommitter.onCheckpoint(checkpoint)
+                        if (exitWindow == ExitWindow.LINK && checkpoint is net.weero.measix.pilot.service.runtime.ToolExecutionUpdatedCheckpoint &&
+                            checkpoint.toolExecution?.childTurnId != null) {
+                            entered.complete(Unit)
+                            release.await()
+                        }
                         val metadata = runtime.durable.currentMessages().last().getTools().singleOrNull()?.getSubAssistantCallMetadata(JsonInstant)
                         val interaction = metadata?.userInteraction
-                        if (interaction != null && !answered) {
+                        if (interaction != null && !answered && exitWindow == null) {
                             answered = true
                             val childRuntime = requireNotNull(registry.findRuntime(Uuid.parse(requireNotNull(metadata.childConversationId))))
                             pausedChildTurnId = childRuntime.snapshot.value.stream!!.turnId
@@ -200,6 +268,37 @@ class SubAssistantTurnIntegrationTest {
                 ))
             }
             registry.installAndStartTurnWorker(runtime.id, turnId, worker)
+            if (exitWindow != null) {
+                entered.await()
+                val gate = ApplicationRecoveryGate().apply { ready() }
+                val application = ConversationApplicationService(settingsStore, repository, mockk(), registry, commands, gate,
+                    SubAssistantLifecycle(repository, registry, commands, JsonInstant), mockk(), artifacts, mockk(), finalizer,
+                    JsonInstant, mockk(), ConversationTitleCoordinator(), sessions, runGate)
+                val synchronization = mockk<EnterpriseSynchronizationService> { coEvery { cancelAndAwait(any()) } returns Unit }
+                val exit = EnterpriseExitService(sessions, synchronization, application, gate, appScope)
+                val request = requireNotNull(exit.captureRequest())
+                val pending = async { try { exit.exit(request); null } catch (error: Exception) { error } }
+                sessions.state.first { it is EnterpriseState.Available && it.manifest.phase == EnterpriseSessionPhase.CLOSING }
+                assertFalse(pending.isCompleted)
+                release.complete(Unit)
+                val failure = pending.await()
+                if (failChildTerminal) {
+                    assertTrue(failure is java.io.IOException)
+                    assertEquals(EnterpriseSessionPhase.CLOSING, (sessions.state.value as EnterpriseState.Available).manifest.phase)
+                    rejectChildTerminal = false
+                    exit.retry(requireNotNull(sessions.pendingExit()))
+                } else org.junit.Assert.assertNull(failure)
+                assertEquals(EnterpriseSessionPhase.SIGNED_OUT, (sessions.state.value as EnterpriseState.Available).manifest.phase)
+                worker.join()
+                assertFalse(runGate.isBusy(SubAssistantRunKey(runtime.id, child.id)))
+                assertEquals(0, repository.countUnfinishedTurns(access.scope))
+                assertTrue(registry.activeRuntimes().none { it.snapshot.value.stream != null || it.currentWorker()?.isCompleted == false || it.hasAuxiliaryWork })
+                val childStarts = synchronized(writes) { writes.filter { it.mutation.conversationId != masterId && it.executionFacts?.turnOperation == TurnExecutionOperation.START } }
+                assertEquals(if (exitWindow == ExitWindow.CHILD_START) 1 else 0, childStarts.size)
+                val linkedChildren = synchronized(writes) { writes.mapNotNull { it.executionFacts?.toolExecution?.childConversationId }.toSet() }
+                assertTrue(headers.keys.filter { it != masterId }.all { it.toString() in linkedChildren })
+                return@runBlocking
+            }
             val result = runCatching { worker.await() }
             if (failChildTerminal) {
                 assertFalse(result.getOrNull() is TurnOutcome.Completed)
@@ -242,7 +341,10 @@ class SubAssistantTurnIntegrationTest {
             assertEquals(metadata.runId, linkedWrite.mutation.upsertedNodes.flatMap { it.messages }.flatMap { it.getTools() }.single().getSubAssistantCallMetadata(JsonInstant)?.runId)
             assertEquals(ToolExecutionStatus.COMPLETED, writes.mapNotNull { it.executionFacts?.toolExecution }.last().status)
         } finally {
+            release.complete(Unit)
             appScope.cancel()
+            withContext(NonCancellable) { appScope.coroutineContext[Job]?.join() }
+            root.deleteRecursively()
         }
     }
 }

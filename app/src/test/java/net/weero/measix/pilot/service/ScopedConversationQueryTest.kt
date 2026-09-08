@@ -59,7 +59,7 @@ class ScopedConversationQueryTest {
         tools.forEach { it.execute(arguments) }
         coVerify(exactly = 1) { repository.getRecentConversationRecords(access.scope, assistant, 10) }
         coVerify(exactly = 1) { repository.searchMessagesOfAssistant(access.scope, assistant, "needle", MessageSearchSort.RELEVANCE) }
-        sessions.finishExit(requireNotNull(sessions.beginExit()))
+        sessions.finishExit(sessions.beginExit(requireNotNull(sessions.captureExitRequest())))
         sessions.enrollFixture(packet)
         tools.forEach { tool ->
             try {

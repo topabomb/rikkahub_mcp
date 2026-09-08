@@ -30,7 +30,12 @@ internal sealed interface EnterpriseState {
     data class Failed(val reason: String) : EnterpriseState
 }
 
-internal data class EnterpriseExitToken(val sessionId: String, val scope: ConfigurationScope.Enterprise)
+internal data class EnterpriseExitRequest(val access: RealmAccess.Enterprise, val selection: RealmSelection)
+internal data class EnterpriseExitToken(val access: RealmAccess.Enterprise, val reason: EnterpriseExitReason)
+internal sealed interface EnterpriseExitSignal {
+    data class Closing(val token: EnterpriseExitToken) : EnterpriseExitSignal
+    data class Expired(val access: RealmAccess.Enterprise) : EnterpriseExitSignal
+}
 
 /** A binding lease owns immutable connection inputs, not permission to execute a capability. */
 internal class EnterpriseBindingLease internal constructor(
@@ -100,7 +105,7 @@ internal class EnterpriseSessionController(
             applyValidated(candidate, enter = true, replaceSession = true)
         } else {
             val session = EnterpriseSession(Uuid.random().toString(), installedIdentity, nowMillis() + SESSION_LIFETIME_MILLIS)
-            publish(EnterpriseManifest(2, EnterpriseSessionPhase.CONFIGURATION_PENDING, session, null, ConfigurationScope.Personal, installedIdentity, current.manifest.feeds), null)
+            publish(EnterpriseManifest(ENTERPRISE_MANIFEST_SCHEMA_VERSION, EnterpriseSessionPhase.CONFIGURATION_PENDING, session, null, ConfigurationScope.Personal, installedIdentity, current.manifest.feeds), null)
         }
     }
 
@@ -159,7 +164,7 @@ internal class EnterpriseSessionController(
             ?.copy(identity = candidate.identity)
             ?: EnterpriseSession(Uuid.random().toString(), candidate.identity, nowMillis() + SESSION_LIFETIME_MILLIS)
         val next = EnterpriseManifest(
-            2, if (manifest.phase == EnterpriseSessionPhase.OFFLINE && session.id == manifest.session?.id) {
+            ENTERPRISE_MANIFEST_SCHEMA_VERSION, if (manifest.phase == EnterpriseSessionPhase.OFFLINE && session.id == manifest.session?.id) {
                 EnterpriseSessionPhase.OFFLINE
             } else EnterpriseSessionPhase.READY, session, version,
             if (enter) candidate.identity.scope else ConfigurationScope.Personal, candidate.identity, feeds, nowMillis(),
@@ -356,20 +361,74 @@ internal class EnterpriseSessionController(
         publish(current.manifest.copy(phase = if (offline) EnterpriseSessionPhase.OFFLINE else EnterpriseSessionPhase.READY), current.configuration)
     }
 
-    suspend fun requireReauthentication() = mutex.withLock {
+    suspend fun captureExitRequest(): EnterpriseExitRequest? = mutex.withLock {
         val manifest = manifestForExit()
-        val identity = manifest.session?.identity ?: manifest.lastIdentity
-        publish(EnterpriseManifest.signedOut(identity, manifest.feeds).copy(phase = EnterpriseSessionPhase.REAUTH_REQUIRED), null)
-        prune(requireNotNull(loaded).manifest)
+        val session = manifest.session ?: return@withLock null
+        val access = RealmAccess.Enterprise(session.identity.scope, session.id)
+        EnterpriseExitRequest(access, exitSelection(manifest))
     }
 
     /** First revoke admission, then the application owner cancels domain work and closes leases. */
-    suspend fun beginExit(): EnterpriseExitToken? = mutex.withLock {
+    suspend fun beginExit(request: EnterpriseExitRequest): EnterpriseExitToken = mutex.withLock {
         val manifest = manifestForExit()
-        val session = manifest.session ?: return@withLock null
-        publish(manifest.copy(phase = EnterpriseSessionPhase.CLOSING, applied = null, selectedScope = ConfigurationScope.Personal,
-            lastConfigurationSyncMillis = null), null)
-        EnterpriseExitToken(session.id, session.identity.scope)
+        requireExitIdentity(manifest, request.access)
+        if (manifest.phase == EnterpriseSessionPhase.CLOSING) fail("enterprise_exit_in_progress")
+        if (exitSelection(manifest) != request.selection) fail("enterprise_selection_revoked")
+        beginClosing(manifest, EnterpriseExitReason.USER_REQUEST)
+    }
+
+    /** Revocation targets the original Session even from personal space or after its expiry. */
+    suspend fun beginInvalidation(access: RealmAccess.Enterprise, reason: EnterpriseExitReason): EnterpriseExitToken = mutex.withLock {
+        require(reason != EnterpriseExitReason.USER_REQUEST)
+        val manifest = manifestForExit()
+        requireExitIdentity(manifest, access)
+        if (manifest.phase == EnterpriseSessionPhase.CLOSING) closingToken(manifest)
+        else beginClosing(manifest, reason)
+    }
+
+    suspend fun pendingExit(): EnterpriseExitToken? = mutex.withLock {
+        manifestForExit().takeIf { it.phase == EnterpriseSessionPhase.CLOSING }?.let(::closingToken)
+    }
+
+    suspend fun withClosingSession(token: EnterpriseExitToken, operation: suspend () -> Unit) = mutex.withLock {
+        val manifest = manifestForExit()
+        if (manifest.phase != EnterpriseSessionPhase.CLOSING || closingToken(manifest) != token) fail("stale_enterprise_exit")
+        operation()
+    }
+
+    /** One clock and durable owner drive expiry independently of the selected UI space. */
+    fun observeExitSignals(): Flow<EnterpriseExitSignal> = state.flatMapLatest { published -> flow {
+        val manifest = (published as? EnterpriseState.Available)?.manifest ?: return@flow
+        val session = manifest.session ?: return@flow
+        if (manifest.phase == EnterpriseSessionPhase.CLOSING) emit(EnterpriseExitSignal.Closing(closingToken(manifest)))
+        else {
+            delay((session.expiresAtMillis - nowMillis()).coerceAtLeast(0))
+            emit(EnterpriseExitSignal.Expired(RealmAccess.Enterprise(session.identity.scope, session.id)))
+        }
+    } }
+
+    private fun exitSelection(manifest: EnterpriseManifest): RealmSelection {
+        val access = if (state.value is EnterpriseState.Failed || manifest.selectedScope == ConfigurationScope.Personal) RealmAccess.Personal
+            else RealmAccess.Enterprise(requireNotNull(manifest.session).identity.scope, manifest.session.id)
+        return RealmSelection(access, selectionRevision.value)
+    }
+
+    private fun requireExitIdentity(manifest: EnterpriseManifest, access: RealmAccess.Enterprise) {
+        val session = manifest.session
+        if (session?.id != access.sessionId || session.identity.scope != access.scope) fail("stale_enterprise_exit")
+    }
+
+    private fun closingToken(manifest: EnterpriseManifest): EnterpriseExitToken {
+        check(manifest.phase == EnterpriseSessionPhase.CLOSING)
+        val session = requireNotNull(manifest.session)
+        return EnterpriseExitToken(RealmAccess.Enterprise(session.identity.scope, session.id), requireNotNull(manifest.exitReason))
+    }
+
+    private suspend fun beginClosing(manifest: EnterpriseManifest, reason: EnterpriseExitReason): EnterpriseExitToken {
+        val closing = manifest.copy(phase = EnterpriseSessionPhase.CLOSING, applied = null,
+            selectedScope = ConfigurationScope.Personal, lastConfigurationSyncMillis = null, exitReason = reason)
+        publish(closing, null)
+        return closingToken(closing)
     }
 
     /** Revocation needs the validated identity, never readable capability files. */
@@ -377,14 +436,14 @@ internal class EnterpriseSessionController(
         loaded?.manifest ?: withContext(Dispatchers.IO) { store.readManifest() }
 
     suspend fun finishExit(token: EnterpriseExitToken) = mutex.withLock {
-        val current = ensureLoaded()
-        val session = current.manifest.session
-        if (current.manifest.phase != EnterpriseSessionPhase.CLOSING || session == null || session.id != token.sessionId ||
-            session.identity.scope != token.scope) fail("stale_enterprise_exit")
-        if (leases.values.any { it.sessionId == token.sessionId }) fail("enterprise_executions_pending")
-        publish(EnterpriseManifest.signedOut(session.identity, current.manifest.feeds), null)
-        prune(requireNotNull(loaded).manifest)
+        val manifest = manifestForExit()
+        if (manifest.phase != EnterpriseSessionPhase.CLOSING || closingToken(manifest) != token) fail("stale_enterprise_exit")
+        if (leases.values.any { it.sessionId == token.access.sessionId }) fail("enterprise_executions_pending")
+        val phase = if (token.reason == EnterpriseExitReason.USER_REQUEST) EnterpriseSessionPhase.SIGNED_OUT else EnterpriseSessionPhase.REAUTH_REQUIRED
+        publish(EnterpriseManifest.signedOut(requireNotNull(manifest.session).identity, manifest.feeds).copy(phase = phase), null)
     }
+
+    suspend fun pruneUnusedRevisions() = mutex.withLock { prune(manifestForExit()) }
 
     suspend fun captureBindings(scope: ConfigurationScope.Enterprise): EnterpriseBindingLease = mutex.withLock {
         val current = requireSession(allowOffline = false)
@@ -408,8 +467,7 @@ internal class EnterpriseSessionController(
         val current = ensureLoaded()
         val session = current.manifest.session ?: fail("enterprise_session_required")
         if (session.expiresAtMillis <= nowMillis()) {
-            publish(EnterpriseManifest.signedOut(session.identity, current.manifest.feeds).copy(phase = EnterpriseSessionPhase.REAUTH_REQUIRED), null)
-            prune(requireNotNull(loaded).manifest)
+            if (current.manifest.phase != EnterpriseSessionPhase.CLOSING) beginClosing(current.manifest, EnterpriseExitReason.AUTHORIZATION_EXPIRED)
             fail("enterprise_session_expired")
         }
         if (current.manifest.phase != EnterpriseSessionPhase.READY &&
@@ -421,15 +479,11 @@ internal class EnterpriseSessionController(
         loaded?.let { return it }
         val manifest = withContext(Dispatchers.IO) { store.readManifest() }
         val session = manifest.session
-        val terminal = when {
-            manifest.phase == EnterpriseSessionPhase.CLOSING -> EnterpriseManifest.signedOut(session?.identity, manifest.feeds)
-            session != null && session.expiresAtMillis <= nowMillis() ->
-                EnterpriseManifest.signedOut(session.identity, manifest.feeds).copy(phase = EnterpriseSessionPhase.REAUTH_REQUIRED)
-            else -> null
-        }
-        if (terminal != null) {
-            publish(terminal, null)
-            prune(terminal)
+        if (manifest.phase == EnterpriseSessionPhase.CLOSING) {
+            loaded = LoadedEnterpriseState(manifest, null)
+            publishState(EnterpriseState.Available(manifest, null))
+        } else if (session != null && session.expiresAtMillis <= nowMillis()) {
+            beginClosing(manifest, EnterpriseExitReason.AUTHORIZATION_EXPIRED)
         } else {
             val recovered = withContext(Dispatchers.IO) { store.load() }
             prune(recovered.manifest)

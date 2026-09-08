@@ -7,6 +7,10 @@ import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.encodeToJsonElement
 import net.weero.measix.pilot.data.configuration.ConfigurationScope
 import org.junit.Assert.*
 import org.junit.Rule
@@ -20,6 +24,43 @@ import org.robolectric.annotation.Config
 @Config(sdk = [34])
 class EnterpriseSessionControllerTest {
     @get:Rule val temporary = TemporaryFolder()
+
+    @Test fun `manifest migration preserves closing identity and retries an interrupted atomic write`() = runTest {
+        val root = temporary.newFolder()
+        val controller = EnterpriseSessionController(EnterpriseAppliedStore(root)) { 1000L }
+        controller.enrollFixture(exampleEnterprisePackage())
+        val token = controller.beginExit(requireNotNull(controller.captureExitRequest()))
+        val current = controller.available().manifest
+        val fields = EnterprisePackageCodec.json.encodeToJsonElement(current).jsonObject.toMutableMap()
+        fields["schemaVersion"] = JsonPrimitive(2)
+        fields.remove("exitReason")
+        val originalBytes = JsonObject(fields).toString().toByteArray()
+        File(root, "manifest.json").writeBytes(originalBytes)
+        val failing = EnterpriseAppliedStore(root) {
+            if (it == EnterpriseStorageCheckpoint.BEFORE_MANIFEST_COMMIT) throw IOException("migration interrupted")
+        }
+        expectFailure<IOException> { failing.readManifest() }
+        assertArrayEquals(originalBytes, File(root, "manifest.json").readBytes())
+        val reopened = EnterpriseSessionController(EnterpriseAppliedStore(root)) { 1000L }
+        assertEquals(current, (reopened.recover() as EnterpriseState.Available).manifest)
+        assertEquals(token, reopened.pendingExit())
+        assertEquals(ENTERPRISE_MANIFEST_SCHEMA_VERSION, EnterpriseAppliedStore(root).readManifest().schemaVersion)
+        assertFalse(originalBytes.contentEquals(File(root, "manifest.json").readBytes()))
+    }
+
+    @Test fun `closing reason is immutable and missing reason in current storage is rejected`() = runTest {
+        val root = temporary.newFolder()
+        val controller = EnterpriseSessionController(EnterpriseAppliedStore(root)) { 1000L }
+        controller.enrollFixture(exampleEnterprisePackage())
+        val access = controller.captureSelectedRealmAccess() as RealmAccess.Enterprise
+        val token = controller.beginInvalidation(access, EnterpriseExitReason.AUTHORIZATION_REVOKED)
+        assertEquals(token, controller.beginInvalidation(access, EnterpriseExitReason.AUTHORIZATION_EXPIRED))
+        val invalid = controller.available().manifest.copy(exitReason = null)
+        File(root, "manifest.json").writeText(EnterprisePackageCodec.json.encodeToJsonElement(invalid).toString())
+        assertEquals("inconsistent_enterprise_exit_reason", expectFailure<EnterpriseStorageException> {
+            EnterpriseAppliedStore(root).readManifest()
+        }.reason)
+    }
 
     @Test
     fun `identity alone stays pending and switching retains the complete applied identity`() = runTest {
@@ -89,26 +130,30 @@ class EnterpriseSessionControllerTest {
     }
 
     @Test
-    fun `exit revokes leases before cleanup and closing restart finishes even with damaged old files`() = runTest {
+    fun `exit revokes leases and closing restart preserves its token despite damaged old files`() = runTest {
         val root = temporary.newFolder()
         val packet = exampleEnterprisePackage()
         val controller = EnterpriseSessionController(EnterpriseAppliedStore(root))
         controller.enrollFixture(packet)
         val lease = controller.captureBindings(packet.identity.scope)
-        val token = requireNotNull(controller.beginExit())
+        val token = controller.beginExit(requireNotNull(controller.captureExitRequest()))
         expectReason("enterprise_binding_lease_unavailable") { lease.binding("mdl_chat") }
         expectReason("enterprise_executions_pending") { controller.finishExit(token) }
         lease.release()
         controller.finishExit(token)
+        controller.pruneUnusedRevisions()
         assertEquals(EnterpriseSessionPhase.SIGNED_OUT, controller.available().manifest.phase)
         assertEquals(0, File(root, "revisions").listFiles()!!.size)
 
         controller.enrollFixture(packet)
         val version = controller.available().manifest.applied!!
-        controller.beginExit()
+        val pending = controller.beginExit(requireNotNull(controller.captureExitRequest()))
         File(root, "revisions/${version.revision}/bindings.json").writeText("damaged")
         val recovered = EnterpriseSessionController(EnterpriseAppliedStore(root))
-        assertEquals(EnterpriseSessionPhase.SIGNED_OUT, (recovered.recover() as EnterpriseState.Available).manifest.phase)
+        assertEquals(EnterpriseSessionPhase.CLOSING, (recovered.recover() as EnterpriseState.Available).manifest.phase)
+        assertEquals(pending, recovered.pendingExit())
+        recovered.finishExit(pending)
+        recovered.pruneUnusedRevisions()
         assertEquals(0, File(root, "revisions").listFiles()!!.size)
     }
 
@@ -127,13 +172,14 @@ class EnterpriseSessionControllerTest {
         assertEquals(EnterpriseSessionPhase.OFFLINE, controller.available().manifest.phase)
         now = expiry
         expectReason("enterprise_session_expired") { controller.switchToEnterprise() }
-        assertEquals(EnterpriseSessionPhase.REAUTH_REQUIRED, controller.available().manifest.phase)
+        assertEquals(EnterpriseSessionPhase.CLOSING, controller.available().manifest.phase)
+        assertEquals(EnterpriseExitReason.AUTHORIZATION_EXPIRED, controller.pendingExit()?.reason)
         assertEquals(ConfigurationScope.Personal, controller.available().manifest.selectedScope)
         assertNull(controller.available().manifest.applied)
     }
 
     @Test
-    fun `bad committed binding fails closed but expired identity can still be recovered as signed out`() = runTest {
+    fun `bad committed binding fails closed but expired identity retains a recoverable closing intent`() = runTest {
         val root = temporary.newFolder()
         val packet = exampleEnterprisePackage()
         val controller = EnterpriseSessionController(EnterpriseAppliedStore(root)) { 1000L }
@@ -143,7 +189,11 @@ class EnterpriseSessionControllerTest {
         val recovered = EnterpriseSessionController(EnterpriseAppliedStore(root)) { 1001L }
         assertEquals(EnterpriseState.Failed("enterprise_revision_hash_mismatch"), recovered.recover())
         val expired = EnterpriseSessionController(EnterpriseAppliedStore(root)) { manifest.session!!.expiresAtMillis }
-        assertEquals(EnterpriseSessionPhase.REAUTH_REQUIRED, (expired.recover() as EnterpriseState.Available).manifest.phase)
+        assertEquals(EnterpriseSessionPhase.CLOSING, (expired.recover() as EnterpriseState.Available).manifest.phase)
+        val token = requireNotNull(expired.pendingExit())
+        assertEquals(EnterpriseExitReason.AUTHORIZATION_EXPIRED, token.reason)
+        expired.finishExit(token)
+        assertEquals(EnterpriseSessionPhase.REAUTH_REQUIRED, (expired.state.value as EnterpriseState.Available).manifest.phase)
     }
 
     @Test
@@ -156,7 +206,7 @@ class EnterpriseSessionControllerTest {
         File(root, "revisions/${version.revision}/configuration.json").writeText("corrupt")
         val recovered = EnterpriseSessionController(EnterpriseAppliedStore(root))
         assertTrue(recovered.recover() is EnterpriseState.Failed)
-        recovered.finishExit(requireNotNull(recovered.beginExit()))
+        recovered.finishExit(recovered.beginExit(requireNotNull(recovered.captureExitRequest())))
         assertEquals(EnterpriseSessionPhase.SIGNED_OUT, recovered.available().manifest.phase)
         recovered.enrollFixture(packet)
         assertEquals(EnterpriseSessionPhase.READY, recovered.available().manifest.phase)

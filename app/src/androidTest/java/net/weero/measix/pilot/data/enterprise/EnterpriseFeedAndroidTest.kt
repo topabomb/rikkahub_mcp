@@ -27,7 +27,7 @@ class EnterpriseFeedAndroidTest {
             val id = a.listFeed(RealmSelection(accessA, a.selectionRevision.value), EnterpriseFeedQuery()).body.items.single().enterpriseUpdateId
             a.changeFeed(accessA, initial.manifest.feeds.single().revision, EnterpriseFeedCommand.Withdraw(id))
             assertEquals(initial.manifest.applied, (a.state.value as EnterpriseState.Available).manifest.applied)
-            a.finishExit(requireNotNull(a.beginExit()))
+            a.finishExit(a.beginExit(requireNotNull(a.captureExitRequest())))
 
             val identities = listOf(packet.identity.copy(userId = "other-user"), packet.identity.copy(
                 authority = EnterpriseAuthority("local:another", packet.identity.authority.deploymentId)))
@@ -39,7 +39,7 @@ class EnterpriseFeedAndroidTest {
                 assertEquals(id, sessions.listFeed(RealmSelection(access, sessions.selectionRevision.value), EnterpriseFeedQuery()).body.items.single().enterpriseUpdateId)
                 try { sessions.listFeed(RealmSelection(accessA, sessions.selectionRevision.value), EnterpriseFeedQuery()); fail("Old principal accessed another Feed") }
                 catch (_: EnterpriseConfigurationException) { }
-                sessions.finishExit(requireNotNull(sessions.beginExit()))
+                sessions.finishExit(sessions.beginExit(requireNotNull(sessions.captureExitRequest())))
             }
             val reopened = EnterpriseSessionController(EnterpriseAppliedStore(root)) { now }
             reopened.recover()

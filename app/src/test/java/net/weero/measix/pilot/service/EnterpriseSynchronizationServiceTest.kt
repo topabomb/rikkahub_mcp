@@ -56,7 +56,7 @@ class EnterpriseSynchronizationServiceTest {
             assertEquals(synchronized.manifest.applied, checked.manifest.applied)
             assertEquals(now, checked.manifest.lastConfigurationSyncMillis)
             assertEquals(checked, EnterpriseSessionController(EnterpriseAppliedStore(h.clientRoot)) { now }.recover())
-            h.sessions.finishExit(h.sessions.beginExit()!!)
+            h.sessions.finishExit(h.sessions.beginExit(requireNotNull(h.sessions.captureExitRequest())))
             assertEquals(changed.packet.configuration, source(h.sessions, h.sourceRoot).enrollExample().configuration)
         } finally { h.work.cancel() }
     }
@@ -131,7 +131,7 @@ class EnterpriseSynchronizationServiceTest {
             entered.await()
             val synchronization = async { runCatching { h.sync.synchronize(access(first)) } }
             runCurrent()
-            h.sessions.finishExit(h.sessions.beginExit()!!)
+            h.sessions.finishExit(h.sessions.beginExit(requireNotNull(h.sessions.captureExitRequest())))
             release.countDown()
             publisher.await()
             val failure = synchronization.await().exceptionOrNull() as EnterpriseConfigurationException

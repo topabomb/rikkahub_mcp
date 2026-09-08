@@ -319,6 +319,7 @@ val appModule = module {
                 )
             },
             recoverEnterpriseConfiguration = { get<EnterpriseSessionController>().recover() },
+            completePendingEnterpriseExit = { get<net.weero.measix.pilot.service.EnterpriseExitService>().completeDuringRecovery() },
             completePendingBackup = {
                 net.weero.measix.pilot.data.sync.PendingBackupRestore.complete(get())
             },
@@ -352,6 +353,8 @@ val appModule = module {
     }
 
     single { ConversationTitleCoordinator() }
+
+    single { net.weero.measix.pilot.service.EnterpriseExitService(get(), get(), get(), get(), get<AppScope>()) }
 
     single {
         GenerationSideEffects(

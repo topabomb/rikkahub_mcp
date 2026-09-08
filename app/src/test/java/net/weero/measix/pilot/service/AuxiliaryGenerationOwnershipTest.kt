@@ -58,7 +58,7 @@ class AuxiliaryGenerationOwnershipTest {
             val title = f.effects.launchTitle(f.runtime, f.page.access, true)
             val suggestion = f.effects.launchSuggestion(f.runtime, f.page.access)
             runCurrent()
-            f.sessions.requireReauthentication()
+            f.sessions.finishExit(f.sessions.beginInvalidation(f.page.access as RealmAccess.Enterprise, EnterpriseExitReason.AUTHORIZATION_REVOKED))
             f.sessions.enrollFixture(exampleEnterprisePackage())
             f.reply.complete("obsolete result")
             joinAll(title, suggestion)

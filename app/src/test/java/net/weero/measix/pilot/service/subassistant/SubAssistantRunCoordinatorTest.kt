@@ -101,7 +101,7 @@ class SubAssistantRunCoordinatorTest {
             val queries = net.weero.measix.pilot.service.ConfigurationQueryService(mockk(), sessions,
                 net.weero.measix.pilot.service.ApplicationRecoveryGate().also { it.ready() })
             val original = queries.captureAccess(packet.identity.scope)
-            sessions.finishExit(requireNotNull(sessions.beginExit()))
+            sessions.finishExit(sessions.beginExit(requireNotNull(sessions.captureExitRequest())))
             sessions.enrollFixture(packet)
             val harness = harness(AttachmentResolveResult.Success(emptyList()), configurationScope = packet.identity.scope, configurations = queries)
             try {

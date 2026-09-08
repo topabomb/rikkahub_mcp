@@ -104,7 +104,7 @@ class LocalEnterpriseSourceTest {
         val code = EnrollmentMaterialParser().parse(raw).code
         h.source.enroll(raw)
         assertFalse(File(h.authorityRoot, "enrollments.json").readText().contains(code))
-        h.sessions.finishExit(requireNotNull(h.sessions.beginExit()))
+        h.sessions.finishExit(h.sessions.beginExit(requireNotNull(h.sessions.captureExitRequest())))
         val reopened = LocalEnterpriseSource({ exampleBytes().inputStream() }, EnterpriseSessionController(EnterpriseAppliedStore(h.clientRoot)) { now },
             LocalEnrollmentAuthority(h.authorityRoot, { now }), ::identityStream, LocalEnterpriseConfigurationStore(h.authorityRoot), { now })
         rejected("enterprise_enrollment_consumed") { reopened.enroll(raw) }
@@ -130,7 +130,7 @@ class LocalEnterpriseSourceTest {
         h.sessions.enrollLocal(identity, redeem = { identity }, configuration = { null })
         val raw = h.source.exampleEnrollmentText()
         rejected("exit_current_enterprise_first") { h.source.enroll(raw) }
-        val exit = requireNotNull(h.sessions.beginExit())
+        val exit = h.sessions.beginExit(requireNotNull(h.sessions.captureExitRequest()))
         rejected("enterprise_exit_in_progress") { h.source.enroll(raw) }
         h.sessions.finishExit(exit)
         assertEquals(EnterpriseSessionPhase.READY, h.source.enroll(raw).manifest.phase)
@@ -271,19 +271,19 @@ class LocalEnterpriseSourceTest {
         val initialDirectory = h.source.installations()
         rejected("exit_current_enterprise_first") { h.source.importPackage(EnterprisePackageCodec.encode(bob).inputStream()) }
         assertEquals(initialDirectory, h.source.installations())
-        h.sessions.finishExit(h.sessions.beginExit()!!)
+        h.sessions.finishExit(h.sessions.beginExit(requireNotNull(h.sessions.captureExitRequest())))
         assertEquals(bob.identity, h.source.importPackage(EnterprisePackageCodec.encode(bob).inputStream()).applied!!.manifest.session!!.identity)
         val bobCode = h.source.enrollmentText(bob.identity.scope)
-        h.sessions.finishExit(h.sessions.beginExit()!!)
+        h.sessions.finishExit(h.sessions.beginExit(requireNotNull(h.sessions.captureExitRequest())))
         h.source.enrollExample()
         rejected("exit_current_enterprise_first") { h.source.enroll(bobCode) }
-        h.sessions.finishExit(h.sessions.beginExit()!!)
+        h.sessions.finishExit(h.sessions.beginExit(requireNotNull(h.sessions.captureExitRequest())))
         assertEquals(bob.identity, h.source.enroll(bobCode).manifest.session!!.identity)
         assertEquals(alice.configuration, h.source.candidate(packet().identity.scope)!!.packet.configuration)
-        h.sessions.finishExit(h.sessions.beginExit()!!)
+        h.sessions.finishExit(h.sessions.beginExit(requireNotNull(h.sessions.captureExitRequest())))
         val other = packet().copy(identity = packet().identity.copy(authority = EnterpriseAuthority("local:private", "private-deployment")))
         assertEquals(other.identity, h.source.importPackage(EnterprisePackageCodec.encode(other).inputStream()).applied!!.manifest.session!!.identity)
-        h.sessions.finishExit(h.sessions.beginExit()!!)
+        h.sessions.finishExit(h.sessions.beginExit(requireNotNull(h.sessions.captureExitRequest())))
         val reopened = LocalEnterpriseSource({ exampleBytes().inputStream() }, h.sessions,
             LocalEnrollmentAuthority(h.authorityRoot, { now }), ::identityStream, LocalEnterpriseConfigurationStore(h.authorityRoot)) { now }
         assertEquals(3, reopened.installations().size)

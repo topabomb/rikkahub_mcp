@@ -41,7 +41,7 @@ class EnterpriseFeedPersistenceTest {
         sessions.synchronize(access, packet.copy(feedSeed = packet.feedSeed!!.copy(items = emptyList())))
         assertEquals(access, sessions.captureRealmAccess(packet.identity.scope))
         assertEquals(changed.manifest.feeds, sessions.available().manifest.feeds)
-        sessions.finishExit(requireNotNull(sessions.beginExit()))
+        sessions.finishExit(sessions.beginExit(requireNotNull(sessions.captureExitRequest())))
         val reopened = EnterpriseSessionController(EnterpriseAppliedStore(root))
         reopened.recover()
         reopened.enrollFixture(packet)
@@ -90,7 +90,7 @@ class EnterpriseFeedPersistenceTest {
         assertThrows(EnterpriseStorageException::class.java) { store.commit(applied.manifest.copy(feeds = listOf(next))) }
         assertEquals(applied.manifest, store.readManifest())
         File(root, "feed-revisions/${original.revision}/feed.json").writeText("corrupted")
-        sessions.finishExit(requireNotNull(sessions.beginExit()))
+        sessions.finishExit(sessions.beginExit(requireNotNull(sessions.captureExitRequest())))
         assertEquals(EnterpriseSessionPhase.SIGNED_OUT, store.readManifest().phase)
         assertEquals(listOf(original), store.readManifest().feeds)
     }

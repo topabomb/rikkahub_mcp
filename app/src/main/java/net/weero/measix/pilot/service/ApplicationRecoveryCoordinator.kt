@@ -65,6 +65,7 @@ class ApplicationRecoveryCoordinator(
     private val assistantManagementService: Lazy<AssistantManagementService>,
     private val gate: ApplicationRecoveryGate,
     private val recoverEnterpriseConfiguration: suspend () -> Unit,
+    private val completePendingEnterpriseExit: suspend () -> Unit = {},
     private val restorePendingBackup: suspend () -> Unit = {},
     private val completePendingBackup: () -> Unit = {},
     private val postRecoveryMaintenance: suspend () -> Unit = {},
@@ -113,6 +114,7 @@ class ApplicationRecoveryCoordinator(
                 turnRecovery.recoverInterruptedRuns()
                 turnRecovery.recoverInterruptedTurns()
                 assistantManagementService.value.performPendingDeletionCleanupDuringRecovery()
+                completePendingEnterpriseExit()
                 postRecoveryMaintenance()
                 completePendingBackup()
                 gate.ready()

@@ -76,6 +76,7 @@ UI 不持有 DAO、ConversationRepository、Runtime Registry、Artifact/Generate
 | Workspace 命令、只读投影、PTY | `WorkspaceApplicationService` / `WorkspaceQueryService` / `WorkspaceTerminalRuntime`；模型与 UI mutation 共用 Workspace command gate |
 | 备份恢复请求与 archive staging | `BackupRestoreApplicationService` / `BackupArchiveService`；`PendingBackupRestore` 执行可恢复发布 |
 | 应用启动恢复与全局写门禁 | `ApplicationRecoveryCoordinator` / `ApplicationRecoveryGate` |
+| 企业退出编排与自动到期 | `EnterpriseExitService`；Session manifest 仍是唯一持久状态，运行取消和终态仍经原会话 owner |
 | 生成期后台保活 | `ChatGenerationForegroundService` / `GenerationForegroundLifetime`；只消费活动投影，不拥有运行事实 |
 
 同一 durable 事实只有一个 owner 和一个写协议。禁止旁路 DAO/Repository 写入、整聚合回写、服务定位器、兼容转发和第二状态源。
@@ -127,13 +128,14 @@ pending backup restore
   → reference projection → FTS projection
   → Child run recovery → Master turn recovery
   → pending assistant deletion
+  → pending enterprise exit（复验已收口的原域运行）
   → post-recovery maintenance → pending backup complete
   → Ready
 ```
 
 未被领域 owner 收口的恢复异常进入 Failed，全局 durable write 门禁保持关闭；retry 重跑同一幂等顺序。企业配置校验失败由 EnterpriseSessionController 发布，个人数据恢复继续；取消仍向上传播。文件 command/query 同样等待门禁，不能在删除状态和孤儿 payload 尚未收口时访问托管文件。TurnRecovery 只查询非终态执行事实；缺 owning message 或损坏 payload 是完整性错误，不以空树、默认对象或 best-effort 写入伪装 Ready。
 
-恢复顺序归应用 coordinator，各领域恢复算法仍归原 owner。恢复链在可注入的 IO dispatcher 执行；助手清理服务使用同一 DI singleton 的 Lazy 引用，在原清理步骤首次解析，避免进程主线程为启动门禁提前构造完整生成依赖链。失败与重试仍经过同一 gate。TurnFinalizer 不接管启动恢复，SubAssistantLifecycle 不另建生成或 Turn 终态写链。
+恢复顺序归应用 coordinator，各领域恢复算法仍归原 owner。EnterpriseExitService 只完成已验证的 CLOSING token，核验 Runtime 与数据库没有原域未完成运行，且不等待尚由恢复任务持有的 ready gate；企业 manifest 本身不可验证时保持企业 Failed，不重复读取它阻断个人启动。恢复链在可注入的 IO dispatcher 执行；助手清理服务使用同一 DI singleton 的 Lazy 引用，在原清理步骤首次解析，避免进程主线程为启动门禁提前构造完整生成依赖链。失败与重试仍经过同一 gate。TurnFinalizer 不接管启动恢复，SubAssistantLifecycle 不另建生成或 Turn 终态写链。
 
 ## 持久化与演进
 

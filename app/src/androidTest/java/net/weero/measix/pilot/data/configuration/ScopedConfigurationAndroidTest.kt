@@ -72,7 +72,7 @@ class ScopedConfigurationAndroidTest {
                 assertFalse(document.configuration.assistants.any { it.id is me.rerere.common.configuration.ConfigurationReference.Enterprise })
                 env.sessions.switchToPersonal()
                 assertEquals(model.id, env.queries.observeCurrent().first().assistantModel(assistant.id).reference)
-                env.sessions.finishExit(requireNotNull(env.sessions.beginExit()))
+                env.sessions.finishExit(env.sessions.beginExit(requireNotNull(env.sessions.captureExitRequest())))
             }
             withEnvironment(app, root) { env ->
                 assertEquals(ConfigurationScope.Personal, env.queries.observeCurrent().first().scope)

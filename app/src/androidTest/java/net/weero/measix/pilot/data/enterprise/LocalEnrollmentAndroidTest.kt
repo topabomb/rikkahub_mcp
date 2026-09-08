@@ -44,7 +44,7 @@ class LocalEnrollmentAndroidTest {
                 .synchronize(RealmAccess.Enterprise(fullPackage.identity.scope, ready.manifest.session.id))
             assertEquals(ready.manifest.session, synchronized.manifest.session)
             assertFalse(synchronized.configuration!!.policy.allowLocalMcp)
-            controller.finishExit(requireNotNull(controller.beginExit()))
+            controller.finishExit(controller.beginExit(requireNotNull(controller.captureExitRequest())))
             val reopened = EnterpriseSessionController(EnterpriseAppliedStore(clientRoot)) { now }
             reopened.recover()
             try { source(reopened, authorityRoot).enroll(raw); fail("consumed code cannot be reused") }
@@ -52,11 +52,11 @@ class LocalEnrollmentAndroidTest {
             assertEquals(EnterpriseSessionPhase.SIGNED_OUT, (reopened.state.value as EnterpriseState.Available).manifest.phase)
             val reentered = source(reopened, authorityRoot).enrollExample()
             assertEquals(published.packet.configuration, reentered.configuration)
-            reopened.finishExit(reopened.beginExit()!!)
+            reopened.finishExit(reopened.beginExit(requireNotNull(reopened.captureExitRequest())))
             val bob = fullPackage.copy(identity = fullPackage.identity.copy(userId = "bob"))
             val imported = source(reopened, authorityRoot).importPackage(EnterprisePackageCodec.encode(bob).inputStream())
             assertEquals(bob.identity, imported.applied!!.manifest.session!!.identity)
-            reopened.finishExit(reopened.beginExit()!!)
+            reopened.finishExit(reopened.beginExit(requireNotNull(reopened.captureExitRequest())))
             val finalSource = source(reopened, authorityRoot)
             assertEquals(2, finalSource.installations().size)
             assertEquals(bob.identity, finalSource.enroll(finalSource.enrollmentText(bob.identity.scope)).manifest.session!!.identity)

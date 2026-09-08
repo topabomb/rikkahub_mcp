@@ -104,6 +104,8 @@ checkpoint 写放大是行为事实，归 `service/turn/TurnPersistenceDeltaTest
 
 ## 7. 确定性、竞态、取消与所有权规则
 
+企业退出由 `EnterpriseExitServiceTest` 验证调用者取消、重复请求、到期准入写盘失败、清理失败及重试；坏企业 manifest 使用真实恢复编排验证个人启动不被阻断。`ConversationCommandAccessTest` 使用真实会话 owner 验证按域停止、辅助任务等待、终态提交失败与空闲 Runtime 淘汰竞态。`SubAssistantTurnIntegrationTest` 在真实主/子 Runner 链的 Child 创建、父 link 提交及 Child START 提交窗口触发真实退出，验证原 Session 拒绝迟到 START、lease 释放、存留 Child 的完整 link 及子运行终态失败重试；IO double 从成功提交记录归并最新事实，不能以默认空集合绕过退出核验。`EnterpriseSessionControllerTest` 与设备上的 `EnterpriseAppliedStateAndroidTest` 验证退出原因、CLOSING 重开及磁盘 manifest 迁移保全；`ConversationRepositoryTreeIntegrationTest` 验证真实 Room 的未完成主/子运行按完整主体计数。这些测试不代表正式页面、媒体或真实平台退出已验收。
+
 - **禁止 wall-clock 等待**：不用 `Thread.sleep`、固定 `delay` 后猜状态、轮询到 timeout。用 `runTest`、`CompletableDeferred`、`Channel`、`Mutex` barrier、`TestCoroutineScheduler`、`advanceUntilIdle`。
 - 真实平台的负行为测试可保留明确的观察窗口（如暂停期间不得开始播放）；窗口只观察该时间段的禁止行为，不能用它猜测合成或 collector 已完成。完成与顺序断言等待真实可观测状态，跨线程记录用 StateFlow/Channel 交接。
 - **竞态测试必须有显式交接点**：说明它控制的 barrier（START commit 前/后、Provider 首输出前、response 后 pending checkpoint 前、Tool STARTED commit 后 side effect 前、result commit 后 Artifact publish 前、terminal commit 中），不依赖调度器"碰巧"切换。

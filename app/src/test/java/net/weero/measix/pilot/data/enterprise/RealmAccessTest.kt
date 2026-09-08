@@ -31,7 +31,7 @@ class RealmAccessTest {
         controller.switchToPersonal()
         controller.setOffline(true)
         assertEquals("original", controller.withRealmAccess(access) { "original" })
-        controller.finishExit(requireNotNull(controller.beginExit()))
+        controller.finishExit(controller.beginExit(requireNotNull(controller.captureExitRequest())))
         controller.enrollFixture(packet)
         runCurrent()
         assertEquals(listOf(true, false), allowed)
@@ -51,7 +51,7 @@ class RealmAccessTest {
         backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { controller.observeRealmAccess(first).collect { old += it } }
         val lifetime = (controller.state.value as EnterpriseState.Available).manifest.session!!.expiresAtMillis - 1_900_000_000_000L
         advanceTimeBy(lifetime / 2)
-        controller.finishExit(requireNotNull(controller.beginExit()))
+        controller.finishExit(controller.beginExit(requireNotNull(controller.captureExitRequest())))
         controller.enrollFixture(packet)
         val fresh = controller.captureRealmAccess(packet.identity.scope)
         val live = mutableListOf<Boolean>()
@@ -75,7 +75,7 @@ class RealmAccessTest {
         val access = controller.captureRealmAccess(identity.scope)
         assertTrue(controller.withRealmAccess(access) { true })
         expectDenied { controller.captureRealmAccess(identity.scope.copy(userId = "another-user")) }
-        controller.requireReauthentication()
+        controller.beginInvalidation(access as RealmAccess.Enterprise, EnterpriseExitReason.AUTHORIZATION_REVOKED)
         expectDenied { controller.withRealmAccess(access) { fail("revoked access executed") } }
         assertEquals(RealmAccess.Personal, controller.captureRealmAccess(ConfigurationScope.Personal))
         assertTrue(controller.withRealmAccess(RealmAccess.Personal) { true })

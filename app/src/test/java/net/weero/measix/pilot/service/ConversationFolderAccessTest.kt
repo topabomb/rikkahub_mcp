@@ -81,7 +81,7 @@ class ConversationFolderAccessTest {
                 rejects<EnterpriseConfigurationException> { f.application.deleteFolder(old, id) }
             }
             rejectsAll()
-            f.sessions.finishExit(requireNotNull(f.sessions.beginExit()))
+            f.sessions.finishExit(f.sessions.beginExit(requireNotNull(f.sessions.captureExitRequest())))
             f.sessions.enrollFixture(exampleEnterprisePackage())
             rejectsAll()
             assertEquals("original", f.folders.value.single().name)

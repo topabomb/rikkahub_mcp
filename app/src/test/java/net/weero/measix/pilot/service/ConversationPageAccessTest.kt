@@ -120,7 +120,7 @@ class ConversationPageAccessTest {
         val request: ConversationOpenRequest = ConversationOpenRequest.OpenExisting(Uuid.random(), original)
         val restored = JsonInstant.decodeFromString<ConversationOpenRequest>(JsonInstant.encodeToString(request))
         assertEquals(request, restored)
-        sessions.finishExit(requireNotNull(sessions.beginExit()))
+        sessions.finishExit(sessions.beginExit(requireNotNull(sessions.captureExitRequest())))
         sessions.enrollFixture(packet)
         val repository = mockk<ConversationRepository>()
         val coordinator = mockk<ConversationCommandCoordinator>()

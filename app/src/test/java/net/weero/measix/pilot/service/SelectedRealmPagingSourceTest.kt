@@ -37,7 +37,7 @@ class SelectedRealmPagingSourceTest {
         sessions.switchToEnterprise()
         assertTrue(page.load(params) is PagingSource.LoadResult.Error)
         assertEquals(1, delegate.loads)
-        sessions.finishExit(requireNotNull(sessions.beginExit()))
+        sessions.finishExit(sessions.beginExit(requireNotNull(sessions.captureExitRequest())))
         sessions.enrollFixture(packet)
         assertNotEquals(access, sessions.observeSelectedRealmSelection().first { it != null }!!)
         assertTrue(page.load(params) is PagingSource.LoadResult.Error)

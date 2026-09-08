@@ -15,6 +15,11 @@ import kotlin.uuid.Uuid
 internal enum class EnterpriseSessionPhase { SIGNED_OUT, CONFIGURATION_PENDING, READY, OFFLINE, CLOSING, REAUTH_REQUIRED }
 
 @Serializable
+internal enum class EnterpriseExitReason { USER_REQUEST, AUTHORIZATION_EXPIRED, AUTHORIZATION_REVOKED }
+
+internal const val ENTERPRISE_MANIFEST_SCHEMA_VERSION = 3
+
+@Serializable
 internal data class EnterpriseSession(
     val id: String,
     val identity: EnterpriseIdentity,
@@ -51,10 +56,11 @@ internal data class EnterpriseManifest(
     val lastIdentity: EnterpriseIdentity?,
     val feeds: List<EnterpriseFeedVersion> = emptyList(),
     val lastConfigurationSyncMillis: Long? = null,
+    val exitReason: EnterpriseExitReason? = null,
 ) {
     companion object {
         fun signedOut(identity: EnterpriseIdentity? = null, feeds: List<EnterpriseFeedVersion> = emptyList()) = EnterpriseManifest(
-            2, EnterpriseSessionPhase.SIGNED_OUT, null, null, ConfigurationScope.Personal, identity, feeds,
+            ENTERPRISE_MANIFEST_SCHEMA_VERSION, EnterpriseSessionPhase.SIGNED_OUT, null, null, ConfigurationScope.Personal, identity, feeds,
         )
     }
 }
@@ -97,8 +103,14 @@ internal class EnterpriseAppliedStore(
         } else {
             EnterpriseManifest.signedOut()
         }
-        validateManifest(manifest)
-        return manifest
+        val current = if (manifest.schemaVersion == 2) {
+            if (manifest.exitReason != null) throw EnterpriseStorageException("invalid_enterprise_storage")
+            manifest.copy(schemaVersion = ENTERPRISE_MANIFEST_SCHEMA_VERSION,
+                exitReason = EnterpriseExitReason.USER_REQUEST.takeIf { manifest.phase == EnterpriseSessionPhase.CLOSING })
+        } else manifest
+        validateManifest(current)
+        if (current != manifest) writeManifest(current)
+        return current
     }
 
     fun prepare(value: EnterprisePackage): EnterpriseAppliedVersion {
@@ -120,6 +132,10 @@ internal class EnterpriseAppliedStore(
         manifest.applied?.let { readPackage(manifest, it) }
         val previousFeeds = readManifest().feeds.associateBy { it.scope }
         manifest.feeds.filter { previousFeeds[it.scope] != it }.forEach(::readFeed)
+        writeManifest(manifest)
+    }
+
+    private fun writeManifest(manifest: EnterpriseManifest) {
         if (!root.isDirectory && !root.mkdirs()) throw EnterpriseStorageException("enterprise_store_directory_failed")
         val bytes = json.encodeToString(manifest).toByteArray()
         checkpoint(EnterpriseStorageCheckpoint.BEFORE_MANIFEST_COMMIT)
@@ -206,7 +222,10 @@ internal class EnterpriseAppliedStore(
     }
 
     private fun validateManifest(manifest: EnterpriseManifest) {
-        if (manifest.schemaVersion != 2) throw EnterpriseStorageException("unsupported_enterprise_manifest")
+        if (manifest.schemaVersion != ENTERPRISE_MANIFEST_SCHEMA_VERSION) throw EnterpriseStorageException("unsupported_enterprise_manifest")
+        if ((manifest.phase == EnterpriseSessionPhase.CLOSING) != (manifest.exitReason != null)) {
+            throw EnterpriseStorageException("inconsistent_enterprise_exit_reason")
+        }
         if (manifest.lastConfigurationSyncMillis?.let { it < 0 || manifest.applied == null } == true) {
             throw EnterpriseStorageException("invalid_enterprise_sync_time")
         }
@@ -233,7 +252,8 @@ internal class EnterpriseAppliedStore(
             EnterpriseSessionPhase.READY, EnterpriseSessionPhase.OFFLINE ->
                 manifest.session != null && manifest.applied != null &&
                     (manifest.selectedScope == ConfigurationScope.Personal || manifest.selectedScope == manifest.session.identity.scope)
-            EnterpriseSessionPhase.CLOSING -> manifest.session != null && manifest.selectedScope == ConfigurationScope.Personal
+            EnterpriseSessionPhase.CLOSING -> manifest.session != null && manifest.applied == null &&
+                manifest.selectedScope == ConfigurationScope.Personal
         }
         if (!valid) throw EnterpriseStorageException("inconsistent_enterprise_manifest")
     }

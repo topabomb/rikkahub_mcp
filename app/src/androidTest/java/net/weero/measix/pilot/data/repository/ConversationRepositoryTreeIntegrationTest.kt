@@ -558,6 +558,26 @@ class ConversationRepositoryTreeIntegrationTest {
         assertEquals(ToolExecutionStatus.STARTED, database.toolExecutionDao().getById(tool.executionId)?.status)
     }
 
+    @Test
+    fun unfinishedTurnCountIncludesChildrenAndIsolatesCompleteEnterpriseIdentity() = runBlocking {
+        val alice = ConfigurationScope.Enterprise(EnterpriseAuthority("local:example", "dep_example"), "alice")
+        val scopes = listOf(ConfigurationScope.Personal, alice, alice.copy(userId = "bob"),
+            alice.copy(authority = EnterpriseAuthority("platform:example", "dep_example")))
+        val roots = scopes.map { scope ->
+            conversation(Uuid.random(), ConfigurationReference.random(), null).copy(scope = scope).also {
+                repository.insertConversation(it)
+                database.turnExecutionDao().insert(turn(it.id, Uuid.random(), TurnExecutionStatus.RUNNING, 1L))
+            }
+        }
+        val parent = roots[1]
+        val child = conversation(Uuid.random(), parent.assistantId, parent.id).copy(scope = alice)
+        repository.insertConversation(child)
+        database.turnExecutionDao().insert(turn(child.id, Uuid.random(), TurnExecutionStatus.AWAITING_USER, 1L))
+        database.turnExecutionDao().insert(turn(parent.id, Uuid.random(), TurnExecutionStatus.CANCELLED, 1L))
+        assertEquals(2, repository.countUnfinishedTurns(alice))
+        scopes.filter { it != alice }.forEach { assertEquals(1, repository.countUnfinishedTurns(it)) }
+    }
+
     private fun emptyMutation(conversationId: Uuid) = ConversationMutation(
         conversationId = conversationId,
         headerPatch = null,

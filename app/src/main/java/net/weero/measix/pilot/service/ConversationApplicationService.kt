@@ -395,6 +395,35 @@ class ConversationApplicationService internal constructor(
         withRootCommand(target) { turnFinalizer.captureStop(target.conversationId)?.let(owned::add) }
     }
 
+    /** CLOSING prevents any new Session from owning this scope until every captured worker is finalized. */
+    internal suspend fun stopEnterpriseWork(token: net.weero.measix.pilot.data.enterprise.EnterpriseExitToken) {
+        stopCapturedRequests { owned ->
+            sessions.withClosingSession(token) {
+                val runtimes = runtimeRegistry.activeRuntimes().filter { it.durable.header.scope == token.access.scope }
+                    .sortedBy { it.durable.header.parentConversationId == null }
+                runtimes.forEach { runtime ->
+                    commandCoordinator.withResidentRuntime(runtime.id) { current ->
+                        if (current != null) {
+                            check(current.durable.header.scope == token.access.scope) { "enterprise_exit_runtime_changed" }
+                            turnFinalizer.captureStop(current.id)?.let(owned::add)
+                        }
+                    }
+                }
+            }
+        }
+        requireEnterpriseStopped(token)
+    }
+
+    /** Also used after startup TurnRecovery, without waiting for the gate that recovery itself owns. */
+    internal suspend fun requireEnterpriseStopped(token: net.weero.measix.pilot.data.enterprise.EnterpriseExitToken) {
+        sessions.withClosingSession(token) {
+            check(runtimeRegistry.activeRuntimes().filter { it.durable.header.scope == token.access.scope }.none {
+                it.hasAuxiliaryWork || it.currentWorker()?.isCompleted == false || it.snapshot.value.stream != null
+            }) { "enterprise_workers_pending" }
+            check(conversationRepo.countUnfinishedTurns(token.access.scope) == 0) { "enterprise_turns_pending" }
+        }
+    }
+
     /** OS foreground timeout owns stopping the exact working requests captured at that event. */
     internal suspend fun stopForForegroundTimeout() {
         recoveryGate.awaitReady()

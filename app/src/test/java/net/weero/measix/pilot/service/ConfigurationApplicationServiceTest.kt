@@ -131,7 +131,7 @@ class ConfigurationApplicationServiceTest {
             env.commands.updateAssistantUsage(env.access, env.assistant.id) {
                 AssistantUsagePreferences(env.assistant.id, temperature = UsageValue(0.2f))
             }
-            env.sessions.finishExit(requireNotNull(env.sessions.beginExit()))
+            env.sessions.finishExit(env.sessions.beginExit(requireNotNull(env.sessions.captureExitRequest())))
             val bob = alice.copy(identity = alice.identity.copy(userId = "bob"))
             env.sessions.enrollFixture(bob)
             assertNull(env.document().preferences.assistantUsage(bob.identity.scope, env.assistant.id))
@@ -213,7 +213,7 @@ class ConfigurationApplicationServiceTest {
             val alice = exampleEnterprisePackage()
             val reference = alice.identity.reference("gw_optional")
             env.commands.setGatewayEnabled(env.access, reference, false)
-            env.sessions.finishExit(requireNotNull(env.sessions.beginExit()))
+            env.sessions.finishExit(env.sessions.beginExit(requireNotNull(env.sessions.captureExitRequest())))
             val bob = alice.copy(identity = alice.identity.copy(userId = "bob"))
             env.sessions.enrollFixture(bob)
             val bobAccess = env.sessions.captureRealmAccess(bob.identity.scope) as RealmAccess.Enterprise
@@ -221,7 +221,7 @@ class ConfigurationApplicationServiceTest {
             assertTrue(env.queries.read(bobAccess).catalog.getValue(ConfigurationKey(ConfigurationCategory.GATEWAY, reference)).gatewayEnablement!!.enabled)
             env.commands.setGatewayEnabled(bobAccess, reference, true)
             assertFalse(env.document().preferences.gateway(alice.identity.scope, reference)!!.enabled)
-            env.sessions.finishExit(requireNotNull(env.sessions.beginExit()))
+            env.sessions.finishExit(env.sessions.beginExit(requireNotNull(env.sessions.captureExitRequest())))
             env.sessions.enrollFixture(alice)
             val before = env.document()
             val staleActions: List<suspend () -> Unit> = listOf(
@@ -321,7 +321,7 @@ class ConfigurationApplicationServiceTest {
             }
             entered.await()
             writer.cancel()
-            val exit = launch { env.sessions.finishExit(requireNotNull(env.sessions.beginExit())) }
+            val exit = launch { env.sessions.finishExit(env.sessions.beginExit(requireNotNull(env.sessions.captureExitRequest()))) }
             runCurrent()
             assertFalse(writer.isCompleted)
             assertFalse(exit.isCompleted)

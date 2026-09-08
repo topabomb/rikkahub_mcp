@@ -23,8 +23,13 @@ internal class EnterpriseSynchronizationService(
     private val mutex = Mutex()
     private val active = mutableMapOf<RealmAccess.Enterprise, Deferred<EnterpriseState.Available>>()
 
+    suspend fun cancelAndAwait(access: RealmAccess.Enterprise) {
+        val pending = mutex.withLock { active[access]?.also { it.cancel() } }
+        pending?.join()
+    }
+
     suspend fun synchronize(access: RealmAccess.Enterprise): EnterpriseState.Available {
-        val pending = mutex.withLock {
+        val pending = sessions.withRealmAccess(access) { mutex.withLock {
             active[access] ?: scope.async(start = CoroutineStart.LAZY) {
                 try {
                     sessions.withRealmAccess(access) { Unit }
@@ -35,7 +40,7 @@ internal class EnterpriseSynchronizationService(
                     withContext(NonCancellable) { mutex.withLock { active.remove(access) } }
                 }
             }.also { active[access] = it; it.start() }
-        }
+        } }
         return pending.await()
     }
 }

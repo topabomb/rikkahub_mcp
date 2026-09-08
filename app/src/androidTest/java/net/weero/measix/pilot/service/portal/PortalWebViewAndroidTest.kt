@@ -143,11 +143,12 @@ class PortalWebViewAndroidTest {
             host = original
             var displayed by mutableStateOf<PortalWebView?>(original)
             compose.setContent { displayed?.let { page -> key(page.document.id) { AndroidView(factory = { page.view }) } } }
-            awaitPage(original) { it["text"]?.jsonPrimitive?.content?.contains("同步企业配置") == true }
+            awaitPage(original) { it["refreshEnabled"]?.jsonPrimitive?.boolean == true }
             withContext(Dispatchers.Main) {
                 original.view.evaluateJavascript("Array.from(document.querySelectorAll('button')).find(b=>b.textContent.includes('同步企业配置')).click()", null)
             }
-            withTimeout(10_000) { started.await() }
+            try { withTimeout(10_000) { started.await() } }
+            catch (failure: kotlinx.coroutines.TimeoutCancellationException) { throw AssertionError("Enabled refresh did not reach native synchronization", failure) }
             withContext(Dispatchers.Main) { original.view.reload() }
             compose.waitUntil(10_000) { compose.runOnUiThread { original.document.isClosed } }
             val replacement = withContext(Dispatchers.Main) {
@@ -162,7 +163,8 @@ class PortalWebViewAndroidTest {
             }
             awaitPage(replacement) { it["observing"]?.jsonPrimitive?.boolean == true }
             release.complete(Unit)
-            withTimeout(10_000) { originalLifetime.join() }
+            try { withTimeout(10_000) { originalLifetime.join() } }
+            catch (failure: kotlinx.coroutines.TimeoutCancellationException) { throw AssertionError("Revoked document did not finish its original synchronization", failure) }
             withContext(Dispatchers.Main) {
                 replacement.view.evaluateJavascript("MeasixHost.postMessage(JSON.stringify({bridgeVersion:3,documentId:MeasixPortalDocument.documentId,requestId:'replacement-probe',method:'getStatus',params:{}}))", null)
             }
@@ -189,7 +191,7 @@ class PortalWebViewAndroidTest {
             compose.waitUntil(timeoutMillis = 30_000) {
                 host.view.post {
                     if (!host.document.isClosed) host.view.evaluateJavascript(
-                        "JSON.stringify({url:location.href,bootstrap:window.MeasixPortalDocument||null,text:document.body?document.body.innerText:'',ready:document.readyState,observing:Array.isArray(window.portalTestResponses),responses:window.portalTestResponses||[]})",
+                        "JSON.stringify({url:location.href,bootstrap:window.MeasixPortalDocument||null,text:document.body?document.body.innerText:'',ready:document.readyState,refreshEnabled:Array.from(document.querySelectorAll('button')).some(b=>b.textContent.includes('同步企业配置')&&!b.disabled),observing:Array.isArray(window.portalTestResponses),responses:window.portalTestResponses||[]})",
                     ) { encoded ->
                         if (encoded != "null") snapshot.set(Json.parseToJsonElement(Json.decodeFromString<String>(encoded)).jsonObject)
                     }

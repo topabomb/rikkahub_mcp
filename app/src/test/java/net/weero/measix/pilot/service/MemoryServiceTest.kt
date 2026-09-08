@@ -79,7 +79,7 @@ class MemoryServiceTest {
             val view = MutableStateFlow(MemoryView.Loading)
             val observer = env.scope.launch { env.memory.observe(packet.identity.scope, env.target.id).collect { view.value = it } }
             val old = view.first { it.records.isNotEmpty() }.records.single()
-            env.sessions.finishExit(requireNotNull(env.sessions.beginExit()))
+            env.sessions.finishExit(env.sessions.beginExit(requireNotNull(env.sessions.captureExitRequest())))
             view.first { it.unavailableReason != null }
             env.sessions.enrollFixture(packet)
             expectRejected { env.memory.delete(old) }

@@ -17,6 +17,7 @@ import net.weero.measix.pilot.data.configuration.ConfigurationScope
 import net.weero.measix.pilot.data.datastore.DEFAULT_ASSISTANT_ID
 import net.weero.measix.pilot.data.datastore.SettingsStore
 import net.weero.measix.pilot.data.datastore.UserSettingsDocument
+import net.weero.measix.pilot.data.db.entity.TurnExecutionStatus
 import net.weero.measix.pilot.data.enterprise.*
 import net.weero.measix.pilot.data.files.ArtifactRetentionLease
 import net.weero.measix.pilot.data.files.ArtifactStore
@@ -253,7 +254,7 @@ class ConversationCommandAccessTest {
     @Test fun `revoked undo cannot rebind and releases its retained artifacts on failure`() = runTest {
         fixture { f ->
             val token = f.application.deleteForUndo(f.page.commandTarget)
-            f.sessions.finishExit(requireNotNull(f.sessions.beginExit()))
+            f.sessions.finishExit(f.sessions.beginExit(requireNotNull(f.sessions.captureExitRequest())))
             f.sessions.enrollFixture(exampleEnterprisePackage())
             rejects<EnterpriseConfigurationException> { f.application.restore(token) }
             assertTrue(f.rows.isEmpty())
@@ -292,7 +293,7 @@ class ConversationCommandAccessTest {
         fixture { f ->
             val original = f.page.commandTarget
             val answer = f.runGate.registerPendingInteraction(f.rootId, original.selection.access, "run", "ask", Job())
-            f.sessions.finishExit(requireNotNull(f.sessions.beginExit()))
+            f.sessions.finishExit(f.sessions.beginExit(requireNotNull(f.sessions.captureExitRequest())))
             f.sessions.enrollFixture(exampleEnterprisePackage())
             rejects<EnterpriseConfigurationException> { f.application.answerSubAssistant(original, "run", "ask", "old page") }
             val selected = f.sessions.observeSelectedRealmSelection().first { it != null }!!
@@ -375,7 +376,7 @@ class ConversationCommandAccessTest {
     @Test fun `closing Session after acceptance prevents an append from running under a later login`() = runTest {
         fixture { f ->
             f.turns.sendMessage(f.page.commandTarget, listOf(UIMessagePart.Text("revoked")), false)
-            f.sessions.finishExit(requireNotNull(f.sessions.beginExit()))
+            f.sessions.finishExit(f.sessions.beginExit(requireNotNull(f.sessions.captureExitRequest())))
             f.sessions.enrollFixture(exampleEnterprisePackage())
             runCurrent()
             assertEquals("original", f.runtime.durable.currentMessages().single().toText())
@@ -496,7 +497,7 @@ class ConversationCommandAccessTest {
             f.runtime.bindTurnContext(turnId, worker, mockk { every { realmAccess } returns originalAccess })
             f.runtime.retainAwaitingUser(started.handle)
             worker.complete()
-            f.sessions.finishExit(requireNotNull(f.sessions.beginExit()))
+            f.sessions.finishExit(f.sessions.beginExit(requireNotNull(f.sessions.captureExitRequest())))
             f.sessions.enrollFixture(exampleEnterprisePackage())
             val selected = f.sessions.observeSelectedRealmSelection().first { it != null }!!
             val reopened = ConversationViewLease(f.rootId, selected.access, selected.revision) {}
@@ -612,6 +613,92 @@ class ConversationCommandAccessTest {
         }
     }
 
+    @Test fun `enterprise exit awaits its auxiliary cleanup and durable terminal without stopping personal work`() = runTest {
+        fixture { f ->
+            val personalId = f.put(ConfigurationScope.Personal)
+            val personal = f.registry.registerSnapshot(f.rows.getValue(personalId))
+            val personalWorker = Job()
+            personal.installTurnWorker(Uuid.random(), personalWorker)
+            val turn = Uuid.random()
+            val worker = Job()
+            f.runtime.installTurnWorker(turn, worker)
+            net.weero.measix.pilot.service.turn.TurnCommitter.start(f.coordinator, f.runtime, turn, disclosureCandidate(), f.finalizer)
+            val release = CompletableDeferred<Unit>()
+            val auxiliary = f.appScope.launch(start = CoroutineStart.UNDISPATCHED) {
+                try { awaitCancellation() }
+                finally { withContext(NonCancellable) { release.await() } }
+            }
+            f.runtime.registerAuxiliaryWorker(f.page.access, auxiliary)
+            val token = f.sessions.beginExit(requireNotNull(f.sessions.captureExitRequest()))
+            val stop = async { f.application.stopEnterpriseWork(token) }
+            runCurrent()
+            assertFalse(stop.isCompleted)
+            assertTrue(auxiliary.isCancelled)
+            assertFalse(auxiliary.isCompleted)
+            assertTrue(personalWorker.isActive)
+            release.complete(Unit)
+            stop.await()
+            assertEquals(TurnExecutionStatus.CANCELLED, f.executions[turn.toString()]?.status)
+            assertNull(f.runtime.snapshot.value.stream)
+            assertFalse(f.runtime.hasAuxiliaryWork)
+            assertTrue(personalWorker.isActive)
+            f.sessions.finishExit(token)
+            personalWorker.cancel()
+        }
+    }
+
+    @Test fun `enterprise stop failure retains terminal owner and retry verifies stored unfinished turns`() = runTest {
+        fixture { f ->
+            val turn = Uuid.random()
+            val worker = Job()
+            f.runtime.installTurnWorker(turn, worker)
+            net.weero.measix.pilot.service.turn.TurnCommitter.start(f.coordinator, f.runtime, turn, disclosureCandidate(), f.finalizer)
+            val token = f.sessions.beginExit(requireNotNull(f.sessions.captureExitRequest()))
+            f.failTerminal = true
+            rejects<java.io.IOException> { f.application.stopEnterpriseWork(token) }
+            assertEquals(token, f.sessions.pendingExit())
+            assertSame(worker, f.runtime.currentWorker())
+            assertEquals(TurnExecutionStatus.RUNNING, f.executions[turn.toString()]?.status)
+            f.failTerminal = false
+            f.application.stopEnterpriseWork(token)
+            assertNull(f.runtime.currentWorker())
+            assertEquals(TurnExecutionStatus.CANCELLED, f.executions[turn.toString()]?.status)
+            coEvery { f.repository.countUnfinishedTurns(f.scope) } returns 1
+            rejects<IllegalStateException> { f.application.requireEnterpriseStopped(token) }
+            assertEquals(token, f.sessions.pendingExit())
+        }
+    }
+
+    @Test fun `cache eviction after enterprise runtime capture does not skip remaining active work`() = runTest {
+        fixture { f ->
+            val turn = Uuid.random()
+            f.runtime.installTurnWorker(turn, Job())
+            net.weero.measix.pilot.service.turn.TurnCommitter.start(f.coordinator, f.runtime, turn, disclosureCandidate(), f.finalizer)
+            val token = f.sessions.beginExit(requireNotNull(f.sessions.captureExitRequest()))
+            val idleId = f.put(f.scope, parent = f.rootId)
+            f.registry.registerSnapshot(f.rows.getValue(idleId))
+            val held = CompletableDeferred<Unit>()
+            val evict = CompletableDeferred<Unit>()
+            val holder = launch {
+                f.locks.withLock(idleId) {
+                    held.complete(Unit)
+                    evict.await()
+                    f.registry.evictRuntime(idleId)
+                }
+            }
+            held.await()
+            val stop = async { f.application.stopEnterpriseWork(token) }
+            runCurrent()
+            assertFalse(stop.isCompleted)
+            evict.complete(Unit)
+            holder.join()
+            stop.await()
+            assertEquals(TurnExecutionStatus.CANCELLED, f.executions[turn.toString()]?.status)
+            assertNull(f.runtime.currentWorker())
+            assertEquals(token, f.sessions.pendingExit())
+        }
+    }
+
     private inner class Fixture(test: TestScope) {
         val appScope = AppScope(StandardTestDispatcher(test.testScheduler))
         val sessions = EnterpriseSessionController(EnterpriseAppliedStore(temporary.newFolder()))
@@ -669,6 +756,13 @@ class ConversationCommandAccessTest {
                 rows.values.filter { it.header.parentConversationId == id }
             }
             coEvery { repository.getTurnExecution(any()) } answers { executions[firstArg()] }
+            coEvery { repository.countUnfinishedTurns(any()) } answers {
+                val requested = firstArg<ConfigurationScope>()
+                executions.values.count { execution ->
+                    rows[Uuid.parse(execution.conversationId)]?.header?.scope == requested &&
+                        execution.status in setOf(TurnExecutionStatus.RUNNING, TurnExecutionStatus.AWAITING_USER)
+                }
+            }
             coEvery { repository.getTurnExecutions(any()) } returns emptyList()
             coEvery { repository.getToolExecutions(any()) } returns emptyList()
             coEvery { repository.existsConversationById(any()) } answers { rows.containsKey(firstArg()) }
