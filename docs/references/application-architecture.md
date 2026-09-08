@@ -65,7 +65,7 @@ UI 不持有 DAO、ConversationRepository、Runtime Registry、Artifact/Generate
 | 当前域统计 | `StatsQueryService` 在原选中域/Session 内聚合；StatsVM 负责取消旧查询及清空旧显示 |
 | 运行记忆 | `MemoryRepository` 唯一写入；`MemoryService` 编排原域 Session、配置授权和 UI 投影，见 [运行记忆](memory-architecture.md) |
 | Artifact metadata、reference、生命周期 | `ArtifactStore`；`ArtifactPayloadStore` 只做磁盘 IO，不持有 DAO |
-| Settings 图片 roots | `ArtifactSettingsCoordinator`；与 Settings、Artifact owner 交接 |
+| 配置文件引用 | `SettingsStore` 唯一写入；`ArtifactSettingsCoordinator` 适配 Settings → Artifact 提交与清理协议，不另持锁或状态 |
 | 图库生成媒体 row、payload 与删除恢复 | `GeneratedMediaStore` |
 | 跨文件 owner 命令与列表 | `FileManagementApplicationService` / `FileManagementQueryService`；不成为第三个文件 owner |
 | 内部 attachment handle 索引 | `AttachmentReferenceLookup`；查询投影，不是文件读取授权 |

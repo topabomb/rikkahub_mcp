@@ -1657,4 +1657,5 @@
   <string name="search_picker_model_unavailable">当前模型不支持内建搜索，请选择其他搜索方式或模型。</string>
   <string name="workspace_preference_partial_failure">工作目录已重置，但工作空间选择未能保存，仍使用原工作空间。请重试。</string>
   <string name="assistant_use_definition_model">使用我的助手定义中的模型</string>
+  <string name="setting_files_page_delete_impact_presets">将移除 %1$d 组助手预设消息中引用此文件的内容。</string>
 </resources>

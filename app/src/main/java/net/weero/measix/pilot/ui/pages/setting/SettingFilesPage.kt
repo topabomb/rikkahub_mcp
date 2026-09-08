@@ -192,6 +192,9 @@ fun SettingFilesPage(
                                 )
                             )
                         }
+                        if (impact.assistantPresetCount > 0) {
+                            ImpactText(stringResource(R.string.setting_files_page_delete_impact_presets, impact.assistantPresetCount))
+                        }
                         if (impact.assistantAvatarCount > 0) {
                             ImpactText(
                                 stringResource(
@@ -519,6 +522,10 @@ fun SettingFilesPage(
                                             impact.assistantBackgroundCount,
                                         )
                                     )
+                                }
+                                if (impact.assistantPresetCount > 0) {
+                                    append("\n")
+                                    append(resources.getString(R.string.setting_files_page_delete_impact_presets, impact.assistantPresetCount))
                                 }
                                 if (impact.assistantAvatarCount > 0) {
                                     append("\n")

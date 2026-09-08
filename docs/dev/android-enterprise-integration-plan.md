@@ -492,9 +492,9 @@ Portal 原生操作批次已接通 logout 与 openExternal：每次文档创建�
 
 顺序：D0 → C1/C2 → C3/U1/M1 最小完整接入 → C4/C5/C6/C7 与 U2 → U3/完整 M1 → R1/V1。中间开发态允许暂时不完整，最终不留无功能按钮/未迁移消费者或本期“后续再补”。
 
-C6 的文件创建与引用边界已接通：上传、粘贴文本、输出图片、MCP/Workspace 图片、归档和生成媒体显式保存原操作 scope；聊天 Draft 绑定原页面命令目标，会话提交和启动引用重建拒绝跨域文件。独立审查未发现该创建链的剩余实质问题。已发布 v19 按既有 Migration_11_12 保全个人数据，不新增未交付企业原型兼容路径。文件查询/预览/导出授权、共享配置资产复制与全部配置 roots、Workspace 上传挂载、备份，以及 ImgGen/MCP 等完整资源准入仍待后续接通；本段不代表 C5/C6 完成。
+C6 的文件创建与引用边界已接通：上传、粘贴文本、输出图片、MCP/Workspace 图片、归档和生成媒体显式保存原操作 scope；聊天 Draft 绑定原页面命令目标，会话提交和启动引用重建拒绝跨域文件。独立审查未发现该创建链的剩余实质问题。已发布 v19 按既有 Migration_11_12 保全个人数据，不新增未交付企业原型兼容路径。配置引用已扩展到共享用户定义、用户头像及全部主体保留的使用覆盖，包含预设消息、嵌套工具输出和结构化交付物。Settings writer → Artifact lifecycle → DataStore 回执 → pin 交接构成统一写顺序，协调器不另持锁或状态；GC/发布/补偿只读已提交完整文档。删除按规范化路径收齐原始引用，先持久移除并复验，再清理文件；失败保留 DELETING 与 payload。共享个人定义不能挂接企业资产。旧备份的悬挂配置引用仅在明确恢复入口回退默认，普通新增引用仍严格验证。文件列表与预览删除确认同时提示头像、背景和预设内容影响。文件查询/预览/导出授权、共享配置资产复制、Workspace 上传挂载、个人备份保全企业图，以及 ImgGen/MCP 等完整资源准入继续实施；C5/C6 尚未整体验收。
 
-本批完整 `test assembleDebug lintDebug assembleRelease --no-parallel --max-workers=1 --no-configuration-cache` 在 15 分 34 秒内通过，App 2,053 项 JVM 测试无失败/跳过、lint 0 错误；Workspace 保留 11 项 Windows 环境跳过。Android 17 模拟器的 14 项定向设备用例全部通过，包含真实 v19 附件升级后重复恢复/重建、不同主体文件并发创建与重开读取、Draft 保留和取消。新 Debug 包可打开已有企业聊天。证据见 `build/reports/enterprise/artifact-scope-verification.json`；不代替真实平台、设备扫码或 Release 实际运行验收。
+文件创建与配置引用批次的最终 `test assembleDebug lintDebug assembleRelease :app:connectedDebugAndroidTest` 串行门禁在 11 分 57 秒内通过，App 2,058 项 JVM 测试无失败/跳过，lint 0 错误、284 警告；Workspace 保留 11 项 Windows 环境跳过。Android 17 模拟器的 15 项定向设备用例全部通过，包含真实 v19 附件升级后重复恢复/重建、不同主体文件并发创建与重开读取、全部配置引用的保留及清理、Draft 保留和取消。新增真实 Settings/DataStore/Room 测试覆盖回执前取消、GC 与迟到写入、配置/文件锁顺序、非当前企业预设附件及等价路径、清除引用写入失败后重试；真实 archive staging → swap → 配置恢复 → Artifact reconcile 用例验证失效配置图片不会阻断个人恢复。独立审查已复核最终修正。新 Debug 包冷启动及正式入口一键接入可到达 READY，企业聊天 Draft 显示企业助手与模型。证据见 `build/reports/enterprise/artifact-roots-verification.json`；本批不代替真实平台、设备扫码或 Release 实际运行验收，也未完成个人恢复保全企业图的 C7 目标。
 
 ## 11. 验收证据
 

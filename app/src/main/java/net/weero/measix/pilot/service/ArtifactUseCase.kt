@@ -49,6 +49,7 @@ data class ArtifactDeleteImpactUiModel(
     val referencedByHistory: Boolean,
     val assistantBackgroundCount: Int,
     val assistantAvatarCount: Int,
+    val assistantPresetCount: Int,
 )
 
 data class ArtifactStorageStats(
@@ -201,6 +202,7 @@ private fun ArtifactDeleteImpact.toUiModel() = ArtifactDeleteImpactUiModel(
     referencedByHistory = referencedByHistory,
     assistantBackgroundCount = assistantBackgroundCount,
     assistantAvatarCount = assistantAvatarCount,
+    assistantPresetCount = assistantPresetCount,
 )
 
 private fun ArtifactDeleteResult.toOutcome(): ArtifactDeleteOutcome = when (this) {

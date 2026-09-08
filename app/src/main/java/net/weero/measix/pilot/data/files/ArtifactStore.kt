@@ -38,6 +38,7 @@ import net.weero.measix.pilot.data.db.entity.ArtifactReferenceType
 import net.weero.measix.pilot.data.db.entity.ArtifactState
 import net.weero.measix.pilot.data.db.entity.SystemMetaEntity
 import net.weero.measix.pilot.data.datastore.Settings
+import net.weero.measix.pilot.data.datastore.UserSettingsDocument
 import net.weero.measix.pilot.data.model.MessageNode
 import net.weero.measix.pilot.data.model.Conversation
 import net.weero.measix.pilot.data.model.collectArtifactReferences
@@ -82,6 +83,7 @@ data class ArtifactDeleteImpact(
     val referencedByHistory: Boolean,
     val assistantBackgroundCount: Int,
     val assistantAvatarCount: Int,
+    val assistantPresetCount: Int,
 )
 
 /** 创建完成但尚未交给 durable message/Settings root 的 artifact 所有权令牌。 */
@@ -435,29 +437,75 @@ class ArtifactStore(
         origin = resolveOrigin(source.toUri(), ArtifactOrigin.GENERATED),
     )
 
-    /** Settings artifact 字段的唯一写入口；新增的本地 root 必须指向 ACTIVE artifact。 */
-    suspend fun updateSettingsReferences(transform: (Settings) -> Settings): Settings = withLifecycleLock {
-        // Once this owner begins the durable Settings write, commit and creation-pin transfer are
-        // indivisible. Cancellation is observed by the caller after both facts agree.
-        withContext(NonCancellable) {
-            val active = artifactDAO.listByState(ArtifactState.ACTIVE.name)
-            val activePaths = active.mapTo(hashSetOf(), ArtifactEntity::relativePath)
-            val committed = settingsCoordinator.updateChecked(transform) { current, updated ->
-                val addedManagedRoots = (ArtifactReferencePolicy.roots(updated) - ArtifactReferencePolicy.roots(current))
-                    .mapNotNull { uri -> payloadStore.relativePathForUri(uri.toUri()) }
-                addedManagedRoots.forEach { relativePath ->
-                    check(relativePath in activePaths) {
-                        "Settings reference targets a non-active artifact: $relativePath"
+    /** Settings owns the writer before Artifact owns validation, commit and creation-pin handoff. */
+    suspend fun updateSettingsReferences(transform: (Settings) -> Settings): Settings =
+        settingsCoordinator.update(transform, ::commitSettingsRoots)
+
+    internal suspend fun restoreSettingsReferences(settings: Settings): Settings =
+        settingsCoordinator.restore(settings) { candidate, commit ->
+            withLifecycleLock {
+                val active = artifactDAO.listByState(ArtifactState.ACTIVE.name)
+                val byPath = active.associateBy(ArtifactEntity::relativePath)
+                val unavailable = ArtifactReferencePolicy.roots(candidate).filterTo(hashSetOf()) { token ->
+                    val path = rootRelativePath(token) ?: return@filterTo false
+                    val artifact = byPath[path]
+                    if (artifact == null || !payloadStore.finalExists(path)) true
+                    else {
+                        check(artifact.scope == ConfigurationScope.Personal) { "settings_artifact_scope_mismatch" }
+                        false
                     }
                 }
+                val prepared = ArtifactReferencePolicy.detach(candidate, unavailable)
+                withContext(NonCancellable) {
+                    val committed = commit(prepared)
+                    handoffSettingsPins(ArtifactReferencePolicy.roots(committed), active)
+                    committed
+                }
             }
-            val rootedPaths = ArtifactReferencePolicy.roots(committed)
-                .mapNotNullTo(hashSetOf()) { uri -> payloadStore.relativePathForUri(uri.toUri()) }
-            val rootedIds = active.filter { it.relativePath in rootedPaths }.mapTo(hashSetOf(), ArtifactEntity::id)
-            synchronized(unpublishedPins) { unpublishedPins.keys.removeAll(rootedIds) }
-            committed
+        }
+
+    private suspend fun commitSettingsRoots(
+        before: UserSettingsDocument,
+        after: UserSettingsDocument,
+        commit: suspend () -> Unit,
+    ) = withLifecycleLock {
+        val active = artifactDAO.listByState(ArtifactState.ACTIVE.name)
+        val byPath = active.associateBy(ArtifactEntity::relativePath)
+        val beforeRoots = ArtifactReferencePolicy.scopedRoots(before)
+        ArtifactReferencePolicy.scopedRoots(after).forEach { (scope, roots) ->
+            (roots - beforeRoots[scope].orEmpty()).mapNotNull(::rootRelativePath).forEach { path ->
+                val artifact = byPath[path]
+                check(artifact != null && payloadStore.finalExists(path)) {
+                    "Settings reference targets an unavailable artifact: $path"
+                }
+                // Shared definition assets belong to Personal; an override may also use its own realm's asset.
+                check(artifact.scope == ConfigurationScope.Personal || artifact.scope == scope) {
+                    "settings_artifact_scope_mismatch"
+                }
+            }
+        }
+        // Once persistence starts, commit acknowledgement and pin transfer share one owner.
+        withContext(NonCancellable) {
+            commit()
+            handoffSettingsPins(ArtifactReferencePolicy.roots(after), active)
         }
     }
+
+    private fun handoffSettingsPins(roots: Set<String>, active: List<ArtifactEntity>) {
+        val rootedPaths = roots.mapNotNullTo(hashSetOf(), ::rootRelativePath)
+        val rootedIds = active.filter { it.relativePath in rootedPaths }.mapTo(hashSetOf(), ArtifactEntity::id)
+        synchronized(unpublishedPins) { unpublishedPins.keys.removeAll(rootedIds) }
+    }
+
+    private fun rootRelativePath(token: String): String? = when {
+        token.startsWith("file:", ignoreCase = true) -> payloadStore.relativePathForUri(token.toUri())
+        ':' !in token -> payloadStore.relativePathForUri(payloadStore.file(token).toUri())
+        else -> null
+    }
+
+    private suspend fun <T> withSettingsDetach(
+        operation: suspend (detach: suspend (Set<String>) -> Boolean) -> T,
+    ): T = settingsCoordinator.withDetach { detach -> withLifecycleLock { operation(detach) } }
 
     suspend fun createFromUri(
         scope: ConfigurationScope,
@@ -749,7 +797,7 @@ class ArtifactStore(
             val pending = synchronized(unpublishedPins) {
                 artifacts.filter { unpublishedPins[it.entity.id] != null }
             }
-            val settingsRoots = settingsCoordinator.withRootsLock(ArtifactReferencePolicy::roots)
+            val settingsRoots = settingsCoordinator.readCommitted { ArtifactReferencePolicy.roots(it).mapNotNullTo(hashSetOf(), ::rootRelativePath) }
             pending.forEach { owned ->
                 val current = synchronized(unpublishedPins) { unpublishedPins[owned.entity.id] }
                 check(current == owned.ownershipToken) { "artifact ownership token mismatch: ${owned.entity.id}" }
@@ -758,7 +806,7 @@ class ArtifactStore(
                     "artifact is not active during ownership transfer: ${owned.entity.id}"
                 }
                 val messageRooted = artifactReferenceDAO.existsByArtifactId(owned.entity.id)
-                check(messageRooted || owned.uri.toString() in settingsRoots) {
+                check(messageRooted || owned.entity.relativePath in settingsRoots) {
                     "artifact has no durable root during ownership transfer: ${owned.entity.id}"
                 }
             }
@@ -911,31 +959,33 @@ class ArtifactStore(
     // ---- 影响检查 ----
 
     suspend fun inspect(artifact: ArtifactEntity): ArtifactDeleteImpact =
-        settingsCoordinator.withRootsLock { settings ->
-            val fileUri = buildFileUri(artifact)
-            val backgroundCount = settings.assistants.count { it.background == fileUri }
-            val userAvatarHit = settings.displaySetting.userAvatar.let { avatar ->
-                avatar is net.weero.measix.pilot.data.model.Avatar.Image && avatar.url == fileUri
-            }
-            val avatarCount = settings.assistants.count { assistant ->
-                val avatar = assistant.avatar
-                avatar is net.weero.measix.pilot.data.model.Avatar.Image && avatar.url == fileUri
-            } + if (userAvatarHit) 1 else 0
+        settingsCoordinator.readCommitted { settings ->
+            fun matches(token: String?): Boolean = token?.let(::rootRelativePath) == artifact.relativePath
+            val assistants = settings.configuration.assistants
+            val usages = settings.preferences.scopes.flatMap { it.assistantUsage }
+            val backgroundCount = assistants.count { matches(it.background) } + usages.count { matches(it.background?.value) }
+            val userAvatarHit = matches((settings.configuration.profile.avatar as? net.weero.measix.pilot.data.model.Avatar.Image)?.url)
+            val avatarCount = assistants.count { matches((it.avatar as? net.weero.measix.pilot.data.model.Avatar.Image)?.url) } +
+                usages.count { matches((it.avatar?.value as? net.weero.measix.pilot.data.model.Avatar.Image)?.url) } +
+                if (userAvatarHit) 1 else 0
+            val presetCount = (assistants.map { it.presetMessages } + usages.mapNotNull { it.presetMessages?.value })
+                .count { messages -> messages.collectArtifactReferences().any { matches(it.token) } }
             ArtifactDeleteImpact(
                 // GC is closed until backfill is complete; inspect remains conservative too.
                 referencedByHistory = !isReferenceProjectionCurrent() || artifactReferenceDAO.existsByArtifactId(artifact.id),
                 assistantBackgroundCount = backgroundCount,
                 assistantAvatarCount = avatarCount,
+                assistantPresetCount = presetCount,
             )
         }
 
     // ---- 生命周期协议（CAS 幂等，无 operationId） ----
 
-    suspend fun deleteUserRequested(artifactId: Long): ArtifactDeleteResult = withLifecycleLock {
-        deleteUserRequestedLocked(artifactId)
+    suspend fun deleteUserRequested(artifactId: Long): ArtifactDeleteResult = withSettingsDetach { detach ->
+        deleteUserRequestedLocked(artifactId, detach)
     }
 
-    private suspend fun deleteUserRequestedLocked(artifactId: Long): ArtifactDeleteResult {
+    private suspend fun deleteUserRequestedLocked(artifactId: Long, detach: suspend (Set<String>) -> Boolean): ArtifactDeleteResult {
         val artifact = artifactDAO.getById(artifactId)
             ?: return ArtifactDeleteResult.Rejected(
                 artifactId,
@@ -945,7 +995,7 @@ class ArtifactStore(
             return ArtifactDeleteResult.Rejected(artifact.id, ArtifactDeleteResult.RejectionReason.IN_PROGRESS)
         }
         if (artifact.state == ArtifactState.DELETING.name) {
-            return withContext(NonCancellable) { finishUserDeletion(artifact) }
+            return withContext(NonCancellable) { finishUserDeletion(artifact, detach) }
         }
         if (artifact.state != ArtifactState.ACTIVE.name) {
             return ArtifactDeleteResult.Rejected(artifact.id, ArtifactDeleteResult.RejectionReason.IN_PROGRESS)
@@ -958,7 +1008,7 @@ class ArtifactStore(
                 System.currentTimeMillis(),
             )
             if (gained != 1) return@withContext deletionConflict(artifact.id)
-            finishUserDeletion(artifact.copy(state = ArtifactState.DELETING.name))
+            finishUserDeletion(artifact.copy(state = ArtifactState.DELETING.name), detach)
         }
     }
 
@@ -973,8 +1023,8 @@ class ArtifactStore(
             return@withLifecycleLock ArtifactDeleteResult.Failed(current.id, "artifact_ownership_already_transferred")
         }
         val rooted = artifactReferenceDAO.existsByArtifactId(current.id) ||
-            settingsCoordinator.withRootsLock { settings ->
-                buildFileUri(current) in ArtifactReferencePolicy.roots(settings)
+            settingsCoordinator.readCommitted { settings ->
+                ArtifactReferencePolicy.roots(settings).any { rootRelativePath(it) == current.relativePath }
             }
         if (rooted) return@withLifecycleLock ArtifactDeleteResult.Failed(current.id, "artifact_already_published")
         withContext(NonCancellable) {
@@ -999,12 +1049,12 @@ class ArtifactStore(
     suspend fun deleteUserRequestedFolderCreatedBefore(
         folder: String,
         createdBefore: Long,
-    ): ArtifactCleanupResult = withLifecycleLock {
+    ): ArtifactCleanupResult = withSettingsDetach { detach ->
         val entities = artifactDAO.listByFolderCreatedBefore(folder, createdBefore)
         if (entities.isEmpty()) {
             // 与 deleteUserRequestedFolder 收敛：无候选时也尝试清空空目录
             payloadStore.deleteEmptyFolder(folder)
-            return@withLifecycleLock ArtifactCleanupResult(0, 0, 0, 0)
+            return@withSettingsDetach ArtifactCleanupResult(0, 0, 0, 0)
         }
         var deleted = 0
         var cleanupPending = 0
@@ -1018,8 +1068,8 @@ class ArtifactStore(
             // 已取得所有权的终态（DELETING 续跑、CREATING 回滚）与单条路径一致地在 NonCancellable 内
             // 原子完成，取消只在单项边界传播，不把"已拥有的收口"交给恢复侧重试。
             val result = when (entity.state) {
-                ArtifactState.ACTIVE.name -> deleteUserRequestedLocked(entity.id)
-                ArtifactState.DELETING.name -> withContext(NonCancellable) { finishUserDeletion(entity) }
+                ArtifactState.ACTIVE.name -> deleteUserRequestedLocked(entity.id, detach)
+                ArtifactState.DELETING.name -> withContext(NonCancellable) { finishUserDeletion(entity, detach) }
                 ArtifactState.CREATING.name -> withContext(NonCancellable) { discardCreating(entity) }
                 else -> ArtifactDeleteResult.Failed(entity.id, "unknown_artifact_state:${entity.state}")
             }
@@ -1040,28 +1090,28 @@ class ArtifactStore(
     suspend fun countFolderCreatedBefore(folder: String, createdBefore: Long): Int =
         artifactDAO.listByFolderCreatedBefore(folder, createdBefore).size
 
-    suspend fun deleteUserRequestedFolder(folder: String): ArtifactDeleteResult = withLifecycleLock {
+    suspend fun deleteUserRequestedFolder(folder: String): ArtifactDeleteResult = withSettingsDetach { detach ->
         val entities = artifactDAO.listAllStatesByFolder(folder).first()
         if (entities.isEmpty()) {
             payloadStore.deleteEmptyFolder(folder)
-            return@withLifecycleLock ArtifactDeleteResult.Completed(0)
+            return@withSettingsDetach ArtifactDeleteResult.Completed(0)
         }
         if (entities.any { isPinned(it.id) }) {
-            return@withLifecycleLock ArtifactDeleteResult.Rejected(0, ArtifactDeleteResult.RejectionReason.IN_PROGRESS)
+            return@withSettingsDetach ArtifactDeleteResult.Rejected(0, ArtifactDeleteResult.RejectionReason.IN_PROGRESS)
         }
         var pendingCleanup: ArtifactDeleteResult.CleanupPending? = null
         entities.forEach { entity ->
             val result = when (entity.state) {
-                ArtifactState.ACTIVE.name -> deleteUserRequestedLocked(entity.id)
-                ArtifactState.DELETING.name -> finishUserDeletion(entity)
+                ArtifactState.ACTIVE.name -> deleteUserRequestedLocked(entity.id, detach)
+                ArtifactState.DELETING.name -> finishUserDeletion(entity, detach)
                 ArtifactState.CREATING.name -> discardCreating(entity)
                 else -> ArtifactDeleteResult.Failed(entity.id, "unknown_artifact_state:${entity.state}")
             }
             when (result) {
                 is ArtifactDeleteResult.Completed -> Unit
                 is ArtifactDeleteResult.CleanupPending -> if (pendingCleanup == null) pendingCleanup = result
-                is ArtifactDeleteResult.Rejected -> return@withLifecycleLock result
-                is ArtifactDeleteResult.Failed -> return@withLifecycleLock result
+                is ArtifactDeleteResult.Rejected -> return@withSettingsDetach result
+                is ArtifactDeleteResult.Failed -> return@withSettingsDetach result
             }
         }
         payloadStore.deleteEmptyFolder(folder)
@@ -1071,7 +1121,7 @@ class ArtifactStore(
     // ---- 启动恢复 ----
 
     /** 冷启动回滚已失去进程内 owner 的 CREATING，续跑 DELETING，并持久化收口悬挂 Settings root。 */
-    suspend fun reconcileStartup() = withLifecycleLock {
+    suspend fun reconcileStartup() = withSettingsDetach { detach ->
         val creating = artifactDAO.listByState(ArtifactState.CREATING.name)
         creating.forEach { entity ->
             when (val result = discardCreating(entity)) {
@@ -1088,7 +1138,7 @@ class ArtifactStore(
             }
         }
         artifactDAO.listByState(ArtifactState.DELETING.name).forEach { entity ->
-            when (val result = finishUserDeletion(entity)) {
+            when (val result = finishUserDeletion(entity, detach)) {
                 is ArtifactDeleteResult.CleanupPending -> error(
                     "Failed to resume artifact deletion ${entity.id}: ${result.reason}"
                 )
@@ -1098,10 +1148,9 @@ class ArtifactStore(
                 else -> Unit
             }
         }
-        val settingsOwnedRoots = settingsCoordinator.withRootsLock { settings ->
+        val settingsOwnedRoots = settingsCoordinator.readCommitted { settings ->
             ArtifactReferencePolicy.roots(settings).mapNotNull { root ->
-                val uri = runCatching { Uri.parse(root) }.getOrNull() ?: return@mapNotNull null
-                payloadStore.relativePathForUri(uri)?.let { relativePath -> root to relativePath }
+                rootRelativePath(root)?.let { relativePath -> root to relativePath }
             }
         }
         val settingsRootsToPersistAsDefaults = mutableSetOf<String>()
@@ -1124,7 +1173,7 @@ class ArtifactStore(
             }
         }
         if (settingsRootsToPersistAsDefaults.isNotEmpty()) {
-            check(settingsCoordinator.detach(settingsRootsToPersistAsDefaults)) {
+            check(detach(settingsRootsToPersistAsDefaults)) {
                 "Failed to persist fallback for Settings roots with unavailable artifacts"
             }
         }
@@ -1133,8 +1182,8 @@ class ArtifactStore(
                 val messageRooted = artifactReferenceDAO.existsByArtifactId(entity.id) ||
                     messageNodeDAO.existsMessagesJsonContaining(entity.relativePath) ||
                     messageNodeDAO.existsMessagesJsonContaining(buildFileUri(entity))
-                val settingsRooted = settingsCoordinator.withRootsLock { settings ->
-                    buildFileUri(entity) in ArtifactReferencePolicy.roots(settings)
+                val settingsRooted = settingsCoordinator.readCommitted { settings ->
+                    ArtifactReferencePolicy.roots(settings).any { rootRelativePath(it) == entity.relativePath }
                 }
                 if (messageRooted || settingsRooted) {
                     throw ArtifactDataIntegrityException(
@@ -1170,14 +1219,14 @@ class ArtifactStore(
             if (!isReferenceProjectionCurrent()) return@withLifecycleLock emptyList()
             val threshold = System.currentTimeMillis() - protectionWindowMillis
             val candidates = artifactDAO.listByStateCreatedBefore(ArtifactState.ACTIVE.name, threshold)
-            settingsCoordinator.withRootsLock { settings ->
-                val roots = ArtifactReferencePolicy.roots(settings)
+            settingsCoordinator.readCommitted { settings ->
+                val roots = ArtifactReferencePolicy.roots(settings).mapNotNullTo(hashSetOf(), ::rootRelativePath)
                 val claimed = mutableListOf<ArtifactEntity>()
                 candidates.forEach { entity ->
-                    // Recheck every root while holding both lifecycle domains, then claim by CAS.
+                    // Recheck committed roots while holding the Artifact lifecycle, then claim by CAS.
                     if (!isPinned(entity.id) &&
                         !artifactReferenceDAO.existsByArtifactId(entity.id) &&
-                        buildFileUri(entity) !in roots
+                        entity.relativePath !in roots
                     ) {
                         if (artifactDAO.compareAndSetState(
                                 entity.id,
@@ -1275,12 +1324,20 @@ class ArtifactStore(
         ArtifactDeleteResult.CleanupPending(entity.id, error.message ?: "unknown")
     }
 
-    private suspend fun finishUserDeletion(entity: ArtifactEntity): ArtifactDeleteResult {
-        val fileUri = buildFileUri(entity)
-        if (!settingsCoordinator.detach(setOf(fileUri))) {
-            return ArtifactDeleteResult.CleanupPending(entity.id, "settings_detach_failed")
+    private suspend fun finishUserDeletion(entity: ArtifactEntity, detach: suspend (Set<String>) -> Boolean): ArtifactDeleteResult = try {
+        val tokens = settingsCoordinator.readCommitted { document ->
+            ArtifactReferencePolicy.roots(document).filterTo(hashSetOf()) { rootRelativePath(it) == entity.relativePath }
         }
-        return finishDeleting(entity)
+        val detached = tokens.isEmpty() || detach(tokens)
+        val stillRooted = settingsCoordinator.readCommitted { document ->
+            ArtifactReferencePolicy.roots(document).any { rootRelativePath(it) == entity.relativePath }
+        }
+        if (!detached || stillRooted) ArtifactDeleteResult.CleanupPending(entity.id, "settings_detach_failed")
+        else finishDeleting(entity)
+    } catch (cancelled: CancellationException) {
+        throw cancelled
+    } catch (error: Exception) {
+        ArtifactDeleteResult.CleanupPending(entity.id, error.message ?: "settings_detach_failed")
     }
 
     private suspend fun discardCreating(entity: ArtifactEntity): ArtifactDeleteResult = try {

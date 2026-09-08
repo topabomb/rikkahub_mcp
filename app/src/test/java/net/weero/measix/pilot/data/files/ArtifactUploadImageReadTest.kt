@@ -70,12 +70,8 @@ class ArtifactUploadImageReadTest {
         val settings = MutableStateFlow(
             EffectiveSettingsSnapshot(Settings(), SettingsAccessIndex(), 0L, ManagedConfigurationState.ABSENT),
         )
-        val settingsStore = mockk<SettingsStore>()
-        every { settingsStore.effectiveSettings } returns settings
-        coEvery { settingsStore.updateLocal(any()) } coAnswers {
-            firstArg<(Settings) -> Settings>()(settings.value.settings).also {
-                settings.value = settings.value.copy(settings = it)
-            }
+        val settingsStore = mockArtifactSettings({ settings.value.settings }) { updated ->
+            settings.value = settings.value.copy(settings = updated)
         }
         payloadStore = spyk(ArtifactPayloadStore(context))
         store = ArtifactStore(

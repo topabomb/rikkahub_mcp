@@ -56,8 +56,10 @@ updateLocal(latest Local shadow transform)
 - 写入失败或取消时不得发布领先于磁盘的内存状态；
 - managed mutation 必须在 Store/commit boundary 拒绝，UI disabled 只是展示；
 - Local shadow 不因 Managed 同 ID 覆盖而删除，Managed remove/disconnect 后应恢复；
-- `restoreLocal()` 和 `snapshotLocal()` 只操作 Local shadow；
+- `restoreLocal()` 和 `snapshotLocal()` 只操作个人 Settings 投影；恢复经 `ArtifactStore.restoreSettingsReferences` 校验配置文件引用；
 - `pendingAssistantDeletions` 在 Settings 投影中为 `@Transient`，在 UserSettingsDocument.internalState 中持久化，恢复普通 Settings 时不得清空。
+
+新增文件引用必须通过 `ArtifactStore.updateSettingsReferences`：Settings 写锁先于 Artifact 生命周期锁，校验后保持文件锁直到 DataStore 回执与创建所有权交接完成。普通配置提交拒绝绕过该入口新增引用。完整引用覆盖用户定义和所有主体保留的使用覆盖，不从 `effectiveSettings` 的当前显示投影推断；具体文件保留、删除与恢复协议见 [多模态与持久化](multimodal-context-and-turn-durability.md)。
 
 ### 2.3 用户配置文档与迁移
 

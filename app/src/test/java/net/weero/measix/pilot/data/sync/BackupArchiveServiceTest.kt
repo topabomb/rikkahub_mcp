@@ -5,6 +5,21 @@ import me.rerere.common.configuration.ConfigurationReference
 import android.content.Context
 import android.database.sqlite.SQLiteDatabase
 import androidx.room.Room
+import androidx.core.net.toUri
+import androidx.datastore.preferences.core.PreferenceDataStoreFactory
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.cancelAndJoin
+import net.weero.measix.pilot.AppScope
+import net.weero.measix.pilot.data.datastore.UserSettingsMigration
+import net.weero.measix.pilot.data.db.RoomDatabaseTransactionRunner
+import net.weero.measix.pilot.data.files.ArtifactPayloadStore
+import net.weero.measix.pilot.data.files.ArtifactSettingsCoordinator
+import net.weero.measix.pilot.data.model.Assistant
+import net.weero.measix.pilot.data.model.Avatar
+import me.rerere.ai.core.MessageRole
+import me.rerere.ai.ui.UIMessage
+import me.rerere.ai.ui.UIMessagePart
 import androidx.test.core.app.ApplicationProvider
 import io.mockk.coEvery
 import io.mockk.coVerify
@@ -69,8 +84,8 @@ class BackupArchiveServiceTest {
         service.stageRestore(archive(mapOf("settings.json" to legacy.toByteArray())), BackupSelection(false, false))
         PendingBackupRestore.bootstrapBeforeDatabaseOpen(context)
         var restored: Settings? = null
-        val settingsStore = mockk<SettingsStore>()
-        coEvery { settingsStore.restoreLocal(any()) } coAnswers { firstArg<Settings>().also { restored = it } }
+        val settingsStore = mockk<ArtifactStore>()
+        coEvery { settingsStore.restoreSettingsReferences(any()) } coAnswers { firstArg<Settings>().also { restored = it } }
         PendingBackupRestore.restoreSettingsIfPending(context, settingsStore, catalogStore, JsonInstant)
         assertNull(restored!!.assistants.single().builtInSearch)
         assertEquals(model, restored!!.providers.single().models.single())
@@ -137,8 +152,8 @@ class BackupArchiveServiceTest {
         assertFalse(oldWal.exists())
 
         var restored: Settings? = null
-        val settingsStore = mockk<SettingsStore>()
-        coEvery { settingsStore.restoreLocal(any()) } coAnswers { firstArg<Settings>().also { restored = it } }
+        val settingsStore = mockk<ArtifactStore>()
+        coEvery { settingsStore.restoreSettingsReferences(any()) } coAnswers { firstArg<Settings>().also { restored = it } }
         PendingBackupRestore.restoreSettingsIfPending(context, settingsStore, catalogStore, JsonInstant)
         assertEquals(Settings().assistantId, restored?.assistantId)
         coVerify { catalogStore.restoreCatalogs(emptyList(), any()) }
@@ -276,8 +291,8 @@ class BackupArchiveServiceTest {
         service.stageRestore(archive, BackupSelection(false, false))
         PendingBackupRestore.bootstrapBeforeDatabaseOpen(context)
         var restored: Settings? = null
-        val settingsStore = mockk<SettingsStore>()
-        coEvery { settingsStore.restoreLocal(any()) } coAnswers { firstArg<Settings>().also { restored = it } }
+        val settingsStore = mockk<ArtifactStore>()
+        coEvery { settingsStore.restoreSettingsReferences(any()) } coAnswers { firstArg<Settings>().also { restored = it } }
         PendingBackupRestore.restoreSettingsIfPending(context, settingsStore, catalogStore, JsonInstant)
 
         assertNull(restored?.assistants?.first()?.background)
@@ -368,8 +383,8 @@ class BackupArchiveServiceTest {
 
         service.stageRestore(archive, BackupSelection(true, true))
         PendingBackupRestore.bootstrapBeforeDatabaseOpen(context)
-        val settingsStore = mockk<SettingsStore>()
-        coEvery { settingsStore.restoreLocal(any()) } returns settings
+        val settingsStore = mockk<ArtifactStore>()
+        coEvery { settingsStore.restoreSettingsReferences(any()) } returns settings
 
         PendingBackupRestore.restoreSettingsIfPending(context, settingsStore, catalogStore, JsonInstant)
 
@@ -421,10 +436,10 @@ class BackupArchiveServiceTest {
 
         service.stageRestore(archive, BackupSelection(true, true))
         PendingBackupRestore.bootstrapBeforeDatabaseOpen(context)
-        val settingsStore = mockk<SettingsStore>()
+        val settingsStore = mockk<ArtifactStore>()
         var restoredSettings: Settings? = null
         var restoredCatalogs: List<McpCatalogSnapshot>? = null
-        coEvery { settingsStore.restoreLocal(any()) } coAnswers {
+        coEvery { settingsStore.restoreSettingsReferences(any()) } coAnswers {
             firstArg<Settings>().also { restoredSettings = it }
         }
         coEvery { catalogStore.restoreCatalogs(any(), any()) } coAnswers {
@@ -440,6 +455,43 @@ class BackupArchiveServiceTest {
         assertEquals(server.id, restoredCatalog.serverId)
         assertEquals(listOf("legacy_measure"), restoredCatalog.tools.map { it.name })
         assertEquals("Legacy measure schema", restoredCatalog.tools.single().description)
+    }
+
+    @Test
+    fun `restore dangling config roots through durable archive`() = runTest {
+        val missing = File(context.filesDir, "upload/missing-preset.png").toUri().toString()
+        val backupSettings = Settings(assistants = listOf(Assistant(name = "restored",
+            avatar = Avatar.Image(missing), background = missing,
+            presetMessages = listOf(UIMessage(role = MessageRole.USER, parts = listOf(UIMessagePart.Image(missing)))))))
+        val source = File(work, "dangling-config.sqlite")
+        createDatabase(source, "restored")
+        service.stageRestore(modernArchive(source, emptyMap(), backupSettings), BackupSelection(true, true))
+        PendingBackupRestore.bootstrapBeforeDatabaseOpen(context)
+        val owner = AppScope(Dispatchers.Default)
+        val disk = PreferenceDataStoreFactory.create(scope = owner, migrations = listOf(UserSettingsMigration()),
+            produceFile = { File(work, "settings.preferences_pb") })
+        val settings = SettingsStore(context, owner, dataStore = disk)
+        val database = Room.databaseBuilder(context, AppDatabase::class.java, "measix_pilot")
+            .setJournalMode(androidx.room.RoomDatabase.JournalMode.TRUNCATE).build()
+        val artifacts = ArtifactStore(ArtifactPayloadStore(context), database.artifactDao(), database.artifactReferenceDao(),
+            database.systemMetaDao(), database.conversationDao(), database.messageNodeDao(),
+            ArtifactSettingsCoordinator(settings), RoomDatabaseTransactionRunner(database))
+        try {
+            PendingBackupRestore.restoreSettingsIfPending(context, artifacts, catalogStore, JsonInstant)
+            artifacts.reconcileStartup()
+            artifacts.ensureReferenceProjection()
+            val restored = settings.snapshotUserDocument().configuration.assistants.single()
+            assertEquals("restored", restored.name)
+            assertEquals(Avatar.Dummy, restored.avatar)
+            assertNull(restored.background)
+            assertTrue(restored.presetMessages.isEmpty())
+            assertEquals("restored", databaseMarker(context.getDatabasePath("measix_pilot")))
+            PendingBackupRestore.complete(context)
+            assertFalse(File(context.noBackupFilesDir, "backup_restore/pending").exists())
+        } finally {
+            owner.coroutineContext[Job]!!.cancelAndJoin()
+            database.close()
+        }
     }
 
     private fun modernArchive(

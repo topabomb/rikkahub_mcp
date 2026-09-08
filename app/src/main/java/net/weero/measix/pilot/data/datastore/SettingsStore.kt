@@ -71,6 +71,7 @@ import net.weero.measix.pilot.data.configuration.GatewayPreference
 import net.weero.measix.pilot.data.configuration.ConfigurationScope
 import net.weero.measix.pilot.data.configuration.ResolvedConfiguration
 import net.weero.measix.pilot.data.enterprise.EnterpriseState
+import net.weero.measix.pilot.data.files.ArtifactReferencePolicy
 
 private const val TAG = "SettingsStore"
 
@@ -396,6 +397,7 @@ class SettingsStore internal constructor(
     /** Both authorization locks remain owned until DataStore's independent writer acknowledges completion. */
     private suspend fun commitUserDocument(
         requireOwner: () -> Unit = {},
+        artifactRootsOwned: Boolean = false,
         transform: (UserSettingsDocument) -> UserSettingsDocument,
     ) {
         val caller = currentCoroutineContext()
@@ -407,7 +409,13 @@ class SettingsStore internal constructor(
                 val document = JsonInstant.decodeFromString<UserSettingsDocument>(
                     requireNotNull(preferences[USER_SETTINGS]) { "user_settings_migration_incomplete" },
                 )
-                val encoded = JsonInstant.encodeToString(transform(document))
+                val updated = transform(document)
+                check(artifactRootsOwned || ArtifactReferencePolicy.scopedRoots(updated).all { (scope, roots) ->
+                    (roots - ArtifactReferencePolicy.scopedRoots(document)[scope].orEmpty()).isEmpty()
+                }) {
+                    "artifact_root_write_requires_lifecycle_owner"
+                }
+                val encoded = JsonInstant.encodeToString(updated)
                 // Before handing the value to the writer, cancellation can still abandon this mutation.
                 caller.ensureActive()
                 requireOwner()
@@ -437,20 +445,33 @@ class SettingsStore internal constructor(
      * 备份恢复替换 Local shadow，但不得清空未完成的内部删除 tombstone。旧 MCP schema
      * staging 属于被替换配置的迁移租约，必须在同一 Settings 写串行区内作废。
      */
-    suspend fun restoreLocal(settings: Settings): Settings =
+    internal suspend fun restoreLocal(
+        settings: Settings,
+        withArtifactRestore: suspend (Settings, suspend (Settings) -> Settings) -> Settings,
+    ): Settings =
         updateMutex.withLock {
             val current = localSettingsRaw.first().settings
-            val restored = updateInternal(
-                current = current,
-                proposed = settings.withInternalStateFrom(current),
-            )
-            dataStore.edit { preferences ->
-                preferences.remove(PENDING_MCP_CATALOG_MIGRATION)
+            withArtifactRestore(settings.withInternalStateFrom(current)) { prepared ->
+                // The restore owner holds Artifact and has prepared the recoverable configuration roots.
+                val restored = updateInternal(
+                    current = current,
+                    proposed = prepared,
+                    withArtifactCommit = { _, _, commit -> commit() },
+                )
+                dataStore.edit { preferences ->
+                    preferences.remove(PENDING_MCP_CATALOG_MIGRATION)
+                }
+                restored
             }
-            restored
         }
 
-    suspend fun updateLocal(transform: (Settings) -> Settings): Settings = updateMutex.withLock {
+    suspend fun updateLocal(transform: (Settings) -> Settings): Settings =
+        updateLocalWithArtifactCommit(null, transform)
+
+    internal suspend fun updateLocalWithArtifactCommit(
+        withArtifactCommit: (suspend (UserSettingsDocument, UserSettingsDocument, suspend () -> Unit) -> Unit)?,
+        transform: (Settings) -> Settings,
+    ): Settings = updateMutex.withLock {
         val localSnapshot = localSettingsRaw.first()
         val local = localSnapshot.settings
         val localReadModel = local.materializeForRead()
@@ -469,7 +490,21 @@ class SettingsStore internal constructor(
         updateInternal(
             current = local,
             proposed = proposed,
+            withArtifactCommit = withArtifactCommit,
         )
+    }
+
+    /** Artifact readers hold their lifecycle lock and read committed state without acquiring this writer. */
+    internal suspend fun snapshotUserDocument(): UserSettingsDocument = userDocuments.first()
+
+    /** The callback acquires Artifact only after this writer; detach cannot add or resurrect roots. */
+    internal suspend fun <T> withArtifactRootDetach(
+        operation: suspend (detach: suspend (Set<String>) -> Boolean) -> T,
+    ): T = updateMutex.withLock {
+        operation { tokens ->
+            commitUserDocument { ArtifactReferencePolicy.detach(it, tokens) }
+            ArtifactReferencePolicy.roots(userDocuments.first()).none(tokens::contains)
+        }
     }
 
     /** Backup is a durable format boundary and exports only the Local shadow. */
@@ -548,6 +583,7 @@ class SettingsStore internal constructor(
     private suspend fun updateInternal(
         current: Settings,
         proposed: Settings,
+        withArtifactCommit: (suspend (UserSettingsDocument, UserSettingsDocument, suspend () -> Unit) -> Unit)? = null,
     ): Settings {
         if (proposed.init) {
             Log.w(TAG, "Cannot update dummy settings")
@@ -556,7 +592,15 @@ class SettingsStore internal constructor(
         return commitSettings(
             proposed = proposed,
             persist = { normalizedSettings ->
-                commitUserDocument { it.withPersonalSettings(normalizedSettings) }
+                if (withArtifactCommit == null) {
+                    commitUserDocument { it.withPersonalSettings(normalizedSettings) }
+                } else {
+                    val before = userDocuments.first()
+                    val after = before.withPersonalSettings(normalizedSettings)
+                    withArtifactCommit(before, after) {
+                        commitUserDocument(artifactRootsOwned = true) { it.withPersonalSettings(normalizedSettings) }
+                    }
+                }
             },
             // persist 正常返回后才发布，避免写盘失败时内存状态领先于持久化状态。
             publish = { committed ->

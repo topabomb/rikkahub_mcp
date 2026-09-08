@@ -5,6 +5,22 @@ import net.weero.measix.pilot.data.configuration.ConfigurationScope
 import android.content.Context
 import android.content.ContextWrapper
 import androidx.room.Room
+import androidx.datastore.core.DataStore
+import androidx.datastore.preferences.core.Preferences
+import androidx.datastore.preferences.core.PreferenceDataStoreFactory
+import androidx.datastore.preferences.core.edit
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.cancelAndJoin
+import net.weero.measix.pilot.data.datastore.UserSettingsMigration
+import net.weero.measix.pilot.data.datastore.ScopedUserPreferences
+import net.weero.measix.pilot.data.configuration.AssistantUsagePreferences
+import net.weero.measix.pilot.data.configuration.UsageValue
+import net.weero.measix.pilot.data.model.Assistant
+import me.rerere.ai.core.MessageRole
+import me.rerere.ai.ui.UIMessage
+import me.rerere.ai.ui.UIMessagePart
+import me.rerere.common.configuration.ConfigurationReference
+import net.weero.measix.pilot.utils.JsonInstant
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import java.io.File
@@ -37,6 +53,8 @@ class ManagedFileCreationIntegrationTest {
     private lateinit var appScope: AppScope
     private lateinit var store: ArtifactStore
     private lateinit var payloadContext: Context
+    private lateinit var settings: SettingsStore
+    private lateinit var preferences: DataStore<Preferences>
     private lateinit var settingsCoordinator: ArtifactSettingsCoordinator
 
     @Before
@@ -48,7 +66,10 @@ class ManagedFileCreationIntegrationTest {
         }
         database = Room.inMemoryDatabaseBuilder(application, AppDatabase::class.java).build()
         appScope = AppScope()
-        settingsCoordinator = ArtifactSettingsCoordinator(SettingsStore(application, appScope))
+        preferences = PreferenceDataStoreFactory.create(scope = appScope, migrations = listOf(UserSettingsMigration()),
+            produceFile = { File(root, "settings.preferences_pb") })
+        settings = SettingsStore(payloadContext, appScope, dataStore = preferences)
+        settingsCoordinator = ArtifactSettingsCoordinator(settings)
         store = newStore()
     }
 
@@ -66,9 +87,37 @@ class ManagedFileCreationIntegrationTest {
 
     @After
     fun tearDown() {
-        appScope.cancel()
+        runBlocking { appScope.coroutineContext[Job]!!.cancelAndJoin() }
         database.close()
         check(root.deleteRecursively())
+    }
+
+    @Test
+    fun configurationRootsSurviveOwnerRecreationAndDetachAcrossDomains() = runBlocking {
+        store.ensureReferenceProjection()
+        val owned = store.createText(ConfigurationScope.Personal, "preset payload")
+        val uri = owned.uri.toString()
+        store.updateSettingsReferences { it.copy(assistants = listOf(Assistant(background = uri))) }
+        val before = settings.snapshotUserDocument()
+        val enterprise = scopeFor(1)
+        val usage = AssistantUsagePreferences(ConfigurationReference.random(), background = UsageValue(uri),
+            presetMessages = UsageValue(listOf(UIMessage(role = MessageRole.USER,
+                parts = listOf(UIMessagePart.Text("keep"), UIMessagePart.Document(uri, "preset.txt", "text/plain"))))))
+        preferences.edit { it[SettingsStore.USER_SETTINGS] = JsonInstant.encodeToString(before.copy(
+            preferences = before.preferences.copy(scopes = before.preferences.scopes +
+                ScopedUserPreferences(enterprise, assistantUsage = listOf(usage))))) }
+        val reopened = newStore()
+        reopened.reconcileStartup()
+        assertTrue(reopened.collectGarbage(0).isEmpty())
+        assertEquals("preset payload", reopened.file(owned.entity).readText())
+        assertTrue(reopened.deleteUserRequested(owned.entity.id) is ArtifactDeleteResult.Completed)
+        val after = settings.snapshotUserDocument()
+        assertTrue(ArtifactReferencePolicy.roots(after).isEmpty())
+        val retained = after.preferences.scopes.single { it.scope == enterprise }.assistantUsage.single()
+        assertEquals(UsageValue<String?>(null), retained.background)
+        assertEquals(listOf(UIMessagePart.Text("keep")), retained.presetMessages!!.value.single().parts)
+        assertFalse(reopened.file(owned.entity).exists())
+        assertEquals(null, database.artifactDao().getById(owned.entity.id))
     }
 
     @Test

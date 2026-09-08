@@ -9,6 +9,9 @@ import io.mockk.mockk
 import java.io.File
 import kotlin.uuid.Uuid
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import net.weero.measix.pilot.data.datastore.UserSettingsDocument
 import net.weero.measix.pilot.data.datastore.EffectiveSettingsSnapshot
 import net.weero.measix.pilot.data.datastore.ManagedConfigurationState
 import net.weero.measix.pilot.data.datastore.Settings
@@ -40,13 +43,9 @@ internal abstract class ArtifactStoreLifecycleTestBase {
         payloadStore = ArtifactPayloadStore(context)
         settingsFlow = MutableStateFlow(Settings())
         effectiveSettings = MutableStateFlow(settingsFlow.value.toEffectiveSnapshot())
-        val settingsStore = mockk<SettingsStore>()
-        every { settingsStore.effectiveSettings } returns effectiveSettings
-        coEvery { settingsStore.updateLocal(any()) } coAnswers {
-            firstArg<(Settings) -> Settings>()(settingsFlow.value).also { updated ->
-                settingsFlow.value = updated
-                effectiveSettings.value = updated.toEffectiveSnapshot()
-            }
+        val settingsStore = mockArtifactSettings({ settingsFlow.value }) { updated ->
+            settingsFlow.value = updated
+            effectiveSettings.value = updated.toEffectiveSnapshot()
         }
         store = ArtifactStore(
             payloadStore = payloadStore,
@@ -114,3 +113,30 @@ internal fun Settings.toEffectiveSnapshot(): EffectiveSettingsSnapshot = Effecti
     revision = 0L,
     managedState = ManagedConfigurationState.ABSENT,
 )
+
+/** Lifecycle tests use an acknowledged Settings writer, never a lagging effective projection. */
+internal fun mockArtifactSettings(read: () -> Settings, write: (Settings) -> Unit): SettingsStore {
+    val store = mockk<SettingsStore>()
+    val writer = Mutex()
+    coEvery { store.snapshotUserDocument() } coAnswers { UserSettingsDocument.empty().withPersonalSettings(read()) }
+    coEvery { store.updateLocalWithArtifactCommit(any(), any()) } coAnswers {
+        val guard = firstArg<suspend (UserSettingsDocument, UserSettingsDocument, suspend () -> Unit) -> Unit>()
+        val transform = secondArg<(Settings) -> Settings>()
+        writer.withLock {
+            val before = read()
+            val after = transform(before)
+            guard(UserSettingsDocument.empty().withPersonalSettings(before), UserSettingsDocument.empty().withPersonalSettings(after)) { write(after) }
+            after
+        }
+    }
+    coEvery { store.withArtifactRootDetach<Any?>(any()) } coAnswers {
+        val operation = firstArg<suspend (suspend (Set<String>) -> Boolean) -> Any?>()
+        writer.withLock {
+            operation { tokens ->
+                write(ArtifactReferencePolicy.detach(read(), tokens))
+                ArtifactReferencePolicy.roots(read()).none(tokens::contains)
+            }
+        }
+    }
+    return store
+}

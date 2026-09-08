@@ -6,7 +6,7 @@ import kotlinx.serialization.json.Json
 import net.weero.measix.pilot.data.ai.mcp.McpCatalogSnapshot
 import net.weero.measix.pilot.data.ai.mcp.McpCatalogStore
 import net.weero.measix.pilot.data.datastore.Settings
-import net.weero.measix.pilot.data.datastore.SettingsStore
+import net.weero.measix.pilot.data.files.ArtifactStore
 import net.weero.measix.pilot.data.datastore.migrateLegacySettingsJson
 
 /** Cold-start owner for installing a validated backup before Room can open the live database. */
@@ -69,7 +69,7 @@ object PendingBackupRestore {
 
     suspend fun restoreSettingsIfPending(
         context: Context,
-        store: SettingsStore,
+        store: ArtifactStore,
         catalogStore: McpCatalogStore,
         json: Json,
     ) {
@@ -88,7 +88,7 @@ object PendingBackupRestore {
         } else {
             BackupSettingsPolicy.withoutLocalPayloadReferences(decoded)
         }
-        store.restoreLocal(settings)
+        store.restoreSettingsReferences(settings)
         val catalogs = json.decodeFromString<List<McpCatalogSnapshot>>(
             File(pending, BackupArchiveService.MCP_CATALOGS_ENTRY).readText(Charsets.UTF_8)
         )

@@ -320,13 +320,9 @@ internal class ArtifactRecoveryTest : ArtifactStoreLifecycleTestBase() {
         }
         val localSettings = MutableStateFlow(Settings())
         val localEffectiveSettings = MutableStateFlow(localSettings.value.toEffectiveSnapshot())
-        val settingsStore = mockk<SettingsStore>()
-        every { settingsStore.effectiveSettings } returns localEffectiveSettings
-        coEvery { settingsStore.updateLocal(any()) } coAnswers {
-            firstArg<(Settings) -> Settings>()(localSettings.value).also { updated ->
-                localSettings.value = updated
-                localEffectiveSettings.value = updated.toEffectiveSnapshot()
-            }
+        val settingsStore = mockArtifactSettings({ localSettings.value }) { updated ->
+            localSettings.value = updated
+            localEffectiveSettings.value = updated.toEffectiveSnapshot()
         }
         val countingStore = ArtifactStore(
             payloadStore = countingPayloadStore,
