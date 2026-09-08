@@ -31,6 +31,8 @@ internal sealed interface EnterpriseState {
 }
 
 internal data class EnterpriseExitRequest(val access: RealmAccess.Enterprise, val selection: RealmSelection)
+internal data class RealmSwitchRequest(val selection: RealmSelection, val target: RealmAccess)
+internal data class EnterprisePresentation(val state: EnterpriseState, val selection: RealmSelection?)
 internal data class EnterpriseExitToken(val access: RealmAccess.Enterprise, val reason: EnterpriseExitReason)
 internal sealed interface EnterpriseExitSignal {
     data class Closing(val token: EnterpriseExitToken) : EnterpriseExitSignal
@@ -172,9 +174,33 @@ internal class EnterpriseSessionController(
         return publish(next, candidate.configuration)
     }
 
-    suspend fun switchToPersonal() = mutex.withLock {
+    suspend fun readPresentation(): EnterprisePresentation = mutex.withLock {
+        val published = state.value
+        EnterprisePresentation(published, when (published) {
+            EnterpriseState.Loading -> null
+            is EnterpriseState.Failed -> RealmSelection(RealmAccess.Personal, selectionRevision.value)
+            is EnterpriseState.Available -> exitSelection(published.manifest)
+        })
+    }
+
+    /** Host shutdown may await OS callbacks here, but original request jobs must be joined outside this lock. */
+    suspend fun switchRealm(request: RealmSwitchRequest, closePreviousHost: suspend (RealmAccess) -> Unit): RealmSelection = mutex.withLock {
         val current = ensureLoaded()
-        publish(current.manifest.copy(selectedScope = ConfigurationScope.Personal), current.configuration)
+        val selected = exitSelection(current.manifest)
+        if (request.selection != selected) fail("enterprise_selection_revoked")
+        if (request.target is RealmAccess.Enterprise) {
+            val session = current.manifest.session ?: fail("enterprise_session_required")
+            if (session.id != request.target.sessionId || session.identity.scope != request.target.scope) fail("enterprise_data_access_unavailable")
+            if (session.expiresAtMillis <= nowMillis()) {
+                if (current.manifest.phase != EnterpriseSessionPhase.CLOSING) beginClosing(current.manifest, EnterpriseExitReason.AUTHORIZATION_EXPIRED)
+                fail("enterprise_session_expired")
+            }
+            if (current.manifest.phase !in setOf(EnterpriseSessionPhase.READY, EnterpriseSessionPhase.OFFLINE)) fail("enterprise_session_not_ready")
+        }
+        if (request.target == selected.access) return@withLock selected
+        closePreviousHost(selected.access)
+        val next = publish(current.manifest.copy(selectedScope = request.target.scope), current.configuration)
+        exitSelection(next.manifest)
     }
 
     suspend fun changeFeed(access: RealmAccess.Enterprise, expectedRevision: String, command: EnterpriseFeedCommand): EnterpriseFeedVersion = mutex.withLock {
@@ -348,12 +374,6 @@ internal class EnterpriseSessionController(
         val current = requireSession(allowOffline = true)
         if (!allowsDataAccess(current.manifest, access)) fail("enterprise_data_access_unavailable")
         operation(EnterpriseState.Available(current.manifest, current.configuration))
-    }
-
-    suspend fun switchToEnterprise() = mutex.withLock {
-        val current = requireSession(allowOffline = true)
-        val scope = requireNotNull(current.manifest.session).identity.scope
-        publish(current.manifest.copy(selectedScope = scope), current.configuration)
     }
 
     suspend fun setOffline(offline: Boolean) = mutex.withLock {

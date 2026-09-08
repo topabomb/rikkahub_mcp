@@ -293,7 +293,7 @@ class RouteActivity : ComponentActivity() {
         }
         val migrationState by DatabaseMigrationTracker.state.collectAsStateWithLifecycle()
 
-        val backStack = rememberNavBackStack(Screen.Startup)
+        val backStack = rememberNavBackStack(Screen.Startup(intent.getStringExtra("conversationId")))
         val adaptiveLayoutInfo = rememberAdaptiveLayoutInfo()
         SideEffect { this@RouteActivity.navStack = backStack }
 
@@ -347,9 +347,9 @@ class RouteActivity : ComponentActivity() {
                                 slideOutHorizontally { it }
                         },
                         entryProvider = entryProvider {
-                            entry<Screen.Startup> {
-                                InitialConversationContent { request ->
-                                    val index = backStack.indexOf(Screen.Startup)
+                            entry<Screen.Startup> { startup ->
+                                InitialConversationContent(startup.notificationId) { request ->
+                                    val index = backStack.indexOf(startup)
                                     if (index >= 0) backStack[index] = Screen.Chat(request)
                                 }
                             }
@@ -419,6 +419,10 @@ class RouteActivity : ComponentActivity() {
 
                             entry<Screen.Setting> {
                                 SettingPage()
+                            }
+
+                            entry<Screen.Enterprise> {
+                                net.weero.measix.pilot.ui.pages.enterprise.EnterprisePage()
                             }
 
                             entry<Screen.Backup> {
@@ -616,13 +620,13 @@ class RouteActivity : ComponentActivity() {
     }
 
     @Composable
-    private fun InitialConversationContent(onReady: (ConversationOpenRequest) -> Unit) {
+    private fun InitialConversationContent(notificationId: String?, onReady: (ConversationOpenRequest) -> Unit) {
         var retry by remember { mutableIntStateOf(0) }
         var failure by remember { mutableStateOf<Throwable?>(null) }
         LaunchedEffect(retry) {
             failure = null
             try {
-                val notification = intent.getStringExtra("conversationId")?.let(Uuid::parseOrNull)
+                val notification = notificationId?.let(Uuid::parseOrNull)
                 val request = if (notification != null) {
                     ConversationOpenRequest.OpenExisting(notification, conversationQueries.captureCurrentAccess())
                 } else conversations.initialRequest(readBooleanPreference("create_new_conversation_on_start", true))
@@ -681,7 +685,10 @@ class RouteActivity : ComponentActivity() {
 
 sealed interface Screen : NavKey {
     @Serializable
-    data object Startup : Screen
+    data object Enterprise : Screen
+
+    @Serializable
+    data class Startup(val notificationId: String? = null) : Screen
     @Serializable
     data class Chat(
         val request: ConversationOpenRequest,

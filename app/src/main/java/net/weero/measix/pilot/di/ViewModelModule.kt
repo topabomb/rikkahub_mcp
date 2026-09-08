@@ -20,6 +20,7 @@ import net.weero.measix.pilot.ui.pages.extensions.workspace.WorkspaceDetailVM
 import net.weero.measix.pilot.ui.pages.extensions.workspace.WorkspaceVM
 import net.weero.measix.pilot.ui.pages.extensions.workspace.WorkspaceTerminalVM
 import net.weero.measix.pilot.ui.pages.setting.SettingVM
+import net.weero.measix.pilot.ui.pages.enterprise.EnterpriseVM
 import net.weero.measix.pilot.ui.pages.setting.ProviderSettingsVM
 import net.weero.measix.pilot.ui.components.ai.ProviderBalanceVM
 import net.weero.measix.pilot.ui.pages.share.handler.ShareHandlerVM
@@ -44,6 +45,7 @@ val viewModelModule = module {
     }
     viewModelOf(::ChatDrawerVM)
     viewModelOf(::SettingVM)
+    viewModelOf(::EnterpriseVM)
     viewModelOf(::ProviderBalanceVM)
     viewModel<ProviderSettingsVM> {
         ProviderSettingsVM(providerId = it.get(), service = get())

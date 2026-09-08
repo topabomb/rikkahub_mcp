@@ -23,6 +23,8 @@ RouteActivity (ComponentActivity)
 
 配置列表的 `ConfigurationReference` 在 Lazy/可拖动列表边界使用 `toString()` 作为可保存 key；业务选择与命令继续传递类型化引用。Lazy item 与 `ReorderableItem` 必须使用同一 key，不能把不可放入 Bundle 的领域对象交给 SaveableStateHolder。
 
+正式空间入口位于聊天顶部、抽屉和设置页，统一导航到 `Screen.Enterprise`。`EnterprisePage` / `EnterpriseVM` 只经 `EnterpriseApplicationService` 查询身份、状态与当前空间，以及执行接入、同步、切换和退出；具体授权及关闭屏障见 [Android 配置架构](android-configuration-architecture.md)。退出确认保存原请求，Portal 展示保存一次打开的独立身份；后台或离页会取消打开任务并关闭原宿主，未交接实例由创建方清理。切换或退出后经不携带通知 ID 的 `Screen.Startup()` 重新获取本域会话请求，不能重放 Activity 初始通知。接入凭据、RealmSelection 和 WebView 不保存进导航或 Activity saved state。
+
 ### 技术栈
 
 | 层面 | 技术 |

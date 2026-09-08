@@ -1,5 +1,8 @@
 package net.weero.measix.pilot.service
 
+import net.weero.measix.pilot.data.enterprise.selectPersonalFixture
+import net.weero.measix.pilot.data.enterprise.selectEnterpriseFixture
+
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.mockk
@@ -148,11 +151,11 @@ class ConversationPageAccessTest {
         }
         runCurrent()
         assertEquals("private", latest)
-        sessions.switchToPersonal()
+        sessions.selectPersonalFixture()
         runCurrent()
         assertEquals("", latest)
         assertEquals(1, closes)
-        sessions.switchToEnterprise()
+        sessions.selectEnterpriseFixture()
         rows.value = "late"
         runCurrent()
         assertEquals("", latest)
@@ -168,7 +171,7 @@ class ConversationPageAccessTest {
         val published = kotlinx.coroutines.CompletableDeferred<Unit>()
         backgroundScope.launch {
             query(sessions).observeForView(lease, "") {
-                flow { sessions.switchToPersonal(); emit("must not publish") }
+                flow { sessions.selectPersonalFixture(); emit("must not publish") }
             }.collect { values.add(it); published.complete(Unit) }
         }
         published.await()
@@ -183,8 +186,8 @@ class ConversationPageAccessTest {
         sessions.enrollFixture(exampleEnterprisePackage())
         val access = sessions.captureSelectedRealmAccess()
         val lease = ConversationViewLease(Uuid.random(), access, sessions.selectionRevision.value) {}
-        sessions.switchToPersonal()
-        sessions.switchToEnterprise()
+        sessions.selectPersonalFixture()
+        sessions.selectEnterpriseFixture()
         assertEquals(access, sessions.captureSelectedRealmAccess())
         var subscribed = false
         assertEquals("", query(sessions).observeForView(lease, "") {

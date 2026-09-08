@@ -36,6 +36,7 @@
 | commit-then-publish 与命令锁 | `ConversationCommandCoordinatorTest` |
 | active Turn session 与 live phase | `ConversationRuntimeTest` |
 | 辅助生成任务、原 Session 与摘要取消 | `AuxiliaryGenerationOwnershipTest` 使用实际生成与应用服务、延迟 Provider 验证取消等待、旧 Session、切域、手动标题、摘要原树校验和提交后取消；`ConversationRepositoryTreeIntegrationTest` 在真实 Room 注入 Child 删除失败，验证整个摘要树事务回滚及重试 |
+| 原生切域与 Portal 清理 | `EnterpriseApplicationServiceTest` 用真实 Session/store 和可控宿主回执验证发布屏障、进度与原选择/目标 Session；`PortalDocumentTest` 验证原请求、宿主超时及重开准入；`PortalWebViewAndroidTest` 验证系统 Cookie/站点存储清理和真实网页消息，`EnterprisePageAndroidTest` 验证原生页面接线与后台交接取消 |
 | streaming overlay | `TurnStreamProjectionTest` |
 | Turn 多 Step 循环 | `TurnRunnerTest` |
 | 单 Step request + tool batch | `StepRunnerTest` |

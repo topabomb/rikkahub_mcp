@@ -8,6 +8,7 @@ import kotlinx.coroutines.*
 import kotlinx.serialization.json.*
 import net.weero.measix.pilot.data.enterprise.*
 import net.weero.measix.pilot.service.EnterpriseSynchronizationService
+import kotlin.coroutines.EmptyCoroutineContext
 
 internal enum class PortalCloseReason { USER_REQUEST, HOST_DISPOSED, DOCUMENT_REPLACED, DOCUMENT_EXPIRED, AUTHORIZATION_REVOKED, HOST_FAILURE }
 internal data class PortalClosure(val documentId: String, val reason: PortalCloseReason)
@@ -21,13 +22,13 @@ internal class PortalDocument private constructor(
     private val synchronization: EnterpriseSynchronizationService,
     parentScope: CoroutineScope,
     private val nowMillis: () -> Long,
-    private val closeHost: () -> Unit,
+    private val closeHost: () -> Deferred<Unit>,
     private val onClosed: (PortalClosure) -> Unit,
 ) : AutoCloseable {
     private val lifetime = SupervisorJob(parentScope.coroutineContext[Job])
     private val scope = CoroutineScope(parentScope.coroutineContext + lifetime + Dispatchers.Main.immediate)
     private var closed = false
-    private var closeFailure: Exception? = null
+    private var hostClosing: Deferred<Unit>? = null
     private var closure: PortalClosure? = null
     @Volatile private var hostClosed = false
     private var notified = false
@@ -37,6 +38,7 @@ internal class PortalDocument private constructor(
     private var lastFeedRefresh: Long? = null
     val bootstrap: String get() = PortalProtocol.bootstrap(id)
     val isClosed: Boolean get() = closed
+    internal val isHostClosed: Boolean get() = hostClosed
 
     init {
         lifetime.invokeOnCompletion { completeClosure() }
@@ -212,29 +214,28 @@ internal class PortalDocument private constructor(
             requests.clear()
             seen.clear()
             lastFeedRefresh = null
-        }
-        try {
-            if (!hostClosed) {
-                closeHost()
-                closeFailure = null
-                hostClosed = true
-            }
-        } catch (cancelled: CancellationException) {
-            closeFailure = cancelled
-            throw cancelled
-        } catch (failure: Exception) {
-            closeFailure = failure
-        } finally {
             lifetime.cancel()
-            completeClosure()
         }
-        if (hostClosed && !notified) {
-            notified = true
-            try { onClosed(requireNotNull(closure)) }
-            catch (cancelled: CancellationException) { throw cancelled }
-            catch (failure: Exception) {
-                android.util.Log.e("PortalDocument", "Portal close notification failed", failure)
+        if (hostClosed || hostClosing?.isActive == true) return
+        val attempt = try { closeHost() }
+        catch (cancelled: CancellationException) { throw cancelled }
+        catch (failure: Exception) { CompletableDeferred<Unit>().apply { completeExceptionally(failure) } }
+        hostClosing = attempt
+        attempt.invokeOnCompletion { failure ->
+            val completed = Runnable {
+                if (hostClosing !== attempt || failure != null) return@Runnable
+                hostClosed = true
+                completeClosure()
+                if (!notified) {
+                    notified = true
+                    try { onClosed(requireNotNull(closure)) }
+                    catch (cancelled: CancellationException) { throw cancelled }
+                    catch (error: Exception) { android.util.Log.e("PortalDocument", "Portal close notification failed", error) }
+                }
             }
+            val main = Dispatchers.Main.immediate
+            if (main.isDispatchNeeded(EmptyCoroutineContext)) main.dispatch(EmptyCoroutineContext, completed)
+            else completed.run()
         }
     }
 
@@ -242,10 +243,17 @@ internal class PortalDocument private constructor(
         if (hostClosed && lifetime.isCompleted) completion.complete(Unit)
     }
 
+    /** Host completion has no dependency on Session admission, so it may precede a selection commit. */
+    suspend fun awaitHostClosed() {
+        val pending = withContext(Dispatchers.Main.immediate) { requireNotNull(hostClosing) }
+        // System browsing-data deletion cannot be cancelled. A timeout only ends this wait.
+        if (withTimeoutOrNull(10_000) { pending.await(); true } != true) throw PortalFailure("timeout")
+    }
+
     /** Called by an external lifecycle owner, never by a request belonging to this document. */
     suspend fun awaitClosed() {
         lifetime.join()
-        closeFailure?.let { throw it }
+        awaitHostClosed()
         completion.await()
     }
 
@@ -260,17 +268,19 @@ internal class PortalDocument private constructor(
             scope: CoroutineScope,
             registry: PortalDocumentRegistry,
             nowMillis: () -> Long = System::currentTimeMillis,
-            closeHost: () -> Unit = {},
+            closeHost: () -> Deferred<Unit> = { CompletableDeferred(Unit) },
             onClosed: (PortalClosure) -> Unit,
         ): PortalDocument {
             var created: PortalDocument? = null
             try {
                 return withContext(Dispatchers.Main.immediate) {
+                    registry.awaitHostAvailable()
                     val state = sessions.portalState(selection)
                     val session = requireNotNull(state.manifest.session)
                     if (!session.identity.authority.isLocal) throw PortalFailure("source_forbidden")
                     val id = Base64.getUrlEncoder().withoutPadding().encodeToString(ByteArray(32).also { SecureRandom().nextBytes(it) })
                     sessions.withSelectedRealmSelection(selection) {
+                        registry.requireHostAvailable()
                         PortalDocument(id, selection, minOf(session.expiresAtMillis, nowMillis() + 600_000),
                             sessions, synchronization, scope, nowMillis, closeHost, onClosed).also {
                             created = it

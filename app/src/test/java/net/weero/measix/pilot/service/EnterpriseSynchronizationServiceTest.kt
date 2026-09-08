@@ -44,7 +44,7 @@ class EnterpriseSynchronizationServiceTest {
             }
             assertEquals(changed, source(h.sessions, h.sourceRoot).candidate(packet().identity.scope))
             val access = access(first)
-            h.sessions.switchToPersonal()
+            h.sessions.selectPersonalFixture()
             now += 1000
             val synchronized = h.sync.synchronize(access)
             assertEquals(changed.packet.configuration, synchronized.configuration)

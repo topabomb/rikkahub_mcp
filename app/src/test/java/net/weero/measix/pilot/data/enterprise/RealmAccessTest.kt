@@ -28,7 +28,7 @@ class RealmAccessTest {
         val allowed = mutableListOf<Boolean>()
         backgroundScope.launch(kotlinx.coroutines.Dispatchers.Unconfined) { controller.observeRealmAccess(access).collect { allowed += it } }
         runCurrent()
-        controller.switchToPersonal()
+        controller.selectPersonalFixture()
         controller.setOffline(true)
         assertEquals("original", controller.withRealmAccess(access) { "original" })
         controller.finishExit(controller.beginExit(requireNotNull(controller.captureExitRequest())))

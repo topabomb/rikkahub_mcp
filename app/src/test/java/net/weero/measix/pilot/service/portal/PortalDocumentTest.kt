@@ -84,8 +84,8 @@ class PortalDocumentTest {
             doc.receive(raw, PortalProtocol.LOCAL_ORIGIN, true) { replies++ }!!.join()
             assertEquals(1, replies)
             assertNull(doc.receive(raw, PortalProtocol.LOCAL_ORIGIN, true) { replies++ })
-            h.sessions.switchToPersonal()
-            h.sessions.switchToEnterprise()
+            h.sessions.selectPersonalFixture()
+            h.sessions.selectEnterpriseFixture()
             doc.receive(h.raw(doc, "getStatus"), PortalProtocol.LOCAL_ORIGIN, true) { replies++ }?.join()
             assertEquals(1, replies)
             assertTrue(doc.isClosed)
@@ -148,8 +148,9 @@ class PortalDocumentTest {
         val request = doc.receive(h.raw(doc, "refresh"), PortalProtocol.LOCAL_ORIGIN, true) { oldReplies++ }!!
         try {
             started.await()
-            h.sessions.switchToPersonal()
-            h.sessions.switchToEnterprise()
+            h.sessions.selectPersonalFixture()
+            h.sessions.selectEnterpriseFixture()
+            doc.close(PortalCloseReason.AUTHORIZATION_REVOKED)
             val replacement = h.open()
             try {
                 val response = h.call(replacement, "getStatus")
@@ -211,16 +212,11 @@ class PortalDocumentTest {
     }
 
     @Test
-    fun `registry drains every document and retries host failure without treating UI notification as cleanup`() = runBlocking<Unit>(Dispatchers.Main) {
+    fun `registry retains failed host cleanup and waits for its original requests before retry`() = runBlocking<Unit>(Dispatchers.Main) {
         val h = harness(this)
         val expected = java.io.IOException("Host teardown failed")
         var failHost = true
         var notifications = 0
-        val secondClosed = CompletableDeferred<Unit>()
-        val first = h.open(closeHost = { if (failHost) throw expected }) {
-            notifications++
-            throw IllegalStateException("Navigation no longer present")
-        }
         val entered = CompletableDeferred<Unit>()
         val release = CompletableDeferred<Unit>()
         val delayed = mockk<EnterpriseSynchronizationService>()
@@ -229,8 +225,11 @@ class PortalDocumentTest {
             withContext(NonCancellable) { release.await() }
             h.sessions.state.value as EnterpriseState.Available
         }
-        val second = h.open(delayed, closeHost = { secondClosed.complete(Unit) })
-        second.receive(h.raw(second, "refresh"), PortalProtocol.LOCAL_ORIGIN, true) { fail("Closed document replied") }
+        val doc = h.open(delayed, closeHost = { if (failHost) throw expected }) {
+            notifications++
+            throw IllegalStateException("Navigation no longer present")
+        }
+        doc.receive(h.raw(doc, "refresh"), PortalProtocol.LOCAL_ORIGIN, true) { fail("Closed document replied") }
         try {
             entered.await()
             val token = h.sessions.beginExit(requireNotNull(h.sessions.captureExitRequest()))
@@ -238,13 +237,12 @@ class PortalDocumentTest {
                 try { h.registry.closeAndAwait(token.access, PortalCloseReason.AUTHORIZATION_REVOKED); null }
                 catch (error: java.io.IOException) { error }
             }
-            secondClosed.await()
-            assertTrue(first.isClosed)
-            assertTrue(second.isClosed)
-            assertFalse("The first failure must not skip the second owner's cleanup", pending.isCompleted)
+            yield()
+            assertTrue(doc.isClosed)
+            assertFalse("A host failure must not skip the original request cleanup", pending.isCompleted)
             assertEquals(0, notifications)
             release.complete(Unit)
-            assertSame(expected, pending.await())
+            assertSame(expected, generateSequence<Throwable>(pending.await()) { it.cause }.last())
             failHost = false
             h.registry.closeAndAwait(token.access, PortalCloseReason.AUTHORIZATION_REVOKED)
             assertEquals(1, notifications)
@@ -254,9 +252,49 @@ class PortalDocumentTest {
         } finally {
             failHost = false
             release.complete(Unit)
-            first.close(); second.close()
-            first.awaitClosed(); second.awaitClosed()
+            doc.close()
+            doc.awaitClosed()
         }
+    }
+
+    @Test
+    fun `host wait timeout and cancellation retain the original cleanup and prevent premature reopening`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val h = harness(backgroundScope)
+        val selection = requireNotNull(h.sessions.observeSelectedRealmSelection().first())
+        val deletion = CompletableDeferred<Unit>()
+        var deletions = 0
+        val doc = PortalDocument.open(selection, h.sessions, h.sync, backgroundScope, h.registry, { now },
+            closeHost = { deletions++; deletion }) {}
+        try {
+            doc.close()
+            val timeout = async {
+                try { doc.awaitHostClosed(); null } catch (error: PortalFailure) { error }
+            }
+            runCurrent()
+            advanceTimeBy(10_000)
+            runCurrent()
+            assertNotNull(timeout.await())
+            assertTrue(deletion.isActive)
+            doc.close()
+            assertEquals(1, deletions)
+            val cancelledOpen = launch { h.open() }
+            runCurrent()
+            assertFalse(cancelledOpen.isCompleted)
+            cancelledOpen.cancelAndJoin()
+            assertTrue(deletion.isActive)
+            val next = async { h.open() }
+            runCurrent()
+            assertFalse(next.isCompleted)
+            deletion.complete(Unit)
+            runCurrent()
+            val replacement = next.await()
+            assertNotEquals(doc.id, replacement.id)
+            assertEquals(1, deletions)
+            doc.awaitClosed()
+            replacement.close()
+            replacement.awaitClosed()
+        } finally { deletion.complete(Unit); doc.close(); doc.awaitClosed() }
     }
 
     @Test
@@ -299,6 +337,7 @@ class PortalDocumentTest {
                 PortalDocument.open(selection, h.sessions, h.sync, independent, h.registry, { now }, closeHost = {
                     cleanupAttempts++
                     if (cleanupAttempts == 1) throw cleanupFailure
+                    CompletableDeferred(Unit)
                 }) { closed = true }
                 delivered = true
             } catch (error: Exception) { observedFailure = error; throw error }
@@ -315,7 +354,7 @@ class PortalDocumentTest {
             assertTrue(observedFailure is CancellationException)
             val suppressed = requireNotNull(observedFailure).suppressed.single()
             assertSame(cleanupFailure, generateSequence(suppressed) { it.cause }.last())
-            h.sessions.switchToPersonal()
+            h.sessions.selectPersonalFixture()
             h.registry.closeAndAwait(selection.access as RealmAccess.Enterprise, PortalCloseReason.AUTHORIZATION_REVOKED)
             assertTrue(closed)
             assertEquals(2, cleanupAttempts)
@@ -369,7 +408,7 @@ class PortalDocumentTest {
         suspend fun open(synchronization: EnterpriseSynchronizationService = sync,
             closeHost: () -> Unit = {}, onClosed: (PortalClosure) -> Unit = {}) =
             PortalDocument.open(requireNotNull(sessions.observeSelectedRealmSelection().first()), sessions, synchronization,
-                scope, registry, { now }, closeHost, onClosed)
+                scope, registry, { now }, { closeHost(); CompletableDeferred(Unit) }, onClosed)
         fun raw(doc: PortalDocument, method: String, params: JsonObject = buildJsonObject {}, requestId: String = "r${nextRequest++}") =
             buildJsonObject { put("bridgeVersion", 3); put("documentId", doc.id); put("requestId", requestId); put("method", method); put("params", params) }.toString()
         suspend fun call(doc: PortalDocument, method: String, params: JsonObject = buildJsonObject {}): JsonObject {

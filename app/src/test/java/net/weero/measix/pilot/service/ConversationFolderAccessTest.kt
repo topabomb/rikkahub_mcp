@@ -72,8 +72,8 @@ class ConversationFolderAccessTest {
             f.application.createFolder(old, "original")
             val id = Uuid.parse(f.folders.value.single().id)
             val conversation = f.addConversation(old.selection.access.scope)
-            f.sessions.switchToPersonal()
-            f.sessions.switchToEnterprise()
+            f.sessions.selectPersonalFixture()
+            f.sessions.selectEnterpriseFixture()
             suspend fun rejectsAll() {
                 rejects<EnterpriseConfigurationException> { f.application.createFolder(old, "new") }
                 rejects<EnterpriseConfigurationException> { f.application.renameFolder(old, id, "changed") }
@@ -156,7 +156,7 @@ class ConversationFolderAccessTest {
             val rename = launch { f.application.renameFolder(access, id, "held") }
             entered.await()
             var switched = false
-            val switch = launch { f.sessions.switchToPersonal(); switched = true }
+            val switch = launch { f.sessions.selectPersonalFixture(); switched = true }
             runCurrent()
             assertFalse(switched)
             release.complete(Unit)
@@ -173,8 +173,8 @@ class ConversationFolderAccessTest {
             val job = backgroundScope.launch { f.query.foldersOfAssistant(DEFAULT_ASSISTANT_ID).collect { latest = it } }
             runCurrent()
             val original = requireNotNull(latest).access
-            f.sessions.switchToPersonal()
-            f.sessions.switchToEnterprise()
+            f.sessions.selectPersonalFixture()
+            f.sessions.selectEnterpriseFixture()
             runCurrent()
             val newer = requireNotNull(latest).access
             assertNotEquals(original, newer)
@@ -191,8 +191,8 @@ class ConversationFolderAccessTest {
             val original = f.directory().access
             val id = f.addConversation(original.selection.access.scope)
             val row = f.summary(id, original)
-            f.sessions.switchToPersonal()
-            f.sessions.switchToEnterprise()
+            f.sessions.selectPersonalFixture()
+            f.sessions.selectEnterpriseFixture()
             val newer = f.directory().access
             rejects<IllegalStateException> { f.application.moveToFolder(newer, row, null) }
             coVerify(exactly = 0) { f.repository.getConversationHeader(any()) }

@@ -1,5 +1,8 @@
 package net.weero.measix.pilot.service
 
+import net.weero.measix.pilot.data.enterprise.selectPersonalFixture
+import net.weero.measix.pilot.data.enterprise.selectEnterpriseFixture
+
 import androidx.paging.AsyncPagingDataDiffer
 import androidx.paging.PagingSource
 import androidx.paging.PagingState
@@ -54,7 +57,7 @@ class ScopedConversationQueryTest {
         coEvery { repository.getRecentConversationRecords(access.scope, assistant, 10) } returns emptyList()
         coEvery { repository.searchMessagesOfAssistant(access.scope, assistant, "needle", MessageSearchSort.RELEVANCE) } returns emptyList()
         val tools = createConversationTools(service(repository, sessions), assistant, access)
-        sessions.switchToPersonal()
+        sessions.selectPersonalFixture()
         val arguments = buildJsonObject { put("query", "needle") }
         tools.forEach { it.execute(arguments) }
         coVerify(exactly = 1) { repository.getRecentConversationRecords(access.scope, assistant, 10) }
@@ -90,14 +93,14 @@ class ScopedConversationQueryTest {
         val job = backgroundScope.launch { service(repository, sessions).conversationsOfAssistant(assistant).collect { latest = it } }
         runCurrent()
         assertEquals(listOf("enterprise"), latest.map { it.title })
-        sessions.switchToPersonal()
+        sessions.selectPersonalFixture()
         runCurrent()
         assertEquals(listOf("personal"), latest.map { it.title })
         failEnterprise = true
-        sessions.switchToEnterprise()
+        sessions.selectEnterpriseFixture()
         runCurrent()
         assertTrue(latest.isEmpty())
-        sessions.switchToPersonal()
+        sessions.selectPersonalFixture()
         runCurrent()
         assertEquals(listOf("personal"), latest.map { it.title })
         job.cancel()
@@ -133,19 +136,19 @@ class ScopedConversationQueryTest {
         assertEquals(1, sources.size)
         val original = sources.single()
         assertEquals(listOf("enterprise"), differ.snapshot().items.map { it.title })
-        sessions.switchToPersonal()
+        sessions.selectPersonalFixture()
         runCurrent()
         assertTrue(original.invalid)
         assertEquals(listOf("personal"), differ.snapshot().items.map { it.title })
-        sessions.switchToEnterprise()
+        sessions.selectEnterpriseFixture()
         runCurrent()
         assertTrue(original.invalid)
         assertEquals(3, sources.size)
         assertEquals(listOf("enterprise"), differ.snapshot().items.map { it.title })
         val oldRow = differ.snapshot().items.single()
         val oldSource = sources.last()
-        sessions.switchToPersonal()
-        sessions.switchToEnterprise()
+        sessions.selectPersonalFixture()
+        sessions.selectEnterpriseFixture()
         runCurrent()
         assertTrue(oldSource.invalid)
         assertTrue(sources.dropLast(1).all { it.invalid })

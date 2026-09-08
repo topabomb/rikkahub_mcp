@@ -117,6 +117,9 @@ fun SettingPage(vm: SettingVM = koinViewModel()) {
             contentPadding = innerPadding + PaddingValues(8.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
+            item("enterpriseSpace") {
+                net.weero.measix.pilot.ui.pages.enterprise.EnterpriseSpaceButton()
+            }
             if (effectiveSettings.managedState != ManagedConfigurationState.ABSENT) {
                 item("managedConfiguration") {
                     CardGroup(

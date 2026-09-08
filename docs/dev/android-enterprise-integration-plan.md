@@ -422,7 +422,9 @@ Portal 关闭屏障已接入企业退出：文档在原 Session 授权锁内登�
 
 本批最终完整门禁通过，App 1,993 项测试无失败/跳过，lint 0 错误；Workspace 保留 11 项 Windows 环境跳过。Pixel_10_Pro_Fold / Android 17 上 3 项实际 Portal WebView 与 4 项企业持久化设备测试全部通过，包含关闭通知在旧 view 脱离后发出、迟到回复隔离和当前格式重开。一次 Debug 增量打包属性缺失在重试后恢复，随后完整门禁重新通过。汇总与原始日志见 `build/reports/enterprise/portal-lifecycle-verification.json`。正式空间 UI、Portal logout、媒体与运行资源 adapters 继续实施，不以本批结果代替 E02/E06/E10/E12 或 0.0.20 整期验收。
 
-正式切域接线前还需补齐发布前关闭屏障：冻结原 RealmSelection 与目标 Session，Session 锁内阻止旧文档新准入，确认宿主及浏览状态清理后才提交新空间；原请求在锁外等待。当前 CookieManager 清除请求未等待完成回调，现有 7 项设备证据不包含该确认，不据此宣称 E07/E10 全部完成。关闭或写盘失败保持原空间，已撤销文档不复活；切域不退出登录、不停止原域生成。
+正式切域已使用发布前关闭屏障：冻结原 RealmSelection 与目标 Session，Session 锁内阻止旧文档新准入，确认宿主及浏览状态清理后才提交新空间；原请求在锁外等待。WebStorageCompat.deleteBrowsingDataForSite 的系统回调确认 Cookie、缓存及站点存储清理，超时只结束等待，重试复用同一不可取消的系统操作。Registry 阻止旧清理完成前打开新宿主。关闭或写盘失败保持原空间，已撤销文档不复活；切域不退出登录、不停止原域生成。此前 7 项设备证据仍只属于原关闭阶段，新增清理确认与入口证据另行记录。
+
+正式原生入口已接入聊天顶部、抽屉和设置页。EnterprisePage 经 EnterpriseApplicationService 提供示例体验、扫码、粘贴、示例码、状态、同步、Portal、空间切换和原 Session 退出确认；返回聊天重新取得本域访问请求。页面退到后台会取消尚未交接的 Portal 打开，旧回调不改新页面。配置损坏时仍可通过原生入口验证 manifest 并发起退出。本阶段 App 1,998 项 JVM 测试通过，Debug/Release 构建及 lint 无错误。Pixel_10_Pro_Fold / Android 17 的 13 项设备测试通过：4 项真实 Portal WebView、5 项原生页面与生命周期、4 项企业持久化。新增设备覆盖实际 Cookie（含私有路径 HttpOnly）与 localStorage 清理、保留无关站点、停止页面后迟到宿主清理、原退出请求和显示名称冻结。另在实际 Debug 安装包手动走通聊天入口 → 一键示例 → Portal 状态/动态 → 关闭工作台 → 切个人 → 原生确认退出 → 未登录；这条路径使用实际 Koin 和本地来源。扫码摄像头、Release 设备路径、Portal logout、媒体、配置规则 UI、完整资源适配和 0.0.20 整体验收继续实施。版本仍为 0.0.19 开发基线；日志、设备证据与完整门禁记录见 build/reports/enterprise/realm-entry-verification.json。
 
 | 编号 | 变更 owner / 文件范围 | 完成要求 |
 | --- | --- | --- |

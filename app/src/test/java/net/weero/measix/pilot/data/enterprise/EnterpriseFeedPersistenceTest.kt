@@ -49,7 +49,7 @@ class EnterpriseFeedPersistenceTest {
         val nextAccess = reopened.captureRealmAccess(packet.identity.scope) as RealmAccess.Enterprise
         assertTrue(reopened.listFeed(RealmSelection(nextAccess, reopened.selectionRevision.value), EnterpriseFeedQuery()).body.items.isEmpty())
         assertEquals(changed.manifest.feeds, reopened.available().manifest.feeds)
-        reopened.switchToPersonal()
+        reopened.selectPersonalFixture()
         expectReason("enterprise_data_access_unavailable") { reopened.listFeed(RealmSelection(nextAccess, reopened.selectionRevision.value), EnterpriseFeedQuery()) }
     }
 

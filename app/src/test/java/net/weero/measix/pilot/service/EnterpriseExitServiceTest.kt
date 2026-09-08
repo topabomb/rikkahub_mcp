@@ -35,7 +35,7 @@ class EnterpriseExitServiceTest {
     @Test fun `accepted exit survives caller cancellation and duplicate requests share cleanup`() = runTest {
         fixture { f ->
             f.sessions.enrollFixture(exampleEnterprisePackage())
-            f.sessions.switchToPersonal()
+            f.sessions.selectPersonalFixture()
             val request = requireNotNull(f.service.captureRequest())
             val entered = CompletableDeferred<Unit>()
             val release = CompletableDeferred<Unit>()
@@ -74,7 +74,7 @@ class EnterpriseExitServiceTest {
     @Test fun `expiry closes original enterprise even while personal space is selected`() = runTest {
         fixture(virtualTime = true) { f ->
             f.sessions.enrollFixture(exampleEnterprisePackage())
-            f.sessions.switchToPersonal()
+            f.sessions.selectPersonalFixture()
             val session = requireNotNull(f.manifest.session)
             val entered = CompletableDeferred<Unit>()
             val release = CompletableDeferred<Unit>()

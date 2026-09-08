@@ -213,6 +213,7 @@ fun ChatDrawerContent(
                 .padding(horizontal = 8.dp),
             verticalArrangement = Arrangement.spacedBy(2.dp),
         ) {
+            net.weero.measix.pilot.ui.pages.enterprise.EnterpriseSpaceButton()
             // 用户头像和昵称自定义区域
             Row(
                 modifier = Modifier

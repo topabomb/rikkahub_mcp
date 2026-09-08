@@ -1405,6 +1405,7 @@ private fun TopBar(
             }
         },
         actions = {
+            net.weero.measix.pilot.ui.pages.enterprise.EnterpriseSpaceButton(Modifier.widthIn(max = 120.dp))
             IconButton(
                 onClick = {
                     onClickMenu()

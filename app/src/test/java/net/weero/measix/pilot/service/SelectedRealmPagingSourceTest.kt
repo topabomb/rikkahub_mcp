@@ -1,5 +1,8 @@
 package net.weero.measix.pilot.service
 
+import net.weero.measix.pilot.data.enterprise.selectPersonalFixture
+import net.weero.measix.pilot.data.enterprise.selectEnterpriseFixture
+
 import androidx.paging.PagingSource
 import androidx.paging.PagingState
 import kotlinx.coroutines.flow.first
@@ -31,10 +34,10 @@ class SelectedRealmPagingSourceTest {
         val delegate = Source()
         val page = SelectedRealmPagingSource(delegate, sessions, access)
         assertTrue(page.load(params) is PagingSource.LoadResult.Page)
-        sessions.switchToPersonal()
+        sessions.selectPersonalFixture()
         assertTrue(page.load(params) is PagingSource.LoadResult.Error)
         assertEquals(1, delegate.loads)
-        sessions.switchToEnterprise()
+        sessions.selectEnterpriseFixture()
         assertTrue(page.load(params) is PagingSource.LoadResult.Error)
         assertEquals(1, delegate.loads)
         sessions.finishExit(sessions.beginExit(requireNotNull(sessions.captureExitRequest())))

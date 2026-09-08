@@ -44,8 +44,8 @@ class ConversationCommandAccessTest {
     @Test fun `old page commands reject a conflated selection round trip before reading or writing data`() = runTest {
         fixture { f ->
             val target = f.page.commandTarget
-            f.sessions.switchToPersonal()
-            f.sessions.switchToEnterprise()
+            f.sessions.selectPersonalFixture()
+            f.sessions.selectEnterpriseFixture()
             val commands: List<suspend () -> Unit> = listOf(
                 { f.application.updateTitle(target, "changed") },
                 { f.application.generateTitle(target, true) },
@@ -156,7 +156,7 @@ class ConversationCommandAccessTest {
             f.runtime.installTurnWorker(Uuid.random(), worker)
             val stop = launch { f.application.stopGeneration(f.page.commandTarget) }
             entered.await()
-            f.sessions.switchToPersonal()
+            f.sessions.selectPersonalFixture()
             stop.cancel()
             runCurrent()
             assertFalse(stop.isCompleted)
@@ -178,7 +178,7 @@ class ConversationCommandAccessTest {
             f.runtime.installTurnWorker(Uuid.random(), worker)
             val deleting = async { rejects<EnterpriseConfigurationException> { f.application.delete(f.page.commandTarget) } }
             entered.await()
-            f.sessions.switchToPersonal()
+            f.sessions.selectPersonalFixture()
             release.complete(Unit)
             deleting.await()
             assertTrue(f.rows.containsKey(f.rootId))
@@ -309,8 +309,8 @@ class ConversationCommandAccessTest {
         fixture { f ->
             val target = f.page.commandTarget
             val answer = f.runGate.registerPendingInteraction(f.rootId, target.selection.access, "run", "ask", Job())
-            f.sessions.switchToPersonal()
-            f.sessions.switchToEnterprise()
+            f.sessions.selectPersonalFixture()
+            f.sessions.selectEnterpriseFixture()
             rejects<EnterpriseConfigurationException> { f.application.answerSubAssistant(target, "run", "ask", "old page") }
             val selected = f.sessions.observeSelectedRealmSelection().first { it != null }!!
             val reopened = ConversationViewLease(f.rootId, selected.access, selected.revision) {}
@@ -346,8 +346,8 @@ class ConversationCommandAccessTest {
     @Test fun `start rejects old selection and closed page before installing any worker`() = runTest {
         fixture { f ->
             val target = f.page.commandTarget
-            f.sessions.switchToPersonal()
-            f.sessions.switchToEnterprise()
+            f.sessions.selectPersonalFixture()
+            f.sessions.selectEnterpriseFixture()
             rejects<EnterpriseConfigurationException> { f.turns.sendMessage(target, listOf(UIMessagePart.Text("late")), false) }
             assertNull(f.runtime.currentWorker())
             coVerify(exactly = 0) { f.repository.commit(any()) }
@@ -363,7 +363,7 @@ class ConversationCommandAccessTest {
         fixture { f ->
             val receipt = requireNotNull(f.turns.sendMessage(f.page.commandTarget, listOf(UIMessagePart.Text("accepted")), false))
             f.page.close()
-            f.sessions.switchToPersonal()
+            f.sessions.selectPersonalFixture()
             runCurrent()
             assertEquals(receipt.userMessageId, f.runtime.durable.currentMessages().last().id)
             assertEquals("accepted", f.runtime.durable.currentMessages().last().toText())
@@ -558,7 +558,7 @@ class ConversationCommandAccessTest {
             runCurrent()
             assertTrue(f.errors.errors.value.toString(), f.errors.errors.value.isEmpty())
             assertTrue(f.runtime.isAwaitingUser(receipt.turnId))
-            f.sessions.switchToPersonal(); f.sessions.switchToEnterprise()
+            f.sessions.selectPersonalFixture(); f.sessions.selectEnterpriseFixture()
             val selected = f.sessions.observeSelectedRealmSelection().first { it != null }!!
             val reopened = ConversationViewLease(f.rootId, selected.access, selected.revision) {}
             try {

@@ -74,7 +74,7 @@ class AuxiliaryGenerationOwnershipTest {
             val title = f.effects.launchTitle(f.runtime, f.page.access, true)
             f.started.await()
             f.application.updateTitle(f.page.commandTarget, "manual")
-            f.sessions.switchToPersonal()
+            f.sessions.selectPersonalFixture()
             f.reply.complete("generated")
             title.await()
             assertEquals("manual", f.runtime.durable.header.title)
@@ -82,7 +82,7 @@ class AuxiliaryGenerationOwnershipTest {
         fixture { f ->
             val title = f.effects.launchTitle(f.runtime, f.page.access, true)
             f.started.await()
-            f.sessions.switchToPersonal()
+            f.sessions.selectPersonalFixture()
             f.reply.complete("generated")
             title.await()
             assertEquals("generated", f.runtime.durable.header.title)

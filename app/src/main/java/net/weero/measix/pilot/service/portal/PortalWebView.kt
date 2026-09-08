@@ -10,6 +10,8 @@ import java.io.ByteArrayInputStream
 import java.security.MessageDigest
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.*
@@ -159,24 +161,15 @@ internal class PortalWebView private constructor(
             { view.stopLoading() },
             { WebViewCompat.removeWebMessageListener(view, "MeasixHost") },
             { view.clearHistory() },
-            { view.clearCache(true) },
             { (view.parent as? android.view.ViewGroup)?.removeView(view) },
         )
     }
-    private val browserTeardown by lazy {
-        mutableListOf<() -> Unit>(
-            { WebStorage.getInstance().deleteOrigin(PortalProtocol.LOCAL_ORIGIN) },
-            { clearCookies() },
-        )
-    }
+    private var browserCleanup: CompletableDeferred<Unit>? = null
     private var destroyed = false
 
-    private fun destroy() {
+    private fun destroy(): Deferred<Unit> {
         active.set(false)
         var failure = attemptTeardown(viewTeardown)
-        attemptTeardown(browserTeardown)?.let { error ->
-            if (failure == null) failure = error else if (error !== failure) failure?.addSuppressed(error)
-        }
         // WebView methods cannot be retried after destroy, which also requires a detached view.
         if (viewTeardown.isEmpty() && !destroyed) {
             try { view.destroy(); destroyed = true }
@@ -186,6 +179,17 @@ internal class PortalWebView private constructor(
             }
         }
         failure?.let { throw it }
+        return browserCleanup?.takeUnless { it.isCancelled } ?: CompletableDeferred<Unit>().also { pending ->
+            browserCleanup = pending
+            try {
+                WebStorageCompat.deleteBrowsingDataForSite(WebStorage.getInstance(), PortalProtocol.LOCAL_ORIGIN) {
+                    pending.complete(Unit)
+                }
+            } catch (error: Exception) {
+                pending.completeExceptionally(error)
+                if (error is kotlinx.coroutines.CancellationException) throw error
+            }
+        }
     }
 
     private fun attemptTeardown(steps: MutableList<() -> Unit>): Exception? {
@@ -201,21 +205,9 @@ internal class PortalWebView private constructor(
         return failure
     }
 
-    private fun clearCookies() {
-        val cookies = CookieManager.getInstance()
-        cookies.getCookie(PortalProtocol.LOCAL_ENTRY)?.split(';')?.forEach { cookie ->
-            val name = cookie.substringBefore('=').trim()
-            if (name.matches(Regex("[A-Za-z0-9_!#$%&'*+.^`|~-]+"))) {
-                listOf("/", "/portal", "/portal/").forEach { path ->
-                    cookies.setCookie(PortalProtocol.LOCAL_ENTRY, "$name=; Max-Age=0; Path=$path; Secure")
-                }
-            }
-        }
-    }
-
     companion object {
         fun supported(): Boolean = listOf(WebViewFeature.WEB_MESSAGE_LISTENER, WebViewFeature.DOCUMENT_START_SCRIPT,
-            WebViewFeature.NAVIGATION_LISTENER).all(WebViewFeature::isFeatureSupported)
+            WebViewFeature.NAVIGATION_LISTENER, WebViewFeature.DELETE_BROWSING_DATA).all(WebViewFeature::isFeatureSupported)
 
         suspend fun open(context: Context, selection: RealmSelection, sessions: EnterpriseSessionController,
             synchronization: EnterpriseSynchronizationService, scope: CoroutineScope,
@@ -225,15 +217,20 @@ internal class PortalWebView private constructor(
             val assets = PortalAssets.load(context)
             var host: PortalWebView? = null
             val document = PortalDocument.open(selection, sessions, synchronization, scope, registry,
-                closeHost = { host?.destroy() }, onClosed = onClosed)
+                closeHost = { host?.destroy() ?: CompletableDeferred(Unit) }, onClosed = onClosed)
             try {
+                if (document.isClosed) throw kotlinx.coroutines.CancellationException("Portal document unavailable")
                 return PortalWebView(WebView(context), document, assets).also {
                     host = it
-                    if (document.isClosed) throw kotlinx.coroutines.CancellationException("Portal document unavailable")
                     it.load()
                 }
             } catch (failure: Exception) {
-                try { document.close(); host?.destroy() }
+                try {
+                    withContext(kotlinx.coroutines.NonCancellable + Dispatchers.Main.immediate) {
+                        document.close()
+                        document.awaitClosed()
+                    }
+                }
                 catch (cleanup: Exception) { if (cleanup !== failure) failure.addSuppressed(cleanup) }
                 throw failure
             }

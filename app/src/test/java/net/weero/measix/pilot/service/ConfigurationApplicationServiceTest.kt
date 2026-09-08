@@ -70,7 +70,7 @@ class ConfigurationApplicationServiceTest {
             val afterEdit = env.queries.observeCurrent().first()
             assertEquals("Renamed", afterEdit.assistants[env.assistant.id]!!.name)
             assertEquals(selected, afterEdit.assistantModel(env.assistant.id).reference)
-            env.sessions.switchToPersonal()
+            env.sessions.selectPersonalFixture()
             val personal = env.queries.observeCurrent().first()
             assertEquals(ConfigurationScope.Personal, personal.scope)
             assertEquals(env.model.id, personal.assistantModel(env.assistant.id).reference)
@@ -295,7 +295,7 @@ class ConfigurationApplicationServiceTest {
             assertEquals(original, JsonInstant.encodeToString(env.diskDocument()))
             assertNotEquals(env.model.id, env.queries.observeCurrent().first().selection(ResourceSelectionSlot.CHAT_MODEL).reference)
             env.intercept = null
-            env.sessions.switchToPersonal()
+            env.sessions.selectPersonalFixture()
             env.commands.selectResource(env.access, ResourceSelectionSlot.CHAT_MODEL, env.model.id)
             assertEquals(env.model.id, env.document().preferences.forScope(scope).chatModelId)
         } finally { env.scope.cancel() }

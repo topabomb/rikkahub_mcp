@@ -1,5 +1,7 @@
 package net.weero.measix.pilot.data.configuration
 
+import net.weero.measix.pilot.data.enterprise.selectPersonalFixture
+
 import android.content.Context
 import android.content.ContextWrapper
 import androidx.datastore.preferences.core.PreferenceDataStoreFactory
@@ -70,7 +72,7 @@ class ScopedConfigurationAndroidTest {
                 assertEquals(provider, document.configuration.providers.single { it.id == provider.id })
                 assertEquals(model.id, document.configuration.assistants.single { it.id == assistant.id }.chatModelId)
                 assertFalse(document.configuration.assistants.any { it.id is me.rerere.common.configuration.ConfigurationReference.Enterprise })
-                env.sessions.switchToPersonal()
+                env.sessions.selectPersonalFixture()
                 assertEquals(model.id, env.queries.observeCurrent().first().assistantModel(assistant.id).reference)
                 env.sessions.finishExit(env.sessions.beginExit(requireNotNull(env.sessions.captureExitRequest())))
             }

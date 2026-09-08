@@ -65,14 +65,14 @@ class EnterpriseSessionControllerTest {
         val controller = EnterpriseSessionController(EnterpriseAppliedStore(root))
         val pending = controller.enrollLocal(packet.identity, { packet.identity }, { null })
         assertEquals(EnterpriseSessionPhase.CONFIGURATION_PENDING, controller.available().manifest.phase)
-        expectReason("enterprise_session_not_ready") { controller.switchToEnterprise() }
+        expectReason("enterprise_session_not_ready") { controller.selectEnterpriseFixture() }
         controller.synchronize(RealmAccess.Enterprise(packet.identity.scope, pending.manifest.session!!.id), packet)
-        controller.switchToEnterprise()
+        controller.selectEnterpriseFixture()
         val ready = controller.available()
-        controller.switchToPersonal()
+        controller.selectPersonalFixture()
         assertEquals(ConfigurationScope.Personal, controller.available().manifest.selectedScope)
         assertEquals(ready.manifest.session, controller.available().manifest.session)
-        controller.switchToEnterprise()
+        controller.selectEnterpriseFixture()
         assertEquals(ready, controller.available())
         val recovered = EnterpriseSessionController(EnterpriseAppliedStore(root))
         assertEquals(ready, recovered.recover())
@@ -163,11 +163,11 @@ class EnterpriseSessionControllerTest {
         val expiry = controller.available().manifest.session!!.expiresAtMillis
         controller.setOffline(true)
         expectReason("enterprise_session_not_ready") { controller.captureBindings(packet.identity.scope) }
-        controller.switchToPersonal()
-        controller.switchToEnterprise()
+        controller.selectPersonalFixture()
+        controller.selectEnterpriseFixture()
         assertEquals(EnterpriseSessionPhase.OFFLINE, controller.available().manifest.phase)
         now = expiry
-        expectReason("enterprise_session_expired") { controller.switchToEnterprise() }
+        expectReason("enterprise_session_expired") { controller.selectEnterpriseFixture() }
         assertEquals(EnterpriseSessionPhase.CLOSING, controller.available().manifest.phase)
         assertEquals(EnterpriseExitReason.AUTHORIZATION_EXPIRED, controller.pendingExit()?.reason)
         assertEquals(ConfigurationScope.Personal, controller.available().manifest.selectedScope)
