@@ -324,6 +324,7 @@ internal fun mergeAssistantDelta(
         mcpServers = pickAssistantField(baseline.mcpServers, edited.mcpServers, current.mcpServers),
         localTools = pickAssistantField(baseline.localTools, edited.localTools, current.localTools),
         enableWebSearch = pickAssistantField(baseline.enableWebSearch, edited.enableWebSearch, current.enableWebSearch),
+        builtInSearch = pickAssistantField(baseline.builtInSearch, edited.builtInSearch, current.builtInSearch),
         workspaceId = pickAssistantField(baseline.workspaceId, edited.workspaceId, current.workspaceId),
         background = pickAssistantField(baseline.background, edited.background, current.background),
         backgroundOpacity = pickAssistantField(

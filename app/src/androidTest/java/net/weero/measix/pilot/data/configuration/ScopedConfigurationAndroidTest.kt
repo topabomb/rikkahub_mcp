@@ -14,6 +14,7 @@ import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import me.rerere.ai.provider.Model
+import me.rerere.ai.provider.BuiltInTools
 import me.rerere.ai.provider.ProviderSetting
 import net.weero.measix.pilot.AppScope
 import net.weero.measix.pilot.data.datastore.Settings
@@ -43,9 +44,9 @@ class ScopedConfigurationAndroidTest {
         val app = ApplicationProvider.getApplicationContext<Context>()
         val root = File(app.noBackupFilesDir, "scoped-configuration-test-${Uuid.random()}").apply { check(mkdirs()) }
         val packet = app.assets.open(LocalEnterpriseSource.EXAMPLE_ASSET).use(EnterprisePackageCodec::decode)
-        val model = Model(modelId = "personal")
-        val provider = ProviderSetting.OpenAI(apiKey = "device-test-user-key", models = listOf(model))
-        val assistant = Assistant(name = "My assistant", chatModelId = model.id)
+        val model = Model(modelId = "personal", tools = setOf(BuiltInTools.Search))
+        val provider = ProviderSetting.OpenAI(apiKey = "device-test-user-key", models = listOf(model), useResponseApi = true)
+        val assistant = Assistant(name = "My assistant", chatModelId = model.id, builtInSearch = true)
         try {
             withEnvironment(app, root) { env ->
                 env.settings.updateLocal {
@@ -57,7 +58,8 @@ class ScopedConfigurationAndroidTest {
                 env.commands.selectResource(selection, ResourceSelectionSlot.ASSISTANT, assistant.id)
                 env.commands.selectResource(selection, ResourceSelectionSlot.CHAT_MODEL, packet.identity.reference("mdl_chat"))
                 env.commands.updateAssistantUsage(access, assistant.id) {
-                    AssistantUsagePreferences(assistant.id, chatModelId = UsageValue(packet.identity.reference("mdl_chat")))
+                    AssistantUsagePreferences(assistant.id, chatModelId = UsageValue(packet.identity.reference("mdl_chat")),
+                        builtInSearch = UsageValue(false), enableWebSearch = UsageValue(true))
                 }
                 env.commands.setGatewayEnabled(access, packet.identity.reference("gw_optional"), false)
             }
@@ -66,15 +68,20 @@ class ScopedConfigurationAndroidTest {
                 assertEquals(packet.identity.scope, enterprise.scope)
                 assertEquals(assistant.id, enterprise.selection(ResourceSelectionSlot.ASSISTANT).reference)
                 assertEquals(packet.identity.reference("mdl_chat"), enterprise.assistantModel(assistant.id).reference)
+                assertFalse(BuiltInTools.Search in enterprise.availableChatModel(enterprise.assistants.getValue(assistant.id))!!.tools)
+                assertTrue(enterprise.assistants.getValue(assistant.id).enableWebSearch)
                 val document = env.document()
                 assertFalse(document.preferences.gateway(packet.identity.scope, packet.identity.reference("gw_optional"))!!.enabled)
                 val gateway = enterprise.catalog.getValue(ConfigurationKey(ConfigurationCategory.GATEWAY, packet.identity.reference("gw_optional")))
                 assertEquals(ResolvedGatewayEnablement(false, true), gateway.gatewayEnablement)
                 assertEquals(provider, document.configuration.providers.single { it.id == provider.id })
                 assertEquals(model.id, document.configuration.assistants.single { it.id == assistant.id }.chatModelId)
+                assertEquals(true, document.configuration.assistants.single { it.id == assistant.id }.builtInSearch)
                 assertFalse(document.configuration.assistants.any { it.id is me.rerere.common.configuration.ConfigurationReference.Enterprise })
                 env.sessions.selectPersonalFixture()
                 assertEquals(model.id, env.queries.observeCurrent().first().assistantModel(assistant.id).reference)
+                val personal = env.queries.observeCurrent().first()
+                assertTrue(BuiltInTools.Search in personal.availableChatModel(personal.assistants.getValue(assistant.id))!!.tools)
                 env.sessions.finishExit(env.sessions.beginExit(requireNotNull(env.sessions.captureExitRequest())))
             }
             withEnvironment(app, root) { env ->

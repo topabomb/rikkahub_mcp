@@ -5,6 +5,8 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import me.rerere.ai.provider.CustomHeader
+import me.rerere.ai.provider.BuiltInTools
+import me.rerere.ai.provider.supportsBuiltInSearch
 import me.rerere.ai.provider.Modality
 import me.rerere.ai.provider.Model
 import me.rerere.ai.provider.ModelType
@@ -27,6 +29,7 @@ import net.weero.measix.pilot.data.enterprise.EnterpriseSessionController
 import net.weero.measix.pilot.data.enterprise.EnterpriseState
 import net.weero.measix.pilot.data.enterprise.RealmAccess
 import net.weero.measix.pilot.data.model.Assistant
+import net.weero.measix.pilot.data.model.withAssistantSearch
 import net.weero.measix.pilot.data.ai.subassistant.SubAssistantRunSpec
 import net.weero.measix.pilot.data.ai.subassistant.SubAssistantRunSpecResolution
 import net.weero.measix.pilot.data.ai.subassistant.resolveSubAssistantRunSpec
@@ -110,13 +113,17 @@ internal class ModelExecutionService(
                 customHeaders = selected.customHeaders.toList(), customBodies = selected.customBodies.toList(),
                 inputModalities = selected.inputModalities.toList(), outputModalities = selected.outputModalities.toList(),
                 abilities = selected.abilities.toList(), tools = selected.tools.toSet(), providerOverwrite = null,
-            )
+            ).withAssistantSearch(assistant)
             val privateBinding = (modelId as? ConfigurationReference.Enterprise)?.let {
                 requireNotNull(originalBindings) { "enterprise_binding_owner_missing" }.binding(it.id)
             }
             val initialTarget = if (privateBinding != null) enterpriseTarget(privateBinding, model)
                 else ModelRequestTarget.Remote(selected.findProvider(snapshot.userSettings.providers)
                     ?: error("model_provider_unavailable"))
+            check(BuiltInTools.Search !in model.tools ||
+                (initialTarget is ModelRequestTarget.Remote && supportsBuiltInSearch(initialTarget.provider))) {
+                "model_builtin_search_not_supported"
+            }
             val frozenShape = (initialTarget as? ModelRequestTarget.Remote)?.let { freezeProviderWireShape(it.provider, model) }
             val credentialOwner = if (privateBinding == null) {
                 captureProviderCredentialOwner(snapshot.userSettings, selected, (initialTarget as ModelRequestTarget.Remote).provider)

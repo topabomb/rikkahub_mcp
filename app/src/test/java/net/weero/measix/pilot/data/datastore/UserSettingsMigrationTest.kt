@@ -19,6 +19,25 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class UserSettingsMigrationTest {
+    @Test
+    fun `legacy assistant search inherits unchanged model tools through the real key migration`() = runTest {
+        val model = me.rerere.ai.provider.Model(tools = setOf(me.rerere.ai.provider.BuiltInTools.Search))
+        val provider = me.rerere.ai.provider.ProviderSetting.Google(models = listOf(model))
+        val assistantJson = """[{"id":"00000000-0000-0000-0000-000000000001","name":"Legacy","chatModelId":"${model.id}","enableWebSearch":true}]"""
+        val old = mutablePreferencesOf(
+            SettingsStore.ASSISTANTS to assistantJson,
+            SettingsStore.PROVIDERS to JsonInstant.encodeToString(listOf<me.rerere.ai.provider.ProviderSetting>(provider)),
+        )
+        val migrated = UserSettingsMigration().migrate(old)
+        val document = JsonInstant.decodeFromString<UserSettingsDocument>(migrated[SettingsStore.USER_SETTINGS]!!)
+        val restored = document.personalSettings()
+        assertEquals(null, restored.assistants.single().builtInSearch)
+        assertTrue(restored.assistants.single().enableWebSearch)
+        assertEquals(model, restored.providers.single().models.single())
+        assertEquals(model.tools, restored.getChatModel(restored.assistants.single())!!.tools)
+        assertEquals(assistantJson, old[SettingsStore.ASSISTANTS])
+    }
+
     private fun golden(): Settings = javaClass.getResourceAsStream("settings-golden.json")!!
         .reader().use { JsonInstant.decodeFromString(it.readText()) }
 

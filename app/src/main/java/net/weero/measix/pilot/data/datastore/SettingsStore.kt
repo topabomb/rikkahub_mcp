@@ -1,5 +1,7 @@
 package net.weero.measix.pilot.data.datastore
 
+import net.weero.measix.pilot.data.model.withAssistantSearch
+
 import me.rerere.common.configuration.ConfigurationReference
 import android.content.Context
 import android.util.Log
@@ -774,7 +776,7 @@ fun Settings.getChatModel(assistant: Assistant): Model? =
         .firstOrNull { model ->
             model.id == (assistant.chatModelId ?: chatModelId) &&
                 model.type == ModelType.CHAT
-        }
+        }?.withAssistantSearch(assistant)
 
 fun Settings.getCurrentChatModel(): Model? = getChatModel(getCurrentAssistant())
 

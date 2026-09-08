@@ -56,6 +56,16 @@ import org.junit.Test
 class ResponseAPISerializerTest {
 
     @Test
+    fun `search follows each request model without persisting previous request tools`() {
+        for (enabled in listOf(true, false)) {
+            val body = invokeBuildRequestBody(ProviderSetting.OpenAI(useResponseApi = true), TextGenerationParams(
+                model = Model(modelId = "gpt-test", tools = if (enabled) setOf(BuiltInTools.Search) else emptySet()),
+            ))
+            assertEquals(enabled, body["tools"]?.jsonArray.orEmpty().any { it.jsonObject["type"]?.jsonPrimitive?.content == "web_search" })
+        }
+    }
+
+    @Test
     fun `tool only Steps retain alternating calls and results`() {
         val wire = invokeBuildMessages(me.rerere.ai.testsupport.consecutiveToolSteps())
         assertEquals(listOf("function_call", "function_call_output", "function_call", "function_call_output"), wire.map {

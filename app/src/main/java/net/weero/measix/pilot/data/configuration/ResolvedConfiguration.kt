@@ -16,6 +16,7 @@ import net.weero.measix.pilot.data.enterprise.EnterpriseIdentity
 import net.weero.measix.pilot.data.enterprise.EnterpriseState
 import net.weero.measix.pilot.data.enterprise.reference
 import net.weero.measix.pilot.data.model.Assistant
+import net.weero.measix.pilot.data.model.withAssistantSearch
 
 internal data class ConfigurationKey(val category: ConfigurationCategory, val reference: ConfigurationReference)
 
@@ -96,7 +97,7 @@ internal data class ResolvedConfiguration(
         selectModel(assistant.chatModelId ?: selections.chatModelId, ModelType.CHAT)
 
     fun availableChatModel(assistant: Assistant): Model? = assistantModel(assistant)
-        .takeIf { it.isAvailable }?.reference?.let { models[it]?.model }
+        .takeIf { it.isAvailable }?.reference?.let { models[it]?.model?.withAssistantSearch(assistant) }
 
     private fun selectModel(reference: ConfigurationReference?, role: ModelSelectionRole): ConfigurationSelection {
         val selected = selectModel(reference, role.type)

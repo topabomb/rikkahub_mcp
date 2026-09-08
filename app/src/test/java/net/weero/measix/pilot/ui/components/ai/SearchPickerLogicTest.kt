@@ -9,6 +9,15 @@ import org.junit.Test
 
 class SearchPickerLogicTest {
     @Test
+    fun `actual model override determines search support`() {
+        val model = Model(providerOverwrite = ProviderSetting.OpenAI(useResponseApi = false))
+        val google = ProviderSetting.Google(models = listOf(model))
+        assertFalse(supportsProviderBuiltInSearch(model, listOf(google)))
+        val override = model.copy(providerOverwrite = ProviderSetting.OpenAI(useResponseApi = true))
+        assertTrue(supportsProviderBuiltInSearch(override, listOf(google)))
+    }
+
+    @Test
     fun `gpt model on Chat Completions is not treated as built-in search`() {
         val model = Model(modelId = "gpt-4o")
         val provider = ProviderSetting.OpenAI(models = listOf(model), useResponseApi = false)

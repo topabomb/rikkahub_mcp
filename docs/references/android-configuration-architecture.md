@@ -92,6 +92,11 @@ PrepareEnterpriseExampleAssets 从公开完整模板派生 enterprise.local.iden
 
 ### 模型执行中的配置与私有连接
 
+助手的 `builtInSearch` 可选偏好由 `Model.withAssistantSearch` 派生为请求工具，个人定义与企业使用偏好保持原有存储归属。
+缺字段继承原模型 Search，不迁移或重写旧 `Model.tools`；显式覆盖不影响共用模型的其他助手。
+子助手从 Caller 借用模型时，按 Target 偏好重新解析原模型。`supportsBuiltInSearch` 判断实际传输能力，
+模型执行捕获拒绝无法兑现的内建搜索选择；配置意图保留，不能把 wire 忽略当成功。
+
 `SettingsStore.withExecutionConfiguration` 在用户配置事务锁内读取同一 `UserSettingsDocument`，派生原 scope 的目录、用户配置和内容摘要 revision；该捕获不增加持久化配置区。`ModelExecutionService` 是主聊天和子助手模型捕获及逐请求准入入口，企业请求固定原 Session 与 Applied binding revision。子助手准备完成时统一使用新捕获的配置构建 prompt、披露与工具；preflight RunSpec 只用于复验，不混入另一份 Settings。
 
 企业本地示例模型使用既有 RequestAssembler、StepRunner、流式合并和 Turn 提交链，返回明确的模拟文本；图片只确认接收，不声称完成真实视觉推理。私有模型 binding 复用 OpenAI Chat/Responses、Claude、Google 的既有 wire builder。`RequestCredentials.Fixed` 只存在于请求参数，不轮换、不写用户 key cache，也不序列化到 Settings 或普通备份。自动认证与同名私有 header 不能同时配置；用户 header 不得改写认证、Host 或企业自有 header，用户 body 不得指定模型回退或路由。

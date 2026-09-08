@@ -1654,4 +1654,5 @@
   <string name="configuration_inherited">Используются настройки пространства по умолчанию</string>
   <string name="configuration_follow_fast_model">Использовать быструю модель, затем модель чата</string>
   <string name="configuration_remove_favorite">Убрать из избранного</string>
+  <string name="search_picker_model_unavailable">Эта модель не поддерживает встроенный поиск. Выберите другой режим поиска или модель.</string>
 </resources>

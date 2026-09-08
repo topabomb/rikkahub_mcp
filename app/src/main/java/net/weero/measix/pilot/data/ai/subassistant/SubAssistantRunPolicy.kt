@@ -106,10 +106,12 @@ fun resolveSubAssistantRunSpec(
         customHeaders = caller.customHeaders,
         customBodies = caller.customBodies,
     )
+    val targetModel = modelForAssistant(runtimeTarget)
+        ?: return SubAssistantRunSpecResolution.Blocked("caller_model_unavailable")
     return SubAssistantRunSpecResolution.Ready(
         SubAssistantRunSpec(
             assistant = runtimeTarget,
-            model = callerModel,
+            model = targetModel,
             modelSource = SubAssistantModelSource.CALLER_FALLBACK,
             modelUnavailableReason = "caller_model_unavailable",
         )

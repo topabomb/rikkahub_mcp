@@ -303,19 +303,18 @@ class ChatVM(
         if (previousAvatar != Avatar.Image(committedUri.toString())) artifactUseCase.maintainStorage()
     }
 
-    fun updateSearchMode(assistantId: ConfigurationReference, model: Model?, mode: SearchMode) {
+    fun updateSearchMode(assistantId: ConfigurationReference, mode: SearchMode) {
         viewModelScope.launch {
             val enableWebSearch = searchModeEnablesLocal(mode)
             val enableBuiltIn = searchModeEnablesBuiltIn(mode)
             try {
                 settingsStore.updateLocal { settings ->
-                    applySearchMode(
-                        settings = settings,
-                        assistantId = assistantId,
-                        modelId = model?.id,
-                        enableWebSearch = enableWebSearch,
-                        enableBuiltIn = enableBuiltIn,
-                    )
+                    settings.copy(assistants = settings.assistants.map { assistant ->
+                        if (assistant.id == assistantId) assistant.copy(
+                            enableWebSearch = enableWebSearch,
+                            builtInSearch = enableBuiltIn,
+                        ) else assistant
+                    })
                 }
             } catch (error: SettingsLockedException) {
                 reportLockedSettingsChange(error)

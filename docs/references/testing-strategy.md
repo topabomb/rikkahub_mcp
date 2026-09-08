@@ -36,6 +36,7 @@
 | commit-then-publish 与命令锁 | `ConversationCommandCoordinatorTest` |
 | active Turn session 与 live phase | `ConversationRuntimeTest` |
 | 模型执行原域、准入与绑定 | `ModelExecutionServiceTest` 使用真实 DataStore/企业存储验证原绑定保留、原凭据刷新、撤权与旧 Session；`ModelExecutionLeaseTest` 验证准入取消和请求清理等待；`SubAssistantTurnIntegrationTest` 验证真实主子执行链撤权后的终态与原因一致 |
+| 助手搜索偏好 | `AssistantModelTest` 验证共用模型与 Child 搜索独立性、缺失/显式空覆盖；`ModelExecutionServiceTest` 验证实际捕获及不支持传输的拒绝。旧无字段原文经 `UserSettingsMigrationTest` 和 `BackupArchiveServiceTest` 的生产迁移/恢复入口验证；实际 DataStore 重开归 `ScopedConfigurationAndroidTest` |
 | 请求凭据与传输保密 | `RequestCredentialsTest` 验证四线实际请求构建、认证唯一性与个人轮换缓存隔离；`ModelRequestTransportTest` 验证受管请求覆盖拒绝；`RequestPrivacyTest` 通过两个 HTTP 服务验证跨 origin 跳转阻断，`RequestLoggingInterceptorTest` 验证应用日志隔离 |
 | 辅助生成任务、原 Session 与摘要取消 | `AuxiliaryGenerationOwnershipTest` 使用实际生成与应用服务、延迟 Provider 验证取消等待、旧 Session、切域、手动标题、摘要原树校验和提交后取消；`ConversationRepositoryTreeIntegrationTest` 在真实 Room 注入 Child 删除失败，验证整个摘要树事务回滚及重试 |
 | 原生切域与 Portal 清理 | `EnterpriseApplicationServiceTest` 用真实 Session/store 和可控宿主回执验证发布屏障、进度与原选择/目标 Session；`PortalDocumentTest` 验证原请求、宿主超时及重开准入；`PortalWebViewAndroidTest` 验证系统 Cookie/站点存储清理和真实网页消息，`EnterprisePageAndroidTest` 验证原生页面接线与后台交接取消 |

@@ -1654,4 +1654,5 @@
   <string name="configuration_inherited">공간 기본값 사용 중</string>
   <string name="configuration_follow_fast_model">빠른 모델을 따르고, 미설정 시 채팅 모델을 따름</string>
   <string name="configuration_remove_favorite">즐겨찾기 해제</string>
+  <string name="search_picker_model_unavailable">이 모델은 내장 검색을 지원하지 않습니다. 다른 검색 방식이나 모델을 선택하세요.</string>
 </resources>

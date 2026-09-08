@@ -23,7 +23,9 @@
 
 不包含真实 Control Hub/Relay 认证和下发、后台建设、生产 Portal 部署、User Sync、远程 Agent Space/Runtime/Fleet、受管 Skill 发布协议。用户已有 Skill/本地 Workspace 在本期内。缺少真实凭据不阻碍默认示例运行。
 
-平台架构仓库由其他任务维护。本期以已明确的用户配置复用语义为准；其修订中的 Snapshot v4/v5 和桥接协议不是本地资料版本，也不代表服务端已 Freeze。不得让真实服务端 Gate 阻塞本期本地实现，不宣称本地实现已获得生产互操作认证。
+平台架构仓库由其他任务维护。本期按 architecture、core、Portal 当前交付契约执行；企业 Snapshot、桥接协议和接入资料各有独立版本。
+上游企业服务与 Android 企业入口均未进入生产，不保留旧企业契约、分批原型或其兼容路径；已发布个人配置与数据仍按明确迁移规则保全。
+不得让真实服务端 Gate 阻塞本期本地实现，不宣称本地实现已获得生产互操作认证。
 
 ## 2. 分类与五项策略
 
@@ -331,6 +333,19 @@ Android 媒体接线按下列所有权完成：`PortalMediaStore` 管理独占�
 - 移除旧签名 envelope/global merge/path lock 和无消费者 facade；原型文件不迁成正式身份；仅保留真实历史迁移需要的解码边界。
 
 ## 10. 完整变更清单与批次
+
+聊天搜索配置的前置整理已进入代码：`Assistant.builtInSearch` 与企业同名 usage 保存选择，唯一模型派生保留原模型的其他工具；
+关闭/外挂/内建搜索同时修改助手的两个开关，不再改共享 `Model.tools`。Child 借用 Caller 模型后重新按 Target 偏好解析。
+旧无字段个人 JSON 继承原模型，经过生产 key 迁移与备份恢复验证；企业偏好不改变个人定义。
+实际传输不支持内建搜索时，选择器显示不可用，执行捕获在 HTTP 前拒绝，保留选择。
+此批不代替聊天页原域助手/模型投影、原页面 typed 配置提交及其余 U2/C5 接线；这些继续实施，版本仍为 0.0.19 开发基线。
+
+该批 105 项 App 定向测试及 AI 模块测试通过；完整 `test assembleDebug lintDebug assembleRelease` 与定向
+`ScopedConfigurationAndroidTest` 串行门禁在 13 分 38 秒内通过。App 2,049 项、AI 366 项无失败/跳过，lint 为
+0 errors、280 warnings；Workspace 保留 11 项 Windows 宿主跳过。Pixel_10_Pro_Fold / Android 17 的实际 DataStore
+重开验证企业搜索偏好、个人定义保全和不同用户隔离。新增测试的泛型推断及内置 Provider 断言错误修正后通过，
+独立审查无剩余本批实质问题。证据见 `build/reports/enterprise/assistant-search-verification.json`；请求 JSON 测试和该设备
+持久化验证不代表聊天企业 UI、Release 设备或真实平台互操作验收。
 
 U2 的共享模型目录和默认模型设置页已接通：目录分开提供用户覆盖、有效选择和不可用原因；企业候选按来源分组，不构造个人 Provider。选择、收藏与建议开关通过原 RealmSelection 提交，清除企业覆盖只继承企业默认；旧选择命令重载和 FavoriteModelService 已删除。个人默认页保留跟随聊天/快速模型与未启用识别的区别；失效收藏可移除，弹窗等待写入成功关闭且禁止重复提交，旧选择的迟到错误不进入新域。用户图片能力按实际覆盖连接统一校验，附件识别用途规则来自同一 Resolver。企业禁止使用个人资源不会关闭个人 Provider 编辑入口。两位独立审查的问题均已收口。
 

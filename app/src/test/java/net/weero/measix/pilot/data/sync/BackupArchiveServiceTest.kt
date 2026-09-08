@@ -60,6 +60,23 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class BackupArchiveServiceTest {
+    @Test
+    fun `legacy backup without assistant search field preserves model search on restore`() = runTest {
+        val model = me.rerere.ai.provider.Model(tools = setOf(me.rerere.ai.provider.BuiltInTools.Search))
+        val provider = me.rerere.ai.provider.ProviderSetting.Google(models = listOf(model))
+        val providers = JsonInstant.encodeToString(listOf<me.rerere.ai.provider.ProviderSetting>(provider))
+        val legacy = """{"assistants":[{"id":"00000000-0000-0000-0000-000000000001","name":"Legacy","chatModelId":"${model.id}"}],"providers":$providers}"""
+        service.stageRestore(archive(mapOf("settings.json" to legacy.toByteArray())), BackupSelection(false, false))
+        PendingBackupRestore.bootstrapBeforeDatabaseOpen(context)
+        var restored: Settings? = null
+        val settingsStore = mockk<SettingsStore>()
+        coEvery { settingsStore.restoreLocal(any()) } coAnswers { firstArg<Settings>().also { restored = it } }
+        PendingBackupRestore.restoreSettingsIfPending(context, settingsStore, catalogStore, JsonInstant)
+        assertNull(restored!!.assistants.single().builtInSearch)
+        assertEquals(model, restored!!.providers.single().models.single())
+        PendingBackupRestore.complete(context)
+    }
+
     private lateinit var context: Context
     private lateinit var service: BackupArchiveService
     private lateinit var catalogStore: McpCatalogStore

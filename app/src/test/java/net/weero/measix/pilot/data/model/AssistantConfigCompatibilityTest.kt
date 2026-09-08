@@ -169,12 +169,14 @@ class AssistantConfigCompatibilityTest {
         val concurrentTargetId = ConfigurationReference.random()
         val baseline = Assistant(id = assistantId, name = "Before")
         val edited = baseline.copy(name = "After")
-        val current = baseline.copy(allowedSubAssistantIds = setOf(concurrentTargetId))
+        val current = baseline.copy(allowedSubAssistantIds = setOf(concurrentTargetId), builtInSearch = true)
 
         val merged = mergeAssistantDelta(baseline, edited, current)
 
         assertEquals("After", merged.name)
         assertEquals(setOf(concurrentTargetId), merged.allowedSubAssistantIds)
+        assertEquals(true, merged.builtInSearch)
+        assertEquals(false, mergeAssistantDelta(baseline, baseline.copy(builtInSearch = false), current).builtInSearch)
     }
 
     @Test

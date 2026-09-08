@@ -1,5 +1,8 @@
 package net.weero.measix.pilot.ui.components.ai
 
+import me.rerere.ai.provider.supportsBuiltInSearch
+import androidx.compose.material3.LocalContentColor
+
 import me.rerere.common.configuration.ConfigurationReference
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.animateColorAsState
@@ -95,8 +98,7 @@ internal fun supportsProviderBuiltInSearch(
     providers: List<ProviderSetting>,
 ): Boolean {
     val provider = model?.findProvider(providers) ?: return false
-    return provider is ProviderSetting.Google ||
-        (provider is ProviderSetting.OpenAI && provider.useResponseApi)
+    return supportsBuiltInSearch(provider)
 }
 
 @Composable
@@ -110,6 +112,8 @@ fun SearchPickerButton(
 ) {
     var showSearchPicker by remember { mutableStateOf(false) }
     val currentService = settings.searchServices.find { it.id == settings.selectedSearchServiceId }
+    val searchUnavailable = model?.tools?.contains(BuiltInTools.Search) == true &&
+        !supportsProviderBuiltInSearch(model, settings.providers)
 
     ToggleSurface(
         modifier = modifier,
@@ -131,7 +135,9 @@ fun SearchPickerButton(
                 if (model?.tools?.contains(BuiltInTools.Search) == true) {
                     Icon(
                         imageVector = HugeIcons.AiSearch02,
-                        contentDescription = stringResource(R.string.use_web_search),
+                        contentDescription = stringResource(if (searchUnavailable)
+                            R.string.search_picker_model_unavailable else R.string.use_web_search),
+                        tint = if (searchUnavailable) MaterialTheme.colorScheme.error else LocalContentColor.current,
                     )
                 } else if (enableSearch && currentService != null) {
                     AutoAIIcon(
@@ -271,6 +277,14 @@ private fun SearchPicker(
                         .fillMaxHeight()
                 )
             }
+        }
+
+        if (hasBuiltInSearchEnabled && !supportsBuiltInSearch) {
+            Text(
+                text = stringResource(R.string.search_picker_model_unavailable),
+                color = MaterialTheme.colorScheme.error,
+                style = MaterialTheme.typography.bodyMedium,
+            )
         }
 
         if (displayedMode != SearchMode.OFF) {

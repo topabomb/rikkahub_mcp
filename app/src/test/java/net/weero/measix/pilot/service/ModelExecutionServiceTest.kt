@@ -12,6 +12,7 @@ import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import me.rerere.ai.provider.Model
+import me.rerere.ai.provider.BuiltInTools
 import me.rerere.ai.provider.ProviderSetting
 import me.rerere.common.configuration.ConfigurationReference
 import net.weero.measix.pilot.AppScope
@@ -21,6 +22,9 @@ import net.weero.measix.pilot.data.ai.tools.local.LocalToolOption
 import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.datastore.SettingsStore
 import net.weero.measix.pilot.data.datastore.UserSettingsMigration
+import net.weero.measix.pilot.data.datastore.getChatModel
+import net.weero.measix.pilot.data.configuration.AssistantUsagePreferences
+import net.weero.measix.pilot.data.configuration.UsageValue
 import net.weero.measix.pilot.data.enterprise.*
 import net.weero.measix.pilot.data.model.Assistant
 import net.weero.measix.pilot.data.model.Conversation
@@ -41,6 +45,48 @@ import kotlin.uuid.Uuid
 @Config(sdk = [34])
 class ModelExecutionServiceTest {
     @get:Rule val temporary = TemporaryFolder()
+
+    @Test fun `search choices reach captured requests while enterprise overrides preserve personal definitions`() = runBlocking {
+        environment { env ->
+            val originalModel = env.model.copy(tools = setOf(BuiltInTools.Search, BuiltInTools.UrlContext))
+            env.settings.updateLocal { it.copy(
+                providers = listOf(env.provider.copy(useResponseApi = true, models = listOf(originalModel))),
+                assistants = listOf(env.assistant.copy(builtInSearch = true)),
+            ) }
+            val personal = env.capture(RealmAccess.Personal)
+            assertEquals(originalModel.tools, personal.model.model.tools)
+            assertEquals(personal.model.model.tools, personal.userSettings.getChatModel(personal.assistant)!!.tools)
+            env.sessions.enrollFixture(exampleEnterprisePackage())
+            val access = env.sessions.captureSelectedRealmAccess() as RealmAccess.Enterprise
+            ConfigurationApplicationService(env.settings, env.sessions, env.gate).updateAssistantUsage(access, env.assistant.id) {
+                AssistantUsagePreferences(env.assistant.id, builtInSearch = UsageValue(false), enableWebSearch = UsageValue(true))
+            }
+            val enterprise = env.capture(access)
+            assertTrue(enterprise.assistant.enableWebSearch)
+            assertEquals(setOf(BuiltInTools.UrlContext), enterprise.model.model.tools)
+            assertEquals(enterprise.model.model.tools,
+                env.service.read(access).configuration.availableChatModel(enterprise.assistant)!!.tools)
+            val restoredPersonal = env.capture(RealmAccess.Personal)
+            assertEquals(personal.model.model.tools, restoredPersonal.model.model.tools)
+            assertEquals(originalModel.tools, restoredPersonal.userSettings.providers.single { it.id == env.provider.id }.models.single().tools)
+        }
+    }
+
+    @Test fun `search unavailable on actual transport fails before request admission and retains user choice`() = runBlocking {
+        environment { env ->
+            val enabled = env.assistant.copy(builtInSearch = true)
+            val originalModel = env.model.copy(providerOverwrite = ProviderSetting.Claude())
+            env.settings.updateLocal { it.copy(
+                assistants = listOf(enabled),
+                providers = listOf(env.provider.copy(useResponseApi = true, models = listOf(originalModel))),
+            ) }
+            try { env.capture(RealmAccess.Personal); fail("unsupported search was silently accepted") }
+            catch (error: IllegalStateException) { assertEquals("model_builtin_search_not_supported", error.message) }
+            assertEquals(true, env.service.read(RealmAccess.Personal).configuration.assistants[enabled.id]!!.builtInSearch)
+            env.settings.updateLocal { it.copy(assistants = listOf(enabled.copy(builtInSearch = false))) }
+            assertFalse(BuiltInTools.Search in env.capture(RealmAccess.Personal).model.model.tools)
+        }
+    }
 
     @Test fun `personal request freezes wire shape and reads credentials from its original live owner`() = runBlocking {
         environment { env ->

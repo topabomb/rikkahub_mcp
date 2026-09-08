@@ -1654,4 +1654,5 @@
   <string name="configuration_inherited">使用空间默认值</string>
   <string name="configuration_follow_fast_model">跟随快速模型，未配置时跟随聊天模型</string>
   <string name="configuration_remove_favorite">取消收藏</string>
+  <string name="search_picker_model_unavailable">当前模型不支持内建搜索，请选择其他搜索方式或模型。</string>
 </resources>

@@ -1655,4 +1655,5 @@
   <string name="configuration_inherited">Using the space default</string>
   <string name="configuration_follow_fast_model">Follow fast model, then chat model</string>
   <string name="configuration_remove_favorite">Remove favorite</string>
+  <string name="search_picker_model_unavailable">This model does not support built-in search. Choose another search mode or model.</string>
 </resources>

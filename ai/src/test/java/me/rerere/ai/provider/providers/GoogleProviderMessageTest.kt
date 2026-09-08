@@ -53,6 +53,16 @@ import org.junit.Test
  */
 class GoogleProviderMessageTest {
 
+    @Test
+    fun `search follows each request model without persisting previous request tools`() {
+        for (enabled in listOf(true, false)) {
+            val body = invokeBuildRequest(listOf(UIMessage.user("hello")), TextGenerationParams(
+                model = Model(modelId = "gemini-test", tools = if (enabled) setOf(BuiltInTools.Search) else emptySet()),
+            ))
+            assertEquals(enabled, body["tools"]?.jsonArray.orEmpty().any { "googleSearch" in it.jsonObject })
+        }
+    }
+
     private lateinit var provider: GoogleProvider
     private val testModelId = "gemini-test"
     private val testSourceProfile = "google:developer:test.example.com"
@@ -1090,4 +1100,3 @@ class GoogleProviderMessageTest {
         }
     }
 }
-

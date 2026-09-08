@@ -84,12 +84,23 @@
 |------|--------|------|
 | `localTools` | `DEFAULT_ASSISTANT_LOCAL_TOOLS` | 内置本地工具选项；当前默认是 `TimeInfo`、`Tts`、`AskUser`。`TextToImage` 不在默认集中 |
 | `enableWebSearch` | `false` | 装配外挂搜索工具；若当前模型已带 `BuiltInTools.Search` 则不再装配 |
+| `builtInSearch` | `null` | `null` 继承模型定义的 Search；`true`/`false` 仅覆盖本助手请求的内建搜索，不改共享模型 |
 | `mcpServers` | 空集合 | 允许该助手使用的 MCP Server ID；选择不等于运行时已发现工具 |
 | `workspaceId` | `null` | 绑定工作区；仅工作区 shell ready 时装配工具并注入提醒 |
 | `enabledSkills` | 空集合 | 允许 `use_skill` 访问的技能名 |
 | `quickMessageIds` | 空集合 | UI 快捷消息引用 |
 
 主会话的工具装配顺序是：搜索、本地工具、历史引用、Workspace、Skill、Assistant Tools、MCP。
+`Model.withAssistantSearch` 统一派生搜索工具；其他模型工具保持原值。聊天搜索模式同时更新助手的
+`enableWebSearch` 和 `builtInSearch`：关闭为 false/false、外挂为 true/false、内建为 false/true。
+子助手借用 Caller 模型时继承模型身份及模型执行参数，搜索仍按原始模型和 Target 自己的偏好解析。
+内建搜索仅支持 Google 与 OpenAI Responses 传输；界面按实际模型覆盖连接判断，不支持时显示不可用提示，
+`ModelExecutionService` 在发请求前拒绝，保留原选择供用户调整。
+
+旧 Assistant JSON 缺少 `builtInSearch` 时读取为 null，原 `Model.tools` 原样保留；备份恢复采用相同规则。
+企业使用偏好的同名字段缺失表示继承用户助手定义，`UsageValue(null)` 表示改为继承本域所选模型。
+显式 true/false 仅影响该主体的助手使用设置。该字段为可选扩展，不改变 Room 或接入资料格式版本。
+
 MCP 还必须与 definition 匹配的完整非空 LKG Catalog 和用户工具策略求交，连接健康不参与 schema 注入；Master/Target 在 run 开始时冻结
 `TurnMcpCapabilitySnapshot`，同一 run 不跟随远端目录通知漂移。
 Memory Tools 与其他工具一样在新 Turn START 前按固定 namespace 装配并冻结 definitions/bindings；同一 Turn 不按 step 重建。Target Run 进一步过滤子助手管理/委托工具；执行时仍重验权限、资源与 Memory namespace，撤销后 live fail-closed。

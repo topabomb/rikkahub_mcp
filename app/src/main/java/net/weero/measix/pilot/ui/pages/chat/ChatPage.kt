@@ -639,7 +639,6 @@ private fun ChatPageContent(
                         onUpdateSearchMode = { mode ->
                             vm.updateSearchMode(
                                 assistantId = assistant.id,
-                                model = setting.getChatModel(assistant),
                                 mode = mode,
                             )
                         },
