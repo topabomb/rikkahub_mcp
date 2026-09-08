@@ -62,7 +62,7 @@ class ConversationAttachmentPreviewProjectorTest {
             )))
             val snapshot = snapshotOf(listOf(message))
             val before = snapshot.nodes
-            val result = ConversationAttachmentPreviewProjector(store, mockk(relaxed = true)).projectUrls(snapshot)
+            val result = ConversationAttachmentPreviewProjector(store, imageFiles()).projectUrls(snapshot)
             assertEquals(mapOf("/upload/abc123.png" to "file:///D:/managed/abc123.png"), result)
             assertEquals(before, snapshot.nodes)
         }
@@ -71,7 +71,7 @@ class ConversationAttachmentPreviewProjectorTest {
             localCallId = Uuid.random(), stepId = Uuid.random(), providerCallId = "call", toolName = "inspect_attachments",
             input = """{"attachments":["/upload/abc123.png"]}""",
         )))
-        assertTrue(ConversationAttachmentPreviewProjector(store, mockk(relaxed = true)).projectUrls(snapshotOf(listOf(message))).isEmpty())
+        assertTrue(ConversationAttachmentPreviewProjector(store, imageFiles()).projectUrls(snapshotOf(listOf(message))).isEmpty())
     }
 
     @Test
@@ -86,7 +86,7 @@ class ConversationAttachmentPreviewProjectorTest {
                 input = """{"attachments":["/upload/../private.png","attachment:123","https://example.com/a.png"]}""",
             ))),
         )
-        assertTrue(ConversationAttachmentPreviewProjector(store, mockk(relaxed = true)).projectUrls(snapshotOf(messages)).isEmpty())
+        assertTrue(ConversationAttachmentPreviewProjector(store, imageFiles()).projectUrls(snapshotOf(messages)).isEmpty())
         coVerify(exactly = 0) { store.resolveToolPath(any()) }
     }
     @Test
@@ -138,7 +138,7 @@ class ConversationAttachmentPreviewProjectorTest {
             }
             assertTrue(sourceFile.delete())
 
-            val previews = ConversationAttachmentPreviewProjector(store, mockk(relaxed = true)).projectUrls(snapshotOf(forkMessages))
+            val previews = ConversationAttachmentPreviewProjector(store, imageFiles()).projectUrls(snapshotOf(forkMessages))
             val clonedInspection = forkMessages.last().parts.single() as UIMessagePart.Tool
             val inputRef = JsonInstant.parseToJsonElement(clonedInspection.input).jsonObject["attachments"]!!
                 .jsonArray.single().jsonPrimitive.content
@@ -186,7 +186,7 @@ class ConversationAttachmentPreviewProjectorTest {
         val store = mockk<ArtifactStore>()
         coEvery { store.resolveImagePreviewForFile(net.weero.measix.pilot.data.configuration.ConfigurationScope.Personal, any()) } returns ArtifactMediaPreview(1, AttachmentRefs.fileToFileUrl(file))
         coEvery { store.resolveManagedReference(file) } returns managed
-        val previews = ConversationAttachmentPreviewProjector(store, mockk(relaxed = true)).projectUrls(snapshotOf(
+        val previews = ConversationAttachmentPreviewProjector(store, imageFiles()).projectUrls(snapshotOf(
             listOf(UIMessage(role = MessageRole.ASSISTANT, parts = listOf(tool))),
         ))
 
@@ -238,7 +238,7 @@ class ConversationAttachmentPreviewProjectorTest {
             UIMessage(role = MessageRole.USER, parts = listOf(direct)),
             UIMessage(role = MessageRole.ASSISTANT, parts = listOf(subAssistantTool)),
         )
-        val projector = ConversationAttachmentPreviewProjector(store, mockk(relaxed = true))
+        val projector = ConversationAttachmentPreviewProjector(store, imageFiles())
 
         val previews = projector.projectUrls(snapshotOf(messages))
 
@@ -249,7 +249,7 @@ class ConversationAttachmentPreviewProjectorTest {
     }
 
     @Test
-    fun `message-part projection accepts nested local images but never remote urls`() = runTest {
+    fun `message projection keeps managed references and adds scoped remote image capabilities`() = runTest {
         val localRef = AttachmentRefs.format(Uuid.random())
         val remoteRef = AttachmentRefs.format(Uuid.random())
         fun image(url: String, ref: String) = AttachmentRefs.withMetadata(
@@ -280,14 +280,14 @@ class ConversationAttachmentPreviewProjectorTest {
         coEvery { store.resolveImagePreviewForFile(net.weero.measix.pilot.data.configuration.ConfigurationScope.Personal, any()) } returns ArtifactMediaPreview(1, localUrl)
         coEvery { store.resolveManagedReference(AttachmentRefs.parseFileUrl(localUrl)!!) } returns
             LocalArtifactRef(relativePath = "upload/generated.png", mimeType = "image/png")
-        val projector = ConversationAttachmentPreviewProjector(store, mockk(relaxed = true))
+        val projector = ConversationAttachmentPreviewProjector(store, imageFiles())
 
         val previews = projector.projectUrls(snapshotOf(messages))
 
         assertEquals(localUrl, previews[localRef])
         assertEquals(localUrl, previews["/upload/generated.png"])
         assertNull(previews[remoteRef])
-        assertNull(previews["https://cdn.example/remote.png"])
+        assertEquals("https://cdn.example/remote.png", previews["https://cdn.example/remote.png"])
         assertNull(previews[AttachmentRefs.format(Uuid.random())])
     }
 
@@ -309,7 +309,7 @@ class ConversationAttachmentPreviewProjectorTest {
         )
         coEvery { store.resolveManagedReference(file) } returns
             LocalArtifactRef(relativePath = "upload/u7km2n4p.png", mimeType = "image/png")
-        val projector = ConversationAttachmentPreviewProjector(store, mockk(relaxed = true))
+        val projector = ConversationAttachmentPreviewProjector(store, imageFiles())
         val snapshot = snapshotOf(listOf(UIMessage(role = MessageRole.USER, parts = listOf(image))))
 
         val first = projector.projectUrls(snapshot)
@@ -333,7 +333,7 @@ class ConversationAttachmentPreviewProjectorTest {
         coEvery { store.resolveImagePreviewForFile(net.weero.measix.pilot.data.configuration.ConfigurationScope.Personal, any()) } returns null
 
         assertNull(
-            ConversationAttachmentPreviewProjector(store, mockk(relaxed = true))
+            ConversationAttachmentPreviewProjector(store, imageFiles())
                 .projectUrls(snapshotOf(listOf(UIMessage(role = MessageRole.USER, parts = listOf(image)))))[ref],
         )
     }
@@ -352,7 +352,7 @@ class ConversationAttachmentPreviewProjectorTest {
         coEvery { store.resolveImagePreviewForFile(net.weero.measix.pilot.data.configuration.ConfigurationScope.Personal, any()) } throws CancellationException("switch conversation")
 
         try {
-            ConversationAttachmentPreviewProjector(store, mockk(relaxed = true)).projectUrls(
+            ConversationAttachmentPreviewProjector(store, imageFiles()).projectUrls(
                 snapshotOf(listOf(UIMessage(role = MessageRole.USER, parts = listOf(image)))),
             )
             org.junit.Assert.fail("cancellation must propagate")
@@ -384,7 +384,7 @@ class ConversationAttachmentPreviewProjectorTest {
 
         assertEquals(
             emptyMap<String, String>(),
-            ConversationAttachmentPreviewProjector(store, mockk(relaxed = true)).projectUrls(
+            ConversationAttachmentPreviewProjector(store, imageFiles()).projectUrls(
                 snapshotOf(listOf(UIMessage(role = MessageRole.ASSISTANT, parts = listOf(tool)))),
             ),
         )
@@ -395,7 +395,7 @@ class ConversationAttachmentPreviewProjectorTest {
         val artifacts = MutableStateFlow<List<ArtifactEntity>>(emptyList())
         val store = mockk<ArtifactStore>()
         every { store.lifecycleChanges() } returns artifacts.map { Unit }
-        val projector = ConversationAttachmentPreviewProjector(store, mockk(relaxed = true))
+        val projector = ConversationAttachmentPreviewProjector(store, imageFiles())
         val emissions = mutableListOf<Unit>()
 
         val job = launch(start = CoroutineStart.UNDISPATCHED) {
@@ -418,7 +418,7 @@ class ConversationAttachmentPreviewProjectorTest {
         coEvery { store.resolveManagedReference(AttachmentRefs.parseFileUrl(url)!!) } throws cancelled
 
         try {
-            ConversationAttachmentPreviewProjector(store, mockk(relaxed = true)).projectUrls(snapshotOf(
+            ConversationAttachmentPreviewProjector(store, imageFiles()).projectUrls(snapshotOf(
                 listOf(UIMessage(role = MessageRole.USER, parts = listOf(image))),
             ))
             org.junit.Assert.fail("cancellation must propagate")
@@ -441,7 +441,7 @@ class ConversationAttachmentPreviewProjectorTest {
         coEvery { store.resolveManagedReference(AttachmentRefs.parseFileUrl(goodUrl)!!) } returns
             LocalArtifactRef(relativePath = "upload/u7km2n4p.png", mimeType = "image/png")
 
-        val result = ConversationAttachmentPreviewProjector(store, mockk(relaxed = true)).projectUrls(snapshotOf(listOf(
+        val result = ConversationAttachmentPreviewProjector(store, imageFiles()).projectUrls(snapshotOf(listOf(
             UIMessage(role = MessageRole.USER, parts = listOf(stampedImage(brokenUrl, brokenRef), stampedImage(goodUrl, goodRef))),
         )))
 
@@ -459,9 +459,18 @@ class ConversationAttachmentPreviewProjectorTest {
         coEvery { store.resolveManagedReference(AttachmentRefs.parseFileUrl(url)!!) } returns
             LocalArtifactRef(relativePath = "images/generated.png", mimeType = "image/png")
 
-        assertEquals(mapOf(ref to url), ConversationAttachmentPreviewProjector(store, mockk(relaxed = true)).projectUrls(snapshotOf(
+        assertEquals(mapOf(ref to url, url to url), ConversationAttachmentPreviewProjector(store, imageFiles()).projectUrls(snapshotOf(
             listOf(UIMessage(role = MessageRole.USER, parts = listOf(stampedImage(url, ref)))),
         )))
+    }
+
+    private fun imageFiles(): FileManagementApplicationService = mockk(relaxed = true) {
+        every { externalImageSource(any<ConversationViewLease>(), any()) } answers {
+            val url = secondArg<String>()
+            if (url.startsWith("https://") || url.startsWith("data:image/"))
+                ImageSource(url, ImageOrigin.NETWORK, verifyAccess = {}, readPayload = { byteArrayOf() })
+            else null
+        }
     }
 
     private suspend fun ConversationAttachmentPreviewProjector.projectUrls(snapshot: ConversationPresentationSnapshot): Map<String, String> {

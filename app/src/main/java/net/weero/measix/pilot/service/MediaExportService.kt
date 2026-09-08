@@ -1,83 +1,88 @@
 package net.weero.measix.pilot.service
 
+import me.rerere.common.android.appTempFolder
+import kotlinx.coroutines.NonCancellable
 import android.content.Context
 import android.graphics.Bitmap
-import android.graphics.BitmapFactory
-import androidx.core.net.toFile
-import androidx.core.net.toUri
-import java.io.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import net.weero.measix.pilot.data.ai.attachments.RemoteMediaFetchResult
-import net.weero.measix.pilot.data.ai.attachments.SafeRemoteMediaFetcher
-import net.weero.measix.pilot.data.imggen.GeneratedMediaStore
 import net.weero.measix.pilot.utils.ImageExportResult
-import net.weero.measix.pilot.utils.exportImage
-import net.weero.measix.pilot.utils.exportImageFile
+import net.weero.measix.pilot.utils.exportImageBytes
 import net.weero.measix.pilot.utils.getActivity
-import kotlin.io.encoding.Base64
-import kotlin.io.encoding.ExperimentalEncodingApi
 
 internal const val IMAGE_SAVE_PERMISSION_REQUIRED = "permission_required"
 
 /** UI-facing export port for copying media outside app storage; it owns no artifact lifecycle. */
-class MediaExportService(
-    private val remoteMediaFetcher: SafeRemoteMediaFetcher,
-) {
-    @OptIn(ExperimentalEncodingApi::class)
-    suspend fun saveImage(context: Context, image: String): String = withContext(Dispatchers.IO) {
+class MediaExportService {
+    suspend fun saveImage(context: Context, image: ImageSource): String = withContext(Dispatchers.IO) {
         val activity = requireNotNull(context.getActivity()) { "Activity not found" }
-        val fileName = "MeasixPilot_${System.currentTimeMillis()}.png"
-        when {
-            image.startsWith("data:image") -> {
-                val payload = image.substringAfter("base64,", missingDelimiterValue = "")
-                require(payload.isNotEmpty() && payload.length <= MAX_BASE64_IMAGE_CHARS) {
-                    "Image payload exceeds the size limit"
-                }
-                val bytes = Base64.decode(payload.toByteArray())
-                val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
-                    ?: error("Failed to decode image")
-                try {
-                    requireExportSuccess(context.exportImage(activity, bitmap, fileName))
-                } finally {
-                    bitmap.recycle()
-                }
-            }
-
-            image.startsWith("file:", ignoreCase = true) ->
-                requireExportSuccess(context.exportImageFile(activity, image.toUri().toFile(), fileName))
-
-            image.startsWith("/") ->
-                requireExportSuccess(context.exportImageFile(activity, File(image), fileName))
-
-            image.startsWith("http") -> exportRemoteImage(context, activity, image, fileName)
-
-            else -> error("Invalid image format")
+        val bytes = image.readBytes()
+        val mime = requireNotNull(net.weero.measix.pilot.data.ai.attachments.ImageMime.sniff(bytes)) { "Invalid image format" }
+        val extension = when (mime) {
+            "image/jpeg" -> "jpg"
+            "image/webp" -> "webp"
+            "image/gif" -> "gif"
+            "image/heic", "image/heif" -> "heic"
+            else -> "png"
         }
+        val fileName = "MeasixPilot_${java.util.UUID.randomUUID()}.$extension"
+        requireExportSuccess(context.exportImageBytes(activity, bytes, mime, fileName, image::requireAccess))
         fileName
     }
 
-    suspend fun saveBitmap(context: Context, bitmap: Bitmap, fileName: String) = withContext(Dispatchers.IO) {
-        val activity = requireNotNull(context.getActivity()) { "Activity not found" }
-        requireExportSuccess(context.exportImage(activity, bitmap, fileName))
+    suspend fun saveAndShareBitmap(context: Context, bitmap: Bitmap, fileName: String, verifyAccess: suspend () -> Unit) {
+        val bytes = withContext(Dispatchers.IO) {
+            verifyAccess()
+            java.io.ByteArrayOutputStream().use { output ->
+                check(bitmap.compress(Bitmap.CompressFormat.PNG, 90, output)) { "Unable to encode image export" }
+                output.toByteArray()
+            }
+        }
+        withContext(Dispatchers.IO) {
+            val activity = requireNotNull(context.getActivity()) { "Activity not found" }
+            requireExportSuccess(context.exportImageBytes(activity, bytes, "image/png", fileName, verifyAccess))
+        }
+        shareBytes(context, bytes, fileName, "image/png", verifyAccess)
     }
 
-    private suspend fun exportRemoteImage(
-        context: Context,
-        activity: android.app.Activity,
-        image: String,
-        fileName: String,
-    ) {
-        val fetched = when (val result = remoteMediaFetcher.fetch(image)) {
-            is RemoteMediaFetchResult.Success -> result
-            is RemoteMediaFetchResult.Failure -> error("Remote image could not be fetched: ${result.reason}")
-        }
-        val bitmap = BitmapFactory.decodeByteArray(fetched.bytes, 0, fetched.bytes.size)
-            ?: error("Failed to decode image")
+    suspend fun shareText(context: Context, text: String, fileName: String, verifyAccess: suspend () -> Unit) =
+        shareBytes(context, text.toByteArray(Charsets.UTF_8), fileName, "text/markdown", verifyAccess)
+
+    private suspend fun shareBytes(context: Context, bytes: ByteArray, fileName: String, mimeType: String, verifyAccess: suspend () -> Unit) {
+        var candidate: java.io.File? = null
+        var shared = false
+        var failure: Throwable? = null
         try {
-            requireExportSuccess(context.exportImage(activity, bitmap, fileName))
+            verifyAccess()
+            val file = withContext(Dispatchers.IO) {
+                java.io.File(context.appTempFolder, "${java.util.UUID.randomUUID()}_$fileName").also {
+                    candidate = it
+                    it.outputStream().use { output -> output.write(bytes) }
+                }
+            }
+            val uri = androidx.core.content.FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
+            withContext(Dispatchers.Main.immediate) {
+                verifyAccess()
+                val intent = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
+                    type = mimeType
+                    putExtra(android.content.Intent.EXTRA_STREAM, uri)
+                    addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                }
+                context.startActivity(android.content.Intent.createChooser(intent,
+                    context.getString(net.weero.measix.pilot.R.string.chat_page_export_share_via)))
+                shared = true
+            }
+        } catch (error: Throwable) {
+            failure = error
+            throw error
         } finally {
-            bitmap.recycle()
+            if (!shared) try {
+                withContext(NonCancellable + Dispatchers.IO) {
+                    candidate?.let { check(!it.exists() || it.delete()) { "Unable to remove unpublished export" } }
+                }
+            } catch (cleanup: Throwable) {
+                failure?.let { if (cleanup !== it) it.addSuppressed(cleanup) } ?: throw cleanup
+            }
         }
     }
 
@@ -89,8 +94,4 @@ class MediaExportService(
         }
     }
 
-    private companion object {
-        const val MAX_BASE64_IMAGE_CHARS =
-            (GeneratedMediaStore.MAX_IMAGE_BYTES * 4 / 3) + 16
-    }
 }

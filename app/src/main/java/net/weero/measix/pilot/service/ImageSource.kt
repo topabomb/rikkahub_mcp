@@ -19,12 +19,17 @@ import okio.buffer
 import okio.source
 import java.nio.ByteBuffer
 
+enum class ImageOrigin { GENERATED, UPLOAD, NETWORK, INLINE, LOCAL }
+
 /**
  * An owner's borrowed image read capability. Identity supports UI/cache reuse, never authorization.
  * The read callback must itself authorize and protect a bounded read; neither callback transfers ownership.
  */
 class ImageSource internal constructor(
     cacheIdentity: String,
+    val origin: ImageOrigin,
+    val displayName: String? = null,
+    val modifiedAtMillis: Long? = null,
     private val verifyAccess: suspend () -> Unit,
     private val readPayload: suspend () -> ByteArray,
 ) {
@@ -70,7 +75,7 @@ internal object ImageSourceFetcherFactory : Fetcher.Factory<ImageSource> {
         SourceFetchResult(
             source = CoilImageSource(bytes.inputStream().source().buffer(), options.fileSystem, ByteBufferMetadata(ByteBuffer.wrap(bytes))),
             mimeType = ImageMime.sniff(bytes),
-            dataSource = DataSource.DISK,
+            dataSource = if (data.origin == ImageOrigin.NETWORK) DataSource.NETWORK else DataSource.DISK,
         )
     }
 }

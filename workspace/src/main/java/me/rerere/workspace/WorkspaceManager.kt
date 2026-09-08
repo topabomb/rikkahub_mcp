@@ -133,6 +133,9 @@ class WorkspaceManager(
         return fileSystem.importBytes(areaRoot, targetPath, inputStream)
     }
 
+    fun statFile(root: String, path: String, area: WorkspaceStorageArea): WorkspaceFileEntry =
+        fileSystem.stat(areaDir(root, area), path)
+
     fun fileSize(
         root: String,
         path: String,

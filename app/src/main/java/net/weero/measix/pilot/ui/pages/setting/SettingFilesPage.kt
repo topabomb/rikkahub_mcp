@@ -146,7 +146,7 @@ private fun FileDirectoryContent(
     var cleanupCategory by remember { mutableStateOf<FileCleanupCategory?>(null) }
     var cleanupRange: FileCleanupRange by remember { mutableStateOf(FileCleanupRange.All) }
     var cleanupCandidateCount by remember { mutableStateOf(0) }
-    var previewImages by remember { mutableStateOf<List<String>>(emptyList()) }
+    var previewImages by remember { mutableStateOf<List<net.weero.measix.pilot.service.ImageSource>>(emptyList()) }
     var previewIndex by remember { mutableStateOf(-1) }
     val settings = LocalSettings.current
     val backgroundHost = rememberImageBackgroundHost(settings)
@@ -450,7 +450,7 @@ private fun FileDirectoryContent(
                         val imagePaths = remember(uploadFiles) {
                             uploadFiles.mapNotNull { file ->
                                 file.takeIf { it.mimeType.startsWith("image/") }
-                                    ?.contentUri
+                                    ?.let { applicationService.imageSource(it.key, it.displayName) }
                             }
                         }
                         val imagePathIndex = remember(imagePaths) {
@@ -467,7 +467,7 @@ private fun FileDirectoryContent(
                                         state is UploadDeleteState.Executing && state.target.key == file.key
                                     },
                                     onDelete = { uploadDeleteState = UploadDeleteState.Confirming(file) },
-                                    onImageClick = file.contentUri.let { uri ->
+                                    onImageClick = applicationService.imageSource(file.key).let { uri ->
                                         imagePathIndex[uri]?.let { index ->
                                             {
                                                 previewImages = imagePaths
@@ -485,7 +485,7 @@ private fun FileDirectoryContent(
                         EmptyFiles()
                     } else {
                         val imagePaths = remember(generatedImages) {
-                            generatedImages.map { it.contentUri }
+                            generatedImages.map { applicationService.imageSource(it.key, it.displayName) }
                         }
                         val imagePathIndex = remember(imagePaths) {
                             imagePaths.withIndex().associate { (index, path) -> path to index }
@@ -498,7 +498,7 @@ private fun FileDirectoryContent(
                                 GeneratedImageItem(
                                     file = file,
                                     onDelete = { pendingGeneratedDeleteKey = file.generatedKey() },
-                                    onImageClick = file.contentUri.let { uri ->
+                                    onImageClick = applicationService.imageSource(file.key).let { uri ->
                                         imagePathIndex[uri]?.let { index ->
                                             {
                                                 previewImages = imagePaths
@@ -525,7 +525,7 @@ private fun FileDirectoryContent(
                 confirmationText = { imageUrl ->
                     when (selectedCategory) {
                         FileCategory.UPLOAD -> {
-                            val target = uploadFiles.firstOrNull { it.contentUri == imageUrl }
+                            val target = uploadFiles.firstOrNull { applicationService.imageSource(it.key) == imageUrl }
                                 ?: error(deleteAlreadyDeletedToast)
                             val impact = queryService.inspectArtifact(target.uploadKey())
                                 ?: error(deleteAlreadyDeletedToast)
@@ -566,7 +566,7 @@ private fun FileDirectoryContent(
                         }
 
                         FileCategory.GENERATED_IMAGES -> {
-                            val target = generatedImages.firstOrNull { it.contentUri == imageUrl }
+                            val target = generatedImages.firstOrNull { applicationService.imageSource(it.key) == imageUrl }
                                 ?: error(deleteAlreadyDeletedToast)
                             resources.getString(
                                 R.string.setting_files_page_delete_generated_confirmation,
@@ -578,7 +578,7 @@ private fun FileDirectoryContent(
                 delete = { imageUrl ->
                     when (selectedCategory) {
                         FileCategory.UPLOAD -> {
-                            val target = uploadFiles.firstOrNull { it.contentUri == imageUrl }
+                            val target = uploadFiles.firstOrNull { applicationService.imageSource(it.key) == imageUrl }
                             if (target == null) {
                                 ImagePreviewDeleteResult.Deleted
                             } else {
@@ -595,7 +595,7 @@ private fun FileDirectoryContent(
                         }
 
                         FileCategory.GENERATED_IMAGES -> {
-                            val target = generatedImages.firstOrNull { it.contentUri == imageUrl }
+                            val target = generatedImages.firstOrNull { applicationService.imageSource(it.key) == imageUrl }
                             if (target == null || applicationService.deleteGenerated(target.generatedKey())) {
                                 ImagePreviewDeleteResult.Deleted
                             } else {

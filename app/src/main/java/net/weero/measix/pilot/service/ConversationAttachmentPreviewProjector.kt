@@ -86,7 +86,7 @@ class ConversationAttachmentPreviewProjector(
                     is AttachmentReferenceTarget.ManagedArtifact -> target.type == "image"
                     AttachmentReferenceTarget.Conflict -> false
                 }
-                val preview = AttachmentPreview(resolved.uri, if (image) files.conversationImageSource(source, resolved.artifactId) else null)
+                val preview = AttachmentPreview(resolved.uri, if (image) files.conversationImageSource(source, resolved.artifactId, resolved.displayName, resolved.modifiedAtMillis) else null)
                 projected[ref] = preview
                 val toolPath = when (target) {
                     is AttachmentReferenceTarget.ManagedArtifact -> target.artifact.toolPath()
@@ -119,7 +119,7 @@ class ConversationAttachmentPreviewProjector(
                 try {
                     val file = artifactStore.resolveToolPath(path) ?: continue
                     artifactStore.resolveImagePreviewForFile(scope, file)?.let {
-                        projected[path] = AttachmentPreview(it.uri, files.conversationImageSource(source, it.artifactId))
+                        projected[path] = AttachmentPreview(it.uri, files.conversationImageSource(source, it.artifactId, it.displayName, it.modifiedAtMillis))
                     }
                 } catch (cancelled: CancellationException) {
                     throw cancelled
@@ -127,6 +127,11 @@ class ConversationAttachmentPreviewProjector(
                     // Malformed or no-longer-available paths have no preview.
                 }
             }
+        }
+        AttachmentRefs.walkMessageParts(messages).filterIsInstance<UIMessagePart.Image>().forEach { image ->
+            val stable = AttachmentRefs.getStableRef(image)?.let(projected::get)
+            val preview = stable ?: files.externalImageSource(source, image.url)?.let { AttachmentPreview(image.url, it) }
+            if (preview != null) projected[image.url] = preview
         }
         return projected
     }

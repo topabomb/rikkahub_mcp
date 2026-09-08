@@ -106,7 +106,7 @@ import net.weero.measix.pilot.ui.adaptive.AdaptiveLayoutDefaults
 import net.weero.measix.pilot.ui.components.message.ChatMessage
 import net.weero.measix.pilot.ui.components.message.LocalAttachmentPreview
 import net.weero.measix.pilot.ui.components.message.LocalConversationImages
-import net.weero.measix.pilot.ui.components.message.collectMessageImageUrls
+import net.weero.measix.pilot.ui.components.message.collectMessageImages
 import net.weero.measix.pilot.ui.components.ui.LocalImagePreviewActions
 import net.weero.measix.pilot.ui.components.ui.LocalImagePreviewOverlay
 import net.weero.measix.pilot.ui.components.ui.rememberImageBackgroundHost
@@ -262,6 +262,7 @@ private fun ChatListNormal(
     onConversationSystemPromptChange: ((String?) -> Unit)? = null,
 ) {
     val scope = rememberCoroutineScope()
+    val imageResolver = net.weero.measix.pilot.ui.components.richtext.rememberConversationImageResolver(detailSource)
     val loading = turnPresentation.isActive
     val loadingState by rememberUpdatedState(loading)
     var isRecentScroll by remember { mutableStateOf(false) }
@@ -354,13 +355,13 @@ private fun ChatListNormal(
         }
 
         val attachmentPreviewProvider = remember(attachmentPreviews) {
-            { ref: String -> attachmentPreviews[ref]?.uri }
+            { ref: String -> attachmentPreviews[ref] }
         }
         // 会话级时序相册：点击期读取最新节点，并只使用查询端口已校验的本地图片 URL。
         val conversationAlbum = remember(attachmentPreviewProvider) {
             {
                 snapshotNodesUpdated.flatMap { node ->
-                    collectMessageImageUrls(node.currentMessage.parts, attachmentPreviewProvider)
+                    collectMessageImages(node.currentMessage.parts, attachmentPreviewProvider)
                 }
             }
         }
@@ -370,6 +371,7 @@ private fun ChatListNormal(
         }
 
         CompositionLocalProvider(
+            net.weero.measix.pilot.ui.components.richtext.LocalImageSourceResolver provides imageResolver,
             net.weero.measix.pilot.ui.components.message.tools.LocalToolConversationId provides snapshot.header.id,
             LocalConversationImages provides conversationAlbum,
             LocalAttachmentPreview provides attachmentPreviewProvider,
@@ -633,6 +635,7 @@ private fun ChatListNormal(
 
             // 导出对话框
             ChatExportSheet(
+                source = detailSource,
                 visible = showExportSheet,
                 onDismissRequest = {
                     showExportSheet = false

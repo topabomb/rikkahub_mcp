@@ -57,7 +57,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.core.content.FileProvider
 import androidx.compose.runtime.mutableStateListOf
 import androidx.navigation3.runtime.NavKey
 import net.weero.measix.pilot.Screen
@@ -78,14 +77,13 @@ import me.rerere.ai.core.MessageRole
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
 import me.rerere.ai.ui.isEmptyUIMessage
-import me.rerere.common.android.appTempFolder
 import net.weero.measix.pilot.R
 import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.datastore.findModelById
 import net.weero.measix.pilot.ui.components.message.MessagePartBlock
 import net.weero.measix.pilot.ui.components.message.ThinkingStep
 import net.weero.measix.pilot.ui.components.message.groupMessageParts
-import net.weero.measix.pilot.ui.components.message.resolveAttachmentImageUrl
+import net.weero.measix.pilot.ui.components.message.resolveAttachmentImageSource
 import net.weero.measix.pilot.ui.components.message.resolveAttachmentMediaUrl
 import net.weero.measix.pilot.ui.components.richtext.MarkdownBlock
 import net.weero.measix.pilot.ui.components.ui.AutoAIIcon
@@ -102,13 +100,13 @@ import net.weero.measix.pilot.utils.getActivity
 import net.weero.measix.pilot.utils.JsonInstantPretty
 import net.weero.measix.pilot.utils.jsonPrimitiveOrNull
 import net.weero.measix.pilot.utils.toLocalString
-import java.io.FileOutputStream
 import java.time.LocalDateTime
 import kotlin.time.Duration.Companion.seconds
 import kotlin.time.DurationUnit
 
 @Composable
 fun ChatExportSheet(
+    source: net.weero.measix.pilot.service.ConversationViewLease?,
     visible: Boolean,
     onDismissRequest: () -> Unit,
     conversationTitle: String,
@@ -120,9 +118,14 @@ fun ChatExportSheet(
     val scope = rememberCoroutineScope()
     val density = LocalDensity.current
     val settings = LocalSettings.current
+    val queries: net.weero.measix.pilot.service.ConversationQueryService = org.koin.compose.koinInject()
+    val verifyAccess: suspend () -> Unit = remember(source, queries) {
+        { queries.requireViewAccess(requireNotNull(source) { "conversation_view_unavailable" }) }
+    }
+    val imageResolver = net.weero.measix.pilot.ui.components.richtext.LocalImageSourceResolver.current
     val mediaExportService: MediaExportService = org.koin.compose.koinInject()
     val attachmentPreview = remember(attachmentPreviews) {
-        { ref: String -> attachmentPreviews[ref]?.uri }
+        { ref: String -> attachmentPreviews[ref] }
     }
     var imageExportOptions by remember { mutableStateOf(ImageExportOptions()) }
     var exporting by remember { mutableStateOf(false) }
@@ -150,7 +153,7 @@ fun ChatExportSheet(
                         exporting = true
                         scope.launch {
                             try {
-                                exportToMarkdown(context, conversationTitle, selectedMessages, attachmentPreview)
+                                exportToMarkdown(context, conversationTitle, selectedMessages, attachmentPreview, mediaExportService, verifyAccess)
                                 toaster.show(markdownSuccessMessage, type = ToastType.Success)
                                 onDismissRequest()
                             } catch (cancelled: CancellationException) {
@@ -233,6 +236,8 @@ fun ChatExportSheet(
                                                 settings = settings,
                                                 mediaExportService = mediaExportService,
                                                 attachmentPreview = attachmentPreview,
+                                                imageResolver = imageResolver,
+                                                verifyAccess = verifyAccess,
                                                 options = imageExportOptions
                                             )
                                             toaster.show(imageSuccessMessage, type = ToastType.Success)
@@ -265,7 +270,9 @@ private suspend fun exportToMarkdown(
     context: Context,
     conversationTitle: String,
     messages: List<UIMessage>,
-    attachmentPreview: (String) -> String?,
+    attachmentPreview: (String) -> net.weero.measix.pilot.service.AttachmentPreview?,
+    mediaExportService: MediaExportService,
+    verifyAccess: suspend () -> Unit,
 ) {
     val filename = "chat-export-${LocalDateTime.now().format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd_HH-mm-ss"))}.md"
 
@@ -284,7 +291,7 @@ private suspend fun exportToMarkdown(
                     }
 
                     is UIMessagePart.Image -> {
-                        resolveAttachmentImageUrl(part, attachmentPreview)?.let { url ->
+                        resolveAttachmentMediaUrl(part.url, part, attachmentPreview)?.let { url ->
                             append("![Image]($url)")
                             appendLine()
                         }
@@ -342,7 +349,7 @@ private suspend fun exportToMarkdown(
                                     }
 
                                     is UIMessagePart.Image -> {
-                                        resolveAttachmentImageUrl(outputPart, attachmentPreview)?.let { url ->
+                                        resolveAttachmentMediaUrl(outputPart.url, outputPart, attachmentPreview)?.let { url ->
                                             append("![Tool Image]($url)")
                                             appendLine()
                                         }
@@ -385,22 +392,8 @@ private suspend fun exportToMarkdown(
         }
     }
 
-    val file = withContext(Dispatchers.IO) {
-        val dir = context.appTempFolder
-        val target = dir.resolve(filename)
-        if (!target.exists()) {
-            check(target.createNewFile()) { "Unable to create export file" }
-        } else {
-            check(target.delete()) { "Unable to replace previous export" }
-            check(target.createNewFile()) { "Unable to create export file" }
-        }
-        FileOutputStream(target).use {
-            it.write(sb.toString().toByteArray())
-        }
-        target
-    }
-    val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
-    shareFile(context, uri, "text/markdown")
+    mediaExportService.shareText(context, sb.toString(), filename, verifyAccess)
+
 }
 
 private suspend fun exportToImage(
@@ -411,19 +404,26 @@ private suspend fun exportToImage(
     messages: List<UIMessage>,
     settings: Settings,
     mediaExportService: MediaExportService,
-    attachmentPreview: (String) -> String?,
+    attachmentPreview: (String) -> net.weero.measix.pilot.service.AttachmentPreview?,
+    imageResolver: (suspend (String) -> net.weero.measix.pilot.service.ImageSource?)?,
+    verifyAccess: suspend () -> Unit,
     options: ImageExportOptions = ImageExportOptions()
 ) {
     val filename = "chat-export-${LocalDateTime.now().format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd_HH-mm-ss"))}.png"
     val composer = BitmapComposer(scope)
     val activity = requireNotNull(context.getActivity()) { "Unable to access the current activity" }
 
+    verifyAccess()
     val bitmap = composer.composableToBitmap(
         activity = activity,
         width = 540.dp,
         screenDensity = density,
         content = {
-            CompositionLocalProvider(LocalSettings provides settings) {
+            CompositionLocalProvider(
+                LocalSettings provides settings,
+                net.weero.measix.pilot.ui.components.richtext.LocalImageSourceResolver provides imageResolver,
+                net.weero.measix.pilot.ui.components.message.LocalAttachmentPreview provides attachmentPreview,
+            ) {
                 ExportedChatImage(
                     conversationTitle = conversationTitle,
                     messages = messages,
@@ -435,28 +435,7 @@ private suspend fun exportToImage(
     )
 
     try {
-        val file = withContext(Dispatchers.IO) {
-            val target = context.appTempFolder.resolve(filename)
-            if (!target.exists()) {
-                check(target.createNewFile()) { "Unable to create export file" }
-            } else {
-                check(target.delete()) { "Unable to replace previous export" }
-                check(target.createNewFile()) { "Unable to create export file" }
-            }
-            FileOutputStream(target).use { output ->
-                check(bitmap.compress(Bitmap.CompressFormat.PNG, 90, output)) {
-                    "Unable to encode image export"
-                }
-            }
-            mediaExportService.saveBitmap(context, bitmap, filename)
-            target
-        }
-        val uri = FileProvider.getUriForFile(
-            context,
-            "${context.packageName}.fileprovider",
-            file
-        )
-        shareFile(context, uri, "image/png")
+        mediaExportService.saveAndShareBitmap(context, bitmap, filename, verifyAccess)
     } finally {
         bitmap.recycle()
     }
@@ -468,7 +447,7 @@ data class ImageExportOptions(val expandReasoning: Boolean = false)
 private fun ExportedChatImage(
     conversationTitle: String,
     messages: List<UIMessage>,
-    attachmentPreview: (String) -> String?,
+    attachmentPreview: (String) -> net.weero.measix.pilot.service.AttachmentPreview?,
     options: ImageExportOptions = ImageExportOptions()
 ) {
     val navBackStack = remember { mutableStateListOf<NavKey>() }
@@ -543,7 +522,7 @@ private fun ExportedChatImage(
 @Composable
 private fun ExportedChatMessage(
     message: UIMessage,
-    attachmentPreview: (String) -> String?,
+    attachmentPreview: (String) -> net.weero.measix.pilot.service.AttachmentPreview?,
     prevMessage: UIMessage? = null,
     options: ImageExportOptions = ImageExportOptions()
 ) {
@@ -654,7 +633,7 @@ private fun ExportedChatMessage(
                             }
 
                             is UIMessagePart.Image -> {
-                                resolveAttachmentImageUrl(part, attachmentPreview)?.let { imageUrl ->
+                                resolveAttachmentImageSource(part, attachmentPreview)?.let { imageUrl ->
                                     AsyncImage(
                                         model = ImageRequest.Builder(context)
                                             .data(imageUrl)
@@ -808,20 +787,5 @@ private fun ChainOfThoughtScope.ExportedToolStep(
         },
         contentVisible = false,
         content = null,
-    )
-}
-
-private fun shareFile(context: Context, uri: Uri, mimeType: String) {
-    val intent = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
-        type = mimeType
-        putExtra(android.content.Intent.EXTRA_STREAM, uri)
-        addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
-    }
-    @Suppress("LocalContextGetResourceValueCall")
-    context.startActivity(
-        android.content.Intent.createChooser(
-            intent,
-            context.getString(R.string.chat_page_export_share_via)
-        )
     )
 }

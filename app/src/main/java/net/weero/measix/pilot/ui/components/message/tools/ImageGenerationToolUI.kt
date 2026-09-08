@@ -48,7 +48,7 @@ import net.weero.measix.pilot.data.ai.tools.local.ImageGenerationToolMetadata
 import net.weero.measix.pilot.data.imggen.imageGenerationFailureStringRes
 import net.weero.measix.pilot.ui.components.message.LocalAttachmentPreview
 import net.weero.measix.pilot.ui.components.message.LocalConversationImages
-import net.weero.measix.pilot.ui.components.message.resolveAttachmentImageUrl
+import net.weero.measix.pilot.ui.components.message.resolveAttachmentImageSource
 import net.weero.measix.pilot.ui.components.message.isImagePartLoading
 import net.weero.measix.pilot.ui.components.richtext.ZoomableAsyncImage
 import net.weero.measix.pilot.ui.components.ui.FormItem
@@ -286,7 +286,7 @@ object ImageGenerationToolUI : ToolUIRenderer {
                             .shimmer(isLoading = true)
                     )
                 } else {
-                    resolveAttachmentImageUrl(image, attachmentPreview)?.let { imageUrl ->
+                    resolveAttachmentImageSource(image, attachmentPreview)?.let { imageUrl ->
                         ZoomableAsyncImage(
                             model = imageUrl,
                             contentDescription = null,

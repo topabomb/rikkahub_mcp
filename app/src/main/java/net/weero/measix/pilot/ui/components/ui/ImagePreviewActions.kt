@@ -1,6 +1,7 @@
 package net.weero.measix.pilot.ui.components.ui
 
 import me.rerere.common.configuration.ConfigurationReference
+import net.weero.measix.pilot.service.ImageSource
 import android.content.Context
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -40,7 +41,7 @@ import kotlin.time.Duration
 data class ImagePreviewAction(
     val icon: ImageVector,
     val contentDescription: String,
-    val onClick: (url: String, toaster: ToasterState) -> Unit,
+    val onClick: (url: ImageSource, toaster: ToasterState) -> Unit,
 )
 
 private val EmptyImagePreviewActions: List<ImagePreviewAction> = emptyList()
@@ -70,7 +71,7 @@ internal fun backgroundFailureMessage(context: Context, reason: String?): String
 }
 
 internal suspend fun applyImageAsBackground(
-    url: String,
+    url: ImageSource,
     assistantId: ConfigurationReference,
     backgroundService: AssistantBackgroundService,
 ): BackgroundUpdateResult = backgroundService.replaceUserSelectedBackground(assistantId, url)
@@ -79,14 +80,14 @@ internal fun assistantDisplayName(name: String?, fallback: String): String =
     name?.trim().orEmpty().ifBlank { fallback }
 
 private data class PendingBackgroundChoice(
-    val url: String,
+    val url: ImageSource,
     val toaster: ToasterState,
     val assistantId: ConfigurationReference,
     val assistantName: String,
 )
 
 private data class PendingAssistantPick(
-    val url: String,
+    val url: ImageSource,
     val toaster: ToasterState,
 )
 
@@ -219,7 +220,7 @@ fun rememberImageBackgroundHost(
 internal fun setBackgroundWithFeedback(
     scope: CoroutineScope,
     context: Context,
-    url: String,
+    url: ImageSource,
     assistantId: ConfigurationReference,
     assistantName: String,
     toaster: ToasterState,

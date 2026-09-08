@@ -56,6 +56,37 @@ class FileManagementServicesTest {
 
     @After fun tearDown() { root.deleteRecursively() }
 
+    @Test fun `preview production survives selection changes while image access stays with its request`() = runTest {
+        val selected = io.mockk.mockk<EnterpriseSessionController>()
+        var selectionAllowed = true
+        coEvery { selected.withRealmAccess<Unit>(selection.access, any()) } coAnswers { secondArg<suspend () -> Unit>()() }
+        coEvery { selected.withSelectedRealmSelection<Unit>(selection, any()) } coAnswers {
+            check(selectionAllowed) { "selection_changed" }
+            secondArg<suspend () -> Unit>()()
+        }
+        val service = FileManagementApplicationService(mockk(), mockk(), ApplicationRecoveryGate().apply { ready() }, selected)
+        val owner = Job()
+        val item = me.rerere.ai.ui.ImageGenerationItem(
+            data = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+            mimeType = "image/png",
+        )
+        val first = service.createGeneratedPreview(item, root, selection, owner)
+        try {
+            first.image.requireAccess()
+            selectionAllowed = false
+            assertTrue(runCatching { first.image.readBytes() }.isFailure)
+            val second = service.createGeneratedPreview(item, root, selection, owner)
+            try {
+                assertTrue(second.file.isFile)
+                assertTrue(runCatching { second.image.requireAccess() }.isFailure)
+                selectionAllowed = true
+                second.image.requireAccess()
+                owner.cancel()
+                assertTrue(runCatching { second.image.readBytes() }.exceptionOrNull() is kotlinx.coroutines.CancellationException)
+            } finally { second.file.delete() }
+        } finally { owner.cancel(); first.file.delete() }
+    }
+
     @Test fun `closing the original page during image work rejects the result`() = runTest {
         for (checkOnly in listOf(true, false)) {
             val artifacts = mockk<ArtifactStore>()
@@ -292,7 +323,7 @@ class FileManagementServicesTest {
 
         try {
             val failure = runCatching {
-                service.createGeneratedPreview(item, tempDirectory)
+                service.createGeneratedPreview(item, tempDirectory, selection, requireNotNull(currentCoroutineContext()[Job]))
             }.exceptionOrNull()
             assertTrue(failure is IllegalStateException)
             assertTrue(partialFile != null)
@@ -326,7 +357,7 @@ class FileManagementServicesTest {
         try {
             val operation = async {
                 operationJob = currentCoroutineContext()[Job]
-                service.createGeneratedPreview(item, tempDirectory)
+                service.createGeneratedPreview(item, tempDirectory, selection, requireNotNull(currentCoroutineContext()[Job]))
             }
             val failure = runCatching { operation.await() }.exceptionOrNull()
             assertTrue(failure is kotlinx.coroutines.CancellationException)

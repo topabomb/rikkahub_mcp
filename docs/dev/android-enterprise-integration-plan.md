@@ -529,6 +529,10 @@ C6 的文件创建与引用边界已接通：上传、粘贴文本、输出图�
 
 本批完整串行 `test assembleDebug lintDebug assembleRelease :app:connectedDebugAndroidTest` 在 8 分 39 秒内通过；App 2,075 项 JVM 测试无失败/跳过，lint 0 错误、287 警告，Workspace 保留 11 项 Windows 条件跳过。Android 17 模拟器 18 项全部通过，包括实际挂载输入组件的发送失败恢复。独立复审无剩余本批实质问题，证据见 `build/reports/enterprise/image-source-verification.json`；Release 构建通过不等于 Release 设备验收。
 
+查看器与导出接线批次：会话/子助手相册、Markdown/HTML、文件目录、生成结果和 Workspace 图片已改为 ImageSource；共享配置图片按 durable root 验证，临时生成预览借用完整请求 Job。删除旧 String 查看器入口及服务内重复的网络/base64/本地路径解析。图片保存保留编码并通过 MediaStore pending 发布；聊天截图与 Markdown 的最终发布、分享复验原页面，文件收口统一放在既有 MediaExportService。设为背景的目标域、ImgGen 参考输入、其他文件/媒体出口及 Workspace 上传挂载仍未完成，不计作完整 C6。
+
+本批定向设备复验 39 项通过，包括实际查看器手势、GIF 编码保全、pending 清理和共享配置根撤销。完整设备扫描发现旧迁移测试夹具没有注册既有 Migration_11_12，已修正为当前生产迁移链；查看器测试安装生产图片组件，相册测试显式查询 pending，复验通过。完整门禁中的 JVM、Debug/Release 构建和 lint 已通过：App 2,065 项 JVM 测试无失败/跳过，lint 0 错误、286 警告，Workspace 保留 11 项 Windows 条件跳过。完整 Android 17 扫描 169 项中 168 项通过，真实键盘用例在 Gboard 展开接近十秒时超时；改用真实触摸并延长系统 IME 等待后，该组 8 项设备复验全部通过，未再重跑整套 169 项。取消补偿的 2 项 JVM 复验通过，保留原取消异常及清理失败诊断。独立审查无剩余本批实质问题；分层证据见 `build/reports/enterprise/image-viewer-verification.json`。真实平台互操作、Release 设备与版本 20 整体验收仍未完成。
+
 ## 11. 验收证据
 
 | 编号 | 必须证明 |

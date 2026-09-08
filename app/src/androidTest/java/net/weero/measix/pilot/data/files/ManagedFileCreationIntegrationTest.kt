@@ -110,6 +110,26 @@ class ManagedFileCreationIntegrationTest {
         check(root.deleteRecursively())
     }
 
+    @Test fun sharedConfigurationImagesRequireDurableConfigurationRoots() = runBlocking {
+        store.ensureReferenceProjection()
+        val sessions = EnterpriseSessionController(EnterpriseAppliedStore(File(root, "configuration-image-session")))
+        sessions.recover()
+        val files = FileManagementApplicationService(store, GeneratedMediaStore(root, GenMediaRepository(database.genMediaDao()), store),
+            ApplicationRecoveryGate().apply { ready() }, sessions)
+        val owned = store.createFromBytes(ConfigurationScope.Personal, pngBytes(), "shared.png", "image/png", origin = ArtifactOrigin.USER)
+        assertTrue(runCatching { files.resolveConfigurationImage(owned.uri.toString()) }.isFailure)
+        val assistant = net.weero.measix.pilot.data.model.Assistant(background = owned.uri.toString())
+        store.updateSettingsReferences { it.copy(assistants = it.assistants + assistant) }
+        val image = requireNotNull(files.resolveConfigurationImage(owned.uri.toString()))
+        assertArrayEquals(pngBytes(), image.readBytes())
+        val packet = payloadContext.assets.open(LocalEnterpriseSource.EXAMPLE_ASSET).use(EnterprisePackageCodec::decode)
+        sessions.enrollLocal(packet.identity, { packet.identity }, { packet })
+        assertArrayEquals(pngBytes(), image.readBytes())
+        store.updateSettingsReferences { it.copy(assistants = it.assistants.filterNot { a -> a.id == assistant.id }) }
+        assertTrue(runCatching { image.requireAccess() }.isFailure)
+        assertTrue(runCatching { image.readBytes() }.isFailure)
+    }
+
     @OptIn(coil3.annotation.DelicateCoilApi::class)
     @Test
     fun mountedInputThumbnailRecoversWhenRejectedSubmissionReturnsOwnership() {

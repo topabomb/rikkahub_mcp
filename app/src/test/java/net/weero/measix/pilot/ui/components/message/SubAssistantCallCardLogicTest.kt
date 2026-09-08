@@ -77,6 +77,8 @@ class SubAssistantCallCardLogicTest {
 
     @Test
     fun `preview resolver receives canonical stable ref`() {
+        val image = io.mockk.mockk<net.weero.measix.pilot.service.ImageSource>()
+        var resolvedRef: String? = null
         val previews = resolveSubAssistantCardImagePreviews(
             artifacts = listOf(
                 net.weero.measix.pilot.data.ai.subassistant.SubAssistantCallArtifact(
@@ -85,16 +87,17 @@ class SubAssistantCallCardLogicTest {
                     mime = "image/png",
                 ),
             ),
-            previewResolver = { ref -> "preview:$ref" },
+            previewResolver = { ref -> resolvedRef = ref; net.weero.measix.pilot.service.AttachmentPreview("preview:$ref", image) },
         )
         assertEquals(
             "attachment:11111111-1111-1111-1111-111111111111",
             previews.single().ref,
         )
         assertEquals(
-            "preview:attachment:11111111-1111-1111-1111-111111111111",
-            previews.single().url,
+            "attachment:11111111-1111-1111-1111-111111111111",
+            resolvedRef,
         )
+        org.junit.Assert.assertSame(image, previews.single().url)
     }
 
     @Test

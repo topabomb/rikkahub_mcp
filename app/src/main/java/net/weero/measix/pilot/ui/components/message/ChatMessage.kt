@@ -784,14 +784,14 @@ private fun MessagePartsBlock(
 /** UI media must use the query-projected, ArtifactStore-validated local URL. */
 private fun resolveRenderableImageUrl(
     part: UIMessagePart.Image,
-    attachmentPreview: (String) -> String?,
-): String? {
-    return resolveAttachmentImageUrl(part, attachmentPreview)
+    attachmentPreview: (String) -> net.weero.measix.pilot.service.AttachmentPreview?,
+): net.weero.measix.pilot.service.ImageSource? {
+    return resolveAttachmentImageSource(part, attachmentPreview)
 }
 
 private fun resolveManagedMediaFile(
     part: UIMessagePart,
-    attachmentPreview: (String) -> String?,
+    attachmentPreview: (String) -> net.weero.measix.pilot.service.AttachmentPreview?,
 ): java.io.File? {
     val rawUrl = when (part) {
         is UIMessagePart.Document -> part.url
@@ -801,7 +801,7 @@ private fun resolveManagedMediaFile(
     }
     if (!rawUrl.startsWith("file:", ignoreCase = true)) return null
     val ref = AttachmentRefs.getStableRef(part) ?: return null
-    return attachmentPreview(ref)?.let(AttachmentRefs::parseFileUrl)
+    return attachmentPreview(ref)?.uri?.let(AttachmentRefs::parseFileUrl)
 }
 
 private val ToolLivePhase.isPreExecutionOrRunning: Boolean

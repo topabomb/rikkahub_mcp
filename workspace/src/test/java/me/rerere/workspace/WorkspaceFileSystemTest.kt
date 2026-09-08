@@ -6,6 +6,18 @@ import org.junit.Test
 import java.nio.file.Files
 
 class WorkspaceFileSystemTest {
+    @Test fun statDoesNotDependOnDirectoryPageAndRejectsEscapes() {
+        val root = Files.createTempDirectory("workspace-stat").toFile()
+        try {
+            val files = WorkspaceFileSystem(WorkspaceConfig(maxListEntries = 1))
+            val expected = files.writeText(root, "z.png", "image")
+            files.writeText(root, "a.txt", "first")
+            assertEquals(listOf("a.txt"), files.list(root).map { it.path })
+            assertEquals(expected, files.stat(root, "z.png"))
+            assertTrue(runCatching { files.stat(root, "../outside") }.isFailure)
+        } finally { root.deleteRecursively() }
+    }
+
     @Test
     fun fileOperationsWorkInsideWorkspaceRoot() {
         val root = Files.createTempDirectory("workspace-test").toFile()

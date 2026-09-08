@@ -88,11 +88,12 @@ class AssistantBackgroundServiceTest {
         coEvery {
             env.store.createFromBytes(ConfigurationScope.Personal, TINY_PNG, "background.png", "image/png", any(), ArtifactOrigin.USER)
         } returns env.owned
-        val encoded = java.util.Base64.getEncoder().encodeToString(TINY_PNG)
+
 
         val result = env.service.replaceUserSelectedBackground(
             env.assistant.id,
-            "data:image/png;base64,$encoded",
+            net.weero.measix.pilot.service.ImageSource("inline", net.weero.measix.pilot.service.ImageOrigin.INLINE,
+                verifyAccess = {}, readPayload = { TINY_PNG }),
         )
 
         assertTrue(result.updated)
@@ -105,9 +106,10 @@ class AssistantBackgroundServiceTest {
     @Test
     fun `rejected remote image never enters artifact storage`() = runTest {
         val env = Env()
-        coEvery { env.fetcher.fetch(any()) } returns RemoteMediaFetchResult.Failure("unsafe")
+        val image = net.weero.measix.pilot.service.ImageSource("rejected", net.weero.measix.pilot.service.ImageOrigin.NETWORK,
+            verifyAccess = {}, readPayload = { error("unsafe") })
 
-        val result = env.service.replaceUserSelectedBackground(env.assistant.id, "https://example.com/image.png")
+        val result = env.service.replaceUserSelectedBackground(env.assistant.id, image)
 
         assertEquals("background_copy_failed", result.reason)
         coVerify(exactly = 0) { env.store.createFromBytes(any(), any(), any(), any(), any(), any()) }
@@ -120,14 +122,11 @@ class AssistantBackgroundServiceTest {
         val assistant = Assistant(name = "A")
         val settings = Settings(assistants = listOf(assistant))
         val store = mockk<ArtifactStore>()
-        val context = mockk<Context>()
-        val fetcher = mockk<SafeRemoteMediaFetcher>()
         val owned = owned(directory)
         val service: AssistantBackgroundService
 
         init {
-            every { context.applicationContext } returns context
-            service = AssistantBackgroundService(store, context, fetcher)
+            service = AssistantBackgroundService(store)
             coEvery { store.copyFile(ConfigurationScope.Personal, source, "image/png", source.name, any(), ArtifactOrigin.GENERATED) } returns owned
             coEvery { store.discardUnpublished(owned) } returns ArtifactDeleteResult.Completed(owned.entity.id)
             coEvery { store.collectGarbage(any()) } returns emptyList()

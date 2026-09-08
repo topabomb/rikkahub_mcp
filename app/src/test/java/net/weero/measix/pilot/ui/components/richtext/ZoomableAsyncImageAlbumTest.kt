@@ -1,38 +1,32 @@
 package net.weero.measix.pilot.ui.components.richtext
 
+import net.weero.measix.pilot.service.ImageSource
+import net.weero.measix.pilot.service.ImageOrigin
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ZoomableAsyncImageAlbumTest {
-    @Test
-    fun `blank model does not open a viewer`() {
-        val album = listOf("file:///a.png", "file:///b.png")
-        val (images, index) = resolveViewerImages(album, "  ")
-        assertTrue(images.isEmpty())
-        assertEquals(0, index)
-    }
+    private fun source(id: String) = ImageSource(id, ImageOrigin.UPLOAD, verifyAccess = {}, readPayload = { byteArrayOf() })
 
-    @Test
-    fun `hit uses the album and the clicked index`() {
-        val album = listOf("file:///a.png", "file:///b.png", "file:///c.png")
-        val (images, index) = resolveViewerImages(album, "file:///b.png")
-        assertEquals(album, images)
+    @Test fun `album preserves original capabilities and uses clicked index`() {
+        val a = source("a")
+        val b = source("b")
+        val album = listOf(a, b)
+        val (images, index) = resolveViewerImages(album, b)
+        assertSame(album, images)
+        assertSame(b, images[index])
         assertEquals(1, index)
+        assertTrue(resolveViewerImages(album, null).first.isEmpty())
     }
 
-    @Test
-    fun `url missing from a non-empty album falls back to single image`() {
-        val album = listOf("file:///a.png", "file:///b.png")
-        val (images, index) = resolveViewerImages(album, "data:image/png;base64,")
-        assertEquals(listOf("data:image/png;base64,"), images)
-        assertEquals(0, index)
-    }
-
-    @Test
-    fun `empty album opens the clicked image alone`() {
-        val (images, index) = resolveViewerImages(emptyList(), "file:///only.png")
-        assertEquals(listOf("file:///only.png"), images)
-        assertEquals(0, index)
+    @Test fun `image absent from album keeps its own capability`() {
+        val a = source("a")
+        for (album in listOf(emptyList(), listOf(source("b")))) {
+            val (images, index) = resolveViewerImages(album, a)
+            assertSame(a, images.single())
+            assertEquals(0, index)
+        }
     }
 }

@@ -90,7 +90,7 @@ object AttachmentInspectionToolUI : ToolUIRenderer {
             if (refs.isNotEmpty()) {
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     refs.forEach { ref ->
-                        val url = previewResolver(ref)
+                        val url = previewResolver(ref)?.image
                         if (url != null) {
                             ZoomableAsyncImage(
                                 model = url,

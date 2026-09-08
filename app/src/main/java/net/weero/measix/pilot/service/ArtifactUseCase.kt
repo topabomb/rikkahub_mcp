@@ -217,6 +217,9 @@ class ArtifactDraftScope internal constructor(
 
     private fun inputImageSource(uri: String, artifactId: Long, artifact: OwnedArtifact?): ImageSource = ImageSource(
         cacheIdentity = "draft:$imageReadIdentity:$artifactId:${artifact?.ownershipToken}",
+        origin = ImageOrigin.UPLOAD,
+        displayName = artifact?.entity?.displayName,
+        modifiedAtMillis = artifact?.entity?.updatedAt,
         verifyAccess = { withImageAccess(uri, artifact) {
             if (artifact == null) store.requireImageAccess(scope, artifactId)
             else store.requireOwnedImageAccess(scope, artifact)

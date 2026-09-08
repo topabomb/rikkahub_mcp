@@ -1,5 +1,6 @@
 package net.weero.measix.pilot.ui.components.richtext
 
+import net.weero.measix.pilot.service.ImageSource
 import androidx.compose.foundation.clickable
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -27,13 +28,13 @@ import net.weero.measix.pilot.ui.theme.LocalDarkMode
 
 @Composable
 fun ZoomableAsyncImage(
-    model: String?,
+    model: ImageSource?,
     contentDescription: String?,
     modifier: Modifier = Modifier,
     alignment: Alignment = Alignment.Center,
     contentScale: ContentScale = ContentScale.Fit,
     alpha: Float = DefaultAlpha,
-    albumProvider: (() -> List<String>)? = null,
+    albumProvider: (() -> List<ImageSource>)? = null,
     extraActions: List<ImagePreviewAction>? = null,
     overlay: (@Composable () -> Unit)? = null,
 ) {
@@ -88,9 +89,39 @@ fun ZoomableAsyncImage(
     }
 }
 
-internal fun resolveViewerImages(album: List<String>, model: String?): Pair<List<String>, Int> {
-    val url = model?.trim().orEmpty()
-    if (url.isEmpty()) return emptyList<String>() to 0
+internal fun resolveViewerImages(album: List<ImageSource>, model: ImageSource?): Pair<List<ImageSource>, Int> {
+    val url = model ?: return emptyList<ImageSource>() to 0
     val index = album.indexOf(url)
     return if (index >= 0) album to index else listOf(url) to 0
+}
+
+val LocalImageSourceResolver = androidx.compose.runtime.compositionLocalOf<(suspend (String) -> ImageSource?)?> { null }
+
+@Composable
+internal fun rememberConversationImageResolver(
+    source: net.weero.measix.pilot.service.ConversationViewLease?,
+): suspend (String) -> ImageSource? {
+    val files: net.weero.measix.pilot.service.FileManagementApplicationService = org.koin.compose.koinInject()
+    return remember(source, files) { { url -> source?.let { files.resolveConversationImage(it, url) } } }
+}
+
+@Composable
+internal fun rememberResolvedImageSource(url: String?): ImageSource? {
+    val preview = net.weero.measix.pilot.ui.components.message.LocalAttachmentPreview.current
+    val resolver = LocalImageSourceResolver.current
+    val files: net.weero.measix.pilot.service.FileManagementApplicationService = org.koin.compose.koinInject()
+    val projected = url?.let(preview)?.image
+    if (projected != null) return projected
+    return androidx.compose.runtime.key(url, resolver) {
+        val image by androidx.compose.runtime.produceState<ImageSource?>(null, url, resolver, files) {
+            value = try {
+                url?.let { if (resolver != null) resolver(it) else files.externalImageSource(it) }
+            } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                null
+            }
+        }
+        image
+    }
 }

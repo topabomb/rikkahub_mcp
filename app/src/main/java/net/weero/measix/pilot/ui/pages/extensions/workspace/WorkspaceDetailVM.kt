@@ -76,10 +76,10 @@ class WorkspaceDetailVM(
         }
     }
 
-    suspend fun delete(entry: WorkspaceFileEntry): Boolean = try {
+    suspend fun delete(entry: WorkspaceFileEntry, area: WorkspaceStorageArea = state.value.area): Boolean = try {
         val deleted = workspaceApplicationService.deleteFile(
             workspaceId = id,
-            area = state.value.area,
+            area = area,
             path = entry.path,
             recursive = entry.isDirectory,
         )
@@ -139,13 +139,17 @@ class WorkspaceDetailVM(
         }
     }
 
+    fun imageSource(entry: WorkspaceFileEntry, area: WorkspaceStorageArea): net.weero.measix.pilot.service.ImageSource =
+        workspaceApplicationService.imageSource(id, area, entry)
+
     fun exportFile(entry: WorkspaceFileEntry, outputStream: OutputStream) {
+        val area = state.value.area
         viewModelScope.launch {
             try {
                 outputStream.use { output ->
                     workspaceApplicationService.exportFile(
                         workspaceId = id,
-                        area = state.value.area,
+                        area = area,
                         path = entry.path,
                         output = output,
                     )
@@ -163,6 +167,7 @@ class WorkspaceDetailVM(
      * 供分享 / 图片预览 / 交给系统应用打开等复用 (它们都需要一个 FileProvider 可访问的真实 File).
      */
     fun exportToCacheFile(entry: WorkspaceFileEntry, cacheDir: File, onReady: (File) -> Unit) {
+        val area = state.value.area
         viewModelScope.launch {
             var file: File? = null
             try {
@@ -173,7 +178,7 @@ class WorkspaceDetailVM(
                 exported.outputStream().use { output ->
                     workspaceApplicationService.exportFile(
                         workspaceId = id,
-                        area = state.value.area,
+                        area = area,
                         path = entry.path,
                         output = output,
                     )

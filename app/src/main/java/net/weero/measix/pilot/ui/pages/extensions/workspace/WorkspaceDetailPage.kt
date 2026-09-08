@@ -212,10 +212,8 @@ fun WorkspaceDetailPage(id: String) {
                                     Screen.WorkspaceFileEditor(id, state.area.name, entry.path)
                                 )
 
-                                WorkspaceFileType.IMAGE -> vm.exportToCacheFile(entry, context.cacheDir) { file ->
-                                    // 传绝对路径 (而非 content:// URI): Coil 可直接加载,
-                                    // 预览弹窗的保存按钮 saveMessageImage 只认 "/" 开头路径, content URI 会报错
-                                    previewImage = WorkspaceImagePreview(entry, file.absolutePath)
+                                WorkspaceFileType.IMAGE -> {
+                                    previewImage = WorkspaceImagePreview(entry, state.area, vm.imageSource(entry, state.area))
                                 }
 
                                 WorkspaceFileType.OTHER -> vm.exportToCacheFile(entry, context.cacheDir) { file ->
@@ -290,11 +288,8 @@ fun WorkspaceDetailPage(id: String) {
     }
 
     previewImage?.let { preview ->
-        DisposableEffect(preview.uri) {
-            onDispose { File(preview.uri).delete() }
-        }
         ImagePreviewDialog(
-            images = listOf(preview.uri),
+            images = listOf(preview.image),
             onDismissRequest = {
                 previewImage = null
             },
@@ -303,7 +298,7 @@ fun WorkspaceDetailPage(id: String) {
                     resources.getString(R.string.workspace_detail_will_delete, preview.entry.path)
                 },
                 delete = {
-                    if (vm.delete(preview.entry)) {
+                    if (vm.delete(preview.entry, preview.area)) {
                         ImagePreviewDeleteResult.Deleted
                     } else {
                         ImagePreviewDeleteResult.Failed(imageDeleteFailed)
@@ -334,7 +329,8 @@ fun WorkspaceDetailPage(id: String) {
 
 private data class WorkspaceImagePreview(
     val entry: WorkspaceFileEntry,
-    val uri: String,
+    val area: WorkspaceStorageArea,
+    val image: net.weero.measix.pilot.service.ImageSource,
 )
 
 @Composable

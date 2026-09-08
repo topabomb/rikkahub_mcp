@@ -298,7 +298,7 @@ private fun RenderImage(
             contentAlignment = Alignment.Center
         ) {
             ZoomableAsyncImage(
-                model = src,
+                model = rememberResolvedImageSource(src),
                 contentDescription = alt.takeIf { it.isNotEmpty() },
                 modifier = Modifier
                     .fillMaxWidth()

@@ -3,23 +3,16 @@ package net.weero.measix.pilot.data.imggen
 import net.weero.measix.pilot.data.configuration.ConfigurationScope
 
 import me.rerere.common.configuration.ConfigurationReference
-import android.content.Context
-import android.net.Uri
+import net.weero.measix.pilot.service.ImageSource
 import android.util.Log
-import androidx.core.net.toUri
-import java.io.ByteArrayOutputStream
 import java.io.File
-import java.util.Base64
 import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.withContext
 import net.weero.measix.pilot.data.ai.attachments.ImageMime
-import net.weero.measix.pilot.data.ai.attachments.RemoteMediaFetchResult
-import net.weero.measix.pilot.data.ai.attachments.SafeRemoteMediaFetcher
 import net.weero.measix.pilot.data.db.entity.ArtifactOrigin
 import net.weero.measix.pilot.data.files.ArtifactStore
-import net.weero.measix.pilot.data.files.FileUtils
 import net.weero.measix.pilot.data.files.OwnedArtifact
 import net.weero.measix.pilot.data.files.requireDiscarded
 
@@ -32,16 +25,17 @@ data class BackgroundUpdateResult(
 
 class AssistantBackgroundService(
     private val artifactStore: ArtifactStore,
-    context: Context,
-    private val remoteMediaFetcher: SafeRemoteMediaFetcher,
 ) {
-    private val appContext = context.applicationContext
 
     suspend fun replaceUserSelectedBackground(
         assistantId: ConfigurationReference,
-        imageUrl: String,
+        image: ImageSource,
     ): BackgroundUpdateResult = replaceBackground(assistantId) {
-        createUserSelectedCopy(imageUrl)
+        val bytes = image.readBytes()
+        val materialized = validatedBackground(bytes, image.displayName ?: "background") ?: return@replaceBackground null
+        image.requireAccess()
+        artifactStore.createFromBytes(ConfigurationScope.Personal, materialized.bytes, materialized.displayName,
+            materialized.mimeType, origin = ArtifactOrigin.USER)
     }
 
     suspend fun replaceGeneratedBackground(
@@ -145,76 +139,6 @@ class AssistantBackgroundService(
         )
     }
 
-    private suspend fun createUserSelectedCopy(imageUrl: String): OwnedArtifact? {
-        val source = imageUrl.trim()
-        val materialized = when {
-            source.startsWith("http://", ignoreCase = true) ||
-                source.startsWith("https://", ignoreCase = true) -> fetchRemote(source)
-
-            source.startsWith("data:", ignoreCase = true) -> decodeDataImage(source)
-            else -> readLocalImage(source)
-        } ?: return null
-        return artifactStore.createFromBytes(
-            scope = ConfigurationScope.Personal,
-            bytes = materialized.bytes,
-            displayName = materialized.displayName,
-            mimeType = materialized.mimeType,
-            origin = ArtifactOrigin.USER,
-        )
-    }
-
-    private suspend fun fetchRemote(url: String): MaterializedBackground? = withContext(Dispatchers.IO) {
-        when (val result = remoteMediaFetcher.fetch(url)) {
-            is RemoteMediaFetchResult.Success -> MaterializedBackground(
-                bytes = result.bytes,
-                mimeType = result.mimeType,
-                displayName = result.fileName,
-            )
-
-            is RemoteMediaFetchResult.Failure -> null
-        }
-    }
-
-    private suspend fun decodeDataImage(value: String): MaterializedBackground? = withContext(Dispatchers.IO) {
-        val header = value.substringBefore(',')
-        if (!header.contains(";base64", ignoreCase = true)) return@withContext null
-        val payload = value.substringAfter(',', missingDelimiterValue = "")
-        if (payload.isEmpty() || payload.length > MAX_BASE64_IMAGE_CHARS) return@withContext null
-        val bytes = runCatching { Base64.getDecoder().decode(payload) }.getOrNull() ?: return@withContext null
-        validatedBackground(bytes, "background")
-    }
-
-    private suspend fun readLocalImage(value: String): MaterializedBackground? = withContext(Dispatchers.IO) {
-        val uri = localImageUri(value) ?: return@withContext null
-        val input = runCatching { appContext.contentResolver.openInputStream(uri) }.getOrNull()
-            ?: return@withContext null
-        val bytes = input.use(::readImageBytes) ?: return@withContext null
-        val declaredMime = FileUtils.getFileMimeType(appContext, uri)
-        val displayName = FileUtils.getFileNameFromUri(appContext, uri)
-            ?.takeIf(String::isNotBlank)
-            ?: "background.${extensionForMime(declaredMime.orEmpty())}"
-        validatedBackground(bytes, displayName)
-    }
-
-    private fun localImageUri(value: String): Uri? = when {
-        value.startsWith("content:", ignoreCase = true) || value.startsWith("file:", ignoreCase = true) ->
-            runCatching { Uri.parse(value) }.getOrNull()
-
-        else -> File(value).takeIf(File::isFile)?.toUri()
-    }
-
-    private fun readImageBytes(input: java.io.InputStream): ByteArray? {
-        val output = ByteArrayOutputStream()
-        val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
-        while (true) {
-            val read = input.read(buffer)
-            if (read < 0) break
-            if (output.size() + read > GeneratedMediaStore.MAX_IMAGE_BYTES) return null
-            output.write(buffer, 0, read)
-        }
-        return output.toByteArray().takeIf(ByteArray::isNotEmpty)
-    }
-
     private fun validatedBackground(
         bytes: ByteArray,
         displayName: String,
@@ -271,8 +195,6 @@ class AssistantBackgroundService(
 
     companion object {
         private const val TAG = "AssistantBackgroundService"
-        private const val MAX_BASE64_IMAGE_CHARS =
-            (GeneratedMediaStore.MAX_IMAGE_BYTES * 4 / 3) + 16
     }
 }
 

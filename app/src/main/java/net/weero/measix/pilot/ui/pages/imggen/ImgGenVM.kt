@@ -51,16 +51,18 @@ data class GeneratedImage(
     val id: Int,
     val prompt: String,
     val filePath: String,
+    val image: net.weero.measix.pilot.service.ImageSource,
     val timestamp: Long,
     val model: String
 )
 
-private fun GeneratedMediaUiModel.toGeneratedImage(): GeneratedImage {
+private fun GeneratedMediaUiModel.toGeneratedImage(files: net.weero.measix.pilot.service.FileManagementApplicationService): GeneratedImage {
     return GeneratedImage(
         selection = key.selection,
         id = key.mediaId,
         prompt = prompt,
         filePath = filePath,
+        image = files.imageSource(key, File(filePath).name, createdAt),
         timestamp = createdAt,
         model = modelId,
     )
@@ -122,7 +124,7 @@ class ImgGenVM internal constructor(
     val generatedImages: Flow<PagingData<GeneratedImage>> = fileManagementQueryService
         .observeGeneratedPaging()
         .map { pagingData ->
-            pagingData.map(GeneratedMediaUiModel::toGeneratedImage)
+            pagingData.map { it.toGeneratedImage(fileManagementApplicationService) }
         }
         .cachedIn(viewModelScope)
 
@@ -183,6 +185,7 @@ class ImgGenVM internal constructor(
         cancelJob = viewModelScope.launch(start = CoroutineStart.ATOMIC) {
             withContext(NonCancellable) { previous?.join() }
             currentCoroutineContext().ensureActive()
+            val requestJob = requireNotNull(currentCoroutineContext()[Job])
             var previewFile: File? = null
             try {
                 _isGenerating.value = true
@@ -209,14 +212,15 @@ class ImgGenVM internal constructor(
                     consumerPlan = GeneratedMediaConsumerPlan.NONE,
                     onPartial = { item ->
                         previewFile?.delete()
-                        val preview = saveImagePreview(item)
-                        previewFile = preview
+                        val preview = saveImagePreview(item, realmSelection, requestJob)
+                        previewFile = preview.file
                         _currentGeneratedImages.value = listOf(
                             GeneratedImage(
                                 selection = realmSelection,
                                 id = 0,
                                 prompt = requestPrompt,
-                                filePath = preview.absolutePath,
+                                filePath = preview.file.absolutePath,
+                                image = preview.image,
                                 timestamp = System.currentTimeMillis(),
                                 model = selection.model.displayName,
                             )
@@ -238,6 +242,7 @@ class ImgGenVM internal constructor(
                                 id = media.mediaId.toInt(),
                                 prompt = requestPrompt,
                                 filePath = media.canonicalFile.absolutePath,
+                                image = fileManagementApplicationService.imageSource(ManagedFileKey.Generated(media.mediaId.toInt(), realmSelection), media.canonicalFile.name),
                                 timestamp = System.currentTimeMillis(),
                                 model = selection.model.displayName,
                             )
@@ -265,6 +270,7 @@ class ImgGenVM internal constructor(
         cancelJob = viewModelScope.launch(start = CoroutineStart.ATOMIC) {
             withContext(NonCancellable) { previous?.join() }
             currentCoroutineContext().ensureActive()
+            val requestJob = requireNotNull(currentCoroutineContext()[Job])
             var previewFile: File? = null
             try {
                 _isGenerating.value = true
@@ -295,14 +301,15 @@ class ImgGenVM internal constructor(
                     editImages = sourceImages,
                     onPartial = { item ->
                         previewFile?.delete()
-                        val preview = saveImagePreview(item)
-                        previewFile = preview
+                        val preview = saveImagePreview(item, realmSelection, requestJob)
+                        previewFile = preview.file
                         _currentGeneratedImages.value = listOf(
                             GeneratedImage(
                                 selection = realmSelection,
                                 id = 0,
                                 prompt = requestPrompt,
-                                filePath = preview.absolutePath,
+                                filePath = preview.file.absolutePath,
+                                image = preview.image,
                                 timestamp = System.currentTimeMillis(),
                                 model = selection.model.displayName,
                             )
@@ -324,6 +331,7 @@ class ImgGenVM internal constructor(
                                 id = media.mediaId.toInt(),
                                 prompt = requestPrompt,
                                 filePath = media.canonicalFile.absolutePath,
+                                image = fileManagementApplicationService.imageSource(ManagedFileKey.Generated(media.mediaId.toInt(), realmSelection), media.canonicalFile.name),
                                 timestamp = System.currentTimeMillis(),
                                 model = selection.model.displayName,
                             )
@@ -346,10 +354,12 @@ class ImgGenVM internal constructor(
         cancelJob?.cancel()
     }
 
-    private suspend fun saveImagePreview(item: ImageGenerationItem): File {
+    private suspend fun saveImagePreview(item: ImageGenerationItem, selection: net.weero.measix.pilot.data.enterprise.RealmSelection, owner: Job): net.weero.measix.pilot.service.GeneratedPreview {
         return fileManagementApplicationService.createGeneratedPreview(
             item = item,
             tempDirectory = getApplication<Application>().appTempFolder,
+            selection = selection,
+            owner = owner,
         )
     }
 

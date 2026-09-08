@@ -64,7 +64,7 @@ UIMessage.parts[]
 `List<UIMessagePart>.isEmptyUIMessage()` 把 `UIMessagePart.Tool` 判为可见：工具调用本身有卡片与操作入口，
 与是否执行、是否产出无关；真正空白 Text 仍为空。`isEmptyInputMessage()` 是独立的"用户可输入内容"判定，不受影响。
 
-会话宿主通过 `LocalConversationImages` 提供点击时求值的时序相册。`collectMessageImageUrls` 按原顺序递归收集顶层与 Tool.output 图片，过滤 loading 占位；本地媒体必须经 `LocalAttachmentPreview` 解析，不能回退为原始 `file:` URI。占位图片显示 shimmer 且不可点击。Markdown/HTML 正文图不进入 part 相册，仍单张浏览。
+会话宿主通过 `LocalConversationImages` 提供点击时求值的时序相册。`collectMessageImages` 按原顺序递归收集顶层与 Tool.output 图片，过滤 loading 占位；图片通过 `LocalAttachmentPreview` 获取原页面的 `ImageSource`；网络/内联图片同样保留原页面权限。本地路径不能直接作为解码或导出权限。占位图片显示 shimmer 且不可点击。Markdown/HTML 正文图通过原宿主的 `LocalImageSourceResolver` 解析，不进入 part 相册，仍单张浏览。
 
 `ZoomableAsyncImage` 透传宿主的操作和覆盖层；查看器手势、设背景、删除与非聊天入口统一见 [界面架构](ui-architecture.md)。文生图工具详情可复制完整提示词，调用 JSON 使用共用 `ToolCallJsonDetails`。
 > 用户消息（`MessageRole.USER`）的 Text 额外包一层 `Surface`（primaryContainer 气泡）；

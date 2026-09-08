@@ -393,19 +393,19 @@ class Migration_9_10Test {
         artifactStore = mockk<ArtifactStore>(relaxed = true),
     )
 
-    /** 真实 v9 → v10 → v11 迁移产物，再按生产前提启用 FK，用于验证当前 schema 上的装载语义。 */
+    /** 真实旧版本到当前版本的迁移产物，再按生产前提启用 FK，用于验证当前 schema 上的装载语义。 */
     private suspend fun withMigratedToCurrentSchemaDatabase(block: suspend (AppDatabase) -> Unit) {
-        val name = "migration-v9-v11-repository-load"
+        val name = "migration-v9-current-repository-load"
         context.deleteDatabase(name)
         helper.createDatabase(name, 9).close()
         helper.runMigrationsAndValidate(name, 10, true, Migration_9_10).close()
         val db = Room.databaseBuilder(context, AppDatabase::class.java, name)
-            .addMigrations(Migration_9_10, Migration_10_11)
+            .addMigrations(Migration_9_10, Migration_10_11, Migration_11_12)
             .allowMainThreadQueries()
             .build()
         try {
             db.openHelper.writableDatabase.execSQL("PRAGMA foreign_keys = ON")
-            assertEquals(11, db.openHelper.readableDatabase.version)
+            assertEquals(net.weero.measix.pilot.data.db.APP_DATABASE_VERSION, db.openHelper.readableDatabase.version)
             block(db)
         } finally {
             db.close()

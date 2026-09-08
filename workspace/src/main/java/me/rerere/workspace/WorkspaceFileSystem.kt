@@ -24,6 +24,12 @@ class WorkspaceFileSystem(
             .map { it.toEntry(root) }
     }
 
+    fun stat(root: File, path: String): WorkspaceFileEntry {
+        val file = resolvePath(root, path)
+        require(file.exists()) { "File does not exist: $path" }
+        return file.toEntry(root)
+    }
+
     fun readText(root: File, path: String, charset: Charset = StandardCharsets.UTF_8): String {
         val file = resolvePath(root, path)
         require(file.exists()) { "File does not exist: $path" }

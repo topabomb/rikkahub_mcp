@@ -165,47 +165,67 @@ fun Context.exportImage(
     }
 }
 
-fun Context.exportImageFile(
+suspend fun Context.exportImageBytes(
     activity: Activity,
-    file: File,
-    fileName: String = "MeasixPilot_${System.currentTimeMillis()}.png"
+    bytes: ByteArray,
+    mimeType: String,
+    fileName: String,
+    beforePublish: suspend () -> Unit,
 ): ImageExportResult {
     requestLegacyWritePermission(activity)?.let { return it }
-
-    var outputStream: OutputStream? = null
     var insertedUri: Uri? = null
+    var legacyFile: File? = null
+    var published = false
+    var failure: Throwable? = null
     return try {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            val contentValues = ContentValues().apply {
+            val values = ContentValues().apply {
                 put(MediaStore.MediaColumns.DISPLAY_NAME, fileName)
-                put(MediaStore.MediaColumns.MIME_TYPE, "image/png")
+                put(MediaStore.MediaColumns.MIME_TYPE, mimeType)
                 put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_PICTURES)
+                put(MediaStore.MediaColumns.IS_PENDING, 1)
             }
-            val uri = contentResolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, contentValues)
-                ?: return ImageExportResult.Failed
+            val uri = contentResolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
+                ?: error("Unable to create image export")
             insertedUri = uri
-            val stream = contentResolver.openOutputStream(uri)
-                ?: return discardInsertedImage(uri)
-            outputStream = stream
-            file.inputStream().use { input -> input.copyTo(stream) }
+            val output = contentResolver.openOutputStream(uri) ?: error("Unable to create image export")
+            output.use { it.write(bytes) }
+            beforePublish()
+            check(contentResolver.update(uri, ContentValues().apply {
+                put(MediaStore.MediaColumns.IS_PENDING, 0)
+            }, null, null) == 1) { "Image publication failed" }
         } else {
+            beforePublish()
             val imagesDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_PICTURES)
             val image = File(imagesDir, fileName)
-            file.copyTo(image, overwrite = true)
-
+            legacyFile = image
+            image.outputStream().use { it.write(bytes) }
+            beforePublish()
             @Suppress("DEPRECATION")
-            val mediaScanIntent = Intent(Intent.ACTION_MEDIA_SCANNER_SCAN_FILE)
-            mediaScanIntent.data = Uri.fromFile(image)
-            sendBroadcast(mediaScanIntent)
+            val scan = Intent(Intent.ACTION_MEDIA_SCANNER_SCAN_FILE).apply { data = Uri.fromFile(image) }
+            sendBroadcast(scan)
         }
-        Log.i(TAG, "Image file saved successfully: $fileName")
+        published = true
         ImageExportResult.Success
-    } catch (e: Exception) {
-        Log.e(TAG, "Failed to save image file", e)
-        insertedUri?.let { runCatching { contentResolver.delete(it, null, null) } }
+    } catch (cancelled: kotlinx.coroutines.CancellationException) {
+        failure = cancelled
+        throw cancelled
+    } catch (error: Exception) {
+        failure = error
+        Log.e(TAG, "Failed to save image", error)
         ImageExportResult.Failed
     } finally {
-        outputStream?.close()
+        if (!published) {
+            try {
+                insertedUri?.let { check(contentResolver.delete(it, null, null) == 1) { "Unable to remove unpublished image" } }
+                legacyFile?.let { check(!it.exists() || it.delete()) { "Unable to remove unpublished image" } }
+            } catch (cleanup: Throwable) {
+                val original = failure
+                if (original == null) throw cleanup
+                original.addSuppressed(cleanup)
+                if (original !is kotlinx.coroutines.CancellationException) throw original
+            }
+        }
     }
 }
 

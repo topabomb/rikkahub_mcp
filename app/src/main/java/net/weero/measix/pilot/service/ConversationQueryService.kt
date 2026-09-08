@@ -174,6 +174,11 @@ class ConversationQueryService internal constructor(
             action()
         }
 
+    suspend fun requireViewAccess(lease: ConversationViewLease) {
+        recoveryGate.awaitReady()
+        withViewAccess(lease) { }
+    }
+
     fun observeConversation(lease: ConversationViewLease): Flow<ConversationReadState> =
         observeForView(lease, ConversationReadState.Failed(IllegalStateException("conversation_view_unavailable"))) {
             observeRegisteredConversation(lease.conversationId).map { state ->

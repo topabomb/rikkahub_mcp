@@ -196,8 +196,9 @@ class TtsControllerLayoutTest {
         }
         showToolbar(aboveInput = true, realKeyboard = true)
         assertAboveInput()
-        compose.onNodeWithTag("input_field").performClick()
-        compose.waitUntil(timeoutMillis = 10_000) { currentImeBottom() > 0 }
+        compose.onNodeWithTag("input_field").performTouchInput { click() }
+        // The system IME can defer expanding its docked view after a keyboard-mode change.
+        compose.waitUntil(timeoutMillis = 30_000) { currentImeBottom() > 0 }
         assertAboveInput()
         val singleLineHeight = compose.onNodeWithTag("input_panel").fetchSemanticsNode().boundsInRoot.height
         compose.onNodeWithTag("input_field").performTextReplacement("first line\nsecond line\nthird line")

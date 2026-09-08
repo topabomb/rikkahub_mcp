@@ -94,7 +94,7 @@ import net.weero.measix.pilot.data.model.AssistantRegex
 import net.weero.measix.pilot.data.model.toMessageNode
 import net.weero.measix.pilot.ui.components.message.ChatMessage
 import net.weero.measix.pilot.ui.components.message.LocalConversationImages
-import net.weero.measix.pilot.ui.components.message.collectMessageImageUrls
+import net.weero.measix.pilot.ui.components.message.collectMessageImages
 import net.weero.measix.pilot.ui.components.ui.LocalImagePreviewActions
 import net.weero.measix.pilot.ui.components.ui.LocalImagePreviewOverlay
 import net.weero.measix.pilot.ui.components.ui.rememberImageBackgroundHost
@@ -408,13 +408,26 @@ private fun AssistantPromptContent(
                 }
                 val previewMessages = (preview as? UiState.Success)?.data
                 val previewError = (preview as? UiState.Error)?.error
+                val imageFiles: net.weero.measix.pilot.service.FileManagementApplicationService = org.koin.compose.koinInject()
+                val imageResolver: suspend (String) -> net.weero.measix.pilot.service.ImageSource? = remember(imageFiles) {
+                    { url -> imageFiles.resolveConfigurationImage(url) }
+                }
+                val previews by androidx.compose.runtime.produceState(
+                    initialValue = emptyMap<String, net.weero.measix.pilot.service.AttachmentPreview>(),
+                    key1 = previewMessages, key2 = imageResolver,
+                ) {
+                    value = net.weero.measix.pilot.data.ai.attachments.AttachmentRefs.walkMessageParts(previewMessages.orEmpty())
+                        .filterIsInstance<me.rerere.ai.ui.UIMessagePart.Image>().toList().mapNotNull { part ->
+                            try {
+                                imageResolver(part.url)?.let { part.url to net.weero.measix.pilot.service.AttachmentPreview(part.url, it) }
+                            } catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+                            catch (_: Exception) { null }
+                        }.toMap()
+                }
+                val previewProvider = remember(previews) { { ref: String -> previews[ref] } }
                 val messagesState = rememberUpdatedState(previewMessages.orEmpty())
-                val previewAlbum = remember {
-                    {
-                        messagesState.value.flatMap { message ->
-                            collectMessageImageUrls(message.parts)
-                        }
-                    }
+                val previewAlbum = remember(previewProvider) {
+                    { messagesState.value.flatMap { message -> collectMessageImages(message.parts, previewProvider) } }
                 }
                 val backgroundHost = rememberImageBackgroundHost(settings, assistant.id)
                 val previewActions = remember(backgroundHost.action) { listOf(backgroundHost.action) }
@@ -427,6 +440,8 @@ private fun AssistantPromptContent(
                     previewMessages != null -> ChatFontProvider(displaySetting = settings.displaySetting) {
                         CompositionLocalProvider(
                             LocalConversationImages provides previewAlbum,
+                            net.weero.measix.pilot.ui.components.message.LocalAttachmentPreview provides previewProvider,
+                            net.weero.measix.pilot.ui.components.richtext.LocalImageSourceResolver provides imageResolver,
                             LocalImagePreviewActions provides previewActions,
                             LocalImagePreviewOverlay provides backgroundHost.overlay,
                         ) {

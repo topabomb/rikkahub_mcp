@@ -36,7 +36,7 @@ import net.weero.measix.pilot.service.runtime.ToolLivePhase
 import net.weero.measix.pilot.service.runtime.isBusy
 import net.weero.measix.pilot.ui.components.message.LocalAttachmentPreview
 import net.weero.measix.pilot.ui.components.message.LocalConversationImages
-import net.weero.measix.pilot.ui.components.message.resolveAttachmentImageUrl
+import net.weero.measix.pilot.ui.components.message.resolveAttachmentImageSource
 import net.weero.measix.pilot.ui.components.message.isImagePartLoading
 import net.weero.measix.pilot.ui.components.richtext.HighlightCodeBlock
 import net.weero.measix.pilot.ui.components.richtext.ZoomableAsyncImage
@@ -248,7 +248,7 @@ fun ToolCallJsonDetails(
                                         .shimmer(isLoading = true)
                                 )
                             } else {
-                                resolveAttachmentImageUrl(part, attachmentPreview)?.let { imageUrl ->
+                                resolveAttachmentImageSource(part, attachmentPreview)?.let { imageUrl ->
                                     ZoomableAsyncImage(
                                         model = imageUrl,
                                         contentDescription = null,

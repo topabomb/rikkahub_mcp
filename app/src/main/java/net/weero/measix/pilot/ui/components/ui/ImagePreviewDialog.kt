@@ -1,7 +1,8 @@
 package net.weero.measix.pilot.ui.components.ui
 
+import net.weero.measix.pilot.service.ImageSource
+import net.weero.measix.pilot.service.ImageOrigin
 import android.graphics.BitmapFactory
-import android.util.Base64
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.core.animate
 import androidx.compose.animation.core.spring
@@ -83,16 +84,12 @@ import me.rerere.hugeicons.stroke.Download01
 import me.rerere.hugeicons.stroke.Delete01
 import me.rerere.hugeicons.stroke.InformationCircle
 import net.weero.measix.pilot.R
-import net.weero.measix.pilot.data.ai.attachments.AttachmentRefs
-import net.weero.measix.pilot.service.ArtifactUseCase
 import net.weero.measix.pilot.service.MediaExportService
 import net.weero.measix.pilot.service.IMAGE_SAVE_PERMISSION_REQUIRED
-import net.weero.measix.pilot.service.FileManagementQueryService
 import net.weero.measix.pilot.ui.context.LocalToaster
 import net.weero.measix.pilot.utils.fileSizeToString
 import net.weero.measix.pilot.utils.toLocalDateTime
 import org.koin.compose.koinInject
-import java.io.File
 import java.time.Instant
 import kotlin.math.abs
 import kotlin.time.Duration
@@ -103,12 +100,12 @@ sealed interface ImagePreviewDeleteResult {
 }
 
 data class ImagePreviewDeleteAction(
-    val confirmationText: suspend (imageUrl: String) -> String,
-    val delete: suspend (imageUrl: String) -> ImagePreviewDeleteResult,
+    val confirmationText: suspend (imageUrl: ImageSource) -> String,
+    val delete: suspend (imageUrl: ImageSource) -> ImagePreviewDeleteResult,
 )
 
 private data class PendingImagePreviewDelete(
-    val imageUrl: String,
+    val imageUrl: ImageSource,
     val confirmationText: String,
     val action: ImagePreviewDeleteAction,
 )
@@ -127,7 +124,7 @@ private const val VERTICAL_DOMINANCE_RATIO = 1.5f
 
 @Composable
 fun ImagePreviewDialog(
-    images: List<String>,
+    images: List<ImageSource>,
     onDismissRequest: () -> Unit,
     initialIndex: Int = 0,
     extraActions: List<ImagePreviewAction> = emptyList(),
@@ -139,8 +136,6 @@ fun ImagePreviewDialog(
         return
     }
     val context = LocalContext.current
-    val artifactUseCase: ArtifactUseCase = koinInject()
-    val fileManagementQueryService: FileManagementQueryService = koinInject()
     val mediaExportService: MediaExportService = koinInject()
     val dialogToaster = rememberToasterState()
     val scope = rememberCoroutineScope()
@@ -159,8 +154,8 @@ fun ImagePreviewDialog(
     var saving by remember { mutableStateOf(false) }
     var deleting by remember { mutableStateOf(false) }
     var pendingDelete by remember { mutableStateOf<PendingImagePreviewDelete?>(null) }
-    val viewerImages = remember { mutableStateListOf<String>().apply { addAll(images) } }
-    var locallyDeleted by remember { mutableStateOf(emptySet<String>()) }
+    val viewerImages = remember { mutableStateListOf<ImageSource>().apply { addAll(images) } }
+    var locallyDeleted by remember { mutableStateOf(emptySet<ImageSource>()) }
     val pagerGestureScope = remember {
         PagerGestureScope(onTap = { dismissState.value() })
     }
@@ -189,15 +184,14 @@ fun ImagePreviewDialog(
     }
     val currentUrl = viewerImages.getOrNull(state.currentPage)
     var imageInfo by remember(currentUrl) { mutableStateOf<ImageInfo?>(null) }
-    LaunchedEffect(currentUrl) {
+    LaunchedEffect(currentUrl, infoVisible) {
+        if (!infoVisible) return@LaunchedEffect
         val url = currentUrl ?: return@LaunchedEffect
-        imageInfo = withContext(Dispatchers.IO) {
-            resolveImageInfo(
-                url = url,
-                isManagedGeneratedFile = fileManagementQueryService::isManagedGeneratedFile,
-                isManagedUploadUrl = artifactUseCase::isManagedUploadUrl,
-            )
-        }
+        imageInfo = try {
+            withContext(Dispatchers.IO) { resolveImageInfo(url) }
+        } catch (cancelled: kotlinx.coroutines.CancellationException) {
+            throw cancelled
+        } catch (_: Exception) { null }
     }
     val infoBlocked = rememberUpdatedState(infoVisible)
 
@@ -250,7 +244,7 @@ fun ImagePreviewDialog(
                         pagerState = state,
                         detectGesture = pagerGestureScope,
                         imageLoader = { index ->
-                            val painter = rememberAsyncImagePainter(viewerImages.getOrNull(index).orEmpty())
+                            val painter = rememberAsyncImagePainter(viewerImages.getOrNull(index))
                             return@ImagePager Pair(painter, painter.intrinsicSize)
                         },
                     )
@@ -692,106 +686,28 @@ internal data class ImageInfo(
     val lastModifiedMs: Long? = null,
 )
 
-/**
- * 按 url 与应用目录推断图片来源: data: 前缀为内联, http(s) 为网络,
- * 生成媒体与上传来源由各自 query port 判定，其余路径只作为普通本地文件展示。
- */
-internal fun classifyImageSource(
-    url: String,
-    isManagedGeneratedFile: (File) -> Boolean = { false },
-    isManagedUploadUrl: (String) -> Boolean = { false },
-): ImageInfoSource {
-    if (url.startsWith("data:", ignoreCase = true)) return ImageInfoSource.Inline
-    if (url.startsWith("http", ignoreCase = true)) return ImageInfoSource.Network
-    val file = localImageFile(url)
-    return when {
-        isManagedGeneratedFile(file) -> ImageInfoSource.Generated
-        isManagedUploadUrl(url) -> ImageInfoSource.Upload
-        else -> ImageInfoSource.Local
-    }
+/** Image information uses the same authorized bytes as the viewer and exporter. */
+internal suspend fun resolveImageInfo(image: ImageSource): ImageInfo {
+    val bytes = image.readBytes()
+    val options = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+    BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options)
+    image.requireAccess()
+    return ImageInfo(
+        source = when (image.origin) {
+            ImageOrigin.GENERATED -> ImageInfoSource.Generated
+            ImageOrigin.UPLOAD -> ImageInfoSource.Upload
+            ImageOrigin.NETWORK -> ImageInfoSource.Network
+            ImageOrigin.INLINE -> ImageInfoSource.Inline
+            ImageOrigin.LOCAL -> ImageInfoSource.Local
+        },
+        fileName = image.displayName,
+        width = options.outWidth.takeIf { it > 0 },
+        height = options.outHeight.takeIf { it > 0 },
+        sizeBytes = bytes.size.toLong(),
+        mimeType = options.outMimeType,
+        lastModifiedMs = image.modifiedAtMillis,
+    )
 }
-
-private fun decodeBounds(bytes: ByteArray): Triple<Int, Int, String?>? = runCatching {
-    val opts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-    BitmapFactory.decodeByteArray(bytes, 0, bytes.size, opts)
-    Triple(opts.outWidth, opts.outHeight, opts.outMimeType.takeIf { it.isNotBlank() })
-}.getOrNull()
-
-private fun decodeBounds(file: File): Triple<Int, Int, String?>? = runCatching {
-    file.inputStream().use { input ->
-        val opts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-        BitmapFactory.decodeStream(input, null, opts)
-        Triple(opts.outWidth, opts.outHeight, opts.outMimeType.takeIf { it.isNotBlank() })
-    }
-}.getOrNull()
-
-private val EXTENSION_MIME_MAP = mapOf(
-    "png" to "image/png",
-    "jpg" to "image/jpeg",
-    "jpeg" to "image/jpeg",
-    "webp" to "image/webp",
-    "gif" to "image/gif",
-    "bmp" to "image/bmp",
-    "svg" to "image/svg+xml",
-    "heic" to "image/heic",
-    "heif" to "image/heif",
-    "avif" to "image/avif",
-)
-
-private fun guessMimeFromExtension(extension: String?): String? =
-    extension?.lowercase()?.takeIf { it.isNotBlank() }?.let(EXTENSION_MIME_MAP::get)
-
-/** 只读图片头(不解码像素)与文件元数据, 全程 IO 线程 */
-internal fun resolveImageInfo(
-    url: String,
-    isManagedGeneratedFile: (File) -> Boolean,
-    isManagedUploadUrl: (String) -> Boolean,
-): ImageInfo {
-    val source = classifyImageSource(url, isManagedGeneratedFile, isManagedUploadUrl)
-    return when {
-        url.startsWith("data:", ignoreCase = true) -> {
-            val bytes = runCatching {
-                Base64.decode(url.substringAfter(',', ""), Base64.DEFAULT)
-            }.getOrNull()
-            val bounds = bytes?.let(::decodeBounds)
-            ImageInfo(
-                source = source,
-                width = bounds?.first?.takeIf { it > 0 },
-                height = bounds?.second?.takeIf { it > 0 },
-                sizeBytes = bytes?.size?.toLong(),
-                mimeType = bounds?.third
-                    ?: url.substringBefore(';').removePrefix("data:").takeIf { it.isNotBlank() },
-            )
-        }
-
-        source == ImageInfoSource.Network -> ImageInfo(
-            source = source,
-            fileName = url.substringAfterLast('/')
-                .substringBefore('?')
-                .takeIf { it.isNotBlank() },
-            mimeType = guessMimeFromExtension(url.substringBefore('?').substringAfterLast('.')),
-        )
-
-        else -> {
-            val file = localImageFile(url)
-            val exists = file.exists()
-            val bounds = if (exists) decodeBounds(file) else null
-            ImageInfo(
-                source = source,
-                fileName = file.name.takeIf { it.isNotBlank() },
-                width = bounds?.first?.takeIf { it > 0 },
-                height = bounds?.second?.takeIf { it > 0 },
-                sizeBytes = if (exists) file.length() else null,
-                mimeType = bounds?.third ?: guessMimeFromExtension(file.extension),
-                lastModifiedMs = if (exists && file.lastModified() > 0) file.lastModified() else null,
-            )
-        }
-    }
-}
-
-/** Parses file URLs through the shared case-insensitive attachment boundary. */
-private fun localImageFile(url: String): File =
-    AttachmentRefs.parseFileUrl(url) ?: File(url)
 
 @Composable
 private fun ImageInfoPanel(

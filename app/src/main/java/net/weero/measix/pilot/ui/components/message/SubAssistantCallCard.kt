@@ -496,16 +496,16 @@ internal fun shouldShowNonTextOutputPlaceholder(
 
 internal data class SubAssistantCardImagePreview(
     val ref: String,
-    val url: String?,
+    val url: net.weero.measix.pilot.service.ImageSource?,
 )
 
 internal fun resolveSubAssistantCardImagePreviews(
     artifacts: List<SubAssistantCallArtifact>,
-    previewResolver: (String) -> String?,
+    previewResolver: (String) -> net.weero.measix.pilot.service.AttachmentPreview?,
 ): List<SubAssistantCardImagePreview> {
     return artifacts.filter { it.type == ARTIFACT_TYPE_IMAGE }.map { item ->
         val ref = AttachmentRefs.parse(item.ref)?.let(AttachmentRefs::format) ?: item.ref
-        SubAssistantCardImagePreview(ref = ref, url = previewResolver(ref))
+        SubAssistantCardImagePreview(ref = ref, url = previewResolver(ref)?.image)
     }
 }
 

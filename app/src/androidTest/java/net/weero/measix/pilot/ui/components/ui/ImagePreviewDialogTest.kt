@@ -1,5 +1,6 @@
 package net.weero.measix.pilot.ui.components.ui
 
+import net.weero.measix.pilot.utils.exportImageBytes
 import android.graphics.Bitmap
 import android.view.View
 import androidx.activity.ComponentActivity
@@ -44,13 +45,80 @@ class ImagePreviewDialogTest {
     @get:Rule
     val compose = createAndroidComposeRule<ComponentActivity>()
 
+    private lateinit var originalLoader: coil3.ImageLoader
+    private lateinit var loader: coil3.ImageLoader
+
+    @OptIn(coil3.annotation.DelicateCoilApi::class)
+    @org.junit.Before fun installImageComponents() {
+        originalLoader = coil3.SingletonImageLoader.get(compose.activity)
+        loader = coil3.ImageLoader.Builder(compose.activity).components {
+            add(net.weero.measix.pilot.service.ImageSourceInterceptor)
+            add(net.weero.measix.pilot.service.ImageSourceKeyer)
+            add(net.weero.measix.pilot.service.ImageSourceFetcherFactory)
+        }.build()
+        coil3.SingletonImageLoader.setUnsafe(loader)
+    }
+
+    private fun queryExport(name: String, vararg columns: String): android.database.Cursor =
+        requireNotNull(compose.activity.contentResolver.query(android.provider.MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+            columns, android.os.Bundle().apply {
+                putInt(android.provider.MediaStore.QUERY_ARG_MATCH_PENDING, android.provider.MediaStore.MATCH_INCLUDE)
+                putString(android.content.ContentResolver.QUERY_ARG_SQL_SELECTION, "_display_name = ?")
+                putStringArray(android.content.ContentResolver.QUERY_ARG_SQL_SELECTION_ARGS, arrayOf(name))
+            }, null))
+
     private val images = mutableListOf<File>()
     private lateinit var viewerView: View
     private var visible by mutableStateOf(true)
 
+    @OptIn(coil3.annotation.DelicateCoilApi::class)
     @After
     fun cleanImages() {
+        coil3.SingletonImageLoader.setUnsafe(originalLoader)
+        loader.shutdown()
         images.forEach(File::delete)
+    }
+
+    @Test fun exportPreservesEncodedImageAndMime() = kotlinx.coroutines.runBlocking {
+        val context = compose.activity
+        val bytes = android.util.Base64.decode("R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==", android.util.Base64.DEFAULT)
+        val source = net.weero.measix.pilot.service.ImageSource("export-gif", net.weero.measix.pilot.service.ImageOrigin.INLINE,
+            verifyAccess = {}, readPayload = { bytes })
+        val name = net.weero.measix.pilot.service.MediaExportService().saveImage(context, source)
+        val collection = android.provider.MediaStore.Images.Media.EXTERNAL_CONTENT_URI
+        context.contentResolver.query(collection, arrayOf("_id", "mime_type", "is_pending"), "_display_name = ?", arrayOf(name), null)!!.use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            val uri = android.content.ContentUris.withAppendedId(collection, cursor.getLong(0))
+            try {
+                assertEquals("image/gif", cursor.getString(1))
+                assertEquals(0, cursor.getInt(2))
+                org.junit.Assert.assertArrayEquals(bytes, context.contentResolver.openInputStream(uri)!!.use { it.readBytes() })
+            } finally { context.contentResolver.delete(uri, null, null) }
+        }
+    }
+
+    @Test fun rejectedOrCancelledPublicationRemovesPendingMedia() = kotlinx.coroutines.runBlocking {
+        val context = compose.activity
+        val collection = android.provider.MediaStore.Images.Media.EXTERNAL_CONTENT_URI
+        for (cancel in listOf(false, true)) {
+            val name = "viewer-rejected-${java.util.UUID.randomUUID()}.png"
+            var sawPending = false
+            val result = runCatching {
+                context.exportImageBytes(context, byteArrayOf(1, 2, 3), "image/png", name) {
+                    queryExport(name, "is_pending").use {
+                        sawPending = it.moveToFirst() && it.getInt(0) == 1
+                    }
+                    if (cancel) throw kotlinx.coroutines.CancellationException("cancel export")
+                    error("original image access ended")
+                }
+            }
+            assertTrue(sawPending)
+            if (cancel) assertTrue(result.exceptionOrNull() is kotlinx.coroutines.CancellationException)
+            else assertEquals(net.weero.measix.pilot.utils.ImageExportResult.Failed, result.getOrThrow())
+            queryExport(name, "_id").use {
+                assertFalse(it.moveToFirst())
+            }
+        }
     }
 
     @Test
@@ -142,7 +210,12 @@ class ImagePreviewDialogTest {
             bitmap.eraseColor(color)
             file.outputStream().use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
             bitmap.recycle()
-            file.toURI().toString()
+            net.weero.measix.pilot.service.ImageSource(
+                file.name, net.weero.measix.pilot.service.ImageOrigin.LOCAL,
+                displayName = file.name,
+                verifyAccess = { check(file.exists()) },
+                readPayload = { file.readBytes() },
+            )
         }
         compose.setContent {
             MaterialTheme {

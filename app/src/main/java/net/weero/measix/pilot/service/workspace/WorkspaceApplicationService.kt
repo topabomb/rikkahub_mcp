@@ -1,5 +1,12 @@
 package net.weero.measix.pilot.service.workspace
 
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
+import net.weero.measix.pilot.service.ImageSource
+import net.weero.measix.pilot.service.ImageOrigin
+import net.weero.measix.pilot.data.imggen.GeneratedMediaStore
+import net.weero.measix.pilot.data.ai.attachments.ImageMime
+import net.weero.measix.pilot.data.files.FilePayloadTooLargeException
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import me.rerere.workspace.RootfsInstallProgress
@@ -53,6 +60,41 @@ class WorkspaceApplicationService(
         path: String,
         output: OutputStream,
     ) = gated(workspaceId) { repository.exportFile(workspaceId, area, path, output) }
+
+    fun imageSource(workspaceId: String, area: WorkspaceStorageArea, entry: WorkspaceFileEntry): ImageSource {
+        suspend fun requireEntry() {
+            requireWorkspace(workspaceId)
+            check(!entry.isDirectory) { "workspace_image_unavailable" }
+            if (entry.sizeBytes > GeneratedMediaStore.MAX_IMAGE_BYTES) throw FilePayloadTooLargeException()
+            check(repository.statFile(workspaceId, area, entry.path) == entry) { "workspace_image_changed" }
+        }
+        return ImageSource(
+            cacheIdentity = "workspace:$workspaceId:$area:$entry",
+            origin = ImageOrigin.LOCAL,
+            displayName = entry.name,
+            modifiedAtMillis = entry.updatedAt,
+            verifyAccess = { gated(workspaceId) { requireEntry() } },
+            readPayload = { gated(workspaceId) {
+                requireEntry()
+                val reading = currentCoroutineContext()
+                val output = object : java.io.ByteArrayOutputStream() {
+                    override fun write(value: Int) {
+                        reading.ensureActive()
+                        if (size() >= GeneratedMediaStore.MAX_IMAGE_BYTES) throw FilePayloadTooLargeException()
+                        super.write(value)
+                    }
+                    override fun write(bytes: ByteArray, offset: Int, length: Int) {
+                        reading.ensureActive()
+                        if (length > GeneratedMediaStore.MAX_IMAGE_BYTES - size()) throw FilePayloadTooLargeException()
+                        super.write(bytes, offset, length)
+                    }
+                }
+                repository.exportFile(workspaceId, area, entry.path, output)
+                requireEntry()
+                output.toByteArray().also { check(ImageMime.isAcceptedImage(it)) { "workspace_image_invalid" } }
+            } },
+        )
+    }
 
     suspend fun writeText(workspaceId: String, path: String, text: String) =
         gated(workspaceId) { repository.writeText(workspaceId, path, text, overwrite = true) }

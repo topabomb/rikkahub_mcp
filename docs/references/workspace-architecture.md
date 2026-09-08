@@ -172,6 +172,8 @@ stdout、stderr 和可选 stdin 使用独立 daemon 线程。
 `WorkspaceApplicationService` → `WorkspaceTerminalRuntime` 串行关闭；tab 在确认期间因 shell exit 或
 Workspace 删除而消失时自动清除 pending，不发送无意义命令。
 
+图片查看借用 `WorkspaceApplicationService.imageSource`：绑定原 workspace/area/entry，通过 FileSystem 的单路径 stat 复验，读取前后检查目标未变化并限制实际字节数。它不依赖有数量上限的目录列表，也不另创建预览临时文件。
+
 Workspace command 仍由 `WorkspaceApplicationService` 拥有；持久化列表/文件预览和 terminal 聚合投影都由 `WorkspaceQueryService` 提供，其中 terminal 读口是 `observeTerminal(workspaceId)`。Query 不获得写能力，也不反向调用 ApplicationService。`WorkspaceTerminalViewport` 只表达 UI viewport capability，不是 session facade 或第二生命周期 owner。
 
 创建中只发布 `PREPARING`，创建成功后发布 `READY`；Rootfs 未就绪、创建失败、取消或 shell exit 都走同一 remove 路径，失败 Tab 不留在 read model。Rootfs/PTY 异步创建失败由 runtime 在同一 Workspace projection 发布带唯一 id 的 typed `lastFailure`，VM 只把新 failure 映射为用户提示；主动关闭或取消不能伪造失败。单 Workspace 最多六个 Tab。rename/reorder/select/close 与创建保留都在 runtime mutex 内决定；资源 finish 在条目先从 read model 移除后执行。创建准备、模型工具执行和 `WorkspaceApplicationService` 的 UI 文件命令/install/delete 使用同一组固定条带 mutex，既阻止同一 Workspace 的 Rootfs/PTY/工具 TOCTOU，也不会按历史 Workspace id 无限保留锁对象。

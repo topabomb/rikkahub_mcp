@@ -51,7 +51,7 @@ import net.weero.measix.pilot.data.model.Assistant
 import net.weero.measix.pilot.ui.components.message.ChatMessage
 import net.weero.measix.pilot.ui.components.message.LocalAttachmentPreview
 import net.weero.measix.pilot.ui.components.message.LocalConversationImages
-import net.weero.measix.pilot.ui.components.message.collectMessageImageUrls
+import net.weero.measix.pilot.ui.components.message.collectMessageImages
 import net.weero.measix.pilot.ui.components.ui.LocalImagePreviewActions
 import net.weero.measix.pilot.ui.components.ui.LocalImagePreviewOverlay
 import net.weero.measix.pilot.ui.components.ui.rememberImageBackgroundHost
@@ -140,6 +140,7 @@ fun SubAssistantDetailPage(
             SubAssistantDetailUiState.Loading -> DetailLoading(Modifier.padding(innerPadding))
             SubAssistantDetailUiState.Unavailable -> DetailUnavailable(Modifier.padding(innerPadding))
             is SubAssistantDetailUiState.Ready -> DetailContent(
+                source = source,
                 state = state,
                 targetAssistant = targetAssistant,
                 attachmentPreviews = vm.attachmentPreviews(),
@@ -151,11 +152,13 @@ fun SubAssistantDetailPage(
 
 @Composable
 private fun DetailContent(
+    source: ConversationViewLease?,
     state: SubAssistantDetailUiState.Ready,
     targetAssistant: Assistant?,
     attachmentPreviews: Map<String, net.weero.measix.pilot.service.AttachmentPreview>,
     modifier: Modifier = Modifier,
 ) {
+    val imageResolver = net.weero.measix.pilot.ui.components.richtext.rememberConversationImageResolver(source)
     val listState = rememberLazyListState()
     var requestExpanded by remember(state.link.metadata.runId) { mutableStateOf(false) }
     var requestOverflow by remember(state.link.metadata.runId) { mutableStateOf(false) }
@@ -178,12 +181,12 @@ private fun DetailContent(
     // 会话级时序相册: 稳定的点击期求值 lambda, 组合期零扫描
     val timelineState = rememberUpdatedState(state.timeline)
     val attachmentPreviewProvider = remember(attachmentPreviews) {
-        { ref: String -> attachmentPreviews[ref]?.uri }
+        { ref: String -> attachmentPreviews[ref] }
     }
     val timelineAlbum = remember(attachmentPreviewProvider) {
         {
             timelineState.value.flatMap { node ->
-                collectMessageImageUrls(node.currentMessage.parts, attachmentPreviewProvider)
+                collectMessageImages(node.currentMessage.parts, attachmentPreviewProvider)
             }
         }
     }
@@ -215,6 +218,7 @@ private fun DetailContent(
     Box(modifier = modifier.fillMaxSize()) {
         // 相册 Provider 提升到列表外: 全部 item 共享同一稳定 lambda, 避免逐项 provider 节点
         CompositionLocalProvider(
+            net.weero.measix.pilot.ui.components.richtext.LocalImageSourceResolver provides imageResolver,
             LocalConversationImages provides timelineAlbum,
             LocalAttachmentPreview provides attachmentPreviewProvider,
             LocalImagePreviewActions provides previewActions,

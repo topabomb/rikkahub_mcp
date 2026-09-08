@@ -285,7 +285,7 @@ verticalPaneSplit(windowWidthDp, fallbackListWidthDp, hingeBounds):
 ```kotlin
 @Composable
 fun ImagePreviewDialog(
-    images: List<String>,
+    images: List<ImageSource>,
     onDismissRequest: () -> Unit,
     initialIndex: Int = 0,
     extraActions: List<ImagePreviewAction> = emptyList(),
@@ -324,18 +324,21 @@ fun ImagePreviewDialog(
 - 底部按钮组：信息 → 保存 → `extraActions` → 可选删除，`BottomCenter`。
 - Dialog 内自建 `Toaster` 并覆盖 `LocalToaster`。进行中与结果共用同一 toast id；应用根 `Toaster`
   在全屏 Dialog 下层会被挡住。
-- 信息面板只读头不解码像素：`classifyImageSource` 按 url 前缀与应用目录推断来源；本地/内联图取
-  分辨率与 MIME；网络图不发请求。面板打开时拖拽关闭早退。
+- 信息面板打开后才通过当前 `ImageSource` 读取有界字节，解析尺寸、MIME 与大小；来源和名称使用 owner 提供的描述，不再扫描路径猜测归属。网络图片在此操作中可能再次读取。面板打开时拖拽关闭早退。
 
 #### 相册与入口
 
 聊天内按**会话级时序相册**聚合，不按单条消息或单个工具 output 分组。宿主
 （`ChatList` / `SubAssistantDetailPage` / `AssistantPromptPage`）提供稳定
-`LocalConversationImages: () -> List<String>`，点击期求值当前分支消息顺序 × 消息内 part 顺序；
-`collectMessageImageUrls` 收集顶层 Image 与 `Tool.output` 中的 Image，过滤
+`LocalConversationImages: () -> List<ImageSource>`，点击期求值当前分支消息顺序 × 消息内 part 顺序；
+`collectMessageImages` 收集顶层 Image 与 `Tool.output` 中的 Image，过滤
 `isImagePartLoading`（空白 url 或 base64 空壳）。`ZoomableAsyncImage` 打开时求值相册，命中则从该张
 浏览整本，未命中或为空则单图打开。Markdown/HTML 正文图不在 part 层，仍单张打开。助手背景、聊天背景
 和附件 chips 是装饰 / 输入态，不接入查看器。Workspace 详情 IMAGE 维持单张，不注入设背景。
+
+缩略图、相册、信息与保存传递同一读取能力。`LocalImageSourceResolver` 使 Markdown/HTML 在原 ConversationViewLease 下解析 URL，解析失败没有个人文件回退。助手 Prompt 预览仅解析仍被共享用户配置引用的文件；网络/内联图片也经相同读取入口。Workspace 图片通过既有 WorkspaceApplicationService 按原工作空间、区域与文件元信息读取，不为预览导出临时副本。
+
+图片保存由 `MediaExportService` 保留原始编码及 MIME，写入系统相册 pending 项，在发布前复验读取权限，失败或取消删除未发布项，补偿失败保留原错误。聊天截图与 Markdown 分享另携带原 ConversationViewLease；渲染后、相册发布及分享前通过查询 owner 验证原页面，文件编码、临时文件与发布收口归同一导出服务。
 
 其余入口把当前可见集合传入查看器：文生图当次结果（1–4 张，两两一行）、Gallery 已加载快照、
 文件管理 Upload Tab 的 `image/*` 与文生图 Tab 的全部产物。非图片 Upload 项不可点开。
@@ -344,9 +347,9 @@ fun ImagePreviewDialog(
 
 | 通道 | 职责 |
 |------|------|
-| `ImagePreviewAction` / `LocalImagePreviewActions` | 查看器只画按钮，把当前页 url 与 Dialog 内 Toaster 交回调用方 |
+| `ImagePreviewAction` / `LocalImagePreviewActions` | 查看器只画按钮，把当前页 `ImageSource` 与 Dialog 内 Toaster 交回调用方 |
 | `LocalImagePreviewOverlay` | 确认框 / 助手选择器，盖在全屏查看器之上 |
-| `rememberImageBackgroundHost` | 设为背景：物化本地文件后由 `AssistantBackgroundService.replaceUserSelectedBackground` 拷独立副本。聊天相关入口助手已知，跳过选择器；文生图橱窗与文件管理先弹 `AssistantPickerSheet`。助手确定后一律再确认一次 |
+| `rememberImageBackgroundHost` | 设为背景：从同一图片读取对象取得字节后由 `AssistantBackgroundService.replaceUserSelectedBackground` 拷独立副本。聊天相关入口助手已知，跳过选择器；文生图橱窗与文件管理先弹 `AssistantPickerSheet`。助手确定后一律再确认一次 |
 | `ImagePreviewDeleteAction` | 仅当宿主已有独立删除语义时传入。查看器承载确认、执行中、失败提示和相册页序列更新；typed suspend action 仍调用既有领域删除 API。成功删除中间项后显示原下一项，删除末项后显示新末项，清空后关闭。聊天消息图片不传该 action |
 
 #### 已知限制与非目标

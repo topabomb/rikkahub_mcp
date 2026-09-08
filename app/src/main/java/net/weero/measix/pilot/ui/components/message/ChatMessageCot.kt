@@ -1,5 +1,7 @@
 package net.weero.measix.pilot.ui.components.message
 
+import net.weero.measix.pilot.service.AttachmentPreview
+import net.weero.measix.pilot.service.ImageSource
 import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.ui.util.fastForEachIndexed
 import me.rerere.ai.ui.UIMessage
@@ -95,57 +97,58 @@ internal fun isImagePartLoading(url: String): Boolean =
  * 收集一条消息内的全部「明确图片」：顶层 Image part 与 Tool.output 中的 Image，
  * 按 part 位置顺序（过滤流式 loading 占位）。会话级时序相册按消息顺序展平本函数结果
  */
-internal fun collectMessageImageUrls(
+internal fun collectMessageImages(
     parts: List<UIMessagePart>,
-    attachmentPreview: ((String) -> String?)? = null,
-): List<String> = buildList {
+    attachmentPreview: ((String) -> AttachmentPreview?)? = null,
+): List<ImageSource> = buildList {
     parts.fastForEachIndexed { _, part ->
         when (part) {
-            is UIMessagePart.Image -> resolveAttachmentImageUrl(part, attachmentPreview)
-                ?.takeUnless(::isImagePartLoading)
-                ?.let(::add)
+            is UIMessagePart.Image -> if (!isImagePartLoading(part.url)) {
+                resolveAttachmentImageSource(part, attachmentPreview)?.let(::add)
+            }
 
-            is UIMessagePart.Tool -> addAll(collectMessageImageUrls(part.output, attachmentPreview))
+            is UIMessagePart.Tool -> addAll(collectMessageImages(part.output, attachmentPreview))
 
             else -> {}
         }
     }
 }
 
-internal fun resolveAttachmentImageUrl(
+internal fun resolveAttachmentImageSource(
     image: UIMessagePart.Image,
-    attachmentPreview: ((String) -> String?)?,
-): String? = resolveAttachmentMediaUrl(image.url, image, attachmentPreview)
+    attachmentPreview: ((String) -> AttachmentPreview?)?,
+): ImageSource? = (AttachmentRefs.getStableRef(image)?.let { attachmentPreview?.invoke(it) }
+    ?: attachmentPreview?.invoke(image.url))?.image
 
 /** Local media is only renderable after the query owner validates its stable reference. */
 internal fun resolveAttachmentMediaUrl(
     url: String,
     part: UIMessagePart,
-    attachmentPreview: ((String) -> String?)?,
+    attachmentPreview: ((String) -> AttachmentPreview?)?,
 ): String? {
     if (!url.startsWith("file:", ignoreCase = true)) return url
-    return AttachmentRefs.getStableRef(part)?.let { ref -> attachmentPreview?.invoke(ref) }
+    return AttachmentRefs.getStableRef(part)?.let { ref -> attachmentPreview?.invoke(ref)?.uri }
 }
 
 /**
  * 会话级时序相册：会话宿主（ChatList 等）提供的点击期求值函数，返回按消息顺序展平的
- * 明确图片 url 列表。宿主侧持有稳定 lambda 实例（组合期零重算、读者零失效），
+ * 明确图片读取对象列表。宿主侧持有稳定 lambda 实例（组合期零重算、读者零失效），
  * 点击图片时才求值展开。默认空相册（共享单例，保证无宿主场景的参数稳定性），
  * 消费点回退单图模式
  */
-private val EmptyConversationAlbum: () -> List<String> = { emptyList() }
+private val EmptyConversationAlbum: () -> List<ImageSource> = { emptyList() }
 
-val LocalConversationImages = compositionLocalOf<() -> List<String>> {
+val LocalConversationImages = compositionLocalOf<() -> List<ImageSource>> {
     EmptyConversationAlbum
 }
 
 /**
  * 附件缩略图只读解析：会话宿主按 stable `attachment:<uuid>`
- * 返回本地 `file:` url；不做远程下载、不触发识别，解析不到返回 null 由消费点显示占位。
+ * 返回原页面投影的媒体描述与图片读取对象；不做远程下载、不触发识别，解析不到返回 null 由消费点显示占位。
  * UI 可显示缩略图不代表当前模型收到图片像素（presentation 与 projection 解耦）。
  */
-private val NoAttachmentPreview: (String) -> String? = { null }
+private val NoAttachmentPreview: (String) -> AttachmentPreview? = { null }
 
-val LocalAttachmentPreview = compositionLocalOf<(String) -> String?> {
+val LocalAttachmentPreview = compositionLocalOf<(String) -> AttachmentPreview?> {
     NoAttachmentPreview
 }

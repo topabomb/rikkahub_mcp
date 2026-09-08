@@ -76,9 +76,9 @@ val appModule = module {
     single { net.weero.measix.pilot.service.ModelExecutionService(get(), get(), get(), get()) }
     single { net.weero.measix.pilot.service.MemoryService(get(), get(), get(), get(), get()) }
     single { ArtifactUseCase(get(), get(), get()) }
-    single { FileManagementApplicationService(get(), get(), get(), get()) }
+    single { FileManagementApplicationService(get(), get(), get(), get(), remoteMediaFetcher = get()) }
     single { FileManagementQueryService(get(), get(), get(), get()) }
-    single { MediaExportService(get()) }
+    single { MediaExportService() }
     single { StatsQueryService(get(), get(), get(), get(), get()) }
     single { ChatErrorStore() }
     single { BackupRestoreApplicationService(get(), get(), get()) }
@@ -112,11 +112,7 @@ val appModule = module {
     }
 
     single {
-        AssistantBackgroundService(
-            artifactStore = get(),
-            context = get(),
-            remoteMediaFetcher = get(),
-        )
+        AssistantBackgroundService(artifactStore = get())
     }
 
     single {

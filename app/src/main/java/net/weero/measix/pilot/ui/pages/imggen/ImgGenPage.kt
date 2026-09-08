@@ -298,7 +298,7 @@ private fun ImageGenScreen(
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         rowImages.forEach { (index, image) ->
                             AsyncImage(
-                                model = File(image.filePath),
+                                model = image.image,
                                 contentDescription = null,
                                 modifier = Modifier
                                     .weight(1f)
@@ -332,9 +332,8 @@ private fun ImageGenScreen(
         if (previewIndex >= 0 && currentGeneratedImages.isEmpty()) previewIndex = -1
     }
     if (previewIndex >= 0 && currentGeneratedImages.isNotEmpty()) {
-        // 统一 file:// 前缀, 与网格的 File model 共享 Coil 缓存键
         ImagePreviewDialog(
-            images = currentGeneratedImages.map { "file://${it.filePath}" },
+            images = currentGeneratedImages.map { it.image },
             onDismissRequest = { previewIndex = -1 },
             initialIndex = previewIndex,
             extraActions = listOf(backgroundHost.action),
@@ -573,7 +572,6 @@ private fun ImageGalleryScreen(
     vm: ImgGenVM,
 ) {
     val generatedImages = vm.generatedImages.collectAsLazyPagingItems()
-    val files: net.weero.measix.pilot.service.FileManagementApplicationService = koinInject()
     val context = LocalContext.current
     val resources = LocalResources.current
     val mediaExportService: MediaExportService = koinInject()
@@ -687,9 +685,7 @@ private fun ImageGalleryScreen(
                         ) {
                             Column {
                                 AsyncImage(
-                                    model = remember(it.id, it.selection, files) {
-                                        files.imageSource(net.weero.measix.pilot.service.ManagedFileKey.Generated(it.id, it.selection))
-                                    },
+                                    model = it.image,
                                     contentDescription = null,
                                     modifier = Modifier
                                         .fillMaxWidth()
@@ -744,7 +740,7 @@ private fun ImageGalleryScreen(
                                             onClick = {
                                                 scope.launch {
                                                     try {
-                                                        mediaExportService.saveImage(context, "file://${it.filePath}")
+                                                        mediaExportService.saveImage(context, it.image)
                                                         toaster.show(
                                                             message = imageSavedSuccess,
                                                             type = ToastType.Success
@@ -813,7 +809,7 @@ private fun ImageGalleryScreen(
     if (previewIndex >= 0) {
         // 当前已加载项的快照组成一本相册, 从点击位进入; 用 id 定位以兼容占位 null 导致的下标偏移
         val snapshotItems = generatedImages.itemSnapshotList.items.filter { it.selection == realmSelection }
-        val urls = snapshotItems.map { "file://${it.filePath}" }
+        val urls = snapshotItems.map { it.image }
         val clicked = previewIndex.takeIf { it < generatedImages.itemCount }
             ?.let { generatedImages[it] }
         val startIndex = clicked
@@ -830,14 +826,14 @@ private fun ImageGalleryScreen(
                 extraActions = listOf(backgroundHost.action),
                 deleteAction = ImagePreviewDeleteAction(
                     confirmationText = { imageUrl ->
-                        val target = snapshotItems.firstOrNull { "file://${it.filePath}" == imageUrl }
+                        val target = snapshotItems.firstOrNull { it.image == imageUrl }
                         resources.getString(
                             R.string.imggen_page_delete_image_confirmation,
                             shortGeneratedLabel(target?.prompt.orEmpty(), generatedNoPrompt),
                         )
                     },
                     delete = { imageUrl ->
-                        val target = snapshotItems.firstOrNull { "file://${it.filePath}" == imageUrl }
+                        val target = snapshotItems.firstOrNull { it.image == imageUrl }
                         if (target == null) {
                             ImagePreviewDeleteResult.Failed(imageDeleteFailed)
                         } else if (vm.deleteImage(target)) {

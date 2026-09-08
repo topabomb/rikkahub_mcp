@@ -269,7 +269,7 @@ fun ChainOfThoughtScope.ChatMessageToolStep(
                                             .shimmer(isLoading = true)
                                     )
                                 } else {
-                                    resolveAttachmentImageUrl(image, attachmentPreview)?.let { imageUrl ->
+                                    resolveAttachmentImageSource(image, attachmentPreview)?.let { imageUrl ->
                                         ZoomableAsyncImage(
                                             model = imageUrl,
                                             contentDescription = null,

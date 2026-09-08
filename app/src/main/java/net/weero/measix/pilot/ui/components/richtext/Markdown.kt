@@ -525,7 +525,7 @@ private fun MarkdownNode(
             ) {
                 // 这里可以使用Coil等图片加载库加载图片
                 ZoomableAsyncImage(
-                    model = imageUrl,
+                    model = rememberResolvedImageSource(imageUrl),
                     contentDescription = altText,
                     modifier = Modifier
                         .clip(RoundedCornerShape(8.dp))

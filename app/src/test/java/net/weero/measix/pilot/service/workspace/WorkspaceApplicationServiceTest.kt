@@ -16,6 +16,30 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class WorkspaceApplicationServiceTest {
+    @Test fun `image reads the captured area and rejects changed files before and after IO`() = runTest {
+        val repository = mockk<WorkspaceRepository>()
+        coEvery { repository.getById("id") } returns workspace()
+        val area = me.rerere.workspace.WorkspaceStorageArea.FILES
+        val bytes = java.util.Base64.getDecoder().decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=")
+        val original = me.rerere.workspace.WorkspaceFileEntry("photo.png", "photo.png", false, bytes.size.toLong(), 10L)
+        var current = original
+        var changeDuringRead = false
+        coEvery { repository.statFile("id", area, "photo.png") } coAnswers { current }
+        coEvery { repository.exportFile("id", area, "photo.png", any()) } coAnswers {
+            arg<java.io.OutputStream>(3).write(bytes)
+            if (changeDuringRead) current = original.copy(updatedAt = 11L)
+        }
+        val source = WorkspaceApplicationService(repository, mockk()).imageSource("id", area, original)
+        org.junit.Assert.assertArrayEquals(bytes, source.readBytes())
+        current = original.copy(updatedAt = 11L)
+        assertTrue(runCatching { source.requireAccess() }.isFailure)
+        assertTrue(runCatching { source.readBytes() }.isFailure)
+        current = original
+        changeDuringRead = true
+        assertTrue(runCatching { source.readBytes() }.isFailure)
+        coVerify(exactly = 0) { repository.listFiles(any(), any(), any()) }
+    }
+
     @Test
     fun `delete waits for an in-flight rename of the same workspace`() = runTest {
         val repository = mockk<WorkspaceRepository>()
