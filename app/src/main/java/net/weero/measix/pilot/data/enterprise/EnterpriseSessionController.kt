@@ -184,16 +184,18 @@ internal class EnterpriseSessionController(
         next
     }
 
-    suspend fun listFeed(access: RealmAccess.Enterprise, query: EnterpriseFeedQuery): EnterpriseFeedResult = mutex.withLock {
-        val current = requireFeedSession(access)
+    suspend fun listFeed(selection: RealmSelection, query: EnterpriseFeedQuery): EnterpriseFeedResult = mutex.withLock {
+        val current = requirePortalSelection(selection)
+        val access = selection.access as RealmAccess.Enterprise
         val version = current.manifest.feeds.find { it.scope == access.scope } ?: fail("enterprise_feed_not_ready")
         withContext(Dispatchers.IO) {
             EnterpriseFeed.list(store.readFeed(version), access.scope, query, Instant.ofEpochMilli(nowMillis()))
         }
     }
 
-    suspend fun feedDetail(access: RealmAccess.Enterprise, id: String): EnterpriseUpdateItem = mutex.withLock {
-        val current = requireFeedSession(access)
+    suspend fun feedDetail(selection: RealmSelection, id: String): EnterpriseUpdateItem = mutex.withLock {
+        val current = requirePortalSelection(selection)
+        val access = selection.access as RealmAccess.Enterprise
         val version = current.manifest.feeds.find { it.scope == access.scope } ?: fail("enterprise_feed_not_ready")
         withContext(Dispatchers.IO) { EnterpriseFeed.detail(store.readFeed(version), id) }
     }
@@ -204,6 +206,31 @@ internal class EnterpriseSessionController(
             fail("enterprise_data_access_unavailable")
         }
         return current
+    }
+
+    suspend fun portalState(selection: RealmSelection): EnterpriseState.Available = mutex.withLock {
+        val current = requirePortalSelection(selection)
+        EnterpriseState.Available(current.manifest, current.configuration)
+    }
+
+    private suspend fun requirePortalSelection(selection: RealmSelection): LoadedEnterpriseState {
+        val current = ensureLoaded()
+        val access = selection.access as? RealmAccess.Enterprise ?: fail("enterprise_session_required")
+        if (selection.revision != selectionRevision.value || current.manifest.selectedScope != access.scope ||
+            !allowsDataAccess(current.manifest, access)) fail("enterprise_data_access_unavailable")
+        return current
+    }
+
+    /** A timed-out UI request may reply only if its original selection can be verified without waiting. */
+    fun tryWithSelectedRealmSelection(selection: RealmSelection, operation: () -> Unit): Boolean {
+        if (!mutex.tryLock()) return false
+        try {
+            val manifest = loaded?.manifest ?: return false
+            if (selection.revision != selectionRevision.value || manifest.selectedScope != selection.access.scope ||
+                (selection.access is RealmAccess.Enterprise && !allowsDataAccess(manifest, selection.access))) return false
+            operation()
+            return true
+        } finally { mutex.unlock() }
     }
 
     suspend fun captureRealmAccess(scope: ConfigurationScope): RealmAccess = when (scope) {

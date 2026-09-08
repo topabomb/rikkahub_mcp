@@ -1,0 +1,722 @@
+[
+  {
+    "name": "local-context",
+    "schema": "LocalPortalContext",
+    "valid": true,
+    "value": {
+      "formatVersion": 1,
+      "kind": "LOCAL_EXAMPLE",
+      "sourceNamespace": "local.example",
+      "deploymentId": "dep_example",
+      "userId": "usr_example",
+      "sessionId": "ses_example",
+      "documentId": "doc_example_1",
+      "enterpriseName": "示例企业",
+      "userDisplayName": "示例用户",
+      "expiresAt": "2030-01-01T00:10:00Z",
+      "sessionIdleExpiresAt": "2030-01-08T00:00:00Z"
+    }
+  },
+  {
+    "name": "local-enrollment",
+    "schema": "LocalExampleEnrollmentMaterial",
+    "valid": true,
+    "value": {
+      "formatVersion": 1,
+      "kind": "LOCAL_EXAMPLE_ENROLLMENT",
+      "sourceNamespace": "local.example",
+      "deploymentId": "dep_example",
+      "code": "fixture-local-code",
+      "expiresAt": "2030-01-01T00:10:00Z"
+    }
+  },
+  {
+    "name": "old-local-enrollment",
+    "schema": "LocalExampleEnrollmentMaterial",
+    "valid": false,
+    "value": {
+      "formatVersion": 1,
+      "sourceNamespace": "local.example",
+      "deploymentId": "dep_example",
+      "userId": "u",
+      "enrollmentCode": "old",
+      "expiresAtMillis": 1893456000000
+    }
+  },
+  {
+    "name": "getStatus",
+    "schema": "BridgeRequest",
+    "valid": true,
+    "value": {
+      "bridgeVersion": 3,
+      "requestId": "request_fixture",
+      "method": "getStatus",
+      "params": {},
+      "documentId": "doc_fixture"
+    }
+  },
+  {
+    "name": "refresh",
+    "schema": "BridgeRequest",
+    "valid": true,
+    "value": {
+      "bridgeVersion": 3,
+      "requestId": "request_fixture",
+      "method": "refresh",
+      "params": {},
+      "documentId": "doc_fixture"
+    }
+  },
+  {
+    "name": "close",
+    "schema": "BridgeRequest",
+    "valid": true,
+    "value": {
+      "bridgeVersion": 3,
+      "requestId": "request_fixture",
+      "method": "close",
+      "params": {},
+      "documentId": "doc_fixture"
+    }
+  },
+  {
+    "name": "logout",
+    "schema": "BridgeRequest",
+    "valid": true,
+    "value": {
+      "bridgeVersion": 3,
+      "requestId": "request_fixture",
+      "method": "logout",
+      "params": {},
+      "documentId": "doc_fixture"
+    }
+  },
+  {
+    "name": "openExternal",
+    "schema": "BridgeRequest",
+    "valid": true,
+    "value": {
+      "bridgeVersion": 3,
+      "requestId": "request_fixture",
+      "method": "openExternal",
+      "params": {
+        "url": "https://example.com"
+      },
+      "documentId": "doc_fixture"
+    }
+  },
+  {
+    "name": "capturePhoto",
+    "schema": "BridgeRequest",
+    "valid": true,
+    "value": {
+      "bridgeVersion": 3,
+      "requestId": "request_fixture",
+      "method": "capturePhoto",
+      "params": {},
+      "documentId": "doc_fixture"
+    }
+  },
+  {
+    "name": "recordAudio",
+    "schema": "BridgeRequest",
+    "valid": true,
+    "value": {
+      "bridgeVersion": 3,
+      "requestId": "request_fixture",
+      "method": "recordAudio",
+      "params": {
+        "maxDurationSeconds": 60
+      },
+      "documentId": "doc_fixture"
+    }
+  },
+  {
+    "name": "readMedia",
+    "schema": "BridgeRequest",
+    "valid": true,
+    "value": {
+      "bridgeVersion": 3,
+      "requestId": "request_fixture",
+      "method": "readMedia",
+      "params": {
+        "mediaId": "media_fixture",
+        "offset": 0,
+        "maxBytes": 65536
+      },
+      "documentId": "doc_fixture"
+    }
+  },
+  {
+    "name": "releaseMedia",
+    "schema": "BridgeRequest",
+    "valid": true,
+    "value": {
+      "bridgeVersion": 3,
+      "requestId": "request_fixture",
+      "method": "releaseMedia",
+      "params": {
+        "mediaId": "media_fixture"
+      },
+      "documentId": "doc_fixture"
+    }
+  },
+  {
+    "name": "cancel",
+    "schema": "BridgeRequest",
+    "valid": true,
+    "value": {
+      "bridgeVersion": 3,
+      "requestId": "request_fixture",
+      "method": "cancel",
+      "params": {
+        "targetRequestId": "request_fixture"
+      },
+      "documentId": "doc_fixture"
+    }
+  },
+  {
+    "name": "status",
+    "schema": "HostStatus",
+    "valid": true,
+    "value": {
+      "managedReady": true,
+      "appliedManagedGeneration": 7,
+      "lastConfigurationSync": "2030-01-01T00:00:00Z",
+      "lastEnterpriseUpdateRefresh": null,
+      "capabilities": [
+        "getStatus",
+        "refresh",
+        "close",
+        "logout",
+        "openExternal",
+        "capturePhoto",
+        "recordAudio",
+        "readMedia",
+        "releaseMedia",
+        "cancel"
+      ]
+    }
+  },
+  {
+    "name": "unknown-method",
+    "schema": "BridgeRequest",
+    "valid": false,
+    "value": {
+      "bridgeVersion": 3,
+      "requestId": "r",
+      "method": "startRecording",
+      "params": {},
+      "documentId": "doc_fixture"
+    }
+  },
+  {
+    "name": "wrong-version",
+    "schema": "BridgeRequest",
+    "valid": false,
+    "value": {
+      "bridgeVersion": 1,
+      "requestId": "r",
+      "method": "refresh",
+      "params": {},
+      "documentId": "doc_fixture"
+    }
+  },
+  {
+    "name": "extra-param",
+    "schema": "BridgeRequest",
+    "valid": false,
+    "value": {
+      "bridgeVersion": 3,
+      "requestId": "r",
+      "method": "refresh",
+      "params": {
+        "generation": 9
+      },
+      "documentId": "doc_fixture"
+    }
+  },
+  {
+    "name": "unsafe-chunk-size",
+    "schema": "BridgeRequest",
+    "valid": false,
+    "value": {
+      "bridgeVersion": 3,
+      "requestId": "r",
+      "method": "readMedia",
+      "params": {
+        "mediaId": "m",
+        "offset": 0,
+        "maxBytes": 65537
+      },
+      "documentId": "doc_fixture"
+    }
+  },
+  {
+    "name": "photo",
+    "schema": "MediaHandle",
+    "valid": true,
+    "value": {
+      "mediaId": "m",
+      "mimeType": "image/jpeg",
+      "byteLength": 4
+    }
+  },
+  {
+    "name": "audio",
+    "schema": "MediaHandle",
+    "valid": true,
+    "value": {
+      "mediaId": "m",
+      "mimeType": "audio/mp4",
+      "byteLength": 4
+    }
+  },
+  {
+    "name": "oversized-media",
+    "schema": "MediaHandle",
+    "valid": false,
+    "value": {
+      "mediaId": "m",
+      "mimeType": "image/jpeg",
+      "byteLength": 10485761
+    }
+  },
+  {
+    "name": "chunk",
+    "schema": "MediaChunk",
+    "valid": true,
+    "value": {
+      "dataBase64": "AQIDBA==",
+      "nextOffset": 4,
+      "eof": true
+    }
+  },
+  {
+    "name": "bad-base64",
+    "schema": "MediaChunk",
+    "valid": false,
+    "value": {
+      "dataBase64": "not*base64",
+      "nextOffset": 1,
+      "eof": true
+    }
+  },
+  {
+    "name": "refresh-success",
+    "schema": "BridgeResponse",
+    "valid": true,
+    "value": {
+      "bridgeVersion": 3,
+      "requestId": "r",
+      "result": {
+        "managedReady": true,
+        "appliedManagedGeneration": 8,
+        "lastConfigurationSync": "2030-01-01T00:00:00Z",
+        "lastEnterpriseUpdateRefresh": null,
+        "capabilities": [
+          "getStatus",
+          "refresh",
+          "close",
+          "logout",
+          "openExternal",
+          "capturePhoto",
+          "recordAudio",
+          "readMedia",
+          "releaseMedia",
+          "cancel"
+        ]
+      },
+      "documentId": "doc_fixture"
+    }
+  },
+  {
+    "name": "refresh-failure",
+    "schema": "BridgeResponse",
+    "valid": true,
+    "value": {
+      "bridgeVersion": 3,
+      "requestId": "r",
+      "error": {
+        "code": "configuration_invalid",
+        "message": "Candidate rejected"
+      },
+      "documentId": "doc_fixture"
+    }
+  },
+  {
+    "name": "ambiguous-response",
+    "schema": "BridgeResponse",
+    "valid": false,
+    "value": {
+      "bridgeVersion": 3,
+      "requestId": "r",
+      "result": {},
+      "error": {
+        "code": "timeout",
+        "message": "timeout"
+      },
+      "documentId": "doc_fixture"
+    }
+  },
+  {
+    "name": "invalid-date",
+    "schema": "LocalPortalContext",
+    "valid": false,
+    "value": {
+      "formatVersion": 1,
+      "kind": "LOCAL_EXAMPLE",
+      "sourceNamespace": "local.example",
+      "deploymentId": "dep_example",
+      "userId": "usr_example",
+      "sessionId": "ses_example",
+      "documentId": "doc_example_1",
+      "enterpriseName": "示例企业",
+      "userDisplayName": "示例用户",
+      "expiresAt": "tomorrow",
+      "sessionIdleExpiresAt": "2030-01-08T00:00:00Z"
+    }
+  },
+  {
+    "name": "fake-csrf",
+    "schema": "LocalPortalContext",
+    "valid": false,
+    "value": {
+      "formatVersion": 1,
+      "kind": "LOCAL_EXAMPLE",
+      "sourceNamespace": "local.example",
+      "deploymentId": "dep_example",
+      "userId": "usr_example",
+      "sessionId": "ses_example",
+      "documentId": "doc_example_1",
+      "enterpriseName": "示例企业",
+      "userDisplayName": "示例用户",
+      "expiresAt": "2030-01-01T00:10:00Z",
+      "sessionIdleExpiresAt": "2030-01-08T00:00:00Z",
+      "csrfToken": "fake"
+    }
+  },
+  {
+    "name": "enrollment-utc-zero-offset",
+    "schema": "LocalExampleEnrollmentMaterial",
+    "valid": true,
+    "value": {
+      "formatVersion": 1,
+      "kind": "LOCAL_EXAMPLE_ENROLLMENT",
+      "sourceNamespace": "local.example",
+      "deploymentId": "dep_example",
+      "code": "fixture-local-code",
+      "expiresAt": "2030-01-01T00:10:00+00:00"
+    }
+  },
+  {
+    "name": "enrollment-utc-lowercase",
+    "schema": "LocalExampleEnrollmentMaterial",
+    "valid": true,
+    "value": {
+      "formatVersion": 1,
+      "kind": "LOCAL_EXAMPLE_ENROLLMENT",
+      "sourceNamespace": "local.example",
+      "deploymentId": "dep_example",
+      "code": "fixture-local-code",
+      "expiresAt": "2030-01-01t00:10:00z"
+    }
+  },
+  {
+    "name": "enrollment-excess-precision",
+    "schema": "LocalExampleEnrollmentMaterial",
+    "valid": false,
+    "value": {
+      "formatVersion": 1,
+      "kind": "LOCAL_EXAMPLE_ENROLLMENT",
+      "sourceNamespace": "local.example",
+      "deploymentId": "dep_example",
+      "code": "fixture-local-code",
+      "expiresAt": "2030-01-01T00:10:00.1234567891Z"
+    }
+  },
+  {
+    "name": "enrollment-leap-second",
+    "schema": "LocalExampleEnrollmentMaterial",
+    "valid": false,
+    "value": {
+      "formatVersion": 1,
+      "kind": "LOCAL_EXAMPLE_ENROLLMENT",
+      "sourceNamespace": "local.example",
+      "deploymentId": "dep_example",
+      "code": "fixture-local-code",
+      "expiresAt": "2030-01-01T00:10:60Z"
+    }
+  },
+  {
+    "name": "getLocalContext",
+    "schema": "BridgeRequest",
+    "valid": true,
+    "value": {
+      "bridgeVersion": 3,
+      "documentId": "doc_fixture",
+      "requestId": "request_fixture",
+      "method": "getLocalContext",
+      "params": {}
+    }
+  },
+  {
+    "name": "listLocalUpdates",
+    "schema": "BridgeRequest",
+    "valid": true,
+    "value": {
+      "bridgeVersion": 3,
+      "documentId": "doc_fixture",
+      "requestId": "request_fixture",
+      "method": "listLocalUpdates",
+      "params": {
+        "startDate": "2026-09-07",
+        "limit": 20,
+        "ifNoneMatch": "\"rev1\""
+      }
+    }
+  },
+  {
+    "name": "getLocalUpdate",
+    "schema": "BridgeRequest",
+    "valid": true,
+    "value": {
+      "bridgeVersion": 3,
+      "documentId": "doc_fixture",
+      "requestId": "request_fixture",
+      "method": "getLocalUpdate",
+      "params": {
+        "enterpriseUpdateId": "eup_00000000-0000-4000-8000-000000000001"
+      }
+    }
+  },
+  {
+    "name": "document-bootstrap",
+    "schema": "PortalDocument",
+    "valid": true,
+    "value": {
+      "bridgeVersion": 3,
+      "documentId": "doc_fixture"
+    }
+  },
+  {
+    "name": "old-bootstrap",
+    "schema": "PortalDocument",
+    "valid": false,
+    "value": {
+      "bridgeVersion": 2,
+      "documentId": "doc_fixture"
+    }
+  },
+  {
+    "name": "old-bridge-v2",
+    "schema": "BridgeRequest",
+    "valid": false,
+    "value": {
+      "bridgeVersion": 2,
+      "documentId": "doc_fixture",
+      "requestId": "request_fixture",
+      "method": "getStatus",
+      "params": {}
+    }
+  },
+  {
+    "name": "missing-document",
+    "schema": "BridgeRequest",
+    "valid": false,
+    "value": {
+      "bridgeVersion": 3,
+      "requestId": "request_fixture",
+      "method": "getStatus",
+      "params": {}
+    }
+  },
+  {
+    "name": "empty-document",
+    "schema": "BridgeRequest",
+    "valid": false,
+    "value": {
+      "bridgeVersion": 3,
+      "documentId": "",
+      "requestId": "request_fixture",
+      "method": "getStatus",
+      "params": {}
+    }
+  },
+  {
+    "name": "local-arbitrary-url",
+    "schema": "BridgeRequest",
+    "valid": false,
+    "value": {
+      "bridgeVersion": 3,
+      "documentId": "doc_fixture",
+      "requestId": "request_fixture",
+      "method": "listLocalUpdates",
+      "params": {
+        "url": "https://evil.invalid"
+      }
+    }
+  },
+  {
+    "name": "local-limit-overflow",
+    "schema": "BridgeRequest",
+    "valid": false,
+    "value": {
+      "bridgeVersion": 3,
+      "documentId": "doc_fixture",
+      "requestId": "request_fixture",
+      "method": "listLocalUpdates",
+      "params": {
+        "limit": 21
+      }
+    }
+  },
+  {
+    "name": "local-null-date",
+    "schema": "BridgeRequest",
+    "valid": false,
+    "value": {
+      "bridgeVersion": 3,
+      "documentId": "doc_fixture",
+      "requestId": "request_fixture",
+      "method": "listLocalUpdates",
+      "params": {
+        "startDate": null
+      }
+    }
+  },
+  {
+    "name": "local-invalid-date",
+    "schema": "BridgeRequest",
+    "valid": false,
+    "value": {
+      "bridgeVersion": 3,
+      "documentId": "doc_fixture",
+      "requestId": "request_fixture",
+      "method": "listLocalUpdates",
+      "params": {
+        "startDate": "2026-02-30"
+      }
+    }
+  },
+  {
+    "name": "local-empty-etag",
+    "schema": "BridgeRequest",
+    "valid": false,
+    "value": {
+      "bridgeVersion": 3,
+      "documentId": "doc_fixture",
+      "requestId": "request_fixture",
+      "method": "listLocalUpdates",
+      "params": {
+        "ifNoneMatch": ""
+      }
+    }
+  },
+  {
+    "name": "local-long-etag",
+    "schema": "BridgeRequest",
+    "valid": false,
+    "value": {
+      "bridgeVersion": 3,
+      "documentId": "doc_fixture",
+      "requestId": "request_fixture",
+      "method": "listLocalUpdates",
+      "params": {
+        "ifNoneMatch": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      }
+    }
+  },
+  {
+    "name": "local-invalid-id",
+    "schema": "BridgeRequest",
+    "valid": false,
+    "value": {
+      "bridgeVersion": 3,
+      "documentId": "doc_fixture",
+      "requestId": "request_fixture",
+      "method": "getLocalUpdate",
+      "params": {
+        "enterpriseUpdateId": "arbitrary"
+      }
+    }
+  },
+  {
+    "name": "local-modified",
+    "schema": "LocalFeedResult",
+    "valid": true,
+    "value": {
+      "kind": "modified",
+      "etag": "\"rev1\"",
+      "feed": {
+        "enterpriseTimezone": "Asia/Shanghai",
+        "items": [],
+        "truncated": false
+      }
+    }
+  },
+  {
+    "name": "local-not-modified",
+    "schema": "LocalFeedResult",
+    "valid": true,
+    "value": {
+      "kind": "notModified",
+      "etag": "\"rev1\""
+    }
+  },
+  {
+    "name": "local-not-modified-with-body",
+    "schema": "LocalFeedResult",
+    "valid": false,
+    "value": {
+      "kind": "notModified",
+      "etag": "\"rev1\"",
+      "feed": {
+        "enterpriseTimezone": "Asia/Shanghai",
+        "items": [],
+        "truncated": false
+      }
+    }
+  },
+  {
+    "name": "local-modified-without-body",
+    "schema": "LocalFeedResult",
+    "valid": false,
+    "value": {
+      "kind": "modified",
+      "etag": "\"rev1\""
+    }
+  },
+  {
+    "name": "local-modified-invalid-feed",
+    "schema": "LocalFeedResult",
+    "valid": false,
+    "value": {
+      "kind": "modified",
+      "etag": "\"rev1\"",
+      "feed": {
+        "enterpriseTimezone": "Asia/Shanghai",
+        "items": [
+          {
+            "title": "incomplete"
+          }
+        ],
+        "truncated": false
+      }
+    }
+  },
+  {
+    "name": "local-source-denied",
+    "schema": "BridgeResponse",
+    "valid": true,
+    "value": {
+      "bridgeVersion": 3,
+      "documentId": "doc_fixture",
+      "requestId": "r",
+      "error": {
+        "code": "source_forbidden",
+        "message": "Unavailable"
+      }
+    }
+  }
+]

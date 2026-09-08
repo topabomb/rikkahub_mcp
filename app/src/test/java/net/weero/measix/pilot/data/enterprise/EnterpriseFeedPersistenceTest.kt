@@ -29,7 +29,7 @@ class EnterpriseFeedPersistenceTest {
         val applied = sessions.enrollFixture(packet)
         val access = sessions.captureRealmAccess(packet.identity.scope) as RealmAccess.Enterprise
         val original = applied.manifest.feeds.single()
-        val id = sessions.listFeed(access, EnterpriseFeedQuery()).body.items.single().enterpriseUpdateId
+        val id = sessions.listFeed(RealmSelection(access, sessions.selectionRevision.value), EnterpriseFeedQuery()).body.items.single().enterpriseUpdateId
         sessions.changeFeed(access, original.revision, EnterpriseFeedCommand.Withdraw(id))
         val changed = sessions.available()
         assertEquals(applied.configuration, changed.configuration)
@@ -45,12 +45,12 @@ class EnterpriseFeedPersistenceTest {
         val reopened = EnterpriseSessionController(EnterpriseAppliedStore(root))
         reopened.recover()
         reopened.enrollFixture(packet)
-        expectReason("enterprise_data_access_unavailable") { reopened.listFeed(access, EnterpriseFeedQuery()) }
+        expectReason("enterprise_data_access_unavailable") { reopened.listFeed(RealmSelection(access, reopened.selectionRevision.value), EnterpriseFeedQuery()) }
         val nextAccess = reopened.captureRealmAccess(packet.identity.scope) as RealmAccess.Enterprise
-        assertTrue(reopened.listFeed(nextAccess, EnterpriseFeedQuery()).body.items.isEmpty())
+        assertTrue(reopened.listFeed(RealmSelection(nextAccess, reopened.selectionRevision.value), EnterpriseFeedQuery()).body.items.isEmpty())
         assertEquals(changed.manifest.feeds, reopened.available().manifest.feeds)
         reopened.switchToPersonal()
-        expectReason("enterprise_data_access_unavailable") { reopened.listFeed(nextAccess, EnterpriseFeedQuery()) }
+        expectReason("enterprise_data_access_unavailable") { reopened.listFeed(RealmSelection(nextAccess, reopened.selectionRevision.value), EnterpriseFeedQuery()) }
     }
 
     @Test
@@ -63,7 +63,7 @@ class EnterpriseFeedPersistenceTest {
         val packet = exampleEnterprisePackage()
         val applied = sessions.enrollFixture(packet)
         val access = sessions.captureRealmAccess(packet.identity.scope) as RealmAccess.Enterprise
-        val before = sessions.listFeed(access, EnterpriseFeedQuery())
+        val before = sessions.listFeed(RealmSelection(access, sessions.selectionRevision.value), EnterpriseFeedQuery())
         failCommit = true
         try {
             sessions.changeFeed(access, applied.manifest.feeds.single().revision,
@@ -73,7 +73,7 @@ class EnterpriseFeedPersistenceTest {
         assertEquals(applied, sessions.available())
         val reopened = EnterpriseSessionController(EnterpriseAppliedStore(root))
         assertEquals(applied, reopened.recover())
-        assertEquals(before, reopened.listFeed(access, EnterpriseFeedQuery()))
+        assertEquals(before, reopened.listFeed(RealmSelection(access, reopened.selectionRevision.value), EnterpriseFeedQuery()))
     }
 
     @Test
@@ -125,7 +125,7 @@ class EnterpriseFeedPersistenceTest {
             assertEquals(sessions.available().manifest, store.readManifest())
             assertEquals(before.manifest.applied, sessions.available().manifest.applied)
             if (point == EnterpriseStorageCheckpoint.FEED_STAGED) assertEquals(before, sessions.available())
-            else assertTrue(sessions.listFeed(access, EnterpriseFeedQuery()).body.items.isEmpty())
+            else assertTrue(sessions.listFeed(RealmSelection(access, sessions.selectionRevision.value), EnterpriseFeedQuery()).body.items.isEmpty())
             assertEquals(sessions.available(), EnterpriseSessionController(EnterpriseAppliedStore(root)).recover())
             assertEquals(1, File(root, "feed-revisions").listFiles()!!.size)
         }

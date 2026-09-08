@@ -65,6 +65,7 @@
 | 运行记忆域与 Session | `RealmAccessTest`、`MemoryServiceTest` 与真实 Room 的 `ScopedMemoryRepositoryAndroidTest`；验证旧 Session、模式变化、工具结果归属、事务取消及个人助手清理范围 |
 | 会话目录、FTS 与统计域过滤 | `ScopedConversationQueryTest`、`SelectedRealmPagingSourceTest` 验证原 Session 工具、列表恢复及实际 Pager 失效；`ConversationDAOIntegrationTest` 和使用生产数据库工厂的 `ScopedMessageSearchAndroidTest` 验证真实 Room/Requery/Jieba 的完整主体过滤与限额前过滤，不替代按 ID 页面/命令授权验收 |
 | 聊天页面打开与生命周期 | `ConversationPageAccessTest` 验证显式 Draft/Existing、原 Session、header 前置检查与投影撤销；`ChatPageLifecycleTest` 验证实际 ViewModel 的授权先行、取消/回收、分享输入消费；`UserSettingsMigrationAndroidTest` 验证实际 DataStore/SharedPreferences 的最近聊天迁移、失败重试和保全；不替代普通命令/Turn 或正式企业 UI 验收 |
+| Portal 消息与文档授权 | `PortalProtocolTest` 核验完整共享输入摘要，执行全部 BridgeRequest 案例和原始重复键；`PortalDocumentTest` 使用真实本地 Session/Feed owner 验证原文档、ETag、配置同步、切域往返、文档替换及迟到同步结果；`PortalWebViewAndroidTest` 覆盖随包网页首次读取、实际 bootstrap、页内导航、重载后新页面、快速切域和旧同步错误隔离。设备验证结果见实施方案；请求解析不代表共享响应反例全部消费，页面测试不替代媒体、扫码或真实平台验收 |
 
 ## 4. Provider contract suite（两层）
 

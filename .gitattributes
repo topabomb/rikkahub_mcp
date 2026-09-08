@@ -9,6 +9,5 @@ highlight/src/test/resources/hljs/**/*.tokens text eol=lf
 workspace/tools/*.sh text eol=lf
 
 # Upstream contract inputs are pinned by SHA256 and retain their original bytes.
-app/src/test/resources/contracts/enrollment/*.json -text
 app/src/test/resources/contracts/portal/*.json -text
 app/src/main/enterprisePortal/** -text

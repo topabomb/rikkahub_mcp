@@ -80,9 +80,9 @@ updateLocal(latest Local shadow transform)
 - `EnterpriseSessionController` 是上述存储的串行写 owner。enrollLocal 处理已验证接入（配置不可用时待配置），importLocal 处理显式原生安装后的应用，synchronize 只接受原 Session 的候选。无 registerIdentity/applyPackage 通用旁路。支持待配置、就绪、离线、退出和重新认证；切换保留登录，退出撤销资格后等待在途 lease 释放。配置损坏时仍能依靠已验证身份退出；恢复不接受不闭合的活动文件。
 - LocalEnterpriseSource 通过 LocalEnterpriseConfigurationStore 唯一管理 noBackupFilesDir/local_enterprise_service 中的安装目录和来源配置。这是模拟服务的来源事实，不是第四个客户端配置区或 enterprise_local。目录按完整主体保存身份、generation 与内容摘要引用，配置使用独立不可变文件；身份读取不依赖配置可读。场景修改按来源 revision 做 CAS 并推进 generation，尚未同步时客户端 Applied 保持原值。损坏来源不能静默重置为随包示例；显式完整文件导入可以在 CAS 校验后以更高 generation 修复。
 - EnterpriseSynchronizationService 合并同一主体/Session 的同步请求，读取来源候选后交给 Session owner 复核原授权并原子应用，不创建、续期或切换 Session。成功提交同时保存 lastConfigurationSyncMillis；同版本检查复用 Applied revision，失败保留原配置和成功时间。取消等待者不会回滚或重放同步；同会话更新保留离线状态。在途 lease 保留捕获的旧绑定直至释放；lease 不充当执行授权，运行链接入时还需统一准入门禁。
-- `LocalEnterpriseSource` 统一验证一键、粘贴和扫码解析后的公开示例接入资料，并支持私有整包导入。`docs/examples/enterprise.local.example.json` 是唯一公开示例输入，通过构建任务进入 assets；根目录 `enterprise.local.json` 被 Git 忽略且不参与打包。配置内 HTML 与 EnterprisePortal 原型已删除。Portal local 消费包固定在 app/src/main/enterprisePortal，保留上游 build-identity.json；PrepareEnterprisePortalAssets 检查来源、版本、完整文件集合和 SHA256 后，为全部构建生成 enterprise_portal assets。普通构建不依赖 sibling checkout；WebView 宿主与 Bridge 尚待接通。
+- `LocalEnterpriseSource` 统一验证一键、粘贴和扫码解析后的公开示例接入资料，并支持私有整包导入。`docs/examples/enterprise.local.example.json` 是唯一公开示例输入，通过构建任务进入 assets；根目录 `enterprise.local.json` 被 Git 忽略且不参与打包。配置内 HTML 与 EnterprisePortal 原型已删除。Portal local 消费包固定在 app/src/main/enterprisePortal，保留上游 build-identity.json；PrepareEnterprisePortalAssets 检查来源、版本、完整文件集合和 SHA256 后，为全部构建生成 enterprise_portal assets。普通构建不依赖 sibling checkout；当前随包协议为 Bridge v3 / 本地读取 v2，原生宿主见下节。
 
-`EnterpriseFeed` 集中管理草稿创建/编辑、发布、撤回与日期查询，EnterpriseSessionController 使用原 Session 写锁和同一 manifest 发布其结果。动态不再属于 EnterpriseConfiguration；仅改变动态不推进配置 generation 或替换 Applied。Seed 仅在该主体没有 Feed 时初始化，重复导入、同步和重入不恢复撤回内容。公开 revision 只随发布/撤回变化；草稿编辑只改变存储 revision。查询遵守 Client Feed 字段、枚举和 eup_UUIDv4 标识，按企业时区日历日界线过滤，ETag 包含主体、公开 revision、规范化日期/limit 与返回表示。Session 与当前选中空间验证先于查询；Portal document 和 304 响应门禁尚待宿主接通。
+`EnterpriseFeed` 集中管理草稿创建/编辑、发布、撤回与日期查询，EnterpriseSessionController 使用原 Session 写锁和同一 manifest 发布其结果。动态不再属于 EnterpriseConfiguration；仅改变动态不推进配置 generation 或替换 Applied。Seed 仅在该主体没有 Feed 时初始化，重复导入、同步和重入不恢复撤回内容。公开 revision 只随发布/撤回变化；草稿编辑只改变存储 revision。查询遵守 Client Feed 字段、枚举和 eup_UUIDv4 标识，按企业时区日历日界线过滤，ETag 包含主体、公开 revision、规范化日期/limit 与返回表示。查询接受原 RealmSelection，在同一次 Session 锁内验证完整主体、母 Session、选中空间与 selectionRevision；当前本地 Portal 使用 modified/notModified 消息结果，不构造 HTTP 304。
 
 原生资料使用独立 EnrollmentMaterialParser 对齐 formatVersion=1 的 PLATFORM_ENROLLMENT / LOCAL_EXAMPLE_ENROLLMENT；原文上限 2048 UTF-8 字节、严格字段与重复键验证。本地资料不包含 userId，运行时由 LocalEnrollmentAuthority 领取一次性 code；该模拟服务账本位于 noBackupFilesDir/local_enterprise_service，独立拥有消费事实，Session 仍只归 EnterpriseSessionController。详见 [接入资料契约](enrollment-material-contract.md)。真实平台资料当前只解析并返回明确不支持，不进入本地接入；完整私有配置使用自己的版本。
 
@@ -113,6 +113,16 @@ Memory 已通过 MemoryAddress/MemoryService 按原域、主体与 Session 进�
 会话/文件夹列表、分页、最近聊天、FTS 与统计按完整 scope 查询。UI 跟随选中域及原 Session，切域清空旧投影并失效分页源；助手的 recent_chats/conversation_search 工具保持创建时的原 RealmAccess，切回个人不改写在途企业工具的归属，退出重登也不能恢复旧工具授权。抽屉持续跟踪文件夹并在域变化时清除文件夹筛选。文件夹目录和会话分页行携带同一 Session owner 签发的 RealmSelection（原 RealmAccess 与进程内选择版本）；快速切域再返回也失效旧目录和惰性分页，新的目录不能给旧行重新授权。文件夹创建显式保存 scope 并验证当前助手准入，重命名、删除和移动由 ConversationApplicationService 在原选择锁内验证完整主体与助手。移动还需验证根会话和目录的选择版本一致；关闭或重登后的旧弹窗不能操作新空间。普通会话操作通过页面 lease 或目录行的 ConversationCommandTarget 保留原选择，最终会话锁内校验主体、根会话和页面生命周期；停止后树操作重新授权，撤销 token 不可跨选择复用。具体协议见 [会话操作](turn-step-execution.md)。子助手回答也使用原页面命令目标，并在 pending owner 内匹配原 Master 与执行 Session；UI 等待原回答被接受后才禁用提交，拒绝可重试，页面回收取消尚未被接受的提交。此接收结果不等同于 Child 后续持久化或模型执行成功。辅助模型生成、企业资源执行、文件访问和恢复/备份尚未全面接入，不能据此宣称全部企业数据已经隔离；Workspace 仍是用户可选择的共享资源。
 
 发送、编辑重发、重生成和主助手审批接收原页面 ConversationCommandTarget。请求安装前验证选中域与 Session，接受后仍以原 RealmAccess 执行 USER/结构修改和 START；切域不改变后台请求归属，退出重登不能恢复旧请求。TurnContext 冻结 RealmAccess，审批继续复用它并校验当前页面的原 Session。输入附件创建 pin 从编辑器交给已接受请求，每个请求另持有独立的 Artifact 保留 lease，页面关闭或前驱取消不能提前释放后继正在引用的附件；前驱终态失败保留原 worker，可通过精确 stop 重试。该准入链不代表企业资源执行 adapters、主动退出收口和所有文件读写授权已全部接通。
+
+### 2.7 本地 Portal 文档与消息
+
+`PortalProtocol` 严格解析 Bridge v3 请求：固定版本、原文档/请求关联、准确字段与参数类型，原始 JSON 中的重复键不会先折叠为 Map。三个本地读方法复用现有 Feed DTO 和规则；不提供本地 GET、旧 CustomEvent 或通用 URL 代理。
+
+`PortalDocument` 在 Main dispatcher 管理单个文档、在途请求与原回复通道，冻结原 RealmSelection、母 Session 和最多十分钟期限。快速切出再切回、重登、到期或关闭均不能恢复旧文档。每次读取和回复重新经过 Session owner 授权；十秒请求期限涵盖授权、执行及回复等待，超时后只能以非等待授权检查返回错误。请求 ID 在文档内不复用，迟到结果不转投新页面。配置刷新复用 EnterpriseSynchronizationService；列表的 notModified 仅在授权成功后比较 ETag，且不携带正文。
+
+`PortalWebView` 为每个批准文档新建实例，在首次加载前注册原生消息监听和 document-start bootstrap。固定 origin 只读取经过版本与摘要校验的 PortalAssets，入口为 text/html；其他地址本地拒绝，网络、文件、content URI、网页直接媒体权限均关闭。静态主文档只交付一次，重载和跨文档导航撤销旧实例，页内导航保留当前文档。响应仅经原 JavaScriptReplyProxy；关闭时撤销请求、销毁 WebView 并清理该 origin 的浏览状态。
+
+当前宿主声明 getStatus、refresh、close、cancel 和三个本地读取方法；状态中的动态刷新时间只表示当前文档已完成的读取，未知时为 null。logout、外链、拍照/录音及媒体句柄尚未接线，不声明对应能力，正式企业 UI 入口仍在实施。以上实现不代表设备媒体验收或真实平台接入。
 
 ## 3. Local Settings 顶层结构
 

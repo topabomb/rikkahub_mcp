@@ -77,7 +77,7 @@ abstract class PrepareEnterprisePortalAssets : DefaultTask() {
     fun prepare() {
         val bundle = bundleDirectory.get().asFile.canonicalFile
         val identity = JsonSlurper().parse(File(bundle, "build-identity.json")) as Map<*, *>
-        require(identity["sourceKind"] == "local" && identity["bridgeVersion"] == 2 && identity["localReadVersion"] == 1 &&
+        require(identity["sourceKind"] == "local" && identity["bridgeVersion"] == 3 && identity["localReadVersion"] == 2 &&
             identity["origin"] == "https://local.measix.invalid") { "Unsupported enterprise Portal bundle" }
         val assets = identity["assets"] as Map<*, *>
         require(assets.containsKey("index.html")) { "Portal entry is missing" }
@@ -286,6 +286,7 @@ dependencies {
     implementation(libs.androidx.lifecycle.process)
     implementation(libs.androidx.work.runtime.ktx)
     implementation(libs.androidx.browser)
+    implementation(libs.androidx.webkit)
     implementation(libs.androidx.profileinstaller)
     implementation(libs.termux.terminal.view)
     implementation(libs.snakeyaml)

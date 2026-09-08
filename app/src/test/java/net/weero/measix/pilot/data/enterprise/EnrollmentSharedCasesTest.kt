@@ -47,7 +47,7 @@ class EnrollmentSharedCasesTest(
         @JvmStatic
         @Parameterized.Parameters(name = "{0}")
         fun cases(): List<Array<Any>> {
-            val raw = requireNotNull(EnrollmentSharedCasesTest::class.java.getResourceAsStream("/contracts/enrollment/cases.json"))
+            val raw = requireNotNull(EnrollmentSharedCasesTest::class.java.getResourceAsStream("/contracts/portal/cases.json"))
                 .bufferedReader().use { it.readText() }
             val root = Json.parseToJsonElement(raw).jsonObject
             val now = Instant.parse(root.getValue("now").jsonPrimitive.content)

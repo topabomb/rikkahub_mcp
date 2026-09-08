@@ -1,13 +1,13 @@
 {
   "repository": "measix-enterprise-portal",
   "sourceKind": "local",
-  "bridgeVersion": 2,
-  "localReadVersion": 1,
+  "bridgeVersion": 3,
+  "localReadVersion": 2,
   "origin": "https://local.measix.invalid",
   "version": "0.1.0",
   "commit": null,
   "dirty": true,
-  "sourceHash": "7281c1f019b61eb3bc0bbe8dd439911bf466917191fe881d3586aa4601fc28c6",
+  "sourceHash": "056e78b269453a5ec19eb5c29f4a07d02385afb05533a155010103aad3a19c02",
   "contract": {
     "artifacts": {
       "generated.ts": {
@@ -16,15 +16,19 @@
       },
       "native-generated.ts": {
         "source": "measix-platform-core/api/portal/portal-contract.openapi.json",
-        "sha256": "0a844a20bf43972a63666300a05680f4129d6906276f3f97b2d7eb907675ff1a"
+        "sha256": "f4748cccb1b74235df2d4bc4e6ae82bccfd9625ae5b9de3fb493dfa64e17a8aa"
       },
       "native-contract.json": {
         "source": "measix-platform-core/api/portal/portal-contract.openapi.json",
-        "sha256": "0a844a20bf43972a63666300a05680f4129d6906276f3f97b2d7eb907675ff1a"
+        "sha256": "f4748cccb1b74235df2d4bc4e6ae82bccfd9625ae5b9de3fb493dfa64e17a8aa"
+      },
+      "client-feed.schemas.json": {
+        "source": "measix-platform-core/api/portal/client-feed.schemas.json",
+        "sha256": "31eec383a85c988c4a9471b73aeb540502a7302c27806ee3dbd64606d47fa571"
       },
       "native-vectors.json": {
         "source": "measix-platform-core/api/fixtures/portal/native-vectors.json",
-        "sha256": "d47073b93279185b0fe2cbda1e868c824689df76ce245e5dec647d018edf980d"
+        "sha256": "c0028a97e055df7870b0f4cd85f4d91a4e84c2b2f4ea2ef3cd7f5e602b25b74b"
       },
       "local-context.json": {
         "source": "measix-platform-core/api/fixtures/portal/local-context.json",
@@ -47,7 +51,7 @@
   "lockfileHash": "360c05d90896194e94082e45c265f917550887c688a5670758e7109938bae2aa",
   "assets": {
     "assets/index-BdXcMQag.css": "86507a9ff59603e692980627f4ddba033ef6db12d46a9c4f94fea4a24d39ac22",
-    "assets/index-RTBvF92x.js": "84082fd9444fd47e4394389e5e4fe608110c65134499a9f4f3649dcbedb8568d",
-    "index.html": "55584db16d597dd07220288c1453bb45ee055eed341f19c4a766417be4adc639"
+    "assets/index-D-MKFxvB.js": "ddc82ef0eaaf47f9eac48678d30ee8ee3336fa64e009d437524c5cf79e44340a",
+    "index.html": "2aedd51029ed14f7147e507783d0a696af3fb57c4063937b360e9c9e8663a479"
   }
 }

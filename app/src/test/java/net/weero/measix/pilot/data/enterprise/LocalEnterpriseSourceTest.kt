@@ -63,7 +63,7 @@ class LocalEnterpriseSourceTest {
         var opened = false
         val source = LocalEnterpriseSource({ opened = true; error("must not load a local source") }, h.sessions, h.authority,
             { opened = true; error("must not load local identity") }, LocalEnterpriseConfigurationStore(h.authorityRoot)) { now }
-        val platform = requireNotNull(javaClass.getResourceAsStream("/contracts/enrollment/platform-v1.json")).bufferedReader().use { it.readText() }
+        val platform = requireNotNull(javaClass.getResourceAsStream("/contracts/portal/platform-v1.json")).bufferedReader().use { it.readText() }
         rejected("platform_enrollment_not_supported") { source.enroll(platform) }
         assertFalse(opened)
         assertSignedOut(h)

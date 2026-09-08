@@ -1,0 +1,103 @@
+{
+  "components": {
+    "schemas": {
+      "EnterpriseUpdateCategory": {
+        "enum": [
+          "ANNOUNCEMENT",
+          "MAINTENANCE",
+          "NOTICE"
+        ],
+        "type": "string"
+      },
+      "EnterpriseUpdateContentFormat": {
+        "enum": [
+          "MARKDOWN",
+          "PLAIN"
+        ],
+        "type": "string"
+      },
+      "EnterpriseUpdateFeed": {
+        "additionalProperties": false,
+        "properties": {
+          "enterpriseTimezone": {
+            "type": "string"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/EnterpriseUpdateItem"
+            },
+            "type": "array"
+          },
+          "truncated": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "enterpriseTimezone",
+          "items",
+          "truncated"
+        ],
+        "type": "object"
+      },
+      "EnterpriseUpdateId": {
+        "pattern": "^eup_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+        "type": "string"
+      },
+      "EnterpriseUpdateItem": {
+        "additionalProperties": false,
+        "properties": {
+          "category": {
+            "$ref": "#/components/schemas/EnterpriseUpdateCategory"
+          },
+          "content": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "contentFormat": {
+            "$ref": "#/components/schemas/EnterpriseUpdateContentFormat"
+          },
+          "enterpriseUpdateId": {
+            "$ref": "#/components/schemas/EnterpriseUpdateId"
+          },
+          "publishedAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "severity": {
+            "$ref": "#/components/schemas/EnterpriseUpdateSeverity"
+          },
+          "title": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "enterpriseUpdateId",
+          "title",
+          "content",
+          "contentFormat",
+          "category",
+          "severity",
+          "publishedAt"
+        ],
+        "type": "object"
+      },
+      "EnterpriseUpdateSeverity": {
+        "enum": [
+          "INFO",
+          "WARNING",
+          "CRITICAL"
+        ],
+        "type": "string"
+      }
+    }
+  },
+  "info": {
+    "title": "Generated Client Feed schemas; do not edit",
+    "version": "1.0.0"
+  },
+  "openapi": "3.0.3",
+  "paths": {},
+  "x-source": "api/client/client-control.openapi.yaml",
+  "x-source-sha256": "aed251a7e4c528152309e967dbce19563f6899fd2b66ba5ab88bc9d78450d453"
+}

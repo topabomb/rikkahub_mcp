@@ -1,0 +1,1107 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "MEASIX Portal native and local wire models",
+    "version": "3.0.0",
+    "description": "Schema-only contract. No Hub HTTP endpoints. Control Protocol section 8 owns transport, source authorization and lifecycle."
+  },
+  "paths": {},
+  "components": {
+    "schemas": {
+      "BridgeMethod": {
+        "type": "string",
+        "enum": [
+          "getStatus",
+          "refresh",
+          "close",
+          "logout",
+          "openExternal",
+          "capturePhoto",
+          "recordAudio",
+          "readMedia",
+          "releaseMedia",
+          "cancel",
+          "getLocalContext",
+          "listLocalUpdates",
+          "getLocalUpdate"
+        ]
+      },
+      "HostStatus": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "managedReady",
+          "appliedManagedGeneration",
+          "lastConfigurationSync",
+          "lastEnterpriseUpdateRefresh",
+          "capabilities"
+        ],
+        "properties": {
+          "managedReady": {
+            "type": "boolean",
+            "nullable": true
+          },
+          "appliedManagedGeneration": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991,
+            "nullable": true
+          },
+          "lastConfigurationSync": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,9})?Z$",
+            "nullable": true
+          },
+          "lastEnterpriseUpdateRefresh": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,9})?Z$",
+            "nullable": true
+          },
+          "capabilities": {
+            "type": "array",
+            "uniqueItems": true,
+            "items": {
+              "$ref": "#/components/schemas/BridgeMethod"
+            }
+          }
+        }
+      },
+      "MediaHandle": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "mediaId",
+          "mimeType",
+          "byteLength"
+        ],
+        "properties": {
+          "mediaId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "mimeType": {
+            "type": "string",
+            "enum": [
+              "image/jpeg",
+              "audio/mp4"
+            ]
+          },
+          "byteLength": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 10485760
+          }
+        }
+      },
+      "MediaChunk": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "dataBase64",
+          "nextOffset",
+          "eof"
+        ],
+        "properties": {
+          "dataBase64": {
+            "type": "string",
+            "maxLength": 87384,
+            "pattern": "^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$"
+          },
+          "nextOffset": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 10485760
+          },
+          "eof": {
+            "type": "boolean"
+          }
+        }
+      },
+      "BridgeError": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "code",
+          "message"
+        ],
+        "properties": {
+          "code": {
+            "type": "string",
+            "enum": [
+              "invalid_request",
+              "unsupported_version",
+              "unsupported_method",
+              "permission_denied",
+              "user_cancelled",
+              "session_expired",
+              "media_unavailable",
+              "resource_limit",
+              "timeout",
+              "network_unavailable",
+              "configuration_invalid",
+              "configuration_not_ready",
+              "source_forbidden",
+              "source_unavailable",
+              "enterprise_update_not_found"
+            ]
+          },
+          "message": {
+            "type": "string",
+            "maxLength": 256
+          }
+        }
+      },
+      "LocalPortalContext": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "formatVersion",
+          "kind",
+          "sourceNamespace",
+          "deploymentId",
+          "userId",
+          "sessionId",
+          "documentId",
+          "enterpriseName",
+          "userDisplayName",
+          "expiresAt",
+          "sessionIdleExpiresAt"
+        ],
+        "properties": {
+          "formatVersion": {
+            "type": "integer",
+            "enum": [
+              1
+            ]
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "LOCAL_EXAMPLE"
+            ]
+          },
+          "sourceNamespace": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "deploymentId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "userId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "sessionId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "documentId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "enterpriseName": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "userDisplayName": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "expiresAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,9})?Z$"
+          },
+          "sessionIdleExpiresAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,9})?Z$"
+          }
+        }
+      },
+      "LocalExampleEnrollmentMaterial": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "formatVersion",
+          "kind",
+          "sourceNamespace",
+          "deploymentId",
+          "code",
+          "expiresAt"
+        ],
+        "properties": {
+          "formatVersion": {
+            "type": "integer",
+            "enum": [
+              1
+            ]
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "LOCAL_EXAMPLE_ENROLLMENT"
+            ]
+          },
+          "sourceNamespace": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "deploymentId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "code": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "expiresAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}[Tt](?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d{1,9})?(?:[Zz]|\\+00:00)$"
+          }
+        }
+      },
+      "EmptyResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [],
+        "properties": {}
+      },
+      "GetStatusRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "bridgeVersion",
+          "requestId",
+          "method",
+          "params",
+          "documentId"
+        ],
+        "properties": {
+          "bridgeVersion": {
+            "type": "integer",
+            "enum": [
+              3
+            ]
+          },
+          "requestId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "method": {
+            "type": "string",
+            "enum": [
+              "getStatus"
+            ]
+          },
+          "params": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [],
+            "properties": {}
+          },
+          "documentId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          }
+        }
+      },
+      "RefreshRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "bridgeVersion",
+          "requestId",
+          "method",
+          "params",
+          "documentId"
+        ],
+        "properties": {
+          "bridgeVersion": {
+            "type": "integer",
+            "enum": [
+              3
+            ]
+          },
+          "requestId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "method": {
+            "type": "string",
+            "enum": [
+              "refresh"
+            ]
+          },
+          "params": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [],
+            "properties": {}
+          },
+          "documentId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          }
+        }
+      },
+      "CloseRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "bridgeVersion",
+          "requestId",
+          "method",
+          "params",
+          "documentId"
+        ],
+        "properties": {
+          "bridgeVersion": {
+            "type": "integer",
+            "enum": [
+              3
+            ]
+          },
+          "requestId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "method": {
+            "type": "string",
+            "enum": [
+              "close"
+            ]
+          },
+          "params": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [],
+            "properties": {}
+          },
+          "documentId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          }
+        }
+      },
+      "LogoutRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "bridgeVersion",
+          "requestId",
+          "method",
+          "params",
+          "documentId"
+        ],
+        "properties": {
+          "bridgeVersion": {
+            "type": "integer",
+            "enum": [
+              3
+            ]
+          },
+          "requestId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "method": {
+            "type": "string",
+            "enum": [
+              "logout"
+            ]
+          },
+          "params": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [],
+            "properties": {}
+          },
+          "documentId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          }
+        }
+      },
+      "OpenExternalRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "bridgeVersion",
+          "requestId",
+          "method",
+          "params",
+          "documentId"
+        ],
+        "properties": {
+          "bridgeVersion": {
+            "type": "integer",
+            "enum": [
+              3
+            ]
+          },
+          "requestId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "method": {
+            "type": "string",
+            "enum": [
+              "openExternal"
+            ]
+          },
+          "params": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "url"
+            ],
+            "properties": {
+              "url": {
+                "type": "string",
+                "format": "uri",
+                "pattern": "^https://"
+              }
+            }
+          },
+          "documentId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          }
+        }
+      },
+      "CapturePhotoRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "bridgeVersion",
+          "requestId",
+          "method",
+          "params",
+          "documentId"
+        ],
+        "properties": {
+          "bridgeVersion": {
+            "type": "integer",
+            "enum": [
+              3
+            ]
+          },
+          "requestId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "method": {
+            "type": "string",
+            "enum": [
+              "capturePhoto"
+            ]
+          },
+          "params": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [],
+            "properties": {}
+          },
+          "documentId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          }
+        }
+      },
+      "RecordAudioRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "bridgeVersion",
+          "requestId",
+          "method",
+          "params",
+          "documentId"
+        ],
+        "properties": {
+          "bridgeVersion": {
+            "type": "integer",
+            "enum": [
+              3
+            ]
+          },
+          "requestId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "method": {
+            "type": "string",
+            "enum": [
+              "recordAudio"
+            ]
+          },
+          "params": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "maxDurationSeconds"
+            ],
+            "properties": {
+              "maxDurationSeconds": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 60
+              }
+            }
+          },
+          "documentId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          }
+        }
+      },
+      "ReadMediaRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "bridgeVersion",
+          "requestId",
+          "method",
+          "params",
+          "documentId"
+        ],
+        "properties": {
+          "bridgeVersion": {
+            "type": "integer",
+            "enum": [
+              3
+            ]
+          },
+          "requestId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "method": {
+            "type": "string",
+            "enum": [
+              "readMedia"
+            ]
+          },
+          "params": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "mediaId",
+              "offset",
+              "maxBytes"
+            ],
+            "properties": {
+              "mediaId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              "offset": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 10485760
+              },
+              "maxBytes": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 65536
+              }
+            }
+          },
+          "documentId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          }
+        }
+      },
+      "ReleaseMediaRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "bridgeVersion",
+          "requestId",
+          "method",
+          "params",
+          "documentId"
+        ],
+        "properties": {
+          "bridgeVersion": {
+            "type": "integer",
+            "enum": [
+              3
+            ]
+          },
+          "requestId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "method": {
+            "type": "string",
+            "enum": [
+              "releaseMedia"
+            ]
+          },
+          "params": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "mediaId"
+            ],
+            "properties": {
+              "mediaId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              }
+            }
+          },
+          "documentId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          }
+        }
+      },
+      "CancelRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "bridgeVersion",
+          "requestId",
+          "method",
+          "params",
+          "documentId"
+        ],
+        "properties": {
+          "bridgeVersion": {
+            "type": "integer",
+            "enum": [
+              3
+            ]
+          },
+          "requestId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "method": {
+            "type": "string",
+            "enum": [
+              "cancel"
+            ]
+          },
+          "params": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "targetRequestId"
+            ],
+            "properties": {
+              "targetRequestId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              }
+            }
+          },
+          "documentId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          }
+        }
+      },
+      "BridgeRequest": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/GetStatusRequest"
+          },
+          {
+            "$ref": "#/components/schemas/RefreshRequest"
+          },
+          {
+            "$ref": "#/components/schemas/CloseRequest"
+          },
+          {
+            "$ref": "#/components/schemas/LogoutRequest"
+          },
+          {
+            "$ref": "#/components/schemas/OpenExternalRequest"
+          },
+          {
+            "$ref": "#/components/schemas/CapturePhotoRequest"
+          },
+          {
+            "$ref": "#/components/schemas/RecordAudioRequest"
+          },
+          {
+            "$ref": "#/components/schemas/ReadMediaRequest"
+          },
+          {
+            "$ref": "#/components/schemas/ReleaseMediaRequest"
+          },
+          {
+            "$ref": "#/components/schemas/CancelRequest"
+          },
+          {
+            "$ref": "#/components/schemas/GetLocalContextRequest"
+          },
+          {
+            "$ref": "#/components/schemas/ListLocalUpdatesRequest"
+          },
+          {
+            "$ref": "#/components/schemas/GetLocalUpdateRequest"
+          }
+        ]
+      },
+      "BridgeResponse": {
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "bridgeVersion",
+              "requestId",
+              "result",
+              "documentId"
+            ],
+            "properties": {
+              "bridgeVersion": {
+                "type": "integer",
+                "enum": [
+                  3
+                ]
+              },
+              "requestId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              "result": {
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/HostStatus"
+                  },
+                  {
+                    "$ref": "#/components/schemas/MediaHandle"
+                  },
+                  {
+                    "$ref": "#/components/schemas/MediaChunk"
+                  },
+                  {
+                    "$ref": "#/components/schemas/EmptyResult"
+                  },
+                  {
+                    "$ref": "#/components/schemas/LocalPortalContext"
+                  },
+                  {
+                    "$ref": "#/components/schemas/LocalFeedResult"
+                  },
+                  {
+                    "$ref": "client-feed.schemas.json#/components/schemas/EnterpriseUpdateItem"
+                  }
+                ]
+              },
+              "documentId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "bridgeVersion",
+              "requestId",
+              "error",
+              "documentId"
+            ],
+            "properties": {
+              "bridgeVersion": {
+                "type": "integer",
+                "enum": [
+                  3
+                ]
+              },
+              "requestId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              "error": {
+                "$ref": "#/components/schemas/BridgeError"
+              },
+              "documentId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              }
+            }
+          }
+        ]
+      },
+      "PortalDocument": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "bridgeVersion",
+          "documentId"
+        ],
+        "properties": {
+          "bridgeVersion": {
+            "type": "integer",
+            "enum": [
+              3
+            ]
+          },
+          "documentId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          }
+        }
+      },
+      "GetLocalContextRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "bridgeVersion",
+          "documentId",
+          "requestId",
+          "method",
+          "params"
+        ],
+        "properties": {
+          "bridgeVersion": {
+            "type": "integer",
+            "enum": [
+              3
+            ]
+          },
+          "documentId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "requestId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "method": {
+            "type": "string",
+            "enum": [
+              "getLocalContext"
+            ]
+          },
+          "params": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [],
+            "properties": {}
+          }
+        }
+      },
+      "ListLocalUpdatesRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "bridgeVersion",
+          "documentId",
+          "requestId",
+          "method",
+          "params"
+        ],
+        "properties": {
+          "bridgeVersion": {
+            "type": "integer",
+            "enum": [
+              3
+            ]
+          },
+          "documentId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "requestId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "method": {
+            "type": "string",
+            "enum": [
+              "listLocalUpdates"
+            ]
+          },
+          "params": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [],
+            "properties": {
+              "startDate": {
+                "type": "string",
+                "format": "date",
+                "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+              },
+              "endDate": {
+                "type": "string",
+                "format": "date",
+                "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+              },
+              "limit": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 20
+              },
+              "ifNoneMatch": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              }
+            }
+          }
+        }
+      },
+      "GetLocalUpdateRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "bridgeVersion",
+          "documentId",
+          "requestId",
+          "method",
+          "params"
+        ],
+        "properties": {
+          "bridgeVersion": {
+            "type": "integer",
+            "enum": [
+              3
+            ]
+          },
+          "documentId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "requestId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "method": {
+            "type": "string",
+            "enum": [
+              "getLocalUpdate"
+            ]
+          },
+          "params": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "enterpriseUpdateId"
+            ],
+            "properties": {
+              "enterpriseUpdateId": {
+                "$ref": "client-feed.schemas.json#/components/schemas/EnterpriseUpdateId"
+              }
+            }
+          }
+        }
+      },
+      "LocalFeedResult": {
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "kind",
+              "etag",
+              "feed"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "modified"
+                ]
+              },
+              "etag": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "feed": {
+                "$ref": "client-feed.schemas.json#/components/schemas/EnterpriseUpdateFeed"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "kind",
+              "etag"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "notModified"
+                ]
+              },
+              "etag": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              }
+            }
+          }
+        ]
+      },
+      "EnterpriseUpdateItem": {
+        "$ref": "client-feed.schemas.json#/components/schemas/EnterpriseUpdateItem"
+      },
+      "EnterpriseUpdateFeed": {
+        "$ref": "client-feed.schemas.json#/components/schemas/EnterpriseUpdateFeed"
+      }
+    }
+  }
+}

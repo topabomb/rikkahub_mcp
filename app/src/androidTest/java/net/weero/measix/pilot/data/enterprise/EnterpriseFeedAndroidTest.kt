@@ -24,7 +24,7 @@ class EnterpriseFeedAndroidTest {
             val a = EnterpriseSessionController(EnterpriseAppliedStore(root)) { now }
             val initial = a.enrollLocal(packet.identity, { packet.identity }, { packet })
             val accessA = a.captureRealmAccess(packet.identity.scope) as RealmAccess.Enterprise
-            val id = a.listFeed(accessA, EnterpriseFeedQuery()).body.items.single().enterpriseUpdateId
+            val id = a.listFeed(RealmSelection(accessA, a.selectionRevision.value), EnterpriseFeedQuery()).body.items.single().enterpriseUpdateId
             a.changeFeed(accessA, initial.manifest.feeds.single().revision, EnterpriseFeedCommand.Withdraw(id))
             assertEquals(initial.manifest.applied, (a.state.value as EnterpriseState.Available).manifest.applied)
             a.finishExit(requireNotNull(a.beginExit()))
@@ -36,8 +36,8 @@ class EnterpriseFeedAndroidTest {
                 sessions.recover()
                 sessions.enrollLocal(identity, { identity }, { packet.copy(identity = identity) })
                 val access = sessions.captureRealmAccess(identity.scope) as RealmAccess.Enterprise
-                assertEquals(id, sessions.listFeed(access, EnterpriseFeedQuery()).body.items.single().enterpriseUpdateId)
-                try { sessions.listFeed(accessA, EnterpriseFeedQuery()); fail("Old principal accessed another Feed") }
+                assertEquals(id, sessions.listFeed(RealmSelection(access, sessions.selectionRevision.value), EnterpriseFeedQuery()).body.items.single().enterpriseUpdateId)
+                try { sessions.listFeed(RealmSelection(accessA, sessions.selectionRevision.value), EnterpriseFeedQuery()); fail("Old principal accessed another Feed") }
                 catch (_: EnterpriseConfigurationException) { }
                 sessions.finishExit(requireNotNull(sessions.beginExit()))
             }
@@ -46,7 +46,7 @@ class EnterpriseFeedAndroidTest {
             val ready = reopened.enrollLocal(packet.identity, { packet.identity }, { packet })
             assertEquals(3, ready.manifest.feeds.size)
             val newAccess = reopened.captureRealmAccess(packet.identity.scope) as RealmAccess.Enterprise
-            assertTrue(reopened.listFeed(newAccess, EnterpriseFeedQuery()).body.items.isEmpty())
+            assertTrue(reopened.listFeed(RealmSelection(newAccess, reopened.selectionRevision.value), EnterpriseFeedQuery()).body.items.isEmpty())
             try {
                 reopened.changeFeed(accessA, ready.manifest.feeds.first { it.scope == accessA.scope }.revision,
                     EnterpriseFeedCommand.Publish(id))

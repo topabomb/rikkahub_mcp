@@ -1,6 +1,5 @@
 package net.weero.measix.pilot.data.enterprise
 
-import java.security.MessageDigest
 import java.time.Instant
 import kotlinx.serialization.json.*
 import me.rerere.common.configuration.EnterpriseAuthority
@@ -15,11 +14,8 @@ class EnterpriseFeedTest {
         EnterpriseUpdateCategory.NOTICE, EnterpriseUpdateSeverity.INFO)
 
     @Test
-    fun `actual date query consumes shared raw vectors and verifies pinned bytes`() {
-        val manifest = Json.parseToJsonElement(resource("consumer-manifest.json").decodeToString()).jsonObject
+    fun `actual date query consumes shared raw vectors`() {
         val bytes = resource("feed-vectors.json")
-        val digest = MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) }
-        assertEquals(manifest.getValue("artifacts").jsonObject.getValue("feed-vectors.json").jsonObject.getValue("sha256").jsonPrimitive.content, digest)
         val suites = Json.parseToJsonElement(bytes.decodeToString()).jsonObject.getValue("suites").jsonArray
         suites.forEach { rawSuite ->
             val suite = rawSuite.jsonObject

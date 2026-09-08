@@ -10,17 +10,8 @@ class EnrollmentMaterialParserTest {
     private val text get() = EnrollmentMaterialParser.encodeLocal(local)
 
     @Test
-    fun `shared artifacts match the pinned upstream digests and local sample stays input only`() {
-        fun bytes(name: String) = requireNotNull(javaClass.getResourceAsStream("/contracts/enrollment/$name")).use { it.readBytes() }
-        val manifest = kotlinx.serialization.json.Json.parseToJsonElement(bytes("consumer-manifest.json").toString(Charsets.UTF_8))
-            as kotlinx.serialization.json.JsonObject
-        val artifacts = manifest.getValue("artifacts") as kotlinx.serialization.json.JsonObject
-        assertEquals(setOf("platform-v1.json", "local-v1.json", "cases.json"), artifacts.keys)
-        artifacts.forEach { (name, metadata) ->
-            val expected = ((metadata as kotlinx.serialization.json.JsonObject).getValue("sha256") as kotlinx.serialization.json.JsonPrimitive).content
-            val actual = java.security.MessageDigest.getInstance("SHA-256").digest(bytes(name)).joinToString("") { "%02x".format(it) }
-            assertEquals(name, expected, actual)
-        }
+    fun `canonical local sample stays input only`() {
+        fun bytes(name: String) = requireNotNull(javaClass.getResourceAsStream("/contracts/portal/$name")).use { it.readBytes() }
         val sample = parser.parse(bytes("local-v1.json").toString(Charsets.UTF_8)) as EnrollmentMaterial.LocalExample
         assertEquals("local.example", sample.sourceNamespace)
         assertEquals("dep_example", sample.deploymentId)
@@ -29,7 +20,7 @@ class EnrollmentMaterialParserTest {
 
     @Test
     fun `canonical platform fixture is consumed as a distinct typed origin`() {
-        val raw = requireNotNull(javaClass.getResourceAsStream("/contracts/enrollment/platform-v1.json")).bufferedReader().use { it.readText() }
+        val raw = requireNotNull(javaClass.getResourceAsStream("/contracts/portal/platform-v1.json")).bufferedReader().use { it.readText() }
         val value = parser.parse(raw) as EnrollmentMaterial.Platform
         assertEquals("https://platform.example", value.platformOrigin)
         assertEquals("fixture-only-not-a-live-enrollment", value.code)

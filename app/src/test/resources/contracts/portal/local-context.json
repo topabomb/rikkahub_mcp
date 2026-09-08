@@ -1,0 +1,13 @@
+{
+  "formatVersion": 1,
+  "kind": "LOCAL_EXAMPLE",
+  "sourceNamespace": "local.example",
+  "deploymentId": "dep_example",
+  "userId": "usr_example",
+  "sessionId": "ses_example",
+  "documentId": "doc_example_1",
+  "enterpriseName": "示例企业",
+  "userDisplayName": "示例用户",
+  "expiresAt": "2030-01-01T00:10:00Z",
+  "sessionIdleExpiresAt": "2030-01-08T00:00:00Z"
+}

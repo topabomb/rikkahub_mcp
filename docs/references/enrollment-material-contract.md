@@ -16,7 +16,7 @@ PrepareEnterpriseExampleAssets 从同一公开模板派生 enterprise.local.iden
 
 ## 平台样例与 Android 消费副本
 
-平台消费导出目录：measix-platform-core/api/generated/android/portal。Android 已导入 platform-v1.json、local-v1.json 和 cases.json，来源摘要记录于 [consumer-manifest.json](../../app/src/test/resources/contracts/enrollment/consumer-manifest.json)。普通 Android 构建不依赖 sibling checkout。
+平台消费导出目录：measix-platform-core/api/generated/android/portal。Android 原样固定该目录的 manifest 和八份输入，接入解析直接消费其中的 platform-v1.json、local-v1.json 和 cases.json；所有输入的来源和摘要统一记录于 [manifest.json](../../app/src/test/resources/contracts/portal/manifest.json)。普通 Android 构建不依赖 sibling checkout。
 
 这些文件只用于离线契约测试，不能独立演进为第二份 canonical fixture。同步时先验证导出 manifest，再原样复制；Git 对该目录 JSON 禁用换行转换，测试验证消费副本 SHA256。平台正例摘要为 `3ac391412640d571dd03220fbfd88487e1d1e47a6b1d6f8a86ee09ae821d340a`。
 
@@ -26,6 +26,6 @@ Android 的代码内本地反例只证明 Android 当前行为，不算平台共
 
 ## 验证边界
 
-EnrollmentMaterialParserTest 消费两类正例并核验摘要，测试严格字段、原始重复键、UTF-8/字符限制、UTC 与 origin。时间接受小写 t/z 与 +00:00；小数秒只能为 1–9 位，拒绝超精度、闰秒、-00:00、其他偏移和错误日期，不截断输入。输出统一大写 T/Z。LocalEnterpriseSourceTest 覆盖一键、粘贴、二维码库编码/解码、来源分流、并发/重开后的消费、到期权威、持久化失败、冲突不消费、配置待就绪与独立文件导入。
+PortalProtocolTest 统一核验 manifest 中全部消费输入的摘要与协议版本。EnrollmentMaterialParserTest 消费两类接入正例，测试严格字段、原始重复键、UTF-8/字符限制、UTC 与 origin。时间接受小写 t/z 与 +00:00；小数秒只能为 1–9 位，拒绝超精度、闰秒、-00:00、其他偏移和错误日期，不截断输入。输出统一大写 T/Z。LocalEnterpriseSourceTest 覆盖一键、粘贴、二维码库编码/解码、来源分流、并发/重开后的消费、到期权威、持久化失败、冲突不消费、配置待就绪与独立文件导入。
 
 二维码库 round-trip 不是 Android 相机扫码设备验收。正式扫码/粘贴 UI、页面错误呈现、真实 Discovery/重定向/Enrollment 与平台互操作尚未交付，验收须分别报告。

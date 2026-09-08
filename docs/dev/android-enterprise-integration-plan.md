@@ -206,9 +206,11 @@ UserConfiguration + UserPreferences + Applied Enterprise State
 | 授权失效/撤销 | 撤销资格，收口企业任务/Portal，回个人，提示重新接入 |
 | Portal 过期 | 只重建网页会话，不退出企业 |
 | 退出接入 | 原生确认，阻断新企业动作，收口该域运行/采集，清活动绑定/凭据/企业配置/网页会话，回个人；保留封存数据 |
-
-正式退出由应用层统一编排：确认时捕获原主体和 Session，提交时复验，旧确认不能退出新接入。先撤销准入，再释放 Session 锁，调用既有主/子运行与媒体 owner 按原企业域取消并等待终态，最后完成退出；不得以 binding lease 为空代替运行清理。流程由应用作用域持有，页面销毁或重复点击不产生第二退出操作，也不能遗留无人收口的 CLOSING。企业状态页直接投影 Session；待配置或停留个人空间时，同步目标仍是已接入的企业 Session。
 | 清除示例企业数据 | 独立确认，仅清该示例主体数据/导航，不删个人配置/历史/共享 Workspace |
+
+正式退出由应用层统一编排：原生确认同时冻结企业 RealmAccess 与当前 RealmSelection，并在同一 Session 锁内复验。停留个人空间也能退出企业，不能仅凭个人 selection 推断目标 Session；旧确认不能退出新接入。授权到期/撤销按原企业 Session 收口，不要求用户仍选中企业或该授权仍有效。
+
+先持久发布 CLOSING 撤销准入，再释放 Session 锁，调用既有主/子运行、Runtime 内标题/建议任务与媒体 owner 按原企业域取消并等待终态，最后凭原退出 token 完成退出；不得以 binding lease 为空或 Job.join 返回代替运行终态提交。流程由应用作用域持有，页面销毁或重复点击不产生第二退出操作；失败保留 CLOSING 和可重试状态，重试不复验已经被退出动作改变的页面选择。重启恢复先保留 CLOSING，完成现有 Child/主 TurnRecovery 后、恢复 gate ready 前完成原退出 token；不能在恢复任务成功前假报退出完成，也不能让恢复等待自己的 ready gate。企业状态页直接投影 Session；待配置或停留个人空间时，同步目标仍是已接入的企业 Session。这些退出接线仍属后续实施项，不作为当前 Portal 读取批次的完成事实。
 
 正常本地 source 不依赖设备互联网，“网络失败”是主动场景。source/deployment/user 是恢复身份边界；本期没有 live fallback，模拟凭据永远不能交给真实服务。网页退出调用同一个原生退出命令，网页打不开也能退出。
 
@@ -294,7 +296,7 @@ Seed 只初始化尚未建立的主体 Feed。同步、重入与重复导入不�
 
 2026-09-08 上游已裁决采用 Control Protocol §8 的 **Native Bridge v3 / 本地读取 v2**。固定 https://local.measix.invalid/portal/ 只承载经过摘要校验的随包静态资源；context/Feed 通过同一个 MeasixHost 类型化消息通道读取。废止本地 GET/document header/304 方案，不保留旧 Bridge v2、CustomEvent 或另一套工作台页面。远端 Hub HTTP、Cookie、CSRF、ETag/304 协议保持独立，本期不实现真实后台接入。
 
-当前配套状态以 Portal 的 android-alignment-handoff.md 为准：架构决定已经生效，core 工作树已出现 Bridge v3/localReadVersion=2 的 executable schema/export，需核验后固定消费；Portal dist-local 当前仍为 v2/v1，等待新版包。Android 可以实现原生入口、文档/消息 owner 和各方法消费者；新资源包到位后核验真实 bridgeVersion=3、localReadVersion=2、来源和 contract/assets 摘要再固定消费。不得修改旧包版本号、改写固定网页脚本或以旧包测试宣称 v3 联调完成。enrollment 与 context 的 formatVersion=1 不变；已完成的接入与 Feed 领域规则继续复用。
+core 与 Portal 的新版可执行契约和资源包均已交付，Android 已核验并固定 Bridge v3/localReadVersion=2 的原始包、manifest 和全部八份共享输入，删除旧 v2 JavaScript 与重复的消费清单。PortalProtocol、PortalDocument、PortalWebView 已进入实现与测试；正式入口、退出及媒体能力继续接线。不得改写固定网页脚本或把资源入包当作完整设备验收。enrollment 与 context 的 formatVersion=1 不变；已完成的接入与 Feed 领域规则继续复用。
 
 原生在批准的顶层文档运行脚本前提供 window.MeasixPortalDocument={bridgeVersion:3,documentId}。documentId 至少具有 128 bit 随机性、非空且最多 128 字符，绑定本次文档、来源/Deployment/User、原母 Session 和期限；网页授权最多十分钟且不超过母 Session，读取不续期。不能可靠提供启动绑定或真实消息 origin/frame 能力时，明确显示宿主不可用，不降级。Android 每个批准文档独占新 WebView：先注册监听器和 document-start bootstrap，再首次加载；重开/重载先撤销旧 owner 和媒体，再创建新实例。旧实例不得加载第二份 Portal HTML，导航回调与静态主文档拦截共同拒绝；导航回调不能被当作替换当前文档启动脚本的时序保证。
 
@@ -310,6 +312,8 @@ Seed 只初始化尚未建立的主体 Feed。同步、重入与重复导入不�
 
 验收分开记录：共享 v3 案例由真实 Android 消费者执行；文档启动、来源/frame、原回复代理、同源导航/旧文档拒绝以及权限/扫码/拍照/录音/句柄释放执行设备验证；生产 Portal 使用新包联调。浏览器替身、纯解析测试、资源打包和本地示例均不代表真实平台互操作或 S0.2 Freeze。原 GET/304 两项限制已由上游消息方案解决，不再列为待裁决事项。
 
+首轮设备发现 Portal 包的 dispose 删除 WebView 原生 onmessage accessor，导致首次 connect 重建 Bridge 后无法接收原生响应。Portal 已修复为赋值清空回调并重新交付，Android 已核验并原样替换 FXzsIi 包：sourceHash 为 056e78b269453a5ec19eb5c29f4a07d02385afb05533a155010103aad3a19c02，build-identity.json 摘要为 3a45b0f297b39e07912f099bd3e469c6e99bfedc721bf3424b5660d9c0e558ec；core 契约不变。Pixel_10_Pro_Fold / Android 17 / WebView 151.0.7922.199 已通过首次 context/动态读取、页内导航、重载撤销并打开新页面、快速切域和旧同步错误不进入新文档的设备验证。生产响应始终使用原 JavaScriptReplyProxy，没有脚本补丁或替代回复通道。正式原生入口、退出和媒体接线继续，不将此问题重新列为协议裁决。
+
 ## 9. 执行、更新、恢复不变量
 
 - 扩展 TurnContextFactory、TurnToolSetFactory、transport lease 和既有 Conversation/Turn/Step owner，不建企业运行栈。
@@ -321,6 +325,14 @@ Seed 只初始化尚未建立的主体 Feed。同步、重入与重复导入不�
 - 移除旧签名 envelope/global merge/path lock 和无消费者 facade；原型文件不迁成正式身份；仅保留真实历史迁移需要的解码边界。
 
 ## 10. 完整变更清单与批次
+
+Portal v3 读取与文档宿主已实现：固定 origin 只加载已校验静态资源，context/Feed 使用原生消息；原 RealmSelection、母 Session、文档期限及原回复代理贯穿执行和回复。七项已实现能力按真实状态声明，配置同步复用既有应用服务，Feed 缓存命中仍先验证授权。完整八份共享输入与原始 manifest 统一固定，删除旧资源和重复消费清单。独立审查无剩余本批阻塞项。
+
+该批 80 项定向 JVM 测试通过，覆盖接入/Feed 回归、共享请求解析、原始重复键、授权撤销、取消与超时。Pixel_10_Pro_Fold / Android 17 的 PortalWebViewAndroidTest 三项及 EnterpriseFeedAndroidTest 一项在 47 秒内全部通过；先前一次运行因测试返回类型不符合 JUnit 要求而在场景开始前失败，修正测试声明后通过。设备日志为 build/reports/enterprise/portal-v3-device-final.log。
+
+最终串行 `test assembleDebug lintDebug assembleRelease --no-parallel --max-workers=1 --no-configuration-cache` 在 7 分 18 秒内通过：App 1,964 项 JVM 无失败或跳过，lint 为 0 errors、279 warnings、5 hints；Workspace 45 项中 11 项 Windows 宿主测试仍跳过。Debug/Release 六份 APK 的 Portal identity 和全部网页资源均与固定输入逐项摘要一致。汇总为 build/reports/enterprise/portal-v3-verification.json。首次全量运行因 C 盘空间不足未完成 Release，本次改用 D 盘任务缓存与临时目录后通过，未修改项目构建约定。正式页面、logout、相机/录音和真实平台互操作尚未验收，版本仍为 0.0.19 开发基线。
+
+下列记录保留各已提交批次的验证范围；其中当时尚未实现的事项，以本文最新条目和实际代码为准。
 
 C4 的主聊天 START/继续交互已接入原页面与 Session：请求接受时交接 AppScope worker 和输入附件保护，等待前任收口期间不持有 Session 锁，退出重登拒绝旧请求。START/CONTINUE 提交与 committer 接收在同一取消安全边界；继续沿用原 TurnContext/TurnHandle。停止与替换冻结原 worker，前任终态写入失败保留其 owner，可显式重试。附件提交使用原 Artifact owner 的独立保留引用，快速重复发送不因首个请求取消丢失输入。UI 仅在实际接受工具回答后推进交互。
 
@@ -348,7 +360,7 @@ C4 的目录查询隔离已进入代码：列表/最近聊天/置顶/文件夹/�
 
 Gateway 使用偏好已移入既有 ScopedUserPreferences，按完整主体保存，删除无 userId 的顶层原型字段；保留已发布个人配置迁移协议。EnterpriseGateway 删除第二个 enabled 位，对齐定义存在即发布、撤销通过候选移除的语义。Resolver 统一派生完整工具对的生效开关与可切换性，REQUIRED 保留但不使用原 false，恢复可控后恢复原偏好。配置应用命令只接受捕获的 RealmAccess.Enterprise，同主体重登后旧页面不能继续修改使用偏好。该批 Gateway 执行消费者与 UI 尚未接通，不代表 Gateway 运行功能已验收。
 
-该偏好批次 39 项定向 JVM 测试通过；新增断言首次误用包含引用相等对象的整文档 equals，改为对比完整序列化内容后通过，未修改产品逻辑规避。Pixel_10_Pro_Fold / Android 17 的 ScopedConfigurationAndroidTest 在 2 分 27 秒内通过，使用实际 DataStore/企业存储重开验证偏好保留、用户隔离与个人配置保全。完整 `test assembleDebug lintDebug assembleRelease --no-parallel --max-workers=1 --no-configuration-cache` 在 8 分 13 秒内通过：App 1,885 项 JVM 测试无失败或跳过，lint 为 0 errors、272 warnings、5 hints，Debug/Release 均构建成功。Workspace 45 项测试中 11 项 Windows 宿主跳过，不算相应能力验收。独立审查无剩余本批阻塞项；版本仍为 0.0.19 开发基线，Portal 读取协议待确认，会话隔离、执行消费者、正式页面和完整 0.0.20 交付继续实施。
+该偏好批次 39 项定向 JVM 测试通过；新增断言首次误用包含引用相等对象的整文档 equals，改为对比完整序列化内容后通过，未修改产品逻辑规避。Pixel_10_Pro_Fold / Android 17 的 ScopedConfigurationAndroidTest 在 2 分 27 秒内通过，使用实际 DataStore/企业存储重开验证偏好保留、用户隔离与个人配置保全。完整 `test assembleDebug lintDebug assembleRelease --no-parallel --max-workers=1 --no-configuration-cache` 在 8 分 13 秒内通过：App 1,885 项 JVM 测试无失败或跳过，lint 为 0 errors、272 warnings、5 hints，Debug/Release 均构建成功。Workspace 45 项测试中 11 项 Windows 宿主跳过，不算相应能力验收。独立审查无剩余本批阻塞项；版本仍为 0.0.19 开发基线，当时 Portal 读取协议尚待确认（现已按 §8 完成裁决）；会话隔离、执行消费者、正式页面和完整 0.0.20 交付继续实施。
 
 本地来源候选与统一同步已实现：安装目录独立保存来源/Deployment/User 身份、generation 和内容摘要引用，随包文件仅初始化；场景发布使用来源 revision CAS，不直接改客户端 Applied。原生完整文件可显式安装其他本地主体，短资料只查询已安装来源，由票据确定用户，消费前检查 Session 冲突。EnterpriseSynchronizationService 合并同原 Session 的同步，失败保留 Applied 和成功时间，同版本成功检查复用 Applied revision，提交期间到期不创建新 Session。有效来源发布后客户端失败返回待接入/待同步；来源文件损坏可显式导入更高 generation 修复。旧 updateLocalPackage 与安装包/Applied 回退分支已删除，未新增客户端 enterprise_local 配置区。
 
@@ -362,9 +374,9 @@ C6 的运行记忆已按域接通：MemoryAddress 固定 scope 与共享/助手 
 
 该记忆批次完整 `test assembleDebug lintDebug assembleRelease --no-parallel --max-workers=1 --no-configuration-cache` 在 11 分 38 秒内通过：App 1,820 项 JVM 测试无失败或跳过，lint 无错误，Debug/Release 均构建成功；Workspace 的 11 项 Windows 宿主测试仍跳过。独立审查无剩余阻塞项。此批不修改版本号，不作为 Release 企业页面或真实平台互操作验收。
 
-Feed 领域与持久发布已接通：完整文件和企业 manifest 使用 v2，配置内 Feed/HTML 与旧桥接示例删除；Feed 以独立主体引用、公开 revision 和内容摘要发布，草稿/发布/撤回及日期查询共用 EnterpriseFeed 规则。共享 feed-vectors.json 已执行实际查询，覆盖双边/单边日期、限额、空结果、错误范围和 DST 23 小时日；来源摘要固定在 contracts/portal/consumer-manifest.json。独立审查发现的新 Feed 指针提交前缺少内容校验已修复，并覆盖文件损坏、取消前后发布和重开。Pixel_10_Pro_Fold / Android 17 的 6 项定向设备测试通过，包含相同动态 ID 跨来源/用户隔离、退出重入保留撤回状态和旧 Session 拒绝。该批不代表 Portal 的 document/304/UI 验收。
+Feed 领域与持久发布已接通：完整文件和企业 manifest 使用 v2，配置内 Feed/HTML 与旧桥接示例删除；Feed 以独立主体引用、公开 revision 和内容摘要发布，草稿/发布/撤回及日期查询共用 EnterpriseFeed 规则。共享 feed-vectors.json 已执行实际查询，覆盖双边/单边日期、限额、空结果、错误范围和 DST 23 小时日；来源摘要现统一固定在 contracts/portal/manifest.json。独立审查发现的新 Feed 指针提交前缺少内容校验已修复，并覆盖文件损坏、取消前后发布和重开。Pixel_10_Pro_Fold / Android 17 的 6 项定向设备测试通过，包含相同动态 ID 跨来源/用户隔离、退出重入保留撤回状态和旧 Session 拒绝。该批不代表 Portal 文档与页面验收；本地 304 方案现已由 §8 的消息读取替代。
 
-Portal dist-local 已原样固定到 app/src/main/enterprisePortal，来源 sourceHash 为 7281c1f019b61eb3bc0bbe8dd439911bf466917191fe881d3586aa4601fc28c6，build-identity.json 摘要为 5e041b9fd791db5545c2d09cd4f9ce3e6aa4ff10e1fb2991a7fb3e79db2374ba。构建任务为全部 variant 校验并生成 assets，不依赖 sibling checkout。实际 Gradle 正例通过；篡改 index.html 后被摘要校验拒绝，随后精确恢复原始字节。独立审查无资源打包阻塞项；WebView、Bridge 和手机能力尚未实现。
+Portal 首次资源打包批次将 dist-local 原样固定到 app/src/main/enterprisePortal；该历史包已被 §8 的 v3 修复包替换，以当前 build-identity.json 为准。构建任务为全部 variant 校验并生成 assets，不依赖 sibling checkout。实际 Gradle 正例通过；篡改 index.html 后被摘要校验拒绝，随后精确恢复原始字节。独立审查无资源打包阻塞项；WebView、Bridge 和手机能力尚未实现。
 
 Feed 与 Portal 资源批次完整 `test assembleDebug lintDebug assembleRelease --no-parallel --max-workers=1 --no-configuration-cache` 在 10 分 44 秒内通过：App 1,873 项 JVM 测试无失败或跳过，lint 无错误。逐个检查三种 ABI 组合的 Debug/Release 共六份 APK，Portal identity、全部资源及新版公开示例均与固定输入摘要一致。Workspace 的 Windows 宿主跳过项不算已验收；APK 内容校验不代表 WebView、Bridge 或媒体生命周期设备验收。版本仍为 0.0.19 开发基线。
 
