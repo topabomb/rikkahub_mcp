@@ -357,11 +357,15 @@ class SettingsStore internal constructor(
 
     /** The session owner serializes authorization changes through the entire preference commit. */
     internal suspend fun updateResourceSelections(
-        scope: ConfigurationScope.Enterprise,
-        enterpriseState: EnterpriseState.Available,
+        scope: ConfigurationScope,
+        enterpriseState: EnterpriseState,
         transform: (ResourceSelections) -> ResourceSelections,
     ) = updateMutex.withLock {
-        require(enterpriseState.manifest.session?.identity?.scope == scope) { "resource_selection_principal_mismatch" }
+        if (scope is ConfigurationScope.Enterprise) {
+            require((enterpriseState as? EnterpriseState.Available)?.manifest?.session?.identity?.scope == scope) {
+                "resource_selection_principal_mismatch"
+            }
+        }
         commitAuthorizedPreferences { document ->
             val before = document.preferences.forScope(scope)
             val proposed = transform(before)

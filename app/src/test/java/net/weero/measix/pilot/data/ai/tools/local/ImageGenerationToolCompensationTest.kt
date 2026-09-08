@@ -100,7 +100,6 @@ class ImageGenerationToolCompensationTest {
 
     private fun available(): ImageGenerationSelection.Available {
         val provider = mockk<Provider<*>>()
-        every { provider.supportsImageGeneration } returns true
         return ImageGenerationSelection.Available(
             model = model,
             sourceProvider = providerSetting,

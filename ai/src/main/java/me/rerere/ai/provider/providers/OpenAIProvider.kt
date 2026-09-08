@@ -59,7 +59,6 @@ class OpenAIProvider(
     private val client: OkHttpClient,
     context: Context? = null
 ) : Provider<ProviderSetting.OpenAI> {
-    override val supportsImageGeneration: Boolean = true
 
     override fun requestMediaCapabilities(
         providerSetting: ProviderSetting.OpenAI,

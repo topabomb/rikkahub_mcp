@@ -1639,4 +1639,19 @@
   <string name="enterprise_stop_recording">Остановить запись</string>
   <string name="enterprise_recording">Идёт запись…</string>
   <string name="enterprise_media_notice">Медиа используется только для просмотра в этом портале. При выходе со страницы оно удаляется.</string>
+  <string name="configuration_scope_personal">Настройки личного пространства</string>
+  <string name="configuration_scope_enterprise">Настройки текущего корпоративного пространства</string>
+  <string name="configuration_source_user">Моя конфигурация</string>
+  <string name="configuration_source_enterprise">Предоставлено организацией</string>
+  <string name="configuration_restore_default">Восстановить настройки пространства по умолчанию</string>
+  <string name="configuration_reason_policy">В этом корпоративном пространстве запрещены личные ресурсы этой категории</string>
+  <string name="configuration_reason_not_ready">Корпоративная конфигурация ещё не готова</string>
+  <string name="configuration_reason_other_space">Ресурс принадлежит другому пространству</string>
+  <string name="configuration_reason_disabled">Ресурс отключён</string>
+  <string name="configuration_reason_capability">Модель не поддерживает это назначение</string>
+  <string name="configuration_reason_missing">Ресурс больше не существует</string>
+  <string name="configuration_reason_ambiguous">Несколько ресурсов используют один идентификатор</string>
+  <string name="configuration_inherited">Используются настройки пространства по умолчанию</string>
+  <string name="configuration_follow_fast_model">Использовать быструю модель, затем модель чата</string>
+  <string name="configuration_remove_favorite">Убрать из избранного</string>
 </resources>

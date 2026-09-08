@@ -1640,4 +1640,19 @@
   <string name="enterprise_stop_recording">Stop recording</string>
   <string name="enterprise_recording">Recording…</string>
   <string name="enterprise_media_notice">This media is only for preview in this portal. Leaving the page discards it.</string>
+  <string name="configuration_scope_personal">Personal space settings</string>
+  <string name="configuration_scope_enterprise">Settings for this enterprise space</string>
+  <string name="configuration_source_user">My configuration</string>
+  <string name="configuration_source_enterprise">Provided by enterprise</string>
+  <string name="configuration_restore_default">Restore space default</string>
+  <string name="configuration_reason_policy">Personal resources in this category are not allowed in this enterprise space</string>
+  <string name="configuration_reason_not_ready">Enterprise configuration is not ready</string>
+  <string name="configuration_reason_other_space">This resource belongs to another space</string>
+  <string name="configuration_reason_disabled">This resource is disabled</string>
+  <string name="configuration_reason_capability">This model does not support this use</string>
+  <string name="configuration_reason_missing">This resource no longer exists</string>
+  <string name="configuration_reason_ambiguous">More than one resource uses this identifier</string>
+  <string name="configuration_inherited">Using the space default</string>
+  <string name="configuration_follow_fast_model">Follow fast model, then chat model</string>
+  <string name="configuration_remove_favorite">Remove favorite</string>
 </resources>

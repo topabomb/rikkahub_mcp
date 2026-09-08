@@ -1,6 +1,5 @@
 package net.weero.measix.pilot.ui.components.ai
 
-import me.rerere.common.configuration.ConfigurationReference
 import androidx.compose.foundation.LocalIndication
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -52,7 +51,6 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.util.fastAny
 import androidx.compose.ui.util.fastFilter
 import androidx.compose.ui.util.fastForEach
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -63,7 +61,7 @@ import me.rerere.ai.provider.Modality
 import me.rerere.ai.provider.Model
 import me.rerere.ai.provider.ModelAbility
 import me.rerere.ai.provider.ModelType
-import me.rerere.ai.provider.ProviderSetting
+import me.rerere.common.configuration.ConfigurationReference
 import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.ArrowRight01
 import me.rerere.hugeicons.stroke.Brain02
@@ -76,8 +74,11 @@ import me.rerere.hugeicons.stroke.Text
 import me.rerere.hugeicons.stroke.Tools
 import net.weero.measix.pilot.R
 import net.weero.measix.pilot.Screen
-import net.weero.measix.pilot.data.datastore.findModelById
-import net.weero.measix.pilot.data.datastore.findProvider
+import net.weero.measix.pilot.service.ConfigurationApplicationService
+import net.weero.measix.pilot.service.ConfigurationQueryService
+import net.weero.measix.pilot.service.ModelCatalogUiModel
+import net.weero.measix.pilot.service.ModelChoiceUiModel
+import net.weero.measix.pilot.service.ModelGroupUiModel
 import net.weero.measix.pilot.ui.adaptive.AdaptiveModal
 import net.weero.measix.pilot.ui.components.ui.AutoAIIcon
 import net.weero.measix.pilot.ui.components.ui.Tag
@@ -85,7 +86,6 @@ import net.weero.measix.pilot.ui.components.ui.TagType
 import net.weero.measix.pilot.ui.components.ui.icons.HeartIcon
 import net.weero.measix.pilot.ui.context.LocalNavController
 import net.weero.measix.pilot.ui.theme.extendColors
-import net.weero.measix.pilot.service.FavoriteModelService
 import net.weero.measix.pilot.utils.toDp
 import org.koin.compose.koinInject
 import sh.calvin.reorderable.ReorderableItem
@@ -93,70 +93,37 @@ import sh.calvin.reorderable.rememberReorderableLazyListState
 
 class ModelListState internal constructor(
     modelId: ConfigurationReference?,
-    providers: List<ProviderSetting>,
+    catalog: ModelCatalogUiModel,
     type: ModelType,
 ) {
     var modelId by mutableStateOf(modelId)
         private set
-
-    var providers by mutableStateOf(providers)
+    internal var catalog by mutableStateOf(catalog)
         private set
-
     var type by mutableStateOf(type)
         private set
-
     var visible by mutableStateOf(false)
         private set
+    val currentModel: Model? get() = catalog.find(modelId)?.model?.takeIf { it.type == type }
+    internal val filteredGroups: List<ModelGroupUiModel> get() = catalog.filterModels { it.type == type }.groups
 
-    val currentModel: Model?
-        get() = modelId
-            ?.let { filteredProviders.findModelById(it) }
-            ?.takeIf { it.type == type }
+    fun open() { visible = true }
+    fun close() { visible = false }
 
-    val filteredProviders: List<ProviderSetting>
-        get() = providers.fastFilter { provider ->
-            provider.enabled && provider.models.fastAny { model -> model.type == type }
-        }
-
-    fun open() {
-        visible = true
-    }
-
-    fun close() {
-        visible = false
-    }
-
-    internal fun update(
-        modelId: ConfigurationReference?,
-        providers: List<ProviderSetting>,
-        type: ModelType,
-    ) {
+    internal fun update(modelId: ConfigurationReference?, catalog: ModelCatalogUiModel, type: ModelType) {
+        if (this.catalog.selection != catalog.selection) close()
         this.modelId = modelId
-        this.providers = providers
+        this.catalog = catalog
         this.type = type
     }
 }
 
 @Composable
-fun rememberModelListState(
+internal fun rememberModelListState(
     modelId: ConfigurationReference?,
-    providers: List<ProviderSetting>,
+    catalog: ModelCatalogUiModel,
     type: ModelType,
-): ModelListState {
-    return remember {
-        ModelListState(
-            modelId = modelId,
-            providers = providers,
-            type = type,
-        )
-    }.also {
-        it.update(
-            modelId = modelId,
-            providers = providers,
-            type = type,
-        )
-    }
-}
+): ModelListState = remember { ModelListState(modelId, catalog, type) }.also { it.update(modelId, catalog, type) }
 
 /**
  * 只渲染触发按钮：sheet 的可见性由调用方在同一处显式组合。
@@ -236,11 +203,16 @@ fun ModelSelectorButton(
 }
 
 @Composable
-fun ModelListSheet(
+internal fun ModelListSheet(
     state: ModelListState,
-    onSelect: (Model) -> Unit,
+    onSelect: suspend (Model) -> Unit,
+    configurationCommands: ConfigurationApplicationService = koinInject(),
+    configurationQueries: ConfigurationQueryService = koinInject(),
 ) {
     if (!state.visible) return
+    val scope = rememberCoroutineScope()
+    var selectionError by remember(state.catalog.selection) { mutableStateOf<String?>(null) }
+    var submitting by remember(state.catalog.selection) { mutableStateOf(false) }
 
     fun dismiss() {
         state.close()
@@ -258,13 +230,32 @@ fun ModelListSheet(
                 .imePadding(),
             verticalArrangement = Arrangement.spacedBy(4.dp)
         ) {
+            selectionError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
             ModelList(
                 currentModel = state.modelId,
-                providers = state.filteredProviders,
+                providers = state.filteredGroups,
+                catalog = state.catalog,
+                configurationCommands = configurationCommands,
+                configurationQueries = configurationQueries,
                 modelType = state.type,
+                selectionEnabled = !submitting,
                 onSelect = {
-                    onSelect(it)
-                    dismiss()
+                    if (!submitting) {
+                        submitting = true
+                        selectionError = null
+                        scope.launch {
+                            try {
+                                onSelect(it)
+                                dismiss()
+                            } catch (error: kotlinx.coroutines.CancellationException) {
+                                throw error
+                            } catch (error: Exception) {
+                                selectionError = error.message ?: "configuration_change_failed"
+                            } finally {
+                                submitting = false
+                            }
+                        }
+                    }
                 },
                 onDismiss = {
                     dismiss()
@@ -277,36 +268,41 @@ fun ModelListSheet(
 @Composable
 private fun ColumnScope.ModelList(
     currentModel: ConfigurationReference? = null,
-    providers: List<ProviderSetting>,
+    providers: List<ModelGroupUiModel>,
+    catalog: ModelCatalogUiModel,
+    configurationCommands: ConfigurationApplicationService,
+    configurationQueries: ConfigurationQueryService,
     modelType: ModelType,
+    selectionEnabled: Boolean,
     onSelect: (Model) -> Unit,
     onDismiss: () -> Unit
 ) {
     val coroutineScope = rememberCoroutineScope()
-    val favoriteModelService = koinInject<FavoriteModelService>()
-    val favoriteModelIds by favoriteModelService.favoriteModelIds
-        .collectAsStateWithLifecycle(initialValue = emptyList())
-
-    val favoriteModels = favoriteModelIds.mapNotNull { modelId ->
-        val model = providers.findModelById(modelId) ?: return@mapNotNull null
-        if (model.type != modelType) return@mapNotNull null
-        val provider = model.findProvider(providers = providers, checkOverwrite = false)
-            ?: return@mapNotNull null
-        model to provider
+    var commandError by remember(catalog.selection) { mutableStateOf<String?>(null) }
+    suspend fun command(action: suspend () -> Unit) {
+        try { action(); commandError = null }
+        catch (error: kotlinx.coroutines.CancellationException) { throw error }
+        catch (error: Exception) { commandError = error.message ?: "configuration_change_failed" }
     }
+    val favoriteFlow = remember(catalog) {
+        if (catalog.selection == null) configurationQueries.observePersonalModelFavorites()
+        else kotlinx.coroutines.flow.flowOf(catalog.selections.favoriteModels)
+    }
+    val favoriteModelIds by favoriteFlow.collectAsStateWithLifecycle(initialValue = emptyList())
+    val favoriteModels = catalog.favorites(favoriteModelIds, modelType)
 
     var searchKeywords by remember { mutableStateOf("") }
 
     val typeFilteredModelsByProvider = remember(providers, modelType) {
         providers.associate { provider ->
-            provider.id to provider.models.fastFilter { it.type == modelType }
+            provider.id to provider.models.fastFilter { it.model.type == modelType }
         }
     }
 
     val searchFilteredModelsByProvider = remember(providers, modelType, searchKeywords) {
         providers.associate { provider ->
             provider.id to provider.models.fastFilter {
-                it.type == modelType && it.displayName.contains(searchKeywords, true)
+                it.model.type == modelType && it.model.displayName.contains(searchKeywords, true)
             }
         }
     }
@@ -323,7 +319,7 @@ private fun ColumnScope.ModelList(
         }
 
         // 检查是否在收藏列表中
-        val favoriteIndex = favoriteModels.indexOfFirst { it.first.id == currentModel }
+        val favoriteIndex = favoriteModels.indexOfFirst { it.reference == currentModel }
         if (favoriteIndex >= 0) {
             if (favoriteModels.isNotEmpty()) {
                 position += 1 // favorite header
@@ -342,7 +338,7 @@ private fun ColumnScope.ModelList(
         for (provider in providers) {
             position += 1 // provider header
             val models = typeFilteredModelsByProvider[provider.id].orEmpty()
-            val modelIndex = models.indexOfFirst { it.id == currentModel }
+            val modelIndex = models.indexOfFirst { it.model.id == currentModel }
             if (modelIndex >= 0) {
                 position += modelIndex
                 return@remember position
@@ -373,10 +369,10 @@ private fun ColumnScope.ModelList(
         if (fromIndex >= 0 && toIndex >= 0 &&
             fromIndex < favoriteModels.size && toIndex < favoriteModels.size
         ) {
-            val fromModelId = favoriteModels[fromIndex].first.id
-            val toModelId = favoriteModels[toIndex].first.id
+            val fromModelId = favoriteModels[fromIndex].reference
+            val toModelId = favoriteModels[toIndex].reference
             coroutineScope.launch {
-                favoriteModelService.move(fromModelId, toModelId)
+                command { configurationCommands.moveModelFavorite(catalog.selection, fromModelId, toModelId) }
             }
         }
     }
@@ -400,6 +396,7 @@ private fun ColumnScope.ModelList(
         }.toMap()
     }
 
+    commandError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
     Surface(
         shape = RoundedCornerShape(50),
         modifier = Modifier
@@ -461,20 +458,34 @@ private fun ColumnScope.ModelList(
 
             items(
                 items = favoriteModels,
-                key = { "favorite:" + it.first.id.toString() }
-            ) { (model, provider) ->
-                ReorderableItem(
+                key = { "favorite:" + it.reference.toString() }
+            ) { favorite ->
+                val model = favorite.choice
+                val provider = favorite.group
+                if (model == null || provider == null) {
+                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().padding(16.dp)) {
+                        Column(Modifier.weight(1f)) {
+                            Text(favorite.reference.toString(), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            Text(configurationUnavailableText(requireNotNull(favorite.unavailableReason)),
+                                color = MaterialTheme.colorScheme.error)
+                        }
+                        IconButton(onClick = { coroutineScope.launch {
+                            command { configurationCommands.setModelFavorite(catalog.selection, favorite.reference, false) }
+                        } }) { Icon(HeartIcon, contentDescription = stringResource(R.string.configuration_remove_favorite)) }
+                    }
+                } else ReorderableItem(
                     state = reorderableState,
-                    key = "favorite:" + model.id.toString()
+                    key = "favorite:" + model.model.id.toString()
                 ) { isDragging ->
                     ModelItem(
                         model = model,
+                        selectionEnabled = selectionEnabled,
                         onSelect = onSelect,
                         modifier = Modifier
                             .scale(if (isDragging) 0.95f else 1f)
                             .animateItem(),
                         providerSetting = provider,
-                        select = model.id == currentModel,
+                        select = model.model.id == currentModel,
                         onDismiss = {
                             onDismiss()
                         },
@@ -482,7 +493,7 @@ private fun ColumnScope.ModelList(
                             IconButton(
                                 onClick = {
                                     coroutineScope.launch {
-                                        favoriteModelService.setFavorite(model.id, favorite = false)
+                                        command { configurationCommands.setModelFavorite(catalog.selection, model.model.id, favorite = false) }
                                     }
                                 }
                             ) {
@@ -526,36 +537,40 @@ private fun ColumnScope.ModelList(
                         style = MaterialTheme.typography.labelMedium,
                         color = MaterialTheme.colorScheme.primary,
                     )
+                    Text(stringResource(if (providerSetting.userProviderId == null) R.string.configuration_source_enterprise
+                        else R.string.configuration_source_user), style = MaterialTheme.typography.labelSmall,
+                        modifier = Modifier.padding(start = 8.dp))
 
                     Spacer(modifier = Modifier.weight(1f))
 
-                    ProviderBalanceText(
-                        providerSetting = providerSetting,
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.primary,
-                    )
+                    providerSetting.balanceSource?.let { source ->
+                        ProviderBalanceText(providerSetting = source, style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.primary)
+                    }
                 }
             }
 
             items(
                 items = searchFilteredModelsByProvider[providerSetting.id].orEmpty(),
-                key = { it.id.toString() }
+                key = { providerSetting.id + ":" + it.model.id.toString() }
             ) { model ->
-                val favorite = model.id in favoriteModelIds
+                val favorite = model.model.id in favoriteModelIds
                 ModelItem(
                     model = model,
+                    selectionEnabled = selectionEnabled,
                     onSelect = onSelect,
                     modifier = Modifier.animateItem(),
                     providerSetting = providerSetting,
-                    select = currentModel == model.id,
+                    select = currentModel == model.model.id,
                     onDismiss = {
                         onDismiss()
                     },
                     tail = {
                         IconButton(
+                            enabled = favorite || model.canSelect,
                             onClick = {
                                 coroutineScope.launch {
-                                    favoriteModelService.setFavorite(model.id, favorite = !favorite)
+                                    command { configurationCommands.setModelFavorite(catalog.selection, model.model.id, favorite = !favorite) }
                                 }
                             }
                         ) {
@@ -633,8 +648,9 @@ private fun ColumnScope.ModelList(
 
 @Composable
 private fun ModelItem(
-    model: Model,
-    providerSetting: ProviderSetting,
+    model: ModelChoiceUiModel,
+    selectionEnabled: Boolean,
+    providerSetting: ModelGroupUiModel,
     select: Boolean,
     onSelect: (Model) -> Unit,
     onDismiss: () -> Unit,
@@ -662,16 +678,8 @@ private fun ModelItem(
                 modifier = Modifier
                     .weight(1f)
                     .combinedClickable(
-                        enabled = true,
-                        onLongClick = {
-                            onDismiss()
-                            navController.navigate(
-                                Screen.SettingProviderDetail(
-                                    providerSetting.id.toString()
-                                )
-                            )
-                        },
-                        onClick = { onSelect(model) },
+                        enabled = selectionEnabled && model.canSelect,
+                        onClick = { onSelect(model.model) },
                         interactionSource = interactionSource,
                         indication = LocalIndication.current
                     ),
@@ -683,7 +691,7 @@ private fun ModelItem(
                     shape = MaterialTheme.shapes.small,
                 ) {
                     AutoAIIcon(
-                        name = model.modelId,
+                        name = model.model.modelId,
                         modifier = Modifier
                             .padding(4.dp)
                             .size(32.dp)
@@ -694,11 +702,15 @@ private fun ModelItem(
                     verticalArrangement = Arrangement.spacedBy(2.dp),
                 ) {
                     Text(
-                        text = model.displayName,
+                        text = model.model.displayName,
                         style = MaterialTheme.typography.titleSmall,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
+                    model.unavailableReason?.let { reason ->
+                        Text(configurationUnavailableText(reason), style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error)
+                    }
 
                     FlowRow(
                         modifier = Modifier
@@ -706,14 +718,20 @@ private fun ModelItem(
                         horizontalArrangement = Arrangement.spacedBy(4.dp),
                         verticalArrangement = Arrangement.spacedBy(2.dp),
                     ) {
-                        ModelTypeTag(model = model)
+                        ModelTypeTag(model = model.model)
 
-                        ModelModalityTag(model = model)
+                        ModelModalityTag(model = model.model)
 
-                        ModelAbilityTag(model = model)
+                        ModelAbilityTag(model = model.model)
                     }
                 }
                 tail()
+            }
+            providerSetting.userProviderId?.let { providerId ->
+                IconButton(enabled = selectionEnabled, onClick = {
+                    onDismiss()
+                    navController.navigate(Screen.SettingProviderDetail(providerId.toString()))
+                }) { Icon(HugeIcons.ArrowRight01, contentDescription = stringResource(R.string.edit)) }
             }
             dragHandle?.let { it() }
         }

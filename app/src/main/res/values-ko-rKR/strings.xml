@@ -1639,4 +1639,19 @@
   <string name="enterprise_stop_recording">녹음 중지</string>
   <string name="enterprise_recording">녹음 중…</string>
   <string name="enterprise_media_notice">이 미디어는 현재 포털에서 미리보기용으로만 사용됩니다. 페이지를 나가면 삭제됩니다.</string>
+  <string name="configuration_scope_personal">개인 공간 설정</string>
+  <string name="configuration_scope_enterprise">현재 기업 공간 설정</string>
+  <string name="configuration_source_user">내 구성</string>
+  <string name="configuration_source_enterprise">기업 제공</string>
+  <string name="configuration_restore_default">공간 기본값 복원</string>
+  <string name="configuration_reason_policy">이 기업 공간에서는 이 유형의 개인 리소스를 사용할 수 없습니다</string>
+  <string name="configuration_reason_not_ready">기업 구성이 아직 준비되지 않았습니다</string>
+  <string name="configuration_reason_other_space">이 리소스는 다른 공간에 속합니다</string>
+  <string name="configuration_reason_disabled">이 리소스는 비활성화되었습니다</string>
+  <string name="configuration_reason_capability">이 모델은 이 용도를 지원하지 않습니다</string>
+  <string name="configuration_reason_missing">이 리소스는 더 이상 존재하지 않습니다</string>
+  <string name="configuration_reason_ambiguous">여러 리소스가 같은 식별자를 사용합니다</string>
+  <string name="configuration_inherited">공간 기본값 사용 중</string>
+  <string name="configuration_follow_fast_model">빠른 모델을 따르고, 미설정 시 채팅 모델을 따름</string>
+  <string name="configuration_remove_favorite">즐겨찾기 해제</string>
 </resources>

@@ -2,6 +2,8 @@ package net.weero.measix.pilot.data.configuration
 
 import me.rerere.ai.provider.Model
 import me.rerere.ai.provider.ModelType
+import me.rerere.ai.provider.Modality
+import me.rerere.ai.provider.supportsImageGeneration
 import me.rerere.common.configuration.ConfigurationReference
 import net.weero.measix.pilot.data.datastore.DEFAULT_ASSISTANT_ID
 import net.weero.measix.pilot.data.datastore.DEFAULT_AUTO_MODEL_ID
@@ -30,6 +32,7 @@ internal data class ResolvedGatewayEnablement(val enabled: Boolean, val canChang
 internal data class ResolvedModelConfiguration(
     val model: Model,
     val userProviderId: ConfigurationReference.User?,
+    val imageGenerationSupported: Boolean,
 )
 
 /** An explicit invalid reference remains visible; it never turns into a different selection. */
@@ -54,6 +57,7 @@ internal data class ResolvedConfiguration(
     val models: Map<ConfigurationReference, ResolvedModelConfiguration>,
     val assistants: Map<ConfigurationReference, Assistant>,
     val selections: ResourceSelections,
+    val storedSelections: ResourceSelections,
 ) {
     fun access(category: ConfigurationCategory, reference: ConfigurationReference): ConfigurationAccess =
         catalog[ConfigurationKey(category, reference)]?.access ?: ConfigurationAccess(
@@ -68,7 +72,7 @@ internal data class ResolvedConfiguration(
         slot.modelRole?.let(::modelSelection) ?: selection(slot.category, slot.reference(selections))
 
     fun choice(slot: ResourceSelectionSlot, reference: ConfigurationReference): ConfigurationSelection =
-        slot.modelRole?.let { selectModel(reference, it.type) } ?: selection(slot.category, reference)
+        slot.modelRole?.let { selectModel(reference, it) } ?: selection(slot.category, reference)
 
     fun modelSelection(role: ModelSelectionRole): ConfigurationSelection = selectModel(
         when (role) {
@@ -80,7 +84,7 @@ internal data class ResolvedConfiguration(
             ModelSelectionRole.SUGGESTION -> selections.suggestionModelId
             ModelSelectionRole.COMPRESS -> selections.compressModelId
         },
-        role.type,
+        role,
     )
 
     fun assistantModel(assistantId: ConfigurationReference): ConfigurationSelection {
@@ -93,6 +97,18 @@ internal data class ResolvedConfiguration(
 
     fun availableChatModel(assistant: Assistant): Model? = assistantModel(assistant)
         .takeIf { it.isAvailable }?.reference?.let { models[it]?.model }
+
+    private fun selectModel(reference: ConfigurationReference?, role: ModelSelectionRole): ConfigurationSelection {
+        val selected = selectModel(reference, role.type)
+        if (!selected.isAvailable) return selected
+        if (role == ModelSelectionRole.IMAGE && !models.getValue(requireNotNull(reference)).imageGenerationSupported) {
+            return selected.copy(unavailableReason = ConfigurationUnavailableReason.RESOURCE_CAPABILITY_MISMATCH)
+        }
+        return if (role == ModelSelectionRole.ATTACHMENT_INSPECTION &&
+            Modality.IMAGE !in models.getValue(requireNotNull(reference)).model.inputModalities) {
+            selected.copy(unavailableReason = ConfigurationUnavailableReason.RESOURCE_CAPABILITY_MISMATCH)
+        } else selected
+    }
 
     private fun selectModel(reference: ConfigurationReference?, type: ModelType): ConfigurationSelection {
         val selected = selection(ConfigurationCategory.MODEL, reference)
@@ -130,7 +146,8 @@ internal object ConfigurationResolver {
                 if (only != null) {
                     val (provider, model) = only
                     add(ConfigurationCategory.MODEL, id, model.displayName, provider.enabled)
-                    models[id] = ResolvedModelConfiguration(model, provider.id as ConfigurationReference.User)
+                    models[id] = ResolvedModelConfiguration(model, provider.id as ConfigurationReference.User,
+                        supportsImageGeneration(model.providerOverwrite ?: provider))
                 } else {
                     // Imported providers can retain model IDs. No owner may be chosen arbitrarily.
                     val key = ConfigurationKey(ConfigurationCategory.MODEL, id)
@@ -157,6 +174,7 @@ internal object ConfigurationResolver {
                     Model(id = id, modelId = definition.modelId, displayName = definition.name, type = definition.type,
                         inputModalities = definition.inputModalities, outputModalities = definition.outputModalities, abilities = definition.abilities),
                     null,
+                    true,
                 )
             }
             enterprise.tts.forEach { add(ConfigurationCategory.TTS, identity.reference(it.id), it.name, it.enabled) }
@@ -207,6 +225,6 @@ internal object ConfigurationResolver {
                 selectedASRProviderId = selected.selectedASRProviderId ?: enterpriseReference(defaults?.asrId),
             )
         }
-        return ResolvedConfiguration(scope, identity, enterprise, catalog, models, assistants, effectiveSelections)
+        return ResolvedConfiguration(scope, identity, enterprise, catalog, models, assistants, effectiveSelections, selected)
     }
 }

@@ -53,8 +53,9 @@ class ScopedConfigurationAndroidTest {
                 }
                 env.sessions.enrollLocal(packet.identity, { packet.identity }, { packet })
                 val access = env.sessions.captureRealmAccess(packet.identity.scope) as RealmAccess.Enterprise
-                env.commands.selectResource(access, ResourceSelectionSlot.ASSISTANT, assistant.id)
-                env.commands.selectResource(access, ResourceSelectionSlot.CHAT_MODEL, packet.identity.reference("mdl_chat"))
+                val selection = requireNotNull(env.sessions.observeSelectedRealmSelection().first())
+                env.commands.selectResource(selection, ResourceSelectionSlot.ASSISTANT, assistant.id)
+                env.commands.selectResource(selection, ResourceSelectionSlot.CHAT_MODEL, packet.identity.reference("mdl_chat"))
                 env.commands.updateAssistantUsage(access, assistant.id) {
                     AssistantUsagePreferences(assistant.id, chatModelId = UsageValue(packet.identity.reference("mdl_chat")))
                 }

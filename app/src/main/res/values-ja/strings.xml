@@ -1639,4 +1639,19 @@
   <string name="enterprise_stop_recording">録音を停止</string>
   <string name="enterprise_recording">録音中…</string>
   <string name="enterprise_media_notice">メディアはこのポータル内のプレビュー専用です。ページを離れると破棄されます。</string>
+  <string name="configuration_scope_personal">個人スペースの設定</string>
+  <string name="configuration_scope_enterprise">現在の企業スペースの設定</string>
+  <string name="configuration_source_user">自分の設定</string>
+  <string name="configuration_source_enterprise">企業が提供</string>
+  <string name="configuration_restore_default">スペースの既定値に戻す</string>
+  <string name="configuration_reason_policy">この企業スペースではこの種類の個人リソースは使用できません</string>
+  <string name="configuration_reason_not_ready">企業設定の準備ができていません</string>
+  <string name="configuration_reason_other_space">このリソースは別のスペースに属しています</string>
+  <string name="configuration_reason_disabled">このリソースは無効です</string>
+  <string name="configuration_reason_capability">このモデルはこの用途に対応していません</string>
+  <string name="configuration_reason_missing">このリソースは存在しません</string>
+  <string name="configuration_reason_ambiguous">複数のリソースが同じ識別子を使用しています</string>
+  <string name="configuration_inherited">スペースの既定値を使用</string>
+  <string name="configuration_follow_fast_model">高速モデルに従い、未設定ならチャットモデルに従う</string>
+  <string name="configuration_remove_favorite">お気に入りから削除</string>
 </resources>

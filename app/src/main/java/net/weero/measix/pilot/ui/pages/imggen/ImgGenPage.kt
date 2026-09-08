@@ -43,19 +43,18 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import net.weero.measix.pilot.ui.adaptive.AdaptiveModal
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SheetState
+import androidx.compose.material3.SheetValue
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.material3.pulltorefresh.rememberPullToRefreshState
-import androidx.compose.material3.SheetValue
 import androidx.compose.material3.rememberBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -77,14 +76,16 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.paging.LoadState
 import androidx.paging.compose.collectAsLazyPagingItems
 import androidx.paging.compose.itemContentType
 import androidx.paging.compose.itemKey
-import androidx.paging.LoadState
 import coil3.compose.AsyncImage
 import com.dokar.sonner.ToastType
-import kotlinx.coroutines.CoroutineScope
+import java.io.File
+import kotlin.uuid.Uuid
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.launch
@@ -105,17 +106,17 @@ import me.rerere.hugeicons.stroke.Tools
 import net.weero.measix.pilot.R
 import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.files.FileUtils
-import net.weero.measix.pilot.service.MediaExportService
-import net.weero.measix.pilot.data.imggen.ImageGenerationSelectionResolver
 import net.weero.measix.pilot.data.imggen.imageGenerationFailureStringRes
+import net.weero.measix.pilot.service.MediaExportService
+import net.weero.measix.pilot.ui.adaptive.AdaptiveModal
 import net.weero.measix.pilot.ui.components.ai.ModelListSheet
 import net.weero.measix.pilot.ui.components.ai.ModelSelectorButton
 import net.weero.measix.pilot.ui.components.ai.rememberModelListState
 import net.weero.measix.pilot.ui.components.nav.BackButton
 import net.weero.measix.pilot.ui.components.ui.FormItem
-import net.weero.measix.pilot.ui.components.ui.ImagePreviewDialog
 import net.weero.measix.pilot.ui.components.ui.ImagePreviewDeleteAction
 import net.weero.measix.pilot.ui.components.ui.ImagePreviewDeleteResult
+import net.weero.measix.pilot.ui.components.ui.ImagePreviewDialog
 import net.weero.measix.pilot.ui.components.ui.OutlinedNumberInput
 import net.weero.measix.pilot.ui.components.ui.rememberImageBackgroundHost
 import net.weero.measix.pilot.ui.components.ui.shortGeneratedLabel
@@ -123,8 +124,6 @@ import net.weero.measix.pilot.ui.context.LocalToaster
 import net.weero.measix.pilot.utils.ImageUtils
 import org.koin.androidx.compose.koinViewModel
 import org.koin.compose.koinInject
-import java.io.File
-import kotlin.uuid.Uuid
 
 @Composable
 fun ImageGenPage(
@@ -446,13 +445,9 @@ private fun InputBar(
             horizontalArrangement = Arrangement.spacedBy(6.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            val resolver = koinInject<ImageGenerationSelectionResolver>()
-            val imageProviders = remember(settings.providers, resolver) {
-                settings.providers.filter { resolver.supportsImageGeneration(it) }
-            }
             val imageModelListState = rememberModelListState(
                 modelId = settings.imageGenerationModelId,
-                providers = imageProviders,
+                catalog = net.weero.measix.pilot.service.userDefinitionModelCatalog(settings.providers),
                 type = ModelType.IMAGE,
             )
             ModelSelectorButton(

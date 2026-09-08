@@ -73,6 +73,8 @@
 
 ## 4. Provider contract suite（两层）
 
+配置模型目录由 `ConfigurationApplicationServiceTest` 验证真实 Session/DataStore 的原选择提交、切域往返失效、覆盖清除及图片连接覆盖能力；`ModelCatalogUiModelTest` 验证默认行为与失效收藏引用投影，`ModelSettingsVMTest` 验证旧选择迟到错误不能覆盖当前错误。`ModelCatalogAndroidTest` 使用实际配置 owner 渲染 Compose 选择器，覆盖企业选择、禁用个人候选仍可进入原 Provider 管理、提交挂起时重复点击与失败重试；其失败注入位于 UI 提交边界，不证明设备磁盘写失败。持久化失败仍由 Store 测试负责。
+
 - **Provider-independent**：`RequestAssemblerTest` 保护 `UIMessage → ModelRequestMessage` 转换、Step 丢弃和 tool call/result identity；`MessageTest` 保护 terminal safe prefix 与空结果/失败媒体的投影区别，`ProviderMessageUtilsTest` 用矩阵保护内容顺序与 `Tool.stepId` 批次边界。`RequestContextPlannerTest` 保护 history/Disclosure 选择与 receipt，媒体输入投影由相应 Input Transformer 测试负责。
 - **Adapter-specific**：每个 adapter 只验自身 wire。请求序列化与响应解析**分开**：
   - `ChatCompletionsAPISerializerTest` / `ChatCompletionsAPIParserTest`

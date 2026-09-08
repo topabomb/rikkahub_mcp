@@ -5,6 +5,7 @@ import me.rerere.ai.provider.ModelType
 import me.rerere.ai.provider.Provider
 import me.rerere.ai.provider.ProviderManager
 import me.rerere.ai.provider.ProviderSetting
+import me.rerere.ai.provider.supportsImageGeneration
 import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.datastore.findModelById
 import net.weero.measix.pilot.data.datastore.findProvider
@@ -37,11 +38,11 @@ class ImageGenerationSelectionResolver(
         }
         val effectiveProvider = model.findProvider(settings.providers, checkOverwrite = true)
             ?: return ImageGenerationSelection.Unavailable("image_model_unavailable")
-        val provider = runCatching { providerManager.getProviderByType(effectiveProvider) }.getOrNull()
-            ?: return ImageGenerationSelection.Unavailable("image_model_unavailable")
-        if (!provider.supportsImageGeneration) {
+        if (!supportsImageGeneration(effectiveProvider)) {
             return ImageGenerationSelection.Unavailable("image_model_unavailable")
         }
+        val provider = runCatching { providerManager.getProviderByType(effectiveProvider) }.getOrNull()
+            ?: return ImageGenerationSelection.Unavailable("image_model_unavailable")
         return ImageGenerationSelection.Available(
             model = model,
             sourceProvider = sourceProvider,
@@ -53,8 +54,4 @@ class ImageGenerationSelectionResolver(
 
     fun isAvailable(settings: Settings): Boolean = resolve(settings) is ImageGenerationSelection.Available
 
-    fun supportsImageGeneration(provider: ProviderSetting): Boolean {
-        val impl = runCatching { providerManager.getProviderByType(provider) }.getOrNull()
-        return impl?.supportsImageGeneration == true
-    }
 }

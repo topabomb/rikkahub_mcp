@@ -1639,4 +1639,19 @@
   <string name="enterprise_stop_recording">停止录音</string>
   <string name="enterprise_recording">正在录音…</string>
   <string name="enterprise_media_notice">媒体仅在当前工作台预览，离开页面后会丢弃。</string>
+  <string name="configuration_scope_personal">个人空间设置</string>
+  <string name="configuration_scope_enterprise">当前企业空间设置</string>
+  <string name="configuration_source_user">我的配置</string>
+  <string name="configuration_source_enterprise">企业提供</string>
+  <string name="configuration_restore_default">恢复空间默认值</string>
+  <string name="configuration_reason_policy">该企业空间不允许使用此类个人资源</string>
+  <string name="configuration_reason_not_ready">企业配置尚未就绪</string>
+  <string name="configuration_reason_other_space">该资源属于其他空间</string>
+  <string name="configuration_reason_disabled">该资源已停用</string>
+  <string name="configuration_reason_capability">该模型不支持此用途</string>
+  <string name="configuration_reason_missing">该资源已不存在</string>
+  <string name="configuration_reason_ambiguous">多个资源使用相同标识</string>
+  <string name="configuration_inherited">使用空间默认值</string>
+  <string name="configuration_follow_fast_model">跟随快速模型，未配置时跟随聊天模型</string>
+  <string name="configuration_remove_favorite">取消收藏</string>
 </resources>

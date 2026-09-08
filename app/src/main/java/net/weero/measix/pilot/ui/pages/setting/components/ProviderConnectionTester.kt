@@ -69,7 +69,7 @@ fun ProviderConnectionTester(
             text = {
                 val connectionModelState = rememberModelListState(
                     modelId = selectedModel?.id,
-                    providers = listOf(internalProvider),
+                    catalog = net.weero.measix.pilot.service.userDefinitionModelCatalog(listOf(internalProvider)),
                     type = ModelType.CHAT,
                 )
                 Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {

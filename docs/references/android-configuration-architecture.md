@@ -105,12 +105,16 @@ PrepareEnterpriseExampleAssets 从公开完整模板派生 enterprise.local.iden
 - 内置定义通过 withBuiltInDefinitions 补齐，显式失效的模型、MCP、注入和快捷消息引用保留。模型选择同时校验用途类型；找不到或被策略排除时返回原因，不按名称或首项替换。企业选择为空时只继承企业默认，不继承个人选择。
 - 重复导入 Provider 可能保留相同模型 ID；新目录将该模型标为引用歧义，不任意选择凭据 owner，也不使其他资源目录整体失败。原用户定义保持不变。
 - AssistantUsagePreferences 只保存企业主体内的显式覆盖。字段缺失继承原定义，UsageValue 中显式 null 清除可空字段；个人助手仍只保存一份共享定义。企业助手使用自身固定核心与普通字段默认值，本域偏好不能改写固定模型、系统提示词或移除固定 MCP/子助手引用。
-- ConfigurationApplicationService 接收页面或调用者捕获的 RealmAccess.Enterprise，等待恢复门禁后由企业 session owner 校验原 Session 与完整主体，持有授权锁调用 SettingsStore 的 DataStore 最新值事务；不在命令内部按 scope 重取登录资格，同主体退出重登不能复活旧写操作。固定锁序为 enterprise session → Settings。transform 开始和交给 writer 前检查原调用者取消状态；已取得提交所有权后不可取消地等待 DataStore actor 的最终 ack，再传播取消，避免写盘期间提前释放锁。策略更新、退出不能穿插偏好提交。
+- ConfigurationApplicationService 的资源选择、收藏和建议开关命令接收页面捕获的 RealmSelection，同时校验原 Session、主体与选择版本；切出再切回也不能恢复旧页面的写资格。共享用户定义编辑中的收藏显式使用个人偏好目标，不冒充当前企业选择。Gateway 与助手使用偏好命令仍接收 RealmAccess.Enterprise。固定锁序为 enterprise session → Settings，持有授权锁调用 DataStore 最新值事务；不在命令内部按 scope 重取登录资格。transform 开始和交给 writer 前检查原调用者取消状态；已取得提交所有权后不可取消地等待 DataStore actor 的最终 ack，再传播取消，避免写盘期间提前释放锁。策略更新、退出不能穿插偏好提交。
 - ResourceSelectionSlot 对应模型角色、助手、Search、TTS、ASR 选择；收藏及建议开关使用同一偏好写协议。新增选择校验身份、类别准入、启用状态和模型用途；清除覆盖始终允许，且不会隐式修复仍失效的其他选择。
 - 助手 MCP 修改只校验新增引用，允许逐项移除已有失效引用。写失败/取消不发布提前生效的内存值；个人定义编辑保留企业主体偏好，同企业不同用户不继承对方的使用选择。
 - Gateway 定义存在即已发布，不含第二个 enabled 位；撤销由来源候选删除定义表达。Resolver 为目录项派生完整 discover/invoke 工具对的 gatewayEnablement，统一决定生效开关与可切换性。REQUIRED 强制开启、拒绝开关写入，但保留原 false；恢复 USER_CONTROLLABLE_DEFAULT_ON 后原 false 再生效，无偏好则默认开启。setGatewayEnabled 使用同一授权与偏好提交协议，拒绝缺失或异主体资源，不更改配置 generation。该目录决策不代表 Session、连接或工具 surface 已通过执行校验；Gateway 执行装配和正式 UI 尚未接通。
 
-上述 application/query ports 已注册 DI；实际页面与执行链的接入和旧 Managed 原型退休尚未完成。
+`observeModelCatalog` 在 Session → Settings 锁序下捕获同一原选择的目录，Settings 流只作为失效通知；返回 Loading、Available 或 Unavailable。`ModelCatalogUiModel` 分开保留原覆盖、有效选择和用途不可用原因，企业目录不携带私有 binding。模型默认设置页已消费该投影，其他助手使用页面与资源执行链仍在接线。
+
+Provider 余额仍在共享用户定义编辑目录沿用既有读取路径；按域模型目录暂未展示余额，需继续通过真实用户 Provider ID 接入现有余额 owner，不向目录加入连接凭据。
+
+用户图片模型的目录、原子选择和执行解析共用 `supportsImageGeneration`，以模型覆盖连接或实际 Provider 协议判断，不以分组 Provider 替代真实传输。附件识别选择要求 CHAT 类型及 IMAGE 输入。企业图片定义的可选择性表示配置声明，实际图片执行适配尚未完成。收藏移动使用原引用对作用于最新完整列表；缺失或歧义收藏仍可从 UI 移除，不凭空构造模型定义。原 FavoriteModelService 已删除。
 
 ### 2.6 数据根记录的域身份
 
@@ -174,7 +178,7 @@ Memory 已通过 MemoryAddress/MemoryService 按原域、主体与 Session 进�
 
 | `Settings` 字段 | 类型 | DataStore key | 读取默认 | 引用/用途 |
 |---|---|---|---|---|
-| `favoriteModels` | `List<ConfigurationReference>` | `favorite_models` | `[]` | 引用 `providers[].models[].id`；失效 ID 在读取模型过滤 |
+| `favoriteModels` | `List<ConfigurationReference>` | `favorite_models` | `[]` | 按域保存引用；失效引用保留并可取消收藏 |
 | `chatModelId` | `ConfigurationReference` | `chat_model` | `DEFAULT_AUTO_MODEL_ID` | 全局 Chat 默认；Assistant 可覆盖 |
 | `fastModelId` | `ConfigurationReference` | `fast_model` | `DEFAULT_AUTO_MODEL_ID` | 快速任务默认 |
 | `titleModelId` | `ConfigurationReference?` | `title_model` | `null` | 标题生成显式选择 |

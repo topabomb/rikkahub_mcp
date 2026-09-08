@@ -458,6 +458,10 @@ ChatPageContent
 只有 turn 进入 `IDLE` 或页面退出组合时才释放；`STOPPING` 期间工具审批、工具回答和子助手回答 callback 统一为空，不向正在收口的 turn 发命令。可因 IME 和自适应布局切换位置的 `ChatInput` 按钮不管理 Window flag。
 模型选择 sheet（`ModelListSheet`）由输入区的稳定根级组合一次，不随 action row 的 IME 显隐分支进入或离开组合；同一页面只存在一个 `ModelListState`，选择、清空与 dismiss 都只修改同一状态。
 
+共享模型选择器消费 `ModelCatalogUiModel`，分组保留来源与真实用户 Provider 编辑入口，企业模型不伪装成 Provider。`ModelListSheet` 等待选择命令成功才关闭；提交中只接受一个选择，失败保留弹窗并恢复重试。目录的 `RealmSelection` 变化会关闭旧弹窗，异步错误属于原选择。失效或歧义的收藏保留引用占位和取消收藏入口。
+
+`SettingModelPage` 的模型页通过 `ModelSettingsVM` 订阅当前域目录；显示原覆盖、当前选择与不可用原因，清除企业覆盖只继承企业默认。个人页区分未配置、跟随聊天模型、跟随快速模型和未启用附件识别，不将默认哨兵当成丢失资源。建议开关写当前域偏好，关闭后仍保留模型选择。提示词页仍编辑共享用户内容；聊天助手/使用参数与独立图片生成执行尚未完成企业域接线，不能把共享组件改造视为这些页面已完成企业验收。
+
 前台 turn 触觉只由 `ChatPage` 的 `TurnHapticFeedback` 管理，调用位于自适应布局分支之外，不依赖消息列表项的组合生命周期。
 它直接收集 `ChatVM` 既有热流中的 `ConversationUiModel.turnFeedback` 同版本查询投影与设置，不经渲染快照转发，避免恢复前台时旧组合值造成误提醒；投影尚未就绪时静默，UI 不解析子助手 metadata 或读取 Runtime Job。
 `enableMessageGenerationHapticEffect` 统一控制触觉；页面内的 `AndroidTurnHapticPlayer` 只将 `WORK` / `ATTENTION` 映射到平台效果，不管理节拍或运行状态，不影响声音或通知。

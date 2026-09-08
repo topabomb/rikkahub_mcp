@@ -49,6 +49,73 @@ class ConfigurationApplicationServiceTest {
     @get:Rule val temporary = TemporaryFolder()
 
     @Test
+    fun `rendered model catalog retains overrides and rejects an old selection after leaving and returning`() = runTest {
+        val env = environment()
+        try {
+            env.initialize()
+            suspend fun catalog() = (env.queries.observeModelCatalog().first { it is ModelCatalogReadState.Available }
+                as ModelCatalogReadState.Available).catalog
+            val initial = catalog()
+            val selection = requireNotNull(initial.selection)
+            assertNull(initial.storedSelections.chatModelId)
+            assertEquals(exampleEnterprisePackage().identity.reference("mdl_chat"), initial.selections.chatModelId)
+            env.commands.selectResource(selection, ResourceSelectionSlot.CHAT_MODEL, env.model.id)
+            env.commands.setModelFavorite(selection, env.model.id, true)
+            val packet = exampleEnterprisePackage()
+            env.sessions.synchronize(env.access, packet.copy(configuration = packet.configuration.copy(
+                generation = 2, policy = packet.configuration.policy.copy(allowLocalProviders = false))))
+            val restricted = catalog()
+            assertEquals(env.model.id, restricted.storedSelections.chatModelId)
+            assertEquals(ConfigurationUnavailableReason.USER_CATEGORY_NOT_ALLOWED, restricted.find(env.model.id)!!.unavailableReason)
+            env.commands.setModelFavorite(selection, env.model.id, false)
+            env.commands.selectResource(selection, ResourceSelectionSlot.CHAT_MODEL, null)
+            assertNull(catalog().storedSelections.chatModelId)
+            assertEquals(initial.selections.chatModelId, catalog().selections.chatModelId)
+            env.sessions.selectPersonalFixture()
+            env.sessions.selectEnterpriseFixture()
+            val before = JsonInstant.encodeToString(env.document())
+            try {
+                env.commands.setSuggestionEnabled(selection, false)
+                fail("old rendered selection accepted after returning")
+            } catch (error: EnterpriseConfigurationException) {
+                assertEquals("enterprise_selection_revoked", error.message)
+            }
+            assertEquals(before, JsonInstant.encodeToString(env.document()))
+            assertEquals(env.model.id, env.document().preferences.forScope(ConfigurationScope.Personal).chatModelId)
+        } finally { env.scope.cancel() }
+    }
+
+    @Test
+    fun `model purpose capability uses overwrite transport in both directory and atomic selection`() = runTest {
+        val env = environment()
+        try {
+            env.initialize()
+            env.sessions.selectPersonalFixture()
+            val supported = Model(modelId = "supported", type = me.rerere.ai.provider.ModelType.IMAGE,
+                providerOverwrite = ProviderSetting.OpenAI())
+            val unsupported = Model(modelId = "unsupported", type = me.rerere.ai.provider.ModelType.IMAGE,
+                providerOverwrite = ProviderSetting.Google())
+            env.settings.updateLocal { it.copy(providers = listOf(
+                ProviderSetting.Google(models = listOf(supported)), ProviderSetting.OpenAI(models = listOf(unsupported, env.model)))) }
+            val catalog = (env.queries.observeModelCatalog().first { it is ModelCatalogReadState.Available }
+                as ModelCatalogReadState.Available).catalog
+            val selection = requireNotNull(catalog.selection)
+            assertTrue(catalog.find(supported.id)!!.canSelect)
+            assertEquals(ConfigurationUnavailableReason.RESOURCE_CAPABILITY_MISMATCH, catalog.find(unsupported.id)!!.unavailableReason)
+            env.commands.selectResource(selection, ResourceSelectionSlot.IMAGE_MODEL, supported.id)
+            val before = JsonInstant.encodeToString(env.document())
+            for ((slot, reference) in listOf(ResourceSelectionSlot.IMAGE_MODEL to unsupported.id,
+                ResourceSelectionSlot.ATTACHMENT_INSPECTION_MODEL to env.model.id)) {
+                try {
+                    env.commands.selectResource(selection, slot, reference)
+                    fail("unsupported model selection accepted")
+                } catch (_: SettingsLockedException) { }
+                assertEquals(before, JsonInstant.encodeToString(env.document()))
+            }
+        } finally { env.scope.cancel() }
+    }
+
+    @Test
     fun `scoped write persists only a preference and personal editing retains it`() = runTest {
         val env = environment()
         try {
@@ -226,9 +293,9 @@ class ConfigurationApplicationServiceTest {
             val before = env.document()
             val staleActions: List<suspend () -> Unit> = listOf(
                 { env.commands.setGatewayEnabled(env.access, reference, true) },
-                { env.commands.selectResource(env.access, ResourceSelectionSlot.CHAT_MODEL, env.model.id) },
-                { env.commands.setModelFavorite(env.access, env.model.id, true) },
-                { env.commands.setSuggestionEnabled(env.access, false) },
+                { env.commands.selectResource(env.selection, ResourceSelectionSlot.CHAT_MODEL, env.model.id) },
+                { env.commands.setModelFavorite(env.selection, env.model.id, true) },
+                { env.commands.setSuggestionEnabled(env.selection, false) },
                 { env.commands.updateAssistantUsage(env.access, env.assistant.id) { null } },
             )
             staleActions.forEach { action ->
@@ -250,9 +317,9 @@ class ConfigurationApplicationServiceTest {
             val packet = exampleEnterprisePackage()
             val scope = packet.identity.scope
             val commands = env.commands
-            commands.selectResource(env.access, ResourceSelectionSlot.CHAT_MODEL, env.model.id)
-            commands.selectResource(env.access, ResourceSelectionSlot.ASSISTANT, env.assistant.id)
-            commands.setModelFavorite(env.access, env.model.id, true)
+            commands.selectResource(env.selection, ResourceSelectionSlot.CHAT_MODEL, env.model.id)
+            commands.selectResource(env.selection, ResourceSelectionSlot.ASSISTANT, env.assistant.id)
+            commands.setModelFavorite(env.selection, env.model.id, true)
             val ownConfiguration = JsonInstant.encodeToString(env.document().configuration)
             val applied = env.sessions.state.value as EnterpriseState.Available
             env.sessions.synchronize(RealmAccess.Enterprise(packet.identity.scope, applied.manifest.session!!.id),
@@ -261,18 +328,18 @@ class ConfigurationApplicationServiceTest {
             assertEquals(env.model.id, restricted.selection(ResourceSelectionSlot.CHAT_MODEL).reference)
             assertEquals(ConfigurationUnavailableReason.USER_CATEGORY_NOT_ALLOWED, restricted.selection(ResourceSelectionSlot.CHAT_MODEL).unavailableReason)
             // An invalid old choice does not prevent editing an unrelated setting or removing a favorite.
-            commands.setSuggestionEnabled(env.access, false)
-            commands.setModelFavorite(env.access, env.model.id, false)
-            commands.selectResource(env.access, ResourceSelectionSlot.CHAT_MODEL, null)
+            commands.setSuggestionEnabled(env.selection, false)
+            commands.setModelFavorite(env.selection, env.model.id, false)
+            commands.selectResource(env.selection, ResourceSelectionSlot.CHAT_MODEL, null)
             assertEquals(packet.identity.reference("mdl_chat"), env.queries.observeCurrent().first().selection(ResourceSelectionSlot.CHAT_MODEL).reference)
             for (reference in listOf(env.model.id, packet.identity.reference("mdl_image"))) {
                 try {
-                    commands.selectResource(env.access, ResourceSelectionSlot.CHAT_MODEL, reference)
+                    commands.selectResource(env.selection, ResourceSelectionSlot.CHAT_MODEL, reference)
                     fail("A forbidden or incompatible model must not be selected")
                 } catch (_: SettingsLockedException) { }
             }
             assertNull(env.document().preferences.forScope(scope).chatModelId)
-            commands.selectResource(env.access, ResourceSelectionSlot.IMAGE_MODEL, packet.identity.reference("mdl_image"))
+            commands.selectResource(env.selection, ResourceSelectionSlot.IMAGE_MODEL, packet.identity.reference("mdl_image"))
             assertTrue(env.queries.observeCurrent().first().selection(ResourceSelectionSlot.IMAGE_MODEL).isAvailable)
             assertEquals(env.model.id, env.document().preferences.forScope(ConfigurationScope.Personal).chatModelId)
             assertEquals(ownConfiguration, JsonInstant.encodeToString(env.document().configuration))
@@ -288,7 +355,7 @@ class ConfigurationApplicationServiceTest {
             val original = JsonInstant.encodeToString(env.document())
             env.intercept = { throw IOException("simulated preference commit failure") }
             try {
-                env.commands.selectResource(env.access, ResourceSelectionSlot.CHAT_MODEL, env.model.id)
+                env.commands.selectResource(env.selection, ResourceSelectionSlot.CHAT_MODEL, env.model.id)
                 fail("Storage failure must be reported")
             } catch (_: IOException) { }
             assertEquals(original, JsonInstant.encodeToString(env.document()))
@@ -296,7 +363,9 @@ class ConfigurationApplicationServiceTest {
             assertNotEquals(env.model.id, env.queries.observeCurrent().first().selection(ResourceSelectionSlot.CHAT_MODEL).reference)
             env.intercept = null
             env.sessions.selectPersonalFixture()
-            env.commands.selectResource(env.access, ResourceSelectionSlot.CHAT_MODEL, env.model.id)
+            env.sessions.selectEnterpriseFixture()
+            env.selection = requireNotNull(env.sessions.observeSelectedRealmSelection().first())
+            env.commands.selectResource(env.selection, ResourceSelectionSlot.CHAT_MODEL, env.model.id)
             assertEquals(env.model.id, env.document().preferences.forScope(scope).chatModelId)
         } finally { env.scope.cancel() }
     }
@@ -378,6 +447,7 @@ class ConfigurationApplicationServiceTest {
         val sessions = EnterpriseSessionController(EnterpriseAppliedStore(File(root, "enterprise")))
         private val gate = ApplicationRecoveryGate()
         lateinit var access: RealmAccess.Enterprise
+        lateinit var selection: RealmSelection
         val commands = ConfigurationApplicationService(settings, sessions, gate)
         val queries = ConfigurationQueryService(settings, sessions, gate)
         val model = Model(modelId = "personal")
@@ -390,6 +460,7 @@ class ConfigurationApplicationServiceTest {
                 assistants = listOf(assistant), mcpServers = listOf(mcp), assistantId = assistant.id, chatModelId = model.id) }
             sessions.enrollFixture(exampleEnterprisePackage())
             access = sessions.captureRealmAccess(exampleEnterprisePackage().identity.scope) as RealmAccess.Enterprise
+            selection = requireNotNull(sessions.observeSelectedRealmSelection().first())
             gate.ready()
         }
 

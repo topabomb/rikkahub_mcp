@@ -543,7 +543,7 @@ private fun ChatPageContent(
     )
     val modelListState = rememberModelListState(
         modelId = assistant.chatModelId ?: setting.chatModelId,
-        providers = setting.providers,
+        catalog = net.weero.measix.pilot.service.userDefinitionModelCatalog(setting.providers),
         type = ModelType.CHAT,
     )
     val modelRequiredMessage = stringResource(R.string.chat_readiness_model_required_toast)

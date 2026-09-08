@@ -360,7 +360,7 @@ internal fun AssistantBasicContent(
                 content = {
                     val chatModelListState = rememberModelListState(
                         modelId = assistant.chatModelId,
-                        providers = providers,
+                        catalog = net.weero.measix.pilot.service.userDefinitionModelCatalog(providers),
                         type = ModelType.CHAT,
                     )
                     ModelSelectorButton(

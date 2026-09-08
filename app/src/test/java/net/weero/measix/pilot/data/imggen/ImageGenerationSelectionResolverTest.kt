@@ -58,14 +58,13 @@ class ImageGenerationSelectionResolverTest {
     @Test
     fun `provider without capability is unavailable`() {
         val provider = mockk<Provider<ProviderSetting>>()
-        every { provider.supportsImageGeneration } returns false
         val manager = mockk<ProviderManager>()
         every { manager.getProviderByType(any<ProviderSetting>()) } returns provider
         val resolver = ImageGenerationSelectionResolver(manager)
         val result = resolver.resolve(
             Settings(
                 imageGenerationModelId = imageModel.id,
-                providers = listOf(ProviderSetting.OpenAI(models = listOf(imageModel))),
+                providers = listOf(ProviderSetting.Google(models = listOf(imageModel))),
             )
         )
         assertTrue(result is ImageGenerationSelection.Unavailable)
@@ -76,7 +75,6 @@ class ImageGenerationSelectionResolverTest {
         val overwrite = ProviderSetting.OpenAI(name = "Override Host", enabled = true)
         val model = imageModel.copy(providerOverwrite = overwrite)
         val provider = mockk<Provider<ProviderSetting>>()
-        every { provider.supportsImageGeneration } returns true
         val manager = mockk<ProviderManager>()
         every { manager.getProviderByType(match { it.id == overwrite.id }) } returns provider
         val resolver = ImageGenerationSelectionResolver(manager)
@@ -94,18 +92,16 @@ class ImageGenerationSelectionResolverTest {
     }
 
     @Test
-    fun `supportsImageGeneration follows provider capability`() {
-        val capable = mockk<Provider<ProviderSetting>>()
-        every { capable.supportsImageGeneration } returns true
-        val incapable = mockk<Provider<ProviderSetting>>()
-        every { incapable.supportsImageGeneration } returns false
-        val openai = ProviderSetting.OpenAI()
-        val claude = ProviderSetting.Claude()
+    fun `overwrite transport decides image support in both directions`() {
         val manager = mockk<ProviderManager>()
-        every { manager.getProviderByType(match<ProviderSetting> { it.id == openai.id }) } returns capable
-        every { manager.getProviderByType(match<ProviderSetting> { it.id == claude.id }) } returns incapable
+        val provider = mockk<Provider<ProviderSetting>>()
+        every { manager.getProviderByType(any<ProviderSetting>()) } returns provider
         val resolver = ImageGenerationSelectionResolver(manager)
-        assertTrue(resolver.supportsImageGeneration(openai))
-        assertTrue(!resolver.supportsImageGeneration(claude))
+        val supported = imageModel.copy(providerOverwrite = ProviderSetting.OpenAI())
+        val unsupported = imageModel.copy(providerOverwrite = ProviderSetting.Google())
+        assertTrue(resolver.resolve(Settings(imageGenerationModelId = supported.id,
+            providers = listOf(ProviderSetting.Google(models = listOf(supported))))) is ImageGenerationSelection.Available)
+        assertTrue(resolver.resolve(Settings(imageGenerationModelId = unsupported.id,
+            providers = listOf(ProviderSetting.OpenAI(models = listOf(unsupported))))) is ImageGenerationSelection.Unavailable)
     }
 }

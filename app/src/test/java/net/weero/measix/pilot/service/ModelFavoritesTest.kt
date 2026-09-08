@@ -6,7 +6,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertSame
 import org.junit.Test
 
-class FavoriteModelServiceTest {
+class ModelFavoritesTest {
     @Test
     fun `move resolves stable ids against the latest list`() {
         val first = ConfigurationReference.random()

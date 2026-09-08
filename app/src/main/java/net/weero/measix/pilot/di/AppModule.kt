@@ -52,7 +52,6 @@ import net.weero.measix.pilot.service.turn.TurnFinalizer
 import net.weero.measix.pilot.service.turn.TurnRecovery
 import net.weero.measix.pilot.service.runtime.ConversationRuntimeRegistry
 import net.weero.measix.pilot.service.runtime.ConversationCommandCoordinator
-import net.weero.measix.pilot.service.FavoriteModelService
 import net.weero.measix.pilot.service.FavoriteService
 import net.weero.measix.pilot.service.workspace.WorkspaceApplicationService
 import net.weero.measix.pilot.service.workspace.WorkspaceQueryService
@@ -147,10 +146,6 @@ val appModule = module {
 
     single {
         UpdateChecker(get(), get())
-    }
-
-    single {
-        FavoriteModelService(get())
     }
 
     single {
