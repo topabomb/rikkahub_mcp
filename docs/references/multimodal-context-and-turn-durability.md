@@ -97,6 +97,8 @@ Tool Result checkpoint（消息与 Artifact 引用同事务）
 消息引用提取统一使用 `collectArtifactReferences`，递归覆盖媒体 part、工具直接 artifact，以及 `sub_assistant_call.artifacts[].artifact`；模型请求不读取 archive marker 的原文，其归档 payload 仍由独立工具读取边界保护。
 
 
+会话预览投影沿 durable header 的 scope 校验文件；子助手终态交付沿原执行 scope 校验图片和文档等媒体。Artifact 的预览入口在 lifecycle lock 内统一验证 ACTIVE、完整主体、已解除创建 pin、匹配的 MIME 和 upload/images canonical 根；图片另做有界内容校验。返回的 URL 只是投影结果，不能替代后续解码或导出的授权。创建 pin 解除后，原 owner 通过 `lifecycleChanges` 合并内存发布通知和两个目录的数据库变化，使先于交接完成的空预览重新计算；该通知不保存文件事实、不推进配置 generation。
+
 会话写入在原 Artifact lifecycle lock 内，用 durable header 的 scope 准备引用 delta；跨域文件使提交失败，不静默删除引用。启动时 `ensureReferenceProjection` 同样核验归属，并在全量准备成功后才事务替换投影与完成标记。v19 迁移将既有行归为个人，保留文件、ID 和路径。
 
 - 文件被清理后，历史消息仍保留 Image part 与 ref；请求投影不为失效本地资源披露可用路径。历史文本中的旧引用若被再次调用，Resolver 按真实可用性失败，不伪造内容。

@@ -236,13 +236,14 @@ internal class ArtifactReferenceProjectionTest : ArtifactStoreLifecycleTestBase(
             origin = ArtifactOrigin.USER,
         )
 
+        assertNull(store.resolveImagePreviewForArtifact(ConfigurationScope.Personal, owned.localRef))
+        store.abandonUnpublished(owned)
         assertEquals(
             AttachmentRefs.fileToFileUrl(store.file(owned.entity)),
-            store.resolveImagePreviewForArtifact(owned.localRef),
+            store.resolveImagePreviewForArtifact(net.weero.measix.pilot.data.configuration.ConfigurationScope.Personal, owned.localRef),
         )
-        store.abandonUnpublished(owned)
         assertTrue(store.deleteUserRequested(ConfigurationScope.Personal, owned.entity.id) is ArtifactDeleteResult.Completed)
-        assertNull(store.resolveImagePreviewForArtifact(owned.localRef))
+        assertNull(store.resolveImagePreviewForArtifact(net.weero.measix.pilot.data.configuration.ConfigurationScope.Personal, owned.localRef))
     }
 
     @Test

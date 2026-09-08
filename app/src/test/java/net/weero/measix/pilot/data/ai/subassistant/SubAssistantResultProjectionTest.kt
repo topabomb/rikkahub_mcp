@@ -266,7 +266,7 @@ class SubAssistantResultProjectionTest {
         val store = mockk<ArtifactStore>()
         coEvery { store.materialize(local) } returns null
 
-        assertTrue(validateDeliverableArtifacts(extracted, store).artifacts.isEmpty())
+        assertTrue(validateDeliverableArtifacts(net.weero.measix.pilot.data.configuration.ConfigurationScope.Personal, extracted, store).artifacts.isEmpty())
     }
 
     @Test
@@ -292,7 +292,7 @@ class SubAssistantResultProjectionTest {
         coEvery { store.materialize(local) } returns local
         every { store.file(local) } returns managedFile
 
-        assertTrue(validateDeliverableArtifacts(extracted, store).artifacts.isEmpty())
+        assertTrue(validateDeliverableArtifacts(net.weero.measix.pilot.data.configuration.ConfigurationScope.Personal, extracted, store).artifacts.isEmpty())
     }
 
     @Test
@@ -316,7 +316,7 @@ class SubAssistantResultProjectionTest {
         coEvery { store.materialize(local) } returns local
         every { store.file(local) } returns File.createTempFile("managed", ".png")
 
-        assertTrue(validateDeliverableArtifacts(extracted, store).artifacts.isEmpty())
+        assertTrue(validateDeliverableArtifacts(net.weero.measix.pilot.data.configuration.ConfigurationScope.Personal, extracted, store).artifacts.isEmpty())
     }
 
     @Test
@@ -338,7 +338,7 @@ class SubAssistantResultProjectionTest {
         coEvery { store.materialize(local) } returns local
         every { store.file(local) } returns File.createTempFile("managed", ".pdf")
 
-        assertTrue(validateDeliverableArtifacts(extracted, store).artifacts.isEmpty())
+        assertTrue(validateDeliverableArtifacts(net.weero.measix.pilot.data.configuration.ConfigurationScope.Personal, extracted, store).artifacts.isEmpty())
     }
 
     @Test
@@ -361,7 +361,8 @@ class SubAssistantResultProjectionTest {
         coEvery { store.materialize(local) } returns local
         every { store.file(local) } returns File.createTempFile("managed", ".pdf")
 
-        val validated = validateDeliverableArtifacts(extracted, store)
+        coEvery { store.resolveMediaPreviewForArtifact(net.weero.measix.pilot.data.configuration.ConfigurationScope.Personal, local) } returns "file:///managed/document.pdf"
+        val validated = validateDeliverableArtifacts(net.weero.measix.pilot.data.configuration.ConfigurationScope.Personal, extracted, store)
 
         assertEquals(3, validated.artifacts.size)
         assertEquals(2, validated.omitted)

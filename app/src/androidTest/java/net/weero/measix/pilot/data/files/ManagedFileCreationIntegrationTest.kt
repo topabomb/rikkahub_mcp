@@ -15,6 +15,10 @@ import net.weero.measix.pilot.data.datastore.UserSettingsMigration
 import net.weero.measix.pilot.data.datastore.ScopedUserPreferences
 import net.weero.measix.pilot.data.configuration.AssistantUsagePreferences
 import net.weero.measix.pilot.data.configuration.UsageValue
+import net.weero.measix.pilot.data.model.toMessageNode
+import net.weero.measix.pilot.service.runtime.ConversationRuntimeSnapshot
+import net.weero.measix.pilot.service.runtime.toSnapshot
+import net.weero.measix.pilot.service.runtime.toPresentationSnapshot
 import net.weero.measix.pilot.data.model.Assistant
 import me.rerere.ai.core.MessageRole
 import me.rerere.ai.ui.UIMessage
@@ -30,6 +34,7 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
 import net.weero.measix.pilot.data.enterprise.*
@@ -100,13 +105,90 @@ class ManagedFileCreationIntegrationTest {
     }
 
     @Test
+    fun publicationRefreshesAnAlreadyObservedPreviewWithoutAnotherDatabaseWrite() = runBlocking {
+        store.ensureReferenceProjection()
+        val enterprise = scopeFor(1)
+        val image = store.createFromBytes(enterprise, pngBytes(), "pending.png", "image/png", origin = ArtifactOrigin.USER)
+        val conversationId = kotlin.uuid.Uuid.random().toString()
+        val nodeId = kotlin.uuid.Uuid.random().toString()
+        database.conversationDao().insert(net.weero.measix.pilot.data.db.entity.ConversationEntity(
+            id = conversationId, assistantId = net.weero.measix.pilot.data.datastore.DEFAULT_ASSISTANT_ID.toString(),
+            title = "publication", createAt = 1, updateAt = 1, chatSuggestions = "[]", isPinned = false, scope = enterprise,
+        ))
+        database.messageNodeDao().insertAll(listOf(net.weero.measix.pilot.data.db.entity.MessageNodeEntity(nodeId, conversationId, 0, "[]", 0)))
+        database.artifactReferenceDao().insertAll(listOf(net.weero.measix.pilot.data.db.entity.ArtifactReferenceEntity(
+            artifactId = image.entity.id, nodeId = nodeId,
+            referenceType = net.weero.measix.pilot.data.db.entity.ArtifactReferenceType.TOOL_OUTPUT.name,
+        )))
+        val previews = kotlinx.coroutines.channels.Channel<String?>(kotlinx.coroutines.channels.Channel.UNLIMITED)
+        val observer = launch {
+            store.lifecycleChanges().collect { previews.send(store.resolveImagePreviewForArtifact(enterprise, image.localRef)) }
+        }
+        try {
+            kotlinx.coroutines.withTimeout(20_000) { assertEquals(null, previews.receive()) }
+            store.publishUnpublished(image)
+            kotlinx.coroutines.withTimeout(20_000) {
+                while (previews.receive() != image.uri.toString()) { }
+            }
+        } finally { observer.cancelAndJoin(); previews.close() }
+    }
+
+    @Test
+    fun conversationPreviewsAndChildDeliverablesRejectForeignOrUnpublishedMedia() = runBlocking {
+        store.ensureReferenceProjection()
+        val enterprise = scopeFor(1)
+        val png = pngBytes()
+        val personal = store.createFromBytes(ConfigurationScope.Personal, png, "personal.png", "image/png", origin = ArtifactOrigin.USER)
+        val own = store.createFromBytes(enterprise, png, "enterprise.png", "image/png", origin = ArtifactOrigin.USER)
+        val document = store.createFromBytes(enterprise, "document".toByteArray(), "document.txt", "text/plain", origin = ArtifactOrigin.USER)
+        assertEquals(null, store.resolveImagePreviewForArtifact(enterprise, own.localRef))
+        assertEquals(null, store.resolveMediaPreviewForArtifact(enterprise, document.localRef))
+        listOf(personal, own, document).forEach { store.abandonUnpublished(it) }
+        assertEquals(own.uri.toString(), store.resolveImagePreviewForArtifact(enterprise, own.localRef))
+        assertEquals(document.uri.toString(), store.resolveMediaPreviewForFile(enterprise, store.file(document.entity), "text/plain"))
+        assertEquals(null, store.resolveMediaPreviewForArtifact(enterprise, document.localRef.copy(mimeType = "application/pdf")))
+        assertTrue(runCatching { store.resolveImagePreviewForArtifact(enterprise, personal.localRef) }.exceptionOrNull() is ArtifactProjectionException)
+        assertTrue(runCatching { store.resolveMediaPreviewForFile(ConfigurationScope.Personal, store.file(document.entity)) }.exceptionOrNull() is ArtifactProjectionException)
+        fun stamped(artifact: OwnedArtifact): UIMessagePart = net.weero.measix.pilot.data.ai.attachments.AttachmentRefs.withMetadata(
+            UIMessagePart.Image(artifact.uri.toString()),
+            net.weero.measix.pilot.data.ai.attachments.AttachmentRefs.mergeMetadata(null, mapOf(
+                net.weero.measix.pilot.data.ai.attachments.AttachmentRefs.METADATA_KEY to
+                    kotlinx.serialization.json.JsonPrimitive(net.weero.measix.pilot.data.ai.attachments.AttachmentRefs.format(kotlin.uuid.Uuid.random())))),
+        )
+        val outside = store.createText(enterprise, "archived tool result", folder = FileFolders.TOOL_OUTPUTS, origin = ArtifactOrigin.SYSTEM)
+        store.abandonUnpublished(outside)
+        assertEquals(null, store.resolveMediaPreviewForFile(enterprise, store.file(outside.entity)))
+        val message = UIMessage(role = MessageRole.USER, parts = listOf(stamped(personal), stamped(own)))
+        val tool = UIMessage(role = MessageRole.ASSISTANT, parts = listOf(UIMessagePart.Tool(
+            localCallId = kotlin.uuid.Uuid.random(), stepId = kotlin.uuid.Uuid.random(), providerCallId = "inspect", toolName = "inspect_attachments",
+            input = """{"attachments":["${personal.localRef.toolPath()}","${own.localRef.toolPath()}"]}""",
+        )))
+        val conversation = net.weero.measix.pilot.data.model.Conversation.ofId(
+            kotlin.uuid.Uuid.random(), net.weero.measix.pilot.data.datastore.DEFAULT_ASSISTANT_ID,
+            messages = listOf(message, tool).map { it.toMessageNode() },
+        ).copy(scope = enterprise)
+        val snapshot = ConversationRuntimeSnapshot(conversation.toSnapshot(), null).toPresentationSnapshot()
+        val previews = ConversationAttachmentPreviewProjector(store).project(snapshot)
+        assertTrue(own.uri.toString() in previews.values)
+        assertFalse(personal.uri.toString() in previews.values)
+        assertTrue(own.localRef.toolPath() in previews.keys)
+        assertFalse(personal.localRef.toolPath() in previews.keys)
+        fun deliverable(artifact: OwnedArtifact) = net.weero.measix.pilot.data.ai.subassistant.SubAssistantExtractedArtifacts(
+            artifacts = listOf(net.weero.measix.pilot.data.ai.subassistant.SubAssistantDeliverableArtifact(
+                ref = net.weero.measix.pilot.data.ai.attachments.AttachmentRefs.format(kotlin.uuid.Uuid.random()),
+                type = "document", mime = artifact.entity.mimeType, artifact = artifact.localRef,
+            )), omitted = 0, hasNonTextOutput = true,
+        )
+        assertEquals(1, net.weero.measix.pilot.data.ai.subassistant.validateDeliverableArtifacts(enterprise, deliverable(document), store).artifacts.size)
+        assertTrue(runCatching { net.weero.measix.pilot.data.ai.subassistant.validateDeliverableArtifacts(ConfigurationScope.Personal, deliverable(document), store) }.exceptionOrNull() is ArtifactProjectionException)
+        assertTrue(store.deleteUserRequested(enterprise, own.entity.id) is ArtifactDeleteResult.Completed)
+        assertTrue(ConversationAttachmentPreviewProjector(store).project(snapshot).isEmpty())
+    }
+
+    @Test
     fun managedImageDecoderRejectsForeignMissingRevokedAndLateCachedResults() = runBlocking {
         store.ensureReferenceProjection()
-        val bitmap = android.graphics.Bitmap.createBitmap(2, 2, android.graphics.Bitmap.Config.ARGB_8888)
-        val bytes = java.io.ByteArrayOutputStream().use { out ->
-            check(bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, out)); out.toByteArray()
-        }
-        bitmap.recycle()
+        val bytes = pngBytes()
         val packet = payloadContext.assets.open(LocalEnterpriseSource.EXAMPLE_ASSET).use(EnterprisePackageCodec::decode)
         val sessions = EnterpriseSessionController(EnterpriseAppliedStore(File(root, "image-session")))
         sessions.enrollLocal(packet.identity, { packet.identity }, { packet })
@@ -286,6 +368,16 @@ class ManagedFileCreationIntegrationTest {
         assertEquals("historical", historical.readText())
         assertEquals(oldName, historical.name)
         assertTrue(File(root, ArtifactPayloadStore.STAGING_FOLDER).listFiles().orEmpty().isEmpty())
+    }
+
+    private fun pngBytes(): ByteArray {
+        val bitmap = android.graphics.Bitmap.createBitmap(2, 2, android.graphics.Bitmap.Config.ARGB_8888)
+        return try {
+            java.io.ByteArrayOutputStream().use { out ->
+                check(bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, out))
+                out.toByteArray()
+            }
+        } finally { bitmap.recycle() }
     }
 
     private fun scopeFor(index: Int): ConfigurationScope = if (index % 2 == 0) ConfigurationScope.Personal else

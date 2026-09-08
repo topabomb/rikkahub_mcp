@@ -105,6 +105,43 @@ class SubAssistantDetailReaderTest {
         }
     }
 
+    @Test fun `publication or newer child during first preview invalidates the pending projection`() = runTest {
+        for (publish in listOf(true, false)) {
+            val f = fixture()
+            val changes = kotlinx.coroutines.flow.MutableSharedFlow<Unit>(replay = 1).apply { tryEmit(Unit) }
+            every { f.projector.lifecycleChanges() } returns changes
+            val entered = CompletableDeferred<Unit>()
+            val release = CompletableDeferred<Unit>()
+            var reads = 0
+            coEvery { f.projector.project(any()) } coAnswers {
+                if (++reads == 1) {
+                    entered.complete(Unit)
+                    withContext(NonCancellable) { release.await() }
+                    emptyMap()
+                } else mapOf("attachment:published" to "file:///published")
+            }
+            val states = mutableListOf<SubAssistantDetailUiState>()
+            val observing = backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) {
+                f.reader.observe(f.source, "run").toList(states)
+            }
+            entered.await()
+            if (publish) changes.emit(Unit) else {
+                f.childSnapshots.value = ConversationRuntimeSnapshot(f.child.copy(
+                    messageNodes = f.child.messageNodes + UIMessage.assistant("new output").toMessageNode(),
+                ).toSnapshot(), null)
+            }
+            runCurrent()
+            release.complete(Unit)
+            runCurrent()
+            assertTrue(states.last() is SubAssistantDetailUiState.Ready)
+            states.filterIsInstance<SubAssistantDetailUiState.Ready>().forEach { ready ->
+                assertEquals(mapOf("attachment:published" to "file:///published"), ready.attachmentPreviews)
+                if (!publish) assertEquals(f.childSnapshots.value.durable.nodes.size, ready.child.nodes.size)
+            }
+            observing.cancelAndJoin()
+        }
+    }
+
     @Test fun `metadata arriving during initial preview is preserved without restarting child`() = runTest {
         val f = fixture()
         val entered = CompletableDeferred<Unit>()
@@ -219,7 +256,7 @@ class SubAssistantDetailReaderTest {
         val child = Conversation(id = childId, assistantId = assistant, scope = access.scope, parentConversationId = masterId,
             messageNodes = listOf(task, UIMessage.assistant("Answer")).map { it.toMessageNode() })
         val masterSnapshots = MutableStateFlow(ConversationRuntimeSnapshot(master.toSnapshot(), null))
-        private val childSnapshots = MutableStateFlow(ConversationRuntimeSnapshot(child.toSnapshot(), null))
+        val childSnapshots = MutableStateFlow(ConversationRuntimeSnapshot(child.toSnapshot(), null))
         private val masterRuntime = mockk<ConversationRuntime>()
         private val childRuntime = mockk<ConversationRuntime>()
         val masterState = MutableStateFlow<ConversationRuntimeState>(ConversationRuntimeState.Ready(masterRuntime))

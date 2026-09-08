@@ -133,6 +133,7 @@ fun extractDeliverableArtifacts(
  * artifact are rejected, so metadata and direct Tool.output cannot describe different files.
  */
 suspend fun validateDeliverableArtifacts(
+    scope: net.weero.measix.pilot.data.configuration.ConfigurationScope,
     extracted: SubAssistantExtractedArtifacts,
     artifactStore: ArtifactStore,
 ): SubAssistantExtractedArtifacts {
@@ -149,7 +150,10 @@ suspend fun validateDeliverableArtifacts(
         }
         if (outputFile != null && outputFile != managedFile) return@mapNotNull null
         if (candidate.type == ARTIFACT_TYPE_IMAGE &&
-            artifactStore.resolveImagePreviewForArtifact(materialized) == null
+            artifactStore.resolveImagePreviewForArtifact(scope, materialized) == null
+        ) return@mapNotNull null
+        if (candidate.type != ARTIFACT_TYPE_IMAGE &&
+            artifactStore.resolveMediaPreviewForArtifact(scope, materialized) == null
         ) return@mapNotNull null
         candidate.copy(
             ref = canonicalRef,

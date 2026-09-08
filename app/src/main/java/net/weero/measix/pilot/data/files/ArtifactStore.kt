@@ -218,6 +218,9 @@ class ArtifactStore(
     private val lifecycleMutex = Mutex()
     private val unpublishedPins = mutableMapOf<Long, String>()
     private val retentionPins = mutableMapOf<Long, Int>()
+    private val previewPublicationChanges = kotlinx.coroutines.flow.MutableSharedFlow<Unit>(
+        replay = 1, onBufferOverflow = kotlinx.coroutines.channels.BufferOverflow.DROP_OLDEST,
+    ).apply { tryEmit(Unit) }
 
     internal suspend fun <T> withLifecycleLock(block: suspend () -> T): T =
         lifecycleMutex.withLock { block() }
@@ -230,8 +233,12 @@ class ArtifactStore(
     suspend fun list(scope: ConfigurationScope, folder: String = FileFolders.UPLOAD): List<ArtifactEntity> =
         artifactDAO.listActiveByFolder(scope, folder).first()
 
-    /** Global metadata invalidation carries no file rows to consumers. */
-    fun lifecycleChanges(): Flow<Unit> = artifactDAO.listAllStatesByFolder(FileFolders.UPLOAD).map { Unit }
+    /** Metadata and creation handoff invalidate projections without exposing rows or owning another file state. */
+    fun lifecycleChanges(): Flow<Unit> = kotlinx.coroutines.flow.combine(
+        artifactDAO.listAllStatesByFolder(FileFolders.UPLOAD),
+        artifactDAO.listAllStatesByFolder("images"),
+        previewPublicationChanges,
+    ) { _, _, _ -> Unit }
 
     suspend fun describeInput(scope: ConfigurationScope, uris: List<Uri>): Map<String, String> = withLifecycleLock {
         uris.mapNotNull { uri ->
@@ -293,64 +300,51 @@ class ArtifactStore(
         )
     }
 
-    /**
-     * Read-only image preview port for query projections.  The caller never receives a payload
-     * path until the ACTIVE metadata, allowed root, declared MIME and image signature all agree.
-     * This keeps previews on the same ArtifactStore lifecycle boundary as attachment execution.
-     */
-    suspend fun resolveImagePreviewForUri(uri: Uri): String? = withContext(Dispatchers.IO) {
-        val relativePath = payloadStore.relativePathForUri(uri)?.replace('\\', '/') ?: return@withContext null
-        resolveActiveImagePreview(relativePath)
+    /** Projection validates the original data scope; the returned URL is not a later read grant. */
+    suspend fun resolveImagePreviewForFile(scope: ConfigurationScope, file: File): String? = withContext(Dispatchers.IO) {
+        val path = payloadStore.relativePathForFile(file) ?: return@withContext null
+        resolveActivePreview(scope, path, expectedMime = null, image = true)
     }
 
-    suspend fun resolveImagePreviewForFile(file: File): String? = withContext(Dispatchers.IO) {
-        val relativePath = payloadStore.relativePathForFile(file)?.replace('\\', '/')
-            ?: return@withContext null
-        resolveActiveImagePreview(relativePath)
+    suspend fun resolveImagePreviewForArtifact(scope: ConfigurationScope, ref: LocalArtifactRef): String? = withContext(Dispatchers.IO) {
+        if (ref.version != LocalArtifactRef.CURRENT_VERSION) return@withContext null
+        resolveActivePreview(scope, ref.relativePath, expectedMime = ref.mimeType, image = true)
     }
 
-    /** Resolves a managed image reference for query/UI display through the lifecycle owner. */
-    suspend fun resolveImagePreviewForArtifact(ref: LocalArtifactRef): String? = withContext(Dispatchers.IO) {
-        val materialized = materialize(ref) ?: return@withContext null
-        resolveActiveImagePreview(materialized.relativePath)
-    }
-
-    /** Resolves any active managed media for query/UI sharing without exposing a raw path. */
-    suspend fun resolveMediaPreviewForFile(file: File, expectedMime: String? = null): String? =
+    suspend fun resolveMediaPreviewForFile(scope: ConfigurationScope, file: File, expectedMime: String? = null): String? =
         withContext(Dispatchers.IO) {
-            val relativePath = payloadStore.relativePathForFile(file)?.replace('\\', '/')
-                ?: return@withContext null
-            val entity = getByRelativePath(relativePath) ?: return@withContext null
-            if (expectedMime != null && !entity.mimeType.equals(expectedMime, ignoreCase = true)) {
-                return@withContext null
-            }
-            val materialized = materialize(
-                LocalArtifactRef(relativePath = entity.relativePath, mimeType = entity.mimeType),
-            ) ?: return@withContext null
-            AttachmentRefs.fileToFileUrl(payloadStore.file(materialized.relativePath))
+            val path = payloadStore.relativePathForFile(file) ?: return@withContext null
+            resolveActivePreview(scope, path, expectedMime, image = false)
         }
 
-    /** Resolves a non-image media artifact through the same ACTIVE/root/version owner. */
-    suspend fun resolveMediaPreviewForArtifact(ref: LocalArtifactRef): String? =
+    suspend fun resolveMediaPreviewForArtifact(scope: ConfigurationScope, ref: LocalArtifactRef): String? =
         withContext(Dispatchers.IO) {
-            val materialized = materialize(ref) ?: return@withContext null
-            AttachmentRefs.fileToFileUrl(payloadStore.file(materialized.relativePath))
+            if (ref.version != LocalArtifactRef.CURRENT_VERSION) return@withContext null
+            resolveActivePreview(scope, ref.relativePath, expectedMime = ref.mimeType, image = false)
         }
 
-    private suspend fun resolveActiveImagePreview(relativePath: String): String? {
-        val normalized = relativePath.replace('\\', '/')
-        if (!normalized.startsWith("${FileFolders.UPLOAD}/") &&
-            !normalized.startsWith("images/")
-        ) return null
-        val entity = getByRelativePath(normalized) ?: return null
-        if (!entity.mimeType.substringBefore(';').trim().lowercase().startsWith("image/")) return null
+    private suspend fun resolveActivePreview(
+        scope: ConfigurationScope,
+        relativePath: String,
+        expectedMime: String?,
+        image: Boolean,
+    ): String? = withLifecycleLock {
+        val entity = artifactDAO.getByPathAndState(relativePath.replace('\\', '/'), ArtifactState.ACTIVE.name)
+            ?: return@withLifecycleLock null
+        requireArtifactScope(entity, scope)
+        if (expectedMime != null && !entity.mimeType.equals(expectedMime, ignoreCase = true)) return@withLifecycleLock null
+        if (synchronized(unpublishedPins) { unpublishedPins.containsKey(entity.id) }) return@withLifecycleLock null
         val file = payloadStore.file(entity.relativePath)
-        if (!file.isFile || file.length() > GeneratedMediaStore.MAX_IMAGE_BYTES) return null
-        val bytes = runCatching { file.readBytes() }.getOrNull() ?: return null
-        if (ImageMime.isUnsupportedNonImage(bytes, entity.mimeType) || !ImageMime.isAcceptedImage(bytes)) {
-            return null
+        if (!file.isFile || !(LocalToolPath.isInsideDirectory(file, payloadStore.file(FileFolders.UPLOAD)) ||
+            LocalToolPath.isInsideDirectory(file, payloadStore.file("images")))) return@withLifecycleLock null
+        if (image) {
+            requireReadableImage(scope, entity.id)
+            val bytes = payloadStore.readBytes(entity.relativePath, GeneratedMediaStore.MAX_IMAGE_BYTES.toLong())
+            if (ImageMime.isUnsupportedNonImage(bytes, entity.mimeType) || !ImageMime.isAcceptedImage(bytes)) {
+                return@withLifecycleLock null
+            }
         }
-        return AttachmentRefs.fileToFileUrl(file)
+        AttachmentRefs.fileToFileUrl(file)
     }
 
     fun displayName(uri: Uri): String? = payloadStore.displayName(uri)
@@ -892,18 +886,20 @@ class ArtifactStore(
                 }
                 unpublishedPins.keys.removeAll(pending.mapTo(hashSetOf()) { it.entity.id })
             }
+            if (pending.isNotEmpty()) previewPublicationChanges.tryEmit(Unit)
         }
     }
 
     /** Releases a creation pin without touching durable state; the unrooted artifact is then GC-owned. */
     fun abandonUnpublished(owned: OwnedArtifact) {
-        synchronized(unpublishedPins) {
+        val released = synchronized(unpublishedPins) {
             val current = unpublishedPins[owned.entity.id]
             check(current == null || current == owned.ownershipToken) {
                 "artifact ownership token mismatch: ${owned.entity.id}"
             }
             unpublishedPins.remove(owned.entity.id, owned.ownershipToken)
         }
+        if (released) previewPublicationChanges.tryEmit(Unit)
     }
 
     suspend fun retainForUndo(conversations: List<Conversation>): ArtifactRetentionLease = withLifecycleLock {

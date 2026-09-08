@@ -1,5 +1,6 @@
 package net.weero.measix.pilot.service
 
+import net.weero.measix.pilot.data.configuration.ConfigurationScope
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.Flow
 import kotlinx.serialization.json.JsonArray
@@ -18,25 +19,26 @@ import net.weero.measix.pilot.service.runtime.ConversationPresentationSnapshot
  * Query-side projection from attachment handles and disclosed upload paths to preview URLs.
  *
  * Preview resolution is suspend because ArtifactStore is the lifecycle owner: every local URL
- * and managed artifact is checked against ACTIVE metadata, the allowed root, MIME and signature
+ * and managed artifact is checked against its original scope, publication state and allowed root;
+ * image previews also validate MIME and signature
  * before a payload URL is returned. There is intentionally no snapshot-only cache because an
  * artifact can be deleted or replaced without changing the conversation snapshot.
  */
 class ConversationAttachmentPreviewProjector(
     private val artifactStore: ArtifactStore,
 ) {
-    /** Emits whenever managed upload metadata changes, invalidating any prior preview URL. */
+    /** Invalidates previews when attachment metadata or creation handoff changes. */
     fun lifecycleChanges(): Flow<Unit> = artifactStore.lifecycleChanges()
 
     suspend fun project(snapshot: ConversationPresentationSnapshot): Map<String, String> {
-        val durable = projectMessages(snapshot.nodes.map { it.currentMessage })
+        val durable = projectMessages(snapshot.header.scope, snapshot.nodes.map { it.currentMessage })
         val active = snapshot.stream ?: return durable
         val assistant = active.assistantMessage ?: return durable
-        val overlay = projectMessages(listOf(assistant))
+        val overlay = projectMessages(snapshot.header.scope, listOf(assistant))
         return if (overlay.isEmpty()) durable else durable + overlay
     }
 
-    private suspend fun projectMessages(messages: List<me.rerere.ai.ui.UIMessage>): Map<String, String> {
+    private suspend fun projectMessages(scope: ConfigurationScope, messages: List<me.rerere.ai.ui.UIMessage>): Map<String, String> {
         val projected = LinkedHashMap<String, String>()
         for ((ref, target) in AttachmentReferenceLookup.index(messages).entries()) {
             val url = when (target) {
@@ -54,10 +56,10 @@ class ConversationAttachmentPreviewProjector(
                         ?.let { file ->
                             try {
                                 when (part) {
-                                    is UIMessagePart.Image -> artifactStore.resolveImagePreviewForFile(file)
-                                    is UIMessagePart.Document -> artifactStore.resolveMediaPreviewForFile(file, part.mime)
-                                    is UIMessagePart.Audio -> artifactStore.resolveMediaPreviewForFile(file)
-                                    is UIMessagePart.Video -> artifactStore.resolveMediaPreviewForFile(file)
+                                    is UIMessagePart.Image -> artifactStore.resolveImagePreviewForFile(scope, file)
+                                    is UIMessagePart.Document -> artifactStore.resolveMediaPreviewForFile(scope, file, part.mime)
+                                    is UIMessagePart.Audio -> artifactStore.resolveMediaPreviewForFile(scope, file)
+                                    is UIMessagePart.Video -> artifactStore.resolveMediaPreviewForFile(scope, file)
                                     else -> null
                                 }
                             } catch (cancelled: CancellationException) {
@@ -68,7 +70,7 @@ class ConversationAttachmentPreviewProjector(
                         }
                 }
 
-                is AttachmentReferenceTarget.ManagedArtifact -> resolveManagedPreview(target)
+                is AttachmentReferenceTarget.ManagedArtifact -> resolveManagedPreview(scope, target)
 
                 AttachmentReferenceTarget.Conflict -> null
             }
@@ -104,7 +106,7 @@ class ConversationAttachmentPreviewProjector(
                 if (LocalToolPath.parseUploadToolPath(path) == null || path in projected) continue
                 try {
                     val file = artifactStore.resolveToolPath(path) ?: continue
-                    artifactStore.resolveImagePreviewForFile(file)?.let { projected[path] = it }
+                    artifactStore.resolveImagePreviewForFile(scope, file)?.let { projected[path] = it }
                 } catch (cancelled: CancellationException) {
                     throw cancelled
                 } catch (_: Exception) {
@@ -115,12 +117,12 @@ class ConversationAttachmentPreviewProjector(
         return projected
     }
 
-    private suspend fun resolveManagedPreview(target: AttachmentReferenceTarget.ManagedArtifact): String? {
+    private suspend fun resolveManagedPreview(scope: ConfigurationScope, target: AttachmentReferenceTarget.ManagedArtifact): String? {
         return try {
             if (target.type == "image") {
-                artifactStore.resolveImagePreviewForArtifact(target.artifact)
+                artifactStore.resolveImagePreviewForArtifact(scope, target.artifact)
             } else {
-                artifactStore.resolveMediaPreviewForArtifact(target.artifact)
+                artifactStore.resolveMediaPreviewForArtifact(scope, target.artifact)
             }
         } catch (cancelled: CancellationException) {
             throw cancelled

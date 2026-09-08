@@ -52,7 +52,7 @@ class ConversationAttachmentPreviewProjectorTest {
         val store = mockk<ArtifactStore>()
         val file = File("D:/managed/abc123.png")
         coEvery { store.resolveToolPath("/upload/abc123.png") } returns file
-        coEvery { store.resolveImagePreviewForFile(file) } returns "file:///D:/managed/abc123.png"
+        coEvery { store.resolveImagePreviewForFile(net.weero.measix.pilot.data.configuration.ConfigurationScope.Personal, file) } returns "file:///D:/managed/abc123.png"
         for (toolName in listOf("inspect_attachments", "assistant_call")) {
             val message = UIMessage(role = MessageRole.ASSISTANT, parts = listOf(UIMessagePart.Tool(
                 localCallId = Uuid.random(), stepId = Uuid.random(), providerCallId = "call", toolName = toolName,
@@ -120,7 +120,7 @@ class ConversationAttachmentPreviewProjectorTest {
                 sourceFile.copyTo(copiedFile)
                 owned
             }
-            coEvery { store.resolveImagePreviewForFile(copiedFile) } answers {
+            coEvery { store.resolveImagePreviewForFile(net.weero.measix.pilot.data.configuration.ConfigurationScope.Personal, copiedFile) } answers {
                 copiedRef.fileUri(filesDir).takeIf { copiedFile.isFile }
             }
             val created = mutableListOf<OwnedArtifact>()
@@ -182,7 +182,7 @@ class ConversationAttachmentPreviewProjectorTest {
             ),
         )
         val store = mockk<ArtifactStore>()
-        coEvery { store.resolveImagePreviewForFile(any()) } returns AttachmentRefs.fileToFileUrl(file)
+        coEvery { store.resolveImagePreviewForFile(net.weero.measix.pilot.data.configuration.ConfigurationScope.Personal, any()) } returns AttachmentRefs.fileToFileUrl(file)
         coEvery { store.resolveManagedReference(file) } returns managed
         val previews = ConversationAttachmentPreviewProjector(store).project(snapshotOf(
             listOf(UIMessage(role = MessageRole.ASSISTANT, parts = listOf(tool))),
@@ -207,10 +207,10 @@ class ConversationAttachmentPreviewProjectorTest {
         val managed = LocalArtifactRef(relativePath = "upload/generated.png", mimeType = "image/png")
         val artifactFile = kotlin.io.path.createTempFile(suffix = ".png").toFile().apply { deleteOnExit() }
         val store = mockk<ArtifactStore>()
-        coEvery { store.resolveImagePreviewForFile(any()) } returns directUrl
+        coEvery { store.resolveImagePreviewForFile(net.weero.measix.pilot.data.configuration.ConfigurationScope.Personal, any()) } returns directUrl
         coEvery { store.resolveManagedReference(AttachmentRefs.parseFileUrl(directUrl)!!) } returns
             LocalArtifactRef(relativePath = "upload/direct.png", mimeType = "image/png")
-        coEvery { store.resolveImagePreviewForArtifact(managed) } returns AttachmentRefs.fileToFileUrl(artifactFile)
+        coEvery { store.resolveImagePreviewForArtifact(net.weero.measix.pilot.data.configuration.ConfigurationScope.Personal, managed) } returns AttachmentRefs.fileToFileUrl(artifactFile)
         val subAssistantTool = UIMessagePart.Tool(
             localCallId = Uuid.random(), stepId = Uuid.random(), providerCallId = "child",
             toolName = "assistant_call",
@@ -275,7 +275,7 @@ class ConversationAttachmentPreviewProjectorTest {
             ),
         )
         val store = mockk<ArtifactStore>()
-        coEvery { store.resolveImagePreviewForFile(any()) } returns localUrl
+        coEvery { store.resolveImagePreviewForFile(net.weero.measix.pilot.data.configuration.ConfigurationScope.Personal, any()) } returns localUrl
         coEvery { store.resolveManagedReference(AttachmentRefs.parseFileUrl(localUrl)!!) } returns
             LocalArtifactRef(relativePath = "upload/generated.png", mimeType = "image/png")
         val projector = ConversationAttachmentPreviewProjector(store)
@@ -301,7 +301,7 @@ class ConversationAttachmentPreviewProjectorTest {
             ),
         )
         val store = mockk<ArtifactStore>()
-        coEvery { store.resolveImagePreviewForFile(any()) } returnsMany listOf(
+        coEvery { store.resolveImagePreviewForFile(net.weero.measix.pilot.data.configuration.ConfigurationScope.Personal, any()) } returnsMany listOf(
             AttachmentRefs.fileToFileUrl(file),
             null,
         )
@@ -328,7 +328,7 @@ class ConversationAttachmentPreviewProjectorTest {
             ),
         )
         val store = mockk<ArtifactStore>()
-        coEvery { store.resolveImagePreviewForFile(any()) } returns null
+        coEvery { store.resolveImagePreviewForFile(net.weero.measix.pilot.data.configuration.ConfigurationScope.Personal, any()) } returns null
 
         assertNull(
             ConversationAttachmentPreviewProjector(store)
@@ -347,7 +347,7 @@ class ConversationAttachmentPreviewProjectorTest {
             ),
         )
         val store = mockk<ArtifactStore>()
-        coEvery { store.resolveImagePreviewForFile(any()) } throws CancellationException("switch conversation")
+        coEvery { store.resolveImagePreviewForFile(net.weero.measix.pilot.data.configuration.ConfigurationScope.Personal, any()) } throws CancellationException("switch conversation")
 
         try {
             ConversationAttachmentPreviewProjector(store).project(
@@ -378,7 +378,7 @@ class ConversationAttachmentPreviewProjectorTest {
             ),
         )
         val store = mockk<ArtifactStore>()
-        coEvery { store.resolveImagePreviewForArtifact(managed) } throws IllegalStateException("database unavailable")
+        coEvery { store.resolveImagePreviewForArtifact(net.weero.measix.pilot.data.configuration.ConfigurationScope.Personal, managed) } throws IllegalStateException("database unavailable")
 
         assertEquals(
             emptyMap<String, String>(),
@@ -412,7 +412,7 @@ class ConversationAttachmentPreviewProjectorTest {
         val image = stampedImage(url, ref)
         val store = mockk<ArtifactStore>()
         val cancelled = CancellationException("conversation switched")
-        coEvery { store.resolveImagePreviewForFile(any()) } returns url
+        coEvery { store.resolveImagePreviewForFile(net.weero.measix.pilot.data.configuration.ConfigurationScope.Personal, any()) } returns url
         coEvery { store.resolveManagedReference(AttachmentRefs.parseFileUrl(url)!!) } throws cancelled
 
         try {
@@ -432,8 +432,8 @@ class ConversationAttachmentPreviewProjectorTest {
         val brokenUrl = "file:///managed/broken.png"
         val goodUrl = "file:///managed/u7km2n4p.png"
         val store = mockk<ArtifactStore>()
-        coEvery { store.resolveImagePreviewForFile(AttachmentRefs.parseFileUrl(brokenUrl)!!) } returns brokenUrl
-        coEvery { store.resolveImagePreviewForFile(AttachmentRefs.parseFileUrl(goodUrl)!!) } returns goodUrl
+        coEvery { store.resolveImagePreviewForFile(net.weero.measix.pilot.data.configuration.ConfigurationScope.Personal, AttachmentRefs.parseFileUrl(brokenUrl)!!) } returns brokenUrl
+        coEvery { store.resolveImagePreviewForFile(net.weero.measix.pilot.data.configuration.ConfigurationScope.Personal, AttachmentRefs.parseFileUrl(goodUrl)!!) } returns goodUrl
         coEvery { store.resolveManagedReference(AttachmentRefs.parseFileUrl(brokenUrl)!!) } throws
             IllegalStateException("artifact lookup unavailable")
         coEvery { store.resolveManagedReference(AttachmentRefs.parseFileUrl(goodUrl)!!) } returns
@@ -453,7 +453,7 @@ class ConversationAttachmentPreviewProjectorTest {
         val ref = AttachmentRefs.format(Uuid.random())
         val url = "file:///managed/generated.png"
         val store = mockk<ArtifactStore>()
-        coEvery { store.resolveImagePreviewForFile(any()) } returns url
+        coEvery { store.resolveImagePreviewForFile(net.weero.measix.pilot.data.configuration.ConfigurationScope.Personal, any()) } returns url
         coEvery { store.resolveManagedReference(AttachmentRefs.parseFileUrl(url)!!) } returns
             LocalArtifactRef(relativePath = "images/generated.png", mimeType = "image/png")
 

@@ -508,6 +508,10 @@ C6 的文件创建与引用边界已接通：上传、粘贴文本、输出图�
 
 该批完整串行 `test assembleDebug lintDebug assembleRelease :app:connectedDebugAndroidTest` 在 8 分 27 秒内通过：App 2,073 项 JVM 测试无失败/跳过，lint 0 错误、287 警告，Workspace 保留 11 项 Windows 条件跳过。Android 17 模拟器 14 项测试全部通过，其中生产 Coil 组件配合真实 Room/Android 解码验证两类图片解码与内存缓存命中、跨域 ID、未发布附件、删除后缓存、切域往返旧请求及解码后的迟到结果拒绝；同时回归请求文件保留与子助手导航恢复。独立审查无剩余本批实质问题，证据见 `build/reports/enterprise/managed-image-verification.json`。版本保持 0.0.19，Release 设备、物理扫码和真实平台互操作不在本批证据内。
 
+会话附件预览与子助手终态交付已补齐原 scope 检查：图片、文档等媒体共用 Artifact lifecycle lock 下的主体、发布状态、MIME 和 upload/images canonical 根校验，删除未调用的 URI 入口。创建 pin 解除通过原 owner 的失效通知刷新预览，不需要额外数据库写入。子助手详情将 Child snapshot 与附件变化合为一条可取消投影，删除重复监听及旧 CAS helper，回交前检查取消，避免首次 Loading 时丢失发布通知或短暂显示旧结果。返回 URL 仍不构成后续解码/导出权限，完整类型化图片来源链继续实施。
+
+该批完整串行 `test assembleDebug lintDebug assembleRelease :app:connectedDebugAndroidTest` 在 8 分 23 秒内通过：App 2,073 项 JVM 测试无失败/跳过，lint 0 错误、287 警告，Workspace 保留 11 项 Windows 条件跳过。Android 17 模拟器 16 项测试全部通过，新增真实 Room/文件的跨域与非附件目录拒绝、未发布媒体拒绝、子助手文档归属检查及无额外数据库写入的发布刷新。确定性 Reader 测试逐个检查已交付状态，覆盖发布/新 Child 期间的迟到预览，替换旧 helper 的低价值镜像测试。独立审查发现的目录边界、通知与取消窗口已修复并复核。首次设备 PNG 静态夹具未被实际 Android 校验接受，改用 Bitmap 编码夹具后复验通过，未放宽生产校验。证据见 `build/reports/enterprise/scoped-preview-verification.json`。版本仍为 0.0.19，本批不代表完整 C6、Release 设备或 0.0.20 整期验收。
+
 ## 11. 验收证据
 
 | 编号 | 必须证明 |

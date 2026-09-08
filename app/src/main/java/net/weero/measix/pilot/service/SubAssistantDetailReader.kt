@@ -4,9 +4,12 @@ import me.rerere.common.configuration.ConfigurationReference
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.channelFlow
@@ -48,14 +51,6 @@ internal fun mergeLiveSubAssistantDetailLink(
     metadata = incoming.metadata,
     failureDetail = incoming.failureDetail ?: previous.failureDetail,
 )
-
-internal fun isCurrentChildSnapshot(
-    state: SubAssistantDetailUiState,
-    requestedChild: ConversationPresentationSnapshot,
-): Boolean {
-    val ready = state as? SubAssistantDetailUiState.Ready ?: return false
-    return ready.child.conversationId == requestedChild.conversationId && ready.child == requestedChild
-}
 
 internal sealed interface SubAssistantDetailLinkResult {
     data class Ready(val link: SubAssistantDetailLink) : SubAssistantDetailLinkResult
@@ -191,27 +186,19 @@ class SubAssistantDetailReader(
                 }
 
                 launch {
-                    queryService.attachmentPreviewChanges().collect {
-                        val ready = state.value as? SubAssistantDetailUiState.Ready ?: return@collect
-                        val previews = queryService.attachmentPreviews(source, ready.child)
-                        state.update { current ->
-                            if (isCurrentChildSnapshot(current, ready.child)) {
-                                (current as SubAssistantDetailUiState.Ready).copy(attachmentPreviews = previews)
-                            } else current
+                    queryService.observeChildForView(source, link.childConversationId)
+                        .combine(queryService.attachmentPreviewChanges()) { child, _ -> child }
+                        .collectLatest { child ->
+                            val timeline = resolveSubAssistantTimeline(source.conversationId, link, child)
+                                ?: error("sub_assistant_child_link_mismatch")
+                            val previews = queryService.attachmentPreviews(source, child)
+                            currentCoroutineContext().ensureActive()
+                            state.update { current ->
+                                val latest = requireSameLink(masterLinks.replayCache.last())
+                                val previous = (current as? SubAssistantDetailUiState.Ready)?.link ?: link
+                                SubAssistantDetailUiState.Ready(mergeLiveSubAssistantDetailLink(previous, latest), child, timeline, previews)
+                            }
                         }
-                    }
-                }
-                launch {
-                    queryService.observeChildForView(source, link.childConversationId).collectLatest { child ->
-                        val timeline = resolveSubAssistantTimeline(source.conversationId, link, child)
-                            ?: error("sub_assistant_child_link_mismatch")
-                        val previews = queryService.attachmentPreviews(source, child)
-                        state.update { current ->
-                            val latest = requireSameLink(masterLinks.replayCache.last())
-                            val previous = (current as? SubAssistantDetailUiState.Ready)?.link ?: link
-                            SubAssistantDetailUiState.Ready(mergeLiveSubAssistantDetailLink(previous, latest), child, timeline, previews)
-                        }
-                    }
                 }
                 // Master metadata changes do not restart the child subscription.
                 launch {

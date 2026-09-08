@@ -607,6 +607,7 @@ class SubAssistantRunCoordinator internal constructor(
             )?.let { reason -> throw CancellationException(reason) }
 
             return terminalResult(
+                scope = realmAccess.scope,
                 outcome = genResult.outcome,
                 genResult = genResult,
                 target = target,
@@ -718,6 +719,7 @@ class SubAssistantRunCoordinator internal constructor(
 
     /** 按 [TurnOutcome] 统一生成终态，所有失败分支共享同一结果形状。 */
     private suspend fun terminalResult(
+        scope: net.weero.measix.pilot.data.configuration.ConfigurationScope,
         outcome: TurnOutcome,
         genResult: TargetGenerationResult,
         target: Assistant,
@@ -742,6 +744,7 @@ class SubAssistantRunCoordinator internal constructor(
         is TurnOutcome.Completed -> {
             val finalText = extractFinalAnswerInternal(genResult.messages, childTaskNodeId)
             val extracted = validateDeliverableArtifacts(
+                scope = scope,
                 extracted = extractDeliverableArtifacts(
                     messages = genResult.messages,
                     childTaskNodeId = childTaskNodeId,
