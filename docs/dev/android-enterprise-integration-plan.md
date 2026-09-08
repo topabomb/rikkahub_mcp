@@ -332,6 +332,10 @@ Android 媒体接线按下列所有权完成：`PortalMediaStore` 管理独占�
 
 ## 10. 完整变更清单与批次
 
+C5 正在实施，企业模型运行链尚未接通。绑定底座已收紧：captureBindings 接受原 RealmAccess，拒绝同主体重新登录后的旧请求；读取绑定后再次检查到期，取消不会留下未交付 lease。并发释放均等待清理结束，失败保留 owner 可重试；同一旧 revision 的最后一个引用释放后才删除文件。接下来的主聊天与子助手改造需统一配置捕获和请求准入，由原 Turn owner 持有绑定，等待用户后继续保留原绑定，终止清理在 Session/会话锁外等待。
+
+此绑定批次 EnterpriseSessionControllerTest 的 18 项 JVM 测试通过，独立审查无阻塞项；完整 test/assembleDebug/lintDebug/assembleRelease 串行门禁在 10 分 26 秒内通过，App 2,024 项无失败或跳过，lint 0 errors、280 warnings，Workspace 仍有 11 项 Windows 宿主跳过。Pixel_10_Pro_Fold / Android 17 上既有 EnterpriseAppliedStateAndroidTest 的 4 项设备回归在 39 秒内通过。清理失败测试在删除开始前注入，不代表文件部分删除恢复已经验收；此次没有新增设备失败场景。证据见 build/reports/enterprise/binding-session-verification.json；本批不代表 C5 或 0.0.20 整体完成。
+
 Portal 原生媒体批次已完成：正式宿主接通相机、录音、分块读取和释放；文件独占 noBackupFilesDir/portal_media，启动恢复清除遗留。原生取消覆盖硬件结束后仍未交付的结果，回复失败补偿未交付句柄，取消读取不删除已交付结果。网页、硬件和文件清理共同控制原宿主关闭屏障，失败保留原 owner 供重试。设备发现 CameraDevice 关闭会截断采集序列回调，现以原设备 onClosed 确认其 Session 失效，不再永久等待被截断的 Session 回调；迟到回调不能恢复所有权。两位独立审查已复核。
 
 本批 37 项定向 JVM 测试通过；完整 test/assembleDebug/lintDebug/assembleRelease 串行门禁在 9 分 6 秒内通过：App 2,020 项无失败或跳过，lint 0 errors、280 warnings；Workspace 仍有 11 项 Windows 宿主跳过。Pixel_10_Pro_Fold / Android 17 的 Portal、采集硬件、企业页面及 Applied 存储 17 项设备回归在 2 分 26 秒内全部通过，包含实际网页照片/音频预览和释放、取消、录音中切域、录音限时自动停止及再次录音、相机打开期间关闭。正式 Debug/Koin 流程手动验证系统相机权限拒绝与重新授权、照片方向及页面预览、麦克风授权，以及录音中退后台后硬件停止、文件清空、返回原生 READY 状态且保留登录。证据汇总为 build/reports/enterprise/portal-capture-verification.json。前置失败记录包含 Compose 等待方式修正与上述真实设备关闭缺陷，不计作成功验收。Release 硬件、实际相机扫码、剩余资源消费者/配置 UI/文件与备份、私有导入及 0.0.20 整期验收仍未完成；本批不代表真实平台互操作，版本保持 0.0.19 开发基线。

@@ -77,7 +77,10 @@ private data class StoredEnterpriseBindings(val revision: String, val bindings: 
 
 internal data class LoadedEnterpriseState(val manifest: EnterpriseManifest, val configuration: EnterpriseConfiguration?)
 
-internal enum class EnterpriseStorageCheckpoint { CONFIGURATION_STAGED, BINDINGS_STAGED, FEED_STAGED, BEFORE_MANIFEST_COMMIT, MANIFEST_WRITTEN }
+internal enum class EnterpriseStorageCheckpoint {
+    CONFIGURATION_STAGED, BINDINGS_STAGED, FEED_STAGED, BEFORE_MANIFEST_COMMIT, MANIFEST_WRITTEN,
+    BINDINGS_READ, BEFORE_REVISION_PRUNE,
+}
 
 internal class EnterpriseStorageException(val reason: String) : IOException(reason)
 
@@ -153,7 +156,7 @@ internal class EnterpriseAppliedStore(
 
     fun bindings(manifest: EnterpriseManifest): List<EnterpriseRuntimeBinding> {
         val version = manifest.applied ?: throw EnterpriseStorageException("enterprise_configuration_not_ready")
-        return readPackage(manifest, version).runtimeBindings
+        return readPackage(manifest, version).runtimeBindings.also { checkpoint(EnterpriseStorageCheckpoint.BINDINGS_READ) }
     }
 
     fun prepareFeed(scope: ConfigurationScope.Enterprise, document: EnterpriseFeedDocument): EnterpriseFeedVersion {
@@ -180,6 +183,7 @@ internal class EnterpriseAppliedStore(
 
     /** Keep the active revision and every in-flight lease; uncommitted staging has no authority. */
     fun prune(retainedRevisions: Set<String>, retainedFeedRevisions: Set<String>) {
+        checkpoint(EnterpriseStorageCheckpoint.BEFORE_REVISION_PRUNE)
         pruneDirectory(revisions, retainedRevisions)
         pruneDirectory(feedRevisions, retainedFeedRevisions)
     }

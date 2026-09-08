@@ -50,6 +50,8 @@ internal class EnterpriseBindingLease internal constructor(
 ) {
     private val closed = AtomicBoolean(false)
     private val revoked = AtomicBoolean(false)
+    private val releaseMutex = Mutex()
+    private var released = false
 
     fun binding(resourceId: String): EnterpriseRuntimeBinding {
         if (closed.get() || revoked.get()) throw EnterpriseConfigurationException("enterprise_binding_lease_unavailable")
@@ -58,8 +60,17 @@ internal class EnterpriseBindingLease internal constructor(
 
     internal fun revoke() { revoked.set(true) }
 
+    /** Await outside Session admission; failure retains ownership so another call can retry cleanup. */
     suspend fun release() {
-        if (closed.compareAndSet(false, true)) withContext(NonCancellable) { releaseOwner(this@EnterpriseBindingLease) }
+        closed.set(true)
+        withContext(NonCancellable) {
+            releaseMutex.withLock {
+                if (!released) {
+                    releaseOwner(this@EnterpriseBindingLease)
+                    released = true
+                }
+            }
+        }
     }
 }
 
@@ -465,13 +476,16 @@ internal class EnterpriseSessionController(
 
     suspend fun pruneUnusedRevisions() = mutex.withLock { prune(manifestForExit()) }
 
-    suspend fun captureBindings(scope: ConfigurationScope.Enterprise): EnterpriseBindingLease = mutex.withLock {
+    suspend fun captureBindings(access: RealmAccess.Enterprise): EnterpriseBindingLease = mutex.withLock {
         val current = requireSession(allowOffline = false)
         val session = requireNotNull(current.manifest.session)
-        if (session.identity.scope != scope) fail("enterprise_principal_mismatch")
+        if (!allowsDataAccess(current.manifest, access)) fail("enterprise_data_access_unavailable")
         val bindings = withContext(Dispatchers.IO) { store.bindings(current.manifest) }
+        // Disk reads can outlive the session even while publication is serialized.
+        currentCoroutineContext().ensureActive()
+        requireSession(allowOffline = false)
         EnterpriseBindingLease(
-            id = Uuid.random().toString(), sessionId = session.id, scope = scope,
+            id = Uuid.random().toString(), sessionId = session.id, scope = access.scope,
             version = requireNotNull(current.manifest.applied), bindings = bindings.associateBy { it.resourceId },
             releaseOwner = ::releaseLease,
         ).also { leases[it.id] = it }
@@ -479,8 +493,8 @@ internal class EnterpriseSessionController(
 
     private suspend fun releaseLease(lease: EnterpriseBindingLease) = mutex.withLock {
         if (leases[lease.id] !== lease) fail("unknown_enterprise_binding_lease")
+        prune(requireNotNull(loaded).manifest, excluding = lease)
         leases.remove(lease.id)
-        prune(requireNotNull(loaded).manifest)
     }
 
     private suspend fun requireSession(allowOffline: Boolean): LoadedEnterpriseState {
@@ -539,9 +553,10 @@ internal class EnterpriseSessionController(
         _state.value = next
     }
 
-    private suspend fun prune(manifest: EnterpriseManifest) = withContext(Dispatchers.IO) {
+    private suspend fun prune(manifest: EnterpriseManifest, excluding: EnterpriseBindingLease? = null) = withContext(Dispatchers.IO) {
         store.prune(
-            leases.values.mapTo(mutableSetOf()) { it.version.revision }.apply { manifest.applied?.let { add(it.revision) } },
+            leases.values.filter { it !== excluding }.mapTo(mutableSetOf()) { it.version.revision }
+                .apply { manifest.applied?.let { add(it.revision) } },
             manifest.feeds.mapTo(mutableSetOf()) { it.revision },
         )
     }

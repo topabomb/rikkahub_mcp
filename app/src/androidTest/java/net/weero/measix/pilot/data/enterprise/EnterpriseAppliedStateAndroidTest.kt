@@ -44,7 +44,7 @@ class EnterpriseAppliedStateAndroidTest {
         assertEquals(first.state.value, reopened.recover())
         assertEquals(ConfigurationScope.Personal, (reopened.state.value as EnterpriseState.Available).manifest.selectedScope)
         reopened.selectEnterpriseFixture()
-        val lease = reopened.captureBindings(example.identity.scope)
+        val lease = reopened.captureBindings(reopened.captureRealmAccess(example.identity.scope) as RealmAccess.Enterprise)
         assertEquals("device-test-secret", lease.binding("mdl_chat").credential)
         val token = reopened.beginExit(requireNotNull(reopened.captureExitRequest()))
         lease.release()
