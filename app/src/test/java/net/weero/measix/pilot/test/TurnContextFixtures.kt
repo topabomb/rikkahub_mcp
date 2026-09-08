@@ -26,13 +26,11 @@ internal fun testTurnContext(
         assistant = resolveTurnAssistantSnapshot(assistant),
         model = TurnModelSnapshot(
             model = model,
-            providerShape = net.weero.measix.pilot.service.runtime.freezeProviderWireShape(
-                model.findProvider(settings.providers) ?: error("Provider not found in test Settings"),
-                model,
-            ),
-            transportLease = net.weero.measix.pilot.service.runtime.ProviderTransportLease {
-                model.findProvider(settings.providers) ?: error("Provider not found in test Settings")
+            executionLease = net.weero.measix.pilot.service.runtime.ModelExecutionLease { accept ->
+                accept(net.weero.measix.pilot.service.runtime.ModelRequestTarget.Remote(model.findProvider(settings.providers) ?: error("Provider not found in test Settings")))
             },
+            userRevision = "test",
+            enterpriseVersion = null,
         ),
         mediaCapabilities = mediaCapabilities,
         promptInputs = promptInputs,

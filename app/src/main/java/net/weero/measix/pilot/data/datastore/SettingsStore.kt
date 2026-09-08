@@ -72,6 +72,13 @@ import net.weero.measix.pilot.data.enterprise.EnterpriseState
 
 private const val TAG = "SettingsStore"
 
+/** One user document and its realm projection captured under the configuration writer lock. */
+internal class ExecutionConfigurationSnapshot(
+    val userSettings: Settings,
+    val configuration: ResolvedConfiguration,
+    val userRevision: String,
+)
+
 private val Context.settingsStore by preferencesDataStore(
     name = "settings",
     produceMigrations = { context ->
@@ -307,6 +314,22 @@ class SettingsStore internal constructor(
         operation: suspend (ResolvedConfiguration) -> T,
     ): T = updateMutex.withLock {
         operation(ConfigurationResolver.resolve(userDocuments.first(), scope, enterpriseState))
+    }
+
+    internal suspend fun <T> withExecutionConfiguration(
+        scope: ConfigurationScope,
+        enterpriseState: EnterpriseState,
+        operation: suspend (ExecutionConfigurationSnapshot) -> T,
+    ): T = updateMutex.withLock {
+        val encoded = requireNotNull(dataStore.data.first()[USER_SETTINGS]) { "user_settings_migration_incomplete" }
+        val document = JsonInstant.decodeFromString<UserSettingsDocument>(encoded)
+        val revision = java.security.MessageDigest.getInstance("SHA-256")
+            .digest(encoded.toByteArray(Charsets.UTF_8)).joinToString("") { "%02x".format(it) }
+        operation(ExecutionConfigurationSnapshot(
+            userSettings = document.personalSettings().withBuiltInDefinitions(),
+            configuration = ConfigurationResolver.resolve(document, scope, enterpriseState),
+            userRevision = revision,
+        ))
     }
 
     /** Called while the enterprise session owner holds its authorization boundary. */

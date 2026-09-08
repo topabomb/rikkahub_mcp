@@ -190,6 +190,7 @@ class TurnInteractionContinuationIntegrationTest {
             try {
                 val worker = requireNotNull(coroutineContext[Job])
                 assertSame(worker, runtime.currentWorker())
+                runtime.bindModelExecution(turnId, worker, turnContext.model.executionLease)
                 runtime.bindTurnContext(turnId, worker, turnContext)
                 val started = TurnCommitter.start(
                     commandCoordinator = coordinator,

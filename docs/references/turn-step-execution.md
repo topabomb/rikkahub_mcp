@@ -127,10 +127,11 @@ worker 在授权锁外先进入清理范围，再等待唯一 installation 结�
 接受后由请求持有，USER 提交后发布实际引用，失败或取消时释放。每个请求独立持有输入 Artifact 的 retention lease，连续提交相同附件也不会因前驱结束而提前失去保护；创建 token 仍只有一个 owner。页面关闭不能提前释放已经转交的 pin。
 START 持久提交与 `TurnCommitter` 认领在同一不可取消边界内完成，提交后收到取消仍由原 committer 收口终态。
 
-同一 START 的用户预处理与模型解析使用同一份 `EffectiveSettingsSnapshot`。START 冻结
-Assistant / Model / Provider wire shape、媒体能力、prompt inputs、有序 `FrozenToolDefinition` 与 execution bindings。
-同一 Turn 的 Step 和审批继续不重读模型可见配置。凭据由 `ProviderTransportLease` 每请求从
-`ProviderCredentialOwnerLocator` 指定的原 owner 获取；owner/type 漂移失败关闭，不重新选择 live provider。
+USER 预处理按原 RealmAccess 的已解析助手执行。START 前由 `ModelExecutionService` 在 Session → Settings 锁序下捕获助手、模型、媒体能力与用户文档内容 revision，随后 `TurnContextFactory` 冻结 prompt inputs、有序工具定义与执行绑定。同一 Turn 的 Step 和审批继续复用原上下文，不跟随全局当前域或选择。
+
+`ModelExecutionLease` 在取得企业 binding 前交给原 Runtime 的 PREPARING owner；上下文只能绑定该 owner 已持有的同一 lease。每次完成请求装配后，StepRunner 经 lease 在原 Session/配置门禁内启动属于原 worker 的请求，网络等待在锁外完成。个人资源只从原 credential owner 刷新凭据，wire shape 保持冻结；企业资源保留原 Applied revision 的私有 binding，并在下一次请求前复验权限和固定绑定。子助手还复验 Caller → Target 的调用资格。
+
+等待用户时，继续 worker 接手同一上下文及 lease；旧 worker 的结束不能释放它。终态或准备失败的资源释放在 Session/会话锁外等待；清理失败保留原 Runtime owner 供 stop 重试。持有执行 lease 的 Runtime 不得被空闲回收、显式驱逐或删除，清理成功后才移除 owner。
 
 `sendMessage` 返回的 `SendMessageReceipt.userMessageId` 是本次 USER 的稳定身份，返回只证明 worker
 已安装，不证明 USER 已提交。UI 通过正式消息投影观察该 ID。`editAndResend` 截断到目标 USER node、

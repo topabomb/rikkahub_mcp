@@ -5,8 +5,9 @@ import me.rerere.ai.core.Tool
 import me.rerere.ai.provider.Model
 import me.rerere.ai.provider.ModelType
 import net.weero.measix.pilot.data.ai.tools.local.LocalToolOption
-import net.weero.measix.pilot.data.datastore.Settings
-import net.weero.measix.pilot.data.datastore.getChatModel
+import net.weero.measix.pilot.data.configuration.ResolvedConfiguration
+import net.weero.measix.pilot.data.configuration.ConfigurationCategory
+import net.weero.measix.pilot.data.configuration.ResourceSelectionSlot
 import net.weero.measix.pilot.data.model.Assistant
 import net.weero.measix.pilot.data.model.DEFAULT_ASSISTANT_LOCAL_TOOLS
 
@@ -75,12 +76,12 @@ sealed interface SubAssistantRunSpecResolution {
 }
 
 fun resolveSubAssistantRunSpec(
-    settings: Settings,
+    modelForAssistant: (Assistant) -> Model?,
     caller: Assistant,
     target: Assistant,
 ): SubAssistantRunSpecResolution {
     if (target.chatModelId != null) {
-        val targetModel = settings.getChatModel(target)
+        val targetModel = modelForAssistant(target)
             ?: return SubAssistantRunSpecResolution.Blocked("target_model_unavailable")
         return SubAssistantRunSpecResolution.Ready(
             SubAssistantRunSpec(
@@ -92,7 +93,7 @@ fun resolveSubAssistantRunSpec(
         )
     }
 
-    val callerModel = settings.getChatModel(caller)
+    val callerModel = modelForAssistant(caller)
         ?: return SubAssistantRunSpecResolution.Blocked("caller_model_unavailable")
     val runtimeTarget = target.copy(
         chatModelId = callerModel.id,
@@ -115,60 +116,59 @@ fun resolveSubAssistantRunSpec(
     )
 }
 
-fun Settings.isEnabledChatModel(modelId: ConfigurationReference): Boolean = providers.asSequence()
-    .filter { it.enabled }
-    .flatMap { it.models.asSequence() }
-    .any { it.id == modelId && it.type == ModelType.CHAT }
-
 /**
  * Lease 已获取但 Child 尚未写入时的同步重验。
  *
  * 这里仍返回 preflight 语义，便于模型知道应该修正工具权限、Target ID、访问授权或模型配置；
  * 真正开始运行后则由 [resolveActiveRunStopReason] 返回 stopped 语义。
  */
-fun resolvePreWriteBlockReason(
-    settings: Settings,
+internal fun resolvePreWriteBlockReason(
+    configuration: ResolvedConfiguration,
     callerAssistantId: ConfigurationReference,
     targetAssistantId: ConfigurationReference,
     runSpec: SubAssistantRunSpec,
 ): String? {
-    val caller = settings.assistants.find { it.id == callerAssistantId }
+    val caller = configuration.assistants[callerAssistantId]
         ?: return "tool_not_permitted"
-    if (LocalToolOption.AssistantDelegation !in caller.localTools) {
+    if (LocalToolOption.AssistantDelegation !in caller.localTools ||
+        !configuration.access(ConfigurationCategory.ASSISTANT, callerAssistantId).canExecute) {
         return "tool_not_permitted"
     }
 
-    val target = settings.assistants.find { it.id == targetAssistantId }
+    val target = configuration.assistants[targetAssistantId]
         ?: return "assistant_not_found"
-    if (!target.allowAsSubAssistant || !SubAssistantAccessPolicy.canAccess(caller, target)) {
+    if (!target.allowAsSubAssistant || !SubAssistantAccessPolicy.canAccess(caller, target) ||
+        !configuration.access(ConfigurationCategory.ASSISTANT, targetAssistantId).canExecute) {
         return "target_not_allowed"
     }
-    if (!settings.isEnabledChatModel(runSpec.model.id)) {
+    if (!configuration.choice(ResourceSelectionSlot.CHAT_MODEL, runSpec.model.id).isAvailable) {
         return runSpec.modelUnavailableReason
     }
     return null
 }
 
 /** 当前运行必须立即停止的配置变化；null 表示 RunSpec 仍可继续。 */
-fun resolveActiveRunStopReason(
-    settings: Settings,
+internal fun resolveActiveRunStopReason(
+    configuration: ResolvedConfiguration,
     callerAssistantId: ConfigurationReference,
     targetAssistantId: ConfigurationReference,
     runSpec: SubAssistantRunSpec,
 ): String? {
-    val target = settings.assistants.find { it.id == targetAssistantId }
+    val target = configuration.assistants[targetAssistantId]
         ?: return "target_removed"
     if (!target.allowAsSubAssistant) return "target_disabled"
 
-    val caller = settings.assistants.find { it.id == callerAssistantId }
+    val caller = configuration.assistants[callerAssistantId]
         ?: return "target_access_revoked"
-    if (LocalToolOption.AssistantDelegation !in caller.localTools) {
+    if (LocalToolOption.AssistantDelegation !in caller.localTools ||
+        !configuration.access(ConfigurationCategory.ASSISTANT, callerAssistantId).canExecute ||
+        !configuration.access(ConfigurationCategory.ASSISTANT, targetAssistantId).canExecute) {
         return "target_access_revoked"
     }
     if (!SubAssistantAccessPolicy.canAccess(caller, target)) {
         return "target_access_revoked"
     }
-    if (!settings.isEnabledChatModel(runSpec.model.id)) {
+    if (!configuration.choice(ResourceSelectionSlot.CHAT_MODEL, runSpec.model.id).isAvailable) {
         return runSpec.modelUnavailableReason
     }
     return null

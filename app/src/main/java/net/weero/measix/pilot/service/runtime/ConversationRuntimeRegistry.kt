@@ -282,8 +282,8 @@ class ConversationRuntimeRegistry(
         val entry = entries[conversationId] ?: return@withLock
         val runtime = entry.state.value.runtimeOrNull()
         check(runtime?.hasAuxiliaryWork != true) { "auxiliary_workers_must_finish_before_eviction" }
-        entry.state.value = ConversationRuntimeState.Missing
         runtime?.cleanup()
+        entry.state.value = ConversationRuntimeState.Missing
         _runtimesVersion.value++
     }
 

@@ -11,8 +11,8 @@ import me.rerere.ai.provider.RequestMediaCapabilities
 import net.weero.measix.pilot.data.ai.tools.ToolExecutionBinding
 import net.weero.measix.pilot.data.model.AssistantRegex
 import net.weero.measix.pilot.data.model.InjectionPosition
-import net.weero.measix.pilot.service.runtime.FrozenProviderWireShape
-import net.weero.measix.pilot.service.runtime.ProviderTransportLease
+import net.weero.measix.pilot.service.runtime.ModelExecutionLease
+import net.weero.measix.pilot.data.enterprise.EnterpriseAppliedVersion
 
 /** One immutable, process-local source for every model-visible value used by a durable Turn. */
 internal data class TurnContext(
@@ -50,8 +50,9 @@ data class TurnAssistantSnapshot(
 /** Provider request shape selected once at START; credentials are supplied separately by its transport owner. */
 internal data class TurnModelSnapshot(
     val model: Model,
-    val providerShape: FrozenProviderWireShape,
-    val transportLease: ProviderTransportLease,
+    val executionLease: ModelExecutionLease,
+    val userRevision: String,
+    val enterpriseVersion: EnterpriseAppliedVersion?,
 )
 
 /** 单条模式注入在本 Turn 内的已解析投影，仅由 START 冻结。 */

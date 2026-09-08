@@ -68,6 +68,8 @@ import me.rerere.ai.util.json
 import me.rerere.ai.util.mergeCustomBody
 import me.rerere.ai.util.removeElements
 import me.rerere.ai.util.stringSafe
+import me.rerere.ai.provider.RequestCredentials
+import me.rerere.ai.provider.authenticate
 import me.rerere.ai.util.toHeaders
 import me.rerere.common.http.await
 import me.rerere.common.http.jsonPrimitiveOrNull
@@ -121,8 +123,14 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
 
     private suspend fun transformRequest(
         providerSetting: ProviderSetting.Google,
-        request: Request
+        request: Request,
+        credentials: RequestCredentials = RequestCredentials.UserSettings,
     ): Request {
+        if (credentials is RequestCredentials.Fixed) {
+            check(!providerSetting.vertexAI) { "fixed_credentials_require_explicit_endpoint" }
+            return request.newBuilder().authenticate(credentials, "x-goog-api-key",
+                userKeys = "", providerId = providerSetting.id.toString(), roulette = keyRoulette).build()
+        }
         return if (providerSetting.vertexAI && providerSetting.useServiceAccount) {
             val accessToken = serviceAccountTokenProvider.fetchAccessToken(
                 serviceAccountEmail = providerSetting.serviceAccountEmail.trim(),
@@ -203,6 +211,7 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
 
         val request = transformRequest(
             providerSetting = providerSetting,
+            credentials = params.credentials,
             request = Request.Builder()
                 .url(url)
                 .headers(params.customHeaders.toHeaders())
@@ -279,6 +288,7 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
 
         val request = transformRequest(
             providerSetting = providerSetting,
+            credentials = params.credentials,
             request = Request.Builder()
                 .url(url)
                 .headers(params.customHeaders.toHeaders())

@@ -305,6 +305,7 @@ class TurnCancellationIntegrationTest {
             try {
                 val activeWorker = requireNotNull(coroutineContext[Job])
                 assertSame(activeWorker, runtime.currentWorker())
+                runtime.bindModelExecution(turnId, activeWorker, turnContext.model.executionLease)
                 runtime.bindTurnContext(turnId, activeWorker, turnContext)
                 val started = TurnCommitter.start(
                     commandCoordinator = coordinator,

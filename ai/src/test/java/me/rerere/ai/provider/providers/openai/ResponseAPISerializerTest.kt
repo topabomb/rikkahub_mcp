@@ -1249,6 +1249,17 @@ class ResponseAPISerializerTest {
 
     // ==================== Custom Body Ownership Tests ====================
 
+    @Test
+    fun `responses custom body cannot replace assembled system instructions`() {
+        val params = TextGenerationParams(Model(modelId = "test"),
+            customBody = listOf(CustomBody("instructions", JsonPrimitive("override"))))
+        val messages = listOf(UIMessage.system("fixed enterprise prompt"), UIMessage.user("hello")).toModelRequests()
+        val error = org.junit.Assert.assertThrows(CustomBodyReservedKeyException::class.java) {
+            api.buildRequestBody(ProviderSetting.OpenAI(useResponseApi = true), messages, params, false)
+        }
+        assertEquals(listOf("instructions"), error.conflictingKeys)
+    }
+
     private fun invokeBuildRequestBodyWithCustomBody(
         customBody: List<CustomBody>,
     ): JsonObject {
@@ -1314,4 +1325,3 @@ class ResponseAPISerializerTest {
         assertTrue(body.containsKey("temperature"))
     }
 }
-

@@ -24,6 +24,12 @@ ProviderSetting
 
 Provider 类型决定原生协议族，`useResponseApi` 只选择 OpenAI 子协议，host 只选择已证实的 endpoint 差异，modelId 只决定模型能力和参数约束。未知 OpenAI-compatible host 不会因为模型名称被重新解释为某个供应商。
 
+### 请求级认证
+
+`TextGenerationParams.credentials` 是不参与序列化的 `RequestCredentials`。`UserSettings` 继续使用原 Provider 的 KeyRoulette；`Fixed` 使用单次请求的原始凭据，不按空白或逗号拆分，不访问轮换缓存。未提供固定 credential 时由私有 headers 提供认证；若同时出现自动认证同名 header 则在发请求前拒绝。四种文本协议共用该认证选择，未创建第二套企业 wire builder。
+
+Fixed 请求带 `PrivateRequest` 网络标记，宿主日志入口不记录其 HTTP 内容，`PrivateRequestBoundaryInterceptor` 在实际重定向边界拒绝跨 origin 转发。Responses 的 `instructions` 与 model/input/tools 一样归协议装配 owner，custom body 不能覆盖已组装系统提示。
+
 ### 工具 JSON Schema 边界
 
 `Tool.parameters` 与目录中的 `McpCatalogTool.inputSchema` 都使用完整 `JsonObject` 作为规范表示。MCP SDK 的 `ToolSchema` 会整体序列化，因而保留 JSON Schema 2020-12 的 `$schema`、`$defs`、`$ref`、`properties` 和 `required`；通用层不使用封闭数据类枚举关键字，也不按 host 删除定义。

@@ -71,7 +71,6 @@ import net.weero.measix.pilot.data.ai.attachments.AttachmentRefs
 import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.datastore.SettingsStore
 import net.weero.measix.pilot.data.datastore.findModelById
-import net.weero.measix.pilot.data.datastore.findProvider
 import net.weero.measix.pilot.data.datastore.getAssistantById
 import net.weero.measix.pilot.data.datastore.getChatModel
 import net.weero.measix.pilot.data.datastore.getCurrentChatModel
@@ -130,12 +129,12 @@ internal enum class TurnEntry {
     CONTINUE_USER_INTERACTION,
 }
 
-/** Carries the one Settings snapshot only for a new START; continuation has no reconstruction input. */
+/** START captures configuration through the model owner; continuation reuses its original context. */
 private sealed interface TurnLaunch {
     val entry: TurnEntry
     val realmAccess: RealmAccess
 
-    data class Start(val settings: Settings, override val realmAccess: RealmAccess) : TurnLaunch {
+    data class Start(override val realmAccess: RealmAccess) : TurnLaunch {
         override val entry = TurnEntry.START
     }
 
@@ -296,6 +295,7 @@ class ConversationTurnService internal constructor(
     private val appScope: AppScope,
     private val appEventBus: AppEventBus,
     private val settingsStore: SettingsStore,
+    private val modelExecutions: ModelExecutionService,
     private val memoryService: MemoryService,
     private val sessions: EnterpriseSessionController,
     private val turnRunner: TurnRunner,
@@ -467,10 +467,10 @@ class ConversationTurnService internal constructor(
         val userMessageId = Uuid.random()
         val access = target.selection.access
         val turnId = startRequest(target, content, artifactDraftScope, R.string.error_title_send_message) { runtime, turnId, submission ->
-            val settings = settingsStore.effectiveSettings.first().settings
+            val configuration = modelExecutions.read(access).configuration
             val processed = withRequest(access, runtime, turnId, tree = true) {
                 val snapshot = runtime.durable
-                val assistant = settings.getAssistantById(snapshot.header.assistantId) ?: error("conversation_assistant_unavailable")
+                val assistant = configuration.assistants[snapshot.header.assistantId] ?: error("conversation_assistant_unavailable")
                 val parts = preprocessUserInputParts(content, assistant)
                 val message = UIMessage(id = userMessageId, role = MessageRole.USER, parts = parts)
                 val localTitle = deriveLocalConversationTitle(message)
@@ -482,7 +482,7 @@ class ConversationTurnService internal constructor(
             }
             // Publication follows the message transaction, without holding Session/conversation locks.
             submission?.publishCommittedReferences(processed)
-            if (answer) launchRun(runtime.id, turnId, launch = TurnLaunch.Start(settings, access))
+            if (answer) launchRun(runtime.id, turnId, launch = TurnLaunch.Start(access))
         }
         return SendMessageReceipt(target.conversationId, turnId, userMessageId)
     }
@@ -497,14 +497,14 @@ class ConversationTurnService internal constructor(
         val userMessageId = Uuid.random()
         val access = target.selection.access
         val turnId = startRequest(target, content, artifactDraftScope, R.string.error_title_send_message) { runtime, turnId, submission ->
-            val settings = settingsStore.effectiveSettings.first().settings
+            val configuration = modelExecutions.read(access).configuration
             val processed = withRequest(access, runtime, turnId, tree = true) {
                 val snapshot = subAssistantLifecycle.requireClosedRunsBeforeTreeMutation(runtime.durable)
                 val nodeIndex = snapshot.nodes.indexOfFirst { node -> node.messages.any { it.id == messageId } }
                 check(nodeIndex >= 0) { "Message not found: $messageId" }
                 val node = snapshot.nodes[nodeIndex]
                 check(node.messages.first { it.id == messageId }.role == MessageRole.USER) { "edit-and-resend requires a USER message" }
-                val assistant = settings.getAssistantById(snapshot.header.assistantId) ?: error("conversation_assistant_unavailable")
+                val assistant = configuration.assistants[snapshot.header.assistantId] ?: error("conversation_assistant_unavailable")
                 val parts = preprocessUserInputParts(content, assistant)
                 commandCoordinator.executeOrThrow(runtime.id, TruncateToNodeIndex(nodeIndexInclusive = nodeIndex))
                 subAssistantLifecycle.applyRetentionAfterTreeMutation(runtime.id)
@@ -513,7 +513,7 @@ class ConversationTurnService internal constructor(
                 parts
             }
             submission?.publishCommittedReferences(processed)
-            launchRun(runtime.id, turnId, launch = TurnLaunch.Start(settings, access))
+            launchRun(runtime.id, turnId, launch = TurnLaunch.Start(access))
         }
         return SendMessageReceipt(target.conversationId, turnId, userMessageId)
     }
@@ -537,8 +537,7 @@ class ConversationTurnService internal constructor(
                 } else commandCoordinator.executeOrThrow(runtime.id, ReplaceMessageTree(snapshot.nodes))
             }
             if (message.role == MessageRole.USER || regenerateAssistantMsg) {
-                val settings = settingsStore.effectiveSettings.first().settings
-                launchRun(runtime.id, turnId, launch = TurnLaunch.Start(settings, access))
+                launchRun(runtime.id, turnId, launch = TurnLaunch.Start(access))
             }
         }
     }
@@ -630,14 +629,13 @@ class ConversationTurnService internal constructor(
             // START 先做一次性 prepareLaunch（唯一允许 IO、可失败，此时尚无 Turn）。
             val launchPlan = when (entry) {
                 TurnEntry.START -> {
-                    val settings = (launch as TurnLaunch.Start).settings
-                    val assistant = settings.getAssistantById(snapshot.header.assistantId)
-                        ?: error("conversation_assistant_unavailable")
-                    val model = settings.getChatModel(assistant)
-                        ?: error("No chat model is configured for assistant ${assistant.id}")
-                    val providerSetting = model.findProvider(settings.providers) ?: error("Provider not found")
-                    val mediaCapabilities = turnRunner.resolveRequestMediaCapabilities(settings, model)
                     val realmAccess = launch.realmAccess
+                    val captured = modelExecutions.captureTurn(realmAccess, runtime, turnId,
+                        requireNotNull(currentCoroutineContext()[Job]), snapshot.header.assistantId)
+                    val settings = captured.userSettings
+                    val assistant = captured.assistant
+                    val model = captured.model.model
+                    val mediaCapabilities = captured.mediaCapabilities
                     val memoryAccess = memoryService.captureExecution(realmAccess, assistant)
                     startDisclosureCandidate = ConversationDisclosureSnapshotService.captureCandidate(
                         settings = settings,
@@ -720,23 +718,11 @@ class ConversationTurnService internal constructor(
                         }
                         addAll(regularTools)
                     }
-                    val credentialOwner = net.weero.measix.pilot.service.runtime.captureProviderCredentialOwner(
-                        settings = settings,
-                        model = model,
-                        selectedProvider = providerSetting,
-                    )
                     turnContextFactory.prepareLaunch(
                         realmAccess = realmAccess,
                         settings = settings,
                         assistant = assistant,
-                        model = model,
-                        providerSetting = providerSetting,
-                        providerTransportLease = net.weero.measix.pilot.service.runtime.ProviderTransportLease {
-                            net.weero.measix.pilot.service.runtime.resolveProviderTransportOwner(
-                                settingsStore.effectiveSettings.value.settings,
-                                credentialOwner,
-                            )
-                        },
+                        model = captured.model,
                         mediaCapabilities = mediaCapabilities,
                         conversationSystemPrompt = snapshot.header.customSystemPrompt,
                         conversationModeInjectionIds = snapshot.header.modeInjectionIds,

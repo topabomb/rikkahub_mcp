@@ -14,6 +14,8 @@ import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.JsonPrimitive
 import net.weero.measix.pilot.data.ai.tools.local.LocalToolOption
 import net.weero.measix.pilot.data.datastore.Settings
+import net.weero.measix.pilot.data.datastore.getChatModel
+import net.weero.measix.pilot.test.testResolvedConfiguration
 import net.weero.measix.pilot.data.model.Assistant
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -224,7 +226,7 @@ class SubAssistantRunPolicyTest {
             assistants = listOf(caller, target),
         )
 
-        val resolution = resolveSubAssistantRunSpec(settings, caller, target)
+        val resolution = resolveSubAssistantRunSpec(settings::getChatModel, caller, target)
             as SubAssistantRunSpecResolution.Ready
 
         assertEquals(SubAssistantModelSource.TARGET_CONFIGURED, resolution.spec.modelSource)
@@ -242,7 +244,7 @@ class SubAssistantRunPolicyTest {
             assistants = listOf(caller, target),
         )
 
-        val resolution = resolveSubAssistantRunSpec(settings, caller, target)
+        val resolution = resolveSubAssistantRunSpec(settings::getChatModel, caller, target)
             as SubAssistantRunSpecResolution.Ready
 
         assertEquals(SubAssistantModelSource.TARGET_CONFIGURED, resolution.spec.modelSource)
@@ -275,7 +277,7 @@ class SubAssistantRunPolicyTest {
             assistants = listOf(caller, target),
         )
 
-        val resolution = resolveSubAssistantRunSpec(settings, caller, target)
+        val resolution = resolveSubAssistantRunSpec(settings::getChatModel, caller, target)
             as SubAssistantRunSpecResolution.Ready
         val runtimeTarget = resolution.spec.assistant
 
@@ -307,7 +309,7 @@ class SubAssistantRunPolicyTest {
             assistants = listOf(caller, target),
         )
 
-        val resolution = resolveSubAssistantRunSpec(settings, caller, target)
+        val resolution = resolveSubAssistantRunSpec(settings::getChatModel, caller, target)
             as SubAssistantRunSpecResolution.Ready
 
         assertEquals(SubAssistantModelSource.CALLER_FALLBACK, resolution.spec.modelSource)
@@ -321,7 +323,7 @@ class SubAssistantRunPolicyTest {
         val target = makeAssistant()
 
         val resolution = resolveSubAssistantRunSpec(
-            settings = Settings(providers = emptyList(), assistants = listOf(caller, target)),
+            modelForAssistant = { null },
             caller = caller,
             target = target,
         )
@@ -342,7 +344,7 @@ class SubAssistantRunPolicyTest {
             assistants = listOf(caller, target),
         )
 
-        val resolution = resolveSubAssistantRunSpec(settings, caller, target)
+        val resolution = resolveSubAssistantRunSpec(settings::getChatModel, caller, target)
 
         assertEquals(
             "target_model_unavailable",
@@ -363,7 +365,7 @@ class SubAssistantRunPolicyTest {
             providers = listOf(ProviderSetting.OpenAI(models = listOf(model))),
             assistants = listOf(caller, target),
         )
-        val runSpec = (resolveSubAssistantRunSpec(initialSettings, caller, target)
+        val runSpec = (resolveSubAssistantRunSpec(initialSettings::getChatModel, caller, target)
             as SubAssistantRunSpecResolution.Ready).spec
         val revokedSettings = initialSettings.copy(
             assistants = listOf(caller.copy(allowedSubAssistantIds = emptySet()), target),
@@ -371,7 +373,7 @@ class SubAssistantRunPolicyTest {
 
         assertEquals(
             "target_access_revoked",
-            resolveActiveRunStopReason(revokedSettings, callerId, targetId, runSpec),
+            resolveActiveRunStopReason(testResolvedConfiguration(revokedSettings), callerId, targetId, runSpec),
         )
     }
 
@@ -388,7 +390,7 @@ class SubAssistantRunPolicyTest {
             providers = listOf(ProviderSetting.OpenAI(models = listOf(model))),
             assistants = listOf(caller, target),
         )
-        val runSpec = (resolveSubAssistantRunSpec(initialSettings, caller, target)
+        val runSpec = (resolveSubAssistantRunSpec(initialSettings::getChatModel, caller, target)
             as SubAssistantRunSpecResolution.Ready).spec
         val disabledSettings = initialSettings.copy(
             assistants = listOf(caller.copy(localTools = emptyList()), target),
@@ -396,7 +398,7 @@ class SubAssistantRunPolicyTest {
 
         assertEquals(
             "tool_not_permitted",
-            resolvePreWriteBlockReason(disabledSettings, callerId, targetId, runSpec),
+            resolvePreWriteBlockReason(testResolvedConfiguration(disabledSettings), callerId, targetId, runSpec),
         )
     }
 
@@ -413,7 +415,7 @@ class SubAssistantRunPolicyTest {
             providers = listOf(ProviderSetting.OpenAI(models = listOf(model))),
             assistants = listOf(caller, target),
         )
-        val runSpec = (resolveSubAssistantRunSpec(initialSettings, caller, target)
+        val runSpec = (resolveSubAssistantRunSpec(initialSettings::getChatModel, caller, target)
             as SubAssistantRunSpecResolution.Ready).spec
         val revokedSettings = initialSettings.copy(
             assistants = listOf(caller.copy(allowedSubAssistantIds = emptySet()), target),
@@ -421,7 +423,7 @@ class SubAssistantRunPolicyTest {
 
         assertEquals(
             "target_not_allowed",
-            resolvePreWriteBlockReason(revokedSettings, callerId, targetId, runSpec),
+            resolvePreWriteBlockReason(testResolvedConfiguration(revokedSettings), callerId, targetId, runSpec),
         )
     }
 
@@ -439,13 +441,13 @@ class SubAssistantRunPolicyTest {
             providers = listOf(ProviderSetting.OpenAI(models = listOf(inheritedModel, nextModel))),
             assistants = listOf(caller, target),
         )
-        val runSpec = (resolveSubAssistantRunSpec(initialSettings, caller, target)
+        val runSpec = (resolveSubAssistantRunSpec(initialSettings::getChatModel, caller, target)
             as SubAssistantRunSpecResolution.Ready).spec
         val changedSettings = initialSettings.copy(
             assistants = listOf(caller.copy(chatModelId = nextModel.id), target),
         )
 
-        assertEquals(null, resolveActiveRunStopReason(changedSettings, callerId, targetId, runSpec))
+        assertEquals(null, resolveActiveRunStopReason(testResolvedConfiguration(changedSettings), callerId, targetId, runSpec))
     }
 
     @Test
@@ -461,7 +463,7 @@ class SubAssistantRunPolicyTest {
             providers = listOf(ProviderSetting.OpenAI(models = listOf(inheritedModel))),
             assistants = listOf(caller, target),
         )
-        val runSpec = (resolveSubAssistantRunSpec(initialSettings, caller, target)
+        val runSpec = (resolveSubAssistantRunSpec(initialSettings::getChatModel, caller, target)
             as SubAssistantRunSpecResolution.Ready).spec
         val disabledSettings = initialSettings.copy(
             providers = listOf(ProviderSetting.OpenAI(enabled = false, models = listOf(inheritedModel))),
@@ -469,7 +471,7 @@ class SubAssistantRunPolicyTest {
 
         assertEquals(
             "caller_model_unavailable",
-            resolveActiveRunStopReason(disabledSettings, callerId, targetId, runSpec),
+            resolveActiveRunStopReason(testResolvedConfiguration(disabledSettings), callerId, targetId, runSpec),
         )
     }
 

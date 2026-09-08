@@ -92,6 +92,10 @@ class EnterprisePackageTest {
             first.copy(protocol = EnterpriseRuntimeProtocol.OPENAI_CHAT, endpoint = "https://$secret@example.invalid"),
             first.copy(protocol = EnterpriseRuntimeProtocol.OPENAI_CHAT, endpoint = "https://example.invalid", credential = "$secret\r\nInjected: x"),
             first.copy(protocol = EnterpriseRuntimeProtocol.OPENAI_CHAT, endpoint = "https://example.invalid", headers = mapOf("Authorization" to secret, "authorization" to secret)),
+            first.copy(protocol = EnterpriseRuntimeProtocol.OPENAI_CHAT, endpoint = "https://example.invalid", credential = secret, headers = mapOf("AUTHORIZATION" to secret)),
+            first.copy(protocol = EnterpriseRuntimeProtocol.GOOGLE_GENERATE, endpoint = "https://example.invalid", credential = secret, headers = mapOf("X-Goog-Api-Key" to secret)),
+            first.copy(protocol = EnterpriseRuntimeProtocol.CLAUDE_MESSAGES, endpoint = "https://example.invalid", credential = secret, headers = mapOf("X-Api-Key" to secret)),
+            first.copy(protocol = EnterpriseRuntimeProtocol.OPENAI_CHAT, endpoint = "https://example.invalid", headers = mapOf("Host" to secret)),
         )
         invalid.forEach { binding ->
             val candidate = example.copy(runtimeBindings = listOf(binding) + example.runtimeBindings.drop(1))

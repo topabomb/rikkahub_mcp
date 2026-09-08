@@ -73,7 +73,7 @@ class TurnFinalizer(
         captured.pending?.let { pending ->
             finishStop(StopRequest(request.conversationId, request.runtime, pending, request.reason))
         }
-        commandCoordinator.withResidentRuntime(request.conversationId) { runtime ->
+        val release = commandCoordinator.withResidentRuntime(request.conversationId) { runtime ->
             val execution = conversationRepository.getTurnExecution(captured.turnId.toString())
             if (execution?.status in setOf(TurnExecutionStatus.RUNNING, TurnExecutionStatus.AWAITING_USER)) {
                 check(runtime === request.runtime && runtime.ownsStoppedWorker(captured)) { "stopped_turn_owner_changed" }
@@ -81,9 +81,12 @@ class TurnFinalizer(
             }
             if (runtime === request.runtime && runtime.ownsStoppedWorker(captured)) {
                 check(runtime.snapshot.value.stream?.turnId != captured.turnId) { "stopped_turn_still_pending" }
-                runtime.releaseTurnWorker(captured.turnId, captured.worker, retainPendingTurnOwner = false)
+                true
+            } else {
+                false
             }
         }
+        if (release) request.runtime.releaseTurnWorker(captured.turnId, captured.worker, retainPendingTurnOwner = false)
     }
 
     suspend fun stopTurn(

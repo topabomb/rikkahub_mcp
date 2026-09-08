@@ -129,6 +129,8 @@ data class TextGenerationParams(
      * Max 256 characters per OpenRouter contract.
      */
     val providerSessionId: String? = null,
+    @kotlinx.serialization.Transient
+    val credentials: RequestCredentials = RequestCredentials.UserSettings,
 )
 
 @Serializable

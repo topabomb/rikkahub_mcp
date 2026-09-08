@@ -2,6 +2,7 @@ package net.weero.measix.pilot.service.runtime
 import net.weero.measix.pilot.service.turn.TurnContext
 
 import android.util.Log
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -76,7 +77,9 @@ class ConversationRuntime internal constructor(
         phase: TurnLivePhase = TurnLivePhase.PREPARING,
         turnContext: TurnContext? = null,
         modelContextProjection: TurnModelContextProjection? = null,
+        var modelExecutionLease: ModelExecutionLease? = null,
     ) {
+        var releaseStarted = false
         private val _phase = AtomicReference(phase)
         private val _handle = AtomicReference(handle)
         private val _turnContext = AtomicReference(turnContext)
@@ -118,7 +121,7 @@ class ConversationRuntime internal constructor(
             _cancelReason.compareAndSet(null, reason)
             val current = _phase.get()
             _phase.compareAndSet(current, TurnLivePhase.STOPPING)
-            worker.cancel()
+            worker.cancel(CancellationException(_cancelReason.get() ?: reason))
         }
 
         fun markRunning(handle: TurnHandle) {
@@ -164,6 +167,8 @@ class ConversationRuntime internal constructor(
      * TurnCommitter fall back to `user_stop`. A completed turnId is a no-op target.
      */
     private val ownedRequests = ConcurrentHashMap<Uuid, ActiveTurnSession>()
+    internal val hasExecutionLeases: Boolean
+        @Synchronized get() = ownedRequests.values.any { it.modelExecutionLease != null }
     private val auxiliaryWorkers = ConcurrentHashMap<Job, RealmAccess>()
     internal val hasAuxiliaryWork: Boolean get() = auxiliaryWorkers.isNotEmpty()
 
@@ -192,7 +197,7 @@ class ConversationRuntime internal constructor(
     private var ttsQueueSessionId: String? = null
     internal val isGenerating: Boolean get() = _activeTurn.value?.worker?.isActive == true
     val isInUse: Boolean
-        get() = refCount.get() > 0 || _activeTurn.value != null || snapshot.value.stream != null || hasAuxiliaryWork
+        get() = refCount.get() > 0 || ownedRequests.isNotEmpty() || snapshot.value.stream != null || hasAuxiliaryWork
 
     private val turnEpoch = AtomicLong(0)
 
@@ -302,6 +307,9 @@ class ConversationRuntime internal constructor(
         check(current != null && current.turnId == turnId && current.worker === worker) {
             "turn context owner does not match turn $turnId"
         }
+        check(!current.releaseStarted && current.modelExecutionLease === context.model.executionLease) {
+            "turn_context_execution_owner_mismatch"
+        }
         current.bindTurnContext(context)
     }
 
@@ -370,14 +378,12 @@ class ConversationRuntime internal constructor(
     @Synchronized
     internal fun captureAndRequestStop(reason: String): CapturedTurnWorker? {
         val current = _activeTurn.value
-        if (current != null) {
-            current.requestCancel(reason)
-            val pending = snapshot.value.stream?.turnId?.takeIf { it != current.turnId }?.let { turnId ->
-                val owner = requireNotNull(ownedRequests[turnId]) { "pending turn lost its worker owner" }
+        val owners = listOfNotNull(current) + ownedRequests.values.filter { it !== current }
+        if (owners.isNotEmpty()) {
+            return owners.asReversed().fold<ActiveTurnSession, CapturedTurnWorker?>(null) { pending, owner ->
                 owner.requestCancel(reason)
-                CapturedTurnWorker(turnId, owner.worker)
+                CapturedTurnWorker(owner.turnId, owner.worker, pending)
             }
-            return CapturedTurnWorker(current.turnId, current.worker, pending)
         }
         val durableTurnId = snapshot.value.stream?.turnId ?: return null
         return CapturedTurnWorker(durableTurnId, null)
@@ -388,8 +394,7 @@ class ConversationRuntime internal constructor(
         val current = _activeTurn.value
         return if (captured.worker == null) {
             current == null && snapshot.value.stream?.turnId == captured.turnId
-        } else (current?.turnId == captured.turnId && current.worker === captured.worker) ||
-            (snapshot.value.stream?.turnId == captured.turnId && ownedRequests[captured.turnId]?.worker === captured.worker)
+        } else ownedRequests[captured.turnId]?.worker === captured.worker
     }
 
     @Synchronized
@@ -401,6 +406,7 @@ class ConversationRuntime internal constructor(
         supersedeReason: String? = null,
         turnContext: TurnContext? = null,
         modelContextProjection: TurnModelContextProjection? = null,
+        modelExecutionLease: ModelExecutionLease? = null,
     ): InstalledTurnWorker {
         cancelIdleCheck()
         val previous = _activeTurn.value
@@ -415,6 +421,7 @@ class ConversationRuntime internal constructor(
             phase = phase,
             turnContext = turnContext,
             modelContextProjection = modelContextProjection,
+            modelExecutionLease = modelExecutionLease,
         )
         ownedRequests[turnId] = installed
         publishActive(installed)
@@ -466,6 +473,7 @@ class ConversationRuntime internal constructor(
         val projection = requireNotNull(current.modelContextProjection) {
             "continuation ${handle.turnId} has no model context projection"
         }
+        check(!current.releaseStarted) { "turn_execution_release_started" }
         return installTurnWorker(
             turnId = handle.turnId,
             worker = worker,
@@ -473,7 +481,17 @@ class ConversationRuntime internal constructor(
             phase = TurnLivePhase.PREPARING,
             turnContext = context,
             modelContextProjection = projection,
-        )
+            modelExecutionLease = current.modelExecutionLease,
+        ).also { current.modelExecutionLease = null }
+    }
+
+    /** The accepting worker hands off immediately after capture, before suspending preparation. */
+    @Synchronized
+    internal fun bindModelExecution(turnId: Uuid, worker: Job, lease: ModelExecutionLease) {
+        val current = requireNotNull(ownedRequests[turnId]) { "turn_execution_owner_missing" }
+        check(current.worker === worker && worker.isActive && !current.releaseStarted) { "turn_execution_owner_changed" }
+        check(current.modelExecutionLease == null) { "turn_execution_already_bound" }
+        current.modelExecutionLease = lease
     }
 
     internal fun processingReporter(): (String?) -> Unit {
@@ -507,28 +525,34 @@ class ConversationRuntime internal constructor(
         publishActive(current)
     }
 
-    @Synchronized
-    internal fun releaseTurnWorker(
+    internal suspend fun releaseTurnWorker(
         turnId: Uuid,
         worker: Job? = null,
         retainPendingTurnOwner: Boolean = true,
     ) {
-        val current = ownedRequests[turnId] ?: return
-        if (worker != null && current.worker !== worker) return
-        if (
-            retainPendingTurnOwner &&
-            snapshot.value.stream?.turnId == turnId
-        ) {
-            _activeTurnRevision.value++
-            return
+        val current = synchronized(this) {
+            val owned = ownedRequests[turnId] ?: return
+            if (worker != null && owned.worker !== worker) return
+            if (retainPendingTurnOwner && snapshot.value.stream?.turnId == turnId) {
+                _activeTurnRevision.value++
+                return
+            }
+            owned.releaseStarted = true
+            owned
         }
+        current.modelExecutionLease?.release()
+        synchronized(this) { retireTurnWorker(current) }
+    }
+
+    private fun retireTurnWorker(current: ActiveTurnSession) {
+        val turnId = current.turnId
+        if (!ownedRequests.remove(turnId, current)) return
         val pending = snapshot.value.stream?.turnId?.takeIf { it != turnId }?.let { ownedRequests[it] }
-        ownedRequests.remove(turnId, current)
         if (_activeTurn.compareAndSet(current, pending)) {
             _lastTerminatedRequestTurnId.set(turnId)
             _activeTurnRevision.value++
-            if (!isInUse) scheduleIdleCheck()
         }
+        if (!isInUse) scheduleIdleCheck()
     }
 
     private fun publishActive(request: ActiveTurnSession?) {
@@ -538,12 +562,9 @@ class ConversationRuntime internal constructor(
 
     @Synchronized
     private fun completeActiveWorker(request: ActiveTurnSession) {
-        val current = _activeTurn.value
-        if (current === request) {
-            releaseTurnWorker(current.turnId, current.worker)
-            return
+        if (snapshot.value.stream?.turnId != request.turnId && request.modelExecutionLease == null && !request.releaseStarted) {
+            retireTurnWorker(request)
         }
-        if (snapshot.value.stream?.turnId != request.turnId) ownedRequests.remove(request.turnId, request)
     }
 
     // 空闲检查任务
@@ -622,6 +643,7 @@ class ConversationRuntime internal constructor(
     @Synchronized
     fun cleanup() {
         check(!hasAuxiliaryWork) { "auxiliary_workers_must_finish_before_eviction" }
+        check(!hasExecutionLeases) { "turn_execution_leases_must_finish_before_eviction" }
         _activeTurn.value?.worker?.cancel()
         _activeTurn.value = null
         ownedRequests.clear()

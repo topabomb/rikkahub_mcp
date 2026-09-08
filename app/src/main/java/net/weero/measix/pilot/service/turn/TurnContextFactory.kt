@@ -3,7 +3,6 @@ package net.weero.measix.pilot.service.turn
 import me.rerere.common.configuration.ConfigurationReference
 import android.os.Build
 import me.rerere.ai.provider.Model
-import me.rerere.ai.provider.ProviderSetting
 import me.rerere.ai.provider.RequestMediaCapabilities
 import net.weero.measix.pilot.data.ai.tools.freezeToolSet
 import net.weero.measix.pilot.data.ai.transformers.buildWorkspacePrompt
@@ -11,8 +10,6 @@ import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.model.Assistant
 import net.weero.measix.pilot.data.model.effectiveContextMessageLimit
 import net.weero.measix.pilot.data.repository.WorkspaceRepository
-import net.weero.measix.pilot.service.runtime.ProviderTransportLease
-import net.weero.measix.pilot.service.runtime.freezeProviderWireShape
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.time.format.FormatStyle
@@ -37,9 +34,7 @@ class TurnContextFactory(
         realmAccess: net.weero.measix.pilot.data.enterprise.RealmAccess,
         settings: Settings,
         assistant: Assistant,
-        model: Model,
-        providerSetting: ProviderSetting,
-        providerTransportLease: ProviderTransportLease,
+        model: TurnModelSnapshot,
         mediaCapabilities: RequestMediaCapabilities,
         conversationSystemPrompt: String?,
         conversationModeInjectionIds: Set<ConfigurationReference>,
@@ -51,7 +46,7 @@ class TurnContextFactory(
         val promptInputs = freezeTurnPromptSnapshot(
             settings = settings,
             assistant = assistant,
-            model = model,
+            model = model.model,
             conversationSystemPrompt = conversationSystemPrompt,
             conversationModeInjectionIds = conversationModeInjectionIds,
             workspaceReminder = workspaceReminder,
@@ -63,8 +58,6 @@ class TurnContextFactory(
             realmAccess = realmAccess,
             assistant = assistant,
             model = model,
-            providerSetting = providerSetting,
-            providerTransportLease = providerTransportLease,
             mediaCapabilities = mediaCapabilities,
             promptInputs = promptInputs,
             tools = tools,
@@ -78,23 +71,10 @@ class TurnContextFactory(
      */
     internal fun materialize(plan: TurnLaunchPlan): TurnContext {
         val frozenTools = freezeToolSet(plan.tools)
-        val frozenModel = plan.model.copy(
-            customHeaders = plan.model.customHeaders.toList(),
-            customBodies = plan.model.customBodies.toList(),
-            inputModalities = plan.model.inputModalities.toList(),
-            outputModalities = plan.model.outputModalities.toList(),
-            abilities = plan.model.abilities.toList(),
-            tools = plan.model.tools.toSet(),
-            providerOverwrite = null,
-        )
         return TurnContext(
             realmAccess = plan.realmAccess,
             assistant = resolveTurnAssistantSnapshot(plan.assistant),
-            model = TurnModelSnapshot(
-                model = frozenModel,
-                providerShape = freezeProviderWireShape(plan.providerSetting, frozenModel),
-                transportLease = plan.providerTransportLease,
-            ),
+            model = plan.model,
             mediaCapabilities = plan.mediaCapabilities,
             promptInputs = plan.promptInputs,
             toolDefinitions = frozenTools.definitions,
@@ -110,9 +90,7 @@ class TurnContextFactory(
 internal class TurnLaunchPlan(
     val realmAccess: net.weero.measix.pilot.data.enterprise.RealmAccess,
     val assistant: Assistant,
-    val model: Model,
-    val providerSetting: ProviderSetting,
-    val providerTransportLease: ProviderTransportLease,
+    val model: TurnModelSnapshot,
     val mediaCapabilities: RequestMediaCapabilities,
     val promptInputs: TurnPromptSnapshot,
     val tools: List<me.rerere.ai.core.Tool>,

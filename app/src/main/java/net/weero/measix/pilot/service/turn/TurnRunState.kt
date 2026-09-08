@@ -81,7 +81,6 @@ internal class TurnRunState(
 ) {
     val turnContext = inputs.turnContext
     val model = turnContext.model.model
-    val frozenProvider = turnContext.model.providerShape
     val assistant = turnContext.assistant
     val promptInputs = turnContext.promptInputs
     val toolsByName = turnContext.toolBindingsByName

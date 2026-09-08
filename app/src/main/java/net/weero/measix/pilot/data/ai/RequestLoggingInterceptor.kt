@@ -1,14 +1,15 @@
-﻿package net.weero.measix.pilot.data.ai
+package net.weero.measix.pilot.data.ai
 
 import me.rerere.common.android.LogEntry
 import me.rerere.common.android.Logging
+import me.rerere.common.http.isPrivate
 import okhttp3.Interceptor
 import okhttp3.Response
 import okio.Buffer
 
 class RequestLoggingInterceptor : Interceptor {
     override fun intercept(chain: Interceptor.Chain): Response {
-        if (!Logging.isRequestLoggingEnabled()) {
+        if (chain.request().isPrivate || !Logging.isRequestLoggingEnabled()) {
             return chain.proceed(chain.request())
         }
 

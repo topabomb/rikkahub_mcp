@@ -183,6 +183,18 @@ internal object EnterprisePackageCodec {
         check(binding.credential?.let { '\r' !in it && '\n' !in it } != false, "invalid_runtime_credential")
         check(binding.headers.all { (key, value) -> key.matches(Regex("[!#$%&'*+.^_`|~0-9A-Za-z-]+")) && '\r' !in value && '\n' !in value }, "invalid_runtime_headers")
         check(binding.headers.keys.map { it.lowercase(java.util.Locale.ROOT) }.distinct().size == binding.headers.size, "duplicate_runtime_header")
+        if (kind == EnterpriseResourceKind.MODEL) {
+            val headers = binding.headers.keys.map { it.lowercase(java.util.Locale.ROOT) }.toSet()
+            check(headers.intersect(setOf("host", "content-length", "transfer-encoding", "connection")).isEmpty(),
+                "runtime_transport_header_conflict")
+            val authenticationHeader = when (binding.protocol) {
+                EnterpriseRuntimeProtocol.OPENAI_CHAT, EnterpriseRuntimeProtocol.OPENAI_RESPONSES -> "authorization"
+                EnterpriseRuntimeProtocol.GOOGLE_GENERATE -> "x-goog-api-key"
+                EnterpriseRuntimeProtocol.CLAUDE_MESSAGES -> "x-api-key"
+                else -> error("validated_model_protocol_missing")
+            }
+            check(binding.credential == null || authenticationHeader !in headers, "runtime_authentication_header_conflict")
+        }
     }
 
     private fun check(condition: Boolean, reason: String) { if (!condition) fail(reason) }

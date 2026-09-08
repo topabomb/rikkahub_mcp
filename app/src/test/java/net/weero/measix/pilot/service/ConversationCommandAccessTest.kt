@@ -365,7 +365,7 @@ class ConversationCommandAccessTest {
             f.page.close()
             f.sessions.selectPersonalFixture()
             runCurrent()
-            assertEquals(receipt.userMessageId, f.runtime.durable.currentMessages().last().id)
+            assertEquals(f.errors.errors.value.toString(), receipt.userMessageId, f.runtime.durable.currentMessages().last().id)
             assertEquals("accepted", f.runtime.durable.currentMessages().last().toText())
             assertEquals(f.scope, f.runtime.durable.header.scope)
             assertTrue(f.errors.errors.value.toString(), f.errors.errors.value.isEmpty())
@@ -422,7 +422,7 @@ class ConversationCommandAccessTest {
             assertEquals("original", f.runtime.durable.currentMessages().single().toText())
             release.complete(Unit)
             runCurrent()
-            assertEquals(listOf("original", "C"), f.runtime.durable.currentMessages().map { it.toText() })
+            assertEquals(f.errors.errors.value.toString(), listOf("original", "C"), f.runtime.durable.currentMessages().map { it.toText() })
             assertEquals(latest.userMessageId, f.runtime.durable.currentMessages().last().id)
             assertNull(f.runtime.currentWorker())
             assertTrue(f.errors.errors.value.toString(), f.errors.errors.value.isEmpty())
@@ -478,7 +478,7 @@ class ConversationCommandAccessTest {
             val receipt = requireNotNull(f.turns.sendMessage(f.page.commandTarget, listOf(UIMessagePart.Text("B")), false))
             f.finalizer.finishStop(stop)
             runCurrent()
-            assertEquals(receipt.userMessageId, f.runtime.durable.currentMessages().last().id)
+            assertEquals(f.errors.errors.value.toString(), receipt.userMessageId, f.runtime.durable.currentMessages().last().id)
             assertNull(f.runtime.currentWorker())
             assertNull(f.runtime.peekCancelReason(originalTurn))
             assertEquals(1, f.terminalCommits)
@@ -494,7 +494,12 @@ class ConversationCommandAccessTest {
             f.runtime.installTurnWorker(turnId, worker)
             val started = net.weero.measix.pilot.service.turn.TurnCommitter.start(
                 f.coordinator, f.runtime, turnId, disclosureCandidate(), f.finalizer)
-            f.runtime.bindTurnContext(turnId, worker, mockk { every { realmAccess } returns originalAccess })
+            val lease = net.weero.measix.pilot.service.runtime.ModelExecutionLease { error("no request expected") }
+            f.runtime.bindModelExecution(turnId, worker, lease)
+            f.runtime.bindTurnContext(turnId, worker, mockk {
+                every { realmAccess } returns originalAccess
+                every { model } returns mockk { every { executionLease } returns lease }
+            })
             f.runtime.retainAwaitingUser(started.handle)
             worker.complete()
             f.sessions.finishExit(f.sessions.beginExit(requireNotNull(f.sessions.captureExitRequest())))
@@ -519,7 +524,7 @@ class ConversationCommandAccessTest {
             f.enableGeneration()
             f.cancelDuringStart = true
             val receipt = requireNotNull(f.turns.sendMessage(f.page.commandTarget, listOf(UIMessagePart.Text("start"))))
-            runCurrent()
+            requireNotNull(f.runtime.currentWorker()).join()
             assertEquals(net.weero.measix.pilot.data.db.entity.TurnExecutionStatus.CANCELLED,
                 f.executions[receipt.turnId.toString()]?.status)
             assertEquals(1, f.terminalCommits)
@@ -555,6 +560,7 @@ class ConversationCommandAccessTest {
                 } else awaitCancellation()
             }
             val receipt = requireNotNull(f.turns.sendMessage(f.page.commandTarget, listOf(UIMessagePart.Text("start"))))
+            f.runtime.activeTurnRevision.first { f.runtime.isAwaitingUser(receipt.turnId) || f.runtime.currentWorker() == null }
             runCurrent()
             assertTrue(f.errors.errors.value.toString(), f.errors.errors.value.isEmpty())
             assertTrue(f.runtime.isAwaitingUser(receipt.turnId))
@@ -727,7 +733,7 @@ class ConversationCommandAccessTest {
             val context = mockk<android.app.Application>()
             every { context.getString(any()) } returns "operation"
             every { effects.preloadSoundEffects() } returns Unit
-            ConversationTurnService(context, appScope, mockk(relaxed = true), settings, memory, sessions, runner, mockk(relaxed = true),
+            ConversationTurnService(context, appScope, mockk(relaxed = true), settings, net.weero.measix.pilot.test.testModelExecutionService(settings, sessions, gate), memory, sessions, runner, mockk(relaxed = true),
                 mcp, mockk(relaxed = true), net.weero.measix.pilot.service.turn.TurnContextFactory(mockk()),
                 mockk(relaxed = true), mockk(), finalizer, lifecycle, registry, coordinator, gate,
                 errors, effects, ArtifactUseCase(artifactStore, gate), ConversationTitleCoordinator())
@@ -742,9 +748,10 @@ class ConversationCommandAccessTest {
         init {
             every { settings.effectiveSettings } returns kotlinx.coroutines.flow.MutableStateFlow(
                 net.weero.measix.pilot.data.datastore.EffectiveSettingsSnapshot(
-                    net.weero.measix.pilot.data.datastore.Settings.dummy(),
+                    net.weero.measix.pilot.data.datastore.Settings(),
                     net.weero.measix.pilot.data.datastore.SettingsAccessIndex(), 0,
                     net.weero.measix.pilot.data.datastore.ManagedConfigurationState.ABSENT))
+            net.weero.measix.pilot.test.installExecutionConfigurationFixture(settings)
             coEvery { repository.getConversationHeader(any()) } answers { rows[firstArg()]?.header }
             coEvery { repository.getConversationSnapshotById(any()) } answers { rows[firstArg()] }
             coEvery { repository.getChildConversationIds(any()) } answers {
@@ -807,7 +814,6 @@ class ConversationCommandAccessTest {
                     net.weero.measix.pilot.data.datastore.SettingsAccessIndex(), 0,
                     net.weero.measix.pilot.data.datastore.ManagedConfigurationState.ABSENT))
             coEvery { memory.captureExecution(any(), any()) } returns null
-            every { runner.resolveRequestMediaCapabilities(any(), any()) } returns me.rerere.ai.provider.RequestMediaCapabilities.NONE
             coEvery { mcp.prepareTurnCapabilities(any()) } returns net.weero.measix.pilot.data.ai.mcp.TurnMcpCapabilitySnapshot.EMPTY
         }
 

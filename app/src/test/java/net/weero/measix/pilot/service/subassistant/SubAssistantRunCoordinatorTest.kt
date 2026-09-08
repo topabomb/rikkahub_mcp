@@ -82,6 +82,7 @@ import kotlin.uuid.Uuid
 @org.junit.runner.RunWith(org.robolectric.RobolectricTestRunner::class)
 @org.robolectric.annotation.Config(sdk = [34])
 class SubAssistantRunCoordinatorTest {
+    @get:org.junit.Rule val temporary = org.junit.rules.TemporaryFolder()
     private val callerId = ConfigurationReference.random()
     private val targetId = ConfigurationReference.random()
     private val masterId = Uuid.random()
@@ -103,7 +104,7 @@ class SubAssistantRunCoordinatorTest {
             val original = queries.captureAccess(packet.identity.scope)
             sessions.finishExit(sessions.beginExit(requireNotNull(sessions.captureExitRequest())))
             sessions.enrollFixture(packet)
-            val harness = harness(AttachmentResolveResult.Success(emptyList()), configurationScope = packet.identity.scope, configurations = queries)
+            val harness = harness(AttachmentResolveResult.Success(emptyList()), configurationScope = packet.identity.scope, configurations = queries, sessions = sessions)
             try {
                 harness.coordinator.executeCall(callerId, masterId, original, targetId, "queued work", executionContext())
                 org.junit.Assert.fail("old parent session must not create a child")
@@ -118,8 +119,12 @@ class SubAssistantRunCoordinatorTest {
     @Test
     fun `text target materializes durable image parts and link failure compensates the exact child`() = runTest {
         val image = UIMessagePart.Image(url = "file:///tmp/a.png")
-        val realm = ConfigurationScope.Enterprise(EnterpriseAuthority("local:example", "dep_example"), "user")
-        val harness = harness(AttachmentResolveResult.Success(listOf(image)), configurationScope = realm)
+        val packet = net.weero.measix.pilot.data.enterprise.exampleEnterprisePackage()
+        val realm = packet.identity.scope
+        val sessions = net.weero.measix.pilot.data.enterprise.EnterpriseSessionController(
+            net.weero.measix.pilot.data.enterprise.EnterpriseAppliedStore(temporary.newFolder()))
+        sessions.enrollFixture(packet)
+        val harness = harness(AttachmentResolveResult.Success(listOf(image)), configurationScope = realm, sessions = sessions)
         val created = slot<Conversation>()
         coEvery { harness.commandCoordinator.create(capture(created)) } returns mockk<ConversationRuntime>()
         coEvery { harness.commandCoordinator.deleteOrThrow(any()) } just Runs
@@ -130,7 +135,7 @@ class SubAssistantRunCoordinatorTest {
         )
 
         harness.coordinator.executeCall(
-            realmAccess = net.weero.measix.pilot.data.enterprise.RealmAccess.Enterprise(realm, "unit-session"),
+            realmAccess = sessions.captureSelectedRealmAccess(),
             callerAssistantId = callerId,
             masterConversationId = masterId,
             targetAssistantId = targetId,
@@ -216,6 +221,7 @@ class SubAssistantRunCoordinatorTest {
             preparationGate = preparationEntered to resumePreparation,
         )
         val childRuntime = mockk<ConversationRuntime>(relaxed = true)
+        every { childRuntime.peekCancelReason(any()) } returns null
         val created = slot<Conversation>()
         coEvery { harness.commandCoordinator.create(capture(created)) } coAnswers {
             every { childRuntime.id } returns created.captured.id
@@ -292,7 +298,6 @@ class SubAssistantRunCoordinatorTest {
         )
         val inputsSlot = slot<TurnRunInputs>()
         val runner = mockk<TurnRunner>()
-        every { runner.resolveRequestMediaCapabilities(any(), any()) } returns RequestMediaCapabilities.NONE
         coEvery { runner.run(capture(inputsSlot)) } returns TurnOutcome.Completed(assistantMessage = childAnswer)
 
         val harness = harness(AttachmentResolveResult.Success(emptyList()), turnRunner = runner)
@@ -357,7 +362,9 @@ class SubAssistantRunCoordinatorTest {
         preparationGate: Pair<CompletableDeferred<Unit>, CompletableDeferred<Unit>>? = null,
         turnRunner: TurnRunner = mockk(relaxed = true),
         configurationScope: ConfigurationScope = ConfigurationScope.Personal,
-        configurations: net.weero.measix.pilot.service.ConfigurationQueryService = mockk(relaxed = true),
+        configurations: net.weero.measix.pilot.service.ConfigurationQueryService? = null,
+        sessions: net.weero.measix.pilot.data.enterprise.EnterpriseSessionController = net.weero.measix.pilot.data.enterprise.EnterpriseSessionController(
+            net.weero.measix.pilot.data.enterprise.EnterpriseAppliedStore(temporary.newFolder())),
     ): Harness {
         val modelId = ConfigurationReference.random()
         val model = Model(
@@ -454,6 +461,8 @@ class SubAssistantRunCoordinatorTest {
                 TurnMcpCapabilitySnapshot.EMPTY
             }
         }
+        net.weero.measix.pilot.test.installExecutionConfigurationFixture(settingsStore)
+        val gate = net.weero.measix.pilot.service.ApplicationRecoveryGate().apply { ready() }
         val coordinator = SubAssistantRunCoordinator(
             turnRunner = turnRunner,
             conversationRepo = conversationRepo,
@@ -462,9 +471,10 @@ class SubAssistantRunCoordinatorTest {
             toolSetFactory = toolSetFactory,
             settingsStore = settingsStore,
             memoryService = mockk<MemoryService>(relaxed = true),
-            configurations = configurations,
+            configurations = configurations ?: net.weero.measix.pilot.service.ConfigurationQueryService(settingsStore, sessions, gate),
+            modelExecutions = net.weero.measix.pilot.test.testModelExecutionService(settingsStore, sessions, gate),
             turnPipelineFactory = mockk<TurnPipelineFactory>(relaxed = true),
-            turnContextFactory = mockk(relaxed = true),
+            turnContextFactory = net.weero.measix.pilot.service.turn.TurnContextFactory(mockk(relaxed = true)),
             artifactStore = artifactStore,
             toolArtifactRewriter = mockk<ToolArtifactRewriter>(relaxed = true),
             json = JsonInstant,

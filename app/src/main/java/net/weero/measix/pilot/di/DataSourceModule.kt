@@ -38,6 +38,8 @@ import net.weero.measix.pilot.data.sync.BackupArchiveService
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.logging.HttpLoggingInterceptor
+import me.rerere.common.http.excludingPrivateRequests
+import me.rerere.common.http.PrivateRequestBoundaryInterceptor
 import org.koin.dsl.module
 
 import java.util.Locale
@@ -176,6 +178,7 @@ val dataSourceModule = module {
             .followSslRedirects(true)
             .followRedirects(true)
             .retryOnConnectionFailure(true)
+            .addNetworkInterceptor(PrivateRequestBoundaryInterceptor())
             .addInterceptor { chain ->
                 val originalRequest = chain.request()
                 val requestBuilder = originalRequest.newBuilder()
@@ -207,7 +210,7 @@ val dataSourceModule = module {
             .addNetworkInterceptor(RequestLoggingInterceptor())
             .addInterceptor(HttpLoggingInterceptor().apply {
                 level = HttpLoggingInterceptor.Level.HEADERS
-            })
+            }.excludingPrivateRequests())
             .build().also { SearchService.init(it, get()) }
     }
 

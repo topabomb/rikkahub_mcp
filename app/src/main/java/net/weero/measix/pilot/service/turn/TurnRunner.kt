@@ -10,9 +10,7 @@ import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
-import me.rerere.ai.provider.Model
 import me.rerere.ai.provider.ProviderManager
-import me.rerere.ai.provider.RequestMediaCapabilities
 import me.rerere.ai.ui.TurnTerminalReasons
 import me.rerere.ai.ui.UIMessage
 import net.weero.measix.pilot.data.ai.request.RequestAssembler
@@ -25,8 +23,6 @@ import net.weero.measix.pilot.data.ai.tools.TurnInteractionCapability
 import net.weero.measix.pilot.data.ai.tools.ToolOutputStore
 import net.weero.measix.pilot.data.ai.transformers.InputMessageTransformer
 import net.weero.measix.pilot.data.ai.transformers.OutputMessageTransformer
-import net.weero.measix.pilot.data.datastore.Settings
-import net.weero.measix.pilot.data.datastore.findProvider
 import net.weero.measix.pilot.data.model.ConversationModelContextEntry
 import net.weero.measix.pilot.service.runtime.TurnCheckpoint
 import net.weero.measix.pilot.service.runtime.TurnHandle
@@ -91,12 +87,6 @@ class TurnRunner(
     private val compactionPlanner = ToolOutputCompactionPlanner()
     private val stepRunner = StepRunner(context, providerManager, contextPlanner, requestAssembler, compactionPlanner, toolOutputStore, toolCallRuntime)
     private val toolBatchRunner = ToolBatchRunner(toolCallRuntime, attachmentResolver)
-
-    fun resolveRequestMediaCapabilities(settings: Settings, model: Model): RequestMediaCapabilities {
-        val providerSetting = model.findProvider(settings.providers) ?: error("Provider not found")
-        return providerManager.getProviderByType(providerSetting)
-            .requestMediaCapabilities(providerSetting, model)
-    }
 
     internal suspend fun run(inputs: TurnRunInputs): TurnRunResult = withContext(Dispatchers.IO) {
         val state = TurnRunState(inputs, context)

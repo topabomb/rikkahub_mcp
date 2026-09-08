@@ -21,6 +21,7 @@ import net.weero.measix.pilot.data.ai.subassistant.parseAssistantCallExtrasFromI
 import net.weero.measix.pilot.data.ai.subassistant.resolveSubAssistantRunSpec
 import net.weero.measix.pilot.data.ai.tools.local.LocalToolOption
 import net.weero.measix.pilot.data.datastore.Settings
+import net.weero.measix.pilot.data.datastore.getChatModel
 import net.weero.measix.pilot.data.model.Conversation
 import net.weero.measix.pilot.data.model.MessageNode
 import kotlin.uuid.Uuid
@@ -224,7 +225,7 @@ internal fun resolveInterruptionReason(
     ) {
         return "target_access_revoked"
     }
-    val runSpec = resolveSubAssistantRunSpec(settings, caller, target)
+    val runSpec = resolveSubAssistantRunSpec(settings::getChatModel, caller, target)
     if (runSpec is SubAssistantRunSpecResolution.Blocked) {
         return runSpec.reason
     }

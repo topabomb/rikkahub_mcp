@@ -85,8 +85,14 @@ internal data class ResolvedConfiguration(
 
     fun assistantModel(assistantId: ConfigurationReference): ConfigurationSelection {
         val assistant = assistants[assistantId] ?: return ConfigurationSelection(assistantId, ConfigurationUnavailableReason.REFERENCE_MISSING)
-        return selectModel(assistant.chatModelId ?: selections.chatModelId, ModelType.CHAT)
+        return assistantModel(assistant)
     }
+
+    fun assistantModel(assistant: Assistant): ConfigurationSelection =
+        selectModel(assistant.chatModelId ?: selections.chatModelId, ModelType.CHAT)
+
+    fun availableChatModel(assistant: Assistant): Model? = assistantModel(assistant)
+        .takeIf { it.isAvailable }?.reference?.let { models[it]?.model }
 
     private fun selectModel(reference: ConfigurationReference?, type: ModelType): ConfigurationSelection {
         val selected = selection(ConfigurationCategory.MODEL, reference)

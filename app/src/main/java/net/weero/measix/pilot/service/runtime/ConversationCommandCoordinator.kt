@@ -332,7 +332,8 @@ class ConversationCommandCoordinator(
 
     private fun ensureNotActive(conversationId: Uuid, includeAuxiliary: Boolean = false) {
         val runtime = registry.findRuntime(conversationId) ?: return
-        if (runtime.isGenerating || runtime.snapshot.value.stream != null || (includeAuxiliary && runtime.hasAuxiliaryWork)) {
+        if (runtime.isGenerating || runtime.snapshot.value.stream != null || runtime.hasExecutionLeases ||
+            (includeAuxiliary && runtime.hasAuxiliaryWork)) {
             throw ConversationCommandConflictException("cannot delete active conversation: $conversationId")
         }
     }

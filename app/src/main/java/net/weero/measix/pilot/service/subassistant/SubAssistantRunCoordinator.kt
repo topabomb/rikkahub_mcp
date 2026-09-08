@@ -7,14 +7,12 @@ import net.weero.measix.pilot.service.runtime.ConversationCommandCoordinator
 import net.weero.measix.pilot.service.runtime.ConversationRuntime
 import net.weero.measix.pilot.service.runtime.ConversationRuntimeRegistry
 import net.weero.measix.pilot.service.runtime.DeleteMessage
-import net.weero.measix.pilot.service.runtime.ProviderTransportLease
 import net.weero.measix.pilot.service.runtime.ResolveToolInteraction
 import net.weero.measix.pilot.service.runtime.ToolInteractionDecision
 import net.weero.measix.pilot.service.runtime.TurnHandle
 import net.weero.measix.pilot.service.runtime.TurnKind
 import net.weero.measix.pilot.service.runtime.TurnTransition
 import net.weero.measix.pilot.service.runtime.toPresentationSnapshot
-import net.weero.measix.pilot.service.runtime.captureProviderCredentialOwner
 import net.weero.measix.pilot.service.runtime.resolveProviderTransportOwner
 import net.weero.measix.pilot.service.turn.TurnCommitter
 import net.weero.measix.pilot.service.turn.TurnOutcome
@@ -91,7 +89,6 @@ import net.weero.measix.pilot.data.ai.attachments.AttachmentResolveResult
 import net.weero.measix.pilot.data.ai.attachments.AttachmentResolver
 import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.datastore.SettingsStore
-import net.weero.measix.pilot.data.datastore.findProvider
 import net.weero.measix.pilot.data.datastore.getAssistantById
 import net.weero.measix.pilot.data.files.AttachmentCloner
 import net.weero.measix.pilot.data.files.ArtifactStore
@@ -140,6 +137,7 @@ class SubAssistantRunCoordinator internal constructor(
     private val settingsStore: SettingsStore,
     private val memoryService: MemoryService,
     private val configurations: net.weero.measix.pilot.service.ConfigurationQueryService,
+    private val modelExecutions: net.weero.measix.pilot.service.ModelExecutionService,
     private val turnPipelineFactory: TurnPipelineFactory,
     private val turnContextFactory: TurnContextFactory,
     private val artifactStore: ArtifactStore,
@@ -176,16 +174,19 @@ class SubAssistantRunCoordinator internal constructor(
     private suspend fun preflightCall(
         callerAssistantId: ConfigurationReference,
         masterConversationId: Uuid,
+        realmAccess: net.weero.measix.pilot.data.enterprise.RealmAccess,
         targetAssistantId: ConfigurationReference,
         task: String,
         execContext: ToolExecutionContext,
     ): Preflight {
-        val settings = settingsStore.effectiveSettings.value.settings
-        val targetAssistant = settings.getAssistantById(targetAssistantId)
-        val callerAssistant = settings.getAssistantById(callerAssistantId)
+        val inputs = modelExecutions.read(realmAccess)
+        val settings = inputs.userSettings
+        val configuration = inputs.configuration
+        val targetAssistant = configuration.assistants[targetAssistantId]
+        val callerAssistant = configuration.assistants[callerAssistantId]
         val runSpecResolution = if (targetAssistant != null && callerAssistant != null) {
             resolveSubAssistantRunSpec(
-                settings = settings,
+                modelForAssistant = configuration::availableChatModel,
                 caller = callerAssistant,
                 target = targetAssistant,
             )
@@ -274,12 +275,15 @@ class SubAssistantRunCoordinator internal constructor(
         )
 
         // 写入 request 前复验（关闭 preflight 与持久化之间的撤权竞态窗口）
-        val latestBlockReason = resolvePreWriteBlockReason(
-            settings = settingsStore.effectiveSettings.value.settings,
+        val latestBlockReason = try { resolvePreWriteBlockReason(
+            configuration = configurations.read(realmAccess),
             callerAssistantId = callerAssistantId,
             targetAssistantId = targetAssistantId,
             runSpec = runSpec,
-        )
+        ) } catch (error: Throwable) {
+            lease.close()
+            throw error
+        }
         if (latestBlockReason != null) {
             lease.close()
             return Preflight.Blocked(
@@ -455,6 +459,7 @@ class SubAssistantRunCoordinator internal constructor(
         val preflight = preflightCall(
             callerAssistantId = callerAssistantId,
             masterConversationId = masterConversationId,
+            realmAccess = realmAccess,
             targetAssistantId = targetAssistantId,
             task = task,
             execContext = execContext,
@@ -470,6 +475,7 @@ class SubAssistantRunCoordinator internal constructor(
         var childTaskNodeId: Uuid? = null
         var childTurnId: Uuid? = null
         var childRunJob: Job? = null
+        var ownedChildRuntime: ConversationRuntime? = null
         var runState: SubAssistantRunStateReducer? = null
         try {
             configurations.requireAccess(realmAccess)
@@ -552,18 +558,21 @@ class SubAssistantRunCoordinator internal constructor(
                 turnId = installedChildTurnId,
                 worker = runJob,
             )
+            val childRuntime = commandCoordinator.load(childConversationId)
+            ownedChildRuntime = childRuntime
 
             // 运行中 Settings 撤权监听器：重算 caller/Target 关系，变化即取消 Child Job
             runScope = CoroutineScope(coroutineContext + runJob)
             settingsWatcher = runScope.launch {
-                settingsStore.effectiveSettings.map { it.settings }.collect { latestSettings ->
+                configurations.observe(realmAccess.scope).collect { latestConfiguration ->
+                    configurations.requireAccess(realmAccess)
                     resolveActiveRunStopReason(
-                        settings = latestSettings,
+                        configuration = latestConfiguration,
                         callerAssistantId = callerAssistantId,
                         targetAssistantId = targetAssistantId,
                         runSpec = ready.runSpec,
                     )?.let { reason ->
-                        runJob.cancel(reason)
+                        childRuntime.requestCancel(installedChildTurnId, reason)
                     }
                 }
             }
@@ -572,12 +581,10 @@ class SubAssistantRunCoordinator internal constructor(
             val genResult = withContext(runJob) {
                 runTargetGeneration(
                     realmAccess = realmAccess,
-                    settings = ready.settings,
-                    target = target,
-                    model = model,
+                    targetAssistantId = target.id,
                     callerAssistantId = callerAssistantId,
                     runSpec = ready.runSpec,
-                    childConversationId = childConversationId,
+                    runtime = childRuntime,
                     childTaskNodeId = childTaskNodeId,
                     childTurnId = installedChildTurnId,
                     activeWorker = runJob,
@@ -591,7 +598,7 @@ class SubAssistantRunCoordinator internal constructor(
             // StateFlow watcher 与 final 可能同时到达；提交 completed 前同步重验，
             // 防止撤权或模型失效期间到达的迟到结果被误记为成功。
             resolveActiveRunStopReason(
-                settings = settingsStore.effectiveSettings.value.settings,
+                configuration = configurations.read(realmAccess),
                 callerAssistantId = callerAssistantId,
                 targetAssistantId = targetAssistantId,
                 runSpec = ready.runSpec,
@@ -612,7 +619,9 @@ class SubAssistantRunCoordinator internal constructor(
             val currentTaskId = childTaskNodeId ?: throw e
             val currentRunState = runState ?: throw e
             // 撤权取消 message 为 target_removed/...；用户取消为 null 或 user_cancelled
-            val cancelReason = normalizeSubAssistantCancellationReason(e.message)
+            val cancelReason = normalizeSubAssistantCancellationReason(
+                childTurnId?.let { ownedChildRuntime?.peekCancelReason(it) } ?: e.message,
+            )
             val masterCancelled = coroutineContext[Job]?.isActive == false
             val terminalMeta = currentRunState.updateTerminalState(
                 state = SubAssistantCallState.STOPPED,
@@ -692,13 +701,16 @@ class SubAssistantRunCoordinator internal constructor(
             val ownedChildId = childConversationId
             val ownedTurnId = childTurnId
             val ownedWorker = childRunJob
-            if (ownedChildId != null && ownedTurnId != null && ownedWorker != null) {
-                runtimeRegistry.findRuntime(ownedChildId)?.releaseTurnWorker(
-                    turnId = ownedTurnId,
-                    worker = ownedWorker,
-                )
+            try {
+                if (ownedChildId != null && ownedTurnId != null && ownedWorker != null) {
+                    runtimeRegistry.findRuntime(ownedChildId)?.releaseTurnWorker(
+                        turnId = ownedTurnId,
+                        worker = ownedWorker,
+                    )
+                }
+            } finally {
+                ready.lease.close()
             }
-            ready.lease.close()
         }
     }
 
@@ -956,12 +968,10 @@ class SubAssistantRunCoordinator internal constructor(
 
     private suspend fun runTargetGeneration(
         realmAccess: net.weero.measix.pilot.data.enterprise.RealmAccess,
-        settings: Settings,
-        target: Assistant,
-        model: me.rerere.ai.provider.Model,
+        targetAssistantId: ConfigurationReference,
         callerAssistantId: ConfigurationReference,
         runSpec: net.weero.measix.pilot.data.ai.subassistant.SubAssistantRunSpec,
-        childConversationId: Uuid,
+        runtime: ConversationRuntime,
         childTaskNodeId: Uuid,
         childTurnId: Uuid,
         activeWorker: kotlinx.coroutines.Job,
@@ -970,10 +980,17 @@ class SubAssistantRunCoordinator internal constructor(
         runState: SubAssistantRunStateReducer,
         turnTtsContext: TtsToolPlaybackContext? = null,
     ): TargetGenerationResult {
-        val runtime = commandCoordinator.load(childConversationId)
+        val childConversationId = runtime.id
         val snapshot = runtime.durable
         configurations.requireAccess(realmAccess)
 
+        val captured = modelExecutions.captureTurn(
+            realmAccess, runtime, childTurnId, activeWorker, targetAssistantId,
+            net.weero.measix.pilot.service.ChildModelAdmission(callerAssistantId, runSpec),
+        )
+        val settings = captured.userSettings
+        val target = captured.assistant
+        val model = captured.model.model
         // 复用 turn-level TtsToolPlaybackContext 的 sessionId，使整轮 turn 内的 Master 和
         // 所有 Target 的 TTS 调用归属同一条播放队列；无 turnTtsContext 时回退独立 context。
         val ttsPlaybackContext = TtsToolPlaybackContext(
@@ -982,8 +999,7 @@ class SubAssistantRunCoordinator internal constructor(
             assistantName = target.name,
             sourceType = TtsPlaybackSource.SourceType.SUB_ASSISTANT,
         )
-        val mediaCapabilities = turnRunner.resolveRequestMediaCapabilities(settings, model)
-        val providerSetting = model.findProvider(settings.providers) ?: error("Provider not found")
+        val mediaCapabilities = captured.mediaCapabilities
         check(snapshot.header.scope == realmAccess.scope) { "sub_assistant_realm_mismatch" }
         val memoryAccess = memoryService.captureExecution(realmAccess, target)
         val disclosureCandidate = ConversationDisclosureSnapshotService.captureCandidate(
@@ -1017,23 +1033,11 @@ class SubAssistantRunCoordinator internal constructor(
             }
             addAll(regularTools)
         }
-        val credentialOwner = captureProviderCredentialOwner(
-            settings = settings,
-            model = model,
-            selectedProvider = providerSetting,
-        )
         val launchPlan = turnContextFactory.prepareLaunch(
             realmAccess = realmAccess,
             settings = settings,
             assistant = target,
-            model = model,
-            providerSetting = providerSetting,
-            providerTransportLease = ProviderTransportLease {
-                resolveProviderTransportOwner(
-                    settingsStore.effectiveSettings.value.settings,
-                    credentialOwner,
-                )
-            },
+            model = captured.model,
             mediaCapabilities = mediaCapabilities,
             conversationSystemPrompt = null,
             conversationModeInjectionIds = target.modeInjectionIds,
@@ -1043,7 +1047,7 @@ class SubAssistantRunCoordinator internal constructor(
         // run, but it cannot change the already frozen wire shape for an admitted START.
         activeWorker.ensureActive()
         resolveActiveRunStopReason(
-            settings = settingsStore.effectiveSettings.value.settings,
+            configuration = configurations.read(realmAccess),
             callerAssistantId = callerAssistantId,
             targetAssistantId = target.id,
             runSpec = runSpec,

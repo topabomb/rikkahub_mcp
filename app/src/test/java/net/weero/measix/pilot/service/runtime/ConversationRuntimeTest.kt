@@ -61,6 +61,75 @@ import kotlin.uuid.Uuid
 class ConversationRuntimeTest {
 
     @Test
+    fun `failed preparation cleanup retains the exact lease owner for stop and retry`() = runTest {
+        var evicted = false
+        val rt = runtime(backgroundScope) { evicted = true }
+        val turn = Uuid.random()
+        val worker = Job()
+        var attempts = 0
+        val lease = ModelExecutionLease(releaseOwner = {
+            attempts++
+            if (attempts == 1) throw java.io.IOException("release failed")
+        }) { accept -> accept(ModelRequestTarget.LocalExample) }
+        rt.installTurnWorker(turn, worker)
+        rt.bindModelExecution(turn, worker, lease)
+        worker.complete()
+        assertTrue(rt.hasExecutionLeases)
+        assertTrue(rt.isInUse)
+        try { rt.releaseTurnWorker(turn, worker, false); org.junit.Assert.fail("release failure swallowed") }
+        catch (_: java.io.IOException) { }
+        assertTrue(rt.hasExecutionLeases)
+        assertThrows(IllegalStateException::class.java) { rt.cleanup() }
+        val replacement = Job()
+        rt.installTurnWorker(Uuid.random(), replacement)
+        replacement.complete()
+        assertEquals(null, rt.currentWorker())
+        val stopped = requireNotNull(rt.captureAndRequestStop("retry"))
+        assertSame(worker, stopped.worker)
+        assertTrue(rt.ownsStoppedWorker(stopped))
+        rt.releaseTurnWorker(turn, Job(), false)
+        assertEquals(1, attempts)
+        rt.releaseTurnWorker(turn, worker, false)
+        assertEquals(2, attempts)
+        assertTrue(!rt.hasExecutionLeases)
+        assertEquals(null, rt.currentWorker())
+        runCurrent()
+        advanceTimeBy(6_000)
+        assertTrue(evicted)
+        try { lease.execute { org.junit.Assert.fail("released lease started I/O") } }
+        catch (error: IllegalStateException) { assertEquals("model_execution_lease_closed", error.message) }
+    }
+
+    @Test
+    fun `concurrent terminal releases wait for the same cleanup acknowledgement`() = runTest {
+        val rt = runtime(backgroundScope)
+        val turn = Uuid.random()
+        val worker = Job()
+        val entered = CompletableDeferred<Unit>()
+        val finish = CompletableDeferred<Unit>()
+        var releases = 0
+        val lease = ModelExecutionLease(releaseOwner = {
+            releases++
+            entered.complete(Unit)
+            finish.await()
+        }) { it(ModelRequestTarget.LocalExample) }
+        rt.installTurnWorker(turn, worker)
+        rt.bindModelExecution(turn, worker, lease)
+        worker.complete()
+        val first = async { rt.releaseTurnWorker(turn, worker, false) }
+        entered.await()
+        val second = async { rt.releaseTurnWorker(turn, worker, false) }
+        runCurrent()
+        assertTrue(!first.isCompleted && !second.isCompleted)
+        assertTrue(rt.hasExecutionLeases)
+        finish.complete(Unit)
+        first.await()
+        second.await()
+        assertEquals(1, releases)
+        assertTrue(!rt.hasExecutionLeases)
+    }
+
+    @Test
     fun `auxiliary ownership survives cancellation until the captured worker actually finishes`() = runTest {
         val conversation = Conversation.ofId(Uuid.random(), DEFAULT_ASSISTANT_ID)
         var evicted = false
@@ -329,6 +398,7 @@ class ConversationRuntimeTest {
             assistant = assistant,
         )
 
+        rt.bindModelExecution(turnId, initialWorker, context.model.executionLease)
         rt.bindTurnContext(turnId, initialWorker, context)
         val projection = TurnModelContextProjection(entries = emptyList(), locators = emptyMap())
         rt.bindModelContextProjection(turnId, initialWorker, projection)
@@ -371,6 +441,7 @@ class ConversationRuntimeTest {
             model = model,
             assistant = assistant,
         )
+        rt.bindModelExecution(turnId, worker, context.model.executionLease)
         rt.bindTurnContext(turnId, worker, context)
         rt.requestCancel(turnId, "target_access_revoked")
         assertEquals(TurnLivePhase.STOPPING, rt.currentTurnPresentation().phase)
@@ -405,15 +476,12 @@ class ConversationRuntimeTest {
         val model = Model(modelId = "model", displayName = "Model")
         val provider = ProviderSetting.OpenAI(models = listOf(model))
         val assistant = Assistant(enableMemory = false)
-        rt.bindTurnContext(
-            turnId,
-            worker,
-            testTurnContext(
-                settings = Settings(providers = listOf(provider), assistants = listOf(assistant)),
-                model = model,
-                assistant = assistant,
-            ),
+        val context = testTurnContext(
+            settings = Settings(providers = listOf(provider), assistants = listOf(assistant)),
+            model = model, assistant = assistant,
         )
+        rt.bindModelExecution(turnId, worker, context.model.executionLease)
+        rt.bindTurnContext(turnId, worker, context)
         rt.retainAwaitingUser(handle)
 
         assertThrows(IllegalArgumentException::class.java) {
@@ -984,6 +1052,24 @@ class ConversationRuntimeTest {
         runCurrent()
 
         assertEquals(1, idleCount)
+    }
+
+    @Test
+    fun `preparation cancellation keeps its reason after the unleased owner retires`() = runTest {
+        val rt = runtime(this)
+        val turnId = Uuid.random()
+        val worker = Job()
+        var completionReason: String? = null
+        worker.invokeOnCompletion { completionReason = it?.message }
+        rt.installTurnWorker(turnId, worker)
+
+        rt.requestCancel(turnId, "target_access_revoked")
+        worker.join()
+        rt.requestCancel(turnId, "user_stop")
+
+        assertEquals(null, rt.currentWorker())
+        assertEquals(null, rt.peekCancelReason(turnId))
+        assertEquals("target_access_revoked", completionReason)
     }
 
     @Test

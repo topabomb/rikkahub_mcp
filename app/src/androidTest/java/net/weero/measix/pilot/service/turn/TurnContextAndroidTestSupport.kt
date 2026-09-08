@@ -1,8 +1,7 @@
 package net.weero.measix.pilot.service.turn
 
 import me.rerere.common.configuration.ConfigurationReference
-import net.weero.measix.pilot.service.runtime.ProviderTransportLease
-import net.weero.measix.pilot.service.runtime.freezeProviderWireShape
+import net.weero.measix.pilot.service.runtime.ModelExecutionLease
 
 import me.rerere.ai.core.Tool
 import me.rerere.ai.provider.Model
@@ -63,13 +62,11 @@ internal fun androidTestTurnContext(
         assistant = resolveTurnAssistantSnapshot(assistant),
         model = TurnModelSnapshot(
             model = model,
-            providerShape = freezeProviderWireShape(
-                model.findProvider(settings.providers) ?: error("Provider not found in test Settings"),
-                model,
-            ),
-            transportLease = ProviderTransportLease {
-                model.findProvider(settings.providers) ?: error("Provider not found in test Settings")
+            executionLease = net.weero.measix.pilot.service.runtime.ModelExecutionLease { accept ->
+                accept(net.weero.measix.pilot.service.runtime.ModelRequestTarget.Remote(model.findProvider(settings.providers) ?: error("Provider not found in test Settings")))
             },
+            userRevision = "test",
+            enterpriseVersion = null,
         ),
         mediaCapabilities = mediaCapabilities,
         promptInputs = promptInputs,

@@ -64,6 +64,7 @@ Target.allowAsSubAssistant
 - Target 显式绑定模型时，严格使用 Target 模型及其执行参数；模型无效返回 `target_model_unavailable`。
 - Target 未绑定模型时，继承 Caller 当前有效模型及模型执行参数，但不回写 Target；Caller 无有效模型返回 `caller_model_unavailable`。
 - Target 的身份、System Prompt、工具、记忆、正则和权限始终保持独立。
+- 活跃调用的 RunSpec 基于原 RealmAccess 的 ResolvedConfiguration 解析，个人资源也受本企业五项策略控制。模型捕获前再次核验同一 RunSpec，随后上下文只使用 captured 配置；每次模型请求在同一授权临界区复验 Caller、Target、引用关系和原模型，撤权沿现有取消/STOPPED 协议收口，不依赖异步配置 watcher 抢先运行。
 
 ## 3. 核心组件与职责
 

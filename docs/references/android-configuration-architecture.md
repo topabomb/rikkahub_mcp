@@ -90,6 +90,14 @@ updateLocal(latest Local shadow transform)
 
 PrepareEnterpriseExampleAssets 从公开完整模板派生 enterprise.local.identity.json，只用于安装目录的首次初始化。原生完整文件导入可安装其他本地来源/Deployment/User；换主体必须先退出，扫码和粘贴无安装权限。票据固定登录身份，同企业的不同用户分别存储。重新接入读取来源当前发布版本，没有“旧安装包时保留较新 Applied”的特殊分支。配置文件缺失/损坏时，已兑换身份可发布 CONFIGURATION_PENDING，不能因读不到配置而猜测用户。有效导入的来源发布成功但客户端应用失败时，LocalEnterpriseImportResult 明确返回来源 revision 与失败原因，后续可重试同步；不会谎报已应用。
 
+### 模型执行中的配置与私有连接
+
+`SettingsStore.withExecutionConfiguration` 在用户配置事务锁内读取同一 `UserSettingsDocument`，派生原 scope 的目录、用户配置和内容摘要 revision；该捕获不增加持久化配置区。`ModelExecutionService` 是主聊天和子助手模型捕获及逐请求准入入口，企业请求固定原 Session 与 Applied binding revision。子助手准备完成时统一使用新捕获的配置构建 prompt、披露与工具；preflight RunSpec 只用于复验，不混入另一份 Settings。
+
+企业本地示例模型使用既有 RequestAssembler、StepRunner、流式合并和 Turn 提交链，返回明确的模拟文本；图片只确认接收，不声称完成真实视觉推理。私有模型 binding 复用 OpenAI Chat/Responses、Claude、Google 的既有 wire builder。`RequestCredentials.Fixed` 只存在于请求参数，不轮换、不写用户 key cache，也不序列化到 Settings 或普通备份。自动认证与同名私有 header 不能同时配置；用户 header 不得改写认证、Host 或企业自有 header，用户 body 不得指定模型回退或路由。
+
+私有请求带无身份、无凭据的 `PrivateRequest` 标记，现有 HTTP 日志入口跳过该请求。共享网络边界在 OkHttp 跟随跨 origin 重定向前拒绝请求，避免 Google/Claude 与自定义私有 header 被转发；个人请求保持原日志和重定向行为。Speech、MCP、辅助模型及附件识别尚未全部迁入模型准入链。
+
 ### 2.5 按主体解析与使用偏好
 
 `ConfigurationQueryService` 通过 SettingsStore 组合唯一用户文档与 EnterpriseSessionController 的已发布状态；ConfigurationResolver 纯派生当前空间或明确指定主体的 ResolvedConfiguration，不持久化第三份镜像。目录携带资源来源、显示名称、编辑权限、准入与不可用原因；企业连接和凭据不进入该目录。
