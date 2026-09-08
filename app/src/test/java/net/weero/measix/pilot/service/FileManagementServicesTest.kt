@@ -56,6 +56,31 @@ class FileManagementServicesTest {
 
     @After fun tearDown() { root.deleteRecursively() }
 
+    @Test fun `image authorization and bytes cannot return after expiry during owner work`() = runTest {
+        for (artifact in listOf(true, false)) for (checkOnly in listOf(true, false)) {
+            var now = 1_800_000_000_000L
+            val controller = EnterpriseSessionController(EnterpriseAppliedStore(File(root, "$artifact-$checkOnly"))) { now }
+            val ready = controller.enrollFixture(exampleEnterprisePackage())
+            val selected = requireNotNull(controller.observeSelectedRealmSelection().first())
+            val artifacts = mockk<ArtifactStore>()
+            val generated = mockk<GeneratedMediaStore>()
+            val service = FileManagementApplicationService(artifacts, generated, ApplicationRecoveryGate().apply { ready() }, controller)
+            val key = if (artifact) ManagedFileKey.Artifact(1, selected) else ManagedFileKey.Generated(1, selected)
+            val entered = kotlinx.coroutines.CompletableDeferred<Unit>()
+            val resume = kotlinx.coroutines.CompletableDeferred<Unit>()
+            suspend fun ownerWork() { entered.complete(Unit); resume.await() }
+            coEvery { artifacts.requireImageAccess(any(), any()) } coAnswers { ownerWork() }
+            coEvery { generated.requireImageAccess(any(), any()) } coAnswers { ownerWork() }
+            coEvery { artifacts.readImage(any(), any()) } coAnswers { ownerWork(); byteArrayOf(1) }
+            coEvery { generated.readImage(any(), any()) } coAnswers { ownerWork(); byteArrayOf(1) }
+            val read = async { runCatching { if (checkOnly) service.requireImageAccess(key) else service.readImage(key) } }
+            entered.await()
+            now = requireNotNull(ready.manifest.session).expiresAtMillis
+            resume.complete(Unit)
+            assertTrue(read.await().exceptionOrNull() is EnterpriseConfigurationException)
+        }
+    }
+
     @Test
     fun `cutoff is calculated once from the supported typed range`() {
         val now = 1_800_000_000_000L
@@ -143,16 +168,20 @@ class FileManagementServicesTest {
         assertTrue(personal != oldPersonal)
         val targets = listOf(oldPersonal, enterprise)
         targets.forEach { old ->
-            assertTrue(runCatching { application.deleteUpload(ManagedFileKey.Upload(1, old)) }.exceptionOrNull() is EnterpriseConfigurationException)
+            assertTrue(runCatching { application.deleteArtifact(ManagedFileKey.Artifact(1, old)) }.exceptionOrNull() is EnterpriseConfigurationException)
             assertTrue(runCatching { application.deleteGenerated(ManagedFileKey.Generated(1, old)) }.exceptionOrNull() is EnterpriseConfigurationException)
             assertTrue(runCatching { application.cleanup(old, FileCleanupCategory.UPLOAD, FileCleanupRange.All) }.exceptionOrNull() is EnterpriseConfigurationException)
-            assertTrue(runCatching { query.inspectUpload(ManagedFileKey.Upload(1, old)) }.exceptionOrNull() is EnterpriseConfigurationException)
+            for (key in listOf(ManagedFileKey.Artifact(1, old), ManagedFileKey.Generated(1, old))) {
+                assertTrue(runCatching { application.requireImageAccess(key) }.exceptionOrNull() is EnterpriseConfigurationException)
+                assertTrue(runCatching { application.readImage(key) }.exceptionOrNull() is EnterpriseConfigurationException)
+            }
+            assertTrue(runCatching { query.inspectArtifact(ManagedFileKey.Artifact(1, old)) }.exceptionOrNull() is EnterpriseConfigurationException)
             assertTrue(runCatching { query.candidateCount(old, FileCleanupCategory.GENERATED_IMAGES, FileCleanupRange.All) }.exceptionOrNull() is EnterpriseConfigurationException)
         }
         coVerify(exactly = 0) { artifacts.deleteUserRequested(any(), any()) }
         coVerify(exactly = 0) { generated.delete(any(), any()) }
         coEvery { artifacts.deleteUserRequested(ConfigurationScope.Personal, 1) } returns net.weero.measix.pilot.data.files.ArtifactDeleteResult.Completed(1)
-        assertEquals(ArtifactDeleteOutcome.Deleted, application.deleteUpload(ManagedFileKey.Upload(1, personal)))
+        assertEquals(ArtifactDeleteOutcome.Deleted, application.deleteArtifact(ManagedFileKey.Artifact(1, personal)))
     }
 
     @Test

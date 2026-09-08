@@ -174,7 +174,7 @@ private fun FileDirectoryContent(
         val executing = uploadDeleteState is UploadDeleteState.Executing
         LaunchedEffect(target.key) {
             pendingUploadDeleteImpact = try {
-                queryService.inspectUpload(target.uploadKey())
+                queryService.inspectArtifact(target.uploadKey())
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (_: Exception) {
@@ -231,7 +231,7 @@ private fun FileDirectoryContent(
                             uploadDeleteState = UploadDeleteState.Executing(target)
                             scope.launch {
                                 try {
-                                    val toast = when (applicationService.deleteUpload(target.uploadKey())) {
+                                    val toast = when (applicationService.deleteArtifact(target.uploadKey())) {
                                         ArtifactDeleteOutcome.Deleted,
                                         ArtifactDeleteOutcome.CleanupPending -> deletedToast
                                         ArtifactDeleteOutcome.InProgress -> deleteInProgressToast
@@ -527,7 +527,7 @@ private fun FileDirectoryContent(
                         FileCategory.UPLOAD -> {
                             val target = uploadFiles.firstOrNull { it.contentUri == imageUrl }
                                 ?: error(deleteAlreadyDeletedToast)
-                            val impact = queryService.inspectUpload(target.uploadKey())
+                            val impact = queryService.inspectArtifact(target.uploadKey())
                                 ?: error(deleteAlreadyDeletedToast)
                             buildString {
                                 append(
@@ -582,7 +582,7 @@ private fun FileDirectoryContent(
                             if (target == null) {
                                 ImagePreviewDeleteResult.Deleted
                             } else {
-                                when (applicationService.deleteUpload(target.uploadKey())) {
+                                when (applicationService.deleteArtifact(target.uploadKey())) {
                                     ArtifactDeleteOutcome.Deleted,
                                     ArtifactDeleteOutcome.CleanupPending,
                                     ArtifactDeleteOutcome.AlreadyDeleted -> ImagePreviewDeleteResult.Deleted
@@ -620,8 +620,8 @@ private fun rangeLabel(range: FileCleanupRange): Int = when (range) {
     FileCleanupRange.All -> R.string.setting_files_page_clean_range_all
 }
 
-private fun ManagedFileUiModel.uploadKey(): ManagedFileKey.Upload =
-    key as? ManagedFileKey.Upload ?: error("upload projection has non-upload key: $key")
+private fun ManagedFileUiModel.uploadKey(): ManagedFileKey.Artifact =
+    key as? ManagedFileKey.Artifact ?: error("upload projection has non-upload key: $key")
 
 private fun ManagedFileUiModel.generatedKey(): ManagedFileKey.Generated =
     key as? ManagedFileKey.Generated ?: error("generated projection has non-generated key: $key")
@@ -708,7 +708,7 @@ private fun FileItem(
     ) {
         Column {
             MediaThumb(
-                model = file.contentUri.takeIf { file.mimeType.startsWith("image/") },
+                model = file.key.takeIf { file.mimeType.startsWith("image/") },
                 contentDescription = file.displayName,
                 onDelete = onDelete,
                 deleteEnabled = !deleteExecuting,
@@ -768,7 +768,7 @@ private fun GeneratedImageItem(
     ) {
         Column {
             MediaThumb(
-                model = file.contentUri,
+                model = file.key,
                 contentDescription = prompt,
                 onDelete = onDelete,
                 onClick = onImageClick,
@@ -803,7 +803,7 @@ private fun GeneratedImageItem(
 
 @Composable
 private fun MediaThumb(
-    model: Any?,
+    model: ManagedFileKey?,
     contentDescription: String,
     onDelete: () -> Unit,
     deleteEnabled: Boolean = true,

@@ -205,6 +205,28 @@ class GeneratedMediaStore(
         return candidate
     }
 
+    internal suspend fun requireImageAccess(scope: ConfigurationScope, mediaId: Int) = withContext(Dispatchers.IO) {
+        withPersistLock { requireReadableImage(scope, mediaId); Unit }
+    }
+
+    internal suspend fun readImage(scope: ConfigurationScope, mediaId: Int): ByteArray = withContext(Dispatchers.IO) {
+        withPersistLock {
+            val file = requireReadableImage(scope, mediaId)
+            val bytes = net.weero.measix.pilot.data.files.FileUtils.readBoundedBytes(file, MAX_IMAGE_BYTES.toLong())
+            check(detectImageMime(bytes) != null) { "generated_image_invalid" }
+            bytes
+        }
+    }
+
+    private suspend fun requireReadableImage(scope: ConfigurationScope, mediaId: Int): File {
+        val entity = genMediaRepository.getMediaById(mediaId)?.takeIf { it.scope == scope }
+            ?: error("generated_image_unavailable")
+        val file = canonicalFile(entity)
+        check(file.isFile) { "generated_image_unavailable" }
+        if (file.length() > MAX_IMAGE_BYTES) throw net.weero.measix.pilot.data.files.FilePayloadTooLargeException()
+        return file
+    }
+
     suspend fun delete(scope: ConfigurationScope, id: Int): Boolean = withPersistLock {
         withContext(Dispatchers.IO) {
             val entity = genMediaRepository.getMediaById(id)?.takeIf { it.scope == scope }

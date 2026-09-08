@@ -686,7 +686,7 @@ private fun ImageGalleryScreen(
                         ) {
                             Column {
                                 AsyncImage(
-                                    model = File(it.filePath),
+                                    model = net.weero.measix.pilot.service.ManagedFileKey.Generated(it.id, it.selection),
                                     contentDescription = null,
                                     modifier = Modifier
                                         .fillMaxWidth()

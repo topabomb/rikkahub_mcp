@@ -504,6 +504,10 @@ C6 的文件创建与引用边界已接通：上传、粘贴文本、输出图�
 
 该批完整串行 `test assembleDebug lintDebug assembleRelease :app:connectedDebugAndroidTest` 通过，最后一次增量门禁耗时 55 秒。App 2,071 项 JVM 测试无失败/跳过，lint 0 错误、287 警告，Workspace 保留 11 项 Windows 条件跳过。Android 17 模拟器 12 项测试全部通过：新增真实 Navigation 保存恢复后屏蔽旧 ViewModel 内容，另回归实际 Room 会话树与引用事务。JVM 使用真实 Registry/Coordinator 与确定性调度验证超过闲置时限后的删除通知和独立释放，并覆盖跨域拒绝、迟到预览和父页面关闭。完整门禁曾发现 Query 直接加载 Runtime，现收回原 Coordinator，未放宽静态约束；旧树测试创建/保留个人附件的错误夹具已改为企业范围，设备复验通过。独立复审无剩余本批实质问题，证据见 `build/reports/enterprise/detail-read-verification.json`。该结果不代表 Release 设备、真实平台或 0.0.20 整期验收。
 
+受管图片读取已复用既有 Artifact/GeneratedMedia owner：文件目录和图库缩略图保存原 RealmSelection，Coil 在缓存查询前和解码返回后验证原授权；owner 在原生命周期锁内校验归属、发布状态、真实路径及图片类型并限量读取。文件锁等待期间到期也不能返回内容。没有新增持久化结构、文件缓存或保留权 owner。完整查看器、保存、设为背景、Markdown/HTML、配置资产及临时图片仍需统一传递类型化来源，不能把本批缩略图接线当作 C6 完成。
+
+该批完整串行 `test assembleDebug lintDebug assembleRelease :app:connectedDebugAndroidTest` 在 8 分 27 秒内通过：App 2,073 项 JVM 测试无失败/跳过，lint 0 错误、287 警告，Workspace 保留 11 项 Windows 条件跳过。Android 17 模拟器 14 项测试全部通过，其中生产 Coil 组件配合真实 Room/Android 解码验证两类图片解码与内存缓存命中、跨域 ID、未发布附件、删除后缓存、切域往返旧请求及解码后的迟到结果拒绝；同时回归请求文件保留与子助手导航恢复。独立审查无剩余本批实质问题，证据见 `build/reports/enterprise/managed-image-verification.json`。版本保持 0.0.19，Release 设备、物理扫码和真实平台互操作不在本批证据内。
+
 ## 11. 验收证据
 
 | 编号 | 必须证明 |

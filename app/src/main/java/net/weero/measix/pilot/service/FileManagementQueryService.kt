@@ -31,7 +31,7 @@ import net.weero.measix.pilot.data.imggen.GeneratedMediaStore
 /** A UI command retains both its typed identity and the selection that displayed it. */
 sealed interface ManagedFileKey {
     val selection: RealmSelection
-    data class Upload(val artifactId: Long, override val selection: RealmSelection) : ManagedFileKey
+    data class Artifact(val artifactId: Long, override val selection: RealmSelection) : ManagedFileKey
     data class Generated(val mediaId: Int, override val selection: RealmSelection) : ManagedFileKey
 }
 
@@ -128,7 +128,7 @@ class FileManagementQueryService internal constructor(
         }
     }
 
-    suspend fun inspectUpload(key: ManagedFileKey.Upload): ArtifactDeleteImpactUiModel? {
+    suspend fun inspectArtifact(key: ManagedFileKey.Artifact): ArtifactDeleteImpactUiModel? {
         recoveryGate.awaitReady()
         return sessions.withSelectedRealmSelection(key.selection) {
             val entity = artifactStore.get(key.artifactId)?.takeIf { it.scope == key.selection.access.scope }
@@ -138,7 +138,7 @@ class FileManagementQueryService internal constructor(
     }
 
     private fun ArtifactEntity.toManaged(selection: RealmSelection) = ManagedFileUiModel(
-        key = ManagedFileKey.Upload(id, selection),
+        key = ManagedFileKey.Artifact(id, selection),
         contentUri = artifactStore.file(this).toUri().toString(),
         displayName = displayName,
         mimeType = mimeType,

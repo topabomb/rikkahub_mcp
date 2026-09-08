@@ -8,11 +8,6 @@ import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.withContext
-import kotlinx.coroutines.currentCoroutineContext
-import kotlinx.coroutines.ensureActive
-import java.io.ByteArrayOutputStream
-
-internal class ArtifactPayloadTooLargeException : java.io.IOException("Artifact payload exceeds the size limit")
 
 /**
  * 托管 artifact 的纯磁盘层。它不知道数据库、引用或删除策略，只负责 staging、
@@ -155,22 +150,8 @@ class ArtifactPayloadStore(private val context: Context) {
     fun mimeType(uri: Uri): String? = FileUtils.getFileMimeType(context, uri)
 
     /** Bounded, cancellable payload read; lifetime authorization belongs to ArtifactStore. */
-    suspend fun readBytes(relativePath: String, maxBytes: Long): ByteArray = withContext(Dispatchers.IO) {
-        val source = file(relativePath)
-        if (source.length() > maxBytes) throw ArtifactPayloadTooLargeException()
-        source.inputStream().use { input ->
-            val output = ByteArrayOutputStream()
-            val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
-            while (true) {
-                currentCoroutineContext().ensureActive()
-                val count = input.read(buffer)
-                if (count < 0) break
-                if (output.size().toLong() + count > maxBytes) throw ArtifactPayloadTooLargeException()
-                output.write(buffer, 0, count)
-            }
-            output.toByteArray()
-        }
-    }
+    suspend fun readBytes(relativePath: String, maxBytes: Long): ByteArray =
+        FileUtils.readBoundedBytes(file(relativePath), maxBytes)
 
     fun stagingExists(stagingToken: String): Boolean = stagingFile(stagingToken).isFile
 

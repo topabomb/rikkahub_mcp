@@ -9,9 +9,31 @@ import android.util.Log
 import android.webkit.MimeTypeMap
 import java.io.ByteArrayOutputStream
 import java.io.File
+import kotlinx.coroutines.ensureActive
 import java.io.FileInputStream
 
+internal class FilePayloadTooLargeException : java.io.IOException("File payload exceeds the size limit")
+
 object FileUtils {
+    /** Owners authorize and protect the file before entering this bounded, cancellable IO primitive. */
+    internal suspend fun readBoundedBytes(file: File, maxBytes: Long): ByteArray =
+        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            require(maxBytes >= 0)
+            if (file.length() > maxBytes) throw FilePayloadTooLargeException()
+            file.inputStream().use { input ->
+                val output = ByteArrayOutputStream()
+                val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+                while (true) {
+                    kotlinx.coroutines.currentCoroutineContext().ensureActive()
+                    val count = input.read(buffer)
+                    if (count < 0) break
+                    if (output.size().toLong() + count > maxBytes) throw FilePayloadTooLargeException()
+                    output.write(buffer, 0, count)
+                }
+                output.toByteArray()
+            }
+        }
+
     private const val TAG = "FileUtils"
 
     fun safeExtension(displayName: String?, mimeType: String?): String {

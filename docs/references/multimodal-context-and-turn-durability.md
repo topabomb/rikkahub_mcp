@@ -121,6 +121,8 @@ Tool Result checkpoint（消息与 Artifact 引用同事务）
 
 ### 2.5 范围清理与恢复
 
+文件目录与图库缩略图通过 `ManagedFileKey.Artifact` / `Generated` 保存原 RealmSelection 和稳定文件 ID。`FileManagementApplicationService` 在原 Session 内调用文件 owner 验证归属、状态和文件边界，并在 owner 操作结束后复验原选择。Artifact lifecycle lock 与 GeneratedMedia persist lock 各自保护有界读取，解码使用返回的字节，不持有 owner 锁；共用 `FileUtils.readBoundedBytes` 按实际读入字节限制大小并传播取消。`ManagedImageInterceptor` 在 Coil 内存缓存命中前及解码结果回交前复验权限，缓存键包含原选择身份；未发布、已删除或跨域资源不能靠旧缓存恢复显示。该入口不创建新的 durable 状态或文件 owner。
+
 上传 Artifact 与图库生成媒体保持独立 owner，不存在共享目录扫描删除器：
 
 - 上传文件由 `ArtifactStore` 从 durable metadata 选取候选，在同一 lifecycle lock 内重验 retention pin、消息引用和 Settings roots，并复用单项 CREATING / ACTIVE / DELETING 状态机；

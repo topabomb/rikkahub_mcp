@@ -156,6 +156,7 @@ private const val TAG = "RouteActivity"
 class RouteActivity : ComponentActivity() {
     private val okHttpClient by inject<OkHttpClient>()
     private val settingsStore by inject<SettingsStore>()
+    private val fileManagement by inject<net.weero.measix.pilot.service.FileManagementApplicationService>()
     private val conversations by inject<ConversationApplicationService>()
     private val conversationQueries by inject<ConversationQueryService>()
     private var navStack: MutableList<NavKey>? = null
@@ -196,6 +197,9 @@ class RouteActivity : ComponentActivity() {
                     ImageLoader.Builder(context)
                         .crossfade(true)
                         .components {
+                            add(net.weero.measix.pilot.service.ManagedImageInterceptor(fileManagement))
+                            add(net.weero.measix.pilot.service.ManagedImageKeyer)
+                            add(net.weero.measix.pilot.service.ManagedImageFetcherFactory(fileManagement))
                             @OptIn(ExperimentalCoilApi::class)
                             add(OkHttpNetworkFetcherFactory(
                                 callFactory = { okHttpClient },

@@ -100,6 +100,85 @@ class ManagedFileCreationIntegrationTest {
     }
 
     @Test
+    fun managedImageDecoderRejectsForeignMissingRevokedAndLateCachedResults() = runBlocking {
+        store.ensureReferenceProjection()
+        val bitmap = android.graphics.Bitmap.createBitmap(2, 2, android.graphics.Bitmap.Config.ARGB_8888)
+        val bytes = java.io.ByteArrayOutputStream().use { out ->
+            check(bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, out)); out.toByteArray()
+        }
+        bitmap.recycle()
+        val packet = payloadContext.assets.open(LocalEnterpriseSource.EXAMPLE_ASSET).use(EnterprisePackageCodec::decode)
+        val sessions = EnterpriseSessionController(EnterpriseAppliedStore(File(root, "image-session")))
+        sessions.enrollLocal(packet.identity, { packet.identity }, { packet })
+        val selected = requireNotNull(sessions.observeSelectedRealmSelection().first())
+        val generated = GeneratedMediaStore(root, GenMediaRepository(database.genMediaDao()), store)
+        val commands = FileManagementApplicationService(store, generated, ApplicationRecoveryGate().apply { ready() }, sessions)
+        suspend fun createKeys(scope: ConfigurationScope): List<ManagedFileKey> {
+            val artifact = store.createFromBytes(scope, bytes, "image.png", "image/png", origin = ArtifactOrigin.USER)
+            store.abandonUnpublished(artifact)
+            val media = generated.commit(scope,
+                me.rerere.ai.ui.ImageGenerationItem(android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP), "image/png"),
+                "image", "model")
+            return listOf(ManagedFileKey.Artifact(artifact.entity.id, selected), ManagedFileKey.Generated(media.mediaId.toInt(), selected))
+        }
+        val foreign = createKeys(ConfigurationScope.Personal)
+        val keys = createKeys(selected.access.scope)
+        for (key in foreign) assertTrue(runCatching { commands.readImage(key) }.isFailure)
+        val unpublished = store.createFromBytes(selected.access.scope, bytes, "pending.png", "image/png", origin = ArtifactOrigin.USER)
+        assertTrue(runCatching { commands.readImage(ManagedFileKey.Artifact(unpublished.entity.id, selected)) }.isFailure)
+        store.discardUnpublished(unpublished).requireDiscarded("test cleanup")
+        val loader = coil3.ImageLoader.Builder(payloadContext).components {
+            add(net.weero.measix.pilot.service.ManagedImageInterceptor(commands))
+            add(net.weero.measix.pilot.service.ManagedImageKeyer)
+            add(net.weero.measix.pilot.service.ManagedImageFetcherFactory(commands))
+        }.build()
+        fun request(key: ManagedFileKey) = coil3.request.ImageRequest.Builder(payloadContext).data(key).size(2, 2).build()
+        try {
+            for (key in keys) {
+                assertArrayEquals(bytes, commands.readImage(key))
+                assertTrue(loader.execute(request(key)) is coil3.request.SuccessResult)
+                val hit = loader.execute(request(key)) as coil3.request.SuccessResult
+                assertEquals(coil3.decode.DataSource.MEMORY_CACHE, hit.dataSource)
+            }
+            // A decoder/cache result already exists when the original realm is revoked.
+            val decoded = kotlinx.coroutines.CompletableDeferred<Unit>()
+            val release = kotlinx.coroutines.CompletableDeferred<Unit>()
+            val delayed = loader.newBuilder().components {
+                add(coil3.intercept.Interceptor { chain ->
+                    val result = chain.proceed()
+                    decoded.complete(Unit)
+                    release.await()
+                    result
+                })
+            }.build()
+            try {
+                val delivery = async { delayed.execute(request(keys.last())) }
+                decoded.await()
+                sessions.switchRealm(RealmSwitchRequest(selected, RealmAccess.Personal)) {}
+                release.complete(Unit)
+                assertTrue(delivery.await() is coil3.request.ErrorResult)
+                for (key in keys) assertTrue(loader.execute(request(key)) is coil3.request.ErrorResult)
+                val personal = requireNotNull(sessions.observeSelectedRealmSelection().first())
+                sessions.switchRealm(RealmSwitchRequest(personal, selected.access)) {}
+                for (key in keys) assertTrue(loader.execute(request(key)) is coil3.request.ErrorResult)
+                val current = requireNotNull(sessions.observeSelectedRealmSelection().first())
+                for (key in keys) {
+                    val activeKey = when (key) {
+                        is ManagedFileKey.Artifact -> key.copy(selection = current)
+                        is ManagedFileKey.Generated -> key.copy(selection = current)
+                    }
+                    assertTrue(loader.execute(request(activeKey)) is coil3.request.SuccessResult)
+                    when (activeKey) {
+                        is ManagedFileKey.Artifact -> commands.deleteArtifact(activeKey)
+                        is ManagedFileKey.Generated -> commands.deleteGenerated(activeKey)
+                    }
+                    assertTrue(loader.execute(request(activeKey)) is coil3.request.ErrorResult)
+                }
+            } finally { release.complete(Unit); delayed.shutdown() }
+        } finally { loader.shutdown() }
+    }
+
+    @Test
     fun fileDirectoriesStatisticsAndDeletionUseTheSelectedPrincipal() = runBlocking {
         store.ensureReferenceProjection()
         val packet = payloadContext.assets.open(LocalEnterpriseSource.EXAMPLE_ASSET).use(EnterprisePackageCodec::decode)
@@ -127,13 +206,13 @@ class ManagedFileCreationIntegrationTest {
         val query = FileManagementQueryService(store, generated, gate, sessions)
         val commands = FileManagementApplicationService(store, generated, gate, sessions)
         val directory = query.observeDirectory().first { it.selection != null }
-        assertEquals(listOf(uploads[1].entity.id), directory.uploads.map { (it.key as ManagedFileKey.Upload).artifactId })
+        assertEquals(listOf(uploads[1].entity.id), directory.uploads.map { (it.key as ManagedFileKey.Artifact).artifactId })
         assertEquals(listOf(mediaIds[1]), directory.generated.map { (it.key as ManagedFileKey.Generated).mediaId })
         assertEquals(ManagedStorageUiModel(2, 7), query.observeStorageStats().first { it != null })
         val page = generated.pagingSource(enterprise).load(androidx.paging.PagingSource.LoadParams.Refresh(null, 20, false))
         assertEquals(listOf(mediaIds[1]), (page as androidx.paging.PagingSource.LoadResult.Page).data.map { it.id })
-        assertEquals(null, query.inspectUpload(ManagedFileKey.Upload(uploads[0].entity.id, enterpriseSelection)))
-        assertEquals(ArtifactDeleteOutcome.AlreadyDeleted, commands.deleteUpload(ManagedFileKey.Upload(uploads[0].entity.id, enterpriseSelection)))
+        assertEquals(null, query.inspectArtifact(ManagedFileKey.Artifact(uploads[0].entity.id, enterpriseSelection)))
+        assertEquals(ArtifactDeleteOutcome.AlreadyDeleted, commands.deleteArtifact(ManagedFileKey.Artifact(uploads[0].entity.id, enterpriseSelection)))
         assertFalse(commands.deleteGenerated(ManagedFileKey.Generated(mediaIds[0], enterpriseSelection)))
         assertEquals(1, query.candidateCount(enterpriseSelection, FileCleanupCategory.UPLOAD, FileCleanupRange.All))
         assertEquals(1, commands.cleanup(enterpriseSelection, FileCleanupCategory.UPLOAD, FileCleanupRange.All).deleted)
@@ -145,7 +224,7 @@ class ManagedFileCreationIntegrationTest {
         assertTrue(File(root, "images/2.png").isFile)
         assertTrue(File(root, "images/unregistered.png").isFile)
         sessions.switchRealm(RealmSwitchRequest(enterpriseSelection, RealmAccess.Personal)) {}
-        assertTrue(runCatching { commands.deleteUpload(ManagedFileKey.Upload(uploads[0].entity.id, originalPersonal)) }.exceptionOrNull() is EnterpriseConfigurationException)
+        assertTrue(runCatching { commands.deleteArtifact(ManagedFileKey.Artifact(uploads[0].entity.id, originalPersonal)) }.exceptionOrNull() is EnterpriseConfigurationException)
         assertEquals(ManagedStorageUiModel(2, 5), query.observeStorageStats().first { it != null })
     }
 

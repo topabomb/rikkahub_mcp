@@ -251,6 +251,33 @@ class ArtifactStore(
 
     fun file(ref: LocalArtifactRef): File = payloadStore.file(ref.relativePath)
 
+    internal suspend fun requireImageAccess(scope: ConfigurationScope, artifactId: Long) = withContext(Dispatchers.IO) {
+        withLifecycleLock { requireReadableImage(scope, artifactId); Unit }
+    }
+
+    internal suspend fun readImage(scope: ConfigurationScope, artifactId: Long): ByteArray = withContext(Dispatchers.IO) {
+        withLifecycleLock {
+            val entity = requireReadableImage(scope, artifactId)
+            val bytes = payloadStore.readBytes(entity.relativePath, GeneratedMediaStore.MAX_IMAGE_BYTES.toLong())
+            check(!ImageMime.isUnsupportedNonImage(bytes, entity.mimeType) && ImageMime.isAcceptedImage(bytes)) {
+                "artifact_image_invalid"
+            }
+            bytes
+        }
+    }
+
+    private suspend fun requireReadableImage(scope: ConfigurationScope, artifactId: Long): ArtifactEntity {
+        val entity = artifactDAO.getById(artifactId) ?: error("artifact_image_unavailable")
+        requireArtifactScope(entity, scope)
+        check(entity.state == ArtifactState.ACTIVE.name && entity.mimeType.substringBefore(';').trim().startsWith("image/", ignoreCase = true)) { "artifact_image_unavailable" }
+        check(!synchronized(unpublishedPins) { unpublishedPins.containsKey(entity.id) }) { "artifact_image_not_published" }
+        val file = payloadStore.file(entity.relativePath)
+        check(file.isFile && (LocalToolPath.isInsideDirectory(file, payloadStore.file(FileFolders.UPLOAD)) ||
+            LocalToolPath.isInsideDirectory(file, payloadStore.file("images")))) { "artifact_image_unavailable" }
+        if (file.length() > GeneratedMediaStore.MAX_IMAGE_BYTES) throw FilePayloadTooLargeException()
+        return entity
+    }
+
     /**
      * Resolves a local file only when its payload is an ACTIVE managed artifact. Callers that
      * clone or otherwise copy files must use this port instead of reading arbitrary file paths.
@@ -393,7 +420,7 @@ class ArtifactStore(
                     payloadStore.readBytes(entity.relativePath, GeneratedMediaStore.MAX_IMAGE_BYTES.toLong())
                 } catch (error: CancellationException) {
                     throw error
-                } catch (_: ArtifactPayloadTooLargeException) {
+                } catch (_: FilePayloadTooLargeException) {
                     return consume(ArtifactImageReadResult.Failure(ArtifactImageReadResult.Reason.TOO_LARGE))
                 } catch (_: java.io.IOException) {
                     return consume(ArtifactImageReadResult.Failure(ArtifactImageReadResult.Reason.READ_FAILED))

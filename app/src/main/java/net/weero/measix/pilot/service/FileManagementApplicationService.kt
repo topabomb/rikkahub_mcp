@@ -42,8 +42,8 @@ sealed interface FileCleanupRange {
 }
 
 /**
- * 设置文件页的唯一写端口：跨 `ArtifactStore`（上传）与 `GeneratedMediaStore`（生成媒体）
- * 两个 owner 编排范围清理，用注入 Clock 一次计算 cutoff，避免长任务里时间漂移。
+ * Combines authorized payload reads and file commands across the existing Artifact and GeneratedMedia owners.
+ * Metadata projection remains in FileManagementQueryService; this port owns no durable files or rows.
  */
 class FileManagementApplicationService internal constructor(
     private val artifactStore: ArtifactStore,
@@ -55,6 +55,28 @@ class FileManagementApplicationService internal constructor(
         file.writeBytes(bytes)
     },
 ) {
+    suspend fun requireImageAccess(key: ManagedFileKey) {
+        recoveryGate.awaitReady()
+        sessions.withSelectedRealmSelection(key.selection) {
+            when (key) {
+                is ManagedFileKey.Artifact -> artifactStore.requireImageAccess(key.selection.access.scope, key.artifactId)
+                is ManagedFileKey.Generated -> generatedMediaStore.requireImageAccess(key.selection.access.scope, key.mediaId)
+            }
+        }
+        sessions.withSelectedRealmSelection(key.selection) { }
+    }
+
+    suspend fun readImage(key: ManagedFileKey): ByteArray {
+        recoveryGate.awaitReady()
+        val bytes = sessions.withSelectedRealmSelection(key.selection) {
+            when (key) {
+                is ManagedFileKey.Artifact -> artifactStore.readImage(key.selection.access.scope, key.artifactId)
+                is ManagedFileKey.Generated -> generatedMediaStore.readImage(key.selection.access.scope, key.mediaId)
+            }
+        }
+        return sessions.withSelectedRealmSelection(key.selection) { bytes }
+    }
+
     suspend fun cleanup(selection: RealmSelection, category: FileCleanupCategory, range: FileCleanupRange): FileCleanupResult {
         recoveryGate.awaitReady()
         return sessions.withSelectedRealmSelection(selection) {
@@ -80,7 +102,7 @@ class FileManagementApplicationService internal constructor(
         }
     }
 
-    suspend fun deleteUpload(key: ManagedFileKey.Upload): ArtifactDeleteOutcome {
+    suspend fun deleteArtifact(key: ManagedFileKey.Artifact): ArtifactDeleteOutcome {
         recoveryGate.awaitReady()
         return sessions.withSelectedRealmSelection(key.selection) {
             artifactStore.deleteUserRequested(key.selection.access.scope, key.artifactId).toOutcome()
