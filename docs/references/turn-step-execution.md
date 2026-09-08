@@ -72,7 +72,7 @@ UI 等待命令结果后关闭对话框，错误可见，取消继续传播。
 恢复期间 discard 不能提前释放其 Artifact retention，成功或失败均由领取者释放；已有同 ID 会话导致冲突，不覆盖新对象。
 历史批量删除只处理用户打开确认框时看到的那组会话，晚到的新会话不被纳入。
 
-START/交互继续、模型生成标题/压缩和文件授权仍有独立执行链，不能以本节的普通操作检查代替其域准入。
+START/交互继续、辅助生成和文件授权各自验证原执行身份，不能以普通操作检查替代其域准入。
 
 ## Turn、Step 与工具事实
 
@@ -211,6 +211,21 @@ Job 后可清理 Runtime。前台服务只通过 query port 观察活动，保�
 具体投影见 [UI 架构](ui-architecture.md)。
 
 ## 标题与子助手
+
+`GenerationSideEffects` 将标题、建议和手动摘要登记到原 `ConversationRuntime`，每个 worker 持有原
+`RealmAccess`。登记在原 Session 与会话准入锁内完成；设置读取、结果和错误发布复验原 Session 与 worker。
+切换所选空间不改写已登记任务的身份；退出或重新接入后，旧 Session 的结果不能提交。
+Runtime 在任务实际完成后才释放登记，取消请求不代表清理结束；停止 ticket 只等待捕获时的任务，
+助手删除的既有超时也覆盖辅助任务的取消与等待。标题重试复用原 worker，不派生脱离其所有权的新任务。
+
+手动摘要保留用户取消语义：取消等待者会取消并等待原摘要 worker，界面在清理完成前不能再次确认。
+结果提交在完整父子锁下复验原节点与 model-context entries，期间历史被编辑则拒绝旧摘要。
+`SubAssistantLifecycle.commitSummary` 使用既有 retention planner，交给
+`ConversationCommandCoordinator.commitTreeMutation` 一次提交摘要树、清空建议及 Child 截断/删除。
+`ConversationWrite.MutateTree` 先取得 Artifact 生命周期锁并准备引用，再进入一个 Room 事务，
+事务成功后才在不可取消段发布 Runtime 和移除已删除 Child；失败不发布任何半完成的树。
+Artifact 垃圾清理由既有维护入口处理，不改变摘要已提交的结果。后台资源配置仍从有效设置读取，
+按原域解析 Provider/binding 的完整执行适配范围见企业实施方案，不能将任务身份验证当作其已完成。
 
 `ConversationTitleCoordinator` 拥有标题阶段、去重和有限重试。首条 USER 的确定性本地标题随
 `AppendUserMessage` 提交。模型标题使用 generation token + expected-title CAS，手动标题与模型提交共用

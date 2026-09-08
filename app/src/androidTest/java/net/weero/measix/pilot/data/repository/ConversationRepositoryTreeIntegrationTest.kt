@@ -100,6 +100,79 @@ class ConversationRepositoryTreeIntegrationTest {
     }
 
     @Test
+    fun summaryTreeCommitRollsBackMasterAndProjectionsWhenChildDeletionFails() = runBlocking<Unit> {
+        val assistant = ConfigurationReference.random()
+        val owned = artifactStore.createFromBytes(byteArrayOf(1, 2, 3), "summary.txt", origin = ArtifactOrigin.USER)
+        val attachment = UIMessagePart.Document(owned.uri.toString(), "summary.txt", "text/plain")
+        val user = UIMessage(role = MessageRole.USER, parts = listOf(UIMessagePart.Text("request"), attachment)).toMessageNode()
+        val answer = UIMessage.assistant("answer").toMessageNode()
+        val master = conversation(Uuid.random(), assistant, null)
+            .copy(chatSuggestions = listOf("suggestion"), messageNodes = listOf(user, answer))
+        val child = conversation(Uuid.random(), assistant, master.id, attachment)
+        val defaults = net.weero.measix.pilot.data.datastore.Settings()
+        val entry = net.weero.measix.pilot.data.model.ConversationModelContextEntry(
+            answer.id, answer.currentMessage.id, user.id, user.currentMessage.id,
+            net.weero.measix.pilot.service.ConversationDisclosureSnapshotService.render(
+                net.weero.measix.pilot.service.ConversationDisclosureSnapshotService.Candidate(
+                    assistant = defaults.assistants.first(), allAssistants = defaults.assistants, memories = emptyList(),
+                ),
+            ),
+        )
+        val original = master.toSnapshot(modelContextEntries = listOf(entry))
+        repository.insertConversationTree(original, listOf(child.toSnapshot()))
+        val favorites = listOf(master.id to user.id, child.id to child.messageNodes.single().id).map { (id, node) ->
+            net.weero.measix.pilot.data.db.entity.FavoriteEntity(Uuid.random().toString(), "node",
+                "node:$id:$node", "{}", "{}", createdAt = 1, updatedAt = 1)
+        }
+        favorites.forEach { database.favoriteDao().upsert(it) }
+        val expectedMaster = original.copy(nodes = original.nodes.map { it.copy(isFavorite = it.id == user.id) })
+        val expectedChild = child.toSnapshot().copy(nodes = child.messageNodes.map { it.copy(isFavorite = true) })
+        fun indexedText(): List<String> = database.openHelper.readableDatabase
+            .query("SELECT text FROM message_fts ORDER BY text").use { cursor ->
+                buildList { while (cursor.moveToNext()) add(cursor.getString(0)) }
+            }
+        val locks = net.weero.measix.pilot.service.runtime.ConversationOperationLocks()
+        val registry = net.weero.measix.pilot.service.runtime.ConversationRuntimeRegistry(appScope, repository, locks)
+        val gate = net.weero.measix.pilot.service.ApplicationRecoveryGate().apply { ready() }
+        val coordinator = net.weero.measix.pilot.service.runtime.ConversationCommandCoordinator(registry, repository, gate, locks)
+        val rootRuntime = coordinator.load(master.id)
+        val childRuntime = coordinator.load(child.id)
+        val replacements = mapOf(master.id to net.weero.measix.pilot.service.runtime.ReplaceMessageTree(
+            listOf(UIMessage.user("summary").toMessageNode()), clearSuggestions = true,
+        ))
+        database.openHelper.writableDatabase.execSQL(
+            "CREATE TRIGGER fail_child_delete BEFORE DELETE ON ConversationEntity " +
+                "WHEN OLD.id = '${child.id}' BEGIN SELECT RAISE(ABORT, 'child deletion failed'); END"
+        )
+        try {
+            coordinator.commitTreeMutation(master.scope, master.id, replacements, setOf(child.id))
+            org.junit.Assert.fail("Expected child deletion failure")
+        } catch (expected: android.database.SQLException) {
+            assertTrue(expected.message.orEmpty().contains("child deletion failed"))
+        }
+        assertEquals(expectedMaster, repository.getConversationSnapshotById(master.id))
+        assertEquals(expectedChild, repository.getConversationSnapshotById(child.id))
+        assertEquals(expectedMaster, rootRuntime.durable)
+        assertEquals(expectedChild, childRuntime.durable)
+        assertEquals(listOf("answer", "request"), indexedText())
+        favorites.forEach { assertEquals(it, database.favoriteDao().getByRefKey(it.refKey)) }
+        assertEquals(setOf(master.id.toString(), child.id.toString()),
+            database.artifactReferenceDao().referencingConversationIds(owned.entity.id).toSet())
+        database.openHelper.writableDatabase.execSQL("DROP TRIGGER fail_child_delete")
+        coordinator.commitTreeMutation(master.scope, master.id, replacements, setOf(child.id))
+        val persisted = requireNotNull(repository.getConversationSnapshotById(master.id))
+        assertEquals(replacements.getValue(master.id).nodes, persisted.nodes)
+        assertTrue(persisted.header.chatSuggestions.isEmpty())
+        assertTrue(persisted.modelContextEntries.isEmpty())
+        assertEquals(persisted, rootRuntime.durable)
+        assertNull(repository.getConversationSnapshotById(child.id))
+        assertNull(registry.findRuntime(child.id))
+        assertEquals(listOf("summary"), indexedText())
+        favorites.forEach { assertNull(database.favoriteDao().getByRefKey(it.refKey)) }
+        assertFalse(database.artifactReferenceDao().existsByArtifactId(owned.entity.id))
+    }
+
+    @Test
     fun enterpriseConfigurationReferencesRoundTripWithoutChangingConversationOrMessageIds() = runBlocking {
         val scope = ConfigurationScope.Enterprise(EnterpriseAuthority("local:example", "dep_example"), "alice")
         val assistantId = ConfigurationReference.parse("managed~local~example~dep_example~assistant_review")

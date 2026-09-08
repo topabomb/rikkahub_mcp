@@ -359,13 +359,13 @@ val appModule = module {
             appScope = get(),
             settingsStore = get(),
             providerManager = get(),
-            artifactStore = get(),
             runtimeRegistry = get(),
             commandCoordinator = get(),
             soundEffectPlayer = get(),
             json = get(),
             chatErrorStore = get(),
             titleCoordinator = get(),
+            sessions = get(),
         )
     }
 

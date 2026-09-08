@@ -5,6 +5,8 @@ import net.weero.measix.pilot.service.subassistant.SubAssistantLifecycle
 import net.weero.measix.pilot.service.subassistant.forkSubAssistantTree
 import me.rerere.common.configuration.ConfigurationReference
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.Deferred
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
 import me.rerere.ai.ui.UIMessage
@@ -220,24 +222,31 @@ class ConversationApplicationService internal constructor(
         commandCoordinator.executeOrThrow(target.conversationId, UpdateHeader(workspaceCwd = OptionalString.Set(cwd)))
     }
 
-    suspend fun generateTitle(conversationId: Uuid, force: Boolean = false) {
-        recoveryGate.awaitReady()
-        sideEffects.generateTitle(commandCoordinator.load(conversationId).durable, force)
+    suspend fun generateTitle(target: ConversationCommandTarget, force: Boolean = false) {
+        withRootCommand(target) {
+            sideEffects.launchTitle(commandCoordinator.load(target.conversationId), target.selection.access, force)
+        }
     }
 
-    /**
-     * 显式压缩入口。UI 只交 conversationId：internal aggregate（含 model context）由本 service 自己
-     * 解析，不让 durable 事实穿过 presentation 边界。
-     */
+    /** Manual summary cancellation waits for its original worker before another operation can begin. */
     suspend fun compress(
-        conversationId: Uuid,
+        target: ConversationCommandTarget,
         additionalPrompt: String,
         targetTokens: Int,
         keepRecentMessages: Int,
     ): Result<Unit> {
-        recoveryGate.awaitReady()
-        val snapshot = commandCoordinator.load(conversationId).durable
-        return sideEffects.compressConversation(snapshot, additionalPrompt, targetTokens, keepRecentMessages)
+        var owned: Deferred<Result<Unit>>? = null
+        try {
+            withTreeCommand(target) {
+                val runtime = commandCoordinator.load(target.conversationId)
+                owned = sideEffects.launchCompression(runtime, target.selection.access, additionalPrompt, targetTokens, keepRecentMessages) { nodes ->
+                    subAssistantLifecycle.commitSummary(runtime.durable, nodes)
+                }
+            }
+            return requireNotNull(owned).await()
+        } finally {
+            withContext(NonCancellable) { owned?.cancelAndJoin() }
+        }
     }
 
     suspend fun moveToFolder(access: ConversationFolderAccess, conversation: ConversationSummary, folderId: Uuid?) =

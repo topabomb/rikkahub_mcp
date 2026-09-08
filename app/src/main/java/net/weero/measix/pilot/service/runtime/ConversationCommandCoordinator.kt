@@ -27,6 +27,35 @@ class ConversationCommandCoordinator(
     suspend fun load(conversationId: Uuid): ConversationRuntime =
         operationLocks.withLock(conversationId) { registry.loadRuntime(conversationId) }
 
+    /** A lineage change commits all aggregates before any runtime publishes or disappears. */
+    internal suspend fun commitTreeMutation(
+        scope: ConfigurationScope,
+        rootId: Uuid,
+        replacements: Map<Uuid, ReplaceMessageTree>,
+        deletedChildIds: Set<Uuid>,
+    ) = withRootTree(scope, rootId) {
+        check(rootId in replacements && rootId !in deletedChildIds)
+        check(replacements.keys.none { it in deletedChildIds })
+        val childIds = repository.getChildConversationIds(rootId).toSet()
+        check((replacements.keys - rootId + deletedChildIds).all { it in childIds })
+        deletedChildIds.forEach { ensureNotActive(it, includeAuxiliary = true) }
+        val planned = replacements.map { (id, command) ->
+            val runtime = load(id)
+            check(!runtime.durable.header.newConversation) { "tree_mutation_requires_persisted_conversation" }
+            val change = ConversationTransition.plan(runtime.durable, command, nowMillis()) as ConversationChange.Durable
+            Triple(runtime, command, change)
+        }
+        val write = ConversationWrite.MutateTree(rootId, planned.map {
+            (it.third.write as ConversationWrite.Mutate).mutation
+        }, deletedChildIds)
+        coroutineContext.ensureActive()
+        withContext(NonCancellable) {
+            commitDurable(write)
+            planned.forEach { (runtime, command, change) -> runtime.publishCommitted(command, change.snapshot) }
+            deletedChildIds.forEach { registry.evictRuntime(it) }
+        }
+    }
+
     internal suspend fun <T> withResidentRuntime(
         conversationId: Uuid,
         operation: suspend (ConversationRuntime?) -> T,
@@ -64,7 +93,7 @@ class ConversationCommandCoordinator(
                         ?: throw ConversationNotFoundException(id)
                     check(header.scope == scope && header.parentConversationId == conversationId) { "conversation_lineage_scope_mismatch" }
                 }
-                childIds.forEach(::ensureNotActive)
+                childIds.forEach { ensureNotActive(it) }
                 if (requestWorker == null) ensureNotActive(conversationId)
                 else check(registry.findRuntime(conversationId)?.currentWorker() === requestWorker) { "conversation_request_owner_changed" }
                 operation()
@@ -173,7 +202,7 @@ class ConversationCommandCoordinator(
     ): DeletedConversationTree = gated {
         val lockIds = deletionLockIds(conversationId)
         operationLocks.withLocks(lockIds) {
-            ensureNotActive(conversationId)
+            ensureNotActive(conversationId, includeAuxiliary = true)
             val root = repository.getConversationSnapshotById(conversationId)
                 ?: throw ConversationNotFoundException(conversationId)
             val children = if (root.header.parentConversationId == null) {
@@ -182,7 +211,7 @@ class ConversationCommandCoordinator(
                 emptyList()
             }
             check(children.all { it.conversationId in lockIds }) { "conversation lineage changed outside command boundary" }
-            children.forEach { ensureNotActive(it.conversationId) }
+            children.forEach { ensureNotActive(it.conversationId, includeAuxiliary = true) }
             val deleted = DeletedConversationTree(root, children)
             beforeDelete(deleted)
             coroutineContext.ensureActive()
@@ -263,7 +292,7 @@ class ConversationCommandCoordinator(
     private suspend fun deleteLocked(conversationId: Uuid) {
         val lockIds = deletionLockIds(conversationId)
         operationLocks.withLocks(lockIds) {
-            ensureNotActive(conversationId)
+            ensureNotActive(conversationId, includeAuxiliary = true)
             val header = repository.getConversationHeader(conversationId)
             if (header == null) {
                 registry.evictRuntime(conversationId)
@@ -275,7 +304,7 @@ class ConversationCommandCoordinator(
                 emptyList()
             }
             check(childIds.all { it in lockIds }) { "conversation lineage changed outside command boundary" }
-            childIds.forEach(::ensureNotActive)
+            childIds.forEach { ensureNotActive(it, includeAuxiliary = true) }
             coroutineContext.ensureActive()
             withContext(NonCancellable) {
                 repository.deleteConversation(conversationId)
@@ -301,9 +330,9 @@ class ConversationCommandCoordinator(
             }
         }
 
-    private fun ensureNotActive(conversationId: Uuid) {
+    private fun ensureNotActive(conversationId: Uuid, includeAuxiliary: Boolean = false) {
         val runtime = registry.findRuntime(conversationId) ?: return
-        if (runtime.isGenerating || runtime.snapshot.value.stream != null) {
+        if (runtime.isGenerating || runtime.snapshot.value.stream != null || (includeAuxiliary && runtime.hasAuxiliaryWork)) {
             throw ConversationCommandConflictException("cannot delete active conversation: $conversationId")
         }
     }
@@ -382,6 +411,7 @@ class ConversationCommandCoordinator(
 
     private suspend fun commitDurable(write: ConversationWrite) {
         when (write) {
+            is ConversationWrite.MutateTree -> repository.commit(write)
             is ConversationWrite.MaterializeDraft -> repository.commit(write)
             is ConversationWrite.Mutate -> {
                 if (write.mutation.hasChanges() || write.executionFacts != null) {

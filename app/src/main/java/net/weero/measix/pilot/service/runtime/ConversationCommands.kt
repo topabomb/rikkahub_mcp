@@ -43,7 +43,7 @@ data class SelectNodeVariant(val nodeId: Uuid, val selectIndex: Int) : Conversat
 data class TruncateToNodeIndex(val nodeIndexInclusive: Int) : ConversationCommand
 
 /** 整树替换（压缩 / 恢复 / fork 载入 / 新会话初始化） */
-data class ReplaceMessageTree(val nodes: List<MessageNode>) : ConversationCommand
+data class ReplaceMessageTree(val nodes: List<MessageNode>, val clearSuggestions: Boolean = false) : ConversationCommand
 
 /** Adds exact missing attachment handles without accepting a replacement tree. */
 data class BackfillAttachmentRefs(val backfills: List<AttachmentRefBackfill>) : ConversationCommand {

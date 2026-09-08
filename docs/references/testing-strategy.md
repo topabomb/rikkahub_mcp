@@ -35,6 +35,7 @@
 | 执行链 owner、依赖与退休面 | `ArchitectureDependencyTest`、`RetiredSurfaceContractTest`、`TurnStepProtocolContractTest`（静态检查） |
 | commit-then-publish 与命令锁 | `ConversationCommandCoordinatorTest` |
 | active Turn session 与 live phase | `ConversationRuntimeTest` |
+| 辅助生成任务、原 Session 与摘要取消 | `AuxiliaryGenerationOwnershipTest` 使用实际生成与应用服务、延迟 Provider 验证取消等待、旧 Session、切域、手动标题、摘要原树校验和提交后取消；`ConversationRepositoryTreeIntegrationTest` 在真实 Room 注入 Child 删除失败，验证整个摘要树事务回滚及重试 |
 | streaming overlay | `TurnStreamProjectionTest` |
 | Turn 多 Step 循环 | `TurnRunnerTest` |
 | 单 Step request + tool batch | `StepRunnerTest` |

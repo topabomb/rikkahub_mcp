@@ -2,6 +2,8 @@ package net.weero.measix.pilot.service.turn
 import me.rerere.ai.ui.ToolResultStatus
 
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.Json
@@ -47,34 +49,39 @@ class TurnFinalizer(
     internal class StopRequest internal constructor(
         internal val conversationId: Uuid,
         internal val runtime: ConversationRuntime,
-        internal val captured: CapturedTurnWorker,
+        internal val captured: CapturedTurnWorker?,
         internal val reason: String,
+        internal val auxiliaryWorkers: List<Job> = emptyList(),
     )
 
     /** Caller must retain this ownership across lock release and finish it even on cancellation. */
     internal fun captureStop(conversationId: Uuid, reason: String = TurnTerminalReasons.USER_STOP): StopRequest? {
         val runtime = runtimeRegistry.findRuntime(conversationId) ?: return null
-        val captured = runtime.captureAndRequestStop(reason) ?: return null
-        return StopRequest(conversationId, runtime, captured, reason)
+        val captured = runtime.captureAndRequestStop(reason)
+        val auxiliary = runtime.captureAndCancelAuxiliaryWorkers()
+        if (captured == null && auxiliary.isEmpty()) return null
+        return StopRequest(conversationId, runtime, captured, reason, auxiliary)
     }
 
     /** Waits outside session/command locks and never captures a replacement worker. */
     internal suspend fun finishStop(request: StopRequest): Unit = withContext(NonCancellable) {
-        val job = request.captured.worker
+        request.auxiliaryWorkers.joinAll()
+        val captured = request.captured ?: return@withContext
+        val job = captured.worker
         if (job?.isCompleted == false) job.cancel()
         job?.join()
-        request.captured.pending?.let { pending ->
+        captured.pending?.let { pending ->
             finishStop(StopRequest(request.conversationId, request.runtime, pending, request.reason))
         }
         commandCoordinator.withResidentRuntime(request.conversationId) { runtime ->
-            val execution = conversationRepository.getTurnExecution(request.captured.turnId.toString())
+            val execution = conversationRepository.getTurnExecution(captured.turnId.toString())
             if (execution?.status in setOf(TurnExecutionStatus.RUNNING, TurnExecutionStatus.AWAITING_USER)) {
-                check(runtime === request.runtime && runtime.ownsStoppedWorker(request.captured)) { "stopped_turn_owner_changed" }
-                finalizeNonTerminalTurn(request.conversationId, request.captured.turnId, request.reason)
+                check(runtime === request.runtime && runtime.ownsStoppedWorker(captured)) { "stopped_turn_owner_changed" }
+                finalizeNonTerminalTurn(request.conversationId, captured.turnId, request.reason)
             }
-            if (runtime === request.runtime && runtime.ownsStoppedWorker(request.captured)) {
-                check(runtime.snapshot.value.stream?.turnId != request.captured.turnId) { "stopped_turn_still_pending" }
-                runtime.releaseTurnWorker(request.captured.turnId, request.captured.worker, retainPendingTurnOwner = false)
+            if (runtime === request.runtime && runtime.ownsStoppedWorker(captured)) {
+                check(runtime.snapshot.value.stream?.turnId != captured.turnId) { "stopped_turn_still_pending" }
+                runtime.releaseTurnWorker(captured.turnId, captured.worker, retainPendingTurnOwner = false)
             }
         }
     }

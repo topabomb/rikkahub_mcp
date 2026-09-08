@@ -47,6 +47,8 @@ class ConversationCommandAccessTest {
             f.sessions.switchToEnterprise()
             val commands: List<suspend () -> Unit> = listOf(
                 { f.application.updateTitle(target, "changed") },
+                { f.application.generateTitle(target, true) },
+                { f.application.compress(target, "", 100, 0) },
                 { f.application.updateCustomSystemPrompt(target, "changed") },
                 { f.application.updateModeInjectionIds(target, emptySet()) },
                 { f.application.updateWorkspaceCwd(target, "changed") },
@@ -577,6 +579,37 @@ class ConversationCommandAccessTest {
         val f = Fixture(this)
         try { f.initialize(); action(f) }
         finally { f.appScope.cancel() }
+    }
+
+    @Test fun `summary registration remains owned when caller is cancelled before admission returns`() = runTest {
+        fixture { f ->
+            val cleanup = CompletableDeferred<Unit>()
+            lateinit var caller: Job
+            val worker = f.appScope.async<Result<Unit>>(start = CoroutineStart.LAZY) {
+                try { awaitCancellation() }
+                finally { withContext(NonCancellable) { cleanup.await() } }
+            }
+            every { f.effects.launchCompression(any(), any(), any(), any(), any(), any()) } answers {
+                f.runtime.registerAuxiliaryWorker(f.page.access, worker)
+                worker.start()
+                caller.cancel()
+                worker
+            }
+            // Enter the worker first so its cancellation must wait for real cleanup.
+            worker.start()
+            runCurrent()
+            caller = launch(start = CoroutineStart.LAZY) { f.application.compress(f.page.commandTarget, "", 100, 0) }
+            caller.start()
+            runCurrent()
+            assertTrue(worker.isCancelled)
+            assertFalse(caller.isCompleted)
+            assertTrue(f.runtime.hasAuxiliaryWork)
+            cleanup.complete(Unit)
+            caller.join()
+            assertTrue(worker.isCompleted)
+            assertFalse(f.runtime.hasAuxiliaryWork)
+            coVerify(exactly = 0) { f.repository.commit(any()) }
+        }
     }
 
     private inner class Fixture(test: TestScope) {

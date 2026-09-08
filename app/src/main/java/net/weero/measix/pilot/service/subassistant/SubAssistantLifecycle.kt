@@ -15,6 +15,24 @@ class SubAssistantLifecycle(
     private val commandCoordinator: ConversationCommandCoordinator,
     private val json: Json,
 ) {
+    internal suspend fun commitSummary(master: ConversationAggregateSnapshot, nodes: List<net.weero.measix.pilot.data.model.MessageNode>) {
+        commandCoordinator.withRootTree(master.header.scope, master.conversationId) {
+            requireClosedRunsBeforeTreeMutation(master)
+            val children = conversationRepository.getChildConversationSnapshots(master.conversationId)
+                .associateBy { it.conversationId }
+            val retention = planSubAssistantRetention(master.conversationId, nodes, children, json)
+            commandCoordinator.commitTreeMutation(
+                master.header.scope,
+                master.conversationId,
+                buildMap {
+                    put(master.conversationId, ReplaceMessageTree(nodes, clearSuggestions = true))
+                    retention.truncatedChildren.forEach { put(it.conversationId, ReplaceMessageTree(it.nodes)) }
+                },
+                retention.deletedChildIds.toSet(),
+            )
+        }
+    }
+
     suspend fun applyRetentionAfterTreeMutation(masterConversationId: Uuid) {
         val master = runtimeRegistry.findRuntime(masterConversationId)?.snapshot?.value?.durable
             ?: conversationRepository.getConversationSnapshotById(masterConversationId)

@@ -5,6 +5,7 @@ import net.weero.measix.pilot.testkit.sampledModelResult
 
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
@@ -35,6 +36,7 @@ import net.weero.measix.pilot.data.ai.request.TurnModelContextProjection
 import me.rerere.ai.ui.ToolResultStatus
 import net.weero.measix.pilot.data.ai.attachments.AttachmentRefs
 import net.weero.measix.pilot.data.model.Conversation
+import net.weero.measix.pilot.data.enterprise.RealmAccess
 import net.weero.measix.pilot.data.model.MessageNode
 import net.weero.measix.pilot.data.ai.ToolExecutionFact
 import net.weero.measix.pilot.data.db.entity.ToolExecutionStatus
@@ -57,6 +59,51 @@ import kotlin.uuid.Uuid
  *    替换 job 不能清除当前 job、cancel reason 绑定 turn。
  */
 class ConversationRuntimeTest {
+
+    @Test
+    fun `auxiliary ownership survives cancellation until the captured worker actually finishes`() = runTest {
+        val conversation = Conversation.ofId(Uuid.random(), DEFAULT_ASSISTANT_ID)
+        var evicted = false
+        val runtime = ConversationRuntime(conversation.id, conversation.toSnapshot(), backgroundScope, { evicted = true })
+        val release = CompletableDeferred<Unit>()
+        val worker = backgroundScope.launch(start = CoroutineStart.LAZY) {
+            try { kotlinx.coroutines.awaitCancellation() }
+            finally { withContext(NonCancellable) { release.await() } }
+        }
+        runtime.registerAuxiliaryWorker(RealmAccess.Personal, worker)
+        worker.start()
+        runCurrent()
+        val stopped = runtime.captureAndCancelAuxiliaryWorkers()
+        assertEquals(listOf(worker), stopped)
+        runCurrent()
+        advanceTimeBy(6_000)
+        assertTrue(runtime.hasAuxiliaryWork)
+        assertTrue(runtime.isInUse)
+        assertTrue(!evicted)
+        assertThrows(IllegalStateException::class.java) { runtime.cleanup() }
+        release.complete(Unit)
+        worker.join()
+        assertTrue(!runtime.hasAuxiliaryWork)
+        assertTrue(!runtime.isInUse)
+        advanceTimeBy(5_001)
+        runCurrent()
+        assertTrue(evicted)
+    }
+
+    @Test
+    fun `finishing captured auxiliary work cannot release a later worker`() = runTest {
+        val conversation = Conversation.ofId(Uuid.random(), DEFAULT_ASSISTANT_ID)
+        val runtime = ConversationRuntime(conversation.id, conversation.toSnapshot(), backgroundScope, {})
+        val old = Job()
+        val replacement = Job()
+        runtime.registerAuxiliaryWorker(RealmAccess.Personal, old)
+        runtime.registerAuxiliaryWorker(RealmAccess.Personal, replacement)
+        old.cancel()
+        assertTrue(runtime.ownsAuxiliaryWorker(RealmAccess.Personal, replacement))
+        assertTrue(runtime.hasAuxiliaryWork)
+        replacement.cancel()
+        assertTrue(!runtime.hasAuxiliaryWork)
+    }
 
     private fun user(text: String): UIMessage =
         UIMessage(id = Uuid.random(), role = MessageRole.USER, parts = listOf(UIMessagePart.Text(text)))

@@ -41,15 +41,16 @@ fun CompressContextDialog(
     var keepRecentMessages by remember { mutableIntStateOf(32) }
     val tokenOptions = listOf(500, 1000, 2000, 4000)
     var currentJob by remember { mutableStateOf<Job?>(null) }
-    val isLoading = currentJob?.isActive == true
+    val isLoading = currentJob != null
 
     // Monitor job completion
     LaunchedEffect(currentJob) {
-        currentJob?.join()
-        if (currentJob?.isCompleted == true && currentJob?.isCancelled == false) {
+        val observedJob = currentJob ?: return@LaunchedEffect
+        observedJob.join()
+        if (!observedJob.isCancelled) {
             onDismiss()
         }
-        currentJob = null
+        if (currentJob === observedJob) currentJob = null
     }
 
     AlertDialog(
@@ -138,7 +139,6 @@ fun CompressContextDialog(
             if (isLoading) {
                 TextButton(onClick = {
                     currentJob?.cancel()
-                    currentJob = null
                 }) {
                     Text(stringResource(R.string.cancel))
                 }

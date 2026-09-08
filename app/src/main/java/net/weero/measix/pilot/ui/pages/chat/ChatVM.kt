@@ -373,16 +373,17 @@ class ChatVM(
         requirePage().let { turnService.editAndResend(it.lease.commandTarget, messageId, parts, it.imports) }
 
     fun handleCompressContext(additionalPrompt: String, targetTokens: Int, keepRecentMessages: Int): Job {
-        return viewModelScope.launch {
+        val target = requirePage().lease.commandTarget
+        return launchCommand(target) {
             conversationApplicationService.compress(
-                _conversationId,
+                target,
                 additionalPrompt,
                 targetTokens,
                 keepRecentMessages
             ).onFailure {
                 chatErrorStore.add(
                     error = it,
-                    conversationId = _conversationId,
+                    conversationId = target.conversationId,
                     title = context.getString(R.string.error_title_compress_conversation),
                 )
             }
@@ -485,8 +486,9 @@ class ChatVM(
     }
 
     fun generateTitle(conversation: ConversationSummary, force: Boolean = false) {
-        viewModelScope.launch {
-            conversationApplicationService.generateTitle(conversation.id, force)
+        val target = conversation.commandTarget
+        launchCommand(target) {
+            conversationApplicationService.generateTitle(target, force)
         }
     }
 

@@ -15,6 +15,7 @@ import kotlinx.coroutines.sync.withLock
 import me.rerere.ai.ui.UIMessage
 import net.weero.measix.pilot.data.ai.request.TurnModelContextProjection
 import net.weero.measix.pilot.data.model.Conversation
+import net.weero.measix.pilot.data.enterprise.RealmAccess
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
@@ -163,6 +164,26 @@ class ConversationRuntime internal constructor(
      * TurnCommitter fall back to `user_stop`. A completed turnId is a no-op target.
      */
     private val ownedRequests = ConcurrentHashMap<Uuid, ActiveTurnSession>()
+    private val auxiliaryWorkers = ConcurrentHashMap<Job, RealmAccess>()
+    internal val hasAuxiliaryWork: Boolean get() = auxiliaryWorkers.isNotEmpty()
+
+    /** Registration happens under Session and conversation admission, before the worker starts. */
+    internal fun registerAuxiliaryWorker(access: RealmAccess, worker: Job) {
+        check(access.scope == durable.header.scope) { "conversation_scope_mismatch" }
+        check(auxiliaryWorkers.putIfAbsent(worker, access) == null) { "auxiliary_worker_already_registered" }
+        cancelIdleCheck()
+        worker.invokeOnCompletion {
+            check(auxiliaryWorkers.remove(worker, access)) { "auxiliary_worker_owner_missing" }
+            if (!isInUse) scheduleIdleCheck()
+        }
+    }
+
+    internal fun ownsAuxiliaryWorker(access: RealmAccess, worker: Job): Boolean = auxiliaryWorkers[worker] == access
+
+    /** Capture exact workers before releasing admission locks; completion, not cancellation, releases ownership. */
+    internal fun captureAndCancelAuxiliaryWorkers(): List<Job> = auxiliaryWorkers.keys.toList().also { workers ->
+        workers.forEach { it.cancel() }
+    }
     internal val activeTurnRevision: StateFlow<Long> = _activeTurnRevision.asStateFlow()
 
     internal fun lastTerminatedRequestTurnId(): Uuid? = _lastTerminatedRequestTurnId.get()
@@ -171,7 +192,7 @@ class ConversationRuntime internal constructor(
     private var ttsQueueSessionId: String? = null
     internal val isGenerating: Boolean get() = _activeTurn.value?.worker?.isActive == true
     val isInUse: Boolean
-        get() = refCount.get() > 0 || _activeTurn.value != null || snapshot.value.stream != null
+        get() = refCount.get() > 0 || _activeTurn.value != null || snapshot.value.stream != null || hasAuxiliaryWork
 
     private val turnEpoch = AtomicLong(0)
 
@@ -600,6 +621,7 @@ class ConversationRuntime internal constructor(
 
     @Synchronized
     fun cleanup() {
+        check(!hasAuxiliaryWork) { "auxiliary_workers_must_finish_before_eviction" }
         _activeTurn.value?.worker?.cancel()
         _activeTurn.value = null
         ownedRequests.clear()

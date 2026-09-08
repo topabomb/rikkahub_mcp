@@ -232,6 +232,8 @@ Target 在新 Child Turn 的 START 前，从同一份有效 Settings、Target、
 
 普通树变更前先停止并 join 活跃 turn；`requireClosedRunsBeforeTreeMutation` 只验证 Child turns 已关闭，不成为第二个终态写 owner。
 
+手动摘要由 `commitSummary` 在完整父子锁内执行相同 retention planner，并通过 `ConversationWrite.MutateTree` 将 Master 树、建议和 Child 截断/删除一次提交。Child 删除失败会回滚 Master；不依赖启动扫描或下一次树操作补做摘要清理。其他树操作仍使用其既有 retention 调用。
+
 Master 分支切换或历史裁剪后，`SubAssistantLifecycle` 只保留仍被有效 metadata 引用的 Child，并把共享 Child 收缩到最长仍被引用的 lineage 前缀。未变化 Child 不重写，写入量只与裁剪 delta 相关。
 
 Fork 顶层会话时，`forkSubAssistantTree` 同时复制有效 Child，重建 `MessageNode.id`、`UIMessage.id`、`run_id`、`previous_run_id` 和 Child link。新 Child 改绑新 Master；随后 `AttachmentCloner.cloneParts()` 对本地附件做内容级复制，并同步改写 `assistant_call` 的 artifact manifest、递归 `Tool.output` Image URL，按复制后的 typed metadata 重建本工具结果 JSON 的 `artifacts[].path`。托管 upload 使用新副本的实际路径；附件逻辑 ref 保留，消息、run 与 Child 身份按复制映射重建。除这些文件归属字段外，Provider metadata 与选中消息内容保持不变；失效 artifact 的输出图片与旧路径会被移除或降级为无路径的不可用描述。

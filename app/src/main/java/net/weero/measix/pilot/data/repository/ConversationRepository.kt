@@ -241,6 +241,29 @@ class ConversationRepository(
             if (!write.mutation.hasChanges() && write.executionFacts == null) false
             else applyMutation(write.mutation, write.executionFacts)
         }
+        is ConversationWrite.MutateTree -> {
+            artifactStore.withLifecycleLock {
+                val prepared = write.mutations.map { prepareMutation(it, null) }
+                database.withTransaction {
+                    val root = requireNotNull(conversationDAO.getConversationById(write.rootId.toString()))
+                    check(root.parentConversationId == null) { "tree_mutation_requires_root" }
+                    val changedIds = write.mutations.map { it.conversationId }
+                    check(changedIds.distinct().size == changedIds.size && write.rootId in changedIds)
+                    check(changedIds.none { it in write.deletedChildIds })
+                    (changedIds.filterNot { it == write.rootId } + write.deletedChildIds).forEach { id ->
+                        val child = requireNotNull(conversationDAO.getConversationById(id.toString()))
+                        check(child.parentConversationId == root.id) { "tree_mutation_child_mismatch" }
+                    }
+                    prepared.forEach { it() }
+                    write.deletedChildIds.forEach { id ->
+                        favoriteDAO.deleteNodeFavoritesOfConversation(id.toString())
+                        messageFtsManager.deleteConversationInTransaction(id.toString())
+                        conversationDAO.deleteById(id.toString())
+                    }
+                }
+            }
+            true
+        }
     }
 
     /**
@@ -254,13 +277,24 @@ class ConversationRepository(
      * 返回是否实际写入。
      */
     internal suspend fun applyMutation(mutation: ConversationMutation, executionFacts: ExecutionFacts? = null): Boolean {
+        if (!mutation.hasChanges() && executionFacts == null) return false
+        suspend fun commitPrepared() {
+            val apply = prepareMutation(mutation, executionFacts)
+            database.withTransaction { apply() }
+        }
+        if (mutation.upsertedNodes.isNotEmpty() || mutation.deletedNodeIds.isNotEmpty()) {
+            artifactStore.withLifecycleLock { commitPrepared() }
+        } else commitPrepared()
+        return true
+    }
+
+    /** Prepare references before taking the Room transaction, preserving ArtifactStore -> Room order. */
+    private suspend fun prepareMutation(
+        mutation: ConversationMutation,
+        executionFacts: ExecutionFacts?,
+    ): suspend () -> Unit {
         val headerPatch = mutation.headerPatch
-        val hasHeaderChange = headerPatch != null
         val hasNodeChange = mutation.upsertedNodes.isNotEmpty() || mutation.deletedNodeIds.isNotEmpty()
-        val hasContextDelta = mutation.insertedModelContextEntries.isNotEmpty() ||
-            mutation.deletedModelContextEntries.isNotEmpty()
-        val hasExecutionFacts = executionFacts != null
-        if (!hasHeaderChange && !hasNodeChange && !hasContextDelta && !hasExecutionFacts) return false
 
         val conversationId = mutation.conversationId.toString()
         require(mutation.upsertedNodeIndices.size == mutation.upsertedNodes.size) {
@@ -275,65 +309,54 @@ class ConversationRepository(
                 selectIndex = node.selectIndex,
             )
         }
-        suspend fun commit(referenceDelta: ArtifactReferenceDelta?) {
-            database.withTransaction {
-                headerPatch?.let { patch -> applyHeaderPatch(mutation.conversationId, patch, mutation.updateAt) }
+        val referenceDelta = if (hasNodeChange) artifactStore.prepareReferenceDelta(
+            mutation.upsertedNodes, mutation.deletedNodeIds,
+        ) else null
+        return {
+            headerPatch?.let { patch -> applyHeaderPatch(mutation.conversationId, patch, mutation.updateAt) }
+            if (mutation.deletedNodeIds.isNotEmpty()) {
+                val deletedIds = mutation.deletedNodeIds.map { it.toString() }
+                favoriteDAO.deleteNodeFavoritesByRefKeys(deletedIds.map { "node:$conversationId:$it" })
+                messageNodeDAO.deleteByIds(deletedIds)
+            }
+            if (nodeEntities.isNotEmpty()) {
+                messageNodeDAO.upsertAll(nodeEntities)
+            }
+            // 事务顺序：node 删除与 upsert 之后、执行事实之前收口 context。
+            // deleted 列表携带消失 entry 的完整事实：按 (owner_node_id, owner_message_id)
+            // 主键精确删除（Fork / Child clone 会在其他 Conversation 保留相同 message id）；
+            // node 级消失同时由 FK cascade 闭合。插入只走 insert-once，同 key 不同行
+            // 直接冲突而不覆盖历史。
+            if (mutation.deletedModelContextEntries.isNotEmpty()) {
+                modelContextDAO.deleteByPrimaryKeys(mutation.deletedModelContextEntries.map(::modelContextEntityOf))
+            }
+            if (mutation.insertedModelContextEntries.isNotEmpty()) {
+                modelContextDAO.insertOnce(mutation.insertedModelContextEntries.map(::modelContextEntityOf))
+            }
+            persistExecutionFacts(executionFacts)
+            referenceDelta?.let { artifactStore.applyReferenceDeltaInTransaction(it) }
+            if (mutation.indexForSearch) {
+                val title = mutation.titleForIndex ?: ""
+                if (mutation.searchMetadataChanged) {
+                    messageFtsManager.updateConversationMetadataInTransaction(
+                        conversationId = conversationId,
+                        title = title,
+                        updateAt = mutation.updateAt,
+                    )
+                }
                 if (mutation.deletedNodeIds.isNotEmpty()) {
-                    val deletedIds = mutation.deletedNodeIds.map { it.toString() }
-                    favoriteDAO.deleteNodeFavoritesByRefKeys(deletedIds.map { "node:$conversationId:$it" })
-                    messageNodeDAO.deleteByIds(deletedIds)
+                    messageFtsManager.deleteNodesIndexInTransaction(conversationId, mutation.deletedNodeIds)
                 }
-                if (nodeEntities.isNotEmpty()) {
-                    messageNodeDAO.upsertAll(nodeEntities)
-                }
-                // 事务顺序：node 删除与 upsert 之后、执行事实之前收口 context。
-                // deleted 列表携带消失 entry 的完整事实：按 (owner_node_id, owner_message_id)
-                // 主键精确删除（Fork / Child clone 会在其他 Conversation 保留相同 message id）；
-                // node 级消失同时由 FK cascade 闭合。插入只走 insert-once，同 key 不同行
-                // 直接冲突而不覆盖历史。
-                if (mutation.deletedModelContextEntries.isNotEmpty()) {
-                    modelContextDAO.deleteByPrimaryKeys(mutation.deletedModelContextEntries.map(::modelContextEntityOf))
-                }
-                if (mutation.insertedModelContextEntries.isNotEmpty()) {
-                    modelContextDAO.insertOnce(mutation.insertedModelContextEntries.map(::modelContextEntityOf))
-                }
-                persistExecutionFacts(executionFacts)
-                referenceDelta?.let { artifactStore.applyReferenceDeltaInTransaction(it) }
-                if (mutation.indexForSearch) {
-                    val title = mutation.titleForIndex ?: ""
-                    if (mutation.searchMetadataChanged) {
-                        messageFtsManager.updateConversationMetadataInTransaction(
-                            conversationId = conversationId,
-                            title = title,
-                            updateAt = mutation.updateAt,
-                        )
-                    }
-                    if (mutation.deletedNodeIds.isNotEmpty()) {
-                        messageFtsManager.deleteNodesIndexInTransaction(conversationId, mutation.deletedNodeIds)
-                    }
-                    if (mutation.upsertedNodes.isNotEmpty()) {
-                        messageFtsManager.reindexNodesInTransaction(
-                            conversationId = conversationId,
-                            title = title,
-                            updateAt = mutation.updateAt,
-                            nodes = mutation.upsertedNodes,
-                        )
-                    }
+                if (mutation.upsertedNodes.isNotEmpty()) {
+                    messageFtsManager.reindexNodesInTransaction(
+                        conversationId = conversationId,
+                        title = title,
+                        updateAt = mutation.updateAt,
+                        nodes = mutation.upsertedNodes,
+                    )
                 }
             }
         }
-        if (hasNodeChange) {
-            artifactStore.withLifecycleLock {
-                val referenceDelta = artifactStore.prepareReferenceDelta(
-                    mutation.upsertedNodes,
-                    mutation.deletedNodeIds,
-                )
-                commit(referenceDelta)
-            }
-        } else {
-            commit(null)
-        }
-        return true
     }
 
     private suspend fun persistExecutionFacts(facts: ExecutionFacts?) {

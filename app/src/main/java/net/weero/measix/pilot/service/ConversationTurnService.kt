@@ -345,18 +345,6 @@ class ConversationTurnService internal constructor(
         return runtimeRegistry.requireRuntime(conversationId)
     }
 
-    private fun launchWithRuntimeLease(
-        conversationId: Uuid,
-        block: suspend () -> Unit
-    ): Job = appScope.launch {
-        val lease = runtimeRegistry.acquireRuntime(conversationId)
-        try {
-            block()
-        } finally {
-            lease.close()
-        }
-    }
-
     // ---- 对话状态访问 ----
 
     private fun liveSnapshot(conversationId: Uuid): ConversationAggregateSnapshot =
@@ -925,11 +913,13 @@ class ConversationTurnService internal constructor(
                 sideEffects.playTurnCompleteSound()
             }
 
-            launchWithRuntimeLease(conversationId) {
-                sideEffects.generateTitle(liveSnapshot(conversationId))
-            }
-            launchWithRuntimeLease(conversationId) {
-                sideEffects.generateSuggestion(liveSnapshot(conversationId))
+            try {
+                withRequest(launch.realmAccess, runtime, turnId) {
+                    sideEffects.launchTitle(runtime, launch.realmAccess)
+                    sideEffects.launchSuggestion(runtime, launch.realmAccess)
+                }
+            } catch (error: net.weero.measix.pilot.data.enterprise.EnterpriseConfigurationException) {
+                if (error.reason != "enterprise_data_access_unavailable") throw error
             }
         } catch (e: CancellationException) {
             val outcome = TurnOutcome.Cancelled(

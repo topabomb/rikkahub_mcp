@@ -60,6 +60,7 @@ UI 不持有 DAO、ConversationRepository、Runtime Registry、Artifact/Generate
 | stop、failure、cancel 终态准备 | `TurnFinalizer`；恢复使用 `TurnRecovery` |
 | 子助手 run / lineage 与 retention | `SubAssistantRunCoordinator` / `SubAssistantLifecycle`；run 并发归 `SubAssistantRunGate` |
 | 标题 | `ConversationTitleCoordinator`；模型结果与手动标题串行，token + expected-title CAS |
+| 标题/建议/手动摘要任务 | `GenerationSideEffects` 登记到原 `ConversationRuntime`，原 Session 复验；停止及删除等待实际完成，摘要树与 Child retention 通过 `ConversationWrite.MutateTree` 原子提交 |
 | 会话读模型 | `ConversationQueryService` 与专用 reader/query port；目录与 Pager 归 Query，Repository/DAO 提供带 scope 的查询及 PagingSource，原 Session 校验归 EnterpriseSessionController |
 | 当前域统计 | `StatsQueryService` 在原选中域/Session 内聚合；StatsVM 负责取消旧查询及清空旧显示 |
 | 运行记忆 | `MemoryRepository` 唯一写入；`MemoryService` 编排原域 Session、配置授权和 UI 投影，见 [运行记忆](memory-architecture.md) |

@@ -27,6 +27,12 @@ internal sealed interface ConversationWrite {
         val mutation: ConversationMutation,
         val executionFacts: ExecutionFacts? = null,
     ) : ConversationWrite
+
+    data class MutateTree(
+        val rootId: Uuid,
+        val mutations: List<ConversationMutation>,
+        val deletedChildIds: Set<Uuid>,
+    ) : ConversationWrite
 }
 
 internal data class ConversationHeaderChange(
@@ -99,7 +105,10 @@ internal object ConversationTransition {
             is DeleteMessage -> deleteMessage(current, command)
             is SelectNodeVariant -> selectNodeVariant(current, command)
             is TruncateToNodeIndex -> truncateTo(current, command.nodeIndexInclusive)
-            is ReplaceMessageTree -> current.copy(nodes = command.nodes)
+            is ReplaceMessageTree -> current.copy(
+                nodes = command.nodes,
+                header = if (command.clearSuggestions) current.header.copy(chatSuggestions = emptyList()) else current.header,
+            )
             is BackfillAttachmentRefs -> backfillAttachmentRefs(current, command.backfills)
             is HeaderConversationCommand -> current.copy(header = applyHeader(current.header, command))
         }
@@ -344,6 +353,9 @@ internal object ConversationTransition {
         command: ConversationCommand,
     ): ConversationHeaderPatch? {
         val fromCommand = when (command) {
+            is ReplaceMessageTree -> ConversationHeaderPatch(
+                chatSuggestions = newHeader.chatSuggestions.takeIf { it != oldHeader.chatSuggestions },
+            ).takeUnless { it.isNoOp() }
             is HeaderConversationCommand -> headerPatchFromCommand(oldHeader, command)
             is AppendUserMessage -> ConversationHeaderPatch(
                 title = newHeader.title.takeIf { it != oldHeader.title },

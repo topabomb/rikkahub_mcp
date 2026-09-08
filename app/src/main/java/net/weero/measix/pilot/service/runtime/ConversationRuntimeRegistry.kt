@@ -281,6 +281,7 @@ class ConversationRuntimeRegistry(
     suspend fun evictRuntime(conversationId: Uuid) = operationLocks.withLock(conversationId) {
         val entry = entries[conversationId] ?: return@withLock
         val runtime = entry.state.value.runtimeOrNull()
+        check(runtime?.hasAuxiliaryWork != true) { "auxiliary_workers_must_finish_before_eviction" }
         entry.state.value = ConversationRuntimeState.Missing
         runtime?.cleanup()
         _runtimesVersion.value++
@@ -289,8 +290,8 @@ class ConversationRuntimeRegistry(
     suspend fun cancelGenerationsForAssistant(assistantId: ConfigurationReference, reason: String) {
         val jobs = activeRuntimes()
             .filter { it.snapshot.value.durable.header.assistantId == assistantId }
-            .mapNotNull { runtime ->
-                runtime.cancelActiveGeneration(reason)
+            .flatMap { runtime ->
+                listOfNotNull(runtime.cancelActiveGeneration(reason)) + runtime.captureAndCancelAuxiliaryWorkers()
             }
             .distinct()
         jobs.joinAll()

@@ -3,10 +3,13 @@ package net.weero.measix.pilot.service
 import me.rerere.common.configuration.ConfigurationReference
 import android.content.Context
 import kotlinx.coroutines.async
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Deferred
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.coroutineScope
-import kotlinx.coroutines.launch
 import kotlinx.datetime.LocalDateTime
 import kotlinx.serialization.json.Json
 import me.rerere.ai.core.MessageRole
@@ -25,12 +28,15 @@ import net.weero.measix.pilot.data.datastore.findModelById
 import net.weero.measix.pilot.data.datastore.findProvider
 import net.weero.measix.pilot.data.datastore.getCurrentChatModel
 import net.weero.measix.pilot.data.model.toMessageNode
-import net.weero.measix.pilot.data.files.ArtifactStore
+import net.weero.measix.pilot.data.model.MessageNode
+import net.weero.measix.pilot.data.enterprise.EnterpriseConfigurationException
+import net.weero.measix.pilot.data.enterprise.EnterpriseSessionController
+import net.weero.measix.pilot.data.enterprise.RealmAccess
 import net.weero.measix.pilot.service.runtime.ConversationRuntimeRegistry
 import net.weero.measix.pilot.service.runtime.ConversationCommandCoordinator
 import net.weero.measix.pilot.service.runtime.ConversationAggregateSnapshot
+import net.weero.measix.pilot.service.runtime.ConversationRuntime
 import net.weero.measix.pilot.service.runtime.UpdateHeader
-import net.weero.measix.pilot.service.runtime.ReplaceMessageTree
 import net.weero.measix.pilot.service.turn.TurnOutcome
 import net.weero.measix.pilot.service.turn.TurnRunResult
 import net.weero.measix.pilot.utils.SoundEffectPlayer
@@ -47,19 +53,87 @@ import kotlin.uuid.Uuid
  *  - 会话衍生数据生成（标题 / 建议 / 压缩）——三者共用同一后台生成骨架
  *    （settings → 专属模型(可选 fastModel fallback) → provider → generateText → 命令提交）
  */
-class GenerationSideEffects(
+class GenerationSideEffects internal constructor(
     private val context: Context,
     private val appScope: AppScope,
     private val settingsStore: SettingsStore,
     private val providerManager: ProviderManager,
-    private val artifactStore: ArtifactStore,
     private val runtimeRegistry: ConversationRuntimeRegistry,
     private val commandCoordinator: ConversationCommandCoordinator,
     private val soundEffectPlayer: SoundEffectPlayer,
     private val json: Json,
     private val chatErrorStore: ChatErrorStore,
     private val titleCoordinator: ConversationTitleCoordinator,
+    private val sessions: EnterpriseSessionController,
 ) {
+    private data class GenerationOwner(val runtime: ConversationRuntime, val access: RealmAccess, val worker: Job)
+
+    /** Callers hold the original Session and conversation admission until the worker is registered. */
+    internal fun launchTitle(runtime: ConversationRuntime, access: RealmAccess, force: Boolean = false) =
+        launchOwned(runtime, access) { owner, snapshot -> generateTitle(owner, snapshot, force) }
+
+    internal fun launchSuggestion(runtime: ConversationRuntime, access: RealmAccess) =
+        launchOwned(runtime, access) { owner, snapshot -> generateSuggestion(owner, snapshot) }
+
+    internal fun launchCompression(
+        runtime: ConversationRuntime,
+        access: RealmAccess,
+        additionalPrompt: String,
+        targetTokens: Int,
+        keepRecentMessages: Int,
+        commit: suspend (List<MessageNode>) -> Unit,
+    ): Deferred<Result<Unit>> = launchOwned(runtime, access) { owner, snapshot ->
+        runCatchingPreservingCancellation {
+            val nodes = compressConversation(owner, snapshot, additionalPrompt, targetTokens, keepRecentMessages)
+            withOwner(owner, tree = true) {
+                check(runtime.durable.nodes == snapshot.nodes && runtime.durable.modelContextEntries == snapshot.modelContextEntries) {
+                    "conversation_changed_during_compression"
+                }
+                commit(nodes)
+            }
+        }
+    }
+
+    private fun <T> launchOwned(
+        runtime: ConversationRuntime,
+        access: RealmAccess,
+        block: suspend (GenerationOwner, ConversationAggregateSnapshot) -> T,
+    ): Deferred<T> {
+        val worker = appScope.async(start = CoroutineStart.LAZY) {
+            val owner = GenerationOwner(runtime, access, requireNotNull(coroutineContext[Job]))
+            val snapshot = withOwner(owner) { runtime.durable }
+            block(owner, snapshot)
+        }
+        try {
+            runtime.registerAuxiliaryWorker(access, worker)
+            worker.start()
+            return worker
+        } catch (error: Throwable) {
+            worker.cancel()
+            throw error
+        }
+    }
+
+    private suspend fun <T> withOwner(owner: GenerationOwner, tree: Boolean = false, operation: suspend () -> T): T =
+        withSessionOwner(owner) {
+            suspend fun execute(): T {
+                owner.worker.ensureActive()
+                check(runtimeRegistry.findRuntime(owner.runtime.id) === owner.runtime &&
+                    owner.runtime.ownsAuxiliaryWorker(owner.access, owner.worker)) { "auxiliary_worker_owner_changed" }
+                return operation()
+            }
+            if (tree) commandCoordinator.withRootTree(owner.access.scope, owner.runtime.id) { execute() }
+            else commandCoordinator.withResidentRuntime(owner.runtime.id) { execute() }
+        }
+
+    private suspend fun <T> withSessionOwner(owner: GenerationOwner, operation: suspend () -> T): T =
+        try {
+            sessions.withRealmAccess(owner.access) { owner.worker.ensureActive(); operation() }
+        } catch (error: EnterpriseConfigurationException) {
+            if (error.reason != "enterprise_data_access_unavailable") throw error
+            throw CancellationException("Auxiliary generation authorization revoked", error)
+        }
+
     // ---- 音效反馈 ----
 
     /** 预装载音效资源（Application onCreate / Service init）。 */
@@ -148,10 +222,21 @@ class GenerationSideEffects(
 
     // ---- 生成标题 ----
 
-    internal suspend fun generateTitle(
+    private suspend fun generateTitle(owner: GenerationOwner, snapshot: ConversationAggregateSnapshot, force: Boolean) {
+        var current = snapshot
+        var requestedForce = force
+        while (true) {
+            val retry = generateTitleAttempt(owner, current, requestedForce) ?: return
+            current = withOwner(owner) { owner.runtime.durable }
+            requestedForce = retry.force
+        }
+    }
+
+    private suspend fun generateTitleAttempt(
+        owner: GenerationOwner,
         snapshot: ConversationAggregateSnapshot,
         force: Boolean = false,
-    ) {
+    ): ConversationTitleRetry? {
         val conversationId = snapshot.conversationId
         if (titleCoordinator.phaseOf(conversationId) == null) {
             // Without in-process provenance, a persisted nonblank title is authoritative. This
@@ -166,11 +251,11 @@ class GenerationSideEffects(
                 initialPhase == ConversationTitlePhase.LOCAL_FALLBACK,
             expectedTitle = snapshot.header.title,
         )
-        val token = (beginResult as? ConversationTitleBeginResult.Granted)?.token ?: return
+        val token = (beginResult as? ConversationTitleBeginResult.Granted)?.token ?: return null
 
-        var cancelled = false
+        var retry: ConversationTitleRetry? = null
         try {
-            val settings = settingsStore.effectiveSettings.value.settings
+            val settings = withOwner(owner) { settingsStore.effectiveSettings.value.settings }
 
             if (!force) {
                 titleCoordinator.recordAttempt(token)
@@ -186,45 +271,47 @@ class GenerationSideEffects(
                         .takeLast(4).joinToString("\n\n") { it.summaryAsText(maxLength = 500) },
                 ),
             ).orEmpty()
-            val titleToWrite = normalizeGeneratedTitle(generatedTitle) ?: return
-            titleCoordinator.commitGeneratedTitle(token, titleToWrite) { expectedTitle, newTitle ->
-                commandCoordinator.updateTitleIfCurrent(
-                    conversationId = conversationId,
-                    expectedTitle = expectedTitle,
-                    title = newTitle,
-                )
+            val titleToWrite = normalizeGeneratedTitle(generatedTitle)
+            // The title mutex precedes conversation locks, for both manual and generated commits.
+            if (titleToWrite != null) withSessionOwner(owner) {
+                titleCoordinator.commitGeneratedTitle(token, titleToWrite) { expectedTitle, newTitle ->
+                    commandCoordinator.withResidentRuntime(conversationId) { current ->
+                        owner.worker.ensureActive()
+                        check(current === owner.runtime && current.ownsAuxiliaryWorker(owner.access, owner.worker)) {
+                            "auxiliary_worker_owner_changed"
+                        }
+                        if (current.durable.nodes != snapshot.nodes) false
+                        else commandCoordinator.updateTitleIfCurrent(conversationId, expectedTitle, newTitle)
+                    }
+                }
             }
         } catch (error: CancellationException) {
-            cancelled = true
             throw error
         } catch (error: Exception) {
             error.printStackTrace()
-            chatErrorStore.add(
-                error = error,
-                conversationId = conversationId,
-                title = context.getString(R.string.error_title_generate_title),
-                solution = ChatErrorSolution.CheckTitleModelSettings,
-            )
-        } finally {
-            val retry = titleCoordinator.end(token)
-            if (!cancelled && retry != null) {
-                launchWithConversationReference(conversationId) {
-                    val latest = commandCoordinator.load(conversationId).durable
-                    generateTitle(latest, force = retry.force)
-                }
+            withOwner(owner) {
+                chatErrorStore.add(
+                    error = error,
+                    conversationId = conversationId,
+                    title = context.getString(R.string.error_title_generate_title),
+                    solution = ChatErrorSolution.CheckTitleModelSettings,
+                )
             }
+        } finally {
+            retry = titleCoordinator.end(token)
         }
+        return retry
     }
 
     // ---- 生成建议 ----
 
-    internal suspend fun generateSuggestion(snapshot: ConversationAggregateSnapshot) {
+    private suspend fun generateSuggestion(owner: GenerationOwner, snapshot: ConversationAggregateSnapshot) {
         val conversationId = snapshot.conversationId
         try {
-            val settings = settingsStore.effectiveSettings.value.settings
+            val settings = withOwner(owner) { settingsStore.effectiveSettings.value.settings }
             if (!settings.enableSuggestion) return
 
-            commandCoordinator.executeOrThrow(conversationId, UpdateHeader(suggestions = emptyList()))
+            withOwner(owner) { commandCoordinator.executeOrThrow(conversationId, UpdateHeader(suggestions = emptyList())) }
 
             val generated = runBackgroundGeneration(
                 settings = settings,
@@ -241,30 +328,36 @@ class GenerationSideEffects(
                 .filter(String::isNotBlank)
                 .take(10)
 
-            commandCoordinator.executeOrThrow(conversationId, UpdateHeader(suggestions = suggestions))
+            withOwner(owner) {
+                if (owner.runtime.durable.nodes == snapshot.nodes) {
+                    commandCoordinator.executeOrThrow(conversationId, UpdateHeader(suggestions = suggestions))
+                }
+            }
         } catch (error: CancellationException) {
             throw error
         } catch (error: Exception) {
             error.printStackTrace()
-            chatErrorStore.add(
-                error = error,
-                conversationId = conversationId,
-                title = context.getString(R.string.error_title_generate_suggestion),
-            )
+            withOwner(owner) {
+                chatErrorStore.add(
+                    error = error,
+                    conversationId = conversationId,
+                    title = context.getString(R.string.error_title_generate_suggestion),
+                )
+            }
         }
     }
 
     // ---- 压缩对话历史 ----
 
-    internal suspend fun compressConversation(
+    private suspend fun compressConversation(
+        owner: GenerationOwner,
         snapshot: ConversationAggregateSnapshot,
         additionalPrompt: String,
         targetTokens: Int,
         keepRecentMessages: Int = 32
-    ): Result<Unit> = runCatchingPreservingCancellation {
-        val settings = settingsStore.effectiveSettings.value.settings
+    ): List<MessageNode> {
+        val settings = withOwner(owner) { settingsStore.effectiveSettings.value.settings }
         val maxMessagesPerChunk = 256
-        val conversationId = snapshot.conversationId
         val allMessages = snapshot.currentMessages()
 
         // Split messages into those to compress and those to keep
@@ -322,31 +415,13 @@ class GenerationSideEffects(
         }
 
         // Replace older history with summary messages while preserving complete recent turns.
-        val newMessageNodes = buildList {
+        return buildList {
             compressedSummaries.forEach { summary ->
                 add(UIMessage.user(summary).toMessageNode())
             }
             addAll(messagesToKeep.map { it.toMessageNode() })
         }
 
-        // 压缩 = ReplaceMessageTree（树替换 delta）+ 清空建议；全量文件扫描由 GC 取代
-        commandCoordinator.executeOrThrow(conversationId, ReplaceMessageTree(newMessageNodes))
-        commandCoordinator.executeOrThrow(conversationId, UpdateHeader(suggestions = emptyList()))
-        artifactStore.collectGarbage()
-    }
-
-    // ---- 私有基础设施 ----
-
-    private fun launchWithConversationReference(
-        conversationId: Uuid,
-        block: suspend () -> Unit
-    ) = appScope.launch {
-        val lease = runtimeRegistry.acquireRuntime(conversationId)
-        try {
-            block()
-        } finally {
-            lease.close()
-        }
     }
 }
 

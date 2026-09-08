@@ -212,6 +212,8 @@ UserConfiguration + UserPreferences + Applied Enterprise State
 
 先持久发布 CLOSING 撤销准入，再释放 Session 锁，调用既有主/子运行、Runtime 内标题/建议任务与媒体 owner 按原企业域取消并等待终态，最后凭原退出 token 完成退出；不得以 binding lease 为空或 Job.join 返回代替运行终态提交。流程由应用作用域持有，页面销毁或重复点击不产生第二退出操作；失败保留 CLOSING 和可重试状态，重试不复验已经被退出动作改变的页面选择。重启恢复先保留 CLOSING，完成现有 Child/主 TurnRecovery 后、恢复 gate ready 前完成原退出 token；不能在恢复任务成功前假报退出完成，也不能让恢复等待自己的 ready gate。企业状态页直接投影 Session；待配置或停留个人空间时，同步目标仍是已接入的企业 Session。这些退出接线仍属后续实施项，不作为当前 Portal 读取批次的完成事实。
 
+退出原因随 CLOSING 写入同一个 manifest，原退出 token 保留该原因；主动退出完成为 SIGNED_OUT，到期/撤销完成为 REAUTH_REQUIRED。自动触发由应用生命周期观察已接入 Session，不能依赖企业页面是否打开。Session 锁内只撤销准入，不等待运行任务或配置同步；同一原 Session 的同步由既有同步 owner 取消并等待。终态提交后的文件清理失败由存储维护收口，不把已退出状态报告成仍在 CLOSING，也不让重试误作用于新 Session。
+
 正常本地 source 不依赖设备互联网，“网络失败”是主动场景。source/deployment/user 是恢复身份边界；本期没有 live fallback，模拟凭据永远不能交给真实服务。网页退出调用同一个原生退出命令，网页打不开也能退出。
 
 ## 6. 全部配置界面的调整矩阵
@@ -409,6 +411,8 @@ C3/M1 的本地资料与持久状态基础已进入代码：完整公开示例�
 - Workspace `hardLinkedWriteTargetCannotModifyAnotherPath` 因设备策略不允许建立硬链接 fixture 而跳过，不能视为该场景已验证。
 - 模拟器实际打开 Debug 的助手选择器、提供商/搜索列表及 Bing 详情；R8 Release 冷启动与助手列表正常。当前构建仍为开发过程中的 0.0.19 基线，尚非 0.0.20 企业域交付。
 
+
+辅助生成收口已通过阶段验证：标题、建议和手动摘要由原 Runtime 登记并持有原 Session；停止与助手删除纳入其取消/等待。手动摘要取消等待真实 worker 完成，包含登记成功但准入尚未返回时的取消；提交复验原树，并将 Master 摘要、建议清空及 Child retention 合为一次事务。独立审查无剩余实质问题。完整 `test assembleDebug lintDebug assembleRelease --no-parallel --max-workers=1 --no-configuration-cache` 在 9 分 18 秒内通过，App 1,973 项 JVM 测试无失败/跳过，lint 0 错误；Workspace 仍有 11 项 Windows 宿主环境跳过。Pixel_10_Pro_Fold / Android 17 的整组 10 项真实 Room 测试通过，新增用例验证 Child 删除失败时 Master、收藏、模型上下文、Artifact 引用和 FTS 全部回滚，以及成功重试后的清理。报告位于 `build/reports/enterprise/auxiliary-ownership-verification.json`。正式企业退出编排、后台资源按原域解析、入口与媒体接线仍待完成；本段不代表 C3/C4/C5 或 0.0.20 整期已验收。
 
 | 编号 | 变更 owner / 文件范围 | 完成要求 |
 | --- | --- | --- |
