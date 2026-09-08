@@ -540,9 +540,11 @@ class ConversationCommandAccessTest {
             val started = net.weero.measix.pilot.service.turn.TurnCommitter.start(
                 f.coordinator, f.runtime, turnId, disclosureCandidate(), f.finalizer)
             val lease = net.weero.measix.pilot.service.runtime.ModelExecutionLease { error("no request expected") }
-            f.runtime.bindModelExecution(turnId, worker, lease)
+            f.runtime.bindModelExecution(turnId, worker, f.runtime.durable.header.assistantId, lease)
             f.runtime.bindTurnContext(turnId, worker, mockk {
                 every { realmAccess } returns originalAccess
+                every { assistant } returns net.weero.measix.pilot.service.turn.resolveTurnAssistantSnapshot(
+                    net.weero.measix.pilot.data.model.Assistant(id = f.runtime.durable.header.assistantId))
                 every { model } returns mockk { every { executionLease } returns lease }
             })
             f.runtime.retainAwaitingUser(started.handle)

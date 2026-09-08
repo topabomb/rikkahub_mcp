@@ -1,10 +1,11 @@
 package net.weero.measix.pilot.service
 
-import me.rerere.common.configuration.ConfigurationReference
 import android.content.Context
 import kotlinx.coroutines.async
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Deferred
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.awaitAll
@@ -22,11 +23,6 @@ import me.rerere.ai.ui.findUserTurnStart
 import net.weero.measix.pilot.AppScope
 import net.weero.measix.pilot.R
 import net.weero.measix.pilot.data.ai.subassistant.getSubAssistantCallMetadata
-import net.weero.measix.pilot.data.datastore.Settings
-import net.weero.measix.pilot.data.datastore.SettingsStore
-import net.weero.measix.pilot.data.datastore.findModelById
-import net.weero.measix.pilot.data.datastore.findProvider
-import net.weero.measix.pilot.data.datastore.getCurrentChatModel
 import net.weero.measix.pilot.data.model.toMessageNode
 import net.weero.measix.pilot.data.model.MessageNode
 import net.weero.measix.pilot.data.enterprise.EnterpriseConfigurationException
@@ -37,6 +33,8 @@ import net.weero.measix.pilot.service.runtime.ConversationCommandCoordinator
 import net.weero.measix.pilot.service.runtime.ConversationAggregateSnapshot
 import net.weero.measix.pilot.service.runtime.ConversationRuntime
 import net.weero.measix.pilot.service.runtime.UpdateHeader
+import net.weero.measix.pilot.data.configuration.ModelSelectionRole
+import net.weero.measix.pilot.service.turn.generateText
 import net.weero.measix.pilot.service.turn.TurnOutcome
 import net.weero.measix.pilot.service.turn.TurnRunResult
 import net.weero.measix.pilot.utils.SoundEffectPlayer
@@ -51,12 +49,12 @@ import kotlin.uuid.Uuid
  * 处理生成事件的非编排副作用，独立于 Master turn 编排：
  *  - 音效反馈（流式步进 / 审批提醒 / 完成 / 失败）
  *  - 会话衍生数据生成（标题 / 建议 / 压缩）——三者共用同一后台生成骨架
- *    （settings → 专属模型(可选 fastModel fallback) → provider → generateText → 命令提交）
+ *    （原域模型捕获 → 请求准入 → generateText → 原会话命令提交）
  */
 class GenerationSideEffects internal constructor(
     private val context: Context,
     private val appScope: AppScope,
-    private val settingsStore: SettingsStore,
+    private val modelExecutions: ModelExecutionService,
     private val providerManager: ProviderManager,
     private val runtimeRegistry: ConversationRuntimeRegistry,
     private val commandCoordinator: ConversationCommandCoordinator,
@@ -85,8 +83,10 @@ class GenerationSideEffects internal constructor(
     ): Deferred<Result<Unit>> = launchOwned(runtime, access) { owner, snapshot ->
         runCatchingPreservingCancellation {
             val nodes = compressConversation(owner, snapshot, additionalPrompt, targetTokens, keepRecentMessages)
+            owner.runtime.releaseAuxiliaryModels(listOf(owner.worker))
             withOwner(owner, tree = true) {
-                check(runtime.durable.nodes == snapshot.nodes && runtime.durable.modelContextEntries == snapshot.modelContextEntries) {
+                check(runtime.durable.header.assistantId == snapshot.header.assistantId &&
+                    runtime.durable.nodes == snapshot.nodes && runtime.durable.modelContextEntries == snapshot.modelContextEntries) {
                     "conversation_changed_during_compression"
                 }
                 commit(nodes)
@@ -99,10 +99,23 @@ class GenerationSideEffects internal constructor(
         access: RealmAccess,
         block: suspend (GenerationOwner, ConversationAggregateSnapshot) -> T,
     ): Deferred<T> {
+        val snapshot = runtime.durable
         val worker = appScope.async(start = CoroutineStart.LAZY) {
             val owner = GenerationOwner(runtime, access, requireNotNull(coroutineContext[Job]))
-            val snapshot = withOwner(owner) { runtime.durable }
-            block(owner, snapshot)
+            var failure: Throwable? = null
+            try {
+                withOwner(owner) { Unit }
+                block(owner, snapshot)
+            } catch (error: Throwable) {
+                failure = error
+                throw error
+            } finally {
+                try { withContext(NonCancellable) { runtime.releaseAuxiliaryModels(listOf(owner.worker)) } }
+                catch (error: Throwable) {
+                    if (failure == null) throw error
+                    if (failure !== error) failure.addSuppressed(error)
+                }
+            }
         }
         try {
             runtime.registerAuxiliaryWorker(access, worker)
@@ -193,30 +206,14 @@ class GenerationSideEffects internal constructor(
 
     // ---- 后台生成公共骨架（标题 / 建议 / 压缩共用） ----
 
-    /**
-     * 背景生成唯一装配路径：settings → 专属模型（可选 fastModel fallback）→ provider →
-     * generateText。返回 null 表示模型/provider 缺失或无 choice（调用方按各自语义处理）。
-     */
     private suspend fun runBackgroundGeneration(
-        settings: Settings,
-        modelId: ConfigurationReference?,
-        fallbackToFastModel: Boolean,
+        captured: CapturedModelConfiguration,
         prompt: String,
     ): String? {
-        val model = if (fallbackToFastModel) {
-            settings.findModelById(modelId, fallback = settings.fastModelId)
-                ?: settings.getCurrentChatModel()
-        } else {
-            settings.findModelById(modelId)
-                ?: settings.getCurrentChatModel()
-        } ?: return null
-        val provider = model.findProvider(settings.providers) ?: return null
-        val providerHandler = providerManager.getProviderByType(provider)
-        val result = providerHandler.generateText(
-            providerSetting = provider,
-            messages = listOf(ModelRequestMessage.user(prompt)),
-            params = backgroundTextGenerationParams(model),
-        )
+        val result = captured.model.executionLease.execute { target ->
+            target.generateText(providerManager, listOf(ModelRequestMessage.user(prompt)),
+                backgroundTextGenerationParams(captured.model.model))
+        }
         return result.choices.getOrNull(0)?.message?.toText()
     }
 
@@ -228,6 +225,7 @@ class GenerationSideEffects internal constructor(
         while (true) {
             val retry = generateTitleAttempt(owner, current, requestedForce) ?: return
             current = withOwner(owner) { owner.runtime.durable }
+            if (current.header.assistantId != snapshot.header.assistantId) return
             requestedForce = retry.force
         }
     }
@@ -255,16 +253,16 @@ class GenerationSideEffects internal constructor(
 
         var retry: ConversationTitleRetry? = null
         try {
-            val settings = withOwner(owner) { settingsStore.effectiveSettings.value.settings }
+            val captured = modelExecutions.captureAuxiliary(owner.access, owner.runtime, owner.worker,
+                snapshot.header.assistantId, ModelSelectionRole.TITLE)
+            val settings = captured.userSettings
 
             if (!force) {
                 titleCoordinator.recordAttempt(token)
             }
 
             val generatedTitle = runBackgroundGeneration(
-                settings = settings,
-                modelId = settings.titleModelId,
-                fallbackToFastModel = true,
+                captured = captured,
                 prompt = settings.titlePrompt.applyPlaceholders(
                     "locale" to Locale.getDefault().displayName,
                     "content" to snapshot.currentMessages()
@@ -280,7 +278,7 @@ class GenerationSideEffects internal constructor(
                         check(current === owner.runtime && current.ownsAuxiliaryWorker(owner.access, owner.worker)) {
                             "auxiliary_worker_owner_changed"
                         }
-                        if (current.durable.nodes != snapshot.nodes) false
+                        if (current.durable.header.assistantId != snapshot.header.assistantId || current.durable.nodes != snapshot.nodes) false
                         else commandCoordinator.updateTitleIfCurrent(conversationId, expectedTitle, newTitle)
                     }
                 }
@@ -308,15 +306,23 @@ class GenerationSideEffects internal constructor(
     private suspend fun generateSuggestion(owner: GenerationOwner, snapshot: ConversationAggregateSnapshot) {
         val conversationId = snapshot.conversationId
         try {
-            val settings = withOwner(owner) { settingsStore.effectiveSettings.value.settings }
+            if (!modelExecutions.read(owner.access).userSettings.enableSuggestion) return
+            val captured = modelExecutions.captureAuxiliary(owner.access, owner.runtime, owner.worker,
+                snapshot.header.assistantId, ModelSelectionRole.SUGGESTION)
+            val settings = captured.userSettings
             if (!settings.enableSuggestion) return
 
-            withOwner(owner) { commandCoordinator.executeOrThrow(conversationId, UpdateHeader(suggestions = emptyList())) }
+            val current = withOwner(owner) {
+                if (owner.runtime.durable.header.assistantId != snapshot.header.assistantId || owner.runtime.durable.nodes != snapshot.nodes) false
+                else {
+                    commandCoordinator.executeOrThrow(conversationId, UpdateHeader(suggestions = emptyList()))
+                    true
+                }
+            }
+            if (!current) return
 
             val generated = runBackgroundGeneration(
-                settings = settings,
-                modelId = settings.suggestionModelId,
-                fallbackToFastModel = true,
+                captured = captured,
                 prompt = settings.suggestionPrompt.applyPlaceholders(
                     "locale" to Locale.getDefault().displayName,
                     "content" to snapshot.currentMessages()
@@ -329,7 +335,7 @@ class GenerationSideEffects internal constructor(
                 .take(10)
 
             withOwner(owner) {
-                if (owner.runtime.durable.nodes == snapshot.nodes) {
+                if (owner.runtime.durable.header.assistantId == snapshot.header.assistantId && owner.runtime.durable.nodes == snapshot.nodes) {
                     commandCoordinator.executeOrThrow(conversationId, UpdateHeader(suggestions = suggestions))
                 }
             }
@@ -356,7 +362,9 @@ class GenerationSideEffects internal constructor(
         targetTokens: Int,
         keepRecentMessages: Int = 32
     ): List<MessageNode> {
-        val settings = withOwner(owner) { settingsStore.effectiveSettings.value.settings }
+        val captured = modelExecutions.captureAuxiliary(owner.access, owner.runtime, owner.worker,
+            snapshot.header.assistantId, ModelSelectionRole.COMPRESS)
+        val settings = captured.userSettings
         val maxMessagesPerChunk = 256
         val allMessages = snapshot.currentMessages()
 
@@ -400,9 +408,7 @@ class GenerationSideEffects internal constructor(
             )
 
             return runBackgroundGeneration(
-                settings = settings,
-                modelId = settings.compressModelId,
-                fallbackToFastModel = false,
+                captured = captured,
                 prompt = prompt,
             )?.trim()
                 ?: throw IllegalStateException("No model available for compression")

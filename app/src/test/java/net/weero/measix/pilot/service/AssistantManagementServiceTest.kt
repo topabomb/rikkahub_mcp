@@ -101,7 +101,7 @@ class AssistantManagementServiceTest {
         assertTrue(env.settings.value.pendingAssistantDeletions.isEmpty())
         coVerifyOrder {
             env.coordinator.cancelRunsForAssistant(target.id)
-            env.registry.cancelGenerationsForAssistant(target.id, "assistant_removed")
+            env.conversations.cancelGenerationsForAssistant(target.id, "assistant_removed")
             env.memory.deleteAll(net.weero.measix.pilot.data.model.MemoryAddress(
                 net.weero.measix.pilot.data.configuration.ConfigurationScope.Personal,
                 net.weero.measix.pilot.data.model.MemoryOwner.Assistant(target.id),
@@ -168,7 +168,6 @@ class AssistantManagementServiceTest {
         val settingsStore = mockk<SettingsStore>()
         val artifacts = mockk<ArtifactStore>(relaxed = true)
         val memory = mockk<MemoryRepository>(relaxed = true)
-        val registry = mockk<ConversationRuntimeRegistry>(relaxed = true)
         val coordinator = mockk<SubAssistantRunCoordinator>(relaxed = true)
         val conversations = mockk<ConversationApplicationService>(relaxed = true)
         val recoveryGate = mockk<ApplicationRecoveryGate>(relaxed = true)
@@ -186,7 +185,6 @@ class AssistantManagementServiceTest {
             settingsStore = settingsStore,
             memoryRepository = memory,
             artifactStore = artifacts,
-            runtimeRegistry = registry,
             subAssistantRunCoordinator = coordinator,
             recoveryGate = recoveryGate,
             conversationApplicationService = conversations,

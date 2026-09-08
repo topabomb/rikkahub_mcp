@@ -55,18 +55,41 @@ class TurnFinalizer(
     )
 
     /** Caller must retain this ownership across lock release and finish it even on cancellation. */
-    internal fun captureStop(conversationId: Uuid, reason: String = TurnTerminalReasons.USER_STOP): StopRequest? {
+    internal fun captureStop(conversationId: Uuid, reason: String = TurnTerminalReasons.USER_STOP,
+        assistantId: me.rerere.common.configuration.ConfigurationReference? = null): StopRequest? {
         val runtime = runtimeRegistry.findRuntime(conversationId) ?: return null
-        val captured = runtime.captureAndRequestStop(reason)
-        val auxiliary = runtime.captureAndCancelAuxiliaryWorkers()
+        val captured = runtime.captureAndRequestStop(reason, assistantId)
+        val auxiliary = runtime.captureAndCancelAuxiliaryWorkers(assistantId)
         if (captured == null && auxiliary.isEmpty()) return null
         return StopRequest(conversationId, runtime, captured, reason, auxiliary)
     }
 
+    /** Bounded callers await jobs before entering terminal cleanup; the Runtime retains timed-out owners. */
+    internal suspend fun awaitStoppedWorkers(request: StopRequest) {
+        request.auxiliaryWorkers.joinAll()
+        suspend fun awaitTurn(captured: CapturedTurnWorker?) {
+            captured ?: return
+            captured.worker?.join()
+            awaitTurn(captured.pending)
+        }
+        awaitTurn(request.captured)
+    }
+
     /** Waits outside session/command locks and never captures a replacement worker. */
     internal suspend fun finishStop(request: StopRequest): Unit = withContext(NonCancellable) {
-        request.auxiliaryWorkers.joinAll()
-        val captured = request.captured ?: return@withContext
+        awaitStoppedWorkers(request)
+        var failure: Throwable? = null
+        try { request.runtime.releaseAuxiliaryModels(request.auxiliaryWorkers) }
+        catch (error: Throwable) { failure = error }
+        try { finishStoppedTurn(request) }
+        catch (error: Throwable) {
+            if (failure == null) failure = error else if (failure !== error) failure.addSuppressed(error)
+        }
+        failure?.let { throw it }
+    }
+
+    private suspend fun finishStoppedTurn(request: StopRequest) {
+        val captured = request.captured ?: return
         val job = captured.worker
         if (job?.isCompleted == false) job.cancel()
         job?.join()

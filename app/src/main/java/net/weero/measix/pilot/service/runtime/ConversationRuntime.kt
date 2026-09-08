@@ -1,9 +1,11 @@
 package net.weero.measix.pilot.service.runtime
 import net.weero.measix.pilot.service.turn.TurnContext
 
+import me.rerere.common.configuration.ConfigurationReference
 import android.util.Log
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -71,6 +73,7 @@ class ConversationRuntime internal constructor(
      * this machine never becomes a second write protocol.
      */
     private class ActiveTurnSession(
+        val assistantId: ConfigurationReference,
         val turnId: Uuid,
         val worker: Job,
         handle: TurnHandle? = null,
@@ -169,26 +172,64 @@ class ConversationRuntime internal constructor(
     private val ownedRequests = ConcurrentHashMap<Uuid, ActiveTurnSession>()
     internal val hasExecutionLeases: Boolean
         @Synchronized get() = ownedRequests.values.any { it.modelExecutionLease != null }
-    private val auxiliaryWorkers = ConcurrentHashMap<Job, RealmAccess>()
+    private class AuxiliaryWorker(val access: RealmAccess, val assistantId: ConfigurationReference) {
+        val models = linkedSetOf<ModelExecutionLease>()
+    }
+    private val auxiliaryWorkers = ConcurrentHashMap<Job, AuxiliaryWorker>()
     internal val hasAuxiliaryWork: Boolean get() = auxiliaryWorkers.isNotEmpty()
 
     /** Registration happens under Session and conversation admission, before the worker starts. */
+    @Synchronized
     internal fun registerAuxiliaryWorker(access: RealmAccess, worker: Job) {
         check(access.scope == durable.header.scope) { "conversation_scope_mismatch" }
-        check(auxiliaryWorkers.putIfAbsent(worker, access) == null) { "auxiliary_worker_already_registered" }
+        check(auxiliaryWorkers.putIfAbsent(worker, AuxiliaryWorker(access, durable.header.assistantId)) == null) { "auxiliary_worker_already_registered" }
         cancelIdleCheck()
-        worker.invokeOnCompletion {
-            check(auxiliaryWorkers.remove(worker, access)) { "auxiliary_worker_owner_missing" }
+        worker.invokeOnCompletion { retireAuxiliaryWorker(worker) }
+    }
+
+    @Synchronized
+    internal fun ownsAuxiliaryWorker(access: RealmAccess, worker: Job): Boolean = auxiliaryWorkers[worker]?.access == access
+
+    @Synchronized
+    internal fun bindAuxiliaryModelExecution(access: RealmAccess, worker: Job, assistantId: ConfigurationReference, lease: ModelExecutionLease) {
+        worker.ensureActive()
+        val owner = requireNotNull(auxiliaryWorkers[worker]) { "auxiliary_worker_owner_missing" }
+        check(owner.access == access && owner.assistantId == assistantId) { "auxiliary_worker_owner_changed" }
+        check(owner.models.add(lease)) { "auxiliary_model_already_registered" }
+    }
+
+    /** Completed jobs retain failed releases; stop and deletion retry the same owned leases. */
+    internal suspend fun releaseAuxiliaryModels(workers: Collection<Job>) {
+        val leases = synchronized(this) {
+            workers.flatMap { worker -> auxiliaryWorkers[worker]?.models.orEmpty().map { worker to it } }
+        }
+        var failure: Throwable? = null
+        leases.forEach { (worker, lease) ->
+            try {
+                lease.release()
+                synchronized(this) { auxiliaryWorkers[worker]?.models?.remove(lease) }
+            } catch (error: Throwable) {
+                if (failure == null) failure = error else if (failure !== error) failure!!.addSuppressed(error)
+            }
+        }
+        workers.forEach(::retireAuxiliaryWorker)
+        failure?.let { throw it }
+    }
+
+    @Synchronized
+    private fun retireAuxiliaryWorker(worker: Job) {
+        val owner = auxiliaryWorkers[worker] ?: return
+        if (worker.isCompleted && owner.models.isEmpty()) {
+            check(auxiliaryWorkers.remove(worker, owner)) { "auxiliary_worker_owner_changed" }
             if (!isInUse) scheduleIdleCheck()
         }
     }
 
-    internal fun ownsAuxiliaryWorker(access: RealmAccess, worker: Job): Boolean = auxiliaryWorkers[worker] == access
-
-    /** Capture exact workers before releasing admission locks; completion, not cancellation, releases ownership. */
-    internal fun captureAndCancelAuxiliaryWorkers(): List<Job> = auxiliaryWorkers.keys.toList().also { workers ->
-        workers.forEach { it.cancel() }
-    }
+    /** Capture exact workers, including completed jobs whose resource release needs retry. */
+    internal fun captureAndCancelAuxiliaryWorkers(assistantId: ConfigurationReference? = null): List<Job> =
+        auxiliaryWorkers.entries.filter { assistantId == null || it.value.assistantId == assistantId }.map { it.key }.also { workers ->
+            workers.forEach { it.cancel() }
+        }
     internal val activeTurnRevision: StateFlow<Long> = _activeTurnRevision.asStateFlow()
 
     internal fun lastTerminatedRequestTurnId(): Uuid? = _lastTerminatedRequestTurnId.get()
@@ -307,6 +348,7 @@ class ConversationRuntime internal constructor(
         check(current != null && current.turnId == turnId && current.worker === worker) {
             "turn context owner does not match turn $turnId"
         }
+        check(current.assistantId == context.assistant.id) { "turn_context_assistant_changed" }
         check(!current.releaseStarted && current.modelExecutionLease === context.model.executionLease) {
             "turn_context_execution_owner_mismatch"
         }
@@ -376,15 +418,17 @@ class ConversationRuntime internal constructor(
      * Job and turnId come from the same object so a concurrent START cannot mix them.
      */
     @Synchronized
-    internal fun captureAndRequestStop(reason: String): CapturedTurnWorker? {
+    internal fun captureAndRequestStop(reason: String, assistantId: ConfigurationReference? = null): CapturedTurnWorker? {
         val current = _activeTurn.value
-        val owners = listOfNotNull(current) + ownedRequests.values.filter { it !== current }
+        val owners = (listOfNotNull(current) + ownedRequests.values.filter { it !== current })
+            .filter { assistantId == null || it.assistantId == assistantId }
         if (owners.isNotEmpty()) {
             return owners.asReversed().fold<ActiveTurnSession, CapturedTurnWorker?>(null) { pending, owner ->
                 owner.requestCancel(reason)
                 CapturedTurnWorker(owner.turnId, owner.worker, pending)
             }
         }
+        if (assistantId != null && (ownedRequests.isNotEmpty() || durable.header.assistantId != assistantId)) return null
         val durableTurnId = snapshot.value.stream?.turnId ?: return null
         return CapturedTurnWorker(durableTurnId, null)
     }
@@ -415,6 +459,7 @@ class ConversationRuntime internal constructor(
             _lastTerminatedRequestTurnId.set(previous.turnId)
         }
         val installed = ActiveTurnSession(
+            assistantId = turnContext?.assistant?.id ?: durable.header.assistantId,
             turnId = turnId,
             worker = worker,
             handle = handle,
@@ -487,9 +532,11 @@ class ConversationRuntime internal constructor(
 
     /** The accepting worker hands off immediately after capture, before suspending preparation. */
     @Synchronized
-    internal fun bindModelExecution(turnId: Uuid, worker: Job, lease: ModelExecutionLease) {
+    internal fun bindModelExecution(turnId: Uuid, worker: Job, assistantId: ConfigurationReference, lease: ModelExecutionLease) {
         val current = requireNotNull(ownedRequests[turnId]) { "turn_execution_owner_missing" }
-        check(current.worker === worker && worker.isActive && !current.releaseStarted) { "turn_execution_owner_changed" }
+        check(current.worker === worker && worker.isActive && !current.releaseStarted && current.assistantId == assistantId) {
+            "turn_execution_owner_changed"
+        }
         check(current.modelExecutionLease == null) { "turn_execution_already_bound" }
         current.modelExecutionLease = lease
     }

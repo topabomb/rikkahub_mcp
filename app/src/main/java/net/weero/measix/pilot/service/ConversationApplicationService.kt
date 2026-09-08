@@ -1,5 +1,6 @@
 package net.weero.measix.pilot.service
 
+import net.weero.measix.pilot.service.runtime.ConversationRuntime
 import net.weero.measix.pilot.service.turn.TurnFinalizer
 import net.weero.measix.pilot.service.subassistant.SubAssistantLifecycle
 import net.weero.measix.pilot.service.subassistant.forkSubAssistantTree
@@ -250,16 +251,30 @@ class ConversationApplicationService internal constructor(
         keepRecentMessages: Int,
     ): Result<Unit> {
         var owned: Deferred<Result<Unit>>? = null
+        var ownerRuntime: ConversationRuntime? = null
+        var failure: Throwable? = null
         try {
             withTreeCommand(target) {
                 val runtime = commandCoordinator.load(target.conversationId)
+                ownerRuntime = runtime
                 owned = sideEffects.launchCompression(runtime, target.selection.access, additionalPrompt, targetTokens, keepRecentMessages) { nodes ->
                     subAssistantLifecycle.commitSummary(runtime.durable, nodes)
                 }
             }
             return requireNotNull(owned).await()
+        } catch (error: Throwable) {
+            failure = error
+            throw error
         } finally {
-            withContext(NonCancellable) { owned?.cancelAndJoin() }
+            try { withContext(NonCancellable) {
+                owned?.let { worker ->
+                    worker.cancelAndJoin()
+                    requireNotNull(ownerRuntime).releaseAuxiliaryModels(listOf(worker))
+                }
+            } } catch (error: Throwable) {
+                if (failure == null) throw error
+                if (failure !== error) failure.addSuppressed(error)
+            }
         }
     }
 
@@ -398,6 +413,20 @@ class ConversationApplicationService internal constructor(
             commandCoordinator.withRootHeaders(first.selection.access.scope, targets.map { it.conversationId }) {}
         }
         targets.distinctBy { it.conversationId }.forEach { delete(it) }
+    }
+
+    internal suspend fun cancelGenerationsForAssistant(assistantId: ConfigurationReference, reason: String) {
+        val requests = mutableListOf<TurnFinalizer.StopRequest>()
+        runtimeRegistry.activeRuntimes()
+            .sortedBy { it.durable.header.parentConversationId == null }.forEach { runtime ->
+                commandCoordinator.withResidentRuntime(runtime.id) { current ->
+                    if (current === runtime) {
+                        turnFinalizer.captureStop(current.id, reason, assistantId)?.let(requests::add)
+                    }
+                }
+            }
+        requests.forEach { turnFinalizer.awaitStoppedWorkers(it) }
+        stopCapturedRequests { it.addAll(requests) }
     }
 
     internal suspend fun deleteOfAssistantFromPendingCleanup(assistantId: ConfigurationReference) {

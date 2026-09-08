@@ -6,19 +6,17 @@ import me.rerere.ai.core.MessageRole
 import me.rerere.ai.core.ReasoningLevel
 import me.rerere.ai.provider.CustomBody
 import me.rerere.ai.provider.CustomHeader
-import me.rerere.ai.provider.Model
 import me.rerere.ai.provider.RequestMediaCapabilities
 import net.weero.measix.pilot.data.ai.tools.ToolExecutionBinding
 import net.weero.measix.pilot.data.model.AssistantRegex
 import net.weero.measix.pilot.data.model.InjectionPosition
-import net.weero.measix.pilot.service.runtime.ModelExecutionLease
-import net.weero.measix.pilot.data.enterprise.EnterpriseAppliedVersion
+import net.weero.measix.pilot.service.ModelExecutionSnapshot
 
 /** One immutable, process-local source for every model-visible value used by a durable Turn. */
 internal data class TurnContext(
     val realmAccess: net.weero.measix.pilot.data.enterprise.RealmAccess,
     val assistant: TurnAssistantSnapshot,
-    val model: TurnModelSnapshot,
+    val model: ModelExecutionSnapshot,
     val mediaCapabilities: RequestMediaCapabilities,
     val promptInputs: TurnPromptSnapshot,
     val toolDefinitions: List<FrozenToolDefinition>,
@@ -45,14 +43,6 @@ data class TurnAssistantSnapshot(
     val customHeaders: List<CustomHeader>,
     val customBodies: List<CustomBody>,
     val regexes: List<AssistantRegex>,
-)
-
-/** Provider request shape selected once at START; credentials are supplied separately by its transport owner. */
-internal data class TurnModelSnapshot(
-    val model: Model,
-    val executionLease: ModelExecutionLease,
-    val userRevision: String,
-    val enterpriseVersion: EnterpriseAppliedVersion?,
 )
 
 /** 单条模式注入在本 Turn 内的已解析投影，仅由 START 冻结。 */

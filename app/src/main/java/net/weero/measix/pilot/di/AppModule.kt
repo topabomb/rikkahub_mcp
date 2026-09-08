@@ -176,7 +176,6 @@ val appModule = module {
             settingsStore = get(),
             memoryRepository = get(),
             artifactStore = get(),
-            runtimeRegistry = get(),
             subAssistantRunCoordinator = get(),
             recoveryGate = get(),
             conversationApplicationService = get(),
@@ -359,7 +358,7 @@ val appModule = module {
         GenerationSideEffects(
             context = get(),
             appScope = get(),
-            settingsStore = get(),
+            modelExecutions = get(),
             providerManager = get(),
             runtimeRegistry = get(),
             commandCoordinator = get(),

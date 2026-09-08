@@ -91,6 +91,20 @@ internal data class ResolvedConfiguration(
         role,
     )
 
+    /** Only an unset/automatic slot falls back; an explicit unavailable choice remains an error. */
+    fun auxiliaryModel(role: ModelSelectionRole, assistant: Assistant): ConfigurationSelection {
+        require(role in setOf(ModelSelectionRole.TITLE, ModelSelectionRole.SUGGESTION, ModelSelectionRole.COMPRESS))
+        fun ConfigurationSelection.isExplicit() = reference != null &&
+            !(scope is ConfigurationScope.Personal && reference == DEFAULT_AUTO_MODEL_ID)
+        val selected = modelSelection(role)
+        if (selected.isExplicit()) return selected
+        if (role != ModelSelectionRole.COMPRESS) {
+            val fast = modelSelection(ModelSelectionRole.FAST)
+            if (fast.isExplicit()) return fast
+        }
+        return assistantModel(assistant)
+    }
+
     fun assistantModel(assistantId: ConfigurationReference): ConfigurationSelection {
         val assistant = assistants[assistantId] ?: return ConfigurationSelection(assistantId, ConfigurationUnavailableReason.REFERENCE_MISSING)
         return assistantModel(assistant)

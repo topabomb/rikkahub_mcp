@@ -42,13 +42,22 @@ import net.weero.measix.pilot.service.runtime.captureProviderCredentialOwner
 import net.weero.measix.pilot.service.runtime.freezeProviderWireShape
 import net.weero.measix.pilot.service.runtime.mergeProviderTransportCredentials
 import net.weero.measix.pilot.service.runtime.resolveProviderTransportOwner
-import net.weero.measix.pilot.service.turn.TurnModelSnapshot
+import net.weero.measix.pilot.data.enterprise.EnterpriseAppliedVersion
+import net.weero.measix.pilot.data.configuration.ModelSelectionRole
 import kotlin.uuid.Uuid
 
-internal class CapturedTurnConfiguration(
+/** Frozen request shape shared by chat and auxiliary execution; credentials remain with the lease owner. */
+internal data class ModelExecutionSnapshot(
+    val model: Model,
+    val executionLease: ModelExecutionLease,
+    val userRevision: String,
+    val enterpriseVersion: EnterpriseAppliedVersion?,
+)
+
+internal class CapturedModelConfiguration(
     val userSettings: Settings,
     val assistant: Assistant,
-    val model: TurnModelSnapshot,
+    val model: ModelExecutionSnapshot,
     val mediaCapabilities: RequestMediaCapabilities,
 )
 
@@ -73,17 +82,46 @@ internal class ModelExecutionService(
         worker: Job,
         assistantId: ConfigurationReference,
         child: ChildModelAdmission? = null,
-    ): CapturedTurnConfiguration {
+    ): CapturedModelConfiguration = captureModel(access, runtime, worker, assistantId, ModelSelectionRole.CHAT, child, turnId) {
+        runtime.bindModelExecution(turnId, worker, assistantId, it)
+    }
+
+    suspend fun captureAuxiliary(
+        access: RealmAccess,
+        runtime: ConversationRuntime,
+        worker: Job,
+        assistantId: ConfigurationReference,
+        role: ModelSelectionRole,
+    ): CapturedModelConfiguration {
+        require(role in setOf(ModelSelectionRole.TITLE, ModelSelectionRole.SUGGESTION, ModelSelectionRole.COMPRESS))
+        return captureModel(access, runtime, worker, assistantId, role, null) {
+            runtime.bindAuxiliaryModelExecution(access, worker, assistantId, it)
+        }
+    }
+
+    private suspend fun captureModel(
+        access: RealmAccess,
+        runtime: ConversationRuntime,
+        worker: Job,
+        assistantId: ConfigurationReference,
+        role: ModelSelectionRole,
+        child: ChildModelAdmission?,
+        turnId: Uuid? = null,
+        bindOwner: (ModelExecutionLease) -> Unit,
+    ): CapturedModelConfiguration {
         recoveryGate.awaitReady()
+        worker.ensureActive()
         check(runtime.durable.header.scope == access.scope) { "conversation_scope_mismatch" }
-        check((runtime.durable.header.parentConversationId != null) == (child != null)) { "model_execution_lineage_mismatch" }
+        if (role == ModelSelectionRole.CHAT) {
+            check((runtime.durable.header.parentConversationId != null) == (child != null)) { "model_execution_lineage_mismatch" }
+        }
         var bindings: EnterpriseBindingLease? = null
         var admission: (suspend ((ModelRequestTarget) -> Unit) -> Unit)? = null
         val execution = ModelExecutionLease(releaseOwner = { bindings?.release() }) { accept ->
             requireNotNull(admission) { "model_execution_not_prepared" }(accept)
         }
         // Ownership precedes the first resource acquisition, including failed or cancelled preparation.
-        runtime.bindModelExecution(turnId, worker, execution)
+        bindOwner(execution)
         if (access is RealmAccess.Enterprise) bindings = sessions.captureBindings(access)
         val originalBindings = bindings
         return withConfiguration(access) { snapshot ->
@@ -103,17 +141,19 @@ internal class ModelExecutionService(
                 spec.assistant
             }
             check(assistant.id == assistantId) { "model_execution_assistant_changed" }
-            val modelId = assistant.chatModelId ?: configuration.selections.chatModelId
-                ?: error("chat_model_not_configured")
+            val selection = if (role == ModelSelectionRole.CHAT) configuration.assistantModel(assistant)
+                else configuration.auxiliaryModel(role, assistant)
+            check(selection.isAvailable) { "model_selection_unavailable:${role.name}:${selection.unavailableReason}" }
+            val modelId = requireNotNull(selection.reference)
             requireAvailable(configuration, ConfigurationCategory.MODEL, modelId)
-            requireFixedBinding(configuration, assistantId, modelId)
+            if (role == ModelSelectionRole.CHAT) requireFixedBinding(configuration, assistantId, modelId)
             val selected = configuration.models[modelId]?.model ?: error("chat_model_unavailable")
             check(selected.type == ModelType.CHAT) { "chat_model_capability_mismatch" }
             val model = selected.copy(
                 customHeaders = selected.customHeaders.toList(), customBodies = selected.customBodies.toList(),
                 inputModalities = selected.inputModalities.toList(), outputModalities = selected.outputModalities.toList(),
                 abilities = selected.abilities.toList(), tools = selected.tools.toSet(), providerOverwrite = null,
-            ).withAssistantSearch(assistant)
+            ).let { if (role == ModelSelectionRole.CHAT) it.withAssistantSearch(assistant) else it.copy(tools = emptySet()) }
             val privateBinding = (modelId as? ConfigurationReference.Enterprise)?.let {
                 requireNotNull(originalBindings) { "enterprise_binding_owner_missing" }.binding(it.id)
             }
@@ -140,13 +180,13 @@ internal class ModelExecutionService(
                     currentCoroutineContext().ensureActive()
                     child?.let {
                         resolveActiveRunStopReason(latest.configuration, it.callerAssistantId, assistantId, it.runSpec)?.let { reason ->
-                            runtime.requestCancel(turnId, reason)
+                            runtime.requestCancel(requireNotNull(turnId), reason)
                             throw CancellationException(reason)
                         }
                     }
                     requireAvailable(latest.configuration, ConfigurationCategory.ASSISTANT, assistantId)
                     requireAvailable(latest.configuration, ConfigurationCategory.MODEL, modelId)
-                    requireFixedBinding(latest.configuration, assistantId, modelId)
+                    if (role == ModelSelectionRole.CHAT) requireFixedBinding(latest.configuration, assistantId, modelId)
                     val target = if (privateBinding != null) {
                         // The original lease checks revocation; replacement bindings belong to new Turns.
                         enterpriseTarget(requireNotNull(originalBindings).binding(modelId.id), model)
@@ -157,8 +197,8 @@ internal class ModelExecutionService(
                     accept(target)
                 }
             }
-            CapturedTurnConfiguration(snapshot.userSettings, assistant,
-                TurnModelSnapshot(model, execution, snapshot.userRevision, originalBindings?.version), media)
+            CapturedModelConfiguration(snapshot.userSettings, assistant,
+                ModelExecutionSnapshot(model, execution, snapshot.userRevision, originalBindings?.version), media)
         }
     }
 

@@ -4,6 +4,7 @@ import android.content.Context
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.every
+import io.mockk.spyk
 import io.mockk.mockk
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -58,10 +59,11 @@ class AuxiliaryGenerationOwnershipTest {
             val title = f.effects.launchTitle(f.runtime, f.page.access, true)
             val suggestion = f.effects.launchSuggestion(f.runtime, f.page.access)
             runCurrent()
-            f.sessions.finishExit(f.sessions.beginInvalidation(f.page.access as RealmAccess.Enterprise, EnterpriseExitReason.AUTHORIZATION_REVOKED))
-            f.sessions.enrollFixture(exampleEnterprisePackage())
+            val exit = f.sessions.beginInvalidation(f.page.access as RealmAccess.Enterprise, EnterpriseExitReason.AUTHORIZATION_REVOKED)
             f.reply.complete("obsolete result")
             joinAll(title, suggestion)
+            f.sessions.finishExit(exit)
+            f.sessions.enrollFixture(exampleEnterprisePackage())
             assertTrue(title.isCancelled)
             assertTrue(suggestion.isCancelled)
             assertEquals("", f.runtime.durable.header.title)
@@ -120,7 +122,7 @@ class AuxiliaryGenerationOwnershipTest {
             val title = f.effects.launchTitle(f.runtime, f.page.access, true)
             f.started.await()
             val stopped = async { withTimeoutOrNull(100) {
-                f.registry.cancelGenerationsForAssistant(DEFAULT_ASSISTANT_ID, "assistant_removed")
+                f.application.cancelGenerationsForAssistant(DEFAULT_ASSISTANT_ID, "assistant_removed")
                 true
             } }
             advanceTimeBy(100)
@@ -130,9 +132,103 @@ class AuxiliaryGenerationOwnershipTest {
             assertFalse(title.isCompleted)
             coVerify(exactly = 0) { f.repository.deleteConversation(any()) }
             f.reply.complete("late title")
-            f.registry.cancelGenerationsForAssistant(DEFAULT_ASSISTANT_ID, "assistant_removed")
+            f.application.cancelGenerationsForAssistant(DEFAULT_ASSISTANT_ID, "assistant_removed")
             assertFalse(f.runtime.hasAuxiliaryWork)
             assertEquals("", f.runtime.durable.header.title)
+        }
+    }
+
+    @Test fun `assistant cleanup retains completed auxiliary owner and retries only failed releases`() = runTest {
+        fixture { f ->
+            val worker = Job()
+            var attempts = 0
+            var releasedSibling = 0
+            val failure = IllegalStateException("release unavailable")
+            val failed = ModelExecutionLease(releaseOwner = { if (++attempts == 1) throw failure }) { error("unused") }
+            val sibling = ModelExecutionLease(releaseOwner = { releasedSibling++ }) { error("unused") }
+            f.runtime.registerAuxiliaryWorker(f.page.access, worker)
+            f.runtime.bindAuxiliaryModelExecution(f.page.access, worker, DEFAULT_ASSISTANT_ID, failed)
+            f.runtime.bindAuxiliaryModelExecution(f.page.access, worker, DEFAULT_ASSISTANT_ID, sibling)
+            worker.complete()
+            assertTrue(f.runtime.hasAuxiliaryWork)
+            try { f.application.cancelGenerationsForAssistant(DEFAULT_ASSISTANT_ID, "assistant_removed"); fail("cleanup failure lost") }
+            catch (error: IllegalStateException) { assertEquals(failure.message, error.message) }
+            assertTrue(f.runtime.hasAuxiliaryWork)
+            assertEquals(1, releasedSibling)
+            f.application.cancelGenerationsForAssistant(DEFAULT_ASSISTANT_ID, "assistant_removed")
+            assertEquals(2, attempts)
+            assertEquals(1, releasedSibling)
+            assertFalse(f.runtime.hasAuxiliaryWork)
+        }
+    }
+
+    @Test fun `assistant cleanup follows original auxiliary identity after moving the conversation`() = runTest {
+        fixture { f ->
+            val title = f.effects.launchTitle(f.runtime, f.page.access, true)
+            f.started.await()
+            f.coordinator.executeOrThrow(f.runtime.id, MoveToAssistant(me.rerere.common.configuration.ConfigurationReference.random()))
+            val newerWorker = Job()
+            val newerTurn = Uuid.random()
+            f.runtime.installTurnWorker(newerTurn, newerWorker)
+            try {
+                val stopped = async { f.application.cancelGenerationsForAssistant(DEFAULT_ASSISTANT_ID, "assistant_removed") }
+                runCurrent()
+                assertFalse(stopped.isCompleted)
+                assertTrue(newerWorker.isActive)
+                f.reply.complete("obsolete title")
+                stopped.await()
+                assertTrue(title.isCancelled)
+                assertEquals("", f.runtime.durable.header.title)
+                assertFalse(f.runtime.hasAuxiliaryWork)
+                assertTrue(newerWorker.isActive)
+            } finally {
+                newerWorker.cancel()
+                f.runtime.releaseTurnWorker(newerTurn, newerWorker, false)
+            }
+        }
+    }
+
+    @Test fun `summary releases model resources before committing replacement history`() = runTest {
+        fixture { f ->
+            val initial = f.runtime.durable
+            var releases = 0
+            coEvery { f.models.captureAuxiliary(any(), any(), any(), any(), any()) } coAnswers {
+                val captured = f.actualModels.captureAuxiliary(firstArg(), secondArg(), thirdArg(), arg(3), arg(4))
+                val release = ModelExecutionLease(releaseOwner = {
+                    if (++releases == 1) throw IllegalStateException("release unavailable")
+                }) { error("unused") }
+                secondArg<ConversationRuntime>().bindAuxiliaryModelExecution(firstArg(), thirdArg(), arg(3), release)
+                captured
+            }
+            val summary = async { f.application.compress(f.page.commandTarget, "", 100, 0) }
+            f.started.await()
+            f.reply.complete("replacement summary")
+            assertTrue(summary.await().isFailure)
+            assertEquals(initial, f.runtime.durable)
+            assertEquals(2, releases)
+            assertFalse(f.runtime.hasAuxiliaryWork)
+            coVerify(exactly = 0) { f.repository.commit(any()) }
+        }
+    }
+
+    @Test fun `late suggestion capture cannot clear the new assistants suggestions`() = runTest {
+        fixture { f ->
+            val captured = CompletableDeferred<Unit>()
+            val resume = CompletableDeferred<Unit>()
+            coEvery { f.models.captureAuxiliary(any(), any(), any(), any(), any()) } coAnswers {
+                val result = f.actualModels.captureAuxiliary(firstArg(), secondArg(), thirdArg(), arg(3), arg(4))
+                captured.complete(Unit)
+                resume.await()
+                result
+            }
+            val suggestion = f.effects.launchSuggestion(f.runtime, f.page.access)
+            captured.await()
+            f.coordinator.executeOrThrow(f.runtime.id, MoveToAssistant(me.rerere.common.configuration.ConfigurationReference.random()))
+            f.coordinator.executeOrThrow(f.runtime.id, UpdateHeader(suggestions = listOf("new assistant suggestion")))
+            resume.complete(Unit)
+            suggestion.await()
+            assertEquals(listOf("new assistant suggestion"), f.runtime.durable.header.chatSuggestions)
+            coVerify(exactly = 0) { f.provider.generateText(any(), any(), any()) }
         }
     }
 
@@ -159,7 +255,9 @@ class AuxiliaryGenerationOwnershipTest {
         val started = CompletableDeferred<Unit>()
         val reply = CompletableDeferred<String>()
         var onCommit: (ConversationWrite) -> Unit = {}
-        val effects = GenerationSideEffects(context, appScope, settings, manager, registry,
+        val actualModels = ModelExecutionService(settings, sessions, gate, manager)
+        val models = spyk(actualModels)
+        val effects = GenerationSideEffects(context, appScope, models, manager, registry,
             coordinator, mockk(), JsonInstant, ChatErrorStore(), titles, sessions)
         val application = ConversationApplicationService(settings, repository, mockk(), registry, coordinator, gate,
             SubAssistantLifecycle(repository, registry, coordinator, JsonInstant), effects, artifacts, mockk(),
@@ -177,6 +275,17 @@ class AuxiliaryGenerationOwnershipTest {
                 compressModelId = model.id, enableSuggestion = true)
             every { settings.effectiveSettings } returns MutableStateFlow(EffectiveSettingsSnapshot(
                 configuration, SettingsAccessIndex(), 0, ManagedConfigurationState.ABSENT))
+            net.weero.measix.pilot.test.installExecutionConfigurationFixture(settings)
+            coEvery { settings.withExecutionConfiguration<Any?>(any(), any(), any()) } coAnswers {
+                val scope = firstArg<net.weero.measix.pilot.data.configuration.ConfigurationScope>()
+                val document = UserSettingsDocument.empty().withPersonalSettings(configuration).let { document ->
+                    document.copy(preferences = document.preferences.withSelections(scope,
+                        document.preferences.forScope(net.weero.measix.pilot.data.configuration.ConfigurationScope.Personal)))
+                }
+                thirdArg<suspend (ExecutionConfigurationSnapshot) -> Any?>()(ExecutionConfigurationSnapshot(
+                    configuration, net.weero.measix.pilot.data.configuration.ConfigurationResolver.resolve(document, scope, secondArg()), "fixture"))
+            }
+            every { provider.requestMediaCapabilities(any(), any()) } returns RequestMediaCapabilities.NONE
             every { manager.getProviderByType(any<ProviderSetting>()) } returns provider
             every { context.getString(any()) } returns "operation failed"
             coEvery { provider.generateText(any(), any(), any()) } coAnswers {

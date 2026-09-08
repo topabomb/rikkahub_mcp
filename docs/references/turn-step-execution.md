@@ -217,13 +217,15 @@ Job 后可清理 Runtime。前台服务只通过 query port 观察活动，保�
 ## 标题与子助手
 
 `GenerationSideEffects` 将标题、建议和手动摘要登记到原 `ConversationRuntime`，每个 worker 持有原
-`RealmAccess`。登记在原 Session 与会话准入锁内完成；设置读取、结果和错误发布复验原 Session 与 worker。
+`RealmAccess`、原助手身份与输入快照。登记在原 Session 与会话准入锁内完成；模型捕获在锁外交给 `ModelExecutionService`，请求、结果和错误发布复验原 Session 与 worker。
 切换所选空间不改写已登记任务的身份；退出或重新接入后，旧 Session 的结果不能提交。
-Runtime 在任务实际完成后才释放登记，取消请求不代表清理结束；停止 ticket 只等待捕获时的任务，
-助手删除的既有超时也覆盖辅助任务的取消与等待。标题重试复用原 worker，不派生脱离其所有权的新任务。
+Runtime 只有在任务完成且模型 lease 释放成功后才移除登记，清理失败保留原记录；停止 ticket 只等待并重试捕获时的任务。
+助手删除通过 `ConversationApplicationService` 按原任务助手身份捕获所有域的工作，先在可取消段等待 worker，再沿 `TurnFinalizer` 释放与终态提交；会话移交不会漏掉原助手任务或取消新助手任务。既有超时仍覆盖等待。
+标题重试复用原 worker，助手移交后不重定向原任务；标题提交、建议清空及结果写入都复验原助手与节点。
 
 手动摘要保留用户取消语义：取消等待者会取消并等待原摘要 worker，界面在清理完成前不能再次确认。
-结果提交在完整父子锁下复验原节点与 model-context entries，期间历史被编辑则拒绝旧摘要。
+摘要生成完成后先在锁外释放已用完的模型资源，失败不提交历史；finally 和原任务停止路径仍可重试清理。
+结果提交在完整父子锁下复验原助手、节点与 model-context entries，期间历史被编辑则拒绝旧摘要。
 `SubAssistantLifecycle.commitSummary` 使用既有 retention planner，交给
 `ConversationCommandCoordinator.commitTreeMutation` 一次提交摘要树、清空建议及 Child 截断/删除。
 `ConversationWrite.MutateTree` 先取得 Artifact 生命周期锁并准备引用，再进入一个 Room 事务，

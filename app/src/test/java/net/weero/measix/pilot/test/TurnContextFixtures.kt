@@ -7,7 +7,7 @@ import net.weero.measix.pilot.data.ai.tools.freezeToolSet
 import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.datastore.findProvider
 import net.weero.measix.pilot.data.model.Assistant
-import net.weero.measix.pilot.service.turn.TurnModelSnapshot
+import net.weero.measix.pilot.service.ModelExecutionSnapshot
 import net.weero.measix.pilot.service.turn.TurnContext
 import net.weero.measix.pilot.service.turn.resolveTurnAssistantSnapshot
 
@@ -24,7 +24,7 @@ internal fun testTurnContext(
     return TurnContext(
         realmAccess = realmAccess,
         assistant = resolveTurnAssistantSnapshot(assistant),
-        model = TurnModelSnapshot(
+        model = ModelExecutionSnapshot(
             model = model,
             executionLease = net.weero.measix.pilot.service.runtime.ModelExecutionLease { accept ->
                 accept(net.weero.measix.pilot.service.runtime.ModelRequestTarget.Remote(model.findProvider(settings.providers) ?: error("Provider not found in test Settings")))

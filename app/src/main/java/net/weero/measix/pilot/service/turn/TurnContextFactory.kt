@@ -1,5 +1,6 @@
 package net.weero.measix.pilot.service.turn
 
+import net.weero.measix.pilot.service.ModelExecutionSnapshot
 import me.rerere.common.configuration.ConfigurationReference
 import android.os.Build
 import me.rerere.ai.provider.Model
@@ -34,7 +35,7 @@ class TurnContextFactory(
         realmAccess: net.weero.measix.pilot.data.enterprise.RealmAccess,
         settings: Settings,
         assistant: Assistant,
-        model: TurnModelSnapshot,
+        model: ModelExecutionSnapshot,
         mediaCapabilities: RequestMediaCapabilities,
         conversationSystemPrompt: String?,
         conversationModeInjectionIds: Set<ConfigurationReference>,
@@ -90,7 +91,7 @@ class TurnContextFactory(
 internal class TurnLaunchPlan(
     val realmAccess: net.weero.measix.pilot.data.enterprise.RealmAccess,
     val assistant: Assistant,
-    val model: TurnModelSnapshot,
+    val model: ModelExecutionSnapshot,
     val mediaCapabilities: RequestMediaCapabilities,
     val promptInputs: TurnPromptSnapshot,
     val tools: List<me.rerere.ai.core.Tool>,

@@ -284,16 +284,6 @@ class ConversationRuntimeRegistry(
         _runtimesVersion.value++
     }
 
-    suspend fun cancelGenerationsForAssistant(assistantId: ConfigurationReference, reason: String) {
-        val jobs = activeRuntimes()
-            .filter { it.snapshot.value.durable.header.assistantId == assistantId }
-            .flatMap { runtime ->
-                listOfNotNull(runtime.cancelActiveGeneration(reason)) + runtime.captureAndCancelAuxiliaryWorkers()
-            }
-            .distinct()
-        jobs.joinAll()
-    }
-
     private fun installReadyRuntime(
         entry: Entry,
         snapshot: ConversationAggregateSnapshot,

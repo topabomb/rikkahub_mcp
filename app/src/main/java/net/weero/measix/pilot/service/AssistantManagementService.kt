@@ -16,7 +16,6 @@ import net.weero.measix.pilot.data.model.Assistant
 import net.weero.measix.pilot.data.model.Avatar
 import net.weero.measix.pilot.data.model.normalizeDescription
 import net.weero.measix.pilot.data.repository.MemoryRepository
-import net.weero.measix.pilot.service.runtime.ConversationRuntimeRegistry
 import net.weero.measix.pilot.service.subassistant.SubAssistantRunCoordinator
 
 private const val TAG = "AssistantManagementService"
@@ -30,7 +29,6 @@ class AssistantManagementService(
     private val settingsStore: SettingsStore,
     private val memoryRepository: MemoryRepository,
     private val artifactStore: ArtifactStore,
-    private val runtimeRegistry: ConversationRuntimeRegistry,
     private val subAssistantRunCoordinator: SubAssistantRunCoordinator,
     private val recoveryGate: ApplicationRecoveryGate,
     private val conversationApplicationService: ConversationApplicationService,
@@ -293,7 +291,7 @@ class AssistantManagementService(
                 subAssistantRunCoordinator.cancelRunsForAssistant(
                     assistantId = tombstone.assistantId,
                 )
-                runtimeRegistry.cancelGenerationsForAssistant(
+                conversationApplicationService.cancelGenerationsForAssistant(
                     assistantId = tombstone.assistantId,
                     reason = "assistant_removed",
                 )

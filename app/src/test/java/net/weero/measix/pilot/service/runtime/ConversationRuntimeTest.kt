@@ -72,7 +72,7 @@ class ConversationRuntimeTest {
             if (attempts == 1) throw java.io.IOException("release failed")
         }) { accept -> accept(ModelRequestTarget.LocalExample) }
         rt.installTurnWorker(turn, worker)
-        rt.bindModelExecution(turn, worker, lease)
+        rt.bindModelExecution(turn, worker, rt.durable.header.assistantId, lease)
         worker.complete()
         assertTrue(rt.hasExecutionLeases)
         assertTrue(rt.isInUse)
@@ -114,7 +114,7 @@ class ConversationRuntimeTest {
             finish.await()
         }) { it(ModelRequestTarget.LocalExample) }
         rt.installTurnWorker(turn, worker)
-        rt.bindModelExecution(turn, worker, lease)
+        rt.bindModelExecution(turn, worker, rt.durable.header.assistantId, lease)
         worker.complete()
         val first = async { rt.releaseTurnWorker(turn, worker, false) }
         entered.await()
@@ -391,14 +391,14 @@ class ConversationRuntimeTest {
         val initialWorker = requireNotNull(rt.currentWorker())
         val model = Model(modelId = "model", displayName = "Model")
         val provider = ProviderSetting.OpenAI(models = listOf(model))
-        val assistant = Assistant(enableMemory = false)
+        val assistant = Assistant(id = rt.durable.header.assistantId, enableMemory = false)
         val context = testTurnContext(
             settings = Settings(providers = listOf(provider), assistants = listOf(assistant)),
             model = model,
             assistant = assistant,
         )
 
-        rt.bindModelExecution(turnId, initialWorker, context.model.executionLease)
+        rt.bindModelExecution(turnId, initialWorker, context.assistant.id, context.model.executionLease)
         rt.bindTurnContext(turnId, initialWorker, context)
         val projection = TurnModelContextProjection(entries = emptyList(), locators = emptyMap())
         rt.bindModelContextProjection(turnId, initialWorker, projection)
@@ -435,13 +435,13 @@ class ConversationRuntimeTest {
         rt.startTurn(turnId, Uuid.random())
         val model = Model(modelId = "model", displayName = "Model")
         val provider = ProviderSetting.OpenAI(models = listOf(model))
-        val assistant = Assistant(enableMemory = false)
+        val assistant = Assistant(id = rt.durable.header.assistantId, enableMemory = false)
         val context = testTurnContext(
             settings = Settings(providers = listOf(provider), assistants = listOf(assistant)),
             model = model,
             assistant = assistant,
         )
-        rt.bindModelExecution(turnId, worker, context.model.executionLease)
+        rt.bindModelExecution(turnId, worker, context.assistant.id, context.model.executionLease)
         rt.bindTurnContext(turnId, worker, context)
         rt.requestCancel(turnId, "target_access_revoked")
         assertEquals(TurnLivePhase.STOPPING, rt.currentTurnPresentation().phase)
@@ -475,12 +475,12 @@ class ConversationRuntimeTest {
         val worker = requireNotNull(rt.currentWorker())
         val model = Model(modelId = "model", displayName = "Model")
         val provider = ProviderSetting.OpenAI(models = listOf(model))
-        val assistant = Assistant(enableMemory = false)
+        val assistant = Assistant(id = rt.durable.header.assistantId, enableMemory = false)
         val context = testTurnContext(
             settings = Settings(providers = listOf(provider), assistants = listOf(assistant)),
             model = model, assistant = assistant,
         )
-        rt.bindModelExecution(turnId, worker, context.model.executionLease)
+        rt.bindModelExecution(turnId, worker, context.assistant.id, context.model.executionLease)
         rt.bindTurnContext(turnId, worker, context)
         rt.retainAwaitingUser(handle)
 

@@ -25,6 +25,7 @@ import net.weero.measix.pilot.data.datastore.SettingsStore
 import net.weero.measix.pilot.data.datastore.UserSettingsMigration
 import net.weero.measix.pilot.data.datastore.getChatModel
 import net.weero.measix.pilot.data.configuration.AssistantUsagePreferences
+import net.weero.measix.pilot.data.configuration.ModelSelectionRole
 import net.weero.measix.pilot.data.configuration.UsageValue
 import net.weero.measix.pilot.data.enterprise.*
 import net.weero.measix.pilot.data.model.Assistant
@@ -166,6 +167,90 @@ class ModelExecutionServiceTest {
         }
     }
 
+    @Test fun `auxiliary fallback uses original assistant and never replaces an explicit invalid choice`() = runBlocking {
+        environment { env ->
+            val other = env.model.copy(id = ConfigurationReference.random(), modelId = "global-other")
+            env.settings.updateLocal { it.copy(providers = listOf(env.provider.copy(models = listOf(env.model, other))),
+                chatModelId = other.id, fastModelId = net.weero.measix.pilot.data.datastore.DEFAULT_AUTO_MODEL_ID,
+                compressModelId = net.weero.measix.pilot.data.datastore.DEFAULT_AUTO_MODEL_ID) }
+            for (role in listOf(ModelSelectionRole.TITLE, ModelSelectionRole.SUGGESTION, ModelSelectionRole.COMPRESS)) {
+                assertEquals(env.model.id, env.captureAuxiliary(RealmAccess.Personal, role).model.model.id)
+            }
+            val missing = ConfigurationReference.random()
+            env.settings.updateLocal { it.copy(titleModelId = missing) }
+            rejected { env.captureAuxiliary(RealmAccess.Personal, ModelSelectionRole.TITLE) }
+            env.settings.updateLocal { it.copy(titleModelId = null, fastModelId = missing) }
+            rejected { env.captureAuxiliary(RealmAccess.Personal, ModelSelectionRole.TITLE) }
+            env.settings.updateLocal { it.copy(compressModelId = missing) }
+            rejected { env.captureAuxiliary(RealmAccess.Personal, ModelSelectionRole.COMPRESS) }
+        }
+    }
+
+    @Test fun `enterprise auxiliary slot differs from fixed chat binding and retains its original private revision`() = runBlocking {
+        environment { env ->
+            val base = exampleEnterprisePackage()
+            val title = base.configuration.models.first { it.id == "mdl_chat" }.copy(id = "mdl_title", modelId = "title-original")
+            val binding = base.runtimeBindings.first { it.resourceId == "mdl_chat" }.copy(resourceId = title.id,
+                protocol = EnterpriseRuntimeProtocol.OPENAI_CHAT, endpoint = "https://title-original.test/v1", credential = "original")
+            val packet = base.copy(configuration = base.configuration.copy(models = base.configuration.models + title,
+                defaults = base.configuration.defaults.copy(titleModelId = title.id)), runtimeBindings = base.runtimeBindings + binding)
+            env.sessions.enrollFixture(packet)
+            val access = env.sessions.captureSelectedRealmAccess() as RealmAccess.Enterprise
+            val assistant = packet.identity.reference(packet.configuration.defaults.assistantId!!)
+            val captured = env.captureAuxiliary(access, ModelSelectionRole.TITLE, assistant)
+            assertEquals(packet.identity.reference(title.id), captured.model.model.id)
+            assertNotEquals(captured.assistant.chatModelId, captured.model.model.id)
+            env.sessions.synchronize(access, packet.copy(configuration = packet.configuration.copy(generation = 2,
+                models = packet.configuration.models.map { if (it.id == title.id) it.copy(modelId = "title-replacement") else it }),
+                runtimeBindings = packet.runtimeBindings.map { if (it.resourceId == title.id) it.copy(endpoint = "https://replacement.test/v1") else it }))
+            val target = captured.model.executionLease.execute { it as ModelRequestTarget.Remote }
+            assertEquals("title-original", captured.model.model.modelId)
+            assertEquals("https://title-original.test/v1", (target.provider as ProviderSetting.OpenAI).baseUrl)
+            val exit = env.sessions.beginExit(requireNotNull(env.sessions.captureExitRequest()))
+            rejected { captured.model.executionLease.execute { fail("closing auxiliary reached I/O") } }
+            env.releaseAll()
+            env.sessions.finishExit(exit)
+            env.sessions.enrollFixture(packet)
+            rejected { captured.model.executionLease.execute { fail("old auxiliary revived") } }
+        }
+    }
+
+    @Test fun `enterprise explicit automatic user reference does not fall back to enterprise defaults`() = runBlocking {
+        environment { env ->
+            val packet = exampleEnterprisePackage()
+            env.sessions.enrollFixture(packet)
+            val access = env.sessions.captureSelectedRealmAccess() as RealmAccess.Enterprise
+            env.preferences.edit { stored ->
+                val document = net.weero.measix.pilot.utils.JsonInstant.decodeFromString<net.weero.measix.pilot.data.datastore.UserSettingsDocument>(stored[SettingsStore.USER_SETTINGS]!!)
+                stored[SettingsStore.USER_SETTINGS] = net.weero.measix.pilot.utils.JsonInstant.encodeToString(document.copy(
+                    preferences = document.preferences.withSelections(access.scope,
+                        document.preferences.forScope(access.scope).copy(titleModelId = net.weero.measix.pilot.data.datastore.DEFAULT_AUTO_MODEL_ID))))
+            }
+            rejected { env.captureAuxiliary(access, ModelSelectionRole.TITLE) }
+        }
+    }
+
+    @Test fun `chat capture rejects an assistant changed after worker registration before acquiring bindings`() = runBlocking {
+        environment { env ->
+            val other = env.assistant.copy(id = ConfigurationReference.random())
+            env.settings.updateLocal { it.copy(assistants = listOf(env.assistant, other)) }
+            val conversation = Conversation(assistantId = env.assistant.id, messageNodes = emptyList())
+            val runtime = ConversationRuntime(conversation.id, conversation.toSnapshot(), env.scope, {})
+            val turn = Uuid.random()
+            val worker = Job()
+            runtime.installTurnWorker(turn, worker)
+            runtime.publishCommitted(net.weero.measix.pilot.service.runtime.MoveToAssistant(other.id),
+                runtime.durable.copy(header = runtime.durable.header.copy(assistantId = other.id)))
+            try {
+                rejected { env.service.captureTurn(RealmAccess.Personal, runtime, turn, worker, other.id) }
+                assertFalse(runtime.hasExecutionLeases)
+                assertNull(runtime.captureAndRequestStop("assistant_removed", other.id))
+                assertTrue(worker.isActive)
+                assertNotNull(runtime.captureAndRequestStop("assistant_removed", env.assistant.id))
+            } finally { worker.cancel(); runtime.releaseTurnWorker(turn, worker, false) }
+        }
+    }
+
     private suspend fun environment(block: suspend (Environment) -> Unit) {
         val env = Environment(temporary.newFolder())
         try {
@@ -193,7 +278,17 @@ class ModelExecutionServiceTest {
         val gate = ApplicationRecoveryGate()
         val service = testModelExecutionService(settings, sessions, gate)
         private val owners = mutableListOf<Triple<ConversationRuntime, Uuid, Job>>()
-        suspend fun capture(access: RealmAccess, id: ConfigurationReference = assistant.id, child: ChildModelAdmission? = null): CapturedTurnConfiguration {
+        private val auxiliary = mutableListOf<Pair<ConversationRuntime, Job>>()
+        suspend fun captureAuxiliary(access: RealmAccess, role: ModelSelectionRole,
+            id: ConfigurationReference = assistant.id): CapturedModelConfiguration {
+            val conversation = Conversation(assistantId = id, scope = access.scope, messageNodes = emptyList())
+            val runtime = ConversationRuntime(conversation.id, conversation.toSnapshot(), scope, {})
+            val worker = Job()
+            runtime.registerAuxiliaryWorker(access, worker)
+            auxiliary += runtime to worker
+            return service.captureAuxiliary(access, runtime, worker, id, role)
+        }
+        suspend fun capture(access: RealmAccess, id: ConfigurationReference = assistant.id, child: ChildModelAdmission? = null): CapturedModelConfiguration {
             val conversation = Conversation(assistantId = id, scope = access.scope, messageNodes = emptyList(),
                 parentConversationId = Uuid.random().takeIf { child != null })
             val runtime = ConversationRuntime(conversation.id, conversation.toSnapshot(), scope, {})
@@ -206,6 +301,8 @@ class ModelExecutionServiceTest {
         suspend fun releaseAll() {
             owners.forEach { (runtime, turn, worker) -> worker.cancel(); runtime.releaseTurnWorker(turn, worker, false) }
             owners.clear()
+            auxiliary.forEach { (runtime, worker) -> worker.cancel(); runtime.releaseAuxiliaryModels(listOf(worker)) }
+            auxiliary.clear()
         }
     }
 

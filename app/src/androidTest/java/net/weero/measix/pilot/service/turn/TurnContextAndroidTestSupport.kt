@@ -11,6 +11,7 @@ import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.datastore.findProvider
 import net.weero.measix.pilot.data.model.Assistant
 import net.weero.measix.pilot.data.model.AssistantMemory
+import net.weero.measix.pilot.service.ModelExecutionSnapshot
 import net.weero.measix.pilot.service.ConversationDisclosureSnapshotService
 import java.time.ZoneId
 import java.util.Locale
@@ -60,7 +61,7 @@ internal fun androidTestTurnContext(
     return TurnContext(
         realmAccess = net.weero.measix.pilot.data.enterprise.RealmAccess.Personal,
         assistant = resolveTurnAssistantSnapshot(assistant),
-        model = TurnModelSnapshot(
+        model = ModelExecutionSnapshot(
             model = model,
             executionLease = net.weero.measix.pilot.service.runtime.ModelExecutionLease { accept ->
                 accept(net.weero.measix.pilot.service.runtime.ModelRequestTarget.Remote(model.findProvider(settings.providers) ?: error("Provider not found in test Settings")))
