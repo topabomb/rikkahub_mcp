@@ -2,12 +2,10 @@ package net.weero.measix.pilot.service
 
 import me.rerere.common.configuration.ConfigurationReference
 import androidx.paging.PagingData
-import androidx.paging.Pager
 import androidx.paging.PagingConfig
 import androidx.paging.PagingSource
 import net.weero.measix.pilot.data.db.dao.LightConversationEntity
 import android.util.Log
-import androidx.paging.map
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
@@ -275,43 +273,19 @@ class ConversationQueryService internal constructor(
     private fun paging(
         access: RealmSelection,
         source: () -> PagingSource<Int, LightConversationEntity>,
-    ): Flow<PagingData<ConversationSummary>> = flow {
-        val owner = Any()
-        val active = mutableSetOf<PagingSource<Int, LightConversationEntity>>()
-        var closed = false
-        try {
-            emit(PagingData.empty())
-            val pager = Pager(PagingConfig(pageSize = 20, initialLoadSize = 40, enablePlaceholders = false)) {
-                synchronized(owner) {
-                    SelectedRealmPagingSource(source(), sessions, access).also { page ->
-                        if (closed) page.invalidate() else {
-                            active.add(page)
-                            page.registerInvalidatedCallback { synchronized(owner) { active.remove(page) } }
-                        }
-                    }
-                }
-            }
-            emitAll(pager.flow.map { data ->
-                data.map { row ->
-                    ConversationSummary(
-                        id = Uuid.parse(row.id),
-                        assistantId = ConfigurationReference.parse(row.assistantId),
-                        title = row.title,
-                        folderId = row.folderId.takeIf(String::isNotEmpty)?.let(Uuid::parse),
-                        isPinned = row.isPinned,
-                        createAt = Instant.ofEpochMilli(row.createAt),
-                        updateAt = Instant.ofEpochMilli(row.updateAt),
-                        selection = access,
-                    )
-                }
-            })
-        } finally {
-            synchronized(owner) {
-                closed = true
-                active.toList().forEach { it.invalidate() }
-                active.clear()
-            }
-        }
+    ): Flow<PagingData<ConversationSummary>> = selectedRealmPaging(
+        sessions, access, PagingConfig(pageSize = 20, initialLoadSize = 40, enablePlaceholders = false), source,
+    ) { row ->
+        ConversationSummary(
+            id = Uuid.parse(row.id),
+            assistantId = ConfigurationReference.parse(row.assistantId),
+            title = row.title,
+            folderId = row.folderId.takeIf(String::isNotEmpty)?.let(Uuid::parse),
+            isPinned = row.isPinned,
+            createAt = Instant.ofEpochMilli(row.createAt),
+            updateAt = Instant.ofEpochMilli(row.updateAt),
+            selection = access,
+        )
     }
 
     fun conversationsOfAssistant(assistantId: ConfigurationReference): Flow<List<ConversationSummary>> =

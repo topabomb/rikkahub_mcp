@@ -6,6 +6,10 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.withContext
 import me.rerere.ai.ui.ImageGenerationItem
+import net.weero.measix.pilot.data.enterprise.EnterpriseSessionController
+import net.weero.measix.pilot.data.enterprise.RealmSelection
+import net.weero.measix.pilot.data.files.ArtifactStore
+import net.weero.measix.pilot.data.files.FileFolders
 import net.weero.measix.pilot.data.imggen.GeneratedMediaStore
 import kotlin.uuid.Uuid
 import kotlin.time.Clock
@@ -38,49 +42,56 @@ sealed interface FileCleanupRange {
 }
 
 /**
- * 设置文件页的唯一写端口：跨 `ArtifactUseCase`（上传）与 `GeneratedMediaStore`（生成媒体）
+ * 设置文件页的唯一写端口：跨 `ArtifactStore`（上传）与 `GeneratedMediaStore`（生成媒体）
  * 两个 owner 编排范围清理，用注入 Clock 一次计算 cutoff，避免长任务里时间漂移。
  */
-class FileManagementApplicationService(
-    private val artifactUseCase: ArtifactUseCase,
+class FileManagementApplicationService internal constructor(
+    private val artifactStore: ArtifactStore,
     private val generatedMediaStore: GeneratedMediaStore,
     private val recoveryGate: ApplicationRecoveryGate,
+    private val sessions: EnterpriseSessionController,
     private val clock: Clock = Clock.System,
     private val writeGeneratedPreview: (File, ByteArray) -> Unit = { file, bytes ->
         file.writeBytes(bytes)
     },
 ) {
-    suspend fun cleanup(category: FileCleanupCategory, range: FileCleanupRange): FileCleanupResult {
+    suspend fun cleanup(selection: RealmSelection, category: FileCleanupCategory, range: FileCleanupRange): FileCleanupResult {
         recoveryGate.awaitReady()
-        val cutoff = cutoffFor(range, clock.now().toEpochMilliseconds())
-        return when (category) {
-            FileCleanupCategory.UPLOAD -> artifactUseCase.deleteUploadsCreatedBefore(cutoff).let { result ->
-                FileCleanupResult(
-                    deleted = result.deleted,
-                    cleanupPending = result.cleanupPending,
-                    skippedInProgress = result.skippedInProgress,
-                    failed = result.failed,
-                )
-            }
-            FileCleanupCategory.GENERATED_IMAGES -> generatedMediaStore.deleteCreatedBefore(cutoff).let { result ->
-                FileCleanupResult(
-                    deleted = result.deleted,
-                    cleanupPending = result.cleanupPending,
-                    skippedInProgress = 0,
-                    failed = result.failed,
-                )
+        return sessions.withSelectedRealmSelection(selection) {
+            val cutoff = cutoffFor(range, clock.now().toEpochMilliseconds())
+            when (category) {
+                FileCleanupCategory.UPLOAD -> artifactStore.deleteUserRequestedFolderCreatedBefore(selection.access.scope, FileFolders.UPLOAD, cutoff).let { result ->
+                    FileCleanupResult(
+                        deleted = result.deleted,
+                        cleanupPending = result.cleanupPending,
+                        skippedInProgress = result.skippedInProgress,
+                        failed = result.failed,
+                    )
+                }
+                FileCleanupCategory.GENERATED_IMAGES -> generatedMediaStore.deleteCreatedBefore(selection.access.scope, cutoff).let { result ->
+                    FileCleanupResult(
+                        deleted = result.deleted,
+                        cleanupPending = result.cleanupPending,
+                        skippedInProgress = 0,
+                        failed = result.failed,
+                    )
+                }
             }
         }
     }
 
     suspend fun deleteUpload(key: ManagedFileKey.Upload): ArtifactDeleteOutcome {
         recoveryGate.awaitReady()
-        return artifactUseCase.deleteUserRequested(key.artifactId)
+        return sessions.withSelectedRealmSelection(key.selection) {
+            artifactStore.deleteUserRequested(key.selection.access.scope, key.artifactId).toOutcome()
+        }
     }
 
     suspend fun deleteGenerated(key: ManagedFileKey.Generated): Boolean {
         recoveryGate.awaitReady()
-        return generatedMediaStore.delete(key.mediaId)
+        return sessions.withSelectedRealmSelection(key.selection) {
+            generatedMediaStore.delete(key.selection.access.scope, key.mediaId)
+        }
     }
 
     suspend fun createGeneratedPreview(item: ImageGenerationItem, tempDirectory: File): File {

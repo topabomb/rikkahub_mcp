@@ -88,7 +88,7 @@ Tool Result checkpoint（消息与 Artifact 引用同事务）
 
 `ArtifactStore` 的创建入口显式接收 `ConfigurationScope`，在 CREATING 行写入后一直保留该归属；`copyFilePreservingOrigin` 保留源文件的域与 origin。聊天输入的 `ArtifactDraftScope` 绑定原 `ConversationCommandTarget`，提交和消息编辑不能借用另一个页面的 draft，即使它们属于同一用户或会话。关闭后的补偿仍归原 lease。
 
-模型输出转换、MCP/Workspace 图片、rolling compaction 归档沿原 Turn 传递 scope；`ImageGenerationRequest` 固定本次操作的 scope，`GeneratedMediaStore` 将同一归属写入图库原件及聊天副本。共享助手定义的头像/背景导入仍创建个人配置资产。这些创建规则不代表文件列表、预览、工具读取或 Workspace 挂载已经全部完成域授权。
+模型输出转换、MCP/Workspace 图片、rolling compaction 归档沿原 Turn 传递 scope；`ImageGenerationRequest` 固定本次操作的 scope，`GeneratedMediaStore` 将同一归属写入图库原件及聊天副本。共享助手定义的头像/背景导入仍创建个人配置资产。目录、统计和删除已按原 RealmSelection 授权；预览、导出、工具读取与 Workspace 挂载的完整域授权仍在企业集成计划中。
 
 会话写入在原 Artifact lifecycle lock 内，用 durable header 的 scope 准备引用 delta；跨域文件使提交失败，不静默删除引用。启动时 `ensureReferenceProjection` 同样核验归属，并在全量准备成功后才事务替换投影与完成标记。v19 迁移将既有行归为个人，保留文件、ID 和路径。
 
@@ -118,9 +118,14 @@ Tool Result checkpoint（消息与 Artifact 引用同事务）
 
 - 上传文件由 `ArtifactStore` 从 durable metadata 选取候选，在同一 lifecycle lock 内重验 retention pin、消息引用和 Settings roots，并复用单项 CREATING / ACTIVE / DELETING 状态机；
 - 图库媒体由 `GeneratedMediaStore` 从 canonical row 选取候选，在 persist lock 内复用单项删除协议。row 删除成功而 payload 暂未清除时返回 `cleanupPending`，保留删除 tombstone，由启动 reconcile 继续收口；row 删除失败则恢复原 payload 身份；
+- 文件目录和候选 SQL 都限定明确 scope；单项删除在 owner 锁内复验 metadata 归属，不能用本域令牌操作其他域的 ID。恢复和 GC 仍由全局 owner 遍历全部主体。
+- FileManagementQueryService 将上传和生成媒体合成携带原 RealmSelection 的目录；统计以该目录的登记条目为准，生成媒体大小读取对应原件，不扫描未登记文件。查询失败有明确失败状态和同域重试入口，统计不可用显示 `—`。
+- 设置文件页按选择重建确认框和预览；图库分页与会话目录复用 selectedRealmPaging，切换时撤销旧数据源，迟到消费不发布已撤权行；删除始终携带原选择，即使离开后回到同域也不能复活旧确认。
 - 候选计数只用于确认提示，不锁定待删集合；真正执行时由 owner 在锁内重新取候选。取消在单项之间传播，已经取得删除所有权的单项按既有终态或补偿协议完成；
 - 两个领域分别返回结构化结果。`FileManagementApplicationService` 只映射为 UI 所需的 `deleted`、`cleanupPending`、`skippedInProgress` 与 `failed`，不把部分成功压成 Boolean，也不为没有该状态的领域伪造结果；
 - `FileManagementApplicationService` 的 owner 命令与 `FileManagementQueryService` 中会读取 row/payload 状态的列表、分页、统计和检查均等待全局 `ApplicationRecoveryGate`。纯 canonical-root 路径分类不读取 row 或 payload 状态，只用于本地图片来源标签。`ApplicationRecoveryCoordinator` 在发布文件读写能力前依次完成 Artifact 与 GeneratedMedia reconcile，页面不会观察或操作尚未收口的 tombstone、staging 或孤儿 payload。
+
+输入框附件名称只经原 ArtifactDraftScope 查询当前输入中的 URI；按规范化路径和 scope 匹配，不订阅全局上传目录，也不按 basename 反查其他文件。名称读取失败可回退显示，取消继续传播。图像页取消沿 enqueue 的原请求收口，Coordinator 的取消返回前等待真实执行结束；下个页面请求等待旧协程完成，旧图片投影不能跨选择继续展示。
 
 ## 3. 请求级投影（`AttachmentProjectionTransformer`）
 

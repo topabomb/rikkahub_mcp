@@ -580,3 +580,7 @@ Local shadow 不因同 ID overlay 覆盖而删除；overlay 移除后恢复本�
 - UI 与运行时只消费同一个 effective read model，不建立第二 owner。
 
 构建/JVM 验证不替代真实平台存储、签名资源和恢复场景的设备验收。新增生产同步路径时，应补充对应的服务端互操作验证。
+
+### 文件目录与选择生命周期
+
+FileManagementQueryService 合成当前选择的上传与图库目录，条目保留原 RealmSelection；列表、候选数量和清理 SQL 都显式限定 scope。FileManagementApplicationService 在 Session 准入内编排原 ArtifactStore/GeneratedMediaStore，单项文件归属仍由原 owner 复验。页面切换会清除旧确认和预览；返回相同主体不会恢复旧选择的写权限。统计只消费本域已登记条目，查询失败可以在同域重试。输入框名称只查询原 Draft 当前附件。预览/导出/工具读取的全链路授权与共享配置资产物化仍按本期计划继续，不能据此宣称 C6 已全部完成。

@@ -148,15 +148,15 @@ class ArtifactUploadImageReadTest {
 
         assertFailure(ArtifactImageReadResult.Reason.UNSUPPORTED_TYPE, read(listOf("/upload/first.png", "/upload/invalid.png")))
 
-        assertTrue(store.deleteUserRequested(first.id) is ArtifactDeleteResult.Completed)
-        assertTrue(store.deleteUserRequested(invalid.id) is ArtifactDeleteResult.Completed)
+        assertTrue(store.deleteUserRequested(ConfigurationScope.Personal, first.id) is ArtifactDeleteResult.Completed)
+        assertTrue(store.deleteUserRequested(ConfigurationScope.Personal, invalid.id) is ArtifactDeleteResult.Completed)
     }
 
     @Test
     fun `later missing metadata does not retain earlier valid image`() = runBlocking {
         val first = register("first.png")
         assertFailure(ArtifactImageReadResult.Reason.NOT_FOUND, read(listOf("/upload/first.png", "/upload/missing.png")))
-        assertTrue(store.deleteUserRequested(first.id) is ArtifactDeleteResult.Completed)
+        assertTrue(store.deleteUserRequested(ConfigurationScope.Personal, first.id) is ArtifactDeleteResult.Completed)
     }
 
     @Test
@@ -182,15 +182,15 @@ class ArtifactUploadImageReadTest {
             try {
                 enteredFirst.await()
                 enteredSecond.await()
-                assertInProgress(store.deleteUserRequested(entity.id))
+                assertInProgress(store.deleteUserRequested(ConfigurationScope.Personal, entity.id))
                 first.cancelAndJoin()
-                assertInProgress(store.deleteUserRequested(entity.id))
+                assertInProgress(store.deleteUserRequested(ConfigurationScope.Personal, entity.id))
                 assertTrue(File(root, entity.relativePath).isFile)
             } finally {
                 first.cancelAndJoin()
                 second.cancelAndJoin()
             }
-            assertTrue(store.deleteUserRequested(entity.id) is ArtifactDeleteResult.Completed)
+            assertTrue(store.deleteUserRequested(ConfigurationScope.Personal, entity.id) is ArtifactDeleteResult.Completed)
             assertFalse(File(root, entity.relativePath).exists())
         }
     }
@@ -210,7 +210,7 @@ class ArtifactUploadImageReadTest {
         consumer.join()
         assertTrue("A committed result must reach its owner without a dispatcher return boundary", delivered.isCompleted)
         assertEquals("committed-child", delivered.await())
-        assertTrue(store.deleteUserRequested(entity.id) is ArtifactDeleteResult.Completed)
+        assertTrue(store.deleteUserRequested(ConfigurationScope.Personal, entity.id) is ArtifactDeleteResult.Completed)
     }
 
     @Test
@@ -226,7 +226,7 @@ class ArtifactUploadImageReadTest {
         } catch (actual: IllegalStateException) {
             assertTrue(actual === expected)
         }
-        assertTrue(store.deleteUserRequested(entity.id) is ArtifactDeleteResult.Completed)
+        assertTrue(store.deleteUserRequested(ConfigurationScope.Personal, entity.id) is ArtifactDeleteResult.Completed)
     }
 
     @Test
@@ -234,14 +234,14 @@ class ArtifactUploadImageReadTest {
         val entity = register("source.png")
         val snapshot = AttachmentResolver(store).readImages(listOf("/upload/source.png")) as AttachmentResolveResult.Success
 
-        assertTrue(store.deleteUserRequested(entity.id) is ArtifactDeleteResult.Completed)
+        assertTrue(store.deleteUserRequested(ConfigurationScope.Personal, entity.id) is ArtifactDeleteResult.Completed)
         val image = snapshot.parts.single()
         val bytes = kotlin.io.encoding.Base64.decode(image.url.substringAfter("base64,"))
         val bitmap = android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size)!!
         assertEquals(1, bitmap.width)
         assertEquals(1, bitmap.height)
         bitmap.recycle()
-        assertTrue(store.list().isEmpty())
+        assertTrue(store.list(ConfigurationScope.Personal).isEmpty())
         assertTrue(File(root, "upload").listFiles().orEmpty().isEmpty())
     }
 
@@ -252,7 +252,7 @@ class ArtifactUploadImageReadTest {
             java.io.IOException("read unavailable")
 
         assertFailure(ArtifactImageReadResult.Reason.READ_FAILED, read(listOf("/upload/unreadable.png")))
-        assertTrue(store.deleteUserRequested(entity.id) is ArtifactDeleteResult.Completed)
+        assertTrue(store.deleteUserRequested(ConfigurationScope.Personal, entity.id) is ArtifactDeleteResult.Completed)
     }
 
     @Test
@@ -267,11 +267,11 @@ class ArtifactUploadImageReadTest {
             val reader = async(Dispatchers.Default) { read(listOf("/upload/cancelled.png")) }
             try {
                 readStarted.await()
-                assertInProgress(store.deleteUserRequested(entity.id))
+                assertInProgress(store.deleteUserRequested(ConfigurationScope.Personal, entity.id))
             } finally {
                 reader.cancelAndJoin()
             }
-            assertTrue(store.deleteUserRequested(entity.id) is ArtifactDeleteResult.Completed)
+            assertTrue(store.deleteUserRequested(ConfigurationScope.Personal, entity.id) is ArtifactDeleteResult.Completed)
         }
     }
 

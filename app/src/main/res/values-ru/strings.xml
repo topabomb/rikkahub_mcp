@@ -1658,4 +1658,5 @@
   <string name="workspace_preference_partial_failure">Рабочий каталог сброшен, но выбор рабочего пространства не сохранён. Остаётся выбрано прежнее пространство. Повторите попытку.</string>
   <string name="assistant_use_definition_model">Использовать модель из определения моего ассистента</string>
   <string name="setting_files_page_delete_impact_presets">Содержимое, ссылающееся на этот файл, будет удалено из списков предустановленных сообщений ассистентов: %1$d.</string>
+  <string name="setting_files_page_load_failed">Не удалось загрузить файлы</string>
 </resources>

@@ -530,8 +530,8 @@ internal class ArtifactCreationTest : ArtifactStoreLifecycleTestBase() {
         }.exceptionOrNull()
 
         assertTrue(failure is IllegalStateException)
-        val rootedDelete = store.deleteUserRequested(rooted.entity.id)
-        val unrootedDelete = store.deleteUserRequested(unrooted.entity.id)
+        val rootedDelete = store.deleteUserRequested(ConfigurationScope.Personal, rooted.entity.id)
+        val unrootedDelete = store.deleteUserRequested(ConfigurationScope.Personal, unrooted.entity.id)
         assertEquals(
             ArtifactDeleteResult.RejectionReason.IN_PROGRESS,
             (rootedDelete as ArtifactDeleteResult.Rejected).reason,

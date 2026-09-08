@@ -10,8 +10,14 @@ import androidx.paging.cachedIn
 import androidx.paging.map
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -20,7 +26,6 @@ import kotlinx.coroutines.flow.stateIn
 import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.datastore.SettingsLockedException
 import kotlinx.coroutines.launch
-import kotlinx.serialization.Serializable
 import me.rerere.ai.provider.ProviderManager
 import me.rerere.ai.ui.ImageGenSize
 import me.rerere.ai.ui.ImageGenerationItem
@@ -41,8 +46,8 @@ import net.weero.measix.pilot.service.ManagedFileKey
 import java.io.File
 import kotlin.coroutines.cancellation.CancellationException
 
-@Serializable
 data class GeneratedImage(
+    val selection: net.weero.measix.pilot.data.enterprise.RealmSelection,
     val id: Int,
     val prompt: String,
     val filePath: String,
@@ -52,7 +57,8 @@ data class GeneratedImage(
 
 private fun GeneratedMediaUiModel.toGeneratedImage(): GeneratedImage {
     return GeneratedImage(
-        id = id,
+        selection = key.selection,
+        id = key.mediaId,
         prompt = prompt,
         filePath = filePath,
         timestamp = createdAt,
@@ -86,6 +92,9 @@ class ImgGenVM internal constructor(
         }
     }
 
+    val realmSelection = fileManagementQueryService.observeSelection()
+        .stateIn(viewModelScope, SharingStarted.Eagerly, null)
+
     private val _prompt = MutableStateFlow("")
     val prompt: StateFlow<String> = _prompt
 
@@ -98,14 +107,14 @@ class ImgGenVM internal constructor(
     private val _isGenerating = MutableStateFlow(false)
     val isGenerating: StateFlow<Boolean> = _isGenerating
     private var cancelJob: Job? = null
-    private val pageSessionId = "imggen-page"
-    private var activeRequestId: String? = null
 
     private val _error = MutableStateFlow<String?>(null)
     val error: StateFlow<String?> = _error
 
     private val _currentGeneratedImages = MutableStateFlow<List<GeneratedImage>>(emptyList())
-    val currentGeneratedImages: StateFlow<List<GeneratedImage>> = _currentGeneratedImages
+    val currentGeneratedImages: StateFlow<List<GeneratedImage>> = combine(_currentGeneratedImages, realmSelection) { images, selected ->
+        images.filter { it.selection == selected }
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
 
     private val _referenceImages = MutableStateFlow<List<String>>(emptyList())
     val referenceImages: StateFlow<List<String>> = _referenceImages
@@ -116,6 +125,12 @@ class ImgGenVM internal constructor(
             pagingData.map(GeneratedMediaUiModel::toGeneratedImage)
         }
         .cachedIn(viewModelScope)
+
+    init {
+        viewModelScope.launch {
+            realmSelection.collect { startNewSession() }
+        }
+    }
 
     fun updatePrompt(prompt: String) {
         _prompt.value = prompt
@@ -163,14 +178,16 @@ class ImgGenVM internal constructor(
         if(prompt.value.isBlank()) return
         val realmSelection = (modelCatalog.value as? net.weero.measix.pilot.service.ModelCatalogReadState.Available)
             ?.catalog?.selection ?: return
-        cancelJob?.cancel()
-        cancelJob = viewModelScope.launch {
+        val previous = cancelJob
+        previous?.cancel()
+        cancelJob = viewModelScope.launch(start = CoroutineStart.ATOMIC) {
+            withContext(NonCancellable) { previous?.join() }
+            currentCoroutineContext().ensureActive()
             var previewFile: File? = null
             try {
                 _isGenerating.value = true
                 _error.value = null
                 _currentGeneratedImages.value = emptyList()
-                coordinator.cancelPageSession(pageSessionId)
 
                 configurationQueryService.requireSelection(realmSelection)
 
@@ -183,7 +200,7 @@ class ImgGenVM internal constructor(
                 val requestPrompt = _prompt.value
                 val request = ImageGenerationRequest(
                     realmAccess = realmSelection.access,
-                    source = ImageGenerationSource.Page(pageSessionId),
+                    source = ImageGenerationSource.Page,
                     selection = selection,
                     prompt = requestPrompt,
                     numOfImages = _numberOfImages.value,
@@ -196,6 +213,7 @@ class ImgGenVM internal constructor(
                         previewFile = preview
                         _currentGeneratedImages.value = listOf(
                             GeneratedImage(
+                                selection = realmSelection,
                                 id = 0,
                                 prompt = requestPrompt,
                                 filePath = preview.absolutePath,
@@ -205,7 +223,6 @@ class ImgGenVM internal constructor(
                         )
                     },
                 )
-                activeRequestId = request.id
                 when (val outcome = coordinator.enqueue(request)) {
                     is ImageGenerationOutcome.Failure -> {
                         previewFile?.delete()
@@ -217,6 +234,7 @@ class ImgGenVM internal constructor(
                         previewFile = null
                         _currentGeneratedImages.value = outcome.media.map { media ->
                             GeneratedImage(
+                                selection = realmSelection,
                                 id = media.mediaId.toInt(),
                                 prompt = requestPrompt,
                                 filePath = media.canonicalFile.absolutePath,
@@ -233,7 +251,6 @@ class ImgGenVM internal constructor(
                 _error.value = "unknown"
             } finally {
                 previewFile?.delete()
-                activeRequestId = null
                 _isGenerating.value = false
             }
         }
@@ -243,14 +260,16 @@ class ImgGenVM internal constructor(
         if (prompt.value.isBlank() || referenceImages.value.isEmpty()) return
         val realmSelection = (modelCatalog.value as? net.weero.measix.pilot.service.ModelCatalogReadState.Available)
             ?.catalog?.selection ?: return
-        cancelJob?.cancel()
-        cancelJob = viewModelScope.launch {
+        val previous = cancelJob
+        previous?.cancel()
+        cancelJob = viewModelScope.launch(start = CoroutineStart.ATOMIC) {
+            withContext(NonCancellable) { previous?.join() }
+            currentCoroutineContext().ensureActive()
             var previewFile: File? = null
             try {
                 _isGenerating.value = true
                 _error.value = null
                 _currentGeneratedImages.value = emptyList()
-                coordinator.cancelPageSession(pageSessionId)
 
                 configurationQueryService.requireSelection(realmSelection)
 
@@ -265,7 +284,7 @@ class ImgGenVM internal constructor(
                 val sourceImages = _referenceImages.value
                 val request = ImageGenerationRequest(
                     realmAccess = realmSelection.access,
-                    source = ImageGenerationSource.Page(pageSessionId),
+                    source = ImageGenerationSource.Page,
                     selection = selection,
                     prompt = requestPrompt,
                     numOfImages = _numberOfImages.value,
@@ -280,6 +299,7 @@ class ImgGenVM internal constructor(
                         previewFile = preview
                         _currentGeneratedImages.value = listOf(
                             GeneratedImage(
+                                selection = realmSelection,
                                 id = 0,
                                 prompt = requestPrompt,
                                 filePath = preview.absolutePath,
@@ -289,7 +309,6 @@ class ImgGenVM internal constructor(
                         )
                     },
                 )
-                activeRequestId = request.id
                 when (val outcome = coordinator.enqueue(request)) {
                     is ImageGenerationOutcome.Failure -> {
                         previewFile?.delete()
@@ -301,6 +320,7 @@ class ImgGenVM internal constructor(
                         previewFile = null
                         _currentGeneratedImages.value = outcome.media.map { media ->
                             GeneratedImage(
+                                selection = realmSelection,
                                 id = media.mediaId.toInt(),
                                 prompt = requestPrompt,
                                 filePath = media.canonicalFile.absolutePath,
@@ -317,7 +337,6 @@ class ImgGenVM internal constructor(
                 _error.value = "unknown"
             } finally {
                 previewFile?.delete()
-                activeRequestId = null
                 _isGenerating.value = false
             }
         }
@@ -325,11 +344,6 @@ class ImgGenVM internal constructor(
 
     fun cancelGeneration() {
         cancelJob?.cancel()
-        val requestId = activeRequestId
-        viewModelScope.launch {
-            if (requestId != null) coordinator.cancel(requestId)
-            coordinator.cancelPageSession(pageSessionId)
-        }
     }
 
     private suspend fun saveImagePreview(item: ImageGenerationItem): File {
@@ -340,7 +354,7 @@ class ImgGenVM internal constructor(
     }
 
     suspend fun deleteImage(image: GeneratedImage): Boolean = try {
-        fileManagementApplicationService.deleteGenerated(ManagedFileKey.Generated(image.id))
+        fileManagementApplicationService.deleteGenerated(ManagedFileKey.Generated(image.id, image.selection))
     } catch (cancelled: CancellationException) {
         throw cancelled
     } catch (error: Exception) {

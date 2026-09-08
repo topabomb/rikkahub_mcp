@@ -20,7 +20,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -40,27 +40,27 @@ import me.rerere.hugeicons.stroke.Cancel01
 import me.rerere.hugeicons.stroke.Files02
 import me.rerere.hugeicons.stroke.MusicNote03
 import me.rerere.hugeicons.stroke.Video01
-import net.weero.measix.pilot.service.ArtifactUseCase
 import net.weero.measix.pilot.service.ArtifactDraftScope
 import kotlinx.coroutines.launch
 import net.weero.measix.pilot.ui.hooks.ChatInputState
-import org.koin.compose.koinInject
 
 @Composable
 internal fun MediaFileInputRow(
     state: ChatInputState,
     artifactDraftScope: ArtifactDraftScope,
 ) {
-    val artifactUseCase: ArtifactUseCase = koinInject()
     val scope = rememberCoroutineScope()
-    val managedFiles by artifactUseCase.observeUploads().collectAsState(initial = emptyList())
-    val displayNameByUri = remember(managedFiles) {
-        managedFiles.associate { it.contentUri to it.displayName }
-    }
-    val displayNameByFileName = remember(managedFiles) {
-        managedFiles.mapNotNull { artifact ->
-            artifact.contentUri.toUri().lastPathSegment?.let { it to artifact.displayName }
-        }.toMap()
+    val parts = state.messageContent
+    val displayNameByUri by produceState(emptyMap<String, String>(), artifactDraftScope, parts) {
+        value = emptyMap()
+        value = try {
+            artifactDraftScope.describeInputs(parts)
+        } catch (cancelled: kotlinx.coroutines.CancellationException) {
+            throw cancelled
+        } catch (error: Exception) {
+            android.util.Log.w("AttachmentChips", "Attachment names unavailable", error)
+            emptyMap()
+        }
     }
 
     fun removePart(part: UIMessagePart, url: String) {
@@ -84,8 +84,7 @@ internal fun MediaFileInputRow(
                         title = attachmentNameFromUrl(
                             url = part.url,
                             fallback = "image",
-                            displayNameByUri = displayNameByUri,
-                            displayNameByFileName = displayNameByFileName
+                            displayNameByUri = displayNameByUri
                         ),
                         leading = {
                             Surface(
@@ -110,8 +109,7 @@ internal fun MediaFileInputRow(
                         title = attachmentNameFromUrl(
                             url = part.url,
                             fallback = "video",
-                            displayNameByUri = displayNameByUri,
-                            displayNameByFileName = displayNameByFileName
+                            displayNameByUri = displayNameByUri
                         ),
                         leading = { AttachmentLeadingIcon(icon = HugeIcons.Video01) },
                         onRemove = { removePart(part, part.url) }
@@ -123,8 +121,7 @@ internal fun MediaFileInputRow(
                         title = attachmentNameFromUrl(
                             url = part.url,
                             fallback = "audio",
-                            displayNameByUri = displayNameByUri,
-                            displayNameByFileName = displayNameByFileName
+                            displayNameByUri = displayNameByUri
                         ),
                         leading = { AttachmentLeadingIcon(icon = HugeIcons.MusicNote03) },
                         onRemove = { removePart(part, part.url) }
@@ -136,8 +133,7 @@ internal fun MediaFileInputRow(
                         title = attachmentNameFromUrl(
                             url = part.url,
                             fallback = part.fileName,
-                            displayNameByUri = displayNameByUri,
-                            displayNameByFileName = displayNameByFileName
+                            displayNameByUri = displayNameByUri
                         ),
                         leading = { AttachmentLeadingIcon(icon = HugeIcons.Files02) },
                         onRemove = { removePart(part, part.url) }
@@ -222,13 +218,11 @@ private fun attachmentNameFromUrl(
     url: String,
     fallback: String,
     displayNameByUri: Map<String, String>,
-    displayNameByFileName: Map<String, String>,
 ): String {
     displayNameByUri[url]?.let { return it }
     val parsed = runCatching { url.toUri() }.getOrNull()
     val storedFileName = parsed?.lastPathSegment?.substringAfterLast('/')?.takeIf { it.isNotBlank() }
     if (storedFileName != null) {
-        displayNameByFileName[storedFileName]?.let { return it }
         return storedFileName
     }
 

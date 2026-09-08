@@ -1,5 +1,6 @@
 package net.weero.measix.pilot.service
 
+import kotlinx.coroutines.flow.map
 import me.rerere.common.configuration.ConfigurationReference
 
 import android.net.Uri
@@ -391,7 +392,7 @@ class ConversationAttachmentPreviewProjectorTest {
     fun `artifact lifecycle flow emits initial state and later invalidations`() = runTest {
         val artifacts = MutableStateFlow<List<ArtifactEntity>>(emptyList())
         val store = mockk<ArtifactStore>()
-        every { store.observe() } returns artifacts
+        every { store.lifecycleChanges() } returns artifacts.map { Unit }
         val projector = ConversationAttachmentPreviewProjector(store)
         val emissions = mutableListOf<Unit>()
 

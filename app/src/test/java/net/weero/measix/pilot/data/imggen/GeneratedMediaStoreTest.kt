@@ -296,7 +296,7 @@ class GeneratedMediaStoreTest {
         )
         every { repository.deleteMedia(3) } returns Unit
         val store = GeneratedMediaStore(filesDir, repository, mockk(relaxed = true))
-        assertTrue(store.delete(3))
+        assertTrue(store.delete(ConfigurationScope.Personal, 3))
         assertFalse(file.exists())
         coVerify { repository.getMediaById(3) }
         verify { repository.deleteMedia(3) }
@@ -318,7 +318,7 @@ class GeneratedMediaStoreTest {
             createAt = 1L,
         )
         val store = GeneratedMediaStore(filesDir, repository, mockk(relaxed = true))
-        assertFalse(store.delete(4))
+        assertFalse(store.delete(ConfigurationScope.Personal, 4))
         verify(exactly = 0) { repository.deleteMedia(any()) }
         filesDir.deleteRecursively()
     }
@@ -330,28 +330,15 @@ class GeneratedMediaStoreTest {
         val committed = File(images, "done.png").apply { writeText("x") }
         val pending = File(images, "live.png.pending").apply { writeText("p") }
         val repository = mockk<GenMediaRepository> { coEvery { existsByPath(any()) } returns false }
-        coEvery { repository.listCreatedBefore(Long.MAX_VALUE) } returns listOf(
+        coEvery { repository.listCreatedBefore(ConfigurationScope.Personal, Long.MAX_VALUE) } returns listOf(
             GenMediaEntity(id = 1, path = "images/done.png", modelId = "m", prompt = "p", createAt = 1L),
         )
         every { repository.deleteMedia(1) } returns Unit
         val store = GeneratedMediaStore(filesDir, repository, mockk(relaxed = true))
-        assertTrue(store.deleteAll())
+        assertTrue(store.deleteCreatedBefore(ConfigurationScope.Personal, Long.MAX_VALUE).let { it.failed == 0 && it.cleanupPending == 0 })
         assertFalse(committed.exists())
         assertTrue(pending.exists())
         verify { repository.deleteMedia(1) }
-        filesDir.deleteRecursively()
-    }
-
-    @Test
-    fun `countCommitted ignores pending files`() = runTest {
-        val filesDir = tempDir("media-count")
-        val images = File(filesDir, "images").apply { mkdirs() }
-        File(images, "a.png").writeBytes(ByteArray(10))
-        File(images, "b.png.pending").writeBytes(ByteArray(20))
-        val store = GeneratedMediaStore(filesDir, mockk(relaxed = true), mockk(relaxed = true))
-        val stats = store.countCommitted()
-        assertEquals(1, stats.count)
-        assertEquals(10L, stats.sizeBytes)
         filesDir.deleteRecursively()
     }
 
@@ -458,7 +445,7 @@ class GeneratedMediaStoreTest {
         )
         every { repository.deleteMedia(5) } throws IllegalStateException("dao")
         val store = GeneratedMediaStore(filesDir, repository, mockk(relaxed = true))
-        assertFalse(store.delete(5))
+        assertFalse(store.delete(ConfigurationScope.Personal, 5))
         assertTrue(file.exists())
         filesDir.deleteRecursively()
     }
@@ -527,7 +514,7 @@ class GeneratedMediaStoreTest {
             deleteCommittedPayload = { false },
         )
 
-        assertTrue(store.delete(7))
+        assertTrue(store.delete(ConfigurationScope.Personal, 7))
         assertTrue(File(images, "deferred.png${GeneratedMediaStore.DELETING_SUFFIX}").exists())
         verify(exactly = 1) { repository.deleteMedia(7) }
         filesDir.deleteRecursively()
@@ -559,14 +546,14 @@ class GeneratedMediaStoreTest {
         val deleted = File(images, "a.png").apply { writeText("a") }
         val restored = File(images, "b.png").apply { writeText("b") }
         val repository = mockk<GenMediaRepository> { coEvery { existsByPath(any()) } returns false }
-        coEvery { repository.listCreatedBefore(Long.MAX_VALUE) } returns listOf(
+        coEvery { repository.listCreatedBefore(ConfigurationScope.Personal, Long.MAX_VALUE) } returns listOf(
             GenMediaEntity(id = 1, path = "images/a.png", modelId = "m", prompt = "p", createAt = 1L),
             GenMediaEntity(id = 2, path = "images/b.png", modelId = "m", prompt = "p", createAt = 1L),
         )
         every { repository.deleteMedia(1) } returns Unit
         every { repository.deleteMedia(2) } throws IllegalStateException("dao")
         val store = GeneratedMediaStore(filesDir, repository, mockk(relaxed = true))
-        assertFalse(store.deleteAll())
+        assertFalse(store.deleteCreatedBefore(ConfigurationScope.Personal, Long.MAX_VALUE).let { it.failed == 0 && it.cleanupPending == 0 })
         assertFalse(deleted.exists())
         assertTrue(restored.exists())
         filesDir.deleteRecursively()

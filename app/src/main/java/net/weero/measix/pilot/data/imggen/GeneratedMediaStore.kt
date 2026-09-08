@@ -52,10 +52,6 @@ data class CommittedGeneratedMedia(
     val chatArtifact: OwnedArtifact? = null,
 )
 
-data class GeneratedMediaStorageStats(
-    val count: Int,
-    val sizeBytes: Long,
-)
 
 /** GeneratedMedia owner 的范围清理结果；不与 Artifact lifecycle 结果互相依赖。 */
 data class GeneratedMediaCleanupResult(
@@ -209,9 +205,10 @@ class GeneratedMediaStore(
         return candidate
     }
 
-    suspend fun delete(id: Int): Boolean = withPersistLock {
+    suspend fun delete(scope: ConfigurationScope, id: Int): Boolean = withPersistLock {
         withContext(Dispatchers.IO) {
-            val entity = genMediaRepository.getMediaById(id) ?: return@withContext false
+            val entity = genMediaRepository.getMediaById(id)?.takeIf { it.scope == scope }
+                ?: return@withContext false
             deleteEntityLocked(entity) != GeneratedMediaDeleteResult.Failed
         }
     }
@@ -221,9 +218,9 @@ class GeneratedMediaStore(
      * 结构化结果，部分成功不压成 Boolean；取消在项目边界传播，已取得单项所有权后的清理由
      * [deleteEntityLocked] 的既有协议收口。
      */
-    suspend fun deleteCreatedBefore(cutoff: Long): GeneratedMediaCleanupResult = withPersistLock {
+    suspend fun deleteCreatedBefore(scope: ConfigurationScope, cutoff: Long): GeneratedMediaCleanupResult = withPersistLock {
         withContext(Dispatchers.IO) {
-            val entities = genMediaRepository.listCreatedBefore(cutoff)
+            val entities = genMediaRepository.listCreatedBefore(scope, cutoff)
             var deleted = 0
             var cleanupPending = 0
             var failed = 0
@@ -238,20 +235,15 @@ class GeneratedMediaStore(
         }
     }
 
-    /** 全部清理 = 同一个范围删除协议；页面不再直调本方法，统一走 application command。 */
-    suspend fun deleteAll(): Boolean = deleteCreatedBefore(Long.MAX_VALUE).let { result ->
-        result.failed == 0 && result.cleanupPending == 0
-    }
-
     /** 只读投影：设置页通过 query port 消费，不把实体当页面协议。 */
-    fun observe(): Flow<List<GenMediaEntity>> = genMediaRepository.observeAllMedia()
+    fun observe(scope: ConfigurationScope): Flow<List<GenMediaEntity>> = genMediaRepository.observeAllMedia(scope)
 
     /** Gallery paging remains owned by this store; UI consumes only the query-port projection. */
-    fun pagingSource(): PagingSource<Int, GenMediaEntity> = genMediaRepository.getAllMedia()
+    fun pagingSource(scope: ConfigurationScope): PagingSource<Int, GenMediaEntity> = genMediaRepository.getAllMedia(scope)
 
     /** 范围清理确认对话框的候选计数（只读提示；真实清理在 persist lock 内重新快照）。 */
-    suspend fun candidateCount(cutoff: Long): Int =
-        genMediaRepository.listCreatedBefore(cutoff).size
+    suspend fun candidateCount(scope: ConfigurationScope, cutoff: Long): Int =
+        genMediaRepository.listCreatedBefore(scope, cutoff).size
 
     private suspend fun deleteEntityLocked(entity: GenMediaEntity): GeneratedMediaDeleteResult {
         val original = canonicalFile(entity)
@@ -284,19 +276,6 @@ class GeneratedMediaStore(
         if (!deleting.exists()) return null
         if (deleting.renameTo(original)) return null
         return IllegalStateException("Failed to restore generated media after row deletion failure: $deleting")
-    }
-
-    suspend fun countCommitted(): GeneratedMediaStorageStats = withContext(Dispatchers.IO) {
-        val imagesDir = File(filesDir, IMAGES_DIR)
-        val files = imagesDir.listFiles().orEmpty().filter { file ->
-            file.isFile &&
-                !file.name.endsWith(PENDING_SUFFIX) &&
-                !file.name.endsWith(DELETING_SUFFIX)
-        }
-        GeneratedMediaStorageStats(
-            count = files.size,
-            sizeBytes = files.sumOf { it.length() },
-        )
     }
 
     fun resolveCanonicalFile(entity: GenMediaEntity): File = canonicalFile(entity)

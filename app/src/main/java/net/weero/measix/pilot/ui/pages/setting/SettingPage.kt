@@ -277,8 +277,9 @@ fun SettingPage(vm: SettingVM = koinViewModel()) {
                 val lifecycleOwner = LocalLifecycleOwner.current
                 val storageState by produceState(-1 to 0L, lifecycleOwner) {
                     lifecycleOwner.repeatOnLifecycle(Lifecycle.State.RESUMED) {
-                        val storage = fileManagementQueryService.storageStats()
-                        value = storage.count to storage.sizeBytes
+                        fileManagementQueryService.observeStorageStats().collect { storage ->
+                            value = storage?.let { it.count to it.sizeBytes } ?: (-1 to 0L)
+                        }
                     }
                 }
                 CardGroup(
@@ -296,7 +297,7 @@ fun SettingPage(vm: SettingVM = koinViewModel()) {
                         leadingContent = { Icon(HugeIcons.ImageUpload, null) },
                         supportingContent = {
                             if (storageState.first == -1) {
-                                Text(stringResource(R.string.calculating))
+                                Text("—")
                             } else {
                                 Text(
                                     stringResource(

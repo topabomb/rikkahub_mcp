@@ -30,6 +30,13 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.withContext
+import net.weero.measix.pilot.data.enterprise.*
+import net.weero.measix.pilot.data.imggen.GeneratedMediaStore
+import net.weero.measix.pilot.data.repository.GenMediaRepository
+import net.weero.measix.pilot.data.db.entity.GenMediaEntity
+import net.weero.measix.pilot.service.*
 import net.weero.measix.pilot.AppScope
 import net.weero.measix.pilot.data.datastore.SettingsStore
 import net.weero.measix.pilot.data.db.AppDatabase
@@ -93,6 +100,56 @@ class ManagedFileCreationIntegrationTest {
     }
 
     @Test
+    fun fileDirectoriesStatisticsAndDeletionUseTheSelectedPrincipal() = runBlocking {
+        store.ensureReferenceProjection()
+        val packet = payloadContext.assets.open(LocalEnterpriseSource.EXAMPLE_ASSET).use(EnterprisePackageCodec::decode)
+        val sessions = EnterpriseSessionController(EnterpriseAppliedStore(File(root, "enterprise")))
+        sessions.recover()
+        val originalPersonal = requireNotNull(sessions.observeSelectedRealmSelection().first())
+        sessions.enrollLocal(packet.identity, { packet.identity }, { packet })
+        val enterpriseSelection = requireNotNull(sessions.observeSelectedRealmSelection().first())
+        val enterprise = enterpriseSelection.access.scope
+        val other = scopeFor(3)
+        val scopes = listOf(ConfigurationScope.Personal, enterprise, other)
+        val uploads = scopes.mapIndexed { index, scope ->
+            store.createFromBytes(scope, ByteArray(index + 1), "file-$index.txt", "text/plain", origin = ArtifactOrigin.USER)
+                .also(store::abandonUnpublished)
+        }
+        val generated = GeneratedMediaStore(root, GenMediaRepository(database.genMediaDao()), store)
+        val mediaIds = scopes.mapIndexed { index, scope ->
+            val file = File(root, "images/$index.png").apply { parentFile!!.mkdirs(); writeBytes(ByteArray(index + 4)) }
+            withContext(Dispatchers.IO) {
+                database.genMediaDao().insert(GenMediaEntity(path = "images/${file.name}", modelId = "model", prompt = "scope-$index", createAt = 1L, scope = scope)).toInt()
+            }
+        }
+        File(root, "images/unregistered.png").writeBytes(ByteArray(90))
+        val gate = ApplicationRecoveryGate().also { it.ready() }
+        val query = FileManagementQueryService(store, generated, gate, sessions)
+        val commands = FileManagementApplicationService(store, generated, gate, sessions)
+        val directory = query.observeDirectory().first { it.selection != null }
+        assertEquals(listOf(uploads[1].entity.id), directory.uploads.map { (it.key as ManagedFileKey.Upload).artifactId })
+        assertEquals(listOf(mediaIds[1]), directory.generated.map { (it.key as ManagedFileKey.Generated).mediaId })
+        assertEquals(ManagedStorageUiModel(2, 7), query.observeStorageStats().first { it != null })
+        val page = generated.pagingSource(enterprise).load(androidx.paging.PagingSource.LoadParams.Refresh(null, 20, false))
+        assertEquals(listOf(mediaIds[1]), (page as androidx.paging.PagingSource.LoadResult.Page).data.map { it.id })
+        assertEquals(null, query.inspectUpload(ManagedFileKey.Upload(uploads[0].entity.id, enterpriseSelection)))
+        assertEquals(ArtifactDeleteOutcome.AlreadyDeleted, commands.deleteUpload(ManagedFileKey.Upload(uploads[0].entity.id, enterpriseSelection)))
+        assertFalse(commands.deleteGenerated(ManagedFileKey.Generated(mediaIds[0], enterpriseSelection)))
+        assertEquals(1, query.candidateCount(enterpriseSelection, FileCleanupCategory.UPLOAD, FileCleanupRange.All))
+        assertEquals(1, commands.cleanup(enterpriseSelection, FileCleanupCategory.UPLOAD, FileCleanupRange.All).deleted)
+        assertEquals(1, commands.cleanup(enterpriseSelection, FileCleanupCategory.GENERATED_IMAGES, FileCleanupRange.All).deleted)
+        assertEquals(emptyList<Any>(), store.list(enterprise))
+        assertTrue(store.file(uploads[0].entity).isFile)
+        assertTrue(store.file(uploads[2].entity).isFile)
+        assertTrue(File(root, "images/0.png").isFile)
+        assertTrue(File(root, "images/2.png").isFile)
+        assertTrue(File(root, "images/unregistered.png").isFile)
+        sessions.switchRealm(RealmSwitchRequest(enterpriseSelection, RealmAccess.Personal)) {}
+        assertTrue(runCatching { commands.deleteUpload(ManagedFileKey.Upload(uploads[0].entity.id, originalPersonal)) }.exceptionOrNull() is EnterpriseConfigurationException)
+        assertEquals(ManagedStorageUiModel(2, 5), query.observeStorageStats().first { it != null })
+    }
+
+    @Test
     fun configurationRootsSurviveOwnerRecreationAndDetachAcrossDomains() = runBlocking {
         store.ensureReferenceProjection()
         val owned = store.createText(ConfigurationScope.Personal, "preset payload")
@@ -110,7 +167,7 @@ class ManagedFileCreationIntegrationTest {
         reopened.reconcileStartup()
         assertTrue(reopened.collectGarbage(0).isEmpty())
         assertEquals("preset payload", reopened.file(owned.entity).readText())
-        assertTrue(reopened.deleteUserRequested(owned.entity.id) is ArtifactDeleteResult.Completed)
+        assertTrue(reopened.deleteUserRequested(ConfigurationScope.Personal, owned.entity.id) is ArtifactDeleteResult.Completed)
         val after = settings.snapshotUserDocument()
         assertTrue(ArtifactReferencePolicy.roots(after).isEmpty())
         val retained = after.preferences.scopes.single { it.scope == enterprise }.assistantUsage.single()

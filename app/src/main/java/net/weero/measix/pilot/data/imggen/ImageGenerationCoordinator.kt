@@ -24,7 +24,7 @@ import me.rerere.ai.ui.ImageGenerationItem
 import me.rerere.ai.util.classifyProviderFailure
 
 sealed class ImageGenerationSource {
-    data class Page(val sessionId: String) : ImageGenerationSource()
+    data object Page : ImageGenerationSource()
     data class Tool(
         val ownerAssistantId: ConfigurationReference,
         val revalidate: suspend (ImageGenerationSelection.Available) -> ImageGenerationFailure?,
@@ -93,28 +93,14 @@ class ImageGenerationCoordinator(
             val waiting = queue.firstOrNull { it.request.id == requestId }
             if (waiting != null) {
                 queue.remove(waiting)
+                waiting.finished.complete(Unit)
                 waiting
             } else {
                 running?.takeIf { it.request.id == requestId }
             }
         } ?: return
         abort(target)
-    }
-
-    suspend fun cancelPageSession(sessionId: String) {
-        val waiting = mutex.withLock {
-            val matches = queue.filter {
-                val source = it.request.source
-                source is ImageGenerationSource.Page && source.sessionId == sessionId
-            }
-            queue.removeAll(matches.toSet())
-            val current = running?.takeIf {
-                val source = it.request.source
-                source is ImageGenerationSource.Page && source.sessionId == sessionId
-            }
-            matches + listOfNotNull(current)
-        }
-        waiting.forEach(::abort)
+        target.finished.await()
     }
 
     private fun ensureWorkerLocked() {
@@ -140,8 +126,8 @@ class ImageGenerationCoordinator(
     }
 
     private suspend fun process(queued: QueuedRequest) {
-        if (!queued.isActive) return
         try {
+            if (!queued.isActive) return
             coroutineScope {
                 launch {
                     val child = coroutineContext[Job]
@@ -168,6 +154,7 @@ class ImageGenerationCoordinator(
             )
         } finally {
             queued.control.complete()
+            queued.finished.complete(Unit)
         }
     }
 
@@ -279,6 +266,7 @@ class ImageGenerationCoordinator(
         val request: ImageGenerationRequest,
         val result: CompletableDeferred<ImageGenerationOutcome>,
         val control: CompletableJob = Job(),
+        val finished: CompletableDeferred<Unit> = CompletableDeferred(),
     ) {
         val isActive: Boolean
             get() = control.isActive && !result.isCompleted

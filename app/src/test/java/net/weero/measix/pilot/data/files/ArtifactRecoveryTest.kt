@@ -295,7 +295,7 @@ internal class ArtifactRecoveryTest : ArtifactStoreLifecycleTestBase() {
             ),
         )
 
-        val result = store.deleteUserRequested(owned.entity.id)
+        val result = store.deleteUserRequested(ConfigurationScope.Personal, owned.entity.id)
 
         assertTrue(result is ArtifactDeleteResult.Completed)
         assertNull(database.artifactDao().getById(owned.entity.id))
@@ -337,7 +337,7 @@ internal class ArtifactRecoveryTest : ArtifactStoreLifecycleTestBase() {
         )
 
         val results = (0 until 20).map {
-            async(Dispatchers.Default) { countingStore.deleteUserRequested(artifactId) }
+            async(Dispatchers.Default) { countingStore.deleteUserRequested(ConfigurationScope.Personal, artifactId) }
         }.awaitAll()
 
         assertEquals(1, physicalDeletes.get())

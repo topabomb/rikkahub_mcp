@@ -37,6 +37,8 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.runtime.key
+import net.weero.measix.pilot.service.FileDirectoryUiModel
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -105,6 +107,21 @@ fun SettingFilesPage(
     applicationService: FileManagementApplicationService = koinInject(),
     queryService: FileManagementQueryService = koinInject(),
 ) {
+    var retry by remember { mutableStateOf(0) }
+    val directory by remember(queryService, retry) { queryService.observeDirectory() }
+        .collectAsState(initial = FileDirectoryUiModel(null))
+    key(directory.selection) {
+        FileDirectoryContent(directory, applicationService, queryService) { retry++ }
+    }
+}
+
+@Composable
+private fun FileDirectoryContent(
+    directory: FileDirectoryUiModel,
+    applicationService: FileManagementApplicationService,
+    queryService: FileManagementQueryService,
+    onRetry: () -> Unit,
+) {
     val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
     val uploadGridState = rememberLazyStaggeredGridState()
     val generatedGridState = rememberLazyStaggeredGridState()
@@ -133,8 +150,8 @@ fun SettingFilesPage(
     var previewIndex by remember { mutableStateOf(-1) }
     val settings = LocalSettings.current
     val backgroundHost = rememberImageBackgroundHost(settings)
-    val uploadFiles by queryService.observeUploads().collectAsState(initial = emptyList())
-    val generatedImages by queryService.observeGenerated().collectAsState(initial = emptyList())
+    val uploadFiles = directory.uploads
+    val generatedImages = directory.generated
     val isUpload = selectedCategory == FileCategory.UPLOAD
     val hasItems = if (isUpload) uploadFiles.isNotEmpty() else generatedImages.isNotEmpty()
 
@@ -142,7 +159,7 @@ fun SettingFilesPage(
     LaunchedEffect(cleanupCategory, cleanupRange) {
         val category = cleanupCategory ?: return@LaunchedEffect
         cleanupCandidateCount = try {
-            queryService.candidateCount(category, cleanupRange)
+            queryService.candidateCount(directory.selection ?: return@LaunchedEffect, category, cleanupRange)
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (_: Exception) {
@@ -331,12 +348,13 @@ fun SettingFilesPage(
             confirmButton = {
                 TextButton(
                     onClick = {
+                        val confirmedSelection = directory.selection ?: return@TextButton
                         val confirmedCategory = category
                         val confirmedRange = cleanupRange
                         cleanupCategory = null
                         scope.launch {
                             try {
-                                val result = applicationService.cleanup(confirmedCategory, confirmedRange)
+                                val result = applicationService.cleanup(confirmedSelection, confirmedCategory, confirmedRange)
                                 // 部分成功不压成 Boolean：待清理/跳过/失败分别给用户可见的结果
                                 val message = when {
                                     result.failed > 0 -> cleanFailedToast
@@ -411,6 +429,14 @@ fun SettingFilesPage(
                     end = innerPadding.calculateEndPadding(layoutDirection),
                 )
         ) {
+            if (directory.failed) {
+                Column(Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center) {
+                    Text(stringResource(R.string.setting_files_page_load_failed))
+                    TextButton(onClick = onRetry) { Text(stringResource(R.string.application_recovery_retry)) }
+                }
+                return@Column
+            }
             CategoryRow(
                 selected = selectedCategory,
                 onSelected = { selectedCategory = it },

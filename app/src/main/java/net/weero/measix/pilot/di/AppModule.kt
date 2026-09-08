@@ -76,8 +76,8 @@ val appModule = module {
     single { net.weero.measix.pilot.service.ModelExecutionService(get(), get(), get(), get()) }
     single { net.weero.measix.pilot.service.MemoryService(get(), get(), get(), get(), get()) }
     single { ArtifactUseCase(get(), get()) }
-    single { FileManagementApplicationService(get(), get(), get()) }
-    single { FileManagementQueryService(get(), get(), get()) }
+    single { FileManagementApplicationService(get(), get(), get(), get()) }
+    single { FileManagementQueryService(get(), get(), get(), get()) }
     single { MediaExportService(get()) }
     single { StatsQueryService(get(), get(), get(), get(), get()) }
     single { ChatErrorStore() }

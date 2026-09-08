@@ -1,5 +1,6 @@
 package net.weero.measix.pilot.data.db.dao
 
+import net.weero.measix.pilot.data.configuration.ConfigurationScope
 import androidx.room.Dao
 import androidx.room.Insert
 import androidx.room.OnConflictStrategy
@@ -24,8 +25,8 @@ interface ArtifactDAO {
     @Query("SELECT id FROM artifact WHERE id IN (:ids) AND state = :state")
     suspend fun getIdsByState(ids: List<Long>, state: String): List<Long>
 
-    @Query("SELECT * FROM artifact WHERE folder = :folder AND state = 'ACTIVE' ORDER BY created_at DESC")
-    fun listActiveByFolder(folder: String): Flow<List<ArtifactEntity>>
+    @Query("SELECT * FROM artifact WHERE scope = :scope AND folder = :folder AND state = 'ACTIVE' ORDER BY created_at DESC")
+    fun listActiveByFolder(scope: ConfigurationScope, folder: String): Flow<List<ArtifactEntity>>
 
     /** Lifecycle/recovery-only query; UI read ports must use listActiveByFolder. */
     @Query("SELECT * FROM artifact WHERE folder = :folder ORDER BY created_at DESC")
@@ -53,6 +54,6 @@ interface ArtifactDAO {
     suspend fun listByStateCreatedBefore(state: String, createdBefore: Long): List<ArtifactEntity>
 
     /** 范围清理候选：folder + createdAt 截止，覆盖全部生命周期状态，由 Store 在 lifecycle lock 内逐项收口。 */
-    @Query("SELECT * FROM artifact WHERE folder = :folder AND created_at <= :createdBefore ORDER BY created_at DESC")
-    suspend fun listByFolderCreatedBefore(folder: String, createdBefore: Long): List<ArtifactEntity>
+    @Query("SELECT * FROM artifact WHERE scope = :scope AND folder = :folder AND created_at <= :createdBefore ORDER BY created_at DESC")
+    suspend fun listByFolderCreatedBefore(scope: ConfigurationScope, folder: String, createdBefore: Long): List<ArtifactEntity>
 }

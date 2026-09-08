@@ -583,6 +583,11 @@ private fun ImageGalleryScreen(
     val pullToRefreshState = rememberPullToRefreshState()
     var previewIndex by remember { mutableStateOf(-1) }
     var pendingDelete by remember { mutableStateOf<GeneratedImage?>(null) }
+    val realmSelection by vm.realmSelection.collectAsStateWithLifecycle()
+    LaunchedEffect(realmSelection) {
+        previewIndex = -1
+        pendingDelete = null
+    }
     val settings by vm.settings.collectAsStateWithLifecycle()
     val backgroundHost = rememberImageBackgroundHost(settings)
     val generatedNoPrompt = stringResource(R.string.imggen_page_no_prompt)
@@ -673,7 +678,7 @@ private fun ImageGalleryScreen(
                     key = generatedImages.itemKey { it.id },
                     contentType = generatedImages.itemContentType { "GeneratedImage" }
                 ) { index ->
-                    val image = generatedImages[index]
+                    val image = generatedImages[index]?.takeIf { it.selection == realmSelection }
                     image?.let {
                         val promptCopiedToast = stringResource(R.string.imggen_page_prompt_copied)
                         Card(
@@ -804,7 +809,7 @@ private fun ImageGalleryScreen(
 
     if (previewIndex >= 0) {
         // 当前已加载项的快照组成一本相册, 从点击位进入; 用 id 定位以兼容占位 null 导致的下标偏移
-        val snapshotItems = generatedImages.itemSnapshotList.items.filterNotNull()
+        val snapshotItems = generatedImages.itemSnapshotList.items.filter { it.selection == realmSelection }
         val urls = snapshotItems.map { "file://${it.filePath}" }
         val clicked = previewIndex.takeIf { it < generatedImages.itemCount }
             ?.let { generatedImages[it] }
@@ -844,7 +849,7 @@ private fun ImageGalleryScreen(
         }
     }
 
-    pendingDelete?.let { target ->
+    pendingDelete?.takeIf { it.selection == realmSelection }?.let { target ->
         val promptLabel = shortGeneratedLabel(
             target.prompt,
             stringResource(R.string.imggen_page_no_prompt),

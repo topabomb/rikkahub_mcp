@@ -2,7 +2,6 @@ package net.weero.measix.pilot.service
 
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.transform
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -27,7 +26,7 @@ class ConversationAttachmentPreviewProjector(
     private val artifactStore: ArtifactStore,
 ) {
     /** Emits whenever managed upload metadata changes, invalidating any prior preview URL. */
-    fun lifecycleChanges(): Flow<Unit> = artifactStore.observe().transform { emit(Unit) }
+    fun lifecycleChanges(): Flow<Unit> = artifactStore.lifecycleChanges()
 
     suspend fun project(snapshot: ConversationPresentationSnapshot): Map<String, String> {
         val durable = projectMessages(snapshot.nodes.map { it.currentMessage })

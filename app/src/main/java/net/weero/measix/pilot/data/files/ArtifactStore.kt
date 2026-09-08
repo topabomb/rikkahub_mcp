@@ -1,5 +1,6 @@
 package net.weero.measix.pilot.data.files
 
+import kotlinx.coroutines.flow.map
 import net.weero.measix.pilot.data.configuration.ConfigurationScope
 
 import android.net.Uri
@@ -191,11 +192,23 @@ class ArtifactStore(
 
     // ---- 创建与查询 ----
 
-    fun observe(folder: String = FileFolders.UPLOAD): Flow<List<ArtifactEntity>> =
-        artifactDAO.listActiveByFolder(folder)
+    fun observe(scope: ConfigurationScope, folder: String = FileFolders.UPLOAD): Flow<List<ArtifactEntity>> =
+        artifactDAO.listActiveByFolder(scope, folder)
 
-    suspend fun list(folder: String = FileFolders.UPLOAD): List<ArtifactEntity> =
-        artifactDAO.listActiveByFolder(folder).first()
+    suspend fun list(scope: ConfigurationScope, folder: String = FileFolders.UPLOAD): List<ArtifactEntity> =
+        artifactDAO.listActiveByFolder(scope, folder).first()
+
+    /** Global metadata invalidation carries no file rows to consumers. */
+    fun lifecycleChanges(): Flow<Unit> = artifactDAO.listAllStatesByFolder(FileFolders.UPLOAD).map { Unit }
+
+    suspend fun describeInput(scope: ConfigurationScope, uris: List<Uri>): Map<String, String> = withLifecycleLock {
+        uris.mapNotNull { uri ->
+            val relative = rootRelativePath(uri.toString()) ?: return@mapNotNull null
+            val entity = getByRelativePath(relative)?.takeIf { it.scope == scope && file(it).isFile }
+                ?: return@mapNotNull null
+            uri.toString() to entity.displayName
+        }.toMap()
+    }
 
     suspend fun get(id: Long): ArtifactEntity? = artifactDAO.getById(id)
 
@@ -981,12 +994,12 @@ class ArtifactStore(
 
     // ---- 生命周期协议（CAS 幂等，无 operationId） ----
 
-    suspend fun deleteUserRequested(artifactId: Long): ArtifactDeleteResult = withSettingsDetach { detach ->
-        deleteUserRequestedLocked(artifactId, detach)
+    suspend fun deleteUserRequested(scope: ConfigurationScope, artifactId: Long): ArtifactDeleteResult = withSettingsDetach { detach ->
+        deleteUserRequestedLocked(scope, artifactId, detach)
     }
 
-    private suspend fun deleteUserRequestedLocked(artifactId: Long, detach: suspend (Set<String>) -> Boolean): ArtifactDeleteResult {
-        val artifact = artifactDAO.getById(artifactId)
+    private suspend fun deleteUserRequestedLocked(scope: ConfigurationScope, artifactId: Long, detach: suspend (Set<String>) -> Boolean): ArtifactDeleteResult {
+        val artifact = artifactDAO.getById(artifactId)?.takeIf { it.scope == scope }
             ?: return ArtifactDeleteResult.Rejected(
                 artifactId,
                 ArtifactDeleteResult.RejectionReason.ALREADY_DELETED,
@@ -1047,12 +1060,12 @@ class ArtifactStore(
      * 逐项复用既有删除协议。返回结构化结果，部分成功不压成 Boolean。
      */
     suspend fun deleteUserRequestedFolderCreatedBefore(
+        scope: ConfigurationScope,
         folder: String,
         createdBefore: Long,
     ): ArtifactCleanupResult = withSettingsDetach { detach ->
-        val entities = artifactDAO.listByFolderCreatedBefore(folder, createdBefore)
+        val entities = artifactDAO.listByFolderCreatedBefore(scope, folder, createdBefore)
         if (entities.isEmpty()) {
-            // 与 deleteUserRequestedFolder 收敛：无候选时也尝试清空空目录
             payloadStore.deleteEmptyFolder(folder)
             return@withSettingsDetach ArtifactCleanupResult(0, 0, 0, 0)
         }
@@ -1068,7 +1081,7 @@ class ArtifactStore(
             // 已取得所有权的终态（DELETING 续跑、CREATING 回滚）与单条路径一致地在 NonCancellable 内
             // 原子完成，取消只在单项边界传播，不把"已拥有的收口"交给恢复侧重试。
             val result = when (entity.state) {
-                ArtifactState.ACTIVE.name -> deleteUserRequestedLocked(entity.id, detach)
+                ArtifactState.ACTIVE.name -> deleteUserRequestedLocked(scope, entity.id, detach)
                 ArtifactState.DELETING.name -> withContext(NonCancellable) { finishUserDeletion(entity, detach) }
                 ArtifactState.CREATING.name -> withContext(NonCancellable) { discardCreating(entity) }
                 else -> ArtifactDeleteResult.Failed(entity.id, "unknown_artifact_state:${entity.state}")
@@ -1081,42 +1094,14 @@ class ArtifactStore(
             }
         }
         // 候选处理完后清理可能变空的目录；deleteEmptyFolder 只在目录确为空时删除，
-        // 仍保留此时间范围之外（或失败未删）的 payload，与 deleteUserRequestedFolder 语义收敛。
+        // 仍保留此时间范围之外（或失败未删）的 payload。
         payloadStore.deleteEmptyFolder(folder)
         ArtifactCleanupResult(deleted = deleted, cleanupPending = cleanupPending, skippedInProgress = skippedInProgress, failed = failed)
     }
 
     /** 范围清理确认对话框的候选计数（只读提示，不锁定；真实清理在同一 lock 内重新快照）。 */
-    suspend fun countFolderCreatedBefore(folder: String, createdBefore: Long): Int =
-        artifactDAO.listByFolderCreatedBefore(folder, createdBefore).size
-
-    suspend fun deleteUserRequestedFolder(folder: String): ArtifactDeleteResult = withSettingsDetach { detach ->
-        val entities = artifactDAO.listAllStatesByFolder(folder).first()
-        if (entities.isEmpty()) {
-            payloadStore.deleteEmptyFolder(folder)
-            return@withSettingsDetach ArtifactDeleteResult.Completed(0)
-        }
-        if (entities.any { isPinned(it.id) }) {
-            return@withSettingsDetach ArtifactDeleteResult.Rejected(0, ArtifactDeleteResult.RejectionReason.IN_PROGRESS)
-        }
-        var pendingCleanup: ArtifactDeleteResult.CleanupPending? = null
-        entities.forEach { entity ->
-            val result = when (entity.state) {
-                ArtifactState.ACTIVE.name -> deleteUserRequestedLocked(entity.id, detach)
-                ArtifactState.DELETING.name -> finishUserDeletion(entity, detach)
-                ArtifactState.CREATING.name -> discardCreating(entity)
-                else -> ArtifactDeleteResult.Failed(entity.id, "unknown_artifact_state:${entity.state}")
-            }
-            when (result) {
-                is ArtifactDeleteResult.Completed -> Unit
-                is ArtifactDeleteResult.CleanupPending -> if (pendingCleanup == null) pendingCleanup = result
-                is ArtifactDeleteResult.Rejected -> return@withSettingsDetach result
-                is ArtifactDeleteResult.Failed -> return@withSettingsDetach result
-            }
-        }
-        payloadStore.deleteEmptyFolder(folder)
-        pendingCleanup ?: ArtifactDeleteResult.Completed(0)
-    }
+    suspend fun countFolderCreatedBefore(scope: ConfigurationScope, folder: String, createdBefore: Long): Int =
+        artifactDAO.listByFolderCreatedBefore(scope, folder, createdBefore).size
 
     // ---- 启动恢复 ----
 

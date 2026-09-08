@@ -1,25 +1,40 @@
 package net.weero.measix.pilot.service
 
-import androidx.paging.Pager
+import android.util.Log
+import androidx.core.net.toUri
 import androidx.paging.PagingConfig
 import androidx.paging.PagingData
-import androidx.paging.map
 import java.io.File
 import kotlin.time.Clock
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.catch
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.emitAll
+import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.onStart
+import kotlinx.coroutines.withContext
+import net.weero.measix.pilot.data.db.entity.ArtifactEntity
+import net.weero.measix.pilot.data.db.entity.ArtifactOrigin
 import net.weero.measix.pilot.data.db.entity.GenMediaEntity
+import net.weero.measix.pilot.data.enterprise.EnterpriseSessionController
+import net.weero.measix.pilot.data.enterprise.EnterpriseConfigurationException
+import net.weero.measix.pilot.data.enterprise.RealmSelection
+import net.weero.measix.pilot.data.files.ArtifactStore
+import net.weero.measix.pilot.data.files.FileFolders
 import net.weero.measix.pilot.data.imggen.GeneratedMediaStore
 
-/** UI 只持有 typed identity，不解析 `artifact:<id>` 一类字符串协议。 */
+/** A UI command retains both its typed identity and the selection that displayed it. */
 sealed interface ManagedFileKey {
-    data class Upload(val artifactId: Long) : ManagedFileKey
-    data class Generated(val mediaId: Int) : ManagedFileKey
+    val selection: RealmSelection
+    data class Upload(val artifactId: Long, override val selection: RealmSelection) : ManagedFileKey
+    data class Generated(val mediaId: Int, override val selection: RealmSelection) : ManagedFileKey
 }
 
-/** 设置文件页统一的托管文件投影：上传与生成媒体共用同一形状。 */
 data class ManagedFileUiModel(
     val key: ManagedFileKey,
     val contentUri: String,
@@ -32,119 +47,129 @@ data class ManagedFileUiModel(
     val modelId: String?,
 )
 
-data class ManagedStorageUiModel(
-    val count: Int,
-    val sizeBytes: Long,
+data class ManagedStorageUiModel(val count: Int, val sizeBytes: Long)
+
+data class FileDirectoryUiModel(
+    val selection: RealmSelection?,
+    val uploads: List<ManagedFileUiModel> = emptyList(),
+    val generated: List<ManagedFileUiModel> = emptyList(),
+    val failed: Boolean = false,
 )
 
 data class GeneratedMediaUiModel(
-    val id: Int,
+    val key: ManagedFileKey.Generated,
     val prompt: String,
     val filePath: String,
     val createdAt: Long,
     val modelId: String,
 )
 
-/**
- * 设置域唯一文件读端口。会读取 row/payload 状态的查询在全局 recovery gate 后开始，避免页面观察到尚未
- * reconcile 的 `.pending` / `.deleting` 或缺 payload row。纯 canonical-root 路径分类不读取 durable 状态，
- * 可安全用于恢复前的本地图片信息展示；本类只组合既有 owner 的只读投影。
- */
-class FileManagementQueryService(
-    private val artifactUseCase: ArtifactUseCase,
+/** Combines the existing file owners; authorization remains with the session owner. */
+class FileManagementQueryService internal constructor(
+    private val artifactStore: ArtifactStore,
     private val generatedMediaStore: GeneratedMediaStore,
     private val recoveryGate: ApplicationRecoveryGate,
+    private val sessions: EnterpriseSessionController,
     private val clock: Clock = Clock.System,
 ) {
-    fun observeUploads(): Flow<List<ManagedFileUiModel>> = flow {
+    fun observeSelection(): Flow<RealmSelection?> = flow {
         recoveryGate.awaitReady()
-        emitAll(artifactUseCase.observeUploads().map { artifacts -> artifacts.map(ArtifactUiModel::toManaged) })
+        emitAll(sessions.observeSelectedRealmSelection())
     }
 
-    fun observeGenerated(): Flow<List<ManagedFileUiModel>> = flow {
-        recoveryGate.awaitReady()
-        emitAll(generatedMediaStore.observe().map { entities ->
-            entities.map { it.toManaged(generatedMediaStore) }
-        })
-    }
-
-    fun observeGeneratedPaging(): Flow<PagingData<GeneratedMediaUiModel>> = flow {
-        recoveryGate.awaitReady()
-        emitAll(
-            Pager(
-                config = PagingConfig(pageSize = 20, enablePlaceholders = false),
-                pagingSourceFactory = generatedMediaStore::pagingSource,
-            ).flow.map { pagingData ->
-                pagingData.map { entity -> entity.toGeneratedUi(generatedMediaStore) }
+    fun observeDirectory(): Flow<FileDirectoryUiModel> = observeSelection().flatMapLatest { selection ->
+        val empty = FileDirectoryUiModel(null)
+        if (selection == null) flowOf(empty) else combine(
+            artifactStore.observe(selection.access.scope),
+            generatedMediaStore.observe(selection.access.scope),
+        ) { uploads, generated ->
+            sessions.withSelectedRealmSelection(selection) {
+                withContext(Dispatchers.IO) {
+                    FileDirectoryUiModel(selection, uploads.map { it.toManaged(selection) }, generated.map { it.toManaged(selection) })
+                }
             }
+        }.onStart { emit(empty) }.catch { error ->
+            if (error is CancellationException) throw error
+            Log.w("FileManagementQuery", "File directory unavailable", error)
+            emit(if (error is EnterpriseConfigurationException) empty else empty.copy(failed = true))
+        }
+    }
+
+    fun observeStorageStats(): Flow<ManagedStorageUiModel?> = observeDirectory().map { directory ->
+        if (directory.selection == null) null else ManagedStorageUiModel(
+            directory.uploads.size + directory.generated.size,
+            directory.uploads.sumOf { it.sizeBytes } + directory.generated.sumOf { it.sizeBytes },
         )
     }
 
-    /** Pure canonical-root classification; does not claim that a row/payload is committed. */
+    fun observeGeneratedPaging(): Flow<PagingData<GeneratedMediaUiModel>> = observeSelection().flatMapLatest { selection ->
+        if (selection == null) flowOf(PagingData.empty()) else selectedRealmPaging(
+            sessions, selection, PagingConfig(pageSize = 20, enablePlaceholders = false),
+            source = { generatedMediaStore.pagingSource(selection.access.scope) },
+        ) { entity ->
+            GeneratedMediaUiModel(
+                ManagedFileKey.Generated(entity.id, selection), entity.prompt,
+                generatedMediaStore.resolveCanonicalFile(entity).absolutePath, entity.createAt, entity.modelId,
+            )
+        }
+    }
+
+    /** Classification only; payload reads must use an authorized file owner. */
     fun isManagedGeneratedFile(file: File): Boolean = generatedMediaStore.isManagedFile(file)
 
-    suspend fun candidateCount(category: FileCleanupCategory, range: FileCleanupRange): Int {
+    suspend fun candidateCount(selection: RealmSelection, category: FileCleanupCategory, range: FileCleanupRange): Int {
         recoveryGate.awaitReady()
-        val cutoff = cutoffFor(range, clock.now().toEpochMilliseconds())
-        return when (category) {
-            FileCleanupCategory.UPLOAD -> artifactUseCase.uploadCandidateCount(cutoff)
-            FileCleanupCategory.GENERATED_IMAGES -> generatedMediaStore.candidateCount(cutoff)
+        return sessions.withSelectedRealmSelection(selection) {
+            val cutoff = cutoffFor(range, clock.now().toEpochMilliseconds())
+            when (category) {
+                FileCleanupCategory.UPLOAD -> artifactStore.countFolderCreatedBefore(selection.access.scope, FileFolders.UPLOAD, cutoff)
+                FileCleanupCategory.GENERATED_IMAGES -> generatedMediaStore.candidateCount(selection.access.scope, cutoff)
+            }
         }
     }
 
     suspend fun inspectUpload(key: ManagedFileKey.Upload): ArtifactDeleteImpactUiModel? {
         recoveryGate.awaitReady()
-        return artifactUseCase.inspect(key.artifactId)
+        return sessions.withSelectedRealmSelection(key.selection) {
+            val entity = artifactStore.get(key.artifactId)?.takeIf { it.scope == key.selection.access.scope }
+                ?: return@withSelectedRealmSelection null
+            artifactStore.inspect(entity).toUiModel()
+        }
     }
 
-    suspend fun storageStats(): ManagedStorageUiModel {
-        recoveryGate.awaitReady()
-        val (uploadCount, uploadSize) = artifactUseCase.uploadStats()
-        val generated = generatedMediaStore.countCommitted()
-        return ManagedStorageUiModel(
-            count = uploadCount + generated.count,
-            sizeBytes = uploadSize + generated.sizeBytes,
+    private fun ArtifactEntity.toManaged(selection: RealmSelection) = ManagedFileUiModel(
+        key = ManagedFileKey.Upload(id, selection),
+        contentUri = artifactStore.file(this).toUri().toString(),
+        displayName = displayName,
+        mimeType = mimeType,
+        sizeBytes = sizeBytes,
+        origin = when (ArtifactOrigin.valueOf(origin)) {
+            ArtifactOrigin.USER -> ArtifactUiOrigin.USER
+            ArtifactOrigin.GENERATED -> ArtifactUiOrigin.GENERATED
+            ArtifactOrigin.SYSTEM -> ArtifactUiOrigin.SYSTEM
+        },
+        createdAt = createdAt,
+        prompt = null,
+        modelId = null,
+    )
+
+    private fun GenMediaEntity.toManaged(selection: RealmSelection): ManagedFileUiModel {
+        val file = generatedMediaStore.resolveCanonicalFile(this)
+        return ManagedFileUiModel(
+            key = ManagedFileKey.Generated(id, selection),
+            contentUri = file.toUri().toString(),
+            displayName = file.name,
+            mimeType = when (file.extension.lowercase()) {
+                "jpg", "jpeg" -> "image/jpeg"
+                "gif" -> "image/gif"
+                "webp" -> "image/webp"
+                else -> "image/png"
+            },
+            sizeBytes = file.takeIf { it.isFile }?.length() ?: 0L,
+            origin = null,
+            createdAt = createAt,
+            prompt = prompt,
+            modelId = modelId,
         )
     }
 }
-
-private fun ArtifactUiModel.toManaged(): ManagedFileUiModel = ManagedFileUiModel(
-    key = ManagedFileKey.Upload(id),
-    contentUri = contentUri,
-    displayName = displayName,
-    mimeType = mimeType,
-    sizeBytes = sizeBytes,
-    origin = origin,
-    createdAt = createdAt,
-    prompt = null,
-    modelId = null,
-)
-
-private fun GenMediaEntity.toManaged(store: GeneratedMediaStore): ManagedFileUiModel {
-    val file = store.resolveCanonicalFile(this)
-    return ManagedFileUiModel(
-        key = ManagedFileKey.Generated(id),
-        contentUri = "file://${file.absolutePath}",
-        displayName = file.name,
-        mimeType = when (file.extension.lowercase()) {
-            "jpg", "jpeg" -> "image/jpeg"
-            "gif" -> "image/gif"
-            "webp" -> "image/webp"
-            else -> "image/png"
-        },
-        sizeBytes = file.takeIf { it.isFile }?.length() ?: 0L,
-        origin = null,
-        createdAt = createAt,
-        prompt = prompt,
-        modelId = modelId,
-    )
-}
-
-private fun GenMediaEntity.toGeneratedUi(store: GeneratedMediaStore): GeneratedMediaUiModel =
-    GeneratedMediaUiModel(
-        id = id,
-        prompt = prompt,
-        filePath = store.resolveCanonicalFile(this).absolutePath,
-        createdAt = createAt,
-        modelId = modelId,
-    )

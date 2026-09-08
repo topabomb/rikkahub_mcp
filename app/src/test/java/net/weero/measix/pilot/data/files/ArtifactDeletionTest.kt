@@ -43,9 +43,9 @@ internal class ArtifactDeletionTest : ArtifactStoreLifecycleTestBase() {
             entity(staged.relativePath, folder, ArtifactState.CREATING, staged.stagingToken)
         )
 
-        val result = store.deleteUserRequestedFolder(folder)
+        val result = store.deleteUserRequestedFolderCreatedBefore(ConfigurationScope.Personal, folder, Long.MAX_VALUE)
 
-        assertTrue(result is ArtifactDeleteResult.Completed)
+        assertEquals(ArtifactCleanupResult(2, 0, 0, 0), result)
         assertNull(database.artifactDao().getById(active.entity.id))
         assertNull(database.artifactDao().getById(creatingId))
         assertFalse(payloadStore.finalExists(active.entity.relativePath))
@@ -66,7 +66,7 @@ internal class ArtifactDeletionTest : ArtifactStoreLifecycleTestBase() {
             entity(freshStaged.relativePath, folder, ArtifactState.ACTIVE, token = null, createdAt = 5_000L)
         )
 
-        val result = store.deleteUserRequestedFolderCreatedBefore(folder, createdBefore = 2_000L)
+        val result = store.deleteUserRequestedFolderCreatedBefore(ConfigurationScope.Personal, folder, createdBefore = 2_000L)
 
         assertEquals(1, result.deleted)
         assertEquals(0, result.cleanupPending)
@@ -88,7 +88,7 @@ internal class ArtifactDeletionTest : ArtifactStoreLifecycleTestBase() {
             origin = ArtifactOrigin.USER,
         )
 
-        val result = store.deleteUserRequestedFolderCreatedBefore(folder, Long.MAX_VALUE)
+        val result = store.deleteUserRequestedFolderCreatedBefore(ConfigurationScope.Personal, folder, Long.MAX_VALUE)
 
         assertEquals(0, result.deleted)
         assertEquals(1, result.skippedInProgress)
@@ -146,7 +146,7 @@ internal class ArtifactDeletionTest : ArtifactStoreLifecycleTestBase() {
             current.copy(assistants = current.assistants.map { it.copy(background = null) })
         }
         assertTrue(store.discardUnpublished(owned) is ArtifactDeleteResult.Failed)
-        assertTrue(store.deleteUserRequested(owned.entity.id) is ArtifactDeleteResult.Completed)
+        assertTrue(store.deleteUserRequested(ConfigurationScope.Personal, owned.entity.id) is ArtifactDeleteResult.Completed)
         assertNull(database.artifactDao().getById(owned.entity.id))
     }
 
@@ -157,7 +157,7 @@ internal class ArtifactDeletionTest : ArtifactStoreLifecycleTestBase() {
         val owned = store.createFromBytes(ConfigurationScope.Personal, byteArrayOf(6), "draft.bin", folder = folder, origin = ArtifactOrigin.USER)
 
         assertTrue(store.collectGarbage(0).isEmpty())
-        val deletion = store.deleteUserRequested(owned.entity.id)
+        val deletion = store.deleteUserRequested(ConfigurationScope.Personal, owned.entity.id)
 
         assertTrue(deletion is ArtifactDeleteResult.Rejected)
         assertEquals(

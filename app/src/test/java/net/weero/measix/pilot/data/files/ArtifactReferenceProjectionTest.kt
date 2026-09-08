@@ -241,7 +241,7 @@ internal class ArtifactReferenceProjectionTest : ArtifactStoreLifecycleTestBase(
             store.resolveImagePreviewForArtifact(owned.localRef),
         )
         store.abandonUnpublished(owned)
-        assertTrue(store.deleteUserRequested(owned.entity.id) is ArtifactDeleteResult.Completed)
+        assertTrue(store.deleteUserRequested(ConfigurationScope.Personal, owned.entity.id) is ArtifactDeleteResult.Completed)
         assertNull(store.resolveImagePreviewForArtifact(owned.localRef))
     }
 
@@ -265,7 +265,7 @@ internal class ArtifactReferenceProjectionTest : ArtifactStoreLifecycleTestBase(
             2L,
         )
 
-        val visible = store.list(folder)
+        val visible = store.list(ConfigurationScope.Personal, folder)
 
         assertEquals(listOf(active.entity.id), visible.map { it.id })
     }

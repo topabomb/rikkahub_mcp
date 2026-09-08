@@ -92,11 +92,11 @@ class ArtifactUploadImageReadIntegrationTest {
         val first = draft.claimSubmission(draft.target, listOf(document))
         val second = draft.claimSubmission(draft.target, listOf(document))
         draft.close()
-        val artifact = store.list().single()
+        val artifact = store.list(ConfigurationScope.Personal).single()
         first.close()
-        assertTrue(store.deleteUserRequested(artifact.id) is ArtifactDeleteResult.Rejected)
+        assertTrue(store.deleteUserRequested(ConfigurationScope.Personal, artifact.id) is ArtifactDeleteResult.Rejected)
         second.close()
-        assertTrue(store.deleteUserRequested(artifact.id) is ArtifactDeleteResult.Completed)
+        assertTrue(store.deleteUserRequested(ConfigurationScope.Personal, artifact.id) is ArtifactDeleteResult.Completed)
     }
 
     @Test
@@ -107,10 +107,10 @@ class ArtifactUploadImageReadIntegrationTest {
         val document = draft.createTextDocument("accepted input")
         val submission = draft.claimSubmission(draft.target, listOf(document))
         draft.close()
-        val artifact = store.list().single()
-        assertTrue(store.deleteUserRequested(artifact.id) is ArtifactDeleteResult.Rejected)
+        val artifact = store.list(ConfigurationScope.Personal).single()
+        assertTrue(store.deleteUserRequested(ConfigurationScope.Personal, artifact.id) is ArtifactDeleteResult.Rejected)
         submission.close()
-        assertTrue(store.deleteUserRequested(artifact.id) is ArtifactDeleteResult.Completed)
+        assertTrue(store.deleteUserRequested(ConfigurationScope.Personal, artifact.id) is ArtifactDeleteResult.Completed)
     }
 
     @Test
@@ -121,14 +121,14 @@ class ArtifactUploadImageReadIntegrationTest {
             kotlin.uuid.Uuid.random(), net.weero.measix.pilot.data.enterprise.RealmAccess.Personal, 0L, {}))
             val document = draft.createTextDocument("unaccepted input")
             val submission = draft.claimSubmission(draft.target, listOf(document))
-            val artifact = store.list().single()
+            val artifact = store.list(ConfigurationScope.Personal).single()
             if (closed) draft.close()
             draft.returnUnaccepted(submission)
             if (!closed) {
-                assertTrue(store.deleteUserRequested(artifact.id) is ArtifactDeleteResult.Rejected)
+                assertTrue(store.deleteUserRequested(ConfigurationScope.Personal, artifact.id) is ArtifactDeleteResult.Rejected)
                 draft.close()
             }
-            assertTrue(store.deleteUserRequested(artifact.id) is ArtifactDeleteResult.Completed)
+            assertTrue(store.deleteUserRequested(ConfigurationScope.Personal, artifact.id) is ArtifactDeleteResult.Completed)
         }
     }
 
@@ -143,8 +143,8 @@ class ArtifactUploadImageReadIntegrationTest {
         assertEquals(2, result.parts.size)
         assertEquals(result.parts[0].url, result.parts[1].url)
         assertFalse(database.artifactReferenceDao().existsByArtifactId(entity.id))
-        assertEquals(listOf(entity.relativePath), store.list().map { it.relativePath })
-        assertTrue(store.deleteUserRequested(entity.id) is ArtifactDeleteResult.Completed)
+        assertEquals(listOf(entity.relativePath), store.list(ConfigurationScope.Personal).map { it.relativePath })
+        assertTrue(store.deleteUserRequested(ConfigurationScope.Personal, entity.id) is ArtifactDeleteResult.Completed)
         result.parts.forEach { part ->
             assertTrue(part.url.startsWith("data:image/jpeg;base64,"))
             val bytes = java.util.Base64.getDecoder().decode(part.url.substringAfter("base64,"))
@@ -153,7 +153,7 @@ class ArtifactUploadImageReadIntegrationTest {
             assertEquals(1, bitmap.height)
             bitmap.recycle()
         }
-        assertTrue(store.list().isEmpty())
+        assertTrue(store.list(ConfigurationScope.Personal).isEmpty())
         assertTrue(File(root, "upload").listFiles().orEmpty().isEmpty())
     }
 
@@ -174,13 +174,13 @@ class ArtifactUploadImageReadIntegrationTest {
                 entered.await()
                 assertEquals(
                     ArtifactDeleteResult.Rejected(entity.id, ArtifactDeleteResult.RejectionReason.IN_PROGRESS),
-                    store.deleteUserRequested(entity.id),
+                    store.deleteUserRequested(ConfigurationScope.Personal, entity.id),
                 )
                 assertTrue(store.file(entity).isFile)
             } finally {
                 reader.cancelAndJoin()
             }
-            assertTrue(store.deleteUserRequested(entity.id) is ArtifactDeleteResult.Completed)
+            assertTrue(store.deleteUserRequested(ConfigurationScope.Personal, entity.id) is ArtifactDeleteResult.Completed)
             assertFalse(store.file(entity).exists())
             assertEquals(
                 AttachmentResolveResult.Failure("attachment_not_found"),
@@ -198,8 +198,8 @@ class ArtifactUploadImageReadIntegrationTest {
             AttachmentResolveResult.Failure("unsupported_attachment_type"),
             resolver.readImages(listOf("/upload/valid.png", "/upload/invalid.png")),
         )
-        assertTrue(store.deleteUserRequested(first.id) is ArtifactDeleteResult.Completed)
-        assertTrue(store.deleteUserRequested(second.id) is ArtifactDeleteResult.Completed)
+        assertTrue(store.deleteUserRequested(ConfigurationScope.Personal, first.id) is ArtifactDeleteResult.Completed)
+        assertTrue(store.deleteUserRequested(ConfigurationScope.Personal, second.id) is ArtifactDeleteResult.Completed)
         val owned = store.createFromBytes(ConfigurationScope.Personal, png, "unpublished.png", "image/png", origin = ArtifactOrigin.USER)
         assertEquals(
             AttachmentResolveResult.Failure("attachment_not_found"),

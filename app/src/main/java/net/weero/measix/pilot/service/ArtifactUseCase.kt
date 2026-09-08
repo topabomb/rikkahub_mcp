@@ -10,21 +10,15 @@ import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
-import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import me.rerere.ai.ui.UIMessagePart
 import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.ai.attachments.ImageMime
-import net.weero.measix.pilot.data.db.entity.ArtifactEntity
-import net.weero.measix.pilot.data.db.entity.ArtifactOrigin
 import net.weero.measix.pilot.data.files.ArtifactDeleteImpact
 import net.weero.measix.pilot.data.files.ArtifactDeleteResult
 import net.weero.measix.pilot.data.files.ArtifactStore
-import net.weero.measix.pilot.data.files.ArtifactCleanupResult
-import net.weero.measix.pilot.data.files.FileFolders
 import net.weero.measix.pilot.data.files.OwnedArtifact
 import net.weero.measix.pilot.data.files.requireDiscarded
 import net.weero.measix.pilot.data.imggen.GeneratedMediaStore
@@ -35,26 +29,11 @@ enum class ArtifactUiOrigin {
     SYSTEM,
 }
 
-data class ArtifactUiModel(
-    val id: Long,
-    val contentUri: String,
-    val displayName: String,
-    val mimeType: String,
-    val sizeBytes: Long,
-    val origin: ArtifactUiOrigin,
-    val createdAt: Long,
-)
-
 data class ArtifactDeleteImpactUiModel(
     val referencedByHistory: Boolean,
     val assistantBackgroundCount: Int,
     val assistantAvatarCount: Int,
     val assistantPresetCount: Int,
-)
-
-data class ArtifactStorageStats(
-    val count: Int,
-    val sizeBytes: Long,
 )
 
 /** Draft-owned import descriptor; callers never have to rediscover metadata from a managed file URI. */
@@ -81,9 +60,6 @@ class ArtifactUseCase(
         view.requireOpen()
         return ArtifactDraftScope(store, recoveryGate, view.commandTarget)
     }
-
-    fun observeUploads(): Flow<List<ArtifactUiModel>> =
-        store.observe(FileFolders.UPLOAD).map { artifacts -> artifacts.map(::toUiModel) }
 
     /** 验证并创建 Settings 图像 artifact，由同一挂起所有者提交 durable root。 */
     suspend fun importSettingsImage(uri: Uri, transform: (Settings, Uri) -> Settings): Uri {
@@ -120,47 +96,11 @@ class ArtifactUseCase(
         }
     }
 
-    suspend fun uploadStats(): ArtifactStorageStats {
-        recoveryGate.awaitReady()
-        val artifacts = store.list(FileFolders.UPLOAD)
-        return ArtifactStorageStats(
-            count = artifacts.size,
-            sizeBytes = artifacts.sumOf(ArtifactEntity::sizeBytes),
-        )
-    }
-
-    suspend fun inspect(id: Long): ArtifactDeleteImpactUiModel? {
-        recoveryGate.awaitReady()
-        val entity = store.get(id) ?: return null
-        return store.inspect(entity).toUiModel()
-    }
-
     fun displayName(uri: Uri): String? = store.displayName(uri)
 
     fun mimeType(uri: Uri): String? = store.mimeType(uri)
 
     fun isManagedUploadUrl(url: String): Boolean = store.isUploadUri(Uri.parse(url))
-
-    suspend fun deleteUserRequested(id: Long): ArtifactDeleteOutcome {
-        recoveryGate.awaitReady()
-        return store.deleteUserRequested(id).toOutcome()
-    }
-
-    suspend fun deleteAllUploads(): ArtifactDeleteOutcome {
-        recoveryGate.awaitReady()
-        return store.deleteUserRequestedFolder(FileFolders.UPLOAD).toOutcome()
-    }
-
-    /** 按时间范围清理上传；`All` 也走同一协议（cutoff = Long.MAX_VALUE）。 */
-    suspend fun deleteUploadsCreatedBefore(cutoff: Long): ArtifactCleanupResult {
-        recoveryGate.awaitReady()
-        return store.deleteUserRequestedFolderCreatedBefore(FileFolders.UPLOAD, cutoff)
-    }
-
-    suspend fun uploadCandidateCount(cutoff: Long): Int {
-        recoveryGate.awaitReady()
-        return store.countFolderCreatedBefore(FileFolders.UPLOAD, cutoff)
-    }
 
     suspend fun updateSettingsReferences(transform: (Settings) -> Settings): Settings {
         recoveryGate.awaitReady()
@@ -179,33 +119,19 @@ class ArtifactUseCase(
         }
     }
 
-    private fun toUiModel(entity: ArtifactEntity): ArtifactUiModel = ArtifactUiModel(
-        id = entity.id,
-        contentUri = store.file(entity).toUri().toString(),
-        displayName = entity.displayName,
-        mimeType = entity.mimeType,
-        sizeBytes = entity.sizeBytes,
-        origin = when (ArtifactOrigin.valueOf(entity.origin)) {
-            ArtifactOrigin.USER -> ArtifactUiOrigin.USER
-            ArtifactOrigin.GENERATED -> ArtifactUiOrigin.GENERATED
-            ArtifactOrigin.SYSTEM -> ArtifactUiOrigin.SYSTEM
-        },
-        createdAt = entity.createdAt,
-    )
-
     private companion object {
         const val TAG = "ArtifactUseCase"
     }
 }
 
-private fun ArtifactDeleteImpact.toUiModel() = ArtifactDeleteImpactUiModel(
+internal fun ArtifactDeleteImpact.toUiModel() = ArtifactDeleteImpactUiModel(
     referencedByHistory = referencedByHistory,
     assistantBackgroundCount = assistantBackgroundCount,
     assistantAvatarCount = assistantAvatarCount,
     assistantPresetCount = assistantPresetCount,
 )
 
-private fun ArtifactDeleteResult.toOutcome(): ArtifactDeleteOutcome = when (this) {
+internal fun ArtifactDeleteResult.toOutcome(): ArtifactDeleteOutcome = when (this) {
     is ArtifactDeleteResult.Completed -> ArtifactDeleteOutcome.Deleted
     is ArtifactDeleteResult.CleanupPending -> ArtifactDeleteOutcome.CleanupPending
     is ArtifactDeleteResult.Rejected -> when (reason) {
@@ -253,6 +179,11 @@ class ArtifactDraftScope internal constructor(
             rollback(created, "artifact import rollback", error)
             throw error
         }
+    }
+
+    suspend fun describeInputs(parts: List<UIMessagePart>): Map<String, String> = withOwnershipLock {
+        target.requireOpen()
+        store.describeInput(scope, parts.collectArtifactUris().map(Uri::parse))
     }
 
     suspend fun createTextDocument(text: String): UIMessagePart.Document = withOwnershipLock {

@@ -64,7 +64,7 @@ internal class ArtifactSettingsCommitTest {
             assertTrue(gc.await().isEmpty())
             assertEquals(owned.uri.toString(), e.settings.snapshotUserDocument().configuration.assistants.single().background)
             // The acknowledged root transferred the creation pin even though its caller was cancelled.
-            assertTrue(e.artifacts.deleteUserRequested(owned.entity.id) is ArtifactDeleteResult.Completed)
+            assertTrue(e.artifacts.deleteUserRequested(ConfigurationScope.Personal, owned.entity.id) is ArtifactDeleteResult.Completed)
         }
     }
 
@@ -82,7 +82,7 @@ internal class ArtifactSettingsCommitTest {
                 }
             }
             entered.await()
-            val deletion = async(start = CoroutineStart.UNDISPATCHED) { e.artifacts.deleteUserRequested(row.id) }
+            val deletion = async(start = CoroutineStart.UNDISPATCHED) { e.artifacts.deleteUserRequested(row.scope, row.id) }
             assertFalse(deletion.isCompleted)
             release.complete(Unit)
             withTimeout(5_000) { reader.await(); deletion.await() }
@@ -127,10 +127,10 @@ internal class ArtifactSettingsCommitTest {
             // Reusing the same token in a shared definition cannot launder an enterprise asset.
             assertTrue(runCatching { e.artifacts.updateSettingsReferences { it.copy(assistants = listOf(Assistant(background = uri))) } }.isFailure)
             e.disk.rejectWrite = true
-            assertTrue(e.artifacts.deleteUserRequested(row.id) is ArtifactDeleteResult.CleanupPending)
+            assertTrue(e.artifacts.deleteUserRequested(row.scope, row.id) is ArtifactDeleteResult.CleanupPending)
             assertEquals(ArtifactState.DELETING.name, e.database.artifactDao().getById(row.id)?.state)
             assertTrue(e.payload.file(row.relativePath).isFile)
-            assertTrue(e.artifacts.deleteUserRequested(row.id) is ArtifactDeleteResult.Completed)
+            assertTrue(e.artifacts.deleteUserRequested(row.scope, row.id) is ArtifactDeleteResult.Completed)
             val updated = e.settings.snapshotUserDocument().preferences.scopes.single { it.scope == enterprise }.assistantUsage.single()
             assertEquals(UsageValue(Avatar.Dummy), updated.avatar)
             assertEquals(UsageValue<String?>(null), updated.background)

@@ -1,5 +1,6 @@
 package net.weero.measix.pilot.data.imggen
 
+import net.weero.measix.pilot.data.configuration.ConfigurationScope
 import io.mockk.coEvery
 import io.mockk.every
 import io.mockk.mockk
@@ -50,11 +51,11 @@ class GeneratedMediaScopedCleanupTest {
         File(filesDir, "images/fresh.png").writeText("fresh")
 
         val repository = mockk<GenMediaRepository>()
-        coEvery { repository.listCreatedBefore(2_000L) } returns listOf(old)
+        coEvery { repository.listCreatedBefore(ConfigurationScope.Personal, 2_000L) } returns listOf(old)
         coEvery { repository.getMediaById(1) } returns old
         coEvery { repository.deleteMedia(1) } returns Unit
 
-        val result = store(filesDir, repository).deleteCreatedBefore(2_000L)
+        val result = store(filesDir, repository).deleteCreatedBefore(ConfigurationScope.Personal, 2_000L)
 
         assertEquals(1, result.deleted)
         assertEquals(0, result.failed)
@@ -71,12 +72,12 @@ class GeneratedMediaScopedCleanupTest {
         val entity = entity(9, "deferred.png", createdAt = 100L)
         File(images, "deferred.png").writeText("x")
         val repository = mockk<GenMediaRepository>()
-        coEvery { repository.listCreatedBefore(Long.MAX_VALUE) } returns listOf(entity)
+        coEvery { repository.listCreatedBefore(ConfigurationScope.Personal, Long.MAX_VALUE) } returns listOf(entity)
         every { repository.deleteMedia(9) } returns Unit
         coEvery { repository.getAllMediaList() } returns emptyList()
         val store = store(filesDir, repository, deletePayload = { false })
 
-        val result = store.deleteCreatedBefore(Long.MAX_VALUE)
+        val result = store.deleteCreatedBefore(ConfigurationScope.Personal, Long.MAX_VALUE)
 
         assertEquals(0, result.deleted)
         assertEquals(1, result.cleanupPending)
@@ -97,10 +98,10 @@ class GeneratedMediaScopedCleanupTest {
         val entity = entity(10, "restore.png", createdAt = 100L)
         val original = File(images, "restore.png").apply { writeText("x") }
         val repository = mockk<GenMediaRepository>()
-        coEvery { repository.listCreatedBefore(Long.MAX_VALUE) } returns listOf(entity)
+        coEvery { repository.listCreatedBefore(ConfigurationScope.Personal, Long.MAX_VALUE) } returns listOf(entity)
         every { repository.deleteMedia(10) } throws IllegalStateException("db unavailable")
 
-        val result = store(filesDir, repository).deleteCreatedBefore(Long.MAX_VALUE)
+        val result = store(filesDir, repository).deleteCreatedBefore(ConfigurationScope.Personal, Long.MAX_VALUE)
 
         assertEquals(0, result.deleted)
         assertEquals(0, result.cleanupPending)
@@ -111,35 +112,16 @@ class GeneratedMediaScopedCleanupTest {
     }
 
     @Test
-    fun `deleteAll routes through the same scoped protocol`() = runTest {
-        val filesDir = tempDir("media-all")
-        File(filesDir, "images").mkdirs()
-        val entity = entity(7, "a.png", createdAt = 100L)
-        File(filesDir, "images/a.png").writeText("a")
-
-        val repository = mockk<GenMediaRepository>()
-        coEvery { repository.listCreatedBefore(Long.MAX_VALUE) } returns listOf(entity)
-        coEvery { repository.getMediaById(7) } returns entity
-        coEvery { repository.deleteMedia(7) } returns Unit
-
-        val ok = store(filesDir, repository).deleteAll()
-
-        assertTrue(ok)
-        assertTrue(!File(filesDir, "images/a.png").exists())
-        filesDir.deleteRecursively()
-    }
-
-    @Test
     fun `candidateCount reflects the query boundary`() = runTest {
         val filesDir = tempDir("media-count")
         val repository = mockk<GenMediaRepository>()
-        coEvery { repository.listCreatedBefore(2_000L) } returns listOf(entity(1, "old.png", 1_000L))
-        coEvery { repository.listCreatedBefore(1L) } returns emptyList()
+        coEvery { repository.listCreatedBefore(ConfigurationScope.Personal, 2_000L) } returns listOf(entity(1, "old.png", 1_000L))
+        coEvery { repository.listCreatedBefore(ConfigurationScope.Personal, 1L) } returns emptyList()
 
         val store = store(filesDir, repository)
 
-        assertEquals(1, store.candidateCount(2_000L))
-        assertEquals(0, store.candidateCount(1L))
+        assertEquals(1, store.candidateCount(ConfigurationScope.Personal, 2_000L))
+        assertEquals(0, store.candidateCount(ConfigurationScope.Personal, 1L))
         filesDir.deleteRecursively()
     }
 }
