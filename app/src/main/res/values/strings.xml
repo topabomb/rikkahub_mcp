@@ -1634,4 +1634,10 @@
   <string name="enterprise_invalid_enrollment">The enrollment information is invalid, expired, already used, or not accepted by an installed source.</string>
   <string name="enterprise_external_open">Open external website</string>
   <string name="enterprise_external_confirm">Open this address in another app?\n\n%1$s</string>
+  <string name="enterprise_take_photo">Take photo</string>
+  <string name="enterprise_record_audio">Record audio</string>
+  <string name="enterprise_start_recording">Start recording</string>
+  <string name="enterprise_stop_recording">Stop recording</string>
+  <string name="enterprise_recording">Recording…</string>
+  <string name="enterprise_media_notice">This media is only for preview in this portal. Leaving the page discards it.</string>
 </resources>

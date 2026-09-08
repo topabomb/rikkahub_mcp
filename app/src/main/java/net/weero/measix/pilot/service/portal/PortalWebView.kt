@@ -211,7 +211,7 @@ internal class PortalWebView private constructor(
 
         suspend fun open(context: Context, selection: RealmSelection, sessions: EnterpriseSessionController,
             synchronization: EnterpriseSynchronizationService, scope: CoroutineScope,
-            registry: PortalDocumentRegistry, createNative: ((PortalDocumentContext) -> PortalNativeActions)? = null,
+            registry: PortalDocumentRegistry, createNative: (suspend (PortalDocumentContext) -> PortalNativeActions)? = null,
             onClosed: (PortalClosure) -> Unit): PortalWebView {
             check(Looper.myLooper() == Looper.getMainLooper())
             if (!supported()) throw PortalFailure("source_unavailable")

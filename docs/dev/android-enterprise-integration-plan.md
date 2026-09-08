@@ -300,7 +300,7 @@ Seed 只初始化尚未建立的主体 Feed。同步、重入与重复导入不�
 
 2026-09-08 上游已裁决采用 Control Protocol §8 的 **Native Bridge v3 / 本地读取 v2**。固定 https://local.measix.invalid/portal/ 只承载经过摘要校验的随包静态资源；context/Feed 通过同一个 MeasixHost 类型化消息通道读取。废止本地 GET/document header/304 方案，不保留旧 Bridge v2、CustomEvent 或另一套工作台页面。远端 Hub HTTP、Cookie、CSRF、ETag/304 协议保持独立，本期不实现真实后台接入。
 
-core 与 Portal 的新版可执行契约和资源包均已交付，Android 已核验并固定 Bridge v3/localReadVersion=2 的原始包、manifest 和全部八份共享输入，删除旧 v2 JavaScript 与重复的消费清单。PortalProtocol、PortalDocument、PortalWebView、正式入口与原生退出已实现并有分层验证；媒体能力继续接线。不得改写固定网页脚本或把资源入包当作完整设备验收。enrollment 与 context 的 formatVersion=1 不变；已完成的接入与 Feed 领域规则继续复用。
+core 与 Portal 的新版可执行契约和资源包均已交付，Android 已核验并固定 Bridge v3/localReadVersion=2 的原始包、manifest 和全部八份共享输入，删除旧 v2 JavaScript 与重复的消费清单。PortalProtocol、PortalDocument、PortalWebView、正式入口与原生退出已实现并有分层验证；媒体请求、原生 UI 与硬件已接线，Debug 设备验证已通过；Release 设备及整期验收仍按下文完成。不得改写固定网页脚本或把资源入包当作完整设备验收。enrollment 与 context 的 formatVersion=1 不变；已完成的接入与 Feed 领域规则继续复用。
 
 原生在批准的顶层文档运行脚本前提供 window.MeasixPortalDocument={bridgeVersion:3,documentId}。documentId 至少具有 128 bit 随机性、非空且最多 128 字符，绑定本次文档、来源/Deployment/User、原母 Session 和期限；网页授权最多十分钟且不超过母 Session，读取不续期。不能可靠提供启动绑定或真实消息 origin/frame 能力时，明确显示宿主不可用，不降级。Android 每个批准文档独占新 WebView：先注册监听器和 document-start bootstrap，再首次加载；重开/重载先撤销旧 owner 和媒体，再创建新实例。旧实例不得加载第二份 Portal HTML，导航回调与静态主文档拦截共同拒绝；导航回调不能被当作替换当前文档启动脚本的时序保证。
 
@@ -314,7 +314,7 @@ core 与 Portal 的新版可执行契约和资源包均已交付，Android 已�
 
 媒体由统一原生 owner 管理，仅用于本页预览，不自动上传或保存到聊天/Artifact。照片为 JPEG、录音为 audio/mp4，recordAudio 包含原生开始/停止 UI，时长参数 1–60 秒。单项最多 10 MiB、每文档两项/合计 20 MiB、最多保留五分钟；readMedia 按不透明句柄返回最多 65536 字节的 base64 分块，不暴露 URI 或路径。普通请求十秒、采集请求 120 秒的期限由原生独立保证，页面不能靠崩溃或超时留下后台录音。释放、取消、期限、导航、切域、退出、会话失效及进程恢复都清理临时文件与迟到结果；取消未知/已结束请求无副作用，不能取消其他文档请求。
 
-Android 媒体接线按下列所有权完成：`PortalMediaStore` 管理独占临时目录，每个文档取得独立 Session，预留时占额度，写入者停止后才发布为不可变句柄；进程恢复通过现有恢复编排清理遗留目录。`PortalNativeActions` 负责原文档的采集请求与原生 UI 交互，硬件适配器控制 CameraX 预览和 MediaRecorder 开始/停止，UI 不接触路径或 Store。相机在应用内展示可取消预览，避免外部相机 Activity 使 Portal 进入后台后仍继续写入。媒体请求取消或文档关闭时先停止硬件并等待原保存回调，再丢弃预留文件；已发布结果的过期扫描不得删除仍在采集的文件。原生媒体清理回执需纳入现有宿主关闭屏障，完成前不能发布新选中空间；请求收尾仍在 Session 锁外等待。拍摄、录音、权限与迟到写入的设备验证完成前不声明这些 capabilities。
+Android 媒体接线按下列所有权完成：`PortalMediaStore` 管理独占临时目录，每个文档取得独立 Session，预留时占额度，写入者停止后才发布为不可变句柄；进程恢复通过现有恢复编排清理遗留目录。`PortalNativeActions` 负责原文档的采集请求与原生 UI 交互，硬件适配器控制 Camera2/TextureView 预览和 MediaRecorder 开始/停止，UI 不接触路径或 Store。相机在应用内展示可取消预览，避免外部相机 Activity 使 Portal 进入后台后仍继续写入。媒体请求取消或文档关闭时先停止硬件并等待原保存回调，再丢弃预留文件；已发布结果的过期扫描不得删除仍在采集的文件。原生媒体清理回执需纳入现有宿主关闭屏障，完成前不能发布新选中空间；请求收尾仍在 Session 锁外等待。正式宿主按已接通的实现声明媒体 capabilities；设备验收记录需分别列出实际成功和未验证的场景。
 
 验收分开记录：共享 v3 案例由真实 Android 消费者执行；文档启动、来源/frame、原回复代理、同源导航/旧文档拒绝以及权限/扫码/拍照/录音/句柄释放执行设备验证；生产 Portal 使用新包联调。浏览器替身、纯解析测试、资源打包和本地示例均不代表真实平台互操作或 S0.2 Freeze。原 GET/304 两项限制已由上游消息方案解决，不再列为待裁决事项。
 
@@ -331,6 +331,10 @@ Android 媒体接线按下列所有权完成：`PortalMediaStore` 管理独占�
 - 移除旧签名 envelope/global merge/path lock 和无消费者 facade；原型文件不迁成正式身份；仅保留真实历史迁移需要的解码边界。
 
 ## 10. 完整变更清单与批次
+
+Portal 原生媒体批次已完成：正式宿主接通相机、录音、分块读取和释放；文件独占 noBackupFilesDir/portal_media，启动恢复清除遗留。原生取消覆盖硬件结束后仍未交付的结果，回复失败补偿未交付句柄，取消读取不删除已交付结果。网页、硬件和文件清理共同控制原宿主关闭屏障，失败保留原 owner 供重试。设备发现 CameraDevice 关闭会截断采集序列回调，现以原设备 onClosed 确认其 Session 失效，不再永久等待被截断的 Session 回调；迟到回调不能恢复所有权。两位独立审查已复核。
+
+本批 37 项定向 JVM 测试通过；完整 test/assembleDebug/lintDebug/assembleRelease 串行门禁在 9 分 6 秒内通过：App 2,020 项无失败或跳过，lint 0 errors、280 warnings；Workspace 仍有 11 项 Windows 宿主跳过。Pixel_10_Pro_Fold / Android 17 的 Portal、采集硬件、企业页面及 Applied 存储 17 项设备回归在 2 分 26 秒内全部通过，包含实际网页照片/音频预览和释放、取消、录音中切域、录音限时自动停止及再次录音、相机打开期间关闭。正式 Debug/Koin 流程手动验证系统相机权限拒绝与重新授权、照片方向及页面预览、麦克风授权，以及录音中退后台后硬件停止、文件清空、返回原生 READY 状态且保留登录。证据汇总为 build/reports/enterprise/portal-capture-verification.json。前置失败记录包含 Compose 等待方式修正与上述真实设备关闭缺陷，不计作成功验收。Release 硬件、实际相机扫码、剩余资源消费者/配置 UI/文件与备份、私有导入及 0.0.20 整期验收仍未完成；本批不代表真实平台互操作，版本保持 0.0.19 开发基线。
 
 Portal v3 读取与文档宿主已实现：固定 origin 只加载已校验静态资源，context/Feed 使用原生消息；原 RealmSelection、母 Session、文档期限及原回复代理贯穿执行和回复。七项已实现能力按真实状态声明，配置同步复用既有应用服务，Feed 缓存命中仍先验证授权。完整八份共享输入与原始 manifest 统一固定，删除旧资源和重复消费清单。独立审查无剩余本批阻塞项。
 

@@ -1633,4 +1633,10 @@
   <string name="enterprise_invalid_enrollment">接入资料无效、已过期、已使用，或不被已安装的来源接受。</string>
   <string name="enterprise_external_open">打开外部网站</string>
   <string name="enterprise_external_confirm">在其他应用中打开此地址？\n\n%1$s</string>
+  <string name="enterprise_take_photo">拍摄照片</string>
+  <string name="enterprise_record_audio">录制音频</string>
+  <string name="enterprise_start_recording">开始录音</string>
+  <string name="enterprise_stop_recording">停止录音</string>
+  <string name="enterprise_recording">正在录音…</string>
+  <string name="enterprise_media_notice">媒体仅在当前工作台预览，离开页面后会丢弃。</string>
 </resources>

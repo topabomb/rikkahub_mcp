@@ -21,7 +21,7 @@ class PortalMediaStoreTest {
     @Test
     fun `startup recovery deletes only its temporary root and can retry a failed deletion`() = runBlocking<Unit> {
         val root = temporary.newFolder()
-        val old = File(root, "old-document/leftover.media").apply { parentFile.mkdirs(); writeBytes(jpeg()) }
+        val old = File(root, "old-document/leftover.media").apply { parentFile.mkdirs(); writeBytes(portalTestJpeg()) }
         val outside = temporary.newFile().apply { writeText("keep") }
         var failDelete = true
         val store = PortalMediaStore(root, { now }) { file -> if (failDelete && file == old) false else file.delete() }
@@ -48,7 +48,7 @@ class PortalMediaStoreTest {
         val second = store.open("second")
         try {
             rejects("media_unavailable") { store.open("first") }
-            val capture = first.reserve(PortalMediaStore.JPEG).apply { file.writeBytes(jpeg()) }
+            val capture = first.reserve(PortalMediaStore.JPEG).apply { file.writeBytes(portalTestJpeg()) }
             rejects("media_unavailable") { second.publish(capture) }
             rejects("media_unavailable") { second.discard(capture) }
             assertTrue(capture.file.exists())
@@ -71,7 +71,7 @@ class PortalMediaStoreTest {
         val store = store()
         val session = store.open("document")
         try {
-            for ((mime, bytes) in listOf(PortalMediaStore.JPEG to jpeg(), PortalMediaStore.AUDIO_MP4 to audio())) {
+            for ((mime, bytes) in listOf(PortalMediaStore.JPEG to portalTestJpeg(), PortalMediaStore.AUDIO_MP4 to portalTestAudio())) {
                 val capture = session.reserve(mime).apply { file.writeBytes(bytes) }
                 val handle = session.publish(capture)
                 assertEquals(mime, handle.mimeType)
@@ -139,7 +139,7 @@ class PortalMediaStoreTest {
     @Test
     fun `invalid or mismatched containers fail publication without retaining a reservation`() = runBlocking<Unit> {
         val session = store().open("document")
-        val videoHandler = audio().apply {
+        val videoHandler = portalTestAudio().apply {
             val position = toString(Charsets.ISO_8859_1).indexOf("soun")
             check(position >= 0)
             "vide".toByteArray().copyInto(this, position)
@@ -149,9 +149,9 @@ class PortalMediaStoreTest {
             for ((mime, bytes) in listOf(
                 PortalMediaStore.JPEG to byteArrayOf(),
                 PortalMediaStore.JPEG to "%PDF-1.7".toByteArray(),
-                PortalMediaStore.JPEG to jpeg().dropLast(2).toByteArray(),
-                PortalMediaStore.AUDIO_MP4 to jpeg(),
-                PortalMediaStore.AUDIO_MP4 to audio().copyOf(12),
+                PortalMediaStore.JPEG to portalTestJpeg().dropLast(2).toByteArray(),
+                PortalMediaStore.AUDIO_MP4 to portalTestJpeg(),
+                PortalMediaStore.AUDIO_MP4 to portalTestAudio().copyOf(12),
                 PortalMediaStore.AUDIO_MP4 to videoHandler,
             )) {
                 val capture = session.reserve(mime).apply { file.writeBytes(bytes) }
@@ -167,7 +167,7 @@ class PortalMediaStoreTest {
     fun `expiry starts at reservation and sweep never removes a still writing capture`() = runBlocking<Unit> {
         val session = store().open("document")
         try {
-            val photo = session.reserve(PortalMediaStore.JPEG).apply { file.writeBytes(jpeg()) }
+            val photo = session.reserve(PortalMediaStore.JPEG).apply { file.writeBytes(portalTestJpeg()) }
             val writing = session.reserve(PortalMediaStore.AUDIO_MP4)
             now += 20_000
             val handle = session.publish(photo)
@@ -184,7 +184,7 @@ class PortalMediaStoreTest {
             session.reserve(PortalMediaStore.JPEG)
             rejects("resource_limit") { session.reserve(PortalMediaStore.JPEG) }
             // Only the caller's stopped writer can now hand this expired capture back.
-            writing.file.writeBytes(audio())
+            writing.file.writeBytes(portalTestAudio())
             rejects("media_unavailable") { session.publish(writing) }
             assertFalse(writing.file.exists())
             session.reserve(PortalMediaStore.JPEG)
@@ -201,7 +201,7 @@ class PortalMediaStoreTest {
         store.recover()
         val session = store.open("document")
         try {
-            val handle = session.publish(session.reserve(PortalMediaStore.JPEG).apply { file.writeBytes(jpeg()) })
+            val handle = session.publish(session.reserve(PortalMediaStore.JPEG).apply { file.writeBytes(portalTestJpeg()) })
             session.reserve(PortalMediaStore.AUDIO_MP4)
             fails<IOException> { session.release(handle.mediaId) }
             rejects("media_unavailable") { session.read(handle.mediaId, 0, 1) }
@@ -224,7 +224,7 @@ class PortalMediaStoreTest {
         }
         store.recover()
         val session = store.open("document")
-        val capture = session.reserve(PortalMediaStore.JPEG).apply { file.writeBytes(jpeg()) }
+        val capture = session.reserve(PortalMediaStore.JPEG).apply { file.writeBytes(portalTestJpeg()) }
         val handle = session.publish(capture)
         try {
             failDelete = true
@@ -252,7 +252,7 @@ class PortalMediaStoreTest {
         try {
             cancelAtReturn { session.reserve(PortalMediaStore.JPEG) }
             assertFalse(root.walkTopDown().any { it.isFile })
-            val capture = session.reserve(PortalMediaStore.JPEG).apply { file.writeBytes(jpeg()) }
+            val capture = session.reserve(PortalMediaStore.JPEG).apply { file.writeBytes(portalTestJpeg()) }
             cancelAtReturn { session.publish(capture) }
             assertFalse(root.walkTopDown().any { it.isFile })
             session.reserve(PortalMediaStore.JPEG)
@@ -270,7 +270,7 @@ class PortalMediaStoreTest {
         }
         store.recover()
         val session = store.open("document")
-        val handle = session.publish(session.reserve(PortalMediaStore.JPEG).apply { file.writeBytes(jpeg()) })
+        val handle = session.publish(session.reserve(PortalMediaStore.JPEG).apply { file.writeBytes(portalTestJpeg()) })
         try {
             val closing = launch(start = CoroutineStart.LAZY) { session.close() }
             cancelDeletion.set(closing)
@@ -320,7 +320,7 @@ class PortalMediaStoreTest {
         val store = store()
         val session = store.open("document")
         try {
-            val original = audio()
+            val original = portalTestAudio()
             val added = 8 * 1024 * 1024
             val firstBoxLength = java.nio.ByteBuffer.wrap(original).int
             val capture = session.reserve(PortalMediaStore.AUDIO_MP4)
@@ -375,7 +375,7 @@ class PortalMediaStoreTest {
     }
 
     private fun paddedJpeg(size: Int): ByteArray {
-        val original = jpeg()
+        val original = portalTestJpeg()
         val output = ByteArrayOutputStream(size)
         DataOutputStream(output).use { target ->
             target.write(original, 0, 2)
@@ -394,11 +394,4 @@ class PortalMediaStoreTest {
         return output.toByteArray().also { check(it.size == size) }
     }
 
-    private fun jpeg(): ByteArray = Base64.getDecoder().decode(
-        "/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8UHRofHh0aHBwgJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPC4zNDL/2wBDAQkJCQwLDBgNDRgyIRwhMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjL/wAARCAABAAEDASIAAhEBAxEB/8QAHwAAAQUBAQEBAQEAAAAAAAAAAAECAwQFBgcICQoL/8QAtRAAAgEDAwIEAwUFBAQAAAF9AQIDAAQRBRIhMUEGE1FhByJxFDKBkaEII0KxwRVS0fAkM2JyggkKFhcYGRolJicoKSo0NTY3ODk6Q0RFRkdISUpTVFVWV1hZWmNkZWZnaGlqc3R1dnd4eXqDhIWGh4iJipKTlJWWl5iZmqKjpKWmp6ipqrKztLW2t7i5usLDxMXGx8jJytLT1NXW19jZ2uHi4+Tl5ufo6erx8vP09fb3+Pn6/8QAHwEAAwEBAQEBAQEBAQAAAAAAAAECAwQFBgcICQoL/8QAtREAAgECBAQDBAcFBAQAAQJ3AAECAxEEBSExBhJBUQdhcRMiMoEIFEKRobHBCSMzUvAVYnLRChYkNOEl8RcYGRomJygpKjU2Nzg5OkNERUZHSElKU1RVVldYWVpjZGVmZ2hpanN0dXZ3eHl6goOEhYaHiImKkpOUlZaXmJmaoqOkpaanqKmqsrO0tba3uLm6wsPExcbHyMnK0tPU1dbX2Nna4uPk5ebn6Onq8vP09fb3+Pn6/9oADAMBAAIRAxEAPwDjqKKK8c98/9k=",
-    )
-
-    private fun audio(): ByteArray = Base64.getDecoder().decode(
-        "AAAAIGZ0eXBpc29tAAACAGlzb21pc282aXNvMm1wNDEAAAK9bW9vdgAAAGxtdmhkAAAAAAAAAAAAAAAAAAAD6AAAAAAAAQAAAQAAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAABAAAAAAAAAAAAAAAAAABAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAgAAAb90cmFrAAAAXHRraGQAAAADAAAAAAAAAAAAAAABAAAAAAAAAAAAAAAAAAAAAAAAAAEBAAAAAAEAAAAAAAAAAAAAAAAAAAABAAAAAAAAAAAAAAAAAABAAAAAAAAAAAAAAAAAAAFbbWRpYQAAACBtZGhkAAAAAAAAAAAAAAAAAAAfQAAAAABVxAAAAAAALWhkbHIAAAAAAAAAAHNvdW4AAAAAAAAAAAAAAABTb3VuZEhhbmRsZXIAAAABBm1pbmYAAAAQc21oZAAAAAAAAAAAAAAAJGRpbmYAAAAcZHJlZgAAAAAAAAABAAAADHVybCAAAAABAAAAynN0YmwAAAB+c3RzZAAAAAAAAAABAAAAbm1wNGEAAAAAAAAAAQAAAAAAAAAAAAEAEAAAAAAfQAAAAAAANmVzZHMAAAAAA4CAgCUAAQAEgICAF0AVAAAAAAC7gAAAu4AFgICABRWIVuUABoCAgAECAAAAFGJ0cnQAAAAAAAC7gAAAu4AAAAAQc3R0cwAAAAAAAAAAAAAAEHN0c2MAAAAAAAAAAAAAABRzdHN6AAAAAAAAAAAAAAAAAAAAEHN0Y28AAAAAAAAAAAAAAChtdmV4AAAAIHRyZXgAAAAAAAAAAQAAAAEAAAAAAAAAAAAAAAAAAABidWR0YQAAAFptZXRhAAAAAAAAACFoZGxyAAAAAAAAAABtZGlyYXBwbAAAAAAAAAAAAAAAAC1pbHN0AAAAJal0b28AAAAdZGF0YQAAAAEAAAAATGF2ZjYyLjEzLjEwMgAAAHxtb29mAAAAEG1maGQAAAAAAAAAAQAAAGR0cmFmAAAAJHRmaGQAAAA5AAAAAQAAAAAAAALdAAAEAAAAABUCAAAAAAAAFHRmZHQBAAAAAAAAAAAAAAAAAAAkdHJ1bgAAAwEAAAACAAAAhAAABAAAAAAVAAAAoAAAAAQAAAAhbWRhdN4CAExhdmM2Mi4yOS4xMDEAAjBADgEYIAcAAABDbWZyYQAAACt0ZnJhAQAAAAAAAAEAAAAAAAAAAQAAAAAAAAAAAAAAAAAAAt0BAQEAAAAQbWZybwAAAAAAAABD",
-    )
 }

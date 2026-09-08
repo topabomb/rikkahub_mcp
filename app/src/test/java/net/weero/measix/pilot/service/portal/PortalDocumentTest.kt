@@ -15,6 +15,7 @@ import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.serialization.json.*
 import net.weero.measix.pilot.data.enterprise.*
 import net.weero.measix.pilot.service.EnterpriseSynchronizationService
@@ -399,7 +400,7 @@ class PortalDocumentTest {
         val exit = EnterpriseExitService(h.sessions, h.sync, conversations,
             ApplicationRecoveryGate().apply { ready() }, appScope, h.registry)
         lateinit var native: PortalNativeActions
-        val doc = h.open(createNative = { PortalNativeActions(mockk(), it, h.sessions, exit).also { native = it } })
+        val doc = h.open(createNative = { h.native(mockk(), it, exit).also { native = it } })
         try {
             val status = h.call(doc, "getStatus").getValue("result").jsonObject
             assertTrue(status.getValue("capabilities").jsonArray.contains(JsonPrimitive("logout")))
@@ -428,7 +429,7 @@ class PortalDocumentTest {
         val context = mockk<Context>(relaxed = true)
         val exit = mockk<EnterpriseExitService>()
         lateinit var native: PortalNativeActions
-        val doc = h.open(createNative = { PortalNativeActions(context, it, h.sessions, exit).also { native = it } })
+        val doc = h.open(createNative = { h.native(context, it, exit).also { native = it } })
         val params = buildJsonObject { put("url", "https://example.com/approved-path") }
         try {
             val declined = async { h.call(doc, "openExternal", params) }
@@ -471,7 +472,7 @@ class PortalDocumentTest {
         val context = mockk<Context>(relaxed = true)
         for (method in listOf("openExternal", "logout")) {
             lateinit var native: PortalNativeActions
-            val doc = h.open(createNative = { PortalNativeActions(context, it, h.sessions, exit).also { native = it } })
+            val doc = h.open(createNative = { h.native(context, it, exit).also { native = it } })
             try {
                 val result = async { h.call(doc, method,
                     if (method == "openExternal") buildJsonObject { put("url", "https://example.com") } else buildJsonObject {}) }
@@ -485,6 +486,201 @@ class PortalDocumentTest {
                 coVerify(exactly = 0) { exit.exit(any()) }
             } finally { doc.close(); doc.awaitClosed() }
         }
+    }
+
+    @Test
+    fun `realm switch waits for late native media writes without holding cleanup behind Session admission`() = runBlocking(Dispatchers.Main) {
+        val h = harness(this)
+        lateinit var operation: ControlledCapture
+        val doc = h.open(createNative = { context -> h.native(mockk(), context, mockk(), PortalCaptureFactory { capture, _, _ ->
+            ControlledCapture(capture).also { operation = it }
+        }) })
+        var replies = 0
+        val request = requireNotNull(doc.receive(h.raw(doc, "capturePhoto"), PortalProtocol.LOCAL_ORIGIN, true) { replies++ })
+        try {
+            requireNotNull(doc.native).capture.first { it != null }
+            val original = doc.selection
+            val switch = async {
+                h.sessions.switchRealm(RealmSwitchRequest(original, RealmAccess.Personal)) { access ->
+                    val close = h.registry.capture(access as RealmAccess.Enterprise)
+                    close.revoke(PortalCloseReason.AUTHORIZATION_REVOKED)
+                    close.awaitHostsClosed()
+                }
+            }
+            operation.closeStarted.await()
+            assertFalse(switch.isCompleted)
+            assertEquals(original.access.scope, (h.sessions.state.value as EnterpriseState.Available).manifest.selectedScope)
+            assertTrue(operation.capture.file.exists())
+            operation.capture.file.writeBytes(portalTestJpeg())
+            operation.hardwareStopped.complete(Unit)
+            withTimeout(5_000) { switch.await(); request.join(); doc.awaitClosed() }
+            assertFalse(operation.capture.file.exists())
+            assertEquals(0, replies)
+            assertEquals(RealmAccess.Personal, h.sessions.readPresentation().selection?.access)
+        } finally { operation.hardwareStopped.complete(Unit); doc.close(); request.cancelAndJoin() }
+    }
+
+    @Test
+    fun `application cancellation still starts native cleanup and waits for the original writer`() = runBlocking(Dispatchers.Main) {
+        val app = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+        val h = harness(app)
+        lateinit var operation: ControlledCapture
+        val doc = h.open(createNative = { context -> h.native(mockk(), context, mockk(), PortalCaptureFactory { capture, _, _ ->
+            ControlledCapture(capture).also { operation = it }
+        }) })
+        doc.receive(h.raw(doc, "recordAudio", buildJsonObject { put("maxDurationSeconds", 5) }), PortalProtocol.LOCAL_ORIGIN, true) { fail("Cancelled media replied") }
+        try {
+            requireNotNull(doc.native).capture.first { it != null }
+            app.cancel()
+            operation.closeStarted.await()
+            assertTrue(doc.isClosed)
+            assertTrue(operation.capture.file.exists())
+            assertFalse(doc.isHostClosed)
+            operation.capture.file.writeBytes(portalTestAudio())
+            operation.hardwareStopped.complete(Unit)
+            withTimeout(5_000) { doc.awaitClosed(); requireNotNull(app.coroutineContext[Job]).join() }
+            assertFalse(operation.capture.file.exists())
+            assertTrue(doc.isHostClosed)
+        } finally { operation.hardwareStopped.complete(Unit); doc.close(); app.cancel() }
+    }
+
+    @Test
+    fun `captured media is read through the original handle and released idempotently`() = runBlocking(Dispatchers.Main) {
+        val h = harness(this)
+        val doc = h.open(createNative = { context -> h.native(mockk(), context, mockk(), PortalCaptureFactory { capture, _, _ ->
+            ControlledCapture(capture).apply {
+                capture.file.writeBytes(portalTestJpeg())
+                hardwareStopped.complete(Unit)
+                result.complete(Unit)
+            }
+        }) })
+        try {
+            val handle = h.call(doc, "capturePhoto").getValue("result").jsonObject
+            val id = handle.getValue("mediaId").jsonPrimitive.content
+            assertEquals("image/jpeg", handle.getValue("mimeType").jsonPrimitive.content)
+            val chunk = h.call(doc, "readMedia", buildJsonObject { put("mediaId", id); put("offset", 0); put("maxBytes", 65536) })
+                .getValue("result").jsonObject
+            assertArrayEquals(portalTestJpeg(), java.util.Base64.getDecoder().decode(chunk.getValue("dataBase64").jsonPrimitive.content))
+            assertEquals(handle.getValue("byteLength"), chunk.getValue("nextOffset"))
+            assertTrue(chunk.getValue("eof").jsonPrimitive.boolean)
+            val params = buildJsonObject { put("mediaId", id) }
+            assertTrue(h.call(doc, "releaseMedia", params).containsKey("result"))
+            assertTrue(h.call(doc, "releaseMedia", params).containsKey("result"))
+            assertEquals("media_unavailable", h.call(doc, "readMedia", buildJsonObject { put("mediaId", id); put("offset", 0); put("maxBytes", 1) })
+                .getValue("error").jsonObject.getValue("code").jsonPrimitive.content)
+        } finally { doc.close(); doc.awaitClosed() }
+    }
+
+    @Test
+    fun `native cancel after hardware completion cancels publication and waits for file cleanup`() = runBlocking(Dispatchers.Main) {
+        val h = harness(this)
+        val store = PortalMediaStore(temporary.newFolder(), { now }).also { it.recover() }
+        lateinit var operation: ControlledCapture
+        val doc = h.open(createNative = { context -> h.native(mockk(), context, mockk(), PortalCaptureFactory { capture, _, _ ->
+            ControlledCapture(capture).also { operation = it }
+        }, store) })
+        val release = CompletableDeferred<Unit>()
+        var holder: Job? = null
+        try {
+            val response = async { h.call(doc, "capturePhoto") }
+            val native = requireNotNull(doc.native)
+            native.capture.first { it != null }
+            val locked = CompletableDeferred<Unit>()
+            holder = launch { store.locked { locked.complete(Unit); release.await() } }
+            locked.await()
+            operation.capture.file.writeBytes(portalTestJpeg())
+            operation.hardwareStopped.complete(Unit)
+            operation.result.complete(Unit)
+            operation.closeStarted.await()
+            yield()
+            native.cancelCapture(operation)
+            yield()
+            assertFalse(response.isCompleted)
+            assertTrue(operation.capture.file.exists())
+            release.complete(Unit)
+            assertEquals("user_cancelled", response.await().getValue("error").jsonObject.getValue("code").jsonPrimitive.content)
+            assertFalse(operation.capture.file.exists())
+            assertNull(native.capture.value)
+        } finally { release.complete(Unit); holder?.join(); operation.hardwareStopped.complete(Unit); doc.close(); doc.awaitClosed() }
+    }
+
+    @Test
+    fun `failed reply releases a published capture while cancelled reads preserve delivered handles`() = runBlocking(Dispatchers.Main) {
+        val h = harness(this)
+        val root = temporary.newFolder()
+        val store = PortalMediaStore(root, { now }).also { it.recover() }
+        val doc = h.open(createNative = { context -> h.native(mockk(), context, mockk(), PortalCaptureFactory { capture, _, _ ->
+            ControlledCapture(capture).apply {
+                capture.file.writeBytes(portalTestJpeg()); hardwareStopped.complete(Unit); result.complete(Unit)
+            }
+        }, store) })
+        val release = CompletableDeferred<Unit>()
+        var holder: Job? = null
+        try {
+            val id = h.call(doc, "capturePhoto").getValue("result").jsonObject.getValue("mediaId").jsonPrimitive.content
+            val params = buildJsonObject { put("mediaId", id); put("offset", 0); put("maxBytes", 1) }
+            val locked = CompletableDeferred<Unit>()
+            holder = launch { store.locked { locked.complete(Unit); release.await() } }
+            locked.await()
+            val read = requireNotNull(doc.receive(h.raw(doc, "readMedia", params), PortalProtocol.LOCAL_ORIGIN, true) { fail("Cancelled read replied") })
+            yield(); read.cancel(); release.complete(Unit); read.join()
+            assertTrue(h.call(doc, "readMedia", params).containsKey("result"))
+            assertTrue(h.call(doc, "releaseMedia", buildJsonObject { put("mediaId", id) }).containsKey("result"))
+            var published = false
+            requireNotNull(doc.receive(h.raw(doc, "capturePhoto"), PortalProtocol.LOCAL_ORIGIN, true) { response ->
+                published = Json.parseToJsonElement(response).jsonObject.containsKey("result")
+                throw IllegalStateException("Original reply proxy gone")
+            }).join()
+            doc.awaitClosed()
+            assertTrue(published)
+            assertTrue(root.walkTopDown().none { it.isFile })
+        } finally { release.complete(Unit); holder?.join(); doc.close(); doc.awaitClosed() }
+    }
+
+    @Test
+    fun `native cleanup failure keeps the host barrier closed until the original owner retries`() = runBlocking(Dispatchers.Main) {
+        val h = harness(this)
+        var rejectDeletion = false
+        val store = PortalMediaStore(temporary.newFolder(), { now }, { file -> !rejectDeletion && file.delete() }).also { it.recover() }
+        rejectDeletion = true
+        lateinit var operation: ControlledCapture
+        var browserClosed = false
+        val doc = h.open(closeHost = { browserClosed = true }, createNative = { context ->
+            h.native(mockk(), context, mockk(), PortalCaptureFactory { capture, _, _ ->
+                ControlledCapture(capture).also { operation = it }
+            }, store)
+        })
+        val request = requireNotNull(doc.receive(h.raw(doc, "capturePhoto"), PortalProtocol.LOCAL_ORIGIN, true) { fail("Closed capture replied") })
+        try {
+            requireNotNull(doc.native).capture.first { it != null }
+            operation.hardwareStopped.complete(Unit)
+            doc.close()
+            request.join()
+            try { doc.awaitHostClosed(); fail("Deletion failure incorrectly opened the host barrier") }
+            catch (_: java.io.IOException) { }
+            assertTrue(browserClosed)
+            assertFalse(doc.isHostClosed)
+            assertTrue(operation.capture.file.exists())
+            rejectDeletion = false
+            doc.close()
+            doc.awaitClosed()
+            assertTrue(doc.isHostClosed)
+            assertFalse(operation.capture.file.exists())
+        } finally { rejectDeletion = false; operation.hardwareStopped.complete(Unit); doc.close(); doc.awaitClosed() }
+    }
+
+    private class ControlledCapture(val capture: PortalMediaCapture) : PortalCaptureOperation {
+        override val permission = if (capture.mimeType == PortalMediaStore.JPEG) android.Manifest.permission.CAMERA else android.Manifest.permission.RECORD_AUDIO
+        override val phase = MutableStateFlow(PortalCapturePhase.PERMISSION)
+        override val preview = MutableStateFlow<android.view.View?>(null)
+        override val result = CompletableDeferred<Unit>()
+        val hardwareStopped = CompletableDeferred<Unit>()
+        val closeStarted = CompletableDeferred<Unit>()
+        override fun permissionResult(granted: Boolean) = Unit
+        override fun start() = Unit
+        override fun stop() = Unit
+        override fun cancel() { result.completeExceptionally(PortalFailure("user_cancelled")); close() }
+        override fun close(): Deferred<Unit> { closeStarted.complete(Unit); result.cancel(); return hardwareStopped }
     }
 
     private suspend fun harness(scope: CoroutineScope): Harness {
@@ -505,10 +701,16 @@ class PortalDocumentTest {
         val registry = PortalDocumentRegistry()
         private var nextRequest = 0
         suspend fun open(synchronization: EnterpriseSynchronizationService = sync,
-            closeHost: () -> Unit = {}, createNative: ((PortalDocumentContext) -> PortalNativeActions)? = null,
+            closeHost: () -> Unit = {}, createNative: (suspend (PortalDocumentContext) -> PortalNativeActions)? = null,
             onClosed: (PortalClosure) -> Unit = {}) =
             PortalDocument.open(requireNotNull(sessions.observeSelectedRealmSelection().first()), sessions, synchronization,
                 scope, registry, { now }, { closeHost(); CompletableDeferred(Unit) }, createNative, onClosed)
+        suspend fun native(context: Context, document: PortalDocumentContext, exit: EnterpriseExitService,
+            captures: PortalCaptureFactory = PortalCaptureFactory { _, _, _ -> error("Unexpected capture") },
+            store: PortalMediaStore? = null): PortalNativeActions {
+            val media = store ?: PortalMediaStore(temporary.newFolder(), { now }).also { it.recover() }
+            return PortalNativeActions(context, document, sessions, exit, media.open(document.id), captures, scope)
+        }
         fun raw(doc: PortalDocument, method: String, params: JsonObject = buildJsonObject {}, requestId: String = "r${nextRequest++}") =
             buildJsonObject { put("bridgeVersion", 3); put("documentId", doc.id); put("requestId", requestId); put("method", method); put("params", params) }.toString()
         suspend fun call(doc: PortalDocument, method: String, params: JsonObject = buildJsonObject {}): JsonObject {

@@ -33,6 +33,14 @@ import net.weero.measix.pilot.data.enterprise.RealmAccess
 import net.weero.measix.pilot.service.portal.PortalWebView
 import net.weero.measix.pilot.service.portal.PortalNativeActions
 import net.weero.measix.pilot.service.portal.PortalNativePrompt
+import net.weero.measix.pilot.service.portal.PortalCaptureOperation
+import net.weero.measix.pilot.service.portal.PortalCapturePhase
+import android.Manifest
+import android.content.pm.PackageManager
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.ContextCompat
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import net.weero.measix.pilot.ui.components.ui.QRCode
 import net.weero.measix.pilot.ui.context.LocalNavController
 import org.koin.androidx.compose.koinViewModel
@@ -201,13 +209,15 @@ private fun EnterprisePortal(original: PortalPresentation, vm: EnterpriseVM, mod
     val page = host
     if (page != null) {
         AndroidView(factory = { page.view }, modifier = modifier)
-        page.document.native?.let { PortalNativeConfirmation(it) }
+        page.document.native?.let { PortalNativeControls(it) }
     }
     else Box(modifier) { CircularProgressIndicator() }
 }
 
 @Composable
-internal fun PortalNativeConfirmation(actions: PortalNativeActions) {
+internal fun PortalNativeControls(actions: PortalNativeActions) {
+    val capture by actions.capture.collectAsStateWithLifecycle()
+    capture?.let { operation -> key(operation) { PortalCaptureDialog(operation) { actions.cancelCapture(operation) } } }
     val prompt by actions.prompt.collectAsStateWithLifecycle()
     val original = prompt ?: return
     AlertDialog(
@@ -223,4 +233,40 @@ internal fun PortalNativeConfirmation(actions: PortalNativeActions) {
         confirmButton = { TextButton(onClick = { actions.decide(original, true) }) { Text(stringResource(R.string.confirm)) } },
         dismissButton = { TextButton(onClick = { actions.decide(original, false) }) { Text(stringResource(R.string.cancel)) } },
     )
+}
+
+@Composable
+private fun PortalCaptureDialog(operation: PortalCaptureOperation, cancel: () -> Unit) {
+    val context = LocalContext.current
+    val phase by operation.phase.collectAsStateWithLifecycle()
+    val preview by operation.preview.collectAsStateWithLifecycle()
+    val photo = operation.permission == Manifest.permission.CAMERA
+    val permission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission(), operation::permissionResult)
+    LaunchedEffect(operation) {
+        if (ContextCompat.checkSelfPermission(context, operation.permission) == PackageManager.PERMISSION_GRANTED) operation.permissionResult(true)
+        else permission.launch(operation.permission)
+    }
+    DisposableEffect(operation) { onDispose { cancel() } }
+    Dialog(onDismissRequest = cancel, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+        Surface(Modifier.widthIn(max = 640.dp).fillMaxWidth(0.9f), shape = MaterialTheme.shapes.extraLarge) {
+            Column(Modifier.verticalScroll(rememberScrollState()).padding(24.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                Text(stringResource(if (photo) R.string.enterprise_take_photo else R.string.enterprise_record_audio),
+                    style = MaterialTheme.typography.titleLarge)
+                preview?.let { view -> AndroidView(factory = { view }, modifier = Modifier.fillMaxWidth().height(320.dp)) }
+                Text(stringResource(R.string.enterprise_media_notice))
+                if (phase in setOf(PortalCapturePhase.PERMISSION, PortalCapturePhase.PREPARING, PortalCapturePhase.FINISHED) ||
+                    (photo && phase == PortalCapturePhase.CAPTURING)) LinearProgressIndicator(Modifier.fillMaxWidth())
+                if (!photo && phase == PortalCapturePhase.CAPTURING) Text(stringResource(R.string.enterprise_recording))
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                    TextButton(onClick = cancel) { Text(stringResource(R.string.cancel)) }
+                    if (phase == PortalCapturePhase.READY) Button(onClick = operation::start) {
+                        Text(stringResource(if (photo) R.string.enterprise_take_photo else R.string.enterprise_start_recording))
+                    }
+                    if (!photo && phase == PortalCapturePhase.CAPTURING) Button(onClick = operation::stop) {
+                        Text(stringResource(R.string.enterprise_stop_recording))
+                    }
+                }
+            }
+        }
+    }
 }

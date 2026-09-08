@@ -27,7 +27,7 @@ import net.weero.measix.pilot.service.EnterpriseSynchronizationService
 import net.weero.measix.pilot.service.EnterpriseExitService
 import net.weero.measix.pilot.service.ApplicationRecoveryGate
 import net.weero.measix.pilot.service.ConversationApplicationService
-import net.weero.measix.pilot.ui.pages.enterprise.PortalNativeConfirmation
+import net.weero.measix.pilot.ui.pages.enterprise.PortalNativeControls
 import net.weero.measix.pilot.R
 import org.junit.Assert.*
 import org.junit.Rule
@@ -281,18 +281,20 @@ class PortalWebViewAndroidTest {
             val exit = EnterpriseExitService(sessions, sync, conversations,
                 ApplicationRecoveryGate().apply { ready() }, scope, registry)
             lateinit var native: PortalNativeActions
+            val media = PortalMediaStore(File(root, "media")).also { it.recover() }
             var displayed by mutableStateOf<PortalWebView?>(null)
             val closed = CompletableDeferred<Unit>()
             val host = withContext(Dispatchers.Main) {
                 PortalWebView.open(compose.activity, selection, sessions, sync, scope, registry,
-                    { PortalNativeActions(compose.activity, it, sessions, exit).also { native = it } }) {
+                    { PortalNativeActions(compose.activity, it, sessions, exit, media.open(it.id),
+                        AndroidPortalCaptureFactory(compose.activity, scope), scope).also { native = it } }) {
                     displayed = null
                     closed.complete(Unit)
                 }.also { hosts += it; displayed = it }
             }
             compose.setContent { displayed?.let { page ->
                 AndroidView(factory = { page.view })
-                PortalNativeConfirmation(native)
+                PortalNativeControls(native)
             } }
             awaitPage(host) { it["text"]?.jsonPrimitive?.content?.contains("退出企业登录") == true }
             suspend fun clickLogout() {
@@ -318,6 +320,89 @@ class PortalWebViewAndroidTest {
             assertTrue(host.document.isClosed)
             assertEquals(RealmAccess.Personal, sessions.readPresentation().selection?.access)
         } finally { closeHosts(hosts, scope); check(root.deleteRecursively()) }
+    }
+
+    @Test
+    fun deliveredPortalCapturesAndPreviewsActualCameraAndMicrophoneMedia() = runBlocking<Unit> {
+        val automation = androidx.test.platform.app.InstrumentationRegistry.getInstrumentation().uiAutomation
+        automation.grantRuntimePermission(context.packageName, android.Manifest.permission.CAMERA)
+        automation.grantRuntimePermission(context.packageName, android.Manifest.permission.RECORD_AUDIO)
+        val root = File(context.noBackupFilesDir, "portal-webview-test-${Uuid.random()}").apply { check(mkdirs()) }
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+        val hosts = mutableListOf<PortalWebView>()
+        var primary: Throwable? = null
+        try {
+            val sessions = EnterpriseSessionController(EnterpriseAppliedStore(File(root, "client")))
+            val source = source(root, sessions)
+            source.enrollExample()
+            val sync = EnterpriseSynchronizationService(sessions, source, scope)
+            val registry = PortalDocumentRegistry()
+            val mediaRoot = File(root, "media")
+            val media = PortalMediaStore(mediaRoot).also { it.recover() }
+            val exit = EnterpriseExitService(sessions, sync, mockk(), ApplicationRecoveryGate().apply { ready() }, scope, registry)
+            lateinit var native: PortalNativeActions
+            var displayed by mutableStateOf<PortalWebView?>(null)
+            val host = withContext(Dispatchers.Main) {
+                PortalWebView.open(compose.activity, requireNotNull(sessions.observeSelectedRealmSelection().first()), sessions,
+                    sync, scope, registry, { PortalNativeActions(compose.activity, it, sessions, exit, media.open(it.id),
+                        AndroidPortalCaptureFactory(compose.activity, scope), scope).also { native = it } }) {
+                    displayed = null
+                }.also { hosts += it; displayed = it }
+            }
+            compose.setContent { displayed?.let { page ->
+                AndroidView(factory = { page.view })
+                PortalNativeControls(native)
+            } }
+            awaitPage(host) { it["text"]?.jsonPrimitive?.content?.contains("手机能力") == true }
+            suspend fun clickPage(label: String) {
+                awaitPage(host) { page -> page["enabledButtons"]?.jsonArray?.any { it.jsonPrimitive.content.contains(label) } == true }
+                assertTrue(evaluatePageJson(host,
+                    "JSON.stringify({clicked:(()=>{const b=Array.from(document.querySelectorAll('button')).find(b=>b.textContent.includes('$label')&&!b.disabled);if(!b)return false;b.click();return true;})()})")
+                    .getValue("clicked").jsonPrimitive.boolean)
+            }
+            clickPage("拍摄照片")
+            val photo = withTimeout(20_000) { native.capture.first { it != null }!! }
+            compose.waitUntil(20_000) { photo.phase.value == PortalCapturePhase.READY }
+            compose.onNode(androidx.compose.ui.test.hasText(context.getString(R.string.enterprise_take_photo)) and androidx.compose.ui.test.hasClickAction()).performClick()
+            awaitPage(host) { it["photoWidth"]?.jsonPrimitive?.int?.let { width -> width > 0 } == true }
+            compose.waitUntil(10_000) { mediaRoot.walkTopDown().none { it.isFile } }
+            clickPage("清除预览")
+            clickPage("录制音频")
+            val audio = withTimeout(10_000) { native.capture.first { it != null }!! }
+            compose.waitUntil(10_000) { audio.phase.value == PortalCapturePhase.READY }
+            compose.onNodeWithText(context.getString(R.string.enterprise_start_recording)).performClick()
+            compose.waitUntil(10_000) { audio.phase.value == PortalCapturePhase.CAPTURING }
+            delay(1_500)
+            compose.onNodeWithText(context.getString(R.string.enterprise_stop_recording)).performClick()
+            awaitPage(host) { it["audioReady"]?.jsonPrimitive?.int?.let { ready -> ready >= 1 } == true }
+            compose.waitUntil(10_000) { mediaRoot.walkTopDown().none { it.isFile } }
+            clickPage("清除预览")
+            clickPage("拍摄照片")
+            withTimeout(10_000) { native.capture.first { it != null } }
+            compose.onNodeWithText(context.getString(R.string.cancel)).performClick()
+            awaitPage(host) { it["text"]?.jsonPrimitive?.content?.contains("已取消") == true }
+            compose.waitUntil(10_000) { mediaRoot.walkTopDown().none { it.isFile } }
+            clickPage("录制音频")
+            val interrupted = withTimeout(10_000) { native.capture.first { it != null }!! }
+            compose.waitUntil(10_000) { interrupted.phase.value == PortalCapturePhase.READY }
+            compose.onNodeWithText(context.getString(R.string.enterprise_start_recording)).performClick()
+            compose.waitUntil(10_000) { interrupted.phase.value == PortalCapturePhase.CAPTURING }
+            sessions.switchRealm(RealmSwitchRequest(host.document.selection, RealmAccess.Personal)) { access ->
+                withContext(Dispatchers.Main) {
+                    val closing = registry.capture(access as RealmAccess.Enterprise)
+                    closing.revoke(PortalCloseReason.AUTHORIZATION_REVOKED)
+                    closing.awaitHostsClosed()
+                }
+            }
+            host.document.awaitClosed()
+            assertTrue(host.document.isHostClosed)
+            assertEquals(RealmAccess.Personal, sessions.readPresentation().selection?.access)
+            assertTrue(mediaRoot.walkTopDown().none { it.isFile })
+        } catch (failure: Throwable) { primary = failure; throw failure }
+        finally {
+            try { closeHosts(hosts, scope); check(root.deleteRecursively()) }
+            catch (cleanup: Throwable) { if (primary == null) throw cleanup else primary.addSuppressed(cleanup) }
+        }
     }
 
     private suspend fun closeHosts(hosts: List<PortalWebView>, scope: CoroutineScope) {
@@ -358,7 +443,7 @@ class PortalWebViewAndroidTest {
             compose.waitUntil(timeoutMillis = 30_000) {
                 host.view.post {
                     if (!host.document.isClosed) host.view.evaluateJavascript(
-                        "JSON.stringify({url:location.href,bootstrap:window.MeasixPortalDocument||null,text:document.body?document.body.innerText:'',ready:document.readyState,refreshEnabled:Array.from(document.querySelectorAll('button')).some(b=>b.textContent.includes('同步企业配置')&&!b.disabled),observing:Array.isArray(window.portalTestResponses),responses:window.portalTestResponses||[]})",
+                        "JSON.stringify({url:location.href,bootstrap:window.MeasixPortalDocument||null,text:document.body?document.body.innerText:'',ready:document.readyState,photoWidth:document.querySelector('img.phone-preview')?.naturalWidth||0,audioReady:document.querySelector('audio.phone-preview')?.readyState||0,enabledButtons:Array.from(document.querySelectorAll('button')).filter(b=>!b.disabled).map(b=>b.textContent),refreshEnabled:Array.from(document.querySelectorAll('button')).some(b=>b.textContent.includes('同步企业配置')&&!b.disabled),observing:Array.isArray(window.portalTestResponses),responses:window.portalTestResponses||[]})",
                     ) { encoded ->
                         if (encoded != "null") snapshot.set(Json.parseToJsonElement(Json.decodeFromString<String>(encoded)).jsonObject)
                     }

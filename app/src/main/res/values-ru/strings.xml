@@ -1633,4 +1633,10 @@
   <string name="enterprise_invalid_enrollment">Данные подключения недействительны, просрочены, уже использованы или не принимаются установленным источником.</string>
   <string name="enterprise_external_open">Открыть внешний сайт</string>
   <string name="enterprise_external_confirm">Открыть этот адрес в другом приложении?\n\n%1$s</string>
+  <string name="enterprise_take_photo">Сделать фото</string>
+  <string name="enterprise_record_audio">Записать аудио</string>
+  <string name="enterprise_start_recording">Начать запись</string>
+  <string name="enterprise_stop_recording">Остановить запись</string>
+  <string name="enterprise_recording">Идёт запись…</string>
+  <string name="enterprise_media_notice">Медиа используется только для просмотра в этом портале. При выходе со страницы оно удаляется.</string>
 </resources>

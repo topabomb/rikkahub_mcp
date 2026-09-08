@@ -30,7 +30,7 @@ internal class PortalDocument private constructor(
     private val context: PortalDocumentContext,
     private val sessions: EnterpriseSessionController,
     private val synchronization: EnterpriseSynchronizationService,
-    parentScope: CoroutineScope,
+    private val parentScope: CoroutineScope,
     private val closeHost: () -> Deferred<Unit>,
     val native: PortalNativeActions?,
     private val onClosed: (PortalClosure) -> Unit,
@@ -68,6 +68,14 @@ internal class PortalDocument private constructor(
             delay((expiresAtMillis - nowMillis()).coerceAtLeast(1))
             close(PortalCloseReason.DOCUMENT_EXPIRED)
         }
+        if (native != null) scope.launch {
+            while (isActive) {
+                delay(1_000)
+                try { native.sweepMedia() }
+                catch (cancelled: CancellationException) { throw cancelled }
+                catch (_: Exception) { close(PortalCloseReason.HOST_FAILURE) }
+            }
+        }
     }
 
     /** reply is the original JavaScriptReplyProxy, never a lookup of the current WebView or page. */
@@ -80,7 +88,13 @@ internal class PortalDocument private constructor(
         val requestId = try { PortalProtocol.identifier(fields, "requestId") } catch (_: PortalFailure) { return null }
         // Replayed IDs cannot take ownership of either an in-flight or completed request's reply channel.
         if (!seen.add(requestId)) return null
-        val deadlineNanos = System.nanoTime() + 10_000_000_000L
+        val request = try { Result.success(PortalProtocol.request(fields)) }
+        catch (failure: PortalFailure) { Result.failure(failure) }
+        val durationNanos = when (request.getOrNull()?.command) {
+            PortalCommand.CapturePhoto, is PortalCommand.RecordAudio -> 120_000_000_000L
+            else -> 10_000_000_000L
+        }
+        val deadlineNanos = System.nanoTime() + durationNanos
         val job = scope.launch(start = CoroutineStart.LAZY) {
             try {
                 val remainingMillis = (deadlineNanos - System.nanoTime()) / 1_000_000L
@@ -89,7 +103,7 @@ internal class PortalDocument private constructor(
                     return@launch
                 }
                 withTimeout(remainingMillis) {
-                    dispatch(fields, requestId, reply)
+                    dispatch(fields, request, requestId, reply)
                 }
             } catch (_: TimeoutCancellationException) {
                 replyTimeout(requestId, reply)
@@ -102,22 +116,34 @@ internal class PortalDocument private constructor(
         return job
     }
 
-    private suspend fun dispatch(fields: JsonObject, requestId: String, reply: (String) -> Unit) {
+    private suspend fun dispatch(fields: JsonObject, request: Result<PortalRequest>, requestId: String, reply: (String) -> Unit) {
+        var capture: PortalMediaHandle? = null
+        var delivered = false
+        var primary: Exception? = null
         try {
             authorize()
-            val request = PortalProtocol.request(fields)
-            respond(requestId, reply, result = execute(request.command))
+            val command = request.getOrThrow().command
+            val result = when (command) {
+                PortalCommand.CapturePhoto -> nativeActions().capturePhoto().also { capture = it }.json()
+                is PortalCommand.RecordAudio -> nativeActions().recordAudio(command.maxDurationSeconds).also { capture = it }.json()
+                else -> execute(command)
+            }
+            delivered = respond(requestId, reply, result = result)
         } catch (cancelled: CancellationException) {
+            primary = cancelled
             throw cancelled
         } catch (failure: PortalFailure) {
+            primary = failure
             respond(requestId, reply, failure = failure)
         } catch (failure: EnterpriseFeedException) {
+            primary = failure
             respond(requestId, reply, failure = PortalFailure(when (failure.reason) {
                 "enterprise_update_not_found" -> "enterprise_update_not_found"
                 "invalid_request" -> "invalid_request"
                 else -> "source_unavailable"
             }))
         } catch (failure: EnterpriseConfigurationException) {
+            primary = failure
             val code = if ((fields["method"] as? JsonPrimitive)?.content == "refresh" &&
                 failure.reason !in setOf("enterprise_configuration_not_ready", "enterprise_feed_not_ready",
                     "enterprise_data_access_unavailable", "enterprise_session_required", "enterprise_selection_revoked")) {
@@ -127,9 +153,22 @@ internal class PortalDocument private constructor(
                 else -> "source_unavailable"
             }
             respond(requestId, reply, failure = PortalFailure(code))
-        } catch (_: Exception) {
+        } catch (failure: Exception) {
+            primary = failure
             respond(requestId, reply, failure = PortalFailure("source_unavailable"))
+        } finally {
+            if (capture != null && !delivered) {
+                try { withContext(NonCancellable) { nativeActions().releaseMedia(capture.mediaId) } }
+                catch (cleanup: Exception) {
+                    if (primary != null && primary !== cleanup) primary.addSuppressed(cleanup)
+                    close(PortalCloseReason.HOST_FAILURE)
+                }
+            }
         }
+    }
+
+    private fun PortalMediaHandle.json() = buildJsonObject {
+        put("mediaId", mediaId); put("mimeType", mimeType); put("byteLength", byteLength)
     }
 
     private suspend fun execute(command: PortalCommand): JsonObject = when (command) {
@@ -164,6 +203,10 @@ internal class PortalDocument private constructor(
         PortalCommand.Close -> { close(PortalCloseReason.USER_REQUEST); buildJsonObject {} }
         PortalCommand.Logout -> { nativeActions().logout(); buildJsonObject {} }
         is PortalCommand.OpenExternal -> { nativeActions().openExternal(command.url); buildJsonObject {} }
+        is PortalCommand.ReadMedia -> nativeActions().readMedia(command).let { chunk -> buildJsonObject {
+            put("dataBase64", chunk.dataBase64); put("nextOffset", chunk.nextOffset); put("eof", chunk.eof)
+        } }
+        is PortalCommand.ReleaseMedia -> { nativeActions().releaseMedia(command.mediaId); buildJsonObject {} }
         is PortalCommand.Cancel -> { requests[command.targetRequestId]?.cancel(); buildJsonObject {} }
         else -> throw PortalFailure("unsupported_method")
     }
@@ -197,15 +240,16 @@ internal class PortalDocument private constructor(
         }
     }
 
-    private suspend fun respond(requestId: String, reply: (String) -> Unit, result: JsonObject? = null, failure: PortalFailure? = null) {
-        if (closed) return
+    private suspend fun respond(requestId: String, reply: (String) -> Unit, result: JsonObject? = null, failure: PortalFailure? = null): Boolean {
+        if (closed) return false
+        var delivered = false
         try {
             // The Session barrier covers the actual native reply, not merely creation of response JSON.
             sessions.withSelectedRealmSelection(selection) {
                 if (!closed) {
                     val error = if (nowMillis() >= expiresAtMillis) PortalFailure("session_expired") else failure
-                    deliver(reply, if (error != null) PortalProtocol.error(id, requestId, error)
-                        else PortalProtocol.success(id, requestId, requireNotNull(result)))
+                    delivered = deliver(reply, if (error != null) PortalProtocol.error(id, requestId, error)
+                        else PortalProtocol.success(id, requestId, requireNotNull(result))) && error == null
                 }
             }
         } catch (cancelled: CancellationException) {
@@ -213,12 +257,13 @@ internal class PortalDocument private constructor(
         } catch (_: EnterpriseConfigurationException) {
             close(PortalCloseReason.AUTHORIZATION_REVOKED)
         }
+        return delivered
     }
 
-    private fun deliver(reply: (String) -> Unit, response: String) {
-        try { reply(response) }
+    private fun deliver(reply: (String) -> Unit, response: String): Boolean {
+        try { reply(response); return true }
         catch (cancelled: CancellationException) { throw cancelled }
-        catch (_: Exception) { close(PortalCloseReason.HOST_FAILURE) }
+        catch (_: Exception) { close(PortalCloseReason.HOST_FAILURE); return false }
     }
 
     @MainThread
@@ -232,13 +277,24 @@ internal class PortalDocument private constructor(
             requests.clear()
             seen.clear()
             lastFeedRefresh = null
-            native?.close()
             lifetime.cancel()
         }
         if (hostClosed || hostClosing?.isActive == true) return
-        val attempt = try { closeHost() }
-        catch (cancelled: CancellationException) { throw cancelled }
-        catch (failure: Exception) { CompletableDeferred<Unit>().apply { completeExceptionally(failure) } }
+        val receipts = listOfNotNull<() -> Deferred<Unit>>({ closeHost() }, native?.let { { it.close() } }).map { start ->
+            try { start() }
+            catch (failure: Exception) { CompletableDeferred<Unit>().apply { completeExceptionally(failure) } }
+        }
+        val attempt = parentScope.async(NonCancellable + Dispatchers.Main.immediate) {
+            var failure: Exception? = null
+            receipts.forEach { receipt ->
+                try { receipt.await() }
+                catch (error: Exception) {
+                    if (failure == null) failure = error else if (error !== failure) failure?.addSuppressed(error)
+                }
+            }
+            failure?.let { throw it }
+            Unit
+        }
         hostClosing = attempt
         attempt.invokeOnCompletion { failure ->
             val completed = Runnable {
@@ -288,10 +344,11 @@ internal class PortalDocument private constructor(
             registry: PortalDocumentRegistry,
             nowMillis: () -> Long = System::currentTimeMillis,
             closeHost: () -> Deferred<Unit> = { CompletableDeferred(Unit) },
-            createNative: ((PortalDocumentContext) -> PortalNativeActions)? = null,
+            createNative: (suspend (PortalDocumentContext) -> PortalNativeActions)? = null,
             onClosed: (PortalClosure) -> Unit,
         ): PortalDocument {
             var created: PortalDocument? = null
+            var native: PortalNativeActions? = null
             try {
                 return withContext(Dispatchers.Main.immediate) {
                     registry.awaitHostAvailable()
@@ -302,7 +359,8 @@ internal class PortalDocument private constructor(
                     sessions.withSelectedRealmSelection(selection) {
                         registry.requireHostAvailable()
                         val context = PortalDocumentContext(id, selection, minOf(session.expiresAtMillis, nowMillis() + 600_000), nowMillis)
-                        PortalDocument(context, sessions, synchronization, scope, closeHost, createNative?.invoke(context), onClosed).also {
+                        native = createNative?.invoke(context)
+                        PortalDocument(context, sessions, synchronization, scope, closeHost, native, onClosed).also {
                             created = it
                             if (it.isClosed || !it.lifetime.isActive) throw CancellationException("Portal document unavailable")
                             registry.register(it)
@@ -315,6 +373,10 @@ internal class PortalDocument private constructor(
                     withContext(NonCancellable + Dispatchers.Main.immediate) {
                         created?.close()
                         created?.awaitClosed()
+                        if (created == null && native != null) {
+                            val receipt = native!!.close()
+                            if (withTimeoutOrNull(10_000) { receipt.await(); true } != true) throw PortalFailure("timeout")
+                        }
                     }
                 } catch (cleanup: Exception) { if (cleanup !== failure) failure.addSuppressed(cleanup) }
                 throw failure

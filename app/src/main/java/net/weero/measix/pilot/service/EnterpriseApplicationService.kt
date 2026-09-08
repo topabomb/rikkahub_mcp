@@ -31,6 +31,7 @@ internal class EnterpriseApplicationService(
     private val portals: PortalDocumentRegistry,
     private val recovery: ApplicationRecoveryGate,
     private val scope: CoroutineScope,
+    private val media: PortalMediaStore,
 ) {
     private data class Switching(val request: RealmSwitchRequest, val result: Deferred<RealmSelection>)
     private val mutex = Mutex()
@@ -73,7 +74,8 @@ internal class EnterpriseApplicationService(
     suspend fun openPortal(context: Context, selection: RealmSelection, onClosed: (PortalClosure) -> Unit): PortalWebView {
         recovery.awaitReady()
         return PortalWebView.open(context, selection, sessions, synchronization, scope, portals,
-            { document -> PortalNativeActions(context, document, sessions, exit) }, onClosed)
+            { document -> PortalNativeActions(context, document, sessions, exit, media.open(document.id),
+                AndroidPortalCaptureFactory(context, scope), scope) }, onClosed)
     }
 
     suspend fun switchRealm(request: RealmSwitchRequest): RealmSelection {

@@ -318,7 +318,10 @@ val appModule = module {
                     get(),
                 )
             },
-            recoverEnterpriseConfiguration = { get<EnterpriseSessionController>().recover() },
+            recoverEnterpriseConfiguration = {
+                get<EnterpriseSessionController>().recover()
+                get<net.weero.measix.pilot.service.portal.PortalMediaStore>().recover()
+            },
             completePendingEnterpriseExit = { get<net.weero.measix.pilot.service.EnterpriseExitService>().completeDuringRecovery() },
             completePendingBackup = {
                 net.weero.measix.pilot.data.sync.PendingBackupRestore.complete(get())
@@ -355,8 +358,9 @@ val appModule = module {
     single { ConversationTitleCoordinator() }
 
     single { net.weero.measix.pilot.service.portal.PortalDocumentRegistry() }
+    single { net.weero.measix.pilot.service.portal.PortalMediaStore(java.io.File(get<Context>().noBackupFilesDir, "portal_media")) }
     single { net.weero.measix.pilot.service.EnterpriseExitService(get(), get(), get(), get(), get<AppScope>(), get()) }
-    single { net.weero.measix.pilot.service.EnterpriseApplicationService(get(), get(), get(), get(), get(), get(), get<AppScope>()) }
+    single { net.weero.measix.pilot.service.EnterpriseApplicationService(get(), get(), get(), get(), get(), get(), get<AppScope>(), get()) }
 
     single {
         GenerationSideEffects(

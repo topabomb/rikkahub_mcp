@@ -1633,4 +1633,10 @@
   <string name="enterprise_invalid_enrollment">접속 정보가 잘못되었거나 만료 또는 사용되었거나 설치된 소스에서 허용되지 않습니다.</string>
   <string name="enterprise_external_open">외부 웹사이트 열기</string>
   <string name="enterprise_external_confirm">다른 앱에서 이 주소를 여시겠습니까?\n\n%1$s</string>
+  <string name="enterprise_take_photo">사진 촬영</string>
+  <string name="enterprise_record_audio">음성 녹음</string>
+  <string name="enterprise_start_recording">녹음 시작</string>
+  <string name="enterprise_stop_recording">녹음 중지</string>
+  <string name="enterprise_recording">녹음 중…</string>
+  <string name="enterprise_media_notice">이 미디어는 현재 포털에서 미리보기용으로만 사용됩니다. 페이지를 나가면 삭제됩니다.</string>
 </resources>
