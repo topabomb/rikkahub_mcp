@@ -77,7 +77,7 @@ import kotlin.uuid.Uuid
 @Composable
 fun SubAssistantCallCard(
     tool: UIMessagePart.Tool,
-    masterConversationId: Uuid?,
+    detailSource: net.weero.measix.pilot.service.ConversationViewLease?,
     modifier: Modifier = Modifier,
     onAnswer: (suspend (runId: String, interactionId: String, answer: String) -> Boolean)? = null,
 ) {
@@ -104,11 +104,11 @@ fun SubAssistantCallCard(
         metadata.state == SubAssistantCallState.RUNNING
 
     // 整张 Card 是单一详情点击目标：只有存在有效 Child link 时才可点击
-    val detailRoute = masterConversationId?.takeIf {
+    val detailRoute = detailSource?.takeIf {
         !metadata.childConversationId.isNullOrBlank() && !metadata.childTaskNodeId.isNullOrBlank()
-    }?.let { masterId ->
+    }?.let { source ->
         Screen.SubAssistantDetail(
-            masterConversationId = masterId.toString(),
+            source = source,
             runId = metadata.runId,
         )
     }

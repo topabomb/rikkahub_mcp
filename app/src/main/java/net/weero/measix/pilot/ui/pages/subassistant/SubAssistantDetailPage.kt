@@ -59,6 +59,8 @@ import net.weero.measix.pilot.ui.components.message.localizeSubAssistantReason
 import net.weero.measix.pilot.ui.components.nav.BackButton
 import net.weero.measix.pilot.ui.components.ui.UIAvatar
 import net.weero.measix.pilot.ui.context.LocalNavController
+import net.weero.measix.pilot.service.ConversationViewLease
+import net.weero.measix.pilot.service.SubAssistantDetailUiState
 import net.weero.measix.pilot.ui.context.LocalSettings
 import net.weero.measix.pilot.ui.theme.CustomColors
 import org.koin.androidx.compose.koinViewModel
@@ -66,13 +68,12 @@ import org.koin.core.parameter.parametersOf
 
 @Composable
 fun SubAssistantDetailPage(
-    masterConversationId: String,
+    source: ConversationViewLease?,
     runId: String,
+    vm: SubAssistantDetailVM = koinViewModel(parameters = { parametersOf(source, runId) }),
 ) {
-    val vm: SubAssistantDetailVM = koinViewModel(
-        parameters = { parametersOf(masterConversationId, runId) }
-    )
-    val uiState by vm.uiState.collectAsStateWithLifecycle()
+    val observedState by vm.uiState.collectAsStateWithLifecycle()
+    val uiState = if (source == null) SubAssistantDetailUiState.Unavailable else observedState
     val settings by vm.settings.collectAsStateWithLifecycle()
     val ready = uiState as? SubAssistantDetailUiState.Ready
     val metadata = ready?.link?.metadata

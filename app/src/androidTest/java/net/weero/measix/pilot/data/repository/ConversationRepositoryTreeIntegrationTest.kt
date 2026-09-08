@@ -228,7 +228,8 @@ class ConversationRepositoryTreeIntegrationTest {
     fun treeDeleteAndRestoreKeepScopedNodesAndArtifactReferencesAtomic() = runBlocking {
         val masterId = Uuid.random()
         val assistantId = ConfigurationReference.random()
-        val owned = artifactStore.createFromBytes(ConfigurationScope.Personal,
+        val scope = ConfigurationScope.Enterprise(EnterpriseAuthority("local:example", "dep_example"), "alice")
+        val owned = artifactStore.createFromBytes(scope,
             byteArrayOf(1, 2, 3),
             "tree.txt",
             origin = ArtifactOrigin.USER,
@@ -238,7 +239,6 @@ class ConversationRepositoryTreeIntegrationTest {
             fileName = "tree.txt",
             mime = "text/plain",
         )
-        val scope = ConfigurationScope.Enterprise(EnterpriseAuthority("local:example", "dep_example"), "alice")
         val master = conversation(masterId, assistantId, null, part).copy(scope = scope)
         val child = conversation(Uuid.random(), assistantId, masterId, part).copy(scope = scope)
 
@@ -264,7 +264,7 @@ class ConversationRepositoryTreeIntegrationTest {
         try {
             val deleted = coordinator.withRootTree(scope, master.id) {
                 coordinator.deleteCapturingTree(master.id) { tree ->
-                    retention = artifactStore.retainNodesForUndo(ConfigurationScope.Personal, (listOf(tree.root) + tree.children).map { it.nodes })
+                    retention = artifactStore.retainNodesForUndo(scope, (listOf(tree.root) + tree.children).map { it.nodes })
                 }
             }
             assertNull(repository.getConversationById(master.id))

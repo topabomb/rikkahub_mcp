@@ -328,6 +328,9 @@ class ChatVM internal constructor(
         }
     }
 
+    internal fun detailSource(target: ConversationAssistantTarget): net.weero.measix.pilot.service.ConversationViewLease? =
+        (page.value as? PageState.Open)?.takeIf { it.lease.commandTarget === target.conversation }?.lease
+
     internal fun importsFor(target: ConversationAssistantTarget): ArtifactDraftScope? =
         (page.value as? PageState.Open)?.takeIf { it.lease.commandTarget === target.conversation }?.imports
 

@@ -71,6 +71,7 @@ class ConversationQueryServiceTest {
             sessions = EnterpriseSessionController(EnterpriseAppliedStore(temporary.newFolder())).apply { recover() },
             recoveryGate = ApplicationRecoveryGate().also { it.ready() },
             settings = mockk(),
+            coordinator = mockk(),
         )
     }
 }

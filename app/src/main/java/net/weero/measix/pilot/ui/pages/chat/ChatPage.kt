@@ -758,6 +758,7 @@ private fun ChatPageContent(
             containerColor = Color.Transparent,
         ) { innerPadding ->
             ChatList(
+                detailSource = configuration?.target?.let(vm::detailSource),
                 innerPadding = innerPadding,
                 snapshot = snapshot,
                 favoriteNodeIds = favoriteNodeIds,

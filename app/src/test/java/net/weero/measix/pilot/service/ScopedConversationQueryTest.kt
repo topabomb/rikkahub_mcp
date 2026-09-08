@@ -172,8 +172,7 @@ class ScopedConversationQueryTest {
 
     private fun sessions() = EnterpriseSessionController(EnterpriseAppliedStore(temporary.newFolder()))
     private fun service(repository: ConversationRepository, sessions: EnterpriseSessionController) = ConversationQueryService(
-        repository, mockk(), mockk(), mockk(), mockk(), sessions, ApplicationRecoveryGate().apply { ready() }, mockk(),
-    )
+        repository, mockk(), mockk(), mockk(), mockk(), sessions, ApplicationRecoveryGate().apply { ready() }, mockk(), mockk())
     private fun row(scope: ConfigurationScope, title: String) = ConversationListRecord(
         Uuid.random(), assistant, title, null, false, Instant.EPOCH, Instant.EPOCH, scope,
     )

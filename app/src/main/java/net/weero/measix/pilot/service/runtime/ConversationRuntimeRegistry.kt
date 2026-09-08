@@ -171,9 +171,6 @@ class ConversationRuntimeRegistry(
     fun requireRuntime(conversationId: Uuid): ConversationRuntime =
         findRuntime(conversationId) ?: error("conversation runtime is not Ready: $conversationId")
 
-    internal suspend fun acquireRuntime(conversationId: Uuid): ConversationRuntimeLease =
-        loadRuntime(conversationId).acquireLease()
-
     internal suspend fun acquireRegisteredRuntime(
         conversationId: Uuid,
         expected: ConversationRuntime,

@@ -98,11 +98,10 @@ val viewModelModule = module {
     viewModelOf(::StatsVM)
     viewModel<SubAssistantDetailVM> {
         SubAssistantDetailVM(
-            masterConversationId = it.get(),
+            source = it.getOrNull(),
             runId = it.get(),
             detailReader = get(),
             settingsStore = get(),
-            json = get(),
         )
     }
 }

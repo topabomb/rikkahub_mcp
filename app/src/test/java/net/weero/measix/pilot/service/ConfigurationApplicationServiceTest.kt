@@ -619,7 +619,7 @@ class ConfigurationApplicationServiceTest {
         val workspaces = mockk<WorkspaceQueryService>()
         val commands = ConfigurationApplicationService(settings, sessions, gate, coordinator, workspaces)
         private val preview = mockk<ConversationAttachmentPreviewProjector>()
-        val chatQuery = ConversationQueryService(repository, registry, mockk(), mockk(), preview, sessions, gate, settings)
+        val chatQuery = ConversationQueryService(repository, registry, mockk(), mockk(), preview, sessions, gate, settings, mockk())
         val queries = ConfigurationQueryService(settings, sessions, gate)
         val model = Model(modelId = "personal")
         val mcp = McpServerConfig.StreamableHTTPServer(commonOptions = McpCommonOptions(name = "Mine"), url = "https://example.invalid")

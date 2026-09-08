@@ -262,7 +262,7 @@ class ConversationFolderAccessTest {
             settings, repository, folderRepository, registry, coordinator, gate, mockk(), mockk(), mockk(),
             mockk(), mockk(), JsonInstant, mockk(), mockk(), sessions, mockk(),
         )
-        val query = ConversationQueryService(repository, registry, folderRepository, mockk(), mockk(), sessions, gate, mockk())
+        val query = ConversationQueryService(repository, registry, folderRepository, mockk(), mockk(), sessions, gate, mockk(), mockk())
 
         init {
             every { folderDao.getFoldersOfAssistant(any(), any()) } answers {

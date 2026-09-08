@@ -221,8 +221,7 @@ class ConversationPageAccessTest {
     private fun gate() = ApplicationRecoveryGate().apply { ready() }
     private fun sessions() = EnterpriseSessionController(EnterpriseAppliedStore(temporary.newFolder()))
     private fun query(sessions: EnterpriseSessionController) = ConversationQueryService(
-        mockk(), mockk(), mockk(), mockk(), mockk(), sessions, gate(), mockk(),
-    )
+        mockk(), mockk(), mockk(), mockk(), mockk(), sessions, gate(), mockk(), mockk())
     private fun application(
         repository: ConversationRepository,
         coordinator: ConversationCommandCoordinator,

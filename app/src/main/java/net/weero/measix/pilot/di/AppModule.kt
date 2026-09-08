@@ -425,7 +425,7 @@ val appModule = module {
     }
 
     single { ConversationAttachmentPreviewProjector(get()) }
-    single { ConversationQueryService(get(), get(), get(), get(), get(), get(), get(), get()) }
+    single { ConversationQueryService(get(), get(), get(), get(), get(), get(), get(), get(), get()) }
     single { CustomChatFontService(get(), get()) }
     single { SearchIndexMaintenanceService(get(), get()) }
     single { FavoriteService(get(), get()) }

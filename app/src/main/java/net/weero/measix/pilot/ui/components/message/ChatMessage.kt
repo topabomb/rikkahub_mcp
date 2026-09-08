@@ -102,7 +102,7 @@ import kotlin.uuid.Uuid
 @Composable
 fun ChatMessage(
     node: MessageNode,
-    masterConversationId: Uuid? = null,
+    detailSource: net.weero.measix.pilot.service.ConversationViewLease? = null,
     modifier: Modifier = Modifier,
     loading: Boolean = false,
     turnFinished: Boolean = !loading,
@@ -183,7 +183,7 @@ fun ChatMessage(
         }
         ProvideTextStyle(textStyle) {
             MessagePartsBlock(
-                masterConversationId = masterConversationId,
+                detailSource = detailSource,
                 assistant = assistant,
                 messageId = message.id,
                 role = message.role,
@@ -376,7 +376,7 @@ private fun MessageTerminalStatusNotice(
 
 @Composable
 private fun MessagePartsBlock(
-    masterConversationId: Uuid?,
+    detailSource: net.weero.measix.pilot.service.ConversationViewLease?,
     assistant: Assistant?,
     messageId: kotlin.uuid.Uuid,
     role: MessageRole,
@@ -484,7 +484,7 @@ private fun MessagePartsBlock(
                 } else {
                     SubAssistantCallCard(
                         tool = block.tool,
-                        masterConversationId = masterConversationId,
+                        detailSource = detailSource,
                         onAnswer = onSubAssistantAnswer,
                         modifier = Modifier.animateContentSize(),
                     )

@@ -152,6 +152,18 @@ class ConversationCommandCoordinator(
         registry.acquireRegisteredRuntime(request.id, runtime)
     } }
 
+    /** Child detail borrows its parent's page authority and owns only a runtime observation lease. */
+    internal suspend fun openChildForView(
+        scope: ConfigurationScope,
+        parentId: Uuid,
+        childId: Uuid,
+    ): ConversationRuntimeLease = gated { operationLocks.withLock(childId) {
+        val header = repository.getConversationHeader(childId) ?: throw ConversationNotFoundException(childId)
+        check(header.scope == scope && header.parentConversationId == parentId) { "sub_assistant_child_scope_mismatch" }
+        val runtime = registry.loadRuntime(childId)
+        registry.acquireRegisteredRuntime(childId, runtime)
+    } }
+
     internal suspend fun createTree(
         master: ConversationAggregateSnapshot,
         children: List<ConversationAggregateSnapshot>,

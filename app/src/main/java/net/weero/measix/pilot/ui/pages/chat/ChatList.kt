@@ -127,6 +127,7 @@ private const val ScrollBottomKey = "ScrollBottomKey"
 
 @Composable
 internal fun ChatList(
+    detailSource: net.weero.measix.pilot.service.ConversationViewLease?,
     innerPadding: PaddingValues,
     snapshot: ConversationPresentationSnapshot,
     favoriteNodeIds: Set<Uuid>,
@@ -182,6 +183,7 @@ internal fun ChatList(
             )
         } else {
             ChatListNormal(
+                detailSource = detailSource,
                 innerPadding = innerPadding,
                 snapshot = snapshot,
                 favoriteNodeIds = favoriteNodeIds,
@@ -223,6 +225,7 @@ internal fun ChatList(
 
 @Composable
 private fun ChatListNormal(
+    detailSource: net.weero.measix.pilot.service.ConversationViewLease?,
     innerPadding: PaddingValues,
     snapshot: ConversationPresentationSnapshot,
     favoriteNodeIds: Set<Uuid>,
@@ -453,7 +456,7 @@ private fun ChatListNormal(
                             ) {
                                 ChatMessage(
                                     node = node,
-                                    masterConversationId = snapshot.conversationId,
+                                    detailSource = detailSource,
                                     model = node.currentMessage.modelId?.let(modelById::get),
                                     assistant = messageAssistant,
                                     loading = loading && index == lastMessageIndex,

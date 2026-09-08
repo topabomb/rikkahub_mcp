@@ -557,7 +557,7 @@ class RouteActivity : ComponentActivity() {
 
                             entry<Screen.SubAssistantDetail> { key ->
                                 SubAssistantDetailPage(
-                                    masterConversationId = key.masterConversationId,
+                                    source = key.source,
                                     runId = key.runId,
                                 )
                             }
@@ -831,7 +831,7 @@ sealed interface Screen : NavKey {
 
     @Serializable
     data class SubAssistantDetail(
-        val masterConversationId: String,
         val runId: String,
+        @kotlinx.serialization.Transient val source: net.weero.measix.pilot.service.ConversationViewLease? = null,
     ) : Screen
 }

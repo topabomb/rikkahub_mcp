@@ -78,7 +78,7 @@ class Navigator(private val backStack: MutableList<NavKey>) {
 `Screen` 的密封层次与 `RouteActivity` 的 `entry<Screen.*>` 注册是路由清单的唯一权威来源。
 路由按职责分为聊天/分享、历史与收藏、助手配置、设置、扩展与 Workspace，以及 WebView、备份、
 图片生成和调试页面。带业务身份的页面把 ID 放入可序列化路由参数；聊天使用 `ConversationOpenRequest`，
-子助手详情使用 `masterConversationId + runId`，工作区文件编辑使用 Workspace ID、区域和路径。
+子助手详情携带 `runId` 与原聊天页面借出的 `ConversationViewLease`；lease 标为导航序列化的 transient，保存恢复后必须从父聊天重新打开详情，不凭会话 ID 重建授权。工作区文件编辑使用 Workspace ID、区域和路径。
 
 `ConversationOpenRequest.NewDraft` 固定会话 ID、原 `RealmAccess` 与助手引用；`OpenExisting` 只打开已有根会话。
 历史、搜索、收藏和通知使用已有会话请求；分享和新建按钮显式创建 Draft。`rememberChatNavigation` 的回调保留渲染时的域，
@@ -730,7 +730,7 @@ Tabletop、无效或多个铰链，以及 Dialog 的 scrim、内容区和底部�
 
 Assistant 配置页提供 Target 类别、全局可见与 Caller 访问范围设置；关闭 Target 类别时会原子清理全局可见和反向授权。普通选择器默认隐藏 Target，可通过筛选显式显示；搜索同时匹配名称与路由描述。
 
-主聊天把 `assistant_call` 渲染为独立 `SubAssistantCallCard`。卡片显示 Target、request、运行状态、有界文本预览和桥接的 `ask_user`，整卡进入 `SubAssistantDetail(masterConversationId, runId)`。详情页校验 run 与 Child 关系，并通过 `ChatMessage(readOnly = true)` 与不提供输入区来禁止修改型交互。
+主聊天把 `assistant_call` 渲染为独立 `SubAssistantCallCard`。卡片显示 Target、request、运行状态、有界文本预览和桥接的 `ask_user`，整卡携带原页面 lease 进入 `SubAssistantDetail(runId, source)`。`SubAssistantDetailReader` 校验原域、run 与 Child 关系，详情页通过 `ChatMessage(readOnly = true)` 与不提供输入区来禁止修改型交互。
 
 TTS 控制条由当前 worker 的 `isSpeaking` 决定可见性，暂停不隐藏。暂停优先于底层播放器状态。同 turn 新内容继续入队，新 turn 替换整条队列；`stop` 释放所有权。控制条只在当前播放来源为 Target 且该 Assistant 开启 `useAssistantAvatar` 时显示 Target 头像。
 

@@ -7,11 +7,11 @@ import androidx.paging.PagingSource
 import net.weero.measix.pilot.data.db.dao.LightConversationEntity
 import android.util.Log
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.mapNotNull
 import kotlinx.coroutines.flow.mapLatest
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.emitAll
@@ -32,7 +32,6 @@ import net.weero.measix.pilot.data.model.Folder
 import net.weero.measix.pilot.service.runtime.ConversationRuntimeRegistry
 import net.weero.measix.pilot.service.runtime.ConversationRuntimeState
 import net.weero.measix.pilot.service.runtime.ConversationAggregateSnapshot
-import net.weero.measix.pilot.service.runtime.ConversationRuntimeSnapshot
 import net.weero.measix.pilot.service.runtime.ConversationPresentation
 import net.weero.measix.pilot.service.runtime.ConversationPresentationSnapshot
 import net.weero.measix.pilot.service.runtime.toPresentationSnapshot
@@ -113,6 +112,7 @@ class ConversationQueryService internal constructor(
     private val sessions: EnterpriseSessionController,
     private val recoveryGate: ApplicationRecoveryGate,
     private val settings: SettingsStore,
+    private val coordinator: net.weero.measix.pilot.service.runtime.ConversationCommandCoordinator,
 ) {
     suspend fun captureCurrentAccess(): RealmAccess {
         recoveryGate.awaitReady()
@@ -222,8 +222,40 @@ class ConversationQueryService internal constructor(
             }
         }
 
-    suspend fun attachmentPreviews(snapshot: ConversationPresentationSnapshot): Map<String, String> =
-        attachmentPreviewProjector.project(snapshot)
+    internal suspend fun attachmentPreviews(source: ConversationViewLease, snapshot: ConversationPresentationSnapshot): Map<String, String> {
+        withViewAccess(source) {
+            check(snapshot.header.scope == source.access.scope &&
+                (snapshot.conversationId == source.conversationId || snapshot.header.parentConversationId == source.conversationId)) {
+                "sub_assistant_preview_scope_mismatch"
+            }
+        }
+        val previews = attachmentPreviewProjector.project(snapshot)
+        return withViewAccess(source) { previews }
+    }
+
+    internal fun observeChildForView(source: ConversationViewLease, childId: Uuid): Flow<ConversationPresentationSnapshot> = flow {
+        var retained: net.weero.measix.pilot.service.runtime.ConversationRuntimeLease? = null
+        try {
+            withViewAccess(source) {
+                retained = coordinator.openChildForView(source.access.scope, source.conversationId, childId)
+            }
+            emitAll(observeRegisteredConversation(childId).mapNotNull { read ->
+                withViewAccess(source) {
+                    when (read) {
+                        is ConversationReadState.Ready -> read.snapshot.also { snapshot ->
+                            check(snapshot.conversationId == childId && snapshot.header.scope == source.access.scope && snapshot.header.parentConversationId == source.conversationId) {
+                                "sub_assistant_child_scope_mismatch"
+                            }
+                        }
+                        ConversationReadState.Loading -> null
+                        else -> error("sub_assistant_child_unavailable")
+                    }
+                }
+            })
+        } finally {
+            retained?.close()
+        }
+    }
 
     /** Re-emits query models when ArtifactStore invalidates or removes a referenced payload. */
     fun attachmentPreviewChanges(): Flow<Unit> = attachmentPreviewProjector.lifecycleChanges()
@@ -326,9 +358,6 @@ class ConversationQueryService internal constructor(
         runtimeRegistry.findRuntime(conversationId)?.snapshot?.value?.durable
             ?: repository.getConversationSnapshotById(conversationId)
 
-    internal fun residentRuntimeSnapshot(conversationId: Uuid): StateFlow<ConversationRuntimeSnapshot>? =
-        runtimeRegistry.findRuntime(conversationId)?.snapshot
-
     suspend fun count(): Int {
         val access = captureCurrentAccess()
         return read(access) { repository.countConversations(access.scope) }
@@ -372,27 +401,3 @@ internal fun mergeConversationActivities(
             if (conversationId in titleGenerationIds) add(ConversationActivity.TITLE_GENERATION)
         }
     }
-
-data class ConversationDetailRead(
-    val initial: ConversationPresentationSnapshot,
-    val updates: Flow<ConversationPresentationSnapshot>?,
-)
-
-class SubAssistantDetailReader(private val queryService: ConversationQueryService) {
-    suspend fun read(conversationId: Uuid): ConversationDetailRead? {
-        val resident = queryService.residentRuntimeSnapshot(conversationId)
-        val initial = resident?.value
-            ?: queryService.aggregateSnapshot(conversationId)?.let { ConversationRuntimeSnapshot(it, null) }
-            ?: return null
-        return ConversationDetailRead(
-            initial = initial.toPresentationSnapshot(),
-            updates = resident?.map { it.toPresentationSnapshot() },
-        )
-    }
-
-    suspend fun attachmentPreviews(snapshot: ConversationPresentationSnapshot): Map<String, String> =
-        queryService.attachmentPreviews(snapshot)
-
-    fun attachmentPreviewChanges(): Flow<Unit> = queryService.attachmentPreviewChanges()
-
-}

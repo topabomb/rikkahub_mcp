@@ -500,6 +500,10 @@ C6 的文件创建与引用边界已接通：上传、粘贴文本、输出图�
 
 本批完整串行门禁 `test assembleDebug lintDebug assembleRelease :app:connectedDebugAndroidTest` 在 8 分 29 秒内通过：App 2,063 项 JVM 测试无失败/跳过，lint 0 错误、287 警告；Workspace 保留 11 项 Windows 条件跳过。Android 17 模拟器 17 项定向用例通过，新增企业原件在保留期间不能删除、Android Provider 图片编码实际读取及跨域拒绝验证。JVM 验证同时覆盖结构化交付物保留、缺失路径迟到重用拒绝，以及流式成功/失败/取消后释放。独立审查已完成，证据见 `build/reports/enterprise/request-read-verification.json`。未将此结果计为 Release 设备、物理扫码或真实平台互操作验收。
 
+子助手详情已绑定原父聊天页面授权：导航仅运行时借用 lease，保存恢复不重建授权；切域、关闭父页面和关联会话删除使旧详情不可用。Child 检查、加载和观察引用由既有 ConversationCommandCoordinator 在同一会话锁内取得，Reader 组合父 metadata、Child 时间线与附件预览，ViewModel 不再自行解析或订阅 Runtime。父 link 每次更新只在后台解析一次；关闭或失败只释放详情的 Child 引用，不误关父页面。未新增持久化结构或第二 Runtime owner。预览 URL 之后的实际解码、导出与共享配置资产读取仍属未完成的 C6。
+
+该批完整串行 `test assembleDebug lintDebug assembleRelease :app:connectedDebugAndroidTest` 通过，最后一次增量门禁耗时 55 秒。App 2,071 项 JVM 测试无失败/跳过，lint 0 错误、287 警告，Workspace 保留 11 项 Windows 条件跳过。Android 17 模拟器 12 项测试全部通过：新增真实 Navigation 保存恢复后屏蔽旧 ViewModel 内容，另回归实际 Room 会话树与引用事务。JVM 使用真实 Registry/Coordinator 与确定性调度验证超过闲置时限后的删除通知和独立释放，并覆盖跨域拒绝、迟到预览和父页面关闭。完整门禁曾发现 Query 直接加载 Runtime，现收回原 Coordinator，未放宽静态约束；旧树测试创建/保留个人附件的错误夹具已改为企业范围，设备复验通过。独立复审无剩余本批实质问题，证据见 `build/reports/enterprise/detail-read-verification.json`。该结果不代表 Release 设备、真实平台或 0.0.20 整期验收。
+
 ## 11. 验收证据
 
 | 编号 | 必须证明 |

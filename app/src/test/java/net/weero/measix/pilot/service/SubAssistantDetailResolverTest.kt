@@ -1,4 +1,4 @@
-package net.weero.measix.pilot.ui.pages.subassistant
+package net.weero.measix.pilot.service
 
 import me.rerere.common.configuration.ConfigurationReference
 
