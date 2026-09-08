@@ -129,6 +129,8 @@ Memory 已通过 MemoryAddress/MemoryService 按原域、主体与 Session 进�
 
 当前宿主声明 getStatus、refresh、close、cancel 和三个本地读取方法；状态中的动态刷新时间只表示当前文档已完成的读取，未知时为 null。logout、外链、拍照/录音及媒体句柄尚未接线，不声明对应能力，正式企业 UI 入口仍在实施。以上实现不代表设备媒体验收或真实平台接入。
 
+浏览状态清理目前调用 WebStorage 与 CookieManager；Cookie 写入清除请求尚未等待系统完成回调。现有设备测试证明 WebView 脱离、原文档撤权及迟到回复隔离，未证明 Cookie 清理完成确认。正式切域入口还需在 Session 发布新空间之前确认宿主及浏览状态关闭，再在锁外等待原请求收尾，不能直接把当前 `closeAndAwait` 整体放进 Session 锁。
+
 ## 3. Local Settings 顶层结构
 
 下表的 DataStore key 列记录旧迁移输入键，正常落盘已统一为 `user_settings` 的类型化结构。下表中的“读取默认”以空 DataStore 的真实迁移/读取/物化结果为准，不以 `Settings()` 中为序列化兼容而存在的随机 UUID

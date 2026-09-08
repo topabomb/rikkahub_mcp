@@ -422,6 +422,8 @@ Portal 关闭屏障已接入企业退出：文档在原 Session 授权锁内登�
 
 本批最终完整门禁通过，App 1,993 项测试无失败/跳过，lint 0 错误；Workspace 保留 11 项 Windows 环境跳过。Pixel_10_Pro_Fold / Android 17 上 3 项实际 Portal WebView 与 4 项企业持久化设备测试全部通过，包含关闭通知在旧 view 脱离后发出、迟到回复隔离和当前格式重开。一次 Debug 增量打包属性缺失在重试后恢复，随后完整门禁重新通过。汇总与原始日志见 `build/reports/enterprise/portal-lifecycle-verification.json`。正式空间 UI、Portal logout、媒体与运行资源 adapters 继续实施，不以本批结果代替 E02/E06/E10/E12 或 0.0.20 整期验收。
 
+正式切域接线前还需补齐发布前关闭屏障：冻结原 RealmSelection 与目标 Session，Session 锁内阻止旧文档新准入，确认宿主及浏览状态清理后才提交新空间；原请求在锁外等待。当前 CookieManager 清除请求未等待完成回调，现有 7 项设备证据不包含该确认，不据此宣称 E07/E10 全部完成。关闭或写盘失败保持原空间，已撤销文档不复活；切域不退出登录、不停止原域生成。
+
 | 编号 | 变更 owner / 文件范围 | 完成要求 |
 | --- | --- | --- |
 | D0 | 本文、后续 roadmap、README/引用、退休 persistent-records 旧计划 | 评审后先独立提交文档 |
