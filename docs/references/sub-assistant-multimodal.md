@@ -57,9 +57,9 @@ file URI、base64 或 Workspace 路径。参数无效在创建 Child 前返回 `
 
 ### 3.1 文件读取与 Child 提交
 
-`AttachmentResolver.withImages(paths, consume)` 通过既有 `ArtifactStore.withUploadImages` 读取：
+`AttachmentResolver.withImages(scope, paths, consume)` 通过既有 `ArtifactStore.withUploadImages` 读取：
 
-1. ArtifactStore 在 lifecycle lock 内校验安全 upload 路径、ACTIVE 登记、已发布状态、实际文件存在和受管目录。
+1. ArtifactStore 在 lifecycle lock 内校验原 Master 域、安全 upload 路径、ACTIVE 登记、已发布状态、实际文件存在和受管目录。
 2. 同一锁内取得已有 retention pin；不新建持久化 lease、登记表或第二套生命周期。
 3. 锁外有界读取，使用 `GeneratedMediaStore.MAX_IMAGE_BYTES` 限制大小，通过 `ImageMime` 校验实际图片。
 4. Resolver 构造原文件 URI 的 Image parts 并为新逻辑附件盖章，不复制文件。

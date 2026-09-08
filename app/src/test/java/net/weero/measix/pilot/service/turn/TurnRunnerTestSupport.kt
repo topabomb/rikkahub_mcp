@@ -80,6 +80,7 @@ internal fun createProviderHarness(
     val assistant = Assistant(enableMemory = false, streamOutput = false)
     return ProviderHarness(
         handler = TurnRunner(
+            artifactStore = io.mockk.mockk<net.weero.measix.pilot.data.files.ArtifactStore>(relaxed = true),
             context = mockk<Context>(relaxed = true),
             providerManager = providerManager,
             json = Json,
@@ -129,6 +130,7 @@ internal fun createUsageStreamHarness(
     )
     return ProviderHarness(
         handler = TurnRunner(
+            artifactStore = io.mockk.mockk<net.weero.measix.pilot.data.files.ArtifactStore>(relaxed = true),
             context = mockk<Context>(relaxed = true),
             providerManager = providerManager,
             json = Json,

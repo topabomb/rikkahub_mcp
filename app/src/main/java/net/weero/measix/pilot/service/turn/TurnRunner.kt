@@ -80,12 +80,13 @@ class TurnRunner(
     private val json: Json,
     private val attachmentResolver: AttachmentResolver,
     private val toolOutputStore: ToolOutputStore,
+    private val artifactStore: net.weero.measix.pilot.data.files.ArtifactStore,
 ) {
     private val toolCallRuntime = ToolCallRuntime(json)
     private val contextPlanner = RequestContextPlanner()
     private val requestAssembler = RequestAssembler()
     private val compactionPlanner = ToolOutputCompactionPlanner()
-    private val stepRunner = StepRunner(context, providerManager, contextPlanner, requestAssembler, compactionPlanner, toolOutputStore, toolCallRuntime)
+    private val stepRunner = StepRunner(context, providerManager, contextPlanner, requestAssembler, compactionPlanner, toolOutputStore, toolCallRuntime, artifactStore)
     private val toolBatchRunner = ToolBatchRunner(toolCallRuntime, attachmentResolver)
 
     internal suspend fun run(inputs: TurnRunInputs): TurnRunResult = withContext(Dispatchers.IO) {

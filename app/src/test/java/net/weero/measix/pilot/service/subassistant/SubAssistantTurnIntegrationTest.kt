@@ -185,8 +185,8 @@ class SubAssistantTurnIntegrationTest {
             val finalizer = TurnFinalizer(repository, registry, commands, JsonInstant)
             val artifacts = mockk<ArtifactStore>(relaxed = true)
             val resolver = mockk<AttachmentResolver>(relaxed = true)
-            coEvery { resolver.withImages<Any?>(any(), any()) } coAnswers {
-                secondArg<suspend (AttachmentResolveResult) -> Any?>()(AttachmentResolveResult.Success(emptyList()))
+            coEvery { resolver.withImages<Any?>(any(), any(), any()) } coAnswers {
+                thirdArg<suspend (AttachmentResolveResult) -> Any?>()(AttachmentResolveResult.Success(emptyList()))
             }
             val attempts = if (revokeDuringRequest) listOf(
                 ProviderAttempt.Stream(listOf(toolCallDelta("parent-call", "assistant_call", "{}"), finishChunk("tool_calls"))),
@@ -210,7 +210,7 @@ class SubAssistantTurnIntegrationTest {
                     return stream
                 }
             }
-            val runner = TurnRunner(mockk<Context>(relaxed = true), scriptedProviderManager(observedProvider), JsonInstant, resolver, ToolOutputStore(artifacts))
+            val runner = TurnRunner(mockk<Context>(relaxed = true), scriptedProviderManager(observedProvider), JsonInstant, resolver, ToolOutputStore(artifacts), artifacts)
             val tools = mockk<TurnToolSetFactory>(relaxed = true)
             coEvery { tools.prepareMcpCapabilities(any()) } returns TurnMcpCapabilitySnapshot.EMPTY
             coEvery { tools.buildTools(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any()) } returns listOf(buildAskUserTool())

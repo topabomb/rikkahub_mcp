@@ -1,5 +1,6 @@
 package net.weero.measix.pilot.data.files
 
+import me.rerere.ai.util.encodeNativeImage
 import net.weero.measix.pilot.data.configuration.ConfigurationScope
 
 import android.content.Context
@@ -138,7 +139,7 @@ class ArtifactUploadImageReadIntegrationTest {
         val path = "/${entity.relativePath}"
         val resolver = AttachmentResolver(store)
 
-        val result = resolver.readImages(listOf(path, path)) as AttachmentResolveResult.Success
+        val result = resolver.readImages(ConfigurationScope.Personal, listOf(path, path)) as AttachmentResolveResult.Success
 
         assertEquals(2, result.parts.size)
         assertEquals(result.parts[0].url, result.parts[1].url)
@@ -163,7 +164,7 @@ class ArtifactUploadImageReadIntegrationTest {
             val entity = register("active.png")
             val entered = CompletableDeferred<Unit>()
             val reader = async(Dispatchers.Default) {
-                AttachmentResolver(store).withImages(listOf("/upload/active.png")) { result ->
+                AttachmentResolver(store).withImages(ConfigurationScope.Personal, listOf("/upload/active.png")) { result ->
                     val parts = (result as AttachmentResolveResult.Success).parts
                     assertEquals(store.file(entity).toURI().path, android.net.Uri.parse(parts.single().url).path)
                     entered.complete(Unit)
@@ -184,7 +185,7 @@ class ArtifactUploadImageReadIntegrationTest {
             assertFalse(store.file(entity).exists())
             assertEquals(
                 AttachmentResolveResult.Failure("attachment_not_found"),
-                AttachmentResolver(store).readImages(listOf("/upload/active.png")),
+                AttachmentResolver(store).readImages(ConfigurationScope.Personal, listOf("/upload/active.png")),
             )
         }
     }
@@ -196,14 +197,14 @@ class ArtifactUploadImageReadIntegrationTest {
         val resolver = AttachmentResolver(store)
         assertEquals(
             AttachmentResolveResult.Failure("unsupported_attachment_type"),
-            resolver.readImages(listOf("/upload/valid.png", "/upload/invalid.png")),
+            resolver.readImages(ConfigurationScope.Personal, listOf("/upload/valid.png", "/upload/invalid.png")),
         )
         assertTrue(store.deleteUserRequested(ConfigurationScope.Personal, first.id) is ArtifactDeleteResult.Completed)
         assertTrue(store.deleteUserRequested(ConfigurationScope.Personal, second.id) is ArtifactDeleteResult.Completed)
         val owned = store.createFromBytes(ConfigurationScope.Personal, png, "unpublished.png", "image/png", origin = ArtifactOrigin.USER)
         assertEquals(
             AttachmentResolveResult.Failure("attachment_not_found"),
-            resolver.readImages(listOf(owned.localRef.toolPath()!!)),
+            resolver.readImages(ConfigurationScope.Personal, listOf(owned.localRef.toolPath()!!)),
         )
         assertTrue(store.discardUnpublished(owned) is ArtifactDeleteResult.Completed)
     }
@@ -215,19 +216,47 @@ class ArtifactUploadImageReadIntegrationTest {
         link.parentFile!!.mkdirs()
         Files.createSymbolicLink(link.toPath(), outside.toPath())
         insertRow("link.png", png.size.toLong())
-        val result = store.withUploadImages(listOf("/upload/link.png")) { it }
+        val result = store.withUploadImages(ConfigurationScope.Personal, listOf("/upload/link.png")) { it }
         assertEquals(ArtifactImageReadResult.Failure(ArtifactImageReadResult.Reason.NOT_FOUND), result)
         assertArrayEquals(png, outside.readBytes())
         assertTrue(link.delete())
     }
 
-    private suspend fun register(name: String, bytes: ByteArray = png): ArtifactEntity {
-        File(root, "upload/$name").apply { parentFile!!.mkdirs(); writeBytes(bytes) }
-        return insertRow(name, bytes.size.toLong())
+    @Test
+    fun requestReadAuthorizesOriginalScopeAndProtectsActualProviderEncoding() = runBlocking {
+        val personal = register("personal-provider.png")
+        val enterprise = ConfigurationScope.Enterprise(
+            me.rerere.common.configuration.EnterpriseAuthority("local:example", "deployment"), "user",
+        )
+        val resource = register("enterprise-provider.png", scope = enterprise)
+        val image = me.rerere.ai.ui.UIMessagePart.Image(
+            url = "file://${File(root, resource.relativePath).absolutePath}",
+        )
+        val messages = listOf(me.rerere.ai.ui.UIMessage(
+            role = me.rerere.ai.core.MessageRole.USER, parts = listOf(image),
+        ))
+        try {
+            store.retainForRequest(ConfigurationScope.Personal, messages).close()
+            throw AssertionError("cross-scope request accepted")
+        } catch (_: ArtifactProjectionException) { }
+        store.retainForRequest(enterprise, messages).use { reads ->
+            reads.requireAuthorizedFiles(messages)
+            assertTrue(store.deleteUserRequested(enterprise, resource.id) is ArtifactDeleteResult.Rejected)
+            assertTrue(image.encodeNativeImage().base64.startsWith("data:image/"))
+            assertEquals(null, reads.resolveUri("file://${File(root, personal.relativePath).absolutePath}"))
+        }
+        assertTrue(store.deleteUserRequested(enterprise, resource.id) is ArtifactDeleteResult.Completed)
+        assertTrue(File(root, personal.relativePath).isFile)
     }
 
-    private suspend fun insertRow(name: String, sizeBytes: Long): ArtifactEntity {
+    private suspend fun register(name: String, bytes: ByteArray = png, scope: ConfigurationScope = ConfigurationScope.Personal): ArtifactEntity {
+        File(root, "upload/$name").apply { parentFile!!.mkdirs(); writeBytes(bytes) }
+        return insertRow(name, bytes.size.toLong(), scope)
+    }
+
+    private suspend fun insertRow(name: String, sizeBytes: Long, scope: ConfigurationScope = ConfigurationScope.Personal): ArtifactEntity {
         val entity = ArtifactEntity(
+            scope = scope,
             folder = FileFolders.UPLOAD, relativePath = "upload/$name", displayName = name,
             mimeType = "image/png", sizeBytes = sizeBytes, createdAt = 1L, updatedAt = 1L,
             state = ArtifactState.ACTIVE.name, origin = ArtifactOrigin.USER.name,

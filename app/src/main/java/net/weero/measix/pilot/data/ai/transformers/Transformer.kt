@@ -1,5 +1,6 @@
 package net.weero.measix.pilot.data.ai.transformers
 
+import net.weero.measix.pilot.data.files.ArtifactReadLease
 import net.weero.measix.pilot.data.enterprise.RealmAccess
 import net.weero.measix.pilot.service.turn.TurnAssistantSnapshot
 import net.weero.measix.pilot.service.turn.TurnPromptSnapshot
@@ -70,6 +71,7 @@ class TransformerContext(
     val reportProcessingText: (String?) -> Unit = {},
     val mediaCapabilities: RequestMediaCapabilities = RequestMediaCapabilities.NONE,
     val registerUnpublishedResource: (ToolResourceLease) -> Unit,
+    val artifactReads: ArtifactReadLease? = null,
 )
 
 interface MessageTransformer {
@@ -129,6 +131,7 @@ suspend fun List<UIMessage>.transforms(
     reportProcessingText: (String?) -> Unit = {},
     mediaCapabilities: RequestMediaCapabilities = RequestMediaCapabilities.NONE,
     registerUnpublishedResource: (ToolResourceLease) -> Unit,
+    artifactReads: ArtifactReadLease? = null,
 ): List<UIMessage> {
     val ctx = TransformerContext(
         realmAccess = realmAccess,
@@ -140,6 +143,7 @@ suspend fun List<UIMessage>.transforms(
         reportProcessingText = reportProcessingText,
         mediaCapabilities = mediaCapabilities,
         registerUnpublishedResource = registerUnpublishedResource,
+        artifactReads = artifactReads,
     )
     return transformers.fold(this) { acc, transformer ->
         transformer.transform(ctx, acc)

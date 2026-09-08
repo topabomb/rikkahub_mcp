@@ -73,6 +73,7 @@ internal class StepRunner(
     private val compactionPlanner: net.weero.measix.pilot.data.ai.tools.ToolOutputCompactionPlanner,
     private val toolOutputStore: net.weero.measix.pilot.data.ai.tools.ToolOutputStore,
     private val toolCallRuntime: ToolCallRuntime,
+    private val artifactStore: net.weero.measix.pilot.data.files.ArtifactStore,
 ) {
     suspend fun run(state: TurnRunState): StepExecutionResult {
         state.sendPhase(TurnRunPhase.PREPARING)
@@ -266,210 +267,214 @@ internal class StepRunner(
                 )
             })
         }
-        val transformedMessages = requestMessages.transforms(
-            realmAccess = realmAccess,
-            transformers = transformers,
-            context = context,
-            model = model,
-            assistant = assistant,
-            promptInputs = promptInputs,
-            requestOrigins = requestOrigins,
-            reportProcessingText = reportProcessingText,
-            mediaCapabilities = mediaCapabilities,
-            registerUnpublishedResource = registerUnpublishedResource,
-        ).replaySafeProjection()
-
-        // context part 在全部 input transformers 之后注入，只附着 Durable USER；
-        // Token estimate 与 receipt 使用包含 context 的最终 projection。
-        // RequestAssembler 是 Step 的唯一丢弃点与 UIMessage → ModelRequestMessage 的唯一转换边界：
-        // Step 是 durable 边界事实，绝不进入 Provider 线协议，也不计入发给模型的 token。
-        val assembled = requestAssembler.assemble(
-            contextPlanner.applyContextProjections(
-                transformedMessages = transformedMessages,
-                projections = requestPlan.contextProjections,
-                originsByMessageId = requestOrigins.frozenOrigins(),
-            ),
-        )
-        val internalMessages = assembled.providerVisibleMessages
-
-        return executionLease.execute { target ->
-            val pendingReceipt = contextPlanner.receiptOf(internalMessages)
-            val estimatedRequestContextTokens = contextPlanner.estimateRequestContextTokens(
-                providerVisibleMessages = internalMessages,
-                tools = toolDefinitions,
-            )
-            var messages: List<UIMessage> = messages
-            val turnUsage = TurnUsageAccumulator.from(messages.lastOrNull()?.usage)
-            val requestUsage = RequestUsageReducer(turnUsage.nextRequestOrdinal())
-
-            fun attachUsage(usage: me.rerere.ai.core.TokenUsage) {
-                messages = messages.withAssistant(messages.last().copy(usage = usage))
-            }
-
-            val params = TextGenerationParams(
+        return artifactStore.retainForRequest(realmAccess.scope, requestMessages).use { artifactReads ->
+            val transformedMessages = requestMessages.transforms(
+                artifactReads = artifactReads,
+                realmAccess = realmAccess,
+                transformers = transformers,
+                context = context,
                 model = model,
-                temperature = assistant.temperature,
-                topP = assistant.topP,
-                maxTokens = assistant.maxTokens,
-                tools = toolDefinitions,
-                reasoningLevel = assistant.reasoningLevel,
-                customHeaders = buildList {
-                    addAll(assistant.customHeaders)
-                    addAll(model.customHeaders)
-                },
-                customBody = buildList {
-                    addAll(assistant.customBodies)
-                    addAll(model.customBodies)
-                },
-                providerSessionId = providerSessionId,
+                assistant = assistant,
+                promptInputs = promptInputs,
+                requestOrigins = requestOrigins,
+                reportProcessingText = reportProcessingText,
                 mediaCapabilities = mediaCapabilities,
+                registerUnpublishedResource = registerUnpublishedResource,
+            ).replaySafeProjection()
+
+            // context part 在全部 input transformers 之后注入，只附着 Durable USER；
+            // Token estimate 与 receipt 使用包含 context 的最终 projection。
+            // RequestAssembler 是 Step 的唯一丢弃点与 UIMessage → ModelRequestMessage 的唯一转换边界：
+            // Step 是 durable 边界事实，绝不进入 Provider 线协议，也不计入发给模型的 token。
+            val assembled = requestAssembler.assemble(
+                contextPlanner.applyContextProjections(
+                    transformedMessages = transformedMessages,
+                    projections = requestPlan.contextProjections,
+                    originsByMessageId = requestOrigins.frozenOrigins(),
+                ),
             )
-            // 请求构建完成，进入等待模型响应阶段
-            onPhase?.invoke(TurnRunPhase.MODEL_WAITING)
-            attachUsage(turnUsage.recordRequestStarted(estimatedRequestContextTokens))
-            onUpdateMessages(messages)
-            val requestStarted = TimeSource.Monotonic.markNow()
-            fun providerDurationMillis(): Long = requestStarted.elapsedNow().inWholeMilliseconds.coerceAtLeast(0)
-            var timeToFirstOutputMillis: Long? = null
-            fun observeFirstOutput(chunk: MessageChunk) {
-                if (timeToFirstOutputMillis == null && chunk.hasModelOutputPayload()) {
-                    val observed = providerDurationMillis()
-                    timeToFirstOutputMillis = observed
-                    attachUsage(turnUsage.recordFirstOutput(observed))
+            val internalMessages = assembled.providerVisibleMessages
+            artifactReads.requireAuthorizedFiles(internalMessages)
+
+            executionLease.execute { target ->
+                val pendingReceipt = contextPlanner.receiptOf(internalMessages)
+                val estimatedRequestContextTokens = contextPlanner.estimateRequestContextTokens(
+                    providerVisibleMessages = internalMessages,
+                    tools = toolDefinitions,
+                )
+                var messages: List<UIMessage> = messages
+                val turnUsage = TurnUsageAccumulator.from(messages.lastOrNull()?.usage)
+                val requestUsage = RequestUsageReducer(turnUsage.nextRequestOrdinal())
+
+                fun attachUsage(usage: me.rerere.ai.core.TokenUsage) {
+                    messages = messages.withAssistant(messages.last().copy(usage = usage))
                 }
-            }
-            var finishReason: String? = null
-            var stepProviderMetadata: kotlinx.serialization.json.JsonObject? = null
-            fun observeProviderMetadata(chunk: MessageChunk) {
-                val choice = chunk.choices.firstOrNull() ?: return
-                val message = choice.delta ?: choice.message ?: return
-                stepProviderMetadata = me.rerere.ai.ui.mergeMessageMetadata(stepProviderMetadata, message.providerMetadata)
-            }
-            var requestOutcome = ProviderRequestOutcome.FAILED
-            var providerFailure: Throwable? = null
-            try {
-                if (stream) {
-                    var reasoningPhaseSent = false
-                    var answerPhaseSent = false
-                    var responseEstablished = false
-                    target.streamText(
-                        providers = providerManager,
-                        messages = assembled.providerMessages,
-                        params = params
-                    ).collect { chunk ->
-                        responseEstablished = true
-                        observeProviderMetadata(chunk)
-                        chunk.choices.firstOrNull()?.finishReason?.let { finishReason = it }
-                        observeFirstOutput(chunk)
-                        messages = messages.withAssistant(accumulator.accumulate(messages.last(), chunk, model))
-                        // Provider usage 只在请求关闭时原子并入 turn；流式快照不改写累计账本。
-                        chunk.usage?.let(requestUsage::accept)
-                        // Phase uses the same accumulated-message semantics as the output projection.
-                        // Text inside a leading <think> block is reasoning, not answer content.
-                        val tagPhase = messages.lastOrNull()?.let(ThinkTagTransformer::classifyPhase)
-                        if (!reasoningPhaseSent) {
-                            val hasReasoning = chunk.choices.any { choice ->
-                                choice.delta?.parts?.any { p -> p is UIMessagePart.Reasoning } == true
-                            } || tagPhase?.hasReasoning == true
-                            if (hasReasoning) {
-                                reasoningPhaseSent = true
-                                onPhase?.invoke(TurnRunPhase.REASONING_STREAMING)
-                            }
-                        }
-                        if (!answerPhaseSent) {
-                            val deltaHasText = chunk.choices.any { choice ->
-                                choice.delta?.parts?.any { p -> p is UIMessagePart.Text && p.text.isNotEmpty() } == true
-                            }
-                            val hasText = when {
-                                tagPhase?.undecided == true -> false
-                                tagPhase != null -> tagPhase.hasAnswer
-                                else -> deltaHasText
-                            }
-                            if (hasText) {
-                                answerPhaseSent = true
-                                onPhase?.invoke(TurnRunPhase.ANSWER_STREAMING)
-                            }
-                        }
-                        onUpdateMessages(messages)
+
+                val params = TextGenerationParams(
+                    model = model,
+                    temperature = assistant.temperature,
+                    topP = assistant.topP,
+                    maxTokens = assistant.maxTokens,
+                    tools = toolDefinitions,
+                    reasoningLevel = assistant.reasoningLevel,
+                    customHeaders = buildList {
+                        addAll(assistant.customHeaders)
+                        addAll(model.customHeaders)
+                    },
+                    customBody = buildList {
+                        addAll(assistant.customBodies)
+                        addAll(model.customBodies)
+                    },
+                    providerSessionId = providerSessionId,
+                    mediaCapabilities = mediaCapabilities,
+                )
+                // 请求构建完成，进入等待模型响应阶段
+                onPhase?.invoke(TurnRunPhase.MODEL_WAITING)
+                attachUsage(turnUsage.recordRequestStarted(estimatedRequestContextTokens))
+                onUpdateMessages(messages)
+                val requestStarted = TimeSource.Monotonic.markNow()
+                fun providerDurationMillis(): Long = requestStarted.elapsedNow().inWholeMilliseconds.coerceAtLeast(0)
+                var timeToFirstOutputMillis: Long? = null
+                fun observeFirstOutput(chunk: MessageChunk) {
+                    if (timeToFirstOutputMillis == null && chunk.hasModelOutputPayload()) {
+                        val observed = providerDurationMillis()
+                        timeToFirstOutputMillis = observed
+                        attachUsage(turnUsage.recordFirstOutput(observed))
                     }
-                    check(responseEstablished) { "Provider stream completed without a response" }
-                } else {
-                    val chunk = try {
-                        target.generateText(
+                }
+                var finishReason: String? = null
+                var stepProviderMetadata: kotlinx.serialization.json.JsonObject? = null
+                fun observeProviderMetadata(chunk: MessageChunk) {
+                    val choice = chunk.choices.firstOrNull() ?: return
+                    val message = choice.delta ?: choice.message ?: return
+                    stepProviderMetadata = me.rerere.ai.ui.mergeMessageMetadata(stepProviderMetadata, message.providerMetadata)
+                }
+                var requestOutcome = ProviderRequestOutcome.FAILED
+                var providerFailure: Throwable? = null
+                try {
+                    if (stream) {
+                        var reasoningPhaseSent = false
+                        var answerPhaseSent = false
+                        var responseEstablished = false
+                        target.streamText(
                             providers = providerManager,
                             messages = assembled.providerMessages,
-                            params = params,
-                        )
-                    } catch (error: ProviderResponseException) {
-                        finishReason = error.response.choices.firstOrNull()?.finishReason
-                        observeProviderMetadata(error.response)
-                        observeFirstOutput(error.response)
-                        messages = messages.withAssistant(accumulator.accumulate(messages.last(), error.response, model))
-                        error.response.usage?.let(requestUsage::accept)
-                        throw error
+                            params = params
+                        ).collect { chunk ->
+                            responseEstablished = true
+                            observeProviderMetadata(chunk)
+                            chunk.choices.firstOrNull()?.finishReason?.let { finishReason = it }
+                            observeFirstOutput(chunk)
+                            messages = messages.withAssistant(accumulator.accumulate(messages.last(), chunk, model))
+                            // Provider usage 只在请求关闭时原子并入 turn；流式快照不改写累计账本。
+                            chunk.usage?.let(requestUsage::accept)
+                            // Phase uses the same accumulated-message semantics as the output projection.
+                            // Text inside a leading <think> block is reasoning, not answer content.
+                            val tagPhase = messages.lastOrNull()?.let(ThinkTagTransformer::classifyPhase)
+                            if (!reasoningPhaseSent) {
+                                val hasReasoning = chunk.choices.any { choice ->
+                                    choice.delta?.parts?.any { p -> p is UIMessagePart.Reasoning } == true
+                                } || tagPhase?.hasReasoning == true
+                                if (hasReasoning) {
+                                    reasoningPhaseSent = true
+                                    onPhase?.invoke(TurnRunPhase.REASONING_STREAMING)
+                                }
+                            }
+                            if (!answerPhaseSent) {
+                                val deltaHasText = chunk.choices.any { choice ->
+                                    choice.delta?.parts?.any { p -> p is UIMessagePart.Text && p.text.isNotEmpty() } == true
+                                }
+                                val hasText = when {
+                                    tagPhase?.undecided == true -> false
+                                    tagPhase != null -> tagPhase.hasAnswer
+                                    else -> deltaHasText
+                                }
+                                if (hasText) {
+                                    answerPhaseSent = true
+                                    onPhase?.invoke(TurnRunPhase.ANSWER_STREAMING)
+                                }
+                            }
+                            onUpdateMessages(messages)
+                        }
+                        check(responseEstablished) { "Provider stream completed without a response" }
+                    } else {
+                        val chunk = try {
+                            target.generateText(
+                                providers = providerManager,
+                                messages = assembled.providerMessages,
+                                params = params,
+                            )
+                        } catch (error: ProviderResponseException) {
+                            finishReason = error.response.choices.firstOrNull()?.finishReason
+                            observeProviderMetadata(error.response)
+                            observeFirstOutput(error.response)
+                            messages = messages.withAssistant(accumulator.accumulate(messages.last(), error.response, model))
+                            error.response.usage?.let(requestUsage::accept)
+                            throw error
+                        }
+                        finishReason = chunk.choices.firstOrNull()?.finishReason
+                        observeProviderMetadata(chunk)
+                        observeFirstOutput(chunk)
+                        messages = messages.withAssistant(accumulator.accumulate(messages.last(), chunk, model))
+                        chunk.usage?.let(requestUsage::accept)
+                        onUpdateMessages(messages)
                     }
-                    finishReason = chunk.choices.firstOrNull()?.finishReason
-                    observeProviderMetadata(chunk)
-                    observeFirstOutput(chunk)
-                    messages = messages.withAssistant(accumulator.accumulate(messages.last(), chunk, model))
-                    chunk.usage?.let(requestUsage::accept)
-                    onUpdateMessages(messages)
-                }
-                requestOutcome = ProviderRequestOutcome.COMPLETED
-            } catch (error: Throwable) {
-                providerFailure = error
-                requestOutcome = if (error is CancellationException) {
-                    ProviderRequestOutcome.CANCELLED
-                } else {
-                    ProviderRequestOutcome.FAILED
-                }
-                throw error
-            } finally {
-                val completedUsage = requestUsage.close(
-                    outcome = requestOutcome,
-                    providerRequestDurationMillis = providerDurationMillis(),
-                    timeToFirstOutputMillis = timeToFirstOutputMillis,
-                )
-                val appliedUsage = turnUsage.apply(completedUsage)
-                val usageDiagnostics = completedUsage.diagnostics + appliedUsage.diagnostics
-                if (usageDiagnostics.isNotEmpty()) {
-                    Log.w(TAG, "Provider usage normalization diagnostics: ${usageDiagnostics.joinToString()}")
-                }
-                attachUsage(appliedUsage.usage)
-                val snapshot = completedUsage.snapshot
-                val step = messages.last().parts.filterIsInstance<UIMessagePart.Step>().last()
-                messages = messages.withAssistant(TurnTransition.recordModelResult(
-                    messages.last(), step.stepId, StepModelResult(
-                        finishReason = finishReason,
-                        usage = StepUsage(
-                            inputTokens = snapshot?.inputTokens,
-                            outputTokens = snapshot?.outputTokens,
-                            cacheReadInputTokens = snapshot?.cacheReadInputTokens,
-                            cacheWriteInputTokens = snapshot?.cacheWriteInputTokens,
-                            reasoningOutputTokens = snapshot?.reasoningOutputTokens,
-                            toolUseInputTokens = snapshot?.toolUseInputTokens,
-                            totalTokens = snapshot?.totalTokens,
+                    requestOutcome = ProviderRequestOutcome.COMPLETED
+                } catch (error: Throwable) {
+                    providerFailure = error
+                    requestOutcome = if (error is CancellationException) {
+                        ProviderRequestOutcome.CANCELLED
+                    } else {
+                        ProviderRequestOutcome.FAILED
+                    }
+                    throw error
+                } finally {
+                    val completedUsage = requestUsage.close(
+                        outcome = requestOutcome,
+                        providerRequestDurationMillis = providerDurationMillis(),
+                        timeToFirstOutputMillis = timeToFirstOutputMillis,
+                    )
+                    val appliedUsage = turnUsage.apply(completedUsage)
+                    val usageDiagnostics = completedUsage.diagnostics + appliedUsage.diagnostics
+                    if (usageDiagnostics.isNotEmpty()) {
+                        Log.w(TAG, "Provider usage normalization diagnostics: ${usageDiagnostics.joinToString()}")
+                    }
+                    attachUsage(appliedUsage.usage)
+                    val snapshot = completedUsage.snapshot
+                    val step = messages.last().parts.filterIsInstance<UIMessagePart.Step>().last()
+                    messages = messages.withAssistant(TurnTransition.recordModelResult(
+                        messages.last(), step.stepId, StepModelResult(
+                            finishReason = finishReason,
+                            usage = StepUsage(
+                                inputTokens = snapshot?.inputTokens,
+                                outputTokens = snapshot?.outputTokens,
+                                cacheReadInputTokens = snapshot?.cacheReadInputTokens,
+                                cacheWriteInputTokens = snapshot?.cacheWriteInputTokens,
+                                reasoningOutputTokens = snapshot?.reasoningOutputTokens,
+                                toolUseInputTokens = snapshot?.toolUseInputTokens,
+                                totalTokens = snapshot?.totalTokens,
+                            ),
+                            providerRequestCount = 1,
+                            timeToFirstOutputMillis = completedUsage.timeToFirstOutputMillis,
+                            requestDurationMillis = completedUsage.providerRequestDurationMillis,
+                            usageCompleteness = completedUsage.coreCompleteness,
+                            providerMetadata = stepProviderMetadata,
                         ),
-                        providerRequestCount = 1,
-                        timeToFirstOutputMillis = completedUsage.timeToFirstOutputMillis,
-                        requestDurationMillis = completedUsage.providerRequestDurationMillis,
-                        usageCompleteness = completedUsage.coreCompleteness,
-                        providerMetadata = stepProviderMetadata,
-                    ),
-                ))
-                try {
-                    onUpdateMessages(messages)
-                } catch (updateError: Throwable) {
-                    val failure = providerFailure
-                    if (failure == null) {
-                        throw updateError
-                    }
-                    if (updateError !== failure) {
-                        failure.addSuppressed(updateError)
+                    ))
+                    try {
+                        onUpdateMessages(messages)
+                    } catch (updateError: Throwable) {
+                        val failure = providerFailure
+                        if (failure == null) {
+                            throw updateError
+                        }
+                        if (updateError !== failure) {
+                            failure.addSuppressed(updateError)
+                        }
                     }
                 }
+                pendingReceipt
             }
-            pendingReceipt
         }
     }
 }

@@ -42,6 +42,7 @@ import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.datastore.UserSettingsDocument
 import net.weero.measix.pilot.data.model.MessageNode
 import net.weero.measix.pilot.data.model.Conversation
+import net.weero.measix.pilot.data.model.collectFileUrlStrings
 import net.weero.measix.pilot.data.model.collectArtifactReferences
 import net.weero.measix.pilot.data.imggen.GeneratedMediaStore
 import net.weero.measix.pilot.utils.JsonInstant
@@ -119,6 +120,37 @@ class ArtifactRetentionLease internal constructor(
 
     override fun close() {
         if (closed.compareAndSet(false, true)) releaseAction()
+    }
+}
+
+/** Frozen file authorization owned by one read operation, backed by ArtifactStore retention. */
+class ArtifactReadLease internal constructor(
+    private val files: Map<String, Pair<LocalArtifactRef, File>>,
+    private val relativePathForUri: (String) -> String?,
+    private val retention: ArtifactRetentionLease,
+) : AutoCloseable {
+    private val closed = java.util.concurrent.atomic.AtomicBoolean(false)
+
+    fun resolveUri(uri: String): LocalArtifactRef? {
+        check(!closed.get()) { "artifact_read_closed" }
+        return relativePathForUri(uri)?.let { files[it]?.first }
+    }
+
+    fun resolve(ref: LocalArtifactRef): LocalArtifactRef? {
+        check(!closed.get()) { "artifact_read_closed" }
+        return files[ref.relativePath]?.first?.takeIf { it == ref }
+    }
+
+    fun file(ref: LocalArtifactRef): File? = resolve(ref)?.let { files[it.relativePath]?.second }
+
+    internal fun requireAuthorizedFiles(messages: List<UIMessage>) {
+        check(messages.collectFileUrlStrings().all { resolveUri(it) != null }) {
+            "request_contains_unretained_artifact"
+        }
+    }
+
+    override fun close() {
+        if (closed.compareAndSet(false, true)) retention.close()
     }
 }
 
@@ -326,6 +358,7 @@ class ArtifactStore(
      * the consumer run outside that lock; deletion/GC reject retained artifacts until it returns.
      */
     suspend fun <T> withUploadImages(
+        scope: ConfigurationScope,
         paths: List<String>,
         consume: suspend (ArtifactImageReadResult) -> T,
     ): T {
@@ -337,6 +370,7 @@ class ArtifactStore(
                     for (path in paths) {
                         val name = LocalToolPath.parseUploadToolPath(path) ?: return@withLifecycleLock null
                         val entity = getByRelativePath("${FileFolders.UPLOAD}/$name") ?: return@withLifecycleLock null
+                        if (entity.scope != scope) return@withLifecycleLock null
                         // An unpublished creation still belongs to its producer and may be rolled back.
                         if (synchronized(unpublishedPins) { unpublishedPins.containsKey(entity.id) }) {
                             return@withLifecycleLock null
@@ -870,6 +904,44 @@ class ArtifactStore(
             }?.id
         }.toSet()
         retainIds(ids)
+    }
+
+    /**
+     * Freeze available attachments before transformation; missing references stay unavailable even
+     * if their paths are later reused. Foreign references fail closed. Archive markers do not read
+     * their archived payload here. The request releases retention after the Provider finishes.
+     */
+    internal suspend fun retainForRequest(
+        scope: ConfigurationScope,
+        messages: List<UIMessage>,
+    ): ArtifactReadLease = withLifecycleLock {
+        val selected = linkedMapOf<String, Pair<LocalArtifactRef, File>>()
+        val ids = linkedSetOf<Long>()
+        messages.collectArtifactReferences()
+            .filter { it.type == ArtifactReferenceType.ATTACHMENT }
+            .forEach { reference ->
+                val relativePath = if (reference.token.startsWith("file:", ignoreCase = true)) {
+                    payloadStore.relativePathForUri(Uri.parse(reference.token))
+                } else {
+                    reference.token
+                } ?: return@forEach
+                val entity = artifactDAO.getByPathAndState(relativePath, ArtifactState.ACTIVE.name)
+                    ?: return@forEach
+                requireArtifactScope(entity, scope)
+                val file = payloadStore.file(entity.relativePath)
+                if (!file.isFile ||
+                    (!LocalToolPath.isInsideDirectory(file, payloadStore.file(FileFolders.UPLOAD)) &&
+                        !LocalToolPath.isInsideDirectory(file, payloadStore.file("images")))) return@forEach
+                selected[entity.relativePath] = LocalArtifactRef(
+                    relativePath = entity.relativePath, mimeType = entity.mimeType,
+                ) to file
+                ids += entity.id
+            }
+        ArtifactReadLease(
+            files = selected,
+            relativePathForUri = { payloadStore.relativePathForUri(Uri.parse(it)) },
+            retention = retainIds(ids),
+        )
     }
 
     private fun retainIds(ids: Set<Long>): ArtifactRetentionLease {

@@ -165,6 +165,7 @@ val dataSourceModule = module {
             json = get(),
             attachmentResolver = get(),
             toolOutputStore = get(),
+            artifactStore = get(),
         )
     }
 

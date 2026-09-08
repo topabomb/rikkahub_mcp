@@ -9,27 +9,25 @@ import me.rerere.document.DocxParser
 import me.rerere.document.EpubParser
 import me.rerere.document.PdfParser
 import me.rerere.document.PptxParser
-import net.weero.measix.pilot.data.ai.attachments.AttachmentRefs
-import net.weero.measix.pilot.data.files.ArtifactStore
+import net.weero.measix.pilot.data.files.ArtifactReadLease
 import net.weero.measix.pilot.data.files.LocalArtifactRef
 import java.io.File
 
 /** Converts managed document artifacts into model-visible text without reading arbitrary paths. */
-class DocumentAsPromptTransformer(
-    private val artifactStore: ArtifactStore,
-) : InputMessageTransformer {
+class DocumentAsPromptTransformer : InputMessageTransformer {
     override suspend fun transform(
         ctx: TransformerContext,
         messages: List<UIMessage>,
     ): List<UIMessage> {
+        val reads = requireNotNull(ctx.artifactReads)
         return withContext(Dispatchers.IO) {
             val transformed = ArrayList<UIMessage>(messages.size)
             for (message in messages) {
                 val parts = message.parts.toMutableList()
                 val documents = parts.filterIsInstance<UIMessagePart.Document>()
                 for (document in documents) {
-                    val managed = resolveManagedDocument(document)
-                    val content = readDocumentContent(document, managed?.let(artifactStore::file))
+                    val managed = resolveManagedDocument(document, reads)
+                    val content = readDocumentContent(document, managed?.let(reads::file))
                     val path = resolveWorkspacePath(managed)
                     val pathAttr = path?.let { " path=\"$it\"" } ?: ""
                     val prompt = """
@@ -63,14 +61,13 @@ class DocumentAsPromptTransformer(
         return EpubParser.parse(file)
     }
 
-    // 只有已由 ArtifactStore materialize 的 upload artifact 才能映射到 workspace /upload。
+    // Only the original read lease may expose a tool-readable upload path.
     private fun resolveWorkspacePath(artifact: LocalArtifactRef?): String? = artifact?.toolPath()
 
-    private suspend fun resolveManagedDocument(document: UIMessagePart.Document): LocalArtifactRef? {
-        val source = AttachmentRefs.parseFileUrl(document.url) ?: return null
-        val managed = artifactStore.resolveManagedReference(source) ?: return null
+    private fun resolveManagedDocument(document: UIMessagePart.Document, reads: ArtifactReadLease): LocalArtifactRef? {
+        val managed = reads.resolveUri(document.url) ?: return null
         if (!managed.mimeType.equals(document.mime, ignoreCase = true)) return null
-        return artifactStore.materialize(managed)
+        return managed
     }
 
     private fun readDocumentContent(document: UIMessagePart.Document, file: File?): String {

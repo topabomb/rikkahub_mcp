@@ -151,6 +151,7 @@ class TurnCancellationIntegrationTest {
         turnFinalizer = TurnFinalizer(repository, registry, coordinator, Json)
         httpClient = OkHttpClient()
         turnRunner = TurnRunner(
+            artifactStore = artifactStore,
             context = payloadContext,
             providerManager = ProviderManager(httpClient, payloadContext),
             json = Json,

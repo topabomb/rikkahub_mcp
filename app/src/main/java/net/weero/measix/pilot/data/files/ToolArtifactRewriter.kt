@@ -75,12 +75,13 @@ class ToolArtifactRewriter(
         }
     }
 
-    suspend fun materializeToolOutput(
+    fun materializeToolOutput(
+        reads: ArtifactReadLease,
         output: List<UIMessagePart>,
         metadata: JsonObject?,
     ): List<UIMessagePart> {
         val ref = metadata?.let { decodeArtifactRef(it) } ?: return output
-        val materialized = artifactStore.materialize(ref)
+        val materialized = reads.resolve(ref)
         if (materialized == null) {
             return unreadableOutput(output)
         }

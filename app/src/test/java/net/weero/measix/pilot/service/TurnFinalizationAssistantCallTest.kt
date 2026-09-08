@@ -177,6 +177,7 @@ class TurnFinalizationAssistantCallTest {
             awaitCancellation()
         }
         val loop = TurnRunner(
+            artifactStore = io.mockk.mockk<net.weero.measix.pilot.data.files.ArtifactStore>(relaxed = true),
             context = mockk<Context>(relaxed = true),
             providerManager = providerManager,
             json = Json,

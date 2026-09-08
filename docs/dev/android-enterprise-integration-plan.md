@@ -496,6 +496,10 @@ C6 的文件创建与引用边界已接通：上传、粘贴文本、输出图�
 
 文件目录与原请求取消批次的最终 `test assembleDebug lintDebug assembleRelease :app:connectedDebugAndroidTest` 串行门禁在 9 分 11 秒内通过：App 2,060 项 JVM 测试无失败/跳过，lint 0 错误、285 警告，Workspace 保留 11 项 Windows 条件跳过。Android 17 模拟器 16 项定向设备用例全部通过，保留此前真实 v19 升级、配置引用与删除恢复覆盖，并新增同库个人/当前企业用户/其他企业用户的列表、图库分页、统计、伪造跨域 ID 拒绝、范围清理及旧选择拒绝验证。实际 Pager 测试覆盖迟到消费与切域；图像页确定性测试覆盖连续取消不能绕过原请求收口。独立审查的生命周期问题已修复并复核。新 Debug 包冷启动、个人文件页、正式入口示例接入 READY 和企业文件页均已手工走通。证据见 `build/reports/enterprise/file-directory-verification.json`；本批不代替完整文件读取/导出授权、真实平台互操作、硬件扫码和 Release 实际运行验收。企业设置首页仍沿用个人配置就绪提示，须与剩余配置 UI 差异一并修正。
 
+模型请求读取已接到原 Turn 域：`StepRunner` 通过 Artifact owner 取得单请求读视图，文档解析、工具结果回放和原生图片编码共享同一保留期；成功、失败和取消统一释放。外域引用拒绝，缺失文件仍降级为不可用，同路径新文件不会被旧请求重新认领。识图与子助手委托按原域验证上传，结构化子助手交付物进入同一引用提取规则。此批不代替预览/导出、共享配置资产复制、Workspace 挂载和备份边界，C5/C6/C7/U2/M1/R1/V1 继续实施。
+
+本批完整串行门禁 `test assembleDebug lintDebug assembleRelease :app:connectedDebugAndroidTest` 在 8 分 29 秒内通过：App 2,063 项 JVM 测试无失败/跳过，lint 0 错误、287 警告；Workspace 保留 11 项 Windows 条件跳过。Android 17 模拟器 17 项定向用例通过，新增企业原件在保留期间不能删除、Android Provider 图片编码实际读取及跨域拒绝验证。JVM 验证同时覆盖结构化交付物保留、缺失路径迟到重用拒绝，以及流式成功/失败/取消后释放。独立审查已完成，证据见 `build/reports/enterprise/request-read-verification.json`。未将此结果计为 Release 设备、物理扫码或真实平台互操作验收。
+
 ## 11. 验收证据
 
 | 编号 | 必须证明 |

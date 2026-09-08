@@ -34,7 +34,7 @@ import me.rerere.ai.ui.metadataAs
 import me.rerere.ai.ui.toMetadata
 import net.weero.measix.pilot.data.ai.attachments.AttachmentRefs
 import net.weero.measix.pilot.data.datastore.Settings
-import net.weero.measix.pilot.data.files.ArtifactStore
+import net.weero.measix.pilot.data.files.ArtifactReadLease
 import net.weero.measix.pilot.data.files.LocalArtifactRef
 import net.weero.measix.pilot.data.model.Assistant
 import org.junit.Assert.assertEquals
@@ -46,8 +46,8 @@ import kotlin.uuid.Uuid
 
 class AttachmentProjectionTransformerTest {
     private val context = mockk<android.content.Context>()
-    private val artifactStore = mockk<ArtifactStore>()
-    private val transformer = AttachmentProjectionTransformer(artifactStore)
+    private val reads = mockk<ArtifactReadLease>()
+    private val transformer = AttachmentProjectionTransformer()
     private val visionModel = Model(
         id = ConfigurationReference.random(),
         modelId = "vision",
@@ -67,8 +67,8 @@ class AttachmentProjectionTransformerTest {
 
     init {
         every { context.filesDir } returns java.io.File(requireNotNull(System.getProperty("java.io.tmpdir")))
-        coEvery { artifactStore.resolveManagedReference(any()) } answers {
-            LocalArtifactRef(relativePath = "upload/${firstArg<java.io.File>().name}", mimeType = "image/png")
+        coEvery { reads.resolveUri(any()) } answers {
+            LocalArtifactRef(relativePath = "upload/${firstArg<String>().substringAfterLast('/')}", mimeType = "image/png")
         }
     }
 
@@ -89,6 +89,7 @@ class AttachmentProjectionTransformerTest {
         promptInputs = testPromptInputs(),
         requestOrigins = RequestMessageOriginTracker(),
         mediaCapabilities = capabilities,
+        artifactReads = reads,
         registerUnpublishedResource = { error("projection transformer must not create resources") },
     )
 
@@ -109,7 +110,7 @@ class AttachmentProjectionTransformerTest {
     fun `managed upload exposes one actual file path without changing durable identity`() = runTest {
         val ref = AttachmentRefs.format(Uuid.random())
         val image = stampedImage(ref, "u7km2n4p.png")
-        coEvery { artifactStore.resolveManagedReference(any()) } returns
+        coEvery { reads.resolveUri(any()) } returns
             LocalArtifactRef(relativePath = "upload/u7km2n4p.png", mimeType = "image/png")
         val message = UIMessage(role = MessageRole.USER, parts = listOf(image))
 
@@ -127,18 +128,18 @@ class AttachmentProjectionTransformerTest {
     @Test
     fun `unavailable managed image never advertises a usable path or UUID`() = runTest {
         val image = stampedImage()
-        coEvery { artifactStore.resolveManagedReference(any()) } returns null
+        coEvery { reads.resolveUri(any()) } returns null
 
         listOf(textModel, visionModel).forEach { model ->
             val parts = transformer.transform(
                 ctxFor(model), listOf(UIMessage(role = MessageRole.USER, parts = listOf(image))),
             ).single().parts
-            val mode = if (model == visionModel) "native" else "unavailable"
+            val mode = "unavailable"
             assertEquals(
                 "[Attachment type=image input=$mode]",
                 (parts.first() as UIMessagePart.Text).text,
             )
-            assertEquals(model == visionModel, parts.any { it is UIMessagePart.Image })
+            assertFalse(parts.any { it is UIMessagePart.Image })
         }
     }
 
@@ -153,7 +154,7 @@ class AttachmentProjectionTransformerTest {
             assertEquals("[Attachment type=image input=$mode]", (parts.first() as UIMessagePart.Text).text)
             assertEquals(model == visionModel, parts.any { it is UIMessagePart.Image })
         }
-        coVerify(exactly = 0) { artifactStore.resolveManagedReference(any()) }
+        coVerify(exactly = 0) { reads.resolveUri(any()) }
     }
 
     @Test
@@ -163,8 +164,8 @@ class AttachmentProjectionTransformerTest {
             UIMessagePart.Audio(url = "file:///tmp/u4nz8q2a.wav"),
             UIMessagePart.Video(url = "file:///tmp/u9rv3c6t.mp4"),
         ).map(AttachmentRefs::ensureAttachmentRef)
-        coEvery { artifactStore.resolveManagedReference(any()) } answers {
-            LocalArtifactRef(relativePath = "upload/${firstArg<java.io.File>().name}", mimeType = "application/octet-stream")
+        coEvery { reads.resolveUri(any()) } answers {
+            LocalArtifactRef(relativePath = "upload/${firstArg<String>().substringAfterLast('/')}", mimeType = "application/octet-stream")
         }
 
         val projected = transformer.transform(
@@ -185,7 +186,7 @@ class AttachmentProjectionTransformerTest {
     @Test
     fun `managed reference lookup cancellation propagates from request projection`() = runTest {
         val cancelled = kotlinx.coroutines.CancellationException("turn cancelled")
-        coEvery { artifactStore.resolveManagedReference(any()) } throws cancelled
+        coEvery { reads.resolveUri(any()) } throws cancelled
 
         try {
             transformer.transform(
@@ -248,7 +249,7 @@ class AttachmentProjectionTransformerTest {
 
     @Test
     fun `non upload managed image does not expose its internal handle`() = runTest {
-        coEvery { artifactStore.resolveManagedReference(any()) } returns
+        coEvery { reads.resolveUri(any()) } returns
             LocalArtifactRef(relativePath = "images/existing.png", mimeType = "image/png")
         val image = stampedImage()
         listOf(textModel, visionModel).forEach { model ->
@@ -363,6 +364,7 @@ class AttachmentProjectionTransformerTest {
                 assistantImages = RequestImageSupport.OPAQUE_REPLAY_ONLY,
                 toolOutputImages = RequestImageSupport.NONE,
             ),
+            artifactReads = reads,
             registerUnpublishedResource = { error("projection transformer must not create resources") },
         )
 

@@ -28,9 +28,9 @@ class TurnPipelineFactoryTest {
         templateTransformer = mockk<TemplateTransformer>(relaxed = true),
         workspaceReminderTransformer = mockk<WorkspaceReminderTransformer>(relaxed = true),
         toolArtifactReplayTransformer = mockk<ToolArtifactReplayTransformer>(relaxed = true),
-        attachmentProjectionTransformer = AttachmentProjectionTransformer(mockk<ArtifactStore>(relaxed = true)),
+        attachmentProjectionTransformer = AttachmentProjectionTransformer(),
         base64ImageToLocalFileTransformer = Base64ImageToLocalFileTransformer(mockk<ArtifactStore>(relaxed = true)),
-        documentAsPromptTransformer = DocumentAsPromptTransformer(mockk<ArtifactStore>(relaxed = true)),
+        documentAsPromptTransformer = DocumentAsPromptTransformer(),
     )
 
     @Test

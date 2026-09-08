@@ -365,6 +365,7 @@ class TurnCommitterTest {
         every { providerManager.getProviderByType(providerSetting) } returns
             mockk<Provider<ProviderSetting.OpenAI>>(relaxed = true)
         val turnRunner = TurnRunner(
+            artifactStore = io.mockk.mockk<net.weero.measix.pilot.data.files.ArtifactStore>(relaxed = true),
             context = mockk<Context>(relaxed = true),
             providerManager = providerManager,
             json = Json,
@@ -550,6 +551,7 @@ class TurnCommitterTest {
         val provider = mockk<Provider<ProviderSetting.OpenAI>>(relaxed = true)
         every { providerManager.getProviderByType(any<ProviderSetting.OpenAI>()) } returns provider
         val handler = TurnRunner(
+            artifactStore = io.mockk.mockk<net.weero.measix.pilot.data.files.ArtifactStore>(relaxed = true),
             context = mockk<Context>(relaxed = true),
             providerManager = providerManager,
             json = Json,
@@ -716,6 +718,7 @@ class TurnCommitterTest {
             }
         }
         val turnRunner = TurnRunner(
+            artifactStore = io.mockk.mockk<net.weero.measix.pilot.data.files.ArtifactStore>(relaxed = true),
             context = mockk<Context>(relaxed = true),
             providerManager = providerManager,
             json = Json,

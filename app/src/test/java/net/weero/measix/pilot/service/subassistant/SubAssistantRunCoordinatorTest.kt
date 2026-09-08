@@ -397,10 +397,10 @@ class SubAssistantRunCoordinatorTest {
         every { settingsStore.effectiveSettings } returns settingsFlow
         val resolver = mockk<AttachmentResolver>()
         val readHeld = java.util.concurrent.atomic.AtomicBoolean(false)
-        coEvery { resolver.withImages<Any?>(any(), any()) } coAnswers {
+        coEvery { resolver.withImages<Any?>(any(), any(), any()) } coAnswers {
             readHeld.set(true)
             try {
-                secondArg<suspend (AttachmentResolveResult) -> Any?>()(resolveResult)
+                thirdArg<suspend (AttachmentResolveResult) -> Any?>()(resolveResult)
             } finally {
                 readHeld.set(false)
             }

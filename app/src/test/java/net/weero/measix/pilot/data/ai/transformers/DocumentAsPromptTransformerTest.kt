@@ -15,7 +15,7 @@ import me.rerere.ai.provider.Model
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
 import net.weero.measix.pilot.data.datastore.Settings
-import net.weero.measix.pilot.data.files.ArtifactStore
+import net.weero.measix.pilot.data.files.ArtifactReadLease
 import net.weero.measix.pilot.data.files.LocalArtifactRef
 import net.weero.measix.pilot.data.model.Assistant
 import org.junit.Assert.assertEquals
@@ -28,12 +28,13 @@ class DocumentAsPromptTransformerTest {
     private val model = mockk<Model>(relaxed = true)
     private val assistant = Assistant()
 
-    private fun contextFor() = TransformerContext(net.weero.measix.pilot.data.enterprise.RealmAccess.Personal,
+    private fun contextFor(reads: ArtifactReadLease) = TransformerContext(net.weero.measix.pilot.data.enterprise.RealmAccess.Personal,
         context = context,
         model = model,
         assistant = resolveTurnAssistantSnapshot(assistant),
         promptInputs = testPromptInputs(),
         requestOrigins = RequestMessageOriginTracker(),
+        artifactReads = reads,
         registerUnpublishedResource = {},
     )
 
@@ -42,11 +43,11 @@ class DocumentAsPromptTransformerTest {
         val file = kotlin.io.path.createTempFile("unmanaged-document", ".txt").toFile().apply {
             writeText("must not be read")
         }
-        val store = mockk<ArtifactStore>()
-        coEvery { store.resolveManagedReference(any<File>()) } returns null
+        val store = mockk<ArtifactReadLease>()
+        coEvery { store.resolveUri(any()) } returns null
 
-        val result = DocumentAsPromptTransformer(store).transform(
-            contextFor(),
+        val result = DocumentAsPromptTransformer().transform(
+            contextFor(store),
             listOf(
                 UIMessage(
                     role = MessageRole.USER,
@@ -73,13 +74,12 @@ class DocumentAsPromptTransformerTest {
             writeText("managed content")
         }
         val ref = LocalArtifactRef(relativePath = "upload/${file.name}", mimeType = "text/plain")
-        val store = mockk<ArtifactStore>()
-        coEvery { store.resolveManagedReference(any<File>()) } returns ref
-        coEvery { store.materialize(ref) } returns ref
+        val store = mockk<ArtifactReadLease>()
+        coEvery { store.resolveUri(any()) } returns ref
         every { store.file(ref) } returns file
 
-        val result = DocumentAsPromptTransformer(store).transform(
-            contextFor(),
+        val result = DocumentAsPromptTransformer().transform(
+            contextFor(store),
             listOf(
                 UIMessage(
                     role = MessageRole.USER,
@@ -100,8 +100,8 @@ class DocumentAsPromptTransformerTest {
 
     @Test
     fun `cancellation from artifact owner propagates`() = runTest {
-        val store = mockk<ArtifactStore>()
-        coEvery { store.resolveManagedReference(any<File>()) } throws CancellationException("cancel")
+        val store = mockk<ArtifactReadLease>()
+        coEvery { store.resolveUri(any()) } throws CancellationException("cancel")
         val message = UIMessage(
             role = MessageRole.USER,
             parts = listOf(UIMessagePart.Document(
@@ -112,7 +112,7 @@ class DocumentAsPromptTransformerTest {
         )
 
         try {
-            DocumentAsPromptTransformer(store).transform(contextFor(), listOf(message))
+            DocumentAsPromptTransformer().transform(contextFor(store), listOf(message))
             org.junit.Assert.fail("cancellation must propagate")
         } catch (_: CancellationException) {
             assertEquals(true, true)

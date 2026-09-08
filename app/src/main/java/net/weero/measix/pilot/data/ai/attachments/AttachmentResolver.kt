@@ -1,5 +1,6 @@
 package net.weero.measix.pilot.data.ai.attachments
 
+import net.weero.measix.pilot.data.configuration.ConfigurationScope
 import me.rerere.ai.ui.UIMessagePart
 import me.rerere.ai.util.encodeImageBytes
 import kotlinx.coroutines.CancellationException
@@ -18,9 +19,9 @@ class AttachmentResolver(private val artifactStore: ArtifactStore) {
      * Inspection consumes an in-memory snapshot. No file URI outlives the owner's read protection,
      * and no temporary artifact is created merely to let a Provider read existing image content.
      */
-    suspend fun readImages(paths: List<String>): AttachmentResolveResult {
+    suspend fun readImages(scope: ConfigurationScope, paths: List<String>): AttachmentResolveResult {
         if (!validPaths(paths)) return invalidPaths()
-        return artifactStore.withUploadImages(paths) { result ->
+        return artifactStore.withUploadImages(scope, paths) { result ->
             when (result) {
                 is ArtifactImageReadResult.Failure -> result.toAttachmentFailure()
                 is ArtifactImageReadResult.Success -> try {
@@ -41,12 +42,13 @@ class AttachmentResolver(private val artifactStore: ArtifactStore) {
      * the existing artifacts are retained; success, failure and cancellation all release pins.
      */
     suspend fun <T> withImages(
+        scope: ConfigurationScope,
         paths: List<String>,
         consume: suspend (AttachmentResolveResult) -> T,
     ): T {
         if (paths.isEmpty()) return consume(AttachmentResolveResult.Success(emptyList()))
         if (!validPaths(paths)) return consume(invalidPaths())
-        return artifactStore.withUploadImages(paths.distinct()) { result ->
+        return artifactStore.withUploadImages(scope, paths.distinct()) { result ->
             consume(
                 when (result) {
                     is ArtifactImageReadResult.Failure -> result.toAttachmentFailure()

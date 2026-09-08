@@ -67,6 +67,7 @@ class TurnRunnerTest {
             providerManager.getProviderByType(any<ProviderSetting.OpenAI>())
         } returns provider
         val handler = TurnRunner(
+            artifactStore = io.mockk.mockk<net.weero.measix.pilot.data.files.ArtifactStore>(relaxed = true),
             context = mockk<Context>(relaxed = true),
             providerManager = providerManager,
             json = Json,
@@ -219,6 +220,7 @@ class TurnRunnerTest {
         )
         val assistant = Assistant(enableMemory = false, streamOutput = false)
         val loop = TurnRunner(
+            artifactStore = io.mockk.mockk<net.weero.measix.pilot.data.files.ArtifactStore>(relaxed = true),
             context = mockk<Context>(relaxed = true),
             providerManager = providerManager,
             json = Json,
@@ -306,6 +308,7 @@ class TurnRunnerTest {
         } returnsMany listOf(toolStep("call-1"), toolStep("call-2"))
         val assistant = Assistant(enableMemory = false, streamOutput = false)
         val loop = TurnRunner(
+            artifactStore = io.mockk.mockk<net.weero.measix.pilot.data.files.ArtifactStore>(relaxed = true),
             context = mockk<Context>(relaxed = true),
             providerManager = providerManager,
             json = Json,
@@ -516,6 +519,7 @@ class TurnRunnerTest {
         val provider = mockk<Provider<ProviderSetting.OpenAI>>(relaxed = true)
         every { providerManager.getProviderByType(any<ProviderSetting.OpenAI>()) } returns provider
         val handler = TurnRunner(
+            artifactStore = io.mockk.mockk<net.weero.measix.pilot.data.files.ArtifactStore>(relaxed = true),
             context = mockk<Context>(relaxed = true),
             providerManager = providerManager,
             json = Json,

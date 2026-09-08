@@ -88,7 +88,14 @@ Tool Result checkpoint（消息与 Artifact 引用同事务）
 
 `ArtifactStore` 的创建入口显式接收 `ConfigurationScope`，在 CREATING 行写入后一直保留该归属；`copyFilePreservingOrigin` 保留源文件的域与 origin。聊天输入的 `ArtifactDraftScope` 绑定原 `ConversationCommandTarget`，提交和消息编辑不能借用另一个页面的 draft，即使它们属于同一用户或会话。关闭后的补偿仍归原 lease。
 
-模型输出转换、MCP/Workspace 图片、rolling compaction 归档沿原 Turn 传递 scope；`ImageGenerationRequest` 固定本次操作的 scope，`GeneratedMediaStore` 将同一归属写入图库原件及聊天副本。共享助手定义的头像/背景导入仍创建个人配置资产。目录、统计和删除已按原 RealmSelection 授权；预览、导出、工具读取与 Workspace 挂载的完整域授权仍在企业集成计划中。
+模型输出转换、MCP/Workspace 图片、rolling compaction 归档沿原 Turn 传递 scope；`ImageGenerationRequest` 固定本次操作的 scope，`GeneratedMediaStore` 将同一归属写入图库原件及聊天副本。共享助手定义的头像/背景导入仍创建个人配置资产。目录、统计和删除已按原 RealmSelection 授权；预览、导出、归档工具读取与 Workspace 挂载的完整域授权仍在企业集成计划中。
+
+`StepRunner` 在每次请求的上下文裁剪完成后，通过 `ArtifactStore.retainForRequest` 取得原 scope 的 `ArtifactReadLease`，覆盖输入转换、请求装配与完整 Provider 流收集。该临时读视图复用既有 retention pin，不新增持久化记录。主、子 Turn 共用此边界；成功、失败或取消后释放，既不保留窗口外历史，也不跨 Step 长期占用文件。
+
+`DocumentAsPromptTransformer`、`ToolArtifactReplayTransformer` 和 `AttachmentProjectionTransformer` 只解析这份读视图。外域 ACTIVE 引用直接拒绝；缺失或不受管路径固定为不可用，同路径迟到出现的新文件不能被本次请求认领。缺失图片保留 unavailable 投影，工具结果保留 artifact_missing 降级；最终装配还会拒绝任何未被本次保留的本地媒体 URL。文件 URL、Provider 图片编码和 durable 消息保持不变；此边界不代表当前 Provider 已实现音视频传输。
+
+消息引用提取统一使用 `collectArtifactReferences`，递归覆盖媒体 part、工具直接 artifact，以及 `sub_assistant_call.artifacts[].artifact`；模型请求不读取 archive marker 的原文，其归档 payload 仍由独立工具读取边界保护。
+
 
 会话写入在原 Artifact lifecycle lock 内，用 durable header 的 scope 准备引用 delta；跨域文件使提交失败，不静默删除引用。启动时 `ensureReferenceProjection` 同样核验归属，并在全量准备成功后才事务替换投影与完成标记。v19 迁移将既有行归为个人，保留文件、ID 和路径。
 
@@ -203,7 +210,7 @@ Tool Result checkpoint（消息与 Artifact 引用同事务）
 ```text
 /upload/<file>（1..4 个，精确文件路径）
 → ToolExecutionContext.resolveAttachments(paths)
-→ AttachmentResolver.readImages(paths)
+→ AttachmentResolver.readImages(scope, paths)
 → ArtifactStore.withUploadImages（授权与保留文件，有界读取和图片校验）
 → 共用 FileEncoder 规范化内存快照 → data URI Image parts，无临时文件
 → 识图模型（[Image N path=...] + 图片 + request；独立固定 system instruction）
@@ -215,7 +222,7 @@ Tool Result checkpoint（消息与 Artifact 引用同事务）
   真实分类错误（如 `provider_error`）表达，而不是预先伪装为 `inspection_model_unavailable`。
   不得依赖参数默认值或把引用行当作识别输入。
 - paths 与产出 1:1、顺序稳定，重复路径保留对应图片位置；内部标签使用原请求路径。识图与委托入口均不接受 UUID、HTTP(S)、file URI、workspace 或越界路径，不提供旧参数兼容入口。
-- `ArtifactStore` 在同一 lifecycle lock 内校验 ACTIVE/已发布并取得既有 retention pin，锁外读取；成功、失败和取消都在 finally 释放。
+- `ArtifactStore` 在同一 lifecycle lock 内校验原操作 scope、ACTIVE/已发布并取得既有 retention pin，锁外读取；成功、失败和取消都在 finally 释放。
   识图内存快照复用 FileEncoder 的压缩、EXIF 方向和格式转换，不以 raw data URI 绕过现有图片编码；网络调用不持有磁盘文件，也不创建副本。
 - 未注入 resolver 的执行环境统一返回 `attachment_resolution_unavailable`，不静默成功。
 - 识别无缓存；结果作为显式 Tool Result 已是正确的历史记录。

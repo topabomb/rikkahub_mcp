@@ -8,6 +8,7 @@ import io.mockk.every
 import io.mockk.mockk
 import io.mockk.slot
 import kotlin.uuid.Uuid
+import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
@@ -65,6 +66,70 @@ import org.junit.Test
  */
 class StepRunnerTest {
     @Test
+    fun `request holds artifact read lease through deferred stream success failure and cancellation`() = runTest {
+        for (outcome in listOf("success", "failure", "cancel")) {
+            val model = Model(modelId = "test-model", displayName = "Test Model")
+            val setting = ProviderSetting.OpenAI(models = listOf(model))
+            val provider = mockk<Provider<ProviderSetting.OpenAI>>()
+            val manager = mockk<ProviderManager>()
+            every { manager.getProviderByType(setting) } returns provider
+            val owner = mockk<net.weero.measix.pilot.data.files.ArtifactStore>()
+            var held = false
+            var releases = 0
+            coEvery { owner.retainForRequest(net.weero.measix.pilot.data.configuration.ConfigurationScope.Personal, any()) } answers {
+                held = true
+                net.weero.measix.pilot.data.files.ArtifactReadLease(
+                    files = emptyMap(), relativePathForUri = { null },
+                    retention = net.weero.measix.pilot.data.files.ArtifactRetentionLease { held = false; releases++ },
+                )
+            }
+            val entered = kotlinx.coroutines.CompletableDeferred<Unit>()
+            val finish = kotlinx.coroutines.CompletableDeferred<Unit>()
+            coEvery { provider.streamText(setting, any(), any()) } returns kotlinx.coroutines.flow.flow {
+                assertTrue(held)
+                entered.complete(Unit)
+                finish.await()
+                assertTrue(held)
+                if (outcome == "failure") throw IllegalStateException("provider failed")
+                emit(textDelta("done", finishReason = "stop"))
+            }
+            val transformer = object : InputMessageTransformer {
+                override suspend fun transform(ctx: TransformerContext, messages: List<UIMessage>): List<UIMessage> {
+                    assertTrue(held)
+                    assertTrue(ctx.artifactReads != null)
+                    return messages
+                }
+            }
+            val assistant = Assistant(enableMemory = false, streamOutput = true)
+            val handler = TurnRunner(
+                artifactStore = owner, context = mockk<Context>(relaxed = true),
+                providerManager = manager, json = Json,
+                attachmentResolver = mockk(relaxed = true), toolOutputStore = mockk(relaxed = true),
+            )
+            val execution = async {
+                handler.run(turnRunInputsFixture(
+                    conversationId = Uuid.random(),
+                    settings = Settings(providers = listOf(setting), assistants = listOf(assistant)),
+                    model = model, assistant = assistant, messages = listOf(UIMessage.user("hello")),
+                    inputTransformers = listOf(transformer), promptInputs = testPromptInputs(), maxSteps = 1,
+                    mediaCapabilities = RequestMediaCapabilities.NONE,
+                ))
+            }
+            entered.await()
+            assertTrue(held)
+            if (outcome == "cancel") {
+                execution.cancel()
+                execution.join()
+            } else {
+                finish.complete(Unit)
+                execution.await()
+            }
+            assertFalse(held)
+            assertEquals(1, releases)
+        }
+    }
+
+    @Test
     fun `run uses coordinator media contract instead of rederiving provider mapping`() = runTest {
         val model = Model(modelId = "test-model", displayName = "Test Model")
         val providerSetting = ProviderSetting.OpenAI(models = listOf(model))
@@ -90,6 +155,7 @@ class StepRunnerTest {
         )
         val assistant = Assistant(enableMemory = false, streamOutput = false)
         val loop = TurnRunner(
+            artifactStore = io.mockk.mockk<net.weero.measix.pilot.data.files.ArtifactStore>(relaxed = true),
             context = mockk<Context>(relaxed = true),
             providerManager = providerManager,
             json = Json,
@@ -129,6 +195,7 @@ class StepRunnerTest {
         val assistant = Assistant(enableMemory = false, streamOutput = true)
         val inFlight = UIMessage(role = MessageRole.ASSISTANT, parts = emptyList())
         val handler = TurnRunner(
+            artifactStore = io.mockk.mockk<net.weero.measix.pilot.data.files.ArtifactStore>(relaxed = true),
             context = mockk<Context>(relaxed = true),
             providerManager = providerManager,
             json = Json,
@@ -348,6 +415,7 @@ class StepRunnerTest {
         ))
         coEvery { provider.generateText(providerSetting, any(), any()) } throws expected
         val handler = TurnRunner(
+            artifactStore = io.mockk.mockk<net.weero.measix.pilot.data.files.ArtifactStore>(relaxed = true),
             context = mockk<Context>(relaxed = true), providerManager = providerManager, json = Json,
             attachmentResolver = mockk<AttachmentResolver>(relaxed = true),
             toolOutputStore = io.mockk.mockk(relaxed = true),

@@ -255,9 +255,9 @@ val appModule = module {
             templateTransformer = get(),
             workspaceReminderTransformer = WorkspaceReminderTransformer(),
             toolArtifactReplayTransformer = ToolArtifactReplayTransformer(get()),
-            attachmentProjectionTransformer = AttachmentProjectionTransformer(get()),
+            attachmentProjectionTransformer = AttachmentProjectionTransformer(),
             base64ImageToLocalFileTransformer = Base64ImageToLocalFileTransformer(get()),
-            documentAsPromptTransformer = DocumentAsPromptTransformer(get()),
+            documentAsPromptTransformer = DocumentAsPromptTransformer(),
         )
     }
 

@@ -1,5 +1,6 @@
 package net.weero.measix.pilot.data.files
 
+import net.weero.measix.pilot.data.ai.subassistant.mergeSubAssistantCallMetadata
 import net.weero.measix.pilot.data.configuration.ConfigurationScope
 
 import android.content.Context
@@ -100,8 +101,8 @@ class ArtifactUploadImageReadTest {
         assertEquals(names.toSet(), File(root, "upload").list()!!.toSet())
         entities.forEach { assertFalse(database.artifactReferenceDao().existsByArtifactId(it.id)) }
         val resolver = AttachmentResolver(store)
-        val firstConversationRequest = resolver.readImages(paths) as AttachmentResolveResult.Success
-        val anotherConversationRequest = resolver.readImages(paths) as AttachmentResolveResult.Success
+        val firstConversationRequest = resolver.readImages(ConfigurationScope.Personal, paths) as AttachmentResolveResult.Success
+        val anotherConversationRequest = resolver.readImages(ConfigurationScope.Personal, paths) as AttachmentResolveResult.Success
         assertEquals(firstConversationRequest.parts.map { it.url }, anotherConversationRequest.parts.map { it.url })
         assertTrue(firstConversationRequest.parts.all { it.url.startsWith("data:image/jpeg;base64,") })
     }
@@ -166,14 +167,14 @@ class ArtifactUploadImageReadTest {
             val enteredFirst = CompletableDeferred<Unit>()
             val enteredSecond = CompletableDeferred<Unit>()
             val first = async(Dispatchers.Default) {
-                store.withUploadImages(listOf("/upload/shared.png", "/upload/shared.png")) {
+                store.withUploadImages(ConfigurationScope.Personal, listOf("/upload/shared.png", "/upload/shared.png")) {
                     assertTrue(it is ArtifactImageReadResult.Success)
                     enteredFirst.complete(Unit)
                     awaitCancellation()
                 }
             }
             val second = async(Dispatchers.Default) {
-                store.withUploadImages(listOf("/upload/shared.png")) {
+                store.withUploadImages(ConfigurationScope.Personal, listOf("/upload/shared.png")) {
                     assertTrue(it is ArtifactImageReadResult.Success)
                     enteredSecond.complete(Unit)
                     awaitCancellation()
@@ -200,7 +201,7 @@ class ArtifactUploadImageReadTest {
         val entity = register("committed.png")
         val delivered = CompletableDeferred<String>()
         val consumer = launch(Dispatchers.Default) {
-            val result = store.withUploadImages(listOf("/upload/committed.png")) {
+            val result = store.withUploadImages(ConfigurationScope.Personal, listOf("/upload/committed.png")) {
                 assertTrue(it is ArtifactImageReadResult.Success)
                 currentCoroutineContext().cancel()
                 "committed-child"
@@ -218,7 +219,7 @@ class ArtifactUploadImageReadTest {
         val entity = register("failure.png")
         val expected = IllegalStateException("consumer failed")
         try {
-            store.withUploadImages(listOf("/upload/failure.png")) {
+            store.withUploadImages(ConfigurationScope.Personal, listOf("/upload/failure.png")) {
                 assertTrue(it is ArtifactImageReadResult.Success)
                 throw expected
             }
@@ -232,7 +233,7 @@ class ArtifactUploadImageReadTest {
     @Test
     fun `inspection snapshot survives source deletion without adding a durable file`() = runBlocking {
         val entity = register("source.png")
-        val snapshot = AttachmentResolver(store).readImages(listOf("/upload/source.png")) as AttachmentResolveResult.Success
+        val snapshot = AttachmentResolver(store).readImages(ConfigurationScope.Personal, listOf("/upload/source.png")) as AttachmentResolveResult.Success
 
         assertTrue(store.deleteUserRequested(ConfigurationScope.Personal, entity.id) is ArtifactDeleteResult.Completed)
         val image = snapshot.parts.single()
@@ -275,7 +276,72 @@ class ArtifactUploadImageReadTest {
         }
     }
 
-    private suspend fun read(paths: List<String>): ArtifactImageReadResult = store.withUploadImages(paths) { it }
+    @Test
+    fun `request read lease freezes availability and retains recursive and metadata files`() = runBlocking {
+        val image = register("request.png")
+        val delivery = register("delivery.png")
+        val missingUri = File(root, "upload/later.png").toURI().toString().replace("file:/", "file:///")
+        fun uri(entity: ArtifactEntity) = File(root, entity.relativePath).toURI().toString().replace("file:/", "file:///")
+        val tool = me.rerere.ai.ui.UIMessagePart.Tool(
+            localCallId = kotlin.uuid.Uuid.random(), stepId = kotlin.uuid.Uuid.random(),
+            providerCallId = "delivery", toolName = "assistant_call", input = "{}",
+            output = listOf(me.rerere.ai.ui.UIMessagePart.Image(uri(image))),
+        ).mergeSubAssistantCallMetadata(
+            net.weero.measix.pilot.utils.JsonInstant,
+            net.weero.measix.pilot.data.ai.subassistant.SubAssistantCallMetadata(
+                runId = "run", targetAssistantId = "target", targetNameSnapshot = "Target",
+                artifacts = listOf(net.weero.measix.pilot.data.ai.subassistant.SubAssistantCallArtifact(
+                    ref = "attachment:${kotlin.uuid.Uuid.random()}", type = "image", mime = "image/png",
+                    artifact = LocalArtifactRef(relativePath = delivery.relativePath, mimeType = delivery.mimeType),
+                )),
+            ),
+        )
+        val messages = listOf(me.rerere.ai.ui.UIMessage(
+            role = me.rerere.ai.core.MessageRole.USER,
+            parts = listOf(tool, me.rerere.ai.ui.UIMessagePart.Image(missingUri)),
+        ))
+        val reads = store.retainForRequest(ConfigurationScope.Personal, messages)
+        reads.use {
+            assertEquals(image.relativePath, it.resolveUri(uri(image))!!.relativePath)
+            assertInProgress(store.deleteUserRequested(ConfigurationScope.Personal, image.id))
+            assertInProgress(store.deleteUserRequested(ConfigurationScope.Personal, delivery.id))
+            register("later.png")
+            assertEquals(null, it.resolveUri(missingUri))
+            try {
+                it.requireAuthorizedFiles(messages)
+                throw AssertionError("late file must not enter this request")
+            } catch (_: IllegalStateException) { }
+        }
+        assertTrue(store.deleteUserRequested(ConfigurationScope.Personal, image.id) is ArtifactDeleteResult.Completed)
+        assertTrue(store.deleteUserRequested(ConfigurationScope.Personal, delivery.id) is ArtifactDeleteResult.Completed)
+        try {
+            reads.resolveUri(uri(image))
+            throw AssertionError("closed read must not expose files")
+        } catch (_: IllegalStateException) { }
+    }
+
+    @Test
+    fun `foreign tool and request files are rejected without partial retention`() = runBlocking {
+        val personal = register("personal.png")
+        val scope = ConfigurationScope.Enterprise(me.rerere.common.configuration.EnterpriseAuthority("local:example", "deployment"), "user")
+        val foreign = register("foreign.png", scope = scope)
+        assertFailure(ArtifactImageReadResult.Reason.NOT_FOUND,
+            store.withUploadImages(ConfigurationScope.Personal, listOf("/upload/foreign.png")) { it })
+        val messages = listOf(me.rerere.ai.ui.UIMessage(
+            role = me.rerere.ai.core.MessageRole.USER,
+            parts = listOf(personal, foreign).map {
+                me.rerere.ai.ui.UIMessagePart.Image("file://${File(root, it.relativePath).absolutePath.replace('\\', '/')}")
+            },
+        ))
+        try {
+            store.retainForRequest(ConfigurationScope.Personal, messages).close()
+            throw AssertionError("foreign request must be rejected")
+        } catch (_: ArtifactProjectionException) { }
+        assertTrue(store.deleteUserRequested(ConfigurationScope.Personal, personal.id) is ArtifactDeleteResult.Completed)
+        assertTrue(store.deleteUserRequested(scope, foreign.id) is ArtifactDeleteResult.Completed)
+    }
+
+    private suspend fun read(paths: List<String>): ArtifactImageReadResult = store.withUploadImages(ConfigurationScope.Personal, paths) { it }
 
     private fun assertFailure(expected: ArtifactImageReadResult.Reason, result: ArtifactImageReadResult) {
         assertEquals(ArtifactImageReadResult.Failure(expected), result)
@@ -291,9 +357,11 @@ class ArtifactUploadImageReadTest {
         state: ArtifactState = ArtifactState.ACTIVE,
         mime: String = "image/png",
         bytes: ByteArray = TINY_PNG,
+        scope: ConfigurationScope = ConfigurationScope.Personal,
     ): ArtifactEntity {
         File(root, "upload/$name").apply { parentFile!!.mkdirs(); writeBytes(bytes) }
         val entity = ArtifactEntity(
+            scope = scope,
             folder = FileFolders.UPLOAD, relativePath = "upload/$name", displayName = name,
             mimeType = mime, sizeBytes = bytes.size.toLong(), createdAt = 1L, updatedAt = 1L,
             state = state.name, origin = ArtifactOrigin.USER.name,

@@ -185,7 +185,8 @@ private fun UIMessagePart.toolMetadataReferenceTokens(): List<String> {
     val artifacts = (metadata[TOOL_METADATA_SUB_ASSISTANT_CALL_KEY] as? kotlinx.serialization.json.JsonObject)
         ?.get(TOOL_METADATA_ARTIFACTS_KEY) as? kotlinx.serialization.json.JsonArray
     artifacts?.forEach { item ->
-        artifactRelativePathOf(item)?.let(tokens::add)
+        (item as? kotlinx.serialization.json.JsonObject)?.get(TOOL_METADATA_ARTIFACT_KEY)
+            ?.let(::artifactRelativePathOf)?.let(tokens::add)
     }
     return tokens
 }

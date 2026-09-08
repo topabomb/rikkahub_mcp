@@ -8,7 +8,7 @@ import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
 import me.rerere.ai.ui.toMetadata
 import net.weero.measix.pilot.data.ai.attachments.AttachmentRefs
-import net.weero.measix.pilot.data.files.ArtifactStore
+import net.weero.measix.pilot.data.files.ArtifactReadLease
 
 /**
  * Request-only 附件投影（见 multimodal-context-and-turn-durability.md）：
@@ -20,9 +20,7 @@ import net.weero.measix.pilot.data.files.ArtifactStore
  *
  * 禁止：调用附件识别模型、读写分析缓存、写回 Conversation、因模型不能看图抛 turn-level failure。
  */
-class AttachmentProjectionTransformer(
-    private val artifactStore: ArtifactStore,
-) : InputMessageTransformer {
+class AttachmentProjectionTransformer : InputMessageTransformer {
     override suspend fun transform(
         ctx: TransformerContext,
         messages: List<UIMessage>,
@@ -33,7 +31,7 @@ class AttachmentProjectionTransformer(
                     parts = message.parts,
                     role = message.role,
                     capabilities = ctx.mediaCapabilities,
-                    artifactStore = artifactStore,
+                    artifactReads = requireNotNull(ctx.artifactReads),
                 ),
             )
         }
@@ -43,7 +41,7 @@ class AttachmentProjectionTransformer(
         parts: List<UIMessagePart>,
         role: MessageRole,
         capabilities: RequestMediaCapabilities,
-        artifactStore: ArtifactStore,
+        artifactReads: ArtifactReadLease,
         insideToolOutput: Boolean = false,
     ): List<UIMessagePart> {
         val result = ArrayList<UIMessagePart>(parts.size + 2)
@@ -54,15 +52,17 @@ class AttachmentProjectionTransformer(
                         parts = part.output,
                         role = role,
                         capabilities = capabilities,
-                        artifactStore = artifactStore,
+                        artifactReads = artifactReads,
                         insideToolOutput = true,
                     ),
                 )
 
                 is UIMessagePart.Image -> {
                     val support = capabilities.supportFor(role, insideToolOutput)
-                    val native = support == RequestImageSupport.STRUCTURED
-                    val path = pathOf(part, artifactStore)
+                    val path = pathOf(part, artifactReads)
+                    val local = part.url.startsWith("file:", ignoreCase = true)
+                    val native = support == RequestImageSupport.STRUCTURED &&
+                        (!local || artifactReads.resolveUri(part.url) != null)
                     result += attachmentProjectionText(
                         attachmentPathLine(
                             path = path,
@@ -80,30 +80,36 @@ class AttachmentProjectionTransformer(
                 }
 
                 is UIMessagePart.Document -> {
-                    pathOf(part, artifactStore)?.let { path ->
+                    pathOf(part, artifactReads)?.let { path ->
                         result += attachmentProjectionText(
                             attachmentPathLine(path, "document"),
                         )
                     }
-                    result += part
+                    if (!part.url.startsWith("file:", ignoreCase = true) || artifactReads.resolveUri(part.url) != null) {
+                        result += part
+                    }
                 }
 
                 is UIMessagePart.Audio -> {
-                    pathOf(part, artifactStore)?.let { path ->
+                    pathOf(part, artifactReads)?.let { path ->
                         result += attachmentProjectionText(
                             attachmentPathLine(path, "audio"),
                         )
                     }
-                    result += part
+                    if (!part.url.startsWith("file:", ignoreCase = true) || artifactReads.resolveUri(part.url) != null) {
+                        result += part
+                    }
                 }
 
                 is UIMessagePart.Video -> {
-                    pathOf(part, artifactStore)?.let { path ->
+                    pathOf(part, artifactReads)?.let { path ->
                         result += attachmentProjectionText(
                             attachmentPathLine(path, "video"),
                         )
                     }
-                    result += part
+                    if (!part.url.startsWith("file:", ignoreCase = true) || artifactReads.resolveUri(part.url) != null) {
+                        result += part
+                    }
                 }
 
                 else -> result += part
@@ -143,9 +149,9 @@ private fun mediaUrl(part: UIMessagePart): String? = when (part) {
     else -> null
 }
 
-private suspend fun pathOf(part: UIMessagePart, artifactStore: ArtifactStore): String? {
+private suspend fun pathOf(part: UIMessagePart, artifactReads: ArtifactReadLease): String? {
     val url = mediaUrl(part) ?: return null
-    val file = AttachmentRefs.parseFileUrl(url) ?: return null
-    val managed = artifactStore.resolveManagedReference(file) ?: return null
+    if (!url.startsWith("file:", ignoreCase = true)) return null
+    val managed = artifactReads.resolveUri(url) ?: return null
     return managed.toolPath()
 }

@@ -125,7 +125,7 @@ internal class ToolBatchRunner(
                     // obtains Room or presentation write access directly.
                     val hooks = ToolExecutionHooks(
                         resolveAttachments = { paths ->
-                            when (val resolvedAttachments = attachmentResolver.readImages(paths)) {
+                            when (val resolvedAttachments = attachmentResolver.readImages(state.turnContext.realmAccess.scope, paths)) {
                                 is AttachmentResolveResult.Success -> {
                                     ToolAttachmentResolution(resolvedAttachments.parts)
                                 }

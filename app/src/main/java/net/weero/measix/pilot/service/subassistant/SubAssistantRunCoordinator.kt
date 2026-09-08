@@ -325,6 +325,7 @@ class SubAssistantRunCoordinator internal constructor(
     }
 
     private suspend fun materializeChild(
+        realmAccess: net.weero.measix.pilot.data.enterprise.RealmAccess,
         preflight: Preflight.Ready,
         masterConversationId: Uuid,
         targetAssistantId: ConfigurationReference,
@@ -336,7 +337,7 @@ class SubAssistantRunCoordinator internal constructor(
         // Clone-created files remain owned here until the Child link has committed.
         val createdArtifacts = mutableListOf<OwnedArtifact>()
         try {
-            return attachmentResolver.withImages(attachments) { resolved ->
+            return attachmentResolver.withImages(realmAccess.scope, attachments) { resolved ->
                 val resolvedImages = when (resolved) {
                     is AttachmentResolveResult.Failure -> return@withImages Materialized.Failure(
                         buildUnavailableCallResult(
@@ -481,6 +482,7 @@ class SubAssistantRunCoordinator internal constructor(
             configurations.requireAccess(realmAccess)
             check(conversationRepo.getConversationHeader(masterConversationId)?.scope == realmAccess.scope) { "sub_assistant_realm_mismatch" }
             val materialized = materializeChild(
+                realmAccess = realmAccess,
                 preflight = ready,
                 masterConversationId = masterConversationId,
                 targetAssistantId = targetAssistantId,

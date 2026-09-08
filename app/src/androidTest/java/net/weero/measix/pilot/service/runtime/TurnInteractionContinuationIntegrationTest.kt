@@ -147,6 +147,7 @@ class TurnInteractionContinuationIntegrationTest {
             assistants = listOf(assistant),
         )
         val turnRunner = TurnRunner(
+            artifactStore = artifactStore,
             context = context,
             providerManager = ProviderManager(httpClient, context),
             json = Json,
