@@ -637,6 +637,7 @@ private fun ChatPageContent(
                         state = inputState,
                         artifactDraftScope = inputImports,
                         requireInputOwner = { vm.requireConfigurationTarget(configuration.target) },
+                        speechPage = configuration.target.conversation,
                         loading = turnPresentation.isActive,
                         settings = setting,
                         assistant = assistant,

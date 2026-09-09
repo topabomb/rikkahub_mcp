@@ -127,6 +127,7 @@ internal fun ChatInput(
     state: ChatInputState,
     artifactDraftScope: ArtifactDraftScope,
     requireInputOwner: () -> Unit,
+    speechPage: net.weero.measix.pilot.service.ConversationCommandTarget,
     loading: Boolean,
     settings: Settings,
     assistant: Assistant,
@@ -175,6 +176,9 @@ internal fun ChatInput(
     }
 
     val asr = LocalASRState.current
+    androidx.compose.runtime.DisposableEffect(speechPage) {
+        onDispose { asr.cancel(speechPage) }
+    }
     val asrState by asr.state.collectAsState()
     val hapticFeedback = LocalHapticFeedback.current
     val soundEffectPlayer: SoundEffectPlayer = koinInject()
@@ -192,7 +196,8 @@ internal fun ChatInput(
                     asrPermission.requestPermissions()
                 } else {
                     asrBaseText = state.textContent.text.toString()
-                    asr.start { transcript ->
+                    asr.start(speechPage) { transcript ->
+                        requireInputOwner()
                         val spacer = if (asrBaseText.isBlank() || transcript.isBlank()) "" else " "
                         state.setMessageText(asrBaseText + spacer + transcript)
                     }

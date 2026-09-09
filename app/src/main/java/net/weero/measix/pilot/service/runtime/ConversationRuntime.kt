@@ -250,6 +250,7 @@ class ConversationRuntime internal constructor(
 
     private val toolApprovalMutex = Mutex()
     private var ttsQueueSessionId: String? = null
+    private var ttsPlaybackContext: net.weero.measix.pilot.data.ai.tools.local.TtsToolPlaybackContext? = null
     internal val isGenerating: Boolean get() = _activeTurn.value?.worker?.isActive == true
     val isInUse: Boolean
         get() = refCount.get() > 0 || ownedRequests.isNotEmpty() || snapshot.value.stream != null || hasAuxiliaryWork
@@ -691,7 +692,13 @@ class ConversationRuntime internal constructor(
     }
 
     @Synchronized
-    fun peekTtsQueueSessionId(): String? = ttsQueueSessionId
+    fun peekTtsPlaybackContext(): net.weero.measix.pilot.data.ai.tools.local.TtsToolPlaybackContext? = ttsPlaybackContext
+
+    @Synchronized
+    fun bindTtsPlaybackContext(context: net.weero.measix.pilot.data.ai.tools.local.TtsToolPlaybackContext) {
+        check(context.sessionId == ttsQueueSessionId) { "turn_speech_queue_mismatch" }
+        ttsPlaybackContext = context
+    }
 
     suspend fun <T> withToolApprovalLock(block: suspend () -> T): T =
         toolApprovalMutex.withLock { block() }
@@ -725,6 +732,7 @@ class ConversationRuntime internal constructor(
         ownedRequests.clear()
         ownedDraft.getAndSet(null)?.close()
         ttsQueueSessionId = null
+        ttsPlaybackContext = null
         idleCheckJob?.cancel()
         idleCheckJob = null
     }

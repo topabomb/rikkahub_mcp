@@ -1,5 +1,7 @@
 package net.weero.measix.pilot.data.ai.mcp
 
+import net.weero.measix.pilot.data.enterprise.ManagedSnapshotRequired
+
 import io.mockk.coEvery
 import io.mockk.mockk
 import io.modelcontextprotocol.kotlin.sdk.client.Client
@@ -34,12 +36,12 @@ class McpToolCallExecutorTest {
 
     @Test fun `managed barrier remains typed for the original interaction owner`() = runTest {
         val client = mockk<Client>()
-        val barrier = McpManagedSnapshotRequired(2, "req_test")
+        val barrier = ManagedSnapshotRequired(2, "req_test")
         coEvery { client.callTool(any<CallToolRequest>(), any<RequestOptions>()) } throws barrier
         try {
             McpToolCallExecutor(mockk()).execute(ConfigurationScope.Personal, McpInvocationLease(client, "Test", 1, true),
                 "query", JsonObject(emptyMap()), {})
             org.junit.Assert.fail("barrier became a tool result")
-        } catch (actual: McpManagedSnapshotRequired) { assertSame(barrier, actual) }
+        } catch (actual: ManagedSnapshotRequired) { assertSame(barrier, actual) }
     }
 }

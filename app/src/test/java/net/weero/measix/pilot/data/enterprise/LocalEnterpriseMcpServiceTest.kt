@@ -88,7 +88,7 @@ class LocalEnterpriseMcpServiceTest {
                 owners += Triple(runtime, turnId, worker)
                 val model = configuration.models.getValue(requireNotNull(configuration.assistantModel(assistant.id).reference)).model
                 val captured = net.weero.measix.pilot.service.CapturedModelConfiguration(net.weero.measix.pilot.data.datastore.Settings(), configuration, assistant,
-                    net.weero.measix.pilot.service.ModelExecutionSnapshot(model, mockk(), "test", state.manifest.applied))
+                    net.weero.measix.pilot.service.ModelExecutionSnapshot(model, mockk(), "test", state.manifest.applied), selectionRevision = h.sessions.selectionRevision.value, interactionId = turnId)
                 return manager.prepareTurnCapabilities(h.access, captured, runtime, turnId, worker) { error("unexpected barrier") }
             }
             suspend fun invoke(tool: McpAvailableTool, args: JsonObject, metadata: suspend (JsonObject) -> Unit = {}) =
@@ -173,7 +173,7 @@ class LocalEnterpriseMcpServiceTest {
 
     @Test fun `published generation change rejects the original interaction before forwarding and uses the shared barrier contract`() = runBlocking {
         val fixture = requireNotNull(javaClass.getResourceAsStream("/contracts/runtime/managed-snapshot-required.json")).bufferedReader().use { it.readText() }
-        val shared = McpManagedSnapshotRequired.parse(fixture)
+        val shared = ManagedSnapshotRequired.parse(fixture)
         assertEquals(42L, shared.targetGeneration)
         withHarness { h -> h.connect { client, target ->
             val ref = client.discoverRef()
@@ -182,7 +182,7 @@ class LocalEnterpriseMcpServiceTest {
             assertEquals(target.version.generation, (h.sessions.state.value as EnterpriseState.Available).manifest.applied!!.generation)
             val failure = try { client.invoke(ref); error("old interaction must hit the generation barrier") }
                 catch (error: Exception) { error }
-            val barrier = requireNotNull(McpManagedSnapshotRequired.find(failure)) { failure.toString() }
+            val barrier = requireNotNull(ManagedSnapshotRequired.find(failure)) { failure.toString() }
             assertEquals(target.version.generation + 1, barrier.targetGeneration)
             assertTrue(barrier.requestId.startsWith("req_"))
         } }

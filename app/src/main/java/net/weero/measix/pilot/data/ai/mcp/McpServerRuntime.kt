@@ -1,5 +1,7 @@
 package net.weero.measix.pilot.data.ai.mcp
 
+import net.weero.measix.pilot.data.enterprise.ManagedSnapshotRequired
+
 import me.rerere.common.configuration.ConfigurationReference
 import android.content.Context
 import android.util.Log
@@ -107,7 +109,7 @@ internal class McpServerRuntime(
     private val policy: McpServerRuntimePolicy,
     private val logger: (String, String) -> Unit,
     private val onClosed: (McpRuntimeKey) -> Unit,
-    private val onManagedSnapshotRequired: (McpManagedSnapshotRequired) -> Unit,
+    private val onManagedSnapshotRequired: (ManagedSnapshotRequired) -> Unit,
 ) {
     val serverId: ConfigurationReference get() = key.serverId
     val mutex = Mutex()
@@ -488,7 +490,7 @@ internal class McpServerRuntime(
         failedClient: Client?,
         error: Throwable,
     ) {
-        McpManagedSnapshotRequired.find(error)?.let {
+        ManagedSnapshotRequired.find(error)?.let {
             acceptManagedBarrier(assignedGeneration, it)
             return
         }
@@ -790,7 +792,7 @@ internal class McpServerRuntime(
         capturedClient: Client,
         error: Throwable,
     ) {
-        McpManagedSnapshotRequired.find(error)?.let {
+        ManagedSnapshotRequired.find(error)?.let {
             acceptManagedBarrier(capturedGeneration, it)
             return
         }
@@ -814,7 +816,7 @@ internal class McpServerRuntime(
         onTransportClosed(capturedGeneration, capturedClient)
     }
 
-    suspend fun acceptManagedBarrier(epoch: Long, barrier: McpManagedSnapshotRequired) {
+    suspend fun acceptManagedBarrier(epoch: Long, barrier: ManagedSnapshotRequired) {
         val accepted = mutex.withLock {
             if (key.access == null || generation.get() != epoch || closing || barrierReported) return@withLock false
             barrierReported = true

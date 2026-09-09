@@ -222,7 +222,7 @@ class EnterpriseExitServiceTest {
             coEvery { sync.cancelAndAwait(any()) } returns Unit
             coEvery { conversations.stopEnterpriseWork(any()) } coAnswers { cleanup(firstArg()) }
             coEvery { conversations.requireEnterpriseStopped(any()) } returns Unit
-            service = EnterpriseExitService(sessions, sync, conversations, gate, scope, net.weero.measix.pilot.service.portal.PortalDocumentRegistry(), mockk(relaxed = true), mockk { io.mockk.coEvery { closeRealm(any()) } returns Unit }, mcp = mockk { io.mockk.coEvery { closeRealm(any()) } returns Unit })
+            service = EnterpriseExitService(sessions, sync, conversations, gate, scope, net.weero.measix.pilot.service.portal.PortalDocumentRegistry(), mockk(relaxed = true), mockk { io.mockk.coEvery { closeRealm(any()) } returns Unit }, mcp = mockk { io.mockk.coEvery { closeRealm(any()) } returns Unit }, speech = mockk(relaxed = true))
         }
 
         fun recovery(): ApplicationRecoveryCoordinator = ApplicationRecoveryCoordinator(

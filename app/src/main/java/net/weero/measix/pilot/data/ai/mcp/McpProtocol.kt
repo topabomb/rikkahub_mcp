@@ -71,27 +71,6 @@ internal class McpProtocolClientFactory(
 
 internal val LocalMcpRequestDefinition = io.ktor.util.AttributeKey<McpConnectionDefinition.Managed>("LocalMcpRequestDefinition")
 
-/** A verified pre-forward generation barrier must never become an automatic tool replay. */
-internal class McpManagedSnapshotRequired(val targetGeneration: Long, val requestId: String) :
-    IllegalStateException("managed_snapshot_required") {
-    companion object {
-        fun find(error: Throwable): McpManagedSnapshotRequired? = generateSequence(error) { it.cause }
-            .filterIsInstance<McpManagedSnapshotRequired>().firstOrNull()
-
-        fun parse(body: String): McpManagedSnapshotRequired {
-            val value = McpJsonFrame.parse(body) as? kotlinx.serialization.json.JsonObject
-                ?: error("invalid_managed_snapshot_barrier")
-            fun string(key: String) = (value[key] as? kotlinx.serialization.json.JsonPrimitive)?.takeIf { it.isString }?.content
-            val generation = (value["targetManagedGeneration"] as? kotlinx.serialization.json.JsonPrimitive)
-                ?.takeUnless { it.isString }?.content?.toLongOrNull()
-            check(string("code") == "managed_snapshot_required" && generation != null && generation > 0 &&
-                value["forwarded"] == kotlinx.serialization.json.JsonPrimitive(false) &&
-                string("requestId")?.matches(Regex("req_[A-Za-z0-9_-]{1,128}")) == true) { "invalid_managed_snapshot_barrier" }
-            return McpManagedSnapshotRequired(requireNotNull(generation), requireNotNull(string("requestId")))
-        }
-    }
-}
-
 /** Shared protocol failure classification used by lifecycle and invocation execution. */
 internal object McpProtocolFailureClassifier {
     fun httpCode(error: Throwable): String {

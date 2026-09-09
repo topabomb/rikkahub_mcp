@@ -121,6 +121,8 @@ fun ColumnScope.ChatMessageActionButtons(
 
         if (message.role == MessageRole.ASSISTANT) {
             val tts = LocalTTSState.current
+            val speechPage = (net.weero.measix.pilot.ui.components.richtext.LocalRenderedContentSource.current as?
+                net.weero.measix.pilot.service.RenderedContentSource.Conversation)?.view?.commandTarget
             val isSpeaking by tts.isSpeaking.collectAsState()
             val isAvailable by tts.isAvailable.collectAsState()
             Icon(
@@ -129,7 +131,7 @@ fun ColumnScope.ChatMessageActionButtons(
                 modifier = Modifier
                     .clip(CircleShape)
                     .clickable(
-                        enabled = isAvailable,
+                        enabled = isAvailable && speechPage != null,
                         interactionSource = remember { MutableInteractionSource() },
                         indication = LocalIndication.current,
                         onClick = {
@@ -142,7 +144,7 @@ fun ColumnScope.ChatMessageActionButtons(
                                 if (settings.displaySetting.ttsOnlyReadOutsideBrackets) {
                                     textToSpeak = textToSpeak.removeBracketedContent() ?: textToSpeak
                                 }
-                                tts.speak(textToSpeak)
+                                tts.speak(requireNotNull(speechPage), textToSpeak)
                             } else {
                                 tts.stop()
                             }

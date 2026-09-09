@@ -241,7 +241,10 @@ class SubAssistantTurnIntegrationTest {
             val parentTool = Tool(
                 name = "assistant_call", description = "Delegate a choice", execute = { emptyList() },
                 contextualExecute = {
-                    childRuns.executeCall(parent.id, runtime.id, access, child.id, "Choose a color", this)
+                    childRuns.executeCall(parent.id, runtime.id, access, child.id, "Choose a color", this,
+                        turnTtsContext = net.weero.measix.pilot.data.ai.tools.local.TtsToolPlaybackContext(
+                            sessionId = runtime.getTtsQueueSessionId(false), capture = mockk(), assistantId = parent.id,
+                            assistantName = parent.name, sourceType = net.weero.measix.pilot.data.ai.tts.TtsPlaybackSource.SourceType.NORMAL))
                 },
             )
             val turnId = Uuid.random()
@@ -310,7 +313,7 @@ class SubAssistantTurnIntegrationTest {
                     SubAssistantLifecycle(repository, registry, commands, JsonInstant), mockk(), artifacts, mockk(), finalizer,
                     JsonInstant, mockk(), ConversationTitleCoordinator(), sessions, runGate)
                 val synchronization = mockk<EnterpriseSynchronizationService> { coEvery { cancelAndAwait(any()) } returns Unit }
-                val exit = EnterpriseExitService(sessions, synchronization, application, gate, appScope, net.weero.measix.pilot.service.portal.PortalDocumentRegistry(), mockk(relaxed = true), mockk { io.mockk.coEvery { closeRealm(any()) } returns Unit }, mcp = mockk { io.mockk.coEvery { closeRealm(any()) } returns Unit })
+                val exit = EnterpriseExitService(sessions, synchronization, application, gate, appScope, net.weero.measix.pilot.service.portal.PortalDocumentRegistry(), mockk(relaxed = true), mockk { io.mockk.coEvery { closeRealm(any()) } returns Unit }, mcp = mockk { io.mockk.coEvery { closeRealm(any()) } returns Unit }, speech = mockk(relaxed = true))
                 val request = requireNotNull(exit.captureRequest())
                 val pending = async { try { exit.exit(request); null } catch (error: Exception) { error } }
                 sessions.state.first { it is EnterpriseState.Available && it.manifest.phase == EnterpriseSessionPhase.CLOSING }

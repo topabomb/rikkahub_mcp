@@ -1,5 +1,7 @@
 package net.weero.measix.pilot.data.ai.mcp
 
+import net.weero.measix.pilot.data.enterprise.ManagedSnapshotRequired
+
 import com.sun.net.httpserver.HttpServer
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.okhttp.OkHttp
@@ -62,7 +64,7 @@ class McpTransportOwnershipIntegrationTest {
                     transport.send(McpJson.decodeFromString<JSONRPCMessage>(if (primed)
                         """{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"invoke_tool","arguments":{}}}"""
                         else """{"jsonrpc":"2.0","method":"notifications/initialized"}"""), null)
-                    assertTrue(failure.await() is McpManagedSnapshotRequired)
+                    assertTrue(failure.await() is ManagedSnapshotRequired)
                     transport.close()
                     assertEquals(1, gets.get())
                     assertEquals(1, posts.get())

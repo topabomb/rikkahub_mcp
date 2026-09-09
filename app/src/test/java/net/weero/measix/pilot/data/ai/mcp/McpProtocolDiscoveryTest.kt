@@ -135,7 +135,7 @@ class McpProtocolDiscoveryTest {
                         McpCatalogDiscovery.fetchCandidate(key, config.mcpDefinitionDigest(), client, managed)
                         fail("Separated number tokens cannot become one valid number")
                     } catch (error: io.modelcontextprotocol.kotlin.sdk.types.McpException) {
-                        assertTrue(generateSequence<Throwable>(error) { it.cause }.any { it.message == "Invalid MCP object" })
+                        assertTrue(generateSequence<Throwable>(error) { it.cause }.any { it.message == "Invalid object" })
                     }
                     assertEquals(1, pageCount)
                     return@withTimeout

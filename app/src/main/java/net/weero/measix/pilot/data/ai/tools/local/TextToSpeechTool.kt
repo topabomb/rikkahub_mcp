@@ -10,11 +10,6 @@ import me.rerere.ai.core.InputSchema
 import me.rerere.ai.core.Tool
 import me.rerere.ai.ui.UIMessagePart
 import net.weero.measix.pilot.data.ai.tts.TtsPlaybackSource
-import net.weero.measix.pilot.data.datastore.SettingsStore
-import net.weero.measix.pilot.data.datastore.getSelectedTTSProvider
-import net.weero.measix.pilot.data.event.AppEvent
-import net.weero.measix.pilot.data.event.AppEventBus
-import me.rerere.tts.provider.TTSManager
 
 /**
  * 一轮用户 turn 内 Master 与 Target 共用的 TTS 播放上下文。
@@ -22,6 +17,7 @@ import me.rerere.tts.provider.TTSManager
  */
 data class TtsToolPlaybackContext(
     val sessionId: String,
+    val capture: net.weero.measix.pilot.service.SpeechCapture,
     val assistantId: ConfigurationReference?,
     val assistantName: String,
     val sourceType: TtsPlaybackSource.SourceType,
@@ -34,10 +30,8 @@ data class TtsToolPlaybackContext(
 }
 
 internal fun buildTextToSpeechTool(
-    eventBus: AppEventBus,
-    ttsManager: TTSManager,
-    settingsStore: SettingsStore,
-    playbackContext: TtsToolPlaybackContext? = null,
+    speech: net.weero.measix.pilot.service.SpeechApplicationService,
+    playbackContext: TtsToolPlaybackContext,
 ): Tool {
     return Tool(
         name = "text_to_speech",
@@ -46,11 +40,7 @@ internal fun buildTextToSpeechTool(
             Returns immediately; playback continues in the background.
             Provide natural speech text without markdown.
         """.trimIndent().replace("\n", " "),
-        // 装配（START）时求值一次：同 Turn 内切换 TTS Provider 不得改写已冻结的 System 前缀。
-        systemPromptContribution = settingsStore.effectiveSettings.value.settings
-            .getSelectedTTSProvider()
-            ?.let { ttsManager.getPromptGuidance(it) }
-            .orEmpty(),
+        systemPromptContribution = playbackContext.capture.guidance,
         parameters = {
             InputSchema.Obj(
                 properties = buildJsonObject {
@@ -63,20 +53,12 @@ internal fun buildTextToSpeechTool(
             )
         },
         execute = {
-            val sequentialEnabled = settingsStore.effectiveSettings.value.settings
-                .displaySetting.ttsToolSequentialPlayback
             val text = it.jsonObject["text"]?.jsonPrimitive?.contentOrNull
                 ?.takeIf { value -> value.isNotBlank() }
                 ?: error("text is required and must not be blank")
 
-            eventBus.emit(AppEvent.Speak(
-                text = text,
-                queueSessionId = playbackContext?.sessionId,
-                // 同一 turn 是否替换由设置决定；缺少 turn context 时保守地替换。
-                replaceWithinSession = playbackContext == null ||
-                    ttsToolReplacesWithinTurn(sequentialEnabled),
-                source = playbackContext?.toPlaybackSource(),
-            ))
+            speech.enqueue(playbackContext.capture, playbackContext.sessionId, text,
+                ttsToolReplacesWithinTurn(playbackContext.capture.sequential), playbackContext.toPlaybackSource())
             val payload = buildJsonObject {
                 put("success", true)
             }

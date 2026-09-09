@@ -62,6 +62,8 @@ internal class CapturedModelConfiguration(
     val configuration: ResolvedConfiguration,
     val assistant: Assistant,
     val model: ModelExecutionSnapshot,
+    val selectionRevision: Long,
+    val interactionId: Uuid,
     val inspectionModel: ModelExecutionSnapshot? = null,
     val imageModel: ModelExecutionSnapshot? = null,
 ) {
@@ -127,6 +129,7 @@ internal class ModelExecutionService(
         turnId: Uuid? = null,
         bindOwner: (ModelExecutionLease) -> Unit,
     ): CapturedModelConfiguration {
+        val selectionRevision = sessions.selectionRevision.value
         check(runtime.durable.header.scope == access.scope) { "conversation_scope_mismatch" }
         if (role == ModelSelectionRole.CHAT) {
             check((runtime.durable.header.parentConversationId != null) == (child != null)) { "model_execution_lineage_mismatch" }
@@ -164,7 +167,7 @@ internal class ModelExecutionService(
             val image = if (role == ModelSelectionRole.CHAT &&
                 net.weero.measix.pilot.data.ai.tools.local.LocalToolOption.TextToImage in assistant.localTools)
                 captureTool(ModelSelectionRole.IMAGE) else null
-            CapturedModelConfiguration(snapshot.userSettings, configuration, assistant, model, inspection, image)
+            CapturedModelConfiguration(snapshot.userSettings, configuration, assistant, model, selectionRevision, turnId ?: Uuid.random(), inspection, image)
         }
     }
 

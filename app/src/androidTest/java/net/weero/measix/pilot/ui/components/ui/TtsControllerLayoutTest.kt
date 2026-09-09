@@ -72,7 +72,7 @@ import net.weero.measix.pilot.data.model.Assistant
 import net.weero.measix.pilot.data.model.Avatar
 import net.weero.measix.pilot.ui.context.LocalSettings
 import net.weero.measix.pilot.ui.context.LocalTTSState
-import net.weero.measix.pilot.ui.hooks.CustomTtsState
+import net.weero.measix.pilot.service.SpeechPlayback
 import net.weero.measix.pilot.ui.adaptive.AdaptiveLayoutDefaults
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -432,7 +432,7 @@ class TtsControllerLayoutTest {
         InstrumentationRegistry.getInstrumentation().targetContext.getString(stringId),
     )
 
-    private class TestTtsState : CustomTtsState {
+    private class TestTtsState : SpeechPlayback {
         override val isAvailable = MutableStateFlow(true)
         override val isSpeaking = MutableStateFlow(true)
         override val error = MutableStateFlow<String?>(null)
@@ -444,17 +444,12 @@ class TtsControllerLayoutTest {
         override fun pause() { playbackState.value = playbackState.value.copy(status = PlaybackStatus.Paused) }
         override fun resume() { playbackState.value = playbackState.value.copy(status = PlaybackStatus.Playing) }
         override fun stop() { isSpeaking.value = false }
-        override fun speak(text: String, flushCalled: Boolean) = Unit
-        override fun speakWithSource(
-            text: String,
-            replaceWithinSession: Boolean,
-            queueSessionId: String?,
-            source: TtsPlaybackSource?,
-        ) = Unit
+        override fun speak(page: net.weero.measix.pilot.service.ConversationCommandTarget, text: String) = Unit
+        override fun speak(selection: net.weero.measix.pilot.data.enterprise.RealmSelection, text: String) = Unit
+        override fun speak(context: net.weero.measix.pilot.data.ai.tools.local.TtsToolPlaybackContext, text: String, replaceWithinSession: Boolean) = Unit
         override fun skipNext() = Unit
         override fun fastForward(ms: Long) = Unit
         override fun setSpeed(speed: Float) = Unit
-        override fun cleanup() = Unit
     }
 
     private companion object {

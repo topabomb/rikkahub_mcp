@@ -50,7 +50,7 @@ import me.rerere.hugeicons.stroke.Pause
 import me.rerere.hugeicons.stroke.Play
 import net.weero.measix.pilot.ui.context.LocalTTSState
 import net.weero.measix.pilot.ui.context.LocalSettings
-import net.weero.measix.pilot.ui.hooks.CustomTtsState
+import net.weero.measix.pilot.service.SpeechPlayback
 import net.weero.measix.pilot.ui.hooks.subAssistantActivityRing
 import me.rerere.tts.model.PlaybackState
 import me.rerere.tts.model.PlaybackStatus
@@ -240,7 +240,7 @@ private fun TtsSourceAvatar(
 }
 
 @Composable
-private fun FastForwardButton(ttsState: CustomTtsState, contentDescription: String) {
+private fun FastForwardButton(ttsState: SpeechPlayback, contentDescription: String) {
     IconButton(
         onClick = {
             ttsState.fastForward(5000)
@@ -256,7 +256,7 @@ private fun FastForwardButton(ttsState: CustomTtsState, contentDescription: Stri
 @Composable
 private fun PlayPauseButton(
     playbackState: PlaybackState,
-    ttsState: CustomTtsState,
+    ttsState: SpeechPlayback,
     playDesc: String,
     pauseDesc: String,
 ) {
@@ -319,7 +319,7 @@ internal fun PlaybackState.toolbarChunkProgress(): Float =
 @Composable
 private fun SpeedButton(
     playbackState: PlaybackState,
-    ttsState: CustomTtsState
+    ttsState: SpeechPlayback
 ) {
     TextButton(
         onClick = {

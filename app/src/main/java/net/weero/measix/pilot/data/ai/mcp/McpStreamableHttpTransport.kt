@@ -1,6 +1,9 @@
 // Modified from modelcontextprotocol/kotlin-sdk 0.15.0; upstream license is bundled in assets/licenses.
+
 // Source and local changes: docs/references/mcp-architecture.md.
 package net.weero.measix.pilot.data.ai.mcp
+
+import net.weero.measix.pilot.data.enterprise.ManagedSnapshotRequired
 
 import io.modelcontextprotocol.kotlin.sdk.client.ReconnectionOptions
 import io.modelcontextprotocol.kotlin.sdk.client.StreamableHttpError
@@ -149,7 +152,7 @@ internal class McpStreamableHttpTransport(
 
             if (!response.status.isSuccess()) {
                 val body = response.readMcpBody()
-                val error = if (managed && response.status.value == 428) McpManagedSnapshotRequired.parse(body)
+                val error = if (managed && response.status.value == 428) ManagedSnapshotRequired.parse(body)
                     else StreamableHttpError(response.status.value, if (managed) "Managed MCP request rejected" else body)
                 _onError(error)
                 throw error
@@ -262,7 +265,7 @@ internal class McpStreamableHttpTransport(
         lastEventId?.let { headers.append(MCP_RESUMPTION_TOKEN_HEADER, it) }
         requestBuilder()
     }.execute { response ->
-        if (managed && response.status.value == 428) throw McpManagedSnapshotRequired.parse(response.readMcpBody())
+        if (managed && response.status.value == 428) throw ManagedSnapshotRequired.parse(response.readMcpBody())
         if (response.status == HttpStatusCode.NotFound || response.status == HttpStatusCode.MethodNotAllowed ||
             response.contentType()?.match(ContentType.Application.Json) == true) return@execute null
         if (!response.status.isSuccess() || response.contentType()?.match(ContentType.Text.EventStream) != true) {

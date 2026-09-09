@@ -1,5 +1,7 @@
 package net.weero.measix.pilot.data.ai.mcp
 
+import net.weero.measix.pilot.utils.StrictJsonValue
+
 import io.modelcontextprotocol.kotlin.sdk.types.JSONRPCRequest
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
@@ -52,14 +54,14 @@ class McpCatalogWireTest {
             """{"value":01}""", """{"value":NaN}""", """{"value":truth}""",
             """{"value":1,}""", """{"value":[1,]}""", "{} {}",
         ).forEach { raw ->
-            try { McpJsonFrame.parse(raw); fail("Accepted invalid JSON: $raw") }
+            try { StrictJsonValue.parse(raw, MAX_MCP_FRAME_BYTES); fail("Accepted invalid JSON: $raw") }
             catch (_: IllegalStateException) { }
             catch (_: kotlinx.serialization.SerializationException) { }
         }
         assertEquals(Json.parseToJsonElement("""{"a":[1,-0,1.2e3,true,null,"中\\文"]}"""),
-            McpJsonFrame.parse("""{"a":[1,-0,1.2e3,true,null,"中\\文"]}"""))
-        val overBytes = "\"" + "中".repeat(McpJsonFrame.MAX_BYTES / 3) + "\""
-        try { McpJsonFrame.parse(overBytes); fail("Must enforce UTF-8 bytes") }
+            StrictJsonValue.parse("""{"a":[1,-0,1.2e3,true,null,"中\\文"]}""", MAX_MCP_FRAME_BYTES))
+        val overBytes = "\"" + "中".repeat(MAX_MCP_FRAME_BYTES / 3) + "\""
+        try { StrictJsonValue.parse(overBytes, MAX_MCP_FRAME_BYTES); fail("Must enforce UTF-8 bytes") }
         catch (_: IllegalStateException) { }
     }
 

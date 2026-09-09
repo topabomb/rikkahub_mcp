@@ -140,6 +140,17 @@ val dataSourceModule = module {
     }
 
     single { net.weero.measix.pilot.data.enterprise.LocalEnterpriseMcpService(get(), get()) }
+    single {
+        val context = get<Context>()
+        net.weero.measix.pilot.data.enterprise.LocalEnterpriseSpeechService(get(), get()) {
+            context.assets.open("enterprise/speech-example.mp3").use { it.readBytes() }
+        }
+    }
+    single {
+        val local = get<net.weero.measix.pilot.data.enterprise.LocalEnterpriseSpeechService>()
+        net.weero.measix.pilot.data.enterprise.EnterpriseSpeechTransport(local::execute)
+    }
+
 
     single<OAuthCallbackKeepAlive> { McpOAuthCallbackKeepAlive() }
 

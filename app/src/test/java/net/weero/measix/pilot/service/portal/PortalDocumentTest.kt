@@ -187,7 +187,7 @@ class PortalDocumentTest {
         val conversations = mockk<ConversationApplicationService>()
         coEvery { conversations.stopEnterpriseWork(any()) } returns Unit
         val exit = EnterpriseExitService(h.sessions, h.sync, conversations,
-            ApplicationRecoveryGate().apply { ready() }, appScope, h.registry, mockk(relaxed = true), mockk { io.mockk.coEvery { closeRealm(any()) } returns Unit }, mcp = mockk { io.mockk.coEvery { closeRealm(any()) } returns Unit })
+            ApplicationRecoveryGate().apply { ready() }, appScope, h.registry, mockk(relaxed = true), mockk { io.mockk.coEvery { closeRealm(any()) } returns Unit }, mcp = mockk { io.mockk.coEvery { closeRealm(any()) } returns Unit }, speech = mockk(relaxed = true))
         try {
             started.await()
             val request = requireNotNull(exit.captureRequest())
@@ -398,7 +398,7 @@ class PortalDocumentTest {
         val conversations = mockk<ConversationApplicationService>()
         coEvery { conversations.stopEnterpriseWork(any()) } returns Unit
         val exit = EnterpriseExitService(h.sessions, h.sync, conversations,
-            ApplicationRecoveryGate().apply { ready() }, appScope, h.registry, mockk(relaxed = true), mockk { io.mockk.coEvery { closeRealm(any()) } returns Unit }, mcp = mockk { io.mockk.coEvery { closeRealm(any()) } returns Unit })
+            ApplicationRecoveryGate().apply { ready() }, appScope, h.registry, mockk(relaxed = true), mockk { io.mockk.coEvery { closeRealm(any()) } returns Unit }, mcp = mockk { io.mockk.coEvery { closeRealm(any()) } returns Unit }, speech = mockk(relaxed = true))
         lateinit var native: PortalNativeActions
         val doc = h.open(createNative = { h.native(mockk(), it, exit).also { native = it } })
         try {

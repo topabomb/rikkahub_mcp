@@ -41,6 +41,33 @@ class EnterprisePackageTest {
         assertNull(packet.configuration.asr.single().language)
     }
 
+    @Test fun `private speech permits only implemented protocols and forbids caller supplied runtime identity headers`() {
+        val base = exampleEnterprisePackage()
+        val resources = listOf(base.configuration.tts.first().id to EnterpriseRuntimeProtocol.OPENAI_TTS,
+            base.configuration.asr.first().id to EnterpriseRuntimeProtocol.OPENAI_HTTP_ASR)
+        for ((id, protocol) in resources) {
+            val binding = EnterpriseRuntimeBinding(id, protocol, "https://speech.test/request", "credential")
+            fun packet(headers: Map<String, String> = emptyMap()) = base.copy(runtimeBindings = base.runtimeBindings.map {
+                if (it.resourceId == id) binding.copy(headers = headers) else it
+            })
+            assertEquals(packet(), EnterprisePackageCodec.decode(EnterprisePackageCodec.encode(packet())))
+            for (header in listOf("Host", "Content-Length", "X-Measix-Managed-Generation", "X-Measix-Interaction-Id",
+                "X-Measix-Resource-Id", "Authorization")) {
+                assertThrows(EnterpriseConfigurationException::class.java) {
+                    EnterprisePackageCodec.validate(packet(mapOf(header to "override")))
+                }
+            }
+            if (protocol == EnterpriseRuntimeProtocol.OPENAI_TTS) {
+                val text = EnterprisePackageCodec.encode(packet()).decodeToString()
+                for (retired in listOf("GEMINI_TTS", "MIMO_TTS")) {
+                    assertThrows(EnterpriseConfigurationException::class.java) {
+                        EnterprisePackageCodec.decode(text.replace("OPENAI_TTS", retired).toByteArray())
+                    }
+                }
+            }
+        }
+    }
+
     @Test fun `private image models require the implemented image wire and preserve authentication ownership`() {
         val base = exampleEnterprisePackage()
         val model = base.configuration.models.first().copy(id = "mdl_image_test", type = me.rerere.ai.provider.ModelType.IMAGE)

@@ -21,7 +21,7 @@ import net.weero.measix.pilot.data.model.Assistant
 import net.weero.measix.pilot.ui.context.LocalNavController
 import net.weero.measix.pilot.ui.context.LocalSettings
 import net.weero.measix.pilot.ui.context.LocalTTSState
-import net.weero.measix.pilot.ui.hooks.CustomTtsState
+import net.weero.measix.pilot.service.SpeechPlayback
 import net.weero.measix.pilot.ui.context.LocalToaster
 import net.weero.measix.pilot.ui.context.Navigator
 import org.junit.Assert.assertEquals
@@ -44,7 +44,7 @@ class AssistantPromptPageAndroidTest {
         every { vm.settings } returns settings
         every { vm.lockedSettingsChanges } returns MutableSharedFlow()
         every { vm.update(any(), any()) } answers { updates += firstArg<Assistant>() to secondArg<Assistant>(); Unit }
-        val tts = mockk<CustomTtsState>()
+        val tts = mockk<SpeechPlayback>()
         every { tts.isSpeaking } returns MutableStateFlow(false)
         every { tts.isAvailable } returns MutableStateFlow(false)
         compose.setContent {

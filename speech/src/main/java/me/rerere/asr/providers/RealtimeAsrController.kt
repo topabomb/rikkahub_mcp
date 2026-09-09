@@ -22,6 +22,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import me.rerere.asr.AsrCleanup
 import me.rerere.asr.ASRController
 import me.rerere.asr.ASRProviderSetting
 import me.rerere.asr.ASRState
@@ -40,6 +41,7 @@ class RealtimeAsrController(
     private val context: Context,
     private val sockets: WebSocket.Factory,
     private val provider: ASRProviderSetting,
+    private val admitRecording: suspend (() -> Unit) -> Unit,
 ) : ASRController {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val _state = MutableStateFlow(ASRState(isAvailable = true))
@@ -88,8 +90,11 @@ class RealtimeAsrController(
                             }
                             if (!webSocket.send(update.toString())) { fail("ASR session initialization failed"); return@launch }
                             try {
-                                startCapture(webSocket)
-                                _state.update { it.copy(status = ASRStatus.Listening) }
+                                admitRecording {
+                                    check(socket === webSocket && state.value.status == ASRStatus.Connecting) { "asr_connection_replaced" }
+                                    startCapture(webSocket)
+                                    _state.update { it.copy(status = ASRStatus.Listening) }
+                                }
                             } catch (cancelled: CancellationException) { throw cancelled }
                             catch (_: Exception) { fail("Microphone recording failed") }
                         }
@@ -138,12 +143,12 @@ class RealtimeAsrController(
 
     /** Cancels each connection and awaits protocol terminal callbacks and every owned recorder's finally. */
     @MainThread
-    override fun dispose(): Job {
+    override fun dispose(): AsrCleanup {
         abandon()
         onTranscriptChange = null
         _state.value = ASRState()
         scope.cancel()
-        return requireNotNull(scope.coroutineContext[Job])
+        return AsrCleanup(requireNotNull(scope.coroutineContext[Job]))
     }
 
     private fun startCapture(original: WebSocket) {

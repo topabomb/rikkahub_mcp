@@ -340,6 +340,17 @@ internal class EnterpriseSessionController(
             operation()
         }
 
+    /** Recheck after awaited work inside the selected-session boundary; wall-clock expiry needs no publication. */
+    internal fun requirePublishedSelection(selection: RealmSelection) {
+        if (selection.revision != selectionRevision.value) fail("enterprise_selection_revoked")
+        val published = state.value
+        if (published is EnterpriseState.Failed && selection.access == RealmAccess.Personal) return
+        val manifest = (published as? EnterpriseState.Available)?.manifest ?: fail("enterprise_data_access_unavailable")
+        val access = selection.access
+        if (manifest.selectedScope != access.scope ||
+            access is RealmAccess.Enterprise && !allowsDataAccess(manifest, access)) fail("enterprise_data_access_unavailable")
+    }
+
     /** UI directory subscriptions follow the selected realm; expiry revokes the original session. */
     fun observeSelectedRealmAccess(): Flow<RealmAccess?> = state.flatMapLatest { published ->
         val manifest = (published as? EnterpriseState.Available)?.manifest

@@ -101,21 +101,10 @@ class TurnToolSetFactory(
             } else {
                 assistant.localTools
             }
-            // 每轮生成创建一个 TtsToolPlaybackContext，step 重建时复用
-            val ttsContext = ttsPlaybackContext ?: TtsToolPlaybackContext(
-                sessionId = Uuid.random().toString(),
-                assistantId = assistant.id,
-                assistantName = assistant.name,
-                sourceType = if (turnKind == TurnKind.SUB_ASSISTANT) {
-                    TtsPlaybackSource.SourceType.SUB_ASSISTANT
-                } else {
-                    TtsPlaybackSource.SourceType.NORMAL
-                },
-            )
             addAll(
                 localTools.getTools(
                     options = localToolOptions,
-                    ttsPlaybackContext = ttsContext,
+                    ttsPlaybackContext = ttsPlaybackContext,
                     buildContext = AssistantToolBuildContext(
                         realmAccess = realmAccess,
                         ownerAssistantId = assistant.id,

@@ -320,8 +320,9 @@ object TextToSpeechToolUI : ToolUIRenderer {
 
     @Composable
     override fun Summary(context: ToolUIContext) {
-        val eventBus: AppEventBus = koinInject()
-        val scope = rememberCoroutineScope()
+        val tts = net.weero.measix.pilot.ui.context.LocalTTSState.current
+        val page = (net.weero.measix.pilot.ui.components.richtext.LocalRenderedContentSource.current as?
+            net.weero.measix.pilot.service.RenderedContentSource.Conversation)?.view?.commandTarget
         val text = context.arguments.getStringContent("text") ?: ""
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -337,7 +338,8 @@ object TextToSpeechToolUI : ToolUIRenderer {
                 modifier = Modifier.weight(1f),
             )
             FilledTonalIconButton(
-                onClick = { scope.launch { eventBus.emit(AppEvent.Speak(text)) } },
+                onClick = { tts.speak(requireNotNull(page), text) },
+                enabled = page != null,
                 modifier = Modifier.size(28.dp),
             ) {
                 Icon(

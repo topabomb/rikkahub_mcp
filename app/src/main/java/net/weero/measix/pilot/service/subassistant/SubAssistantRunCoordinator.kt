@@ -997,10 +997,7 @@ class SubAssistantRunCoordinator internal constructor(
         val settings = captured.userSettings
         val target = captured.assistant
         val model = captured.model.model
-        // 复用 turn-level TtsToolPlaybackContext 的 sessionId，使整轮 turn 内的 Master 和
-        // 所有 Target 的 TTS 调用归属同一条播放队列；无 turnTtsContext 时回退独立 context。
-        val ttsPlaybackContext = TtsToolPlaybackContext(
-            sessionId = turnTtsContext?.sessionId ?: Uuid.random().toString(),
+        val ttsPlaybackContext = requireNotNull(turnTtsContext) { "parent_turn_speech_capture_missing" }.copy(
             assistantId = target.id,
             assistantName = target.name,
             sourceType = TtsPlaybackSource.SourceType.SUB_ASSISTANT,

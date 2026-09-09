@@ -18,15 +18,16 @@ fun TTSAutoPlay(vm: ChatVM, setting: Settings, snapshot: ConversationPresentatio
     val tts = LocalTTSState.current
     val updatedSetting by rememberUpdatedState(setting)
     LaunchedEffect(vm, snapshot.conversationId) {
-        vm.generationDoneFlow.collect { conversationId ->
+        vm.completedSpeech.collect { completion ->
+            val conversationId = completion.conversationId
             if (snapshot.conversationId != conversationId) return@collect
             // SharedFlow 完成事件可能先于 Compose 参数重组到达，直接读取内存快照（权威事实源）。
             val completedSnapshot = vm.currentSnapshot()
             if (updatedSetting.displaySetting.autoPlayTTSAfterGeneration &&
-                shouldAutoPlayTts(conversationId, completedSnapshot)
+                shouldAutoPlayTts(completion, completedSnapshot)
             ) {
-                val lastMessage = completedSnapshot.currentMessages().lastOrNull()
-                if (lastMessage != null && lastMessage.role == MessageRole.ASSISTANT) {
+                val lastMessage = completion.message
+                if (lastMessage.role == MessageRole.ASSISTANT) {
                     val text = lastMessage.toText()
                     var textToSpeak = text
                     if (updatedSetting.displaySetting.ttsOnlyReadQuoted) {
@@ -36,16 +37,9 @@ fun TTSAutoPlay(vm: ChatVM, setting: Settings, snapshot: ConversationPresentatio
                         textToSpeak = textToSpeak.removeBracketedContent() ?: textToSpeak
                     }
                     if (textToSpeak.isNotBlank()) {
-                        val queueSessionId = vm.getTtsQueueSessionId(conversationId)
-                        tts.speakWithSource(
-                            text = textToSpeak,
-                            replaceWithinSession = autoPlayReplacesWithinTurn(
-                                queueSessionId = queueSessionId,
-                                sequentialEnabled = updatedSetting.displaySetting.ttsToolSequentialPlayback,
-                            ),
-                            queueSessionId = queueSessionId,
-                            source = null,
-                        )
+                        val context = completion.context
+                        tts.speak(context, textToSpeak, autoPlayReplacesWithinTurn(context.sessionId,
+                            context.capture.sequential))
                     }
                 }
             }
@@ -56,8 +50,9 @@ fun TTSAutoPlay(vm: ChatVM, setting: Settings, snapshot: ConversationPresentatio
 internal fun autoPlayReplacesWithinTurn(queueSessionId: String?, sequentialEnabled: Boolean): Boolean =
     queueSessionId == null || !sequentialEnabled
 
-internal fun shouldAutoPlayTts(conversationId: kotlin.uuid.Uuid, snapshot: ConversationPresentationSnapshot): Boolean {
-    if (snapshot.conversationId != conversationId) return false
+internal fun shouldAutoPlayTts(completion: net.weero.measix.pilot.service.ConversationSpeechCompletion, snapshot: ConversationPresentationSnapshot): Boolean {
+    if (snapshot.conversationId != completion.conversationId) return false
+    if (snapshot.currentMessages().lastOrNull()?.id != completion.message.id) return false
     val lastMessage = snapshot.currentMessages().lastOrNull() ?: return false
     if (lastMessage.role != MessageRole.ASSISTANT) return false
     val hasPendingTools = lastMessage.parts.any { it is UIMessagePart.Tool && it.isPending }

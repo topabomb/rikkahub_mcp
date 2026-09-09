@@ -265,15 +265,6 @@ class ConversationQueryService internal constructor(
     /** Re-emits query models when ArtifactStore invalidates or removes a referenced payload. */
     fun attachmentPreviewChanges(): Flow<Unit> = attachmentPreviewProjector.lifecycleChanges()
 
-    suspend fun ttsQueueSessionId(lease: ConversationViewLease): String? =
-        withViewAccess(lease) {
-            runtimeRegistry.findRuntime(lease.conversationId)?.let { runtime ->
-                check(runtime.snapshot.value.durable.header.scope == lease.access.scope) {
-                    "conversation_scope_mismatch"
-                }
-                runtime.peekTtsQueueSessionId()
-            }
-        }
 
     fun conversationActivities(): Flow<Map<Uuid, Set<ConversationActivity>>> = combine(
         runtimeRegistry.getConversationTurnPresentations(),

@@ -673,7 +673,6 @@
   <string name="setting_asr_configure_vad_threshold">VAD阈值</string>
   <string name="setting_asr_configure_websocket_url">WebSocket URL</string>
   <string name="setting_asr_page_add_provider">添加ASR提供商</string>
-  <string name="setting_asr_page_default_name">ASR</string>
   <string name="setting_asr_page_edit_provider">编辑ASR提供商</string>
   <string name="setting_display_page_amoled_dark_mode_desc">在暗色主题中使用纯黑背景，适合 AMOLED 屏幕</string>
   <string name="setting_display_page_amoled_dark_mode_inactive_desc">仅在深色主题下生效</string>
@@ -1050,7 +1049,6 @@
   <string name="setting_tts_page_base_url">基础URL</string>
   <string name="setting_tts_page_base_url_description">API基础URL端点</string>
   <string name="setting_tts_page_base_url_placeholder">https://api.openai.com/v1</string>
-  <string name="setting_tts_page_default_name">系统TTS</string>
   <string name="setting_tts_page_default_playback_speed">默认播放速度</string>
   <string name="setting_tts_page_default_playback_speed_description">本地应用于所有 TTS 提供商，不更改其合成设置。</string>
   <string name="setting_tts_page_edit_provider">编辑提供商</string>
@@ -1058,7 +1056,6 @@
   <string name="setting_tts_page_model_description">要使用的TTS模型</string>
   <string name="setting_tts_page_model_placeholder_gemini">gemini-2.5-flash-preview-tts</string>
   <string name="setting_tts_page_model_placeholder_openai">gpt-4o-mini-tts</string>
-  <string name="setting_tts_page_more_options_content_description">更多选项</string>
   <string name="setting_tts_page_name">名称</string>
   <string name="setting_tts_page_name_description">此TTS提供商的自定义名称</string>
   <string name="setting_tts_page_name_placeholder">输入提供商名称</string>
@@ -1078,7 +1075,6 @@
   <string name="setting_tts_page_style_instruction_placeholder">如：轻快上扬的语调，语速稍快，带着兴奋</string>
   <string name="setting_tts_page_provider_type">提供商类型</string>
   <string name="setting_tts_page_provider_type_description">选择TTS提供商类型</string>
-  <string name="setting_tts_page_selected">已选择</string>
   <string name="setting_tts_page_speech_rate">语音速度</string>
   <string name="setting_tts_page_speech_rate_description">控制语音播放速度 (0.1 - 3.0，1.0为正常速度)</string>
   <string name="setting_tts_page_test_text">你好，这是文字转语音测试。</string>
@@ -1667,4 +1663,5 @@
   <string name="mcp_enterprise_read_only">企业工具只读，首次使用后可查看已发现的工具目录。</string>
   <string name="mcp_gateway_preference_hint">所有网关工具一起启停，修改仅对新的交互生效。</string>
   <string name="mcp_enterprise_required">企业要求启用</string>
+  <string name="speech_operation_unavailable">语音不可用，请检查所选资源和空间。</string>
 </resources>

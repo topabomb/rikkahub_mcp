@@ -33,6 +33,7 @@ internal class EnterpriseApplicationService(
     private val scope: CoroutineScope,
     private val media: PortalMediaStore,
     private val terminals: net.weero.measix.pilot.service.workspace.WorkspaceTerminalRuntime,
+    private val speech: SpeechApplicationService,
 ) {
     private data class Switching(val request: RealmSwitchRequest, val result: Deferred<RealmSelection>)
     private val mutex = Mutex()
@@ -101,6 +102,7 @@ internal class EnterpriseApplicationService(
         var failure: Exception? = null
         try {
             selected = sessions.switchRealm(request) { previous ->
+                speech.revoke(previous)
                 terminals.revokeViewports(previous)
                 if (previous is RealmAccess.Enterprise) {
                     receipt = portals.capture(previous)
@@ -113,7 +115,14 @@ internal class EnterpriseApplicationService(
         }
         try {
             // The accepted switch owns this receipt even if its caller or application scope is cancelled.
-            withContext(NonCancellable) { receipt?.awaitClosed() }
+            withContext(NonCancellable) {
+                var portalFailure: Exception? = null
+                try { receipt?.awaitClosed() } catch (error: Exception) { portalFailure = error }
+                try { speech.closeRealm(request.selection.access) } catch (error: Exception) {
+                    if (portalFailure == null) throw error else portalFailure.addSuppressed(error)
+                }
+                portalFailure?.let { throw it }
+            }
         } catch (cleanup: Exception) {
             if (failure == null) failure = cleanup else if (cleanup !== failure) failure.addSuppressed(cleanup)
         } finally {

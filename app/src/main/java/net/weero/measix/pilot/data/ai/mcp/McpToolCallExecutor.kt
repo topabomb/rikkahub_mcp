@@ -1,5 +1,7 @@
 package net.weero.measix.pilot.data.ai.mcp
 
+import net.weero.measix.pilot.data.enterprise.ManagedSnapshotRequired
+
 import net.weero.measix.pilot.data.configuration.ConfigurationScope
 
 import io.modelcontextprotocol.kotlin.sdk.client.Client
@@ -135,7 +137,7 @@ internal class McpToolCallExecutor(
             throw cancelled
         } catch (error: Throwable) {
             discardCreatedArtifacts(createdArtifacts, "MCP tool result rollback", error)
-            McpManagedSnapshotRequired.find(error)?.let { throw it }
+            ManagedSnapshotRequired.find(error)?.let { throw it }
             val kind = when {
                 receivedResult -> McpInvocationFailureKind.PROTOCOL
                 error is McpException -> McpInvocationFailureKind.REMOTE

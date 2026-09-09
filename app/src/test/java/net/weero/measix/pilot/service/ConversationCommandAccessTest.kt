@@ -780,7 +780,7 @@ class ConversationCommandAccessTest {
             val context = mockk<android.app.Application>()
             every { context.getString(any()) } returns "operation"
             every { effects.preloadSoundEffects() } returns Unit
-            ConversationTurnService(context, appScope, mockk(relaxed = true), settings, net.weero.measix.pilot.test.testModelExecutionService(settings, sessions, gate), memory, sessions, runner, mockk(relaxed = true),
+            ConversationTurnService(context, appScope, mockk(relaxed = true), settings, net.weero.measix.pilot.test.testModelExecutionService(settings, sessions, gate), mockk(relaxed = true), memory, sessions, runner, mockk(relaxed = true),
                 mcp, mockk(relaxed = true), net.weero.measix.pilot.service.turn.TurnContextFactory(mockk()),
                 mockk(relaxed = true), mockk(), finalizer, lifecycle, registry, coordinator, gate,
                 errors, effects, ArtifactUseCase(artifactStore, gate, sessions), ConversationTitleCoordinator())

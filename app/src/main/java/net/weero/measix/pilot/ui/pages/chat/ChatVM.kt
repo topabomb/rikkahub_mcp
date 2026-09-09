@@ -256,17 +256,12 @@ class ChatVM internal constructor(
         )?.let(chatErrorStore::add)
     }
 
-    val generationDoneFlow: Flow<Uuid> = fromPage<Uuid?>(null) { state ->
-        conversationQueryService.observeForView<Uuid?>(state.lease, null) {
-            turnService.generationDoneFlow.filter { it == _conversationId }
-        }
-    }.filterNotNull()
-
-    suspend fun getTtsQueueSessionId(conversationId: Uuid): String? {
-        val current = requirePage()
-        check(conversationId == current.lease.conversationId) { "conversation_view_mismatch" }
-        return conversationQueryService.ttsQueueSessionId(current.lease)
-    }
+    internal val completedSpeech: Flow<net.weero.measix.pilot.service.ConversationSpeechCompletion> =
+        fromPage<net.weero.measix.pilot.service.ConversationSpeechCompletion?>(null) { state ->
+            conversationQueryService.observeForView<net.weero.measix.pilot.service.ConversationSpeechCompletion?>(state.lease, null) {
+                turnService.completedSpeech.filter { it.conversationId == _conversationId }
+            }
+        }.filterNotNull()
 
     fun updateSettings(transform: (Settings) -> Settings): Job {
         return viewModelScope.launch {

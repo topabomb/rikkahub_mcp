@@ -690,7 +690,6 @@
   <string name="setting_asr_configure_vad_threshold">VAD Threshold</string>
   <string name="setting_asr_configure_websocket_url">WebSocket URL</string>
   <string name="setting_asr_page_add_provider">Add ASR Provider</string>
-  <string name="setting_asr_page_default_name">ASR</string>
   <string name="setting_asr_page_edit_provider">Edit ASR Provider</string>
   <string name="setting_display_page_amoled_dark_mode_desc">Use pure black background in dark theme, suitable for AMOLED screens</string>
   <string name="setting_display_page_amoled_dark_mode_inactive_desc">Applies only in dark theme</string>
@@ -1076,7 +1075,6 @@
   <string name="setting_tts_page_base_url">Base URL</string>
   <string name="setting_tts_page_base_url_description">API base URL endpoint</string>
   <string name="setting_tts_page_base_url_placeholder">https://api.openai.com/v1</string>
-  <string name="setting_tts_page_default_name">System TTS</string>
   <string name="setting_tts_page_default_playback_speed">Default playback speed</string>
   <string name="setting_tts_page_default_playback_speed_description">Applied locally to every TTS provider without changing its synthesis settings.</string>
   <string name="setting_tts_page_edit_provider">Edit Provider</string>
@@ -1084,7 +1082,6 @@
   <string name="setting_tts_page_model_description">TTS model to use</string>
   <string name="setting_tts_page_model_placeholder_gemini">gemini-2.5-flash-preview-tts</string>
   <string name="setting_tts_page_model_placeholder_openai">gpt-4o-mini-tts</string>
-  <string name="setting_tts_page_more_options_content_description">More options</string>
   <string name="setting_tts_page_name">Name</string>
   <string name="setting_tts_page_name_description">Custom name for this TTS provider</string>
   <string name="setting_tts_page_name_placeholder">Enter provider name</string>
@@ -1104,7 +1101,6 @@
   <string name="setting_tts_page_style_instruction_placeholder">e.g. Bright, bouncy, slightly sing-song tone, fast pace</string>
   <string name="setting_tts_page_provider_type">Provider Type</string>
   <string name="setting_tts_page_provider_type_description">Select the TTS provider type</string>
-  <string name="setting_tts_page_selected">Selected</string>
   <string name="setting_tts_page_speech_rate">Speech Rate</string>
   <string name="setting_tts_page_speech_rate_description">Control the speed of speech (0.1 - 3.0, 1.0 is normal)</string>
   <string name="setting_tts_page_test_text">Hello, this is a text-to-speech test.</string>
@@ -1668,4 +1664,5 @@
   <string name="mcp_enterprise_read_only">Enterprise tools are read-only. Their catalog becomes available after first use.</string>
   <string name="mcp_gateway_preference_hint">All gateway tools switch together. Changes apply to new interactions.</string>
   <string name="mcp_enterprise_required">Required by your enterprise</string>
+  <string name="speech_operation_unavailable">Speech is unavailable. Check the selected resource and space.</string>
 </resources>

@@ -92,8 +92,6 @@ import net.weero.measix.pilot.ui.context.LocalToaster
 import net.weero.measix.pilot.ui.context.Navigator
 import net.weero.measix.pilot.ui.hooks.getCurrentAppLanguage
 import net.weero.measix.pilot.ui.hooks.readBooleanPreference
-import net.weero.measix.pilot.ui.hooks.rememberCustomAsrState
-import net.weero.measix.pilot.ui.hooks.rememberCustomTtsState
 import net.weero.measix.pilot.ui.hooks.wrapWithLocale
 import net.weero.measix.pilot.ui.pages.assistant.AssistantPage
 import net.weero.measix.pilot.ui.pages.assistant.detail.AssistantBasicPage
@@ -273,20 +271,21 @@ class RouteActivity : ComponentActivity() {
         val toastState = rememberToasterState()
         val effectiveSettings by settingsStore.effectiveSettings.collectAsStateWithLifecycle()
         val settings = effectiveSettings.settings
-        val tts = rememberCustomTtsState()
-        val asr = rememberCustomAsrState()
+        val speech = koinInject<net.weero.measix.pilot.service.SpeechApplicationService>()
+        val tts = speech.playback
+        val asr = speech.recognition
+        LaunchedEffect(settings.defaultTTSPlaybackSpeed) { tts.setSpeed(settings.defaultTTSPlaybackSpeed) }
         val eventBus = koinInject<AppEventBus>()
         val recoveryCoordinator = koinInject<ApplicationRecoveryCoordinator>()
         val recoveryState by recoveryCoordinator.state.collectAsStateWithLifecycle()
-        LaunchedEffect(tts) {
+        LaunchedEffect(tts, toastState) {
+            tts.error.collect { message ->
+                if (message != null) toastState.show(message, type = com.dokar.sonner.ToastType.Error)
+            }
+        }
+        LaunchedEffect(eventBus) {
             eventBus.events.collect { event ->
                 when (event) {
-                    is AppEvent.Speak -> tts.speakWithSource(
-                        text = event.text,
-                        replaceWithinSession = event.replaceWithinSession,
-                        queueSessionId = event.queueSessionId,
-                        source = event.source,
-                    )
                     is AppEvent.OpenUsageAccessSettings -> this@RouteActivity.openUsageAccessSettings()
                     is AppEvent.ChatGenerationUpdate -> Unit // 由 ChatNotificationManager 消费
                     is AppEvent.ChatGenerationAwaitingUser -> Unit // 由 ChatNotificationManager 消费

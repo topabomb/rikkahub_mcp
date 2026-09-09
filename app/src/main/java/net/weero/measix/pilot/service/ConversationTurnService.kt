@@ -296,6 +296,7 @@ class ConversationTurnService internal constructor(
     private val appEventBus: AppEventBus,
     private val settingsStore: SettingsStore,
     private val modelExecutions: ModelExecutionService,
+    private val speech: SpeechApplicationService,
     private val memoryService: MemoryService,
     private val sessions: EnterpriseSessionController,
     private val turnRunner: TurnRunner,
@@ -317,8 +318,8 @@ class ConversationTurnService internal constructor(
 ) {
 
     // 生成完成流
-    private val _generationDoneFlow = MutableSharedFlow<Uuid>()
-    val generationDoneFlow: SharedFlow<Uuid> = _generationDoneFlow.asSharedFlow()
+    private val _completedSpeech = MutableSharedFlow<ConversationSpeechCompletion>()
+    internal val completedSpeech: SharedFlow<ConversationSpeechCompletion> = _completedSpeech.asSharedFlow()
 
     // 前台状态管理
     private val _isForeground = MutableStateFlow(false)
@@ -413,7 +414,6 @@ class ConversationTurnService internal constructor(
                 closePrevious(runtime, installed)
                 currentCoroutineContext().ensureActive()
                 operation(runtime, turnId, submission)
-                _generationDoneFlow.emit(runtime.id)
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: Exception) {
@@ -570,7 +570,6 @@ class ConversationTurnService internal constructor(
                             val resumeJob = appScope.launch(start = CoroutineStart.LAZY) {
                                 try {
                                     launchRun(runtime.id, owner.turnId, launch = TurnLaunch.Continue(original.realmAccess))
-                                    _generationDoneFlow.emit(runtime.id)
                                 } finally { runtime.releaseTurnWorker(owner.turnId, coroutineContext[Job]) }
                             }
                             try { runtimeRegistry.installAndStartUserInteractionContinuation(runtime.id, handle, resumeJob) }
@@ -580,7 +579,6 @@ class ConversationTurnService internal constructor(
                 }
             }
         }
-        _generationDoneFlow.emit(runtime.id)
     }
 
     private suspend fun launchRun(
@@ -676,10 +674,14 @@ class ConversationTurnService internal constructor(
                     }
                     val turnTtsContext = TtsToolPlaybackContext(
                         sessionId = runtime.getTtsQueueSessionId(launchPolicy.reuseTtsQueue),
+                        capture = speech.captureTurn(captured, realmAccess) {
+                            turnFinalizer.stopInteraction(runtime, turnId, "managed_snapshot_required")
+                        },
                         assistantId = assistant.id,
                         assistantName = assistant.name,
                         sourceType = TtsPlaybackSource.SourceType.NORMAL,
                     )
+                    runtime.bindTtsPlaybackContext(turnTtsContext)
                     val regularTools = toolSetFactory.buildTools(
                         realmAccess = realmAccess,
                         assistant = assistant,
@@ -825,6 +827,7 @@ class ConversationTurnService internal constructor(
             }
             val soundTracker = sideEffects.soundTracker()
             val phaseReporter = runtime.livePhaseReporter()
+            val speechContext = runtime.peekTtsPlaybackContext()?.takeIf { it.capture.interactionId == "int_$turnId" }
             val turnResult = turnRunner.run(
                 TurnRunInputs(
                     turnContext = turnContext,
@@ -873,6 +876,11 @@ class ConversationTurnService internal constructor(
                 )
             )
 
+            if (turnResult is TurnOutcome.Completed && speechContext != null) {
+                runtime.durable.currentMessages().firstOrNull { it.id == started.assistantMessageId }?.let { message ->
+                    _completedSpeech.emit(ConversationSpeechCompletion(conversationId, turnId, message, speechContext))
+                }
+            }
             if (turnResult is TurnOutcome.Failed && isForeground.value && generationSoundEnabled) {
                 sideEffects.playTurnFailedSound()
             }
@@ -1029,3 +1037,11 @@ class ConversationTurnService internal constructor(
 internal fun planDurableAttachmentRefBackfills(
     snapshot: ConversationAggregateSnapshot,
 ) = AttachmentRefs.planBackfills(snapshot.nodes)
+
+/** A completed reply carries its original speech authority; consumers never look up a newer turn's context. */
+internal data class ConversationSpeechCompletion(
+    val conversationId: Uuid,
+    val turnId: Uuid,
+    val message: UIMessage,
+    val context: TtsToolPlaybackContext,
+)

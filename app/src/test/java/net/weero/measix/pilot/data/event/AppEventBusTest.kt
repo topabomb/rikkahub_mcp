@@ -29,10 +29,10 @@ class AppEventBusTest {
             }
         }
 
-        bus.emit(AppEvent.Speak("first"))
+        bus.emit(AppEvent.OpenUsageAccessSettings)
         firstObserved.await()
-        repeat(16) { index ->
-            assertTrue(bus.tryEmit(AppEvent.Speak("buffered-$index")))
+        repeat(16) {
+            assertTrue(bus.tryEmit(AppEvent.OpenUsageAccessSettings))
         }
         val terminal = AppEvent.ChatGenerationEnded(
             conversationId = Uuid.random(),

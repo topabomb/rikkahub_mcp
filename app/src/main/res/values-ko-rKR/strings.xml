@@ -671,7 +671,6 @@
   <string name="setting_asr_configure_vad_threshold">VAD 임계값</string>
   <string name="setting_asr_configure_websocket_url">WebSocket URL</string>
   <string name="setting_asr_page_add_provider">ASR 공급자 추가</string>
-  <string name="setting_asr_page_default_name">ASR</string>
   <string name="setting_asr_page_edit_provider">ASR 공급자 편집</string>
   <string name="setting_display_page_amoled_dark_mode_desc">다크 테마에서 순수 검정 배경 사용, AMOLED 화면에 적합</string>
   <string name="setting_display_page_amoled_dark_mode_inactive_desc">다크 테마에서만 적용됩니다</string>
@@ -1040,7 +1039,6 @@
   <string name="setting_tts_page_base_url">기본 URL</string>
   <string name="setting_tts_page_base_url_description">API 기본 URL 엔드포인트</string>
   <string name="setting_tts_page_base_url_placeholder">https://api.openai.com/v1</string>
-  <string name="setting_tts_page_default_name">시스템 TTS</string>
   <string name="setting_tts_page_default_playback_speed">기본 재생 속도</string>
   <string name="setting_tts_page_default_playback_speed_description">모든 TTS 제공자에 로컬로 적용되며 합성 설정은 변경되지 않습니다.</string>
   <string name="setting_tts_page_edit_provider">제공업체 편집</string>
@@ -1048,7 +1046,6 @@
   <string name="setting_tts_page_model_description">사용할 TTS 모델</string>
   <string name="setting_tts_page_model_placeholder_gemini">gemini-2.5-flash-preview-tts</string>
   <string name="setting_tts_page_model_placeholder_openai">gpt-4o-mini-tts</string>
-  <string name="setting_tts_page_more_options_content_description">추가 옵션</string>
   <string name="setting_tts_page_name">이름</string>
   <string name="setting_tts_page_name_description">이 TTS 제공업체에 대한 사용자 정의 이름</string>
   <string name="setting_tts_page_name_placeholder">제공업체 이름 입력</string>
@@ -1068,7 +1065,6 @@
   <string name="setting_tts_page_style_instruction_placeholder">예: 밝고 경쾌한 톤, 빠른 속도, 흥분된 어조</string>
   <string name="setting_tts_page_provider_type">제공업체 유형</string>
   <string name="setting_tts_page_provider_type_description">TTS 제공업체 유형 선택</string>
-  <string name="setting_tts_page_selected">선택됨</string>
   <string name="setting_tts_page_speech_rate">말하기 속도</string>
   <string name="setting_tts_page_speech_rate_description">말하기 속도 제어 (0.1 - 3.0, 1.0은 일반)</string>
   <string name="setting_tts_page_test_text">안녕하세요, 이것은 텍스트-음성 테스트입니다.</string>
@@ -1667,4 +1663,5 @@
   <string name="mcp_enterprise_read_only">기업 도구는 읽기 전용입니다. 처음 사용한 후 검색된 도구 목록을 확인할 수 있습니다.</string>
   <string name="mcp_gateway_preference_hint">모든 게이트웨이 도구를 함께 켜거나 끕니다. 변경 사항은 새로운 상호작용에 적용됩니다.</string>
   <string name="mcp_enterprise_required">기업에서 사용하도록 지정함</string>
+  <string name="speech_operation_unavailable">음성을 사용할 수 없습니다. 선택한 리소스와 공간을 확인하세요.</string>
 </resources>

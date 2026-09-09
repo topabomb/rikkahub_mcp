@@ -41,6 +41,14 @@ internal class ConfigurationQueryService(
             configuration.catalog.values.filter { it.key.category == ConfigurationCategory.ASSISTANT }) },
     )
 
+    fun observeSpeechCatalog(): Flow<SpeechCatalogUiModel?> = observeSelected(
+        { null },
+        { configuration, selection -> SpeechCatalogUiModel(selection,
+            configuration.selection(ResourceSelectionSlot.TTS), configuration.selection(ResourceSelectionSlot.ASR),
+            configuration.catalog.values.filter { it.key.category in setOf(ConfigurationCategory.TTS, ConfigurationCategory.ASR) },
+            configuration.enterpriseConfiguration?.tts.orEmpty(), configuration.enterpriseConfiguration?.asr.orEmpty()) },
+    )
+
     private fun <T> observeSelected(unavailable: (String) -> T, project: (ResolvedConfiguration, RealmSelection) -> T): Flow<T> = flow {
         recoveryGate.awaitReady()
         emitAll(enterpriseSessions.observeSelectedRealmSelection().flatMapLatest { selection ->
@@ -93,4 +101,13 @@ internal data class AssistantCatalogUiModel(
     val selected: ConfigurationSelection,
     val assistants: Map<ConfigurationReference, Assistant>,
     val resources: List<ConfigurationCatalogItem>,
+)
+
+internal data class SpeechCatalogUiModel(
+    val selection: RealmSelection,
+    val selectedTts: ConfigurationSelection,
+    val selectedAsr: ConfigurationSelection,
+    val resources: List<ConfigurationCatalogItem>,
+    val managedTts: List<net.weero.measix.pilot.data.enterprise.EnterpriseTtsResource>,
+    val managedAsr: List<net.weero.measix.pilot.data.enterprise.EnterpriseAsrResource>,
 )

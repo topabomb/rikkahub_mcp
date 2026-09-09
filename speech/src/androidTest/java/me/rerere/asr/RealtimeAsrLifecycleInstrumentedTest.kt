@@ -44,12 +44,12 @@ class RealtimeAsrLifecycleInstrumentedTest {
             val factory = Sockets()
             val transcripts = CopyOnWriteArrayList<String>()
             val controller = withContext(Dispatchers.Main) {
-                RealtimeAsrController(context, factory, provider).also { it.start(transcripts::add) }
+                RealtimeAsrController(context, factory, provider) { it() }.also { it.start(transcripts::add) }
             }
             val socket = factory.values.single()
             socket.completeCancellation = false
             val cleanup = withContext(Dispatchers.Main) { controller.stop(); controller.dispose() }
-            val disposed = async(start = CoroutineStart.UNDISPATCHED) { cleanup.join() }
+            val disposed = async(start = CoroutineStart.UNDISPATCHED) { cleanup.awaitClosed() }
             assertFalse("Disposal must await the original socket's terminal callback", disposed.isCompleted)
             socket.finishCancellation()
             withTimeout(10_000) { disposed.await() }
@@ -59,7 +59,6 @@ class RealtimeAsrLifecycleInstrumentedTest {
             withContext(Dispatchers.Main) { }
             assertTrue(transcripts.isEmpty())
             assertEquals(ASRState(), controller.state.value)
-            assertTrue(cleanup.isCompleted)
         }
     }
 
@@ -68,7 +67,7 @@ class RealtimeAsrLifecycleInstrumentedTest {
         for (provider in providers()) {
             val factory = Sockets()
             val delivered = CompletableDeferred<String>()
-            val controller = withContext(Dispatchers.Main) { RealtimeAsrController(context, factory, provider) }
+            val controller = withContext(Dispatchers.Main) { RealtimeAsrController(context, factory, provider) { it() } }
             try {
                 withContext(Dispatchers.Main) { controller.start { error("Original callback must not receive text") } }
                 val old = factory.values.single()
@@ -88,8 +87,7 @@ class RealtimeAsrLifecycleInstrumentedTest {
                 assertEquals(ASRStatus.Listening, controller.state.value.status)
             } finally {
                 val cleanup = withContext(Dispatchers.Main) { controller.dispose() }
-                withTimeout(10_000) { cleanup.join() }
-                assertTrue(cleanup.children.none())
+                withTimeout(10_000) { cleanup.awaitClosed() }
                 assertTrue(factory.values.all { it.cancellations.get() > 0 })
             }
         }
@@ -102,7 +100,7 @@ class RealtimeAsrLifecycleInstrumentedTest {
             for (ending in endings) {
                 val factory = Sockets()
                 val controller = withContext(Dispatchers.Main) {
-                    RealtimeAsrController(context, factory, provider).also { it.start { } }
+                    RealtimeAsrController(context, factory, provider) { it() }.also { it.start { } }
                 }
                 val socket = factory.values.single()
                 try {
@@ -130,7 +128,7 @@ class RealtimeAsrLifecycleInstrumentedTest {
                     assertEquals(framesAtClose, socket.audioFrames.get())
                 } finally {
                     val cleanup = withContext(Dispatchers.Main) { controller.dispose() }
-                    withTimeout(10_000) { cleanup.join() }
+                    withTimeout(10_000) { cleanup.awaitClosed() }
                 }
             }
         }

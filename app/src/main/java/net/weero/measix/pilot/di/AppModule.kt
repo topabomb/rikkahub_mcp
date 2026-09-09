@@ -133,7 +133,7 @@ val appModule = module {
     }
 
     single {
-        LocalTools(get(), get(), get(), get(), get())
+        LocalTools(get(), get(), get(), get())
     }
 
     single {
@@ -345,8 +345,11 @@ val appModule = module {
 
     single { net.weero.measix.pilot.service.portal.PortalDocumentRegistry() }
     single { net.weero.measix.pilot.service.portal.PortalMediaStore(java.io.File(get<Context>().noBackupFilesDir, "portal_media")) }
-    single { net.weero.measix.pilot.service.EnterpriseExitService(get(), get(), get(), get(), get<AppScope>(), get(), get(), get(), get()) }
-    single { net.weero.measix.pilot.service.EnterpriseApplicationService(get(), get(), get(), get(), get(), get(), get<AppScope>(), get(), get()) }
+    single {
+        net.weero.measix.pilot.service.SpeechApplicationService(get(), get(), get(), get(), get(), get(), get(), get(), get<AppScope>(), me.rerere.tts.controller.TtsController(get()))
+    }
+    single { net.weero.measix.pilot.service.EnterpriseExitService(get(), get(), get(), get(), get<AppScope>(), get(), get(), get(), get(), get()) }
+    single { net.weero.measix.pilot.service.EnterpriseApplicationService(get(), get(), get(), get(), get(), get(), get<AppScope>(), get(), get(), get()) }
 
     single {
         GenerationSideEffects(
@@ -366,7 +369,7 @@ val appModule = module {
 
     single {
         ConversationTurnService(
-            modelExecutions = get(),
+            speech = get(),            modelExecutions = get(),
             context = get(),
             appScope = get(),
             appEventBus = get(),

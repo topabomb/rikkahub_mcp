@@ -12,6 +12,7 @@ class TtsPlaybackSourceTest {
     fun `context converts to source without changing turn identity`() {
         val assistantId = ConfigurationReference.random()
         val context = TtsToolPlaybackContext(
+            capture = io.mockk.mockk(),
             sessionId = "master-turn-42",
             assistantId = assistantId,
             assistantName = "Android Analyzer",
@@ -32,12 +33,14 @@ class TtsPlaybackSourceTest {
     fun `master and target sources can share queue session while retaining UI identity`() {
         val sessionId = "master-turn-1"
         val masterContext = TtsToolPlaybackContext(
+            capture = io.mockk.mockk(),
             sessionId = sessionId,
             assistantId = ConfigurationReference.random(),
             assistantName = "Master",
             sourceType = TtsPlaybackSource.SourceType.NORMAL,
         )
         val targetContext = TtsToolPlaybackContext(
+            capture = io.mockk.mockk(),
             sessionId = sessionId,
             assistantId = ConfigurationReference.random(),
             assistantName = "Target",
@@ -55,6 +58,7 @@ class TtsPlaybackSourceTest {
     fun `different master turns have different queue identities`() {
         val assistantId = ConfigurationReference.random()
         val first = TtsToolPlaybackContext(
+            capture = io.mockk.mockk(),
             sessionId = "turn-1",
             assistantId = assistantId,
             assistantName = "Master",

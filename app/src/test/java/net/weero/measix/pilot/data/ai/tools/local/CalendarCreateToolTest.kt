@@ -156,7 +156,7 @@ class CalendarCreateToolTest {
     fun `each step captures current timezone while previously built tool keeps its parser zone`() {
         val previousTimeZone = TimeZone.getDefault()
         try {
-            val localTools = LocalTools(mockk(), mockk(), mockk(), mockk(), mockk())
+            val localTools = LocalTools(mockk(), mockk(), mockk(), mockk())
             val args = buildJsonObject {
                 put("title", "Timezone-sensitive range")
                 put("start", "2026-08-31T10:00:00")

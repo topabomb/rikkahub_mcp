@@ -1,5 +1,7 @@
 package net.weero.measix.pilot.data.ai.mcp
 
+import net.weero.measix.pilot.utils.StrictJsonValue
+
 import io.ktor.client.statement.bodyAsChannel
 import io.ktor.utils.io.readAvailable
 import io.ktor.utils.io.readUTF8Line
@@ -19,6 +21,8 @@ import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.decodeFromJsonElement
+
+internal const val MAX_MCP_FRAME_BYTES = 16 * 1024 * 1024
 
 internal data class McpToolPage(val tools: List<McpCatalogTool>, val nextCursor: String?)
 
@@ -89,7 +93,7 @@ internal class McpCatalogWire {
     fun close() = captures.clear()
 
     fun decode(text: String): JSONRPCMessage {
-        val envelope = McpJsonFrame.parse(text) as? JsonObject ?: error("MCP frame must be an object")
+        val envelope = StrictJsonValue.parse(text, MAX_MCP_FRAME_BYTES) as? JsonObject ?: error("MCP frame must be an object")
         val message = McpJson.decodeFromJsonElement<JSONRPCMessage>(envelope)
         val result = envelope["result"] as? JsonObject
         if (result != null) {
@@ -101,97 +105,6 @@ internal class McpCatalogWire {
     }
 }
 
-/** Strict, bounded JSON with duplicate decoded keys rejected before they can collapse into a map. */
-internal class McpJsonFrame private constructor(private val input: String) {
-    private var position = 0
-
-    private fun value(depth: Int): JsonElement {
-        check(depth <= 128) { "MCP frame nesting is too deep" }
-        whitespace()
-        return when (input.getOrNull(position)) {
-            '{' -> {
-                position++
-                val fields = linkedMapOf<String, JsonElement>()
-                whitespace()
-                if (!take('}')) {
-                    do {
-                        whitespace()
-                        val key = scalar() as? JsonPrimitive ?: error("Invalid MCP object key")
-                        check(key.isString) { "MCP object key must be a string" }
-                        check(key.content !in fields) { "Duplicate MCP object key" }
-                        whitespace()
-                        check(take(':')) { "Invalid MCP object separator" }
-                        fields[key.content] = value(depth + 1)
-                        whitespace()
-                    } while (take(','))
-                    check(take('}')) { "Invalid MCP object" }
-                }
-                JsonObject(fields)
-            }
-            '[' -> {
-                position++
-                val values = mutableListOf<JsonElement>()
-                whitespace()
-                if (!take(']')) {
-                    do {
-                        values += value(depth + 1)
-                        whitespace()
-                    } while (take(','))
-                    check(take(']')) { "Invalid MCP array" }
-                }
-                JsonArray(values)
-            }
-            else -> scalar()
-        }
-    }
-
-    private fun scalar(): JsonElement {
-        val start = position
-        if (take('"')) {
-            var closed = false
-            while (position < input.length) {
-                when (input[position++]) {
-                    '\\' -> position++
-                    '"' -> { closed = true; break }
-                }
-            }
-            check(closed) { "Unterminated MCP JSON string" }
-        } else {
-            while (position < input.length && input[position] !in ",]}: \t\r\n") position++
-        }
-        check(position > start) { "Invalid MCP JSON value" }
-        val token = input.substring(start, position)
-        check(token.startsWith('"') || token in setOf("true", "false", "null") || NUMBER.matches(token)) {
-            "Invalid MCP JSON scalar"
-        }
-        return Json.parseToJsonElement(token).also {
-            check(it is JsonPrimitive) { "Invalid MCP JSON scalar" }
-        }
-    }
-
-    private fun whitespace() {
-        while (position < input.length && input[position] in " \t\r\n") position++
-    }
-
-    private fun take(char: Char): Boolean = (input.getOrNull(position) == char).also { if (it) position++ }
-
-    companion object {
-        const val MAX_BYTES = 16 * 1024 * 1024
-        private val NUMBER = Regex("""-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?""")
-
-        fun parse(text: String): JsonElement {
-            check(text.length <= MAX_BYTES && text.toByteArray(Charsets.UTF_8).size <= MAX_BYTES) {
-                "MCP frame exceeds byte limit"
-            }
-            val reader = McpJsonFrame(text)
-            val result = reader.value(0)
-            reader.whitespace()
-            check(reader.position == text.length) { "Trailing MCP JSON input" }
-            return result
-        }
-    }
-}
-
 /** Bound JSON/error bodies before allocating the decoded frame. SSE events use the same decoder limit. */
 internal suspend fun io.ktor.client.statement.HttpResponse.readMcpBody(): String {
     val channel = bodyAsChannel()
@@ -200,7 +113,7 @@ internal suspend fun io.ktor.client.statement.HttpResponse.readMcpBody(): String
     while (true) {
         val count = channel.readAvailable(buffer)
         if (count == -1) break
-        check(output.size() + count <= McpJsonFrame.MAX_BYTES) { "MCP body exceeds byte limit" }
+        check(output.size() + count <= MAX_MCP_FRAME_BYTES) { "MCP body exceeds byte limit" }
         output.write(buffer, 0, count)
     }
     return output.toByteArray().decodeToString(throwOnInvalidSequence = true)
@@ -211,7 +124,7 @@ internal data class McpSseEvent(val data: String, val name: String?, val id: Str
 
 /** Reads within the caller-owned streaming response; false ends that response immediately. */
 internal suspend fun io.ktor.client.statement.HttpResponse.readMcpSseEvents(
-    maxBytes: Int = McpJsonFrame.MAX_BYTES,
+    maxBytes: Int = MAX_MCP_FRAME_BYTES,
     consume: suspend (McpSseEvent) -> Boolean,
 ) {
     val channel = bodyAsChannel()

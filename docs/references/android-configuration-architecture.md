@@ -1,16 +1,16 @@
 # Android 配置架构与资源边界
 
-本文定义 Android 当前配置的 owner、持久化载体、字段目录、引用关系和内部签名 overlay 边界。Assistant 逐字段运行语义见 [助手配置](assistant-configuration.md)，总体依赖与启动恢复见 [应用架构](application-architecture.md)。待实现的企业阶段、字段映射与验证要求见 [企业集成计划](../dev/android-enterprise-integration-plan.md)。
+本文定义 Android 当前配置的 owner、持久化载体、字段目录、引用关系及个人/本地企业域边界。Assistant 逐字段运行语义见 [助手配置](assistant-configuration.md)，总体依赖与启动恢复见 [应用架构](application-architecture.md)。待实现的企业阶段、字段映射与验证要求见 [企业集成计划](../dev/android-enterprise-integration-plan.md)。
 
 ## 1. 配置组成
 
 ```text
-Built-in defaults + Local shadow + 已验证的 Managed overlay
-  → SettingsStore.effectiveSettings
-      → 配置、生成与 UI consumers
+UserSettingsDocument（用户定义 + 公用/按域偏好）+ Applied Enterprise State
+  → ConfigurationResolver（按原域/主体解析）
+      → ResolvedConfiguration → application / query ports → 执行与 UI
 ```
 
-完整配置分属 DataStore、轻量 UI preferences、Room、资源文件和可重建缓存，不能整体替换为远端 Settings JSON。当前 ManagedConfigurationEnvelope 是内部签名 overlay；生产 Realm、Enrollment/Session、平台 Snapshot 和同步入口尚未实现，不能复用本地 Provider/MCP 凭据冒充企业身份。
+完整配置分属 DataStore、轻量 UI preferences、Room、资源文件和可重建缓存，不能整体替换为远端 Settings JSON。本地企业接入、Session、配置同步与模型/MCP/语音消费者已使用独立企业边界；真实平台接入尚未实现。代码中仍有内部签名 ManagedConfigurationEnvelope 与旧 effectiveSettings 消费者，属于尚未清理完的旧原型，不能作为平台协议或企业身份来源。
 
 ## 2. 配置 owner 与读写架构
 
@@ -23,7 +23,8 @@ Built-in defaults + Local shadow + 已验证的 Managed overlay
 | Local UI preference | SharedPreferences `MeasixPilot.preferences` | 语言、明暗、启动/布局/搜索排序等轻量偏好 | 否 |
 | Local durable resource | Room + `filesDir` | Workspace、Skill、会话级覆盖、资源文件 | 仅备份协议明确包含的域 |
 | Local runtime cache | `cacheDir/lru_key_roulette.json` 等 | 可重建的 key 轮换/发现缓存；不是配置真源 | 否 |
-| Managed prototype | `filesDir/managed_configuration/` | 当前代码中的签名通用 overlay 原型 | 否 |
+| 企业状态 | `noBackupFilesDir/enterprise`；EnterpriseAppliedStore / EnterpriseSessionController | Session、完整配置、binding、独立 Feed 与当前空间；按来源/Deployment/User | 否 |
+| 尚存的 Managed prototype | `filesDir/managed_configuration/` | 当前代码中的签名通用 overlay 原型，不承载本地企业接入 | 否 |
 
 最近聊天 ID 位于 `ScopedUserPreferences.lastConversationId`，按个人域或完整来源/Deployment/User 保存。
 `ConversationHistoryPreferenceMigration` 在旧 Settings 键迁移之后，把已发行的 SharedPreferences `lastConversationId`
@@ -52,7 +53,7 @@ updateLocal(latest Local shadow transform)
 
 关键不变量：
 
-- 既有页面和执行消费者只读 `effectiveSettings`；企业配置查询端口的派生解析见下节，不由消费者自行合并 Local 与 Managed；
+- 域感知页面和执行通过 configuration application/query ports 读取 `ResolvedConfiguration`；尚未迁移的旧页面仍读取 `effectiveSettings`，不得把该旧投影视作企业执行授权；
 - 写入失败或取消时不得发布领先于磁盘的内存状态；
 - managed mutation 必须在 Store/commit boundary 拒绝，UI disabled 只是展示；
 - Local shadow 不因 Managed 同 ID 覆盖而删除，Managed remove/disconnect 后应恢复；
@@ -79,7 +80,7 @@ SettingsStore 的首次写入、恢复和 managed apply 先等待初始化发布
 
 ### 2.4 本地企业接入基础
 
-`data/enterprise` 提供独立的企业配置、接入资料及持久状态组件。DataSourceModule 注册其单例，私有存储位于 noBackupFilesDir/enterprise；ApplicationRecoveryCoordinator 在 Settings 就绪之后恢复企业状态。企业校验错误由企业 owner 发布，不阻塞个人数据恢复。正式入口、Portal、会话、模型与 MCP 执行及管理页已接入企业域；Speech 等消费者仍在迁移，旧 Managed 原型尚未整体退休。
+`data/enterprise` 提供独立的企业配置、接入资料及持久状态组件。DataSourceModule 注册其单例，私有存储位于 noBackupFilesDir/enterprise；ApplicationRecoveryCoordinator 在 Settings 就绪之后恢复企业状态。企业校验错误由企业 owner 发布，不阻塞个人数据恢复。正式入口、Portal、会话、模型、MCP 和 Speech 执行及管理页已接入企业域；其余配置消费者与旧 Managed 原型仍未整体收口。
 
 - `EnterprisePackageCodec` 校验 formatVersion=2 的完整本地资料：显式五项准入、资源/助手引用、默认选择与完整运行绑定，顶层可携带 feedSeed 初值。该格式独立于接入资料和平台 Snapshot；旧企业原型格式拒绝，不保留双格式兼容。定义与运行连接分开；异常不带可能含凭据的原始反序列化错误。
 - `EnterpriseAppliedStore` 在调用者指定的私有目录暂存不可变配置、绑定及独立 Feed 文件，以 schemaVersion=3 的单个 manifest 原子发布身份、版本、当前空间及退出原因。只接受当前企业格式，未交付原型的旧版本明确拒绝，不自动改写身份或推断退出原因；接入资料和完整配置使用各自独立版本。Feed 指针按来源/Deployment/User 保存，退出保留且不可跨主体读取。提交显式同步文件并核验实际 manifest，不能把 AtomicFile 仅记录日志的失败当作成功。
@@ -109,7 +110,7 @@ PrepareEnterpriseExampleAssets 从公开完整模板派生 enterprise.local.iden
 
 辅助模型选择从原域的角色配置解析：标题/建议未配置时尝试 fast，再使用原助手的聊天模型；摘要未配置时使用原助手聊天模型。只有 Personal 的历史 `DEFAULT_AUTO_MODEL_ID` 等同未配置，显式缺失、被撤权或类型不符的引用不回退。辅助角色不受企业助手固定聊天模型的绑定限制，但每个请求仍复验原助手和所选资源准入，保持原 wire shape/企业 binding revision。`ModelExecutionSnapshot` 是进程内执行快照，不持久化私有传输数据。聊天、附件识别与已启用的图片工具在同次配置读取中捕获，工具借用只含 `execute` 的 `ModelRequests`；Runtime 保留唯一模型 lease 和企业 binding，暂停继续只移交这一个资源 owner。模型 lease 在取得 binding 前登记到原 Runtime；辅助任务清理失败不能丢失重试 owner。
 
-私有请求带无身份、无凭据的 `PrivateRequest` 标记，现有 HTTP 日志入口跳过该请求。共享网络边界在 OkHttp 跟随跨 origin 重定向前拒绝请求，避免 Google/Claude 与自定义私有 header 被转发；个人请求保持原日志和重定向行为。图片 URL 结果的后续下载继承私有日志标记，但不转发原认证和企业 header。企业 MCP 已接入原 Session/binding/interaction 的执行准入与版本屏障，管理页通过 McpQueryService 按原 RealmSelection 投影目录及只读受管工具；Speech 尚未全部迁入相应执行链。
+私有请求带无身份、无凭据的 `PrivateRequest` 标记，现有 HTTP 日志入口跳过该请求。共享网络边界在 OkHttp 跟随跨 origin 重定向前拒绝请求，避免 Google/Claude 与自定义私有 header 被转发；个人请求保持原日志和重定向行为。图片 URL 结果的后续下载继承私有日志标记，但不转发原认证和企业 header。企业 MCP 已接入原 Session/binding/interaction 的执行准入与版本屏障，管理页通过 McpQueryService 按原 RealmSelection 投影目录及只读受管工具；Speech 通过独立应用 owner 接入同一原 Session、binding 和 interaction 边界，具体见 TTS/ASR 小节。
 
 图片页面从原域模型目录选择明确的 IMAGE 引用；`ImageGenerationCoordinator` 的现有请求节点负责页面模型 lease，出队才捕获连接，后续默认模型变化不改选原任务。页面捕获、逐请求准入和结果提交复验原 `RealmSelection`，切域往返不会恢复旧请求；工具借用原 Turn 的模型请求视图，只校验原任务域及资源权限。企业退出等待原队列工作停止和资源释放；失败节点保留给原退出流程重试。默认本地来源生成标明模拟性质的 PNG，编辑输入会校验文件并显示模拟编辑标识，不声称完成真实图像编辑。
 
@@ -401,7 +402,7 @@ Search 包含本地用户 API key/URL/账号，不作为 Model/MCP 路由或企�
 
 企业公开定义使用 `EnterpriseTtsResource`，字段为 `id/name/enabled/modelId/voice`；`voice` 必须显式非空，不补 Android 默认音色。它与用户 `TTSProviderSetting`、私有 `EnterpriseRuntimeBinding` 分别保存。
 
-`TtsController` 统一管理分片、预取与播放；每个 `TtsPlaybackSession` 提供合成和播放准入回调。停止取消并返回同一组任务的清理回执，恢复播放复验原 worker，销毁等待整个 controller 协程作用域，包含旧队列尚未退出的合成。现有 `rememberCustomTtsState` 消费者提供个人 Provider 回调并等待清理。OpenAI/Gemini HTTP 合成使用 `Call.readResponse`，取消实际网络 Call，并等待响应正文读取退出后关闭响应。
+`TtsController` 统一管理分片、预取与播放；每个 `TtsPlaybackSession` 提供合成和播放准入回调。停止取消并返回同一组任务的清理回执，恢复播放复验原 worker，销毁等待整个 controller 协程作用域，包含旧队列尚未退出的合成。`SpeechApplicationService` 为唯一应用语音 owner，提供 `SpeechPlayback` / `SpeechRecognition` UI 端口；页面不创建 controller 或通过 AppEvent 发出播放请求。OpenAI/Gemini HTTP 合成使用 `Call.readResponse`，取消实际网络 Call，并等待响应正文读取退出后关闭响应。
 
 ### 4.6 ASR
 
@@ -414,9 +415,12 @@ Search 包含本地用户 API key/URL/账号，不作为 Model/MCP 路由或企�
 
 当前 Local ASR 使用 WebSocket/realtime controller 配置，HTTP transcription 不由这些 realtime 类型承载。
 
-`RealtimeAsrController` 统一管理两种个人实时协议的连接、消息投影和停止流程，各自的 endpoint/session 编码仍取对应配置类型。`PcmAudioCapture` 独占一只麦克风及阻塞读循环。用户停止、服务端结束和关闭帧共用一次读循环等待与关闭握手；销毁等待所有已取消录音及原连接的 WebSocket 终态回调。`rememberCustomAsrState` 提供稳定状态流，并等待历代 Provider controller 的销毁回执；迟到回调不得更新新连接或新输入。
+`RealtimeAsrController` 统一管理两种个人实时协议的连接、消息投影和停止流程，各自的 endpoint/session 编码仍取对应配置类型。`PcmAudioCapture` 独占一只麦克风及阻塞读循环。用户停止、服务端结束和关闭帧共用一次读循环等待与关闭握手；销毁等待所有已取消录音及原连接的 WebSocket 终态回调。`SpeechApplicationService` 保留原 Recognition、转写交付任务和第一次销毁回执；正常结束先完成最终交付，再等待 controller/录音/网络退出并释放 binding。取消或替换后，旧回调不得更新新输入或错误投影。`HttpAsrController` 使用同一 PcmAudioCapture 写入临时 WAV，完成录音后通过应用提供的 transport 上传，所有路径最终回收原文件；清理失败保留原文件与 owner 供重试。
 
 企业公开定义独立使用 `EnterpriseAsrResource`，字段为 `id/name/enabled/modelId/language`，其中 `language` 可省略，提供时必须非空。不接受 TTS 的 `voice` 或 realtime 的 `sampleRate` 等字段。
+
+`EnterpriseSpeechTransport` 编码显式 TTS/MP3 和 ASR multipart file/model/language 请求，注入原 generation/interaction；私有 binding 的 endpoint 是完整请求地址，凭据仅归 transport。其 HTTP client 不重定向或自动重试。企业私有语音仅接受 `OPENAI_TTS` / `OPENAI_HTTP_ASR`，不接受未实现的 Gemini/MiMo 私有协议。`EXAMPLE` 交由 `LocalEnterpriseSpeechService` 消费同一编码正文：先校验原 Session/generation，再处理合成请求或实际 WAV 内容。共享 `ManagedSnapshotRequired` 解析 428 barrier，严格 JSON 解码归 `StrictJsonValue`。应用 owner 在原 RealmSelection 下捕获资源和完整 AppliedVersion，队列/录音自行持有 binding 至实际清理完成。独立播放/录音创建交互，工具和主/子助手共用原 turn 的冻结语音上下文。完成事件携带原回复和该上下文，自动朗读不查询新 turn 的全局选择。428 永久终止原语音交互，分别收口父 turn、语音资源与同步，不重放；文件清理失败不能跳过父 turn 停止或同步，旧 binding 仍由原 owner 保留。空间切换在 Session 锁内只撤销和停止硬件，锁外等待清理。
+
 
 ### 4.7 MCP
 
@@ -600,3 +604,5 @@ Local shadow 不因同 ID overlay 覆盖而删除；overlay 移除后恢复本�
 ### 文件目录与选择生命周期
 
 FileManagementQueryService 合成当前选择的上传与图库目录，条目保留原 RealmSelection；列表、候选数量和清理 SQL 都显式限定 scope。FileManagementApplicationService 在 Session 准入内编排原 ArtifactStore/GeneratedMediaStore，单项文件归属仍由原 owner 复验。页面切换会清除旧确认和预览；返回相同主体不会恢复旧选择的写权限。统计只消费本域已登记条目，查询失败可以在同域重试。输入框名称只查询原 Draft 当前附件。共享配置预设消息经 ArtifactStore 验证持久配置根后复制为目标域附件；主 Draft 由原 Runtime 持有创建令牌，子助手沿既有 Child 创建与链接提交交接。预览、导出和工具读取使用原页面/执行主体；Workspace 是显式共享空间，其文件与终端边界见 Workspace 参考。设备与整体验收状态以本期实施方案为准。
+
+语音设置页通过 `ConfigurationQueryService.observeSpeechCatalog` 显示本域资源和不可用原因，选择写入原 RealmSelection 的偏好。企业定义仅显示模型、音色或语言，用户定义保留编辑/排序；System TTS 可调整音调和语速，不能删除，并遵守 allowLocalTts。删除定义保留失效选择供用户明确重选，不按首项替换。

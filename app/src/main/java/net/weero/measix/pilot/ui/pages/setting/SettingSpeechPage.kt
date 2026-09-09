@@ -66,13 +66,9 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import net.weero.measix.pilot.R
 import me.rerere.asr.ASRProviderSetting
 import net.weero.measix.pilot.data.datastore.DEFAULT_SYSTEM_TTS_ID
-import net.weero.measix.pilot.data.datastore.EffectiveSettingsSnapshot
-import net.weero.measix.pilot.data.datastore.ManagedConfigurationRecordKind
 import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.ui.components.nav.BackButton
 import net.weero.measix.pilot.ui.components.ui.AutoAIIcon
-import net.weero.measix.pilot.ui.components.ui.ManagedDefaultStatus
-import net.weero.measix.pilot.ui.components.ui.ManagedRecordStatus
 import net.weero.measix.pilot.ui.components.ui.Tag
 import net.weero.measix.pilot.ui.components.ui.TagType
 import net.weero.measix.pilot.ui.context.LocalTTSState
@@ -84,12 +80,39 @@ import me.rerere.tts.provider.TTSProviderSetting
 import org.koin.androidx.compose.koinViewModel
 import sh.calvin.reorderable.ReorderableItem
 import sh.calvin.reorderable.rememberReorderableLazyListState
+import androidx.compose.runtime.rememberCoroutineScope
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.CancellationException
+import org.koin.compose.koinInject
+import com.dokar.sonner.ToastType
+import net.weero.measix.pilot.ui.context.LocalToaster
+import net.weero.measix.pilot.ui.components.ai.configurationUnavailableText
+import net.weero.measix.pilot.service.ConfigurationApplicationService
+import net.weero.measix.pilot.service.ConfigurationQueryService
+import net.weero.measix.pilot.service.SpeechCatalogUiModel
+import net.weero.measix.pilot.data.configuration.ConfigurationCategory
+import net.weero.measix.pilot.data.configuration.ConfigurationCatalogItem
+import net.weero.measix.pilot.data.configuration.ResourceSelectionSlot
+import me.rerere.common.configuration.ConfigurationReference
 import kotlin.math.roundToInt
 
 @Composable
 fun SettingSpeechPage(vm: SettingVM = koinViewModel()) {
     val settings by vm.settings.collectAsStateWithLifecycle()
-    val effectiveSettings by vm.effectiveSettings.collectAsStateWithLifecycle()
+    val queries = koinInject<ConfigurationQueryService>()
+    val commands = koinInject<ConfigurationApplicationService>()
+    val catalog by remember(queries) { queries.observeSpeechCatalog() }.collectAsStateWithLifecycle(null)
+    val scope = rememberCoroutineScope()
+    val toaster = LocalToaster.current
+    val failureText = stringResource(R.string.configuration_reason_not_ready)
+    fun select(slot: ResourceSelectionSlot, reference: ConfigurationReference) {
+        val original = catalog?.selection ?: return
+        scope.launch {
+            try { commands.selectResource(original, slot, reference) }
+            catch (cancelled: CancellationException) { throw cancelled }
+            catch (_: Exception) { toaster.show(failureText, type = ToastType.Error) }
+        }
+    }
     var editingTTSProvider by remember { mutableStateOf<TTSProviderSetting?>(null) }
     var editingASRProvider by remember { mutableStateOf<ASRProviderSetting?>(null) }
     var selectedPage by remember { mutableIntStateOf(0) }
@@ -116,7 +139,6 @@ fun SettingSpeechPage(vm: SettingVM = koinViewModel()) {
                             vm.updateSettings { current ->
                                 current.copy(
                                     asrProviders = listOf(provider) + current.asrProviders,
-                                    selectedASRProviderId = current.selectedASRProviderId ?: provider.id,
                                 )
                             }
                         }
@@ -156,20 +178,20 @@ fun SettingSpeechPage(vm: SettingVM = koinViewModel()) {
                     },
                     modifier = Modifier.padding(start = 16.dp, top = 16.dp, end = 16.dp, bottom = 8.dp),
                 )
-                TTSProviderList(
-                    settings = settings,
-                    effectiveSettings = effectiveSettings,
+                SpeechProviderList(
+                    settings = settings, catalog = catalog, category = ConfigurationCategory.TTS,
                     onUpdateSettings = vm::updateSettings,
-                    onEdit = { editingTTSProvider = it },
+                    onSelect = { select(ResourceSelectionSlot.TTS, it) },
+                    onEditTts = { editingTTSProvider = it }, onEditAsr = { editingASRProvider = it },
                     modifier = Modifier.weight(1f),
                 )
             }
 
-            1 -> ASRProviderList(
-                settings = settings,
-                effectiveSettings = effectiveSettings,
+            1 -> SpeechProviderList(
+                settings = settings, catalog = catalog, category = ConfigurationCategory.ASR,
                 onUpdateSettings = vm::updateSettings,
-                onEdit = { editingASRProvider = it },
+                onSelect = { select(ResourceSelectionSlot.ASR, it) },
+                onEditTts = { editingTTSProvider = it }, onEditAsr = { editingASRProvider = it },
                 modifier = Modifier.padding(innerPadding)
             )
         }
@@ -310,101 +332,6 @@ fun SettingSpeechPage(vm: SettingVM = koinViewModel()) {
 }
 
 @Composable
-private fun TTSProviderList(
-    settings: Settings,
-    effectiveSettings: EffectiveSettingsSnapshot,
-    onUpdateSettings: ((Settings) -> Settings) -> Unit,
-    onEdit: (TTSProviderSetting) -> Unit,
-    modifier: Modifier = Modifier
-) {
-    val lazyListState = rememberLazyListState()
-    val reorderableState = rememberReorderableLazyListState(lazyListState) { from, to ->
-        val fromId = settings.ttsProviders.getOrNull(from.index)?.id ?: return@rememberReorderableLazyListState
-        val toId = settings.ttsProviders.getOrNull(to.index)?.id ?: return@rememberReorderableLazyListState
-        onUpdateSettings { current ->
-            val latestFrom = current.ttsProviders.indexOfFirst { it.id == fromId }
-            val latestTo = current.ttsProviders.indexOfFirst { it.id == toId }
-            if (latestFrom < 0 || latestTo < 0) current else current.copy(
-                ttsProviders = current.ttsProviders.toMutableList().apply {
-                    add(latestTo, removeAt(latestFrom))
-                }
-            )
-        }
-    }
-
-    LazyColumn(
-        modifier = modifier
-            .fillMaxSize()
-            .imePadding(),
-        contentPadding = PaddingValues(16.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
-        state = lazyListState
-    ) {
-        item("selected_tts_provider") {
-            ManagedDefaultStatus(
-                snapshot = effectiveSettings,
-                path = "defaults/selectedTTSProviderId",
-            )
-        }
-        items(settings.ttsProviders, key = { it.id.toString() }) { provider ->
-            ReorderableItem(
-                state = reorderableState,
-                key = provider.id.toString()
-            ) { isDragging ->
-                TTSProviderItem(
-                    modifier = Modifier
-                        .scale(if (isDragging) 0.95f else 1f)
-                        .fillMaxWidth(),
-                    provider = provider,
-                    effectiveSettings = effectiveSettings,
-                    dragHandle = {
-                        val haptic = LocalHapticFeedback.current
-                        IconButton(
-                            onClick = {},
-                            modifier = Modifier
-                                .longPressDraggableHandle(
-                                    onDragStarted = {
-                                        haptic.performHapticFeedback(HapticFeedbackType.GestureThresholdActivate)
-                                    },
-                                    onDragStopped = {
-                                        haptic.performHapticFeedback(HapticFeedbackType.GestureEnd)
-                                    }
-                                )
-                        ) {
-                            Icon(
-                                imageVector = HugeIcons.DragDropHorizontal,
-                                contentDescription = null
-                            )
-                        }
-                    },
-                    isSelected = settings.selectedTTSProviderId == provider.id,
-                    onSelect = {
-                        onUpdateSettings { it.copy(selectedTTSProviderId = provider.id) }
-                    },
-                    onEdit = {
-                        onEdit(provider)
-                    },
-                    onDelete = {
-                        onUpdateSettings { current ->
-                            val newProviders = current.ttsProviders.filterNot { it.id == provider.id }
-                            val newSelectedId = if (current.selectedTTSProviderId == provider.id) {
-                                DEFAULT_SYSTEM_TTS_ID
-                            } else {
-                                current.selectedTTSProviderId
-                            }
-                            current.copy(
-                                ttsProviders = newProviders,
-                                selectedTTSProviderId = newSelectedId,
-                            )
-                        }
-                    }
-                )
-            }
-        }
-    }
-}
-
-@Composable
 private fun TTSPlaybackSpeedSetting(
     speed: Float,
     onSpeedChange: (Float) -> Unit,
@@ -447,101 +374,6 @@ private fun TTSPlaybackSpeedSetting(
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-        }
-    }
-}
-
-@Composable
-private fun ASRProviderList(
-    settings: Settings,
-    effectiveSettings: EffectiveSettingsSnapshot,
-    onUpdateSettings: ((Settings) -> Settings) -> Unit,
-    onEdit: (ASRProviderSetting) -> Unit,
-    modifier: Modifier = Modifier
-) {
-    val lazyListState = rememberLazyListState()
-    val reorderableState = rememberReorderableLazyListState(lazyListState) { from, to ->
-        val fromId = settings.asrProviders.getOrNull(from.index)?.id ?: return@rememberReorderableLazyListState
-        val toId = settings.asrProviders.getOrNull(to.index)?.id ?: return@rememberReorderableLazyListState
-        onUpdateSettings { current ->
-            val latestFrom = current.asrProviders.indexOfFirst { it.id == fromId }
-            val latestTo = current.asrProviders.indexOfFirst { it.id == toId }
-            if (latestFrom < 0 || latestTo < 0) current else current.copy(
-                asrProviders = current.asrProviders.toMutableList().apply {
-                    add(latestTo, removeAt(latestFrom))
-                }
-            )
-        }
-    }
-
-    LazyColumn(
-        modifier = modifier
-            .fillMaxSize()
-            .imePadding(),
-        contentPadding = PaddingValues(16.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
-        state = lazyListState
-    ) {
-        item("selected_asr_provider") {
-            ManagedDefaultStatus(
-                snapshot = effectiveSettings,
-                path = "defaults/selectedASRProviderId",
-            )
-        }
-        items(settings.asrProviders, key = { it.id.toString() }) { provider ->
-            ReorderableItem(
-                state = reorderableState,
-                key = provider.id.toString()
-            ) { isDragging ->
-                ASRProviderItem(
-                    modifier = Modifier
-                        .scale(if (isDragging) 0.95f else 1f)
-                        .fillMaxWidth(),
-                    provider = provider,
-                    effectiveSettings = effectiveSettings,
-                    dragHandle = {
-                        val haptic = LocalHapticFeedback.current
-                        IconButton(
-                            onClick = {},
-                            modifier = Modifier
-                                .longPressDraggableHandle(
-                                    onDragStarted = {
-                                        haptic.performHapticFeedback(HapticFeedbackType.GestureThresholdActivate)
-                                    },
-                                    onDragStopped = {
-                                        haptic.performHapticFeedback(HapticFeedbackType.GestureEnd)
-                                    }
-                                )
-                        ) {
-                            Icon(
-                                imageVector = HugeIcons.DragDropHorizontal,
-                                contentDescription = null
-                            )
-                        }
-                    },
-                    isSelected = settings.selectedASRProviderId == provider.id,
-                    onSelect = {
-                        onUpdateSettings { it.copy(selectedASRProviderId = provider.id) }
-                    },
-                    onEdit = {
-                        onEdit(provider)
-                    },
-                    onDelete = {
-                        onUpdateSettings { current ->
-                            val newProviders = current.asrProviders.filterNot { it.id == provider.id }
-                            val newSelectedId = if (current.selectedASRProviderId == provider.id) {
-                                newProviders.firstOrNull()?.id
-                            } else {
-                                current.selectedASRProviderId
-                            }
-                            current.copy(
-                                asrProviders = newProviders,
-                                selectedASRProviderId = newSelectedId,
-                            )
-                        }
-                    }
-                )
-            }
         }
     }
 }
@@ -715,271 +547,124 @@ private fun AddASRProviderButton(onAdd: (ASRProviderSetting) -> Unit) {
 }
 
 @Composable
-private fun TTSProviderItem(
-    provider: TTSProviderSetting,
-    effectiveSettings: EffectiveSettingsSnapshot,
+private fun SpeechProviderList(
+    settings: Settings,
+    catalog: SpeechCatalogUiModel?,
+    category: ConfigurationCategory,
+    onUpdateSettings: ((Settings) -> Settings) -> Unit,
+    onSelect: (ConfigurationReference) -> Unit,
+    onEditTts: (TTSProviderSetting) -> Unit,
+    onEditAsr: (ASRProviderSetting) -> Unit,
     modifier: Modifier = Modifier,
-    isSelected: Boolean = false,
-    dragHandle: @Composable () -> Unit,
-    onSelect: () -> Unit,
-    onEdit: () -> Unit,
-    onDelete: () -> Unit
 ) {
-    var showDropdownMenu by remember { mutableStateOf(false) }
-    val tts = LocalTTSState.current
-    val isSpeaking by tts.isSpeaking.collectAsState()
-    val isAvailable by tts.isAvailable.collectAsState()
-
-    Card(
-        modifier = modifier,
-        colors = CardDefaults.cardColors(
-            containerColor = if (isSelected) {
-                MaterialTheme.colorScheme.primaryContainer
+    val resources = catalog?.resources.orEmpty().filter { it.key.category == category }
+    val selected = if (category == ConfigurationCategory.TTS) catalog?.selectedTts else catalog?.selectedAsr
+    val lazyState = rememberLazyListState()
+    val reorder = rememberReorderableLazyListState(lazyState) { from, to ->
+        val fromId = resources.find { it.key.reference.toString() == from.key }?.key?.reference
+        val toId = resources.find { it.key.reference.toString() == to.key }?.key?.reference
+        if (fromId == null || toId == null || fromId is ConfigurationReference.Enterprise || toId is ConfigurationReference.Enterprise) return@rememberReorderableLazyListState
+        onUpdateSettings { current ->
+            if (category == ConfigurationCategory.TTS) {
+                val source = current.ttsProviders.indexOfFirst { it.id == fromId }
+                val target = current.ttsProviders.indexOfFirst { it.id == toId }
+                if (source < 0 || target < 0) current else current.copy(ttsProviders = current.ttsProviders.toMutableList().apply { add(target, removeAt(source)) })
             } else {
-                CustomColors.listItemColors.containerColor
+                val source = current.asrProviders.indexOfFirst { it.id == fromId }
+                val target = current.asrProviders.indexOfFirst { it.id == toId }
+                if (source < 0 || target < 0) current else current.copy(asrProviders = current.asrProviders.toMutableList().apply { add(target, removeAt(source)) })
             }
-        )
-    ) {
-        Column(
-            modifier = Modifier.padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                AutoAIIcon(
-                    name = provider.name.ifEmpty { stringResource(R.string.setting_tts_page_default_name) },
-                    modifier = Modifier.size(32.dp)
-                )
-
-                Column(
-                    modifier = Modifier.weight(1f)
-                ) {
-                    Text(
-                        text = provider.name.ifEmpty { stringResource(R.string.setting_tts_page_default_name) },
-                        style = MaterialTheme.typography.titleMedium,
-                        color = if (isSelected) {
-                            MaterialTheme.colorScheme.onPrimaryContainer
-                        } else {
-                            MaterialTheme.colorScheme.onSurface
+        }
+    }
+    val playback = LocalTTSState.current
+    val speaking by playback.isSpeaking.collectAsStateWithLifecycle()
+    val testText = stringResource(R.string.setting_tts_page_test_text)
+    LazyColumn(modifier.fillMaxSize().imePadding(), state = lazyState,
+        contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        if (catalog == null) item { Text(stringResource(R.string.configuration_reason_not_ready)) }
+        selected?.unavailableReason?.let { reason -> item { Text(configurationUnavailableText(reason), color = MaterialTheme.colorScheme.error) } }
+        items(resources, key = { it.key.reference.toString() }) { resource ->
+            val reference = resource.key.reference
+            val tts = settings.ttsProviders.find { it.id == reference }
+            val asr = settings.asrProviders.find { it.id == reference }
+            val managedId = (reference as? ConfigurationReference.Enterprise)?.id
+            val managedTts = catalog?.managedTts?.find { it.id == managedId }
+            val managedAsr = catalog?.managedAsr?.find { it.id == managedId }
+            val details = when {
+                managedTts != null -> "${managedTts.modelId} · ${managedTts.voice}"
+                managedAsr != null -> listOfNotNull(managedAsr.modelId, managedAsr.language).joinToString(" · ")
+                tts is TTSProviderSetting.OpenAI -> stringResource(R.string.setting_tts_page_provider_openai)
+                tts is TTSProviderSetting.Gemini -> stringResource(R.string.setting_tts_page_provider_gemini)
+                tts is TTSProviderSetting.MiMo -> stringResource(R.string.setting_tts_page_provider_mimo)
+                tts is TTSProviderSetting.SystemTTS -> stringResource(R.string.setting_tts_page_provider_system)
+                asr is ASRProviderSetting.OpenAIRealtime -> "OpenAI Realtime"
+                asr is ASRProviderSetting.DashScope -> "DashScope"
+                else -> ""
+            }
+            ReorderableItem(reorder, key = reference.toString()) { dragging ->
+                SpeechProviderItem(resource, details, selected?.reference == reference,
+                    modifier = Modifier.fillMaxWidth().scale(if (dragging) .95f else 1f),
+                    onSelect = { onSelect(reference) },
+                    onEdit = if (tts != null) ({ onEditTts(tts) }) else if (asr != null) ({ onEditAsr(asr) }) else null,
+                    onDelete = if (resource.access.canEditDefinition && reference != DEFAULT_SYSTEM_TTS_ID) ({
+                        onUpdateSettings { current ->
+                            if (category == ConfigurationCategory.TTS) current.copy(ttsProviders = current.ttsProviders.filterNot { it.id == reference })
+                            else current.copy(asrProviders = current.asrProviders.filterNot { it.id == reference })
                         }
-                    )
-
-                    Text(
-                        text = when (provider) {
-                            is TTSProviderSetting.OpenAI -> stringResource(R.string.setting_tts_page_provider_openai)
-                            is TTSProviderSetting.Gemini -> stringResource(R.string.setting_tts_page_provider_gemini)
-                            is TTSProviderSetting.SystemTTS -> stringResource(R.string.setting_tts_page_provider_system)
-                            is TTSProviderSetting.MiMo -> stringResource(R.string.setting_tts_page_provider_mimo)
-                        },
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-
-                RadioButton(
-                    selected = isSelected,
-                    onClick = onSelect
-                )
-
-                dragHandle()
-            }
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                // 状态标签
-                if (isSelected) {
-                    Tag(type = TagType.SUCCESS) {
-                        Text(stringResource(R.string.setting_tts_page_selected))
-                    }
-                }
-                ManagedRecordStatus(
-                    snapshot = effectiveSettings,
-                    kind = ManagedConfigurationRecordKind.TTS_PROVIDER,
-                    id = provider.id,
-                )
-
-                Spacer(modifier = Modifier.weight(1f))
-
-                // TTS测试播放按钮
-                if (isSelected && isAvailable) {
-                    val testText = stringResource(R.string.setting_tts_page_test_text)
-                    IconButton(
-                        onClick = {
-                            if (!isSpeaking) {
-                                tts.speak(testText)
-                            } else {
-                                tts.stop()
+                    }) else null,
+                    test = if (category == ConfigurationCategory.TTS && selected?.reference == reference && resource.access.canExecute && catalog != null) ({
+                        IconButton(onClick = { if (speaking) playback.stop() else playback.speak(catalog.selection, testText) }) {
+                            Icon(if (speaking) HugeIcons.StopCircle else HugeIcons.VolumeHigh,
+                                contentDescription = stringResource(if (speaking) R.string.stop else R.string.test_tts))
+                        }
+                    }) else null,
+                    dragHandle = {
+                        if (reference !is ConfigurationReference.Enterprise) {
+                            val haptic = LocalHapticFeedback.current
+                            IconButton(onClick = {}, modifier = Modifier.longPressDraggableHandle(
+                                onDragStarted = { haptic.performHapticFeedback(HapticFeedbackType.GestureThresholdActivate) },
+                                onDragStopped = { haptic.performHapticFeedback(HapticFeedbackType.GestureEnd) })) {
+                                Icon(HugeIcons.DragDropHorizontal, contentDescription = null)
                             }
                         }
-                    ) {
-                        Icon(
-                            imageVector = if (isSpeaking) HugeIcons.StopCircle else HugeIcons.VolumeHigh,
-                            contentDescription = if (isSpeaking) stringResource(R.string.stop) else stringResource(R.string.test_tts),
-                            tint = if (isSpeaking) MaterialTheme.colorScheme.error else LocalContentColor.current
-                        )
-                    }
-                }
-
-                IconButton(
-                    onClick = { showDropdownMenu = true }
-                ) {
-                    Icon(
-                        imageVector = HugeIcons.Tools,
-                        contentDescription = stringResource(R.string.setting_tts_page_more_options_content_description)
-                    )
-                    DropdownMenu(
-                        expanded = showDropdownMenu,
-                        onDismissRequest = { showDropdownMenu = false }
-                    ) {
-                        DropdownMenuItem(
-                            text = { Text(stringResource(R.string.edit)) },
-                            onClick = {
-                                showDropdownMenu = false
-                                onEdit()
-                            },
-                            leadingIcon = {
-                                Icon(HugeIcons.PencilEdit01, contentDescription = null)
-                            }
-                        )
-                        DropdownMenuItem(
-                            text = { Text(stringResource(R.string.delete)) },
-                            onClick = {
-                                showDropdownMenu = false
-                                onDelete()
-                            },
-                            leadingIcon = {
-                                Icon(HugeIcons.Delete01, contentDescription = null)
-                            },
-                            enabled = provider.id != DEFAULT_SYSTEM_TTS_ID
-                        )
-                    }
-                }
+                    })
             }
         }
     }
 }
 
 @Composable
-private fun ASRProviderItem(
-    provider: ASRProviderSetting,
-    effectiveSettings: EffectiveSettingsSnapshot,
-    modifier: Modifier = Modifier,
-    isSelected: Boolean = false,
-    dragHandle: @Composable () -> Unit,
+private fun SpeechProviderItem(
+    resource: ConfigurationCatalogItem,
+    details: String,
+    selected: Boolean,
+    modifier: Modifier,
     onSelect: () -> Unit,
-    onEdit: () -> Unit,
-    onDelete: () -> Unit
+    onEdit: (() -> Unit)?,
+    onDelete: (() -> Unit)?,
+    test: (@Composable () -> Unit)?,
+    dragHandle: @Composable () -> Unit,
 ) {
-    var showDropdownMenu by remember { mutableStateOf(false) }
-
-    Card(
-        modifier = modifier,
-        colors = CardDefaults.cardColors(
-            containerColor = if (isSelected) {
-                MaterialTheme.colorScheme.primaryContainer
-            } else {
-                CustomColors.listItemColors.containerColor
-            }
-        )
-    ) {
-        Column(
-            modifier = Modifier.padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                AutoAIIcon(
-                    name = provider.name.ifEmpty { stringResource(R.string.setting_asr_page_default_name) },
-                    modifier = Modifier.size(32.dp)
-                )
-
-                Column(
-                    modifier = Modifier.weight(1f)
-                ) {
-                    Text(
-                        text = provider.name.ifEmpty { stringResource(R.string.setting_asr_page_default_name) },
-                        style = MaterialTheme.typography.titleMedium,
-                        color = if (isSelected) {
-                            MaterialTheme.colorScheme.onPrimaryContainer
-                        } else {
-                            MaterialTheme.colorScheme.onSurface
-                        }
-                    )
-
-                    Text(
-                        text = when (provider) {
-                            is ASRProviderSetting.OpenAIRealtime -> "OpenAI Realtime"
-                            is ASRProviderSetting.DashScope -> "DashScope"
-                        },
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+    Card(modifier, colors = CardDefaults.cardColors(containerColor = if (selected) MaterialTheme.colorScheme.primaryContainer else CustomColors.listItemColors.containerColor)) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                AutoAIIcon(resource.name, modifier = Modifier.size(32.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(resource.name, style = MaterialTheme.typography.titleMedium)
+                    Text(details, style = MaterialTheme.typography.bodySmall)
                 }
-
-                RadioButton(
-                    selected = isSelected,
-                    onClick = onSelect
-                )
-
+                RadioButton(selected, onSelect, enabled = resource.access.canSelect)
                 dragHandle()
             }
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                if (isSelected) {
-                    Tag(type = TagType.SUCCESS) {
-                        Text(stringResource(R.string.setting_tts_page_selected))
-                    }
-                }
-                ManagedRecordStatus(
-                    snapshot = effectiveSettings,
-                    kind = ManagedConfigurationRecordKind.ASR_PROVIDER,
-                    id = provider.id,
-                )
-
-                Spacer(modifier = Modifier.weight(1f))
-
-                IconButton(
-                    onClick = { showDropdownMenu = true }
-                ) {
-                    Icon(
-                        imageVector = HugeIcons.Tools,
-                        contentDescription = stringResource(R.string.setting_tts_page_more_options_content_description)
-                    )
-                    DropdownMenu(
-                        expanded = showDropdownMenu,
-                        onDismissRequest = { showDropdownMenu = false }
-                    ) {
-                        DropdownMenuItem(
-                            text = { Text(stringResource(R.string.edit)) },
-                            onClick = {
-                                showDropdownMenu = false
-                                onEdit()
-                            },
-                            leadingIcon = {
-                                Icon(HugeIcons.PencilEdit01, contentDescription = null)
-                            }
-                        )
-                        DropdownMenuItem(
-                            text = { Text(stringResource(R.string.delete)) },
-                            onClick = {
-                                showDropdownMenu = false
-                                onDelete()
-                            },
-                            leadingIcon = {
-                                Icon(HugeIcons.Delete01, contentDescription = null)
-                            }
-                        )
-                    }
-                }
+            Text(stringResource(when (resource.key.reference) {
+                is ConfigurationReference.Enterprise -> R.string.managed_configuration_source_managed
+                is ConfigurationReference.User -> if (resource.key.reference == DEFAULT_SYSTEM_TTS_ID) R.string.managed_configuration_source_builtin else R.string.managed_configuration_source_local
+            }), style = MaterialTheme.typography.labelMedium)
+            resource.access.unavailableReason?.let { Text(configurationUnavailableText(it), color = MaterialTheme.colorScheme.error) }
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                test?.invoke()
+                onEdit?.let { IconButton(it) { Icon(HugeIcons.PencilEdit01, stringResource(R.string.edit)) } }
+                onDelete?.let { IconButton(it) { Icon(HugeIcons.Delete01, stringResource(R.string.delete)) } }
             }
         }
     }

@@ -21,7 +21,7 @@ class TTSAutoPlayTest {
     fun `auto play ignores completion events from another conversation`() {
         val conversation = conversationWith(UIMessage.assistant("current"))
 
-        assertFalse(shouldAutoPlayTts(Uuid.random(), conversation.presentation()))
+        assertFalse(shouldAutoPlayTts(completion(conversation).copy(conversationId = Uuid.random()), conversation.presentation()))
     }
 
     @Test
@@ -39,14 +39,14 @@ class TTSAutoPlayTest {
         )
         val conversation = conversationWith(pending)
 
-        assertFalse(shouldAutoPlayTts(conversation.id, conversation.presentation()))
+        assertFalse(shouldAutoPlayTts(completion(conversation), conversation.presentation()))
     }
 
     @Test
     fun `auto play accepts completed assistant response in current conversation`() {
         val conversation = conversationWith(UIMessage.assistant("done"))
 
-        assertTrue(shouldAutoPlayTts(conversation.id, conversation.presentation()))
+        assertTrue(shouldAutoPlayTts(completion(conversation), conversation.presentation()))
     }
 
     @Test
@@ -66,7 +66,7 @@ class TTSAutoPlayTest {
         )
         val conversation = conversationWith(spoken)
 
-        assertFalse(shouldAutoPlayTts(conversation.id, conversation.presentation()))
+        assertFalse(shouldAutoPlayTts(completion(conversation), conversation.presentation()))
     }
 
     @Test
@@ -75,6 +75,17 @@ class TTSAutoPlayTest {
         assertTrue(autoPlayReplacesWithinTurn("turn-1", sequentialEnabled = false))
         assertTrue(autoPlayReplacesWithinTurn(null, sequentialEnabled = true))
     }
+
+    @Test fun `late completion cannot read a replacement reply or its speech context`() {
+        val original = conversationWith(UIMessage.assistant("original reply"))
+        val event = completion(original)
+        val replacement = original.copy(messageNodes = listOf(UIMessage.assistant("next reply").toMessageNode()))
+        assertFalse(shouldAutoPlayTts(event, replacement.presentation()))
+        org.junit.Assert.assertEquals("original reply", event.message.toText())
+    }
+
+    private fun completion(conversation: Conversation) = net.weero.measix.pilot.service.ConversationSpeechCompletion(
+        conversation.id, Uuid.random(), conversation.messageNodes.last().currentMessage, io.mockk.mockk())
 
     private fun conversationWith(message: UIMessage): Conversation {
         val id = Uuid.random()

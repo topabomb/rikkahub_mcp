@@ -1,5 +1,7 @@
 package net.weero.measix.pilot.data.ai.mcp
 
+import net.weero.measix.pilot.data.enterprise.ManagedSnapshotRequired
+
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.ensureActive
 import net.weero.measix.pilot.data.configuration.ConfigurationCategory
@@ -650,7 +652,7 @@ class McpRuntimeCoordinator internal constructor(
             toolCallExecutor.execute(realmAccess.scope, lease, toolName, args, onArtifactCreated) { metadata ->
             if (admission.config.managed?.gatewaySurface != null) onResolvedTool(metadata)
         }
-        } catch (barrier: McpManagedSnapshotRequired) {
+        } catch (barrier: ManagedSnapshotRequired) {
             serverRuntime.acceptManagedBarrier(preparation.generation, barrier)
             throw barrier
         }
@@ -714,7 +716,7 @@ class McpRuntimeCoordinator internal constructor(
     private fun runtime(
         key: McpRuntimeKey,
         source: McpRuntimeDefinition,
-        onManagedSnapshotRequired: (McpManagedSnapshotRequired) -> Unit = {},
+        onManagedSnapshotRequired: (ManagedSnapshotRequired) -> Unit = {},
     ): McpServerRuntime =
         runtimeState.getOrCreate(key) {
             McpServerRuntime(
