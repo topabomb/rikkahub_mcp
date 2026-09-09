@@ -19,7 +19,7 @@ UserSettingsDocument（用户定义 + 公用/按域偏好）+ Applied Enterprise
 | Owner | 当前载体 | 负责的事实 | 是否进入普通本地备份 |
 |---|---|---|---|
 | Built-in | `DefaultProviders.kt`、默认 Assistant/TTS/Prompt/Theme 常量 | 安装包内默认资源和反序列化默认值 | 不单独备份；读取时补齐 |
-| 用户配置与偏好 | Preferences DataStore `settings` 的 `user_settings` JSON | UserSettingsDocument 内分开保存用户定义、公用显示偏好、按主体的选择、内部状态 | 当前仍以个人 Settings 投影导出 `settings.json` |
+| 用户配置与偏好 | Preferences DataStore `settings` 的 `user_settings` JSON | UserSettingsDocument 内分开保存用户定义、公用显示偏好、按主体的选择、内部状态 | 以个人 Settings 投影导出 `settings.json` |
 | Local UI preference | SharedPreferences `MeasixPilot.preferences` | 语言、明暗、启动/布局/搜索排序等轻量偏好 | 否 |
 | Local durable resource | Room + `filesDir` | Workspace、Skill、会话级覆盖、资源文件 | 仅备份协议明确包含的域 |
 | Local runtime cache | `cacheDir/lru_key_roulette.json` 等 | 可重建的 key 轮换/发现缓存；不是配置真源 | 否 |
@@ -467,13 +467,15 @@ BackupReminderConfig { enabled=false, intervalDays=7, lastBackupTime=0 }
 普通备份的 `settings.json` 是 Local shadow，当前会序列化 Local Provider/Search/TTS/ASR/MCP/WebDAV/S3 中的本地凭据。
 这再次说明 Enterprise credential 不能进入 `Settings`。Managed Snapshot/Binding/credential 也不属于普通备份域。
 
-当前手工备份格式是 `rikkahub-durable-v4`：包含 `settings.json`、独立的 `mcp_catalogs.json`、`VACUUM INTO` 得到的 Room
-snapshot、manifest，以及 `upload/images/skills/fonts` 四个 durable 目录；不包含
-`workspaces/tool_outputs/managed_configuration`。Room v10 的 `conversation_model_context` 随 `measix_pilot.db` 整体备份和恢复，
-不增加 disclosure sidecar 或新 manifest 版本；settings-only 备份不携带会话 context。恢复仍接受 v3，并从旧 Settings 中一次性提取完整 MCP schema 后写入独立
-Catalog；空或不完整目录不迁移。`SettingsPersistenceContractTest` 用 `settings-golden.json` 锁定 `settings.json` 的逐字载荷（含 Provider/Model 覆盖、Assistant 枚举、显示设置、S3/WebDAV、TTS/ASR、模式注入与备份配置的默认值与嵌套表示），并另锁顶层字段顺序、Preferences key 名称/Boolean-String-Int-Float 类型清单，明确排除 disclosure/model-context 字段；`BackupArchiveServiceTest` 通过生产 `prepare` 验证 settings-only ZIP 只有 settings 与独立 Catalog。`BackupRestoreMigrationIntegrationTest` 在设备上覆盖两条链路：真实 v9 snapshot 封装为 durable-v4，经 `stageRestore`、冷启动文件交换和生产 migration 链打开为 v10 并装载历史 aggregate；以及已含 canonical context 行的 v10 库整体备份后换回，仍由生产 migration 链打开并经 Repository 逐字读回该 entry。ZIP 未加密、未签名，manifest 的 SHA-256 只提供完整性。Manifest 仍声明
-`allowBackup=true`，所以企业 credential 设计还必须单独审计 Android
-Auto Backup/设备迁移规则，不能只验证手工 ZIP。
+当前手工完整备份格式为 `rikkahub-personal-v1`，包含个人 `settings.json`、个人 `mcp_catalogs.json`、个人数据图的 `measix_pilot.db`、按图收集的 payload 和完整性 manifest。设置投影仍含用户自己的 Provider/Search/TTS/ASR/MCP/WebDAV/S3 凭据；企业配置、binding、Session、Feed、企业偏好和企业数据均不进入个人包。ZIP 未加密、未签名，SHA-256 仅校验完整性。
+
+`BackupArchiveService` 在既有文件锁与 snapshot barrier 内取得 SQLite 一致快照，`BackupDataGraph` 将个人根及其 Message/Turn/Tool/Context 复制到新建数据库，按显式列名复制并保留自增 ID 高水位；不携带源库空闲页、未知表或旧全文索引。Artifact 引用和 FTS 从保留的消息重建。个人 Artifact 包含未挂接聊天的用户文件；payload 清单只来自保留的 metadata、生命周期 receipt，以及共享 Skill/字体配置，不扫描整份 upload/images。Workspace 注册信息属于共享配置，Workspace 目录内容不进入该包。
+
+个人格式最低要求带 durable scope 的 Room schema 12，不绑定后续 App 或当前 Room 版本；升级继续使用同一迁移链。恢复仍接受已发布的 durable-v3/v4/v5 和原有无 manifest 个人备份，使用同一 Room migration/物理 schema 校验；旧格式缺失的头像、背景和预设资产仅在显式恢复入口按 `ArtifactReferencePolicy.detach` 回退默认。新格式要求配置根完整，已持久化的 DELETING 根保留给 Artifact 恢复 owner。正常用户删除附件留下的历史消息仍有效，不重建已经失效的活引用。
+
+`PendingBackupRestore` 保留原始个人输入。冷启动在应用 Room 和运行写入开放前读取最新数据库与同一 Settings DataStore，将“备份个人图 + 最新企业图 + 企业偏好仍引用的共享个人资产”构建为独立 publication。共享 Workspace 注册使用最新本地值。相同主键但不同内容、不同文件 owner 的路径冲突、非规范路径或跨域引用均拒绝，不覆盖企业行；同一共享 Artifact 仅在 metadata 与 payload 均相同时合并。物理发布仍使用既有 swap/rollback；重试先恢复原图，再重新读取最新企业状态。升级时遇到已发布个人版本留下的 prepared 输入，在 publication 副本上走生产 Room migration，保留原输入字节；若旧个人恢复已开始直接交换 pending 文件，先按原交换来源回滚，再进入合并。CREATING/DELETING（包含 payload 已清除但 metadata 补偿未完成的状态）和图库 `.pending`/`.deleting` receipt 交回原 owner 恢复，不在备份层执行生命周期动作。Settings 恢复只替换个人投影，保留企业使用偏好与内部清理状态。旧个人 prepared 输入的失效配置资产在合并企业图前归一化；派生结果保存在 pending 的独立文件，实际 Settings owner 消费同一结果，原 settings.json 与数据库字节不变。恢复 owner 完成后先原子退休 pending，再删除 rollback、publication 与退休目录；清理中断不重放恢复。
+
+Settings-only 包只有个人 Settings 与 MCP Catalog，不携带会话数据或本地 payload 引用。系统备份与设备迁移已显式排除混合域存储，见本文“系统备份边界”。
 
 ## 5. Settings 之外的 Android 配置
 

@@ -96,11 +96,14 @@ class BackupArchiveService(
                             val timestamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss"))
                             val unique = Uuid.random().toString()
                             val archive = File(context.cacheDir, "backup_${timestamp}_$unique.zip")
-                            val snapshot = if (selection.includeDurableAggregate) {
-                                File(context.cacheDir, "backup_database_$unique.sqlite").also(::createDatabaseSnapshot)
-                            } else null
+                            val sourceSnapshot = if (selection.includeDurableAggregate) File(context.cacheDir, "backup_source_$unique.sqlite") else null
+                            val snapshot = if (selection.includeDurableAggregate) File(context.cacheDir, "backup_database_$unique.sqlite") else null
                             try {
                                 val liveSettings = settingsStore.snapshotLocal()
+                                val personalPaths = if (snapshot != null) {
+                                    createDatabaseSnapshot(requireNotNull(sourceSnapshot))
+                                    BackupDataGraph(context).exportPersonal(sourceSnapshot, snapshot, liveSettings)
+                                } else emptySet()
                                 val archiveSettings = if (selection.includeDurableAggregate) {
                                     liveSettings
                                 } else {
@@ -113,12 +116,7 @@ class BackupArchiveService(
                                 ).toByteArray(Charsets.UTF_8)
                                 val durableFiles = if (snapshot != null) buildList {
                                     add(DATABASE_ENTRY to snapshot)
-                                    DURABLE_DIRECTORIES.forEach { folder ->
-                                        val root = File(context.filesDir, folder)
-                                        if (root.isDirectory) root.walkTopDown().filter(File::isFile).forEach { file ->
-                                            add("$folder/${file.relativeTo(root).invariantSeparatorsPath}" to file)
-                                        }
-                                    }
+                                    personalPaths.forEach { path -> add(path to resolveInside(context.filesDir, path)) }
                                 }.sortedBy { it.first } else emptyList()
                                 ZipOutputStream(FileOutputStream(archive)).use { output ->
                                     addBytes(output, SETTINGS_ENTRY, settingsBytes)
@@ -145,6 +143,7 @@ class BackupArchiveService(
                                 throw error
                             } finally {
                                 snapshot?.delete()
+                                sourceSnapshot?.delete()
                             }
                         }
                     }
@@ -205,7 +204,7 @@ class BackupArchiveService(
                                 input.closeEntry()
                             }
                         }
-                        val restoredSettings = validateSettings(staging)
+                        var restoredSettings = validateSettings(staging)
                         if (selection.includeDurableAggregate) {
                             val modern = File(staging, MANIFEST_ENTRY).isFile
                             val manifest = if (modern) validateModernManifest(staging, archiveFiles) else null
@@ -218,6 +217,10 @@ class BackupArchiveService(
                             // leaves the original live database untouched.
                             upgradeStagingDatabaseToCurrentSchema(staging)
                             validateSettingsPayloadRoots(staging, restoredSettings.settings)
+                            val normalized = BackupDataGraph(context).validatePersonalArchive(
+                                staging, restoredSettings.settings, legacy = manifest?.version != MANIFEST_VERSION,
+                            )
+                            restoredSettings = restoredSettings.copy(settings = normalized, normalizedJson = json.encodeToString(normalized))
                             DURABLE_DIRECTORIES.forEach { File(staging, it).mkdirs() }
                             File(staging, AGGREGATE_MARKER).writeText("1", Charsets.UTF_8)
                         }
@@ -455,12 +458,12 @@ class BackupArchiveService(
         return manifest
     }
 
-    /** Modern manifests require all managed payloads; v5 additionally promises the current Room schema. */
+    /** Personal archives require durable scope columns and follow the normal Room migration chain. */
     private fun validateModernAggregate(staging: File, manifestVersion: String) {
         val db = SQLiteDatabase.openDatabase(File(staging, DATABASE_ENTRY).absolutePath, null, SQLiteDatabase.OPEN_READONLY)
         try {
-            require(manifestVersion != MANIFEST_VERSION || db.version == APP_DATABASE_VERSION) {
-                "Current backup manifest requires database version $APP_DATABASE_VERSION"
+            require(manifestVersion != MANIFEST_VERSION || db.version in FIRST_PERSONAL_DATABASE_VERSION..APP_DATABASE_VERSION) {
+                "Personal backup requires database version $FIRST_PERSONAL_DATABASE_VERSION or newer"
             }
             require(db.version in 8..APP_DATABASE_VERSION) {
                 "Unsupported modern backup database version: ${db.version}"
@@ -476,7 +479,10 @@ class BackupArchiveService(
                 require(relativePath.startsWith("${FileFolders.IMAGES}/")) {
                     "Generated-media payload is outside its managed domain: $relativePath"
                 }
-                requireManagedPayload(staging, relativePath, "generated-media")
+                val expected = if (manifestVersion == MANIFEST_VERSION && !resolveInside(staging, relativePath).isFile) {
+                    relativePath + GeneratedMediaStore.DELETING_SUFFIX
+                } else relativePath
+                requireManagedPayload(staging, expected, "generated-media")
             }
         } finally {
             db.close()
@@ -557,9 +563,10 @@ class BackupArchiveService(
         internal const val SETTINGS_ENTRY = "settings.json"
         internal const val MCP_CATALOGS_ENTRY = "mcp_catalogs.json"
         internal const val MANIFEST_ENTRY = "backup_manifest"
-        internal const val MANIFEST_VERSION = "rikkahub-durable-v5"
+        internal const val MANIFEST_VERSION = "rikkahub-personal-v1"
+        private const val FIRST_PERSONAL_DATABASE_VERSION = 12
         internal val SUPPORTED_MANIFEST_VERSIONS =
-            setOf("rikkahub-durable-v3", "rikkahub-durable-v4", MANIFEST_VERSION)
+            setOf("rikkahub-durable-v3", "rikkahub-durable-v4", "rikkahub-durable-v5", MANIFEST_VERSION)
         internal const val DATABASE_ENTRY = "measix_pilot.db"
         internal const val LEGACY_WAL_ENTRY = "measix_pilot-wal"
         internal const val LEGACY_SHM_ENTRY = "measix_pilot-shm"
@@ -572,6 +579,7 @@ class BackupArchiveService(
             FileFolders.SKILLS,
             FileFolders.FONTS,
             FileFolders.TOOL_OUTPUTS,
+            net.weero.measix.pilot.data.files.ArtifactPayloadStore.STAGING_FOLDER,
         )
         private const val MAX_ENTRIES = 20_000
         private const val MAX_ENTRY_BYTES = 2L * 1024 * 1024 * 1024

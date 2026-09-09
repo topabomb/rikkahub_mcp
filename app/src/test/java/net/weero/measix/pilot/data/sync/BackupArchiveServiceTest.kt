@@ -84,7 +84,7 @@ class BackupArchiveServiceTest {
         val providers = JsonInstant.encodeToString(listOf<me.rerere.ai.provider.ProviderSetting>(provider))
         val legacy = """{"assistants":[{"id":"00000000-0000-0000-0000-000000000001","name":"Legacy","chatModelId":"${model.id}"}],"providers":$providers}"""
         service.stageRestore(archive(mapOf("settings.json" to legacy.toByteArray())), BackupSelection(false, false))
-        PendingBackupRestore.bootstrapBeforeDatabaseOpen(context)
+        PendingBackupRestore.applyBeforeDatabaseOpen(context, readSettings = { net.weero.measix.pilot.data.datastore.UserSettingsDocument.empty() })
         var restored: Settings? = null
         val settingsStore = mockk<ArtifactStore>()
         coEvery { settingsStore.restoreSettingsReferences(any()) } coAnswers { firstArg<Settings>().also { restored = it } }
@@ -106,7 +106,12 @@ class BackupArchiveServiceTest {
         mockkStatic("net.weero.measix.pilot.data.db.AppDatabaseFactoryKt")
         every { createAppDatabase(any(), any()) } answers {
             Room.databaseBuilder(firstArg<Context>(), AppDatabase::class.java, secondArg<String>())
-                .setJournalMode(androidx.room.RoomDatabase.JournalMode.TRUNCATE).build()
+                .setJournalMode(androidx.room.RoomDatabase.JournalMode.TRUNCATE)
+                .addCallback(object : androidx.room.RoomDatabase.Callback() {
+                    override fun onOpen(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                        db.execSQL("CREATE TABLE IF NOT EXISTS message_fts(text TEXT,node_id TEXT,message_id TEXT,conversation_id TEXT,title TEXT,update_at TEXT)")
+                    }
+                }).build()
         }
         work = File(System.getProperty("java.io.tmpdir"), "backup-test-${System.nanoTime()}").apply { mkdirs() }
         File(context.noBackupFilesDir, "backup_restore").deleteRecursively()
@@ -133,20 +138,20 @@ class BackupArchiveServiceTest {
     }
 
     @Test
-    fun `durable archive stages then swaps database files and settings across restart phases`() = runTest {
+    fun `personal restore swaps validated aggregate`() = runTest {
         val liveDb = context.getDatabasePath("measix_pilot")
         createDatabase(liveDb, "old")
-        val oldWal = File(liveDb.parentFile, "measix_pilot-wal").apply { writeBytes(byteArrayOf(1, 2, 3)) }
+        val oldWal = File(liveDb.parentFile, "measix_pilot-wal")
         val liveUpload = File(context.filesDir, "upload").apply { mkdirs() }
         File(liveUpload, "old.txt").writeText("old")
         val stagedDb = File(work, "new.sqlite")
-        createDatabase(stagedDb, "new")
+        createDatabase(stagedDb, "new", artifactPath = "upload/new.txt")
         val archive = modernArchive(stagedDb, mapOf("upload/new.txt" to "new".toByteArray()))
 
         service.stageRestore(archive, BackupSelection(true, true))
         assertEquals("old", databaseMarker(liveDb))
 
-        PendingBackupRestore.bootstrapBeforeDatabaseOpen(context)
+        PendingBackupRestore.applyBeforeDatabaseOpen(context, readSettings = { net.weero.measix.pilot.data.datastore.UserSettingsDocument.empty() })
 
         assertEquals("new", databaseMarker(liveDb))
         assertEquals("new", File(context.filesDir, "upload/new.txt").readText())
@@ -216,7 +221,7 @@ class BackupArchiveServiceTest {
         val archive = modernArchive(stagedDb, mapOf(path to "full result".toByteArray()))
 
         service.stageRestore(archive, BackupSelection(true, true))
-        PendingBackupRestore.bootstrapBeforeDatabaseOpen(context)
+        PendingBackupRestore.applyBeforeDatabaseOpen(context, readSettings = { net.weero.measix.pilot.data.datastore.UserSettingsDocument.empty() })
 
         assertEquals("tool-output", databaseMarker(context.getDatabasePath("measix_pilot")))
         assertEquals("full result", File(context.filesDir, path).readText())
@@ -291,7 +296,7 @@ class BackupArchiveServiceTest {
         )
 
         service.stageRestore(archive, BackupSelection(false, false))
-        PendingBackupRestore.bootstrapBeforeDatabaseOpen(context)
+        PendingBackupRestore.applyBeforeDatabaseOpen(context, readSettings = { net.weero.measix.pilot.data.datastore.UserSettingsDocument.empty() })
         var restored: Settings? = null
         val settingsStore = mockk<ArtifactStore>()
         coEvery { settingsStore.restoreSettingsReferences(any()) } coAnswers { firstArg<Settings>().also { restored = it } }
@@ -313,9 +318,6 @@ class BackupArchiveServiceTest {
             deleteLiveRestoreComponents()
             val liveDb = context.getDatabasePath("measix_pilot")
             createDatabase(liveDb, "old")
-            val oldDatabase = liveDb.readBytes()
-            val walBytes = byteArrayOf(7, 8, 9, 10)
-            val oldWal = File(liveDb.parentFile, "measix_pilot-wal").apply { writeBytes(walBytes) }
             BackupArchiveService.DURABLE_DIRECTORIES.forEach { folder ->
                 File(context.filesDir, "$folder/old.txt").apply {
                     parentFile?.mkdirs()
@@ -328,19 +330,18 @@ class BackupArchiveServiceTest {
             service.stageRestore(modernArchive(stagedDb, files), BackupSelection(true, true))
 
             val failure = runCatching {
-                PendingBackupRestore.applyBeforeDatabaseOpen(context) { swapped ->
+                PendingBackupRestore.applyBeforeDatabaseOpen(context, readSettings = { net.weero.measix.pilot.data.datastore.UserSettingsDocument.empty() }) { swapped ->
                     if (swapped == faultPoint) error("injected-$faultPoint")
                 }
             }.exceptionOrNull()
 
             assertTrue(failure is IllegalStateException)
-            assertTrue(liveDb.readBytes().contentEquals(oldDatabase))
-            assertTrue(oldWal.readBytes().contentEquals(walBytes))
+            assertEquals("old", databaseMarker(liveDb))
             BackupArchiveService.DURABLE_DIRECTORIES.forEach { folder ->
                 assertEquals("old-$folder", File(context.filesDir, "$folder/old.txt").readText())
             }
 
-            PendingBackupRestore.bootstrapBeforeDatabaseOpen(context)
+            PendingBackupRestore.applyBeforeDatabaseOpen(context, readSettings = { net.weero.measix.pilot.data.datastore.UserSettingsDocument.empty() })
             assertEquals("new", databaseMarker(liveDb))
             PendingBackupRestore.complete(context)
         }
@@ -384,7 +385,7 @@ class BackupArchiveServiceTest {
         val archive = modernArchive(stagedDb, emptyMap(), settings, listOf(catalog))
 
         service.stageRestore(archive, BackupSelection(true, true))
-        PendingBackupRestore.bootstrapBeforeDatabaseOpen(context)
+        PendingBackupRestore.applyBeforeDatabaseOpen(context, readSettings = { net.weero.measix.pilot.data.datastore.UserSettingsDocument.empty() })
         val settingsStore = mockk<ArtifactStore>()
         coEvery { settingsStore.restoreSettingsReferences(any()) } returns settings
 
@@ -437,7 +438,7 @@ class BackupArchiveServiceTest {
         val archive = archive(payloads + ("backup_manifest" to JsonInstant.encodeToString(manifest).toByteArray()))
 
         service.stageRestore(archive, BackupSelection(true, true))
-        PendingBackupRestore.bootstrapBeforeDatabaseOpen(context)
+        PendingBackupRestore.applyBeforeDatabaseOpen(context, readSettings = { net.weero.measix.pilot.data.datastore.UserSettingsDocument.empty() })
         val settingsStore = mockk<ArtifactStore>()
         var restoredSettings: Settings? = null
         var restoredCatalogs: List<McpCatalogSnapshot>? = null
@@ -467,8 +468,8 @@ class BackupArchiveServiceTest {
             presetMessages = listOf(UIMessage(role = MessageRole.USER, parts = listOf(UIMessagePart.Image(missing)))))))
         val source = File(work, "dangling-config.sqlite")
         createDatabase(source, "restored")
-        service.stageRestore(modernArchive(source, emptyMap(), backupSettings), BackupSelection(true, true))
-        PendingBackupRestore.bootstrapBeforeDatabaseOpen(context)
+        service.stageRestore(modernArchive(source, emptyMap(), backupSettings, version = "rikkahub-durable-v5"), BackupSelection(true, true))
+        PendingBackupRestore.applyBeforeDatabaseOpen(context, readSettings = { net.weero.measix.pilot.data.datastore.UserSettingsDocument.empty() })
         val owner = AppScope(Dispatchers.Default)
         val disk = PreferenceDataStoreFactory.create(scope = owner, migrations = listOf(UserSettingsMigration()),
             produceFile = { File(work, "settings.preferences_pb") })
@@ -501,6 +502,7 @@ class BackupArchiveServiceTest {
         files: Map<String, ByteArray>,
         settings: Settings = Settings(),
         catalogs: List<McpCatalogSnapshot> = emptyList(),
+        version: String = BackupArchiveService.MANIFEST_VERSION,
     ): File {
         val payloads = linkedMapOf(
             "settings.json" to JsonInstant.encodeToString(settings).toByteArray(),
@@ -508,7 +510,7 @@ class BackupArchiveServiceTest {
             "measix_pilot.db" to database.readBytes(),
         ).apply { putAll(files) }
         val manifest = DurableBackupManifest(
-            version = BackupArchiveService.MANIFEST_VERSION,
+            version = version,
             entries = payloads.map { (path, bytes) ->
                 DurableBackupEntry(path, bytes.size.toLong(), sha256(bytes))
             }.sortedBy(DurableBackupEntry::path),
@@ -529,7 +531,7 @@ class BackupArchiveServiceTest {
     }
 
     @Test
-    fun `valid Room database reopens through DAO after durable v5 round trip`() = runTest {
+    fun `valid Room database reopens through DAO after personal archive round trip`() = runTest {
         val sourceName = "v10-context-${System.nanoTime()}"
         val conversationId = "00000000-0000-0000-0000-000000000010"
         val anchorNodeId = "00000000-0000-0000-0000-000000000011"
@@ -593,13 +595,13 @@ class BackupArchiveServiceTest {
             val manifest = JsonInstant.decodeFromString<DurableBackupManifest>(
                 zip.getInputStream(zip.getEntry("backup_manifest")).bufferedReader().readText(),
             )
-            assertEquals("rikkahub-durable-v5", manifest.version)
+            assertEquals("rikkahub-personal-v1", manifest.version)
             assertTrue(manifest.entries.any { it.path == "measix_pilot.db" })
             assertFalse(manifest.entries.any { it.path.contains("disclosure") || it.path.contains("model_context") })
         }
 
         service.stageRestore(archive, BackupSelection(true, true))
-        PendingBackupRestore.bootstrapBeforeDatabaseOpen(context)
+        PendingBackupRestore.applyBeforeDatabaseOpen(context, readSettings = { net.weero.measix.pilot.data.datastore.UserSettingsDocument.empty() })
         val restored = Room.databaseBuilder(context, AppDatabase::class.java, "measix_pilot")
             .allowMainThreadQueries()
             .build()
@@ -638,8 +640,8 @@ class BackupArchiveServiceTest {
         try { room.openHelper.writableDatabase } finally { room.close() }
         val db = SQLiteDatabase.openOrCreateDatabase(file, null)
         db.version = version
-        db.execSQL("CREATE TABLE marker(value TEXT NOT NULL)")
-        db.execSQL("INSERT INTO marker VALUES(?)", arrayOf(marker))
+        db.execSQL("INSERT INTO ConversationEntity(id,assistant_id,title,create_at,update_at,suggestions,is_pinned,custom_system_prompt,mode_injection_ids,workspace_cwd,tags,folder_id,parent_conversation_id) VALUES(?,?,?,1,1,'[]',0,'','[]','','','',NULL)",
+            arrayOf("00000000-0000-0000-0000-000000000099", Settings().assistantId.toString(), marker))
         artifactPath?.let { insertArtifact(db, it) }
         db.close()
     }
@@ -650,16 +652,24 @@ class BackupArchiveServiceTest {
     }
 
     @Test
-    fun `current schema marker cannot publish invalid schema or transcript over live data`() = runTest {
+    fun `invalid graph never replaces live data`() = runTest {
         val live = context.getDatabasePath("measix_pilot")
         createDatabase(live, "live")
-        for (fault in listOf("missing_unique_index", "missing_column", "invalid_transcript")) {
+        for (fault in listOf("missing_unique_index", "missing_column", "invalid_transcript", "invalid_child_lineage", "invalid_selected_variant")) {
             val source = File(work, "$fault.sqlite")
             createDatabase(source, "invalid")
             SQLiteDatabase.openDatabase(source.absolutePath, null, SQLiteDatabase.OPEN_READWRITE).use { db ->
                 when (fault) {
                     "missing_unique_index" -> db.execSQL("DROP INDEX index_tool_execution_turn_id_local_call_id")
                     "missing_column" -> db.execSQL("ALTER TABLE ConversationEntity RENAME COLUMN title TO damaged_title")
+                    "invalid_child_lineage" -> {
+                        db.execSQL("INSERT INTO turn_execution(turn_id,conversation_id,assistant_message_id,status,reason,created_at,updated_at) VALUES('00000000-0000-0000-0000-000000000201','00000000-0000-0000-0000-000000000099',NULL,'FAILED',NULL,1,1)")
+                        db.execSQL("INSERT INTO tool_execution(execution_id,turn_id,step_id,local_call_id,status,reason,child_conversation_id,child_turn_id,sub_assistant_run_id,created_at,updated_at) VALUES('00000000-0000-0000-0000-000000000202','00000000-0000-0000-0000-000000000201','00000000-0000-0000-0000-000000000203','00000000-0000-0000-0000-000000000204','FAILED',NULL,'00000000-0000-0000-0000-000000000099',NULL,NULL,1,1)")
+                    }
+                    "invalid_selected_variant" -> {
+                        db.execSQL("INSERT INTO message_node(id,conversation_id,node_index,messages,select_index,transcript_schema) VALUES('00000000-0000-0000-0000-000000000098','00000000-0000-0000-0000-000000000099',0,?,2,3)",
+                            arrayOf(JsonInstant.encodeToString(listOf(UIMessage.user("one variant")))))
+                    }
                     else -> {
                         db.execSQL("INSERT INTO ConversationEntity(id, assistant_id, title, create_at, update_at, suggestions, " +
                             "is_pinned, custom_system_prompt, mode_injection_ids, workspace_cwd, tags, folder_id, parent_conversation_id) " +
@@ -673,7 +683,9 @@ class BackupArchiveServiceTest {
                 service.stageRestore(modernArchive(source, emptyMap()), BackupSelection(true, true))
             }.exceptionOrNull()
             assertTrue("$fault must fail staging", failure != null)
-            if (fault != "invalid_transcript") {
+            if (fault == "invalid_child_lineage") assertEquals("Invalid child execution lineage", failure?.message)
+            if (fault == "invalid_selected_variant") assertEquals("Selected message variant is missing", failure?.message)
+            if (fault in setOf("missing_unique_index", "missing_column")) {
                 assertTrue("$fault must reach Room schema validation: $failure",
                     failure?.message.orEmpty().contains("invalid schema"))
             }
@@ -700,7 +712,7 @@ class BackupArchiveServiceTest {
     private fun databaseMarker(file: File): String {
         val db = SQLiteDatabase.openDatabase(file.absolutePath, null, SQLiteDatabase.OPEN_READONLY)
         return try {
-            db.rawQuery("SELECT value FROM marker", null).use { cursor ->
+            db.rawQuery("SELECT title FROM ConversationEntity", null).use { cursor ->
                 check(cursor.moveToFirst())
                 cursor.getString(0)
             }

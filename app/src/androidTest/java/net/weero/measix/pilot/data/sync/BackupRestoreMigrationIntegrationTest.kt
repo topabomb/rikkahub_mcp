@@ -3,6 +3,8 @@ package net.weero.measix.pilot.data.sync
 import me.rerere.common.configuration.ConfigurationReference
 
 import android.content.Context
+import androidx.core.net.toUri
+import net.weero.measix.pilot.data.model.Avatar
 import android.database.sqlite.SQLiteDatabase
 import androidx.room.testing.MigrationTestHelper
 import androidx.sqlite.db.framework.FrameworkSQLiteOpenHelperFactory
@@ -14,6 +16,7 @@ import io.mockk.mockk
 import java.io.File
 import java.io.FileOutputStream
 import java.security.MessageDigest
+import java.util.zip.ZipFile
 import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
 import kotlinx.coroutines.runBlocking
@@ -37,6 +40,7 @@ import net.weero.measix.pilot.data.db.migrations.Migration_6_7
 import net.weero.measix.pilot.data.db.migrations.Migration_7_8
 import net.weero.measix.pilot.data.db.migrations.Migration_8_9
 import net.weero.measix.pilot.data.db.migrations.Migration_9_10
+import net.weero.measix.pilot.data.db.migrations.Migration_10_11
 import net.weero.measix.pilot.data.files.ArtifactStore
 import net.weero.measix.pilot.data.imggen.GeneratedMediaStore
 import net.weero.measix.pilot.data.repository.ConversationRepository
@@ -117,7 +121,7 @@ class BackupRestoreMigrationIntegrationTest {
                 arrayOf<Any?>(ownerNodeId.toString(), conversationId.toString(), 1, JsonInstant.encodeToString(listOf(owner))),
             )
         }
-        createDurableV4Archive(context.getDatabasePath(sourceName), archive)
+        createDurableArchive(context.getDatabasePath(sourceName), archive)
         val catalogStore = mockk<McpCatalogStore>(relaxed = true)
         coEvery { catalogStore.snapshotForBackup(any()) } returns emptyList()
         val service = BackupArchiveService(
@@ -140,7 +144,7 @@ class BackupRestoreMigrationIntegrationTest {
                 while (c.moveToNext()) assertEquals(3, c.getInt(0))
             }
         }
-        PendingBackupRestore.bootstrapBeforeDatabaseOpen(context)
+        PendingBackupRestore.applyBeforeDatabaseOpen(context, readSettings = { net.weero.measix.pilot.data.datastore.UserSettingsDocument.empty() })
         val database = createAppDatabase(context, "measix_pilot")
         try {
             assertEquals(APP_DATABASE_VERSION, database.openHelper.readableDatabase.version)
@@ -247,7 +251,7 @@ class BackupRestoreMigrationIntegrationTest {
 
         val v10Archive = File(context.cacheDir, "restore-v10-${System.nanoTime()}.zip")
         try {
-            createDurableV4Archive(context.getDatabasePath(sourceV10), v10Archive)
+            createDurableArchive(context.getDatabasePath(sourceV10), v10Archive)
             val catalogStore = mockk<McpCatalogStore>(relaxed = true)
             coEvery { catalogStore.snapshotForBackup(any()) } returns emptyList()
             BackupArchiveService(
@@ -268,7 +272,7 @@ class BackupRestoreMigrationIntegrationTest {
                     while (c.moveToNext()) assertEquals(3, c.getInt(0))
                 }
             }
-            PendingBackupRestore.bootstrapBeforeDatabaseOpen(context)
+            PendingBackupRestore.applyBeforeDatabaseOpen(context, readSettings = { net.weero.measix.pilot.data.datastore.UserSettingsDocument.empty() })
 
             val database = createAppDatabase(context, "measix_pilot")
             try {
@@ -302,8 +306,97 @@ class BackupRestoreMigrationIntegrationTest {
         }
     }
 
-    private fun createDurableV4Archive(database: File, target: File) {
-        val settings = JsonInstant.encodeToString(Settings(
+    @Test
+    fun publishedV5ArchivePreservesMigratedArtifactColumnsAndReservedIds() = assertPublishedV5Restore("archive")
+
+    @Test
+    fun preparedV19RestoreSurvivesApplicationUpgrade() = assertPublishedV5Restore("prepared")
+
+    @Test
+    fun interruptedV19RestoreRollsBackBeforeMigratingItsOriginalInput() = assertPublishedV5Restore("interrupted")
+
+    private fun assertPublishedV5Restore(entry: String) = runBlocking {
+        migrationHelper.createDatabase(sourceName, 5).use { db ->
+            db.execSQL("INSERT INTO managed_files(id,folder,relative_path,display_name,mime_type,size_bytes,created_at,updated_at) VALUES(9,'upload','upload/legacy.txt','legacy','text/plain',6,1,1)")
+            db.execSQL("INSERT INTO managed_files(id,folder,relative_path,display_name,mime_type,size_bytes,created_at,updated_at) VALUES(123,'upload','upload/deleted.txt','deleted','text/plain',1,1,1)")
+            db.execSQL("DELETE FROM managed_files WHERE id=123")
+        }
+        migrationHelper.runMigrationsAndValidate(sourceName, 11, true,
+            Migration_5_6, Migration_6_7, Migration_7_8, Migration_8_9, Migration_9_10, Migration_10_11).use { db ->
+            val columns = buildList {
+                db.query("PRAGMA table_info(artifact)").use { while (it.moveToNext()) add(it.getString(1)) }
+            }
+            assertTrue(columns.indexOf("origin") < columns.indexOf("payload_token"))
+        }
+        val missing = File(context.filesDir, "upload/missing-legacy-asset.png").toUri().toString()
+        val oldSettings = Settings().let { settings -> settings.copy(assistants = listOf(settings.assistants.first().copy(
+            avatar = Avatar.Image(missing), background = missing,
+            presetMessages = listOf(UIMessage(role = MessageRole.USER, parts = listOf(UIMessagePart.Image(missing)))),
+        ))) }
+        createDurableArchive(context.getDatabasePath(sourceName), archive, "rikkahub-durable-v5",
+            mapOf("upload/legacy.txt" to "legacy".encodeToByteArray()), oldSettings)
+        val pending = PendingBackupRestore.pendingDir(context)
+        if (entry == "archive") {
+            BackupArchiveService(context, mockk(), mockk(), JsonInstant, mockk(), mockk(), mockk())
+                .stageRestore(archive, BackupSelection(true, true))
+        } else {
+            pending.mkdirs()
+            ZipFile(archive).use { zip ->
+                zip.entries().asSequence().forEach { item ->
+                    val file = File(pending, item.name).also { it.parentFile?.mkdirs() }
+                    zip.getInputStream(item).use { input -> file.outputStream().use(input::copyTo) }
+                }
+            }
+            File(pending, BackupArchiveService.PREPARED_MARKER).writeText("1")
+            File(pending, BackupArchiveService.AGGREGATE_MARKER).writeText("1")
+        }
+        val original = File(pending, BackupArchiveService.DATABASE_ENTRY).readBytes()
+        val originalSettings = File(pending, BackupArchiveService.SETTINGS_ENTRY).readBytes()
+        if (entry == "interrupted") {
+            migrationHelper.createDatabase("measix_pilot", 11).close()
+            val live = context.getDatabasePath("measix_pilot")
+            val rollback = File(pending.parentFile, "rollback").apply { mkdirs() }
+            assertTrue(live.renameTo(File(rollback, live.name)))
+            assertTrue(File(pending, BackupArchiveService.DATABASE_ENTRY).renameTo(live))
+            File(pending, ".apply_started").writeText("1")
+        }
+        PendingBackupRestore.applyBeforeDatabaseOpen(context,
+            readSettings = { net.weero.measix.pilot.data.datastore.UserSettingsDocument.empty() })
+        org.junit.Assert.assertArrayEquals(original, File(pending, BackupArchiveService.DATABASE_ENTRY).readBytes())
+        org.junit.Assert.assertArrayEquals(originalSettings, File(pending, BackupArchiveService.SETTINGS_ENTRY).readBytes())
+        var installedSettings: Settings? = null
+        val settingsOwner = mockk<ArtifactStore>()
+        coEvery { settingsOwner.restoreSettingsReferences(any()) } answers { firstArg<Settings>().also { installedSettings = it } }
+        PendingBackupRestore.restoreSettingsIfPending(context, settingsOwner, mockk(relaxed = true), JsonInstant)
+        val installedAssistant = requireNotNull(installedSettings).assistants.first()
+        assertEquals(Avatar.Dummy, installedAssistant.avatar)
+        assertEquals(null, installedAssistant.background)
+        assertTrue(installedAssistant.presetMessages.isEmpty())
+        val restored = createAppDatabase(context, "measix_pilot")
+        try {
+            val artifact = requireNotNull(restored.artifactDao().getById(9))
+            assertEquals("USER", artifact.origin)
+            assertEquals(null, artifact.payloadToken)
+            assertEquals(net.weero.measix.pilot.data.configuration.ConfigurationScope.Personal, artifact.scope)
+            restored.openHelper.writableDatabase.query("SELECT seq FROM sqlite_sequence WHERE name='artifact'").use {
+                assertTrue(it.moveToFirst() && it.getLong(0) >= 123)
+            }
+            assertEquals("legacy", File(context.filesDir, "upload/legacy.txt").readText())
+        } finally { restored.close() }
+        if (entry == "interrupted") {
+            val failure = runCatching { PendingBackupRestore.complete(context) { error("interrupted cleanup") } }.exceptionOrNull()
+            assertEquals("interrupted cleanup", failure?.message)
+            assertTrue(!pending.exists())
+            PendingBackupRestore.applyBeforeDatabaseOpen(context, readSettings = { error("Retired restore must not read settings") })
+            PendingBackupRestore.restoreSettingsIfPending(context, mockk(), mockk(), JsonInstant)
+            PendingBackupRestore.complete(context)
+            assertTrue(!File(pending.parentFile, "completed").exists())
+            assertTrue(!File(pending.parentFile, "publication").exists())
+        }
+    }
+
+    private fun createDurableArchive(database: File, target: File, version: String = "rikkahub-durable-v4", payloads: Map<String, ByteArray> = emptyMap(), settingsOverride: Settings? = null) {
+        val settings = JsonInstant.encodeToString(settingsOverride ?: Settings(
             chatModelId = ConfigurationReference.parse("00000000-0000-0000-0000-000000000311"),
             fastModelId = ConfigurationReference.parse("00000000-0000-0000-0000-000000000312"),
             imageGenerationModelId = ConfigurationReference.parse("00000000-0000-0000-0000-000000000313"),
@@ -315,15 +408,15 @@ class BackupRestoreMigrationIntegrationTest {
             DurableBackupEntry("settings.json", settings.size.toLong(), sha256(settings)),
             DurableBackupEntry("mcp_catalogs.json", catalogs.size.toLong(), sha256(catalogs)),
             DurableBackupEntry("measix_pilot.db", dbBytes.size.toLong(), sha256(dbBytes)),
-        ).sortedBy { it.path }
-        val manifest = JsonInstant.encodeToString(DurableBackupManifest("rikkahub-durable-v4", entries)).encodeToByteArray()
+        ).plus(payloads.map { (path, bytes) -> DurableBackupEntry(path, bytes.size.toLong(), sha256(bytes)) }).sortedBy { it.path }
+        val manifest = JsonInstant.encodeToString(DurableBackupManifest(version, entries)).encodeToByteArray()
         ZipOutputStream(FileOutputStream(target)).use { output ->
             listOf(
                 "settings.json" to settings,
                 "mcp_catalogs.json" to catalogs,
                 "measix_pilot.db" to dbBytes,
                 "backup_manifest" to manifest,
-            ).forEach { (name, bytes) ->
+            ).plus(payloads.toList()).forEach { (name, bytes) ->
                 output.putNextEntry(ZipEntry(name))
                 output.write(bytes)
                 output.closeEntry()

@@ -344,7 +344,7 @@ Android 媒体接线按下列所有权完成：`PortalMediaStore` 管理独占�
 | MCP / Gateway（C5、U2） | 企业固定选择、完整 Tool JSON、主体目录与连接清理已实现；原 Session/binding/interaction、Gateway 标准发现与调用、本地 source engine、428 收口及只读工具清单已通过本批完整门禁；管理 UI、归档业务工具卡和 Mock 模型标准工具续轮已通过定向、Debug 设备及本批完整门禁 |
 | 语音（C5、U2） | SpeechApplicationService 已统一拥有原域捕获、binding、播放与录音清理；企业 TTS/HTTP-ASR、本地 MP3/WAV adapter、目录选择与聊天入口已接通；428 终止原交互并同步，不重放。应用 JVM、实际 AudioRecord 和完整构建/设备回归已通过；正式 Debug App 的朗读、录音、关页清理和个人/企业目录已验证，错误提示已接通；Release 及整期场景验收仍待完成 |
 | 文件与 Workspace（C6） | 会话/记忆、目录、图片、背景、参考输入及附件/富文本出口已分域验证；Workspace 上传/终端/SAF 已完成本批实现与完整门禁；共享配置预设附件的目标域复制及 Draft/Child 交接已完成，完整门禁通过；整体 UI/版本验收仍待最终收口 |
-| 个人备份（C7） | 个人 Settings 保全已实现；系统备份与设备迁移已显式排除混合域存储；备份仍需个人闭合图导出、恢复合并保全最新企业图，不能用 Settings 测试代表数据保全 |
+| 个人备份（C7） | 个人闭合图导出与冷恢复合并已实现；配置/企业数据、共享资产和恢复 receipt 按原 owner 保全，系统备份与设备迁移显式排除混合域存储；当前验证记录见本文个人备份批次 |
 | 完整示例与 UI（M1、U2） | 正式企业入口、Portal、公开模板和私有文件 ignore 已有；仍需原生整包导入/场景管理、Starter 预填、辅助生成模拟格式及剩余资源/助手页面 |
 | 退休与发行（R1、V1） | 消费者完成后删除旧 managed overlay 链，再做 E01–E12、Release/硬件验收和版本 20 交付；真实后台属于下一阶段 |
 
@@ -688,3 +688,13 @@ MCP UI 与本地模型接线：企业只读目录、Gateway 原选择写入与�
 语音错误提示与四项退休文案清理后的 `:app:assembleDebug :app:lintDebug :app:assembleRelease` 通过（7 分 14 秒），App lint 回到 0 错误、287 警告。此处只复验门禁后的 UI/资源差异，不将早期完整设备报告冒充重新运行；安装包消费者证据保存实际安装 APK 摘要。
 
 C7 的系统备份入口已关闭：Manifest 禁用 allowBackup，旧系统备份、云端备份和设备迁移分别显式排除混合域存储。Debug/Release 资源与合并 Manifest 校验、lint 通过（2 分 53 秒，0 错误、287 警告）；未验证厂商设备迁移运行时。记录见 `build/reports/enterprise/backup-platform-boundary-verification.json`。应用内个人图导出和恢复合并尚未完成，此项不改变现有 Room/DataStore 数据结构。
+
+### 个人备份批次
+
+`BackupArchiveService` 以 `rikkahub-personal-v1` 导出个人 Settings、个人 MCP Catalog、个人闭合数据图和受管 payload。`BackupDataGraph` 只构建分离的数据库，用显式列名保全迁移库字段和自增高水位，重建 FTS/Artifact 引用，不导出企业行、旧索引空闲页或未知表；Skill/字体继续作为共享配置资产。当前 Room/DataStore 结构不变，备份格式最低要求 schema 12，后续使用常规 Room migration，不绑定 App 版本。
+
+冷启动 `PendingBackupRestore` 在原 Room 对应用开放之前，将备份个人图与最新企业图、企业偏好仍引用的个人资产构成独立 publication。原个人输入保留；失败先恢复旧图，再重新读取最新企业写入。不同 owner 的主键或规范路径冲突明确拒绝，不使用 REPLACE 或按字节相同混用。合法删除附件的历史消息保持可恢复；CREATING/DELETING 与图库 receipt 由原 owner 收口。已发布个人 v19 的 prepared/交换中断任务也走同一迁移与回滚链，旧失效头像/背景/preset 在个人图内规范化，实际 Settings owner 接收同一派生结果，原件字节保全。恢复完成先原子退休任务，再清理材料，清理中断不重放。未增加企业原型兼容。
+
+双人审查发现的列序、失效引用、路径别名和 owner 混用问题已修正；设备验证还纠正了 Requery 连接池中的 ATTACH 作用域，离线目标使用单连接，运行数据库保持原配置。完整门禁通过后补充的校验与旧恢复入口，另有定向结果记录；本批不代表 0.0.20 整期完成，剩余 U2/M1/R1/V1 继续推进，也不宣称 Release UI、系统设备迁移或真实平台互操作验收。
+
+本批完整基线 `test assembleDebug lintDebug assembleRelease connectedDebugAndroidTest` 通过：App 2,153 项 JVM、199 项设备测试和 Speech 14 项设备测试无失败；Workspace 保留 11 项 Windows JVM 条件跳过和 1 项设备硬链接条件跳过。最终审查修正后，17 项备份 JVM 与 12 项实际 Room/迁移设备测试复验通过，Debug/Release 构建及 lint 再次通过（0 错误、287 警告）。旧升级夹具中的 Settings 断言验证传给 Artifact owner 的规范化参数，使用测试替身，不表述为该路径的真实 DataStore 落盘验收。分层报告见 `build/reports/enterprise/backup-personal-graph-verification.json`。备份页面范围说明与整期 UI 验收仍归后续 UI 收口。

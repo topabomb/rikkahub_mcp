@@ -2,6 +2,10 @@ package net.weero.measix.pilot.data.sync
 
 import android.content.Context
 import java.io.File
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.runBlocking
+import net.weero.measix.pilot.data.datastore.readUserSettingsForBackupRestore
+import net.weero.measix.pilot.data.db.createAppDatabase
 import kotlinx.serialization.json.Json
 import net.weero.measix.pilot.data.ai.mcp.decodePersonalMcpCatalogImport
 import net.weero.measix.pilot.data.ai.mcp.McpCatalogStore
@@ -15,6 +19,9 @@ object PendingBackupRestore {
     private const val PENDING = "pending"
     private const val STAGING = "staging"
     private const val ROLLBACK = "rollback"
+    private const val PUBLICATION = "publication"
+    private const val RESOLVED_SETTINGS = ".resolved_settings.json"
+    private const val COMPLETED = "completed"
     private const val APPLY_STARTED = ".apply_started"
     private const val APPLY_COMPLETE = ".apply_complete"
     private const val BOOTSTRAP_FAILURE = "bootstrap_failure"
@@ -35,6 +42,7 @@ object PendingBackupRestore {
 
     internal fun applyBeforeDatabaseOpen(
         context: Context,
+        readSettings: suspend () -> net.weero.measix.pilot.data.datastore.UserSettingsDocument = { context.readUserSettingsForBackupRestore() },
         afterSwap: (String) -> Unit = {},
     ) {
         val pending = pendingDir(context)
@@ -42,7 +50,31 @@ object PendingBackupRestore {
         if (File(pending, APPLY_COMPLETE).isFile) return
 
         val rollback = rollbackDir(context)
-        if (File(pending, APPLY_STARTED).exists()) rollbackInterrupted(context, pending, rollback)
+        val publication = File(rootDir(context), PUBLICATION)
+        if (File(pending, APPLY_STARTED).exists()) {
+            // Published personal restores swapped directly from pending before publication was introduced.
+            rollbackInterrupted(context, pending, if (publication.exists()) publication else pending, rollback)
+        }
+        if (File(pending, BackupArchiveService.AGGREGATE_MARKER).isFile) {
+            check(!publication.exists() || publication.deleteRecursively()) { "Unable to clear previous restore publication" }
+            check(publication.mkdirs()) { "Unable to create restore publication" }
+            runBlocking(Dispatchers.IO) {
+                val latest = File(publication, "latest-source.sqlite")
+                try {
+                    val live = context.getDatabasePath(DATABASE_NAME)
+                    if (live.isFile) {
+                        val source = createAppDatabase(context, live.absolutePath)
+                        try {
+                            val quoted = latest.absolutePath.replace("'", "''")
+                            source.openHelper.writableDatabase.execSQL("VACUUM INTO '$quoted'")
+                        } finally { source.close() }
+                    }
+                    val restored = BackupDataGraph(context).mergeRestore(pending, latest.takeIf(File::isFile),
+                        readSettings(), publication)
+                    File(pending, RESOLVED_SETTINGS).writeText(net.weero.measix.pilot.utils.JsonInstant.encodeToString(restored), Charsets.UTF_8)
+                } finally { latest.delete() }
+            }
+        }
         check(!rollback.exists() || rollback.deleteRecursively()) { "Unable to clear restore rollback directory" }
         check(rollback.mkdirs()) { "Unable to create restore rollback directory" }
         File(pending, APPLY_STARTED).writeText("1", Charsets.UTF_8)
@@ -50,19 +82,19 @@ object PendingBackupRestore {
             if (File(pending, BackupArchiveService.AGGREGATE_MARKER).isFile) {
                 retainDatabaseSidecars(context, rollback)
                 swapComponent(
-                    staged = File(pending, BackupArchiveService.DATABASE_ENTRY),
+                    staged = File(publication, BackupArchiveService.DATABASE_ENTRY),
                     live = context.getDatabasePath(DATABASE_NAME),
                     rollback = rollback,
                 )
                 afterSwap(BackupArchiveService.DATABASE_ENTRY)
                 BackupArchiveService.DURABLE_DIRECTORIES.forEach { folder ->
-                    swapComponent(File(pending, folder), File(context.filesDir, folder), rollback)
+                    swapComponent(File(publication, folder), File(context.filesDir, folder), rollback)
                     afterSwap(folder)
                 }
             }
             File(pending, APPLY_COMPLETE).writeText("1", Charsets.UTF_8)
         } catch (error: Exception) {
-            rollbackInterrupted(context, pending, rollback)
+            rollbackInterrupted(context, pending, publication, rollback)
             throw error
         }
     }
@@ -79,7 +111,17 @@ object PendingBackupRestore {
         }
         val pending = pendingDir(context)
         if (!File(pending, APPLY_COMPLETE).isFile) return
-        val settingsFile = File(pending, BackupArchiveService.SETTINGS_ENTRY)
+        val publication = File(rootDir(context), PUBLICATION)
+        val resolved = File(pending, RESOLVED_SETTINGS)
+        val aggregate = File(pending, BackupArchiveService.AGGREGATE_MARKER).isFile
+        val settingsFile = if (aggregate && resolved.isFile) resolved else {
+            if (aggregate) {
+                val manifest = File(pending, BackupArchiveService.MANIFEST_ENTRY)
+                val legacy = !manifest.isFile || json.decodeFromString<DurableBackupManifest>(manifest.readText()).version != BackupArchiveService.MANIFEST_VERSION
+                check(legacy && !publication.exists()) { "Completed backup restore is missing its resolved settings" }
+            }
+            File(pending, BackupArchiveService.SETTINGS_ENTRY)
+        }
         val decoded = json.decodeFromString<Settings>(
             migrateLegacySettingsJson(settingsFile.readText(Charsets.UTF_8)),
         )
@@ -95,12 +137,19 @@ object PendingBackupRestore {
         catalogStore.restorePersonalCatalogs(catalogs, settings.mcpServers)
     }
 
-    fun complete(context: Context) {
+    internal fun complete(context: Context, afterRetire: () -> Unit = {}) {
         val pending = pendingDir(context)
-        if (!File(pending, APPLY_COMPLETE).isFile) return
+        val completed = File(rootDir(context), COMPLETED)
+        if (File(pending, APPLY_COMPLETE).isFile) {
+            check(!completed.exists() && pending.renameTo(completed)) { "Unable to retire completed restore" }
+            afterRetire()
+        }
+        if (!completed.exists()) return
         val rollback = rollbackDir(context)
         check(!rollback.exists() || rollback.deleteRecursively()) { "Unable to remove restore rollback data" }
-        check(pending.deleteRecursively()) { "Unable to finalize pending restore" }
+        val publication = File(rootDir(context), PUBLICATION)
+        check(!publication.exists() || publication.deleteRecursively()) { "Unable to remove restore publication" }
+        check(completed.deleteRecursively()) { "Unable to finalize completed restore" }
     }
 
     private fun rollbackDir(context: Context) = File(rootDir(context), ROLLBACK)
@@ -119,11 +168,11 @@ object PendingBackupRestore {
         check(staged.renameTo(live)) { "Unable to install staged restore component: ${staged.name}" }
     }
 
-    private fun rollbackInterrupted(context: Context, pending: File, rollback: File) {
-        restoreComponents(context, pending).asReversed().forEach { (staged, live) ->
+    private fun rollbackInterrupted(context: Context, pending: File, publication: File, rollback: File) {
+        restoreComponents(context, publication).asReversed().forEach { (staged, live) ->
             val saved = File(rollback, live.name)
             val absent = File(rollback, "${live.name}.absent")
-            if (!staged.exists() && live.exists()) {
+            if ((saved.exists() || absent.exists()) && !staged.exists() && live.exists()) {
                 check(live.renameTo(staged)) { "Unable to restage ${live.name}" }
             }
             if (saved.exists()) {

@@ -96,6 +96,12 @@ private val Context.settingsStore by preferencesDataStore(
 )
 
 
+/** Cold restore reads the same DataStore delegate before the application graph exists. */
+internal suspend fun Context.readUserSettingsForBackupRestore(): UserSettingsDocument =
+    JsonInstant.decodeFromString(requireNotNull(applicationContext.settingsStore.data.first()[SettingsStore.USER_SETTINGS]) {
+        "user_settings_migration_incomplete"
+    })
+
 private data class SettingsDefaultPath(
     val path: String,
     val key: Preferences.Key<String>,

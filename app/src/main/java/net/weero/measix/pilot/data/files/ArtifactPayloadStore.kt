@@ -3,6 +3,7 @@ package net.weero.measix.pilot.data.files
 import android.content.Context
 import android.net.Uri
 import androidx.core.net.toFile
+import androidx.core.net.toUri
 import java.io.File
 import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.Dispatchers
@@ -135,6 +136,12 @@ class ArtifactPayloadStore(private val context: Context) {
             "Artifact payload escapes the managed files directory: $relativePath"
         }
         return target
+    }
+
+    internal fun relativePathForToken(token: String): String? = when {
+        token.startsWith("file:", ignoreCase = true) -> relativePathForUri(token.toUri())
+        ':' !in token -> relativePathForFile(file(token))
+        else -> null
     }
 
     fun relativePathForUri(uri: Uri): String? {

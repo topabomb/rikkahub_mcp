@@ -139,7 +139,7 @@ pending backup restore
 
 ## 持久化与演进
 
-Room/DataStore/文件协议按长期数据保全演进。结构变化必须提供显式 migration、fresh schema 同构与历史数据验证；索引随实体和 migration 维护，不由业务请求临时创建。备份先在 staging 升级和验证，成功后才发布。
+Room/DataStore/文件协议按长期数据保全演进。结构变化必须提供显式 migration、fresh schema 同构与历史数据验证；索引随实体和 migration 维护，不由业务请求临时创建。备份先在 staging 升级和验证，成功后才发布。`BackupDataGraph` 只构建分离的个人备份或恢复 publication，复用生产 Room schema 并重建派生索引；它不成为运行时数据库或文件 owner。冷恢复由 `PendingBackupRestore` 合并最新企业图后执行既有 swap/rollback，禁止用个人包整体覆盖混合域 live 数据库。
 
 兼容只存在于明确的持久化迁移和外部协议解析边界。架构迁移同次删除旧 facade、fallback、deprecated 转发、过渡命名与无调用协议，不能以双路径掩盖不一致。未来配置或工具来源应从既有 TurnContextFactory/TurnToolSetFactory 接入，有真实消费者后再扩展合同；不预埋无消费者的 schema。下一步企业阶段目标见 [Android 企业集成计划](../dev/android-enterprise-integration-plan.md)。
 

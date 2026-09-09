@@ -759,11 +759,7 @@ class ArtifactStore(
         synchronized(unpublishedPins) { unpublishedPins.keys.removeAll(rootedIds) }
     }
 
-    private fun rootRelativePath(token: String): String? = when {
-        token.startsWith("file:", ignoreCase = true) -> payloadStore.relativePathForUri(token.toUri())
-        ':' !in token -> payloadStore.relativePathForUri(payloadStore.file(token).toUri())
-        else -> null
-    }
+    private fun rootRelativePath(token: String): String? = payloadStore.relativePathForToken(token)
 
     private suspend fun <T> withSettingsDetach(
         operation: suspend (detach: suspend (Set<String>) -> Boolean) -> T,
