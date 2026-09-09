@@ -1662,4 +1662,9 @@
   <string name="chat_message_attachment_open_failed">첨부 파일을 열 수 없습니다. 파일을 사용할 수 없거나 접근 권한이 만료되었을 수 있습니다.</string>
   <string name="rendered_content_unavailable">이 미리보기를 더 이상 사용할 수 없습니다. 원래 페이지에서 다시 열어 주세요.</string>
   <string name="workspace_terminal_closing">터미널 종료 중…</string>
+  <string name="mcp_user_definitions">내 MCP 정의</string>
+  <string name="mcp_shared_definition_notice">정의를 변경하면 해당 정의를 사용하는 모든 공간에 적용됩니다.</string>
+  <string name="mcp_enterprise_read_only">기업 도구는 읽기 전용입니다. 처음 사용한 후 검색된 도구 목록을 확인할 수 있습니다.</string>
+  <string name="mcp_gateway_preference_hint">모든 게이트웨이 도구를 함께 켜거나 끕니다. 변경 사항은 새로운 상호작용에 적용됩니다.</string>
+  <string name="mcp_enterprise_required">기업에서 사용하도록 지정함</string>
 </resources>

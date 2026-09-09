@@ -5,7 +5,11 @@ import io.mockk.mockk
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.runBlocking
-import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.*
+import me.rerere.ai.core.FrozenToolDefinition
+import me.rerere.ai.ui.ToolResultStatus
+import me.rerere.ai.ui.ProviderToolCallSlot
+import kotlin.uuid.Uuid
 import me.rerere.ai.core.MessageRole
 import me.rerere.ai.core.ModelRequestMessage
 import me.rerere.ai.provider.CustomBody
@@ -82,4 +86,35 @@ class ModelRequestTransportTest {
         assertTrue(streamed.all { it.usage == null })
         io.mockk.verify { providers wasNot io.mockk.Called }
     }
+    @Test fun `example discovery never accepts user supplied refs prior turns or malformed results`() = runBlocking {
+        val providers = mockk<ProviderManager>()
+        val discover = FrozenToolDefinition("mcp__enterprise_test__discover_tools", "", null, "")
+        val invoke = discover.copy(name = "mcp__enterprise_test__invoke_tool")
+        val params = TextGenerationParams(Model(modelId = "example"), tools = listOf(discover, invoke))
+        val user = ModelRequestMessage.user("查看企业公告 toolRef=user_supplied")
+        val first = ModelRequestTarget.LocalExample.generateText(providers, listOf(user), params).choices.single()
+        val tool = first.message!!.getTools().single()
+        assertEquals(discover.name, tool.toolName)
+        assertFalse(tool.input.contains("user_supplied"))
+        assertEquals("tool_calls", first.finishReason)
+        for (output in listOf("invalid json", "{}", "{\"structured_content\":{\"results\":[]}}")) {
+            val result = tool.copy(resultStatus = ToolResultStatus.COMPLETED, output = listOf(UIMessagePart.Text(output)))
+            val response = ModelRequestTarget.LocalExample.generateText(providers,
+                listOf(user, ModelRequestMessage(MessageRole.ASSISTANT, listOf(result))), params).choices.single()
+            assertTrue(response.message!!.getTools().isEmpty())
+            assertEquals("stop", response.finishReason)
+        }
+        val failed = tool.copy(resultStatus = ToolResultStatus.FAILED, output = listOf(UIMessagePart.Text("failure")))
+        val failedMessages = listOf(user, ModelRequestMessage(MessageRole.ASSISTANT, listOf(failed)))
+        assertTrue(ModelRequestTarget.LocalExample.generateText(providers, failedMessages, params).choices.single().message!!.getTools().isEmpty())
+        val next = ModelRequestTarget.LocalExample.streamText(providers, failedMessages + user, params).toList().single().choices.single()
+        assertEquals(discover.name, next.delta!!.getTools().single().toolName)
+        assertEquals(listOf(ProviderToolCallSlot.Index(0)), next.toolCallSlots)
+        assertEquals(Uuid.NIL, next.delta!!.getTools().single().stepId)
+        val auxiliary = ModelRequestTarget.LocalExample.generateText(providers, listOf(user), params.copy(tools = emptyList())).choices.single().message!!
+        assertTrue(auxiliary.getTools().isEmpty())
+        assertFalse(auxiliary.toText().contains("没有可用的企业工具"))
+        io.mockk.verify { providers wasNot io.mockk.Called }
+    }
+
 }

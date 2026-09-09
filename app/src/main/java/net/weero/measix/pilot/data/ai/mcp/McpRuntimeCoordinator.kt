@@ -238,29 +238,67 @@ class McpRuntimeCoordinator internal constructor(
         }
     }
 
-    /** Passive inspection uses confirmed catalogs and the caller's realm projection; it never opens a connection. */
-    internal suspend fun inspectCapabilities(
+    internal val catalogs: StateFlow<Map<McpCatalogKey, McpCatalogSnapshot>> get() = catalogStore.catalogs
+
+    /** Passive readers share catalog validation; they neither connect nor retain an execution lease. */
+    internal suspend fun readCatalogCapabilities(
         access: RealmAccess,
         snapshot: net.weero.measix.pilot.data.datastore.ExecutionConfigurationSnapshot,
-        assistant: Assistant,
-    ): TurnMcpCapabilitySnapshot {
+    ): Map<ConfigurationReference, McpRuntimeCapability> {
         check(snapshot.configuration.scope == access.scope)
         catalogStore.awaitReady()
         return when (access) {
-            RealmAccess.Personal -> inspectCatalogCapabilities(snapshot, assistant, emptyMap())
+            RealmAccess.Personal -> projectCatalogCapabilities(access, snapshot, emptyMap())
             is RealmAccess.Enterprise -> sessions.readBindings(access) { version, bindings ->
                 check(version.generation == snapshot.configuration.enterpriseConfiguration?.generation) {
                     "enterprise_configuration_changed_during_inspection"
                 }
-                inspectCatalogCapabilities(snapshot, assistant, bindings.associateBy { it.resourceId })
+                projectCatalogCapabilities(access, snapshot, bindings.associateBy { it.resourceId })
             }
         }
     }
 
+    private fun projectCatalogCapabilities(
+        access: RealmAccess,
+        snapshot: net.weero.measix.pilot.data.datastore.ExecutionConfigurationSnapshot,
+        bindings: Map<String, net.weero.measix.pilot.data.enterprise.EnterpriseRuntimeBinding>,
+    ): Map<ConfigurationReference, McpRuntimeCapability> {
+        val configuration = snapshot.configuration
+        return configuration.catalog.values.filter {
+            it.key.category == ConfigurationCategory.MCP || it.key.category == ConfigurationCategory.GATEWAY
+        }.associate { resource ->
+            val id = resource.key.reference
+            val user = snapshot.userSettings.mcpServers.find { it.id == id }
+            val gateway = configuration.enterpriseConfiguration?.gateways?.find { it.id == (id as? ConfigurationReference.Enterprise)?.id }
+            val key = McpCatalogKey(if (id is ConfigurationReference.User) net.weero.measix.pilot.data.configuration.ConfigurationScope.Personal else configuration.scope, id)
+            val catalog = catalogs.value[key]?.takeIf {
+                when (id) {
+                    is ConfigurationReference.User -> user != null && it.definitionDigest == user.mcpDefinitionDigest()
+                    is ConfigurationReference.Enterprise -> bindings[id.id]?.let { binding ->
+                        it.managed == McpManagedCatalog(requireNotNull(configuration.enterpriseConfiguration).generation, gateway?.surface) &&
+                            it.definitionDigest == managedMcpDefinitionDigest(id, resource.name, binding, configuration.enterpriseConfiguration.generation)
+                    } == true
+                }
+            }
+            val connections = runtimeCapabilities.value.filter { (key, value) ->
+                key.serverId == id && key.access == (access as? RealmAccess.Enterprise) &&
+                    (value.catalog == null || value.catalog.definitionDigest == catalog?.definitionDigest)
+            }.values
+            // A resource may serve several interactions; no individual connection represents them all.
+            id to McpRuntimeCapability(connections.singleOrNull()?.status ?: McpStatus.Idle, catalog)
+        }
+    }
+
+    internal suspend fun inspectCapabilities(
+        access: RealmAccess,
+        snapshot: net.weero.measix.pilot.data.datastore.ExecutionConfigurationSnapshot,
+        assistant: Assistant,
+    ): TurnMcpCapabilitySnapshot = inspectCatalogCapabilities(snapshot, assistant, readCatalogCapabilities(access, snapshot))
+
     private fun inspectCatalogCapabilities(
         snapshot: net.weero.measix.pilot.data.datastore.ExecutionConfigurationSnapshot,
         assistant: Assistant,
-        bindings: Map<String, net.weero.measix.pilot.data.enterprise.EnterpriseRuntimeBinding>,
+        capabilities: Map<ConfigurationReference, McpRuntimeCapability>,
     ): TurnMcpCapabilitySnapshot {
         val configuration = snapshot.configuration
         check(configuration.assistants[assistant.id] == assistant &&
@@ -270,21 +308,13 @@ class McpRuntimeCoordinator internal constructor(
         } + configuration.catalog.values.filter {
             it.key.category == ConfigurationCategory.GATEWAY && it.access.canExecute
         }.map { it.key.reference }
-        val catalogs = catalogStore.catalogs.value
         val tools = mutableListOf<McpAvailableTool>()
         val outcomes = selected.distinct().map { id ->
             val user = snapshot.userSettings.mcpServers.find { it.id == id }
             val gateway = configuration.enterpriseConfiguration?.gateways?.find { it.id == (id as? ConfigurationReference.Enterprise)?.id }
             val category = if (gateway != null) ConfigurationCategory.GATEWAY else ConfigurationCategory.MCP
             val name = configuration.catalog.getValue(net.weero.measix.pilot.data.configuration.ConfigurationKey(category, id)).name
-            val key = McpCatalogKey(if (id is ConfigurationReference.User) net.weero.measix.pilot.data.configuration.ConfigurationScope.Personal else configuration.scope, id)
-            val catalog = catalogs[key]?.takeIf {
-                when (id) {
-                    is ConfigurationReference.User -> user != null && it.definitionDigest == user.mcpDefinitionDigest()
-                    is ConfigurationReference.Enterprise -> it.managed == McpManagedCatalog(requireNotNull(configuration.enterpriseConfiguration).generation, gateway?.surface) &&
-                        it.definitionDigest == managedMcpDefinitionDigest(id, name, bindings.getValue(id.id), configuration.enterpriseConfiguration.generation)
-                }
-            }
+            val catalog = capabilities[id]?.catalog
             val policies = user?.commonOptions?.toolPolicyByName().orEmpty()
             val enabled = catalog?.tools.orEmpty().filter { policies[it.name]?.enable != false }
             enabled.forEach { tool ->

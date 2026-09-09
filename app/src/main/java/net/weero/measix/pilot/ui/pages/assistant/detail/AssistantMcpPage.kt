@@ -37,7 +37,7 @@ fun AssistantMcpPage(id: String) {
     AssistantLockedChangeEffect(vm)
     val assistant = vm.assistant.collectAsStateWithLifecycle().value
     val mcpQueryService = koinInject<McpQueryService>()
-    val mcpServers by mcpQueryService.servers.collectAsStateWithLifecycle()
+    val mcpServers by mcpQueryService.userServers.collectAsStateWithLifecycle()
     val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
 
     Scaffold(

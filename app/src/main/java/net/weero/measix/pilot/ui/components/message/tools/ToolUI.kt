@@ -26,6 +26,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.util.fastForEach
 import androidx.compose.runtime.remember
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.contentOrNull
 import me.rerere.ai.ui.UIMessagePart
 import me.rerere.common.http.jsonObjectOrNull
@@ -98,7 +99,7 @@ interface ToolUIRenderer {
     /** 折叠步骤的标题 */
     @Composable
     fun title(context: ToolUIContext): String =
-        stringResource(R.string.chat_message_tool_call_generic, context.tool.toolName)
+        stringResource(R.string.chat_message_tool_call_generic, context.tool.displayToolName)
 
     /** 步骤展开时是否显示内联摘要 */
     fun hasSummary(context: ToolUIContext): Boolean = false
@@ -149,8 +150,27 @@ object ToolUIRegistry {
     fun resolve(toolName: String): ToolUIRenderer = renderers[toolName] ?: DefaultToolUIRenderer
 }
 
+/** Business identity comes only from committed client-safe metadata, including after output archiving. */
+internal val UIMessagePart.Tool.gatewayAction: JsonObject?
+    get() = (metadata?.get("com.measix/resolvedTool") as? JsonObject)?.let { action ->
+        JsonObject(action.filterKeys { it in setOf("gatewayToolId", "name", "status", "requestId") })
+    }
+
+internal val UIMessagePart.Tool.displayToolName: String
+    get() = gatewayAction.getStringContent("name")?.takeIf { it.isNotBlank() } ?: toolName
+
 internal fun JsonElement?.getStringContent(key: String): String? =
     this?.jsonObjectOrNull?.get(key)?.jsonPrimitiveOrNull?.contentOrNull
+
+@Composable
+internal fun GatewayActionDetails(tool: UIMessagePart.Tool) {
+    tool.gatewayAction?.let { action ->
+        FormItem(label = { Text(tool.displayToolName) }) {
+            HighlightCodeBlock(code = JsonInstantPretty.encodeToString(action), language = "json",
+                style = TextStyle(fontSize = 10.sp, lineHeight = 12.sp))
+        }
+    }
+}
 
 /**
  * 默认工具详情: 入参与输出的 JSON 高亮展示
@@ -193,9 +213,10 @@ fun ToolCallJsonDetails(
     context: ToolUIContext,
     includeImages: Boolean = true,
 ) {
+    GatewayActionDetails(context.tool)
     FormItem(
         label = {
-            Text(stringResource(R.string.chat_message_tool_call_label, context.tool.toolName))
+            Text(stringResource(R.string.chat_message_tool_call_label, context.tool.displayToolName))
         }
     ) {
         HighlightCodeBlock(

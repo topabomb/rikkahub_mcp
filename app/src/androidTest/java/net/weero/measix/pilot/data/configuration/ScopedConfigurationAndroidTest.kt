@@ -53,14 +53,13 @@ class ScopedConfigurationAndroidTest {
                     Settings(providers = listOf(provider), assistants = listOf(assistant), assistantId = assistant.id, chatModelId = model.id)
                 }
                 env.sessions.enrollLocal(packet.identity, { packet.identity }, { packet })
-                val access = env.sessions.captureRealmAccess(packet.identity.scope) as RealmAccess.Enterprise
                 val selection = requireNotNull(env.sessions.observeSelectedRealmSelection().first())
                 env.commands.selectResource(selection, ResourceSelectionSlot.ASSISTANT, assistant.id)
                 env.commands.selectResource(selection, ResourceSelectionSlot.CHAT_MODEL, packet.identity.reference("mdl_chat"))
                 val target = env.assistantTarget(assistant.id)
                 env.commands.changeAssistantPreference(target, AssistantPreferenceChange.Model(packet.identity.reference("mdl_chat")))
                 env.commands.changeAssistantPreference(target, AssistantPreferenceChange.Search(AssistantSearchMode.LOCAL))
-                env.commands.setGatewayEnabled(access, packet.identity.reference("twg_example"), false)
+                env.commands.setGatewayEnabled(selection, packet.identity.reference("twg_example"), false)
             }
             withEnvironment(app, root) { env ->
                 val enterprise = env.queries.observeCurrent().first()

@@ -66,6 +66,7 @@ import net.weero.measix.pilot.service.runtime.ToolInteractionDecision
 import net.weero.measix.pilot.service.runtime.isBusy
 import net.weero.measix.pilot.service.runtime.resolveToolLivePhase
 import net.weero.measix.pilot.ui.components.message.tools.ArchivedToolOutputDetails
+import net.weero.measix.pilot.ui.components.message.tools.GatewayActionDetails
 import net.weero.measix.pilot.ui.components.message.tools.ToolOutputProjection
 import net.weero.measix.pilot.ui.components.message.tools.ToolUIContext
 import net.weero.measix.pilot.ui.components.message.tools.ToolUIRegistry
@@ -329,6 +330,7 @@ fun ChainOfThoughtScope.ChatMessageToolStep(
                         val projection = outputProjection
                         if (projection is ToolOutputProjection.Archived) {
                             Column(modifier = Modifier.padding(16.dp)) {
+                                GatewayActionDetails(displayTool)
                                 ArchivedToolOutputDetails(projection)
                             }
                         } else {

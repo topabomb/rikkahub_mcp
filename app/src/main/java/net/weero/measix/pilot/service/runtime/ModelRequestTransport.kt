@@ -3,6 +3,10 @@ package net.weero.measix.pilot.service.runtime
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.yield
+import kotlinx.serialization.json.*
+import me.rerere.ai.ui.ProviderToolCallSlot
+import me.rerere.ai.ui.ToolResultStatus
+import kotlin.uuid.Uuid
 import me.rerere.ai.core.MessageRole
 import me.rerere.ai.core.ModelRequestMessage
 import me.rerere.ai.provider.ImageGenerationParams
@@ -29,11 +33,17 @@ internal suspend fun ModelRequestTarget.streamText(
         provider, messages, requestParams(params),
     )
     ModelRequestTarget.LocalExample -> flow {
-        exampleResponse(messages).chunked(12).forEach { text ->
+        val response = exampleResponse(messages, params)
+        if (response.getTools().isNotEmpty()) {
             yield()
-            emit(exampleChunk(params, text, stream = true, finished = false))
+            emit(exampleChunk(params, response, stream = true, finished = true))
+        } else {
+            response.toText().chunked(12).forEach { text ->
+                yield()
+                emit(exampleChunk(params, UIMessage.assistant(text), stream = true, finished = false))
+            }
+            emit(exampleChunk(params, UIMessage.assistant(""), stream = true, finished = true))
         }
-        emit(exampleChunk(params, "", stream = true, finished = true))
     }
 }
 
@@ -45,7 +55,7 @@ internal suspend fun ModelRequestTarget.generateText(
     is ModelRequestTarget.Remote -> providers.getProviderByType(provider).generateText(
         provider, messages, requestParams(params),
     )
-    ModelRequestTarget.LocalExample -> exampleChunk(params, exampleResponse(messages), stream = false, finished = true)
+    ModelRequestTarget.LocalExample -> exampleChunk(params, exampleResponse(messages, params), stream = false, finished = true)
 }
 
 internal suspend fun ModelRequestTarget.generateImage(
@@ -128,18 +138,78 @@ private fun ModelRequestTarget.Remote.validateOverrides(customHeaders: List<Cust
     }
 }
 
-private fun exampleResponse(messages: List<ModelRequestMessage>): String {
+/** The simulated model emits ordinary calls from this request's frozen tool surface, never executes them. */
+private fun exampleResponse(messages: List<ModelRequestMessage>, params: TextGenerationParams): UIMessage {
+    val userIndex = messages.indexOfLast { it.role == MessageRole.USER }
+    val prompt = messages.getOrNull(userIndex)?.toText().orEmpty()
+    val action = when {
+        listOf("公告", "动态", "通知", "updates", "notices").any { prompt.contains(it, true) } -> "get_enterprise_updates"
+        listOf("指南", "参考", "guide", "reference").any { prompt.contains(it, true) } -> "read_enterprise_guide"
+        listOf("企业信息", "企业资料", "profile").any { prompt.contains(it, true) } -> "get_enterprise_profile"
+        else -> null
+    }
+    if (action != null && params.tools.isNotEmpty()) {
+        val calls = messages.drop(userIndex + 1).filter { it.role == MessageRole.ASSISTANT }
+            .flatMap { it.parts.filterIsInstance<UIMessagePart.Tool>() }
+        fun unavailable() = UIMessage.assistant("本地模拟：当前助手没有可用的企业工具，或工具尚未返回有效结果。请检查本域资源选择与 Gateway 开关。")
+        fun definition(suffix: String) = params.tools.singleOrNull {
+            it.name.startsWith("mcp__enterprise_") && it.name.endsWith("__$suffix")
+        }
+        val direct = action == "get_enterprise_profile"
+        val entry = definition(if (direct) action else "discover_tools") ?: return unavailable()
+        val invoked = calls.lastOrNull { it.toolName == entry.name }
+        if (invoked == null) return exampleToolCall(entry.name, if (direct) buildJsonObject {} else buildJsonObject {
+            put("queries", buildJsonArray { add(action) }); put("limitPerQuery", 1)
+        })
+        if (!invoked.hasReplayResult || invoked.resultStatus != ToolResultStatus.COMPLETED) return unavailable()
+        if (direct) return exampleToolReply(invoked)
+        val invokeName = entry.name.removeSuffix("discover_tools") + "invoke_tool"
+        if (params.tools.none { it.name == invokeName }) return unavailable()
+        calls.lastOrNull { it.toolName == invokeName }?.let {
+            return if (it.hasReplayResult && it.resultStatus == ToolResultStatus.COMPLETED) exampleToolReply(it) else unavailable()
+        }
+        val discovery = invoked.output.filterIsInstance<UIMessagePart.Text>().firstNotNullOfOrNull {
+            try { (Json.parseToJsonElement(it.text) as? JsonObject)?.get("structured_content") as? JsonObject }
+            catch (_: IllegalArgumentException) { null }
+        }
+        val matches = (discovery?.get("results") as? JsonArray)?.flatMap {
+            ((it as? JsonObject)?.get("matches") as? JsonArray).orEmpty()
+        }.orEmpty()
+        val match = matches.filterIsInstance<JsonObject>().singleOrNull { (it["name"] as? JsonPrimitive)?.contentOrNull == action }
+        val ref = (match?.get("toolRef") as? JsonPrimitive)?.takeIf { it.isString }?.content?.takeIf { it.isNotBlank() }
+            ?: return unavailable()
+        return exampleToolCall(invokeName, buildJsonObject {
+            put("toolRef", ref)
+            put("arguments", buildJsonObject { if (action == "read_enterprise_guide") put("query", prompt) })
+        })
+    }
+
     val user = messages.lastOrNull { it.role == MessageRole.USER }
     val images = user?.parts?.count { it is UIMessagePart.Image } ?: 0
-    return buildString {
+    return UIMessage.assistant(buildString {
         append("企业本地示例已收到你的请求。")
         if (images > 0) append("已接收 $images 张图片；本地示例返回模拟结果。")
-        append("这是一条本地模拟回复，用于验证企业空间中的对话流程。")
-    }
+        append("这是一条本地模拟回复，用于验证企业空间中的对话流程。可尝试：查看企业信息、查看企业公告、查询企业指南。")
+    })
 }
 
-private fun exampleChunk(params: TextGenerationParams, text: String, stream: Boolean, finished: Boolean): MessageChunk {
-    val message = UIMessage.assistant(text)
+private fun exampleToolCall(name: String, arguments: JsonObject) = UIMessage(
+    role = MessageRole.ASSISTANT,
+    parts = listOf(UIMessagePart.Tool(localCallId = Uuid.NIL, stepId = Uuid.NIL,
+        providerCallId = "example_${Uuid.random()}", toolName = name, input = arguments.toString())),
+)
+
+private fun exampleToolReply(tool: UIMessagePart.Tool): UIMessage {
+    val texts = tool.output.filterIsInstance<UIMessagePart.Text>()
+    val structured = texts.firstNotNullOfOrNull {
+        try { (Json.parseToJsonElement(it.text) as? JsonObject)?.get("structured_content") }
+        catch (_: IllegalArgumentException) { null }
+    }
+    return UIMessage.assistant("本地模拟：已通过企业工具取得以下结果。\n" +
+        (structured?.toString() ?: texts.joinToString("\n") { it.text }).take(6000))
+}
+
+private fun exampleChunk(params: TextGenerationParams, message: UIMessage, stream: Boolean, finished: Boolean): MessageChunk {
     return MessageChunk(
         id = "local-example-response",
         model = params.model.modelId,
@@ -147,7 +217,8 @@ private fun exampleChunk(params: TextGenerationParams, text: String, stream: Boo
             index = 0,
             delta = message.takeIf { stream },
             message = message.takeUnless { stream },
-            finishReason = "stop".takeIf { finished },
+            finishReason = (if (message.getTools().isEmpty()) "stop" else "tool_calls").takeIf { finished },
+            toolCallSlots = message.getTools().indices.map { ProviderToolCallSlot.Index(it) },
         )),
     )
 }

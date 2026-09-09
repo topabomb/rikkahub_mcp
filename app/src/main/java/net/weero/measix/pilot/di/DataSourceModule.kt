@@ -161,7 +161,7 @@ val dataSourceModule = module {
 
     single { McpApplicationService(coordinator = get(), settingsStore = get()) }
 
-    single { McpQueryService(settingsStore = get(), coordinator = get(), scope = get()) }
+    single { McpQueryService(settingsStore = get(), coordinator = get(), configurationQueries = get(), sessions = get(), scope = get()) }
 
     single {
         TurnRunner(

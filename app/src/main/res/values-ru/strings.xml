@@ -1662,4 +1662,9 @@
   <string name="chat_message_attachment_open_failed">Не удалось открыть вложение. Возможно, файл недоступен или доступ к нему прекращён.</string>
   <string name="rendered_content_unavailable">Этот просмотр больше недоступен. Откройте его снова с исходной страницы.</string>
   <string name="workspace_terminal_closing">Закрытие терминала…</string>
+  <string name="mcp_user_definitions">Мои определения MCP</string>
+  <string name="mcp_shared_definition_notice">Изменения определений действуют во всех пространствах, где они используются.</string>
+  <string name="mcp_enterprise_read_only">Инструменты предприятия доступны только для чтения. Их каталог появится после первого использования.</string>
+  <string name="mcp_gateway_preference_hint">Все инструменты шлюза включаются и отключаются вместе. Изменения действуют для новых взаимодействий.</string>
+  <string name="mcp_enterprise_required">Включение обязательно по правилам предприятия</string>
 </resources>

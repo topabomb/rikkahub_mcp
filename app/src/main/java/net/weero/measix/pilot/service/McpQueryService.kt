@@ -10,7 +10,6 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.serialization.json.JsonObject
 import net.weero.measix.pilot.AppScope
-import net.weero.measix.pilot.data.ai.mcp.McpCatalogSnapshot
 import net.weero.measix.pilot.data.ai.mcp.McpRuntimeCoordinator
 import net.weero.measix.pilot.data.ai.mcp.McpRuntimeCapability
 import net.weero.measix.pilot.data.ai.mcp.McpServerConfig
@@ -18,9 +17,20 @@ import net.weero.measix.pilot.data.ai.mcp.McpStatus
 import net.weero.measix.pilot.data.ai.mcp.mcpDefinitionDigest
 import net.weero.measix.pilot.data.ai.mcp.toolPolicyByName
 import net.weero.measix.pilot.data.datastore.SettingsStore
-import net.weero.measix.pilot.data.datastore.ManagedConfigurationRecordKind
-import net.weero.measix.pilot.data.datastore.ManagedConfigurationState
-import net.weero.measix.pilot.data.datastore.SettingsValueSource
+
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.flow.emitAll
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.flowOf
+import net.weero.measix.pilot.data.configuration.ConfigurationCategory
+import net.weero.measix.pilot.data.configuration.ConfigurationScope
+import net.weero.measix.pilot.data.configuration.ConfigurationUnavailableReason
+import net.weero.measix.pilot.data.configuration.ResolvedGatewayEnablement
+import net.weero.measix.pilot.data.datastore.ExecutionConfigurationSnapshot
+import net.weero.measix.pilot.data.enterprise.EnterpriseSessionController
+import net.weero.measix.pilot.data.enterprise.RealmAccess
+import net.weero.measix.pilot.data.enterprise.RealmSelection
 
 data class McpToolPresentation(
     val name: String,
@@ -30,59 +40,108 @@ data class McpToolPresentation(
     val needsApproval: Boolean,
 )
 
-data class McpServerPresentation(
+internal data class McpServerPresentation(
     val serverId: ConfigurationReference,
     val name: String,
     val enabled: Boolean,
-    val definition: McpServerConfig,
-    val configurationSource: McpConfigurationSource = McpConfigurationSource.LOCAL,
-    val lockReason: String? = null,
-    val showConfigurationSource: Boolean = false,
+    val definition: McpServerConfig?,
+    val access: RealmAccess = RealmAccess.Personal,
+    val unavailableReason: ConfigurationUnavailableReason? = null,
+    val requiredEnabled: Boolean = false,
+    val gatewayEnablement: ResolvedGatewayEnablement? = null,
     val status: McpStatus,
     val tools: List<McpToolPresentation>,
 ) {
-    /** A validated catalog is usable even while the transport is reconnecting or offline. */
+    val scope: ConfigurationScope get() = access.scope
     val isReady: Boolean get() = tools.isNotEmpty()
     val isBusy: Boolean
         get() = !isReady && (status == McpStatus.Connecting || status == McpStatus.Discovering)
 }
 
-enum class McpConfigurationSource { BUILT_IN, LOCAL, MANAGED }
+internal sealed interface McpCatalogReadState {
+    data class Available(val servers: List<McpServerPresentation>) : McpCatalogReadState
+    data object Unavailable : McpCatalogReadState
+}
 
-/** Read-only join of MCP definition, durable catalog and runtime state for every UI consumer. */
-class McpQueryService(
+internal data class McpCatalogUiModel(val selection: RealmSelection, val content: McpCatalogReadState) {
+    val servers: List<McpServerPresentation> get() = (content as? McpCatalogReadState.Available)?.servers.orEmpty()
+}
+
+/** Read-only join of original-realm rules, confirmed catalogs and transient connection state. */
+internal class McpQueryService(
     settingsStore: SettingsStore,
-    coordinator: McpRuntimeCoordinator,
+    private val coordinator: McpRuntimeCoordinator,
+    private val configurationQueries: ConfigurationQueryService,
+    private val sessions: EnterpriseSessionController,
     scope: AppScope,
 ) {
-    val servers: StateFlow<List<McpServerPresentation>> = combine(
-        settingsStore.effectiveSettings,
-        coordinator.runtimeCapabilities,
-    ) { effective, capabilities ->
-        effective.settings.mcpServers.map { server ->
-            server.toPresentation(
-                runtime = capabilities[net.weero.measix.pilot.data.ai.mcp.McpRuntimeKey(server.id)] ?: McpRuntimeCapability(McpStatus.Idle, null),
-                configurationSource = effective.access
-                    .sourceOf(ManagedConfigurationRecordKind.MCP_SERVER, server.id)
-                    .toMcpSource(),
-                lockReason = effective.access.reasonFor(
-                    "records/${ManagedConfigurationRecordKind.MCP_SERVER.settingsPath}/${server.id}"
-                ),
-                showConfigurationSource = effective.managedState != ManagedConfigurationState.ABSENT,
-            )
-        }
-    }.stateIn(scope, SharingStarted.Eagerly, emptyList())
+    /** Shared definitions are edited independently of admission to the selected enterprise. */
+    val userServers: StateFlow<List<McpServerPresentation>> = flow {
+        configurationQueries.requireAccess(RealmAccess.Personal)
+        emitAll(combine(settingsStore.userMcpDefinitions, coordinator.runtimeCapabilities) { definitions, capabilities ->
+            definitions.map { it.toPresentation(capabilities[net.weero.measix.pilot.data.ai.mcp.McpRuntimeKey(it.id)] ?: McpRuntimeCapability.EMPTY) }
+        })
+    }.stateIn(scope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
-    fun observeServer(serverId: ConfigurationReference): Flow<McpServerPresentation?> = servers
+    val catalog: StateFlow<McpCatalogUiModel?> = flow {
+        configurationQueries.requireAccess(RealmAccess.Personal)
+        emitAll(sessions.observeSelectedRealmSelection().flatMapLatest { selection ->
+            if (selection == null) flowOf(null)
+            else flow<McpCatalogUiModel?> {
+                emit(null)
+                emitAll(observe(selection.access).map { rows ->
+                    try { sessions.withSelectedRealmSelection(selection) { McpCatalogUiModel(selection, rows) } }
+                    catch (error: Exception) {
+                        if (error is CancellationException) throw error
+                        null
+                    }
+                })
+            }
+        })
+    }.stateIn(scope, SharingStarted.WhileSubscribed(stopTimeoutMillis = 0, replayExpirationMillis = 0), null)
+
+    fun observe(access: RealmAccess): Flow<McpCatalogReadState> = combine(
+        configurationQueries.observe(access.scope), coordinator.runtimeCapabilities, coordinator.catalogs, sessions.state,
+    ) { _, _, _, _ -> Unit }.map {
+        try {
+            val snapshot = configurationQueries.readExecution(access)
+            McpCatalogReadState.Available(snapshot.mcpPresentations(access, coordinator.readCatalogCapabilities(access, snapshot)))
+        } catch (error: Exception) {
+            if (error is CancellationException) throw error
+            McpCatalogReadState.Unavailable
+        }
+    }.distinctUntilChanged()
+
+    fun observeUserServer(serverId: ConfigurationReference): Flow<McpServerPresentation?> = userServers
         .map { rows -> rows.firstOrNull { it.serverId == serverId } }
         .distinctUntilChanged()
 }
 
+internal fun ExecutionConfigurationSnapshot.mcpPresentations(
+    access: RealmAccess,
+    capabilities: Map<ConfigurationReference, McpRuntimeCapability>,
+): List<McpServerPresentation> {
+    check(configuration.scope == access.scope)
+    return configuration.catalog.values.filter {
+        it.key.category == ConfigurationCategory.MCP || it.key.category == ConfigurationCategory.GATEWAY
+    }.map { resource ->
+        val capability = capabilities[resource.key.reference] ?: McpRuntimeCapability.EMPTY
+        val user = userSettings.mcpServers.singleOrNull { it.id == resource.key.reference }
+        if (user != null) user.toPresentation(capability).copy(
+            access = access, unavailableReason = resource.access.unavailableReason,
+        ) else McpServerPresentation(
+            serverId = resource.key.reference, name = resource.name,
+            enabled = resource.gatewayEnablement?.enabled ?: (resource.access.unavailableReason != ConfigurationUnavailableReason.RESOURCE_DISABLED),
+            definition = null, access = access,
+            unavailableReason = resource.access.unavailableReason, requiredEnabled = resource.access.requiredEnabled,
+            gatewayEnablement = resource.gatewayEnablement, status = capability.status,
+            tools = capability.catalog?.tools.orEmpty().map { McpToolPresentation(it.name, it.description, it.inputSchema, true, false) },
+        )
+    }
+}
+
 internal fun net.weero.measix.pilot.data.ai.mcp.McpServerConfig.toPresentation(
     runtime: McpRuntimeCapability,
-    configurationSource: McpConfigurationSource = McpConfigurationSource.LOCAL,
-    lockReason: String? = null,
-    showConfigurationSource: Boolean = false,
 ): McpServerPresentation {
     val status = runtime.status
     val catalog = runtime.catalog
@@ -102,9 +161,6 @@ internal fun net.weero.measix.pilot.data.ai.mcp.McpServerConfig.toPresentation(
         name = commonOptions.name,
         enabled = commonOptions.enable,
         definition = this,
-        configurationSource = configurationSource,
-        lockReason = lockReason,
-        showConfigurationSource = showConfigurationSource,
         status = presentedStatus,
         tools = activeCatalog?.tools.orEmpty().map { descriptor ->
             val policy = policies[descriptor.name]
@@ -117,10 +173,4 @@ internal fun net.weero.measix.pilot.data.ai.mcp.McpServerConfig.toPresentation(
             )
         },
     )
-}
-
-private fun SettingsValueSource.toMcpSource(): McpConfigurationSource = when (this) {
-    SettingsValueSource.BUILT_IN -> McpConfigurationSource.BUILT_IN
-    SettingsValueSource.LOCAL -> McpConfigurationSource.LOCAL
-    SettingsValueSource.MANAGED -> McpConfigurationSource.MANAGED
 }

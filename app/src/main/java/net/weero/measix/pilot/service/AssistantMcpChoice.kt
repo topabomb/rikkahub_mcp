@@ -26,7 +26,7 @@ internal fun ConversationConfigurationUiModel.mcpChoices(runtime: List<McpServer
         val definition = definitions[id]
         val reason = definition?.access?.unavailableReason
             ?: if (definition == null) ConfigurationUnavailableReason.REFERENCE_MISSING else null
-        val status = runtime.singleOrNull { it.serverId == id }
+        val status = runtime.singleOrNull { it.serverId == id && it.access == target.conversation.selection.access }
         AssistantMcpChoice(id, definition?.name ?: id.toString(), id in selected,
             assistant != null && id !in fixedMcpBindings && (id in selected || reason == null), reason,
             status?.status ?: McpStatus.Idle, status?.tools.orEmpty())

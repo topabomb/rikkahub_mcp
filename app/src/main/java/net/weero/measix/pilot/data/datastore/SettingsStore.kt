@@ -459,7 +459,7 @@ class SettingsStore internal constructor(
         settings: Settings,
         withArtifactRestore: suspend (Settings, suspend (Settings) -> Settings) -> Settings,
     ): Settings =
-        updateMutex.withLock {
+        withInitializedWriter {
             val current = localSettingsRaw.first().settings
             withArtifactRestore(settings.withInternalStateFrom(current)) { prepared ->
                 // The restore owner holds Artifact and has prepared the recoverable configuration roots.
@@ -481,7 +481,7 @@ class SettingsStore internal constructor(
     internal suspend fun updateLocalWithArtifactCommit(
         withArtifactCommit: (suspend (UserSettingsDocument, UserSettingsDocument, suspend () -> Unit) -> Unit)?,
         transform: (Settings) -> Settings,
-    ): Settings = updateMutex.withLock {
+    ): Settings = withInitializedWriter {
         val localSnapshot = localSettingsRaw.first()
         val local = localSnapshot.settings
         val localReadModel = local.materializeForRead()
@@ -537,7 +537,7 @@ class SettingsStore internal constructor(
     }
 
     /** Applies one verified managed aggregate without exposing a second configuration owner. */
-    internal suspend fun applyManagedSnapshot(envelope: ByteArray): ManagedApplyResult = updateMutex.withLock {
+    internal suspend fun applyManagedSnapshot(envelope: ByteArray): ManagedApplyResult = withInitializedWriter {
         val previous = managedSnapshot.filterNotNull().first()
         when (val prepared = managedConfiguration.prepare(envelope, previous)) {
             is ManagedConfigurationPreparation.Rejected -> ManagedApplyResult.Rejected(prepared.reason)
@@ -571,6 +571,12 @@ class SettingsStore internal constructor(
                 }
             }
         }
+    }
+
+    /** Startup also owns the writer lock; no writer may wait for its publication while holding that lock. */
+    private suspend fun <T> withInitializedWriter(operation: suspend () -> T): T {
+        managedSnapshot.filterNotNull().first()
+        return updateMutex.withLock { operation() }
     }
 
     /** Publishes only the latest Local/Managed pair after its durable owner has committed. */

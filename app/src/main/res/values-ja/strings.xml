@@ -1662,4 +1662,9 @@
   <string name="chat_message_attachment_open_failed">この添付ファイルを開けません。ファイルが利用できないか、アクセス権が失効している可能性があります。</string>
   <string name="rendered_content_unavailable">このプレビューは利用できません。元のページから開き直してください。</string>
   <string name="workspace_terminal_closing">ターミナルを終了中…</string>
+  <string name="mcp_user_definitions">自分の MCP 定義</string>
+  <string name="mcp_shared_definition_notice">定義の変更は、それを使用するすべてのスペースに適用されます。</string>
+  <string name="mcp_enterprise_read_only">企業のツールは読み取り専用です。初回使用後に検出されたツール一覧を確認できます。</string>
+  <string name="mcp_gateway_preference_hint">ゲートウェイの全ツールをまとめて切り替えます。変更は新しいやり取りに適用されます。</string>
+  <string name="mcp_enterprise_required">企業により有効化が必須</string>
 </resources>

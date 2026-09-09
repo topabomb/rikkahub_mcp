@@ -340,14 +340,16 @@ Android 媒体接线按下列所有权完成：`PortalMediaStore` 管理独占�
 
 | 收口工作包 | 当前事实与剩余工作 |
 | --- | --- |
-| 模型消费者（C5） | 主/子、标题/建议/摘要、附件识别和图片生成已接入原域模型捕获、逐请求准入与 binding；完整工具调用示例继续实施 |
-| MCP / Gateway（C5、U2） | 企业固定选择、完整 Tool JSON、主体目录与连接清理已实现；原 Session/binding/interaction、Gateway 标准发现与调用、本地 source engine、428 收口及只读工具清单已通过本批完整门禁；完整管理 UI、业务工具卡、Mock 模型工具续轮与设备执行仍需收口 |
+| 模型消费者（C5） | 主/子、标题/建议/摘要、附件识别和图片生成已接入原域模型捕获、逐请求准入与 binding；本地模型标准工具调用已通过组件、Debug 聊天与本批完整门禁 |
+| MCP / Gateway（C5、U2） | 企业固定选择、完整 Tool JSON、主体目录与连接清理已实现；原 Session/binding/interaction、Gateway 标准发现与调用、本地 source engine、428 收口及只读工具清单已通过本批完整门禁；管理 UI、归档业务工具卡和 Mock 模型标准工具续轮已通过定向、Debug 设备及本批完整门禁 |
 | 语音（C5、U2） | 仍需 TTS/ASR 的企业/用户目录、私有 binding、原请求准入及本地音频/转写 adapter |
 | 文件与 Workspace（C6） | 会话/记忆、目录、图片、背景、参考输入及附件/富文本出口已分域验证；Workspace 上传/终端/SAF 已完成本批实现与完整门禁；共享配置预设附件的目标域复制及 Draft/Child 交接已完成，完整门禁通过；整体 UI/版本验收仍待最终收口 |
 | 个人备份（C7） | 个人 Settings 保全已实现；备份仍需个人闭合图导出、恢复合并保全最新企业图和系统备份边界，不能用 Settings 测试代表数据保全 |
-| 完整示例与 UI（M1、U2） | 正式企业入口、Portal、公开模板和私有文件 ignore 已有；仍需原生整包导入/场景管理、工具批次 mock、Starter 预填及剩余资源/助手页面 |
+| 完整示例与 UI（M1、U2） | 正式企业入口、Portal、公开模板和私有文件 ignore 已有；仍需原生整包导入/场景管理、Starter 预填、辅助生成模拟格式及剩余资源/助手页面 |
 | 退休与发行（R1、V1） | 消费者完成后删除旧 managed overlay 链，再做 E01–E12、Release/硬件验收和版本 20 交付；真实后台属于下一阶段 |
 
+
+MCP 设置页已改用当前域目录与共享用户定义两个明确视图：企业卡片只读、用户定义可编辑并提示共享影响，Gateway 完整工具对按 REQUIRED/用户可控规则呈现；命令携带原选择版本。聊天工具选择按原 Session 读取，页面停订阅/切域清空旧目录，失败显示未就绪并可随配置变化恢复。工具卡从持久的安全元数据显示真实业务名称及追踪字段；不解析下游正文。本地模型已接入正常工具续轮，定向设备、正式 Debug 聊天及本批完整门禁通过，不代表整期或真实平台互操作完成。
 
 MCP 执行接线已完成本批实现与验证：原 Turn 的 McpExecutionLease 持有原 Session/binding/interaction，等待用户继续转交相同 lease；企业内复用个人 MCP 仍使用其用户 definition/凭据和个人 Catalog，不复制资源。Direct MCP 按已解析助手引用装配，Gateway 独立装配完整工具对，开关只影响新 interaction。POST 及通知/恢复 GET 的 428 由原 TurnFinalizer 收口后同步；原目录的保留与新目录发布按原 Applied revision 分开。只读助手检查复用配置/Catalog/Session owner，不创建执行租约，私有连接异常不带入公共日志与工具异常。
 
@@ -665,3 +667,8 @@ App 2,124 项 JVM、Android 17 模拟器 App 190 项与 Speech 6 项无失败，
 Workspace JVM 保留 11 项 Windows 条件跳过，设备 12 项中 1 项硬链接条件跳过。分层报告见
 `build/reports/enterprise/mcp-definition-owner-verification.json`。本次设备是既有消费者回归，未新增企业 MCP 业务验收；
 企业 Session/binding/interaction target、配置页面接线、原外层配置锁清理、Gateway 完整 Mock、Speech、备份和整期验收继续实施。
+
+MCP UI 与本地模型接线：企业只读目录、Gateway 原选择写入与个人定义共用已接通；目录失败明确呈现，重新订阅不复用旧域目录。
+本地模型通过实际 Tool factory、Step 循环、SDK 与示例服务完成公告、指南、企业信息查询，流式/非流式均有组件验证；检查点由测试捕获，不冒充 Room 验收。
+两个 Compose 设备用例通过，覆盖正式 MCP 设置页和归档业务详情。实际 Debug 安装包已走通正式接入到企业公告聊天，打开工具详情核实业务名称、状态及 requestId；该人工路径不等于 Release 或真实平台验收。
+本批完整串行 `test assembleDebug lintDebug assembleRelease connectedDebugAndroidTest` 在 18 分 6 秒内通过：App 2,140 项 JVM、Android 17 模拟器 App 192 项及 Speech 6 项无失败。App/Workspace lint 均为 0 错误、分别 287/11 项警告；Workspace JVM 48 项中 11 项 Windows 条件跳过，设备 12 项中 1 项硬链接条件跳过。首次全量设备运行暴露首次配置写入与初始化的锁等待环；确定调度用例在修复前失败，修复后定向 16 项设备及最终全量通过。修正仅调整 Settings 原 owner 的初始化等待顺序，无新增存储或兼容层。两位阶段复审无剩余实质问题，分层报告见 `build/reports/enterprise/mcp-ui-verification.json`。实际 Debug 聊天的人工观察发生在最后的模拟回复去重与无工具辅助请求修正之前，后者由最终构建/测试验证。Speech、个人备份图保全、剩余配置页面与示例场景以及版本 20 整体验收继续实施。

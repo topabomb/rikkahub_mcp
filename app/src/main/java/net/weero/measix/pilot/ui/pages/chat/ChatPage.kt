@@ -490,13 +490,18 @@ private fun ChatPageContent(
     val toaster = LocalToaster.current
     val workspaceQueryService: WorkspaceQueryService = koinInject()
     val mcpQueryService: McpQueryService = koinInject()
-    val mcpPresentations by mcpQueryService.servers.collectAsStateWithLifecycle()
     val workspaces by workspaceQueryService.observeWorkspaces()
         .collectAsStateWithLifecycle(initialValue = emptyList())
     var previewMode by rememberSaveable { mutableStateOf(false) }
     val hazeState = rememberHazeState()
     val configuration = conversationUiModel?.configuration
     val target = configuration?.target
+    val mcpFlow = remember(mcpQueryService, target?.conversation?.selection) {
+        target?.conversation?.selection?.access?.let(mcpQueryService::observe)
+            ?: kotlinx.coroutines.flow.flowOf(net.weero.measix.pilot.service.McpCatalogReadState.Unavailable)
+    }
+    val mcpCatalog by mcpFlow.collectAsStateWithLifecycle(initialValue = net.weero.measix.pilot.service.McpCatalogReadState.Unavailable)
+    val mcpPresentations = (mcpCatalog as? net.weero.measix.pilot.service.McpCatalogReadState.Available)?.servers.orEmpty()
     val assistant = configuration?.assistant
     val inputImports = target?.let(vm::importsFor)
     val changePreference: (AssistantPreferenceChange) -> Unit = { change ->

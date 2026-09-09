@@ -1662,4 +1662,9 @@
   <string name="chat_message_attachment_open_failed">无法打开此附件。文件可能已不可用，或访问授权已结束。</string>
   <string name="rendered_content_unavailable">此预览已不可用，请从原页面重新打开。</string>
   <string name="workspace_terminal_closing">正在关闭终端…</string>
+  <string name="mcp_user_definitions">我的 MCP 定义</string>
+  <string name="mcp_shared_definition_notice">修改这些定义会影响所有使用它们的空间。</string>
+  <string name="mcp_enterprise_read_only">企业工具只读，首次使用后可查看已发现的工具目录。</string>
+  <string name="mcp_gateway_preference_hint">所有网关工具一起启停，修改仅对新的交互生效。</string>
+  <string name="mcp_enterprise_required">企业要求启用</string>
 </resources>

@@ -1663,4 +1663,9 @@
   <string name="chat_message_attachment_open_failed">Unable to open this attachment. It may be unavailable or access may have ended.</string>
   <string name="rendered_content_unavailable">This preview is no longer available. Open it again from the original page.</string>
   <string name="workspace_terminal_closing">Closing terminal…</string>
+  <string name="mcp_user_definitions">My MCP definitions</string>
+  <string name="mcp_shared_definition_notice">Changes to these definitions apply wherever you use them.</string>
+  <string name="mcp_enterprise_read_only">Enterprise tools are read-only. Their catalog becomes available after first use.</string>
+  <string name="mcp_gateway_preference_hint">All gateway tools switch together. Changes apply to new interactions.</string>
+  <string name="mcp_enterprise_required">Required by your enterprise</string>
 </resources>

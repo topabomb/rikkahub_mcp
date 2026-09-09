@@ -274,9 +274,20 @@ server/tool 身份、generation、transport 阶段、HTTP/SDK 异常、`retryabl
 - 有 LKG 时，无论 Ready、Reconnecting、WaitingNetwork、RetryScheduled、NeedsAuthorization 或 Error，都显示真实工具数；
 - 只有首次无目录的 Connecting/Discovering/Authorizing 使用 spinner；maintenance recovery 使用静态状态和下次重试信息；
 - 空目录显示 rejected，绝不显示“已连接 0/0 tools”；
-- 设置页只有列表下拉刷新入口，不保留重复的顶部刷新按钮；spinner 只绑定本次用户 command 的 20 秒 receipt，不绑定全局后台恢复；
+- 共享用户定义的列表下拉刷新沿用个人连接维护；spinner 只绑定本次用户 command 的 20 秒 receipt，不绑定全局后台恢复。企业目录在首次执行时发现，页面只读展示已确认目录，不为浏览建立 interaction；
 - notification stream 单独退化时保留 command transport 与目录，并显示 stale/degraded 原因；前台或手工刷新补齐遗漏；
-- managed source/lock、授权、错误详情和工具策略都由同一 presentation 提供，Compose 不直连 Manager/Store。
+- 来源、当前域准入、强制启用、Gateway policy 与工具目录由同一 presentation 提供，Compose 不直连 Manager/Store。
+
+`userServers` 明确用于共享用户定义管理，保留原 OAuth、工具策略和编辑入口，并说明跨空间影响。
+按域目录通过 `ConfigurationQueryService` 读取原配置，复用 Coordinator 的 `readCatalogCapabilities` 验证完整主体、generation、surface 和当前 binding 摘要。
+目录行携带原 `RealmAccess`，聊天按原 Session 匹配；企业定义没有可编辑的 `McpServerConfig`，也不暴露 endpoint/header/credential。
+读取失败发布 `McpCatalogReadState.Unavailable`，之后的 owner 变化可以恢复观察；私有 Applied revision 单独唤醒读取。
+选中目录在选择变化时先清空，停止订阅后不保留旧企业 replay，重开先重新授权。多个在途连接不能被任一单独状态冒充为整个资源的连接状态；已确认工具目录独立显示。
+
+企业 MCP 卡片没有编辑、删除、关闭、OAuth 或单工具策略入口；用户定义始终可管理，企业准入被禁止时显示原因。
+Gateway 按发布 policy 对完整工具对启停，REQUIRED 只读；写入携带渲染时的 `RealmSelection` 并复验原选择版本，等待提交时禁用重复操作。
+`com.measix/resolvedTool` 的安全元数据随原工具 checkpoint 持久化；默认工具卡用其业务 name，详情仅展示 gatewayToolId/name/status/requestId。
+显示不解析下游输出猜测身份、不再次请求 Gateway，输出归档不删除这份业务身份。
 
 ## 9. 验证边界
 
@@ -300,4 +311,8 @@ Gateway 返回的安全业务元数据经原 ToolExecutionContext 的 deferred m
 助手 `assistant_inspect` 的工具清单读取原域配置和已确认 Catalog，不建立连接，也不借用当前页面的配置。
 用户目录要求 definition digest 匹配；企业目录要求原主体、generation、当前 binding 的 definition digest 和 Gateway surface 匹配。
 查询仅在既有 Session owner 锁内短读取 binding 并计算目录匹配，不创建执行租约、不缓存凭据或获得调用权限。
-该只读清单不包含 execution interaction，不能充当调用租约。MCP 管理页面的完整按域投影仍在实施。
+该只读清单不包含 execution interaction，不能充当调用租约。MCP 管理页面与助手检查复用同一目录匹配规则。
+
+本地示例模型在 `ModelRequestTransport` 消费同一请求的冻结工具目录，对公告、指南、企业信息请求发出标准工具调用。
+Gateway 只使用本轮成功发现结果中的 `toolRef`，失败不重试或回退 Direct；执行仍由 TurnToolSetFactory、TurnRunner 和 MCP owner 完成。
+流式调用携带正常 Provider transport slot，Step accumulator 分配 durable 身份。工具卡业务摘要来自提交后的受限 metadata，归档详情沿用同一摘要，不读取归档正文。

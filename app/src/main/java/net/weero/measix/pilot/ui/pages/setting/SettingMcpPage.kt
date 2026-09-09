@@ -1,5 +1,7 @@
 package net.weero.measix.pilot.ui.pages.setting
 
+import me.rerere.common.configuration.ConfigurationReference
+
 import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.AlertCircle
 import me.rerere.hugeicons.stroke.ArrowDown01
@@ -127,7 +129,12 @@ import net.weero.measix.pilot.data.ai.mcp.McpToolPolicy
 import net.weero.measix.pilot.service.McpApplicationService
 import net.weero.measix.pilot.service.McpQueryService
 import net.weero.measix.pilot.service.McpServerPresentation
-import net.weero.measix.pilot.service.McpConfigurationSource
+import net.weero.measix.pilot.service.ConfigurationApplicationService
+import net.weero.measix.pilot.data.configuration.ConfigurationScope
+import net.weero.measix.pilot.data.enterprise.RealmSelection
+import net.weero.measix.pilot.ui.components.ai.configurationUnavailableText
+import androidx.compose.runtime.key
+import kotlinx.coroutines.ensureActive
 import net.weero.measix.pilot.service.McpToolPresentation
 import net.weero.measix.pilot.data.ai.mcp.parseMcpServersFromJson
 import net.weero.measix.pilot.data.ai.mcp.encodeForShare
@@ -148,10 +155,12 @@ import net.weero.measix.pilot.utils.writeClipboardText
 import org.koin.compose.koinInject
 
 @Composable
-fun SettingMcpPage() {
+internal fun SettingMcpPage(
+    mcpApplicationService: McpApplicationService = koinInject(),
+    mcpQueryService: McpQueryService = koinInject(),
+    configurationCommands: ConfigurationApplicationService = koinInject(),
+) {
     val pageScope = rememberCoroutineScope()
-    val mcpApplicationService = koinInject<McpApplicationService>()
-    val mcpQueryService = koinInject<McpQueryService>()
     val toaster = LocalToaster.current
     val context = LocalContext.current
     val resources = LocalResources.current
@@ -177,8 +186,14 @@ fun SettingMcpPage() {
     var showImportMethodDialog by remember { mutableStateOf(false) }
     var pendingConflicts by remember { mutableStateOf<List<Pair<McpServerConfig, McpServerConfig>>?>(null) }
     var shareConfig by remember { mutableStateOf<McpServerConfig?>(null) }
-    val mcpPresentations by mcpQueryService.servers.collectAsStateWithLifecycle()
-    val mcpConfigs = mcpPresentations.map { it.definition }
+    val userServers by mcpQueryService.userServers.collectAsStateWithLifecycle()
+    val catalog by mcpQueryService.catalog.collectAsStateWithLifecycle()
+    val managedServers = catalog?.servers.orEmpty().filter { it.definition == null }
+    val mcpPresentations = userServers.map { server ->
+        val admission = catalog?.servers?.singleOrNull { it.serverId == server.serverId }
+        server.copy(access = admission?.access ?: server.access, unavailableReason = admission?.unavailableReason)
+    }
+    val mcpConfigs = userServers.mapNotNull { it.definition }
 
     val scanErrorText = stringResource(R.string.setting_provider_page_scan_error)
     val noPermissionText = stringResource(R.string.setting_provider_page_no_permission)
@@ -306,6 +321,20 @@ fun SettingMcpPage() {
                     bottom = innerPadding.calculateBottomPadding() + 16.dp,
                 )
             ) {
+                if (catalog?.content == net.weero.measix.pilot.service.McpCatalogReadState.Unavailable) {
+                    item { Text(stringResource(R.string.configuration_reason_not_ready), color = MaterialTheme.colorScheme.error) }
+                }
+                items(managedServers, key = { it.serverId.toString() }) { server ->
+                    catalog?.selection?.let { selection ->
+                        key(selection) { ManagedMcpServerItem(server, selection, configurationCommands) }
+                    }
+                }
+                item {
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text(stringResource(R.string.mcp_user_definitions), style = MaterialTheme.typography.titleMedium)
+                        Text(stringResource(R.string.mcp_shared_definition_notice), style = MaterialTheme.typography.bodySmall)
+                    }
+                }
                 items(mcpConfigs, key = { it.id.toString() }) { mcpConfig ->
                     McpServerItem(
                         item = mcpConfig,
@@ -344,7 +373,7 @@ fun SettingMcpPage() {
                 }
             }
 
-            if (mcpConfigs.isEmpty()) {
+            if (mcpConfigs.isEmpty() && managedServers.isEmpty()) {
                 Column(
                     modifier = Modifier.align(Alignment.Center),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -419,6 +448,58 @@ fun SettingMcpPage() {
             },
             onDismiss = { pendingConflicts = null }
         )
+    }
+}
+
+@Composable
+private fun ManagedMcpServerItem(server: McpServerPresentation, selection: RealmSelection, commands: ConfigurationApplicationService) {
+    val scope = rememberCoroutineScope()
+    val toaster = LocalToaster.current
+    val failureText = stringResource(R.string.error_title_operation)
+    var submitting by remember { mutableStateOf(false) }
+    var expanded by remember { mutableStateOf(false) }
+    Card(colors = CardDefaults.cardColors(containerColor = CustomColors.listItemColors.containerColor)) {
+        Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(server.name, Modifier.weight(1f), style = MaterialTheme.typography.titleLarge)
+                Tag(type = TagType.WARNING) { Text(stringResource(R.string.managed_configuration_source_managed)) }
+            }
+            Text(stringResource(R.string.mcp_enterprise_read_only), style = MaterialTheme.typography.bodySmall)
+            server.gatewayEnablement?.let { gateway ->
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("Gateway", Modifier.weight(1f))
+                    androidx.compose.material3.Switch(checked = gateway.enabled, enabled = gateway.canChange && !submitting, onCheckedChange = { enabled ->
+                        if (!submitting) scope.launch {
+                            submitting = true
+                            try {
+                                commands.setGatewayEnabled(selection, server.serverId as ConfigurationReference.Enterprise, enabled)
+                            } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                                throw cancelled
+                            } catch (error: Exception) {
+                                kotlinx.coroutines.currentCoroutineContext().ensureActive()
+                                toaster.show(error.message ?: failureText, type = ToastType.Error)
+                            } finally { submitting = false }
+                        }
+                    })
+                }
+                Text(stringResource(if (gateway.canChange) R.string.mcp_gateway_preference_hint else R.string.mcp_enterprise_required),
+                    style = MaterialTheme.typography.bodySmall)
+            }
+            if (server.requiredEnabled && server.gatewayEnablement == null) {
+                Text(stringResource(R.string.mcp_enterprise_required), style = MaterialTheme.typography.bodySmall)
+            }
+            server.unavailableReason?.let { Text(configurationUnavailableText(it), color = MaterialTheme.colorScheme.error) }
+            if (server.isBusy) CircularProgressIndicator(Modifier.size(24.dp))
+            (server.status as? McpStatus.Error)?.let { Text(it.message ?: failureText, color = MaterialTheme.colorScheme.error) }
+            if (server.tools.isNotEmpty()) {
+                TextButton(onClick = { expanded = !expanded }) {
+                    Text(stringResource(R.string.mcp_enabled_tools_count, server.tools.size, server.tools.size))
+                }
+                if (expanded) server.tools.forEach { tool ->
+                    key(tool.name) { McpToolCard(tool, {}, {}, editable = false) }
+                }
+            }
+        }
     }
 }
 
@@ -556,30 +637,11 @@ private fun McpServerItem(
                             text = item.commonOptions.name,
                             style = MaterialTheme.typography.titleLarge,
                         )
-                        if (presentation?.showConfigurationSource == true) {
-                            Tag(
-                                type = when (presentation.configurationSource) {
-                                    McpConfigurationSource.BUILT_IN -> TagType.DEFAULT
-                                    McpConfigurationSource.LOCAL -> TagType.INFO
-                                    McpConfigurationSource.MANAGED -> TagType.WARNING
-                                },
-                            ) {
-                                Text(
-                                    stringResource(
-                                        when (presentation.configurationSource) {
-                                            McpConfigurationSource.BUILT_IN ->
-                                                R.string.managed_configuration_source_builtin
-                                            McpConfigurationSource.LOCAL ->
-                                                R.string.managed_configuration_source_local
-                                            McpConfigurationSource.MANAGED ->
-                                                R.string.managed_configuration_source_managed
-                                        }
-                                    )
-                                )
-                            }
-                            presentation.lockReason?.let { reason ->
-                                Tag(type = TagType.WARNING) { Text(reason) }
-                            }
+                        if (presentation?.scope is ConfigurationScope.Enterprise) {
+                            Tag(type = TagType.INFO) { Text(stringResource(R.string.managed_configuration_source_local)) }
+                        }
+                        presentation?.unavailableReason?.let { reason ->
+                            Tag(type = TagType.WARNING) { Text(configurationUnavailableText(reason)) }
                         }
                         val dotColor =
                             if (item.commonOptions.enable) MaterialTheme.extendColors.green6 else MaterialTheme.extendColors.red6
@@ -1280,7 +1342,7 @@ private fun McpToolsConfigure(
     update: (McpServerConfig) -> Unit,
 ) {
     val queryService = koinInject<McpQueryService>()
-    val presentation by queryService.observeServer(config.id)
+    val presentation by queryService.observeUserServer(config.id)
         .collectAsStateWithLifecycle(initialValue = null)
     val policies = config.commonOptions.toolPolicies.associateBy { it.name }
     val tools = presentation?.tools.orEmpty().map { tool ->
@@ -1341,6 +1403,7 @@ private fun McpToolCard(
     tool: McpToolPresentation,
     onEnableChange: (Boolean) -> Unit,
     onNeedsApprovalChange: (Boolean) -> Unit,
+    editable: Boolean = true,
 ) {
     var expanded by remember { mutableStateOf(false) }
     Card(
@@ -1368,35 +1431,37 @@ private fun McpToolCard(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
-                // 需要审批开关
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(4.dp),
-                ) {
-                    Text(
-                        text = stringResource(R.string.setting_mcp_page_needs_approval),
-                        style = MaterialTheme.typography.labelSmall,
-                    )
-                    Switch(
-                        checked = tool.needsApproval,
-                        onCheckedChange = onNeedsApprovalChange,
-                        size = SwitchSize.Small
-                    )
-                }
-                // 启用开关
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(4.dp),
-                ) {
-                    Text(
-                        text = "启用",
-                        style = MaterialTheme.typography.labelSmall,
-                    )
-                    Switch(
-                        checked = tool.enabled,
-                        onCheckedChange = onEnableChange,
-                        size = SwitchSize.Small
-                    )
+                if (editable) {
+                    // 需要审批开关
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    ) {
+                        Text(
+                            text = stringResource(R.string.setting_mcp_page_needs_approval),
+                            style = MaterialTheme.typography.labelSmall,
+                        )
+                        Switch(
+                            checked = tool.needsApproval,
+                            onCheckedChange = onNeedsApprovalChange,
+                            size = SwitchSize.Small
+                        )
+                    }
+                    // 启用开关
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    ) {
+                        Text(
+                            text = "启用",
+                            style = MaterialTheme.typography.labelSmall,
+                        )
+                        Switch(
+                            checked = tool.enabled,
+                            onCheckedChange = onEnableChange,
+                            size = SwitchSize.Small
+                        )
+                    }
                 }
                 // 展开/收起按钮
                 IconButton(

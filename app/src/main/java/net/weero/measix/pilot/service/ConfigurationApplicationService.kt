@@ -90,9 +90,11 @@ internal class ConfigurationApplicationService(
         }
     }
 
-    suspend fun setGatewayEnabled(access: RealmAccess.Enterprise, gateway: ConfigurationReference.Enterprise, enabled: Boolean) {
+    suspend fun setGatewayEnabled(selection: RealmSelection, gateway: ConfigurationReference.Enterprise, enabled: Boolean) {
         recoveryGate.awaitReady()
-        enterpriseSessions.withAppliedConfiguration(access) { applied ->
+        val access = requireNotNull(selection.access as? RealmAccess.Enterprise)
+        enterpriseSessions.withSelectedRealmSelection(selection) {
+            val applied = enterpriseSessions.state.value as net.weero.measix.pilot.data.enterprise.EnterpriseState.Available
             settings.updateGatewayPreference(access.scope, applied, gateway, enabled)
         }
     }

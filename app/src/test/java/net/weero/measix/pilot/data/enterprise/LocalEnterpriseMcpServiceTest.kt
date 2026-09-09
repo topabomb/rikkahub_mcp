@@ -1,5 +1,25 @@
 package net.weero.measix.pilot.data.enterprise
 
+import net.weero.measix.pilot.data.ai.tools.TurnToolSetFactory
+import net.weero.measix.pilot.data.ai.tools.ToolOutputStore
+import net.weero.measix.pilot.data.ai.tools.local.LocalTools
+import net.weero.measix.pilot.data.files.ArtifactStore
+import net.weero.measix.pilot.data.files.ArtifactReadLease
+import net.weero.measix.pilot.data.files.ArtifactRetentionLease
+import net.weero.measix.pilot.data.datastore.Settings
+import net.weero.measix.pilot.data.model.Assistant
+import net.weero.measix.pilot.service.runtime.ModelExecutionLease
+import net.weero.measix.pilot.service.runtime.ModelRequestTarget
+import net.weero.measix.pilot.service.turn.TurnRunner
+import net.weero.measix.pilot.service.turn.TurnOutcome
+import net.weero.measix.pilot.test.TurnRunCapture
+import net.weero.measix.pilot.test.turnRunInputsFixture
+import me.rerere.ai.ui.UIMessage
+import me.rerere.ai.ui.UIMessagePart
+import me.rerere.ai.provider.Model
+import me.rerere.ai.provider.ProviderManager
+import me.rerere.ai.provider.ProviderSetting
+import me.rerere.ai.provider.RequestMediaCapabilities
 import io.mockk.coEvery
 import io.mockk.every
 import io.mockk.mockk
@@ -77,6 +97,7 @@ class LocalEnterpriseMcpServiceTest {
             try {
                 val first = prepare()
                 assertTrue(first.tools.any { it.name == "get_enterprise_profile" })
+                verifyModelToolLoop(h.access, first, manager)
                 val discover = first.tools.single { it.name == "discover_tools" }
                 val discovery = invoke(discover, buildJsonObject { put("queries", buildJsonArray { add("公告") }) })
                 val structured = discovery.filterIsInstance<me.rerere.ai.ui.UIMessagePart.Text>().mapNotNull {
@@ -181,6 +202,50 @@ class LocalEnterpriseMcpServiceTest {
             assertTrue(McpProtocolFailureClassifier.isUnauthorized(failure))
             assertEquals(h.access, exit.access)
         } }
+    }
+
+    /** Real factory, model adapter, Step loop, SDK and local service; checkpoints are captured, not Room commits. */
+    private suspend fun verifyModelToolLoop(access: RealmAccess.Enterprise, capabilities: TurnMcpCapabilitySnapshot, manager: McpRuntimeCoordinator) {
+        val artifacts = mockk<ArtifactStore>()
+        coEvery { artifacts.retainForRequest(any(), any()) } answers {
+            ArtifactReadLease(emptyMap(), { null }, ArtifactRetentionLease {})
+        }
+        val localTools = mockk<LocalTools>()
+        every { localTools.getTools(any(), any(), any()) } returns emptyList()
+        val providers = mockk<ProviderManager>()
+        val outputStore = ToolOutputStore(artifacts)
+        val factory = TurnToolSetFactory(localTools, mockk(), mockk(), mockk(), mockk(), manager, providers, artifacts, outputStore)
+        val model = Model(modelId = "example")
+        val runner = TurnRunner(artifactStore = artifacts, context = androidx.test.core.app.ApplicationProvider.getApplicationContext(),
+            providerManager = providers, json = Json, attachmentResolver = mockk(), toolOutputStore = outputStore)
+        for (stream in listOf(false, true)) for (prompt in listOf("查看企业公告", "查询企业指南", "查看企业信息")) {
+            val assistant = Assistant(enableMemory = false, streamOutput = stream, localTools = emptyList(), enableRecentChatsReference = false)
+            val settings = Settings(providers = listOf(ProviderSetting.OpenAI(models = listOf(model))), assistants = listOf(assistant))
+            val tools = factory.buildTools(access, assistant, settings = settings, capabilityModel = model, mcpCapabilities = capabilities)
+            val capture = TurnRunCapture()
+            val inputs = turnRunInputsFixture(Uuid.random(), settings, model, RequestMediaCapabilities.NONE,
+                listOf(UIMessage.user(prompt)), assistant, tools = tools, maxSteps = 4, capture = capture)
+            val lease = ModelExecutionLease { it(ModelRequestTarget.LocalExample) }
+            try {
+                runner.run(inputs.copy(turnContext = inputs.turnContext.copy(realmAccess = access,
+                    model = inputs.turnContext.model.copy(requests = lease))))
+                val outcome = capture.result
+                assertTrue("$prompt stream=$stream outcome=$outcome", outcome is TurnOutcome.Completed)
+                val message = (outcome as TurnOutcome.Completed).assistantMessage!!
+                val executed = message.getTools()
+                assertEquals(if (prompt == "查看企业信息") 1 else 2, executed.size)
+                assertTrue(executed.all { it.hasReplayResult && it.localCallId != Uuid.NIL && it.stepId != Uuid.NIL })
+                assertEquals(executed.size + 1, message.parts.filterIsInstance<UIMessagePart.Step>().size)
+                if (executed.size == 2) {
+                    assertTrue(executed[0].toolName.endsWith("__discover_tools"))
+                    assertTrue(executed[1].toolName.endsWith("__invoke_tool"))
+                    assertNotNull(executed[1].metadata?.get("com.measix/resolvedTool"))
+                    assertFalse(message.toText().contains("toolRef"))
+                }
+                assertTrue(message.toText().contains("已通过企业工具"))
+            } finally { lease.release() }
+        }
+        io.mockk.verify { providers wasNot io.mockk.Called }
     }
 
     private suspend fun withHarness(block: suspend (Harness) -> Unit) = withTimeout(20_000) {

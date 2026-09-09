@@ -428,7 +428,13 @@ class ConfigurationApplicationServiceTest {
             val key = ConfigurationKey(ConfigurationCategory.GATEWAY, reference)
             assertEquals(ResolvedGatewayEnablement(true, true), env.queries.read(env.access).catalog.getValue(key).gatewayEnablement)
             val manifest = (env.sessions.state.value as EnterpriseState.Available).manifest
-            env.commands.setGatewayEnabled(env.access, reference, false)
+            val beforeStaleWrite = env.document()
+            try {
+                env.commands.setGatewayEnabled(env.selection.copy(revision = env.selection.revision - 1), reference, false)
+                fail("An old rendered directory cannot mutate Gateway preferences")
+            } catch (error: EnterpriseConfigurationException) { assertEquals("enterprise_selection_revoked", error.reason) }
+            assertEquals(JsonInstant.encodeToString(beforeStaleWrite), JsonInstant.encodeToString(env.document()))
+            env.commands.setGatewayEnabled(env.selection, reference, false)
             assertEquals(manifest, (env.sessions.state.value as EnterpriseState.Available).manifest)
             assertEquals(ResolvedGatewayEnablement(false, true), env.queries.read(env.access).catalog.getValue(key).gatewayEnablement)
             assertFalse(env.queries.read(env.access).access(ConfigurationCategory.GATEWAY, reference).canExecute)
@@ -444,7 +450,7 @@ class ConfigurationApplicationServiceTest {
             for (gateway in listOf(reference, reference.copy(id = "gw_missing"),
                 reference.copy(authority = reference.authority.copy(sourceNamespace = "local:other")))) {
                 try {
-                    env.commands.setGatewayEnabled(env.access, gateway, false)
+                    env.commands.setGatewayEnabled(env.selection, gateway, false)
                     fail("Required, missing and foreign gateways must reject preference writes")
                 } catch (_: SettingsLockedException) { }
             }
@@ -462,20 +468,20 @@ class ConfigurationApplicationServiceTest {
             env.initialize()
             val alice = exampleEnterprisePackage()
             val reference = alice.identity.reference("twg_example")
-            env.commands.setGatewayEnabled(env.access, reference, false)
+            env.commands.setGatewayEnabled(env.selection, reference, false)
             env.sessions.finishExit(env.sessions.beginExit(requireNotNull(env.sessions.captureExitRequest())))
             val bob = alice.copy(identity = alice.identity.copy(userId = "bob"))
             env.sessions.enrollFixture(bob)
             val bobAccess = env.sessions.captureRealmAccess(bob.identity.scope) as RealmAccess.Enterprise
             assertNull(env.document().preferences.gateway(bob.identity.scope, reference))
             assertTrue(env.queries.read(bobAccess).catalog.getValue(ConfigurationKey(ConfigurationCategory.GATEWAY, reference)).gatewayEnablement!!.enabled)
-            env.commands.setGatewayEnabled(bobAccess, reference, true)
+            env.commands.setGatewayEnabled(requireNotNull(env.sessions.observeSelectedRealmSelection().first()), reference, true)
             assertFalse(env.document().preferences.gateway(alice.identity.scope, reference)!!.enabled)
             env.sessions.finishExit(env.sessions.beginExit(requireNotNull(env.sessions.captureExitRequest())))
             env.sessions.enrollFixture(alice)
             val before = env.document()
             val staleActions: List<suspend () -> Unit> = listOf(
-                { env.commands.setGatewayEnabled(env.access, reference, true) },
+                { env.commands.setGatewayEnabled(env.selection, reference, true) },
                 { env.commands.selectResource(env.selection, ResourceSelectionSlot.CHAT_MODEL, env.model.id) },
                 { env.commands.setModelFavorite(env.selection, env.model.id, true) },
                 { env.commands.setSuggestionEnabled(env.selection, false) },
@@ -486,8 +492,7 @@ class ConfigurationApplicationServiceTest {
                 catch (error: EnterpriseConfigurationException) { assertEquals("enterprise_data_access_unavailable", error.reason) }
             }
             assertEquals(JsonInstant.encodeToString(before), JsonInstant.encodeToString(env.document()))
-            val newAccess = env.sessions.captureRealmAccess(alice.identity.scope) as RealmAccess.Enterprise
-            env.commands.setGatewayEnabled(newAccess, reference, true)
+            env.commands.setGatewayEnabled(requireNotNull(env.sessions.observeSelectedRealmSelection().first()), reference, true)
             assertTrue(env.document().preferences.gateway(alice.identity.scope, reference)!!.enabled)
         } finally { env.scope.cancel() }
     }
