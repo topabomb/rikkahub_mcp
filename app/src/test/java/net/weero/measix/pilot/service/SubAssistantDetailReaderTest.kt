@@ -196,7 +196,7 @@ class SubAssistantDetailReaderTest {
         coEvery { f.repository.deleteConversation(f.child.id) } coAnswers { persistedChild = null }
         val parent = registry.loadRuntime(f.master.id)
         val parentLease = registry.acquireRegisteredRuntime(f.master.id, parent)
-        val source = ConversationViewLease(f.master.id, f.source.access, f.source.selectionRevision, parentLease::close)
+        val source = ConversationViewLease(f.master.id, f.source.access, f.source.selectionRevision, closeAction = parentLease::close)
         val reader = SubAssistantDetailReader(ConversationQueryService(f.repository, registry, mockk(), mockk(), f.projector,
             f.sessions, ApplicationRecoveryGate().apply { ready() }, mockk(), coordinator), dispatcher)
         val states = mutableListOf<SubAssistantDetailUiState>()

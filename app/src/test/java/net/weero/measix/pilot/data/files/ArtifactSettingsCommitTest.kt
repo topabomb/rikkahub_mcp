@@ -139,6 +139,76 @@ internal class ArtifactSettingsCommitTest {
         }
     }
 
+    @Test
+    fun `preset materialization copies each configuration asset once and rewrites nested and archived references`() = runBlocking {
+        withStore { e ->
+            val image = e.artifacts.createFromBytes(ConfigurationScope.Personal,
+                net.weero.measix.pilot.data.imggen.TINY_PNG, "preset.png", "image/png", origin = ArtifactOrigin.USER)
+            val secondImage = e.artifacts.createFromBytes(ConfigurationScope.Personal,
+                net.weero.measix.pilot.data.imggen.TINY_PNG, "second.png", "image/png", origin = ArtifactOrigin.USER)
+            val archive = e.artifacts.createText(ConfigurationScope.Personal, "archived", folder = FileFolders.TOOL_OUTPUTS)
+            val archiveFact = me.rerere.ai.ui.ToolOutputArchive(archive.entity.id,
+                me.rerere.ai.ui.ToolOutputArchiveRef(archive.localRef.relativePath, "text/plain"), 8, 1)
+            val imagePart = UIMessagePart.Image(image.uri.toString())
+            val nested = UIMessagePart.Tool(localCallId = Uuid.random(), stepId = Uuid.random(),
+                providerCallId = "nested", toolName = "image", input = "{}", output = listOf(imagePart, UIMessagePart.Image(secondImage.uri.toString())),
+                metadata = buildJsonObject { put("artifact", JsonInstant.encodeToJsonElement(LocalArtifactRef.serializer(), image.localRef)) })
+            val archived = UIMessagePart.Tool(localCallId = Uuid.random(), stepId = Uuid.random(),
+                providerCallId = "archive", toolName = "read", input = "{}",
+                output = listOf(UIMessagePart.Text("[Archived tool result: ref=${archive.entity.id}; status=completed; lines=1; chars=8]")),
+                runtimeState = me.rerere.ai.ui.ToolRuntimeState(me.rerere.ai.core.ToolOutputPolicy.ARCHIVABLE_TEXT, archiveFact))
+            val messages = listOf(UIMessage(role = MessageRole.ASSISTANT, parts = listOf(imagePart, nested, archived)))
+            e.artifacts.updateSettingsReferences { it.copy(assistants = listOf(Assistant(presetMessages = messages))) }
+            val created = mutableListOf<OwnedArtifact>()
+            val copied = e.artifacts.materializeConfigurationMessages(enterprise, messages, created)
+            assertEquals(3, created.size)
+            assertTrue(created.all { it.entity.scope == enterprise })
+            val newImage = created.single { it.entity.displayName == "preset.png" }
+            val newArchive = created.single { it.entity.folder == FileFolders.TOOL_OUTPUTS }
+            assertEquals(newImage.uri.toString(), (copied.single().parts[0] as UIMessagePart.Image).url)
+            val copiedNested = copied.single().parts[1] as UIMessagePart.Tool
+            assertEquals(newImage.uri.toString(), (copiedNested.output.first() as UIMessagePart.Image).url)
+            assertEquals(created.single { it.entity.displayName == "second.png" }.uri.toString(), (copiedNested.output[1] as UIMessagePart.Image).url)
+            assertEquals(newImage.localRef, ToolArtifactRewriter(e.payload.file("upload").parentFile!!, e.artifacts).decodeArtifactRef(copiedNested.metadata!!))
+            val copiedArchive = copied.single().parts[2] as UIMessagePart.Tool
+            assertEquals(newArchive.entity.id, copiedArchive.runtimeState.archive!!.ref)
+            assertEquals(newArchive.localRef.relativePath, copiedArchive.runtimeState.archive!!.artifact.relativePath)
+            assertTrue((copiedArchive.output.single() as UIMessagePart.Text).text.startsWith("[Archived tool result: ref=${newArchive.entity.id};"))
+            // Configuration removal affects only the source; the Draft's creation tokens protect its independent copies.
+            e.artifacts.updateSettingsReferences { it.copy(assistants = emptyList()) }
+            assertTrue(e.artifacts.deleteUserRequested(ConfigurationScope.Personal, image.entity.id) is ArtifactDeleteResult.Completed)
+            assertNull(e.artifacts.resolveImagePreviewForArtifact(enterprise, newImage.localRef))
+            assertNotNull(e.artifacts.resolveImagePreviewForArtifact(enterprise, newImage.localRef, newImage))
+            assertArrayEquals(net.weero.measix.pilot.data.imggen.TINY_PNG, e.artifacts.readOwnedImage(enterprise, newImage))
+            assertTrue(runCatching { e.artifacts.readOwnedImage(ConfigurationScope.Personal, newImage) }.isFailure)
+            assertTrue(e.artifacts.deleteUserRequested(enterprise, newImage.entity.id) is ArtifactDeleteResult.Rejected)
+            created.forEach(e.artifacts::abandonUnpublished)
+            assertTrue(e.artifacts.deleteUserRequested(enterprise, newImage.entity.id) is ArtifactDeleteResult.Completed)
+        }
+    }
+
+    @Test
+    fun `preset copies reject uncommitted roots and another enterprise before allocating payloads`() = runBlocking {
+        withStore { e ->
+            val source = e.artifacts.createText(ConfigurationScope.Personal, "private")
+            val messages = listOf(UIMessage(role = MessageRole.USER,
+                parts = listOf(UIMessagePart.Document(source.uri.toString(), "private.txt", "text/plain"))))
+            val created = mutableListOf<OwnedArtifact>()
+            assertTrue(runCatching { e.artifacts.materializeConfigurationMessages(enterprise, messages, created) }.isFailure)
+            assertTrue(created.isEmpty())
+            val row = e.seed(enterprise)
+            val usage = AssistantUsagePreferences(ConfigurationReference.random(), presetMessages = UsageValue(listOf(
+                UIMessage(role = MessageRole.USER, parts = listOf(UIMessagePart.Document(e.payload.file(row.relativePath).toUri().toString(), "root.txt", "text/plain"))))))
+            val initial = e.settings.snapshotUserDocument()
+            e.disk.delegate.edit { it[SettingsStore.USER_SETTINGS] = JsonInstant.encodeToString(initial.copy(
+                preferences = initial.preferences.copy(scopes = listOf(ScopedUserPreferences(enterprise, assistantUsage = listOf(usage)))))) }
+            val other = enterprise.copy(userId = "another-user")
+            assertTrue(runCatching { e.artifacts.materializeConfigurationMessages(other, usage.presetMessages!!.value, created) }.isFailure)
+            assertTrue(created.isEmpty())
+            e.artifacts.abandonUnpublished(source)
+        }
+    }
+
     private suspend fun withStore(block: suspend (Environment) -> Unit) {
         val app = ApplicationProvider.getApplicationContext<Context>()
         val files = temporary.newFolder()

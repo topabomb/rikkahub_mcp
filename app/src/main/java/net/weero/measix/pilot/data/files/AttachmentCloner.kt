@@ -83,7 +83,7 @@ internal object AttachmentCloner {
                     val sourceRef = part.metadata?.let(toolArtifactRewriter::decodeArtifactRef)
                     if (sourceRef != null) {
                         val rewritten = toolArtifactRewriter.rewriteToolOutput(
-                            output = part.output,
+                            output = clonePartsInternal(part.output, artifactStore, createdArtifacts, toolArtifactRewriter, copiedArtifacts),
                             metadata = part.metadata,
                             copiedArtifacts = copiedArtifacts,
                         )
@@ -101,7 +101,27 @@ internal object AttachmentCloner {
                         )
                     }
                 }
-                rebindAttachmentInput(cloned, artifactStore, copiedArtifacts)
+                val archive = cloned.runtimeState.archive
+                val archiveCopy = archive?.artifact?.relativePath
+                    ?.let { artifactStore.file(LocalArtifactRef(relativePath = it, mimeType = archive.artifact.mimeType)) }
+                    ?.let(::canonicalPath)?.let(copiedArtifacts::get)
+                val rebound = if (archive != null && archiveCopy != null) {
+                    cloned.copy(
+                        runtimeState = cloned.runtimeState.copy(archive = archive.copy(
+                            ref = archiveCopy.entity.id,
+                            artifact = archive.artifact.copy(relativePath = archiveCopy.localRef.relativePath),
+                        )),
+                        output = cloned.output.map { output ->
+                            if (output is UIMessagePart.Text && output.text.startsWith("[Archived tool result: ref=${archive.ref};")) {
+                                output.copy(text = output.text.replaceFirst(
+                                    "[Archived tool result: ref=${archive.ref};",
+                                    "[Archived tool result: ref=${archiveCopy.entity.id};",
+                                ))
+                            } else output
+                        },
+                    )
+                } else cloned
+                rebindAttachmentInput(rebound, artifactStore, copiedArtifacts)
             }
             else -> part
         }

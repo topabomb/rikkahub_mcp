@@ -341,7 +341,7 @@ Android 媒体接线按下列所有权完成：`PortalMediaStore` 管理独占�
 | 模型消费者（C5） | 主/子、标题/建议/摘要、附件识别和图片生成已接入原域模型捕获、逐请求准入与 binding；完整工具调用示例继续实施 |
 | MCP / Gateway（C5、U2） | 企业固定选择已有 UI；仍需接通原 MCP runtime/catalog/OAuth owner、企业 binding 与示例实际工具执行 |
 | 语音（C5、U2） | 仍需 TTS/ASR 的企业/用户目录、私有 binding、原请求准入及本地音频/转写 adapter |
-| 文件与 Workspace（C6） | 会话/记忆、目录、图片、背景、参考输入及附件/富文本出口已分域验证；Workspace 上传/终端/SAF 已完成本批实现与完整门禁；共享配置资产进入聊天的复制仍待完成 |
+| 文件与 Workspace（C6） | 会话/记忆、目录、图片、背景、参考输入及附件/富文本出口已分域验证；Workspace 上传/终端/SAF 已完成本批实现与完整门禁；共享配置预设附件的目标域复制及 Draft/Child 交接已完成，完整门禁通过；整体 UI/版本验收仍待最终收口 |
 | 个人备份（C7） | 个人 Settings 保全已实现；备份仍需个人闭合图导出、恢复合并保全最新企业图和系统备份边界，不能用 Settings 测试代表数据保全 |
 | 完整示例与 UI（M1、U2） | 正式企业入口、Portal、公开模板和私有文件 ignore 已有；仍需原生整包导入/场景管理、工具批次 mock、Starter 预填及剩余资源/助手页面 |
 | 退休与发行（R1、V1） | 消费者完成后删除旧 managed overlay 链，再做 E01–E12、Release/硬件验收和版本 20 交付；真实后台属于下一阶段 |
@@ -601,3 +601,8 @@ PTY 最终串行 `test assembleDebug lintDebug assembleRelease connectedDebugAnd
 SAF 批次已删除 Provider 直连 DAO/Manager、查询时建目录以及移动失败后的复制删除回退。URI 保持 `ws/{root}/{path}`，注册查找复用 `root` 唯一索引；命令复用既有 workspaceId stripe，双操作去重排序并在锁内复验。底层与 Rootfs 复用同一 JNI 文件设施，目录句柄处理 NOFOLLOW、验证后截断和原子重命名；复制 staging 使用既有 `tmp/`，失败按原所有权清理，普通用户文件名不被隐藏。描述符移交后归外部客户端，不承诺随切域撤销。
 
 该批最终串行 `test assembleDebug lintDebug assembleRelease connectedDebugAndroidTest` 通过（13 分 59 秒）：App 2,085 项 JVM、Android 17 模拟器 App 189 项与 Speech 6 项无失败；App/Workspace lint 均为 0 错误，分别有 287/11 项警告。Workspace JVM 保留 11 项 Windows 条件跳过，设备 12 项中保留 1 项硬链接条件跳过。真实 Provider/Room/JNI 消费者覆盖注册操作、锁冲突、缺失目录、非法 URI、符号链接、复制失败清理和 PFD 取消；目录句柄另验证路径替换后仍作用原目录。未新增表、索引或配置结构。证据见 `build/reports/enterprise/workspace-documents-verification.json`；此批不代替系统文件选择器人工验收、Release 设备、完整 PRoot 或真实平台验收。其余 C6、MCP/Gateway、Speech、备份、UI/示例与版本 20 整体验收继续实施。
+
+
+共享配置预设附件已通过原 Artifact 创建协议物化到目标域：媒体、工具交付 metadata、嵌套输出及归档引用使用同一复制映射，原配置文件和归属保持不变。主 Draft 由 Runtime 保留创建令牌，首 USER 单事务提交；失败可重试，闲置丢弃交还 GC；Child 复用既有创建/链接/补偿。未新增 schema、配置区或持久化 owner。独立复审发现的发布/读取竞态和工具多图片重写问题均已关闭。
+
+本批最终串行 `test assembleDebug lintDebug assembleRelease connectedDebugAndroidTest` 通过（16 分 36 秒）：App 2,088 项 JVM、Android 17 模拟器 App 190 项与 Speech 6 项无失败；App/Workspace lint 均为 0 错误，分别有 287/11 项警告。Workspace JVM 保留 11 项 Windows 条件跳过，设备 12 项中保留 1 项硬链接条件跳过。真实设备消费者使用正式 Room/FTS 建库入口，验证企业 Draft 预览、源删除、首消息事务失败与重试、提交后读取及关页撤权。证据见 `build/reports/enterprise/configuration-assets-verification.json`；不替代 Release 设备、实体机、系统选择器人工验收或真实平台互操作。MCP/Gateway、Speech、备份、UI/示例和版本 20 整体验收继续实施，最后仍须对整份需求做独立审查。

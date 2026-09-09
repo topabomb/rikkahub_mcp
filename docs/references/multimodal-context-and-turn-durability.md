@@ -115,6 +115,12 @@ Tool Result checkpoint（消息与 Artifact 引用同事务）
   `attachments` 输入数组中的 `/upload` 路径，使工具卡查询和后续引用指向新会话副本。UUID、其他字段与正文不改，
   未复制的路径不触发额外文件复制，查询层不增加源路径别名；详见子助手多模态参考的文件寿命与 fork 协议。
 
+助手预设消息进入主聊天或子助手时，`ArtifactStore.materializeConfigurationMessages` 先按已提交的共享/本主体配置根校验并保留源，再去重复制为目标 scope 的独立附件。现有 `AttachmentCloner` 使用这份复制映射重写媒体、工具交付 metadata、嵌套输出与归档 ID/marker；复制后的每个文件必须仍有消息引用。源 scope、原消息和逻辑附件 handle 不变，不新增表或目录别名。
+
+主聊天在 Settings → Conversation → Artifact 的锁序内惰性创建预设副本。`ConversationRuntime` 持有 `ConversationDraft` 的创建令牌，多页面共用一个 Draft；首 USER 仍通过原单事务建立会话、消息和引用。事务失败保留 Draft，提交后晋升并发布令牌，发布回执失败可由后续打开重试。无人使用的 Draft 清理同步将未提交副本交还 GC。子助手沿既有 `createdArtifacts`、Child 创建、父调用链接提交与补偿链交接。
+
+Draft 预览、读图和附件导出通过原 `ConversationViewLease` 查询其 Runtime 持有的令牌。Artifact owner 在同一 lifecycle 临界区裁决：未发布必须匹配该文件的创建令牌，发布后按普通 ACTIVE/scope 规则读取；发布与读取交错不会误判失效。关闭页面或切换原选择仍撤销访问，其他页面不能凭同域身份读取未发布副本。
+
 配置文件引用直接来自已提交的 `UserSettingsDocument`：共享用户头像、所有助手定义的头像/背景/预设消息，以及全部主体保留的使用覆盖。预设消息复用消息附件引用规则，包含嵌套工具输出与结构化交付物；不会只检查当前选中企业或当前显示的助手。
 
 `SettingsStore` 持有唯一配置写锁，`ArtifactSettingsCoordinator` 仅适配该协议，不另持锁或缓存。新增引用按 Settings writer → Artifact lifecycle → DataStore 提交回执 → creation pin 交接执行；普通 Settings 写入不能绕过新增引用校验。共享定义资产归个人域，使用覆盖可引用个人配置资产或本主体资产，不能反向把企业资产挂到个人定义。启动备份的配置恢复同样按 Settings → Artifact 执行，在锁内将旧备份中失去 metadata 或 payload 的可变配置引用回退默认后提交；不会因失效头像/背景阻断整份个人备份。仍可用的资产必须属于个人域。恢复入口不等待尚未开放的 recovery gate，普通新增引用保持严格校验。

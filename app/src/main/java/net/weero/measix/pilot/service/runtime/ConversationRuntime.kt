@@ -59,7 +59,18 @@ class ConversationRuntime internal constructor(
     private val scope: CoroutineScope,
     private val onIdle: (Uuid) -> Unit,
     private val idleTimeoutMs: Long = IDLE_TIMEOUT_MS,
+    draftAssets: ConversationDraft? = null,
 ) {
+    private val ownedDraft = AtomicReference(draftAssets)
+
+    internal fun draftArtifacts() = ownedDraft.get()?.artifacts.orEmpty()
+
+    internal suspend fun publishDraftArtifacts() {
+        val draft = ownedDraft.get() ?: return
+        draft.publish()
+        ownedDraft.compareAndSet(draft, null)
+    }
+
     // 唯一事实流：durable 聚合 + 唯一高频流式投影
     private val _snapshot = MutableStateFlow(
         ConversationRuntimeSnapshot(durable = initial, stream = null),
@@ -694,6 +705,7 @@ class ConversationRuntime internal constructor(
         _activeTurn.value?.worker?.cancel()
         _activeTurn.value = null
         ownedRequests.clear()
+        ownedDraft.getAndSet(null)?.close()
         ttsQueueSessionId = null
         idleCheckJob?.cancel()
         idleCheckJob = null
@@ -706,6 +718,11 @@ internal class ConversationRuntimeLease internal constructor(
     private val runtime: ConversationRuntime,
 ) : AutoCloseable {
     private val closed = AtomicBoolean(false)
+
+    internal fun draftArtifacts(): List<net.weero.measix.pilot.data.files.OwnedArtifact> {
+        check(!closed.get()) { "conversation_runtime_lease_closed" }
+        return runtime.draftArtifacts()
+    }
 
     override fun close() {
         if (closed.compareAndSet(false, true)) runtime.releaseLease()

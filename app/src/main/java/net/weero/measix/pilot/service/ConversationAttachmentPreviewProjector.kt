@@ -68,10 +68,10 @@ class ConversationAttachmentPreviewProjector(
                         ?.let { file ->
                             try {
                                 when (part) {
-                                    is UIMessagePart.Image -> artifactStore.resolveImagePreviewForFile(scope, file)
-                                    is UIMessagePart.Document -> artifactStore.resolveMediaPreviewForFile(scope, file, part.mime)
-                                    is UIMessagePart.Audio -> artifactStore.resolveMediaPreviewForFile(scope, file)
-                                    is UIMessagePart.Video -> artifactStore.resolveMediaPreviewForFile(scope, file)
+                                    is UIMessagePart.Image -> artifactStore.resolveImagePreviewForFile(scope, file, source.ownedArtifact(file))
+                                    is UIMessagePart.Document -> artifactStore.resolveMediaPreviewForFile(scope, file, part.mime, source.ownedArtifact(file))
+                                    is UIMessagePart.Audio -> artifactStore.resolveMediaPreviewForFile(scope, file, owner = source.ownedArtifact(file))
+                                    is UIMessagePart.Video -> artifactStore.resolveMediaPreviewForFile(scope, file, owner = source.ownedArtifact(file))
                                     else -> null
                                 }
                             } catch (cancelled: CancellationException) {
@@ -82,7 +82,7 @@ class ConversationAttachmentPreviewProjector(
                         }
                 }
 
-                is AttachmentReferenceTarget.ManagedArtifact -> resolveManagedPreview(scope, target)
+                is AttachmentReferenceTarget.ManagedArtifact -> resolveManagedPreview(source, target)
 
                 AttachmentReferenceTarget.Conflict -> null
             }
@@ -128,7 +128,7 @@ class ConversationAttachmentPreviewProjector(
                 if (LocalToolPath.parseUploadToolPath(path) == null || path in projected) continue
                 try {
                     val file = artifactStore.resolveToolPath(path) ?: continue
-                    artifactStore.resolveImagePreviewForFile(scope, file)?.let {
+                    artifactStore.resolveImagePreviewForFile(scope, file, source.ownedArtifact(file))?.let {
                         projected[path] = AttachmentPreview(it.uri, files.conversationImageSource(source, it.artifactId, it.displayName, it.modifiedAtMillis))
                     }
                 } catch (cancelled: CancellationException) {
@@ -146,12 +146,14 @@ class ConversationAttachmentPreviewProjector(
         return projected
     }
 
-    private suspend fun resolveManagedPreview(scope: ConfigurationScope, target: AttachmentReferenceTarget.ManagedArtifact): ArtifactMediaPreview? {
+    private suspend fun resolveManagedPreview(source: ConversationViewLease, target: AttachmentReferenceTarget.ManagedArtifact): ArtifactMediaPreview? {
         return try {
+            val scope = source.access.scope
+            val owner = source.ownedArtifact(target.artifact)
             if (target.type == "image") {
-                artifactStore.resolveImagePreviewForArtifact(scope, target.artifact)
+                artifactStore.resolveImagePreviewForArtifact(scope, target.artifact, owner)
             } else {
-                artifactStore.resolveMediaPreviewForArtifact(scope, target.artifact)
+                artifactStore.resolveMediaPreviewForArtifact(scope, target.artifact, owner)
             }
         } catch (cancelled: CancellationException) {
             throw cancelled

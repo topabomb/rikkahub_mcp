@@ -92,7 +92,7 @@ class FileManagementApplicationService internal constructor(
                 else -> null
             } ?: return@withContentAccess null
             when (source) {
-                is RenderedContentSource.Conversation -> artifactStore.resolveMediaPreviewForFile(source.view.access.scope, file)
+                is RenderedContentSource.Conversation -> artifactStore.resolveMediaPreviewForFile(source.view.access.scope, file, owner = source.view.ownedArtifact(file))
                 RenderedContentSource.UserConfiguration -> artifactStore.resolveConfigurationMedia(file)
                 RenderedContentSource.Static -> null
             }
@@ -105,7 +105,7 @@ class FileManagementApplicationService internal constructor(
         val target = requireNotNull(preview.fileTarget) { "attachment_unavailable" }
         val mime = withContentAccess(target.source) {
             when (val source = target.source) {
-                is RenderedContentSource.Conversation -> artifactStore.copyMediaTo(source.view.access.scope, target.artifactId, output)
+                is RenderedContentSource.Conversation -> artifactStore.copyMediaTo(source.view.access.scope, target.artifactId, output, source.view.ownedArtifact(target.artifactId))
                 RenderedContentSource.UserConfiguration -> artifactStore.copyConfigurationMediaTo(target.artifactId, output)
                 RenderedContentSource.Static -> error("attachment_unavailable")
             }
@@ -119,7 +119,7 @@ class FileManagementApplicationService internal constructor(
         val target = requireNotNull(preview.fileTarget) { "attachment_unavailable" }
         withContentAccess(target.source) {
             when (val source = target.source) {
-                is RenderedContentSource.Conversation -> artifactStore.requireMediaAccess(source.view.access.scope, target.artifactId)
+                is RenderedContentSource.Conversation -> artifactStore.requireMediaAccess(source.view.access.scope, target.artifactId, source.view.ownedArtifact(target.artifactId))
                 RenderedContentSource.UserConfiguration -> artifactStore.requireConfigurationMediaAccess(target.artifactId)
                 RenderedContentSource.Static -> error("attachment_unavailable")
             }
@@ -136,22 +136,23 @@ class FileManagementApplicationService internal constructor(
         displayName = displayName,
         modifiedAtMillis = modifiedAtMillis,
         requireOwner = view::requireOpen,
+        artifactOwner = view::ownedArtifact,
     )
 
-    private fun createImageSource(contextIdentity: String, key: ManagedFileKey, displayName: String? = null, modifiedAtMillis: Long? = null, requireOwner: () -> Unit): ImageSource = ImageSource(
+    private fun createImageSource(contextIdentity: String, key: ManagedFileKey, displayName: String? = null, modifiedAtMillis: Long? = null, artifactOwner: (Long) -> net.weero.measix.pilot.data.files.OwnedArtifact? = { null }, requireOwner: () -> Unit): ImageSource = ImageSource(
         cacheIdentity = "$contextIdentity:$key",
         origin = if (key is ManagedFileKey.Generated) ImageOrigin.GENERATED else ImageOrigin.UPLOAD,
         displayName = displayName,
         modifiedAtMillis = modifiedAtMillis,
         verifyAccess = { withImageAccess(key, requireOwner) {
             when (key) {
-                is ManagedFileKey.Artifact -> artifactStore.requireImageAccess(key.selection.access.scope, key.artifactId)
+                is ManagedFileKey.Artifact -> artifactStore.requireImageAccess(key.selection.access.scope, key.artifactId, artifactOwner(key.artifactId))
                 is ManagedFileKey.Generated -> generatedMediaStore.requireImageAccess(key.selection.access.scope, key.mediaId)
             }
         } },
         readPayload = { withImageAccess(key, requireOwner) {
             when (key) {
-                is ManagedFileKey.Artifact -> artifactStore.readImage(key.selection.access.scope, key.artifactId)
+                is ManagedFileKey.Artifact -> artifactStore.readImage(key.selection.access.scope, key.artifactId, artifactOwner(key.artifactId))
                 is ManagedFileKey.Generated -> generatedMediaStore.readImage(key.selection.access.scope, key.mediaId)
             }
         } },
@@ -199,7 +200,7 @@ class FileManagementApplicationService internal constructor(
                 net.weero.measix.pilot.data.files.LocalToolPath.parseUploadToolPath(url) != null -> artifactStore.resolveToolPath(url)
                 else -> null
             } ?: return@withSelectedRealmSelection null
-            artifactStore.resolveImagePreviewForFile(view.access.scope, file)
+            artifactStore.resolveImagePreviewForFile(view.access.scope, file, view.ownedArtifact(file))
         }
         requireImagePage(view)
         return preview?.let { conversationImageSource(view, it.artifactId, it.displayName, it.modifiedAtMillis) }

@@ -132,7 +132,7 @@ class ConversationCommandCoordinator(
 
     internal suspend fun openForView(
         request: ConversationOpenRequest,
-        draft: Conversation?,
+        draft: (suspend () -> ConversationDraft)? = null,
     ): ConversationRuntimeLease = gated { operationLocks.withLock(request.id) {
         val header = registry.findRuntime(request.id)?.durable?.header ?: repository.getConversationHeader(request.id)
         if (header != null) {
@@ -145,10 +145,19 @@ class ConversationCommandCoordinator(
             throw ConversationNotFoundException(request.id)
         }
         val runtime = if (header != null) registry.loadRuntime(request.id) else {
-            val candidate = requireNotNull(draft) { "conversation_draft_assistant_unavailable" }
-            check(candidate.id == request.id && candidate.scope == request.access.scope)
-            registry.installDraft(candidate)
+            val candidate = requireNotNull(draft) { "conversation_draft_assistant_unavailable" }.invoke()
+            var installed = false
+            try {
+                check(candidate.conversation.id == request.id && candidate.conversation.scope == request.access.scope)
+                coroutineContext.ensureActive()
+                withContext(NonCancellable) {
+                    registry.installDraft(candidate.conversation, candidate).also { installed = true }
+                }
+            } finally {
+                if (!installed) candidate.close()
+            }
         }
+        if (!runtime.durable.header.newConversation) runtime.publishDraftArtifacts()
         registry.acquireRegisteredRuntime(request.id, runtime)
     } }
 
@@ -419,6 +428,7 @@ class ConversationCommandCoordinator(
             commitDurable(durable.write)
             runtime.publishCommitted(command, durable.snapshot)
             if (promoteDraft) registry.promoteDraft(runtime.id, runtime)
+            runtime.publishDraftArtifacts()
         }
     }
 
@@ -528,4 +538,15 @@ sealed interface ConversationDeletionResult {
     data object Success : ConversationDeletionResult
     data object AlreadyDeleted : ConversationDeletionResult
     data class Failure(val error: Throwable) : ConversationDeletionResult
+}
+
+/** Prepared outside persistence; Runtime takes the creation pins when it installs the Draft. */
+internal class ConversationDraft(
+    val conversation: Conversation,
+    private val store: net.weero.measix.pilot.data.files.ArtifactStore,
+    artifacts: List<net.weero.measix.pilot.data.files.OwnedArtifact>,
+) : AutoCloseable {
+    val artifacts = artifacts.toList()
+    suspend fun publish() = store.publishAllUnpublished(artifacts)
+    override fun close() = artifacts.forEach(store::abandonUnpublished)
 }

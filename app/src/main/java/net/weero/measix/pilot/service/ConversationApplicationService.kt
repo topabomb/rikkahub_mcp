@@ -139,19 +139,32 @@ class ConversationApplicationService internal constructor(
     suspend fun initialize(request: ConversationOpenRequest): ConversationViewLease {
         recoveryGate.awaitReady()
         return sessions.withSelectedRealmAccess(request.access) {
-            val draft = (request as? ConversationOpenRequest.NewDraft)?.let { creation ->
-                settingsStore.withResolvedConfiguration(creation.access.scope, sessions.state.value) { configuration ->
-                    configuration.assistants[creation.assistantId]
-                        ?.takeIf { configuration.selection(ConfigurationCategory.ASSISTANT, it.id).isAvailable }
-                        ?.let { assistant ->
-                            Conversation.ofId(id = creation.id, assistantId = assistant.id, newConversation = true)
-                                .copy(scope = creation.access.scope)
-                                .updateCurrentMessages(assistant.presetMessages)
+            val lease = if (request is ConversationOpenRequest.NewDraft) {
+                settingsStore.withResolvedConfiguration(request.access.scope, sessions.state.value) { configuration ->
+                    commandCoordinator.openForView(request) {
+                        val assistant = requireNotNull(configuration.assistants[request.assistantId]) { "conversation_assistant_missing" }
+                        check(configuration.selection(ConfigurationCategory.ASSISTANT, assistant.id).isAvailable) { "conversation_assistant_unavailable" }
+                        val owned = mutableListOf<net.weero.measix.pilot.data.files.OwnedArtifact>()
+                        try {
+                            val presets = artifactStore.materializeConfigurationMessages(request.access.scope, assistant.presetMessages, owned)
+                            net.weero.measix.pilot.service.runtime.ConversationDraft(
+                                Conversation.ofId(id = request.id, assistantId = assistant.id, newConversation = true)
+                                    .copy(scope = request.access.scope).updateCurrentMessages(presets),
+                                artifactStore, owned.toList(),
+                            )
+                        } catch (error: Throwable) {
+                            withContext(NonCancellable) {
+                                owned.asReversed().forEach { artifact ->
+                                    try { artifactStore.discardUnpublished(artifact).requireDiscarded("preset materialization rollback") }
+                                    catch (cleanup: Throwable) { error.addSuppressed(cleanup) }
+                                }
+                            }
+                            throw error
                         }
+                    }
                 }
-            }
-            val lease = commandCoordinator.openForView(request, draft)
-            ConversationViewLease(request.id, request.access, sessions.selectionRevision.value, lease::close)
+            } else commandCoordinator.openForView(request)
+            ConversationViewLease(request.id, request.access, sessions.selectionRevision.value, lease::draftArtifacts, lease::close)
         }
     }
 

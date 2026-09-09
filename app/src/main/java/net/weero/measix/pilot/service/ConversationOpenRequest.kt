@@ -34,6 +34,7 @@ class ConversationViewLease internal constructor(
     val conversationId: Uuid,
     internal val access: RealmAccess,
     internal val selectionRevision: Long,
+    private val draftArtifacts: () -> List<net.weero.measix.pilot.data.files.OwnedArtifact> = { emptyList() },
     private val closeAction: () -> Unit,
 ) : AutoCloseable {
     internal val imageReadIdentity = Uuid.random()
@@ -44,6 +45,22 @@ class ConversationViewLease internal constructor(
 
     internal fun requireOpen() {
         check(!closedOnce.get()) { "conversation_view_closed" }
+    }
+
+    internal fun ownedArtifact(id: Long): net.weero.measix.pilot.data.files.OwnedArtifact? {
+        requireOpen()
+        return draftArtifacts().find { it.entity.id == id }
+    }
+
+    internal fun ownedArtifact(ref: net.weero.measix.pilot.data.files.LocalArtifactRef): net.weero.measix.pilot.data.files.OwnedArtifact? {
+        requireOpen()
+        return draftArtifacts().find { it.localRef == ref }
+    }
+
+    internal fun ownedArtifact(file: java.io.File): net.weero.measix.pilot.data.files.OwnedArtifact? {
+        requireOpen()
+        val path = file.canonicalPath
+        return draftArtifacts().find { net.weero.measix.pilot.data.ai.attachments.AttachmentRefs.parseFileUrl(it.uri.toString())?.canonicalPath == path }
     }
 
     override fun close() {

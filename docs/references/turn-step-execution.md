@@ -110,7 +110,7 @@ Tool 的 `stepId` 指向前方最近的 Step，`localCallId` 在 owning Assistan
 
 ## START 与交互继续
 
-新聊天先是非持久化 Draft，首条 `AppendUserMessage` 单事务创建会话并原位晋升 Ready。
+新聊天先是非持久化 Draft，首条 `AppendUserMessage` 单事务创建会话并原位晋升 Ready。共享预设附件在安装 Draft 前由 ArtifactStore 复制到目标域，创建令牌随原 Runtime 保留；重复打开不重复复制。提交失败保持 Draft 与附件，提交后沿原会话协议发布，闲置丢弃时同步交还 GC。细节见多模态持久化参考。
 页面打开通过 `ConversationApplicationService.initialize` 校验原 selected RealmAccess，再由 `openForView` 在会话锁内先检查
 resident/Room header 的完整 scope 与根会话身份，之后才加载消息树或安装显式 Draft。已有会话不存在时返回 Missing，禁止回退新建。
 已晋升聊天保留原 Runtime 与导航项；恢复的 `NewDraft` 请求若已有持久 header，就读取已提交内容，不重放助手 preset。

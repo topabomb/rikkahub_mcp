@@ -110,6 +110,65 @@ class ManagedFileCreationIntegrationTest {
         check(root.deleteRecursively())
     }
 
+    @Test fun enterprisePresetDraftKeepsPreviewUntilFirstMessageOwnsItsIndependentCopy() = runBlocking {
+        database.close()
+        database = net.weero.measix.pilot.data.db.createAppDatabase(payloadContext, File(root, "presets.db").absolutePath)
+        store = newStore()
+        store.ensureReferenceProjection()
+        val packet = payloadContext.assets.open(LocalEnterpriseSource.EXAMPLE_ASSET).use(EnterprisePackageCodec::decode)
+        val sessions = EnterpriseSessionController(EnterpriseAppliedStore(File(root, "preset-session")))
+        sessions.enrollLocal(packet.identity, { packet.identity }, { packet })
+        val selected = requireNotNull(sessions.observeSelectedRealmSelection().first())
+        val source = store.createFromBytes(ConfigurationScope.Personal, pngBytes(), "preset.png", "image/png", origin = ArtifactOrigin.USER)
+        val assistant = Assistant(presetMessages = listOf(UIMessage(role = MessageRole.USER, parts = listOf(UIMessagePart.Image(source.uri.toString())))))
+        store.updateSettingsReferences { it.copy(assistants = listOf(assistant)) }
+        val repository = net.weero.measix.pilot.data.repository.ConversationRepository(database.conversationDao(), database.messageNodeDao(),
+            database.favoriteDao(), database, net.weero.measix.pilot.data.db.fts.MessageFtsManager(database), database.turnExecutionDao(),
+            database.toolExecutionDao(), database.conversationModelContextDao(), store)
+        val locks = net.weero.measix.pilot.service.runtime.ConversationOperationLocks()
+        val registry = net.weero.measix.pilot.service.runtime.ConversationRuntimeRegistry(appScope, repository, locks)
+        val gate = ApplicationRecoveryGate().apply { ready() }
+        val commands = net.weero.measix.pilot.service.runtime.ConversationCommandCoordinator(registry, repository, gate, locks)
+        val request = ConversationOpenRequest.NewDraft(kotlin.uuid.Uuid.random(), selected.access, assistant.id)
+        val runtimeLease = settings.withResolvedConfiguration(selected.access.scope, sessions.state.value) {
+            commands.openForView(request) {
+                val owned = mutableListOf<OwnedArtifact>()
+                val messages = store.materializeConfigurationMessages(selected.access.scope, assistant.presetMessages, owned)
+                net.weero.measix.pilot.service.runtime.ConversationDraft(
+                    net.weero.measix.pilot.data.model.Conversation.ofId(request.id, assistant.id, newConversation = true)
+                        .copy(scope = selected.access.scope).updateCurrentMessages(messages), store, owned)
+            }
+        }
+        val view = ConversationViewLease(request.id, selected.access, selected.revision, runtimeLease::draftArtifacts, runtimeLease::close)
+        val files = FileManagementApplicationService(store, GeneratedMediaStore(root, GenMediaRepository(database.genMediaDao()), store), gate, sessions)
+        val copied = runtimeLease.draftArtifacts().single()
+        assertEquals(null, repository.getConversationHeader(request.id))
+        val image = requireNotNull(files.resolveConversationImage(view, copied.uri.toString()))
+        assertArrayEquals(pngBytes(), image.readBytes())
+        val otherView = ConversationViewLease(request.id, selected.access, selected.revision) {}
+        assertEquals(null, files.resolveConversationImage(otherView, copied.uri.toString()))
+        store.updateSettingsReferences { it.copy(assistants = emptyList()) }
+        assertTrue(store.deleteUserRequested(ConfigurationScope.Personal, source.entity.id) is ArtifactDeleteResult.Completed)
+        assertArrayEquals(pngBytes(), image.readBytes())
+        database.openHelper.writableDatabase.execSQL("CREATE TRIGGER reject_preset_commit BEFORE INSERT ON ConversationEntity BEGIN SELECT RAISE(ABORT, 'test insert rejected'); END")
+        assertTrue(runCatching { commands.executeOrThrow(request.id,
+            net.weero.measix.pilot.service.runtime.AppendUserMessage(UIMessage.user("first"))) }.isFailure)
+        assertEquals(null, repository.getConversationHeader(request.id))
+        assertEquals(listOf(copied), runtimeLease.draftArtifacts())
+        assertArrayEquals(pngBytes(), image.readBytes())
+        database.openHelper.writableDatabase.execSQL("DROP TRIGGER reject_preset_commit")
+        commands.executeOrThrow(request.id, net.weero.measix.pilot.service.runtime.AppendUserMessage(UIMessage.user("first")))
+        assertTrue(runtimeLease.draftArtifacts().isEmpty())
+        assertEquals(selected.access.scope, repository.getConversationHeader(request.id)!!.scope)
+        assertEquals(2, repository.getConversationSnapshotById(request.id)!!.nodes.size)
+        // A reader captured immediately before publication follows the published artifact under the same scope.
+        assertArrayEquals(pngBytes(), store.readOwnedImage(selected.access.scope, copied))
+        assertArrayEquals(pngBytes(), image.readBytes())
+        view.close()
+        assertTrue(runCatching { image.readBytes() }.isFailure)
+        otherView.close()
+    }
+
     @Test fun sharedConfigurationImagesRequireDurableConfigurationRoots() = runBlocking {
         store.ensureReferenceProjection()
         val sessions = EnterpriseSessionController(EnterpriseAppliedStore(File(root, "configuration-image-session")))

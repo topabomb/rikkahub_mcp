@@ -357,7 +357,7 @@ class SubAssistantRunCoordinator internal constructor(
                     is LineageDecision.CreateNew,
                     is LineageDecision.CreateNewDueToError,
                     -> {
-                        val (childId, taskNodeId) = createNewChild(target, masterConversationId, userParts)
+                        val (childId, taskNodeId) = createNewChild(target, masterConversationId, userParts, createdArtifacts)
                         Materialized.Ready(childId, taskNodeId, preflight.lease.job, true, createdArtifacts.toList())
                     }
 
@@ -816,17 +816,18 @@ class SubAssistantRunCoordinator internal constructor(
         target: Assistant,
         masterConversationId: Uuid,
         userParts: List<UIMessagePart>,
+        createdArtifacts: MutableList<OwnedArtifact>,
     ): Pair<Uuid, Uuid> {
         val childId = Uuid.random()
         val masterScope = conversationRepo.getConversationHeader(masterConversationId)?.scope
             ?: error("Master conversation does not exist")
-        // 首次创建时只写入 Target 的 preset messages
+        val presets = artifactStore.materializeConfigurationMessages(masterScope, target.presetMessages, createdArtifacts)
         val taskMessage = UIMessage(role = MessageRole.USER, parts = userParts)
         val conversation = Conversation(
             id = childId,
             assistantId = target.id,
             title = target.name,
-            messageNodes = target.presetMessages.map { it.toMessageNode() } + taskMessage.toMessageNode(),
+            messageNodes = presets.map { it.toMessageNode() } + taskMessage.toMessageNode(),
             parentConversationId = masterConversationId,
             scope = masterScope,
         )

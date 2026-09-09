@@ -304,8 +304,8 @@ class ArtifactStore(
         return entity
     }
 
-    internal suspend fun requireImageAccess(scope: ConfigurationScope, artifactId: Long) = withContext(Dispatchers.IO) {
-        withLifecycleLock { requireReadableImage(scope, artifactId); Unit }
+    internal suspend fun requireImageAccess(scope: ConfigurationScope, artifactId: Long, owner: OwnedArtifact? = null) = withContext(Dispatchers.IO) {
+        withLifecycleLock { requireReadableImage(scope, artifactId, owner); Unit }
     }
 
     internal suspend fun requireOwnedImageAccess(scope: ConfigurationScope, artifact: OwnedArtifact) = withContext(Dispatchers.IO) {
@@ -315,9 +315,7 @@ class ArtifactStore(
     internal suspend fun readOwnedImage(scope: ConfigurationScope, artifact: OwnedArtifact): ByteArray =
         readImage(scope, artifact.entity.id, artifact)
 
-    internal suspend fun readImage(scope: ConfigurationScope, artifactId: Long): ByteArray = readImage(scope, artifactId, null)
-
-    private suspend fun readImage(scope: ConfigurationScope, artifactId: Long, owner: OwnedArtifact?): ByteArray = withContext(Dispatchers.IO) {
+    internal suspend fun readImage(scope: ConfigurationScope, artifactId: Long, owner: OwnedArtifact? = null): ByteArray = withContext(Dispatchers.IO) {
         withLifecycleLock {
             val entity = requireReadableImage(scope, artifactId, owner)
             readImagePayload(entity)
@@ -341,10 +339,9 @@ class ArtifactStore(
         val entity = artifactDAO.getById(artifactId) ?: error("artifact_media_unavailable")
         requireArtifactScope(entity, scope)
         check(entity.state == ArtifactState.ACTIVE.name) { "artifact_media_unavailable" }
-        if (owner == null) {
-            check(!synchronized(unpublishedPins) { unpublishedPins.containsKey(entity.id) }) { "artifact_media_not_published" }
-        } else {
-            check(owner.entity.id == entity.id && isPinnedBy(owner)) { "artifact_media_owner_released" }
+        val creationToken = synchronized(unpublishedPins) { unpublishedPins[entity.id] }
+        if (creationToken != null) {
+            check(owner?.entity?.id == entity.id && owner.ownershipToken == creationToken) { "artifact_media_not_published" }
         }
         val file = payloadStore.file(entity.relativePath)
         check(file.isFile && (LocalToolPath.isInsideDirectory(file, payloadStore.file(FileFolders.UPLOAD)) ||
@@ -352,14 +349,14 @@ class ArtifactStore(
         return entity
     }
 
-    internal suspend fun requireMediaAccess(scope: ConfigurationScope, artifactId: Long) = withContext(Dispatchers.IO) {
-        withLifecycleLock { requireReadableMedia(scope, artifactId); Unit }
+    internal suspend fun requireMediaAccess(scope: ConfigurationScope, artifactId: Long, owner: OwnedArtifact? = null) = withContext(Dispatchers.IO) {
+        withLifecycleLock { requireReadableMedia(scope, artifactId, owner); Unit }
     }
 
     /** Streams a published attachment under its lifetime lock; no raw file read grant escapes. */
-    internal suspend fun copyMediaTo(scope: ConfigurationScope, artifactId: Long, output: java.io.OutputStream): String = withContext(Dispatchers.IO) {
+    internal suspend fun copyMediaTo(scope: ConfigurationScope, artifactId: Long, output: java.io.OutputStream, owner: OwnedArtifact? = null): String = withContext(Dispatchers.IO) {
         withLifecycleLock {
-            val entity = requireReadableMedia(scope, artifactId)
+            val entity = requireReadableMedia(scope, artifactId, owner)
             payloadStore.copyTo(entity.relativePath, output)
             entity.mimeType
         }
@@ -381,26 +378,26 @@ class ArtifactStore(
     }
 
     /** Projection validates the original data scope; the returned URL is not a later read grant. */
-    suspend fun resolveImagePreviewForFile(scope: ConfigurationScope, file: File): ArtifactMediaPreview? = withContext(Dispatchers.IO) {
+    suspend fun resolveImagePreviewForFile(scope: ConfigurationScope, file: File, owner: OwnedArtifact? = null): ArtifactMediaPreview? = withContext(Dispatchers.IO) {
         val path = payloadStore.relativePathForFile(file) ?: return@withContext null
-        resolveActivePreview(scope, path, expectedMime = null, image = true)
+        resolveActivePreview(scope, path, expectedMime = null, image = true, owner = owner)
     }
 
-    suspend fun resolveImagePreviewForArtifact(scope: ConfigurationScope, ref: LocalArtifactRef): ArtifactMediaPreview? = withContext(Dispatchers.IO) {
+    suspend fun resolveImagePreviewForArtifact(scope: ConfigurationScope, ref: LocalArtifactRef, owner: OwnedArtifact? = null): ArtifactMediaPreview? = withContext(Dispatchers.IO) {
         if (ref.version != LocalArtifactRef.CURRENT_VERSION) return@withContext null
-        resolveActivePreview(scope, ref.relativePath, expectedMime = ref.mimeType, image = true)
+        resolveActivePreview(scope, ref.relativePath, expectedMime = ref.mimeType, image = true, owner = owner)
     }
 
-    suspend fun resolveMediaPreviewForFile(scope: ConfigurationScope, file: File, expectedMime: String? = null): ArtifactMediaPreview? =
+    suspend fun resolveMediaPreviewForFile(scope: ConfigurationScope, file: File, expectedMime: String? = null, owner: OwnedArtifact? = null): ArtifactMediaPreview? =
         withContext(Dispatchers.IO) {
             val path = payloadStore.relativePathForFile(file) ?: return@withContext null
-            resolveActivePreview(scope, path, expectedMime, image = false)
+            resolveActivePreview(scope, path, expectedMime, image = false, owner = owner)
         }
 
-    suspend fun resolveMediaPreviewForArtifact(scope: ConfigurationScope, ref: LocalArtifactRef): ArtifactMediaPreview? =
+    suspend fun resolveMediaPreviewForArtifact(scope: ConfigurationScope, ref: LocalArtifactRef, owner: OwnedArtifact? = null): ArtifactMediaPreview? =
         withContext(Dispatchers.IO) {
             if (ref.version != LocalArtifactRef.CURRENT_VERSION) return@withContext null
-            resolveActivePreview(scope, ref.relativePath, expectedMime = ref.mimeType, image = false)
+            resolveActivePreview(scope, ref.relativePath, expectedMime = ref.mimeType, image = false, owner = owner)
         }
 
     private suspend fun resolveActivePreview(
@@ -408,17 +405,20 @@ class ArtifactStore(
         relativePath: String,
         expectedMime: String?,
         image: Boolean,
+        owner: OwnedArtifact?,
     ): ArtifactMediaPreview? = withLifecycleLock {
         val entity = artifactDAO.getByPathAndState(relativePath.replace('\\', '/'), ArtifactState.ACTIVE.name)
             ?: return@withLifecycleLock null
         requireArtifactScope(entity, scope)
         if (expectedMime != null && !entity.mimeType.equals(expectedMime, ignoreCase = true)) return@withLifecycleLock null
-        if (synchronized(unpublishedPins) { unpublishedPins.containsKey(entity.id) }) return@withLifecycleLock null
+        if (synchronized(unpublishedPins) { unpublishedPins.containsKey(entity.id) }) {
+            if (owner?.entity?.id != entity.id || !isPinnedBy(owner)) return@withLifecycleLock null
+        }
         val file = payloadStore.file(entity.relativePath)
         if (!file.isFile || !(LocalToolPath.isInsideDirectory(file, payloadStore.file(FileFolders.UPLOAD)) ||
             LocalToolPath.isInsideDirectory(file, payloadStore.file("images")))) return@withLifecycleLock null
         if (image) {
-            requireReadableImage(scope, entity.id)
+            requireReadableImage(scope, entity.id, owner?.takeIf(::isPinnedBy))
             val bytes = payloadStore.readBytes(entity.relativePath, GeneratedMediaStore.MAX_IMAGE_BYTES.toLong())
             if (ImageMime.isUnsupportedNonImage(bytes, entity.mimeType) || !ImageMime.isAcceptedImage(bytes)) {
                 return@withLifecycleLock null
@@ -626,6 +626,71 @@ class ArtifactStore(
         folder = folder,
         origin = resolveOrigin(source.toUri(), ArtifactOrigin.GENERATED),
     )
+
+    /** Copies committed configuration roots into independent conversation-owned payloads. */
+    internal suspend fun materializeConfigurationMessages(
+        scope: ConfigurationScope,
+        messages: List<UIMessage>,
+        createdArtifacts: MutableList<OwnedArtifact>,
+    ): List<UIMessage> {
+        if (messages.isEmpty()) return messages
+        var retention: ArtifactRetentionLease? = null
+        try {
+            val sources = withLifecycleLock {
+                val roots = settingsCoordinator.readCommitted { document ->
+                    val scoped = ArtifactReferencePolicy.scopedRoots(document)
+                    (scoped[ConfigurationScope.Personal].orEmpty() + scoped[scope].orEmpty())
+                        .mapNotNullTo(hashSetOf(), ::rootRelativePath)
+                }
+                val selected = linkedMapOf<String, ArtifactEntity>()
+                messages.collectArtifactReferences().forEach { reference ->
+                    val path = requireNotNull(rootRelativePath(reference.token)) { "configuration_artifact_unmanaged" }
+                    val entity = requireNotNull(artifactDAO.getByPathAndState(path, ArtifactState.ACTIVE.name)) {
+                        "configuration_artifact_unavailable"
+                    }
+                    check(entity.scope == ConfigurationScope.Personal || entity.scope == scope) { "configuration_artifact_scope_mismatch" }
+                    check(path in roots && !synchronized(unpublishedPins) { unpublishedPins.containsKey(entity.id) }) {
+                        "artifact_not_in_committed_configuration"
+                    }
+                    check(reference.expectedArtifactId == null || reference.expectedArtifactId == entity.id) { "configuration_archive_identity_mismatch" }
+                    val file = payloadStore.file(path)
+                    check(file.isFile) { "configuration_artifact_unavailable" }
+                    val archive = reference.type == ArtifactReferenceType.TOOL_OUTPUT
+                    check(if (archive) path.startsWith("${FileFolders.TOOL_OUTPUTS}/") && entity.mimeType == "text/plain"
+                        else path.startsWith("${FileFolders.UPLOAD}/") || path.startsWith("images/")) {
+                        "configuration_artifact_kind_mismatch"
+                    }
+                    selected[path] = entity
+                }
+                retention = retainIds(selected.values.mapTo(hashSetOf(), ArtifactEntity::id))
+                selected
+            }
+            val copies = linkedMapOf<String, OwnedArtifact>()
+            sources.values.forEach { source ->
+                val file = payloadStore.file(source.relativePath)
+                val copied = copyFile(
+                    scope, file, source.mimeType, source.displayName,
+                    folder = if (source.relativePath.startsWith("${FileFolders.TOOL_OUTPUTS}/")) FileFolders.TOOL_OUTPUTS else FileFolders.UPLOAD,
+                    origin = ArtifactOrigin.valueOf(source.origin),
+                )
+                createdArtifacts += copied
+                copies[file.canonicalPath] = copied
+            }
+            val rewriter = ToolArtifactRewriter(requireNotNull(payloadStore.file(FileFolders.UPLOAD).parentFile), this)
+            val copiedCount = createdArtifacts.size
+            return messages.map { message -> message.copy(parts = AttachmentCloner.cloneParts(
+                message.parts, this, createdArtifacts, rewriter, copies,
+            )) }.also { rewritten ->
+                check(createdArtifacts.size == copiedCount) { "configuration_copy_unretained_source" }
+                val targetPaths = copies.values.mapTo(hashSetOf()) { it.localRef.relativePath }
+                check(rewritten.collectArtifactReferences().mapTo(hashSetOf()) { rootRelativePath(it.token) } == targetPaths) {
+                    "configuration_copy_unmapped_reference"
+                }
+            }
+        } finally {
+            retention?.close()
+        }
+    }
 
     /** Settings owns the writer before Artifact owns validation, commit and creation-pin handoff. */
     suspend fun updateSettingsReferences(transform: (Settings) -> Settings): Settings =

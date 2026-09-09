@@ -589,4 +589,4 @@ Local shadow 不因同 ID overlay 覆盖而删除；overlay 移除后恢复本�
 
 ### 文件目录与选择生命周期
 
-FileManagementQueryService 合成当前选择的上传与图库目录，条目保留原 RealmSelection；列表、候选数量和清理 SQL 都显式限定 scope。FileManagementApplicationService 在 Session 准入内编排原 ArtifactStore/GeneratedMediaStore，单项文件归属仍由原 owner 复验。页面切换会清除旧确认和预览；返回相同主体不会恢复旧选择的写权限。统计只消费本域已登记条目，查询失败可以在同域重试。输入框名称只查询原 Draft 当前附件。预览/导出/工具读取的全链路授权与共享配置资产物化仍按本期计划继续，不能据此宣称 C6 已全部完成。
+FileManagementQueryService 合成当前选择的上传与图库目录，条目保留原 RealmSelection；列表、候选数量和清理 SQL 都显式限定 scope。FileManagementApplicationService 在 Session 准入内编排原 ArtifactStore/GeneratedMediaStore，单项文件归属仍由原 owner 复验。页面切换会清除旧确认和预览；返回相同主体不会恢复旧选择的写权限。统计只消费本域已登记条目，查询失败可以在同域重试。输入框名称只查询原 Draft 当前附件。共享配置预设消息经 ArtifactStore 验证持久配置根后复制为目标域附件；主 Draft 由原 Runtime 持有创建令牌，子助手沿既有 Child 创建与链接提交交接。预览、导出和工具读取使用原页面/执行主体；Workspace 是显式共享空间，其文件与终端边界见 Workspace 参考。设备与整体验收状态以本期实施方案为准。

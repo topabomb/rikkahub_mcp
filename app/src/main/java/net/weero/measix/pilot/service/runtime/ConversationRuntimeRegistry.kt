@@ -136,7 +136,7 @@ class ConversationRuntimeRegistry(
         }
 
     /** Registers a non-durable new-chat draft. It is evicted without persistence when unused. */
-    internal suspend fun installDraft(conversation: Conversation): ConversationRuntime =
+    internal suspend fun installDraft(conversation: Conversation, assets: ConversationDraft? = null): ConversationRuntime =
         operationLocks.withLock(conversation.id) {
             val entry = entries.computeIfAbsent(conversation.id) { Entry() }
             entry.loadMutex.withLock {
@@ -145,7 +145,7 @@ class ConversationRuntimeRegistry(
                     is ConversationRuntimeState.Ready -> error(
                         "draft cannot replace a durable runtime: ${conversation.id}",
                     )
-                    else -> installRuntime(entry, conversation.toSnapshot(), draft = true)
+                    else -> installRuntime(entry, conversation.toSnapshot(), draft = true, draftAssets = assets)
                 }
             }
         }
@@ -296,6 +296,7 @@ class ConversationRuntimeRegistry(
         entry: Entry,
         snapshot: ConversationAggregateSnapshot,
         draft: Boolean,
+        draftAssets: ConversationDraft? = null,
     ): ConversationRuntime {
         val runtime = ConversationRuntime(
             id = snapshot.conversationId,
@@ -303,6 +304,7 @@ class ConversationRuntimeRegistry(
             scope = appScope,
             onIdle = ::removeIdleRuntime,
             idleTimeoutMs = idleTimeoutMs,
+            draftAssets = draftAssets,
         )
         entry.state.value = if (draft) {
             ConversationRuntimeState.Draft(runtime)

@@ -92,7 +92,13 @@ class ConversationPageAccessTest {
         try {
             val draft = Conversation.ofId(id, request.assistantId, newConversation = true)
                 .updateCurrentMessages(listOf(UIMessage.user("preset")))
-            val lease = coordinator.openForView(request, draft)
+            val store = mockk<net.weero.measix.pilot.data.files.ArtifactStore>(relaxed = true)
+            val owned = mockk<net.weero.measix.pilot.data.files.OwnedArtifact>()
+            var publicationAttempts = 0
+            coEvery { store.publishAllUnpublished(listOf(owned)) } answers {
+                if (publicationAttempts++ == 0) throw java.io.IOException("publication acknowledgement")
+            }
+            val lease = coordinator.openForView(request) { net.weero.measix.pilot.service.runtime.ConversationDraft(draft, store, listOf(owned)) }
             val runtime = registry.findRuntime(id)
             coordinator.openForView(request, null).close()
             assertSame(runtime, registry.findRuntime(id))
@@ -101,7 +107,11 @@ class ConversationPageAccessTest {
             assertFails<ConversationNotFoundException> {
                 coordinator.openForView(ConversationOpenRequest.OpenExisting(id, request.access), null)
             }
-            coordinator.executeOrThrow(id, AppendUserMessage(UIMessage.user("first")))
+            assertFails<java.io.IOException> { coordinator.executeOrThrow(id, AppendUserMessage(UIMessage.user("first"))) }
+            assertEquals(listOf(owned), lease.draftArtifacts())
+            coordinator.openForView(request) { error("resident draft must not materialize twice") }.close()
+            assertTrue(lease.draftArtifacts().isEmpty())
+            assertEquals(2, publicationAttempts)
             assertSame(runtime, registry.findRuntime(id))
             assertFalse(registry.isDraft(id))
             lease.close()
@@ -112,6 +122,36 @@ class ConversationPageAccessTest {
             assertEquals(listOf("preset", "first"), restoredRegistry.findRuntime(id)!!.durable.nodes.map { it.currentMessage.toText() })
             coVerify(exactly = 1) { repository.commit(any()) }
             coVerify(exactly = 1) { repository.getConversationSnapshotById(id) }
+        } finally { appScope.cancel() }
+    }
+
+    @Test fun `closing the last draft page releases its preset ownership without persistence`() = runTest {
+        val appScope = AppScope(StandardTestDispatcher(testScheduler))
+        val repository = mockk<ConversationRepository>()
+        val locks = ConversationOperationLocks()
+        val registry = ConversationRuntimeRegistry(appScope, repository, locks)
+        val coordinator = ConversationCommandCoordinator(registry, repository, gate(), locks)
+        val store = mockk<net.weero.measix.pilot.data.files.ArtifactStore>(relaxed = true)
+        val owned = mockk<net.weero.measix.pilot.data.files.OwnedArtifact>()
+        val id = Uuid.random()
+        val request = ConversationOpenRequest.NewDraft(id, RealmAccess.Personal, ConfigurationReference.random())
+        coEvery { repository.getConversationHeader(id) } returns null
+        try {
+            val first = coordinator.openForView(request) {
+                net.weero.measix.pilot.service.runtime.ConversationDraft(
+                    Conversation.ofId(id, request.assistantId, newConversation = true), store, listOf(owned))
+            }
+            val second = coordinator.openForView(request) { error("must reuse the installed owner") }
+            first.close()
+            testScheduler.advanceTimeBy(6_000)
+            assertNotNull(registry.findRuntime(id))
+            second.close()
+            testScheduler.advanceTimeBy(6_000)
+            testScheduler.runCurrent()
+            assertNull(registry.findRuntime(id))
+            io.mockk.verify(exactly = 1) { store.abandonUnpublished(owned) }
+            coVerify(exactly = 0) { store.publishAllUnpublished(any()) }
+            coVerify(exactly = 0) { repository.commit(any()) }
         } finally { appScope.cancel() }
     }
 

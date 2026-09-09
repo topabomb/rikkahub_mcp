@@ -355,6 +355,10 @@ class SubAssistantChildPartsTest {
         val artifactStore = mockk<ArtifactStore>()
         val owned = mockk<OwnedArtifact>()
         coEvery { artifactStore.materialize(sourceRef) } returns sourceRef
+        coEvery { artifactStore.resolveManagedReference(sourceRef.file(filesDir)) } returns sourceRef
+        val copiedUri = mockk<Uri>()
+        every { copiedUri.toString() } returns copiedRef.fileUri(filesDir)
+        every { owned.uri } returns copiedUri
         every { artifactStore.file(sourceRef) } returns sourceRef.file(filesDir)
         every { owned.localRef } returns copiedRef
         io.mockk.coEvery {
@@ -389,6 +393,7 @@ class SubAssistantChildPartsTest {
         val sourceRef = LocalArtifactRef(relativePath = "upload/missing.png", mimeType = "image/png")
         val artifactStore = mockk<ArtifactStore>()
         coEvery { artifactStore.materialize(sourceRef) } returns null
+        coEvery { artifactStore.resolveManagedReference(sourceRef.file(filesDir)) } returns null
         val rewriter = ToolArtifactRewriter(filesDir, artifactStore)
         val tool = UIMessagePart.Tool(
             localCallId = Uuid.random(), stepId = Uuid.random(), providerCallId = "t",

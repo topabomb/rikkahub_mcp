@@ -33,8 +33,8 @@ class ArtifactUseCaseTest {
     fun `draft cannot be submitted by another view even with the same principal and conversation`() = runTest {
         val store = mockk<ArtifactStore>()
         val id = kotlin.uuid.Uuid.random()
-        val view = ConversationViewLease(id, net.weero.measix.pilot.data.enterprise.RealmAccess.Personal, 1L, {})
-        val replacement = ConversationViewLease(id, net.weero.measix.pilot.data.enterprise.RealmAccess.Personal, 2L, {})
+        val view = ConversationViewLease(id, net.weero.measix.pilot.data.enterprise.RealmAccess.Personal, 1L, closeAction = {})
+        val replacement = ConversationViewLease(id, net.weero.measix.pilot.data.enterprise.RealmAccess.Personal, 2L, closeAction = {})
         val draft = ArtifactUseCase(store, ApplicationRecoveryGate().apply { ready() }, mockk()).openDraftScope(view)
         org.junit.Assert.assertTrue(runCatching { draft.claimSubmission(replacement.commandTarget, emptyList()) }
             .exceptionOrNull() is IllegalStateException)
@@ -77,7 +77,7 @@ class ArtifactUseCaseTest {
             ApplicationRecoveryGate().apply { ready() },
             mockk(),
         ).openDraftScope(net.weero.measix.pilot.service.ConversationViewLease(
-            kotlin.uuid.Uuid.random(), net.weero.measix.pilot.data.enterprise.RealmAccess.Personal, 0L, {}))
+            kotlin.uuid.Uuid.random(), net.weero.measix.pilot.data.enterprise.RealmAccess.Personal, 0L, closeAction = {}))
 
         val imported = scope.importUrisOrThrow(listOf(source)).single()
         assertEquals(ownedUri, imported.uri)
@@ -120,7 +120,7 @@ class ArtifactUseCaseTest {
             ApplicationRecoveryGate().apply { ready() },
             mockk(),
         ).openDraftScope(net.weero.measix.pilot.service.ConversationViewLease(
-            kotlin.uuid.Uuid.random(), net.weero.measix.pilot.data.enterprise.RealmAccess.Personal, 0L, {}))
+            kotlin.uuid.Uuid.random(), net.weero.measix.pilot.data.enterprise.RealmAccess.Personal, 0L, closeAction = {}))
 
         scope.importUrisOrThrow(listOf(source))
         scope.close()

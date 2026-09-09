@@ -50,7 +50,10 @@ class ToolArtifactRewriter(
             val copiedRef = copied.localRef
             val rewrittenOutput = output.map { part ->
                 when (part) {
-                    is UIMessagePart.Image -> part.copy(url = copiedRef.fileUri(filesDir))
+                    is UIMessagePart.Image -> {
+                        val imageFile = net.weero.measix.pilot.data.ai.attachments.AttachmentRefs.parseFileUrl(part.url)
+                        if (imageFile?.canonicalFile == sourceFile.canonicalFile) part.copy(url = copiedRef.fileUri(filesDir)) else part
+                    }
                     is UIMessagePart.Text -> part.copy(text = rewriteFilePathJson(part.text, copiedRef))
                     else -> part
                 }
