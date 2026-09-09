@@ -56,12 +56,24 @@ class TurnFinalizer(
 
     /** Caller must retain this ownership across lock release and finish it even on cancellation. */
     internal fun captureStop(conversationId: Uuid, reason: String = TurnTerminalReasons.USER_STOP,
-        assistantId: me.rerere.common.configuration.ConfigurationReference? = null): StopRequest? {
+        assistantId: me.rerere.common.configuration.ConfigurationReference? = null, turnId: Uuid? = null): StopRequest? {
         val runtime = runtimeRegistry.findRuntime(conversationId) ?: return null
-        val captured = runtime.captureAndRequestStop(reason, assistantId)
-        val auxiliary = runtime.captureAndCancelAuxiliaryWorkers(assistantId)
+        val captured = runtime.captureAndRequestStop(reason, assistantId, turnId)
+        val auxiliary = if (turnId == null) runtime.captureAndCancelAuxiliaryWorkers(assistantId) else emptyList()
         if (captured == null && auxiliary.isEmpty()) return null
         return StopRequest(conversationId, runtime, captured, reason, auxiliary)
+    }
+
+    /** A resource barrier stops only its original Turn, including a completed user-paused worker. */
+    internal suspend fun stopInteraction(runtime: ConversationRuntime, turnId: Uuid, reason: String) {
+        var request: StopRequest? = null
+        try {
+            commandCoordinator.withResidentRuntime(runtime.id) { current ->
+                if (current === runtime) request = captureStop(runtime.id, reason, turnId = turnId)
+            }
+        } finally {
+            request?.let { finishStop(it) }
+        }
     }
 
     /** Bounded callers await jobs before entering terminal cleanup; the Runtime retains timed-out owners. */

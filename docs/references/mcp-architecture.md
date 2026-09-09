@@ -28,7 +28,7 @@ MCP 的“工具能力”和“当前能否连通”是两类正交事实：
 | Server definition、启用状态、工具 enable/approval policy | `SettingsStore` | Settings DataStore | Coordinator、Query、run capture |
 | 完整非空远端工具目录 | `McpCatalogStore` | `mcp_catalog` DataStore | Runtime 启动恢复和提交 |
 | 跨 server 注册表、触发汇流和并发预算 | `McpRuntimeCoordinator` | AppScope 内存 | application / turn |
-| client、generation、授权 Job、刷新与恢复调度、连接健康 | 每 server 一个 `McpServerRuntime` | AppScope 内存 | `McpRuntimeStateStore` |
+| client、generation、授权 Job、刷新与恢复调度、连接健康 | 每 `McpRuntimeKey` 一个 `McpServerRuntime` | AppScope 内存 | `McpRuntimeStateStore` |
 | OAuth 网络流程、refresh single-flight 与 Settings CAS | `McpOAuthCoordinator` | AppScope + Settings | `McpServerRuntime` / invocation admission |
 | transport/client 创建与完整分页发现 | `McpProtocolClientFactory` / `McpCatalogDiscovery` | 工厂持有进程内共享 HTTP client，发现无独立状态 | `McpServerRuntime` |
 | 已承诺工具调用和结果/Artifact 补偿 | `McpToolCallExecutor` | invocation 内存 | Coordinator |
@@ -44,7 +44,24 @@ Settings；导入、编辑、OAuth 更新也无权覆盖 Catalog。
 锁顺序固定为配置 owner → Runtime；Runtime 不保存第二份配置快照。连接、发现、恢复、目录激活和
 调用准入均复验定义，网络和 OAuth I/O 位于这些锁外。取消等待释放配置 gate，清理仍归原连接 owner。
 初次读取只恢复已有目录，选中的 turn、显式刷新或后续配置变化才触发连接；初始化不排队连接全部个人服务器。
-这些是个人连接的实际边界，企业 Session/binding/interaction target 的执行接线仍在实施。
+企业执行以 `(server reference, 原 RealmAccess, interactionId)` 为连接键；借用用户 MCP 也使用独立的企业执行连接，
+但其定义、凭据与目录继续归用户 owner。个人维护连接仍以用户 reference 为键，不复制用户定义。
+`McpConnectionDefinition` 区分用户定义与临时受管 binding；企业凭据不转换成可编辑 `McpServerConfig`。
+原 Session → Settings → Runtime 是企业连接和调用准入的锁顺序，网络等待在锁外。
+`McpExecutionLease` 在捕获 binding 前交给原 Turn owner，等待用户期间保留，CONTINUE 转交同一租约。
+终态与退出在原 owner 上关闭并等待全部 transport，之后释放 binding；失败保留清理所有权。
+
+Direct MCP 只装配已解析助手选中的服务；企业固定引用不可删，允许的扩展来自本域偏好。
+显式引用不可执行时准备失败，不静默移除。Gateway 独立装配完整工具对，REQUIRED 目录未就绪时拒绝准备。
+Gateway 使用开关只影响新 interaction；在途执行仍复验原 Session、助手和资源是否存在。
+受管 namespace 由稳定资源引用摘要派生，避免本地化名称或长资源 ID 破坏 Provider 工具名。
+
+受管 Streamable HTTP 使用禁止重定向、关闭透明请求重试并带 `PrivateRequest` 的专用共享 client。
+原 generation 与 interaction headers 来自捕获的 binding owner，私有包不能覆盖这些协议头。
+受管连接状态与日志不输出底层异常正文/堆栈；调用保留失败分类，向上抛出的工具异常不携带私有 transport cause。
+POST 与通知/恢复 GET 都解析有效 `428 managed_snapshot_required`，先封闭该 Runtime 的连接/调用准入，随后由原 `TurnFinalizer.stopInteraction`
+按 Runtime/turnId 捕获当前 worker、提交终态并等待租约清理，成功后才走既有同步服务。
+暂停已完成的 worker 和 CONTINUE 后的新 worker 都走这一收口；不等待过时的 START Job，也不停止后续新 turn。
 
 `McpProtocolClientFactory` 在首次真实 transport 创建时同步且唯一地初始化共享 Ktor client，调用位于现有 server 的 IO 连接任务；
 不在 Application/DI 构造阶段初始化 Ktor，也不为测试 override 初始化真实 transport。初始化返回后复查取消，超时/取消的连接
@@ -110,8 +127,10 @@ Catalog 初始化只执行一次迁移、读取和发布；全部命令等待这
 
 企业目录的 `McpManagedCatalog` 记录发布 generation，与目录 revision、连接 epoch 分开。
 同一资源低于已确认目录 generation 的候选被拒绝且不夺取提交补偿 token；同 generation 的
-公开 definition 或 Gateway surface 改变也被拒绝。相同工具随新 generation 发布时仍持久化新 generation。
-这只是目录提交顺序，不能代替原 Session 的执行准入或服务端 428 barrier。
+Gateway surface 改变被拒绝。私有 binding 可在同 generation 轮换而改变 definition digest，
+目录发布另在原 Session 的 Applied revision gate 内验证，旧 binding 的发现结果不能覆盖新配置目录。
+旧 interaction 可保留原 binding 与已确认目录；发布不再获准时只能沿用匹配的已确认目录，无目录则明确失败。
+相同工具随新 generation 发布时仍持久化新 generation。这不能代替原 Session 的执行准入或服务端 428 barrier。
 
 Gateway 的 `McpGatewaySurface` 校验固定顺序 `discover_tools` / `invoke_tool` 两个完整 Tool 对象，
 包含 outputSchema、annotations、`_meta` 和扩展字段；先验证再做目录排序。
@@ -132,7 +151,7 @@ Gateway 的目录 digest 使用已验证的 canonical surface digest；仅 JSON 
 已登记 server 排进连接队列。新对话开始时只激活该 Assistant 选择的 server；新建、重新启用或修改 definition 的
 server 会主动建立其自身连接。用户全局刷新显式激活全部 enabled server。
 
-每个 server 只有一个 `McpServerRuntime`。它持有 mutex、generation、client、已接受连接请求的 fingerprint 和各 operation Job；
+每个 `McpRuntimeKey` 只有一个 `McpServerRuntime`。它持有 mutex、generation、client、已接受连接请求的 fingerprint 和各 operation Job；
 其子 scope 保留所有已接受的生命周期任务，取消或替换 Job 引用不会丢失尚未完成的清理。
 连接替换与原始 transport 集合只在同一个 connection-operation mutex 下访问；新连接先完成旧连接清理。
 移除先封闭准入并取消 runtime scope，由 AppScope 接受关闭任务，在状态锁外等待原任务完成并关闭原始 transport，
@@ -224,7 +243,7 @@ Assistant 选择
 客户端不通过局部扫描 `required` 或忽略 `$ref` 的自制校验器建立第二份参数契约。
 
 本地 definition/policy typed command 与 `tools/call` 的不可撤销调用承诺共享
-`McpRuntimeCoordinator.withConfigurationMutation()`，形成唯一线性化顺序：配置提交先取得门时，最终 admission 读取新配置并拒绝；
+原 `SettingsStore` 配置 writer gate，经 `McpRuntimeDefinition.withCurrent` 保持到 Runtime 接受或拒绝，形成唯一线性化顺序：配置提交先取得门时，最终 admission 读取新配置并拒绝；
 调用先取得门时，该 invocation 已进入 in-flight，随后配置变化只影响后续调用和披露。SDK 不暴露“首个 HTTP 字节已写出”的
 精确边界，因此上层不把本地承诺伪称为“请求已经发送”；承诺后未取得完整结果的 transport/timeout 失败都保守报告
 `status=unknown`，客户端不得自动重放。
@@ -268,3 +287,17 @@ server/tool 身份、generation、transport 阶段、HTTP/SDK 异常、`retryabl
 
 构建/JVM 通过不等于真实 Android 验收。前后台、Wi-Fi/蜂窝、Doze、OAuth 浏览器回调、真实通知通道和 MCP UI/Agent
 仍需连接设备后执行对应 instrumentation 与现场场景。
+
+## 本地企业执行与只读检查
+
+`LocalEnterpriseMcpService` 是已安装本地来源的 HTTP engine adapter；Client、Streamable HTTP transport、
+初始化、发现、surface 验证和调用仍走生产 MCP 链。它不创建网络 socket，也不把平台资料转成本地来源。
+Direct MCP 独立提供企业和成员显示资料，Gateway 提供动态与指南的 discover/invoke；两侧不重复暴露同一业务工具。动态查询复用原 Session 的 Feed owner。
+ToolRef 验证原来源/Deployment/User、Session、interaction、generation、schema、期限和签名，不能按名称回退。
+来源已发布新 generation 时返回共享契约要求的 428，不能先执行业务再报屏障。
+Gateway 返回的安全业务元数据经原 ToolExecutionContext 的 deferred metadata 协议提交，不另写执行记录。
+
+助手 `assistant_inspect` 的工具清单读取原域配置和已确认 Catalog，不建立连接，也不借用当前页面的配置。
+用户目录要求 definition digest 匹配；企业目录要求原主体、generation、当前 binding 的 definition digest 和 Gateway surface 匹配。
+查询仅在既有 Session owner 锁内短读取 binding 并计算目录匹配，不创建执行租约、不缓存凭据或获得调用权限。
+该只读清单不包含 execution interaction，不能充当调用租约。MCP 管理页面的完整按域投影仍在实施。

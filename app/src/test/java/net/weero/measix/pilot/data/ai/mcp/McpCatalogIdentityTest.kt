@@ -144,11 +144,21 @@ class McpCatalogIdentityTest {
             assertEquals(McpCatalogCommitResult.RejectedGeneration(2), store.commitCandidate(candidate.copy(tools = emptyList())))
             assertEquals(bytes, disk.data.first()[documentKey])
             assertEquals(next.snapshot, store.catalogs.value[candidate.key])
-            try { store.commitCandidate(newer.copy(definitionDigest = "conflict")); fail("Same generation changed definition") }
-            catch (_: IllegalArgumentException) { }
             // Rejected old work cannot take over the current commit's compensation receipt.
             store.rollbackCommitted(next.snapshot, next.previous, next.headToken)
             assertEquals(first.snapshot, store.catalogs.value[candidate.key])
+        }
+    }
+
+    @Test fun `same managed generation may rotate private binding identity without changing the surface`() = runBlocking {
+        withDisk { store, _ ->
+            val scope = ConfigurationScope.Enterprise(EnterpriseAuthority("local:example", "deployment"), "user")
+            val first = store.commitCandidate(enterpriseCandidate(scope)) as McpCatalogCommitResult.Committed
+            val rotated = store.commitCandidate(enterpriseCandidate(scope).copy(definitionDigest = "rotated-binding")) as McpCatalogCommitResult.Committed
+            assertEquals(first.snapshot.managed, rotated.snapshot.managed)
+            assertEquals(first.snapshot.catalogDigest, rotated.snapshot.catalogDigest)
+            store.rollbackCommitted(first.snapshot, first.previous, first.headToken)
+            assertEquals(rotated.snapshot, store.catalogs.value[rotated.snapshot.key])
         }
     }
 

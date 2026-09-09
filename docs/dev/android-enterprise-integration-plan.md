@@ -341,12 +341,17 @@ Android 媒体接线按下列所有权完成：`PortalMediaStore` 管理独占�
 | 收口工作包 | 当前事实与剩余工作 |
 | --- | --- |
 | 模型消费者（C5） | 主/子、标题/建议/摘要、附件识别和图片生成已接入原域模型捕获、逐请求准入与 binding；完整工具调用示例继续实施 |
-| MCP / Gateway（C5、U2） | 企业固定选择已有 UI；完整 Tool JSON、主体目录与连接清理已实现；原 Session 执行、企业 binding、Gateway 和示例工具仍需接线 |
+| MCP / Gateway（C5、U2） | 企业固定选择、完整 Tool JSON、主体目录与连接清理已实现；原 Session/binding/interaction、Gateway 标准发现与调用、本地 source engine、428 收口及只读工具清单已通过本批完整门禁；完整管理 UI、业务工具卡、Mock 模型工具续轮与设备执行仍需收口 |
 | 语音（C5、U2） | 仍需 TTS/ASR 的企业/用户目录、私有 binding、原请求准入及本地音频/转写 adapter |
 | 文件与 Workspace（C6） | 会话/记忆、目录、图片、背景、参考输入及附件/富文本出口已分域验证；Workspace 上传/终端/SAF 已完成本批实现与完整门禁；共享配置预设附件的目标域复制及 Draft/Child 交接已完成，完整门禁通过；整体 UI/版本验收仍待最终收口 |
 | 个人备份（C7） | 个人 Settings 保全已实现；备份仍需个人闭合图导出、恢复合并保全最新企业图和系统备份边界，不能用 Settings 测试代表数据保全 |
 | 完整示例与 UI（M1、U2） | 正式企业入口、Portal、公开模板和私有文件 ignore 已有；仍需原生整包导入/场景管理、工具批次 mock、Starter 预填及剩余资源/助手页面 |
 | 退休与发行（R1、V1） | 消费者完成后删除旧 managed overlay 链，再做 E01–E12、Release/硬件验收和版本 20 交付；真实后台属于下一阶段 |
+
+
+MCP 执行接线已完成本批实现与验证：原 Turn 的 McpExecutionLease 持有原 Session/binding/interaction，等待用户继续转交相同 lease；企业内复用个人 MCP 仍使用其用户 definition/凭据和个人 Catalog，不复制资源。Direct MCP 按已解析助手引用装配，Gateway 独立装配完整工具对，开关只影响新 interaction。POST 及通知/恢复 GET 的 428 由原 TurnFinalizer 收口后同步；原目录的保留与新目录发布按原 Applied revision 分开。只读助手检查复用配置/Catalog/Session owner，不创建执行租约，私有连接异常不带入公共日志与工具异常。
+
+本地 Source 经生产 SDK/Streamable HTTP、Coordinator、Catalog 与调用链提供独立的 Direct 企业资料查询，以及 Gateway 动态/指南；同一业务不同时由两条路径暴露。阶段复审提出的暂停/继续收口、查询租约、同 generation binding 轮换、企业内个人 MCP 重连和 GET 428 等问题已修正，并补实际消费者与失败路径验证。本批串行 `test assembleDebug lintDebug assembleRelease connectedDebugAndroidTest` 在 26 分 25 秒内通过：App 2,137 项 JVM、Android 17 模拟器 App 190 项与 Speech 6 项无失败；App/Workspace lint 均为 0 错误，分别有 287/11 项警告。Workspace 保留 11 项 Windows JVM 条件跳过，设备 12 项中保留 1 项硬链接条件跳过。完整回归曾暴露 Portal 测试在异步文档关闭完成前重置 Main dispatcher 的清理竞态，测试已等待原关闭 owner 后再重置；生产 Portal 生命周期未变。证据见 `build/reports/enterprise/mcp-execution-verification.json`。本次设备是既有消费者回归，不代替企业工具端到端或真实平台验收。MCP 管理页面、业务工具卡、模型 Mock 的完整工具续轮、设备企业工具执行及整期目标仍待收口，不标记 C5/E01–E12 完成。
 
 
 聊天配置与抽屉接线已实现：原页面 query 同时提供助手、模型目录、搜索与传输能力；字段命令复用 Session/Settings/会话 owner，删除无消费者的通用 usage 写入口。企业固定模型/MCP 不可修改，用户助手可本域重选、跟随域默认或恢复定义；失效定义不再静默回退。Workspace 目录、系统提示和附件迟到结果绑定原目标，写盘取消等待实际 ack。抽屉助手、目录、分页和筛选共用原 ConversationFolderAccess，旧目标不自动转入新空间；会话移动等待实际提交，换助手同时清 folder/cwd。此次没有增加配置存储区或持久化镜像。

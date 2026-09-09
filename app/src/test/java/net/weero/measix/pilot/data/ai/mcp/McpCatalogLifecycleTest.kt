@@ -89,7 +89,7 @@ internal class McpCatalogLifecycleTest : McpRuntimeCoordinatorTestBase() {
         var cancelled = false
         val observer = backgroundScope.async(kotlinx.coroutines.test.UnconfinedTestDispatcher(testScheduler)) {
             manager.runtimeCapabilities.collect { views ->
-                if (!cancelled && views[SERVER_ID]?.catalog == fresh) {
+                if (!cancelled && views[McpRuntimeKey(SERVER_ID)]?.catalog == fresh) {
                     cancelled = true
                     requireNotNull(operation).cancel(cause)
                 }
@@ -101,30 +101,72 @@ internal class McpCatalogLifecycleTest : McpRuntimeCoordinatorTestBase() {
         observer.cancel()
         assertTrue(cancelled)
         coVerify(exactly = 0) { catalogStore.rollbackCommitted(any(), any(), any()) }
-        assertEquals(fresh, manager.runtimeCapabilities.value[SERVER_ID]?.catalog)
+        assertEquals(fresh, manager.runtimeCapabilities.value[McpRuntimeKey(SERVER_ID)]?.catalog)
     }
 
     @Test
-    fun `definition owner failure after initial catalog commit compensates and closes the original transport`() = runTest(dispatcher) {
+    fun `borrowed user MCP keeps its confirmed catalog or fails explicitly after enterprise publication advances`() = runTest(dispatcher) {
+        for (initiallyReady in listOf(false, true)) {
+            catalogs.value = emptyMap()
+            var mayPublish = initiallyReady
+            val config = McpConnectionDefinition.User(serverConfig())
+            val access = net.weero.measix.pilot.data.enterprise.RealmAccess.Enterprise(
+                ConfigurationScope.Enterprise(me.rerere.common.configuration.EnterpriseAuthority("local:test", "dep_test"), "user_test"), "session_test")
+            val key = McpRuntimeKey(SERVER_ID, access, "int_${kotlin.uuid.Uuid.random()}")
+            val states = McpRuntimeStateStore()
+            val appScope = AppScope(dispatcher)
+            val network = mockk<NetworkMonitor>()
+            every { network.isOnline } returns MutableStateFlow(true)
+            val runtime = McpServerRuntime(key, object : McpRuntimeDefinition {
+                override suspend fun <T> withCurrent(use: McpDefinitionUse, operation: suspend (McpConnectionDefinition?) -> T): T =
+                    operation(config.takeIf { use == McpDefinitionUse.EXECUTION || mayPublish })
+            }, catalogStore, appScope, network, states,
+                McpProtocolClientFactory(createHttpClient = { error("unexpected HTTP") },
+                    createManagedHttpClient = { error("unexpected managed HTTP") }, createLocalHttpClient = { error("unexpected local HTTP") },
+                    transportOverride = { FakeTransport().also(createdTransports::add) }, clientOverride = { fakeClient(it) }),
+                oauthCoordinator, kotlinx.coroutines.sync.Semaphore(1), dispatcher, MutableStateFlow(true), McpServerRuntimePolicy { 0 },
+                { _, _ -> }, {}, {})
+            states.getOrCreate(key) { runtime }
+            try {
+                runtime.reconcile(refreshTools = false)
+                advanceUntilIdle()
+                if (initiallyReady) {
+                    val original = requireNotNull(states.capabilities.value[key]?.catalog)
+                    mayPublish = false
+                    runtime.reconcile(refreshTools = true)
+                    advanceUntilIdle()
+                    assertEquals(original, states.capabilities.value[key]?.catalog)
+                    assertTrue(states.capabilities.value[key]?.status is McpStatus.Ready)
+                    runtime.reconcile(refreshTools = false, forceReconnect = true)
+                    advanceUntilIdle()
+                    assertEquals(original, states.capabilities.value[key]?.catalog)
+                    assertTrue(states.capabilities.value[key]?.status is McpStatus.Ready)
+                } else {
+                    assertEquals(null, states.capabilities.value[key]?.catalog)
+                    assertTrue(states.capabilities.value[key]?.status is McpStatus.Error)
+                }
+            } finally { runtime.closeAndAwait(); appScope.coroutineContext[kotlinx.coroutines.Job]!!.cancel() }
+        }
+    }
+
+    @Test
+    fun `definition owner read failure before publication closes the original transport without a commit`() = runTest(dispatcher) {
         var rejectRead = false
         coEvery { settingsStore.withUserMcpDefinitions<Any?>(any()) } coAnswers {
             if (rejectRead) error("definition_store_unavailable")
             firstArg<suspend (List<McpServerConfig>) -> Any?>().invoke(effective.snapshot.settings.mcpServers)
         }
-        lateinit var receipt: McpCatalogCommitResult.Committed
-        coEvery { catalogStore.commitCandidate(any()) } coAnswers {
-            val candidate = firstArg<McpCatalogCandidate>()
-            receipt = McpCatalogCommitResult.Committed(candidate.initialSnapshot(), null, 42L)
-            // Do not deliver the independent Store observation; this exercises Runtime receipt ownership.
+        listToolsResponder = { _, _ ->
             rejectRead = true
-            receipt
+            io.modelcontextprotocol.kotlin.sdk.types.ListToolsResult(listOf(io.modelcontextprotocol.kotlin.sdk.types.Tool(name = "ready", inputSchema = io.modelcontextprotocol.kotlin.sdk.types.ToolSchema())))
         }
         emit(listOf(serverConfig()))
         advanceUntilIdle()
-        coVerify(exactly = 1) { catalogStore.rollbackCommitted(receipt.snapshot, null, receipt.headToken) }
-        assertTrue(manager.runtimeCapabilities.value[SERVER_ID]?.status is McpStatus.Error)
-        assertEquals(null, manager.runtimeCapabilities.value[SERVER_ID]?.catalog)
-        assertEquals(1, createdTransports.single().closeCalls)
+        coVerify(exactly = 0) { catalogStore.commitCandidate(any()) }
+        assertTrue(manager.runtimeCapabilities.value[McpRuntimeKey(SERVER_ID)]?.status is McpStatus.Error)
+        assertEquals(null, manager.runtimeCapabilities.value[McpRuntimeKey(SERVER_ID)]?.catalog)
+        assertTrue(createdTransports.isNotEmpty())
+        assertTrue(createdTransports.all { it.closeCalls > 0 })
     }
 
     private suspend fun kotlinx.coroutines.test.TestScope.assertCancelledCommit(initiallyReady: Boolean) {
@@ -451,6 +493,9 @@ internal class McpCatalogLifecycleTest : McpRuntimeCoordinatorTestBase() {
         every { isolatedNetwork.isOnline } returns MutableStateFlow(true)
         val restartClients = mutableListOf<Client>()
         val restarted = McpRuntimeCoordinator(
+            sessions = io.mockk.mockk(),
+            localMcp = io.mockk.mockk(),
+            synchronization = io.mockk.mockk(),
             settingsStore = isolatedSettingsStore,
             catalogStore = isolatedCatalogStore,
             appScope = AppScope(dispatcher),

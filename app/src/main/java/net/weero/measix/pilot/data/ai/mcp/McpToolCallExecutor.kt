@@ -32,6 +32,7 @@ internal data class McpInvocationLease(
     val client: Client,
     val serverName: String,
     val generation: Long,
+    val managed: Boolean = false,
 )
 
 internal enum class McpInvocationFailureKind {
@@ -62,6 +63,7 @@ internal class McpToolCallExecutor(
         toolName: String,
         args: JsonObject,
         onArtifactCreated: (OwnedArtifact) -> Unit,
+        onResolvedTool: suspend (JsonObject) -> Unit = {},
     ): McpInvocationOutcome {
         val createdArtifacts = mutableListOf<OwnedArtifact>()
         var receivedResult = false
@@ -71,6 +73,14 @@ internal class McpToolCallExecutor(
                 RequestOptions(timeout = 120.seconds),
             )
             receivedResult = true
+            result.meta?.get("com.measix/resolvedTool")?.let { value ->
+                val metadata = value as? JsonObject ?: error("invalid_gateway_result_metadata")
+                val fields = setOf("gatewayToolId", "name", "status", "requestId")
+                check(fields.all { (metadata[it] as? kotlinx.serialization.json.JsonPrimitive)?.let { value ->
+                    value.isString && value.content.isNotBlank() && value.content.length <= 256
+                } == true }) { "invalid_gateway_result_metadata" }
+                onResolvedTool(JsonObject(metadata.filterKeys { it in fields }))
+            }
             val projected = result.content.map {
                 when (it) {
                     is TextContent -> UIMessagePart.Text(it.text)
@@ -117,7 +127,7 @@ internal class McpToolCallExecutor(
                     } else {
                         McpToolFailureKind.OUTCOME_UNKNOWN
                     },
-                    cause = timeout,
+                    cause = timeout.takeUnless { lease.managed },
                 ),
             )
         } catch (cancelled: CancellationException) {
@@ -125,6 +135,7 @@ internal class McpToolCallExecutor(
             throw cancelled
         } catch (error: Throwable) {
             discardCreatedArtifacts(createdArtifacts, "MCP tool result rollback", error)
+            McpManagedSnapshotRequired.find(error)?.let { throw it }
             val kind = when {
                 receivedResult -> McpInvocationFailureKind.PROTOCOL
                 error is McpException -> McpInvocationFailureKind.REMOTE
@@ -143,7 +154,7 @@ internal class McpToolCallExecutor(
                 McpToolFailureProjector.project(
                     kind = projectedKind,
                     remoteMessage = (error as? McpException)?.message,
-                    cause = error,
+                    cause = error.takeUnless { lease.managed },
                 ),
             )
         }

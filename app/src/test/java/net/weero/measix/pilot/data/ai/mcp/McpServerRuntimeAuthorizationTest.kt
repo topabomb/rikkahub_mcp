@@ -77,10 +77,10 @@ class McpServerRuntimeAuthorizationTest {
         val stateStore = McpRuntimeStateStore()
         lateinit var runtime: McpServerRuntime
         runtime = McpServerRuntime(
-            serverId = serverId,
+            key = McpRuntimeKey(serverId),
             definition = object : McpRuntimeDefinition {
-                override suspend fun <T> withCurrent(operation: suspend (McpServerConfig?) -> T): T =
-                    operation(settings.value.settings.mcpServers.find { it.id == serverId })
+                override suspend fun <T> withCurrent(use: McpDefinitionUse, operation: suspend (McpConnectionDefinition?) -> T): T =
+                    operation(settings.value.settings.mcpServers.find { it.id == serverId }?.let { McpConnectionDefinition.User(it) })
             },
             catalogStore = mockk(relaxed = true),
             appScope = appScope,
@@ -94,8 +94,9 @@ class McpServerRuntimeAuthorizationTest {
             policy = McpServerRuntimePolicy { 0L },
             logger = { _, _ -> },
             onClosed = {},
+            onManagedSnapshotRequired = { error("unexpected managed barrier") },
         )
-        stateStore.getOrCreate(serverId) { runtime }
+        stateStore.getOrCreate(McpRuntimeKey(serverId)) { runtime }
         val context = mockk<Context>(relaxed = true)
         every { context.applicationContext } returns context
 

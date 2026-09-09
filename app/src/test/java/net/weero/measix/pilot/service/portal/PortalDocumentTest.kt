@@ -71,7 +71,7 @@ class PortalDocumentTest {
             assertEquals(before.manifest.applied!!.generation, status.getValue("appliedManagedGeneration").jsonPrimitive.long)
             assertEquals(before.manifest.session, (h.sessions.state.value as EnterpriseState.Available).manifest.session)
             assertEquals(Instant.ofEpochMilli(now).toString(), status.getValue("lastEnterpriseUpdateRefresh").jsonPrimitive.content)
-        } finally { doc.close() }
+        } finally { doc.close(); doc.awaitClosed() }
     }
 
     @Test
@@ -97,8 +97,8 @@ class PortalDocumentTest {
                 assertNotEquals(doc.id, next.id)
                 assertNull(next.receive(raw, PortalProtocol.LOCAL_ORIGIN, true) { replies++ })
                 assertTrue(h.call(next, "getStatus").getValue("result").jsonObject.getValue("managedReady").jsonPrimitive.boolean)
-            } finally { next.close() }
-        } finally { doc.close() }
+            } finally { next.close(); next.awaitClosed() }
+        } finally { doc.close(); doc.awaitClosed() }
     }
 
     @Test
@@ -112,7 +112,7 @@ class PortalDocumentTest {
             val expired = h.call(doc, "listLocalUpdates", buildJsonObject { put("ifNoneMatch", etag) })
             assertEquals("session_expired", expired.getValue("error").jsonObject.getValue("code").jsonPrimitive.content)
             assertEquals(original, (h.sessions.state.value as EnterpriseState.Available).manifest.session)
-        } finally { doc.close() }
+        } finally { doc.close(); doc.awaitClosed() }
     }
 
     @Test
@@ -132,7 +132,7 @@ class PortalDocumentTest {
             assertTrue(doc.isClosed)
             assertFalse(replied)
             assertEquals(before, h.sessions.state.value)
-        } finally { doc.close() }
+        } finally { doc.close(); doc.awaitClosed() }
     }
 
     @Test
@@ -163,8 +163,8 @@ class PortalDocumentTest {
                 assertTrue(doc.isClosed)
                 assertEquals(0, oldReplies)
                 assertFalse(replacement.isClosed)
-            } finally { replacement.close() }
-        } finally { release.complete(Unit); doc.close(); request.join() }
+            } finally { replacement.close(); replacement.awaitClosed() }
+        } finally { release.complete(Unit); doc.close(); doc.awaitClosed(); request.join() }
     }
 
     @Test
@@ -187,7 +187,7 @@ class PortalDocumentTest {
         val conversations = mockk<ConversationApplicationService>()
         coEvery { conversations.stopEnterpriseWork(any()) } returns Unit
         val exit = EnterpriseExitService(h.sessions, h.sync, conversations,
-            ApplicationRecoveryGate().apply { ready() }, appScope, h.registry, mockk(relaxed = true), mockk { io.mockk.coEvery { closeRealm(any()) } returns Unit })
+            ApplicationRecoveryGate().apply { ready() }, appScope, h.registry, mockk(relaxed = true), mockk { io.mockk.coEvery { closeRealm(any()) } returns Unit }, mcp = mockk { io.mockk.coEvery { closeRealm(any()) } returns Unit })
         try {
             started.await()
             val request = requireNotNull(exit.captureRequest())
@@ -388,7 +388,7 @@ class PortalDocumentTest {
             release.complete(Unit)
             holder.join()
             assertTrue(h.call(doc, "getStatus").getValue("result").jsonObject.getValue("managedReady").jsonPrimitive.boolean)
-        } finally { release.complete(Unit); holder.cancelAndJoin(); doc.close() }
+        } finally { release.complete(Unit); holder.cancelAndJoin(); doc.close(); doc.awaitClosed() }
     }
 
     @Test
@@ -398,7 +398,7 @@ class PortalDocumentTest {
         val conversations = mockk<ConversationApplicationService>()
         coEvery { conversations.stopEnterpriseWork(any()) } returns Unit
         val exit = EnterpriseExitService(h.sessions, h.sync, conversations,
-            ApplicationRecoveryGate().apply { ready() }, appScope, h.registry, mockk(relaxed = true), mockk { io.mockk.coEvery { closeRealm(any()) } returns Unit })
+            ApplicationRecoveryGate().apply { ready() }, appScope, h.registry, mockk(relaxed = true), mockk { io.mockk.coEvery { closeRealm(any()) } returns Unit }, mcp = mockk { io.mockk.coEvery { closeRealm(any()) } returns Unit })
         lateinit var native: PortalNativeActions
         val doc = h.open(createNative = { h.native(mockk(), it, exit).also { native = it } })
         try {
@@ -419,7 +419,7 @@ class PortalDocumentTest {
             assertNull(native.prompt.value)
             assertEquals(0, replies)
             coVerify(exactly = 1) { conversations.stopEnterpriseWork(any()) }
-        } finally { doc.close(); appScope.coroutineContext[Job]!!.cancelAndJoin() }
+        } finally { doc.close(); doc.awaitClosed(); appScope.coroutineContext[Job]!!.cancelAndJoin() }
     }
 
     @Test
@@ -461,7 +461,7 @@ class PortalDocumentTest {
             assertEquals(0, lateReplies)
             verify(exactly = 1) { context.startActivity(any()) }
             coVerify(exactly = 0) { exit.exit(any()) }
-        } finally { doc.close() }
+        } finally { doc.close(); doc.awaitClosed() }
     }
 
     @Test
@@ -517,7 +517,7 @@ class PortalDocumentTest {
             assertFalse(operation.capture.file.exists())
             assertEquals(0, replies)
             assertEquals(RealmAccess.Personal, h.sessions.readPresentation().selection?.access)
-        } finally { operation.hardwareStopped.complete(Unit); doc.close(); request.cancelAndJoin() }
+        } finally { operation.hardwareStopped.complete(Unit); doc.close(); doc.awaitClosed(); request.cancelAndJoin() }
     }
 
     @Test
@@ -541,7 +541,7 @@ class PortalDocumentTest {
             withTimeout(5_000) { doc.awaitClosed(); requireNotNull(app.coroutineContext[Job]).join() }
             assertFalse(operation.capture.file.exists())
             assertTrue(doc.isHostClosed)
-        } finally { operation.hardwareStopped.complete(Unit); doc.close(); app.cancel() }
+        } finally { operation.hardwareStopped.complete(Unit); doc.close(); doc.awaitClosed(); app.cancel() }
     }
 
     @Test

@@ -61,7 +61,7 @@ class McpQueryService(
     ) { effective, capabilities ->
         effective.settings.mcpServers.map { server ->
             server.toPresentation(
-                runtime = capabilities[server.id] ?: McpRuntimeCapability(McpStatus.Idle, null),
+                runtime = capabilities[net.weero.measix.pilot.data.ai.mcp.McpRuntimeKey(server.id)] ?: McpRuntimeCapability(McpStatus.Idle, null),
                 configurationSource = effective.access
                     .sourceOf(ManagedConfigurationRecordKind.MCP_SERVER, server.id)
                     .toMcpSource(),

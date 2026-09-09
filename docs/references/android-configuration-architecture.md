@@ -107,7 +107,7 @@ PrepareEnterpriseExampleAssets 从公开完整模板派生 enterprise.local.iden
 
 辅助模型选择从原域的角色配置解析：标题/建议未配置时尝试 fast，再使用原助手的聊天模型；摘要未配置时使用原助手聊天模型。只有 Personal 的历史 `DEFAULT_AUTO_MODEL_ID` 等同未配置，显式缺失、被撤权或类型不符的引用不回退。辅助角色不受企业助手固定聊天模型的绑定限制，但每个请求仍复验原助手和所选资源准入，保持原 wire shape/企业 binding revision。`ModelExecutionSnapshot` 是进程内执行快照，不持久化私有传输数据。聊天、附件识别与已启用的图片工具在同次配置读取中捕获，工具借用只含 `execute` 的 `ModelRequests`；Runtime 保留唯一模型 lease 和企业 binding，暂停继续只移交这一个资源 owner。模型 lease 在取得 binding 前登记到原 Runtime；辅助任务清理失败不能丢失重试 owner。
 
-私有请求带无身份、无凭据的 `PrivateRequest` 标记，现有 HTTP 日志入口跳过该请求。共享网络边界在 OkHttp 跟随跨 origin 重定向前拒绝请求，避免 Google/Claude 与自定义私有 header 被转发；个人请求保持原日志和重定向行为。图片 URL 结果的后续下载继承私有日志标记，但不转发原认证和企业 header。Speech、MCP 尚未全部迁入相应的执行准入链。
+私有请求带无身份、无凭据的 `PrivateRequest` 标记，现有 HTTP 日志入口跳过该请求。共享网络边界在 OkHttp 跟随跨 origin 重定向前拒绝请求，避免 Google/Claude 与自定义私有 header 被转发；个人请求保持原日志和重定向行为。图片 URL 结果的后续下载继承私有日志标记，但不转发原认证和企业 header。企业 MCP 已接入原 Session/binding/interaction 的执行准入与版本屏障，管理页按域投影仍在实施；Speech 尚未全部迁入相应执行链。
 
 图片页面从原域模型目录选择明确的 IMAGE 引用；`ImageGenerationCoordinator` 的现有请求节点负责页面模型 lease，出队才捕获连接，后续默认模型变化不改选原任务。页面捕获、逐请求准入和结果提交复验原 `RealmSelection`，切域往返不会恢复旧请求；工具借用原 Turn 的模型请求视图，只校验原任务域及资源权限。企业退出等待原队列工作停止和资源释放；失败节点保留给原退出流程重试。默认本地来源生成标明模拟性质的 PNG，编辑输入会校验文件并显示模拟编辑标识，不声称完成真实图像编辑。
 
@@ -124,7 +124,7 @@ PrepareEnterpriseExampleAssets 从公开完整模板派生 enterprise.local.iden
 - Settings 更新以 cold DataStore 文档为基线，不能把异步显示 StateFlow 当作最新值。commitUserDocument 统一等待实际写入 ack，个人 aggregate 编辑保留企业偏好。Workspace 使用选择先通过原会话命令清空 cwd，再提交偏好；第二步失败明确报告目录已重置，保留原选择供重试，不声称两个存储具有联合事务。目录选择另核对发起时的 Workspace，切助手也在原 Room patch 中清 cwd。
 - ResourceSelectionSlot 对应模型角色、助手、Search、TTS、ASR 选择；收藏及建议开关使用同一偏好写协议。新增选择校验身份、类别准入、启用状态和模型用途；清除覆盖始终允许，且不会隐式修复仍失效的其他选择。
 - 助手 MCP 修改只校验新增引用，允许逐项移除已有失效引用。写失败/取消不发布提前生效的内存值；个人定义编辑保留企业主体偏好，同企业不同用户不继承对方的使用选择。
-- 每个企业配置最多一个 Gateway，必须携带 `surfaceVersion=1` 与 `surfaceHash`；不接受缺失字段的未发布原型。企业 Direct MCP 与 Gateway 的私有连接只接受 `MCP_STREAMABLE_HTTP`，个人 MCP 的 SSE 仍保留。Gateway 定义存在即已发布，不含第二个 enabled 位；撤销由来源候选删除定义表达。Resolver 为目录项派生完整 discover/invoke 工具对的 gatewayEnablement，统一决定生效开关与可切换性。REQUIRED 强制开启、拒绝开关写入，但保留原 false；恢复 USER_CONTROLLABLE_DEFAULT_ON 后原 false 再生效，无偏好则默认开启。setGatewayEnabled 使用同一授权与偏好提交协议，拒绝缺失或异主体资源，不更改配置 generation。该目录决策不代表 Session、连接或工具 surface 已通过执行校验；Gateway 执行装配和正式 UI 尚未接通。
+- 每个企业配置最多一个 Gateway，必须携带 `surfaceVersion=1` 与 `surfaceHash`；不接受缺失字段的未发布原型。企业 Direct MCP 与 Gateway 的私有连接只接受 `MCP_STREAMABLE_HTTP`，个人 MCP 的 SSE 仍保留。Gateway 定义存在即已发布，不含第二个 enabled 位；撤销由来源候选删除定义表达。Resolver 为目录项派生完整 discover/invoke 工具对的 gatewayEnablement，统一决定生效开关与可切换性。REQUIRED 强制开启、拒绝开关写入，但保留原 false；恢复 USER_CONTROLLABLE_DEFAULT_ON 后原 false 再生效，无偏好则默认开启。setGatewayEnabled 使用同一授权与偏好提交协议，拒绝缺失或异主体资源，不更改配置 generation。该目录决策不代表 Session、连接或工具 surface 已通过执行校验；Gateway 执行已独立装配完整工具对并校验 surface；正式管理 UI 尚未接通。
 
 `observeModelCatalog` 在 Session → Settings 锁序下捕获同一原选择的目录，Settings 流只作为失效通知；返回 Loading、Available 或 Unavailable。`ModelCatalogUiModel` 分开保留原覆盖、有效选择和用途不可用原因，企业目录不携带私有 binding。模型默认设置页与聊天模型选择器消费该投影，完整助手使用页面与其余资源执行链仍在接线。
 

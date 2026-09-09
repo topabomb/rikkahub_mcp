@@ -1,0 +1,9 @@
+{
+  "type": "about:blank",
+  "title": "Managed snapshot required",
+  "status": 428,
+  "code": "managed_snapshot_required",
+  "targetManagedGeneration": 42,
+  "requestId": "req_550e8400-e29b-41d4-a716-446655440000",
+  "forwarded": false
+}

@@ -59,6 +59,7 @@ internal data class ModelExecutionSnapshot(
 
 internal class CapturedModelConfiguration(
     val userSettings: Settings,
+    val configuration: ResolvedConfiguration,
     val assistant: Assistant,
     val model: ModelExecutionSnapshot,
     val inspectionModel: ModelExecutionSnapshot? = null,
@@ -163,7 +164,7 @@ internal class ModelExecutionService(
             val image = if (role == ModelSelectionRole.CHAT &&
                 net.weero.measix.pilot.data.ai.tools.local.LocalToolOption.TextToImage in assistant.localTools)
                 captureTool(ModelSelectionRole.IMAGE) else null
-            CapturedModelConfiguration(snapshot.userSettings, assistant, model, inspection, image)
+            CapturedModelConfiguration(snapshot.userSettings, configuration, assistant, model, inspection, image)
         }
     }
 

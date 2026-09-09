@@ -76,6 +76,7 @@ private const val DEFAULT_MAX_INLINE_SSE_EVENT_SIZE: Int = 16 * 1024 * 1024
 internal class McpStreamableHttpTransport(
     private val client: HttpClient,
     private val url: String,
+    private val managed: Boolean = false,
     private val reconnectionOptions: ReconnectionOptions = ReconnectionOptions(),
     private val maxInlineSseEventSize: Int = DEFAULT_MAX_INLINE_SSE_EVENT_SIZE,
     private val requestBuilder: HttpRequestBuilder.() -> Unit = {},
@@ -147,7 +148,9 @@ internal class McpStreamableHttpTransport(
             }
 
             if (!response.status.isSuccess()) {
-                val error = StreamableHttpError(response.status.value, response.readMcpBody())
+                val body = response.readMcpBody()
+                val error = if (managed && response.status.value == 428) McpManagedSnapshotRequired.parse(body)
+                    else StreamableHttpError(response.status.value, if (managed) "Managed MCP request rejected" else body)
                 _onError(error)
                 throw error
             }
@@ -259,6 +262,7 @@ internal class McpStreamableHttpTransport(
         lastEventId?.let { headers.append(MCP_RESUMPTION_TOKEN_HEADER, it) }
         requestBuilder()
     }.execute { response ->
+        if (managed && response.status.value == 428) throw McpManagedSnapshotRequired.parse(response.readMcpBody())
         if (response.status == HttpStatusCode.NotFound || response.status == HttpStatusCode.MethodNotAllowed ||
             response.contentType()?.match(ContentType.Application.Json) == true) return@execute null
         if (!response.status.isSuccess() || response.contentType()?.match(ContentType.Text.EventStream) != true) {

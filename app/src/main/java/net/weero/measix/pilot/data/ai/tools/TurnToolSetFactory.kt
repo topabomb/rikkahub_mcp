@@ -47,11 +47,20 @@ class TurnToolSetFactory(
     private val toolOutputStore: ToolOutputStore = ToolOutputStore(artifactStore),
 ) {
 
-    suspend fun captureMcpCapabilities(assistant: Assistant): TurnMcpCapabilitySnapshot =
-        mcpManager.captureTurnCapabilities(assistant)
+    internal suspend fun inspectMcpCapabilities(
+        access: RealmAccess,
+        snapshot: net.weero.measix.pilot.data.datastore.ExecutionConfigurationSnapshot,
+        assistant: Assistant,
+    ): TurnMcpCapabilitySnapshot = mcpManager.inspectCapabilities(access, snapshot, assistant)
 
-    suspend fun prepareMcpCapabilities(assistant: Assistant): TurnMcpCapabilitySnapshot =
-        mcpManager.prepareTurnCapabilities(assistant)
+    internal suspend fun prepareMcpCapabilities(
+        access: RealmAccess,
+        captured: net.weero.measix.pilot.service.CapturedModelConfiguration,
+        owner: net.weero.measix.pilot.service.runtime.ConversationRuntime,
+        turnId: Uuid,
+        worker: kotlinx.coroutines.Job,
+        stopInteraction: suspend () -> Unit,
+    ): TurnMcpCapabilitySnapshot = mcpManager.prepareTurnCapabilities(access, captured, owner, turnId, worker, stopInteraction)
 
     /**
      * 构建指定 Assistant 的工具集（不含 Memory Tools，那些由 TurnRunner 内部添加）。
@@ -135,7 +144,7 @@ class TurnToolSetFactory(
             addAll(additionalToolsBeforeMcp)
 
             val invalidNames = mcpCapabilities.tools
-                .map { it.serverName }
+                .map { it.namespace }
                 .distinct()
                 .filter { name ->
                     name.isEmpty() || !name.all {
@@ -147,27 +156,27 @@ class TurnToolSetFactory(
                 onInvalidMcpServerNames(invalidNames.sorted())
             }
             val invalidToolBindings = mcpCapabilities.tools
-                .filterNot { tool -> validProviderToolBinding(tool.serverName, tool.name) }
+                .filterNot { tool -> validProviderToolBinding(tool.namespace, tool.name) }
                 .map { "${it.serverName}/${it.name}" }
             if (invalidToolBindings.isNotEmpty()) {
                 Log.w(TAG, "Ignoring invalid MCP tool bindings: $invalidToolBindings")
             }
             val validBindings = mcpCapabilities.tools.filterNot { tool ->
-                    tool.serverName in invalidNames || !validProviderToolBinding(tool.serverName, tool.name)
+                    tool.namespace in invalidNames || !validProviderToolBinding(tool.namespace, tool.name)
                 }
             val collidedProviderNames = validBindings
-                .groupBy { tool -> providerToolName(tool.serverName, tool.name) }
+                .groupBy { tool -> providerToolName(tool.namespace, tool.name) }
                 .filterValues { tools -> tools.size > 1 }
                 .keys
             if (collidedProviderNames.isNotEmpty()) {
                 Log.w(TAG, "Ignoring colliding MCP provider tool names: $collidedProviderNames")
             }
             validBindings
-                .filterNot { tool -> providerToolName(tool.serverName, tool.name) in collidedProviderNames }
+                .filterNot { tool -> providerToolName(tool.namespace, tool.name) in collidedProviderNames }
                 .forEach { tool ->
                     add(
                         Tool(
-                            name = providerToolName(tool.serverName, tool.name),
+                            name = providerToolName(tool.namespace, tool.name),
                             description = tool.description ?: "",
                             parameters = { tool.inputSchema },
                             interactionRequirement = {
@@ -182,10 +191,16 @@ class TurnToolSetFactory(
                                 mcpManager.callTool(
                                     realmAccess = realmAccess,
                                     serverId = tool.serverId,
+                                    interactionId = tool.interactionId,
                                     toolName = tool.name,
                                     expectedDefinitionDigest = tool.definitionDigest,
                                     expectedNeedsApproval = tool.needsApproval,
                                     args = it.jsonObject,
+                                    onResolvedTool = { metadata ->
+                                        reportMetadata(kotlinx.serialization.json.buildJsonObject {
+                                            put("com.measix/resolvedTool", metadata)
+                                        }, me.rerere.ai.core.ToolMetadataDelivery.DEFERRED)
+                                    },
                                 ) { owned ->
                                     registerUnpublishedResource(artifactStore.unpublishedLease(owned))
                                 }

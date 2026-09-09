@@ -245,6 +245,15 @@ internal class EnterpriseSessionController(
         }
     }
 
+    suspend fun listFeed(access: RealmAccess.Enterprise, query: EnterpriseFeedQuery): EnterpriseFeedResult = mutex.withLock {
+        val current = requireSession(allowOffline = true)
+        if (!allowsDataAccess(current.manifest, access)) fail("enterprise_data_access_unavailable")
+        val version = current.manifest.feeds.find { it.scope == access.scope } ?: fail("enterprise_feed_not_ready")
+        withContext(Dispatchers.IO) {
+            EnterpriseFeed.list(store.readFeed(version), access.scope, query, Instant.ofEpochMilli(nowMillis()))
+        }
+    }
+
     suspend fun feedDetail(selection: RealmSelection, id: String): EnterpriseUpdateItem = mutex.withLock {
         val current = requirePortalSelection(selection)
         val access = selection.access as RealmAccess.Enterprise
@@ -485,6 +494,19 @@ internal class EnterpriseSessionController(
     }
 
     suspend fun pruneUnusedRevisions() = mutex.withLock { prune(manifestForExit()) }
+
+    /** A synchronous projection needs no execution lease or revision retention beyond this read. */
+    suspend fun <T> readBindings(
+        access: RealmAccess.Enterprise,
+        project: (EnterpriseAppliedVersion, List<EnterpriseRuntimeBinding>) -> T,
+    ): T = mutex.withLock {
+        val current = requireSession(allowOffline = true)
+        if (!allowsDataAccess(current.manifest, access)) fail("enterprise_data_access_unavailable")
+        val bindings = withContext(Dispatchers.IO) { store.bindings(current.manifest) }
+        currentCoroutineContext().ensureActive()
+        requireSession(allowOffline = true)
+        project(requireNotNull(current.manifest.applied), bindings)
+    }
 
     suspend fun captureBindings(access: RealmAccess.Enterprise): EnterpriseBindingLease = mutex.withLock {
         val current = requireSession(allowOffline = false)

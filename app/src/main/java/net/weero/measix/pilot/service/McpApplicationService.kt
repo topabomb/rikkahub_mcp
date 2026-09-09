@@ -16,104 +16,84 @@ class McpApplicationService(
 ) {
     suspend fun refreshAll(): McpRefreshReceipt = coordinator.refreshAllRegisteredServers()
 
-    suspend fun restart(serverId: ConfigurationReference): McpRefreshReceipt {
-        val config = requireNotNull(currentConfig(serverId)) { "MCP server not found" }
-        return coordinator.restartServer(config.id)
-    }
+    suspend fun restart(serverId: ConfigurationReference): McpRefreshReceipt = coordinator.restartServer(userReference(serverId))
 
-    fun authorize(serverId: ConfigurationReference, context: Context) {
-        val config = requireNotNull(currentConfig(serverId)) { "MCP server not found" }
-        coordinator.startAuthorization(config, context.applicationContext)
-    }
+    fun authorize(serverId: ConfigurationReference, context: Context) =
+        coordinator.startAuthorization(userReference(serverId), context.applicationContext)
 
-    fun cancelAuthorization(serverId: ConfigurationReference) {
-        val config = currentConfig(serverId) ?: return
-        coordinator.cancelAuthorization(config)
-    }
+    fun cancelAuthorization(serverId: ConfigurationReference) = coordinator.cancelAuthorization(userReference(serverId))
 
-    suspend fun clearAuthorization(serverId: ConfigurationReference) {
-        val config = currentConfig(serverId) ?: return
-        coordinator.clearAuthorization(config)
-    }
+    suspend fun clearAuthorization(serverId: ConfigurationReference) = coordinator.clearAuthorization(userReference(serverId))
 
-    suspend fun setOAuthClientCredentials(serverId: ConfigurationReference, clientId: String, clientSecret: String?) {
-        val config = requireNotNull(currentConfig(serverId)) { "MCP server not found" }
-        coordinator.setOAuthClientCredentials(config, clientId, clientSecret)
-    }
+    suspend fun setOAuthClientCredentials(serverId: ConfigurationReference, clientId: String, clientSecret: String?) =
+        coordinator.setOAuthClientCredentials(userReference(serverId), clientId, clientSecret)
 
     suspend fun upsert(config: McpServerConfig) {
-        val effectiveOthers = settingsStore.effectiveSettings.value.settings.mcpServers
-            .filterNot { it.id == config.id }
-        coordinator.withConfigurationMutation {
-            settingsStore.updateLocal { settings ->
-                requireUniqueName(effectiveOthers + settings.mcpServers, config)
-                val existing = settings.mcpServers.firstOrNull { it.id == config.id }
-                val saved = existing?.let { applyEditorSave(it, config) } ?: config
-                settings.copy(
-                    mcpServers = if (existing == null) settings.mcpServers + saved else
-                        settings.mcpServers.map { if (it.id == config.id) saved else it }
-                )
-            }
+        userReference(config.id)
+        settingsStore.updateLocal { settings ->
+            requireUniqueName(settings.mcpServers, config)
+            val existing = settings.mcpServers.firstOrNull { it.id == config.id }
+            val saved = existing?.let { applyEditorSave(it, config) } ?: config
+            settings.copy(
+                mcpServers = if (existing == null) settings.mcpServers + saved else
+                    settings.mcpServers.map { if (it.id == config.id) saved else it }
+            )
         }
     }
 
     suspend fun importServers(newConfigs: List<McpServerConfig>): McpImportResult {
+        newConfigs.forEach { userReference(it.id) }
         var result = McpImportResult(emptyList(), emptyList())
-        val managed = settingsStore.effectiveSettings.value.settings.mcpServers
-        coordinator.withConfigurationMutation {
-            settingsStore.updateLocal { local ->
-                val existingByName = (managed + local.mcpServers)
-                    .associateBy { it.commonOptions.name.trim().lowercase() }
-                    .toMutableMap()
-                val added = mutableListOf<McpServerConfig>()
-                val conflicts = mutableListOf<Pair<McpServerConfig, McpServerConfig>>()
-                newConfigs.forEach { candidate ->
-                    val key = normalizedName(candidate)
-                    val existing = existingByName[key]
-                    if (existing == null) {
-                        added += candidate
-                        existingByName[key] = candidate
-                    } else {
-                        conflicts += candidate to existing
-                    }
+        settingsStore.updateLocal { local ->
+            val existingByName = local.mcpServers
+                .associateBy { it.commonOptions.name.trim().lowercase() }
+                .toMutableMap()
+            val added = mutableListOf<McpServerConfig>()
+            val conflicts = mutableListOf<Pair<McpServerConfig, McpServerConfig>>()
+            newConfigs.forEach { candidate ->
+                val key = normalizedName(candidate)
+                val existing = existingByName[key]
+                if (existing == null) {
+                    added += candidate
+                    existingByName[key] = candidate
+                } else {
+                    conflicts += candidate to existing
                 }
-                result = McpImportResult(added, conflicts)
-                local.copy(mcpServers = local.mcpServers + added)
             }
+            result = McpImportResult(added, conflicts)
+            local.copy(mcpServers = local.mcpServers + added)
         }
         return result
     }
 
     suspend fun overwriteByName(configs: List<McpServerConfig>) {
+        configs.forEach { userReference(it.id) }
         val imports = configs.associateBy(::normalizedName)
-        coordinator.withConfigurationMutation {
-            settingsStore.updateLocal { settings ->
-                settings.copy(
-                    mcpServers = settings.mcpServers.map { existing ->
-                        imports[normalizedName(existing)]?.let { imported ->
-                            applyEditorSave(existing, imported.clone(id = existing.id))
-                        } ?: existing
-                    }
-                )
-            }
+        settingsStore.updateLocal { settings ->
+            settings.copy(
+                mcpServers = settings.mcpServers.map { existing ->
+                    imports[normalizedName(existing)]?.let { imported ->
+                        applyEditorSave(existing, imported.clone(id = existing.id))
+                    } ?: existing
+                }
+            )
         }
     }
 
     suspend fun delete(serverId: ConfigurationReference) {
-        coordinator.withConfigurationMutation {
-            settingsStore.updateLocal { settings ->
-                settings.copy(
-                    mcpServers = settings.mcpServers.filterNot { it.id == serverId },
-                    assistants = settings.assistants.map { assistant ->
-                        assistant.copy(mcpServers = assistant.mcpServers - serverId)
-                    },
-                )
-            }
+        userReference(serverId)
+        settingsStore.updateLocal { settings ->
+            settings.copy(
+                mcpServers = settings.mcpServers.filterNot { it.id == serverId },
+                assistants = settings.assistants.map { assistant ->
+                    assistant.copy(mcpServers = assistant.mcpServers - serverId)
+                },
+            )
         }
     }
 
-    private fun currentConfig(serverId: ConfigurationReference): McpServerConfig? =
-        settingsStore.effectiveSettings.value.settings.mcpServers.firstOrNull { it.id == serverId }
+    private fun userReference(reference: ConfigurationReference): ConfigurationReference.User =
+        requireNotNull(reference as? ConfigurationReference.User) { "enterprise_mcp_definition_is_read_only" }
 
     private fun requireUniqueName(existing: List<McpServerConfig>, candidate: McpServerConfig) {
         require(existing.none { it.id != candidate.id && normalizedName(it) == normalizedName(candidate) }) {

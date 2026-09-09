@@ -279,7 +279,7 @@ class PortalWebViewAndroidTest {
             val conversations = mockk<ConversationApplicationService>()
             coEvery { conversations.stopEnterpriseWork(any()) } returns Unit
             val exit = EnterpriseExitService(sessions, sync, conversations,
-                ApplicationRecoveryGate().apply { ready() }, scope, registry, mockk(relaxed = true), mockk { io.mockk.coEvery { closeRealm(any()) } returns Unit })
+                ApplicationRecoveryGate().apply { ready() }, scope, registry, mockk(relaxed = true), mockk { io.mockk.coEvery { closeRealm(any()) } returns Unit }, mcp = mockk { io.mockk.coEvery { closeRealm(any()) } returns Unit })
             lateinit var native: PortalNativeActions
             val media = PortalMediaStore(File(root, "media")).also { it.recover() }
             var displayed by mutableStateOf<PortalWebView?>(null)
@@ -339,7 +339,7 @@ class PortalWebViewAndroidTest {
             val registry = PortalDocumentRegistry()
             val mediaRoot = File(root, "media")
             val media = PortalMediaStore(mediaRoot).also { it.recover() }
-            val exit = EnterpriseExitService(sessions, sync, mockk(), ApplicationRecoveryGate().apply { ready() }, scope, registry, mockk(relaxed = true), mockk { io.mockk.coEvery { closeRealm(any()) } returns Unit })
+            val exit = EnterpriseExitService(sessions, sync, mockk(), ApplicationRecoveryGate().apply { ready() }, scope, registry, mockk(relaxed = true), mockk { io.mockk.coEvery { closeRealm(any()) } returns Unit }, mcp = mockk { io.mockk.coEvery { closeRealm(any()) } returns Unit })
             lateinit var native: PortalNativeActions
             var displayed by mutableStateOf<PortalWebView?>(null)
             val host = withContext(Dispatchers.Main) {

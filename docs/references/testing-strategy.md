@@ -41,6 +41,7 @@
 | 请求凭据与传输保密 | `RequestCredentialsTest` 验证聊天四线及图片生成/编辑的实际请求构建、认证唯一性、私有图片下载与个人轮换缓存隔离；`ModelRequestTransportTest` 验证受管请求覆盖拒绝；`RequestPrivacyTest` 通过两个 HTTP 服务验证跨 origin 跳转阻断，`RequestLoggingInterceptorTest` 验证应用日志隔离 |
 | 辅助生成任务、原 Session 与摘要取消 | `AuxiliaryGenerationOwnershipTest` 使用实际生成与应用服务、延迟 Provider 验证取消等待、旧 Session、切域、手动标题、移交后原助手清理、清理失败重试、建议迟到清空拒绝及摘要先释放后提交；模型回退、原企业辅助 binding 和捕获前助手变化由 `ModelExecutionServiceTest` 验证；`ConversationRepositoryTreeIntegrationTest` 在真实 Room 注入 Child 删除失败，验证整个摘要树事务回滚及重试 |
 | 原生切域与 Portal 清理 | `EnterpriseApplicationServiceTest` 用真实 Session/store 和可控宿主回执验证发布屏障、进度与原选择/目标 Session；`PortalDocumentTest` 验证原请求、宿主超时及重开准入；`PortalWebViewAndroidTest` 验证系统 Cookie/站点存储清理和真实网页消息，`EnterprisePageAndroidTest` 验证原生页面接线与后台交接取消 |
+| MCP 本地企业执行 | `LocalEnterpriseMcpServiceTest` 经真实 SDK/Streamable HTTP 与本地 source engine 验证标准发现/调用、ToolRef 身份/期限、原 Session Feed 和 generation 屏障；`McpToolCallExecutorTest` 验证受管错误保密与 typed barrier；`McpTurnCapabilitySnapshotTest` 验证只读检查的策略、开关、目录版本与 binding 轮换。均不代表设备或真实平台互操作 |
 | MCP 用户定义准入 | `SettingsStoreMcpTest` 使用实际 DataStore 验证配置写入与定义读取串行、取消释放 owner、读取规范化且不回写；不依赖全局有效配置投影 |
 | MCP 连接与传输所有权 | `McpConnectionLifecycleTest` 验证取消、原始 transport 关闭、失败持有与重新启用；`McpClientTransportTest` 验证 SDK 终态后的实际 I/O 等待；`McpTransportOwnershipIntegrationTest` 经真实 OkHttp/本机 HTTP 验证响应头等待取消、截断恢复和协议失败，不代表 Android 设备或真实服务互操作 |
 | MCP 完整目录与持久化主体 | `McpProtocolDiscoveryTest` 经 SDK、OkHttp 和本机 HTTP 服务验证完整 Tool JSON、分页及 SSE；`McpCatalogIdentityTest` 使用实际 DataStore 验证主体隔离、旧个人迁移与个人恢复保全企业；`McpCatalogPublicationTest` 验证提交、取消与回执顺序；`McpCatalogPersistenceTest` 验证 Android 关闭重开后的目录与磁盘一致 |
@@ -182,3 +183,5 @@ AndroidX JSON 的 `sampledMetrics` 保留每轮耗时与 `JavaAllocatedBytesAppr
 指标 API 依据：[Android Debug runtime statistics](https://developer.android.com/reference/android/os/Debug#getRuntimeStat(java.lang.String))、[AndroidX TraceMetric](https://developer.android.com/reference/androidx/benchmark/macro/TraceMetric)、[Metric.Measurement](https://developer.android.com/reference/androidx/benchmark/macro/Metric.Measurement)。
 
 真实 IME 布局验证要求非零 inset 的停靠软键盘，CI 关闭硬键盘。`TtsControllerLayoutTest` 使用 edge-to-edge/adjustResize 窗口，并等待实际 IME 高度；测试需要临时调整系统手写设置时，只在最小授权作用域写入，任何失败均在 finally 恢复原值。键盘未出现不能转换为跳过，也不能改变生产输入配置来满足测试。
+
+`contracts/runtime/managed-snapshot-required.json` 原样来自 platform-core 的 `api/fixtures/problem/managed-snapshot-required.json`，由 `LocalEnterpriseMcpServiceTest` 消费。其余本地工具行为测试是 Android 自有测试，不宣称已有跨端共享样例覆盖。

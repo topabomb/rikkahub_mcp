@@ -139,11 +139,16 @@ val dataSourceModule = module {
         McpCatalogStore(context = get(), scope = get(), settingsStore = get())
     }
 
+    single { net.weero.measix.pilot.data.enterprise.LocalEnterpriseMcpService(get(), get()) }
+
     single<OAuthCallbackKeepAlive> { McpOAuthCallbackKeepAlive() }
 
     single {
         McpRuntimeCoordinator(
             settingsStore = get(),
+            sessions = get(),
+            localMcp = get(),
+            synchronization = get(),
             catalogStore = get(),
             appScope = get(),
             artifactStore = get(),

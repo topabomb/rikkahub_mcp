@@ -128,6 +128,8 @@ data class McpAvailableTool(
     val description: String?,
     val inputSchema: JsonObject,
     val needsApproval: Boolean,
+    val namespace: String = serverName,
+    val interactionId: String? = null,
 )
 
 data class TurnMcpCapabilitySnapshot(
@@ -231,8 +233,8 @@ class McpCatalogStore internal constructor(
                 return@commit McpCatalogCommitResult.RejectedGeneration(previousGeneration)
             }
             if (previousGeneration != null && candidate.managed?.generation == previousGeneration) {
-                require(previous.definitionDigest == candidate.definitionDigest && previous.managed == candidate.managed) {
-                    "Managed MCP definition changed within the same generation"
+                require(previous.managed == candidate.managed) {
+                    "Managed MCP surface changed within the same generation"
                 }
             }
             val headToken = (headTokens[candidate.key] ?: 0L) + 1L

@@ -22,20 +22,20 @@ class McpProtocolClientFactoryTest {
     @Test fun `constructing factory and using overrides never initializes HTTP`() = runTest {
         val transport = mockk<AbstractTransport>()
         val client = mockk<Client>()
-        val factory = McpProtocolClientFactory(
+        val factory = McpProtocolClientFactory(createManagedHttpClient = { error("unexpected managed connection") }, createLocalHttpClient = { error("unexpected local connection") },
             createHttpClient = { error("HTTP must remain uninitialized") },
             transportOverride = { transport },
             clientOverride = { client },
         )
         val config = McpServerConfig.SseTransportServer(url = "https://example.invalid/mcp")
-        assertSame(client, factory.createClient(config))
-        assertSame(transport, factory.createTransport(config))
+        assertSame(client, factory.createClient(McpConnectionDefinition.User(config)))
+        assertSame(transport, factory.createTransport(McpConnectionDefinition.User(config)))
     }
 
     @Test fun `parallel real transport creation shares one HTTP client without connecting`() = runTest {
         val created = AtomicInteger()
         lateinit var http: HttpClient
-        val factory = McpProtocolClientFactory(createHttpClient = {
+        val factory = McpProtocolClientFactory(createManagedHttpClient = { error("unexpected managed connection") }, createLocalHttpClient = { error("unexpected local connection") }, createHttpClient = {
             created.incrementAndGet()
             HttpClient(OkHttp) { install(SSE) }.also { http = it }
         })
@@ -45,7 +45,7 @@ class McpProtocolClientFactoryTest {
                 async(Dispatchers.Default) {
                     val config = if (index % 2 == 0) McpServerConfig.SseTransportServer(url = "https://example.invalid/mcp")
                         else McpServerConfig.StreamableHTTPServer(url = "https://example.invalid/mcp")
-                    factory.createTransport(config)
+                    factory.createTransport(McpConnectionDefinition.User(config))
                 }
             }.awaitAll()
             assertEquals(1, created.get())
@@ -59,7 +59,7 @@ class McpProtocolClientFactoryTest {
         val created = AtomicInteger()
         lateinit var cancelled: Deferred<AbstractTransport>
         val handedOff = AtomicBoolean(false)
-        val factory = McpProtocolClientFactory(createHttpClient = {
+        val factory = McpProtocolClientFactory(createManagedHttpClient = { error("unexpected managed connection") }, createLocalHttpClient = { error("unexpected local connection") }, createHttpClient = {
             created.incrementAndGet()
             cancelled.cancel()
             http
@@ -67,14 +67,14 @@ class McpProtocolClientFactoryTest {
         val config = McpServerConfig.SseTransportServer(url = "https://example.invalid/mcp")
         try {
             cancelled = async(Dispatchers.Default, start = CoroutineStart.LAZY) {
-                factory.createTransport(config).also { handedOff.set(true) }
+                factory.createTransport(McpConnectionDefinition.User(config)).also { handedOff.set(true) }
             }
             cancelled.start()
             try { cancelled.await(); fail("Cancelled initialization cannot return a transport") }
             catch (_: CancellationException) { }
             cancelled.join()
             assertFalse(handedOff.get())
-            val later = factory.createTransport(config)
+            val later = factory.createTransport(McpConnectionDefinition.User(config))
             assertEquals(1, created.get())
             later.close()
         } finally { http.close() }

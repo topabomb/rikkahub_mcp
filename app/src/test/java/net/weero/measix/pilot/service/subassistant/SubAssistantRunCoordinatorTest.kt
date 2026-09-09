@@ -455,7 +455,7 @@ class SubAssistantRunCoordinatorTest {
         val turnFinalizer = mockk<TurnFinalizer>(relaxed = true)
         val toolSetFactory = mockk<TurnToolSetFactory>(relaxed = true)
         if (preparationGate != null) {
-            coEvery { toolSetFactory.prepareMcpCapabilities(any()) } coAnswers {
+            coEvery { toolSetFactory.prepareMcpCapabilities(any(), any(), any(), any(), any(), any()) } coAnswers {
                 preparationGate.first.complete(Unit)
                 preparationGate.second.await()
                 TurnMcpCapabilitySnapshot.EMPTY

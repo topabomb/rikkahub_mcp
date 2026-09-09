@@ -26,6 +26,51 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class McpTransportOwnershipIntegrationTest {
+    @Test fun `managed GET barrier stays typed for notification and primed request recovery without replay`() = runBlocking {
+        val problem = requireNotNull(javaClass.getResourceAsStream("/contracts/runtime/managed-snapshot-required.json")).use { it.readBytes() }
+        for (primed in listOf(false, true)) {
+            val server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
+            val posts = AtomicInteger()
+            val gets = AtomicInteger()
+            val failure = CompletableDeferred<Throwable>()
+            server.createContext("/mcp") { exchange ->
+                try {
+                    exchange.requestBody.readBytes()
+                    if (exchange.requestMethod == "GET") {
+                        gets.incrementAndGet()
+                        exchange.responseHeaders.add("Content-Type", if (primed) "application/json" else "application/problem+json")
+                        exchange.sendResponseHeaders(428, problem.size.toLong())
+                        exchange.responseBody.write(problem)
+                    } else {
+                        posts.incrementAndGet()
+                        if (primed) {
+                            val body = "id: original-cursor\nretry: 1\ndata: \n\n".toByteArray()
+                            exchange.responseHeaders.add("Content-Type", "text/event-stream")
+                            exchange.sendResponseHeaders(200, body.size.toLong())
+                            exchange.responseBody.write(body)
+                        } else exchange.sendResponseHeaders(202, -1)
+                    }
+                } finally { exchange.close() }
+            }
+            server.start()
+            val http = HttpClient(OkHttp)
+            val transport = McpStreamableHttpTransport(http, "http://127.0.0.1:${server.address.port}/mcp", managed = true)
+            transport.onError { failure.complete(it) }
+            try {
+                withTimeout(5_000) {
+                    transport.start()
+                    transport.send(McpJson.decodeFromString<JSONRPCMessage>(if (primed)
+                        """{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"invoke_tool","arguments":{}}}"""
+                        else """{"jsonrpc":"2.0","method":"notifications/initialized"}"""), null)
+                    assertTrue(failure.await() is McpManagedSnapshotRequired)
+                    transport.close()
+                    assertEquals(1, gets.get())
+                    assertEquals(1, posts.get())
+                }
+            } finally { transport.close(); http.close(); server.stop(0) }
+        }
+    }
+
     @Test fun `legacy SSE EOF before endpoint fails initialization explicitly`() = runBlocking {
         val server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
         server.createContext("/mcp") { exchange ->

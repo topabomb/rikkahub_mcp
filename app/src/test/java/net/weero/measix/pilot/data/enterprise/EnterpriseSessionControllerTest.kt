@@ -230,6 +230,26 @@ class EnterpriseSessionControllerTest {
     }
 
     @Test
+    fun `failed binding projection owns no execution lease and cannot block exit`() = runTest {
+        var failRead = false
+        val controller = EnterpriseSessionController(EnterpriseAppliedStore(temporary.newFolder()) {
+            if (failRead && it == EnterpriseStorageCheckpoint.BINDINGS_READ) throw IOException("injected")
+        }) { 1000L }
+        val packet = exampleEnterprisePackage()
+        val ready = controller.enrollFixture(packet)
+        val access = RealmAccess.Enterprise(packet.identity.scope, ready.manifest.session!!.id)
+        failRead = true
+        try { controller.readBindings(access) { _, _ -> Unit }; fail("read succeeded") }
+        catch (_: IOException) { }
+        failRead = false
+        try { controller.readBindings(access) { _, _ -> error("projection failed") }; fail("projection succeeded") }
+        catch (_: IllegalStateException) { }
+        val token = controller.beginExit(requireNotNull(controller.captureExitRequest()))
+        controller.finishExit(token)
+        assertNull(controller.available().manifest.session)
+    }
+
+    @Test
     fun `cancellation or expiry during a binding read cannot leave an execution lease`() = runTest {
         for (cancel in listOf(true, false)) {
             var now = 1000L

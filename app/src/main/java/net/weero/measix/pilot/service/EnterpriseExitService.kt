@@ -40,6 +40,7 @@ internal class EnterpriseExitService(
     private val portals: PortalDocumentRegistry,
     private val images: net.weero.measix.pilot.data.imggen.ImageGenerationCoordinator,
     private val terminals: net.weero.measix.pilot.service.workspace.WorkspaceTerminalRuntime,
+    private val mcp: net.weero.measix.pilot.data.ai.mcp.McpRuntimeCoordinator,
 ) {
     private val mutex = Mutex()
     private val active = mutableMapOf<RealmAccess.Enterprise, Deferred<EnterpriseExitResult>>()
@@ -152,6 +153,7 @@ internal class EnterpriseExitService(
                 async { synchronization.cancelAndAwait(token.access) },
                 async { images.cancelAndAwait(token.access) },
                 async { terminals.closeRealm(token.access) },
+                async { mcp.closeRealm(token.access) },
                 async {
                     if (duringRecovery) conversations.requireEnterpriseStopped(token) else conversations.stopEnterpriseWork(token)
                 },

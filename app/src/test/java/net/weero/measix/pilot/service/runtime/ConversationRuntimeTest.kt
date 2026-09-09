@@ -44,6 +44,7 @@ import net.weero.measix.pilot.data.db.entity.TurnExecutionStatus
 import net.weero.measix.pilot.service.applyToolInteractionDecision
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
@@ -402,6 +403,9 @@ class ConversationRuntimeTest {
         val owner = context.model.requests as ModelExecutionLease
         val inspection = owner.borrow { it(ModelRequestTarget.LocalExample) }
         rt.bindModelExecution(turnId, initialWorker, context.assistant.id, owner)
+        var mcpReleases = 0
+        rt.bindMcpExecution(turnId, initialWorker, context.assistant.id,
+            net.weero.measix.pilot.data.ai.mcp.McpExecutionLease { mcpReleases++ })
         rt.bindTurnContext(turnId, initialWorker, context)
         val projection = TurnModelContextProjection(entries = emptyList(), locators = emptyMap())
         rt.bindModelContextProjection(turnId, initialWorker, projection)
@@ -427,10 +431,16 @@ class ConversationRuntimeTest {
         assertSame(projection, rt.requireTurnModelContextProjection(turnId, continuationWorker))
         rt.releaseTurnWorker(turnId, initialWorker, false)
         assertTrue(inspection.execute { it === ModelRequestTarget.LocalExample })
-        continuationWorker.cancel()
+        assertEquals(0, mcpReleases)
+        assertNull(rt.captureAndRequestStop("managed_snapshot_required", turnId = Uuid.random()))
+        assertTrue(continuationWorker.isActive)
+        val stopped = requireNotNull(rt.captureAndRequestStop("managed_snapshot_required", turnId = turnId))
+        assertSame(continuationWorker, stopped.worker)
+        assertTrue(continuationWorker.isCancelled)
         rt.releaseTurnWorker(turnId, continuationWorker, false)
         try { inspection.execute { fail("released continuation reached I/O") }; fail("closed inspection accepted") }
         catch (error: IllegalStateException) { assertEquals("model_execution_lease_closed", error.message) }
+        assertEquals(1, mcpReleases)
         scope.cancel()
     }
 

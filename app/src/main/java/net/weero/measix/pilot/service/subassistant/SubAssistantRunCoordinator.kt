@@ -1013,7 +1013,9 @@ class SubAssistantRunCoordinator internal constructor(
             assistant = target,
             memories = memoryAccess?.let { memoryService.read(it) }.orEmpty(),
         )
-        val mcpCapabilities = toolSetFactory.prepareMcpCapabilities(target)
+        val mcpCapabilities = toolSetFactory.prepareMcpCapabilities(realmAccess, captured, runtime, childTurnId, activeWorker) {
+            turnFinalizer.stopInteraction(runtime, childTurnId, "managed_snapshot_required")
+        }
         targetMcpPreparationFailure(mcpCapabilities)?.let(::error)
         val regularTools = toolSetFactory.buildTools(
             realmAccess = realmAccess,

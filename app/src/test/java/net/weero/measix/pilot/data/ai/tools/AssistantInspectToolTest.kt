@@ -58,14 +58,15 @@ class AssistantInspectToolTest {
         val managementService = mockk<AssistantManagementService>()
         val memoryService = mockk<net.weero.measix.pilot.service.MemoryService>()
         val configurations = mockk<net.weero.measix.pilot.service.ConfigurationQueryService>()
-        coEvery { configurations.read(any()) } answers {
+        coEvery { configurations.readExecution(any()) } answers {
+            net.weero.measix.pilot.data.datastore.ExecutionConfigurationSnapshot(settings,
             net.weero.measix.pilot.data.configuration.ConfigurationResolver.resolve(
                 net.weero.measix.pilot.data.datastore.UserSettingsDocument.empty().copy(
                     configuration = net.weero.measix.pilot.data.datastore.UserConfiguration(assistants = effectiveSettings.value.settings.assistants),
                 ),
                 net.weero.measix.pilot.data.configuration.ConfigurationScope.Personal,
                 net.weero.measix.pilot.data.enterprise.EnterpriseState.Loading,
-            )
+            ), "test")
         }
         if (memoryResult != null) {
             coEvery { memoryService.inspect(any(), any(), any()) } answers { memoryResult.getOrThrow() }
@@ -204,7 +205,7 @@ class AssistantInspectToolTest {
         val target = accessibleTarget(enableMemory = true)
         val caller = caller()
         val toolSetFactory = mockk<TurnToolSetFactory>()
-        coEvery { toolSetFactory.captureMcpCapabilities(any()) } returns
+        coEvery { toolSetFactory.inspectMcpCapabilities(any(), any(), any()) } returns
             net.weero.measix.pilot.data.ai.mcp.TurnMcpCapabilitySnapshot.EMPTY
         coEvery {
             toolSetFactory.buildTools(

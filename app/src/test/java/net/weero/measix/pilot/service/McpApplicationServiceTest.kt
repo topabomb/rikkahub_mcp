@@ -40,9 +40,6 @@ class McpApplicationServiceTest {
                 effective.value = committed.toEffectiveSettingsSnapshot(effective.value.revision + 1)
             }
         }
-        coEvery { manager.withConfigurationMutation(any()) } coAnswers {
-            firstArg<suspend () -> Unit>().invoke()
-        }
         service = McpApplicationService(manager, settingsStore)
     }
 

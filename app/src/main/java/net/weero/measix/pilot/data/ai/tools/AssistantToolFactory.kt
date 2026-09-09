@@ -333,9 +333,10 @@ class AssistantToolFactory internal constructor(
             return errorResult("target_is_caller")
         }
 
-        val configuration = try { configurations.read(realmAccess) }
+        val snapshot = try { configurations.readExecution(realmAccess) }
         catch (cancelled: CancellationException) { throw cancelled }
         catch (_: Exception) { return errorResult("tool_not_permitted") }
+        val configuration = snapshot.configuration
         val caller = configuration.assistants[callerAssistantId]
             ?: return errorResult("tool_not_permitted")
         if (!configuration.access(net.weero.measix.pilot.data.configuration.ConfigurationCategory.ASSISTANT, callerAssistantId).canExecute ||
@@ -351,7 +352,7 @@ class AssistantToolFactory internal constructor(
 
         val sections = parseInspectSections(obj)
         val toolNames = if (INSPECT_SECTION_TOOLS in sections) {
-            listTargetToolNames(realmAccess, target, settingsStore.effectiveSettings.value.settings, masterConversationId,
+            listTargetToolNames(realmAccess, target, snapshot, masterConversationId,
                 configuration.assistantModel(target.id).reference?.let { configuration.models[it]?.model },
                 configuration.modelSelection(net.weero.measix.pilot.data.configuration.ModelSelectionRole.ATTACHMENT_INSPECTION).isAvailable,
                 configuration.modelSelection(net.weero.measix.pilot.data.configuration.ModelSelectionRole.IMAGE).isAvailable)
@@ -412,7 +413,7 @@ class AssistantToolFactory internal constructor(
     private suspend fun listTargetToolNames(
         realmAccess: net.weero.measix.pilot.data.enterprise.RealmAccess,
         target: Assistant,
-        settings: Settings,
+        snapshot: net.weero.measix.pilot.data.datastore.ExecutionConfigurationSnapshot,
         masterConversationId: Uuid,
         capabilityModel: me.rerere.ai.provider.Model?,
         inspectionAvailable: Boolean,
@@ -422,10 +423,10 @@ class AssistantToolFactory internal constructor(
             realmAccess = realmAccess,
             assistant = target,
             conversationId = masterConversationId,
-            settings = settings,
+            settings = snapshot.userSettings,
             capabilityModel = capabilityModel,
             turnKind = TurnKind.SUB_ASSISTANT,
-            mcpCapabilities = toolSetFactory.captureMcpCapabilities(target),
+            mcpCapabilities = toolSetFactory.inspectMcpCapabilities(realmAccess, snapshot, target),
         ).map { it.name }
         return buildList {
             addAll(built)

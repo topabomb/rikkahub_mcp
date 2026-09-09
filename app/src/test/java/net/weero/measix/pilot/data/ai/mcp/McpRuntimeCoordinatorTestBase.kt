@@ -63,6 +63,7 @@ internal abstract class McpRuntimeCoordinatorTestBase {
         ListToolsResult(tools = listOf(serverTool("search")))
     }
     protected val settingsStore = mockk<SettingsStore>()
+    protected val sessions = mockk<net.weero.measix.pilot.data.enterprise.EnterpriseSessionController>()
     protected val catalogs = MutableStateFlow<Map<McpCatalogKey, McpCatalogSnapshot>>(emptyMap())
     protected val catalogStore = mockk<McpCatalogStore>()
     protected lateinit var networkOnline: MutableStateFlow<Boolean>
@@ -133,6 +134,9 @@ internal abstract class McpRuntimeCoordinatorTestBase {
             logger = { _, _ -> },
         )
         manager = McpRuntimeCoordinator(
+            sessions = sessions,
+            localMcp = io.mockk.mockk(),
+            synchronization = io.mockk.mockk(),
             settingsStore = settingsStore,
             catalogStore = catalogStore,
             appScope = AppScope(dispatcher),
@@ -277,7 +281,7 @@ internal class MutableStateFlowHolder {
 
 /** Test-only status projection; production exposes only the atomic runtime capability map. */
 internal val McpRuntimeCoordinator.syncingStatus: TestStatusSnapshot
-    get() = TestStatusSnapshot(runtimeCapabilities.value.mapValues { it.value.status })
+    get() = TestStatusSnapshot(runtimeCapabilities.value.mapKeys { it.key.serverId }.mapValues { it.value.status })
 
 internal data class TestStatusSnapshot(val value: Map<ConfigurationReference, McpStatus>)
 

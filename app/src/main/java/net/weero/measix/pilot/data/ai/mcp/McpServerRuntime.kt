@@ -88,12 +88,12 @@ internal sealed interface McpToolCallPreparation {
 }
 
 internal sealed interface McpToolCallAdmission {
-    data class Candidate(val config: McpServerConfig) : McpToolCallAdmission
+    data class Candidate(val config: McpConnectionDefinition) : McpToolCallAdmission
     data class Rejected(val serverName: String, val message: String) : McpToolCallAdmission
 }
 
 internal class McpServerRuntime(
-    val serverId: ConfigurationReference,
+    val key: McpRuntimeKey,
     private val definition: McpRuntimeDefinition,
     private val catalogStore: McpCatalogStore,
     private val appScope: AppScope,
@@ -106,8 +106,10 @@ internal class McpServerRuntime(
     private val foregroundState: StateFlow<Boolean>,
     private val policy: McpServerRuntimePolicy,
     private val logger: (String, String) -> Unit,
-    private val onClosed: (ConfigurationReference) -> Unit,
+    private val onClosed: (McpRuntimeKey) -> Unit,
+    private val onManagedSnapshotRequired: (McpManagedSnapshotRequired) -> Unit,
 ) {
+    val serverId: ConfigurationReference get() = key.serverId
     val mutex = Mutex()
     private val runtimeJob = SupervisorJob(appScope.coroutineContext[Job])
     private val runtimeScope = CoroutineScope(appScope.coroutineContext + runtimeJob)
@@ -133,13 +135,14 @@ internal class McpServerRuntime(
     private var authorizationOperation = 0L
     @Volatile
     private var activated = false
+    private var barrierReported = false
     private var reconnectAttempt = 0
     private val generation = AtomicLong(0)
 
     fun currentGeneration(): Long = generation.get()
 
     private fun capability(): McpRuntimeCapability =
-        stateStore.capabilities.value[serverId] ?: McpRuntimeCapability.EMPTY
+        stateStore.capabilities.value[key] ?: McpRuntimeCapability.EMPTY
 
     private val status: McpStatus get() = capability().status
     private val activeCatalog: McpCatalogSnapshot? get() = capability().catalog
@@ -148,11 +151,11 @@ internal class McpServerRuntime(
     private var displayName = serverId.toString()
 
     /** Configuration admission precedes the connection mutex; callbacks only inspect/hand off runtime state. */
-    private suspend fun <T> withDefinition(block: (McpServerConfig?) -> T): T =
-        definition.withCurrent { current ->
+    private suspend fun <T> withDefinition(block: (McpConnectionDefinition?) -> T): T =
+        definition.withCurrent(McpDefinitionUse.EXECUTION) { current ->
             mutex.withLock {
-                current?.let { displayName = it.commonOptions.name }
-                block(current?.takeIf { it.commonOptions.enable && it.commonOptions.name.isNotBlank() })
+                current?.let { displayName = it.name }
+                block(current?.takeIf { it.enabled && !barrierReported })
             }
         }
 
@@ -161,7 +164,7 @@ internal class McpServerRuntime(
     suspend fun bootstrap() = withContext(ioDispatcher) {
         withDefinition { config ->
             if (config == null) return@withDefinition
-            hydrateCatalogLocked(config, catalogStore.catalogs.value[McpCatalogKey(net.weero.measix.pilot.data.configuration.ConfigurationScope.Personal, serverId)])
+            hydrateCatalogLocked(config, catalogStore.catalogs.value[config.catalogKey])
             if (activeCatalog == null && status == McpStatus.Idle) {
                 setStatusLocked(McpStatus.Idle, null)
             }
@@ -183,7 +186,7 @@ internal class McpServerRuntime(
                 teardownLocked()
                 return@withDefinition
             }
-            hydrateCatalogLocked(config, catalogStore.catalogs.value[McpCatalogKey(net.weero.measix.pilot.data.configuration.ConfigurationScope.Personal, serverId)])
+            hydrateCatalogLocked(config, catalogStore.catalogs.value[config.catalogKey])
             // 授权流程进行中不被配置同步打断；需要授权的 server 只有连接参数变化时才重连
             val desiredFingerprint = config.connectionFingerprint()
             if (!forceReconnect && status == McpStatus.Authorizing) return@withDefinition
@@ -228,7 +231,7 @@ internal class McpServerRuntime(
         withDefinition { config -> if (config != null) hydrateCatalogLocked(config, catalog) }
     }
 
-    private fun hydrateCatalogLocked(config: McpServerConfig, catalog: McpCatalogSnapshot?) {
+    private fun hydrateCatalogLocked(config: McpConnectionDefinition, catalog: McpCatalogSnapshot?) {
         if (closing || catalog == null || catalog.definitionDigest != config.mcpDefinitionDigest()) return
         val current = activeCatalog
         if (current != null && current.revision >= catalog.revision) return
@@ -264,7 +267,7 @@ internal class McpServerRuntime(
                     throw cancelled
                 } catch (error: Exception) {
                     mutex.withLock {
-                        if (generation.get() == revokedGeneration) setStatusLocked(McpStatus.Error.from(error))
+                        if (generation.get() == revokedGeneration) setStatusLocked(failureStatus(error))
                     }
                 }
             }
@@ -286,6 +289,11 @@ internal class McpServerRuntime(
             } ?: return
             operation.join()
         }
+    }
+
+    suspend fun closeAndAwait() {
+        val close = mutex.withLock { teardownLocked(); requireNotNull(closeOperation) }
+        close.await()
     }
 
     private fun teardownLocked() {
@@ -310,14 +318,14 @@ internal class McpServerRuntime(
                 connectionOperationMutex.withLock { closeConnectionsBefore(Long.MAX_VALUE) }
                 mutex.withLock { stateStore.remove(this@McpServerRuntime) }
                 logger(getServerName(), "Disconnected (resources closed)")
-                onClosed(serverId)
+                onClosed(key)
             } catch (timeout: TimeoutCancellationException) {
                 mutex.withLock { setStatusLocked(McpStatus.Error("MCP resource cleanup timed out; retry required")) }
                 throw timeout
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: Exception) {
-                mutex.withLock { setStatusLocked(McpStatus.Error.from(error, "MCP resource cleanup failed")) }
+                mutex.withLock { setStatusLocked(failureStatus(error, "MCP resource cleanup failed")) }
                 throw error
             }
         }
@@ -325,7 +333,7 @@ internal class McpServerRuntime(
 
     /** 锁内只交接 lease；connect、发现和目录落盘均由 AppScope operation 在锁外完成。 */
     fun startConnectionLocked(
-        config: McpServerConfig,
+        config: McpConnectionDefinition,
         retryAfterFailure: Boolean,
         cancelReconnect: Boolean = true,
     ) {
@@ -357,7 +365,7 @@ internal class McpServerRuntime(
     }
 
     private suspend fun runConnectionOperation(
-        requestedConfig: McpServerConfig,
+        requestedConfig: McpConnectionDefinition,
         assignedGeneration: Long,
         retryAfterFailure: Boolean,
     ) {
@@ -368,7 +376,7 @@ internal class McpServerRuntime(
             lifecycleOperationSemaphore.withPermit {
                 withTimeout(policy.connectionOperationTimeoutMs) {
                     closeConnectionsBefore(assignedGeneration)
-                    val config = oauthCoordinator.ensureFreshToken(requestedConfig)
+                    val config = refreshCredentials(requestedConfig)
                     if (!matchesDesiredDefinition(assignedGeneration, config)) {
                         requestReconcile(refreshTools = false)
                         return@withTimeout
@@ -410,17 +418,17 @@ internal class McpServerRuntime(
                     }
                     if (!discovering) return@withTimeout
                     val candidate = McpCatalogDiscovery.fetchCandidate(
-                        McpCatalogKey(net.weero.measix.pilot.data.configuration.ConfigurationScope.Personal, config.id),
-                        config.mcpDefinitionDigest(), createdClient,
+                        config.catalogKey,
+                        config.mcpDefinitionDigest(), createdClient, config.managed,
                     )
                     if (!matchesClientLease(assignedGeneration, createdClient, config)) return@withTimeout
-                    commitAndActivateCatalog(candidate) { current, catalogResult ->
+                    val published = commitAndActivateCatalog(candidate) { current, catalogResult ->
                         if (!matchesClientLeaseLocked(assignedGeneration, createdClient, config, current)) return@commitAndActivateCatalog false
                         publishCatalogResultLocked(catalogResult)
                         catalogAccepted = true
                         reconnectAttempt = 0
                         logger(
-                            config.commonOptions.name,
+                            config.name,
                             "Discovery completed (${status.catalogCountForLog()} tools available)",
                         )
                         if (catalogRefreshPending) {
@@ -428,6 +436,9 @@ internal class McpServerRuntime(
                             requestCatalogRefreshLocked()
                         }
                         true
+                    }
+                    if (!published && key.access != null) {
+                        catalogAccepted = retainConfirmedCatalog(config, assignedGeneration, createdClient)
                     }
                 }
             }
@@ -455,9 +466,9 @@ internal class McpServerRuntime(
                 } catch (error: Exception) {
                     // The resource stays registered; a later reconnect/close retries the same owner.
                     mutex.withLock {
-                        if (generation.get() == assignedGeneration) setStatusLocked(McpStatus.Error.from(error))
+                        if (generation.get() == assignedGeneration) setStatusLocked(failureStatus(error))
                     }
-                    logger(getServerName(), "Connection cleanup incomplete: ${error.message}")
+                    logger(getServerName(), "Connection cleanup incomplete: ${failureDetail(error)}")
                 } finally {
                     mutex.withLock {
                         if (connectionJob === operation) {
@@ -471,12 +482,16 @@ internal class McpServerRuntime(
     }
 
     private suspend fun handleConnectionFailure(
-        requestedConfig: McpServerConfig,
+        requestedConfig: McpConnectionDefinition,
         assignedGeneration: Long,
         retryAfterFailure: Boolean,
         failedClient: Client?,
         error: Throwable,
     ) {
+        McpManagedSnapshotRequired.find(error)?.let {
+            acceptManagedBarrier(assignedGeneration, it)
+            return
+        }
         val authorizationRequired = needsAuthorization(requestedConfig, error)
         mutex.withLock {
             if (generation.get() != assignedGeneration) return@withLock
@@ -490,20 +505,20 @@ internal class McpServerRuntime(
             } else if (retryAfterFailure && McpProtocolFailureClassifier.isConnectionError(error)) {
                 scheduleReconnectLocked(assignedGeneration)
             } else {
-                setStatusLocked(McpStatus.Error.from(error))
+                setStatusLocked(failureStatus(error))
             }
         }
-        logger(getServerName(), "Connection failed: ${error.message ?: error::class.simpleName}")
+        logger(getServerName(), "Connection failed: ${failureDetail(error)}")
     }
 
-    private fun needsAuthorization(config: McpServerConfig, error: Throwable): Boolean {
-        if (!McpProtocolFailureClassifier.isUnauthorized(error)) return false
-        // A user-supplied Authorization header is manual authentication; an invalid header is a
-        // configuration failure and must not start the OAuth lifecycle.
-        return config.commonOptions.headers.none {
-            it.first.equals("Authorization", ignoreCase = true)
-        }
+    internal suspend fun refreshCredentials(config: McpConnectionDefinition): McpConnectionDefinition = when (config) {
+        is McpConnectionDefinition.User -> McpConnectionDefinition.User(oauthCoordinator.ensureFreshToken(config.config))
+        is McpConnectionDefinition.Managed -> config
     }
+
+    private fun needsAuthorization(config: McpConnectionDefinition, error: Throwable): Boolean =
+        config is McpConnectionDefinition.User && McpProtocolFailureClassifier.isUnauthorized(error) &&
+            config.config.commonOptions.headers.none { it.first.equals("Authorization", ignoreCase = true) }
 
     private suspend fun rollbackStaleCommit(result: McpCatalogCommitResult) {
         if (result !is McpCatalogCommitResult.Committed) return
@@ -513,34 +528,49 @@ internal class McpServerRuntime(
     /** A durable receipt must be accepted or compensated before cancellation can discard it. */
     private suspend fun commitAndActivateCatalog(
         candidate: McpCatalogCandidate,
-        activateLocked: (McpServerConfig?, McpCatalogCommitResult) -> Boolean,
-    ) {
+        activateLocked: (McpConnectionDefinition?, McpCatalogCommitResult) -> Boolean,
+    ): Boolean {
         catalogStore.awaitReady()
+        var accepted = false
         val caller = currentCoroutineContext()
         caller.ensureActive()
         withContext(NonCancellable) {
-            val result = catalogStore.commitCandidate(candidate)
-            val accepted = try {
-                withDefinition { current -> caller.isActive && activateLocked(current, result) }
-            } catch (error: Throwable) {
-                try { rollbackStaleCommit(result) }
-                catch (cleanup: Throwable) { error.addSuppressed(cleanup) }
-                throw error
+            definition.withCurrent(McpDefinitionUse.CATALOG_PUBLICATION) { current ->
+                if (!caller.isActive || current?.mcpDefinitionDigest() != candidate.definitionDigest || current.catalogKey != candidate.key || current.managed != candidate.managed) return@withCurrent
+                val result = catalogStore.commitCandidate(candidate)
+                accepted = try {
+                    mutex.withLock { caller.isActive && activateLocked(current, result) }
+                } catch (error: Throwable) {
+                    try { rollbackStaleCommit(result) }
+                    catch (cleanup: Throwable) { error.addSuppressed(cleanup) }
+                    throw error
+                }
+                if (!accepted) rollbackStaleCommit(result)
             }
-            if (!accepted) rollbackStaleCommit(result)
         }
         caller.ensureActive()
+        return accepted
     }
+
+    /** A newer publication cannot replace the original interaction's already-confirmed schema. */
+    private suspend fun retainConfirmedCatalog(config: McpConnectionDefinition, epoch: Long, expectedClient: Client): Boolean =
+        withDefinition { current ->
+            if (!matchesClientLeaseLocked(epoch, expectedClient, config, current)) return@withDefinition false
+            val retained = activeCatalog?.takeIf { it.definitionDigest == config.mcpDefinitionDigest() }
+                ?: error("mcp_catalog_configuration_superseded")
+            setStatusLocked(McpStatus.Ready(retained.tools.size, retained.revision), retained)
+            true
+        }
 
     private suspend fun matchesDesiredDefinition(
         assignedGeneration: Long,
-        config: McpServerConfig,
+        config: McpConnectionDefinition,
     ): Boolean = withDefinition { current -> matchesDesiredDefinitionLocked(assignedGeneration, config, current) }
 
     private fun matchesDesiredDefinitionLocked(
         assignedGeneration: Long,
-        config: McpServerConfig,
-        current: McpServerConfig?,
+        config: McpConnectionDefinition,
+        current: McpConnectionDefinition?,
     ): Boolean = !closing && stateStore.isCurrent(this@McpServerRuntime) &&
         generation.get() == assignedGeneration &&
         current?.connectionFingerprint() == config.connectionFingerprint()
@@ -548,14 +578,14 @@ internal class McpServerRuntime(
     private suspend fun matchesClientLease(
         assignedGeneration: Long,
         expectedClient: Client,
-        config: McpServerConfig,
+        config: McpConnectionDefinition,
     ): Boolean = withDefinition { current -> matchesClientLeaseLocked(assignedGeneration, expectedClient, config, current) }
 
     private fun matchesClientLeaseLocked(
         assignedGeneration: Long,
         expectedClient: Client,
-        config: McpServerConfig,
-        current: McpServerConfig?,
+        config: McpConnectionDefinition,
+        current: McpConnectionDefinition?,
     ): Boolean = matchesDesiredDefinitionLocked(assignedGeneration, config, current) && client === expectedClient
 
     /** Runtime serializes admission against definition removal and client hand-off. */
@@ -572,7 +602,7 @@ internal class McpServerRuntime(
         )
         if (rejection != null) {
             return@withDefinition McpToolCallAdmission.Rejected(
-                current?.commonOptions?.name ?: serverId.toString(),
+                current?.name ?: serverId.toString(),
                 rejection,
             )
         }
@@ -581,7 +611,7 @@ internal class McpServerRuntime(
 
     /** Revalidates every admission condition after credential refresh performed outside this owner. */
     suspend fun completeInvocationAdmission(
-        freshConfig: McpServerConfig,
+        freshConfig: McpConnectionDefinition,
         toolName: String,
         expectedDefinitionDigest: String,
         expectedNeedsApproval: Boolean,
@@ -592,7 +622,7 @@ internal class McpServerRuntime(
             expectedDefinitionDigest,
             expectedNeedsApproval,
         )
-        val serverName = current?.commonOptions?.name ?: serverId.toString()
+        val serverName = current?.name ?: serverId.toString()
         if (rejection != null) {
             return@withDefinition McpToolCallPreparation.Rejected(
                 kind = McpToolFailureKind.TOOL_UNAVAILABLE,
@@ -602,18 +632,18 @@ internal class McpServerRuntime(
         }
         val currentConfig = requireNotNull(current)
         if (currentConfig.connectionFingerprint() != freshConfig.connectionFingerprint()) {
-            logger(currentConfig.commonOptions.name, "Connection credentials changed during callTool; scheduling reconnect")
+            logger(currentConfig.name, "Connection credentials changed during callTool; scheduling reconnect")
             startConnectionLocked(currentConfig, retryAfterFailure = true)
             return@withDefinition McpToolCallPreparation.Rejected(
                 kind = McpToolFailureKind.SERVER_UNAVAILABLE,
-                serverName = currentConfig.commonOptions.name,
+                serverName = currentConfig.name,
                 diagnosticMessage = "Session credentials changed; recovery started",
             )
         }
         if (status == McpStatus.NeedsAuthorization) {
             return@withDefinition McpToolCallPreparation.Rejected(
                 kind = McpToolFailureKind.AUTHORIZATION_REQUIRED,
-                serverName = currentConfig.commonOptions.name,
+                serverName = currentConfig.name,
                 diagnosticMessage = "MCP authorization is required",
             )
         }
@@ -627,7 +657,7 @@ internal class McpServerRuntime(
             }
             return@withDefinition McpToolCallPreparation.Rejected(
                 kind = McpToolFailureKind.SERVER_UNAVAILABLE,
-                serverName = currentConfig.commonOptions.name,
+                serverName = currentConfig.name,
                 diagnosticMessage = "MCP session is unavailable; recovery is in progress",
             )
         }
@@ -635,7 +665,7 @@ internal class McpServerRuntime(
             startConnectionLocked(currentConfig, retryAfterFailure = true)
             return@withDefinition McpToolCallPreparation.Rejected(
                 kind = McpToolFailureKind.SERVER_UNAVAILABLE,
-                serverName = currentConfig.commonOptions.name,
+                serverName = currentConfig.name,
                 diagnosticMessage = "Session credentials changed; recovery started",
             )
         }
@@ -644,20 +674,20 @@ internal class McpServerRuntime(
             scheduleReconnectLocked(currentGeneration())
             return@withDefinition McpToolCallPreparation.Rejected(
                 kind = McpToolFailureKind.SERVER_UNAVAILABLE,
-                serverName = currentConfig.commonOptions.name,
+                serverName = currentConfig.name,
                 diagnosticMessage = "MCP transport is disconnected; recovery is in progress",
             )
         }
         if (liveClient.serverCapabilities?.tools == null) {
             return@withDefinition McpToolCallPreparation.Rejected(
                 kind = McpToolFailureKind.PROTOCOL_INCOMPATIBLE,
-                serverName = currentConfig.commonOptions.name,
+                serverName = currentConfig.name,
                 diagnosticMessage = "MCP server does not declare tools capability",
             )
         }
         McpToolCallPreparation.Ready(
             client = liveClient,
-            serverName = currentConfig.commonOptions.name,
+            serverName = currentConfig.name,
             generation = currentGeneration(),
         )
     }
@@ -678,14 +708,14 @@ internal class McpServerRuntime(
     }
 
     private fun invocationRejection(
-        currentConfig: McpServerConfig?,
+        currentConfig: McpConnectionDefinition?,
         toolName: String,
         expectedDefinitionDigest: String,
         expectedNeedsApproval: Boolean,
     ): String? {
         if (closing || !stateStore.isCurrent(this)) return "TOOL_REVOKED: MCP runtime is closing"
         if (currentConfig == null) return "TOOL_REVOKED: MCP tool is no longer available"
-        val policy = currentConfig.commonOptions.toolPolicyByName()[toolName]
+        val policy = currentConfig.toolPolicy(toolName)
         val currentNeedsApproval = policy?.needsApproval ?: false
         if (
             currentConfig.mcpDefinitionDigest() != expectedDefinitionDigest ||
@@ -760,6 +790,11 @@ internal class McpServerRuntime(
         capturedClient: Client,
         error: Throwable,
     ) {
+        McpManagedSnapshotRequired.find(error)?.let {
+            acceptManagedBarrier(capturedGeneration, it)
+            return
+        }
+
         if (McpProtocolFailureClassifier.isSseStreamGiveUp(error)) {
             mutex.withLock {
                 if (generation.get() != capturedGeneration || client !== capturedClient) return@withLock
@@ -777,6 +812,19 @@ internal class McpServerRuntime(
             return
         }
         onTransportClosed(capturedGeneration, capturedClient)
+    }
+
+    suspend fun acceptManagedBarrier(epoch: Long, barrier: McpManagedSnapshotRequired) {
+        val accepted = mutex.withLock {
+            if (key.access == null || generation.get() != epoch || closing || barrierReported) return@withLock false
+            barrierReported = true
+            activeConnection = null
+            fingerprint = null
+            cancelRecoveryJobsLocked()
+            setStatusLocked(McpStatus.Error("managed_snapshot_required"))
+            true
+        }
+        if (accepted) onManagedSnapshotRequired(barrier)
     }
 
     private fun requestCatalogRefreshLocked() {
@@ -806,7 +854,7 @@ internal class McpServerRuntime(
      * event driven and does not consume attempts or poll the radio.
      */
     private fun scheduleReconnectLocked(capturedGeneration: Long) {
-        if (closing || generation.get() != capturedGeneration) return
+        if (closing || barrierReported || generation.get() != capturedGeneration) return
         if (reconnectJob?.isActive == true) return
         val attempt = reconnectAttempt + 1
         if (attempt > policy.maxTotalReconnectAttempts) {
@@ -895,8 +943,9 @@ internal class McpServerRuntime(
         authorizationJob = null
     }
 
-    private fun setupNotificationHandlers(client: Client, config: McpServerConfig, assignedGeneration: Long) {
-        val configName = config.commonOptions.name
+    private fun setupNotificationHandlers(client: Client, config: McpConnectionDefinition, assignedGeneration: Long) {
+        if (config.managed?.gatewaySurface != null) return
+        val configName = config.name
         client.setNotificationHandler<ToolListChangedNotification>(
             NotificationsToolsListChanged
         ) {
@@ -939,19 +988,22 @@ internal class McpServerRuntime(
                                 return@withTimeout
                             }
                             val candidate = McpCatalogDiscovery.fetchCandidate(
-                                McpCatalogKey(net.weero.measix.pilot.data.configuration.ConfigurationScope.Personal, lease.config.id),
-                                lease.config.mcpDefinitionDigest(), lease.client,
+                                lease.config.catalogKey,
+                                lease.config.mcpDefinitionDigest(), lease.client, lease.config.managed,
                             )
                             if (!matchesClientLease(assignedGeneration, lease.client, lease.config)) {
                                 return@withTimeout
                             }
-                            commitAndActivateCatalog(candidate) { current, result ->
+                            val published = commitAndActivateCatalog(candidate) { current, result ->
                                 if (!matchesClientLeaseLocked(assignedGeneration, lease.client, lease.config, current)) {
                                     return@commitAndActivateCatalog false
                                 }
                                 publishCatalogResultLocked(result)
                                 catalogAccepted = true
                                 true
+                            }
+                            if (!published && key.access != null) {
+                                catalogAccepted = retainConfirmedCatalog(lease.config, assignedGeneration, lease.client)
                             }
                         }
                     }
@@ -989,14 +1041,14 @@ internal class McpServerRuntime(
                                 val lastGood = lease.previousCatalog
                                 setStatusLocked(
                                     lastGood?.let { catalog ->
-                                        McpStatus.CatalogStale(catalog.tools.size, catalog.revision, error.message)
-                                    } ?: McpStatus.Error.from(error, "catalog discovery failed"),
+                                        McpStatus.CatalogStale(catalog.tools.size, catalog.revision, failureDetail(error))
+                                    } ?: failureStatus(error, "catalog discovery failed"),
                                     lastGood,
                                 )
                             }
                         }
                     }
-                    logger(configName, "Catalog refresh failed: ${error.message}")
+                    logger(configName, "Catalog refresh failed: ${failureDetail(error)}")
                 }
                 val repeat = mutex.withLock {
                     if (generation.get() != assignedGeneration || !catalogRefreshPending) {
@@ -1015,8 +1067,8 @@ internal class McpServerRuntime(
         } catch (error: CancellationException) {
             throw error
         } catch (error: Throwable) {
-            Log.e(TAG, "Failed to sync tools after list_changed for $configName", error)
-            logger(configName, "catalog refresh after list_changed failed: ${error.message}")
+            if (serverId is ConfigurationReference.User) Log.e(TAG, "Failed to sync tools after list_changed for $configName", error)
+            logger(configName, "catalog refresh after list_changed failed: ${failureDetail(error)}")
         } finally {
             mutex.withLock {
                 if (catalogRefreshJob === kotlinx.coroutines.currentCoroutineContext()[Job]) {
@@ -1052,11 +1104,11 @@ internal class McpServerRuntime(
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: Throwable) {
-                logger(getServerName(), "OAuth replacement could not be sealed: ${error.message}")
+                logger(getServerName(), "OAuth replacement could not be sealed: ${failureDetail(error)}")
                 mutex.withLock {
                     if (authorizationOperation == replacement.operation) {
                         setStatusLocked(
-                            McpStatus.Error.from(error, "OAuth authorization could not be started"),
+                            failureStatus(error, "OAuth authorization could not be started"),
                             replacement.previousCatalog,
                         )
                         authorizationPreviousStatus = null
@@ -1067,16 +1119,16 @@ internal class McpServerRuntime(
             }
 
             withDefinition { current ->
-                if (authorizationOperation != replacement.operation || current == null) return@withDefinition
+                if (authorizationOperation != replacement.operation || current !is McpConnectionDefinition.User) return@withDefinition
                 setStatusLocked(McpStatus.Authorizing)
                 authorizationJob = runtimeScope.launch {
                     try {
-                        oauthCoordinator.authorize(current, context)
+                        oauthCoordinator.authorize(current.config, context)
                         reconcile(refreshTools = true, forceReconnect = true)
                     } catch (cancelled: CancellationException) {
                         throw cancelled
                     } catch (error: Throwable) {
-                        logger(current.commonOptions.name, "OAuth authorization failed: ${error.message}")
+                        logger(current.name, "OAuth authorization failed: ${failureDetail(error)}")
                         mutex.withLock {
                             if (authorizationOperation == replacement.operation) {
                                 setStatusLocked(McpStatus.NeedsAuthorization)
@@ -1120,7 +1172,7 @@ internal class McpServerRuntime(
                 throw cancelled
             } catch (error: Throwable) {
                 persistenceFailure = error
-                logger(getServerName(), "OAuth cancellation persistence failed: ${error.message}")
+                logger(getServerName(), "OAuth cancellation persistence failed: ${failureDetail(error)}")
             } finally {
                 mutex.withLock {
                     if (authorizationOperation == cancellation.operation) {
@@ -1131,7 +1183,7 @@ internal class McpServerRuntime(
                             )
                         } else {
                             setStatusLocked(
-                                McpStatus.Error.from(
+                                failureStatus(
                                     requireNotNull(persistenceFailure),
                                     "OAuth cancellation could not be persisted",
                                 ),
@@ -1146,11 +1198,17 @@ internal class McpServerRuntime(
         }
     }
 
+    private fun failureDetail(error: Throwable): String? =
+        if (serverId is ConfigurationReference.Enterprise) "Managed MCP operation failed (${error::class.simpleName})" else error.message
+
+    private fun failureStatus(error: Throwable, fallback: String? = null): McpStatus.Error =
+        if (serverId is ConfigurationReference.Enterprise) McpStatus.Error(failureDetail(error)) else McpStatus.Error.from(error, fallback)
+
     private fun getServerName(): String = displayName
 }
 
 private data class McpCatalogRefreshLease(
-    val config: McpServerConfig,
+    val config: McpConnectionDefinition,
     val client: Client,
     val previousStatus: McpStatus,
     val previousCatalog: McpCatalogSnapshot?,

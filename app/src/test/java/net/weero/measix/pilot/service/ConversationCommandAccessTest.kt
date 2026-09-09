@@ -863,7 +863,7 @@ class ConversationCommandAccessTest {
                     net.weero.measix.pilot.data.datastore.SettingsAccessIndex(), 0,
                     net.weero.measix.pilot.data.datastore.ManagedConfigurationState.ABSENT))
             coEvery { memory.captureExecution(any(), any()) } returns null
-            coEvery { mcp.prepareTurnCapabilities(any()) } returns net.weero.measix.pilot.data.ai.mcp.TurnMcpCapabilitySnapshot.EMPTY
+            coEvery { mcp.prepareTurnCapabilities(any(), any(), any(), any(), any(), any()) } returns net.weero.measix.pilot.data.ai.mcp.TurnMcpCapabilitySnapshot.EMPTY
         }
 
         suspend fun initialize() {

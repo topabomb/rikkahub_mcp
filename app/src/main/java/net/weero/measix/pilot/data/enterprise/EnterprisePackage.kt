@@ -191,6 +191,13 @@ internal object EnterprisePackageCodec {
         check(binding.credential?.let { '\r' !in it && '\n' !in it } != false, "invalid_runtime_credential")
         check(binding.headers.all { (key, value) -> key.matches(Regex("[!#$%&'*+.^_`|~0-9A-Za-z-]+")) && '\r' !in value && '\n' !in value }, "invalid_runtime_headers")
         check(binding.headers.keys.map { it.lowercase(java.util.Locale.ROOT) }.distinct().size == binding.headers.size, "duplicate_runtime_header")
+        if (kind in setOf(EnterpriseResourceKind.MCP, EnterpriseResourceKind.GATEWAY)) {
+            val headers = binding.headers.keys.map { it.lowercase(java.util.Locale.ROOT) }.toSet()
+            check(headers.intersect(setOf("host", "content-length", "transfer-encoding", "connection", "mcp-session-id",
+                "mcp-protocol-version", "x-measix-managed-generation", "x-measix-interaction-id", "x-measix-resource-id")).isEmpty(),
+                "runtime_transport_header_conflict")
+            check(binding.credential == null || "authorization" !in headers, "runtime_authentication_header_conflict")
+        }
         if (kind == EnterpriseResourceKind.MODEL) {
             val headers = binding.headers.keys.map { it.lowercase(java.util.Locale.ROOT) }.toSet()
             check(headers.intersect(setOf("host", "content-length", "transfer-encoding", "connection")).isEmpty(),

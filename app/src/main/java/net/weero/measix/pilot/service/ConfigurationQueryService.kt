@@ -73,10 +73,12 @@ internal class ConfigurationQueryService(
         enterpriseSessions.withSelectedRealmSelection(selection) { }
     }
 
-    internal suspend fun read(access: RealmAccess): ResolvedConfiguration {
+    internal suspend fun read(access: RealmAccess): ResolvedConfiguration = readExecution(access).configuration
+
+    internal suspend fun readExecution(access: RealmAccess): net.weero.measix.pilot.data.datastore.ExecutionConfigurationSnapshot {
         recoveryGate.awaitReady()
         return enterpriseSessions.withRealmAccess(access) {
-            settings.withResolvedConfiguration(access.scope, enterpriseSessions.state.value) { it }
+            settings.withExecutionConfiguration(access.scope, enterpriseSessions.state.value) { it }
         }
     }
 

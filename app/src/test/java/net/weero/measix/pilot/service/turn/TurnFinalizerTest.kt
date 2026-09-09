@@ -8,6 +8,7 @@ import io.mockk.mockk
 import io.mockk.slot
 import kotlin.uuid.Uuid
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.async
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.Job
@@ -38,6 +39,7 @@ import net.weero.measix.pilot.service.runtime.currentTurnPresentation
 import net.weero.measix.pilot.service.runtime.FinalizeTurn
 import net.weero.measix.pilot.service.runtime.TurnHandle
 import net.weero.measix.pilot.service.runtime.toSnapshot
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -286,7 +288,7 @@ class TurnFinalizerTest {
     }
 
     @Test
-    fun `approval-paused turn is cancelled before a replacement turn starts`() = runTest {
+    fun `resource barrier finalizes a completed approval-paused worker and awaits its MCP cleanup`() = runTest {
         val conversationId = Uuid.random()
         val turnId = Uuid.random()
         val step = net.weero.measix.pilot.service.runtime.TurnTransition.openStep(0)
@@ -342,18 +344,34 @@ class TurnFinalizerTest {
             secondArg<suspend (ConversationRuntime?) -> Any?>()(runtime)
         }
 
-        runtime.installTurnWorker(turnId, kotlinx.coroutines.Job())
+        val worker = kotlinx.coroutines.Job()
+        runtime.installTurnWorker(turnId, worker)
+        val cleanupStarted = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val finishCleanup = kotlinx.coroutines.CompletableDeferred<Unit>()
+        runtime.bindMcpExecution(turnId, worker, runtime.durable.header.assistantId,
+            net.weero.measix.pilot.data.ai.mcp.McpExecutionLease {
+                cleanupStarted.complete(Unit)
+                finishCleanup.await()
+            })
         runtime.retainAwaitingUser(TurnHandle(conversationId, 7, turnId, assistant.id))
         assertEquals(TurnLivePhase.AWAITING_USER, runtime.currentTurnPresentation().phase)
 
+        worker.complete()
         val registry = mockk<ConversationRuntimeRegistry>()
         io.mockk.every { registry.findRuntime(conversationId) } returns runtime
-        TurnFinalizer(
+        val finalizer = TurnFinalizer(
             conversationRepository = repository,
             runtimeRegistry = registry,
             commandCoordinator = coordinator,
             json = Json,
-        ).stopTurn(conversationId)
+        )
+        val stop = async { finalizer.stopInteraction(runtime, turnId, "managed_snapshot_required") }
+        try {
+            cleanupStarted.await()
+            assertFalse(stop.isCompleted)
+            assertNull(runtime.snapshot.value.stream)
+        } finally { finishCleanup.complete(Unit) }
+        stop.await()
 
         coVerify(exactly = 1) { coordinator.executeOrThrow(conversationId, any()) }
         val finalize = command.captured as FinalizeTurn

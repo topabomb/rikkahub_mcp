@@ -345,7 +345,7 @@ val appModule = module {
 
     single { net.weero.measix.pilot.service.portal.PortalDocumentRegistry() }
     single { net.weero.measix.pilot.service.portal.PortalMediaStore(java.io.File(get<Context>().noBackupFilesDir, "portal_media")) }
-    single { net.weero.measix.pilot.service.EnterpriseExitService(get(), get(), get(), get(), get<AppScope>(), get(), get(), get()) }
+    single { net.weero.measix.pilot.service.EnterpriseExitService(get(), get(), get(), get(), get<AppScope>(), get(), get(), get(), get()) }
     single { net.weero.measix.pilot.service.EnterpriseApplicationService(get(), get(), get(), get(), get(), get(), get<AppScope>(), get(), get()) }
 
     single {

@@ -16,40 +16,78 @@ import kotlinx.coroutines.ensureActive
 /** Owns the process-shared HTTP client, but no per-server connection state. */
 internal class McpProtocolClientFactory(
     createHttpClient: () -> HttpClient,
+    private val createManagedHttpClient: () -> HttpClient,
+    private val createLocalHttpClient: () -> HttpClient,
     private val transportOverride: ((McpServerConfig) -> AbstractTransport)? = null,
     private val clientOverride: ((McpServerConfig) -> Client)? = null,
 ) {
     private val httpClient by lazy(LazyThreadSafetyMode.SYNCHRONIZED, createHttpClient)
+    private val managedHttpClient by lazy(LazyThreadSafetyMode.SYNCHRONIZED, createManagedHttpClient)
+    private val localHttpClient by lazy(LazyThreadSafetyMode.SYNCHRONIZED, createLocalHttpClient)
 
-    suspend fun createTransport(config: McpServerConfig): AbstractTransport {
+    suspend fun createTransport(definition: McpConnectionDefinition): AbstractTransport {
         currentCoroutineContext().ensureActive()
-        transportOverride?.let { return it(config) }
-        val sharedClient = httpClient
-        currentCoroutineContext().ensureActive()
-        return defaultTransport(config, sharedClient)
+        return when (definition) {
+            is McpConnectionDefinition.User -> {
+                transportOverride?.let { return it(definition.config) }
+                val shared = httpClient
+                currentCoroutineContext().ensureActive()
+                userTransport(definition.config, shared)
+            }
+            is McpConnectionDefinition.Managed -> {
+                val local = definition.binding.protocol == net.weero.measix.pilot.data.enterprise.EnterpriseRuntimeProtocol.EXAMPLE
+                val shared = if (local) localHttpClient else managedHttpClient
+                currentCoroutineContext().ensureActive()
+                McpStreamableHttpTransport(url = definition.url, client = shared, managed = true, requestBuilder = {
+                    definition.headers.forEach { (key, value) -> headers.append(key, value) }
+                    if (local) attributes.put(LocalMcpRequestDefinition, definition)
+                })
+            }
+        }
     }
 
-    fun createClient(config: McpServerConfig): Client =
-        clientOverride?.invoke(config) ?: Client(
-            clientInfo = Implementation(name = config.commonOptions.name, version = "1.0"),
+    fun createClient(definition: McpConnectionDefinition): Client =
+        (definition as? McpConnectionDefinition.User)?.let { clientOverride?.invoke(it.config) } ?: Client(
+            clientInfo = Implementation(name = definition.namespace, version = "1.0"),
             options = ClientOptions(capabilities = ClientCapabilities()),
         )
 
-    private fun defaultTransport(config: McpServerConfig, httpClient: HttpClient): AbstractTransport {
+    private fun userTransport(config: McpServerConfig, httpClient: HttpClient): AbstractTransport {
         val customHeaders = StringValues.build {
             config.resolvedConnectionHeaders().forEach { append(it.first, it.second) }
         }
         return when (config) {
             is McpServerConfig.SseTransportServer -> McpSseTransport(
-                urlString = config.url,
-                client = httpClient,
+                urlString = config.url, client = httpClient,
                 requestBuilder = { headers.appendAll(customHeaders) },
             )
             is McpServerConfig.StreamableHTTPServer -> McpStreamableHttpTransport(
-                url = config.url,
-                client = httpClient,
+                url = config.url, client = httpClient,
                 requestBuilder = { headers.appendAll(customHeaders) },
             )
+        }
+    }
+}
+
+internal val LocalMcpRequestDefinition = io.ktor.util.AttributeKey<McpConnectionDefinition.Managed>("LocalMcpRequestDefinition")
+
+/** A verified pre-forward generation barrier must never become an automatic tool replay. */
+internal class McpManagedSnapshotRequired(val targetGeneration: Long, val requestId: String) :
+    IllegalStateException("managed_snapshot_required") {
+    companion object {
+        fun find(error: Throwable): McpManagedSnapshotRequired? = generateSequence(error) { it.cause }
+            .filterIsInstance<McpManagedSnapshotRequired>().firstOrNull()
+
+        fun parse(body: String): McpManagedSnapshotRequired {
+            val value = McpJsonFrame.parse(body) as? kotlinx.serialization.json.JsonObject
+                ?: error("invalid_managed_snapshot_barrier")
+            fun string(key: String) = (value[key] as? kotlinx.serialization.json.JsonPrimitive)?.takeIf { it.isString }?.content
+            val generation = (value["targetManagedGeneration"] as? kotlinx.serialization.json.JsonPrimitive)
+                ?.takeUnless { it.isString }?.content?.toLongOrNull()
+            check(string("code") == "managed_snapshot_required" && generation != null && generation > 0 &&
+                value["forwarded"] == kotlinx.serialization.json.JsonPrimitive(false) &&
+                string("requestId")?.matches(Regex("req_[A-Za-z0-9_-]{1,128}")) == true) { "invalid_managed_snapshot_barrier" }
+            return McpManagedSnapshotRequired(requireNotNull(generation), requireNotNull(string("requestId")))
         }
     }
 }

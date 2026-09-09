@@ -36,40 +36,40 @@ data class McpRuntimeCapability(
  */
 internal class McpRuntimeStateStore {
     private val lock = Any()
-    private val runtimes = mutableMapOf<ConfigurationReference, McpServerRuntime>()
-    private val _capabilities = MutableStateFlow<Map<ConfigurationReference, McpRuntimeCapability>>(emptyMap())
+    private val runtimes = mutableMapOf<McpRuntimeKey, McpServerRuntime>()
+    private val _capabilities = MutableStateFlow<Map<McpRuntimeKey, McpRuntimeCapability>>(emptyMap())
 
-    val capabilities: StateFlow<Map<ConfigurationReference, McpRuntimeCapability>> = _capabilities
-    val serverIds: Set<ConfigurationReference> get() = synchronized(lock) { runtimes.keys.toSet() }
+    val capabilities: StateFlow<Map<McpRuntimeKey, McpRuntimeCapability>> = _capabilities
+    val keys: Set<McpRuntimeKey> get() = synchronized(lock) { runtimes.keys.toSet() }
     val activeRuntimes: List<McpServerRuntime> get() = synchronized(lock) { runtimes.values.toList() }
     val isEmpty: Boolean get() = synchronized(lock) { runtimes.isEmpty() }
 
-    fun find(serverId: ConfigurationReference): McpServerRuntime? = synchronized(lock) { runtimes[serverId] }
+    fun find(key: McpRuntimeKey): McpServerRuntime? = synchronized(lock) { runtimes[key] }
 
     fun getOrCreate(
-        serverId: ConfigurationReference,
+        key: McpRuntimeKey,
         create: () -> McpServerRuntime,
-    ): McpServerRuntime = synchronized(lock) { runtimes.getOrPut(serverId, create) }
+    ): McpServerRuntime = synchronized(lock) { runtimes.getOrPut(key, create) }
 
     fun isCurrent(runtime: McpServerRuntime): Boolean =
-        synchronized(lock) { runtimes[runtime.serverId] === runtime }
+        synchronized(lock) { runtimes[runtime.key] === runtime }
 
     fun publish(runtime: McpServerRuntime, capability: McpRuntimeCapability) {
         synchronized(lock) {
-            if (runtimes[runtime.serverId] !== runtime) return
-            _capabilities.update { it + (runtime.serverId to capability) }
+            if (runtimes[runtime.key] !== runtime) return
+            _capabilities.update { it + (runtime.key to capability) }
         }
     }
 
     fun remove(runtime: McpServerRuntime): Boolean = synchronized(lock) {
-        if (runtimes[runtime.serverId] !== runtime) return@synchronized false
-        runtimes.remove(runtime.serverId)
-        _capabilities.update { it - runtime.serverId }
+        if (runtimes[runtime.key] !== runtime) return@synchronized false
+        runtimes.remove(runtime.key)
+        _capabilities.update { it - runtime.key }
         true
     }
 }
 
 /** Keeps the source authorization gate owned until the runtime has accepted or rejected the definition. */
 internal interface McpRuntimeDefinition {
-    suspend fun <T> withCurrent(operation: suspend (McpServerConfig?) -> T): T
+    suspend fun <T> withCurrent(use: McpDefinitionUse, operation: suspend (McpConnectionDefinition?) -> T): T
 }

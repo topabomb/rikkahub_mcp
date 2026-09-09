@@ -36,6 +36,65 @@ import org.junit.Test
 internal class McpTurnCapabilitySnapshotTest : McpRuntimeCoordinatorTestBase() {
 
     @Test
+    fun `passive enterprise inspection obeys resource policy gateway choice and confirmed generation without connecting`() = runTest(dispatcher) {
+        val example = net.weero.measix.pilot.data.enterprise.EnterprisePackageCodec.decode(
+            requireNotNull(javaClass.getResourceAsStream("/enterprise.local.example.json")))
+        val scope = example.identity.scope
+        val directId = ConfigurationReference.Enterprise(scope.authority, example.configuration.mcpServers.first().id)
+        val gateway = example.configuration.gateways.single()
+        val gatewayId = ConfigurationReference.Enterprise(scope.authority, gateway.id)
+        val personal = serverConfig()
+        var currentBindings = example.runtimeBindings.associateBy { it.resourceId }
+        val access = net.weero.measix.pilot.data.enterprise.RealmAccess.Enterprise(scope, "inspection")
+        var currentVersion = net.weero.measix.pilot.data.enterprise.EnterpriseAppliedVersion("inspection", example.configuration.generation, "configuration", "bindings")
+        coEvery { sessions.readBindings<Any?>(access, any()) } coAnswers {
+            secondArg<(net.weero.measix.pilot.data.enterprise.EnterpriseAppliedVersion, List<net.weero.measix.pilot.data.enterprise.EnterpriseRuntimeBinding>) -> Any?>()(currentVersion, currentBindings.values.toList())
+        }
+        val assistant = Assistant(mcpServers = setOf(SERVER_ID))
+        val settings = Settings(assistants = listOf(assistant), mcpServers = listOf(personal))
+        val document = net.weero.measix.pilot.data.datastore.UserSettingsDocument.empty().copy(
+            configuration = net.weero.measix.pilot.data.datastore.UserConfiguration(assistants = listOf(assistant), mcpServers = listOf(personal)))
+        val manifest = net.weero.measix.pilot.data.enterprise.EnterpriseManifest.signedOut().copy(
+            phase = net.weero.measix.pilot.data.enterprise.EnterpriseSessionPhase.READY,
+            session = net.weero.measix.pilot.data.enterprise.EnterpriseSession("inspection", example.identity, Long.MAX_VALUE),
+            applied = net.weero.measix.pilot.data.enterprise.EnterpriseAppliedVersion("inspection", example.configuration.generation, "configuration", "bindings"),
+            selectedScope = scope)
+        fun resolve(allowUser: Boolean, gatewayEnabled: Boolean = true, generation: Long = example.configuration.generation): net.weero.measix.pilot.data.datastore.ExecutionConfigurationSnapshot {
+            currentVersion = requireNotNull(manifest.applied).copy(generation = generation)
+            val config = example.configuration.copy(generation = generation, policy = example.configuration.policy.copy(allowLocalMcp = allowUser))
+            val resolved = net.weero.measix.pilot.data.configuration.ConfigurationResolver.resolve(document.copy(preferences = document.preferences
+                .withAssistantUsage(scope, net.weero.measix.pilot.data.configuration.AssistantUsagePreferences(assistant.id,
+                    mcpServers = net.weero.measix.pilot.data.configuration.UsageValue(setOf(SERVER_ID, directId))))
+                .withGateway(scope, net.weero.measix.pilot.data.configuration.GatewayPreference(gatewayId, gatewayEnabled))), scope,
+                net.weero.measix.pilot.data.enterprise.EnterpriseState.Available(manifest.copy(applied = manifest.applied!!.copy(generation = generation)), config))
+            return net.weero.measix.pilot.data.datastore.ExecutionConfigurationSnapshot(settings,
+                resolved, "test")
+        }
+        fun catalog(id: ConfigurationReference, tools: List<McpCatalogTool>, managed: McpManagedCatalog?) = McpCatalogSnapshot(
+            if (id is ConfigurationReference.User) ConfigurationScope.Personal else scope, id, 1,
+            if (id is ConfigurationReference.User) personal.mcpDefinitionDigest() else managedMcpDefinitionDigest(id as ConfigurationReference.Enterprise,
+                if (id == gatewayId) gateway.name else example.configuration.mcpServers.first().name,
+                currentBindings.getValue(id.id), example.configuration.generation), "catalog", tools, managed)
+        catalogs.value = listOf(
+            catalog(SERVER_ID, listOf(McpCatalogTool("user_tool", inputSchema = JsonObject(emptyMap()))), null),
+            catalog(directId, listOf(McpCatalogTool("direct_tool", inputSchema = JsonObject(emptyMap()))), McpManagedCatalog(example.configuration.generation)),
+            catalog(gatewayId, net.weero.measix.pilot.data.enterprise.LocalEnterpriseMcpSurface.gatewayTools, McpManagedCatalog(example.configuration.generation, gateway.surface)),
+        ).associateBy { it.key }
+        suspend fun inspect(snapshot: net.weero.measix.pilot.data.datastore.ExecutionConfigurationSnapshot) =
+            manager.inspectCapabilities(access, snapshot, snapshot.configuration.assistants.getValue(assistant.id))
+        val allowed = inspect(resolve(true))
+        assertEquals(setOf("user_tool", "direct_tool", "discover_tools", "invoke_tool"), allowed.tools.map { it.name }.toSet())
+        assertEquals(setOf("direct_tool", "discover_tools", "invoke_tool"), inspect(resolve(false)).tools.map { it.name }.toSet())
+        assertEquals(listOf("direct_tool"), inspect(resolve(false, gatewayEnabled = false)).tools.map { it.name })
+        assertEquals(listOf("user_tool"), inspect(resolve(true, generation = example.configuration.generation + 1)).tools.map { it.name })
+        currentBindings = currentBindings + (directId.id to currentBindings.getValue(directId.id).copy(credential = "rotated"))
+        assertEquals(setOf("user_tool", "discover_tools", "invoke_tool"), inspect(resolve(true)).tools.map { it.name }.toSet())
+        assertTrue(allowed.tools.all { it.interactionId == null })
+        assertTrue(allowed.tools.all { Regex("[A-Za-z0-9_-]{1,64}").matches("mcp__${it.namespace}__${it.name}") })
+        assertTrue(createdTransports.isEmpty())
+    }
+
+    @Test
     fun `cancelling turn preparation does not cancel the app scope connection`() = runTest(dispatcher) {
         val gate = CompletableDeferred<Unit>()
         connectGates[SERVER_ID] = gate
@@ -181,8 +240,15 @@ internal class McpTurnCapabilitySnapshotTest : McpRuntimeCoordinatorTestBase() {
             remoteStarted = true
             CallToolResult(content = listOf(TextContent("must-not-run")))
         }
+        val definitionGate = kotlinx.coroutines.sync.Mutex()
+        io.mockk.coEvery { settingsStore.withUserMcpDefinitions<Any?>(any()) } coAnswers {
+            definitionGate.lock()
+            try { firstArg<suspend (List<McpServerConfig>) -> Any?>().invoke(effective.snapshot.settings.mcpServers) }
+            finally { definitionGate.unlock() }
+        }
         val mutation = async {
-            manager.withConfigurationMutation {
+            definitionGate.lock()
+            try {
                 mutationEntered.complete(Unit)
                 releaseMutation.await()
                 emit(
@@ -192,7 +258,7 @@ internal class McpTurnCapabilitySnapshotTest : McpRuntimeCoordinatorTestBase() {
                         )
                     )
                 )
-            }
+            } finally { definitionGate.unlock() }
         }
         runCurrent()
         mutationEntered.await()
@@ -284,6 +350,9 @@ internal class McpTurnCapabilitySnapshotTest : McpRuntimeCoordinatorTestBase() {
         val networkMonitor = mockk<NetworkMonitor>()
         every { networkMonitor.isOnline } returns MutableStateFlow(true)
         val isolatedManager = McpRuntimeCoordinator(
+            sessions = io.mockk.mockk(),
+            localMcp = io.mockk.mockk(),
+            synchronization = io.mockk.mockk(),
             settingsStore = isolatedSettingsStore,
             catalogStore = isolatedCatalogStore,
             appScope = AppScope(dispatcher),

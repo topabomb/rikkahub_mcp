@@ -1,5 +1,17 @@
 package net.weero.measix.pilot.data.ai.mcp
 
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.ensureActive
+import net.weero.measix.pilot.data.configuration.ConfigurationCategory
+import net.weero.measix.pilot.data.configuration.ConfigurationKey
+import net.weero.measix.pilot.data.configuration.ResolvedConfiguration
+import net.weero.measix.pilot.data.enterprise.EnterpriseBindingLease
+import net.weero.measix.pilot.data.enterprise.EnterpriseSessionPhase
+import net.weero.measix.pilot.data.enterprise.EnterpriseState
+import net.weero.measix.pilot.data.enterprise.RealmAccess
+import net.weero.measix.pilot.service.CapturedModelConfiguration
+import net.weero.measix.pilot.service.runtime.ConversationRuntime
+import kotlin.uuid.Uuid
 import me.rerere.common.configuration.ConfigurationReference
 import android.content.Context
 import android.util.Log
@@ -73,11 +85,14 @@ private val ProcessForegroundState = MutableStateFlow(true)
 /**
  * MCP 服务器连接管理器。
  *
- * 每个 server 只有一个 [McpServerRuntime]。本类只汇聚配置、前台、网络和用户命令，
+ * 每个 [McpRuntimeKey] 只有一个 [McpServerRuntime]。本类只汇聚配置、前台、网络和用户命令，
  * 单服务器连接、发现、恢复和调用准入全部由对应 runtime 串行化。
  */
-class McpRuntimeCoordinator(
+class McpRuntimeCoordinator internal constructor(
     private val settingsStore: SettingsStore,
+    private val sessions: net.weero.measix.pilot.data.enterprise.EnterpriseSessionController,
+    private val synchronization: net.weero.measix.pilot.service.EnterpriseSynchronizationService,
+    private val localMcp: net.weero.measix.pilot.data.enterprise.LocalEnterpriseMcpService,
     private val catalogStore: McpCatalogStore,
     private val appScope: AppScope,
     private val artifactStore: ArtifactStore,
@@ -133,17 +148,29 @@ class McpRuntimeCoordinator(
                 }
             }
         },
+        createManagedHttpClient = {
+            HttpClient(OkHttp) {
+                followRedirects = false
+                engine {
+                    preconfigured = okHttpClient.newBuilder()
+                        .followRedirects(false).followSslRedirects(false).retryOnConnectionFailure(false)
+                        .addInterceptor { chain ->
+                            chain.proceed(chain.request().newBuilder()
+                                .tag(me.rerere.common.http.PrivateRequest::class.java, me.rerere.common.http.PrivateRequest).build())
+                        }.build()
+                }
+            }
+        },
+        createLocalHttpClient = localMcp::createClient,
         transportOverride = transportOverride,
         clientOverride = clientOverride,
     )
     private val toolCallExecutor = McpToolCallExecutor(artifactStore)
 
     private val runtimeState = McpRuntimeStateStore()
-    /** Linearizes local definition/policy commits against irrevocable tool-call commitment. */
-    private val configurationInvocationCommitMutex = Mutex()
     /** Bounds connect/discovery and catalog refresh work; tool calls never pass through this gate. */
     private val lifecycleOperationSemaphore = Semaphore(MAX_PARALLEL_LIFECYCLE_OPERATIONS)
-    val runtimeCapabilities: StateFlow<Map<ConfigurationReference, McpRuntimeCapability>> = runtimeState.capabilities
+    val runtimeCapabilities: StateFlow<Map<McpRuntimeKey, McpRuntimeCapability>> = runtimeState.capabilities
     private val runtimePolicy = McpServerRuntimePolicy(retryJitter)
 
     private fun logMcp(serverName: String, message: String) {
@@ -160,7 +187,7 @@ class McpRuntimeCoordinator(
                     configs.filter { current[it.id]?.enabled == true }
                         .forEach { config -> runtime(config.id).bootstrap() }
                 }
-                runtimeState.serverIds.filter { current[it]?.enabled != true }
+                runtimeState.keys.filter { it.access == null }.map { it.serverId }.filter { current[it]?.enabled != true }
                     .forEach { id -> runtime(id).deactivateIfDisabledOrRemoved() }
                 // Disabled definitions may have no runtime; durable retention follows the definition.
                 (previous.orEmpty().keys - current.keys).forEach { id ->
@@ -211,6 +238,70 @@ class McpRuntimeCoordinator(
         }
     }
 
+    /** Passive inspection uses confirmed catalogs and the caller's realm projection; it never opens a connection. */
+    internal suspend fun inspectCapabilities(
+        access: RealmAccess,
+        snapshot: net.weero.measix.pilot.data.datastore.ExecutionConfigurationSnapshot,
+        assistant: Assistant,
+    ): TurnMcpCapabilitySnapshot {
+        check(snapshot.configuration.scope == access.scope)
+        catalogStore.awaitReady()
+        return when (access) {
+            RealmAccess.Personal -> inspectCatalogCapabilities(snapshot, assistant, emptyMap())
+            is RealmAccess.Enterprise -> sessions.readBindings(access) { version, bindings ->
+                check(version.generation == snapshot.configuration.enterpriseConfiguration?.generation) {
+                    "enterprise_configuration_changed_during_inspection"
+                }
+                inspectCatalogCapabilities(snapshot, assistant, bindings.associateBy { it.resourceId })
+            }
+        }
+    }
+
+    private fun inspectCatalogCapabilities(
+        snapshot: net.weero.measix.pilot.data.datastore.ExecutionConfigurationSnapshot,
+        assistant: Assistant,
+        bindings: Map<String, net.weero.measix.pilot.data.enterprise.EnterpriseRuntimeBinding>,
+    ): TurnMcpCapabilitySnapshot {
+        val configuration = snapshot.configuration
+        check(configuration.assistants[assistant.id] == assistant &&
+            configuration.access(ConfigurationCategory.ASSISTANT, assistant.id).canExecute)
+        val selected = assistant.mcpServers.filter {
+            configuration.access(ConfigurationCategory.MCP, it).canExecute
+        } + configuration.catalog.values.filter {
+            it.key.category == ConfigurationCategory.GATEWAY && it.access.canExecute
+        }.map { it.key.reference }
+        val catalogs = catalogStore.catalogs.value
+        val tools = mutableListOf<McpAvailableTool>()
+        val outcomes = selected.distinct().map { id ->
+            val user = snapshot.userSettings.mcpServers.find { it.id == id }
+            val gateway = configuration.enterpriseConfiguration?.gateways?.find { it.id == (id as? ConfigurationReference.Enterprise)?.id }
+            val category = if (gateway != null) ConfigurationCategory.GATEWAY else ConfigurationCategory.MCP
+            val name = configuration.catalog.getValue(net.weero.measix.pilot.data.configuration.ConfigurationKey(category, id)).name
+            val key = McpCatalogKey(if (id is ConfigurationReference.User) net.weero.measix.pilot.data.configuration.ConfigurationScope.Personal else configuration.scope, id)
+            val catalog = catalogs[key]?.takeIf {
+                when (id) {
+                    is ConfigurationReference.User -> user != null && it.definitionDigest == user.mcpDefinitionDigest()
+                    is ConfigurationReference.Enterprise -> it.managed == McpManagedCatalog(requireNotNull(configuration.enterpriseConfiguration).generation, gateway?.surface) &&
+                        it.definitionDigest == managedMcpDefinitionDigest(id, name, bindings.getValue(id.id), configuration.enterpriseConfiguration.generation)
+                }
+            }
+            val policies = user?.commonOptions?.toolPolicyByName().orEmpty()
+            val enabled = catalog?.tools.orEmpty().filter { policies[it.name]?.enable != false }
+            enabled.forEach { tool ->
+                tools += McpAvailableTool(
+                    serverId = id, serverName = name,
+                    namespace = if (id is ConfigurationReference.Enterprise) managedMcpNamespace(id) else name,
+                    catalogRevision = requireNotNull(catalog).revision, definitionDigest = catalog.definitionDigest,
+                    catalogDigest = catalog.catalogDigest, name = tool.name, description = tool.description,
+                    inputSchema = tool.inputSchema, needsApproval = policies[tool.name]?.needsApproval ?: false,
+                )
+            }
+            McpServerCapabilityOutcome(id, name,
+                if (catalog != null) McpServerCapabilityState.READY else McpServerCapabilityState.UNAVAILABLE, enabled.size)
+        }
+        return TurnMcpCapabilitySnapshot(tools, outcomes)
+    }
+
     suspend fun captureTurnCapabilities(assistant: Assistant): TurnMcpCapabilitySnapshot =
         captureTurnCapabilities(assistant, emptySet())
 
@@ -222,7 +313,7 @@ class McpRuntimeCoordinator(
             .filter { it.commonOptions.enable && it.id in assistant.mcpServers }
         val runtimeViews = runtimeCapabilities.value
         val activeCatalogs = selected.mapNotNull { server ->
-            val view = runtimeViews[server.id] ?: McpRuntimeCapability.EMPTY
+            val view = runtimeViews[McpRuntimeKey(server.id)] ?: McpRuntimeCapability.EMPTY
             val catalog = view.catalog
                 ?.takeIf { it.definitionDigest == server.mcpDefinitionDigest() }
                 ?: return@mapNotNull null
@@ -249,7 +340,7 @@ class McpRuntimeCoordinator(
         }
         val toolsByServer = tools.groupBy { it.serverId }
         val outcomes = selected.map { server ->
-            val runtime = runtimeViews[server.id] ?: McpRuntimeCapability.EMPTY
+            val runtime = runtimeViews[McpRuntimeKey(server.id)] ?: McpRuntimeCapability.EMPTY
             val status = runtime.status
             val state = when {
                 server.id in activeCatalogs -> McpServerCapabilityState.READY
@@ -280,7 +371,7 @@ class McpRuntimeCoordinator(
         if (selected.isEmpty()) return TurnMcpCapabilitySnapshot.EMPTY
         val selectedIds = selected.mapTo(hashSetOf()) { it.id }
         val missingCatalogIds = selected.filterTo(linkedSetOf()) { config ->
-            runtimeCapabilities.value[config.id]?.catalog
+            runtimeCapabilities.value[McpRuntimeKey(config.id)]?.catalog
                 ?.definitionDigest != config.mcpDefinitionDigest()
         }.mapTo(hashSetOf()) { it.id }
         selected.forEach { config -> runtime(config.id).reconcile(refreshTools = false) }
@@ -293,21 +384,174 @@ class McpRuntimeCoordinator(
             true
         } ?: false
         val timedOut = if (settled) emptySet() else selectedIds.filterTo(hashSetOf()) { id ->
-            runtimeCapabilities.value[id]?.catalog == null
+            runtimeCapabilities.value[McpRuntimeKey(id)]?.catalog == null
         }
         return captureTurnCapabilities(assistant, timedOut)
+    }
+
+    /** The accepting Turn owns the lease before binding capture, discovery, or any other suspension. */
+    internal suspend fun prepareTurnCapabilities(
+        access: RealmAccess,
+        captured: CapturedModelConfiguration,
+        owner: ConversationRuntime,
+        turnId: Uuid,
+        worker: Job,
+        stopInteraction: suspend () -> Unit,
+    ): TurnMcpCapabilitySnapshot {
+        check(captured.configuration.scope == access.scope && owner.durable.header.scope == access.scope)
+        if (access == RealmAccess.Personal) return prepareTurnCapabilities(captured.assistant)
+        access as RealmAccess.Enterprise
+        var bindings: EnterpriseBindingLease? = null
+        val owned = mutableListOf<McpServerRuntime>()
+        val lease = McpExecutionLease {
+            owned.forEach { it.closeAndAwait() }
+            bindings?.release()
+        }
+        owner.bindMcpExecution(turnId, worker, captured.assistant.id, lease)
+        worker.ensureActive()
+        bindings = sessions.captureBindings(access)
+        val original = requireNotNull(bindings)
+        check(original.version == captured.model.enterpriseVersion) { "enterprise_configuration_changed_during_capture" }
+        val interactionId = "int_$turnId"
+        captured.assistant.mcpServers.forEach { reference ->
+            val permission = captured.configuration.access(ConfigurationCategory.MCP, reference)
+            check(permission.canExecute) { "mcp_reference_unavailable:$reference:${permission.unavailableReason}" }
+        }
+        val definitions = connectionDefinitions(access, captured.configuration, captured.userSettings, captured.assistant, original, interactionId)
+        val targets = definitions.map { definition ->
+            val key = McpRuntimeKey(definition.id, access, interactionId)
+            val source = object : McpRuntimeDefinition {
+                override suspend fun <T> withCurrent(use: McpDefinitionUse, operation: suspend (McpConnectionDefinition?) -> T): T =
+                    sessions.withAppliedConfiguration(access) { state ->
+                        check(state.manifest.phase == EnterpriseSessionPhase.READY) { "enterprise_session_not_ready" }
+                        settingsStore.withExecutionConfiguration(access.scope, state) { latest ->
+                            lease.requireOpen()
+                            val configuration = latest.configuration
+                            val assistant = configuration.assistants[captured.assistant.id]
+                            val gateway = definition.managed?.gatewaySurface != null
+                            val allowed = assistant != null && configuration.access(ConfigurationCategory.ASSISTANT, assistant.id).canExecute &&
+                                if (gateway) configuration.enterpriseConfiguration?.gateways?.any { it.id == (definition.id as ConfigurationReference.Enterprise).id } == true
+                                else definition.id in assistant.mcpServers && configuration.access(ConfigurationCategory.MCP, definition.id).canExecute
+                            val current = when {
+                                !allowed -> null
+                                use == McpDefinitionUse.CATALOG_PUBLICATION && state.manifest.applied != original.version -> null
+                                definition is McpConnectionDefinition.Managed -> {
+                                    original.binding(definition.id.id)
+                                    definition
+                                }
+                                else -> latest.userSettings.mcpServers.find { it.id == definition.id }
+                                    ?.let { McpConnectionDefinition.User(it) }
+                            }
+                            operation(current)
+                        }
+                    }
+            }
+            source.withCurrent(McpDefinitionUse.EXECUTION) { current ->
+                worker.ensureActive()
+                check(current != null) { "mcp_configuration_changed_during_capture" }
+                runtime(key, source) {
+                    owner.requestCancel(turnId, "managed_snapshot_required")
+                    appScope.launch {
+                        try {
+                            stopInteraction()
+                            synchronization.synchronize(access)
+                        }
+                        catch (cancelled: CancellationException) { throw cancelled }
+                        catch (_: Exception) { logMcp(definition.name, "Enterprise generation barrier cleanup or synchronization failed") }
+                    }
+                }.also(owned::add)
+            }
+        }
+        definitions.zip(targets).forEach { (definition, runtime) ->
+            catalogStore.catalogs.value[definition.catalogKey]?.let { runtime.hydrateCatalog(it) }
+            runtime.reconcile(refreshTools = false)
+        }
+        val settled = withTimeoutOrNull(TURN_CAPABILITY_PREPARE_TIMEOUT_MS) {
+            coroutineScope { targets.map { async { it.awaitCurrentOperations() } }.forEach { it.await() } }
+            true
+        } == true
+        val result = captureCapabilities(definitions, access, interactionId, timedOut = !settled)
+        val requiredGateways = captured.configuration.catalog.values.filter {
+            it.key.category == ConfigurationCategory.GATEWAY && it.access.requiredEnabled
+        }.mapTo(hashSetOf()) { it.key.reference }
+        check(result.serverOutcomes.none { it.serverId in requiredGateways && it.state != McpServerCapabilityState.READY }) {
+            "required_gateway_unavailable"
+        }
+        return result
+    }
+
+    private fun connectionDefinitions(
+        access: RealmAccess.Enterprise,
+        configuration: ResolvedConfiguration,
+        settings: net.weero.measix.pilot.data.datastore.Settings,
+        assistant: Assistant,
+        bindings: EnterpriseBindingLease,
+        interactionId: String,
+    ): List<McpConnectionDefinition> = buildList {
+        val enterprise = requireNotNull(configuration.enterpriseConfiguration)
+        assistant.mcpServers.forEach { id ->
+            when (id) {
+                is ConfigurationReference.User -> settings.mcpServers.find { it.id == id }?.let { add(McpConnectionDefinition.User(it)) }
+                is ConfigurationReference.Enterprise -> enterprise.mcpServers.find { it.id == id.id }?.let { definition ->
+                    add(McpConnectionDefinition.Managed(access, id, definition.name, bindings.binding(id.id), bindings.version, interactionId, null))
+                }
+            }
+        }
+        configuration.catalog.values.filter { it.key.category == ConfigurationCategory.GATEWAY && it.access.canExecute }.forEach { item ->
+            val id = item.key.reference as ConfigurationReference.Enterprise
+            val gateway = enterprise.gateways.single { it.id == id.id }
+            add(McpConnectionDefinition.Managed(access, id, gateway.name, bindings.binding(id.id), bindings.version, interactionId, gateway.surface))
+        }
+    }
+
+    private fun captureCapabilities(
+        definitions: List<McpConnectionDefinition>,
+        access: RealmAccess.Enterprise,
+        interactionId: String,
+        timedOut: Boolean,
+    ): TurnMcpCapabilitySnapshot {
+        val tools = mutableListOf<McpAvailableTool>()
+        val outcomes = definitions.map { definition ->
+            val capability = runtimeCapabilities.value[McpRuntimeKey(definition.id, access, interactionId)] ?: McpRuntimeCapability.EMPTY
+            val catalog = capability.catalog?.takeIf { it.definitionDigest == definition.mcpDefinitionDigest() }
+            val selected = catalog?.tools.orEmpty().filter { definition.toolPolicy(it.name)?.enable != false }
+            selected.forEach { tool ->
+                tools += McpAvailableTool(
+                    serverId = definition.id, serverName = definition.name, namespace = definition.namespace, interactionId = interactionId,
+                    catalogRevision = requireNotNull(catalog).revision, definitionDigest = catalog.definitionDigest, catalogDigest = catalog.catalogDigest,
+                    name = tool.name, description = tool.description, inputSchema = tool.inputSchema,
+                    needsApproval = definition.toolPolicy(tool.name)?.needsApproval ?: false,
+                )
+            }
+            McpServerCapabilityOutcome(definition.id, definition.name, when {
+                catalog != null -> McpServerCapabilityState.READY
+                timedOut -> McpServerCapabilityState.TIMEOUT
+                capability.status is McpStatus.NeedsAuthorization -> McpServerCapabilityState.AUTHORIZATION_REQUIRED
+                capability.status is McpStatus.CatalogRejectedEmpty -> McpServerCapabilityState.EMPTY_CATALOG
+                else -> McpServerCapabilityState.UNAVAILABLE
+            }, selected.size)
+        }
+        return TurnMcpCapabilitySnapshot(tools, outcomes)
+    }
+
+    /** Exit seals Session admission first, so this sweep cannot race an accepted new connection. */
+    internal suspend fun closeRealm(access: RealmAccess.Enterprise) = coroutineScope {
+        runtimeState.activeRuntimes.filter { it.key.access == access }
+            .map { async { it.closeAndAwait() } }.forEach { it.await() }
     }
 
     suspend fun callTool(
         realmAccess: net.weero.measix.pilot.data.enterprise.RealmAccess,
         serverId: ConfigurationReference,
+        interactionId: String? = null,
         toolName: String,
         expectedDefinitionDigest: String,
         expectedNeedsApproval: Boolean,
         args: JsonObject,
+        onResolvedTool: suspend (JsonObject) -> Unit = {},
         onArtifactCreated: (OwnedArtifact) -> Unit,
     ): List<UIMessagePart> {
-        val serverRuntime = runtimeState.find(serverId) ?: run {
+        val serverRuntime = runtimeState.find(McpRuntimeKey(serverId, realmAccess as? net.weero.measix.pilot.data.enterprise.RealmAccess.Enterprise, interactionId)) ?: run {
             logMcp(serverId.toString(), "Tool '$toolName' rejected before commitment: runtime absent")
             throw McpToolFailureProjector.project(McpToolFailureKind.TOOL_UNAVAILABLE)
         }
@@ -324,9 +568,9 @@ class McpRuntimeCoordinator(
 
         // OAuth refresh may perform network and Settings I/O. It must never hold the runtime gate.
         val freshConfig = try {
-            withTimeout(OAUTH_IO_TIMEOUT_MS) { oauthCoordinator.ensureFreshToken(admission.config) }
+            withTimeout(OAUTH_IO_TIMEOUT_MS) { serverRuntime.refreshCredentials(admission.config) }
         } catch (timeout: TimeoutCancellationException) {
-            logMcp(admission.config.commonOptions.name, "Tool '$toolName' rejected before commitment: OAuth refresh timeout")
+            logMcp(admission.config.name, "Tool '$toolName' rejected before commitment: OAuth refresh timeout")
             throw McpToolFailureProjector.project(
                 kind = McpToolFailureKind.SERVER_UNAVAILABLE,
                 cause = timeout,
@@ -345,7 +589,7 @@ class McpRuntimeCoordinator(
                 cause = error,
             )
         }
-        val preparation = configurationInvocationCommitMutex.withLock {
+        val preparation = run {
             val preparation = serverRuntime.completeInvocationAdmission(
                 freshConfig = freshConfig,
                 toolName = toolName,
@@ -370,8 +614,17 @@ class McpRuntimeCoordinator(
             client = preparation.client,
             serverName = preparation.serverName,
             generation = preparation.generation,
+            managed = admission.config is McpConnectionDefinition.Managed,
         )
-        return when (val outcome = toolCallExecutor.execute(realmAccess.scope, lease, toolName, args, onArtifactCreated)) {
+        val outcome = try {
+            toolCallExecutor.execute(realmAccess.scope, lease, toolName, args, onArtifactCreated) { metadata ->
+            if (admission.config.managed?.gatewaySurface != null) onResolvedTool(metadata)
+        }
+        } catch (barrier: McpManagedSnapshotRequired) {
+            serverRuntime.acceptManagedBarrier(preparation.generation, barrier)
+            throw barrier
+        }
+        return when (outcome) {
             is McpInvocationOutcome.Succeeded -> outcome.content.also {
                 logMcp(preparation.serverName, "Tool '$toolName' succeeded")
             }
@@ -411,7 +664,7 @@ class McpRuntimeCoordinator(
         val desiredIds = desired.map { it.id }.toSet()
         // remove 分支不信任快照顺序：runtime 在锁内重读当前配置后才拆除，旧的 reconcile
         // 无法拆掉新 revision 刚建立的连接。
-        runtimeState.serverIds.filter { it !in desiredIds }.forEach { id ->
+        runtimeState.keys.filter { it.access == null }.map { it.serverId }.filter { it !in desiredIds }.forEach { id ->
             launch { runtime(id).deactivateIfDisabledOrRemoved() }
         }
         desired.forEach { config ->
@@ -419,32 +672,34 @@ class McpRuntimeCoordinator(
         }
     }
 
-    private fun runtime(serverId: ConfigurationReference): McpServerRuntime =
-        runtimeState.getOrCreate(serverId) {
+    private fun runtime(serverId: ConfigurationReference): McpServerRuntime = runtime(
+        McpRuntimeKey(serverId), object : McpRuntimeDefinition {
+            override suspend fun <T> withCurrent(use: McpDefinitionUse, operation: suspend (McpConnectionDefinition?) -> T): T =
+                settingsStore.withUserMcpDefinitions { definitions ->
+                    operation(definitions.find { it.id == serverId }?.let { McpConnectionDefinition.User(it) })
+                }
+        },
+    )
+
+    private fun runtime(
+        key: McpRuntimeKey,
+        source: McpRuntimeDefinition,
+        onManagedSnapshotRequired: (McpManagedSnapshotRequired) -> Unit = {},
+    ): McpServerRuntime =
+        runtimeState.getOrCreate(key) {
             McpServerRuntime(
-                serverId = serverId,
-                definition = object : McpRuntimeDefinition {
-                    override suspend fun <T> withCurrent(operation: suspend (McpServerConfig?) -> T): T =
-                        settingsStore.withUserMcpDefinitions { definitions ->
-                            operation(definitions.find { it.id == serverId })
-                        }
-                },
-                catalogStore = catalogStore,
-                appScope = appScope,
-                networkMonitor = networkMonitor,
-                stateStore = runtimeState,
-                protocolClientFactory = protocolClientFactory,
-                oauthCoordinator = oauthCoordinator,
-                lifecycleOperationSemaphore = lifecycleOperationSemaphore,
-                ioDispatcher = ioDispatcher,
-                foregroundState = foregroundState,
-                policy = runtimePolicy,
-                logger = ::logMcp,
-                onClosed = { id ->
-                    appScope.launch {
+                key = key, definition = source,
+                catalogStore = catalogStore, appScope = appScope, networkMonitor = networkMonitor,
+                stateStore = runtimeState, protocolClientFactory = protocolClientFactory,
+                oauthCoordinator = oauthCoordinator, lifecycleOperationSemaphore = lifecycleOperationSemaphore,
+                ioDispatcher = ioDispatcher, foregroundState = foregroundState,
+                policy = runtimePolicy, logger = ::logMcp,
+                onManagedSnapshotRequired = onManagedSnapshotRequired,
+                onClosed = { closed ->
+                    if (closed.access == null) appScope.launch {
                         val enabled = settingsStore.userMcpDefinitions.first()
-                            .any { it.id == id && it.commonOptions.enable && it.commonOptions.name.isNotBlank() }
-                        if (enabled) runtime(id).reconcile(refreshTools = false)
+                            .any { it.id == closed.serverId && it.commonOptions.enable && it.commonOptions.name.isNotBlank() }
+                        if (enabled) runtime(closed.serverId).reconcile(refreshTools = false)
                     }
                 },
             )
@@ -485,28 +740,17 @@ class McpRuntimeCoordinator(
         )
     }
 
-    /**
-     * Typed application commands use this boundary for definition/policy commits. It creates one
-     * total order with irrevocable invocation commitment without holding a runtime mutex across
-     * network I/O. The SDK does not expose the exact network-byte send boundary; after commitment,
-     * failures are therefore conservatively classified as an unknown remote outcome.
-     */
-    internal suspend fun withConfigurationMutation(block: suspend () -> Unit) =
-        configurationInvocationCommitMutex.withLock { block() }
-
-    fun startAuthorization(config: McpServerConfig, context: Context) {
-        runtime(config.id).startAuthorization(context.applicationContext)
+    fun startAuthorization(serverId: ConfigurationReference.User, context: Context) {
+        runtime(serverId).startAuthorization(context.applicationContext)
     }
 
-    fun cancelAuthorization(config: McpServerConfig) {
-        runtime(config.id).cancelAuthorization()
+    fun cancelAuthorization(serverId: ConfigurationReference.User) {
+        runtime(serverId).cancelAuthorization()
     }
 
-    suspend fun clearAuthorization(config: McpServerConfig) {
-        withConfigurationMutation {
-            oauthCoordinator.clearAuthorization(config.id)
-            runtime(config.id).revokeAuthorization()
-        }
+    suspend fun clearAuthorization(serverId: ConfigurationReference.User) {
+        oauthCoordinator.clearAuthorization(serverId)
+        runtime(serverId).revokeAuthorization()
     }
 
     private suspend fun recoverActivatedConnections(refreshTools: Boolean) = coroutineScope {
@@ -515,8 +759,8 @@ class McpRuntimeCoordinator(
             .forEach { it.await() }
     }
 
-    suspend fun setOAuthClientCredentials(config: McpServerConfig, clientId: String, clientSecret: String?) {
-        oauthCoordinator.setClientCredentials(config.id, clientId, clientSecret)
+    suspend fun setOAuthClientCredentials(serverId: ConfigurationReference.User, clientId: String, clientSecret: String?) {
+        oauthCoordinator.setClientCredentials(serverId, clientId, clientSecret)
     }
 
 }

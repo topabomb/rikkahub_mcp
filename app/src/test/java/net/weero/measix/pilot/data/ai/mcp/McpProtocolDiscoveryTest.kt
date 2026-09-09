@@ -119,17 +119,17 @@ class McpProtocolDiscoveryTest {
         }
         server.start()
         val http = HttpClient(OkHttp)
-        val factory = McpProtocolClientFactory(createHttpClient = { http })
+        val factory = McpProtocolClientFactory(createManagedHttpClient = { error("unexpected managed connection") }, createLocalHttpClient = { error("unexpected local connection") }, createHttpClient = { http })
         val url = "http://127.0.0.1:${server.address.port}/mcp"
         val config = if (mode == 3) McpServerConfig.SseTransportServer(url = url)
             else McpServerConfig.StreamableHTTPServer(url = url)
-        val client = factory.createClient(config)
+        val client = factory.createClient(McpConnectionDefinition.User(config))
         val key = if (gateway) McpCatalogKey(packet.identity.scope, packet.identity.reference(packet.configuration.gateways.single().id))
             else McpCatalogKey(net.weero.measix.pilot.data.configuration.ConfigurationScope.Personal, config.id)
         val managed = if (gateway) McpManagedCatalog(packet.configuration.generation, packet.configuration.gateways.single().surface) else null
         try {
             withTimeout(10_000) {
-                client.connect(factory.createTransport(config))
+                client.connect(factory.createTransport(McpConnectionDefinition.User(config)))
                 if (malformedMultiline) {
                     try {
                         McpCatalogDiscovery.fetchCandidate(key, config.mcpDefinitionDigest(), client, managed)

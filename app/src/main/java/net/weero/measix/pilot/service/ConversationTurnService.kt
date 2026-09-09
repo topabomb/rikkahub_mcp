@@ -642,7 +642,9 @@ class ConversationTurnService internal constructor(
                         assistant = assistant,
                         memories = memoryAccess?.let { memoryService.read(it) }.orEmpty(),
                     )
-                    val mcpCapabilities = mcpManager.prepareTurnCapabilities(assistant)
+                    val mcpCapabilities = mcpManager.prepareTurnCapabilities(realmAccess, captured, runtime, turnId, worker) {
+                        turnFinalizer.stopInteraction(runtime, turnId, "managed_snapshot_required")
+                    }
                     val unavailableMcp = mcpCapabilities.serverOutcomes.filter {
                         it.state != net.weero.measix.pilot.data.ai.mcp.McpServerCapabilityState.READY
                     }

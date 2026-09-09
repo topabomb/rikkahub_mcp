@@ -132,6 +132,10 @@ START 持久提交与 `TurnCommitter` 认领在同一不可取消边界内完成
 
 USER 预处理按原 RealmAccess 的已解析助手执行。START 前由 `ModelExecutionService` 在 Session → Settings 锁序下捕获助手、模型、媒体能力与用户文档内容 revision，随后 `TurnContextFactory` 冻结 prompt inputs、有序工具定义与执行绑定。同一 Turn 的 Step 和审批继续复用原上下文，不跟随全局当前域或选择。
 
+企业 MCP 的 `McpExecutionLease` 与模型 lease 都归原 ActiveTurnSession，CONTINUE 转交相同资源。
+资源版本屏障通过 `TurnFinalizer.stopInteraction` 精确停止原 Runtime/turnId；包括已经结束 worker 的 AWAITING_USER。
+先在命令边界捕获当前停止回执，再在锁外等待、提交终态及释放连接/binding，清理失败不推进配置同步。
+
 `ModelExecutionLease` 在取得企业 binding 前交给原 Runtime 的 PREPARING owner；上下文只能绑定该 owner 已持有的同一 lease。每次完成请求装配后，StepRunner 经 lease 在原 Session/配置门禁内启动属于原 worker 的请求，网络等待在锁外完成。个人资源只从原 credential owner 刷新凭据，wire shape 保持冻结；企业资源保留原 Applied revision 的私有 binding，并在下一次请求前复验权限和固定绑定。子助手还复验 Caller → Target 的调用资格。
 
 等待用户时，继续 worker 接手同一上下文及 lease；旧 worker 的结束不能释放它。终态或准备失败的资源释放在 Session/会话锁外等待；清理失败保留原 Runtime owner 供 stop 重试。持有执行 lease 的 Runtime 不得被空闲回收、显式驱逐或删除，清理成功后才移除 owner。
