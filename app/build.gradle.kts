@@ -395,6 +395,7 @@ dependencies {
 
     // mcp
     implementation(libs.modelcontextprotocol.kotlin.sdk)
+    implementation(libs.kotlin.logging)
 
     // SLF4J Android binding — routes Ktor/SLF4J logs to logcat
     implementation(libs.slf4j.api)

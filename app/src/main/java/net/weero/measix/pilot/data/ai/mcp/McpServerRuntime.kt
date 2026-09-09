@@ -140,7 +140,7 @@ internal class McpServerRuntime(
 
     suspend fun bootstrap(config: McpServerConfig) = withContext(ioDispatcher) {
         mutex.withLock {
-            hydrateCatalogLocked(config, catalogStore.catalogs.value[serverId])
+            hydrateCatalogLocked(config, catalogStore.catalogs.value[McpCatalogKey(net.weero.measix.pilot.data.configuration.ConfigurationScope.Personal, serverId)])
             if (activeCatalog == null && status == McpStatus.Idle) {
                 setStatusLocked(McpStatus.Idle, null)
             }
@@ -159,7 +159,7 @@ internal class McpServerRuntime(
                 teardownLocked()
                 return@withLock
             }
-            hydrateCatalogLocked(config, catalogStore.catalogs.value[serverId])
+            hydrateCatalogLocked(config, catalogStore.catalogs.value[McpCatalogKey(net.weero.measix.pilot.data.configuration.ConfigurationScope.Personal, serverId)])
             // 授权流程进行中不被配置同步打断；需要授权的 server 只有连接参数变化时才重连
             val desiredFingerprint = config.connectionFingerprint()
             if (!forceReconnect && status == McpStatus.Authorizing) return@withLock
@@ -346,7 +346,7 @@ internal class McpServerRuntime(
                         true
                     }
                     if (!discovering) return@withTimeout
-                    val candidate = McpCatalogDiscovery.fetchCandidate(config, createdClient)
+                    val candidate = McpCatalogDiscovery.fetchCandidate(config, createdClient, net.weero.measix.pilot.data.configuration.ConfigurationScope.Personal)
                     if (!matchesClientLease(assignedGeneration, createdClient, config)) return@withTimeout
                     commitAndActivateCatalog(candidate) { catalogResult ->
                         if (!matchesClientLeaseLocked(assignedGeneration, createdClient, config)) return@commitAndActivateCatalog false
@@ -839,7 +839,7 @@ internal class McpServerRuntime(
                             if (!matchesClientLease(assignedGeneration, lease.client, lease.config)) {
                                 return@withTimeout
                             }
-                            val candidate = McpCatalogDiscovery.fetchCandidate(lease.config, lease.client)
+                            val candidate = McpCatalogDiscovery.fetchCandidate(lease.config, lease.client, net.weero.measix.pilot.data.configuration.ConfigurationScope.Personal)
                             if (!matchesClientLease(assignedGeneration, lease.client, lease.config)) {
                                 return@withTimeout
                             }

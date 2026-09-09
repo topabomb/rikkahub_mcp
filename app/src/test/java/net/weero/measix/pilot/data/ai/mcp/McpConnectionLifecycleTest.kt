@@ -361,7 +361,7 @@ internal class McpConnectionLifecycleTest : McpRuntimeCoordinatorTestBase() {
         val ready = manager.syncingStatus.value[SERVER_ID] as McpStatus.Ready
         assertEquals(
             serverConfig(url = "https://new.example/mcp").mcpDefinitionDigest(),
-            catalogs.value.getValue(SERVER_ID).definitionDigest,
+            catalogs.value.getValue(CATALOG_KEY).definitionDigest,
         )
         assertTrue(ready.toolCount > 0)
         coVerify { createdClients.first().close() }

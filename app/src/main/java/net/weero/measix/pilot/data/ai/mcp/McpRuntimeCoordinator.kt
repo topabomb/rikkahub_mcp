@@ -179,7 +179,7 @@ class McpRuntimeCoordinator(
                     // Catalog retention follows definition existence, not runtime existence. A
                     // disabled definition has no runtime, so deletion must be derived from the
                     // Settings delta or its durable catalog could become orphaned.
-                    removedDefinitionIds.forEach { id -> catalogStore.remove(id) }
+                    removedDefinitionIds.forEach { id -> catalogStore.remove(McpCatalogKey(net.weero.measix.pilot.data.configuration.ConfigurationScope.Personal, id)) }
                     configs.filter { current[it.id]?.enabled == true }
                         .filter { config -> previous[config.id] != current[config.id] }
                         .forEach { config -> runtime(config.id).reconcile(refreshTools = false) }
@@ -193,7 +193,9 @@ class McpRuntimeCoordinator(
             catalogStore.catalogs.collect { catalogs ->
                 val definitions = settingsStore.effectiveSettings.value.settings.mcpServers
                     .associateBy(McpServerConfig::id)
-                catalogs.forEach { (serverId, catalog) ->
+                catalogs.filterKeys { it.scope == net.weero.measix.pilot.data.configuration.ConfigurationScope.Personal }
+                    .forEach { (key, catalog) ->
+                    val serverId = key.serverId
                     definitions[serverId]
                         ?.takeIf { it.commonOptions.enable && it.commonOptions.name.isNotBlank() }
                         ?.let { definition -> runtime(serverId).hydrateCatalog(definition, catalog) }

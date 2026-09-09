@@ -1,5 +1,7 @@
 package net.weero.measix.pilot.data.ai.mcp
 
+import net.weero.measix.pilot.data.configuration.ConfigurationScope
+
 
 import me.rerere.common.configuration.ConfigurationReference
 
@@ -74,8 +76,8 @@ internal class McpCatalogLifecycleTest : McpRuntimeCoordinatorTestBase() {
     private suspend fun kotlinx.coroutines.test.TestScope.assertAcceptedCommitCancellation(cause: kotlinx.coroutines.CancellationException) {
         emit(listOf(serverConfig()))
         advanceUntilIdle()
-        val previous = catalogs.value.getValue(SERVER_ID)
-        val fresh = McpCatalogCandidate(SERVER_ID, previous.definitionDigest, listOf(McpCatalogTool("fresh", inputSchema = JsonObject(emptyMap()))))
+        val previous = catalogs.value.getValue(CATALOG_KEY)
+        val fresh = McpCatalogCandidate(ConfigurationScope.Personal, SERVER_ID, previous.definitionDigest, listOf(McpCatalogTool("fresh", inputSchema = JsonObject(emptyMap()))))
             .initialSnapshot().copy(revision = previous.revision + 1)
         var operation: kotlinx.coroutines.Job? = null
         coEvery { catalogStore.awaitReady() } coAnswers {
@@ -107,14 +109,14 @@ internal class McpCatalogLifecycleTest : McpRuntimeCoordinatorTestBase() {
             emit(listOf(serverConfig()))
             advanceUntilIdle()
         }
-        val previous = catalogs.value[SERVER_ID]
+        val previous = catalogs.value[CATALOG_KEY]
         val written = CompletableDeferred<McpCatalogCommitResult.Committed>()
         val releaseReceipt = CompletableDeferred<Unit>()
         coEvery { catalogStore.commitCandidate(any()) } coAnswers {
             val candidate = firstArg<McpCatalogCandidate>()
             val snapshot = candidate.initialSnapshot().copy(revision = (previous?.revision ?: 0L) + 1L)
             val receipt = McpCatalogCommitResult.Committed(snapshot, previous, 42L)
-            catalogs.value = mapOf(SERVER_ID to snapshot)
+            catalogs.value = mapOf(CATALOG_KEY to snapshot)
             written.complete(receipt)
             releaseReceipt.await()
             receipt
@@ -130,7 +132,7 @@ internal class McpCatalogLifecycleTest : McpRuntimeCoordinatorTestBase() {
         advanceUntilIdle()
         val receipt = written.await()
         coVerify(exactly = 1) { catalogStore.rollbackCommitted(receipt.snapshot, previous, receipt.headToken) }
-        assertEquals(previous, catalogs.value[SERVER_ID])
+        assertEquals(previous, catalogs.value[CATALOG_KEY])
     }
 
     @Test
@@ -142,7 +144,7 @@ internal class McpCatalogLifecycleTest : McpRuntimeCoordinatorTestBase() {
         emit(emptyList())
         advanceUntilIdle()
 
-        coVerify(exactly = 1) { catalogStore.remove(SERVER_ID) }
+        coVerify(exactly = 1) { catalogStore.remove(CATALOG_KEY) }
     }
 
     @Test
@@ -151,12 +153,12 @@ internal class McpCatalogLifecycleTest : McpRuntimeCoordinatorTestBase() {
         advanceUntilIdle()
         emit(listOf(serverConfig(enable = false)))
         advanceUntilIdle()
-        coVerify(exactly = 0) { catalogStore.remove(SERVER_ID) }
+        coVerify(exactly = 0) { catalogStore.remove(CATALOG_KEY) }
 
         emit(emptyList())
         advanceUntilIdle()
 
-        coVerify(exactly = 1) { catalogStore.remove(SERVER_ID) }
+        coVerify(exactly = 1) { catalogStore.remove(CATALOG_KEY) }
     }
 
     @Test
@@ -205,7 +207,7 @@ internal class McpCatalogLifecycleTest : McpRuntimeCoordinatorTestBase() {
         }
         emit(listOf(serverConfig()))
         advanceUntilIdle()
-        val catalogRevision = catalogs.value.getValue(SERVER_ID).revision
+        val catalogRevision = catalogs.value.getValue(CATALOG_KEY).revision
 
         foregroundAction?.invoke()
         runCurrent()
@@ -216,7 +218,7 @@ internal class McpCatalogLifecycleTest : McpRuntimeCoordinatorTestBase() {
 
         assertEquals(1, createdClients.size)
         assertEquals(1, listRequests)
-        assertEquals(catalogRevision, catalogs.value.getValue(SERVER_ID).revision)
+        assertEquals(catalogRevision, catalogs.value.getValue(CATALOG_KEY).revision)
     }
 
     @Test
@@ -234,7 +236,7 @@ internal class McpCatalogLifecycleTest : McpRuntimeCoordinatorTestBase() {
 
         val ready = manager.syncingStatus.value[SERVER_ID] as McpStatus.Ready
         assertEquals(2, ready.toolCount)
-        assertEquals(listOf("first", "second"), catalogs.value.getValue(SERVER_ID).tools.map { it.name })
+        assertEquals(listOf("first", "second"), catalogs.value.getValue(CATALOG_KEY).tools.map { it.name })
     }
 
     @Test
@@ -262,7 +264,7 @@ internal class McpCatalogLifecycleTest : McpRuntimeCoordinatorTestBase() {
         advanceUntilIdle()
 
         assertEquals(2, requests)
-        assertEquals(listOf("refreshed"), catalogs.value.getValue(SERVER_ID).tools.map { it.name })
+        assertEquals(listOf("refreshed"), catalogs.value.getValue(CATALOG_KEY).tools.map { it.name })
         assertTrue(manager.syncingStatus.value[SERVER_ID] is McpStatus.Ready)
     }
 
@@ -411,7 +413,7 @@ internal class McpCatalogLifecycleTest : McpRuntimeCoordinatorTestBase() {
             managedState = ManagedConfigurationState.ABSENT,
         )
         every { isolatedSettingsStore.effectiveSettings } returns isolatedEffective.flow
-        val durable = McpCatalogSnapshot(
+        val durable = McpCatalogSnapshot(ConfigurationScope.Personal,
             serverId = SERVER_ID,
             revision = 7L,
             definitionDigest = definition.mcpDefinitionDigest(),
@@ -420,7 +422,7 @@ internal class McpCatalogLifecycleTest : McpRuntimeCoordinatorTestBase() {
         )
         val isolatedCatalogStore = mockk<McpCatalogStore>()
         coEvery { isolatedCatalogStore.awaitReady() } returns Unit
-        every { isolatedCatalogStore.catalogs } returns MutableStateFlow(mapOf(SERVER_ID to durable))
+        every { isolatedCatalogStore.catalogs } returns MutableStateFlow(mapOf(durable.key to durable))
         coEvery { isolatedCatalogStore.remove(any()) } returns Unit
         val isolatedNetwork = mockk<NetworkMonitor>()
         every { isolatedNetwork.isOnline } returns MutableStateFlow(true)

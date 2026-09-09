@@ -4,17 +4,12 @@ import io.ktor.client.HttpClient
 import io.ktor.util.StringValues
 import io.modelcontextprotocol.kotlin.sdk.client.Client
 import io.modelcontextprotocol.kotlin.sdk.client.ClientOptions
-import io.modelcontextprotocol.kotlin.sdk.client.SseClientTransport
-import io.modelcontextprotocol.kotlin.sdk.client.StreamableHttpClientTransport
 import io.modelcontextprotocol.kotlin.sdk.shared.AbstractTransport
 import io.modelcontextprotocol.kotlin.sdk.types.ClientCapabilities
 import io.modelcontextprotocol.kotlin.sdk.types.Implementation
 import io.modelcontextprotocol.kotlin.sdk.types.ListToolsRequest
 import io.modelcontextprotocol.kotlin.sdk.types.PaginatedRequestParams
 import io.modelcontextprotocol.kotlin.sdk.client.StreamableHttpError
-import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.encodeToJsonElement
-import kotlinx.serialization.json.jsonObject
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 
@@ -45,12 +40,12 @@ internal class McpProtocolClientFactory(
             config.resolvedConnectionHeaders().forEach { append(it.first, it.second) }
         }
         return when (config) {
-            is McpServerConfig.SseTransportServer -> SseClientTransport(
+            is McpServerConfig.SseTransportServer -> McpSseTransport(
                 urlString = config.url,
                 client = httpClient,
                 requestBuilder = { headers.appendAll(customHeaders) },
             )
-            is McpServerConfig.StreamableHTTPServer -> StreamableHttpClientTransport(
+            is McpServerConfig.StreamableHTTPServer -> McpStreamableHttpTransport(
                 url = config.url,
                 client = httpClient,
                 requestBuilder = { headers.appendAll(customHeaders) },
@@ -108,7 +103,11 @@ internal object McpCatalogDiscovery {
     private const val MAX_TOOL_PAGES = 64
     private const val MAX_TOOL_COUNT = 4096
 
-    suspend fun fetchCandidate(config: McpServerConfig, client: Client): McpCatalogCandidate {
+    suspend fun fetchCandidate(
+        config: McpServerConfig,
+        client: Client,
+        catalogScope: net.weero.measix.pilot.data.configuration.ConfigurationScope,
+    ): McpCatalogCandidate {
         checkNotNull(client.serverCapabilities?.tools) { "MCP server does not declare tools capability" }
         val tools = mutableListOf<McpCatalogTool>()
         val seenCursors = mutableSetOf<String>()
@@ -116,27 +115,23 @@ internal object McpCatalogDiscovery {
         var page = 0
         do {
             check(page++ < MAX_TOOL_PAGES) { "MCP tools/list exceeded $MAX_TOOL_PAGES pages" }
-            val result = client.listTools(ListToolsRequest(params = cursor?.let(::PaginatedRequestParams)))
+            val result = McpToolPageCapture.read {
+                client.listTools(ListToolsRequest(params = cursor?.let(::PaginatedRequestParams)))
+            }
             result.tools.forEach { tool ->
                 check(tool.name.isNotBlank()) { "MCP catalog contains a blank tool name" }
                 check(tools.none { it.name == tool.name }) {
                     "MCP catalog contains duplicate tool '${tool.name}'"
                 }
                 check(tools.size < MAX_TOOL_COUNT) { "MCP catalog exceeded $MAX_TOOL_COUNT tools" }
-                tools += McpCatalogTool(
-                    name = tool.name,
-                    description = tool.description,
-                    inputSchema = Json.encodeToJsonElement(
-                        io.modelcontextprotocol.kotlin.sdk.types.ToolSchema.serializer(),
-                        tool.inputSchema,
-                    ).jsonObject,
-                )
+                tools += tool
             }
             cursor = result.nextCursor
             if (cursor != null) check(seenCursors.add(cursor)) { "MCP tools/list repeated cursor" }
         } while (cursor != null)
 
         return McpCatalogCandidate(
+            scope = catalogScope,
             serverId = config.id,
             definitionDigest = config.mcpDefinitionDigest(),
             tools = tools,

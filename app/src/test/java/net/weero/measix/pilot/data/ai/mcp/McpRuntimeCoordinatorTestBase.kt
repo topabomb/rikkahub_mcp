@@ -1,5 +1,7 @@
 package net.weero.measix.pilot.data.ai.mcp
 
+import net.weero.measix.pilot.data.configuration.ConfigurationScope
+
 import me.rerere.common.configuration.ConfigurationReference
 
 import io.mockk.coEvery
@@ -59,7 +61,7 @@ internal abstract class McpRuntimeCoordinatorTestBase {
         ListToolsResult(tools = listOf(serverTool("search")))
     }
     protected val settingsStore = mockk<SettingsStore>()
-    protected val catalogs = MutableStateFlow<Map<ConfigurationReference, McpCatalogSnapshot>>(emptyMap())
+    protected val catalogs = MutableStateFlow<Map<McpCatalogKey, McpCatalogSnapshot>>(emptyMap())
     protected val catalogStore = mockk<McpCatalogStore>()
     protected lateinit var networkOnline: MutableStateFlow<Boolean>
     protected var foregroundAction: (() -> Unit)? = null
@@ -82,31 +84,31 @@ internal abstract class McpRuntimeCoordinatorTestBase {
         coEvery { catalogStore.awaitReady() } returns Unit
         coEvery { catalogStore.commitCandidate(any()) } coAnswers {
             val candidate = firstArg<McpCatalogCandidate>()
-            val previous = catalogs.value[candidate.serverId]
+            val previous = catalogs.value[candidate.key]
             if (candidate.tools.isEmpty()) {
                 McpCatalogCommitResult.RejectedEmpty(
                     previous?.takeIf { it.definitionDigest == candidate.definitionDigest }
                 )
             } else {
-                val snapshot = McpCatalogSnapshot(
+                val snapshot = McpCatalogSnapshot(candidate.scope,
                     serverId = candidate.serverId,
                     revision = (previous?.revision ?: 0L) + 1,
                     definitionDigest = candidate.definitionDigest,
                     catalogDigest = candidate.tools.joinToString { it.name },
                     tools = candidate.tools,
                 )
-                catalogs.value = catalogs.value + (candidate.serverId to snapshot)
+                catalogs.value = catalogs.value + (candidate.key to snapshot)
                 McpCatalogCommitResult.Committed(snapshot, previous, snapshot.revision)
             }
         }
         coEvery { catalogStore.rollbackCommitted(any(), any(), any()) } coAnswers {
             val committed = firstArg<McpCatalogSnapshot>()
             val previous = secondArg<McpCatalogSnapshot?>()
-            if (catalogs.value[committed.serverId] == committed) {
+            if (catalogs.value[committed.key] == committed) {
                 catalogs.value = if (previous == null) {
-                    catalogs.value - committed.serverId
+                    catalogs.value - committed.key
                 } else {
-                    catalogs.value + (committed.serverId to previous)
+                    catalogs.value + (committed.key to previous)
                 }
             }
         }
@@ -171,7 +173,14 @@ internal abstract class McpRuntimeCoordinatorTestBase {
         )
         coEvery { client.close() } returns Unit
         coEvery { client.listTools(any()) } coAnswers {
-            listToolsResponder(config, firstArg())
+            val wire = McpCatalogWire()
+            val request = io.modelcontextprotocol.kotlin.sdk.types.JSONRPCRequest(method = "tools/list")
+            wire.bind(request)
+            listToolsResponder(config, firstArg()).also { result ->
+                wire.decode(io.modelcontextprotocol.kotlin.sdk.types.McpJson.encodeToString(
+                    io.modelcontextprotocol.kotlin.sdk.types.JSONRPCResponse(request.id, result)
+                ))
+            }
         }
         coEvery {
             client.callTool(any<CallToolRequest>(), any<RequestOptions>())
@@ -220,6 +229,7 @@ internal abstract class McpRuntimeCoordinatorTestBase {
 
     companion object {
         val SERVER_ID = ConfigurationReference.random()
+        val CATALOG_KEY = McpCatalogKey(ConfigurationScope.Personal, SERVER_ID)
     }
 }
 

@@ -135,6 +135,7 @@ leakcanary-android = { module = "com.squareup.leakcanary:leakcanary-android", ve
 reorderable = { module = "sh.calvin.reorderable:reorderable", version.ref = "reorderable" }
 commons-text = { module = "org.apache.commons:commons-text", version.ref = "commons-text" }
 re2j = { module = "com.google.re2j:re2j", version.ref = "re2j" }
+kotlin-logging = { module = "io.github.oshai:kotlin-logging", version = "8.0.4" }
 modelcontextprotocol-kotlin-sdk = { module = "io.modelcontextprotocol:kotlin-sdk", version.ref = "mcp" }
 pebble = { module = "io.pebbletemplates:pebble", version.ref = "pebble" }
 diffutils = { module = "io.github.java-diff-utils:java-diff-utils", version.ref = "diffutils" }

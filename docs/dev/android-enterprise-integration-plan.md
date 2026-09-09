@@ -606,3 +606,19 @@ SAF 批次已删除 Provider 直连 DAO/Manager、查询时建目录以及移动
 共享配置预设附件已通过原 Artifact 创建协议物化到目标域：媒体、工具交付 metadata、嵌套输出及归档引用使用同一复制映射，原配置文件和归属保持不变。主 Draft 由 Runtime 保留创建令牌，首 USER 单事务提交；失败可重试，闲置丢弃交还 GC；Child 复用既有创建/链接/补偿。未新增 schema、配置区或持久化 owner。独立复审发现的发布/读取竞态和工具多图片重写问题均已关闭。
 
 本批最终串行 `test assembleDebug lintDebug assembleRelease connectedDebugAndroidTest` 通过（16 分 36 秒）：App 2,088 项 JVM、Android 17 模拟器 App 190 项与 Speech 6 项无失败；App/Workspace lint 均为 0 错误，分别有 287/11 项警告。Workspace JVM 保留 11 项 Windows 条件跳过，设备 12 项中保留 1 项硬链接条件跳过。真实设备消费者使用正式 Room/FTS 建库入口，验证企业 Draft 预览、源删除、首消息事务失败与重试、提交后读取及关页撤权。证据见 `build/reports/enterprise/configuration-assets-verification.json`；不替代 Release 设备、实体机、系统选择器人工验收或真实平台互操作。MCP/Gateway、Speech、备份、UI/示例和版本 20 整体验收继续实施，最后仍须对整份需求做独立审查。
+
+
+C5 的 MCP 协议接线正在实施。完整远端 Tool 对象已进入唯一 Catalog：SDK 仍拥有 RPC/超时/取消，
+传输保留同次响应，不丢失 outputSchema、annotations、`_meta` 或 Schema 扩展；原个人目录的 Tool 字节和摘要保持。
+HTTP JSON、POST SSE、GET SSE 和个人 SSE 经实际 SDK、生产 OkHttp 与本机 HTTP 服务验证，覆盖分页、
+完整字段往返、错 ID、持续 POST 流、GET 断线恢复与多行内容拒绝错误拼接。
+
+Catalog 已按来源、Deployment、User 和资源保存企业目录，Session 属于运行态；用户目录仍归个人。
+已发布个人数组一次性迁移到版本化文档，成功后删除旧键。个人备份只替换个人目录，保留企业内容及提交回执；
+新文档损坏时拒绝覆盖，不回退旧键。独立审查发现的无关恢复导致企业补偿失效问题已修正。
+MCP 与备份定向 JVM 回归 146 项通过，Android 17 模拟器目录关闭重开用例通过；覆盖不同用户和本地/平台来源。
+证据位于 `build/reports/enterprise/mcp-catalog-scope-focused.log` 与 `mcp-catalog-scope-jvm-results.json`。
+企业原 Session 连接与准入、Gateway hash/成对策略/执行、本地企业工具完整场景仍待本批收口；
+不将上述目录与协议验证视为企业互操作完成。
+
+本目录与协议接收批次的完整串行 `test assembleDebug lintDebug assembleRelease connectedDebugAndroidTest` 通过（19 分 43 秒）：App 2,101 项 JVM、Android 17 模拟器 App 190 项与 Speech 6 项无失败；App/Workspace lint 均为 0 错误，分别有 287/11 项警告。Workspace JVM 保留 11 项 Windows 条件跳过，设备 12 项中保留 1 项硬链接条件跳过。证据见 `build/reports/enterprise/mcp-catalog-verification.json`。未完成原 Session MCP 连接、Gateway 完整场景、Speech、个人备份图保全与其余整期验收；版本仍保持 0.0.19 开发基线。

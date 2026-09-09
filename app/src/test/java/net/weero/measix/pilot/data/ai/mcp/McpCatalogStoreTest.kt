@@ -1,5 +1,7 @@
 package net.weero.measix.pilot.data.ai.mcp
 
+import net.weero.measix.pilot.data.configuration.ConfigurationScope
+
 import me.rerere.common.configuration.ConfigurationReference
 
 import android.content.Context
@@ -44,6 +46,7 @@ class McpCatalogStoreTest {
         try {
             val context = ApplicationProvider.getApplicationContext<Context>()
             val legacyServerId = ConfigurationReference.random()
+            val legacyKey = McpCatalogKey(ConfigurationScope.Personal, legacyServerId)
             val legacyJson = """
                 [
                   {
@@ -93,7 +96,7 @@ class McpCatalogStoreTest {
 
             val migratedCatalog = withContext(Dispatchers.Default.limitedParallelism(1)) {
                 withTimeout(5_000L) {
-                    store.catalogs.first { legacyServerId in it }.getValue(legacyServerId)
+                    store.catalogs.first { legacyKey in it }.getValue(legacyKey)
                 }
             }
             assertEquals(listOf("legacy_measure"), migratedCatalog.tools.map { it.name })
@@ -109,7 +112,7 @@ class McpCatalogStoreTest {
                 "restored_tool",
             ).initialSnapshot()
             val restore = async {
-                store.restoreCatalogs(listOf(restoredSnapshot), listOf(restoredDefinition))
+                store.restorePersonalCatalogs(listOf(restoredSnapshot), listOf(restoredDefinition))
             }
             runCurrent()
             assertFalse(restore.isCompleted)
@@ -121,10 +124,10 @@ class McpCatalogStoreTest {
 
             migrationCompletionGate.complete(Unit)
             assertEquals(listOf("legacy_measure"), backupSnapshot.await().single().tools.map { it.name })
-            store.restoreCatalogs(listOf(restoredSnapshot), listOf(restoredDefinition))
+            store.restorePersonalCatalogs(listOf(restoredSnapshot), listOf(restoredDefinition))
             coVerify(exactly = 1) { settingsStore.completeMcpCatalogMigration(pendingEncoded) }
-            assertEquals(setOf(restoredDefinition.id), store.catalogs.value.keys)
-            assertEquals(listOf("restored_tool"), store.catalogs.value.getValue(restoredDefinition.id).tools.map { it.name })
+            assertEquals(setOf(restoredSnapshot.key), store.catalogs.value.keys)
+            assertEquals(listOf("restored_tool"), store.catalogs.value.getValue(restoredSnapshot.key).tools.map { it.name })
 
             val serverId = ConfigurationReference.random()
             val firstCandidate = candidate(serverId, "definition-a", "search")
@@ -154,7 +157,7 @@ class McpCatalogStoreTest {
             assertEquals(changed.snapshot, changed.snapshot.validated())
 
             store.rollbackCommitted(changed.snapshot, changed.previous, changed.headToken)
-            assertEquals(first.snapshot, store.catalogs.value[serverId])
+            assertEquals(first.snapshot, store.catalogs.value[first.snapshot.key])
 
             val replacement = store.commitCandidate(candidate(serverId, "definition-a", "replace"))
                 as McpCatalogCommitResult.Committed
@@ -163,14 +166,14 @@ class McpCatalogStoreTest {
             assertEquals(
                 "an unchanged observation must protect the current head from an older rollback",
                 replacement.snapshot,
-                store.catalogs.value[serverId],
+                store.catalogs.value[first.snapshot.key],
             )
         } finally {
             scope.cancel()
         }
     }
 
-    private fun candidate(serverId: ConfigurationReference, definition: String, toolName: String) = McpCatalogCandidate(
+    private fun candidate(serverId: ConfigurationReference, definition: String, toolName: String) = McpCatalogCandidate(ConfigurationScope.Personal,
         serverId = serverId,
         definitionDigest = definition,
         tools = listOf(

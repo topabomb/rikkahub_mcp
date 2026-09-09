@@ -13,9 +13,23 @@ import kotlinx.serialization.json.put
 import kotlinx.serialization.json.buildJsonObject
 import net.weero.measix.pilot.utils.JsonInstant
 
+/** Released Settings staging contains personal resources only, without a runtime principal. */
+@Serializable
+internal data class McpPersonalCatalogMigrationCandidate(
+    val serverId: ConfigurationReference,
+    val definitionDigest: String,
+    val tools: List<McpCatalogTool>,
+) {
+    init { require(serverId is ConfigurationReference.User) { "Legacy MCP staging must be personal" } }
+
+    fun toCatalogCandidate() = McpCatalogCandidate(
+        net.weero.measix.pilot.data.configuration.ConfigurationScope.Personal, serverId, definitionDigest, tools,
+    )
+}
+
 @Serializable
 internal data class McpLegacyCatalogMigrationPayload(
-    val candidates: List<McpCatalogCandidate>,
+    val candidates: List<McpPersonalCatalogMigrationCandidate>,
 )
 
 internal data class McpLegacySettingsMigration(
@@ -47,7 +61,7 @@ internal fun migrateLegacyMcpServersJson(encoded: String): McpLegacySettingsMigr
     val seenIds = hashSetOf<ConfigurationReference>()
     val seenNames = hashSetOf<String>()
     val normalizedServers = mutableListOf<McpServerConfig>()
-    val candidates = mutableListOf<McpCatalogCandidate>()
+    val candidates = mutableListOf<McpPersonalCatalogMigrationCandidate>()
     records.forEach { (decoded, element) ->
         val normalizedName = decoded.commonOptions.name.trim().lowercase()
         if (!seenIds.add(decoded.id) || !seenNames.add(normalizedName)) return@forEach
@@ -61,7 +75,7 @@ internal fun migrateLegacyMcpServersJson(encoded: String): McpLegacySettingsMigr
         val tools = element.legacyToolsArray() ?: return@forEach
         if (tools.any(JsonElement::containsLegacySchema)) foundLegacySchema = true
         tools.toLegacyCatalogTools()?.takeIf { it.isNotEmpty() }?.let { catalogTools ->
-            candidates += McpCatalogCandidate(
+            candidates += McpPersonalCatalogMigrationCandidate(
                 serverId = normalized.id,
                 definitionDigest = normalized.mcpDefinitionDigest(),
                 tools = catalogTools,

@@ -3,7 +3,7 @@ package net.weero.measix.pilot.data.sync
 import android.content.Context
 import java.io.File
 import kotlinx.serialization.json.Json
-import net.weero.measix.pilot.data.ai.mcp.McpCatalogSnapshot
+import net.weero.measix.pilot.data.ai.mcp.decodePersonalMcpCatalogImport
 import net.weero.measix.pilot.data.ai.mcp.McpCatalogStore
 import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.files.ArtifactStore
@@ -89,10 +89,10 @@ object PendingBackupRestore {
             BackupSettingsPolicy.withoutLocalPayloadReferences(decoded)
         }
         store.restoreSettingsReferences(settings)
-        val catalogs = json.decodeFromString<List<McpCatalogSnapshot>>(
+        val catalogs = decodePersonalMcpCatalogImport(
             File(pending, BackupArchiveService.MCP_CATALOGS_ENTRY).readText(Charsets.UTF_8)
         )
-        catalogStore.restoreCatalogs(catalogs, settings.mcpServers)
+        catalogStore.restorePersonalCatalogs(catalogs, settings.mcpServers)
     }
 
     fun complete(context: Context) {

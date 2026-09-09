@@ -1,5 +1,7 @@
 package net.weero.measix.pilot.data.ai.mcp
 
+import net.weero.measix.pilot.data.configuration.ConfigurationScope
+
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.PreferenceDataStoreFactory
@@ -24,6 +26,9 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.encodeToJsonElement
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import net.weero.measix.pilot.AppScope
@@ -44,7 +49,7 @@ class McpCatalogPublicationTest {
             withTimeout(5_000) { disk.readCaptured.await() }
             val restored = candidate("restored").initialSnapshot()
             val restore = async(start = CoroutineStart.UNDISPATCHED) {
-                store.restoreCatalogs(listOf(restored), listOf(definition))
+                store.restorePersonalCatalogs(listOf(restored), listOf(definition))
             }
             val discovery = async(start = CoroutineStart.UNDISPATCHED) { store.commitCandidate(candidate("discovered")) }
             assertFalse(restore.isCompleted)
@@ -53,9 +58,9 @@ class McpCatalogPublicationTest {
             disk.releaseRead.complete(Unit)
             withTimeout(5_000) { restore.await(); discovery.await() }
             // Observe again after another complete replacement; no delayed disk subscription may roll it back.
-            store.restoreCatalogs(listOf(restored), listOf(definition))
+            store.restorePersonalCatalogs(listOf(restored), listOf(definition))
             val final = store.commitCandidate(candidate("final")) as McpCatalogCommitResult.Committed
-            assertEquals(final.snapshot, store.catalogs.value[definition.id])
+            assertEquals(final.snapshot, store.catalogs.value[McpCatalogKey(ConfigurationScope.Personal, definition.id)])
             assertEquals(listOf(final.snapshot), store.snapshotForBackup(listOf(definition)))
         }
     }
@@ -66,9 +71,9 @@ class McpCatalogPublicationTest {
             val snapshot = candidate("unused").initialSnapshot()
             val operations: List<suspend () -> Any?> = listOf(
                 { store.snapshotForBackup(listOf(definition)) },
-                { store.restoreCatalogs(listOf(snapshot), listOf(definition)) },
+                { store.restorePersonalCatalogs(listOf(snapshot), listOf(definition)) },
                 { store.commitCandidate(candidate("unused")) },
-                { store.remove(definition.id) },
+                { store.remove(McpCatalogKey(ConfigurationScope.Personal, definition.id)) },
                 { store.rollbackCommitted(snapshot, null, 1) },
             )
             operations.forEach { operation ->
@@ -81,20 +86,20 @@ class McpCatalogPublicationTest {
     }
 
     @Test
-    fun `explicit full restore repairs failed initial read without pretending backup succeeded`() = runBlocking {
+    fun `personal restore repairs released personal format without pretending backup succeeded`() = runBlocking {
         val valid = candidate("restored").initialSnapshot()
         val corruptInputs = listOf(
-            "{", JsonInstant.encodeToString(listOf(valid.copy(catalogDigest = "broken"))),
-            JsonInstant.encodeToString(listOf(valid, valid)),
+            "{", releasedArray(valid.copy(catalogDigest = "broken")),
+            releasedArray(valid, valid),
         )
         for (encoded in corruptInputs + null) {
             withStore(failRead = encoded == null, initialCatalog = encoded) { store, _ ->
                 try { store.snapshotForBackup(listOf(definition)); fail("Unreadable directory became an empty backup") }
                 catch (_: IOException) { }
                 catch (_: IllegalArgumentException) { }
-                store.restoreCatalogs(listOf(valid), listOf(definition))
+                store.restorePersonalCatalogs(listOf(valid), listOf(definition))
                 assertEquals(listOf(valid), store.snapshotForBackup(listOf(definition)))
-                assertEquals(mapOf(definition.id to valid), store.catalogs.value)
+                assertEquals(mapOf(valid.key to valid), store.catalogs.value)
             }
         }
     }
@@ -123,7 +128,7 @@ class McpCatalogPublicationTest {
         withStore(pauseInitialRead = true) { store, disk ->
             withTimeout(5_000) { disk.readCaptured.await() }
             val restore = async(start = CoroutineStart.UNDISPATCHED) {
-                store.restoreCatalogs(listOf(candidate("unused").initialSnapshot()), listOf(definition))
+                store.restorePersonalCatalogs(listOf(candidate("unused").initialSnapshot()), listOf(definition))
             }
             disk.owner.coroutineContext[Job]!!.cancelAndJoin()
             withTimeout(5_000) { restore.join() }
@@ -141,7 +146,7 @@ class McpCatalogPublicationTest {
             withTimeout(5_000) { disk.writeCommitted.await() }
             writer.cancel()
             assertFalse(writer.isCompleted)
-            assertEquals(first.snapshot, store.catalogs.value[definition.id])
+            assertEquals(first.snapshot, store.catalogs.value[McpCatalogKey(ConfigurationScope.Personal, definition.id)])
             val following = async(start = CoroutineStart.UNDISPATCHED) { store.commitCandidate(candidate("third")) }
             assertFalse(following.isCompleted)
             disk.releaseAck.complete(Unit)
@@ -150,7 +155,7 @@ class McpCatalogPublicationTest {
             val latest = withTimeout(5_000) { following.await() } as McpCatalogCommitResult.Committed
             assertEquals(3L, latest.snapshot.revision)
             store.rollbackCommitted(first.snapshot, null, first.headToken)
-            assertEquals(latest.snapshot, store.catalogs.value[definition.id])
+            assertEquals(latest.snapshot, store.catalogs.value[McpCatalogKey(ConfigurationScope.Personal, definition.id)])
             assertEquals(listOf(latest.snapshot), store.snapshotForBackup(listOf(definition)))
         }
     }
@@ -180,7 +185,11 @@ class McpCatalogPublicationTest {
         }
     }
 
-    private fun candidate(tool: String) = McpCatalogCandidate(
+    private fun releasedArray(vararg snapshots: McpCatalogSnapshot): String = JsonArray(snapshots.map {
+        JsonObject((JsonInstant.encodeToJsonElement(it) as JsonObject) - "scope")
+    }).toString()
+
+    private fun candidate(tool: String) = McpCatalogCandidate(ConfigurationScope.Personal,
         definition.id, definition.mcpDefinitionDigest(),
         listOf(McpCatalogTool(tool, inputSchema = buildJsonObject { put("type", "object") })),
     )

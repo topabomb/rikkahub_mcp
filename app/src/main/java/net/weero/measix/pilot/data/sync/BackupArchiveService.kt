@@ -26,6 +26,8 @@ import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.datastore.SettingsStore
 import net.weero.measix.pilot.data.datastore.migrateLegacySettingsJson
 import net.weero.measix.pilot.data.ai.mcp.McpCatalogSnapshot
+import net.weero.measix.pilot.data.ai.mcp.decodePersonalMcpCatalogImport
+import net.weero.measix.pilot.data.ai.mcp.encodeMcpCatalogDocument
 import net.weero.measix.pilot.data.ai.mcp.McpCatalogStore
 import net.weero.measix.pilot.data.ai.mcp.McpLegacyCatalogMigrationPayload
 import net.weero.measix.pilot.data.ai.mcp.initialSnapshot
@@ -106,7 +108,7 @@ class BackupArchiveService(
                                 }
                                 val settingsBytes = json.encodeToString(archiveSettings)
                                     .toByteArray(Charsets.UTF_8)
-                                val catalogBytes = json.encodeToString(
+                                val catalogBytes = encodeMcpCatalogDocument(
                                     mcpCatalogStore.snapshotForBackup(liveSettings.mcpServers)
                                 ).toByteArray(Charsets.UTF_8)
                                 val durableFiles = if (snapshot != null) buildList {
@@ -265,13 +267,13 @@ class BackupArchiveService(
     private fun prepareMcpCatalogRestore(staging: File, validated: ValidatedBackupSettings) {
         val catalogFile = File(staging, MCP_CATALOGS_ENTRY)
         val snapshots = if (catalogFile.isFile) {
-            json.decodeFromString<List<McpCatalogSnapshot>>(catalogFile.readText(Charsets.UTF_8))
+            decodePersonalMcpCatalogImport(catalogFile.readText(Charsets.UTF_8))
         } else {
-            validated.legacyCatalogs?.candidates.orEmpty().map { it.initialSnapshot() }
+            validated.legacyCatalogs?.candidates.orEmpty().map { it.toCatalogCandidate().initialSnapshot() }
         }
         validateCatalogsAgainstSettings(snapshots, validated.settings)
         File(staging, SETTINGS_ENTRY).writeText(validated.normalizedJson, Charsets.UTF_8)
-        catalogFile.writeText(json.encodeToString(snapshots.sortedBy { it.serverId.toString() }), Charsets.UTF_8)
+        catalogFile.writeText(encodeMcpCatalogDocument(snapshots), Charsets.UTF_8)
     }
 
     private fun validateCatalogsAgainstSettings(catalogs: List<McpCatalogSnapshot>, settings: Settings) {

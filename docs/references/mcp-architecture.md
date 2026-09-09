@@ -42,6 +42,25 @@ Settings；导入、编辑、OAuth 更新也无权覆盖 Catalog。
 不在 Application/DI 构造阶段初始化 Ktor，也不为测试 override 初始化真实 transport。初始化返回后复查取消，超时/取消的连接
 不取得新 transport；已创建的共享 HTTP client 继续由工厂持有，单个 server 关闭或重连不能关闭它。
 
+`McpCatalogTool.definition` 保存完整远端 Tool JSON；名称、说明与输入 Schema 都从它投影，
+`outputSchema`、annotations、`_meta` 和扩展字段不会在 SDK 类型转换时丢弃。已有个人目录的三字段 JSON
+仍是合法的已保存目录表示，序列化字节与摘要不变；不得把历史个人缓存当作已经验证的企业 Gateway surface。
+
+实际 HTTP JSON、POST SSE、GET SSE 与个人 SSE 收包都经过 `McpCatalogWire`：同一次 SDK `tools/list`
+调用携带短期 capture，发送时关联 SDK 生成的 request ID，响应在交给 SDK handler 前保留完整结果。
+SDK 继续拥有请求、超时和取消；capture 在调用结束的 `finally` 中释放，不能缺失时回退 typed Tool、
+另发请求或维护第二份目录。重复响应以首个匹配结果为准，原始 ID 必须匹配，不能借 SSE 的 replay ID
+重写认领其他响应。JSON 解码拒绝重复键并限制帧字节数与嵌套深度。
+POST 使用 Ktor streaming `execute` 作用域，在预读整个 body 之前执行边界检查；收到原请求的终态响应
+后即可结束 POST SSE，不等待远端关闭流。GET SSE 保留持续接收和断线重连，只有指定 resumption
+请求的匹配响应才结束该恢复。多行 `data` 按 SSE 换行规则还原，不拼接为不同 JSON。
+初始化响应确认后，后续 HTTP 请求带协商后的 `mcp-protocol-version`。
+
+`McpStreamableHttpTransport` 与 `McpSseTransport` 从 [kotlin-sdk 0.15.0](https://github.com/modelcontextprotocol/kotlin-sdk/tree/0.15.0)
+的对应 transport 源码适配，复用 SDK `AbstractClientTransport`、RPC Client、重连参数和错误类型；
+本地修改集中在上述完整 JSON 解码、capture 收口和不记录请求正文，移除未使用的上游构造/发送重载。
+上游许可证全文随应用放在 `assets/licenses/mcp-kotlin-sdk-LICENSE.txt`。
+
 协调器可以从恢复 IO 线程构造；ProcessLifecycleOwner 观察者通过 AppScope 的主线程任务注册，不能在构造调用线程直接注册。
 
 编辑或同名导入只在 transport、canonical resource 和静态 headers 都未变化时保留原 OAuth 状态。任一信任边界变化都会
@@ -61,12 +80,18 @@ token 与 registration endpoint 必须保持 HTTPS，不接受 fragment 或 user
 从曾将完整 schema 写在 Settings 的版本升级时，DataStore migration 在重写 policy-only Settings 的同一事务中生成一次性
 catalog staging；`McpCatalogStore` 只接收完整、非空候选，提交后删除 staging，不保留旧 schema 读取旁路。手工备份 v4/v5 将
 `mcp_catalogs.json` 作为 manifest 必需根；恢复 v3 时执行同样的一次性提取。备份恢复先让已经取得租约的旧迁移收口，再用
-备份目录整体替换 Catalog，避免旧 staging 在恢复后写回孤儿目录。
+备份目录替换个人 Catalog，保留企业主体的目录，避免旧 staging 在恢复后写回孤儿目录。
 
 Catalog 初始化只执行一次迁移、读取和发布；全部命令等待这次初始化收口。后续目录仅由 `McpCatalogStore` 的
 `commitMutex` 内提交协议发布，不再由常驻 DataStore collector 回写内存。初始化取消或迁移失败明确拒绝命令；
-目录读取失败不伪装为空备份。合法完整恢复可在同一 owner 下替换损坏的目录内容，但不能绕过未成功收口的旧迁移。
-缺少目录键或合法空数组表示空目录，格式错误、非法摘要及重复 server 均为读取失败。
+目录读取失败不伪装为空备份。个人恢复不能绕过未成功收口的旧迁移。
+
+`McpCatalogKey` 由 `ConfigurationScope` 与 server reference 组成：用户资源的目录归个人，企业资源的目录归
+来源、Deployment、User 完整主体；Session 不进入持久化目录身份。`catalog_document` 保存版本化目录，
+已发布的个人 `catalogs` 数组只在一次性迁移或旧备份导入时读取，成功后原键删除。版本化文档存在时不回退旧键。
+个人备份仅导出与用户 definition 匹配的个人目录；恢复入口统一拒绝企业记录，在同一提交锁内重新读取并保留
+当前所有企业目录。仅旧个人键损坏可由明确的个人恢复替换；新文档损坏或读取失败必须拒绝写入，不能把企业事实
+视为空。非法摘要、重复主体/资源键和资源归属不一致均为失败。
 
 `McpRuntimeCoordinator.runtimeCapabilities` 是 runtime 的唯一公开状态源；底层由 `McpRuntimeStateStore` 对每个键以一个 immutable
 `McpRuntimeCapability(status, catalog)` 原子发布。Settings、Catalog DataStore flow 和 UI 不再形成第二条 runtime
@@ -92,7 +117,7 @@ session 的 catalog refresh 共用一个全局 semaphore，最多 4 路并行；
 1. server 必须声明 tools capability；
 2. 最多 64 页、4096 个工具；
 3. 工具名必须非空且 server 内唯一，cursor 不得重复；
-4. `ToolSchema` 整体序列化为 `JsonObject`，保留 `$schema`、`$defs`、`$ref` 与扩展字段；
+4. 保留原始完整 Tool `JsonObject`，从中投影 Schema，保留 `$schema`、`$defs`、`$ref` 与扩展字段；
 5. 全部页面成功后才形成 candidate；
 6. `McpCatalogStore.commitCandidate()` 在单一 commit mutex 下计算 digest、revision 并原子落盘；
 7. 空目录不会成为稳定目录，也不会覆盖 LKG；相同 digest 是 no-op；

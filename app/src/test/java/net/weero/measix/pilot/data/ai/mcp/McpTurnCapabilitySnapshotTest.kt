@@ -1,5 +1,7 @@
 package net.weero.measix.pilot.data.ai.mcp
 
+import net.weero.measix.pilot.data.configuration.ConfigurationScope
+
 
 import me.rerere.common.configuration.ConfigurationReference
 
@@ -250,7 +252,7 @@ internal class McpTurnCapabilitySnapshotTest : McpRuntimeCoordinatorTestBase() {
     fun `oauth refresh during tool admission does not hold the slot gate`() = runTest(dispatcher) {
         val isolatedEffective = MutableStateFlowHolder()
         val isolatedSettingsStore = mockk<SettingsStore>()
-        val isolatedCatalogs = MutableStateFlow<Map<ConfigurationReference, McpCatalogSnapshot>>(emptyMap())
+        val isolatedCatalogs = MutableStateFlow<Map<McpCatalogKey, McpCatalogSnapshot>>(emptyMap())
         val isolatedCatalogStore = mockk<McpCatalogStore>()
         coEvery { isolatedCatalogStore.awaitReady() } returns Unit
         val oauthClient = mockk<McpOAuthClient>(relaxed = true)
@@ -268,15 +270,15 @@ internal class McpTurnCapabilitySnapshotTest : McpRuntimeCoordinatorTestBase() {
         coEvery { isolatedCatalogStore.remove(any()) } returns Unit
         coEvery { isolatedCatalogStore.commitCandidate(any()) } coAnswers {
             val candidate = firstArg<McpCatalogCandidate>()
-            val previous = isolatedCatalogs.value[candidate.serverId]
-            val snapshot = McpCatalogSnapshot(
+            val previous = isolatedCatalogs.value[candidate.key]
+            val snapshot = McpCatalogSnapshot(ConfigurationScope.Personal,
                 serverId = candidate.serverId,
                 revision = (previous?.revision ?: 0L) + 1L,
                 definitionDigest = candidate.definitionDigest,
                 catalogDigest = candidate.tools.joinToString { it.name },
                 tools = candidate.tools,
             )
-            isolatedCatalogs.value += candidate.serverId to snapshot
+            isolatedCatalogs.value += candidate.key to snapshot
             McpCatalogCommitResult.Committed(snapshot, previous, snapshot.revision)
         }
         val networkMonitor = mockk<NetworkMonitor>()

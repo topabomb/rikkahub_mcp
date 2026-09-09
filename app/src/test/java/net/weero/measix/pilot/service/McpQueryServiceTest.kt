@@ -1,5 +1,7 @@
 package net.weero.measix.pilot.service
 
+import net.weero.measix.pilot.data.configuration.ConfigurationScope
+
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import net.weero.measix.pilot.data.ai.mcp.McpCatalogSnapshot
@@ -20,7 +22,7 @@ class McpQueryServiceTest {
         val presentation = server.toPresentation(
             runtime = net.weero.measix.pilot.data.ai.mcp.McpRuntimeCapability(
                 status = McpStatus.Ready(toolCount = 1, catalogRevision = 1L),
-                catalog = McpCatalogSnapshot(
+                catalog = McpCatalogSnapshot(ConfigurationScope.Personal,
                 serverId = server.id,
                 revision = 1L,
                 definitionDigest = "wrong-definition",

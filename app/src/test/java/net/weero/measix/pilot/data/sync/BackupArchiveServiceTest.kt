@@ -1,5 +1,7 @@
 package net.weero.measix.pilot.data.sync
 
+import net.weero.measix.pilot.data.configuration.ConfigurationScope
+
 import me.rerere.common.configuration.ConfigurationReference
 
 import android.content.Context
@@ -156,7 +158,7 @@ class BackupArchiveServiceTest {
         coEvery { settingsStore.restoreSettingsReferences(any()) } coAnswers { firstArg<Settings>().also { restored = it } }
         PendingBackupRestore.restoreSettingsIfPending(context, settingsStore, catalogStore, JsonInstant)
         assertEquals(Settings().assistantId, restored?.assistantId)
-        coVerify { catalogStore.restoreCatalogs(emptyList(), any()) }
+        coVerify { catalogStore.restorePersonalCatalogs(emptyList(), any()) }
         PendingBackupRestore.complete(context)
         assertFalse(File(context.noBackupFilesDir, "backup_restore/pending").exists())
         assertFalse(File(context.noBackupFilesDir, "backup_restore/rollback").exists())
@@ -366,7 +368,7 @@ class BackupArchiveServiceTest {
             url = "https://example.test/mcp",
         )
         val settings = Settings(mcpServers = listOf(server))
-        val catalog = McpCatalogCandidate(
+        val catalog = McpCatalogCandidate(ConfigurationScope.Personal,
             serverId = server.id,
             definitionDigest = server.mcpDefinitionDigest(),
             tools = listOf(
@@ -388,7 +390,7 @@ class BackupArchiveServiceTest {
 
         PendingBackupRestore.restoreSettingsIfPending(context, settingsStore, catalogStore, JsonInstant)
 
-        coVerify(exactly = 1) { catalogStore.restoreCatalogs(listOf(catalog), settings.mcpServers) }
+        coVerify(exactly = 1) { catalogStore.restorePersonalCatalogs(listOf(catalog), settings.mcpServers) }
     }
 
     @Test
@@ -442,7 +444,7 @@ class BackupArchiveServiceTest {
         coEvery { settingsStore.restoreSettingsReferences(any()) } coAnswers {
             firstArg<Settings>().also { restoredSettings = it }
         }
-        coEvery { catalogStore.restoreCatalogs(any(), any()) } coAnswers {
+        coEvery { catalogStore.restorePersonalCatalogs(any(), any()) } coAnswers {
             firstArg<List<McpCatalogSnapshot>>().also { restoredCatalogs = it }
         }
 
@@ -502,7 +504,7 @@ class BackupArchiveServiceTest {
     ): File {
         val payloads = linkedMapOf(
             "settings.json" to JsonInstant.encodeToString(settings).toByteArray(),
-            "mcp_catalogs.json" to JsonInstant.encodeToString(catalogs).toByteArray(),
+            "mcp_catalogs.json" to net.weero.measix.pilot.data.ai.mcp.encodeMcpCatalogDocument(catalogs).toByteArray(),
             "measix_pilot.db" to database.readBytes(),
         ).apply { putAll(files) }
         val manifest = DurableBackupManifest(

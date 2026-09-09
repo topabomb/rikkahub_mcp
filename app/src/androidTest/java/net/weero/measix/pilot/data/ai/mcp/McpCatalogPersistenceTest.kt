@@ -13,6 +13,9 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
+import me.rerere.common.configuration.ConfigurationReference
+import me.rerere.common.configuration.EnterpriseAuthority
+import net.weero.measix.pilot.data.configuration.ConfigurationScope
 import net.weero.measix.pilot.AppScope
 import net.weero.measix.pilot.data.datastore.SettingsStore
 import net.weero.measix.pilot.data.datastore.UserSettingsMigration
@@ -30,27 +33,42 @@ class McpCatalogPersistenceTest {
         val old = McpServerConfig.StreamableHTTPServer(url = "https://old.example/mcp")
         val restored = McpServerConfig.StreamableHTTPServer(url = "https://restored.example/mcp")
         val replacement = candidate(restored, "restored").initialSnapshot()
+        val local = EnterpriseAuthority("local:example", "deployment")
+        val platform = EnterpriseAuthority("platform:example", "deployment")
+        val enterpriseCatalogs = listOf(
+            ConfigurationScope.Enterprise(local, "a"),
+            ConfigurationScope.Enterprise(local, "b"),
+            ConfigurationScope.Enterprise(platform, "a"),
+        ).map { scope ->
+            McpCatalogCandidate(
+                scope, ConfigurationReference.Enterprise(scope.authority, "mcp_shared"), "definition",
+                listOf(McpCatalogTool("search", inputSchema = buildJsonObject { put("type", "object") })),
+            ).initialSnapshot()
+        }.associateBy { it.key }
         var final: McpCatalogSnapshot? = null
         try {
             withStore(context, root) { store ->
                 store.commitCandidate(candidate(old, "old"))
-                store.restoreCatalogs(listOf(replacement), listOf(restored))
-                assertEquals(mapOf(restored.id to replacement), store.catalogs.value)
+                enterpriseCatalogs.values.forEach { snapshot ->
+                    store.commitCandidate(McpCatalogCandidate(snapshot.scope, snapshot.serverId, snapshot.definitionDigest, snapshot.tools))
+                }
+                store.restorePersonalCatalogs(listOf(replacement), listOf(restored))
+                assertEquals(enterpriseCatalogs + (replacement.key to replacement), store.catalogs.value)
             }
             withStore(context, root) { store ->
                 assertEquals(listOf(replacement), store.snapshotForBackup(listOf(restored)))
-                assertEquals(mapOf(restored.id to replacement), store.catalogs.value)
+                assertEquals(enterpriseCatalogs + (replacement.key to replacement), store.catalogs.value)
                 final = (store.commitCandidate(candidate(restored, "discovered")) as McpCatalogCommitResult.Committed).snapshot
                 assertEquals(2L, final!!.revision)
             }
             withStore(context, root) { store ->
                 assertEquals(listOf(final!!), store.snapshotForBackup(listOf(restored)))
-                assertEquals(mapOf(restored.id to final), store.catalogs.value)
-                store.remove(restored.id)
+                assertEquals(enterpriseCatalogs + (final!!.key to final), store.catalogs.value)
+                store.remove(replacement.key)
             }
             withStore(context, root) { store ->
                 assertTrue(store.snapshotForBackup(listOf(restored)).isEmpty())
-                assertTrue(store.catalogs.value.isEmpty())
+                assertEquals(enterpriseCatalogs, store.catalogs.value)
             }
         } finally { root.deleteRecursively() }
     }
@@ -69,11 +87,13 @@ class McpCatalogPersistenceTest {
         val catalog = PreferenceDataStoreFactory.create(scope = scope, produceFile = { File(root, "catalog.preferences_pb") })
         try {
             settings.effectiveSettings.first { !it.settings.init }
-            operation(McpCatalogStore(catalog, scope, settings))
+            val owner = McpCatalogStore(catalog, scope, settings)
+            owner.awaitReady()
+            operation(owner)
         } finally { scope.coroutineContext[Job]!!.cancelAndJoin() }
     }
 
-    private fun candidate(server: McpServerConfig, tool: String) = McpCatalogCandidate(
+    private fun candidate(server: McpServerConfig, tool: String) = McpCatalogCandidate(ConfigurationScope.Personal,
         server.id, server.mcpDefinitionDigest(),
         listOf(McpCatalogTool(tool, inputSchema = buildJsonObject { put("type", "object") })),
     )

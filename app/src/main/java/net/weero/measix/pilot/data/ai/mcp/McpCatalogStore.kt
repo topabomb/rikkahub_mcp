@@ -20,7 +20,19 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.KSerializer
+import kotlinx.serialization.descriptors.SerialDescriptor
+import kotlinx.serialization.encoding.Decoder
+import kotlinx.serialization.encoding.Encoder
+import kotlinx.serialization.json.JsonNull
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.encodeToJsonElement
+import kotlinx.serialization.json.decodeFromJsonElement
+import net.weero.measix.pilot.data.configuration.ConfigurationScope
 import net.weero.measix.pilot.AppScope
 import net.weero.measix.pilot.data.datastore.SettingsStore
 import net.weero.measix.pilot.utils.JsonInstant
@@ -28,28 +40,75 @@ import me.rerere.common.configuration.ConfigurationReference
 
 private val Context.mcpCatalogDataStore by preferencesDataStore(name = "mcp_catalog")
 
+/** The complete remote Tool object is the sole catalog fact; consumers read projections. */
+@Serializable(with = McpCatalogToolSerializer::class)
+data class McpCatalogTool(val definition: JsonObject) {
+    constructor(name: String, description: String? = null, inputSchema: JsonObject) : this(
+        buildJsonObject {
+            put("name", name)
+            put("description", description?.let(::JsonPrimitive) ?: JsonNull)
+            put("inputSchema", inputSchema)
+        }
+    )
+
+    init {
+        require((definition["name"] as? JsonPrimitive)?.isString == true) { "MCP tool name must be a string" }
+        require(definition["inputSchema"] is JsonObject) { "MCP tool inputSchema must be an object" }
+        val description = definition["description"]
+        require(description == null || description == JsonNull ||
+            (description is JsonPrimitive && description.isString)) { "MCP tool description must be a string" }
+    }
+
+    val name: String get() = (definition.getValue("name") as JsonPrimitive).content
+    val description: String? get() = (definition["description"] as? JsonPrimitive)
+        ?.takeUnless { it == JsonNull }?.content
+    val inputSchema: JsonObject get() = definition.getValue("inputSchema") as JsonObject
+}
+
+/** Keeps the released personal catalog representation and digest unchanged. */
+object McpCatalogToolSerializer : KSerializer<McpCatalogTool> {
+    override val descriptor: SerialDescriptor = JsonObject.serializer().descriptor
+    override fun serialize(encoder: Encoder, value: McpCatalogTool) =
+        encoder.encodeSerializableValue(JsonObject.serializer(), value.definition)
+    override fun deserialize(decoder: Decoder): McpCatalogTool =
+        McpCatalogTool(decoder.decodeSerializableValue(JsonObject.serializer()))
+}
+
+/** Stable owner of a remote catalog. Session and connection epochs belong to the runtime. */
 @Serializable
-data class McpCatalogTool(
-    val name: String,
-    val description: String? = null,
-    val inputSchema: JsonObject,
-)
+data class McpCatalogKey(val scope: ConfigurationScope, val serverId: ConfigurationReference) {
+    init {
+        when (serverId) {
+            is ConfigurationReference.User -> require(scope == ConfigurationScope.Personal) { "Personal MCP catalog requires its personal owner" }
+            is ConfigurationReference.Enterprise -> require(scope is ConfigurationScope.Enterprise && scope.authority == serverId.authority) {
+                "Enterprise MCP catalog requires its full matching principal"
+            }
+        }
+    }
+}
 
 @Serializable
 data class McpCatalogSnapshot(
+    val scope: ConfigurationScope,
     val serverId: ConfigurationReference,
     val revision: Long,
     val definitionDigest: String,
     val catalogDigest: String,
     val tools: List<McpCatalogTool>,
-)
+) {
+    val key: McpCatalogKey get() = McpCatalogKey(scope, serverId)
+    init { key }
+}
 
-@Serializable
 data class McpCatalogCandidate(
+    val scope: ConfigurationScope,
     val serverId: ConfigurationReference,
     val definitionDigest: String,
     val tools: List<McpCatalogTool>,
-)
+) {
+    val key: McpCatalogKey get() = McpCatalogKey(scope, serverId)
+    init { key }
+}
 
 data class McpAvailableTool(
     val serverId: ConfigurationReference,
@@ -112,16 +171,19 @@ class McpCatalogStore internal constructor(
         this(context.mcpCatalogDataStore, scope, settingsStore)
 
     private val commitMutex = Mutex()
-    private val headTokens = mutableMapOf<ConfigurationReference, Long>()
+    private val headTokens = mutableMapOf<McpCatalogKey, Long>()
     private var readFailure: Exception? = null
 
-    private val _catalogs = MutableStateFlow<Map<ConfigurationReference, McpCatalogSnapshot>>(emptyMap())
-    val catalogs: StateFlow<Map<ConfigurationReference, McpCatalogSnapshot>> = _catalogs.asStateFlow()
+    private val _catalogs = MutableStateFlow<Map<McpCatalogKey, McpCatalogSnapshot>>(emptyMap())
+    val catalogs: StateFlow<Map<McpCatalogKey, McpCatalogSnapshot>> = _catalogs.asStateFlow()
 
     private val initialization = scope.async {
         migrateLegacySettingsCatalogs()
         commitMutex.withLock {
-            try { _catalogs.value = readCurrentCatalogs() }
+            try {
+                migrateStoredPersonalCatalogs()
+                _catalogs.value = readCurrentCatalogs()
+            }
             catch (cancelled: CancellationException) { throw cancelled }
             catch (error: Exception) { readFailure = error }
         }
@@ -135,10 +197,12 @@ class McpCatalogStore internal constructor(
     private suspend fun migrateLegacySettingsCatalogs() {
         val pending = settingsStore.pendingMcpCatalogMigration() ?: return
         commitLocked {
+            migrateStoredPersonalCatalogs()
             val current = readCurrentCatalogs()
-            val updated = pending.payload.candidates.fold(current) { catalogs, candidate ->
-                if (candidate.serverId in catalogs) catalogs
-                else catalogs + (candidate.serverId to candidate.initialSnapshot())
+            val updated = pending.payload.candidates.fold(current) { catalogs, legacy ->
+                val candidate = legacy.toCatalogCandidate()
+                if (candidate.key in catalogs) catalogs
+                else catalogs + (candidate.key to candidate.initialSnapshot())
             }
             if (updated != current) writeCatalogs(updated)
             _catalogs.value = updated
@@ -151,11 +215,11 @@ class McpCatalogStore internal constructor(
             val normalizedTools = candidate.tools.sortedBy { it.name }
             val current = readCurrentCatalogs()
             _catalogs.value = current
-            val headToken = (headTokens[candidate.serverId] ?: 0L) + 1L
+            val headToken = (headTokens[candidate.key] ?: 0L) + 1L
             if (normalizedTools.isEmpty()) {
-                headTokens[candidate.serverId] = headToken
+                headTokens[candidate.key] = headToken
                 return@commit McpCatalogCommitResult.RejectedEmpty(
-                    current[candidate.serverId]?.takeIf { it.definitionDigest == candidate.definitionDigest }
+                    current[candidate.key]?.takeIf { it.definitionDigest == candidate.definitionDigest }
                 )
             }
             require(normalizedTools.none { it.name.isBlank() }) { "MCP catalog contains a blank tool name" }
@@ -164,27 +228,28 @@ class McpCatalogStore internal constructor(
             }
 
             val catalogDigest = sha256(JsonInstant.encodeToString(normalizedTools))
-            val previous = current[candidate.serverId]
+            val previous = current[candidate.key]
             if (
                 previous != null &&
                 previous.definitionDigest == candidate.definitionDigest &&
                 previous.catalogDigest == catalogDigest
             ) {
-                headTokens[candidate.serverId] = headToken
+                headTokens[candidate.key] = headToken
                 return@commit McpCatalogCommitResult.Unchanged(previous)
             }
 
             val next = McpCatalogSnapshot(
+                scope = candidate.scope,
                 serverId = candidate.serverId,
                 revision = (previous?.revision ?: 0L) + 1L,
                 definitionDigest = candidate.definitionDigest,
                 catalogDigest = catalogDigest,
                 tools = normalizedTools,
             )
-            val updated = current + (candidate.serverId to next)
+            val updated = current + (candidate.key to next)
             writeCatalogs(updated)
             _catalogs.value = updated
-            headTokens[candidate.serverId] = headToken
+            headTokens[candidate.key] = headToken
             McpCatalogCommitResult.Committed(next, previous, headToken)
         }
 
@@ -199,29 +264,29 @@ class McpCatalogStore internal constructor(
     ) = commit {
         val current = readCurrentCatalogs()
         if (
-            current[committed.serverId] != committed ||
-            headTokens[committed.serverId] != expectedHeadToken
+            current[committed.key] != committed ||
+            headTokens[committed.key] != expectedHeadToken
         ) {
             return@commit
         }
         val updated = if (previous == null) {
-            current - committed.serverId
+            current - committed.key
         } else {
-            current + (committed.serverId to previous)
+            current + (committed.key to previous)
         }
         writeCatalogs(updated)
         _catalogs.value = updated
-        headTokens[committed.serverId] = expectedHeadToken + 1L
+        headTokens[committed.key] = expectedHeadToken + 1L
     }
 
     /** Removes the catalog only when the server definition has been explicitly removed. */
-    suspend fun remove(serverId: ConfigurationReference) = commit {
+    suspend fun remove(key: McpCatalogKey) = commit {
         val current = readCurrentCatalogs()
-        if (serverId !in current) return@commit
-        val updated = current - serverId
+        if (key !in current) return@commit
+        val updated = current - key
         writeCatalogs(updated)
         _catalogs.value = updated
-        headTokens[serverId] = (headTokens[serverId] ?: 0L) + 1L
+        headTokens[key] = (headTokens[key] ?: 0L) + 1L
     }
 
     suspend fun snapshotForBackup(definitions: List<McpServerConfig>): List<McpCatalogSnapshot> {
@@ -231,12 +296,12 @@ class McpCatalogStore internal constructor(
             readFailure?.let { throw it }
             val expected = definitions.associate { it.id to it.mcpDefinitionDigest() }
             readCurrentCatalogs().values
-                .filter { snapshot -> expected[snapshot.serverId] == snapshot.definitionDigest }
+                .filter { snapshot -> snapshot.scope == ConfigurationScope.Personal && expected[snapshot.serverId] == snapshot.definitionDigest }
                 .sortedBy { it.serverId.toString() }
         }
     }
 
-    suspend fun restoreCatalogs(
+    suspend fun restorePersonalCatalogs(
         snapshots: List<McpCatalogSnapshot>,
         definitions: List<McpServerConfig>,
     ) {
@@ -245,6 +310,7 @@ class McpCatalogStore internal constructor(
         commit(replaceUnreadable = true) {
             val expected = definitions.associate { it.id to it.mcpDefinitionDigest() }
             val restored = snapshots.map { snapshot ->
+                require(snapshot.scope == ConfigurationScope.Personal) { "Personal backup contains an enterprise MCP catalog" }
                 requireNotNull(snapshot.validated()) { "Backup contains an invalid MCP catalog" }
                     .also { valid ->
                         require(expected[valid.serverId] == valid.definitionDigest) {
@@ -255,17 +321,23 @@ class McpCatalogStore internal constructor(
             require(restored.map { it.serverId }.toSet().size == restored.size) {
                 "Backup contains duplicate MCP catalogs"
             }
-            val updated = restored.associateBy { it.serverId }
+            val preferences = dataStore.data.first()
+            // Once the scoped document exists, its enterprise facts must be read successfully.
+            // Only the released personal-only key may be replaced without decoding its damaged data.
+            val retained = if (preferences[CATALOG_DOCUMENT] == null) emptyMap() else decodeCatalogs(preferences)
+                .filterKeys { it.scope != ConfigurationScope.Personal }
+            val updated = retained + restored.associateBy { it.key }
             writeCatalogs(updated)
             _catalogs.value = updated
-            (headTokens.keys + updated.keys).forEach { serverId ->
-                headTokens[serverId] = (headTokens[serverId] ?: 0L) + 1L
+            (headTokens.keys + updated.keys).filter { it.scope == ConfigurationScope.Personal }.forEach { key ->
+                headTokens[key] = (headTokens[key] ?: 0L) + 1L
             }
         }
     }
 
     private companion object {
-        val CATALOGS = stringPreferencesKey("catalogs")
+        val PERSONAL_CATALOGS = stringPreferencesKey("catalogs")
+        val CATALOG_DOCUMENT = stringPreferencesKey("catalog_document")
     }
 
     private suspend fun <T> commit(replaceUnreadable: Boolean = false, operation: suspend () -> T): T {
@@ -284,26 +356,35 @@ class McpCatalogStore internal constructor(
         result
     }
 
-    private suspend fun readCurrentCatalogs(): Map<ConfigurationReference, McpCatalogSnapshot> = dataStore.data
+    private suspend fun readCurrentCatalogs(): Map<McpCatalogKey, McpCatalogSnapshot> = dataStore.data
         .first()
         .let(::decodeCatalogs)
 
-    private suspend fun writeCatalogs(catalogs: Map<ConfigurationReference, McpCatalogSnapshot>) {
+    private suspend fun writeCatalogs(catalogs: Map<McpCatalogKey, McpCatalogSnapshot>) {
         dataStore.edit { preferences ->
-            preferences[CATALOGS] = JsonInstant.encodeToString(
-                catalogs.values.sortedBy { it.serverId.toString() }
-            )
+            preferences[CATALOG_DOCUMENT] = encodeMcpCatalogDocument(catalogs.values.toList())
+            preferences.remove(PERSONAL_CATALOGS)
         }
     }
 
-    private fun decodeCatalogs(preferences: Preferences): Map<ConfigurationReference, McpCatalogSnapshot> {
-        val encoded = preferences[CATALOGS] ?: return emptyMap()
-        val snapshots = JsonInstant.decodeFromString<List<McpCatalogSnapshot>>(encoded).map {
-            requireNotNull(it.validated()) { "Stored MCP catalog is invalid" }
+    /** One transaction upgrades the released personal-only key and removes its old representation. */
+    private suspend fun migrateStoredPersonalCatalogs() {
+        val before = dataStore.data.first()
+        if (before[CATALOG_DOCUMENT] != null || before[PERSONAL_CATALOGS] == null) return
+        dataStore.edit { preferences ->
+            if (preferences[CATALOG_DOCUMENT] == null) {
+                val encoded = preferences[PERSONAL_CATALOGS] ?: return@edit
+                preferences[CATALOG_DOCUMENT] = encodeMcpCatalogDocument(decodePersonalMcpCatalogImport(encoded))
+                preferences.remove(PERSONAL_CATALOGS)
+            }
         }
-        require(snapshots.map { it.serverId }.distinct().size == snapshots.size) { "Stored MCP catalogs contain duplicate servers" }
-        return snapshots.associateBy { it.serverId }
     }
+
+    private fun decodeCatalogs(preferences: Preferences): Map<McpCatalogKey, McpCatalogSnapshot> {
+        val encoded = preferences[CATALOG_DOCUMENT] ?: return emptyMap()
+        return decodeMcpCatalogDocument(encoded).associateBy { it.key }
+    }
+
 }
 
 internal fun McpCatalogCandidate.initialSnapshot(): McpCatalogSnapshot {
@@ -314,6 +395,7 @@ internal fun McpCatalogCandidate.initialSnapshot(): McpCatalogSnapshot {
         "Legacy MCP catalog contains duplicate tool names"
     }
     return McpCatalogSnapshot(
+        scope = scope,
         serverId = serverId,
         revision = 1L,
         definitionDigest = definitionDigest,
@@ -340,3 +422,41 @@ internal fun McpCatalogSnapshot.validated(): McpCatalogSnapshot? {
 internal fun sha256(value: String): String = MessageDigest.getInstance("SHA-256")
     .digest(value.toByteArray(Charsets.UTF_8))
     .joinToString("") { byte -> "%02x".format(byte) }
+
+
+@Serializable
+private data class McpCatalogDocument(val formatVersion: Int, val catalogs: List<McpCatalogSnapshot>)
+
+internal fun encodeMcpCatalogDocument(catalogs: List<McpCatalogSnapshot>): String =
+    JsonInstant.encodeToString(McpCatalogDocument(1, catalogs.sortedWith(
+        compareBy<McpCatalogSnapshot> { JsonInstant.encodeToString(it.scope) }.thenBy { it.serverId.toString() }
+    )))
+
+private fun decodeMcpCatalogDocument(encoded: String): List<McpCatalogSnapshot> {
+    val document = JsonInstant.decodeFromString<McpCatalogDocument>(encoded)
+    require(document.formatVersion == 1) { "Unsupported MCP catalog document version" }
+    return validateMcpCatalogSnapshots(document.catalogs)
+}
+
+private fun validateMcpCatalogSnapshots(snapshots: List<McpCatalogSnapshot>): List<McpCatalogSnapshot> {
+    val validated = snapshots.map { requireNotNull(it.validated()) { "Stored MCP catalog is invalid" } }
+    require(validated.map { it.key }.distinct().size == validated.size) { "Stored MCP catalogs contain duplicate owners" }
+    return validated
+}
+
+/** Released personal arrays are import input only; new documents never fall back to them. */
+internal fun decodePersonalMcpCatalogImport(encoded: String): List<McpCatalogSnapshot> {
+    val root = JsonInstant.parseToJsonElement(encoded)
+    val snapshots = if (root is JsonArray) {
+        validateMcpCatalogSnapshots(root.map { element ->
+            val record = element as? JsonObject ?: error("Invalid personal MCP catalog")
+            require("scope" !in record) { "Legacy MCP catalog cannot declare a principal" }
+            val scoped = JsonObject(record + (
+                "scope" to JsonInstant.encodeToJsonElement<ConfigurationScope>(ConfigurationScope.Personal)
+            ))
+            JsonInstant.decodeFromJsonElement<McpCatalogSnapshot>(scoped)
+        })
+    } else decodeMcpCatalogDocument(encoded)
+    require(snapshots.all { it.scope == ConfigurationScope.Personal }) { "Personal backup contains enterprise MCP catalogs" }
+    return snapshots
+}
