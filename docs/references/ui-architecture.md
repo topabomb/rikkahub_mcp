@@ -340,6 +340,10 @@ fun ImagePreviewDialog(
 
 图片保存由 `MediaExportService` 保留原始编码及 MIME，写入系统相册 pending 项，在发布前复验读取权限，失败或取消删除未发布项，补偿失败保留原错误。聊天截图与 Markdown 分享另携带原 ConversationViewLease；渲染后、相册发布及分享前通过查询 owner 验证原页面，文件编码、临时文件与发布收口归同一导出服务。
 
+聊天和子助手的文档、音频、视频点击通过 `MediaExportService.openAttachment` 打开独立临时副本。`AttachmentPreview` 携带原页面与 Artifact ID，文件应用服务验证原选择，Artifact 在生命周期锁内流式复制；最终 Intent 在重新取得原选择的接受边界内发送。UI 不再把原附件路径直接授予其他应用；无处理应用、取消和拒绝均回收未交付副本，成功交付的副本保留到后续启动清理。
+
+Mermaid 导出按代码、原图片解析器与主题绑定整个 WebView 文档。新文档不消费旧导出计数，原生桥只接收匹配当前显式请求 ID 的结果；JS 未就绪可以重试，旧回调不能完成新请求。图片经原解析器和 `MediaExportService.saveImage` 读取、校验与发布，组件销毁取消未完成导出，不直接在桥接线程解码或写入相册。
+
 其余入口把当前可见集合传入查看器：文生图当次结果（1–4 张，两两一行）、Gallery 已加载快照、
 文件管理 Upload Tab 的 `image/*` 与文生图 Tab 的全部产物。非图片 Upload 项不可点开。
 

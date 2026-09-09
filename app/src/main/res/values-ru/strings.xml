@@ -1659,4 +1659,5 @@
   <string name="assistant_use_definition_model">Использовать модель из определения моего ассистента</string>
   <string name="setting_files_page_delete_impact_presets">Содержимое, ссылающееся на этот файл, будет удалено из списков предустановленных сообщений ассистентов: %1$d.</string>
   <string name="setting_files_page_load_failed">Не удалось загрузить файлы</string>
+  <string name="chat_message_attachment_open_failed">Не удалось открыть вложение. Возможно, файл недоступен или доступ к нему прекращён.</string>
 </resources>

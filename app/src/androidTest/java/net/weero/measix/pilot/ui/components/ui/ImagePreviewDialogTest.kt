@@ -84,7 +84,7 @@ class ImagePreviewDialogTest {
         val bytes = android.util.Base64.decode("R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==", android.util.Base64.DEFAULT)
         val source = net.weero.measix.pilot.service.ImageSource("export-gif", net.weero.measix.pilot.service.ImageOrigin.INLINE,
             verifyAccess = {}, readPayload = { bytes })
-        val name = net.weero.measix.pilot.service.MediaExportService().saveImage(context, source)
+        val name = net.weero.measix.pilot.service.MediaExportService(io.mockk.mockk()).saveImage(context, source)
         val collection = android.provider.MediaStore.Images.Media.EXTERNAL_CONTENT_URI
         context.contentResolver.query(collection, arrayOf("_id", "mime_type", "is_pending"), "_display_name = ?", arrayOf(name), null)!!.use { cursor ->
             assertTrue(cursor.moveToFirst())

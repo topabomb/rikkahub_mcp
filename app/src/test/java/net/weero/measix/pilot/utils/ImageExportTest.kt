@@ -21,6 +21,80 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class ImageExportTest {
+    @Test fun `startup cleanup cannot remove files exported after the old directory was detached`() {
+        val cache = kotlin.io.path.createTempDirectory("retired-exports").toFile()
+        try {
+            val old = java.io.File(cache, "temp").apply { mkdirs() }
+            java.io.File(old, "old.pdf").writeText("old")
+            val orphan = java.io.File(cache, "retired-temp-previous").apply { mkdirs() }
+            java.io.File(orphan, "interrupted.pdf").writeText("old")
+            val retired = net.weero.measix.pilot.retireApplicationTempFiles(cache)
+            val current = java.io.File(cache, "temp").apply { mkdirs() }
+            val exported = java.io.File(current, "new.pdf").apply { writeText("new export") }
+            retired.forEach { check(it.deleteRecursively()) }
+            org.junit.Assert.assertEquals("new export", exported.readText())
+            org.junit.Assert.assertFalse(orphan.exists())
+        } finally { check(cache.deleteRecursively()) }
+    }
+
+    @Test fun `attachment handoff exports only a copy and compensates every unaccepted outcome`() = runTest {
+        val root = kotlin.io.path.createTempDirectory("attachment-export").toFile()
+        val context = mockk<Context>()
+        every { context.cacheDir } returns root
+        every { context.packageName } returns "test.app"
+        val files = mockk<net.weero.measix.pilot.service.FileManagementApplicationService>()
+        val view = net.weero.measix.pilot.service.ConversationViewLease(kotlin.uuid.Uuid.random(),
+            net.weero.measix.pilot.data.enterprise.RealmAccess.Personal, 0) {}
+        val preview = net.weero.measix.pilot.service.AttachmentPreview("file:///original/private.pdf", null,
+            net.weero.measix.pilot.service.AttachmentPreview.FileTarget(view, 42, "private.pdf"))
+        val bytes = ByteArray(150_000) { (it % 127).toByte() }
+        var mode = "success"
+        io.mockk.coEvery { files.copyAttachmentTo(preview, any()) } coAnswers {
+            secondArg<java.io.OutputStream>().write(bytes)
+            if (mode == "copy_failed") throw java.io.IOException("copy failed")
+            "application/pdf"
+        }
+        io.mockk.coEvery { files.withAttachmentAccess<Unit>(preview, any()) } coAnswers {
+            if (mode == "revoked") throw IllegalStateException("page revoked")
+            if (mode == "cancelled") throw CancellationException("page cancelled")
+            secondArg<() -> Unit>()()
+        }
+        var delivered: android.content.Intent? = null
+        every { context.startActivity(any()) } answers {
+            if (mode == "no_handler") throw android.content.ActivityNotFoundException()
+            delivered = firstArg()
+        }
+        kotlinx.coroutines.Dispatchers.setMain(kotlinx.coroutines.test.StandardTestDispatcher(testScheduler))
+        io.mockk.mockkStatic(androidx.core.content.FileProvider::class)
+        var candidate: java.io.File? = null
+        every { androidx.core.content.FileProvider.getUriForFile(context, any(), any()) } answers {
+            candidate = thirdArg()
+            Uri.parse("content://test/export-copy")
+        }
+        try {
+            val exporter = net.weero.measix.pilot.service.MediaExportService(files)
+            for (failure in listOf("copy_failed", "revoked", "cancelled", "no_handler")) {
+                mode = failure
+                val result = runCatching { exporter.openAttachment(context, preview) }
+                org.junit.Assert.assertTrue(failure, result.isFailure)
+                org.junit.Assert.assertNull(delivered)
+                org.junit.Assert.assertTrue(java.io.File(root, "temp").listFiles().orEmpty().isEmpty())
+                if (failure == "cancelled") org.junit.Assert.assertTrue(result.exceptionOrNull() is CancellationException)
+            }
+            mode = "success"
+            exporter.openAttachment(context, preview)
+            org.junit.Assert.assertEquals(android.content.Intent.ACTION_VIEW, delivered?.action)
+            org.junit.Assert.assertEquals("application/pdf", delivered?.type)
+            org.junit.Assert.assertEquals(Uri.parse("content://test/export-copy"), delivered?.data)
+            org.junit.Assert.assertTrue(delivered!!.flags and android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION != 0)
+            org.junit.Assert.assertArrayEquals(bytes, requireNotNull(candidate).readBytes())
+        } finally {
+            io.mockk.unmockkStatic(androidx.core.content.FileProvider::class)
+            kotlinx.coroutines.Dispatchers.resetMain()
+            check(root.deleteRecursively())
+        }
+    }
+
     @Test fun `cancelled sharing retains original cancellation when file cleanup fails`() = runTest {
         val root = kotlin.io.path.createTempDirectory("share-cleanup").toFile()
         val context = mockk<Context>()
@@ -36,7 +110,7 @@ class ImageExportTest {
             val operation = async {
                 val originalJob = kotlinx.coroutines.currentCoroutineContext()[kotlinx.coroutines.Job]!!
                 try {
-                    net.weero.measix.pilot.service.MediaExportService().shareText(context, "private", "chat.md") {
+                    net.weero.measix.pilot.service.MediaExportService(io.mockk.mockk()).shareText(context, "private", "chat.md") {
                         checks++
                         if (checks == 2) {
                             val file = java.io.File(root, "temp").listFiles()!!.single()

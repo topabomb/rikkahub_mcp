@@ -77,7 +77,7 @@ val appModule = module {
     single { ArtifactUseCase(get(), get(), get()) }
     single { FileManagementApplicationService(get(), get(), get(), get(), remoteMediaFetcher = get()) }
     single { FileManagementQueryService(get(), get(), get(), get()) }
-    single { MediaExportService() }
+    single { MediaExportService(get()) }
     single { StatsQueryService(get(), get(), get(), get(), get()) }
     single { ChatErrorStore() }
     single { BackupRestoreApplicationService(get(), get(), get()) }

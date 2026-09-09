@@ -1,9 +1,6 @@
 package net.weero.measix.pilot.ui.components.richtext
 
-import android.graphics.BitmapFactory
-import android.util.Base64
 import android.webkit.JavascriptInterface
-import androidx.activity.compose.LocalActivity
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -12,6 +9,10 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.key
+import androidx.compose.runtime.rememberCoroutineScope
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.CancellationException
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
@@ -25,9 +26,7 @@ import net.weero.measix.pilot.ui.components.webview.WebView
 import net.weero.measix.pilot.ui.components.webview.rememberWebViewState
 import net.weero.measix.pilot.ui.context.LocalToaster
 import net.weero.measix.pilot.ui.theme.LocalDarkMode
-import net.weero.measix.pilot.utils.ImageExportResult
 import net.weero.measix.pilot.utils.escapeHtml
-import net.weero.measix.pilot.utils.exportImage
 import net.weero.measix.pilot.utils.toCssHex
 
 @Composable
@@ -36,63 +35,43 @@ fun Mermaid(
     exportRequestKey: Int = 0,
     modifier: Modifier = Modifier,
 ) {
+    val resolver = LocalImageSourceResolver.current
+    key(code, resolver, MaterialTheme.colorScheme, LocalDarkMode.current) {
+        MermaidContent(code, exportRequestKey, modifier)
+    }
+}
+
+@Composable
+private fun MermaidContent(code: String, exportRequestKey: Int, modifier: Modifier) {
     val colorScheme = MaterialTheme.colorScheme
     val darkMode = LocalDarkMode.current
     val context = LocalContext.current
-    val activity = LocalActivity.current
+    val scope = rememberCoroutineScope()
+    val resolver = LocalImageSourceResolver.current
+    val files: net.weero.measix.pilot.service.FileManagementApplicationService = org.koin.compose.koinInject()
+    val exporter: net.weero.measix.pilot.service.MediaExportService = org.koin.compose.koinInject()
     val toaster = LocalToaster.current
 
     val exportSuccessText = stringResource(R.string.mermaid_export_success)
     val exportFailedText = stringResource(R.string.mermaid_export_failed)
     val permissionRequiredText = stringResource(R.string.image_viewer_save_need_permission)
-    val jsInterface = remember(
-        activity,
-        context,
-        toaster,
-        exportSuccessText,
-        exportFailedText,
-        permissionRequiredText,
-    ) {
-        MermaidInterface(
-            onExportImage = { base64Image ->
-                val host = activity
-                if (host == null) {
-                    toaster.show(exportFailedText, type = ToastType.Error)
-                } else {
-                    runCatching {
-                        val imageBytes = Base64.decode(base64Image, Base64.DEFAULT)
-                        val bitmap = BitmapFactory.decodeByteArray(imageBytes, 0, imageBytes.size)
-                            ?: error("Failed to decode mermaid image")
-                        when (
-                            context.exportImage(
-                                host,
-                                bitmap,
-                                "mermaid_${System.currentTimeMillis()}.png"
-                            )
-                        ) {
-                            ImageExportResult.Success -> toaster.show(
-                                exportSuccessText,
-                                type = ToastType.Success
-                            )
-                            ImageExportResult.PermissionRequired -> toaster.show(
-                                permissionRequiredText,
-                                type = ToastType.Error
-                            )
-                            ImageExportResult.Failed -> toaster.show(
-                                exportFailedText,
-                                type = ToastType.Error
-                            )
-                        }
-                    }.onFailure {
-                        it.printStackTrace()
-                        toaster.show(
-                            exportFailedText,
-                            type = ToastType.Error
-                        )
-                    }
+    val jsInterface = remember(context, scope, resolver, files, exporter, toaster,
+        exportSuccessText, exportFailedText, permissionRequiredText) {
+        MermaidInterface { base64Image ->
+            scope.launch {
+                try {
+                    val url = "data:image/png;base64,$base64Image"
+                    val image = requireNotNull(if (resolver != null) resolver(url) else files.externalImageSource(url)) { "image_unavailable" }
+                    exporter.saveImage(context, image)
+                    toaster.show(exportSuccessText, type = ToastType.Success)
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (error: Exception) {
+                    toaster.show(if (error.message == net.weero.measix.pilot.service.IMAGE_SAVE_PERMISSION_REQUIRED)
+                        permissionRequiredText else exportFailedText, type = ToastType.Error)
                 }
             }
-        )
+        }
     }
 
     val html = remember(code, colorScheme, darkMode) {
@@ -118,12 +97,18 @@ fun Mermaid(
         }
     )
 
+    val initialExportRequest = remember { exportRequestKey }
     LaunchedEffect(exportRequestKey) {
-        if (exportRequestKey > 0) {
-            webViewState.webView?.evaluateJavascript(
-                "exportSvgToPng();",
-                null,
-            )
+        val view = webViewState.webView
+        if (exportRequestKey > initialExportRequest && view != null) {
+            jsInterface.requestExport(exportRequestKey)
+            view.evaluateJavascript(
+                "if (typeof exportSvgToPng === 'function') { exportSvgToPng($exportRequestKey); true; } else { false; }",
+            ) { result ->
+                if (result != "true" && jsInterface.cancelExport(exportRequestKey)) scope.launch {
+                    toaster.show(exportFailedText, type = ToastType.Error)
+                }
+            }
         }
     }
 
@@ -139,9 +124,14 @@ fun Mermaid(
 private class MermaidInterface(
     private val onExportImage: (String) -> Unit
 ) {
+    private val pending = java.util.concurrent.atomic.AtomicInteger(0)
+
+    fun requestExport(id: Int) { pending.set(id) }
+    fun cancelExport(id: Int): Boolean = pending.compareAndSet(id, 0)
+
     @JavascriptInterface
-    fun exportImage(base64Image: String) {
-        onExportImage(base64Image)
+    fun exportImage(requestId: Int, base64Image: String) {
+        if (requestId > 0 && pending.compareAndSet(requestId, 0)) onExportImage(base64Image)
     }
 }
 
@@ -235,11 +225,11 @@ internal fun buildMermaidHtml(
                     }
               });
 
-              window.exportSvgToPng = function() {
+              window.exportSvgToPng = function(requestId) {
                 try {
                     const svgElement = document.querySelector('.mermaid svg');
                     if (!svgElement) {
-                        AndroidInterface.exportImage('');
+                        AndroidInterface.exportImage(requestId, '');
                         return;
                     }
 
@@ -268,14 +258,14 @@ internal fun buildMermaidHtml(
                         ctx.fillText('measix-pilot.weero.net', 20, canvas.height - 10);
 
                         const pngBase64 = canvas.toDataURL('image/png').split(',')[1];
-                        AndroidInterface.exportImage(pngBase64);
+                        AndroidInterface.exportImage(requestId, pngBase64);
                     };
                     img.onerror = function(e) {
-                        AndroidInterface.exportImage('');
+                        AndroidInterface.exportImage(requestId, '');
                     }
                     img.src = 'data:image/svg+xml;base64,' + svgBase64;
                 } catch (e) {
-                    AndroidInterface.exportImage('');
+                    AndroidInterface.exportImage(requestId, '');
                 }
               };
             </script>

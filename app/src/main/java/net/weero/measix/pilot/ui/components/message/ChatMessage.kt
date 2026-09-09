@@ -52,7 +52,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.util.fastAll
 import androidx.compose.ui.util.fastForEach
 import androidx.compose.ui.util.fastForEachIndexed
-import androidx.core.content.FileProvider
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -97,6 +96,7 @@ import net.weero.measix.pilot.utils.JsonInstant
 import net.weero.measix.pilot.utils.openUrl
 import net.weero.measix.pilot.utils.urlDecode
 
+import kotlinx.coroutines.launch
 import kotlin.uuid.Uuid
 
 @Composable
@@ -390,6 +390,19 @@ private fun MessagePartsBlock(
     onUserMessageClick: (() -> Unit)? = null,
 ) {
     val context = LocalContext.current
+    val exportService: net.weero.measix.pilot.service.MediaExportService = org.koin.compose.koinInject()
+    val exportScope = androidx.compose.runtime.rememberCoroutineScope()
+    val toaster = net.weero.measix.pilot.ui.context.LocalToaster.current
+    val openFailureText = stringResource(R.string.chat_message_attachment_open_failed)
+    fun openAttachment(preview: net.weero.measix.pilot.service.AttachmentPreview?) {
+        if (preview == null) { toaster.show(openFailureText, type = com.dokar.sonner.ToastType.Error); return }
+        exportScope.launch {
+            try { exportService.openAttachment(context, preview) }
+            catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+            catch (_: Exception) { toaster.show(openFailureText, type = com.dokar.sonner.ToastType.Error) }
+        }
+    }
+
     val contentColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.65f)
     val attachmentPreview = LocalAttachmentPreview.current
 
@@ -567,16 +580,7 @@ private fun MessagePartsBlock(
                         Surface(
                             tonalElevation = 2.dp,
                             onClick = {
-                                val file = resolveManagedMediaFile(part, attachmentPreview) ?: return@Surface
-                                val intent = Intent(Intent.ACTION_VIEW)
-                                intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                                intent.data = FileProvider.getUriForFile(
-                                    context,
-                                    "${context.packageName}.fileprovider",
-                                    file,
-                                )
-                                val chooserIndent = Intent.createChooser(intent, null)
-                                context.startActivity(chooserIndent)
+                                openAttachment(AttachmentRefs.getStableRef(part)?.let(attachmentPreview))
                             },
                             modifier = Modifier,
                             shape = RoundedCornerShape(8.dp),
@@ -591,16 +595,7 @@ private fun MessagePartsBlock(
                         Surface(
                             tonalElevation = 2.dp,
                             onClick = {
-                                val file = resolveManagedMediaFile(part, attachmentPreview) ?: return@Surface
-                                val intent = Intent(Intent.ACTION_VIEW)
-                                intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                                intent.data = FileProvider.getUriForFile(
-                                    context,
-                                    "${context.packageName}.fileprovider",
-                                    file,
-                                )
-                                val chooserIndent = Intent.createChooser(intent, null)
-                                context.startActivity(chooserIndent)
+                                openAttachment(AttachmentRefs.getStableRef(part)?.let(attachmentPreview))
                             },
                             modifier = Modifier,
                             shape = RoundedCornerShape(50),
@@ -657,16 +652,7 @@ private fun MessagePartsBlock(
                         Surface(
                             tonalElevation = 2.dp,
                             onClick = {
-                                val file = resolveManagedMediaFile(part, attachmentPreview) ?: return@Surface
-                                val intent = Intent(Intent.ACTION_VIEW)
-                                intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                                intent.data = FileProvider.getUriForFile(
-                                    context,
-                                    "${context.packageName}.fileprovider",
-                                    file,
-                                )
-                                val chooserIndent = Intent.createChooser(intent, null)
-                                context.startActivity(chooserIndent)
+                                openAttachment(AttachmentRefs.getStableRef(part)?.let(attachmentPreview))
                             },
                             modifier = Modifier,
                             shape = RoundedCornerShape(50),
@@ -787,21 +773,6 @@ private fun resolveRenderableImageUrl(
     attachmentPreview: (String) -> net.weero.measix.pilot.service.AttachmentPreview?,
 ): net.weero.measix.pilot.service.ImageSource? {
     return resolveAttachmentImageSource(part, attachmentPreview)
-}
-
-private fun resolveManagedMediaFile(
-    part: UIMessagePart,
-    attachmentPreview: (String) -> net.weero.measix.pilot.service.AttachmentPreview?,
-): java.io.File? {
-    val rawUrl = when (part) {
-        is UIMessagePart.Document -> part.url
-        is UIMessagePart.Audio -> part.url
-        is UIMessagePart.Video -> part.url
-        else -> return null
-    }
-    if (!rawUrl.startsWith("file:", ignoreCase = true)) return null
-    val ref = AttachmentRefs.getStableRef(part) ?: return null
-    return attachmentPreview(ref)?.uri?.let(AttachmentRefs::parseFileUrl)
 }
 
 private val ToolLivePhase.isPreExecutionOrRunning: Boolean

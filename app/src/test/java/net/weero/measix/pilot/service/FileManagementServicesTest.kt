@@ -56,6 +56,27 @@ class FileManagementServicesTest {
 
     @After fun tearDown() { root.deleteRecursively() }
 
+    @Test fun `attachment handoff rechecks expiry after waiting for the artifact owner`() = runTest {
+        var now = 1_800_000_000_000L
+        val controller = EnterpriseSessionController(EnterpriseAppliedStore(File(root, "export-expiry"))) { now }
+        val ready = controller.enrollFixture(exampleEnterprisePackage())
+        val selected = requireNotNull(controller.observeSelectedRealmSelection().first())
+        val artifacts = mockk<ArtifactStore>()
+        val files = FileManagementApplicationService(artifacts, mockk(), ApplicationRecoveryGate().apply { ready() }, controller)
+        val view = ConversationViewLease(kotlin.uuid.Uuid.random(), selected.access, selected.revision) {}
+        val preview = AttachmentPreview("file:///report.pdf", null, AttachmentPreview.FileTarget(view, 1, "report.pdf"))
+        val entered = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val resume = kotlinx.coroutines.CompletableDeferred<Unit>()
+        coEvery { artifacts.requireMediaAccess(selected.access.scope, 1) } coAnswers { entered.complete(Unit); resume.await() }
+        var handedOff = false
+        val handoff = async { runCatching { files.withAttachmentAccess(preview) { handedOff = true } } }
+        entered.await()
+        now = requireNotNull(ready.manifest.session).expiresAtMillis
+        resume.complete(Unit)
+        assertTrue(handoff.await().isFailure)
+        assertEquals(false, handedOff)
+    }
+
     @Test fun `reference import rechecks selection after IO and removes the unreceived file`() = runTest {
         val selected = mockk<EnterpriseSessionController>()
         var allowed = true

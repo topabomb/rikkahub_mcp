@@ -578,3 +578,7 @@ gradlew.bat connectedDebugAndroidTest --no-parallel --max-workers=1
 参考图片导入已归入现有文件应用服务与 ImgGenVM：原生选择前保存原域和页面任务，返回时复验；重建页面保留待返回目标，重置任务则拒绝旧结果。临时副本只由 VM 持有，实际请求借用的文件等待请求收口，其余未接收或移除的文件立即回收。没有新增持久化结构或资源 owner。独立复审发现的取消补偿、满额临时文件与选择器目标丢失均已修复。
 
 本批定向 JVM 与 Android 17 的实际图片解码/存储/域授权用例通过；完整串行 `test assembleDebug lintDebug assembleRelease :app:compileDebugAndroidTestKotlin` 通过（11 分 5 秒）：App 2,077 项 JVM 无失败/跳过，lint 0 错误、287 警告，Workspace 保留 11 项 Windows 条件跳过。原生选择器 Activity 重建未作设备验收，目标保留由 VM 测试验证；本批设备只运行一项图片集成场景，不冒充整套设备回归。证据见 `build/reports/enterprise/reference-image-verification.json`。其余媒体出口、Workspace、MCP/Gateway、Speech、备份及最终版本 20 验收继续实施。
+
+附件与渲染导出已收回既有文件服务：文档/音频/视频从原页面授权和稳定 Artifact ID 出发，在生命周期锁内复制后交给外部查看器；最终交付复验原页面与 Session。失败或取消只清理未交付副本，启动清理不会删除本次进程刚导出的文件。Mermaid 的实际 WebView、导出请求和回调属于原文档，换来源/主题不重放旧请求，迟到回调不能完成新请求；没有新增持久化结构或文件 owner。
+
+该批独立复审已关闭发现，最终串行 `test assembleDebug lintDebug assembleRelease connectedDebugAndroidTest` 全部通过（5 分 26 秒）：App 2,080 项 JVM 无失败/跳过，lint 0 错误、287 警告；Android 17 模拟器 App 173 项、Speech 6 项通过，Workspace 的硬链接能力用例按设备条件跳过。首次整套设备运行因模拟器系统看门狗终止系统进程而中断，冷启动并切换软件图形后端后完整重跑通过，未放宽业务断言。分层结果见 `build/reports/enterprise/attachment-export-verification.json`。富文本链接/代码与表格导出/HTML 预览、Workspace、MCP/Gateway、Speech 企业接线、备份和版本 20 最终验收继续实施。

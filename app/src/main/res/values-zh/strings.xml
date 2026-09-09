@@ -1659,4 +1659,5 @@
   <string name="assistant_use_definition_model">使用我的助手定义中的模型</string>
   <string name="setting_files_page_delete_impact_presets">将移除 %1$d 组助手预设消息中引用此文件的内容。</string>
   <string name="setting_files_page_load_failed">无法加载文件</string>
+  <string name="chat_message_attachment_open_failed">无法打开此附件。文件可能已不可用，或访问授权已结束。</string>
 </resources>

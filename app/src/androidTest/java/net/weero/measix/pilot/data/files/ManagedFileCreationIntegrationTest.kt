@@ -339,6 +339,68 @@ class ManagedFileCreationIntegrationTest {
     }
 
     @Test
+    fun attachmentExportsRetainOriginalPageAndCopyUnderArtifactLifetime() = runBlocking {
+        store.ensureReferenceProjection()
+        val packet = payloadContext.assets.open(LocalEnterpriseSource.EXAMPLE_ASSET).use(EnterprisePackageCodec::decode)
+        val sessions = EnterpriseSessionController(EnterpriseAppliedStore(File(root, "export-session")))
+        sessions.enrollLocal(packet.identity, { packet.identity }, { packet })
+        val selected = requireNotNull(sessions.observeSelectedRealmSelection().first())
+        val commands = FileManagementApplicationService(store, GeneratedMediaStore(root, GenMediaRepository(database.genMediaDao()), store),
+            ApplicationRecoveryGate().apply { ready() }, sessions)
+        val bytes = ByteArray(200_000) { (it % 127).toByte() }
+        val artifact = store.createFromBytes(selected.access.scope, bytes, "report.pdf", "application/pdf", origin = ArtifactOrigin.USER)
+        val personal = store.createFromBytes(ConfigurationScope.Personal, bytes, "personal.pdf", "application/pdf", origin = ArtifactOrigin.USER)
+        val view = ConversationViewLease(kotlin.uuid.Uuid.random(), selected.access, selected.revision) {}
+        fun preview(id: Long) = AttachmentPreview(artifact.uri.toString(), null, AttachmentPreview.FileTarget(view, id, "report.pdf"))
+        assertTrue(runCatching { commands.copyAttachmentTo(preview(artifact.entity.id), java.io.ByteArrayOutputStream()) }.isFailure)
+        store.abandonUnpublished(artifact)
+        store.abandonUnpublished(personal)
+        assertTrue(runCatching { commands.copyAttachmentTo(preview(personal.entity.id), java.io.ByteArrayOutputStream()) }.isFailure)
+
+        val started = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val release = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val copied = java.io.ByteArrayOutputStream()
+        val output = object : java.io.OutputStream() {
+            override fun write(value: Int) { error("streaming buffer expected") }
+            override fun write(buffer: ByteArray, offset: Int, length: Int) {
+                started.complete(Unit)
+                runBlocking { release.await() }
+                copied.write(buffer, offset, length)
+            }
+        }
+        val copy = async(Dispatchers.IO) { store.copyMediaTo(selected.access.scope, artifact.entity.id, output) }
+        started.await()
+        val deleting = async(start = kotlinx.coroutines.CoroutineStart.UNDISPATCHED) { store.deleteUserRequested(selected.access.scope, artifact.entity.id) }
+        assertFalse(deleting.isCompleted)
+        release.complete(Unit)
+        assertEquals("application/pdf", copy.await())
+        assertArrayEquals(bytes, copied.toByteArray())
+        assertTrue(deleting.await() is ArtifactDeleteResult.Completed)
+        assertTrue(runCatching { commands.copyAttachmentTo(preview(artifact.entity.id), java.io.ByteArrayOutputStream()) }.isFailure)
+
+        val retained = store.createFromBytes(selected.access.scope, bytes, "report.pdf", "application/pdf", origin = ArtifactOrigin.USER)
+        store.abandonUnpublished(retained)
+        var intent: android.content.Intent? = null
+        val exportCache = File(root, "export-cache").apply { mkdirs() }
+        val exportingContext = object : ContextWrapper(compose.activity) {
+            override fun getCacheDir(): File = exportCache
+            override fun startActivity(value: android.content.Intent) { intent = value }
+        }
+        MediaExportService(commands).openAttachment(exportingContext, preview(retained.entity.id))
+        val uri = requireNotNull(intent?.data)
+        assertEquals("content", uri.scheme)
+        assertEquals("application/pdf", intent?.type)
+        assertTrue(store.deleteUserRequested(selected.access.scope, retained.entity.id) is ArtifactDeleteResult.Completed)
+        assertArrayEquals(bytes, exportingContext.contentResolver.openInputStream(uri)!!.use { it.readBytes() })
+        sessions.switchRealm(RealmSwitchRequest(selected, RealmAccess.Personal)) {}
+        intent = null
+        assertTrue(runCatching { MediaExportService(commands).openAttachment(exportingContext, preview(personal.entity.id)) }.isFailure)
+        assertEquals(null, intent)
+        assertEquals(1, File(exportCache, "temp").listFiles()!!.size)
+        view.close()
+    }
+
+    @Test
     fun managedImageDecoderRejectsForeignMissingRevokedAndLateCachedResults() = runBlocking {
         store.ensureReferenceProjection()
         val bytes = pngBytes()

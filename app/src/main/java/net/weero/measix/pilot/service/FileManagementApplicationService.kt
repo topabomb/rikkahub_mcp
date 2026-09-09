@@ -58,6 +58,33 @@ class FileManagementApplicationService internal constructor(
     },
     private val remoteMediaFetcher: net.weero.measix.pilot.data.ai.attachments.SafeRemoteMediaFetcher = net.weero.measix.pilot.data.ai.attachments.SafeRemoteMediaFetcher(),
 ) {
+    internal suspend fun copyAttachmentTo(preview: AttachmentPreview, output: java.io.OutputStream): String {
+        val target = requireNotNull(preview.fileTarget) { "attachment_unavailable" }
+        recoveryGate.awaitReady()
+        val mime = sessions.withSelectedRealmSelection(RealmSelection(target.view.access, target.view.selectionRevision)) {
+            target.view.requireOpen()
+            artifactStore.copyMediaTo(target.view.access.scope, target.artifactId, output)
+        }
+        withAttachmentAccess(preview) { }
+        return mime
+    }
+
+    /** The final system handoff is accepted under the original selection, outside the artifact lock. */
+    internal suspend fun <T> withAttachmentAccess(preview: AttachmentPreview, action: () -> T): T {
+        val target = requireNotNull(preview.fileTarget) { "attachment_unavailable" }
+        recoveryGate.awaitReady()
+        val selection = RealmSelection(target.view.access, target.view.selectionRevision)
+        sessions.withSelectedRealmSelection(selection) {
+            target.view.requireOpen()
+            artifactStore.requireMediaAccess(target.view.access.scope, target.artifactId)
+        }
+        return sessions.withSelectedRealmSelection(selection) {
+            target.view.requireOpen()
+            kotlinx.coroutines.currentCoroutineContext().ensureActive()
+            action()
+        }
+    }
+
     fun imageSource(key: ManagedFileKey, displayName: String? = null, modifiedAtMillis: Long? = null): ImageSource =
         createImageSource("managed", key, displayName, modifiedAtMillis) { }
 
@@ -138,6 +165,10 @@ class FileManagementApplicationService internal constructor(
     private fun externalImageSource(url: String, contextIdentity: String, verify: suspend () -> Unit): ImageSource? {
         val inline = url.startsWith("data:image/", ignoreCase = true)
         if (!inline && !url.startsWith("https://", ignoreCase = true) && !url.startsWith("http://", ignoreCase = true)) return null
+        val inlinePayload = if (inline) url.substringAfter(',', "").also { payload ->
+            require(url.substringBefore(',').endsWith(";base64", ignoreCase = true) && payload.isNotEmpty() &&
+                payload.length <= GeneratedMediaStore.MAX_IMAGE_BYTES * 4 / 3 + 16) { "image_payload_invalid" }
+        } else null
         return ImageSource(
             cacheIdentity = "$contextIdentity:external:$url",
             origin = if (inline) ImageOrigin.INLINE else ImageOrigin.NETWORK,
@@ -146,10 +177,7 @@ class FileManagementApplicationService internal constructor(
             readPayload = {
                 verify()
                 val bytes = if (inline) {
-                    val payload = url.substringAfter(',', "")
-                    require(url.substringBefore(',').endsWith(";base64", ignoreCase = true) && payload.isNotEmpty() &&
-                        payload.length <= GeneratedMediaStore.MAX_IMAGE_BYTES * 4 / 3 + 16) { "image_payload_invalid" }
-                    java.util.Base64.getDecoder().decode(payload)
+                    java.util.Base64.getDecoder().decode(requireNotNull(inlinePayload))
                 } else when (val result = remoteMediaFetcher.fetch(url)) {
                     is net.weero.measix.pilot.data.ai.attachments.RemoteMediaFetchResult.Success -> result.bytes
                     is net.weero.measix.pilot.data.ai.attachments.RemoteMediaFetchResult.Failure -> error(result.reason)

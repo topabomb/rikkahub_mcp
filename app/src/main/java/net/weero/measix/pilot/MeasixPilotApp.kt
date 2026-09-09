@@ -22,7 +22,6 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import me.rerere.common.android.appTempFolder
 import com.whl.quickjs.android.QuickJSLoader
 import net.weero.measix.pilot.di.appModule
 import net.weero.measix.pilot.di.dataSourceModule
@@ -53,6 +52,7 @@ class MeasixPilotApp : Application(), WorkspaceDocumentsDependencies {
     override fun onCreate() {
         super.onCreate()
         PendingBackupRestore.bootstrapBeforeDatabaseOpen(this)
+        val retiredTempFolders = retireApplicationTempFiles(cacheDir)
         startKoin {
             androidLogger()
             androidContext(this@MeasixPilotApp)
@@ -71,7 +71,7 @@ class MeasixPilotApp : Application(), WorkspaceDocumentsDependencies {
         QuickJSLoader.init()
 
         // delete temp files
-        deleteTempFiles()
+        deleteTempFiles(retiredTempFolders)
 
         // cleanup workspace temp dirs (proot + rootfs /tmp)
         cleanupWorkspaceTempDirs()
@@ -91,11 +91,10 @@ class MeasixPilotApp : Application(), WorkspaceDocumentsDependencies {
         }
     }
 
-    private fun deleteTempFiles() {
+    private fun deleteTempFiles(retired: List<java.io.File>) {
         get<AppScope>().launch(Dispatchers.IO) {
-            val dir = appTempFolder
-            if (dir.exists()) {
-                dir.deleteRecursively()
+            retired.forEach { directory ->
+                if (!directory.deleteRecursively()) Log.w(TAG, "Unable to clean retired temporary files")
             }
         }
     }
@@ -139,3 +138,14 @@ class AppScope(
         Log.e(TAG, "AppScope exception", e)
     }
 )
+
+/** Detach old temporary files before any application owner can create new exports. */
+internal fun retireApplicationTempFiles(cacheDir: java.io.File): List<java.io.File> {
+    val retired = cacheDir.listFiles().orEmpty().filter { it.isDirectory && it.name.startsWith("retired-temp-") }.toMutableList()
+    val current = java.io.File(cacheDir, "temp")
+    if (!current.exists()) return retired
+    val destination = java.io.File(cacheDir, "retired-temp-${java.util.UUID.randomUUID()}")
+    if (current.renameTo(destination)) retired += destination
+    else Log.w("MeasixPilotApp", "Unable to detach old temporary files; leaving them for a later startup")
+    return retired
+}

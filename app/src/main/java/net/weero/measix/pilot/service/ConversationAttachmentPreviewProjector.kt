@@ -16,7 +16,13 @@ import net.weero.measix.pilot.data.files.LocalToolPath
 import net.weero.measix.pilot.utils.JsonInstant
 import net.weero.measix.pilot.service.runtime.ConversationPresentationSnapshot
 
-data class AttachmentPreview(val uri: String, val image: ImageSource?)
+data class AttachmentPreview internal constructor(
+    val uri: String,
+    val image: ImageSource?,
+    internal val fileTarget: FileTarget? = null,
+) {
+    internal data class FileTarget(val view: ConversationViewLease, val artifactId: Long, val displayName: String?)
+}
 
 /**
  * Resolves attachment handles and disclosed upload paths through their original page and realm.
@@ -86,7 +92,11 @@ class ConversationAttachmentPreviewProjector(
                     is AttachmentReferenceTarget.ManagedArtifact -> target.type == "image"
                     AttachmentReferenceTarget.Conflict -> false
                 }
-                val preview = AttachmentPreview(resolved.uri, if (image) files.conversationImageSource(source, resolved.artifactId, resolved.displayName, resolved.modifiedAtMillis) else null)
+                val preview = AttachmentPreview(
+                    resolved.uri,
+                    if (image) files.conversationImageSource(source, resolved.artifactId, resolved.displayName, resolved.modifiedAtMillis) else null,
+                    AttachmentPreview.FileTarget(source, resolved.artifactId, resolved.displayName),
+                )
                 projected[ref] = preview
                 val toolPath = when (target) {
                     is AttachmentReferenceTarget.ManagedArtifact -> target.artifact.toolPath()

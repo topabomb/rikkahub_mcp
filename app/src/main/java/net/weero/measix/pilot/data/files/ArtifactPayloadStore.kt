@@ -6,6 +6,7 @@ import androidx.core.net.toFile
 import java.io.File
 import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.withContext
 
@@ -152,6 +153,19 @@ class ArtifactPayloadStore(private val context: Context) {
     /** Bounded, cancellable payload read; lifetime authorization belongs to ArtifactStore. */
     suspend fun readBytes(relativePath: String, maxBytes: Long): ByteArray =
         FileUtils.readBoundedBytes(file(relativePath), maxBytes)
+
+    /** The caller holds the artifact lifetime; the destination remains owned by its exporter. */
+    suspend fun copyTo(relativePath: String, output: java.io.OutputStream) {
+        file(relativePath).inputStream().use { input ->
+            val buffer = ByteArray(64 * 1024)
+            while (true) {
+                kotlinx.coroutines.currentCoroutineContext().ensureActive()
+                val count = input.read(buffer)
+                if (count < 0) break
+                output.write(buffer, 0, count)
+            }
+        }
+    }
 
     fun stagingExists(stagingToken: String): Boolean = stagingFile(stagingToken).isFile
 

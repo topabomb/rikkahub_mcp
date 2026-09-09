@@ -13,7 +13,7 @@ import net.weero.measix.pilot.utils.getActivity
 internal const val IMAGE_SAVE_PERMISSION_REQUIRED = "permission_required"
 
 /** UI-facing export port for copying media outside app storage; it owns no artifact lifecycle. */
-class MediaExportService {
+class MediaExportService(private val files: FileManagementApplicationService) {
     suspend fun saveImage(context: Context, image: ImageSource): String = withContext(Dispatchers.IO) {
         val activity = requireNotNull(context.getActivity()) { "Activity not found" }
         val bytes = image.readBytes()
@@ -48,28 +48,56 @@ class MediaExportService {
     suspend fun shareText(context: Context, text: String, fileName: String, verifyAccess: suspend () -> Unit) =
         shareBytes(context, text.toByteArray(Charsets.UTF_8), fileName, "text/markdown", verifyAccess)
 
+    suspend fun openAttachment(context: Context, preview: AttachmentPreview) {
+        val target = requireNotNull(preview.fileTarget) { "attachment_unavailable" }
+        publishFile(context, target.displayName ?: "attachment", writePayload = { output ->
+            files.copyAttachmentTo(preview, output)
+        }) { uri, mime ->
+            files.withAttachmentAccess(preview) {
+                val intent = android.content.Intent(android.content.Intent.ACTION_VIEW).apply {
+                    setDataAndType(uri, mime)
+                    addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                }
+                // Launch directly so missing handlers fail before ownership is handed off.
+                context.startActivity(intent)
+            }
+        }
+    }
+
     private suspend fun shareBytes(context: Context, bytes: ByteArray, fileName: String, mimeType: String, verifyAccess: suspend () -> Unit) {
+        verifyAccess()
+        publishFile(context, fileName, writePayload = { output -> output.write(bytes); mimeType }) { uri, mime ->
+            verifyAccess()
+            val intent = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
+                type = mime
+                putExtra(android.content.Intent.EXTRA_STREAM, uri)
+                addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            context.startActivity(android.content.Intent.createChooser(intent,
+                context.getString(net.weero.measix.pilot.R.string.chat_page_export_share_via)))
+        }
+    }
+
+    private suspend fun publishFile(
+        context: Context,
+        fileName: String,
+        writePayload: suspend (java.io.OutputStream) -> String,
+        deliver: suspend (android.net.Uri, String) -> Unit,
+    ) {
         var candidate: java.io.File? = null
         var shared = false
         var failure: Throwable? = null
         try {
-            verifyAccess()
-            val file = withContext(Dispatchers.IO) {
-                java.io.File(context.appTempFolder, "${java.util.UUID.randomUUID()}_$fileName").also {
-                    candidate = it
-                    it.outputStream().use { output -> output.write(bytes) }
-                }
+            val safeName = fileName.substringAfterLast('/').substringAfterLast('\\')
+                .filter { !it.isISOControl() }.take(160).ifBlank { "attachment" }
+            val (file, mimeType) = withContext(Dispatchers.IO) {
+                val file = java.io.File(context.appTempFolder, "${java.util.UUID.randomUUID()}_$safeName")
+                candidate = file
+                file to file.outputStream().use { output -> writePayload(output) }
             }
             val uri = androidx.core.content.FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
             withContext(Dispatchers.Main.immediate) {
-                verifyAccess()
-                val intent = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
-                    type = mimeType
-                    putExtra(android.content.Intent.EXTRA_STREAM, uri)
-                    addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                }
-                context.startActivity(android.content.Intent.createChooser(intent,
-                    context.getString(net.weero.measix.pilot.R.string.chat_page_export_share_via)))
+                deliver(uri, mimeType)
                 shared = true
             }
         } catch (error: Throwable) {

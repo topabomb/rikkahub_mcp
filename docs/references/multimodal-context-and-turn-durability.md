@@ -108,8 +108,8 @@ Tool Result checkpoint（消息与 Artifact 引用同事务）
   并为已知工具 `inspect_attachments` / `assistant_call` 顶层 `attachments` 中的合法路径补充预览。
   所有本地 URL 均经 `ArtifactStore` 生命周期与内容校验，文件生命周期变化使投影失效。
   UI 只做 O(1) map lookup，不扫描 metadata；该 map 既不是持久化别名，也不是文件读取授权或 durable root。
-- `ChatMessage`、会话相册与聊天导出只消费查询投影返回的本地媒体 URL；没有投影 map 时，
-  `file:` 图片/媒体保持不可见，不回退为原始路径。助手配置页的合成消息预览同样不读取本地附件。
+- `ChatMessage` 与会话相册消费查询投影的读取对象；非图片附件同时保存原页面与 Artifact ID。
+  `file:` 图片/媒体没有有效投影时不回退原路径。聊天 Markdown 导出只使用投影中的 URL 表示；助手配置页的合成消息预览同样不读取本地附件。
 - Resolver 只接受安全 `/upload` 路径，由 `ArtifactStore.withUploadImages` 校验 ACTIVE、已发布、文件存在、受管根目录、大小与实际图片内容；仅 payload 存在不能认领孤儿文件。路径读取不要求当前会话引用，不依赖 Workspace。
 - Fork/Child clone 只按本次已经取得的文件复制映射，重绑定 `inspect_attachments` 与 `assistant_call` 的
   `attachments` 输入数组中的 `/upload` 路径，使工具卡查询和后续引用指向新会话副本。UUID、其他字段与正文不改，
@@ -126,6 +126,8 @@ Tool Result checkpoint（消息与 Artifact 引用同事务）
 文件目录与图库缩略图将 `ManagedFileKey.Artifact` / `Generated` 交给 `FileManagementApplicationService.imageSource`，取得携带原 RealmSelection 和稳定文件身份的 `ImageSource`。该对象只借用原 owner 的校验和有界读取能力，不管理文件生命周期或 Job；UI 不直接构造它。文件服务在原 Session 内调用文件 owner 验证归属、状态和文件边界，并在 owner 操作结束后复验原选择。Artifact lifecycle lock 与 GeneratedMedia persist lock 各自保护有界读取，解码使用返回的字节，不持有 owner 锁；共用 `FileUtils.readBoundedBytes` 按实际读入字节限制大小并传播取消。`ImageSourceInterceptor` 在 Coil 内存缓存命中前及解码结果回交前复验权限，缓存键包含原选择身份；未发布、已删除或跨域资源不能靠旧缓存恢复显示。该入口不创建新的 durable 状态或文件 owner。
 
 会话预览由 `ConversationAttachmentPreviewProjector` 携带原 `ConversationViewLease` 解析。`ArtifactMediaPreview` 在 Store 锁内同时取得稳定 ID 与 URI；`AttachmentPreview` 中的图片读取对象由文件 application port 绑定该 ID 和原页面，后续读取不重新按同路径认领文件。同一页面重复投影使用同一缓存身份；原页面关闭后不可读，新页面即使打开同一会话也取得独立身份。会话大图、富文本图片及导出沿用该对象，聊天整体导出另复验原页面。共享配置图片每次读取要求仍有已提交的配置根；此准入不会开放普通个人文件。背景写入目标及其他文件出口的剩余工作见实施方案。
+
+非图片附件导出由 `ArtifactStore.copyMediaTo` 在同一生命周期锁内验证原 scope、ACTIVE、已发布与 canonical upload/images 根，并通过 `ArtifactPayloadStore.copyTo` 流式写入导出者的文件；不套用图片大小上限，也不返回原件读取权限。`FileManagementApplicationService` 保护原 ConversationViewLease/RealmSelection，文件读取后、最终系统交付前重新取得授权；最后接受边界不等待 Artifact IO。`MediaExportService` 只持有独立临时副本，失败/取消精确清理，已发出的 Intent 保留副本。启动在 application owner 创建新文件前分离旧 temp 目录，异步清理只处理已分离目录，不能递归删除当前会话的新导出文件。
 
 上传 Artifact 与图库生成媒体保持独立 owner，不存在共享目录扫描删除器：
 

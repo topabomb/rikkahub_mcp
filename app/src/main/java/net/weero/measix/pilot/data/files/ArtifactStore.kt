@@ -314,19 +314,38 @@ class ArtifactStore(
     }
 
     private suspend fun requireReadableImage(scope: ConfigurationScope, artifactId: Long, owner: OwnedArtifact? = null): ArtifactEntity {
-        val entity = artifactDAO.getById(artifactId) ?: error("artifact_image_unavailable")
+        val entity = requireReadableMedia(scope, artifactId, owner)
+        check(entity.mimeType.substringBefore(';').trim().startsWith("image/", ignoreCase = true)) { "artifact_image_unavailable" }
+        if (payloadStore.file(entity.relativePath).length() > GeneratedMediaStore.MAX_IMAGE_BYTES) throw FilePayloadTooLargeException()
+        return entity
+    }
+
+    private suspend fun requireReadableMedia(scope: ConfigurationScope, artifactId: Long, owner: OwnedArtifact? = null): ArtifactEntity {
+        val entity = artifactDAO.getById(artifactId) ?: error("artifact_media_unavailable")
         requireArtifactScope(entity, scope)
-        check(entity.state == ArtifactState.ACTIVE.name && entity.mimeType.substringBefore(';').trim().startsWith("image/", ignoreCase = true)) { "artifact_image_unavailable" }
+        check(entity.state == ArtifactState.ACTIVE.name) { "artifact_media_unavailable" }
         if (owner == null) {
-            check(!synchronized(unpublishedPins) { unpublishedPins.containsKey(entity.id) }) { "artifact_image_not_published" }
+            check(!synchronized(unpublishedPins) { unpublishedPins.containsKey(entity.id) }) { "artifact_media_not_published" }
         } else {
-            check(owner.entity.id == entity.id && isPinnedBy(owner)) { "artifact_image_owner_released" }
+            check(owner.entity.id == entity.id && isPinnedBy(owner)) { "artifact_media_owner_released" }
         }
         val file = payloadStore.file(entity.relativePath)
         check(file.isFile && (LocalToolPath.isInsideDirectory(file, payloadStore.file(FileFolders.UPLOAD)) ||
-            LocalToolPath.isInsideDirectory(file, payloadStore.file("images")))) { "artifact_image_unavailable" }
-        if (file.length() > GeneratedMediaStore.MAX_IMAGE_BYTES) throw FilePayloadTooLargeException()
+            LocalToolPath.isInsideDirectory(file, payloadStore.file("images")))) { "artifact_media_unavailable" }
         return entity
+    }
+
+    internal suspend fun requireMediaAccess(scope: ConfigurationScope, artifactId: Long) = withContext(Dispatchers.IO) {
+        withLifecycleLock { requireReadableMedia(scope, artifactId); Unit }
+    }
+
+    /** Streams a published attachment under its lifetime lock; no raw file read grant escapes. */
+    internal suspend fun copyMediaTo(scope: ConfigurationScope, artifactId: Long, output: java.io.OutputStream): String = withContext(Dispatchers.IO) {
+        withLifecycleLock {
+            val entity = requireReadableMedia(scope, artifactId)
+            payloadStore.copyTo(entity.relativePath, output)
+            entity.mimeType
+        }
     }
 
     /**
