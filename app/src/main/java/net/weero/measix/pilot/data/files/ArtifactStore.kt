@@ -445,6 +445,48 @@ class ArtifactStore(
         return ref
     }
 
+    /** Upload file reads and invocation copies remain under the canonical artifact lifetime. */
+    internal suspend fun readUpload(scope: ConfigurationScope, path: String, maxBytes: Long): ByteArray = withContext(Dispatchers.IO) {
+        withLifecycleLock { payloadStore.readBytes(requireUpload(scope, path).relativePath, maxBytes) }
+    }
+
+    internal suspend fun copyUploads(scope: ConfigurationScope, paths: List<String>, destination: File, maxBytes: Long) = withContext(Dispatchers.IO) {
+        require(paths.distinct().size == paths.size) { "duplicate_upload_path" }
+        require(maxBytes >= 0)
+        withLifecycleLock {
+            val selected = paths.map { requireUpload(scope, it) }
+            require(selected.map { it.id }.distinct().size == selected.size) { "duplicate_upload_path" }
+            var remaining = maxBytes
+            selected.forEach { entity ->
+                val size = payloadStore.file(entity.relativePath).length()
+                if (size > remaining) throw FilePayloadTooLargeException()
+                remaining -= size
+            }
+            remaining = maxBytes
+            selected.forEach { entity ->
+                File(destination, entity.relativePath.substringAfterLast('/')).outputStream().use { target ->
+                    val bounded = object : java.io.OutputStream() {
+                        override fun write(value: Int) {
+                            if (remaining == 0L) throw FilePayloadTooLargeException()
+                            target.write(value); remaining--
+                        }
+                        override fun write(bytes: ByteArray, offset: Int, length: Int) {
+                            if (length > remaining) throw FilePayloadTooLargeException()
+                            target.write(bytes, offset, length); remaining -= length
+                        }
+                    }
+                    payloadStore.copyTo(entity.relativePath, bounded)
+                }
+            }
+        }
+    }
+
+    private suspend fun requireUpload(scope: ConfigurationScope, path: String): ArtifactEntity {
+        val name = requireNotNull(LocalToolPath.parseUploadToolPath(path)) { "invalid_upload_path" }
+        val entity = requireNotNull(getByRelativePath("${FileFolders.UPLOAD}/$name")) { "upload_unavailable" }
+        return requireReadableMedia(scope, entity.id)
+    }
+
     suspend fun resolveToolPath(path: String): File? {
         val fileName = LocalToolPath.parseUploadToolPath(path) ?: return null
         val entity = getByRelativePath("${FileFolders.UPLOAD}/$fileName") ?: return null

@@ -94,7 +94,9 @@ class MeasixPilotApp : Application(), WorkspaceDocumentsDependencies {
     private fun deleteTempFiles(retired: List<java.io.File>) {
         get<AppScope>().launch(Dispatchers.IO) {
             retired.forEach { directory ->
-                if (!directory.deleteRecursively()) Log.w(TAG, "Unable to clean retired temporary files")
+                try { net.weero.measix.pilot.data.files.FileUtils.deleteOwnedTree(directory) }
+                catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+                catch (error: Exception) { Log.w(TAG, "Unable to clean retired temporary files", error) }
             }
         }
     }

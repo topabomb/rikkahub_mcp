@@ -168,7 +168,7 @@ name / description。`SkillManager` 是 Skill 文件树和读取 owner，`use_sk
 `workspaceId` 已绑定且 `WorkspaceShellStatus.READY` 时追加到第一条 System。不注入 cwd。
 
 内容由 `buildWorkspacePrompt()` 生成：`<workspace>` 内说明 `/workspace`、路径必须在 Rootfs
-内、四个 `workspace_*` 工具的分工、`/skills`、`/upload` 只读。
+内、四个 `workspace_*` 工具的分工、共享 `/skills` 与 `/workspace`，以及 `/upload` 原生只读和 Shell 显式输入副本规则。
 
 ### 3.6 时间间隔 `TimeReminderTransformer`
 
@@ -366,7 +366,7 @@ JSON：
 ```text
 attachment:<uuid>   仅内部持久化逻辑身份，不作为模型披露或工具输入
 /upload/<file>      托管附件的模型文件路径；识别与委托不依赖 workspace
-/workspace/...      工作产物区。会话共享的只读文件（上传与生成的媒体）挂载在 /upload
+/workspace/...      显式共享的工作产物区；Shell 的 /upload 只含 uploads 列出的本域授权副本
 ```
 
 工具产出新媒体（如 `generate_image`）时，Tool Result `file.path` 与附件事实行的 path 指向同一聊天副本。

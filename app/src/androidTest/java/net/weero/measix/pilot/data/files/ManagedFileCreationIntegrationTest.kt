@@ -238,6 +238,90 @@ class ManagedFileCreationIntegrationTest {
         } finally { loader.shutdown(); draft.close(); view.close() }
     }
 
+    @Test fun workspaceInputsAreScopedCopiesAndCancellationWaitsBeforeDeletingThem() = runBlocking {
+        store.ensureReferenceProjection()
+        val packet = payloadContext.assets.open(LocalEnterpriseSource.EXAMPLE_ASSET).use(EnterprisePackageCodec::decode)
+        val sessions = EnterpriseSessionController(EnterpriseAppliedStore(File(root, "workspace-session")))
+        sessions.enrollLocal(packet.identity, { packet.identity }, { packet })
+        val access = sessions.captureSelectedRealmAccess() as RealmAccess.Enterprise
+        val own = store.createFromBytes(access.scope, "owned".toByteArray(), "own.txt", "text/plain", origin = ArtifactOrigin.USER)
+        val foreign = store.createFromBytes(ConfigurationScope.Personal, "personal".toByteArray(), "personal.txt", "text/plain", origin = ArtifactOrigin.USER)
+        val pending = store.createFromBytes(access.scope, "pending".toByteArray(), "pending.txt", "text/plain", origin = ArtifactOrigin.USER)
+        store.abandonUnpublished(own)
+        store.abandonUnpublished(foreign)
+        val ownPath = requireNotNull(own.localRef.toolPath())
+        val foreignPath = requireNotNull(foreign.localRef.toolPath())
+        val pendingPath = requireNotNull(pending.localRef.toolPath())
+        assertEquals("owned", store.readUpload(access.scope, ownPath, 1024).decodeToString())
+        assertTrue(runCatching { store.readUpload(access.scope, foreignPath, 1024) }.isFailure)
+        assertTrue(runCatching { store.readUpload(access.scope, pendingPath, 1024) }.isFailure)
+        val budget = File(root, "budget").apply { mkdirs() }
+        assertTrue(runCatching { store.copyUploads(access.scope, listOf(ownPath), budget, 1) }.isFailure)
+        assertTrue(runCatching { store.copyUploads(access.scope, listOf(ownPath, " $ownPath "), budget, 1024) }.isFailure)
+        assertTrue(budget.listFiles().orEmpty().isEmpty())
+        val repository = io.mockk.mockk<net.weero.measix.pilot.data.repository.WorkspaceRepository>()
+        io.mockk.coEvery { repository.getById("workspace") } returns net.weero.measix.pilot.data.db.entity.WorkspaceEntity(
+            "workspace", "Shared", "workspace-root", me.rerere.workspace.WorkspaceShellStatus.READY.name, 1, 1)
+        val temp = File(root, "command-inputs")
+        val shared = File(root, "shared").apply { mkdirs() }
+        val marker = File(shared, "keep.txt").apply { writeText("shared file") }
+        val shellStarted = kotlinx.coroutines.CompletableDeferred<File>()
+        val stopping = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val stopped = kotlinx.coroutines.CompletableDeferred<Unit>()
+        var block = false
+        var expectedFiles = listOf(ownPath.substringAfterLast('/'))
+        val directories = mutableListOf<File>()
+        io.mockk.coEvery { repository.executeCommand(any(), any(), any(), any(), any(), any()) } coAnswers {
+            val mount = arg<List<me.rerere.workspace.WorkspaceBindMount>>(5).single()
+            assertEquals("/upload", mount.target)
+            val directory = mount.source
+            directories += directory
+            assertEquals(expectedFiles, directory.listFiles().orEmpty().map { it.name })
+            if (expectedFiles.isNotEmpty()) {
+                val copied = File(directory, expectedFiles.single())
+                assertEquals("owned", copied.readText())
+                copied.writeText("changed copy")
+            }
+            Files.createSymbolicLink(File(directory, "shared-link").toPath(), shared.toPath())
+            if (block) {
+                shellStarted.complete(directory)
+                try { kotlinx.coroutines.awaitCancellation() }
+                finally { withContext(kotlinx.coroutines.NonCancellable) { stopping.complete(Unit); stopped.await() } }
+            }
+            me.rerere.workspace.WorkspaceCommandResult(0, "ok", "")
+        }
+        val service = net.weero.measix.pilot.service.workspace.WorkspaceApplicationService(repository, io.mockk.mockk(), store, sessions,
+            temp, ApplicationRecoveryGate().apply { ready() })
+        assertEquals("owned", service.executeTool("workspace", access) { readRootfsBytes(ownPath, 1024) }.decodeToString())
+        listOf(foreignPath, pendingPath).forEach { path ->
+            assertTrue(runCatching { service.executeTool("workspace", access) { executeCommand("cat", uploads = listOf(path)) } }.isFailure)
+            assertTrue(temp.listFiles().orEmpty().isEmpty())
+        }
+        assertTrue(directories.isEmpty())
+        service.executeTool("workspace", access) { executeCommand("cat", uploads = listOf(ownPath)) }
+        assertFalse(directories.single().exists())
+        assertEquals("owned", store.readUpload(access.scope, ownPath, 1024).decodeToString())
+        assertEquals("shared file", marker.readText())
+        expectedFiles = emptyList()
+        service.executeTool("workspace", access) { executeCommand("ls") }
+        assertTrue(directories.none { it.exists() })
+        block = true
+        expectedFiles = listOf(ownPath.substringAfterLast('/'))
+        val running = async(Dispatchers.Default) { service.executeTool("workspace", access) { executeCommand("cat", uploads = listOf(ownPath)) } }
+        val retained = shellStarted.await()
+        try {
+            // The source Session remains responsive while the shell owns its invocation copies.
+            kotlinx.coroutines.withTimeout(5_000) { sessions.beginInvalidation(access, EnterpriseExitReason.AUTHORIZATION_EXPIRED) }
+            running.cancel()
+            stopping.await()
+            assertTrue(retained.isDirectory)
+        } finally { stopped.complete(Unit); running.cancelAndJoin() }
+        assertFalse(retained.exists())
+        assertEquals("shared file", marker.readText())
+        assertTrue(runCatching { service.executeTool("workspace", access) { readRootfsBytes(ownPath, 1024) } }.isFailure)
+        store.discardUnpublished(pending).requireDiscarded("workspace test cleanup")
+    }
+
     @Test fun renderedDocumentsReadOnlyTheirSourceAndNeverShareBrowserStorage() = runBlocking {
         store.ensureReferenceProjection()
         val sessions = EnterpriseSessionController(EnterpriseAppliedStore(File(root, "rendered-session")))

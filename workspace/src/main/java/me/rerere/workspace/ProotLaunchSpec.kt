@@ -39,7 +39,6 @@ data class ProotLaunchSpec(
          */
         fun appBindMounts(appFilesDir: File): List<WorkspaceBindMount> = listOf(
             WorkspaceBindMount(File(appFilesDir, "skills").apply { mkdirs() }, SKILLS_DIR),
-            WorkspaceBindMount(File(appFilesDir, "upload").apply { mkdirs() }, UPLOAD_DIR),
         )
 
         fun from(

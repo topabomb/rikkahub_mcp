@@ -27,7 +27,7 @@ class RootfsFileAccessTest {
     private lateinit var base: File
     private lateinit var manager: WorkspaceManager
     private lateinit var outside: File
-    private lateinit var upload: File
+    private lateinit var sharedMount: File
     private val root = "test"
 
     @Before
@@ -35,10 +35,10 @@ class RootfsFileAccessTest {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         base = Files.createTempDirectory(context.cacheDir.toPath(), "rootfs-io-").toFile().canonicalFile
         outside = File(base, "outside").apply { mkdirs() }
-        upload = File(base, "upload").apply { mkdirs() }
+        sharedMount = File(base, "sharedMount").apply { mkdirs() }
         manager = WorkspaceManager(
             File(base, "workspaces"),
-            bindMounts = listOf(WorkspaceBindMount(upload, "/upload")),
+            bindMounts = listOf(WorkspaceBindMount(sharedMount, "/skills")),
         )
         manager.ensureWorkspace(root)
         File(manager.linuxDir(root), "tmp").mkdirs()
@@ -59,6 +59,16 @@ class RootfsFileAccessTest {
                 return FileVisitResult.CONTINUE
             }
         })
+    }
+
+    @Test
+    fun uploadCannotFallBackToLinuxFilesOrBeWrittenWithApproval() {
+        File(manager.linuxDir(root), "upload").mkdirs()
+        val stale = File(manager.linuxDir(root), "upload/stale.txt").apply { writeText("shared remainder") }
+        assertThrows(IllegalArgumentException::class.java) { read("/upload/stale.txt") }
+        assertThrows(IllegalArgumentException::class.java) { manager.writeRootfsText(root, "/tmp/../upload/stale.txt", "bad", true, true) }
+        assertThrows(IllegalArgumentException::class.java) { manager.updateRootfsText(root, "/upload/stale.txt", 1024, true) { "bad" } }
+        assertEquals("shared remainder", stale.readText())
     }
 
     @Test
@@ -93,20 +103,20 @@ class RootfsFileAccessTest {
 
     @Test
     fun outsideAndNormalizedTraversalRequireActualApproval() {
-        listOf("/etc/x", "/tmp/../etc/x", "/workspace/../etc/x", "/upload/x").forEach { path ->
+        listOf("/etc/x", "/tmp/../etc/x", "/workspace/../etc/x", "/skills/x").forEach { path ->
             assertThrows(IllegalArgumentException::class.java) {
                 manager.writeRootfsText(root, path, "denied", true, false)
             }
         }
         assertFalse(File(manager.linuxDir(root), "etc/x").exists())
-        assertFalse(File(upload, "x").exists())
+        assertFalse(File(sharedMount, "x").exists())
         manager.writeRootfsText(root, "/tmp/../etc/x", "approved", true, true)
         assertEquals("approved", read("/etc/x"))
         manager.updateRootfsText(root, "/etc/x", 1024, true) { "$it edit" }
         assertEquals("approved edit", read("/etc/x"))
-        manager.writeRootfsText(root, "/upload/x", "mount", true, true)
-        assertEquals("mount", File(upload, "x").readText())
-        assertEquals("mount", read("/upload/x"))
+        manager.writeRootfsText(root, "/skills/x", "mount", true, true)
+        assertEquals("mount", File(sharedMount, "x").readText())
+        assertEquals("mount", read("/skills/x"))
     }
 
     @Test
@@ -133,9 +143,9 @@ class RootfsFileAccessTest {
         assertTrue(files.renameTo(File(files.parentFile, "saved-files")))
         Os.symlink(outside.path, files.path)
         assertThrows(IOException::class.java) { manager.writeRootfsText(root, "/workspace/target", "bad", true, false) }
-        assertTrue(upload.renameTo(File(base, "saved-upload")))
-        Os.symlink(outside.path, upload.path)
-        assertThrows(IOException::class.java) { manager.writeRootfsText(root, "/upload/target", "bad", true, true) }
+        assertTrue(sharedMount.renameTo(File(base, "saved-sharedMount")))
+        Os.symlink(outside.path, sharedMount.path)
+        assertThrows(IOException::class.java) { manager.writeRootfsText(root, "/skills/target", "bad", true, true) }
         assertEquals("protected", protected.readText())
     }
 

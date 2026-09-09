@@ -166,7 +166,9 @@ class WorkspaceManager(
      * them under [WorkspaceStorageArea.LINUX] would instead point at the empty mount point.
      */
     fun resolveRootfsPath(root: String, path: String): RootfsLocation {
-        val trimmed = RootfsPath.parse(path).value
+        val parsed = RootfsPath.parse(path)
+        require(!parsed.isUpload) { "/upload requires the calling artifact owner" }
+        val trimmed = parsed.value
         KERNEL_FS_MOUNTS.firstOrNull { trimmed == it || trimmed.startsWith("$it/") }?.let {
             error("$it is a kernel filesystem and cannot be read as a file, use workspace_shell instead")
         }
@@ -229,6 +231,7 @@ class WorkspaceManager(
 
     private fun authorizedWritePath(path: String, approvedByUser: Boolean): RootfsPath =
         RootfsPath.parse(path).also {
+            require(!it.isUpload) { "/upload is read-only" }
             require(approvedByUser || !it.requiresWriteApproval) { "Writing outside /workspace and /tmp requires user approval" }
         }
 
@@ -270,6 +273,7 @@ class WorkspaceManager(
         cwd: String = "",
         timeoutMillis: Long = DEFAULT_COMMAND_TIMEOUT_MS,
         stdin: ByteArray? = null,
+        invocationMounts: List<WorkspaceBindMount> = emptyList(),
     ): WorkspaceCommandResult {
         require(command.isNotBlank()) { "Command is required" }
         val workingDir = fileSystem.resolve(filesDir(root), cwd)
@@ -287,7 +291,7 @@ class WorkspaceManager(
                 workingDir = workingDir,
                 timeoutMillis = timeoutMillis,
                 stdin = stdin,
-                bindMounts = bindMounts,
+                bindMounts = bindMounts + invocationMounts,
             )
         )
     }

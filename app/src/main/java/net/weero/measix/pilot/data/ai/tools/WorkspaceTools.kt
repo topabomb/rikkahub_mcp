@@ -46,10 +46,10 @@ suspend fun createWorkspaceTools(
     val shellCwd = cwd?.let(::normalizeWorkspaceCwd)
 
     return listOf(
-        createReadFileTool(realmAccess.scope, workspaceId, ::approvalRequired, workspaceApplicationService, artifactStore),
-        createWriteFileTool(workspaceId, ::approvalRequired, workspaceApplicationService),
-        createEditFileTool(workspaceId, ::approvalRequired, workspaceApplicationService),
-        createShellTool(workspaceId, ::approvalRequired, workspaceApplicationService, shellCwd),
+        createReadFileTool(realmAccess, workspaceId, ::approvalRequired, workspaceApplicationService, artifactStore),
+        createWriteFileTool(realmAccess, workspaceId, ::approvalRequired, workspaceApplicationService),
+        createEditFileTool(realmAccess, workspaceId, ::approvalRequired, workspaceApplicationService),
+        createShellTool(realmAccess, workspaceId, ::approvalRequired, workspaceApplicationService, shellCwd),
     )
 }
 
@@ -64,7 +64,7 @@ private fun String.isImagePath(): Boolean =
     substringAfterLast('.', "").lowercase() in IMAGE_EXTENSIONS
 
 private fun createReadFileTool(
-    scope: ConfigurationScope,
+    access: net.weero.measix.pilot.data.enterprise.RealmAccess,
     workspaceId: String,
     approvalRequired: (String) -> Boolean,
     workspaceApplicationService: WorkspaceApplicationService,
@@ -93,10 +93,10 @@ private fun createReadFileTool(
         val registerArtifact: (net.weero.measix.pilot.data.files.OwnedArtifact) -> Unit = { owned ->
             registerUnpublishedResource(artifactStore.unpublishedLease(owned))
         }
-        workspaceApplicationService.executeTool(workspaceId) {
+        workspaceApplicationService.executeTool(workspaceId, access) {
             if (path.isImagePath()) {
                 readImageInRootfs(
-                    scope = scope,
+                    scope = access.scope,
                     path,
                     artifactStore,
                     onArtifactCreated = registerArtifact,
@@ -117,6 +117,7 @@ private fun createReadFileTool(
 )
 
 private fun createWriteFileTool(
+    access: net.weero.measix.pilot.data.enterprise.RealmAccess,
     workspaceId: String,
     approvalRequired: (String) -> Boolean,
     workspaceApplicationService: WorkspaceApplicationService,
@@ -150,7 +151,7 @@ private fun createWriteFileTool(
     contextualExecute = {
         val args = parseWorkspaceWriteArguments(it)
         val approval = approvedByUser
-        val entry = workspaceApplicationService.executeTool(workspaceId) {
+        val entry = workspaceApplicationService.executeTool(workspaceId, access) {
             writeRootfsText(args.path.value, args.text, args.overwrite, approval)
         }
         listOf(UIMessagePart.Text(entry.toJson().toString()))
@@ -158,6 +159,7 @@ private fun createWriteFileTool(
 )
 
 private fun createEditFileTool(
+    access: net.weero.measix.pilot.data.enterprise.RealmAccess,
     workspaceId: String,
     approvalRequired: (String) -> Boolean,
     workspaceApplicationService: WorkspaceApplicationService,
@@ -198,7 +200,7 @@ private fun createEditFileTool(
         val path = args.path.value
         val approval = approvedByUser
 
-        workspaceApplicationService.executeTool(workspaceId) {
+        workspaceApplicationService.executeTool(workspaceId, access) {
             var original = ""
             lateinit var result: ReplaceTextResult
             val entry = updateRootfsText(path, MAX_READ_FILE_BYTES, approval) { content ->
@@ -225,6 +227,7 @@ private fun createEditFileTool(
 )
 
 private fun createShellTool(
+    access: net.weero.measix.pilot.data.enterprise.RealmAccess,
     workspaceId: String,
     approvalRequired: (String) -> Boolean,
     workspaceApplicationService: WorkspaceApplicationService,
@@ -233,7 +236,7 @@ private fun createShellTool(
     name = "workspace_shell",
     description = buildString {
         append("Run a shell command in the bound workspace Rootfs. ")
-        append("cwd is relative to the workspace files root. ")
+        append("cwd is relative to the workspace files root. /upload contains only copies explicitly listed in uploads for this invocation; edits do not change original attachments. ")
         if (!defaultCwd.isNullOrBlank()) {
             append("Defaults to '$defaultCwd'.")
         }
@@ -256,6 +259,13 @@ private fun createShellTool(
                         }
                     )
                 })
+                put("uploads", buildJsonObject {
+                    put("type", "array")
+                    put("maxItems", net.weero.measix.pilot.service.workspace.MAX_WORKSPACE_UPLOADS)
+                    put("uniqueItems", true)
+                    put("items", buildJsonObject { put("type", "string") })
+                    put("description", "Exact /upload/<file> paths to copy into this command. Omitted means no uploads. Total input limit: ${net.weero.measix.pilot.service.workspace.MAX_WORKSPACE_UPLOAD_BYTES / (1024 * 1024)} MiB.")
+                })
                 put("timeout", buildJsonObject {
                     put("type", "integer")
                     put(
@@ -274,8 +284,8 @@ private fun createShellTool(
     },
     execute = {
         val args = parseWorkspaceShellArguments(it, defaultCwd)
-        val result = workspaceApplicationService.executeTool(workspaceId) {
-            executeCommand(args.command, args.cwd, args.timeoutMillis)
+        val result = workspaceApplicationService.executeTool(workspaceId, access) {
+            executeCommand(args.command, args.cwd, args.timeoutMillis, uploads = args.uploads)
         }
         val output = listOf(
             UIMessagePart.Text(

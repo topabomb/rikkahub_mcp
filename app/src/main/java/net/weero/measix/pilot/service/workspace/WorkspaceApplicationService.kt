@@ -1,5 +1,18 @@
 package net.weero.measix.pilot.service.workspace
 
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
+import me.rerere.workspace.ProotLaunchSpec
+import me.rerere.workspace.RootfsPath
+import me.rerere.workspace.WorkspaceBindMount
+import net.weero.measix.pilot.data.enterprise.EnterpriseSessionController
+import net.weero.measix.pilot.data.enterprise.RealmAccess
+import net.weero.measix.pilot.data.files.ArtifactStore
+import net.weero.measix.pilot.data.files.FileUtils
+import net.weero.measix.pilot.service.ApplicationRecoveryGate
+import java.io.File
+import java.nio.file.Files
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import net.weero.measix.pilot.service.ImageSource
@@ -19,9 +32,16 @@ import net.weero.measix.pilot.data.repository.WorkspaceRepository
 import java.io.InputStream
 import java.io.OutputStream
 
-class WorkspaceApplicationService(
+internal const val MAX_WORKSPACE_UPLOADS = 32
+internal const val MAX_WORKSPACE_UPLOAD_BYTES = 64L * 1024 * 1024
+
+class WorkspaceApplicationService internal constructor(
     private val repository: WorkspaceRepository,
     private val terminals: WorkspaceTerminalRuntime,
+    private val artifacts: ArtifactStore,
+    private val sessions: EnterpriseSessionController,
+    private val tempRoot: File,
+    private val recovery: ApplicationRecoveryGate,
 ) {
     private val catalogGate = Mutex()
     private val mutationGates = Array(GATE_STRIPES) { Mutex() }
@@ -157,13 +177,21 @@ class WorkspaceApplicationService(
      */
     suspend fun <T> executeTool(
         workspaceId: String,
+        access: RealmAccess,
         operation: suspend WorkspaceToolSession.() -> T,
     ): T = gated(workspaceId) {
+        recovery.awaitReady()
+        sessions.withRealmAccess(access) { currentCoroutineContext().ensureActive() }
         val workspace = requireWorkspace(workspaceId)
         check(workspace.resolvedShellStatus() == WorkspaceShellStatus.READY) {
             "Workspace shell is not ready: $workspaceId"
         }
-        RepositoryWorkspaceToolSession(repository, workspaceId).operation()
+        val tool = ScopedWorkspaceToolSession(workspaceId, access)
+        try {
+            val result = tool.operation()
+            sessions.withRealmAccess(access) { currentCoroutineContext().ensureActive() }
+            result
+        } finally { tool.open = false }
     }
 
     fun bindViewport(tabId: String, viewport: WorkspaceTerminalViewport): Boolean =
@@ -179,6 +207,61 @@ class WorkspaceApplicationService(
 
     private suspend fun <T> gated(workspaceId: String, block: suspend () -> T): T =
         mutationGates[(workspaceId.hashCode() and Int.MAX_VALUE) % mutationGates.size].withLock { block() }
+
+    private inner class ScopedWorkspaceToolSession(
+        private val workspaceId: String,
+        private val access: RealmAccess,
+    ) : WorkspaceToolSession {
+        var open = true
+        private fun requireOpen() { check(open) { "workspace_tool_session_closed" } }
+
+        override suspend fun readRootfsBytes(path: String, maxBytes: Long): ByteArray = sessions.withRealmAccess(access) {
+            requireOpen()
+            val normalized = RootfsPath.parse(path)
+            if (normalized.isUpload) artifacts.readUpload(access.scope, normalized.value, maxBytes)
+            else repository.readRootfsBytes(workspaceId, normalized.value, maxBytes)
+        }
+
+        override suspend fun writeRootfsText(path: String, text: String, overwrite: Boolean, approvedByUser: Boolean): WorkspaceFileEntry =
+            sessions.withRealmAccess(access) {
+                requireOpen()
+                repository.writeRootfsText(workspaceId, path, text, overwrite, approvedByUser)
+            }
+
+        override suspend fun updateRootfsText(path: String, maxBytes: Long, approvedByUser: Boolean, transform: (String) -> String): WorkspaceFileEntry =
+            sessions.withRealmAccess(access) {
+                requireOpen()
+                repository.updateRootfsText(workspaceId, path, maxBytes, approvedByUser, transform)
+            }
+
+        override suspend fun executeCommand(command: String, cwd: String, timeoutMillis: Long, stdin: ByteArray?, uploads: List<String>): WorkspaceCommandResult {
+            requireOpen()
+            require(uploads.size <= MAX_WORKSPACE_UPLOADS) { "too_many_uploads" }
+            var directory: File? = null
+            var failure: Throwable? = null
+            try {
+                val inputs = withContext(Dispatchers.IO) {
+                    check(tempRoot.isDirectory || tempRoot.mkdirs()) { "workspace_input_directory_unavailable" }
+                    Files.createTempDirectory(tempRoot.toPath(), "workspace-input-").toFile().also { directory = it }
+                }
+                sessions.withRealmAccess(access) { artifacts.copyUploads(access.scope, uploads, inputs, MAX_WORKSPACE_UPLOAD_BYTES) }
+                currentCoroutineContext().ensureActive()
+                return repository.executeCommand(workspaceId, command, cwd, timeoutMillis, stdin,
+                    listOf(WorkspaceBindMount(inputs, ProotLaunchSpec.UPLOAD_DIR)))
+            } catch (error: Throwable) {
+                failure = error
+                throw error
+            } finally {
+                try {
+                    withContext(NonCancellable) {
+                        directory?.let { FileUtils.deleteOwnedTree(it) }
+                    }
+                } catch (cleanup: Throwable) {
+                    failure?.let { if (cleanup !== it) it.addSuppressed(cleanup) } ?: throw cleanup
+                }
+            }
+        }
+    }
 
     private companion object {
         const val GATE_STRIPES = 32
@@ -204,40 +287,6 @@ interface WorkspaceToolSession {
         cwd: String = "",
         timeoutMillis: Long = WorkspaceManager.DEFAULT_COMMAND_TIMEOUT_MS,
         stdin: ByteArray? = null,
+        uploads: List<String> = emptyList(),
     ): WorkspaceCommandResult
-}
-
-private class RepositoryWorkspaceToolSession(
-    private val repository: WorkspaceRepository,
-    private val workspaceId: String,
-) : WorkspaceToolSession {
-    override suspend fun readRootfsBytes(path: String, maxBytes: Long): ByteArray =
-        repository.readRootfsBytes(workspaceId, path, maxBytes)
-
-    override suspend fun writeRootfsText(
-        path: String,
-        text: String,
-        overwrite: Boolean,
-        approvedByUser: Boolean,
-    ): WorkspaceFileEntry = repository.writeRootfsText(workspaceId, path, text, overwrite, approvedByUser)
-
-    override suspend fun updateRootfsText(
-        path: String,
-        maxBytes: Long,
-        approvedByUser: Boolean,
-        transform: (String) -> String,
-    ): WorkspaceFileEntry = repository.updateRootfsText(workspaceId, path, maxBytes, approvedByUser, transform)
-
-    override suspend fun executeCommand(
-        command: String,
-        cwd: String,
-        timeoutMillis: Long,
-        stdin: ByteArray?,
-    ): WorkspaceCommandResult = repository.executeCommand(
-        id = workspaceId,
-        command = command,
-        cwd = cwd,
-        timeoutMillis = timeoutMillis,
-        stdin = stdin,
-    )
 }

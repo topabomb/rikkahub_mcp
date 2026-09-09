@@ -62,10 +62,10 @@ Rootfs 内的主要映射：
 |-------------|----------|----------|
 | `/workspace` | 当前 Workspace 的 `files/` | 模型与用户的主要工作目录 |
 | `/skills` | 应用级技能目录 | 跨 Workspace 共享 |
-| `/upload` | 用户上传目录 | 提示词要求只读；需修改时先复制到 `/workspace` |
+| `/upload` | 原生读取经 ArtifactStore；Shell 为本次授权输入副本 | 原生只读；Shell 可修改副本，原文件不变；PTY 不自动挂载 |
 | `/dev`、`/proc`、`/sys` | Android 对应目录 | 仅存在时挂载，不允许文件 API 直接读取 |
 
-`WorkspaceManager.resolveRootfsPath()` 负责把规范化的 Rootfs 绝对路径映射回宿主文件。`RootfsPath.parse` 消除 `.` / `..` 与重复分隔符，拒绝越过 guest 根、NUL 和反斜线；审批与执行共用规范化后的路径。bind mount 按目标路径长度降序匹配，避免较短前缀抢先命中；`/workspace` 映射到当前 Workspace 文件区，其他路径落到 `linux/`。内核文件系统只能通过 shell 访问。
+`WorkspaceManager.resolveRootfsPath()` 负责把规范化的 Rootfs 绝对路径映射回宿主文件。`RootfsPath.parse` 消除 `.` / `..` 与重复分隔符，拒绝越过 guest 根、NUL 和反斜线；审批与执行共用规范化后的路径。bind mount 按目标路径长度降序匹配，避免较短前缀抢先命中；`/workspace` 映射到当前 Workspace 文件区，其他路径落到 `linux/`。`/upload` 是保留入口：`WorkspaceToolSession` 将读取交给 ArtifactStore，校验原 RealmAccess 的主体、ACTIVE 和发布状态；WorkspaceManager 拒绝直接解析及任何写入/编辑，即使已审批也不能回落到 Linux 同名目录。内核文件系统只能通过 shell 访问。
 
 `WorkspaceStorageArea.FILES` 和 `LINUX` 用于管理页面的直接文件操作；AI 工具使用 Rootfs 绝对路径，以便与 shell 看到同一命名空间。
 
@@ -133,6 +133,8 @@ Workspace 或工具权限后，当前 Turn 的 Provider schema 仍使用 START �
 
 ### Shell 工具
 
+`workspace_shell` 的 `uploads` 显式列出本次需要的 `/upload/<file>`，最多 `MAX_WORKSPACE_UPLOADS` 个，总量不超过 `MAX_WORKSPACE_UPLOAD_BYTES`。参数解析拒绝无效路径和规范化重复；ArtifactStore 在生命周期锁内复验并复制，WorkspaceApplicationService 持有单次临时目录。空列表也绑定空目录，不暴露历史输入。副本可修改，原 Artifact 不变；需要保留的结果须明确写到共享 `/workspace`。复制及命令取消均沿原调用收口，目录清理不跟随符号链接。
+
 `workspace_shell` 的 cwd 相对 `/workspace`；默认超时来自 `WorkspaceManager.DEFAULT_COMMAND_TIMEOUT_MS`，调用参数可在工具上限内覆盖。结果为：
 
 ```json
@@ -163,7 +165,7 @@ WorkspaceApplicationService.executeTool()
 
 stdout、stderr 和可选 stdin 使用独立 daemon 线程。
 `readResult` 在 `stdin == null` 时立即关闭管道，向子进程声明没有输入；等待 EOF 的 CLI（`cat`、`read`、
-`sort` 等）不会挂到超时。有输入时仍由唯一 `StreamWriter` 写入、flush 并 close。超时会 `destroyForcibly()`，返回 `exitCode=-1` 与 `timedOut=true`。协程取消通过 `runInterruptible` 转换为线程中断；`readResult()` 在中断路径强制销毁进程并继续传播取消，确保停止生成不会留下后台 PRoot。
+`sort` 等）不会挂到超时。有输入时仍由唯一 `StreamWriter` 写入、flush 并 close。超时会 `destroyForcibly()` 并等待实际进程退出，返回 `exitCode=-1` 与 `timedOut=true`。协程取消通过 `runInterruptible` 转换为线程中断；`readResult()` 保留原中断，销毁并等待实际退出后才传播。重复中断或销毁失败也不能提前释放输入副本；清理失败附加到原错误。Session 锁只覆盖授权和文件复制，不包住 Shell 等待；既有 Workspace 命令门仍保护安装与删除互斥。该协议约束应用交付的输入及其生命周期，不把 PRoot 声称为恶意进程的内核安全边界。
 
 ## 7. 交互终端
 
@@ -180,7 +182,7 @@ Workspace command 仍由 `WorkspaceApplicationService` 拥有；持久化列表/
 
 `WorkspaceApplicationService.installRootfs` 与 `deleteWorkspace` 必须在同一 Workspace command gate 内先 `closeWorkspace` 并等待全部创建 Job/PTY 收口，再调用 Repository。删除与故障恢复协议见下文“状态与删除”。
 
-shell 工具与交互终端都消费同一份 `ProotLaunchSpec`：executable、loader、kernel spoof、`/workspace` bind、应用级 `/skills` `/upload`、内核文件系统以及 `PWD` 都来自该值对象。二者只把 spec 交给各自进程 adapter，不再手写第二套 argv/env/bind。受管 Tool Output 不挂载到 Rootfs；模型只能使用 conversation-scoped `read_tool_output` / `grep_tool_output` 回查。
+shell 工具与交互终端都消费同一份 `ProotLaunchSpec`：executable、loader、kernel spoof、`/workspace` bind、应用级 `/skills`、内核文件系统以及 `PWD` 都来自该值对象。二者只把 spec 交给各自进程 adapter，不再手写第二套 argv/env/bind。Shell 另传单次调用的 `/upload` 副本挂载；全局挂载表与 PTY 均不包含应用上传目录。受管 Tool Output 不挂载到 Rootfs；模型只能使用 conversation-scoped `read_tool_output` / `grep_tool_output` 回查。
 
 ## 8. Rootfs 安装与修补
 

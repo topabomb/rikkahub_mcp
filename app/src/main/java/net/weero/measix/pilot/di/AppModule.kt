@@ -83,7 +83,7 @@ val appModule = module {
     single { BackupRestoreApplicationService(get(), get(), get()) }
     single { ProviderSettingsApplicationService(get(), get()) }
     single { WorkspaceTerminalRuntime(get(), get()) }
-    single { WorkspaceApplicationService(get(), get()) }
+    single { WorkspaceApplicationService(get(), get(), get(), get(), java.io.File(get<Context>().cacheDir, "temp"), get()) }
     single { WorkspaceQueryService(get(), get()) }
 
     single {

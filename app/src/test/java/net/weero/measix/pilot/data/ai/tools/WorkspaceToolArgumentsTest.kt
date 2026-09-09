@@ -36,6 +36,17 @@ class WorkspaceToolArgumentsTest {
         availability = TurnInteractionCapability.FULL,
     )
 
+    @Test fun uploadsAreExplicitBoundedAndCanonicalBeforeApproval() {
+        listOf("null", "{}", "[null]", "[1]", "[\"/workspace/a\"]", "[\"/upload/a\",\"/tmp/../upload/a\"]",
+            (1..33).joinToString(prefix = "[", postfix = "]") { "\"/upload/a$it\"" }).forEach { value ->
+            assertNotNull(value, validateWorkspaceArguments { parseWorkspaceShellArguments(Json.parseToJsonElement("{\"command\":\"ls\",\"uploads\":$value}")) })
+        }
+        assertEquals(emptyList<String>(), parseWorkspaceShellArguments(Json.parseToJsonElement("{\"command\":\"ls\"}")).uploads)
+        assertEquals(listOf("/upload/a"), parseWorkspaceShellArguments(Json.parseToJsonElement("{\"command\":\"cat /upload/a\",\"uploads\":[\"/tmp/../upload/a\"]}")).uploads)
+        assertNotNull(validateWorkspaceArguments { parseWorkspaceWriteArguments(Json.parseToJsonElement("{\"path\":\"/upload/a\",\"text\":\"bad\"}")) })
+        assertNotNull(validateWorkspaceArguments { parseWorkspaceEditArguments(Json.parseToJsonElement("{\"path\":\"/upload/a\",\"old_text\":\"a\",\"new_text\":\"b\"}")) })
+    }
+
     @Test
     fun validationReturnsStructuredDomainDetailsWithoutReplayEnvelope() {
         val error = validateWorkspaceArguments { parseWorkspaceWriteArguments(buildJsonObject {}) }
@@ -68,8 +79,8 @@ class WorkspaceToolArgumentsTest {
         val session = mockk<WorkspaceToolSession>()
         val context = mockk<ToolExecutionContext>()
         every { context.approvedByUser } returns false
-        coEvery { service.executeTool<WorkspaceFileEntry>(any(), any()) } coAnswers {
-            secondArg<suspend WorkspaceToolSession.() -> WorkspaceFileEntry>().invoke(session)
+        coEvery { service.executeTool<WorkspaceFileEntry>(any(), any(), any()) } coAnswers {
+            thirdArg<suspend WorkspaceToolSession.() -> WorkspaceFileEntry>().invoke(session)
         }
         coEvery { session.writeRootfsText(any(), any(), any(), any()) } returns WorkspaceFileEntry("/etc/a", "a", false, 1, 1)
         val tool = createWorkspaceTools(net.weero.measix.pilot.data.enterprise.RealmAccess.Personal, "workspace", service, emptyMap(), mockk<ArtifactStore>())

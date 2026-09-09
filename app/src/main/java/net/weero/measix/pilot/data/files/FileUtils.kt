@@ -15,6 +15,27 @@ import java.io.FileInputStream
 internal class FilePayloadTooLargeException : java.io.IOException("File payload exceeds the size limit")
 
 object FileUtils {
+    /** The caller owns this retired tree; symbolic links are deleted, never followed. */
+    internal suspend fun deleteOwnedTree(directory: File) = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+        val current = kotlinx.coroutines.currentCoroutineContext()
+        val path = directory.toPath()
+        if (java.nio.file.Files.exists(path, java.nio.file.LinkOption.NOFOLLOW_LINKS)) {
+            java.nio.file.Files.walkFileTree(path, object : java.nio.file.SimpleFileVisitor<java.nio.file.Path>() {
+                override fun visitFile(file: java.nio.file.Path, attrs: java.nio.file.attribute.BasicFileAttributes): java.nio.file.FileVisitResult {
+                    current.ensureActive()
+                    java.nio.file.Files.delete(file)
+                    return java.nio.file.FileVisitResult.CONTINUE
+                }
+                override fun postVisitDirectory(dir: java.nio.file.Path, error: java.io.IOException?): java.nio.file.FileVisitResult {
+                    current.ensureActive()
+                    if (error != null) throw error
+                    java.nio.file.Files.delete(dir)
+                    return java.nio.file.FileVisitResult.CONTINUE
+                }
+            })
+        }
+    }
+
     /** Owners authorize and protect the file before entering this bounded, cancellable IO primitive. */
     internal suspend fun readBoundedBytes(file: File, maxBytes: Long): ByteArray =
         kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {

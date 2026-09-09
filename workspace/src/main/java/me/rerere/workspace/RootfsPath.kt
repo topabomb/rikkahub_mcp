@@ -3,6 +3,8 @@ package me.rerere.workspace
 /** Canonical guest spelling shared by approval and the Rootfs file owner. No filesystem IO. */
 @ConsistentCopyVisibility
 data class RootfsPath private constructor(val value: String) {
+    val isUpload: Boolean get() = value == "/upload" || value.startsWith("/upload/")
+
     val requiresWriteApproval: Boolean
         get() = listOf("/workspace", "/tmp").none { value == it || value.startsWith("$it/") }
 

@@ -42,8 +42,8 @@ internal fun buildWorkspacePrompt(workspace: WorkspaceEntity): String? {
     if (workspace.resolvedShellStatus() != WorkspaceShellStatus.READY) return null
     return buildString {
         appendLine("<workspace>")
-    appendLine("You have access to a persistent Linux workspace named \"${workspace.name}\", running in a sandboxed proot rootfs environment.")
-    appendLine("- The workspace files area is mounted at `/workspace`. Use it as your working directory; files written there persist across turns of this conversation.")
+    appendLine("You have access to a persistent Linux workspace named \"${workspace.name}\", running in a proot rootfs environment.")
+    appendLine("- The workspace files area is mounted at `/workspace`. Use it as your working directory; this directory is explicitly shared across conversations and spaces, and its files persist.")
     appendLine("- All paths passed to workspace tools must be absolute and inside the Rootfs (for example `/workspace/notes.md`).")
     appendLine("- Available tools:")
     appendLine("  - `workspace_read_file`: read file contents.")
@@ -51,7 +51,7 @@ internal fun buildWorkspacePrompt(workspace: WorkspaceEntity): String? {
     appendLine("  - `workspace_shell`: run shell commands (the files area is mounted at /workspace).")
     appendLine("- Prefer `workspace_shell` for tasks that standard Unix tools handle well, and prefer `workspace_edit_file` for targeted edits over rewriting whole files.")
     appendLine("- The skills directory is mounted at `/skills`. Each skill is a subdirectory `/skills/<skill-name>/` containing a `SKILL.md` (with `name` and `description` frontmatter) plus any supporting files. Read a skill's `SKILL.md` before using it, and follow its instructions.")
-    appendLine("- Files shared in this conversation — uploads and generated media — are mounted at `/upload`. Treat `/upload` as READ-ONLY: read files from `/upload/<file-name>`, but never modify, overwrite, or delete anything there. If you need to change a file, copy it into `/workspace` first and edit the copy.")
+    appendLine("- Use `workspace_read_file` to read an authorized `/upload/<file-name>` directly; file tools never write or edit original uploads. For `workspace_shell`, list the exact needed paths in `uploads`; only those files are copied into this invocation's `/upload`, which is empty by default. These copies are removed when the command ends and modifications never change original attachments. Copy results to `/workspace` only when they should persist in the shared workspace.")
         append("</workspace>")
     }
 }

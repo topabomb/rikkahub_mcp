@@ -13,12 +13,12 @@ class ProotLaunchSpecTest {
     val tmp = TemporaryFolder()
 
     @Test
-    fun `app bind mounts cover skills and upload`() {
+    fun `shared app mounts exclude private uploads`() {
         val appFilesDir = tmp.newFolder("app-files")
         val mounts = ProotLaunchSpec.appBindMounts(appFilesDir)
 
         assertEquals(
-            listOf(ProotLaunchSpec.SKILLS_DIR, ProotLaunchSpec.UPLOAD_DIR),
+            listOf(ProotLaunchSpec.SKILLS_DIR),
             mounts.map { it.target },
         )
         mounts.forEach { mount ->

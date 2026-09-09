@@ -19,7 +19,7 @@ internal data class WorkspaceEditArguments(
     val newText: String,
     val replaceAll: Boolean,
 )
-internal data class WorkspaceShellArguments(val command: String, val cwd: String, val timeoutMillis: Long)
+internal data class WorkspaceShellArguments(val command: String, val cwd: String, val timeoutMillis: Long, val uploads: List<String>)
 
 /** These parsers are pure and shared by validation, approval classification, and execution. */
 internal fun parseWorkspaceReadArguments(input: JsonElement): RootfsPath =
@@ -28,7 +28,7 @@ internal fun parseWorkspaceReadArguments(input: JsonElement): RootfsPath =
 internal fun parseWorkspaceWriteArguments(input: JsonElement): WorkspaceWriteArguments {
     val args = input.objectArguments()
     return WorkspaceWriteArguments(
-        RootfsPath.parse(args.requiredString("path")),
+        RootfsPath.parse(args.requiredString("path")).also { require(!it.isUpload) { "/upload is read-only" } },
         args.requiredString("text"),
         args.optionalBoolean("overwrite", true),
     )
@@ -37,7 +37,7 @@ internal fun parseWorkspaceWriteArguments(input: JsonElement): WorkspaceWriteArg
 internal fun parseWorkspaceEditArguments(input: JsonElement): WorkspaceEditArguments {
     val args = input.objectArguments()
     return WorkspaceEditArguments(
-        RootfsPath.parse(args.requiredString("path")),
+        RootfsPath.parse(args.requiredString("path")).also { require(!it.isUpload) { "/upload is read-only" } },
         args.requiredString("old_text").also { require(it.isNotEmpty()) { "old_text must not be empty" } },
         args.requiredString("new_text"),
         args.optionalBoolean("replace_all", false),
@@ -60,6 +60,17 @@ internal fun parseWorkspaceShellArguments(input: JsonElement, defaultCwd: String
         args.requiredString("command").also { require(it.isNotBlank()) { "command must not be empty" } },
         normalizeWorkspaceCwd(cwd),
         timeout,
+        if (!args.containsKey("uploads")) emptyList() else {
+            val entries = requireNotNull(args["uploads"] as? kotlinx.serialization.json.JsonArray) { "uploads must be an array" }
+            require(entries.size <= net.weero.measix.pilot.service.workspace.MAX_WORKSPACE_UPLOADS) { "too_many_uploads" }
+            entries.map { entry ->
+                val value = requireNotNull(entry as? JsonPrimitive) { "upload must be a string" }
+                require(value.isString) { "upload must be a string" }
+                val path = RootfsPath.parse(value.content).value
+                requireNotNull(net.weero.measix.pilot.data.files.LocalToolPath.parseUploadToolPath(path)) { "invalid_upload_path" }
+                path
+            }.also { require(it.distinct().size == it.size) { "duplicate_upload_path" } }
+        },
     )
 }
 

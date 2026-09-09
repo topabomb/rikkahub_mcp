@@ -47,9 +47,7 @@ fun Process.readResult(timeoutMillis: Long, stdin: ByteArray? = null): Workspace
         ?: closeStdin()
     try {
         val finished = waitFor(timeoutMillis, TimeUnit.MILLISECONDS)
-        if (!finished) {
-            destroyForcibly()
-        }
+        if (!finished) terminateAndAwait()
         stdinWriter?.join(1_000)
         stdout.join(1_000)
         stderr.join(1_000)
@@ -61,14 +59,26 @@ fun Process.readResult(timeoutMillis: Long, stdin: ByteArray? = null): Workspace
             truncated = stdout.truncated || stderr.truncated,
         )
     } catch (e: InterruptedException) {
-        // 调用方线程被中断（如协程取消时的 runInterruptible），杀掉进程避免命令继续执行
-        destroyForcibly()
-        // 进程被杀后 stdout/stderr 会关闭, 这里 join 回收两个采集线程, 避免每次取消泄漏一对线程
-        stdinWriter?.join(1_000)
-        stdout.join(1_000)
-        stderr.join(1_000)
+        // Cancellation cannot release invocation files while the process still owns them.
+        for (cleanup in listOf({ terminateAndAwait() }, { stdinWriter?.join(1_000); Unit }, { stdout.join(1_000) }, { stderr.join(1_000) })) {
+            try { cleanup() }
+            catch (error: Throwable) { if (error !== e) e.addSuppressed(error) }
+        }
         throw e
     }
+}
+
+/** Process.destroyForcibly is asynchronous; the invocation owner waits for actual termination. */
+private fun Process.terminateAndAwait() {
+    var failure: Throwable? = null
+    try { destroyForcibly() } catch (error: Throwable) { failure = error }
+    while (true) {
+        try { waitFor(); break }
+        catch (interrupted: InterruptedException) {
+            if (failure == null) failure = interrupted else if (failure !== interrupted) failure.addSuppressed(interrupted)
+        }
+    }
+    failure?.let { throw it }
 }
 
 /** 立即向子进程声明"没有输入"；关闭失败只可能来自已退出的进程，不改变退出状态语义。 */

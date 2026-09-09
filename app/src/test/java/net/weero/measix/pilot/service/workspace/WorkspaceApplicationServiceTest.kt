@@ -16,6 +16,40 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class WorkspaceApplicationServiceTest {
+    @get:org.junit.Rule val temporary = org.junit.rules.TemporaryFolder()
+    private fun workspaceService(repository: WorkspaceRepository, terminals: WorkspaceTerminalRuntime) = WorkspaceApplicationService(
+        repository, terminals, mockk(),
+        net.weero.measix.pilot.data.enterprise.EnterpriseSessionController(net.weero.measix.pilot.data.enterprise.EnterpriseAppliedStore(temporary.newFolder())),
+        temporary.newFolder(), net.weero.measix.pilot.service.ApplicationRecoveryGate().apply { ready() },
+    )
+
+    @Test fun `cancelled input preparation cleans its partial directory and expired capabilities cannot escape`() = runTest {
+        val repository = mockk<WorkspaceRepository>()
+        coEvery { repository.getById("id") } returns workspace()
+        val artifacts = mockk<net.weero.measix.pilot.data.files.ArtifactStore>()
+        val started = CompletableDeferred<java.io.File>()
+        coEvery { artifacts.copyUploads(any(), any(), any(), any()) } coAnswers {
+            val dir = thirdArg<java.io.File>()
+            java.io.File(dir, "partial.txt").writeText("partial")
+            started.complete(dir)
+            kotlinx.coroutines.awaitCancellation()
+        }
+        val service = WorkspaceApplicationService(repository, mockk(), artifacts,
+            net.weero.measix.pilot.data.enterprise.EnterpriseSessionController(net.weero.measix.pilot.data.enterprise.EnterpriseAppliedStore(temporary.newFolder())),
+            temporary.newFolder(), net.weero.measix.pilot.service.ApplicationRecoveryGate().apply { ready() })
+        val access = net.weero.measix.pilot.data.enterprise.RealmAccess.Personal
+        val request = async { service.executeTool("id", access) { executeCommand("cat", uploads = listOf("/upload/a")) } }
+        val dir = started.await()
+        assertTrue(dir.isDirectory)
+        request.cancel()
+        request.join()
+        assertFalse(dir.exists())
+        coVerify(exactly = 0) { repository.executeCommand(any(), any(), any(), any(), any(), any()) }
+        val expired = service.executeTool("id", access) { this }
+        assertTrue(runCatching { expired.readRootfsBytes("/workspace/a", 10) }.isFailure)
+        coVerify(exactly = 0) { repository.readRootfsBytes(any(), any(), any()) }
+    }
+
     @Test fun `image reads the captured area and rejects changed files before and after IO`() = runTest {
         val repository = mockk<WorkspaceRepository>()
         coEvery { repository.getById("id") } returns workspace()
@@ -29,7 +63,7 @@ class WorkspaceApplicationServiceTest {
             arg<java.io.OutputStream>(3).write(bytes)
             if (changeDuringRead) current = original.copy(updatedAt = 11L)
         }
-        val source = WorkspaceApplicationService(repository, mockk()).imageSource("id", area, original)
+        val source = workspaceService(repository, mockk()).imageSource("id", area, original)
         org.junit.Assert.assertArrayEquals(bytes, source.readBytes())
         current = original.copy(updatedAt = 11L)
         assertTrue(runCatching { source.requireAccess() }.isFailure)
@@ -55,7 +89,7 @@ class WorkspaceApplicationServiceTest {
         coEvery { repository.getById("id") } returns workspace
         coEvery { terminals.closeWorkspace("root") } returns Unit
         coEvery { repository.delete("id") } returns true
-        val service = WorkspaceApplicationService(repository, terminals)
+        val service = workspaceService(repository, terminals)
 
         val rename = async { service.renameWorkspace("id", "Renamed") }
         renameStarted.await()
@@ -84,7 +118,7 @@ class WorkspaceApplicationServiceTest {
         coEvery { repository.getById("id") } returns workspace
         coEvery { terminals.closeWorkspace("root") } returns Unit
         coEvery { repository.delete("id") } returns true
-        val service = WorkspaceApplicationService(repository, terminals)
+        val service = workspaceService(repository, terminals)
 
         val write = async { service.writeText("id", "notes.md", "body") }
         writeStarted.await()
@@ -107,10 +141,10 @@ class WorkspaceApplicationServiceTest {
         coEvery { repository.getById("id") } returns workspace()
         coEvery { terminals.closeWorkspace("root") } returns Unit
         coEvery { repository.delete("id") } returns true
-        val service = WorkspaceApplicationService(repository, terminals)
+        val service = workspaceService(repository, terminals)
 
         val tool = async {
-            service.executeTool("id") {
+            service.executeTool("id", net.weero.measix.pilot.data.enterprise.RealmAccess.Personal) {
                 toolStarted.complete(Unit)
                 finishTool.await()
             }
@@ -139,7 +173,7 @@ class WorkspaceApplicationServiceTest {
             updatedAt = 1,
         )
 
-        val result = WorkspaceApplicationService(repository, terminals).createTerminal("id")
+        val result = workspaceService(repository, terminals).createTerminal("id")
 
         assertEquals(WorkspaceTerminalCreateResult.NotReady, result)
         coVerify(exactly = 0) { terminals.create(any(), any()) }
@@ -165,7 +199,7 @@ class WorkspaceApplicationServiceTest {
             true
         }
 
-        WorkspaceApplicationService(repository, terminals).installRootfs("id", "url") {}
+        workspaceService(repository, terminals).installRootfs("id", "url") {}
 
         assertEquals(listOf("close", "install"), calls)
     }
@@ -192,7 +226,7 @@ class WorkspaceApplicationServiceTest {
             true
         }
         coEvery { terminals.create("root", any()) } returns WorkspaceTerminalCreateResult.Created("tab")
-        val service = WorkspaceApplicationService(repository, terminals)
+        val service = workspaceService(repository, terminals)
 
         val install = async { service.installRootfs("id", "url") {} }
         mutationStarted.await()
@@ -219,11 +253,11 @@ class WorkspaceApplicationServiceTest {
             prepareUnderGate = secondArg()
             WorkspaceTerminalCreateResult.Created("tab")
         }
-        val service = WorkspaceApplicationService(repository, terminals)
+        val service = workspaceService(repository, terminals)
         assertEquals(WorkspaceTerminalCreateResult.Created("tab"), service.createTerminal("id"))
 
         val tool = async {
-            service.executeTool("id") {
+            service.executeTool("id", net.weero.measix.pilot.data.enterprise.RealmAccess.Personal) {
                 toolStarted.complete(Unit)
                 finishTool.await()
             }
