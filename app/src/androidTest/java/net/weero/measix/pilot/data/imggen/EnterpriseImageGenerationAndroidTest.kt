@@ -95,6 +95,13 @@ class EnterpriseImageGenerationAndroidTest {
             try { assertEquals(512, bitmap.width) } finally { bitmap.recycle() }
             assertEquals(3, repository.observeAllMedia(packet.identity.scope).first().size)
             assertTrue(repository.observeAllMedia(ConfigurationScope.Personal).first().isEmpty())
+            val referenceOwner = Job()
+            val referenceDirectory = File(root, "references").apply { check(mkdirs()) }
+            val imageFiles = net.weero.measix.pilot.service.FileManagementApplicationService(artifacts, mediaStore, gate, sessions)
+            val importedReference = imageFiles.importImageReference(context, android.net.Uri.fromFile(generated.media.first().canonicalFile),
+                referenceDirectory, original, referenceOwner)
+            assertTrue(importedReference.image.readBytes().isNotEmpty())
+            assertEquals(original, importedReference.selection)
             val mediaId = generated.media.first().mediaId
             val enterpriseAssistant = packet.identity.reference(packet.configuration.assistants.first().id)
             for (assistantId in listOf(userAssistant.id, enterpriseAssistant)) {
@@ -133,6 +140,17 @@ class EnterpriseImageGenerationAndroidTest {
             assertEquals(beforeArtifactIds, db.artifactDao().listByState("ACTIVE").map { it.id })
             assertTrue(backgrounds.replaceGeneratedBackground(original.access, enterpriseAssistant, mediaId).updated)
             sessions.selectEnterpriseFixture()
+            try { importedReference.image.readBytes(); fail("old reference remained readable") }
+            catch (_: EnterpriseConfigurationException) { }
+            val referenceFiles = referenceDirectory.listFiles()!!.map { it.name }
+            try {
+                imageFiles.importImageReference(context, android.net.Uri.fromFile(generated.media.first().canonicalFile),
+                    referenceDirectory, original, referenceOwner)
+                fail("stale picker was accepted")
+            } catch (_: EnterpriseConfigurationException) { }
+            assertEquals(referenceFiles, referenceDirectory.listFiles()!!.map { it.name })
+            referenceOwner.cancel()
+            assertTrue(importedReference.file.delete())
             val beforeRejected = settings.snapshotUserDocument()
             val stale = backgrounds.replaceUserSelectedBackground(AssistantBackgroundTarget.Page(original, userAssistant.id), inline)
             assertFalse(stale.updated)

@@ -82,17 +82,11 @@ import androidx.paging.compose.itemContentType
 import androidx.paging.compose.itemKey
 import coil3.compose.AsyncImage
 import com.dokar.sonner.ToastType
-import java.io.File
-import kotlin.uuid.Uuid
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import me.rerere.ai.provider.ModelType
 import me.rerere.ai.ui.ImageGenSize
-import me.rerere.common.android.appTempFolder
 import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.Add01
 import me.rerere.hugeicons.stroke.ArrowUp02
@@ -105,7 +99,6 @@ import me.rerere.hugeicons.stroke.Image03
 import me.rerere.hugeicons.stroke.Tools
 import net.weero.measix.pilot.R
 import net.weero.measix.pilot.data.datastore.Settings
-import net.weero.measix.pilot.data.files.FileUtils
 import net.weero.measix.pilot.data.imggen.imageGenerationFailureStringRes
 import net.weero.measix.pilot.service.MediaExportService
 import net.weero.measix.pilot.ui.adaptive.AdaptiveModal
@@ -121,7 +114,6 @@ import net.weero.measix.pilot.ui.components.ui.OutlinedNumberInput
 import net.weero.measix.pilot.ui.components.ui.rememberImageBackgroundHost
 import net.weero.measix.pilot.ui.components.ui.shortGeneratedLabel
 import net.weero.measix.pilot.ui.context.LocalToaster
-import net.weero.measix.pilot.utils.ImageUtils
 import org.koin.androidx.compose.koinViewModel
 import org.koin.compose.koinInject
 
@@ -322,7 +314,6 @@ private fun ImageGenScreen(
             vm = vm,
             isGenerating = isGenerating,
             referenceImages = referenceImages,
-            settings = settings,
             onShowSettings = { showSettingsSheet = true },
             modifier = Modifier
         )
@@ -358,60 +349,22 @@ private fun InputBar(
     prompt: String,
     vm: ImgGenVM,
     isGenerating: Boolean,
-    referenceImages: List<String>,
-    settings: Settings,
+    referenceImages: List<net.weero.measix.pilot.service.TemporaryImage>,
     onShowSettings: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val context = LocalContext.current
     val toaster = LocalToaster.current
     val scope = rememberCoroutineScope()
     val importFailed = stringResource(R.string.imggen_page_reference_import_failed)
     val addReferenceImage = stringResource(R.string.imggen_page_add_reference_image)
     val imagePickerLauncher =
         rememberLauncherForActivityResult(ActivityResultContracts.GetMultipleContents()) { selectedUris ->
-            if (selectedUris.isNotEmpty()) {
-                scope.launch {
-                    val created = mutableListOf<String>()
-                    var failed = 0
-                    try {
-                        selectedUris.forEach { uri ->
-                            val path = try {
-                                withContext(Dispatchers.IO) {
-                                    val bitmap = ImageUtils.loadOptimizedBitmap(context, uri, maxSize = 2048)
-                                        ?: error("Failed to decode image")
-                                    val pngBytes = try {
-                                        FileUtils.compressBitmapToPng(bitmap)
-                                    } finally {
-                                        bitmap.recycle()
-                                    }
-                                    val file = File(context.appTempFolder, "imggen_ref_${Uuid.random()}.png")
-                                    try {
-                                        file.writeBytes(pngBytes)
-                                        file.absolutePath
-                                    } catch (error: Throwable) {
-                                        file.delete()
-                                        throw error
-                                    }
-                                }
-                            } catch (cancelled: CancellationException) {
-                                throw cancelled
-                            } catch (error: Exception) {
-                                failed += 1
-                                null
-                            }
-                            path?.let(created::add)
-                        }
-                        failed += vm.addReferenceImages(created)
-                        created.clear()
-                        if (failed > 0) toaster.show(importFailed, type = ToastType.Error)
-                    } catch (cancelled: CancellationException) {
-                        withContext(NonCancellable + Dispatchers.IO) {
-                            created.forEach { File(it).delete() }
-                        }
-                        throw cancelled
-                    }
-                }
+            val target = vm.takeReferenceImport()
+            if (target != null && selectedUris.isNotEmpty()) scope.launch {
+                try {
+                    if (vm.importReferenceImages(target, selectedUris) > 0) toaster.show(importFailed, type = ToastType.Error)
+                } catch (cancelled: CancellationException) { throw cancelled }
+                catch (_: Exception) { toaster.show(importFailed, type = ToastType.Error) }
             }
         }
 
@@ -468,7 +421,9 @@ private fun InputBar(
             }
 
             IconButton(
-                onClick = { imagePickerLauncher.launch("image/*") }
+                onClick = {
+                    if (vm.beginReferenceImport()) imagePickerLauncher.launch("image/*")
+                }
             ) {
                 Icon(
                     imageVector = HugeIcons.Add01,
@@ -522,8 +477,8 @@ private fun InputBar(
 
 @Composable
 private fun ReferenceImagesRow(
-    images: List<String>,
-    onRemove: (String) -> Unit,
+    images: List<net.weero.measix.pilot.service.TemporaryImage>,
+    onRemove: (net.weero.measix.pilot.service.TemporaryImage) -> Unit,
 ) {
     Row(
         modifier = Modifier
@@ -540,7 +495,7 @@ private fun ReferenceImagesRow(
             ) {
                 Box {
                     AsyncImage(
-                        model = File(image),
+                        model = image.image,
                         contentDescription = null,
                         contentScale = ContentScale.Crop,
                         modifier = Modifier.fillMaxSize()

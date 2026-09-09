@@ -2,6 +2,9 @@ package net.weero.measix.pilot.ui.pages.imggen
 
 import me.rerere.common.configuration.ConfigurationReference
 import android.app.Application
+import android.net.Uri
+import net.weero.measix.pilot.service.TemporaryImage
+import net.weero.measix.pilot.data.enterprise.RealmSelection
 import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
@@ -63,6 +66,8 @@ private fun GeneratedMediaUiModel.toGeneratedImage(files: net.weero.measix.pilot
     )
 }
 
+internal data class ImageReferenceImport(val selection: RealmSelection, val owner: Job)
+
 class ImgGenVM internal constructor(
     context: Application,
     private val settingsStore: SettingsStore,
@@ -113,8 +118,13 @@ class ImgGenVM internal constructor(
         images.filter { it.selection == selected }
     }.stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
 
-    private val _referenceImages = MutableStateFlow<List<String>>(emptyList())
-    val referenceImages: StateFlow<List<String>> = _referenceImages
+    private var referenceOwner = Job(viewModelScope.coroutineContext[Job])
+    private var pendingReferenceImport: ImageReferenceImport? = null
+    private val referenceReaders = java.util.concurrent.ConcurrentHashMap<String, Job>()
+    private val _referenceImages = MutableStateFlow<List<TemporaryImage>>(emptyList())
+    internal val referenceImages: StateFlow<List<TemporaryImage>> = combine(_referenceImages, realmSelection) { images, selected ->
+        images.filter { it.selection == selected }
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
 
     val generatedImages: Flow<PagingData<GeneratedImage>> = fileManagementQueryService
         .observeGeneratedPaging()
@@ -141,21 +151,51 @@ class ImgGenVM internal constructor(
         _size.value = size
     }
 
-    fun addReferenceImages(paths: List<String>): Int {
-        val retained = (_referenceImages.value + paths).distinct().take(MAX_REFERENCE_IMAGES)
-        val rejected = paths.filterNot(retained::contains)
-        _referenceImages.value = retained
-        deleteReferenceFiles(rejected)
-        return rejected.size
+    internal fun beginReferenceImport(): Boolean {
+        if (pendingReferenceImport != null) return false
+        val selected = realmSelection.value ?: return false
+        pendingReferenceImport = ImageReferenceImport(selected, referenceOwner)
+        return true
     }
 
-    fun removeReferenceImage(path: String) {
-        _referenceImages.value = _referenceImages.value.filterNot { it == path }
-        deleteReferenceFiles(listOf(path))
+    internal fun takeReferenceImport(): ImageReferenceImport? = pendingReferenceImport.also { pendingReferenceImport = null }
+
+    internal suspend fun importReferenceImages(target: ImageReferenceImport, uris: List<Uri>): Int {
+        val created = mutableListOf<TemporaryImage>()
+        var failed = 0
+        val capacity = (MAX_REFERENCE_IMAGES - _referenceImages.value.size).coerceAtLeast(0)
+        try {
+            target.owner.ensureActive()
+            configurationQueryService.requireSelection(target.selection)
+            for (uri in uris.take(capacity)) {
+                try {
+                    created += fileManagementApplicationService.importImageReference(getApplication<Application>(), uri,
+                        getApplication<Application>().appTempFolder, target.selection, target.owner)
+                } catch (cancelled: CancellationException) { throw cancelled }
+                catch (_: Exception) { failed++ }
+            }
+            configurationQueryService.requireSelection(target.selection)
+            target.owner.ensureActive()
+            check(target.owner === referenceOwner && realmSelection.value == target.selection) { "reference_import_revoked" }
+            val available = (MAX_REFERENCE_IMAGES - _referenceImages.value.size).coerceAtLeast(0)
+            val accepted = created.take(available)
+            _referenceImages.value += accepted
+            created.removeAll(accepted.toSet())
+            return failed + (uris.size - capacity).coerceAtLeast(0) + created.size
+        } finally {
+            deleteReferenceFilesNow(created.map { it.file.path })
+        }
+    }
+
+    internal fun removeReferenceImage(image: TemporaryImage) {
+        _referenceImages.value = _referenceImages.value.filterNot { it == image }
+        deleteReferenceFiles(listOf(image.file.path))
     }
 
     fun clearReferenceImages() {
-        deleteReferenceFiles(_referenceImages.value)
+        referenceOwner.cancel()
+        referenceOwner = Job(viewModelScope.coroutineContext[Job])
+        deleteReferenceFiles(_referenceImages.value.map { it.file.path })
         _referenceImages.value = emptyList()
     }
 
@@ -177,10 +217,12 @@ class ImgGenVM internal constructor(
 
     private fun submitImage(edit: Boolean) {
         val requestPrompt = _prompt.value
-        val sourceImages = if (edit) _referenceImages.value.toList() else emptyList()
-        if (requestPrompt.isBlank() || (edit && sourceImages.isEmpty())) return
+        val references = if (edit) _referenceImages.value.toList() else emptyList()
+        if (requestPrompt.isBlank() || (edit && references.isEmpty())) return
         val catalog = (modelCatalog.value as? net.weero.measix.pilot.service.ModelCatalogReadState.Available)?.catalog ?: return
         val selection = catalog.selection ?: return
+        if (references.any { it.selection != selection }) return
+        val sourceImages = references.map { it.file.path }
         val chosen = catalog.roleSelections[net.weero.measix.pilot.data.configuration.ResourceSelectionSlot.IMAGE_MODEL]
         val model = chosen?.reference?.let(catalog::find)?.model
         if (chosen?.isAvailable != true || model == null) { _error.value = "image_model_unavailable"; return }
@@ -189,7 +231,7 @@ class ImgGenVM internal constructor(
         val previous = cancelJob
         previous?.cancel()
         val token = Any().also { generationToken = it }
-        cancelJob = viewModelScope.launch(start = CoroutineStart.ATOMIC) {
+        val next = viewModelScope.launch(start = CoroutineStart.ATOMIC) {
             val requestJob = requireNotNull(currentCoroutineContext()[Job])
             fun isCurrent() = generationToken === token && realmSelection.value == selection
             var previewFile: File? = null
@@ -241,13 +283,17 @@ class ImgGenVM internal constructor(
                 if (generationToken === token) _isGenerating.value = false
             }
         }
+        cancelJob = next
+        // Replacements join predecessors, so the latest borrower also covers older uses of the same file.
+        sourceImages.forEach { referenceReaders[it] = next }
+        next.invokeOnCompletion { sourceImages.forEach { referenceReaders.remove(it, next) } }
     }
 
     fun cancelGeneration() {
         cancelJob?.cancel()
     }
 
-    private suspend fun saveImagePreview(item: ImageGenerationItem, selection: net.weero.measix.pilot.data.enterprise.RealmSelection, owner: Job): net.weero.measix.pilot.service.GeneratedPreview {
+    private suspend fun saveImagePreview(item: ImageGenerationItem, selection: net.weero.measix.pilot.data.enterprise.RealmSelection, owner: Job): net.weero.measix.pilot.service.TemporaryImage {
         return fileManagementApplicationService.createGeneratedPreview(
             item = item,
             tempDirectory = getApplication<Application>().appTempFolder,
@@ -266,15 +312,18 @@ class ImgGenVM internal constructor(
     }
 
     private fun deleteReferenceFiles(paths: List<String>) {
-        if (paths.isEmpty()) return
-        val owner = cancelJob
-        if (owner?.isCompleted == false) owner.invokeOnCompletion { deleteReferenceFilesNow(paths) }
-        else deleteReferenceFilesNow(paths)
+        paths.forEach { path ->
+            val reader = referenceReaders[path]
+            if (reader?.isCompleted == false) reader.invokeOnCompletion { deleteReferenceFilesNow(listOf(path)) }
+            else deleteReferenceFilesNow(listOf(path))
+        }
     }
 
     override fun onCleared() {
+        pendingReferenceImport = null
+        referenceOwner.cancel()
         cancelJob?.cancel()
-        deleteReferenceFiles(_referenceImages.value)
+        deleteReferenceFiles(_referenceImages.value.map { it.file.path })
         _referenceImages.value = emptyList()
         super.onCleared()
     }

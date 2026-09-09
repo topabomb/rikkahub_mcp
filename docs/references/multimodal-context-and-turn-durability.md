@@ -60,7 +60,7 @@ Tool Result checkpoint（消息与 Artifact 引用同事务）
 - 编辑器导入返回 `ArtifactDraftItem(uri, displayName, mimeType)`；路由、分享、粘贴和裁剪调用方直接使用托管时已经确定的 metadata，不对托管 `file://` URI 再走外部 ContentResolver 分类。裁剪输出扩展名与 PNG 压缩格式一致。
 - 配置编辑器的头像与背景经 `ArtifactUseCase.importSettingsImage` 执行有界复制与结构检查；查看器/生成工具的背景由 `AssistantBackgroundService` 接受原页面、任务或共享定义目标，分别写个人定义或企业主体偏好。两条入口均复用 Artifact 的 Settings root 提交及 pin 移交，失败或取消回滚未发布 artifact，不能直接挂接原始文件路径。
 - 本地 Settings background/头像是可变显示偏好，不是 artifact owner。冷启动发现其 ACTIVE metadata 缺失时，经 `ArtifactReferencePolicy.detach` 持久化回退默认值，绝不扫描或认领遗留文件；metadata 存在而 payload 缺失时，也先持久化回退默认值，再删除该失效 metadata。两种情形均不阻断 Settings 读取；消息附件仍按其独立 durable root 规则 fail-closed。
-- 生成中预览与助手背景只接受经结构检查的图片，文件名与扩展名由实际内容生成，不信任模型名、索引或远程声明。
+- 生成中预览、参考图片与助手背景只接受经结构检查的图片，文件名与扩展名由实际内容生成，不信任模型名、索引或远程声明。临时图片由页面/请求保留清理权，`FileManagementApplicationService` 统一物化、原目标复验和未交接补偿；补偿不能覆盖原取消或失败。参考输入到生成请求的借用由原 VM 跟踪，取消等待链结束前保留实际输入，不延迟回收无关副本。
 
 ### 2.3 内部身份与模型引用
 

@@ -341,7 +341,7 @@ Android 媒体接线按下列所有权完成：`PortalMediaStore` 管理独占�
 | 模型消费者（C5） | 主/子、标题/建议/摘要、附件识别和图片生成已接入原域模型捕获、逐请求准入与 binding；完整工具调用示例继续实施 |
 | MCP / Gateway（C5、U2） | 企业固定选择已有 UI；仍需接通原 MCP runtime/catalog/OAuth owner、企业 binding 与示例实际工具执行 |
 | 语音（C5、U2） | 仍需 TTS/ASR 的企业/用户目录、私有 binding、原请求准入及本地音频/转写 adapter |
-| 文件与 Workspace（C6） | 会话/记忆、目录、图片查看/保存、生成落库和背景目标已分域验证；参考图片导入、其他媒体出口、共享配置资产复制及 Workspace 全局 upload 挂载仍需收口 |
+| 文件与 Workspace（C6） | 会话/记忆、目录、图片查看/保存、生成落库、背景目标和参考图片导入已分域验证；其他媒体出口、共享配置资产复制及 Workspace 全局 upload 挂载仍需收口 |
 | 个人备份（C7） | 个人 Settings 保全已实现；备份仍需个人闭合图导出、恢复合并保全最新企业图和系统备份边界，不能用 Settings 测试代表数据保全 |
 | 完整示例与 UI（M1、U2） | 正式企业入口、Portal、公开模板和私有文件 ignore 已有；仍需原生整包导入/场景管理、工具批次 mock、Starter 预填及剩余资源/助手页面 |
 | 退休与发行（R1、V1） | 消费者完成后删除旧 managed overlay 链，再做 E01–E12、Release/硬件验收和版本 20 交付；真实后台属于下一阶段 |
@@ -574,3 +574,7 @@ gradlew.bat connectedDebugAndroidTest --no-parallel --max-workers=1
 另需安装 Release 实际验证，Debug instrumentation 不代替发行版行为。新增常见文案同步 values、values-zh、values-ja、values-ko-rKR、values-ru。记录设备/报告/场景与外部凭据验证缺口，只按真实证据更新完成状态。
 
 最终交付两份文档独立提交、完整实现提交、0.0.20 APK/校验信息、私有文件模板和使用说明、E01–E12 证据。提交前检查 git diff --check、最终 diff/工作树、schema/序列化/备份兼容，不含秘密或无关变更。
+
+参考图片导入已归入现有文件应用服务与 ImgGenVM：原生选择前保存原域和页面任务，返回时复验；重建页面保留待返回目标，重置任务则拒绝旧结果。临时副本只由 VM 持有，实际请求借用的文件等待请求收口，其余未接收或移除的文件立即回收。没有新增持久化结构或资源 owner。独立复审发现的取消补偿、满额临时文件与选择器目标丢失均已修复。
+
+本批定向 JVM 与 Android 17 的实际图片解码/存储/域授权用例通过；完整串行 `test assembleDebug lintDebug assembleRelease :app:compileDebugAndroidTestKotlin` 通过（11 分 5 秒）：App 2,077 项 JVM 无失败/跳过，lint 0 错误、287 警告，Workspace 保留 11 项 Windows 条件跳过。原生选择器 Activity 重建未作设备验收，目标保留由 VM 测试验证；本批设备只运行一项图片集成场景，不冒充整套设备回归。证据见 `build/reports/enterprise/reference-image-verification.json`。其余媒体出口、Workspace、MCP/Gateway、Speech、备份及最终版本 20 验收继续实施。

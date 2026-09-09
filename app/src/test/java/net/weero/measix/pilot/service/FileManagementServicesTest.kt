@@ -56,6 +56,47 @@ class FileManagementServicesTest {
 
     @After fun tearDown() { root.deleteRecursively() }
 
+    @Test fun `reference import rechecks selection after IO and removes the unreceived file`() = runTest {
+        val selected = mockk<EnterpriseSessionController>()
+        var allowed = true
+        coEvery { selected.withSelectedRealmSelection<Unit>(selection, any()) } coAnswers {
+            check(allowed) { "selection_changed" }
+            secondArg<suspend () -> Unit>()()
+        }
+        var candidate: File? = null
+        val service = FileManagementApplicationService(mockk(), mockk(), ApplicationRecoveryGate().apply { ready() }, selected,
+            writeTemporaryImage = { file, bytes -> file.writeBytes(bytes); candidate = file; allowed = false })
+        val source = File(root, "picked.png").apply { writeBytes(java.util.Base64.getDecoder().decode(PNG)) }
+        val failure = runCatching { service.importImageReference(androidx.test.core.app.ApplicationProvider.getApplicationContext(),
+            android.net.Uri.fromFile(source), root, selection, Job()) }.exceptionOrNull()
+        assertEquals("selection_changed", failure?.message)
+        assertTrue(candidate != null && !candidate!!.exists())
+        assertTrue(source.isFile)
+    }
+
+    @Test fun `temporary image compensation preserves cancellation and deletion failure`() = runTest {
+        val cancelled = kotlinx.coroutines.CancellationException("cancelled image writer")
+        var writer: Job? = null
+        val service = FileManagementApplicationService(mockk(), mockk(), ApplicationRecoveryGate().apply { ready() }, sessions,
+            writeTemporaryImage = { file, _ ->
+                check(file.mkdir())
+                File(file, "blocks-delete").writeText("owned failed output")
+                requireNotNull(writer).cancel(cancelled)
+                throw cancelled
+            })
+        var failure: Throwable? = null
+        val job = launch {
+            writer = currentCoroutineContext()[Job]
+            try { service.createGeneratedPreview(me.rerere.ai.ui.ImageGenerationItem(PNG, "image/png"), root, selection, requireNotNull(writer)) }
+            catch (error: Throwable) { failure = error }
+        }
+        job.join()
+        assertTrue(failure is kotlinx.coroutines.CancellationException)
+        assertEquals(cancelled.message, failure?.message)
+        assertTrue(generateSequence(requireNotNull(failure)) { it.cause }.flatMap { it.suppressed.asSequence() }
+            .any { it is java.io.IOException && it.message!!.contains("incomplete temporary image") })
+    }
+
     @Test fun `preview production survives selection changes while image access stays with its request`() = runTest {
         val selected = io.mockk.mockk<EnterpriseSessionController>()
         var selectionAllowed = true
@@ -310,7 +351,7 @@ class FileManagementServicesTest {
             sessions = sessions,
             generatedMediaStore = mockk(),
             recoveryGate = ApplicationRecoveryGate().also { it.ready() },
-            writeGeneratedPreview = { file, _ ->
+            writeTemporaryImage = { file, _ ->
                 partialFile = file
                 file.writeText("partial")
                 error("disk write failed")
@@ -343,7 +384,7 @@ class FileManagementServicesTest {
             sessions = sessions,
             generatedMediaStore = mockk(),
             recoveryGate = ApplicationRecoveryGate().also { it.ready() },
-            writeGeneratedPreview = { file, bytes ->
+            writeTemporaryImage = { file, bytes ->
                 candidate = file
                 file.writeBytes(bytes)
                 operationJob?.cancel()
@@ -366,5 +407,8 @@ class FileManagementServicesTest {
         } finally {
             tempDirectory.deleteRecursively()
         }
+    }
+    companion object {
+        private const val PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
     }
 }

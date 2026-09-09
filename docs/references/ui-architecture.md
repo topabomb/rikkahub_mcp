@@ -761,3 +761,5 @@ insets，不能重复加上键盘高度。多行、编辑态、附件及键盘�
 - [Material 3 Adaptive](https://m3.material.io/develop/android/jetpack-compose/adaptive-layouts)
 
 助手定义编辑调用 `AssistantDetailVM.update(pageSnapshot, edited)`，两者来自同一次页面快照；现有字段 delta 合并应用到最新持久定义。长期存活的提示词输入回调不能将后来更新的背景或其他字段误判成待撤销的编辑。
+
+图片生成页的原生参考图选择由 `ImgGenVM` 保存并一次性消费打开时的 `ImageReferenceImport`，Activity 重建不依赖组合内状态恢复目标；切域或重置后原 Job 失效。`FileManagementApplicationService.importImageReference` 在复制前后验证原选择，复用 `TemporaryImage` 的图片校验与失败清理。缩略图使用带原选择/Job 的 `ImageSource`，不直接读取文件路径；只有已交给生成请求的路径按实际借用 Job 延迟删除，其他副本立即清理。

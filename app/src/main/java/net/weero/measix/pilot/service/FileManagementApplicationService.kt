@@ -53,7 +53,7 @@ class FileManagementApplicationService internal constructor(
     private val recoveryGate: ApplicationRecoveryGate,
     private val sessions: EnterpriseSessionController,
     private val clock: Clock = Clock.System,
-    private val writeGeneratedPreview: (File, ByteArray) -> Unit = { file, bytes ->
+    private val writeTemporaryImage: (File, ByteArray) -> Unit = { file, bytes ->
         file.writeBytes(bytes)
     },
     private val remoteMediaFetcher: net.weero.measix.pilot.data.ai.attachments.SafeRemoteMediaFetcher = net.weero.measix.pilot.data.ai.attachments.SafeRemoteMediaFetcher(),
@@ -200,31 +200,48 @@ class FileManagementApplicationService internal constructor(
         }
     }
 
-    suspend fun createGeneratedPreview(item: ImageGenerationItem, tempDirectory: File, selection: RealmSelection, owner: Job): GeneratedPreview {
+    internal suspend fun createGeneratedPreview(item: ImageGenerationItem, tempDirectory: File, selection: RealmSelection, owner: Job): TemporaryImage =
+        createTemporaryImage(tempDirectory, selection, owner, ImageOrigin.GENERATED,
+            requireDestination = { sessions.withRealmAccess(selection.access) { owner.ensureActive() } },
+            readBytes = { GeneratedMediaStore.decodeImageBytes(item.data) })
+
+    internal suspend fun importImageReference(context: android.content.Context, uri: android.net.Uri,
+        tempDirectory: File, selection: RealmSelection, owner: Job): TemporaryImage =
+        createTemporaryImage(tempDirectory, selection, owner, ImageOrigin.UPLOAD,
+            requireDestination = { sessions.withSelectedRealmSelection(selection) { owner.ensureActive() } },
+            readBytes = {
+                val bitmap = net.weero.measix.pilot.utils.ImageUtils.loadOptimizedBitmap(context, uri, maxSize = 2048)
+                    ?: error("reference_image_decode_failed")
+                try { net.weero.measix.pilot.data.files.FileUtils.compressBitmapToPng(bitmap) }
+                finally { bitmap.recycle() }
+            })
+
+    private suspend fun createTemporaryImage(tempDirectory: File, selection: RealmSelection, owner: Job,
+        origin: ImageOrigin, requireDestination: suspend () -> Unit, readBytes: suspend () -> ByteArray): TemporaryImage {
         recoveryGate.awaitReady()
-        sessions.withRealmAccess(selection.access) { owner.ensureActive() }
+        requireDestination()
         var candidate: File? = null
         try {
             return withContext(Dispatchers.IO) {
-                val bytes = GeneratedMediaStore.decodeImageBytes(item.data)
-                val inspected = GeneratedMediaStore.inspectImagePayload(bytes, item.mimeType)
+                val bytes = readBytes()
+                val inspected = GeneratedMediaStore.inspectImagePayload(bytes, "application/octet-stream")
                 val preview = File(
                     tempDirectory,
-                    "imggen_preview_${Uuid.random()}.${inspected.extension}",
+                    "imggen_${Uuid.random()}.${inspected.extension}",
                 )
                 candidate = preview
-                writeGeneratedPreview(preview, bytes)
+                writeTemporaryImage(preview, bytes)
                 suspend fun verify() {
                     recoveryGate.awaitReady()
                     sessions.withSelectedRealmSelection(selection) {
                         owner.ensureActive()
-                        check(preview.isFile) { "generated_preview_unavailable" }
+                        check(preview.isFile) { "temporary_image_unavailable" }
                     }
                 }
-                sessions.withRealmAccess(selection.access) { owner.ensureActive() }
-                GeneratedPreview(preview, ImageSource(
-                    cacheIdentity = "generated-preview:${preview.name}:$selection",
-                    origin = ImageOrigin.GENERATED,
+                requireDestination()
+                TemporaryImage(preview, selection, ImageSource(
+                    cacheIdentity = "temporary-image:${preview.name}:$selection",
+                    origin = origin,
                     displayName = preview.name,
                     verifyAccess = { verify() },
                     readPayload = {
@@ -236,16 +253,14 @@ class FileManagementApplicationService internal constructor(
                 ))
             }
         } catch (error: Throwable) {
-            withContext(NonCancellable + Dispatchers.IO) {
-                candidate?.let { preview ->
-                    try {
-                        if (preview.exists() && !preview.delete()) {
-                            error.addSuppressed(IOException("failed to remove incomplete generated preview"))
-                        }
-                    } catch (cleanupError: Throwable) {
-                        error.addSuppressed(cleanupError)
+            try {
+                withContext(NonCancellable + Dispatchers.IO) {
+                    candidate?.let { preview ->
+                        if (preview.exists() && !preview.delete()) throw IOException("failed to remove incomplete temporary image")
                     }
                 }
+            } catch (cleanup: Throwable) {
+                if (cleanup !== error) error.addSuppressed(cleanup)
             }
             throw error
         }
@@ -258,4 +273,4 @@ internal fun cutoffFor(range: FileCleanupRange, nowMillis: Long): Long = when (r
 }
 
 /** The producer retains temporary-file cleanup; the source only borrows read access. */
-data class GeneratedPreview(val file: File, val image: ImageSource)
+internal data class TemporaryImage(val file: File, val selection: RealmSelection, val image: ImageSource)

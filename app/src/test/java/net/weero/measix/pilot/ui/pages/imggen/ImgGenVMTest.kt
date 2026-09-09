@@ -45,6 +45,84 @@ import org.robolectric.annotation.Config
 @Config(sdk = [34])
 class ImgGenVMTest {
     @Test
+    fun `picker target is consumed once and only actual request inputs wait for completion`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val owner = ViewModelStore()
+        val release = CompletableDeferred<Unit>()
+        val root = kotlin.io.path.createTempDirectory("reference-owner").toFile()
+        try {
+            val settings = mockk<SettingsStore>()
+            every { settings.effectiveSettings } returns MutableStateFlow(Settings().toEffectiveSnapshot())
+            val selected = RealmSelection(RealmAccess.Personal, 0)
+            val model = Model(modelId = "image", type = me.rerere.ai.provider.ModelType.IMAGE)
+            val catalog = net.weero.measix.pilot.service.userDefinitionModelCatalog(listOf(ProviderSetting.OpenAI(models = listOf(model)))).copy(
+                selection = selected, roleSelections = mapOf(net.weero.measix.pilot.data.configuration.ResourceSelectionSlot.IMAGE_MODEL to
+                    net.weero.measix.pilot.data.configuration.ConfigurationSelection(model.id, null)))
+            val configuration = mockk<ConfigurationQueryService>()
+            every { configuration.observeModelCatalog() } returns flowOf(ModelCatalogReadState.Available(catalog))
+            coEvery { configuration.requireSelection(selected) } returns Unit
+            val files = mockk<FileManagementQueryService>()
+            every { files.observeSelection() } returns MutableStateFlow(selected)
+            every { files.observeGeneratedPaging() } returns flowOf(PagingData.empty())
+            val commands = mockk<net.weero.measix.pilot.service.FileManagementApplicationService>()
+            var imports = 0
+            coEvery { commands.importImageReference(any(), any(), any(), any(), any()) } coAnswers {
+                val file = java.io.File(root, "${imports++}.png").apply { writeText("temporary input") }
+                net.weero.measix.pilot.service.TemporaryImage(file, selected,
+                    net.weero.measix.pilot.service.ImageSource(file.path, net.weero.measix.pilot.service.ImageOrigin.UPLOAD,
+                        verifyAccess = {}, readPayload = { file.readBytes() }))
+            }
+            val started = CompletableDeferred<Unit>()
+            val coordinator = mockk<ImageGenerationCoordinator>()
+            coEvery { coordinator.enqueue(any()) } coAnswers {
+                started.complete(Unit)
+                try { awaitCancellation() } finally { withContext(NonCancellable) { release.await() } }
+            }
+            val vm = ImgGenVM(ApplicationProvider.getApplicationContext<Application>(), settings, coordinator, files, commands, configuration, mockk())
+            owner.put("image", vm)
+            runCurrent()
+            org.junit.Assert.assertTrue(vm.beginReferenceImport())
+            assertFalse(vm.beginReferenceImport())
+            val target = requireNotNull(vm.takeReferenceImport())
+            org.junit.Assert.assertNull(vm.takeReferenceImport())
+            val uris = List(16) { android.net.Uri.parse("content://picked/$it") }
+            assertEquals(0, vm.importReferenceImages(target, uris))
+            assertEquals(1, vm.importReferenceImages(target, uris.take(1)))
+            assertEquals(16, imports)
+            runCurrent()
+            val captured = vm.referenceImages.value
+            vm.updatePrompt("use captured references")
+            vm.editImage()
+            runCurrent()
+            started.await()
+            vm.clearReferenceImages()
+            org.junit.Assert.assertTrue(captured.all { it.file.exists() })
+            org.junit.Assert.assertTrue(vm.beginReferenceImport())
+            val fresh = requireNotNull(vm.takeReferenceImport())
+            assertEquals(0, vm.importReferenceImages(fresh, uris.take(1)))
+            runCurrent()
+            val unused = vm.referenceImages.value.single()
+            vm.removeReferenceImage(unused)
+            assertFalse(unused.file.exists())
+            org.junit.Assert.assertTrue(captured.all { it.file.exists() })
+            org.junit.Assert.assertTrue(vm.beginReferenceImport())
+            vm.startNewSession()
+            val revoked = requireNotNull(vm.takeReferenceImport())
+            assertFalse(revoked.owner.isActive)
+            org.junit.Assert.assertTrue(runCatching { vm.importReferenceImages(revoked, uris) }.exceptionOrNull() is kotlinx.coroutines.CancellationException)
+            release.complete(Unit)
+            runCurrent()
+            org.junit.Assert.assertTrue(captured.none { it.file.exists() })
+        } finally {
+            release.complete(Unit)
+            owner.clear()
+            runCurrent()
+            root.deleteRecursively()
+            Dispatchers.resetMain()
+        }
+    }
+
+    @Test
     fun `rapid replacement cannot bypass a cancelled predecessor that still owns cleanup`() = runTest {
         Dispatchers.setMain(StandardTestDispatcher(testScheduler))
         val release = CompletableDeferred<Unit>()
