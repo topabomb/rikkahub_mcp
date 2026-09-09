@@ -43,6 +43,8 @@
 | 原生切域与 Portal 清理 | `EnterpriseApplicationServiceTest` 用真实 Session/store 和可控宿主回执验证发布屏障、进度与原选择/目标 Session；`PortalDocumentTest` 验证原请求、宿主超时及重开准入；`PortalWebViewAndroidTest` 验证系统 Cookie/站点存储清理和真实网页消息，`EnterprisePageAndroidTest` 验证原生页面接线与后台交接取消 |
 | MCP 本地企业执行 | `LocalEnterpriseMcpServiceTest` 经真实 SDK/Streamable HTTP 与本地 source engine 验证标准发现/调用、ToolRef 身份/期限、原 Session Feed 和 generation 屏障，并用实际 TurnToolSetFactory/TurnRunner 验证本地模型在流式和非流式下的 Direct/Gateway 工具续轮（捕获 checkpoint，不作 Room 提交验收）；`McpToolCallExecutorTest` 验证受管错误保密与 typed barrier；`McpTurnCapabilitySnapshotTest` 验证只读检查的策略、开关、目录版本与 binding 轮换。均不代表设备或真实平台互操作 |
 | MCP 页面与业务工具卡 | `McpQueryServiceTest` 验证原选择目录、不可用恢复及旧 Session 清空；`SettingMcpPageAndroidTest` 挂载正式页面验证受管只读、Gateway 强制/可控与等待提交；`GatewayToolCardAndroidTest` 挂载归档工具卡验证安全业务 metadata，不读取归档正文 |
+| 语音传输与清理 | `RequestCancellationTest` 经本机 HTTP 服务验证响应头等待和正文读取中的实际 Call 取消；`OpenAITtsWireTest` 验证显式模型/音色与 MP3 请求；`EnterprisePackageTest` 验证 TTS/ASR 字段边界。`SystemTtsSequentialPlaybackInstrumentedTest` 验证系统音频、顺序队列、暂停、停止/销毁等待合成退出和迟到恢复拒绝；不代表企业语音端到端验收 |
+| 个人实时识别生命周期 | `RealtimeAsrLifecycleInstrumentedTest` 使用 Android 实际 AudioRecord 和受控 WebSocket 公共接口，验证晚握手/转写拒绝、原连接终态等待、录音替换、服务端主动结束和幂等关闭。连接 fixture 模拟协议回调，不代表真实网络服务或语音识别准确率验收 |
 | 配置首次写入锁顺序 | `SettingsStartupTest` 通过确定调度让写入/恢复先于异步初始化，验证写锁外等待与提交结果 |
 | MCP 用户定义准入 | `SettingsStoreMcpTest` 使用实际 DataStore 验证配置写入与定义读取串行、取消释放 owner、读取规范化且不回写；不依赖全局有效配置投影 |
 | MCP 连接与传输所有权 | `McpConnectionLifecycleTest` 验证取消、原始 transport 关闭、失败持有与重新启用；`McpClientTransportTest` 验证 SDK 终态后的实际 I/O 等待；`McpTransportOwnershipIntegrationTest` 经真实 OkHttp/本机 HTTP 验证响应头等待取消、截断恢复和协议失败，不代表 Android 设备或真实服务互操作 |

@@ -31,12 +31,92 @@ import org.junit.runner.RunWith
 
 @RunWith(AndroidJUnit4::class)
 class SystemTtsSequentialPlaybackInstrumentedTest {
+    private fun systemPlayback(context: android.content.Context, setting: TTSProviderSetting): TtsPlaybackSession {
+        val synthesizer = TtsSynthesizer(TTSManager(context))
+        return TtsPlaybackSession({ chunk -> synthesizer.synthesize(setting, chunk) }, { start -> start() })
+    }
+
+    @Test
+    fun stopAndDisposeWaitForPrefetchedSynthesisToReleaseItsResources() = runBlocking {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val entered = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val release = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val closed = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val controller = withContext(Dispatchers.Main) {
+            TtsController(context).also { controller ->
+                controller.setSession(TtsPlaybackSession(synthesize = {
+                    entered.complete(Unit)
+                    try { kotlinx.coroutines.awaitCancellation() }
+                    finally { withContext(kotlinx.coroutines.NonCancellable) { release.await(); closed.complete(Unit) } }
+                }, admitPlayback = { start -> start() }))
+                controller.speak("A single pending synthesis", queueSessionId = "cancelled-queue")
+            }
+        }
+        var disposal: TtsPlaybackCleanup? = null
+        try {
+            withTimeout(CONTROLLER_TIMEOUT_MS) { entered.await() }
+            val cleanup = withContext(Dispatchers.Main) { controller.stop() }
+            val waiting = async(start = CoroutineStart.UNDISPATCHED) { cleanup.awaitClosed() }
+            assertFalse(waiting.isCompleted)
+            assertFalse(closed.isCompleted)
+            assertFalse(controller.isSpeaking.value)
+            disposal = withContext(Dispatchers.Main) { controller.dispose() }
+            val disposing = async(start = CoroutineStart.UNDISPATCHED) { requireNotNull(disposal).awaitClosed() }
+            assertFalse("Disposal must await synthesis already cancelled by stop", disposing.isCompleted)
+            release.complete(Unit)
+            withTimeout(CONTROLLER_TIMEOUT_MS) { waiting.await(); disposing.await() }
+            assertTrue(closed.isCompleted)
+            assertEquals(PlaybackStatus.Idle, controller.playbackState.value.status)
+            assertNull(controller.activeSource.value)
+        } finally {
+            release.complete(Unit)
+            withContext(Dispatchers.Main) { (disposal ?: controller.dispose()).awaitClosed() }
+        }
+    }
+
+    @Test
+    fun lateResumeCannotUnpauseAReplacementQueueInTheSameSession() = runBlocking {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val admissionEntered = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val releaseAdmission = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val controller = withContext(Dispatchers.Main) {
+            TtsController(context).also {
+                it.setSession(TtsPlaybackSession(
+                    synthesize = { kotlinx.coroutines.awaitCancellation() },
+                    admitPlayback = { start ->
+                        admissionEntered.complete(Unit)
+                        releaseAdmission.await()
+                        start()
+                    },
+                ))
+                it.speak("Original pending audio", queueSessionId = "same-session")
+                it.pause()
+            }
+        }
+        try {
+            val resume = async(Dispatchers.Main) { controller.resume() }
+            withTimeout(CONTROLLER_TIMEOUT_MS) { admissionEntered.await() }
+            withContext(Dispatchers.Main) {
+                controller.stop().awaitClosed()
+                controller.speak("Replacement pending audio", queueSessionId = "same-session")
+                controller.pause()
+            }
+            releaseAdmission.complete(Unit)
+            withTimeout(CONTROLLER_TIMEOUT_MS) { resume.await() }
+            assertEquals(PlaybackStatus.Paused, controller.playbackState.value.status)
+            assertTrue(controller.isSpeaking.value)
+        } finally {
+            releaseAdmission.complete(Unit)
+            withContext(Dispatchers.Main) { controller.dispose().awaitClosed() }
+        }
+    }
+
     @Test
     fun toolbarPauseKeepsQueueAndBlocksAudioThatFinishesSynthesizing() = runBlocking {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         val controller = withContext(Dispatchers.Main) {
-            TtsController(context, TTSManager(context)).also {
-                it.setProvider(TTSProviderSetting.SystemTTS(speechRate = 2.0f))
+            TtsController(context).also {
+                it.setSession(systemPlayback(context, TTSProviderSetting.SystemTTS(speechRate = 2.0f)))
             }
         }
         val playedSources = MutableStateFlow<List<String>>(emptyList())
@@ -76,7 +156,7 @@ class SystemTtsSequentialPlaybackInstrumentedTest {
             assertEquals(listOf("master-paused", "target-queued"), observed)
         } finally {
             collector.cancelAndJoin()
-            withContext(Dispatchers.Main) { controller.dispose() }
+            withContext(Dispatchers.Main) { controller.dispose().awaitClosed() }
         }
     }
 
@@ -84,8 +164,8 @@ class SystemTtsSequentialPlaybackInstrumentedTest {
     fun toolbarStopClearsTurnAndLaterSubmissionStartsFreshPlayback() = runBlocking {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         val controller = withContext(Dispatchers.Main) {
-            TtsController(context, TTSManager(context)).also {
-                it.setProvider(TTSProviderSetting.SystemTTS(speechRate = 2.0f))
+            TtsController(context).also {
+                it.setSession(systemPlayback(context, TTSProviderSetting.SystemTTS(speechRate = 2.0f)))
                 it.setSpeed(2.0f)
             }
         }
@@ -97,7 +177,7 @@ class SystemTtsSequentialPlaybackInstrumentedTest {
             withTimeout(CONTROLLER_TIMEOUT_MS) {
                 controller.playbackState.first { it.status == PlaybackStatus.Playing }
             }
-            withContext(Dispatchers.Main) { controller.stop() }
+            withContext(Dispatchers.Main) { controller.stop().awaitClosed() }
 
             assertFalse(controller.isSpeaking.value)
             assertEquals(PlaybackStatus.Idle, controller.playbackState.value.status)
@@ -117,7 +197,7 @@ class SystemTtsSequentialPlaybackInstrumentedTest {
                 controller.playbackState.first { it.status == PlaybackStatus.Ended }
             }
         } finally {
-            withContext(Dispatchers.Main) { controller.dispose() }
+            withContext(Dispatchers.Main) { controller.dispose().awaitClosed() }
         }
         Unit
     }
@@ -126,8 +206,8 @@ class SystemTtsSequentialPlaybackInstrumentedTest {
     fun sameTurnCanResumeWithLateTargetAudioAfterQueueDrains() = runBlocking {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         val controller = withContext(Dispatchers.Main) {
-            TtsController(context, TTSManager(context)).also {
-                it.setProvider(TTSProviderSetting.SystemTTS(speechRate = 2.0f))
+            TtsController(context).also {
+                it.setSession(systemPlayback(context, TTSProviderSetting.SystemTTS(speechRate = 2.0f)))
                 it.setSpeed(2.0f)
             }
         }
@@ -154,7 +234,7 @@ class SystemTtsSequentialPlaybackInstrumentedTest {
                 }
             }
         } finally {
-            withContext(Dispatchers.Main) { controller.dispose() }
+            withContext(Dispatchers.Main) { controller.dispose().awaitClosed() }
         }
     }
 
@@ -194,7 +274,7 @@ class SystemTtsSequentialPlaybackInstrumentedTest {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         val setting = TTSProviderSetting.SystemTTS()
         val controller = withContext(Dispatchers.Main) {
-            TtsController(context, TTSManager(context)).also { it.setProvider(setting) }
+            TtsController(context).also { it.setSession(systemPlayback(context, setting)) }
         }
         val playedSources = MutableStateFlow<List<String>>(emptyList())
         val collector = launch(Dispatchers.Main) {
@@ -224,7 +304,7 @@ class SystemTtsSequentialPlaybackInstrumentedTest {
             assertEquals(listOf("master-1", "target-1", "target-2", "master-2"), observed)
         } finally {
             collector.cancelAndJoin()
-            withContext(Dispatchers.Main) { controller.dispose() }
+            withContext(Dispatchers.Main) { controller.dispose().awaitClosed() }
         }
     }
 

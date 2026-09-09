@@ -342,7 +342,7 @@ Android 媒体接线按下列所有权完成：`PortalMediaStore` 管理独占�
 | --- | --- |
 | 模型消费者（C5） | 主/子、标题/建议/摘要、附件识别和图片生成已接入原域模型捕获、逐请求准入与 binding；本地模型标准工具调用已通过组件、Debug 聊天与本批完整门禁 |
 | MCP / Gateway（C5、U2） | 企业固定选择、完整 Tool JSON、主体目录与连接清理已实现；原 Session/binding/interaction、Gateway 标准发现与调用、本地 source engine、428 收口及只读工具清单已通过本批完整门禁；管理 UI、归档业务工具卡和 Mock 模型标准工具续轮已通过定向、Debug 设备及本批完整门禁 |
-| 语音（C5、U2） | 仍需 TTS/ASR 的企业/用户目录、私有 binding、原请求准入及本地音频/转写 adapter |
+| 语音（C5、U2） | TTS/ASR 公开字段已分开，TTS voice 显式必填；HTTP 正文取消和播放器清理基础已调整；个人 realtime ASR 共用录音/连接 owner，清理等待原协议终态。仍需应用层统一 owner、企业/用户目录、私有 binding、原请求准入及本地音频/转写 adapter；不能视为企业语音已接通 |
 | 文件与 Workspace（C6） | 会话/记忆、目录、图片、背景、参考输入及附件/富文本出口已分域验证；Workspace 上传/终端/SAF 已完成本批实现与完整门禁；共享配置预设附件的目标域复制及 Draft/Child 交接已完成，完整门禁通过；整体 UI/版本验收仍待最终收口 |
 | 个人备份（C7） | 个人 Settings 保全已实现；备份仍需个人闭合图导出、恢复合并保全最新企业图和系统备份边界，不能用 Settings 测试代表数据保全 |
 | 完整示例与 UI（M1、U2） | 正式企业入口、Portal、公开模板和私有文件 ignore 已有；仍需原生整包导入/场景管理、Starter 预填、辅助生成模拟格式及剩余资源/助手页面 |
@@ -672,3 +672,7 @@ MCP UI 与本地模型接线：企业只读目录、Gateway 原选择写入与�
 本地模型通过实际 Tool factory、Step 循环、SDK 与示例服务完成公告、指南、企业信息查询，流式/非流式均有组件验证；检查点由测试捕获，不冒充 Room 验收。
 两个 Compose 设备用例通过，覆盖正式 MCP 设置页和归档业务详情。实际 Debug 安装包已走通正式接入到企业公告聊天，打开工具详情核实业务名称、状态及 requestId；该人工路径不等于 Release 或真实平台验收。
 本批完整串行 `test assembleDebug lintDebug assembleRelease connectedDebugAndroidTest` 在 18 分 6 秒内通过：App 2,140 项 JVM、Android 17 模拟器 App 192 项及 Speech 6 项无失败。App/Workspace lint 均为 0 错误、分别 287/11 项警告；Workspace JVM 48 项中 11 项 Windows 条件跳过，设备 12 项中 1 项硬链接条件跳过。首次全量设备运行暴露首次配置写入与初始化的锁等待环；确定调度用例在修复前失败，修复后定向 16 项设备及最终全量通过。修正仅调整 Settings 原 owner 的初始化等待顺序，无新增存储或兼容层。两位阶段复审无剩余实质问题，分层报告见 `build/reports/enterprise/mcp-ui-verification.json`。实际 Debug 聊天的人工观察发生在最后的模拟回复去重与无工具辅助请求修正之前，后者由最终构建/测试验证。Speech、个人备份图保全、剩余配置页面与示例场景以及版本 20 整体验收继续实施。
+
+
+语音底座已完成：企业 TTS/ASR 公开定义分离，HTTP 取消覆盖正文读取；TTS 停止与销毁等待原预取任务，迟到恢复不能操作替换后的队列。个人 realtime ASR 两套重复 controller 合并为同一连接/录音 owner，服务端结束和用户停止共用一次清理；未保留旧类转发，无 Room/DataStore 或个人配置格式变化。
+本批完整串行门禁 `test assembleDebug lintDebug assembleRelease connectedDebugAndroidTest` 通过（16 分 43 秒）：App 2,141 项 JVM、Android 17 模拟器 App 192 项及 Speech 11 项无失败；App/Workspace lint 0 错误、287/11 项警告。Workspace JVM 保留 11 项 Windows 条件跳过，设备保留 1 项硬链接条件跳过。两位阶段复审提出的清理与迟到回调问题已关闭，原始报告存于 `build/reports/enterprise/speech-foundation-verification.json` 及同名前缀 XML 归档。录音测试使用实际 AudioRecord 与受控 WebSocket 回调，不代表真实识别服务验收。Speech 应用 owner、企业资源接线、HTTP-ASR、本地语音 adapter、个人备份、剩余 UI 与整期验收继续实施；版本保持 0.0.19。

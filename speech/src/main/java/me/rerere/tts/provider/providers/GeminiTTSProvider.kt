@@ -2,9 +2,9 @@ package me.rerere.tts.provider.providers
 
 import android.content.Context
 import android.util.Base64
-import android.util.Log
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
+import me.rerere.common.http.readResponse
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import me.rerere.tts.model.AudioChunk
@@ -20,7 +20,6 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.util.concurrent.TimeUnit
 
-private const val TAG = "GeminiTTSProvider"
 
 class GeminiTTSProvider : TTSProvider<TTSProviderSetting.Gemini> {
     private val httpClient = OkHttpClient.Builder()
@@ -84,8 +83,6 @@ class GeminiTTSProvider : TTSProvider<TTSProviderSetting.Gemini> {
             put("model", providerSetting.model)
         }
 
-        Log.i(TAG, "generateSpeech: $requestBody")
-
         val httpRequest = Request.Builder()
             .url("${providerSetting.baseUrl}/models/${providerSetting.model}:generateContent")
             .addHeader("x-goog-api-key", providerSetting.apiKey)
@@ -93,14 +90,10 @@ class GeminiTTSProvider : TTSProvider<TTSProviderSetting.Gemini> {
             .post(requestBody.toString().toRequestBody("application/json".toMediaType()))
             .build()
 
-        val response = httpClient.newCall(httpRequest).execute()
-
-        if (!response.isSuccessful) {
-            throw Exception("Gemini TTS request failed: ${response.code} ${response.message}")
+        val geminiResponse = httpClient.newCall(httpRequest).readResponse { response ->
+            check(response.isSuccessful) { "Gemini TTS request failed: ${response.code}" }
+            json.decodeFromString<GeminiTTSResponse>(response.body.string())
         }
-
-        val responseJson = response.body.string()
-        val geminiResponse = json.decodeFromString<GeminiTTSResponse>(responseJson)
 
         if (geminiResponse.candidates.isEmpty() ||
             geminiResponse.candidates[0].content.parts.isEmpty()

@@ -26,8 +26,8 @@ internal data class EnterpriseConfiguration(
     val generation: Long,
     val policy: EnterprisePolicy,
     val models: List<EnterpriseModel>,
-    val tts: List<EnterpriseSpeechResource>,
-    val asr: List<EnterpriseSpeechResource>,
+    val tts: List<EnterpriseTtsResource>,
+    val asr: List<EnterpriseAsrResource>,
     val mcpServers: List<EnterpriseMcpResource>,
     val assistants: List<EnterpriseAssistant>,
     val memorySeeds: List<EnterpriseMemorySeed>,
@@ -49,12 +49,21 @@ internal data class EnterpriseModel(
 )
 
 @Serializable
-internal data class EnterpriseSpeechResource(
+internal data class EnterpriseTtsResource(
     val id: String,
     val name: String,
     val enabled: Boolean = true,
     val modelId: String,
-    val voice: String? = null,
+    val voice: String,
+)
+
+@Serializable
+internal data class EnterpriseAsrResource(
+    val id: String,
+    val name: String,
+    val enabled: Boolean = true,
+    val modelId: String,
+    val language: String? = null,
 )
 
 @Serializable

@@ -10,13 +10,18 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import me.rerere.asr.ASRController
 import me.rerere.asr.ASRProviderSetting
 import me.rerere.asr.ASRState
-import me.rerere.asr.providers.DashScopeASRController
-import me.rerere.asr.providers.OpenAIRealtimeASRController
+import me.rerere.asr.providers.RealtimeAsrController
 import net.weero.measix.pilot.data.datastore.SettingsStore
 import net.weero.measix.pilot.data.datastore.getSelectedASRProvider
 import okhttp3.OkHttpClient
@@ -60,7 +65,10 @@ private class CustomAsrStateImpl(
     private val httpClient: OkHttpClient
 ) : CustomAsrState {
     private var controller: ASRController? = null
-    private val idleState = MutableStateFlow(ASRState())
+    private val lifecycle = SupervisorJob()
+    private val scope = CoroutineScope(lifecycle + Dispatchers.Main.immediate)
+    private var projection: Job? = null
+    private val publishedState = MutableStateFlow(ASRState())
 
     private val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
     private val audioFocusRequest = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_EXCLUSIVE)
@@ -73,18 +81,25 @@ private class CustomAsrStateImpl(
         .setAcceptsDelayedFocusGain(false)
         .build()
 
-    override val state: StateFlow<ASRState>
-        get() = controller?.state ?: idleState
+    override val state: StateFlow<ASRState> = publishedState.asStateFlow()
 
     fun updateProvider(provider: ASRProviderSetting?) {
-        controller?.dispose()
+        if (!lifecycle.isActive) return
+        projection?.cancel()
+        controller?.dispose()?.let { closing -> scope.launch { closing.join() } }
         controller = provider?.let { createController(it) }
-        if (controller == null) {
-            idleState.value = ASRState()
-        }
+        val selected = controller
+        publishedState.value = selected?.state?.value ?: ASRState()
+        projection = selected?.let { current -> scope.launch {
+            current.state.collect { state ->
+                publishedState.value = state
+                if (!state.isRecording) audioManager.abandonAudioFocusRequest(audioFocusRequest)
+            }
+        } }
     }
 
     override fun start(onTranscriptChange: (String) -> Unit) {
+        if (!lifecycle.isActive || controller == null) return
         val result = audioManager.requestAudioFocus(audioFocusRequest)
         if (result == AudioManager.AUDIOFOCUS_REQUEST_GRANTED) {
             controller?.start(onTranscriptChange)
@@ -97,21 +112,26 @@ private class CustomAsrStateImpl(
     }
 
     override fun cleanup() {
-        controller?.dispose()
+        projection?.cancel()
+        projection = null
+        controller?.dispose()?.let { closing -> scope.launch { closing.join() } }
         controller = null
+        publishedState.value = ASRState()
         audioManager.abandonAudioFocusRequest(audioFocusRequest)
+        // Already registered controller teardowns drain naturally, including prior provider replacements.
+        lifecycle.complete()
     }
 
     private fun createController(provider: ASRProviderSetting): ASRController? {
         return when (provider) {
             is ASRProviderSetting.OpenAIRealtime -> {
                 if (provider.apiKey.isBlank()) return null
-                OpenAIRealtimeASRController(context, httpClient, provider)
+                RealtimeAsrController(context, httpClient, provider)
             }
 
             is ASRProviderSetting.DashScope -> {
                 if (provider.apiKey.isBlank()) return null
-                DashScopeASRController(context, httpClient, provider)
+                RealtimeAsrController(context, httpClient, provider)
             }
         }
     }

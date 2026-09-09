@@ -133,8 +133,13 @@ internal object EnterprisePackageCodec {
             check(it.name.isNotBlank() && it.modelId.isNotBlank(), "invalid_enterprise_model")
             check(it.inputModalities.isNotEmpty() && it.outputModalities.isNotEmpty(), "invalid_model_modalities")
         }
-        (config.tts + config.asr).forEach {
-            check(it.name.isNotBlank() && it.modelId.isNotBlank(), "invalid_enterprise_speech_resource")
+        config.tts.forEach {
+            check(it.id.startsWith("tts_") && it.name.isNotBlank() && it.modelId.isNotBlank() && it.voice.isNotBlank(),
+                "invalid_enterprise_tts_resource")
+        }
+        config.asr.forEach {
+            check(it.id.startsWith("asr_") && it.name.isNotBlank() && it.modelId.isNotBlank() &&
+                (it.language == null || it.language.isNotBlank()), "invalid_enterprise_asr_resource")
         }
         (config.mcpServers.map { it.name } + config.gateways.map { it.name }).forEach {
             check(it.isNotBlank(), "invalid_enterprise_tool_resource")

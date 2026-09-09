@@ -9,6 +9,9 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -21,34 +24,32 @@ import kotlinx.coroutines.launch
 import me.rerere.tts.model.PlaybackState
 import me.rerere.tts.model.PlaybackStatus
 import me.rerere.tts.model.TTSResponse
-import me.rerere.tts.provider.TTSManager
-import me.rerere.tts.provider.TTSProviderSetting
 import java.util.UUID
 
 private const val TAG = "TtsController"
 
-/**
- * TTS 控制器（重构版）
- * - 负责文本分片、预取合成、排队播放与状态上报
- * - 对外 API 与原版兼容
- *
- * 一个非空 sessionId 对应一轮 Master turn 独占的共享队列。
- * 新 session 总是替换旧队列；同 session 是否替换只由调用方的队列策略决定。
- */
-class TtsController(
-    context: Context,
-    private val ttsManager: TTSManager
-) {
+/** Request and playback admission are supplied by the application owner, independent of UI selection. */
+class TtsPlaybackSession(
+    val synthesize: suspend (TtsChunk) -> TTSResponse,
+    val admitPlayback: suspend (() -> Unit) -> Unit,
+)
+
+/** Captures canceled work before replacement; awaiting it cannot stop a newer queue. */
+class TtsPlaybackCleanup internal constructor(private val jobs: List<Job>) {
+    suspend fun awaitClosed() { jobs.joinAll() }
+}
+
+/** One shared chunking, prefetch and playback pipeline; callers own resource admission and lease release. */
+class TtsController(context: Context) {
     // 协程作用域
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
 
     // 组件
     private val chunker = TextChunker(maxChunkLength = 160)
-    private val synthesizer = TtsSynthesizer(ttsManager)
     private val audio = AudioPlayer(context)
 
-    // Provider & 作业
-    private var currentProvider: TTSProviderSetting? = null
+    // Queue execution and worker ownership
+    private var currentSession: TtsPlaybackSession? = null
     private var workerJob: Job? = null
     private val workerOwner = PlaybackOwner()
     private val isPaused = MutableStateFlow(false)
@@ -63,7 +64,7 @@ class TtsController(
     private val chunkDelayMs = 120L
     private val prefetchCount = 4
 
-    // 状态流（保留与旧版兼容的 StateFlow）
+    // Playback projection is published by this controller only.
     private val _isAvailable = MutableStateFlow(false)
     val isAvailable: StateFlow<Boolean> = _isAvailable.asStateFlow()
 
@@ -111,11 +112,11 @@ class TtsController(
         }
     }
 
-    /** 选择/取消选择 Provider */
-    fun setProvider(provider: TTSProviderSetting?) {
-        currentProvider = provider
-        _isAvailable.update { provider != null }
-        if (provider == null) stop()
+    fun setSession(session: TtsPlaybackSession?): TtsPlaybackCleanup {
+        val cleanup = stop()
+        currentSession = session
+        _isAvailable.value = session != null
+        return cleanup
     }
 
     /**
@@ -130,28 +131,24 @@ class TtsController(
         replaceWithinSession: Boolean = true,
         source: Any? = null,
         queueSessionId: String? = null,
-    ) {
-        if (text.isBlank()) return
-        val provider = currentProvider
-        if (provider == null) {
-            _error.update { "No TTS provider selected" }
-            return
+    ): TtsPlaybackCleanup? {
+        if (text.isBlank()) return null
+        if (currentSession == null) {
+            _error.update { "No speech execution session admitted" }
+            return null
         }
 
         val newChunks = chunker.split(text)
-        if (newChunks.isEmpty()) return
+        if (newChunks.isEmpty()) return null
 
         val replaceQueue = playbackQueue.requiresReplacement(
             incomingSessionId = queueSessionId,
             replaceWithinSession = replaceWithinSession,
         )
-        if (replaceQueue) {
-            internalReset()
-            _currentChunk.update { 0 }
-        }
+        val cleanup = if (replaceQueue) stop() else null
         playbackQueue.append(newChunks, queueSessionId, source)
         // 队列自然播放结束后仍保留 session 所有权；同一 turn 的迟到工具调用继续追加，
-        // 直到新 turn、手动播放、stop 或 Provider 切换显式替换。
+        // 直到新 turn、手动播放、stop 或 播放会话切换显式替换。
         _totalChunks.update { playbackQueue.totalChunkCount() }
         _error.update { null }
 
@@ -170,26 +167,7 @@ class TtsController(
 
         if (!hasActiveWorker) startWorker()
         prefetchFrom((_currentChunk.value).coerceAtLeast(0))
-    }
-
-    private fun internalReset() {
-        // Reset current session while keeping provider availability
-        // 先撤销旧 worker 的终态写入权，避免它在新队列建立前隐藏工具栏或清空头像。
-        workerOwner.invalidate()
-        workerJob?.cancel()
-        audio.stop()
-        audio.clear()
-        isPaused.value = false
-        isPreparingChunk = false
-        playbackQueue.clear()
-        cache.values.forEach { it.cancel(CancellationException("Reset")) }
-        cache.clear()
-        lastPrefetchedIndex = -1
-        _currentChunk.update { 0 }
-        _totalChunks.update { 0 }
-        _error.update { null }
-        _playbackState.update { PlaybackState(status = PlaybackStatus.Idle) }
-        _activeSource.value = null
+        return cleanup
     }
 
     /** 暂停播放（保留进度） */
@@ -200,11 +178,16 @@ class TtsController(
     }
 
     /** 恢复播放 */
-    fun resume() {
-        isPaused.value = false
-        audio.resume()
-        // AudioPlayer 会在真实恢复后发布 Playing；若暂停发生在合成阶段，这里应先回到 Buffering。
-        _playbackState.update { it.copy(status = PlaybackStatus.Buffering) }
+    suspend fun resume() {
+        val session = currentSession ?: return
+        val worker = workerJob ?: return
+        session.admitPlayback {
+            if (currentSession === session && workerJob === worker && worker.isActive) {
+                isPaused.value = false
+                audio.resume()
+                _playbackState.update { it.copy(status = PlaybackStatus.Buffering) }
+            }
+        }
     }
 
     /** 快进当前音频 */
@@ -225,16 +208,16 @@ class TtsController(
     }
 
     /** 停止并清空状态 */
-    fun stop() {
+    fun stop(): TtsPlaybackCleanup {
+        val stopped = (listOfNotNull(workerJob) + cache.values).distinct()
         // 先使当前 worker 失去终态写入权，再触发取消。
         workerOwner.invalidate()
-        workerJob?.cancel()
+        stopped.forEach { it.cancel(CancellationException("Stopped")) }
         audio.stop()
         audio.clear()
         isPaused.value = false
         isPreparingChunk = false
         playbackQueue.clear()
-        cache.values.forEach { it.cancel(CancellationException("Stopped")) }
         cache.clear()
         lastPrefetchedIndex = -1
         _isSpeaking.update { false }
@@ -242,13 +225,18 @@ class TtsController(
         _totalChunks.update { 0 }
         _playbackState.update { PlaybackState(status = PlaybackStatus.Idle) }
         _activeSource.value = null
+        return TtsPlaybackCleanup(stopped)
     }
 
-    /** 释放资源 */
-    fun dispose() {
+    /** Stop hardware synchronously; wait for synthesis teardown outside application admission locks. */
+    fun dispose(): TtsPlaybackCleanup {
         stop()
+        currentSession = null
+        _isAvailable.value = false
         scope.cancel()
         audio.release()
+        // Replaced queues can still be releasing synthesis resources under this same root.
+        return TtsPlaybackCleanup(listOfNotNull(scope.coroutineContext[Job]))
     }
 
     private suspend fun awaitResumeIfPaused() {
@@ -257,9 +245,9 @@ class TtsController(
 
     // region 内部：播放调度
     private fun startWorker() {
-        val provider = currentProvider
-        if (provider == null) {
-            _error.update { "No TTS provider selected" }
+        val session = currentSession
+        if (session == null) {
+            _error.update { "No speech execution session admitted" }
             return
         }
 
@@ -292,7 +280,7 @@ class TtsController(
                     prefetchFrom(chunk.index + 1)
 
                     val response = try {
-                        awaitOrCreate(chunk, provider)
+                        awaitOrCreate(chunk, session)
                     } catch (e: Exception) {
                         if (e is CancellationException) throw e
                         Log.e(TAG, "Synthesis error", e)
@@ -307,7 +295,14 @@ class TtsController(
                     // 播放
                     isPreparingChunk = false
                     try {
-                        audio.play(response)
+                        coroutineScope {
+                            var playback: kotlinx.coroutines.Deferred<Unit>? = null
+                            session.admitPlayback {
+                                check(currentSession === session && workerOwner.owns(ownershipToken)) { "tts_queue_replaced" }
+                                playback = async(start = CoroutineStart.LAZY) { audio.play(response) }.also { it.start() }
+                            }
+                            requireNotNull(playback) { "tts_playback_not_admitted" }.await()
+                        }
                     } catch (e: Exception) {
                         if (e is CancellationException) throw e
                         Log.e(TAG, "Playback error", e)
@@ -332,7 +327,7 @@ class TtsController(
     }
 
     private fun prefetchFrom(startIndex: Int) {
-        val provider = currentProvider ?: return
+        val session = currentSession ?: return
         val begin = startIndex.coerceAtLeast(lastPrefetchedIndex + 1)
         val endExclusive = (begin + prefetchCount).coerceAtMost(playbackQueue.totalChunkCount())
         if (begin >= endExclusive) return
@@ -340,20 +335,20 @@ class TtsController(
         for (i in begin until endExclusive) {
             val chunk = playbackQueue.chunkAt(i) ?: continue
             cache.computeIfAbsent(chunk.id) {
-                scope.async(Dispatchers.IO) { synthesizer.synthesize(provider, chunk) }
+                scope.async(Dispatchers.IO) { session.synthesize(chunk) }
             }
         }
         lastPrefetchedIndex = endExclusive - 1
     }
 
-    private suspend fun awaitOrCreate(chunk: TtsChunk, provider: TTSProviderSetting): TTSResponse {
+    private suspend fun awaitOrCreate(chunk: TtsChunk, session: TtsPlaybackSession): TTSResponse {
         val deferred = cache.computeIfAbsent(chunk.id) {
-            scope.async(Dispatchers.IO) { synthesizer.synthesize(provider, chunk) }
+            scope.async(Dispatchers.IO) { session.synthesize(chunk) }
         }
         return try {
             deferred.await()
         } finally {
-            // 可按需保留缓存（此处保留，便于重播/重试）
+            cache.remove(chunk.id, deferred)
         }
     }
     // endregion

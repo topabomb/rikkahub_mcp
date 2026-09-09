@@ -17,6 +17,30 @@ internal suspend fun EnterpriseSessionController.enrollFixture(packet: Enterpris
     enrollLocal(packet.identity, redeem = { packet.identity }, configuration = { packet })
 
 class EnterprisePackageTest {
+    @Test fun `TTS requires its own explicit voice while HTTP ASR carries only optional language`() {
+        val packet = exampleEnterprisePackage()
+        val root = EnterprisePackageCodec.json.parseToJsonElement(EnterprisePackageCodec.encode(packet).decodeToString()).jsonObject
+        val configuration = root.getValue("configuration").jsonObject
+        fun encoded(category: String, value: JsonObject) = JsonObject(root + ("configuration" to
+            JsonObject(configuration + (category to JsonArray(listOf(value)))))).toString().encodeToByteArray()
+        val tts = configuration.getValue("tts").jsonArray.single().jsonObject
+        for (voice in listOf<kotlinx.serialization.json.JsonElement?>(null, kotlinx.serialization.json.JsonNull,
+            JsonPrimitive(""), JsonPrimitive(" "), JsonPrimitive(4))) {
+            val candidate = if (voice == null) JsonObject(tts - "voice") else JsonObject(tts + ("voice" to voice))
+            assertThrows(EnterpriseConfigurationException::class.java) { EnterprisePackageCodec.decode(encoded("tts", candidate)) }
+        }
+        val asr = configuration.getValue("asr").jsonArray.single().jsonObject
+        for (invalid in listOf(JsonObject(asr + ("voice" to JsonPrimitive("example"))),
+            JsonObject(asr + ("language" to JsonPrimitive(" "))), JsonObject(asr + ("sampleRate" to JsonPrimitive(24000))))) {
+            assertThrows(EnterpriseConfigurationException::class.java) { EnterprisePackageCodec.decode(encoded("asr", invalid)) }
+        }
+        val withLanguage = EnterprisePackageCodec.decode(encoded("asr", JsonObject(asr + ("language" to JsonPrimitive("zh")))))
+        assertEquals("zh", withLanguage.configuration.asr.single().language)
+        assertEquals(withLanguage, EnterprisePackageCodec.decode(EnterprisePackageCodec.encode(withLanguage)))
+        assertEquals("example", packet.configuration.tts.single().voice)
+        assertNull(packet.configuration.asr.single().language)
+    }
+
     @Test fun `private image models require the implemented image wire and preserve authentication ownership`() {
         val base = exampleEnterprisePackage()
         val model = base.configuration.models.first().copy(id = "mdl_image_test", type = me.rerere.ai.provider.ModelType.IMAGE)

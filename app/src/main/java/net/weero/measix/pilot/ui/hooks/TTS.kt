@@ -8,7 +8,14 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.StateFlow
+import me.rerere.tts.controller.TtsPlaybackSession
+import me.rerere.tts.controller.TtsSynthesizer
 import me.rerere.tts.model.PlaybackState
 import net.weero.measix.pilot.data.datastore.SettingsStore
 import net.weero.measix.pilot.data.datastore.getSelectedTTSProvider
@@ -140,7 +147,9 @@ private class CustomTtsStateImpl(
     ttsManager: TTSManager,
 ) : CustomTtsState {
 
-    private val controller by lazy { me.rerere.tts.controller.TtsController(context, ttsManager) }
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    private val synthesizer = TtsSynthesizer(ttsManager)
+    private val controller by lazy { TtsController(context) }
 
     override val isAvailable: StateFlow<Boolean> get() = controller.isAvailable
     override val isSpeaking: StateFlow<Boolean> get() = controller.isSpeaking
@@ -161,8 +170,13 @@ private class CustomTtsStateImpl(
 
     fun updateProvider(provider: TTSProviderSetting?) {
         // Provider 切换时清空队列和 activeSource
-        stop()
-        controller.setProvider(provider)
+        val cleanup = controller.setSession(provider?.let { selected ->
+            TtsPlaybackSession(
+                synthesize = { chunk -> synthesizer.synthesize(selected, chunk) },
+                admitPlayback = { start -> start() },
+            )
+        })
+        scope.launch { cleanup.awaitClosed() }
     }
 
     override fun speak(text: String, flushCalled: Boolean) {
@@ -184,16 +198,18 @@ private class CustomTtsStateImpl(
         val processed = text.stripMarkdown()
 
         // queueSessionId 是队列边界；source 只标记该批音频的 UI 来源。
-        controller.speak(
+        val cleanup = controller.speak(
             text = processed,
             replaceWithinSession = replaceWithinSession,
             source = source,
             queueSessionId = queueSessionId,
         )
+        scope.launch { cleanup?.awaitClosed() }
     }
 
     override fun stop() {
-        controller.stop()
+        val cleanup = controller.stop()
+        scope.launch { cleanup.awaitClosed() }
     }
 
     override fun pause() {
@@ -202,7 +218,7 @@ private class CustomTtsStateImpl(
     }
 
     override fun resume() {
-        controller.resume()
+        scope.launch { controller.resume() }
         Log.d("CustomTtsState", "TTS resumed")
     }
 
@@ -219,6 +235,9 @@ private class CustomTtsStateImpl(
     }
 
     override fun cleanup() {
-        controller.dispose()
+        val cleanup = controller.dispose()
+        scope.launch {
+            try { cleanup.awaitClosed() } finally { scope.cancel() }
+        }
     }
 }

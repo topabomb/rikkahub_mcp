@@ -399,6 +399,10 @@ Search 包含本地用户 API key/URL/账号，不作为 Model/MCP 路由或企�
 
 `selectedTTSProviderId` 选中一个 provider；`defaultTTSPlaybackSpeed` 是播放层公共速度，不是服务端 TTS voice。
 
+企业公开定义使用 `EnterpriseTtsResource`，字段为 `id/name/enabled/modelId/voice`；`voice` 必须显式非空，不补 Android 默认音色。它与用户 `TTSProviderSetting`、私有 `EnterpriseRuntimeBinding` 分别保存。
+
+`TtsController` 统一管理分片、预取与播放；每个 `TtsPlaybackSession` 提供合成和播放准入回调。停止取消并返回同一组任务的清理回执，恢复播放复验原 worker，销毁等待整个 controller 协程作用域，包含旧队列尚未退出的合成。现有 `rememberCustomTtsState` 消费者提供个人 Provider 回调并等待清理。OpenAI/Gemini HTTP 合成使用 `Call.readResponse`，取消实际网络 Call，并等待响应正文读取退出后关闭响应。
+
 ### 4.6 ASR
 
 所有 Local ASR 类型都有 `id/name`，类型特有字段如下：
@@ -409,6 +413,10 @@ Search 包含本地用户 API key/URL/账号，不作为 Model/MCP 路由或企�
 | `DashScope` | `id, name, apiKey, websocketUrl, model, language, sampleRate, vadThreshold, silenceDurationMs` |
 
 当前 Local ASR 使用 WebSocket/realtime controller 配置，HTTP transcription 不由这些 realtime 类型承载。
+
+`RealtimeAsrController` 统一管理两种个人实时协议的连接、消息投影和停止流程，各自的 endpoint/session 编码仍取对应配置类型。`PcmAudioCapture` 独占一只麦克风及阻塞读循环。用户停止、服务端结束和关闭帧共用一次读循环等待与关闭握手；销毁等待所有已取消录音及原连接的 WebSocket 终态回调。`rememberCustomAsrState` 提供稳定状态流，并等待历代 Provider controller 的销毁回执；迟到回调不得更新新连接或新输入。
+
+企业公开定义独立使用 `EnterpriseAsrResource`，字段为 `id/name/enabled/modelId/language`，其中 `language` 可省略，提供时必须非空。不接受 TTS 的 `voice` 或 realtime 的 `sampleRate` 等字段。
 
 ### 4.7 MCP
 
