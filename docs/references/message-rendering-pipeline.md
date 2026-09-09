@@ -29,7 +29,7 @@ UIMessage.parts[]
 | Markdown AST / HTML DOM | `app/src/main/java/net/weero/measix/pilot/ui/components/richtext/Markdown.kt`、`MarkdownNew.kt` |
 | 代码、Mermaid、LaTeX | `app/src/main/java/net/weero/measix/pilot/ui/components/richtext/HighlightCodeBlock.kt`、`Mermaid.kt`、`LatexText.kt`、`MathBlock.kt` |
 | HTML、Diff 与图片 | `app/src/main/java/net/weero/measix/pilot/ui/components/richtext/SimpleHtmlBlock.kt`、`DiffView.kt`、`ZoomableAsyncImage.kt` |
-| 全文预览 | `app/src/main/java/net/weero/measix/pilot/ui/components/richtext/MarkdownWeb.kt`、`ui/pages/webview/WebViewPage.kt`、`app/src/main/assets/html/mark.html` |
+| 全文预览 | `app/src/main/java/net/weero/measix/pilot/ui/components/richtext/MarkdownWeb.kt`、`ui/pages/webview/ContentPreviewPage.kt`、`app/src/main/assets/html/mark.html` |
 | WebView 封装 | `app/src/main/java/net/weero/measix/pilot/ui/components/webview/WebView.kt` |
 
 ## 2. 第一层：Part 分组与分发
@@ -171,6 +171,15 @@ Flow 异步收集。
 
 ---
 
+### 富文本动作与来源
+
+`RichTextHost` 在聊天/子助手宿主借用 `ConversationViewLease`，用户配置预览明确使用 `UserConfiguration`，开发示例和更新说明明确使用 `Static`。它为整棵渲染树提供统一链接、预览和一个待处理文档选择器；渲染组件不读写文件、不从当前空间重新推断来源。两个 Markdown 引擎与 HTML 链接均经同一 URI handler；缺少交互宿主的离屏树只显示内容，不借系统默认 URI handler 获得打开权限。
+
+代码/表格下载在点击时冻结正文、文件名、MIME 和原来源。选择器返回后由 `MediaExportService` 接收 URI，包括缺失请求与已取消宿主；失败清理新建文档，取消原样传播。旧选择器未回交前不会被新点击替换。共享配置文件仍需 Artifact owner 验证个人配置的持久 root，不能读取任意个人历史附件。
+
+聊天图片导出的独立 Compose 树只传递原来源及图片投影，不安装交互选择器。`BitmapComposer` 由调用导出协程直接拥有；捕获完成或取消都移除临时 Compose 树，未交付 Bitmap 被回收，不留下独立 Handler 回调或第二协程作用域。
+
+
 ## 4. 代码块渲染（HighlightCodeBlock）
 
 `HighlightCodeBlock`（`HighlightCodeBlock.kt`）根据代码语言进入三条路径：
@@ -181,10 +190,10 @@ HighlightCodeBlock(code, language, completeCodeBlock)
   ├─ canInlinePreview = completeCodeBlock && language ∈ {html, svg}
   │    └─ canInlinePreview && previewMode → CodeBlockPreview (WebView 内联预览)
   │         默认预览模式，可切换"代码/预览"
-  │         └─ 全屏: WebViewContentCache.store → Screen.WebView(contentId)
+  │         └─ 全屏: RichTextHost → Screen.ContentPreview(document)
   │
   ├─ completeCodeBlock && language == "mermaid" → Mermaid (WebView 渲染)
-  │    └─ 全屏: WebViewContentCache.store → Screen.WebView(contentId)
+  │    └─ 全屏: RichTextHost → Screen.ContentPreview(document)
   │
   └─ 其他（或代码块未闭合）→ 原生 HighlightText (语法高亮)
         ├─ autoWrap + showLineNumbers → 逐行渲染 (CodeBlockWithLineNumbersWrapped)
@@ -242,11 +251,9 @@ HighlightCodeBlock(code, language, completeCodeBlock)
 ### 5.3 JS ↔ Kotlin 交互
 
 - **接口注入**：`MermaidInterface` 类通过 `@JavascriptInterface` 注入，名为 `AndroidInterface`
-- **导出 PNG**：Kotlin 侧通过 `webViewState.webView?.evaluateJavascript("exportSvgToPng();", null)` 触发 JS 函数
-  - JS 侧：SVG 序列化 → Base64 → Canvas 绘制（含水印）→ `canvas.toDataURL('image/png')` → 调用 `AndroidInterface.exportImage(base64)`
-  - Kotlin 侧：解码 Bitmap → `exportImage()` 保存到相册
-- **全屏预览**：代码块 Header 的 View 图标将同一 Mermaid HTML 写入 `WebViewContentCache`，再导航到
-  `Screen.WebView(contentId)`
+- **导出 PNG**：Header 的显式递增请求号触发 `exportSvgToPng(requestId)`。JS 经 SVG/Canvas 返回 `AndroidInterface.exportImage(requestId, base64Image)`，只接受当前待处理请求一次；函数缺失允许下次重试，旧回调不能完成新请求。
+- Kotlin 侧通过原宿主 `ImageSource` 与 `MediaExportService.saveImage` 验证来源、读取和相册发布。整个 WebView/bridge 随代码、来源及主题重建，新实例不重放旧导出计数。
+- **全屏预览**：Header 把同一 HTML 与原来源交给 `RichTextHost`，经 `Screen.ContentPreview(document)` 借用到新页面，不写磁盘缓存。
 
 ### 5.4 布局
 
@@ -267,22 +274,23 @@ HighlightCodeBlock(code, language, completeCodeBlock)
 - **SVG**：包裹在 `<!DOCTYPE html><html><body style="margin:0;display:flex;justify-content:center;align-items:center;min-height:100vh;">$svgCode</body></html>` 中，居中显示
 - **HTML**：直接使用原始代码作为 HTML 内容
 
-WebView 通过 `rememberWebViewState(data = html, baseUrl = "https://measix.local", mimeType = "text/html")` 加载，
-`baseUrl` 使 HTML 中的相对路径资源能正确解析。
+`RenderedContentWebView` 与全屏页共用 `rememberRenderedContentState`。每份文档使用独立的随机 `.invalid` origin，禁用 DOM Storage，避免 Cookie/IndexedDB/浏览器缓存成为跨来源存储；不修改 Portal 的浏览器状态。原来源尚未授权或已经撤销时不创建 WebView，授权结果必须匹配具体来源，不能继承旧文档的 true。
+
+本地图片经原文件服务解析、读取，`file:` 和 `/upload` 资源由文档内映射转到该文档的绝对虚拟 origin（含动态节点与 CSS）；外部 `<base>` 不能把原本地路径改发网络。`/upload` 链接归回原来源。平台 WebView 禁止自行访问任意 file/content 路径；用户点击链接交给原宿主文件/外链动作。模型 HTML 不取得 Portal Bridge。
 
 ### 6.2 布局与交互
 
 - 内联预览：`Modifier.height(200.dp)` 固定高度（与 Mermaid 一致）
 - `useWideViewPort` + `loadWithOverviewMode` + `builtInZoomControls`（隐藏缩放按钮）
 - 可在"代码/预览"模式间切换（`previewMode` 状态）
-- 全屏预览：通过 `Screen.WebView` 导航到 `WebViewPage`
+- 全屏预览：通过 `Screen.ContentPreview` 导航到 `ContentPreviewPage`
 - **无 JS 接口**：纯展示，不需要 `@JavascriptInterface`
 
 ---
 
 ## 7. WebView 核心封装层
 
-`WebView.kt` 是所有 WebView 场景的统一封装，通过 `AndroidView` 包装原生 `WebView`。
+`WebView.kt` 是富文本预览和 Mermaid 的平台视图封装（企业 Portal 使用独立宿主），通过 `AndroidView` 包装原生 `WebView`。
 
 ### 7.1 状态管理（WebViewState）
 
@@ -318,12 +326,9 @@ WebViewState
 
 ## 8. 全屏 WebView 页面
 
-`WebViewPage.kt` 接收 `url` 或 `WebViewContentCache` 的 `contentId`，提供完整的 WebView 浏览体验：
+`ContentPreviewPage` 接收进程内 `RenderedContent`，复用原页面来源。导航只序列化稳定条目 ID，HTML/来源标为 transient；保存恢复后显示不可用，必须从原页面重新打开，不能凭旧缓存 ID 重建访问。
 
-- `Scaffold` + `TopAppBar`（标题 / 刷新 / 前进 / 更多操作）
-- `BackHandler` 处理 WebView 内部后退导航
-- "Open in Browser"：通过 `LocalUriHandler` 打开系统浏览器
-- Console Logs BottomSheet：开发调试用，按级别（ERROR/WARNING）着色
+页面保留返回、刷新和分级 Console Logs。刷新复验原来源；链接经宿主授权后交给原生处理，预览页不成为通用浏览器。来源撤销后移除并销毁原 WebView，关闭预览不主动关闭父页面的 lease。
 
 ---
 
@@ -331,7 +336,7 @@ WebViewState
 
 ### 9.1 触发方式
 
-在聊天消息的长按操作菜单中，`onWebViewPreview` 提取所有 `UIMessagePart.Text` 的文本，调用 `buildMarkdownPreviewHtml()` 生成 HTML，导航到 `WebViewPage` 全屏渲染。
+在聊天消息的长按操作菜单中，`onWebViewPreview` 提取所有 `UIMessagePart.Text` 的文本，调用 `buildMarkdownPreviewHtml()` 生成 HTML，通过宿主导航到 `ContentPreviewPage` 全屏渲染。
 
 ### 9.2 HTML 模板（mark.html）
 
@@ -371,5 +376,5 @@ WebViewState
 | 图片 | 原生 | `ZoomableAsyncImage`（点击进入全屏多图查看器） | Coil3 |
 | 表格 | 原生 | `DataTable` | Compose 自定义布局 |
 | HTML 块 | 原生 | `SimpleHtmlBlock` / `MarkdownNew` | Jsoup → Compose |
-| 全屏预览 | WebView | `WebViewPage` | 独立页面 |
+| 全屏预览 | WebView | `ContentPreviewPage` | 独立页面 |
 | Markdown 全文预览 | WebView | `mark.html` 模板 | markdown-it + KaTeX + Mermaid + highlight.js |

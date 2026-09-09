@@ -169,7 +169,7 @@ fun UpdateCard(vm: ChatVM) {
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.primary
                     )
-                    MarkdownBlock(
+                    MarkdownBlock(source = net.weero.measix.pilot.service.RenderedContentSource.Static,
                         content = info.changelog,
                         modifier = Modifier
                             .fillMaxWidth()

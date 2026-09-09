@@ -122,7 +122,11 @@ fun ChatExportSheet(
     val verifyAccess: suspend () -> Unit = remember(source, queries) {
         { queries.requireViewAccess(requireNotNull(source) { "conversation_view_unavailable" }) }
     }
-    val imageResolver = net.weero.measix.pilot.ui.components.richtext.LocalImageSourceResolver.current
+    val contentSource = source?.let { net.weero.measix.pilot.service.RenderedContentSource.Conversation(it) }
+    val contentFiles: net.weero.measix.pilot.service.FileManagementApplicationService = org.koin.compose.koinInject()
+    val imageResolver: suspend (String) -> net.weero.measix.pilot.service.ImageSource? = remember(contentSource, contentFiles) {
+        { url -> contentSource?.let { contentFiles.resolveContentImage(it, url) } }
+    }
     val mediaExportService: MediaExportService = org.koin.compose.koinInject()
     val attachmentPreview = remember(attachmentPreviews) {
         { ref: String -> attachmentPreviews[ref] }
@@ -229,7 +233,6 @@ fun ChatExportSheet(
                                         try {
                                             exportToImage(
                                                 context = context,
-                                                scope = scope,
                                                 density = density,
                                                 conversationTitle = conversationTitle,
                                                 messages = selectedMessages,
@@ -237,6 +240,7 @@ fun ChatExportSheet(
                                                 mediaExportService = mediaExportService,
                                                 attachmentPreview = attachmentPreview,
                                                 imageResolver = imageResolver,
+                                                contentSource = contentSource,
                                                 verifyAccess = verifyAccess,
                                                 options = imageExportOptions
                                             )
@@ -396,9 +400,8 @@ private suspend fun exportToMarkdown(
 
 }
 
-private suspend fun exportToImage(
+internal suspend fun exportToImage(
     context: Context,
-    scope: CoroutineScope,
     density: Density,
     conversationTitle: String,
     messages: List<UIMessage>,
@@ -406,11 +409,12 @@ private suspend fun exportToImage(
     mediaExportService: MediaExportService,
     attachmentPreview: (String) -> net.weero.measix.pilot.service.AttachmentPreview?,
     imageResolver: (suspend (String) -> net.weero.measix.pilot.service.ImageSource?)?,
+    contentSource: net.weero.measix.pilot.service.RenderedContentSource?,
     verifyAccess: suspend () -> Unit,
     options: ImageExportOptions = ImageExportOptions()
 ) {
     val filename = "chat-export-${LocalDateTime.now().format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd_HH-mm-ss"))}.png"
-    val composer = BitmapComposer(scope)
+    val composer = BitmapComposer()
     val activity = requireNotNull(context.getActivity()) { "Unable to access the current activity" }
 
     verifyAccess()
@@ -420,6 +424,7 @@ private suspend fun exportToImage(
         screenDensity = density,
         content = {
             CompositionLocalProvider(
+                net.weero.measix.pilot.ui.components.richtext.LocalRenderedContentSource provides contentSource,
                 LocalSettings provides settings,
                 net.weero.measix.pilot.ui.components.richtext.LocalImageSourceResolver provides imageResolver,
                 net.weero.measix.pilot.ui.components.message.LocalAttachmentPreview provides attachmentPreview,

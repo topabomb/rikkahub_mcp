@@ -341,7 +341,7 @@ Android 媒体接线按下列所有权完成：`PortalMediaStore` 管理独占�
 | 模型消费者（C5） | 主/子、标题/建议/摘要、附件识别和图片生成已接入原域模型捕获、逐请求准入与 binding；完整工具调用示例继续实施 |
 | MCP / Gateway（C5、U2） | 企业固定选择已有 UI；仍需接通原 MCP runtime/catalog/OAuth owner、企业 binding 与示例实际工具执行 |
 | 语音（C5、U2） | 仍需 TTS/ASR 的企业/用户目录、私有 binding、原请求准入及本地音频/转写 adapter |
-| 文件与 Workspace（C6） | 会话/记忆、目录、图片查看/保存、生成落库、背景目标和参考图片导入已分域验证；其他媒体出口、共享配置资产复制及 Workspace 全局 upload 挂载仍需收口 |
+| 文件与 Workspace（C6） | 会话/记忆、目录、图片、背景、参考输入及附件/富文本出口已分域验证；共享配置资产进入聊天的复制及 Workspace 上传/终端/SAF 边界仍需收口 |
 | 个人备份（C7） | 个人 Settings 保全已实现；备份仍需个人闭合图导出、恢复合并保全最新企业图和系统备份边界，不能用 Settings 测试代表数据保全 |
 | 完整示例与 UI（M1、U2） | 正式企业入口、Portal、公开模板和私有文件 ignore 已有；仍需原生整包导入/场景管理、工具批次 mock、Starter 预填及剩余资源/助手页面 |
 | 退休与发行（R1、V1） | 消费者完成后删除旧 managed overlay 链，再做 E01–E12、Release/硬件验收和版本 20 交付；真实后台属于下一阶段 |
@@ -582,3 +582,10 @@ gradlew.bat connectedDebugAndroidTest --no-parallel --max-workers=1
 附件与渲染导出已收回既有文件服务：文档/音频/视频从原页面授权和稳定 Artifact ID 出发，在生命周期锁内复制后交给外部查看器；最终交付复验原页面与 Session。失败或取消只清理未交付副本，启动清理不会删除本次进程刚导出的文件。Mermaid 的实际 WebView、导出请求和回调属于原文档，换来源/主题不重放旧请求，迟到回调不能完成新请求；没有新增持久化结构或文件 owner。
 
 该批独立复审已关闭发现，最终串行 `test assembleDebug lintDebug assembleRelease connectedDebugAndroidTest` 全部通过（5 分 26 秒）：App 2,080 项 JVM 无失败/跳过，lint 0 错误、287 警告；Android 17 模拟器 App 173 项、Speech 6 项通过，Workspace 的硬链接能力用例按设备条件跳过。首次整套设备运行因模拟器系统看门狗终止系统进程而中断，冷启动并切换软件图形后端后完整重跑通过，未放宽业务断言。分层结果见 `build/reports/enterprise/attachment-export-verification.json`。富文本链接/代码与表格导出/HTML 预览、Workspace、MCP/Gateway、Speech 企业接线、备份和版本 20 最终验收继续实施。
+
+
+富文本批次已收回原页面来源：聊天/子助手、用户配置预览与静态说明明确区分；链接、代码和表格下载共用宿主动作与既有文件服务。选择器返回只处理点击时冻结的正文和来源，失效或恢复后缺失请求时清理新建文档。HTML 预览不再落盘缓存，每份文档使用独立 origin；原生 file/content 访问关闭，本地资源由原 Artifact owner 校验。保存导航只保留条目 ID，不能重建旧 HTML 或授权。聊天截图由原导出协程拥有临时 Compose 树，取消/清理失败保留原错误并释放资源。
+
+该批独立复审的来源、选择器、Bitmap 清理、外部 base 与观察器循环问题已关闭。最终串行 `test assembleDebug lintDebug assembleRelease connectedDebugAndroidTest` 通过（13 分 37 秒）：App 2,079 项 JVM、Android 17 模拟器 App 178 项和 Speech 6 项无失败，lint 0 错误、290 警告；Workspace 保留 Windows JVM 与设备硬链接条件跳过。设备消费者覆盖代码/表格点击、两个 Markdown 引擎与 HTML 链接、真实 Room/Artifact 图片、预览导航恢复与截图取消；选择器结果和截图最终出口使用测试适配，不能表述为人工系统文件选择/图库验收。分层证据见 `build/reports/enterprise/richtext-verification.json`。版本仍为 0.0.19；共享配置复制、Workspace、MCP/Gateway、Speech 企业接线、备份与版本 20 整体验收继续实施。
+
+下一批 Workspace 的收口约束（尚未实现）：原生 `/upload` 读取经 Artifact 校验原主体与发布状态，写入/编辑始终拒绝，不能回落到共享 Linux 同名目录。Shell 只接收明确列出的授权输入副本，按单次调用绑定 `/upload`，空列表也不暴露历史目录；副本数量/总大小有界，实际进程停止后才清理。PTY 不自动挂载上传目录，原 Session/选择随终端保留；切域在发布新选择前同步撤销旧 viewport 的实际输入，关闭失败保留 owner 供重试。SAF 仍暴露共享 Workspace，经既有应用/查询入口与描述符安全操作完成，不另建当前域状态。沿用 PRoot 的既有非内核沙箱边界：本期限制应用交付的文件并保护原 Artifact，不宣称能够阻断恶意 Shell 对宿主的所有旁路。

@@ -127,6 +127,14 @@ fun MarkdownNew(
     style: TextStyle = LocalTextStyle.current,
     onClickCitation: (String) -> Unit = {},
 ) {
+    androidx.compose.runtime.CompositionLocalProvider(androidx.compose.ui.platform.LocalUriHandler provides
+        (LocalRichTextActions.current?.uriHandler ?: UnavailableContentUriHandler)) {
+        MarkdownHtmlContent(content, modifier, style, onClickCitation)
+    }
+}
+
+@Composable
+private fun MarkdownHtmlContent(content: String, modifier: Modifier, style: TextStyle, onClickCitation: (String) -> Unit) {
     var html by remember {
         mutableStateOf(
             value = generateMarkdownHtml(content),

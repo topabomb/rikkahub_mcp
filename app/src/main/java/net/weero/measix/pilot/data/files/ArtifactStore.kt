@@ -260,28 +260,45 @@ class ArtifactStore(
 
     fun file(ref: LocalArtifactRef): File = payloadStore.file(ref.relativePath)
 
-    internal suspend fun resolveConfigurationImage(file: File): ArtifactMediaPreview? = withContext(Dispatchers.IO) {
+    internal suspend fun resolveConfigurationImage(file: File): ArtifactMediaPreview? = resolveConfigurationMedia(file, image = true)
+
+    internal suspend fun resolveConfigurationMedia(file: File): ArtifactMediaPreview? = resolveConfigurationMedia(file, image = false)
+
+    private suspend fun resolveConfigurationMedia(file: File, image: Boolean): ArtifactMediaPreview? = withContext(Dispatchers.IO) {
         val path = payloadStore.relativePathForFile(file) ?: return@withContext null
         withLifecycleLock {
             val entity = artifactDAO.getByPathAndState(path, ArtifactState.ACTIVE.name) ?: return@withLifecycleLock null
-            requireConfigurationImage(entity.id)
+            requireConfigurationMedia(entity.id, image)
             ArtifactMediaPreview(entity.id, AttachmentRefs.fileToFileUrl(payloadStore.file(entity.relativePath)), entity.displayName, entity.updatedAt)
         }
     }
 
     internal suspend fun requireConfigurationImageAccess(artifactId: Long) = withContext(Dispatchers.IO) {
-        withLifecycleLock { requireConfigurationImage(artifactId); Unit }
+        withLifecycleLock { requireConfigurationMedia(artifactId, image = true); Unit }
+    }
+
+    internal suspend fun requireConfigurationMediaAccess(artifactId: Long) = withContext(Dispatchers.IO) {
+        withLifecycleLock { requireConfigurationMedia(artifactId); Unit }
     }
 
     internal suspend fun readConfigurationImage(artifactId: Long): ByteArray = withContext(Dispatchers.IO) {
-        withLifecycleLock { readImagePayload(requireConfigurationImage(artifactId)) }
+        withLifecycleLock { readImagePayload(requireConfigurationMedia(artifactId, image = true)) }
     }
 
-    private suspend fun requireConfigurationImage(artifactId: Long): ArtifactEntity {
-        val entity = requireReadableImage(ConfigurationScope.Personal, artifactId)
+    internal suspend fun copyConfigurationMediaTo(artifactId: Long, output: java.io.OutputStream): String = withContext(Dispatchers.IO) {
+        withLifecycleLock {
+            val entity = requireConfigurationMedia(artifactId)
+            payloadStore.copyTo(entity.relativePath, output)
+            entity.mimeType
+        }
+    }
+
+    private suspend fun requireConfigurationMedia(artifactId: Long, image: Boolean = false): ArtifactEntity {
+        val entity = if (image) requireReadableImage(ConfigurationScope.Personal, artifactId)
+            else requireReadableMedia(ConfigurationScope.Personal, artifactId)
         settingsCoordinator.readCommitted { document ->
             check(ArtifactReferencePolicy.roots(document.personalSettings()).any { rootRelativePath(it) == entity.relativePath }) {
-                "image_not_in_shared_configuration"
+                "media_not_in_shared_configuration"
             }
         }
         return entity

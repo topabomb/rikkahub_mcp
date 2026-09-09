@@ -158,7 +158,6 @@ private fun DetailContent(
     attachmentPreviews: Map<String, net.weero.measix.pilot.service.AttachmentPreview>,
     modifier: Modifier = Modifier,
 ) {
-    val imageResolver = net.weero.measix.pilot.ui.components.richtext.rememberConversationImageResolver(source)
     val listState = rememberLazyListState()
     var requestExpanded by remember(state.link.metadata.runId) { mutableStateOf(false) }
     var requestOverflow by remember(state.link.metadata.runId) { mutableStateOf(false) }
@@ -217,8 +216,8 @@ private fun DetailContent(
 
     Box(modifier = modifier.fillMaxSize()) {
         // 相册 Provider 提升到列表外: 全部 item 共享同一稳定 lambda, 避免逐项 provider 节点
-        CompositionLocalProvider(
-            net.weero.measix.pilot.ui.components.richtext.LocalImageSourceResolver provides imageResolver,
+        net.weero.measix.pilot.ui.components.richtext.RichTextHost(
+            source?.let { net.weero.measix.pilot.service.RenderedContentSource.Conversation(it) },
             LocalConversationImages provides timelineAlbum,
             LocalAttachmentPreview provides attachmentPreviewProvider,
             LocalImagePreviewActions provides previewActions,

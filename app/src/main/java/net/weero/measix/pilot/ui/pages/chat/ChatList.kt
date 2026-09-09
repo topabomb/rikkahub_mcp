@@ -262,7 +262,6 @@ private fun ChatListNormal(
     onConversationSystemPromptChange: ((String?) -> Unit)? = null,
 ) {
     val scope = rememberCoroutineScope()
-    val imageResolver = net.weero.measix.pilot.ui.components.richtext.rememberConversationImageResolver(detailSource)
     val loading = turnPresentation.isActive
     val loadingState by rememberUpdatedState(loading)
     var isRecentScroll by remember { mutableStateOf(false) }
@@ -370,8 +369,8 @@ private fun ChatListNormal(
             if (assistant != null) listOf(backgroundHost.action) else emptyList()
         }
 
-        CompositionLocalProvider(
-            net.weero.measix.pilot.ui.components.richtext.LocalImageSourceResolver provides imageResolver,
+        net.weero.measix.pilot.ui.components.richtext.RichTextHost(
+            detailSource?.let { net.weero.measix.pilot.service.RenderedContentSource.Conversation(it) },
             net.weero.measix.pilot.ui.components.message.tools.LocalToolConversationId provides snapshot.header.id,
             LocalConversationImages provides conversationAlbum,
             LocalAttachmentPreview provides attachmentPreviewProvider,

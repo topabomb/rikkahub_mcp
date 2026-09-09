@@ -48,6 +48,44 @@ class MediaExportService(private val files: FileManagementApplicationService) {
     suspend fun shareText(context: Context, text: String, fileName: String, verifyAccess: suspend () -> Unit) =
         shareBytes(context, text.toByteArray(Charsets.UTF_8), fileName, "text/markdown", verifyAccess)
 
+    suspend fun openContentLink(context: Context, source: RenderedContentSource, url: String) {
+        val uri = android.net.Uri.parse(url)
+        if (uri.host.equals("measix.local", ignoreCase = true)) {
+            require(uri.scheme == "https" && uri.port == -1) { "content_link_unavailable" }
+            val local = requireNotNull(renderedLocalFileUrl(uri)) { "content_link_unavailable" }
+            openAttachment(context, requireNotNull(files.resolveContentAttachment(source, local)) { "attachment_unavailable" })
+            return
+        }
+        if (uri.scheme?.lowercase() in setOf("http", "https", "mailto", "tel")) {
+            withContext(Dispatchers.Main.immediate) {
+                files.withContentAccess(source) { context.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW, uri)) }
+            }
+        } else {
+            openAttachment(context, requireNotNull(files.resolveContentAttachment(source, url)) { "attachment_unavailable" })
+        }
+    }
+
+    suspend fun saveTextDocument(context: Context, uri: android.net.Uri, request: TextDocumentExport?) {
+        try {
+            requireNotNull(request) { "document_request_unavailable" }
+            withContext(Dispatchers.IO) {
+                files.withContentAccess(request.source) {
+                    requireNotNull(context.contentResolver.openOutputStream(uri, "wt")) { "document_unavailable" }.use { output ->
+                        output.write(request.text.toByteArray(Charsets.UTF_8))
+                    }
+                }
+                files.requireContentAccess(request.source)
+            }
+        } catch (error: Throwable) {
+            try {
+                withContext(NonCancellable + Dispatchers.IO) {
+                    check(android.provider.DocumentsContract.deleteDocument(context.contentResolver, uri)) { "document_cleanup_failed" }
+                }
+            } catch (cleanup: Throwable) { if (cleanup !== error) error.addSuppressed(cleanup) }
+            throw error
+        }
+    }
+
     suspend fun openAttachment(context: Context, preview: AttachmentPreview) {
         val target = requireNotNull(preview.fileTarget) { "attachment_unavailable" }
         publishFile(context, target.displayName ?: "attachment", writePayload = { output ->

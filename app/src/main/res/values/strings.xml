@@ -1661,4 +1661,5 @@
   <string name="setting_files_page_delete_impact_presets">Content referencing this file will be removed from %1$d assistant preset message lists.</string>
   <string name="setting_files_page_load_failed">Unable to load files</string>
   <string name="chat_message_attachment_open_failed">Unable to open this attachment. It may be unavailable or access may have ended.</string>
+  <string name="rendered_content_unavailable">This preview is no longer available. Open it again from the original page.</string>
 </resources>

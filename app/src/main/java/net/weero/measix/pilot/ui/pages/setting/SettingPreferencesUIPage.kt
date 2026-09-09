@@ -343,7 +343,7 @@ fun SettingPreferencesUIPage(vm: SettingVM = koinViewModel()) {
                                     )
                                     Text(text = "${(displaySetting.fontSizeRatio * 100).toInt()}%")
                                 }
-                                MarkdownBlock(
+                                MarkdownBlock(source = net.weero.measix.pilot.service.RenderedContentSource.Static,
                                     content = stringResource(R.string.setting_display_page_font_size_preview),
                                     style = LocalTextStyle.current.copy(
                                         fontSize = LocalTextStyle.current.fontSize * displaySetting.fontSizeRatio,

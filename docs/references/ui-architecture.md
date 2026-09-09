@@ -76,7 +76,7 @@ class Navigator(private val backStack: MutableList<NavKey>) {
 ### 2.3 路由边界
 
 `Screen` 的密封层次与 `RouteActivity` 的 `entry<Screen.*>` 注册是路由清单的唯一权威来源。
-路由按职责分为聊天/分享、历史与收藏、助手配置、设置、扩展与 Workspace，以及 WebView、备份、
+路由按职责分为聊天/分享、历史与收藏、助手配置、设置、扩展与 Workspace，以及内容预览、备份、
 图片生成和调试页面。带业务身份的页面把 ID 放入可序列化路由参数；聊天使用 `ConversationOpenRequest`，
 子助手详情携带 `runId` 与原聊天页面借出的 `ConversationViewLease`；lease 标为导航序列化的 transient，保存恢复后必须从父聊天重新打开详情，不凭会话 ID 重建授权。工作区文件编辑使用 Workspace ID、区域和路径。
 
@@ -767,3 +767,5 @@ insets，不能重复加上键盘高度。多行、编辑态、附件及键盘�
 助手定义编辑调用 `AssistantDetailVM.update(pageSnapshot, edited)`，两者来自同一次页面快照；现有字段 delta 合并应用到最新持久定义。长期存活的提示词输入回调不能将后来更新的背景或其他字段误判成待撤销的编辑。
 
 图片生成页的原生参考图选择由 `ImgGenVM` 保存并一次性消费打开时的 `ImageReferenceImport`，Activity 重建不依赖组合内状态恢复目标；切域或重置后原 Job 失效。`FileManagementApplicationService.importImageReference` 在复制前后验证原选择，复用 `TemporaryImage` 的图片校验与失败清理。缩略图使用带原选择/Job 的 `ImageSource`，不直接读取文件路径；只有已交给生成请求的路径按实际借用 Job 延迟删除，其他副本立即清理。
+
+富文本交互由 `RichTextHost` 统一接收原来源，链接、代码/表格导出与 HTML 预览不在各渲染器中直接操作文件或重新捕获当前域。`Screen.ContentPreview` 只序列化导航 ID，实际 `RenderedContent` 借用原来源且不持久化；恢复后必须从原页重开。内联 HTML/SVG 与全屏页共用来源观察、受管图片读取及独立文档 origin。详细机制见 [消息渲染管线](message-rendering-pipeline.md)。

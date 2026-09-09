@@ -64,7 +64,7 @@ class FileManagementServicesTest {
         val artifacts = mockk<ArtifactStore>()
         val files = FileManagementApplicationService(artifacts, mockk(), ApplicationRecoveryGate().apply { ready() }, controller)
         val view = ConversationViewLease(kotlin.uuid.Uuid.random(), selected.access, selected.revision) {}
-        val preview = AttachmentPreview("file:///report.pdf", null, AttachmentPreview.FileTarget(view, 1, "report.pdf"))
+        val preview = AttachmentPreview("file:///report.pdf", null, AttachmentPreview.FileTarget(net.weero.measix.pilot.service.RenderedContentSource.Conversation(view), 1, "report.pdf"))
         val entered = kotlinx.coroutines.CompletableDeferred<Unit>()
         val resume = kotlinx.coroutines.CompletableDeferred<Unit>()
         coEvery { artifacts.requireMediaAccess(selected.access.scope, 1) } coAnswers { entered.complete(Unit); resume.await() }

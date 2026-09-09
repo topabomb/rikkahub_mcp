@@ -98,14 +98,6 @@ internal fun resolveViewerImages(album: List<ImageSource>, model: ImageSource?):
 val LocalImageSourceResolver = androidx.compose.runtime.compositionLocalOf<(suspend (String) -> ImageSource?)?> { null }
 
 @Composable
-internal fun rememberConversationImageResolver(
-    source: net.weero.measix.pilot.service.ConversationViewLease?,
-): suspend (String) -> ImageSource? {
-    val files: net.weero.measix.pilot.service.FileManagementApplicationService = org.koin.compose.koinInject()
-    return remember(source, files) { { url -> source?.let { files.resolveConversationImage(it, url) } } }
-}
-
-@Composable
 internal fun rememberResolvedImageSource(url: String?): ImageSource? {
     val preview = net.weero.measix.pilot.ui.components.message.LocalAttachmentPreview.current
     val resolver = LocalImageSourceResolver.current

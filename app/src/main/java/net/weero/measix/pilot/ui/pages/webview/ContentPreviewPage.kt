@@ -1,11 +1,8 @@
 ﻿package net.weero.measix.pilot.ui.pages.webview
 
 import me.rerere.hugeicons.HugeIcons
-import me.rerere.hugeicons.stroke.ArrowRight01
 import me.rerere.hugeicons.stroke.Bug01
-import me.rerere.hugeicons.stroke.Earth
 import me.rerere.hugeicons.stroke.Refresh01
-import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -31,63 +28,50 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import me.rerere.hugeicons.stroke.MoreVertical
 import net.weero.measix.pilot.ui.components.nav.BackButton
-import net.weero.measix.pilot.ui.components.webview.WEB_VIEW_BASE_URL
 import net.weero.measix.pilot.ui.components.webview.WebView
-import net.weero.measix.pilot.ui.components.webview.WebViewContentCache
-import net.weero.measix.pilot.ui.components.webview.rememberWebViewState
+import net.weero.measix.pilot.ui.components.webview.rememberRenderedContentState
+import net.weero.measix.pilot.service.RenderedContent
+import net.weero.measix.pilot.ui.components.richtext.RichTextHost
+import androidx.compose.runtime.key
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.ui.res.stringResource
+import kotlinx.coroutines.launch
+import net.weero.measix.pilot.R
 import net.weero.measix.pilot.ui.theme.JetbrainsMono
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun WebViewPage(url: String, contentId: String) {
-    val context = LocalContext.current
-    val state = if (url.isNotEmpty()) {
-        rememberWebViewState(
-            url = url,
-            settings = {
-                builtInZoomControls = true
-                displayZoomControls = false
-                useWideViewPort = true
-                loadWithOverviewMode = true
-            })
-    } else {
-        val content = remember(contentId) {
-            WebViewContentCache.load(context.cacheDir, contentId).orEmpty()
+fun ContentPreviewPage(document: RenderedContent?) {
+    RichTextHost(document?.source) { ContentPreview(document) }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ContentPreview(document: RenderedContent?) {
+    val state = rememberRenderedContentState(document)
+    val scope = rememberCoroutineScope()
+    val files: net.weero.measix.pilot.service.FileManagementApplicationService = org.koin.compose.koinInject()
+    if (state == null || document == null) {
+        Scaffold(topBar = { TopAppBar(title = { Text(stringResource(R.string.code_block_preview)) }, navigationIcon = { BackButton() }) }) {
+            Text(stringResource(R.string.rendered_content_unavailable), Modifier.padding(it).padding(16.dp))
         }
-        rememberWebViewState(
-            data = content,
-            baseUrl = WEB_VIEW_BASE_URL,
-            mimeType = "text/html",
-            settings = {
-                builtInZoomControls = true
-                displayZoomControls = false
-                useWideViewPort = true
-                loadWithOverviewMode = true
-            }
-        )
+        return
     }
 
     var showDropdown by remember { mutableStateOf(false) }
     var showConsoleSheet by remember { mutableStateOf(false) }
     val sheetState = rememberBottomSheetState(initialValue = SheetValue.Hidden)
 
-    BackHandler(state.canGoBack) {
-        state.goBack()
-    }
-
     Scaffold(
         topBar = {
             TopAppBar(
                 title = {
                     Text(
-                        text = state.pageTitle?.takeIf { it.isNotEmpty() } ?: state.currentUrl
-                        ?: "",
+                        text = state.pageTitle?.takeIf { it.isNotEmpty() } ?: stringResource(R.string.code_block_preview),
                         maxLines = 1,
                         style = MaterialTheme.typography.titleSmall
                     )
@@ -96,39 +80,23 @@ fun WebViewPage(url: String, contentId: String) {
                     BackButton()
                 },
                 actions = {
-                    IconButton(onClick = { state.reload() }) {
+                    IconButton(onClick = { scope.launch {
+                        try { files.requireContentAccess(document.source); state.reload() }
+                        catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+                        catch (_: Exception) { state.stopLoading() }
+                    } }) {
                         Icon(HugeIcons.Refresh01, contentDescription = "Refresh")
                     }
 
                     IconButton(
-                        onClick = { state.goForward() },
-                        enabled = state.canGoForward
-                    ) {
-                        Icon(HugeIcons.ArrowRight01, contentDescription = "Forward")
-                    }
-
-                    val urlHandler = LocalUriHandler.current
-                    IconButton(
                         onClick = { showDropdown = true }
                     ) {
-                        Icon(HugeIcons.MoreVertical, contentDescription = "More options")
+                        Icon(HugeIcons.MoreVertical, contentDescription = stringResource(R.string.more_options))
 
                         DropdownMenu(
                             expanded = showDropdown,
                             onDismissRequest = { showDropdown = false }
                         ) {
-                            DropdownMenuItem(
-                                text = { Text("Open in Browser") },
-                                leadingIcon = { Icon(HugeIcons.Earth, contentDescription = null) },
-                                onClick = {
-                                    showDropdown = false
-                                    state.currentUrl?.let { url ->
-                                        if (url.isNotBlank()) {
-                                            urlHandler.openUri(url)
-                                        }
-                                    }
-                                }
-                            )
                             DropdownMenuItem(
                                 text = { Text("Console Logs") },
                                 leadingIcon = { Icon(HugeIcons.Bug01, contentDescription = null) },
@@ -143,12 +111,9 @@ fun WebViewPage(url: String, contentId: String) {
             )
         }
     ) {
-        WebView(
-            state = state,
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(it),
-        )
+        key(state) {
+            WebView(state = state, modifier = Modifier.fillMaxSize().padding(it))
+        }
     }
 
     if (showConsoleSheet) {

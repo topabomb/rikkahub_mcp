@@ -142,10 +142,12 @@ class AppScope(
 /** Detach old temporary files before any application owner can create new exports. */
 internal fun retireApplicationTempFiles(cacheDir: java.io.File): List<java.io.File> {
     val retired = cacheDir.listFiles().orEmpty().filter { it.isDirectory && it.name.startsWith("retired-temp-") }.toMutableList()
-    val current = java.io.File(cacheDir, "temp")
-    if (!current.exists()) return retired
-    val destination = java.io.File(cacheDir, "retired-temp-${java.util.UUID.randomUUID()}")
-    if (current.renameTo(destination)) retired += destination
-    else Log.w("MeasixPilotApp", "Unable to detach old temporary files; leaving them for a later startup")
+    for (name in listOf("temp", "webview_content")) {
+        val current = java.io.File(cacheDir, name)
+        if (!current.exists()) continue
+        val destination = java.io.File(cacheDir, "retired-temp-${java.util.UUID.randomUUID()}")
+        if (current.renameTo(destination)) retired += destination
+        else Log.w("MeasixPilotApp", "Unable to detach old temporary files; leaving them for a later startup")
+    }
     return retired
 }

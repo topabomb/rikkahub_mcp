@@ -9,6 +9,7 @@ import io.mockk.mockk
 import java.io.ByteArrayOutputStream
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.async
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.setMain
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.runTest
@@ -28,13 +29,62 @@ class ImageExportTest {
             java.io.File(old, "old.pdf").writeText("old")
             val orphan = java.io.File(cache, "retired-temp-previous").apply { mkdirs() }
             java.io.File(orphan, "interrupted.pdf").writeText("old")
+            val oldPreview = java.io.File(cache, "webview_content").apply { mkdirs() }
+            java.io.File(oldPreview, "old-html").writeText("private old preview")
             val retired = net.weero.measix.pilot.retireApplicationTempFiles(cache)
             val current = java.io.File(cache, "temp").apply { mkdirs() }
             val exported = java.io.File(current, "new.pdf").apply { writeText("new export") }
             retired.forEach { check(it.deleteRecursively()) }
             org.junit.Assert.assertEquals("new export", exported.readText())
             org.junit.Assert.assertFalse(orphan.exists())
+            org.junit.Assert.assertFalse(oldPreview.exists())
         } finally { check(cache.deleteRecursively()) }
+    }
+
+    @Test fun `document service compensates missing requests cancelled reception and expired writes`() = runTest {
+        val context = mockk<Context>()
+        val resolver = mockk<ContentResolver>()
+        every { context.contentResolver } returns resolver
+        val uri = Uri.parse("content://documents/document/new")
+        val files = mockk<net.weero.measix.pilot.service.FileManagementApplicationService>()
+        val source = net.weero.measix.pilot.service.RenderedContentSource.Static
+        val request = net.weero.measix.pilot.service.TextDocumentExport(source, "original 中文", "original.txt", "text/plain")
+        val output = ByteArrayOutputStream()
+        every { resolver.openOutputStream(uri, "wt") } returns output
+        io.mockk.coEvery { files.withContentAccess<Unit>(source, any()) } coAnswers { secondArg<suspend () -> Unit>()() }
+        var expired = false
+        io.mockk.coEvery { files.requireContentAccess(source) } coAnswers { check(!expired) { "expired" } }
+        var deleted = 0
+        io.mockk.mockkStatic(android.provider.DocumentsContract::class)
+        every { android.provider.DocumentsContract.deleteDocument(resolver, uri) } answers { deleted++; true }
+        val exports = net.weero.measix.pilot.service.MediaExportService(files)
+        try {
+            exports.saveTextDocument(context, uri, request)
+            org.junit.Assert.assertEquals(request.text, output.toString("UTF-8"))
+            org.junit.Assert.assertEquals(0, deleted)
+            org.junit.Assert.assertTrue(runCatching { exports.saveTextDocument(context, uri, null) }.isFailure)
+            org.junit.Assert.assertEquals(1, deleted)
+            expired = true
+            org.junit.Assert.assertTrue(runCatching { exports.saveTextDocument(context, uri, request) }.isFailure)
+            org.junit.Assert.assertEquals(2, deleted)
+            val cancelled = launch(start = kotlinx.coroutines.CoroutineStart.ATOMIC) {
+                exports.saveTextDocument(context, uri, request)
+            }
+            cancelled.cancel()
+            cancelled.join()
+            org.junit.Assert.assertEquals(3, deleted)
+        } finally { io.mockk.unmockkStatic(android.provider.DocumentsContract::class) }
+    }
+
+    @Test fun `fixed renderer upload URLs use the attachment owner rather than browser navigation`() = runTest {
+        val context = mockk<Context>()
+        val files = mockk<net.weero.measix.pilot.service.FileManagementApplicationService>()
+        val source = net.weero.measix.pilot.service.RenderedContentSource.UserConfiguration
+        io.mockk.coEvery { files.resolveContentAttachment(source, "/upload/known.pdf") } returns null
+        val exports = net.weero.measix.pilot.service.MediaExportService(files)
+        org.junit.Assert.assertTrue(runCatching { exports.openContentLink(context, source, "https://measix.local/upload/known.pdf") }.isFailure)
+        io.mockk.coVerify(exactly = 1) { files.resolveContentAttachment(source, "/upload/known.pdf") }
+        io.mockk.verify(exactly = 0) { context.startActivity(any()) }
     }
 
     @Test fun `attachment handoff exports only a copy and compensates every unaccepted outcome`() = runTest {
@@ -46,7 +96,7 @@ class ImageExportTest {
         val view = net.weero.measix.pilot.service.ConversationViewLease(kotlin.uuid.Uuid.random(),
             net.weero.measix.pilot.data.enterprise.RealmAccess.Personal, 0) {}
         val preview = net.weero.measix.pilot.service.AttachmentPreview("file:///original/private.pdf", null,
-            net.weero.measix.pilot.service.AttachmentPreview.FileTarget(view, 42, "private.pdf"))
+            net.weero.measix.pilot.service.AttachmentPreview.FileTarget(net.weero.measix.pilot.service.RenderedContentSource.Conversation(view), 42, "private.pdf"))
         val bytes = ByteArray(150_000) { (it % 127).toByte() }
         var mode = "success"
         io.mockk.coEvery { files.copyAttachmentTo(preview, any()) } coAnswers {

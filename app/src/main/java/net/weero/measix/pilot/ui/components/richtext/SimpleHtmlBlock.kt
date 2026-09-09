@@ -26,7 +26,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
@@ -52,28 +51,14 @@ fun SimpleHtmlBlock(
         }
     }
 
-    val uriHandler = LocalUriHandler.current
-
     Column(modifier = modifier) {
-        document.body().childNodes().forEach { node ->
-            RenderNode(
-                node = node,
-                onLinkClick = { url ->
-                    try {
-                        uriHandler.openUri(url)
-                    } catch (e: Exception) {
-                        // Handle link click error silently
-                    }
-                }
-            )
-        }
+        document.body().childNodes().forEach { node -> RenderNode(node) }
     }
 }
 
 @Composable
 private fun RenderNode(
-    node: Node,
-    onLinkClick: (String) -> Unit
+    node: Node
 ) {
     when (node) {
         is TextNode -> {
@@ -90,7 +75,7 @@ private fun RenderNode(
         is Element -> {
             when (node.tagName().lowercase()) {
                 "p" -> {
-                    val annotatedString = buildAnnotatedStringFromElement(node, onLinkClick)
+                    val annotatedString = buildAnnotatedStringFromElement(node)
                     if (annotatedString.text.isNotBlank()) {
                         // Parse inline styles for <p> element
                         val style = node.attr("style")
@@ -118,7 +103,7 @@ private fun RenderNode(
                         else -> MaterialTheme.typography.titleSmall
                     }
 
-                    val annotatedString = buildAnnotatedStringFromElement(node, onLinkClick)
+                    val annotatedString = buildAnnotatedStringFromElement(node)
                     if (annotatedString.text.isNotBlank()) {
                         // Parse inline styles for heading elements
                         val style = node.attr("style")
@@ -136,11 +121,11 @@ private fun RenderNode(
                 }
 
                 "ul", "ol" -> {
-                    RenderList(node, node.tagName() == "ol", onLinkClick)
+                    RenderList(node, node.tagName() == "ol")
                 }
 
                 "details" -> {
-                    RenderDetails(node, onLinkClick)
+                    RenderDetails(node)
                 }
 
                 "img" -> {
@@ -152,7 +137,7 @@ private fun RenderNode(
                 }
 
                 "table" -> {
-                    RenderTable(node, onLinkClick)
+                    RenderTable(node)
                 }
 
                 "br" -> {
@@ -162,14 +147,14 @@ private fun RenderNode(
                 "div" -> {
                     Column(modifier = Modifier.fillMaxWidth()) {
                         node.childNodes().forEach { childNode ->
-                            RenderNode(childNode, onLinkClick)
+                            RenderNode(childNode)
                         }
                     }
                 }
 
                 else -> {
                     // Render other elements as text
-                    val annotatedString = buildAnnotatedStringFromElement(node, onLinkClick)
+                    val annotatedString = buildAnnotatedStringFromElement(node)
                     if (annotatedString.text.isNotBlank()) {
                         // Parse inline styles for other elements
                         val style = node.attr("style")
@@ -192,8 +177,7 @@ private fun RenderNode(
 @Composable
 private fun RenderList(
     listElement: Element,
-    isOrdered: Boolean,
-    onLinkClick: (String) -> Unit
+    isOrdered: Boolean
 ) {
     Column(modifier = Modifier.padding(start = 16.dp, bottom = 4.dp)) {
         listElement.children().forEachIndexed { index, item ->
@@ -207,7 +191,7 @@ private fun RenderList(
                     )
                     Spacer(modifier = Modifier.width(4.dp))
 
-                    val annotatedString = buildAnnotatedStringFromElement(item, onLinkClick)
+                    val annotatedString = buildAnnotatedStringFromElement(item)
                     if (annotatedString.text.isNotBlank()) {
                         Text(
                             text = annotatedString,
@@ -225,8 +209,7 @@ private fun RenderList(
 
 @Composable
 private fun RenderDetails(
-    detailsElement: Element,
-    onLinkClick: (String) -> Unit
+    detailsElement: Element
 ) {
     val isOpenByDefault = detailsElement.hasAttr("open")
     var isExpanded by remember { mutableStateOf(isOpenByDefault) }
@@ -253,7 +236,7 @@ private fun RenderDetails(
             )
 
             val summaryAnnotatedString = if (summaryElement != null) {
-                buildAnnotatedStringFromElement(summaryElement, onLinkClick)
+                buildAnnotatedStringFromElement(summaryElement)
             } else {
                 AnnotatedString(summaryText)
             }
@@ -276,7 +259,7 @@ private fun RenderDetails(
             ) {
                 detailsElement.children().forEach { child ->
                     if (child.tagName().lowercase() != "summary") {
-                        RenderNode(child, onLinkClick)
+                        RenderNode(child)
                     }
                 }
             }
@@ -311,18 +294,16 @@ private fun RenderImage(
 }
 
 private fun buildAnnotatedStringFromElement(
-    element: Element,
-    onLinkClick: (String) -> Unit
+    element: Element
 ): AnnotatedString {
     return buildAnnotatedString {
-        processElementNodes(element, this, onLinkClick)
+        processElementNodes(element, this)
     }
 }
 
 private fun processElementNodes(
     element: Element,
-    builder: AnnotatedString.Builder,
-    onLinkClick: (String) -> Unit
+    builder: AnnotatedString.Builder
 ) {
     element.childNodes().forEach { node ->
         when (node) {
@@ -334,7 +315,7 @@ private fun processElementNodes(
                 when (node.tagName().lowercase()) {
                     "b", "strong" -> {
                         val start = builder.length
-                        processElementNodes(node, builder, onLinkClick)
+                        processElementNodes(node, builder)
                         builder.addStyle(
                             SpanStyle(fontWeight = FontWeight.Bold),
                             start,
@@ -344,7 +325,7 @@ private fun processElementNodes(
 
                     "i", "em" -> {
                         val start = builder.length
-                        processElementNodes(node, builder, onLinkClick)
+                        processElementNodes(node, builder)
                         builder.addStyle(
                             SpanStyle(fontStyle = FontStyle.Italic),
                             start,
@@ -354,7 +335,7 @@ private fun processElementNodes(
 
                     "u" -> {
                         val start = builder.length
-                        processElementNodes(node, builder, onLinkClick)
+                        processElementNodes(node, builder)
                         builder.addStyle(
                             SpanStyle(textDecoration = TextDecoration.Underline),
                             start,
@@ -365,7 +346,7 @@ private fun processElementNodes(
                     "a" -> {
                         val href = node.attr("href")
                         val start = builder.length
-                        processElementNodes(node, builder, onLinkClick)
+                        processElementNodes(node, builder)
                         if (href.isNotEmpty()) {
                             builder.addStyle(
                                 SpanStyle(
@@ -375,9 +356,8 @@ private fun processElementNodes(
                                 start,
                                 builder.length
                             )
-                            builder.addStringAnnotation(
-                                tag = "URL",
-                                annotation = href,
+                            builder.addLink(
+                                androidx.compose.ui.text.LinkAnnotation.Url(href),
                                 start = start,
                                 end = builder.length
                             )
@@ -386,7 +366,7 @@ private fun processElementNodes(
 
                     "code" -> {
                         val start = builder.length
-                        processElementNodes(node, builder, onLinkClick)
+                        processElementNodes(node, builder)
                         builder.addStyle(
                             SpanStyle(
                                 fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
@@ -403,7 +383,7 @@ private fun processElementNodes(
 
                     "span" -> {
                         val start = builder.length
-                        processElementNodes(node, builder, onLinkClick)
+                        processElementNodes(node, builder)
 
                         // Handle inline styles
                         val style = node.attr("style")
@@ -421,7 +401,7 @@ private fun processElementNodes(
 
                     "font" -> {
                         val start = builder.length
-                        processElementNodes(node, builder, onLinkClick)
+                        processElementNodes(node, builder)
 
                         // Handle font color attribute
                         val color = node.attr("color")
@@ -438,7 +418,7 @@ private fun processElementNodes(
                     }
 
                     else -> {
-                        processElementNodes(node, builder, onLinkClick)
+                        processElementNodes(node, builder)
                     }
                 }
             }
@@ -632,8 +612,7 @@ private fun RenderProgress(
 
 @Composable
 private fun RenderTable(
-    tableElement: Element,
-    onLinkClick: (String) -> Unit
+    tableElement: Element
 ) {
     val rows = mutableListOf<List<@Composable () -> Unit>>()
     var headers = emptyList<@Composable () -> Unit>()
@@ -644,7 +623,7 @@ private fun RenderTable(
 
         tr.select("th, td").forEach { cell ->
             cells.add {
-                val annotatedString = buildAnnotatedStringFromElement(cell, onLinkClick)
+                val annotatedString = buildAnnotatedStringFromElement(cell)
                 if (annotatedString.text.isNotBlank()) {
                     Text(
                         text = annotatedString,

@@ -238,6 +238,84 @@ class ManagedFileCreationIntegrationTest {
         } finally { loader.shutdown(); draft.close(); view.close() }
     }
 
+    @Test fun renderedDocumentsReadOnlyTheirSourceAndNeverShareBrowserStorage() = runBlocking {
+        store.ensureReferenceProjection()
+        val sessions = EnterpriseSessionController(EnterpriseAppliedStore(File(root, "rendered-session")))
+        sessions.recover()
+        val files = FileManagementApplicationService(store, GeneratedMediaStore(root, GenMediaRepository(database.genMediaDao()), store),
+            ApplicationRecoveryGate().apply { ready() }, sessions)
+        val own = store.createFromBytes(ConfigurationScope.Personal, pngBytes(), "configuration.png", "image/png", origin = ArtifactOrigin.USER)
+        val foreign = store.createFromBytes(scopeFor(1), pngBytes(), "foreign.png", "image/png", origin = ArtifactOrigin.USER)
+        store.abandonUnpublished(foreign)
+        store.updateSettingsReferences { it.copy(assistants = it.assistants + Assistant(background = own.uri.toString())) }
+        val attachment = requireNotNull(files.resolveContentAttachment(RenderedContentSource.UserConfiguration, requireNotNull(own.localRef.toolPath())))
+        val copied = java.io.ByteArrayOutputStream()
+        assertEquals("image/png", files.copyAttachmentTo(attachment, copied))
+        assertArrayEquals(pngBytes(), copied.toByteArray())
+        assertEquals(null, files.resolveContentAttachment(RenderedContentSource.Static, own.uri.toString()))
+        val html = """<html><head><base href="https://external.example/"></head><body>
+            <img id="file" src="${own.uri}"><img id="upload" src="${own.localRef.toolPath()}">
+            <img id="foreign" src="${foreign.uri}"><a href="/UPLOAD/invalid">Unsupported path</a>
+            <script>window.beforeCookie=document.cookie;document.cookie='marker=private;path=/';
+            try { window.beforeStorage=localStorage.getItem('marker');localStorage.setItem('marker','private'); }
+            catch(e) { window.beforeStorage='disabled'; }</script></body></html>"""
+        val document = androidx.compose.runtime.mutableStateOf(RenderedContent(RenderedContentSource.UserConfiguration, html))
+        val states = java.util.concurrent.CopyOnWriteArrayList<Pair<RenderedContentSource, Boolean>>()
+        val queries = io.mockk.mockk<ConversationQueryService>()
+        compose.setContent {
+            val current = document.value
+            val state = net.weero.measix.pilot.ui.components.webview.rememberRenderedContentState(current, files, queries)
+            androidx.compose.runtime.SideEffect { states += current.source to (state != null) }
+            if (state != null) androidx.compose.runtime.key(state) {
+                net.weero.measix.pilot.ui.components.webview.WebView(state)
+            }
+        }
+        fun find(view: android.view.View): android.webkit.WebView? = when (view) {
+            is android.webkit.WebView -> view
+            is android.view.ViewGroup -> (0 until view.childCount).firstNotNullOfOrNull { find(view.getChildAt(it)) }
+            else -> null
+        }
+        suspend fun evaluate(view: android.webkit.WebView, script: String): String = withContext(Dispatchers.Main) {
+            kotlinx.coroutines.suspendCancellableCoroutine { continuation -> view.evaluateJavascript(script) {
+                if (continuation.isActive) continuation.resumeWith(Result.success(it))
+            } }
+        }
+        suspend fun ready(previous: android.webkit.WebView? = null): android.webkit.WebView {
+            var current: android.webkit.WebView? = null
+            compose.waitUntil(10_000) { current = find(compose.activity.window.decorView); current != null && current !== previous }
+            val view = requireNotNull(current)
+            try {
+                kotlinx.coroutines.withTimeout(15_000) {
+                    while (evaluate(view, "document.readyState==='complete' && document.images.length===3 && Array.from(document.images).every(i=>i.complete)") != "true") kotlinx.coroutines.delay(50)
+                }
+            } catch (error: kotlinx.coroutines.TimeoutCancellationException) {
+                throw AssertionError("Document failed to load: " + evaluate(view, "JSON.stringify({url:location.href,ready:document.readyState,text:document.body.innerText.slice(0,300)})"), error)
+            }
+            return view
+        }
+        val first = ready()
+        assertEquals("[2,2,0]", evaluate(first, "JSON.stringify(Array.from(document.images).map(i=>i.naturalWidth))").let {
+            net.weero.measix.pilot.utils.JsonInstant.decodeFromString<String>(it)
+        })
+        val firstOrigin = evaluate(first, "location.origin")
+        assertEquals("\"disabled\"", evaluate(first, "window.beforeStorage"))
+        assertEquals("\"marker=private\"", evaluate(first, "document.cookie"))
+        compose.runOnIdle { document.value = RenderedContent(RenderedContentSource.Static, html) }
+        val second = ready(first)
+        org.junit.Assert.assertNotSame(first, second)
+        org.junit.Assert.assertNotEquals(firstOrigin, evaluate(second, "location.origin"))
+        assertEquals("\"\"", evaluate(second, "window.beforeCookie"))
+        assertEquals("[0,0,0]", net.weero.measix.pilot.utils.JsonInstant.decodeFromString<String>(evaluate(second, "JSON.stringify(Array.from(document.images).map(i=>i.naturalWidth))")))
+        val closed = ConversationViewLease(kotlin.uuid.Uuid.random(), RealmAccess.Personal, 0L) {}.apply { close() }
+        val denied = RenderedContentSource.Conversation(closed)
+        compose.runOnIdle { document.value = RenderedContent(denied, "<html>Private replacement</html>") }
+        compose.waitUntil(5_000) { states.lastOrNull()?.first == denied }
+        assertTrue(states.filter { it.first == denied }.none { it.second })
+        compose.runOnIdle { assertEquals(null, find(compose.activity.window.decorView)) }
+        store.updateSettingsReferences { it.copy(assistants = emptyList()) }
+        assertTrue(runCatching { files.copyAttachmentTo(attachment, java.io.ByteArrayOutputStream()) }.isFailure)
+    }
+
     @Test
     fun publicationRefreshesAnAlreadyObservedPreviewWithoutAnotherDatabaseWrite() = runBlocking {
         store.ensureReferenceProjection()
@@ -351,7 +429,7 @@ class ManagedFileCreationIntegrationTest {
         val artifact = store.createFromBytes(selected.access.scope, bytes, "report.pdf", "application/pdf", origin = ArtifactOrigin.USER)
         val personal = store.createFromBytes(ConfigurationScope.Personal, bytes, "personal.pdf", "application/pdf", origin = ArtifactOrigin.USER)
         val view = ConversationViewLease(kotlin.uuid.Uuid.random(), selected.access, selected.revision) {}
-        fun preview(id: Long) = AttachmentPreview(artifact.uri.toString(), null, AttachmentPreview.FileTarget(view, id, "report.pdf"))
+        fun preview(id: Long) = AttachmentPreview(artifact.uri.toString(), null, AttachmentPreview.FileTarget(net.weero.measix.pilot.service.RenderedContentSource.Conversation(view), id, "report.pdf"))
         assertTrue(runCatching { commands.copyAttachmentTo(preview(artifact.entity.id), java.io.ByteArrayOutputStream()) }.isFailure)
         store.abandonUnpublished(artifact)
         store.abandonUnpublished(personal)

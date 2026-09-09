@@ -1,6 +1,5 @@
 package net.weero.measix.pilot.ui.components.message
 
-import android.content.Intent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.fadeIn
@@ -82,7 +81,6 @@ import net.weero.measix.pilot.service.terminalMessagePresentation
 import net.weero.measix.pilot.ui.components.richtext.MarkdownBlock
 import net.weero.measix.pilot.ui.components.richtext.ZoomableAsyncImage
 import net.weero.measix.pilot.ui.components.richtext.buildMarkdownPreviewHtml
-import net.weero.measix.pilot.ui.components.webview.WebViewContentCache
 import net.weero.measix.pilot.ui.components.ui.ChainOfThought
 import net.weero.measix.pilot.ui.components.ui.Favicon
 import net.weero.measix.pilot.ui.context.LocalNavController
@@ -134,6 +132,7 @@ fun ChatMessage(
     var showActionsSheet by remember { mutableStateOf(false) }
     var showSelectCopySheet by remember { mutableStateOf(false) }
     val navController = LocalNavController.current
+    val richTextActions = net.weero.measix.pilot.ui.components.richtext.LocalRichTextActions.current
     val context = LocalContext.current
     val colorScheme = MaterialTheme.colorScheme
     val mediaFailureText = stringResource(R.string.chat_message_media_persistence_failed)
@@ -282,8 +281,7 @@ fun ChatMessage(
                         markdown = textContent,
                         colorScheme = colorScheme
                     )
-                    val contentId = WebViewContentCache.store(context.cacheDir, htmlContent)
-                    navController.navigate(Screen.WebView(contentId = contentId))
+                    richTextActions?.preview?.invoke(htmlContent)
                 }
             },
             onDismissRequest = {

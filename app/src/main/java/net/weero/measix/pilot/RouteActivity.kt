@@ -140,7 +140,7 @@ import net.weero.measix.pilot.ui.pages.setting.SettingSpeechPage
 import net.weero.measix.pilot.ui.pages.share.handler.ShareHandlerPage
 import net.weero.measix.pilot.ui.pages.stats.StatsPage
 import net.weero.measix.pilot.ui.pages.subassistant.SubAssistantDetailPage
-import net.weero.measix.pilot.ui.pages.webview.WebViewPage
+import net.weero.measix.pilot.ui.pages.webview.ContentPreviewPage
 import net.weero.measix.pilot.ui.theme.LocalDarkMode
 import net.weero.measix.pilot.ui.theme.MeasixTheme
 import net.weero.measix.pilot.utils.CrashHandler
@@ -436,8 +436,8 @@ class RouteActivity : ComponentActivity() {
                                 ImageGenPage()
                             }
 
-                            entry<Screen.WebView> { key ->
-                                WebViewPage(key.url, key.contentId)
+                            entry<Screen.ContentPreview> { key ->
+                                ContentPreviewPage(key.document)
                             }
 
                             entry<Screen.SettingTheme> {
@@ -746,7 +746,10 @@ sealed interface Screen : NavKey {
     data object ImageGen : Screen
 
     @Serializable
-    data class WebView(val url: String = "", val contentId: String = "") : Screen
+    data class ContentPreview(
+        val id: String = java.util.UUID.randomUUID().toString(),
+        @kotlinx.serialization.Transient val document: net.weero.measix.pilot.service.RenderedContent? = null,
+    ) : Screen
 
     @Serializable
     data object SettingTheme : Screen

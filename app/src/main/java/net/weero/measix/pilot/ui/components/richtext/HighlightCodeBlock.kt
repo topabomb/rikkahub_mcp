@@ -1,11 +1,7 @@
 ﻿package net.weero.measix.pilot.ui.components.richtext
 
 import android.content.ClipData
-import android.net.Uri
 import androidx.activity.compose.LocalActivity
-import androidx.activity.compose.ManagedActivityResultLauncher
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.background
@@ -41,7 +37,6 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.ClipEntry
 import androidx.compose.ui.platform.Clipboard
 import androidx.compose.ui.platform.LocalClipboard
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextStyle
@@ -70,14 +65,7 @@ import me.rerere.hugeicons.stroke.Download01
 import me.rerere.hugeicons.stroke.Eye
 import me.rerere.hugeicons.stroke.View
 import net.weero.measix.pilot.R
-import net.weero.measix.pilot.Screen
-import net.weero.measix.pilot.ui.components.webview.WEB_VIEW_BASE_URL
-import net.weero.measix.pilot.ui.components.webview.WebView
-import net.weero.measix.pilot.ui.components.webview.WebViewContentCache
-import net.weero.measix.pilot.ui.components.webview.rememberWebViewState
-import net.weero.measix.pilot.ui.context.LocalNavController
 import net.weero.measix.pilot.ui.context.LocalSettings
-import net.weero.measix.pilot.ui.context.Navigator
 import net.weero.measix.pilot.ui.modifier.onClick
 import net.weero.measix.pilot.ui.theme.AtomOneDarkPalette
 import net.weero.measix.pilot.ui.theme.AtomOneLightPalette
@@ -99,15 +87,18 @@ fun HighlightCodeBlock(
         fontSize = 12.sp,
         lineHeight = 16.sp,
     ),
+    source: net.weero.measix.pilot.service.RenderedContentSource? = null,
 ) {
+    if (source != null) {
+        RichTextHost(source) { HighlightCodeBlock(code, language, modifier, completeCodeBlock, style) }
+        return
+    }
     val darkMode = LocalDarkMode.current
     val colorPalette = if (darkMode) AtomOneDarkPalette else AtomOneLightPalette
     val scrollState = rememberScrollState()
     val clipboardManager = LocalClipboard.current
     val scope = rememberCoroutineScope()
-    val navController = LocalNavController.current
     val activity = LocalActivity.current
-    val context = LocalContext.current
     val settings = LocalSettings.current
     val colorScheme = MaterialTheme.colorScheme
     val normalizedLanguage = remember(language) { language.lowercase() }
@@ -139,21 +130,7 @@ fun HighlightCodeBlock(
     val autoWrap = settings.displaySetting.codeBlockAutoWrap
     val showLineNumbers = settings.displaySetting.showLineNumbers
 
-    val createDocumentLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.CreateDocument("*/*")
-    ) { uri: Uri? ->
-        uri?.let {
-            scope.launch {
-                try {
-                    context.contentResolver.openOutputStream(it)?.use { outputStream ->
-                        outputStream.write(code.toByteArray())
-                    }
-                } catch (e: Exception) {
-                    e.printStackTrace()
-                }
-            }
-        }
-    }
+    val actions = LocalRichTextActions.current
 
     Column(
         modifier = modifier
@@ -172,8 +149,7 @@ fun HighlightCodeBlock(
                 scope = scope,
                 clipboardManager = clipboardManager,
                 code = code,
-                createDocumentLauncher = createDocumentLauncher,
-                navController = navController,
+                onExport = { name -> actions?.exportText?.invoke(code, name, "text/plain") },
                 fullScreenPreviewContent = fullScreenPreviewContent,
                 previewMode = previewMode,
                 canInlinePreview = canInlinePreview,
@@ -387,15 +363,14 @@ private fun HighlightCodeActions(
     scope: CoroutineScope,
     clipboardManager: Clipboard,
     code: String,
-    createDocumentLauncher: ManagedActivityResultLauncher<String, Uri?>,
-    navController: Navigator,
+    onExport: (String) -> Unit,
     fullScreenPreviewContent: String? = null,
     previewMode: Boolean = false,
     canInlinePreview: Boolean = false,
     onExportRenderedPreview: (() -> Unit)? = null,
     onTogglePreviewMode: () -> Unit = {},
 ) {
-    val context = LocalContext.current
+    val actions = LocalRichTextActions.current
     Row(
         modifier = Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically
@@ -442,7 +417,7 @@ private fun HighlightCodeActions(
                             "svg" -> "svg"
                             else -> "txt"
                         }
-                        createDocumentLauncher.launch(
+                        onExport(
                             "code_${
                                 Clock.System.now().toLocalDateTime(TimeZone.currentSystemDefault())
                             }.$extension"
@@ -490,11 +465,7 @@ private fun HighlightCodeActions(
                     modifier = Modifier
                         .clip(RoundedCornerShape(4.dp))
                         .onClick {
-                            val contentId = WebViewContentCache.store(
-                                context.cacheDir,
-                                fullScreenPreviewContent,
-                            )
-                            navController.navigate(Screen.WebView(contentId = contentId))
+                            actions?.preview?.invoke(fullScreenPreviewContent)
                         }
                         .padding(4.dp)
                         .size(iconSize)
@@ -523,20 +494,10 @@ private fun CodeBlockPreview(
     language: String,
     modifier: Modifier = Modifier,
 ) {
-    val state = rememberWebViewState(
-        data = buildCodePreviewHtml(code = code, language = language),
-        baseUrl = WEB_VIEW_BASE_URL,
-        mimeType = "text/html",
-        settings = {
-            builtInZoomControls = true
-            displayZoomControls = false
-            useWideViewPort = true
-            loadWithOverviewMode = true
-        }
-    )
-
-    WebView(
-        state = state,
+    net.weero.measix.pilot.ui.components.webview.RenderedContentWebView(
+        document = LocalRenderedContentSource.current?.let {
+            net.weero.measix.pilot.service.RenderedContent(it, buildCodePreviewHtml(code, language))
+        },
         modifier = modifier.clip(RoundedCornerShape(4.dp)),
     )
 }

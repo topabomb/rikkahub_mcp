@@ -294,3 +294,5 @@ Artifact metadata、引用和生命周期归 `ArtifactStore`；`ArtifactPayloadS
 的 `TOOL_OUTPUT` reference 并取得 retention pin，锁外流式读取，finally 释放。ref 猜测、其他会话、payload 缺失都统一
 fail-closed。fork 的节点引用同一 Artifact；删除任一会话只移除自己的 reference，最后引用消失后才允许 GC。backup/restore
 包含 `tool_outputs` durable directory，启动恢复按 Artifact 既有 CREATING/DELETING 协议收口。
+
+富文本的文件链接与文档选择器复用 `FileManagementApplicationService` / `MediaExportService`：原会话链接保留页面 lease，共享定义链接检查仍有效的个人配置 root；二者都由 Artifact 生命周期锁内复制。渲染器只传冻结内容与来源，不以 URL 或当前空间作为读权限。完整 HTML 预览不再落盘缓存；应用启动退役旧预览缓存与上次进程的临时导出文件。聊天截图由原导出协程拥有离屏 Compose 树，取消时立即拆除并回收未交付 Bitmap。

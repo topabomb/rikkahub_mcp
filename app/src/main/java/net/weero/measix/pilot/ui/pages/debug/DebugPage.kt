@@ -166,6 +166,7 @@ private fun MainPage(vm: DebugVM) {
             name = "A"
         )
         HighlightCodeBlock(
+            source = net.weero.measix.pilot.service.RenderedContentSource.Static,
             language = "mermaid",
             code = """
                 mindmap
@@ -279,7 +280,7 @@ private fun MainPage(vm: DebugVM) {
 
 
         var markdown by remember { mutableStateOf("") }
-        MarkdownBlock(markdown, modifier = Modifier.fillMaxWidth())
+        MarkdownBlock(source = net.weero.measix.pilot.service.RenderedContentSource.Static, content = markdown, modifier = Modifier.fillMaxWidth())
         MathBlock(markdown)
         OutlinedTextField(
             value = markdown,

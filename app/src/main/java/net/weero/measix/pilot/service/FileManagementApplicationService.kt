@@ -58,12 +58,57 @@ class FileManagementApplicationService internal constructor(
     },
     private val remoteMediaFetcher: net.weero.measix.pilot.data.ai.attachments.SafeRemoteMediaFetcher = net.weero.measix.pilot.data.ai.attachments.SafeRemoteMediaFetcher(),
 ) {
+    suspend fun requireContentAccess(source: RenderedContentSource) = withContentAccess(source) { }
+
+    internal suspend fun <T> withContentAccess(source: RenderedContentSource, action: suspend () -> T): T {
+        recoveryGate.awaitReady()
+        kotlinx.coroutines.currentCoroutineContext().ensureActive()
+        return when (source) {
+            is RenderedContentSource.Conversation -> sessions.withSelectedRealmSelection(
+                RealmSelection(source.view.access, source.view.selectionRevision),
+            ) { source.view.requireOpen(); action() }
+            RenderedContentSource.UserConfiguration, RenderedContentSource.Static -> action()
+        }
+    }
+
+    suspend fun resolveContentImage(source: RenderedContentSource, url: String): ImageSource? = when (source) {
+        is RenderedContentSource.Conversation -> resolveConversationImage(source.view, url)
+        RenderedContentSource.UserConfiguration -> resolveConfigurationImage(url)
+        RenderedContentSource.Static -> externalImageSource(url)
+    }
+
+    suspend fun readRenderedImage(source: RenderedContentSource, url: String): Pair<String, ByteArray>? {
+        val image = resolveContentImage(source, url) ?: return null
+        val bytes = image.readBytes()
+        val mime = net.weero.measix.pilot.data.ai.attachments.ImageMime.sniff(bytes) ?: return null
+        return mime to bytes
+    }
+
+    suspend fun resolveContentAttachment(source: RenderedContentSource, url: String): AttachmentPreview? {
+        val preview = withContentAccess(source) {
+            val file = when {
+                url.startsWith("file:", ignoreCase = true) -> net.weero.measix.pilot.data.ai.attachments.AttachmentRefs.parseFileUrl(url)
+                net.weero.measix.pilot.data.files.LocalToolPath.parseUploadToolPath(url) != null -> artifactStore.resolveToolPath(url)
+                else -> null
+            } ?: return@withContentAccess null
+            when (source) {
+                is RenderedContentSource.Conversation -> artifactStore.resolveMediaPreviewForFile(source.view.access.scope, file)
+                RenderedContentSource.UserConfiguration -> artifactStore.resolveConfigurationMedia(file)
+                RenderedContentSource.Static -> null
+            }
+        }
+        requireContentAccess(source)
+        return preview?.let { AttachmentPreview(it.uri, null, AttachmentPreview.FileTarget(source, it.artifactId, it.displayName)) }
+    }
+
     internal suspend fun copyAttachmentTo(preview: AttachmentPreview, output: java.io.OutputStream): String {
         val target = requireNotNull(preview.fileTarget) { "attachment_unavailable" }
-        recoveryGate.awaitReady()
-        val mime = sessions.withSelectedRealmSelection(RealmSelection(target.view.access, target.view.selectionRevision)) {
-            target.view.requireOpen()
-            artifactStore.copyMediaTo(target.view.access.scope, target.artifactId, output)
+        val mime = withContentAccess(target.source) {
+            when (val source = target.source) {
+                is RenderedContentSource.Conversation -> artifactStore.copyMediaTo(source.view.access.scope, target.artifactId, output)
+                RenderedContentSource.UserConfiguration -> artifactStore.copyConfigurationMediaTo(target.artifactId, output)
+                RenderedContentSource.Static -> error("attachment_unavailable")
+            }
         }
         withAttachmentAccess(preview) { }
         return mime
@@ -72,17 +117,14 @@ class FileManagementApplicationService internal constructor(
     /** The final system handoff is accepted under the original selection, outside the artifact lock. */
     internal suspend fun <T> withAttachmentAccess(preview: AttachmentPreview, action: () -> T): T {
         val target = requireNotNull(preview.fileTarget) { "attachment_unavailable" }
-        recoveryGate.awaitReady()
-        val selection = RealmSelection(target.view.access, target.view.selectionRevision)
-        sessions.withSelectedRealmSelection(selection) {
-            target.view.requireOpen()
-            artifactStore.requireMediaAccess(target.view.access.scope, target.artifactId)
+        withContentAccess(target.source) {
+            when (val source = target.source) {
+                is RenderedContentSource.Conversation -> artifactStore.requireMediaAccess(source.view.access.scope, target.artifactId)
+                RenderedContentSource.UserConfiguration -> artifactStore.requireConfigurationMediaAccess(target.artifactId)
+                RenderedContentSource.Static -> error("attachment_unavailable")
+            }
         }
-        return sessions.withSelectedRealmSelection(selection) {
-            target.view.requireOpen()
-            kotlinx.coroutines.currentCoroutineContext().ensureActive()
-            action()
-        }
+        return withContentAccess(target.source) { action() }
     }
 
     fun imageSource(key: ManagedFileKey, displayName: String? = null, modifiedAtMillis: Long? = null): ImageSource =
@@ -124,8 +166,9 @@ class FileManagementApplicationService internal constructor(
     suspend fun resolveConfigurationImage(url: String): ImageSource? {
         recoveryGate.awaitReady()
         externalImageSource(url)?.let { return it }
-        val file = net.weero.measix.pilot.data.ai.attachments.AttachmentRefs.parseFileUrl(url) ?: return null
-        val preview = artifactStore.resolveConfigurationImage(file) ?: return null
+        val file = net.weero.measix.pilot.data.ai.attachments.AttachmentRefs.parseFileUrl(url)
+            ?: if (net.weero.measix.pilot.data.files.LocalToolPath.parseUploadToolPath(url) != null) artifactStore.resolveToolPath(url) else null
+        val preview = artifactStore.resolveConfigurationImage(file ?: return null) ?: return null
         return ImageSource(
             cacheIdentity = "configuration:${preview.artifactId}",
             origin = ImageOrigin.UPLOAD,

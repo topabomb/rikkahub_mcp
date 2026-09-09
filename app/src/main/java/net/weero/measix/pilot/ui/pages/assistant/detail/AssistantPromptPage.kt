@@ -437,10 +437,10 @@ private fun AssistantPromptContent(
                         color = MaterialTheme.colorScheme.error
                     )
                     previewMessages != null -> ChatFontProvider(displaySetting = settings.displaySetting) {
-                        CompositionLocalProvider(
+                        net.weero.measix.pilot.ui.components.richtext.RichTextHost(
+                            net.weero.measix.pilot.service.RenderedContentSource.UserConfiguration,
                             LocalConversationImages provides previewAlbum,
                             net.weero.measix.pilot.ui.components.message.LocalAttachmentPreview provides previewProvider,
-                            net.weero.measix.pilot.ui.components.richtext.LocalImageSourceResolver provides imageResolver,
                             LocalImagePreviewActions provides previewActions,
                             LocalImagePreviewOverlay provides backgroundHost.overlay,
                         ) {

@@ -1,9 +1,6 @@
 ﻿package net.weero.measix.pilot.ui.components.richtext
 
 import android.content.ClipData
-import android.content.Intent
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -235,8 +232,21 @@ fun MarkdownBlock(
     content: String,
     modifier: Modifier = Modifier,
     style: TextStyle = LocalTextStyle.current,
-    onClickCitation: (String) -> Unit = {}
+    onClickCitation: (String) -> Unit = {},
+    source: net.weero.measix.pilot.service.RenderedContentSource? = null,
 ) {
+    if (source != null) {
+        RichTextHost(source) { MarkdownBlock(content, modifier, style, onClickCitation) }
+    } else {
+        CompositionLocalProvider(androidx.compose.ui.platform.LocalUriHandler provides
+            (LocalRichTextActions.current?.uriHandler ?: UnavailableContentUriHandler)) {
+            MarkdownContent(content, modifier, style, onClickCitation)
+        }
+    }
+}
+
+@Composable
+private fun MarkdownContent(content: String, modifier: Modifier, style: TextStyle, onClickCitation: (String) -> Unit) {
     var (data, setData) = remember { mutableStateOf(parseMarkdown(content)) }
 
     // 监听内容变化，重新解析AST树
@@ -464,14 +474,13 @@ private fun MarkdownNode(
                 ?: ""
             val linkDest =
                 node.findChildOfTypeRecursive(MarkdownElementTypes.LINK_DESTINATION)?.getTextInNode(content) ?: ""
-            val context = LocalContext.current
+            val uriHandler = androidx.compose.ui.platform.LocalUriHandler.current
             Text(
                 text = linkText,
                 color = MaterialTheme.colorScheme.primary,
                 textDecoration = TextDecoration.Underline,
                 modifier = modifier.clickable {
-                    val intent = Intent(Intent.ACTION_VIEW, linkDest.toUri())
-                    context.startActivity(intent)
+                    uriHandler.openUri(linkDest)
                 })
         }
 
@@ -878,21 +887,7 @@ private fun TableNode(node: ASTNode, content: String, modifier: Modifier = Modif
     val tableMarkdown = remember(node, content) { node.getTextInNode(content).trim() }
     val tableCsv = remember(headerCells, rows) { buildTableCsv(headerCells, rows) }
 
-    val createDocumentLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.CreateDocument("text/csv")
-    ) { uri ->
-        uri?.let {
-            scope.launch {
-                try {
-                    context.contentResolver.openOutputStream(it)?.use { outputStream ->
-                        outputStream.write(tableCsv.toByteArray())
-                    }
-                } catch (e: Exception) {
-                    e.printStackTrace()
-                }
-            }
-        }
-    }
+    val actions = LocalRichTextActions.current
 
     // 渲染表格卡片（工具栏 + 表格）
     Column(
@@ -946,10 +941,10 @@ private fun TableNode(node: ASTNode, content: String, modifier: Modifier = Modif
                     modifier = Modifier
                         .clip(RoundedCornerShape(4.dp))
                         .onClick {
-                            createDocumentLauncher.launch(
+                            actions?.exportText?.invoke(tableCsv,
                                 "table_${
                                     Clock.System.now().toLocalDateTime(TimeZone.currentSystemDefault())
-                                }.csv"
+                                }.csv", "text/csv"
                             )
                         }
                         .padding(4.dp)

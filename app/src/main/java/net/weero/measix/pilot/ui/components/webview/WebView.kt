@@ -53,8 +53,15 @@ internal class MyWebViewClient(private val state: WebViewState) : WebViewClient(
         view: WebView,
         request: WebResourceRequest
     ): WebResourceResponse? {
+        state.interceptRequest?.invoke(request.url)?.let { return it }
         return WebViewLocalAssets.intercept(view.context.applicationContext, request.url)
             ?: super.shouldInterceptRequest(view, request)
+    }
+
+    override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
+        val navigation = state.onNavigate ?: return super.shouldOverrideUrlLoading(view, request)
+        if (request.hasGesture()) navigation(request.url.toString())
+        return true
     }
 
     override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
@@ -104,8 +111,8 @@ fun WebView(
     onUpdated: (WebView) -> Unit = {},
 ) {
     // Remember the clients based on the state
-    val webChromeClient = remember { MyWebChromeClient(state) }
-    val webViewClient = remember { MyWebViewClient(state) }
+    val webChromeClient = remember(state) { MyWebChromeClient(state) }
+    val webViewClient = remember(state) { MyWebViewClient(state) }
 
     Box(
         modifier = modifier
@@ -124,7 +131,8 @@ fun WebView(
 
                     settings.javaScriptEnabled = true // Enable JavaScript
                     settings.domStorageEnabled = true
-                    settings.allowContentAccess = true
+                    settings.allowContentAccess = false
+                    settings.allowFileAccess = false
                     settings.apply(state.settings)
 
                     // Use the created clients
@@ -228,7 +236,9 @@ sealed class WebContent {
 class WebViewState(
     initialContent: WebContent = WebContent.NavigatorOnly,
     val interfaces: Map<String, Any> = emptyMap(),
-    val settings: WebSettings.() -> Unit = {}
+    val settings: WebSettings.() -> Unit = {},
+    internal val interceptRequest: ((android.net.Uri) -> WebResourceResponse?)? = null,
+    internal val onNavigate: ((String) -> Unit)? = null,
 ) {
     // --- Content State ---
     var content: WebContent by mutableStateOf(initialContent)

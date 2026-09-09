@@ -21,7 +21,7 @@ data class AttachmentPreview internal constructor(
     val image: ImageSource?,
     internal val fileTarget: FileTarget? = null,
 ) {
-    internal data class FileTarget(val view: ConversationViewLease, val artifactId: Long, val displayName: String?)
+    internal data class FileTarget(val source: RenderedContentSource, val artifactId: Long, val displayName: String?)
 }
 
 /**
@@ -95,7 +95,7 @@ class ConversationAttachmentPreviewProjector(
                 val preview = AttachmentPreview(
                     resolved.uri,
                     if (image) files.conversationImageSource(source, resolved.artifactId, resolved.displayName, resolved.modifiedAtMillis) else null,
-                    AttachmentPreview.FileTarget(source, resolved.artifactId, resolved.displayName),
+                    AttachmentPreview.FileTarget(RenderedContentSource.Conversation(source), resolved.artifactId, resolved.displayName),
                 )
                 projected[ref] = preview
                 val toolPath = when (target) {
