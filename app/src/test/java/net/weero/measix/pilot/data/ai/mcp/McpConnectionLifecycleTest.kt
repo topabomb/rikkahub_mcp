@@ -10,6 +10,9 @@ import io.mockk.every
 import io.mockk.mockk
 import io.modelcontextprotocol.kotlin.sdk.client.StreamableHttpError
 import io.modelcontextprotocol.kotlin.sdk.types.ListToolsResult
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.launch
@@ -35,6 +38,19 @@ import org.junit.Test
 /** 连接生命周期：建连与重连、传输关闭、定义变更重建客户端、授权状态写入、超时与维护退避、并行准入与按服务器状态。 */
 @OptIn(ExperimentalCoroutinesApi::class)
 internal class McpConnectionLifecycleTest : McpRuntimeCoordinatorTestBase() {
+
+    @Test
+    fun `transport internal cancellation cannot leave a connecting client owned as ready`() = runTest(dispatcher) {
+        connectFailure = kotlinx.coroutines.CancellationException("remote initialization cancelled")
+        emit(listOf(serverConfig()))
+        runCurrent()
+        assertTrue(manager.syncingStatus.value[SERVER_ID] is McpStatus.RetryScheduled)
+        assertEquals(1, createdTransports.single().closeCalls)
+        connectFailure = null
+        advanceUntilIdle()
+        assertEquals(2, createdClients.size)
+        assertTrue(manager.syncingStatus.value[SERVER_ID] is McpStatus.Ready)
+    }
 
     @Test
     fun `enabled server connects once and tool-only changes do not rebuild the client`() = runTest(dispatcher) {
@@ -114,24 +130,72 @@ internal class McpConnectionLifecycleTest : McpRuntimeCoordinatorTestBase() {
     }
 
     @Test
-    fun `re-add during client close keeps the mapped slot as the live owner`() = runTest(dispatcher) {
+    fun `re-add waits for the original transport after client cleanup returns`() = runTest(dispatcher) {
         emit(listOf(serverConfig()))
         advanceUntilIdle()
         val first = createdClients.single()
+        val transport = createdTransports.single()
         val closeGate = CompletableDeferred<Unit>()
-        coEvery { first.close() } coAnswers { closeGate.await() }
-
-        emit(emptyList())
+        transport.closeAction = { closeGate.await() }
+        try {
+            emit(emptyList())
+            runCurrent()
+            coVerify { first.close() }
+            assertEquals(1, transport.closeCalls)
+            assertTrue(manager.syncingStatus.value.containsKey(SERVER_ID))
+            emit(listOf(serverConfig()))
+            runCurrent()
+            assertEquals(1, createdClients.size)
+        } finally { closeGate.complete(Unit) }
         advanceUntilIdle()
-        emit(listOf(serverConfig()))
-        advanceUntilIdle()
-
-        closeGate.complete(Unit)
-        advanceUntilIdle()
-
         assertEquals(2, createdClients.size)
         assertTrue(manager.syncingStatus.value[SERVER_ID] is McpStatus.Ready)
-        coVerify { first.close() }
+    }
+
+    @Test
+    fun `failed transport cleanup remains owned and is retried before a new connection`() = runTest(dispatcher) {
+        emit(listOf(serverConfig()))
+        advanceUntilIdle()
+        val transport = createdTransports.single()
+        transport.closeAction = { error("close failed") }
+        emit(emptyList())
+        advanceUntilIdle()
+        assertTrue(manager.syncingStatus.value[SERVER_ID] is McpStatus.Error)
+        assertEquals(1, createdClients.size)
+        transport.closeAction = {}
+        emit(listOf(serverConfig()))
+        advanceUntilIdle()
+        assertEquals(2, transport.closeCalls)
+        assertEquals(2, createdClients.size)
+        assertTrue(manager.syncingStatus.value[SERVER_ID] is McpStatus.Ready)
+    }
+
+    @Test
+    fun `removal retains cancelled discovery until its cleanup and original transport finish`() = runTest(dispatcher) {
+        val entered = CompletableDeferred<Unit>()
+        val cleaning = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        listToolsResponder = { _, _ ->
+            entered.complete(Unit)
+            try { awaitCancellation() }
+            finally { withContext(NonCancellable) { cleaning.complete(Unit); release.await() } }
+        }
+        try {
+            emit(listOf(serverConfig()))
+            runCurrent()
+            assertTrue(entered.isCompleted)
+            emit(listOf(serverConfig(url = "https://example.com/next")))
+            runCurrent()
+            assertTrue(cleaning.isCompleted)
+            emit(emptyList())
+            runCurrent()
+            assertEquals(1, createdClients.size)
+            assertTrue(manager.syncingStatus.value.containsKey(SERVER_ID))
+            assertEquals(0, createdTransports.single().closeCalls)
+        } finally { release.complete(Unit) }
+        advanceUntilIdle()
+        assertFalse(manager.syncingStatus.value.containsKey(SERVER_ID))
+        assertEquals(1, createdTransports.single().closeCalls)
     }
 
     @Test

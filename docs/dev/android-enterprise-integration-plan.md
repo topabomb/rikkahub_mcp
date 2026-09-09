@@ -339,7 +339,7 @@ Android 媒体接线按下列所有权完成：`PortalMediaStore` 管理独占�
 | 收口工作包 | 当前事实与剩余工作 |
 | --- | --- |
 | 模型消费者（C5） | 主/子、标题/建议/摘要、附件识别和图片生成已接入原域模型捕获、逐请求准入与 binding；完整工具调用示例继续实施 |
-| MCP / Gateway（C5、U2） | 企业固定选择已有 UI；仍需接通原 MCP runtime/catalog/OAuth owner、企业 binding 与示例实际工具执行 |
+| MCP / Gateway（C5、U2） | 企业固定选择已有 UI；完整 Tool JSON、主体目录与连接清理已实现；原 Session 执行、企业 binding、Gateway 和示例工具仍需接线 |
 | 语音（C5、U2） | 仍需 TTS/ASR 的企业/用户目录、私有 binding、原请求准入及本地音频/转写 adapter |
 | 文件与 Workspace（C6） | 会话/记忆、目录、图片、背景、参考输入及附件/富文本出口已分域验证；Workspace 上传/终端/SAF 已完成本批实现与完整门禁；共享配置预设附件的目标域复制及 Draft/Child 交接已完成，完整门禁通过；整体 UI/版本验收仍待最终收口 |
 | 个人备份（C7） | 个人 Settings 保全已实现；备份仍需个人闭合图导出、恢复合并保全最新企业图和系统备份边界，不能用 Settings 测试代表数据保全 |
@@ -622,3 +622,13 @@ MCP 与备份定向 JVM 回归 146 项通过，Android 17 模拟器目录关闭�
 不将上述目录与协议验证视为企业互操作完成。
 
 本目录与协议接收批次的完整串行 `test assembleDebug lintDebug assembleRelease connectedDebugAndroidTest` 通过（19 分 43 秒）：App 2,101 项 JVM、Android 17 模拟器 App 190 项与 Speech 6 项无失败；App/Workspace lint 均为 0 错误，分别有 287/11 项警告。Workspace JVM 保留 11 项 Windows 条件跳过，设备 12 项中保留 1 项硬链接条件跳过。证据见 `build/reports/enterprise/mcp-catalog-verification.json`。未完成原 Session MCP 连接、Gateway 完整场景、Speech、个人备份图保全与其余整期验收；版本仍保持 0.0.19 开发基线。
+
+MCP 连接生命周期已收回既有 Runtime：取消中的任务和原始 transport 保留到实际清理成功；关闭失败可重试，
+重新启用先等待旧资源关闭。HTTP GET/POST 均由 transport 自身 I/O scope 持有，关闭不影响共享 HTTP client；
+断流保留已消费游标与 retry，协议错误明确失败，初始化 EOF 或内部取消不会留下 Connecting。
+此批不新增持久化结构，不代表原 Session MCP、Gateway 或整个 C5 已完成。独立复审与初始化取消补测已收口，
+最终串行 `test assembleDebug lintDebug assembleRelease connectedDebugAndroidTest` 通过（15 分 58 秒）：
+App 2,111 项 JVM、Android 17 模拟器 App 190 项与 Speech 6 项无失败，App/Workspace lint 为 0 错误、287/11 警告。
+Workspace JVM 保留 11 项 Windows 条件跳过，设备 12 项中 1 项硬链接条件跳过。报告见
+`build/reports/enterprise/mcp-lifecycle-verification.json`。本次设备运行是既有消费者回归，未新增企业 MCP/Gateway 执行验收，
+不替代 Release 设备、实体机或真实平台互操作；原 Session 接线、Speech、备份及版本 20 整期工作继续。

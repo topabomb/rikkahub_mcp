@@ -6,95 +6,88 @@ package net.weero.measix.pilot.data.ai.mcp
 import io.github.oshai.kotlinlogging.KLogger
 import io.github.oshai.kotlinlogging.KotlinLogging
 import io.ktor.client.HttpClient
-import io.ktor.client.plugins.sse.ClientSSESession
-import io.ktor.client.plugins.sse.sseSession
 import io.ktor.client.request.HttpRequestBuilder
 import io.ktor.client.request.preparePost
+import io.ktor.client.request.prepareGet
 import io.ktor.client.request.setBody
 import io.ktor.http.ContentType
 import io.ktor.http.HttpHeaders
 import io.ktor.http.append
 import io.ktor.http.isSuccess
+import io.ktor.http.contentType
 import io.ktor.http.protocolWithAuthority
-import io.modelcontextprotocol.kotlin.sdk.shared.AbstractClientTransport
 import io.modelcontextprotocol.kotlin.sdk.shared.TransportSendOptions
 import io.modelcontextprotocol.kotlin.sdk.types.JSONRPCMessage
 import io.modelcontextprotocol.kotlin.sdk.types.McpJson
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineName
-import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.NonCancellable
-import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.cancel
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
-import kotlinx.serialization.SerializationException
-import kotlin.concurrent.atomics.ExperimentalAtomicApi
-import kotlin.time.Duration
 
 /**
  * Client transport for SSE: this will connect to a server using Server-Sent Events for receiving
  * messages and make separate POST requests for sending messages.
  */
-@OptIn(ExperimentalAtomicApi::class)
 internal class McpSseTransport(
     private val client: HttpClient,
-    private val urlString: String?,
-    private val reconnectionTime: Duration? = null,
+    private val urlString: String,
     private val requestBuilder: HttpRequestBuilder.() -> Unit = {},
-) : AbstractClientTransport() {
+) : McpClientTransport() {
 
-    private val catalogWire = McpCatalogWire()
 
     override val logger: KLogger = KotlinLogging.logger {}
 
     private val endpoint = CompletableDeferred<String>()
 
-    private lateinit var session: ClientSSESession
-    private lateinit var scope: CoroutineScope
     private var job: Job? = null
+    private lateinit var origin: String
+    private lateinit var baseUrl: String
 
-    private val origin: String by lazy {
-        session.call.request.url.protocolWithAuthority
-    }
-
-    private val baseUrl: String by lazy {
-        session.call.request.url.let { url ->
-            val path = url.encodedPath
-            when {
-                path.isEmpty() -> origin
-                path.endsWith("/") -> origin + path.removeSuffix("/")
-                else -> origin + path.take(path.lastIndexOf("/"))
+    @OptIn(kotlinx.coroutines.DelicateCoroutinesApi::class)
+    override suspend fun initializeTransport() {
+        job = transportScope.launch(CoroutineName("SseMcpClientTransport.connect#${hashCode()}"), start = CoroutineStart.ATOMIC) {
+            try {
+                client.prepareGet(urlString) {
+                    headers.append(HttpHeaders.Accept, ContentType.Text.EventStream.toString())
+                    requestBuilder()
+                }.execute { response ->
+                    check(response.status.isSuccess()) { "MCP SSE connection failed: HTTP ${response.status.value}" }
+                    check(response.contentType()?.match(ContentType.Text.EventStream) == true) { "Invalid MCP SSE content type" }
+                    val url = response.call.request.url
+                    origin = url.protocolWithAuthority
+                    val path = url.encodedPath
+                    baseUrl = origin + if (path.endsWith("/")) path.removeSuffix("/") else path.substringBeforeLast('/', "")
+                    response.readMcpSseEvents { event ->
+                        ensureActive()
+                        when (event.name) {
+                            "error" -> error("MCP SSE error")
+                            "open" -> Unit
+                            "endpoint" -> handleEndpoint(event.data)
+                            else -> if (event.data.isNotBlank()) _onMessage(catalogWire.decode(event.data))
+                        }
+                        true
+                    }
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                _onError(error)
+                endpoint.completeExceptionally(error)
+            } finally {
+                endpoint.completeExceptionally(java.io.IOException("MCP SSE connection closed before endpoint"))
+                signalShutdown()
+                invokeOnCloseCallback()
             }
         }
-    }
-
-    override suspend fun initialize() {
-        session = urlString?.let {
-            client.sseSession(
-                urlString = it,
-                reconnectionTime = reconnectionTime,
-                block = requestBuilder,
-            )
-        } ?: client.sseSession(
-            reconnectionTime = reconnectionTime,
-            block = requestBuilder,
-        )
-        scope = CoroutineScope(session.coroutineContext + SupervisorJob())
-
-        job = scope.launch(CoroutineName("SseMcpClientTransport.connect#${hashCode()}")) {
-            collectMessages()
-        }
-
         endpoint.await()
     }
 
     @OptIn(ExperimentalCoroutinesApi::class)
-    override suspend fun performSend(message: JSONRPCMessage, options: TransportSendOptions?) {
+    override suspend fun sendMessage(message: JSONRPCMessage, options: TransportSendOptions?) {
         catalogWire.bind(message)
         check(job?.isActive == true) { "McpSseTransport is closed!" }
         check(endpoint.isCompleted) { "Not connected!" }
@@ -111,38 +104,6 @@ internal class McpSseTransport(
         }
 
         logger.debug { "Client successfully sent message via SSE $endpoint" }
-    }
-
-    private suspend fun CoroutineScope.collectMessages() {
-        try {
-            session.incoming.collect { event ->
-                ensureActive()
-
-                when (event.event) {
-                    "error" -> {
-                        val error = IllegalStateException("SSE error: ${event.data}")
-                        _onError(error)
-                        throw error
-                    }
-
-                    "open" -> {
-                        // The connection is open, but we need to wait for the endpoint to be received.
-                    }
-
-                    "endpoint" -> handleEndpoint(event.data.orEmpty())
-
-                    else -> handleMessage(event.data.orEmpty())
-                }
-            }
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Throwable) {
-            _onError(e)
-            throw e
-        } finally {
-            closeResources()
-            invokeOnCloseCallback()
-        }
     }
 
     /**
@@ -168,26 +129,4 @@ internal class McpSseTransport(
         }
     }
 
-    private suspend fun handleMessage(data: String) {
-        try {
-            val message = catalogWire.decode(data)
-            _onMessage(message)
-        } catch (e: SerializationException) {
-            _onError(e)
-        }
-    }
-
-    override suspend fun closeResources() {
-        catalogWire.close()
-        withContext(NonCancellable) {
-            job?.cancel()
-            try {
-                if (::session.isInitialized) session.cancel()
-                if (::scope.isInitialized) scope.cancel()
-                endpoint.cancel()
-            } catch (e: Throwable) {
-                _onError(e)
-            }
-        }
-    }
 }

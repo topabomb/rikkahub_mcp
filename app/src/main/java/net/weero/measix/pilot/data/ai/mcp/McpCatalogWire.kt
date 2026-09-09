@@ -2,6 +2,7 @@ package net.weero.measix.pilot.data.ai.mcp
 
 import io.ktor.client.statement.bodyAsChannel
 import io.ktor.utils.io.readAvailable
+import io.ktor.utils.io.readUTF8Line
 import io.modelcontextprotocol.kotlin.sdk.types.JSONRPCMessage
 import io.modelcontextprotocol.kotlin.sdk.types.JSONRPCRequest
 import io.modelcontextprotocol.kotlin.sdk.types.McpJson
@@ -203,4 +204,45 @@ internal suspend fun io.ktor.client.statement.HttpResponse.readMcpBody(): String
         output.write(buffer, 0, count)
     }
     return output.toByteArray().decodeToString(throwOnInvalidSequence = true)
+}
+
+
+internal data class McpSseEvent(val data: String, val name: String?, val id: String?, val retryMillis: Long?)
+
+/** Reads within the caller-owned streaming response; false ends that response immediately. */
+internal suspend fun io.ktor.client.statement.HttpResponse.readMcpSseEvents(
+    maxBytes: Int = McpJsonFrame.MAX_BYTES,
+    consume: suspend (McpSseEvent) -> Boolean,
+) {
+    val channel = bodyAsChannel()
+    val data = StringBuilder()
+    var id: String? = null
+    var name: String? = null
+    var retry: Long? = null
+    var frameBytes = 0
+    var first = true
+    while (true) {
+        val line = try {
+            channel.readUTF8Line(maxBytes)?.let { if (first) it.removePrefix("\uFEFF") else it }
+        } catch (_: io.ktor.utils.io.charsets.TooLongLineException) {
+            throw io.modelcontextprotocol.kotlin.sdk.shared.TooLongFrameException(maxBytes.toLong() + 1, maxBytes)
+        } ?: return
+        first = false
+        if (line.isEmpty()) {
+            if (!consume(McpSseEvent(data.toString().removeSuffix("\n"), name, id, retry))) return
+            data.clear(); id = null; name = null; retry = null; frameBytes = 0
+            continue
+        }
+        frameBytes += line.toByteArray(Charsets.UTF_8).size + 1
+        if (frameBytes > maxBytes) throw io.modelcontextprotocol.kotlin.sdk.shared.TooLongFrameException(frameBytes.toLong(), maxBytes)
+        val separator = line.indexOf(':')
+        val field = if (separator < 0) line else line.substring(0, separator)
+        val value = if (separator < 0) "" else line.substring(separator + 1).removePrefix(" ")
+        when (field) {
+            "data" -> data.append(value).append('\n')
+            "event" -> name = value
+            "id" -> if ('\u0000' !in value) id = value
+            "retry" -> if (value.isNotEmpty() && value.all { it in '0'..'9' }) retry = value.toLongOrNull()
+        }
+    }
 }

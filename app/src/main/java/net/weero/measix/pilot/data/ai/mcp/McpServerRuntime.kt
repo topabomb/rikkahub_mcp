@@ -3,12 +3,17 @@ package net.weero.measix.pilot.data.ai.mcp
 import me.rerere.common.configuration.ConfigurationReference
 import android.content.Context
 import android.util.Log
+import io.modelcontextprotocol.kotlin.sdk.shared.AbstractTransport
 import io.modelcontextprotocol.kotlin.sdk.client.Client
 import io.modelcontextprotocol.kotlin.sdk.types.ToolListChangedNotification
 import io.modelcontextprotocol.kotlin.sdk.types.Method.Defined.NotificationsToolsListChanged
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Deferred
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.currentCoroutineContext
@@ -102,10 +107,18 @@ internal class McpServerRuntime(
     private val foregroundState: StateFlow<Boolean>,
     private val policy: McpServerRuntimePolicy,
     private val logger: (String, String) -> Unit,
+    private val onClosed: (ConfigurationReference) -> Unit,
 ) {
     val mutex = Mutex()
-    var client: Client? = null
-        private set
+    private val runtimeJob = SupervisorJob(appScope.coroutineContext[Job])
+    private val runtimeScope = CoroutineScope(appScope.coroutineContext + runtimeJob)
+    // Serializes connection replacement and all access to retained transport resources; never the UI/state mutex.
+    private val connectionOperationMutex = Mutex()
+    private val connections = linkedSetOf<McpConnectionResources>()
+    private var activeConnection: McpConnectionResources? = null
+    val client: Client? get() = activeConnection?.client
+    private var closing = false
+    private var closeOperation: Deferred<Unit>? = null
     var fingerprint: McpConnectionFingerprint? = null
         private set
     private var reconnectJob: Job? = null
@@ -152,8 +165,12 @@ internal class McpServerRuntime(
         forceReconnect: Boolean = false,
     ) = withContext(ioDispatcher) {
         mutex.withLock {
-            activated = true
             if (!stateStore.isCurrent(this@McpServerRuntime)) return@withLock
+            if (closing) {
+                beginCloseLocked()
+                return@withLock
+            }
+            activated = true
             val config = desiredEnabledConfig()
             if (config == null) {
                 teardownLocked()
@@ -187,7 +204,7 @@ internal class McpServerRuntime(
     }
 
     fun requestReconcile(refreshTools: Boolean, forceReconnect: Boolean = false) {
-        appScope.launch { reconcile(refreshTools, forceReconnect) }
+        runtimeScope.launch { reconcile(refreshTools, forceReconnect) }
     }
 
     suspend fun deactivateIfDisabledOrRemoved() = withContext(ioDispatcher) {
@@ -208,7 +225,7 @@ internal class McpServerRuntime(
         }
 
     private fun hydrateCatalogLocked(config: McpServerConfig, catalog: McpCatalogSnapshot?) {
-        if (catalog == null || catalog.definitionDigest != config.mcpDefinitionDigest()) return
+        if (closing || catalog == null || catalog.definitionDigest != config.mcpDefinitionDigest()) return
         val current = activeCatalog
         if (current != null && current.revision >= catalog.revision) return
         val restoredStatus = when (val health = status) {
@@ -224,15 +241,29 @@ internal class McpServerRuntime(
 
     suspend fun revokeAuthorization() = withContext(ioDispatcher) {
         mutex.withLock {
-            generation.incrementAndGet()
+            if (closing) return@withLock
+            val revokedGeneration = generation.incrementAndGet()
             cancelAllJobsLocked()
             connectionJob?.cancel()
             connectionJob = null
             connectionRequestFingerprint = null
-            val detachedClient = client
-            client = null
+            activeConnection = null
             fingerprint = null
-            detachedClient?.let { stale -> appScope.launch(ioDispatcher) { closeClient(stale) } }
+            runtimeScope.launch(ioDispatcher) {
+                try {
+                    connectionOperationMutex.withLock { closeConnectionsBefore(revokedGeneration) }
+                } catch (timeout: TimeoutCancellationException) {
+                    mutex.withLock {
+                        if (generation.get() == revokedGeneration) setStatusLocked(McpStatus.Error("MCP resource cleanup timed out"))
+                    }
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (error: Exception) {
+                    mutex.withLock {
+                        if (generation.get() == revokedGeneration) setStatusLocked(McpStatus.Error.from(error))
+                    }
+                }
+            }
             setStatusLocked(McpStatus.NeedsAuthorization)
         }
     }
@@ -240,6 +271,11 @@ internal class McpServerRuntime(
     /** Waits for the operation accepted before this call; coalesced follow-up refreshes drain too. */
     suspend fun awaitCurrentOperations() {
         while (true) {
+            val cleanup = mutex.withLock { closeOperation }
+            if (cleanup != null) {
+                cleanup.await()
+                return
+            }
             val operation = mutex.withLock {
                 connectionJob?.takeIf { it.isActive }
                     ?: catalogRefreshJob?.takeIf { it.isActive }
@@ -249,21 +285,38 @@ internal class McpServerRuntime(
     }
 
     private fun teardownLocked() {
-        val name = settingsStore.effectiveSettings.value.settings.mcpServers
-            .find { it.id == serverId }?.commonOptions?.name ?: serverId.toString()
-        generation.incrementAndGet()
-        cancelAllJobsLocked()
-        connectionJob?.cancel()
-        connectionJob = null
-        connectionRequestFingerprint = null
-        val detachedClient = client
-        client = null
-        fingerprint = null
-        reconnectAttempt = 0
-        activated = false
-        stateStore.remove(this@McpServerRuntime)
-        detachedClient?.let { stale -> appScope.launch(ioDispatcher) { closeClient(stale) } }
-        logger(name, "Disconnected (removed)")
+        if (!closing) {
+            closing = true
+            generation.incrementAndGet()
+            activated = false
+            setStatusLocked(McpStatus.Idle)
+            activeConnection = null
+            fingerprint = null
+            runtimeJob.cancel()
+        }
+        beginCloseLocked()
+    }
+
+    private fun beginCloseLocked() {
+        if (closeOperation?.let { !it.isCompleted || !it.isCancelled } == true) return
+        // Cleanup belongs to AppScope: the sealed runtime must never await its own child here.
+        closeOperation = appScope.async(ioDispatcher) {
+            try {
+                withTimeout(policy.clientCloseTimeoutMs) { runtimeJob.join() }
+                connectionOperationMutex.withLock { closeConnectionsBefore(Long.MAX_VALUE) }
+                mutex.withLock { stateStore.remove(this@McpServerRuntime) }
+                logger(getServerName(), "Disconnected (resources closed)")
+                onClosed(serverId)
+            } catch (timeout: TimeoutCancellationException) {
+                mutex.withLock { setStatusLocked(McpStatus.Error("MCP resource cleanup timed out; retry required")) }
+                throw timeout
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                mutex.withLock { setStatusLocked(McpStatus.Error.from(error, "MCP resource cleanup failed")) }
+                throw error
+            }
+        }
     }
 
     /** 锁内只交接 lease；connect、发现和目录落盘均由 AppScope operation 在锁外完成。 */
@@ -272,6 +325,7 @@ internal class McpServerRuntime(
         retryAfterFailure: Boolean,
         cancelReconnect: Boolean = true,
     ) {
+        if (closing) return
         if (cancelReconnect) reconnectAttempt = 0
         val assignedGeneration = generation.incrementAndGet()
         if (cancelReconnect) {
@@ -285,15 +339,16 @@ internal class McpServerRuntime(
         catalogRefreshPreviousCatalog = null
         connectionJob?.cancel()
         connectionRequestFingerprint = config.connectionFingerprint()
-        val detachedClient = client
-        client = null
+        activeConnection = null
         fingerprint = null
         val retainedCatalog = activeCatalog?.takeIf {
             it.definitionDigest == config.mcpDefinitionDigest()
         }
         if (retainedCatalog == null) setStatusLocked(McpStatus.Idle, null)
-        connectionJob = appScope.launch(ioDispatcher) {
-            runConnectionOperation(config, assignedGeneration, retryAfterFailure, detachedClient)
+        connectionJob = runtimeScope.launch(ioDispatcher) {
+            connectionOperationMutex.withLock {
+                runConnectionOperation(config, assignedGeneration, retryAfterFailure)
+            }
         }
     }
 
@@ -301,14 +356,14 @@ internal class McpServerRuntime(
         requestedConfig: McpServerConfig,
         assignedGeneration: Long,
         retryAfterFailure: Boolean,
-        detachedClient: Client?,
     ) {
+        var resources: McpConnectionResources? = null
         var newClient: Client? = null
         var catalogAccepted = false
         try {
             lifecycleOperationSemaphore.withPermit {
                 withTimeout(policy.connectionOperationTimeoutMs) {
-                    detachedClient?.let { closeClient(it) }
+                    closeConnectionsBefore(assignedGeneration)
                     val config = oauthCoordinator.ensureFreshToken(requestedConfig)
                     if (!matchesDesiredDefinition(assignedGeneration, config)) {
                         requestReconcile(refreshTools = false)
@@ -321,18 +376,22 @@ internal class McpServerRuntime(
                     }
                     if (!connecting) return@withTimeout
                     val transport = protocolClientFactory.createTransport(config)
+                    val ownedResources = McpConnectionResources(assignedGeneration, transport)
+                    connections.add(ownedResources)
+                    resources = ownedResources
                     val createdClient = protocolClientFactory.createClient(config)
                     newClient = createdClient
+                    ownedResources.client = createdClient
                     setupNotificationHandlers(createdClient, config, assignedGeneration)
                     transport.onClose {
-                        appScope.launch { onTransportClosed(assignedGeneration, createdClient) }
+                        runtimeScope.launch { onTransportClosed(assignedGeneration, createdClient) }
                     }
                     transport.onError { error ->
-                        appScope.launch { onTransportError(assignedGeneration, createdClient, error) }
+                        runtimeScope.launch { onTransportError(assignedGeneration, createdClient, error) }
                     }
                     val admitted = mutex.withLock {
                         if (!matchesDesiredDefinitionLocked(assignedGeneration, config)) return@withLock false
-                        client = createdClient
+                        activeConnection = ownedResources
                         fingerprint = config.connectionFingerprint()
                         true
                     }
@@ -368,18 +427,37 @@ internal class McpServerRuntime(
         } catch (timeout: TimeoutCancellationException) {
             if (!catalogAccepted) handleConnectionFailure(requestedConfig, assignedGeneration, retryAfterFailure, newClient, timeout)
         } catch (cancelled: CancellationException) {
+            // Transport-owned cancellation can end initialization without cancelling this runtime worker.
+            if (currentCoroutineContext().isActive) {
+                handleConnectionFailure(requestedConfig, assignedGeneration, retryAfterFailure, newClient,
+                    java.io.IOException("MCP connection interrupted", cancelled))
+            }
             throw cancelled
         } catch (error: Throwable) {
             handleConnectionFailure(requestedConfig, assignedGeneration, retryAfterFailure, newClient, error)
         } finally {
-            newClient?.let { candidate ->
-                val owned = mutex.withLock { client === candidate && generation.get() == assignedGeneration }
-                if (!owned) closeClient(candidate)
-            }
-            mutex.withLock {
-                if (connectionJob === kotlinx.coroutines.currentCoroutineContext()[Job]) {
-                    connectionJob = null
-                    connectionRequestFingerprint = null
+            val operation = currentCoroutineContext()[Job]
+            withContext(NonCancellable) {
+                try {
+                    resources?.let { candidate ->
+                        val owned = mutex.withLock {
+                            activeConnection === candidate && generation.get() == assignedGeneration
+                        }
+                        if (!owned) closeConnection(candidate)
+                    }
+                } catch (error: Exception) {
+                    // The resource stays registered; a later reconnect/close retries the same owner.
+                    mutex.withLock {
+                        if (generation.get() == assignedGeneration) setStatusLocked(McpStatus.Error.from(error))
+                    }
+                    logger(getServerName(), "Connection cleanup incomplete: ${error.message}")
+                } finally {
+                    mutex.withLock {
+                        if (connectionJob === operation) {
+                            connectionJob = null
+                            connectionRequestFingerprint = null
+                        }
+                    }
                 }
             }
         }
@@ -397,7 +475,7 @@ internal class McpServerRuntime(
         mutex.withLock {
             if (generation.get() != assignedGeneration) return@withLock
             if (client === failedClient) {
-                client = null
+                activeConnection = null
                 fingerprint = null
             }
             if (authorizationRequired) {
@@ -450,7 +528,7 @@ internal class McpServerRuntime(
     private fun matchesDesiredDefinitionLocked(
         assignedGeneration: Long,
         config: McpServerConfig,
-    ): Boolean = stateStore.isCurrent(this@McpServerRuntime) &&
+    ): Boolean = !closing && stateStore.isCurrent(this@McpServerRuntime) &&
         generation.get() == assignedGeneration &&
         desiredEnabledConfig()?.connectionFingerprint() == config.connectionFingerprint()
 
@@ -588,6 +666,7 @@ internal class McpServerRuntime(
         expectedDefinitionDigest: String,
         expectedNeedsApproval: Boolean,
     ): String? {
+        if (closing || !stateStore.isCurrent(this)) return "TOOL_REVOKED: MCP runtime is closing"
         val currentConfig = desiredEnabledConfig()
             ?: return "TOOL_REVOKED: MCP tool is no longer available"
         val policy = currentConfig.commonOptions.toolPolicyByName()[toolName]
@@ -631,16 +710,18 @@ internal class McpServerRuntime(
         }
     }
 
-    private suspend fun closeClient(target: Client) {
-        try {
-            withTimeout(policy.clientCloseTimeoutMs) { target.close() }
-        } catch (_: TimeoutCancellationException) {
-            logger(getServerName(), "Client close timed out")
-        } catch (cancelled: CancellationException) {
-            throw cancelled
-        } catch (error: Throwable) {
-            logger(getServerName(), "Failed to close client: ${error.message}")
+    private suspend fun closeConnectionsBefore(beforeGeneration: Long) {
+        val retired = connections.filter { it.generation < beforeGeneration }
+        retired.forEach { closeConnection(it) }
+    }
+
+    private suspend fun closeConnection(target: McpConnectionResources) {
+        withTimeout(policy.clientCloseTimeoutMs) {
+            // SDK may detach Client.transport during its callback, so retain the original transport.
+            try { target.client?.close() }
+            finally { target.transport.close() }
         }
+        connections.remove(target)
     }
 
     private suspend fun onTransportClosed(
@@ -695,7 +776,7 @@ internal class McpServerRuntime(
         catalogRefreshPreviousStatus = status
         catalogRefreshPreviousCatalog = activeCatalog
         if (activeCatalog == null) setStatusLocked(McpStatus.Discovering)
-        catalogRefreshJob = appScope.launch(ioDispatcher) {
+        catalogRefreshJob = runtimeScope.launch(ioDispatcher) {
             drainCatalogRefreshes(assignedGeneration, getServerName())
         }
     }
@@ -706,7 +787,7 @@ internal class McpServerRuntime(
      * event driven and does not consume attempts or poll the radio.
      */
     private fun scheduleReconnectLocked(capturedGeneration: Long) {
-        if (generation.get() != capturedGeneration) return
+        if (closing || generation.get() != capturedGeneration) return
         if (reconnectJob?.isActive == true) return
         val attempt = reconnectAttempt + 1
         if (attempt > policy.maxTotalReconnectAttempts) {
@@ -728,7 +809,7 @@ internal class McpServerRuntime(
                 McpStatus.WaitingNetwork
             }
         )
-        reconnectJob = appScope.launch {
+        reconnectJob = runtimeScope.launch {
             try {
                 networkMonitor.isOnline.first { it }
                 foregroundState.first { it }
@@ -801,7 +882,7 @@ internal class McpServerRuntime(
             NotificationsToolsListChanged
         ) {
             logger(configName, "Received tools/list_changed notification")
-            appScope.launch {
+            runtimeScope.launch {
                 mutex.withLock {
                     if (generation.get() != assignedGeneration || this@McpServerRuntime.client !== client) {
                         return@withLock
@@ -928,7 +1009,7 @@ internal class McpServerRuntime(
     }
 
     fun startAuthorization(context: Context) {
-        appScope.launch {
+        runtimeScope.launch {
             val replacement = mutex.withLock {
                 val previousJob = authorizationJob
                 authorizationJob = null
@@ -968,7 +1049,7 @@ internal class McpServerRuntime(
                 if (authorizationOperation != replacement.operation) return@withLock
                 val current = desiredEnabledConfig() ?: return@withLock
                 setStatusLocked(McpStatus.Authorizing)
-                authorizationJob = appScope.launch {
+                authorizationJob = runtimeScope.launch {
                     try {
                         oauthCoordinator.authorize(current, context)
                         reconcile(refreshTools = true, forceReconnect = true)
@@ -982,7 +1063,7 @@ internal class McpServerRuntime(
                             }
                         }
                         // 授权期间被跳过的配置变化（如 URL 修改）在此收敛
-                        appScope.launch { reconcile(refreshTools = true) }
+                        runtimeScope.launch { reconcile(refreshTools = true) }
                     } finally {
                         mutex.withLock {
                             if (
@@ -1001,7 +1082,7 @@ internal class McpServerRuntime(
     }
 
     fun cancelAuthorization() {
-        appScope.launch {
+        runtimeScope.launch {
             val cancellation = mutex.withLock {
                 val job = authorizationJob
                 authorizationJob = null
@@ -1015,6 +1096,8 @@ internal class McpServerRuntime(
             var persistenceFailure: Throwable? = null
             try {
                 oauthCoordinator.touchState(serverId)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
             } catch (error: Throwable) {
                 persistenceFailure = error
                 logger(getServerName(), "OAuth cancellation persistence failed: ${error.message}")
@@ -1074,4 +1157,12 @@ private fun McpStatus.catalogCountForLog(): Int = when (this) {
     is McpStatus.Ready -> toolCount
     is McpStatus.CatalogStale -> lastKnownGoodCount
     else -> 0
+}
+
+/** Retained by its runtime until both SDK and original transport cleanup have completed. */
+private class McpConnectionResources(
+    val generation: Long,
+    val transport: AbstractTransport,
+) {
+    var client: Client? = null
 }

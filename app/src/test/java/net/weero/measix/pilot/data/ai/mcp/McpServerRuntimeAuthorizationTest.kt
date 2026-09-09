@@ -94,6 +94,7 @@ class McpServerRuntimeAuthorizationTest {
             foregroundState = MutableStateFlow(true),
             policy = McpServerRuntimePolicy { 0L },
             logger = { _, _ -> },
+            onClosed = {},
         )
         stateStore.getOrCreate(serverId) { runtime }
         val context = mockk<Context>(relaxed = true)

@@ -236,7 +236,12 @@ internal abstract class McpRuntimeCoordinatorTestBase {
 internal class FakeTransport : AbstractTransport() {
     override suspend fun start() = Unit
     override suspend fun send(message: JSONRPCMessage, options: TransportSendOptions?) = Unit
-    override suspend fun close() = Unit
+    var closeCalls = 0
+    var closeAction: suspend () -> Unit = {}
+    override suspend fun close() {
+        closeCalls++
+        closeAction()
+    }
 
     fun simulateClose() = invokeOnCloseCallback()
     fun simulateError(error: Throwable) {

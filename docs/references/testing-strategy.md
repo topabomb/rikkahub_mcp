@@ -41,6 +41,7 @@
 | 请求凭据与传输保密 | `RequestCredentialsTest` 验证聊天四线及图片生成/编辑的实际请求构建、认证唯一性、私有图片下载与个人轮换缓存隔离；`ModelRequestTransportTest` 验证受管请求覆盖拒绝；`RequestPrivacyTest` 通过两个 HTTP 服务验证跨 origin 跳转阻断，`RequestLoggingInterceptorTest` 验证应用日志隔离 |
 | 辅助生成任务、原 Session 与摘要取消 | `AuxiliaryGenerationOwnershipTest` 使用实际生成与应用服务、延迟 Provider 验证取消等待、旧 Session、切域、手动标题、移交后原助手清理、清理失败重试、建议迟到清空拒绝及摘要先释放后提交；模型回退、原企业辅助 binding 和捕获前助手变化由 `ModelExecutionServiceTest` 验证；`ConversationRepositoryTreeIntegrationTest` 在真实 Room 注入 Child 删除失败，验证整个摘要树事务回滚及重试 |
 | 原生切域与 Portal 清理 | `EnterpriseApplicationServiceTest` 用真实 Session/store 和可控宿主回执验证发布屏障、进度与原选择/目标 Session；`PortalDocumentTest` 验证原请求、宿主超时及重开准入；`PortalWebViewAndroidTest` 验证系统 Cookie/站点存储清理和真实网页消息，`EnterprisePageAndroidTest` 验证原生页面接线与后台交接取消 |
+| MCP 连接与传输所有权 | `McpConnectionLifecycleTest` 验证取消、原始 transport 关闭、失败持有与重新启用；`McpClientTransportTest` 验证 SDK 终态后的实际 I/O 等待；`McpTransportOwnershipIntegrationTest` 经真实 OkHttp/本机 HTTP 验证响应头等待取消、截断恢复和协议失败，不代表 Android 设备或真实服务互操作 |
 | MCP 完整目录与持久化主体 | `McpProtocolDiscoveryTest` 经 SDK、OkHttp 和本机 HTTP 服务验证完整 Tool JSON、分页及 SSE；`McpCatalogIdentityTest` 使用实际 DataStore 验证主体隔离、旧个人迁移与个人恢复保全企业；`McpCatalogPublicationTest` 验证提交、取消与回执顺序；`McpCatalogPersistenceTest` 验证 Android 关闭重开后的目录与磁盘一致 |
 | streaming overlay | `TurnStreamProjectionTest` |
 | Turn 多 Step 循环 | `TurnRunnerTest` |

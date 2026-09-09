@@ -4,7 +4,6 @@ import com.sun.net.httpserver.HttpExchange
 import com.sun.net.httpserver.HttpServer
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.okhttp.OkHttp
-import io.ktor.client.plugins.sse.SSE
 import java.io.OutputStream
 import java.net.InetSocketAddress
 import java.util.concurrent.CountDownLatch
@@ -112,7 +111,7 @@ class McpProtocolDiscoveryTest {
             } finally { exchange.close() }
         }
         server.start()
-        val http = HttpClient(OkHttp) { install(SSE) }
+        val http = HttpClient(OkHttp)
         val factory = McpProtocolClientFactory(createHttpClient = { http })
         val url = "http://127.0.0.1:${server.address.port}/mcp"
         val config = if (mode == 3) McpServerConfig.SseTransportServer(url = url)

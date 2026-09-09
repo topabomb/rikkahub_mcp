@@ -11,7 +11,6 @@ import me.rerere.common.android.Logging
 import net.weero.measix.pilot.data.ai.RequestLoggingInterceptor
 import io.ktor.client.engine.okhttp.OkHttp
 import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
-import io.ktor.client.plugins.sse.SSE
 import io.ktor.serialization.kotlinx.json.json
 import io.modelcontextprotocol.kotlin.sdk.client.Client
 import io.modelcontextprotocol.kotlin.sdk.shared.AbstractTransport
@@ -131,7 +130,6 @@ class McpRuntimeCoordinator(
                         isLenient = true
                     })
                 }
-                install(SSE)
             }
         },
         transportOverride = transportOverride,
@@ -448,6 +446,13 @@ class McpRuntimeCoordinator(
                 foregroundState = foregroundState,
                 policy = runtimePolicy,
                 logger = ::logMcp,
+                onClosed = { id ->
+                    appScope.launch {
+                        val enabled = settingsStore.effectiveSettings.value.settings.mcpServers
+                            .any { it.id == id && it.commonOptions.enable && it.commonOptions.name.isNotBlank() }
+                        if (enabled) runtime(id).reconcile(refreshTools = false)
+                    }
+                },
             )
         }
 

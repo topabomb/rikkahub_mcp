@@ -58,7 +58,14 @@ POST 使用 Ktor streaming `execute` 作用域，在预读整个 body 之前执�
 
 `McpStreamableHttpTransport` 与 `McpSseTransport` 从 [kotlin-sdk 0.15.0](https://github.com/modelcontextprotocol/kotlin-sdk/tree/0.15.0)
 的对应 transport 源码适配，复用 SDK `AbstractClientTransport`、RPC Client、重连参数和错误类型；
-本地修改集中在上述完整 JSON 解码、capture 收口和不记录请求正文，移除未使用的上游构造/发送重载。
+本地修改集中在上述完整 JSON 解码、capture 收口、传输 I/O 所有权和不记录请求正文，移除未使用的上游构造/发送重载。
+`McpClientTransport` 持有自己的 I/O Job；初始化、POST 和 GET 都在该 Job 下运行，关闭必须取消并等待实际 I/O。
+GET 使用 streaming `prepareGet().execute`，不使用会在共享 HttpClient scope 留下任务的 SSE session builder。
+SDK 提前进入终态或断开 Client 引用不能代替实际清理；原 transport 的重复关闭仍等待同一 I/O owner，
+单个 transport 不关闭共享 HTTP client。个人 SSE 在 endpoint 前结束属于明确连接失败；
+传输内部取消不能伪装为 Runtime 调用者取消而留下 Connecting，仍须清理原连接并发布恢复状态。
+已消费事件立即更新恢复游标和 retry，成功建立流即重置重连计数；
+只有网络 I/O 与明确可重试 HTTP 错误重连，坏 JSON、超限帧和其他协议错误报告并停止接收。
 上游许可证全文随应用放在 `assets/licenses/mcp-kotlin-sdk-LICENSE.txt`。
 
 协调器可以从恢复 IO 线程构造；ProcessLifecycleOwner 观察者通过 AppScope 的主线程任务注册，不能在构造调用线程直接注册。
@@ -104,6 +111,11 @@ Catalog 初始化只执行一次迁移、读取和发布；全部命令等待这
 server 会主动建立其自身连接。用户全局刷新显式激活全部 enabled server。
 
 每个 server 只有一个 `McpServerRuntime`。它持有 mutex、generation、client、已接受连接请求的 fingerprint 和各 operation Job；
+其子 scope 保留所有已接受的生命周期任务，取消或替换 Job 引用不会丢失尚未完成的清理。
+连接替换与原始 transport 集合只在同一个 connection-operation mutex 下访问；新连接先完成旧连接清理。
+移除先封闭准入并取消 runtime scope，由 AppScope 接受关闭任务，在状态锁外等待原任务完成并关闭原始 transport，
+然后才从注册表移除。超时/失败保留 Runtime 与资源，公开错误并由后续命令重试；重新启用也须先完成旧资源清理。
+SDK Client 即使已经丢失 transport 引用，清理仍使用 Runtime 持有的原 transport。
 所有远程或持久化 I/O 在锁外执行，完成时以 generation/client/definition lease 重新验收。同 fingerprint 的重复触发合并到
 已有 operation，definition 变化则取消旧 operation、推进 generation 并替换。跨 server 的 connect、首次 discovery 和健康
 session 的 catalog refresh 共用一个全局 semaphore，最多 4 路并行；工具调用永不经过该门。连接/目录 attempt 的 timeout 从
