@@ -20,11 +20,13 @@ sealed interface AssistantPreferenceChange {
     data class Skill(val name: String, val enabled: Boolean) : AssistantPreferenceChange
     data class Workspace(val id: Uuid?) : AssistantPreferenceChange
     data class LocalTool(val option: LocalToolOption, val enabled: Boolean) : AssistantPreferenceChange
+    data class Background(val uri: String) : AssistantPreferenceChange
 }
 
 internal fun Assistant.withPreference(change: AssistantPreferenceChange): Assistant = when (change) {
     is AssistantPreferenceChange.Model -> copy(chatModelId = change.reference)
     AssistantPreferenceChange.InheritModel -> copy(chatModelId = null)
+    is AssistantPreferenceChange.Background -> copy(background = change.uri, useGradientBackground = false)
     is AssistantPreferenceChange.Reasoning -> copy(reasoningLevel = change.level)
     is AssistantPreferenceChange.Search -> copy(enableWebSearch = change.mode == AssistantSearchMode.LOCAL,
         builtInSearch = change.mode == AssistantSearchMode.BUILT_IN)
@@ -42,6 +44,7 @@ internal fun AssistantUsagePreferences.withPreference(
 ): AssistantUsagePreferences = when (change) {
     is AssistantPreferenceChange.Model -> copy(chatModelId = UsageValue(change.reference))
     AssistantPreferenceChange.InheritModel -> copy(chatModelId = null)
+    is AssistantPreferenceChange.Background -> copy(background = UsageValue(change.uri), useGradientBackground = UsageValue(false))
     is AssistantPreferenceChange.Reasoning -> copy(reasoningLevel = UsageValue(change.level))
     is AssistantPreferenceChange.Search -> copy(enableWebSearch = UsageValue(change.mode == AssistantSearchMode.LOCAL),
         builtInSearch = UsageValue(change.mode == AssistantSearchMode.BUILT_IN))

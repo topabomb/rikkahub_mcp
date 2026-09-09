@@ -1,13 +1,16 @@
 package net.weero.measix.pilot.data.imggen
 
+import net.weero.measix.pilot.data.configuration.AssistantPreferenceChange
+import net.weero.measix.pilot.data.enterprise.EnterpriseSessionController
+import net.weero.measix.pilot.data.enterprise.RealmAccess
+import net.weero.measix.pilot.data.enterprise.RealmSelection
+import net.weero.measix.pilot.service.ApplicationRecoveryGate
 import net.weero.measix.pilot.data.configuration.ConfigurationScope
 
 import me.rerere.common.configuration.ConfigurationReference
 import net.weero.measix.pilot.service.ImageSource
 import android.util.Log
-import java.io.File
 import kotlin.coroutines.cancellation.CancellationException
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.withContext
 import net.weero.measix.pilot.data.ai.attachments.ImageMime
@@ -23,120 +26,97 @@ data class BackgroundUpdateResult(
     val cleanupPending: Boolean = false,
 )
 
-class AssistantBackgroundService(
-    private val artifactStore: ArtifactStore,
-) {
+internal sealed interface AssistantBackgroundTarget {
+    val assistantId: ConfigurationReference
+    val scope: ConfigurationScope
 
+    data class Page(val selection: RealmSelection, override val assistantId: ConfigurationReference) : AssistantBackgroundTarget {
+        override val scope get() = selection.access.scope
+    }
+    data class Task(val access: RealmAccess, override val assistantId: ConfigurationReference) : AssistantBackgroundTarget {
+        override val scope get() = access.scope
+    }
+    data class Definition(override val assistantId: ConfigurationReference.User) : AssistantBackgroundTarget {
+        override val scope = ConfigurationScope.Personal
+    }
+}
+
+internal class AssistantBackgroundService(
+    private val artifactStore: ArtifactStore,
+    private val generatedMediaStore: GeneratedMediaStore,
+    private val sessions: EnterpriseSessionController,
+    private val recoveryGate: ApplicationRecoveryGate,
+) {
     suspend fun replaceUserSelectedBackground(
-        assistantId: ConfigurationReference,
+        target: AssistantBackgroundTarget,
         image: ImageSource,
-    ): BackgroundUpdateResult = replaceBackground(assistantId) {
+    ): BackgroundUpdateResult = replaceBackground(target, ArtifactOrigin.USER) {
         val bytes = image.readBytes()
-        val materialized = validatedBackground(bytes, image.displayName ?: "background") ?: return@replaceBackground null
         image.requireAccess()
-        artifactStore.createFromBytes(ConfigurationScope.Personal, materialized.bytes, materialized.displayName,
-            materialized.mimeType, origin = ArtifactOrigin.USER)
+        validatedBackground(bytes, image.displayName ?: "background")
     }
 
     suspend fun replaceGeneratedBackground(
+        access: RealmAccess,
         assistantId: ConfigurationReference,
-        source: File,
-        mimeType: String,
-    ): BackgroundUpdateResult = replaceBackground(assistantId) {
-        artifactStore.copyFile(
-            scope = ConfigurationScope.Personal,
-            source = source,
-            mimeType = mimeType,
-            displayName = source.name,
-            origin = ArtifactOrigin.GENERATED,
-        )
+        mediaId: Long,
+    ): BackgroundUpdateResult = replaceBackground(AssistantBackgroundTarget.Task(access, assistantId), ArtifactOrigin.GENERATED) {
+        val bytes = sessions.withRealmAccess(access) { generatedMediaStore.readImage(access.scope, Math.toIntExact(mediaId)) }
+        validatedBackground(bytes, "background")
     }
 
-    /** 复制背景为设置域 artifact，并以同一 Settings 引用事务发布。 */
+    private suspend fun <T> withTarget(target: AssistantBackgroundTarget, operation: suspend () -> T): T = when (target) {
+        is AssistantBackgroundTarget.Page -> sessions.withSelectedRealmSelection(target.selection, operation)
+        is AssistantBackgroundTarget.Task -> sessions.withRealmAccess(target.access, operation)
+        is AssistantBackgroundTarget.Definition -> operation()
+    }
+
+    /** Source reads retain their own authorization; the destination is rechecked before its reference transaction. */
     private suspend fun replaceBackground(
-        assistantId: ConfigurationReference,
-        createCopy: suspend () -> OwnedArtifact?,
+        target: AssistantBackgroundTarget,
+        origin: ArtifactOrigin,
+        materialize: suspend () -> MaterializedBackground?,
     ): BackgroundUpdateResult {
-        val copy = try {
-            createCopy()
+        recoveryGate.awaitReady()
+        val image = try {
+            withTarget(target) { }
+            materialize()
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (error: Exception) {
-            Log.e(TAG, "failed to copy background", error)
+            Log.e(TAG, "failed to read background", error)
             null
-        }
-        if (copy == null) {
-            return BackgroundUpdateResult(
-                requested = true,
-                updated = false,
-                reason = "background_copy_failed",
-            )
-        }
-        val newUri = copy.uri.toString()
-        var previousBackground: String? = null
-        var assistantFound = false
-        val committed = try {
-            artifactStore.updateSettingsReferences { settings ->
-                val index = settings.assistants.indexOfFirst { it.id == assistantId }
-                if (index < 0) return@updateSettingsReferences settings
-                assistantFound = true
-                val current = settings.assistants[index]
-                previousBackground = current.background
-                settings.copy(
-                    assistants = settings.assistants.toMutableList().also { list ->
-                        list[index] = current.copy(
-                            background = newUri,
-                            useGradientBackground = false,
-                        )
-                    },
-                )
+        } ?: return BackgroundUpdateResult(true, false, "background_copy_failed")
+        var copy: OwnedArtifact? = null
+        try {
+            withTarget(target) {
+                copy = artifactStore.createFromBytes(target.scope, image.bytes, image.displayName,
+                    image.mimeType, origin = origin)
+                artifactStore.updateAssistantPreferenceReferences(target.scope, sessions.state.value,
+                    target.assistantId, AssistantPreferenceChange.Background(requireNotNull(copy).uri.toString()))
             }
         } catch (cancelled: CancellationException) {
             withContext(NonCancellable) {
-                discardUncommittedBackgroundCopy(copy, newUri)?.let(cancelled::addSuppressed)
+                copy?.let { discardUncommittedBackgroundCopy(it, it.uri.toString()) }?.let(cancelled::addSuppressed)
             }
             throw cancelled
         } catch (error: Exception) {
             Log.e(TAG, "failed to write background settings", error)
-            val cleanupFailure =
-            withContext(NonCancellable) {
-                discardUncommittedBackgroundCopy(copy, newUri)
+            val cleanupFailure = withContext(NonCancellable) {
+                copy?.let { discardUncommittedBackgroundCopy(it, it.uri.toString()) }
             }
-            return BackgroundUpdateResult(
-                requested = true,
-                updated = false,
-                reason = "settings_write_failed",
-                cleanupPending = cleanupFailure != null,
-            )
-        }
-        val backgroundCommitted = committed.assistants
-            .find { it.id == assistantId }
-            ?.background == newUri
-        if (!assistantFound || !backgroundCommitted) {
-            val cleanupFailure = discardUncommittedBackgroundCopy(copy, newUri)
-            return BackgroundUpdateResult(
-                requested = true,
-                updated = false,
-                reason = if (assistantFound) "settings_write_rejected" else "assistant_not_found",
-                cleanupPending = cleanupFailure != null,
-            )
+            return BackgroundUpdateResult(true, false, "settings_write_failed", cleanupFailure != null)
         }
         val cleanupPending = try {
-            !cleanupUnreferencedLocalBackground(
-                previousBackground,
-                protectedUris = setOf(newUri),
-            )
+            artifactStore.collectGarbage(protectionWindowMillis = 0)
+            false
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (error: Exception) {
             Log.w(TAG, "old background cleanup deferred", error)
             true
         }
-        return BackgroundUpdateResult(
-            requested = true,
-            updated = true,
-            cleanupPending = cleanupPending,
-        )
+        return BackgroundUpdateResult(true, true, cleanupPending = cleanupPending)
     }
 
     private fun validatedBackground(
@@ -175,24 +155,6 @@ class AssistantBackgroundService(
         error
     }
 
-    suspend fun cleanupUnreferencedLocalBackground(
-        backgroundUri: String?,
-        protectedUris: Set<String> = emptySet(),
-    ): Boolean {
-        if (backgroundUri.isNullOrBlank()) return true
-        if (backgroundUri in protectedUris) return true
-        val file = localFileFromUri(backgroundUri) ?: return true
-        return try {
-            artifactStore.collectGarbage(protectionWindowMillis = 0)
-            !file.exists()
-        } catch (cancelled: CancellationException) {
-            throw cancelled
-        } catch (error: Exception) {
-            Log.w(TAG, "failed to cleanup old background $backgroundUri", error)
-            false
-        }
-    }
-
     companion object {
         private const val TAG = "AssistantBackgroundService"
     }
@@ -203,25 +165,3 @@ private data class MaterializedBackground(
     val mimeType: String,
     val displayName: String,
 )
-
-internal fun localFileFromUri(value: String): File? {
-    val trimmed = value.trim()
-    if (!trimmed.startsWith("file:", ignoreCase = true)) return null
-    // The scheme check is case-insensitive; strip exactly five characters so FILE://
-    // follows the same path normalization as the canonical lowercase form.
-    val withoutScheme = trimmed.substring("file:".length)
-    val path = when {
-        withoutScheme.startsWith("///") -> {
-            val rest = withoutScheme.removePrefix("//")
-            if (rest.length >= 3 && rest[2] == ':') rest.removePrefix("/") else rest
-        }
-        withoutScheme.startsWith("//") -> withoutScheme.removePrefix("//")
-        else -> withoutScheme
-    }.replace('/', File.separatorChar)
-    return path.takeIf { it.isNotBlank() }?.let(::File)
-}
-
-internal fun fileUri(file: File): String {
-    val path = file.absolutePath.replace('\\', '/')
-    return if (path.startsWith("/")) "file://$path" else "file:///$path"
-}

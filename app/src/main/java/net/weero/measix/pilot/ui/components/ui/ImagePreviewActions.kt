@@ -4,6 +4,11 @@ import me.rerere.common.configuration.ConfigurationReference
 import net.weero.measix.pilot.service.ImageSource
 import android.content.Context
 import androidx.compose.runtime.Composable
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.compose.runtime.LaunchedEffect
+import net.weero.measix.pilot.service.ConfigurationQueryService
+import net.weero.measix.pilot.data.enterprise.RealmSelection
+import net.weero.measix.pilot.data.imggen.AssistantBackgroundTarget
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.getValue
@@ -26,7 +31,6 @@ import me.rerere.hugeicons.stroke.ImageComposition
 import net.weero.measix.pilot.R
 import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.datastore.getAssistantById
-import net.weero.measix.pilot.data.datastore.getCurrentAssistant
 import net.weero.measix.pilot.data.imggen.AssistantBackgroundService
 import net.weero.measix.pilot.data.imggen.BackgroundUpdateResult
 import net.weero.measix.pilot.ui.components.ai.AssistantPickerSheet
@@ -72,9 +76,9 @@ internal fun backgroundFailureMessage(context: Context, reason: String?): String
 
 internal suspend fun applyImageAsBackground(
     url: ImageSource,
-    assistantId: ConfigurationReference,
+    target: AssistantBackgroundTarget,
     backgroundService: AssistantBackgroundService,
-): BackgroundUpdateResult = backgroundService.replaceUserSelectedBackground(assistantId, url)
+): BackgroundUpdateResult = backgroundService.replaceUserSelectedBackground(target, url)
 
 internal fun assistantDisplayName(name: String?, fallback: String): String =
     name?.trim().orEmpty().ifBlank { fallback }
@@ -82,11 +86,12 @@ internal fun assistantDisplayName(name: String?, fallback: String): String =
 private data class PendingBackgroundChoice(
     val url: ImageSource,
     val toaster: ToasterState,
-    val assistantId: ConfigurationReference,
+    val target: AssistantBackgroundTarget,
     val assistantName: String,
 )
 
 private data class PendingAssistantPick(
+    val selection: RealmSelection,
     val url: ImageSource,
     val toaster: ToasterState,
 )
@@ -103,12 +108,17 @@ class ImageBackgroundHost(
  * 为空(文生图橱窗 / 文件管理)时先弹选择器。助手确定后一律再确认一次。
  */
 @Composable
-fun rememberImageBackgroundHost(
+internal fun rememberImageBackgroundHost(
     settings: Settings,
     assistantId: ConfigurationReference? = null,
+    editSharedDefinition: Boolean = false,
 ): ImageBackgroundHost {
     val context = LocalContext.current
     val backgroundService: AssistantBackgroundService = koinInject()
+    val queries: ConfigurationQueryService = koinInject()
+    val catalog by remember(queries) { queries.observeAssistantCatalog() }.collectAsStateWithLifecycle(null)
+    val catalogState = rememberUpdatedState(catalog)
+    val definitionMode = rememberUpdatedState(editSharedDefinition)
     val scope = rememberCoroutineScope()
     val settingsState = rememberUpdatedState(settings)
     val assistantIdState = rememberUpdatedState(assistantId)
@@ -122,6 +132,10 @@ fun rememberImageBackgroundHost(
     var pendingPick by remember { mutableStateOf<PendingAssistantPick?>(null) }
     var pendingConfirm by remember { mutableStateOf<PendingBackgroundChoice?>(null) }
 
+    LaunchedEffect(catalog?.selection, assistantId, editSharedDefinition) {
+        pendingPick = null
+        pendingConfirm = null
+    }
     val action = remember(description, defaultAssistantName, missingAssistantText) {
         ImagePreviewAction(
             icon = HugeIcons.ImageComposition,
@@ -129,12 +143,20 @@ fun rememberImageBackgroundHost(
             onClick = { url, toaster ->
                 if (applying.get()) return@ImagePreviewAction
                 val knownId = assistantIdState.value
-                if (knownId == null) {
-                    pendingPick = PendingAssistantPick(url, toaster)
+                val current = catalogState.value
+                if (knownId == null && !definitionMode.value && current != null) {
+                    pendingPick = PendingAssistantPick(current.selection, url, toaster)
                     return@ImagePreviewAction
                 }
-                val assistant = settingsState.value.getAssistantById(knownId)
-                if (assistant == null) {
+                val assistant = if (definitionMode.value) knownId?.let { settingsState.value.getAssistantById(it) }
+                    else current?.assistants?.get(knownId)
+                val target = if (definitionMode.value && knownId is ConfigurationReference.User)
+                    AssistantBackgroundTarget.Definition(knownId)
+                else if (!definitionMode.value && knownId != null && current != null &&
+                    current.resources.any { it.key.reference == knownId && it.access.canSelect })
+                    AssistantBackgroundTarget.Page(current.selection, knownId)
+                else null
+                if (assistant == null || target == null) {
                     toaster.show(
                         message = missingAssistantText,
                         type = ToastType.Error,
@@ -145,7 +167,7 @@ fun rememberImageBackgroundHost(
                 pendingConfirm = PendingBackgroundChoice(
                     url = url,
                     toaster = toaster,
-                    assistantId = knownId,
+                    target = target,
                     assistantName = assistantDisplayName(assistant.name, defaultAssistantName),
                 )
             },
@@ -161,11 +183,13 @@ fun rememberImageBackgroundHost(
                 }
             }
             val pick = pendingPick
-            if (pick != null) {
+            val currentCatalog = catalogState.value
+            if (pick != null && currentCatalog?.selection == pick.selection) {
                 AssistantPickerSheet(
                     settings = settingsState.value,
-                    currentAssistantId = settingsState.value.getCurrentAssistant().id,
-                    assistants = settingsState.value.assistants,
+                    currentAssistantId = currentCatalog.selected.reference,
+                    assistants = currentCatalog.assistants.values.toList(),
+                    unavailableReasons = currentCatalog.resources.associate { it.key.reference to it.access.unavailableReason },
                     title = pickerTitle,
                     forceDialog = true,
                     allowManage = false,
@@ -174,7 +198,7 @@ fun rememberImageBackgroundHost(
                         pendingConfirm = PendingBackgroundChoice(
                             url = pick.url,
                             toaster = pick.toaster,
-                            assistantId = assistant.id,
+                            target = AssistantBackgroundTarget.Page(pick.selection, assistant.id),
                             assistantName = assistantDisplayName(assistant.name, defaultAssistantName),
                         )
                     },
@@ -194,7 +218,7 @@ fun rememberImageBackgroundHost(
                             scope = scope,
                             context = context,
                             url = confirm.url,
-                            assistantId = confirm.assistantId,
+                            target = confirm.target,
                             assistantName = confirm.assistantName,
                             toaster = confirm.toaster,
                             backgroundService = backgroundService,
@@ -221,7 +245,7 @@ internal fun setBackgroundWithFeedback(
     scope: CoroutineScope,
     context: Context,
     url: ImageSource,
-    assistantId: ConfigurationReference,
+    target: AssistantBackgroundTarget,
     assistantName: String,
     toaster: ToasterState,
     backgroundService: AssistantBackgroundService,
@@ -236,7 +260,7 @@ internal fun setBackgroundWithFeedback(
                 id = toastId,
                 duration = Duration.INFINITE,
             )
-            val result = applyImageAsBackground(url, assistantId, backgroundService)
+            val result = applyImageAsBackground(url, target, backgroundService)
             if (result.updated) {
                 toaster.show(
                     message = context.getString(R.string.image_viewer_background_set, assistantName),

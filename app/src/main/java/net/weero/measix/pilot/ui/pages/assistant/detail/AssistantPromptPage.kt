@@ -114,14 +114,9 @@ import org.koin.core.parameter.parametersOf
 import sh.calvin.reorderable.ReorderableColumn
 
 @Composable
-fun AssistantPromptPage(id: String) {
-    val vm: AssistantDetailVM = koinViewModel(
-        parameters = {
-            parametersOf(id)
-        }
-    )
+fun AssistantPromptPage(id: String, vm: AssistantDetailVM = koinViewModel(parameters = { parametersOf(id) })) {
     AssistantLockedChangeEffect(vm)
-    val assistant by vm.assistant.collectAsStateWithLifecycle()
+    val assistant = vm.assistant.collectAsStateWithLifecycle().value
     val settings by vm.settings.collectAsStateWithLifecycle()
     val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
 
@@ -141,11 +136,15 @@ fun AssistantPromptPage(id: String) {
         modifier = Modifier.nestedScroll(scrollBehavior.nestedScrollConnection),
         containerColor = CustomColors.topBarColors.containerColor,
     ) { innerPadding ->
+        if (assistant.id.toString() != id) {
+            Text(stringResource(R.string.sub_assistant_reason_assistant_not_found), Modifier.padding(innerPadding))
+            return@Scaffold
+        }
         AssistantPromptContent(
             innerPadding = innerPadding,
             assistant = assistant,
             settings = settings,
-            onUpdate = { vm.update(it) }
+            onUpdate = { vm.update(assistant, it) }
         )
     }
 }
@@ -429,7 +428,7 @@ private fun AssistantPromptContent(
                 val previewAlbum = remember(previewProvider) {
                     { messagesState.value.flatMap { message -> collectMessageImages(message.parts, previewProvider) } }
                 }
-                val backgroundHost = rememberImageBackgroundHost(settings, assistant.id)
+                val backgroundHost = rememberImageBackgroundHost(settings, assistant.id, editSharedDefinition = true)
                 val previewActions = remember(backgroundHost.action) { listOf(backgroundHost.action) }
                 when {
                     previewError != null -> Text(

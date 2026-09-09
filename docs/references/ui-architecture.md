@@ -349,7 +349,7 @@ fun ImagePreviewDialog(
 |------|------|
 | `ImagePreviewAction` / `LocalImagePreviewActions` | 查看器只画按钮，把当前页 `ImageSource` 与 Dialog 内 Toaster 交回调用方 |
 | `LocalImagePreviewOverlay` | 确认框 / 助手选择器，盖在全屏查看器之上 |
-| `rememberImageBackgroundHost` | 设为背景：从同一图片读取对象取得字节后由 `AssistantBackgroundService.replaceUserSelectedBackground` 拷独立副本。聊天相关入口助手已知，跳过选择器；文生图橱窗与文件管理先弹 `AssistantPickerSheet`。助手确定后一律再确认一次 |
+| `rememberImageBackgroundHost` | 设为背景：从同一图片读取对象取得字节后由 `AssistantBackgroundService.replaceUserSelectedBackground` 拷独立副本。聊天相关入口助手已知，跳过选择器；文生图橱窗与文件管理先弹 `AssistantPickerSheet`。助手确定后一律再确认一次。选择器使用当前域目录及不可用原因，确认保留原域目标；切域清除待选和确认。Prompt 配置编辑器明确编辑共享定义，聊天和图库编辑当前域使用偏好 |
 | `ImagePreviewDeleteAction` | 仅当宿主已有独立删除语义时传入。查看器承载确认、执行中、失败提示和相册页序列更新；typed suspend action 仍调用既有领域删除 API。成功删除中间项后显示原下一项，删除末项后显示新末项，清空后关闭。聊天消息图片不传该 action |
 
 #### 已知限制与非目标
@@ -559,7 +559,7 @@ Compose 暴露 application/query service；恢复由 `ApplicationRecoveryCoordin
 
 `ConversationAssistantTarget` 冻结原页面和助手。模型弹窗、助手/工具弹层及输入导入按原目标持有状态；字段命令只更新最新值中的指定字段。会话系统提示、注入与目录仍由 `ConversationApplicationService` 写原会话，提交时复验助手；目录还核对原 Workspace。实际换助手在同一会话命令清空 folder 与 cwd，重新选择同一助手不清空。导入结果在交给输入框前再次验证原目标，失效或取消只释放本批新文件。
 
-本地工具使用既有 `AssistantLocalToolContent`，个人定义编辑和聊天本域使用分别调用各自命令。聊天本域子助手引用目前只读；完整使用参数、额外子助手授权、企业头像/背景资产编辑和其余资源消费者尚未全部接通。新建会话的默认选择不直接驱动已有会话。
+本地工具使用既有 `AssistantLocalToolContent`，个人定义编辑和聊天本域使用分别调用各自命令。聊天本域子助手引用目前只读；完整使用参数、额外子助手授权、企业头像资产编辑和其余资源消费者尚未全部接通；背景已按原域写入使用偏好。新建会话的默认选择不直接驱动已有会话。
 
 抽屉的助手选择、文件夹和会话列表来自同一个按域助手目录。`ChatDrawerVM` 保留原 `ConversationFolderAccess`，筛选也绑定该目标；切域或换助手先丢弃旧筛选，旧目录不能在新空间继续查询。移动到助手复用同一选择组件，展示企业候选与准入原因，等待原会话命令成功后关闭；提交期间禁用重复选择和定义管理。
 
@@ -759,3 +759,5 @@ insets，不能重复加上键盘高度。多行、编辑态、附件及键盘�
 - [Android Developers: Support different screen sizes](https://developer.android.com/develop/ui/compose/layouts/adaptive/support-different-screen-sizes)
 - [Android Developers: Navigation 3](https://developer.android.com/guide/navigation/navigation-3)
 - [Material 3 Adaptive](https://m3.material.io/develop/android/jetpack-compose/adaptive-layouts)
+
+助手定义编辑调用 `AssistantDetailVM.update(pageSnapshot, edited)`，两者来自同一次页面快照；现有字段 delta 合并应用到最新持久定义。长期存活的提示词输入回调不能将后来更新的背景或其他字段误判成待撤销的编辑。

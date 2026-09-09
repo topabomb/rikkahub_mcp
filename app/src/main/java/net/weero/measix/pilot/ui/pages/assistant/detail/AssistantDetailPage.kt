@@ -55,7 +55,7 @@ fun AssistantDetailPage(id: String) {
             parametersOf(id)
         }
     )
-    val assistant by vm.assistant.collectAsStateWithLifecycle()
+    val assistant = vm.assistant.collectAsStateWithLifecycle().value
     val navController = LocalNavController.current
     val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
 
@@ -80,6 +80,10 @@ fun AssistantDetailPage(id: String) {
         modifier = Modifier.nestedScroll(scrollBehavior.nestedScrollConnection),
         containerColor = CustomColors.topBarColors.containerColor
     ) { innerPadding ->
+        if (assistant.id.toString() != id) {
+            Text(stringResource(R.string.sub_assistant_reason_assistant_not_found), Modifier.padding(innerPadding))
+            return@Scaffold
+        }
         LazyColumn(
             modifier = Modifier.fillMaxSize(),
             contentPadding = innerPadding + PaddingValues(8.dp),

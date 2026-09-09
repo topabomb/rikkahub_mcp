@@ -342,14 +342,15 @@ class SettingsStore internal constructor(
         assistantId: ConfigurationReference,
         change: net.weero.measix.pilot.data.configuration.AssistantPreferenceChange,
         requireOwner: () -> Unit,
+        withArtifactCommit: (suspend (UserSettingsDocument, UserSettingsDocument, suspend () -> Unit) -> Unit)? = null,
         withCommit: suspend (suspend () -> Unit) -> Unit,
     ) = updateMutex.withLock {
         requireOwner()
-        userDocuments.first().changeAssistantPreference(scope, enterpriseState, assistantId, change)
+        val before = userDocuments.first()
+        val after = before.changeAssistantPreference(scope, enterpriseState, assistantId, change)
         withCommit {
-            commitUserDocument(requireOwner) { document ->
-                document.changeAssistantPreference(scope, enterpriseState, assistantId, change)
-            }
+            suspend fun commit() = commitUserDocument(requireOwner, artifactRootsOwned = withArtifactCommit != null) { after }
+            if (withArtifactCommit == null) commit() else withArtifactCommit(before, after, ::commit)
         }
     }
 

@@ -74,7 +74,7 @@ fun AssistantBasicPage(id: String) {
         }
     )
     AssistantLockedChangeEffect(vm)
-    val assistant by vm.assistant.collectAsStateWithLifecycle()
+    val assistant = vm.assistant.collectAsStateWithLifecycle().value
     val providers by vm.providers.collectAsStateWithLifecycle()
     val hasValidChatModel by vm.hasValidChatModel.collectAsStateWithLifecycle()
     val tags by vm.tags.collectAsStateWithLifecycle()
@@ -97,6 +97,10 @@ fun AssistantBasicPage(id: String) {
         modifier = Modifier.nestedScroll(scrollBehavior.nestedScrollConnection),
         containerColor = CustomColors.topBarColors.containerColor,
     ) { innerPadding ->
+        if (assistant.id.toString() != id) {
+            Text(stringResource(R.string.sub_assistant_reason_assistant_not_found), Modifier.padding(innerPadding))
+            return@Scaffold
+        }
         AssistantBasicContent(
             innerPadding = innerPadding,
             assistant = assistant,
@@ -104,7 +108,7 @@ fun AssistantBasicPage(id: String) {
             hasValidChatModel = hasValidChatModel,
             tags = tags,
             workspaces = workspaces,
-            onUpdate = { vm.update(it) },
+            onUpdate = { vm.update(assistant, it) },
             vm = vm
         )
     }

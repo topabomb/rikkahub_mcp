@@ -58,7 +58,7 @@ Tool Result checkpoint（消息与 Artifact 引用同事务）
 - MCP `ImageContent` 先限制 base64 字符与解码字节，再按文件头与容器结构识别 MIME；声明 MIME 不能覆盖实际格式。
 - `GeneratedMediaStore` 对 URL/base64 结果使用同一尺寸上限与结构检查，并以检测 MIME 决定扩展名；WebP 校验遍历 RIFF chunk、padding 与 VP8X 后续图像/动画 payload，不把扩展头误当完整图像。Gallery 只通过 `resolveCanonicalFile` 解析根目录内路径。
 - 编辑器导入返回 `ArtifactDraftItem(uri, displayName, mimeType)`；路由、分享、粘贴和裁剪调用方直接使用托管时已经确定的 metadata，不对托管 `file://` URI 再走外部 ContentResolver 分类。裁剪输出扩展名与 PNG 压缩格式一致。
-- 头像与助手背景经 `ArtifactUseCase.importSettingsImage` 执行有界复制与结构检查，Settings root 提交成功后才发布，失败或取消回滚未发布 artifact。
+- 配置编辑器的头像与背景经 `ArtifactUseCase.importSettingsImage` 执行有界复制与结构检查；查看器/生成工具的背景由 `AssistantBackgroundService` 接受原页面、任务或共享定义目标，分别写个人定义或企业主体偏好。两条入口均复用 Artifact 的 Settings root 提交及 pin 移交，失败或取消回滚未发布 artifact，不能直接挂接原始文件路径。
 - 本地 Settings background/头像是可变显示偏好，不是 artifact owner。冷启动发现其 ACTIVE metadata 缺失时，经 `ArtifactReferencePolicy.detach` 持久化回退默认值，绝不扫描或认领遗留文件；metadata 存在而 payload 缺失时，也先持久化回退默认值，再删除该失效 metadata。两种情形均不阻断 Settings 读取；消息附件仍按其独立 durable root 规则 fail-closed。
 - 生成中预览与助手背景只接受经结构检查的图片，文件名与扩展名由实际内容生成，不信任模型名、索引或远程声明。
 

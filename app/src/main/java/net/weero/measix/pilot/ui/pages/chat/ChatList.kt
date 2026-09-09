@@ -367,7 +367,7 @@ private fun ChatListNormal(
         }
     val backgroundHost = rememberImageBackgroundHost(settings, snapshot.header.assistantId)
         val previewActions = remember(backgroundHost.action, assistant, snapshot.header.scope) {
-            if (assistant != null && snapshot.header.scope == net.weero.measix.pilot.data.configuration.ConfigurationScope.Personal) listOf(backgroundHost.action) else emptyList()
+            if (assistant != null) listOf(backgroundHost.action) else emptyList()
         }
 
         CompositionLocalProvider(

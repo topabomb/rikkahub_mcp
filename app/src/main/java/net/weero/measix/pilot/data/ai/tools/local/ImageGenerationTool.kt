@@ -258,8 +258,8 @@ private suspend fun executeGenerateImage(
                 reportPhase("setting_background", delivery = ToolMetadataDelivery.CHECKPOINT)
                 background = backgroundService.replaceGeneratedBackground(
                     assistantId = ownerAssistantId,
-                    source = media.canonicalFile,
-                    mimeType = media.mimeType,
+                    access = realmAccess,
+                    mediaId = media.mediaId,
                 )
             }
             val text = buildJsonObject {

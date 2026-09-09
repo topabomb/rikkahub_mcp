@@ -35,7 +35,7 @@ fun AssistantRequestPage(id: String) {
         }
     )
     AssistantLockedChangeEffect(vm)
-    val assistant by vm.assistant.collectAsStateWithLifecycle()
+    val assistant = vm.assistant.collectAsStateWithLifecycle().value
     val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
 
     Scaffold(
@@ -54,10 +54,14 @@ fun AssistantRequestPage(id: String) {
         modifier = Modifier.nestedScroll(scrollBehavior.nestedScrollConnection),
         containerColor = CustomColors.topBarColors.containerColor,
     ) { innerPadding ->
+        if (assistant.id.toString() != id) {
+            Text(stringResource(R.string.sub_assistant_reason_assistant_not_found), Modifier.padding(innerPadding))
+            return@Scaffold
+        }
         AssistantRequestContent(
             innerPadding = innerPadding,
             assistant = assistant,
-            onUpdate = { vm.update(it) }
+            onUpdate = { vm.update(assistant, it) }
         )
     }
 }

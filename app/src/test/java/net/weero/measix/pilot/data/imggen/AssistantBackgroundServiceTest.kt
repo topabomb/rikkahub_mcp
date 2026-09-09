@@ -1,10 +1,11 @@
 package net.weero.measix.pilot.data.imggen
 
+import net.weero.measix.pilot.data.enterprise.*
+import net.weero.measix.pilot.service.ApplicationRecoveryGate
 import net.weero.measix.pilot.data.configuration.ConfigurationScope
 
 import me.rerere.common.configuration.ConfigurationReference
 
-import android.content.Context
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.every
@@ -12,9 +13,6 @@ import io.mockk.mockk
 import java.io.File
 import kotlin.io.path.createTempDirectory
 import kotlinx.coroutines.test.runTest
-import net.weero.measix.pilot.data.datastore.Settings
-import net.weero.measix.pilot.data.ai.attachments.RemoteMediaFetchResult
-import net.weero.measix.pilot.data.ai.attachments.SafeRemoteMediaFetcher
 import net.weero.measix.pilot.data.db.entity.ArtifactEntity
 import net.weero.measix.pilot.data.db.entity.ArtifactOrigin
 import net.weero.measix.pilot.data.db.entity.ArtifactState
@@ -30,20 +28,11 @@ import org.junit.Test
 
 class AssistantBackgroundServiceTest {
     @Test
-    fun `uppercase file scheme resolves the same local path`() {
-        val file = File.createTempFile("background", ".png")
-        val uppercase = fileUri(file).replaceFirst("file:", "FILE:")
-
-        assertEquals(file.canonicalFile, localFileFromUri(uppercase)?.canonicalFile)
-        file.delete()
-    }
-
-    @Test
     fun `successful replacement publishes settings before reporting success`() = runTest {
         val env = Env()
         env.settingsUpdateSucceeds()
 
-        val result = env.service.replaceGeneratedBackground(env.assistant.id, env.source, "image/png")
+        val result = env.service.replaceGeneratedBackground(RealmAccess.Personal, env.assistant.id, 3)
 
         assertTrue(result.updated)
         assertFalse(result.cleanupPending)
@@ -57,9 +46,9 @@ class AssistantBackgroundServiceTest {
         env.settingsUpdateSucceeds()
         coEvery { env.store.discardUnpublished(env.owned) } returns ArtifactDeleteResult.Completed(env.owned.entity.id)
 
-        val result = env.service.replaceGeneratedBackground(ConfigurationReference.random(), env.source, "image/png")
+        val result = env.service.replaceGeneratedBackground(RealmAccess.Personal, ConfigurationReference.random(), 3)
 
-        assertEquals("assistant_not_found", result.reason)
+        assertEquals("settings_write_failed", result.reason)
         assertFalse(result.cleanupPending)
         coVerify(exactly = 1) { env.store.discardUnpublished(env.owned) }
         env.close()
@@ -68,13 +57,13 @@ class AssistantBackgroundServiceTest {
     @Test
     fun `settings failure compensates and exposes cleanup status`() = runTest {
         val env = Env()
-        coEvery { env.store.updateSettingsReferences(any()) } throws IllegalStateException("datastore failed")
+        coEvery { env.store.updateAssistantPreferenceReferences(any(), any(), any(), any()) } throws IllegalStateException("datastore failed")
         coEvery { env.store.discardUnpublished(env.owned) } returns ArtifactDeleteResult.Failed(
             env.owned.entity.id,
             "payload_delete_failed",
         )
 
-        val result = env.service.replaceGeneratedBackground(env.assistant.id, env.source, "image/png")
+        val result = env.service.replaceGeneratedBackground(RealmAccess.Personal, env.assistant.id, 3)
 
         assertEquals("settings_write_failed", result.reason)
         assertTrue(result.cleanupPending)
@@ -91,7 +80,7 @@ class AssistantBackgroundServiceTest {
 
 
         val result = env.service.replaceUserSelectedBackground(
-            env.assistant.id,
+            AssistantBackgroundTarget.Definition(env.assistant.id as ConfigurationReference.User),
             net.weero.measix.pilot.service.ImageSource("inline", net.weero.measix.pilot.service.ImageOrigin.INLINE,
                 verifyAccess = {}, readPayload = { TINY_PNG }),
         )
@@ -109,32 +98,54 @@ class AssistantBackgroundServiceTest {
         val image = net.weero.measix.pilot.service.ImageSource("rejected", net.weero.measix.pilot.service.ImageOrigin.NETWORK,
             verifyAccess = {}, readPayload = { error("unsafe") })
 
-        val result = env.service.replaceUserSelectedBackground(env.assistant.id, image)
+        val result = env.service.replaceUserSelectedBackground(AssistantBackgroundTarget.Definition(env.assistant.id as ConfigurationReference.User), image)
 
         assertEquals("background_copy_failed", result.reason)
         coVerify(exactly = 0) { env.store.createFromBytes(any(), any(), any(), any(), any(), any()) }
         env.close()
     }
 
+    @Test
+    fun `cancellation after copy preserves cancellation and compensates exactly the owned artifact`() = runTest {
+        val env = Env()
+        try {
+            val cancelled = kotlinx.coroutines.CancellationException("cancel before reference commit")
+            coEvery { env.store.updateAssistantPreferenceReferences(any(), any(), any(), any()) } throws cancelled
+            coEvery { env.store.discardUnpublished(env.owned) } throws IllegalStateException("cleanup failed")
+            try {
+                env.service.replaceGeneratedBackground(RealmAccess.Personal, env.assistant.id, 3)
+                org.junit.Assert.fail("cancellation swallowed")
+            } catch (actual: kotlinx.coroutines.CancellationException) {
+                org.junit.Assert.assertSame(cancelled, actual)
+                assertEquals("cleanup failed", actual.suppressed.single().message)
+            }
+            coVerify(exactly = 1) { env.store.discardUnpublished(env.owned) }
+            coVerify(exactly = 0) { env.store.collectGarbage(any()) }
+        } finally { env.close() }
+    }
+
     private class Env {
         val directory = createTempDirectory("assistant-background-v1c").toFile()
-        val source = File(directory, "source.png").apply { writeBytes(TINY_PNG) }
         val assistant = Assistant(name = "A")
-        val settings = Settings(assistants = listOf(assistant))
         val store = mockk<ArtifactStore>()
         val owned = owned(directory)
+        val generated = mockk<GeneratedMediaStore>()
+        val sessions = mockk<EnterpriseSessionController>()
         val service: AssistantBackgroundService
 
         init {
-            service = AssistantBackgroundService(store)
-            coEvery { store.copyFile(ConfigurationScope.Personal, source, "image/png", source.name, any(), ArtifactOrigin.GENERATED) } returns owned
+            every { sessions.state } returns kotlinx.coroutines.flow.MutableStateFlow(EnterpriseState.Loading)
+            coEvery { sessions.withRealmAccess<Any?>(any(), any()) } coAnswers { secondArg<suspend () -> Any?>()() }
+            service = AssistantBackgroundService(store, generated, sessions, ApplicationRecoveryGate().apply { ready() })
+            coEvery { generated.readImage(ConfigurationScope.Personal, 3) } returns TINY_PNG
+            coEvery { store.createFromBytes(ConfigurationScope.Personal, TINY_PNG, "background.png", "image/png", any(), ArtifactOrigin.GENERATED) } returns owned
             coEvery { store.discardUnpublished(owned) } returns ArtifactDeleteResult.Completed(owned.entity.id)
             coEvery { store.collectGarbage(any()) } returns emptyList()
         }
 
         fun settingsUpdateSucceeds() {
-            coEvery { store.updateSettingsReferences(any()) } coAnswers {
-                firstArg<(Settings) -> Settings>()(settings)
+            coEvery { store.updateAssistantPreferenceReferences(any(), any(), any(), any()) } coAnswers {
+                check(thirdArg<ConfigurationReference>() == assistant.id) { "assistant_not_found" }
             }
         }
 

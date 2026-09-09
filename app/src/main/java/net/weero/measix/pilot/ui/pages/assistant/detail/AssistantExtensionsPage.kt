@@ -40,7 +40,7 @@ import org.koin.core.parameter.parametersOf
 fun AssistantExtensionsPage(id: String) {
     val vm: AssistantDetailVM = koinViewModel(parameters = { parametersOf(id) })
     AssistantLockedChangeEffect(vm)
-    val assistant by vm.assistant.collectAsStateWithLifecycle()
+    val assistant = vm.assistant.collectAsStateWithLifecycle().value
     val settings by vm.settings.collectAsStateWithLifecycle()
     val skills by vm.skills.collectAsStateWithLifecycle()
     val navController = LocalNavController.current
@@ -60,6 +60,10 @@ fun AssistantExtensionsPage(id: String) {
         modifier = Modifier.nestedScroll(scrollBehavior.nestedScrollConnection),
         containerColor = CustomColors.topBarColors.containerColor,
     ) { innerPadding ->
+        if (assistant.id.toString() != id) {
+            Text(stringResource(R.string.sub_assistant_reason_assistant_not_found), Modifier.padding(innerPadding))
+            return@Scaffold
+        }
         Column(
             modifier = Modifier
                 .fillMaxSize()
@@ -109,7 +113,7 @@ fun AssistantExtensionsPage(id: String) {
                                     onToggle = { quickMessageId, checked ->
                                         val newIds = if (checked) assistant.quickMessageIds + quickMessageId
                                         else assistant.quickMessageIds - quickMessageId
-                                        vm.update(assistant.copy(quickMessageIds = newIds))
+                                        vm.update(assistant, assistant.copy(quickMessageIds = newIds))
                                     },
                                 )
                                 TextButton(
@@ -138,7 +142,7 @@ fun AssistantExtensionsPage(id: String) {
                                     onToggle = { injId, checked ->
                                         val newIds = if (checked) assistant.modeInjectionIds + injId
                                         else assistant.modeInjectionIds - injId
-                                        vm.update(assistant.copy(modeInjectionIds = newIds))
+                                        vm.update(assistant, assistant.copy(modeInjectionIds = newIds))
                                     },
                                 )
                                 TextButton(
@@ -167,7 +171,7 @@ fun AssistantExtensionsPage(id: String) {
                                     onToggle = { name, checked ->
                                         val newSkills = if (checked) assistant.enabledSkills + name
                                         else assistant.enabledSkills - name
-                                        vm.update(assistant.copy(enabledSkills = newSkills))
+                                        vm.update(assistant, assistant.copy(enabledSkills = newSkills))
                                     },
                                 )
                                 TextButton(

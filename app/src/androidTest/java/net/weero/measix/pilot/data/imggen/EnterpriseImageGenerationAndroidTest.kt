@@ -8,13 +8,21 @@ import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import java.io.File
+import kotlinx.serialization.encodeToString
+import net.weero.measix.pilot.utils.JsonInstant
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.async
+import kotlinx.coroutines.CompletableDeferred
 import me.rerere.ai.provider.ProviderManager
 import net.weero.measix.pilot.AppScope
+import net.weero.measix.pilot.data.model.Assistant
+import me.rerere.common.configuration.ConfigurationReference
+import net.weero.measix.pilot.service.ImageSource
+import net.weero.measix.pilot.service.ImageOrigin
 import net.weero.measix.pilot.data.configuration.ConfigurationScope
 import net.weero.measix.pilot.data.datastore.SettingsStore
 import net.weero.measix.pilot.data.datastore.UserSettingsMigration
@@ -52,6 +60,8 @@ class EnterpriseImageGenerationAndroidTest {
                 produceFile = { File(root, "settings.preferences_pb") })
             val settings = SettingsStore(context, scope, dataStore = preferences)
             settings.effectiveSettings.first { !it.settings.init }
+            val userAssistant = Assistant(name = "Personal definition")
+            settings.updateLocal { it.copy(assistants = it.assistants + userAssistant) }
             val sessions = EnterpriseSessionController(EnterpriseAppliedStore(File(root, "enterprise")))
             sessions.recover()
             val packet = app.assets.open(LocalEnterpriseSource.EXAMPLE_ASSET).use(EnterprisePackageCodec::decode)
@@ -67,7 +77,10 @@ class EnterpriseImageGenerationAndroidTest {
             val repository = GenMediaRepository(db.genMediaDao())
             val providers = ProviderManager(client, context)
             val models = ModelExecutionService(settings, sessions, gate, providers)
-            val coordinator = ImageGenerationCoordinator(scope, GeneratedMediaStore(context.filesDir, repository, artifacts), models, providers, sessions)
+            val mediaStore = GeneratedMediaStore(context.filesDir, repository, artifacts)
+            val coordinator = ImageGenerationCoordinator(scope, mediaStore, models, providers, sessions)
+            artifacts.reconcileStartup()
+            val backgrounds = AssistantBackgroundService(artifacts, mediaStore, sessions, gate)
             val source = ImageGenerationSource.Page(original, packet.identity.reference("mdl_image"))
             val generated = coordinator.enqueue(ImageGenerationRequest(source = source, prompt = "local generation", size = "256x256", numOfImages = 2)) as ImageGenerationOutcome.Success
             assertFalse(generated.cleanupPending)
@@ -82,8 +95,48 @@ class EnterpriseImageGenerationAndroidTest {
             try { assertEquals(512, bitmap.width) } finally { bitmap.recycle() }
             assertEquals(3, repository.observeAllMedia(packet.identity.scope).first().size)
             assertTrue(repository.observeAllMedia(ConfigurationScope.Personal).first().isEmpty())
+            val mediaId = generated.media.first().mediaId
+            val enterpriseAssistant = packet.identity.reference(packet.configuration.assistants.first().id)
+            for (assistantId in listOf(userAssistant.id, enterpriseAssistant)) {
+                val result = backgrounds.replaceGeneratedBackground(original.access, assistantId, mediaId)
+                assertTrue(result.updated)
+                assertFalse(result.cleanupPending)
+            }
+            val document = settings.snapshotUserDocument()
+            val enterpriseBackground = requireNotNull(document.preferences.assistantUsage(packet.identity.scope, userAssistant.id)?.background?.value)
+            assertEquals(userAssistant.background, document.configuration.assistants.single { it.id == userAssistant.id }.background)
+            assertTrue(db.artifactDao().listByState("ACTIVE").any { it.scope == packet.identity.scope })
+            val sourceBytes = generated.media.first().canonicalFile.readBytes()
+            val inline = ImageSource("inline background", ImageOrigin.INLINE, verifyAccess = {}, readPayload = { sourceBytes })
+            val definition = backgrounds.replaceUserSelectedBackground(
+                AssistantBackgroundTarget.Definition(userAssistant.id as ConfigurationReference.User), inline)
+            assertTrue(definition.updated)
+            val afterDefinition = settings.snapshotUserDocument()
+            assertEquals(enterpriseBackground, afterDefinition.preferences.assistantUsage(packet.identity.scope, userAssistant.id)?.background?.value)
+            assertNotEquals(userAssistant.background, afterDefinition.configuration.assistants.single { it.id == userAssistant.id }.background)
+            assertTrue(db.artifactDao().listByState("ACTIVE").any { it.scope == ConfigurationScope.Personal })
+            val enteredRead = CompletableDeferred<Unit>()
+            val resumeRead = CompletableDeferred<Unit>()
+            val delayed = ImageSource("delayed background", ImageOrigin.INLINE, verifyAccess = {}, readPayload = {
+                enteredRead.complete(Unit)
+                resumeRead.await()
+                sourceBytes
+            })
+            val beforePending = settings.snapshotUserDocument()
+            val beforeArtifactIds = db.artifactDao().listByState("ACTIVE").map { it.id }
+            val pending = async { backgrounds.replaceUserSelectedBackground(AssistantBackgroundTarget.Page(original, userAssistant.id), delayed) }
+            enteredRead.await()
             sessions.selectPersonalFixture()
+            resumeRead.complete(Unit)
+            assertFalse(pending.await().updated)
+            assertEquals(JsonInstant.encodeToString(beforePending), JsonInstant.encodeToString(settings.snapshotUserDocument()))
+            assertEquals(beforeArtifactIds, db.artifactDao().listByState("ACTIVE").map { it.id })
+            assertTrue(backgrounds.replaceGeneratedBackground(original.access, enterpriseAssistant, mediaId).updated)
             sessions.selectEnterpriseFixture()
+            val beforeRejected = settings.snapshotUserDocument()
+            val stale = backgrounds.replaceUserSelectedBackground(AssistantBackgroundTarget.Page(original, userAssistant.id), inline)
+            assertFalse(stale.updated)
+            assertEquals(JsonInstant.encodeToString(beforeRejected), JsonInstant.encodeToString(settings.snapshotUserDocument()))
             try {
                 coordinator.enqueue(ImageGenerationRequest(source = source, prompt = "stale page", size = "256x256"))
                 fail("old page was accepted after realm roundtrip")
@@ -93,6 +146,9 @@ class EnterpriseImageGenerationAndroidTest {
             sessions.finishExit(exit)
             assertEquals(EnterpriseSessionPhase.SIGNED_OUT, (sessions.state.value as EnterpriseState.Available).manifest.phase)
             assertEquals(3, repository.observeAllMedia(packet.identity.scope).first().size)
+            val signedOut = settings.snapshotUserDocument()
+            assertFalse(backgrounds.replaceGeneratedBackground(original.access, userAssistant.id, mediaId).updated)
+            assertEquals(JsonInstant.encodeToString(signedOut), JsonInstant.encodeToString(settings.snapshotUserDocument()))
             assertEquals(0, networkCalls)
         } finally {
             scope.coroutineContext[Job]!!.cancelAndJoin()

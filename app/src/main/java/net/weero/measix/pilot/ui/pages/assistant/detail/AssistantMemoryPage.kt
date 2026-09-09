@@ -68,7 +68,7 @@ fun AssistantMemoryPage(id: String) {
     androidx.compose.runtime.LaunchedEffect(vm, memoryFailureMessage) {
         vm.memoryFailures.collect { toaster.show(memoryFailureMessage, type = com.dokar.sonner.ToastType.Error) }
     }
-    val assistant by vm.assistant.collectAsStateWithLifecycle()
+    val assistant = vm.assistant.collectAsStateWithLifecycle().value
     val memories by vm.memories.collectAsStateWithLifecycle()
     val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
 
@@ -88,11 +88,15 @@ fun AssistantMemoryPage(id: String) {
         modifier = Modifier.nestedScroll(scrollBehavior.nestedScrollConnection),
         containerColor = CustomColors.topBarColors.containerColor,
     ) { innerPadding ->
+        if (assistant.id.toString() != id) {
+            Text(stringResource(R.string.sub_assistant_reason_assistant_not_found), Modifier.padding(innerPadding))
+            return@Scaffold
+        }
         AssistantMemoryContent(
             innerPadding = innerPadding,
             assistant = assistant,
             memories = memories,
-            onUpdateAssistant = { vm.update(it) },
+            onUpdateAssistant = { vm.update(assistant, it) },
             onDeleteMemory = { vm.deleteMemory(it) },
             onAddMemory = { vm.addMemory(it) },
             onUpdateMemory = { vm.updateMemory(it) }

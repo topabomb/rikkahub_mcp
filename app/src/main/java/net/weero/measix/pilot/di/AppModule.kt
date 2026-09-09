@@ -110,7 +110,7 @@ val appModule = module {
     }
 
     single {
-        AssistantBackgroundService(artifactStore = get())
+        AssistantBackgroundService(artifactStore = get(), generatedMediaStore = get(), sessions = get(), recoveryGate = get())
     }
 
     single {

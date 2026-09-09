@@ -7,6 +7,24 @@ import org.junit.Test
 
 class AssistantPreferenceMutationTest {
     @Test
+    fun `background edits are principal preferences and revoked personal assistants cannot be edited`() {
+        val packet = exampleEnterprisePackage()
+        val user = net.weero.measix.pilot.data.model.Assistant(name = "Personal", background = "personal-background")
+        val document = UserSettingsDocument.empty().let { it.copy(configuration = it.configuration.copy(assistants = listOf(user))) }
+        val updated = document.changeAssistantPreference(packet.identity.scope, appliedConfiguration(packet), user.id,
+            AssistantPreferenceChange.Background("enterprise-background"))
+        assertEquals(document.configuration, updated.configuration)
+        assertEquals("enterprise-background", updated.preferences.assistantUsage(packet.identity.scope, user.id)?.background?.value)
+        assertNull(updated.preferences.assistantUsage(packet.identity.scope.copy(userId = "another"), user.id))
+        val denied = packet.copy(configuration = packet.configuration.copy(policy = packet.configuration.policy.copy(allowLocalAssistants = false)))
+        try {
+            updated.changeAssistantPreference(packet.identity.scope, appliedConfiguration(denied), user.id,
+                AssistantPreferenceChange.Background("must-not-write"))
+            fail("revoked assistant accepted")
+        } catch (_: SettingsLockedException) { }
+    }
+
+    @Test
     fun `enabling a newly fixed MCP does not turn the fixed binding into a persisted user choice`() {
         val packet = exampleEnterprisePackage()
         val assistant = packet.configuration.assistants.first()

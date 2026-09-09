@@ -190,10 +190,10 @@ class AssistantDetailVM(
         }
     }
 
-    fun update(assistant: Assistant) {
-        val pageSnapshot = this.assistant.value
+    fun update(pageSnapshot: Assistant, edited: Assistant) {
+        require(pageSnapshot.id == assistantId && edited.id == assistantId) { "assistant_edit_target_changed" }
         viewModelScope.launch {
-            runSettingsChange { updateAndAwait(pageSnapshot, assistant) }
+            runSettingsChange { updateAndAwait(pageSnapshot, edited) }
         }
     }
 

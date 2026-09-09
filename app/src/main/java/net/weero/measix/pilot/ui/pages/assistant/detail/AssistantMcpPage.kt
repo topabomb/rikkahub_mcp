@@ -1,5 +1,6 @@
 package net.weero.measix.pilot.ui.pages.assistant.detail
 
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.calculateEndPadding
 import androidx.compose.foundation.layout.calculateStartPadding
@@ -34,7 +35,7 @@ fun AssistantMcpPage(id: String) {
         }
     )
     AssistantLockedChangeEffect(vm)
-    val assistant by vm.assistant.collectAsStateWithLifecycle()
+    val assistant = vm.assistant.collectAsStateWithLifecycle().value
     val mcpQueryService = koinInject<McpQueryService>()
     val mcpServers by mcpQueryService.servers.collectAsStateWithLifecycle()
     val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
@@ -55,6 +56,10 @@ fun AssistantMcpPage(id: String) {
         modifier = Modifier.nestedScroll(scrollBehavior.nestedScrollConnection),
         containerColor = CustomColors.topBarColors.containerColor,
     ) { innerPadding ->
+        if (assistant.id.toString() != id) {
+            Text(stringResource(R.string.sub_assistant_reason_assistant_not_found), Modifier.padding(innerPadding))
+            return@Scaffold
+        }
         val layoutDirection = LocalLayoutDirection.current
         McpPicker(
             modifier = Modifier.fillMaxSize(),
@@ -65,7 +70,7 @@ fun AssistantMcpPage(id: String) {
                 bottom = innerPadding.calculateBottomPadding() + 16.dp,
             ),
             servers = mcpServers.assistantChoices(assistant),
-            onToggle = { id, enabled -> vm.update(assistant.copy(mcpServers = if (enabled) assistant.mcpServers + id else assistant.mcpServers - id)) }
+            onToggle = { id, enabled -> vm.update(assistant, assistant.copy(mcpServers = if (enabled) assistant.mcpServers + id else assistant.mcpServers - id)) }
         )
     }
 }

@@ -77,7 +77,7 @@ fun AssistantLocalToolPage(id: String) {
         }
     )
     AssistantLockedChangeEffect(vm)
-    val assistant by vm.assistant.collectAsStateWithLifecycle()
+    val assistant = vm.assistant.collectAsStateWithLifecycle().value
     val settingsStore: net.weero.measix.pilot.data.datastore.SettingsStore = koinInject()
     val effectiveSettings by settingsStore.effectiveSettings.collectAsStateWithLifecycle()
     val settings = effectiveSettings.settings
@@ -102,13 +102,17 @@ fun AssistantLocalToolPage(id: String) {
         modifier = Modifier.nestedScroll(scrollBehavior.nestedScrollConnection),
         containerColor = CustomColors.topBarColors.containerColor,
     ) { innerPadding ->
+        if (assistant.id.toString() != id) {
+            Text(stringResource(R.string.sub_assistant_reason_assistant_not_found), Modifier.padding(innerPadding))
+            return@Scaffold
+        }
         AssistantLocalToolContent(
             innerPadding = innerPadding,
             assistant = assistant,
             subAssistants = settings.assistants,
             imageGenerationAvailable = imageGenerationAvailable,
             onToggleLocalTool = vm::toggleLocalTool,
-            onUpdateSubAssistantIds = { vm.update(assistant.copy(allowedSubAssistantIds = it)) },
+            onUpdateSubAssistantIds = { vm.update(assistant, assistant.copy(allowedSubAssistantIds = it)) },
         )
     }
 }
