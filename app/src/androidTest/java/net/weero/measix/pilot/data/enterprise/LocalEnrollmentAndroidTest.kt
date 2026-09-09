@@ -54,7 +54,7 @@ class LocalEnrollmentAndroidTest {
             assertEquals(published.packet.configuration, reentered.configuration)
             reopened.finishExit(reopened.beginExit(requireNotNull(reopened.captureExitRequest())))
             val bob = fullPackage.copy(identity = fullPackage.identity.copy(userId = "bob"))
-            val imported = source(reopened, authorityRoot).importPackage(EnterprisePackageCodec.encode(bob).inputStream())
+            val imported = source(reopened, authorityRoot).importPackage(requireNotNull(reopened.readPresentation().selection), EnterprisePackageCodec.encode(bob).inputStream())
             assertEquals(bob.identity, imported.applied!!.manifest.session!!.identity)
             reopened.finishExit(reopened.beginExit(requireNotNull(reopened.captureExitRequest())))
             val finalSource = source(reopened, authorityRoot)

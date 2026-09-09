@@ -169,7 +169,7 @@
   <string name="backup_page_delete">삭제</string>
   <string name="backup_page_delete_failed">삭제 실패: %s</string>
   <string name="backup_page_delete_success">삭제 성공</string>
-  <string name="backup_page_export_desc">앱 데이터를 파일로 내보내기</string>
+  <string name="backup_page_export_desc">개인 설정과 데이터를 파일로 내보내기</string>
   <string name="backup_page_exporting">내보내는 중...</string>
   <string name="backup_page_files">파일</string>
   <string name="backup_page_durable_aggregate">채팅 및 관리 파일</string>
@@ -857,7 +857,7 @@
   <string name="setting_page_config_api_desc">API와 대화 모델을 설정하면 대화를 시작할 수 있습니다.</string>
   <string name="setting_page_config_api_title">API와 모델을 설정하세요</string>
   <string name="setting_page_data_backup">데이터 백업</string>
-  <string name="setting_page_data_backup_desc">앱 데이터 백업 및 복원</string>
+  <string name="setting_page_data_backup_desc">개인 설정과 데이터 백업 및 복원</string>
   <string name="setting_page_data_settings">데이터 설정</string>
   <string name="setting_page_default_model">기본 모델 및 프롬프트</string>
   <string name="setting_page_default_model_desc">각 기능의 기본 모델 설정</string>
@@ -1664,4 +1664,13 @@
   <string name="mcp_gateway_preference_hint">모든 게이트웨이 도구를 함께 켜거나 끕니다. 변경 사항은 새로운 상호작용에 적용됩니다.</string>
   <string name="mcp_enterprise_required">기업에서 사용하도록 지정함</string>
   <string name="speech_operation_unavailable">음성을 사용할 수 없습니다. 선택한 리소스와 공간을 확인하세요.</string>
+  <string name="enterprise_import_configuration">로컬 기업 설정 가져오기</string>
+  <string name="enterprise_installed_sources">설치된 로컬 기업</string>
+  <string name="enterprise_import_applied">기업 설정이 적용되었습니다. 기존 기업 소식은 유지됩니다.</string>
+  <string name="enterprise_import_pending">로컬 소스가 업데이트되었지만 설정이 적용되지 않았습니다. 동기화를 다시 시도하거나 설치된 기업에 다시 연결하세요.</string>
+  <string name="enterprise_import_exit_first">다른 기업이나 사용자의 설정을 가져오기 전에 현재 기업에서 로그아웃하세요.</string>
+  <string name="enterprise_selection_changed">공간이 변경되었습니다. 설정 파일을 다시 선택하세요.</string>
+  <string name="enterprise_import_notice">접속 코드와는 별도의 전체 설정 파일을 가져옵니다. 비공개 인증 정보는 개인 백업에 포함되지 않습니다.</string>
+  <string name="backup_personal_scope_notice">사용자 설정과 개인 공간의 데이터를 백업합니다. 기업 설정과 데이터는 포함되지 않으며 복원 시에도 유지됩니다.</string>
+  <string name="enterprise_import_failed">이 파일을 가져올 수 없습니다. 파일을 읽을 수 있는지, 형식과 설정 버전 및 리소스 참조가 올바른지 확인하세요.</string>
 </resources>

@@ -23,7 +23,7 @@ RouteActivity (ComponentActivity)
 
 配置列表的 `ConfigurationReference` 在 Lazy/可拖动列表边界使用 `toString()` 作为可保存 key；业务选择与命令继续传递类型化引用。Lazy item 与 `ReorderableItem` 必须使用同一 key，不能把不可放入 Bundle 的领域对象交给 SaveableStateHolder。
 
-正式空间入口位于聊天顶部、抽屉和设置页，统一导航到 `Screen.Enterprise`。`EnterprisePage` / `EnterpriseVM` 只经 `EnterpriseApplicationService` 查询身份、状态与当前空间，以及执行接入、同步、切换和退出；具体授权及关闭屏障见 [Android 配置架构](android-configuration-architecture.md)。退出确认保存原请求，Portal 展示保存一次打开的独立身份；后台或离页会取消打开任务并关闭原宿主，未交接实例由创建方清理。切换或退出后经不携带通知 ID 的 `Screen.Startup()` 重新获取本域会话请求，不能重放 Activity 初始通知。接入凭据、RealmSelection 和 WebView 不保存进导航或 Activity saved state。
+正式空间入口位于聊天顶部、抽屉和设置页，统一导航到 `Screen.Enterprise`。`EnterprisePage` / `EnterpriseVM` 只经 `EnterpriseApplicationService` 查询身份、状态与当前空间，以及执行接入、同步、切换和退出；具体授权及关闭屏障见 [Android 配置架构](android-configuration-architecture.md)。退出确认保存原请求，Portal 展示保存一次打开的独立身份；后台或离页会取消打开任务并关闭原宿主，未交接实例由创建方清理。切换或退出后经不携带通知 ID 的 `Screen.Startup()` 重新获取本域会话请求，不能重放 Activity 初始通知。接入凭据、RealmSelection 和 WebView 不保存进导航或 Activity saved state。原生完整配置通过系统文件选择器导入，保留打开选择器时的 RealmSelection；来源发布前后复验原选择，切域后的旧文件结果不可应用。原生页面分开显示“已生效”与“来源已更新、待同步”，已安装来源列表通过同一接入资料解析和票据兑换链重新接入。备份页面统一说明个人备份范围，适用于文件、WebDAV 和 S3。
 
 网页退出与外链由 `PortalNativeControls` 展示原生确认，状态及决策归当前文档的 `PortalNativeActions`。退出显示已冻结的企业名称，外链显示完整地址；拒绝、关闭或超时使原提示失效。网页退出复用同一企业退出命令，关闭工作台仍保留企业登录。 拍照/录音使用同一文档的原生弹窗申请权限、展示相机预览及开始/停止/取消动作；UI 只持有采集操作投影，不接触文件路径。取消回传原操作对象，不能取消替换后的操作；离开前台由 Portal 宿主关闭协议停止硬件并清理文件。
 

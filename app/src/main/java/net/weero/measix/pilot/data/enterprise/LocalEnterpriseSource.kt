@@ -80,10 +80,10 @@ internal class LocalEnterpriseSource(
     }
 
     /** System file picker owns and closes the stream; full private packages never enter the enrollment parser. */
-    suspend fun importPackage(input: InputStream): LocalEnterpriseImportResult {
+    suspend fun importPackage(selection: RealmSelection, input: InputStream): LocalEnterpriseImportResult {
         val packet = withContext(Dispatchers.IO) { EnterprisePackageCodec.decode(input) }
         val revision = installations().find { it.identity.scope == packet.identity.scope }?.revision
-        return sessions.importLocal(packet.identity) {
+        return sessions.importLocal(selection, packet.identity) {
             mutex.withLock { publish(packet, revision, imported = true) }
         }
     }

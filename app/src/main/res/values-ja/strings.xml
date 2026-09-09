@@ -169,7 +169,7 @@
   <string name="backup_page_delete">削除</string>
   <string name="backup_page_delete_failed">削除失敗: %s</string>
   <string name="backup_page_delete_success">削除成功</string>
-  <string name="backup_page_export_desc">アプリデータをファイルにエクスポート</string>
+  <string name="backup_page_export_desc">個人の設定とデータをファイルにエクスポート</string>
   <string name="backup_page_exporting">エクスポート中...</string>
   <string name="backup_page_files">ファイル</string>
   <string name="backup_page_durable_aggregate">チャットと管理ファイル</string>
@@ -857,7 +857,7 @@
   <string name="setting_page_config_api_desc">API と会話モデルを設定すると、会話を開始できます。</string>
   <string name="setting_page_config_api_title">API とモデルを設定してください</string>
   <string name="setting_page_data_backup">データバックアップ</string>
-  <string name="setting_page_data_backup_desc">アプリデータのバックアップと復元</string>
+  <string name="setting_page_data_backup_desc">個人の設定とデータのバックアップと復元</string>
   <string name="setting_page_data_settings">データ設定</string>
   <string name="setting_page_default_model">デフォルトモデルとプロンプト</string>
   <string name="setting_page_default_model_desc">各機能のデフォルトモデルを設定</string>
@@ -1664,4 +1664,13 @@
   <string name="mcp_gateway_preference_hint">ゲートウェイの全ツールをまとめて切り替えます。変更は新しいやり取りに適用されます。</string>
   <string name="mcp_enterprise_required">企業により有効化が必須</string>
   <string name="speech_operation_unavailable">音声を利用できません。選択したリソースとスペースを確認してください。</string>
+  <string name="enterprise_import_configuration">ローカル企業設定をインポート</string>
+  <string name="enterprise_installed_sources">インストール済みのローカル企業</string>
+  <string name="enterprise_import_applied">企業設定を適用しました。既存の企業のお知らせは保持されます。</string>
+  <string name="enterprise_import_pending">ローカルソースは更新されましたが、設定は未適用です。同期を再試行するか、インストール済みの企業に再接続してください。</string>
+  <string name="enterprise_import_exit_first">別の企業やユーザーの設定をインポートする前に、現在の企業からログアウトしてください。</string>
+  <string name="enterprise_selection_changed">スペースが変更されました。設定ファイルを選び直してください。</string>
+  <string name="enterprise_import_notice">ここでは接続コードとは別の完全な設定ファイルをインポートします。非公開の認証情報は個人バックアップに含まれません。</string>
+  <string name="backup_personal_scope_notice">ユーザー設定と個人スペースのデータをバックアップします。企業の設定とデータは含まれず、復元時にも保持されます。</string>
+  <string name="enterprise_import_failed">このファイルをインポートできません。読み取り可能か、形式・設定バージョン・リソース参照が正しいか確認してください。</string>
 </resources>

@@ -169,7 +169,7 @@
   <string name="backup_page_delete">删除</string>
   <string name="backup_page_delete_failed">删除失败: %s</string>
   <string name="backup_page_delete_success">删除成功</string>
-  <string name="backup_page_export_desc">导出APP数据为文件</string>
+  <string name="backup_page_export_desc">将个人配置和数据导出为文件</string>
   <string name="backup_page_exporting">正在导出...</string>
   <string name="backup_page_files">文件</string>
   <string name="backup_page_durable_aggregate">聊天记录与受管文件</string>
@@ -867,7 +867,7 @@
   <string name="setting_page_config_api_desc">配置 API 和对话模型后即可开始会话。</string>
   <string name="setting_page_config_api_title">请配置 API 和模型</string>
   <string name="setting_page_data_backup">数据备份</string>
-  <string name="setting_page_data_backup_desc">备份和恢复应用数据</string>
+  <string name="setting_page_data_backup_desc">备份和恢复个人配置与数据</string>
   <string name="setting_page_data_settings">数据设置</string>
   <string name="setting_page_default_model">默认模型和提示词</string>
   <string name="setting_page_default_model_desc">设置各个功能的默认模型</string>
@@ -1664,4 +1664,13 @@
   <string name="mcp_gateway_preference_hint">所有网关工具一起启停，修改仅对新的交互生效。</string>
   <string name="mcp_enterprise_required">企业要求启用</string>
   <string name="speech_operation_unavailable">语音不可用，请检查所选资源和空间。</string>
+  <string name="enterprise_import_configuration">导入本地企业配置</string>
+  <string name="enterprise_installed_sources">已安装的本地企业</string>
+  <string name="enterprise_import_applied">企业配置已生效，已有企业动态保持不变。</string>
+  <string name="enterprise_import_pending">本地来源已更新，但配置尚未生效。请重试同步，或重新接入已安装的企业。</string>
+  <string name="enterprise_import_exit_first">导入其他企业或用户的配置前，请先退出当前企业。</string>
+  <string name="enterprise_selection_changed">空间已变化，请重新选择配置文件。</string>
+  <string name="enterprise_import_notice">这里导入完整配置文件，与接入码不同。私有凭据不进入个人备份。</string>
+  <string name="backup_personal_scope_notice">备份包含用户配置和个人空间的数据。不包含企业配置或数据，恢复时保留企业内容。</string>
+  <string name="enterprise_import_failed">无法导入此文件。请检查文件是否可读，以及格式、配置版本和资源引用是否正确。</string>
 </resources>

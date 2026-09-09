@@ -65,6 +65,12 @@ internal fun EnterprisePage(vm: EnterpriseVM = koinViewModel()) {
     val state by vm.overview.collectAsStateWithLifecycle()
     val working by vm.busy.collectAsStateWithLifecycle()
     val error by vm.error.collectAsStateWithLifecycle()
+    val notice by vm.notice.collectAsStateWithLifecycle()
+    val sources by vm.sources.collectAsStateWithLifecycle()
+    val context = LocalContext.current
+    val filePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        vm.importConfiguration(context, uri)
+    }
     val exit by vm.exitRequest.collectAsStateWithLifecycle()
     val example by vm.exampleCode.collectAsStateWithLifecycle()
     val portal by vm.portal.collectAsStateWithLifecycle()
@@ -80,6 +86,7 @@ internal fun EnterprisePage(vm: EnterpriseVM = koinViewModel()) {
         }
     }
     val busy = working || state?.switching == true || state?.phase == EnterpriseSessionPhase.CLOSING
+    LaunchedEffect(state?.access) { if (state?.access != null) vm.dismissSources() }
     val inEnterprise = state?.selection?.access is RealmAccess.Enterprise
     val ready = state?.phase in setOf(EnterpriseSessionPhase.READY, EnterpriseSessionPhase.OFFLINE)
     val openChat = { nav.clearAndNavigate(Screen.Startup()) }
@@ -111,6 +118,7 @@ internal fun EnterprisePage(vm: EnterpriseVM = koinViewModel()) {
                 if (error != null || state?.failure != null || state?.exitFailure != null) {
                     Text(stringResource(error ?: R.string.enterprise_failure), color = MaterialTheme.colorScheme.error)
                 }
+                notice?.let { Text(stringResource(it)) }
                 if (state?.exitFailure != null) {
                     Button(onClick = vm::retryExit, enabled = !working) { Text(stringResource(R.string.application_recovery_retry)) }
                 }
@@ -122,6 +130,7 @@ internal fun EnterprisePage(vm: EnterpriseVM = koinViewModel()) {
                     OutlinedButton(onClick = { paste = true }, enabled = !busy) { Text(stringResource(R.string.enterprise_join_paste)) }
                     OutlinedButton(onClick = { scanner.launch(null) }, enabled = !busy) { Text(stringResource(R.string.enterprise_join_scan)) }
                     TextButton(onClick = vm::showExampleCode, enabled = !busy) { Text(stringResource(R.string.enterprise_example_code)) }
+                    OutlinedButton(onClick = vm::showSources, enabled = !busy) { Text(stringResource(R.string.enterprise_installed_sources)) }
                 }
                 if (state?.access != null) {
                     if (inEnterprise || ready) {
@@ -138,9 +147,29 @@ internal fun EnterprisePage(vm: EnterpriseVM = koinViewModel()) {
                     }
                     TextButton(onClick = vm::requestExit, enabled = !busy) { Text(stringResource(R.string.enterprise_exit)) }
                 }
+                if (state?.selection != null) {
+                    OutlinedButton(onClick = { if (vm.beginImport()) filePicker.launch(arrayOf("*/*")) }, enabled = !busy) {
+                        Text(stringResource(R.string.enterprise_import_configuration))
+                    }
+                    Text(stringResource(R.string.enterprise_import_notice), style = MaterialTheme.typography.bodySmall)
+                }
                 Button(onClick = openChat, enabled = !busy && state?.selection != null) { Text(stringResource(R.string.enterprise_open_chat)) }
             }
         }
+    }
+    sources?.let { installed ->
+        AlertDialog(onDismissRequest = vm::dismissSources,
+            title = { Text(stringResource(R.string.enterprise_installed_sources)) },
+            text = { Column(Modifier.verticalScroll(rememberScrollState())) {
+                installed.forEach { source ->
+                    TextButton(onClick = { vm.joinInstalled(source) }, enabled = !busy) {
+                        Column(Modifier.fillMaxWidth()) {
+                            Text(source.enterpriseName, style = MaterialTheme.typography.titleMedium)
+                            Text(source.userName)
+                        }
+                    }
+                }
+            } }, confirmButton = { TextButton(onClick = vm::dismissSources) { Text(stringResource(R.string.cancel)) } })
     }
     if (paste) AlertDialog(onDismissRequest = { paste = false; enrollment = "" },
         title = { Text(stringResource(R.string.enterprise_join_paste)) },

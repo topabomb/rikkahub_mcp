@@ -169,7 +169,7 @@
   <string name="backup_page_delete">Удалить</string>
   <string name="backup_page_delete_failed">Не удалось удалить: %s</string>
   <string name="backup_page_delete_success">Удаление выполнено успешно</string>
-  <string name="backup_page_export_desc">Экспортировать данные приложения в файл</string>
+  <string name="backup_page_export_desc">Экспорт личных настроек и данных в файл</string>
   <string name="backup_page_exporting">Экспорт…</string>
   <string name="backup_page_files">Файлы</string>
   <string name="backup_page_durable_aggregate">Чаты и управляемые файлы</string>
@@ -857,7 +857,7 @@
   <string name="setting_page_config_api_desc">Настройте API и модель диалога, чтобы начать общение.</string>
   <string name="setting_page_config_api_title">Настройте API и модель</string>
   <string name="setting_page_data_backup">Резервное копирование данных</string>
-  <string name="setting_page_data_backup_desc">Резервное копирование и восстановление данных приложения</string>
+  <string name="setting_page_data_backup_desc">Резервное копирование и восстановление личных настроек и данных</string>
   <string name="setting_page_data_settings">Настройки данных</string>
   <string name="setting_page_default_model">Модель и промпт по умолчанию</string>
   <string name="setting_page_default_model_desc">Установить модели по умолчанию для каждой функции</string>
@@ -1664,4 +1664,13 @@
   <string name="mcp_gateway_preference_hint">Все инструменты шлюза включаются и отключаются вместе. Изменения действуют для новых взаимодействий.</string>
   <string name="mcp_enterprise_required">Включение обязательно по правилам предприятия</string>
   <string name="speech_operation_unavailable">Речь недоступна. Проверьте выбранный ресурс и пространство.</string>
+  <string name="enterprise_import_configuration">Импорт локальной конфигурации организации</string>
+  <string name="enterprise_installed_sources">Установленные локальные организации</string>
+  <string name="enterprise_import_applied">Конфигурация применена. Существующие новости организации сохранены.</string>
+  <string name="enterprise_import_pending">Локальный источник обновлён, но конфигурация не применена. Повторите синхронизацию или подключение к установленной организации.</string>
+  <string name="enterprise_import_exit_first">Перед импортом конфигурации другой организации или пользователя выйдите из текущей организации.</string>
+  <string name="enterprise_selection_changed">Пространство изменилось. Выберите файл конфигурации повторно.</string>
+  <string name="enterprise_import_notice">Здесь импортируется полный файл конфигурации, а не код подключения. Закрытые учётные данные не включаются в личные резервные копии.</string>
+  <string name="backup_personal_scope_notice">Сохраняются пользовательские настройки и данные личного пространства. Конфигурация и данные организации не входят в копию и сохраняются при восстановлении.</string>
+  <string name="enterprise_import_failed">Не удалось импортировать файл. Проверьте доступность файла, формат, версию конфигурации и ссылки на ресурсы.</string>
 </resources>

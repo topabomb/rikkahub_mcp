@@ -70,7 +70,7 @@ class EnterpriseSynchronizationServiceTest {
             val candidate = packet().copy(configuration = packet().configuration.copy(generation = 2))
             now += 1000
             failClient = true
-            val imported = h.source.importPackage(EnterprisePackageCodec.encode(candidate).inputStream())
+            val imported = h.source.importPackage(requireNotNull(h.sessions.readPresentation().selection), EnterprisePackageCodec.encode(candidate).inputStream())
             assertNull(imported.applied)
             assertNotNull(imported.failureReason)
             assertEquals(candidate, h.source.candidate(candidate.identity.scope)!!.packet)

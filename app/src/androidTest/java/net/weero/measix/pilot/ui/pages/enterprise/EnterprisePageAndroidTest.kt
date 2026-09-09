@@ -40,6 +40,7 @@ import net.weero.measix.pilot.data.enterprise.RealmSelection
 import net.weero.measix.pilot.data.enterprise.RealmSwitchRequest
 import net.weero.measix.pilot.service.EnterpriseApplicationService
 import net.weero.measix.pilot.service.EnterpriseOverview
+import net.weero.measix.pilot.service.InstalledEnterpriseSource
 import net.weero.measix.pilot.service.portal.PortalDocument
 import net.weero.measix.pilot.service.portal.PortalFailure
 import net.weero.measix.pilot.service.portal.PortalWebView
@@ -94,6 +95,21 @@ class EnterprisePageAndroidTest {
         } finally {
             releaseSwitch.complete(Unit)
         }
+    }
+
+    @Test
+    fun installedEnterpriseListUsesTheChosenSourceIdentity() {
+        val fixture = Fixture(overview(access = null))
+        val installed = InstalledEnterpriseSource(access("installed").scope, "Private enterprise", "Private user")
+        coEvery { fixture.service.installedSources() } returns listOf(installed)
+        coEvery { fixture.service.joinInstalled(installed.scope) } coAnswers { fixture.state.value = overview() }
+        fixture.show()
+        click(R.string.enterprise_installed_sources)
+        compose.onNodeWithText("Private enterprise").assertIsDisplayed()
+        compose.onNodeWithText("Private user").assertIsDisplayed()
+        compose.onNodeWithText("Private enterprise").performClick()
+        compose.waitUntil(5_000) { fixture.vm.overview.value?.access != null }
+        coVerify(exactly = 1) { fixture.service.joinInstalled(installed.scope) }
     }
 
     @Test

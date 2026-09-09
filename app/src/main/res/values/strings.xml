@@ -169,7 +169,7 @@
   <string name="backup_page_delete">Delete</string>
   <string name="backup_page_delete_failed">Delete failed: %s</string>
   <string name="backup_page_delete_success">Delete successful</string>
-  <string name="backup_page_export_desc">Export app data to a file</string>
+  <string name="backup_page_export_desc">Export personal configuration and data to a file</string>
   <string name="backup_page_exporting">Exporting...</string>
   <string name="backup_page_files">Files</string>
   <string name="backup_page_durable_aggregate">Chats and managed files</string>
@@ -887,7 +887,7 @@
   <string name="setting_page_config_api_desc">Configure an API and conversation model to start chatting.</string>
   <string name="setting_page_config_api_title">Please configure API and model</string>
   <string name="setting_page_data_backup">Data Backup</string>
-  <string name="setting_page_data_backup_desc">Backup and restore app data</string>
+  <string name="setting_page_data_backup_desc">Back up and restore personal configuration and data</string>
   <string name="setting_page_data_settings">Data Settings</string>
   <string name="setting_page_default_model">Default Model and Prompt</string>
   <string name="setting_page_default_model_desc">Set default models for each feature</string>
@@ -1665,4 +1665,13 @@
   <string name="mcp_gateway_preference_hint">All gateway tools switch together. Changes apply to new interactions.</string>
   <string name="mcp_enterprise_required">Required by your enterprise</string>
   <string name="speech_operation_unavailable">Speech is unavailable. Check the selected resource and space.</string>
+  <string name="enterprise_import_configuration">Import local enterprise configuration</string>
+  <string name="enterprise_installed_sources">Installed local enterprises</string>
+  <string name="enterprise_import_applied">Enterprise configuration applied. Existing enterprise updates are preserved.</string>
+  <string name="enterprise_import_pending">Source updated, but configuration was not applied. Retry synchronization or rejoin the installed enterprise.</string>
+  <string name="enterprise_import_exit_first">Exit the current enterprise before importing a different enterprise or user.</string>
+  <string name="enterprise_selection_changed">The space changed. Select the configuration file again.</string>
+  <string name="enterprise_import_notice">Import a full configuration file, separate from enrollment codes. Private credentials are excluded from personal backups.</string>
+  <string name="backup_personal_scope_notice">Back up your configuration and personal-space data. Enterprise configuration and data are excluded and preserved during restore.</string>
+  <string name="enterprise_import_failed">Cannot import this file. Check that it is readable and that its format, configuration version and resource references are valid.</string>
 </resources>

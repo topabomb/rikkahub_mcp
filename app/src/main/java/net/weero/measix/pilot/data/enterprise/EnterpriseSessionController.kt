@@ -136,14 +136,18 @@ internal class EnterpriseSessionController(
     }
 
     /** Explicit native installation publishes source facts before applying them; application failure is observable. */
-    suspend fun importLocal(identity: EnterpriseIdentity, publishSource: suspend () -> LocalEnterpriseCandidate): LocalEnterpriseImportResult = mutex.withLock {
+    suspend fun importLocal(selection: RealmSelection, identity: EnterpriseIdentity, publishSource: suspend () -> LocalEnterpriseCandidate): LocalEnterpriseImportResult = mutex.withLock {
         EnterprisePackageCodec.validateIdentity(identity)
         val current = ensureLoaded()
+        requirePublishedSelection(selection)
         requireSamePrincipal(current.manifest, identity)
         val candidate = publishSource()
         check(candidate.packet.identity == identity)
         try {
-            val applied = applyValidated(candidate.packet, current.manifest.session == null || current.manifest.selectedScope is ConfigurationScope.Enterprise)
+            requirePublishedSelection(selection)
+            val applied = applyValidated(candidate.packet,
+                current.manifest.session == null || current.manifest.selectedScope is ConfigurationScope.Enterprise,
+                expectedAccess = current.manifest.session?.let { RealmAccess.Enterprise(it.identity.scope, it.id) })
             LocalEnterpriseImportResult(candidate.revision, applied, null)
         } catch (cancelled: CancellationException) {
             throw cancelled

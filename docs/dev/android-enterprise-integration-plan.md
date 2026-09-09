@@ -345,7 +345,7 @@ Android 媒体接线按下列所有权完成：`PortalMediaStore` 管理独占�
 | 语音（C5、U2） | SpeechApplicationService 已统一拥有原域捕获、binding、播放与录音清理；企业 TTS/HTTP-ASR、本地 MP3/WAV adapter、目录选择与聊天入口已接通；428 终止原交互并同步，不重放。应用 JVM、实际 AudioRecord 和完整构建/设备回归已通过；正式 Debug App 的朗读、录音、关页清理和个人/企业目录已验证，错误提示已接通；Release 及整期场景验收仍待完成 |
 | 文件与 Workspace（C6） | 会话/记忆、目录、图片、背景、参考输入及附件/富文本出口已分域验证；Workspace 上传/终端/SAF 已完成本批实现与完整门禁；共享配置预设附件的目标域复制及 Draft/Child 交接已完成，完整门禁通过；整体 UI/版本验收仍待最终收口 |
 | 个人备份（C7） | 个人闭合图导出与冷恢复合并已实现；配置/企业数据、共享资产和恢复 receipt 按原 owner 保全，系统备份与设备迁移显式排除混合域存储；当前验证记录见本文个人备份批次 |
-| 完整示例与 UI（M1、U2） | 正式企业入口、Portal、公开模板和私有文件 ignore 已有；仍需原生整包导入/场景管理、Starter 预填、辅助生成模拟格式及剩余资源/助手页面 |
+| 完整示例与 UI（M1、U2） | 正式企业入口、Portal、公开模板和私有文件 ignore 已有；原生整包导入与已安装来源接入已接线，仍需场景管理、Starter 预填、辅助生成模拟格式及剩余资源/助手页面 |
 | 退休与发行（R1、V1） | 消费者完成后删除旧 managed overlay 链，再做 E01–E12、Release/硬件验收和版本 20 交付；真实后台属于下一阶段 |
 
 
@@ -698,3 +698,9 @@ C7 的系统备份入口已关闭：Manifest 禁用 allowBackup，旧系统备�
 双人审查发现的列序、失效引用、路径别名和 owner 混用问题已修正；设备验证还纠正了 Requery 连接池中的 ATTACH 作用域，离线目标使用单连接，运行数据库保持原配置。完整门禁通过后补充的校验与旧恢复入口，另有定向结果记录；本批不代表 0.0.20 整期完成，剩余 U2/M1/R1/V1 继续推进，也不宣称 Release UI、系统设备迁移或真实平台互操作验收。
 
 本批完整基线 `test assembleDebug lintDebug assembleRelease connectedDebugAndroidTest` 通过：App 2,153 项 JVM、199 项设备测试和 Speech 14 项设备测试无失败；Workspace 保留 11 项 Windows JVM 条件跳过和 1 项设备硬链接条件跳过。最终审查修正后，17 项备份 JVM 与 12 项实际 Room/迁移设备测试复验通过，Debug/Release 构建及 lint 再次通过（0 错误、287 警告）。旧升级夹具中的 Settings 断言验证传给 Artifact owner 的规范化参数，使用测试替身，不表述为该路径的真实 DataStore 落盘验收。分层报告见 `build/reports/enterprise/backup-personal-graph-verification.json`。备份页面范围说明与整期 UI 验收仍归后续 UI 收口。
+
+### 原生配置文件入口批次
+
+正式空间页增加“导入本地企业配置”和“已安装的本地企业”。完整文件通过系统选择器进入现有来源发布/Session 应用流程，私有 binding 不进入 UI；已安装来源继续通过同一短资料解析与票据兑换链接入。页面分别显示已生效或来源已更新但待同步；换主体仍须先退出。选择文件时捕获原空间，切域往返后的旧结果不能发布。导入期间已有企业 Session 到期（包括当前停留个人空间）不自动续期；来源已提交时保留来源供后续接入，客户端不假报成功。备份四个标签页共用个人范围说明；英文、中文、日文、韩文和俄文同步。两位独立复审的问题已关闭，场景管理、其余 UI 与整期验收继续实施。
+
+本批完整串行 `test assembleDebug lintDebug assembleRelease` 通过：App 2,155 项 JVM 无失败，Workspace 保留 11 项 Windows 条件跳过。定向 32 项 JVM 与 Android 17 模拟器 8 项设备测试通过；最后的错误指引和备份文案另经 Debug/Release 构建与 lint 复验（7 分 15 秒，0 错误、287 警告）。正式 Debug App 实际完成系统选文件取消、坏文件拒绝、完整文件导入、退出、已安装来源重新接入、企业聊天保存重开与备份范围呈现。选择器打开期间切域后的迟到返回由源命令测试验证，尚未作该场景的系统选择器设备验收；本批没有 Release UI 或真实平台互操作验收。分层证据见 `build/reports/enterprise/native-import-verification.json`。

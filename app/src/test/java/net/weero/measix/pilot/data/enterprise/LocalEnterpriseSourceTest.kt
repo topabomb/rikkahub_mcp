@@ -257,7 +257,8 @@ class LocalEnterpriseSourceTest {
         try { h.source.enroll(exampleBytes().toString(Charsets.UTF_8)); fail("full package cannot enroll") }
         catch (_: EnterpriseConfigurationException) { }
         assertSignedOut(h)
-        val imported = h.source.importPackage(exampleBytes().inputStream())
+        h.sessions.recover()
+        val imported = h.source.importPackage(requireNotNull(h.sessions.readPresentation().selection), exampleBytes().inputStream())
         assertNull(imported.failureReason)
         assertEquals(packet().configuration, imported.applied!!.configuration)
         assertEquals(packet().identity, imported.applied.manifest.session!!.identity)
@@ -269,10 +270,10 @@ class LocalEnterpriseSourceTest {
         val alice = h.source.enrollExample()
         val bob = packet().copy(identity = packet().identity.copy(userId = "bob"))
         val initialDirectory = h.source.installations()
-        rejected("exit_current_enterprise_first") { h.source.importPackage(EnterprisePackageCodec.encode(bob).inputStream()) }
+        rejected("exit_current_enterprise_first") { h.source.importPackage(requireNotNull(h.sessions.readPresentation().selection), EnterprisePackageCodec.encode(bob).inputStream()) }
         assertEquals(initialDirectory, h.source.installations())
         h.sessions.finishExit(h.sessions.beginExit(requireNotNull(h.sessions.captureExitRequest())))
-        assertEquals(bob.identity, h.source.importPackage(EnterprisePackageCodec.encode(bob).inputStream()).applied!!.manifest.session!!.identity)
+        assertEquals(bob.identity, h.source.importPackage(requireNotNull(h.sessions.readPresentation().selection), EnterprisePackageCodec.encode(bob).inputStream()).applied!!.manifest.session!!.identity)
         val bobCode = h.source.enrollmentText(bob.identity.scope)
         h.sessions.finishExit(h.sessions.beginExit(requireNotNull(h.sessions.captureExitRequest())))
         h.source.enrollExample()
@@ -282,7 +283,7 @@ class LocalEnterpriseSourceTest {
         assertEquals(alice.configuration, h.source.candidate(packet().identity.scope)!!.packet.configuration)
         h.sessions.finishExit(h.sessions.beginExit(requireNotNull(h.sessions.captureExitRequest())))
         val other = packet().copy(identity = packet().identity.copy(authority = EnterpriseAuthority("local:private", "private-deployment")))
-        assertEquals(other.identity, h.source.importPackage(EnterprisePackageCodec.encode(other).inputStream()).applied!!.manifest.session!!.identity)
+        assertEquals(other.identity, h.source.importPackage(requireNotNull(h.sessions.readPresentation().selection), EnterprisePackageCodec.encode(other).inputStream()).applied!!.manifest.session!!.identity)
         h.sessions.finishExit(h.sessions.beginExit(requireNotNull(h.sessions.captureExitRequest())))
         val reopened = LocalEnterpriseSource({ exampleBytes().inputStream() }, h.sessions,
             LocalEnrollmentAuthority(h.authorityRoot, { now }), ::identityStream, LocalEnterpriseConfigurationStore(h.authorityRoot)) { now }
@@ -298,11 +299,11 @@ class LocalEnterpriseSourceTest {
         File(h.authorityRoot, "configurations/${original.revision}.json").writeText("broken")
         assertEquals(packet().identity, h.source.installations().single().identity)
         rejected("local_enterprise_configuration_invalid") { h.source.candidate(packet().identity.scope) }
-        rejected("local_enterprise_configuration_invalid") { h.source.importPackage(exampleBytes().inputStream()) }
+        rejected("local_enterprise_configuration_invalid") { h.source.importPackage(requireNotNull(h.sessions.readPresentation().selection), exampleBytes().inputStream()) }
         val pending = h.source.enrollExample()
         assertEquals(EnterpriseSessionPhase.CONFIGURATION_PENDING, pending.manifest.phase)
         val repaired = packet().copy(configuration = packet().configuration.copy(generation = 2))
-        val applied = h.source.importPackage(EnterprisePackageCodec.encode(repaired).inputStream()).applied!!
+        val applied = h.source.importPackage(requireNotNull(h.sessions.readPresentation().selection), EnterprisePackageCodec.encode(repaired).inputStream()).applied!!
         assertEquals(pending.manifest.session, applied.manifest.session)
         assertEquals(repaired, h.source.candidate(repaired.identity.scope)!!.packet)
     }
@@ -321,19 +322,56 @@ class LocalEnterpriseSourceTest {
         val original = h.source.candidate(packet().identity.scope)!!
         val updated = packet().copy(configuration = packet().configuration.copy(generation = 2))
         failCommit = true
-        try { h.source.importPackage(EnterprisePackageCodec.encode(updated).inputStream()); fail("write must fail") }
+        try { h.source.importPackage(requireNotNull(h.sessions.readPresentation().selection), EnterprisePackageCodec.encode(updated).inputStream()); fail("write must fail") }
         catch (_: IllegalStateException) { }
         failCommit = false
         assertEquals(original, h.source.candidate(packet().identity.scope))
         assertEquals(first, h.sessions.state.value)
         pause = true
-        val job = launch(Dispatchers.Default) { h.source.importPackage(EnterprisePackageCodec.encode(updated).inputStream()) }
+        val job = launch(Dispatchers.Default) { h.source.importPackage(requireNotNull(h.sessions.readPresentation().selection), EnterprisePackageCodec.encode(updated).inputStream()) }
         try { entered.await(); job.cancel() } finally { release.countDown() }
         job.join()
         assertTrue(job.isCancelled)
         assertEquals(updated, h.source.candidate(packet().identity.scope)!!.packet)
         assertEquals(first, h.sessions.state.value)
         assertEquals(updated, LocalEnterpriseConfigurationStore(h.authorityRoot).let { it.read(it.installations()!!.single()) }!!.packet)
+    }
+
+    @Test
+    fun `file selection revoked by a realm round trip cannot publish or apply its package`() = runTest {
+        val h = harness()
+        val first = h.source.enrollExample()
+        val original = requireNotNull(h.sessions.readPresentation().selection)
+        val personal = h.sessions.switchRealm(RealmSwitchRequest(original, RealmAccess.Personal)) {}
+        h.sessions.switchRealm(RealmSwitchRequest(personal, original.access)) {}
+        val current = h.sessions.state.value
+        val sourceBefore = h.source.candidate(packet().identity.scope)
+        val update = packet().copy(configuration = packet().configuration.copy(generation = 2))
+        rejected("enterprise_selection_revoked") {
+            h.source.importPackage(original, EnterprisePackageCodec.encode(update).inputStream())
+        }
+        assertEquals(sourceBefore, h.source.candidate(packet().identity.scope))
+        assertEquals(current, h.sessions.state.value)
+        assertEquals(first.manifest.session, (current as EnterpriseState.Available).manifest.session)
+    }
+
+    @Test
+    fun `expiry during owned import preserves source without renewing a session in either selected realm`() = runTest {
+        for (selectPersonal in listOf(false, true)) {
+            var expiresDuringCommit: Long? = null
+            val h = harness(sourceCheckpoint = { expiresDuringCommit?.let { now = it } })
+            val first = h.source.enrollExample()
+            var original = requireNotNull(h.sessions.readPresentation().selection)
+            if (selectPersonal) original = h.sessions.switchRealm(RealmSwitchRequest(original, RealmAccess.Personal)) {}
+            val before = h.sessions.state.value
+            val update = packet().copy(configuration = packet().configuration.copy(generation = 2))
+            expiresDuringCommit = first.manifest.session!!.expiresAtMillis
+            val result = h.source.importPackage(original, EnterprisePackageCodec.encode(update).inputStream())
+            assertNull(result.applied)
+            assertNotNull(result.failureReason)
+            assertEquals(update, h.source.candidate(packet().identity.scope)!!.packet)
+            assertEquals(before, h.sessions.state.value)
+        }
     }
 
     private data class Harness(val clientRoot: File, val authorityRoot: File, val sessions: EnterpriseSessionController,

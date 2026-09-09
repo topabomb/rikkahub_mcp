@@ -57,7 +57,7 @@ class EnterpriseSpeechTransportTest {
         try {
             val packet = requireNotNull(source.candidate(access.scope)).packet
             val tts = packet.configuration.tts.first()
-            source.importPackage(EnterprisePackageCodec.encode(packet.copy(configuration = packet.configuration.copy(generation = packet.configuration.generation + 1))).inputStream())
+            source.importPackage(requireNotNull(sessions.readPresentation().selection), EnterprisePackageCodec.encode(packet.copy(configuration = packet.configuration.copy(generation = packet.configuration.generation + 1))).inputStream())
             val target = target(access, lease.version, lease.binding(tts.id))
             val writes = AtomicInteger()
             val body = object : RequestBody() {

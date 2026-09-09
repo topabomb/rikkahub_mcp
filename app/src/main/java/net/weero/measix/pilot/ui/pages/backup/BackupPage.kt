@@ -62,6 +62,7 @@ fun BackupPage(vm: BackupVM = koinViewModel()) {
                 .fillMaxSize()
                 .padding(contentPadding)
         ) {
+            Text(stringResource(R.string.backup_personal_scope_notice), modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
             SecondaryScrollableTabRow(
                 selectedTabIndex = pagerState.currentPage,
                 containerColor = CustomColors.topBarColors.containerColor,

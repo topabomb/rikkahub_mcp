@@ -1,12 +1,20 @@
 package net.weero.measix.pilot.service
 
 import android.content.Context
+import android.net.Uri
+import net.weero.measix.pilot.data.configuration.ConfigurationScope
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import net.weero.measix.pilot.data.enterprise.*
 import net.weero.measix.pilot.service.portal.*
+
+internal data class InstalledEnterpriseSource(
+    val scope: ConfigurationScope.Enterprise,
+    val enterpriseName: String,
+    val userName: String,
+)
 
 internal data class EnterpriseOverview(
     val selection: RealmSelection?,
@@ -68,6 +76,22 @@ internal class EnterpriseApplicationService(
     suspend fun joinExample() { recovery.awaitReady(); source.enrollExample() }
     suspend fun join(text: String) { recovery.awaitReady(); source.enroll(text) }
     suspend fun exampleEnrollmentText(): String { recovery.awaitReady(); return source.exampleEnrollmentText() }
+    suspend fun installedSources(): List<InstalledEnterpriseSource> {
+        recovery.awaitReady()
+        return source.installations().map { InstalledEnterpriseSource(it.identity.scope,
+            it.identity.enterpriseName, it.identity.userName) }
+    }
+    suspend fun joinInstalled(target: ConfigurationScope.Enterprise) {
+        recovery.awaitReady()
+        source.enroll(source.enrollmentText(target))
+    }
+    suspend fun importConfiguration(context: Context, selection: RealmSelection, uri: Uri): LocalEnterpriseImportResult {
+        recovery.awaitReady()
+        return withContext(Dispatchers.IO) {
+            requireNotNull(context.contentResolver.openInputStream(uri)) { "enterprise_configuration_file_unavailable" }
+                .use { source.importPackage(selection, it) }
+        }
+    }
     suspend fun synchronize(access: RealmAccess.Enterprise) { recovery.awaitReady(); synchronization.synchronize(access) }
     suspend fun captureExitRequest(): EnterpriseExitRequest? = exit.captureRequest()
     suspend fun exit(request: EnterpriseExitRequest) { exit.exit(request) }
