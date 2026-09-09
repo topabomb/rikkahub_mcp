@@ -344,7 +344,7 @@ Android 媒体接线按下列所有权完成：`PortalMediaStore` 管理独占�
 | MCP / Gateway（C5、U2） | 企业固定选择、完整 Tool JSON、主体目录与连接清理已实现；原 Session/binding/interaction、Gateway 标准发现与调用、本地 source engine、428 收口及只读工具清单已通过本批完整门禁；管理 UI、归档业务工具卡和 Mock 模型标准工具续轮已通过定向、Debug 设备及本批完整门禁 |
 | 语音（C5、U2） | SpeechApplicationService 已统一拥有原域捕获、binding、播放与录音清理；企业 TTS/HTTP-ASR、本地 MP3/WAV adapter、目录选择与聊天入口已接通；428 终止原交互并同步，不重放。应用 JVM、实际 AudioRecord 和完整构建/设备回归已通过；正式 Debug App 的朗读、录音、关页清理和个人/企业目录已验证，错误提示已接通；Release 及整期场景验收仍待完成 |
 | 文件与 Workspace（C6） | 会话/记忆、目录、图片、背景、参考输入及附件/富文本出口已分域验证；Workspace 上传/终端/SAF 已完成本批实现与完整门禁；共享配置预设附件的目标域复制及 Draft/Child 交接已完成，完整门禁通过；整体 UI/版本验收仍待最终收口 |
-| 个人备份（C7） | 个人 Settings 保全已实现；备份仍需个人闭合图导出、恢复合并保全最新企业图和系统备份边界，不能用 Settings 测试代表数据保全 |
+| 个人备份（C7） | 个人 Settings 保全已实现；系统备份与设备迁移已显式排除混合域存储；备份仍需个人闭合图导出、恢复合并保全最新企业图，不能用 Settings 测试代表数据保全 |
 | 完整示例与 UI（M1、U2） | 正式企业入口、Portal、公开模板和私有文件 ignore 已有；仍需原生整包导入/场景管理、Starter 预填、辅助生成模拟格式及剩余资源/助手页面 |
 | 退休与发行（R1、V1） | 消费者完成后删除旧 managed overlay 链，再做 E01–E12、Release/硬件验收和版本 20 交付；真实后台属于下一阶段 |
 
@@ -686,3 +686,5 @@ MCP UI 与本地模型接线：企业只读目录、Gateway 原选择写入与�
 正式 Debug/Koin 流程已从空间入口接入示例企业，在聊天页通过原生麦克风权限、实际录音、停止上传和模拟转写；语音设置页显示只读企业 TTS/ASR，并由 App 的 24 kHz 单声道 AudioTrack 实际播放、结束和释放示例音频。录音中离开聊天会删除原 WAV，切回个人后不显示企业转写或 ASR 入口，语音目录只保留用户资源；个人 System TTS 仍可播放。证据见 `build/reports/enterprise/speech-app-verification.json`。这是模拟器正式 App 消费者验证，不是实际识别服务、人工听音质量或 Release 设备验收。设置首页仍按旧个人配置提示未配置，纳入剩余 UI/overlay 退休收口。
 
 语音错误提示与四项退休文案清理后的 `:app:assembleDebug :app:lintDebug :app:assembleRelease` 通过（7 分 14 秒），App lint 回到 0 错误、287 警告。此处只复验门禁后的 UI/资源差异，不将早期完整设备报告冒充重新运行；安装包消费者证据保存实际安装 APK 摘要。
+
+C7 的系统备份入口已关闭：Manifest 禁用 allowBackup，旧系统备份、云端备份和设备迁移分别显式排除混合域存储。Debug/Release 资源与合并 Manifest 校验、lint 通过（2 分 53 秒，0 错误、287 警告）；未验证厂商设备迁移运行时。记录见 `build/reports/enterprise/backup-platform-boundary-verification.json`。应用内个人图导出和恢复合并尚未完成，此项不改变现有 Room/DataStore 数据结构。

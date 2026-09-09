@@ -606,3 +606,8 @@ Local shadow 不因同 ID overlay 覆盖而删除；overlay 移除后恢复本�
 FileManagementQueryService 合成当前选择的上传与图库目录，条目保留原 RealmSelection；列表、候选数量和清理 SQL 都显式限定 scope。FileManagementApplicationService 在 Session 准入内编排原 ArtifactStore/GeneratedMediaStore，单项文件归属仍由原 owner 复验。页面切换会清除旧确认和预览；返回相同主体不会恢复旧选择的写权限。统计只消费本域已登记条目，查询失败可以在同域重试。输入框名称只查询原 Draft 当前附件。共享配置预设消息经 ArtifactStore 验证持久配置根后复制为目标域附件；主 Draft 由原 Runtime 持有创建令牌，子助手沿既有 Child 创建与链接提交交接。预览、导出和工具读取使用原页面/执行主体；Workspace 是显式共享空间，其文件与终端边界见 Workspace 参考。设备与整体验收状态以本期实施方案为准。
 
 语音设置页通过 `ConfigurationQueryService.observeSpeechCatalog` 显示本域资源和不可用原因，选择写入原 RealmSelection 的偏好。企业定义仅显示模型、音色或语言，用户定义保留编辑/排序；System TTS 可调整音调和语速，不能删除，并遵守 allowLocalTts。删除定义保留失效选择供用户明确重选，不按首项替换。
+
+
+### 系统备份边界
+
+Android Manifest 关闭 `allowBackup`；`backup_rules.xml` 和 `data_extraction_rules.xml` 分别显式排除旧系统备份、云端备份与设备迁移中的全部应用存储域，包含 device-protected storage。Room、DataStore 和共享 payload 混有多个域的数据，不能直接交给系统复制。按域导出与恢复归既有 BackupArchiveService/PendingBackupRestore；这不新增存储结构，也不改变应用内备份入口。部分厂商设备迁移不受 `allowBackup=false` 单独控制，因此保留显式排除规则，见 [Android 官方备份说明](https://developer.android.com/identity/data/autobackup)。
