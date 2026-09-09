@@ -161,7 +161,30 @@ class RootfsFileAccessTest {
         }
         assertThrows(IOException::class.java) { manager.writeRootfsText(root, "/workspace/linked", "bad", true, false) }
         assertThrows(IOException::class.java) { manager.updateRootfsText(root, "/workspace/linked", 1024, false) { "bad" } }
+        assertThrows(IllegalStateException::class.java) {
+            manager.openDocument(root, "linked", android.os.ParcelFileDescriptor.parseMode("wt"))
+        }
         assertEquals("protected", protected.readText())
+    }
+
+    @Test
+    fun directoryCapabilitySurvivesParentReplacementWithoutFollowingItsNewLink() {
+        val parent = File(manager.filesDir(root), "parent").apply { mkdirs() }
+        val saved = File(manager.filesDir(root), "saved")
+        File(parent, "target").writeText("original")
+        File(outside, "target").writeText("protected")
+        WorkspaceDirectoryHandle(manager.filesDir(root)).use { workspace ->
+            workspace.directory("parent").use { directory ->
+                assertTrue(parent.renameTo(saved))
+                Os.symlink(outside.path, parent.path)
+                directory.open("target", android.os.ParcelFileDescriptor.parseMode("wt")).use { }
+                directory.create("", "created", false)
+            }
+        }
+        assertEquals("", File(saved, "target").readText())
+        assertTrue(File(saved, "created").isFile)
+        assertEquals("protected", File(outside, "target").readText())
+        assertFalse(File(outside, "created").exists())
     }
 
     @Test

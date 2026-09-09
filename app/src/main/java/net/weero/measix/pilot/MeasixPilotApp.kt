@@ -31,7 +31,8 @@ import net.weero.measix.pilot.data.datastore.SettingsStore
 import net.weero.measix.pilot.data.sync.PendingBackupRestore
 import net.weero.measix.pilot.utils.CrashHandler
 import net.weero.measix.pilot.utils.DatabaseUtil
-import net.weero.measix.pilot.data.db.dao.WorkspaceDAO
+import net.weero.measix.pilot.service.workspace.WorkspaceApplicationService
+import net.weero.measix.pilot.service.workspace.WorkspaceQueryService
 import net.weero.measix.pilot.data.provider.WorkspaceDocumentsDependencies
 import me.rerere.workspace.WorkspaceManager
 import org.koin.android.ext.android.get
@@ -46,8 +47,8 @@ const val CHAT_COMPLETED_NOTIFICATION_CHANNEL_ID = "chat_completed"
 const val CHAT_LIVE_UPDATE_NOTIFICATION_CHANNEL_ID = "chat_live_update"
 
 class MeasixPilotApp : Application(), WorkspaceDocumentsDependencies {
-    override val workspaceManager: WorkspaceManager by lazy(LazyThreadSafetyMode.SYNCHRONIZED) { get() }
-    override val workspaceDao: WorkspaceDAO by lazy(LazyThreadSafetyMode.SYNCHRONIZED) { get() }
+    override val workspaceCommands: WorkspaceApplicationService by lazy(LazyThreadSafetyMode.SYNCHRONIZED) { get() }
+    override val workspaceQueries: WorkspaceQueryService by lazy(LazyThreadSafetyMode.SYNCHRONIZED) { get() }
 
     override fun onCreate() {
         super.onCreate()

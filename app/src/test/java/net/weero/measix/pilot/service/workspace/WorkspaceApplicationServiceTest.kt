@@ -24,6 +24,29 @@ class WorkspaceApplicationServiceTest {
         temporary.newFolder(), net.weero.measix.pilot.service.ApplicationRecoveryGate().apply { ready() },
     )
 
+    @Test fun `document mutation rechecks registration after waiting for the existing workspace gate`() = runTest {
+        val repository = mockk<WorkspaceRepository>()
+        var registered: WorkspaceEntity? = workspace()
+        coEvery { repository.getByRoot("root") } coAnswers { registered }
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        coEvery { repository.deleteFile("id", any(), "old", false) } coAnswers {
+            entered.complete(Unit)
+            release.await()
+            true
+        }
+        val service = workspaceService(repository, mockk())
+        val deletion = async { service.deleteFile("id", me.rerere.workspace.WorkspaceStorageArea.FILES, "old", false) }
+        entered.await()
+        val creation = async { runCatching { service.createDocument("root", "", "new", false) } }
+        runCurrent()
+        registered = null
+        release.complete(Unit)
+        deletion.await()
+        assertTrue(creation.await().isFailure)
+        coVerify(exactly = 0) { repository.createDocument(any(), any(), any(), any()) }
+    }
+
     @Test fun `cancelled input preparation cleans its partial directory and expired capabilities cannot escape`() = runTest {
         val repository = mockk<WorkspaceRepository>()
         coEvery { repository.getById("id") } returns workspace()

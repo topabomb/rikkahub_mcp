@@ -18,7 +18,26 @@ class WorkspaceQueryService internal constructor(
     private val repository: WorkspaceRepository,
     private val terminalRuntime: WorkspaceTerminalRuntime,
     private val sessions: EnterpriseSessionController,
+    private val recovery: net.weero.measix.pilot.service.ApplicationRecoveryGate,
 ) {
+    suspend fun document(root: String, path: String): WorkspaceDocumentUiModel? {
+        recovery.awaitReady()
+        val workspace = repository.getByRoot(root) ?: return null
+        val entry = repository.statDocument(root, path) ?: return null
+        return WorkspaceDocumentUiModel(root, workspace.name, entry)
+    }
+
+    suspend fun documentRoots(): List<WorkspaceDocumentUiModel> {
+        recovery.awaitReady()
+        return repository.allWorkspaces().mapNotNull { document(it.root, "") }
+    }
+
+    suspend fun documentChildren(root: String, path: String): List<WorkspaceDocumentUiModel> {
+        recovery.awaitReady()
+        val workspace = repository.getByRoot(root) ?: throw java.io.FileNotFoundException("Workspace not registered")
+        return repository.listDocuments(root, path).map { WorkspaceDocumentUiModel(root, workspace.name, it) }
+    }
+
     fun observeWorkspaces(): Flow<List<WorkspaceUiModel>> = repository.listFlow().map { workspaces ->
         workspaces.map { it.toUiModel() }
     }
@@ -91,3 +110,5 @@ data class WorkspaceTerminalScreenUiModel(
     val canCreateTerminal: Boolean = false,
     val terminal: WorkspaceTerminalWorkspaceState = WorkspaceTerminalWorkspaceState(),
 )
+
+data class WorkspaceDocumentUiModel(val root: String, val workspaceName: String, val entry: me.rerere.workspace.WorkspaceFileEntry)

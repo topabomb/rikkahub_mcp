@@ -3,329 +3,195 @@ package net.weero.measix.pilot.data.provider
 import android.database.Cursor
 import android.database.MatrixCursor
 import android.os.CancellationSignal
+import android.os.OperationCanceledException
 import android.os.ParcelFileDescriptor
 import android.provider.DocumentsContract
 import android.provider.DocumentsContract.Document
 import android.provider.DocumentsContract.Root
 import android.provider.DocumentsProvider
 import android.webkit.MimeTypeMap
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.runBlocking
 import net.weero.measix.pilot.R
-import net.weero.measix.pilot.data.db.dao.WorkspaceDAO
-import net.weero.measix.pilot.data.db.entity.WorkspaceEntity
-import me.rerere.workspace.WorkspaceManager
-import java.io.File
+import net.weero.measix.pilot.service.workspace.WorkspaceApplicationService
+import net.weero.measix.pilot.service.workspace.WorkspaceQueryService
+import net.weero.measix.pilot.service.workspace.WorkspaceDocumentUiModel
+import java.io.FileNotFoundException
 
-/**
- * 通过 Storage Access Framework 将 workspace 的 files 目录暴露给系统文件管理器。
- *
- * 目录结构：
- * ```
- * <root>
- * └── {workspace name}        <- 每个 workspace（虚拟目录，对应 files/ 目录）
- *     └── ...                 <- files/ 目录下的实际文件
- * ```
- *
- * documentId 设计：
- * - 顶层根：[ROOT_DOC_ID]
- * - workspace 根目录：`ws/{root}`（root 为 workspace 在磁盘上的目录名，即 UUID）
- * - workspace 内文件：`ws/{root}/{相对 files/ 的路径}`
- */
 interface WorkspaceDocumentsDependencies {
-    val workspaceManager: WorkspaceManager
-    val workspaceDao: WorkspaceDAO
+    val workspaceCommands: WorkspaceApplicationService
+    val workspaceQueries: WorkspaceQueryService
 }
 
+/** Presents registered shared Workspaces through their existing command and query owners. */
 class WorkspaceDocumentsProvider : DocumentsProvider() {
+    private val dependencies get() = requireNotNull(context?.applicationContext as? WorkspaceDocumentsDependencies)
+    private val commands get() = dependencies.workspaceCommands
+    private val queries get() = dependencies.workspaceQueries
 
-    private fun dependencies(): WorkspaceDocumentsDependencies =
-        requireNotNull(context?.applicationContext as? WorkspaceDocumentsDependencies) {
-            "Application does not provide WorkspaceDocumentsDependencies"
-        }
+    override fun onCreate() = true
 
-    private fun manager(): WorkspaceManager = dependencies().workspaceManager
-
-    private fun allWorkspaces(): List<WorkspaceEntity> = runBlocking { dependencies().workspaceDao.getAll() }
-
-    private fun workspaceName(root: String): String =
-        allWorkspaces().firstOrNull { it.root == root }?.name ?: root
-
-    override fun onCreate(): Boolean = true
-
-    override fun queryRoots(projection: Array<String>?): Cursor {
-        val cursor = MatrixCursor(projection ?: DEFAULT_ROOT_PROJECTION)
-        val ctx = context ?: return cursor
-        cursor.newRow().apply {
+    override fun queryRoots(projection: Array<String>?): Cursor = MatrixCursor(projection ?: DEFAULT_ROOT_PROJECTION).apply {
+        val ctx = requireNotNull(context)
+        newRow().apply {
             add(Root.COLUMN_ROOT_ID, ROOT_ID)
             add(Root.COLUMN_DOCUMENT_ID, ROOT_DOC_ID)
             add(Root.COLUMN_TITLE, ctx.getString(R.string.app_name))
-            add(
-                Root.COLUMN_FLAGS,
-                Root.FLAG_LOCAL_ONLY or Root.FLAG_SUPPORTS_IS_CHILD or Root.FLAG_SUPPORTS_CREATE,
-            )
+            add(Root.COLUMN_FLAGS, Root.FLAG_LOCAL_ONLY or Root.FLAG_SUPPORTS_IS_CHILD)
             add(Root.COLUMN_ICON, R.mipmap.ic_launcher)
             add(Root.COLUMN_MIME_TYPES, "*/*")
         }
-        return cursor
     }
 
-    override fun queryDocument(documentId: String, projection: Array<String>?): Cursor {
-        val cursor = MatrixCursor(projection ?: DEFAULT_DOCUMENT_PROJECTION)
-        val target = parseDocId(documentId)
-        if (target.isRoot) {
-            cursor.newRow().apply {
+    override fun queryDocument(documentId: String, projection: Array<String>?): Cursor =
+        MatrixCursor(projection ?: DEFAULT_DOCUMENT_PROJECTION).apply {
+            val target = parseDocId(documentId)
+            if (target.isRoot) newRow().apply {
                 add(Document.COLUMN_DOCUMENT_ID, ROOT_DOC_ID)
                 add(Document.COLUMN_DISPLAY_NAME, context?.getString(R.string.app_name))
                 add(Document.COLUMN_MIME_TYPE, Document.MIME_TYPE_DIR)
                 add(Document.COLUMN_FLAGS, 0)
                 add(Document.COLUMN_SIZE, null)
                 add(Document.COLUMN_LAST_MODIFIED, null)
-            }
-        } else {
-            val file = resolveFile(target.root, target.relPath)
-            if (file.exists()) {
-                addFileRow(cursor, target.root, file)
-            }
+            } else runBlocking { queries.document(target.root, target.path) }?.let { addFileRow(this, it) }
         }
-        return cursor
-    }
 
-    override fun queryChildDocuments(
-        parentDocumentId: String,
-        projection: Array<String>?,
-        sortOrder: String?,
-    ): Cursor {
-        val cursor = MatrixCursor(projection ?: DEFAULT_DOCUMENT_PROJECTION)
-        val parent = parseDocId(parentDocumentId)
-        if (parent.isRoot) {
-            // 顶层：列出所有 workspace
-            for (ws in allWorkspaces()) {
-                val dir = manager().filesDir(ws.root).also { it.mkdirs() }
-                addFileRow(cursor, ws.root, dir)
+    override fun queryChildDocuments(parentDocumentId: String, projection: Array<String>?, sortOrder: String?): Cursor =
+        MatrixCursor(projection ?: DEFAULT_DOCUMENT_PROJECTION).apply {
+            val parent = parseDocId(parentDocumentId)
+            val documents = runBlocking {
+                if (parent.isRoot) queries.documentRoots() else queries.documentChildren(parent.root, parent.path)
             }
-        } else {
-            val dir = resolveFile(parent.root, parent.relPath)
-            if (dir.isDirectory) {
-                dir.listFiles()
-                    .orEmpty()
-                    .filter { !it.name.startsWith(".l2s.") }
-                    .sortedWith(compareBy<File> { !it.isDirectory }.thenBy { it.name.lowercase() })
-                    .forEach { addFileRow(cursor, parent.root, it) }
-            }
+            documents.forEach { addFileRow(this, it) }
         }
-        return cursor
-    }
 
-    override fun openDocument(
-        documentId: String,
-        mode: String,
-        signal: CancellationSignal?,
-    ): ParcelFileDescriptor {
+    override fun openDocument(documentId: String, mode: String, signal: CancellationSignal?): ParcelFileDescriptor {
         val target = parseDocId(documentId)
-        require(!target.isRoot) { "Cannot open root as a document" }
-        val file = resolveFile(target.root, target.relPath)
-        return ParcelFileDescriptor.open(file, ParcelFileDescriptor.parseMode(mode))
+        require(!target.isRoot && target.path.isNotEmpty()) { "Cannot open a Workspace root" }
+        val job = Job()
+        var opened: ParcelFileDescriptor? = null
+        var failure: Throwable? = null
+        signal?.setOnCancelListener { job.cancel() }
+        try {
+            runBlocking(job) { opened = commands.openDocument(target.root, target.path, ParcelFileDescriptor.parseMode(mode)) }
+            signal?.throwIfCanceled()
+            return requireNotNull(opened).also { opened = null }
+        } catch (cancelled: CancellationException) {
+            throw OperationCanceledException().also { it.initCause(cancelled); failure = it }
+        } catch (error: Throwable) { failure = error; throw error }
+        finally {
+            signal?.setOnCancelListener(null)
+            job.cancel()
+            try { opened?.close() } catch (cleanup: Throwable) { failure?.addSuppressed(cleanup) ?: throw cleanup }
+        }
     }
 
-    override fun createDocument(
-        parentDocumentId: String,
-        mimeType: String,
-        displayName: String,
-    ): String {
+    override fun createDocument(parentDocumentId: String, mimeType: String, displayName: String): String {
         val parent = parseDocId(parentDocumentId)
-        require(!parent.isRoot) { "Cannot create document at root" }
-        manager().ensureWorkspace(parent.root)
-        val parentDir = resolveFile(parent.root, parent.relPath)
-        require(parentDir.isDirectory) { "Parent is not a directory" }
-        val target = uniqueChild(parentDir, displayName)
-        if (mimeType == Document.MIME_TYPE_DIR) {
-            require(target.mkdir()) { "Failed to create directory: $displayName" }
-        } else {
-            require(target.createNewFile()) { "Failed to create file: $displayName" }
-        }
+        require(!parent.isRoot)
+        val path = runBlocking { commands.createDocument(parent.root, parent.path, displayName, mimeType == Document.MIME_TYPE_DIR) }
         notifyChange(parentDocumentId)
-        return buildDocId(parent.root, relPathOf(parent.root, target))
+        return buildDocId(parent.root, path)
     }
 
     override fun deleteDocument(documentId: String) {
         val target = parseDocId(documentId)
-        require(!target.isRoot && target.relPath.isNotEmpty()) { "Cannot delete this document" }
-        val file = resolveFile(target.root, target.relPath)
-        val ok = if (file.isDirectory) file.deleteRecursively() else file.delete()
-        require(ok) { "Failed to delete: $documentId" }
-        notifyChange(buildDocId(target.root, target.relPath.substringBeforeLast('/', "")))
+        require(!target.isRoot && target.path.isNotEmpty())
+        try { runBlocking { commands.deleteDocument(target.root, target.path) } }
+        finally { notifyChange(target.parentId) }
     }
 
     override fun renameDocument(documentId: String, displayName: String): String {
         val target = parseDocId(documentId)
-        require(!target.isRoot && target.relPath.isNotEmpty()) { "Cannot rename this document" }
-        val file = resolveFile(target.root, target.relPath)
-        val dest = File(file.parentFile, displayName.replace('/', '_'))
-        require(!dest.exists()) { "Target already exists: $displayName" }
-        require(file.renameTo(dest)) { "Failed to rename: $documentId" }
-        notifyChange(buildDocId(target.root, target.relPath.substringBeforeLast('/', "")))
-        return buildDocId(target.root, relPathOf(target.root, dest))
+        require(!target.isRoot && target.path.isNotEmpty())
+        val path = try { runBlocking { commands.renameDocument(target.root, target.path, displayName) } }
+        finally { notifyChange(target.parentId) }
+        return buildDocId(target.root, path)
     }
 
-    override fun copyDocument(sourceDocumentId: String, targetParentDocumentId: String): String {
+    override fun copyDocument(sourceDocumentId: String, targetParentDocumentId: String): String =
+        transfer(sourceDocumentId, targetParentDocumentId, move = false)
+
+    override fun moveDocument(sourceDocumentId: String, sourceParentDocumentId: String?, targetParentDocumentId: String): String {
         val source = parseDocId(sourceDocumentId)
-        val targetParent = parseDocId(targetParentDocumentId)
-        require(!source.isRoot && source.relPath.isNotEmpty()) { "Cannot copy this document" }
-        require(!targetParent.isRoot) { "Cannot copy to root" }
-        val srcFile = resolveFile(source.root, source.relPath)
-        val destDir = resolveFile(targetParent.root, targetParent.relPath)
-        require(destDir.isDirectory) { "Target is not a directory" }
-        val dest = uniqueChild(destDir, srcFile.name)
-        // 防止把目录复制到自身内部
-        require(!dest.canonicalPath.startsWith(srcFile.canonicalPath + File.separator)) {
-            "Cannot copy a directory into itself"
-        }
-        require(srcFile.copyRecursively(dest)) { "Failed to copy: $sourceDocumentId" }
-        notifyChange(targetParentDocumentId)
-        return buildDocId(targetParent.root, relPathOf(targetParent.root, dest))
+        require(sourceParentDocumentId == source.parentId) { "Source parent does not match document" }
+        return transfer(sourceDocumentId, targetParentDocumentId, move = true)
     }
 
-    override fun moveDocument(
-        sourceDocumentId: String,
-        sourceParentDocumentId: String?,
-        targetParentDocumentId: String,
-    ): String {
+    private fun transfer(sourceDocumentId: String, targetParentDocumentId: String, move: Boolean): String {
         val source = parseDocId(sourceDocumentId)
-        val targetParent = parseDocId(targetParentDocumentId)
-        require(!source.isRoot && source.relPath.isNotEmpty()) { "Cannot move this document" }
-        require(!targetParent.isRoot) { "Cannot move to root" }
-        val srcFile = resolveFile(source.root, source.relPath)
-        val destDir = resolveFile(targetParent.root, targetParent.relPath)
-        require(destDir.isDirectory) { "Target is not a directory" }
-        val dest = uniqueChild(destDir, srcFile.name)
-        // 防止把目录移动到自身内部
-        require(!dest.canonicalPath.startsWith(srcFile.canonicalPath + File.separator)) {
-            "Cannot move a directory into itself"
+        val target = parseDocId(targetParentDocumentId)
+        require(!source.isRoot && source.path.isNotEmpty() && !target.isRoot)
+        val path = try {
+            runBlocking { commands.transferDocument(source.root, source.path, target.root, target.path, move) }
+        } finally {
+            notifyChange(targetParentDocumentId)
+            if (move) notifyChange(source.parentId)
         }
-        if (!srcFile.renameTo(dest)) {
-            // 所有 workspace 都在应用私有目录下，renameTo 一般可行；失败则回退为复制+删除
-            require(srcFile.copyRecursively(dest)) { "Failed to move: $sourceDocumentId" }
-            require(if (srcFile.isDirectory) srcFile.deleteRecursively() else srcFile.delete()) {
-                "Failed to remove source after move: $sourceDocumentId"
-            }
-        }
-        notifyChange(buildDocId(source.root, source.relPath.substringBeforeLast('/', "")))
-        notifyChange(targetParentDocumentId)
-        return buildDocId(targetParent.root, relPathOf(targetParent.root, dest))
+        return buildDocId(target.root, path)
     }
 
     override fun getDocumentType(documentId: String): String {
         val target = parseDocId(documentId)
         if (target.isRoot) return Document.MIME_TYPE_DIR
-        return mimeOf(resolveFile(target.root, target.relPath))
+        return mimeOf(runBlocking { queries.document(target.root, target.path) } ?: throw FileNotFoundException(documentId))
     }
 
     override fun isChildDocument(parentDocumentId: String, documentId: String): Boolean {
         val parent = parseDocId(parentDocumentId)
         val child = parseDocId(documentId)
-        if (child.isRoot) return false
-        if (parent.isRoot) return true
-        if (parent.root != child.root) return false
-        if (parent.relPath.isEmpty()) return true
-        return child.relPath == parent.relPath || child.relPath.startsWith(parent.relPath + "/")
+        if (child.isRoot || parent == child) return false
+        return runBlocking {
+            if (queries.document(child.root, child.path) == null) false
+            else if (parent.isRoot) true
+            else if (parent.root != child.root || queries.document(parent.root, parent.path)?.entry?.isDirectory != true) false
+            else parent.path.isEmpty() || child.path.startsWith(parent.path + "/")
+        }
     }
 
-    // --- helpers ---
-
-    private fun addFileRow(cursor: MatrixCursor, root: String, file: File) {
-        val relPath = relPathOf(root, file)
-        val isDir = file.isDirectory
-        val flags = when {
-            // workspace 根目录：仅允许在其内部创建文件，不能删除/重命名 workspace 本身
-            relPath.isEmpty() -> Document.FLAG_DIR_SUPPORTS_CREATE
-            isDir -> Document.FLAG_DIR_SUPPORTS_CREATE or
-                Document.FLAG_SUPPORTS_DELETE or Document.FLAG_SUPPORTS_RENAME or
-                Document.FLAG_SUPPORTS_COPY or Document.FLAG_SUPPORTS_MOVE
-            else -> Document.FLAG_SUPPORTS_WRITE or
-                Document.FLAG_SUPPORTS_DELETE or Document.FLAG_SUPPORTS_RENAME or
-                Document.FLAG_SUPPORTS_COPY or Document.FLAG_SUPPORTS_MOVE
-        }
+    private fun addFileRow(cursor: MatrixCursor, model: WorkspaceDocumentUiModel) {
+        val file = model.entry
+        val flags = if (file.path.isEmpty()) Document.FLAG_DIR_SUPPORTS_CREATE else
+            Document.FLAG_SUPPORTS_DELETE or Document.FLAG_SUPPORTS_RENAME or Document.FLAG_SUPPORTS_COPY or Document.FLAG_SUPPORTS_MOVE or
+                if (file.isDirectory) Document.FLAG_DIR_SUPPORTS_CREATE else Document.FLAG_SUPPORTS_WRITE
         cursor.newRow().apply {
-            add(Document.COLUMN_DOCUMENT_ID, buildDocId(root, relPath))
-            add(Document.COLUMN_DISPLAY_NAME, if (relPath.isEmpty()) workspaceName(root) else file.name)
-            add(Document.COLUMN_MIME_TYPE, if (isDir) Document.MIME_TYPE_DIR else mimeOf(file))
+            add(Document.COLUMN_DOCUMENT_ID, buildDocId(model.root, file.path))
+            add(Document.COLUMN_DISPLAY_NAME, if (file.path.isEmpty()) model.workspaceName else file.name)
+            add(Document.COLUMN_MIME_TYPE, mimeOf(model))
             add(Document.COLUMN_FLAGS, flags)
-            add(Document.COLUMN_SIZE, if (isDir) null else file.length())
-            add(Document.COLUMN_LAST_MODIFIED, file.lastModified())
+            add(Document.COLUMN_SIZE, if (file.isDirectory) null else file.sizeBytes)
+            add(Document.COLUMN_LAST_MODIFIED, file.updatedAt)
         }
     }
 
-    private fun mimeOf(file: File): String {
-        if (file.isDirectory) return Document.MIME_TYPE_DIR
-        val ext = file.extension.lowercase()
-        return ext.takeIf { it.isNotEmpty() }
-            ?.let { MimeTypeMap.getSingleton().getMimeTypeFromExtension(it) }
-            ?: "application/octet-stream"
-    }
-
-    private fun uniqueChild(parent: File, name: String): File {
-        val safe = name.replace('/', '_').ifBlank { "untitled" }
-        var candidate = File(parent, safe)
-        if (!candidate.exists()) return candidate
-        val stem = candidate.nameWithoutExtension
-        val ext = candidate.extension.let { if (it.isNotEmpty()) ".$it" else "" }
-        var n = 1
-        do {
-            candidate = File(parent, "$stem ($n)$ext")
-            n++
-        } while (candidate.exists())
-        return candidate
-    }
-
-    /** 将 workspace files 目录下的文件解析为相对路径（root 自身返回空串） */
-    private fun relPathOf(root: String, file: File): String {
-        val base = manager().filesDir(root).canonicalFile
-        return file.canonicalFile.relativeTo(base).path.replace(File.separatorChar, '/')
-    }
-
-    /** 解析 documentId 指向的实际文件，并校验路径不逃逸 workspace files 目录 */
-    private fun resolveFile(root: String, relPath: String): File {
-        val base = manager().filesDir(root).canonicalFile
-        base.mkdirs()
-        val normalized = relPath.trim().trimStart('/')
-        require(!normalized.contains('\u0000')) { "Path contains invalid character" }
-        if (normalized.isEmpty()) return base
-        val target = File(base, normalized).canonicalFile
-        require(target.path == base.path || target.path.startsWith(base.path + File.separator)) {
-            "Path escapes workspace root: $relPath"
-        }
-        return target
-    }
+    private fun mimeOf(model: WorkspaceDocumentUiModel): String = if (model.entry.isDirectory) Document.MIME_TYPE_DIR else
+        MimeTypeMap.getSingleton().getMimeTypeFromExtension(model.entry.name.substringAfterLast('.', "").lowercase()) ?: "application/octet-stream"
 
     private fun parseDocId(documentId: String): DocId {
-        if (documentId == ROOT_DOC_ID) return DocId(isRoot = true, root = "", relPath = "")
-        require(documentId.startsWith(DOC_PREFIX)) { "Invalid documentId: $documentId" }
+        if (documentId == ROOT_DOC_ID) return DocId(true, "", "")
+        require(documentId.startsWith(DOC_PREFIX)) { "Invalid document ID" }
         val rest = documentId.removePrefix(DOC_PREFIX)
-        val idx = rest.indexOf('/')
-        return if (idx < 0) {
-            DocId(isRoot = false, root = rest, relPath = "")
-        } else {
-            DocId(isRoot = false, root = rest.substring(0, idx), relPath = rest.substring(idx + 1))
-        }
+        val root = rest.substringBefore('/')
+        val path = rest.substringAfter('/', "")
+        require(root.matches(Regex("[A-Za-z0-9._-]+")) && root != "." && root != "..") { "Invalid Workspace root" }
+        require('/' !in rest || path.isNotEmpty()) { "Invalid document path" }
+        require(path.isEmpty() || path.split('/').all { part ->
+            part.isNotEmpty() && part != "." && part != ".." && part.none { it == '\u0000' }
+        }) { "Invalid document path" }
+        return DocId(false, root, path)
     }
 
-    private fun buildDocId(root: String, relPath: String): String =
-        if (relPath.isEmpty()) "$DOC_PREFIX$root" else "$DOC_PREFIX$root/$relPath"
+    private fun buildDocId(root: String, path: String) = if (path.isEmpty()) "$DOC_PREFIX$root" else "$DOC_PREFIX$root/$path"
 
     private fun notifyChange(parentDocumentId: String) {
-        val ctx = context ?: return
-        val uri = DocumentsContract.buildChildDocumentsUri(
-            ctx.packageName + ".documents",
-            parentDocumentId,
-        )
-        ctx.contentResolver.notifyChange(uri, null)
+        val ctx = requireNotNull(context)
+        ctx.contentResolver.notifyChange(DocumentsContract.buildChildDocumentsUri(ctx.packageName + ".documents", parentDocumentId), null)
     }
 
-    private data class DocId(
-        val isRoot: Boolean,
-        val root: String,
-        val relPath: String,
-    )
+    private data class DocId(val isRoot: Boolean, val root: String, val path: String) {
+        val parentId get() = "ws/$root" + path.substringBeforeLast('/', "").let { if (it.isEmpty()) "" else "/$it" }
+    }
 
     companion object {
         private const val ROOT_ID = "rikkahub_workspaces"

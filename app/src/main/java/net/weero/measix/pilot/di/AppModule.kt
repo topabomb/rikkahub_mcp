@@ -84,7 +84,7 @@ val appModule = module {
     single { ProviderSettingsApplicationService(get(), get()) }
     single { WorkspaceTerminalRuntime(get(), get(), get()) }
     single { WorkspaceApplicationService(get(), get(), get(), get(), java.io.File(get<Context>().cacheDir, "temp"), get()) }
-    single { WorkspaceQueryService(get(), get(), get()) }
+    single { WorkspaceQueryService(get(), get(), get(), get()) }
 
     single {
         AppEventBus()

@@ -144,7 +144,7 @@ UserConfiguration + UserPreferences + Applied Enterprise State
 - typed 配置引用保留 Local UUID 原值和 Managed `prv_/mdl_/mcp_/asd_/str_` 原字符串，不 hash/strip 为 UUID。路由、会话、Folder/Memory、缓存与历史显示一起迁移，不只改数据库列。
 - 一个 AppDatabase；Conversation、Memory、Artifact、GenMedia、Folder/Favorite 等独立根保存必要 scope。MessageNode/Turn/Tool/Disclosure 从可靠外键派生，不新增平行可变真源。
 - 旧数据全归 PERSONAL，原 ID/内容/排序/引用/文件不变；旧选择只进入个人偏好。Draft 首消息事务和 Child lineage 不变。新企业记录创建时确定域/主体。
-- 查询/命令/FTS/统计/收藏/最近聊天/文件/deep link/通知/SAF/子助手都校验 scope，不先全量读取再 UI 过滤。
+- 会话与本域文件的查询/命令/FTS/统计/收藏/最近聊天/deep link/通知/子助手都校验 scope，不先全量读取再 UI 过滤。SAF 只暴露下述显式共享 Workspace，校验已注册 root 与文件访问边界，不额外建立当前域目录。
 - C4 的会话入口明确区分创建 Draft 与打开既有记录；不存在的既有 ID 返回 Missing，外域 ID 返回拒绝，不能借 loadOrRegisterDraft 变成新聊天。ConversationViewLease 携带从持久 header 或已注册 Draft 捕获的原 RealmAccess；ChatVM 先取得页面授权，再订阅会话、turn、附件、收藏和活动，关闭或授权撤销时清空投影。lastConversationId 移入按域偏好，旧 SharedPreferences 值只迁入个人域，构造 ViewModel 时不再直接写全局值。
 - C4 的命令授权覆盖 resident、仅 header 和完整加载三个分支，并与提交/发布保持同一顺序；新增 START 与继续用户交互沿用原授权。停止后删除分成校验并请求取消、释放锁等待任务结束、用原授权重新提交三个步骤，不能持有 Session 锁等待仍需记忆/配置授权的任务。已取得 TurnHandle 的终态收口与恢复继续使用现有 typed owner，不能新增通用跳过授权开关。Memory 等已持 Session 锁的调用使用明确的内部已授权读取边界，避免重复获取不可重入锁。
 - Child 从父会话复制 scope；创建、导入和 fork 都验证父子同域。移动到 Folder 同时验证 scope 与 assistant reference；收藏必须由原会话 owner 核实节点归属，不能信任 UI 传来的快照。撤销 token、缓存和已加载 Runtime 保留原 scope 并复验授权，不能因避开 DAO 而跳过隔离。
@@ -341,7 +341,7 @@ Android 媒体接线按下列所有权完成：`PortalMediaStore` 管理独占�
 | 模型消费者（C5） | 主/子、标题/建议/摘要、附件识别和图片生成已接入原域模型捕获、逐请求准入与 binding；完整工具调用示例继续实施 |
 | MCP / Gateway（C5、U2） | 企业固定选择已有 UI；仍需接通原 MCP runtime/catalog/OAuth owner、企业 binding 与示例实际工具执行 |
 | 语音（C5、U2） | 仍需 TTS/ASR 的企业/用户目录、私有 binding、原请求准入及本地音频/转写 adapter |
-| 文件与 Workspace（C6） | 会话/记忆、目录、图片、背景、参考输入及附件/富文本出口已分域验证；共享配置资产进入聊天的复制及 Workspace 上传/终端/SAF 边界仍需收口 |
+| 文件与 Workspace（C6） | 会话/记忆、目录、图片、背景、参考输入及附件/富文本出口已分域验证；Workspace 上传/终端/SAF 已完成本批实现与完整门禁；共享配置资产进入聊天的复制仍待完成 |
 | 个人备份（C7） | 个人 Settings 保全已实现；备份仍需个人闭合图导出、恢复合并保全最新企业图和系统备份边界，不能用 Settings 测试代表数据保全 |
 | 完整示例与 UI（M1、U2） | 正式企业入口、Portal、公开模板和私有文件 ignore 已有；仍需原生整包导入/场景管理、工具批次 mock、Starter 预填及剩余资源/助手页面 |
 | 退休与发行（R1、V1） | 消费者完成后删除旧 managed overlay 链，再做 E01–E12、Release/硬件验收和版本 20 交付；真实后台属于下一阶段 |
@@ -592,8 +592,12 @@ Workspace 输入交付已接通原 RealmAccess：原生 `/upload` 读取由 Arti
 
 该批独立审查无剩余实质问题。最终串行 `test assembleDebug lintDebug assembleRelease connectedDebugAndroidTest` 通过（13 分 59 秒）：App 2,081 项 JVM、Android 17 模拟器 App 179 项与 Speech 6 项无失败；lint 0 错误、290 警告。Workspace JVM 48 项中保留 11 项 Windows 条件跳过，设备 11 项中保留 1 项硬链接条件跳过。首次全量运行遇到 JBR 编译器自身崩溃，保留诊断后原代码完整重跑通过，未放宽断言。应用设备用例使用真实 Room/Artifact/文件与受控 Shell adapter，进程终止另由确定性 Process 用例验证，不冒充真实 PRoot 命令验收。分层证据见 `build/reports/enterprise/workspace-input-verification.json`。
 
-Workspace PTY 已完成实现、独立复审与完整门禁；SAF 仍待接线：原 Session 保留终端，原选择版本约束输入与页面操作；切域在发布新选择前永久退休旧 viewport，返回同一有效 Session 可用新视图接回原 PTY。绑定和输入等待原 Session 准入，锁忙不能静默丢弃按键；已接受关闭即使页面取消也继续收口，失败保留 owner 供重试。SAF 仍暴露共享 Workspace，经既有应用/查询入口与描述符安全操作完成，不另建当前域状态。沿用 PRoot 的既有非内核沙箱边界：限制应用交付的文件并保护原 Artifact，不宣称能够阻断恶意 Shell 的所有宿主访问。共享配置资产复制、MCP/Gateway、Speech、备份及版本 20 整体验收继续实施；当前版本仍为 0.0.19。
+Workspace PTY 与 SAF 已完成实现、独立复审与完整门禁：原 Session 保留终端，原选择版本约束输入与页面操作；切域在发布新选择前永久退休旧 viewport，返回同一有效 Session 可用新视图接回原 PTY。绑定和输入等待原 Session 准入，锁忙不能静默丢弃按键；已接受关闭即使页面取消也继续收口，失败保留 owner 供重试。SAF 暴露共享 Workspace，经既有应用/查询入口与描述符操作完成，不另建当前域状态。沿用 PRoot 的既有非内核沙箱边界：限制应用交付的文件并保护原 Artifact，不宣称能够阻断恶意 Shell 的所有宿主访问。共享配置资产复制、MCP/Gateway、Speech、备份及版本 20 整体验收继续实施；当前版本仍为 0.0.19。
 
 PTY 最终串行 `test assembleDebug lintDebug assembleRelease connectedDebugAndroidTest` 通过（9 分 7 秒）：App 2,083 项 JVM、Android 17 模拟器 App 186 项与 Speech 6 项无失败；App lint 0 错误、287 警告，Workspace lint 0 错误、11 警告。Workspace JVM 保留 11 项 Windows 条件跳过，设备 11 项中保留 1 项硬链接条件跳过。分层结果见 `build/reports/enterprise/workspace-terminal-verification.json`。
 
 新增设备消费者验证包含 6 项原生 PTY 场景和 1 项实际 Compose 页面场景：真实 JNI 与系统 shell 覆盖阻塞输入、自动回复、中文长文本、输入上限、取消、旧 IME/autofill 拒绝及切域失败；Compose 验证标签切换、物理视图退休/重建和扩展键路由。完整回归暴露的首次绑定轮询超时已改用 Compose 空闲同步，断言不放宽。原生 open/fork 失败抛错、waitpid 重试 EINTR、信号退出按 JNI 约定返回负值。本批未新增数据库或配置结构，不代表 PRoot 全场景、Release 设备或真实平台验收。
+
+SAF 批次已删除 Provider 直连 DAO/Manager、查询时建目录以及移动失败后的复制删除回退。URI 保持 `ws/{root}/{path}`，注册查找复用 `root` 唯一索引；命令复用既有 workspaceId stripe，双操作去重排序并在锁内复验。底层与 Rootfs 复用同一 JNI 文件设施，目录句柄处理 NOFOLLOW、验证后截断和原子重命名；复制 staging 使用既有 `tmp/`，失败按原所有权清理，普通用户文件名不被隐藏。描述符移交后归外部客户端，不承诺随切域撤销。
+
+该批最终串行 `test assembleDebug lintDebug assembleRelease connectedDebugAndroidTest` 通过（13 分 59 秒）：App 2,085 项 JVM、Android 17 模拟器 App 189 项与 Speech 6 项无失败；App/Workspace lint 均为 0 错误，分别有 287/11 项警告。Workspace JVM 保留 11 项 Windows 条件跳过，设备 12 项中保留 1 项硬链接条件跳过。真实 Provider/Room/JNI 消费者覆盖注册操作、锁冲突、缺失目录、非法 URI、符号链接、复制失败清理和 PFD 取消；目录句柄另验证路径替换后仍作用原目录。未新增表、索引或配置结构。证据见 `build/reports/enterprise/workspace-documents-verification.json`；此批不代替系统文件选择器人工验收、Release 设备、完整 PRoot 或真实平台验收。其余 C6、MCP/Gateway、Speech、备份、UI/示例与版本 20 整体验收继续实施。

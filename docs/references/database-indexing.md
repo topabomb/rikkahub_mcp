@@ -17,7 +17,7 @@
 | `favorites` | 保留 `ref_key` 唯一索引与 `(created_at)`；`(type, created_at)` 支持分类后的时间排序 |
 | `turn_execution` | 保留 `(conversation_id)` 与 `(status)`，分别支持归属查询、非终态恢复 |
 | `tool_execution` | `(turn_id)` 支持归属查询；唯一 `(turn_id, local_call_id)` 约束调用身份；`(child_conversation_id)` 保留 Child 关系查询。恢复按 `turn_id` 读取执行事实并验证 Child Turn/run，不为无独立查询的 `child_turn_id`、`sub_assistant_run_id` 建索引；无全局 status 查询，不建 status 索引 |
-| `workspaces` | 保留 `root` 唯一索引与 `(updated_at)`，支持路径唯一性和列表排序；主键用于 Workspace 点查 |
+| `workspaces` | 保留 `root` 唯一索引与 `(updated_at)`，支持路径唯一性、SAF 的 `getByRoot` 注册查找及列表排序；主键用于 Workspace 点查，SAF 不新增表或索引 |
 | `system_meta` | 现有主键满足 key 点查，无额外业务筛选索引 |
 
 复合索引优先让等值筛选字段位于排序字段前。助手全列表与未归档列表分别建索引：后者需要 `folder_id` 参与范围定位，前者不能被中间的 `folder_id` 打断排序。全部排序方向一致时 SQLite 可反向扫描，无需另外建立 DESC 镜像索引。
@@ -34,8 +34,8 @@
 
 `Migration_11_12` 给 Conversation、Memory、Artifact、生成媒体、会话文件夹和收藏六类根记录追加 `scope TEXT NOT NULL DEFAULT 'personal'`。旧行的 ID、payload、引用、索引和外键不变；消息、turn、tool 和 context 通过所属会话确定域，不重复保存。ConfigurationScopeConverter 使用规范身份编码保存企业来源、部署与用户，非法编码不能回退个人域。
 
-会话助手列表、最近聊天、置顶、未归类/文件夹分页、文件夹列表和统计均在 SQL 内过滤完整 scope。FTS 在排序与限额之前经所属会话过滤 scope 和主会话，包含全局搜索与助手内搜索；索引仍是既有 message_fts 投影，不复制域数据。ConversationQueryService 负责选中域订阅及原 Session 授权，SelectedRealmPagingSource 对每次惰性加载重新校验，切域或结束订阅使旧源失效。此查询调整不改变 schema 或索引；按 ID 的页面/命令、收藏及文件访问尚未全面接入域授权，不能视为完整访问隔离。
+会话助手列表、最近聊天、置顶、未归类/文件夹分页、文件夹列表和统计均在 SQL 内过滤完整 scope。FTS 在排序与限额之前经所属会话过滤 scope 和主会话，包含全局搜索与助手内搜索；索引仍是既有 message_fts 投影，不复制域数据。ConversationQueryService 负责选中域订阅及原 Session 授权，SelectedRealmPagingSource 对每次惰性加载重新校验，切域或结束订阅使旧源失效。此查询调整不改变 schema 或索引；按 ID 的页面与命令授权另由对应 application owner 校验，不能以索引代替访问授权。
 
 迁移由 Room 在事务内执行，新安装直接使用同构 schema。所有角色的消息均须可解码；旧字段的显式 null 按既有缺省语义处理，错误类型、未知 turn 状态或未知消息 part 必须中止迁移，不得置空后继续。备份校验接受受支持的历史数据库，在 staging 内由同一 Room migration 链升级到当前版本并验证后才发布 pending；当前版本在 staging 移除派生的 `room_master_table`，使 Room 打开时执行生成的 schema 校验并重建标记，不能仅凭既有 identity hash 信任表、列和索引。所有版本另行校验外键和 transcript；当前版本不转换 transcript，不为旧文件名引入额外读取路径。
 
-架构相关入口：`AppDatabase`、`AppDatabaseFactory`、各 `*Entity` / `*DAO`、`Migration_8_9`、`Migration_9_10`、`Migration_10_11`、`BackupArchiveService`。迁移验证覆盖历史链、新旧 schema、数据与约束保全，并用 Android SQLite 的 `EXPLAIN QUERY PLAN` 检查主要查询的索引和排序行为；查询计划验证不等于设备耗时基准。
+架构相关入口：`AppDatabase`、`AppDatabaseFactory`、各 `*Entity` / `*DAO`、`Migration_8_9`、`Migration_9_10`、`Migration_10_11`、`Migration_11_12`、`BackupArchiveService`。迁移验证覆盖历史链、新旧 schema、数据与约束保全，并用 Android SQLite 的 `EXPLAIN QUERY PLAN` 检查主要查询的索引和排序行为；查询计划验证不等于设备耗时基准。

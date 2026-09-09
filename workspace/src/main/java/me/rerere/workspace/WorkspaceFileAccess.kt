@@ -12,29 +12,36 @@ internal class RootfsFileHandle(
     create: Boolean,
     overwrite: Boolean,
 ) : Closeable {
-    private var handle = RootfsFileAccess.open(
+    private var handle = WorkspaceFileAccess.open(
         directory.absolutePath.toByteArray(Charsets.UTF_8), path.toByteArray(Charsets.UTF_8),
         writable, create, overwrite,
     )
 
-    fun read(maxBytes: Long): ByteArray = RootfsFileAccess.read(handle, maxBytes)
+    fun read(maxBytes: Long): ByteArray = WorkspaceFileAccess.read(handle, maxBytes)
 
-    fun write(bytes: ByteArray): LongArray = RootfsFileAccess.write(handle, bytes)
+    fun write(bytes: ByteArray): LongArray = WorkspaceFileAccess.write(handle, bytes)
 
     override fun close() {
         if (handle != 0L) {
-            RootfsFileAccess.close(handle)
+            WorkspaceFileAccess.close(handle)
             handle = 0L
         }
     }
 }
 
 @Keep
-internal object RootfsFileAccess {
+internal object WorkspaceFileAccess {
     init { System.loadLibrary("workspace") }
 
     external fun open(root: ByteArray, path: ByteArray, writable: Boolean, create: Boolean, overwrite: Boolean): Long
     external fun read(handle: Long, maxBytes: Long): ByteArray
     external fun write(handle: Long, bytes: ByteArray): LongArray
     external fun close(handle: Long)
+    external fun openDirectory(root: ByteArray): Int
+    external fun openChild(parent: Int, name: ByteArray, flags: Int, metadataOnly: Boolean, directory: Boolean): Int
+    external fun statDescriptor(descriptor: Int): LongArray
+    external fun listDirectory(descriptor: Int): Array<ByteArray>
+    external fun createDirectory(parent: Int, name: ByteArray): Int
+    external fun removeChild(parent: Int, name: ByteArray, directory: Boolean)
+    external fun renameChild(source: Int, name: ByteArray, destination: Int, target: ByteArray): Boolean
 }

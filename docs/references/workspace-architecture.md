@@ -22,7 +22,7 @@ Assistant.workspaceId 有效
 |------|------|
 | `WorkspaceManager` | 目录布局、路径解析、文件操作、命令执行上下文与 bind mount 表 |
 | `RootfsPath` | 纯 guest 路径规范化与安全写区分类，供审批及 Manager 共用 |
-| `RootfsFileHandle` / `RootfsFileAccess` | Manager 内部的受控目录/文件描述符 IO；不读取配置、不拥有审批或持久化事实 |
+| `RootfsFileHandle` / `WorkspaceDirectoryHandle` / `WorkspaceFileAccess` | Manager 内部的受控目录/文件描述符 IO；不读取配置、不拥有审批或持久化事实 |
 | `WorkspaceFileSystem` | `FILES` / `LINUX` 存储区内的安全相对路径操作 |
 | `WorkspaceShellRunner` | 阻塞式命令执行接口与进程 I/O 收集 |
 | `ProotLaunchSpec` | 两类 PRoot 启动共用的 executable、bind、cwd、env 与 argv |
@@ -43,7 +43,11 @@ Workspace 工具由 `TurnToolSetFactory` 在 Master/Target 共用的 `TurnCommit
 
 Compose、ViewModel、聊天文件补全、cwd 选择和已编辑文件导出都只能依赖 `WorkspaceQueryService` / `WorkspaceApplicationService`；不得持有 `WorkspaceRepository` 或 Room `WorkspaceEntity`。`WorkspaceUiModel` 只公开 UI 所需的 id、名称、typed `WorkspaceShellStatus` 和工具审批投影，不把持久化实体或 `shell_status` 字符串编码当作页面协议。字符串只存在于 Room 边界，并由 `WorkspaceEntity.resolvedShellStatus` 一次解析；未知值按 `BROKEN` fail-closed，不能意外开放工具或终端。
 
-`WorkspaceDocumentsProvider.queryDocument` 在解析到具体文件后必须先确认 `File.exists()`，已删除路径不能再写入 SAF 游标。
+`WorkspaceDocumentsProvider` 仅负责稳定的 `root` / `ws/{root}/{path}` URI、Cursor、MIME、取消信号与通知；数据读取和命令分别交给现有 QueryService / ApplicationService，不访问 DAO、Manager 或磁盘。SAF 暴露显式共享的已注册 Workspace，不使用当前域作为第二目录状态。所有数据入口等待恢复就绪，查询不创建缺失目录；未知或已删除路径不产生虚构游标项，`isChildDocument` 同样校验注册与存在。
+
+命令按已注册 workspaceId 复用既有 stripe gate，双目录操作按 stripe 去重、排序加锁并复验 root 映射。底层 `WorkspaceDirectoryHandle` 复用现有 JNI 描述符 IO，逐层 NOFOLLOW；可写 FD 先验证 regular file 和单硬链接，再截断。创建使用独占名称，重命名/移动只使用 `RENAME_NOREPLACE`，没有复制删除回退。复制在目标 Workspace 既有 `tmp/` 内完成独占临时树再原子发布到文件区，避免占用用户文件名或暴露未完成副本，失败清理本次未发布副本；删除不跟随树内符号链接，可能部分完成时直接报错供重试，不新增文件树事务表。
+
+文件描述符移交前的取消归原打开调用清理；成功移交后由外部客户端持有和关闭。Workspace gate 保护打开与移交，不覆盖外部客户端之后的每次读写，也不承诺切域或删除能够撤销已打开的 FD。
 
 ## 3. 文件系统与挂载
 

@@ -1,5 +1,6 @@
 #include <jni.h>
 #include <fcntl.h>
+#include <dirent.h>
 #include <sys/stat.h>
 #include <sys/syscall.h>
 #include <linux/fs.h>
@@ -39,9 +40,14 @@ struct Handle {
         : parent(parent), leaf(std::move(leaf)), writable(writable) {}
 };
 
-void failure(const char* action) {
-    throw std::runtime_error(std::string(action) + ": " + std::strerror(errno));
-}
+class FileError : public std::runtime_error {
+public:
+    const int number;
+    FileError(const char* action, int number)
+        : std::runtime_error(std::string(action) + ": " + std::strerror(number)), number(number) {}
+};
+
+void failure(const char* action) { throw FileError(action, errno); }
 
 void interrupted(JNIEnv* env) {
     jclass thread = env->FindClass("java/lang/Thread");
@@ -58,7 +64,11 @@ void interrupted(JNIEnv* env) {
 }
 
 void report(JNIEnv* env, const std::exception& error) {
-    if (!env->ExceptionCheck()) env->ThrowNew(env->FindClass("java/io/IOException"), error.what());
+    if (!env->ExceptionCheck()) {
+        auto* fileError = dynamic_cast<const FileError*>(&error);
+        const char* type = fileError && fileError->number == ENOENT ? "java/io/FileNotFoundException" : "java/io/IOException";
+        env->ThrowNew(env->FindClass(type), error.what());
+    }
 }
 
 std::string text(JNIEnv* env, jbyteArray bytes) {
@@ -111,7 +121,7 @@ Handle* from(jlong pointer) {
 }
 
 extern "C" JNIEXPORT jlong JNICALL
-Java_me_rerere_workspace_RootfsFileAccess_open(
+Java_me_rerere_workspace_WorkspaceFileAccess_open(
     JNIEnv* env, jobject, jbyteArray rootBytes, jbyteArray pathBytes,
     jboolean writable, jboolean create, jboolean overwrite
 ) {
@@ -152,7 +162,7 @@ Java_me_rerere_workspace_RootfsFileAccess_open(
 }
 
 extern "C" JNIEXPORT jbyteArray JNICALL
-Java_me_rerere_workspace_RootfsFileAccess_read(JNIEnv* env, jobject, jlong pointer, jlong maxBytes) {
+Java_me_rerere_workspace_WorkspaceFileAccess_read(JNIEnv* env, jobject, jlong pointer, jlong maxBytes) {
     try {
         auto* handle = from(pointer);
         if (!handle->existed) throw std::runtime_error("File does not exist");
@@ -180,7 +190,7 @@ Java_me_rerere_workspace_RootfsFileAccess_read(JNIEnv* env, jobject, jlong point
 }
 
 extern "C" JNIEXPORT jlongArray JNICALL
-Java_me_rerere_workspace_RootfsFileAccess_write(JNIEnv* env, jobject, jlong pointer, jbyteArray bytes) {
+Java_me_rerere_workspace_WorkspaceFileAccess_write(JNIEnv* env, jobject, jlong pointer, jbyteArray bytes) {
     std::string temporary;
     struct stat ownedTemporary{};
     bool ownsTemporary = false;
@@ -265,6 +275,137 @@ Java_me_rerere_workspace_RootfsFileAccess_write(JNIEnv* env, jobject, jlong poin
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_me_rerere_workspace_RootfsFileAccess_close(JNIEnv*, jobject, jlong pointer) {
+Java_me_rerere_workspace_WorkspaceFileAccess_close(JNIEnv*, jobject, jlong pointer) {
     delete reinterpret_cast<Handle*>(pointer);
+}
+
+// Directory capabilities share the same NOFOLLOW traversal as Rootfs file operations.
+namespace {
+std::string childName(JNIEnv* env, jbyteArray bytes) {
+    auto name = text(env, bytes);
+    if (name.empty() || name == "." || name == ".." || name.find('/') != std::string::npos)
+        throw std::runtime_error("Invalid document name");
+    return name;
+}
+
+jbyteArray utf8(JNIEnv* env, const std::string& value) {
+    auto result = env->NewByteArray(static_cast<jsize>(value.size()));
+    if (result && !value.empty()) env->SetByteArrayRegion(result, 0, static_cast<jsize>(value.size()),
+        reinterpret_cast<const jbyte*>(value.data()));
+    return result;
+}
+}
+
+extern "C" JNIEXPORT jint JNICALL
+Java_me_rerere_workspace_WorkspaceFileAccess_openDirectory(JNIEnv* env, jobject, jbyteArray rootBytes) {
+    try {
+        interrupted(env);
+        const auto root = text(env, rootBytes);
+        if (root.empty() || root[0] != '/') throw std::runtime_error("Directory anchor must be absolute");
+        Fd directory(::open("/", O_PATH | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC));
+        if (directory.get() < 0) failure("Open filesystem root");
+        for (const auto& segment : components(root)) directory.reset(directoryAt(directory.get(), segment, false));
+        int result = fcntl(directory.get(), F_DUPFD_CLOEXEC, 0);
+        if (result < 0) failure("Keep document directory");
+        return result;
+    } catch (const std::exception& error) { report(env, error); return -1; }
+}
+
+extern "C" JNIEXPORT jint JNICALL
+Java_me_rerere_workspace_WorkspaceFileAccess_openChild(JNIEnv* env, jobject, jint parent, jbyteArray nameBytes, jint flags, jboolean metadataOnly, jboolean directory) {
+    try {
+        interrupted(env);
+        const auto name = childName(env, nameBytes);
+        int fd = openat(parent, name.c_str(), (metadataOnly ? O_PATH : flags) | (directory ? O_DIRECTORY : 0) | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC, 0600);
+        if (fd < 0 && errno != ENOENT && errno != EEXIST) failure("Open document without symbolic links");
+        return fd;
+    } catch (const std::exception& error) { report(env, error); return -1; }
+}
+
+extern "C" JNIEXPORT jlongArray JNICALL
+Java_me_rerere_workspace_WorkspaceFileAccess_statDescriptor(JNIEnv* env, jobject, jint descriptor) {
+    try {
+        struct stat value{};
+        if (fstat(descriptor, &value) < 0) failure("Read document metadata");
+        jlong values[] = { value.st_mode, value.st_size,
+            value.st_mtim.tv_sec * 1000LL + value.st_mtim.tv_nsec / 1000000LL,
+            static_cast<jlong>(value.st_dev), static_cast<jlong>(value.st_ino), static_cast<jlong>(value.st_nlink) };
+        auto result = env->NewLongArray(6);
+        if (result) env->SetLongArrayRegion(result, 0, 6, values);
+        return result;
+    } catch (const std::exception& error) { report(env, error); return nullptr; }
+}
+
+extern "C" JNIEXPORT jobjectArray JNICALL
+Java_me_rerere_workspace_WorkspaceFileAccess_listDirectory(JNIEnv* env, jobject, jint descriptor) {
+    try {
+        interrupted(env);
+        int fd = openat(descriptor, ".", O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+        if (fd < 0) failure("Open directory listing");
+        DIR* opened = fdopendir(fd);
+        if (!opened) { const int saved = errno; ::close(fd); errno = saved; failure("Read directory listing"); }
+        std::unique_ptr<DIR, decltype(&closedir)> directory(opened, closedir);
+        std::vector<std::string> names;
+        while (true) {
+            interrupted(env);
+            errno = 0;
+            dirent* entry = readdir(directory.get());
+            if (!entry) { if (errno) failure("Read directory entry"); break; }
+            std::string name(entry->d_name);
+            if (name != "." && name != "..") names.push_back(std::move(name));
+        }
+        auto result = env->NewObjectArray(static_cast<jsize>(names.size()), env->FindClass("[B"), nullptr);
+        if (!result) return nullptr;
+        for (size_t index = 0; index < names.size(); ++index) {
+            auto name = utf8(env, names[index]);
+            if (!name) return nullptr;
+            env->SetObjectArrayElement(result, static_cast<jsize>(index), name);
+            env->DeleteLocalRef(name);
+        }
+        return result;
+    } catch (const std::exception& error) { report(env, error); return nullptr; }
+}
+
+extern "C" JNIEXPORT jint JNICALL
+Java_me_rerere_workspace_WorkspaceFileAccess_createDirectory(JNIEnv* env, jobject, jint parent, jbyteArray nameBytes) {
+    try {
+        interrupted(env);
+        const auto name = childName(env, nameBytes);
+        if (mkdirat(parent, name.c_str(), 0700) < 0) {
+            if (errno == EEXIST) return -1;
+            failure("Create document directory");
+        }
+        int fd = openat(parent, name.c_str(), O_PATH | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+        if (fd < 0) {
+            const int saved = errno;
+            unlinkat(parent, name.c_str(), AT_REMOVEDIR);
+            errno = saved;
+            failure("Open created directory");
+        }
+        return fd;
+    } catch (const std::exception& error) { report(env, error); }
+    return -1;
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_me_rerere_workspace_WorkspaceFileAccess_removeChild(JNIEnv* env, jobject, jint parent, jbyteArray nameBytes, jboolean directory) {
+    try {
+        const auto name = childName(env, nameBytes);
+        if (unlinkat(parent, name.c_str(), directory ? AT_REMOVEDIR : 0) < 0 && errno != ENOENT)
+            failure("Remove document");
+    } catch (const std::exception& error) { report(env, error); }
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_me_rerere_workspace_WorkspaceFileAccess_renameChild(JNIEnv* env, jobject, jint source, jbyteArray nameBytes,
+    jint destination, jbyteArray targetBytes) {
+    try {
+        interrupted(env);
+        const auto name = childName(env, nameBytes);
+        const auto target = childName(env, targetBytes);
+        if (syscall(SYS_renameat2, source, name.c_str(), destination, target.c_str(), RENAME_NOREPLACE) == 0) return true;
+        if (errno == EEXIST) return false;
+        failure("Move document");
+    } catch (const std::exception& error) { report(env, error); }
+    return false;
 }

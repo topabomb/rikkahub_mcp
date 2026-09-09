@@ -47,6 +47,37 @@ class WorkspaceApplicationService internal constructor(
     private val catalogGate = Mutex()
     private val mutationGates = Array(GATE_STRIPES) { Mutex() }
 
+    suspend fun openDocument(root: String, path: String, mode: Int) =
+        documents(listOf(root)) { repository.openDocument(root, path, mode) }
+
+    suspend fun createDocument(root: String, path: String, name: String, directory: Boolean) =
+        documents(listOf(root)) { repository.createDocument(root, path, name, directory) }
+
+    suspend fun deleteDocument(root: String, path: String) =
+        documents(listOf(root)) { repository.deleteDocument(root, path) }
+
+    suspend fun renameDocument(root: String, path: String, name: String) =
+        documents(listOf(root)) { repository.renameDocument(root, path, name) }
+
+    suspend fun transferDocument(sourceRoot: String, path: String, targetRoot: String, targetPath: String, move: Boolean) =
+        documents(listOf(sourceRoot, targetRoot)) { repository.transferDocument(sourceRoot, path, targetRoot, targetPath, move) }
+
+    private suspend fun <T> documents(roots: List<String>, operation: suspend () -> T): T {
+        recovery.awaitReady()
+        val registered = roots.distinct().associateWith { root ->
+            repository.getByRoot(root)?.id ?: throw java.io.FileNotFoundException("Workspace not registered: $root")
+        }
+        val stripes = registered.values.map(::gateIndex).distinct().sorted()
+        var acquired = 0
+        try {
+            for (stripe in stripes) { mutationGates[stripe].lock(); acquired++ }
+            registered.forEach { (root, id) ->
+                check(repository.getByRoot(root)?.id == id) { "Workspace registration changed" }
+            }
+            return operation()
+        } finally { for (index in acquired - 1 downTo 0) mutationGates[stripes[index]].unlock() }
+    }
+
     suspend fun createWorkspace(name: String): WorkspaceCreated = catalogGate.withLock {
         WorkspaceCreated(repository.create(name).id)
     }
@@ -207,7 +238,9 @@ class WorkspaceApplicationService internal constructor(
         requireNotNull(repository.getById(id)) { "Workspace not found: $id" }
 
     private suspend fun <T> gated(workspaceId: String, block: suspend () -> T): T =
-        mutationGates[(workspaceId.hashCode() and Int.MAX_VALUE) % mutationGates.size].withLock { block() }
+        mutationGates[gateIndex(workspaceId)].withLock { block() }
+
+    private fun gateIndex(workspaceId: String) = (workspaceId.hashCode() and Int.MAX_VALUE) % mutationGates.size
 
     private inner class ScopedWorkspaceToolSession(
         private val workspaceId: String,

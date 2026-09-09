@@ -67,6 +67,28 @@ class WorkspaceRepository(
     }
 
     suspend fun getById(id: String): WorkspaceEntity? = dao.getById(id)
+    suspend fun getByRoot(root: String): WorkspaceEntity? = dao.getByRoot(root)
+    suspend fun allWorkspaces(): List<WorkspaceEntity> = dao.getAll()
+
+    suspend fun statDocument(root: String, path: String) = runInterruptible(Dispatchers.IO) { manager.statDocument(root, path) }
+    suspend fun listDocuments(root: String, path: String) = runInterruptible(Dispatchers.IO) { manager.listDocuments(root, path) }
+    suspend fun createDocument(root: String, path: String, name: String, directory: Boolean) =
+        runInterruptible(Dispatchers.IO) { manager.createDocument(root, path, name, directory) }
+    suspend fun deleteDocument(root: String, path: String) = runInterruptible(Dispatchers.IO) { manager.deleteDocument(root, path) }
+    suspend fun renameDocument(root: String, path: String, name: String) = runInterruptible(Dispatchers.IO) { manager.renameDocument(root, path, name) }
+    suspend fun transferDocument(sourceRoot: String, path: String, targetRoot: String, targetPath: String, move: Boolean) =
+        runInterruptible(Dispatchers.IO) { manager.transferDocument(sourceRoot, path, targetRoot, targetPath, move) }
+
+    suspend fun openDocument(root: String, path: String, mode: Int): android.os.ParcelFileDescriptor {
+        var opened: android.os.ParcelFileDescriptor? = null
+        try {
+            runInterruptible(Dispatchers.IO) { opened = manager.openDocument(root, path, mode) }
+            return requireNotNull(opened)
+        } catch (error: Throwable) {
+            try { opened?.close() } catch (cleanup: Throwable) { error.addSuppressed(cleanup) }
+            throw error
+        }
+    }
 
     suspend fun create(name: String): WorkspaceEntity {
         val id = Uuid.random().toString()

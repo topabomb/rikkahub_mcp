@@ -28,6 +28,37 @@ class WorkspaceManager(
         baseDir.mkdirs()
     }
 
+    fun statDocument(root: String, path: String): WorkspaceFileEntry? = try {
+        WorkspaceDirectoryHandle(filesDir(root)).use { it.stat(path) }
+    } catch (_: java.io.FileNotFoundException) { null }
+
+    fun listDocuments(root: String, path: String): List<WorkspaceFileEntry> =
+        WorkspaceDirectoryHandle(filesDir(root)).use { it.list(path) }
+
+    fun openDocument(root: String, path: String, mode: Int): android.os.ParcelFileDescriptor =
+        WorkspaceDirectoryHandle(filesDir(root)).use { it.open(path, mode) }
+
+    fun createDocument(root: String, path: String, name: String, directory: Boolean): String =
+        WorkspaceDirectoryHandle(filesDir(root)).use { it.create(path, name, directory) }
+
+    fun deleteDocument(root: String, path: String) = WorkspaceDirectoryHandle(filesDir(root)).use { it.delete(path) }
+
+    fun renameDocument(root: String, path: String, name: String): String =
+        WorkspaceDirectoryHandle(filesDir(root)).use { it.rename(path, name) }
+
+    fun transferDocument(sourceRoot: String, path: String, targetRoot: String, targetPath: String, move: Boolean): String {
+        require(path.isNotEmpty()) { "Cannot transfer Workspace root" }
+        require(sourceRoot != targetRoot || (targetPath != path && !targetPath.startsWith("$path/"))) { "Cannot transfer into the source tree" }
+        return WorkspaceDirectoryHandle(filesDir(sourceRoot)).use { source ->
+            WorkspaceDirectoryHandle(filesDir(targetRoot)).use { target ->
+                if (move) source.move(path, target, targetPath)
+                else WorkspaceDirectoryHandle(workspaceDir(targetRoot)).use { workspace ->
+                    workspace.ensureDirectory(TEMP_DIR).use { source.copy(path, target, targetPath, it) }
+                }
+            }
+        }
+    }
+
     fun ensureWorkspace(root: String): File {
         val dir = workspaceDir(root)
         filesDir(root).mkdirs()

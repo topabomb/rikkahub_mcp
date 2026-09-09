@@ -24,6 +24,9 @@ class ArchitectureDependencyTest {
     fun `UI never reaches workspace repository or entity directly`() {
         assertNoHits("WorkspaceRepository", sourcesUnder("ui"))
         assertNoHits("WorkspaceEntity", sourcesUnder("ui"))
+        val provider = listOf(File(architectureSourceRoot, "data/provider/WorkspaceDocumentsProvider.kt"))
+        listOf("WorkspaceDAO", "WorkspaceManager", "WorkspaceRepository")
+            .forEach { assertNoHits(it, provider) }
     }
 
     @Test
