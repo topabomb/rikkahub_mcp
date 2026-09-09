@@ -82,9 +82,9 @@ val appModule = module {
     single { ChatErrorStore() }
     single { BackupRestoreApplicationService(get(), get(), get()) }
     single { ProviderSettingsApplicationService(get(), get()) }
-    single { WorkspaceTerminalRuntime(get(), get()) }
+    single { WorkspaceTerminalRuntime(get(), get(), get()) }
     single { WorkspaceApplicationService(get(), get(), get(), get(), java.io.File(get<Context>().cacheDir, "temp"), get()) }
-    single { WorkspaceQueryService(get(), get()) }
+    single { WorkspaceQueryService(get(), get(), get()) }
 
     single {
         AppEventBus()
@@ -345,8 +345,8 @@ val appModule = module {
 
     single { net.weero.measix.pilot.service.portal.PortalDocumentRegistry() }
     single { net.weero.measix.pilot.service.portal.PortalMediaStore(java.io.File(get<Context>().noBackupFilesDir, "portal_media")) }
-    single { net.weero.measix.pilot.service.EnterpriseExitService(get(), get(), get(), get(), get<AppScope>(), get(), get()) }
-    single { net.weero.measix.pilot.service.EnterpriseApplicationService(get(), get(), get(), get(), get(), get(), get<AppScope>(), get()) }
+    single { net.weero.measix.pilot.service.EnterpriseExitService(get(), get(), get(), get(), get<AppScope>(), get(), get(), get()) }
+    single { net.weero.measix.pilot.service.EnterpriseApplicationService(get(), get(), get(), get(), get(), get(), get<AppScope>(), get(), get()) }
 
     single {
         GenerationSideEffects(

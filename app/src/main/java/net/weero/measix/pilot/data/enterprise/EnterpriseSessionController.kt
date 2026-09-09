@@ -213,9 +213,15 @@ internal class EnterpriseSessionController(
             if (current.manifest.phase !in setOf(EnterpriseSessionPhase.READY, EnterpriseSessionPhase.OFFLINE)) fail("enterprise_session_not_ready")
         }
         if (request.target == selected.access) return@withLock selected
-        closePreviousHost(selected.access)
-        val next = publish(current.manifest.copy(selectedScope = request.target.scope))
-        exitSelection(next.manifest)
+        try {
+            closePreviousHost(selected.access)
+            val next = publish(current.manifest.copy(selectedScope = request.target.scope))
+            exitSelection(next.manifest)
+        } catch (error: Throwable) {
+            // A retired host cannot reuse its rendered authority even when the domain switch fails.
+            if (selectionRevision.value == selected.revision) _selectionRevision.value++
+            throw error
+        }
     }
 
     suspend fun changeFeed(access: RealmAccess.Enterprise, expectedRevision: String, command: EnterpriseFeedCommand): EnterpriseFeedVersion = mutex.withLock {

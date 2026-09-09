@@ -1,280 +1,393 @@
 package net.weero.measix.pilot.service.workspace
 
 import android.content.Context
+import android.os.Looper
 import android.util.Log
-import com.termux.terminal.TerminalSession
 import com.termux.view.TerminalView
 import java.util.UUID
-import java.util.concurrent.ConcurrentHashMap
-import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.CoroutineStart
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.NonCancellable
-import kotlinx.coroutines.cancelAndJoin
+import java.io.ByteArrayOutputStream
+import kotlinx.coroutines.*
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.runInterruptible
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
-import kotlinx.coroutines.withContext
 import net.weero.measix.pilot.AppScope
+import net.weero.measix.pilot.data.enterprise.EnterpriseConfigurationException
+import net.weero.measix.pilot.data.enterprise.EnterpriseSessionController
+import net.weero.measix.pilot.data.enterprise.RealmAccess
+import net.weero.measix.pilot.data.enterprise.RealmSelection
 
-/** Application-scoped owner of every interactive Workspace PTY and its tab lifecycle. */
+/** Application owner of interactive PTYs. Entries and viewports are confined to Main. */
 class WorkspaceTerminalRuntime internal constructor(
     context: Context,
     private val appScope: AppScope,
-    private val terminalHost: WorkspaceTerminalHost,
+    private val sessions: EnterpriseSessionController,
+    private val terminalHost: WorkspaceTerminalHost = AndroidWorkspaceTerminalHost,
 ) {
-    constructor(context: Context, appScope: AppScope) : this(context, appScope, AndroidWorkspaceTerminalHost)
-
     private val context = context.applicationContext
-    private val mutex = Mutex()
     private val entries = LinkedHashMap<String, TerminalEntry>()
-    private val liveSessions = ConcurrentHashMap<String, LiveTerminal>()
-    private val creationJobs = mutableMapOf<String, Job>()
-    private val mutableWorkspaces = MutableStateFlow<Map<String, WorkspaceTerminalWorkspaceState>>(emptyMap())
-    val workspaces: StateFlow<Map<String, WorkspaceTerminalWorkspaceState>> = mutableWorkspaces.asStateFlow()
+    private val mutableWorkspaces = MutableStateFlow<Map<WorkspaceTerminalOwner, WorkspaceTerminalWorkspaceState>>(emptyMap())
+    internal val workspaces = mutableWorkspaces.asStateFlow()
 
     suspend fun create(
         root: String,
+        selection: RealmSelection,
         prepareUnderCommandGate: suspend (suspend () -> Boolean) -> Boolean,
-    ): WorkspaceTerminalCreateResult {
-        val tabId = UUID.randomUUID().toString()
-        mutex.withLock {
-            val count = entries.values.count { it.root == root }
-            if (count >= MAX_TABS_PER_WORKSPACE) {
-                return WorkspaceTerminalCreateResult.LimitReached(MAX_TABS_PER_WORKSPACE)
-            }
-            val nextNumber = (entries.values.filter { it.root == root }.maxOfOrNull { it.number } ?: 0) + 1
-            entries[tabId] = TerminalEntry(
-                id = tabId,
-                root = root,
-                number = nextNumber,
-                customTitle = null,
-                readiness = WorkspaceTerminalReadiness.PREPARING,
-            )
-            selectLocked(root, tabId)
-            publishLocked(root)
-            val creationJob = appScope.launch(start = CoroutineStart.LAZY) {
-                createSession(tabId, prepareUnderCommandGate)
-            }
-            creationJobs[tabId] = creationJob
-            creationJob.start()
+    ): WorkspaceTerminalCreateResult = selected(selection) {
+        val owner = WorkspaceTerminalOwner(root, selection.access)
+        if (entries.values.count { it.owner.root == root } >= MAX_TABS_PER_WORKSPACE) {
+            return@selected WorkspaceTerminalCreateResult.LimitReached(MAX_TABS_PER_WORKSPACE)
         }
-        return WorkspaceTerminalCreateResult.Created(tabId)
+        appScope.coroutineContext.ensureActive()
+        val entry = TerminalEntry(UUID.randomUUID().toString(), owner,
+            (entries.values.filter { it.owner == owner }.maxOfOrNull { it.number } ?: 0) + 1)
+        entries[entry.id] = entry
+        publish(owner, entry.id)
+        entry.creation = appScope.launch(Dispatchers.Main.immediate, start = CoroutineStart.ATOMIC) { createSession(entry, prepareUnderCommandGate) }
+        WorkspaceTerminalCreateResult.Created(entry.id)
     }
 
-    suspend fun select(root: String, tabId: String) = mutex.withLock {
-        if (entries[tabId]?.root != root) return@withLock
-        selectLocked(root, tabId)
-        publishLocked(root)
+    suspend fun select(root: String, selection: RealmSelection, tabId: String) = selected(selection) {
+        owned(root, selection, tabId)?.let { publish(it.owner, tabId) }
     }
 
-    suspend fun rename(root: String, tabId: String, title: String) = mutex.withLock {
-        val entry = entries[tabId]?.takeIf { it.root == root } ?: return@withLock
-        entry.customTitle = title.trim().take(MAX_TITLE_LENGTH).ifBlank { null }
-        publishLocked(root)
-    }
-
-    suspend fun reorder(root: String, orderedIds: List<String>) = mutex.withLock {
-        val current = entries.values.filter { it.root == root }
-        if (orderedIds.toSet() != current.mapTo(linkedSetOf()) { it.id }) return@withLock
-        val byId = current.associateBy { it.id }
-        val other = entries.values.filterNot { it.root == root }
-        entries.clear()
-        other.forEach { entries[it.id] = it }
-        orderedIds.forEach { id -> entries[id] = requireNotNull(byId[id]) }
-        publishLocked(root)
-    }
-
-    suspend fun close(root: String, tabId: String) {
-        val resources = mutex.withLock { removeLocked(root, tabId) } ?: return
-        withContext(NonCancellable) {
-            resources.creationJob?.cancelAndJoin()
-            withContext(Dispatchers.Main.immediate) { resources.session?.finishIfRunning() }
+    suspend fun rename(root: String, selection: RealmSelection, tabId: String, title: String) = selected(selection) {
+        owned(root, selection, tabId)?.let {
+            it.customTitle = title.trim().take(MAX_TITLE_LENGTH).ifBlank { null }
+            publish(it.owner)
         }
     }
 
-    suspend fun closeWorkspace(root: String) {
-        val resources = mutex.withLock {
-            entries.values.filter { it.root == root }.mapNotNull { removeLocked(root, it.id) }.also {
-                mutableWorkspaces.value = mutableWorkspaces.value - root
-            }
-        }
-        withContext(NonCancellable) {
-            resources.forEach { it.creationJob?.cancelAndJoin() }
-            withContext(Dispatchers.Main.immediate) {
-                resources.forEach { it.session?.finishIfRunning() }
-            }
+    suspend fun reorder(root: String, selection: RealmSelection, orderedIds: List<String>) = selected(selection) {
+        val owner = WorkspaceTerminalOwner(root, selection.access)
+        val current = entries.values.filter { it.owner == owner }.associateBy { it.id }
+        if (orderedIds.size != current.size || orderedIds.toSet() != current.keys) return@selected
+        current.keys.forEach(entries::remove)
+        orderedIds.forEach { entries[it] = current.getValue(it) }
+        publish(owner)
+    }
+
+    suspend fun close(root: String, selection: RealmSelection, tabId: String) {
+        var admitted: TerminalEntry? = null
+        var failure: Throwable? = null
+        try {
+            selected(selection) { owned(root, selection, tabId)?.let { admitted = it; beginClose(it) } }
+        } catch (error: Throwable) { failure = error; throw error }
+        finally {
+            try { withContext(NonCancellable) { admitted?.let { closeEntry(it) } } }
+            catch (cleanup: Throwable) { failure?.let { if (cleanup !== it) it.addSuppressed(cleanup) } ?: throw cleanup }
         }
     }
 
-    fun bind(tabId: String, view: TerminalView): Boolean {
-        val live = liveSessions[tabId] ?: return false
+    suspend fun closeWorkspace(root: String) = closeMatching { it.owner.root == root }
+    internal suspend fun closeRealm(access: RealmAccess) = closeMatching { it.owner.access == access }
+
+    /** Called before publishing the replacement selection. No Session or Workspace lock is acquired. */
+    internal suspend fun revokeViewports(access: RealmAccess) = withContext(Dispatchers.Main.immediate) {
+        entries.values.filter { it.owner.access == access }.forEach(::retireViewport)
+    }
+
+    suspend fun bind(selection: RealmSelection, tabId: String, view: TerminalView): Boolean = selected(selection) {
+        val entry = ownedForView(selection, tabId) ?: return@selected false
+        if (entry.readiness != WorkspaceTerminalReadiness.READY || view.isRetired) return@selected false
+        val live = entry.live ?: return@selected false
+        if (entry.viewport?.view !== view) {
+            retireViewport(entry)
+            entry.viewport = BoundViewport(view, selection, CoroutineScope(appScope.coroutineContext +
+                SupervisorJob(appScope.coroutineContext[Job]) + Dispatchers.Main.immediate))
+        }
+        val bound = requireNotNull(entry.viewport)
         live.client.terminalView = view
+        view.setActionDispatcher(object : TerminalView.ActionDispatcher {
+            override fun dispatch(action: Runnable) = dispatchAction(entry, bound) { action.run() }
+        })
         view.attachSession(live.session)
         view.onScreenUpdated()
-        return true
+        true
     }
 
     fun unbind(tabId: String, view: TerminalView) {
-        liveSessions[tabId]?.client?.let { client ->
-            if (client.terminalView === view) client.terminalView = null
+        requireMain()
+        val entry = entries[tabId]
+        if (entry?.viewport?.view === view) retireViewport(entry) else view.retire()
+    }
+
+    fun write(selection: RealmSelection, tabId: String, text: String) {
+        requireMain()
+        val entry = ownedForView(selection, tabId) ?: return
+        val bound = entry.viewport?.takeIf { it.selection == selection } ?: return
+        val session = entry.live?.session ?: return
+        dispatchAction(entry, bound) { session.write(text) }
+    }
+
+    private fun ownedForView(selection: RealmSelection, tabId: String) = entries[tabId]?.takeIf {
+        it.owner.access == selection.access && it.readiness != WorkspaceTerminalReadiness.CLOSING
+    }
+
+    /** Short UI actions wait for the original selection without treating contention as revocation. */
+    private fun dispatchAction(entry: TerminalEntry, bound: BoundViewport, action: () -> Unit): Boolean {
+        requireMain()
+        if (entries[entry.id] !== entry || entry.viewport !== bound || bound.view.isRetired || !bound.scope.isActive) return false
+        bound.scope.launch {
+            try {
+                sessions.withSelectedRealmSelection(bound.selection) {
+                    if (entries[entry.id] === entry && entry.viewport === bound && !bound.view.isRetired &&
+                        entry.readiness == WorkspaceTerminalReadiness.READY) action()
+                }
+            } catch (cancelled: CancellationException) { throw cancelled }
+            catch (error: Exception) {
+                if (error !is EnterpriseConfigurationException) {
+                    Log.w(TAG, "Terminal input failed", error)
+                    try {
+                        beginClose(entry)
+                        publishFailure(entry.owner, WorkspaceTerminalFailureReason.Unexpected)
+                    } finally { entry.writing?.cancel() }
+                }
+            }
+        }
+        return true
+    }
+
+    /** Includes bytes being drained, so a blocked child cannot grow the queue without bound. */
+    private fun enqueue(entry: TerminalEntry, session: WorkspacePtySession, data: ByteArray, offset: Int, count: Int) {
+        requireMain()
+        if (entries[entry.id] !== entry || entry.live?.session !== session ||
+            entry.readiness != WorkspaceTerminalReadiness.READY || count == 0) return
+        if (count <= MAX_PENDING_INPUT_BYTES - entry.pendingBytes) {
+            entry.pendingInput.write(data, offset, count)
+            entry.pendingBytes += count
+            if (entry.inputAvailable.trySend(Unit).isSuccess) return
+        }
+        try {
+            beginClose(entry)
+            publishFailure(entry.owner, WorkspaceTerminalFailureReason.Unexpected)
+        } finally {
+            entry.writing?.cancel(CancellationException("workspace_terminal_input_limit"))
         }
     }
 
-    fun write(tabId: String, text: String) {
-        val session = liveSessions[tabId]?.session ?: return
-        val bytes = text.toByteArray()
-        session.write(bytes, 0, bytes.size)
-    }
-
-    private suspend fun createSession(
-        tabId: String,
-        prepareUnderCommandGate: suspend (suspend () -> Boolean) -> Boolean,
-    ) {
-        var created: TerminalSession? = null
-        try {
-            val root = mutex.withLock { entries[tabId]?.root } ?: return
-            val ready = prepareUnderCommandGate {
-                runInterruptible(Dispatchers.IO) {
-                    terminalHost.prepare(context, root)
-                }
-            }
-            if (!ready) {
-                mutex.withLock {
-                    if (entries[tabId]?.root == root) {
-                        removeLocked(root, tabId)
-                        publishFailureLocked(root, WorkspaceTerminalFailureReason.NotReady)
+    private fun startWriter(entry: TerminalEntry, session: WorkspacePtySession): Job =
+        appScope.launch(Dispatchers.Main, start = CoroutineStart.ATOMIC) {
+            try {
+                // Cleanup is inside coroutineScope: kill the PTY before waiting for a blocked IO child.
+                coroutineScope {
+                    try {
+                        for (signal in entry.inputAvailable) {
+                            if (entry.pendingInput.size() == 0) continue
+                            val bytes = entry.pendingInput.toByteArray()
+                            entry.pendingInput.reset()
+                            async(Dispatchers.IO) { session.drain(bytes) }.await()
+                            entry.pendingBytes -= bytes.size
+                        }
+                    } finally {
+                        withContext(NonCancellable) {
+                            var failure: Throwable? = null
+                            try { beginClose(entry) }
+                            catch (error: Throwable) { failure = error; throw error }
+                            finally {
+                                try { stopSession(entry) }
+                                catch (cleanup: Throwable) {
+                                    failure?.let { if (cleanup !== it) it.addSuppressed(cleanup) } ?: throw cleanup
+                                }
+                            }
+                        }
                     }
                 }
+            } catch (cancelled: CancellationException) { throw cancelled }
+            catch (error: Exception) {
+                Log.w(TAG, "Terminal writer failed", error)
+                publishFailure(entry.owner, WorkspaceTerminalFailureReason.Unexpected)
+            } finally {
+                withContext(NonCancellable + Dispatchers.Main.immediate) {
+                    entry.inputAvailable.cancel()
+                    entry.pendingInput.reset()
+                    entry.pendingBytes = 0
+                    entry.writing = null
+                    removeIfStopped(entry)
+                }
+            }
+        }
+
+    private suspend fun <T> selected(selection: RealmSelection, action: () -> T): T =
+        sessions.withSelectedRealmSelection(selection) { withContext(Dispatchers.Main.immediate) { action() } }
+
+    private fun owned(root: String, selection: RealmSelection, id: String) = entries[id]?.takeIf {
+        it.owner == WorkspaceTerminalOwner(root, selection.access)
+    }
+
+    private suspend fun createSession(entry: TerminalEntry, prepare: suspend (suspend () -> Boolean) -> Boolean) {
+        try {
+            val ready = prepare { runInterruptible(Dispatchers.IO) { terminalHost.prepare(context, entry.owner.root) } }
+            if (!ready) {
+                withContext(Dispatchers.Main.immediate) { remove(entry); publishFailure(entry.owner, WorkspaceTerminalFailureReason.NotReady) }
                 return
             }
-            val client = WorkspaceTerminalSessionClient(context) {
-                appScope.launch { removeAfterShellExit(root, tabId) }
-            }
-            created = withContext(Dispatchers.Main.immediate) {
-                terminalHost.create(context, root, client)
-            }
-            val retained = mutex.withLock {
-                val entry = entries[tabId]
-                if (entry == null) {
-                    false
-                } else {
-                    entry.session = created
+            sessions.withRealmAccess(entry.owner.access) {
+                withContext(Dispatchers.Main.immediate) {
+                    currentCoroutineContext().ensureActive()
+                    if (entries[entry.id] !== entry || entry.readiness == WorkspaceTerminalReadiness.CLOSING) return@withContext
+                    val ended = CompletableDeferred<Unit>()
+                    val client = WorkspaceTerminalSessionClient(context,
+                        onAction = { action -> entry.viewport?.let { dispatchAction(entry, it, action) } ?: false },
+                        onWrite = { session, data, offset, count -> enqueue(entry, session, data, offset, count) },
+                        onFinished = {
+                            ended.complete(Unit)
+                            entry.inputAvailable.cancel()
+                            entry.readiness = WorkspaceTerminalReadiness.CLOSING
+                            try {
+                                retireViewport(entry)
+                                if (entry.writing == null) remove(entry) else publish(entry.owner)
+                            }
+                            catch (error: Exception) {
+                                entry.readiness = WorkspaceTerminalReadiness.CLOSING
+                                publishFailure(entry.owner, WorkspaceTerminalFailureReason.Unexpected)
+                                Log.w(TAG, "Terminal viewport cleanup failed", error)
+                            }
+                        })
+                    val session = terminalHost.create(context, entry.owner.root, client)
+                    entry.live = LiveTerminal(session, client, ended)
                     entry.readiness = WorkspaceTerminalReadiness.READY
-                    liveSessions[tabId] = LiveTerminal(created, client)
-                    creationJobs.remove(tabId)
-                    publishLocked(root)
-                    true
+                    entry.writing = startWriter(entry, session)
+                    publish(entry.owner)
                 }
             }
-            if (!retained) withContext(NonCancellable + Dispatchers.Main.immediate) { created.finishIfRunning() }
-        } catch (cancelled: CancellationException) {
-            created?.let {
-                withContext(NonCancellable + Dispatchers.Main.immediate) { it.finishIfRunning() }
-            }
-            throw cancelled
         } catch (error: Exception) {
-            created?.let {
-                withContext(NonCancellable + Dispatchers.Main.immediate) { it.finishIfRunning() }
-            }
-            mutex.withLock {
-                entries[tabId]?.root?.let { root ->
-                    removeLocked(root, tabId)
-                    Log.w(TAG, "Failed to create terminal for workspace root=$root", error)
-                    publishFailureLocked(root, WorkspaceTerminalFailureReason.Unexpected)
+            withContext(NonCancellable) {
+                val needsCleanup = withContext(Dispatchers.Main.immediate) {
+                    if (entries[entry.id] !== entry || entry.readiness == WorkspaceTerminalReadiness.CLOSING) false
+                    else { beginClose(entry); true }
+                }
+                if (needsCleanup) {
+                    try { stopSession(entry) }
+                    catch (cleanup: Exception) { if (cleanup !== error) error.addSuppressed(cleanup) }
+                    withContext(Dispatchers.Main.immediate) {
+                        if (entry.live == null) remove(entry) else removeIfStopped(entry)
+                        publishFailure(entry.owner, WorkspaceTerminalFailureReason.Unexpected)
+                    }
                 }
             }
+            if (error is CancellationException) throw error
+            Log.w(TAG, "Terminal creation failed", error)
+        } finally {
+            withContext(NonCancellable + Dispatchers.Main.immediate) { entry.creation = null }
         }
     }
 
-    private suspend fun removeAfterShellExit(root: String, tabId: String) {
-        mutex.withLock { removeLocked(root, tabId) }
-    }
-
-    private fun removeLocked(root: String, tabId: String): TerminalResources? {
-        val entry = entries[tabId]?.takeIf { it.root == root } ?: return null
-        entries.remove(tabId)
-        liveSessions.remove(tabId)
-        val job = creationJobs.remove(tabId)
-        val remaining = entries.values.filter { it.root == root }
-        val selected = mutableWorkspaces.value[root]?.selectedTabId
-        val replacement = if (selected == tabId) remaining.lastOrNull()?.id else selected
-        publishLocked(root, replacement)
-        return TerminalResources(job, entry.session)
-    }
-
-    private fun selectLocked(root: String, tabId: String) {
-        val previous = mutableWorkspaces.value[root]
-        mutableWorkspaces.value = mutableWorkspaces.value + (
-            root to (previous ?: WorkspaceTerminalWorkspaceState()).copy(selectedTabId = tabId)
-        )
-    }
-
-    private fun publishLocked(root: String, selectedOverride: String? = mutableWorkspaces.value[root]?.selectedTabId) {
-        val tabs = entries.values.filter { it.root == root }.map { entry ->
-            WorkspaceTerminalTabUiModel(
-                id = entry.id,
-                number = entry.number,
-                customTitle = entry.customTitle,
-                readiness = entry.readiness,
-            )
-        }
-        mutableWorkspaces.value = if (tabs.isEmpty()) {
-            mutableWorkspaces.value - root
-        } else {
-            mutableWorkspaces.value + (
-                root to WorkspaceTerminalWorkspaceState(
-                    tabs = tabs,
-                    selectedTabId = selectedOverride?.takeIf { selected -> tabs.any { it.id == selected } }
-                        ?: tabs.last().id,
-                )
-            )
+    private suspend fun closeMatching(predicate: (TerminalEntry) -> Boolean) {
+        var admitted = emptyList<TerminalEntry>()
+        var failure: Throwable? = null
+        try {
+            withContext(Dispatchers.Main.immediate) {
+                admitted = entries.values.filter(predicate)
+                admitted.forEach(::beginClose)
+            }
+        } catch (error: Throwable) { failure = error; throw error }
+        finally {
+            var cleanupFailure: Throwable? = null
+            withContext(NonCancellable) {
+                admitted.forEach { entry ->
+                    try { closeEntry(entry) }
+                    catch (error: Throwable) {
+                        if (cleanupFailure == null) cleanupFailure = error
+                        else if (cleanupFailure !== error) cleanupFailure!!.addSuppressed(error)
+                    }
+                }
+            }
+            cleanupFailure?.let { cleanup -> failure?.let { if (cleanup !== it) it.addSuppressed(cleanup) } ?: throw cleanup }
         }
     }
 
-    private fun publishFailureLocked(root: String, reason: WorkspaceTerminalFailureReason) {
-        val current = mutableWorkspaces.value[root] ?: WorkspaceTerminalWorkspaceState()
-        mutableWorkspaces.value = mutableWorkspaces.value + (
-            root to current.copy(
-                lastFailure = WorkspaceTerminalFailure(
-                    id = UUID.randomUUID().toString(),
-                    reason = reason,
-                ),
-            )
-        )
+    private fun beginClose(entry: TerminalEntry) {
+        entry.readiness = WorkspaceTerminalReadiness.CLOSING
+        retireViewport(entry)
+        publish(entry.owner)
     }
 
-    private data class TerminalEntry(
-        val id: String,
-        val root: String,
-        val number: Int,
-        var customTitle: String?,
-        var readiness: WorkspaceTerminalReadiness,
-        var session: TerminalSession? = null,
-    )
+    private suspend fun closeEntry(entry: TerminalEntry) = entry.closeGate.withLock {
+        withContext(Dispatchers.Main.immediate) { entry.creation }?.cancelAndJoin()
+        stopSession(entry)
+        withContext(Dispatchers.Main.immediate) { entry.inputAvailable.cancel(); entry.writing }?.join()
+        withContext(Dispatchers.Main.immediate) { retireViewport(entry); remove(entry) }
+    }
 
-    private data class TerminalResources(val creationJob: Job?, val session: TerminalSession?)
+    private suspend fun stopSession(entry: TerminalEntry) {
+        val live = withContext(Dispatchers.Main.immediate) {
+            entry.live?.also {
+                // Termux starts lazily on the first viewport size; killing PID 0 would target the process group.
+                if (it.session.pid == 0) it.ended.complete(Unit)
+                else if (!it.ended.isCompleted) it.session.finishIfRunning()
+            }
+        } ?: return
+        check(withTimeoutOrNull(CLOSE_TIMEOUT_MILLIS) { live.ended.await(); true } == true) { "workspace_terminal_close_timeout" }
+    }
 
-    private data class LiveTerminal(
-        val session: TerminalSession,
-        val client: WorkspaceTerminalSessionClient,
-    )
+    private fun retireViewport(entry: TerminalEntry) {
+        entry.live?.client?.terminalView = null
+        entry.viewport?.scope?.cancel()
+        entry.viewport?.view?.retire()
+        entry.viewport = null
+    }
+
+    private fun removeIfStopped(entry: TerminalEntry) {
+        if (entry.live?.ended?.isCompleted == true && entry.writing == null) {
+            retireViewport(entry)
+            remove(entry)
+        }
+    }
+
+    private fun remove(entry: TerminalEntry) {
+        if (entries[entry.id] !== entry) return
+        entries.remove(entry.id)
+        publish(entry.owner)
+    }
+
+    private fun publish(owner: WorkspaceTerminalOwner, selected: String? = mutableWorkspaces.value[owner]?.selectedTabId) {
+        val tabs = entries.values.filter { it.owner == owner }.map {
+            WorkspaceTerminalTabUiModel(it.id, it.number, it.customTitle, it.readiness)
+        }
+        val failure = mutableWorkspaces.value[owner]?.lastFailure
+        mutableWorkspaces.value = if (tabs.isEmpty() && failure == null) mutableWorkspaces.value - owner
+        else mutableWorkspaces.value + (owner to WorkspaceTerminalWorkspaceState(tabs,
+            selected?.takeIf { id -> tabs.any { it.id == id } } ?: tabs.lastOrNull()?.id, failure))
+    }
+
+    private fun publishFailure(owner: WorkspaceTerminalOwner, reason: WorkspaceTerminalFailureReason) {
+        val current = mutableWorkspaces.value[owner] ?: WorkspaceTerminalWorkspaceState()
+        mutableWorkspaces.value += owner to current.copy(lastFailure = WorkspaceTerminalFailure(UUID.randomUUID().toString(), reason))
+    }
+
+    private class TerminalEntry(val id: String, val owner: WorkspaceTerminalOwner, val number: Int) {
+        var customTitle: String? = null
+        var readiness = WorkspaceTerminalReadiness.PREPARING
+        var creation: Job? = null
+        var live: LiveTerminal? = null
+        var viewport: BoundViewport? = null
+        val closeGate = Mutex()
+        val pendingInput = ByteArrayOutputStream()
+        val inputAvailable = Channel<Unit>(Channel.CONFLATED)
+        var pendingBytes = 0
+        var writing: Job? = null
+    }
+    private data class BoundViewport(val view: TerminalView, val selection: RealmSelection, val scope: CoroutineScope)
+    private data class LiveTerminal(val session: WorkspacePtySession, val client: WorkspaceTerminalSessionClient, val ended: CompletableDeferred<Unit>)
+
+    private fun requireMain() { check(Looper.myLooper() == Looper.getMainLooper()) }
 
     companion object {
         const val MAX_TABS_PER_WORKSPACE = 6
+        private const val MAX_PENDING_INPUT_BYTES = 4 * 1024 * 1024
         private const val MAX_TITLE_LENGTH = 48
+        private const val CLOSE_TIMEOUT_MILLIS = 10_000L
         private const val TAG = "WorkspaceTerminalRuntime"
     }
 }
 
+internal data class WorkspaceTerminalOwner(val root: String, val access: RealmAccess)
+
 internal interface WorkspaceTerminalHost {
     fun prepare(context: Context, root: String): Boolean
-    fun create(context: Context, root: String, client: WorkspaceTerminalSessionClient): TerminalSession
+    fun create(context: Context, root: String, client: WorkspaceTerminalSessionClient): WorkspacePtySession
 }
 
 private object AndroidWorkspaceTerminalHost : WorkspaceTerminalHost {
@@ -288,7 +401,7 @@ private object AndroidWorkspaceTerminalHost : WorkspaceTerminalHost {
         context: Context,
         root: String,
         client: WorkspaceTerminalSessionClient,
-    ): TerminalSession = createWorkspaceTerminalSession(context, root, client)
+    ): WorkspacePtySession = createWorkspaceTerminalSession(context, root, client)
 }
 
 data class WorkspaceTerminalWorkspaceState(
@@ -314,7 +427,7 @@ data class WorkspaceTerminalTabUiModel(
     val readiness: WorkspaceTerminalReadiness,
 )
 
-enum class WorkspaceTerminalReadiness { PREPARING, READY }
+enum class WorkspaceTerminalReadiness { PREPARING, READY, CLOSING }
 
 sealed interface WorkspaceTerminalCreateResult {
     data class Created(val tabId: String) : WorkspaceTerminalCreateResult

@@ -7,6 +7,7 @@ import me.rerere.workspace.ProotLaunchSpec
 import me.rerere.workspace.RootfsPath
 import me.rerere.workspace.WorkspaceBindMount
 import net.weero.measix.pilot.data.enterprise.EnterpriseSessionController
+import net.weero.measix.pilot.data.enterprise.RealmSelection
 import net.weero.measix.pilot.data.enterprise.RealmAccess
 import net.weero.measix.pilot.data.files.ArtifactStore
 import net.weero.measix.pilot.data.files.FileUtils
@@ -119,10 +120,10 @@ class WorkspaceApplicationService internal constructor(
     suspend fun writeText(workspaceId: String, path: String, text: String) =
         gated(workspaceId) { repository.writeText(workspaceId, path, text, overwrite = true) }
 
-    suspend fun createTerminal(workspaceId: String): WorkspaceTerminalCreateResult = gated(workspaceId) {
+    suspend fun createTerminal(workspaceId: String, selection: RealmSelection): WorkspaceTerminalCreateResult = gated(workspaceId) {
         val workspace = requireWorkspace(workspaceId)
         if (workspace.resolvedShellStatus() != WorkspaceShellStatus.READY) WorkspaceTerminalCreateResult.NotReady
-        else terminals.create(workspace.root) { preparation ->
+        else terminals.create(workspace.root, selection) { preparation ->
             gated(workspaceId) {
                 val current = requireWorkspace(workspaceId)
                 if (
@@ -137,20 +138,20 @@ class WorkspaceApplicationService internal constructor(
         }
     }
 
-    suspend fun selectTerminal(workspaceId: String, tabId: String) = gated(workspaceId) {
-        terminals.select(requireWorkspace(workspaceId).root, tabId)
+    suspend fun selectTerminal(workspaceId: String, selection: RealmSelection, tabId: String) = gated(workspaceId) {
+        terminals.select(requireWorkspace(workspaceId).root, selection, tabId)
     }
 
-    suspend fun renameTerminal(workspaceId: String, tabId: String, title: String) = gated(workspaceId) {
-        terminals.rename(requireWorkspace(workspaceId).root, tabId, title)
+    suspend fun renameTerminal(workspaceId: String, selection: RealmSelection, tabId: String, title: String) = gated(workspaceId) {
+        terminals.rename(requireWorkspace(workspaceId).root, selection, tabId, title)
     }
 
-    suspend fun reorderTerminals(workspaceId: String, orderedIds: List<String>) = gated(workspaceId) {
-        terminals.reorder(requireWorkspace(workspaceId).root, orderedIds)
+    suspend fun reorderTerminals(workspaceId: String, selection: RealmSelection, orderedIds: List<String>) = gated(workspaceId) {
+        terminals.reorder(requireWorkspace(workspaceId).root, selection, orderedIds)
     }
 
-    suspend fun closeTerminal(workspaceId: String, tabId: String) = gated(workspaceId) {
-        terminals.close(requireWorkspace(workspaceId).root, tabId)
+    suspend fun closeTerminal(workspaceId: String, selection: RealmSelection, tabId: String) = gated(workspaceId) {
+        terminals.close(requireWorkspace(workspaceId).root, selection, tabId)
     }
 
     suspend fun installRootfs(
@@ -194,13 +195,13 @@ class WorkspaceApplicationService internal constructor(
         } finally { tool.open = false }
     }
 
-    fun bindViewport(tabId: String, viewport: WorkspaceTerminalViewport): Boolean =
-        terminals.bind(tabId, viewport.view)
+    suspend fun bindViewport(selection: RealmSelection, tabId: String, viewport: WorkspaceTerminalViewport): Boolean =
+        terminals.bind(selection, tabId, viewport.view)
 
     fun unbindViewport(tabId: String, viewport: WorkspaceTerminalViewport) =
         terminals.unbind(tabId, viewport.view)
 
-    fun writeTerminal(tabId: String, text: String) = terminals.write(tabId, text)
+    fun writeTerminal(selection: RealmSelection, tabId: String, text: String) = terminals.write(selection, tabId, text)
 
     private suspend fun requireWorkspace(id: String) =
         requireNotNull(repository.getById(id)) { "Workspace not found: $id" }

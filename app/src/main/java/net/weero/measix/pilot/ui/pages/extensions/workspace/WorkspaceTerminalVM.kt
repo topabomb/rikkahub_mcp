@@ -9,6 +9,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import net.weero.measix.pilot.data.enterprise.RealmSelection
+import net.weero.measix.pilot.data.enterprise.EnterpriseConfigurationException
 import net.weero.measix.pilot.service.workspace.WorkspaceApplicationService
 import net.weero.measix.pilot.service.workspace.WorkspaceTerminalViewport
 import net.weero.measix.pilot.service.workspace.WorkspaceQueryService
@@ -29,7 +31,7 @@ class WorkspaceTerminalVM(
     private val mutableCommandError = MutableStateFlow<WorkspaceTerminalCommandError?>(null)
     val commandError = mutableCommandError.asStateFlow()
 
-    private var initialTerminalRequested = false
+    private var initialTerminalSelection: RealmSelection? = null
     private var observedFailureId: String? = null
 
     init {
@@ -44,58 +46,62 @@ class WorkspaceTerminalVM(
                         }
                     }
                 }
-                if (!initialTerminalRequested && current.shellReady && current.terminal.tabs.isEmpty()) {
-                    initialTerminalRequested = true
-                    requestTerminal()
+                if (current.selection != null && initialTerminalSelection != current.selection && current.shellReady && current.terminal.tabs.isEmpty()) {
+                    initialTerminalSelection = current.selection
+                    requestTerminal(current.selection)
                 }
             }
         }
     }
 
-    fun create() {
+    fun create(selection: RealmSelection) {
         viewModelScope.launch {
-            requestTerminal()
+            requestTerminal(selection)
         }
     }
-    fun select(tabId: String) = launchCommand { applicationService.selectTerminal(workspaceId, tabId) }
-    fun close(tabId: String) = launchCommand { applicationService.closeTerminal(workspaceId, tabId) }
-    fun rename(tabId: String, title: String) = launchCommand {
-        applicationService.renameTerminal(workspaceId, tabId, title)
+    fun select(selection: RealmSelection, tabId: String) = launchCommand(selection) { applicationService.selectTerminal(workspaceId, selection, tabId) }
+    fun close(selection: RealmSelection, tabId: String) = launchCommand(selection) { applicationService.closeTerminal(workspaceId, selection, tabId) }
+    fun rename(selection: RealmSelection, tabId: String, title: String) = launchCommand(selection) {
+        applicationService.renameTerminal(workspaceId, selection, tabId, title)
     }
-    fun reorder(orderedIds: List<String>) = launchCommand {
-        applicationService.reorderTerminals(workspaceId, orderedIds)
+    fun reorder(selection: RealmSelection, orderedIds: List<String>) = launchCommand(selection) {
+        applicationService.reorderTerminals(workspaceId, selection, orderedIds)
     }
 
-    fun bindViewport(tabId: String, viewport: WorkspaceTerminalViewport): Boolean =
-        applicationService.bindViewport(tabId, viewport)
+    suspend fun bindViewport(selection: RealmSelection, tabId: String, viewport: WorkspaceTerminalViewport): Boolean = try {
+        applicationService.bindViewport(selection, tabId, viewport)
+    } catch (cancelled: CancellationException) { throw cancelled }
+    catch (_: EnterpriseConfigurationException) { false }
 
     fun unbindViewport(tabId: String, viewport: WorkspaceTerminalViewport) =
         applicationService.unbindViewport(tabId, viewport)
 
-    fun write(tabId: String, text: String) = applicationService.writeTerminal(tabId, text)
+    fun write(selection: RealmSelection, tabId: String, text: String) = applicationService.writeTerminal(selection, tabId, text)
 
     fun consumeCommandError() {
         mutableCommandError.value = null
     }
 
-    private fun launchCommand(block: suspend () -> Unit) {
+    private fun launchCommand(selection: RealmSelection, block: suspend () -> Unit) {
         viewModelScope.launch {
             try {
-                mutableCommandError.value = null
+                if (state.value.selection == selection) mutableCommandError.value = null
                 block()
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: Exception) {
                 Log.w(TAG, "Terminal command failed for workspace=$workspaceId", error)
-                mutableCommandError.value = WorkspaceTerminalCommandError.Unexpected
+                if (state.value.selection == selection) mutableCommandError.value = WorkspaceTerminalCommandError.Unexpected
             }
         }
     }
 
-    private suspend fun requestTerminal() {
-        mutableCommandError.value = null
+    private suspend fun requestTerminal(selection: RealmSelection) {
+        if (state.value.selection == selection) mutableCommandError.value = null
         try {
-            when (val result = applicationService.createTerminal(workspaceId)) {
+            val result = applicationService.createTerminal(workspaceId, selection)
+            if (state.value.selection != selection) return
+            when (result) {
                 is WorkspaceTerminalCreateResult.Created -> Unit
                 is WorkspaceTerminalCreateResult.LimitReached -> {
                     mutableCommandError.value = WorkspaceTerminalCommandError.LimitReached(result.maximum)
@@ -108,7 +114,7 @@ class WorkspaceTerminalVM(
             throw cancelled
         } catch (error: Exception) {
             Log.w(TAG, "Terminal creation failed for workspace=$workspaceId", error)
-            mutableCommandError.value = WorkspaceTerminalCommandError.Unexpected
+            if (state.value.selection == selection) mutableCommandError.value = WorkspaceTerminalCommandError.Unexpected
         }
     }
 

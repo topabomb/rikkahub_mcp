@@ -27,6 +27,27 @@ class EnterpriseSessionControllerTest {
     @get:Rule val temporary = TemporaryFolder()
 
     @Test
+    fun `failed or cancelled host shutdown retires rendered selection without changing the original session`() = runTest {
+        val controller = EnterpriseSessionController(EnterpriseAppliedStore(temporary.newFolder()))
+        controller.enrollFixture(exampleEnterprisePackage())
+        val original = controller.available()
+        for (failure in listOf(IOException("host close failed"), kotlinx.coroutines.CancellationException("cancelled"))) {
+            val selection = requireNotNull(controller.readPresentation().selection)
+            try {
+                controller.switchRealm(RealmSwitchRequest(selection, RealmAccess.Personal)) { throw failure }
+                fail("Expected shutdown failure")
+            } catch (actual: Throwable) { assertSame(failure, actual) }
+            val refreshed = requireNotNull(controller.readPresentation().selection)
+            assertEquals(selection.access, refreshed.access)
+            assertEquals(selection.revision + 1, refreshed.revision)
+            assertEquals(original, controller.available())
+            expectReason("enterprise_selection_revoked") {
+                controller.switchRealm(RealmSwitchRequest(selection, RealmAccess.Personal)) {}
+            }
+        }
+    }
+
+    @Test
     fun `transport capabilities follow the committed binding revision through failure restart and closing`() = runTest {
         val root = temporary.newFolder()
         var failCommit = false

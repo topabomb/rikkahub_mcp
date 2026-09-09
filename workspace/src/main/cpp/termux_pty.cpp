@@ -45,8 +45,12 @@ static void free_string_vector(std::vector<char *> &values) {
 static int open_pty_master(char *slave_name, size_t slave_name_size) {
     const int master = posix_openpt(O_RDWR | O_CLOEXEC);
     if (master < 0) return -1;
-    if (grantpt(master) != 0 || unlockpt(master) != 0 || ptsname_r(master, slave_name, slave_name_size) != 0) {
+    int error = 0;
+    if (grantpt(master) != 0 || unlockpt(master) != 0) error = errno;
+    else error = ptsname_r(master, slave_name, slave_name_size);
+    if (error != 0) {
         close(master);
+        errno = error;
         return -1;
     }
     return master;
@@ -66,7 +70,9 @@ Java_com_termux_terminal_JNI_createSubprocess(
     char slave_name[128] = {};
     const int master = open_pty_master(slave_name, sizeof(slave_name));
     if (master < 0) {
-        __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, "open pty failed: %s", strerror(errno));
+        const int error = errno;
+        __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, "open pty failed: %s", strerror(error));
+        env->ThrowNew(env->FindClass("java/io/IOException"), strerror(error));
         return -1;
     }
 
@@ -87,12 +93,14 @@ Java_com_termux_terminal_JNI_createSubprocess(
 
     const pid_t pid = fork();
     if (pid < 0) {
-        __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, "fork failed: %s", strerror(errno));
+        const int error = errno;
+        __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, "fork failed: %s", strerror(error));
         close(master);
         free(command);
         free(working_dir);
         free_string_vector(java_args);
         free_string_vector(java_env);
+        env->ThrowNew(env->FindClass("java/io/IOException"), strerror(error));
         return -1;
     }
 
@@ -144,9 +152,11 @@ Java_com_termux_terminal_JNI_setPtyWindowSize(JNIEnv *, jclass, jint fd, jint ro
 extern "C" JNIEXPORT jint JNICALL
 Java_com_termux_terminal_JNI_waitFor(JNIEnv *, jclass, jint pid) {
     int status = 0;
-    if (waitpid(pid, &status, 0) < 0) return -1;
+    pid_t waited;
+    do { waited = waitpid(pid, &status, 0); } while (waited < 0 && errno == EINTR);
+    if (waited < 0) return -1;
     if (WIFEXITED(status)) return WEXITSTATUS(status);
-    if (WIFSIGNALED(status)) return 128 + WTERMSIG(status);
+    if (WIFSIGNALED(status)) return -WTERMSIG(status);
     return status;
 }
 

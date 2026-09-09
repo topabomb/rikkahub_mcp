@@ -12,6 +12,11 @@ modules:
       - "app/src/main/java/**/*.java"
       - "app/src/main/AndroidManifest.xml"
       - "app/src/main/res/xml/*.xml"
+  - name: "workspace"
+    res_path: "workspace/src/main/res"
+    source_patterns:
+      - "workspace/src/main/**/*.kt"
+      - "workspace/src/main/**/*.java"
   - name: "ai"
     res_path: "ai/src/main/res"
     source_patterns:

@@ -169,7 +169,7 @@ stdout、stderr 和可选 stdin 使用独立 daemon 线程。
 
 ## 7. 交互终端
 
-`WorkspaceTerminalRuntime` 是所有交互终端的 application-scoped owner。它通过 service 层的 `WorkspaceTerminalSession` helper 创建 Termux PTY，并独占 session、创建 Job、tab 顺序、选中项和 shell-exit 清理。UI/VM 只持有 `WorkspaceTerminalTabUiModel`；UI 自己拥有的 `TerminalView` 以 `WorkspaceTerminalViewport` capability 按 tab id bind/unbind，不能取得 runtime-owned `TerminalSession`。页面离开或应用进入后台不关闭 PTY，进程死亡后也不持久化虚假的运行态。
+`WorkspaceTerminalRuntime` 是所有交互终端的 application-scoped owner。它通过 service 层的 `WorkspacePtySession` 创建 Termux PTY，并独占原 RealmAccess、session、创建 Job、字节 writer、tab 顺序、选中项和 shell-exit 清理。UI/VM 只持有 `WorkspaceTerminalTabUiModel`；UI 自己拥有的 `TerminalView` 以 `WorkspaceTerminalViewport` capability 按 tab id bind/unbind，不能取得 runtime-owned `TerminalSession`。页面离开或应用进入后台不关闭 PTY，进程死亡后也不持久化虚假的运行态。
 关闭终端 Tab 前需要二次确认：确认态是 `WorkspaceTerminalPage` 的 UI 临时状态，确认后仍经
 `WorkspaceApplicationService` → `WorkspaceTerminalRuntime` 串行关闭；tab 在确认期间因 shell exit 或
 Workspace 删除而消失时自动清除 pending，不发送无意义命令。
@@ -178,7 +178,13 @@ Workspace 删除而消失时自动清除 pending，不发送无意义命令。
 
 Workspace command 仍由 `WorkspaceApplicationService` 拥有；持久化列表/文件预览和 terminal 聚合投影都由 `WorkspaceQueryService` 提供，其中 terminal 读口是 `observeTerminal(workspaceId)`。Query 不获得写能力，也不反向调用 ApplicationService。`WorkspaceTerminalViewport` 只表达 UI viewport capability，不是 session facade 或第二生命周期 owner。
 
-创建中只发布 `PREPARING`，创建成功后发布 `READY`；Rootfs 未就绪、创建失败、取消或 shell exit 都走同一 remove 路径，失败 Tab 不留在 read model。Rootfs/PTY 异步创建失败由 runtime 在同一 Workspace projection 发布带唯一 id 的 typed `lastFailure`，VM 只把新 failure 映射为用户提示；主动关闭或取消不能伪造失败。单 Workspace 最多六个 Tab。rename/reorder/select/close 与创建保留都在 runtime mutex 内决定；资源 finish 在条目先从 read model 移除后执行。创建准备、模型工具执行和 `WorkspaceApplicationService` 的 UI 文件命令/install/delete 使用同一组固定条带 mutex，既阻止同一 Workspace 的 Rootfs/PTY/工具 TOCTOU，也不会按历史 Workspace id 无限保留锁对象。
+条目按 Workspace root 与原 RealmAccess（含完整企业 Session）投影，所有条目和 viewport 状态限制在 Main。创建中为 `PREPARING`，成功后为 `READY`；关闭先变为 `CLOSING` 并退休视图，实际进程退出且 writer 完成后才移除。关闭失败保留原条目供重试。尚未首次布局的 PID 0 不发送进程信号。单 Workspace 跨域合计最多六个 Tab，配置与数据库不保存运行态。
+
+页面操作捕获原 RealmSelection。绑定、resize、按键、粘贴与 UI 命令等待 Session 准入；锁忙不等于授权失效。切域在发布新选择前永久退休旧 viewport、IME、选择句柄和延迟滚动回调，并取消尚未准入的操作。切回同一有效 Session 时用新视图接回原 PTY。切换在退休后失败或取消时，Session owner 保留原域但推进选择版本，旧视图永不复活。退出通过原 PTY owner 关闭该企业 Session 的终端。
+
+Termux view 与 emulator 源码在既有 Workspace 模块维护，来源和修改见 `workspace/TERMINAL-SOURCE.md`。协议编码、屏幕更新与自动响应仍在 Main；`WorkspacePtySession.write(byte[], offset, count)` 是唯一字节交付边界，原条目复制字节并由串行 IO writer 排空。Main 使用单个字节缓冲区合并逐字符输入，以单个合并唤醒信号驱动 writer，不为每个字符保留队列节点。待交付总字节量包含正在写入的批次，超限明确关闭并提示失败。Session 锁不包住可能阻塞的 ByteQueue 写入；取消先停止 PTY 以释放阻塞写，再等待 writer 完成。已编码的输入和自动回复始终归原 PTY，不改投新域。
+
+Rootfs/PTY 异步失败由 runtime 在同一 Workspace projection 发布带唯一 id 的 typed `lastFailure`，VM 只映射新 failure。创建准备、模型工具执行和 `WorkspaceApplicationService` 的 UI 文件命令/install/delete 使用同一组固定条带 mutex，不按历史 Workspace id 无限保留锁对象。
 
 `WorkspaceApplicationService.installRootfs` 与 `deleteWorkspace` 必须在同一 Workspace command gate 内先 `closeWorkspace` 并等待全部创建 Job/PTY 收口，再调用 Repository。删除与故障恢复协议见下文“状态与删除”。
 

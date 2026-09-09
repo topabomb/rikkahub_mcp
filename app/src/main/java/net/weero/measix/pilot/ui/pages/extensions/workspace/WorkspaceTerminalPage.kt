@@ -30,6 +30,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
+import androidx.compose.runtime.key
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -101,27 +102,28 @@ fun WorkspaceTerminalPage(id: String) {
                 )
             },
         ) { padding ->
-            WorkspaceTerminalContent(
+            val selection = state.selection
+            key(selection) { WorkspaceTerminalContent(
                 state = state,
                 contentPadding = padding,
-                bindViewport = vm::bindViewport,
+                bindViewport = { tab, view -> selection?.let { vm.bindViewport(it, tab, view) } ?: false },
                 unbindViewport = vm::unbindViewport,
-                writeTerminal = vm::write,
-                onCreate = vm::create,
-                onSelect = vm::select,
-                onClose = vm::close,
-                onRename = vm::rename,
-                onReorder = vm::reorder,
-            )
+                writeTerminal = { tab, text -> selection?.let { vm.write(it, tab, text) } },
+                onCreate = { selection?.let(vm::create) },
+                onSelect = { tab -> selection?.let { vm.select(it, tab) } },
+                onClose = { tab -> selection?.let { vm.close(it, tab) } },
+                onRename = { tab, title -> selection?.let { vm.rename(it, tab, title) } },
+                onReorder = { ids -> selection?.let { vm.reorder(it, ids) } },
+            ) }
         }
     }
 }
 
 @Composable
-private fun WorkspaceTerminalContent(
+internal fun WorkspaceTerminalContent(
     state: WorkspaceTerminalScreenUiModel,
     contentPadding: PaddingValues,
-    bindViewport: (String, WorkspaceTerminalViewport) -> Boolean,
+    bindViewport: suspend (String, WorkspaceTerminalViewport) -> Boolean,
     unbindViewport: (String, WorkspaceTerminalViewport) -> Unit,
     writeTerminal: (String, String) -> Unit,
     onCreate: () -> Unit,
@@ -152,7 +154,7 @@ private fun WorkspaceTerminalContent(
                     )
                 }
             } else {
-                WorkspaceTerminalView(selected, bindViewport, unbindViewport, writeTerminal)
+                key(selected.id) { WorkspaceTerminalView(selected, bindViewport, unbindViewport, writeTerminal) }
             }
         }
     }
@@ -283,14 +285,14 @@ private fun WorkspaceTerminalTabs(
 @Composable
 private fun WorkspaceTerminalView(
     tab: WorkspaceTerminalTabUiModel,
-    bindViewport: (String, WorkspaceTerminalViewport) -> Boolean,
+    bindViewport: suspend (String, WorkspaceTerminalViewport) -> Boolean,
     unbindViewport: (String, WorkspaceTerminalViewport) -> Unit,
     writeTerminal: (String, String) -> Unit,
 ) {
     if (tab.readiness != WorkspaceTerminalReadiness.READY) {
         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
             Text(
-                stringResource(R.string.workspace_terminal_loading),
+                stringResource(if (tab.readiness == WorkspaceTerminalReadiness.CLOSING) R.string.workspace_terminal_closing else R.string.workspace_terminal_loading),
                 color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f),
             )
         }
@@ -307,10 +309,14 @@ private fun WorkspaceTerminalView(
     viewClient.altDown = altDown
     var boundView by remember(tab.id) { mutableStateOf<TerminalView?>(null) }
 
-    DisposableEffect(tab.id, boundView) {
+    val currentView = boundView
+    LaunchedEffect(tab.id, currentView) {
+        currentView?.let { bindViewport(tab.id, WorkspaceTerminalViewport(it)) }
+    }
+    DisposableEffect(tab.id, currentView) {
         onDispose {
-            boundView?.let { unbindViewport(tab.id, WorkspaceTerminalViewport(it)) }
-            viewClient.terminalView = null
+            currentView?.let { unbindViewport(tab.id, WorkspaceTerminalViewport(it)) }
+            if (currentView != null && viewClient.terminalView === currentView) viewClient.terminalView = null
         }
     }
 
@@ -326,7 +332,6 @@ private fun WorkspaceTerminalView(
                     setTerminalViewClient(viewClient)
                     viewClient.terminalView = this
                     boundView = this
-                    bindViewport(tab.id, WorkspaceTerminalViewport(this))
                     setOnTouchListener { view, event ->
                         if (event.action == MotionEvent.ACTION_UP) {
                             view.performClick()
@@ -343,7 +348,6 @@ private fun WorkspaceTerminalView(
                 view.setTerminalViewClient(viewClient)
                 viewClient.terminalView = view
                 boundView = view
-                bindViewport(tab.id, WorkspaceTerminalViewport(view))
             },
         )
         TerminalExtraKeysBar(

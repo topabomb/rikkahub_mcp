@@ -4,6 +4,7 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
+import android.os.Looper
 import android.net.ConnectivityManager
 import android.util.Log
 import android.view.KeyEvent
@@ -24,8 +25,8 @@ import java.io.File
 internal fun createWorkspaceTerminalSession(
     context: Context,
     root: String,
-    client: TerminalSessionClient,
-): TerminalSession {
+    client: WorkspaceTerminalSessionClient,
+): WorkspacePtySession {
     val appContext = context.applicationContext
     val workspaceDir = File(File(appContext.filesDir, "workspaces"), root)
     val filesDir = File(workspaceDir, "files")
@@ -39,7 +40,7 @@ internal fun createWorkspaceTerminalSession(
         bindMounts = ProotLaunchSpec.appBindMounts(appContext.filesDir),
     )
 
-    return TerminalSession(
+    return WorkspacePtySession(
         spec.executable.absolutePath,
         spec.workingDirectory.absolutePath,
         spec.arguments.toTypedArray(),
@@ -48,6 +49,27 @@ internal fun createWorkspaceTerminalSession(
         client,
     ).apply {
         mSessionName = root
+    }
+}
+
+/** Keeps upstream protocol encoding on Main and delegates only immutable bytes to the PTY owner. */
+internal class WorkspacePtySession(
+    shellPath: String,
+    cwd: String,
+    args: Array<String>,
+    env: Array<String>,
+    transcriptRows: Int,
+    private val client: WorkspaceTerminalSessionClient,
+) : TerminalSession(shellPath, cwd, args, env, transcriptRows, client) {
+    override fun write(data: ByteArray, offset: Int, count: Int) {
+        check(Looper.myLooper() == Looper.getMainLooper())
+        require(offset >= 0 && count >= 0 && offset <= data.size - count)
+        client.onWrite(this, data, offset, count)
+    }
+
+    fun drain(bytes: ByteArray) {
+        check(Looper.myLooper() != Looper.getMainLooper())
+        super.write(bytes, 0, bytes.size)
     }
 }
 
@@ -71,6 +93,8 @@ internal fun workspaceRootfsReady(context: Context, root: String): Boolean {
 
 internal class WorkspaceTerminalSessionClient(
     private val context: Context,
+    private val onAction: (() -> Unit) -> Boolean,
+    val onWrite: (WorkspacePtySession, ByteArray, Int, Int) -> Unit,
     private val onFinished: () -> Unit,
 ) : TerminalSessionClient {
     var terminalView: TerminalView? = null
@@ -82,25 +106,25 @@ internal class WorkspaceTerminalSessionClient(
     override fun onTitleChanged(changedSession: TerminalSession) = Unit
 
     override fun onSessionFinished(finishedSession: TerminalSession) {
-        terminalView?.onScreenUpdated()
         onFinished()
     }
 
     override fun onCopyTextToClipboard(session: TerminalSession, text: String) {
         val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-        clipboard.setPrimaryClip(ClipData.newPlainText("terminal", text))
+        onAction { clipboard.setPrimaryClip(ClipData.newPlainText("terminal", text)) }
     }
 
     override fun onPasteTextFromClipboard(session: TerminalSession) {
-        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-        val text = clipboard.primaryClip
-            ?.takeIf { it.itemCount > 0 }
-            ?.getItemAt(0)
-            ?.coerceToText(context)
-            ?.toString()
-            ?: return
-        val bytes = text.toByteArray()
-        session.write(bytes, 0, bytes.size)
+        onAction {
+            val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+            val text = clipboard.primaryClip
+                ?.takeIf { it.itemCount > 0 }
+                ?.getItemAt(0)
+                ?.coerceToText(context)
+                ?.toString()
+                ?: return@onAction
+            session.emulator?.paste(text)
+        }
     }
 
     override fun onBell(session: TerminalSession) = Unit
@@ -205,8 +229,7 @@ internal class WorkspaceTerminalViewClient(
         return runCatching {
             val intent = Intent(Intent.ACTION_VIEW, url.toUri())
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            context.startActivity(intent)
-            true
+            view.dispatchAction { context.startActivity(intent) }
         }.getOrElse {
             Log.w("WorkspaceTerminal", "Failed to open url: $url", it)
             false
@@ -217,9 +240,11 @@ internal class WorkspaceTerminalViewClient(
         val view = terminalView ?: return
         val inputMethodManager = context.getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
         view.post {
-            view.requestFocus()
-            @Suppress("DEPRECATION")
-            inputMethodManager.showSoftInput(view, InputMethodManager.SHOW_IMPLICIT)
+            if (terminalView === view && !view.isRetired) view.dispatchAction {
+                view.requestFocus()
+                @Suppress("DEPRECATION")
+                inputMethodManager.showSoftInput(view, InputMethodManager.SHOW_IMPLICIT)
+            }
         }
     }
 
@@ -229,7 +254,7 @@ internal class WorkspaceTerminalViewClient(
 
     override fun shouldUseCtrlSpaceWorkaround(): Boolean = false
 
-    override fun isTerminalViewSelected(): Boolean = true
+    override fun isTerminalViewSelected(): Boolean = terminalView?.let { !it.isRetired } == true
 
     override fun copyModeChanged(copyMode: Boolean) = Unit
 

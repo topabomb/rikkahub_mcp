@@ -57,7 +57,6 @@ profileinstaller = "1.4.1"
 ktor = "3.5.2"
 slf4j = "2.0.18"
 sqlite-android = "-SNAPSHOT"
-termux = "0.118.0"
 diffutils = "4.17"
 mockk = "1.14.5"
 kotlinx-coroutines-test = "1.11.0"
@@ -161,7 +160,6 @@ xz = { module = "org.tukaani:xz", version = "1.12" }
 slf4j-api = { module = "org.slf4j:slf4j-api", version.ref = "slf4j" }
 slf4j-android = { module = "uk.uuid.slf4j:slf4j-android", version = "2.0.17-0" }
 sqlite-android = { module = "com.github.rikkahub:sqlite-android", version.ref = "sqlite-android" }
-termux-terminal-view = { module = "com.termux.termux-app:terminal-view", version.ref = "termux" }
 snakeyaml = { module = "org.yaml:snakeyaml", version.ref = "snakeyaml" }
 
 [plugins]

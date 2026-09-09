@@ -16,6 +16,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class WorkspaceApplicationServiceTest {
+    private val selection = net.weero.measix.pilot.data.enterprise.RealmSelection(net.weero.measix.pilot.data.enterprise.RealmAccess.Personal, 0)
     @get:org.junit.Rule val temporary = org.junit.rules.TemporaryFolder()
     private fun workspaceService(repository: WorkspaceRepository, terminals: WorkspaceTerminalRuntime) = WorkspaceApplicationService(
         repository, terminals, mockk(),
@@ -173,10 +174,10 @@ class WorkspaceApplicationServiceTest {
             updatedAt = 1,
         )
 
-        val result = workspaceService(repository, terminals).createTerminal("id")
+        val result = workspaceService(repository, terminals).createTerminal("id", selection)
 
         assertEquals(WorkspaceTerminalCreateResult.NotReady, result)
-        coVerify(exactly = 0) { terminals.create(any(), any()) }
+        coVerify(exactly = 0) { terminals.create(any(), any(), any()) }
     }
 
     @Test
@@ -225,19 +226,19 @@ class WorkspaceApplicationServiceTest {
             finishMutation.await()
             true
         }
-        coEvery { terminals.create("root", any()) } returns WorkspaceTerminalCreateResult.Created("tab")
+        coEvery { terminals.create("root", selection, any()) } returns WorkspaceTerminalCreateResult.Created("tab")
         val service = workspaceService(repository, terminals)
 
         val install = async { service.installRootfs("id", "url") {} }
         mutationStarted.await()
-        val create = async { service.createTerminal("id") }
+        val create = async { service.createTerminal("id", selection) }
         runCurrent()
 
-        coVerify(exactly = 0) { terminals.create(any(), any()) }
+        coVerify(exactly = 0) { terminals.create(any(), any(), any()) }
         finishMutation.complete(Unit)
         assertTrue(install.await())
         assertEquals(WorkspaceTerminalCreateResult.Created("tab"), create.await())
-        coVerify(exactly = 1) { terminals.create("root", any()) }
+        coVerify(exactly = 1) { terminals.create("root", selection, any()) }
     }
 
     @Test
@@ -249,12 +250,12 @@ class WorkspaceApplicationServiceTest {
         val prepared = CompletableDeferred<Unit>()
         lateinit var prepareUnderGate: suspend (suspend () -> Boolean) -> Boolean
         coEvery { repository.getById("id") } returns workspace()
-        coEvery { terminals.create("root", any()) } coAnswers {
-            prepareUnderGate = secondArg()
+        coEvery { terminals.create("root", selection, any()) } coAnswers {
+            prepareUnderGate = thirdArg()
             WorkspaceTerminalCreateResult.Created("tab")
         }
         val service = workspaceService(repository, terminals)
-        assertEquals(WorkspaceTerminalCreateResult.Created("tab"), service.createTerminal("id"))
+        assertEquals(WorkspaceTerminalCreateResult.Created("tab"), service.createTerminal("id", selection))
 
         val tool = async {
             service.executeTool("id", net.weero.measix.pilot.data.enterprise.RealmAccess.Personal) {

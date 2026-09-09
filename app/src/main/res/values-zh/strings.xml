@@ -1661,4 +1661,5 @@
   <string name="setting_files_page_load_failed">无法加载文件</string>
   <string name="chat_message_attachment_open_failed">无法打开此附件。文件可能已不可用，或访问授权已结束。</string>
   <string name="rendered_content_unavailable">此预览已不可用，请从原页面重新打开。</string>
+  <string name="workspace_terminal_closing">正在关闭终端…</string>
 </resources>

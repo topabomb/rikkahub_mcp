@@ -175,7 +175,7 @@ class EnterpriseApplicationServiceTest {
             every { failure } returns MutableStateFlow<EnterpriseExitFailure?>(null)
         }
         val service = EnterpriseApplicationService(sessions, mockk(), synchronization, exit, portals,
-            ApplicationRecoveryGate().apply { ready() }, scope, mockk())
+            ApplicationRecoveryGate().apply { ready() }, scope, mockk(), mockk { io.mockk.coEvery { revokeViewports(any()) } returns Unit })
         val documents = mutableListOf<PortalDocument>()
         val hosts = mutableListOf<BlockedHost>()
 

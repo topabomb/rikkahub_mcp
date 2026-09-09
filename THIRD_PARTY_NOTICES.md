@@ -5,6 +5,7 @@ the license metadata packaged by Gradle dependencies and the source-specific pro
 
 | Component | Version | License | Source / provenance |
 | --- | --- | --- | --- |
+| Termux terminal-view / terminal-emulator | 0.118.0, locally maintained source | GPL-3.0-only with upstream Apache-2.0 source exception | [`workspace/TERMINAL-SOURCE.md`](workspace/TERMINAL-SOURCE.md) |
 | SnakeYAML | 2.6 | Apache-2.0 | <https://bitbucket.org/snakeyaml/snakeyaml>; resolved through the Gradle dependency catalog |
 | PRoot | 5.1.107.92 | GPL-2.0-or-later | [`workspace/PROOT.md`](workspace/PROOT.md) and [`workspace/proot-lock.json`](workspace/proot-lock.json) |
 | libtalloc | 2.4.3 | LGPL-3.0-or-later | Statically linked into the recorded PRoot artifacts; source hash is pinned in `workspace/proot-lock.json` |

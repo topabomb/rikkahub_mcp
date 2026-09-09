@@ -213,7 +213,6 @@ android {
     packaging {
         jniLibs {
             useLegacyPackaging = true
-            pickFirsts += "lib/*/libtermux.so"
         }
         resources {
             // JUnit 5 (pulled by androidTest deps) ships duplicate META-INF license files.
@@ -288,7 +287,6 @@ dependencies {
     implementation(libs.androidx.browser)
     implementation(libs.androidx.webkit)
     implementation(libs.androidx.profileinstaller)
-    implementation(libs.termux.terminal.view)
     implementation(libs.snakeyaml)
     implementation(libs.re2j)
 

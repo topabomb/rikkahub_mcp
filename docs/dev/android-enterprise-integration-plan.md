@@ -592,4 +592,8 @@ Workspace 输入交付已接通原 RealmAccess：原生 `/upload` 读取由 Arti
 
 该批独立审查无剩余实质问题。最终串行 `test assembleDebug lintDebug assembleRelease connectedDebugAndroidTest` 通过（13 分 59 秒）：App 2,081 项 JVM、Android 17 模拟器 App 179 项与 Speech 6 项无失败；lint 0 错误、290 警告。Workspace JVM 48 项中保留 11 项 Windows 条件跳过，设备 11 项中保留 1 项硬链接条件跳过。首次全量运行遇到 JBR 编译器自身崩溃，保留诊断后原代码完整重跑通过，未放宽断言。应用设备用例使用真实 Room/Artifact/文件与受控 Shell adapter，进程终止另由确定性 Process 用例验证，不冒充真实 PRoot 命令验收。分层证据见 `build/reports/enterprise/workspace-input-verification.json`。
 
-Workspace 尚需完成 PTY 与 SAF 接线：原 Session 保留终端，原选择版本约束输入与页面操作；切域在发布新选择前永久退休旧 viewport，返回同一有效 Session 可用新视图接回原 PTY。绑定和输入等待原 Session 准入，锁忙不能静默丢弃按键；已接受关闭即使页面取消也继续收口，失败保留 owner 供重试。SAF 仍暴露共享 Workspace，经既有应用/查询入口与描述符安全操作完成，不另建当前域状态。沿用 PRoot 的既有非内核沙箱边界：限制应用交付的文件并保护原 Artifact，不宣称能够阻断恶意 Shell 的所有宿主访问。共享配置资产复制、MCP/Gateway、Speech、备份及版本 20 整体验收继续实施；当前版本仍为 0.0.19。
+Workspace PTY 已完成实现、独立复审与完整门禁；SAF 仍待接线：原 Session 保留终端，原选择版本约束输入与页面操作；切域在发布新选择前永久退休旧 viewport，返回同一有效 Session 可用新视图接回原 PTY。绑定和输入等待原 Session 准入，锁忙不能静默丢弃按键；已接受关闭即使页面取消也继续收口，失败保留 owner 供重试。SAF 仍暴露共享 Workspace，经既有应用/查询入口与描述符安全操作完成，不另建当前域状态。沿用 PRoot 的既有非内核沙箱边界：限制应用交付的文件并保护原 Artifact，不宣称能够阻断恶意 Shell 的所有宿主访问。共享配置资产复制、MCP/Gateway、Speech、备份及版本 20 整体验收继续实施；当前版本仍为 0.0.19。
+
+PTY 最终串行 `test assembleDebug lintDebug assembleRelease connectedDebugAndroidTest` 通过（9 分 7 秒）：App 2,083 项 JVM、Android 17 模拟器 App 186 项与 Speech 6 项无失败；App lint 0 错误、287 警告，Workspace lint 0 错误、11 警告。Workspace JVM 保留 11 项 Windows 条件跳过，设备 11 项中保留 1 项硬链接条件跳过。分层结果见 `build/reports/enterprise/workspace-terminal-verification.json`。
+
+新增设备消费者验证包含 6 项原生 PTY 场景和 1 项实际 Compose 页面场景：真实 JNI 与系统 shell 覆盖阻塞输入、自动回复、中文长文本、输入上限、取消、旧 IME/autofill 拒绝及切域失败；Compose 验证标签切换、物理视图退休/重建和扩展键路由。完整回归暴露的首次绑定轮询超时已改用 Compose 空闲同步，断言不放宽。原生 open/fork 失败抛错、waitpid 重试 EINTR、信号退出按 JNI 约定返回负值。本批未新增数据库或配置结构，不代表 PRoot 全场景、Release 设备或真实平台验收。

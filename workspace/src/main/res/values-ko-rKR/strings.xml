@@ -1,0 +1,6 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<resources>
+  <string name="copy_text">복사</string>
+  <string name="paste_text">붙여넣기</string>
+  <string name="text_selection_more">더보기…</string>
+</resources>

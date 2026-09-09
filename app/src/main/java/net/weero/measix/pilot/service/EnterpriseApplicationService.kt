@@ -32,6 +32,7 @@ internal class EnterpriseApplicationService(
     private val recovery: ApplicationRecoveryGate,
     private val scope: CoroutineScope,
     private val media: PortalMediaStore,
+    private val terminals: net.weero.measix.pilot.service.workspace.WorkspaceTerminalRuntime,
 ) {
     private data class Switching(val request: RealmSwitchRequest, val result: Deferred<RealmSelection>)
     private val mutex = Mutex()
@@ -100,6 +101,7 @@ internal class EnterpriseApplicationService(
         var failure: Exception? = null
         try {
             selected = sessions.switchRealm(request) { previous ->
+                terminals.revokeViewports(previous)
                 if (previous is RealmAccess.Enterprise) {
                     receipt = portals.capture(previous)
                     receipt!!.revoke(PortalCloseReason.AUTHORIZATION_REVOKED)
