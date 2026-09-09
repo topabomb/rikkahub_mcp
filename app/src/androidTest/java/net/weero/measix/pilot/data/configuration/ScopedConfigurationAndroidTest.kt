@@ -60,7 +60,7 @@ class ScopedConfigurationAndroidTest {
                 val target = env.assistantTarget(assistant.id)
                 env.commands.changeAssistantPreference(target, AssistantPreferenceChange.Model(packet.identity.reference("mdl_chat")))
                 env.commands.changeAssistantPreference(target, AssistantPreferenceChange.Search(AssistantSearchMode.LOCAL))
-                env.commands.setGatewayEnabled(access, packet.identity.reference("gw_optional"), false)
+                env.commands.setGatewayEnabled(access, packet.identity.reference("twg_example"), false)
             }
             withEnvironment(app, root) { env ->
                 val enterprise = env.queries.observeCurrent().first()
@@ -70,8 +70,8 @@ class ScopedConfigurationAndroidTest {
                 assertFalse(BuiltInTools.Search in enterprise.availableChatModel(enterprise.assistants.getValue(assistant.id))!!.tools)
                 assertTrue(enterprise.assistants.getValue(assistant.id).enableWebSearch)
                 val document = env.document()
-                assertFalse(document.preferences.gateway(packet.identity.scope, packet.identity.reference("gw_optional"))!!.enabled)
-                val gateway = enterprise.catalog.getValue(ConfigurationKey(ConfigurationCategory.GATEWAY, packet.identity.reference("gw_optional")))
+                assertFalse(document.preferences.gateway(packet.identity.scope, packet.identity.reference("twg_example"))!!.enabled)
+                val gateway = enterprise.catalog.getValue(ConfigurationKey(ConfigurationCategory.GATEWAY, packet.identity.reference("twg_example")))
                 assertEquals(ResolvedGatewayEnablement(false, true), gateway.gatewayEnablement)
                 assertEquals(provider, document.configuration.providers.single { it.id == provider.id })
                 assertEquals(model.id, document.configuration.assistants.single { it.id == assistant.id }.chatModelId)
@@ -89,9 +89,9 @@ class ScopedConfigurationAndroidTest {
                 val bob = packet.copy(identity = packet.identity.copy(userId = "bob"))
                 env.sessions.enrollLocal(bob.identity, { bob.identity }, { bob })
                 assertNull(env.document().preferences.assistantUsage(bob.identity.scope, assistant.id))
-                assertNull(env.document().preferences.gateway(bob.identity.scope, bob.identity.reference("gw_optional")))
+                assertNull(env.document().preferences.gateway(bob.identity.scope, bob.identity.reference("twg_example")))
                 assertTrue(env.queries.observeCurrent().first().catalog.getValue(
-                    ConfigurationKey(ConfigurationCategory.GATEWAY, bob.identity.reference("gw_optional"))).gatewayEnablement!!.enabled)
+                    ConfigurationKey(ConfigurationCategory.GATEWAY, bob.identity.reference("twg_example"))).gatewayEnablement!!.enabled)
                 assertEquals(model.id, env.queries.observeCurrent().first().assistantModel(assistant.id).reference)
             }
         } finally { root.deleteRecursively() }

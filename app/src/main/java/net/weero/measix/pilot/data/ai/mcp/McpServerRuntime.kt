@@ -405,7 +405,10 @@ internal class McpServerRuntime(
                         true
                     }
                     if (!discovering) return@withTimeout
-                    val candidate = McpCatalogDiscovery.fetchCandidate(config, createdClient, net.weero.measix.pilot.data.configuration.ConfigurationScope.Personal)
+                    val candidate = McpCatalogDiscovery.fetchCandidate(
+                        McpCatalogKey(net.weero.measix.pilot.data.configuration.ConfigurationScope.Personal, config.id),
+                        config.mcpDefinitionDigest(), createdClient,
+                    )
                     if (!matchesClientLease(assignedGeneration, createdClient, config)) return@withTimeout
                     commitAndActivateCatalog(candidate) { catalogResult ->
                         if (!matchesClientLeaseLocked(assignedGeneration, createdClient, config)) return@commitAndActivateCatalog false
@@ -695,6 +698,9 @@ internal class McpServerRuntime(
                     catalogResult.snapshot,
                 )
             }
+            is McpCatalogCommitResult.RejectedGeneration -> {
+                setStatusLocked(McpStatus.Error("MCP catalog generation is stale; synchronize enterprise configuration"))
+            }
             is McpCatalogCommitResult.RejectedEmpty -> {
                 setStatusLocked(
                     catalogResult.lastKnownGood?.let { catalog ->
@@ -920,7 +926,10 @@ internal class McpServerRuntime(
                             if (!matchesClientLease(assignedGeneration, lease.client, lease.config)) {
                                 return@withTimeout
                             }
-                            val candidate = McpCatalogDiscovery.fetchCandidate(lease.config, lease.client, net.weero.measix.pilot.data.configuration.ConfigurationScope.Personal)
+                            val candidate = McpCatalogDiscovery.fetchCandidate(
+                                McpCatalogKey(net.weero.measix.pilot.data.configuration.ConfigurationScope.Personal, lease.config.id),
+                                lease.config.mcpDefinitionDigest(), lease.client,
+                            )
                             if (!matchesClientLease(assignedGeneration, lease.client, lease.config)) {
                                 return@withTimeout
                             }

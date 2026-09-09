@@ -60,7 +60,7 @@ class McpCatalogIdentityTest {
             val b = enterpriseCandidate(ConfigurationScope.Enterprise(local, "b")).initialSnapshot()
             val remote = enterpriseCandidate(ConfigurationScope.Enterprise(platform, "a")).initialSnapshot()
             listOf(a, b, remote).forEach { snapshot ->
-                store.commitCandidate(McpCatalogCandidate(snapshot.scope, snapshot.serverId, snapshot.definitionDigest, snapshot.tools))
+                store.commitCandidate(McpCatalogCandidate(snapshot.scope, snapshot.serverId, snapshot.definitionDigest, snapshot.tools, snapshot.managed))
             }
             store.commitCandidate(personalCandidate("old"))
             assertEquals(4, store.catalogs.value.size)
@@ -130,12 +130,86 @@ class McpCatalogIdentityTest {
         }
     }
 
+    @Test fun `new managed generation advances even for identical tools and stale work cannot replace or protect it`() = runBlocking {
+        withDisk { store, disk ->
+            val scope = ConfigurationScope.Enterprise(EnterpriseAuthority("local:example", "deployment"), "user")
+            val candidate = enterpriseCandidate(scope)
+            val first = store.commitCandidate(candidate) as McpCatalogCommitResult.Committed
+            val newer = candidate.copy(managed = McpManagedCatalog(2))
+            val next = store.commitCandidate(newer) as McpCatalogCommitResult.Committed
+            assertEquals(first.snapshot.catalogDigest, next.snapshot.catalogDigest)
+            assertEquals(2L, next.snapshot.revision)
+            val bytes = disk.data.first()[documentKey]
+            assertEquals(McpCatalogCommitResult.RejectedGeneration(2), store.commitCandidate(candidate.copy(tools = listOf(tool("late")))))
+            assertEquals(McpCatalogCommitResult.RejectedGeneration(2), store.commitCandidate(candidate.copy(tools = emptyList())))
+            assertEquals(bytes, disk.data.first()[documentKey])
+            assertEquals(next.snapshot, store.catalogs.value[candidate.key])
+            try { store.commitCandidate(newer.copy(definitionDigest = "conflict")); fail("Same generation changed definition") }
+            catch (_: IllegalArgumentException) { }
+            // Rejected old work cannot take over the current commit's compensation receipt.
+            store.rollbackCommitted(next.snapshot, next.previous, next.headToken)
+            assertEquals(first.snapshot, store.catalogs.value[candidate.key])
+        }
+    }
+
+    @Test fun `managed metadata cannot be omitted or attached to a personal catalog`() {
+        val scope = ConfigurationScope.Enterprise(EnterpriseAuthority("local:example", "deployment"), "user")
+        assertThrows(IllegalArgumentException::class.java) { enterpriseCandidate(scope).copy(managed = null) }
+        assertThrows(IllegalArgumentException::class.java) { personalCandidate("personal").copy(managed = McpManagedCatalog(1)) }
+        val serialized = JsonInstant.encodeToJsonElement(personalCandidate("personal").initialSnapshot()) as JsonObject
+        assertFalse("managed" in serialized)
+        assertThrows(IllegalArgumentException::class.java) { McpManagedCatalog(0) }
+    }
+
+    @Test fun `Gateway metadata cannot be omitted or moved to another resource type on commit or reopen`() = runBlocking {
+        val packet = net.weero.measix.pilot.data.enterprise.exampleEnterprisePackage()
+        val resource = packet.configuration.gateways.single()
+        val scope = packet.identity.scope
+        val candidate = McpCatalogCandidate(scope, ConfigurationReference.Enterprise(scope.authority, resource.id),
+            "definition", net.weero.measix.pilot.data.enterprise.LocalEnterpriseMcpSurface.gatewayTools,
+            McpManagedCatalog(packet.configuration.generation, resource.surface))
+        withDisk { store, _ ->
+            val saved = store.commitCandidate(candidate) as McpCatalogCommitResult.Committed
+            assertEquals(resource.surface, saved.snapshot.managed!!.gatewaySurface)
+            assertEquals(resource.surfaceHash.removePrefix("sha256:"), saved.snapshot.catalogDigest)
+            val reordered = candidate.copy(tools = candidate.tools.map {
+                McpCatalogTool(JsonObject(it.definition.entries.reversed().associate { it.toPair() }))
+            })
+            assertEquals(McpCatalogCommitResult.Unchanged(saved.snapshot), store.commitCandidate(reordered))
+            assertThrows(IllegalArgumentException::class.java) { candidate.copy(managed = McpManagedCatalog(1)) }
+            assertThrows(IllegalArgumentException::class.java) {
+                candidate.copy(serverId = ConfigurationReference.Enterprise(scope.authority, "mcp_wrong"))
+            }
+            assertThrows(IllegalArgumentException::class.java) {
+                candidate.copy(serverId = ConfigurationReference.Enterprise(scope.authority, "mdl_wrong"))
+            }
+            try { store.commitCandidate(candidate.copy(tools = candidate.tools.reversed())); fail("Gateway pair order changed") }
+            catch (_: IllegalArgumentException) { }
+            assertEquals(saved.snapshot, store.catalogs.value[candidate.key])
+        }
+        val snapshot = candidate.initialSnapshot()
+        val row = JsonInstant.encodeToJsonElement(snapshot) as JsonObject
+        val metadata = row.getValue("managed") as JsonObject
+        val invalidRows = listOf(JsonObject(row + ("managed" to JsonObject(metadata - "gatewaySurface"))),
+            JsonObject(row - "managed"))
+        for (invalid in invalidRows) {
+            val document = JsonInstant.parseToJsonElement(encodeMcpCatalogDocument(listOf(snapshot))) as JsonObject
+            val encoded = JsonObject(document + ("catalogs" to JsonArray(listOf(invalid)))).toString()
+            withDisk(mutablePreferencesOf(documentKey to encoded)) { store, disk ->
+                try { store.awaitReady(); fail("Incomplete Gateway verification became ready") }
+                catch (_: IllegalArgumentException) { }
+                assertTrue(store.catalogs.value.isEmpty())
+                assertEquals(encoded, disk.data.first()[documentKey])
+            }
+        }
+    }
+
     private fun personalCandidate(name: String) = McpCatalogCandidate(
         ConfigurationScope.Personal, personal.id, personal.mcpDefinitionDigest(), listOf(tool(name)),
     )
 
     private fun enterpriseCandidate(scope: ConfigurationScope.Enterprise) = McpCatalogCandidate(
-        scope, ConfigurationReference.Enterprise(scope.authority, "mcp_shared"), "definition", listOf(tool("search")),
+        scope, ConfigurationReference.Enterprise(scope.authority, "mcp_shared"), "definition", listOf(tool("search")), McpManagedCatalog(1),
     )
 
     private fun tool(name: String) = McpCatalogTool(name, inputSchema = buildJsonObject { put("type", "object") })

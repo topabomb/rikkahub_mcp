@@ -34,7 +34,6 @@ internal enum class EnterpriseRuntimeProtocol {
     MIMO_TTS,
     OPENAI_HTTP_ASR,
     MCP_STREAMABLE_HTTP,
-    MCP_SSE,
 }
 
 /** This local import format is not the production platform wire protocol. */
@@ -106,6 +105,13 @@ internal object EnterprisePackageCodec {
         validateIdentity(identity)
         val config = value.configuration
         check(config.generation > 0, "invalid_enterprise_generation")
+        check(config.gateways.size <= 1, "multiple_enterprise_gateways")
+        check(config.mcpServers.all { it.id.startsWith("mcp_") }, "invalid_enterprise_mcp_id")
+        config.gateways.forEach {
+            check(it.id.startsWith("twg_"), "invalid_enterprise_gateway_id")
+            try { it.surface }
+            catch (_: IllegalArgumentException) { fail("invalid_gateway_surface") }
+        }
         val ids = config.runtimeResources().keys.toList() + config.assistants.map { it.id } +
             config.memorySeeds.map { it.id } + config.starters.map { it.id }
         val expectedCount = config.models.size + config.tts.size + config.asr.size + config.mcpServers.size +
@@ -177,7 +183,7 @@ internal object EnterprisePackageCodec {
                 EnterpriseRuntimeProtocol.GOOGLE_GENERATE, EnterpriseRuntimeProtocol.CLAUDE_MESSAGES)
             EnterpriseResourceKind.TTS -> setOf(EnterpriseRuntimeProtocol.OPENAI_TTS, EnterpriseRuntimeProtocol.GEMINI_TTS, EnterpriseRuntimeProtocol.MIMO_TTS)
             EnterpriseResourceKind.ASR -> setOf(EnterpriseRuntimeProtocol.OPENAI_HTTP_ASR)
-            EnterpriseResourceKind.MCP, EnterpriseResourceKind.GATEWAY -> setOf(EnterpriseRuntimeProtocol.MCP_STREAMABLE_HTTP, EnterpriseRuntimeProtocol.MCP_SSE)
+            EnterpriseResourceKind.MCP, EnterpriseResourceKind.GATEWAY -> setOf(EnterpriseRuntimeProtocol.MCP_STREAMABLE_HTTP)
         }
         check(binding.protocol in allowed, "runtime_protocol_kind_mismatch")
         val uri = try { URI(requireNotNull(binding.endpoint)) } catch (_: Exception) { fail("invalid_runtime_endpoint") }

@@ -95,9 +95,14 @@ data class McpCatalogSnapshot(
     val definitionDigest: String,
     val catalogDigest: String,
     val tools: List<McpCatalogTool>,
+    @OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)
+    @kotlinx.serialization.EncodeDefault(kotlinx.serialization.EncodeDefault.Mode.NEVER)
+    val managed: McpManagedCatalog? = null,
 ) {
     val key: McpCatalogKey get() = McpCatalogKey(scope, serverId)
-    init { key }
+    init {
+        key.validateManaged(managed)
+    }
 }
 
 data class McpCatalogCandidate(
@@ -105,9 +110,12 @@ data class McpCatalogCandidate(
     val serverId: ConfigurationReference,
     val definitionDigest: String,
     val tools: List<McpCatalogTool>,
+    val managed: McpManagedCatalog? = null,
 ) {
     val key: McpCatalogKey get() = McpCatalogKey(scope, serverId)
-    init { key }
+    init {
+        key.validateManaged(managed)
+    }
 }
 
 data class McpAvailableTool(
@@ -154,6 +162,7 @@ sealed interface McpCatalogCommitResult {
     ) : McpCatalogCommitResult
     data class Unchanged(val snapshot: McpCatalogSnapshot) : McpCatalogCommitResult
     data class RejectedEmpty(val lastKnownGood: McpCatalogSnapshot?) : McpCatalogCommitResult
+    data class RejectedGeneration(val currentGeneration: Long) : McpCatalogCommitResult
 }
 
 /**
@@ -212,9 +221,20 @@ class McpCatalogStore internal constructor(
 
     suspend fun commitCandidate(candidate: McpCatalogCandidate): McpCatalogCommitResult =
         commit {
+            candidate.managed?.gatewaySurface?.validate(candidate.tools)
             val normalizedTools = candidate.tools.sortedBy { it.name }
             val current = readCurrentCatalogs()
             _catalogs.value = current
+            val previous = current[candidate.key]
+            val previousGeneration = previous?.managed?.generation
+            if (previousGeneration != null && requireNotNull(candidate.managed).generation < previousGeneration) {
+                return@commit McpCatalogCommitResult.RejectedGeneration(previousGeneration)
+            }
+            if (previousGeneration != null && candidate.managed?.generation == previousGeneration) {
+                require(previous.definitionDigest == candidate.definitionDigest && previous.managed == candidate.managed) {
+                    "Managed MCP definition changed within the same generation"
+                }
+            }
             val headToken = (headTokens[candidate.key] ?: 0L) + 1L
             if (normalizedTools.isEmpty()) {
                 headTokens[candidate.key] = headToken
@@ -227,12 +247,12 @@ class McpCatalogStore internal constructor(
                 "MCP catalog contains duplicate tool names"
             }
 
-            val catalogDigest = sha256(JsonInstant.encodeToString(normalizedTools))
-            val previous = current[candidate.key]
+            val catalogDigest = mcpCatalogDigest(normalizedTools, candidate.managed)
             if (
                 previous != null &&
                 previous.definitionDigest == candidate.definitionDigest &&
-                previous.catalogDigest == catalogDigest
+                previous.catalogDigest == catalogDigest &&
+                previous.managed == candidate.managed
             ) {
                 headTokens[candidate.key] = headToken
                 return@commit McpCatalogCommitResult.Unchanged(previous)
@@ -245,6 +265,7 @@ class McpCatalogStore internal constructor(
                 definitionDigest = candidate.definitionDigest,
                 catalogDigest = catalogDigest,
                 tools = normalizedTools,
+                managed = candidate.managed,
             )
             val updated = current + (candidate.key to next)
             writeCatalogs(updated)
@@ -388,6 +409,7 @@ class McpCatalogStore internal constructor(
 }
 
 internal fun McpCatalogCandidate.initialSnapshot(): McpCatalogSnapshot {
+    managed?.gatewaySurface?.validate(tools)
     val normalizedTools = tools.sortedBy { it.name }
     require(normalizedTools.isNotEmpty()) { "Legacy MCP catalog is empty" }
     require(normalizedTools.none { it.name.isBlank() }) { "Legacy MCP catalog contains a blank tool name" }
@@ -399,12 +421,15 @@ internal fun McpCatalogCandidate.initialSnapshot(): McpCatalogSnapshot {
         serverId = serverId,
         revision = 1L,
         definitionDigest = definitionDigest,
-        catalogDigest = sha256(JsonInstant.encodeToString(normalizedTools)),
+        catalogDigest = mcpCatalogDigest(normalizedTools, managed),
         tools = normalizedTools,
+        managed = managed,
     )
 }
 
 internal fun McpCatalogSnapshot.validated(): McpCatalogSnapshot? {
+    try { managed?.gatewaySurface?.validate(tools) }
+    catch (_: IllegalArgumentException) { return null }
     val normalizedTools = tools.sortedBy { it.name }
     if (
         revision <= 0L ||
@@ -415,9 +440,13 @@ internal fun McpCatalogSnapshot.validated(): McpCatalogSnapshot? {
     ) {
         return null
     }
-    val expectedDigest = sha256(JsonInstant.encodeToString(normalizedTools))
+    val expectedDigest = mcpCatalogDigest(normalizedTools, managed)
     return takeIf { catalogDigest == expectedDigest }?.copy(tools = normalizedTools)
 }
+
+/** Callers validate the managed surface before deriving its catalog identity. */
+private fun mcpCatalogDigest(tools: List<McpCatalogTool>, managed: McpManagedCatalog?): String =
+    managed?.gatewaySurface?.hash?.removePrefix("sha256:") ?: sha256(JsonInstant.encodeToString(tools))
 
 internal fun sha256(value: String): String = MessageDigest.getInstance("SHA-256")
     .digest(value.toByteArray(Charsets.UTF_8))

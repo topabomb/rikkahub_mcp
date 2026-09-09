@@ -16,6 +16,7 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import net.weero.measix.pilot.data.enterprise.reference
 import net.weero.measix.pilot.utils.JsonInstant
 import org.junit.Assert.*
 import org.junit.Test
@@ -29,15 +30,21 @@ class McpProtocolDiscoveryTest {
 
     @Test fun `SSE multiline must not concatenate separated number tokens into a valid value`() = verify(1, true)
 
-    private fun verify(mode: Int, malformedMultiline: Boolean = false): Unit = runBlocking {
-        val first = Json.parseToJsonElement("""{
+    @Test fun `Gateway HTTP discovery preserves its published surface and managed generation`() = verify(0, gateway = true)
+    @Test fun `Gateway SSE discovery preserves its published surface and managed generation`() = verify(1, gateway = true)
+
+    private fun verify(mode: Int, malformedMultiline: Boolean = false, gateway: Boolean = false): Unit = runBlocking {
+        val packet = net.weero.measix.pilot.data.enterprise.exampleEnterprisePackage()
+        val exampleTools = net.weero.measix.pilot.data.enterprise.LocalEnterpriseMcpSurface.gatewayTools
+
+        val first = if (gateway) exampleTools.first().definition else Json.parseToJsonElement("""{
             "name":"discover_tools","title":"Discovery","description":"Search enterprise tools",
             "inputSchema":{"type":"object","properties":{"queries":{"type":"array","items":{"type":"string"}}},"required":["queries"],"additionalProperties":false},
             "outputSchema":{"type":"object","properties":{"results":{"type":"array"}},"additionalProperties":false},
             "annotations":{"readOnlyHint":true,"vendorHint":"preserve"},
             "_meta":{"com.example/catalog":{"version":7}},"futureField":{"kept":true}
         }""") as JsonObject
-        val second = Json.parseToJsonElement("""{"name":"invoke_tool","inputSchema":{"type":"object","additionalProperties":false}}""") as JsonObject
+        val second = if (gateway) exampleTools.last().definition else Json.parseToJsonElement("""{"name":"invoke_tool","inputSchema":{"type":"object","additionalProperties":false}}""") as JsonObject
         val methods = java.util.Collections.synchronizedList(mutableListOf<String>())
         val failure = AtomicReference<Throwable?>()
         val server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
@@ -117,12 +124,15 @@ class McpProtocolDiscoveryTest {
         val config = if (mode == 3) McpServerConfig.SseTransportServer(url = url)
             else McpServerConfig.StreamableHTTPServer(url = url)
         val client = factory.createClient(config)
+        val key = if (gateway) McpCatalogKey(packet.identity.scope, packet.identity.reference(packet.configuration.gateways.single().id))
+            else McpCatalogKey(net.weero.measix.pilot.data.configuration.ConfigurationScope.Personal, config.id)
+        val managed = if (gateway) McpManagedCatalog(packet.configuration.generation, packet.configuration.gateways.single().surface) else null
         try {
             withTimeout(10_000) {
                 client.connect(factory.createTransport(config))
                 if (malformedMultiline) {
                     try {
-                        McpCatalogDiscovery.fetchCandidate(config, client, net.weero.measix.pilot.data.configuration.ConfigurationScope.Personal)
+                        McpCatalogDiscovery.fetchCandidate(key, config.mcpDefinitionDigest(), client, managed)
                         fail("Separated number tokens cannot become one valid number")
                     } catch (error: io.modelcontextprotocol.kotlin.sdk.types.McpException) {
                         assertTrue(generateSequence<Throwable>(error) { it.cause }.any { it.message == "Invalid MCP object" })
@@ -130,11 +140,12 @@ class McpProtocolDiscoveryTest {
                     assertEquals(1, pageCount)
                     return@withTimeout
                 }
-                val candidate = McpCatalogDiscovery.fetchCandidate(config, client, net.weero.measix.pilot.data.configuration.ConfigurationScope.Personal)
+                val candidate = McpCatalogDiscovery.fetchCandidate(key, config.mcpDefinitionDigest(), client, managed)
                 assertEquals(listOf(first, second), candidate.tools.map { it.definition })
                 val snapshot = candidate.initialSnapshot()
                 val roundTrip = JsonInstant.decodeFromString<McpCatalogSnapshot>(JsonInstant.encodeToString(snapshot))
                 assertEquals(snapshot, roundTrip.validated())
+                assertEquals(managed, roundTrip.managed)
                 assertEquals(first, roundTrip.tools.first().definition)
                 val result = client.callTool(io.modelcontextprotocol.kotlin.sdk.types.CallToolRequest(
                     params = io.modelcontextprotocol.kotlin.sdk.types.CallToolRequestParams(name = "invoke_tool")

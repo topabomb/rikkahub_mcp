@@ -43,6 +43,7 @@ class McpCatalogPersistenceTest {
             McpCatalogCandidate(
                 scope, ConfigurationReference.Enterprise(scope.authority, "mcp_shared"), "definition",
                 listOf(McpCatalogTool("search", inputSchema = buildJsonObject { put("type", "object") })),
+                McpManagedCatalog(7),
             ).initialSnapshot()
         }.associateBy { it.key }
         var final: McpCatalogSnapshot? = null
@@ -50,13 +51,18 @@ class McpCatalogPersistenceTest {
             withStore(context, root) { store ->
                 store.commitCandidate(candidate(old, "old"))
                 enterpriseCatalogs.values.forEach { snapshot ->
-                    store.commitCandidate(McpCatalogCandidate(snapshot.scope, snapshot.serverId, snapshot.definitionDigest, snapshot.tools))
+                    store.commitCandidate(McpCatalogCandidate(snapshot.scope, snapshot.serverId, snapshot.definitionDigest, snapshot.tools, snapshot.managed))
                 }
                 store.restorePersonalCatalogs(listOf(replacement), listOf(restored))
                 assertEquals(enterpriseCatalogs + (replacement.key to replacement), store.catalogs.value)
             }
             withStore(context, root) { store ->
                 assertEquals(listOf(replacement), store.snapshotForBackup(listOf(restored)))
+                assertEquals(enterpriseCatalogs + (replacement.key to replacement), store.catalogs.value)
+                enterpriseCatalogs.values.forEach { snapshot ->
+                    assertEquals(McpCatalogCommitResult.RejectedGeneration(7), store.commitCandidate(
+                        McpCatalogCandidate(snapshot.scope, snapshot.serverId, "old-definition", snapshot.tools, McpManagedCatalog(6))))
+                }
                 assertEquals(enterpriseCatalogs + (replacement.key to replacement), store.catalogs.value)
                 final = (store.commitCandidate(candidate(restored, "discovered")) as McpCatalogCommitResult.Committed).snapshot
                 assertEquals(2L, final!!.revision)

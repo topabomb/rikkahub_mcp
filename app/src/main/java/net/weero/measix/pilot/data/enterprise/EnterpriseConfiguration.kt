@@ -90,7 +90,12 @@ internal data class EnterpriseGateway(
     val id: String,
     val name: String,
     val enablement: GatewayEnablementPolicy,
-)
+    val surfaceVersion: Int,
+    val surfaceHash: String,
+) {
+    val surface: net.weero.measix.pilot.data.ai.mcp.McpGatewaySurface
+        get() = net.weero.measix.pilot.data.ai.mcp.McpGatewaySurface(surfaceVersion, surfaceHash)
+}
 
 @Serializable
 internal data class EnterpriseDefaults(

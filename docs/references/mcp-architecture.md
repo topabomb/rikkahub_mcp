@@ -100,6 +100,20 @@ Catalog 初始化只执行一次迁移、读取和发布；全部命令等待这
 当前所有企业目录。仅旧个人键损坏可由明确的个人恢复替换；新文档损坏或读取失败必须拒绝写入，不能把企业事实
 视为空。非法摘要、重复主体/资源键和资源归属不一致均为失败。
 
+企业目录的 `McpManagedCatalog` 记录发布 generation，与目录 revision、连接 epoch 分开。
+同一资源低于已确认目录 generation 的候选被拒绝且不夺取提交补偿 token；同 generation 的
+公开 definition 或 Gateway surface 改变也被拒绝。相同工具随新 generation 发布时仍持久化新 generation。
+这只是目录提交顺序，不能代替原 Session 的执行准入或服务端 428 barrier。
+
+Gateway 的 `McpGatewaySurface` 校验固定顺序 `discover_tools` / `invoke_tool` 两个完整 Tool 对象，
+包含 outputSchema、annotations、`_meta` 和扩展字段；先验证再做目录排序。
+采用 [java-json-canonicalization](https://github.com/erdtman/java-json-canonicalization) 的 RFC 8785 JCS
+字符串经严格 UTF-8 编码，拒绝孤立代理项而不替换字符，再计算 SHA-256，与企业定义要求的 `sha256:<lowercase hex>` 比对；不使用普通 Kotlin JSON 序列化摘要替代。
+目录构造与重开统一要求 `twg_*` 携带 surface、`mcp_*` 不携带 surface；其他企业资源类型拒绝进入目录。
+目录重开再次验证 surface，缺失元数据不能降级成普通目录，也不能把个人 LKG 作为已验证的 Gateway 工具对。
+Gateway 的目录 digest 使用已验证的 canonical surface digest；仅 JSON 对象键顺序变化不推进目录 revision，
+保留已确认 Tool 对象和请求前缀。个人与 Direct MCP 的既有目录摘要算法保持。
+
 `McpRuntimeCoordinator.runtimeCapabilities` 是 runtime 的唯一公开状态源；底层由 `McpRuntimeStateStore` 对每个键以一个 immutable
 `McpRuntimeCapability(status, catalog)` 原子发布。Settings、Catalog DataStore flow 和 UI 不再形成第二条 runtime
 读写路径。status 可变化而 catalog 保持不变，这正是离线仍披露 LKG 工具的协议。

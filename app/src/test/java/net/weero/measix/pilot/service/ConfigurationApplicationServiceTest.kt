@@ -424,7 +424,7 @@ class ConfigurationApplicationServiceTest {
         try {
             env.initialize()
             val packet = exampleEnterprisePackage()
-            val reference = packet.identity.reference("gw_optional")
+            val reference = packet.identity.reference("twg_example")
             val key = ConfigurationKey(ConfigurationCategory.GATEWAY, reference)
             assertEquals(ResolvedGatewayEnablement(true, true), env.queries.read(env.access).catalog.getValue(key).gatewayEnablement)
             val manifest = (env.sessions.state.value as EnterpriseState.Available).manifest
@@ -461,7 +461,7 @@ class ConfigurationApplicationServiceTest {
         try {
             env.initialize()
             val alice = exampleEnterprisePackage()
-            val reference = alice.identity.reference("gw_optional")
+            val reference = alice.identity.reference("twg_example")
             env.commands.setGatewayEnabled(env.access, reference, false)
             env.sessions.finishExit(env.sessions.beginExit(requireNotNull(env.sessions.captureExitRequest())))
             val bob = alice.copy(identity = alice.identity.copy(userId = "bob"))

@@ -104,9 +104,10 @@ internal object McpCatalogDiscovery {
     private const val MAX_TOOL_COUNT = 4096
 
     suspend fun fetchCandidate(
-        config: McpServerConfig,
+        key: McpCatalogKey,
+        definitionDigest: String,
         client: Client,
-        catalogScope: net.weero.measix.pilot.data.configuration.ConfigurationScope,
+        managed: McpManagedCatalog? = null,
     ): McpCatalogCandidate {
         checkNotNull(client.serverCapabilities?.tools) { "MCP server does not declare tools capability" }
         val tools = mutableListOf<McpCatalogTool>()
@@ -131,10 +132,11 @@ internal object McpCatalogDiscovery {
         } while (cursor != null)
 
         return McpCatalogCandidate(
-            scope = catalogScope,
-            serverId = config.id,
-            definitionDigest = config.mcpDefinitionDigest(),
+            scope = key.scope,
+            serverId = key.serverId,
+            definitionDigest = definitionDigest,
             tools = tools,
+            managed = managed,
         )
     }
 }

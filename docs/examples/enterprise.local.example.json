@@ -125,14 +125,11 @@
     ],
     "gateways": [
       {
-        "id": "gw_required",
-        "name": "企业必需工具网关",
-        "enablement": "REQUIRED"
-      },
-      {
-        "id": "gw_optional",
-        "name": "企业可选工具网关",
-        "enablement": "USER_CONTROLLABLE_DEFAULT_ON"
+        "id": "twg_example",
+        "name": "企业工具网关",
+        "enablement": "USER_CONTROLLABLE_DEFAULT_ON",
+        "surfaceVersion": 1,
+        "surfaceHash": "sha256:c76780142f7f425445691b1025969c42fd1d92fefc51dcb87a5d5a184be3a7e1"
       }
     ],
     "defaults": {
@@ -170,11 +167,7 @@
       "protocol": "EXAMPLE"
     },
     {
-      "resourceId": "gw_required",
-      "protocol": "EXAMPLE"
-    },
-    {
-      "resourceId": "gw_optional",
+      "resourceId": "twg_example",
       "protocol": "EXAMPLE"
     }
   ],

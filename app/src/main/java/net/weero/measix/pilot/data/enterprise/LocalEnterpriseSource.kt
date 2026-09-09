@@ -93,6 +93,7 @@ internal class LocalEnterpriseSource(
 
     private suspend fun publish(packet: EnterprisePackage, expectedRevision: String?, imported: Boolean = false): LocalEnterpriseCandidate {
         EnterprisePackageCodec.validate(packet)
+        LocalEnterpriseMcpSurface.validate(packet)
         currentCoroutineContext().ensureActive()
         return withContext(Dispatchers.IO + NonCancellable) { configurations.publish(packet, expectedRevision, imported) }
     }
@@ -101,7 +102,7 @@ internal class LocalEnterpriseSource(
         withContext(Dispatchers.IO) { configurations.installations() }?.let { return it }
         val identity = bundledIdentity()
         val packet = try {
-            withContext(Dispatchers.IO) { openExample().use(EnterprisePackageCodec::decode).takeIf { it.identity == identity } }
+            withContext(Dispatchers.IO) { openExample().use(EnterprisePackageCodec::decode).also(LocalEnterpriseMcpSurface::validate).takeIf { it.identity == identity } }
         } catch (_: EnterpriseConfigurationException) { null }
         catch (_: IOException) { null }
         currentCoroutineContext().ensureActive()

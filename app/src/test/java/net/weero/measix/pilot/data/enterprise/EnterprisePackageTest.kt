@@ -59,11 +59,61 @@ class EnterprisePackageTest {
         assertTrue(example.configuration.tts.isNotEmpty())
         assertTrue(example.configuration.asr.isNotEmpty())
         assertTrue(example.configuration.mcpServers.isNotEmpty())
-        assertTrue(example.configuration.gateways.isNotEmpty())
+        assertEquals(1, example.configuration.gateways.size)
+        LocalEnterpriseMcpSurface.validate(example)
         assertTrue(example.configuration.assistants.any { it.allowedSubAssistantIds.isNotEmpty() })
         assertTrue(example.configuration.memorySeeds.isNotEmpty())
         assertTrue(example.configuration.starters.isNotEmpty())
         assertTrue(example.runtimeBindings.all { it.protocol == EnterpriseRuntimeProtocol.EXAMPLE && it.credential == null })
+    }
+
+    @Test fun `gateway version and expected hash are required and multiple gateways are rejected`() {
+        val packet = exampleEnterprisePackage()
+        val gateway = packet.configuration.gateways.single()
+        assertEquals("invalid_enterprise_gateway_id", assertThrows(EnterpriseConfigurationException::class.java) {
+            EnterprisePackageCodec.validate(packet.copy(configuration = packet.configuration.copy(
+                gateways = listOf(gateway.copy(id = "mcp_wrong")))))
+        }.reason)
+        assertEquals("invalid_enterprise_mcp_id", assertThrows(EnterpriseConfigurationException::class.java) {
+            EnterprisePackageCodec.validate(packet.copy(configuration = packet.configuration.copy(
+                mcpServers = packet.configuration.mcpServers.map { it.copy(id = "twg_wrong") })))
+        }.reason)
+        val invalid = listOf(gateway.copy(surfaceVersion = 2), gateway.copy(surfaceHash = ""),
+            gateway.copy(surfaceHash = gateway.surfaceHash.uppercase()))
+        invalid.forEach { value ->
+            assertThrows(EnterpriseConfigurationException::class.java) {
+                EnterprisePackageCodec.encode(packet.copy(configuration = packet.configuration.copy(gateways = listOf(value))))
+            }
+        }
+        assertThrows(EnterpriseConfigurationException::class.java) {
+            EnterprisePackageCodec.encode(packet.copy(configuration = packet.configuration.copy(
+                gateways = listOf(gateway, gateway.copy(id = "twg_second")))),
+            )
+        }
+        val root = EnterprisePackageCodec.json.parseToJsonElement(EnterprisePackageCodec.encode(packet).decodeToString()).jsonObject
+        val config = root.getValue("configuration").jsonObject
+        val original = config.getValue("gateways").jsonArray.single().jsonObject
+        listOf("surfaceVersion", "surfaceHash").forEach { key ->
+            val text = JsonObject(root + ("configuration" to JsonObject(config +
+                ("gateways" to JsonArray(listOf(JsonObject(original - key))))))).toString()
+            assertThrows(EnterpriseConfigurationException::class.java) { EnterprisePackageCodec.decode(text.encodeToByteArray()) }
+        }
+        assertThrows(EnterpriseConfigurationException::class.java) {
+            LocalEnterpriseMcpSurface.validate(packet.copy(configuration = packet.configuration.copy(
+                gateways = listOf(gateway.copy(surfaceHash = "sha256:" + "0".repeat(64))))))
+        }
+    }
+
+    @Test fun `private managed MCP accepts only Streamable HTTP and rejects the unshipped SSE protocol`() {
+        val packet = exampleEnterprisePackage()
+        val managed = packet.runtimeBindings.first { it.resourceId == "mcp_example" }
+        val http = managed.copy(protocol = EnterpriseRuntimeProtocol.MCP_STREAMABLE_HTTP, endpoint = "https://mcp.example/mcp")
+        val valid = packet.copy(runtimeBindings = packet.runtimeBindings.map { if (it == managed) http else it })
+        val encoded = EnterprisePackageCodec.encode(valid).decodeToString()
+        assertEquals(valid, EnterprisePackageCodec.decode(encoded.encodeToByteArray()))
+        assertThrows(EnterpriseConfigurationException::class.java) {
+            EnterprisePackageCodec.decode(encoded.replace("MCP_STREAMABLE_HTTP", "MCP_SSE").encodeToByteArray())
+        }
     }
 
     @Test

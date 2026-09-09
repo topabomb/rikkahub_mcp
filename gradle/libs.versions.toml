@@ -43,6 +43,7 @@ leakcanary = "2.14"
 workmanager = "2.11.2"
 reorderable = "3.1.0"
 mcp = "0.15.0"
+json-canonicalization = "1.1"
 pebble = "4.1.1"
 browser = "1.10.0"
 webkit = "1.16.0"
@@ -63,6 +64,7 @@ kotlinx-coroutines-test = "1.11.0"
 snakeyaml = "2.6"
 
 [libraries]
+json-canonicalization = { module = "io.github.erdtman:java-json-canonicalization", version.ref = "json-canonicalization" }
 android-gradle-plugin = { module = "com.android.tools.build:gradle", version.ref = "agp" }
 kotlin-compose-gradle-plugin = { module = "org.jetbrains.kotlin:compose-compiler-gradle-plugin", version.ref = "kotlin" }
 kotlin-gradle-plugin = { module = "org.jetbrains.kotlin:kotlin-gradle-plugin", version.ref = "kotlin" }

@@ -394,6 +394,7 @@ dependencies {
     implementation(libs.jlatexmath.font.cyrillic)
 
     // mcp
+    implementation(libs.json.canonicalization)
     implementation(libs.modelcontextprotocol.kotlin.sdk)
     implementation(libs.kotlin.logging)
 

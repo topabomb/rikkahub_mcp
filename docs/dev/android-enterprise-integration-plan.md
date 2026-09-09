@@ -85,7 +85,9 @@ Policy 横切 A/B/C，不是第四种业务内容。是否含 API Key 不决定 
 
 企业 Direct MCP `enabled=true` 自动加入企业目录并启用，用户无关闭/编辑/删除入口，命令也拒绝。`allowLocalMcp` 只控制额外的用户 MCP。服务启用不等于所有助手自动取得全部工具：企业助手按固定绑定，用户助手在本域选择可用服务。
 
-Gateway 是独立受管资源，不出现普通 MCP URL/Header/OAuth 编辑器。`REQUIRED` 强制整对工具开启；`USER_CONTROLLABLE_DEFAULT_ON` 默认开启且可成对关闭。使用偏好按 `(sourceNamespace, deploymentId, userId, toolGatewayId)` 保存，不继承同企业其他用户的选择；REQUIRED 保留旧 false 但不生效，恢复可控时恢复。变更只影响新执行。
+每个 Deployment 最多发布一个 Gateway，配置明确携带 `surfaceVersion=1` 与完整工具对的 JCS `surfaceHash`。Gateway 是独立受管资源，不出现普通 MCP URL/Header/OAuth 编辑器。`REQUIRED` 强制整对工具开启；`USER_CONTROLLABLE_DEFAULT_ON` 默认开启且可成对关闭。使用偏好按 `(sourceNamespace, deploymentId, userId, toolGatewayId)` 保存，不继承同企业其他用户的选择；REQUIRED 保留旧 false 但不生效，恢复可控时恢复。变更只影响新执行。
+
+公开示例默认提供一个 `twg_example`，采用可控默认开启策略；REQUIRED 通过同一资源的配置变更场景验证，不同时发布两个 Gateway。企业 Direct MCP 与 Gateway 只走 Streamable HTTP，个人 SSE 保留。
 
 本地 Gateway 经标准发现、固定 discover/invoke pair、surface 校验及调用流程；工具卡显示真实业务动作。业务 Catalog/发布后台不在本期，不通过客户端拼接业务工具或 Direct MCP fallback 冒充 Gateway。
 
@@ -632,3 +634,16 @@ App 2,111 项 JVM、Android 17 模拟器 App 190 项与 Speech 6 项无失败，
 Workspace JVM 保留 11 项 Windows 条件跳过，设备 12 项中 1 项硬链接条件跳过。报告见
 `build/reports/enterprise/mcp-lifecycle-verification.json`。本次设备运行是既有消费者回归，未新增企业 MCP/Gateway 执行验收，
 不替代 Release 设备、实体机或真实平台互操作；原 Session 接线、Speech、备份及版本 20 整期工作继续。
+
+
+企业 Catalog 已保存 managed generation，并在提交和重新打开时校验 Gateway 的完整有序 Tool 对象、
+固定双工具、surfaceVersion 与 JCS SHA256。旧 generation 不能覆盖新目录；对象字段重排不改写目录，
+缺失 Gateway 校验字段不能降级成普通 MCP。个人目录的既有序列化和摘要保持。示例现为一个 `twg_example`，
+强制与可选策略通过同一资源的配置变更验证；未发布的企业 SSE 协议已删除，个人 SSE 保留。
+
+本批独立审查发现的校验降级问题已修复，另外补齐了 JCS 库孤立代理字符的严格 UTF-8 拒绝。
+最终串行 `test assembleDebug lintDebug assembleRelease connectedDebugAndroidTest` 通过（33 分 53 秒）：
+App 2,121 项 JVM、Android 17 模拟器 App 190 项与 Speech 6 项无失败，App/Workspace lint 为 0 错误、287/11 警告。
+Workspace JVM 保留 11 项 Windows 条件跳过，设备 12 项中 1 项硬链接条件跳过。证据见
+`build/reports/enterprise/mcp-managed-catalog-verification.json`。实际 SDK/HTTP 发现和设备目录持久化已验证，
+原 Session MCP 连接、Gateway 业务执行、Speech、备份及整期验收仍未完成，不代表真实平台互操作。
