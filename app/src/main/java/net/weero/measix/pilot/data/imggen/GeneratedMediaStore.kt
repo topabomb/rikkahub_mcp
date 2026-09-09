@@ -25,23 +25,10 @@ import net.weero.measix.pilot.data.files.AssetFileNames
 import net.weero.measix.pilot.data.files.requireDiscarded
 import net.weero.measix.pilot.data.repository.GenMediaRepository
 
-enum class GeneratedMediaConsumer {
-    CHAT_TOOL_RESULT,
-}
-
 /** Domain kind mapped to the existing stable Room string only inside the media owner. */
 enum class GeneratedMediaKind(internal val persistedValue: String) {
     GENERATION(GenMediaEntity.TYPE_IMAGE_GENERATION),
     EDIT(GenMediaEntity.TYPE_IMAGE_EDIT),
-}
-
-data class GeneratedMediaConsumerPlan(
-    val consumers: Set<GeneratedMediaConsumer> = emptySet(),
-) {
-    companion object {
-        val NONE = GeneratedMediaConsumerPlan()
-        val CHAT_TOOL_RESULT = GeneratedMediaConsumerPlan(setOf(GeneratedMediaConsumer.CHAT_TOOL_RESULT))
-    }
 }
 
 data class CommittedGeneratedMedia(
@@ -84,9 +71,9 @@ class GeneratedMediaStore(
         modelLabel: String,
         kind: GeneratedMediaKind = GeneratedMediaKind.GENERATION,
         sourcePaths: String? = null,
-        consumerPlan: GeneratedMediaConsumerPlan = GeneratedMediaConsumerPlan.NONE,
+        receiveChatArtifact: ((OwnedArtifact) -> Unit)? = null,
     ): CommittedGeneratedMedia = withPersistLock {
-        commitLocked(scope, item, prompt, modelLabel, kind, sourcePaths, consumerPlan)
+        commitLocked(scope, item, prompt, modelLabel, kind, sourcePaths, receiveChatArtifact)
     }
 
     @OptIn(ExperimentalEncodingApi::class)
@@ -97,9 +84,10 @@ class GeneratedMediaStore(
         modelLabel: String,
         kind: GeneratedMediaKind,
         sourcePaths: String?,
-        consumerPlan: GeneratedMediaConsumerPlan,
+        receiveChatArtifact: ((OwnedArtifact) -> Unit)?,
     ): CommittedGeneratedMedia {
         val durableCommit = AtomicReference<CommittedGeneratedMedia?>()
+        val received = java.util.concurrent.atomic.AtomicBoolean(false)
         try {
             return withContext(Dispatchers.IO) {
                 val bytes = decodeImageBytes(item.data)
@@ -113,12 +101,12 @@ class GeneratedMediaStore(
                 check(pending.createNewFile()) { "Generated media pending collision: $fileName" }
                 var finalPublished = false
                 var chatArtifact: OwnedArtifact? = null
-                try {
+                val committed = try {
                     pending.writeBytes(bytes)
                     check(!finalFile.exists()) { "Generated media target already exists: $fileName" }
                     check(pending.renameTo(finalFile)) { "Failed to atomically publish generated media: $fileName" }
                     finalPublished = true
-                    if (GeneratedMediaConsumer.CHAT_TOOL_RESULT in consumerPlan.consumers) {
+                    if (receiveChatArtifact != null) {
                         // 生成媒体在聊天域的副本——诞生方式为生成派生
                         chatArtifact = artifactStore.copyFile(
                             scope = scope,
@@ -159,12 +147,17 @@ class GeneratedMediaStore(
                     }
                     throw error
                 }
+                committed.chatArtifact?.let { artifact ->
+                    requireNotNull(receiveChatArtifact)(artifact)
+                    received.set(true)
+                }
+                committed
             }
-        } catch (cancelled: CancellationException) {
+        } catch (cancelled: Throwable) {
             withContext(NonCancellable) {
                 discardUnpublishedChatCopy(
-                    durableCommit.get()?.chatArtifact,
-                    "cancelled generated-media consumer",
+                    durableCommit.get()?.chatArtifact?.takeUnless { received.get() },
+                    "unreceived generated-media consumer",
                     cancelled,
                 )
             }

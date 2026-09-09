@@ -31,7 +31,7 @@ internal sealed interface ModelRequests {
     suspend fun <T> execute(operation: suspend (ModelRequestTarget) -> T): T
 }
 
-/** The Turn owner retains this lease across user pauses and awaits release outside admission locks. */
+/** The task owner retains this lease across user pauses and awaits release outside admission locks. */
 internal class ModelExecutionLease(
     private val releaseOwner: suspend () -> Unit = {},
     private val admit: suspend ((ModelRequestTarget) -> Unit) -> Unit,

@@ -4,8 +4,6 @@ import net.weero.measix.pilot.data.enterprise.RealmAccess
 
 import me.rerere.common.configuration.ConfigurationReference
 import java.io.File
-import kotlinx.coroutines.NonCancellable
-import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
@@ -23,24 +21,18 @@ import me.rerere.ai.core.ToolInteractionRequirement
 import me.rerere.ai.core.ToolMetadataDelivery
 import me.rerere.ai.core.ToolOutputPolicy
 import me.rerere.ai.ui.UIMessagePart
+import net.weero.measix.pilot.data.datastore.findProvider
 import net.weero.measix.pilot.data.datastore.Settings
-import net.weero.measix.pilot.data.datastore.SettingsStore
 import net.weero.measix.pilot.data.files.LocalArtifactRef
-import net.weero.measix.pilot.data.files.ArtifactDeleteResult
 import net.weero.measix.pilot.data.files.ArtifactStore
-import net.weero.measix.pilot.data.files.OwnedArtifact
 import net.weero.measix.pilot.data.files.ToolArtifactRewriter
 import net.weero.measix.pilot.data.imggen.AssistantBackgroundService
 import net.weero.measix.pilot.data.imggen.BackgroundUpdateResult
-import net.weero.measix.pilot.data.imggen.GeneratedMediaConsumerPlan
 import net.weero.measix.pilot.data.imggen.ImageGenerationCoordinator
-import net.weero.measix.pilot.data.imggen.ImageGenerationFailure
 import net.weero.measix.pilot.data.imggen.ImageGenerationModelDescriptor
 import net.weero.measix.pilot.data.imggen.ImageGenerationOutcome
 import net.weero.measix.pilot.data.imggen.ImageGenerationPhase
 import net.weero.measix.pilot.data.imggen.ImageGenerationRequest
-import net.weero.measix.pilot.data.imggen.ImageGenerationSelection
-import net.weero.measix.pilot.data.imggen.ImageGenerationSelectionResolver
 import net.weero.measix.pilot.data.imggen.ImageGenerationSource
 import net.weero.measix.pilot.data.ai.tools.failToolResult
 import net.weero.measix.pilot.utils.JsonInstant
@@ -106,16 +98,15 @@ internal fun failedResult(reason: String, detail: String? = null): Nothing =
         reason = reason,
     )
 
-data class AssistantToolBuildContext(
+internal data class AssistantToolBuildContext(
     val realmAccess: RealmAccess,
     val ownerAssistantId: ConfigurationReference,
     val settings: Settings,
+    val imageModel: net.weero.measix.pilot.service.ModelExecutionSnapshot?,
 )
 
-class ImageGenerationToolFactory(
+internal class ImageGenerationToolFactory(
     private val filesDir: File,
-    private val settingsStore: SettingsStore,
-    private val resolver: ImageGenerationSelectionResolver,
     private val coordinator: ImageGenerationCoordinator,
     private val backgroundService: AssistantBackgroundService,
     private val artifactStore: ArtifactStore,
@@ -123,10 +114,11 @@ class ImageGenerationToolFactory(
     private val json: Json = JsonInstant,
 ) {
     fun create(context: AssistantToolBuildContext): Tool? {
-        val selection = resolver.resolve(context.settings)
-        if (selection !is ImageGenerationSelection.Available) return null
+        val capturedModel = context.imageModel ?: return null
+        val provider = capturedModel.model.findProvider(context.settings.providers)
+        val descriptor = if (provider != null) ImageGenerationModelDescriptor.from(capturedModel.model, provider)
+            else ImageGenerationModelDescriptor("enterprise", "Enterprise", capturedModel.model.modelId, capturedModel.model.displayName).sanitized()
         val ownerAssistantId = context.ownerAssistantId
-        val capturedSelection = selection
         return Tool(
             name = GENERATE_IMAGE_TOOL_NAME,
             description = "Generate one image from a text prompt, show it to the user, and return a local path " +
@@ -152,7 +144,7 @@ class ImageGenerationToolFactory(
                     required = listOf("prompt"),
                 )
             },
-            systemPromptContribution = imageGenerationSystemPrompt(capturedSelection.descriptor),
+            systemPromptContribution = imageGenerationSystemPrompt(descriptor),
             interactionRequirement = { args ->
                 if (parseGenerateImageArguments(args).getOrNull()?.setAsBackground == true) {
                     ToolInteractionRequirement.Approval
@@ -171,10 +163,9 @@ class ImageGenerationToolFactory(
                     context = this,
                     args = args,
                     ownerAssistantId = ownerAssistantId,
-                    capturedSelection = capturedSelection,
+                    capturedModel = capturedModel,
+                    descriptor = descriptor,
                     filesDir = filesDir,
-                    settingsStore = settingsStore,
-                    resolver = resolver,
                     coordinator = coordinator,
                     backgroundService = backgroundService,
                     artifactStore = artifactStore,
@@ -191,10 +182,9 @@ private suspend fun executeGenerateImage(
     context: ToolExecutionContext,
     args: JsonElement,
     ownerAssistantId: ConfigurationReference,
-    capturedSelection: ImageGenerationSelection.Available,
+    capturedModel: net.weero.measix.pilot.service.ModelExecutionSnapshot,
+    descriptor: ImageGenerationModelDescriptor,
     filesDir: File,
-    settingsStore: SettingsStore,
-    resolver: ImageGenerationSelectionResolver,
     coordinator: ImageGenerationCoordinator,
     backgroundService: AssistantBackgroundService,
     artifactStore: ArtifactStore,
@@ -204,46 +194,26 @@ private suspend fun executeGenerateImage(
     val parsed = parseGenerateImageArguments(args).getOrElse {
         return failedResult("invalid_arguments")
     }
-    val latest = settingsStore.effectiveSettings.value.settings
-    val preflight = revalidateGenerateImage(
-        settings = latest,
-        ownerAssistantId = ownerAssistantId,
-        capturedSelection = capturedSelection,
-        resolver = resolver,
-    )
-    if (preflight != null) return failedResult(preflight.reason)
-
     suspend fun reportPhase(phase: String, delivery: ToolMetadataDelivery, extra: ImageGenerationToolMetadata? = null) {
         val metadata = extra ?: ImageGenerationToolMetadata(
             phase = phase,
-            providerType = capturedSelection.descriptor.providerType,
-            providerName = capturedSelection.descriptor.providerName,
-            modelId = capturedSelection.descriptor.modelId,
-            modelName = capturedSelection.descriptor.modelName,
+            providerType = descriptor.providerType,
+            providerName = descriptor.providerName,
+            modelId = descriptor.modelId,
+            modelName = descriptor.modelName,
         )
         context.reportMetadata(json.encodeToJsonElement(ImageGenerationToolMetadata.serializer(), metadata).jsonObject(), delivery)
     }
 
     var lastPhaseOrdinal = -1
     val request = ImageGenerationRequest(
-        realmAccess = realmAccess,
-        source = ImageGenerationSource.Tool(
-            ownerAssistantId = ownerAssistantId,
-            revalidate = { frozen ->
-                revalidateGenerateImage(
-                    settings = settingsStore.effectiveSettings.value.settings,
-                    ownerAssistantId = ownerAssistantId,
-                    capturedSelection = frozen,
-                    resolver = resolver,
-                )
-            },
-        ),
-        selection = capturedSelection,
+        source = ImageGenerationSource.Tool(realmAccess, capturedModel) { owned ->
+            context.registerUnpublishedResource(artifactStore.unpublishedLease(owned))
+        },
         prompt = parsed.prompt,
         numOfImages = 1,
         size = me.rerere.ai.ui.ImageGenSize.AUTO.value,
         partialImages = 0,
-        consumerPlan = GeneratedMediaConsumerPlan.CHAT_TOOL_RESULT,
         onPhase = { phase ->
             val ordinal = phase.ordinal
             if (ordinal >= lastPhaseOrdinal) {
@@ -267,10 +237,10 @@ private suspend fun executeGenerateImage(
                 delivery = ToolMetadataDelivery.DEFERRED,
                 extra = ImageGenerationToolMetadata(
                     phase = "failed",
-                    providerType = capturedSelection.descriptor.providerType,
-                    providerName = capturedSelection.descriptor.providerName,
-                    modelId = capturedSelection.descriptor.modelId,
-                    modelName = capturedSelection.descriptor.modelName,
+                    providerType = descriptor.providerType,
+                    providerName = descriptor.providerName,
+                    modelId = descriptor.modelId,
+                    modelName = descriptor.modelName,
                     status = "failed",
                     reason = outcome.reason,
                 ),
@@ -282,13 +252,7 @@ private suspend fun executeGenerateImage(
             val media = outcome.media.first()
             val ownedArtifact = media.chatArtifact ?: return failedResult("persistence_error")
             val artifact = ownedArtifact.localRef
-            val toolPath = artifact.toolPath() ?: run {
-                withContext(NonCancellable) {
-                    discardGeneratedArtifactOrThrow(artifactStore, ownedArtifact)
-                }
-                return failedResult("persistence_error")
-            }
-            context.registerUnpublishedResource(artifactStore.unpublishedLease(ownedArtifact))
+            val toolPath = artifact.toolPath() ?: return failedResult("persistence_error")
             var background = BackgroundUpdateResult(requested = parsed.setAsBackground, updated = false)
             if (parsed.setAsBackground) {
                 reportPhase("setting_background", delivery = ToolMetadataDelivery.CHECKPOINT)
@@ -313,10 +277,10 @@ private suspend fun executeGenerateImage(
             }.toString()
             val terminal = ImageGenerationToolMetadata(
                 phase = "completed",
-                providerType = capturedSelection.descriptor.providerType,
-                providerName = capturedSelection.descriptor.providerName,
-                modelId = capturedSelection.descriptor.modelId,
-                modelName = capturedSelection.descriptor.modelName,
+                providerType = descriptor.providerType,
+                providerName = descriptor.providerName,
+                modelId = descriptor.modelId,
+                modelName = descriptor.modelName,
                 status = "completed",
                 artifact = artifact,
             )
@@ -333,49 +297,4 @@ private suspend fun executeGenerateImage(
     }
 }
 
-private suspend fun discardGeneratedArtifactOrThrow(
-    artifactStore: ArtifactStore,
-    ownedArtifact: OwnedArtifact,
-) {
-    when (val result = artifactStore.discardUnpublished(ownedArtifact)) {
-        is ArtifactDeleteResult.Completed -> Unit
-        is ArtifactDeleteResult.CleanupPending -> error(
-            "Generated artifact cleanup pending: id=${result.artifactId}, reason=${result.reason}"
-        )
-        is ArtifactDeleteResult.Rejected -> {
-            check(result.reason == ArtifactDeleteResult.RejectionReason.ALREADY_DELETED) {
-                "Generated artifact cleanup was not acquired: $result"
-            }
-        }
-        is ArtifactDeleteResult.Failed -> error(
-            "Generated artifact cleanup failed: id=${result.artifactId}, reason=${result.reason}"
-        )
-    }
-}
-
 private fun JsonElement.jsonObject(): JsonObject = this as JsonObject
-
-internal fun revalidateGenerateImage(
-    settings: Settings,
-    ownerAssistantId: ConfigurationReference,
-    capturedSelection: ImageGenerationSelection.Available,
-    resolver: ImageGenerationSelectionResolver,
-): ImageGenerationFailure? {
-    val owner = settings.assistants.find { it.id == ownerAssistantId }
-        ?: return ImageGenerationFailure("assistant_not_found")
-    if (LocalToolOption.TextToImage !in owner.localTools) {
-        return ImageGenerationFailure("tool_revoked")
-    }
-    return when (val latest = resolver.resolve(settings)) {
-        is ImageGenerationSelection.Unavailable -> ImageGenerationFailure("image_model_unavailable")
-        is ImageGenerationSelection.Available -> {
-            if (latest.model.id != capturedSelection.model.id ||
-                latest.effectiveProvider.id != capturedSelection.effectiveProvider.id
-            ) {
-                ImageGenerationFailure("image_model_changed")
-            } else {
-                null
-            }
-        }
-    }
-}

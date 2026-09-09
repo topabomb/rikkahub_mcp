@@ -48,8 +48,6 @@ import net.weero.measix.pilot.data.imggen.CommittedGeneratedMedia
 import net.weero.measix.pilot.data.imggen.ImageGenerationCoordinator
 import net.weero.measix.pilot.data.imggen.ImageGenerationModelDescriptor
 import net.weero.measix.pilot.data.imggen.ImageGenerationOutcome
-import net.weero.measix.pilot.data.imggen.ImageGenerationSelection
-import net.weero.measix.pilot.data.imggen.ImageGenerationSelectionResolver
 import net.weero.measix.pilot.data.imggen.TINY_PNG
 import net.weero.measix.pilot.data.model.Assistant
 import org.junit.Assert.assertEquals
@@ -66,16 +64,14 @@ class ImageGenerationToolCompensationTest {
     @Test
     fun `registered image tool rejects bad input before approval without invoking generation`() {
         val settings = Settings(assistants = listOf(Assistant(id = ownerId, localTools = listOf(LocalToolOption.TextToImage))))
-        val resolver = mockk<ImageGenerationSelectionResolver>()
-        every { resolver.resolve(any()) } returns available()
         val coordinator = mockk<ImageGenerationCoordinator>()
         val artifactStore = mockk<ArtifactStore>()
         val factory = ImageGenerationToolFactory(
-            filesDir = File("unused"), settingsStore = mockk(), resolver = resolver,
+            filesDir = File("unused"),
             coordinator = coordinator, backgroundService = mockk(), artifactStore = artifactStore,
             rewriter = ToolArtifactRewriter(File("unused"), artifactStore),
         )
-        val tool = factory.create(AssistantToolBuildContext(net.weero.measix.pilot.data.enterprise.RealmAccess.Personal, ownerId, settings))!!
+        val tool = factory.create(AssistantToolBuildContext(net.weero.measix.pilot.data.enterprise.RealmAccess.Personal, ownerId, settings, available()))!!
         val failure = assertThrows(ToolArgumentsException::class.java) { tool.parseArguments("{}", Json) }
         val replay = Json.parseToJsonElement((failure.output.single() as UIMessagePart.Text).text).jsonObject
         val domainFailure = requireNotNull(tool.validateArguments(buildJsonObject {}))
@@ -98,16 +94,11 @@ class ImageGenerationToolCompensationTest {
         coVerify(exactly = 0) { coordinator.enqueue(any()) }
     }
 
-    private fun available(): ImageGenerationSelection.Available {
-        val provider = mockk<Provider<*>>()
-        return ImageGenerationSelection.Available(
-            model = model,
-            sourceProvider = providerSetting,
-            effectiveProvider = providerSetting,
-            provider = provider,
-            descriptor = ImageGenerationModelDescriptor.from(model, providerSetting),
-        )
-    }
+    private fun available() = net.weero.measix.pilot.service.ModelExecutionSnapshot(
+        model, net.weero.measix.pilot.service.runtime.ModelExecutionLease { accept ->
+            accept(net.weero.measix.pilot.service.runtime.ModelRequestTarget.Remote(providerSetting))
+        }, "fixture", null,
+    )
 
     @Test
     fun `cancel after chat artifact commit deletes the unowned copy`() = runTest {
@@ -126,10 +117,11 @@ class ImageGenerationToolCompensationTest {
         )
         val settingsStore = mockk<SettingsStore>()
         every { settingsStore.effectiveSettings } returns MutableStateFlow(settings.toEffectiveSettingsSnapshot())
-        val resolver = mockk<ImageGenerationSelectionResolver>()
-        every { resolver.resolve(any()) } returns available()
         val coordinator = mockk<ImageGenerationCoordinator>()
-        coEvery { coordinator.enqueue(any()) } returns ImageGenerationOutcome.Success(
+        coEvery { coordinator.enqueue(any()) } coAnswers {
+            val source = firstArg<net.weero.measix.pilot.data.imggen.ImageGenerationRequest>().source as net.weero.measix.pilot.data.imggen.ImageGenerationSource.Tool
+            requireNotNull(source.receiveChatArtifact)(artifact)
+            ImageGenerationOutcome.Success(
             listOf(
                 CommittedGeneratedMedia(
                     mediaId = 11L,
@@ -140,6 +132,7 @@ class ImageGenerationToolCompensationTest {
                 )
             )
         )
+        }
         val backgroundService = mockk<AssistantBackgroundService>()
         coEvery { backgroundService.replaceGeneratedBackground(any(), any(), any()) } throws
             CancellationException("stop after persist")
@@ -151,14 +144,12 @@ class ImageGenerationToolCompensationTest {
         )
         val factory = ImageGenerationToolFactory(
             filesDir = filesDir,
-            settingsStore = settingsStore,
-            resolver = resolver,
             coordinator = coordinator,
             backgroundService = backgroundService,
             artifactStore = artifactStore,
             rewriter = ToolArtifactRewriter(filesDir, artifactStore),
         )
-        val tool = factory.create(AssistantToolBuildContext(net.weero.measix.pilot.data.enterprise.RealmAccess.Personal, ownerId, settings))!!
+        val tool = factory.create(AssistantToolBuildContext(net.weero.measix.pilot.data.enterprise.RealmAccess.Personal, ownerId, settings, available()))!!
         val resources = mutableListOf<ToolResourceLease>()
         val result = runCatching {
             tool.executeWithContext(
@@ -195,10 +186,11 @@ class ImageGenerationToolCompensationTest {
         )
         val settingsStore = mockk<SettingsStore>()
         every { settingsStore.effectiveSettings } returns MutableStateFlow(settings.toEffectiveSettingsSnapshot())
-        val resolver = mockk<ImageGenerationSelectionResolver>()
-        every { resolver.resolve(any()) } returns available()
         val coordinator = mockk<ImageGenerationCoordinator>()
-        coEvery { coordinator.enqueue(any()) } returns ImageGenerationOutcome.Success(
+        coEvery { coordinator.enqueue(any()) } coAnswers {
+            val source = firstArg<net.weero.measix.pilot.data.imggen.ImageGenerationRequest>().source as net.weero.measix.pilot.data.imggen.ImageGenerationSource.Tool
+            requireNotNull(source.receiveChatArtifact)(artifact)
+            ImageGenerationOutcome.Success(
             listOf(
                 CommittedGeneratedMedia(
                     mediaId = 12L,
@@ -209,6 +201,7 @@ class ImageGenerationToolCompensationTest {
                 )
             )
         )
+        }
         val backgroundService = mockk<AssistantBackgroundService>()
         coEvery { backgroundService.replaceGeneratedBackground(any(), any(), any()) } returns
             BackgroundUpdateResult(requested = true, updated = true)
@@ -219,14 +212,12 @@ class ImageGenerationToolCompensationTest {
         )
         val factory = ImageGenerationToolFactory(
             filesDir = filesDir,
-            settingsStore = settingsStore,
-            resolver = resolver,
             coordinator = coordinator,
             backgroundService = backgroundService,
             artifactStore = artifactStore,
             rewriter = ToolArtifactRewriter(filesDir, artifactStore),
         )
-        val tool = factory.create(AssistantToolBuildContext(net.weero.measix.pilot.data.enterprise.RealmAccess.Personal, ownerId, settings))!!
+        val tool = factory.create(AssistantToolBuildContext(net.weero.measix.pilot.data.enterprise.RealmAccess.Personal, ownerId, settings, available()))!!
         val resources = mutableListOf<ToolResourceLease>()
         val metadataPatches = mutableListOf<Pair<JsonObject, ToolMetadataDelivery>>()
         val parts = tool.executeWithContext(

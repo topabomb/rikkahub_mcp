@@ -685,6 +685,7 @@ class ConversationTurnService internal constructor(
                         settings = settings,
                         capabilityModel = model,
                         inspectionModel = captured.inspectionModel,
+                        imageModel = captured.imageModel,
                         workspaceCwd = snapshot.header.workspaceCwd,
                         ttsPlaybackContext = turnTtsContext,
                         mcpCapabilities = mcpCapabilities,

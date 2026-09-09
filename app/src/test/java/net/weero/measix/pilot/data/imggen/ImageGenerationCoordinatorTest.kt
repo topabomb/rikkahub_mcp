@@ -48,13 +48,127 @@ class ImageGenerationCoordinatorTest {
         partial = partial,
     )
 
-    private fun available(provider: Provider<*>) = ImageGenerationSelection.Available(
-        model = model,
-        sourceProvider = providerSetting,
-        effectiveProvider = providerSetting,
-        provider = provider,
-        descriptor = ImageGenerationModelDescriptor.from(model, providerSetting),
-    )
+    private val providerBindings = mutableMapOf<me.rerere.common.configuration.ConfigurationReference, Provider<*>>()
+    private val providers = mockk<me.rerere.ai.provider.ProviderManager> {
+        every { getProviderByType(any()) } answers { providerBindings.getValue(firstArg<ProviderSetting>().id) as Provider<ProviderSetting> }
+    }
+    private val sessions = mockk<net.weero.measix.pilot.data.enterprise.EnterpriseSessionController> {
+        coEvery { withRealmAccess<Any?>(any(), any()) } coAnswers { secondArg<suspend () -> Any?>().invoke() }
+    }
+
+    private fun available(provider: Provider<*>): net.weero.measix.pilot.service.ModelExecutionSnapshot {
+        val setting = providerSetting.copy(id = me.rerere.common.configuration.ConfigurationReference.random())
+        providerBindings[setting.id] = provider
+        return net.weero.measix.pilot.service.ModelExecutionSnapshot(model,
+            net.weero.measix.pilot.service.runtime.ModelExecutionLease { accept ->
+                accept(net.weero.measix.pilot.service.runtime.ModelRequestTarget.Remote(setting))
+            }, "fixture", null)
+    }
+
+    private fun coordinator(scope: kotlinx.coroutines.CoroutineScope, store: GeneratedMediaStore): ImageGenerationCoordinator =
+        ImageGenerationCoordinator(scope, store, mockk(), providers, sessions)
+
+    @Test
+    fun `page cleanup failure keeps committed media and original owner for exit retry`() = runTest {
+        val access = net.weero.measix.pilot.data.enterprise.RealmAccess.Enterprise(
+            ConfigurationScope.Enterprise(me.rerere.common.configuration.EnterpriseAuthority("local:example", "deployment"), "user"), "original")
+        val selection = net.weero.measix.pilot.data.enterprise.RealmSelection(access, 7)
+        coEvery { sessions.withSelectedRealmSelection<Any?>(selection, any()) } coAnswers { secondArg<suspend () -> Any?>().invoke() }
+        val provider = mockk<Provider<ProviderSetting>>()
+        coEvery { provider.generateImage(any(), any()) } returns flowOf(pngItem())
+        val modelCapture = available(provider)
+        var releases = 0
+        val lease = net.weero.measix.pilot.service.runtime.ModelExecutionLease(releaseOwner = {
+            releases++
+            if (releases == 1) error("release pending")
+        }) { accept -> modelCapture.requests.execute { accept(it) } }
+        val models = mockk<net.weero.measix.pilot.service.ModelExecutionService>()
+        coEvery { models.capturePageImage(selection, any(), model.id, any()) } coAnswers {
+            arg<(net.weero.measix.pilot.service.runtime.ModelExecutionLease) -> Unit>(3)(lease)
+            modelCapture.copy(requests = lease)
+        }
+        val files = tempDir("image-page-release")
+        val repository = mockk<GenMediaRepository> { coEvery { existsByPath(any()) } returns false }
+        every { repository.insertMedia(any()) } returns 81L
+        val coordinator = ImageGenerationCoordinator(this, GeneratedMediaStore(files, repository, mockk()), models, providers, sessions)
+        val outcome = coordinator.enqueue(ImageGenerationRequest(source = ImageGenerationSource.Page(selection, model.id), prompt = "original", size = "auto")) as ImageGenerationOutcome.Success
+        assertTrue(outcome.cleanupPending)
+        assertTrue(outcome.media.single().canonicalFile.exists())
+        assertEquals(1, releases)
+        coordinator.cancelAndAwait(access)
+        coordinator.cancelAndAwait(access)
+        assertEquals(2, releases)
+        verify(exactly = 1) { repository.insertMedia(match { it.scope == access.scope }) }
+        files.deleteRecursively()
+    }
+
+    @Test
+    fun `cancel during page capture retains failed release without replacing cancellation`() = runTest {
+        val access = net.weero.measix.pilot.data.enterprise.RealmAccess.Enterprise(
+            ConfigurationScope.Enterprise(me.rerere.common.configuration.EnterpriseAuthority("local:example", "deployment"), "user"), "original")
+        val selection = net.weero.measix.pilot.data.enterprise.RealmSelection(access, 7)
+        coEvery { sessions.withSelectedRealmSelection<Any?>(selection, any()) } coAnswers { secondArg<suspend () -> Any?>().invoke() }
+        val entered = CompletableDeferred<Unit>()
+        val unwinding = CompletableDeferred<Unit>()
+        val allowStop = CompletableDeferred<Unit>()
+        var releaseAllowed = false
+        var releases = 0
+        val lease = net.weero.measix.pilot.service.runtime.ModelExecutionLease(releaseOwner = {
+            releases++
+            check(releaseAllowed) { "release pending" }
+        }) { error("capture never completed") }
+        val models = mockk<net.weero.measix.pilot.service.ModelExecutionService>()
+        coEvery { models.capturePageImage(selection, any(), model.id, any()) } coAnswers {
+            arg<(net.weero.measix.pilot.service.runtime.ModelExecutionLease) -> Unit>(3)(lease)
+            entered.complete(Unit)
+            try { awaitCancellation() } finally {
+                withContext(kotlinx.coroutines.NonCancellable) { unwinding.complete(Unit); allowStop.await() }
+            }
+        }
+        val store = mockk<GeneratedMediaStore>()
+        val coordinator = ImageGenerationCoordinator(this, store, models, providers, sessions)
+        val request = ImageGenerationRequest(source = ImageGenerationSource.Page(selection, model.id), prompt = "original", size = "auto")
+        val caught = CompletableDeferred<Throwable>()
+        val caller = async {
+            try { coordinator.enqueue(request) } catch (error: Throwable) { caught.complete(error) }
+        }
+        entered.await()
+        caller.cancel()
+        unwinding.await()
+        val exit = async { runCatching { coordinator.cancelAndAwait(access) } }
+        runCurrent()
+        assertFalse(exit.isCompleted)
+        assertEquals(0, releases)
+        allowStop.complete(Unit)
+        caller.join()
+        assertTrue(exit.await().isFailure)
+        assertTrue(caught.await() is kotlinx.coroutines.CancellationException)
+        assertTrue(caught.await().suppressed.any { it.message == "release pending" })
+        releaseAllowed = true
+        coordinator.cancelAndAwait(access)
+        val released = releases
+        coordinator.cancelAndAwait(access)
+        assertEquals(released, releases)
+        coVerify(exactly = 0) { store.commit(any(), any(), any(), any(), any(), any(), any()) }
+    }
+
+    @Test
+    fun `duplicate registration cannot cancel original tool or release its Turn resources`() = runTest {
+        val provider = mockk<Provider<ProviderSetting>>()
+        val entered = CompletableDeferred<Unit>()
+        coEvery { provider.generateImage(any(), any()) } returns flow { entered.complete(Unit); awaitCancellation() }
+        val captured = available(provider)
+        val coordinator = coordinator(this, mockk())
+        val request = ImageGenerationRequest(id = "same", source = ImageGenerationSource.Tool(net.weero.measix.pilot.data.enterprise.RealmAccess.Personal, captured), prompt = "first", size = "auto")
+        val original = async { coordinator.enqueue(request) }
+        entered.await()
+        assertEquals("image_request_already_registered", runCatching { coordinator.enqueue(request.copy(prompt = "second")) }.exceptionOrNull()?.message)
+        assertTrue(original.isActive)
+        coordinator.cancel(request.id)
+        original.join()
+        captured.requests.execute { Unit }
+        coVerify(exactly = 1) { provider.generateImage(any(), any()) }
+    }
 
     private fun tempDir(prefix: String): File = createTempDirectory(prefix).toFile()
 
@@ -88,12 +202,11 @@ class ImageGenerationCoordinatorTest {
             genMediaRepository = repository,
             artifactStore = mockk(relaxed = true),
         )
-        val coordinator = ImageGenerationCoordinator(this, store)
+        val coordinator = coordinator(this, store)
         val first = async {
             coordinator.enqueue(
-                ImageGenerationRequest(net.weero.measix.pilot.data.enterprise.RealmAccess.Enterprise(enterprise, "session-one"),
-                    source = ImageGenerationSource.Page,
-                    selection = available(firstProvider),
+                ImageGenerationRequest(
+                    source = ImageGenerationSource.Tool(net.weero.measix.pilot.data.enterprise.RealmAccess.Enterprise(enterprise, "session-one"), available(firstProvider)),
                     prompt = "one",
                     size = "auto",
                 )
@@ -101,9 +214,8 @@ class ImageGenerationCoordinatorTest {
         }
         val second = async {
             coordinator.enqueue(
-                ImageGenerationRequest(net.weero.measix.pilot.data.enterprise.RealmAccess.Personal,
-                    source = ImageGenerationSource.Page,
-                    selection = available(secondProvider),
+                ImageGenerationRequest(
+                    source = ImageGenerationSource.Tool(net.weero.measix.pilot.data.enterprise.RealmAccess.Personal, available(secondProvider)),
                     prompt = "two",
                     size = "auto",
                 )
@@ -130,22 +242,20 @@ class ImageGenerationCoordinatorTest {
         val filesDir = tempDir("img-fail")
         val repository = mockk<GenMediaRepository> { coEvery { existsByPath(any()) } returns false }
         every { repository.insertMedia(any()) } returns 7L
-        val coordinator = ImageGenerationCoordinator(
+        val coordinator = coordinator(
             this,
             GeneratedMediaStore(filesDir, repository, mockk(relaxed = true)),
         )
         val failed = coordinator.enqueue(
-            ImageGenerationRequest(net.weero.measix.pilot.data.enterprise.RealmAccess.Personal,
-                source = ImageGenerationSource.Page,
-                selection = available(failing),
+            ImageGenerationRequest(
+                    source = ImageGenerationSource.Tool(net.weero.measix.pilot.data.enterprise.RealmAccess.Personal, available(failing)),
                 prompt = "bad",
                 size = "auto",
             )
         )
         val ok = coordinator.enqueue(
-            ImageGenerationRequest(net.weero.measix.pilot.data.enterprise.RealmAccess.Personal,
-                source = ImageGenerationSource.Page,
-                selection = available(succeeding),
+            ImageGenerationRequest(
+                    source = ImageGenerationSource.Tool(net.weero.measix.pilot.data.enterprise.RealmAccess.Personal, available(succeeding)),
                 prompt = "good",
                 size = "auto",
             )
@@ -178,22 +288,20 @@ class ImageGenerationCoordinatorTest {
         }
         val filesDir = tempDir("img-classify")
         val repository = mockk<GenMediaRepository> { coEvery { existsByPath(any()) } returns false }
-        val coordinator = ImageGenerationCoordinator(
+        val coordinator = coordinator(
             this,
             GeneratedMediaStore(filesDir, repository, mockk(relaxed = true)),
         )
         val blocked = coordinator.enqueue(
-            ImageGenerationRequest(net.weero.measix.pilot.data.enterprise.RealmAccess.Personal,
-                source = ImageGenerationSource.Page,
-                selection = available(policy),
+            ImageGenerationRequest(
+                    source = ImageGenerationSource.Tool(net.weero.measix.pilot.data.enterprise.RealmAccess.Personal, available(policy)),
                 prompt = "bad",
                 size = "auto",
             )
         ) as ImageGenerationOutcome.Failure
         val rate = coordinator.enqueue(
-            ImageGenerationRequest(net.weero.measix.pilot.data.enterprise.RealmAccess.Personal,
-                source = ImageGenerationSource.Page,
-                selection = available(limited),
+            ImageGenerationRequest(
+                    source = ImageGenerationSource.Tool(net.weero.measix.pilot.data.enterprise.RealmAccess.Personal, available(limited)),
                 prompt = "later",
                 size = "auto",
             )
@@ -217,23 +325,21 @@ class ImageGenerationCoordinatorTest {
         val filesDir = tempDir("img-cancel")
         val repository = mockk<GenMediaRepository> { coEvery { existsByPath(any()) } returns false }
         every { repository.insertMedia(any()) } returns 1L
-        val coordinator = ImageGenerationCoordinator(
+        val coordinator = coordinator(
             this,
             GeneratedMediaStore(filesDir, repository, mockk(relaxed = true)),
         )
         val first = async {
             coordinator.enqueue(
-                ImageGenerationRequest(net.weero.measix.pilot.data.enterprise.RealmAccess.Personal,
-                    source = ImageGenerationSource.Page,
-                    selection = available(blocking),
+                ImageGenerationRequest(
+                    source = ImageGenerationSource.Tool(net.weero.measix.pilot.data.enterprise.RealmAccess.Personal, available(blocking)),
                     prompt = "run",
                     size = "auto",
                 )
             )
         }
-        val secondRequest = ImageGenerationRequest(net.weero.measix.pilot.data.enterprise.RealmAccess.Personal,
-            source = ImageGenerationSource.Page,
-            selection = available(skipped),
+        val secondRequest = ImageGenerationRequest(
+                    source = ImageGenerationSource.Tool(net.weero.measix.pilot.data.enterprise.RealmAccess.Personal, available(skipped)),
             prompt = "skip",
             size = "auto",
         )
@@ -258,23 +364,21 @@ class ImageGenerationCoordinatorTest {
         val filesDir = tempDir("img-drain")
         val repository = mockk<GenMediaRepository> { coEvery { existsByPath(any()) } returns false }
         every { repository.insertMedia(any()) } returnsMany listOf(1L, 2L)
-        val coordinator = ImageGenerationCoordinator(
+        val coordinator = coordinator(
             this,
             GeneratedMediaStore(filesDir, repository, mockk(relaxed = true)),
         )
         val first = coordinator.enqueue(
-            ImageGenerationRequest(net.weero.measix.pilot.data.enterprise.RealmAccess.Personal,
-                source = ImageGenerationSource.Page,
-                selection = available(firstProvider),
+            ImageGenerationRequest(
+                    source = ImageGenerationSource.Tool(net.weero.measix.pilot.data.enterprise.RealmAccess.Personal, available(firstProvider)),
                 prompt = "one",
                 size = "auto",
             )
         )
         assertTrue(first is ImageGenerationOutcome.Success)
         val second = coordinator.enqueue(
-            ImageGenerationRequest(net.weero.measix.pilot.data.enterprise.RealmAccess.Personal,
-                source = ImageGenerationSource.Page,
-                selection = available(secondProvider),
+            ImageGenerationRequest(
+                    source = ImageGenerationSource.Tool(net.weero.measix.pilot.data.enterprise.RealmAccess.Personal, available(secondProvider)),
                 prompt = "two",
                 size = "auto",
             )
@@ -297,14 +401,13 @@ class ImageGenerationCoordinatorTest {
         val filesDir = tempDir("img-phase-order")
         val repository = mockk<GenMediaRepository> { coEvery { existsByPath(any()) } returns false }
         every { repository.insertMedia(any()) } returns 1L
-        val coordinator = ImageGenerationCoordinator(
+        val coordinator = coordinator(
             this,
             GeneratedMediaStore(filesDir, repository, mockk(relaxed = true)),
         )
         coordinator.enqueue(
-            ImageGenerationRequest(net.weero.measix.pilot.data.enterprise.RealmAccess.Personal,
-                source = ImageGenerationSource.Page,
-                selection = available(provider),
+            ImageGenerationRequest(
+                    source = ImageGenerationSource.Tool(net.weero.measix.pilot.data.enterprise.RealmAccess.Personal, available(provider)),
                 prompt = "one",
                 size = "auto",
                 onPhase = { phases.add(it) },
@@ -331,13 +434,12 @@ class ImageGenerationCoordinatorTest {
         }
         val filesDir = tempDir("img-cancel-running")
         val repository = mockk<GenMediaRepository> { coEvery { existsByPath(any()) } returns false }
-        val coordinator = ImageGenerationCoordinator(
+        val coordinator = coordinator(
             this,
             GeneratedMediaStore(filesDir, repository, mockk(relaxed = true)),
         )
-        val request = ImageGenerationRequest(net.weero.measix.pilot.data.enterprise.RealmAccess.Personal,
-            source = ImageGenerationSource.Page,
-            selection = available(provider),
+        val request = ImageGenerationRequest(
+                    source = ImageGenerationSource.Tool(net.weero.measix.pilot.data.enterprise.RealmAccess.Personal, available(provider)),
             prompt = "run",
             size = "auto",
         )
@@ -361,18 +463,16 @@ class ImageGenerationCoordinatorTest {
         val filesDir = tempDir("img-extra")
         val repository = mockk<GenMediaRepository> { coEvery { existsByPath(any()) } returns false }
         every { repository.insertMedia(any()) } returnsMany listOf(1L, 2L, 3L)
-        val coordinator = ImageGenerationCoordinator(
+        val coordinator = coordinator(
             this,
             GeneratedMediaStore(filesDir, repository, mockk(relaxed = true)),
         )
         val outcome = coordinator.enqueue(
-            ImageGenerationRequest(net.weero.measix.pilot.data.enterprise.RealmAccess.Personal,
-                source = ImageGenerationSource.Page,
-                selection = available(provider),
+            ImageGenerationRequest(
+                    source = ImageGenerationSource.Tool(net.weero.measix.pilot.data.enterprise.RealmAccess.Personal, available(provider)),
                 prompt = "one",
                 numOfImages = 1,
                 size = "auto",
-                consumerPlan = GeneratedMediaConsumerPlan.CHAT_TOOL_RESULT,
             )
         )
         assertTrue(outcome is ImageGenerationOutcome.Success)
@@ -396,25 +496,23 @@ class ImageGenerationCoordinatorTest {
         val filesDir = tempDir("img-hang")
         val repository = mockk<GenMediaRepository> { coEvery { existsByPath(any()) } returns false }
         every { repository.insertMedia(any()) } returns 1L
-        val coordinator = ImageGenerationCoordinator(
+        val coordinator = coordinator(
             this,
             GeneratedMediaStore(filesDir, repository, mockk(relaxed = true)),
         )
         val nextProvider = mockk<Provider<ProviderSetting>>()
         coEvery { nextProvider.generateImage(any(), any()) } returns flowOf(pngItem())
         val first = coordinator.enqueue(
-            ImageGenerationRequest(net.weero.measix.pilot.data.enterprise.RealmAccess.Personal,
-                source = ImageGenerationSource.Page,
-                selection = available(provider),
+            ImageGenerationRequest(
+                    source = ImageGenerationSource.Tool(net.weero.measix.pilot.data.enterprise.RealmAccess.Personal, available(provider)),
                 prompt = "one",
                 numOfImages = 1,
                 size = "auto",
             )
         )
         val second = coordinator.enqueue(
-            ImageGenerationRequest(net.weero.measix.pilot.data.enterprise.RealmAccess.Personal,
-                source = ImageGenerationSource.Page,
-                selection = available(nextProvider),
+            ImageGenerationRequest(
+                    source = ImageGenerationSource.Tool(net.weero.measix.pilot.data.enterprise.RealmAccess.Personal, available(nextProvider)),
                 prompt = "two",
                 size = "auto",
             )
@@ -442,15 +540,14 @@ class ImageGenerationCoordinatorTest {
         val filesDir = tempDir("img-caller-queued")
         val repository = mockk<GenMediaRepository> { coEvery { existsByPath(any()) } returns false }
         every { repository.insertMedia(any()) } returns 1L
-        val coordinator = ImageGenerationCoordinator(
+        val coordinator = coordinator(
             this,
             GeneratedMediaStore(filesDir, repository, mockk(relaxed = true)),
         )
         val first = async {
             coordinator.enqueue(
-                ImageGenerationRequest(net.weero.measix.pilot.data.enterprise.RealmAccess.Personal,
-                    source = ImageGenerationSource.Page,
-                    selection = available(blocking),
+                ImageGenerationRequest(
+                    source = ImageGenerationSource.Tool(net.weero.measix.pilot.data.enterprise.RealmAccess.Personal, available(blocking)),
                     prompt = "run",
                     size = "auto",
                 )
@@ -458,9 +555,8 @@ class ImageGenerationCoordinatorTest {
         }
         val second = async {
             coordinator.enqueue(
-                ImageGenerationRequest(net.weero.measix.pilot.data.enterprise.RealmAccess.Personal,
-                    source = ImageGenerationSource.Page,
-                    selection = available(skipped),
+                ImageGenerationRequest(
+                    source = ImageGenerationSource.Tool(net.weero.measix.pilot.data.enterprise.RealmAccess.Personal, available(skipped)),
                     prompt = "skip",
                     size = "auto",
                 )
@@ -493,15 +589,14 @@ class ImageGenerationCoordinatorTest {
         }
         val filesDir = tempDir("img-caller-running")
         val repository = mockk<GenMediaRepository> { coEvery { existsByPath(any()) } returns false }
-        val coordinator = ImageGenerationCoordinator(
+        val coordinator = coordinator(
             this,
             GeneratedMediaStore(filesDir, repository, mockk(relaxed = true)),
         )
         val result = async {
             coordinator.enqueue(
-                ImageGenerationRequest(net.weero.measix.pilot.data.enterprise.RealmAccess.Personal,
-                    source = ImageGenerationSource.Page,
-                    selection = available(provider),
+                ImageGenerationRequest(
+                    source = ImageGenerationSource.Tool(net.weero.measix.pilot.data.enterprise.RealmAccess.Personal, available(provider)),
                     prompt = "run",
                     size = "auto",
                 )
@@ -529,15 +624,14 @@ class ImageGenerationCoordinatorTest {
             release.await()
             51L
         }
-        val coordinator = ImageGenerationCoordinator(
+        val coordinator = coordinator(
             this,
             GeneratedMediaStore(filesDir, repository, mockk(relaxed = true)),
         )
         val result = async {
             coordinator.enqueue(
-                ImageGenerationRequest(net.weero.measix.pilot.data.enterprise.RealmAccess.Personal,
-                    source = ImageGenerationSource.Page,
-                    selection = available(provider),
+                ImageGenerationRequest(
+                    source = ImageGenerationSource.Tool(net.weero.measix.pilot.data.enterprise.RealmAccess.Personal, available(provider)),
                     prompt = "run",
                     size = "auto",
                 )
@@ -571,13 +665,12 @@ class ImageGenerationCoordinatorTest {
             release.await()
             52L
         }
-        val coordinator = ImageGenerationCoordinator(
+        val coordinator = coordinator(
             this,
             GeneratedMediaStore(filesDir, repository, mockk(relaxed = true)),
         )
-        val request = ImageGenerationRequest(net.weero.measix.pilot.data.enterprise.RealmAccess.Personal,
-            source = ImageGenerationSource.Page,
-            selection = available(provider),
+        val request = ImageGenerationRequest(
+                    source = ImageGenerationSource.Tool(net.weero.measix.pilot.data.enterprise.RealmAccess.Personal, available(provider)),
             prompt = "run",
             size = "auto",
         )
@@ -601,15 +694,14 @@ class ImageGenerationCoordinatorTest {
         coEvery { provider.generateImage(any(), any()) } returns flowOf(pngItem())
         val filesDir = tempDir("img-phase")
         val repository = mockk<GenMediaRepository> { coEvery { existsByPath(any()) } returns false }
-        val coordinator = ImageGenerationCoordinator(
+        val coordinator = coordinator(
             this,
             GeneratedMediaStore(filesDir, repository, mockk(relaxed = true)),
         )
         runCatching {
             coordinator.enqueue(
-                ImageGenerationRequest(net.weero.measix.pilot.data.enterprise.RealmAccess.Personal,
-                    source = ImageGenerationSource.Page,
-                    selection = available(provider),
+                ImageGenerationRequest(
+                    source = ImageGenerationSource.Tool(net.weero.measix.pilot.data.enterprise.RealmAccess.Personal, available(provider)),
                     prompt = "one",
                     size = "auto",
                     onPhase = { error("phase failed") },
@@ -628,14 +720,13 @@ class ImageGenerationCoordinatorTest {
         val filesDir = tempDir("img-edit")
         val repository = mockk<GenMediaRepository> { coEvery { existsByPath(any()) } returns false }
         every { repository.insertMedia(any()) } returns 33L
-        val coordinator = ImageGenerationCoordinator(
+        val coordinator = coordinator(
             this,
             GeneratedMediaStore(filesDir, repository, mockk(relaxed = true)),
         )
         val result = coordinator.enqueue(
-            ImageGenerationRequest(net.weero.measix.pilot.data.enterprise.RealmAccess.Personal,
-                source = ImageGenerationSource.Page,
-                selection = available(provider),
+            ImageGenerationRequest(
+                    source = ImageGenerationSource.Tool(net.weero.measix.pilot.data.enterprise.RealmAccess.Personal, available(provider)),
                 prompt = "make it blue",
                 size = "auto",
                 mediaKind = GeneratedMediaKind.EDIT,

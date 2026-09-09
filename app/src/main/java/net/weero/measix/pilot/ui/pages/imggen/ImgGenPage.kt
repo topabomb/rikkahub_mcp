@@ -444,9 +444,12 @@ private fun InputBar(
             horizontalArrangement = Arrangement.spacedBy(6.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
+            val modelCatalog by vm.modelCatalog.collectAsStateWithLifecycle()
             val imageModelListState = rememberModelListState(
-                modelId = settings.imageGenerationModelId,
-                catalog = net.weero.measix.pilot.service.userDefinitionModelCatalog(settings.providers),
+                modelId = (modelCatalog as? net.weero.measix.pilot.service.ModelCatalogReadState.Available)?.catalog?.selections?.imageGenerationModelId,
+                catalog = (modelCatalog as? net.weero.measix.pilot.service.ModelCatalogReadState.Available)?.catalog
+                    ?.forSlot(net.weero.measix.pilot.data.configuration.ResourceSelectionSlot.IMAGE_MODEL)
+                    ?: net.weero.measix.pilot.service.ModelCatalogUiModel(emptyList()),
                 type = ModelType.IMAGE,
             )
             ModelSelectorButton(

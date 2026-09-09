@@ -6,7 +6,7 @@ import net.weero.measix.pilot.data.datastore.SettingsStore
 import net.weero.measix.pilot.data.event.AppEventBus
 import me.rerere.tts.provider.TTSManager
 
-class LocalTools(
+class LocalTools internal constructor(
     private val context: Context,
     private val eventBus: AppEventBus,
     private val ttsManager: TTSManager,
@@ -25,7 +25,7 @@ class LocalTools(
 
     val calendarQueryTool by lazy { buildCalendarQueryTool(context) }
 
-    fun getTools(
+    internal fun getTools(
         options: List<LocalToolOption>,
         ttsPlaybackContext: TtsToolPlaybackContext? = null,
         buildContext: AssistantToolBuildContext? = null,

@@ -167,7 +167,7 @@ class GeneratedMediaStoreTest {
             item = item(TINY_PNG, "image/png"),
             prompt = "cat",
             modelLabel = "GPT Image",
-            consumerPlan = GeneratedMediaConsumerPlan.CHAT_TOOL_RESULT,
+            receiveChatArtifact = {},
         )
         assertEquals(42L, committed.mediaId)
         assertTrue(committed.canonicalFile.exists())
@@ -212,7 +212,7 @@ class GeneratedMediaStoreTest {
                     item = item(TINY_PNG, "image/png"),
                     prompt = "cat",
                     modelLabel = "model",
-                    consumerPlan = GeneratedMediaConsumerPlan.CHAT_TOOL_RESULT,
+                    receiveChatArtifact = {},
                 )
             }
         }.await()
@@ -224,7 +224,7 @@ class GeneratedMediaStoreTest {
     }
 
     @Test
-    fun `cancellation after insert keeps durable media and discards unpublished consumer artifact`() = runTest {
+    fun `cancellation after insert keeps durable media and transfers consumer before returning`() = runTest {
         val filesDir = tempDir("media-cancel-after-commit")
         val repository = mockk<GenMediaRepository> { coEvery { existsByPath(any()) } returns false }
         val cancellationJob = Job()
@@ -241,18 +241,41 @@ class GeneratedMediaStoreTest {
         coEvery { artifactStore.copyFile(any(), any(), any(), any(), any(), any()) } returns owned
         coEvery { artifactStore.discardUnpublished(owned) } returns ArtifactDeleteResult.Completed(7L)
         val store = GeneratedMediaStore(filesDir, repository, artifactStore)
+        var received: OwnedArtifact? = null
         val result = runCatching {
             CoroutineScope(coroutineContext + cancellationJob).async {
                 store.commit(ConfigurationScope.Personal,
                     item = item(TINY_PNG, "image/png"),
                     prompt = "cat",
                     modelLabel = "model",
-                    consumerPlan = GeneratedMediaConsumerPlan.CHAT_TOOL_RESULT,
+                    receiveChatArtifact = { received = it },
                 )
             }.await()
         }
 
         assertTrue(result.exceptionOrNull() is CancellationException)
+        assertEquals(1, File(filesDir, "images").listFiles().orEmpty().count { it.isFile })
+        verify(exactly = 1) { repository.insertMedia(any()) }
+        assertTrue(received === owned)
+        coVerify(exactly = 0) { artifactStore.discardUnpublished(owned) }
+        filesDir.deleteRecursively()
+    }
+
+    @Test
+    fun `consumer refusal discards only its copy and preserves committed gallery`() = runTest {
+        val filesDir = tempDir("media-refused")
+        val repository = mockk<GenMediaRepository> { coEvery { existsByPath(any()) } returns false }
+        every { repository.insertMedia(any()) } returns 44L
+        val artifactStore = mockk<ArtifactStore>()
+        val owned = mockk<OwnedArtifact>()
+        coEvery { artifactStore.copyFile(any(), any(), any(), any(), any(), any()) } returns owned
+        coEvery { artifactStore.discardUnpublished(owned) } returns ArtifactDeleteResult.Completed(7L)
+        val store = GeneratedMediaStore(filesDir, repository, artifactStore)
+        val failure = runCatching {
+            store.commit(ConfigurationScope.Personal, item(TINY_PNG, "image/png"), "cat", "model",
+                receiveChatArtifact = { error("consumer refused") })
+        }.exceptionOrNull()
+        assertEquals("consumer refused", failure?.message)
         assertEquals(1, File(filesDir, "images").listFiles().orEmpty().count { it.isFile })
         verify(exactly = 1) { repository.insertMedia(any()) }
         coVerify(exactly = 1) { artifactStore.discardUnpublished(owned) }

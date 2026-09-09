@@ -24,7 +24,7 @@ import me.rerere.ai.util.classifyProviderFailure
 import net.weero.measix.pilot.data.ai.attachments.AttachmentFailureReasons
 import net.weero.measix.pilot.data.ai.attachments.AttachmentRefs
 import net.weero.measix.pilot.data.ai.attachments.MAX_INSPECTION_ATTACHMENTS
-import net.weero.measix.pilot.service.turn.generateText
+import net.weero.measix.pilot.service.runtime.generateText
 import net.weero.measix.pilot.data.files.LocalToolPath
 
 const val ATTACHMENT_INSPECTION_TOOL_NAME = "inspect_attachments"

@@ -43,6 +43,8 @@ import net.weero.measix.pilot.data.ai.transformers.transforms
 import net.weero.measix.pilot.data.db.entity.TurnExecutionStatus
 import net.weero.measix.pilot.data.model.ConversationModelContextEntry
 import net.weero.measix.pilot.service.ConversationDisclosureSnapshotService
+import net.weero.measix.pilot.service.runtime.generateText
+import net.weero.measix.pilot.service.runtime.streamText
 import net.weero.measix.pilot.service.runtime.ModelRequests
 import kotlin.time.Clock
 import kotlin.time.TimeSource
@@ -104,7 +106,7 @@ internal class StepRunner(
             transformers = state.inputTransformers,
             accumulator = state.accumulator,
             model = state.model,
-            executionLease = state.turnContext.model.requests,
+            modelRequests = state.turnContext.model.requests,
             toolDefinitions = state.toolDefinitions,
             stream = state.assistant.streamOutput,
             reportProcessingText = state.reportProcessingText,
@@ -199,7 +201,7 @@ internal class StepRunner(
         accumulator: StepOutputAccumulator,
         transformers: List<MessageTransformer>,
         model: Model,
-        executionLease: ModelRequests,
+        modelRequests: ModelRequests,
         toolDefinitions: List<FrozenToolDefinition>,
         stream: Boolean,
         reportProcessingText: (String?) -> Unit = {},
@@ -296,7 +298,7 @@ internal class StepRunner(
             val internalMessages = assembled.providerVisibleMessages
             artifactReads.requireAuthorizedFiles(internalMessages)
 
-            executionLease.execute { target ->
+            modelRequests.execute { target ->
                 val pendingReceipt = contextPlanner.receiptOf(internalMessages)
                 val estimatedRequestContextTokens = contextPlanner.estimateRequestContextTokens(
                     providerVisibleMessages = internalMessages,

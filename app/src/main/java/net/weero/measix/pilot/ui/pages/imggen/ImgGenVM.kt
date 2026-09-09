@@ -24,20 +24,15 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
 import net.weero.measix.pilot.data.datastore.Settings
-import net.weero.measix.pilot.data.datastore.SettingsLockedException
 import kotlinx.coroutines.launch
-import me.rerere.ai.provider.ProviderManager
 import me.rerere.ai.ui.ImageGenSize
 import me.rerere.ai.ui.ImageGenerationItem
 import me.rerere.common.android.appTempFolder
 import net.weero.measix.pilot.data.datastore.SettingsStore
-import net.weero.measix.pilot.data.imggen.GeneratedMediaConsumerPlan
 import net.weero.measix.pilot.data.imggen.GeneratedMediaKind
 import net.weero.measix.pilot.data.imggen.ImageGenerationCoordinator
 import net.weero.measix.pilot.data.imggen.ImageGenerationOutcome
 import net.weero.measix.pilot.data.imggen.ImageGenerationRequest
-import net.weero.measix.pilot.data.imggen.ImageGenerationSelection
-import net.weero.measix.pilot.data.imggen.ImageGenerationSelectionResolver
 import net.weero.measix.pilot.data.imggen.ImageGenerationSource
 import net.weero.measix.pilot.service.FileManagementApplicationService
 import net.weero.measix.pilot.service.FileManagementQueryService
@@ -71,26 +66,25 @@ private fun GeneratedMediaUiModel.toGeneratedImage(files: net.weero.measix.pilot
 class ImgGenVM internal constructor(
     context: Application,
     private val settingsStore: SettingsStore,
-    val providerManager: ProviderManager,
-    private val selectionResolver: ImageGenerationSelectionResolver,
     private val coordinator: ImageGenerationCoordinator,
     private val fileManagementQueryService: FileManagementQueryService,
     private val fileManagementApplicationService: FileManagementApplicationService,
     private val configurationQueryService: net.weero.measix.pilot.service.ConfigurationQueryService,
+    private val configurationApplicationService: net.weero.measix.pilot.service.ConfigurationApplicationService,
 ) : AndroidViewModel(context) {
-    private val modelCatalog = configurationQueryService.observeModelCatalog()
+    internal val modelCatalog = configurationQueryService.observeModelCatalog()
         .stateIn(viewModelScope, SharingStarted.Eagerly, net.weero.measix.pilot.service.ModelCatalogReadState.Loading)
     val settings: StateFlow<Settings> = settingsStore.effectiveSettings
         .map { it.settings }
         .stateIn(viewModelScope, SharingStarted.Eagerly, Settings.dummy())
 
     fun selectImageGenerationModel(modelId: ConfigurationReference) {
+        val selection = (modelCatalog.value as? net.weero.measix.pilot.service.ModelCatalogReadState.Available)?.catalog?.selection ?: return
         viewModelScope.launch {
             try {
-                settingsStore.updateLocal { it.copy(imageGenerationModelId = modelId) }
-            } catch (error: SettingsLockedException) {
-                _error.value = "managed_configuration_locked:${error.reason}"
-            }
+                configurationApplicationService.selectResource(selection, net.weero.measix.pilot.data.configuration.ResourceSelectionSlot.IMAGE_MODEL, modelId)
+            } catch (cancelled: CancellationException) { throw cancelled }
+            catch (error: Exception) { _error.value = error.message ?: "image_model_unavailable" }
         }
     }
 
@@ -109,6 +103,7 @@ class ImgGenVM internal constructor(
     private val _isGenerating = MutableStateFlow(false)
     val isGenerating: StateFlow<Boolean> = _isGenerating
     private var cancelJob: Job? = null
+    private var generationToken: Any? = null
 
     private val _error = MutableStateFlow<String?>(null)
     val error: StateFlow<String?> = _error
@@ -176,176 +171,74 @@ class ImgGenVM internal constructor(
         _error.value = null
     }
 
-    fun generateImage() {
-        if(prompt.value.isBlank()) return
-        val realmSelection = (modelCatalog.value as? net.weero.measix.pilot.service.ModelCatalogReadState.Available)
-            ?.catalog?.selection ?: return
+    fun generateImage() = submitImage(edit = false)
+
+    fun editImage() = submitImage(edit = true)
+
+    private fun submitImage(edit: Boolean) {
+        val requestPrompt = _prompt.value
+        val sourceImages = if (edit) _referenceImages.value.toList() else emptyList()
+        if (requestPrompt.isBlank() || (edit && sourceImages.isEmpty())) return
+        val catalog = (modelCatalog.value as? net.weero.measix.pilot.service.ModelCatalogReadState.Available)?.catalog ?: return
+        val selection = catalog.selection ?: return
+        val chosen = catalog.roleSelections[net.weero.measix.pilot.data.configuration.ResourceSelectionSlot.IMAGE_MODEL]
+        val model = chosen?.reference?.let(catalog::find)?.model
+        if (chosen?.isAvailable != true || model == null) { _error.value = "image_model_unavailable"; return }
+        val count = _numberOfImages.value
+        val size = _size.value
         val previous = cancelJob
         previous?.cancel()
+        val token = Any().also { generationToken = it }
         cancelJob = viewModelScope.launch(start = CoroutineStart.ATOMIC) {
-            withContext(NonCancellable) { previous?.join() }
-            currentCoroutineContext().ensureActive()
             val requestJob = requireNotNull(currentCoroutineContext()[Job])
+            fun isCurrent() = generationToken === token && realmSelection.value == selection
             var previewFile: File? = null
             try {
+                withContext(NonCancellable) { previous?.join() }
+                currentCoroutineContext().ensureActive()
+                configurationQueryService.requireSelection(selection)
+                if (!isCurrent()) return@launch
                 _isGenerating.value = true
                 _error.value = null
                 _currentGeneratedImages.value = emptyList()
-
-                configurationQueryService.requireSelection(realmSelection)
-
-                val settings = settingsStore.effectiveSettings.first().settings
-                val selection = selectionResolver.resolve(settings)
-                if (selection !is ImageGenerationSelection.Available) {
-                    _error.value = "image_model_unavailable"
-                    return@launch
-                }
-                val requestPrompt = _prompt.value
                 val request = ImageGenerationRequest(
-                    realmAccess = realmSelection.access,
-                    source = ImageGenerationSource.Page,
-                    selection = selection,
-                    prompt = requestPrompt,
-                    numOfImages = _numberOfImages.value,
-                    size = _size.value,
-                    partialImages = 2,
-                    consumerPlan = GeneratedMediaConsumerPlan.NONE,
-                    onPartial = { item ->
-                        previewFile?.delete()
-                        val preview = saveImagePreview(item, realmSelection, requestJob)
-                        previewFile = preview.file
-                        _currentGeneratedImages.value = listOf(
-                            GeneratedImage(
-                                selection = realmSelection,
-                                id = 0,
-                                prompt = requestPrompt,
-                                filePath = preview.file.absolutePath,
-                                image = preview.image,
-                                timestamp = System.currentTimeMillis(),
-                                model = selection.model.displayName,
-                            )
-                        )
-                    },
-                )
-                when (val outcome = coordinator.enqueue(request)) {
-                    is ImageGenerationOutcome.Failure -> {
-                        previewFile?.delete()
-                        previewFile = null
-                        _error.value = outcome.reason
-                    }
-                    is ImageGenerationOutcome.Success -> {
-                        previewFile?.delete()
-                        previewFile = null
-                        _currentGeneratedImages.value = outcome.media.map { media ->
-                            GeneratedImage(
-                                selection = realmSelection,
-                                id = media.mediaId.toInt(),
-                                prompt = requestPrompt,
-                                filePath = media.canonicalFile.absolutePath,
-                                image = fileManagementApplicationService.imageSource(ManagedFileKey.Generated(media.mediaId.toInt(), realmSelection), media.canonicalFile.name),
-                                timestamp = System.currentTimeMillis(),
-                                model = selection.model.displayName,
-                            )
-                        }
-                    }
-                }
-            } catch (cancelled: CancellationException) {
-                throw cancelled
-            } catch (error: Exception) {
-                Log.e(TAG, "Failed to generate image", error)
-                _error.value = "unknown"
-            } finally {
-                previewFile?.delete()
-                _isGenerating.value = false
-            }
-        }
-    }
-
-    fun editImage() {
-        if (prompt.value.isBlank() || referenceImages.value.isEmpty()) return
-        val realmSelection = (modelCatalog.value as? net.weero.measix.pilot.service.ModelCatalogReadState.Available)
-            ?.catalog?.selection ?: return
-        val previous = cancelJob
-        previous?.cancel()
-        cancelJob = viewModelScope.launch(start = CoroutineStart.ATOMIC) {
-            withContext(NonCancellable) { previous?.join() }
-            currentCoroutineContext().ensureActive()
-            val requestJob = requireNotNull(currentCoroutineContext()[Job])
-            var previewFile: File? = null
-            try {
-                _isGenerating.value = true
-                _error.value = null
-                _currentGeneratedImages.value = emptyList()
-
-                configurationQueryService.requireSelection(realmSelection)
-
-                val settings = settingsStore.effectiveSettings.first().settings
-                val selection = selectionResolver.resolve(settings)
-                if (selection !is ImageGenerationSelection.Available) {
-                    _error.value = "image_model_unavailable"
-                    return@launch
-                }
-
-                val requestPrompt = _prompt.value
-                val sourceImages = _referenceImages.value
-                val request = ImageGenerationRequest(
-                    realmAccess = realmSelection.access,
-                    source = ImageGenerationSource.Page,
-                    selection = selection,
-                    prompt = requestPrompt,
-                    numOfImages = _numberOfImages.value,
-                    size = _size.value,
-                    partialImages = 2,
-                    mediaKind = GeneratedMediaKind.EDIT,
-                    sourcePaths = sourceImages.joinToString("\n"),
+                    source = ImageGenerationSource.Page(selection, model.id),
+                    prompt = requestPrompt, numOfImages = count, size = size, partialImages = 2,
+                    mediaKind = if (edit) GeneratedMediaKind.EDIT else GeneratedMediaKind.GENERATION,
+                    sourcePaths = sourceImages.takeIf { it.isNotEmpty() }?.joinToString("\n"),
                     editImages = sourceImages,
                     onPartial = { item ->
-                        previewFile?.delete()
-                        val preview = saveImagePreview(item, realmSelection, requestJob)
-                        previewFile = preview.file
-                        _currentGeneratedImages.value = listOf(
-                            GeneratedImage(
-                                selection = realmSelection,
-                                id = 0,
-                                prompt = requestPrompt,
-                                filePath = preview.file.absolutePath,
-                                image = preview.image,
-                                timestamp = System.currentTimeMillis(),
-                                model = selection.model.displayName,
-                            )
-                        )
+                        requestJob.ensureActive()
+                        if (isCurrent()) {
+                            previewFile?.delete()
+                            val preview = saveImagePreview(item, selection, requestJob)
+                            previewFile = preview.file
+                            if (isCurrent()) _currentGeneratedImages.value = listOf(GeneratedImage(
+                                selection, 0, requestPrompt, preview.file.absolutePath, preview.image,
+                                System.currentTimeMillis(), model.displayName,
+                            ))
+                        }
                     },
                 )
-                when (val outcome = coordinator.enqueue(request)) {
-                    is ImageGenerationOutcome.Failure -> {
-                        previewFile?.delete()
-                        previewFile = null
-                        _error.value = outcome.reason
-                    }
+                val outcome = coordinator.enqueue(request)
+                if (isCurrent()) when (outcome) {
+                    is ImageGenerationOutcome.Failure -> _error.value = outcome.reason
                     is ImageGenerationOutcome.Success -> {
-                        previewFile?.delete()
-                        previewFile = null
-                        _currentGeneratedImages.value = outcome.media.map { media ->
-                            GeneratedImage(
-                                selection = realmSelection,
-                                id = media.mediaId.toInt(),
-                                prompt = requestPrompt,
-                                filePath = media.canonicalFile.absolutePath,
-                                image = fileManagementApplicationService.imageSource(ManagedFileKey.Generated(media.mediaId.toInt(), realmSelection), media.canonicalFile.name),
-                                timestamp = System.currentTimeMillis(),
-                                model = selection.model.displayName,
-                            )
-                        }
+                        _currentGeneratedImages.value = outcome.media.map { media -> GeneratedImage(
+                            selection, media.mediaId.toInt(), requestPrompt, media.canonicalFile.absolutePath,
+                            fileManagementApplicationService.imageSource(ManagedFileKey.Generated(media.mediaId.toInt(), selection), media.canonicalFile.name),
+                            System.currentTimeMillis(), model.displayName,
+                        ) }
+                        if (outcome.cleanupPending) _error.value = "cleanup_pending"
                     }
                 }
-            } catch (cancelled: CancellationException) {
-                throw cancelled
-            } catch (error: Exception) {
-                Log.e(TAG, "Failed to edit image", error)
-                _error.value = "unknown"
+            } catch (cancelled: CancellationException) { throw cancelled }
+            catch (error: Exception) {
+                Log.e(TAG, "Failed to generate image", error)
+                if (isCurrent()) _error.value = "unknown"
             } finally {
                 previewFile?.delete()
-                _isGenerating.value = false
+                if (generationToken === token) _isGenerating.value = false
             }
         }
     }
@@ -374,14 +267,14 @@ class ImgGenVM internal constructor(
 
     private fun deleteReferenceFiles(paths: List<String>) {
         if (paths.isEmpty()) return
-        viewModelScope.launch(Dispatchers.IO) {
-            deleteReferenceFilesNow(paths)
-        }
+        val owner = cancelJob
+        if (owner?.isCompleted == false) owner.invokeOnCompletion { deleteReferenceFilesNow(paths) }
+        else deleteReferenceFilesNow(paths)
     }
 
     override fun onCleared() {
         cancelJob?.cancel()
-        deleteReferenceFilesNow(_referenceImages.value)
+        deleteReferenceFiles(_referenceImages.value)
         _referenceImages.value = emptyList()
         super.onCleared()
     }

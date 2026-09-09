@@ -15,6 +15,9 @@ import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.ensureActive
+import net.weero.measix.pilot.service.runtime.generateImage
+import net.weero.measix.pilot.service.runtime.editImage
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -23,12 +26,17 @@ import me.rerere.ai.provider.ImageGenerationParams
 import me.rerere.ai.ui.ImageGenerationItem
 import me.rerere.ai.util.classifyProviderFailure
 
-sealed class ImageGenerationSource {
-    data object Page : ImageGenerationSource()
+internal sealed interface ImageGenerationSource {
+    val access: RealmAccess
+    data class Page(
+        val selection: net.weero.measix.pilot.data.enterprise.RealmSelection,
+        val modelId: ConfigurationReference,
+    ) : ImageGenerationSource { override val access get() = selection.access }
     data class Tool(
-        val ownerAssistantId: ConfigurationReference,
-        val revalidate: suspend (ImageGenerationSelection.Available) -> ImageGenerationFailure?,
-    ) : ImageGenerationSource()
+        override val access: RealmAccess,
+        val model: net.weero.measix.pilot.service.ModelExecutionSnapshot,
+        val receiveChatArtifact: ((net.weero.measix.pilot.data.files.OwnedArtifact) -> Unit)? = null,
+    ) : ImageGenerationSource
 }
 
 enum class ImageGenerationPhase {
@@ -37,70 +45,97 @@ enum class ImageGenerationPhase {
     PERSISTING,
 }
 
-data class ImageGenerationRequest(
-    val realmAccess: RealmAccess,
+internal data class ImageGenerationRequest(
     val id: String = UUID.randomUUID().toString(),
     val source: ImageGenerationSource,
-    val selection: ImageGenerationSelection.Available,
     val prompt: String,
     val numOfImages: Int = 1,
     val size: String,
     val partialImages: Int = 0,
     val mediaKind: GeneratedMediaKind = GeneratedMediaKind.GENERATION,
     val sourcePaths: String? = null,
-    val consumerPlan: GeneratedMediaConsumerPlan = GeneratedMediaConsumerPlan.NONE,
     val editImages: List<String> = emptyList(),
     val onPartial: (suspend (ImageGenerationItem) -> Unit)? = null,
     val onPhase: (suspend (ImageGenerationPhase) -> Unit)? = null,
 )
 
 sealed class ImageGenerationOutcome {
-    data class Success(val media: List<CommittedGeneratedMedia>) : ImageGenerationOutcome()
+    data class Success(val media: List<CommittedGeneratedMedia>, val cleanupPending: Boolean = false) : ImageGenerationOutcome()
     data class Failure(val reason: String, val detail: String? = null) : ImageGenerationOutcome()
 }
 
-data class ImageGenerationFailure(val reason: String)
-
-class ImageGenerationCoordinator(
+internal class ImageGenerationCoordinator(
     private val scope: CoroutineScope,
     private val mediaStore: GeneratedMediaStore,
+    private val models: net.weero.measix.pilot.service.ModelExecutionService,
+    private val providers: me.rerere.ai.provider.ProviderManager,
+    private val sessions: net.weero.measix.pilot.data.enterprise.EnterpriseSessionController,
 ) {
     private val mutex = Mutex()
-    private val queue = ArrayDeque<QueuedRequest>()
+    // Completed requests remain here until their original resource release succeeds.
+    private val requests = linkedMapOf<String, QueuedRequest>()
     private var workerJob: Job? = null
-    private var running: QueuedRequest? = null
 
     suspend fun enqueue(request: ImageGenerationRequest): ImageGenerationOutcome {
-        val queued = QueuedRequest(request, CompletableDeferred())
+        val queued = QueuedRequest(request)
+        var registered = false
         try {
-            request.onPhase?.invoke(ImageGenerationPhase.QUEUED)
-            mutex.withLock {
-                if (!queued.isActive) return@withLock
-                queue.addLast(queued)
+            suspend fun register() = mutex.withLock {
+                coroutineContext.ensureActive()
+                check(request.id !in requests) { "image_request_already_registered" }
+                requests[request.id] = queued
+                registered = true
                 ensureWorkerLocked()
             }
-            return queued.result.await()
+            when (val source = request.source) {
+                is ImageGenerationSource.Page -> sessions.withSelectedRealmSelection(source.selection) { register() }
+                is ImageGenerationSource.Tool -> sessions.withRealmAccess(source.access) { register() }
+            }
+            val outcome = queued.result.await()
+            queued.finished.await()
+            return if (outcome is ImageGenerationOutcome.Success) outcome.copy(cleanupPending = queued.cleanupFailure != null)
+                else outcome
         } catch (error: Exception) {
             withContext(NonCancellable) {
-                cancel(request.id)
+                if (registered) try { cancelOwned(queued) }
+                catch (cleanup: Exception) { if (cleanup !== error) error.addSuppressed(cleanup) }
             }
             throw error
         }
     }
 
     suspend fun cancel(requestId: String) {
-        val target = mutex.withLock {
-            val waiting = queue.firstOrNull { it.request.id == requestId }
-            if (waiting != null) {
-                queue.remove(waiting)
-                waiting.finished.complete(Unit)
-                waiting
-            } else {
-                running?.takeIf { it.request.id == requestId }
-            }
-        } ?: return
-        abort(target)
+        val target = mutex.withLock { requests[requestId]?.also { abortLocked(it) } } ?: return
         target.finished.await()
+        release(target)
+    }
+
+    private suspend fun cancelOwned(target: QueuedRequest) {
+        mutex.withLock { if (requests[target.request.id] === target) abortLocked(target) }
+        target.finished.await()
+        release(target)
+    }
+
+    suspend fun cancelAndAwait(access: RealmAccess.Enterprise) {
+        val targets = mutex.withLock {
+            requests.values.filter { it.request.source.access == access }.onEach(::abortLocked)
+        }
+        var failure: Exception? = null
+        targets.forEach { target ->
+            target.finished.await()
+            try { release(target) }
+            catch (cancelled: CancellationException) { throw cancelled }
+            catch (error: Exception) {
+                if (failure == null) failure = error else if (failure !== error) failure?.addSuppressed(error)
+            }
+        }
+        failure?.let { throw it }
+    }
+
+    private fun abortLocked(target: QueuedRequest) {
+        target.control.cancel()
+        target.result.cancel()
+        if (!target.started) target.finished.complete(Unit)
     }
 
     private fun ensureWorkerLocked() {
@@ -108,171 +143,136 @@ class ImageGenerationCoordinator(
         workerJob = scope.launch {
             while (true) {
                 val next = mutex.withLock {
-                    val item = queue.removeFirstOrNull()
-                    if (item == null) {
-                        workerJob = null
-                        running = null
-                    } else {
-                        running = item
-                    }
-                    item
+                    requests.values.firstOrNull { !it.started && !it.finished.isCompleted }?.also { it.started = true }
+                        .also { if (it == null) workerJob = null }
                 } ?: break
                 process(next)
-                mutex.withLock {
-                    if (running === next) running = null
-                }
             }
         }
     }
 
     private suspend fun process(queued: QueuedRequest) {
         try {
-            if (!queued.isActive) return
             coroutineScope {
                 launch {
-                    val child = coroutineContext[Job]
-                    val handle = queued.control.invokeOnCompletion { cause ->
-                        if (cause != null) child?.cancel()
-                    }
+                    val child = requireNotNull(coroutineContext[Job])
+                    val handle = queued.control.invokeOnCompletion { cause -> if (cause != null) child.cancel() }
                     try {
-                        executeRequest(queued)
-                    } finally {
-                        handle.dispose()
-                    }
+                        child.ensureActive()
+                        queued.request.onPhase?.invoke(ImageGenerationPhase.QUEUED)
+                        val captured = when (val source = queued.request.source) {
+                            is ImageGenerationSource.Tool -> source.model
+                            is ImageGenerationSource.Page -> models.capturePageImage(source.selection, child, source.modelId) {
+                                check(queued.lease == null) { "image_model_owner_already_bound" }
+                                queued.lease = it
+                            }
+                        }
+                        queued.result.complete(executeRequest(queued.request, captured))
+                    } finally { handle.dispose() }
                 }
             }
         } catch (cancelled: CancellationException) {
-            if (!queued.result.isCompleted) queued.result.cancel(cancelled)
+            queued.result.cancel(cancelled)
         } catch (error: Exception) {
             Log.e(TAG, "image generation failed", error)
             val classified = classifyProviderFailure(error)
-            queued.result.complete(
-                ImageGenerationOutcome.Failure(
-                    reason = classified.kind.reason,
-                    detail = classified.detail,
-                )
-            )
+            queued.result.complete(ImageGenerationOutcome.Failure(classified.kind.reason, classified.detail))
         } finally {
-            queued.control.complete()
-            queued.finished.complete(Unit)
+            withContext(NonCancellable) {
+                try { release(queued) }
+                catch (error: Exception) {
+                    queued.cleanupFailure = error
+                    Log.e(TAG, "image resource release pending", error)
+                }
+                queued.control.complete()
+                queued.finished.complete(Unit)
+            }
         }
     }
 
-    private suspend fun executeRequest(queued: QueuedRequest) {
-        if (!queued.isActive) return
-        val request = queued.request
-        if (request.source is ImageGenerationSource.Tool) {
-            val revoked = request.source.revalidate(request.selection)
-            if (revoked != null) {
-                queued.result.complete(ImageGenerationOutcome.Failure(revoked.reason))
-                return
-            }
-        }
-        if (!queued.isActive) return
+    private suspend fun release(queued: QueuedRequest) {
+        queued.lease?.release()
+        mutex.withLock { if (requests[queued.request.id] === queued) requests.remove(queued.request.id) }
+        queued.cleanupFailure = null
+    }
+
+    private suspend fun executeRequest(
+        request: ImageGenerationRequest,
+        captured: net.weero.measix.pilot.service.ModelExecutionSnapshot,
+    ): ImageGenerationOutcome {
         request.onPhase?.invoke(ImageGenerationPhase.GENERATING)
-        val finals = collectFinals(request)
-        if (finals.isEmpty()) {
-            queued.result.complete(ImageGenerationOutcome.Failure("invalid_result"))
-            return
-        }
+        val finals = captured.requests.execute { target -> collectFinals(request, captured.model, target) }
+        if (finals.isEmpty()) return ImageGenerationOutcome.Failure("invalid_result")
+        coroutineContext.ensureActive()
         request.onPhase?.invoke(ImageGenerationPhase.PERSISTING)
-        val modelLabel = request.selection.model.displayName.ifBlank {
-            request.selection.model.modelId
-        }
+        val modelLabel = captured.model.displayName.ifBlank { captured.model.modelId }
         val committed = try {
-            finals.map { item ->
-                mediaStore.commit(
-                    scope = request.realmAccess.scope,
-                    item = item,
-                    prompt = request.prompt,
-                    modelLabel = modelLabel,
-                    kind = request.mediaKind,
-                    sourcePaths = request.sourcePaths,
-                    consumerPlan = request.consumerPlan,
-                )
+            suspend fun persist() = finals.map { item ->
+                    mediaStore.commit(
+                        scope = request.source.access.scope, item = item, prompt = request.prompt,
+                        modelLabel = modelLabel, kind = request.mediaKind, sourcePaths = request.sourcePaths,
+                        receiveChatArtifact = (request.source as? ImageGenerationSource.Tool)?.receiveChatArtifact,
+                    )
+                }
+            when (val source = request.source) {
+                is ImageGenerationSource.Page -> sessions.withSelectedRealmSelection(source.selection) { persist() }
+                is ImageGenerationSource.Tool -> sessions.withRealmAccess(source.access) { persist() }
             }
-        } catch (cancelled: CancellationException) {
-            throw cancelled
-        } catch (error: Exception) {
+        } catch (cancelled: CancellationException) { throw cancelled }
+        catch (error: Exception) {
             Log.e(TAG, "image persistence failed", error)
-            queued.result.complete(ImageGenerationOutcome.Failure("persistence_error"))
-            return
+            return ImageGenerationOutcome.Failure("persistence_error")
         }
-        queued.result.complete(ImageGenerationOutcome.Success(committed))
+        return ImageGenerationOutcome.Success(committed)
     }
 
-    private suspend fun collectFinals(request: ImageGenerationRequest): List<ImageGenerationItem> {
+    private suspend fun collectFinals(
+        request: ImageGenerationRequest,
+        model: me.rerere.ai.provider.Model,
+        target: net.weero.measix.pilot.service.runtime.ModelRequestTarget,
+    ): List<ImageGenerationItem> {
         val needed = request.numOfImages.coerceAtLeast(1)
         val finals = mutableListOf<ImageGenerationItem>()
         val flow = if (request.editImages.isEmpty()) {
-            request.selection.provider.generateImage(
-                request.selection.effectiveProvider,
-                ImageGenerationParams(
-                    model = request.selection.model,
-                    prompt = request.prompt,
-                    numOfImages = request.numOfImages,
-                    size = request.size,
-                    partialImages = request.partialImages,
-                    customHeaders = request.selection.model.customHeaders,
-                    customBody = request.selection.model.customBodies,
-                ),
-            )
+            target.generateImage(providers, ImageGenerationParams(
+                model = model, prompt = request.prompt, numOfImages = request.numOfImages,
+                size = request.size, partialImages = request.partialImages,
+                customHeaders = model.customHeaders, customBody = model.customBodies,
+            ))
         } else {
-            request.selection.provider.editImage(
-                request.selection.effectiveProvider,
-                ImageEditParams(
-                    model = request.selection.model,
-                    prompt = request.prompt,
-                    images = request.editImages,
-                    numOfImages = request.numOfImages,
-                    size = request.size,
-                    partialImages = request.partialImages,
-                    customHeaders = request.selection.model.customHeaders,
-                    customBody = request.selection.model.customBodies,
-                ),
-            )
+            target.editImage(providers, ImageEditParams(
+                model = model, prompt = request.prompt, images = request.editImages,
+                numOfImages = request.numOfImages, size = request.size, partialImages = request.partialImages,
+                customHeaders = model.customHeaders, customBody = model.customBodies,
+            ))
         }
         val parent = coroutineContext[Job]
         val collectorJob = SupervisorJob(parent)
         try {
             withContext(collectorJob) {
                 flow.collect { item ->
-                    if (item.partial) {
-                        request.onPartial?.invoke(item)
-                    } else if (finals.size < needed) {
+                    if (item.partial) request.onPartial?.invoke(item)
+                    else if (finals.size < needed) {
                         finals.add(item)
-                        if (finals.size >= needed) {
-                            collectorJob.cancel()
-                        }
+                        if (finals.size >= needed) collectorJob.cancel()
                     }
                 }
             }
         } catch (cancelled: CancellationException) {
+            parent?.ensureActive()
             if (finals.size < needed) throw cancelled
-        } finally {
-            collectorJob.complete()
-        }
+        } finally { collectorJob.complete() }
         return finals
     }
 
-    private fun abort(target: QueuedRequest) {
-        target.control.cancel()
-        if (!target.result.isCompleted) {
-            target.result.cancel()
-        }
+    private class QueuedRequest(val request: ImageGenerationRequest) {
+        val result = CompletableDeferred<ImageGenerationOutcome>()
+        val control: CompletableJob = Job()
+        val finished = CompletableDeferred<Unit>()
+        var started = false
+        var lease: net.weero.measix.pilot.service.runtime.ModelExecutionLease? = null
+        var cleanupFailure: Exception? = null
     }
 
-    private class QueuedRequest(
-        val request: ImageGenerationRequest,
-        val result: CompletableDeferred<ImageGenerationOutcome>,
-        val control: CompletableJob = Job(),
-        val finished: CompletableDeferred<Unit> = CompletableDeferred(),
-    ) {
-        val isActive: Boolean
-            get() = control.isActive && !result.isCompleted
-    }
-
-    companion object {
-        private const val TAG = "ImageGenerationCoordinator"
-    }
+    companion object { private const val TAG = "ImageGenerationCoordinator" }
 }

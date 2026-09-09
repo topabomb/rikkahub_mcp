@@ -46,7 +46,6 @@ import com.dokar.sonner.ToastType
 import net.weero.measix.pilot.R
 import net.weero.measix.pilot.Screen
 import net.weero.measix.pilot.data.ai.tools.local.LocalToolOption
-import net.weero.measix.pilot.data.imggen.ImageGenerationSelectionResolver
 import net.weero.measix.pilot.data.model.Assistant
 import net.weero.measix.pilot.data.model.Avatar
 import net.weero.measix.pilot.ui.components.nav.BackButton
@@ -82,8 +81,9 @@ fun AssistantLocalToolPage(id: String) {
     val settingsStore: net.weero.measix.pilot.data.datastore.SettingsStore = koinInject()
     val effectiveSettings by settingsStore.effectiveSettings.collectAsStateWithLifecycle()
     val settings = effectiveSettings.settings
-    val imageSelectionResolver: ImageGenerationSelectionResolver = koinInject()
-    val imageGenerationAvailable = remember(settings) { imageSelectionResolver.isAvailable(settings) }
+    val configurationQuery: net.weero.measix.pilot.service.ConfigurationQueryService = koinInject()
+    val configuration by remember(configurationQuery) { configurationQuery.observeCurrent() }.collectAsStateWithLifecycle(initialValue = null)
+    val imageGenerationAvailable = configuration?.modelSelection(net.weero.measix.pilot.data.configuration.ModelSelectionRole.IMAGE)?.isAvailable == true
     val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
 
     Scaffold(

@@ -88,7 +88,7 @@ Tool Result checkpoint（消息与 Artifact 引用同事务）
 
 `ArtifactStore` 的创建入口显式接收 `ConfigurationScope`，在 CREATING 行写入后一直保留该归属；`copyFilePreservingOrigin` 保留源文件的域与 origin。聊天输入的 `ArtifactDraftScope` 绑定原 `ConversationCommandTarget`，提交和消息编辑不能借用另一个页面的 draft，即使它们属于同一用户或会话。关闭后的补偿仍归原 lease。
 
-模型输出转换、MCP/Workspace 图片、rolling compaction 归档沿原 Turn 传递 scope；`ImageGenerationRequest` 固定本次操作的 scope，`GeneratedMediaStore` 将同一归属写入图库原件及聊天副本。共享助手定义的头像/背景导入仍创建个人配置资产。目录、统计和删除已按原 RealmSelection 授权；预览、导出、归档工具读取与 Workspace 挂载的完整域授权仍在企业集成计划中。
+模型输出转换、MCP/Workspace 图片、rolling compaction 归档沿原 Turn 传递 scope；`ImageGenerationRequest.source` 固定原页面选择或原工具任务的域与模型请求视图，`GeneratedMediaStore` 将同一归属写入图库原件及聊天副本。共享助手定义的头像/背景导入仍创建个人配置资产。目录、统计和删除已按原 RealmSelection 授权；预览、导出、归档工具读取与 Workspace 挂载的完整域授权仍在企业集成计划中。
 
 `StepRunner` 在每次请求的上下文裁剪完成后，通过 `ArtifactStore.retainForRequest` 取得原 scope 的 `ArtifactReadLease`，覆盖输入转换、请求装配与完整 Provider 流收集。该临时读视图复用既有 retention pin，不新增持久化记录。主、子 Turn 共用此边界；成功、失败或取消后释放，既不保留窗口外历史，也不跨 Step 长期占用文件。
 
@@ -254,6 +254,8 @@ Tool Result checkpoint（消息与 Artifact 引用同事务）
 Artifact metadata、引用和生命周期归 `ArtifactStore`；`ArtifactPayloadStore` 只处理磁盘 IO。启动时按 CREATING / ACTIVE / DELETING 状态与 durable roots 收口，不能仅凭 payload 存在认领资源。图库生成媒体由 `GeneratedMediaStore` 独立恢复；全局恢复门禁在两者完成前阻止文件查询和写入。
 
 工具副作用之前的 STARTED、checkpoint、终态 CAS、UNKNOWN 与父子恢复顺序统一见 [turn-step-execution.md](turn-step-execution.md)。资源 durability 复用这条提交链，不建立第二张执行表或旁路写协议。
+
+`GeneratedMediaStore.commit` 以同步 `receiveChatArtifact` 回调明确聊天副本的接收者，图库 row 提交后、可取消返回边界前交给原 `ToolExecutionContext.registerUnpublishedResource`。接收后由工具 checkpoint 协议发布或丢弃；接收失败只清理未交付副本，保留已提交图库。未提供接收者的页面任务只生成图库原件，不先创建无人管理的聊天副本。
 
 ## 7. 媒体回放边界
 

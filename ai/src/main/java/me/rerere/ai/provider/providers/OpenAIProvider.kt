@@ -3,6 +3,8 @@ package me.rerere.ai.provider.providers
 
 import android.content.Context
 import android.util.Log
+import me.rerere.common.http.PrivateRequest
+import me.rerere.common.http.isPrivate
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
@@ -23,6 +25,7 @@ import me.rerere.ai.provider.Model
 import me.rerere.ai.provider.Provider
 import me.rerere.ai.provider.ProviderSetting
 import me.rerere.ai.provider.RequestMediaCapabilities
+import me.rerere.ai.provider.authenticate
 import me.rerere.ai.provider.TextGenerationParams
 import me.rerere.ai.provider.providers.openai.ChatCompletionsAPI
 import me.rerere.ai.provider.providers.openai.ResponseAPI
@@ -226,7 +229,6 @@ class OpenAIProvider(
             "Expected OpenAI provider setting"
         }
 
-        val key = keyRoulette.next(providerSetting.apiKey, providerSetting.id.toString())
 
         val requestBody = json.encodeToString(
             buildJsonObject {
@@ -250,7 +252,7 @@ class OpenAIProvider(
         val request = Request.Builder()
             .url("${providerSetting.baseUrl}/images/generations")
             .headers(params.customHeaders.toHeaders())
-            .addHeader("Authorization", "Bearer $key")
+            .authenticate(params.credentials, "Authorization", "Bearer ", providerSetting.apiKey, providerSetting.id.toString(), keyRoulette)
             .addHeader("Content-Type", "application/json")
             .post(requestBody.toRequestBody("application/json".toMediaType()))
             .configureReferHeaders(providerSetting.baseUrl)
@@ -261,7 +263,7 @@ class OpenAIProvider(
             if (!response.isSuccessful) {
                 throw formatProviderHttpError(response.code, response.body?.string())
             }
-            parseImageResponse(response.body.string())
+            parseImageResponse(response.body.string(), request.isPrivate)
         }
 
         items.forEach { emit(it) }
@@ -278,7 +280,6 @@ class OpenAIProvider(
             "At least one image is required"
         }
 
-        val key = keyRoulette.next(providerSetting.apiKey, providerSetting.id.toString())
         val bodyBuilder = MultipartBody.Builder()
             .setType(MultipartBody.FORM)
             .addFormDataPart("model", params.model.modelId)
@@ -326,7 +327,7 @@ class OpenAIProvider(
         val request = Request.Builder()
             .url("${providerSetting.baseUrl}/images/edits")
             .headers(params.customHeaders.toHeaders())
-            .addHeader("Authorization", "Bearer $key")
+            .authenticate(params.credentials, "Authorization", "Bearer ", providerSetting.apiKey, providerSetting.id.toString(), keyRoulette)
             .post(bodyBuilder.build())
             .configureReferHeaders(providerSetting.baseUrl)
             .build()
@@ -336,13 +337,13 @@ class OpenAIProvider(
             if (!response.isSuccessful) {
                 throw formatProviderHttpError(response.code, response.body?.string())
             }
-            parseImageResponse(response.body.string())
+            parseImageResponse(response.body.string(), request.isPrivate)
         }
 
         items.forEach { emit(it) }
     }
 
-    private suspend fun parseImageResponse(bodyStr: String): List<ImageGenerationItem> {
+    private suspend fun parseImageResponse(bodyStr: String, privateRequest: Boolean): List<ImageGenerationItem> {
         val parsed = parseImageGenerationResponseBody(bodyStr)
         if (parsed.allBlockedByModeration && parsed.items.isEmpty()) {
             throw moderationBlockedImageException()
@@ -353,15 +354,16 @@ class OpenAIProvider(
                     data = item.data,
                     mimeType = item.mimeType,
                 )
-                is ParsedImageGenerationItem.RemoteUrl -> downloadImageAsBase64(item.url)
+                is ParsedImageGenerationItem.RemoteUrl -> downloadImageAsBase64(item.url, privateRequest)
             }
         }
     }
 
     @OptIn(ExperimentalEncodingApi::class)
-    private suspend fun downloadImageAsBase64(url: String): ImageGenerationItem {
+    private suspend fun downloadImageAsBase64(url: String, privateRequest: Boolean): ImageGenerationItem {
         val request = Request.Builder()
             .url(url)
+            .apply { if (privateRequest) tag(PrivateRequest::class.java, PrivateRequest) }
             .get()
             .build()
 

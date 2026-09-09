@@ -35,9 +35,10 @@
 | 执行链 owner、依赖与退休面 | `ArchitectureDependencyTest`、`RetiredSurfaceContractTest`、`TurnStepProtocolContractTest`（静态检查） |
 | commit-then-publish 与命令锁 | `ConversationCommandCoordinatorTest` |
 | active Turn session 与 live phase | `ConversationRuntimeTest` |
-| 模型执行原域、准入与绑定 | `ModelExecutionServiceTest` 使用真实 DataStore/企业存储验证同次聊天/识图捕获、准备失败清理、原绑定保留、原凭据刷新、撤权与旧 Session；`ModelExecutionLeaseTest` 验证借用角色共同关闭、释放失败重试、准入取消和请求清理等待；`SubAssistantTurnIntegrationTest` 验证真实主子执行链撤权后的终态与原因一致 |
+| 模型执行原域、准入与绑定 | `ModelExecutionServiceTest` 使用真实 DataStore/企业存储验证同次聊天/识图/图片工具捕获、页面选择撤销、准备失败清理、原绑定保留、原凭据刷新、撤权与旧 Session；`ModelExecutionLeaseTest` 验证借用角色共同关闭、释放失败重试、准入取消和请求清理等待；`SubAssistantTurnIntegrationTest` 验证真实主子执行链撤权后的终态与原因一致 |
+| 图片任务与交接 | `ImageGenerationCoordinatorTest` 验证原页面 lease、取消准备/失败释放/退出重试、重复 ID 隔离及 Tool 借用；`GeneratedMediaStoreTest` 验证图库提交与副本接收失败、取消回交；`ImgGenVMTest` 验证连续替换等待清理；`EnterpriseImageGenerationAndroidTest` 使用实际 DataStore、Room、原生 PNG 和生产本地队列验证生成/编辑、域隔离、旧页面拒绝及退出，无真实 Provider 网络 |
 | 助手搜索偏好 | `AssistantModelTest` 验证共用模型与 Child 搜索独立性、缺失/显式空覆盖；`ModelExecutionServiceTest` 验证实际捕获及不支持传输的拒绝。旧无字段原文经 `UserSettingsMigrationTest` 和 `BackupArchiveServiceTest` 的生产迁移/恢复入口验证；实际 DataStore 重开归 `ScopedConfigurationAndroidTest` |
-| 请求凭据与传输保密 | `RequestCredentialsTest` 验证四线实际请求构建、认证唯一性与个人轮换缓存隔离；`ModelRequestTransportTest` 验证受管请求覆盖拒绝；`RequestPrivacyTest` 通过两个 HTTP 服务验证跨 origin 跳转阻断，`RequestLoggingInterceptorTest` 验证应用日志隔离 |
+| 请求凭据与传输保密 | `RequestCredentialsTest` 验证聊天四线及图片生成/编辑的实际请求构建、认证唯一性、私有图片下载与个人轮换缓存隔离；`ModelRequestTransportTest` 验证受管请求覆盖拒绝；`RequestPrivacyTest` 通过两个 HTTP 服务验证跨 origin 跳转阻断，`RequestLoggingInterceptorTest` 验证应用日志隔离 |
 | 辅助生成任务、原 Session 与摘要取消 | `AuxiliaryGenerationOwnershipTest` 使用实际生成与应用服务、延迟 Provider 验证取消等待、旧 Session、切域、手动标题、移交后原助手清理、清理失败重试、建议迟到清空拒绝及摘要先释放后提交；模型回退、原企业辅助 binding 和捕获前助手变化由 `ModelExecutionServiceTest` 验证；`ConversationRepositoryTreeIntegrationTest` 在真实 Room 注入 Child 删除失败，验证整个摘要树事务回滚及重试 |
 | 原生切域与 Portal 清理 | `EnterpriseApplicationServiceTest` 用真实 Session/store 和可控宿主回执验证发布屏障、进度与原选择/目标 Session；`PortalDocumentTest` 验证原请求、宿主超时及重开准入；`PortalWebViewAndroidTest` 验证系统 Cookie/站点存储清理和真实网页消息，`EnterprisePageAndroidTest` 验证原生页面接线与后台交接取消 |
 | streaming overlay | `TurnStreamProjectionTest` |

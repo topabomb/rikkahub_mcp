@@ -26,6 +26,7 @@ internal enum class EnterpriseRuntimeProtocol {
     EXAMPLE,
     OPENAI_CHAT,
     OPENAI_RESPONSES,
+    OPENAI_IMAGES,
     GOOGLE_GENERATE,
     CLAUDE_MESSAGES,
     OPENAI_TTS,
@@ -116,7 +117,7 @@ internal object EnterprisePackageCodec {
         check(value.runtimeBindings.map { it.resourceId }.distinct().size == value.runtimeBindings.size, "duplicate_runtime_binding")
         val resources = config.runtimeResources()
         check(resources.keys == value.runtimeBindings.map { it.resourceId }.toSet(), "runtime_binding_set_mismatch")
-        value.runtimeBindings.forEach { binding -> validateBinding(binding, resources.getValue(binding.resourceId)) }
+        value.runtimeBindings.forEach { binding -> validateBinding(binding, resources.getValue(binding.resourceId), config.models.firstOrNull { it.id == binding.resourceId }?.type) }
 
         val models = config.models.associateBy { it.id }
         val assistants = config.assistants.associateBy { it.id }
@@ -165,13 +166,14 @@ internal object EnterprisePackageCodec {
         }
     }
 
-    private fun validateBinding(binding: EnterpriseRuntimeBinding, kind: EnterpriseResourceKind) {
+    private fun validateBinding(binding: EnterpriseRuntimeBinding, kind: EnterpriseResourceKind, modelType: ModelType?) {
         if (binding.protocol == EnterpriseRuntimeProtocol.EXAMPLE) {
             check(binding.endpoint == null && binding.credential == null && binding.headers.isEmpty(), "example_binding_contains_connection_details")
             return
         }
         val allowed = when (kind) {
-            EnterpriseResourceKind.MODEL -> setOf(EnterpriseRuntimeProtocol.OPENAI_CHAT, EnterpriseRuntimeProtocol.OPENAI_RESPONSES,
+            EnterpriseResourceKind.MODEL -> if (modelType == ModelType.IMAGE) setOf(EnterpriseRuntimeProtocol.OPENAI_IMAGES)
+                else setOf(EnterpriseRuntimeProtocol.OPENAI_CHAT, EnterpriseRuntimeProtocol.OPENAI_RESPONSES,
                 EnterpriseRuntimeProtocol.GOOGLE_GENERATE, EnterpriseRuntimeProtocol.CLAUDE_MESSAGES)
             EnterpriseResourceKind.TTS -> setOf(EnterpriseRuntimeProtocol.OPENAI_TTS, EnterpriseRuntimeProtocol.GEMINI_TTS, EnterpriseRuntimeProtocol.MIMO_TTS)
             EnterpriseResourceKind.ASR -> setOf(EnterpriseRuntimeProtocol.OPENAI_HTTP_ASR)
@@ -188,7 +190,7 @@ internal object EnterprisePackageCodec {
             check(headers.intersect(setOf("host", "content-length", "transfer-encoding", "connection")).isEmpty(),
                 "runtime_transport_header_conflict")
             val authenticationHeader = when (binding.protocol) {
-                EnterpriseRuntimeProtocol.OPENAI_CHAT, EnterpriseRuntimeProtocol.OPENAI_RESPONSES -> "authorization"
+                EnterpriseRuntimeProtocol.OPENAI_CHAT, EnterpriseRuntimeProtocol.OPENAI_RESPONSES, EnterpriseRuntimeProtocol.OPENAI_IMAGES -> "authorization"
                 EnterpriseRuntimeProtocol.GOOGLE_GENERATE -> "x-goog-api-key"
                 EnterpriseRuntimeProtocol.CLAUDE_MESSAGES -> "x-api-key"
                 else -> error("validated_model_protocol_missing")

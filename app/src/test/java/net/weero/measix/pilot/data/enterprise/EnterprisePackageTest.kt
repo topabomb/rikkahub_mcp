@@ -17,6 +17,23 @@ internal suspend fun EnterpriseSessionController.enrollFixture(packet: Enterpris
     enrollLocal(packet.identity, redeem = { packet.identity }, configuration = { packet })
 
 class EnterprisePackageTest {
+    @Test fun `private image models require the implemented image wire and preserve authentication ownership`() {
+        val base = exampleEnterprisePackage()
+        val model = base.configuration.models.first().copy(id = "mdl_image_test", type = me.rerere.ai.provider.ModelType.IMAGE)
+        val binding = EnterpriseRuntimeBinding(model.id, EnterpriseRuntimeProtocol.OPENAI_IMAGES, "https://images.test/v1", "fixed")
+        val packet = base.copy(configuration = base.configuration.copy(models = base.configuration.models + model),
+            runtimeBindings = base.runtimeBindings + binding)
+        assertEquals(packet, EnterprisePackageCodec.decode(EnterprisePackageCodec.encode(packet)))
+        for (protocol in listOf(EnterpriseRuntimeProtocol.OPENAI_CHAT, EnterpriseRuntimeProtocol.CLAUDE_MESSAGES)) {
+            assertThrows(EnterpriseConfigurationException::class.java) {
+                EnterprisePackageCodec.validate(packet.copy(runtimeBindings = base.runtimeBindings + binding.copy(protocol = protocol)))
+            }
+        }
+        assertThrows(EnterpriseConfigurationException::class.java) {
+            EnterprisePackageCodec.validate(packet.copy(runtimeBindings = base.runtimeBindings + binding.copy(headers = mapOf("Authorization" to "other"))))
+        }
+    }
+
     @Test
     fun `published gateway rejects a second enabled bit and requires an explicit known policy`() {
         val root = EnterprisePackageCodec.json.parseToJsonElement(

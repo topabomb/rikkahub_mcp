@@ -135,6 +135,8 @@ data class ImageGenerationParams(
     val partialImages: Int = 2,
     val customHeaders: List<CustomHeader> = emptyList(),
     val customBody: List<CustomBody> = emptyList(),
+    @kotlinx.serialization.Transient
+    val credentials: RequestCredentials = RequestCredentials.UserSettings,
 )
 
 @Serializable
@@ -147,6 +149,8 @@ data class ImageEditParams(
     val partialImages: Int = 2,
     val customHeaders: List<CustomHeader> = emptyList(),
     val customBody: List<CustomBody> = emptyList(),
+    @kotlinx.serialization.Transient
+    val credentials: RequestCredentials = RequestCredentials.UserSettings,
 )
 
 @Serializable

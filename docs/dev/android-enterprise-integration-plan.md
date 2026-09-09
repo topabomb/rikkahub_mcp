@@ -338,10 +338,10 @@ Android 媒体接线按下列所有权完成：`PortalMediaStore` 管理独占�
 
 | 收口工作包 | 当前事实与剩余工作 |
 | --- | --- |
-| 模型消费者（C5） | 主/子、标题/建议/摘要及附件识别已使用原域模型准入与 binding；图片生成仍需接入同一捕获与请求链 |
+| 模型消费者（C5） | 主/子、标题/建议/摘要、附件识别和图片生成已接入原域模型捕获、逐请求准入与 binding；完整工具调用示例继续实施 |
 | MCP / Gateway（C5、U2） | 企业固定选择已有 UI；仍需接通原 MCP runtime/catalog/OAuth owner、企业 binding 与示例实际工具执行 |
 | 语音（C5、U2） | 仍需 TTS/ASR 的企业/用户目录、私有 binding、原请求准入及本地音频/转写 adapter |
-| 文件与 Workspace（C6） | 会话/记忆隔离、创建引用、目录删除、请求保留和子助手详情已有对应验证；图片查看/保存/背景、共享配置资产复制、外部打开及 Workspace 全局 upload 挂载仍需收口 |
+| 文件与 Workspace（C6） | 会话/记忆、目录、图片查看/保存及生成落库已分域验证；背景目标、参考图片导入、其他媒体出口、共享配置资产复制及 Workspace 全局 upload 挂载仍需收口 |
 | 个人备份（C7） | 个人 Settings 保全已实现；备份仍需个人闭合图导出、恢复合并保全最新企业图和系统备份边界，不能用 Settings 测试代表数据保全 |
 | 完整示例与 UI（M1、U2） | 正式企业入口、Portal、公开模板和私有文件 ignore 已有；仍需原生整包导入/场景管理、工具批次 mock、Starter 预填及剩余资源/助手页面 |
 | 退休与发行（R1、V1） | 消费者完成后删除旧 managed overlay 链，再做 E01–E12、Release/硬件验收和版本 20 交付；真实后台属于下一阶段 |
@@ -536,6 +536,10 @@ C6 的文件创建与引用边界已接通：上传、粘贴文本、输出图�
 辅助模型接线批次：标题、建议和手动摘要已复用 `ModelExecutionService` 的原域捕获、冻结 binding 和逐请求准入，删除直接查全局个人 Provider 的旧路径。原 Runtime 保存任务登记时的助手身份和模型 lease，会话移交不重定向原任务；删除助手按原 owner 停止并保留有界等待，清理失败可重试。摘要先释放模型资源，再原子提交历史，建议的清空和最终提交均复验原助手/节点。独立复审发现的身份窗口与提交后失败问题已修正。完整门禁的 JVM、Debug/Release 构建及 lint 通过：App 2,073 项无失败/跳过，lint 0 错误、286 警告，Workspace 保留 11 项 Windows 条件跳过。设备源集三处旧接口已同步，随后 Android 17 模拟器完整 169 项测试全部通过；包含原 Turn 取消/暂停继续、真实 Room、WebView、文件与键盘布局验证。分层结果见 `build/reports/enterprise/auxiliary-model-verification.json`。图片生成、附件识别、MCP/Gateway、Speech、其余文件出口和备份仍继续实施，不据此将 C5/C6 或版本 20 标为完成。
 
 附件识别已接入原域模型捕获：与 CHAT 共享同次用户配置和企业 binding，`ModelRequests` 只提供执行，Runtime 仍持有唯一释放 owner。主/子装配消费捕获结果，`assistant_inspect` 从本域目录描述可用性，旧 Settings/ProviderTransportLease 路径删除。本地示例走相同结构化图片请求，返回明确模拟结果。复审未发现实质缺陷，补充 Child 撤权与暂停继续的借用请求断言。完整串行 `test assembleDebug lintDebug assembleRelease :app:compileDebugAndroidTestKotlin` 在 10 分 4 秒内通过：App 2,072 项 JVM 无失败/跳过，lint 0 错误、286 警告；Workspace 保留 11 项 Windows 条件跳过。Android 17 模拟器三个实际 Room/Turn 取消与审批继续用例全部通过；此前辅助模型基线的整套 169 项设备通过单独保留，本批不冒称重新运行全部设备用例。证据见 `build/reports/enterprise/inspection-model-verification.json`。图片生成、MCP/Gateway、Speech、其余文件出口和备份继续实施。
+
+图片生成已接入原域模型捕获与请求链：页面从本域目录选择模型，队列节点持有页面资源；工具借用原 Turn，删除旧 ImageGenerationSelectionResolver。生成/编辑使用私有凭据或明确模拟 PNG；私有下载只继承日志标记，不转发认证。原页面切域往返仍失效，企业退出等待实际停止与失败释放重试。图库提交后同步把聊天副本交给原工具资源协议，取消回交不丢失 owner。
+
+图片批次独立复审无剩余实质问题。完整串行 `test assembleDebug lintDebug assembleRelease :app:compileDebugAndroidTestKotlin` 通过：App 2,072 项、AI 369 项 JVM 无失败，lint 0 错误、287 警告；Workspace JVM 保留 11 项 Windows 条件跳过。完整 `connectedDebugAndroidTest` 通过：Android 17 模拟器 App 170 项、Speech 6 项通过，Workspace 报告 10 项、其中 1 项硬链接环境条件跳过。新增图片设备用例使用真实 DataStore、Room、PNG 和生产本地队列验证生成/编辑、域隔离、旧页面拒绝与退出，无真实 Provider 网络。证据见 `build/reports/enterprise/image-owner-verification.json`。参考图片导入授权、背景目标、MCP/Gateway、Speech 企业适配及备份继续实施；版本仍为 0.0.19，不据此宣称 Release 设备或真实平台互操作验收。
 
 ## 11. 验收证据
 

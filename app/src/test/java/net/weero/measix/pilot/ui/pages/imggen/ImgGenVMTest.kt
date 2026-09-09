@@ -30,8 +30,6 @@ import net.weero.measix.pilot.data.imggen.ImageGenerationCoordinator
 import net.weero.measix.pilot.data.imggen.ImageGenerationModelDescriptor
 import net.weero.measix.pilot.data.imggen.ImageGenerationOutcome
 import net.weero.measix.pilot.data.imggen.ImageGenerationRequest
-import net.weero.measix.pilot.data.imggen.ImageGenerationSelection
-import net.weero.measix.pilot.data.imggen.ImageGenerationSelectionResolver
 import net.weero.measix.pilot.service.ConfigurationQueryService
 import net.weero.measix.pilot.service.FileManagementQueryService
 import net.weero.measix.pilot.service.ModelCatalogReadState
@@ -56,20 +54,21 @@ class ImgGenVMTest {
             val settings = mockk<SettingsStore>()
             every { settings.effectiveSettings } returns MutableStateFlow(Settings().toEffectiveSnapshot())
             val selected = RealmSelection(RealmAccess.Personal, 0)
+            val model = Model(modelId = "image", type = me.rerere.ai.provider.ModelType.IMAGE)
+            val provider = ProviderSetting.OpenAI(models = listOf(model))
+            val catalog = net.weero.measix.pilot.service.userDefinitionModelCatalog(listOf(provider)).copy(
+                selection = selected,
+                roleSelections = mapOf(net.weero.measix.pilot.data.configuration.ResourceSelectionSlot.IMAGE_MODEL to
+                    net.weero.measix.pilot.data.configuration.ConfigurationSelection(model.id, null)),
+            )
             val configuration = mockk<ConfigurationQueryService>()
             every { configuration.observeModelCatalog() } returns flowOf(
-                ModelCatalogReadState.Available(ModelCatalogUiModel(emptyList(), selected)),
+                ModelCatalogReadState.Available(catalog),
             )
             coEvery { configuration.requireSelection(selected) } returns Unit
             val files = mockk<FileManagementQueryService>()
             every { files.observeSelection() } returns MutableStateFlow(selected)
             every { files.observeGeneratedPaging() } returns flowOf(PagingData.empty())
-            val model = Model(modelId = "image")
-            val provider = ProviderSetting.OpenAI(models = listOf(model))
-            val resolver = mockk<ImageGenerationSelectionResolver>()
-            every { resolver.resolve(any()) } returns ImageGenerationSelection.Available(
-                model, provider, provider, mockk(), ImageGenerationModelDescriptor.from(model, provider),
-            )
             val coordinator = mockk<ImageGenerationCoordinator>()
             val started = mutableListOf<String>()
             coEvery { coordinator.enqueue(any()) } coAnswers {
@@ -81,8 +80,8 @@ class ImgGenVMTest {
                     }
                 } else ImageGenerationOutcome.Success(emptyList())
             }
-            val vm = ImgGenVM(ApplicationProvider.getApplicationContext<Application>(), settings, mockk(), resolver,
-                coordinator, files, mockk(), configuration)
+            val vm = ImgGenVM(ApplicationProvider.getApplicationContext<Application>(), settings,
+                coordinator, files, mockk(), configuration, mockk())
             owner.put("image", vm)
             runCurrent()
             vm.updatePrompt("A")

@@ -15,7 +15,6 @@ import net.weero.measix.pilot.data.files.ToolArtifactRewriter
 import net.weero.measix.pilot.data.imggen.AssistantBackgroundService
 import net.weero.measix.pilot.data.imggen.GeneratedMediaStore
 import net.weero.measix.pilot.data.imggen.ImageGenerationCoordinator
-import net.weero.measix.pilot.data.imggen.ImageGenerationSelectionResolver
 import net.weero.measix.pilot.data.ai.transformers.TemplateTransformer
 import net.weero.measix.pilot.data.ai.transformers.WorkspaceReminderTransformer
 import net.weero.measix.pilot.data.ai.transformers.ToolArtifactReplayTransformer
@@ -92,10 +91,6 @@ val appModule = module {
     }
 
     single {
-        ImageGenerationSelectionResolver(get())
-    }
-
-    single {
         val context: Context = get()
         GeneratedMediaStore(
             filesDir = context.filesDir,
@@ -108,6 +103,9 @@ val appModule = module {
         ImageGenerationCoordinator(
             scope = get<AppScope>(),
             mediaStore = get(),
+            models = get(),
+            providers = get(),
+            sessions = get(),
         )
     }
 
@@ -127,8 +125,6 @@ val appModule = module {
         val context: Context = get()
         ImageGenerationToolFactory(
             filesDir = context.filesDir,
-            settingsStore = get(),
-            resolver = get(),
             coordinator = get(),
             backgroundService = get(),
             artifactStore = get(),
@@ -349,7 +345,7 @@ val appModule = module {
 
     single { net.weero.measix.pilot.service.portal.PortalDocumentRegistry() }
     single { net.weero.measix.pilot.service.portal.PortalMediaStore(java.io.File(get<Context>().noBackupFilesDir, "portal_media")) }
-    single { net.weero.measix.pilot.service.EnterpriseExitService(get(), get(), get(), get(), get<AppScope>(), get()) }
+    single { net.weero.measix.pilot.service.EnterpriseExitService(get(), get(), get(), get(), get<AppScope>(), get(), get()) }
     single { net.weero.measix.pilot.service.EnterpriseApplicationService(get(), get(), get(), get(), get(), get(), get<AppScope>(), get()) }
 
     single {

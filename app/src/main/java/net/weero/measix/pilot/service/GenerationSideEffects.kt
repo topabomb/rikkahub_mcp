@@ -34,7 +34,7 @@ import net.weero.measix.pilot.service.runtime.ConversationAggregateSnapshot
 import net.weero.measix.pilot.service.runtime.ConversationRuntime
 import net.weero.measix.pilot.service.runtime.UpdateHeader
 import net.weero.measix.pilot.data.configuration.ModelSelectionRole
-import net.weero.measix.pilot.service.turn.generateText
+import net.weero.measix.pilot.service.runtime.generateText
 import net.weero.measix.pilot.service.turn.TurnOutcome
 import net.weero.measix.pilot.service.turn.TurnRunResult
 import net.weero.measix.pilot.utils.SoundEffectPlayer

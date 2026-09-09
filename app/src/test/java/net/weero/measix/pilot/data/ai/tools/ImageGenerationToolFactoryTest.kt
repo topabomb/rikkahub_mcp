@@ -16,8 +16,6 @@ import net.weero.measix.pilot.data.ai.tools.local.ImageGenerationToolFactory
 import net.weero.measix.pilot.data.ai.tools.local.LocalToolOption
 import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.imggen.ImageGenerationModelDescriptor
-import net.weero.measix.pilot.data.imggen.ImageGenerationSelection
-import net.weero.measix.pilot.data.imggen.ImageGenerationSelectionResolver
 import net.weero.measix.pilot.data.model.Assistant
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -32,24 +30,15 @@ class ImageGenerationToolFactoryTest {
     private val model = Model(modelId = "gpt-image-1", displayName = "GPT Image", type = ModelType.IMAGE)
     private val providerSetting = ProviderSetting.OpenAI(name = "OpenAI", models = listOf(model))
 
-    private fun available(): ImageGenerationSelection.Available {
-        val provider = mockk<Provider<*>>()
-        return ImageGenerationSelection.Available(
-            model = model,
-            sourceProvider = providerSetting,
-            effectiveProvider = providerSetting,
-            provider = provider,
-            descriptor = ImageGenerationModelDescriptor.from(model, providerSetting),
-        )
-    }
+    private fun available() = net.weero.measix.pilot.service.ModelExecutionSnapshot(
+        model, net.weero.measix.pilot.service.runtime.ModelExecutionLease { accept ->
+            accept(net.weero.measix.pilot.service.runtime.ModelRequestTarget.Remote(providerSetting))
+        }, "fixture", null,
+    )
 
-    private fun factory(selection: ImageGenerationSelection): ImageGenerationToolFactory {
-        val resolver = mockk<ImageGenerationSelectionResolver>()
-        every { resolver.resolve(any()) } returns selection
+    private fun factory(): ImageGenerationToolFactory {
         return ImageGenerationToolFactory(
             filesDir = File("."),
-            settingsStore = mockk(relaxed = true),
-            resolver = resolver,
             coordinator = mockk(relaxed = true),
             backgroundService = mockk(relaxed = true),
             artifactStore = mockk(relaxed = true),
@@ -59,18 +48,20 @@ class ImageGenerationToolFactoryTest {
 
     @Test
     fun `unavailable selection does not register the tool`() {
-        val tool = factory(ImageGenerationSelection.Unavailable("image_model_unavailable")).create(
-            AssistantToolBuildContext(net.weero.measix.pilot.data.enterprise.RealmAccess.Personal, ownerId, Settings()),
+        val tool = factory().create(
+            AssistantToolBuildContext(net.weero.measix.pilot.data.enterprise.RealmAccess.Personal, ownerId, Settings(), null),
         )
         assertNull(tool)
     }
 
     @Test
     fun `available selection registers generate_image with captured owner and prompt`() {
-        val tool = factory(available()).create(
+        val tool = factory().create(
             AssistantToolBuildContext(net.weero.measix.pilot.data.enterprise.RealmAccess.Personal,
                 ownerAssistantId = ownerId,
+                imageModel = available(),
                 settings = Settings(
+                    providers = listOf(providerSetting),
                     assistants = listOf(Assistant(id = ownerId, localTools = listOf(LocalToolOption.TextToImage))),
                 ),
             ),

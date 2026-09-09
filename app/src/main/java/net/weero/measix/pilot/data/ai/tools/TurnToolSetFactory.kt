@@ -69,6 +69,7 @@ class TurnToolSetFactory(
         settings: Settings,
         capabilityModel: Model?,
         inspectionModel: net.weero.measix.pilot.service.ModelExecutionSnapshot? = null,
+        imageModel: net.weero.measix.pilot.service.ModelExecutionSnapshot? = null,
         workspaceCwd: String? = null,
         turnKind: TurnKind = TurnKind.USER,
         ttsPlaybackContext: TtsToolPlaybackContext? = null,
@@ -109,6 +110,7 @@ class TurnToolSetFactory(
                     buildContext = AssistantToolBuildContext(
                         realmAccess = realmAccess,
                         ownerAssistantId = assistant.id,
+                        imageModel = imageModel,
                         settings = settings,
                     ),
                 )

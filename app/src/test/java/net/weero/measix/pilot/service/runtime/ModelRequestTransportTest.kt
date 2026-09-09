@@ -1,4 +1,4 @@
-package net.weero.measix.pilot.service.turn
+package net.weero.measix.pilot.service.runtime
 
 import android.content.Context
 import io.mockk.mockk
@@ -10,6 +10,8 @@ import me.rerere.ai.core.MessageRole
 import me.rerere.ai.core.ModelRequestMessage
 import me.rerere.ai.provider.CustomBody
 import me.rerere.ai.provider.CustomHeader
+import me.rerere.ai.provider.ImageGenerationParams
+import me.rerere.ai.provider.ImageEditParams
 import me.rerere.ai.provider.Model
 import me.rerere.ai.provider.ProviderManager
 import me.rerere.ai.provider.ProviderSetting
@@ -43,6 +45,27 @@ class ModelRequestTransportTest {
             }
             assertEquals(0, sent)
         } finally { client.dispatcher.executorService.shutdown(); client.connectionPool.evictAll() }
+    }
+
+    @Test fun `managed image requests reject user authentication and routing overrides before network IO`() = runBlocking {
+        val providers = mockk<ProviderManager>()
+        val target = ModelRequestTarget.Remote(ProviderSetting.OpenAI(), listOf(CustomHeader("X-Tenant", "binding")), RequestCredentials.fixed("fixed"))
+        val model = Model(modelId = "image")
+        val invalid = listOf(
+            listOf(CustomHeader("Authorization", "other")) to emptyList<CustomBody>(),
+            listOf(CustomHeader("X-TENANT", "other")) to emptyList<CustomBody>(),
+            emptyList<CustomHeader>() to listOf(CustomBody("route", JsonPrimitive("override"))),
+        )
+        for ((headers, body) in invalid) for (edit in listOf(false, true)) {
+            try {
+                if (edit) target.editImage(providers, ImageEditParams(model, "edit", listOf("not-read.png"), customHeaders = headers, customBody = body)).collect()
+                else target.generateImage(providers, ImageGenerationParams(model, "draw", customHeaders = headers, customBody = body)).collect()
+                fail("managed image override accepted")
+            } catch (error: IllegalStateException) {
+                assertTrue(error.message in setOf("enterprise_request_header_conflict", "enterprise_request_routing_override"))
+            }
+        }
+        io.mockk.verify { providers wasNot io.mockk.Called }
     }
 
     @Test fun `local example consumes assembled input equally in streaming and nonstreaming modes without network`() = runBlocking {

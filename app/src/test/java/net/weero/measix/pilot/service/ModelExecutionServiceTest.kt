@@ -331,6 +331,78 @@ class ModelExecutionServiceTest {
         }
     }
 
+    @Test fun `page image captures explicit original model while Turn image borrows its owner`() = runBlocking {
+        environment { env ->
+            val image = env.model.copy(id = ConfigurationReference.random(), modelId = "image-original", type = me.rerere.ai.provider.ModelType.IMAGE)
+            val other = image.copy(id = ConfigurationReference.random(), modelId = "image-other")
+            env.settings.updateLocal { it.copy(providers = listOf(env.provider.copy(models = listOf(env.model, image, other))),
+                imageGenerationModelId = image.id, assistants = listOf(env.assistant.copy(localTools = listOf(LocalToolOption.TextToImage)))) }
+            val worker = Job()
+            var owner: net.weero.measix.pilot.service.runtime.ModelExecutionLease? = null
+            try {
+                val page = env.service.capturePageImage(requireNotNull(env.sessions.observeSelectedRealmSelection().first()), worker, image.id) { owner = it }
+                val turn = env.capture(RealmAccess.Personal)
+                val tool = requireNotNull(turn.imageModel)
+                assertEquals(turn.model.userRevision, tool.userRevision)
+                env.settings.updateLocal { it.copy(imageGenerationModelId = other.id,
+                    providers = listOf(env.provider.copy(baseUrl = "https://replacement.test/v1", apiKey = "rotated", models = listOf(env.model, image, other)))) }
+                for (captured in listOf(page, tool)) {
+                    assertEquals(image.id, captured.model.id)
+                    val target = captured.requests.execute { it as ModelRequestTarget.Remote }
+                    assertEquals(env.provider.baseUrl, (target.provider as ProviderSetting.OpenAI).baseUrl)
+                    assertEquals("rotated", target.provider.apiKey)
+                }
+                env.settings.updateLocal { it.copy(assistants = listOf(env.assistant.copy(localTools = emptyList()))) }
+                rejected { tool.requests.execute { fail("revoked image tool reached I/O") } }
+                page.requests.execute { Unit }
+            } finally { worker.cancel(); owner?.release() }
+        }
+    }
+
+    @Test fun `enterprise image page uses image protocol and failed capture keeps its release owner`() = runBlocking {
+        environment { env ->
+            val base = exampleEnterprisePackage()
+            val image = base.configuration.models.first { it.id == "mdl_chat" }.copy(id = "mdl_test_image", modelId = "enterprise-image",
+                type = me.rerere.ai.provider.ModelType.IMAGE)
+            val binding = base.runtimeBindings.first { it.resourceId == "mdl_chat" }.copy(resourceId = image.id,
+                protocol = EnterpriseRuntimeProtocol.OPENAI_IMAGES, endpoint = "https://image.test/v1", credential = "image credential")
+            val packet = base.copy(configuration = base.configuration.copy(models = base.configuration.models + image), runtimeBindings = base.runtimeBindings + binding)
+            env.sessions.enrollFixture(packet)
+            val access = env.sessions.captureSelectedRealmAccess() as RealmAccess.Enterprise
+            val worker = Job()
+            val owners = mutableListOf<net.weero.measix.pilot.service.runtime.ModelExecutionLease>()
+            try {
+                val page = env.service.capturePageImage(requireNotNull(env.sessions.observeSelectedRealmSelection().first()), worker, packet.identity.reference(image.id)) { owners += it }
+                val target = page.requests.execute { it as ModelRequestTarget.Remote }
+                assertEquals("https://image.test/v1", (target.provider as ProviderSetting.OpenAI).baseUrl)
+                assertTrue(target.credentials is me.rerere.ai.provider.RequestCredentials.Fixed)
+                rejected { env.service.capturePageImage(requireNotNull(env.sessions.observeSelectedRealmSelection().first()), worker, packet.identity.reference("mdl_chat")) { owners += it } }
+                assertEquals(2, owners.size)
+            } finally { worker.cancel(); owners.forEach { it.release() } }
+            env.sessions.finishExit(env.sessions.beginExit(requireNotNull(env.sessions.captureExitRequest())))
+        }
+    }
+
+    @Test fun `page selection stays revoked after realm roundtrip while Turn image keeps original access`() = runBlocking {
+        environment { env ->
+            val image = env.model.copy(id = ConfigurationReference.random(), type = me.rerere.ai.provider.ModelType.IMAGE)
+            env.settings.updateLocal { it.copy(providers = listOf(env.provider.copy(models = listOf(env.model, image))),
+                imageGenerationModelId = image.id, assistants = listOf(env.assistant.copy(localTools = listOf(LocalToolOption.TextToImage)))) }
+            val original = requireNotNull(env.sessions.observeSelectedRealmSelection().first())
+            val worker = Job()
+            val owners = mutableListOf<net.weero.measix.pilot.service.runtime.ModelExecutionLease>()
+            try {
+                val page = env.service.capturePageImage(original, worker, image.id) { owners += it }
+                val tool = requireNotNull(env.capture(RealmAccess.Personal).imageModel)
+                env.sessions.enrollFixture(exampleEnterprisePackage())
+                env.sessions.selectPersonalFixture()
+                rejected { page.requests.execute { fail("old page survived realm roundtrip") } }
+                rejected { env.service.capturePageImage(original, worker, image.id) { owners += it } }
+                tool.requests.execute { Unit }
+            } finally { worker.cancel(); owners.forEach { it.release() } }
+        }
+    }
+
     private suspend fun environment(block: suspend (Environment) -> Unit) {
         val env = Environment(temporary.newFolder())
         try {

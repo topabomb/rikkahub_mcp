@@ -169,4 +169,4 @@ Room/DataStore/文件协议按长期数据保全演进。结构变化必须提�
 
 ### 文件目录与原请求取消
 
-FileManagementQueryService 和 FileManagementApplicationService 直接组合 ArtifactStore 与 GeneratedMediaStore；ArtifactUseCase 保留配置资产和 Draft 入口，不再转发文件目录与删除。目录投影和文件命令携带原 RealmSelection，Session → Settings writer → Artifact lifecycle 为上传删除准入顺序。会话与图库分页统一复用 selectedRealmPaging 的数据源生命周期。ImageGenerationCoordinator 独占排队、执行与取消收口；取消原请求会等待该请求的实际执行结束，图像页只取消拥有 enqueue 的协程，不再按固定页面 ID 启动第二次扫描取消。
+FileManagementQueryService 和 FileManagementApplicationService 直接组合 ArtifactStore 与 GeneratedMediaStore；ArtifactUseCase 保留配置资产和 Draft 入口，不再转发文件目录与删除。目录投影和文件命令携带原 RealmSelection，Session → Settings writer → Artifact lifecycle 为上传删除准入顺序。会话与图库分页统一复用 selectedRealmPaging 的数据源生命周期。ImageGenerationCoordinator 独占排队、执行与取消收口；原请求节点持有页面模型 lease，工具只借用所属 Turn 的 ModelRequests。取消等待实际执行结束，释放失败保留原节点供企业退出重试。图像页只取消拥有 enqueue 的协程，不按固定页面 ID 启动第二次扫描取消。模型目录与选择命令复用 ConfigurationQueryService/ConfigurationApplicationService。
