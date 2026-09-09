@@ -104,6 +104,29 @@ internal class McpCatalogLifecycleTest : McpRuntimeCoordinatorTestBase() {
         assertEquals(fresh, manager.runtimeCapabilities.value[SERVER_ID]?.catalog)
     }
 
+    @Test
+    fun `definition owner failure after initial catalog commit compensates and closes the original transport`() = runTest(dispatcher) {
+        var rejectRead = false
+        coEvery { settingsStore.withUserMcpDefinitions<Any?>(any()) } coAnswers {
+            if (rejectRead) error("definition_store_unavailable")
+            firstArg<suspend (List<McpServerConfig>) -> Any?>().invoke(effective.snapshot.settings.mcpServers)
+        }
+        lateinit var receipt: McpCatalogCommitResult.Committed
+        coEvery { catalogStore.commitCandidate(any()) } coAnswers {
+            val candidate = firstArg<McpCatalogCandidate>()
+            receipt = McpCatalogCommitResult.Committed(candidate.initialSnapshot(), null, 42L)
+            // Do not deliver the independent Store observation; this exercises Runtime receipt ownership.
+            rejectRead = true
+            receipt
+        }
+        emit(listOf(serverConfig()))
+        advanceUntilIdle()
+        coVerify(exactly = 1) { catalogStore.rollbackCommitted(receipt.snapshot, null, receipt.headToken) }
+        assertTrue(manager.runtimeCapabilities.value[SERVER_ID]?.status is McpStatus.Error)
+        assertEquals(null, manager.runtimeCapabilities.value[SERVER_ID]?.catalog)
+        assertEquals(1, createdTransports.single().closeCalls)
+    }
+
     private suspend fun kotlinx.coroutines.test.TestScope.assertCancelledCommit(initiallyReady: Boolean) {
         if (initiallyReady) {
             emit(listOf(serverConfig()))
@@ -412,7 +435,7 @@ internal class McpCatalogLifecycleTest : McpRuntimeCoordinatorTestBase() {
             revision = 1L,
             managedState = ManagedConfigurationState.ABSENT,
         )
-        every { isolatedSettingsStore.effectiveSettings } returns isolatedEffective.flow
+        stubMcpUserDefinitions(isolatedSettingsStore, isolatedEffective.flow)
         val durable = McpCatalogSnapshot(ConfigurationScope.Personal,
             serverId = SERVER_ID,
             revision = 7L,

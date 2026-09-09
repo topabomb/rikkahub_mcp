@@ -68,3 +68,8 @@ internal class McpRuntimeStateStore {
         true
     }
 }
+
+/** Keeps the source authorization gate owned until the runtime has accepted or rejected the definition. */
+internal interface McpRuntimeDefinition {
+    suspend fun <T> withCurrent(operation: suspend (McpServerConfig?) -> T): T
+}

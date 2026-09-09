@@ -38,6 +38,14 @@ MCP 的“工具能力”和“当前能否连通”是两类正交事实：
 `McpCommonOptions.toolPolicies` 只保存工具名、enable 和 needsApproval。远端 description/input schema 不写回
 Settings；导入、编辑、OAuth 更新也无权覆盖 Catalog。
 
+个人连接维护和 OAuth 只读取 `SettingsStore.userMcpDefinitions` / `withUserMcpDefinitions`，不读取全局
+`effectiveSettings`。两入口复用既有定义规范化规则；观察流只触发收敛，不能代替调用准入。
+`McpRuntimeDefinition.withCurrent` 将原配置 owner 的授权边界保持到 Runtime 接受或拒绝定义，
+锁顺序固定为配置 owner → Runtime；Runtime 不保存第二份配置快照。连接、发现、恢复、目录激活和
+调用准入均复验定义，网络和 OAuth I/O 位于这些锁外。取消等待释放配置 gate，清理仍归原连接 owner。
+初次读取只恢复已有目录，选中的 turn、显式刷新或后续配置变化才触发连接；初始化不排队连接全部个人服务器。
+这些是个人连接的实际边界，企业 Session/binding/interaction target 的执行接线仍在实施。
+
 `McpProtocolClientFactory` 在首次真实 transport 创建时同步且唯一地初始化共享 Ktor client，调用位于现有 server 的 IO 连接任务；
 不在 Application/DI 构造阶段初始化 Ktor，也不为测试 override 初始化真实 transport。初始化返回后复查取消，超时/取消的连接
 不取得新 transport；已创建的共享 HTTP client 继续由工厂持有，单个 server 关闭或重连不能关闭它。

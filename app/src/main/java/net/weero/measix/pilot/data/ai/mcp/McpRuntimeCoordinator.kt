@@ -26,6 +26,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.filter
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -151,52 +152,43 @@ class McpRuntimeCoordinator(
     }
 
     init {
-        val initialDesired = settingsStore.effectiveSettings.value.settings.mcpServers
-            .map(::desiredConnection)
-            .associateBy(McpDesiredConnection::serverId)
-        // 链 1: 有效配置变化 → reconcile（create/update/remove 由 server runtime 重读当前配置）
         appScope.launch {
-            var previous = initialDesired
-            var bootstrapped = false
-            settingsStore.effectiveSettings
-                .map { snapshot ->
-                    snapshot.settings.mcpServers.map(::desiredConnection)
-                }
-                .distinctUntilChanged()
-                .collect { desired ->
-                    val configs = settingsStore.effectiveSettings.value.settings.mcpServers
-                    val current = desired.associateBy(McpDesiredConnection::serverId)
-                    val removedDefinitionIds = previous.keys - current.keys
-                    if (!bootstrapped) {
-                        configs.filter { current[it.id]?.enabled == true }
-                            .forEach { config -> runtime(config.id).bootstrap(config) }
-                        bootstrapped = true
-                    }
-                    runtimeState.serverIds.filter { current[it]?.enabled != true }
-                        .forEach { id -> runtime(id).deactivateIfDisabledOrRemoved() }
-                    // Catalog retention follows definition existence, not runtime existence. A
-                    // disabled definition has no runtime, so deletion must be derived from the
-                    // Settings delta or its durable catalog could become orphaned.
-                    removedDefinitionIds.forEach { id -> catalogStore.remove(McpCatalogKey(net.weero.measix.pilot.data.configuration.ConfigurationScope.Personal, id)) }
+            var previous: Map<ConfigurationReference, McpDesiredConnection>? = null
+            settingsStore.userMcpDefinitions.collect { configs ->
+                val current = configs.map(::desiredConnection).associateBy(McpDesiredConnection::serverId)
+                if (previous == null) {
                     configs.filter { current[it.id]?.enabled == true }
-                        .filter { config -> previous[config.id] != current[config.id] }
-                        .forEach { config -> runtime(config.id).reconcile(refreshTools = false) }
-                    previous = current
+                        .forEach { config -> runtime(config.id).bootstrap() }
                 }
+                runtimeState.serverIds.filter { current[it]?.enabled != true }
+                    .forEach { id -> runtime(id).deactivateIfDisabledOrRemoved() }
+                // Disabled definitions may have no runtime; durable retention follows the definition.
+                (previous.orEmpty().keys - current.keys).forEach { id ->
+                    settingsStore.withUserMcpDefinitions { latest ->
+                        if (latest.none { it.id == id }) {
+                            catalogStore.remove(McpCatalogKey(net.weero.measix.pilot.data.configuration.ConfigurationScope.Personal, id))
+                        }
+                    }
+                }
+                configs.filter { current[it.id]?.enabled == true }
+                    .filter { config -> previous != null && previous?.get(config.id) != current[config.id] }
+                    .forEach { config -> runtime(config.id).reconcile(refreshTools = false) }
+                previous = current
+            }
         }
 
         // Durable LKG is independently owned by McpCatalogStore. Restore it into the runtime's
         // single runtime capability without waiting for a transport connection.
         appScope.launch {
             catalogStore.catalogs.collect { catalogs ->
-                val definitions = settingsStore.effectiveSettings.value.settings.mcpServers
+                val definitions = settingsStore.userMcpDefinitions.first()
                     .associateBy(McpServerConfig::id)
                 catalogs.filterKeys { it.scope == net.weero.measix.pilot.data.configuration.ConfigurationScope.Personal }
                     .forEach { (key, catalog) ->
                     val serverId = key.serverId
                     definitions[serverId]
                         ?.takeIf { it.commonOptions.enable && it.commonOptions.name.isNotBlank() }
-                        ?.let { definition -> runtime(serverId).hydrateCatalog(definition, catalog) }
+                        ?.let { runtime(serverId).hydrateCatalog(catalog) }
                 }
             }
         }
@@ -219,15 +211,14 @@ class McpRuntimeCoordinator(
         }
     }
 
-    fun captureTurnCapabilities(assistant: Assistant): TurnMcpCapabilitySnapshot =
+    suspend fun captureTurnCapabilities(assistant: Assistant): TurnMcpCapabilitySnapshot =
         captureTurnCapabilities(assistant, emptySet())
 
-    private fun captureTurnCapabilities(
+    private suspend fun captureTurnCapabilities(
         assistant: Assistant,
         timedOutServerIds: Set<ConfigurationReference>,
     ): TurnMcpCapabilitySnapshot {
-        val settings = settingsStore.effectiveSettings.value.settings
-        val selected = settings.mcpServers
+        val selected = settingsStore.userMcpDefinitions.first()
             .filter { it.commonOptions.enable && it.id in assistant.mcpServers }
         val runtimeViews = runtimeCapabilities.value
         val activeCatalogs = selected.mapNotNull { server ->
@@ -283,8 +274,7 @@ class McpRuntimeCoordinator(
      * servers never delay this turn. The returned catalog is then immutable for the run.
      */
     suspend fun prepareTurnCapabilities(assistant: Assistant): TurnMcpCapabilitySnapshot {
-        val settings = settingsStore.effectiveSettings.value.settings
-        val selected = settings.mcpServers.filter {
+        val selected = settingsStore.userMcpDefinitions.first().filter {
             it.id in assistant.mcpServers && it.commonOptions.enable && it.commonOptions.name.isNotBlank()
         }
         if (selected.isEmpty()) return TurnMcpCapabilitySnapshot.EMPTY
@@ -406,8 +396,7 @@ class McpRuntimeCoordinator(
 
     /** 用户/生命周期触发的唯一同步入口：只调用同一个 reconcile，不建立第二条路径。 */
     suspend fun refreshAllRegisteredServers(): McpRefreshReceipt = withContext(ioDispatcher) {
-        val snapshot = settingsStore.effectiveSettings.value
-        val desired = snapshot.settings.mcpServers.filter {
+        val desired = settingsStore.userMcpDefinitions.first().filter {
             it.commonOptions.enable && it.commonOptions.name.isNotBlank()
         }
         reconcile(desired, refreshTools = true)
@@ -434,7 +423,12 @@ class McpRuntimeCoordinator(
         runtimeState.getOrCreate(serverId) {
             McpServerRuntime(
                 serverId = serverId,
-                settingsStore = settingsStore,
+                definition = object : McpRuntimeDefinition {
+                    override suspend fun <T> withCurrent(operation: suspend (McpServerConfig?) -> T): T =
+                        settingsStore.withUserMcpDefinitions { definitions ->
+                            operation(definitions.find { it.id == serverId })
+                        }
+                },
                 catalogStore = catalogStore,
                 appScope = appScope,
                 networkMonitor = networkMonitor,
@@ -448,7 +442,7 @@ class McpRuntimeCoordinator(
                 logger = ::logMcp,
                 onClosed = { id ->
                     appScope.launch {
-                        val enabled = settingsStore.effectiveSettings.value.settings.mcpServers
+                        val enabled = settingsStore.userMcpDefinitions.first()
                             .any { it.id == id && it.commonOptions.enable && it.commonOptions.name.isNotBlank() }
                         if (enabled) runtime(id).reconcile(refreshTools = false)
                     }

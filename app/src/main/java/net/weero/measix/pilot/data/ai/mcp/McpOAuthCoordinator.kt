@@ -344,8 +344,8 @@ internal class McpOAuthCoordinator(
         return applied
     }
 
-    private fun currentConfig(serverId: ConfigurationReference): McpServerConfig? =
-        settingsStore.effectiveSettings.value.settings.mcpServers.find { it.id == serverId }
+    private suspend fun currentConfig(serverId: ConfigurationReference): McpServerConfig? =
+        settingsStore.withUserMcpDefinitions { definitions -> definitions.find { it.id == serverId } }
 
     private fun computeExpiry(expiresIn: Long?): Long =
         if (expiresIn != null && expiresIn > 0) {

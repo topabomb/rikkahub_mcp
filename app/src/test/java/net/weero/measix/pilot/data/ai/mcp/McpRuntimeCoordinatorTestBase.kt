@@ -28,6 +28,8 @@ import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.map
 import kotlinx.serialization.json.JsonObject
 import net.weero.measix.pilot.AppScope
 import net.weero.measix.pilot.data.datastore.EffectiveSettingsSnapshot
@@ -79,7 +81,7 @@ internal abstract class McpRuntimeCoordinatorTestBase {
         callToolResponder = { CallToolResult(content = listOf(TextContent("tool-result"))) }
         listToolsResponder = { _, _ -> ListToolsResult(tools = listOf(serverTool("search"))) }
         effective.snapshot = snapshotOf(emptyList())
-        every { settingsStore.effectiveSettings } returns effective.flow
+        stubMcpUserDefinitions(settingsStore, effective.flow)
         every { catalogStore.catalogs } returns catalogs
         coEvery { catalogStore.awaitReady() } returns Unit
         coEvery { catalogStore.commitCandidate(any()) } coAnswers {
@@ -278,3 +280,10 @@ internal val McpRuntimeCoordinator.syncingStatus: TestStatusSnapshot
     get() = TestStatusSnapshot(runtimeCapabilities.value.mapValues { it.value.status })
 
 internal data class TestStatusSnapshot(val value: Map<ConfigurationReference, McpStatus>)
+
+internal fun stubMcpUserDefinitions(store: SettingsStore, definitions: StateFlow<EffectiveSettingsSnapshot>) {
+    every { store.userMcpDefinitions } returns definitions.map { it.settings.mcpServers }
+    coEvery { store.withUserMcpDefinitions<Any?>(any()) } coAnswers {
+        firstArg<suspend (List<McpServerConfig>) -> Any?>().invoke(definitions.value.settings.mcpServers)
+    }
+}

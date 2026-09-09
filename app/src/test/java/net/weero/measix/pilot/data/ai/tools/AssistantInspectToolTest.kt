@@ -204,7 +204,7 @@ class AssistantInspectToolTest {
         val target = accessibleTarget(enableMemory = true)
         val caller = caller()
         val toolSetFactory = mockk<TurnToolSetFactory>()
-        every { toolSetFactory.captureMcpCapabilities(any()) } returns
+        coEvery { toolSetFactory.captureMcpCapabilities(any()) } returns
             net.weero.measix.pilot.data.ai.mcp.TurnMcpCapabilitySnapshot.EMPTY
         coEvery {
             toolSetFactory.buildTools(

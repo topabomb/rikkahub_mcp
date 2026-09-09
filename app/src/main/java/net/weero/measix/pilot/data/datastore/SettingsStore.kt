@@ -259,6 +259,15 @@ class SettingsStore internal constructor(
         }
     }
 
+    internal val userMcpDefinitions = userDocuments
+        .map { it.configuration.mcpServers.normalizeMcpDefinitions() }
+        .distinctUntilChanged()
+
+    /** Definition reads and connection commitment share the existing user-settings writer boundary. */
+    internal suspend fun <T> withUserMcpDefinitions(
+        operation: suspend (List<McpServerConfig>) -> T,
+    ): T = updateMutex.withLock { operation(userDocuments.first().configuration.mcpServers.normalizeMcpDefinitions()) }
+
     private val localSettingsRaw = userDocuments
         .map { document ->
             val selected = document.preferences.forScope(

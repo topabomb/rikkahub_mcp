@@ -47,7 +47,7 @@ class TurnToolSetFactory(
     private val toolOutputStore: ToolOutputStore = ToolOutputStore(artifactStore),
 ) {
 
-    fun captureMcpCapabilities(assistant: Assistant): TurnMcpCapabilitySnapshot =
+    suspend fun captureMcpCapabilities(assistant: Assistant): TurnMcpCapabilitySnapshot =
         mcpManager.captureTurnCapabilities(assistant)
 
     suspend fun prepareMcpCapabilities(assistant: Assistant): TurnMcpCapabilitySnapshot =

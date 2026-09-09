@@ -647,3 +647,16 @@ App 2,121 项 JVM、Android 17 模拟器 App 190 项与 Speech 6 项无失败，
 Workspace JVM 保留 11 项 Windows 条件跳过，设备 12 项中 1 项硬链接条件跳过。证据见
 `build/reports/enterprise/mcp-managed-catalog-verification.json`。实际 SDK/HTTP 发现和设备目录持久化已验证，
 原 Session MCP 连接、Gateway 业务执行、Speech、备份及整期验收仍未完成，不代表真实平台互操作。
+
+
+个人 MCP 连接已从全局有效配置投影移到明确的用户定义读取：观察只触发收敛，准入复用 Settings 的原写锁，
+然后取得 Runtime 锁；没有新增配置缓存或持久化字段。初次加载只恢复目录，选中使用或后续变更才建立连接。
+配置源故障不能阻断已经取得资源的收口：目录回执未接受时 CAS 补偿，连接失败直接清理原 transport。
+独立审查与根代理复核发现的源读取失败问题已经关闭；150 项定向回归覆盖实际 DataStore 并发、取消、
+规范化读取不回写及目录补偿/连接关闭。
+
+本批完整串行 `test assembleDebug lintDebug assembleRelease connectedDebugAndroidTest` 通过（21m 41s）：
+App 2,124 项 JVM、Android 17 模拟器 App 190 项与 Speech 6 项无失败，App/Workspace lint 为 0 错误、287/11 警告。
+Workspace JVM 保留 11 项 Windows 条件跳过，设备 12 项中 1 项硬链接条件跳过。分层报告见
+`build/reports/enterprise/mcp-definition-owner-verification.json`。本次设备是既有消费者回归，未新增企业 MCP 业务验收；
+企业 Session/binding/interaction target、配置页面接线、原外层配置锁清理、Gateway 完整 Mock、Speech、备份和整期验收继续实施。

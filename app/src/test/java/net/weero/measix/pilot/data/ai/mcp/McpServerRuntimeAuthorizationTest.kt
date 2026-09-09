@@ -24,7 +24,6 @@ import net.weero.measix.pilot.data.datastore.EffectiveSettingsSnapshot
 import net.weero.measix.pilot.data.datastore.ManagedConfigurationState
 import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.datastore.SettingsAccessIndex
-import net.weero.measix.pilot.data.datastore.SettingsStore
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Test
@@ -49,9 +48,6 @@ class McpServerRuntimeAuthorizationTest {
                 managedState = ManagedConfigurationState.ABSENT,
             )
         )
-        val settingsStore = mockk<SettingsStore> {
-            every { effectiveSettings } returns settings
-        }
         val oauthCoordinator = mockk<McpOAuthCoordinator>()
         val events = mutableListOf<String>()
         val calls = AtomicInteger()
@@ -82,7 +78,10 @@ class McpServerRuntimeAuthorizationTest {
         lateinit var runtime: McpServerRuntime
         runtime = McpServerRuntime(
             serverId = serverId,
-            settingsStore = settingsStore,
+            definition = object : McpRuntimeDefinition {
+                override suspend fun <T> withCurrent(operation: suspend (McpServerConfig?) -> T): T =
+                    operation(settings.value.settings.mcpServers.find { it.id == serverId })
+            },
             catalogStore = mockk(relaxed = true),
             appScope = appScope,
             networkMonitor = networkMonitor,

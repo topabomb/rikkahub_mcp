@@ -258,7 +258,7 @@ internal class McpTurnCapabilitySnapshotTest : McpRuntimeCoordinatorTestBase() {
         val oauthClient = mockk<McpOAuthClient>(relaxed = true)
         val isolatedClients = mutableListOf<Client>()
         isolatedEffective.snapshot = snapshotOf(emptyList())
-        every { isolatedSettingsStore.effectiveSettings } returns isolatedEffective.flow
+        stubMcpUserDefinitions(isolatedSettingsStore, isolatedEffective.flow)
         coEvery { isolatedSettingsStore.updateLocal(any()) } coAnswers {
             val transform = firstArg<(Settings) -> Settings>()
             val next = transform(isolatedEffective.snapshot.settings)
@@ -306,7 +306,7 @@ internal class McpTurnCapabilitySnapshotTest : McpRuntimeCoordinatorTestBase() {
         )
         isolatedEffective.publish(Settings(mcpServers = listOf(serverConfig(url = "https://old.example/mcp", oauth = authorized))))
         advanceUntilIdle()
-        val tool = isolatedManager.captureTurnCapabilities(Assistant(mcpServers = setOf(SERVER_ID))).tools.single()
+        val tool = isolatedManager.prepareTurnCapabilities(Assistant(mcpServers = setOf(SERVER_ID))).tools.single()
         val refreshGate = CompletableDeferred<Unit>()
         coEvery {
             oauthClient.refreshToken(any(), any(), any(), any(), any(), any())
