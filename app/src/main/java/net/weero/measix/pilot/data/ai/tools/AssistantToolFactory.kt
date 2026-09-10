@@ -404,6 +404,7 @@ class AssistantToolFactory internal constructor(
             assistant = target,
             conversationId = masterConversationId,
             settings = snapshot.userSettings,
+            configuration = snapshot.configuration,
             capabilityModel = capabilityModel,
             turnKind = TurnKind.SUB_ASSISTANT,
             mcpCapabilities = toolSetFactory.inspectMcpCapabilities(realmAccess, snapshot, target),

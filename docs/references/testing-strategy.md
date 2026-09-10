@@ -36,6 +36,8 @@
 | commit-then-publish 与命令锁 | `ConversationCommandCoordinatorTest` |
 | active Turn session 与 live phase | `ConversationRuntimeTest` |
 | 模型执行原域、准入与绑定 | `ModelExecutionServiceTest` 使用真实 DataStore/企业存储验证同次聊天/识图/图片工具捕获、页面选择撤销、准备失败清理、原绑定保留、原凭据刷新、撤权与旧 Session；`ModelExecutionLeaseTest` 验证借用角色共同关闭、释放失败重试、准入取消和请求清理等待；`SubAssistantTurnIntegrationTest` 验证真实主子执行链撤权后的终态与原因一致 |
+| 模型来源版本屏障 | `LocalEnterpriseSourceTest` 验证实际流式/非流式 Mock 消费拒绝陈旧 generation；`ModelExecutionLeaseTest` 验证屏障永久关闭借用请求；`ModelExecutionServiceTest` 验证原 owner 释放后才同步，释放失败不得开放旧捕获 |
+| 迟到通知 | `ChatNotificationManagerTest` 直接调用实际通知 owner，验证过期、退出、同主体重新登录后原事件不得发布，取消进度和已发布完成通知各守原生命周期；不以此宣称验证了系统通知权限 UI |
 | 图片任务与交接 | `ImageGenerationCoordinatorTest` 验证原页面 lease、取消准备/失败释放/退出重试、重复 ID 隔离及 Tool 借用；`GeneratedMediaStoreTest` 验证图库提交与副本接收失败、取消回交；`ImgGenVMTest` 验证连续替换等待清理；`EnterpriseImageGenerationAndroidTest` 使用实际 DataStore、Room、原生 PNG 和生产本地队列验证生成/编辑、域隔离、旧页面拒绝及退出，无真实 Provider 网络 |
 | 助手搜索偏好 | `AssistantModelTest` 验证共用模型与 Child 搜索独立性、缺失/显式空覆盖；`ModelExecutionServiceTest` 验证实际捕获及不支持传输的拒绝。旧无字段原文经 `UserSettingsMigrationTest` 和 `BackupArchiveServiceTest` 的生产迁移/恢复入口验证；实际 DataStore 重开归 `ScopedConfigurationAndroidTest` |
 | 请求凭据与传输保密 | `RequestCredentialsTest` 验证聊天四线及图片生成/编辑的实际请求构建、认证唯一性、私有图片下载与个人轮换缓存隔离；`ModelRequestTransportTest` 验证受管请求覆盖拒绝；`RequestPrivacyTest` 通过两个 HTTP 服务验证跨 origin 跳转阻断，`RequestLoggingInterceptorTest` 验证应用日志隔离 |
@@ -72,7 +74,7 @@
 | tool output 协议与 marker | `ToolOutputProtocolTest` |
 | request/turn usage | `RequestUsageReducerTest`、`TurnUsageTest` |
 | Tool lease 顺序 | `ToolResourceCommitTest` |
-| Tool set 冻结 | `TurnToolSetFactoryMcpTest`、`FrozenToolSetTest` |
+| Tool set 冻结与域选择 | `TurnToolSetFactoryTest`、`FrozenToolSetTest`；搜索通过实际 HTTP 验证原域服务与认证 |
 | 子助手访问/运行策略 | `SubAssistantAccessPolicyTest`、`SubAssistantRunPolicyTest` |
 | 子助手 lineage/retention | `SubAssistantLineageTest` |
 | 子助手结果投影 | `SubAssistantResultProjectionTest` |
@@ -84,6 +86,8 @@
 | 会话目录、FTS 与统计域过滤 | `ScopedConversationQueryTest`、`SelectedRealmPagingSourceTest` 验证原 Session 工具、列表恢复及实际 Pager 失效；`ConversationDAOIntegrationTest` 和使用生产数据库工厂的 `ScopedMessageSearchAndroidTest` 验证真实 Room/Requery/Jieba 的完整主体过滤与限额前过滤，不替代按 ID 页面/命令授权验收 |
 | 聊天页面打开与生命周期 | `ConversationPageAccessTest` 验证显式 Draft/Existing、原 Session、header 前置检查与投影撤销；`ChatPageLifecycleTest` 验证实际 ViewModel 的授权先行、取消/回收、分享输入消费；`UserSettingsMigrationAndroidTest` 验证实际 DataStore/SharedPreferences 的最近聊天迁移、失败重试和保全；不替代普通命令/Turn 或正式企业 UI 验收 |
 | Portal 消息与文档授权 | `PortalProtocolTest` 核验完整共享输入摘要，执行全部 BridgeRequest 案例和原始重复键；`PortalDocumentTest` 使用真实本地 Session/Feed owner 验证原文档、ETag、配置同步、切域往返、文档替换及迟到同步结果；`PortalWebViewAndroidTest` 覆盖随包网页首次读取、实际 bootstrap、页内导航、重载后新页面、快速切域和旧同步错误隔离。设备验证结果见实施方案；请求解析不代表共享响应反例全部消费，页面测试不替代媒体、扫码或真实平台验收 |
+| 清除内置示例数据 | `EnterpriseExitServiceTest` 验证原主体、旧选择、普通退出不可代替清除、CLOSING 重试与 Feed 回收失败；`EnterpriseDataRemovalAndroidTest` 经实际 Room/DataStore/会话命令与文件 owner 验证完整主体清除、其他主体保全、Draft/staging 和媒体回执的启动恢复。未运行的 Provider 协作者使用替身，不等同于全部在途任务设备验收 |
+| 本地模型的子助手示例 | `ModelRequestTransportTest` 消费随包委派 Starter 和正式 Disclosure renderer，验证最新目录 ID、流式/非流式标准调用、结果续轮、缺工具、同名歧义与目录文本不触发用户动作；它只证明 Mock 模型输出，实际 Child 创建/运行/持久化由既有子助手组件和正式设备聊天分别验证 |
 
 企业聊天配置由 `ConfigurationApplicationServiceTest` 验证实际字段命令、DataStore 失败/取消与根会话锁，
 `AssistantPreferenceMutationTest` 验证固定 MCP 与旧显式偏好的保全。`ConversationCommandAccessTest` 验证原助手、

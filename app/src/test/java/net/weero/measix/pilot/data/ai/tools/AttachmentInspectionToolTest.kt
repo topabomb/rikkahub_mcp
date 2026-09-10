@@ -637,7 +637,7 @@ class AttachmentInspectionToolTest {
     fun `local example consumes structured attachments without contacting a provider`() = runTest {
         val captured = net.weero.measix.pilot.service.ModelExecutionSnapshot(
             visionModel, net.weero.measix.pilot.service.runtime.ModelExecutionLease {
-                it(net.weero.measix.pilot.service.runtime.ModelRequestTarget.LocalExample)
+                it(net.weero.measix.pilot.test.exampleModelTarget)
             }, "test", null, inspectionCapabilities,
         )
         val result = executeInspection(args(listOf("/upload/a.png")), captured, providerManager) {

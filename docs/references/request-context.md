@@ -65,10 +65,13 @@ Provider opaque replay、Denied / Answered 和无终态调用不参与。整批�
 
 ### Disclosure Snapshot
 
-每个新 `START` 从同一份 Effective Settings 与一次 `ORDER BY id ASC` 的 Memory 查询捕获完整
+每个主/子助手的新 `START` 从同次捕获的 `ResolvedConfiguration` 与一次 `ORDER BY id ASC` 的 Memory 查询捕获完整
 candidate；与结构变换后目标 selected branch 上最近适用 entry 做逐字比较，不同才随新 Assistant
 owner 追加。同一 Turn 的 step、审批、`ask_user`、重试不刷新。后出现的完整 Snapshot 按时间顺序
 成为新 baseline，不需要 generation / effect 协议，也不把当前 live 状态写回 Conversation 头部。
+
+助手目录先按本域 `ConfigurationAccess.canExecute` 过滤，再应用既有主从可见性规则；企业固定助手参与目录，
+企业禁止的个人助手不披露。不能用仅含用户定义的 `userSettings.assistants` 代替生效目录。
 
 regenerate 同一 USER 创建新 Assistant owner，不复制 USER。即将被替换的旧 owner 先退出目标分支
 再判等，因此相同 live content 也可能相对更早 baseline 被判定为变化，并由新 owner 重新落一条

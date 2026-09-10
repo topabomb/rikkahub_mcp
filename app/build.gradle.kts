@@ -8,6 +8,7 @@ import org.gradle.api.provider.Property
 import org.gradle.api.tasks.Input
 import org.gradle.api.tasks.InputDirectory
 import org.gradle.api.tasks.InputFile
+import org.gradle.api.tasks.Internal
 import org.gradle.api.tasks.OutputDirectory
 import org.gradle.api.tasks.TaskAction
 import java.io.File
@@ -73,6 +74,9 @@ abstract class PrepareEnterprisePortalAssets : DefaultTask() {
     @get:OutputDirectory
     abstract val outputDirectory: DirectoryProperty
 
+    @get:Internal
+    abstract val buildDirectory: DirectoryProperty
+
     @TaskAction
     fun prepare() {
         val bundle = bundleDirectory.get().asFile.canonicalFile
@@ -99,7 +103,9 @@ abstract class PrepareEnterprisePortalAssets : DefaultTask() {
             require(digest == value) { "Portal asset digest mismatch: $name" }
         }
         val output = outputDirectory.get().asFile
-        require(output.canonicalFile.toPath().startsWith(project.layout.buildDirectory.get().asFile.canonicalFile.toPath()))
+        val outputPath = output.canonicalFile.toPath()
+        val buildPath = buildDirectory.get().asFile.canonicalFile.toPath()
+        require(outputPath != buildPath && outputPath.startsWith(buildPath)) { "Portal output must be inside the build directory" }
         if (output.exists()) check(output.deleteRecursively()) { "Cannot replace generated Portal assets" }
         val target = File(output, "enterprise_portal")
         files.forEach { file ->
@@ -113,6 +119,7 @@ abstract class PrepareEnterprisePortalAssets : DefaultTask() {
 val enterprisePortalAssets = tasks.register<PrepareEnterprisePortalAssets>("prepareEnterprisePortalAssets") {
     bundleDirectory.set(layout.projectDirectory.dir("src/main/enterprisePortal"))
     outputDirectory.set(layout.buildDirectory.dir("generated/enterprisePortalAssets"))
+    buildDirectory.set(layout.buildDirectory)
 }
 
 android {
@@ -123,8 +130,8 @@ android {
         applicationId = "net.weero.measix.pilot"
         minSdk = 26
         targetSdk = 37
-        versionCode = 19
-        versionName = "0.0.19"
+        versionCode = 20
+        versionName = "0.0.20"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 

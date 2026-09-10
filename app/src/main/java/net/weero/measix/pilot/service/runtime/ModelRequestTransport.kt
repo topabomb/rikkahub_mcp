@@ -8,6 +8,7 @@ import me.rerere.ai.ui.ProviderToolCallSlot
 import me.rerere.ai.ui.ToolResultStatus
 import kotlin.uuid.Uuid
 import net.weero.measix.pilot.data.configuration.ModelSelectionRole
+import net.weero.measix.pilot.service.ConversationDisclosureSnapshotService
 import me.rerere.ai.core.MessageRole
 import me.rerere.ai.core.ModelRequestMessage
 import me.rerere.ai.provider.ImageGenerationParams
@@ -33,7 +34,8 @@ internal suspend fun ModelRequestTarget.streamText(
     is ModelRequestTarget.Remote -> providers.getProviderByType(provider).streamText(
         provider, messages, requestParams(params),
     )
-    ModelRequestTarget.LocalExample -> flow {
+    is ModelRequestTarget.LocalExample -> flow {
+        verifyRequest()
         val response = exampleResponse(messages, params)
         if (response.getTools().isNotEmpty()) {
             yield()
@@ -57,7 +59,10 @@ internal suspend fun ModelRequestTarget.generateText(
     is ModelRequestTarget.Remote -> providers.getProviderByType(provider).generateText(
         provider, messages, requestParams(params),
     )
-    ModelRequestTarget.LocalExample -> exampleChunk(params, exampleAuxiliaryResponse(messages, role) ?: exampleResponse(messages, params), stream = false, finished = true)
+    is ModelRequestTarget.LocalExample -> {
+        verifyRequest()
+        exampleChunk(params, exampleAuxiliaryResponse(messages, role) ?: exampleResponse(messages, params), stream = false, finished = true)
+    }
 }
 
 internal suspend fun ModelRequestTarget.generateImage(
@@ -69,7 +74,10 @@ internal suspend fun ModelRequestTarget.generateImage(
         providers.getProviderByType(provider).generateImage(provider,
             params.copy(customHeaders = params.customHeaders + headers, credentials = credentials))
     }
-    ModelRequestTarget.LocalExample -> exampleImages(params.model.displayName, params.prompt, params.numOfImages, params.size, 0)
+    is ModelRequestTarget.LocalExample -> flow {
+        verifyRequest()
+        exampleImages(params.model.displayName, params.prompt, params.numOfImages, params.size, 0).collect { emit(it) }
+    }
 }
 
 internal suspend fun ModelRequestTarget.editImage(
@@ -81,9 +89,10 @@ internal suspend fun ModelRequestTarget.editImage(
         providers.getProviderByType(provider).editImage(provider,
             params.copy(customHeaders = params.customHeaders + headers, credentials = credentials))
     }
-    ModelRequestTarget.LocalExample -> {
+    is ModelRequestTarget.LocalExample -> flow {
+        verifyRequest()
         require(params.images.isNotEmpty() && params.images.all { java.io.File(it).isFile }) { "image_edit_input_unavailable" }
-        exampleImages(params.model.displayName, params.prompt, params.numOfImages, params.size, params.images.size)
+        exampleImages(params.model.displayName, params.prompt, params.numOfImages, params.size, params.images.size).collect { emit(it) }
     }
 }
 
@@ -157,12 +166,28 @@ private fun exampleAuxiliaryResponse(messages: List<ModelRequestMessage>, role: 
 /** The simulated model emits ordinary calls from this request's frozen tool surface, never executes them. */
 private fun exampleResponse(messages: List<ModelRequestMessage>, params: TextGenerationParams): UIMessage {
     val userIndex = messages.indexOfLast { it.role == MessageRole.USER }
-    val prompt = messages.getOrNull(userIndex)?.toText().orEmpty()
+    val userTexts = messages.getOrNull(userIndex)?.parts?.filterIsInstance<UIMessagePart.Text>().orEmpty()
+    val prompt = userTexts.filter { exampleDisclosure(it.text) == null }.joinToString("\n") { it.text }
     val calls = messages.drop(userIndex + 1).filter { it.role == MessageRole.ASSISTANT }
         .flatMap { it.parts.filterIsInstance<UIMessagePart.Tool>() }
+    // Explicit exercise commands use the ordinary frozen tool surface and its normal execution/approval owner.
+    val exercise = when {
+        prompt.startsWith("演练搜索：") -> "search_web" to buildJsonObject { put("query", prompt.substringAfter("：").trim()) }
+        prompt.startsWith("演练技能：") -> "use_skill" to buildJsonObject { put("name", prompt.substringAfter("：").trim()) }
+        prompt.trim() == "演练工作空间" -> "workspace_shell" to buildJsonObject { put("command", "pwd") }
+        else -> null
+    }
+    if (exercise != null) {
+        calls.lastOrNull { it.toolName == exercise.first }?.let { return exampleToolReply(it) }
+        if (params.tools.none { it.name == exercise.first } ||
+            exercise.second.values.any { (it as? JsonPrimitive)?.content.isNullOrBlank() }) {
+            return UIMessage.assistant("本地模拟：请填写演练内容，并启用及配置相应能力；当前企业规则和工具审批仍然生效。")
+        }
+        return exampleToolCall(exercise.first, exercise.second)
+    }
     val createAssistant = listOf("创建示例子助手", "创建并调用示例子助手", "create example sub-assistant", "create and call example sub-assistant")
         .any { prompt.contains(it, true) }
-    if (createAssistant && params.tools.isNotEmpty()) {
+    if (createAssistant) {
         val delegate = prompt.contains("创建并调用", true) || prompt.contains("create and call", true)
         if (params.tools.none { it.name == "assistant_manage" } || (delegate && params.tools.none { it.name == "assistant_call" })) {
             return UIMessage.assistant("本地模拟：请在当前助手的本地能力中启用助手管理；创建并调用还需启用子助手调用。企业域需允许用户助手。")
@@ -185,6 +210,24 @@ private fun exampleResponse(messages: List<ModelRequestMessage>, params: TextGen
         return exampleToolCall("assistant_call", buildJsonObject {
             put("assistant_id", id)
             put("request", "请简短确认已收到这次企业空间协作请求。")
+        })
+    }
+    if (listOf("委派", "delegate", "调用已有子助手").any { prompt.contains(it, true) }) {
+        calls.lastOrNull { it.toolName == "assistant_call" }?.let { return exampleToolReply(it) }
+        val catalog = messages.take(userIndex + 1).filter { it.role == MessageRole.USER }
+            .flatMap { it.parts.filterIsInstance<UIMessagePart.Text>() }
+            .mapNotNull { exampleDisclosure(it.text) }.lastOrNull()?.get("sub_assistants") as? JsonObject
+        val mode = catalog?.get("mode")?.jsonPrimitive?.content
+        val rows = (catalog?.get("rows") as? JsonArray).orEmpty().map { it.jsonArray }
+        val target = rows.singleOrNull { row -> prompt.contains(row[1].jsonPrimitive.content, true) }
+        if (params.tools.none { it.name == "assistant_call" } || target == null || mode !in listOf(
+                ConversationDisclosureSnapshotService.SUB_ASSISTANTS_MODE_BOTH,
+                ConversationDisclosureSnapshotService.SUB_ASSISTANTS_MODE_DELEGATION_ONLY)) {
+            return UIMessage.assistant("本地模拟：请启用子助手调用，并在请求中指定当前授权目录内的子助手名称。")
+        }
+        return exampleToolCall("assistant_call", buildJsonObject {
+            put("assistant_id", target[0].jsonPrimitive.content)
+            put("request", "请整理企业信息并简短回复。")
         })
     }
     val action = when {
@@ -234,6 +277,15 @@ private fun exampleResponse(messages: List<ModelRequestMessage>, params: TextGen
         if (images > 0) append("已接收 $images 张图片；本地示例返回模拟结果。")
         append("这是一条本地模拟回复，用于验证企业空间中的对话流程。可尝试：查看企业信息、查看企业公告、查询企业指南。启用助手管理和子助手调用后，也可请求创建并调用示例子助手。")
     })
+}
+
+/** Reads only the same model-visible baseline as a real provider; it does not resolve live settings. */
+private fun exampleDisclosure(text: String): JsonObject? {
+    val root = try { Json.parseToJsonElement(text) as? JsonObject } catch (_: IllegalArgumentException) { null }
+    if (root?.get("type") != JsonPrimitive(ConversationDisclosureSnapshotService.CONTENT_TYPE)) return null
+    try { ConversationDisclosureSnapshotService.requireDurableEnvelope(text) }
+    catch (_: net.weero.measix.pilot.service.DisclosureContentException) { return null }
+    return root
 }
 
 private fun exampleToolCall(name: String, arguments: JsonObject) = UIMessage(

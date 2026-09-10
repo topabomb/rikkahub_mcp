@@ -92,6 +92,9 @@ internal object EnterprisePackageCodec {
 
     fun validateIdentity(identity: EnterpriseIdentity) {
         check(identity.authority.isLocal, "local_package_requires_local_authority")
+        listOf(identity.authority.sourceNamespace, identity.authority.deploymentId, identity.userId).forEach {
+            check(it.codePointCount(0, it.length) in 1..128, "invalid_enterprise_identity_length")
+        }
         check(identity.enterpriseName.isNotBlank() && identity.enterpriseName.length <= 256, "invalid_enterprise_name")
         check(identity.userName.isNotBlank() && identity.userName.length <= 256, "invalid_enterprise_user_name")
         try { identity.scope } catch (_: IllegalArgumentException) { fail("invalid_enterprise_user_id") }

@@ -208,6 +208,7 @@ class AssistantInspectToolTest {
                 assistant = any(),
                 conversationId = any(),
                 settings = any(),
+                configuration = any(),
                 capabilityModel = any(),
                 workspaceCwd = any(),
                 turnKind = TurnKind.SUB_ASSISTANT,

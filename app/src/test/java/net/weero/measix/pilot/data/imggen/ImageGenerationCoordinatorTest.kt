@@ -83,8 +83,8 @@ class ImageGenerationCoordinatorTest {
             if (releases == 1) error("release pending")
         }) { accept -> modelCapture.requests.execute { accept(it) } }
         val models = mockk<net.weero.measix.pilot.service.ModelExecutionService>()
-        coEvery { models.capturePageImage(selection, any(), model.id, any()) } coAnswers {
-            arg<(net.weero.measix.pilot.service.runtime.ModelExecutionLease) -> Unit>(3)(lease)
+        coEvery { models.capturePageImage(selection, any(), model.id, any(), any()) } coAnswers {
+            arg<(net.weero.measix.pilot.service.runtime.ModelExecutionLease) -> Unit>(4)(lease)
             modelCapture.copy(requests = lease)
         }
         val files = tempDir("image-page-release")
@@ -118,8 +118,8 @@ class ImageGenerationCoordinatorTest {
             check(releaseAllowed) { "release pending" }
         }) { error("capture never completed") }
         val models = mockk<net.weero.measix.pilot.service.ModelExecutionService>()
-        coEvery { models.capturePageImage(selection, any(), model.id, any()) } coAnswers {
-            arg<(net.weero.measix.pilot.service.runtime.ModelExecutionLease) -> Unit>(3)(lease)
+        coEvery { models.capturePageImage(selection, any(), model.id, any(), any()) } coAnswers {
+            arg<(net.weero.measix.pilot.service.runtime.ModelExecutionLease) -> Unit>(4)(lease)
             entered.complete(Unit)
             try { awaitCancellation() } finally {
                 withContext(kotlinx.coroutines.NonCancellable) { unwinding.complete(Unit); allowStop.await() }

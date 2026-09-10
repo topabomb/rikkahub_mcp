@@ -229,6 +229,7 @@ internal object ConfigurationResolver {
             compressModelId = selected.compressModelId ?: DEFAULT_AUTO_MODEL_ID,
             assistantId = selected.assistantId ?: DEFAULT_ASSISTANT_ID,
             selectedTTSProviderId = selected.selectedTTSProviderId ?: DEFAULT_SYSTEM_TTS_ID,
+            selectedSearchServiceId = selected.selectedSearchServiceId ?: user.searchServices.firstOrNull()?.id,
         ) else {
             val defaults = enterprise?.defaults
             fun enterpriseReference(id: String?) = id?.let { requireNotNull(identity).reference(it) }

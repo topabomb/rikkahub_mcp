@@ -58,5 +58,16 @@ internal fun testModelExecutionService(store: SettingsStore, sessions: Enterpris
             RequestMediaCapabilities(userImages = me.rerere.ai.provider.RequestImageSupport.STRUCTURED)
         else RequestMediaCapabilities.NONE
     }
-    return ModelExecutionService(store, sessions, gate, providers)
+    return ModelExecutionService(store, sessions, gate, providers, mockk(), mockk(), mockk())
 }
+
+/** Transport/lease tests own admission explicitly; source authorization has separate real-owner tests. */
+internal val exampleModelTarget = net.weero.measix.pilot.service.runtime.ModelRequestTarget.LocalExample(
+    net.weero.measix.pilot.data.enterprise.RealmAccess.Enterprise(
+        net.weero.measix.pilot.data.enterprise.exampleEnterprisePackage().identity.scope, "test-session"),
+    net.weero.measix.pilot.data.enterprise.EnterpriseAppliedVersion("test", 1, "test", "test"),
+    "mdl_chat",
+    mockk<net.weero.measix.pilot.data.enterprise.LocalEnterpriseSource> {
+        coEvery { verifyModelRequest(any(), any(), any()) } returns Unit
+    },
+)

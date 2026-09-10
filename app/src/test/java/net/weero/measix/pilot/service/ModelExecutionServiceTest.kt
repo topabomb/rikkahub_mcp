@@ -7,6 +7,8 @@ import androidx.datastore.preferences.core.edit
 import androidx.test.core.app.ApplicationProvider
 import java.io.File
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancelAndJoin
@@ -32,6 +34,7 @@ import net.weero.measix.pilot.data.model.Assistant
 import net.weero.measix.pilot.data.model.Conversation
 import net.weero.measix.pilot.service.runtime.ConversationRuntime
 import net.weero.measix.pilot.service.runtime.ModelRequestTarget
+import net.weero.measix.pilot.service.runtime.generateText
 import net.weero.measix.pilot.service.runtime.toSnapshot
 import net.weero.measix.pilot.test.testModelExecutionService
 import org.junit.Assert.*
@@ -47,6 +50,52 @@ import kotlin.uuid.Uuid
 @Config(sdk = [34])
 class ModelExecutionServiceTest {
     @get:Rule val temporary = TemporaryFolder()
+
+    @Test fun `model barrier stops original owner before syncing and failed cleanup never reopens the capture`() = runBlocking {
+        for (failCleanup in listOf(false, true)) environment { env ->
+            val packet = exampleEnterprisePackage()
+            val authorityRoot = env.root.resolve("source")
+            val source = LocalEnterpriseSource({ EnterprisePackageCodec.encode(packet).inputStream() }, env.sessions,
+                LocalEnrollmentAuthority(authorityRoot),
+                { EnterprisePackageCodec.json.encodeToString(EnterpriseIdentity.serializer(), packet.identity).byteInputStream() },
+                LocalEnterpriseConfigurationStore(authorityRoot))
+            source.enrollExample()
+            val access = env.sessions.captureSelectedRealmAccess() as RealmAccess.Enterprise
+            val providers = io.mockk.mockk<me.rerere.ai.provider.ProviderManager>()
+            env.service = ModelExecutionService(env.settings, env.sessions, env.gate, providers, source, env.scope,
+                EnterpriseSynchronizationService(env.sessions, source, env.scope))
+            val stopped = CompletableDeferred<Unit>()
+            val permitCleanup = CompletableDeferred<Unit>()
+            val cleanupAttempted = CompletableDeferred<Unit>()
+            val captured = env.capture(access, packet.identity.reference(packet.configuration.defaults.assistantId!!), stop = {
+                stopped.complete(Unit)
+                permitCleanup.await()
+                if (failCleanup) {
+                    cleanupAttempted.complete(Unit)
+                    error("injected model release failure")
+                }
+                env.releaseAll()
+                cleanupAttempted.complete(Unit)
+            })
+            val candidate = requireNotNull(source.candidate(access.scope))
+            source.changeConfiguration(access.scope, candidate.revision) { it }
+            try {
+                captured.model.requests.execute { it.generateText(providers,
+                    listOf(me.rerere.ai.core.ModelRequestMessage.user("hello")),
+                    me.rerere.ai.provider.TextGenerationParams(captured.model.model)) }
+                fail("stale model emitted")
+            } catch (_: ManagedSnapshotRequired) { }
+            withTimeout(10_000) { stopped.await() }
+            assertEquals(1L, (env.sessions.state.value as EnterpriseState.Available).manifest.applied!!.generation)
+            permitCleanup.complete(Unit)
+            withTimeout(10_000) { cleanupAttempted.await() }
+            if (failCleanup) assertEquals(1L, (env.sessions.state.value as EnterpriseState.Available).manifest.applied!!.generation)
+            else withTimeout(10_000) { env.sessions.state.first { (it as? EnterpriseState.Available)?.manifest?.applied?.generation == 2L } }
+            try { captured.model.requests.execute { fail("closed capture replayed") }; fail("old capture reopened") }
+            catch (error: IllegalStateException) { assertEquals("model_execution_lease_closed", error.message) }
+            io.mockk.verify { providers wasNot io.mockk.Called }
+        }
+    }
 
     @Test fun `search choices reach captured requests while enterprise overrides preserve personal definitions`() = runBlocking {
         environment { env ->
@@ -246,7 +295,7 @@ class ModelExecutionServiceTest {
             runtime.publishCommitted(net.weero.measix.pilot.service.runtime.MoveToAssistant(other.id),
                 runtime.durable.copy(header = runtime.durable.header.copy(assistantId = other.id)))
             try {
-                rejected { env.service.captureTurn(RealmAccess.Personal, runtime, turn, worker, other.id) }
+                rejected { env.service.captureTurn(RealmAccess.Personal, runtime, turn, worker, other.id) { } }
                 assertFalse(runtime.hasExecutionLeases)
                 assertNull(runtime.captureAndRequestStop("assistant_removed", other.id))
                 assertTrue(worker.isActive)
@@ -320,7 +369,7 @@ class ModelExecutionServiceTest {
             val provider = io.mockk.mockk<me.rerere.ai.provider.Provider<ProviderSetting>>()
             io.mockk.every { providers.getProviderByType(any<ProviderSetting>()) } returns provider
             io.mockk.every { provider.requestMediaCapabilities(any(), any()) } returns me.rerere.ai.provider.RequestMediaCapabilities.NONE
-            env.service = ModelExecutionService(env.settings, env.sessions, env.gate, providers)
+            env.service = ModelExecutionService(env.settings, env.sessions, env.gate, providers, io.mockk.mockk(), env.scope, io.mockk.mockk())
             env.sessions.enrollFixture(packet)
             val access = env.sessions.captureSelectedRealmAccess() as RealmAccess.Enterprise
             rejected { env.capture(access, packet.identity.reference(packet.configuration.defaults.assistantId!!)) }
@@ -340,7 +389,7 @@ class ModelExecutionServiceTest {
             val worker = Job()
             var owner: net.weero.measix.pilot.service.runtime.ModelExecutionLease? = null
             try {
-                val page = env.service.capturePageImage(requireNotNull(env.sessions.observeSelectedRealmSelection().first()), worker, image.id) { owner = it }
+                val page = env.service.capturePageImage(requireNotNull(env.sessions.observeSelectedRealmSelection().first()), worker, image.id, stopRequest = {}) { owner = it }
                 val turn = env.capture(RealmAccess.Personal)
                 val tool = requireNotNull(turn.imageModel)
                 assertEquals(turn.model.userRevision, tool.userRevision)
@@ -372,11 +421,11 @@ class ModelExecutionServiceTest {
             val worker = Job()
             val owners = mutableListOf<net.weero.measix.pilot.service.runtime.ModelExecutionLease>()
             try {
-                val page = env.service.capturePageImage(requireNotNull(env.sessions.observeSelectedRealmSelection().first()), worker, packet.identity.reference(image.id)) { owners += it }
+                val page = env.service.capturePageImage(requireNotNull(env.sessions.observeSelectedRealmSelection().first()), worker, packet.identity.reference(image.id), stopRequest = {}) { owners += it }
                 val target = page.requests.execute { it as ModelRequestTarget.Remote }
                 assertEquals("https://image.test/v1", (target.provider as ProviderSetting.OpenAI).baseUrl)
                 assertTrue(target.credentials is me.rerere.ai.provider.RequestCredentials.Fixed)
-                rejected { env.service.capturePageImage(requireNotNull(env.sessions.observeSelectedRealmSelection().first()), worker, packet.identity.reference("mdl_chat")) { owners += it } }
+                rejected { env.service.capturePageImage(requireNotNull(env.sessions.observeSelectedRealmSelection().first()), worker, packet.identity.reference("mdl_chat"), stopRequest = {}) { owners += it } }
                 assertEquals(2, owners.size)
             } finally { worker.cancel(); owners.forEach { it.release() } }
             env.sessions.finishExit(env.sessions.beginExit(requireNotNull(env.sessions.captureExitRequest())))
@@ -392,12 +441,12 @@ class ModelExecutionServiceTest {
             val worker = Job()
             val owners = mutableListOf<net.weero.measix.pilot.service.runtime.ModelExecutionLease>()
             try {
-                val page = env.service.capturePageImage(original, worker, image.id) { owners += it }
+                val page = env.service.capturePageImage(original, worker, image.id, stopRequest = {}) { owners += it }
                 val tool = requireNotNull(env.capture(RealmAccess.Personal).imageModel)
                 env.sessions.enrollFixture(exampleEnterprisePackage())
                 env.sessions.selectPersonalFixture()
                 rejected { page.requests.execute { fail("old page survived realm roundtrip") } }
-                rejected { env.service.capturePageImage(original, worker, image.id) { owners += it } }
+                rejected { env.service.capturePageImage(original, worker, image.id, stopRequest = {}) { owners += it } }
                 tool.requests.execute { Unit }
             } finally { worker.cancel(); owners.forEach { it.release() } }
         }
@@ -440,7 +489,8 @@ class ModelExecutionServiceTest {
             auxiliary += runtime to worker
             return service.captureAuxiliary(access, runtime, worker, id, role)
         }
-        suspend fun capture(access: RealmAccess, id: ConfigurationReference = assistant.id, child: ChildModelAdmission? = null): CapturedModelConfiguration {
+        suspend fun capture(access: RealmAccess, id: ConfigurationReference = assistant.id, child: ChildModelAdmission? = null,
+            stop: suspend () -> Unit = {}): CapturedModelConfiguration {
             val conversation = Conversation(assistantId = id, scope = access.scope, messageNodes = emptyList(),
                 parentConversationId = Uuid.random().takeIf { child != null })
             val runtime = ConversationRuntime(conversation.id, conversation.toSnapshot(), scope, {})
@@ -448,7 +498,7 @@ class ModelExecutionServiceTest {
             val worker = Job()
             runtime.installTurnWorker(turn, worker)
             owners += Triple(runtime, turn, worker)
-            return service.captureTurn(access, runtime, turn, worker, id, child)
+            return service.captureTurn(access, runtime, turn, worker, id, child, stop)
         }
         suspend fun releaseAll() {
             owners.forEach { (runtime, turn, worker) -> worker.cancel(); runtime.releaseTurnWorker(turn, worker, false) }

@@ -53,9 +53,13 @@ import java.util.Date
 internal fun EnterpriseSpaceButton(modifier: Modifier = Modifier, vm: EnterpriseVM = koinViewModel()) {
     val state by vm.overview.collectAsStateWithLifecycle()
     val nav = LocalNavController.current
+    val access = state?.selection?.access
     TextButton(onClick = { nav.navigate(Screen.Enterprise) { launchSingleTop = true } }, modifier = modifier) {
         Text(
-            if (state?.selection?.access is RealmAccess.Enterprise) state?.enterpriseName ?: stringResource(R.string.enterprise_space)
+            if (access is RealmAccess.Enterprise) {
+                val name = state?.enterpriseName ?: stringResource(R.string.enterprise_space)
+                if (access.scope.authority.isLocal) stringResource(R.string.enterprise_local_badge, name) else name
+            }
             else stringResource(R.string.enterprise_personal),
             maxLines = 1, overflow = TextOverflow.Ellipsis,
         )

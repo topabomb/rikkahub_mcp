@@ -2,6 +2,7 @@ package net.weero.measix.pilot.service
 
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import me.rerere.ai.provider.CustomHeader
@@ -78,6 +79,9 @@ internal class ModelExecutionService(
     private val sessions: EnterpriseSessionController,
     private val recoveryGate: ApplicationRecoveryGate,
     private val providers: ProviderManager,
+    private val localSource: net.weero.measix.pilot.data.enterprise.LocalEnterpriseSource,
+    private val appScope: net.weero.measix.pilot.AppScope,
+    private val synchronization: EnterpriseSynchronizationService,
 ) {
     suspend fun read(access: RealmAccess): ExecutionConfigurationSnapshot {
         recoveryGate.awaitReady()
@@ -91,7 +95,9 @@ internal class ModelExecutionService(
         worker: Job,
         assistantId: ConfigurationReference,
         child: ChildModelAdmission? = null,
-    ): CapturedModelConfiguration = captureModel(access, runtime, worker, assistantId, ModelSelectionRole.CHAT, child, turnId) {
+        stopInteraction: suspend () -> Unit,
+    ): CapturedModelConfiguration = captureModel(access, runtime, worker, assistantId, ModelSelectionRole.CHAT, child, turnId,
+        onBarrier = barrier(access, { runtime.requestCancel(turnId, "managed_snapshot_required") }, stopInteraction)) {
         runtime.bindModelExecution(turnId, worker, assistantId, it)
     }
 
@@ -103,7 +109,11 @@ internal class ModelExecutionService(
         role: ModelSelectionRole,
     ): CapturedModelConfiguration {
         require(role in setOf(ModelSelectionRole.TITLE, ModelSelectionRole.SUGGESTION, ModelSelectionRole.COMPRESS))
-        return captureModel(access, runtime, worker, assistantId, role, null) {
+        return captureModel(access, runtime, worker, assistantId, role, null,
+            onBarrier = barrier(access, { worker.cancel(CancellationException("managed_snapshot_required")) }, {
+                worker.join()
+                runtime.releaseAuxiliaryModels(listOf(worker))
+            })) {
             runtime.bindAuxiliaryModelExecution(access, worker, assistantId, it)
         }
     }
@@ -112,8 +122,10 @@ internal class ModelExecutionService(
         selection: RealmSelection,
         worker: Job,
         modelId: ConfigurationReference,
+        stopRequest: suspend () -> Unit,
         bindOwner: (ModelExecutionLease) -> Unit,
-    ): ModelExecutionSnapshot = captureResources(selection.access, worker, bindOwner, selection) { snapshot, bindings, _, primary ->
+    ): ModelExecutionSnapshot = captureResources(selection.access, worker, bindOwner, selection,
+        barrier(selection.access, { worker.cancel(CancellationException("managed_snapshot_required")) }, stopRequest)) { snapshot, bindings, _, primary ->
         captureSelection(selection.access, snapshot, bindings, ModelSelectionRole.IMAGE,
             snapshot.configuration.choice(net.weero.measix.pilot.data.configuration.ResourceSelectionSlot.IMAGE_MODEL, modelId),
             null, primary, selection) { }
@@ -127,6 +139,7 @@ internal class ModelExecutionService(
         role: ModelSelectionRole,
         child: ChildModelAdmission?,
         turnId: Uuid? = null,
+        onBarrier: () -> Unit,
         bindOwner: (ModelExecutionLease) -> Unit,
     ): CapturedModelConfiguration {
         val selectionRevision = sessions.selectionRevision.value
@@ -134,7 +147,7 @@ internal class ModelExecutionService(
         if (role == ModelSelectionRole.CHAT) {
             check((runtime.durable.header.parentConversationId != null) == (child != null)) { "model_execution_lineage_mismatch" }
         }
-        return captureResources(access, worker, bindOwner) { snapshot, bindings, execution, primary ->
+        return captureResources(access, worker, bindOwner, onBarrier = onBarrier) { snapshot, bindings, execution, primary ->
             val configuration = snapshot.configuration
             requireAvailable(configuration, ConfigurationCategory.ASSISTANT, assistantId)
             val configured = configuration.assistants[assistantId] ?: error("conversation_assistant_unavailable")
@@ -176,6 +189,7 @@ internal class ModelExecutionService(
         worker: Job,
         bindOwner: (ModelExecutionLease) -> Unit,
         page: RealmSelection? = null,
+        onBarrier: () -> Unit,
         prepare: (ExecutionConfigurationSnapshot, EnterpriseBindingLease?, ModelExecutionLease,
             (suspend ((ModelRequestTarget) -> Unit) -> Unit) -> ModelRequests) -> T,
     ): T {
@@ -183,7 +197,7 @@ internal class ModelExecutionService(
         worker.ensureActive()
         var bindings: EnterpriseBindingLease? = null
         var admission: (suspend ((ModelRequestTarget) -> Unit) -> Unit)? = null
-        val execution = ModelExecutionLease(releaseOwner = { bindings?.release() }) { accept ->
+        val execution = ModelExecutionLease(releaseOwner = { bindings?.release() }, onManagedSnapshotRequired = onBarrier) { accept ->
             requireNotNull(admission) { "model_execution_not_prepared" }(accept)
         }
         bindOwner(execution)
@@ -199,6 +213,18 @@ internal class ModelExecutionService(
                 admission = it
                 execution
             }
+        }
+    }
+
+    /** The original owner stops and releases outside request/admission locks; no failed request is replayed. */
+    private fun barrier(access: RealmAccess, revoke: () -> Unit, stop: suspend () -> Unit): () -> Unit = {
+        revoke()
+        if (access is RealmAccess.Enterprise) appScope.launch {
+            try {
+                stop()
+                synchronization.synchronize(access)
+            } catch (cancelled: CancellationException) { throw cancelled }
+            catch (_: Exception) { android.util.Log.e("ModelExecutionService", "Model barrier cleanup or synchronization failed") }
         }
     }
 
@@ -228,7 +254,9 @@ internal class ModelExecutionService(
         val privateBinding = (modelId as? ConfigurationReference.Enterprise)?.let {
             requireNotNull(bindings) { "enterprise_binding_owner_missing" }.binding(it.id)
         }
-        val initialTarget = if (privateBinding != null) enterpriseTarget(privateBinding, model)
+        fun target(binding: EnterpriseRuntimeBinding) = enterpriseTarget(binding, model,
+            access as RealmAccess.Enterprise, requireNotNull(bindings).version)
+        val initialTarget = if (privateBinding != null) target(privateBinding)
             else ModelRequestTarget.Remote(selected.findProvider(snapshot.userSettings.providers)
                 ?: error("model_provider_unavailable"))
         check(BuiltInTools.Search !in model.tools ||
@@ -240,7 +268,7 @@ internal class ModelExecutionService(
             captureProviderCredentialOwner(snapshot.userSettings, selected, (initialTarget as ModelRequestTarget.Remote).provider)
         } else null
         val media = when (initialTarget) {
-            ModelRequestTarget.LocalExample -> if (Modality.IMAGE in model.inputModalities) {
+            is ModelRequestTarget.LocalExample -> if (Modality.IMAGE in model.inputModalities) {
                 RequestMediaCapabilities(RequestImageSupport.STRUCTURED, RequestImageSupport.STRUCTURED, RequestImageSupport.STRUCTURED)
             } else RequestMediaCapabilities.NONE
             is ModelRequestTarget.Remote -> if (role.type == ModelType.IMAGE) RequestMediaCapabilities.NONE
@@ -258,7 +286,7 @@ internal class ModelExecutionService(
                 if (role == ModelSelectionRole.CHAT) requireFixedBinding(latest.configuration, requireNotNull(assistant).id, modelId)
                 val target = if (privateBinding != null) {
                     // The original lease checks revocation; replacement bindings belong to new Turns.
-                    enterpriseTarget(requireNotNull(bindings).binding(modelId.id), model)
+                    target(requireNotNull(bindings).binding(modelId.id))
                 } else ModelRequestTarget.Remote(mergeProviderTransportCredentials(
                     requireNotNull(frozenShape),
                     resolveProviderTransportOwner(latest.userSettings, requireNotNull(credentialOwner)),
@@ -306,11 +334,12 @@ internal class ModelExecutionService(
         }
     }
 
-    private fun enterpriseTarget(binding: EnterpriseRuntimeBinding, model: Model): ModelRequestTarget {
+    private fun enterpriseTarget(binding: EnterpriseRuntimeBinding, model: Model,
+        access: RealmAccess.Enterprise, version: EnterpriseAppliedVersion): ModelRequestTarget {
         val endpoint = binding.endpoint.orEmpty()
         val credential = RequestCredentials.fixed(binding.credential)
         val provider = when (binding.protocol) {
-            EnterpriseRuntimeProtocol.EXAMPLE -> return ModelRequestTarget.LocalExample
+            EnterpriseRuntimeProtocol.EXAMPLE -> return ModelRequestTarget.LocalExample(access, version, binding.resourceId, localSource)
             EnterpriseRuntimeProtocol.OPENAI_CHAT, EnterpriseRuntimeProtocol.OPENAI_RESPONSES, EnterpriseRuntimeProtocol.OPENAI_IMAGES -> ProviderSetting.OpenAI(
                 id = model.id, name = model.displayName, models = listOf(model), baseUrl = endpoint, apiKey = "",
                 useResponseApi = binding.protocol == EnterpriseRuntimeProtocol.OPENAI_RESPONSES,

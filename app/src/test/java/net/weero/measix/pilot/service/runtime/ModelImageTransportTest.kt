@@ -26,7 +26,7 @@ class ModelImageTransportTest {
 
     @Test fun `local image generation and editing produce complete decodable PNGs without network`() = runBlocking {
         val providers = mockk<ProviderManager>()
-        val target = ModelRequestTarget.LocalExample
+        val target = net.weero.measix.pilot.test.exampleModelTarget
         val model = Model(modelId = "local-image", displayName = "Local image", type = ModelType.IMAGE)
         val generated = target.generateImage(providers, ImageGenerationParams(model, "fixture", numOfImages = 2, size = "256x256")).toList()
         assertEquals(2, generated.size)

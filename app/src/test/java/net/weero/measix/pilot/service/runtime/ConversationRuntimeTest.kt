@@ -72,7 +72,7 @@ class ConversationRuntimeTest {
         val lease = ModelExecutionLease(releaseOwner = {
             attempts++
             if (attempts == 1) throw java.io.IOException("release failed")
-        }) { accept -> accept(ModelRequestTarget.LocalExample) }
+        }) { accept -> accept(net.weero.measix.pilot.test.exampleModelTarget) }
         rt.installTurnWorker(turn, worker)
         rt.bindModelExecution(turn, worker, rt.durable.header.assistantId, lease)
         worker.complete()
@@ -114,7 +114,7 @@ class ConversationRuntimeTest {
             releases++
             entered.complete(Unit)
             finish.await()
-        }) { it(ModelRequestTarget.LocalExample) }
+        }) { it(net.weero.measix.pilot.test.exampleModelTarget) }
         rt.installTurnWorker(turn, worker)
         rt.bindModelExecution(turn, worker, rt.durable.header.assistantId, lease)
         worker.complete()
@@ -401,7 +401,7 @@ class ConversationRuntimeTest {
         )
 
         val owner = context.model.requests as ModelExecutionLease
-        val inspection = owner.borrow { it(ModelRequestTarget.LocalExample) }
+        val inspection = owner.borrow { it(net.weero.measix.pilot.test.exampleModelTarget) }
         rt.bindModelExecution(turnId, initialWorker, context.assistant.id, owner)
         var mcpReleases = 0
         rt.bindMcpExecution(turnId, initialWorker, context.assistant.id,
@@ -430,7 +430,7 @@ class ConversationRuntimeTest {
         assertSame(context, rt.requireTurnContext(turnId, continuationWorker))
         assertSame(projection, rt.requireTurnModelContextProjection(turnId, continuationWorker))
         rt.releaseTurnWorker(turnId, initialWorker, false)
-        assertTrue(inspection.execute { it === ModelRequestTarget.LocalExample })
+        assertTrue(inspection.execute { it === net.weero.measix.pilot.test.exampleModelTarget })
         assertEquals(0, mcpReleases)
         assertNull(rt.captureAndRequestStop("managed_snapshot_required", turnId = Uuid.random()))
         assertTrue(continuationWorker.isActive)

@@ -114,9 +114,15 @@ internal class BackupDataGraph(private val context: Context) {
         }
         files.forEach { (path, source) -> copyPayload(source, inside(output, path)) }
         // These filenames are recovery receipts owned by GeneratedMediaStore, including committed row deletions.
-        File(context.filesDir, FileFolders.IMAGES).listFiles().orEmpty()
-            .filter { it.isFile && (it.name.endsWith(GeneratedMediaStore.DELETING_SUFFIX) || it.name.endsWith(GeneratedMediaStore.PENDING_SUFFIX)) }
+        val images = File(context.filesDir, FileFolders.IMAGES)
+        val receipts = if (!images.exists()) emptyArray() else {
+            check(images.isDirectory) { "Live media recovery directory is not a directory" }
+            checkNotNull(images.listFiles()) { "Cannot enumerate live media recovery receipts" }
+        }
+        receipts
+            .filter { it.name.endsWith(GeneratedMediaStore.DELETING_SUFFIX) || it.name.endsWith(GeneratedMediaStore.PENDING_SUFFIX) }
             .forEach { receipt ->
+                check(receipt.isFile) { "Live media recovery receipt is not a file" }
                 val relative = FileFolders.IMAGES + "/" + receipt.name
                 val canonical = inside(output, relative.removeSuffix(GeneratedMediaStore.DELETING_SUFFIX).removeSuffix(GeneratedMediaStore.PENDING_SUFFIX))
                 val fromArchive = inside(personal, relative.removeSuffix(GeneratedMediaStore.DELETING_SUFFIX).removeSuffix(GeneratedMediaStore.PENDING_SUFFIX))

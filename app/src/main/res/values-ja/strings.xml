@@ -1731,4 +1731,5 @@
   <string name="enterprise_clear_example">内蔵サンプルのデータを消去して退出</string>
   <string name="enterprise_clear_example_requires_session">データを消去する前に内蔵サンプルに接続してください。他のインポート済み企業は対象外です。</string>
   <string name="enterprise_clear_example_confirm">%1$s のチャット、記憶、管理ファイル、更新情報、スペース設定を削除して退出しますか？個人データ、ユーザー設定、他の企業、共有 Workspace は保持されます。元に戻せません。</string>
+  <string name="enterprise_local_badge">ローカル模擬 · %1$s</string>
 </resources>

@@ -24,6 +24,27 @@ internal fun appliedConfiguration(packet: EnterprisePackage): EnterpriseState.Av
 
 class ConfigurationResolverTest {
     @Test
+    fun `only unset personal search inherits the configured first service without rewriting stored selection`() {
+        val services = listOf(SearchServiceOptions.BingLocalOptions(), SearchServiceOptions.TavilyOptions(apiKey = "key"))
+        val document = UserSettingsDocument.empty().withPersonalSettings(Settings(searchServices = services))
+        val packet = exampleEnterprisePackage()
+        val personal = ConfigurationResolver.resolve(document, ConfigurationScope.Personal, appliedConfiguration(packet))
+        assertEquals(services.first().id, personal.selection(ResourceSelectionSlot.SEARCH).reference)
+        assertNull(personal.storedSelections.selectedSearchServiceId)
+        assertNull(ConfigurationResolver.resolve(document, packet.identity.scope, appliedConfiguration(packet))
+            .selection(ResourceSelectionSlot.SEARCH).reference)
+        val missing = ConfigurationReference.random()
+        val explicit = document.copy(preferences = document.preferences.withSelections(ConfigurationScope.Personal,
+            ResourceSelections(selectedSearchServiceId = missing)))
+        val unresolved = ConfigurationResolver.resolve(explicit, ConfigurationScope.Personal, appliedConfiguration(packet))
+        assertEquals(missing, unresolved.selection(ResourceSelectionSlot.SEARCH).reference)
+        assertFalse(unresolved.selection(ResourceSelectionSlot.SEARCH).isAvailable)
+        val empty = document.copy(configuration = document.configuration.copy(searchServices = emptyList()))
+        assertNull(ConfigurationResolver.resolve(empty, ConfigurationScope.Personal, appliedConfiguration(packet))
+            .selection(ResourceSelectionSlot.SEARCH).reference)
+    }
+
+    @Test
     fun `chat capabilities follow the model transport override instead of the containing provider`() {
         val model = Model(modelId = "overridden", providerOverwrite = ProviderSetting.Google())
         val parent = ProviderSetting.OpenAI(models = listOf(model))

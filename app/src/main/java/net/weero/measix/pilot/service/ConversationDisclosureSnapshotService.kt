@@ -15,7 +15,8 @@ import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
 import net.weero.measix.pilot.data.ai.subassistant.SubAssistantAccessPolicy
 import net.weero.measix.pilot.data.ai.tools.local.LocalToolOption
-import net.weero.measix.pilot.data.datastore.Settings
+import net.weero.measix.pilot.data.configuration.ConfigurationCategory
+import net.weero.measix.pilot.data.configuration.ResolvedConfiguration
 import net.weero.measix.pilot.data.model.Assistant
 import net.weero.measix.pilot.data.model.AssistantMemory
 import me.rerere.common.configuration.ConfigurationReference
@@ -96,11 +97,11 @@ object ConversationDisclosureSnapshotService {
     private val canonicalJson: Json = Json { prettyPrint = false }
 
     /**
-     * 一次捕获的全部输入。调用方负责给出**同一份**已复制的 effective Settings 与**一次**已排序
+     * 一次捕获的全部输入。调用方负责给出**同一份**已捕获的生效配置与**一次**已排序
      * 的 Memory 读取结果；renderer 内部不再解析 live state，因此一次捕获可安全重放。
      *
      * [assistant] 是本次 START 生效的 Assistant（Master 或 Child 的 Target），
-     * [allAssistants] 是有效 Settings 的完整助手列表，必须保持其中的用户顺序。
+     * [allAssistants] 是当前域准入的助手目录，保持配置目录的稳定顺序。
      */
     data class Candidate(
         val assistant: Assistant,
@@ -109,19 +110,22 @@ object ConversationDisclosureSnapshotService {
     )
 
     /**
-     * 一次 `START` 边界的捕获入口：从**一份已复制的 effective Settings** 与**一次已排序的
+     * 一次 `START` 边界的捕获入口：从**一份已捕获的生效配置** 与**一次已排序的
      * Memory 读取**渲染 canonical candidate。调用方通过 MemoryService 使用原会话的
      * realm/session 与助手 memory 模式完成授权读取，再将不可变结果交给本纯渲染入口。
      *
      * Master 与 Child 都只经由此入口捕获；调用方拿到结果后交给 `StartTurn` 命令，本服务
      * 不接触 durable 写协议。
      */
-    fun captureCandidate(
-        settings: Settings,
+    internal fun captureCandidate(
+        configuration: ResolvedConfiguration,
         assistant: Assistant,
         memories: List<AssistantMemory>,
     ): String {
-        return render(Candidate(assistant = assistant, allAssistants = settings.assistants, memories = memories))
+        val assistants = configuration.assistants.values.filter {
+            configuration.access(ConfigurationCategory.ASSISTANT, it.id).canExecute
+        }
+        return render(Candidate(assistant = assistant, allAssistants = assistants, memories = memories))
     }
 
     /**

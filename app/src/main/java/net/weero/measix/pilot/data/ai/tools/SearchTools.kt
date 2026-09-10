@@ -1,4 +1,4 @@
-﻿package net.weero.measix.pilot.data.ai.tools
+package net.weero.measix.pilot.data.ai.tools
 
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
@@ -9,15 +9,18 @@ import kotlinx.serialization.json.jsonObject
 import me.rerere.ai.core.Tool
 import me.rerere.ai.ui.UIMessagePart
 import net.weero.measix.pilot.data.datastore.Settings
+import net.weero.measix.pilot.data.configuration.ResolvedConfiguration
+import net.weero.measix.pilot.data.configuration.ResourceSelectionSlot
 import net.weero.measix.pilot.utils.JsonInstantPretty
 import me.rerere.search.SearchService
-import me.rerere.search.SearchServiceOptions
 import kotlin.uuid.Uuid
 
-fun createSearchTools(settings: Settings): Set<Tool> {
-    val options = settings.searchServices.find { it.id == settings.selectedSearchServiceId }
-        ?: settings.searchServices.firstOrNull()
-        ?: SearchServiceOptions.DEFAULT
+internal fun createSearchTools(settings: Settings, configuration: ResolvedConfiguration): Set<Tool> {
+    val selected = configuration.selection(ResourceSelectionSlot.SEARCH)
+    check(selected.isAvailable) { "search_selection_unavailable" }
+    val options = requireNotNull(settings.searchServices.singleOrNull { it.id == selected.reference }) {
+        "search_definition_unavailable"
+    }
     val service = SearchService.getService(options)
 
     return buildSet {

@@ -66,7 +66,8 @@ class TurnToolSetFactory(
      * 构建指定 Assistant 的工具集（不含 Memory Tools，那些由 TurnRunner 内部添加）。
      *
      * @param assistant 目标助手
-     * @param settings START 装配时的有效设置快照；产物作为 FrozenToolDefinition 同 Turn 冻结
+     * @param settings START 捕获的共享用户定义；产物作为 FrozenToolDefinition 同 Turn 冻结
+     * @param configuration 同次捕获的本域资源目录与选择
      * @param capabilityModel 本次 run 的实际模型，或非运行时检查中显式解析的配置模型。
      * @param workspaceCwd 工作目录（可覆盖会话级别）
      * @param turnKind 运行分类；SUB_ASSISTANT 时过滤 Assistant Tools，ask_user 保留给 Coordinator 桥接
@@ -76,6 +77,7 @@ class TurnToolSetFactory(
         assistant: Assistant,
         conversationId: Uuid = Uuid.random(),
         settings: Settings,
+        configuration: net.weero.measix.pilot.data.configuration.ResolvedConfiguration,
         capabilityModel: Model?,
         inspectionModel: net.weero.measix.pilot.service.ModelExecutionSnapshot? = null,
         imageModel: net.weero.measix.pilot.service.ModelExecutionSnapshot? = null,
@@ -91,7 +93,7 @@ class TurnToolSetFactory(
             addAll(createToolOutputLookupTools(toolOutputStore, conversationId))
 
             if (shouldUseExternalWebSearch(assistant, capabilityModel)) {
-                addAll(createSearchTools(settings))
+                addAll(createSearchTools(settings, configuration))
             }
 
             inspectionModel?.let { add(createAttachmentInspectionTool(it, providerManager)) }

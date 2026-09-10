@@ -1731,4 +1731,5 @@
   <string name="enterprise_clear_example">내장 예제 데이터 삭제 후 로그아웃</string>
   <string name="enterprise_clear_example_requires_session">데이터를 삭제하려면 내장 예제 기업에 먼저 접속하세요. 가져온 다른 기업은 여기서 삭제할 수 없습니다.</string>
   <string name="enterprise_clear_example_confirm">%1$s의 채팅, 기억, 관리 파일, 소식, 공간 환경설정을 삭제하고 로그아웃할까요? 개인 데이터, 사용자 구성, 다른 기업, 공유 Workspace는 유지됩니다. 되돌릴 수 없습니다.</string>
+  <string name="enterprise_local_badge">로컬 모의 · %1$s</string>
 </resources>

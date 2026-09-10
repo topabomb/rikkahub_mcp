@@ -35,6 +35,7 @@ class AppEventBusTest {
             assertTrue(bus.tryEmit(AppEvent.OpenUsageAccessSettings))
         }
         val terminal = AppEvent.ChatGenerationEnded(
+            access = net.weero.measix.pilot.data.enterprise.RealmAccess.Personal,
             conversationId = Uuid.random(),
             senderName = "assistant",
             contentPreview = null,

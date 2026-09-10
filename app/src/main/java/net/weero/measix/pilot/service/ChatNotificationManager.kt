@@ -21,6 +21,8 @@ import net.weero.measix.pilot.RouteActivity
 import net.weero.measix.pilot.data.datastore.SettingsStore
 import net.weero.measix.pilot.data.event.AppEvent
 import net.weero.measix.pilot.data.event.AppEventBus
+import net.weero.measix.pilot.data.enterprise.EnterpriseSessionController
+import net.weero.measix.pilot.data.enterprise.EnterpriseConfigurationException
 import net.weero.measix.pilot.utils.cancelNotification
 import net.weero.measix.pilot.utils.sendNotification
 import kotlin.uuid.Uuid
@@ -38,11 +40,12 @@ private data class LiveUpdateNotificationState(
  * 订阅 [AppEventBus] 上的聊天生成事件，负责后台生成相关的系统通知
  * （Live Update 进度通知和生成完成通知）。
  */
-class ChatNotificationManager(
+internal class ChatNotificationManager(
     private val context: Application,
     appScope: AppScope,
     eventBus: AppEventBus,
     private val settingsStore: SettingsStore,
+    private val sessions: EnterpriseSessionController,
 ) {
     private val notificationStateLock = Any()
     private var isForeground = false
@@ -69,13 +72,33 @@ class ChatNotificationManager(
         }
         appScope.launch(Dispatchers.Default) {
             eventBus.events.collect { event ->
+                handleEvent(event)
+            }
+        }
+    }
+
+    /** Authorize the original Session at publication; ending or rejecting an event still removes progress. */
+    internal suspend fun handleEvent(event: AppEvent) {
+        val (access, conversationId) = when (event) {
+            is AppEvent.ChatGenerationUpdate -> event.access to event.conversationId
+            is AppEvent.ChatGenerationAwaitingUser -> event.access to event.conversationId
+            is AppEvent.ChatGenerationEnded -> event.access to event.conversationId
+            else -> return
+        }
+        if (event is AppEvent.ChatGenerationEnded) synchronized(notificationStateLock) {
+            cancelLiveUpdateNotification(conversationId)
+        }
+        try {
+            sessions.withRealmAccess(access) {
                 when (event) {
                     is AppEvent.ChatGenerationUpdate -> handleGenerationUpdate(event)
                     is AppEvent.ChatGenerationAwaitingUser -> handleAwaitingUser(event)
                     is AppEvent.ChatGenerationEnded -> handleGenerationEnded(event)
-                    else -> {}
                 }
             }
+        } catch (error: EnterpriseConfigurationException) {
+            if (error.reason != "enterprise_data_access_unavailable") throw error
+            synchronized(notificationStateLock) { cancelLiveUpdateNotification(conversationId) }
         }
     }
 
@@ -111,8 +134,6 @@ class ChatNotificationManager(
 
     private fun handleGenerationEnded(event: AppEvent.ChatGenerationEnded) {
         synchronized(notificationStateLock) {
-            cancelLiveUpdateNotification(event.conversationId)
-
             if (!event.notifyCompletion) return
             val contentPreview = event.contentPreview ?: return
             if (isForeground) return

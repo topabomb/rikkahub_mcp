@@ -19,7 +19,7 @@
 
 平台来源为 `D:/RustProject/measix/measix-architecture`。路线图/术语/生命周期、Runtime Foundation、S0 合同、Control Protocol/测试形成权威链。实际接入固定已提交 architecture/core commit、OpenAPI/DTO/fixture hash、profile 与 Freeze evidence，不使用 floating latest 或未提交草案宣称兼容。
 
-当前架构修订提出 v4（Experience+五项准入）、v5（再加 Gateway）。旧 v1/v2/v3 的 allowLocal=true 不等于新用户原配置复用授权。正式接入必须明确 supported schemas、旧 Release/客户端升级、五项缺失值、canonical bytes/hash；本地资料 formatVersion 不冒充平台版本。
+接入时以 architecture/core 最新明确的 Snapshot、五项准入和 Gateway 契约为基线，固定实际版本、canonical bytes/hash 与双方能力。企业入口及上游服务均未发布，不实现旧企业原型兼容或旧 Release 迁移；已发布个人数据的迁移继续保留。本地接入资料 formatVersion、Snapshot 与 Portal Bridge 的版本互相独立。
 
 接入前固定：
 

@@ -72,7 +72,7 @@ val appModule = module {
     single { ApplicationRecoveryGate() }
     single { ConfigurationApplicationService(get(), get(), get(), get(), get(), get()) }
     single { ConfigurationQueryService(get(), get(), get()) }
-    single { net.weero.measix.pilot.service.ModelExecutionService(get(), get(), get(), get()) }
+    single { net.weero.measix.pilot.service.ModelExecutionService(get(), get(), get(), get(), get(), get(), get()) }
     single { net.weero.measix.pilot.service.MemoryService(get(), get(), get(), get(), get()) }
     single { ArtifactUseCase(get(), get(), get()) }
     single { FileManagementApplicationService(get(), get(), get(), get(), remoteMediaFetcher = get()) }
@@ -164,6 +164,7 @@ val appModule = module {
             appScope = get(),
             eventBus = get(),
             settingsStore = get(),
+            sessions = get(),
         )
     }
 

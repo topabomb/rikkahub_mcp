@@ -35,6 +35,7 @@ class ToolDefinitionCacheContractTest {
         compressModelId = ConfigurationReference.parse("00000000-0000-0000-0000-000000000404"),
         assistants = assistants,
         mcpServers = mcpServers,
+        selectedSearchServiceId = me.rerere.search.SearchServiceOptions.DEFAULT.id,
     )
 
     private fun mcpServer(name: String, url: String) = McpServerConfig.StreamableHTTPServer(
@@ -58,7 +59,7 @@ class ToolDefinitionCacheContractTest {
                 onDelete = { error("definition assembly must not execute") },
             ),
         )
-        addAll(createSearchTools(settings))
+        addAll(createSearchTools(settings, net.weero.measix.pilot.test.testResolvedConfiguration(settings)))
     }
 
     @Test

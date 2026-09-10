@@ -629,14 +629,16 @@ class ConversationTurnService internal constructor(
                 TurnEntry.START -> {
                     val realmAccess = launch.realmAccess
                     val captured = modelExecutions.captureTurn(realmAccess, runtime, turnId,
-                        requireNotNull(currentCoroutineContext()[Job]), snapshot.header.assistantId)
+                        requireNotNull(currentCoroutineContext()[Job]), snapshot.header.assistantId) {
+                        turnFinalizer.stopInteraction(runtime, turnId, "managed_snapshot_required")
+                    }
                     val settings = captured.userSettings
                     val assistant = captured.assistant
                     val model = captured.model.model
                     val mediaCapabilities = captured.mediaCapabilities
                     val memoryAccess = memoryService.captureExecution(realmAccess, assistant)
                     startDisclosureCandidate = ConversationDisclosureSnapshotService.captureCandidate(
-                        settings = settings,
+                        configuration = captured.configuration,
                         assistant = assistant,
                         memories = memoryAccess?.let { memoryService.read(it) }.orEmpty(),
                     )
@@ -687,6 +689,7 @@ class ConversationTurnService internal constructor(
                         assistant = assistant,
                         conversationId = conversationId,
                         settings = settings,
+                        configuration = captured.configuration,
                         capabilityModel = model,
                         inspectionModel = captured.inspectionModel,
                         imageModel = captured.imageModel,
@@ -859,6 +862,7 @@ class ConversationTurnService internal constructor(
                         }?.localCallId
                         appEventBus.tryEmit(
                             AppEvent.ChatGenerationUpdate(
+                                access = launch.realmAccess,
                                 conversationId = conversationId,
                                 lastMessage = lastMessage,
                                 senderName = senderName.orEmpty(),
@@ -893,6 +897,7 @@ class ConversationTurnService internal constructor(
                 )
             }
             applyTurnSideEffects(
+                access = launch.realmAccess,
                 conversationId = conversationId,
                 result = turnResult,
                 inFlightAssistantMessageId = inFlightAssistantMessageId,
@@ -931,6 +936,7 @@ class ConversationTurnService internal constructor(
                 e.addSuppressed(finalizationError)
             }
             applyTurnSideEffects(
+                access = launch.realmAccess,
                 conversationId = conversationId,
                 result = outcome,
                 inFlightAssistantMessageId = inFlightAssistantMessageId,
@@ -955,6 +961,7 @@ class ConversationTurnService internal constructor(
                 sideEffects.playTurnFailedSound()
             }
             applyTurnSideEffects(
+                access = launch.realmAccess,
                 conversationId = conversationId,
                 result = outcome,
                 inFlightAssistantMessageId = inFlightAssistantMessageId,
@@ -975,6 +982,7 @@ class ConversationTurnService internal constructor(
 
     /** 本会话终态副作用（通知与错误上报）；执行事实已由 FinalizeTurn 原子收口。 */
     private suspend fun applyTurnSideEffects(
+        access: RealmAccess,
         conversationId: Uuid,
         result: TurnRunResult,
         inFlightAssistantMessageId: Uuid? = null,
@@ -1013,6 +1021,7 @@ class ConversationTurnService internal constructor(
             if (finalMessage != null && pendingToolLocalCallId != null) {
                 appEventBus.emit(
                     AppEvent.ChatGenerationAwaitingUser(
+                        access = access,
                         conversationId = conversationId,
                         lastMessage = finalMessage,
                         senderName = senderName,
@@ -1022,6 +1031,7 @@ class ConversationTurnService internal constructor(
             } else {
                 appEventBus.emit(
                     AppEvent.ChatGenerationEnded(
+                        access = access,
                         conversationId = conversationId,
                         senderName = senderName,
                         contentPreview = finalMessage?.toText()?.take(50)?.trim(),

@@ -212,7 +212,7 @@ class SubAssistantTurnIntegrationTest {
             val runner = TurnRunner(mockk<Context>(relaxed = true), scriptedProviderManager(observedProvider), JsonInstant, resolver, ToolOutputStore(artifacts), artifacts)
             val tools = mockk<TurnToolSetFactory>(relaxed = true)
             coEvery { tools.prepareMcpCapabilities(any(), any(), any(), any(), any(), any()) } returns TurnMcpCapabilitySnapshot.EMPTY
-            coEvery { tools.buildTools(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any()) } returns listOf(buildAskUserTool())
+            coEvery { tools.buildTools(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any()) } returns listOf(buildAskUserTool())
             val pipeline = mockk<TurnPipelineFactory>()
             every { pipeline.input(any()) } returns emptyList()
             every { pipeline.output() } returns emptyList()

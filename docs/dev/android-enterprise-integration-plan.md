@@ -1,6 +1,6 @@
 # Android 企业域本期实施方案（0.0.20）
 
-> 状态：实施中，尚未完成整期开发与验收。本文是 `versionName=0.0.20` / `versionCode=20` 的需求、架构、UI、变更与验收权威。
+> 状态：本期开发与本地模拟验收完成（Android 17 模拟器）；实体手机与真实平台互操作未验收。本文是 `versionName=0.0.20` / `versionCode=20` 的需求、架构、UI、变更与验收权威。
 > 本期交付正式企业域功能与本地模拟企业服务，Debug 和 Release 均有完整入口，不依赖真实企业后台或 Debug 开关。
 > 后续真实接入见 [真实企业服务接入规划](android-enterprise-production-integration-roadmap.md)。`docs/references/` 只描述已实现事实。
 
@@ -216,7 +216,7 @@ UserConfiguration + UserPreferences + Applied Enterprise State
 
 正式退出由应用层统一编排：原生确认同时冻结企业 RealmAccess 与当前 RealmSelection，并在同一 Session 锁内复验。停留个人空间也能退出企业，不能仅凭个人 selection 推断目标 Session；旧确认不能退出新接入。授权到期/撤销按原企业 Session 收口，不要求用户仍选中企业或该授权仍有效。
 
-先持久发布 CLOSING 撤销准入，再释放 Session 锁，调用既有主/子运行、Runtime 内标题/建议任务与媒体 owner 按原企业域取消并等待终态，最后凭原退出 token 完成退出；不得以 binding lease 为空或 Job.join 返回代替运行终态提交。流程由应用作用域持有，页面销毁或重复点击不产生第二退出操作；失败保留 CLOSING 和可重试状态，重试不复验已经被退出动作改变的页面选择。重启恢复先保留 CLOSING，完成现有 Child/主 TurnRecovery 后、恢复 gate ready 前完成原退出 token；不能在恢复任务成功前假报退出完成，也不能让恢复等待自己的 ready gate。企业状态页直接投影 Session；待配置或停留个人空间时，同步目标仍是已接入的企业 Session。当前 EnterpriseExitService 已实现 Portal 文档、同步与会话取消、终态核验、到期观察和启动恢复；正式原生入口与 Portal logout 已接通；媒体 owner 接线继续实施，各批次验收分别记录。
+先持久发布 CLOSING 撤销准入，再释放 Session 锁，调用既有主/子运行、Runtime 内标题/建议任务与媒体 owner 按原企业域取消并等待终态，最后凭原退出 token 完成退出；不得以 binding lease 为空或 Job.join 返回代替运行终态提交。流程由应用作用域持有，页面销毁或重复点击不产生第二退出操作；失败保留 CLOSING 和可重试状态，重试不复验已经被退出动作改变的页面选择。重启恢复先保留 CLOSING，完成现有 Child/主 TurnRecovery 后、恢复 gate ready 前完成原退出 token；不能在恢复任务成功前假报退出完成，也不能让恢复等待自己的 ready gate。企业状态页直接投影 Session；待配置或停留个人空间时，同步目标仍是已接入的企业 Session。当前 EnterpriseExitService 已实现 Portal 文档、同步与会话取消、终态核验、到期观察和启动恢复；正式原生入口与 Portal logout 已接通；媒体 owner 已纳入原宿主关闭屏障，各批次验收分别记录。
 
 退出原因随 CLOSING 写入同一个 manifest，原退出 token 保留该原因；主动退出完成为 SIGNED_OUT，到期/撤销完成为 REAUTH_REQUIRED。自动触发由应用生命周期观察已接入 Session，不能依赖企业页面是否打开。Session 锁内只撤销准入，不等待运行任务或配置同步；同一原 Session 的同步由既有同步 owner 取消并等待。终态提交后的文件清理失败由存储维护收口，不把已退出状态报告成仍在 CLOSING，也不让重试误作用于新 Session。
 
@@ -274,6 +274,8 @@ LocalEnterpriseSource（身份/配置/动态/场景）
 
 本地聊天可请求“创建示例子助手”或“创建并调用示例子助手”（英文为 create example sub-assistant / create and call example sub-assistant）。先在本域使用设置的“本地工具”启用助手管理及所需的子助手调用；示例只生成标准工具调用，实际创建、授权、Child 执行和持久化不替换。工具或企业用户助手准入关闭时明确失败，不自动开权限；创建所得 ID 只从本次工具成功结果获取，旧聊天结果不触发新委派。
 
+“体验子助手”Starter 委派已有的企业资料助手：启用子助手调用后，Mock 从本次模型请求中最新的 Disclosure 目录按名称唯一选择 ID，再发出标准 assistant_call；没有目录、缺工具或名称歧义时明确不可用，不硬编码资源 ID，不回读全局 Settings，也不把目录名称或描述当作用户请求触发动作。
+
 场景管理覆盖五项逐一收紧/恢复、Gateway policy、模型新增/改名/删除、坏 schema/引用、版本变化、缺配置、网络/身份故障、Portal 过期和重启。配置调整通过新 generation 和正常应用协议发布，不能直接改 UI Boolean；连接状态和 Session 期限变化不推进配置 generation，动态仍使用独立 Feed revision。
 
 正式空间页提供“本地企业场景”，不依赖开发模式。未接入时可选择“已验证、待配置”体验：共用正常资料解析与一次性兑换，暂不应用配置，留在个人空间；随后“同步配置”恢复 READY，再主动切入企业。已有本地 Session 可模拟断连、明确恢复、缩短为 60 秒内到期或撤销凭据。断连不等于退出，普通同步不恢复连接；到期和撤销走既有统一退出 owner，停留个人空间或重启也不能续期。操作捕获原页面选择与 Session，旧操作不能影响重新接入的 Session；不另存故障配置或增加退出流程。
@@ -284,7 +286,7 @@ LocalEnterpriseSource（身份/配置/动态/场景）
 
 原生同步与 Portal refresh 共用命令：捕获原主体/Session，读取来源候选，完整校验，在原 Session 内原子应用后返回。同步不得创建新 Session、续期或切域；同版本成功检查也可更新成功时间，失败保留已应用配置和上次成功时间。来源发布与客户端应用分开可观察；私有导入先完整验证再发布候选，应用失败应显示待同步。并发请求合并同步工作，取消单个等待者不回滚已提交结果。此流程仍为本地模拟，不要求真实平台网络接入。
 
-交付完整无秘密模板 `docs/examples/enterprise.local.example.json`，根目录 `/enterprise.local.json` 加入 Git ignore。用户可修改私有文件提供真实端点/凭据；不打印秘密，不进源码/测试/提交。模板和示例不得只包含空占位资源。
+交付完整无秘密模板 `docs/examples/enterprise.local.example.json`，根目录 `/enterprise.local.json` 加入 Git ignore。用户可修改私有文件提供真实端点/凭据；不打印秘密，不进源码/测试/提交。模板和示例不得只包含空占位资源。实际入口、资源体验和私有文件导入步骤见 [本地企业使用说明](../examples/README.md)。
 
 本地文件使用独立 `formatVersion`，包含 source/deployment/user、完整五项 policy、资源/助手/seed/starter/gateway/动态，以及独立 `runtimeBindings`。endpoint/credential 是本地 source 私有实现，不属于平台 client-safe Managed Snapshot，不混进用户资源配置。
 
@@ -346,19 +348,76 @@ Android 媒体接线按下列所有权完成：`PortalMediaStore` 管理独占�
 
 ## 10. 完整变更清单与批次
 
-当前进度以此表和最终验收结果为准。下方早期批次记录是当时的实现与验证快照，其中“继续实施”的入口、聊天配置、主/子模型 lease、辅助任务生命周期、Portal 退出和媒体 owner 已在后续批次接通，不重复建设；`developerMode` 已退休。
+当前实现和验收以此表及 §11 为准；§12 仅保留各批次历史。Debug/Release 均为 20 / 0.0.20，正式入口、配置与资源消费者、数据/备份、Portal 媒体及本地场景已接通。`developerMode` 与旧企业原型已退休；真实平台接入属于下一阶段。
 
-| 收口工作包 | 当前事实与剩余工作 |
+| 工作包 | 最终结果 |
 | --- | --- |
-| 模型消费者（C5） | 主/子、标题/建议/摘要、附件识别和图片生成已接入原域模型捕获、逐请求准入与 binding；本地模型标准工具调用已通过组件、Debug 聊天与本批完整门禁 |
-| MCP / Gateway（C5、U2） | 企业固定选择、完整 Tool JSON、主体目录与连接清理已实现；原 Session/binding/interaction、Gateway 标准发现与调用、本地 source engine、428 收口及只读工具清单已通过本批完整门禁；管理 UI、归档业务工具卡和 Mock 模型标准工具续轮已通过定向、Debug 设备及本批完整门禁 |
-| 语音（C5、U2） | SpeechApplicationService 已统一拥有原域捕获、binding、播放与录音清理；企业 TTS/HTTP-ASR、本地 MP3/WAV adapter、目录选择与聊天入口已接通；428 终止原交互并同步，不重放。应用 JVM、实际 AudioRecord 和完整构建/设备回归已通过；正式 Debug App 的朗读、录音、关页清理和个人/企业目录已验证，错误提示已接通；Release 及整期场景验收仍待完成 |
-| 文件与 Workspace（C6） | 会话/记忆、目录、图片、背景、参考输入及附件/富文本出口已分域验证；Workspace 上传/终端/SAF 已完成本批实现与完整门禁；共享配置预设附件的目标域复制及 Draft/Child 交接已完成，完整门禁通过；整体 UI/版本验收仍待最终收口 |
-| 个人备份（C7） | 个人闭合图导出与冷恢复合并已实现；配置/企业数据、共享资产和恢复 receipt 按原 owner 保全，系统备份与设备迁移显式排除混合域存储；当前验证记录见本文个人备份批次 |
-| 完整示例与 UI（M1、U2） | 正式企业入口、Portal、原生整包导入、已安装来源、辅助生成及 Starter 预填已接通；五项策略、Gateway、模型管理与助手本域使用编辑已实现。仍需模拟故障/恢复场景及整期 Debug/Release UI 验收 |
-| 助手管理（C5、U2） | assistant_manage 已按原 Session 与最新策略提交共享用户定义及本域授权，删除复用个人 tombstone；不保留个人配置的第二准入。完整本域使用编辑、配置资产和额外子助手引用已接通并通过本批门禁及 Debug 交互检查；工具聊天与整期 Release 设备验收仍待完成 |
-| 退休与发行（R1、V1） | 旧 managed overlay 存储/验签/合并/过期与 UI 标签链已删除；共享用户配置读取与按域解析分开。剩余消费者与场景完成后执行 E01–E12、Release/硬件验收和版本 20 交付；真实后台属于下一阶段 |
+| 模型消费者（C5） | 主/子、标题/建议/摘要、附件识别、图片生成共用原域捕获与逐请求准入；本地来源也核验 generation，失效先由原 owner 停止并释放，再同步，不重放 |
+| MCP / Gateway（C5、U2） | 固定企业 MCP、用户 MCP 与 Gateway 复用正常目录、连接、标准工具调用及结果链；按原 Session 收口，公开定义不泄漏私有 binding |
+| 语音（C5、U2） | SpeechApplicationService 统一拥有选择、播放与录音生命周期；真实 Android AudioRecord/AudioTrack、企业示例与用户目录已验证；模拟 ASR 明确标识结果 |
+| 文件 / Workspace / 备份（C6、C7） | 域数据经原 owner 授权，共享配置资产按目标域复制，Workspace 显式共享；个人恢复合并保全企业图，枚举/路径/恢复回执异常失败保留可重试状态 |
+| 正式入口与完整示例（M1、U1–U3） | 一键/相机扫码/粘贴、完整文件导入、状态场景、策略/模型/Feed 编辑、同步/切换/退出/清除，以及 Portal 拍照/录音均有正式入口 |
+| 助手与搜索（C5、U2） | 本域使用编辑、用户助手创建与主从授权已实现；主/子 START 从同次 ResolvedConfiguration 捕获授权目录；搜索工具精确使用本域选择的共享用户定义和凭据，无消费者默认回退 |
+| 审查与交付（R1、V1） | 两位独立审查的问题已修正并复核；本轮无持久化 schema 变动、无旧企业兼容分支，保留已发布个人迁移；最终完整门禁和 Release 实际操作证据见 §11 |
 
+| 编号 | 变更 owner / 文件范围 | 完成要求 |
+| --- | --- | --- |
+| D0 | 本文、后续 roadmap、README/引用、退休 persistent-records 旧计划 | 评审后先独立提交文档 |
+| C1 | SettingsStore/Normalization/WriteRules、ConfigurationResolver、三类模型/scope/typed refs | 五项规则、全部字段迁移、唯一新读写链 |
+| C2 | DataStore/SharedPreferences/旧备份迁移、AppDatabase/Entity/DAO/Repository/schema/索引 | 原个人 ID/秘密/值/图保全，fresh/upgrade 同构、中断恢复 |
+| C3 | 企业 source/session/applied/private binding/application/query、DI | 无后台接入/切换/退出/更新/重启可用 |
+| C4 | Conversation 命令/查询/runtime、Draft/标题/搜索/统计 | 所有数据入口 scoped、在途与草稿隔离 |
+| C5 | TurnContextFactory/TurnToolSetFactory、Provider/Speech、MCP、SubAssistant | 企业/用户资源消费者完整，模拟及真实 binding 正确 |
+| C6 | Memory、Artifact/GenMedia、文件服务、Workspace/Rootfs、通知/SAF | 本域数据授权，共享配置资产/工作空间明确，上传无泄漏 |
+| C7 | BackupArchiveService/PendingBackupRestore/Recovery、系统 backup rules | 个人恢复保全企业图，失败可恢复，无整库覆盖 |
+| U1 | RouteActivity/Screen、Chat 空间入口、Settings 企业页面/VM | 两种构建正式入口、一键/扫码/粘贴/切域/退出 |
+| U2 | 全部 Settings/Assistant/Extensions/Speech/MCP/Model/Prompt/Backup 页面和 pickers | §6 每行有实际行为，UI 与命令/执行一致 |
+| U3 | Portal 宿主/固定资源包/动态、相机/录音/扫码/受限媒体句柄 | Android 系统设备上的权限、取消、结果与来源隔离 |
+| M1 | 完整示例、确定性 adapters、场景管理、私有模板/导入/.gitignore | 零凭据完整体验，私有文件可替换真实服务，无秘密进 Git |
+| R1 | 删除旧原型/无效 developerMode/全局消费者，更新 references/静态约束 | 无双路径/假 UUID/无消费者接口，文档忠实代码 |
+| V1 | build.gradle.kts、changelog、报告、APK/说明 | 20/0.0.20，完整门禁与设备体验，最终提交 |
+
+顺序：D0 → C1/C2 → C3/U1/M1 最小完整接入 → C4/C5/C6/C7 与 U2 → U3/完整 M1 → R1/V1。中间开发态允许暂时不完整，最终不留无功能按钮/未迁移消费者或本期“后续再补”。
+
+## 11. 验收证据
+
+以下为本期本地交付验收。设备均为 Pixel_10_Pro_Fold / Android 17 x86_64 模拟器；真实 Android 系统、WebView、相机与录音链路已执行，不将其表述为实体手机、真实企业服务或真实模型质量验收。证据根目录为 `build/reports/enterprise/`。入口、Portal、原生导入与媒体在前一份 0.0.20 Release 验证；随后仅修正 Disclosure/搜索，两者已在最终 SHA 的 APK 复验。最终 JVM/设备门禁覆盖最终代码，不宣称所有人工交互均在最后一份 APK 重跑。
+
+| 编号 | 验收内容与实际证据 |
+| --- | --- |
+| E01 升级 | UserSettingsMigrationAndroidTest、Room migrations 与 BackupRestoreMigrationIntegrationTest 验证旧个人配置/数据、schema 和恢复；原 ID/凭据/引用保全，不兼容未发行企业原型 |
+| E02 正式入口 | Debug/Release 正式入口和一键已验证；0.0.20 Release 实际相机解码、有效粘贴 READY、无效输入拒绝见 `final20-qr-result.xml`、`final20-paste-ready.xml`、`final20-invalid-rejected.xml` |
+| E03 五项策略 | ConfigurationResolver/ScopedConfiguration、资源 owner 失败路径及正式策略/使用编辑验证 true/false/恢复、失效引用与个人不变；清单外不默认封禁，见 `local-configuration-verification.json`、`assistant-usage-verification.json` |
+| E04 MCP/助手 | Direct/Gateway 标准链和固定绑定见 `mcp-ui-verification.json`、`local-mock-verification.json`；最终 Release 企业子助手经授权目录实际委派、调用企业工具、完成回传，见 `final20-fixedchild-result.xml` |
+| E05 配置变化 | 候选完整校验、generation/revision CAS、原 Session 应用、来源 N+1 屏障与无重放覆盖于最终 JVM；正式模型管理与文件更新见 `local-configuration-verification.json`、`final20-import-result.xml` |
+| E06 执行 | 主/子、辅助生成、图片、Speech、Skill/Workspace 工具及原域消费者由最终 JVM/设备门禁验证；正式聊天、语音和子助手另有 UI 验证。最终 Release 搜索通过真实 SearXNG HTTP 工具到本机测试服务，路径/测试凭据匹配并正常续轮，见 `final20-search-result-loopback.xml`、`final20-search-requests.jsonl`；未逐一人工重跑所有 Skill/Workspace 组合 |
+| E07 状态 | 断连/恢复、待配置、切域、退出、到期/撤销、重启与清除在 Debug/Release 场景验证；并发、原文档/原 Session、迟到结果、取消与恢复由最终门禁覆盖，见 `local-mock-verification.json`、`release-clear-completed.xml` |
+| E08 数据 | scoped 会话/记忆/搜索/统计/文件/deep link、附件与 Workspace 上传/PTY/SAF 由原 owner 测试和设备门禁验证；共享 Workspace 沿用 PRoot 边界，不宣称内核沙箱 |
+| E09 备份 | PersonalBackupGraphAndroidTest、旧包迁移、冲突与中断失败路径均通过；最终含非文件恢复回执拒绝和重试，个人恢复不覆盖企业图；OEM 系统迁移运行时未验收 |
+| E10 Portal | 当前 Bridge v3 / localReadVersion=2 与上游包逐字节匹配；实际 WebView 原文档/frame、权限拒绝/允许/取消、媒体回收见 Portal 设备测试与 `portal-capture-verification.json`。Release 页面照片、录音、关闭见 `final20-photo-result.png`、`final20-record-result.png`、`final20-portal-closed.xml` |
+| E11 私有资料 | 无秘密完整模板及正式系统文件导入已验证，失败不半提交；Release 同主体来源/Applied 更新至 generation 4 见 `final20-import-result.xml`。用户尚未提供的私有端点/凭据未做联合验证 |
+| E12 发行 | 最终 JVM、Debug/Release 构建、lint 和设备门禁通过；Release R8 包已安装，版本 20/0.0.20，真实子助手与搜索链验证；APK 摘要、分层报告与审查结果见 `final-v20-delivery.json` |
+
+最终 `test assembleDebug lintDebug assembleRelease` 串行门禁在 10 分 51 秒内通过：App 2,180 项 JVM、全部模块合计 2,677 项，0 失败，Workspace 保留 11 项 Windows 条件跳过。lint 无错误。最终全模块 `connectedDebugAndroidTest` 在 9 分 38 秒内通过：App 207 项、Speech 14 项、Workspace 12 项（1 项硬链接能力条件跳过），无失败；结果记录于 `final-v20-device-results.json`；与旧批次报告分开归档，不用旧构建通过替代最终结果。
+
+两位独立审查分别核对最新协议/实际执行与数据/职责边界。修正原 Session 通知发布、来源 generation 屏障及原 owner 收口、备份恢复回执失败路径、身份长度和模拟标识；实际 Release 验收另发现并闭合子助手 Disclosure 目录和搜索域选择两处消费者问题。本轮修正没有新增持久化结构、平行 owner、无意义旁路或企业原型兼容。审查与测试是分别记录的证据，见 `final-review.json`。
+
+纯规则测试锁语义；组件测试覆盖失败/竞态/所有权；Room/文件/迁移、Compose、权限、恢复需 Android 系统设备运行；本次使用模拟器，实体手机覆盖另行记录。静态测试只保护依赖与退休面，不用字符串冒充 UI/授权。Mock 证据不证明真实企业系统。
+
+定向验证后串行执行：
+
+```text
+gradlew.bat test assembleDebug lintDebug assembleRelease --no-parallel --max-workers=1
+gradlew.bat connectedDebugAndroidTest --no-parallel --max-workers=1
+```
+
+另需安装 Release 实际验证，Debug instrumentation 不代替发行版行为。新增常见文案同步 values、values-zh、values-ja、values-ko-rKR、values-ru。记录设备/报告/场景与外部凭据验证缺口，只按真实证据更新完成状态。
+
+本期方案与后续 roadmap 分开维护，阶段文档和实现已有独立提交。最终交付包含 0.0.20 APK/校验信息、[完整模板与使用说明](../examples/README.md) 及 E01–E12 分层证据。提交前检查 git diff --check、最终 diff/工作树、schema/序列化/备份兼容，不含秘密或无关变更。
+
+## 12. 历史实施与验证记录
+
+以下保留各批次当时的实现范围、测试结果与限制，其中“尚未完成”“继续实施”仅描述当时状态；当前进度以 §10 为准，最终验收以 §11 为准。早期契约或资源包已由后续批次替换，不作为当前协议依据。
 
 MCP 设置页已改用当前域目录与共享用户定义两个明确视图：企业卡片只读、用户定义可编辑并提示共享影响，Gateway 完整工具对按 REQUIRED/用户可控规则呈现；命令携带原选择版本。聊天工具选择按原 Session 读取，页面停订阅/切域清空旧目录，失败显示未就绪并可随配置变化恢复。工具卡从持久的安全元数据显示真实业务名称及追踪字段；不解析下游正文。本地模型已接入正常工具续轮，定向设备、正式 Debug 聊天及本批完整门禁通过，不代表整期或真实平台互操作完成。
 
@@ -506,25 +565,6 @@ Portal 原生操作批次已接通 logout 与 openExternal：每次文档创建�
 
 本批完整门禁 test、assembleDebug、lintDebug、assembleRelease 与相关 connectedDebugAndroidTest 串行通过。App 2,014 项 JVM 测试无失败，其他模块无失败，Workspace 保留 11 项 Windows 条件跳过；lint 无错误。Android 17 的 14 项设备回归通过，新增随包 Portal → Bridge → Compose 原生确认 → 实际 Session/store/Exit 的取消与确认退出验证。另在实际 Debug 包使用完整 Koin 服务走通网页原生退出、未登录状态和个人新聊天，并观察到过时确认超时且不退出。日志与分类证据见 build/reports/enterprise/portal-native-verification.json。硬件权限/采集/迟到写入、Release 设备体验、剩余资源与配置规则 UI、私有整包导入界面和 0.0.20 最终验收继续实施；当前版本号不变，未宣称真实平台互操作完成。
 
-| 编号 | 变更 owner / 文件范围 | 完成要求 |
-| --- | --- | --- |
-| D0 | 本文、后续 roadmap、README/引用、退休 persistent-records 旧计划 | 评审后先独立提交文档 |
-| C1 | SettingsStore/Normalization/WriteRules、ConfigurationResolver、三类模型/scope/typed refs | 五项规则、全部字段迁移、唯一新读写链 |
-| C2 | DataStore/SharedPreferences/旧备份迁移、AppDatabase/Entity/DAO/Repository/schema/索引 | 原个人 ID/秘密/值/图保全，fresh/upgrade 同构、中断恢复 |
-| C3 | 企业 source/session/applied/private binding/application/query、DI | 无后台接入/切换/退出/更新/重启可用 |
-| C4 | Conversation 命令/查询/runtime、Draft/标题/搜索/统计 | 所有数据入口 scoped、在途与草稿隔离 |
-| C5 | TurnContextFactory/TurnToolSetFactory、Provider/Speech、MCP、SubAssistant | 企业/用户资源消费者完整，模拟及真实 binding 正确 |
-| C6 | Memory、Artifact/GenMedia、文件服务、Workspace/Rootfs、通知/SAF | 本域数据授权，共享配置资产/工作空间明确，上传无泄漏 |
-| C7 | BackupArchiveService/PendingBackupRestore/Recovery、系统 backup rules | 个人恢复保全企业图，失败可恢复，无整库覆盖 |
-| U1 | RouteActivity/Screen、Chat 空间入口、Settings 企业页面/VM | 两种构建正式入口、一键/扫码/粘贴/切域/退出 |
-| U2 | 全部 Settings/Assistant/Extensions/Speech/MCP/Model/Prompt/Backup 页面和 pickers | §6 每行有实际行为，UI 与命令/执行一致 |
-| U3 | Portal 宿主/固定资源包/动态、相机/录音/扫码/受限媒体句柄 | 真机权限、取消、结果与来源隔离 |
-| M1 | 完整示例、确定性 adapters、场景管理、私有模板/导入/.gitignore | 零凭据完整体验，私有文件可替换真实服务，无秘密进 Git |
-| R1 | 删除旧原型/无效 developerMode/全局消费者，更新 references/静态约束 | 无双路径/假 UUID/无消费者接口，文档忠实代码 |
-| V1 | build.gradle.kts、changelog、报告、APK/说明 | 20/0.0.20，完整门禁与设备体验，最终提交 |
-
-顺序：D0 → C1/C2 → C3/U1/M1 最小完整接入 → C4/C5/C6/C7 与 U2 → U3/完整 M1 → R1/V1。中间开发态允许暂时不完整，最终不留无功能按钮/未迁移消费者或本期“后续再补”。
-
 C6 的文件创建与引用边界已接通：上传、粘贴文本、输出图片、MCP/Workspace 图片、归档和生成媒体显式保存原操作 scope；聊天 Draft 绑定原页面命令目标，会话提交和启动引用重建拒绝跨域文件。独立审查未发现该创建链的剩余实质问题。已发布 v19 按既有 Migration_11_12 保全个人数据，不新增未交付企业原型兼容路径。配置引用已扩展到共享用户定义、用户头像及全部主体保留的使用覆盖，包含预设消息、嵌套工具输出和结构化交付物。Settings writer → Artifact lifecycle → DataStore 回执 → pin 交接构成统一写顺序，协调器不另持锁或状态；GC/发布/补偿只读已提交完整文档。删除按规范化路径收齐原始引用，先持久移除并复验，再清理文件；失败保留 DELETING 与 payload。共享个人定义不能挂接企业资产。旧备份的悬挂配置引用仅在明确恢复入口回退默认，普通新增引用仍严格验证。文件列表与预览删除确认同时提示头像、背景和预设内容影响。文件目录、统计、候选与删除已按原 RealmSelection 接通；单项 owner 复验归属，切域清理页面确认和预览，分页复用既有会话目录生命周期。输入框不再订阅全局文件目录。查询失败明确呈现并可重试。图像页取消沿原请求等待执行收口，禁止迟到取消新域请求。预览/导出的完整读取授权、共享配置资产复制、Workspace 上传挂载、个人备份保全企业图，以及 ImgGen/MCP 等完整资源准入继续实施；C5/C6 尚未整体验收。
 
 文件目录与原请求取消批次的最终 `test assembleDebug lintDebug assembleRelease :app:connectedDebugAndroidTest` 串行门禁在 9 分 11 秒内通过：App 2,060 项 JVM 测试无失败/跳过，lint 0 错误、285 警告，Workspace 保留 11 项 Windows 条件跳过。Android 17 模拟器 16 项定向设备用例全部通过，保留此前真实 v19 升级、配置引用与删除恢复覆盖，并新增同库个人/当前企业用户/其他企业用户的列表、图库分页、统计、伪造跨域 ID 拒绝、范围清理及旧选择拒绝验证。实际 Pager 测试覆盖迟到消费与切域；图像页确定性测试覆盖连续取消不能绕过原请求收口。独立审查的生命周期问题已修复并复核。新 Debug 包冷启动、个人文件页、正式入口示例接入 READY 和企业文件页均已手工走通。证据见 `build/reports/enterprise/file-directory-verification.json`；本批不代替完整文件读取/导出授权、真实平台互操作、硬件扫码和 Release 实际运行验收。企业设置首页仍沿用个人配置就绪提示，须与剩余配置 UI 差异一并修正。
@@ -564,36 +604,6 @@ C6 的文件创建与引用边界已接通：上传、粘贴文本、输出图�
 背景设置已按原域接通：个人写共享助手定义，企业写完整主体的助手使用偏好；生成工具按原任务与图库 ID 读取，查看器确认绑定原选择。Settings typed mutation 与 Artifact 引用提交共用既有写 owner；失败精确回收副本，GC 保留其他域仍引用的图片。助手编辑页面传入同源的渲染基线与编辑结果，避免长存提示词回调撤销后来设置的背景；目标未就绪时不挂载编辑器。
 
 背景批次双人复审已关闭发现。最终串行 `test assembleDebug lintDebug assembleRelease` 与两项定向 Android 用例通过：App 2,074 项、AI 369 项 JVM 无失败；lint 0 错误、287 警告；Workspace JVM 保留 11 项 Windows 条件跳过。Android 17 实际 DataStore/Room 用例验证企业偏好、个人定义不混写、读取中切域、旧页面与退出拒绝；真实 Prompt 页面验证更新背景后的输入回调，并由 VM 测试验证合并保全。此次仅运行两项设备场景，不把此前整套设备基线当作本批重跑。证据见 `build/reports/enterprise/background-verification.json`。参考图片导入、其余 C6、MCP/Gateway、Speech、备份及最终版本 20 验收继续实施。
-
-## 11. 验收证据
-
-| 编号 | 必须证明 |
-| --- | --- |
-| E01 升级 | 真实旧 Settings/SharedPreferences/Room/文件保全 ID/值/秘密/引用，失败重启可恢复 |
-| E02 正式入口 | Debug/Release 可见入口，一键/扫码/粘贴成功与失败，无 Debug 依赖 |
-| E03 五项策略 | 每项 true/false/恢复、已选失效、个人不变、清单外可用、工具不能旁路 |
-| E04 MCP/助手 | 企业 MCP 强制启用、用户主子助手、固定绑定、工具结果与持久化 |
-| E05 配置变化 | 改名/参数/删除/新 ID/坏引用/缺字段/错 source，whole-state 原子，不静默换模型 |
-| E06 执行 | Chat 流/工具/语音/Search/Skill/Workspace/子助手/辅助生成，用户真实资源及企业示例路径 |
-| E07 状态 | 切域/退出/过期/断网/恢复/重启、在途取消与迟到响应、无自动重放 |
-| E08 数据 | 会话/记忆/文件/统计/搜索/deep link 隔离，Workspace 显式共享与上传挂载授权 |
-| E09 备份 | 旧包迁移、个人包排除企业、恢复保全企业、失败/主键/路径冲突处理 |
-| E10 Portal | 真机权限允许/拒绝/取消/导航/退出、原文档结果、句柄回收、无凭据泄漏 |
-| E11 私有资料 | 完整模板、坏包无半提交、更新真实 binding，缺真实秘密仍可运行示例 |
-| E12 发行 | Release R8 后入口/HTML/序列化/执行可用，版本/产物与 Git 范围正确 |
-
-纯规则测试锁语义；组件测试覆盖失败/竞态/所有权；Room/文件/迁移、Compose、权限、恢复需真实设备。静态测试只保护依赖与退休面，不用字符串冒充 UI/授权。Mock 证据不证明真实企业系统。
-
-定向验证后串行执行：
-
-```text
-gradlew.bat test assembleDebug lintDebug assembleRelease --no-parallel --max-workers=1
-gradlew.bat connectedDebugAndroidTest --no-parallel --max-workers=1
-```
-
-另需安装 Release 实际验证，Debug instrumentation 不代替发行版行为。新增常见文案同步 values、values-zh、values-ja、values-ko-rKR、values-ru。记录设备/报告/场景与外部凭据验证缺口，只按真实证据更新完成状态。
-
-最终交付两份文档独立提交、完整实现提交、0.0.20 APK/校验信息、私有文件模板和使用说明、E01–E12 证据。提交前检查 git diff --check、最终 diff/工作树、schema/序列化/备份兼容，不含秘密或无关变更。
 
 参考图片导入已归入现有文件应用服务与 ImgGenVM：原生选择前保存原域和页面任务，返回时复验；重建页面保留待返回目标，重置任务则拒绝旧结果。临时副本只由 VM 持有，实际请求借用的文件等待请求收口，其余未接收或移除的文件立即回收。没有新增持久化结构或资源 owner。独立复审发现的取消补偿、满额临时文件与选择器目标丢失均已修复。
 

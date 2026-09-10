@@ -71,6 +71,22 @@ internal class LocalEnterpriseSource(
         withContext(Dispatchers.IO) { configurations.read(installation) }
     }
 
+    /** Simulates the server's pre-forward check against the installed source, not the client's cached snapshot. */
+    suspend fun verifyModelRequest(access: RealmAccess.Enterprise, version: EnterpriseAppliedVersion, resourceId: String) {
+        sessions.withAppliedConfiguration(access) { current ->
+            if (current.manifest.phase != EnterpriseSessionPhase.READY) fail("enterprise_session_not_ready")
+            val packet = candidate(access.scope)?.packet ?: fail("enterprise_configuration_not_ready")
+            sessions.requirePublishedRealmAccess(access)
+            if (packet.configuration.generation != version.generation) {
+                throw ManagedSnapshotRequired(packet.configuration.generation, "req_${kotlin.uuid.Uuid.random()}")
+            }
+            if (packet.configuration.models.none { it.id == resourceId && it.enabled } ||
+                packet.runtimeBindings.none { it.resourceId == resourceId && it.protocol == EnterpriseRuntimeProtocol.EXAMPLE }) {
+                fail("enterprise_model_unavailable")
+            }
+        }
+    }
+
     suspend fun changeConfiguration(scope: ConfigurationScope.Enterprise, expectedRevision: String,
         transform: (EnterprisePackage) -> EnterprisePackage): LocalEnterpriseCandidate = mutex.withLock {
         val installation = ensureInstalled().find { it.identity.scope == scope } ?: fail("unknown_local_enterprise_source")

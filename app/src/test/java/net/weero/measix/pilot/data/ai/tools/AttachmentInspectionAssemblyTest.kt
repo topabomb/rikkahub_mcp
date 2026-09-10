@@ -51,6 +51,7 @@ class AttachmentInspectionAssemblyTest {
                     realmAccess = net.weero.measix.pilot.data.enterprise.RealmAccess.Personal,
                     assistant = Assistant(workspaceId = null),
                     settings = Settings(providers = emptyList()),
+                    configuration = net.weero.measix.pilot.test.testResolvedConfiguration(Settings(providers = emptyList())),
                     capabilityModel = currentModel,
                     inspectionModel = net.weero.measix.pilot.service.ModelExecutionSnapshot(
                         inspection,

@@ -993,7 +993,7 @@ class SubAssistantRunCoordinator internal constructor(
         val captured = modelExecutions.captureTurn(
             realmAccess, runtime, childTurnId, activeWorker, targetAssistantId,
             net.weero.measix.pilot.service.ChildModelAdmission(callerAssistantId, runSpec),
-        )
+        ) { turnFinalizer.stopInteraction(runtime, childTurnId, "managed_snapshot_required") }
         val settings = captured.userSettings
         val target = captured.assistant
         val model = captured.model.model
@@ -1006,7 +1006,7 @@ class SubAssistantRunCoordinator internal constructor(
         check(snapshot.header.scope == realmAccess.scope) { "sub_assistant_realm_mismatch" }
         val memoryAccess = memoryService.captureExecution(realmAccess, target)
         val disclosureCandidate = ConversationDisclosureSnapshotService.captureCandidate(
-            settings = settings,
+            configuration = captured.configuration,
             assistant = target,
             memories = memoryAccess?.let { memoryService.read(it) }.orEmpty(),
         )
@@ -1019,6 +1019,7 @@ class SubAssistantRunCoordinator internal constructor(
             assistant = target,
             conversationId = childConversationId,
             settings = settings,
+            configuration = captured.configuration,
             capabilityModel = model,
             inspectionModel = captured.inspectionModel,
                         imageModel = captured.imageModel,

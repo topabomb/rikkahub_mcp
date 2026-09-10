@@ -162,7 +162,8 @@ internal class ImageGenerationCoordinator(
                         queued.request.onPhase?.invoke(ImageGenerationPhase.QUEUED)
                         val captured = when (val source = queued.request.source) {
                             is ImageGenerationSource.Tool -> source.model
-                            is ImageGenerationSource.Page -> models.capturePageImage(source.selection, child, source.modelId) {
+                            is ImageGenerationSource.Page -> models.capturePageImage(source.selection, child, source.modelId,
+                                stopRequest = { cancelOwned(queued) }) {
                                 check(queued.lease == null) { "image_model_owner_already_bound" }
                                 queued.lease = it
                             }

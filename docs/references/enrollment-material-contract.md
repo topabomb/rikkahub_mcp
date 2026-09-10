@@ -28,4 +28,4 @@ Android 的代码内本地反例只证明 Android 当前行为，不算平台共
 
 PortalProtocolTest 统一核验 manifest 中全部消费输入的摘要与协议版本。EnrollmentMaterialParserTest 消费两类接入正例，测试严格字段、原始重复键、UTF-8/字符限制、UTC 与 origin。时间接受小写 t/z 与 +00:00；小数秒只能为 1–9 位，拒绝超精度、闰秒、-00:00、其他偏移和错误日期，不截断输入。输出统一大写 T/Z。LocalEnterpriseSourceTest 覆盖一键、粘贴、二维码库编码/解码、来源分流、并发/重开后的消费、到期权威、持久化失败、冲突不消费、配置待就绪与独立文件导入。
 
-二维码库 round-trip 不是 Android 相机扫码设备验收。正式扫码/粘贴 UI、页面错误呈现、真实 Discovery/重定向/Enrollment 与平台互操作尚未交付，验收须分别报告。
+二维码库 round-trip 不是 Android 相机扫码设备验收。正式空间页已提供扫码、粘贴和错误呈现，并将解码结果交给同一接入流程；其设备场景证据见实施方案。真实 Discovery/重定向/Enrollment 与平台互操作属于下一阶段，不能以本地入口或解析通过替代。

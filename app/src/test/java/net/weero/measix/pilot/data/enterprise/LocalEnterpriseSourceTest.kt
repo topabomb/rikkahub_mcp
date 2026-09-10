@@ -18,6 +18,9 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.flow.toList
+import net.weero.measix.pilot.service.runtime.generateText
+import net.weero.measix.pilot.service.runtime.streamText
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonObject
 import me.rerere.common.configuration.EnterpriseAuthority
@@ -35,6 +38,41 @@ import org.robolectric.annotation.Config
 class LocalEnterpriseSourceTest {
     @get:Rule val temporary = TemporaryFolder()
     private var now = Instant.parse("2029-01-01T00:00:00Z").toEpochMilli()
+
+    @Test fun `model transport rejects stale source generation before emitting and does not renew original access`() = runTest {
+        val h = harness()
+        val state = h.source.enrollExample()
+        val access = h.sessions.captureSelectedRealmAccess() as RealmAccess.Enterprise
+        val original = requireNotNull(state.manifest.applied)
+        val target = net.weero.measix.pilot.service.runtime.ModelRequestTarget.LocalExample(access, original, "mdl_chat", h.source)
+        target.verifyRequest()
+        val candidate = requireNotNull(h.source.candidate(access.scope))
+        h.source.changeConfiguration(access.scope, candidate.revision) {
+            it.copy(configuration = it.configuration.copy(policy = it.configuration.policy.copy(allowLocalProviders = false)))
+        }
+        assertEquals(original, (h.sessions.state.value as EnterpriseState.Available).manifest.applied)
+        val providers = io.mockk.mockk<me.rerere.ai.provider.ProviderManager>()
+        val messages = listOf(me.rerere.ai.core.ModelRequestMessage.user("hello"))
+        val params = me.rerere.ai.provider.TextGenerationParams(me.rerere.ai.provider.Model(modelId = "example"))
+        for (stream in listOf(false, true)) {
+            try {
+                if (stream) target.streamText(providers, messages, params).toList()
+                else target.generateText(providers, messages, params)
+                fail("stale request accepted")
+            } catch (barrier: ManagedSnapshotRequired) { assertEquals(original.generation + 1, barrier.targetGeneration) }
+        }
+        io.mockk.verify { providers wasNot io.mockk.Called }
+        h.sessions.synchronize(access, requireNotNull(h.source.candidate(access.scope)).packet)
+        try { target.verifyRequest(); fail("old capture revived by sync") }
+        catch (_: ManagedSnapshotRequired) { }
+        val current = requireNotNull((h.sessions.state.value as EnterpriseState.Available).manifest.applied)
+        val replacement = net.weero.measix.pilot.service.runtime.ModelRequestTarget.LocalExample(access, current, "mdl_chat", h.source)
+        replacement.verifyRequest()
+        h.sessions.finishExit(h.sessions.beginExit(requireNotNull(h.sessions.captureExitRequest())))
+        h.source.enrollExample()
+        try { replacement.verifyRequest(); fail("old Session revived") }
+        catch (_: EnterpriseConfigurationException) { }
+    }
 
     @Test
     fun `one click paste and actual QR decoding enter the same complete local enterprise`() = runTest {

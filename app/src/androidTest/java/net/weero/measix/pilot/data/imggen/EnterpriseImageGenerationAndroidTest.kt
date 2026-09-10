@@ -76,7 +76,14 @@ class EnterpriseImageGenerationAndroidTest {
             )
             val repository = GenMediaRepository(db.genMediaDao())
             val providers = ProviderManager(client, context)
-            val models = ModelExecutionService(settings, sessions, gate, providers)
+            val authorityRoot = File(root, "local-source")
+            val localSource = LocalEnterpriseSource(
+                { app.assets.open(LocalEnterpriseSource.EXAMPLE_ASSET) }, sessions,
+                LocalEnrollmentAuthority(authorityRoot),
+                { app.assets.open(LocalEnterpriseSource.IDENTITY_ASSET) }, LocalEnterpriseConfigurationStore(authorityRoot),
+            )
+            val models = ModelExecutionService(settings, sessions, gate, providers, localSource, scope,
+                net.weero.measix.pilot.service.EnterpriseSynchronizationService(sessions, localSource, scope))
             val mediaStore = GeneratedMediaStore(context.filesDir, repository, artifacts)
             val coordinator = ImageGenerationCoordinator(scope, mediaStore, models, providers, sessions)
             artifacts.reconcileStartup()

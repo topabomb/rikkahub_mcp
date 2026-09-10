@@ -17,6 +17,19 @@ internal suspend fun EnterpriseSessionController.enrollFixture(packet: Enterpris
     enrollLocal(packet.identity, redeem = { packet.identity }, configuration = { packet })
 
 class EnterprisePackageTest {
+    @Test fun `installed identity fits enrollment and Portal context including namespace prefix`() {
+        val base = exampleEnterprisePackage().identity
+        val valid = base.copy(authority = me.rerere.common.configuration.EnterpriseAuthority("local:" + "a".repeat(122), "d".repeat(128)),
+            userId = "用".repeat(128))
+        EnterprisePackageCodec.validateIdentity(valid)
+        for (identity in listOf(valid.copy(userId = "用".repeat(129)),
+            valid.copy(authority = valid.authority.copy(deploymentId = "d".repeat(129))),
+            valid.copy(authority = valid.authority.copy(sourceNamespace = "local:" + "a".repeat(123))))) {
+            try { EnterprisePackageCodec.validateIdentity(identity); fail("invalid identity accepted") }
+            catch (error: EnterpriseConfigurationException) { assertEquals("invalid_enterprise_identity_length", error.reason) }
+        }
+    }
+
     @Test fun `TTS requires its own explicit voice while HTTP ASR carries only optional language`() {
         val packet = exampleEnterprisePackage()
         val root = EnterprisePackageCodec.json.parseToJsonElement(EnterprisePackageCodec.encode(packet).decodeToString()).jsonObject

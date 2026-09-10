@@ -1,0 +1,39 @@
+# Android 本地企业使用说明
+
+从聊天顶部或设置中的“空间”进入，选择“体验示例企业”。Debug 和 Release 都提供此入口。示例在本机模拟企业服务，聊天、工具、图片、语音和 Portal 不需要真实企业后台。
+
+## 体验与退出
+
+- 企业工作助手使用企业模型和固定企业 MCP。可发送“查看企业信息”“查看企业公告”“查询企业指南”，观察标准工具调用及结果。
+- 开启对应能力后，可发送“演练搜索：Android 官方文档”“演练技能：你的技能名称”“演练工作空间”。企业搜索先在聊天搜索选择器中选定用户已配置的服务；分别调用本域选择的搜索服务、读取指定技能和在已绑定 Workspace 执行 `pwd`。搜索可能使用网络与用户凭据，工作空间保留正常审批。
+- 要体验固定企业子助手，在当前助手的“本域使用设置 → 本地能力”启用“子助手调用”，然后使用“体验子助手”开场白。要创建用户子助手，还需启用“助手管理”，发送“创建并调用示例子助手”；企业需允许用户助手。
+- “本地企业配置”可以逐项调整五个用户资源开关、Gateway 策略及模型。发布后同步客户端配置，观察当前域的可选资源和失效原因；个人配置仍保留。
+- “本地企业场景”提供断连/恢复、待配置接入、短期到期、凭据撤销、Feed 草稿/发布/撤回，以及清除内置示例数据。
+- “切换到个人空间”保留企业登录。“退出企业”保留该企业数据。“清除内置示例数据并退出”另有确认，会删除该主体数据及偏好，保留个人数据、其他企业、用户配置、共享 Workspace 和已安装来源。
+- “打开企业工作台”进入随包 Portal，可查看动态、同步配置、拍照和录音。关闭工作台只关闭网页；退出企业使用独立确认。媒体不自动上传。
+
+## 私有配置文件
+
+[enterprise.local.example.json](enterprise.local.example.json) 是完整无秘密模板。工作区根目录 `enterprise.local.json` 是供你编辑的副本，已加入 Git ignore；App 不会把该私有文件自动编译进 APK。
+
+1. 保留模板的完整结构，修改所需资源的 `runtimeBindings`，其余资源继续使用 `EXAMPLE`。
+2. 对应模型的 `configuration.models[].modelId` 改成服务实际模型名。资源稳定 `id` 用于引用，改模型名称或连接时不需要改它。
+3. 更新已经安装的同一主体时，将 `configuration.generation` 设为高于手机“本地企业配置”显示的来源代数；不可只比较客户端上次同步代数。
+4. 将文件复制到手机，从“空间 → 导入本地企业配置”使用系统文件选择器导入。完整配置文件不能作为扫码或粘贴接入资料使用。
+5. 导入结果区分来源已发布和客户端已应用。待同步时显式同步；更换来源、Deployment 或用户时先退出，再从“已安装的本地企业”接入。
+
+| 资源 | `protocol` | `endpoint` 含义 |
+| --- | --- | --- |
+| 聊天模型 | `OPENAI_CHAT` / `OPENAI_RESPONSES` | Provider API 基址，例如 `https://example.invalid/v1`；客户端追加对应请求路径 |
+| Google / Claude 模型 | `GOOGLE_GENERATE` / `CLAUDE_MESSAGES` | 对应 Provider 的 API 基址 |
+| 图片模型 | `OPENAI_IMAGES` | API 基址；追加 images/generations 或 images/edits |
+| TTS | `OPENAI_TTS` | 完整语音合成请求地址 |
+| ASR | `OPENAI_HTTP_ASR` | 完整音频转写请求地址 |
+| Direct MCP / Gateway | `MCP_STREAMABLE_HTTP` | 完整 Streamable HTTP 地址；Gateway 仍须符合标准工具对和 surface 声明 |
+| 保持模拟 | `EXAMPLE` | 不提供 endpoint、credential 或 headers |
+
+私有连接可填写 `credential` 和可选 `headers`。由 `credential` 提供认证时，不要再用 headers 重复覆盖同一认证头；传输内部头也不能覆盖。没有认证要求的服务可省略 credential。修改 TTS 还需设置其模型和 voice，ASR 可设置 language。导入校验拒绝未知字段、无效引用或不匹配的资源协议，错误页面不回显私有正文。
+
+完整文件 `formatVersion=2`、短接入资料 `formatVersion=1` 与 Portal Bridge 版本互相独立。本地文件的身份与私有 binding 属于模拟来源；它不是平台公开 Snapshot，也不代表真实平台认证或互操作已完成。
+
+`feedSeed` 只初始化该主体尚不存在的动态，不会覆盖已经发布、编辑或撤回的内容。修改已存在动态请使用正式 Feed 编辑器。

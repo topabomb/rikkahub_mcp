@@ -23,7 +23,14 @@ internal sealed interface ModelRequestTarget {
         val headers: List<CustomHeader> = emptyList(),
         val credentials: RequestCredentials = RequestCredentials.UserSettings,
     ) : ModelRequestTarget
-    data object LocalExample : ModelRequestTarget
+    class LocalExample(
+        val access: net.weero.measix.pilot.data.enterprise.RealmAccess.Enterprise,
+        val version: net.weero.measix.pilot.data.enterprise.EnterpriseAppliedVersion,
+        val resourceId: String,
+        private val source: net.weero.measix.pilot.data.enterprise.LocalEnterpriseSource,
+    ) : ModelRequestTarget {
+        suspend fun verifyRequest() = source.verifyModelRequest(access, version, resourceId)
+    }
 }
 
 /** A request view can execute against its original owner but cannot release shared resources. */
@@ -34,6 +41,7 @@ internal sealed interface ModelRequests {
 /** The task owner retains this lease across user pauses and awaits release outside admission locks. */
 internal class ModelExecutionLease(
     private val releaseOwner: suspend () -> Unit = {},
+    private val onManagedSnapshotRequired: () -> Unit = {},
     private val admit: suspend ((ModelRequestTarget) -> Unit) -> Unit,
 ) : ModelRequests {
     private val closed = AtomicBoolean(false)
@@ -65,7 +73,14 @@ internal class ModelExecutionLease(
             requestContext.ensureActive()
             check(!closed.get()) { "model_execution_lease_closed" }
             check(request == null) { "model_request_already_admitted" }
-            request = async(Dispatchers.IO, start = CoroutineStart.LAZY) { operation(target) }.also { it.start() }
+            request = async(Dispatchers.IO, start = CoroutineStart.LAZY) {
+                try { operation(target) }
+                catch (error: Exception) {
+                    if (net.weero.measix.pilot.data.enterprise.ManagedSnapshotRequired.find(error) != null &&
+                        closed.compareAndSet(false, true)) onManagedSnapshotRequired()
+                    throw error
+                }
+            }.also { it.start() }
         }
         requireNotNull(request) { "model_request_not_admitted" }.await()
     }

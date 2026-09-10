@@ -280,7 +280,16 @@ class AuxiliaryGenerationOwnershipTest {
         val started = CompletableDeferred<Unit>()
         val reply = CompletableDeferred<String>()
         var onCommit: (ConversationWrite) -> Unit = {}
-        val actualModels = ModelExecutionService(settings, sessions, gate, manager)
+        private val sourceRoot = temporary.newFolder()
+        private val source = net.weero.measix.pilot.data.enterprise.LocalEnterpriseSource(
+            { net.weero.measix.pilot.data.enterprise.EnterprisePackageCodec.encode(exampleEnterprisePackage()).inputStream() }, sessions,
+            net.weero.measix.pilot.data.enterprise.LocalEnrollmentAuthority(sourceRoot),
+            { net.weero.measix.pilot.data.enterprise.EnterprisePackageCodec.json.encodeToString(
+                net.weero.measix.pilot.data.enterprise.EnterpriseIdentity.serializer(), exampleEnterprisePackage().identity).byteInputStream() },
+            net.weero.measix.pilot.data.enterprise.LocalEnterpriseConfigurationStore(sourceRoot),
+        )
+        val actualModels = ModelExecutionService(settings, sessions, gate, manager, source, appScope,
+            EnterpriseSynchronizationService(sessions, source, appScope))
         val models = spyk(actualModels)
         val effects = GenerationSideEffects(context, appScope, models, manager, registry,
             coordinator, mockk(), JsonInstant, ChatErrorStore(), titles, sessions)
@@ -329,7 +338,7 @@ class AuxiliaryGenerationOwnershipTest {
         }
 
         suspend fun initialize() {
-            sessions.enrollFixture(exampleEnterprisePackage())
+            source.enrollExample()
             runtime = registry.registerSnapshot(initial)
             page = ConversationViewLease(runtime.id, sessions.captureSelectedRealmAccess(), sessions.selectionRevision.value) {}
         }

@@ -11,13 +11,33 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class ModelExecutionLeaseTest {
+    @Test fun `managed generation barrier permanently closes all borrowed requests before notifying the owner`() = runBlocking {
+        var barriers = 0
+        var releases = 0
+        val barrier = net.weero.measix.pilot.data.enterprise.ManagedSnapshotRequired(2, "req_test")
+        val owner = ModelExecutionLease(releaseOwner = { releases++ }, onManagedSnapshotRequired = { barriers++ }) {
+            it(net.weero.measix.pilot.test.exampleModelTarget)
+        }
+        val borrowed = owner.borrow { it(net.weero.measix.pilot.test.exampleModelTarget) }
+        try { borrowed.execute { throw barrier }; fail("barrier missing") }
+        catch (error: net.weero.measix.pilot.data.enterprise.ManagedSnapshotRequired) { assertSame(barrier, error) }
+        for (view in listOf(owner, borrowed)) {
+            try { view.execute { fail("barrier replayed") }; fail("closed lease admitted") }
+            catch (error: IllegalStateException) { assertEquals("model_execution_lease_closed", error.message) }
+        }
+        assertEquals(1, barriers)
+        assertEquals(0, releases)
+        owner.release()
+        owner.release()
+        assertEquals(1, releases)
+    }
     @Test fun `admitted request remains a child of the original worker and cancellation awaits cleanup`() = runBlocking {
         val entered = CompletableDeferred<Unit>()
         val cleaning = CompletableDeferred<Unit>()
         val finish = CompletableDeferred<Unit>()
-        val lease = ModelExecutionLease { it(ModelRequestTarget.LocalExample) }
+        val lease = ModelExecutionLease { it(net.weero.measix.pilot.test.exampleModelTarget) }
         val worker = launch {
-            lease.borrow { it(ModelRequestTarget.LocalExample) }.execute {
+            lease.borrow { it(net.weero.measix.pilot.test.exampleModelTarget) }.execute {
                 entered.complete(Unit)
                 try { awaitCancellation() }
                 finally { withContext(NonCancellable) { cleaning.complete(Unit); finish.await() } }
@@ -37,7 +57,7 @@ class ModelExecutionLeaseTest {
         val permit = CompletableDeferred<Unit>()
         var requests = 0
         val lease = ModelExecutionLease { accept ->
-            withContext(NonCancellable) { entered.complete(Unit); permit.await(); accept(ModelRequestTarget.LocalExample) }
+            withContext(NonCancellable) { entered.complete(Unit); permit.await(); accept(net.weero.measix.pilot.test.exampleModelTarget) }
         }
         val worker = launch { lease.execute { requests++ } }
         entered.await()
@@ -50,11 +70,11 @@ class ModelExecutionLeaseTest {
     @Test fun `borrowed roles share closure and retry one failed binding cleanup`() = runBlocking {
         var releases = 0
         val owner = ModelExecutionLease(releaseOwner = { if (++releases == 1) error("cleanup_failed") }) {
-            it(ModelRequestTarget.LocalExample)
+            it(net.weero.measix.pilot.test.exampleModelTarget)
         }
         var admitted = 0
-        val inspection = owner.borrow { admitted++; it(ModelRequestTarget.LocalExample) }
-        val image = owner.borrow { admitted++; it(ModelRequestTarget.LocalExample) }
+        val inspection = owner.borrow { admitted++; it(net.weero.measix.pilot.test.exampleModelTarget) }
+        val image = owner.borrow { admitted++; it(net.weero.measix.pilot.test.exampleModelTarget) }
         assertTrue(owner.owns(inspection))
         assertTrue(owner.owns(image))
         inspection.execute { Unit }

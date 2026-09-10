@@ -97,7 +97,7 @@ class LocalEnterpriseMcpServiceTest {
             try {
                 val first = prepare()
                 assertTrue(first.tools.any { it.name == "get_enterprise_profile" })
-                verifyModelToolLoop(h.access, first, manager)
+                verifyModelToolLoop(h.access, h.sessions.state.value, first, manager)
                 val discover = first.tools.single { it.name == "discover_tools" }
                 val discovery = invoke(discover, buildJsonObject { put("queries", buildJsonArray { add("公告") }) })
                 val structured = discovery.filterIsInstance<me.rerere.ai.ui.UIMessagePart.Text>().mapNotNull {
@@ -205,7 +205,7 @@ class LocalEnterpriseMcpServiceTest {
     }
 
     /** Real factory, model adapter, Step loop, SDK and local service; checkpoints are captured, not Room commits. */
-    private suspend fun verifyModelToolLoop(access: RealmAccess.Enterprise, capabilities: TurnMcpCapabilitySnapshot, manager: McpRuntimeCoordinator) {
+    private suspend fun verifyModelToolLoop(access: RealmAccess.Enterprise, state: EnterpriseState, capabilities: TurnMcpCapabilitySnapshot, manager: McpRuntimeCoordinator) {
         val artifacts = mockk<ArtifactStore>()
         coEvery { artifacts.retainForRequest(any(), any()) } answers {
             ArtifactReadLease(emptyMap(), { null }, ArtifactRetentionLease {})
@@ -221,11 +221,13 @@ class LocalEnterpriseMcpServiceTest {
         for (stream in listOf(false, true)) for (prompt in listOf("查看企业公告", "查询企业指南", "查看企业信息")) {
             val assistant = Assistant(enableMemory = false, streamOutput = stream, localTools = emptyList(), enableRecentChatsReference = false)
             val settings = Settings(providers = listOf(ProviderSetting.OpenAI(models = listOf(model))), assistants = listOf(assistant))
-            val tools = factory.buildTools(access, assistant, settings = settings, capabilityModel = model, mcpCapabilities = capabilities)
+            val tools = factory.buildTools(access, assistant, settings = settings,
+                configuration = net.weero.measix.pilot.test.testResolvedConfiguration(settings, access.scope, state),
+                capabilityModel = model, mcpCapabilities = capabilities)
             val capture = TurnRunCapture()
             val inputs = turnRunInputsFixture(Uuid.random(), settings, model, RequestMediaCapabilities.NONE,
                 listOf(UIMessage.user(prompt)), assistant, tools = tools, maxSteps = 4, capture = capture)
-            val lease = ModelExecutionLease { it(ModelRequestTarget.LocalExample) }
+            val lease = ModelExecutionLease { it(net.weero.measix.pilot.test.exampleModelTarget) }
             try {
                 runner.run(inputs.copy(turnContext = inputs.turnContext.copy(realmAccess = access,
                     model = inputs.turnContext.model.copy(requests = lease))))

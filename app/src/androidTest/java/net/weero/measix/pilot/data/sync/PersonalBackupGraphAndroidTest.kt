@@ -223,6 +223,52 @@ class PersonalBackupGraphAndroidTest {
     fun equalBytesCannotMergeIndependentMediaOwners() = assertCollision("images/shared.png", false)
 
     @Test
+    fun invalidLiveMediaPathsKeepPendingAndLiveDataUntilRetry() = runBlocking {
+        val id = conversation(personal, "archived")
+        val archive = archiveService.prepare(BackupSelection(true, true))
+        archiveService.stageRestore(archive, BackupSelection(true, true))
+        val pending = File(PendingBackupRestore.pendingDir(context), BackupArchiveService.DATABASE_ENTRY)
+        val staged = pending.readBytes()
+        room.openHelper.writableDatabase.execSQL("UPDATE ConversationEntity SET title='live' WHERE id=?", arrayOf(id))
+        val images = file("images")
+        assertFalse(images.exists())
+        images.writeText("unreadable directory sentinel")
+        room.close()
+        try {
+            PendingBackupRestore.applyBeforeDatabaseOpen(context, readSettings = settings::snapshotUserDocument)
+            fail("invalid media directory accepted")
+        } catch (error: IllegalStateException) {
+            assertEquals("Live media recovery directory is not a directory", error.message)
+        }
+        assertArrayEquals(staged, pending.readBytes())
+        assertEquals("unreadable directory sentinel", images.readText())
+        openOwners()
+        assertEquals("live", title(id))
+        room.close()
+        assertTrue(images.delete())
+        for (suffix in listOf(GeneratedMediaStore.DELETING_SUFFIX, GeneratedMediaStore.PENDING_SUFFIX)) {
+            val receipt = file("images/broken.png$suffix").apply { assertTrue(mkdir()) }
+            val original = File(receipt, "original").apply { writeText("unresolved owner data") }
+            try {
+                PendingBackupRestore.applyBeforeDatabaseOpen(context, readSettings = settings::snapshotUserDocument)
+                fail("invalid recovery receipt accepted")
+            } catch (error: IllegalStateException) {
+                assertEquals("Live media recovery receipt is not a file", error.message)
+            }
+            assertArrayEquals(staged, pending.readBytes())
+            assertEquals("unresolved owner data", original.readText())
+            openOwners()
+            assertEquals("live", title(id))
+            room.close()
+            assertTrue(original.delete())
+            assertTrue(receipt.delete())
+        }
+        PendingBackupRestore.applyBeforeDatabaseOpen(context, readSettings = settings::snapshotUserDocument)
+        openOwners()
+        assertEquals("archived", title(id))
+    }
+
+    @Test
     fun equalBytesCannotMergeMediaAndArtifactOwners() = assertCollision("images/shared.png", true)
 
     @Test
