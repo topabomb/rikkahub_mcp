@@ -519,7 +519,7 @@ private fun SubAssistantScopeItem(
             onCheckedChange = onCheckedChange,
         )
         UIAvatar(
-            name = sub.name,
+            name = sub.name.ifBlank { stringResource(R.string.assistant_page_default_assistant) },
             value = sub.avatar,
             imageResolver = imageResolver,
             modifier = Modifier.size(32.dp),
@@ -536,7 +536,7 @@ private fun SubAssistantScopeItem(
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
             ) {
                 Text(
-                    text = sub.name,
+                    text = sub.name.ifBlank { stringResource(R.string.assistant_page_default_assistant) },
                     style = MaterialTheme.typography.bodyMedium,
                     fontWeight = FontWeight.Medium,
                     maxLines = 1,

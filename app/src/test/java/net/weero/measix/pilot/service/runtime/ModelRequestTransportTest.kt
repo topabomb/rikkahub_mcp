@@ -29,6 +29,64 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class ModelRequestTransportTest {
+    @Test fun `assistant example emits create and delegate using only the successful current turn result`() = runBlocking {
+        val providers = mockk<ProviderManager>()
+        val params = TextGenerationParams(Model(modelId = "example"), tools = listOf(
+            FrozenToolDefinition("assistant_manage", "", null, ""), FrozenToolDefinition("assistant_call", "", null, "")))
+        val target = ModelRequestTarget.LocalExample
+        for (stream in listOf(false, true)) {
+            suspend fun reply(messages: List<ModelRequestMessage>) = if (stream)
+                target.streamText(providers, messages, params).toList().single().choices.single().delta!!
+            else target.generateText(providers, messages, params).choices.single().message!!
+            val user = ModelRequestMessage.user("创建并调用示例子助手")
+            val create = reply(listOf(user)).getTools().single()
+            assertEquals("assistant_manage", create.toolName)
+            assertEquals("CREATE", Json.parseToJsonElement(create.input).jsonObject["action"]!!.jsonPrimitive.content)
+            val id = Uuid.random().toString()
+            val result = create.copy(resultStatus = ToolResultStatus.COMPLETED,
+                output = listOf(UIMessagePart.Text(buildJsonObject { put("action", "create"); put("id", id) }.toString())))
+            val history = listOf(user, ModelRequestMessage(MessageRole.ASSISTANT, listOf(result)))
+            val delegated = reply(history).getTools().single()
+            assertEquals("assistant_call", delegated.toolName)
+            assertEquals(id, Json.parseToJsonElement(delegated.input).jsonObject["assistant_id"]!!.jsonPrimitive.content)
+            assertEquals("assistant_manage", reply(history + user).getTools().single().toolName)
+            val completed = delegated.copy(resultStatus = ToolResultStatus.COMPLETED,
+                output = listOf(UIMessagePart.Text("{\"status\":\"completed\",\"content\":\"child reply\"}")))
+            val final = target.generateText(providers, history + ModelRequestMessage(MessageRole.ASSISTANT, listOf(completed)), params)
+                .choices.single().message!!
+            assertTrue(final.getTools().isEmpty())
+            assertTrue(final.toText().contains("child reply"))
+        }
+        io.mockk.verify { providers wasNot io.mockk.Called }
+    }
+
+    @Test fun `assistant example never delegates failed malformed or missing creation and respects the available tool surface`() = runBlocking {
+        val providers = mockk<ProviderManager>()
+        val params = TextGenerationParams(Model(modelId = "example"), tools = listOf(
+            FrozenToolDefinition("assistant_manage", "", null, ""), FrozenToolDefinition("assistant_call", "", null, "")))
+        val user = ModelRequestMessage.user("create and call example sub-assistant")
+        val target = ModelRequestTarget.LocalExample
+        val create = target.generateText(providers, listOf(user), params).choices.single().message!!.getTools().single()
+        for (output in listOf("invalid", "{}", "{\"error\":\"operation_failed\"}", "{\"action\":\"create\",\"id\":null}")) {
+            val result = create.copy(resultStatus = ToolResultStatus.COMPLETED, output = listOf(UIMessagePart.Text(output)))
+            assertTrue(target.generateText(providers, listOf(user, ModelRequestMessage(MessageRole.ASSISTANT, listOf(result))), params)
+                .choices.single().message!!.getTools().isEmpty())
+        }
+        for (tools in listOf(params.tools.take(1), params.tools.takeLast(1))) {
+            assertTrue(target.generateText(providers, listOf(user), params.copy(tools = tools)).choices.single().message!!.getTools().isEmpty())
+        }
+        val successfulBody = listOf(UIMessagePart.Text(buildJsonObject { put("action", "create"); put("id", Uuid.random().toString()) }.toString()))
+        val failedCreate = create.copy(resultStatus = ToolResultStatus.FAILED, output = successfulBody)
+        assertTrue(target.generateText(providers, listOf(user, ModelRequestMessage(MessageRole.ASSISTANT, listOf(failedCreate))), params)
+            .choices.single().message!!.getTools().isEmpty())
+        val created = ModelRequestMessage(MessageRole.ASSISTANT, listOf(create.copy(resultStatus = ToolResultStatus.COMPLETED, output = successfulBody)))
+        val delegated = target.generateText(providers, listOf(user, created), params).choices.single().message!!.getTools().single()
+        val failedCall = delegated.copy(resultStatus = ToolResultStatus.FAILED, output = listOf(UIMessagePart.Text("delegation denied")))
+        assertTrue(target.generateText(providers, listOf(user, created, ModelRequestMessage(MessageRole.ASSISTANT, listOf(failedCall))), params)
+            .choices.single().message!!.getTools().isEmpty())
+        io.mockk.verify { providers wasNot io.mockk.Called }
+    }
+
     @Test fun `managed user overrides cannot replace authentication routing or private header ownership`() = runBlocking {
         var sent = 0
         val client = OkHttpClient.Builder().addInterceptor { sent++; error("unexpected I/O") }.build()

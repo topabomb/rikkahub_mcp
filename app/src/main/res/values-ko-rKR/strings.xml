@@ -1698,4 +1698,13 @@
   <string name="assistant_usage_inherit_model">어시스턴트 정의의 모델 사용</string>
   <string name="assistant_usage_fixed_model">기업에서 고정한 모델</string>
   <string name="assistant_preset_media_kept">텍스트 외 콘텐츠도 있으며 텍스트를 편집해도 유지됩니다.</string>
+  <string name="enterprise_local_scenarios">로컬 기업 시나리오</string>
+  <string name="enterprise_local_scenarios_notice">정상 세션과 정리 절차를 사용하는 로컬 시뮬레이션입니다. 만료나 자격 증명 취소 시 개인 공간으로 돌아가며 기업 기록은 유지됩니다.</string>
+  <string name="enterprise_pending_example_notice">신원 확인은 성공했지만 구성을 가져올 수 없는 상태로 접속합니다. 구성을 동기화한 뒤 기업 공간으로 전환하세요.</string>
+  <string name="enterprise_join_pending_example">예제 접속: 구성 대기</string>
+  <string name="enterprise_simulate_disconnect">연결 끊김 시뮬레이션</string>
+  <string name="enterprise_simulate_reconnect">로컬 연결 복원</string>
+  <string name="enterprise_simulate_expiry">이 로그인을 60초 이내에 만료</string>
+  <string name="enterprise_simulate_revocation">자격 증명 취소 후 기업 공간 나가기</string>
+  <string name="enterprise_expiry_scheduled">이 로그인은 60초 이내에 만료됩니다. 개인 공간에 있거나 앱을 다시 시작해도 정상 종료 절차가 적용됩니다.</string>
 </resources>

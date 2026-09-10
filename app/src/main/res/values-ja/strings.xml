@@ -1698,4 +1698,13 @@
   <string name="assistant_usage_inherit_model">定義のモデルを使用</string>
   <string name="assistant_usage_fixed_model">企業が指定した固定モデル</string>
   <string name="assistant_preset_media_kept">テキスト以外の内容もあります。テキストを編集しても保持されます。</string>
+  <string name="enterprise_local_scenarios">ローカル企業シナリオ</string>
+  <string name="enterprise_local_scenarios_notice">通常のセッションと終了処理を使用するローカルシミュレーションです。有効期限切れや資格情報の取り消しで個人スペースに戻ります。企業の記録は保持されます。</string>
+  <string name="enterprise_pending_example_notice">本人確認後に設定を取得できない状態で接続します。その後、設定を同期し、企業スペースへ切り替えてください。</string>
+  <string name="enterprise_join_pending_example">サンプルに接続：設定待ち</string>
+  <string name="enterprise_simulate_disconnect">切断をシミュレート</string>
+  <string name="enterprise_simulate_reconnect">ローカル接続を復元</string>
+  <string name="enterprise_simulate_expiry">ログインを60秒以内に期限切れにする</string>
+  <string name="enterprise_simulate_revocation">資格情報を取り消して企業スペースを退出</string>
+  <string name="enterprise_expiry_scheduled">60秒以内にログインが期限切れになります。個人スペースにいる場合や再起動後も通常の終了処理が行われます。</string>
 </resources>

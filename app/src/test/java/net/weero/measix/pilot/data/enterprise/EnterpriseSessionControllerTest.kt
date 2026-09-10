@@ -348,7 +348,7 @@ class EnterpriseSessionControllerTest {
         val controller = EnterpriseSessionController(EnterpriseAppliedStore(root)) { now }
         controller.enrollFixture(packet)
         val expiry = controller.available().manifest.session!!.expiresAtMillis
-        controller.setOffline(true)
+        controller.captureExitRequest()!!.let { controller.setLocalOffline(it.selection, it.access, true) }
         expectReason("enterprise_session_not_ready") { controller.captureBindings(controller.captureRealmAccess(packet.identity.scope) as RealmAccess.Enterprise) }
         controller.selectPersonalFixture()
         controller.selectEnterpriseFixture()
@@ -459,7 +459,7 @@ class EnterpriseSessionControllerTest {
         val packet = exampleEnterprisePackage()
         val first = controller.enrollFixture(packet)
         val original = controller.available().manifest.applied!!
-        controller.setOffline(true)
+        controller.captureExitRequest()!!.let { controller.setLocalOffline(it.selection, it.access, true) }
         val access = RealmAccess.Enterprise(packet.identity.scope, first.manifest.session!!.id)
         controller.synchronize(access, packet.copy(configuration = packet.configuration.copy(generation = 2, policy = packet.configuration.policy.copy(allowLocalMcp = false))))
         assertEquals(original.generation + 1, controller.available().manifest.applied!!.generation)
@@ -506,6 +506,37 @@ class EnterpriseSessionControllerTest {
     }
 
     private fun EnterpriseSessionController.available() = state.value as EnterpriseState.Available
+
+    @Test
+    fun `local scenarios preserve configuration facts and reject stale selections and sessions`() = runTest {
+        var now = 1000L
+        val store = EnterpriseAppliedStore(temporary.newFolder())
+        val controller = EnterpriseSessionController(store) { now }
+        val packet = exampleEnterprisePackage()
+        val first = controller.enrollFixture(packet)
+        val original = requireNotNull(controller.readPresentation().selection)
+        val access = original.access as RealmAccess.Enterprise
+        controller.setLocalOffline(original, access, true)
+        assertEquals(first.manifest.copy(phase = EnterpriseSessionPhase.OFFLINE), store.readManifest())
+        controller.setLocalOffline(original, access, false)
+        assertEquals(first.manifest, store.readManifest())
+        val personal = controller.switchRealm(RealmSwitchRequest(original, RealmAccess.Personal)) {}
+        expectReason("enterprise_selection_revoked") { controller.shortenLocalSession(original, access) }
+        expectReason("enterprise_data_access_unavailable") { controller.setLocalOffline(personal, access.copy(sessionId = "old"), true) }
+        controller.shortenLocalSession(personal, access)
+        val shortened = store.readManifest()
+        assertEquals(61_000L, shortened.session!!.expiresAtMillis)
+        assertEquals(first.manifest.copy(selectedScope = ConfigurationScope.Personal, session = shortened.session), shortened)
+        now += 1000
+        controller.shortenLocalSession(personal, access)
+        assertEquals(shortened, store.readManifest())
+        val recovered = EnterpriseSessionController(store) { now }
+        assertEquals(shortened, (recovered.recover() as EnterpriseState.Available).manifest)
+        now = 61_000L
+        val expired = EnterpriseSessionController(store) { now }.recover() as EnterpriseState.Available
+        assertEquals(EnterpriseSessionPhase.CLOSING, expired.manifest.phase)
+        assertEquals(access, EnterpriseSessionController(store) { now }.pendingExit()!!.access)
+    }
 
     private fun withCredential(packet: EnterprisePackage, credential: String) = packet.copy(
         runtimeBindings = packet.runtimeBindings.map {

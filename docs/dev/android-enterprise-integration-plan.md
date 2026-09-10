@@ -272,7 +272,11 @@ LocalEnterpriseSource（身份/配置/动态/场景）
 
 用户资源仍真实执行，不伪装成 Mock 结果。私有真实 binding 显示连接来源，失败不退回假回复。零凭据安装可以完整跑内置示例，不因占位 API Key 阻塞。子助手、Search、Skill、Workspace 和辅助生成必须接同一执行链。
 
-场景管理覆盖五项逐一收紧/恢复、Gateway policy、模型新增/改名/删除、坏 schema/引用、版本变化、缺配置、网络/身份故障、Portal 过期和重启。调整通过新 generation 和正常应用协议发布，不能直接改 UI Boolean。
+本地聊天可请求“创建示例子助手”或“创建并调用示例子助手”（英文为 create example sub-assistant / create and call example sub-assistant）。先在本域使用设置的“本地工具”启用助手管理及所需的子助手调用；示例只生成标准工具调用，实际创建、授权、Child 执行和持久化不替换。工具或企业用户助手准入关闭时明确失败，不自动开权限；创建所得 ID 只从本次工具成功结果获取，旧聊天结果不触发新委派。
+
+场景管理覆盖五项逐一收紧/恢复、Gateway policy、模型新增/改名/删除、坏 schema/引用、版本变化、缺配置、网络/身份故障、Portal 过期和重启。配置调整通过新 generation 和正常应用协议发布，不能直接改 UI Boolean；连接状态和 Session 期限变化不推进配置 generation，动态仍使用独立 Feed revision。
+
+正式空间页提供“本地企业场景”，不依赖开发模式。未接入时可选择“已验证、待配置”体验：共用正常资料解析与一次性兑换，暂不应用配置，留在个人空间；随后“同步配置”恢复 READY，再主动切入企业。已有本地 Session 可模拟断连、明确恢复、缩短为 60 秒内到期或撤销凭据。断连不等于退出，普通同步不恢复连接；到期和撤销走既有统一退出 owner，停留个人空间或重启也不能续期。操作捕获原页面选择与 Session，旧操作不能影响重新接入的 Session；不另存故障配置或增加退出流程。
 
 ### 7.2 私有配置文件
 
@@ -753,3 +757,11 @@ assistant_manage 将原 RealmAccess 和调用者引用交给既有管理服务�
 完整串行 test assembleDebug lintDebug assembleRelease 最终通过（8 分 10 秒），App 2,156 项 JVM 无失败，lint 0 错误、287 警告；Workspace 保留 11 项 Windows 条件跳过。同批配置/文件设备门禁 17 项通过，随后两处 UI 入口调整经最终完整构建和正式 Debug 页面验证：一键入域、固定字段、温度修改及冷启动保留、重置恢复继承、固定子助手不可移除、用户子助手选择及重开保留、共享定义提示。原生图片选择器与本批 Release UI 未单独验收。证据见 build/reports/enterprise/assistant-usage-verification.json 和报告 ZIP。
 
 模拟故障/恢复、原生 assistant_manage 工具聊天、E01–E12 与最终 20 版本交付继续实施；本批不是整期完成或真实平台互操作验收。
+
+### 本地状态场景与助手工具聊天
+
+正式空间页已提供断连/恢复、凭据撤销、缩短登录期限和已验证待配置场景，复用原 Session、同步及退出 owner，不新增持久化字段或计时器。断连只改 phase，同步不假报连接恢复；待配置仅影响本次接入读取，不删除来源配置或替换活动 Session。模拟模型只发标准 assistant_manage/assistant_call 调用，按本次成功创建结果委派，原工具/会话 owner 完成定义、授权、Child 与结果提交。两名阶段审查无剩余实质问题，补齐失败状态及不重试验证。
+
+最终完整串行 test assembleDebug lintDebug assembleRelease 通过（8 分 28 秒）：App 2,162 项 JVM 无失败，lint 0 错误、287 警告；Workspace 保留 11 项 Windows 条件跳过。本批未重跑 instrumentation。Android 17 模拟器正式 Debug/Release 均验证场景入口、断连恢复、撤销、待配置同步留在个人，以及创建并调用用户子助手；Debug 另验证重启后的主子聊天与本域授权保留、关闭用户助手准入后的实际工具拒绝、个人空间重启后到期、Portal 实际录音到期关闭及临时文件清空。设备结果与完整门禁分开记录于 build/reports/enterprise/local-mock-verification.json 和同批报告 ZIP；不代表真实平台互操作。
+
+整份需求复核还需补齐本地动态草稿/发布/撤回的正式入口及“清除示例企业数据”，随后完成 E01–E12、最终三方审查和 0.0.20 产物。当前版本仍为 0.0.19 开发基线。

@@ -377,6 +377,39 @@ class LocalEnterpriseSourceTest {
     private data class Harness(val clientRoot: File, val authorityRoot: File, val sessions: EnterpriseSessionController,
         val authority: LocalEnrollmentAuthority, val source: LocalEnterpriseSource)
 
+    @Test
+    fun `pending example redeems normal enrollment once and synchronization keeps the same session in personal space`() = runTest {
+        val h = harness()
+        val text = h.source.exampleEnrollmentText()
+        val pending = h.source.enroll(text, configurationUnavailable = true)
+        assertEquals(EnterpriseSessionPhase.CONFIGURATION_PENDING, pending.manifest.phase)
+        assertEquals(ConfigurationScope.Personal, pending.manifest.selectedScope)
+        assertNull(pending.manifest.applied)
+        val session = requireNotNull(pending.manifest.session)
+        val candidate = requireNotNull(h.source.candidate(session.identity.scope))
+        assertEquals(packet(), candidate.packet)
+        try { h.source.enroll(text); fail("consumed enrollment must fail") }
+        catch (_: EnterpriseConfigurationException) { }
+        assertEquals(pending, h.sessions.state.value)
+        val ready = h.sessions.synchronize(RealmAccess.Enterprise(session.identity.scope, session.id), candidate.packet)
+        assertEquals(EnterpriseSessionPhase.READY, ready.manifest.phase)
+        assertEquals(session, ready.manifest.session)
+        assertEquals(ConfigurationScope.Personal, ready.manifest.selectedScope)
+        assertEquals(candidate, h.source.candidate(session.identity.scope))
+    }
+
+    @Test
+    fun `pending scenario cannot replace an active session or consume its new enrollment code`() = runTest {
+        val h = harness()
+        val current = h.source.enrollExample()
+        val text = h.source.exampleEnrollmentText()
+        rejected("exit_current_enterprise_first") { h.source.enroll(text, configurationUnavailable = true) }
+        assertEquals(current, h.sessions.state.value)
+        h.sessions.finishExit(h.sessions.beginExit(requireNotNull(h.sessions.captureExitRequest())))
+        assertEquals(EnterpriseSessionPhase.CONFIGURATION_PENDING,
+            h.source.enroll(text, configurationUnavailable = true).manifest.phase)
+    }
+
     private fun harness(bytes: ByteArray = exampleBytes(), authorityCheckpoint: () -> Unit = {},
         clientCheckpoint: (EnterpriseStorageCheckpoint) -> Unit = {}, sourceCheckpoint: () -> Unit = {}): Harness {
         val clientRoot = temporary.newFolder()

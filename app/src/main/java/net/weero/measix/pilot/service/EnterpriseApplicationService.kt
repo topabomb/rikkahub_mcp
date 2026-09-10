@@ -40,6 +40,8 @@ internal sealed interface LocalEnterpriseConfigurationChange {
 
 internal data class LocalEnterpriseConfigurationEditResult(val configuration: LocalEnterpriseConfigurationUiModel, val applied: Boolean)
 
+internal enum class LocalEnterpriseScenario { DISCONNECT, RECONNECT, EXPIRE_SOON, REVOKE }
+
 internal data class EnterpriseOverview(
     val selection: RealmSelection?,
     val phase: EnterpriseSessionPhase?,
@@ -98,6 +100,20 @@ internal class EnterpriseApplicationService(
         }.distinctUntilChanged()
 
     suspend fun joinExample() { recovery.awaitReady(); source.enrollExample() }
+    suspend fun joinPendingExample() { recovery.awaitReady(); source.enrollExample(configurationUnavailable = true) }
+    suspend fun runLocalScenario(selection: RealmSelection, access: RealmAccess.Enterprise, scenario: LocalEnterpriseScenario) {
+        recovery.awaitReady()
+        when (scenario) {
+            LocalEnterpriseScenario.DISCONNECT -> sessions.setLocalOffline(selection, access, true)
+            LocalEnterpriseScenario.RECONNECT -> sessions.setLocalOffline(selection, access, false)
+            LocalEnterpriseScenario.EXPIRE_SOON -> sessions.shortenLocalSession(selection, access)
+            LocalEnterpriseScenario.REVOKE -> {
+                sessions.validateLocalSessionTarget(selection, access)
+                // Exit cleanup must acquire Session admission independently of scenario validation.
+                exit.invalidate(access, EnterpriseExitReason.AUTHORIZATION_REVOKED)
+            }
+        }
+    }
     suspend fun join(text: String) { recovery.awaitReady(); source.enroll(text) }
     suspend fun exampleEnrollmentText(): String { recovery.awaitReady(); return source.exampleEnrollmentText() }
     suspend fun installedSources(): List<InstalledEnterpriseSource> {

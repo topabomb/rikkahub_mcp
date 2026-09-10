@@ -16,6 +16,8 @@ import net.weero.measix.pilot.data.enterprise.*
 import net.weero.measix.pilot.service.EnterpriseApplicationService
 import net.weero.measix.pilot.service.LocalEnterpriseConfigurationUiModel
 import net.weero.measix.pilot.service.LocalEnterpriseConfigurationChange
+import net.weero.measix.pilot.service.LocalEnterpriseScenario
+import net.weero.measix.pilot.service.EnterpriseOverview
 import net.weero.measix.pilot.service.portal.PortalClosure
 import kotlin.uuid.Uuid
 
@@ -44,6 +46,17 @@ internal class EnterpriseVM(private val service: EnterpriseApplicationService) :
     val portal = _portal.asStateFlow()
 
     fun joinExample() = command(enrollment = true) { service.joinExample() }
+    fun joinPendingExample() = command(enrollment = true) { service.joinPendingExample() }
+    fun runLocalScenario(original: EnterpriseOverview, scenario: LocalEnterpriseScenario) {
+        val selection = original.selection ?: return
+        val access = original.access ?: return
+        command(isCurrent = { overview.value?.selection == selection && overview.value?.access == access }) {
+            service.runLocalScenario(selection, access, scenario)
+            if (scenario == LocalEnterpriseScenario.EXPIRE_SOON && overview.value?.access == access) {
+                _notice.value = R.string.enterprise_expiry_scheduled
+            }
+        }
+    }
     fun join(text: String) = command(enrollment = true) { service.join(text) }
     fun showExampleCode() = command { _exampleCode.value = service.exampleEnrollmentText() }
     fun dismissExampleCode() { _exampleCode.value = null }

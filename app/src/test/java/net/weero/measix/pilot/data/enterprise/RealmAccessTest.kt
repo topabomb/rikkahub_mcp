@@ -29,7 +29,7 @@ class RealmAccessTest {
         backgroundScope.launch(kotlinx.coroutines.Dispatchers.Unconfined) { controller.observeRealmAccess(access).collect { allowed += it } }
         runCurrent()
         controller.selectPersonalFixture()
-        controller.setOffline(true)
+        controller.captureExitRequest()!!.let { controller.setLocalOffline(it.selection, it.access, true) }
         assertEquals("original", controller.withRealmAccess(access) { "original" })
         controller.finishExit(controller.beginExit(requireNotNull(controller.captureExitRequest())))
         controller.enrollFixture(packet)

@@ -35,7 +35,7 @@ internal class LocalEnterpriseSource(
     suspend fun installations(): List<LocalEnterpriseInstallation> = mutex.withLock { ensureInstalled() }
 
     /** One-click, pasted text and a decoded QR all enter through this parser and source validator. */
-    suspend fun enroll(text: String): EnterpriseState.Available {
+    suspend fun enroll(text: String, configurationUnavailable: Boolean = false): EnterpriseState.Available {
         val material = parser.parse(text)
         requireEnrollmentNotExpired(material, Instant.ofEpochMilli(nowMillis()))
         if (material is EnrollmentMaterial.Platform) fail("platform_enrollment_not_supported")
@@ -50,14 +50,16 @@ internal class LocalEnterpriseSource(
             installedIdentity = identity,
             redeem = { enrollmentAuthority.redeem(material, identity) },
             configuration = {
-                try { candidate(identity.scope)?.packet }
+                try { if (configurationUnavailable) null else candidate(identity.scope)?.packet }
                 catch (_: EnterpriseConfigurationException) { null }
                 catch (_: IOException) { null }
             },
+            requireSignedOut = configurationUnavailable,
         )
     }
 
-    suspend fun enrollExample(): EnterpriseState.Available = enroll(exampleEnrollmentText())
+    suspend fun enrollExample(configurationUnavailable: Boolean = false): EnterpriseState.Available =
+        enroll(exampleEnrollmentText(), configurationUnavailable)
 
     suspend fun setPolicy(scope: ConfigurationScope.Enterprise, expectedRevision: String, policy: EnterprisePolicy): LocalEnterpriseCandidate =
         changeConfiguration(scope, expectedRevision) { it.copy(configuration = it.configuration.copy(policy = policy)) }

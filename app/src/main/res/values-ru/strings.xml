@@ -1698,4 +1698,13 @@
   <string name="assistant_usage_inherit_model">Использовать модель из определения</string>
   <string name="assistant_usage_fixed_model">Модель закреплена организацией</string>
   <string name="assistant_preset_media_kept">В пресете есть нетекстовое содержимое. При редактировании текста оно сохраняется.</string>
+  <string name="enterprise_local_scenarios">Сценарии локальной организации</string>
+  <string name="enterprise_local_scenarios_notice">Локальные сценарии используют обычный сеанс и процедуру завершения. Истечение срока или отзыв учётных данных возвращает в личное пространство; записи организации сохраняются.</string>
+  <string name="enterprise_pending_example_notice">Подключение с подтверждённой личностью, но без доступной конфигурации. Затем синхронизируйте конфигурацию и переключитесь в пространство организации.</string>
+  <string name="enterprise_join_pending_example">Подключить пример: ожидание конфигурации</string>
+  <string name="enterprise_simulate_disconnect">Имитировать отключение</string>
+  <string name="enterprise_simulate_reconnect">Восстановить локальное соединение</string>
+  <string name="enterprise_simulate_expiry">Завершить срок входа в течение 60 секунд</string>
+  <string name="enterprise_simulate_revocation">Отозвать учётные данные и выйти из организации</string>
+  <string name="enterprise_expiry_scheduled">Срок входа истечёт в течение 60 секунд. Обычная процедура завершения действует также в личном пространстве и после перезапуска приложения.</string>
 </resources>

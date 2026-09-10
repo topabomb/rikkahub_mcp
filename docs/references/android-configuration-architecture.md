@@ -94,6 +94,8 @@ updateLocal(latest personalSettings transform)
 
 PrepareEnterpriseExampleAssets 从公开完整模板派生 enterprise.local.identity.json，只用于安装目录的首次初始化。原生完整文件导入可安装其他本地来源/Deployment/User；换主体必须先退出，扫码和粘贴无安装权限。票据固定登录身份，同企业的不同用户分别存储。重新接入读取来源当前发布版本，没有“旧安装包时保留较新 Applied”的特殊分支。配置文件缺失/损坏时，已兑换身份可发布 CONFIGURATION_PENDING，不能因读不到配置而猜测用户。有效导入的来源发布成功但客户端应用失败时，LocalEnterpriseImportResult 明确返回来源 revision 与失败原因，后续可重试同步；不会谎报已应用。EnterpriseApplicationService 接收原生文件 URI 并拥有输入流的关闭；LocalEnterpriseSource 负责严格解码，Session owner 在发布前后复验文件选择时的 RealmSelection。来源发布期间到期不续期原 Session，已提交来源仍可供后续重新接入。原生已安装来源列表只投影名称和主体，不返回私有 binding。
 
+正式空间页的“本地企业场景”仅作用于本地来源。EnterpriseApplicationService 将原 RealmSelection 和目标 Session 交给 Session owner；断连/恢复只改变 phase，普通配置同步保持 OFFLINE。缩短登录期限只更新原 Session 的 expiresAtMillis，不能延长已有期限，由既有 EnterpriseExitService 到期观察与启动恢复完成清理；凭据撤销在 Session 锁外进入同一退出流程。没有额外计时器、故障存储或配置镜像。待配置体验仍经过原资料解析、身份验证和一次性兑换，仅本次读取返回无配置；准入在消费前拒绝替换活动 Session。正常同步恢复 READY 后仍留在个人空间，用户明确切入企业。
+
 ### 模型执行中的配置与私有连接
 
 助手的 `builtInSearch` 可选偏好由 `Model.withAssistantSearch` 派生为请求工具，个人定义与企业使用偏好保持原有存储归属。
@@ -107,6 +109,8 @@ PrepareEnterpriseExampleAssets 从公开完整模板派生 enterprise.local.iden
 
 辅助模型选择从原域的角色配置解析：标题/建议未配置时尝试 fast，再使用原助手的聊天模型；摘要未配置时使用原助手聊天模型。只有 Personal 的历史 `DEFAULT_AUTO_MODEL_ID` 等同未配置，显式缺失、被撤权或类型不符的引用不回退。辅助角色不受企业助手固定聊天模型的绑定限制，但每个请求仍复验原助手和所选资源准入，保持原 wire shape/企业 binding revision。`ModelExecutionSnapshot` 是进程内执行快照，不持久化私有传输数据。聊天、附件识别与已启用的图片工具在同次配置读取中捕获，工具借用只含 `execute` 的 `ModelRequests`；Runtime 保留唯一模型 lease 和企业 binding，暂停继续只移交这一个资源 owner。模型 lease 在取得 binding 前登记到原 Runtime；辅助任务清理失败不能丢失重试 owner。
 本地模型适配器按调用方的 `ModelSelectionRole` 生成标题、逐行建议和显式标注的模拟摘要；不通过提示词关键词推断用途，辅助生成不发起工具调用。摘要仅保留有界输入摘录，注明省略，不宣称具备真实语义归纳能力。真实 Provider 仍接收原提示词和参数，标题/建议/摘要均经原会话 owner 提交；没有第二条本地持久化路径。
+
+本地聊天模型支持“创建示例子助手”和“创建并调用示例子助手”（亦接受对应英文请求）。只在本次冻结工具面包含所需工具时生成标准 assistant_manage/assistant_call 调用；委派 ID 仅取本次用户消息之后成功创建的工具结果，失败不委派或重试。创建、共享定义与本域授权、Child 建库及结果回写仍由原工具和会话 owner 执行。用户需在本域使用设置启用管理/调用，企业需允许用户助手；示例不会自动打开权限。
 
 私有请求带无身份、无凭据的 `PrivateRequest` 标记，现有 HTTP 日志入口跳过该请求。共享网络边界在 OkHttp 跟随跨 origin 重定向前拒绝请求，避免 Google/Claude 与自定义私有 header 被转发；个人请求保持原日志和重定向行为。图片 URL 结果的后续下载继承私有日志标记，但不转发原认证和企业 header。企业 MCP 已接入原 Session/binding/interaction 的执行准入与版本屏障，管理页通过 McpQueryService 按原 RealmSelection 投影目录及只读受管工具；Speech 通过独立应用 owner 接入同一原 Session、binding 和 interaction 边界，具体见 TTS/ASR 小节。
 

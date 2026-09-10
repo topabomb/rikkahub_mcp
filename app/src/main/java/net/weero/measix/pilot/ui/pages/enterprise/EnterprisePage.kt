@@ -30,6 +30,8 @@ import net.weero.measix.pilot.R
 import net.weero.measix.pilot.Screen
 import net.weero.measix.pilot.data.enterprise.EnterpriseSessionPhase
 import net.weero.measix.pilot.data.enterprise.RealmAccess
+import net.weero.measix.pilot.service.EnterpriseOverview
+import net.weero.measix.pilot.service.LocalEnterpriseScenario
 import net.weero.measix.pilot.service.portal.PortalWebView
 import net.weero.measix.pilot.service.portal.PortalNativeActions
 import net.weero.measix.pilot.service.portal.PortalNativePrompt
@@ -77,6 +79,7 @@ internal fun EnterprisePage(vm: EnterpriseVM = koinViewModel()) {
     val portal by vm.portal.collectAsStateWithLifecycle()
     val nav = LocalNavController.current
     var paste by remember { mutableStateOf(false) }
+    var scenarios by remember { mutableStateOf<EnterpriseOverview?>(null) }
     // Enrollment text contains a credential and is deliberately not saved in Activity state.
     var enrollment by remember { mutableStateOf("") }
     val scanner = rememberLauncherForActivityResult(ScanQRCode()) { result ->
@@ -90,6 +93,10 @@ internal fun EnterprisePage(vm: EnterpriseVM = koinViewModel()) {
     LaunchedEffect(state?.access) { if (state?.access != null) vm.dismissSources() }
     LaunchedEffect(state?.selection) {
         if (localConfiguration?.selection != state?.selection) vm.dismissLocalConfiguration()
+    }
+    LaunchedEffect(state?.selection, state?.access, state?.phase) {
+        if (scenarios?.selection != state?.selection || scenarios?.access != state?.access ||
+            state?.phase == EnterpriseSessionPhase.CLOSING) scenarios = null
     }
     val inEnterprise = state?.selection?.access is RealmAccess.Enterprise
     val ready = state?.phase in setOf(EnterpriseSessionPhase.READY, EnterpriseSessionPhase.OFFLINE)
@@ -122,7 +129,8 @@ internal fun EnterprisePage(vm: EnterpriseVM = koinViewModel()) {
                 if (error != null || state?.failure != null || state?.exitFailure != null) {
                     Text(stringResource(error ?: R.string.enterprise_failure), color = MaterialTheme.colorScheme.error)
                 }
-                notice?.let { Text(stringResource(it)) }
+                notice?.takeIf { it != R.string.enterprise_expiry_scheduled || state?.access != null }
+                    ?.let { Text(stringResource(it)) }
                 if (state?.exitFailure != null) {
                     Button(onClick = vm::retryExit, enabled = !working) { Text(stringResource(R.string.application_recovery_retry)) }
                 }
@@ -157,6 +165,11 @@ internal fun EnterprisePage(vm: EnterpriseVM = koinViewModel()) {
                     TextButton(onClick = vm::requestExit, enabled = !busy) { Text(stringResource(R.string.enterprise_exit)) }
                 }
                 if (state?.selection != null) {
+                    if (state?.failure == null && (state?.access == null || state?.isLocal == true)) {
+                        OutlinedButton(onClick = { scenarios = state }, enabled = !busy) {
+                            Text(stringResource(R.string.enterprise_local_scenarios))
+                        }
+                    }
                     OutlinedButton(onClick = { if (vm.beginImport()) filePicker.launch(arrayOf("*/*")) }, enabled = !busy) {
                         Text(stringResource(R.string.enterprise_import_configuration))
                     }
@@ -170,6 +183,33 @@ internal fun EnterprisePage(vm: EnterpriseVM = koinViewModel()) {
         EnterpriseLocalConfigurationEditor(original, busy, error, notice,
             onChange = { vm.changeLocalConfiguration(original, it) },
             onRefresh = vm::showLocalConfiguration, onDismiss = vm::dismissLocalConfiguration)
+    }
+    scenarios?.let { original ->
+        AlertDialog(onDismissRequest = { scenarios = null },
+            title = { Text(stringResource(R.string.enterprise_local_scenarios)) },
+            text = { Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(stringResource(R.string.enterprise_local_scenarios_notice))
+                if (original.access == null) {
+                    Text(stringResource(R.string.enterprise_pending_example_notice))
+                    OutlinedButton(onClick = { scenarios = null; vm.joinPendingExample() }, enabled = !busy) {
+                        Text(stringResource(R.string.enterprise_join_pending_example))
+                    }
+                } else {
+                    val connected = original.phase == EnterpriseSessionPhase.READY
+                    OutlinedButton(onClick = {
+                        scenarios = null
+                        vm.runLocalScenario(original, if (connected) LocalEnterpriseScenario.DISCONNECT else LocalEnterpriseScenario.RECONNECT)
+                    }, enabled = !busy && original.phase in setOf(EnterpriseSessionPhase.READY, EnterpriseSessionPhase.OFFLINE)) {
+                        Text(stringResource(if (connected) R.string.enterprise_simulate_disconnect else R.string.enterprise_simulate_reconnect))
+                    }
+                    OutlinedButton(onClick = { scenarios = null; vm.runLocalScenario(original, LocalEnterpriseScenario.EXPIRE_SOON) }, enabled = !busy) {
+                        Text(stringResource(R.string.enterprise_simulate_expiry))
+                    }
+                    TextButton(onClick = { scenarios = null; vm.runLocalScenario(original, LocalEnterpriseScenario.REVOKE) }, enabled = !busy) {
+                        Text(stringResource(R.string.enterprise_simulate_revocation))
+                    }
+                }
+            } }, confirmButton = { TextButton(onClick = { scenarios = null }) { Text(stringResource(R.string.cancel)) } })
     }
     sources?.let { installed ->
         AlertDialog(onDismissRequest = vm::dismissSources,

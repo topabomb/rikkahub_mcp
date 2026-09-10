@@ -249,6 +249,27 @@ class EnterpriseApplicationServiceTest {
         assertEquals(reason, requireNotNull(failure) { "Expected rejected space switch" }.reason)
     }
 
+    @Test(timeout = 30_000)
+    fun `mock revocation validates its original target and invokes exit outside session admission`() = runBlocking(Dispatchers.Main) {
+        fixture { f ->
+            val original = f.selection()
+            val access = original.access as RealmAccess.Enterprise
+            val personal = f.sessions.switchRealm(RealmSwitchRequest(original, RealmAccess.Personal)) {}
+            rejects("enterprise_selection_revoked") {
+                f.service.runLocalScenario(original, access, LocalEnterpriseScenario.REVOKE)
+            }
+            io.mockk.coVerify(exactly = 0) { f.exit.invalidate(any(), any()) }
+            io.mockk.coEvery { f.exit.invalidate(access, EnterpriseExitReason.AUTHORIZATION_REVOKED) } coAnswers {
+                val token = f.sessions.beginInvalidation(access, EnterpriseExitReason.AUTHORIZATION_REVOKED)
+                f.sessions.finishExit(token)
+                EnterpriseExitResult()
+            }
+            f.service.runLocalScenario(personal, access, LocalEnterpriseScenario.REVOKE)
+            io.mockk.coVerify(exactly = 1) { f.exit.invalidate(access, EnterpriseExitReason.AUTHORIZATION_REVOKED) }
+            assertEquals(EnterpriseSessionPhase.REAUTH_REQUIRED, f.store.readManifest().phase)
+        }
+    }
+
     private suspend fun fixture(operation: suspend (Fixture) -> Unit) {
         val f = Fixture()
         try {

@@ -76,7 +76,7 @@ internal fun AssistantUsageEditor(
         R.string.assistant_extensions_page_tab_skills)
     Column(Modifier.fillMaxSize()) {
         Text(stringResource(R.string.assistant_usage_title), style = MaterialTheme.typography.titleLarge, modifier = Modifier.padding(16.dp))
-        Text(assistant.name, style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(horizontal = 16.dp))
+        Text(assistant.name.ifBlank { stringResource(R.string.assistant_page_default_assistant) }, style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(horizontal = 16.dp))
         Text(stringResource(R.string.assistant_usage_description), style = MaterialTheme.typography.bodySmall,
             modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {

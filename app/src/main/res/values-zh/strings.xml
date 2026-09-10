@@ -1698,4 +1698,13 @@
   <string name="assistant_usage_inherit_model">跟随助手定义的模型</string>
   <string name="assistant_usage_fixed_model">企业固定模型</string>
   <string name="assistant_preset_media_kept">此预设还包含非文本内容，编辑文字会保留这些内容。</string>
+  <string name="enterprise_local_scenarios">本地企业场景</string>
+  <string name="enterprise_local_scenarios_notice">这些本地模拟使用正常的会话与清理流程。登录到期或撤销凭据会结束企业访问并返回个人空间，企业记录仍保留。</string>
+  <string name="enterprise_pending_example_notice">模拟身份验证成功但暂时取不到配置。接入后点击“同步配置”恢复就绪，再主动切换到企业空间。</string>
+  <string name="enterprise_join_pending_example">接入示例：已验证、待配置</string>
+  <string name="enterprise_simulate_disconnect">模拟断连</string>
+  <string name="enterprise_simulate_reconnect">恢复本地连接</string>
+  <string name="enterprise_simulate_expiry">将本次登录设为 60 秒内到期</string>
+  <string name="enterprise_simulate_revocation">撤销凭据并退出企业空间</string>
+  <string name="enterprise_expiry_scheduled">本次登录将在 60 秒内到期；停留在个人空间或重启应用后，也会按正常退出流程处理。</string>
 </resources>

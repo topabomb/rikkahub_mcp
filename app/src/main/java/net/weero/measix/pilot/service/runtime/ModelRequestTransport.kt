@@ -158,6 +158,35 @@ private fun exampleAuxiliaryResponse(messages: List<ModelRequestMessage>, role: 
 private fun exampleResponse(messages: List<ModelRequestMessage>, params: TextGenerationParams): UIMessage {
     val userIndex = messages.indexOfLast { it.role == MessageRole.USER }
     val prompt = messages.getOrNull(userIndex)?.toText().orEmpty()
+    val calls = messages.drop(userIndex + 1).filter { it.role == MessageRole.ASSISTANT }
+        .flatMap { it.parts.filterIsInstance<UIMessagePart.Tool>() }
+    val createAssistant = listOf("创建示例子助手", "创建并调用示例子助手", "create example sub-assistant", "create and call example sub-assistant")
+        .any { prompt.contains(it, true) }
+    if (createAssistant && params.tools.isNotEmpty()) {
+        val delegate = prompt.contains("创建并调用", true) || prompt.contains("create and call", true)
+        if (params.tools.none { it.name == "assistant_manage" } || (delegate && params.tools.none { it.name == "assistant_call" })) {
+            return UIMessage.assistant("本地模拟：请在当前助手的本地能力中启用助手管理；创建并调用还需启用子助手调用。企业域需允许用户助手。")
+        }
+        val created = calls.lastOrNull { it.toolName == "assistant_manage" }
+        if (created == null) return exampleToolCall("assistant_manage", buildJsonObject {
+            put("action", "CREATE")
+            put("name", "示例协作助手")
+            put("description", "用于验证本域子助手创建、授权与调用的用户助手。")
+            put("instructions", "请简短回应收到的请求。你是用于验证企业本地示例的协作助手。")
+        })
+        if (!created.hasReplayResult || created.resultStatus != ToolResultStatus.COMPLETED) return exampleToolReply(created)
+        val result = created.output.filterIsInstance<UIMessagePart.Text>().singleOrNull()?.text?.let {
+            try { Json.parseToJsonElement(it) as? JsonObject } catch (_: IllegalArgumentException) { null }
+        }
+        val id = (result?.get("id") as? JsonPrimitive)?.takeIf { it.isString }?.content
+        if (result?.get("action") != JsonPrimitive("create") || id.isNullOrBlank()) return exampleToolReply(created)
+        if (!delegate) return exampleToolReply(created)
+        calls.lastOrNull { it.toolName == "assistant_call" }?.let { return exampleToolReply(it) }
+        return exampleToolCall("assistant_call", buildJsonObject {
+            put("assistant_id", id)
+            put("request", "请简短确认已收到这次企业空间协作请求。")
+        })
+    }
     val action = when {
         listOf("公告", "动态", "通知", "updates", "notices").any { prompt.contains(it, true) } -> "get_enterprise_updates"
         listOf("指南", "参考", "guide", "reference").any { prompt.contains(it, true) } -> "read_enterprise_guide"
@@ -165,8 +194,6 @@ private fun exampleResponse(messages: List<ModelRequestMessage>, params: TextGen
         else -> null
     }
     if (action != null && params.tools.isNotEmpty()) {
-        val calls = messages.drop(userIndex + 1).filter { it.role == MessageRole.ASSISTANT }
-            .flatMap { it.parts.filterIsInstance<UIMessagePart.Tool>() }
         fun unavailable() = UIMessage.assistant("本地模拟：当前助手没有可用的企业工具，或工具尚未返回有效结果。请检查本域资源选择与 Gateway 开关。")
         fun definition(suffix: String) = params.tools.singleOrNull {
             it.name.startsWith("mcp__enterprise_") && it.name.endsWith("__$suffix")
@@ -205,7 +232,7 @@ private fun exampleResponse(messages: List<ModelRequestMessage>, params: TextGen
     return UIMessage.assistant(buildString {
         append("企业本地示例已收到你的请求。")
         if (images > 0) append("已接收 $images 张图片；本地示例返回模拟结果。")
-        append("这是一条本地模拟回复，用于验证企业空间中的对话流程。可尝试：查看企业信息、查看企业公告、查询企业指南。")
+        append("这是一条本地模拟回复，用于验证企业空间中的对话流程。可尝试：查看企业信息、查看企业公告、查询企业指南。启用助手管理和子助手调用后，也可请求创建并调用示例子助手。")
     })
 }
 
@@ -221,7 +248,8 @@ private fun exampleToolReply(tool: UIMessagePart.Tool): UIMessage {
         try { (Json.parseToJsonElement(it.text) as? JsonObject)?.get("structured_content") }
         catch (_: IllegalArgumentException) { null }
     }
-    return UIMessage.assistant("本地模拟：已通过企业工具取得以下结果。\n" +
+    return UIMessage.assistant((if (tool.toolName.startsWith("mcp__enterprise_")) "本地模拟：已通过企业工具取得以下结果。\n"
+        else "本地模拟：工具返回了以下结果。\n") +
         (structured?.toString() ?: texts.joinToString("\n") { it.text }).take(6000))
 }
 

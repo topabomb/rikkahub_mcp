@@ -1699,4 +1699,13 @@
   <string name="assistant_usage_inherit_model">Use the model from the assistant definition</string>
   <string name="assistant_usage_fixed_model">Model fixed by the enterprise</string>
   <string name="assistant_preset_media_kept">This preset also has non-text content. Editing text keeps that content.</string>
+  <string name="enterprise_local_scenarios">Local enterprise scenarios</string>
+  <string name="enterprise_local_scenarios_notice">These local simulations use the normal session and cleanup flow. Expiry and credential revocation end enterprise access and return to personal space; enterprise records are retained.</string>
+  <string name="enterprise_pending_example_notice">Join with verified identity while configuration is unavailable. Then use Sync configuration to become ready, and explicitly switch to enterprise space.</string>
+  <string name="enterprise_join_pending_example">Join example — configuration pending</string>
+  <string name="enterprise_simulate_disconnect">Simulate disconnection</string>
+  <string name="enterprise_simulate_reconnect">Restore local connection</string>
+  <string name="enterprise_simulate_expiry">Expire this login within 60 seconds</string>
+  <string name="enterprise_simulate_revocation">Revoke credentials and leave enterprise space</string>
+  <string name="enterprise_expiry_scheduled">This login will expire within 60 seconds. The normal exit flow also applies while in personal space or after restarting the app.</string>
 </resources>

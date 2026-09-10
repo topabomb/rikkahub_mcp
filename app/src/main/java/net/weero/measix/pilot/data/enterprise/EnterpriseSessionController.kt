@@ -108,10 +108,12 @@ internal class EnterpriseSessionController(
         installedIdentity: EnterpriseIdentity,
         redeem: suspend () -> EnterpriseIdentity,
         configuration: suspend () -> EnterprisePackage?,
+        requireSignedOut: Boolean = false,
     ): EnterpriseState.Available = mutex.withLock {
         EnterprisePackageCodec.validateIdentity(installedIdentity)
         val current = ensureLoaded()
         if (current.manifest.phase == EnterpriseSessionPhase.CLOSING) fail("enterprise_exit_in_progress")
+        if (requireSignedOut && current.manifest.session != null) fail("exit_current_enterprise_first")
         requireSamePrincipal(current.manifest, installedIdentity)
         if (redeem() != installedIdentity) fail("enterprise_enrollment_identity_mismatch")
         currentCoroutineContext().ensureActive()
@@ -428,9 +430,30 @@ internal class EnterpriseSessionController(
         operation(current.toAvailable())
     }
 
-    suspend fun setOffline(offline: Boolean) = mutex.withLock {
-        val current = requireSession(allowOffline = true)
+    suspend fun setLocalOffline(selection: RealmSelection, access: RealmAccess.Enterprise, offline: Boolean) = mutex.withLock {
+        val current = requireLocalSessionTarget(selection, access)
+        if (current.manifest.phase !in setOf(EnterpriseSessionPhase.READY, EnterpriseSessionPhase.OFFLINE)) fail("enterprise_session_not_ready")
         publish(current.manifest.copy(phase = if (offline) EnterpriseSessionPhase.OFFLINE else EnterpriseSessionPhase.READY))
+    }
+
+    /** Shortening the existing durable deadline exercises the normal expiry and recovery owners. */
+    suspend fun shortenLocalSession(selection: RealmSelection, access: RealmAccess.Enterprise) = mutex.withLock {
+        val current = requireLocalSessionTarget(selection, access)
+        val session = requireNotNull(current.manifest.session)
+        publish(current.manifest.copy(session = session.copy(expiresAtMillis = minOf(session.expiresAtMillis, nowMillis() + 60_000))))
+    }
+
+    suspend fun validateLocalSessionTarget(selection: RealmSelection, access: RealmAccess.Enterprise) = mutex.withLock {
+        requireLocalSessionTarget(selection, access)
+        Unit
+    }
+
+    private suspend fun requireLocalSessionTarget(selection: RealmSelection, access: RealmAccess.Enterprise): LoadedEnterpriseState {
+        val current = ensureLoaded()
+        requirePublishedSelection(selection)
+        if (!access.scope.authority.isLocal) fail("local_enterprise_required")
+        if (!allowsDataAccess(current.manifest, access)) fail("enterprise_data_access_unavailable")
+        return current
     }
 
     suspend fun captureExitRequest(): EnterpriseExitRequest? = mutex.withLock {
