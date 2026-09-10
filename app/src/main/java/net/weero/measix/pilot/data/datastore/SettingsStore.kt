@@ -365,6 +365,13 @@ class SettingsStore internal constructor(
         }
     }
 
+    /** Called only after enterprise admission is durably closed; shared user definitions remain intact. */
+    internal suspend fun clearEnterprisePreferences(scope: ConfigurationScope.Enterprise) = updateMutex.withLock {
+        commitUserDocument { document ->
+            document.copy(preferences = document.preferences.copy(scopes = document.preferences.scopes.filterNot { it.scope == scope }))
+        }
+    }
+
     /** Both authorization locks remain owned until DataStore's independent writer acknowledges completion. */
     private suspend fun commitUserDocument(
         requireOwner: () -> Unit = {},

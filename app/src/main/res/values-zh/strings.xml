@@ -1728,4 +1728,7 @@
   <string name="enterprise_feed_publish">发布</string>
   <string name="enterprise_feed_withdraw">撤回</string>
   <string name="enterprise_feed_changed">动态已变更，请刷新后重新编辑。</string>
+  <string name="enterprise_clear_example">清除内置示例数据并退出</string>
+  <string name="enterprise_clear_example_requires_session">请先接入内置示例企业再清除其数据；这里不能清除导入的其他企业来源。</string>
+  <string name="enterprise_clear_example_confirm">删除 %1$s 的聊天、记忆、托管文件、动态和空间偏好，并退出登录？个人数据、用户配置、其他企业以及共享 Workspace 均保留。此操作不可撤销。</string>
 </resources>

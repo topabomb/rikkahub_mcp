@@ -115,6 +115,8 @@ class ConversationRepository(
         return conversationDAO.countAll(scope)
     }
 
+    internal suspend fun getRootIds(scope: ConfigurationScope): List<Uuid> = conversationDAO.getRootIds(scope).map(Uuid::parse)
+
     internal suspend fun insertConversation(conversation: Conversation) {
         artifactStore.withLifecycleLock {
             val referenceDelta = artifactStore.prepareReferenceDelta(

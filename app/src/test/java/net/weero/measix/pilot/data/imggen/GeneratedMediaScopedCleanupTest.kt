@@ -20,6 +20,23 @@ import kotlin.io.path.createTempDirectory
  */
 class GeneratedMediaScopedCleanupTest {
 
+    @Test
+    fun `scope cleanup rejects unreadable media directory and non-file deletion receipt`() = runTest {
+        val enterprise = ConfigurationScope.Enterprise(me.rerere.common.configuration.EnterpriseAuthority("local:cleanup", "deployment"), "user")
+        for (receipt in listOf(false, true)) {
+            val root = tempDir("media-invalid-directory")
+            try {
+                if (receipt) File(root, "images/retired.png.deleting").mkdirs()
+                else File(root, "images").writeText("not a directory")
+                val repository = mockk<GenMediaRepository>()
+                coEvery { repository.getAllMediaList() } returns emptyList()
+                try { store(root, repository).clearEnterpriseScope(enterprise); org.junit.Assert.fail("Unverifiable deletion is not success") }
+                catch (_: IllegalStateException) { }
+                io.mockk.coVerify(exactly = 0) { repository.listInScope(any()) }
+            } finally { root.deleteRecursively() }
+        }
+    }
+
     private fun tempDir(prefix: String): File = createTempDirectory(prefix).toFile()
 
     private fun entity(id: Int, fileName: String, createdAt: Long) = GenMediaEntity(

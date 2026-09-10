@@ -1728,4 +1728,7 @@
   <string name="enterprise_feed_publish">Опубликовать</string>
   <string name="enterprise_feed_withdraw">Отозвать</string>
   <string name="enterprise_feed_changed">Новости изменились. Обновите их перед редактированием.</string>
+  <string name="enterprise_clear_example">Очистить данные встроенного примера и выйти</string>
+  <string name="enterprise_clear_example_requires_session">Сначала подключитесь к встроенному примеру. Другие импортированные организации здесь не очищаются.</string>
+  <string name="enterprise_clear_example_confirm">Удалить чаты, память, управляемые файлы, новости и настройки пространства %1$s и выйти? Личные данные, пользовательские конфигурации, другие организации и общий Workspace сохранятся. Отменить удаление нельзя.</string>
 </resources>

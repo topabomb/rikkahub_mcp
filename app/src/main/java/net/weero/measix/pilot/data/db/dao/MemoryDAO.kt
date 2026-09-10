@@ -7,7 +7,7 @@ import kotlinx.coroutines.flow.Flow
 import net.weero.measix.pilot.data.configuration.ConfigurationScope
 import net.weero.measix.pilot.data.db.entity.MemoryEntity
 
-/** Ordered namespace reads keep disclosure content stable. Every operation includes the durable realm and owner. */
+/** Ordered namespace reads keep disclosure content stable. Per-memory operations include realm and owner. */
 @Dao
 interface MemoryDAO {
     @Query("SELECT * FROM memoryentity WHERE scope = :scope AND assistant_id = :ownerId ORDER BY id ASC")
@@ -30,4 +30,8 @@ interface MemoryDAO {
 
     @Query("DELETE FROM memoryentity WHERE scope = :scope AND assistant_id = :ownerId")
     suspend fun deleteAll(scope: ConfigurationScope, ownerId: String)
+
+    /** Scope removal includes global and no-longer-configured assistant owners. */
+    @Query("DELETE FROM memoryentity WHERE scope = :scope")
+    suspend fun deleteScope(scope: ConfigurationScope)
 }

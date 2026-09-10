@@ -29,6 +29,8 @@ internal class LocalEnterpriseSource(
 
     suspend fun exampleEnrollmentText(): String = enrollmentText(bundledIdentity().scope)
 
+    suspend fun bundledScope(): ConfigurationScope.Enterprise = bundledIdentity().scope
+
     suspend fun enrollmentText(scope: ConfigurationScope.Enterprise): String =
         EnrollmentMaterialParser.encodeLocal(enrollmentAuthority.issue(installed(scope).identity))
 

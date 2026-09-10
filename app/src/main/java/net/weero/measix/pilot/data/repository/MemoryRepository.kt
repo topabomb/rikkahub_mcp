@@ -46,6 +46,8 @@ class MemoryRepository(private val dao: MemoryDAO, private val transactions: Dat
 
     suspend fun deleteAll(address: MemoryAddress) = commit { dao.deleteAll(address.scope, address.owner.storageId) }
 
+    internal suspend fun clearEnterpriseScope(scope: ConfigurationScope.Enterprise) = commit { dao.deleteScope(scope) }
+
     /** Keep the caller's authorization locks until Room has finished committing or rolling back. */
     private suspend fun commit(write: suspend () -> Unit) {
         val caller = currentCoroutineContext()

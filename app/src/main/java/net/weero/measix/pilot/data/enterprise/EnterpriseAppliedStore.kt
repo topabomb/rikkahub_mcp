@@ -16,7 +16,7 @@ import me.rerere.ai.provider.ChatTransportCapabilities
 internal enum class EnterpriseSessionPhase { SIGNED_OUT, CONFIGURATION_PENDING, READY, OFFLINE, CLOSING, REAUTH_REQUIRED }
 
 @Serializable
-internal enum class EnterpriseExitReason { USER_REQUEST, AUTHORIZATION_EXPIRED, AUTHORIZATION_REVOKED }
+internal enum class EnterpriseExitReason { USER_REQUEST, AUTHORIZATION_EXPIRED, AUTHORIZATION_REVOKED, CLEAR_EXAMPLE_DATA }
 
 internal const val ENTERPRISE_MANIFEST_SCHEMA_VERSION = 3
 

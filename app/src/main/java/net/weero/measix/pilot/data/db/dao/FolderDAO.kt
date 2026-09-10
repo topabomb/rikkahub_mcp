@@ -18,6 +18,9 @@ interface FolderDAO {
     @Query("SELECT * FROM conversation_folder WHERE id = :id")
     suspend fun getFolderById(id: String): FolderEntity?
 
+    @Query("SELECT id FROM conversation_folder WHERE scope = :scope")
+    suspend fun getIdsInScope(scope: ConfigurationScope): List<String>
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insert(folder: FolderEntity)
 

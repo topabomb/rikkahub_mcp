@@ -56,4 +56,7 @@ interface ArtifactDAO {
     /** 范围清理候选：folder + createdAt 截止，覆盖全部生命周期状态，由 Store 在 lifecycle lock 内逐项收口。 */
     @Query("SELECT * FROM artifact WHERE scope = :scope AND folder = :folder AND created_at <= :createdBefore ORDER BY created_at DESC")
     suspend fun listByFolderCreatedBefore(scope: ConfigurationScope, folder: String, createdBefore: Long): List<ArtifactEntity>
+
+    @Query("SELECT * FROM artifact WHERE scope = :scope ORDER BY created_at DESC")
+    suspend fun listInScope(scope: ConfigurationScope): List<ArtifactEntity>
 }

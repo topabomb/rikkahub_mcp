@@ -484,6 +484,23 @@ class ConversationApplicationService internal constructor(
         }
     }
 
+    /** CLOSING owns this maintenance request, including cold recovery before the application gate opens. */
+    internal suspend fun clearEnterpriseData(token: net.weero.measix.pilot.data.enterprise.EnterpriseExitToken) {
+        require(token.reason == net.weero.measix.pilot.data.enterprise.EnterpriseExitReason.CLEAR_EXAMPLE_DATA)
+        requireEnterpriseStopped(token)
+        val scope = token.access.scope
+        conversationRepo.getRootIds(scope).forEach { id ->
+            val childIds = conversationRepo.getChildConversationIds(id)
+            commandCoordinator.deleteFromPendingCleanup(id)
+            (childIds + id).forEach(sideEffects::clearTitleTracking)
+        }
+        runtimeRegistry.activeRuntimes().filter { it.durable.header.scope == scope }.forEach { runtime ->
+            check(runtimeRegistry.isDraft(runtime.id)) { "enterprise_conversation_cleanup_incomplete" }
+            runtimeRegistry.evictRuntime(runtime.id)
+        }
+        folderRepository.getIdsInScope(scope).forEach { folderRepository.deleteEmptyFolder(it) }
+    }
+
     /** OS foreground timeout owns stopping the exact working requests captured at that event. */
     internal suspend fun stopForForegroundTimeout() {
         recoveryGate.awaitReady()

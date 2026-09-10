@@ -250,6 +250,31 @@ class GeneratedMediaStore(
         }
     }
 
+    /** Scope removal reuses row deletion and its recoverable payload receipt. */
+    internal suspend fun clearEnterpriseScope(scope: ConfigurationScope.Enterprise) = withPersistLock {
+        withContext(Dispatchers.IO) {
+            val imagesDir = File(filesDir, IMAGES_DIR)
+            val recordedNames = genMediaRepository.getAllMediaList().mapTo(mutableSetOf()) {
+                canonicalFile(it).relativeTo(imagesDir.canonicalFile).invariantSeparatorsPath
+            }
+            // A committed deletion has no row or scope left. Finish only its existing receipt,
+            // without running the global orphan/staging sweep or deleting any unrelated live row.
+            val payloads = if (!imagesDir.exists()) emptyList() else {
+                check(imagesDir.isDirectory) { "generated_media_directory_unavailable" }
+                checkNotNull(imagesDir.listFiles()) { "generated_media_directory_unreadable" }.toList()
+            }
+            payloads.filter { it.name.endsWith(DELETING_SUFFIX) }.forEach {
+                check(it.isFile) { "generated_media_deletion_receipt_unreadable" }
+                reconcileDeletingFile(it, recordedNames)
+            }
+            genMediaRepository.listInScope(scope).forEach { entity ->
+                check(deleteEntityLocked(entity) == GeneratedMediaDeleteResult.Completed) {
+                    "enterprise_generated_media_cleanup_pending"
+                }
+            }
+        }
+    }
+
     /** 只读投影：设置页通过 query port 消费，不把实体当页面协议。 */
     fun observe(scope: ConfigurationScope): Flow<List<GenMediaEntity>> = genMediaRepository.observeAllMedia(scope)
 
@@ -331,18 +356,7 @@ class GeneratedMediaStore(
                     return@forEach
                 }
                 if (file.name.endsWith(DELETING_SUFFIX)) {
-                    val originalName = file.name.removeSuffix(DELETING_SUFFIX)
-                    if (originalName in recordedNames) {
-                        val original = File(imagesDir, originalName)
-                        check(original.exists() || file.renameTo(original)) {
-                            "Failed to restore interrupted generated-media deletion: $file"
-                        }
-                        if (original.exists() && file.exists()) {
-                            check(file.delete()) { "Failed to remove duplicate generated-media tombstone: $file" }
-                        }
-                    } else {
-                        check(file.delete()) { "Failed to finish generated-media deletion: $file" }
-                    }
+                    reconcileDeletingFile(file, recordedNames)
                     return@forEach
                 }
                 if (file.name !in recordedNames && age >= PROTECTION_MS) {
@@ -355,6 +369,21 @@ class GeneratedMediaStore(
                     genMediaRepository.deleteMedia(entity.id)
                 }
             }
+        }
+    }
+
+    private fun reconcileDeletingFile(file: File, recordedNames: Set<String>) {
+        val originalName = file.name.removeSuffix(DELETING_SUFFIX)
+        if (originalName in recordedNames) {
+            val original = File(file.parentFile, originalName)
+            check(original.exists() || file.renameTo(original)) {
+                "Failed to restore interrupted generated-media deletion: $file"
+            }
+            if (original.exists() && file.exists()) {
+                check(file.delete()) { "Failed to remove duplicate generated-media tombstone: $file" }
+            }
+        } else {
+            check(deleteCommittedPayload(file)) { "Failed to finish generated-media deletion: $file" }
         }
     }
 

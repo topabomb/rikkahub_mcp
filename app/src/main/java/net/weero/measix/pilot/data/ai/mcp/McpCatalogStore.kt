@@ -312,6 +312,17 @@ class McpCatalogStore internal constructor(
         headTokens[key] = (headTokens[key] ?: 0L) + 1L
     }
 
+    /** Domain removal reads the durable catalog under the existing writer, including hidden entries. */
+    internal suspend fun clearEnterpriseScope(scope: ConfigurationScope.Enterprise) = commit {
+        val current = readCurrentCatalogs()
+        val removed = current.keys.filter { it.scope == scope }
+        if (removed.isEmpty()) return@commit
+        val updated = current - removed.toSet()
+        writeCatalogs(updated)
+        _catalogs.value = updated
+        removed.forEach { key -> headTokens[key] = (headTokens[key] ?: 0L) + 1L }
+    }
+
     suspend fun snapshotForBackup(definitions: List<McpServerConfig>): List<McpCatalogSnapshot> {
         // A v4 backup cannot race the one-shot extraction and permanently export an empty catalog.
         initialization.await()

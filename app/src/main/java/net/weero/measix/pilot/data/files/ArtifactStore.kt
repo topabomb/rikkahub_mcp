@@ -1386,10 +1386,20 @@ class ArtifactStore(
         createdBefore: Long,
     ): ArtifactCleanupResult = withSettingsDetach { detach ->
         val entities = artifactDAO.listByFolderCreatedBefore(scope, folder, createdBefore)
-        if (entities.isEmpty()) {
-            payloadStore.deleteEmptyFolder(folder)
-            return@withSettingsDetach ArtifactCleanupResult(0, 0, 0, 0)
+        val result = deleteEntitiesLocked(entities, detach)
+        payloadStore.deleteEmptyFolder(folder)
+        result
+    }
+
+    /** Includes every folder and lifecycle state; an outstanding owner must release its pin first. */
+    internal suspend fun clearEnterpriseScope(scope: ConfigurationScope.Enterprise) = withSettingsDetach { detach ->
+        val result = deleteEntitiesLocked(artifactDAO.listInScope(scope), detach)
+        check(result.cleanupPending == 0 && result.skippedInProgress == 0 && result.failed == 0) {
+            "enterprise_artifact_cleanup_pending"
         }
+    }
+
+    private suspend fun deleteEntitiesLocked(entities: List<ArtifactEntity>, detach: suspend (Set<String>) -> Boolean): ArtifactCleanupResult {
         var deleted = 0
         var cleanupPending = 0
         var skippedInProgress = 0
@@ -1402,7 +1412,7 @@ class ArtifactStore(
             // 已取得所有权的终态（DELETING 续跑、CREATING 回滚）与单条路径一致地在 NonCancellable 内
             // 原子完成，取消只在单项边界传播，不把"已拥有的收口"交给恢复侧重试。
             val result = when (entity.state) {
-                ArtifactState.ACTIVE.name -> deleteUserRequestedLocked(scope, entity.id, detach)
+                ArtifactState.ACTIVE.name -> deleteUserRequestedLocked(entity.scope, entity.id, detach)
                 ArtifactState.DELETING.name -> withContext(NonCancellable) { finishUserDeletion(entity, detach) }
                 ArtifactState.CREATING.name -> withContext(NonCancellable) { discardCreating(entity) }
                 else -> ArtifactDeleteResult.Failed(entity.id, "unknown_artifact_state:${entity.state}")
@@ -1414,10 +1424,7 @@ class ArtifactStore(
                 is ArtifactDeleteResult.Failed -> failed++
             }
         }
-        // 候选处理完后清理可能变空的目录；deleteEmptyFolder 只在目录确为空时删除，
-        // 仍保留此时间范围之外（或失败未删）的 payload。
-        payloadStore.deleteEmptyFolder(folder)
-        ArtifactCleanupResult(deleted = deleted, cleanupPending = cleanupPending, skippedInProgress = skippedInProgress, failed = failed)
+        return ArtifactCleanupResult(deleted = deleted, cleanupPending = cleanupPending, skippedInProgress = skippedInProgress, failed = failed)
     }
 
     /** 范围清理确认对话框的候选计数（只读提示，不锁定；真实清理在同一 lock 内重新快照）。 */

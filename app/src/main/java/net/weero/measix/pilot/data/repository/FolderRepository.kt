@@ -22,6 +22,8 @@ class FolderRepository(
 
     suspend fun getFolder(id: Uuid): Folder? = folderDAO.getFolderById(id.toString())?.toFolder()
 
+    internal suspend fun getIdsInScope(scope: ConfigurationScope): List<Uuid> = folderDAO.getIdsInScope(scope).map(Uuid::parse)
+
     suspend fun createFolder(scope: ConfigurationScope, assistantId: ConfigurationReference, name: String): Folder {
         val folder = Folder(
             scope = scope,

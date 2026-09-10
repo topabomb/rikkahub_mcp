@@ -210,7 +210,7 @@ UserConfiguration + UserPreferences + Applied Enterprise State
 | 授权失效/撤销 | 撤销资格，收口企业任务/Portal，回个人，提示重新接入 |
 | Portal 过期 | 只重建网页会话，不退出企业 |
 | 退出接入 | 原生确认，阻断新企业动作，收口该域运行/采集，清活动绑定/凭据/企业配置/网页会话，回个人；保留封存数据 |
-| 清除示例企业数据 | 独立确认，仅清该示例主体数据/导航，不删个人配置/历史/共享 Workspace |
+| 清除示例企业数据 | 先接入内置示例，在“本地企业场景”独立确认“清除内置示例数据并退出”；支持当前停留个人空间或待配置，只清该示例主体数据/导航，不删用户配置、个人历史、其他企业或共享 Workspace |
 
 平台 Access/Refresh Token 的 rotation、single-flight、幂等与丢响应恢复属于下一阶段真实平台接入，见 [生产接入规划](android-enterprise-production-integration-roadmap.md)。本地来源遵循 Control Protocol §8 的独立 document/session 边界，不伪造平台 token、grant 或 Cookie；配置同步、切域和 Portal 操作均不能续期本地 Session。
 
@@ -295,6 +295,8 @@ LocalEnterpriseSource（身份/配置/动态/场景）
 整包发布由企业应用状态提交协调者负责：先暂存不可变的定义、binding revision 和必要资源，校验闭合关系；最后一次原子持久提交 manifest 指针，包含完整 source/principal、配置 generation 与 binding revision。此提交是可见状态的唯一发布点；Session owner 只有在该主体的 manifest 可恢复后才发布企业可用状态。崩溃恢复只接受完整已提交组合，未提交资料回收；旧 binding 由在途 lease 持有，最后引用释放后清理。退出先撤销 session 执行资格，再按同一恢复协议移除活动 manifest/凭据，不允许配置已换而仍调用旧凭据。
 
 ### 7.3 独立企业动态
+
+清除内置示例数据独立于普通退出：`CLEAR_EXAMPLE_DATA` 使用原 CLOSING/重试/启动恢复，先完成原运行收口，再逐 owner 清除该主体的会话树、Draft、Folder、记忆、域偏好、托管文件和 MCP 目录。Feed 引用与退休配置/绑定文件在 CLOSING 内清完后才发布 SIGNED_OUT；文件 pin、待清理回执或读取失败不能被当作成功。已安装来源仍保留，重新接入可按来源当前版本初始化新的 Feed。共享用户定义、个人与其他主体数据、共享 Workspace 不在清除范围；无需新增数据库表或另一份清理状态。
 
 按 Control Protocol §8/§10.16 将 Feed 从 EnterpriseConfiguration 移出：完整文件升为 v2，顶层 feedSeed 携带企业时区与动态初值；应用 manifest 使用独立 Feed 存储引用、摘要和公开 revision。配置/绑定与 Feed 复用同一原子 manifest 发布协议，Feed 的领域命令负责草稿、发布、撤回和查询，不增加第二写锁或状态流。仅编辑不可见草稿不推进公开 revision；发布/撤回改变可见表示时推进 Feed revision，配置 applied/generation 和配置同步时间不变。
 
@@ -775,3 +777,11 @@ assistant_manage 将原 RealmAccess 和调用者引用交给既有管理服务�
 完整串行 test assembleDebug lintDebug assembleRelease 在 9 分 21 秒内通过：App 2,164 项 JVM 无失败，lint 0 错误、287 警告，Workspace 保留 11 项 Windows 条件跳过。AndroidTest 编译通过，本批未重跑 instrumentation。Android 17 模拟器的正式 Debug 入口验证新建、编辑、发布、Portal 列表/详情、撤回及强制停止后重开；公开 revision 从 1 到 3，配置 generation 和配置同步时间保持原值，草稿与撤回内容均不进入 Portal。设备 UI 使用定向构建包，随后补的到期校验经最终 JVM 门禁验证；Release 原生动态 UI 留待整期设备验收。证据见 build/reports/enterprise/feed-verification.json 和 feed-results.zip。
 
 仍需完成“清除示例数据并退出”、E01–E12 与最终并行审查，再交付 0.0.20；本批不代表真实平台互操作。
+
+### 清除内置示例数据
+
+正式场景页提供独立确认入口，只作用于已经接入的内置示例完整主体；待配置或当前停留个人空间均可执行。沿原退出 CLOSING 协议停止运行，再由会话、偏好、记忆、文件、MCP 目录和 Feed 各自 owner 清理。清理失败保留原 token，冷启动继续恢复；全部清理及旧 Feed 文件回收成功后才发布 SIGNED_OUT。保留用户配置、个人数据、其他企业主体、共享 Workspace 和已安装来源配置，没有新增表、配置区或数据 owner。
+
+完整串行 test assembleDebug lintDebug assembleRelease 通过（9 分 27 秒）：App 2,169 项 JVM 无失败或跳过，lint 0 错误、287 警告；Workspace 保留 11 项 Windows 条件跳过。Android 17 模拟器两项实际 Room/DataStore/文件与会话 owner 用例通过，覆盖完整主体删除、其他主体保全、未发布 staging、Draft 持有、媒体删除失败及重建后的启动恢复。没有 active Provider 运行的测试协作者使用替身，不能将其称为所有运行任务的设备验收。
+
+正式 Debug 页面验证待配置清除、取消确认、已有聊天清除、模拟器重启后未登录，以及重新接入 READY 后历史为空。Release 本次清除入口尚未单独验收。分层证据见 build/reports/enterprise/clear-example-verification.json 和 clear-example-results.zip。最终并行审查发现示例委派开场白尚未触发固定企业子助手，继续修正该路径，并完成 E01–E12 与版本 20 交付。

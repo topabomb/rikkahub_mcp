@@ -22,7 +22,7 @@ import net.weero.measix.pilot.service.portal.PortalClosure
 import kotlin.uuid.Uuid
 
 internal data class PortalPresentation(val id: Uuid = Uuid.random(), val selection: RealmSelection)
-internal data class EnterpriseExitConfirmation(val request: EnterpriseExitRequest, val enterpriseName: String?)
+internal data class EnterpriseExitConfirmation(val request: EnterpriseExitRequest, val enterpriseName: String?, val clearExampleData: Boolean = false)
 
 internal class EnterpriseVM(private val service: EnterpriseApplicationService) : ViewModel() {
     val overview = service.observe().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
@@ -142,10 +142,17 @@ internal class EnterpriseVM(private val service: EnterpriseApplicationService) :
         if (_exitRequest.value == null) _error.value = R.string.enterprise_failure
     }
     fun dismissExit() { _exitRequest.value = null }
+    fun requestExampleDataRemoval() = command {
+        val request = service.captureExampleDataRemoval()
+        _exitRequest.value = EnterpriseExitConfirmation(request, overview.value?.enterpriseName, clearExampleData = true)
+    }
     fun confirmExit(onExited: () -> Unit) {
         val original = _exitRequest.value ?: return
         _exitRequest.value = null
-        command { service.exit(original.request); onExited() }
+        command {
+            if (original.clearExampleData) service.clearExampleData(original.request) else service.exit(original.request)
+            onExited()
+        }
     }
     fun retryExit() { overview.value?.exitFailure?.let { failure -> command { service.retryExit(failure) } } }
     fun showPortal() { overview.value?.selection?.let { _portal.value = PortalPresentation(selection = it) } }
@@ -173,6 +180,7 @@ internal class EnterpriseVM(private val service: EnterpriseApplicationService) :
                     error is EnterpriseConfigurationException && error.reason == "enterprise_selection_revoked" -> R.string.enterprise_selection_changed
                     error is EnterpriseConfigurationException && error.reason == "local_enterprise_configuration_changed" -> R.string.enterprise_source_changed
                     error is EnterpriseConfigurationException && error.reason == "enterprise_feed_changed" -> R.string.enterprise_feed_changed
+                    error is EnterpriseConfigurationException && error.reason == "bundled_example_session_required" -> R.string.enterprise_clear_example_requires_session
                     error is EnterpriseConfigurationException && error.reason in setOf("invalid_assistant_model_reference", "invalid_default_chat_model", "invalid_default_image_model") -> R.string.enterprise_model_still_referenced
                     enrollment -> R.string.enterprise_invalid_enrollment
                     else -> failureMessage

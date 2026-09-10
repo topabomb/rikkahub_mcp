@@ -347,7 +347,7 @@ val appModule = module {
     single {
         net.weero.measix.pilot.service.SpeechApplicationService(get(), get(), get(), get(), get(), get(), get(), get(), get<AppScope>(), me.rerere.tts.controller.TtsController(get()))
     }
-    single { net.weero.measix.pilot.service.EnterpriseExitService(get(), get(), get(), get(), get<AppScope>(), get(), get(), get(), get(), get()) }
+    single { net.weero.measix.pilot.service.EnterpriseExitService(get(), get(), get(), get(), get<AppScope>(), get(), get(), get(), get(), get(), get(), get(), get(), get()) }
     single { net.weero.measix.pilot.service.EnterpriseApplicationService(get(), get(), get(), get(), get(), get(), get<AppScope>(), get(), get(), get()) }
 
     single {

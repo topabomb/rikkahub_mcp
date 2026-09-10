@@ -198,6 +198,7 @@ internal fun EnterprisePage(vm: EnterpriseVM = koinViewModel()) {
                 Text(stringResource(R.string.enterprise_local_scenarios_notice))
                 if (original.access == null) {
                     Text(stringResource(R.string.enterprise_pending_example_notice))
+                    Text(stringResource(R.string.enterprise_clear_example_requires_session))
                     OutlinedButton(onClick = { scenarios = null; vm.joinPendingExample() }, enabled = !busy) {
                         Text(stringResource(R.string.enterprise_join_pending_example))
                     }
@@ -219,6 +220,9 @@ internal fun EnterprisePage(vm: EnterpriseVM = koinViewModel()) {
                     }
                     TextButton(onClick = { scenarios = null; vm.runLocalScenario(original, LocalEnterpriseScenario.REVOKE) }, enabled = !busy) {
                         Text(stringResource(R.string.enterprise_simulate_revocation))
+                    }
+                    TextButton(onClick = { scenarios = null; vm.requestExampleDataRemoval() }, enabled = !busy) {
+                        Text(stringResource(R.string.enterprise_clear_example))
                     }
                 }
             } }, confirmButton = { TextButton(onClick = { scenarios = null }) { Text(stringResource(R.string.cancel)) } })
@@ -244,8 +248,9 @@ internal fun EnterprisePage(vm: EnterpriseVM = koinViewModel()) {
             Text(stringResource(R.string.enterprise_join_submit))
         } }, dismissButton = { TextButton(onClick = { paste = false; enrollment = "" }) { Text(stringResource(R.string.cancel)) } })
     if (exit != null) AlertDialog(onDismissRequest = vm::dismissExit,
-        title = { Text(stringResource(R.string.enterprise_exit)) },
-        text = { Text(stringResource(R.string.enterprise_exit_confirm, exit?.enterpriseName ?: stringResource(R.string.enterprise_space))) },
+        title = { Text(stringResource(if (exit?.clearExampleData == true) R.string.enterprise_clear_example else R.string.enterprise_exit)) },
+        text = { Text(stringResource(if (exit?.clearExampleData == true) R.string.enterprise_clear_example_confirm else R.string.enterprise_exit_confirm,
+            exit?.enterpriseName ?: stringResource(R.string.enterprise_space))) },
         confirmButton = { TextButton(onClick = { vm.confirmExit(openChat) }) { Text(stringResource(R.string.confirm)) } },
         dismissButton = { TextButton(onClick = vm::dismissExit) { Text(stringResource(R.string.cancel)) } })
     example?.let { code ->

@@ -211,6 +211,12 @@ internal class EnterpriseApplicationService(
     )
 
     suspend fun captureExitRequest(): EnterpriseExitRequest? = exit.captureRequest()
+    suspend fun captureExampleDataRemoval(): EnterpriseExitRequest {
+        val request = exit.captureRequest() ?: throw EnterpriseConfigurationException("bundled_example_session_required")
+        if (request.access.scope != source.bundledScope()) throw EnterpriseConfigurationException("bundled_example_session_required")
+        return request
+    }
+    suspend fun clearExampleData(request: EnterpriseExitRequest) { exit.clearExampleData(request, source.bundledScope()) }
     suspend fun exit(request: EnterpriseExitRequest) { exit.exit(request) }
     suspend fun retryExit(failure: EnterpriseExitFailure) { exit.retry(failure) }
 

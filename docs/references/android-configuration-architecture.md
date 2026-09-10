@@ -98,6 +98,10 @@ PrepareEnterpriseExampleAssets 从公开完整模板派生 enterprise.local.iden
 
 正式空间页的“本地企业场景”仅作用于本地来源。EnterpriseApplicationService 将原 RealmSelection 和目标 Session 交给 Session owner；断连/恢复只改变 phase，普通配置同步保持 OFFLINE。缩短登录期限只更新原 Session 的 expiresAtMillis，不能延长已有期限，由既有 EnterpriseExitService 到期观察与启动恢复完成清理；凭据撤销在 Session 锁外进入同一退出流程。没有额外计时器、故障存储或配置镜像。待配置体验仍经过原资料解析、身份验证和一次性兑换，仅本次读取返回无配置；准入在消费前拒绝替换活动 Session。正常同步恢复 READY 后仍留在个人空间，用户明确切入企业。
 
+“清除内置示例数据并退出”要求已接入安装包内置示例的完整主体，允许当前选中个人空间或 CONFIGURATION_PENDING。独立确认保存原 RealmSelection/Session；导入的其他本地企业不能通过此入口清除。`EnterpriseExitService` 以 `CLEAR_EXAMPLE_DATA` 保存原 CLOSING 意图，先执行普通退出的运行屏障，再交给 `ConversationApplicationService` 删除完整会话树、释放同域 Draft 并删除空 Folder；SettingsStore 移除该主体的选择、助手使用、Gateway 偏好和导航，MemoryRepository 清除该域所有记忆 owner。FileManagementApplicationService 只编排 ArtifactStore 的全目录生命周期删除和 GeneratedMediaStore 的 row/文件删除；McpCatalogStore 在原 writer 内移除该主体目录并失效 head token。所有共享用户定义、个人数据、其他主体、已安装来源配置和共享 Workspace 均保留。
+
+清除失败保留原 token，重试和启动恢复复用同一 owner，不能等待恢复自身持有的 Ready gate。Artifact 的 pin、失败或待清理结果均阻止完成；图库沿已有 tombstone 协议完成已提交删除，不运行全局孤儿清扫，不把目录读取失败当作空目录。无 row 的图库 tombstone 已没有主体信息，其收口仅完成此前删除，不移除其他主体的活跃 row。`prepareExampleDataRemovalCompletion` 在 CLOSING 内移除目标 Feed 引用并清理退休配置/绑定/Feed 文件，成功后 `finishExit` 才清除 Session 与最近身份。普通退出保留数据，不能合并为清除成功；本流程不新增数据库表、manifest 字段或第二套持久化清理状态。
+
 ### 模型执行中的配置与私有连接
 
 助手的 `builtInSearch` 可选偏好由 `Model.withAssistantSearch` 派生为请求工具，个人定义与企业使用偏好保持原有存储归属。

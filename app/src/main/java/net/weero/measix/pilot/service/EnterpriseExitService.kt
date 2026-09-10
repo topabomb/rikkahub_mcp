@@ -42,9 +42,14 @@ internal class EnterpriseExitService(
     private val terminals: net.weero.measix.pilot.service.workspace.WorkspaceTerminalRuntime,
     private val mcp: net.weero.measix.pilot.data.ai.mcp.McpRuntimeCoordinator,
     private val speech: SpeechApplicationService,
+    private val settings: net.weero.measix.pilot.data.datastore.SettingsStore,
+    private val memories: net.weero.measix.pilot.data.repository.MemoryRepository,
+    private val catalogs: net.weero.measix.pilot.data.ai.mcp.McpCatalogStore,
+    private val files: FileManagementApplicationService,
 ) {
     private val mutex = Mutex()
-    private val active = mutableMapOf<RealmAccess.Enterprise, Deferred<EnterpriseExitResult>>()
+    private data class ExitTask(val reason: EnterpriseExitReason, val result: Deferred<EnterpriseExitResult>)
+    private val active = mutableMapOf<RealmAccess.Enterprise, ExitTask>()
     private val _failure = MutableStateFlow<EnterpriseExitFailure?>(null)
     val failure = _failure.asStateFlow()
 
@@ -74,12 +79,19 @@ internal class EnterpriseExitService(
 
     suspend fun exit(request: EnterpriseExitRequest): EnterpriseExitResult {
         recoveryGate.awaitReady()
-        return enqueue(request.access) { sessions.beginExit(request) }.await()
+        return enqueue(request.access, EnterpriseExitReason.USER_REQUEST) { sessions.beginExit(request) }.await()
+    }
+
+    suspend fun clearExampleData(request: EnterpriseExitRequest, bundledScope: net.weero.measix.pilot.data.configuration.ConfigurationScope.Enterprise): EnterpriseExitResult {
+        recoveryGate.awaitReady()
+        return enqueue(request.access, EnterpriseExitReason.CLEAR_EXAMPLE_DATA) {
+            sessions.beginExampleDataRemoval(request, bundledScope)
+        }.await()
     }
 
     suspend fun invalidate(access: RealmAccess.Enterprise, reason: EnterpriseExitReason): EnterpriseExitResult {
         recoveryGate.awaitReady()
-        return enqueue(access, invalidationReason = reason) { sessions.beginInvalidation(access, reason) }.await()
+        return enqueue(access, reason, invalidationReason = reason) { sessions.beginInvalidation(access, reason) }.await()
     }
 
     suspend fun retry(failure: EnterpriseExitFailure): EnterpriseExitResult = when (failure) {
@@ -89,7 +101,7 @@ internal class EnterpriseExitService(
 
     suspend fun retry(token: EnterpriseExitToken): EnterpriseExitResult {
         recoveryGate.awaitReady()
-        return enqueue(token.access) {
+        return enqueue(token.access, token.reason) {
             sessions.withClosingSession(token) { Unit }
             token
         }.await()
@@ -98,7 +110,7 @@ internal class EnterpriseExitService(
     private suspend fun resumeClosing(token: EnterpriseExitToken) {
         val pending = mutex.withLock {
             if ((_failure.value as? EnterpriseExitFailure.Closing)?.token == token || sessions.pendingExit() != token) null
-            else enqueueLocked(token.access, null) {
+            else enqueueLocked(token.access, token.reason, null) {
                 sessions.withClosingSession(token) { Unit }
                 token
             }
@@ -108,16 +120,25 @@ internal class EnterpriseExitService(
 
     private suspend fun enqueue(
         access: RealmAccess.Enterprise,
+        requestedReason: EnterpriseExitReason,
         invalidationReason: EnterpriseExitReason? = null,
         admit: suspend () -> EnterpriseExitToken,
-    ): Deferred<EnterpriseExitResult> = mutex.withLock { enqueueLocked(access, invalidationReason, admit) }
+    ): Deferred<EnterpriseExitResult> = mutex.withLock { enqueueLocked(access, requestedReason, invalidationReason, admit) }
 
     private fun enqueueLocked(
         access: RealmAccess.Enterprise,
+        requestedReason: EnterpriseExitReason,
         invalidationReason: EnterpriseExitReason?,
         admit: suspend () -> EnterpriseExitToken,
-    ): Deferred<EnterpriseExitResult> =
-        active[access] ?: scope.async(start = CoroutineStart.LAZY) {
+    ): Deferred<EnterpriseExitResult> {
+        active[access]?.let { existing ->
+            // A normal sign-out retains data and must never satisfy an explicit removal request.
+            if (requestedReason == EnterpriseExitReason.CLEAR_EXAMPLE_DATA && existing.reason != requestedReason) {
+                throw EnterpriseConfigurationException("enterprise_exit_in_progress")
+            }
+            return existing.result
+        }
+        return scope.async(start = CoroutineStart.LAZY) {
             var token: EnterpriseExitToken? = null
             try {
                 token = admit()
@@ -138,7 +159,8 @@ internal class EnterpriseExitService(
             } finally {
                 withContext(NonCancellable) { mutex.withLock { active.remove(access) } }
             }
-        }.also { active[access] = it; it.start() }
+        }.also { active[access] = ExitTask(requestedReason, it); it.start() }
+    }
 
     /** Runs after Child/Turn recovery and before gate.ready; it must never wait on that gate. */
     suspend fun completeDuringRecovery() {
@@ -170,8 +192,18 @@ internal class EnterpriseExitService(
             }
             failure?.let { throw it }
         }
+        if (token.reason == EnterpriseExitReason.CLEAR_EXAMPLE_DATA) {
+            sessions.withClosingSession(token) { }
+            conversations.clearEnterpriseData(token)
+            settings.clearEnterprisePreferences(token.access.scope)
+            memories.clearEnterpriseScope(token.access.scope)
+            files.clearEnterpriseData(token)
+            catalogs.clearEnterpriseScope(token.access.scope)
+            sessions.prepareExampleDataRemovalCompletion(token)
+        }
         sessions.finishExit(token)
         _failure.value = null
+        if (token.reason == EnterpriseExitReason.CLEAR_EXAMPLE_DATA) return EnterpriseExitResult()
         return try {
             sessions.pruneUnusedRevisions()
             EnterpriseExitResult()

@@ -76,7 +76,7 @@ UI 不持有 DAO、ConversationRepository、Runtime Registry、Artifact/Generate
 | Workspace 命令、只读投影、PTY | `WorkspaceApplicationService` / `WorkspaceQueryService` / `WorkspaceTerminalRuntime`；模型与 UI mutation 共用 Workspace command gate |
 | 备份恢复请求与 archive staging | `BackupRestoreApplicationService` / `BackupArchiveService`；`PendingBackupRestore` 执行可恢复发布 |
 | 应用启动恢复与全局写门禁 | `ApplicationRecoveryCoordinator` / `ApplicationRecoveryGate` |
-| 企业退出编排与自动到期 | `EnterpriseExitService`；Session manifest 仍是唯一持久状态，运行取消和终态仍经原会话 owner |
+| 企业退出、自动到期与内置示例数据清除 | `EnterpriseExitService`；Session manifest 仍是唯一持久状态，运行取消和终态仍经原会话 owner；显式清除复用各数据 owner 的范围命令，文件修订清完才完成退出 |
 | 生成期后台保活 | `ChatGenerationForegroundService` / `GenerationForegroundLifetime`；只消费活动投影，不拥有运行事实 |
 
 同一 durable 事实只有一个 owner 和一个写协议。禁止旁路 DAO/Repository 写入、整聚合回写、服务定位器、兼容转发和第二状态源。

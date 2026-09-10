@@ -484,11 +484,20 @@ internal class EnterpriseSessionController(
 
     /** Revocation targets the original Session even from personal space or after its expiry. */
     suspend fun beginInvalidation(access: RealmAccess.Enterprise, reason: EnterpriseExitReason): EnterpriseExitToken = mutex.withLock {
-        require(reason != EnterpriseExitReason.USER_REQUEST)
+        require(reason in setOf(EnterpriseExitReason.AUTHORIZATION_EXPIRED, EnterpriseExitReason.AUTHORIZATION_REVOKED))
         val manifest = manifestForExit()
         requireExitIdentity(manifest, access)
         if (manifest.phase == EnterpriseSessionPhase.CLOSING) closingToken(manifest)
         else beginClosing(manifest, reason)
+    }
+
+    suspend fun beginExampleDataRemoval(request: EnterpriseExitRequest, bundledScope: ConfigurationScope.Enterprise): EnterpriseExitToken = mutex.withLock {
+        if (!bundledScope.authority.isLocal || request.access.scope != bundledScope) fail("bundled_example_session_required")
+        val manifest = manifestForExit()
+        requireExitIdentity(manifest, request.access)
+        if (manifest.phase == EnterpriseSessionPhase.CLOSING) fail("enterprise_exit_in_progress")
+        if (exitSelection(manifest) != request.selection) fail("enterprise_selection_revoked")
+        beginClosing(manifest, EnterpriseExitReason.CLEAR_EXAMPLE_DATA)
     }
 
     suspend fun pendingExit(): EnterpriseExitToken? = mutex.withLock {
@@ -540,12 +549,31 @@ internal class EnterpriseSessionController(
     private suspend fun manifestForExit(): EnterpriseManifest =
         loaded?.manifest ?: withContext(Dispatchers.IO) { store.readManifest() }
 
+    /** Keep the durable removal intent until both Feed references and retired payload revisions are gone. */
+    suspend fun prepareExampleDataRemovalCompletion(token: EnterpriseExitToken) = mutex.withLock {
+        require(token.reason == EnterpriseExitReason.CLEAR_EXAMPLE_DATA)
+        val manifest = manifestForExit()
+        if (manifest.phase != EnterpriseSessionPhase.CLOSING || closingToken(manifest) != token) fail("stale_enterprise_exit")
+        if (leases.values.any { it.scope == token.access.scope }) fail("enterprise_executions_pending")
+        val retained = manifest.feeds.filterNot { it.scope == token.access.scope }
+        val cleared = if (retained != manifest.feeds) publish(manifest.copy(feeds = retained)).manifest else manifest
+        prune(cleared)
+    }
+
     suspend fun finishExit(token: EnterpriseExitToken) = mutex.withLock {
         val manifest = manifestForExit()
         if (manifest.phase != EnterpriseSessionPhase.CLOSING || closingToken(manifest) != token) fail("stale_enterprise_exit")
         if (leases.values.any { it.sessionId == token.access.sessionId }) fail("enterprise_executions_pending")
-        val phase = if (token.reason == EnterpriseExitReason.USER_REQUEST) EnterpriseSessionPhase.SIGNED_OUT else EnterpriseSessionPhase.REAUTH_REQUIRED
-        publish(EnterpriseManifest.signedOut(requireNotNull(manifest.session).identity, manifest.feeds).copy(phase = phase))
+        val clearing = token.reason == EnterpriseExitReason.CLEAR_EXAMPLE_DATA
+        if (clearing && manifest.feeds.any { it.scope == token.access.scope }) fail("enterprise_feed_cleanup_pending")
+        val phase = when (token.reason) {
+            EnterpriseExitReason.USER_REQUEST, EnterpriseExitReason.CLEAR_EXAMPLE_DATA -> EnterpriseSessionPhase.SIGNED_OUT
+            EnterpriseExitReason.AUTHORIZATION_EXPIRED, EnterpriseExitReason.AUTHORIZATION_REVOKED -> EnterpriseSessionPhase.REAUTH_REQUIRED
+        }
+        publish(EnterpriseManifest.signedOut(
+            if (clearing) null else requireNotNull(manifest.session).identity,
+            manifest.feeds,
+        ).copy(phase = phase))
     }
 
     suspend fun pruneUnusedRevisions() = mutex.withLock { prune(manifestForExit()) }
