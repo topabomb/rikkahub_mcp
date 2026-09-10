@@ -55,7 +55,7 @@ Target.allowAsSubAssistant
 `SubAssistantAccessPolicy` 重算访问范围，不把 Snapshot 当作授权凭据。详细配置由
 `assistant_inspect` 按需读取。请求级叠加见 [`request-context.md`](request-context.md)。
 
-`AssistantManagement` 与 `AssistantDelegation` 是独立 Local Tool 权限。前者注册 `assistant_manage`、`assistant_inspect`，后者注册 `assistant_call`。工具创建的新 Target 会原子加入 Caller 的 `allowedSubAssistantIds`。
+`AssistantManagement` 与 `AssistantDelegation` 是独立 Local Tool 权限。前者注册 `assistant_manage`、`assistant_inspect`，后者注册 `assistant_call`。工具创建的新 Target 只保存一份用户定义：个人域原子加入 Caller 定义的 allowedSubAssistantIds，企业域原子加入原主体的 additionalSubAssistantIds；两者均与新定义共用同一次 Settings 文档提交。管理服务持原 Session 授权，叠加 allowLocalAssistants、调用者管理权限和目标主从授权；Factory 不再用个人 Settings 重复准入。企业定义禁止 UPDATE/DELETE，用户定义修改有共享影响。删除清理各域 usage/附加引用，既有个人数据 tombstone 清理在授权锁外进行，不删除企业历史。
 
 ### 模型解析
 

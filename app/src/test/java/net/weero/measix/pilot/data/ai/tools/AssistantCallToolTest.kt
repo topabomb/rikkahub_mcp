@@ -24,7 +24,6 @@ import me.rerere.ai.core.ToolOutputPolicy
 import me.rerere.ai.ui.UIMessagePart
 import net.weero.measix.pilot.data.ai.tools.local.LocalToolOption
 import net.weero.measix.pilot.data.datastore.Settings
-import net.weero.measix.pilot.data.datastore.SettingsStore
 import net.weero.measix.pilot.data.model.Assistant
 import net.weero.measix.pilot.service.AssistantManagementService
 import net.weero.measix.pilot.service.subassistant.SubAssistantRunCoordinator
@@ -51,16 +50,7 @@ class AssistantCallToolTest {
     )
 
     private fun createTool(coordinator: SubAssistantRunCoordinator): me.rerere.ai.core.Tool {
-        val effectiveSettings = MutableStateFlow(
-            Settings(
-                assistants = listOf(caller, target),
-                assistantId = callerId,
-            ),
-        )
-        val settingsStore = mockk<SettingsStore>()
-        every { settingsStore.userSettings } returns effectiveSettings
         return AssistantToolFactory(
-            settingsStore = settingsStore,
             assistantManagementService = mockk<AssistantManagementService>(relaxed = true),
             json = Json,
             subAssistantRunCoordinator = coordinator,

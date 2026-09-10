@@ -11,6 +11,9 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.test.runTest
 import net.weero.measix.pilot.data.ai.tools.local.LocalToolOption
 import net.weero.measix.pilot.data.datastore.Settings
+import net.weero.measix.pilot.data.datastore.*
+import net.weero.measix.pilot.data.enterprise.*
+import net.weero.measix.pilot.data.configuration.ConfigurationScope
 import net.weero.measix.pilot.data.datastore.SettingsStore
 import net.weero.measix.pilot.data.files.ArtifactStore
 import net.weero.measix.pilot.data.model.Assistant
@@ -32,13 +35,13 @@ class AssistantManagementServiceTest {
         )
         val env = Env(Settings(assistants = listOf(caller), assistantId = caller.id))
 
-        assertTrue(env.service.createAssistant("", "Description", "Prompt", caller.id).isFailure)
+        assertTrue(env.service.createAssistant("", "Description", "Prompt", AssistantManagementCaller(caller.id, RealmAccess.Personal)).isFailure)
 
         val created = env.service.createAssistant(
             name = " Target ",
             description = " Description ",
             instructions = " Prompt ",
-            callerAssistantId = caller.id,
+            caller = AssistantManagementCaller(caller.id, RealmAccess.Personal),
         ).getOrThrow()
 
         assertEquals("Target", created.name)
@@ -70,7 +73,7 @@ class AssistantManagementServiceTest {
             assistantId = target.id,
             name = "New",
             instructions = "New prompt",
-            callerAssistantId = caller.id,
+            caller = AssistantManagementCaller(caller.id, RealmAccess.Personal),
         ).getOrThrow()
 
         assertEquals("New", updated.name)
@@ -91,12 +94,12 @@ class AssistantManagementServiceTest {
             )
         )
 
-        val result = env.service.deleteAssistant(target.id, caller.id).getOrThrow()
+        val result = env.service.deleteAssistant(target.id, AssistantManagementCaller(caller.id, RealmAccess.Personal)).getOrThrow()
 
         assertFalse(result.cleanupPending)
         assertEquals(caller.id, env.settings.value.assistantId)
         assertFalse(env.settings.value.assistants.any { it.id == target.id })
-        assertFalse(env.settings.value.assistants.single().allowedSubAssistantIds.contains(target.id))
+        assertFalse(env.settings.value.assistants.single { it.id == caller.id }.allowedSubAssistantIds.contains(target.id))
         assertTrue(env.settings.value.pendingAssistantDeletions.isEmpty())
         coVerifyOrder {
             env.coordinator.cancelRunsForAssistant(target.id)
@@ -123,7 +126,7 @@ class AssistantManagementServiceTest {
         coEvery { env.conversations.deleteOfAssistantFromPendingCleanup(target.id) } throws
             IllegalStateException("storage unavailable")
 
-        val result = env.service.deleteAssistant(target.id, caller.id).getOrThrow()
+        val result = env.service.deleteAssistant(target.id, AssistantManagementCaller(caller.id, RealmAccess.Personal)).getOrThrow()
 
         assertTrue(result.cleanupPending)
         assertEquals(listOf(target.id), env.settings.value.pendingAssistantDeletions.map { it.assistantId })
@@ -163,7 +166,8 @@ class AssistantManagementServiceTest {
 
     private class Env(initial: Settings) {
         val settings = MutableStateFlow(initial)
-        private val effectiveSettings = MutableStateFlow(initial)
+        private var document = UserSettingsDocument.empty().withPersonalSettings(initial)
+        val sessions = mockk<EnterpriseSessionController>()
         val settingsStore = mockk<SettingsStore>()
         val artifacts = mockk<ArtifactStore>(relaxed = true)
         val memory = mockk<MemoryRepository>(relaxed = true)
@@ -172,10 +176,22 @@ class AssistantManagementServiceTest {
         val recoveryGate = mockk<ApplicationRecoveryGate>(relaxed = true)
 
         init {
-            every { settingsStore.userSettings } returns effectiveSettings
+            every { settingsStore.userSettings } returns settings
+            every { sessions.state } returns MutableStateFlow<EnterpriseState>(EnterpriseState.Loading)
+            every { sessions.requirePublishedRealmAccess(any()) } returns Unit
+            coEvery { sessions.withRealmAccess<AssistantManagementResult>(any(), any()) } coAnswers {
+                secondArg<suspend () -> AssistantManagementResult>()()
+            }
+            coEvery { artifacts.manageAssistantReferences(any(), any(), any(), any(), any()) } coAnswers {
+                arg<() -> Unit>(4)()
+                val mutation = document.manageAssistant(firstArg(), secondArg(), thirdArg(), arg(3))
+                document = mutation.document
+                settings.value = document.personalSettings()
+                mutation.result
+            }
             coEvery { artifacts.updateSettingsReferences(any()) } coAnswers {
                 settings.value = firstArg<(Settings) -> Settings>()(settings.value)
-                effectiveSettings.value = settings.value
+                document = document.withPersonalSettings(settings.value)
                 settings.value
             }
         }
@@ -187,6 +203,7 @@ class AssistantManagementServiceTest {
             subAssistantRunCoordinator = coordinator,
             recoveryGate = recoveryGate,
             conversationApplicationService = conversations,
+            sessions = sessions,
         )
     }
 }

@@ -355,6 +355,13 @@ internal class EnterpriseSessionController(
             access is RealmAccess.Enterprise && !allowsDataAccess(manifest, access)) fail("enterprise_data_access_unavailable")
     }
 
+    /** Recheck the original execution authority immediately before a durable write under this owner. */
+    internal fun requirePublishedRealmAccess(access: RealmAccess) {
+        if (access == RealmAccess.Personal) return
+        val manifest = (state.value as? EnterpriseState.Available)?.manifest ?: fail("enterprise_data_access_unavailable")
+        if (!allowsDataAccess(manifest, access as RealmAccess.Enterprise)) fail("enterprise_data_access_unavailable")
+    }
+
     /** UI directory subscriptions follow the selected realm; expiry revokes the original session. */
     fun observeSelectedRealmAccess(): Flow<RealmAccess?> = state.flatMapLatest { published ->
         val manifest = (published as? EnterpriseState.Available)?.manifest

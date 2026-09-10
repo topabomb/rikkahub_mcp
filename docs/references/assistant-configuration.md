@@ -211,7 +211,11 @@ code point 限制长度。关闭 `allowAsSubAssistant` 时，`normalizeForPersis
 `pendingAssistantDeletions`。失效的 MCP / 注入 / 快捷消息引用、重复 id、内置 Provider 补齐由
 `materializeForRead()` 负责，不在 `normalizeForPersistence` 里。
 
-跨助手的权限清理和删除 tombstone 仍必须放在同一次 `updateLocal` transform 中，不能先发布内存状态再补写磁盘。市场导入若只调用 `normalizeForPersistence`，不会自动丢掉失效引用。
+管理服务的 CRUD（`assistant_manage` 与 UI 删除）通过 `SettingsStore.manageAssistant` 的 typed mutation 一次提交用户定义、按主体使用授权与删除 tombstone；`ArtifactSettingsCoordinator` 接入既有 `ArtifactStore.commitSettingsRoots`，保持 Settings → Artifact 锁序。用户助手集合与读取共用内置定义补齐规则，避免目录可见但命令无法找到。回执只在 DataStore 确认后返回，取消前未接收的写入拒绝，已接收写入等待确认后传播取消。市场导入若只调用 `normalizeForPersistence`，不会自动丢掉失效引用。
+
+`assistant_manage` 捕获原 `AssistantManagementCaller`（助手引用与 RealmAccess），Factory 不读取个人 Settings 做第二次准入。管理服务在原 Session 内用最新配置解析调用者、管理工具开关及主从授权；企业域还要求 allowLocalAssistants。CREATE 保存一份共享用户子助手定义，并在同次提交给调用者的当前企业主体追加 additionalSubAssistantIds；个人域仍更新用户定义的允许列表。UPDATE/DELETE 只接受获准用户定义，企业定义只读；工具说明明确共享影响。切换到个人不改变在途调用的原域，退出重入不能给旧 Session 补发权限，提交前复验期限。
+
+删除同次移除各域该助手 usage 及额外授权，保留企业已选引用的失效状态，不静默替换；个人当前选择按原规则修正。该配置提交不删除企业聊天或运行记忆。
 
 删除 Assistant 由 `AssistantManagementService` 协调：先写 tombstone，再取消相关生成和子助手运行，
 清理记忆与会话，最后提交 Settings 清理。中断后由 tombstone 恢复流程继续完成，不能把列表移除视为删除完成。

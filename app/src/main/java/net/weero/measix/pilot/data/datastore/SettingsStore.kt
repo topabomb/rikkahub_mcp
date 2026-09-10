@@ -291,6 +291,25 @@ class SettingsStore internal constructor(
         }
     }
 
+    internal suspend fun manageAssistant(
+        scope: ConfigurationScope,
+        state: EnterpriseState,
+        callerId: ConfigurationReference?,
+        change: AssistantManagementChange,
+        requireOwner: () -> Unit,
+        withArtifactCommit: suspend (UserSettingsDocument, UserSettingsDocument, suspend () -> Unit) -> Unit,
+    ): AssistantManagementResult = updateMutex.withLock {
+        val caller = currentCoroutineContext()
+        requireOwner()
+        val before = userDocuments.first()
+        val mutation = before.manageAssistant(scope, state, callerId, change)
+        withArtifactCommit(before, mutation.document) {
+            commitUserDocument({ caller.ensureActive(); requireOwner() }, artifactRootsOwned = true) { mutation.document }
+        }
+        caller.ensureActive()
+        mutation.result
+    }
+
     /** The session owner serializes authorization changes through the entire preference commit. */
     internal suspend fun updateResourceSelections(
         scope: ConfigurationScope,

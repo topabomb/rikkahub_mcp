@@ -607,3 +607,7 @@ Android Manifest 关闭 `allowBackup`；`backup_rules.xml` 和 `data_extraction_
 ### 企业 Starter 预填
 
 ConversationConfigurationUiModel 只投影当前企业助手绑定的 Starter ID、标题与 prompt；用户助手或其他企业助手的开场白不混入。聊天输入框的输入模板菜单分别展示企业开场白与用户 QuickMessage。点击 Starter 在原页面授权仍有效时把文本追加到现有草稿（有文字时以空行分隔），保留附件；不自动发送、不创建 QuickMessage、不改企业定义。实际发送仍走当前会话的模型与资源准入。
+
+### 助手管理工具的域内授权
+
+AssistantToolFactory 将原 RealmAccess 与 caller 引用交给 AssistantManagementService，不依赖个人 Settings 投影决定企业操作。管理服务持原 Session，SettingsStore.manageAssistant 在用户写锁内解析最新规则并执行 typed AssistantManagementChange；ArtifactSettingsCoordinator 接入原 Artifact 提交协议。企业 CREATE 同时保存共享用户定义与当前主体额外子助手授权，UPDATE/DELETE 拒绝企业定义。删除清理所有主体的相关 usage/额外授权，并提交原个人数据清理 tombstone；企业历史及失效的企业选择引用保留。内置用户助手补齐与普通读取共用规则，未新增持久格式或兼容路径。

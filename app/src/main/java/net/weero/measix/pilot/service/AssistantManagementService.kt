@@ -5,15 +5,15 @@ import android.util.Log
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.withTimeout
-import net.weero.measix.pilot.data.ai.subassistant.SubAssistantAccessPolicy
 import net.weero.measix.pilot.data.ai.subassistant.buildToolCreatedAssistant
-import net.weero.measix.pilot.data.ai.tools.local.LocalToolOption
 import net.weero.measix.pilot.data.datastore.PendingAssistantDeletion
 import net.weero.measix.pilot.data.datastore.SettingsStore
-import net.weero.measix.pilot.data.datastore.getAssistantById
+import net.weero.measix.pilot.data.datastore.AssistantManagementChange
+import net.weero.measix.pilot.data.datastore.AssistantManagementResult
+import net.weero.measix.pilot.data.enterprise.EnterpriseSessionController
+import net.weero.measix.pilot.data.enterprise.RealmAccess
 import net.weero.measix.pilot.data.files.ArtifactStore
 import net.weero.measix.pilot.data.model.Assistant
-import net.weero.measix.pilot.data.model.Avatar
 import net.weero.measix.pilot.data.model.normalizeDescription
 import net.weero.measix.pilot.data.repository.MemoryRepository
 import net.weero.measix.pilot.service.subassistant.SubAssistantRunCoordinator
@@ -21,248 +21,79 @@ import net.weero.measix.pilot.service.subassistant.SubAssistantRunCoordinator
 private const val TAG = "AssistantManagementService"
 private const val ASSISTANT_CLEANUP_STOP_TIMEOUT_MS = 5_000L
 
+internal data class AssistantManagementCaller(val assistantId: ConfigurationReference, val realmAccess: RealmAccess)
+
 /**
- * Assistant CRUD、校验、Settings 原子更新以及文件、Memory 和普通会话清理的唯一 owner。
- * UI 与 [AssistantToolFactory] 的 assistant_manage 都通过此 Service 执行。
+ * 管理工具的助手 CRUD 与 UI 删除入口；配置提交和可恢复数据清理共用既有 owner。
  */
-class AssistantManagementService(
+class AssistantManagementService internal constructor(
     private val settingsStore: SettingsStore,
     private val memoryRepository: MemoryRepository,
     private val artifactStore: ArtifactStore,
     private val subAssistantRunCoordinator: SubAssistantRunCoordinator,
     private val recoveryGate: ApplicationRecoveryGate,
     private val conversationApplicationService: ConversationApplicationService,
+    private val sessions: EnterpriseSessionController,
 ) {
-    /**
-     * 创建 Assistant，默认 Local Tools 与普通 Assistant 一致，其他扩展能力保持关闭。
-     * CREATE 要求 name、description、instructions 均非空。
-     * 创建目标固定为子助手、非全局可见，并把新 ID 原子加入 caller 的 allowedSubAssistantIds。
-     */
-    suspend fun createAssistant(
+    /** A created user definition and the caller's own-realm grant share one durable transaction. */
+    internal suspend fun createAssistant(
         name: String,
         description: String,
         instructions: String,
-        callerAssistantId: ConfigurationReference? = null,
+        caller: AssistantManagementCaller? = null,
     ): Result<Assistant> {
         recoveryGate.awaitReady()
         val trimmedName = name.trim()
         val trimmedDescription = normalizeDescription(description)
         val trimmedInstructions = instructions.trim()
-
         if (trimmedName.isEmpty() || trimmedDescription.isEmpty() || trimmedInstructions.isEmpty()) {
             return Result.failure(IllegalArgumentException("invalid_arguments"))
         }
-
-        val assistant = buildToolCreatedAssistant(
-            name = trimmedName,
-            description = trimmedDescription,
-            systemPrompt = trimmedInstructions,
-        )
-
-        var createdAssistant: Assistant? = null
-        artifactStore.updateSettingsReferences { settings ->
-            // 重新确认 caller 仍存在、AssistantManagement 仍启用
-            val caller = callerAssistantId?.let { settings.getAssistantById(it) }
-            if (callerAssistantId != null && caller == null) {
-                return@updateSettingsReferences settings
-            }
-            if (callerAssistantId != null && LocalToolOption.AssistantManagement !in caller!!.localTools) {
-                return@updateSettingsReferences settings
-            }
-
-            // 原子加入 caller 的 allowedSubAssistantIds
-            val updatedAssistants = if (callerAssistantId != null && caller != null) {
-                settings.assistants.map { a ->
-                    if (a.id == callerAssistantId) {
-                        a.copy(allowedSubAssistantIds = a.allowedSubAssistantIds + assistant.id)
-                    } else {
-                        a
-                    }
-                } + assistant
-            } else {
-                settings.assistants + assistant
-            }
-            createdAssistant = assistant
-            settings.copy(assistants = updatedAssistants)
-        }
-
-        val result = createdAssistant
-        return if (result != null) {
-            Log.i(TAG, "createAssistant: ${result.id} ($trimmedName)")
-            Result.success(result)
-        } else {
-            Result.failure(IllegalStateException("operation_failed"))
-        }
+        val assistant = buildToolCreatedAssistant(trimmedName, trimmedDescription, trimmedInstructions)
+        return manage(caller, AssistantManagementChange.Create(assistant)).map { it.assistant }
     }
 
-    /**
-     * 更新 Assistant。只允许修改 name、description、instructions。
-     * 不允许修改 model、工具、Memory、头像、Tag、背景、allowAsSubAssistant 等用户配置。
-     * UPDATE 要求 assistant_id，且 name/description/instructions 至少提供一个。
-     */
-    suspend fun updateAssistant(
+    /** Only shared user name, description and instructions are editable through the management tool. */
+    internal suspend fun updateAssistant(
         assistantId: ConfigurationReference,
         name: String? = null,
         description: String? = null,
         instructions: String? = null,
-        callerAssistantId: ConfigurationReference? = null,
+        caller: AssistantManagementCaller? = null,
     ): Result<Assistant> {
         recoveryGate.awaitReady()
-        if (name == null && description == null && instructions == null) {
-            return Result.failure(IllegalArgumentException("invalid_arguments"))
-        }
+        if (name == null && description == null && instructions == null) return Result.failure(IllegalArgumentException("invalid_arguments"))
         val normalizedName = name?.trim()
         val normalizedDescription = description?.let(::normalizeDescription)
         val normalizedInstructions = instructions?.trim()
-        if (normalizedName?.isEmpty() == true || normalizedDescription?.isEmpty() == true ||
-            normalizedInstructions?.isEmpty() == true
-        ) {
+        if (normalizedName?.isEmpty() == true || normalizedDescription?.isEmpty() == true || normalizedInstructions?.isEmpty() == true) {
             return Result.failure(IllegalArgumentException("invalid_arguments"))
         }
-
-        var updatedAssistant: Assistant? = null
-        var failureReason: String? = null
-        artifactStore.updateSettingsReferences { settings ->
-            val caller = callerAssistantId?.let(settings::getAssistantById)
-            if (callerAssistantId != null &&
-                (caller == null || LocalToolOption.AssistantManagement !in caller.localTools)
-            ) {
-                failureReason = "tool_not_permitted"
-                return@updateSettingsReferences settings
-            }
-            val existing = settings.getAssistantById(assistantId)
-            if (existing == null) {
-                failureReason = "assistant_not_found"
-                return@updateSettingsReferences settings
-            }
-            if (caller != null && !SubAssistantAccessPolicy.canAccess(caller, existing)) {
-                failureReason = "target_not_allowed"
-                return@updateSettingsReferences settings
-            }
-
-            val updated = existing.copy(
-                name = normalizedName ?: existing.name,
-                description = normalizedDescription ?: existing.description,
-                systemPrompt = normalizedInstructions ?: existing.systemPrompt,
-            )
-            updatedAssistant = updated
-            settings.copy(
-                assistants = settings.assistants.map { if (it.id == assistantId) updated else it }
-            )
-        }
-
-        val result = updatedAssistant
-        return if (result != null) {
-            Log.i(TAG, "updateAssistant: $assistantId")
-            Result.success(result)
-        } else {
-            when (failureReason) {
-                "assistant_not_found" -> Result.failure(NoSuchElementException("assistant_not_found"))
-                else -> Result.failure(IllegalArgumentException(failureReason ?: "operation_failed"))
-            }
-        }
+        return manage(caller, AssistantManagementChange.Update(assistantId, normalizedName, normalizedDescription, normalizedInstructions)).map { it.assistant }
     }
 
-    /**
-     * 删除 Assistant。
-     * - 不能删除 caller（如果有）；
-     * - 不能删除最后一个 Assistant；
-     * - 在同一 Settings 原子变换中移除 Target、清理所有 allowedSubAssistantIds、
-     *   在 Target 是全局当前选择时切换、写入 durable cleanup tombstone；
-     * - Settings 提交后幂等删除普通顶层 Conversations、Local Memory 和助手文件；
-     * - 历史 Child Conversation 保留，新调用失败。
-     */
-    suspend fun deleteAssistant(
+    /** Grants and usage references retire with the definition. Data cleanup waits outside authorization locks. */
+    internal suspend fun deleteAssistant(
         assistantId: ConfigurationReference,
-        callerAssistantId: ConfigurationReference? = null,
+        caller: AssistantManagementCaller? = null,
     ): Result<AssistantDeletionResult> {
         recoveryGate.awaitReady()
-        if (callerAssistantId != null && assistantId == callerAssistantId) {
-            return Result.failure(IllegalArgumentException("target_is_caller"))
-        }
+        val committed = manage(caller, AssistantManagementChange.Delete(assistantId)).getOrElse { return Result.failure(it) }
+        val cleanupCompleted = committed.deletion?.let { cleanupPendingDeletion(it) } == true
+        return Result.success(AssistantDeletionResult(committed.assistant, cleanupPending = !cleanupCompleted))
+    }
 
-        var assistantToDelete: Assistant? = null
-        var tombstone: PendingAssistantDeletion? = null
-        var failureReason: String? = null
-        artifactStore.updateSettingsReferences { settings ->
-            if (settings.assistants.size <= 1) {
-                failureReason = "last_assistant"
-                return@updateSettingsReferences settings
-            }
-            val target = settings.getAssistantById(assistantId)
-            if (target == null) {
-                failureReason = "assistant_not_found"
-                return@updateSettingsReferences settings
-            }
-            val caller = callerAssistantId?.let(settings::getAssistantById)
-            if (callerAssistantId != null &&
-                (caller == null || LocalToolOption.AssistantManagement !in caller.localTools)
-            ) {
-                failureReason = "tool_not_permitted"
-                return@updateSettingsReferences settings
-            }
-            if (caller != null && !SubAssistantAccessPolicy.canAccess(caller, target)) {
-                failureReason = "target_not_allowed"
-                return@updateSettingsReferences settings
-            }
-
-            assistantToDelete = target
-
-            // 检查是否需要切换全局当前选择
-            val needsGlobalSwitch = settings.assistantId == assistantId
-
-            // 从所有 Assistant 的允许列表移除其 ID（反向授权清理）
-            val updatedAssistants = settings.assistants
-                .filter { it.id != assistantId }
-                .map { a ->
-                    a.copy(allowedSubAssistantIds = a.allowedSubAssistantIds - assistantId)
+    private suspend fun manage(caller: AssistantManagementCaller?, change: AssistantManagementChange): Result<AssistantManagementResult> {
+        val access = caller?.realmAccess ?: RealmAccess.Personal
+        return try {
+            val result = sessions.withRealmAccess(access) {
+                artifactStore.manageAssistantReferences(access.scope, sessions.state.value, caller?.assistantId, change) {
+                    sessions.requirePublishedRealmAccess(access)
                 }
-
-            // 切换全局当前选择
-            val newAssistantId = if (needsGlobalSwitch) {
-                // 优先选择普通 Assistant，否则选第一个可用
-                updatedAssistants.firstOrNull { !it.allowAsSubAssistant }?.id
-                    ?: updatedAssistants.firstOrNull()?.id
-                    ?: settings.assistantId
-            } else {
-                settings.assistantId
             }
-
-            // 写入 durable cleanup tombstone
-            val avatarUri = (target.avatar as? Avatar.Image)?.url
-            val backgroundUri = target.background
-            val newTombstone = PendingAssistantDeletion(
-                assistantId = assistantId,
-                avatarUri = avatarUri,
-                backgroundUri = backgroundUri,
-            )
-            tombstone = newTombstone
-
-            settings.copy(
-                assistants = updatedAssistants,
-                assistantId = newAssistantId,
-                pendingAssistantDeletions = (settings.pendingAssistantDeletions + newTombstone)
-                    .distinctBy { it.assistantId },
-            )
-        }
-
-        val assistant = assistantToDelete
-        if (assistant == null) {
-            return when (failureReason) {
-                "assistant_not_found" -> Result.failure(NoSuchElementException("assistant_not_found"))
-                else -> Result.failure(IllegalArgumentException(failureReason ?: "operation_failed"))
-            }
-        }
-
-        val cleanupCompleted = tombstone?.let { cleanupPendingDeletion(it) } == true
-
-        Log.i(TAG, "deleteAssistant: $assistantId")
-        return Result.success(
-            AssistantDeletionResult(
-                assistant = assistant,
-                cleanupPending = !cleanupCompleted,
-            )
-        )
+            Result.success(result)
+        } catch (missing: NoSuchElementException) { Result.failure(missing) }
+        catch (rejected: IllegalArgumentException) { Result.failure(rejected) }
     }
 
     /** App 启动时幂等消费尚未完成的删除 tombstone。 */

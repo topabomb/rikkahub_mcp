@@ -96,6 +96,52 @@ class ScopedConfigurationAndroidTest {
         } finally { root.deleteRecursively() }
     }
 
+    @Test
+    fun enterpriseToolCreatedDefinitionAndGrantCommitTogetherAndSurviveReopening() = runBlocking {
+        val app = ApplicationProvider.getApplicationContext<Context>()
+        val root = File(app.noBackupFilesDir, "assistant-management-test-${Uuid.random()}").apply { check(mkdirs()) }
+        val packet = app.assets.open(LocalEnterpriseSource.EXAMPLE_ASSET).use(EnterprisePackageCodec::decode)
+        val caller = packet.identity.reference(packet.configuration.assistants.first().id)
+        val child = net.weero.measix.pilot.data.ai.subassistant.buildToolCreatedAssistant("Device child", "Research", "Find evidence")
+        try {
+            withEnvironment(app, root) { env ->
+                env.sessions.enrollLocal(packet.identity, { packet.identity }, { packet })
+                val access = env.sessions.captureRealmAccess(packet.identity.scope)
+                env.sessions.withRealmAccess(access) {
+                    env.settings.changeAssistantPreference(access.scope, env.sessions.state.value, caller,
+                        AssistantPreferenceChange.LocalTool(net.weero.measix.pilot.data.ai.tools.local.LocalToolOption.AssistantManagement, true), {}) { it() }
+                    env.settings.manageAssistant(access.scope, env.sessions.state.value, caller,
+                        net.weero.measix.pilot.data.datastore.AssistantManagementChange.Create(child),
+                        { env.sessions.requirePublishedRealmAccess(access) }) { _, _, commit -> commit() }
+                }
+            }
+            withEnvironment(app, root) { env ->
+                val saved = env.document()
+                assertEquals(child.id, saved.configuration.assistants.single { it.id == child.id }.id)
+                assertEquals(setOf(child.id), saved.preferences.assistantUsage(packet.identity.scope, caller)?.additionalSubAssistantIds)
+                assertFalse(saved.configuration.assistants.any { it.id is me.rerere.common.configuration.ConfigurationReference.Enterprise })
+                assertTrue(saved.configuration.assistants.none { child.id in it.allowedSubAssistantIds })
+                val current = env.queries.observeCurrent().first()
+                assertTrue(net.weero.measix.pilot.data.ai.subassistant.SubAssistantAccessPolicy.canAccess(
+                    current.assistants.getValue(caller), current.assistants.getValue(child.id)))
+                val access = env.sessions.captureRealmAccess(packet.identity.scope)
+                env.sessions.withRealmAccess(access) {
+                    env.settings.manageAssistant(access.scope, env.sessions.state.value, caller,
+                        net.weero.measix.pilot.data.datastore.AssistantManagementChange.Delete(child.id),
+                        { env.sessions.requirePublishedRealmAccess(access) }) { _, _, commit -> commit() }
+                }
+            }
+            withEnvironment(app, root) { env ->
+                val saved = env.document()
+                assertFalse(saved.configuration.assistants.any { it.id == child.id })
+                assertTrue(saved.preferences.scopes.all { scoped -> scoped.assistantUsage.none {
+                    it.assistantId == child.id || child.id in it.additionalSubAssistantIds
+                } })
+                assertEquals(listOf(child.id), saved.internalState.pendingAssistantDeletions.map { it.assistantId })
+            }
+        } finally { root.deleteRecursively() }
+    }
+
     private suspend fun withEnvironment(app: Context, root: File, block: suspend (Environment) -> Unit) {
         val env = Environment(app, root)
         try {

@@ -5,6 +5,9 @@ import me.rerere.ai.provider.ProviderSetting
 import me.rerere.search.SearchServiceOptions
 import net.weero.measix.pilot.data.ai.mcp.normalizeMcpDefinitions
 
+internal fun List<net.weero.measix.pilot.data.model.Assistant>.withBuiltInAssistantDefinitions() =
+    mergeDefaults(DEFAULT_ASSISTANTS, { it.id }) { it.copy() }
+
 /** Restores built-in definitions and runtime attributes without rewriting stored choices or references. */
 internal fun Settings.withBuiltInDefinitions(): Settings {
     val materializedProviders = providers.mergeDefaults(DEFAULT_PROVIDERS, ProviderSetting::id) { provider ->
@@ -16,7 +19,7 @@ internal fun Settings.withBuiltInDefinitions(): Settings {
             )
         } ?: provider
     }
-    val materializedAssistants = assistants.mergeDefaults(DEFAULT_ASSISTANTS, { it.id }) { it.copy() }
+    val materializedAssistants = assistants.withBuiltInAssistantDefinitions()
     val materializedTtsProviders = ttsProviders.mergeDefaults(DEFAULT_TTS_PROVIDERS, { it.id }) { it.copyProvider() }
 
     return copy(

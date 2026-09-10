@@ -21,7 +21,6 @@ import me.rerere.ai.core.ToolExecutionFailure
 import me.rerere.ai.ui.UIMessagePart
 import net.weero.measix.pilot.data.ai.tools.local.LocalToolOption
 import net.weero.measix.pilot.data.datastore.Settings
-import net.weero.measix.pilot.data.datastore.SettingsStore
 import net.weero.measix.pilot.data.model.Assistant
 import net.weero.measix.pilot.service.AssistantManagementService
 import net.weero.measix.pilot.service.runtime.TurnKind
@@ -51,8 +50,6 @@ class AssistantInspectToolTest {
             assistantId = callerId,
         )
         val effectiveSettings = MutableStateFlow(settings)
-        val settingsStore = mockk<SettingsStore>()
-        every { settingsStore.userSettings } returns effectiveSettings
 
         val managementService = mockk<AssistantManagementService>()
         val memoryService = mockk<net.weero.measix.pilot.service.MemoryService>()
@@ -72,7 +69,6 @@ class AssistantInspectToolTest {
         }
 
         return AssistantToolFactory(
-            settingsStore = settingsStore,
             assistantManagementService = managementService,
             json = json,
             subAssistantRunCoordinator = mockk(relaxed = true),

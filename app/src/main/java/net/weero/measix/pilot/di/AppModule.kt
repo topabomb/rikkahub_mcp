@@ -175,6 +175,7 @@ val appModule = module {
             subAssistantRunCoordinator = get(),
             recoveryGate = get(),
             conversationApplicationService = get(),
+            sessions = get(),
         )
     }
 
@@ -274,7 +275,6 @@ val appModule = module {
 
     single {
         AssistantToolFactory(
-            settingsStore = get(),
             assistantManagementService = get(),
             json = get(),
             subAssistantRunCoordinator = get(),

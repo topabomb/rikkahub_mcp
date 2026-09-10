@@ -28,8 +28,6 @@ import net.weero.measix.pilot.data.ai.subassistant.parseAssistantCallExtras
 import net.weero.measix.pilot.data.ai.tools.local.LocalToolOption
 import net.weero.measix.pilot.data.ai.tools.local.TtsToolPlaybackContext
 import net.weero.measix.pilot.data.datastore.Settings
-import net.weero.measix.pilot.data.datastore.SettingsStore
-import net.weero.measix.pilot.data.datastore.getAssistantById
 import net.weero.measix.pilot.data.datastore.getChatModel
 import net.weero.measix.pilot.data.model.Assistant
 import net.weero.measix.pilot.data.model.normalizeDescription
@@ -94,10 +92,9 @@ internal fun parseAssistantManageArguments(args: kotlinx.serialization.json.Json
  *
  * 子助手 Catalog 不再经工具 System Prompt 动态注入：可见集合只由
  * ConversationDisclosureSnapshotService 在每次新 START 写入 canonical Snapshot；
- * 执行时授权仍由 SubAssistantAccessPolicy 按 live Settings fail-closed。
+ * 执行时由各命令 owner 按原域配置和 SubAssistantAccessPolicy 复验授权。
  */
 class AssistantToolFactory internal constructor(
-    private val settingsStore: SettingsStore,
     private val assistantManagementService: AssistantManagementService,
     private val json: Json,
     /** 子助手调用的唯一执行协调器。 */
@@ -123,7 +120,7 @@ class AssistantToolFactory internal constructor(
 
         return buildList {
             if (enableManagement) {
-                add(buildAssistantManageTool(callerAssistant.id))
+                add(buildAssistantManageTool(net.weero.measix.pilot.service.AssistantManagementCaller(callerAssistant.id, realmAccess)))
                 add(buildAssistantInspectTool(callerAssistant.id, masterConversationId, realmAccess))
             }
             if (enableDelegation) {
@@ -140,10 +137,11 @@ class AssistantToolFactory internal constructor(
     // ---- assistant_manage ----
 
     private fun buildAssistantManageTool(
-        callerAssistantId: ConfigurationReference,
+        caller: net.weero.measix.pilot.service.AssistantManagementCaller,
     ): Tool = Tool(
         name = TOOL_ASSISTANT_MANAGE,
-        description = "Create, update, or delete a sub-assistant (sub-agent). New ones join your allowed list.",
+        description = "Create, update, or delete a user sub-assistant (sub-agent). New ones join your allowed list in this realm. " +
+            "User definitions are shared across spaces; updates and deletion affect that shared definition. Enterprise definitions are read-only.",
         parameters = {
             InputSchema.Obj(
                 properties = buildJsonObject {
@@ -189,55 +187,37 @@ class AssistantToolFactory internal constructor(
             } ?: ToolInteractionRequirement.None
         },
         execute = { args ->
-            executeAssistantManage(callerAssistantId, args)
+            executeAssistantManage(caller, args)
         },
     )
 
     private suspend fun executeAssistantManage(
-        callerAssistantId: ConfigurationReference,
+        caller: net.weero.measix.pilot.service.AssistantManagementCaller,
         args: kotlinx.serialization.json.JsonElement,
     ): List<UIMessagePart> {
         val parameters = parseAssistantManageArguments(args) ?: return errorResult("invalid_arguments")
         val action = parameters.action
 
-        // 执行时从最新 Settings 重新校验 caller 仍存在、AssistantManagement 仍启用
-        val settings = settingsStore.userSettings.value
-        val caller = settings.assistants.find { it.id == callerAssistantId }
-            ?: return errorResult("tool_not_permitted")
-        if (LocalToolOption.AssistantManagement !in caller.localTools) {
-            return errorResult("tool_not_permitted")
-        }
-
         val result = when (action) {
             AssistantManageAction.CREATE -> {
                 assistantManagementService.createAssistant(
                     requireNotNull(parameters.name), requireNotNull(parameters.description),
-                    requireNotNull(parameters.instructions), callerAssistantId,
+                    requireNotNull(parameters.instructions), caller,
                 )
             }
             AssistantManageAction.UPDATE -> {
                 val assistantId = requireNotNull(parameters.assistantId)
-                // Target 必须在当前 Catalog 有效范围内
-                val target = settings.getAssistantById(assistantId)
-                if (target == null || !SubAssistantAccessPolicy.canAccess(caller, target)) {
-                    return errorResult("target_not_allowed")
-                }
                 assistantManagementService.updateAssistant(
                     assistantId = assistantId,
                     name = parameters.name,
                     description = parameters.description,
                     instructions = parameters.instructions,
-                    callerAssistantId = callerAssistantId,
+                    caller = caller,
                 )
             }
             AssistantManageAction.DELETE -> {
                 val assistantId = requireNotNull(parameters.assistantId)
-                // Target 必须在当前 Catalog 有效范围内
-                val target = settings.getAssistantById(assistantId)
-                if (target == null || !SubAssistantAccessPolicy.canAccess(caller, target)) {
-                    return errorResult("target_not_allowed")
-                }
-                assistantManagementService.deleteAssistant(assistantId, callerAssistantId)
+                assistantManagementService.deleteAssistant(assistantId, caller)
             }
         }
 

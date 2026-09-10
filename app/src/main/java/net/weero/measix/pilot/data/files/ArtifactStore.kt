@@ -703,6 +703,14 @@ class ArtifactStore(
         change: net.weero.measix.pilot.data.configuration.AssistantPreferenceChange,
     ) = settingsCoordinator.changeAssistantPreference(scope, state, assistantId, change, ::commitSettingsRoots)
 
+    internal suspend fun manageAssistantReferences(
+        scope: ConfigurationScope,
+        state: net.weero.measix.pilot.data.enterprise.EnterpriseState,
+        callerId: me.rerere.common.configuration.ConfigurationReference?,
+        change: net.weero.measix.pilot.data.datastore.AssistantManagementChange,
+        requireOwner: () -> Unit,
+    ) = settingsCoordinator.manageAssistant(scope, state, callerId, change, requireOwner, ::commitSettingsRoots)
+
     internal suspend fun restoreSettingsReferences(settings: Settings): Settings =
         settingsCoordinator.restore(settings) { candidate, commit ->
             withLifecycleLock {

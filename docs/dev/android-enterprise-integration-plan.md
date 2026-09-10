@@ -347,7 +347,8 @@ Android 媒体接线按下列所有权完成：`PortalMediaStore` 管理独占�
 | 语音（C5、U2） | SpeechApplicationService 已统一拥有原域捕获、binding、播放与录音清理；企业 TTS/HTTP-ASR、本地 MP3/WAV adapter、目录选择与聊天入口已接通；428 终止原交互并同步，不重放。应用 JVM、实际 AudioRecord 和完整构建/设备回归已通过；正式 Debug App 的朗读、录音、关页清理和个人/企业目录已验证，错误提示已接通；Release 及整期场景验收仍待完成 |
 | 文件与 Workspace（C6） | 会话/记忆、目录、图片、背景、参考输入及附件/富文本出口已分域验证；Workspace 上传/终端/SAF 已完成本批实现与完整门禁；共享配置预设附件的目标域复制及 Draft/Child 交接已完成，完整门禁通过；整体 UI/版本验收仍待最终收口 |
 | 个人备份（C7） | 个人闭合图导出与冷恢复合并已实现；配置/企业数据、共享资产和恢复 receipt 按原 owner 保全，系统备份与设备迁移显式排除混合域存储；当前验证记录见本文个人备份批次 |
-| 完整示例与 UI（M1、U2） | 正式企业入口、Portal、公开模板和私有文件 ignore 已有；原生整包导入与已安装来源接入已接线，辅助生成模拟格式已接通，仍需场景管理、Starter 预填及剩余资源/助手页面 |
+| 完整示例与 UI（M1、U2） | 正式企业入口、Portal、原生整包导入、已安装来源、辅助生成及 Starter 预填已接通；五项策略、Gateway 和模型管理在 Debug/Release 可用。仍需模拟故障/恢复场景、完整助手本域使用编辑及整期 UI 验收 |
+| 助手管理（C5、U2） | assistant_manage 已按原 Session 与最新策略提交共享用户定义及本域授权，删除复用个人 tombstone；不保留个人配置的第二准入。完整本域使用参数、额外子助手引用编辑与工具聊天设备验收仍待完成 |
 | 退休与发行（R1、V1） | 旧 managed overlay 存储/验签/合并/过期与 UI 标签链已删除；共享用户配置读取与按域解析分开。剩余消费者与场景完成后执行 E01–E12、Release/硬件验收和版本 20 交付；真实后台属于下一阶段 |
 
 
@@ -736,3 +737,9 @@ C7 的系统备份入口已关闭：Manifest 禁用 allowBackup，旧系统备�
 所有编辑捕获原空间选择与来源 revision，在既有 Session → Source 边界发布完整候选，再走统一同步。失败保留来源/Applied 各自真实状态；同步若加入旧在途任务，回执 generation 未覆盖本次发布则提示待同步。关闭编辑器使页面请求和反馈失效，迟到结果不重开窗口。没有新增持久化结构、平行配置区或兼容路径。两名独立审查发现的旧同步假报、关闭后迟到刷新问题已修正并复核。
 
 9 项定向 JVM 测试与 AndroidTest 编译通过；完整串行 test assembleDebug lintDebug assembleRelease 在 8 分 9 秒内通过，App 2,140 项 JVM 无失败或跳过，lint 无错误；Workspace 保留 11 项 Windows 条件跳过。Android 17 模拟器正式 Debug 页面验证策略、Gateway、模型增改停删、固定引用拒绝以及冷启动恢复；Release 验证正式入口和策略发布。此批未重跑全量 instrumentation，Release 未重复全部模型场景，真实平台互操作未验收。证据见 build/reports/enterprise/local-configuration-verification.json。网络、缺配置、授权失效等场景入口，完整助手使用编辑及整期验收仍待完成；版本保持 0.0.19 开发基线。
+
+### 助手管理工具与本域授权
+
+assistant_manage 将原 RealmAccess 和调用者引用交给既有管理服务，在同一个用户文档事务创建共享用户定义并添加调用者本域授权。更新/删除只允许获准用户定义；关闭用户助手准入、移除管理工具或原 Session 失效都拒绝提交。删除同时退休各域 usage/额外授权并保存个人清理 tombstone，清理等待位于 Session 锁外，企业历史保持。Factory 的个人 Settings 第二准入已删除；内置助手查找与读取共用补齐规则，不新增持久化格式或原型兼容。两位独立审查的问题已关闭。
+
+定向 JVM 与 AndroidTest 编译通过；完整串行 test assembleDebug lintDebug assembleRelease 加 ScopedConfigurationAndroidTest 在 8 分 24 秒内通过，App 2,149 项 JVM 和 Android 17 模拟器 2 项配置设备用例无失败，lint 无错误；Workspace 保留 11 项 Windows 条件跳过。设备用例验证真实 DataStore/企业状态重开、定义与授权保全，以及删除后的引用清理和 tombstone，不包含完整删除清理或原生聊天工具执行。证据见 build/reports/enterprise/assistant-management-verification.json 与同批报告 ZIP。完整本域使用编辑、额外子助手引用 UI、模拟场景及 E01–E12/Release 验收仍待完成，版本保持 0.0.19 开发基线。

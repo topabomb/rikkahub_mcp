@@ -5,11 +5,9 @@ import me.rerere.common.configuration.ConfigurationReference
 
 import io.mockk.Called
 import io.mockk.coEvery
-import io.mockk.every
 import io.mockk.mockk
 import io.mockk.verify
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
@@ -23,8 +21,6 @@ import me.rerere.ai.core.ToolExecutionFailure
 import me.rerere.ai.core.ToolInteractionRequirement
 import me.rerere.ai.ui.UIMessagePart
 import net.weero.measix.pilot.data.ai.tools.local.LocalToolOption
-import net.weero.measix.pilot.data.datastore.Settings
-import net.weero.measix.pilot.data.datastore.SettingsStore
 import net.weero.measix.pilot.data.model.Assistant
 import net.weero.measix.pilot.service.AssistantDeletionResult
 import net.weero.measix.pilot.service.AssistantManagementService
@@ -42,16 +38,10 @@ class AssistantManageToolTest {
     private val targetId = ConfigurationReference.random()
 
     private fun createFactory(
-        assistants: List<Assistant>,
         created: Assistant? = null,
         updated: Assistant? = null,
         deleted: AssistantDeletionResult? = null,
     ): AssistantToolFactory {
-        val settings = Settings(assistants = assistants, assistantId = callerId)
-        val effectiveSettings = MutableStateFlow(settings)
-        val settingsStore = mockk<SettingsStore>()
-        every { settingsStore.userSettings } returns effectiveSettings
-
         val managementService = mockk<AssistantManagementService>()
         if (created != null) {
             coEvery { managementService.createAssistant(any(), any(), any(), any()) } returns
@@ -67,7 +57,6 @@ class AssistantManageToolTest {
         }
 
         return AssistantToolFactory(
-            settingsStore = settingsStore,
             assistantManagementService = managementService,
             json = json,
             subAssistantRunCoordinator = mockk(relaxed = true),
@@ -109,7 +98,7 @@ class AssistantManageToolTest {
 
     @Test
     fun `CREATE does not need approval but update and delete do`() {
-        val tool = manageTool(createFactory(listOf(caller(), target())), caller())
+        val tool = manageTool(createFactory(), caller())
         assertEquals(
             ToolInteractionRequirement.None,
             tool.interactionRequirement(
@@ -152,11 +141,10 @@ class AssistantManageToolTest {
 
 
     @Test
-    fun `invalid arguments are rejected before settings or management access`() = runTest {
-        val settingsStore = mockk<SettingsStore>()
+    fun `invalid arguments are rejected before management access`() = runTest {
         val service = mockk<AssistantManagementService>()
         val factory = AssistantToolFactory(
-            settingsStore, service, json, mockk(), mockk(), mockk(), mockk(),
+            service, json, mockk(), mockk(), mockk(), mockk(),
         )
         val tool = manageTool(factory, caller())
         val invalid = listOf(
@@ -192,13 +180,14 @@ class AssistantManageToolTest {
                 assertEquals("error", replay["type"]!!.jsonPrimitive.content)
             }
         }
-        verify { settingsStore wasNot Called }
         verify { service wasNot Called }
     }
 
     @Test
     fun `pure validator accepts unknown target while execution rechecks dynamic access`() = runTest {
-        val tool = manageTool(createFactory(listOf(caller())), caller())
+        val service = mockk<AssistantManagementService>()
+        coEvery { service.deleteAssistant(any(), any()) } returns Result.failure(IllegalArgumentException("target_not_allowed"))
+        val tool = manageTool(AssistantToolFactory(service, json, mockk(), mockk(), mockk(), mockk()), caller())
         val args = buildJsonObject {
             put("action", "DELETE")
             put("assistant_id", targetId.toString())
@@ -224,13 +213,9 @@ class AssistantManageToolTest {
     @Test
     fun `management result cancellation is rethrown`() = runTest {
         val cancellation = CancellationException("stop mutation")
-        val settingsStore = mockk<SettingsStore>()
-        every { settingsStore.userSettings } returns MutableStateFlow(
-            Settings(assistants = listOf(caller(), target())),
-        )
         val service = mockk<AssistantManagementService>()
         coEvery { service.deleteAssistant(any(), any()) } returns Result.failure(cancellation)
-        val tool = manageTool(AssistantToolFactory(settingsStore, service, json, mockk(), mockk(), mockk(), mockk()), caller())
+        val tool = manageTool(AssistantToolFactory(service, json, mockk(), mockk(), mockk(), mockk()), caller())
         try {
             tool.execute(buildJsonObject {
                 put("action", "DELETE")
@@ -242,6 +227,23 @@ class AssistantManageToolTest {
         }
     }
 
+    @Test fun `management execution passes the original enterprise caller to its sole command owner`() = runTest {
+        val authority = me.rerere.common.configuration.EnterpriseAuthority("local:example", "dep_example")
+        val reference = ConfigurationReference.Enterprise(authority, "asd_main")
+        val access = net.weero.measix.pilot.data.enterprise.RealmAccess.Enterprise(
+            net.weero.measix.pilot.data.configuration.ConfigurationScope.Enterprise(authority, "member"), "session-original")
+        val service = mockk<AssistantManagementService>()
+        val captured = net.weero.measix.pilot.service.AssistantManagementCaller(reference, access)
+        coEvery { service.createAssistant("Helper", "Research", "Find evidence", captured) } returns Result.success(target())
+        val tool = AssistantToolFactory(service, json, mockk(), mockk(), mockk(), mockk()).buildTools(
+            caller().copy(id = reference), Uuid.random(), access).single { it.name == "assistant_manage" }
+        val result = parseResult(tool.execute(buildJsonObject {
+            put("action", "CREATE"); put("name", "Helper"); put("description", "Research"); put("instructions", "Find evidence")
+        }))
+        assertEquals(targetId.toString(), result["id"]!!.jsonPrimitive.content)
+        io.mockk.coVerify(exactly = 1) { service.createAssistant("Helper", "Research", "Find evidence", captured) }
+    }
+
     @Test
     fun `CREATE result is action and id only`() = runTest {
         val created = Assistant(
@@ -251,7 +253,7 @@ class AssistantManageToolTest {
         )
         val caller = caller()
         val result = parseResult(
-            manageTool(createFactory(listOf(caller, target()), created = created), caller).execute(
+            manageTool(createFactory(created = created), caller).execute(
                 buildJsonObject {
                     put("action", "CREATE")
                     put("name", "New helper")
@@ -273,7 +275,7 @@ class AssistantManageToolTest {
         val existing = target()
         val result = parseResult(
             manageTool(
-                createFactory(listOf(caller, existing), updated = existing.copy(name = "Renamed")),
+                createFactory(updated = existing.copy(name = "Renamed")),
                 caller,
             ).execute(
                 buildJsonObject {
@@ -296,7 +298,6 @@ class AssistantManageToolTest {
         val result = parseResult(
             manageTool(
                 createFactory(
-                    listOf(caller, existing),
                     deleted = AssistantDeletionResult(existing, cleanupPending = false),
                 ),
                 caller,
