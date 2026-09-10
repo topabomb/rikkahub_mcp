@@ -420,6 +420,6 @@ val appModule = module {
     single { ConversationQueryService(get(), get(), get(), get(), get(), get(), get(), get(), get()) }
     single { CustomChatFontService(get(), get()) }
     single { SearchIndexMaintenanceService(get(), get()) }
-    single { FavoriteService(get(), get()) }
+    single { FavoriteService(get(), get(), get(), get()) }
     single { SubAssistantDetailReader(get()) }
 }

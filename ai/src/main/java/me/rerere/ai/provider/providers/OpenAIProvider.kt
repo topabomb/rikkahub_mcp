@@ -44,7 +44,7 @@ import me.rerere.ai.util.formatProviderHttpError
 import me.rerere.ai.util.json
 import me.rerere.ai.util.mergeCustomBody
 import me.rerere.ai.util.toHeaders
-import me.rerere.common.http.await
+import me.rerere.common.http.readResponse
 import me.rerere.common.http.getByKey
 import okhttp3.MultipartBody
 import okhttp3.MediaType.Companion.toMediaType
@@ -83,12 +83,12 @@ class OpenAIProvider(
                 .get()
                 .build()
 
-            val response = client.newCall(request).await()
-            if (!response.isSuccessful) {
-                error("Failed to get models: ${response.code} ${response.body?.string()}")
+            val bodyStr = client.newCall(request).readResponse { response ->
+                if (!response.isSuccessful) {
+                    error("Failed to get models: ${response.code} ${response.body?.string()}")
+                }
+                response.body?.string() ?: ""
             }
-
-            val bodyStr = response.body?.string() ?: ""
             val bodyJson = json.parseToJsonElement(bodyStr).jsonObject
             val data = bodyJson["data"]?.jsonArray ?: return@withContext emptyList()
 
@@ -115,12 +115,12 @@ class OpenAIProvider(
             .addHeader("Authorization", "Bearer $key")
             .get()
             .build()
-        val response = client.newCall(request).await()
-        if (!response.isSuccessful) {
-            error("Failed to get balance: ${response.code} ${response.body?.string()}")
+        val bodyStr = client.newCall(request).readResponse { response ->
+            if (!response.isSuccessful) {
+                error("Failed to get balance: ${response.code} ${response.body?.string()}")
+            }
+            response.body.string()
         }
-
-        val bodyStr = response.body.string()
         val bodyJson = json.parseToJsonElement(bodyStr).jsonObject
         val value = bodyJson.getByKey(providerSetting.balanceOption.resultPath)
         val digitalValue = value.toFloatOrNull()
@@ -199,12 +199,12 @@ class OpenAIProvider(
             .post(requestBody.toRequestBody("application/json".toMediaType()))
             .build()
 
-        val response = client.newCall(request).await()
-        if (!response.isSuccessful) {
-            error("Failed to generate embedding: ${response.code} ${response.body?.string()}")
+        val bodyStr = client.newCall(request).readResponse { response ->
+            if (!response.isSuccessful) {
+                error("Failed to generate embedding: ${response.code} ${response.body?.string()}")
+            }
+            response.body?.string() ?: ""
         }
-
-        val bodyStr = response.body?.string() ?: ""
         val bodyJson = json.parseToJsonElement(bodyStr).jsonObject
         val data = bodyJson["data"]?.jsonArray ?: error("No data in response")
         val model = bodyJson["model"]?.jsonPrimitive?.contentOrNull ?: params.model.modelId
@@ -259,11 +259,13 @@ class OpenAIProvider(
             .build()
 
         val items = withContext(Dispatchers.IO) {
-            val response = client.newCall(request).await()
-            if (!response.isSuccessful) {
-                throw formatProviderHttpError(response.code, response.body?.string())
+            val bodyStr = client.newCall(request).readResponse { response ->
+                if (!response.isSuccessful) {
+                    throw formatProviderHttpError(response.code, response.body?.string())
+                }
+                response.body.string()
             }
-            parseImageResponse(response.body.string(), request.isPrivate)
+            parseImageResponse(bodyStr, request.isPrivate)
         }
 
         items.forEach { emit(it) }
@@ -333,11 +335,13 @@ class OpenAIProvider(
             .build()
 
         val items = withContext(Dispatchers.IO) {
-            val response = client.newCall(request).await()
-            if (!response.isSuccessful) {
-                throw formatProviderHttpError(response.code, response.body?.string())
+            val bodyStr = client.newCall(request).readResponse { response ->
+                if (!response.isSuccessful) {
+                    throw formatProviderHttpError(response.code, response.body?.string())
+                }
+                response.body.string()
             }
-            parseImageResponse(response.body.string(), request.isPrivate)
+            parseImageResponse(bodyStr, request.isPrivate)
         }
 
         items.forEach { emit(it) }
@@ -367,19 +371,16 @@ class OpenAIProvider(
             .get()
             .build()
 
-        val response = client.newCall(request).await()
-        if (!response.isSuccessful) {
-            throw formatProviderHttpError(response.code, response.body.string())
+        return client.newCall(request).readResponse { response ->
+            if (!response.isSuccessful) {
+                throw formatProviderHttpError(response.code, response.body.string())
+            }
+            val body = response.body
+            ImageGenerationItem(
+                data = Base64.encode(body.bytes()),
+                mimeType = body.contentType()?.toString() ?: "image/png",
+            )
         }
-
-        val body = response.body
-        val mimeType = body.contentType()?.toString() ?: "image/png"
-        val base64 = Base64.encode(body.bytes())
-
-        return ImageGenerationItem(
-            data = base64,
-            mimeType = mimeType
-        )
     }
 
     private fun File.imageMediaType(): String = when (extension.lowercase()) {

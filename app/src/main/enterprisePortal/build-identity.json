@@ -7,7 +7,7 @@
   "version": "0.1.0",
   "commit": null,
   "dirty": true,
-  "sourceHash": "056e78b269453a5ec19eb5c29f4a07d02385afb05533a155010103aad3a19c02",
+  "sourceHash": "b29533489820a58eb489d3df3c9f2e09245e413988a40fff6ccae0ea0936049c",
   "contract": {
     "artifacts": {
       "generated.ts": {
@@ -50,8 +50,8 @@
   },
   "lockfileHash": "360c05d90896194e94082e45c265f917550887c688a5670758e7109938bae2aa",
   "assets": {
-    "assets/index-BdXcMQag.css": "86507a9ff59603e692980627f4ddba033ef6db12d46a9c4f94fea4a24d39ac22",
-    "assets/index-D-MKFxvB.js": "ddc82ef0eaaf47f9eac48678d30ee8ee3336fa64e009d437524c5cf79e44340a",
-    "index.html": "2aedd51029ed14f7147e507783d0a696af3fb57c4063937b360e9c9e8663a479"
+    "assets/index-BDhPy01j.js": "cb5120fbb5c3bc1baa36ff985e3cc859a683d6857a82344da77b2982675ee64f",
+    "assets/index-U4YUZ9q3.css": "3e1e760af7185c42f5d0b4bc03bb3b5d3dd989d55ac57a955be3894fd2e5f989",
+    "index.html": "1a3feb1c9cadd426380ecf61f41dc3b7fca123993ecf18a4715083caead74aae"
   }
 }

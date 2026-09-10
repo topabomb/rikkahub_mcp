@@ -23,13 +23,19 @@ RouteActivity (ComponentActivity)
 
 配置列表的 `ConfigurationReference` 在 Lazy/可拖动列表边界使用 `toString()` 作为可保存 key；业务选择与命令继续传递类型化引用。Lazy item 与 `ReorderableItem` 必须使用同一 key，不能把不可放入 Bundle 的领域对象交给 SaveableStateHolder。
 
-正式空间入口位于聊天顶部、抽屉和设置页，统一导航到 `Screen.Enterprise`。`EnterprisePage` / `EnterpriseVM` 只经 `EnterpriseApplicationService` 查询身份、状态与当前空间，以及执行接入、同步、切换和退出；具体授权及关闭屏障见 [Android 配置架构](android-configuration-architecture.md)。退出确认保存原请求，Portal 展示保存一次打开的独立身份；后台或离页会取消打开任务并关闭原宿主，未交接实例由创建方清理。切换或退出后经不携带通知 ID 的 `Screen.Startup()` 重新获取本域会话请求，不能重放 Activity 初始通知。接入凭据、RealmSelection 和 WebView 不保存进导航或 Activity saved state。原生完整配置通过系统文件选择器导入，保留打开选择器时的 RealmSelection；来源发布前后复验原选择，切域后的旧文件结果不可应用。原生页面分开显示“已生效”与“来源已更新、待同步”，已安装来源列表通过同一接入资料解析和票据兑换链重新接入。备份页面统一说明个人备份范围，适用于文件、WebDAV 和 S3。
+正式空间入口位于聊天顶部、抽屉和设置页，统一导航到 `Screen.Enterprise`。`EnterprisePage` / `EnterpriseVM` 只经 `EnterpriseApplicationService` 查询身份、状态与当前空间，以及执行接入、同步、切换和退出；具体授权及关闭屏障见 [Android 配置架构](android-configuration-architecture.md)。退出确认保存原请求，Portal 展示保存一次打开的独立身份；后台或离页会取消打开任务并关闭原宿主，未交接实例由创建方清理。切换或退出后经不携带通知 ID 的 `Screen.Startup()` 重新获取本域会话请求，不能重放 Activity 初始通知。接入凭据、RealmSelection 和 WebView 不保存进导航或 Activity saved state。原生完整配置通过系统文件选择器导入，保留打开选择器时的 RealmSelection；来源发布前后复验原选择，切域后的旧文件结果不可应用。空间页按“当前空间”“已接入企业”“接入企业”“导入企业配置”“本地企业管理”组织。聊天和工作台位于当前空间卡，切换空间保留企业登录；企业状态、同步与退出位于独立企业卡。扫码和粘贴接入 JSON 在“接入企业”卡中持续可见；已有企业 Session 时禁用并明确提示先退出，不能把切回个人空间当作退出。本地管理默认收起，展开后提供“企业规则与模型”“企业动态”和“连接与退出演练”，明确这些操作模拟企业管理员，不是成员使用偏好。规则编辑逐项保存并同步，无额外保存按钮；关闭不撤销修改。原生页面分开显示“已生效”与“来源已更新、待同步”，已安装来源列表通过同一接入资料解析和票据兑换链重新接入。备份页面统一说明个人备份范围，适用于文件、WebDAV 和 S3。
+
+企业操作反馈由 EnterpriseVM 绑定产生结果时的 RealmSelection；切换空间或退出后不继续显示旧主体的同步结果。Portal 页面展示由 Portal 仓库 App.vue 负责，通过正式 local 包交付，Android 不维护另一份网页 UI。工作台按配置状态、企业动态、能力体验组织；重新检查只读取状态，立即同步执行同步，两者即使版本未变化也明确反馈结果。动态查询、刷新、外链和媒体各自展示结果，避免无关操作清除反馈；外链异步结果不得返回已关闭或已切换的详情。拍照和录音用于当前页面预览，取消反馈位于操作按钮之前；关闭工作台保留登录，退出企业登录需要原生确认。
 
 网页退出与外链由 `PortalNativeControls` 展示原生确认，状态及决策归当前文档的 `PortalNativeActions`。退出显示已冻结的企业名称，外链显示完整地址；拒绝、关闭或超时使原提示失效。网页退出复用同一企业退出命令，关闭工作台仍保留企业登录。 拍照/录音使用同一文档的原生弹窗申请权限、展示相机预览及开始/停止/取消动作；UI 只持有采集操作投影，不接触文件路径。取消回传原操作对象，不能取消替换后的操作；离开前台由 Portal 宿主关闭协议停止硬件并清理文件。
 
+聊天配置弹层保留独立的标题和关闭动作，长内容只在剩余高度内滚动，不能直接把填满整页的 Content 作为唯一弹层内容。助手本域使用页的关闭按钮固定在标题行，名称单行省略，业务操作可换行；Workspace 选择列表按剩余高度滚动，底部管理入口不被列表挤掉。ChatVM 的配置命令返回 Result<Unit>，保留原失败并传播取消；模型选择由 ModelListSheet 就近显示失败，其他聊天配置操作由原 target 绑定的页面失败对话框显示，保留被遮盖的原选择界面，不再把失败只写到背后的聊天错误列表。
+
 聊天搜索模式更新助手的外挂/内建搜索偏好，不改共享模型工具目录。搜索按钮与主执行消费相同的助手模型派生；
 当前模型覆盖连接不支持内建搜索时，选择器保留原选择并显示不可用原因，用户可关闭或改用外挂搜索。
-该规则不代表聊天页的其余个人 Settings 消费已经接通企业域；完整原域助手投影与使用参数提交仍在实施。
+聊天使用 `ConversationConfigurationUiModel` 投影原会话域的助手与资源，通过原 `ConversationAssistantTarget` 提交本域偏好；企业助手固定定义不进入用户定义编辑器。`AssistantUsageEditor` 的记忆页将企业绑定的只读 Seed 与可编辑运行记忆分开显示，Seed 由 `ResolvedConfiguration.assistantMemorySeeds` 按原企业身份及助手引用解析，不通过运行记忆开关或删除操作修改。
+
+Provider 列表与两个详情标签页、用户助手列表和语音目录明确说明用户定义的跨空间共享影响；企业可用性继续由既有模型、助手和语音目录投影。企业聊天没有可用模型时展示本域就绪状态，模型行转到正式空间恢复入口，不引导用户填写个人 API Key 代替企业资源。
 
 ### 技术栈
 
@@ -83,6 +89,7 @@ class Navigator(private val backStack: MutableList<NavKey>) {
 `ConversationOpenRequest.NewDraft` 固定会话 ID、原 `RealmAccess` 与助手引用；`OpenExisting` 只打开已有根会话。
 历史、搜索、收藏和通知使用已有会话请求；分享和新建按钮显式创建 Draft。`rememberChatNavigation` 的回调保留渲染时的域，
 助手切换由 `selectAssistantRequest` 在同一授权边界完成选择和最近会话查询，等待后不重新捕获 Session。
+系统分享页复用 `ConfigurationQueryService.observeAssistantCatalog` 显示当前空间的企业与用户助手及不可用原因；创建 Draft 使用所显示目录的原 `RealmSelection`，切域往返或授权到期后拒绝旧选择。分享只预填输入，不自动发送，也不改默认助手。
 抽屉切换使用助手目录捕获的 `RealmSelection`，由 `ChatDrawerVM` 等待命令后导航；不通过另一条全局助手状态或导航写入分支。
 冷启动的 `Screen.Startup` 在恢复完成后读取本域的最近会话或生成新请求，再替换为稳定的聊天导航项。
 

@@ -308,11 +308,11 @@ class GenerationSideEffects internal constructor(
     private suspend fun generateSuggestion(owner: GenerationOwner, snapshot: ConversationAggregateSnapshot) {
         val conversationId = snapshot.conversationId
         try {
-            if (!modelExecutions.read(owner.access).userSettings.enableSuggestion) return
+            if (!modelExecutions.read(owner.access).configuration.selections.enableSuggestion) return
             val captured = modelExecutions.captureAuxiliary(owner.access, owner.runtime, owner.worker,
                 snapshot.header.assistantId, ModelSelectionRole.SUGGESTION)
             val settings = captured.userSettings
-            if (!settings.enableSuggestion) return
+            if (!captured.configuration.selections.enableSuggestion) return
 
             val current = withOwner(owner) {
                 if (owner.runtime.durable.header.assistantId != snapshot.header.assistantId || owner.runtime.durable.nodes != snapshot.nodes) false

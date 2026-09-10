@@ -48,6 +48,78 @@ import org.junit.Test
 internal class McpCatalogLifecycleTest : McpRuntimeCoordinatorTestBase() {
 
     @Test
+    fun `expiry while a committed catalog receipt waits compensates publication before runtime activation`() = runTest(dispatcher) {
+        for (initiallyReady in listOf(false, true)) {
+            catalogs.value = emptyMap()
+            var authorized = true
+            val config = McpConnectionDefinition.User(serverConfig())
+            val access = net.weero.measix.pilot.data.enterprise.RealmAccess.Enterprise(
+                ConfigurationScope.Enterprise(me.rerere.common.configuration.EnterpriseAuthority("local:test", "dep_test"), "user_test"), "session_test")
+            val key = McpRuntimeKey(SERVER_ID, access, "int_${kotlin.uuid.Uuid.random()}")
+            val states = McpRuntimeStateStore()
+            val appScope = AppScope(dispatcher)
+            val network = mockk<NetworkMonitor>()
+            every { network.isOnline } returns MutableStateFlow(true)
+            val runtime = McpServerRuntime(key, object : McpRuntimeDefinition {
+                override fun requireAuthority() { check(authorized) { "original_session_expired" } }
+                override suspend fun <T> withCurrent(use: McpDefinitionUse, operation: suspend (McpConnectionDefinition?) -> T): T {
+                    requireAuthority()
+                    return operation(config)
+                }
+            }, catalogStore, appScope, network, states,
+                McpProtocolClientFactory(createHttpClient = { error("unexpected HTTP") },
+                    createManagedHttpClient = { error("unexpected managed HTTP") }, createLocalHttpClient = { error("unexpected local HTTP") },
+                    transportOverride = { FakeTransport().also(createdTransports::add) }, clientOverride = { fakeClient(it) }),
+                oauthCoordinator, kotlinx.coroutines.sync.Semaphore(1), dispatcher, MutableStateFlow(true), McpServerRuntimePolicy { 0 },
+                { _, _ -> }, {}, {})
+            states.getOrCreate(key) { runtime }
+            val releaseReceipt = CompletableDeferred<Unit>()
+            try {
+                // The initially-ready case starts with the same normal Store receipt, without a suspended publication.
+                coEvery { catalogStore.commitCandidate(any()) } coAnswers {
+                    val candidate = firstArg<McpCatalogCandidate>()
+                    val previous = catalogs.value[candidate.key]
+                    val snapshot = candidate.initialSnapshot().copy(revision = (previous?.revision ?: 0L) + 1L)
+                    catalogs.value = catalogs.value + (candidate.key to snapshot)
+                    McpCatalogCommitResult.Committed(snapshot, previous, snapshot.revision)
+                }
+                if (initiallyReady) {
+                    runtime.reconcile(refreshTools = false)
+                    advanceUntilIdle()
+                    assertTrue(states.capabilities.value[key]?.status is McpStatus.Ready)
+                }
+                val previous = catalogs.value[config.catalogKey]
+                val written = CompletableDeferred<McpCatalogCommitResult.Committed>()
+                coEvery { catalogStore.commitCandidate(any()) } coAnswers {
+                    val candidate = firstArg<McpCatalogCandidate>()
+                    val snapshot = candidate.initialSnapshot().copy(revision = (previous?.revision ?: 0L) + 1L)
+                    val receipt = McpCatalogCommitResult.Committed(snapshot, previous, 42L)
+                    catalogs.value = catalogs.value + (candidate.key to snapshot)
+                    written.complete(receipt)
+                    releaseReceipt.await()
+                    receipt
+                }
+                runtime.reconcile(refreshTools = initiallyReady)
+                if (initiallyReady) advanceTimeBy(McpServerRuntimePolicy.CATALOG_REFRESH_DEBOUNCE_MS + 1L)
+                runCurrent()
+                assertTrue(written.isCompleted)
+                authorized = false
+                releaseReceipt.complete(Unit)
+                advanceUntilIdle()
+                val receipt = written.await()
+                coVerify(exactly = 1) { catalogStore.rollbackCommitted(receipt.snapshot, previous, receipt.headToken) }
+                assertEquals(previous, catalogs.value[config.catalogKey])
+                assertFalse(states.capabilities.value[key]?.status is McpStatus.Ready)
+                assertEquals(previous, states.capabilities.value[key]?.catalog)
+            } finally {
+                releaseReceipt.complete(Unit)
+                runtime.closeAndAwait()
+                appScope.coroutineContext[kotlinx.coroutines.Job]!!.cancel()
+            }
+        }
+    }
+
+    @Test
     fun `cancelled connection compensates a catalog already committed before its receipt returns`() = runTest(dispatcher) {
         assertCancelledCommit(initiallyReady = false)
     }

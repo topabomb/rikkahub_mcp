@@ -338,10 +338,12 @@ class PersonalBackupGraphAndroidTest {
             text, 1, 1, "[]", false, folderId = folderId, scope = realm))
         room.messageNodeDao().insertAll(listOf(MessageNodeEntity(nodeId.toString(), id.toString(), 0,
             JsonInstant.encodeToString(listOf(message)), 0)))
-        room.favoriteDao().upsert(net.weero.measix.pilot.data.db.entity.FavoriteEntity(
-            id = Uuid.random().toString(), type = "node", refKey = "node:$id:$nodeId",
-            refJson = JsonInstant.encodeToString(net.weero.measix.pilot.data.model.NodeFavoriteRef(id, nodeId)),
-            snapshotJson = "", createdAt = 1, updatedAt = 1, scope = realm))
+        room.favoriteDao().upsert(net.weero.measix.pilot.data.favorite.NodeFavoriteAdapter.buildFavoriteEntity(
+            net.weero.measix.pilot.data.model.NodeFavoriteTarget(
+                scope = realm, conversationId = id, conversationTitle = text,
+                nodeId = nodeId, node = MessageNode(nodeId, listOf(message)),
+            ), now = 1,
+        ))
         MessageFtsManager(room).reindexNodesInTransaction(id.toString(), text, 1, listOf(MessageNode(nodeId, listOf(message))))
         return id.toString()
     }

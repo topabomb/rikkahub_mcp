@@ -113,6 +113,19 @@ class EnterprisePageAndroidTest {
     }
 
     @Test
+    fun syncFeedbackDoesNotSurviveTheEnterpriseSelectionThatProducedIt() {
+        val original = overview()
+        val fixture = Fixture(original)
+        coEvery { fixture.service.synchronize(requireNotNull(original.access)) } just Runs
+        fixture.show()
+        click(R.string.enterprise_sync)
+        compose.waitUntil(5_000) { fixture.vm.notice.value == R.string.enterprise_sync_completed }
+        fixture.state.value = overview(access = null, revision = 2L)
+        compose.waitUntil(5_000) { fixture.vm.overview.value?.access == null && fixture.vm.notice.value == null }
+        compose.onNodeWithText(text(R.string.enterprise_sync_completed)).assertDoesNotExist()
+    }
+
+    @Test
     fun exitConfirmationKeepsTheOriginalSessionSelectionAndEnterpriseName() {
         val original = overview(name = "Original enterprise")
         val fixture = Fixture(original)

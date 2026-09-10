@@ -26,6 +26,23 @@ import org.robolectric.annotation.Config
 class EnterpriseSessionControllerTest {
     @get:Rule val temporary = TemporaryFolder()
 
+    @Test fun `enterprise expiry during host shutdown cannot publish an expired selected realm`() = runTest {
+        var now = 1000L
+        val controller = EnterpriseSessionController(EnterpriseAppliedStore(temporary.newFolder())) { now }
+        val ready = controller.enrollFixture(exampleEnterprisePackage())
+        val target = controller.captureSelectedRealmAccess()
+        controller.selectPersonalFixture()
+        val original = requireNotNull(controller.readPresentation().selection)
+        expectReason("enterprise_session_expired") {
+            controller.switchRealm(RealmSwitchRequest(original, target)) {
+                now = ready.manifest.session!!.expiresAtMillis
+            }
+        }
+        assertEquals(ConfigurationScope.Personal, controller.available().manifest.selectedScope)
+        assertEquals(EnterpriseSessionPhase.CLOSING, controller.available().manifest.phase)
+        assertEquals(EnterpriseExitReason.AUTHORIZATION_EXPIRED, controller.pendingExit()!!.reason)
+    }
+
     @Test
     fun `failed or cancelled host shutdown retires rendered selection without changing the original session`() = runTest {
         val controller = EnterpriseSessionController(EnterpriseAppliedStore(temporary.newFolder()))

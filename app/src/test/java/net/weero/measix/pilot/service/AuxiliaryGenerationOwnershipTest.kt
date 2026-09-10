@@ -257,6 +257,19 @@ class AuxiliaryGenerationOwnershipTest {
         }
     }
 
+    @Test fun `suggestion generation follows enterprise preference independently of personal preference`() = runTest {
+        fixture(local = true) { f ->
+            f.realmSuggestion = false
+            f.personalSuggestion = true
+            f.effects.launchSuggestion(f.runtime, f.page.access).await()
+            assertTrue(f.runtime.durable.header.chatSuggestions.isEmpty())
+            f.realmSuggestion = true
+            f.personalSuggestion = false
+            f.effects.launchSuggestion(f.runtime, f.page.access).await()
+            assertTrue(f.runtime.durable.header.chatSuggestions.isNotEmpty())
+        }
+    }
+
     private suspend fun TestScope.fixture(local: Boolean = false, block: suspend (Fixture) -> Unit) {
         val f = Fixture(this, local)
         try { f.initialize(); block(f) }
@@ -280,6 +293,8 @@ class AuxiliaryGenerationOwnershipTest {
         val started = CompletableDeferred<Unit>()
         val reply = CompletableDeferred<String>()
         var onCommit: (ConversationWrite) -> Unit = {}
+        var personalSuggestion = true
+        var realmSuggestion = true
         private val sourceRoot = temporary.newFolder()
         private val source = net.weero.measix.pilot.data.enterprise.LocalEnterpriseSource(
             { net.weero.measix.pilot.data.enterprise.EnterprisePackageCodec.encode(exampleEnterprisePackage()).inputStream() }, sessions,
@@ -315,10 +330,10 @@ class AuxiliaryGenerationOwnershipTest {
                 val scope = firstArg<net.weero.measix.pilot.data.configuration.ConfigurationScope>()
                 val document = UserSettingsDocument.empty().withPersonalSettings(configuration).let { document ->
                     document.copy(preferences = document.preferences.withSelections(scope,
-                        if (local) ResourceSelections() else document.preferences.forScope(net.weero.measix.pilot.data.configuration.ConfigurationScope.Personal)))
+                        (if (local) ResourceSelections() else document.preferences.forScope(net.weero.measix.pilot.data.configuration.ConfigurationScope.Personal)).copy(enableSuggestion = realmSuggestion)))
                 }
                 thirdArg<suspend (ExecutionConfigurationSnapshot) -> Any?>()(ExecutionConfigurationSnapshot(
-                    configuration, net.weero.measix.pilot.data.configuration.ConfigurationResolver.resolve(document, scope, secondArg()), "fixture"))
+                    configuration.copy(enableSuggestion = personalSuggestion), net.weero.measix.pilot.data.configuration.ConfigurationResolver.resolve(document, scope, secondArg()), "fixture"))
             }
             every { provider.requestMediaCapabilities(any(), any()) } returns RequestMediaCapabilities.NONE
             every { manager.getProviderByType(any<ProviderSetting>()) } returns provider

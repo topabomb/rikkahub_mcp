@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.size
 import androidx.compose.ui.draw.clipToBounds
@@ -504,8 +505,13 @@ private fun ChatPageContent(
     val mcpPresentations = (mcpCatalog as? net.weero.measix.pilot.service.McpCatalogReadState.Available)?.servers.orEmpty()
     val assistant = configuration?.assistant
     val inputImports = target?.let(vm::importsFor)
+    var configurationError by remember(target) { mutableStateOf<Throwable?>(null) }
+    val acceptConfigurationResult: (Result<Unit>) -> Boolean = { result ->
+        configurationError = result.exceptionOrNull()
+        result.isSuccess
+    }
     val changePreference: (AssistantPreferenceChange) -> Unit = { change ->
-        if (target != null) scope.launch { vm.changeAssistantPreference(target, change) }
+        if (target != null) scope.launch { acceptConfigurationResult(vm.changeAssistantPreference(target, change)) }
     }
     val mcpChoices = configuration?.mcpChoices(mcpPresentations).orEmpty()
     var showFilesSheet by remember(target) { mutableStateOf(false) }
@@ -650,11 +656,11 @@ private fun ChatPageContent(
                         canChangeModel = configuration.canChangeModel,
                         modelSelectionActions = buildList {
                             add(net.weero.measix.pilot.ui.components.ai.ModelSelectionAction(stringResource(R.string.assistant_page_follow_default_model)) {
-                                check(vm.changeAssistantPreference(configuration.target, AssistantPreferenceChange.Model(null)))
+                                vm.changeAssistantPreference(configuration.target, AssistantPreferenceChange.Model(null)).getOrThrow()
                             })
                             if (snapshot.header.scope is net.weero.measix.pilot.data.configuration.ConfigurationScope.Enterprise) {
                                 add(net.weero.measix.pilot.ui.components.ai.ModelSelectionAction(stringResource(R.string.assistant_use_definition_model)) {
-                                    check(vm.changeAssistantPreference(configuration.target, AssistantPreferenceChange.InheritModel))
+                                    vm.changeAssistantPreference(configuration.target, AssistantPreferenceChange.InheritModel).getOrThrow()
                                 })
                             }
                         },
@@ -744,9 +750,9 @@ private fun ChatPageContent(
                             }
                             inputState.clearInput()
                         },
-                        onUpdateChatModel = { check(vm.changeAssistantPreference(configuration.target, AssistantPreferenceChange.Model(it.id))) },
+                        onUpdateChatModel = { vm.changeAssistantPreference(configuration.target, AssistantPreferenceChange.Model(it.id)).getOrThrow() },
                         onUpdateReasoning = { changePreference(AssistantPreferenceChange.Reasoning(it)) },
-                        onUpdateSearchService = { id -> scope.launch { vm.selectSearchService(configuration.target, id) } },
+                        onUpdateSearchService = { id -> scope.launch { acceptConfigurationResult(vm.selectSearchService(configuration.target, id)) } },
                         onMoreClick = {
                             showFilesSheet = true
                         },
@@ -830,13 +836,15 @@ private fun ChatPageContent(
                     vm.toggleMessageFavorite(node)
                 },
                 onConversationSystemPromptChange = { newPrompt ->
-                    target?.let { original -> scope.launch { vm.updateCustomSystemPrompt(original, newPrompt) } }
+                    target?.let { original -> scope.launch { acceptConfigurationResult(vm.updateCustomSystemPrompt(original, newPrompt)) } }
                 },
                 onProviderConfigClick = {
                     navController.navigate(Screen.SettingProvider)
                 },
                 onReadinessModelClick = {
-                    if (configuration?.canChangeModel == true) modelListState.open()
+                    if (readiness.requiresProviderConfiguration && snapshot.header.scope is net.weero.measix.pilot.data.configuration.ConfigurationScope.Enterprise) {
+                        navController.navigate(Screen.Enterprise)
+                    } else if (configuration?.canChangeModel == true) modelListState.open()
                 },
                 onReadinessMcpClick = {
                     showMcpPicker = true
@@ -880,6 +888,7 @@ private fun ChatPageContent(
                 originalImports = inputImports,
                 mcpChoices = mcpChoices,
                 onPreferenceChange = changePreference,
+                onConfigurationResult = acceptConfigurationResult,
                 onDismiss = { showFilesSheet = false },
             )
         }
@@ -905,7 +914,7 @@ private fun ChatPageContent(
                     .associate { it.key.reference to it.access.unavailableReason },
                 onAssistantSelected = { newAssistant ->
                     scope.launch {
-                        if (vm.moveConversationToAssistant(configuration.target, newAssistant.id)) showAssistantPicker = false
+                        if (acceptConfigurationResult(vm.moveConversationToAssistant(configuration.target, newAssistant.id))) showAssistantPicker = false
                     }
                 },
                 onDismiss = { showAssistantPicker = false },
@@ -918,6 +927,7 @@ private fun ChatPageContent(
                 net.weero.measix.pilot.ui.pages.assistant.detail.AssistantUsageEditor(
                     configuration, originalView, setting, workspaces, mcpChoices,
                     onChange = { vm.changeAssistantPreference(configuration.target, it) },
+                    onFailure = { configurationError = it },
                     onImportImage = { uri, avatar -> vm.importAssistantUsageImage(configuration.target, uri, avatar) },
                     requireOriginal = { vm.requireConfigurationTarget(configuration.target) },
                     onEditSharedDefinition = {
@@ -943,19 +953,41 @@ private fun ChatPageContent(
                 resolve
             }
             AdaptiveModal(onDismissRequest = { showLocalTools = false }) {
-                AssistantLocalToolContent(
-                    innerPadding = PaddingValues(0.dp),
-                    assistant = assistant,
-                    subAssistants = configuration.assistants.values.toList(),
-                    imageGenerationAvailable = imageGenerationAvailable,
-                    onToggleLocalTool = { option, enabled -> changePreference(AssistantPreferenceChange.LocalTool(option, enabled)) },
-                    onUpdateSubAssistantIds = null,
-                    onToggleSubAssistant = { id, enabled -> vm.changeAssistantPreference(configuration.target, AssistantPreferenceChange.SubAssistant(id, enabled)) },
-                    inheritedSubAssistantIds = configuration.inheritedSubAssistantIds,
-                    imageResolver = imageResolver,
-                    subAssistantAccess = configuration.resources.filter { it.key.category == net.weero.measix.pilot.data.configuration.ConfigurationCategory.ASSISTANT }
-                        .associate { it.key.reference to it.access },
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        stringResource(R.string.assistant_page_tab_local_tools),
+                        style = MaterialTheme.typography.titleLarge,
+                        modifier = Modifier.weight(1f),
+                    )
+                    TextButton(onClick = { showLocalTools = false }) {
+                        Text(stringResource(R.string.update_card_close))
+                    }
+                }
+                Text(
+                    assistant.name.ifBlank { stringResource(R.string.assistant_page_default_assistant) },
+                    style = MaterialTheme.typography.bodyMedium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(horizontal = 16.dp),
                 )
+                Box(Modifier.weight(1f)) {
+                    AssistantLocalToolContent(
+                        innerPadding = PaddingValues(top = 8.dp, bottom = 16.dp),
+                        assistant = assistant,
+                        subAssistants = configuration.assistants.values.toList(),
+                        imageGenerationAvailable = imageGenerationAvailable,
+                        onToggleLocalTool = { option, enabled -> changePreference(AssistantPreferenceChange.LocalTool(option, enabled)) },
+                        onUpdateSubAssistantIds = null,
+                        onToggleSubAssistant = { id, enabled -> acceptConfigurationResult(vm.changeAssistantPreference(configuration.target, AssistantPreferenceChange.SubAssistant(id, enabled))) },
+                        inheritedSubAssistantIds = configuration.inheritedSubAssistantIds,
+                        imageResolver = imageResolver,
+                        subAssistantAccess = configuration.resources.filter { it.key.category == net.weero.measix.pilot.data.configuration.ConfigurationCategory.ASSISTANT }
+                            .associate { it.key.reference to it.access },
+                    )
+                }
             }
         }
 
@@ -965,7 +997,7 @@ private fun ChatPageContent(
                 workspaces = workspaces,
                 onSelect = { workspaceId ->
                     scope.launch {
-                        if (vm.changeAssistantPreference(configuration.target, AssistantPreferenceChange.Workspace(workspaceId?.let(Uuid::parse)))) {
+                        if (acceptConfigurationResult(vm.changeAssistantPreference(configuration.target, AssistantPreferenceChange.Workspace(workspaceId?.let(Uuid::parse))))) {
                             showWorkspaceSheet = false
                         }
                     }
@@ -976,6 +1008,16 @@ private fun ChatPageContent(
                 },
                 onDismiss = {
                     showWorkspaceSheet = false
+                },
+            )
+        }
+        configurationError?.let { error ->
+            AlertDialog(
+                onDismissRequest = { configurationError = null },
+                title = { Text(stringResource(R.string.error_title_operation)) },
+                text = { Text(error.message ?: stringResource(R.string.chat_error_detail_unavailable)) },
+                confirmButton = {
+                    TextButton(onClick = { configurationError = null }) { Text(stringResource(android.R.string.ok)) }
                 },
             )
         }
@@ -1112,6 +1154,7 @@ private fun ChatFilesPickerSheet(
     originalImports: net.weero.measix.pilot.service.ArtifactDraftScope,
     mcpChoices: List<net.weero.measix.pilot.service.AssistantMcpChoice>,
     onPreferenceChange: (AssistantPreferenceChange) -> Unit,
+    onConfigurationResult: (Result<Unit>) -> Boolean,
     onDismiss: () -> Unit,
 ) {
     val context = LocalContext.current
@@ -1365,10 +1408,10 @@ private fun ChatFilesPickerSheet(
             transportCapabilities = configuration.transportCapabilities,
             mcpServers = mcpChoices,
             onUpdateConversationModeInjectionIds = { ids ->
-                scope.launch { vm.updateModeInjectionIds(originalTarget, ids) }
+                scope.launch { onConfigurationResult(vm.updateModeInjectionIds(originalTarget, ids)) }
             },
             onUpdateWorkspaceCwd = { cwd ->
-                scope.launch { vm.updateWorkspaceCwd(originalTarget, assistant.workspaceId, cwd) }
+                scope.launch { onConfigurationResult(vm.updateWorkspaceCwd(originalTarget, assistant.workspaceId, cwd)) }
             },
             showInjectionSheet = showInjectionSheet,
             onShowInjectionSheetChange = { showInjectionSheet = it },

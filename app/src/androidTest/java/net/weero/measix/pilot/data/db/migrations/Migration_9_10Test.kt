@@ -281,7 +281,14 @@ class Migration_9_10Test {
             db.conversationModelContextDao().insertOnce(listOf(entry(content)))
             val stored = onlyContent(db, OWNER_ASSISTANT)
             assertEquals("the durable row holds exact canonical bytes", content, stored)
-            assertEquals(1, ConversationDisclosureSnapshotService.requireCanonical(stored))
+            assertEquals(ConversationDisclosureSnapshotService.CURRENT_FORMAT,
+                ConversationDisclosureSnapshotService.requireCanonical(stored))
+            val publishedPersonalContent = """{"type":"conversation_disclosure_snapshot","format":1,"memory":{"enabled":false,"scope":"disabled","header":["id","content"],"rows":[]},"sub_assistants":{"mode":"disabled","header":["id","name","description"],"rows":[]}}"""
+            db.conversationModelContextDao().insertOnce(listOf(entry(publishedPersonalContent,
+                ownerNodeId = "node-assistant-later", ownerMessageId = LATER_ASSISTANT)))
+            val preserved = onlyContent(db, LATER_ASSISTANT)
+            assertEquals(publishedPersonalContent, preserved)
+            assertEquals(1, ConversationDisclosureSnapshotService.requireDurableEnvelope(preserved))
         }
     }
 

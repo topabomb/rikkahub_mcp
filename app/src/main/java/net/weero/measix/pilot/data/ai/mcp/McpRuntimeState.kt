@@ -72,4 +72,7 @@ internal class McpRuntimeStateStore {
 /** Keeps the source authorization gate owned until the runtime has accepted or rejected the definition. */
 internal interface McpRuntimeDefinition {
     suspend fun <T> withCurrent(use: McpDefinitionUse, operation: suspend (McpConnectionDefinition?) -> T): T
+
+    /** Recheck time-based authority after suspension while the definition gate remains held. */
+    fun requireAuthority() = Unit
 }

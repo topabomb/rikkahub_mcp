@@ -28,6 +28,23 @@ class ConversationModelContextTransitionTest {
 
     private val turnFinishedAt = LocalDateTime(2026, 1, 2, 3, 4, 5)
 
+    @Test fun `format upgrade appends one baseline and preserves published personal history bytes`() {
+        val old = """{"type":"conversation_disclosure_snapshot","format":1,"memory":{"enabled":false,"scope":"disabled","header":["id","content"],"rows":[]},"sub_assistants":{"mode":"disabled","header":["id","name","description"],"rows":[]}}"""
+        var snapshot = Conversation.ofId(Uuid.random()).copy(messageNodes = listOf(userNode("old"))).toSnapshot()
+        val first = Uuid.random()
+        snapshot = finalize(startAt(snapshot, first, old), first)
+        val oldEntry = snapshot.modelContextEntries.single()
+        val current = stableCandidate(7)
+        snapshot = ConversationTransition.apply(snapshot, AppendUserMessage(UIMessage.user("new")))
+        val second = Uuid.random()
+        snapshot = finalize(startAt(snapshot, second, current), second)
+        assertEquals(listOf(old, current), snapshot.modelContextEntries.map { it.content })
+        assertEquals(oldEntry, snapshot.modelContextEntries.first())
+        snapshot = ConversationTransition.apply(snapshot, AppendUserMessage(UIMessage.user("same")))
+        val after = startAt(snapshot, Uuid.random(), current)
+        assertEquals(snapshot.modelContextEntries, after.modelContextEntries)
+    }
+
     private fun userNode(text: String) = MessageNode.of(UIMessage.user(text))
 
     private fun plan(snapshot: ConversationAggregateSnapshot, command: ConversationCommand): ConversationMutation {
@@ -457,6 +474,6 @@ class ConversationModelContextTransitionTest {
         val candidate = stableCandidate(7)
         val after = startAt(snapshot, Uuid.random(), candidate)
         assertEquals(candidate, after.modelContextEntries.single().content)
-        assertEquals(1, ConversationDisclosureSnapshotService.requireCanonical(after.modelContextEntries.single().content))
+        assertEquals(2, ConversationDisclosureSnapshotService.requireCanonical(after.modelContextEntries.single().content))
     }
 }

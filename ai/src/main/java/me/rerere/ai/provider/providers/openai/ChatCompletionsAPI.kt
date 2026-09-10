@@ -66,7 +66,7 @@ import me.rerere.ai.util.stringSafe
 import me.rerere.ai.provider.authenticate
 import me.rerere.ai.util.toHeaders
 import kotlin.uuid.Uuid
-import me.rerere.common.http.await
+import me.rerere.common.http.readResponse
 import me.rerere.common.http.jsonArrayOrNull
 import me.rerere.common.http.jsonObjectOrNull
 import me.rerere.common.http.jsonPrimitiveOrNull
@@ -131,12 +131,12 @@ class ChatCompletionsAPI(
 
         Log.d(TAG, "generateText: model=${params.model.modelId}")
 
-        val response = client.newCall(request).await()
-        if (!response.isSuccessful) {
-            throw Exception("Failed to get response: ${response.code} ${response.body?.string()}")
+        val bodyStr = client.newCall(request).readResponse { response ->
+            if (!response.isSuccessful) {
+                throw Exception("Failed to get response: ${response.code} ${response.body?.string()}")
+            }
+            response.body?.string() ?: ""
         }
-
-        val bodyStr = response.body?.string() ?: ""
         val bodyJson = json.parseToJsonElement(bodyStr).jsonObject
 
         // 从 JsonObject 中提取必要的信息

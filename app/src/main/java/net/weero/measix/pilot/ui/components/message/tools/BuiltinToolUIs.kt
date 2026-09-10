@@ -131,11 +131,13 @@ object MemoryToolUI : ToolUIRenderer {
         val scope = rememberCoroutineScope()
         val toaster = net.weero.measix.pilot.ui.context.LocalToaster.current
         val memoryFailureMessage = stringResource(R.string.memory_operation_failed)
-        val candidate by androidx.compose.runtime.produceState<MemoryToolRecord?>(null, context.conversationId, context.locator) {
+        val memoryView = (net.weero.measix.pilot.ui.components.richtext.LocalRenderedContentSource.current as?
+            net.weero.measix.pilot.service.RenderedContentSource.Conversation)?.view
+        val candidate by androidx.compose.runtime.produceState<MemoryToolRecord?>(null, memoryView, context.conversationId, context.locator) {
             val conversationId = context.conversationId
             val locator = context.locator
-            if (conversationId != null && locator != null) {
-                value = try { memoryService.captureToolRecord(conversationId, locator) }
+            if (memoryView != null && conversationId != null && locator != null) {
+                value = try { memoryService.captureToolRecord(memoryView, conversationId, locator) }
                 catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
                 catch (_: Exception) { null }
             }

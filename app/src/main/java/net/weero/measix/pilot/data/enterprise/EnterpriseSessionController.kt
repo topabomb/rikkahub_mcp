@@ -221,6 +221,11 @@ internal class EnterpriseSessionController(
         if (request.target == selected.access) return@withLock selected
         try {
             closePreviousHost(selected.access)
+            if (request.target is RealmAccess.Enterprise &&
+                current.manifest.session!!.expiresAtMillis <= nowMillis()) {
+                beginClosing(current.manifest, EnterpriseExitReason.AUTHORIZATION_EXPIRED)
+                fail("enterprise_session_expired")
+            }
             val next = publish(current.manifest.copy(selectedScope = request.target.scope))
             exitSelection(next.manifest)
         } catch (error: Throwable) {

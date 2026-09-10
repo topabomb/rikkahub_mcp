@@ -3,17 +3,21 @@ package net.weero.measix.pilot.ui.pages.share.handler
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.flow.SharingStarted
-import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
-import net.weero.measix.pilot.data.datastore.Settings
-import net.weero.measix.pilot.data.datastore.SettingsStore
+import me.rerere.common.configuration.ConfigurationReference
+import net.weero.measix.pilot.data.enterprise.RealmSelection
+import net.weero.measix.pilot.service.ConfigurationQueryService
+import net.weero.measix.pilot.service.ConversationApplicationService
 
-class ShareHandlerVM(
+class ShareHandlerVM internal constructor(
     text: String,
-    private val settingsStore: SettingsStore
+    queries: ConfigurationQueryService,
+    private val conversations: ConversationApplicationService,
 ) : ViewModel() {
-    val shareText = checkNotNull(text)
-    val settings = settingsStore.userSettings
-        .stateIn(viewModelScope, SharingStarted.Eagerly, Settings.dummy())
+    val shareText = text
+    internal val catalog = queries.observeAssistantCatalog()
+        .stateIn(viewModelScope, SharingStarted.Eagerly, null)
 
+    internal suspend fun newDraft(selection: RealmSelection, assistant: ConfigurationReference) =
+        conversations.newDraftRequest(selection, assistant)
 }

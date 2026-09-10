@@ -45,7 +45,6 @@ import net.weero.measix.pilot.ui.components.nav.BackButton
 import net.weero.measix.pilot.ui.context.LocalNavController
 import net.weero.measix.pilot.ui.theme.CustomColors
 import net.weero.measix.pilot.service.NodeFavoriteItem
-import net.weero.measix.pilot.ui.context.rememberChatNavigation
 import net.weero.measix.pilot.utils.toLocalDateTime
 import org.koin.androidx.compose.koinViewModel
 import java.time.Instant
@@ -54,12 +53,12 @@ import java.time.Instant
 fun FavoritePage(vm: FavoriteVM = koinViewModel()) {
     val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
     val navController = LocalNavController.current
-    val chatNavigation = rememberChatNavigation(navController)
     val scope = rememberCoroutineScope()
     val snackbarHostState = remember { SnackbarHostState() }
     val favorites = vm.nodeFavorites.collectAsStateWithLifecycle().value
     val favoriteRemovedText = stringResource(R.string.favorite_page_removed)
     val undoText = stringResource(R.string.history_page_undo)
+    val operationFailed = stringResource(R.string.error_title_operation)
 
     Scaffold(
         topBar = {
@@ -103,17 +102,34 @@ fun FavoritePage(vm: FavoriteVM = koinViewModel()) {
             items(favorites, key = { it.id }) { item ->
                 SwipeableFavoriteCard(
                     item = item,
-                    onClick = { chatNavigation.existingChat(item.conversationId, nodeId = item.nodeId) },
+                    onClick = {
+                        scope.launch {
+                            try {
+                                val request = vm.openRequest(item)
+                                navController.clearAndNavigate(net.weero.measix.pilot.Screen.Chat(request, nodeId = item.nodeId.toString()))
+                            } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                                throw cancelled
+                            } catch (error: Exception) {
+                                android.util.Log.e("FavoritePage", "Favorite navigation failed", error)
+                                snackbarHostState.showSnackbar(operationFailed)
+                            }
+                        }
+                    },
                     onDelete = {
                         scope.launch {
-                            val restoreToken = vm.removeForUndo(item.refKey) ?: return@launch
-                            val result = snackbarHostState.showSnackbar(
-                                message = favoriteRemovedText,
-                                actionLabel = undoText,
-                                withDismissAction = true,
-                            )
-                            if (result == SnackbarResult.ActionPerformed) {
-                                vm.restoreFavorite(restoreToken)
+                            try {
+                                val restoreToken = vm.removeForUndo(item) ?: return@launch
+                                val result = snackbarHostState.showSnackbar(
+                                    message = favoriteRemovedText,
+                                    actionLabel = undoText,
+                                    withDismissAction = true,
+                                )
+                                if (result == SnackbarResult.ActionPerformed) vm.restoreFavorite(restoreToken)
+                            } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                                throw cancelled
+                            } catch (error: Exception) {
+                                android.util.Log.e("FavoritePage", "Favorite command failed", error)
+                                snackbarHostState.showSnackbar(operationFailed)
                             }
                         }
                     },

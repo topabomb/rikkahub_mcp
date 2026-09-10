@@ -41,6 +41,8 @@ internal fun EnterpriseLocalConfigurationEditor(
             error?.let { Text(stringResource(it), color = MaterialTheme.colorScheme.error) }
             notice?.let { Text(stringResource(it)) }
             if (busy) LinearProgressIndicator(Modifier.fillMaxWidth())
+            Text(stringResource(R.string.enterprise_personal_resources), style = MaterialTheme.typography.titleMedium)
+            Text(stringResource(R.string.enterprise_personal_resources_notice), style = MaterialTheme.typography.bodySmall)
             val policy = original.policy
             ConfigurationToggle(stringResource(R.string.enterprise_allow_user_models), policy.allowLocalProviders, !busy) {
                 onChange(LocalEnterpriseConfigurationChange.Policy(policy.copy(allowLocalProviders = it)))
@@ -60,23 +62,29 @@ internal fun EnterpriseLocalConfigurationEditor(
             original.gateways.forEach { gateway ->
                 HorizontalDivider()
                 Text(gateway.name)
+                Text(stringResource(R.string.enterprise_gateway_policy_notice), style = MaterialTheme.typography.bodySmall)
                 ConfigurationToggle(stringResource(R.string.enterprise_gateway_required), gateway.enablement == GatewayEnablementPolicy.REQUIRED, !busy) {
                     onChange(LocalEnterpriseConfigurationChange.Gateway(gateway.id, if (it) GatewayEnablementPolicy.REQUIRED else GatewayEnablementPolicy.USER_CONTROLLABLE_DEFAULT_ON))
                 }
             }
             HorizontalDivider()
             Text(stringResource(R.string.enterprise_source_models), style = MaterialTheme.typography.titleMedium)
+            Text(stringResource(R.string.enterprise_source_models_notice), style = MaterialTheme.typography.bodySmall)
             original.models.forEach { model ->
-                Text(model.name)
-                Text(model.id, style = MaterialTheme.typography.bodySmall)
-                ConfigurationToggle(stringResource(R.string.enterprise_model_enabled), model.enabled, !busy) {
-                    onChange(LocalEnterpriseConfigurationChange.ModelEnabled(model.id, it))
-                }
-                Row {
-                    TextButton(enabled = !busy, onClick = { modelId = model.id; modelName = model.name; naming = true }) {
-                        Text(stringResource(R.string.enterprise_model_rename))
+                OutlinedCard(Modifier.fillMaxWidth()) {
+                    Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text(model.name, style = MaterialTheme.typography.titleSmall)
+                        Text(model.id, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        ConfigurationToggle(stringResource(R.string.enterprise_model_enabled), model.enabled, !busy) {
+                            onChange(LocalEnterpriseConfigurationChange.ModelEnabled(model.id, it))
+                        }
+                        Row {
+                            TextButton(enabled = !busy, onClick = { modelId = model.id; modelName = model.name; naming = true }) {
+                                Text(stringResource(R.string.enterprise_model_rename))
+                            }
+                            TextButton(enabled = !busy, onClick = { deleting = model.id }) { Text(stringResource(R.string.delete)) }
+                        }
                     }
-                    TextButton(enabled = !busy, onClick = { deleting = model.id }) { Text(stringResource(R.string.delete)) }
                 }
             }
             OutlinedButton(enabled = !busy, onClick = { modelId = null; modelName = ""; naming = true }) {

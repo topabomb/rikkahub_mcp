@@ -44,6 +44,42 @@ import kotlin.uuid.Uuid
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class ChatPageLifecycleTest {
+    @Test fun `configuration failure returns its cause to the active control without a hidden chat error`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val fixture = Fixture()
+        val failure = IllegalStateException("enterprise_resource_changed")
+        coEvery { fixture.configuration.changeAssistantPreference(any(), any()) } throws failure
+        try {
+            val vm = fixture.create()
+            runCurrent()
+            val target = ConversationAssistantTarget(fixture.lease.commandTarget, fixture.request.assistantId)
+            val result = vm.changeAssistantPreference(target,
+                net.weero.measix.pilot.data.configuration.AssistantPreferenceChange.InheritModel)
+            assertSame(failure, result.exceptionOrNull())
+            assertTrue(fixture.errors.errors.value.isEmpty())
+        } finally { fixture.store.clear(); Dispatchers.resetMain() }
+    }
+
+    @Test fun `configuration cancellation propagates instead of becoming an operation failure`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val fixture = Fixture()
+        val cancellation = kotlinx.coroutines.CancellationException("configuration cancelled")
+        coEvery { fixture.configuration.changeAssistantPreference(any(), any()) } throws cancellation
+        try {
+            val vm = fixture.create()
+            runCurrent()
+            val target = ConversationAssistantTarget(fixture.lease.commandTarget, fixture.request.assistantId)
+            try {
+                vm.changeAssistantPreference(target,
+                    net.weero.measix.pilot.data.configuration.AssistantPreferenceChange.InheritModel)
+                fail("Cancellation must propagate")
+            } catch (caught: kotlinx.coroutines.CancellationException) {
+                assertSame(cancellation, caught)
+            }
+            assertTrue(fixture.errors.errors.value.isEmpty())
+        } finally { fixture.store.clear(); Dispatchers.resetMain() }
+    }
+
     @Test fun `page acquires authorization before any attachment or private subscription and closes on revocation`() = runTest {
         Dispatchers.setMain(StandardTestDispatcher(testScheduler))
         val fixture = Fixture()
@@ -233,6 +269,7 @@ class ChatPageLifecycleTest {
         val access = MutableStateFlow(true)
         private val settings = mockk<SettingsStore>()
         val errors = ChatErrorStore()
+        val configuration = mockk<ConfigurationApplicationService>()
         val turns = mockk<net.weero.measix.pilot.service.ConversationTurnService>()
         private val updater = mockk<UpdateChecker>()
         init {
@@ -242,7 +279,7 @@ class ChatPageLifecycleTest {
             every { imports.close() } returns Unit
             every { settings.userSettings } returns MutableStateFlow(net.weero.measix.pilot.data.datastore.Settings.dummy())
             every { updater.updateState } returns MutableStateFlow(UiState.Idle)
-            every { favorites.observeNodeIds(request.id) } returns flowOf(setOf(Uuid.random()))
+            every { favorites.observeNodeIds(any()) } returns flowOf(setOf(Uuid.random()))
             every { query.observeViewAccess(any()) } returns access
             every { query.observeForView<Any?>(any(), any(), any()) } answers { thirdArg<() -> Flow<Any?>>()() }
             val snapshot = ConversationRuntimeSnapshot(
@@ -257,7 +294,7 @@ class ChatPageLifecycleTest {
             @Suppress("UNCHECKED_CAST")
             override fun <T : ViewModel> create(modelClass: Class<T>): T = ChatVM(
                 request, mockk<Application> { every { getString(net.weero.measix.pilot.R.string.error_title_operation) } returns "Operation failed" }, settings, turns, application,
-                query, updater, artifacts, favorites, errors, mockk(),
+                query, updater, artifacts, favorites, errors, configuration,
             ) as T
         })[ChatVM::class.java]
     }

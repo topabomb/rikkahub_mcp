@@ -73,6 +73,12 @@ owner 追加。同一 Turn 的 step、审批、`ask_user`、重试不刷新。�
 助手目录先按本域 `ConfigurationAccess.canExecute` 过滤，再应用既有主从可见性规则；企业固定助手参与目录，
 企业禁止的个人助手不披露。不能用仅含用户定义的 `userSettings.assistants` 代替生效目录。
 
+企业助手绑定的 Memory Seed 从同份 `ResolvedConfiguration.assistantMemorySeeds` 捕获，写入独立只读
+`enterprise_memory_seeds` section，不混入可变 Memory 的整数 ID，也不受可变记忆开关影响。
+新 candidate 使用 format 2；已发布个人历史的 format 1 仍按原形状读取，既有 entry 不改写。
+主/子 START 共用此捕获，种子变化在下一 START 随完整 baseline 提交；同一 Turn 不重读企业配置，
+工具不能修改 Seed 或通过更新记忆改写请求前缀。完整 Snapshot 仍受既有 256 KiB 请求上限约束。
+
 regenerate 同一 USER 创建新 Assistant owner，不复制 USER。即将被替换的旧 owner 先退出目标分支
 再判等，因此相同 live content 也可能相对更早 baseline 被判定为变化，并由新 owner 重新落一条
 entry，不会丢基线。

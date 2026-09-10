@@ -199,6 +199,8 @@ fun AssistantPage(vm: AssistantVM = koinViewModel()) {
                 .consumeWindowInsets(it),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
+            Text(stringResource(R.string.configuration_user_definition_shared_notice),
+                style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(horizontal = 16.dp))
             val lazyListState = rememberLazyListState()
             val isFiltering = selectedTagIds.isNotEmpty() || searchQuery.isNotBlank()
             val reorderableState = rememberReorderableLazyListState(lazyListState) { from, to ->

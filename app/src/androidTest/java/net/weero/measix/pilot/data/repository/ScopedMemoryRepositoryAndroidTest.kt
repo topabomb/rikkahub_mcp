@@ -61,10 +61,10 @@ class ScopedMemoryRepositoryAndroidTest {
                 assertEquals(listOf(index * 10 + 1, index * 10 + 2), rows.map { it.id })
                 assertEquals(listOf("z-$index", "a-$index"), rows.map { it.content })
                 assertEquals(rows, withTimeout(10_000) { repository.observe(address).first() })
-                val added = repository.add(address, "new-$index")
-                repository.update(address, added.id, "updated-$index")
+                val added = repository.add(address, "new-$index") {}
+                repository.update(address, added.id, "updated-$index") {}
                 assertEquals("updated-$index", repository.read(address).last().content)
-                repository.delete(address, added.id)
+                repository.delete(address, added.id) {}
                 assertEquals(rows, repository.read(address))
             }
         }
@@ -74,17 +74,17 @@ class ScopedMemoryRepositoryAndroidTest {
     fun wrongScopeOwnerAndIdCannotMutateRowsAndPersonalAssistantCleanupPreservesEnterpriseMemory() = runBlocking {
         withDatabase { database ->
             val repository = MemoryRepository(database.memoryDao(), RoomDatabaseTransactionRunner(database))
-            val entries = addresses().associateWith { repository.add(it, "kept-$it") }
+            val entries = addresses().associateWith { repository.add(it, "kept-$it") {} }
             val personalAssistant = MemoryAddress(ConfigurationScope.Personal, assistant)
             val target = entries.getValue(personalAssistant)
             val invalidAddresses = entries.keys.filter { it != personalAssistant } +
                 MemoryAddress(ConfigurationScope.Personal, MemoryOwner.Assistant(ConfigurationReference.random()))
             invalidAddresses.forEach { address ->
-                expectMissing { repository.update(address, target.id, "wrong") }
-                expectMissing { repository.delete(address, target.id) }
+                expectMissing { repository.update(address, target.id, "wrong") {} }
+                expectMissing { repository.delete(address, target.id) {} }
             }
-            expectMissing { repository.update(personalAssistant, Int.MAX_VALUE, "wrong") }
-            expectMissing { repository.delete(personalAssistant, Int.MAX_VALUE) }
+            expectMissing { repository.update(personalAssistant, Int.MAX_VALUE, "wrong") {} }
+            expectMissing { repository.delete(personalAssistant, Int.MAX_VALUE) {} }
             entries.forEach { (address, row) -> assertEquals(listOf(row), repository.read(address)) }
 
             repository.deleteAll(personalAssistant)
@@ -113,7 +113,7 @@ class ScopedMemoryRepositoryAndroidTest {
                 val repository = MemoryRepository(pausedDao, RoomDatabaseTransactionRunner(database))
                 val address = MemoryAddress(ConfigurationScope.Enterprise(authority, "alice"), assistant)
                 val writer = launch(Dispatchers.Default) {
-                    try { repository.add(address, "must roll back") }
+                    try { repository.add(address, "must roll back") {} }
                     catch (error: CancellationException) { cancelled.set(true); throw error }
                 }
                 try {
@@ -162,7 +162,7 @@ class ScopedMemoryRepositoryAndroidTest {
                     }
                     val repository = MemoryRepository(database.memoryDao(), transactions)
                     val writer = launch(Dispatchers.Default) {
-                        try { sessions.withRealmAccess(access) { repository.add(address, "committed") } }
+                        try { sessions.withRealmAccess(access) { repository.add(address, "committed") {} } }
                         catch (error: CancellationException) { cancelled.set(true); throw error }
                     }
                     var exitJob: Job? = null
@@ -191,6 +191,25 @@ class ScopedMemoryRepositoryAndroidTest {
             }
         } finally {
             clientRoot.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun authorizationRevokedInsideTransactionRollsBackInsertedMemory() = runBlocking {
+        withDatabase { database ->
+            var authorized = true
+            val dao = object : MemoryDAO by database.memoryDao() {
+                override suspend fun insertMemory(memory: MemoryEntity): Long = database.memoryDao().insertMemory(memory).also {
+                    authorized = false
+                }
+            }
+            val repository = MemoryRepository(dao, RoomDatabaseTransactionRunner(database))
+            val address = addresses().first()
+            try {
+                repository.add(address, "must roll back") { check(authorized) { "expired" } }
+                fail("Expired authority must roll back")
+            } catch (error: IllegalStateException) { assertEquals("expired", error.message) }
+            assertTrue(repository.read(address).isEmpty())
         }
     }
 

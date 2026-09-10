@@ -128,13 +128,25 @@ class ConversationApplicationService internal constructor(
     ): ConversationOpenRequest.NewDraft {
         recoveryGate.awaitReady()
         return sessions.withSelectedRealmAccess(access) {
-            settingsStore.withResolvedConfiguration(access.scope, sessions.state.value) { configuration ->
-                val selected = requireNotNull(assistantId ?: configuration.selections.assistantId) { "conversation_assistant_missing" }
-                check(configuration.selection(ConfigurationCategory.ASSISTANT, selected).isAvailable) { "conversation_assistant_unavailable" }
-                ConversationOpenRequest.NewDraft(Uuid.random(), access, selected)
-            }
+            createDraftRequest(RealmSelection(access, sessions.selectionRevision.value), assistantId)
         }
     }
+
+    suspend fun newDraftRequest(
+        selection: RealmSelection,
+        assistantId: ConfigurationReference? = null,
+    ): ConversationOpenRequest.NewDraft {
+        recoveryGate.awaitReady()
+        return sessions.withSelectedRealmSelection(selection) { createDraftRequest(selection, assistantId) }
+    }
+
+    private suspend fun createDraftRequest(selection: RealmSelection, assistantId: ConfigurationReference?) =
+        settingsStore.withResolvedConfiguration(selection.access.scope, sessions.state.value) { configuration ->
+            sessions.requirePublishedSelection(selection)
+            val selected = requireNotNull(assistantId ?: configuration.selections.assistantId) { "conversation_assistant_missing" }
+            check(configuration.selection(ConfigurationCategory.ASSISTANT, selected).isAvailable) { "conversation_assistant_unavailable" }
+            ConversationOpenRequest.NewDraft(Uuid.random(), selection.access, selected)
+        }
 
     suspend fun initialize(request: ConversationOpenRequest): ConversationViewLease {
         recoveryGate.awaitReady()
@@ -663,6 +675,26 @@ class ConversationApplicationService internal constructor(
         }
     }
 
+    /** Favorite mutations share the conversation lock with node and tree deletion. */
+    internal suspend fun <T> withFavoriteNode(
+        target: ConversationCommandTarget,
+        nodeId: Uuid,
+        operation: suspend (net.weero.measix.pilot.data.model.NodeFavoriteTarget) -> T,
+    ): T = withRootCommand(target) {
+        val snapshot = liveSnapshot(target.conversationId)
+        check(!snapshot.header.newConversation) { "favorite_requires_persisted_conversation" }
+        val node = snapshot.nodes.singleOrNull { it.id == nodeId } ?: error("favorite_node_missing")
+        target.requireOpen()
+        sessions.requirePublishedSelection(target.selection)
+        operation(net.weero.measix.pilot.data.model.NodeFavoriteTarget(
+            scope = snapshot.header.scope,
+            conversationId = snapshot.conversationId,
+            conversationTitle = snapshot.header.title,
+            nodeId = node.id,
+            node = node,
+        ))
+    }
+
     suspend fun selectNode(target: ConversationCommandTarget, nodeId: Uuid, selectIndex: Int) = withRootCommand(target) {
         val snapshot = liveSnapshot(target.conversationId)
         val node = snapshot.nodes.firstOrNull { it.id == nodeId } ?: throw NoSuchElementException("Message node not found")
@@ -686,6 +718,7 @@ class ConversationApplicationService internal constructor(
             RealmAccess.Personal -> settingsStore.updateLocal { it.copy(assistantId = assistantId) }
             is RealmAccess.Enterprise -> settingsStore.updateResourceSelections(
                 access.scope, sessions.state.value as net.weero.measix.pilot.data.enterprise.EnterpriseState.Available,
+                requireOwner = { sessions.requirePublishedRealmAccess(access) },
             ) { it.copy(assistantId = assistantId) }
         }
     }

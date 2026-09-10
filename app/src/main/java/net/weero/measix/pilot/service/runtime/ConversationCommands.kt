@@ -93,7 +93,7 @@ sealed interface OptionalConfigurationReferenceSet {
 }
 
 /**
- * 收藏是 FavoriteService 单写的独立查询投影，不属于 Conversation 聚合命令。
+ * 收藏由 FavoriteService 写入独立投影；原会话 owner 在同一命令锁内核实 durable node，防止与节点删除竞态。
  * MessageNode.isFavorite 仅为不落 message_node 的投影字段。
  */
 

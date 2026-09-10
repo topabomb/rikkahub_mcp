@@ -30,6 +30,8 @@ Provider 类型决定原生协议族，`useResponseApi` 只选择 OpenAI 子协�
 
 Fixed 请求带 `PrivateRequest` 网络标记，宿主日志入口不记录其 HTTP 内容，`PrivateRequestBoundaryInterceptor` 在实际重定向边界拒绝跨 origin 转发。Responses 的 `instructions` 与 model/input/tools 一样归协议装配 owner，custom body 不能覆盖已组装系统提示。
 
+非流式文本、图片生成/编辑及结果下载、模型目录、余额和 embedding 的完整响应读取统一使用 `Call.readResponse`，由同一调用持有 HTTP Call 到响应体消费并关闭为止。取消等待响应头或阻塞读取成功/错误响应体都会取消原 Call；退出不依赖网络读取超时收口。流式请求继续由各协议的 EventSource 生命周期负责取消。
+
 ### 工具 JSON Schema 边界
 
 `Tool.parameters` 与目录中的 `McpCatalogTool.inputSchema` 都使用完整 `JsonObject` 作为规范表示。MCP SDK 的 `ToolSchema` 会整体序列化，因而保留 JSON Schema 2020-12 的 `$schema`、`$defs`、`$ref`、`properties` 和 `required`；通用层不使用封闭数据类枚举关键字，也不按 host 删除定义。

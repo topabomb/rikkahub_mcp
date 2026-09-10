@@ -14,6 +14,7 @@ import net.weero.measix.pilot.data.configuration.ResourceSelectionSlot
 import net.weero.measix.pilot.data.model.Assistant
 
 internal data class ConversationStarterUiModel(val reference: ConfigurationReference.Enterprise, val title: String, val prompt: String)
+internal data class AssistantMemorySeedUiModel(val id: String, val content: String)
 
 /** The assistant and its choices belong to the same rendered conversation and authorized configuration. */
 internal data class ConversationConfigurationUiModel(
@@ -32,6 +33,7 @@ internal data class ConversationConfigurationUiModel(
     val fixedMcpBindings: Set<ConfigurationReference>,
     val starters: List<ConversationStarterUiModel>,
     val inheritedSubAssistantIds: Set<ConfigurationReference> = emptySet(),
+    val memorySeeds: List<AssistantMemorySeedUiModel> = emptyList(),
 ) {
     val canChangeModel: Boolean get() = assistant != null && target.assistantId is ConfigurationReference.User
     val canEditDefinition: Boolean get() = target.assistantId is ConfigurationReference.User
@@ -59,5 +61,6 @@ internal fun ResolvedConfiguration.conversationConfiguration(target: Conversatio
             }
         }.orEmpty(),
         inheritedSubAssistantIds[target.assistantId].orEmpty(),
+        assistantMemorySeeds(target.assistantId).map { AssistantMemorySeedUiModel(it.id, it.content) },
     )
 }

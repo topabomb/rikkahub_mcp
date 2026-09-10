@@ -155,7 +155,7 @@ class ConversationRepositoryTreeIntegrationTest {
         assertEquals(expectedMaster, rootRuntime.durable)
         assertEquals(expectedChild, childRuntime.durable)
         assertEquals(listOf("answer", "request"), indexedText())
-        favorites.forEach { assertEquals(it, database.favoriteDao().getByRefKey(it.refKey)) }
+        favorites.forEach { assertEquals(it, database.favoriteDao().getByRefKey(it.scope, it.refKey)) }
         assertEquals(setOf(master.id.toString(), child.id.toString()),
             database.artifactReferenceDao().referencingConversationIds(owned.entity.id).toSet())
         database.openHelper.writableDatabase.execSQL("DROP TRIGGER fail_child_delete")
@@ -168,7 +168,7 @@ class ConversationRepositoryTreeIntegrationTest {
         assertNull(repository.getConversationSnapshotById(child.id))
         assertNull(registry.findRuntime(child.id))
         assertEquals(listOf("summary"), indexedText())
-        favorites.forEach { assertNull(database.favoriteDao().getByRefKey(it.refKey)) }
+        favorites.forEach { assertNull(database.favoriteDao().getByRefKey(it.scope, it.refKey)) }
         assertFalse(database.artifactReferenceDao().existsByArtifactId(owned.entity.id))
     }
 

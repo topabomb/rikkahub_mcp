@@ -48,6 +48,9 @@ Settings；导入、编辑、OAuth 更新也无权覆盖 Catalog。
 但其定义、凭据与目录继续归用户 owner。个人维护连接仍以用户 reference 为键，不复制用户定义。
 `McpConnectionDefinition` 区分用户定义与临时受管 binding；企业凭据不转换成可编辑 `McpServerConfig`。
 原 Session → Settings → Runtime 是企业连接和调用准入的锁顺序，网络等待在锁外。
+Settings 和 Runtime 锁等待后通过原 definition 的 `requireAuthority` 复验时间授权；
+Session 锁可阻止退出状态并发写入，但不能阻止墙上时钟越过期限。
+目录提交回执返回后、Runtime 激活前也复验原授权；期间到期按原提交回执回滚，不发布 Ready。
 `McpExecutionLease` 在捕获 binding 前交给原 Turn owner，等待用户期间保留，CONTINUE 转交同一租约。
 终态与退出在原 owner 上关闭并等待全部 transport，之后释放 binding；失败保留清理所有权。
 

@@ -15,6 +15,8 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
+import net.weero.measix.pilot.data.enterprise.selectPersonalFixture
+import net.weero.measix.pilot.data.enterprise.selectEnterpriseFixture
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
 import me.rerere.common.configuration.ConfigurationReference
@@ -62,7 +64,7 @@ class MemoryServiceTest {
             env.settings.updateLocal { it.copy(assistants = it.assistants.map { a -> if (a.id == env.target.id) a.copy(useGlobalMemory = true) else a }) }
             assertEquals("shared", view.first { it.access?.address == shared }.records.single().content)
             expectRejected { env.memory.update(original.copy(content = "wrong namespace")) }
-            coVerify(exactly = 0) { env.repository.update(any(), any(), any()) }
+            coVerify(exactly = 0) { env.repository.update(any(), any(), any(), any()) }
             env.settings.updateLocal { it.copy(assistants = it.assistants.map { a -> if (a.id == env.target.id) a.copy(useGlobalMemory = false) else a }) }
             assertEquals("local", view.first { it.access?.address == local }.records.single().content)
             observer.cancelAndJoin()
@@ -83,7 +85,7 @@ class MemoryServiceTest {
             view.first { it.unavailableReason != null }
             env.sessions.enrollFixture(packet)
             expectRejected { env.memory.delete(old) }
-            coVerify(exactly = 0) { env.repository.delete(any(), any()) }
+            coVerify(exactly = 0) { env.repository.delete(any(), any(), any()) }
             // This fixture uses real IO and wall-clock sessions, as does its existing AppScope collector.
             val fresh = kotlinx.coroutines.withContext(Dispatchers.Default) {
                 env.memory.observe(packet.identity.scope, env.target.id).first { it.access != null }
@@ -141,7 +143,64 @@ class MemoryServiceTest {
             env.settings.updateLocal { it.copy(assistants = it.assistants.map { a -> if (a.id == env.target.id) a.copy(enableMemory = false) else a }) }
             assertFalse(env.memory.isAllowed(access))
             expectRejected { env.memory.add(access, "late tool") }
-            coVerify(exactly = 0) { env.repository.add(any(), any()) }
+            coVerify(exactly = 0) { env.repository.add(any(), any(), any()) }
+        }
+    }
+
+    @Test
+    fun `memory write queued behind configuration rejects expired original session`() = runTest {
+        environment { env ->
+            env.sessions.enrollFixture(exampleEnterprisePackage())
+            val realm = env.sessions.captureSelectedRealmAccess()
+            val access = requireNotNull(env.memory.captureExecution(realm, env.target))
+            val held = kotlinx.coroutines.CompletableDeferred<Unit>()
+            val release = kotlinx.coroutines.CompletableDeferred<Unit>()
+            val holder = launch {
+                env.settings.withResolvedConfiguration(ConfigurationScope.Personal, env.sessions.state.value) {
+                    held.complete(Unit)
+                    release.await()
+                }
+            }
+            held.await()
+            val writer = launch(start = kotlinx.coroutines.CoroutineStart.UNDISPATCHED) {
+                expectRejected { env.memory.add(access, "expired") }
+            }
+            env.now = (env.sessions.state.value as net.weero.measix.pilot.data.enterprise.EnterpriseState.Available).manifest.session!!.expiresAtMillis
+            release.complete(Unit)
+            holder.join()
+            writer.join()
+            coVerify(exactly = 0) { env.repository.add(any(), any(), any()) }
+        }
+    }
+
+    @Test
+    fun `memory editor stays revoked after switching away and back`() = runTest {
+        environment { env ->
+            env.sessions.enrollFixture(exampleEnterprisePackage())
+            val realm = env.sessions.captureSelectedRealmAccess()
+            val view = kotlinx.coroutines.withContext(Dispatchers.Default) { env.memory.observe(realm, env.target.id).first { it.access != null } }
+            env.sessions.selectPersonalFixture()
+            env.sessions.selectEnterpriseFixture()
+            expectRejected { env.memory.add(requireNotNull(view.access), "stale editor") }
+            coVerify(exactly = 0) { env.repository.add(any(), any(), any()) }
+        }
+    }
+
+    @Test
+    fun `delayed memory page subscription cannot borrow a new selection revision`() = runTest {
+        environment { env ->
+            env.sessions.enrollFixture(exampleEnterprisePackage())
+            val realm = env.sessions.captureSelectedRealmAccess()
+            val page = ConversationViewLease(kotlin.uuid.Uuid.random(), realm, env.sessions.selectionRevision.value) {}
+            every { env.conversations.observeForView<MemoryView>(any(), any(), any()) } answers {
+                thirdArg<() -> kotlinx.coroutines.flow.Flow<MemoryView>>()()
+            }
+            val pending = env.memory.observe(page, env.target.id)
+            env.sessions.selectPersonalFixture()
+            env.sessions.selectEnterpriseFixture()
+            val result = kotlinx.coroutines.withContext(Dispatchers.Default) { pending.first() }
+            assertNull(result.access)
+            assertTrue(result.records.isEmpty())
         }
     }
 
@@ -199,20 +258,25 @@ class MemoryServiceTest {
             coEvery { env.conversations.aggregateSnapshot(conversation.id) } answers { snapshot }
             val address = MemoryAddress(ConfigurationScope.Personal, MemoryOwner.Assistant(env.target.id))
             coEvery { env.repository.findToolResult(ConfigurationScope.Personal, 42) } returns (address to AssistantMemory(42, "note"))
-            coEvery { env.repository.delete(address, 42) } returns Unit
+            coEvery { env.repository.delete(address, 42, any()) } returns Unit
             val locator = me.rerere.ai.core.ToolCallLocator(message.id, tool.stepId, tool.localCallId)
-            assertNull(env.memory.captureToolRecord(conversation.id, locator.copy(localCallId = kotlin.uuid.Uuid.random())))
-            val record = requireNotNull(env.memory.captureToolRecord(conversation.id, locator))
+            val page = ConversationViewLease(conversation.id, net.weero.measix.pilot.data.enterprise.RealmAccess.Personal, env.sessions.selectionRevision.value) {}
+            assertNull(env.memory.captureToolRecord(page, conversation.id, locator.copy(localCallId = kotlin.uuid.Uuid.random())))
+            val record = requireNotNull(env.memory.captureToolRecord(page, conversation.id, locator))
             assertTrue(record.matches(conversation.id, locator))
             assertFalse(record.matches(kotlin.uuid.Uuid.random(), locator))
             snapshot = conversation.copy(messageNodes = listOf(net.weero.measix.pilot.data.model.MessageNode(messages = listOf(
                 message.copy(parts = listOf(tool.copy(output = listOf(me.rerere.ai.ui.UIMessagePart.Text("""{"id":999}"""))))),
             )))).toSnapshot()
             expectRejected { env.memory.deleteToolRecord(record) }
-            coVerify(exactly = 0) { env.repository.delete(any(), any()) }
+            coVerify(exactly = 0) { env.repository.delete(any(), any(), any()) }
             snapshot = conversation.toSnapshot()
             env.memory.deleteToolRecord(record)
-            coVerify(exactly = 1) { env.repository.delete(address, 42) }
+            coVerify(exactly = 1) { env.repository.delete(address, 42, any()) }
+            env.sessions.enrollFixture(exampleEnterprisePackage())
+            env.sessions.selectPersonalFixture()
+            expectRejected { env.memory.deleteToolRecord(record) }
+            coVerify(exactly = 1) { env.repository.delete(address, 42, any()) }
         }
     }
 
@@ -227,7 +291,8 @@ class MemoryServiceTest {
         private val preferences = PreferenceDataStoreFactory.create(migrations = listOf(UserSettingsMigration()), scope = scope,
             produceFile = { File(root, "settings.preferences_pb") })
         val settings = SettingsStore(context, scope, dataStore = preferences)
-        val sessions = EnterpriseSessionController(EnterpriseAppliedStore(File(root, "enterprise")))
+        var now = System.currentTimeMillis()
+        val sessions = EnterpriseSessionController(EnterpriseAppliedStore(File(root, "enterprise"))) { now }
         val gate = ApplicationRecoveryGate()
         val configurations = ConfigurationQueryService(settings, sessions, gate)
         val repository = mockk<MemoryRepository>()

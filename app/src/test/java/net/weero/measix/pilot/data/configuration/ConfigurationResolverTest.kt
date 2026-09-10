@@ -24,6 +24,28 @@ internal fun appliedConfiguration(packet: EnterprisePackage): EnterpriseState.Av
 
 class ConfigurationResolverTest {
     @Test
+    fun `enterprise memory seeds follow only the authorized assistant bindings and never user memory preferences`() {
+        val original = exampleEnterprisePackage()
+        val definition = original.configuration.assistants.first().copy(memorySeedIds = listOf("seed_second", "seed_first"))
+        val packet = original.copy(configuration = original.configuration.copy(
+            assistants = listOf(definition),
+            memorySeeds = listOf(EnterpriseMemorySeed("seed_first", "First"), EnterpriseMemorySeed("seed_second", "Second")),
+        ))
+        val reference = packet.identity.reference(definition.id)
+        val resolved = ConfigurationResolver.resolve(document, packet.identity.scope, appliedConfiguration(packet))
+        assertEquals(listOf("Second", "First"), resolved.assistantMemorySeeds(reference).map { it.content })
+        assertEquals(listOf("Second", "First"), resolved.copy(assistants = resolved.assistants.mapValues { (_, value) ->
+            value.copy(enableMemory = false, useGlobalMemory = true)
+        }).assistantMemorySeeds(reference).map { it.content })
+        assertTrue(resolved.assistantMemorySeeds(userAssistant.id).isEmpty())
+        assertTrue(ConfigurationResolver.resolve(document, ConfigurationScope.Personal, appliedConfiguration(packet))
+            .assistantMemorySeeds(reference).isEmpty())
+        val unavailable = packet.copy(configuration = packet.configuration.copy(assistants = listOf(definition.copy(enabled = false))))
+        assertTrue(ConfigurationResolver.resolve(document, packet.identity.scope, appliedConfiguration(unavailable))
+            .assistantMemorySeeds(reference).isEmpty())
+    }
+
+    @Test
     fun `only unset personal search inherits the configured first service without rewriting stored selection`() {
         val services = listOf(SearchServiceOptions.BingLocalOptions(), SearchServiceOptions.TavilyOptions(apiKey = "key"))
         val document = UserSettingsDocument.empty().withPersonalSettings(Settings(searchServices = services))

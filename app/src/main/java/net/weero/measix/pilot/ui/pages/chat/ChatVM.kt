@@ -111,7 +111,7 @@ class ChatVM internal constructor(
 
     val favoriteNodeIds: StateFlow<Set<Uuid>> = fromPage(emptySet()) { state ->
         conversationQueryService.observeForView(state.lease, emptySet()) {
-            favoriteService.observeNodeIds(_conversationId)
+            favoriteService.observeNodeIds(state.lease.commandTarget)
         }
     }.stateIn(viewModelScope, SharingStarted.Eagerly, emptySet())
 
@@ -297,28 +297,24 @@ class ChatVM internal constructor(
         configurationApplicationService.importAssistantImage(target, uri, avatar)
     }
 
-    internal suspend fun changeAssistantPreference(target: ConversationAssistantTarget, change: AssistantPreferenceChange): Boolean =
+    internal suspend fun changeAssistantPreference(target: ConversationAssistantTarget, change: AssistantPreferenceChange): Result<Unit> =
         runConfigurationCommand(target) { configurationApplicationService.changeAssistantPreference(target, change) }
 
-    internal suspend fun selectSearchService(target: ConversationAssistantTarget, reference: ConfigurationReference): Boolean =
+    internal suspend fun selectSearchService(target: ConversationAssistantTarget, reference: ConfigurationReference): Result<Unit> =
         runConfigurationCommand(target) {
             configurationApplicationService.selectConversationSearch(target, reference)
         }
 
-    private suspend fun runConfigurationCommand(target: ConversationAssistantTarget, action: suspend () -> Unit): Boolean = try {
+    private suspend fun runConfigurationCommand(target: ConversationAssistantTarget, action: suspend () -> Unit): Result<Unit> = try {
         requireConfigurationTarget(target)
         action()
-        true
+        Result.success(Unit)
     } catch (cancelled: CancellationException) {
         throw cancelled
     } catch (error: Exception) {
-        if ((page.value as? PageState.Open)?.lease?.commandTarget === target.conversation) {
-            val visibleError = if (error is net.weero.measix.pilot.service.WorkspacePreferenceException)
-                IllegalStateException(context.getString(R.string.workspace_preference_partial_failure), error) else error
-            chatErrorStore.add(error = visibleError, conversationId = target.conversation.conversationId,
-                title = context.getString(R.string.error_title_operation))
-        }
-        false
+        val visibleError = if (error is net.weero.measix.pilot.service.WorkspacePreferenceException)
+            IllegalStateException(context.getString(R.string.workspace_preference_partial_failure), error) else error
+        Result.failure(visibleError)
     }
 
     internal fun requireConfigurationTarget(target: ConversationAssistantTarget) {
@@ -466,7 +462,7 @@ class ChatVM internal constructor(
         launchCommand(target) { conversationApplicationService.togglePin(target) }
     }
 
-    internal suspend fun moveConversationToAssistant(target: ConversationAssistantTarget, targetAssistantId: ConfigurationReference): Boolean =
+    internal suspend fun moveConversationToAssistant(target: ConversationAssistantTarget, targetAssistantId: ConfigurationReference): Result<Unit> =
         runConfigurationCommand(target) {
             conversationApplicationService.moveToAssistant(target, targetAssistantId, selectForNewChats = true)
         }
@@ -482,22 +478,18 @@ class ChatVM internal constructor(
         launchPageCommand { opened -> conversationApplicationService.selectNode(opened.lease.commandTarget, nodeId, selectIndex) }
     }
 
-    internal suspend fun updateCustomSystemPrompt(target: ConversationAssistantTarget, prompt: String?): Boolean =
+    internal suspend fun updateCustomSystemPrompt(target: ConversationAssistantTarget, prompt: String?): Result<Unit> =
         runConfigurationCommand(target) { conversationApplicationService.updateCustomSystemPrompt(target, prompt) }
 
-    internal suspend fun updateModeInjectionIds(target: ConversationAssistantTarget, ids: Set<ConfigurationReference>): Boolean =
+    internal suspend fun updateModeInjectionIds(target: ConversationAssistantTarget, ids: Set<ConfigurationReference>): Result<Unit> =
         runConfigurationCommand(target) { conversationApplicationService.updateModeInjectionIds(target, ids) }
 
-    internal suspend fun updateWorkspaceCwd(target: ConversationAssistantTarget, expectedWorkspaceId: Uuid?, cwd: String?): Boolean =
+    internal suspend fun updateWorkspaceCwd(target: ConversationAssistantTarget, expectedWorkspaceId: Uuid?, cwd: String?): Result<Unit> =
         runConfigurationCommand(target) { conversationApplicationService.updateWorkspaceCwd(target, expectedWorkspaceId, cwd) }
 
     fun toggleMessageFavorite(node: MessageNode) {
-        viewModelScope.launch {
-            favoriteService.toggleNode(
-                conversationId = _conversationId,
-                conversationTitle = requireNotNull(snapshot.value).header.title,
-                node = node,
-            )
+        launchPageCommand { opened ->
+            favoriteService.toggleNode(opened.lease.commandTarget, node.id)
         }
     }
 

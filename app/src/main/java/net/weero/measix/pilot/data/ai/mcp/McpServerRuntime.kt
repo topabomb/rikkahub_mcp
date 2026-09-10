@@ -156,6 +156,7 @@ internal class McpServerRuntime(
     private suspend fun <T> withDefinition(block: (McpConnectionDefinition?) -> T): T =
         definition.withCurrent(McpDefinitionUse.EXECUTION) { current ->
             mutex.withLock {
+                definition.requireAuthority()
                 current?.let { displayName = it.name }
                 block(current?.takeIf { it.enabled && !barrierReported })
             }
@@ -541,7 +542,10 @@ internal class McpServerRuntime(
                 if (!caller.isActive || current?.mcpDefinitionDigest() != candidate.definitionDigest || current.catalogKey != candidate.key || current.managed != candidate.managed) return@withCurrent
                 val result = catalogStore.commitCandidate(candidate)
                 accepted = try {
-                    mutex.withLock { caller.isActive && activateLocked(current, result) }
+                    mutex.withLock {
+                        definition.requireAuthority()
+                        caller.isActive && activateLocked(current, result)
+                    }
                 } catch (error: Throwable) {
                     try { rollbackStaleCommit(result) }
                     catch (cleanup: Throwable) { error.addSuppressed(cleanup) }

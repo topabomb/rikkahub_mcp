@@ -593,6 +593,38 @@ class ConfigurationApplicationServiceTest {
         } finally { env.scope.cancel() }
     }
 
+    @Test
+    fun `queued realm preferences reject expiry before the settings transaction`() = runTest {
+        for (gateway in listOf(false, true)) {
+            val env = environment()
+            try {
+                env.initialize()
+                val before = JsonInstant.encodeToString(env.document())
+                val held = CompletableDeferred<Unit>()
+                val release = CompletableDeferred<Unit>()
+                val holder = launch {
+                    env.settings.withResolvedConfiguration(ConfigurationScope.Personal, env.sessions.state.value) {
+                        held.complete(Unit)
+                        release.await()
+                    }
+                }
+                held.await()
+                val pending = launch(start = kotlinx.coroutines.CoroutineStart.UNDISPATCHED) {
+                    try {
+                        if (gateway) env.commands.setGatewayEnabled(env.selection, exampleEnterprisePackage().identity.reference("twg_example"), false)
+                        else env.commands.setSuggestionEnabled(env.selection, false)
+                        fail("Expired preference write must fail")
+                    } catch (_: net.weero.measix.pilot.data.enterprise.EnterpriseConfigurationException) { }
+                }
+                env.now = (env.sessions.state.value as EnterpriseState.Available).manifest.session!!.expiresAtMillis
+                release.complete(Unit)
+                holder.join()
+                pending.join()
+                assertEquals(before, JsonInstant.encodeToString(env.diskDocument()))
+            } finally { env.scope.cancel() }
+        }
+    }
+
     private class Environment(root: File, val scope: AppScope) {
         var intercept: (suspend () -> Unit)? = null
         private val preferencesFile = File(root, "settings.preferences_pb")
@@ -611,7 +643,8 @@ class ConfigurationApplicationServiceTest {
             override fun getFilesDir(): File = File(root, "files").apply { mkdirs() }
         }
         val settings = SettingsStore(context, scope, dataStore = preferences)
-        val sessions = EnterpriseSessionController(EnterpriseAppliedStore(File(root, "enterprise")))
+        var now = System.currentTimeMillis()
+        val sessions = EnterpriseSessionController(EnterpriseAppliedStore(File(root, "enterprise"))) { now }
         private val gate = ApplicationRecoveryGate()
         lateinit var access: RealmAccess.Enterprise
         lateinit var target: ConversationAssistantTarget

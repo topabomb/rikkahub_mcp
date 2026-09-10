@@ -27,6 +27,39 @@ import org.junit.Test
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class McpServerRuntimeAuthorizationTest {
+    @Test fun `runtime admission rechecks authority after the definition owner has waited`() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val appScope = AppScope(dispatcher)
+        var authorized = true
+        val server = McpServerConfig.StreamableHTTPServer(commonOptions = McpCommonOptions(name = "expired"), url = "https://example.test/mcp")
+        val runtime = McpServerRuntime(
+            key = McpRuntimeKey(server.id),
+            definition = object : McpRuntimeDefinition {
+                override fun requireAuthority() { check(authorized) { "original_session_expired" } }
+                override suspend fun <T> withCurrent(use: McpDefinitionUse, operation: suspend (McpConnectionDefinition?) -> T): T {
+                    check(authorized)
+                    // Models expiry after the initial check, before Runtime accepts the definition.
+                    authorized = false
+                    return operation(McpConnectionDefinition.User(server))
+                }
+            },
+            catalogStore = mockk(), appScope = appScope,
+            networkMonitor = mockk { every { isOnline } returns MutableStateFlow(true) },
+            stateStore = McpRuntimeStateStore(), protocolClientFactory = mockk(), oauthCoordinator = mockk(),
+            lifecycleOperationSemaphore = Semaphore(1), ioDispatcher = dispatcher,
+            foregroundState = MutableStateFlow(true), policy = McpServerRuntimePolicy { 0L },
+            logger = { _, _ -> }, onClosed = {}, onManagedSnapshotRequired = {},
+        )
+        try {
+            try {
+                runtime.admitInvocation("tool", "digest", false)
+                org.junit.Assert.fail("expired definition reached invocation admission")
+            } catch (error: IllegalStateException) {
+                assertEquals("original_session_expired", error.message)
+            }
+        } finally { appScope.cancel() }
+    }
+
     @Test
     fun `replacement authorization waits for cancellation and seals the previous lease`() = runTest {
         val dispatcher = StandardTestDispatcher(testScheduler)

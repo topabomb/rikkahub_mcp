@@ -278,7 +278,7 @@ LocalEnterpriseSource（身份/配置/动态/场景）
 
 场景管理覆盖五项逐一收紧/恢复、Gateway policy、模型新增/改名/删除、坏 schema/引用、版本变化、缺配置、网络/身份故障、Portal 过期和重启。配置调整通过新 generation 和正常应用协议发布，不能直接改 UI Boolean；连接状态和 Session 期限变化不推进配置 generation，动态仍使用独立 Feed revision。
 
-正式空间页提供“本地企业场景”，不依赖开发模式。未接入时可选择“已验证、待配置”体验：共用正常资料解析与一次性兑换，暂不应用配置，留在个人空间；随后“同步配置”恢复 READY，再主动切入企业。已有本地 Session 可模拟断连、明确恢复、缩短为 60 秒内到期或撤销凭据。断连不等于退出，普通同步不恢复连接；到期和撤销走既有统一退出 owner，停留个人空间或重启也不能续期。操作捕获原页面选择与 Session，旧操作不能影响重新接入的 Session；不另存故障配置或增加退出流程。
+正式空间页将日常聊天、工作台及企业同步/退出与本地管理分开。本地管理默认收起，不依赖开发模式；“企业规则与模型”模拟管理员修改并立即同步来源配置，“企业动态”维护 Feed，“连接与退出演练”提供状态验证。完整 JSON 导入单独展示：未接入企业时成功导入会接入并进入企业空间，已接入同一企业时更新配置并保留当前空间。未接入时可选择“已验证、待配置”体验：共用正常资料解析与一次性兑换，暂不应用配置，留在个人空间；随后“同步配置”恢复 READY，再主动切入企业。已有本地 Session 可模拟断连、明确恢复、缩短为 60 秒内到期或撤销凭据。断连不等于退出，普通同步不恢复连接；到期和撤销走既有统一退出 owner，停留个人空间或重启也不能续期。操作捕获原页面选择与 Session，旧操作不能影响重新接入的 Session；不另存故障配置或增加退出流程。
 
 ### 7.2 私有配置文件
 
@@ -307,6 +307,8 @@ Seed 只初始化尚未建立的主体 Feed。同步、重入与重复导入不�
 本地企业空间的“本地企业场景 → 本地企业动态”提供正式原生管理入口：新建与编辑草稿、设置正文格式/分类/级别、发布和撤回；已发布内容不能直接编辑，改动通过新草稿发布，原记录可撤回。该入口仅在选中本地企业且 READY/OFFLINE 时可用，Portal 继续只读已发布动态。页面捕获原 RealmSelection 和存储 revision，读取与写入在 Session owner 内校验原主体、Session、选中版本与期限；读写 IO 完成后再次核验期限，过期或旧页面不得返回快照或提交。存储 revision 冲突须重新读取，不用重新播种覆盖现有动态。
 
 公开 DTO、eup_UUIDv4 标识和枚举直接遵守 Client OpenAPI。查询统一处理日期、默认/范围 limit、truncated 和 publishedAt 降序，时间相同以稳定 ID 排序。日期使用企业时区日历的首日零点至末日下一日零点，覆盖 DST；ETag 包含主体、公开 revision、时区和规范化查询，start-only 包含本次解析的企业当前日期。主体/Session/document 授权先于内容及 notModified 返回；withRealmAccess 的历史数据授权不能代替 Portal 当前 selectedScope 校验。
+
+企业功能尚未发布，只维护当前最终契约；各载体的版本编号不代表曾发行过多个企业版本。完整配置、manifest、Portal Bridge 与接入资料分别只接受其当前固定版本，不提供旧企业版本的读取回退或迁移。
 
 0.0.20 是个人域/企业域的第一个入口版本。企业接入、Portal、完整配置及本地企业存储只执行本期最新契约；外部旧完整文件明确拒绝并提示使用新模板，不为分阶段开发的企业原型保留双格式解析、旧 HTML、旧桥接或专用历史迁移/归档。清理未交付的旧企业实现，以及与其绑定的临时/过时文件、旧模板、无效测试和文档；保留当前有效的共享消费契约与必要交付材料。已发布个人配置、Room 数据和个人备份的迁移与保全要求仍有效。
 
@@ -414,6 +416,10 @@ gradlew.bat connectedDebugAndroidTest --no-parallel --max-workers=1
 另需安装 Release 实际验证，Debug instrumentation 不代替发行版行为。新增常见文案同步 values、values-zh、values-ja、values-ko-rKR、values-ru。记录设备/报告/场景与外部凭据验证缺口，只按真实证据更新完成状态。
 
 本期方案与后续 roadmap 分开维护，阶段文档和实现已有独立提交。最终交付包含 0.0.20 APK/校验信息、[完整模板与使用说明](../examples/README.md) 及 E01–E12 分层证据。提交前检查 git diff --check、最终 diff/工作树、schema/序列化/备份兼容，不含秘密或无关变更。
+
+### 2026-09-10 独立复审补充
+
+后续代码复审确认上述完成结论遗漏了收藏域隔离和 Memory Seed 消费，并发现授权等待期间到期的执行窗口。本轮已沿原 owner 修复这些问题及相关 UI 引导，完整串行 JVM/构建/lint/Release/设备门禁通过，并在本轮 Release 验证 Seed、共享配置提示和收藏切域。具体问题、验证数据及未覆盖边界见 [独立复审记录](android-enterprise-review-2026-09-10.md)；上文旧批次计数保留为历史证据。
 
 ## 12. 历史实施与验证记录
 
@@ -795,3 +801,18 @@ assistant_manage 将原 RealmAccess 和调用者引用交给既有管理服务�
 完整串行 test assembleDebug lintDebug assembleRelease 通过（9 分 27 秒）：App 2,169 项 JVM 无失败或跳过，lint 0 错误、287 警告；Workspace 保留 11 项 Windows 条件跳过。Android 17 模拟器两项实际 Room/DataStore/文件与会话 owner 用例通过，覆盖完整主体删除、其他主体保全、未发布 staging、Draft 持有、媒体删除失败及重建后的启动恢复。没有 active Provider 运行的测试协作者使用替身，不能将其称为所有运行任务的设备验收。
 
 正式 Debug 页面验证待配置清除、取消确认、已有聊天清除、模拟器重启后未登录，以及重新接入 READY 后历史为空。Release 本次清除入口尚未单独验收。分层证据见 build/reports/enterprise/clear-example-verification.json 和 clear-example-results.zip。最终并行审查发现示例委派开场白尚未触发固定企业子助手，继续修正该路径，并完成 E01–E12 与版本 20 交付。
+
+### 企业空间与工作台交互整理
+
+空间页按当前空间、已接入企业、接入企业、配置文件导入和本地管理划分；扫码与粘贴保持可见，已有登录时明确说明先退出。切换空间、关闭工作台、退出登录分别说明后果。本地管理员入口默认收起，规则与模型页说明逐项立即保存、个人资源准入和企业模型引用限制，动态操作提供读取、保存、发布和撤回反馈。
+
+Portal 源码通过正常构建和 Android 交付包更新，没有在 Android 维护另一份内嵌页面。配置状态、同步、Feed 查询与刷新、外链、媒体分别反馈；状态未变化也报告完成。小屏单列、大屏分栏；日期输入可正常操作，取消采集的反馈位于按钮之前。页面展示不新增配置事实或持久化结构。两名独立审查已复核原生与 Portal 的职责和异步反馈边界。
+
+本批验证：
+- App JVM 2,200 项通过，Debug 构建与 lint 通过。Portal 98 项单元测试、5 项 local 浏览器测试和 remote/local 构建通过。
+- 最终交付包 sourceHash 为 b29533489820a58eb489d3df3c9f2e09245e413988a40fff6ccae0ea0936049c；Android 校验交付清单及资产摘要，最终 Debug 构建和 PortalWebViewAndroidTest 6 项全部通过，覆盖真实 WebView、相机、录音、取消、关闭与退出。
+- EnterprisePage 7 项和 LocalEnrollment 2 项在组合运行中通过，但随后 Portal 用例出现 Feed/原生操作超时；Portal 单独运行通过。原因尚未确认，不能将这些结果表述为同进程 15 项组合门禁通过，也不通过延长产品超时掩盖问题。日志为 build/reports/enterprise/ui-integrated-gate.log 与 portal-final-bundle-device.log。
+- Android 17 模拟器正式界面实际验证粘贴接入、CameraX 扫码接入、状态检查、版本未变化的同步反馈、动态刷新、拍照取消和关闭工作台保留登录；另外验证 390 像素浏览器布局。本批不代表真实企业后台互操作或 Release 设备验收。
+- connectedDebugAndroidTest 清除了模拟器原 Debug 数据。全部 instrumentation 后已从未修改的 enterprise.local.json 经系统文件选择器重新导入，确认第 2 版配置就绪、五项个人资源准入及 measix_ai 模型；旧测试聊天没有恢复。后续设备验收需在独立测试设备或预先保全数据后执行。
+
+本批保留当前版本号，不提交或发布版本。截图和分层验证记录位于 build/reports/enterprise。

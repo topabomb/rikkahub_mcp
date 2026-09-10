@@ -56,6 +56,7 @@ internal class ConfigurationQueryService(
             else settings.observeConfiguration(enterpriseSessions.state, selection.access.scope)
                 .map { enterpriseSessions.withSelectedRealmSelection(selection) {
                     settings.withResolvedConfiguration(selection.access.scope, enterpriseSessions.state.value) { configuration ->
+                        enterpriseSessions.requirePublishedSelection(selection)
                         project(configuration, selection)
                     }
                 } }
@@ -86,7 +87,10 @@ internal class ConfigurationQueryService(
     internal suspend fun readExecution(access: RealmAccess): net.weero.measix.pilot.data.datastore.ExecutionConfigurationSnapshot {
         recoveryGate.awaitReady()
         return enterpriseSessions.withRealmAccess(access) {
-            settings.withExecutionConfiguration(access.scope, enterpriseSessions.state.value) { it }
+            settings.withExecutionConfiguration(access.scope, enterpriseSessions.state.value) {
+                enterpriseSessions.requirePublishedRealmAccess(access)
+                it
+            }
         }
     }
 

@@ -453,10 +453,13 @@ class McpRuntimeCoordinator internal constructor(
         val targets = definitions.map { definition ->
             val key = McpRuntimeKey(definition.id, access, interactionId)
             val source = object : McpRuntimeDefinition {
+                override fun requireAuthority() = sessions.requirePublishedRealmAccess(access)
+
                 override suspend fun <T> withCurrent(use: McpDefinitionUse, operation: suspend (McpConnectionDefinition?) -> T): T =
                     sessions.withAppliedConfiguration(access) { state ->
                         check(state.manifest.phase == EnterpriseSessionPhase.READY) { "enterprise_session_not_ready" }
                         settingsStore.withExecutionConfiguration(access.scope, state) { latest ->
+                            requireAuthority()
                             lease.requireOpen()
                             val configuration = latest.configuration
                             val assistant = configuration.assistants[captured.assistant.id]

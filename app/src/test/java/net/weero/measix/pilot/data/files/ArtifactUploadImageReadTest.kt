@@ -327,9 +327,11 @@ class ArtifactUploadImageReadTest {
         val messages = listOf(me.rerere.ai.ui.UIMessage(
             role = me.rerere.ai.core.MessageRole.USER,
             parts = listOf(personal, foreign).map {
-                me.rerere.ai.ui.UIMessagePart.Image("file://${File(root, it.relativePath).absolutePath.replace('\\', '/')}")
+                me.rerere.ai.ui.UIMessagePart.Image(File(root, it.relativePath).toURI().toString().replace("file:/", "file:///"))
             },
         ))
+        assertEquals(foreign.relativePath, payloadStore.relativePathForUri(
+            android.net.Uri.parse((messages.single().parts.last() as me.rerere.ai.ui.UIMessagePart.Image).url)))
         try {
             store.retainForRequest(ConfigurationScope.Personal, messages).close()
             throw AssertionError("foreign request must be rejected")

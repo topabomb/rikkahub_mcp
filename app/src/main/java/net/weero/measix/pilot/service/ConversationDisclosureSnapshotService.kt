@@ -19,6 +19,7 @@ import net.weero.measix.pilot.data.configuration.ConfigurationCategory
 import net.weero.measix.pilot.data.configuration.ResolvedConfiguration
 import net.weero.measix.pilot.data.model.Assistant
 import net.weero.measix.pilot.data.model.AssistantMemory
+import net.weero.measix.pilot.data.enterprise.reference
 import me.rerere.common.configuration.ConfigurationReference
 
 /** canonical envelope 非法：装载或提交必须失败，不得静默把模型基线降级为"没有 context"。 */
@@ -27,7 +28,7 @@ class DisclosureContentException(message: String) : IllegalStateException(messag
 /**
  * 会话披露快照（Disclosure Snapshot）的唯一 canonical renderer 与 envelope 协议所有者。
  *
- * 职责边界：只从**一份已固定的 effective-settings 读模型**与**一次已按 id
+ * 职责边界：只从**一份已固定的 ResolvedConfiguration**与**一次已按 id
  * 升序的 Memory 查询结果**构造 canonical content；不读库、不写库、不读 Settings、不读时钟。
  * 捕获时机、baseline 判等与持久化分别属于 Turn Coordinator 与 Conversation aggregate。
  *
@@ -44,7 +45,7 @@ object ConversationDisclosureSnapshotService {
     const val CONTENT_TYPE: String = "conversation_disclosure_snapshot"
 
     /** renderer 当前唯一生成的 format。 */
-    const val CURRENT_FORMAT: Int = 1
+    const val CURRENT_FORMAT: Int = 2
 
     /** Mobile request capability for one complete canonical snapshot; content is never truncated. */
     const val MAX_CANONICAL_CONTENT_UTF8_BYTES: Int = 256 * 1024
@@ -52,7 +53,7 @@ object ConversationDisclosureSnapshotService {
     /** 本 App 明确支持的 durable format 集合。未知 format 必须 fail-closed：静默忽略等于让
      * 模型基线凭空消失。停止支持一个已落库 format 前必须提供显式数据迁移。
      */
-    val SUPPORTED_FORMATS: Set<Int> = setOf(CURRENT_FORMAT)
+    val SUPPORTED_FORMATS: Set<Int> = setOf(1, CURRENT_FORMAT)
 
     /**
      * 固定模型规则：请求携带 Snapshot 时唯一允许进入 System / Developer 的披露说明。
@@ -64,7 +65,8 @@ object ConversationDisclosureSnapshotService {
         "\n" +
         "When multiple snapshots appear, the later snapshot is the complete baseline\n" +
         "from that point onward. Successful tool results after a snapshot may update\n" +
-        "live state until a later snapshot replaces that baseline."
+        "live state until a later snapshot replaces that baseline.\n" +
+        "enterprise_memory_seeds contains read-only enterprise context; its IDs are not memory_tool IDs."
 
     /** memory section 的 scope 取值；关闭时仍输出完整形状，不省略任何 key。 */
     const val MEMORY_SCOPE_DISABLED: String = "disabled"
@@ -77,12 +79,13 @@ object ConversationDisclosureSnapshotService {
     const val SUB_ASSISTANTS_MODE_BOTH: String = "both"
     const val SUB_ASSISTANTS_MODE_DISABLED: String = "disabled"
 
-    /** 两个 section 的列头是协议的一部分：rows 使用位置数组，列语义只在这里声明一次。 */
+    /** section 的列头是协议的一部分：rows 使用位置数组，列语义只在这里声明一次。 */
     val MEMORY_HEADER: List<String> = listOf("id", "content")
     val SUB_ASSISTANT_HEADER: List<String> = listOf("id", "name", "description")
 
     /** 固定字段顺序即 canonical 顺序；未来 section 追加在末尾，不改变既有位置。 */
     private val TOP_LEVEL_KEYS = listOf("type", "format", "memory", "sub_assistants")
+    private val SEED_KEYS = listOf("header", "rows")
     private val MEMORY_KEYS = listOf("enabled", "scope", "header", "rows")
     private val SUB_ASSISTANT_KEYS = listOf("mode", "header", "rows")
     private val MEMORY_SCOPES = setOf(MEMORY_SCOPE_LOCAL, MEMORY_SCOPE_GLOBAL, MEMORY_SCOPE_DISABLED)
@@ -107,6 +110,7 @@ object ConversationDisclosureSnapshotService {
         val assistant: Assistant,
         val allAssistants: List<Assistant>,
         val memories: List<AssistantMemory>,
+        val enterpriseMemorySeeds: List<Pair<ConfigurationReference.Enterprise, String>> = emptyList(),
     )
 
     /**
@@ -125,7 +129,11 @@ object ConversationDisclosureSnapshotService {
         val assistants = configuration.assistants.values.filter {
             configuration.access(ConfigurationCategory.ASSISTANT, it.id).canExecute
         }
-        return render(Candidate(assistant = assistant, allAssistants = assistants, memories = memories))
+        val seeds = configuration.assistantMemorySeeds(assistant.id).map {
+            requireNotNull(configuration.enterpriseIdentity).reference(it.id) to it.content
+        }
+        return render(Candidate(assistant = assistant, allAssistants = assistants, memories = memories,
+            enterpriseMemorySeeds = seeds))
     }
 
     /**
@@ -140,6 +148,14 @@ object ConversationDisclosureSnapshotService {
             put("format", JsonPrimitive(CURRENT_FORMAT))
             put("memory", memorySection(candidate))
             put("sub_assistants", subAssistantSection(candidate))
+            put("enterprise_memory_seeds", buildJsonObject {
+                put("header", JsonArray(MEMORY_HEADER.map(::JsonPrimitive)))
+                putJsonArray("rows") {
+                    candidate.enterpriseMemorySeeds.forEach { (id, content) ->
+                        add(buildJsonArray { add(id.toString()); add(content) })
+                    }
+                }
+            })
         }
         return canonicalJson.encodeToString(JsonObject.serializer(), envelope).also(::requireWithinRequestCapability)
     }
@@ -173,7 +189,6 @@ object ConversationDisclosureSnapshotService {
     }
 
     private fun validateEnvelope(root: JsonObject): Int {
-        requireKeyOrder(root, TOP_LEVEL_KEYS, "envelope")
         val type = requireString(root, "type", "envelope")
         if (type != CONTENT_TYPE) {
             throw DisclosureContentException("unexpected disclosure type \"$type\"")
@@ -182,9 +197,27 @@ object ConversationDisclosureSnapshotService {
         if (format !in SUPPORTED_FORMATS) {
             throw DisclosureContentException("unsupported disclosure format $format")
         }
+        requireKeyOrder(root, if (format == 1) TOP_LEVEL_KEYS else TOP_LEVEL_KEYS + "enterprise_memory_seeds", "envelope")
         validateMemory(requireObject(root, "memory", "envelope"))
         validateSubAssistants(requireObject(root, "sub_assistants", "envelope"))
+        if (format == 2) validateSeeds(requireObject(root, "enterprise_memory_seeds", "envelope"))
         return format
+    }
+
+    private fun validateSeeds(section: JsonObject) {
+        requireKeyOrder(section, SEED_KEYS, "enterprise_memory_seeds")
+        requireHeader(section, MEMORY_HEADER, "enterprise_memory_seeds")
+        val ids = mutableSetOf<String>()
+        requireArray(section, "rows", "enterprise_memory_seeds").forEach { row ->
+            val cells = row.asArrayOrThrow("enterprise memory seed row")
+            if (cells.size != 2) throw DisclosureContentException("enterprise memory seed row must have 2 cells")
+            val id = cells[0].asStringOrThrow("enterprise memory seed id")
+            val reference = runCatching { ConfigurationReference.parse(id) }.getOrNull()
+            if (reference !is ConfigurationReference.Enterprise || reference.toString() != id || !ids.add(id)) {
+                throw DisclosureContentException("enterprise memory seed requires a unique canonical enterprise reference")
+            }
+            cells[1].asStringOrThrow("enterprise memory seed content")
+        }
     }
 
     private fun requireWithinRequestCapability(content: String) {

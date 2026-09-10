@@ -1,6 +1,7 @@
 package net.weero.measix.pilot.service
 
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.emitAll
@@ -21,6 +22,7 @@ import net.weero.measix.pilot.data.configuration.ConfigurationScope
 import net.weero.measix.pilot.data.configuration.ResolvedConfiguration
 import net.weero.measix.pilot.data.datastore.SettingsStore
 import net.weero.measix.pilot.data.enterprise.EnterpriseSessionController
+import net.weero.measix.pilot.data.enterprise.RealmSelection
 import net.weero.measix.pilot.data.enterprise.RealmAccess
 import net.weero.measix.pilot.data.model.Assistant
 import net.weero.measix.pilot.data.model.AssistantMemory
@@ -28,11 +30,14 @@ import net.weero.measix.pilot.data.model.MemoryAddress
 import net.weero.measix.pilot.data.model.memoryAddress
 import net.weero.measix.pilot.data.repository.MemoryRepository
 
+@ConsistentCopyVisibility
 data class MemoryAccess internal constructor(
     internal val realm: RealmAccess,
     val address: MemoryAddress,
     internal val assistantId: ConfigurationReference,
     internal val requireEnabled: Boolean,
+    internal val selection: RealmSelection?,
+    internal val requireView: () -> Unit,
 )
 
 /** The row retains its original namespace and session while an editor is open. */
@@ -48,7 +53,7 @@ data class MemoryListResult(
 data class MemoryItem(val id: Int, val content: String)
 
 class MemoryToolRecord internal constructor(
-    internal val realm: RealmAccess,
+    internal val view: ConversationViewLease,
     internal val conversationId: Uuid,
     internal val locator: ToolCallLocator,
     internal val address: MemoryAddress,
@@ -74,6 +79,7 @@ class MemoryService internal constructor(
         recovery.awaitReady()
         return sessions.withRealmAccess(realm) {
             settings.withResolvedConfiguration(realm.scope, sessions.state.value) { configuration ->
+                sessions.requirePublishedRealmAccess(realm)
                 val caller = configuration.assistants[callerId] ?: error("assistant_not_found")
                 val target = configuration.assistants[assistantId] ?: error("assistant_not_found")
                 check(configuration.access(ConfigurationCategory.ASSISTANT, callerId).canExecute &&
@@ -84,6 +90,7 @@ class MemoryService internal constructor(
                 }
                 val mode = when { !target.enableMemory -> "disabled"; target.useGlobalMemory -> "global"; else -> "local" }
                 val rows = if (mode == "local") repository.read(target.memoryAddress(realm.scope)) else emptyList()
+                sessions.requirePublishedRealmAccess(realm)
                 MemoryListResult(target.id.toString(), target.name, mode, rows.map { MemoryItem(it.id, it.content) })
             }
         }
@@ -103,27 +110,36 @@ class MemoryService internal constructor(
     suspend fun captureExecution(realm: RealmAccess, assistant: Assistant): MemoryAccess? {
         if (!assistant.enableMemory) return null
         recovery.awaitReady()
-        val access = MemoryAccess(realm, assistant.memoryAddress(realm.scope), assistant.id, requireEnabled = true)
+        val access = MemoryAccess(realm, assistant.memoryAddress(realm.scope), assistant.id, requireEnabled = true, selection = null, requireView = {})
         authorized(access) { }
         return access
     }
 
-    suspend fun captureToolRecord(conversationId: Uuid, locator: ToolCallLocator): MemoryToolRecord? {
+    suspend fun captureToolRecord(view: ConversationViewLease, conversationId: Uuid, locator: ToolCallLocator): MemoryToolRecord? {
         recovery.awaitReady()
-        val snapshot = conversations.aggregateSnapshot(conversationId) ?: return null
-        val realm = sessions.captureRealmAccess(snapshot.header.scope)
-        return sessions.withRealmAccess(realm) {
-            val id = toolMemoryId(conversationId, locator, realm.scope) ?: return@withRealmAccess null
-            val row = repository.findToolResult(realm.scope, id) ?: return@withRealmAccess null
-            MemoryToolRecord(realm, conversationId, locator, row.first, id)
+        return sessions.withSelectedRealmSelection(view.commandTarget.selection) {
+            view.requireOpen()
+            val snapshot = conversations.aggregateSnapshot(conversationId) ?: return@withSelectedRealmSelection null
+            check(snapshot.header.scope == view.access.scope &&
+                (conversationId == view.conversationId || snapshot.header.parentConversationId == view.conversationId)) { "memory_tool_scope_mismatch" }
+            val id = toolMemoryId(conversationId, locator, view.access.scope) ?: return@withSelectedRealmSelection null
+            val row = repository.findToolResult(view.access.scope, id) ?: return@withSelectedRealmSelection null
+            view.requireOpen()
+            sessions.requirePublishedSelection(view.commandTarget.selection)
+            MemoryToolRecord(view, conversationId, locator, row.first, id)
         }
     }
 
     suspend fun deleteToolRecord(record: MemoryToolRecord) {
         recovery.awaitReady()
-        sessions.withRealmAccess(record.realm) {
-            check(toolMemoryId(record.conversationId, record.locator, record.realm.scope) == record.id) { "memory_tool_result_changed" }
-            repository.delete(record.address, record.id)
+        val view = record.view
+        sessions.withSelectedRealmSelection(view.commandTarget.selection) {
+            view.requireOpen()
+            check(toolMemoryId(record.conversationId, record.locator, view.access.scope) == record.id) { "memory_tool_result_changed" }
+            repository.delete(record.address, record.id) {
+                view.requireOpen()
+                sessions.requirePublishedSelection(view.commandTarget.selection)
+            }
         }
     }
 
@@ -151,10 +167,22 @@ class MemoryService internal constructor(
         emit(MemoryView(null, emptyList(), "memory_access_unavailable"))
     }
 
-    fun observe(realm: RealmAccess, assistantId: ConfigurationReference, enabledOnly: Boolean = false): Flow<MemoryView> = flow {
+    fun observe(view: ConversationViewLease, assistantId: ConfigurationReference): Flow<MemoryView> =
+        conversations.observeForView(view, MemoryView(null, emptyList(), "memory_access_unavailable")) {
+            observe(view.access, assistantId, false, RealmSelection(view.access, view.selectionRevision), view::requireOpen)
+        }
+
+    fun observe(realm: RealmAccess, assistantId: ConfigurationReference, enabledOnly: Boolean = false): Flow<MemoryView> =
+        observe(realm, assistantId, enabledOnly, null) {}
+
+    private fun observe(realm: RealmAccess, assistantId: ConfigurationReference, enabledOnly: Boolean,
+        page: RealmSelection?, requireView: () -> Unit): Flow<MemoryView> = flow {
         recovery.awaitReady()
         val scope = realm.scope
-        emitAll(sessions.observeRealmAccess(realm).flatMapLatest { allowed ->
+        val selection = page ?: sessions.withSelectedRealmAccess(realm) { RealmSelection(realm, sessions.selectionRevision.value) }
+        emitAll(combine(sessions.observeRealmAccess(realm), sessions.observeSelectedRealmSelection()) { allowed, selected ->
+            allowed && selected == selection
+        }.flatMapLatest { allowed ->
             if (!allowed) flowOf(MemoryView(null, emptyList(), "memory_access_unavailable"))
             else settings.observeConfiguration(sessions.state, scope).flatMapLatest { configuration ->
                 val assistant = configuration.assistants[assistantId]
@@ -162,7 +190,7 @@ class MemoryService internal constructor(
                     (enabledOnly && !assistant.enableMemory)) {
                     flowOf(MemoryView(null, emptyList(), "memory_assistant_unavailable"))
                 } else {
-                    val access = MemoryAccess(realm, assistant.memoryAddress(scope), assistantId, enabledOnly)
+                    val access = MemoryAccess(realm, assistant.memoryAddress(scope), assistantId, enabledOnly, selection, requireView)
                     repository.observe(access.address).map { rows ->
                         authorized(access) { MemoryView(access, rows.map { MemoryRecord(access, it.id, it.content) }) }
                     }.catch { error ->
@@ -177,22 +205,28 @@ class MemoryService internal constructor(
         emit(MemoryView(null, emptyList(), "memory_access_unavailable"))
     }
 
-    suspend fun read(access: MemoryAccess): List<AssistantMemory> = authorized(access) { repository.read(access.address) }
-    suspend fun add(access: MemoryAccess, content: String): AssistantMemory = authorized(access) { repository.add(access.address, content) }
+    suspend fun read(access: MemoryAccess): List<AssistantMemory> = authorized(access) { checkOwner -> repository.read(access.address).also { checkOwner() } }
+    suspend fun add(access: MemoryAccess, content: String): AssistantMemory = authorized(access) { checkOwner -> repository.add(access.address, content, checkOwner) }
     suspend fun update(record: MemoryRecord): AssistantMemory = update(record.access, record.id, record.content)
     suspend fun update(access: MemoryAccess, id: Int, content: String): AssistantMemory =
-        authorized(access) { repository.update(access.address, id, content) }
+        authorized(access) { checkOwner -> repository.update(access.address, id, content, checkOwner) }
     suspend fun delete(record: MemoryRecord) = delete(record.access, record.id)
-    suspend fun delete(access: MemoryAccess, id: Int) = authorized(access) { repository.delete(access.address, id) }
+    suspend fun delete(access: MemoryAccess, id: Int) = authorized(access) { checkOwner -> repository.delete(access.address, id, checkOwner) }
 
-    private suspend fun <T> authorized(access: MemoryAccess, operation: suspend () -> T): T {
+    private suspend fun <T> authorized(access: MemoryAccess, operation: suspend (() -> Unit) -> T): T {
         recovery.awaitReady()
-        return sessions.withRealmAccess(access.realm) {
-            settings.withResolvedConfiguration(access.address.scope, sessions.state.value) { configuration ->
+        suspend fun run(): T = settings.withResolvedConfiguration(access.address.scope, sessions.state.value) { configuration ->
+            val checkOwner = {
+                access.requireView()
+                if (access.selection != null) sessions.requirePublishedSelection(access.selection)
+                else sessions.requirePublishedRealmAccess(access.realm)
                 validate(configuration, access)
-                operation()
             }
+            checkOwner()
+            operation(checkOwner)
         }
+        return if (access.selection != null) sessions.withSelectedRealmSelection(access.selection) { run() }
+        else sessions.withRealmAccess(access.realm) { run() }
     }
 
     private fun validate(configuration: ResolvedConfiguration, access: MemoryAccess) {

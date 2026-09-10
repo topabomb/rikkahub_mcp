@@ -73,7 +73,7 @@ class ConfigurationScopePersistenceTest {
                     assertEquals(scope, db.artifactDao().getById(id.toLong())?.scope)
                     assertEquals(scope, db.genMediaDao().getById(id)?.scope)
                     assertEquals(scope, db.folderDao().getFolderById("folder-$id")?.scope)
-                    assertEquals(scope, db.favoriteDao().getByRefKey("node:conversation-$id:node-$id")?.scope)
+                    assertEquals(scope, db.favoriteDao().getByRefKey(scope, "node:conversation-$id:node-$id")?.scope)
                 }
             } finally {
                 reader.close()

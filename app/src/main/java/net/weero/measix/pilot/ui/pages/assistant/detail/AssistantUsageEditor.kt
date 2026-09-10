@@ -5,7 +5,9 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.CancellationException
@@ -22,7 +24,6 @@ import net.weero.measix.pilot.data.files.SkillMetadata
 import net.weero.measix.pilot.service.*
 import net.weero.measix.pilot.service.workspace.WorkspaceUiModel
 import net.weero.measix.pilot.ui.components.ai.*
-import net.weero.measix.pilot.ui.context.LocalToaster
 import org.koin.compose.koinInject
 
 /** Borrows the open chat target; no navigation identity or second settings snapshot is persisted. */
@@ -33,7 +34,8 @@ internal fun AssistantUsageEditor(
     settings: Settings,
     workspaces: List<WorkspaceUiModel>,
     mcpChoices: List<AssistantMcpChoice>,
-    onChange: suspend (AssistantPreferenceChange) -> Boolean,
+    onChange: suspend (AssistantPreferenceChange) -> Result<Unit>,
+    onFailure: (Throwable) -> Unit,
     onImportImage: suspend (Uri, Boolean) -> Unit,
     requireOriginal: () -> Unit,
     onEditSharedDefinition: () -> Unit,
@@ -49,10 +51,9 @@ internal fun AssistantUsageEditor(
     val files: FileManagementApplicationService = koinInject()
     val skillManager: SkillManager = koinInject()
     val skills by produceState<List<SkillMetadata>>(emptyList(), skillManager) { value = skillManager.listSkills() }
-    val memories by remember(view, assistant.id) { memory.observe(view.access, assistant.id) }
+    val memories by remember(view, assistant.id) { memory.observe(view, assistant.id) }
         .collectAsStateWithLifecycle(MemoryView.Loading)
     val imageResolver: suspend (String) -> ImageSource? = remember(files, view) { { files.resolveConfigurationImage(it, view) } }
-    val toaster = LocalToaster.current
     val memoryError = stringResource(R.string.memory_operation_failed)
     var tab by remember { mutableIntStateOf(initialTab) }
     var reset by remember { mutableStateOf(false) }
@@ -60,13 +61,13 @@ internal fun AssistantUsageEditor(
     var editShared by remember { mutableStateOf(false) }
     var resetEpoch by remember { mutableIntStateOf(0) }
     val enterprise = view.access.scope is ConfigurationScope.Enterprise
-    fun change(value: AssistantPreferenceChange) { scope.launch { onChange(value) } }
-    suspend fun commit(value: AssistantPreferenceChange) { check(onChange(value)) { "configuration_change_failed" } }
+    fun change(value: AssistantPreferenceChange) { scope.launch { onChange(value).onFailure(onFailure) } }
+    suspend fun commit(value: AssistantPreferenceChange) { onChange(value).getOrThrow() }
     fun mutateMemory(action: suspend () -> Unit) {
         scope.launch {
             try { requireOriginal(); action() }
             catch (cancelled: CancellationException) { throw cancelled }
-            catch (_: Exception) { toaster.show(memoryError, type = com.dokar.sonner.ToastType.Error) }
+            catch (error: Exception) { onFailure(IllegalStateException(memoryError, error)) }
         }
     }
     val tabs = listOf(R.string.assistant_page_tab_basic, R.string.assistant_page_tab_prompt,
@@ -75,14 +76,17 @@ internal fun AssistantUsageEditor(
         R.string.assistant_extensions_page_tab_quick_messages, R.string.assistant_extensions_page_tab_mode_injections,
         R.string.assistant_extensions_page_tab_skills)
     Column(Modifier.fillMaxSize()) {
-        Text(stringResource(R.string.assistant_usage_title), style = MaterialTheme.typography.titleLarge, modifier = Modifier.padding(16.dp))
-        Text(assistant.name.ifBlank { stringResource(R.string.assistant_page_default_assistant) }, style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(horizontal = 16.dp))
+        Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text(stringResource(R.string.assistant_usage_title), style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
+            TextButton(onClick = onClose) { Text(stringResource(R.string.update_card_close)) }
+        }
+        Text(assistant.name.ifBlank { stringResource(R.string.assistant_page_default_assistant) }, style = MaterialTheme.typography.titleMedium,
+            maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(horizontal = 16.dp))
         Text(stringResource(R.string.assistant_usage_description), style = MaterialTheme.typography.bodySmall,
             modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+        FlowRow(Modifier.fillMaxWidth().padding(horizontal = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             if (enterprise) TextButton(onClick = { reset = true }) { Text(stringResource(R.string.assistant_usage_reset)) }
             if (configuration.canEditDefinition) TextButton(onClick = { editShared = true }) { Text(stringResource(R.string.assistant_usage_shared_edit)) }
-            TextButton(onClick = onClose) { Text(stringResource(R.string.update_card_close)) }
         }
         PrimaryScrollableTabRow(selectedTabIndex = tab, edgePadding = 0.dp) {
             tabs.forEachIndexed { index, label -> Tab(selected = tab == index, onClick = { tab = index }, text = { Text(stringResource(label)) }) }
@@ -116,13 +120,14 @@ internal fun AssistantUsageEditor(
                     1 -> AssistantPromptContent(PaddingValues(0.dp), assistant, settings, update, definitionEditable = false, usageView = view)
                     2 -> AssistantRequestContent(PaddingValues(0.dp), assistant, update)
                     3 -> AssistantMemoryContent(PaddingValues(0.dp), assistant, memories, update,
+                        memorySeeds = configuration.memorySeeds,
                         onAddMemory = { record -> mutateMemory { memory.add(record.access, record.content) } },
                         onUpdateMemory = { record -> mutateMemory { memory.update(record) } },
                         onDeleteMemory = { record -> mutateMemory { memory.delete(record) } })
                     4 -> AssistantLocalToolContent(PaddingValues(0.dp), assistant, configuration.assistants.values.toList(),
                         configuration.imageGenerationAvailable, onToggleLocalTool = { tool, enabled -> change(AssistantPreferenceChange.LocalTool(tool, enabled)) },
                         onUpdateSubAssistantIds = null,
-                        onToggleSubAssistant = { id, enabled -> onChange(AssistantPreferenceChange.SubAssistant(id, enabled)) },
+                        onToggleSubAssistant = { id, enabled -> onChange(AssistantPreferenceChange.SubAssistant(id, enabled)).onFailure(onFailure).isSuccess },
                         inheritedSubAssistantIds = configuration.inheritedSubAssistantIds, imageResolver = imageResolver,
                         subAssistantAccess = configuration.resources.filter { it.key.category == ConfigurationCategory.ASSISTANT }.associate { it.key.reference to it.access })
                     5 -> McpPicker(mcpChoices, onToggle = { id, enabled -> change(AssistantPreferenceChange.Mcp(id, enabled)) })
@@ -139,7 +144,7 @@ internal fun AssistantUsageEditor(
     if (reset) AlertDialog(onDismissRequest = { if (!resetting) reset = false },
         title = { Text(stringResource(R.string.assistant_usage_reset)) },
         text = { Text(stringResource(R.string.assistant_usage_reset_description)) },
-        confirmButton = { TextButton(enabled = !resetting, onClick = { resetting = true; scope.launch { try { if (onChange(AssistantPreferenceChange.ResetUsage)) { reset = false; resetEpoch++ } } finally { resetting = false } } }) { Text(stringResource(android.R.string.ok)) } },
+        confirmButton = { TextButton(enabled = !resetting, onClick = { resetting = true; scope.launch { try { if (onChange(AssistantPreferenceChange.ResetUsage).onFailure(onFailure).isSuccess) { reset = false; resetEpoch++ } } finally { resetting = false } } }) { Text(stringResource(android.R.string.ok)) } },
         dismissButton = { TextButton(enabled = !resetting, onClick = { reset = false }) { Text(stringResource(android.R.string.cancel)) } })
     if (editShared) AlertDialog(onDismissRequest = { editShared = false },
         title = { Text(stringResource(R.string.assistant_usage_shared_edit)) },

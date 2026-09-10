@@ -4,11 +4,14 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.relocation.BringIntoViewRequester
+import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
@@ -84,6 +87,7 @@ internal fun EnterprisePage(vm: EnterpriseVM = koinViewModel()) {
     val portal by vm.portal.collectAsStateWithLifecycle()
     val nav = LocalNavController.current
     var paste by remember { mutableStateOf(false) }
+    var localManagement by remember { mutableStateOf(false) }
     var scenarios by remember { mutableStateOf<EnterpriseOverview?>(null) }
     // Enrollment text contains a credential and is deliberately not saved in Activity state.
     var enrollment by remember { mutableStateOf("") }
@@ -97,6 +101,7 @@ internal fun EnterprisePage(vm: EnterpriseVM = koinViewModel()) {
     val busy = working || state?.switching == true || state?.phase == EnterpriseSessionPhase.CLOSING
     LaunchedEffect(state?.access) { if (state?.access != null) vm.dismissSources() }
     LaunchedEffect(state?.selection) {
+        localManagement = false
         if (localConfiguration?.selection != state?.selection) vm.dismissLocalConfiguration()
         if (localFeed?.selection != state?.selection) vm.dismissLocalFeed()
     }
@@ -122,66 +127,118 @@ internal fun EnterprisePage(vm: EnterpriseVM = koinViewModel()) {
             key(approved.id) { EnterprisePortal(approved, vm, Modifier.fillMaxSize().padding(padding)) }
         } else {
             Column(Modifier.fillMaxSize().padding(padding).verticalScroll(rememberScrollState()).padding(16.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Text(stringResource(R.string.enterprise_current_space,
+                EnterpriseSection(stringResource(R.string.enterprise_current_space,
                     if (inEnterprise) state?.enterpriseName ?: stringResource(R.string.enterprise_space) else stringResource(R.string.enterprise_personal)),
-                    style = MaterialTheme.typography.titleLarge)
-                if (state == null || busy) LinearProgressIndicator(Modifier.fillMaxWidth())
-                Text(stringResource(phaseText(state?.phase)))
-                state?.userName?.let { Text(it) }
-                if (state?.isLocal == true || state?.access == null) Text(stringResource(R.string.enterprise_local_notice))
-                state?.generation?.let { Text(stringResource(R.string.enterprise_generation, it)) }
-                state?.lastSyncMillis?.let { Text(stringResource(R.string.enterprise_last_sync, DateFormat.getDateTimeInstance().format(Date(it)))) }
-                if (error != null || state?.failure != null || state?.exitFailure != null) {
-                    Text(stringResource(error ?: R.string.enterprise_failure), color = MaterialTheme.colorScheme.error)
+                ) {
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Button(onClick = openChat, enabled = !busy && state?.selection != null) {
+                            Text(stringResource(R.string.enterprise_open_chat))
+                        }
+                        if (inEnterprise && ready) {
+                            OutlinedButton(onClick = vm::showPortal, enabled = !busy) { Text(stringResource(R.string.enterprise_portal)) }
+                        }
+                    }
+                    if (state?.access != null && (inEnterprise || ready)) {
+                        TextButton(onClick = { vm.switchSpace(openChat) }, enabled = !busy) {
+                            Text(stringResource(if (inEnterprise) R.string.enterprise_switch_personal else R.string.enterprise_switch_enterprise))
+                        }
+                        Text(stringResource(R.string.enterprise_switch_notice), style = MaterialTheme.typography.bodySmall)
+                    }
                 }
-                notice?.takeIf { it != R.string.enterprise_expiry_scheduled || state?.access != null }
-                    ?.let { Text(stringResource(it)) }
+                if (state == null || busy) LinearProgressIndicator(Modifier.fillMaxWidth())
+                val feedback = remember { BringIntoViewRequester() }
+                Column(Modifier.widthIn(max = 720.dp).fillMaxWidth().bringIntoViewRequester(feedback)) {
+                    if (error != null || state?.failure != null || state?.exitFailure != null) {
+                        Text(stringResource(error ?: R.string.enterprise_failure), color = MaterialTheme.colorScheme.error)
+                    }
+                    notice?.takeIf { it != R.string.enterprise_expiry_scheduled || state?.access != null }
+                        ?.let { Text(stringResource(it)) }
+                }
+                LaunchedEffect(error, notice) {
+                    if (error != null || notice != null) feedback.bringIntoView()
+                }
                 if (state?.exitFailure != null) {
                     Button(onClick = vm::retryExit, enabled = !working) { Text(stringResource(R.string.application_recovery_retry)) }
                 }
                 if (state?.failure != null) {
                     TextButton(onClick = vm::requestExit, enabled = !busy) { Text(stringResource(R.string.enterprise_exit)) }
                 }
-                if (state?.access == null && state != null && state?.failure == null) {
-                    Button(onClick = vm::joinExample, enabled = !busy) { Text(stringResource(R.string.enterprise_join_example)) }
-                    OutlinedButton(onClick = { paste = true }, enabled = !busy) { Text(stringResource(R.string.enterprise_join_paste)) }
-                    OutlinedButton(onClick = { scanner.launch(null) }, enabled = !busy) { Text(stringResource(R.string.enterprise_join_scan)) }
-                    TextButton(onClick = vm::showExampleCode, enabled = !busy) { Text(stringResource(R.string.enterprise_example_code)) }
-                    OutlinedButton(onClick = vm::showSources, enabled = !busy) { Text(stringResource(R.string.enterprise_installed_sources)) }
-                }
                 if (state?.access != null) {
-                    if (inEnterprise || ready) {
-                        Button(onClick = { vm.switchSpace(openChat) }, enabled = !busy) {
-                            Text(stringResource(if (inEnterprise) R.string.enterprise_switch_personal else R.string.enterprise_switch_enterprise))
+                    EnterpriseSection(stringResource(R.string.enterprise_connected_enterprise,
+                        state?.enterpriseName ?: stringResource(R.string.enterprise_space))) {
+                        state?.userName?.let { Text(it) }
+                        Text(stringResource(phaseText(state?.phase)), color = MaterialTheme.colorScheme.primary)
+                        if (state?.phase == EnterpriseSessionPhase.CONFIGURATION_PENDING) {
+                            Text(stringResource(R.string.enterprise_pending_next_step), style = MaterialTheme.typography.bodySmall)
                         }
-                        Text(stringResource(R.string.enterprise_switch_notice))
-                    }
-                    if (inEnterprise && ready) {
-                        OutlinedButton(onClick = vm::showPortal, enabled = !busy) { Text(stringResource(R.string.enterprise_portal)) }
-                    }
-                    OutlinedButton(onClick = vm::synchronize, enabled = !busy && state?.phase != EnterpriseSessionPhase.REAUTH_REQUIRED) {
-                        Text(stringResource(R.string.enterprise_sync))
-                    }
-                    if (inEnterprise && state?.isLocal == true) {
-                        OutlinedButton(onClick = vm::showLocalConfiguration, enabled = !busy) {
-                            Text(stringResource(R.string.enterprise_local_configuration))
+                        if (state?.isLocal == true) Text(stringResource(R.string.enterprise_local_notice), style = MaterialTheme.typography.bodySmall)
+                        state?.generation?.let { Text(stringResource(R.string.enterprise_generation, it), style = MaterialTheme.typography.bodySmall) }
+                        state?.lastSyncMillis?.let { Text(stringResource(R.string.enterprise_last_sync, DateFormat.getDateTimeInstance().format(Date(it))), style = MaterialTheme.typography.bodySmall) }
+                        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            OutlinedButton(onClick = vm::synchronize, enabled = !busy && state?.phase != EnterpriseSessionPhase.REAUTH_REQUIRED) {
+                                Text(stringResource(R.string.enterprise_sync))
+                            }
+                            TextButton(onClick = vm::requestExit, enabled = !busy) { Text(stringResource(R.string.enterprise_exit)) }
                         }
                     }
-                    TextButton(onClick = vm::requestExit, enabled = !busy) { Text(stringResource(R.string.enterprise_exit)) }
                 }
                 if (state?.selection != null) {
-                    if (state?.failure == null && (state?.access == null || state?.isLocal == true)) {
-                        OutlinedButton(onClick = { scenarios = state }, enabled = !busy) {
-                            Text(stringResource(R.string.enterprise_local_scenarios))
+                    EnterpriseSection(stringResource(R.string.enterprise_join_options)) {
+                        Text(stringResource(R.string.enterprise_enrollment_notice), style = MaterialTheme.typography.bodySmall)
+                        val canJoin = !busy && state?.access == null && state?.failure == null
+                        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            OutlinedButton(onClick = { scanner.launch(null) }, enabled = canJoin) {
+                                Text(stringResource(R.string.enterprise_join_scan))
+                            }
+                            OutlinedButton(onClick = { paste = true }, enabled = canJoin) {
+                                Text(stringResource(R.string.enterprise_join_paste))
+                            }
+                        }
+                        if (state?.access != null) {
+                            Text(stringResource(R.string.enterprise_join_requires_exit), style = MaterialTheme.typography.bodySmall)
+                        } else {
+                            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Button(onClick = vm::joinExample, enabled = canJoin) { Text(stringResource(R.string.enterprise_join_example)) }
+                                TextButton(onClick = vm::showSources, enabled = canJoin) { Text(stringResource(R.string.enterprise_installed_sources)) }
+                            }
                         }
                     }
-                    OutlinedButton(onClick = { if (vm.beginImport()) filePicker.launch(arrayOf("*/*")) }, enabled = !busy) {
-                        Text(stringResource(R.string.enterprise_import_configuration))
-                    }
-                    Text(stringResource(R.string.enterprise_import_notice), style = MaterialTheme.typography.bodySmall)
                 }
-                Button(onClick = openChat, enabled = !busy && state?.selection != null) { Text(stringResource(R.string.enterprise_open_chat)) }
+                if (state?.selection != null) {
+                    EnterpriseSection(stringResource(R.string.enterprise_import_configuration)) {
+                        Text(stringResource(R.string.enterprise_import_notice), style = MaterialTheme.typography.bodySmall)
+                        OutlinedButton(onClick = { if (vm.beginImport()) filePicker.launch(arrayOf("*/*")) }, enabled = !busy) {
+                            Text(stringResource(R.string.enterprise_select_configuration_file))
+                        }
+                    }
+                    if (state?.failure == null && (state?.access == null || state?.isLocal == true)) {
+                        EnterpriseSection(stringResource(R.string.enterprise_local_management)) {
+                            Text(stringResource(R.string.enterprise_local_management_notice), style = MaterialTheme.typography.bodySmall)
+                            TextButton(onClick = { localManagement = !localManagement }) {
+                                Text(stringResource(if (localManagement) R.string.enterprise_management_collapse else R.string.enterprise_management_expand))
+                            }
+                            if (localManagement) {
+                                if (state?.access != null && state?.isLocal == true) {
+                                    if (!inEnterprise) Text(stringResource(R.string.enterprise_management_enter_space), style = MaterialTheme.typography.bodySmall)
+                                    OutlinedButton(onClick = vm::showLocalConfiguration, enabled = !busy && inEnterprise) {
+                                        Text(stringResource(R.string.enterprise_local_configuration))
+                                    }
+                                    OutlinedButton(onClick = vm::showLocalFeed, enabled = !busy && inEnterprise && ready) {
+                                        Text(stringResource(R.string.enterprise_feed_editor))
+                                    }
+                                }
+                                OutlinedButton(onClick = { scenarios = state }, enabled = !busy) {
+                                    Text(stringResource(R.string.enterprise_local_scenarios))
+                                }
+                                if (state?.access == null) TextButton(onClick = vm::showExampleCode, enabled = !busy) {
+                                    Text(stringResource(R.string.enterprise_example_code))
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
     }
@@ -191,7 +248,7 @@ internal fun EnterprisePage(vm: EnterpriseVM = koinViewModel()) {
             onRefresh = vm::showLocalConfiguration, onDismiss = vm::dismissLocalConfiguration)
     }
     localFeed?.let { original ->
-        EnterpriseLocalFeedEditor(original, busy, error,
+        EnterpriseLocalFeedEditor(original, busy, error, notice,
             onChange = { vm.changeLocalFeed(original, it) },
             onRefresh = vm::showLocalFeed, onDismiss = vm::dismissLocalFeed)
     }
@@ -207,11 +264,6 @@ internal fun EnterprisePage(vm: EnterpriseVM = koinViewModel()) {
                         Text(stringResource(R.string.enterprise_join_pending_example))
                     }
                 } else {
-                    if (original.selection?.access is RealmAccess.Enterprise && original.phase in setOf(EnterpriseSessionPhase.READY, EnterpriseSessionPhase.OFFLINE)) {
-                        OutlinedButton(onClick = { scenarios = null; vm.showLocalFeed() }, enabled = !busy) {
-                            Text(stringResource(R.string.enterprise_feed_editor))
-                        }
-                    }
                     val connected = original.phase == EnterpriseSessionPhase.READY
                     OutlinedButton(onClick = {
                         scenarios = null
@@ -225,6 +277,7 @@ internal fun EnterprisePage(vm: EnterpriseVM = koinViewModel()) {
                     TextButton(onClick = { scenarios = null; vm.runLocalScenario(original, LocalEnterpriseScenario.REVOKE) }, enabled = !busy) {
                         Text(stringResource(R.string.enterprise_simulate_revocation))
                     }
+                    Text(stringResource(R.string.enterprise_clear_example_requires_session), style = MaterialTheme.typography.bodySmall)
                     TextButton(onClick = { scenarios = null; vm.requestExampleDataRemoval() }, enabled = !busy) {
                         Text(stringResource(R.string.enterprise_clear_example))
                     }
@@ -247,7 +300,10 @@ internal fun EnterprisePage(vm: EnterpriseVM = koinViewModel()) {
     }
     if (paste) AlertDialog(onDismissRequest = { paste = false; enrollment = "" },
         title = { Text(stringResource(R.string.enterprise_join_paste)) },
-        text = { OutlinedTextField(enrollment, { enrollment = it }, minLines = 4, maxLines = 8) },
+        text = { Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text(stringResource(R.string.enterprise_enrollment_notice), style = MaterialTheme.typography.bodySmall)
+            OutlinedTextField(enrollment, { enrollment = it }, minLines = 4, maxLines = 8)
+        } },
         confirmButton = { TextButton(onClick = { val text = enrollment; enrollment = ""; paste = false; vm.join(text) }, enabled = enrollment.isNotBlank()) {
             Text(stringResource(R.string.enterprise_join_submit))
         } }, dismissButton = { TextButton(onClick = { paste = false; enrollment = "" }) { Text(stringResource(R.string.cancel)) } })
@@ -266,6 +322,16 @@ internal fun EnterprisePage(vm: EnterpriseVM = koinViewModel()) {
                     color = Color.Black, backgroundColor = Color.White)
                 SelectionContainer { Text(code, style = MaterialTheme.typography.bodySmall) }
             } }, confirmButton = { TextButton(onClick = vm::dismissExampleCode) { Text(stringResource(R.string.update_card_close)) } })
+    }
+}
+
+@Composable
+private fun EnterpriseSection(title: String, content: @Composable ColumnScope.() -> Unit) {
+    OutlinedCard(Modifier.widthIn(max = 720.dp).fillMaxWidth()) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(title, style = MaterialTheme.typography.titleMedium)
+            content()
+        }
     }
 }
 

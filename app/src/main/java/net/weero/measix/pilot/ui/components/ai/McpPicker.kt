@@ -37,6 +37,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.util.fastFilter
 import me.rerere.hugeicons.HugeIcons
@@ -142,7 +143,12 @@ internal fun McpPickerSheet(
                         fontWeight = FontWeight.Bold
                     ),
                     modifier = Modifier.weight(1f),
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
                 )
+                TextButton(onClick = onDismiss) { Text(stringResource(R.string.update_card_close)) }
+            }
+            Row(Modifier.fillMaxWidth()) {
                 TextButton(
                     onClick = {
                         onDismiss()

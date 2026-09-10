@@ -27,20 +27,20 @@ class MemoryRepository(private val dao: MemoryDAO, private val transactions: Dat
     suspend fun read(address: MemoryAddress): List<AssistantMemory> =
         dao.read(address.scope, address.owner.storageId).map { AssistantMemory(it.id, it.content) }
 
-    suspend fun add(address: MemoryAddress, content: String): AssistantMemory {
+    suspend fun add(address: MemoryAddress, content: String, requireOwner: () -> Unit): AssistantMemory {
         var id = 0
-        commit {
+        commit(requireOwner) {
             id = dao.insertMemory(MemoryEntity(assistantId = address.owner.storageId, content = content, scope = address.scope)).toInt()
         }
         return AssistantMemory(id, content)
     }
 
-    suspend fun update(address: MemoryAddress, id: Int, content: String): AssistantMemory {
-        commit { check(dao.update(address.scope, address.owner.storageId, id, content) == 1) { "memory_not_found_in_namespace" } }
+    suspend fun update(address: MemoryAddress, id: Int, content: String, requireOwner: () -> Unit): AssistantMemory {
+        commit(requireOwner) { check(dao.update(address.scope, address.owner.storageId, id, content) == 1) { "memory_not_found_in_namespace" } }
         return AssistantMemory(id, content)
     }
 
-    suspend fun delete(address: MemoryAddress, id: Int) = commit {
+    suspend fun delete(address: MemoryAddress, id: Int, requireOwner: () -> Unit) = commit(requireOwner) {
         check(dao.delete(address.scope, address.owner.storageId, id) == 1) { "memory_not_found_in_namespace" }
     }
 
@@ -49,14 +49,16 @@ class MemoryRepository(private val dao: MemoryDAO, private val transactions: Dat
     internal suspend fun clearEnterpriseScope(scope: ConfigurationScope.Enterprise) = commit { dao.deleteScope(scope) }
 
     /** Keep the caller's authorization locks until Room has finished committing or rolling back. */
-    private suspend fun commit(write: suspend () -> Unit) {
+    private suspend fun commit(requireOwner: () -> Unit = {}, write: suspend () -> Unit) {
         val caller = currentCoroutineContext()
         caller.ensureActive()
         withContext(NonCancellable) {
             transactions.run {
                 caller.ensureActive()
+                requireOwner()
                 write()
                 caller.ensureActive()
+                requireOwner()
             }
         }
         caller.ensureActive()

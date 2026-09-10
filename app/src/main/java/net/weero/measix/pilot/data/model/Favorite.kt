@@ -31,6 +31,7 @@ data class NodeFavoriteRef(
 )
 
 data class NodeFavoriteTarget(
+    val scope: net.weero.measix.pilot.data.configuration.ConfigurationScope,
     val conversationId: Uuid,
     val conversationTitle: String,
     val nodeId: Uuid,

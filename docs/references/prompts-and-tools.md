@@ -104,9 +104,10 @@ Child 附件投影见 [子助手多模态](sub-assistant-multimodal.md)，执行
 ```json
 {
   "type": "conversation_disclosure_snapshot",
-  "format": 1,
+  "format": 2,
   "memory": { "enabled": false, "scope": "disabled", "header": ["id", "content"], "rows": [] },
-  "sub_assistants": { "mode": "disabled", "header": ["id", "name", "description"], "rows": [] }
+  "sub_assistants": { "mode": "disabled", "header": ["id", "name", "description"], "rows": [] },
+  "enterprise_memory_seeds": { "header": ["id", "content"], "rows": [] }
 }
 ```
 
@@ -127,6 +128,10 @@ canonical Snapshot；内容变化才随新 Assistant owner
 
 `memory_tool` 的执行仍是 live owner 语义：写入前按最新有效配置重验 owner 与写权限；
 Snapshot 中是否存在某条 Memory 不代表它仍可写，也不妨碍按真实 ID 操作新 Memory。
+
+企业 Memory Seed 使用独立 `enterprise_memory_seeds` section，行 ID 为完整企业资源引用，内容只读；
+它不是 `memory_tool` 可更新的整数记忆 ID。按当前企业助手的固定绑定顺序捕获，不因关闭可变 Memory
+而丢失。format 2 新增该 section，已发布个人历史 format 1 继续原样读取，不回填或重写。
 
 ### 3.2 子助手：Disclosure Snapshot 的 sub_assistants section
 

@@ -5,6 +5,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import me.rerere.common.http.readResponse
 import okhttp3.FormBody
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -100,7 +101,7 @@ class ServiceAccountTokenProvider(
             .header("Content-Type", "application/x-www-form-urlencoded")
             .build()
 
-        http.newCall(req).execute().use { resp ->
+        http.newCall(req).readResponse { resp ->
             if (!resp.isSuccessful) {
                 val body = resp.body.string()
                 throw IllegalStateException("Token endpoint ${resp.code}: $body")

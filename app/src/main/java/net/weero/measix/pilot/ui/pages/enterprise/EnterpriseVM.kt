@@ -9,6 +9,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import net.weero.measix.pilot.R
@@ -30,8 +31,11 @@ internal class EnterpriseVM(private val service: EnterpriseApplicationService) :
     val busy = _busy.asStateFlow()
     private val _error = MutableStateFlow<Int?>(null)
     val error = _error.asStateFlow()
-    private val _notice = MutableStateFlow<Int?>(null)
-    val notice = _notice.asStateFlow()
+    private data class Notice(val resource: Int, val selection: RealmSelection? = null)
+    private val _notice = MutableStateFlow<Notice?>(null)
+    val notice = combine(_notice, overview) { value, state ->
+        value?.takeIf { it.selection == null || it.selection == state?.selection }?.resource
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
     private val _sources = MutableStateFlow<List<InstalledEnterpriseSource>?>(null)
     val sources = _sources.asStateFlow()
     private val _localConfiguration = MutableStateFlow<LocalEnterpriseConfigurationUiModel?>(null)
@@ -56,7 +60,7 @@ internal class EnterpriseVM(private val service: EnterpriseApplicationService) :
         command(isCurrent = { overview.value?.selection == selection && overview.value?.access == access }) {
             service.runLocalScenario(selection, access, scenario)
             if (scenario == LocalEnterpriseScenario.EXPIRE_SOON && overview.value?.access == access) {
-                _notice.value = R.string.enterprise_expiry_scheduled
+                _notice.value = Notice(R.string.enterprise_expiry_scheduled, selection)
             }
         }
     }
@@ -78,7 +82,10 @@ internal class EnterpriseVM(private val service: EnterpriseApplicationService) :
         val isCurrent = { localConfigurationRequest === request && overview.value?.selection == original }
         command(isCurrent = isCurrent) {
             val result = service.localConfiguration(original)
-            if (isCurrent()) _localConfiguration.value = result
+            if (isCurrent()) {
+                _localConfiguration.value = result
+                _notice.value = Notice(R.string.enterprise_configuration_read, original)
+            }
         }
     }
     fun dismissLocalConfiguration() { localConfigurationRequest = null; _localConfiguration.value = null }
@@ -89,7 +96,10 @@ internal class EnterpriseVM(private val service: EnterpriseApplicationService) :
         val isCurrent = { localFeedRequest === request && overview.value?.selection == original }
         command(isCurrent = isCurrent) {
             val result = service.localFeed(original)
-            if (isCurrent()) _localFeed.value = result
+            if (isCurrent()) {
+                _localFeed.value = result
+                _notice.value = Notice(R.string.enterprise_feed_read, original)
+            }
         }
     }
     fun dismissLocalFeed() { localFeedRequest = null; _localFeed.value = null }
@@ -99,7 +109,14 @@ internal class EnterpriseVM(private val service: EnterpriseApplicationService) :
         val isCurrent = { localFeedRequest === request && overview.value?.selection == original.selection }
         command(isCurrent = isCurrent) {
             val result = service.changeLocalFeed(original, change)
-            if (isCurrent()) _localFeed.value = result
+            if (isCurrent()) {
+                _localFeed.value = result
+                _notice.value = Notice(when (change) {
+                    is EnterpriseFeedCommand.Publish -> R.string.enterprise_feed_published
+                    is EnterpriseFeedCommand.Withdraw -> R.string.enterprise_feed_withdrawn
+                    else -> R.string.enterprise_feed_saved
+                }, original.selection)
+            }
         }
     }
     fun changeLocalConfiguration(original: LocalEnterpriseConfigurationUiModel, change: LocalEnterpriseConfigurationChange) {
@@ -110,7 +127,7 @@ internal class EnterpriseVM(private val service: EnterpriseApplicationService) :
             val result = service.changeLocalConfiguration(original, change)
             if (isCurrent()) {
                 _localConfiguration.value = result.configuration
-                _notice.value = if (result.applied) R.string.enterprise_import_applied else R.string.enterprise_import_pending
+                _notice.value = Notice(if (result.applied) R.string.enterprise_import_applied else R.string.enterprise_import_pending, original.selection)
             }
         }
     }
@@ -125,10 +142,16 @@ internal class EnterpriseVM(private val service: EnterpriseApplicationService) :
         if (uri == null) return
         command(failureMessage = R.string.enterprise_import_failed) {
             val result = service.importConfiguration(context, original, uri)
-            _notice.value = if (result.applied != null) R.string.enterprise_import_applied else R.string.enterprise_import_pending
+            _notice.value = Notice(if (result.applied != null) R.string.enterprise_import_applied else R.string.enterprise_import_pending)
         }
     }
-    fun synchronize() { overview.value?.access?.let { access -> command { service.synchronize(access) } } }
+    fun synchronize() {
+        val selection = overview.value?.selection ?: return
+        overview.value?.access?.let { access -> command {
+            service.synchronize(access)
+            if (overview.value?.access == access) _notice.value = Notice(R.string.enterprise_sync_completed, selection)
+        } }
+    }
     fun switchSpace(onSelected: () -> Unit) {
         val state = overview.value ?: return
         val selected = state.selection ?: return
@@ -179,6 +202,7 @@ internal class EnterpriseVM(private val service: EnterpriseApplicationService) :
                     error is EnterpriseConfigurationException && error.reason == "exit_current_enterprise_first" -> R.string.enterprise_import_exit_first
                     error is EnterpriseConfigurationException && error.reason == "enterprise_selection_revoked" -> R.string.enterprise_selection_changed
                     error is EnterpriseConfigurationException && error.reason == "local_enterprise_configuration_changed" -> R.string.enterprise_source_changed
+                    error is EnterpriseConfigurationException && error.reason in setOf("enterprise_generation_regression", "enterprise_generation_conflict") -> R.string.enterprise_import_version_rejected
                     error is EnterpriseConfigurationException && error.reason == "enterprise_feed_changed" -> R.string.enterprise_feed_changed
                     error is EnterpriseConfigurationException && error.reason == "bundled_example_session_required" -> R.string.enterprise_clear_example_requires_session
                     error is EnterpriseConfigurationException && error.reason in setOf("invalid_assistant_model_reference", "invalid_default_chat_model", "invalid_default_image_model") -> R.string.enterprise_model_still_referenced

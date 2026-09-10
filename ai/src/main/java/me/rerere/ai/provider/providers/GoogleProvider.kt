@@ -71,7 +71,7 @@ import me.rerere.ai.util.stringSafe
 import me.rerere.ai.provider.RequestCredentials
 import me.rerere.ai.provider.authenticate
 import me.rerere.ai.util.toHeaders
-import me.rerere.common.http.await
+import me.rerere.common.http.readResponse
 import me.rerere.common.http.jsonPrimitiveOrNull
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
@@ -163,9 +163,10 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
                     .get()
                     .build()
             )
-            val response = client.newCall(request).await()
-            if (response.isSuccessful) {
-                val body = response.body?.string() ?: error("empty body")
+            val body = client.newCall(request).readResponse { response ->
+                if (response.isSuccessful) response.body?.string() ?: error("empty body") else null
+            }
+            if (body != null) {
                 Log.d(TAG, "listModels: $body")
                 val bodyObject = json.parseToJsonElement(body).jsonObject
                 val models = bodyObject["models"]?.jsonArray ?: return@withContext emptyList()
@@ -222,12 +223,12 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
                 .build()
         )
 
-        val response = client.newCall(request).await()
-        if (!response.isSuccessful) {
-            throw formatProviderHttpError(response.code, response.body?.string())
+        val bodyStr = client.newCall(request).readResponse { response ->
+            if (!response.isSuccessful) {
+                throw formatProviderHttpError(response.code, response.body?.string())
+            }
+            response.body?.string() ?: ""
         }
-
-        val bodyStr = response.body?.string() ?: ""
         val bodyJson = json.parseToJsonElement(bodyStr).jsonObject
 
         val candidates = bodyJson["candidates"]?.jsonArray.orEmpty()

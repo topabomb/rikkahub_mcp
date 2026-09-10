@@ -11,6 +11,8 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.async
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
@@ -50,6 +52,36 @@ import kotlin.uuid.Uuid
 @Config(sdk = [34])
 class ModelExecutionServiceTest {
     @get:Rule val temporary = TemporaryFolder()
+
+    @Test fun `session expiry while waiting for user configuration rejects the original model request`() = runBlocking {
+        environment { env ->
+            env.sessions.enrollFixture(exampleEnterprisePackage())
+            val access = env.sessions.captureSelectedRealmAccess() as RealmAccess.Enterprise
+            val captured = env.capture(access)
+            val locked = CompletableDeferred<Unit>()
+            val release = CompletableDeferred<Unit>()
+            val holder = kotlinx.coroutines.CoroutineScope(coroutineContext).launch {
+                env.settings.withExecutionConfiguration(access.scope, env.sessions.state.value) {
+                    locked.complete(Unit)
+                    release.await()
+                }
+            }
+            locked.await()
+            // Undispatched entry takes Session admission and suspends on the held Settings lock.
+            val request = kotlinx.coroutines.CoroutineScope(coroutineContext).async(start = kotlinx.coroutines.CoroutineStart.UNDISPATCHED) {
+                try {
+                    captured.model.requests.execute { fail("expired session reached external request") }
+                    fail("expired request accepted")
+                } catch (error: EnterpriseConfigurationException) {
+                    assertEquals("enterprise_data_access_unavailable", error.reason)
+                }
+            }
+            env.now = (env.sessions.state.value as EnterpriseState.Available).manifest.session!!.expiresAtMillis
+            release.complete(Unit)
+            holder.join()
+            request.await()
+        }
+    }
 
     @Test fun `model barrier stops original owner before syncing and failed cleanup never reopens the capture`() = runBlocking {
         for (failCleanup in listOf(false, true)) environment { env ->
@@ -475,7 +507,8 @@ class ModelExecutionServiceTest {
         val preferences = PreferenceDataStoreFactory.create(
             migrations = listOf(UserSettingsMigration()), scope = scope, produceFile = { root.resolve("settings.preferences_pb") })
         val settings = SettingsStore(context, scope, dataStore = preferences)
-        val sessions = EnterpriseSessionController(EnterpriseAppliedStore(root.resolve("enterprise")))
+        var now = System.currentTimeMillis()
+        val sessions = EnterpriseSessionController(EnterpriseAppliedStore(root.resolve("enterprise"))) { now }
         val gate = ApplicationRecoveryGate()
         var service = testModelExecutionService(settings, sessions, gate)
         private val owners = mutableListOf<Triple<ConversationRuntime, Uuid, Job>>()

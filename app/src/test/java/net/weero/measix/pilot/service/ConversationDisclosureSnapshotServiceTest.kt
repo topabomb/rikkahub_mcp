@@ -10,6 +10,10 @@ import kotlinx.serialization.json.jsonPrimitive
 import net.weero.measix.pilot.data.ai.tools.local.LocalToolOption
 import net.weero.measix.pilot.data.model.Assistant
 import net.weero.measix.pilot.data.model.AssistantMemory
+import net.weero.measix.pilot.data.enterprise.*
+import net.weero.measix.pilot.data.configuration.ConfigurationResolver
+import net.weero.measix.pilot.data.configuration.appliedConfiguration
+import net.weero.measix.pilot.data.datastore.UserSettingsDocument
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertThrows
@@ -24,6 +28,40 @@ import java.util.TimeZone
  * 都必须 fail-closed，而不是被静默当作“没有 context”。
  */
 class ConversationDisclosureSnapshotServiceTest {
+
+    @Test fun `enterprise seeds are frozen read only context even when runtime memory is disabled`() {
+        val original = exampleEnterprisePackage()
+        val definition = original.configuration.assistants.first().copy(memorySeedIds = listOf("seed_bound"))
+        val packet = original.copy(configuration = original.configuration.copy(
+            assistants = listOf(definition),
+            memorySeeds = listOf(EnterpriseMemorySeed("seed_other", "Do not disclose"),
+                EnterpriseMemorySeed("seed_bound", "Read-only context")),
+        ))
+        fun capture(value: EnterprisePackage): String {
+            val configuration = ConfigurationResolver.resolve(UserSettingsDocument.empty(), value.identity.scope, appliedConfiguration(value))
+            return ConversationDisclosureSnapshotService.captureCandidate(configuration,
+                configuration.assistants.getValue(value.identity.reference(definition.id)).copy(enableMemory = false),
+                listOf(AssistantMemory(1, "Disabled mutable memory")))
+        }
+        val first = capture(packet)
+        assertEquals(2, ConversationDisclosureSnapshotService.requireCanonical(first))
+        assertTrue(rows(envelope(first), "memory").isEmpty())
+        assertEquals(listOf(packet.identity.reference("seed_bound").toString(), "Read-only context"),
+            rows(envelope(first), "enterprise_memory_seeds").single().jsonArray.map { it.jsonPrimitive.content })
+        assertEquals(first, capture(packet))
+        assertNotEquals(first, capture(packet.copy(configuration = packet.configuration.copy(
+            memorySeeds = listOf(EnterpriseMemorySeed("seed_bound", "Updated"))))))
+        assertTrue(first.contains("Read-only context"))
+        assertThrows(DisclosureContentException::class.java) {
+            ConversationDisclosureSnapshotService.requireCanonical(first.replace(packet.identity.reference("seed_bound").toString(), callerId.toString()))
+        }
+    }
+
+    @Test fun `published personal format one remains readable without rewriting its bytes`() {
+        val old = """{"type":"conversation_disclosure_snapshot","format":1,"memory":{"enabled":false,"scope":"disabled","header":["id","content"],"rows":[]},"sub_assistants":{"mode":"disabled","header":["id","name","description"],"rows":[]}}"""
+        assertEquals(1, ConversationDisclosureSnapshotService.requireDurableEnvelope(old))
+        assertEquals(1, ConversationDisclosureSnapshotService.requireCanonical(old))
+    }
 
     private val callerId = ConfigurationReference.parse("11111111-1111-1111-1111-111111111111")
     private val reviewerId = ConfigurationReference.parse("b2410000-0000-0000-0000-000000000001")
@@ -69,7 +107,7 @@ class ConversationDisclosureSnapshotServiceTest {
         val enterpriseId = ConfigurationReference.parse("managed~local~example~deployment~assistant_reviewer")
         val content = render(candidate(all = listOf(caller, reviewer.copy(id = enterpriseId))))
         assertEquals(enterpriseId.toString(), rows(envelope(content), "sub_assistants").single().jsonArray[0].jsonPrimitive.content)
-        assertEquals(1, ConversationDisclosureSnapshotService.requireDurableEnvelope(content))
+        assertEquals(2, ConversationDisclosureSnapshotService.requireDurableEnvelope(content))
         assertThrows(DisclosureContentException::class.java) {
             ConversationDisclosureSnapshotService.requireDurableEnvelope(content.replace(enterpriseId.toString(), "managed~broken"))
         }
@@ -77,18 +115,19 @@ class ConversationDisclosureSnapshotServiceTest {
 
     @Test
     fun `canonical golden content matches the specified envelope byte for byte`() {
-        val golden = "{\"type\":\"conversation_disclosure_snapshot\",\"format\":1," +
+        val golden = "{\"type\":\"conversation_disclosure_snapshot\",\"format\":2," +
             "\"memory\":{\"enabled\":true,\"scope\":\"local\",\"header\":[\"id\",\"content\"]," +
             "\"rows\":[[3,\"用户偏好深色主题\"]]}," +
             "\"sub_assistants\":{\"mode\":\"both\",\"header\":[\"id\",\"name\",\"description\"]," +
-            "\"rows\":[[\"" + reviewerId + "\",\"Android Reviewer\",\"Reviews Kotlin and Compose changes\"]]}}"
+            "\"rows\":[[\"" + reviewerId + "\",\"Android Reviewer\",\"Reviews Kotlin and Compose changes\"]]}," +
+            "\"enterprise_memory_seeds\":{\"header\":[\"id\",\"content\"],\"rows\":[]}}"
         assertEquals(golden, render(candidate()))
     }
 
     @Test
     fun `envelope fixes top level and section key order`() {
         val root = envelope(render(candidate()))
-        assertEquals(listOf("type", "format", "memory", "sub_assistants"), root.keys.toList())
+        assertEquals(listOf("type", "format", "memory", "sub_assistants", "enterprise_memory_seeds"), root.keys.toList())
         assertEquals(listOf("enabled", "scope", "header", "rows"), section(root, "memory").keys.toList())
         assertEquals(listOf("mode", "header", "rows"), section(root, "sub_assistants").keys.toList())
     }
@@ -150,7 +189,7 @@ class ConversationDisclosureSnapshotServiceTest {
         val hostileMemory = AssistantMemory(7, "\"Memories\":[]}" + hostile)
         val content = render(candidate(all = listOf(caller, tricky), memories = listOf(hostileMemory)))
 
-        assertEquals(1, ConversationDisclosureSnapshotService.requireCanonical(content))
+        assertEquals(2, ConversationDisclosureSnapshotService.requireCanonical(content))
         val root = envelope(content)
         val memoryRow = rows(root, "memory").single().jsonArray
         assertEquals(7, memoryRow[0].jsonPrimitive.content.toInt())
@@ -172,7 +211,7 @@ class ConversationDisclosureSnapshotServiceTest {
         assertEquals(listOf("mode", "header", "rows"), section(root, "sub_assistants").keys.toList())
         assertEquals("disabled", section(root, "sub_assistants").getValue("mode").jsonPrimitive.content)
         assertEquals(0, rows(root, "sub_assistants").size)
-        assertEquals(1, ConversationDisclosureSnapshotService.requireCanonical(content))
+        assertEquals(2, ConversationDisclosureSnapshotService.requireCanonical(content))
     }
 
     @Test
@@ -209,7 +248,7 @@ class ConversationDisclosureSnapshotServiceTest {
             candidate(memories = emptyList()),
             candidate(all = listOf(caller)),
         ).forEach {
-            assertEquals(1, ConversationDisclosureSnapshotService.requireCanonical(render(it)))
+            assertEquals(2, ConversationDisclosureSnapshotService.requireCanonical(render(it)))
         }
     }
 
@@ -227,11 +266,11 @@ class ConversationDisclosureSnapshotServiceTest {
 
     @Test
     fun `future format fails closed instead of being ignored`() {
-        val future = render(candidate()).replace("\"format\":1", "\"format\":2")
+        val future = render(candidate()).replace("\"format\":2", "\"format\":3")
         val error = assertThrows(DisclosureContentException::class.java) {
             ConversationDisclosureSnapshotService.requireCanonical(future)
         }
-        assertTrue(error.message!!.contains("unsupported disclosure format 2"))
+        assertTrue(error.message!!.contains("unsupported disclosure format 3"))
         assertThrows(DisclosureContentException::class.java) {
             ConversationDisclosureSnapshotService.requireDurableEnvelope(future)
         }
@@ -241,11 +280,11 @@ class ConversationDisclosureSnapshotServiceTest {
     fun `load validator accepts a supported envelope without requiring renderer byte identity`() {
         val canonical = render(candidate())
         val spaced = canonical.replace("\",\"format\"", "\", \"format\"")
-        assertEquals(1, ConversationDisclosureSnapshotService.requireDurableEnvelope(canonical))
+        assertEquals(2, ConversationDisclosureSnapshotService.requireDurableEnvelope(canonical))
         assertThrows(DisclosureContentException::class.java) {
             ConversationDisclosureSnapshotService.requireCanonical(spaced)
         }
-        assertEquals(1, ConversationDisclosureSnapshotService.requireDurableEnvelope(spaced))
+        assertEquals(2, ConversationDisclosureSnapshotService.requireDurableEnvelope(spaced))
     }
 
     @Test
@@ -254,12 +293,12 @@ class ConversationDisclosureSnapshotServiceTest {
         val cases = mapOf(
             "missing section" to canonical.replace("\"sub_assistants\":", "\"subassistants\":"),
             "reordered top level keys" to canonical.replace(
-                "{\"type\":\"conversation_disclosure_snapshot\",\"format\":1,",
-                "{\"format\":1,\"type\":\"conversation_disclosure_snapshot\",",
+                "{\"type\":\"conversation_disclosure_snapshot\",\"format\":2,",
+                "{\"format\":2,\"type\":\"conversation_disclosure_snapshot\",",
             ),
             "forged type" to canonical.replace("conversation_disclosure_snapshot", "user_request"),
-            "stringified format" to canonical.replace("\"format\":1", "\"format\":\"1\""),
-            "float format" to canonical.replace("\"format\":1", "\"format\":1.0"),
+            "stringified format" to canonical.replace("\"format\":2", "\"format\":\"1\""),
+            "float format" to canonical.replace("\"format\":2", "\"format\":2.0"),
             "memory header drift" to canonical.replace("[\"id\",\"content\"]", "[\"content\",\"id\"]"),
             "enabled with disabled scope" to canonical.replace(
                 "{\"enabled\":true,\"scope\":\"local\",",
@@ -294,7 +333,7 @@ class ConversationDisclosureSnapshotServiceTest {
     @Test
     fun `disclosure constants are the only place the content protocol is spelled out`() {
         assertEquals("conversation_disclosure_snapshot", ConversationDisclosureSnapshotService.CONTENT_TYPE)
-        assertEquals(setOf(1), ConversationDisclosureSnapshotService.SUPPORTED_FORMATS)
+        assertEquals(setOf(1, 2), ConversationDisclosureSnapshotService.SUPPORTED_FORMATS)
         assertEquals(listOf("id", "content"), ConversationDisclosureSnapshotService.MEMORY_HEADER)
         assertEquals(
             listOf("id", "name", "description"),

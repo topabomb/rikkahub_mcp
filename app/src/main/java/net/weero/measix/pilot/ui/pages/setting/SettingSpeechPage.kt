@@ -581,6 +581,7 @@ private fun SpeechProviderList(
     val testText = stringResource(R.string.setting_tts_page_test_text)
     LazyColumn(modifier.fillMaxSize().imePadding(), state = lazyState,
         contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        item { Text(stringResource(R.string.configuration_user_definition_shared_notice), style = MaterialTheme.typography.bodySmall) }
         if (catalog == null) item { Text(stringResource(R.string.configuration_reason_not_ready)) }
         selected?.unavailableReason?.let { reason -> item { Text(configurationUnavailableText(reason), color = MaterialTheme.colorScheme.error) } }
         items(resources, key = { it.key.reference.toString() }) { resource ->

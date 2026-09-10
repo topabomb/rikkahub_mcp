@@ -4,7 +4,6 @@ import android.content.Context
 import android.webkit.CookieManager
 import androidx.activity.ComponentActivity
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
-import androidx.compose.ui.test.ComposeTimeoutException
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.viewinterop.AndroidView
@@ -16,7 +15,6 @@ import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.webkit.WebViewCompat
 import java.io.File
-import java.util.concurrent.atomic.AtomicReference
 import io.mockk.coEvery
 import io.mockk.mockk
 import kotlinx.coroutines.*
@@ -296,8 +294,10 @@ class PortalWebViewAndroidTest {
                 AndroidView(factory = { page.view })
                 PortalNativeControls(native)
             } }
-            awaitPage(host) { it["text"]?.jsonPrimitive?.content?.contains("退出企业登录") == true }
             suspend fun clickLogout() {
+                awaitPage(host) { page ->
+                    page["enabledButtons"]?.jsonArray?.any { it.jsonPrimitive.content.contains("退出企业登录") } == true
+                }
                 assertTrue(evaluatePageJson(host,
                     "JSON.stringify({clicked:(()=>{const b=Array.from(document.querySelectorAll('button')).find(b=>b.textContent.includes('退出企业登录')&&!b.disabled);if(!b)return false;b.click();return true;})()})")
                     .getValue("clicked").jsonPrimitive.boolean)
@@ -353,7 +353,6 @@ class PortalWebViewAndroidTest {
                 AndroidView(factory = { page.view })
                 PortalNativeControls(native)
             } }
-            awaitPage(host) { it["text"]?.jsonPrimitive?.content?.contains("手机能力") == true }
             suspend fun clickPage(label: String) {
                 awaitPage(host) { page -> page["enabledButtons"]?.jsonArray?.any { it.jsonPrimitive.content.contains(label) } == true }
                 assertTrue(evaluatePageJson(host,
@@ -437,23 +436,22 @@ class PortalWebViewAndroidTest {
         Json.parseToJsonElement(Json.decodeFromString<String>(withTimeout(5_000) { result.await() })).jsonObject
     }
 
-    private fun awaitPage(host: PortalWebView, predicate: (JsonObject) -> Boolean): JsonObject {
-        val snapshot = AtomicReference<JsonObject?>()
+    private suspend fun awaitPage(host: PortalWebView, predicate: (JsonObject) -> Boolean): JsonObject {
+        var snapshot: JsonObject? = null
         try {
-            compose.waitUntil(timeoutMillis = 30_000) {
-                host.view.post {
-                    if (!host.document.isClosed) host.view.evaluateJavascript(
-                        "JSON.stringify({url:location.href,bootstrap:window.MeasixPortalDocument||null,text:document.body?document.body.innerText:'',ready:document.readyState,photoWidth:document.querySelector('img.phone-preview')?.naturalWidth||0,audioReady:document.querySelector('audio.phone-preview')?.readyState||0,enabledButtons:Array.from(document.querySelectorAll('button')).filter(b=>!b.disabled).map(b=>b.textContent),refreshEnabled:Array.from(document.querySelectorAll('button')).some(b=>b.textContent.includes('同步企业配置')&&!b.disabled),observing:Array.isArray(window.portalTestResponses),responses:window.portalTestResponses||[]})",
-                    ) { encoded ->
-                        if (encoded != "null") snapshot.set(Json.parseToJsonElement(Json.decodeFromString<String>(encoded)).jsonObject)
-                    }
+            withTimeout(30_000) {
+                while (true) {
+                    check(!host.document.isClosed) { "Portal closed while awaiting page" }
+                    snapshot = evaluatePageJson(host,
+                        "JSON.stringify({url:location.href,bootstrap:window.MeasixPortalDocument||null,text:document.body?document.body.innerText:'',ready:document.readyState,photoWidth:document.querySelector('img.phone-preview')?.naturalWidth||0,audioReady:document.querySelector('audio.phone-preview')?.readyState||0,enabledButtons:Array.from(document.querySelectorAll('button')).filter(b=>!b.disabled).map(b=>b.textContent),refreshEnabled:Array.from(document.querySelectorAll('button')).some(b=>b.textContent.includes('同步企业配置')&&!b.disabled),observing:Array.isArray(window.portalTestResponses),responses:window.portalTestResponses||[]})")
+                    if (predicate(requireNotNull(snapshot))) break
+                    delay(50)
                 }
-                snapshot.get()?.let(predicate) == true
             }
-        } catch (failure: ComposeTimeoutException) {
-            throw AssertionError("Portal closed=${host.document.isClosed}; last page=${snapshot.get()}", failure)
+        } catch (failure: TimeoutCancellationException) {
+            throw AssertionError("Portal closed=${host.document.isClosed}; last page=$snapshot", failure)
         }
-        return requireNotNull(snapshot.get())
+        return requireNotNull(snapshot)
     }
 
     private fun source(root: File, sessions: EnterpriseSessionController) = LocalEnterpriseSource(

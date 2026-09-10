@@ -4,8 +4,8 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.stateIn
-import kotlinx.coroutines.launch
 import net.weero.measix.pilot.service.FavoriteService
+import net.weero.measix.pilot.service.NodeFavoriteItem
 
 class FavoriteVM(
     private val favoriteService: FavoriteService,
@@ -13,12 +13,10 @@ class FavoriteVM(
     val nodeFavorites = favoriteService.observeNodeFavorites()
         .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
 
-    suspend fun removeForUndo(refKey: String): FavoriteService.RestoreToken? =
-        favoriteService.removeForUndo(refKey)
+    suspend fun openRequest(item: NodeFavoriteItem) = favoriteService.openRequest(item)
 
-    fun restoreFavorite(token: FavoriteService.RestoreToken) {
-        viewModelScope.launch {
-            favoriteService.restore(token)
-        }
-    }
+    suspend fun removeForUndo(item: NodeFavoriteItem): FavoriteService.RestoreToken? =
+        favoriteService.removeForUndo(item)
+
+    suspend fun restoreFavorite(token: FavoriteService.RestoreToken) = favoriteService.restore(token)
 }

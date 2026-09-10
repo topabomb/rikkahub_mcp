@@ -212,46 +212,49 @@ fun SettingProviderDetailPage(
             }
         }
     ) {
-        HorizontalPager(
-            state = pager,
-            modifier = Modifier
-                .padding(it)
-                .consumeWindowInsets(it)
-        ) { page ->
-            when (page) {
-                0 -> {
-                    val saveSuccessText = stringResource(R.string.setting_provider_page_save_success)
-                    SettingProviderConfigPage(
-                        provider = provider,
-                        providerSettingsState = providerSettingsState,
-                        onOpenConnectionTest = providerSettingsVM::openConnectionTest,
-                        onDismissConnectionTest = providerSettingsVM::dismissConnectionTest,
-                        onSelectConnectionModel = providerSettingsVM::selectConnectionModel,
-                        onRunConnectionTest = providerSettingsVM::runConnectionTest,
-                        onEdit = {
-                            providerSettingsVM.saveConfiguration(it) {
-                                toaster.show(saveSuccessText, type = ToastType.Success)
+        Column(Modifier.padding(it).consumeWindowInsets(it)) {
+            Text(stringResource(R.string.configuration_user_definition_shared_notice),
+                style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
+            HorizontalPager(
+                state = pager,
+                modifier = Modifier
+                    .weight(1f)
+            ) { page ->
+                when (page) {
+                    0 -> {
+                        val saveSuccessText = stringResource(R.string.setting_provider_page_save_success)
+                        SettingProviderConfigPage(
+                            provider = provider,
+                            providerSettingsState = providerSettingsState,
+                            onOpenConnectionTest = providerSettingsVM::openConnectionTest,
+                            onDismissConnectionTest = providerSettingsVM::dismissConnectionTest,
+                            onSelectConnectionModel = providerSettingsVM::selectConnectionModel,
+                            onRunConnectionTest = providerSettingsVM::runConnectionTest,
+                            onEdit = {
+                                providerSettingsVM.saveConfiguration(it) {
+                                    toaster.show(saveSuccessText, type = ToastType.Success)
+                                }
+                            },
+                            onDelete = {
+                                onDelete()
                             }
-                        },
-                        onDelete = {
-                            onDelete()
-                        }
-                    )
-                }
+                        )
+                    }
 
-                1 -> {
-                    SettingProviderModelPage(
-                        provider = provider,
-                        modelCatalog = providerSettingsState.modelCatalog,
-                        onLoadModelCatalog = providerSettingsVM::loadModelCatalog,
-                        applyRegistryCapabilities = providerSettingsVM::applyRegistryCapabilities,
-                        onAddModel = providerSettingsVM::addModel,
-                        onRemoveModel = providerSettingsVM::removeModel,
-                        onEditModel = providerSettingsVM::editModel,
-                        onAddModels = providerSettingsVM::addModels,
-                        onRemoveModelsByModelIds = providerSettingsVM::removeModelsByModelIds,
-                        onMoveModel = providerSettingsVM::moveModel,
-                    )
+                    1 -> {
+                        SettingProviderModelPage(
+                            provider = provider,
+                            modelCatalog = providerSettingsState.modelCatalog,
+                            onLoadModelCatalog = providerSettingsVM::loadModelCatalog,
+                            applyRegistryCapabilities = providerSettingsVM::applyRegistryCapabilities,
+                            onAddModel = providerSettingsVM::addModel,
+                            onRemoveModel = providerSettingsVM::removeModel,
+                            onEditModel = providerSettingsVM::editModel,
+                            onAddModels = providerSettingsVM::addModels,
+                            onRemoveModelsByModelIds = providerSettingsVM::removeModelsByModelIds,
+                            onMoveModel = providerSettingsVM::moveModel,
+                        )
+                    }
                 }
             }
         }

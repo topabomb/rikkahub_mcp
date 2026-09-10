@@ -400,7 +400,7 @@ private fun ChatListNormal(
                             Column(
                                 verticalArrangement = Arrangement.spacedBy(8.dp),
                             ) {
-                                if (readiness.requiresProviderConfiguration) {
+                                if (readiness.requiresProviderConfiguration && snapshot.header.scope is net.weero.measix.pilot.data.configuration.ConfigurationScope.Personal) {
                                     ProviderConfigWarningCard(onClick = onProviderConfigClick)
                                 }
                                 ConversationReadinessCard(
@@ -417,7 +417,7 @@ private fun ChatListNormal(
                                 )
                             }
                         }
-                    } else if (readiness.requiresProviderConfiguration) {
+                    } else if (readiness.requiresProviderConfiguration && snapshot.header.scope is net.weero.measix.pilot.data.configuration.ConfigurationScope.Personal) {
                         item(key = "ProviderConfigWarning") {
                             ProviderConfigWarningCard(onClick = onProviderConfigClick)
                         }

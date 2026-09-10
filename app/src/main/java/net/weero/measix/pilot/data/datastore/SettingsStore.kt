@@ -328,7 +328,7 @@ class SettingsStore internal constructor(
     internal suspend fun updateResourceSelections(
         scope: ConfigurationScope,
         enterpriseState: EnterpriseState,
-        requireOwner: () -> Unit = {},
+        requireOwner: () -> Unit,
         withCommit: suspend (suspend () -> Unit) -> Unit = { it() },
         transform: (ResourceSelections) -> ResourceSelections,
     ) = updateMutex.withLock {
@@ -352,9 +352,10 @@ class SettingsStore internal constructor(
         enterpriseState: EnterpriseState.Available,
         gateway: ConfigurationReference.Enterprise,
         enabled: Boolean,
+        requireOwner: () -> Unit,
     ) = updateMutex.withLock {
         require(enterpriseState.manifest.session?.identity?.scope == scope) { "gateway_preference_principal_mismatch" }
-        commitUserDocument { document ->
+        commitUserDocument(requireOwner) { document ->
             val resolved = ConfigurationResolver.resolve(document, scope, enterpriseState)
             val item = resolved.catalog[ConfigurationKey(ConfigurationCategory.GATEWAY, gateway)]
             if (item?.gatewayEnablement?.canChange != true) {

@@ -258,6 +258,20 @@ class ConversationPageAccessTest {
         coVerify(exactly = 2) { repository.getConversationHeader(id) }
     }
 
+    @Test fun `share draft rejects the original directory after a same-session selection round trip`() = runTest {
+        val sessions = sessions()
+        sessions.enrollFixture(exampleEnterprisePackage())
+        val original = requireNotNull(sessions.observeSelectedRealmSelection().first())
+        sessions.selectPersonalFixture()
+        sessions.selectEnterpriseFixture()
+        assertEquals(original.access, sessions.captureSelectedRealmAccess())
+        val settings = mockk<SettingsStore>()
+        assertFails<EnterpriseConfigurationException> {
+            application(mockk(), mockk(), sessions, settings).newDraftRequest(original, ConfigurationReference.random())
+        }
+        io.mockk.confirmVerified(settings)
+    }
+
     private fun gate() = ApplicationRecoveryGate().apply { ready() }
     private fun sessions() = EnterpriseSessionController(EnterpriseAppliedStore(temporary.newFolder()))
     private fun query(sessions: EnterpriseSessionController) = ConversationQueryService(

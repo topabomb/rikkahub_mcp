@@ -18,6 +18,7 @@ internal fun EnterpriseLocalFeedEditor(
     original: LocalEnterpriseFeedSnapshot,
     busy: Boolean,
     error: Int?,
+    notice: Int?,
     onChange: (EnterpriseFeedCommand) -> Unit,
     onRefresh: () -> Unit,
     onDismiss: () -> Unit,
@@ -36,6 +37,7 @@ internal fun EnterpriseLocalFeedEditor(
                 Text(stringResource(R.string.enterprise_feed_revision, original.document.publicRevision,
                     original.document.enterpriseTimezone), style = MaterialTheme.typography.bodySmall)
                 error?.let { Text(stringResource(it), color = MaterialTheme.colorScheme.error) }
+                notice?.let { Text(stringResource(it), style = MaterialTheme.typography.bodySmall) }
                 if (busy) LinearProgressIndicator(Modifier.fillMaxWidth())
                 if (editing) {
                     OutlinedTextField(content.title, { content = content.copy(title = it) },

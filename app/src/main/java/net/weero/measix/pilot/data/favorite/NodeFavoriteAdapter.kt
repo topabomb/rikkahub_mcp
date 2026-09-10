@@ -1,4 +1,4 @@
-﻿package net.weero.measix.pilot.data.favorite
+package net.weero.measix.pilot.data.favorite
 
 import net.weero.measix.pilot.data.db.entity.FavoriteEntity
 import net.weero.measix.pilot.data.model.FavoriteMeta
@@ -33,6 +33,7 @@ object NodeFavoriteAdapter : FavoriteAdapter<NodeFavoriteTarget> {
         )
 
         return FavoriteEntity(
+            scope = target.scope,
             id = existing?.id ?: buildRefKey(target),
             type = type.value,
             refKey = buildRefKey(target),

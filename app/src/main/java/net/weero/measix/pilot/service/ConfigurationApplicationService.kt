@@ -27,7 +27,7 @@ internal class ConfigurationApplicationService(
         recoveryGate.awaitReady()
         val page = target.conversation
         enterpriseSessions.withSelectedRealmSelection(page.selection) {
-            settings.updateResourceSelections(page.selection.access.scope, enterpriseSessions.state.value, page::requireOpen,
+            settings.updateResourceSelections(page.selection.access.scope, enterpriseSessions.state.value, { page.requireOpen(); enterpriseSessions.requirePublishedSelection(page.selection) },
                 withCommit = { commit ->
                     conversations.withRootHeaders(page.selection.access.scope, listOf(page.conversationId)) { headers ->
                         page.requireOpen()
@@ -109,9 +109,10 @@ internal class ConfigurationApplicationService(
     private suspend fun updateSelectedPreferences(selection: RealmSelection?, transform: (ResourceSelections) -> ResourceSelections) {
         recoveryGate.awaitReady()
         if (selection == null) {
-            settings.updateResourceSelections(RealmAccess.Personal.scope, enterpriseSessions.state.value, transform = transform)
+            settings.updateResourceSelections(RealmAccess.Personal.scope, enterpriseSessions.state.value, requireOwner = {}, transform = transform)
         } else enterpriseSessions.withSelectedRealmSelection(selection) {
-            settings.updateResourceSelections(selection.access.scope, enterpriseSessions.state.value, transform = transform)
+            settings.updateResourceSelections(selection.access.scope, enterpriseSessions.state.value,
+                requireOwner = { enterpriseSessions.requirePublishedSelection(selection) }, transform = transform)
         }
     }
 
@@ -120,7 +121,7 @@ internal class ConfigurationApplicationService(
         val access = requireNotNull(selection.access as? RealmAccess.Enterprise)
         enterpriseSessions.withSelectedRealmSelection(selection) {
             val applied = enterpriseSessions.state.value as net.weero.measix.pilot.data.enterprise.EnterpriseState.Available
-            settings.updateGatewayPreference(access.scope, applied, gateway, enabled)
+            settings.updateGatewayPreference(access.scope, applied, gateway, enabled) { enterpriseSessions.requirePublishedSelection(selection) }
         }
     }
 

@@ -114,6 +114,17 @@ internal data class ResolvedConfiguration(
     fun assistantModel(assistant: Assistant): ConfigurationSelection =
         selectModel(assistant.chatModelId ?: selections.chatModelId, ModelType.CHAT)
 
+    /** Fixed enterprise context is separate from mutable runtime memory and user definitions. */
+    fun assistantMemorySeeds(assistantId: ConfigurationReference): List<net.weero.measix.pilot.data.enterprise.EnterpriseMemorySeed> {
+        val reference = assistantId as? ConfigurationReference.Enterprise ?: return emptyList()
+        val identity = enterpriseIdentity ?: return emptyList()
+        if (reference.authority != identity.authority || !access(ConfigurationCategory.ASSISTANT, reference).canExecute) return emptyList()
+        val configuration = enterpriseConfiguration ?: return emptyList()
+        val definition = configuration.assistants.singleOrNull { it.id == reference.id } ?: return emptyList()
+        val seeds = configuration.memorySeeds.associateBy { it.id }
+        return definition.memorySeedIds.map { seeds.getValue(it) }
+    }
+
     fun availableChatModel(assistant: Assistant): Model? = assistantModel(assistant)
         .takeIf { it.isAvailable }?.reference?.let { models[it]?.model?.withAssistantSearch(assistant) }
 

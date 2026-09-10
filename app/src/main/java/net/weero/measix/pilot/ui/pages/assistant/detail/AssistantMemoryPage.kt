@@ -113,6 +113,7 @@ internal fun AssistantMemoryContent(
     onAddMemory: (MemoryRecord) -> Unit,
     onUpdateMemory: (MemoryRecord) -> Unit,
     onDeleteMemory: (MemoryRecord) -> Unit,
+    memorySeeds: List<net.weero.measix.pilot.service.AssistantMemorySeedUiModel> = emptyList(),
 ) {
     val memoryDialogState = useEditState<MemoryRecord> {
         if (it.id == 0) {
@@ -257,6 +258,20 @@ internal fun AssistantMemoryContent(
                     )
                 }
             )
+        }
+
+        if (memorySeeds.isNotEmpty()) {
+            Text(stringResource(R.string.assistant_enterprise_memory_seed), style = MaterialTheme.typography.titleMedium)
+            Text(stringResource(R.string.assistant_enterprise_memory_seed_description), style = MaterialTheme.typography.bodySmall)
+            memorySeeds.forEach { seed ->
+                key(seed.id) {
+                    Card(colors = CustomColors.cardColorsOnSurfaceContainer, modifier = Modifier.fillMaxWidth()) {
+                        androidx.compose.foundation.text.selection.SelectionContainer {
+                            Text(seed.content, Modifier.padding(16.dp))
+                        }
+                    }
+                }
+            }
         }
 
         Box(

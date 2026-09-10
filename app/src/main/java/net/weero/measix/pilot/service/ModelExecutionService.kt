@@ -312,7 +312,12 @@ internal class ModelExecutionService(
                 check((state as? EnterpriseState.Available)?.manifest?.phase ==
                     net.weero.measix.pilot.data.enterprise.EnterpriseSessionPhase.READY) { "enterprise_session_not_ready" }
             }
-            return settings.withExecutionConfiguration(access.scope, state, operation)
+            return settings.withExecutionConfiguration(access.scope, state) { snapshot ->
+                // Session time can expire while waiting for the user configuration transaction.
+                if (page != null) sessions.requirePublishedSelection(page)
+                else sessions.requirePublishedRealmAccess(access)
+                operation(snapshot)
+            }
         }
         return if (page != null) {
             check(page.access == access) { "model_execution_page_scope_mismatch" }
