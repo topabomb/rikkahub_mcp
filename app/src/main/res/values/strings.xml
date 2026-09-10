@@ -324,7 +324,7 @@
   <string name="chat_page_compress_additional_prompt">Additional Instructions (Optional)</string>
   <string name="chat_page_compress_additional_prompt_hint">Specify what to preserve or focus on</string>
   <string name="chat_page_compress_context">Compress History</string>
-  <string name="chat_page_compress_context_desc">Summarize older complete turns while keeping recent messages.</string>
+  <string name="chat_page_compress_context_desc">Replace older complete turns with a summary and keep recent messages. Local example models only excerpt part of the input; they do not summarize its meaning. Use them only with test conversations.</string>
   <string name="chat_page_compress_context_title">Compress Conversation History</string>
   <string name="chat_page_compress_keep_recent">Minimum recent messages to keep</string>
   <string name="chat_page_compress_not_enough_messages">Not enough messages to compress. Reduce the number of messages to keep or add more messages.</string>

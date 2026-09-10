@@ -306,7 +306,7 @@
   <string name="chat_page_compress_additional_prompt">追加指示（オプション）</string>
   <string name="chat_page_compress_additional_prompt_hint">保持または重点的に扱う内容を指定</string>
   <string name="chat_page_compress_context">履歴を圧縮</string>
-  <string name="chat_page_compress_context_desc">古い完全な会話ターンを要約し、最近のメッセージを保持します。</string>
+  <string name="chat_page_compress_context_desc">以前の完全な会話ターンを要約に置き換え、最近のメッセージを保持します。ローカルサンプルモデルは入力の一部を抜粋するだけで、意味を要約しません。テスト用の会話でのみ使用してください。</string>
   <string name="chat_page_compress_context_title">会話履歴を圧縮</string>
   <string name="chat_page_compress_keep_recent">保持する最近のメッセージの最小数</string>
   <string name="chat_page_compress_not_enough_messages">圧縮するためのメッセージが不足しています。保持するメッセージ数を減らすか、メッセージを追加してください。</string>

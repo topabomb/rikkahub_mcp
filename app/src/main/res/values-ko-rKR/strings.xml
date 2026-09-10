@@ -306,7 +306,7 @@
   <string name="chat_page_compress_additional_prompt">추가 지침(선택 사항)</string>
   <string name="chat_page_compress_additional_prompt_hint">보존하거나 집중할 내용을 지정하세요</string>
   <string name="chat_page_compress_context">기록 압축</string>
-  <string name="chat_page_compress_context_desc">오래된 전체 대화 턴을 요약하고 최근 메시지는 유지합니다.</string>
+  <string name="chat_page_compress_context_desc">이전의 완전한 대화 턴을 요약으로 대체하고 최근 메시지는 유지합니다. 로컬 예제 모델은 입력의 일부만 발췌하며 의미를 요약하지 않습니다. 테스트 대화에서만 사용하세요.</string>
   <string name="chat_page_compress_context_title">대화 기록 압축</string>
   <string name="chat_page_compress_keep_recent">유지할 최근 메시지의 최소 개수</string>
   <string name="chat_page_compress_not_enough_messages">압축할 메시지가 부족합니다. 유지할 메시지 수를 줄이거나 더 많은 메시지를 추가하세요.</string>

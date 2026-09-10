@@ -208,11 +208,12 @@ class GenerationSideEffects internal constructor(
 
     private suspend fun runBackgroundGeneration(
         captured: CapturedModelConfiguration,
+        role: ModelSelectionRole,
         prompt: String,
     ): String? {
         val result = captured.model.requests.execute { target ->
             target.generateText(providerManager, listOf(ModelRequestMessage.user(prompt)),
-                backgroundTextGenerationParams(captured.model.model))
+                backgroundTextGenerationParams(captured.model.model), role)
         }
         return result.choices.getOrNull(0)?.message?.toText()
     }
@@ -263,6 +264,7 @@ class GenerationSideEffects internal constructor(
 
             val generatedTitle = runBackgroundGeneration(
                 captured = captured,
+                role = ModelSelectionRole.TITLE,
                 prompt = settings.titlePrompt.applyPlaceholders(
                     "locale" to Locale.getDefault().displayName,
                     "content" to snapshot.currentMessages()
@@ -323,6 +325,7 @@ class GenerationSideEffects internal constructor(
 
             val generated = runBackgroundGeneration(
                 captured = captured,
+                role = ModelSelectionRole.SUGGESTION,
                 prompt = settings.suggestionPrompt.applyPlaceholders(
                     "locale" to Locale.getDefault().displayName,
                     "content" to snapshot.currentMessages()
@@ -409,6 +412,7 @@ class GenerationSideEffects internal constructor(
 
             return runBackgroundGeneration(
                 captured = captured,
+                role = ModelSelectionRole.COMPRESS,
                 prompt = prompt,
             )?.trim()
                 ?: throw IllegalStateException("No model available for compression")

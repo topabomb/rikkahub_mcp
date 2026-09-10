@@ -1,6 +1,7 @@
 package net.weero.measix.pilot.service.runtime
 
 import android.content.Context
+import net.weero.measix.pilot.data.configuration.ModelSelectionRole
 import io.mockk.mockk
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.toList
@@ -86,6 +87,20 @@ class ModelRequestTransportTest {
         assertTrue(streamed.all { it.usage == null })
         io.mockk.verify { providers wasNot io.mockk.Called }
     }
+    @Test fun `local summary response is bounded and marks omitted input without invoking tools`() = runBlocking {
+        val providers = mockk<ProviderManager>()
+        val messages = listOf(ModelRequestMessage.user("custom " + "a".repeat(2000)))
+        val params = TextGenerationParams(Model(modelId = "local-example"), tools = listOf(
+            FrozenToolDefinition("mcp__enterprise_test__discover_tools", "", null, "")))
+        val result = ModelRequestTarget.LocalExample.generateText(providers, messages, params, ModelSelectionRole.COMPRESS)
+            .choices.single().message!!
+        assertTrue(result.getTools().isEmpty())
+        assertTrue(result.toText().length < 600)
+        assertTrue(result.toText().contains("custom"))
+        assertTrue(result.toText().contains("其余输入已省略"))
+        io.mockk.verify { providers wasNot io.mockk.Called }
+    }
+
     @Test fun `example discovery never accepts user supplied refs prior turns or malformed results`() = runBlocking {
         val providers = mockk<ProviderManager>()
         val discover = FrozenToolDefinition("mcp__enterprise_test__discover_tools", "", null, "")

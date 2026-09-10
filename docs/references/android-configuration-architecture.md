@@ -109,6 +109,7 @@ PrepareEnterpriseExampleAssets 从公开完整模板派生 enterprise.local.iden
 企业本地示例模型使用既有 RequestAssembler、StepRunner、流式合并和 Turn 提交链，返回明确的模拟文本；图片只确认接收，不声称完成真实视觉推理。私有模型 binding 复用 OpenAI Chat/Responses、Claude、Google 的既有 wire builder；IMAGE 模型使用独立 `OPENAI_IMAGES` binding，复用生成与编辑接口。`RequestCredentials.Fixed` 只存在于请求参数，不轮换、不写用户 key cache，也不序列化到 Settings 或普通备份。自动认证与同名私有 header 不能同时配置；用户 header 不得改写认证、Host 或企业自有 header，用户 body 不得指定模型回退或路由。
 
 辅助模型选择从原域的角色配置解析：标题/建议未配置时尝试 fast，再使用原助手的聊天模型；摘要未配置时使用原助手聊天模型。只有 Personal 的历史 `DEFAULT_AUTO_MODEL_ID` 等同未配置，显式缺失、被撤权或类型不符的引用不回退。辅助角色不受企业助手固定聊天模型的绑定限制，但每个请求仍复验原助手和所选资源准入，保持原 wire shape/企业 binding revision。`ModelExecutionSnapshot` 是进程内执行快照，不持久化私有传输数据。聊天、附件识别与已启用的图片工具在同次配置读取中捕获，工具借用只含 `execute` 的 `ModelRequests`；Runtime 保留唯一模型 lease 和企业 binding，暂停继续只移交这一个资源 owner。模型 lease 在取得 binding 前登记到原 Runtime；辅助任务清理失败不能丢失重试 owner。
+本地模型适配器按调用方的 `ModelSelectionRole` 生成标题、逐行建议和显式标注的模拟摘要；不通过提示词关键词推断用途，辅助生成不发起工具调用。摘要仅保留有界输入摘录，注明省略，不宣称具备真实语义归纳能力。真实 Provider 仍接收原提示词和参数，标题/建议/摘要均经原会话 owner 提交；没有第二条本地持久化路径。
 
 私有请求带无身份、无凭据的 `PrivateRequest` 标记，现有 HTTP 日志入口跳过该请求。共享网络边界在 OkHttp 跟随跨 origin 重定向前拒绝请求，避免 Google/Claude 与自定义私有 header 被转发；个人请求保持原日志和重定向行为。图片 URL 结果的后续下载继承私有日志标记，但不转发原认证和企业 header。企业 MCP 已接入原 Session/binding/interaction 的执行准入与版本屏障，管理页通过 McpQueryService 按原 RealmSelection 投影目录及只读受管工具；Speech 通过独立应用 owner 接入同一原 Session、binding 和 interaction 边界，具体见 TTS/ASR 小节。
 

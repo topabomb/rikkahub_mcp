@@ -232,13 +232,38 @@ class AuxiliaryGenerationOwnershipTest {
         }
     }
 
-    private suspend fun TestScope.fixture(block: suspend (Fixture) -> Unit) {
-        val f = Fixture(this)
+    @Test fun `local auxiliary requests commit title suggestions and an explicit simulated summary through original owners`() = runTest {
+        fixture(local = true) { f ->
+            f.effects.launchTitle(f.runtime, f.page.access, true).await()
+            val title = f.runtime.durable.header.title
+            assertTrue(title.isNotBlank() && title.length <= 10)
+            assertFalse(title.contains("已收到"))
+            f.effects.launchSuggestion(f.runtime, f.page.access).await()
+            val suggestions = f.runtime.durable.header.chatSuggestions
+            assertTrue(suggestions.size in 3..5)
+            assertTrue(suggestions.all { it.isNotBlank() && it.length <= 10 })
+            f.coordinator.executeOrThrow(f.runtime.id, AppendUserMessage(UIMessage.user("long context "+ "x".repeat(1000))))
+            assertTrue(f.application.compress(f.page.commandTarget, "", 100, 0).isSuccess)
+            val summary = f.runtime.durable.currentMessages().single().toText()
+            assertTrue(summary.contains("本地模拟摘要"))
+            assertTrue(summary.contains("original"))
+            assertTrue(summary.contains("其余输入已省略"))
+            assertTrue(summary.length < 600)
+            assertFalse(summary.contains("You are a conversation compression assistant"))
+            assertEquals(title, f.runtime.durable.header.title)
+            assertTrue(f.runtime.durable.header.chatSuggestions.isEmpty())
+            assertFalse(f.runtime.hasAuxiliaryWork)
+            coVerify(exactly = 0) { f.provider.generateText(any(), any(), any()) }
+        }
+    }
+
+    private suspend fun TestScope.fixture(local: Boolean = false, block: suspend (Fixture) -> Unit) {
+        val f = Fixture(this, local)
         try { f.initialize(); block(f) }
         finally { f.reply.complete("cleanup"); f.appScope.cancel(); f.appScope.coroutineContext[Job]?.join() }
     }
 
-    private inner class Fixture(test: TestScope) {
+    private inner class Fixture(test: TestScope, local: Boolean) {
         val appScope = AppScope(StandardTestDispatcher(test.testScheduler))
         val sessions = EnterpriseSessionController(EnterpriseAppliedStore(temporary.newFolder()))
         val repository = mockk<ConversationRepository>()
@@ -272,7 +297,9 @@ class AuxiliaryGenerationOwnershipTest {
             val model = Model(modelId = "test")
             val configuration = Settings(providers = listOf(ProviderSetting.OpenAI(models = listOf(model))),
                 chatModelId = model.id, titleModelId = model.id, suggestionModelId = model.id,
-                compressModelId = model.id, enableSuggestion = true)
+                compressModelId = model.id, enableSuggestion = true).let {
+                if (local) it.copy(titlePrompt = "custom 查看企业公告 {content}", suggestionPrompt = "custom 查看企业公告 {content}") else it
+            }
             every { settings.effectiveSettings } returns MutableStateFlow(EffectiveSettingsSnapshot(
                 configuration, SettingsAccessIndex(), 0, ManagedConfigurationState.ABSENT))
             net.weero.measix.pilot.test.installExecutionConfigurationFixture(settings)
@@ -280,7 +307,7 @@ class AuxiliaryGenerationOwnershipTest {
                 val scope = firstArg<net.weero.measix.pilot.data.configuration.ConfigurationScope>()
                 val document = UserSettingsDocument.empty().withPersonalSettings(configuration).let { document ->
                     document.copy(preferences = document.preferences.withSelections(scope,
-                        document.preferences.forScope(net.weero.measix.pilot.data.configuration.ConfigurationScope.Personal)))
+                        if (local) ResourceSelections() else document.preferences.forScope(net.weero.measix.pilot.data.configuration.ConfigurationScope.Personal)))
                 }
                 thirdArg<suspend (ExecutionConfigurationSnapshot) -> Any?>()(ExecutionConfigurationSnapshot(
                     configuration, net.weero.measix.pilot.data.configuration.ConfigurationResolver.resolve(document, scope, secondArg()), "fixture"))

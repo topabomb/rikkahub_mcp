@@ -306,7 +306,7 @@
   <string name="chat_page_compress_additional_prompt">Дополнительные инструкции (по желанию)</string>
   <string name="chat_page_compress_additional_prompt_hint">Укажите, что сохранить или на чём сосредоточиться</string>
   <string name="chat_page_compress_context">Сжать историю</string>
-  <string name="chat_page_compress_context_desc">Сводит старые полные ходы диалога в резюме, сохраняя недавние сообщения.</string>
+  <string name="chat_page_compress_context_desc">Заменить ранние полные циклы диалога сводкой, сохранив последние сообщения. Локальные демонстрационные модели лишь вырезают часть текста, не обобщая его смысл. Используйте их только в тестовых беседах.</string>
   <string name="chat_page_compress_context_title">Сжать историю чата</string>
   <string name="chat_page_compress_keep_recent">Минимум сохраняемых недавних сообщений</string>
   <string name="chat_page_compress_not_enough_messages">Недостаточно сообщений для сжатия. Уменьшите количество сохраняемых сообщений или добавьте больше сообщений.</string>

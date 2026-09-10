@@ -308,7 +308,7 @@
   <string name="chat_page_compress_additional_prompt">附加说明（可选）</string>
   <string name="chat_page_compress_additional_prompt_hint">指定要保留或关注的内容</string>
   <string name="chat_page_compress_context">压缩历史</string>
-  <string name="chat_page_compress_context_desc">将较早的完整对话轮次总结为摘要，并保留最近消息。</string>
+  <string name="chat_page_compress_context_desc">用摘要替换较早的完整对话轮次，并保留最近消息。本地示例模型仅截取部分输入，不进行语义归纳，请仅用测试聊天验证。</string>
   <string name="chat_page_compress_context_title">压缩对话历史</string>
   <string name="chat_page_compress_keep_recent">至少保留最近消息</string>
   <string name="chat_page_compress_not_enough_messages">消息数量不足，无法压缩。请减少保留的消息数量或添加更多消息。</string>

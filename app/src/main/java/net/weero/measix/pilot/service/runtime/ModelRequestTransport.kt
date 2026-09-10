@@ -7,6 +7,7 @@ import kotlinx.serialization.json.*
 import me.rerere.ai.ui.ProviderToolCallSlot
 import me.rerere.ai.ui.ToolResultStatus
 import kotlin.uuid.Uuid
+import net.weero.measix.pilot.data.configuration.ModelSelectionRole
 import me.rerere.ai.core.MessageRole
 import me.rerere.ai.core.ModelRequestMessage
 import me.rerere.ai.provider.ImageGenerationParams
@@ -51,11 +52,12 @@ internal suspend fun ModelRequestTarget.generateText(
     providers: ProviderManager,
     messages: List<ModelRequestMessage>,
     params: TextGenerationParams,
+    role: ModelSelectionRole = ModelSelectionRole.CHAT,
 ): MessageChunk = when (this) {
     is ModelRequestTarget.Remote -> providers.getProviderByType(provider).generateText(
         provider, messages, requestParams(params),
     )
-    ModelRequestTarget.LocalExample -> exampleChunk(params, exampleResponse(messages, params), stream = false, finished = true)
+    ModelRequestTarget.LocalExample -> exampleChunk(params, exampleAuxiliaryResponse(messages, role) ?: exampleResponse(messages, params), stream = false, finished = true)
 }
 
 internal suspend fun ModelRequestTarget.generateImage(
@@ -136,6 +138,20 @@ private fun ModelRequestTarget.Remote.validateOverrides(customHeaders: List<Cust
             "enterprise_request_routing_override"
         }
     }
+}
+
+/** The caller supplies the task purpose; customized prompts cannot turn auxiliary work into tool calls. */
+private fun exampleAuxiliaryResponse(messages: List<ModelRequestMessage>, role: ModelSelectionRole): UIMessage? = when (role) {
+    ModelSelectionRole.TITLE -> UIMessage.assistant("企业示例对话")
+    ModelSelectionRole.SUGGESTION -> UIMessage.assistant("查看企业信息\n查看企业公告\n查询企业指南")
+    ModelSelectionRole.COMPRESS -> {
+        val prompt = messages.lastOrNull { it.role == MessageRole.USER }?.toText().orEmpty()
+        val content = if (prompt.contains("<conversation>") && prompt.contains("</conversation>"))
+            prompt.substringAfter("<conversation>").substringBeforeLast("</conversation>").trim() else prompt
+        UIMessage.assistant("[本地模拟摘要：仅截取输入，未进行语义归纳]\n" + content.take(512) +
+            if (content.length > 512) "\n[其余输入已省略]" else "")
+    }
+    else -> null
 }
 
 /** The simulated model emits ordinary calls from this request's frozen tool surface, never executes them. */
