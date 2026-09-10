@@ -1,6 +1,7 @@
 package net.weero.measix.pilot.service
 
 import me.rerere.common.configuration.ConfigurationReference
+import net.weero.measix.pilot.data.files.requireDiscarded
 import net.weero.measix.pilot.data.configuration.AssistantPreferenceChange
 import net.weero.measix.pilot.service.runtime.ConversationCommandCoordinator
 import net.weero.measix.pilot.service.runtime.OptionalString
@@ -20,6 +21,7 @@ internal class ConfigurationApplicationService(
     private val recoveryGate: ApplicationRecoveryGate,
     private val conversations: ConversationCommandCoordinator,
     private val workspaces: WorkspaceQueryService,
+    private val artifacts: net.weero.measix.pilot.data.files.ArtifactStore,
 ) {
     suspend fun selectConversationSearch(target: ConversationAssistantTarget, reference: ConfigurationReference) {
         recoveryGate.awaitReady()
@@ -41,16 +43,21 @@ internal class ConfigurationApplicationService(
         val page = target.conversation
         enterpriseSessions.withSelectedRealmSelection(page.selection) {
             page.requireOpen()
-            if (change is AssistantPreferenceChange.Workspace && change.id != null) {
-                check(workspaces.getWorkspace(change.id.toString()) != null) { "workspace_not_found" }
+            val workspaceChanged = change is AssistantPreferenceChange.Workspace || change == AssistantPreferenceChange.ResetUsage ||
+                change is AssistantPreferenceChange.EditUsage && change.baseline.workspaceId != change.edited.workspaceId
+            val newWorkspace = when (change) {
+                is AssistantPreferenceChange.Workspace -> change.id
+                is AssistantPreferenceChange.EditUsage -> change.edited.workspaceId.takeIf { workspaceChanged }
+                else -> null
             }
-            settings.changeAssistantPreference(page.selection.access.scope, enterpriseSessions.state.value,
-                target.assistantId, change, page::requireOpen) { commit ->
+            if (newWorkspace != null) check(workspaces.getWorkspace(newWorkspace.toString()) != null) { "workspace_not_found" }
+            artifacts.updateAssistantPreferenceReferences(page.selection.access.scope, enterpriseSessions.state.value,
+                target.assistantId, change, { page.requireOpen(); enterpriseSessions.requirePublishedSelection(page.selection) }) { commit ->
                 conversations.withRootHeaders(page.selection.access.scope, listOf(page.conversationId)) { headers ->
                     page.requireOpen()
                     check(headers.single().assistantId == target.assistantId) { "conversation_assistant_changed" }
                     var cwdReset = false
-                    if (change is AssistantPreferenceChange.Workspace && headers.single().workspaceCwd != null) {
+                    if (workspaceChanged && headers.single().workspaceCwd != null) {
                         conversations.executeOrThrow(page.conversationId, UpdateHeader(workspaceCwd = OptionalString.Set(null)))
                         cwdReset = true
                     }
@@ -62,6 +69,24 @@ internal class ConfigurationApplicationService(
                     }
                 }
             }
+        }
+    }
+
+    suspend fun importAssistantImage(target: ConversationAssistantTarget, uri: android.net.Uri, avatar: Boolean) {
+        recoveryGate.awaitReady()
+        val page = target.conversation
+        enterpriseSessions.withSelectedRealmSelection(page.selection) { page.requireOpen() }
+        val owned = artifacts.createConfigurationImage(page.selection.access.scope, uri)
+        try {
+            changeAssistantPreference(target, if (avatar) AssistantPreferenceChange.Avatar(
+                net.weero.measix.pilot.data.model.Avatar.Image(owned.uri.toString())) else AssistantPreferenceChange.Background(owned.uri.toString()))
+            kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) { artifacts.publishUnpublished(owned) }
+        } catch (error: Throwable) {
+            kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) {
+                try { artifacts.discardUnpublished(owned).requireDiscarded("assistant usage image", allowAlreadyPublished = true) }
+                catch (cleanup: Throwable) { error.addSuppressed(cleanup) }
+            }
+            throw error
         }
     }
 

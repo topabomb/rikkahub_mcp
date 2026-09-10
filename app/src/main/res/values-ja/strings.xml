@@ -1688,4 +1688,14 @@
   <string name="enterprise_reload_source">ソースを再読み込み</string>
   <string name="enterprise_source_changed">ソースが変更されました。再読み込みしてから編集してください。</string>
   <string name="enterprise_model_still_referenced">企業アシスタントまたは既定設定が参照中です。完全な設定で参照を変更してから削除・無効化してください。</string>
+  <string name="assistant_usage_title">このスペースでの設定</string>
+  <string name="assistant_usage_description">このスペース内での使用設定です。名前、説明、システムプロンプトは定義に従います。</string>
+  <string name="assistant_usage_reset">このスペースの設定をリセット</string>
+  <string name="assistant_usage_reset_description">追加サブアシスタント権限を含む使用設定をすべて削除します。共有定義と履歴は保持されます。</string>
+  <string name="assistant_usage_shared_edit">共有アシスタント定義を編集</string>
+  <string name="assistant_usage_shared_warning">これは共有ユーザー設定です。変更はこのアシスタントを使うすべてのスペースに影響します。</string>
+  <string name="assistant_usage_inherited_binding">定義から継承されているため、ここでは削除できません</string>
+  <string name="assistant_usage_inherit_model">定義のモデルを使用</string>
+  <string name="assistant_usage_fixed_model">企業が指定した固定モデル</string>
+  <string name="assistant_preset_media_kept">テキスト以外の内容もあります。テキストを編集しても保持されます。</string>
 </resources>

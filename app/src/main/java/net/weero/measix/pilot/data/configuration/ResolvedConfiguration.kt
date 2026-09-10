@@ -62,6 +62,7 @@ internal data class ResolvedConfiguration(
     val assistants: Map<ConfigurationReference, Assistant>,
     val selections: ResourceSelections,
     val storedSelections: ResourceSelections,
+    val inheritedSubAssistantIds: Map<ConfigurationReference, Set<ConfigurationReference>> = emptyMap(),
 ) {
     fun access(category: ConfigurationCategory, reference: ConfigurationReference): ConfigurationAccess =
         catalog[ConfigurationKey(category, reference)]?.access ?: ConfigurationAccess(
@@ -244,6 +245,12 @@ internal object ConfigurationResolver {
                 selectedASRProviderId = selected.selectedASRProviderId ?: enterpriseReference(defaults?.asrId),
             )
         }
-        return ResolvedConfiguration(scope, identity, enterprise, catalog, models, assistants, effectiveSelections, selected)
+        val inheritedSubAssistants = if (scope is ConfigurationScope.Personal) emptyMap() else buildMap {
+            user.assistants.forEach { put(it.id, it.allowedSubAssistantIds) }
+            if (identity != null) enterprise?.assistants?.forEach { definition ->
+                put(identity.reference(definition.id), definition.allowedSubAssistantIds.mapTo(linkedSetOf(), identity::reference))
+            }
+        }
+        return ResolvedConfiguration(scope, identity, enterprise, catalog, models, assistants, effectiveSelections, selected, inheritedSubAssistants)
     }
 }

@@ -20,7 +20,7 @@ MemoryRepository 在原 caller 仍有效时进入事务，并在提交决定前�
 
 ## 查询与调用
 
-MemoryView 保存授权上下文和记录；编辑/删除使用记录的原上下文。订阅在 Session 退出、主体变化或期限届满时取消数据观察并清空 rows，明确显示不可用。同一旧订阅不因重新登录恢复。配置模式/策略变化只替换当前数据观察，不因一次旧地址的查询失败永久结束外层观察。
+MemoryService 的原页面订阅接收 RealmAccess，延迟订阅也不按 scope 重新捕获 Session；共享定义入口仍在订阅时捕获其明确范围。MemoryView 保存授权上下文和记录；编辑/删除使用记录的原上下文。订阅在 Session 退出、主体变化或期限届满时取消数据观察并清空 rows，明确显示不可用。同一旧订阅不因重新登录恢复。配置模式/策略变化只替换当前数据观察，不因一次旧地址的查询失败永久结束外层观察。
 
 Master 的 START 使用会话持久 scope 捕获 RealmAccess；Child 继承父调用的 access 并核对父子 scope，不重新取得新 Session。Disclosure 读取与 memory_tool 使用同一捕获的 MemoryAccess；工具每次写入复验。assistant_inspect 使用捕获域的配置核实 caller/target/主从授权，只披露目标的局部记忆；共享或关闭模式返回空 rows。
 

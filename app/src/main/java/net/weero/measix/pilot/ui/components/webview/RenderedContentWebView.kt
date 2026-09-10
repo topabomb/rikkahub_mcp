@@ -26,6 +26,7 @@ internal fun rememberRenderedContentState(
             files.requireContentAccess(source)
             when (source) {
                 is RenderedContentSource.Conversation -> queries.observeViewAccess(source.view).collect { value = source.takeIf { _ -> it } }
+                is RenderedContentSource.RealmConfiguration -> queries.observeViewAccess(source.view).collect { value = source.takeIf { _ -> it } }
                 RenderedContentSource.Static, RenderedContentSource.UserConfiguration -> value = source
             }
         } catch (cancelled: CancellationException) { throw cancelled }

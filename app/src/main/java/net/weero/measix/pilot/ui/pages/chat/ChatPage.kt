@@ -511,6 +511,7 @@ private fun ChatPageContent(
     var showFilesSheet by remember(target) { mutableStateOf(false) }
     var showMcpPicker by remember(target) { mutableStateOf(false) }
     var showLocalTools by remember(target) { mutableStateOf(false) }
+    var usageEditorTab by remember(target) { mutableStateOf<Int?>(null) }
     var showWorkspaceSheet by remember(target) { mutableStateOf(false) }
     var showAssistantPicker by remember(target) { mutableStateOf(false) }
     val workspaceNamesById = remember(workspaces) {
@@ -848,10 +849,12 @@ private fun ChatPageContent(
                 },
                 onSwitchAssistant = { showAssistantPicker = true },
                 onManageAssistant = {
-                    navController.navigate(Screen.AssistantDetail(snapshot.header.assistantId.toString()))
+                    if (target?.conversation?.selection?.access?.scope is net.weero.measix.pilot.data.configuration.ConfigurationScope.Enterprise) usageEditorTab = 0
+                    else navController.navigate(Screen.AssistantDetail(snapshot.header.assistantId.toString()))
                 },
                 onMemoryClick = {
-                    navController.navigate(Screen.AssistantMemory(snapshot.header.assistantId.toString()))
+                    if (target?.conversation?.selection?.access?.scope is net.weero.measix.pilot.data.configuration.ConfigurationScope.Enterprise) usageEditorTab = 3
+                    else navController.navigate(Screen.AssistantMemory(snapshot.header.assistantId.toString()))
                 },
             )
             if (isActiveRoute) {
@@ -909,7 +912,36 @@ private fun ChatPageContent(
             )
         }
 
+        if (usageEditorTab != null && assistant != null && configuration != null) key(configuration.target) {
+            val originalView = vm.detailSource(configuration.target)
+            if (originalView != null) AdaptiveModal(onDismissRequest = { usageEditorTab = null }) {
+                net.weero.measix.pilot.ui.pages.assistant.detail.AssistantUsageEditor(
+                    configuration, originalView, setting, workspaces, mcpChoices,
+                    onChange = { vm.changeAssistantPreference(configuration.target, it) },
+                    onImportImage = { uri, avatar -> vm.importAssistantUsageImage(configuration.target, uri, avatar) },
+                    requireOriginal = { vm.requireConfigurationTarget(configuration.target) },
+                    onEditSharedDefinition = {
+                        usageEditorTab = null
+                        navController.navigate(Screen.AssistantDetail(configuration.target.assistantId.toString()))
+                    },
+                    onManageQuickMessages = { usageEditorTab = null; navController.navigate(Screen.QuickMessages) },
+                    onManagePrompts = { usageEditorTab = null; navController.navigate(Screen.Prompts) },
+                    onManageSkills = { usageEditorTab = null; navController.navigate(Screen.Skills) },
+                    onClose = { usageEditorTab = null },
+                    initialTab = requireNotNull(usageEditorTab),
+                )
+            }
+        }
+
         if (showLocalTools && assistant != null && configuration != null) key(configuration.target) {
+            val files: net.weero.measix.pilot.service.FileManagementApplicationService = koinInject()
+            val imageResolver: suspend (String) -> net.weero.measix.pilot.service.ImageSource? = remember(configuration.target, files) {
+                val view = vm.detailSource(configuration.target)
+                val resolve: suspend (String) -> net.weero.measix.pilot.service.ImageSource? = { url ->
+                    if (view == null) null else files.resolveConfigurationImage(url, view)
+                }
+                resolve
+            }
             AdaptiveModal(onDismissRequest = { showLocalTools = false }) {
                 AssistantLocalToolContent(
                     innerPadding = PaddingValues(0.dp),
@@ -918,6 +950,11 @@ private fun ChatPageContent(
                     imageGenerationAvailable = imageGenerationAvailable,
                     onToggleLocalTool = { option, enabled -> changePreference(AssistantPreferenceChange.LocalTool(option, enabled)) },
                     onUpdateSubAssistantIds = null,
+                    onToggleSubAssistant = { id, enabled -> vm.changeAssistantPreference(configuration.target, AssistantPreferenceChange.SubAssistant(id, enabled)) },
+                    inheritedSubAssistantIds = configuration.inheritedSubAssistantIds,
+                    imageResolver = imageResolver,
+                    subAssistantAccess = configuration.resources.filter { it.key.category == net.weero.measix.pilot.data.configuration.ConfigurationCategory.ASSISTANT }
+                        .associate { it.key.reference to it.access },
                 )
             }
         }

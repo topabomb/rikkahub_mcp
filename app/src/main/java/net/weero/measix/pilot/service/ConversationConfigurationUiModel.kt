@@ -31,6 +31,7 @@ internal data class ConversationConfigurationUiModel(
     val searchSelection: ConfigurationSelection,
     val fixedMcpBindings: Set<ConfigurationReference>,
     val starters: List<ConversationStarterUiModel>,
+    val inheritedSubAssistantIds: Set<ConfigurationReference> = emptySet(),
 ) {
     val canChangeModel: Boolean get() = assistant != null && target.assistantId is ConfigurationReference.User
     val canEditDefinition: Boolean get() = target.assistantId is ConfigurationReference.User
@@ -57,5 +58,6 @@ internal fun ResolvedConfiguration.conversationConfiguration(target: Conversatio
                 ConversationStarterUiModel(ConfigurationReference.Enterprise(reference.authority, it.id), it.title, it.prompt)
             }
         }.orEmpty(),
+        inheritedSubAssistantIds[target.assistantId].orEmpty(),
     )
 }

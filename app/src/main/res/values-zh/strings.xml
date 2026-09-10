@@ -1688,4 +1688,14 @@
   <string name="enterprise_reload_source">重新读取来源</string>
   <string name="enterprise_source_changed">来源已变更，请重新读取后再修改。</string>
   <string name="enterprise_model_still_referenced">企业助手或默认配置仍引用该模型。请先在完整配置中调整这些引用，再删除或停用。</string>
+  <string name="assistant_usage_title">本域使用设置</string>
+  <string name="assistant_usage_description">只影响此助手在当前空间的使用。名称、描述和系统提示词来自助手定义。</string>
+  <string name="assistant_usage_reset">恢复本域默认设置</string>
+  <string name="assistant_usage_reset_description">移除此助手在当前空间的全部使用偏好，包括额外子助手授权。共享定义和历史记录保留。</string>
+  <string name="assistant_usage_shared_edit">编辑我的助手定义</string>
+  <string name="assistant_usage_shared_warning">这是共享用户配置，修改会影响所有使用此助手的空间。</string>
+  <string name="assistant_usage_inherited_binding">来自助手定义，不能在本域移除</string>
+  <string name="assistant_usage_inherit_model">跟随助手定义的模型</string>
+  <string name="assistant_usage_fixed_model">企业固定模型</string>
+  <string name="assistant_preset_media_kept">此预设还包含非文本内容，编辑文字会保留这些内容。</string>
 </resources>

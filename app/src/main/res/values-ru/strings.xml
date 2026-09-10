@@ -1688,4 +1688,14 @@
   <string name="enterprise_reload_source">Перечитать источник</string>
   <string name="enterprise_source_changed">Источник изменился. Перечитайте его перед редактированием.</string>
   <string name="enterprise_model_still_referenced">Модель используется корпоративным ассистентом или настройкой по умолчанию. Измените ссылки в полной конфигурации перед удалением или отключением.</string>
+  <string name="assistant_usage_title">Настройки этого пространства</string>
+  <string name="assistant_usage_description">Настройки действуют в этом пространстве. Имя, описание и системный промпт берутся из определения.</string>
+  <string name="assistant_usage_reset">Сбросить настройки пространства</string>
+  <string name="assistant_usage_reset_description">Удалить все переопределения, включая дополнительные разрешения субассистентов. Общие определения и история сохранятся.</string>
+  <string name="assistant_usage_shared_edit">Изменить общее определение ассистента</string>
+  <string name="assistant_usage_shared_warning">Это общая пользовательская конфигурация. Изменения затронут все пространства, использующие этого ассистента.</string>
+  <string name="assistant_usage_inherited_binding">Унаследовано из определения; здесь удалить нельзя</string>
+  <string name="assistant_usage_inherit_model">Использовать модель из определения</string>
+  <string name="assistant_usage_fixed_model">Модель закреплена организацией</string>
+  <string name="assistant_preset_media_kept">В пресете есть нетекстовое содержимое. При редактировании текста оно сохраняется.</string>
 </resources>

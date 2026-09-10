@@ -292,6 +292,11 @@ class ChatVM internal constructor(
         if (previousAvatar != Avatar.Image(committedUri.toString())) artifactUseCase.maintainStorage()
     }
 
+    internal suspend fun importAssistantUsageImage(target: ConversationAssistantTarget, uri: android.net.Uri, avatar: Boolean) {
+        requireConfigurationTarget(target)
+        configurationApplicationService.importAssistantImage(target, uri, avatar)
+    }
+
     internal suspend fun changeAssistantPreference(target: ConversationAssistantTarget, change: AssistantPreferenceChange): Boolean =
         runConfigurationCommand(target) { configurationApplicationService.changeAssistantPreference(target, change) }
 

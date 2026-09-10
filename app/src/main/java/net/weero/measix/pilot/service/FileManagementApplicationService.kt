@@ -1,5 +1,7 @@
 package net.weero.measix.pilot.service
 
+import net.weero.measix.pilot.data.configuration.ConfigurationScope
+
 import java.io.File
 import java.io.IOException
 import kotlinx.coroutines.Job
@@ -67,12 +69,16 @@ class FileManagementApplicationService internal constructor(
             is RenderedContentSource.Conversation -> sessions.withSelectedRealmSelection(
                 RealmSelection(source.view.access, source.view.selectionRevision),
             ) { source.view.requireOpen(); action() }
+            is RenderedContentSource.RealmConfiguration -> sessions.withSelectedRealmSelection(
+                RealmSelection(source.view.access, source.view.selectionRevision)
+            ) { source.view.requireOpen(); action() }
             RenderedContentSource.UserConfiguration, RenderedContentSource.Static -> action()
         }
     }
 
     suspend fun resolveContentImage(source: RenderedContentSource, url: String): ImageSource? = when (source) {
         is RenderedContentSource.Conversation -> resolveConversationImage(source.view, url)
+        is RenderedContentSource.RealmConfiguration -> resolveConfigurationImage(url, source.view)
         RenderedContentSource.UserConfiguration -> resolveConfigurationImage(url)
         RenderedContentSource.Static -> externalImageSource(url)
     }
@@ -93,6 +99,7 @@ class FileManagementApplicationService internal constructor(
             } ?: return@withContentAccess null
             when (source) {
                 is RenderedContentSource.Conversation -> artifactStore.resolveMediaPreviewForFile(source.view.access.scope, file, owner = source.view.ownedArtifact(file))
+                is RenderedContentSource.RealmConfiguration -> artifactStore.resolveConfigurationMedia(file, source.view.access.scope)
                 RenderedContentSource.UserConfiguration -> artifactStore.resolveConfigurationMedia(file)
                 RenderedContentSource.Static -> null
             }
@@ -106,6 +113,7 @@ class FileManagementApplicationService internal constructor(
         val mime = withContentAccess(target.source) {
             when (val source = target.source) {
                 is RenderedContentSource.Conversation -> artifactStore.copyMediaTo(source.view.access.scope, target.artifactId, output, source.view.ownedArtifact(target.artifactId))
+                is RenderedContentSource.RealmConfiguration -> artifactStore.copyConfigurationMediaTo(target.artifactId, output, source.view.access.scope)
                 RenderedContentSource.UserConfiguration -> artifactStore.copyConfigurationMediaTo(target.artifactId, output)
                 RenderedContentSource.Static -> error("attachment_unavailable")
             }
@@ -120,6 +128,7 @@ class FileManagementApplicationService internal constructor(
         withContentAccess(target.source) {
             when (val source = target.source) {
                 is RenderedContentSource.Conversation -> artifactStore.requireMediaAccess(source.view.access.scope, target.artifactId, source.view.ownedArtifact(target.artifactId))
+                is RenderedContentSource.RealmConfiguration -> artifactStore.requireConfigurationMediaAccess(target.artifactId, source.view.access.scope)
                 RenderedContentSource.UserConfiguration -> artifactStore.requireConfigurationMediaAccess(target.artifactId)
                 RenderedContentSource.Static -> error("attachment_unavailable")
             }
@@ -164,19 +173,22 @@ class FileManagementApplicationService internal constructor(
         return sessions.withSelectedRealmSelection(key.selection) { requireOwner(); result }
     }
 
-    suspend fun resolveConfigurationImage(url: String): ImageSource? {
-        recoveryGate.awaitReady()
-        externalImageSource(url)?.let { return it }
+    suspend fun resolveConfigurationImage(url: String, view: ConversationViewLease? = null): ImageSource? {
+        val source = view?.let { RenderedContentSource.RealmConfiguration(it) } ?: RenderedContentSource.UserConfiguration
+        suspend fun <T> authorized(action: suspend () -> T): T = withContentAccess(source, action)
+        authorized { }
+        val scope = view?.access?.scope ?: ConfigurationScope.Personal
+        externalImageSource(url, "configuration:${view?.imageReadIdentity ?: "shared"}") { authorized { } }?.let { return it }
         val file = net.weero.measix.pilot.data.ai.attachments.AttachmentRefs.parseFileUrl(url)
             ?: if (net.weero.measix.pilot.data.files.LocalToolPath.parseUploadToolPath(url) != null) artifactStore.resolveToolPath(url) else null
-        val preview = artifactStore.resolveConfigurationImage(file ?: return null) ?: return null
+        val preview = authorized { artifactStore.resolveConfigurationImage(file ?: return@authorized null, scope) } ?: return null
         return ImageSource(
-            cacheIdentity = "configuration:${preview.artifactId}",
+            cacheIdentity = "configuration:${view?.imageReadIdentity ?: "shared"}:${preview.artifactId}",
             origin = ImageOrigin.UPLOAD,
             displayName = preview.displayName,
             modifiedAtMillis = preview.modifiedAtMillis,
-            verifyAccess = { recoveryGate.awaitReady(); artifactStore.requireConfigurationImageAccess(preview.artifactId) },
-            readPayload = { recoveryGate.awaitReady(); artifactStore.readConfigurationImage(preview.artifactId) },
+            verifyAccess = { authorized { artifactStore.requireConfigurationImageAccess(preview.artifactId, scope) } },
+            readPayload = { authorized { artifactStore.readConfigurationImage(preview.artifactId, scope) } },
         )
     }
 

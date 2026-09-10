@@ -260,46 +260,46 @@ class ArtifactStore(
 
     fun file(ref: LocalArtifactRef): File = payloadStore.file(ref.relativePath)
 
-    internal suspend fun resolveConfigurationImage(file: File): ArtifactMediaPreview? = resolveConfigurationMedia(file, image = true)
+    internal suspend fun resolveConfigurationImage(file: File, scope: ConfigurationScope = ConfigurationScope.Personal): ArtifactMediaPreview? = resolveConfigurationMedia(file, image = true, scope)
 
-    internal suspend fun resolveConfigurationMedia(file: File): ArtifactMediaPreview? = resolveConfigurationMedia(file, image = false)
+    internal suspend fun resolveConfigurationMedia(file: File, scope: ConfigurationScope = ConfigurationScope.Personal): ArtifactMediaPreview? = resolveConfigurationMedia(file, image = false, scope)
 
-    private suspend fun resolveConfigurationMedia(file: File, image: Boolean): ArtifactMediaPreview? = withContext(Dispatchers.IO) {
+    private suspend fun resolveConfigurationMedia(file: File, image: Boolean, scope: ConfigurationScope): ArtifactMediaPreview? = withContext(Dispatchers.IO) {
         val path = payloadStore.relativePathForFile(file) ?: return@withContext null
         withLifecycleLock {
             val entity = artifactDAO.getByPathAndState(path, ArtifactState.ACTIVE.name) ?: return@withLifecycleLock null
-            requireConfigurationMedia(entity.id, image)
+            requireConfigurationMedia(entity.id, image, scope)
             ArtifactMediaPreview(entity.id, AttachmentRefs.fileToFileUrl(payloadStore.file(entity.relativePath)), entity.displayName, entity.updatedAt)
         }
     }
 
-    internal suspend fun requireConfigurationImageAccess(artifactId: Long) = withContext(Dispatchers.IO) {
-        withLifecycleLock { requireConfigurationMedia(artifactId, image = true); Unit }
+    internal suspend fun requireConfigurationImageAccess(artifactId: Long, scope: ConfigurationScope = ConfigurationScope.Personal) = withContext(Dispatchers.IO) {
+        withLifecycleLock { requireConfigurationMedia(artifactId, image = true, scope); Unit }
     }
 
-    internal suspend fun requireConfigurationMediaAccess(artifactId: Long) = withContext(Dispatchers.IO) {
-        withLifecycleLock { requireConfigurationMedia(artifactId); Unit }
+    internal suspend fun requireConfigurationMediaAccess(artifactId: Long, scope: ConfigurationScope = ConfigurationScope.Personal) = withContext(Dispatchers.IO) {
+        withLifecycleLock { requireConfigurationMedia(artifactId, scope = scope); Unit }
     }
 
-    internal suspend fun readConfigurationImage(artifactId: Long): ByteArray = withContext(Dispatchers.IO) {
-        withLifecycleLock { readImagePayload(requireConfigurationMedia(artifactId, image = true)) }
+    internal suspend fun readConfigurationImage(artifactId: Long, scope: ConfigurationScope = ConfigurationScope.Personal): ByteArray = withContext(Dispatchers.IO) {
+        withLifecycleLock { readImagePayload(requireConfigurationMedia(artifactId, image = true, scope)) }
     }
 
-    internal suspend fun copyConfigurationMediaTo(artifactId: Long, output: java.io.OutputStream): String = withContext(Dispatchers.IO) {
+    internal suspend fun copyConfigurationMediaTo(artifactId: Long, output: java.io.OutputStream, scope: ConfigurationScope = ConfigurationScope.Personal): String = withContext(Dispatchers.IO) {
         withLifecycleLock {
-            val entity = requireConfigurationMedia(artifactId)
+            val entity = requireConfigurationMedia(artifactId, scope = scope)
             payloadStore.copyTo(entity.relativePath, output)
             entity.mimeType
         }
     }
 
-    private suspend fun requireConfigurationMedia(artifactId: Long, image: Boolean = false): ArtifactEntity {
-        val entity = if (image) requireReadableImage(ConfigurationScope.Personal, artifactId)
-            else requireReadableMedia(ConfigurationScope.Personal, artifactId)
+    private suspend fun requireConfigurationMedia(artifactId: Long, image: Boolean = false, scope: ConfigurationScope): ArtifactEntity {
+        val stored = requireNotNull(artifactDAO.getById(artifactId)) { "configuration_media_missing" }
+        check(stored.scope == ConfigurationScope.Personal || stored.scope == scope) { "configuration_media_scope_mismatch" }
+        val entity = if (image) requireReadableImage(stored.scope, artifactId) else requireReadableMedia(stored.scope, artifactId)
         settingsCoordinator.readCommitted { document ->
-            check(ArtifactReferencePolicy.roots(document.personalSettings()).any { rootRelativePath(it) == entity.relativePath }) {
-                "media_not_in_shared_configuration"
-            }
+            val roots = ArtifactReferencePolicy.scopedRoots(document)
+            check((roots[ConfigurationScope.Personal].orEmpty() + roots[scope].orEmpty()).any { rootRelativePath(it) == entity.relativePath }) { "media_not_in_configuration" }
         }
         return entity
     }
@@ -692,6 +692,27 @@ class ArtifactStore(
         }
     }
 
+    /** Returns an owned, validated image; the caller must commit a configuration root or discard it. */
+    internal suspend fun createConfigurationImage(scope: ConfigurationScope, uri: android.net.Uri): OwnedArtifact {
+        val owned = createFromUri(scope, uri, maxBytes = net.weero.measix.pilot.data.imggen.GeneratedMediaStore.MAX_IMAGE_BYTES.toLong())
+        return try {
+            withContext(kotlinx.coroutines.Dispatchers.IO) {
+                val image = file(owned.entity)
+                require(image.isFile && image.length() in 1..net.weero.measix.pilot.data.imggen.GeneratedMediaStore.MAX_IMAGE_BYTES.toLong()) {
+                    "configuration_image_size_invalid"
+                }
+                require(net.weero.measix.pilot.data.ai.attachments.ImageMime.isAcceptedImage(image.readBytes())) { "configuration_image_invalid" }
+            }
+            owned
+        } catch (error: Throwable) {
+            withContext(NonCancellable) {
+                try { discardUnpublished(owned).requireDiscarded("invalid configuration image") }
+                catch (cleanup: Throwable) { error.addSuppressed(cleanup) }
+            }
+            throw error
+        }
+    }
+
     /** Settings owns the writer before Artifact owns validation, commit and creation-pin handoff. */
     suspend fun updateSettingsReferences(transform: (Settings) -> Settings): Settings =
         settingsCoordinator.update(transform, ::commitSettingsRoots)
@@ -701,7 +722,9 @@ class ArtifactStore(
         state: net.weero.measix.pilot.data.enterprise.EnterpriseState,
         assistantId: me.rerere.common.configuration.ConfigurationReference,
         change: net.weero.measix.pilot.data.configuration.AssistantPreferenceChange,
-    ) = settingsCoordinator.changeAssistantPreference(scope, state, assistantId, change, ::commitSettingsRoots)
+        requireOwner: () -> Unit,
+        withCommit: suspend (suspend () -> Unit) -> Unit,
+    ) = settingsCoordinator.changeAssistantPreference(scope, state, assistantId, change, requireOwner, withCommit, ::commitSettingsRoots)
 
     internal suspend fun manageAssistantReferences(
         scope: ConfigurationScope,
@@ -751,6 +774,11 @@ class ArtifactStore(
                 // Shared definition assets belong to Personal; an override may also use its own realm's asset.
                 check(artifact.scope == ConfigurationScope.Personal || artifact.scope == scope) {
                     "settings_artifact_scope_mismatch"
+                }
+                if (scope != ConfigurationScope.Personal && artifact.scope == ConfigurationScope.Personal) {
+                    check((beforeRoots[ConfigurationScope.Personal].orEmpty() + beforeRoots[scope].orEmpty()).any { rootRelativePath(it) == path }) {
+                        "personal_media_not_in_shared_configuration"
+                    }
                 }
             }
         }

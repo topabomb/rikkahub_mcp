@@ -10,6 +10,12 @@ enum class AssistantSearchMode { OFF, LOCAL, BUILT_IN }
 
 /** Field commands apply to the latest definition or principal preference, never a rendered aggregate. */
 sealed interface AssistantPreferenceChange {
+    /** Page values derive a field delta, never a saved definition or complete override. */
+    data class EditUsage(val baseline: Assistant, val edited: Assistant) : AssistantPreferenceChange
+    data object ResetUsage : AssistantPreferenceChange
+    data class SubAssistant(val reference: ConfigurationReference, val enabled: Boolean) : AssistantPreferenceChange
+    data class Tags(val selected: List<ConfigurationReference>, val catalog: List<net.weero.measix.pilot.data.model.Tag>) : AssistantPreferenceChange
+    data class Avatar(val value: net.weero.measix.pilot.data.model.Avatar) : AssistantPreferenceChange
     data class Model(val reference: ConfigurationReference?) : AssistantPreferenceChange
     data object InheritModel : AssistantPreferenceChange
     data class Reasoning(val level: ReasoningLevel) : AssistantPreferenceChange
@@ -24,6 +30,11 @@ sealed interface AssistantPreferenceChange {
 }
 
 internal fun Assistant.withPreference(change: AssistantPreferenceChange): Assistant = when (change) {
+    is AssistantPreferenceChange.EditUsage -> resolveUserAssistantUsage(this, AssistantUsagePreferences(id).withDelta(change.baseline, change.edited))
+    AssistantPreferenceChange.ResetUsage -> error("personal_assistant_definition_has_no_usage_override")
+    is AssistantPreferenceChange.SubAssistant -> copy(allowedSubAssistantIds = allowedSubAssistantIds.toggle(change.reference, change.enabled))
+    is AssistantPreferenceChange.Tags -> copy(tags = change.selected)
+    is AssistantPreferenceChange.Avatar -> copy(avatar = change.value)
     is AssistantPreferenceChange.Model -> copy(chatModelId = change.reference)
     AssistantPreferenceChange.InheritModel -> copy(chatModelId = null)
     is AssistantPreferenceChange.Background -> copy(background = change.uri, useGradientBackground = false)
@@ -42,6 +53,11 @@ internal fun AssistantUsagePreferences.withPreference(
     change: AssistantPreferenceChange,
     current: Assistant,
 ): AssistantUsagePreferences = when (change) {
+    is AssistantPreferenceChange.EditUsage -> withDelta(change.baseline, change.edited)
+    AssistantPreferenceChange.ResetUsage -> AssistantUsagePreferences(assistantId)
+    is AssistantPreferenceChange.SubAssistant -> copy(additionalSubAssistantIds = additionalSubAssistantIds.toggle(change.reference, change.enabled))
+    is AssistantPreferenceChange.Tags -> copy(tags = UsageValue(change.selected))
+    is AssistantPreferenceChange.Avatar -> copy(avatar = UsageValue(change.value))
     is AssistantPreferenceChange.Model -> copy(chatModelId = UsageValue(change.reference))
     AssistantPreferenceChange.InheritModel -> copy(chatModelId = null)
     is AssistantPreferenceChange.Background -> copy(background = UsageValue(change.uri), useGradientBackground = UsageValue(false))

@@ -189,6 +189,33 @@ class ManagedFileCreationIntegrationTest {
         assertTrue(runCatching { image.readBytes() }.isFailure)
     }
 
+    @Test fun enterpriseUsageRetainsOnlyItsOwnCommittedSharedConfigurationImage() = runBlocking {
+        store.ensureReferenceProjection()
+        val packet = payloadContext.assets.open(LocalEnterpriseSource.EXAMPLE_ASSET).use(EnterprisePackageCodec::decode)
+        val sessions = EnterpriseSessionController(EnterpriseAppliedStore(File(root, "usage-image-session")))
+        sessions.enrollLocal(packet.identity, { packet.identity }, { packet })
+        val selection = requireNotNull(sessions.observeSelectedRealmSelection().first())
+        val image = store.createFromBytes(ConfigurationScope.Personal, pngBytes(), "shared-usage.png", "image/png", origin = ArtifactOrigin.USER)
+        val personal = Assistant(background = image.uri.toString())
+        store.updateSettingsReferences { it.copy(assistants = it.assistants + personal) }
+        val enterpriseAssistant = packet.identity.reference(packet.configuration.assistants.first().id)
+        store.updateAssistantPreferenceReferences(selection.access.scope, sessions.state.value, enterpriseAssistant,
+            net.weero.measix.pilot.data.configuration.AssistantPreferenceChange.Background(image.uri.toString()),
+            requireOwner = { sessions.requirePublishedSelection(selection) }, withCommit = { it() })
+        store.updateSettingsReferences { it.copy(assistants = it.assistants.map { a -> if (a.id == personal.id) a.copy(background = null) else a }) }
+        assertArrayEquals(pngBytes(), store.readConfigurationImage(image.entity.id, selection.access.scope))
+        assertTrue(runCatching { store.readConfigurationImage(image.entity.id) }.isFailure)
+        assertTrue(runCatching { store.readConfigurationImage(image.entity.id, packet.identity.scope.copy(userId = "other")) }.isFailure)
+        val unrelated = store.createFromBytes(ConfigurationScope.Personal, pngBytes(), "personal-unshared.png", "image/png", origin = ArtifactOrigin.USER)
+        assertTrue(runCatching {
+            store.updateAssistantPreferenceReferences(selection.access.scope, sessions.state.value, enterpriseAssistant,
+                net.weero.measix.pilot.data.configuration.AssistantPreferenceChange.Background(unrelated.uri.toString()),
+                requireOwner = { sessions.requirePublishedSelection(selection) }, withCommit = { it() })
+        }.isFailure)
+        assertArrayEquals(pngBytes(), store.readConfigurationImage(image.entity.id, selection.access.scope))
+        assertTrue(runCatching { store.readConfigurationImage(unrelated.entity.id, selection.access.scope) }.isFailure)
+    }
+
     @OptIn(coil3.annotation.DelicateCoilApi::class)
     @Test
     fun mountedInputThumbnailRecoversWhenRejectedSubmissionReturnsOwnership() {

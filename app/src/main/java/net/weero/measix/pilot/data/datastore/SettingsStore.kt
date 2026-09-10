@@ -282,12 +282,26 @@ class SettingsStore internal constructor(
         withArtifactCommit: (suspend (UserSettingsDocument, UserSettingsDocument, suspend () -> Unit) -> Unit)? = null,
         withCommit: suspend (suspend () -> Unit) -> Unit,
     ) = updateMutex.withLock {
+        val caller = currentCoroutineContext()
         requireOwner()
         val before = userDocuments.first()
         val after = before.changeAssistantPreference(scope, enterpriseState, assistantId, change)
         withCommit {
-            suspend fun commit() = commitUserDocument(requireOwner, artifactRootsOwned = withArtifactCommit != null) { after }
+            suspend fun commit() = commitUserDocument({ caller.ensureActive(); requireOwner() }, artifactRootsOwned = withArtifactCommit != null) { after }
             if (withArtifactCommit == null) commit() else withArtifactCommit(before, after, ::commit)
+        }
+        caller.ensureActive()
+    }
+
+    internal suspend fun cleanupAssistantTags() = updateMutex.withLock {
+        commitUserDocument { document ->
+            val valid = document.configuration.assistantTags.mapTo(hashSetOf()) { it.id }
+            val assistants = document.configuration.assistants.map { it.copy(tags = it.tags.filter(valid::contains)) }
+            val used = assistants.flatMapTo(hashSetOf()) { it.tags } + document.preferences.scopes.flatMap { scoped ->
+                scoped.assistantUsage.flatMap { it.tags?.value.orEmpty() }
+            }
+            document.copy(configuration = document.configuration.copy(assistants = assistants,
+                assistantTags = document.configuration.assistantTags.filter { it.id in used }))
         }
     }
 

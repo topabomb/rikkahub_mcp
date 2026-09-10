@@ -72,16 +72,9 @@ class ArtifactUseCase internal constructor(
     /** 验证并创建 Settings 图像 artifact，由同一挂起所有者提交 durable root。 */
     suspend fun importSettingsImage(uri: Uri, transform: (Settings, Uri) -> Settings): Uri {
         recoveryGate.awaitReady()
-        val owned = store.createFromUri(ConfigurationScope.Personal, uri, maxBytes = GeneratedMediaStore.MAX_IMAGE_BYTES.toLong())
+        val owned = store.createConfigurationImage(ConfigurationScope.Personal, uri)
         var ownershipTransferred = false
         return try {
-            withContext(Dispatchers.IO) {
-                val file = store.file(owned.entity)
-                require(file.isFile && file.length() in 1..GeneratedMediaStore.MAX_IMAGE_BYTES.toLong()) {
-                    "Settings image payload exceeds the size limit"
-                }
-                require(ImageMime.isAcceptedImage(file.readBytes())) { "Settings image payload is invalid" }
-            }
             withContext(NonCancellable) {
                 store.updateSettingsReferences { settings -> transform(settings, owned.uri) }
                 // The transform must actually root the new artifact. A no-op/missing owner is a

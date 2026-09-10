@@ -145,7 +145,15 @@ class MemoryService internal constructor(
 
     fun observe(scope: ConfigurationScope, assistantId: ConfigurationReference, enabledOnly: Boolean = false): Flow<MemoryView> = flow {
         recovery.awaitReady()
-        val realm = sessions.captureRealmAccess(scope)
+        emitAll(observe(sessions.captureRealmAccess(scope), assistantId, enabledOnly))
+    }.catch { error ->
+        if (error is CancellationException) throw error
+        emit(MemoryView(null, emptyList(), "memory_access_unavailable"))
+    }
+
+    fun observe(realm: RealmAccess, assistantId: ConfigurationReference, enabledOnly: Boolean = false): Flow<MemoryView> = flow {
+        recovery.awaitReady()
+        val scope = realm.scope
         emitAll(sessions.observeRealmAccess(realm).flatMapLatest { allowed ->
             if (!allowed) flowOf(MemoryView(null, emptyList(), "memory_access_unavailable"))
             else settings.observeConfiguration(sessions.state, scope).flatMapLatest { configuration ->

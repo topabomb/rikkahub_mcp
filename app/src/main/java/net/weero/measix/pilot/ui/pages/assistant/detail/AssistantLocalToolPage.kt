@@ -31,6 +31,8 @@ import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.rememberCoroutineScope
+import kotlinx.coroutines.launch
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -124,8 +126,13 @@ internal fun AssistantLocalToolContent(
     imageGenerationAvailable: Boolean,
     onToggleLocalTool: (LocalToolOption, Boolean) -> Unit,
     onUpdateSubAssistantIds: ((Set<ConfigurationReference>) -> Unit)?,
+    onToggleSubAssistant: (suspend (ConfigurationReference, Boolean) -> Boolean)? = null,
+    inheritedSubAssistantIds: Set<ConfigurationReference> = emptySet(),
+    imageResolver: (suspend (String) -> net.weero.measix.pilot.service.ImageSource?)? = null,
+    subAssistantAccess: Map<ConfigurationReference, net.weero.measix.pilot.data.configuration.ConfigurationAccess> = emptyMap(),
 ) {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     val toaster = LocalToaster.current
     val navController = LocalNavController.current
     val textToImageEnabled = assistant.localTools.contains(LocalToolOption.TextToImage)
@@ -374,10 +381,8 @@ internal fun AssistantLocalToolContent(
     // 子助手访问范围多选对话框
     if (showAccessScopeDialog) {
         var accessSearchQuery by remember(showAccessScopeDialog) { mutableStateOf("") }
-        val candidateSubAssistants = remember(subAssistants, assistant.id) {
-            subAssistants.filter {
-                it.id != assistant.id && it.allowAsSubAssistant
-            }
+        val candidateSubAssistants = remember(subAssistants, assistant.id, assistant.allowedSubAssistantIds) {
+            subAssistants.filter { it.id != assistant.id && (it.allowAsSubAssistant || it.id in assistant.allowedSubAssistantIds) }
         }
         val filteredCandidates = remember(candidateSubAssistants, accessSearchQuery) {
             candidateSubAssistants.filter { candidate ->
@@ -388,9 +393,24 @@ internal fun AssistantLocalToolContent(
         }
         val selectedIds = remember(assistant.allowedSubAssistantIds, eligibleTargetIds) {
             mutableStateOf(
-                assistant.allowedSubAssistantIds
-                    .filterTo(mutableSetOf()) { it in eligibleTargetIds }
+                assistant.allowedSubAssistantIds.toMutableSet()
             )
+        }
+
+        var changing by remember { mutableStateOf(false) }
+        fun toggle(id: ConfigurationReference, checked: Boolean) {
+            if (changing) return
+            if (onToggleSubAssistant == null) {
+                selectedIds.value = (if (checked) selectedIds.value + id else selectedIds.value - id).toMutableSet()
+            } else {
+                changing = true
+                scope.launch {
+                    try {
+                        if (onToggleSubAssistant(id, checked)) selectedIds.value =
+                            (if (checked) selectedIds.value + id else selectedIds.value - id).toMutableSet()
+                    } finally { changing = false }
+                }
+            }
         }
 
         AlertDialog(
@@ -419,15 +439,25 @@ internal fun AssistantLocalToolContent(
                     filteredCandidates.forEach { sub ->
                         SubAssistantScopeItem(
                             sub = sub,
+                            imageResolver = imageResolver,
                             checked = sub.id in selectedIds.value,
-                            onCheckedChange = if (onUpdateSubAssistantIds == null) null else { checked ->
-                                selectedIds.value = (if (checked) {
-                                    selectedIds.value + sub.id
-                                } else {
-                                    selectedIds.value - sub.id
-                                }).toMutableSet()
-                            }
+                            onCheckedChange = if (changing || sub.id in inheritedSubAssistantIds ||
+                                (onUpdateSubAssistantIds == null && onToggleSubAssistant == null) ||
+                                (sub.id !in selectedIds.value && (!sub.allowAsSubAssistant || subAssistantAccess[sub.id]?.canSelect == false))) null
+                                else { checked -> toggle(sub.id, checked) },
+                            inherited = sub.id in inheritedSubAssistantIds,
+                            unavailableReason = subAssistantAccess[sub.id]?.unavailableReason,
                         )
+                    }
+                    (selectedIds.value - subAssistants.mapTo(hashSetOf()) { it.id }).forEach { missing ->
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(missing.toString(), Modifier.weight(1f), maxLines = 2)
+                            if (missing !in inheritedSubAssistantIds && (onToggleSubAssistant != null || onUpdateSubAssistantIds != null)) {
+                                TextButton(enabled = !changing, onClick = { toggle(missing, false) }) {
+                                    Text(stringResource(R.string.assistant_page_remove))
+                                }
+                            }
+                        }
                     }
                     if (filteredCandidates.isEmpty()) {
                         Text(
@@ -446,7 +476,7 @@ internal fun AssistantLocalToolContent(
             },
             confirmButton = {
                 TextButton(onClick = {
-                    onUpdateSubAssistantIds?.invoke(selectedIds.value.filterTo(mutableSetOf()) { it in eligibleTargetIds })
+                    onUpdateSubAssistantIds?.invoke(selectedIds.value)
                     showAccessScopeDialog = false
                 }) { Text(stringResource(android.R.string.ok)) }
             },
@@ -472,6 +502,9 @@ private fun SubAssistantScopeItem(
     sub: Assistant,
     checked: Boolean,
     onCheckedChange: ((Boolean) -> Unit)?,
+    imageResolver: (suspend (String) -> net.weero.measix.pilot.service.ImageSource?)? = null,
+    inherited: Boolean = false,
+    unavailableReason: net.weero.measix.pilot.data.configuration.ConfigurationUnavailableReason? = null,
 ) {
     Row(
         verticalAlignment = Alignment.CenterVertically,
@@ -488,12 +521,16 @@ private fun SubAssistantScopeItem(
         UIAvatar(
             name = sub.name,
             value = sub.avatar,
+            imageResolver = imageResolver,
             modifier = Modifier.size(32.dp),
         )
         Column(
             modifier = Modifier.weight(1f),
             verticalArrangement = Arrangement.spacedBy(2.dp),
         ) {
+            if (inherited) Text(stringResource(R.string.assistant_usage_inherited_binding), style = MaterialTheme.typography.labelSmall)
+            unavailableReason?.let { Text(net.weero.measix.pilot.ui.components.ai.configurationUnavailableText(it),
+                style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.error) }
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(6.dp),

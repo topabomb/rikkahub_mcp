@@ -109,7 +109,9 @@ fun AssistantBasicPage(id: String) {
             tags = tags,
             workspaces = workspaces,
             onUpdate = { vm.update(assistant, it) },
-            vm = vm
+            onUpdateTags = vm::updateTags,
+            onImportAvatar = vm::importAvatar,
+            onImportBackground = vm::importBackground
         )
     }
 }
@@ -123,7 +125,12 @@ internal fun AssistantBasicContent(
     tags: List<DataTag>,
     workspaces: List<WorkspaceUiModel>,
     onUpdate: (Assistant) -> Unit,
-    vm: AssistantDetailVM
+    onUpdateTags: (List<me.rerere.common.configuration.ConfigurationReference>, List<DataTag>) -> Unit,
+    onImportAvatar: suspend (android.net.Uri) -> Unit,
+    onImportBackground: suspend (android.net.Uri) -> Unit,
+    definitionEditable: Boolean = true,
+    modelControl: (@Composable () -> Unit)? = null,
+    imageResolver: (suspend (String) -> net.weero.measix.pilot.service.ImageSource?)? = null,
 ) {
     val effectiveContextMessageLimit = assistant.effectiveContextMessageLimit()
 
@@ -153,7 +160,8 @@ internal fun AssistantBasicContent(
                         )
                     )
                 },
-                onImportImage = vm::importAvatar,
+                onImportImage = onImportAvatar,
+                imageResolver = imageResolver,
                 modifier = Modifier
                     .size(80.dp)
                     .heroAnimation("assistant_${assistant.id}")
@@ -173,6 +181,7 @@ internal fun AssistantBasicContent(
             ) {
                 OutlinedTextField(
                     value = assistant.name,
+                    readOnly = !definitionEditable,
                     onValueChange = {
                         onUpdate(
                             assistant.copy(
@@ -192,6 +201,7 @@ internal fun AssistantBasicContent(
             ) {
                 OutlinedTextField(
                     value = assistant.description,
+                    readOnly = !definitionEditable,
                     onValueChange = {
                         val normalized = normalizeDescription(it)
                         onUpdate(assistant.copy(description = normalized))
@@ -219,7 +229,7 @@ internal fun AssistantBasicContent(
                     value = assistant.tags,
                     tags = tags,
                     onValueChange = { tagIds, tagList ->
-                        vm.updateTags(tagIds, tagList)
+                        onUpdateTags(tagIds, tagList)
                     },
                 )
             }
@@ -292,7 +302,7 @@ internal fun AssistantBasicContent(
                 tail = {
                     Switch(
                         checked = assistant.allowAsSubAssistant,
-                        enabled = assistant.description.isNotBlank(),
+                        enabled = definitionEditable && assistant.description.isNotBlank(),
                         onCheckedChange = { enabled ->
                             onUpdate(
                                 assistant.copy(
@@ -319,6 +329,7 @@ internal fun AssistantBasicContent(
                     tail = {
                         Switch(
                             checked = assistant.isSubAssistantGloballyVisible,
+                            enabled = definitionEditable,
                             onCheckedChange = { enabled ->
                                 onUpdate(assistant.copy(isSubAssistantGloballyVisible = enabled))
                             },
@@ -362,6 +373,7 @@ internal fun AssistantBasicContent(
                     Text(stringResource(R.string.assistant_page_chat_model_desc))
                 },
                 content = {
+                    if (modelControl != null) modelControl() else {
                     val chatModelListState = rememberModelListState(
                         modelId = assistant.chatModelId,
                         catalog = net.weero.measix.pilot.service.userDefinitionModelCatalog(providers),
@@ -388,6 +400,7 @@ internal fun AssistantBasicContent(
                             )
                         },
                     )
+                    }
                 }
             )
             HorizontalDivider()
@@ -697,7 +710,8 @@ internal fun AssistantBasicContent(
                             )
                         )
                     },
-                    onImportImage = vm::importBackground,
+                    onImportImage = onImportBackground,
+                    imageResolver = imageResolver,
                 )
             }
 

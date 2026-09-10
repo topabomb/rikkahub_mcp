@@ -3,6 +3,7 @@ package net.weero.measix.pilot.service
 /** The rendered document borrows its original source; it never reconstructs permission from a route or URL. */
 sealed interface RenderedContentSource {
     data class Conversation(val view: ConversationViewLease) : RenderedContentSource
+    data class RealmConfiguration(val view: ConversationViewLease) : RenderedContentSource
     data object UserConfiguration : RenderedContentSource
     data object Static : RenderedContentSource
 }

@@ -336,7 +336,7 @@ fun ImagePreviewDialog(
 浏览整本，未命中或为空则单图打开。Markdown/HTML 正文图不在 part 层，仍单张打开。助手背景、聊天背景
 和附件 chips 是装饰 / 输入态，不接入查看器。Workspace 详情 IMAGE 维持单张，不注入设背景。
 
-缩略图、相册、信息与保存传递同一读取能力。`LocalImageSourceResolver` 使 Markdown/HTML 在原 ConversationViewLease 下解析 URL，解析失败没有个人文件回退。助手 Prompt 预览仅解析仍被共享用户配置引用的文件；网络/内联图片也经相同读取入口。Workspace 图片通过既有 WorkspaceApplicationService 按原工作空间、区域与文件元信息读取，不为预览导出临时副本。
+缩略图、相册、信息与保存传递同一读取能力。`LocalImageSourceResolver` 使 Markdown/HTML 在原 ConversationViewLease 下解析 URL，解析失败没有个人文件回退。助手共享定义 Prompt 预览仅解析仍被个人配置引用的文件；企业使用预览携带原 ConversationViewLease，解析本主体或共享配置根。网络/内联图片也经相同读取入口。Workspace 图片通过既有 WorkspaceApplicationService 按原工作空间、区域与文件元信息读取，不为预览导出临时副本。
 
 图片保存由 `MediaExportService` 保留原始编码及 MIME，写入系统相册 pending 项，在发布前复验读取权限，失败或取消删除未发布项，补偿失败保留原错误。聊天截图与 Markdown 分享另携带原 ConversationViewLease；渲染后、相册发布及分享前通过查询 owner 验证原页面，文件编码、临时文件与发布收口归同一导出服务。
 
@@ -472,7 +472,7 @@ ChatPageContent
 
 共享模型选择器消费 `ModelCatalogUiModel`，分组保留来源与真实用户 Provider 编辑入口，企业模型不伪装成 Provider。`ModelListSheet` 等待选择命令成功才关闭；提交中只接受一个选择，失败保留弹窗并恢复重试。目录的 `RealmSelection` 变化会关闭旧弹窗，异步错误属于原选择。失效或歧义的收藏保留引用占位和取消收藏入口。
 
-`SettingModelPage` 的模型页通过 `ModelSettingsVM` 订阅当前域目录；显示原覆盖、当前选择与不可用原因，清除企业覆盖只继承企业默认。个人页区分未配置、跟随聊天模型、跟随快速模型和未启用附件识别，不将默认哨兵当成丢失资源。建议开关写当前域偏好，关闭后仍保留模型选择。提示词页仍编辑共享用户内容；聊天助手/使用参数与独立图片生成执行尚未完成企业域接线，不能把共享组件改造视为这些页面已完成企业验收。
+`SettingModelPage` 的模型页通过 `ModelSettingsVM` 订阅当前域目录；显示原覆盖、当前选择与不可用原因，清除企业覆盖只继承企业默认。个人页区分未配置、跟随聊天模型、跟随快速模型和未启用附件识别，不将默认哨兵当成丢失资源。建议开关写当前域偏好，关闭后仍保留模型选择。提示词管理页仍编辑共享用户内容；企业聊天使用 AssistantUsageEditor 编辑原主体偏好，独立图片生成通过原域模型请求执行。设备验收范围以实施方案中的实际证据为准。
 
 前台 turn 触觉只由 `ChatPage` 的 `TurnHapticFeedback` 管理，调用位于自适应布局分支之外，不依赖消息列表项的组合生命周期。
 它直接收集 `ChatVM` 既有热流中的 `ConversationUiModel.turnFeedback` 同版本查询投影与设置，不经渲染快照转发，避免恢复前台时旧组合值造成误提醒；投影尚未就绪时静默，UI 不解析子助手 metadata 或读取 Runtime Job。

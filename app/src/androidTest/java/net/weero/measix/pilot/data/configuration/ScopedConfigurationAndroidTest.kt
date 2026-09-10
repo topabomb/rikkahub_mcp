@@ -169,7 +169,12 @@ class ScopedConfigurationAndroidTest {
         private val locks = net.weero.measix.pilot.service.runtime.ConversationOperationLocks()
         private val registry = net.weero.measix.pilot.service.runtime.ConversationRuntimeRegistry(scope, repository, locks)
         private val coordinator = net.weero.measix.pilot.service.runtime.ConversationCommandCoordinator(registry, repository, gate, locks)
-        val commands = ConfigurationApplicationService(settings, sessions, gate, coordinator, io.mockk.mockk())
+        private val artifacts = io.mockk.mockk<net.weero.measix.pilot.data.files.ArtifactStore> {
+            io.mockk.coEvery { updateAssistantPreferenceReferences(any(), any(), any(), any(), any(), any()) } coAnswers {
+                settings.changeAssistantPreference(arg(0), arg(1), arg(2), arg(3), arg(4), withCommit = arg(5))
+            }
+        }
+        val commands = ConfigurationApplicationService(settings, sessions, gate, coordinator, io.mockk.mockk(), artifacts)
         suspend fun assistantTarget(id: me.rerere.common.configuration.ConfigurationReference): net.weero.measix.pilot.service.ConversationAssistantTarget {
             val selection = requireNotNull(sessions.observeSelectedRealmSelection().first())
             val draft = net.weero.measix.pilot.data.model.Conversation(assistantId = id, scope = selection.access.scope, newConversation = true, messageNodes = emptyList())

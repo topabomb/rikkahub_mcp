@@ -96,6 +96,23 @@ class MemoryServiceTest {
     }
 
     @Test
+    fun `delayed subscription retains original session instead of capturing a new login`() = runTest {
+        environment { env ->
+            val packet = exampleEnterprisePackage()
+            env.sessions.enrollFixture(packet)
+            val original = env.sessions.captureRealmAccess(packet.identity.scope)
+            val pending = env.memory.observe(original, env.target.id)
+            env.sessions.finishExit(env.sessions.beginExit(requireNotNull(env.sessions.captureExitRequest())))
+            env.sessions.enrollFixture(packet)
+            val result = pending.first()
+            assertNull(result.access)
+            assertTrue(result.records.isEmpty())
+            assertEquals("memory_access_unavailable", result.unavailableReason)
+            coVerify(exactly = 0) { env.repository.read(any()) }
+        }
+    }
+
+    @Test
     fun `inspection reads only target local memory in the captured realm and honors policy changes`() = runTest {
         environment { env ->
             val packet = exampleEnterprisePackage()

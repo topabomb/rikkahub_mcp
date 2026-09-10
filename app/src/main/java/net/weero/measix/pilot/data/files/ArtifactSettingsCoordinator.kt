@@ -19,8 +19,10 @@ class ArtifactSettingsCoordinator(private val settingsStore: SettingsStore) {
         state: net.weero.measix.pilot.data.enterprise.EnterpriseState,
         assistantId: me.rerere.common.configuration.ConfigurationReference,
         change: net.weero.measix.pilot.data.configuration.AssistantPreferenceChange,
+        requireOwner: () -> Unit,
+        withCommit: suspend (suspend () -> Unit) -> Unit,
         withArtifactCommit: suspend (UserSettingsDocument, UserSettingsDocument, suspend () -> Unit) -> Unit,
-    ) = settingsStore.changeAssistantPreference(scope, state, assistantId, change, {}, withArtifactCommit) { it() }
+    ) = settingsStore.changeAssistantPreference(scope, state, assistantId, change, requireOwner, withArtifactCommit, withCommit)
 
     internal suspend fun manageAssistant(
         scope: net.weero.measix.pilot.data.configuration.ConfigurationScope,

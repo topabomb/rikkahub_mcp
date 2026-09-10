@@ -70,7 +70,7 @@ val appModule = module {
     single<Json> { JsonInstant }
 
     single { ApplicationRecoveryGate() }
-    single { ConfigurationApplicationService(get(), get(), get(), get(), get()) }
+    single { ConfigurationApplicationService(get(), get(), get(), get(), get(), get()) }
     single { ConfigurationQueryService(get(), get(), get()) }
     single { net.weero.measix.pilot.service.ModelExecutionService(get(), get(), get(), get()) }
     single { net.weero.measix.pilot.service.MemoryService(get(), get(), get(), get(), get()) }

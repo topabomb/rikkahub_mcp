@@ -142,6 +142,7 @@ fun QuickMessagesContent(
                 Text(quickMessage.title.ifBlank { stringResource(R.string.extension_content_unnamed) })
             }
         }
+        if (onManage != null) item { ManageButton(onClick = onManage) }
     }
 }
 

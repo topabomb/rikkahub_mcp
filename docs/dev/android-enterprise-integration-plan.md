@@ -347,8 +347,8 @@ Android 媒体接线按下列所有权完成：`PortalMediaStore` 管理独占�
 | 语音（C5、U2） | SpeechApplicationService 已统一拥有原域捕获、binding、播放与录音清理；企业 TTS/HTTP-ASR、本地 MP3/WAV adapter、目录选择与聊天入口已接通；428 终止原交互并同步，不重放。应用 JVM、实际 AudioRecord 和完整构建/设备回归已通过；正式 Debug App 的朗读、录音、关页清理和个人/企业目录已验证，错误提示已接通；Release 及整期场景验收仍待完成 |
 | 文件与 Workspace（C6） | 会话/记忆、目录、图片、背景、参考输入及附件/富文本出口已分域验证；Workspace 上传/终端/SAF 已完成本批实现与完整门禁；共享配置预设附件的目标域复制及 Draft/Child 交接已完成，完整门禁通过；整体 UI/版本验收仍待最终收口 |
 | 个人备份（C7） | 个人闭合图导出与冷恢复合并已实现；配置/企业数据、共享资产和恢复 receipt 按原 owner 保全，系统备份与设备迁移显式排除混合域存储；当前验证记录见本文个人备份批次 |
-| 完整示例与 UI（M1、U2） | 正式企业入口、Portal、原生整包导入、已安装来源、辅助生成及 Starter 预填已接通；五项策略、Gateway 和模型管理在 Debug/Release 可用。仍需模拟故障/恢复场景、完整助手本域使用编辑及整期 UI 验收 |
-| 助手管理（C5、U2） | assistant_manage 已按原 Session 与最新策略提交共享用户定义及本域授权，删除复用个人 tombstone；不保留个人配置的第二准入。完整本域使用参数、额外子助手引用编辑与工具聊天设备验收仍待完成 |
+| 完整示例与 UI（M1、U2） | 正式企业入口、Portal、原生整包导入、已安装来源、辅助生成及 Starter 预填已接通；五项策略、Gateway、模型管理与助手本域使用编辑已实现。仍需模拟故障/恢复场景及整期 Debug/Release UI 验收 |
+| 助手管理（C5、U2） | assistant_manage 已按原 Session 与最新策略提交共享用户定义及本域授权，删除复用个人 tombstone；不保留个人配置的第二准入。完整本域使用编辑、配置资产和额外子助手引用已接通并通过本批门禁及 Debug 交互检查；工具聊天与整期 Release 设备验收仍待完成 |
 | 退休与发行（R1、V1） | 旧 managed overlay 存储/验签/合并/过期与 UI 标签链已删除；共享用户配置读取与按域解析分开。剩余消费者与场景完成后执行 E01–E12、Release/硬件验收和版本 20 交付；真实后台属于下一阶段 |
 
 
@@ -743,3 +743,13 @@ C7 的系统备份入口已关闭：Manifest 禁用 allowBackup，旧系统备�
 assistant_manage 将原 RealmAccess 和调用者引用交给既有管理服务，在同一个用户文档事务创建共享用户定义并添加调用者本域授权。更新/删除只允许获准用户定义；关闭用户助手准入、移除管理工具或原 Session 失效都拒绝提交。删除同时退休各域 usage/额外授权并保存个人清理 tombstone，清理等待位于 Session 锁外，企业历史保持。Factory 的个人 Settings 第二准入已删除；内置助手查找与读取共用补齐规则，不新增持久化格式或原型兼容。两位独立审查的问题已关闭。
 
 定向 JVM 与 AndroidTest 编译通过；完整串行 test assembleDebug lintDebug assembleRelease 加 ScopedConfigurationAndroidTest 在 8 分 24 秒内通过，App 2,149 项 JVM 和 Android 17 模拟器 2 项配置设备用例无失败，lint 无错误；Workspace 保留 11 项 Windows 条件跳过。设备用例验证真实 DataStore/企业状态重开、定义与授权保全，以及删除后的引用清理和 tombstone，不包含完整删除清理或原生聊天工具执行。证据见 build/reports/enterprise/assistant-management-verification.json 与同批报告 ZIP。完整本域使用编辑、额外子助手引用 UI、模拟场景及 E01–E12/Release 验收仍待完成，版本保持 0.0.19 开发基线。
+
+### 助手本域使用编辑
+
+企业聊天的管理和记忆入口打开原页面绑定的 AssistantUsageEditor，复用现有九组配置内容。EditUsage 只提交相对页面基线的字段变化，保留最新未编辑覆盖；固定定义和继承子助手引用不能修改，额外授权按五项策略复验。标签清理统计所有主体，重置只删除当前主体覆盖。配置资产沿原 Session、Settings 与 Artifact 事务创建、验证和交接，没有新增持久化结构或并行配置镜像。共享定义页统一说明跨空间影响。
+
+两名独立审查发现的共享图片根、子助手头像读取、记忆延迟订阅与预览背景目标问题已修正并复核。正式 Debug 页面另发现并修正企业助手管理按钮沿用个人定义编辑条件的问题。当前模板预览仅修改文本部分，保留媒体与 metadata。
+
+完整串行 test assembleDebug lintDebug assembleRelease 最终通过（8 分 10 秒），App 2,156 项 JVM 无失败，lint 0 错误、287 警告；Workspace 保留 11 项 Windows 条件跳过。同批配置/文件设备门禁 17 项通过，随后两处 UI 入口调整经最终完整构建和正式 Debug 页面验证：一键入域、固定字段、温度修改及冷启动保留、重置恢复继承、固定子助手不可移除、用户子助手选择及重开保留、共享定义提示。原生图片选择器与本批 Release UI 未单独验收。证据见 build/reports/enterprise/assistant-usage-verification.json 和报告 ZIP。
+
+模拟故障/恢复、原生 assistant_manage 工具聊天、E01–E12 与最终 20 版本交付继续实施；本批不是整期完成或真实平台互操作验收。

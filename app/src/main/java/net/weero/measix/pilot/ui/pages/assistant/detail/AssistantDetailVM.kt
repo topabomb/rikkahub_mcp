@@ -137,44 +137,7 @@ class AssistantDetailVM(
         }
     }
 
-    private suspend fun cleanupUnusedTagsAndAwait() {
-        settingsStore.updateLocal { currentSettings ->
-                val validTagIds = currentSettings.assistantTags.map { it.id }.toSet()
-
-                // 清理 assistant 中的无效 tag id
-                val cleanedAssistants = currentSettings.assistants.map { assistant ->
-                    val validTags = assistant.tags.filter { tagId ->
-                        validTagIds.contains(tagId)
-                    }
-                    if (validTags.size != assistant.tags.size) {
-                        assistant.copy(tags = validTags)
-                    } else {
-                        assistant
-                    }
-                }
-
-                // 获取清理后的 assistant 中使用的 tag id
-                val usedTagIds = cleanedAssistants.flatMap { it.tags }.toSet()
-
-                // 清理未使用的 tags
-                val cleanedTags = currentSettings.assistantTags.filter { tag ->
-                    usedTagIds.contains(tag.id)
-                }
-
-                // 检查是否需要更新
-                val needUpdateAssistants = cleanedAssistants != currentSettings.assistants
-                val needUpdateTags = cleanedTags.size != currentSettings.assistantTags.size
-
-                if (needUpdateAssistants || needUpdateTags) {
-                    currentSettings.copy(
-                        assistants = cleanedAssistants,
-                        assistantTags = cleanedTags,
-                    )
-                } else {
-                    currentSettings
-                }
-        }
-    }
+    private suspend fun cleanupUnusedTagsAndAwait() = settingsStore.cleanupAssistantTags()
 
     fun toggleLocalTool(option: net.weero.measix.pilot.data.ai.tools.local.LocalToolOption, enabled: Boolean) {
         viewModelScope.launch {

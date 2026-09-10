@@ -105,7 +105,7 @@ fun AssistantMemoryPage(id: String) {
 }
 
 @Composable
-private fun AssistantMemoryContent(
+internal fun AssistantMemoryContent(
     innerPadding: PaddingValues,
     assistant: Assistant,
     memories: MemoryView,

@@ -93,7 +93,13 @@ internal class AssistantBackgroundService(
                 copy = artifactStore.createFromBytes(target.scope, image.bytes, image.displayName,
                     image.mimeType, origin = origin)
                 artifactStore.updateAssistantPreferenceReferences(target.scope, sessions.state.value,
-                    target.assistantId, AssistantPreferenceChange.Background(requireNotNull(copy).uri.toString()))
+                    target.assistantId, AssistantPreferenceChange.Background(requireNotNull(copy).uri.toString()), {
+                        when (target) {
+                            is AssistantBackgroundTarget.Page -> sessions.requirePublishedSelection(target.selection)
+                            is AssistantBackgroundTarget.Task -> sessions.requirePublishedRealmAccess(target.access)
+                            is AssistantBackgroundTarget.Definition -> Unit
+                        }
+                    }) { it() }
             }
         } catch (cancelled: CancellationException) {
             withContext(NonCancellable) {

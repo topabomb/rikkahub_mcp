@@ -96,7 +96,7 @@ class SpeechApplicationServiceTest {
     @Test fun `system speech follows user TTS admission without changing personal settings`() = runBlocking {
         environment { e ->
             val access = e.sessions.captureSelectedRealmAccess()
-            ConfigurationApplicationService(e.settings, e.sessions, e.gate, mockk(), mockk()).selectResource(
+            ConfigurationApplicationService(e.settings, e.sessions, e.gate, mockk(), mockk(), mockk()).selectResource(
                 RealmSelection(access, e.sessions.selectionRevision.value), ResourceSelectionSlot.TTS, DEFAULT_SYSTEM_TTS_ID)
             e.sessions.synchronize(access as RealmAccess.Enterprise, e.packet.copy(configuration = e.packet.configuration.copy(
                 generation = 2, policy = e.packet.configuration.policy.copy(allowLocalTts = false))))

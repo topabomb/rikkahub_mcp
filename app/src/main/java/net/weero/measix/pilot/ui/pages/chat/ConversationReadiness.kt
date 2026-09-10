@@ -544,7 +544,7 @@ private fun ReadinessTitleRow(
         // 右侧：配置助手按钮，右对齐
         FilledTonalIconButton(
             onClick = onManageAssistant,
-            enabled = assistant?.id is me.rerere.common.configuration.ConfigurationReference.User,
+            enabled = assistant != null,
             modifier = Modifier.size(30.dp),
         ) {
             Icon(

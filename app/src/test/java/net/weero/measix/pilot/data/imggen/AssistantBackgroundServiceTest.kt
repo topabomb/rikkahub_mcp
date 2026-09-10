@@ -57,7 +57,7 @@ class AssistantBackgroundServiceTest {
     @Test
     fun `settings failure compensates and exposes cleanup status`() = runTest {
         val env = Env()
-        coEvery { env.store.updateAssistantPreferenceReferences(any(), any(), any(), any()) } throws IllegalStateException("datastore failed")
+        coEvery { env.store.updateAssistantPreferenceReferences(any(), any(), any(), any(), any(), any()) } throws IllegalStateException("datastore failed")
         coEvery { env.store.discardUnpublished(env.owned) } returns ArtifactDeleteResult.Failed(
             env.owned.entity.id,
             "payload_delete_failed",
@@ -110,7 +110,7 @@ class AssistantBackgroundServiceTest {
         val env = Env()
         try {
             val cancelled = kotlinx.coroutines.CancellationException("cancel before reference commit")
-            coEvery { env.store.updateAssistantPreferenceReferences(any(), any(), any(), any()) } throws cancelled
+            coEvery { env.store.updateAssistantPreferenceReferences(any(), any(), any(), any(), any(), any()) } throws cancelled
             coEvery { env.store.discardUnpublished(env.owned) } throws IllegalStateException("cleanup failed")
             try {
                 env.service.replaceGeneratedBackground(RealmAccess.Personal, env.assistant.id, 3)
@@ -144,7 +144,7 @@ class AssistantBackgroundServiceTest {
         }
 
         fun settingsUpdateSucceeds() {
-            coEvery { store.updateAssistantPreferenceReferences(any(), any(), any(), any()) } coAnswers {
+            coEvery { store.updateAssistantPreferenceReferences(any(), any(), any(), any(), any(), any()) } coAnswers {
                 check(thirdArg<ConfigurationReference>() == assistant.id) { "assistant_not_found" }
             }
         }

@@ -42,6 +42,7 @@ fun BackgroundPicker(
     backgroundOpacity: Float = 1.0f,
     onUpdate: (String?) -> Unit,
     onImportImage: suspend (Uri) -> Unit,
+    imageResolver: (suspend (String) -> net.weero.measix.pilot.service.ImageSource?)? = null,
 ) {
     val scope = rememberCoroutineScope()
     val toaster = LocalToaster.current
@@ -114,8 +115,13 @@ fun BackgroundPicker(
                 }
             }
 
+            val imageModel by androidx.compose.runtime.produceState<Any?>(null, background, imageResolver) {
+                value = if (imageResolver == null) background else try { imageResolver(background) }
+                    catch (cancelled: CancellationException) { throw cancelled }
+                    catch (_: Exception) { null }
+            }
             AsyncImage(
-                model = background,
+                model = imageModel,
                 contentDescription = null,
                 modifier = Modifier
                     .fillMaxWidth()

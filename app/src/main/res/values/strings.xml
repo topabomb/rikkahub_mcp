@@ -1689,4 +1689,14 @@
   <string name="enterprise_reload_source">Reload source</string>
   <string name="enterprise_source_changed">The source changed. Reload it before editing.</string>
   <string name="enterprise_model_still_referenced">This model is referenced by an enterprise assistant or default. Update those references in the full configuration before removing or disabling it.</string>
+  <string name="assistant_usage_title">Settings for this space</string>
+  <string name="assistant_usage_description">Changes apply to this assistant in this space. Name, description and system prompt come from its definition.</string>
+  <string name="assistant_usage_reset">Reset settings for this space</string>
+  <string name="assistant_usage_reset_description">Remove all usage overrides for this assistant in this space, including additional sub-assistant grants. Shared definitions and history are kept.</string>
+  <string name="assistant_usage_shared_edit">Edit my shared assistant definition</string>
+  <string name="assistant_usage_shared_warning">This is a shared user configuration. Changes affect every space that uses this assistant.</string>
+  <string name="assistant_usage_inherited_binding">Inherited from the assistant definition; cannot be removed here</string>
+  <string name="assistant_usage_inherit_model">Use the model from the assistant definition</string>
+  <string name="assistant_usage_fixed_model">Model fixed by the enterprise</string>
+  <string name="assistant_preset_media_kept">This preset also has non-text content. Editing text keeps that content.</string>
 </resources>

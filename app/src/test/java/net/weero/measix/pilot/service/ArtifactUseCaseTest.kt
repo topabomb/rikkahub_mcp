@@ -154,6 +154,7 @@ class ArtifactUseCaseTest {
             localRef = LocalArtifactRef(relativePath = entity.relativePath, mimeType = entity.mimeType),
         )
         val settings = Settings.dummy()
+        coEvery { store.createConfigurationImage(any(), any()) } coAnswers { callOriginal() }
         val payload = kotlin.io.path.createTempFile(suffix = ".png").toFile().apply { writeBytes(TINY_PNG) }
         coEvery {
             store.createFromUri(ConfigurationScope.Personal, source, maxBytes = GeneratedMediaStore.MAX_IMAGE_BYTES.toLong())
@@ -206,6 +207,7 @@ class ArtifactUseCaseTest {
             uri = ownedUri,
             localRef = LocalArtifactRef(relativePath = entity.relativePath, mimeType = entity.mimeType),
         )
+        coEvery { store.createConfigurationImage(any(), any()) } coAnswers { callOriginal() }
         val payload = kotlin.io.path.createTempFile(suffix = ".png").toFile().apply {
             writeText("not an image")
         }

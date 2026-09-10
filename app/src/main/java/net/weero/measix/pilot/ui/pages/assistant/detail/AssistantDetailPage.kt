@@ -90,6 +90,11 @@ fun AssistantDetailPage(id: String) {
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
             item {
+                Text(stringResource(R.string.assistant_usage_shared_warning),
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.padding(horizontal = 8.dp))
+            }
+            item {
                 AssistantHeader(
                     assistant = assistant,
                     modifier = Modifier.padding(horizontal = 8.dp, vertical = 16.dp)

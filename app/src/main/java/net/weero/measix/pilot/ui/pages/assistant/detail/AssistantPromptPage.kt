@@ -150,11 +150,13 @@ fun AssistantPromptPage(id: String, vm: AssistantDetailVM = koinViewModel(parame
 }
 
 @Composable
-private fun AssistantPromptContent(
+internal fun AssistantPromptContent(
     innerPadding: PaddingValues,
     assistant: Assistant,
     settings: Settings,
-    onUpdate: (Assistant) -> Unit
+    onUpdate: (Assistant) -> Unit,
+    definitionEditable: Boolean = true,
+    usageView: net.weero.measix.pilot.service.ConversationViewLease? = null,
 ) {
     val context = LocalContext.current
     val templateTransformer = koinInject<TemplateTransformer>()
@@ -175,6 +177,10 @@ private fun AssistantPromptContent(
                 modifier = Modifier.padding(16.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
+                if (!definitionEditable) {
+                    Text(stringResource(R.string.assistant_page_system_prompt), style = MaterialTheme.typography.labelLarge)
+                    androidx.compose.foundation.text.selection.SelectionContainer { Text(assistant.systemPrompt) }
+                } else {
                 val systemPromptValue = rememberTextFieldState(
                     initialText = assistant.systemPrompt,
                 )
@@ -216,6 +222,7 @@ private fun AssistantPromptContent(
                         }
                     }
                 }
+                }
             }
         }
 
@@ -233,6 +240,7 @@ private fun AssistantPromptContent(
                 tail = {
                     Switch(
                         checked = assistant.allowConversationSystemPrompt,
+                        enabled = assistant.id is me.rerere.common.configuration.ConfigurationReference.User,
                         onCheckedChange = {
                             onUpdate(
                                 assistant.copy(
@@ -375,7 +383,7 @@ private fun AssistantPromptContent(
                         UiState.Success(
                             templateTransformer.transform(
                                 ctx = TransformerContext(
-                                    realmAccess = RealmAccess.Personal,
+                                    realmAccess = usageView?.access ?: RealmAccess.Personal,
                                     context = context,
                                     model = Model(modelId = "gpt-4o", displayName = "GPT-4o"),
                                     assistant = net.weero.measix.pilot.service.turn.resolveTurnAssistantSnapshot(assistant),
@@ -408,8 +416,8 @@ private fun AssistantPromptContent(
                 val previewMessages = (preview as? UiState.Success)?.data
                 val previewError = (preview as? UiState.Error)?.error
                 val imageFiles: net.weero.measix.pilot.service.FileManagementApplicationService = org.koin.compose.koinInject()
-                val imageResolver: suspend (String) -> net.weero.measix.pilot.service.ImageSource? = remember(imageFiles) {
-                    { url -> imageFiles.resolveConfigurationImage(url) }
+                val imageResolver: suspend (String) -> net.weero.measix.pilot.service.ImageSource? = remember(imageFiles, usageView) {
+                    { url -> imageFiles.resolveConfigurationImage(url, usageView) }
                 }
                 val previews by androidx.compose.runtime.produceState(
                     initialValue = emptyMap<String, net.weero.measix.pilot.service.AttachmentPreview>(),
@@ -428,8 +436,8 @@ private fun AssistantPromptContent(
                 val previewAlbum = remember(previewProvider) {
                     { messagesState.value.flatMap { message -> collectMessageImages(message.parts, previewProvider) } }
                 }
-                val backgroundHost = rememberImageBackgroundHost(settings, assistant.id, editSharedDefinition = true)
-                val previewActions = remember(backgroundHost.action) { listOf(backgroundHost.action) }
+                val backgroundHost = if (usageView == null) rememberImageBackgroundHost(settings, assistant.id, editSharedDefinition = true) else null
+                val previewActions = remember(backgroundHost?.action) { listOfNotNull(backgroundHost?.action) }
                 when {
                     previewError != null -> Text(
                         // Runtime class names are obfuscated in Release and are not meaningful UI text.
@@ -438,11 +446,12 @@ private fun AssistantPromptContent(
                     )
                     previewMessages != null -> ChatFontProvider(displaySetting = settings.displaySetting) {
                         net.weero.measix.pilot.ui.components.richtext.RichTextHost(
-                            net.weero.measix.pilot.service.RenderedContentSource.UserConfiguration,
+                            usageView?.let { net.weero.measix.pilot.service.RenderedContentSource.RealmConfiguration(it) }
+                                ?: net.weero.measix.pilot.service.RenderedContentSource.UserConfiguration,
                             LocalConversationImages provides previewAlbum,
                             net.weero.measix.pilot.ui.components.message.LocalAttachmentPreview provides previewProvider,
                             LocalImagePreviewActions provides previewActions,
-                            LocalImagePreviewOverlay provides backgroundHost.overlay,
+                            LocalImagePreviewOverlay provides backgroundHost?.overlay,
                         ) {
                             previewMessages.fastForEach { message ->
                                 ChatMessage(
@@ -520,6 +529,9 @@ private fun AssistantPromptContent(
                                 Icon(HugeIcons.Cancel01, null)
                             }
                         }
+                        if (presetMessage.parts.any { it !is UIMessagePart.Text }) {
+                            Text(stringResource(R.string.assistant_preset_media_kept), style = MaterialTheme.typography.bodySmall)
+                        }
                         OutlinedTextField(
                             value = presetMessage.toText(),
                             onValueChange = { text ->
@@ -527,7 +539,7 @@ private fun AssistantPromptContent(
                                     assistant.copy(
                                         presetMessages = assistant.presetMessages.mapIndexed { i, msg ->
                                             if (i == index) {
-                                                msg.copy(parts = listOf(UIMessagePart.Text(text)))
+                                                msg.withPresetText(text)
                                             } else {
                                                 msg
                                             }
@@ -859,4 +871,15 @@ private fun AssistantRegexCard(
             }
         }
     }
+}
+
+/** Editing the visible text preserves media, tool parts and message metadata. */
+internal fun UIMessage.withPresetText(text: String): UIMessage {
+    var replaced = false
+    val updated = parts.mapNotNull { part ->
+        if (part is UIMessagePart.Text) {
+            if (replaced) null else UIMessagePart.Text(text).also { replaced = true }
+        } else part
+    }
+    return copy(parts = if (replaced) updated else listOf(UIMessagePart.Text(text)) + updated)
 }

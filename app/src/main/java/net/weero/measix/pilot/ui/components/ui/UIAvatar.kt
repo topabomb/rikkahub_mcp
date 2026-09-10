@@ -105,7 +105,8 @@ fun UIAvatar(
     subAssistant: Boolean = false,
     onUpdate: ((Avatar) -> Unit)? = null,
     onImportImage: (suspend (Uri) -> Unit)? = null,
-    onClick: (() -> Unit)? = null
+    onClick: (() -> Unit)? = null,
+    imageResolver: (suspend (String) -> net.weero.measix.pilot.service.ImageSource?)? = null,
 ) {
     val context = LocalContext.current
     val toaster = LocalToaster.current
@@ -193,8 +194,14 @@ fun UIAvatar(
             ) {
                 when (value) {
                     is Avatar.Image -> {
+                        val avatarUrl = value.url
+                        val imageModel by androidx.compose.runtime.produceState<Any?>(null, avatarUrl, imageResolver) {
+                            this.value = if (imageResolver == null) avatarUrl else try { imageResolver(avatarUrl) }
+                                catch (cancelled: CancellationException) { throw cancelled }
+                                catch (_: Exception) { null }
+                        }
                         AsyncImage(
-                            model = value.url,
+                            model = imageModel,
                             contentDescription = null,
                             modifier = Modifier.fillMaxSize(),
                             contentScale = ContentScale.Crop,

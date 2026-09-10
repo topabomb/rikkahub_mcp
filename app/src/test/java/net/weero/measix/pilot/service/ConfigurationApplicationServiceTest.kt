@@ -622,7 +622,12 @@ class ConfigurationApplicationServiceTest {
         private val registry = ConversationRuntimeRegistry(scope, repository, locks)
         val coordinator = ConversationCommandCoordinator(registry, repository, gate, locks)
         val workspaces = mockk<WorkspaceQueryService>()
-        val commands = ConfigurationApplicationService(settings, sessions, gate, coordinator, workspaces)
+        private val artifacts = io.mockk.mockk<net.weero.measix.pilot.data.files.ArtifactStore> {
+            io.mockk.coEvery { updateAssistantPreferenceReferences(any(), any(), any(), any(), any(), any()) } coAnswers {
+                settings.changeAssistantPreference(arg(0), arg(1), arg(2), arg(3), arg(4), withCommit = arg(5))
+            }
+        }
+        val commands = ConfigurationApplicationService(settings, sessions, gate, coordinator, workspaces, artifacts)
         private val preview = mockk<ConversationAttachmentPreviewProjector>()
         val chatQuery = ConversationQueryService(repository, registry, mockk(), mockk(), preview, sessions, gate, settings, mockk())
         val queries = ConfigurationQueryService(settings, sessions, gate)
