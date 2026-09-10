@@ -1670,4 +1670,6 @@
   <string name="backup_personal_scope_notice">ユーザー設定と個人スペースのデータをバックアップします。企業の設定とデータは含まれず、復元時にも保持されます。</string>
   <string name="enterprise_import_failed">このファイルをインポートできません。読み取り可能か、形式・設定バージョン・リソース参照が正しいか確認してください。</string>
   <string name="configuration_change_rejected">この設定変更は許可されていません：%1$s</string>
+  <string name="enterprise_starters">企業の会話開始文（下書きに挿入）</string>
+  <string name="chat_input_presets">入力テンプレート</string>
 </resources>

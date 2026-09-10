@@ -1,6 +1,12 @@
 package net.weero.measix.pilot.service
 
 import me.rerere.common.configuration.ConfigurationReference
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.distinctUntilChangedBy
+import kotlinx.coroutines.flow.transformLatest
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.map
 import me.rerere.ai.core.ModelRequestMessage
@@ -23,7 +29,7 @@ import java.util.concurrent.TimeUnit
  *
  * UI 与 ViewModel 只表达“读取模型目录、读取余额、验证连接”等意图，不持有 Provider 容器，
  * 也不解释 Provider 返回的线协议对象。该服务不持有页面运行态；取消与过期结果隔离由页面
- * ViewModel 负责，协程取消会原样传播到 Provider SDK。
+ * collector 或预览协程负责，取消会原样传播到 Provider SDK。
  */
 class ProviderSettingsApplicationService(
     private val providerManager: ProviderManager,
@@ -83,7 +89,30 @@ class ProviderSettingsApplicationService(
             .map(::applyRegistryCapabilities)
             .sortedBy(Model::modelId)
 
-    suspend fun getBalance(setting: ProviderSetting.OpenAI): String {
+    /** The row owns collection; edits cancel the old request and disposal stops all balance work. */
+    fun observeBalance(providerId: ConfigurationReference.User): Flow<ProviderBalanceUiState> =
+        observeProvider(providerId)
+            .map { (it as? ProviderSetting.OpenAI)?.takeIf { provider -> provider.enabled && provider.balanceOption.enabled } }
+            .distinctUntilChangedBy { it?.balanceRequestFingerprint() }
+            .transformLatest { provider ->
+                if (provider == null) emit(ProviderBalanceUiState.Hidden)
+                else {
+                    emit(ProviderBalanceUiState.Loading)
+                    try { emit(ProviderBalanceUiState.Available(getBalance(provider))) }
+                    catch (cancelled: CancellationException) { throw cancelled }
+                    catch (_: Exception) { emit(ProviderBalanceUiState.Unavailable) }
+                }
+            }
+
+    /** An explicit editor preview may query unsaved user credentials without writing them. */
+    suspend fun previewBalance(draft: ProviderSetting): ProviderBalanceUiState {
+        if (draft !is ProviderSetting.OpenAI || !draft.balanceOption.enabled) return ProviderBalanceUiState.Hidden
+        return try { ProviderBalanceUiState.Available(getBalance(draft)) }
+        catch (cancelled: CancellationException) { throw cancelled }
+        catch (_: Exception) { ProviderBalanceUiState.Unavailable }
+    }
+
+    private suspend fun getBalance(setting: ProviderSetting.OpenAI): String {
         val key = ProviderBalanceCacheKey(
             providerId = setting.id,
             requestFingerprint = setting.balanceRequestFingerprint(),
@@ -91,7 +120,7 @@ class ProviderSettingsApplicationService(
         balanceCache.getIfPresent(key)?.let { return it }
         return providerManager.getProviderByType(setting)
             .getBalance(setting)
-            .also { balanceCache.put(key, it) }
+            .also { currentCoroutineContext().ensureActive(); balanceCache.put(key, it) }
     }
 
     fun applyRegistryCapabilities(model: Model): Model = model.copy(
@@ -197,4 +226,11 @@ internal fun ProviderSetting.OpenAI.balanceRequestFingerprint(): String {
 sealed interface ProviderToolProbeResult {
     data class Called(val toolName: String, val input: String) : ProviderToolProbeResult
     data class NotCalled(val responseText: String) : ProviderToolProbeResult
+}
+
+sealed interface ProviderBalanceUiState {
+    data object Hidden : ProviderBalanceUiState
+    data object Loading : ProviderBalanceUiState
+    data class Available(val value: String) : ProviderBalanceUiState
+    data object Unavailable : ProviderBalanceUiState
 }

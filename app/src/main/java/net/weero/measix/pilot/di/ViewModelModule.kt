@@ -23,7 +23,6 @@ import net.weero.measix.pilot.ui.pages.setting.SettingVM
 import net.weero.measix.pilot.ui.pages.setting.ModelSettingsVM
 import net.weero.measix.pilot.ui.pages.enterprise.EnterpriseVM
 import net.weero.measix.pilot.ui.pages.setting.ProviderSettingsVM
-import net.weero.measix.pilot.ui.components.ai.ProviderBalanceVM
 import net.weero.measix.pilot.ui.pages.share.handler.ShareHandlerVM
 import org.koin.core.module.dsl.viewModel
 import org.koin.core.module.dsl.viewModelOf
@@ -49,7 +48,6 @@ val viewModelModule = module {
     viewModelOf(::SettingVM)
     viewModelOf(::ModelSettingsVM)
     viewModelOf(::EnterpriseVM)
-    viewModelOf(::ProviderBalanceVM)
     viewModel<ProviderSettingsVM> {
         ProviderSettingsVM(providerId = it.get(), service = get())
     }

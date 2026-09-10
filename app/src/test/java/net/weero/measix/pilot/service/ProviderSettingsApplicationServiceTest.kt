@@ -8,6 +8,12 @@ import io.mockk.coVerify
 import io.mockk.every
 import io.mockk.mockk
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.toList
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.test.runTest
 import me.rerere.ai.core.MessageRole
@@ -159,6 +165,7 @@ class ProviderSettingsApplicationServiceTest {
             id = providerId,
             baseUrl = "https://first.example/v1",
             apiKey = "first-key",
+            balanceOption = me.rerere.ai.provider.BalanceOption(enabled = true),
         )
         val edited = first.copy(
             baseUrl = "https://second.example/v1",
@@ -170,14 +177,88 @@ class ProviderSettingsApplicationServiceTest {
         every { manager.getProviderByType(edited) } returns provider
         coEvery { provider.getBalance(first) } returns "first"
         coEvery { provider.getBalance(edited) } returns "second"
-        val service = ProviderSettingsApplicationService(manager, mockk())
+        val settings = MutableStateFlow(Settings(providers = listOf(first)))
+        val store = mockk<SettingsStore>()
+        every { store.userSettings } returns settings
+        val service = ProviderSettingsApplicationService(manager, store)
+        suspend fun available() = service.observeBalance(providerId as ConfigurationReference.User)
+            .first { it is ProviderBalanceUiState.Available }
 
-        assertEquals("first", service.getBalance(first))
-        assertEquals("second", service.getBalance(edited))
-        assertEquals("first", service.getBalance(first))
+        assertEquals(ProviderBalanceUiState.Available("first"), available())
+        settings.value = settings.value.copy(providers = listOf(edited))
+        assertEquals(ProviderBalanceUiState.Available("second"), available())
+        settings.value = settings.value.copy(providers = listOf(first))
+        assertEquals(ProviderBalanceUiState.Available("first"), available())
 
         coVerify(exactly = 1) { provider.getBalance(first) }
         coVerify(exactly = 1) { provider.getBalance(edited) }
+    }
+
+    @Test
+    fun `balance follows current user settings and cancelling collection stops the original request`() = runTest {
+        val original = ProviderSetting.OpenAI(baseUrl = "https://old.example/v1",
+            balanceOption = me.rerere.ai.provider.BalanceOption(enabled = true))
+        val revised = original.copy(apiKey = "revised-key")
+        val settings = MutableStateFlow(Settings(providers = listOf(original)))
+        val store = mockk<SettingsStore>()
+        every { store.userSettings } returns settings
+        val manager = mockk<ProviderManager>()
+        val provider = mockk<Provider<ProviderSetting.OpenAI>>()
+        every { manager.getProviderByType(any<ProviderSetting.OpenAI>()) } returns provider
+        var stops = 0
+        coEvery { provider.getBalance(original) } coAnswers {
+            try { awaitCancellation() } finally { stops++ }
+        }
+        coEvery { provider.getBalance(revised) } returns "21"
+        val service = ProviderSettingsApplicationService(manager, store)
+        val states = mutableListOf<ProviderBalanceUiState>()
+        val collection = backgroundScope.launch { service.observeBalance(original.id as ConfigurationReference.User).toList(states) }
+        runCurrent()
+        assertEquals(ProviderBalanceUiState.Loading, states.last())
+        settings.value = settings.value.copy(providers = listOf(revised))
+        runCurrent()
+        assertEquals(1, stops)
+        assertEquals(ProviderBalanceUiState.Available("21"), states.last())
+        settings.value = settings.value.copy(providers = listOf(revised.copy(enabled = false)))
+        runCurrent()
+        assertEquals(ProviderBalanceUiState.Hidden, states.last())
+        settings.value = settings.value.copy(providers = listOf(original))
+        runCurrent()
+        assertEquals(ProviderBalanceUiState.Loading, states.last())
+        collection.cancel()
+        runCurrent()
+        assertEquals(2, stops)
+        coVerify(exactly = 2) { provider.getBalance(original) }
+        coVerify(exactly = 1) { provider.getBalance(revised) }
+    }
+
+    @Test
+    fun `balance errors are typed and reopening retries without caching failures`() = runTest {
+        val configured = ProviderSetting.OpenAI(balanceOption = me.rerere.ai.provider.BalanceOption(enabled = true))
+        val settings = MutableStateFlow(Settings(providers = listOf(configured)))
+        val store = mockk<SettingsStore>()
+        every { store.userSettings } returns settings
+        val manager = mockk<ProviderManager>()
+        val provider = mockk<Provider<ProviderSetting.OpenAI>>()
+        every { manager.getProviderByType(configured) } returns provider
+        coEvery { provider.getBalance(configured) } throws IllegalStateException("private diagnostic") andThen "8"
+        val service = ProviderSettingsApplicationService(manager, store)
+        val id = configured.id as ConfigurationReference.User
+        assertEquals(ProviderBalanceUiState.Unavailable, service.observeBalance(id).first { it == ProviderBalanceUiState.Unavailable })
+        assertEquals(ProviderBalanceUiState.Available("8"), service.observeBalance(id).first { it is ProviderBalanceUiState.Available })
+        settings.value = settings.value.copy(providers = emptyList())
+        assertEquals(ProviderBalanceUiState.Hidden, service.observeBalance(id).first())
+        coVerify(exactly = 2) { provider.getBalance(configured) }
+    }
+
+    @Test
+    fun `explicit balance preview queries an unsaved draft without accessing stored configuration`() = runTest {
+        val draft = ProviderSetting.OpenAI(apiKey = "unsaved-key", balanceOption = me.rerere.ai.provider.BalanceOption(enabled = true))
+        val (service, _, provider) = fixture(draft)
+        coEvery { provider.getBalance(draft) } returns "preview"
+        assertEquals(ProviderBalanceUiState.Available("preview"), service.previewBalance(draft))
+        assertEquals(ProviderBalanceUiState.Hidden, service.previewBalance(draft.copy(balanceOption = draft.balanceOption.copy(enabled = false))))
+        coVerify(exactly = 1) { provider.getBalance(draft) }
     }
 
     private fun fixture(

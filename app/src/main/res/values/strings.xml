@@ -1671,4 +1671,6 @@
   <string name="backup_personal_scope_notice">Back up your configuration and personal-space data. Enterprise configuration and data are excluded and preserved during restore.</string>
   <string name="enterprise_import_failed">Cannot import this file. Check that it is readable and that its format, configuration version and resource references are valid.</string>
   <string name="configuration_change_rejected">This configuration change is not allowed: %1$s</string>
+  <string name="enterprise_starters">Enterprise starters (insert into draft)</string>
+  <string name="chat_input_presets">Input templates</string>
 </resources>

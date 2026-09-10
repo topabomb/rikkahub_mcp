@@ -550,8 +550,8 @@ private fun ColumnScope.ModelList(
 
                     Spacer(modifier = Modifier.weight(1f))
 
-                    providerSetting.balanceSource?.let { source ->
-                        ProviderBalanceText(providerSetting = source, style = MaterialTheme.typography.labelMedium,
+                    providerSetting.userProviderId?.takeIf { providerSetting.models.any { it.canSelect } }?.let { providerId ->
+                        ProviderBalanceText(providerId = providerId, style = MaterialTheme.typography.labelMedium,
                             color = MaterialTheme.colorScheme.primary)
                     }
                 }

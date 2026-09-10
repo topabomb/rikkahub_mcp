@@ -102,7 +102,7 @@ import net.weero.measix.pilot.R
 import net.weero.measix.pilot.ui.components.ai.ModelAbilityTag
 import net.weero.measix.pilot.ui.components.ai.ModelModalityTag
 import net.weero.measix.pilot.ui.components.ai.ModelTypeTag
-import net.weero.measix.pilot.ui.components.ai.ProviderBalanceText
+import net.weero.measix.pilot.ui.components.ai.ProviderBalancePreview
 import net.weero.measix.pilot.ui.components.nav.BackButton
 import net.weero.measix.pilot.ui.components.ui.AutoAIIcon
 import net.weero.measix.pilot.ui.components.ui.ShareSheet
@@ -293,7 +293,7 @@ private fun SettingProviderConfigPage(
                 balanceOption = internalProvider.balanceOption,
                 onEdit = { internalProvider = internalProvider.copyProvider(balanceOption = it) }
             )
-            ProviderBalanceText(providerSetting = internalProvider, style = MaterialTheme.typography.labelSmall)
+            ProviderBalancePreview(draft = internalProvider, style = MaterialTheme.typography.labelSmall)
         }
 
         Row(

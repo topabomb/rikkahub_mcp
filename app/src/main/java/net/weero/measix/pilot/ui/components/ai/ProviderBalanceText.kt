@@ -8,8 +8,12 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.Text
+import androidx.compose.runtime.produceState
+import me.rerere.ai.provider.ProviderSetting
+import androidx.compose.runtime.remember
+import org.koin.compose.koinInject
+import net.weero.measix.pilot.service.ProviderBalanceUiState
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
@@ -18,45 +22,52 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.takeOrElse
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.dp
-import androidx.lifecycle.ViewModel
-import androidx.lifecycle.viewModelScope
-import android.util.Log
-import me.rerere.ai.provider.ProviderSetting
 import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.MoneyBag02
-import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.update
-import kotlinx.coroutines.launch
 import net.weero.measix.pilot.service.ProviderSettingsApplicationService
-import net.weero.measix.pilot.service.balanceRequestFingerprint
 import net.weero.measix.pilot.R
 import net.weero.measix.pilot.utils.toDp
-import org.koin.androidx.compose.koinViewModel
 
 @Composable
 fun ProviderBalanceText(
-    providerSetting: ProviderSetting,
+    providerId: ConfigurationReference.User,
     modifier: Modifier = Modifier,
     style: TextStyle = LocalTextStyle.current,
     color: Color = Color.Unspecified
 ) {
-    if (!providerSetting.balanceOption.enabled || providerSetting !is ProviderSetting.OpenAI) {
-        // Balance option is disabled or provider is not OpenAI type
-        return
-    }
+    val service: ProviderSettingsApplicationService = koinInject()
+    val balance by remember(service, providerId) { service.observeBalance(providerId) }
+        .collectAsStateWithLifecycle(initialValue = ProviderBalanceUiState.Hidden)
+    ProviderBalanceValue(balance, modifier, style, color)
+}
 
-    val balanceVM = koinViewModel<ProviderBalanceVM>()
-    val balances by balanceVM.balances.collectAsStateWithLifecycle()
-    LaunchedEffect(providerSetting) { balanceVM.request(providerSetting) }
-    val value = when (val state = balances[providerSetting.id]) {
+@Composable
+fun ProviderBalancePreview(
+    draft: ProviderSetting,
+    modifier: Modifier = Modifier,
+    style: TextStyle = LocalTextStyle.current,
+    color: Color = Color.Unspecified,
+) {
+    val service: ProviderSettingsApplicationService = koinInject()
+    val balance by produceState<ProviderBalanceUiState>(ProviderBalanceUiState.Hidden, draft) {
+        value = ProviderBalanceUiState.Loading
+        value = service.previewBalance(draft)
+    }
+    ProviderBalanceValue(balance, modifier, style, color)
+}
+
+@Composable
+private fun ProviderBalanceValue(
+    balance: ProviderBalanceUiState,
+    modifier: Modifier,
+    style: TextStyle,
+    color: Color,
+) {
+    val value = when (val state = balance) {
+        ProviderBalanceUiState.Hidden -> return
         is ProviderBalanceUiState.Available -> state.value
         ProviderBalanceUiState.Unavailable -> androidx.compose.ui.res.stringResource(R.string.provider_balance_unavailable)
-        ProviderBalanceUiState.Loading,
-        null,
-        -> "~"
+        ProviderBalanceUiState.Loading -> "~"
     }
 
     Row(
@@ -77,58 +88,4 @@ fun ProviderBalanceText(
             color = color
         )
     }
-}
-
-class ProviderBalanceVM(
-    private val providerSettings: ProviderSettingsApplicationService,
-) : ViewModel() {
-    private val _balances = MutableStateFlow<Map<ConfigurationReference, ProviderBalanceUiState>>(emptyMap())
-    val balances = _balances.asStateFlow()
-    private val jobs = mutableMapOf<ConfigurationReference, Job>()
-    private val revisions = mutableMapOf<ConfigurationReference, Long>()
-    private val requestFingerprints = mutableMapOf<ConfigurationReference, String>()
-
-    fun request(provider: ProviderSetting.OpenAI) {
-        val providerId = provider.id
-        val fingerprint = provider.balanceRequestFingerprint()
-        if (requestFingerprints[providerId] == fingerprint) {
-            when (_balances.value[providerId]) {
-                ProviderBalanceUiState.Loading,
-                is ProviderBalanceUiState.Available,
-                -> return
-                ProviderBalanceUiState.Unavailable,
-                null,
-                -> Unit
-            }
-        }
-        val revision = revisions.getOrDefault(providerId, 0L) + 1L
-        revisions[providerId] = revision
-        requestFingerprints[providerId] = fingerprint
-        jobs.remove(providerId)?.cancel()
-        _balances.update { it + (providerId to ProviderBalanceUiState.Loading) }
-        val job = viewModelScope.launch {
-            val result = try {
-                ProviderBalanceUiState.Available(providerSettings.getBalance(provider))
-            } catch (cancelled: CancellationException) {
-                throw cancelled
-            } catch (error: Exception) {
-                Log.w("ProviderBalanceVM", "Failed to query provider balance", error)
-                ProviderBalanceUiState.Unavailable
-            }
-            if (revisions[providerId] == revision) {
-                _balances.update { it + (providerId to result) }
-            }
-        }
-        jobs[providerId] = job
-        job.invokeOnCompletion {
-            if (revisions[providerId] == revision) jobs.remove(providerId)
-        }
-    }
-
-}
-
-sealed interface ProviderBalanceUiState {
-    data object Loading : ProviderBalanceUiState
-    data class Available(val value: String) : ProviderBalanceUiState
-    data object Unavailable : ProviderBalanceUiState
 }

@@ -100,6 +100,7 @@ import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.datastore.getChatModel
 import net.weero.measix.pilot.data.datastore.getQuickMessagesOfAssistant
 import net.weero.measix.pilot.data.model.Assistant
+import net.weero.measix.pilot.service.ConversationStarterUiModel
 import net.weero.measix.pilot.data.model.QuickMessage
 import net.weero.measix.pilot.service.importInputUris
 import net.weero.measix.pilot.service.createInputText
@@ -128,6 +129,7 @@ internal fun ChatInput(
     artifactDraftScope: ArtifactDraftScope,
     requireInputOwner: () -> Unit,
     speechPage: net.weero.measix.pilot.service.ConversationCommandTarget,
+    starters: List<ConversationStarterUiModel>,
     loading: Boolean,
     settings: Settings,
     assistant: Assistant,
@@ -360,6 +362,7 @@ internal fun ChatInput(
                                 state = state,
                                 artifactDraftScope = artifactDraftScope,
                                 requireInputOwner = requireInputOwner,
+                                starters = starters,
                                 assistant = assistant,
                                 completionProviders = completionProviders,
                                 onSendMessage = { sendMessage() },
@@ -374,6 +377,7 @@ internal fun ChatInput(
                             state = state,
                             artifactDraftScope = artifactDraftScope,
                             requireInputOwner = requireInputOwner,
+                            starters = starters,
                             assistant = assistant,
                             completionProviders = completionProviders,
                             onSendMessage = { sendMessage() },
@@ -474,6 +478,7 @@ private fun ActionIconButton(
 @Composable
 private fun TextInputRow(
     state: ChatInputState,
+    starters: List<ConversationStarterUiModel>,
     artifactDraftScope: ArtifactDraftScope,
     requireInputOwner: () -> Unit,
     assistant: Assistant,
@@ -665,9 +670,9 @@ private fun TextInputRow(
                     trailingContent()
                 }
             },
-            leadingIcon = if (quickMessages.isNotEmpty()) {
+            leadingIcon = if (quickMessages.isNotEmpty() || starters.isNotEmpty()) {
                 {
-                    QuickMessageButton(quickMessages = quickMessages, state = state)
+                    PromptPresetButton(quickMessages = quickMessages, starters = starters, state = state, requireInputOwner = requireInputOwner)
                 }
             } else null,
         )
@@ -761,49 +766,53 @@ private fun ChatInputState.applyCompletion(
 }
 
 @Composable
-private fun QuickMessageButton(
+private fun PromptPresetButton(
     quickMessages: List<QuickMessage>,
+    starters: List<ConversationStarterUiModel>,
     state: ChatInputState,
+    requireInputOwner: () -> Unit,
 ) {
     var expanded by remember { mutableStateOf(false) }
-    IconButton(
-        onClick = {
-            expanded = !expanded
-        }) {
-        Icon(HugeIcons.Zap, null)
+    val toaster = LocalToaster.current
+    val failed = stringResource(R.string.error_title_operation)
+    fun append(content: String, separate: Boolean) {
+        try {
+            requireInputOwner()
+            val spacer = if (separate && state.textContent.text.isNotEmpty()) "\n\n" else ""
+            state.appendText(spacer + content)
+            expanded = false
+        } catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+        catch (_: Exception) { toaster.show(failed, type = ToastType.Error) }
+    }
+    IconButton(onClick = { expanded = !expanded }) {
+        Icon(HugeIcons.Zap, stringResource(R.string.chat_input_presets))
         DropdownMenu(
             expanded = expanded,
             onDismissRequest = { expanded = false },
-            modifier = Modifier
-                .widthIn(min = 200.dp, max = 360.dp)
+            modifier = Modifier.widthIn(min = 200.dp, max = 360.dp),
         ) {
-            quickMessages.forEach { quickMessage ->
-                Surface(
-                    onClick = {
-                        state.appendText(quickMessage.content)
-                        expanded = false
-                    },
-                    color = Color.Transparent,
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    Column(
-                        modifier = Modifier.padding(8.dp)
-                    ) {
-                        Text(
-                            text = quickMessage.title,
-                            style = MaterialTheme.typography.titleMedium,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                        Text(
-                            text = quickMessage.content,
-                            style = MaterialTheme.typography.bodySmall,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                    }
+            if (starters.isNotEmpty()) {
+                Text(stringResource(R.string.enterprise_starters), Modifier.padding(8.dp), style = MaterialTheme.typography.labelMedium)
+                starters.forEach { starter ->
+                    PromptPresetItem(starter.title, starter.prompt) { append(starter.prompt, separate = true) }
                 }
             }
+            if (quickMessages.isNotEmpty()) {
+                Text(stringResource(R.string.assistant_page_quick_messages), Modifier.padding(8.dp), style = MaterialTheme.typography.labelMedium)
+                quickMessages.forEach { message ->
+                    PromptPresetItem(message.title, message.content) { append(message.content, separate = false) }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun PromptPresetItem(title: String, content: String, onClick: () -> Unit) {
+    Surface(onClick = onClick, color = Color.Transparent, modifier = Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(8.dp)) {
+            Text(title, style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(content, style = MaterialTheme.typography.bodySmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
         }
     }
 }

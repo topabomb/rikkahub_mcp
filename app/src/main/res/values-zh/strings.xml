@@ -1670,4 +1670,6 @@
   <string name="backup_personal_scope_notice">备份包含用户配置和个人空间的数据。不包含企业配置或数据，恢复时保留企业内容。</string>
   <string name="enterprise_import_failed">无法导入此文件。请检查文件是否可读，以及格式、配置版本和资源引用是否正确。</string>
   <string name="configuration_change_rejected">不允许此配置修改：%1$s</string>
+  <string name="enterprise_starters">企业开场白（填入草稿）</string>
+  <string name="chat_input_presets">输入模板</string>
 </resources>

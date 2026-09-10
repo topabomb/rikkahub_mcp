@@ -13,6 +13,8 @@ import net.weero.measix.pilot.data.configuration.ResolvedConfiguration
 import net.weero.measix.pilot.data.configuration.ResourceSelectionSlot
 import net.weero.measix.pilot.data.model.Assistant
 
+internal data class ConversationStarterUiModel(val reference: ConfigurationReference.Enterprise, val title: String, val prompt: String)
+
 /** The assistant and its choices belong to the same rendered conversation and authorized configuration. */
 internal data class ConversationConfigurationUiModel(
     val target: ConversationAssistantTarget,
@@ -28,6 +30,7 @@ internal data class ConversationConfigurationUiModel(
     val assistants: Map<ConfigurationReference, Assistant>,
     val searchSelection: ConfigurationSelection,
     val fixedMcpBindings: Set<ConfigurationReference>,
+    val starters: List<ConversationStarterUiModel>,
 ) {
     val canChangeModel: Boolean get() = assistant != null && target.assistantId is ConfigurationReference.User
     val canEditDefinition: Boolean get() = target.assistantId is ConfigurationReference.User
@@ -48,6 +51,11 @@ internal fun ResolvedConfiguration.conversationConfiguration(target: Conversatio
         (target.assistantId as? ConfigurationReference.Enterprise)?.let { reference ->
             enterpriseConfiguration?.assistants?.singleOrNull { it.id == reference.id }?.mcpServerIds
                 ?.map { ConfigurationReference.Enterprise(reference.authority, it) }?.toSet()
+        }.orEmpty(),
+        (target.assistantId as? ConfigurationReference.Enterprise)?.takeIf { assistant != null }?.let { reference ->
+            enterpriseConfiguration?.starters?.filter { it.assistantId == reference.id }?.map {
+                ConversationStarterUiModel(ConfigurationReference.Enterprise(reference.authority, it.id), it.title, it.prompt)
+            }
         }.orEmpty(),
     )
 }

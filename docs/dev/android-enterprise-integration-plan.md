@@ -206,11 +206,13 @@ UserConfiguration + UserPreferences + Applied Enterprise State
 | 切回个人 | 保留登录和两域选择/草稿；关闭 Portal/采集，在途生成仍归原域 |
 | 重启 | 先恢复 source 再恢复企业状态；有效恢复原空间，失效回个人并保留恢复入口 |
 | 模拟网络失败 | 保留绑定；企业新外部执行暂停，合法历史/本地操作可用，个人正常 |
-| 访问令牌过期 | 同一 session owner single-flight 模拟刷新，成功继续 |
+| 本地 Session 到期 | 按本地来源期限撤销资格并收口，重新接入；不签发或伪造平台 token |
 | 授权失效/撤销 | 撤销资格，收口企业任务/Portal，回个人，提示重新接入 |
 | Portal 过期 | 只重建网页会话，不退出企业 |
 | 退出接入 | 原生确认，阻断新企业动作，收口该域运行/采集，清活动绑定/凭据/企业配置/网页会话，回个人；保留封存数据 |
 | 清除示例企业数据 | 独立确认，仅清该示例主体数据/导航，不删个人配置/历史/共享 Workspace |
+
+平台 Access/Refresh Token 的 rotation、single-flight、幂等与丢响应恢复属于下一阶段真实平台接入，见 [生产接入规划](android-enterprise-production-integration-roadmap.md)。本地来源遵循 Control Protocol §8 的独立 document/session 边界，不伪造平台 token、grant 或 Cookie；配置同步、切域和 Portal 操作均不能续期本地 Session。
 
 正式退出由应用层统一编排：原生确认同时冻结企业 RealmAccess 与当前 RealmSelection，并在同一 Session 锁内复验。停留个人空间也能退出企业，不能仅凭个人 selection 推断目标 Session；旧确认不能退出新接入。授权到期/撤销按原企业 Session 收口，不要求用户仍选中企业或该授权仍有效。
 
@@ -718,3 +720,11 @@ C7 的系统备份入口已关闭：Manifest 禁用 allowBackup，旧系统备�
 设置首页仅在个人域缺少可用模型时提示配置 Provider；历史页按所选助手引用读取本域历史，不把资源禁用或定义缺失当作历史读取撤权。TurnRecovery 根据已提交调用关系恢复，不再用个人配置判断企业子助手是否已删除；运行时资源准入保持不变。配置写失败、已接受写取消后发布、企业子助手恢复及历史读取分别有针对性验证；独立审查提出的问题均已修正。
 
 完整串行 `test assembleDebug lintDebug assembleRelease` 通过（8 分 57 秒），App 2,135 项 JVM 无失败；lint 0 错误。Kotlin 编译器在大型协程集成测试上发生栈溢出，已将 compiler stack 配置为 4 MiB；随后用仓库默认门禁命令连同定向设备回归再次通过（36 秒）。Android 17 模拟器 7 项用例覆盖个人配置迁移、按域配置、MCP 目录与模型目录；实际 Debug 冷启动、企业历史、个人/企业设置提示与切域已核实。两位独立审查均已闭合。证据见 `build/reports/enterprise/overlay-retirement-verification.json`；本批未重跑 Release 手工操作，不宣称真实平台互操作或整期完成。
+
+### 模型目录余额与企业开场白
+
+用户 Provider 余额由原 ProviderSettingsApplicationService 按真实用户引用读取，目录不携带连接配置；配置变更或停止收集取消旧请求，失败不缓存。用户 Provider 编辑器保留明确的未保存草稿预览，复用同一 SDK 与缓存 owner；旧 ProviderBalanceVM 及其第二请求状态已删除。
+
+正式聊天输入框增加企业开场白分组，只显示当前可用企业助手的绑定项。点击复验原页面/助手，追加到原草稿并保留附件，等待用户发送；不会写回助手或创建会话。这是原生输入入口，不能表述为 Portal 已提供 Starter 操作。
+
+本批完整串行 test assembleDebug lintDebug assembleRelease 在 8 分 41 秒内通过：App 2,135 项 JVM 无失败或跳过；Workspace 保留 11 项 Windows 条件跳过，App lint 无错误。Android 17 模拟器正式 Debug 页面验证接入、开场白分组、原草稿和附件保留，以及不自动发送/建库；没有重跑全量 instrumentation，也未作本批 Release UI 或真实平台互操作验收。独立审查未发现剩余实质问题，证据见 build/reports/enterprise/catalog-input-verification.json。完整助手本域使用编辑、assistant_manage、场景管理和整期验收继续实施。

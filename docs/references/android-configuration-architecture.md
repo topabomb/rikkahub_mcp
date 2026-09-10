@@ -124,7 +124,7 @@ PrepareEnterpriseExampleAssets 从公开完整模板派生 enterprise.local.iden
 
 `observeModelCatalog` 在 Session → Settings 锁序下捕获同一原选择的目录，Settings 流只作为失效通知；返回 Loading、Available 或 Unavailable。`ModelCatalogUiModel` 分开保留原覆盖、有效选择和用途不可用原因，企业目录不携带私有 binding。模型默认设置页与聊天模型选择器消费该投影，完整助手使用页面与其余资源执行链仍在接线。
 
-Provider 余额仍在共享用户定义编辑目录沿用既有读取路径；按域模型目录暂未展示余额，需继续通过真实用户 Provider ID 接入现有余额 owner，不向目录加入连接凭据。
+按域模型目录和共享定义的模型选择器只传真实用户 Provider ID，由 ProviderSettingsApplicationService.observeBalance 读取当前用户配置。受禁止或无可选模型的分组不启动余额读取；企业资源不进入用户余额接口。配置变更取消旧请求，页面离开取消 collection；结果缓存仍只归既有服务，按凭据/endpoint/查询路径指纹隔离。Provider 编辑页通过明确的 previewBalance 预览未保存草稿，不把草稿写入配置。ModelGroupUiModel 不携带 balanceSource/连接凭据，UI 不保留第二套请求映射。
 
 用户图片模型的目录、原子选择和执行解析共用 `supportsImageGeneration`，以模型覆盖连接或实际 Provider 协议判断，不以分组 Provider 替代真实传输。附件识别选择要求 CHAT 类型及 IMAGE 输入。企业图片定义的可选择性表示配置声明，实际图片执行适配尚未完成。收藏移动使用原引用对作用于最新完整列表；缺失或歧义收藏仍可从 UI 移除，不凭空构造模型定义。原 FavoriteModelService 已删除。
 
@@ -602,3 +602,7 @@ FileManagementQueryService 合成当前选择的上传与图库目录，条目�
 ### 系统备份边界
 
 Android Manifest 关闭 `allowBackup`；`backup_rules.xml` 和 `data_extraction_rules.xml` 分别显式排除旧系统备份、云端备份与设备迁移中的全部应用存储域，包含 device-protected storage。Room、DataStore 和共享 payload 混有多个域的数据，不能直接交给系统复制。按域导出与恢复归既有 BackupArchiveService/PendingBackupRestore；这不新增存储结构，也不改变应用内备份入口。部分厂商设备迁移不受 `allowBackup=false` 单独控制，因此保留显式排除规则，见 [Android 官方备份说明](https://developer.android.com/identity/data/autobackup)。
+
+### 企业 Starter 预填
+
+ConversationConfigurationUiModel 只投影当前企业助手绑定的 Starter ID、标题与 prompt；用户助手或其他企业助手的开场白不混入。聊天输入框的输入模板菜单分别展示企业开场白与用户 QuickMessage。点击 Starter 在原页面授权仍有效时把文本追加到现有草稿（有文字时以空行分隔），保留附件；不自动发送、不创建 QuickMessage、不改企业定义。实际发送仍走当前会话的模型与资源准入。

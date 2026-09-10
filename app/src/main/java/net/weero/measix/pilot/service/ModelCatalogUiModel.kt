@@ -44,7 +44,6 @@ internal data class ModelGroupUiModel(
     val name: String,
     val models: List<ModelChoiceUiModel>,
     val userProviderId: ConfigurationReference.User?,
-    val balanceSource: ProviderSetting? = null,
 )
 
 /** A rendered directory contains public definitions, never enterprise connection inputs. */
@@ -132,7 +131,6 @@ internal fun userDefinitionModelCatalog(providers: List<ProviderSetting>): Model
                 })
             },
             userProviderId = provider.id as ConfigurationReference.User,
-            balanceSource = provider.takeIf { it.enabled },
         )
     })
 }

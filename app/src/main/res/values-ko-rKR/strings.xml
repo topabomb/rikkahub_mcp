@@ -1670,4 +1670,6 @@
   <string name="backup_personal_scope_notice">사용자 설정과 개인 공간의 데이터를 백업합니다. 기업 설정과 데이터는 포함되지 않으며 복원 시에도 유지됩니다.</string>
   <string name="enterprise_import_failed">이 파일을 가져올 수 없습니다. 파일을 읽을 수 있는지, 형식과 설정 버전 및 리소스 참조가 올바른지 확인하세요.</string>
   <string name="configuration_change_rejected">이 설정 변경은 허용되지 않습니다: %1$s</string>
+  <string name="enterprise_starters">기업 대화 시작 문구 (초안에 삽입)</string>
+  <string name="chat_input_presets">입력 템플릿</string>
 </resources>

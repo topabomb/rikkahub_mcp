@@ -1670,4 +1670,6 @@
   <string name="backup_personal_scope_notice">Сохраняются пользовательские настройки и данные личного пространства. Конфигурация и данные организации не входят в копию и сохраняются при восстановлении.</string>
   <string name="enterprise_import_failed">Не удалось импортировать файл. Проверьте доступность файла, формат, версию конфигурации и ссылки на ресурсы.</string>
   <string name="configuration_change_rejected">Это изменение настройки не разрешено: %1$s</string>
+  <string name="enterprise_starters">Начало диалога от организации (вставить в черновик)</string>
+  <string name="chat_input_presets">Шаблоны ввода</string>
 </resources>
