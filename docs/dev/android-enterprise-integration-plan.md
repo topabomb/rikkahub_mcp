@@ -300,6 +300,8 @@ LocalEnterpriseSource（身份/配置/动态/场景）
 
 Seed 只初始化尚未建立的主体 Feed。同步、重入与重复导入不能覆盖已发布/撤回状态；导入结果明确提示已有 Feed 不被 seed 替换。动态保留来源/Deployment/User 归属，退出后仍保存但不可读取，重登不重新播种。
 
+本地企业空间的“本地企业场景 → 本地企业动态”提供正式原生管理入口：新建与编辑草稿、设置正文格式/分类/级别、发布和撤回；已发布内容不能直接编辑，改动通过新草稿发布，原记录可撤回。该入口仅在选中本地企业且 READY/OFFLINE 时可用，Portal 继续只读已发布动态。页面捕获原 RealmSelection 和存储 revision，读取与写入在 Session owner 内校验原主体、Session、选中版本与期限；读写 IO 完成后再次核验期限，过期或旧页面不得返回快照或提交。存储 revision 冲突须重新读取，不用重新播种覆盖现有动态。
+
 公开 DTO、eup_UUIDv4 标识和枚举直接遵守 Client OpenAPI。查询统一处理日期、默认/范围 limit、truncated 和 publishedAt 降序，时间相同以稳定 ID 排序。日期使用企业时区日历的首日零点至末日下一日零点，覆盖 DST；ETag 包含主体、公开 revision、时区和规范化查询，start-only 包含本次解析的企业当前日期。主体/Session/document 授权先于内容及 notModified 返回；withRealmAccess 的历史数据授权不能代替 Portal 当前 selectedScope 校验。
 
 0.0.20 是个人域/企业域的第一个入口版本。企业接入、Portal、完整配置及本地企业存储只执行本期最新契约；外部旧完整文件明确拒绝并提示使用新模板，不为分阶段开发的企业原型保留双格式解析、旧 HTML、旧桥接或专用历史迁移/归档。清理未交付的旧企业实现，以及与其绑定的临时/过时文件、旧模板、无效测试和文档；保留当前有效的共享消费契约与必要交付材料。已发布个人配置、Room 数据和个人备份的迁移与保全要求仍有效。
@@ -765,3 +767,11 @@ assistant_manage 将原 RealmAccess 和调用者引用交给既有管理服务�
 最终完整串行 test assembleDebug lintDebug assembleRelease 通过（8 分 28 秒）：App 2,162 项 JVM 无失败，lint 0 错误、287 警告；Workspace 保留 11 项 Windows 条件跳过。本批未重跑 instrumentation。Android 17 模拟器正式 Debug/Release 均验证场景入口、断连恢复、撤销、待配置同步留在个人，以及创建并调用用户子助手；Debug 另验证重启后的主子聊天与本域授权保留、关闭用户助手准入后的实际工具拒绝、个人空间重启后到期、Portal 实际录音到期关闭及临时文件清空。设备结果与完整门禁分开记录于 build/reports/enterprise/local-mock-verification.json 和同批报告 ZIP；不代表真实平台互操作。
 
 整份需求复核还需补齐本地动态草稿/发布/撤回的正式入口及“清除示例企业数据”，随后完成 E01–E12、最终三方审查和 0.0.20 产物。当前版本仍为 0.0.19 开发基线。
+
+### 本地动态原生管理
+
+正式本地场景入口已接通草稿创建/编辑、正文格式/分类/级别、发布和撤回；Portal 消费同一 Feed 的公开内容。阶段审查发现的 IO 期间 Session 到期窗口已修正，固定时钟测试验证读取不返回内容、写入不发布新 manifest。实际 application 消费者测试覆盖草稿不可见、存储 revision 冲突、发布/撤回、配置不变和离开后返回原企业仍拒绝旧页面。
+
+完整串行 test assembleDebug lintDebug assembleRelease 在 9 分 21 秒内通过：App 2,164 项 JVM 无失败，lint 0 错误、287 警告，Workspace 保留 11 项 Windows 条件跳过。AndroidTest 编译通过，本批未重跑 instrumentation。Android 17 模拟器的正式 Debug 入口验证新建、编辑、发布、Portal 列表/详情、撤回及强制停止后重开；公开 revision 从 1 到 3，配置 generation 和配置同步时间保持原值，草稿与撤回内容均不进入 Portal。设备 UI 使用定向构建包，随后补的到期校验经最终 JVM 门禁验证；Release 原生动态 UI 留待整期设备验收。证据见 build/reports/enterprise/feed-verification.json 和 feed-results.zip。
+
+仍需完成“清除示例数据并退出”、E01–E12 与最终并行审查，再交付 0.0.20；本批不代表真实平台互操作。

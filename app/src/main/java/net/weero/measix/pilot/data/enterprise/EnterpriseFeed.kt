@@ -68,6 +68,12 @@ internal data class EnterpriseUpdateFeed(
 internal data class EnterpriseFeedQuery(val startDate: String? = null, val endDate: String? = null, val limit: Int = 10)
 internal data class EnterpriseFeedResult(val body: EnterpriseUpdateFeed, val etag: String)
 
+internal data class LocalEnterpriseFeedSnapshot(
+    val selection: RealmSelection,
+    val revision: String,
+    val document: EnterpriseFeedDocument,
+)
+
 internal sealed interface EnterpriseFeedCommand {
     data class CreateDraft(val content: EnterpriseUpdateContent) : EnterpriseFeedCommand
     data class UpdateDraft(val id: String, val content: EnterpriseUpdateContent) : EnterpriseFeedCommand

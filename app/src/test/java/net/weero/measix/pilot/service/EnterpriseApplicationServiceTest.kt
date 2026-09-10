@@ -37,6 +37,41 @@ class EnterpriseApplicationServiceTest {
     @After fun resetMain() { Dispatchers.resetMain(); main.close() }
 
     @Test(timeout = 30_000)
+    fun `native Feed authoring shares publication and rejects stale revision and returned selection`() = runBlocking(Dispatchers.Main) {
+        fixture { f ->
+            val original = f.service.localFeed(f.selection())
+            val manifest = f.store.readManifest()
+            val content = EnterpriseUpdateContent("Native draft", "Native content", EnterpriseUpdateFormat.MARKDOWN,
+                EnterpriseUpdateCategory.MAINTENANCE, EnterpriseUpdateSeverity.WARNING)
+            val created = f.service.changeLocalFeed(original, EnterpriseFeedCommand.CreateDraft(content))
+            val draft = created.document.items.last()
+            assertEquals(original.document.publicRevision, created.document.publicRevision)
+            assertNotEquals(original.revision, created.revision)
+            assertFalse(f.sessions.listFeed(original.selection, EnterpriseFeedQuery()).body.items.any { it.enterpriseUpdateId == draft.enterpriseUpdateId })
+            rejects("enterprise_feed_changed") { f.service.changeLocalFeed(original, EnterpriseFeedCommand.Publish(draft.enterpriseUpdateId)) }
+            val edited = f.service.changeLocalFeed(created, EnterpriseFeedCommand.UpdateDraft(draft.enterpriseUpdateId, content.copy(title = "Edited title")))
+            val published = f.service.changeLocalFeed(edited, EnterpriseFeedCommand.Publish(draft.enterpriseUpdateId))
+            val visible = f.sessions.feedDetail(original.selection, draft.enterpriseUpdateId)
+            assertEquals("Edited title", visible.title)
+            assertEquals(content.category, visible.category)
+            assertEquals(content.severity, visible.severity)
+            assertEquals(original.document.publicRevision + 1, published.document.publicRevision)
+            val withdrawn = f.service.changeLocalFeed(published, EnterpriseFeedCommand.Withdraw(draft.enterpriseUpdateId))
+            assertEquals(original.document.publicRevision + 2, withdrawn.document.publicRevision)
+            assertFalse(f.sessions.listFeed(original.selection, EnterpriseFeedQuery()).body.items.any { it.enterpriseUpdateId == draft.enterpriseUpdateId })
+            assertEquals(manifest.copy(feeds = f.store.readManifest().feeds), f.store.readManifest())
+
+            val personal = f.service.switchRealm(RealmSwitchRequest(original.selection, RealmAccess.Personal))
+            val returned = f.service.switchRealm(RealmSwitchRequest(personal, original.selection.access))
+            rejects("enterprise_data_access_unavailable") { f.service.localFeed(original.selection) }
+            rejects("enterprise_data_access_unavailable") { f.service.changeLocalFeed(withdrawn, EnterpriseFeedCommand.CreateDraft(content)) }
+            val reopened = f.service.localFeed(returned)
+            assertEquals(withdrawn.document, reopened.document)
+            assertEquals(withdrawn.revision, reopened.revision)
+        }
+    }
+
+    @Test(timeout = 30_000)
     fun `host shutdown exposes switching while the published and stored space remain unchanged`() = runBlocking(Dispatchers.Main) {
         fixture { f ->
             val original = f.selection()

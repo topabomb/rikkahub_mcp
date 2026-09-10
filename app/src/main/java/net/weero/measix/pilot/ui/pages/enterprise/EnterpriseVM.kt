@@ -37,6 +37,9 @@ internal class EnterpriseVM(private val service: EnterpriseApplicationService) :
     private val _localConfiguration = MutableStateFlow<LocalEnterpriseConfigurationUiModel?>(null)
     val localConfiguration = _localConfiguration.asStateFlow()
     private var localConfigurationRequest: Any? = null
+    private val _localFeed = MutableStateFlow<LocalEnterpriseFeedSnapshot?>(null)
+    val localFeed = _localFeed.asStateFlow()
+    private var localFeedRequest: Any? = null
     private var importSelection: RealmSelection? = null
     private val _exitRequest = MutableStateFlow<EnterpriseExitConfirmation?>(null)
     val exitRequest = _exitRequest.asStateFlow()
@@ -79,6 +82,26 @@ internal class EnterpriseVM(private val service: EnterpriseApplicationService) :
         }
     }
     fun dismissLocalConfiguration() { localConfigurationRequest = null; _localConfiguration.value = null }
+    fun showLocalFeed() {
+        if (_busy.value) return
+        val original = overview.value?.selection ?: return
+        val request = Any().also { localFeedRequest = it }
+        val isCurrent = { localFeedRequest === request && overview.value?.selection == original }
+        command(isCurrent = isCurrent) {
+            val result = service.localFeed(original)
+            if (isCurrent()) _localFeed.value = result
+        }
+    }
+    fun dismissLocalFeed() { localFeedRequest = null; _localFeed.value = null }
+    fun changeLocalFeed(original: LocalEnterpriseFeedSnapshot, change: EnterpriseFeedCommand) {
+        if (_localFeed.value != original) return
+        val request = localFeedRequest ?: return
+        val isCurrent = { localFeedRequest === request && overview.value?.selection == original.selection }
+        command(isCurrent = isCurrent) {
+            val result = service.changeLocalFeed(original, change)
+            if (isCurrent()) _localFeed.value = result
+        }
+    }
     fun changeLocalConfiguration(original: LocalEnterpriseConfigurationUiModel, change: LocalEnterpriseConfigurationChange) {
         if (_localConfiguration.value != original) return
         val request = localConfigurationRequest ?: return
@@ -149,6 +172,7 @@ internal class EnterpriseVM(private val service: EnterpriseApplicationService) :
                     error is EnterpriseConfigurationException && error.reason == "exit_current_enterprise_first" -> R.string.enterprise_import_exit_first
                     error is EnterpriseConfigurationException && error.reason == "enterprise_selection_revoked" -> R.string.enterprise_selection_changed
                     error is EnterpriseConfigurationException && error.reason == "local_enterprise_configuration_changed" -> R.string.enterprise_source_changed
+                    error is EnterpriseConfigurationException && error.reason == "enterprise_feed_changed" -> R.string.enterprise_feed_changed
                     error is EnterpriseConfigurationException && error.reason in setOf("invalid_assistant_model_reference", "invalid_default_chat_model", "invalid_default_image_model") -> R.string.enterprise_model_still_referenced
                     enrollment -> R.string.enterprise_invalid_enrollment
                     else -> failureMessage

@@ -1707,4 +1707,25 @@
   <string name="enterprise_simulate_expiry">이 로그인을 60초 이내에 만료</string>
   <string name="enterprise_simulate_revocation">자격 증명 취소 후 기업 공간 나가기</string>
   <string name="enterprise_expiry_scheduled">이 로그인은 60초 이내에 만료됩니다. 개인 공간에 있거나 앱을 다시 시작해도 정상 종료 절차가 적용됩니다.</string>
+  <string name="enterprise_feed_editor">로컬 기업 소식</string>
+  <string name="enterprise_feed_notice">초안은 이 편집기에만 표시됩니다. 게시 또는 철회는 소식 버전만 변경하며 구성 세대는 유지됩니다.</string>
+  <string name="enterprise_feed_revision">공개 버전: %1$d · %2$s</string>
+  <string name="enterprise_feed_title">제목</string>
+  <string name="enterprise_feed_content">본문</string>
+  <string name="enterprise_feed_plain">일반 텍스트</string>
+  <string name="enterprise_feed_markdown">Markdown</string>
+  <string name="enterprise_feed_notice_category">알림</string>
+  <string name="enterprise_feed_announcement">공지</string>
+  <string name="enterprise_feed_maintenance">유지보수</string>
+  <string name="enterprise_feed_info">정보</string>
+  <string name="enterprise_feed_warning">경고</string>
+  <string name="enterprise_feed_critical">심각</string>
+  <string name="enterprise_feed_save_draft">초안 저장</string>
+  <string name="enterprise_feed_create">새 초안</string>
+  <string name="enterprise_feed_draft">초안</string>
+  <string name="enterprise_feed_published">게시됨</string>
+  <string name="enterprise_feed_withdrawn">철회됨</string>
+  <string name="enterprise_feed_publish">게시</string>
+  <string name="enterprise_feed_withdraw">철회</string>
+  <string name="enterprise_feed_changed">소식이 변경되었습니다. 새로고침 후 다시 편집하세요.</string>
 </resources>

@@ -1707,4 +1707,25 @@
   <string name="enterprise_simulate_expiry">Завершить срок входа в течение 60 секунд</string>
   <string name="enterprise_simulate_revocation">Отозвать учётные данные и выйти из организации</string>
   <string name="enterprise_expiry_scheduled">Срок входа истечёт в течение 60 секунд. Обычная процедура завершения действует также в личном пространстве и после перезапуска приложения.</string>
+  <string name="enterprise_feed_editor">Локальные новости организации</string>
+  <string name="enterprise_feed_notice">Черновики видны только в редакторе. Публикация и отзыв меняют версию новостей, но не поколение конфигурации.</string>
+  <string name="enterprise_feed_revision">Публичная версия: %1$d · %2$s</string>
+  <string name="enterprise_feed_title">Заголовок</string>
+  <string name="enterprise_feed_content">Содержание</string>
+  <string name="enterprise_feed_plain">Обычный текст</string>
+  <string name="enterprise_feed_markdown">Markdown</string>
+  <string name="enterprise_feed_notice_category">Уведомление</string>
+  <string name="enterprise_feed_announcement">Объявление</string>
+  <string name="enterprise_feed_maintenance">Обслуживание</string>
+  <string name="enterprise_feed_info">Информация</string>
+  <string name="enterprise_feed_warning">Предупреждение</string>
+  <string name="enterprise_feed_critical">Критическое</string>
+  <string name="enterprise_feed_save_draft">Сохранить черновик</string>
+  <string name="enterprise_feed_create">Новый черновик</string>
+  <string name="enterprise_feed_draft">Черновик</string>
+  <string name="enterprise_feed_published">Опубликовано</string>
+  <string name="enterprise_feed_withdrawn">Отозвано</string>
+  <string name="enterprise_feed_publish">Опубликовать</string>
+  <string name="enterprise_feed_withdraw">Отозвать</string>
+  <string name="enterprise_feed_changed">Новости изменились. Обновите их перед редактированием.</string>
 </resources>

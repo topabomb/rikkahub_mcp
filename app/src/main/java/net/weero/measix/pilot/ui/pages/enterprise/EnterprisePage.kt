@@ -70,6 +70,7 @@ internal fun EnterprisePage(vm: EnterpriseVM = koinViewModel()) {
     val notice by vm.notice.collectAsStateWithLifecycle()
     val sources by vm.sources.collectAsStateWithLifecycle()
     val localConfiguration by vm.localConfiguration.collectAsStateWithLifecycle()
+    val localFeed by vm.localFeed.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val filePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         vm.importConfiguration(context, uri)
@@ -93,6 +94,7 @@ internal fun EnterprisePage(vm: EnterpriseVM = koinViewModel()) {
     LaunchedEffect(state?.access) { if (state?.access != null) vm.dismissSources() }
     LaunchedEffect(state?.selection) {
         if (localConfiguration?.selection != state?.selection) vm.dismissLocalConfiguration()
+        if (localFeed?.selection != state?.selection) vm.dismissLocalFeed()
     }
     LaunchedEffect(state?.selection, state?.access, state?.phase) {
         if (scenarios?.selection != state?.selection || scenarios?.access != state?.access ||
@@ -184,6 +186,11 @@ internal fun EnterprisePage(vm: EnterpriseVM = koinViewModel()) {
             onChange = { vm.changeLocalConfiguration(original, it) },
             onRefresh = vm::showLocalConfiguration, onDismiss = vm::dismissLocalConfiguration)
     }
+    localFeed?.let { original ->
+        EnterpriseLocalFeedEditor(original, busy, error,
+            onChange = { vm.changeLocalFeed(original, it) },
+            onRefresh = vm::showLocalFeed, onDismiss = vm::dismissLocalFeed)
+    }
     scenarios?.let { original ->
         AlertDialog(onDismissRequest = { scenarios = null },
             title = { Text(stringResource(R.string.enterprise_local_scenarios)) },
@@ -195,6 +202,11 @@ internal fun EnterprisePage(vm: EnterpriseVM = koinViewModel()) {
                         Text(stringResource(R.string.enterprise_join_pending_example))
                     }
                 } else {
+                    if (original.selection?.access is RealmAccess.Enterprise && original.phase in setOf(EnterpriseSessionPhase.READY, EnterpriseSessionPhase.OFFLINE)) {
+                        OutlinedButton(onClick = { scenarios = null; vm.showLocalFeed() }, enabled = !busy) {
+                            Text(stringResource(R.string.enterprise_feed_editor))
+                        }
+                    }
                     val connected = original.phase == EnterpriseSessionPhase.READY
                     OutlinedButton(onClick = {
                         scenarios = null

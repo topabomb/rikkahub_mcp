@@ -61,7 +61,7 @@ class PortalDocumentTest {
             val entry = list.getValue("feed").jsonObject.getValue("items").jsonArray.single().jsonObject
             val id = entry.getValue("enterpriseUpdateId").jsonPrimitive.content
             assertEquals(entry, h.call(doc, "getLocalUpdate", buildJsonObject { put("enterpriseUpdateId", id) }).getValue("result"))
-            h.sessions.changeFeed(doc.selection.access as RealmAccess.Enterprise, before.manifest.feeds.single().revision, EnterpriseFeedCommand.Withdraw(id))
+            h.sessions.changeFeed(doc.selection, before.manifest.feeds.single().revision, EnterpriseFeedCommand.Withdraw(id))
             assertEquals("enterprise_update_not_found", h.call(doc, "getLocalUpdate", buildJsonObject { put("enterpriseUpdateId", id) })
                 .getValue("error").jsonObject.getValue("code").jsonPrimitive.content)
             val withdrawn = h.call(doc, "listLocalUpdates", buildJsonObject { put("ifNoneMatch", etag) }).getValue("result").jsonObject

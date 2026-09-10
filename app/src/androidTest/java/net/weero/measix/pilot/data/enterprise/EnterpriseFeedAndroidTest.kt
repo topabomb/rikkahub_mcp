@@ -25,7 +25,7 @@ class EnterpriseFeedAndroidTest {
             val initial = a.enrollLocal(packet.identity, { packet.identity }, { packet })
             val accessA = a.captureRealmAccess(packet.identity.scope) as RealmAccess.Enterprise
             val id = a.listFeed(RealmSelection(accessA, a.selectionRevision.value), EnterpriseFeedQuery()).body.items.single().enterpriseUpdateId
-            a.changeFeed(accessA, initial.manifest.feeds.single().revision, EnterpriseFeedCommand.Withdraw(id))
+            a.changeFeed(RealmSelection(accessA, a.selectionRevision.value), initial.manifest.feeds.single().revision, EnterpriseFeedCommand.Withdraw(id))
             assertEquals(initial.manifest.applied, (a.state.value as EnterpriseState.Available).manifest.applied)
             a.finishExit(a.beginExit(requireNotNull(a.captureExitRequest())))
 
@@ -48,7 +48,7 @@ class EnterpriseFeedAndroidTest {
             val newAccess = reopened.captureRealmAccess(packet.identity.scope) as RealmAccess.Enterprise
             assertTrue(reopened.listFeed(RealmSelection(newAccess, reopened.selectionRevision.value), EnterpriseFeedQuery()).body.items.isEmpty())
             try {
-                reopened.changeFeed(accessA, ready.manifest.feeds.first { it.scope == accessA.scope }.revision,
+                reopened.changeFeed(RealmSelection(accessA, reopened.selectionRevision.value), ready.manifest.feeds.first { it.scope == accessA.scope }.revision,
                     EnterpriseFeedCommand.Publish(id))
                 fail("Old Session cannot mutate Feed after reentry")
             } catch (error: EnterpriseConfigurationException) { assertEquals("enterprise_data_access_unavailable", error.reason) }

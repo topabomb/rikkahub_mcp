@@ -230,16 +230,27 @@ internal class EnterpriseSessionController(
         }
     }
 
-    suspend fun changeFeed(access: RealmAccess.Enterprise, expectedRevision: String, command: EnterpriseFeedCommand): EnterpriseFeedVersion = mutex.withLock {
-        val current = requireFeedSession(access)
+    suspend fun readLocalFeed(selection: RealmSelection): LocalEnterpriseFeedSnapshot = mutex.withLock {
+        val current = requireLocalFeedSelection(selection)
+        val version = current.manifest.feeds.find { it.scope == selection.access.scope } ?: fail("enterprise_feed_not_ready")
+        val document = withContext(Dispatchers.IO) { store.readFeed(version) }
+        requirePublishedSelection(selection)
+        LocalEnterpriseFeedSnapshot(selection, version.revision, document)
+    }
+
+    suspend fun changeFeed(selection: RealmSelection, expectedRevision: String, command: EnterpriseFeedCommand): LocalEnterpriseFeedSnapshot = mutex.withLock {
+        val current = requireLocalFeedSelection(selection)
+        val access = selection.access as RealmAccess.Enterprise
         val previous = current.manifest.feeds.find { it.scope == access.scope } ?: fail("enterprise_feed_not_ready")
         if (previous.revision != expectedRevision) fail("enterprise_feed_changed")
         prune(current.manifest)
-        val next = withContext(Dispatchers.IO) {
-            store.prepareFeed(access.scope, EnterpriseFeed.change(store.readFeed(previous), command, Instant.ofEpochMilli(nowMillis())))
+        val document = withContext(Dispatchers.IO) {
+            EnterpriseFeed.change(store.readFeed(previous), command, Instant.ofEpochMilli(nowMillis()))
         }
+        val next = withContext(Dispatchers.IO) { store.prepareFeed(access.scope, document) }
+        requirePublishedSelection(selection)
         publish(current.manifest.copy(feeds = current.manifest.feeds.map { if (it.scope == access.scope) next else it }))
-        next
+        LocalEnterpriseFeedSnapshot(selection, next.revision, document)
     }
 
     suspend fun listFeed(selection: RealmSelection, query: EnterpriseFeedQuery): EnterpriseFeedResult = mutex.withLock {
@@ -267,11 +278,10 @@ internal class EnterpriseSessionController(
         withContext(Dispatchers.IO) { EnterpriseFeed.detail(store.readFeed(version), id) }
     }
 
-    private suspend fun requireFeedSession(access: RealmAccess.Enterprise): LoadedEnterpriseState {
-        val current = requireSession(allowOffline = true)
-        if (!allowsDataAccess(current.manifest, access) || current.manifest.selectedScope != access.scope) {
-            fail("enterprise_data_access_unavailable")
-        }
+    private suspend fun requireLocalFeedSelection(selection: RealmSelection): LoadedEnterpriseState {
+        val current = requirePortalSelection(selection)
+        if (!selection.access.scope.let { it is ConfigurationScope.Enterprise && it.authority.isLocal }) fail("local_enterprise_required")
+        if (current.manifest.phase !in setOf(EnterpriseSessionPhase.READY, EnterpriseSessionPhase.OFFLINE)) fail("enterprise_session_not_ready")
         return current
     }
 

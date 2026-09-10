@@ -1707,4 +1707,25 @@
   <string name="enterprise_simulate_expiry">ログインを60秒以内に期限切れにする</string>
   <string name="enterprise_simulate_revocation">資格情報を取り消して企業スペースを退出</string>
   <string name="enterprise_expiry_scheduled">60秒以内にログインが期限切れになります。個人スペースにいる場合や再起動後も通常の終了処理が行われます。</string>
+  <string name="enterprise_feed_editor">ローカル企業の更新</string>
+  <string name="enterprise_feed_notice">下書きはこの画面でのみ表示されます。公開や撤回は更新情報の版を変更し、設定の世代は変えません。</string>
+  <string name="enterprise_feed_revision">公開版：%1$d · %2$s</string>
+  <string name="enterprise_feed_title">タイトル</string>
+  <string name="enterprise_feed_content">本文</string>
+  <string name="enterprise_feed_plain">プレーンテキスト</string>
+  <string name="enterprise_feed_markdown">Markdown</string>
+  <string name="enterprise_feed_notice_category">通知</string>
+  <string name="enterprise_feed_announcement">お知らせ</string>
+  <string name="enterprise_feed_maintenance">メンテナンス</string>
+  <string name="enterprise_feed_info">情報</string>
+  <string name="enterprise_feed_warning">警告</string>
+  <string name="enterprise_feed_critical">重大</string>
+  <string name="enterprise_feed_save_draft">下書きを保存</string>
+  <string name="enterprise_feed_create">新しい下書き</string>
+  <string name="enterprise_feed_draft">下書き</string>
+  <string name="enterprise_feed_published">公開済み</string>
+  <string name="enterprise_feed_withdrawn">撤回済み</string>
+  <string name="enterprise_feed_publish">公開</string>
+  <string name="enterprise_feed_withdraw">撤回</string>
+  <string name="enterprise_feed_changed">更新情報が変更されました。再読み込みしてください。</string>
 </resources>

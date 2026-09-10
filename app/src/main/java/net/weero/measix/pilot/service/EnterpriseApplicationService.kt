@@ -133,6 +133,14 @@ internal class EnterpriseApplicationService(
         }
     }
     suspend fun synchronize(access: RealmAccess.Enterprise) { recovery.awaitReady(); synchronization.synchronize(access) }
+    suspend fun localFeed(selection: RealmSelection): LocalEnterpriseFeedSnapshot {
+        recovery.awaitReady()
+        return sessions.readLocalFeed(selection)
+    }
+    suspend fun changeLocalFeed(original: LocalEnterpriseFeedSnapshot, command: EnterpriseFeedCommand): LocalEnterpriseFeedSnapshot {
+        recovery.awaitReady()
+        return sessions.changeFeed(original.selection, original.revision, command)
+    }
     suspend fun localConfiguration(selection: RealmSelection): LocalEnterpriseConfigurationUiModel {
         recovery.awaitReady()
         val access = selection.access as? RealmAccess.Enterprise ?: throw EnterpriseConfigurationException("local_enterprise_required")

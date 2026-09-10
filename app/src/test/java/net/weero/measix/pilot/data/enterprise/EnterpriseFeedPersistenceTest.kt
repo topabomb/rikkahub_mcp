@@ -22,6 +22,36 @@ class EnterpriseFeedPersistenceTest {
     @get:Rule val temporary = TemporaryFolder()
 
     @Test
+    fun `native Feed reads and writes recheck expiry after storage work`() = runTest {
+        for (writing in listOf(false, true)) {
+            var now = 1000L
+            var expiresAt = Long.MAX_VALUE
+            var expire = false
+            val backing = EnterpriseAppliedStore(temporary.newFolder()) {
+                if (expire && writing && it == EnterpriseStorageCheckpoint.FEED_STAGED) now = expiresAt
+            }
+            val store = io.mockk.spyk(backing)
+            io.mockk.every { store.readFeed(any()) } answers {
+                callOriginal().also { if (expire && !writing) now = expiresAt }
+            }
+            val sessions = EnterpriseSessionController(store) { now }
+            val packet = exampleEnterprisePackage()
+            val applied = sessions.enrollFixture(packet)
+            expiresAt = requireNotNull(applied.manifest.session).expiresAtMillis
+            val selection = requireNotNull(sessions.readPresentation().selection)
+            val original = sessions.readLocalFeed(selection)
+            expire = true
+            expectReason("enterprise_data_access_unavailable") {
+                if (writing) sessions.changeFeed(selection, original.revision,
+                    EnterpriseFeedCommand.Withdraw(packet.feedSeed!!.items.single().enterpriseUpdateId))
+                else sessions.readLocalFeed(selection)
+            }
+            assertEquals(applied.manifest, store.readManifest())
+            assertEquals(applied, sessions.available())
+        }
+    }
+
+    @Test
     fun `withdrawal survives repeated seed logout and reopen without configuration changes`() = runTest {
         val root = temporary.newFolder()
         val packet = exampleEnterprisePackage()
@@ -30,13 +60,13 @@ class EnterpriseFeedPersistenceTest {
         val access = sessions.captureRealmAccess(packet.identity.scope) as RealmAccess.Enterprise
         val original = applied.manifest.feeds.single()
         val id = sessions.listFeed(RealmSelection(access, sessions.selectionRevision.value), EnterpriseFeedQuery()).body.items.single().enterpriseUpdateId
-        sessions.changeFeed(access, original.revision, EnterpriseFeedCommand.Withdraw(id))
+        sessions.changeFeed(RealmSelection(access, sessions.selectionRevision.value), original.revision, EnterpriseFeedCommand.Withdraw(id))
         val changed = sessions.available()
         assertEquals(applied.configuration, changed.configuration)
         assertEquals(applied.manifest.applied, changed.manifest.applied)
         assertEquals(applied.manifest.session, changed.manifest.session)
         assertEquals(original.publicRevision + 1, changed.manifest.feeds.single().publicRevision)
-        expectReason("enterprise_feed_changed") { sessions.changeFeed(access, original.revision, EnterpriseFeedCommand.Withdraw(id)) }
+        expectReason("enterprise_feed_changed") { sessions.changeFeed(RealmSelection(access, sessions.selectionRevision.value), original.revision, EnterpriseFeedCommand.Withdraw(id)) }
         // A changed seed at the same generation is neither a configuration conflict nor a replacement Feed.
         sessions.synchronize(access, packet.copy(feedSeed = packet.feedSeed!!.copy(items = emptyList())))
         assertEquals(access, sessions.captureRealmAccess(packet.identity.scope))
@@ -66,7 +96,7 @@ class EnterpriseFeedPersistenceTest {
         val before = sessions.listFeed(RealmSelection(access, sessions.selectionRevision.value), EnterpriseFeedQuery())
         failCommit = true
         try {
-            sessions.changeFeed(access, applied.manifest.feeds.single().revision,
+            sessions.changeFeed(RealmSelection(access, sessions.selectionRevision.value), applied.manifest.feeds.single().revision,
                 EnterpriseFeedCommand.Withdraw(before.body.items.single().enterpriseUpdateId))
             fail("failed manifest must not publish Feed")
         } catch (_: IOException) { }
@@ -114,7 +144,7 @@ class EnterpriseFeedPersistenceTest {
             val access = sessions.captureRealmAccess(packet.identity.scope) as RealmAccess.Enterprise
             pause = true
             val operation = launch {
-                sessions.changeFeed(access, before.manifest.feeds.single().revision,
+                sessions.changeFeed(RealmSelection(access, sessions.selectionRevision.value), before.manifest.feeds.single().revision,
                     EnterpriseFeedCommand.Withdraw(packet.feedSeed!!.items.single().enterpriseUpdateId))
             }
             entered.await()

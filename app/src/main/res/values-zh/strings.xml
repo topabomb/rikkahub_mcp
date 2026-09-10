@@ -1707,4 +1707,25 @@
   <string name="enterprise_simulate_expiry">将本次登录设为 60 秒内到期</string>
   <string name="enterprise_simulate_revocation">撤销凭据并退出企业空间</string>
   <string name="enterprise_expiry_scheduled">本次登录将在 60 秒内到期；停留在个人空间或重启应用后，也会按正常退出流程处理。</string>
+  <string name="enterprise_feed_editor">本地企业动态</string>
+  <string name="enterprise_feed_notice">草稿仅在此编辑器可见。发布或撤回会更新动态版本，不改变配置代数。</string>
+  <string name="enterprise_feed_revision">公开动态版本：%1$d · %2$s</string>
+  <string name="enterprise_feed_title">标题</string>
+  <string name="enterprise_feed_content">正文</string>
+  <string name="enterprise_feed_plain">纯文本</string>
+  <string name="enterprise_feed_markdown">Markdown</string>
+  <string name="enterprise_feed_notice_category">通知</string>
+  <string name="enterprise_feed_announcement">公告</string>
+  <string name="enterprise_feed_maintenance">维护</string>
+  <string name="enterprise_feed_info">一般</string>
+  <string name="enterprise_feed_warning">警告</string>
+  <string name="enterprise_feed_critical">严重</string>
+  <string name="enterprise_feed_save_draft">保存草稿</string>
+  <string name="enterprise_feed_create">新建草稿</string>
+  <string name="enterprise_feed_draft">草稿</string>
+  <string name="enterprise_feed_published">已发布</string>
+  <string name="enterprise_feed_withdrawn">已撤回</string>
+  <string name="enterprise_feed_publish">发布</string>
+  <string name="enterprise_feed_withdraw">撤回</string>
+  <string name="enterprise_feed_changed">动态已变更，请刷新后重新编辑。</string>
 </resources>

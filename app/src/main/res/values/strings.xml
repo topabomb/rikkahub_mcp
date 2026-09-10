@@ -1708,4 +1708,25 @@
   <string name="enterprise_simulate_expiry">Expire this login within 60 seconds</string>
   <string name="enterprise_simulate_revocation">Revoke credentials and leave enterprise space</string>
   <string name="enterprise_expiry_scheduled">This login will expire within 60 seconds. The normal exit flow also applies while in personal space or after restarting the app.</string>
+  <string name="enterprise_feed_editor">Local enterprise updates</string>
+  <string name="enterprise_feed_notice">Drafts are private to this editor. Publishing or withdrawing changes the Feed revision; configuration generation stays unchanged.</string>
+  <string name="enterprise_feed_revision">Public revision: %1$d · %2$s</string>
+  <string name="enterprise_feed_title">Title</string>
+  <string name="enterprise_feed_content">Content</string>
+  <string name="enterprise_feed_plain">Plain text</string>
+  <string name="enterprise_feed_markdown">Markdown</string>
+  <string name="enterprise_feed_notice_category">Notice</string>
+  <string name="enterprise_feed_announcement">Announcement</string>
+  <string name="enterprise_feed_maintenance">Maintenance</string>
+  <string name="enterprise_feed_info">Information</string>
+  <string name="enterprise_feed_warning">Warning</string>
+  <string name="enterprise_feed_critical">Critical</string>
+  <string name="enterprise_feed_save_draft">Save draft</string>
+  <string name="enterprise_feed_create">New draft</string>
+  <string name="enterprise_feed_draft">Draft</string>
+  <string name="enterprise_feed_published">Published</string>
+  <string name="enterprise_feed_withdrawn">Withdrawn</string>
+  <string name="enterprise_feed_publish">Publish</string>
+  <string name="enterprise_feed_withdraw">Withdraw</string>
+  <string name="enterprise_feed_changed">Updates changed. Refresh before editing again.</string>
 </resources>
