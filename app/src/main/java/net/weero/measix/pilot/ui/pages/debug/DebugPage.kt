@@ -68,7 +68,7 @@ fun DebugPage(vm: DebugVM = koinViewModel()) {
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
     val toaster = LocalToaster.current
-    val lockedMessage = stringResource(R.string.managed_configuration_locked, "{reason}")
+    val lockedMessage = stringResource(R.string.configuration_change_rejected, "{reason}")
     LaunchedEffect(vm, toaster, lockedMessage) {
         vm.lockedChanges.collect { error ->
             toaster.show(lockedMessage.replace("{reason}", error.reason), type = ToastType.Error)

@@ -231,7 +231,6 @@ val appModule = module {
         TurnRecovery(
             conversationRepo = get(),
             commandCoordinator = get(),
-            settingsStore = get(),
             json = get(),
             runGate = get(),
         )

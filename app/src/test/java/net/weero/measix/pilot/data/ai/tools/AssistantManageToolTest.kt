@@ -25,7 +25,6 @@ import me.rerere.ai.ui.UIMessagePart
 import net.weero.measix.pilot.data.ai.tools.local.LocalToolOption
 import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.datastore.SettingsStore
-import net.weero.measix.pilot.data.datastore.toEffectiveSettingsSnapshot
 import net.weero.measix.pilot.data.model.Assistant
 import net.weero.measix.pilot.service.AssistantDeletionResult
 import net.weero.measix.pilot.service.AssistantManagementService
@@ -49,9 +48,9 @@ class AssistantManageToolTest {
         deleted: AssistantDeletionResult? = null,
     ): AssistantToolFactory {
         val settings = Settings(assistants = assistants, assistantId = callerId)
-        val effectiveSettings = MutableStateFlow(settings.toEffectiveSettingsSnapshot())
+        val effectiveSettings = MutableStateFlow(settings)
         val settingsStore = mockk<SettingsStore>()
-        every { settingsStore.effectiveSettings } returns effectiveSettings
+        every { settingsStore.userSettings } returns effectiveSettings
 
         val managementService = mockk<AssistantManagementService>()
         if (created != null) {
@@ -226,8 +225,8 @@ class AssistantManageToolTest {
     fun `management result cancellation is rethrown`() = runTest {
         val cancellation = CancellationException("stop mutation")
         val settingsStore = mockk<SettingsStore>()
-        every { settingsStore.effectiveSettings } returns MutableStateFlow(
-            Settings(assistants = listOf(caller(), target())).toEffectiveSettingsSnapshot(),
+        every { settingsStore.userSettings } returns MutableStateFlow(
+            Settings(assistants = listOf(caller(), target())),
         )
         val service = mockk<AssistantManagementService>()
         coEvery { service.deleteAssistant(any(), any()) } returns Result.failure(cancellation)

@@ -15,7 +15,6 @@ import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
 import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.datastore.SettingsStore
-import net.weero.measix.pilot.data.datastore.toEffectiveSettingsSnapshot
 import net.weero.measix.pilot.data.files.SkillManager
 import net.weero.measix.pilot.data.model.Assistant
 import net.weero.measix.pilot.service.ArtifactUseCase
@@ -34,13 +33,13 @@ class AssistantDetailVMTest {
             val rendered = Assistant(name = "Before", systemPrompt = "Before", background = "old.png", useGradientBackground = true)
             val backgroundChanged = rendered.copy(background = "new.png", useGradientBackground = false, name = "Renamed")
             var stored = Settings(assistants = listOf(backgroundChanged))
-            val projection = MutableStateFlow(stored.toEffectiveSettingsSnapshot())
+            val projection = MutableStateFlow(stored)
             val settings = mockk<SettingsStore>()
-            every { settings.effectiveSettings } returns projection
+            every { settings.userSettings } returns projection
             val artifacts = mockk<ArtifactUseCase>()
             coEvery { artifacts.updateSettingsReferences(any()) } coAnswers {
                 stored = firstArg<(Settings) -> Settings>()(stored)
-                projection.value = stored.toEffectiveSettingsSnapshot()
+                projection.value = stored
                 stored
             }
             val memories = mockk<MemoryService>()

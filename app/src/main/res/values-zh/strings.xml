@@ -1559,10 +1559,6 @@
   <string name="workspace_terminal_command_failed">终端操作失败</string>
   <string name="setting_provider_page_mutation_failed">Provider 设置操作失败</string>
   <string name="skills_page_import_resource_limit">Skill 包超过安全导入上限</string>
-  <string name="managed_configuration_active">受管配置已启用</string>
-  <string name="managed_configuration_degraded">受管配置已过期；仍使用上次验证的配置</string>
-  <string name="managed_configuration_blocked">受管配置不可用：%1$s</string>
-  <string name="managed_configuration_locked">受管配置锁定了此更改：%1$s</string>
   <string name="managed_configuration_source_builtin">内置</string>
   <string name="managed_configuration_source_local">本地</string>
   <string name="managed_configuration_source_managed">受管</string>
@@ -1673,4 +1669,5 @@
   <string name="enterprise_import_notice">这里导入完整配置文件，与接入码不同。私有凭据不进入个人备份。</string>
   <string name="backup_personal_scope_notice">备份包含用户配置和个人空间的数据。不包含企业配置或数据，恢复时保留企业内容。</string>
   <string name="enterprise_import_failed">无法导入此文件。请检查文件是否可读，以及格式、配置版本和资源引用是否正确。</string>
+  <string name="configuration_change_rejected">不允许此配置修改：%1$s</string>
 </resources>

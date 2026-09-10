@@ -116,7 +116,7 @@ internal class ArtifactRecoveryTest : ArtifactStoreLifecycleTestBase() {
         settingsFlow.value = Settings(
             assistants = listOf(Assistant(background = file.toUri().toString())),
         )
-        effectiveSettings.value = settingsFlow.value.toEffectiveSnapshot()
+        effectiveSettings.value = settingsFlow.value
 
         store.reconcileStartup()
 
@@ -138,7 +138,7 @@ internal class ArtifactRecoveryTest : ArtifactStoreLifecycleTestBase() {
             ),
             displaySetting = Settings().displaySetting.copy(userAvatar = Avatar.Image(missingRoot)),
         )
-        effectiveSettings.value = settingsFlow.value.toEffectiveSnapshot()
+        effectiveSettings.value = settingsFlow.value
 
         store.reconcileStartup()
         store.reconcileStartup()
@@ -174,7 +174,7 @@ internal class ArtifactRecoveryTest : ArtifactStoreLifecycleTestBase() {
                 ),
             ),
         )
-        effectiveSettings.value = settingsFlow.value.toEffectiveSnapshot()
+        effectiveSettings.value = settingsFlow.value
 
         store.reconcileStartup()
 
@@ -319,10 +319,10 @@ internal class ArtifactRecoveryTest : ArtifactStoreLifecycleTestBase() {
             true
         }
         val localSettings = MutableStateFlow(Settings())
-        val localEffectiveSettings = MutableStateFlow(localSettings.value.toEffectiveSnapshot())
+        val localEffectiveSettings = MutableStateFlow(localSettings.value)
         val settingsStore = mockArtifactSettings({ localSettings.value }) { updated ->
             localSettings.value = updated
-            localEffectiveSettings.value = updated.toEffectiveSnapshot()
+            localEffectiveSettings.value = updated
         }
         val countingStore = ArtifactStore(
             payloadStore = countingPayloadStore,

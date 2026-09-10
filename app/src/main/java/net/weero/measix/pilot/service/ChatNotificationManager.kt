@@ -82,7 +82,7 @@ class ChatNotificationManager(
     private fun handleGenerationUpdate(event: AppEvent.ChatGenerationUpdate) {
         synchronized(notificationStateLock) {
             if (isForeground) return
-            val displaySetting = settingsStore.effectiveSettings.value.settings.displaySetting
+            val displaySetting = settingsStore.userSettings.value.displaySetting
             if (!displaySetting.enableNotificationOnMessageGeneration) return
             if (!displaySetting.enableLiveUpdateNotification) return
 
@@ -116,7 +116,7 @@ class ChatNotificationManager(
             if (!event.notifyCompletion) return
             val contentPreview = event.contentPreview ?: return
             if (isForeground) return
-            if (!settingsStore.effectiveSettings.value.settings.displaySetting.enableNotificationOnMessageGeneration) return
+            if (!settingsStore.userSettings.value.displaySetting.enableNotificationOnMessageGeneration) return
             sendGenerationDoneNotification(event.conversationId, event.senderName, contentPreview)
         }
     }
@@ -124,7 +124,7 @@ class ChatNotificationManager(
     private fun handleAwaitingUser(event: AppEvent.ChatGenerationAwaitingUser) {
         synchronized(notificationStateLock) {
             liveUpdateStates.remove(event.conversationId)
-            val displaySetting = settingsStore.effectiveSettings.value.settings.displaySetting
+            val displaySetting = settingsStore.userSettings.value.displaySetting
             if (isForeground ||
                 !displaySetting.enableNotificationOnMessageGeneration ||
                 !displaySetting.enableLiveUpdateNotification

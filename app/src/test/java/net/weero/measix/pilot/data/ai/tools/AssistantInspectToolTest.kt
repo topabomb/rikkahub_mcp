@@ -22,7 +22,6 @@ import me.rerere.ai.ui.UIMessagePart
 import net.weero.measix.pilot.data.ai.tools.local.LocalToolOption
 import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.datastore.SettingsStore
-import net.weero.measix.pilot.data.datastore.toEffectiveSettingsSnapshot
 import net.weero.measix.pilot.data.model.Assistant
 import net.weero.measix.pilot.service.AssistantManagementService
 import net.weero.measix.pilot.service.runtime.TurnKind
@@ -51,9 +50,9 @@ class AssistantInspectToolTest {
             assistants = assistants,
             assistantId = callerId,
         )
-        val effectiveSettings = MutableStateFlow(settings.toEffectiveSettingsSnapshot())
+        val effectiveSettings = MutableStateFlow(settings)
         val settingsStore = mockk<SettingsStore>()
-        every { settingsStore.effectiveSettings } returns effectiveSettings
+        every { settingsStore.userSettings } returns effectiveSettings
 
         val managementService = mockk<AssistantManagementService>()
         val memoryService = mockk<net.weero.measix.pilot.service.MemoryService>()
@@ -62,7 +61,7 @@ class AssistantInspectToolTest {
             net.weero.measix.pilot.data.datastore.ExecutionConfigurationSnapshot(settings,
             net.weero.measix.pilot.data.configuration.ConfigurationResolver.resolve(
                 net.weero.measix.pilot.data.datastore.UserSettingsDocument.empty().copy(
-                    configuration = net.weero.measix.pilot.data.datastore.UserConfiguration(assistants = effectiveSettings.value.settings.assistants),
+                    configuration = net.weero.measix.pilot.data.datastore.UserConfiguration(assistants = effectiveSettings.value.assistants),
                 ),
                 net.weero.measix.pilot.data.configuration.ConfigurationScope.Personal,
                 net.weero.measix.pilot.data.enterprise.EnterpriseState.Loading,

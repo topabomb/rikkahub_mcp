@@ -60,10 +60,10 @@ class AssistantDetailVM(
     }
 
     val settings: StateFlow<Settings> =
-        settingsStore.effectiveSettings.map { it.settings }.stateIn(viewModelScope, SharingStarted.Eagerly, Settings.dummy())
+        settingsStore.userSettings.stateIn(viewModelScope, SharingStarted.Eagerly, Settings.dummy())
 
     val assistant: StateFlow<Assistant> = settingsStore
-        .effectiveSettings.map { it.settings }
+        .userSettings
         .map { settings ->
             settings.assistants.find { it.id == assistantId } ?: Assistant()
         }.stateIn(
@@ -76,7 +76,7 @@ class AssistantDetailVM(
         )
 
     val providers = settingsStore
-        .effectiveSettings.map { it.settings }
+        .userSettings
         .map { settings ->
             settings.providers
         }.stateIn(
@@ -95,7 +95,7 @@ class AssistantDetailVM(
         )
 
     val tags = settingsStore
-        .effectiveSettings.map { it.settings }
+        .userSettings
         .map { settings ->
             settings.assistantTags
         }.stateIn(

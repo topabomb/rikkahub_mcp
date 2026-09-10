@@ -11,7 +11,6 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import net.weero.measix.pilot.data.datastore.Settings
-import net.weero.measix.pilot.data.datastore.EffectiveSettingsSnapshot
 import net.weero.measix.pilot.data.datastore.SettingsStore
 import net.weero.measix.pilot.data.datastore.SettingsLockedException
 import net.weero.measix.pilot.data.model.Assistant
@@ -28,8 +27,7 @@ class AssistantVM(
 ) : ViewModel() {
     private val _lockedChanges = MutableSharedFlow<SettingsLockedException>(extraBufferCapacity = 1)
     val lockedChanges = _lockedChanges.asSharedFlow()
-    internal val effectiveSettings: StateFlow<EffectiveSettingsSnapshot> = settingsStore.effectiveSettings
-    val settings: StateFlow<Settings> = settingsStore.effectiveSettings.map { it.settings }
+    val settings: StateFlow<Settings> = settingsStore.userSettings
         .stateIn(viewModelScope, SharingStarted.Eagerly, Settings.dummy())
 
     fun reorderAssistants(orderedIds: List<ConfigurationReference>) {

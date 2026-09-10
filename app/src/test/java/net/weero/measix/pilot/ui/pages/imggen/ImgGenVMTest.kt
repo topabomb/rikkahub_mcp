@@ -25,7 +25,6 @@ import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.datastore.SettingsStore
 import net.weero.measix.pilot.data.enterprise.RealmAccess
 import net.weero.measix.pilot.data.enterprise.RealmSelection
-import net.weero.measix.pilot.data.files.toEffectiveSnapshot
 import net.weero.measix.pilot.data.imggen.ImageGenerationCoordinator
 import net.weero.measix.pilot.data.imggen.ImageGenerationModelDescriptor
 import net.weero.measix.pilot.data.imggen.ImageGenerationOutcome
@@ -52,7 +51,7 @@ class ImgGenVMTest {
         val root = kotlin.io.path.createTempDirectory("reference-owner").toFile()
         try {
             val settings = mockk<SettingsStore>()
-            every { settings.effectiveSettings } returns MutableStateFlow(Settings().toEffectiveSnapshot())
+            every { settings.userSettings } returns MutableStateFlow(Settings())
             val selected = RealmSelection(RealmAccess.Personal, 0)
             val model = Model(modelId = "image", type = me.rerere.ai.provider.ModelType.IMAGE)
             val catalog = net.weero.measix.pilot.service.userDefinitionModelCatalog(listOf(ProviderSetting.OpenAI(models = listOf(model)))).copy(
@@ -130,7 +129,7 @@ class ImgGenVMTest {
         val owner = ViewModelStore()
         try {
             val settings = mockk<SettingsStore>()
-            every { settings.effectiveSettings } returns MutableStateFlow(Settings().toEffectiveSnapshot())
+            every { settings.userSettings } returns MutableStateFlow(Settings())
             val selected = RealmSelection(RealmAccess.Personal, 0)
             val model = Model(modelId = "image", type = me.rerere.ai.provider.ModelType.IMAGE)
             val provider = ProviderSetting.OpenAI(models = listOf(model))

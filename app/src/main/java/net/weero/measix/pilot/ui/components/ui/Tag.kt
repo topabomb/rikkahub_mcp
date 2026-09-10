@@ -20,10 +20,6 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import net.weero.measix.pilot.R
-import net.weero.measix.pilot.data.datastore.EffectiveSettingsSnapshot
-import net.weero.measix.pilot.data.datastore.ManagedConfigurationRecordKind
-import net.weero.measix.pilot.data.datastore.ManagedConfigurationState
-import net.weero.measix.pilot.data.datastore.SettingsValueSource
 import net.weero.measix.pilot.ui.theme.extendColors
 import me.rerere.common.configuration.ConfigurationReference
 
@@ -72,71 +68,6 @@ fun Tag(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             children()
-        }
-    }
-}
-
-/** Read-only provenance and lock context for a record rendered by its original settings page. */
-@Composable
-internal fun ManagedRecordStatus(
-    snapshot: EffectiveSettingsSnapshot,
-    kind: ManagedConfigurationRecordKind,
-    id: ConfigurationReference,
-    modifier: Modifier = Modifier,
-) {
-    if (snapshot.managedState == ManagedConfigurationState.ABSENT) return
-    ManagedSourceAndLockStatus(
-        source = snapshot.access.sourceOf(kind, id),
-        lockReason = snapshot.access.reasonFor("records/${kind.settingsPath}/$id"),
-        modifier = modifier,
-    )
-}
-
-/** Read-only provenance and lock context for an effective named selection. */
-@Composable
-internal fun ManagedDefaultStatus(
-    snapshot: EffectiveSettingsSnapshot,
-    path: String,
-    modifier: Modifier = Modifier,
-) {
-    if (snapshot.managedState == ManagedConfigurationState.ABSENT) return
-    ManagedSourceAndLockStatus(
-        source = snapshot.access.sourceOfDefault(path),
-        lockReason = snapshot.access.reasonFor(path),
-        modifier = modifier,
-    )
-}
-
-@Composable
-private fun ManagedSourceAndLockStatus(
-    source: SettingsValueSource,
-    lockReason: String?,
-    modifier: Modifier,
-) {
-    FlowRow(
-        modifier = modifier,
-        horizontalArrangement = Arrangement.spacedBy(4.dp),
-        verticalArrangement = Arrangement.spacedBy(4.dp),
-    ) {
-        Tag(
-            type = when (source) {
-                SettingsValueSource.BUILT_IN -> TagType.DEFAULT
-                SettingsValueSource.LOCAL -> TagType.INFO
-                SettingsValueSource.MANAGED -> TagType.WARNING
-            },
-        ) {
-            Text(
-                stringResource(
-                    when (source) {
-                        SettingsValueSource.BUILT_IN -> R.string.managed_configuration_source_builtin
-                        SettingsValueSource.LOCAL -> R.string.managed_configuration_source_local
-                        SettingsValueSource.MANAGED -> R.string.managed_configuration_source_managed
-                    },
-                ),
-            )
-        }
-        lockReason?.let { reason ->
-            Tag(type = TagType.WARNING) { Text(reason) }
         }
     }
 }

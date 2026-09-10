@@ -28,10 +28,7 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import net.weero.measix.pilot.data.ai.attachments.AttachmentResolveResult
 import net.weero.measix.pilot.data.ai.attachments.AttachmentResolver
-import net.weero.measix.pilot.data.datastore.EffectiveSettingsSnapshot
-import net.weero.measix.pilot.data.datastore.ManagedConfigurationState
 import net.weero.measix.pilot.data.datastore.Settings
-import net.weero.measix.pilot.data.datastore.SettingsAccessIndex
 import net.weero.measix.pilot.data.datastore.SettingsStore
 import net.weero.measix.pilot.data.db.AppDatabase
 import net.weero.measix.pilot.data.db.RoomDatabaseTransactionRunner
@@ -69,10 +66,10 @@ class ArtifactUploadImageReadTest {
         }
         database = Room.inMemoryDatabaseBuilder(application, AppDatabase::class.java).build()
         val settings = MutableStateFlow(
-            EffectiveSettingsSnapshot(Settings(), SettingsAccessIndex(), 0L, ManagedConfigurationState.ABSENT),
+            Settings(),
         )
-        val settingsStore = mockArtifactSettings({ settings.value.settings }) { updated ->
-            settings.value = settings.value.copy(settings = updated)
+        val settingsStore = mockArtifactSettings({ settings.value }) { updated ->
+            settings.value = updated
         }
         payloadStore = spyk(ArtifactPayloadStore(context))
         store = ArtifactStore(

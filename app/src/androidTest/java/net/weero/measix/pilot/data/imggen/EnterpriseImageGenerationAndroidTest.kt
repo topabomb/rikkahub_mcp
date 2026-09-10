@@ -59,7 +59,7 @@ class EnterpriseImageGenerationAndroidTest {
             val preferences = PreferenceDataStoreFactory.create(migrations = listOf(UserSettingsMigration()), scope = scope,
                 produceFile = { File(root, "settings.preferences_pb") })
             val settings = SettingsStore(context, scope, dataStore = preferences)
-            settings.effectiveSettings.first { !it.settings.init }
+            settings.userSettings.first { !it.init }
             val userAssistant = Assistant(name = "Personal definition")
             settings.updateLocal { it.copy(assistants = it.assistants + userAssistant) }
             val sessions = EnterpriseSessionController(EnterpriseAppliedStore(File(root, "enterprise")))

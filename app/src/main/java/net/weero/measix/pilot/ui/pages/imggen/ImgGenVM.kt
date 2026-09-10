@@ -79,8 +79,7 @@ class ImgGenVM internal constructor(
 ) : AndroidViewModel(context) {
     internal val modelCatalog = configurationQueryService.observeModelCatalog()
         .stateIn(viewModelScope, SharingStarted.Eagerly, net.weero.measix.pilot.service.ModelCatalogReadState.Loading)
-    val settings: StateFlow<Settings> = settingsStore.effectiveSettings
-        .map { it.settings }
+    val settings: StateFlow<Settings> = settingsStore.userSettings
         .stateIn(viewModelScope, SharingStarted.Eagerly, Settings.dummy())
 
     fun selectImageGenerationModel(modelId: ConfigurationReference) {

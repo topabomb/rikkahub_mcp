@@ -25,7 +25,6 @@ import me.rerere.ai.ui.UIMessagePart
 import net.weero.measix.pilot.data.ai.tools.local.LocalToolOption
 import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.datastore.SettingsStore
-import net.weero.measix.pilot.data.datastore.toEffectiveSettingsSnapshot
 import net.weero.measix.pilot.data.model.Assistant
 import net.weero.measix.pilot.service.AssistantManagementService
 import net.weero.measix.pilot.service.subassistant.SubAssistantRunCoordinator
@@ -56,10 +55,10 @@ class AssistantCallToolTest {
             Settings(
                 assistants = listOf(caller, target),
                 assistantId = callerId,
-            ).toEffectiveSettingsSnapshot(),
+            ),
         )
         val settingsStore = mockk<SettingsStore>()
-        every { settingsStore.effectiveSettings } returns effectiveSettings
+        every { settingsStore.userSettings } returns effectiveSettings
         return AssistantToolFactory(
             settingsStore = settingsStore,
             assistantManagementService = mockk<AssistantManagementService>(relaxed = true),

@@ -233,7 +233,7 @@ class ChatVM internal constructor(
     }
 
     val settings: StateFlow<Settings> =
-        settingsStore.effectiveSettings.map { it.settings }.stateIn(viewModelScope, SharingStarted.Eagerly, Settings.dummy())
+        settingsStore.userSettings.stateIn(viewModelScope, SharingStarted.Eagerly, Settings.dummy())
 
     // 错误状态
     val errors: StateFlow<List<ChatError>> = fromPage(emptyList()) { state ->

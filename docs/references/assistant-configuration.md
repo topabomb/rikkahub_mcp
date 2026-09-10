@@ -202,20 +202,9 @@ code point 限制长度。关闭 `allowAsSubAssistant` 时，`normalizeForPersis
 
 ## 5. 更新与持久化边界
 
-现有 `ManagedConfigurationEnvelope(schemaVersion=1)` 把完整 `Assistant`、`QuickMessage` 等
-Local DTO 放进 `records[]`，使用 Android UUID，并由全局 `EffectiveSettingsResolver` 合并 Built-in/Local/Managed；
-`SettingsStore.applyManagedSnapshot()` 目前只有测试调用，没有 Enrollment/Sync 生产入口。该原型没有 Personal/Enterprise Realm，
-生产企业配置尚未接入；阶段与目标映射见 [企业集成计划](../dev/android-enterprise-integration-plan.md)。
+用户 Assistant 定义保存在 UserSettingsDocument.configuration；企业定义归 Applied Enterprise State。企业域的用户使用选择保存在同一用户文档的 scoped preferences，不复制整份 Assistant，也不修改企业固定定义。
 
-`SettingsStore.updateLocal()` 在互斥区内读取最新 Local shadow 的读取模型、执行 transform，并以有效快照中的 lock
-规则校验变化；随后统一执行持久化归一化、DataStore 标量规范化和 `commitSettings` 的“落盘后发布”顺序。Store 更新内部 Local shadow，`EffectiveSettingsResolver` 把 Built-in、Local 与已验证 managed overlay 合并为唯一对外的
-`effectiveSettings` 快照。跨助手的权限清理、选择项修正和删除 tombstone 必须在同一个 transform 中完成，不能先发布内存状态再补写磁盘。
-
-已验证 managed Assistant 以稳定 ID 覆盖同 ID 的 Local shadow；用户和备份不会改写 managed envelope。受管 Assistant 的模型、
-Tag、MCP、Mode Injection、Quick Message 和子助手引用必须由 verifier 的 generation-local known set 解析；仅模型、助手、Mode Injection
-等明确拥有内置默认项的类型会额外允许对应 Built-in ID，不能因为 Local shadow 碰巧有同 ID 就绑定。未被受管协议表示的 Skill 引用会明确拒绝。
-头像和背景仅能通过同 generation 的签名 asset binding 附着。
-原助手页会显示 Built-in/Local/Managed 来源及 lock 原因；命中 lock 的整个本地提交会失败，撤回更高 generation 后才重新显示 Local shadow。
+`SettingsStore.updateLocal()` 持写锁读取最新个人投影，执行 transform、持久化规范化与 DataStore 提交，回执成功后发布 `userSettings`。企业目录和执行使用 `ConfigurationResolver` 的按域结果；共享定义编辑器明确编辑用户定义，不将个人读取投影视作企业授权。跨助手权限清理、选择修正和删除 tombstone 必须在同一事务完成。
 
 `Settings.normalizeForPersistence()` 在每次写入前运行，只负责规范化
 `Assistant.description`、在未开启子助手类别时强制关闭全局可见、按 `assistantId` 去重
@@ -229,8 +218,7 @@ Tag、MCP、Mode Injection、Quick Message 和子助手引用必须由 verifier 
 
 ## 6. 配置消费边界
 
-`Assistant` 数据模型定义持久字段与默认语义；Settings 的 Local shadow、受管快照、有效读模型、读取物化和提交规则归
-Settings owner。会话助手归属只经 `ConversationApplicationService` 迁移；模型 readiness 与主生成工具装配归
+`Assistant` 数据模型定义持久字段与默认语义；用户配置的读取物化和提交归 Settings owner；企业状态归 Enterprise owner；按域生效解析归 ConfigurationResolver。会话助手归属只经 `ConversationApplicationService` 迁移；模型 readiness 与主生成工具装配归
 `ConversationTurnService` 和 `TurnToolSetFactory`；请求映射、工具循环与 Transformer 归 `TurnRunner` / `StepRunner` / `ToolBatchRunner`；助手的
 创建、修改和删除归 `AssistantManagementService`。子助手的运行过滤、执行与恢复分别归 `SubAssistantRunPolicy`、
 `SubAssistantRunCoordinator`、`TurnRecovery` 和 `ApplicationRecoveryCoordinator`。
@@ -246,8 +234,8 @@ UI 和 Provider adapter 只消费 typed 配置与有效读模型，不成为配�
 | 边界 | 文件 |
 | --- | --- |
 | Assistant 数据模型 | `app/src/main/java/net/weero/measix/pilot/data/model/Assistant.kt` |
-| Local shadow 与 effective owner | `app/src/main/java/net/weero/measix/pilot/data/datastore/SettingsStore.kt`、`EffectiveSettings.kt` |
-| 读取物化、写规则与提交 | `app/src/main/java/net/weero/measix/pilot/data/datastore/SettingsNormalization.kt`、`SettingsWriteRules.kt`、`SettingsCommit.kt` |
+| 用户配置写入与域内解析 | `app/src/main/java/net/weero/measix/pilot/data/datastore/SettingsStore.kt`、`data/configuration/ConfigurationResolver.kt` |
+| 读取物化、写规则与提交 | `app/src/main/java/net/weero/measix/pilot/data/datastore/SettingsNormalization.kt`、`SettingsWriteRules.kt` |
 | 会话归属与生成装配 | `app/src/main/java/net/weero/measix/pilot/service/ConversationApplicationService.kt`、`ConversationTurnService.kt`、`service/turn/TurnRunner.kt`、`service/turn/StepRunner.kt`、`service/turn/ToolBatchRunner.kt`、`service/turn/TurnRunState.kt`、`data/ai/tools/TurnToolSetFactory.kt` |
 | 助手管理工具 | `app/src/main/java/net/weero/measix/pilot/service/AssistantManagementService.kt`、`data/ai/tools/AssistantToolFactory.kt` |
 | 子助手策略与执行 | `app/src/main/java/net/weero/measix/pilot/data/ai/subassistant/SubAssistantRunPolicy.kt`、`service/subassistant/SubAssistantRunCoordinator.kt` |

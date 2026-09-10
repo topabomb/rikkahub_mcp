@@ -16,7 +16,6 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import net.weero.measix.pilot.data.datastore.SettingsStore
-import net.weero.measix.pilot.data.datastore.ManagedConfigurationState
 import net.weero.measix.pilot.data.files.ArtifactStore
 import net.weero.measix.pilot.data.imggen.GeneratedMediaStore
 import net.weero.measix.pilot.data.repository.ConversationRepository
@@ -29,9 +28,6 @@ sealed interface ApplicationRecoveryState {
 
 class ApplicationRecoveryUnavailableException(cause: Throwable) :
     IllegalStateException("Application recovery has not completed", cause)
-
-class ManagedConfigurationBlockedException(reason: String?) :
-    IllegalStateException(reason ?: "Managed configuration cannot be verified")
 
 /** 所有 durable write 共用的 fail-closed 门禁。 */
 class ApplicationRecoveryGate internal constructor() {
@@ -101,10 +97,7 @@ class ApplicationRecoveryCoordinator(
             gate.loading()
             try {
                 restorePendingBackup()
-                val effective = settingsStore.effectiveSettings.first { !it.settings.init }
-                if (effective.managedState == ManagedConfigurationState.BLOCKED) {
-                    throw ManagedConfigurationBlockedException(effective.managedFailureReason)
-                }
+                settingsStore.userSettings.first { !it.init }
                 // Enterprise validation failure is published by its owner; personal data recovery remains independent.
                 recoverEnterpriseConfiguration()
                 artifactStore.reconcileStartup()

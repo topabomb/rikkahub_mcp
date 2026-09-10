@@ -659,7 +659,7 @@ class ConfigurationApplicationServiceTest {
         }
 
         suspend fun initialize() {
-            settings.effectiveSettings.first { !it.settings.init }
+            settings.userSettings.first { !it.init }
             settings.updateLocal { Settings(providers = listOf(ProviderSetting.OpenAI(models = listOf(model))),
                 assistants = listOf(assistant), mcpServers = listOf(mcp), assistantId = assistant.id, chatModelId = model.id) }
             sessions.enrollFixture(exampleEnterprisePackage())

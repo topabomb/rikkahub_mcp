@@ -1559,10 +1559,6 @@
   <string name="workspace_terminal_command_failed">ターミナル操作に失敗しました</string>
   <string name="setting_provider_page_mutation_failed">プロバイダー設定の操作に失敗しました</string>
   <string name="skills_page_import_resource_limit">Skill パッケージが安全なインポート上限を超えています</string>
-  <string name="managed_configuration_active">管理対象の設定が有効です</string>
-  <string name="managed_configuration_degraded">管理対象の設定は期限切れです。最後に検証された設定を引き続き使用します</string>
-  <string name="managed_configuration_blocked">管理対象の設定を利用できません: %1$s</string>
-  <string name="managed_configuration_locked">管理対象の設定によりこの変更はロックされています: %1$s</string>
   <string name="managed_configuration_source_builtin">組み込み</string>
   <string name="managed_configuration_source_local">ローカル</string>
   <string name="managed_configuration_source_managed">管理対象</string>
@@ -1673,4 +1669,5 @@
   <string name="enterprise_import_notice">ここでは接続コードとは別の完全な設定ファイルをインポートします。非公開の認証情報は個人バックアップに含まれません。</string>
   <string name="backup_personal_scope_notice">ユーザー設定と個人スペースのデータをバックアップします。企業の設定とデータは含まれず、復元時にも保持されます。</string>
   <string name="enterprise_import_failed">このファイルをインポートできません。読み取り可能か、形式・設定バージョン・リソース参照が正しいか確認してください。</string>
+  <string name="configuration_change_rejected">この設定変更は許可されていません：%1$s</string>
 </resources>

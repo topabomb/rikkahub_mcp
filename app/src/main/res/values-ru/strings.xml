@@ -1559,10 +1559,6 @@
   <string name="workspace_terminal_command_failed">Не удалось выполнить операцию терминала</string>
   <string name="setting_provider_page_mutation_failed">Не удалось изменить настройки провайдера</string>
   <string name="skills_page_import_resource_limit">Пакет Skill превышает безопасный лимит импорта</string>
-  <string name="managed_configuration_active">Управляемая конфигурация активна</string>
-  <string name="managed_configuration_degraded">Срок действия управляемой конфигурации истёк; используется последняя проверенная конфигурация</string>
-  <string name="managed_configuration_blocked">Управляемая конфигурация недоступна: %1$s</string>
-  <string name="managed_configuration_locked">Управляемая конфигурация блокирует это изменение: %1$s</string>
   <string name="managed_configuration_source_builtin">Встроенное</string>
   <string name="managed_configuration_source_local">Локальное</string>
   <string name="managed_configuration_source_managed">Управляемое</string>
@@ -1673,4 +1669,5 @@
   <string name="enterprise_import_notice">Здесь импортируется полный файл конфигурации, а не код подключения. Закрытые учётные данные не включаются в личные резервные копии.</string>
   <string name="backup_personal_scope_notice">Сохраняются пользовательские настройки и данные личного пространства. Конфигурация и данные организации не входят в копию и сохраняются при восстановлении.</string>
   <string name="enterprise_import_failed">Не удалось импортировать файл. Проверьте доступность файла, формат, версию конфигурации и ссылки на ресурсы.</string>
+  <string name="configuration_change_rejected">Это изменение настройки не разрешено: %1$s</string>
 </resources>

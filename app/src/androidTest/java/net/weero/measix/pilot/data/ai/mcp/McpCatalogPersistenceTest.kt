@@ -92,7 +92,7 @@ class McpCatalogPersistenceTest {
         val settings = SettingsStore(context, scope, dataStore = preferences)
         val catalog = PreferenceDataStoreFactory.create(scope = scope, produceFile = { File(root, "catalog.preferences_pb") })
         try {
-            settings.effectiveSettings.first { !it.settings.init }
+            settings.userSettings.first { !it.init }
             val owner = McpCatalogStore(catalog, scope, settings)
             owner.awaitReady()
             operation(owner)

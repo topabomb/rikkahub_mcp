@@ -15,7 +15,6 @@ import net.weero.measix.pilot.data.ai.mcp.McpServerConfig
 import net.weero.measix.pilot.data.ai.mcp.McpToolPolicy
 import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.datastore.SettingsStore
-import net.weero.measix.pilot.data.datastore.toEffectiveSettingsSnapshot
 import net.weero.measix.pilot.data.model.Assistant
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -26,18 +25,18 @@ class McpApplicationServiceTest {
     private val manager = mockk<McpRuntimeCoordinator>(relaxed = true)
     private val settingsStore = mockk<SettingsStore>()
     private lateinit var local: Settings
-    private lateinit var effective: MutableStateFlow<net.weero.measix.pilot.data.datastore.EffectiveSettingsSnapshot>
+    private lateinit var effective: MutableStateFlow<net.weero.measix.pilot.data.datastore.Settings>
     private lateinit var service: McpApplicationService
 
     @Before
     fun setUp() {
         local = Settings()
-        effective = MutableStateFlow(local.toEffectiveSettingsSnapshot())
-        every { settingsStore.effectiveSettings } returns effective
+        effective = MutableStateFlow(local)
+        every { settingsStore.userSettings } returns effective
         coEvery { settingsStore.updateLocal(any()) } coAnswers {
             firstArg<(Settings) -> Settings>()(local).also { committed ->
                 local = committed
-                effective.value = committed.toEffectiveSettingsSnapshot(effective.value.revision + 1)
+                effective.value = committed
             }
         }
         service = McpApplicationService(manager, settingsStore)
@@ -53,7 +52,7 @@ class McpApplicationServiceTest {
             policies = listOf(McpToolPolicy(name = "measure", enable = false, needsApproval = true)),
         )
         local = Settings(mcpServers = listOf(existing))
-        effective.value = local.toEffectiveSettingsSnapshot()
+        effective.value = local
 
         service.overwriteByName(
             listOf(
@@ -77,7 +76,7 @@ class McpApplicationServiceTest {
         val oauth = McpOAuthState(enabled = true, accessToken = "current-token")
         val existing = remote(name = "Remote tools", oauth = oauth)
         local = Settings(mcpServers = listOf(existing))
-        effective.value = local.toEffectiveSettingsSnapshot()
+        effective.value = local
 
         service.overwriteByName(listOf(remote(name = "remote tools")))
 
@@ -89,7 +88,7 @@ class McpApplicationServiceTest {
         val oauth = McpOAuthState(enabled = true, accessToken = "current-token")
         val existing = remote(name = "Remote tools", oauth = oauth)
         local = Settings(mcpServers = listOf(existing))
-        effective.value = local.toEffectiveSettingsSnapshot()
+        effective.value = local
 
         service.upsert(
             remote(
@@ -105,7 +104,7 @@ class McpApplicationServiceTest {
     @Test
     fun `upsert rejects case-insensitive duplicate server names`() = runTest {
         local = Settings(mcpServers = listOf(remote(name = "Remote tools")))
-        effective.value = local.toEffectiveSettingsSnapshot()
+        effective.value = local
 
         val error = try {
             service.upsert(remote(name = " remote tools "))
@@ -122,7 +121,7 @@ class McpApplicationServiceTest {
         val server = remote(name = "Remote tools")
         val assistant = Assistant(mcpServers = setOf(server.id))
         local = Settings(mcpServers = listOf(server), assistants = listOf(assistant))
-        effective.value = local.toEffectiveSettingsSnapshot()
+        effective.value = local
 
         service.delete(server.id)
 
@@ -142,7 +141,7 @@ class McpApplicationServiceTest {
     fun `single server restart returns the coordinator operation receipt unchanged`() = runTest {
         val server = remote(name = "Remote tools")
         local = Settings(mcpServers = listOf(server))
-        effective.value = local.toEffectiveSettingsSnapshot()
+        effective.value = local
         val receipt = McpRefreshReceipt(requestedServerCount = 1, settledServerCount = 0)
         coEvery { manager.restartServer(server.id) } returns receipt
 

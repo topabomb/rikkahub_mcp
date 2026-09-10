@@ -79,8 +79,7 @@ fun AssistantLocalToolPage(id: String) {
     AssistantLockedChangeEffect(vm)
     val assistant = vm.assistant.collectAsStateWithLifecycle().value
     val settingsStore: net.weero.measix.pilot.data.datastore.SettingsStore = koinInject()
-    val effectiveSettings by settingsStore.effectiveSettings.collectAsStateWithLifecycle()
-    val settings = effectiveSettings.settings
+    val settings by settingsStore.userSettings.collectAsStateWithLifecycle()
     val configurationQuery: net.weero.measix.pilot.service.ConfigurationQueryService = koinInject()
     val configuration by remember(configurationQuery) { configurationQuery.observeCurrent() }.collectAsStateWithLifecycle(initialValue = null)
     val imageGenerationAvailable = configuration?.modelSelection(net.weero.measix.pilot.data.configuration.ModelSelectionRole.IMAGE)?.isAvailable == true

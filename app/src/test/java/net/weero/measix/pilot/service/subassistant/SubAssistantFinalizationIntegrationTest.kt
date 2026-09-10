@@ -1,25 +1,19 @@
 package net.weero.measix.pilot.service.subassistant
 
 import me.rerere.common.configuration.ConfigurationReference
-
+import me.rerere.common.configuration.EnterpriseAuthority
+import net.weero.measix.pilot.data.configuration.ConfigurationScope
 
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.test.runTest
 import me.rerere.ai.core.MessageRole
-import me.rerere.ai.provider.Model
-import me.rerere.ai.provider.ModelType
-import me.rerere.ai.provider.ProviderSetting
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
 import net.weero.measix.pilot.data.ai.subassistant.SubAssistantCallState
 import net.weero.measix.pilot.data.ai.subassistant.buildInitialSubAssistantCallMetadata
 import net.weero.measix.pilot.data.ai.subassistant.getSubAssistantCallMetadata
 import net.weero.measix.pilot.data.ai.subassistant.mergeSubAssistantCallMetadata
-import net.weero.measix.pilot.data.ai.tools.local.LocalToolOption
-import net.weero.measix.pilot.data.datastore.PendingAssistantDeletion
-import net.weero.measix.pilot.data.datastore.Settings
-import net.weero.measix.pilot.data.model.Assistant
 import net.weero.measix.pilot.data.model.Conversation
 import net.weero.measix.pilot.data.model.toMessageNode
 import net.weero.measix.pilot.service.runtime.toSnapshot
@@ -35,7 +29,7 @@ import kotlin.uuid.Uuid
  * 子助手中断收口与恢复投影集成测试。
  *
  * 覆盖 [finalizeInterruptedRunSafely] 的超时/失败收口，以及 [reconcileMasterSubAssistantCalls]
- * 在重启后对 Master `assistant_call` 的停止投影、reason 优先级与 extras 策略。
+ * 在重启后对 Master `assistant_call` 的停止投影、lineage 与 extras 策略。
  */
 class SubAssistantFinalizationIntegrationTest {
 
@@ -111,23 +105,10 @@ class SubAssistantFinalizationIntegrationTest {
     )
 
     @Test
-    fun `stop reason priority handles caller model and unknown reasons deterministically`() {
-        assertEquals(
-            "caller_model_unavailable",
-            chooseMoreSpecificStopReason("app_restarted", "caller_model_unavailable"),
-        )
-        assertEquals(
-            "target_access_revoked",
-            chooseMoreSpecificStopReason("target_access_revoked", "unknown_reason"),
-        )
-    }
-
-    @Test
     fun `valid stale run is stopped with rebuilt preview and retains child`() {
         val call = callTool("run-1")
         val result = reconcileCalls(
             master = masterWith(call),
-            settings = validSettings(),
             childrenById = mapOf(child.id to child),
             json = json,
         )
@@ -143,11 +124,25 @@ class SubAssistantFinalizationIntegrationTest {
     }
 
     @Test
+    fun `enterprise child is interrupted without requiring a personal assistant definition`() {
+        val authority = EnterpriseAuthority("local:recovery", "dep_recovery")
+        val scope = ConfigurationScope.Enterprise(authority, "user")
+        val target = ConfigurationReference.Enterprise(authority, "asd_child")
+        val enterpriseChild = child.copy(assistantId = target, scope = scope)
+        val result = reconcileCalls(
+            masterWith(callTool("enterprise", target = target)).copy(scope = scope),
+            mapOf(child.id to enterpriseChild), json,
+        )
+        assertEquals("app_restarted", result.childStopReasons[child.id])
+        assertEquals("app_restarted", result.master.messageNodes.single().currentMessage.getTools().single()
+            .getSubAssistantCallMetadata(json)!!.reason)
+    }
+
+    @Test
     fun `recovery does not project artifacts even when extras request them`() {
         val call = callTool("run-artifacts", input = """{"extras":["artifacts"]}""")
         val result = reconcileCalls(
             master = masterWith(call),
-            settings = validSettings(),
             childrenById = mapOf(child.id to child),
             json = json,
         )
@@ -161,38 +156,9 @@ class SubAssistantFinalizationIntegrationTest {
     }
 
     @Test
-    fun `recovery reason follows deterministic configuration priority`() {
-        val valid = validSettings()
-        val caller = valid.assistants.first { it.id == callerId }
-        val target = valid.assistants.first { it.id == targetId }
-        val cases = listOf(
-            valid.copy(
-                pendingAssistantDeletions = listOf(PendingAssistantDeletion(targetId)),
-            ) to "target_removed",
-            valid.copy(assistants = listOf(caller, target.copy(allowAsSubAssistant = false))) to "target_disabled",
-            valid.copy(assistants = listOf(caller.copy(allowedSubAssistantIds = emptySet()), target)) to
-                "target_access_revoked",
-            valid.copy(providers = emptyList()) to "caller_model_unavailable",
-        )
-
-        cases.forEachIndexed { index, (settings, expectedReason) ->
-            val result = reconcileCalls(
-                masterWith(callTool("run-$index")),
-                settings,
-                mapOf(child.id to child),
-                json,
-            )
-            val metadata = result.master.messageNodes.single().currentMessage.getTools().single()
-                .getSubAssistantCallMetadata(json)!!
-            assertEquals(expectedReason, metadata.reason)
-        }
-    }
-
-    @Test
-    fun `missing link is child missing after valid configuration checks`() {
+    fun `missing link is child missing independently of current configuration`() {
         val result = reconcileCalls(
             masterWith(callTool("run-1")),
-            validSettings(),
             emptyMap(),
             json,
         )
@@ -211,7 +177,6 @@ class SubAssistantFinalizationIntegrationTest {
         )
         val result = reconcileCalls(
             masterWithNode(message),
-            validSettings(),
             mapOf(child.id to child),
             json,
         )
@@ -227,7 +192,6 @@ class SubAssistantFinalizationIntegrationTest {
     fun `recovery includes tts_stats but not bulky extras by default`() {
         val result = reconcileCalls(
             master = masterWith(callTool("run-tts")),
-            settings = validSettings(),
             childrenById = mapOf(child.id to childWithTts()),
             json = json,
         )
@@ -242,7 +206,6 @@ class SubAssistantFinalizationIntegrationTest {
     fun `recovery returns extras when requested`() {
         val result = reconcileCalls(
             master = masterWith(callTool("run-tts", input = """{"extras":["tts","tool_calls"]}""")),
-            settings = validSettings(),
             childrenById = mapOf(child.id to childWithTts()),
             json = json,
         )
@@ -260,31 +223,10 @@ class SubAssistantFinalizationIntegrationTest {
             output = listOf(UIMessagePart.Text("done")),
         )
         val master = masterWith(terminal)
-        val result = reconcileCalls(master, validSettings(), emptyMap(), json)
+        val result = reconcileCalls(master, emptyMap(), json)
 
         assertEquals(master, result.master)
         assertFalse(result.referencedChildIds.contains(child.id))
-    }
-
-    private fun validSettings(): Settings {
-        val model = Model(id = ConfigurationReference.random(), displayName = "model", type = ModelType.CHAT)
-        val caller = Assistant(
-            id = callerId,
-            chatModelId = model.id,
-            localTools = listOf(LocalToolOption.AssistantDelegation),
-            allowedSubAssistantIds = setOf(targetId),
-        )
-        val target = Assistant(
-            id = targetId,
-            name = "Target",
-            description = "Handles tasks",
-            allowAsSubAssistant = true,
-            chatModelId = null,
-        )
-        return Settings(
-            providers = listOf(ProviderSetting.OpenAI(models = listOf(model))),
-            assistants = listOf(caller, target),
-        )
     }
 
     private fun childWithTts(): Conversation = child.copy(
@@ -314,10 +256,11 @@ class SubAssistantFinalizationIntegrationTest {
         runId: String,
         state: SubAssistantCallState = SubAssistantCallState.RUNNING,
         input: String = "{}",
+        target: ConfigurationReference = targetId,
     ): UIMessagePart.Tool {
         val metadata = buildInitialSubAssistantCallMetadata(
             runId = runId,
-            targetAssistantId = targetId,
+            targetAssistantId = target,
             targetNameSnapshot = "Target",
         ).copy(
             childConversationId = childId.toString(),
@@ -350,15 +293,12 @@ private data class ReconciledConversation(
 
 private fun reconcileCalls(
     master: Conversation,
-    settings: Settings,
     childrenById: Map<Uuid, Conversation>,
     json: kotlinx.serialization.json.Json,
 ): ReconciledConversation {
     val result = reconcileMasterSubAssistantCalls(
         masterId = master.id,
-        masterAssistantId = master.assistantId,
         masterNodes = master.messageNodes,
-        settings = settings,
         childrenById = childrenById.mapValues { it.value.toSnapshot() },
         json = json,
     )

@@ -72,8 +72,6 @@ import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 import me.rerere.ai.core.MessageRole
 import net.weero.measix.pilot.R
-import net.weero.measix.pilot.data.datastore.EffectiveSettingsSnapshot
-import net.weero.measix.pilot.data.datastore.ManagedConfigurationRecordKind
 import net.weero.measix.pilot.data.export.ModeInjectionSerializer
 import net.weero.measix.pilot.data.export.rememberExporter
 import net.weero.measix.pilot.data.export.rememberImporter
@@ -82,7 +80,6 @@ import net.weero.measix.pilot.data.model.PromptInjection
 import net.weero.measix.pilot.ui.components.nav.BackButton
 import net.weero.measix.pilot.ui.components.ui.ExportDialog
 import net.weero.measix.pilot.ui.components.ui.FormItem
-import net.weero.measix.pilot.ui.components.ui.ManagedRecordStatus
 import net.weero.measix.pilot.ui.components.ui.Select
 import net.weero.measix.pilot.ui.components.ui.Tag
 import net.weero.measix.pilot.ui.components.ui.TagType
@@ -97,9 +94,8 @@ import sh.calvin.reorderable.rememberReorderableLazyListState
 @Composable
 fun PromptPage(vm: PromptVM = koinViewModel()) {
     val settings by vm.settings.collectAsStateWithLifecycle()
-    val effectiveSettings by vm.effectiveSettings.collectAsStateWithLifecycle()
     val toaster = LocalToaster.current
-    val lockedMessage = stringResource(R.string.managed_configuration_locked, "{reason}")
+    val lockedMessage = stringResource(R.string.configuration_change_rejected, "{reason}")
     val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
 
     LaunchedEffect(vm, toaster, lockedMessage) {
@@ -122,7 +118,6 @@ fun PromptPage(vm: PromptVM = koinViewModel()) {
     ) { innerPadding ->
         ModeInjectionTab(
             modeInjections = settings.modeInjections,
-            effectiveSettings = effectiveSettings,
             onUpdate = { transform ->
                 vm.updateSettings { current ->
                     current.copy(modeInjections = transform(current.modeInjections))
@@ -136,7 +131,6 @@ fun PromptPage(vm: PromptVM = koinViewModel()) {
 @Composable
 private fun ModeInjectionTab(
     modeInjections: List<PromptInjection.ModeInjection>,
-    effectiveSettings: EffectiveSettingsSnapshot,
     onUpdate: ((List<PromptInjection.ModeInjection>) -> List<PromptInjection.ModeInjection>) -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -218,7 +212,6 @@ private fun ModeInjectionTab(
                     ) { isDragging ->
                         ModeInjectionCard(
                             injection = injection,
-                            effectiveSettings = effectiveSettings,
                             modifier = Modifier
                                 .longPressDraggableHandle()
                                 .graphicsLayer {
@@ -278,7 +271,6 @@ private fun ModeInjectionTab(
 @Composable
 private fun ModeInjectionCard(
     injection: PromptInjection.ModeInjection,
-    effectiveSettings: EffectiveSettingsSnapshot,
     modifier: Modifier = Modifier,
     onEdit: () -> Unit,
     onDelete: () -> Unit
@@ -350,11 +342,6 @@ private fun ModeInjectionCard(
                                 Text(stringResource(R.string.prompt_page_disabled))
                             }
                         }
-                        ManagedRecordStatus(
-                            snapshot = effectiveSettings,
-                            kind = ManagedConfigurationRecordKind.MODE_INJECTION,
-                            id = injection.id,
-                        )
                     }
                 }
                 IconButton(onClick = { showExportDialog = true }) {

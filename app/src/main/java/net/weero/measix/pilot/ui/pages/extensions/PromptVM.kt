@@ -10,7 +10,6 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import net.weero.measix.pilot.data.datastore.Settings
-import net.weero.measix.pilot.data.datastore.EffectiveSettingsSnapshot
 import net.weero.measix.pilot.data.datastore.SettingsLockedException
 import net.weero.measix.pilot.data.datastore.SettingsStore
 
@@ -19,8 +18,7 @@ class PromptVM(
 ) : ViewModel() {
     private val _lockedChanges = MutableSharedFlow<SettingsLockedException>(extraBufferCapacity = 1)
     val lockedChanges = _lockedChanges.asSharedFlow()
-    internal val effectiveSettings: StateFlow<EffectiveSettingsSnapshot> = settingsStore.effectiveSettings
-    val settings = settingsStore.effectiveSettings.map { it.settings }
+    val settings = settingsStore.userSettings
         .stateIn(viewModelScope, SharingStarted.Lazily, Settings.dummy())
 
     fun updateSettings(transform: (Settings) -> Settings) {

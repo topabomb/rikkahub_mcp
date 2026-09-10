@@ -49,7 +49,7 @@
 | HTTP 录音生命周期 | `HttpAsrLifecycleInstrumentedTest` 使用 Android 实际 AudioRecord 验证 WAV 头与实际 PCM、原上传等待/取消、迟到转写拒绝、文件回收和录音前准入拒绝；转写响应为模拟值，不代表识别准确率或生产互操作 |
 | 个人实时识别生命周期 | `RealtimeAsrLifecycleInstrumentedTest` 使用 Android 实际 AudioRecord 和受控 WebSocket 公共接口，验证晚握手/转写拒绝、原连接终态等待、录音替换、服务端主动结束和幂等关闭。连接 fixture 模拟协议回调，不代表真实网络服务或语音识别准确率验收 |
 | 个人备份与冷恢复 | `BackupArchiveServiceTest` 验证 manifest、staging 拒绝、个人配置归一化及 swap 回滚；`PersonalBackupGraphAndroidTest` 使用生产 Room/FTS、Settings 与文件 owner 验证企业内容排除、最新企业图和共享资产保全、原生 WAL crash image、历史删除附件、恢复 receipt 与路径冲突。WAL 用例复原真实数据库/WAL 镜像，不冒充进程 kill 验收。`BackupRestoreMigrationIntegrationTest` 使用真实旧 schema/migration 验证已发布个人包的消息、Context、Artifact 列映射和 ID 保全，以及 v19 prepared/交换中断恢复跨 App 升级；不代替用户界面或系统设备迁移验收 |
-| 配置首次写入锁顺序 | `SettingsStartupTest` 通过确定调度让写入/恢复先于异步初始化，验证写锁外等待与提交结果 |
+| 用户配置提交与发布 | `SettingsStartupTest` 在实际 SettingsStore 与可控 DataStore 回执下验证首次写入/恢复不依赖异步投影、写失败不发布、已接受写入取消后等待回执并发布；不冒充真实磁盘故障测试 |
 | MCP 用户定义准入 | `SettingsStoreMcpTest` 使用实际 DataStore 验证配置写入与定义读取串行、取消释放 owner、读取规范化且不回写；不依赖全局有效配置投影 |
 | MCP 连接与传输所有权 | `McpConnectionLifecycleTest` 验证取消、原始 transport 关闭、失败持有与重新启用；`McpClientTransportTest` 验证 SDK 终态后的实际 I/O 等待；`McpTransportOwnershipIntegrationTest` 经真实 OkHttp/本机 HTTP 验证响应头等待取消、截断恢复和协议失败，不代表 Android 设备或真实服务互操作 |
 | MCP 完整目录与持久化主体 | `McpProtocolDiscoveryTest` 经 SDK、OkHttp 和本机 HTTP 服务验证完整 Tool JSON、分页及 SSE；`McpCatalogIdentityTest` 使用实际 DataStore 验证主体隔离、旧个人迁移与个人恢复保全企业；`McpCatalogPublicationTest` 验证提交、取消与回执顺序；`McpCatalogPersistenceTest` 验证 Android 关闭重开后的目录与磁盘一致 |

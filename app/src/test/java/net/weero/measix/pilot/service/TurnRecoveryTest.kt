@@ -4,13 +4,11 @@ import me.rerere.common.configuration.ConfigurationReference
 
 import io.mockk.coEvery
 import io.mockk.coVerify
-import io.mockk.every
 import io.mockk.mockk
 import io.mockk.slot
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancel
-import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
 import me.rerere.ai.core.MessageRole
@@ -20,9 +18,6 @@ import me.rerere.ai.ui.ToolResultStatus
 import me.rerere.ai.ui.TurnTerminalReasons
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
-import net.weero.measix.pilot.data.datastore.Settings
-import net.weero.measix.pilot.data.datastore.SettingsStore
-import net.weero.measix.pilot.data.datastore.toEffectiveSettingsSnapshot
 import net.weero.measix.pilot.data.db.dao.ScopedTurnExecution
 import net.weero.measix.pilot.data.db.entity.ToolExecutionEntity
 import net.weero.measix.pilot.data.db.entity.ToolExecutionStatus
@@ -426,12 +421,9 @@ class TurnRecoveryTest {
         repository: ConversationRepository,
         coordinator: ConversationCommandCoordinator,
     ): TurnRecovery {
-        val settingsStore = mockk<SettingsStore>()
-        every { settingsStore.effectiveSettings } returns MutableStateFlow(Settings().toEffectiveSettingsSnapshot())
         return TurnRecovery(
             conversationRepo = repository,
             commandCoordinator = coordinator,
-            settingsStore = settingsStore,
             json = Json,
             runGate = mockk(relaxed = true),
         )

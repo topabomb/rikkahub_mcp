@@ -50,7 +50,7 @@ class StatsQueryService internal constructor(
                 coreNonExactMessages = tokenStats.coreNonExactMessages,
                 cacheReadNonExactMessages = tokenStats.cacheReadNonExactMessages,
                 conversationsPerDay = conversationsPerDay,
-                launchCount = settingsStore.effectiveSettings.value.settings.launchCount,
+                launchCount = settingsStore.userSettings.value.launchCount,
             )
         }
     }

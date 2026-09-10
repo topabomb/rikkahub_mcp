@@ -19,7 +19,7 @@ class SubAssistantDetailVM(
 ) : ViewModel() {
     val uiState = detailReader.observe(source, runId)
         .stateIn(viewModelScope, SharingStarted.Eagerly, SubAssistantDetailUiState.Loading)
-    val settings = settingsStore.effectiveSettings.map { it.settings }
+    val settings = settingsStore.userSettings
         .stateIn(viewModelScope, SharingStarted.Eagerly, Settings.dummy())
 
     fun attachmentPreviews(): Map<String, net.weero.measix.pilot.service.AttachmentPreview> =

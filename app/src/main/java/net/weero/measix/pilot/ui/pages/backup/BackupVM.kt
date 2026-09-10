@@ -26,7 +26,7 @@ class BackupVM(
     private val s3Sync: S3Sync,
     private val restoreApplicationService: BackupRestoreApplicationService,
 ) : ViewModel() {
-    val settings = settingsStore.effectiveSettings.map { it.settings }.stateIn(
+    val settings = settingsStore.userSettings.stateIn(
         scope = viewModelScope,
         started = SharingStarted.Eagerly,
         initialValue = Settings.dummy()

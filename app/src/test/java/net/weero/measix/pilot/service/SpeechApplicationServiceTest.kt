@@ -161,7 +161,7 @@ class SpeechApplicationServiceTest {
     private suspend fun environment(block: suspend (Environment) -> Unit) {
         val e = Environment(temporary.newFolder())
         try {
-            e.settings.effectiveSettings.first { !it.settings.init }
+            e.settings.userSettings.first { !it.init }
             e.settings.updateLocal { Settings() }
             e.sessions.recover()
             e.sessions.enrollFixture(e.packet)

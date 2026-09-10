@@ -20,10 +20,7 @@ import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.sync.Semaphore
 import net.weero.measix.pilot.AppScope
-import net.weero.measix.pilot.data.datastore.EffectiveSettingsSnapshot
-import net.weero.measix.pilot.data.datastore.ManagedConfigurationState
 import net.weero.measix.pilot.data.datastore.Settings
-import net.weero.measix.pilot.data.datastore.SettingsAccessIndex
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Test
@@ -41,12 +38,7 @@ class McpServerRuntimeAuthorizationTest {
             url = "https://oauth.example/mcp",
         )
         val settings = MutableStateFlow(
-            EffectiveSettingsSnapshot(
-                settings = Settings(mcpServers = listOf(config)),
-                access = SettingsAccessIndex(),
-                revision = 1L,
-                managedState = ManagedConfigurationState.ABSENT,
-            )
+            Settings(mcpServers = listOf(config))
         )
         val oauthCoordinator = mockk<McpOAuthCoordinator>()
         val events = mutableListOf<String>()
@@ -80,7 +72,7 @@ class McpServerRuntimeAuthorizationTest {
             key = McpRuntimeKey(serverId),
             definition = object : McpRuntimeDefinition {
                 override suspend fun <T> withCurrent(use: McpDefinitionUse, operation: suspend (McpConnectionDefinition?) -> T): T =
-                    operation(settings.value.settings.mcpServers.find { it.id == serverId }?.let { McpConnectionDefinition.User(it) })
+                    operation(settings.value.mcpServers.find { it.id == serverId }?.let { McpConnectionDefinition.User(it) })
             },
             catalogStore = mockk(relaxed = true),
             appScope = appScope,

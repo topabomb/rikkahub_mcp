@@ -46,7 +46,6 @@ import net.weero.measix.pilot.data.ai.tools.local.LocalToolOption
 import net.weero.measix.pilot.service.turn.TurnPipelineFactory
 import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.datastore.SettingsStore
-import net.weero.measix.pilot.data.datastore.toEffectiveSettingsSnapshot
 import net.weero.measix.pilot.data.files.ArtifactDeleteResult
 import net.weero.measix.pilot.data.files.ArtifactStore
 import net.weero.measix.pilot.data.files.OwnedArtifact
@@ -249,13 +248,13 @@ class SubAssistantRunCoordinatorTest {
             )
         }
         preparationEntered.await()
-        val current = harness.settingsFlow.value.settings
+        val current = harness.settingsFlow.value
         val caller = current.assistants.single { it.id == callerId }
         harness.settingsFlow.value = current.copy(
             assistants = current.assistants.map {
                 if (it.id == callerId) caller.copy(allowedSubAssistantIds = emptySet()) else it
             },
-        ).toEffectiveSettingsSnapshot()
+        )
         resumePreparation.complete(Unit)
 
         val result = execution.await()
@@ -398,9 +397,9 @@ class SubAssistantRunCoordinatorTest {
                 assistantId = callerId,
                 chatModelId = modelId,
                 providers = listOf(ProviderSetting.OpenAI(models = listOf(model))),
-            ).toEffectiveSettingsSnapshot(),
+            ),
         )
-        every { settingsStore.effectiveSettings } returns settingsFlow
+        every { settingsStore.userSettings } returns settingsFlow
         val resolver = mockk<AttachmentResolver>()
         val readHeld = java.util.concurrent.atomic.AtomicBoolean(false)
         coEvery { resolver.withImages<Any?>(any(), any(), any()) } coAnswers {
@@ -498,7 +497,7 @@ class SubAssistantRunCoordinatorTest {
         val artifactStore: ArtifactStore,
         val turnFinalizer: TurnFinalizer,
         val readHeld: java.util.concurrent.atomic.AtomicBoolean,
-        val settingsFlow: MutableStateFlow<net.weero.measix.pilot.data.datastore.EffectiveSettingsSnapshot>,
+        val settingsFlow: MutableStateFlow<net.weero.measix.pilot.data.datastore.Settings>,
     )
 
     // ── ask_user 桥接与中断收口（原 SubAssistantAskUserBridgeTest）──

@@ -96,7 +96,7 @@ class SettingsStoreMcpTest {
             migrations = listOf(UserSettingsMigration()), produceFile = { root.resolve("settings.preferences_pb") })
         try {
             val settings = SettingsStore(context, scope, dataStore = preferences)
-            settings.effectiveSettings.first { !it.settings.init }
+            settings.userSettings.first { !it.init }
             operation(settings, preferences)
         } finally { scope.coroutineContext[Job]!!.cancelAndJoin() }
     }

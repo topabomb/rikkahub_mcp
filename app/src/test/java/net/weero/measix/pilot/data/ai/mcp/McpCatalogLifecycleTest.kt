@@ -34,10 +34,7 @@ import kotlinx.serialization.json.put
 import kotlinx.serialization.json.jsonObject
 import net.weero.measix.pilot.AppScope
 import me.rerere.ai.core.ToolExecutionFailure
-import net.weero.measix.pilot.data.datastore.EffectiveSettingsSnapshot
-import net.weero.measix.pilot.data.datastore.ManagedConfigurationState
 import net.weero.measix.pilot.data.datastore.Settings
-import net.weero.measix.pilot.data.datastore.SettingsAccessIndex
 import net.weero.measix.pilot.data.datastore.SettingsStore
 import net.weero.measix.pilot.data.files.ArtifactStore
 import net.weero.measix.pilot.data.model.Assistant
@@ -154,7 +151,7 @@ internal class McpCatalogLifecycleTest : McpRuntimeCoordinatorTestBase() {
         var rejectRead = false
         coEvery { settingsStore.withUserMcpDefinitions<Any?>(any()) } coAnswers {
             if (rejectRead) error("definition_store_unavailable")
-            firstArg<suspend (List<McpServerConfig>) -> Any?>().invoke(effective.snapshot.settings.mcpServers)
+            firstArg<suspend (List<McpServerConfig>) -> Any?>().invoke(effective.snapshot.mcpServers)
         }
         listToolsResponder = { _, _ ->
             rejectRead = true
@@ -471,12 +468,7 @@ internal class McpCatalogLifecycleTest : McpRuntimeCoordinatorTestBase() {
                 url = "https://server-$index.example/mcp",
             )
         }
-        isolatedEffective.snapshot = EffectiveSettingsSnapshot(
-            settings = Settings(mcpServers = definitions),
-            access = SettingsAccessIndex(),
-            revision = 1L,
-            managedState = ManagedConfigurationState.ABSENT,
-        )
+        isolatedEffective.snapshot = Settings(mcpServers = definitions)
         stubMcpUserDefinitions(isolatedSettingsStore, isolatedEffective.flow)
         val durable = McpCatalogSnapshot(ConfigurationScope.Personal,
             serverId = SERVER_ID,

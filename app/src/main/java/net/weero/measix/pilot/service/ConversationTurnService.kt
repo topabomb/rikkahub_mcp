@@ -793,7 +793,7 @@ class ConversationTurnService internal constructor(
                 TurnEntry.CONTINUE_USER_INTERACTION ->
                     runtime.requireTurnContext(turnId, worker)
             }
-            val displaySettings = settingsStore.effectiveSettings.value.settings
+            val displaySettings = settingsStore.userSettings.value
             generationSoundEnabled = displaySettings.displaySetting.enableMessageGenerationSoundEffect
             if (senderName == null) {
                 val currentAssistant = displaySettings.getAssistantById(turnContext.assistant.id)

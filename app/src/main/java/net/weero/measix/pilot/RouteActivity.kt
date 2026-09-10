@@ -269,8 +269,7 @@ class RouteActivity : ComponentActivity() {
     @Composable
     fun AppRoutes() {
         val toastState = rememberToasterState()
-        val effectiveSettings by settingsStore.effectiveSettings.collectAsStateWithLifecycle()
-        val settings = effectiveSettings.settings
+        val settings by settingsStore.userSettings.collectAsStateWithLifecycle()
         val speech = koinInject<net.weero.measix.pilot.service.SpeechApplicationService>()
         val tts = speech.playback
         val asr = speech.recognition

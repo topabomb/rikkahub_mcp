@@ -8,7 +8,6 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.test.runTest
 import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.datastore.SettingsStore
-import net.weero.measix.pilot.data.datastore.toEffectiveSettingsSnapshot
 import net.weero.measix.pilot.data.db.dao.ConversationDAO
 import net.weero.measix.pilot.data.db.dao.MessageDayCount
 import net.weero.measix.pilot.data.db.dao.MessageNodeDAO
@@ -46,8 +45,8 @@ class StatsQueryServiceTest {
             coreNonExactMessages = 2,
             cacheReadNonExactMessages = 5,
         )
-        every { settingsStore.effectiveSettings } returns MutableStateFlow(
-            Settings(launchCount = 9).toEffectiveSettingsSnapshot()
+        every { settingsStore.userSettings } returns MutableStateFlow(
+            Settings(launchCount = 9)
         )
 
         val result = StatsQueryService(conversationDao, messageNodeDao, settingsStore,

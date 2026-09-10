@@ -13,7 +13,6 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.*
 import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.datastore.SettingsStore
-import net.weero.measix.pilot.data.datastore.toEffectiveSettingsSnapshot
 import net.weero.measix.pilot.data.enterprise.*
 import net.weero.measix.pilot.data.files.ArtifactStore
 import net.weero.measix.pilot.data.imggen.GeneratedMediaStore
@@ -228,7 +227,7 @@ class EnterpriseExitServiceTest {
         fun recovery(): ApplicationRecoveryCoordinator = ApplicationRecoveryCoordinator(
             appScope = scope,
             settingsStore = mockk<SettingsStore> {
-                every { effectiveSettings } returns MutableStateFlow(Settings(init = false).toEffectiveSettingsSnapshot())
+                every { userSettings } returns MutableStateFlow(Settings(init = false))
             },
             artifactStore = mockk<ArtifactStore> {
                 coEvery { reconcileStartup() } returns Unit

@@ -13,7 +13,7 @@ class ShareHandlerVM(
     private val settingsStore: SettingsStore
 ) : ViewModel() {
     val shareText = checkNotNull(text)
-    val settings = settingsStore.effectiveSettings.map { it.settings }
+    val settings = settingsStore.userSettings
         .stateIn(viewModelScope, SharingStarted.Eagerly, Settings.dummy())
 
 }

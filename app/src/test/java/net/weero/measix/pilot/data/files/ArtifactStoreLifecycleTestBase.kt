@@ -12,10 +12,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import net.weero.measix.pilot.data.datastore.UserSettingsDocument
-import net.weero.measix.pilot.data.datastore.EffectiveSettingsSnapshot
-import net.weero.measix.pilot.data.datastore.ManagedConfigurationState
 import net.weero.measix.pilot.data.datastore.Settings
-import net.weero.measix.pilot.data.datastore.SettingsAccessIndex
 import net.weero.measix.pilot.data.datastore.SettingsStore
 import net.weero.measix.pilot.data.db.AppDatabase
 import net.weero.measix.pilot.data.db.RoomDatabaseTransactionRunner
@@ -30,7 +27,7 @@ internal abstract class ArtifactStoreLifecycleTestBase {
     protected lateinit var database: AppDatabase
     protected lateinit var payloadStore: ArtifactPayloadStore
     protected lateinit var settingsFlow: MutableStateFlow<Settings>
-    protected lateinit var effectiveSettings: MutableStateFlow<EffectiveSettingsSnapshot>
+    protected lateinit var effectiveSettings: MutableStateFlow<Settings>
     protected lateinit var store: ArtifactStore
     protected val folders = mutableSetOf<String>()
 
@@ -42,10 +39,10 @@ internal abstract class ArtifactStoreLifecycleTestBase {
             .build()
         payloadStore = ArtifactPayloadStore(context)
         settingsFlow = MutableStateFlow(Settings())
-        effectiveSettings = MutableStateFlow(settingsFlow.value.toEffectiveSnapshot())
+        effectiveSettings = MutableStateFlow(settingsFlow.value)
         val settingsStore = mockArtifactSettings({ settingsFlow.value }) { updated ->
             settingsFlow.value = updated
-            effectiveSettings.value = updated.toEffectiveSnapshot()
+            effectiveSettings.value = updated
         }
         store = ArtifactStore(
             payloadStore = payloadStore,
@@ -106,13 +103,6 @@ internal abstract class ArtifactStoreLifecycleTestBase {
         origin = ArtifactOrigin.USER.name,
     )
 }
-
-internal fun Settings.toEffectiveSnapshot(): EffectiveSettingsSnapshot = EffectiveSettingsSnapshot(
-    settings = this,
-    access = SettingsAccessIndex(),
-    revision = 0L,
-    managedState = ManagedConfigurationState.ABSENT,
-)
 
 /** Lifecycle tests use an acknowledged Settings writer, never a lagging effective projection. */
 internal fun mockArtifactSettings(read: () -> Settings, write: (Settings) -> Unit): SettingsStore {

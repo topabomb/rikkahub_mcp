@@ -32,10 +32,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.map
 import kotlinx.serialization.json.JsonObject
 import net.weero.measix.pilot.AppScope
-import net.weero.measix.pilot.data.datastore.EffectiveSettingsSnapshot
-import net.weero.measix.pilot.data.datastore.ManagedConfigurationState
 import net.weero.measix.pilot.data.datastore.Settings
-import net.weero.measix.pilot.data.datastore.SettingsAccessIndex
 import net.weero.measix.pilot.data.datastore.SettingsStore
 import net.weero.measix.pilot.data.files.ArtifactStore
 import org.junit.After
@@ -118,7 +115,7 @@ internal abstract class McpRuntimeCoordinatorTestBase {
         coEvery { catalogStore.remove(any()) } returns Unit
         coEvery { settingsStore.updateLocal(any()) } coAnswers {
             val transform = firstArg<(Settings) -> Settings>()
-            val next = transform(effective.snapshot.settings)
+            val next = transform(effective.snapshot)
             effective.publish(next)
             next
         }
@@ -198,13 +195,8 @@ internal abstract class McpRuntimeCoordinatorTestBase {
         return client
     }
 
-    protected fun snapshotOf(servers: List<McpServerConfig>): EffectiveSettingsSnapshot =
-        EffectiveSettingsSnapshot(
-            settings = Settings(mcpServers = servers),
-            access = SettingsAccessIndex(),
-            revision = effective.revision.incrementAndGet(),
-            managedState = ManagedConfigurationState.ABSENT,
-        )
+    protected fun snapshotOf(servers: List<McpServerConfig>): Settings =
+        Settings(mcpServers = servers)
 
     protected fun emit(servers: List<McpServerConfig>) {
         effective.snapshot = snapshotOf(servers)
@@ -255,27 +247,21 @@ internal class FakeTransport : AbstractTransport() {
     }
 }
 
-/** 快照容器：revision 只增不减，保证 collector 每次写入都收到新值。 */
+/** In-memory user-definition publisher for runtime tests. */
 internal class MutableStateFlowHolder {
-    val revision = java.util.concurrent.atomic.AtomicLong(0)
     private val _flow = kotlinx.coroutines.flow.MutableStateFlow(
-        EffectiveSettingsSnapshot(
-            settings = Settings(),
-            access = SettingsAccessIndex(),
-            revision = 0,
-            managedState = ManagedConfigurationState.ABSENT,
-        ),
+        Settings(),
     )
-    val flow: kotlinx.coroutines.flow.StateFlow<EffectiveSettingsSnapshot> = _flow
+    val flow: kotlinx.coroutines.flow.StateFlow<Settings> = _flow
 
-    var snapshot: EffectiveSettingsSnapshot
+    var snapshot: Settings
         get() = _flow.value
         set(value) {
             _flow.value = value
         }
 
     fun publish(settings: Settings) {
-        snapshot = snapshot.copy(settings = settings, revision = revision.incrementAndGet())
+        snapshot = settings
     }
 }
 
@@ -285,9 +271,9 @@ internal val McpRuntimeCoordinator.syncingStatus: TestStatusSnapshot
 
 internal data class TestStatusSnapshot(val value: Map<ConfigurationReference, McpStatus>)
 
-internal fun stubMcpUserDefinitions(store: SettingsStore, definitions: StateFlow<EffectiveSettingsSnapshot>) {
-    every { store.userMcpDefinitions } returns definitions.map { it.settings.mcpServers }
+internal fun stubMcpUserDefinitions(store: SettingsStore, definitions: StateFlow<Settings>) {
+    every { store.userMcpDefinitions } returns definitions.map { it.mcpServers }
     coEvery { store.withUserMcpDefinitions<Any?>(any()) } coAnswers {
-        firstArg<suspend (List<McpServerConfig>) -> Any?>().invoke(definitions.value.settings.mcpServers)
+        firstArg<suspend (List<McpServerConfig>) -> Any?>().invoke(definitions.value.mcpServers)
     }
 }

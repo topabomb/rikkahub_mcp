@@ -300,8 +300,7 @@ class AuxiliaryGenerationOwnershipTest {
                 compressModelId = model.id, enableSuggestion = true).let {
                 if (local) it.copy(titlePrompt = "custom 查看企业公告 {content}", suggestionPrompt = "custom 查看企业公告 {content}") else it
             }
-            every { settings.effectiveSettings } returns MutableStateFlow(EffectiveSettingsSnapshot(
-                configuration, SettingsAccessIndex(), 0, ManagedConfigurationState.ABSENT))
+            every { settings.userSettings } returns MutableStateFlow(configuration)
             net.weero.measix.pilot.test.installExecutionConfigurationFixture(settings)
             coEvery { settings.withExecutionConfiguration<Any?>(any(), any(), any()) } coAnswers {
                 val scope = firstArg<net.weero.measix.pilot.data.configuration.ConfigurationScope>()

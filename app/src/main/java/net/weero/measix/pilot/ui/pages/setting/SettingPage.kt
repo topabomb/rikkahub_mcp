@@ -54,8 +54,6 @@ import me.rerere.hugeicons.stroke.Sun01
 import me.rerere.hugeicons.stroke.WavingHand01
 import net.weero.measix.pilot.R
 import net.weero.measix.pilot.Screen
-import net.weero.measix.pilot.data.datastore.isNotConfigured
-import net.weero.measix.pilot.data.datastore.ManagedConfigurationState
 import net.weero.measix.pilot.service.FileManagementQueryService
 import net.weero.measix.pilot.ui.components.nav.BackButton
 import net.weero.measix.pilot.ui.components.ui.CardGroup
@@ -76,12 +74,12 @@ import org.koin.compose.koinInject
 fun SettingPage(vm: SettingVM = koinViewModel()) {
     val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
     val navController = LocalNavController.current
-    val settings by vm.settings.collectAsStateWithLifecycle()
-    val effectiveSettings by vm.effectiveSettings.collectAsStateWithLifecycle()
+    val modelCatalog by vm.modelCatalog.collectAsStateWithLifecycle()
+    val catalog = (modelCatalog as? net.weero.measix.pilot.service.ModelCatalogReadState.Available)?.catalog
     val lockedChange by vm.lockedChange.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val lockedMessage = lockedChange?.let {
-        stringResource(R.string.managed_configuration_locked, it.reason)
+        stringResource(R.string.configuration_change_rejected, it.reason)
     }
     val fileManagementQueryService: FileManagementQueryService = koinInject()
 
@@ -120,33 +118,8 @@ fun SettingPage(vm: SettingVM = koinViewModel()) {
             item("enterpriseSpace") {
                 net.weero.measix.pilot.ui.pages.enterprise.EnterpriseSpaceButton()
             }
-            if (effectiveSettings.managedState != ManagedConfigurationState.ABSENT) {
-                item("managedConfiguration") {
-                    CardGroup(
-                        modifier = Modifier.padding(horizontal = 8.dp),
-                        title = { Text(stringResource(R.string.settings)) },
-                    ) {
-                        item(
-                            supportingContent = {
-                                Text(
-                                    when (effectiveSettings.managedState) {
-                                        ManagedConfigurationState.ACTIVE -> stringResource(R.string.managed_configuration_active)
-                                        ManagedConfigurationState.DEGRADED -> stringResource(R.string.managed_configuration_degraded)
-                                        ManagedConfigurationState.BLOCKED -> stringResource(
-                                            R.string.managed_configuration_blocked,
-                                            effectiveSettings.managedFailureReason.orEmpty(),
-                                        )
-                                        ManagedConfigurationState.ABSENT -> error("unreachable")
-                                    },
-                                )
-                            },
-                            headlineContent = { Text(stringResource(R.string.managed_configuration_active)) },
-                        )
-                    }
-                }
-            }
-
-            if (settings.isNotConfigured()) {
+            if (catalog?.selection?.access == net.weero.measix.pilot.data.enterprise.RealmAccess.Personal &&
+                catalog.groups.none { group -> group.models.any { it.canSelect } }) {
                 item {
                     ProviderConfigWarningCard(
                         onClick = { navController.navigate(Screen.SettingProvider) },

@@ -33,7 +33,7 @@ class ProviderSettingsApplicationService(
         .expireAfterWrite(2, TimeUnit.MINUTES)
         .build()
 
-    fun observeProvider(id: ConfigurationReference) = settingsStore.effectiveSettings.map { it.settings }.map { settings ->
+    fun observeProvider(id: ConfigurationReference) = settingsStore.userSettings.map { settings ->
         settings.providers.firstOrNull { it.id == id }
     }
 

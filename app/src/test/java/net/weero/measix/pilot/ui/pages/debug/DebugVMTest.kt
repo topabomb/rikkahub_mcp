@@ -17,7 +17,6 @@ import kotlinx.coroutines.test.setMain
 import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.datastore.SettingsLockedException
 import net.weero.measix.pilot.data.datastore.SettingsStore
-import net.weero.measix.pilot.data.datastore.toEffectiveSettingsSnapshot
 import net.weero.measix.pilot.service.ConversationApplicationService
 import net.weero.measix.pilot.service.ConversationQueryService
 import org.junit.After
@@ -40,7 +39,7 @@ class DebugVMTest {
         val settingsStore = mockk<SettingsStore>()
         val query = mockk<ConversationQueryService>()
         coEvery { query.count() } returns 0
-        every { settingsStore.effectiveSettings } returns MutableStateFlow(Settings().toEffectiveSettingsSnapshot())
+        every { settingsStore.userSettings } returns MutableStateFlow(Settings())
         coEvery { settingsStore.updateLocal(any()) } throws SettingsLockedException("defaults/chatModelId", "Managed")
         val vm = DebugVM(settingsStore, query, mockk<ConversationApplicationService>())
         val reported = async { vm.lockedChanges.first() }

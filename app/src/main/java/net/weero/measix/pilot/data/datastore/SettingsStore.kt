@@ -14,10 +14,8 @@ import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.currentCoroutineContext
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -26,7 +24,6 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
-import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
@@ -59,7 +56,6 @@ import net.weero.measix.pilot.data.sync.s3.S3Config
 import net.weero.measix.pilot.ui.theme.CustomTheme
 import net.weero.measix.pilot.ui.theme.PresetThemes
 import net.weero.measix.pilot.utils.JsonInstant
-import net.weero.measix.pilot.utils.toMutableStateFlow
 import me.rerere.search.SearchCommonOptions
 import me.rerere.search.SearchServiceOptions
 import me.rerere.tts.provider.TTSProviderSetting
@@ -102,37 +98,9 @@ internal suspend fun Context.readUserSettingsForBackupRestore(): UserSettingsDoc
         "user_settings_migration_incomplete"
     })
 
-private data class SettingsDefaultPath(
-    val path: String,
-    val key: Preferences.Key<String>,
-    val isPersisted: (Settings) -> Boolean,
-)
-
-private val SETTINGS_DEFAULT_PATHS = listOf(
-    SettingsDefaultPath("defaults/chatModelId", SettingsStore.SELECT_MODEL) { true },
-    SettingsDefaultPath("defaults/fastModelId", SettingsStore.FAST_MODEL) { true },
-    SettingsDefaultPath("defaults/titleModelId", SettingsStore.TITLE_MODEL) { it.titleModelId != null },
-    SettingsDefaultPath("defaults/imageGenerationModelId", SettingsStore.IMAGE_GENERATION_MODEL) { true },
-    SettingsDefaultPath("defaults/attachmentInspectionModelId", SettingsStore.ATTACHMENT_INSPECTION_MODEL) { it.attachmentInspectionModelId != null },
-    SettingsDefaultPath("defaults/compressModelId", SettingsStore.COMPRESS_MODEL) { true },
-    SettingsDefaultPath("defaults/assistantId", SettingsStore.SELECT_ASSISTANT) { true },
-    SettingsDefaultPath("defaults/selectedSearchServiceId", SettingsStore.SELECTED_SEARCH_SERVICE_ID) { it.selectedSearchServiceId != null },
-    SettingsDefaultPath("defaults/selectedTTSProviderId", SettingsStore.SELECTED_TTS_PROVIDER) { true },
-    SettingsDefaultPath("defaults/selectedASRProviderId", SettingsStore.SELECTED_ASR_PROVIDER) { it.selectedASRProviderId != null },
-)
-
-
-private data class LocalSettingsSnapshot(
-    val settings: Settings,
-    val explicitDefaultPaths: Set<String>,
-)
-
-private fun Settings.persistedDefaultPaths(): Set<String> =
-    SETTINGS_DEFAULT_PATHS.filterTo(linkedSetOf()) { it.isPersisted(this) }.mapTo(linkedSetOf()) { it.path }
-
 /**
  * `search_selected` was a UI list index. Persisting the selected service identity makes a
- * reorder, deletion, or managed overlay unable to select a different search backend.
+ * reorder or deletion unable to select a different search backend.
  */
 internal class SearchSelectionMigration : DataMigration<Preferences> {
     override suspend fun shouldMigrate(currentData: Preferences): Boolean =
@@ -159,18 +127,9 @@ internal class SearchSelectionMigration : DataMigration<Preferences> {
 class SettingsStore internal constructor(
     private val appContext: Context,
     private val scope: AppScope,
-    runtime: ManagedConfigurationRuntime = managedConfigurationRuntime(),
     private val dataStore: DataStore<Preferences> = appContext.settingsStore,
 ) {
-    private val nowMillis = runtime.nowMillis
-
     companion object {
-        internal fun forManagedStateTest(
-            appContext: Context,
-            scope: AppScope,
-            runtime: ManagedConfigurationRuntime,
-        ): SettingsStore = SettingsStore(appContext, scope, runtime)
-
         internal val USER_SETTINGS = stringPreferencesKey("user_settings")
 
         // UI设置
@@ -274,48 +233,11 @@ class SettingsStore internal constructor(
         operation: suspend (List<McpServerConfig>) -> T,
     ): T = updateMutex.withLock { operation(userDocuments.first().configuration.mcpServers.normalizeMcpDefinitions()) }
 
-    private val localSettingsRaw = userDocuments
-        .map { document ->
-            val selected = document.preferences.forScope(
-                net.weero.measix.pilot.data.configuration.ConfigurationScope.Personal,
-            )
-            LocalSettingsSnapshot(
-                settings = document.personalSettings(),
-                explicitDefaultPaths = buildSet {
-                    if (selected.chatModelId != null) add("defaults/chatModelId")
-                    if (selected.fastModelId != null) add("defaults/fastModelId")
-                    if (selected.titleModelId != null) add("defaults/titleModelId")
-                    if (selected.imageGenerationModelId != null) add("defaults/imageGenerationModelId")
-                    if (selected.attachmentInspectionModelId != null) add("defaults/attachmentInspectionModelId")
-                    if (selected.compressModelId != null) add("defaults/compressModelId")
-                    if (selected.assistantId != null) add("defaults/assistantId")
-                    if (selected.selectedSearchServiceId != null) add("defaults/selectedSearchServiceId")
-                    if (selected.selectedTTSProviderId != null) add("defaults/selectedTTSProviderId")
-                    if (selected.selectedASRProviderId != null) add("defaults/selectedASRProviderId")
-                },
-            )
-        }
+    private val userSettingsRaw = userDocuments.map { it.personalSettings() }
+    private val _userSettings = MutableStateFlow(Settings.dummy())
 
-    private val localSettings = localSettingsRaw
-        .distinctUntilChanged()
-        .toMutableStateFlow(scope, LocalSettingsSnapshot(Settings.dummy(), emptySet()))
-
-    private val managedConfiguration = ManagedConfigurationStorage(appContext, runtime)
-    private val managedSnapshot = MutableStateFlow<ManagedConfigurationSnapshot?>(null)
-    private var managedExpiryJob: Job? = null
-    private var effectiveRevision = 0L
-    private var publishedEffectiveInputs: Pair<LocalSettingsSnapshot, ManagedConfigurationSnapshot>? = null
-    private val _effectiveSettings = MutableStateFlow(
-        EffectiveSettingsSnapshot(
-            settings = Settings.dummy(),
-            access = SettingsAccessIndex(),
-            revision = 0,
-            managedState = ManagedConfigurationState.ABSENT,
-        ),
-    )
-
-    /** The aggregate's only externally visible configuration read model. */
-    internal val effectiveSettings: StateFlow<EffectiveSettingsSnapshot> = _effectiveSettings.asStateFlow()
+    /** Shared user definitions and personal selections. Realm execution uses observeConfiguration instead. */
+    internal val userSettings: StateFlow<Settings> = _userSettings.asStateFlow()
 
     internal fun observeConfiguration(
         enterpriseState: StateFlow<EnterpriseState>,
@@ -437,36 +359,31 @@ class SettingsStore internal constructor(
                 requireOwner()
                 preferences[USER_SETTINGS] = encoded
             }
+            publishUserSettings()
         }
         caller.ensureActive()
     }
 
     init {
         scope.launch {
-            updateMutex.withLock {
-                publishManagedSnapshot(managedConfiguration.loadSnapshot())
+            userDocuments.collect {
+                // Read again under the writer so a delayed observer cannot regress a committed projection.
+                updateMutex.withLock { publishUserSettings() }
             }
-        }
-        scope.launch {
-            combine(localSettings, managedSnapshot.filterNotNull()) { local, managed -> local to managed }
-                .collect { (local, managed) ->
-                    updateMutex.withLock {
-                        publishEffectiveSnapshot(local, managed)
-                    }
-                }
         }
     }
 
-    /**
-     * 备份恢复替换 Local shadow，但不得清空未完成的内部删除 tombstone。旧 MCP schema
-     * staging 属于被替换配置的迁移租约，必须在同一 Settings 写串行区内作废。
-     */
+    private suspend fun publishUserSettings() {
+        _userSettings.value = userSettingsRaw.first().materializeForRead()
+    }
+
+    /** Personal restore preserves domain preferences and pending deletion receipts in the same document. */
     internal suspend fun restoreLocal(
         settings: Settings,
         withArtifactRestore: suspend (Settings, suspend (Settings) -> Settings) -> Settings,
     ): Settings =
-        withInitializedWriter {
-            val current = localSettingsRaw.first().settings
+        updateMutex.withLock {
+            val current = userSettingsRaw.first()
             withArtifactRestore(settings.withInternalStateFrom(current)) { prepared ->
                 // The restore owner holds Artifact and has prepared the recoverable configuration roots.
                 val restored = updateInternal(
@@ -487,22 +404,9 @@ class SettingsStore internal constructor(
     internal suspend fun updateLocalWithArtifactCommit(
         withArtifactCommit: (suspend (UserSettingsDocument, UserSettingsDocument, suspend () -> Unit) -> Unit)?,
         transform: (Settings) -> Settings,
-    ): Settings = withInitializedWriter {
-        val localSnapshot = localSettingsRaw.first()
-        val local = localSnapshot.settings
-        val localReadModel = local.materializeForRead()
-        val effective = EffectiveSettingsResolver.resolve(
-            local = localReadModel,
-            managed = managedSnapshot.filterNotNull().first(),
-            revision = effectiveSettings.value.revision,
-            explicitLocalDefaults = localSnapshot.explicitDefaultPaths,
-        )
-        val proposed = transform(localReadModel)
-        requireLocalSettingsWriteAllowed(
-            currentLocal = localReadModel,
-            currentEffective = effective,
-            proposedLocal = proposed,
-        )
+    ): Settings = updateMutex.withLock {
+        val local = userSettingsRaw.first()
+        val proposed = transform(local.materializeForRead())
         updateInternal(
             current = local,
             proposed = proposed,
@@ -523,8 +427,8 @@ class SettingsStore internal constructor(
         }
     }
 
-    /** Backup is a durable format boundary and exports only the Local shadow. */
-    internal suspend fun snapshotLocal(): Settings = localSettingsRaw.first().settings.materializeForRead()
+    /** Backup exports shared user definitions and Personal selections, never enterprise configuration. */
+    internal suspend fun snapshotLocal(): Settings = userSettingsRaw.first().materializeForRead()
 
     internal suspend fun pendingMcpCatalogMigration(): PendingMcpCatalogMigration? =
         dataStore.data.first()[PENDING_MCP_CATALOG_MIGRATION]?.let { encoded ->
@@ -542,66 +446,6 @@ class SettingsStore internal constructor(
         }
     }
 
-    /** Applies one verified managed aggregate without exposing a second configuration owner. */
-    internal suspend fun applyManagedSnapshot(envelope: ByteArray): ManagedApplyResult = withInitializedWriter {
-        val previous = managedSnapshot.filterNotNull().first()
-        when (val prepared = managedConfiguration.prepare(envelope, previous)) {
-            is ManagedConfigurationPreparation.Rejected -> ManagedApplyResult.Rejected(prepared.reason)
-            is ManagedConfigurationPreparation.Accepted -> {
-                publishManagedSnapshot(prepared.snapshot)
-                scope.launch { managedConfiguration.cleanupRetired(envelope, prepared.generation) }
-                ManagedApplyResult.Applied(prepared.generation)
-            }
-        }
-    }
-
-    /** Serializes time-driven degradation with local writes and managed generation changes. */
-    private suspend fun publishManagedSnapshot(snapshot: ManagedConfigurationSnapshot) {
-        managedSnapshot.value = snapshot
-        publishEffectiveSnapshot(localSettingsRaw.first(), snapshot)
-        managedExpiryJob?.cancel()
-        val expiresAt = snapshot.expiresAtEpochMillis ?: return
-        if (snapshot.state != ManagedConfigurationState.ACTIVE) return
-        managedExpiryJob = scope.launch {
-            val now = nowMillis()
-            delay(if (expiresAt <= now) 0L else expiresAt - now)
-            updateMutex.withLock {
-                val current = managedSnapshot.filterNotNull().first()
-                if (
-                    current.generation == snapshot.generation &&
-                    current.state == ManagedConfigurationState.ACTIVE &&
-                    current.expiresAtEpochMillis != null &&
-                    current.expiresAtEpochMillis <= nowMillis()
-                ) {
-                    publishManagedSnapshot(current.copy(state = ManagedConfigurationState.DEGRADED))
-                }
-            }
-        }
-    }
-
-    /** Startup also owns the writer lock; no writer may wait for its publication while holding that lock. */
-    private suspend fun <T> withInitializedWriter(operation: suspend () -> T): T {
-        managedSnapshot.filterNotNull().first()
-        return updateMutex.withLock { operation() }
-    }
-
-    /** Publishes only the latest Local/Managed pair after its durable owner has committed. */
-    private fun publishEffectiveSnapshot(
-        local: LocalSettingsSnapshot,
-        managed: ManagedConfigurationSnapshot,
-    ) {
-        if (local.settings.init || local != localSettings.value || managed != managedSnapshot.value) return
-        val inputs = local to managed
-        if (inputs == publishedEffectiveInputs) return
-        _effectiveSettings.value = EffectiveSettingsResolver.resolve(
-            local = local.settings,
-            managed = managed,
-            revision = ++effectiveRevision,
-            explicitLocalDefaults = local.explicitDefaultPaths,
-        )
-        publishedEffectiveInputs = inputs
-    }
-
     private suspend fun updateInternal(
         current: Settings,
         proposed: Settings,
@@ -611,29 +455,17 @@ class SettingsStore internal constructor(
             Log.w(TAG, "Cannot update dummy settings")
             return current
         }
-        return commitSettings(
-            proposed = proposed,
-            persist = { normalizedSettings ->
-                if (withArtifactCommit == null) {
-                    commitUserDocument { it.withPersonalSettings(normalizedSettings) }
-                } else {
-                    val before = userDocuments.first()
-                    val after = before.withPersonalSettings(normalizedSettings)
-                    withArtifactCommit(before, after) {
-                        commitUserDocument(artifactRootsOwned = true) { it.withPersonalSettings(normalizedSettings) }
-                    }
-                }
-            },
-            // persist 正常返回后才发布，避免写盘失败时内存状态领先于持久化状态。
-            publish = { committed ->
-                val localSnapshot = LocalSettingsSnapshot(committed, committed.persistedDefaultPaths())
-                localSettings.value = localSnapshot
-                publishEffectiveSnapshot(
-                    localSnapshot,
-                    managedSnapshot.filterNotNull().first(),
-                )
-            },
-        ).materializeForRead()
+        val prepared = proposed.normalizeForPersistence().canonicalizeForDataStore()
+        if (withArtifactCommit == null) {
+            commitUserDocument { it.withPersonalSettings(prepared) }
+        } else {
+            val before = userDocuments.first()
+            val after = before.withPersonalSettings(prepared)
+            withArtifactCommit(before, after) {
+                commitUserDocument(artifactRootsOwned = true) { it.withPersonalSettings(prepared) }
+            }
+        }
+        return prepared.materializeForRead()
     }
 
 }

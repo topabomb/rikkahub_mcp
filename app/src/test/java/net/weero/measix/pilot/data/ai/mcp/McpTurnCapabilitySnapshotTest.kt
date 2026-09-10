@@ -243,7 +243,7 @@ internal class McpTurnCapabilitySnapshotTest : McpRuntimeCoordinatorTestBase() {
         val definitionGate = kotlinx.coroutines.sync.Mutex()
         io.mockk.coEvery { settingsStore.withUserMcpDefinitions<Any?>(any()) } coAnswers {
             definitionGate.lock()
-            try { firstArg<suspend (List<McpServerConfig>) -> Any?>().invoke(effective.snapshot.settings.mcpServers) }
+            try { firstArg<suspend (List<McpServerConfig>) -> Any?>().invoke(effective.snapshot.mcpServers) }
             finally { definitionGate.unlock() }
         }
         val mutation = async {
@@ -327,7 +327,7 @@ internal class McpTurnCapabilitySnapshotTest : McpRuntimeCoordinatorTestBase() {
         stubMcpUserDefinitions(isolatedSettingsStore, isolatedEffective.flow)
         coEvery { isolatedSettingsStore.updateLocal(any()) } coAnswers {
             val transform = firstArg<(Settings) -> Settings>()
-            val next = transform(isolatedEffective.snapshot.settings)
+            val next = transform(isolatedEffective.snapshot)
             isolatedEffective.publish(next)
             next
         }

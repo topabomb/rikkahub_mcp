@@ -29,21 +29,21 @@ internal fun testResolvedConfiguration(
 /** Reuse real resolution and admission while an existing test owns its in-memory Settings publisher. */
 internal fun installExecutionConfigurationFixture(store: SettingsStore) {
     coEvery { store.withExecutionConfiguration<Any?>(any(), any(), any()) } coAnswers {
-        val settings = store.effectiveSettings.value.settings
+        val settings = store.userSettings.value
         thirdArg<suspend (ExecutionConfigurationSnapshot) -> Any?>()(ExecutionConfigurationSnapshot(
             settings, testResolvedConfiguration(settings, firstArg(), secondArg()), "fixture-${settings.hashCode()}",
         ))
     }
     coEvery { store.withResolvedConfiguration<Any?>(any(), any(), any()) } coAnswers {
         thirdArg<suspend (ResolvedConfiguration) -> Any?>()(
-            testResolvedConfiguration(store.effectiveSettings.value.settings, firstArg(), secondArg()),
+            testResolvedConfiguration(store.userSettings.value, firstArg(), secondArg()),
         )
     }
     every { store.observeConfiguration(any(), any()) } answers {
         val enterprise = firstArg<kotlinx.coroutines.flow.StateFlow<EnterpriseState>>()
         val requested = secondArg<ConfigurationScope?>()
-        combine(store.effectiveSettings, enterprise) { settings, state ->
-            testResolvedConfiguration(settings.settings,
+        combine(store.userSettings, enterprise) { settings, state ->
+            testResolvedConfiguration(settings,
                 requested ?: (state as? EnterpriseState.Available)?.manifest?.selectedScope ?: ConfigurationScope.Personal, state)
         }
     }

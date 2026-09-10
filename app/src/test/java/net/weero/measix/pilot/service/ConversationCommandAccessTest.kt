@@ -793,11 +793,8 @@ class ConversationCommandAccessTest {
         lateinit var page: ConversationViewLease
 
         init {
-            every { settings.effectiveSettings } returns kotlinx.coroutines.flow.MutableStateFlow(
-                net.weero.measix.pilot.data.datastore.EffectiveSettingsSnapshot(
-                    net.weero.measix.pilot.data.datastore.Settings(),
-                    net.weero.measix.pilot.data.datastore.SettingsAccessIndex(), 0,
-                    net.weero.measix.pilot.data.datastore.ManagedConfigurationState.ABSENT))
+            every { settings.userSettings } returns kotlinx.coroutines.flow.MutableStateFlow(
+                net.weero.measix.pilot.data.datastore.Settings())
             net.weero.measix.pilot.test.installExecutionConfigurationFixture(settings)
             coEvery { repository.getConversationHeader(any()) } answers { rows[firstArg()]?.header }
             coEvery { repository.getConversationSnapshotById(any()) } answers { rows[firstArg()] }
@@ -848,9 +845,8 @@ class ConversationCommandAccessTest {
         }
 
         fun configureAssistant(assistant: net.weero.measix.pilot.data.model.Assistant) {
-            val current = settings.effectiveSettings.value
-            every { settings.effectiveSettings } returns kotlinx.coroutines.flow.MutableStateFlow(current.copy(
-                settings = current.settings.copy(assistants = listOf(assistant))))
+            val current = settings.userSettings.value
+            every { settings.userSettings } returns kotlinx.coroutines.flow.MutableStateFlow(current.copy(assistants = listOf(assistant)))
         }
 
         fun enableGeneration() {
@@ -858,10 +854,8 @@ class ConversationCommandAccessTest {
             val assistant = net.weero.measix.pilot.data.model.Assistant(id = DEFAULT_ASSISTANT_ID, enableMemory = false, chatModelId = model.id)
             val config = net.weero.measix.pilot.data.datastore.Settings(assistants = listOf(assistant),
                 providers = listOf(me.rerere.ai.provider.ProviderSetting.OpenAI(models = listOf(model))), chatModelId = model.id)
-            every { settings.effectiveSettings } returns kotlinx.coroutines.flow.MutableStateFlow(
-                net.weero.measix.pilot.data.datastore.EffectiveSettingsSnapshot(config,
-                    net.weero.measix.pilot.data.datastore.SettingsAccessIndex(), 0,
-                    net.weero.measix.pilot.data.datastore.ManagedConfigurationState.ABSENT))
+            every { settings.userSettings } returns kotlinx.coroutines.flow.MutableStateFlow(
+                config)
             coEvery { memory.captureExecution(any(), any()) } returns null
             coEvery { mcp.prepareTurnCapabilities(any(), any(), any(), any(), any(), any()) } returns net.weero.measix.pilot.data.ai.mcp.TurnMcpCapabilitySnapshot.EMPTY
         }

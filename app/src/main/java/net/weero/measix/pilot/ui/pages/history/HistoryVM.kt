@@ -6,30 +6,25 @@ import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.stateIn
-import net.weero.measix.pilot.data.datastore.SettingsStore
-import net.weero.measix.pilot.data.datastore.getCurrentAssistant
+import net.weero.measix.pilot.service.ConfigurationQueryService
 import net.weero.measix.pilot.service.ConversationApplicationService
 import net.weero.measix.pilot.service.ConversationQueryService
 import net.weero.measix.pilot.service.ConversationSummary
 
 private const val TAG = "HistoryVM"
 
-class HistoryVM(
+class HistoryVM internal constructor(
     private val conversationQueryService: ConversationQueryService,
-    private val settingsStore: SettingsStore,
+    configurationQueryService: ConfigurationQueryService,
     private val conversationApplicationService: ConversationApplicationService,
 ) : ViewModel() {
-    val assistant = settingsStore.effectiveSettings.map { it.settings }
-        .map { it.getCurrentAssistant() }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, null)
-
-    val conversations = assistant.flatMapLatest { assistant ->
-        if (assistant == null) flowOf(emptyList()) else conversationQueryService.conversationsOfAssistant(assistant.id)
+    val conversations = configurationQueryService.observeAssistantCatalog().flatMapLatest { catalog ->
+        val reference = catalog?.selected?.reference
+        if (reference == null) flowOf(emptyList()) else conversationQueryService.conversationsOfAssistant(reference)
     }.catch {
         if (it is CancellationException) throw it
         Log.e(TAG, "Error: ${it.message}")

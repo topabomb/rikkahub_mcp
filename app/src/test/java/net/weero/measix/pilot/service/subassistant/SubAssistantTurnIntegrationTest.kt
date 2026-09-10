@@ -34,7 +34,6 @@ import net.weero.measix.pilot.data.ai.tools.local.LocalToolOption
 import net.weero.measix.pilot.data.ai.tools.local.buildAskUserTool
 import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.datastore.SettingsStore
-import net.weero.measix.pilot.data.datastore.toEffectiveSettingsSnapshot
 import net.weero.measix.pilot.data.db.entity.ToolExecutionStatus
 import net.weero.measix.pilot.data.db.entity.TurnExecutionStatus
 import net.weero.measix.pilot.data.files.ArtifactStore
@@ -129,8 +128,8 @@ class SubAssistantTurnIntegrationTest {
                 assistants = listOf(parent, child), providers = listOf(providerSetting),
             )
             val settingsStore = mockk<SettingsStore>()
-            val settingsFlow = MutableStateFlow(settings.toEffectiveSettingsSnapshot())
-            every { settingsStore.effectiveSettings } returns settingsFlow
+            val settingsFlow = MutableStateFlow(settings)
+            every { settingsStore.userSettings } returns settingsFlow
             net.weero.measix.pilot.test.installExecutionConfigurationFixture(settingsStore)
             val repository = mockk<ConversationRepository>(relaxed = true)
             val writes = Collections.synchronizedList(mutableListOf<ConversationWrite.Mutate>())
@@ -295,7 +294,7 @@ class SubAssistantTurnIntegrationTest {
             registry.installAndStartTurnWorker(runtime.id, turnId, worker)
             if (revokeDuringRequest) {
                 entered.await()
-                settingsFlow.value = settings.copy(assistants = listOf(parent.copy(allowedSubAssistantIds = emptySet()), child)).toEffectiveSettingsSnapshot()
+                settingsFlow.value = settings.copy(assistants = listOf(parent.copy(allowedSubAssistantIds = emptySet()), child))
                 assertTrue(worker.await() is TurnOutcome.Completed)
                 val metadata = runtime.durable.currentMessages().flatMap { it.getTools() }.single().getSubAssistantCallMetadata(JsonInstant)!!
                 assertEquals(net.weero.measix.pilot.data.ai.subassistant.SubAssistantCallState.STOPPED, metadata.state)

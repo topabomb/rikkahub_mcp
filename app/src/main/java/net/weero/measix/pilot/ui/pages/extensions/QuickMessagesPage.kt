@@ -48,12 +48,9 @@ import me.rerere.hugeicons.stroke.Edit01
 import me.rerere.hugeicons.stroke.MoreVertical
 import me.rerere.hugeicons.stroke.Zap
 import net.weero.measix.pilot.R
-import net.weero.measix.pilot.data.datastore.EffectiveSettingsSnapshot
-import net.weero.measix.pilot.data.datastore.ManagedConfigurationRecordKind
 import net.weero.measix.pilot.data.model.QuickMessage
 import net.weero.measix.pilot.ui.components.nav.BackButton
 import net.weero.measix.pilot.ui.components.ui.ConfirmDialog
-import net.weero.measix.pilot.ui.components.ui.ManagedRecordStatus
 import net.weero.measix.pilot.ui.context.LocalToaster
 import net.weero.measix.pilot.ui.theme.CustomColors
 import net.weero.measix.pilot.utils.plus
@@ -62,9 +59,8 @@ import org.koin.androidx.compose.koinViewModel
 @Composable
 fun QuickMessagesPage(vm: QuickMessagesVM = koinViewModel()) {
     val settings = vm.settings.collectAsStateWithLifecycle().value
-    val effectiveSettings = vm.effectiveSettings.collectAsStateWithLifecycle().value
     val toaster = LocalToaster.current
-    val lockedMessage = stringResource(R.string.managed_configuration_locked, "{reason}")
+    val lockedMessage = stringResource(R.string.configuration_change_rejected, "{reason}")
     val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
     var showAddDialog by rememberSaveable { mutableStateOf(false) }
     var editTarget by remember { mutableStateOf<QuickMessage?>(null) }
@@ -130,7 +126,6 @@ fun QuickMessagesPage(vm: QuickMessagesVM = koinViewModel()) {
             items(settings.quickMessages, key = { it.id.toString() }) { quickMessage ->
                 QuickMessageCard(
                     quickMessage = quickMessage,
-                    effectiveSettings = effectiveSettings,
                     onEdit = { editTarget = quickMessage },
                     onDelete = { deleteTarget = quickMessage },
                 )
@@ -185,7 +180,6 @@ fun QuickMessagesPage(vm: QuickMessagesVM = koinViewModel()) {
 @Composable
 private fun QuickMessageCard(
     quickMessage: QuickMessage,
-    effectiveSettings: EffectiveSettingsSnapshot,
     onEdit: () -> Unit,
     onDelete: () -> Unit,
 ) {
@@ -225,11 +219,6 @@ private fun QuickMessageCard(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
-                )
-                ManagedRecordStatus(
-                    snapshot = effectiveSettings,
-                    kind = ManagedConfigurationRecordKind.QUICK_MESSAGE,
-                    id = quickMessage.id,
                 )
             }
             Box {

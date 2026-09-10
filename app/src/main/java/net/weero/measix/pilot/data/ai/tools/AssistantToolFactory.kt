@@ -201,7 +201,7 @@ class AssistantToolFactory internal constructor(
         val action = parameters.action
 
         // 执行时从最新 Settings 重新校验 caller 仍存在、AssistantManagement 仍启用
-        val settings = settingsStore.effectiveSettings.value.settings
+        val settings = settingsStore.userSettings.value
         val caller = settings.assistants.find { it.id == callerAssistantId }
             ?: return errorResult("tool_not_permitted")
         if (LocalToolOption.AssistantManagement !in caller.localTools) {

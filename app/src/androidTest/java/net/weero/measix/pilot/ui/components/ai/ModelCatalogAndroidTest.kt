@@ -71,7 +71,7 @@ class ModelCatalogAndroidTest {
                 override fun getFilesDir(): File = File(root, "files").apply { mkdirs() }
             }
             val settings = SettingsStore(context, scope, dataStore = preferences)
-            settings.effectiveSettings.first { !it.settings.init }
+            settings.userSettings.first { !it.init }
             val personal = Model(modelId = "personal-test", displayName = "Personal test model")
             settings.updateLocal { Settings(providers = listOf(ProviderSetting.OpenAI(name = "Personal provider", models = listOf(personal)))) }
             val source = app.assets.open(LocalEnterpriseSource.EXAMPLE_ASSET).use(EnterprisePackageCodec::decode)
@@ -135,7 +135,7 @@ class ModelCatalogAndroidTest {
                 as ModelCatalogReadState.Available).catalog
             assertEquals(managed.id, after.storedSelections.chatModelId)
             assertEquals(2, attempts.get())
-            assertFalse(settings.effectiveSettings.value.settings.favoriteModels.contains(managed.id))
+            assertFalse(settings.userSettings.value.favoriteModels.contains(managed.id))
         } finally {
             scope.coroutineContext[Job]!!.cancelAndJoin()
             root.deleteRecursively()

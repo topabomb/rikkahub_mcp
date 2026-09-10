@@ -4,18 +4,13 @@ import me.rerere.common.configuration.ConfigurationReference
 
 import io.mockk.coEvery
 import io.mockk.coVerify
-import io.mockk.every
 import io.mockk.mockk
-import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
 import me.rerere.ai.ui.UIMessage
 import net.weero.measix.pilot.data.db.dao.ScopedTurnExecution
 import net.weero.measix.pilot.data.db.entity.TurnExecutionEntity
 import net.weero.measix.pilot.data.db.entity.TurnExecutionStatus
-import net.weero.measix.pilot.data.datastore.SettingsStore
-import net.weero.measix.pilot.data.datastore.Settings
-import net.weero.measix.pilot.data.datastore.toEffectiveSettingsSnapshot
 import net.weero.measix.pilot.data.model.Conversation
 import net.weero.measix.pilot.data.model.MessageNode
 import net.weero.measix.pilot.data.repository.ConversationRepository
@@ -35,13 +30,11 @@ class RecoveryCostDecouplingTest {
 
     private fun turnRecovery(
         repo: ConversationRepository,
-        settingsStore: SettingsStore,
         runGate: SubAssistantRunGate,
         commandCoordinator: ConversationCommandCoordinator = mockk(relaxed = true),
     ) = TurnRecovery(
         conversationRepo = repo,
         commandCoordinator = commandCoordinator,
-        settingsStore = settingsStore,
         json = Json,
         runGate = runGate,
     )
@@ -49,12 +42,10 @@ class RecoveryCostDecouplingTest {
     @Test
     fun `recovery reads only the non-terminal turn execution index`() = runTest {
         val repo = mockk<ConversationRepository>(relaxed = true)
-        val settingsStore = mockk<SettingsStore>(relaxed = true)
         val runGate = mockk<SubAssistantRunGate>(relaxed = true)
         coEvery { repo.getNonTerminalTurnExecutionsWithScope() } returns emptyList()
-        every { settingsStore.effectiveSettings } returns MutableStateFlow(Settings().toEffectiveSettingsSnapshot())
 
-        val recovery = turnRecovery(repo, settingsStore, runGate)
+        val recovery = turnRecovery(repo, runGate)
         recovery.recoverInterruptedRuns()
 
         // 唯一允许的恢复输入：turn_execution 状态索引（JOIN 区分 Master/Child）
@@ -65,12 +56,10 @@ class RecoveryCostDecouplingTest {
     @Test
     fun `empty index short-circuits without loading any conversation`() = runTest {
         val repo = mockk<ConversationRepository>(relaxed = true)
-        val settingsStore = mockk<SettingsStore>(relaxed = true)
         val runGate = mockk<SubAssistantRunGate>(relaxed = true)
         coEvery { repo.getNonTerminalTurnExecutionsWithScope() } returns emptyList()
-        every { settingsStore.effectiveSettings } returns MutableStateFlow(Settings().toEffectiveSettingsSnapshot())
 
-        val recovery = turnRecovery(repo, settingsStore, runGate)
+        val recovery = turnRecovery(repo, runGate)
         recovery.recoverInterruptedRuns()
 
         // 健康库（无非终态 turn）：零会话加载、零恢复树写入
@@ -83,7 +72,6 @@ class RecoveryCostDecouplingTest {
     @Test
     fun `interrupted child without master metadata is still finalized`() = runTest {
         val repo = mockk<ConversationRepository>(relaxed = true)
-        val settingsStore = mockk<SettingsStore>()
         val runGate = mockk<SubAssistantRunGate>(relaxed = true)
         val commandCoordinator = mockk<ConversationCommandCoordinator>(relaxed = true)
         val masterId = Uuid.random()
@@ -118,9 +106,8 @@ class RecoveryCostDecouplingTest {
         coEvery { repo.getConversationSnapshotById(childId) } returns child.toSnapshot()
         coEvery { repo.getTurnExecutions(childId) } returns listOf(turn)
         coEvery { repo.getToolExecutions(turn.turnId) } returns emptyList()
-        every { settingsStore.effectiveSettings } returns MutableStateFlow(Settings().toEffectiveSettingsSnapshot())
 
-        turnRecovery(repo, settingsStore, runGate, commandCoordinator).recoverInterruptedRuns()
+        turnRecovery(repo, runGate, commandCoordinator).recoverInterruptedRuns()
 
         coVerify(exactly = 1) {
             commandCoordinator.executeRecovery(

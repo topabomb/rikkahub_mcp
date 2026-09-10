@@ -131,8 +131,8 @@ DisplaySetting 全字段逐项迁移，不因命名而整体当纯显示。Assis
 ```text
 UserConfiguration + UserPreferences + Applied Enterprise State
   + requested realm / authorized principal
-  → EffectiveSettingsResolver（纯解析与规则）
-  → EffectiveSettingsSnapshot（只读，不额外落盘）
+  → ConfigurationResolver（纯解析与规则）
+  → ResolvedConfiguration（只读，不额外落盘）
        → 页面 UiModel / command admission / immutable execution capture
 ```
 
@@ -346,7 +346,7 @@ Android 媒体接线按下列所有权完成：`PortalMediaStore` 管理独占�
 | 文件与 Workspace（C6） | 会话/记忆、目录、图片、背景、参考输入及附件/富文本出口已分域验证；Workspace 上传/终端/SAF 已完成本批实现与完整门禁；共享配置预设附件的目标域复制及 Draft/Child 交接已完成，完整门禁通过；整体 UI/版本验收仍待最终收口 |
 | 个人备份（C7） | 个人闭合图导出与冷恢复合并已实现；配置/企业数据、共享资产和恢复 receipt 按原 owner 保全，系统备份与设备迁移显式排除混合域存储；当前验证记录见本文个人备份批次 |
 | 完整示例与 UI（M1、U2） | 正式企业入口、Portal、公开模板和私有文件 ignore 已有；原生整包导入与已安装来源接入已接线，辅助生成模拟格式已接通，仍需场景管理、Starter 预填及剩余资源/助手页面 |
-| 退休与发行（R1、V1） | 消费者完成后删除旧 managed overlay 链，再做 E01–E12、Release/硬件验收和版本 20 交付；真实后台属于下一阶段 |
+| 退休与发行（R1、V1） | 旧 managed overlay 存储/验签/合并/过期与 UI 标签链已删除；共享用户配置读取与按域解析分开。剩余消费者与场景完成后执行 E01–E12、Release/硬件验收和版本 20 交付；真实后台属于下一阶段 |
 
 
 MCP 设置页已改用当前域目录与共享用户定义两个明确视图：企业卡片只读、用户定义可编辑并提示共享影响，Gateway 完整工具对按 REQUIRED/用户可控规则呈现；命令携带原选择版本。聊天工具选择按原 Session 读取，页面停订阅/切域清空旧目录，失败显示未就绪并可随配置变化恢复。工具卡从持久的安全元数据显示真实业务名称及追踪字段；不解析下游正文。本地模型已接入正常工具续轮，定向设备、正式 Debug 聊天及本批完整门禁通过，不代表整期或真实平台互操作完成。
@@ -498,7 +498,7 @@ Portal 原生操作批次已接通 logout 与 openExternal：每次文档创建�
 | 编号 | 变更 owner / 文件范围 | 完成要求 |
 | --- | --- | --- |
 | D0 | 本文、后续 roadmap、README/引用、退休 persistent-records 旧计划 | 评审后先独立提交文档 |
-| C1 | SettingsStore/Commit/Normalization/EffectiveSettings/WriteRules、三类模型/scope/typed refs | 五项规则、全部字段迁移、唯一新读写链 |
+| C1 | SettingsStore/Normalization/WriteRules、ConfigurationResolver、三类模型/scope/typed refs | 五项规则、全部字段迁移、唯一新读写链 |
 | C2 | DataStore/SharedPreferences/旧备份迁移、AppDatabase/Entity/DAO/Repository/schema/索引 | 原个人 ID/秘密/值/图保全，fresh/upgrade 同构、中断恢复 |
 | C3 | 企业 source/session/applied/private binding/application/query、DI | 无后台接入/切换/退出/更新/重启可用 |
 | C4 | Conversation 命令/查询/runtime、Draft/标题/搜索/统计 | 所有数据入口 scoped、在途与草稿隔离 |
@@ -710,3 +710,11 @@ C7 的系统备份入口已关闭：Manifest 禁用 allowBackup，旧系统备�
 标题、建议和手动摘要通过调用方明确的用途进入同一模型适配器；真实 Provider 的提示词与参数不变，原 Session、辅助任务 lease 和会话命令继续负责准入、清理与提交。模拟标题保持简短，建议按行返回；模拟摘要仅截取有界输入并明确标识省略，不声明语义归纳能力。原手动摘要确认框在提交前说明这一限制，仅用于测试聊天，保留历史替换与不可撤销提示。没有新存储结构或本地提交旁路。两位复审发现的事前告知问题已关闭。
 
 定向 18 项 JVM 通过，包含长历史消费者与原 owner 提交/释放。正式 Debug App 已验证新会话标题、三条建议、摘要确认说明、提交及关闭重开后的持久结果；完整串行 `test assembleDebug lintDebug assembleRelease` 通过（8 分 48 秒），App 2,157 项 JVM 无失败，lint 0 错误、287 警告；Workspace 保留 11 项 Windows 条件跳过。实际 Release 安装包也已验证正式入口、一键接入 READY、企业聊天、标题和三条建议。本批未重跑 instrumentation；Release 手动摘要、其余 E01–E12 与版本 20 整体验收继续实施，不代表真实模型归纳能力或平台互操作。证据见 `build/reports/enterprise/auxiliary-format-verification.json` 与同批 XML 归档。
+
+### 配置原型退休批次
+
+删除未交付的 ManagedConfiguration、EffectiveSettings 和 SettingsCommit 原型及其专属测试；SettingsStore 保留唯一用户文档写协议，并在 DataStore 回执成功后发布个人只读 userSettings。企业定义与按域执行继续使用现有 Session / ConfigurationResolver，不增加兼容 fallback 或持久化结构。已发行个人数据迁移、备份与恢复协议保持。
+
+设置首页仅在个人域缺少可用模型时提示配置 Provider；历史页按所选助手引用读取本域历史，不把资源禁用或定义缺失当作历史读取撤权。TurnRecovery 根据已提交调用关系恢复，不再用个人配置判断企业子助手是否已删除；运行时资源准入保持不变。配置写失败、已接受写取消后发布、企业子助手恢复及历史读取分别有针对性验证；独立审查提出的问题均已修正。
+
+完整串行 `test assembleDebug lintDebug assembleRelease` 通过（8 分 57 秒），App 2,135 项 JVM 无失败；lint 0 错误。Kotlin 编译器在大型协程集成测试上发生栈溢出，已将 compiler stack 配置为 4 MiB；随后用仓库默认门禁命令连同定向设备回归再次通过（36 秒）。Android 17 模拟器 7 项用例覆盖个人配置迁移、按域配置、MCP 目录与模型目录；实际 Debug 冷启动、企业历史、个人/企业设置提示与切域已核实。两位独立审查均已闭合。证据见 `build/reports/enterprise/overlay-retirement-verification.json`；本批未重跑 Release 手工操作，不宣称真实平台互操作或整期完成。

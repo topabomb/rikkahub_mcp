@@ -39,7 +39,7 @@ MCP 的“工具能力”和“当前能否连通”是两类正交事实：
 Settings；导入、编辑、OAuth 更新也无权覆盖 Catalog。
 
 个人连接维护和 OAuth 只读取 `SettingsStore.userMcpDefinitions` / `withUserMcpDefinitions`，不读取全局
-`effectiveSettings`。两入口复用既有定义规范化规则；观察流只触发收敛，不能代替调用准入。
+个人 `userSettings` 投影。两入口复用既有定义规范化规则；观察流只触发收敛，不能代替调用准入。
 `McpRuntimeDefinition.withCurrent` 将原配置 owner 的授权边界保持到 Runtime 接受或拒绝定义，
 锁顺序固定为配置 owner → Runtime；Runtime 不保存第二份配置快照。连接、发现、恢复、目录激活和
 调用准入均复验定义，网络和 OAuth I/O 位于这些锁外。取消等待释放配置 gate，清理仍归原连接 owner。

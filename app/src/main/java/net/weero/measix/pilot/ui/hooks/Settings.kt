@@ -13,7 +13,7 @@ import org.koin.compose.koinInject
 fun rememberUserSettingsState(): State<Settings> {
     val store = koinInject<SettingsStore>()
     val settings = remember(store) {
-        store.effectiveSettings.map { it.settings }
+        store.userSettings
     }
     return settings
         .collectAsStateWithLifecycle(

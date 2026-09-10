@@ -131,7 +131,7 @@ class MemoryServiceTest {
     private suspend fun environment(block: suspend (Environment) -> Unit) {
         val env = Environment(temporary.newFolder())
         try {
-            env.settings.effectiveSettings.first { !it.settings.init }
+            env.settings.userSettings.first { !it.init }
             env.settings.updateLocal { Settings(assistants = listOf(env.caller, env.target), assistantId = env.caller.id) }
             env.sessions.recover()
             env.gate.ready()

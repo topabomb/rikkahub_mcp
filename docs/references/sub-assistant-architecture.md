@@ -45,7 +45,7 @@ Target.allowAsSubAssistant
     || Target.isSubAssistantGloballyVisible)
 ```
 
-关闭 `allowAsSubAssistant` 时，`AssistantDetailVM` 通过 `SettingsStore.updateLocal` 同时关闭全局可见，并从所有 Assistant 的允许列表移除该 ID。Local shadow 落盘成功后才由 `SettingsStore` 发布新的有效配置快照，避免内存状态领先于持久化状态。
+关闭 `allowAsSubAssistant` 时，`AssistantDetailVM` 通过 `SettingsStore.updateLocal` 同时关闭全局可见，并从所有 Assistant 的允许列表移除该 ID。用户文档落盘成功后才由 `SettingsStore` 发布新的个人配置投影，避免内存状态领先于持久化状态。
 
 ### 披露
 
@@ -229,7 +229,7 @@ Target 在新 Child Turn 的 START 前，从同一份有效 Settings、Target、
 - STARTED tool fact 先变为 `UNKNOWN`，再提交 owning turn 终态；终态事务失败不会留下“turn 已终态、tool 仍 STARTED”的窗口。
 - 恢复先经 `SubAssistantRunGate` 取消全部运行 lease 与 pending ask_user，再读取 Room。
 - Child 父子完整性由自引用外键保护，启动恢复不进行孤儿目录扫描。
-- `target_removed`、`target_disabled`、`target_access_revoked`、模型不可用、`child_missing` 和 `app_restarted` 按确定优先级选择。
+- 非终态调用按已落盘 lineage 收口：有效 Child 为 `app_restarted`，缺失或重复/无效关联为 `child_missing`；已提交终态保持不变。启动恢复不使用当前配置重新裁定历史调用，资源删除、准入和模型可用性仍由下一次执行的运行时校验负责。
 
 `ApplicationRecoveryGate` 在完整恢复和 tombstone 清理结束前阻止所有 durable Conversation/Assistant 写入。任一步失败进入 `Failed(error)`；用户可显式 retry，但不能绕过门禁继续写。
 

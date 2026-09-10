@@ -12,7 +12,6 @@ import kotlinx.coroutines.test.runTest
 import net.weero.measix.pilot.data.ai.tools.local.LocalToolOption
 import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.datastore.SettingsStore
-import net.weero.measix.pilot.data.datastore.toEffectiveSettingsSnapshot
 import net.weero.measix.pilot.data.files.ArtifactStore
 import net.weero.measix.pilot.data.model.Assistant
 import net.weero.measix.pilot.data.repository.MemoryRepository
@@ -164,7 +163,7 @@ class AssistantManagementServiceTest {
 
     private class Env(initial: Settings) {
         val settings = MutableStateFlow(initial)
-        private val effectiveSettings = MutableStateFlow(initial.toEffectiveSettingsSnapshot())
+        private val effectiveSettings = MutableStateFlow(initial)
         val settingsStore = mockk<SettingsStore>()
         val artifacts = mockk<ArtifactStore>(relaxed = true)
         val memory = mockk<MemoryRepository>(relaxed = true)
@@ -173,10 +172,10 @@ class AssistantManagementServiceTest {
         val recoveryGate = mockk<ApplicationRecoveryGate>(relaxed = true)
 
         init {
-            every { settingsStore.effectiveSettings } returns effectiveSettings
+            every { settingsStore.userSettings } returns effectiveSettings
             coEvery { artifacts.updateSettingsReferences(any()) } coAnswers {
                 settings.value = firstArg<(Settings) -> Settings>()(settings.value)
-                effectiveSettings.value = settings.value.toEffectiveSettingsSnapshot()
+                effectiveSettings.value = settings.value
                 settings.value
             }
         }

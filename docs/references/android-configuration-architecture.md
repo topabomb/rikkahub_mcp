@@ -10,7 +10,7 @@ UserSettingsDocument（用户定义 + 公用/按域偏好）+ Applied Enterprise
       → ResolvedConfiguration → application / query ports → 执行与 UI
 ```
 
-完整配置分属 DataStore、轻量 UI preferences、Room、资源文件和可重建缓存，不能整体替换为远端 Settings JSON。本地企业接入、Session、配置同步与模型/MCP/语音消费者已使用独立企业边界；真实平台接入尚未实现。代码中仍有内部签名 ManagedConfigurationEnvelope 与旧 effectiveSettings 消费者，属于尚未清理完的旧原型，不能作为平台协议或企业身份来源。
+完整配置分属 DataStore、轻量 UI preferences、Room、资源文件和可重建缓存，不能整体替换为远端 Settings JSON。本地企业接入、Session、配置同步与模型/MCP/语音消费者已使用独立企业边界；真实平台接入尚未实现。企业配置使用独立身份与定义，不通过全局 Settings overlay 覆盖用户配置。
 
 ## 2. 配置 owner 与读写架构
 
@@ -24,7 +24,6 @@ UserSettingsDocument（用户定义 + 公用/按域偏好）+ Applied Enterprise
 | Local durable resource | Room + `filesDir` | Workspace、Skill、会话级覆盖、资源文件 | 仅备份协议明确包含的域 |
 | Local runtime cache | `cacheDir/lru_key_roulette.json` 等 | 可重建的 key 轮换/发现缓存；不是配置真源 | 否 |
 | 企业状态 | `noBackupFilesDir/enterprise`；EnterpriseAppliedStore / EnterpriseSessionController | Session、完整配置、binding、独立 Feed 与当前空间；按来源/Deployment/User | 否 |
-| 尚存的 Managed prototype | `filesDir/managed_configuration/` | 当前代码中的签名通用 overlay 原型，不承载本地企业接入 | 否 |
 
 最近聊天 ID 位于 `ScopedUserPreferences.lastConversationId`，按个人域或完整来源/Deployment/User 保存。
 `ConversationHistoryPreferenceMigration` 在旧 Settings 键迁移之后，把已发行的 SharedPreferences `lastConversationId`
@@ -36,33 +35,26 @@ UserSettingsDocument（用户定义 + 公用/按域偏好）+ Applied Enterprise
 
 ### 2.2 单一读写路径
 
-`SettingsStore` 是当前应用级配置聚合的唯一 owner：
+`SettingsStore` 是用户配置与偏好的唯一写入 owner。企业配置归独立的 EnterpriseAppliedStore / EnterpriseSessionController。
 
 ```text
-updateLocal(latest Local shadow transform)
-→ managed lock/write rule
-→ normalizeForPersistence
-→ canonicalizeForDataStore
+updateLocal(latest personalSettings transform)
+→ normalizeForPersistence / canonicalizeForDataStore
 → UserSettingsDocument.withPersonalSettings
 → one dataStore.edit（user_settings）
 → durable success
-→ materializeForRead
-→ EffectiveSettingsResolver
-→ effectiveSettings
+→ userSettings（materializeForRead，只读个人投影）
 ```
 
-关键不变量：
-
-- 域感知页面和执行通过 configuration application/query ports 读取 `ResolvedConfiguration`；尚未迁移的旧页面仍读取 `effectiveSettings`，不得把该旧投影视作企业执行授权；
-- 写入失败或取消时不得发布领先于磁盘的内存状态；
-- managed mutation 必须在 Store/commit boundary 拒绝，UI disabled 只是展示；
-- Local shadow 不因 Managed 同 ID 覆盖而删除，Managed remove/disconnect 后应恢复；
-- `restoreLocal()` 和 `snapshotLocal()` 只操作个人 Settings 投影；恢复经 `ArtifactStore.restoreSettingsReferences` 校验配置文件引用；
+- `userSettings` 用于共享用户定义编辑、公用外观与个人配置读取；不代表企业可用资源或执行授权。
+- 域内目录、使用选择和执行通过 configuration application/query ports 消费 `ConfigurationResolver` 的 `ResolvedConfiguration`，不另落盘镜像。
+- 所有配置修改持有同一 Settings writer lock。首次写入直接读 DataStore，不等待异步 UI 投影；观察器取得写锁后重新读取最新文档，不能用迟到值回退投影。
+- DataStore 拒绝提交时不发布；已取得写入所有权的提交在取消后仍等待回执并发布，再传播取消。按域偏好提交还保持原 Session 授权边界。
+- 企业规则在 application/Settings 命令与执行边界复验，UI disabled 只是展示；企业定义不会覆盖或删除同名用户定义。
+- `restoreLocal()` 和 `snapshotLocal()` 只操作个人 Settings 投影；恢复经 `ArtifactStore.restoreSettingsReferences` 校验配置文件引用。
 - `pendingAssistantDeletions` 在 Settings 投影中为 `@Transient`，在 UserSettingsDocument.internalState 中持久化，恢复普通 Settings 时不得清空。
 
-新增文件引用必须通过 `ArtifactStore.updateSettingsReferences`：Settings 写锁先于 Artifact 生命周期锁，校验后保持文件锁直到 DataStore 回执与创建所有权交接完成。普通配置提交拒绝绕过该入口新增引用。完整引用覆盖用户定义和所有主体保留的使用覆盖，不从 `effectiveSettings` 的当前显示投影推断；具体文件保留、删除与恢复协议见 [多模态与持久化](multimodal-context-and-turn-durability.md)。
-
-SettingsStore 的首次写入、恢复和 managed apply 先等待初始化发布，再取得同一 writer lock；不能持锁等待也需要该锁的初始化。锁内重新读取最新配置后提交，初始化等待不成为旧快照整包回写的依据。SettingsStartupTest 通过显式调度首次写入与恢复，验证此锁顺序。
+新增文件引用必须通过 `ArtifactStore.updateSettingsReferences`：Settings 写锁先于 Artifact 生命周期锁，校验后保持文件锁直到 DataStore 回执与创建所有权交接完成。普通配置提交拒绝绕过该入口新增引用。完整引用覆盖用户定义和所有主体保留的使用偏好，不从当前显示投影推断；具体文件保留、删除与恢复协议见 [多模态与持久化](multimodal-context-and-turn-durability.md)。
 
 ### 2.3 用户配置文档与迁移
 
@@ -74,13 +66,13 @@ SettingsStore 的首次写入、恢复和 managed apply 先等待初始化发布
 - `UserSettingsMigration` 在旧 OCR/Search/MCP 迁移之后，将旧键转换并在同一次 DataStore 迁移提交中移除；MCP Catalog 的 pending staging 保留给 Catalog owner。旧资源或 tombstone 解码失败会中止迁移，原输入不变。正常读写只访问新文档，没有旧键 fallback。
 - 用户定义及其配置绑定只接受 User 引用；按企业保存的选择允许 User 或同 authority 的 Enterprise 引用，拒绝外域引用。会话、Message、Turn、文件与 Workspace 的自身 ID 继续使用 UUID。
 - 已删除无功能消费者的 developerMode 字段；迁移清除旧 developer_mode 键，旧备份中的字段由 JSON codec 忽略。构建类型标记不使用此配置。
-- 写个人配置会保留其他主体的偏好；EffectiveSettingsSnapshot 仍为只读内存投影，不另落盘。
+- 写个人配置会保留其他主体的偏好；ResolvedConfiguration 仍为只读内存投影，不另落盘。
 
 背景写入由 `AssistantBackgroundService` 接受明确的目的：页面持有原 `RealmSelection`，生成工具持有原 `RealmAccess`，共享定义编辑器显式指定 User 助手。个人域写助手定义，企业域写完整主体下的 `AssistantUsagePreferences.background` 并关闭渐变，不复制整份个人配置，也不修改企业下发定义。生成背景按原域和图库 ID 读取；查看器读取 `ImageSource` 后复验目的域。`AssistantPreferenceChange.Background` 复用 Settings 唯一 typed 写协议，经 `ArtifactSettingsCoordinator` 与 `ArtifactStore.commitSettingsRoots` 在 Session → Settings → Artifact 顺序中验证引用、提交并移交创建 pin。失败精确回收未发布副本；旧图片由 Artifact 按所有域的引用统一回收。
 
 ### 2.4 本地企业接入基础
 
-`data/enterprise` 提供独立的企业配置、接入资料及持久状态组件。DataSourceModule 注册其单例，私有存储位于 noBackupFilesDir/enterprise；ApplicationRecoveryCoordinator 在 Settings 就绪之后恢复企业状态。企业校验错误由企业 owner 发布，不阻塞个人数据恢复。正式入口、Portal、会话、模型、MCP 和 Speech 执行及管理页已接入企业域；其余配置消费者与旧 Managed 原型仍未整体收口。
+`data/enterprise` 提供独立的企业配置、接入资料及持久状态组件。DataSourceModule 注册其单例，私有存储位于 noBackupFilesDir/enterprise；ApplicationRecoveryCoordinator 在 Settings 就绪之后恢复企业状态。企业校验错误由企业 owner 发布，不阻塞个人数据恢复。正式入口、Portal、会话、模型、MCP 和 Speech 执行及管理页已接入企业域；其余配置消费者的完整进度见实施方案。
 
 - `EnterprisePackageCodec` 校验 formatVersion=2 的完整本地资料：显式五项准入、资源/助手引用、默认选择与完整运行绑定，顶层可携带 feedSeed 初值。该格式独立于接入资料和平台 Snapshot；旧企业原型格式拒绝，不保留双格式兼容。定义与运行连接分开；异常不带可能含凭据的原始反序列化错误。
 - `EnterpriseAppliedStore` 在调用者指定的私有目录暂存不可变配置、绑定及独立 Feed 文件，以 schemaVersion=3 的单个 manifest 原子发布身份、版本、当前空间及退出原因。只接受当前企业格式，未交付原型的旧版本明确拒绝，不自动改写身份或推断退出原因；接入资料和完整配置使用各自独立版本。Feed 指针按来源/Deployment/User 保存，退出保留且不可跨主体读取。提交显式同步文件并核验实际 manifest，不能把 AtomicFile 仅记录日志的失败当作成功。
@@ -465,7 +457,7 @@ S3Config     { endpoint, accessKeyId, secretAccessKey, bucket, region="auto",
 BackupReminderConfig { enabled=false, intervalDays=7, lastBackupTime=0 }
 ```
 
-普通备份的 `settings.json` 是 Local shadow，当前会序列化 Local Provider/Search/TTS/ASR/MCP/WebDAV/S3 中的本地凭据。
+普通备份的 `settings.json` 是用户文档的个人配置投影，当前会序列化 Local Provider/Search/TTS/ASR/MCP/WebDAV/S3 中的本地凭据。
 这再次说明 Enterprise credential 不能进入 `Settings`。Managed Snapshot/Binding/credential 也不属于普通备份域。
 
 当前手工完整备份格式为 `rikkahub-personal-v1`，包含个人 `settings.json`、个人 `mcp_catalogs.json`、个人数据图的 `measix_pilot.db`、按图收集的 payload 和完整性 manifest。设置投影仍含用户自己的 Provider/Search/TTS/ASR/MCP/WebDAV/S3 凭据；企业配置、binding、Session、Feed、企业偏好和企业数据均不进入个人包。ZIP 未加密、未签名，SHA-256 仅校验完整性。
@@ -568,24 +560,20 @@ Conversation.folderId            → Folder.id
 读取物化会补齐 Built-in Provider/Assistant/System TTS、按 ID 去重，并清理部分失效引用；它不会把清理结果静默写回磁盘。
 跨记录删除、授权清理和默认选择修正仍需由对应 application service 在同一次 `updateLocal` transform 中完成。
 
-## 7. 内部受管配置边界
+## 7. 企业配置边界
 
-`ManagedConfigurationEnvelope` 使用 `schemaVersion=1`，具备签名校验、generation 单调、asset staging、Local shadow、effective projection 和写门禁。其保存与校验归 ManagedConfigurationStorage，唯一有效状态仍由 SettingsStore 发布。
+企业定义、策略、generation 与完整性校验归企业 Applied State owner。用户定义与偏好只写 UserSettingsDocument；受管模型、助手和 MCP 的固定字段不能通过用户编辑器修改。生效目录由 ConfigurationResolver 按完整来源/Deployment/User 解析。
 
-Local shadow 不因同 ID overlay 覆盖而删除；overlay 移除后恢复本地值。UI disabled 仅表达投影，受管 mutation 必须在提交边界拒绝。受管文件不进入普通本地备份，不能成为绕过 SettingsStore 的第二写入口。
-
-当前尚未接入生产 Realm/Enrollment、企业 Binding/Session wire、平台 Snapshot DTO、Managed Memory Seed store 或生产下发入口。前文的本地企业会话及整包格式独立于生产协议。真实接入必须明确身份、凭据、generation、资源引用与撤销合同，并替换内部原型的传输路径，不能混用平台 ID 与 Local UUID，不能把服务端 upstream/secret/route 写入本地能力配置。
+本地企业来源实现已接入的原生协议与资源消费者。真实平台 Enrollment/Sync 传输尚未接通，不能以本地验收宣称生产互操作；后续接入复用当前身份、资源引用与生命周期边界。
 
 ## 8. 关键架构文件
 
 | 边界 | 文件 |
 | --- | --- |
-| Settings owner 与 Local shadow | `app/src/main/java/net/weero/measix/pilot/data/datastore/SettingsStore.kt` |
-| 提交与发布顺序 | `app/src/main/java/net/weero/measix/pilot/data/datastore/SettingsCommit.kt` |
+| 用户配置、偏好与提交发布 owner | `app/src/main/java/net/weero/measix/pilot/data/datastore/SettingsStore.kt` |
 | 读取物化与持久化归一化 | `app/src/main/java/net/weero/measix/pilot/data/datastore/SettingsNormalization.kt` |
-| Managed 写门禁 | `app/src/main/java/net/weero/measix/pilot/data/datastore/SettingsWriteRules.kt` |
-| 唯一有效读模型 | `app/src/main/java/net/weero/measix/pilot/data/datastore/EffectiveSettings.kt` |
-| 当前签名 overlay 原型 | `app/src/main/java/net/weero/measix/pilot/data/datastore/ManagedConfiguration.kt` |
+| 个人持久化规范化与配置拒绝类型 | `app/src/main/java/net/weero/measix/pilot/data/datastore/SettingsWriteRules.kt` |
+| 按域有效读模型 | `app/src/main/java/net/weero/measix/pilot/data/configuration/ConfigurationResolver.kt` |
 | Assistant 配置模型 | `app/src/main/java/net/weero/measix/pilot/data/model/Assistant.kt` |
 
 ## 9. 维护与验证
@@ -596,8 +584,8 @@ Local shadow 不因同 ID overlay 覆盖而删除；overlay 移除后恢复本�
 修改当前 Android 配置链至少验证：
 
 - Settings serialization、缺失 key 默认、读取物化和旧备份兼容；
-- Local shadow、Managed overlay、write lock 与“落盘后发布”顺序；
-- Local 备份不包含 Managed envelope、Enterprise Binding、credential 或 Applied Snapshot；
+- 用户文档、按域解析、write lock 与“落盘后发布”顺序；
+- Local 备份不包含 Enterprise Binding、credential 或 Applied Snapshot；
 - 无效、过期、撤销或损坏 Managed payload 的 fail-closed/LKG 行为；
 - 删除与恢复在 Provider、Assistant、MCP、TTS、ASR、Search 和文件引用之间保持原子；
 - UI 与运行时只消费同一个 effective read model，不建立第二 owner。

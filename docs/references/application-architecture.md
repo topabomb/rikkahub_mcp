@@ -122,7 +122,7 @@ Settings 与文件删除跨 owner 时，使用可恢复暂存和同一 Settings 
 
 ```text
 pending backup restore
-  → Settings/effectiveSettings（BLOCKED 时停止）
+  → Settings/userSettings（用户文档初始化成功）
   → 企业配置恢复（企业错误保留为企业不可用状态）
   → Artifact reconcile → GeneratedMedia reconcile
   → reference projection → FTS projection

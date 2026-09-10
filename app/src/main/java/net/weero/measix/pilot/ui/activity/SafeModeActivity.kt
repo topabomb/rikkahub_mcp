@@ -73,12 +73,11 @@ class SafeModeActivity : ComponentActivity() {
         enableEdgeToEdge()
         setContent {
             MeasixTheme {
-                val effectiveSettings by settingsStore.effectiveSettings.collectAsStateWithLifecycle()
-                val settings = effectiveSettings.settings
+                val settings by settingsStore.userSettings.collectAsStateWithLifecycle()
                 var showAssistantPicker by remember { mutableStateOf(false) }
                 val scope = rememberCoroutineScope()
                 val context = LocalContext.current
-                val lockedMessage = stringResource(R.string.managed_configuration_locked, "{reason}")
+                val lockedMessage = stringResource(R.string.configuration_change_rejected, "{reason}")
 
                 Scaffold(
                     modifier = Modifier.fillMaxSize(),

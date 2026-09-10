@@ -8,20 +8,14 @@ import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
 import me.rerere.ai.ui.finishInterruptedTools
 import me.rerere.ai.ui.finishPendingTools
-import net.weero.measix.pilot.data.ai.subassistant.SubAssistantAccessPolicy
 import net.weero.measix.pilot.data.ai.subassistant.SubAssistantCallMetadata
 import net.weero.measix.pilot.data.ai.subassistant.SubAssistantCallState
-import net.weero.measix.pilot.data.ai.subassistant.SubAssistantRunSpecResolution
 import net.weero.measix.pilot.data.ai.subassistant.buildSubAssistantCallResult
 import net.weero.measix.pilot.data.ai.subassistant.collectSubAssistantCallOutputs
 import net.weero.measix.pilot.data.ai.subassistant.computeSubAssistantPreview
 import net.weero.measix.pilot.data.ai.subassistant.getSubAssistantCallMetadata
 import net.weero.measix.pilot.data.ai.subassistant.mergeSubAssistantCallMetadata
 import net.weero.measix.pilot.data.ai.subassistant.parseAssistantCallExtrasFromInput
-import net.weero.measix.pilot.data.ai.subassistant.resolveSubAssistantRunSpec
-import net.weero.measix.pilot.data.ai.tools.local.LocalToolOption
-import net.weero.measix.pilot.data.datastore.Settings
-import net.weero.measix.pilot.data.datastore.getChatModel
 import net.weero.measix.pilot.data.model.Conversation
 import net.weero.measix.pilot.data.model.MessageNode
 import kotlin.uuid.Uuid
@@ -56,9 +50,7 @@ private data class RecoveryOccurrence(
 
 internal fun reconcileMasterSubAssistantCalls(
     masterId: Uuid,
-    masterAssistantId: ConfigurationReference,
     masterNodes: List<MessageNode>,
-    settings: Settings,
     childrenById: Map<Uuid, net.weero.measix.pilot.service.runtime.ConversationAggregateSnapshot>,
     json: Json,
 ): SubAssistantReconciliation {
@@ -91,17 +83,9 @@ internal fun reconcileMasterSubAssistantCalls(
         if (validChild != null) referenced += validChild.conversationId
 
         if (!metadata.state.isTerminal()) {
-            val reason = if (duplicateOrBlankRun) {
-                "child_missing"
-            } else {
-                resolveInterruptionReason(masterAssistantId, metadata, settings, validChild)
-            }
-            if (validChild != null) {
-                childReasons[validChild.conversationId] = chooseMoreSpecificStopReason(
-                    childReasons[validChild.conversationId],
-                    reason,
-                )
-            }
+            // Recovery closes persisted work; current configuration cannot rewrite its historical authorization.
+            val reason = if (validChild == null) "child_missing" else "app_restarted"
+            if (validChild != null) childReasons[validChild.conversationId] = reason
             val taskId = metadata.childTaskNodeId?.let { runCatching { Uuid.parse(it) }.getOrNull() }
             val childMessages = validChild?.currentMessages().orEmpty()
             val outputs = collectSubAssistantCallOutputs(
@@ -203,47 +187,4 @@ internal fun resolveValidChildLineage(
             node.currentMessage.role == MessageRole.USER
     }
     return child.takeIf { hasSelectedTask }
-}
-
-internal fun resolveInterruptionReason(
-    masterAssistantId: ConfigurationReference,
-    metadata: SubAssistantCallMetadata,
-    settings: Settings,
-    validChild: net.weero.measix.pilot.service.runtime.ConversationAggregateSnapshot?,
-): String {
-    val targetId = runCatching { ConfigurationReference.parse(metadata.targetAssistantId) }.getOrNull()
-        ?: return "target_removed"
-    val pendingDeletionIds = settings.pendingAssistantDeletions.mapTo(mutableSetOf()) { it.assistantId }
-    val target = settings.assistants.find { it.id == targetId }
-    if (target == null || targetId in pendingDeletionIds) return "target_removed"
-    if (!target.allowAsSubAssistant) return "target_disabled"
-
-    val caller = settings.assistants.find { it.id == masterAssistantId }
-    if (caller == null || caller.id in pendingDeletionIds ||
-        LocalToolOption.AssistantDelegation !in caller.localTools ||
-        !SubAssistantAccessPolicy.canAccess(caller, target)
-    ) {
-        return "target_access_revoked"
-    }
-    val runSpec = resolveSubAssistantRunSpec(settings::getChatModel, caller, target)
-    if (runSpec is SubAssistantRunSpecResolution.Blocked) {
-        return runSpec.reason
-    }
-    if (validChild == null) return "child_missing"
-    return "app_restarted"
-}
-
-internal fun chooseMoreSpecificStopReason(existing: String?, incoming: String): String {
-    if (existing == null) return incoming
-    val priority = listOf(
-        "target_removed",
-        "target_disabled",
-        "target_access_revoked",
-        "target_model_unavailable",
-        "caller_model_unavailable",
-        "child_missing",
-        "app_restarted",
-    )
-    fun rank(reason: String): Int = priority.indexOf(reason).takeIf { it >= 0 } ?: Int.MAX_VALUE
-    return if (rank(incoming) < rank(existing)) incoming else existing
 }

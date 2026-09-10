@@ -8,7 +8,6 @@ import me.rerere.ai.ui.TurnTerminalReasons
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
 import net.weero.measix.pilot.data.ai.subassistant.getSubAssistantCallMetadata
-import net.weero.measix.pilot.data.datastore.SettingsStore
 import net.weero.measix.pilot.data.db.entity.ToolExecutionEntity
 import net.weero.measix.pilot.data.db.entity.ToolExecutionStatus
 import net.weero.measix.pilot.data.db.entity.TurnExecutionStatus
@@ -37,7 +36,6 @@ import kotlin.uuid.Uuid
 class TurnRecovery(
     private val conversationRepo: ConversationRepository,
     private val commandCoordinator: ConversationCommandCoordinator,
-    private val settingsStore: SettingsStore,
     private val json: Json,
     private val runGate: SubAssistantRunGate = SubAssistantRunGate(),
 ) {
@@ -68,7 +66,6 @@ class TurnRecovery(
                 Uuid.parse(rawId)
             }
             .toSet()
-        val settings = settingsStore.effectiveSettings.value.settings
         // 定点加载候选 Master（每会话一次）
         val masters = masterIds.map { masterId ->
             requireNotNull(conversationRepo.getConversationSnapshotById(masterId)) {
@@ -113,9 +110,7 @@ class TurnRecovery(
         masters.forEach { master ->
             val result = reconcileMasterSubAssistantCalls(
                 masterId = master.conversationId,
-                masterAssistantId = master.header.assistantId,
                 masterNodes = master.nodes,
-                settings = settings,
                 childrenById = childrenById,
                 json = json,
             )
@@ -160,9 +155,7 @@ class TurnRecovery(
                 val children = loadLinkedChildren(snapshot, toolExecutions)
                 val reconciled = reconcileMasterSubAssistantCalls(
                     masterId = conversationId,
-                    masterAssistantId = snapshot.header.assistantId,
                     masterNodes = listOf(MessageNode.of(message)),
-                    settings = settingsStore.effectiveSettings.value.settings,
                     childrenById = children,
                     json = json,
                 ).masterNodes.single().messages.single()

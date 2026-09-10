@@ -35,7 +35,7 @@ class DebugVM(
     private val _lockedChanges = MutableSharedFlow<SettingsLockedException>(extraBufferCapacity = 1)
     val lockedChanges = _lockedChanges.asSharedFlow()
 
-    val settings: StateFlow<Settings> = settingsStore.effectiveSettings.map { it.settings }
+    val settings: StateFlow<Settings> = settingsStore.userSettings
         .stateIn(viewModelScope, SharingStarted.Lazily, Settings.dummy())
 
     private val _conversationCount = MutableStateFlow<Int?>(null)

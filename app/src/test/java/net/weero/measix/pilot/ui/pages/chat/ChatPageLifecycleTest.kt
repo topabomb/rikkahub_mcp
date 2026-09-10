@@ -240,9 +240,7 @@ class ChatPageLifecycleTest {
             coEvery { application.rememberConversation(lease) } returns Unit
             every { artifacts.openDraftScope(any()) } returns imports
             every { imports.close() } returns Unit
-            every { settings.effectiveSettings } returns MutableStateFlow(mockk {
-                every { this@mockk.settings } returns net.weero.measix.pilot.data.datastore.Settings.dummy()
-            })
+            every { settings.userSettings } returns MutableStateFlow(net.weero.measix.pilot.data.datastore.Settings.dummy())
             every { updater.updateState } returns MutableStateFlow(UiState.Idle)
             every { favorites.observeNodeIds(request.id) } returns flowOf(setOf(Uuid.random()))
             every { query.observeViewAccess(any()) } returns access

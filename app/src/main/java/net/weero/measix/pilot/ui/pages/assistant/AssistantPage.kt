@@ -65,8 +65,6 @@ import me.rerere.hugeicons.stroke.MoreVertical
 import net.weero.measix.pilot.R
 import net.weero.measix.pilot.Screen
 import net.weero.measix.pilot.data.datastore.DEFAULT_ASSISTANTS_IDS
-import net.weero.measix.pilot.data.datastore.EffectiveSettingsSnapshot
-import net.weero.measix.pilot.data.datastore.ManagedConfigurationRecordKind
 import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.model.Assistant
 import net.weero.measix.pilot.data.model.AssistantMemory
@@ -74,7 +72,6 @@ import net.weero.measix.pilot.data.model.DEFAULT_SYSTEM_PROMPT
 import net.weero.measix.pilot.ui.components.nav.BackButton
 import net.weero.measix.pilot.data.model.normalizeDescription
 import net.weero.measix.pilot.ui.components.ui.FormItem
-import net.weero.measix.pilot.ui.components.ui.ManagedRecordStatus
 import net.weero.measix.pilot.ui.components.ui.Tag
 import net.weero.measix.pilot.ui.components.ui.TagType
 import net.weero.measix.pilot.ui.components.ui.UIAvatar
@@ -115,9 +112,8 @@ internal fun reorderVisibleAssistants(
 @Composable
 fun AssistantPage(vm: AssistantVM = koinViewModel()) {
     val settings by vm.settings.collectAsStateWithLifecycle()
-    val effectiveSettings by vm.effectiveSettings.collectAsStateWithLifecycle()
     val toaster = LocalToaster.current
-    val lockedMessage = stringResource(R.string.managed_configuration_locked, "{reason}")
+    val lockedMessage = stringResource(R.string.configuration_change_rejected, "{reason}")
     val createState = useEditState<Assistant> {
         vm.addAssistant(it)
     }
@@ -231,7 +227,6 @@ fun AssistantPage(vm: AssistantVM = koinViewModel()) {
             if (settings.assistantTags.isNotEmpty()) {
                 AssistantTagFiltersRow(
                     settings = settings,
-                    effectiveSettings = effectiveSettings,
                     vm = vm,
                     selectedTagIds = selectedTagIds,
                     onUpdateSelectedTagIds = { ids ->
@@ -280,7 +275,6 @@ fun AssistantPage(vm: AssistantVM = koinViewModel()) {
                         AssistantItem(
                             assistant = assistant,
                             settings = settings,
-                            effectiveSettings = effectiveSettings,
                             memories = memories,
                             onEdit = {
                                 navController.navigate(Screen.AssistantDetail(id = assistant.id.toString()))
@@ -335,7 +329,6 @@ fun AssistantPage(vm: AssistantVM = koinViewModel()) {
 @Composable
 private fun AssistantTagFiltersRow(
     settings: Settings,
-    effectiveSettings: EffectiveSettingsSnapshot,
     vm: AssistantVM,
     selectedTagIds: Set<ConfigurationReference>,
     onUpdateSelectedTagIds: (Set<ConfigurationReference>) -> Unit
@@ -390,11 +383,6 @@ private fun AssistantTagFiltersRow(
                                         haptic.performHapticFeedback(HapticFeedbackType.GestureEnd)
                                     },
                                 )
-                        )
-                        ManagedRecordStatus(
-                            snapshot = effectiveSettings,
-                            kind = ManagedConfigurationRecordKind.ASSISTANT_TAG,
-                            id = tag.id,
                         )
                     }
                 }
@@ -541,7 +529,6 @@ private fun AssistantCreationSheet(
 private fun AssistantItem(
     assistant: Assistant,
     settings: Settings,
-    effectiveSettings: EffectiveSettingsSnapshot,
     modifier: Modifier = Modifier,
     memories: List<AssistantMemory>,
     onEdit: () -> Unit,
@@ -610,11 +597,6 @@ private fun AssistantItem(
                             Text(stringResource(R.string.assistant_page_memory_count, memories.size))
                         }
                     }
-                    ManagedRecordStatus(
-                        snapshot = effectiveSettings,
-                        kind = ManagedConfigurationRecordKind.ASSISTANT,
-                        id = assistant.id,
-                    )
 
                     if (assistant.tags.isNotEmpty()) {
                         assistant.tags.take(2).fastForEach { tagId ->

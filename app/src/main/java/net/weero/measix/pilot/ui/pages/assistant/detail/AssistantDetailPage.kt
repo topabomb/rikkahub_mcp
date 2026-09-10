@@ -158,7 +158,7 @@ fun AssistantDetailPage(id: String) {
 @Composable
 internal fun AssistantLockedChangeEffect(vm: AssistantDetailVM) {
     val toaster = LocalToaster.current
-    val message = stringResource(R.string.managed_configuration_locked, "{reason}")
+    val message = stringResource(R.string.configuration_change_rejected, "{reason}")
     LaunchedEffect(vm) {
         vm.lockedSettingsChanges.collect { error ->
             toaster.show(message.replace("{reason}", error.reason), type = ToastType.Error)

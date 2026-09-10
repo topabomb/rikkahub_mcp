@@ -221,11 +221,11 @@ internal class McpConnectionLifecycleTest : McpRuntimeCoordinatorTestBase() {
 
         val trustBoundary = config.oauthTrustBoundary()
         assertTrue(oauthCoordinator.persistStateFor(trustBoundary, config.id, 0L, token))
-        assertEquals(token.copy(revision = 1L), effective.snapshot.settings.mcpServers.single().commonOptions.oauth)
+        assertEquals(token.copy(revision = 1L), effective.snapshot.mcpServers.single().commonOptions.oauth)
 
         emit(listOf(config.copy(url = "https://b.example/mcp")))
         assertFalse(oauthCoordinator.persistStateFor(trustBoundary, config.id, 1L, token))
-        assertNull(effective.snapshot.settings.mcpServers.single().commonOptions.oauth)
+        assertNull(effective.snapshot.mcpServers.single().commonOptions.oauth)
     }
 
     @Test
@@ -252,7 +252,7 @@ internal class McpConnectionLifecycleTest : McpRuntimeCoordinatorTestBase() {
             )
         )
 
-        val stored = effective.snapshot.settings.mcpServers.single().commonOptions.oauth
+        val stored = effective.snapshot.mcpServers.single().commonOptions.oauth
         assertEquals(5L, stored?.revision)
         assertEquals("new", stored?.accessToken)
     }
@@ -273,7 +273,7 @@ internal class McpConnectionLifecycleTest : McpRuntimeCoordinatorTestBase() {
                 oauth = token,
             )
         )
-        assertNull(effective.snapshot.settings.mcpServers.single().commonOptions.oauth)
+        assertNull(effective.snapshot.mcpServers.single().commonOptions.oauth)
     }
 
     @Test
@@ -324,7 +324,7 @@ internal class McpConnectionLifecycleTest : McpRuntimeCoordinatorTestBase() {
         refreshGate.complete(Unit)
         refreshJob.join()
         advanceUntilIdle()
-        val stored = effective.snapshot.settings.mcpServers.single().commonOptions.oauth
+        val stored = effective.snapshot.mcpServers.single().commonOptions.oauth
         assertEquals("refresh", stored?.refreshToken)
         assertTrue(stored?.accessToken != "token-for-old-url")
     }
@@ -371,7 +371,7 @@ internal class McpConnectionLifecycleTest : McpRuntimeCoordinatorTestBase() {
         assertTrue(job.isCancelled)
         refreshGate.complete(Unit)
         advanceUntilIdle()
-        val stored = effective.snapshot.settings.mcpServers.single().commonOptions.oauth
+        val stored = effective.snapshot.mcpServers.single().commonOptions.oauth
         assertEquals("refresh", stored?.refreshToken)
         assertEquals("should-not-persist", stored?.accessToken)
     }

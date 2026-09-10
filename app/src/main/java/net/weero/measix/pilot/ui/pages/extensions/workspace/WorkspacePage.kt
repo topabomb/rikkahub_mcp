@@ -70,7 +70,7 @@ fun WorkspacePage(vm: WorkspaceVM = koinViewModel()) {
         WorkspaceMutationOperation.RENAME to stringResource(R.string.workspace_page_rename_failed),
         WorkspaceMutationOperation.DELETE to stringResource(R.string.workspace_page_delete_failed),
     )
-    val lockedMessage = stringResource(R.string.managed_configuration_locked, "{reason}")
+    val lockedMessage = stringResource(R.string.configuration_change_rejected, "{reason}")
     fun handleMutationResult(result: WorkspaceMutationResult, onSuccess: () -> Unit) {
         when (result) {
             WorkspaceMutationResult.Success -> onSuccess()

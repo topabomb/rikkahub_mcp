@@ -12,6 +12,10 @@ class RetiredSurfaceContractTest {
     @Test
     fun `removed compatibility surfaces cannot return`() {
         listOf(
+            "ManagedConfigurationEnvelope",
+            "EffectiveSettingsSnapshot",
+            "applyManagedSnapshot",
+            "effectiveSettings",
             "ConversationAggregateSnapshot.toConversation(",
             "ToolSetRunMode",
             "updateConversationState",

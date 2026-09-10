@@ -231,8 +231,8 @@ class ArchitectureDependencyTest {
         assertFalse("MCP settings UI must not write SettingsStore directly", settingPage.contains("updateLocal("))
         assertFalse("MCP settings UI must not bypass its query projection through SettingVM", settingPage.contains("SettingVM"))
         assertFalse(
-            "MCP settings UI must not consume EffectiveSettingsSnapshot",
-            settingPage.contains("EffectiveSettingsSnapshot"),
+            "MCP settings UI must not consume the personal settings projection",
+            settingPage.contains(".userSettings"),
         )
         assertFalse(File(architectureSourceRoot, "ui/pages/setting/McpSettingMutation.kt").exists())
 

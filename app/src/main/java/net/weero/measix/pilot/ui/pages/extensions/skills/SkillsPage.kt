@@ -87,7 +87,7 @@ fun SkillsPage() {
     val importSuccessFmt = stringResource(R.string.skills_page_import_success)
     val importFailedFmt = stringResource(R.string.skills_page_import_failed)
     val saveFailedText = stringResource(R.string.skills_page_save_failed)
-    val lockedMessage = stringResource(R.string.managed_configuration_locked, "{reason}")
+    val lockedMessage = stringResource(R.string.configuration_change_rejected, "{reason}")
     LaunchedEffect(vm) {
         vm.lockedChanges.collect { error ->
             toaster.show(lockedMessage.replace("{reason}", error.reason), type = ToastType.Error)

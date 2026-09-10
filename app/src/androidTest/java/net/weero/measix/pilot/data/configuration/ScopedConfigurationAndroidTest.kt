@@ -99,7 +99,7 @@ class ScopedConfigurationAndroidTest {
     private suspend fun withEnvironment(app: Context, root: File, block: suspend (Environment) -> Unit) {
         val env = Environment(app, root)
         try {
-            env.settings.effectiveSettings.first { !it.settings.init }
+            env.settings.userSettings.first { !it.init }
             env.sessions.recover()
             env.gate.ready()
             block(env)
