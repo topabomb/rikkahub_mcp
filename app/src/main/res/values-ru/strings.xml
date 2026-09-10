@@ -1672,4 +1672,20 @@
   <string name="configuration_change_rejected">Это изменение настройки не разрешено: %1$s</string>
   <string name="enterprise_starters">Начало диалога от организации (вставить в черновик)</string>
   <string name="chat_input_presets">Шаблоны ввода</string>
+  <string name="enterprise_local_configuration">Локальная конфигурация организации</string>
+  <string name="enterprise_local_configuration_notice">Изменения публикуются в локальном источнике и синхронизируются с приложением. Личные настройки не меняются. Модели с корпоративными ссылками нельзя удалить или отключить.</string>
+  <string name="enterprise_source_generation">Конфигурация источника: %1$d</string>
+  <string name="enterprise_allow_user_models">Разрешить личных провайдеров и модели</string>
+  <string name="enterprise_allow_user_tts">Разрешить личный синтез речи</string>
+  <string name="enterprise_allow_user_asr">Разрешить личное распознавание речи</string>
+  <string name="enterprise_allow_user_mcp">Разрешить личные MCP-серверы</string>
+  <string name="enterprise_allow_user_assistants">Разрешить личных ассистентов</string>
+  <string name="enterprise_gateway_required">Обязательный Gateway (выкл.: пользователь может отключить)</string>
+  <string name="enterprise_source_models">Корпоративные модели</string>
+  <string name="enterprise_model_enabled">Модель включена</string>
+  <string name="enterprise_model_rename">Переименовать модель</string>
+  <string name="enterprise_add_example_model">Добавить локальную примерную модель</string>
+  <string name="enterprise_reload_source">Перечитать источник</string>
+  <string name="enterprise_source_changed">Источник изменился. Перечитайте его перед редактированием.</string>
+  <string name="enterprise_model_still_referenced">Модель используется корпоративным ассистентом или настройкой по умолчанию. Измените ссылки в полной конфигурации перед удалением или отключением.</string>
 </resources>

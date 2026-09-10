@@ -67,6 +67,7 @@ internal fun EnterprisePage(vm: EnterpriseVM = koinViewModel()) {
     val error by vm.error.collectAsStateWithLifecycle()
     val notice by vm.notice.collectAsStateWithLifecycle()
     val sources by vm.sources.collectAsStateWithLifecycle()
+    val localConfiguration by vm.localConfiguration.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val filePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         vm.importConfiguration(context, uri)
@@ -87,6 +88,9 @@ internal fun EnterprisePage(vm: EnterpriseVM = koinViewModel()) {
     }
     val busy = working || state?.switching == true || state?.phase == EnterpriseSessionPhase.CLOSING
     LaunchedEffect(state?.access) { if (state?.access != null) vm.dismissSources() }
+    LaunchedEffect(state?.selection) {
+        if (localConfiguration?.selection != state?.selection) vm.dismissLocalConfiguration()
+    }
     val inEnterprise = state?.selection?.access is RealmAccess.Enterprise
     val ready = state?.phase in setOf(EnterpriseSessionPhase.READY, EnterpriseSessionPhase.OFFLINE)
     val openChat = { nav.clearAndNavigate(Screen.Startup()) }
@@ -145,6 +149,11 @@ internal fun EnterprisePage(vm: EnterpriseVM = koinViewModel()) {
                     OutlinedButton(onClick = vm::synchronize, enabled = !busy && state?.phase != EnterpriseSessionPhase.REAUTH_REQUIRED) {
                         Text(stringResource(R.string.enterprise_sync))
                     }
+                    if (inEnterprise && state?.isLocal == true) {
+                        OutlinedButton(onClick = vm::showLocalConfiguration, enabled = !busy) {
+                            Text(stringResource(R.string.enterprise_local_configuration))
+                        }
+                    }
                     TextButton(onClick = vm::requestExit, enabled = !busy) { Text(stringResource(R.string.enterprise_exit)) }
                 }
                 if (state?.selection != null) {
@@ -156,6 +165,11 @@ internal fun EnterprisePage(vm: EnterpriseVM = koinViewModel()) {
                 Button(onClick = openChat, enabled = !busy && state?.selection != null) { Text(stringResource(R.string.enterprise_open_chat)) }
             }
         }
+    }
+    localConfiguration?.let { original ->
+        EnterpriseLocalConfigurationEditor(original, busy, error, notice,
+            onChange = { vm.changeLocalConfiguration(original, it) },
+            onRefresh = vm::showLocalConfiguration, onDismiss = vm::dismissLocalConfiguration)
     }
     sources?.let { installed ->
         AlertDialog(onDismissRequest = vm::dismissSources,

@@ -12,6 +12,7 @@ import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.setMain
 import net.weero.measix.pilot.data.configuration.ConfigurationScope
+import net.weero.measix.pilot.data.configuration.GatewayEnablementPolicy
 import net.weero.measix.pilot.data.enterprise.*
 import net.weero.measix.pilot.service.portal.PortalCloseReason
 import net.weero.measix.pilot.service.portal.PortalDocument
@@ -131,6 +132,118 @@ class EnterpriseApplicationServiceTest {
         }
     }
 
+    @Test(timeout = 30_000)
+    fun `local policy publication synchronizes without changing feed or session and stale edits cannot overwrite it`() = runBlocking(Dispatchers.Main) {
+        fixture { f ->
+            val original = f.service.localConfiguration(f.selection())
+            val manifest = f.store.readManifest()
+            val policy = original.policy.copy(allowLocalProviders = false, allowLocalTts = false,
+                allowLocalAsr = false, allowLocalMcp = false, allowLocalAssistants = false)
+            val changed = f.service.changeLocalConfiguration(original, LocalEnterpriseConfigurationChange.Policy(policy))
+            assertTrue(changed.applied)
+            assertEquals(original.generation + 1, changed.configuration.generation)
+            assertEquals(policy, changed.configuration.policy)
+            assertEquals(policy, (f.sessions.state.value as EnterpriseState.Available).configuration?.policy)
+            assertEquals(manifest.feeds, f.store.readManifest().feeds)
+            assertEquals(manifest.session, f.store.readManifest().session)
+            rejects("local_enterprise_configuration_changed") {
+                f.service.changeLocalConfiguration(original, LocalEnterpriseConfigurationChange.Policy(original.policy))
+            }
+            val gateway = changed.configuration.gateways.single()
+            val required = f.service.changeLocalConfiguration(changed.configuration,
+                LocalEnterpriseConfigurationChange.Gateway(gateway.id, GatewayEnablementPolicy.REQUIRED))
+            assertTrue(required.applied)
+            assertEquals(GatewayEnablementPolicy.REQUIRED, required.configuration.gateways.single().enablement)
+            val personal = f.service.switchRealm(RealmSwitchRequest(f.selection(), RealmAccess.Personal))
+            f.service.switchRealm(RealmSwitchRequest(personal, original.selection.access))
+            rejects("enterprise_selection_revoked") {
+                f.service.changeLocalConfiguration(required.configuration, LocalEnterpriseConfigurationChange.Policy(original.policy))
+            }
+            assertEquals(required.configuration.revision, f.source.candidate((original.selection.access as RealmAccess.Enterprise).scope)?.revision)
+        }
+    }
+
+    @Test(timeout = 30_000)
+    fun `model edits preserve stable ids private bindings and fixed references while invalid packages never publish`() = runBlocking(Dispatchers.Main) {
+        fixture { f ->
+            val original = f.service.localConfiguration(f.selection())
+            val access = original.selection.access as RealmAccess.Enterprise
+            val before = requireNotNull(f.source.candidate(access.scope))
+            val referenced = before.packet.configuration.assistants.first().modelId
+            rejects("invalid_assistant_model_reference") {
+                f.service.changeLocalConfiguration(original, LocalEnterpriseConfigurationChange.DeleteModel(referenced))
+            }
+            assertEquals(before.revision, f.source.candidate(access.scope)?.revision)
+            val added = f.service.changeLocalConfiguration(original, LocalEnterpriseConfigurationChange.AddExampleModel("Example B"))
+            val newModel = added.configuration.models.single { it.id !in original.models.map { model -> model.id } }
+            var current = f.service.changeLocalConfiguration(added.configuration, LocalEnterpriseConfigurationChange.RenameModel(newModel.id, "Renamed")).configuration
+            assertEquals("Renamed", current.models.single { it.id == newModel.id }.name)
+            current = f.service.changeLocalConfiguration(current, LocalEnterpriseConfigurationChange.ModelEnabled(newModel.id, false)).configuration
+            assertFalse(current.models.single { it.id == newModel.id }.enabled)
+            current = f.service.changeLocalConfiguration(current, LocalEnterpriseConfigurationChange.DeleteModel(newModel.id)).configuration
+            val after = requireNotNull(f.source.candidate(access.scope))
+            assertEquals(original.models, current.models)
+            assertEquals(before.packet.runtimeBindings, after.packet.runtimeBindings)
+            assertEquals(before.packet.configuration.assistants, after.packet.configuration.assistants)
+            assertEquals(current.generation, f.store.readManifest().applied?.generation)
+        }
+    }
+
+    @Test(timeout = 30_000)
+    fun `failed client application reports published source pending and normal sync can retry without another generation`() = runBlocking(Dispatchers.Main) {
+        fixture { f ->
+            val original = f.service.localConfiguration(f.selection())
+            val manifest = f.store.readManifest()
+            f.failClientCommit = true
+            val result = f.service.changeLocalConfiguration(original,
+                LocalEnterpriseConfigurationChange.Policy(original.policy.copy(allowLocalMcp = false)))
+            assertFalse(result.applied)
+            assertEquals(original.generation + 1, result.configuration.generation)
+            assertEquals(manifest, f.store.readManifest())
+            f.failClientCommit = false
+            f.service.synchronize(original.selection.access as RealmAccess.Enterprise)
+            assertEquals(result.configuration.generation, f.store.readManifest().applied?.generation)
+            assertEquals(result.configuration.revision, f.source.candidate(original.selection.access.scope)?.revision)
+        }
+    }
+
+    @Test(timeout = 30_000)
+    fun `joining an older in flight synchronization cannot claim the newly published generation is applied`() = runBlocking(Dispatchers.Main) {
+        fixture { f ->
+            val original = f.service.localConfiguration(f.selection())
+            val access = original.selection.access as RealmAccess.Enterprise
+            val oldCandidate = requireNotNull(f.source.candidate(access.scope))
+            val captured = CompletableDeferred<Unit>()
+            val release = CompletableDeferred<Unit>()
+            val published = CompletableDeferred<Unit>()
+            io.mockk.coEvery { f.source.candidate(access.scope) } coAnswers {
+                captured.complete(Unit)
+                release.await()
+                oldCandidate
+            }
+            io.mockk.coEvery { f.source.changeConfiguration(access.scope, original.revision, any()) } coAnswers {
+                val result = f.realSource.changeConfiguration(access.scope, original.revision, thirdArg())
+                published.complete(Unit)
+                result
+            }
+            val oldSync = async { f.synchronization.synchronize(access) }
+            captured.await()
+            val editing = async { f.service.changeLocalConfiguration(original,
+                LocalEnterpriseConfigurationChange.Policy(original.policy.copy(allowLocalProviders = false))) }
+            published.await()
+            // Both callers are now eligible to join the same existing synchronization.
+            yield()
+            release.complete(Unit)
+            oldSync.await()
+            val result = editing.await()
+            assertFalse(result.applied)
+            assertEquals(original.generation + 1, result.configuration.generation)
+            assertEquals(original.generation, f.store.readManifest().applied?.generation)
+            val directory = LocalEnterpriseConfigurationStore(f.sourceRoot)
+            assertEquals(result.configuration.generation, directory.installations()?.single()?.generation)
+        }
+    }
+
     private suspend fun rejects(reason: String, operation: suspend () -> Unit) {
         val failure = try { operation(); null } catch (error: EnterpriseConfigurationException) { error }
         assertEquals(reason, requireNotNull(failure) { "Expected rejected space switch" }.reason)
@@ -167,14 +280,23 @@ class EnterpriseApplicationServiceTest {
 
     private inner class Fixture {
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
-        val store = EnterpriseAppliedStore(temporary.newFolder())
+        var failClientCommit = false
+        val store = EnterpriseAppliedStore(temporary.newFolder()) { if (failClientCommit) throw java.io.IOException("injected client failure") }
         val sessions = EnterpriseSessionController(store) { 1000L }
         val portals = PortalDocumentRegistry()
-        val synchronization = mockk<EnterpriseSynchronizationService>()
+        val sourceRoot = temporary.newFolder()
+        val realSource = LocalEnterpriseSource(
+            { requireNotNull(javaClass.getResourceAsStream("/${LocalEnterpriseSource.EXAMPLE_ASSET}")) }, sessions,
+            LocalEnrollmentAuthority(sourceRoot, { 1000L }),
+            { requireNotNull(javaClass.getResourceAsStream("/${LocalEnterpriseSource.IDENTITY_ASSET}")) },
+            LocalEnterpriseConfigurationStore(sourceRoot), { 1000L },
+        )
+        val source = io.mockk.spyk(realSource)
+        val synchronization = EnterpriseSynchronizationService(sessions, source, scope)
         val exit = mockk<EnterpriseExitService> {
             every { failure } returns MutableStateFlow<EnterpriseExitFailure?>(null)
         }
-        val service = EnterpriseApplicationService(sessions, mockk(), synchronization, exit, portals,
+        val service = EnterpriseApplicationService(sessions, source, synchronization, exit, portals,
             ApplicationRecoveryGate().apply { ready() }, scope, mockk(), mockk { io.mockk.coEvery { revokeViewports(any()) } returns Unit }, speech = mockk(relaxed = true))
         val documents = mutableListOf<PortalDocument>()
         val hosts = mutableListOf<BlockedHost>()

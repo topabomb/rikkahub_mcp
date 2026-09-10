@@ -1672,4 +1672,20 @@
   <string name="configuration_change_rejected">この設定変更は許可されていません：%1$s</string>
   <string name="enterprise_starters">企業の会話開始文（下書きに挿入）</string>
   <string name="chat_input_presets">入力テンプレート</string>
+  <string name="enterprise_local_configuration">ローカル企業設定</string>
+  <string name="enterprise_local_configuration_notice">変更はローカルソースに公開され、アプリに同期されます。個人設定は変わりません。企業が参照中のモデルは削除・無効化できません。</string>
+  <string name="enterprise_source_generation">ソース設定：%1$d</string>
+  <string name="enterprise_allow_user_models">個人のプロバイダーとモデルを許可</string>
+  <string name="enterprise_allow_user_tts">個人の音声合成を許可</string>
+  <string name="enterprise_allow_user_asr">個人の音声認識を許可</string>
+  <string name="enterprise_allow_user_mcp">個人の MCP サーバーを許可</string>
+  <string name="enterprise_allow_user_assistants">個人のアシスタントを許可</string>
+  <string name="enterprise_gateway_required">Gateway を必須にする（オフ：ユーザーが無効化可能）</string>
+  <string name="enterprise_source_models">企業モデル</string>
+  <string name="enterprise_model_enabled">モデルを有効化</string>
+  <string name="enterprise_model_rename">モデル名を変更</string>
+  <string name="enterprise_add_example_model">ローカルサンプルモデルを追加</string>
+  <string name="enterprise_reload_source">ソースを再読み込み</string>
+  <string name="enterprise_source_changed">ソースが変更されました。再読み込みしてから編集してください。</string>
+  <string name="enterprise_model_still_referenced">企業アシスタントまたは既定設定が参照中です。完全な設定で参照を変更してから削除・無効化してください。</string>
 </resources>

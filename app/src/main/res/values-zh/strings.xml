@@ -1672,4 +1672,20 @@
   <string name="configuration_change_rejected">不允许此配置修改：%1$s</string>
   <string name="enterprise_starters">企业开场白（填入草稿）</string>
   <string name="chat_input_presets">输入模板</string>
+  <string name="enterprise_local_configuration">本地企业配置</string>
+  <string name="enterprise_local_configuration_notice">修改会发布到本地来源并同步到应用，不修改个人配置。企业仍在引用的模型不能删除或停用。</string>
+  <string name="enterprise_source_generation">来源配置版本：%1$d</string>
+  <string name="enterprise_allow_user_models">允许个人提供商和模型</string>
+  <string name="enterprise_allow_user_tts">允许个人语音合成</string>
+  <string name="enterprise_allow_user_asr">允许个人语音识别</string>
+  <string name="enterprise_allow_user_mcp">允许个人 MCP 服务</string>
+  <string name="enterprise_allow_user_assistants">允许个人助手</string>
+  <string name="enterprise_gateway_required">强制启用 Gateway（关闭则允许用户停用）</string>
+  <string name="enterprise_source_models">企业模型</string>
+  <string name="enterprise_model_enabled">启用模型</string>
+  <string name="enterprise_model_rename">重命名模型</string>
+  <string name="enterprise_add_example_model">添加本地示例模型</string>
+  <string name="enterprise_reload_source">重新读取来源</string>
+  <string name="enterprise_source_changed">来源已变更，请重新读取后再修改。</string>
+  <string name="enterprise_model_still_referenced">企业助手或默认配置仍引用该模型。请先在完整配置中调整这些引用，再删除或停用。</string>
 </resources>

@@ -1673,4 +1673,20 @@
   <string name="configuration_change_rejected">This configuration change is not allowed: %1$s</string>
   <string name="enterprise_starters">Enterprise starters (insert into draft)</string>
   <string name="chat_input_presets">Input templates</string>
+  <string name="enterprise_local_configuration">Local enterprise configuration</string>
+  <string name="enterprise_local_configuration_notice">Changes publish to the local source and synchronize to the app. Personal settings remain unchanged. Referenced enterprise models cannot be removed or disabled.</string>
+  <string name="enterprise_source_generation">Source configuration: %1$d</string>
+  <string name="enterprise_allow_user_models">Allow personal providers and models</string>
+  <string name="enterprise_allow_user_tts">Allow personal speech synthesis</string>
+  <string name="enterprise_allow_user_asr">Allow personal speech recognition</string>
+  <string name="enterprise_allow_user_mcp">Allow personal MCP servers</string>
+  <string name="enterprise_allow_user_assistants">Allow personal assistants</string>
+  <string name="enterprise_gateway_required">Require Gateway (off: user can disable it)</string>
+  <string name="enterprise_source_models">Enterprise models</string>
+  <string name="enterprise_model_enabled">Model enabled</string>
+  <string name="enterprise_model_rename">Rename model</string>
+  <string name="enterprise_add_example_model">Add local example model</string>
+  <string name="enterprise_reload_source">Reload source</string>
+  <string name="enterprise_source_changed">The source changed. Reload it before editing.</string>
+  <string name="enterprise_model_still_referenced">This model is referenced by an enterprise assistant or default. Update those references in the full configuration before removing or disabling it.</string>
 </resources>

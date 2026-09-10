@@ -14,6 +14,8 @@ import kotlinx.coroutines.launch
 import net.weero.measix.pilot.R
 import net.weero.measix.pilot.data.enterprise.*
 import net.weero.measix.pilot.service.EnterpriseApplicationService
+import net.weero.measix.pilot.service.LocalEnterpriseConfigurationUiModel
+import net.weero.measix.pilot.service.LocalEnterpriseConfigurationChange
 import net.weero.measix.pilot.service.portal.PortalClosure
 import kotlin.uuid.Uuid
 
@@ -30,6 +32,9 @@ internal class EnterpriseVM(private val service: EnterpriseApplicationService) :
     val notice = _notice.asStateFlow()
     private val _sources = MutableStateFlow<List<InstalledEnterpriseSource>?>(null)
     val sources = _sources.asStateFlow()
+    private val _localConfiguration = MutableStateFlow<LocalEnterpriseConfigurationUiModel?>(null)
+    val localConfiguration = _localConfiguration.asStateFlow()
+    private var localConfigurationRequest: Any? = null
     private var importSelection: RealmSelection? = null
     private val _exitRequest = MutableStateFlow<EnterpriseExitConfirmation?>(null)
     val exitRequest = _exitRequest.asStateFlow()
@@ -49,6 +54,29 @@ internal class EnterpriseVM(private val service: EnterpriseApplicationService) :
         if (_sources.value?.contains(source) != true || overview.value?.access != null) return
         _sources.value = null
         command(enrollment = true) { service.joinInstalled(source.scope) }
+    }
+    fun showLocalConfiguration() {
+        if (_busy.value) return
+        val original = overview.value?.selection ?: return
+        val request = Any().also { localConfigurationRequest = it }
+        val isCurrent = { localConfigurationRequest === request && overview.value?.selection == original }
+        command(isCurrent = isCurrent) {
+            val result = service.localConfiguration(original)
+            if (isCurrent()) _localConfiguration.value = result
+        }
+    }
+    fun dismissLocalConfiguration() { localConfigurationRequest = null; _localConfiguration.value = null }
+    fun changeLocalConfiguration(original: LocalEnterpriseConfigurationUiModel, change: LocalEnterpriseConfigurationChange) {
+        if (_localConfiguration.value != original) return
+        val request = localConfigurationRequest ?: return
+        val isCurrent = { localConfigurationRequest === request && overview.value?.selection == original.selection }
+        command(isCurrent = isCurrent) {
+            val result = service.changeLocalConfiguration(original, change)
+            if (isCurrent()) {
+                _localConfiguration.value = result.configuration
+                _notice.value = if (result.applied) R.string.enterprise_import_applied else R.string.enterprise_import_pending
+            }
+        }
     }
     fun beginImport(): Boolean {
         if (_busy.value || overview.value?.switching == true) return false
@@ -94,7 +122,7 @@ internal class EnterpriseVM(private val service: EnterpriseApplicationService) :
         _error.value = R.string.enterprise_failure
     }
 
-    private fun command(enrollment: Boolean = false, failureMessage: Int = R.string.enterprise_failure, action: suspend () -> Unit) {
+    private fun command(enrollment: Boolean = false, failureMessage: Int = R.string.enterprise_failure, isCurrent: () -> Boolean = { true }, action: suspend () -> Unit) {
         if (_busy.value) return
         _busy.value = true
         _error.value = null
@@ -103,10 +131,12 @@ internal class EnterpriseVM(private val service: EnterpriseApplicationService) :
             try { action() }
             catch (cancelled: CancellationException) { throw cancelled }
             catch (error: Exception) {
-                _error.value = when {
+                if (isCurrent()) _error.value = when {
                     error is EnterpriseConfigurationException && error.reason == "platform_enrollment_not_supported" -> R.string.enterprise_platform_unavailable
                     error is EnterpriseConfigurationException && error.reason == "exit_current_enterprise_first" -> R.string.enterprise_import_exit_first
                     error is EnterpriseConfigurationException && error.reason == "enterprise_selection_revoked" -> R.string.enterprise_selection_changed
+                    error is EnterpriseConfigurationException && error.reason == "local_enterprise_configuration_changed" -> R.string.enterprise_source_changed
+                    error is EnterpriseConfigurationException && error.reason in setOf("invalid_assistant_model_reference", "invalid_default_chat_model", "invalid_default_image_model") -> R.string.enterprise_model_still_referenced
                     enrollment -> R.string.enterprise_invalid_enrollment
                     else -> failureMessage
                 }

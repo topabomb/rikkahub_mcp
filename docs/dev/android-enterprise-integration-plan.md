@@ -728,3 +728,11 @@ C7 的系统备份入口已关闭：Manifest 禁用 allowBackup，旧系统备�
 正式聊天输入框增加企业开场白分组，只显示当前可用企业助手的绑定项。点击复验原页面/助手，追加到原草稿并保留附件，等待用户发送；不会写回助手或创建会话。这是原生输入入口，不能表述为 Portal 已提供 Starter 操作。
 
 本批完整串行 test assembleDebug lintDebug assembleRelease 在 8 分 41 秒内通过：App 2,135 项 JVM 无失败或跳过；Workspace 保留 11 项 Windows 条件跳过，App lint 无错误。Android 17 模拟器正式 Debug 页面验证接入、开场白分组、原草稿和附件保留，以及不自动发送/建库；没有重跑全量 instrumentation，也未作本批 Release UI 或真实平台互操作验收。独立审查未发现剩余实质问题，证据见 build/reports/enterprise/catalog-input-verification.json。完整助手本域使用编辑、assistant_manage、场景管理和整期验收继续实施。
+
+### 正式本地企业配置管理
+
+空间页增加“本地企业配置”，Debug/Release 均可打开。管理五项用户资源准入、Gateway 强制/用户可控策略及本地模型增加、改名、启停和删除。新增模型使用独立 EXAMPLE binding；已有模型改名保持稳定 ID，管理投影不携带连接地址或凭据。企业助手或默认配置仍引用的模型，删除/停用会整包拒绝并说明需先调整完整配置，不静默替换引用。
+
+所有编辑捕获原空间选择与来源 revision，在既有 Session → Source 边界发布完整候选，再走统一同步。失败保留来源/Applied 各自真实状态；同步若加入旧在途任务，回执 generation 未覆盖本次发布则提示待同步。关闭编辑器使页面请求和反馈失效，迟到结果不重开窗口。没有新增持久化结构、平行配置区或兼容路径。两名独立审查发现的旧同步假报、关闭后迟到刷新问题已修正并复核。
+
+9 项定向 JVM 测试与 AndroidTest 编译通过；完整串行 test assembleDebug lintDebug assembleRelease 在 8 分 9 秒内通过，App 2,140 项 JVM 无失败或跳过，lint 无错误；Workspace 保留 11 项 Windows 条件跳过。Android 17 模拟器正式 Debug 页面验证策略、Gateway、模型增改停删、固定引用拒绝以及冷启动恢复；Release 验证正式入口和策略发布。此批未重跑全量 instrumentation，Release 未重复全部模型场景，真实平台互操作未验收。证据见 build/reports/enterprise/local-configuration-verification.json。网络、缺配置、授权失效等场景入口，完整助手使用编辑及整期验收仍待完成；版本保持 0.0.19 开发基线。

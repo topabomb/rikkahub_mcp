@@ -3,6 +3,9 @@ package net.weero.measix.pilot.service
 import android.content.Context
 import android.net.Uri
 import net.weero.measix.pilot.data.configuration.ConfigurationScope
+import net.weero.measix.pilot.data.configuration.EnterprisePolicy
+import net.weero.measix.pilot.data.configuration.GatewayEnablementPolicy
+import kotlin.uuid.Uuid
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.sync.Mutex
@@ -15,6 +18,27 @@ internal data class InstalledEnterpriseSource(
     val enterpriseName: String,
     val userName: String,
 )
+
+/** Public source projection; private runtime bindings never enter the configuration editor. */
+internal data class LocalEnterpriseConfigurationUiModel(
+    val selection: RealmSelection,
+    val revision: String,
+    val generation: Long,
+    val policy: EnterprisePolicy,
+    val models: List<EnterpriseModel>,
+    val gateways: List<EnterpriseGateway>,
+)
+
+internal sealed interface LocalEnterpriseConfigurationChange {
+    data class Policy(val value: EnterprisePolicy) : LocalEnterpriseConfigurationChange
+    data class Gateway(val id: String, val enablement: GatewayEnablementPolicy) : LocalEnterpriseConfigurationChange
+    data class RenameModel(val id: String, val name: String) : LocalEnterpriseConfigurationChange
+    data class ModelEnabled(val id: String, val enabled: Boolean) : LocalEnterpriseConfigurationChange
+    data class AddExampleModel(val name: String) : LocalEnterpriseConfigurationChange
+    data class DeleteModel(val id: String) : LocalEnterpriseConfigurationChange
+}
+
+internal data class LocalEnterpriseConfigurationEditResult(val configuration: LocalEnterpriseConfigurationUiModel, val applied: Boolean)
 
 internal data class EnterpriseOverview(
     val selection: RealmSelection?,
@@ -93,6 +117,75 @@ internal class EnterpriseApplicationService(
         }
     }
     suspend fun synchronize(access: RealmAccess.Enterprise) { recovery.awaitReady(); synchronization.synchronize(access) }
+    suspend fun localConfiguration(selection: RealmSelection): LocalEnterpriseConfigurationUiModel {
+        recovery.awaitReady()
+        val access = selection.access as? RealmAccess.Enterprise ?: throw EnterpriseConfigurationException("local_enterprise_required")
+        if (!access.scope.authority.isLocal) throw EnterpriseConfigurationException("local_enterprise_required")
+        return sessions.withSelectedRealmSelection(selection) {
+            val candidate = source.candidate(access.scope) ?: throw EnterpriseConfigurationException("enterprise_configuration_not_ready")
+            sessions.requirePublishedSelection(selection)
+            candidate.presentation(selection)
+        }
+    }
+
+    suspend fun changeLocalConfiguration(original: LocalEnterpriseConfigurationUiModel,
+        change: LocalEnterpriseConfigurationChange): LocalEnterpriseConfigurationEditResult {
+        recovery.awaitReady()
+        val access = original.selection.access as? RealmAccess.Enterprise ?: throw EnterpriseConfigurationException("local_enterprise_required")
+        if (!access.scope.authority.isLocal) throw EnterpriseConfigurationException("local_enterprise_required")
+        val published = sessions.withSelectedRealmSelection(original.selection) {
+            source.changeConfiguration(access.scope, original.revision) { packet ->
+                sessions.requirePublishedSelection(original.selection)
+                val config = packet.configuration
+                fun requireModel(id: String) { if (config.models.none { it.id == id }) throw EnterpriseConfigurationException("enterprise_model_missing") }
+                when (change) {
+                    is LocalEnterpriseConfigurationChange.Policy -> packet.copy(configuration = config.copy(policy = change.value))
+                    is LocalEnterpriseConfigurationChange.Gateway -> {
+                        if (config.gateways.none { it.id == change.id }) throw EnterpriseConfigurationException("enterprise_gateway_missing")
+                        packet.copy(configuration = config.copy(gateways = config.gateways.map {
+                            if (it.id == change.id) it.copy(enablement = change.enablement) else it
+                        }))
+                    }
+                    is LocalEnterpriseConfigurationChange.RenameModel -> {
+                        requireModel(change.id)
+                        packet.copy(configuration = config.copy(models = config.models.map {
+                            if (it.id == change.id) it.copy(name = change.name.trim()) else it
+                        }))
+                    }
+                    is LocalEnterpriseConfigurationChange.ModelEnabled -> {
+                        requireModel(change.id)
+                        packet.copy(configuration = config.copy(models = config.models.map {
+                            if (it.id == change.id) it.copy(enabled = change.enabled) else it
+                        }))
+                    }
+                    is LocalEnterpriseConfigurationChange.AddExampleModel -> {
+                        val id = "mdl_${Uuid.random()}"
+                        packet.copy(configuration = config.copy(models = config.models + EnterpriseModel(id, change.name.trim(), "local-example")),
+                            runtimeBindings = packet.runtimeBindings + EnterpriseRuntimeBinding(id, EnterpriseRuntimeProtocol.EXAMPLE))
+                    }
+                    is LocalEnterpriseConfigurationChange.DeleteModel -> {
+                        requireModel(change.id)
+                        packet.copy(configuration = config.copy(models = config.models.filterNot { it.id == change.id }),
+                            runtimeBindings = packet.runtimeBindings.filterNot { it.resourceId == change.id })
+                    }
+                }
+            }
+        }
+        // Source publication is durable even if applying it fails. Synchronization owns the client commit.
+        val applied = try {
+            val receipt = synchronization.synchronize(access)
+            (receipt.manifest.applied?.generation ?: 0) >= published.packet.configuration.generation
+        }
+        catch (cancelled: CancellationException) { throw cancelled }
+        catch (_: Exception) { false }
+        return LocalEnterpriseConfigurationEditResult(published.presentation(original.selection), applied)
+    }
+
+    private fun LocalEnterpriseCandidate.presentation(selection: RealmSelection) = LocalEnterpriseConfigurationUiModel(
+        selection, revision, packet.configuration.generation, packet.configuration.policy,
+        packet.configuration.models, packet.configuration.gateways,
+    )
+
     suspend fun captureExitRequest(): EnterpriseExitRequest? = exit.captureRequest()
     suspend fun exit(request: EnterpriseExitRequest) { exit.exit(request) }
     suspend fun retryExit(failure: EnterpriseExitFailure) { exit.retry(failure) }
