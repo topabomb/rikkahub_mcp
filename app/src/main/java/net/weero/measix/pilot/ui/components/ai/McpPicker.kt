@@ -102,7 +102,7 @@ internal fun McpPickerListItem(
 
     if (showMcpPicker) {
         McpPickerSheet(
-                    servers = servers,
+            servers = servers,
             onToggle = onToggle,
             onNavigateToSettings = onNavigateToSettings,
             onDismiss = { showMcpPicker = false },
@@ -179,7 +179,7 @@ internal fun McpPickerSheet(
             }
             if (hasEnabledServers) {
                 McpPicker(
-                                    servers = servers,
+                    servers = servers,
                     onToggle = onToggle,
                     modifier = Modifier
                         .fillMaxWidth()
@@ -316,8 +316,11 @@ internal fun McpPicker(
                                 Text("${enabledTools.size}/${tools.size} tools")
                             }
                         }
+                        server.unavailableReason?.let { reason ->
+                            Text(configurationUnavailableText(reason), style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.error)
+                        }
                     }
-                    server.unavailableReason?.let { reason -> Text(configurationUnavailableText(reason)) }
                     Switch(
                         checked = server.selected,
                         enabled = server.canToggle,

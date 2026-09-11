@@ -1,6 +1,6 @@
 # Android 配置架构与资源边界
 
-本文定义 Android 当前配置的 owner、持久化载体、字段目录、引用关系及个人/本地企业域边界。Assistant 逐字段运行语义见 [助手配置](assistant-configuration.md)，总体依赖与启动恢复见 [应用架构](application-architecture.md)。待实现的企业阶段、字段映射与验证要求见 [企业集成计划](../dev/android-enterprise-integration-plan.md)。
+本文定义 Android 当前配置的 owner、持久化载体、字段目录、引用关系及个人/本地企业域边界。Assistant 逐字段运行语义见 [助手配置](assistant-configuration.md)，总体依赖与启动恢复见 [应用架构](application-architecture.md)。本地企业交付范围与验证记录见 [企业集成计划](../dev/android-enterprise-integration-plan.md)，尚未实现的真实平台接入见 [生产接入规划](../dev/android-enterprise-production-integration-roadmap.md)。
 
 ## 1. 配置组成
 
@@ -62,7 +62,7 @@ updateLocal(latest personalSettings transform)
 
 - `UserConfiguration` 保存现有 Provider/Model、TTS/ASR、MCP、Search、Assistant、注入/QuickMessage/标签、辅助提示词、备份连接及 UserProfile。用户昵称/头像不重复放入显示偏好。
 - `UserPreferences.common` 保存 DataStore 原有的外观、DisplayPreferences、播放速度和提醒；`scopes` 以完整 ConfigurationScope 保存 ResourceSelections、企业域的 AssistantUsagePreferences 和 GatewayPreference。Gateway 偏好随来源、Deployment、User 与资源 ID 隔离，未交付的顶层 gateways 字段已删除，不将无用户归属的原型偏好猜测归入某个主体。SharedPreferences 表中的偏好仍由原 owner 管理。
-- `common.configuration.ConfigurationReference` 保留原用户 UUID 或企业来源/原始字符串 ID，不生成替代 UUID。个人引用的 JSON 仍是原 UUID 字符串；企业引用序列化为 `managed~来源类型~来源标识~deploymentId~资源ID`，完整保留来源和原始资源 ID。ConfigurationScope 企业身份包括 sourceNamespace/deploymentId/userId，本地与平台来源不相交。当前实际 Settings 消费链只投影个人选择；正式本地企业接入、状态和 Portal 已实现，企业资源消费者继续按实施方案接线。
+- `common.configuration.ConfigurationReference` 保留原用户 UUID 或企业来源/原始字符串 ID，不生成替代 UUID。个人引用的 JSON 仍是原 UUID 字符串；企业引用序列化为 `managed~来源类型~来源标识~deploymentId~资源ID`，完整保留来源和原始资源 ID。ConfigurationScope 企业身份包括 sourceNamespace/deploymentId/userId，本地与平台来源不相交。Settings 投影只提供个人配置；本地企业的聊天、子助手、辅助模型、MCP、语音与配置界面通过原域的 ResolvedConfiguration 读取资源和选择。
 - `UserSettingsMigration` 在旧 OCR/Search/MCP 迁移之后，将旧键转换并在同一次 DataStore 迁移提交中移除；MCP Catalog 的 pending staging 保留给 Catalog owner。旧资源或 tombstone 解码失败会中止迁移，原输入不变。正常读写只访问新文档，没有旧键 fallback。
 - 用户定义及其配置绑定只接受 User 引用；按企业保存的选择允许 User 或同 authority 的 Enterprise 引用，拒绝外域引用。会话、Message、Turn、文件与 Workspace 的自身 ID 继续使用 UUID。
 - 已删除无功能消费者的 developerMode 字段；迁移清除旧 developer_mode 键，旧备份中的字段由 JSON codec 忽略。构建类型标记不使用此配置。
@@ -76,7 +76,7 @@ updateLocal(latest personalSettings transform)
 
 ### 2.4 本地企业接入基础
 
-`data/enterprise` 提供独立的企业配置、接入资料及持久状态组件。DataSourceModule 注册其单例，私有存储位于 noBackupFilesDir/enterprise；ApplicationRecoveryCoordinator 在 Settings 就绪之后恢复企业状态。企业校验错误由企业 owner 发布，不阻塞个人数据恢复。正式入口、Portal、会话、模型、MCP 和 Speech 执行及管理页已接入企业域；其余配置消费者的完整进度见实施方案。
+`data/enterprise` 提供独立的企业配置、接入资料及持久状态组件。DataSourceModule 注册其单例，私有存储位于 noBackupFilesDir/enterprise；ApplicationRecoveryCoordinator 在 Settings 就绪之后恢复企业状态。企业校验错误由企业 owner 发布，不阻塞个人数据恢复。正式入口、Portal、会话、模型、MCP 和 Speech 执行及管理页已接入本地企业域；真实平台认证、下发和 Relay 传输仍属后续接入范围。
 
 - `EnterprisePackageCodec` 校验 formatVersion=2 的完整本地资料：显式五项准入、资源/助手引用、默认选择与完整运行绑定，顶层可携带 feedSeed 初值。该格式独立于接入资料和平台 Snapshot；旧企业原型格式拒绝，不保留双格式兼容。定义与运行连接分开；异常不带可能含凭据的原始反序列化错误。
 - `EnterpriseAppliedStore` 在调用者指定的私有目录暂存不可变配置、绑定及独立 Feed 文件，以 schemaVersion=3 的单个 manifest 原子发布身份、版本、当前空间及退出原因。只接受当前企业格式，未交付原型的旧版本明确拒绝，不自动改写身份或推断退出原因；接入资料和完整配置使用各自独立版本。Feed 指针按来源/Deployment/User 保存，退出保留且不可跨主体读取。提交显式同步文件并核验实际 manifest，不能把 AtomicFile 仅记录日志的失败当作成功。
@@ -124,6 +124,8 @@ PrepareEnterpriseExampleAssets 从公开完整模板派生 enterprise.local.iden
 模型捕获和逐请求准入在等待 Settings 事务后复验原 Session/页面授权，不能将入锁前仍有效的期限当作
 等待后的执行许可。配置目录读取同样复验；企业切入在等待原宿主关闭后再次检查期限，到期进入原 CLOSING
 退出协议，不发布已过期的企业选择。
+
+只读数据在等待数据库、文件 owner 或磁盘读取后、返回结果前也复验原授权。`ConversationQueryService` 的历史查询与工具使用原 RealmAccess；`SelectedRealmPagingSource`、文件目录与删除影响查询保留原 RealmSelection；`StatsQueryService` 复验统计目标。`EnterpriseSessionController` 的动态列表、详情和 Gateway 读取遵守同一规则。到期不依赖状态流及时发布；返回前复验只拒绝结果，不改写业务数据或另建退出流程。
 
 企业助手的固定 Memory Seed 由 `ResolvedConfiguration.assistantMemorySeeds` 按本主体/绑定顺序解析，
 UI 仅展示只读内容，执行通过主/子 START 的 `ConversationDisclosureSnapshotService` 捕获。
@@ -521,7 +523,6 @@ Settings-only 包只有个人 Settings 与 MCP Catalog，不携带会话数据�
 | `create_new_conversation_on_start` | `true` | Local 启动行为 |
 | `chat_sidebar_expanded` | `true` | Local 布局偏好 |
 | `search_page_sort_order` | `RELEVANCE` | Local 查询显示偏好 |
-| `lastConversationId` | `null` | 导航恢复状态，不是配置下发项 |
 
 CrashHandler 的独立 `crash_handler` SharedPreferences 保存 `crashed` 和截断后的 `stacktrace`，属于崩溃恢复状态，
 不是产品配置。
@@ -539,7 +540,7 @@ Workspace 文件系统另有代码内置的 `WorkspaceConfig` 运行限制：`ma
 `maxWriteBytes=2 MiB`、`maxListEntries=500`、`maxSearchResults=100`。它们当前不是持久化字段，也没有
 企业下发入口；如果以后改成策略，必须先明确由 Local、Managed Policy 还是 Runtime owner 持有。
 
-这些事实归本地配置或用户数据 owner，不属于当前内部 overlay 的远端会话同步协议。
+这些事实归原配置或用户数据 owner，企业域按完整主体保存会话与文件夹；Workspace 注册及目录为显式共享配置，不属于企业 Snapshot 或远端会话同步。
 
 ### 5.3 Skills 与文件资源
 
@@ -612,7 +613,7 @@ Conversation.folderId            → Folder.id
 | 用户配置、偏好与提交发布 owner | `app/src/main/java/net/weero/measix/pilot/data/datastore/SettingsStore.kt` |
 | 读取物化与持久化归一化 | `app/src/main/java/net/weero/measix/pilot/data/datastore/SettingsNormalization.kt` |
 | 个人持久化规范化与配置拒绝类型 | `app/src/main/java/net/weero/measix/pilot/data/datastore/SettingsWriteRules.kt` |
-| 按域有效读模型 | `app/src/main/java/net/weero/measix/pilot/data/configuration/ConfigurationResolver.kt` |
+| 按域有效读模型与纯解析器 | `app/src/main/java/net/weero/measix/pilot/data/configuration/ResolvedConfiguration.kt` |
 | Assistant 配置模型 | `app/src/main/java/net/weero/measix/pilot/data/model/Assistant.kt` |
 
 ## 9. 维护与验证

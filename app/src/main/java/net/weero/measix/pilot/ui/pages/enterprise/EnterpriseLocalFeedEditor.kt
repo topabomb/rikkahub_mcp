@@ -8,7 +8,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import net.weero.measix.pilot.R
 import net.weero.measix.pilot.data.enterprise.*
 
@@ -28,11 +28,13 @@ internal fun EnterpriseLocalFeedEditor(
     var content by remember(original.revision) { mutableStateOf(EnterpriseUpdateContent(
         "", "", EnterpriseUpdateFormat.PLAIN, EnterpriseUpdateCategory.NOTICE, EnterpriseUpdateSeverity.INFO,
     )) }
-    Dialog(onDismissRequest = onDismiss) {
-        Surface(shape = MaterialTheme.shapes.extraLarge) {
-            Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(24.dp),
+    AlertDialog(onDismissRequest = onDismiss,
+        modifier = Modifier.imePadding(),
+        properties = DialogProperties(decorFitsSystemWindows = false),
+        title = { Text(stringResource(R.string.enterprise_feed_editor)) },
+        text = {
+            Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Text(stringResource(R.string.enterprise_feed_editor), style = MaterialTheme.typography.titleLarge)
                 Text(stringResource(R.string.enterprise_feed_notice), style = MaterialTheme.typography.bodySmall)
                 Text(stringResource(R.string.enterprise_feed_revision, original.document.publicRevision,
                     original.document.enterpriseTimezone), style = MaterialTheme.typography.bodySmall)
@@ -72,7 +74,7 @@ internal fun EnterpriseLocalFeedEditor(
                                 })) })
                         }
                     }
-                    Row {
+                    FlowRow {
                         Button(onClick = { onChange(id?.let { EnterpriseFeedCommand.UpdateDraft(it, content) }
                             ?: EnterpriseFeedCommand.CreateDraft(content)) }, enabled = !busy && content.title.isNotBlank() && content.content.isNotBlank()) {
                             Text(stringResource(R.string.enterprise_feed_save_draft))
@@ -96,7 +98,7 @@ internal fun EnterpriseLocalFeedEditor(
                         }))
                         entry.publishedAt?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
                         Text(entry.content.content, maxLines = 4)
-                        Row {
+                        FlowRow {
                             if (entry.status == EnterpriseUpdateStatus.DRAFT) {
                                 TextButton(onClick = { id = entry.enterpriseUpdateId; content = entry.content; editing = true }, enabled = !busy) {
                                     Text(stringResource(R.string.edit))
@@ -112,11 +114,9 @@ internal fun EnterpriseLocalFeedEditor(
                         }
                     }
                 }
-                Row {
-                    TextButton(onClick = onRefresh, enabled = !busy) { Text(stringResource(R.string.enterprise_reload_source)) }
-                    TextButton(onClick = onDismiss) { Text(stringResource(R.string.update_card_close)) }
-                }
             }
-        }
-    }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.update_card_close)) } },
+        dismissButton = { TextButton(onClick = onRefresh, enabled = !busy && !editing) { Text(stringResource(R.string.enterprise_reload_source)) } },
+    )
 }

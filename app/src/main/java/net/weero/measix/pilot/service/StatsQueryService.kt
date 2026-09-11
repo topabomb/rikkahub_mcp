@@ -51,7 +51,7 @@ class StatsQueryService internal constructor(
                 cacheReadNonExactMessages = tokenStats.cacheReadNonExactMessages,
                 conversationsPerDay = conversationsPerDay,
                 launchCount = settingsStore.userSettings.value.launchCount,
-            )
+            ).also { sessions.requirePublishedRealmAccess(access) }
         }
     }
 }

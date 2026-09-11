@@ -1596,7 +1596,7 @@
   <string name="enterprise_space">企业空间</string>
   <string name="enterprise_join_example">体验示例企业</string>
   <string name="enterprise_local_notice">企业配置由本机提供，模型可连接你配置的服务。</string>
-  <string name="enterprise_join_paste">粘贴接入 JSON</string>
+  <string name="enterprise_join_paste">粘贴接入资料</string>
   <string name="enterprise_join_scan">扫码接入</string>
   <string name="enterprise_join_submit">接入企业</string>
   <string name="enterprise_example_code">显示示例接入码</string>
@@ -1686,7 +1686,7 @@
   <string name="enterprise_model_rename">重命名模型</string>
   <string name="enterprise_add_example_model">添加模拟模型</string>
   <string name="enterprise_reload_source">刷新</string>
-  <string name="enterprise_source_changed">来源已变更，请重新读取后再修改。</string>
+  <string name="enterprise_source_changed">企业配置已变化，请刷新后再修改。</string>
   <string name="enterprise_model_still_referenced">企业助手或默认配置仍引用该模型。请先在完整配置中调整这些引用，再删除或停用。</string>
   <string name="assistant_usage_title">本域使用设置</string>
   <string name="assistant_usage_description">只影响此助手在当前空间的使用。名称、描述和系统提示词来自助手定义。</string>
@@ -1708,7 +1708,7 @@
   <string name="enterprise_simulate_revocation">撤销凭据并退出企业空间</string>
   <string name="enterprise_expiry_scheduled">本次登录将在 60 秒内到期；停留在个人空间或重启应用后，也会按正常退出流程处理。</string>
   <string name="enterprise_feed_editor">本地企业动态</string>
-  <string name="enterprise_feed_notice">草稿仅在此编辑器可见。发布或撤回会更新动态版本，不改变配置代数。</string>
+  <string name="enterprise_feed_notice">草稿仅在这里可见。发布后会显示在工作台，撤回后不再显示。企业配置不受影响。</string>
   <string name="enterprise_feed_revision">公开动态版本：%1$d · %2$s</string>
   <string name="enterprise_feed_title">标题</string>
   <string name="enterprise_feed_content">正文</string>
@@ -1733,7 +1733,7 @@
   <string name="enterprise_clear_example_confirm">删除 %1$s 的聊天、记忆、托管文件、动态和空间偏好，并退出登录？个人数据、用户配置、其他企业以及共享 Workspace 均保留。此操作不可撤销。</string>
   <string name="enterprise_local_badge">本地模拟 · %1$s</string>
   <string name="configuration_user_definition_shared_notice">这里管理你的共享配置。修改会影响允许使用这些配置的所有空间；企业策略仍决定能否在企业空间使用。</string>
-  <string name="assistant_enterprise_memory_seed">企业记忆种子（只读）</string>
+  <string name="assistant_enterprise_memory_seed">企业参考记忆（只读）</string>
   <string name="assistant_enterprise_memory_seed_description">由企业提供并纳入助手上下文。它与下方可编辑的记忆分开，不受记忆开关或删除操作影响。</string>
   <string name="enterprise_join_options">接入企业</string>
   <string name="enterprise_connected_enterprise">已接入企业：%1$s</string>

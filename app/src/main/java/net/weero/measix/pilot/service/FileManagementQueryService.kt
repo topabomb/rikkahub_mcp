@@ -86,7 +86,7 @@ class FileManagementQueryService internal constructor(
             sessions.withSelectedRealmSelection(selection) {
                 withContext(Dispatchers.IO) {
                     FileDirectoryUiModel(selection, uploads.map { it.toManaged(selection) }, generated.map { it.toManaged(selection) })
-                }
+                }.also { sessions.requirePublishedSelection(selection) }
             }
         }.onStart { emit(empty) }.catch { error ->
             if (error is CancellationException) throw error
@@ -124,7 +124,7 @@ class FileManagementQueryService internal constructor(
             when (category) {
                 FileCleanupCategory.UPLOAD -> artifactStore.countFolderCreatedBefore(selection.access.scope, FileFolders.UPLOAD, cutoff)
                 FileCleanupCategory.GENERATED_IMAGES -> generatedMediaStore.candidateCount(selection.access.scope, cutoff)
-            }
+            }.also { sessions.requirePublishedSelection(selection) }
         }
     }
 
@@ -133,7 +133,7 @@ class FileManagementQueryService internal constructor(
         return sessions.withSelectedRealmSelection(key.selection) {
             val entity = artifactStore.get(key.artifactId)?.takeIf { it.scope == key.selection.access.scope }
                 ?: return@withSelectedRealmSelection null
-            artifactStore.inspect(entity).toUiModel()
+            artifactStore.inspect(entity).toUiModel().also { sessions.requirePublishedSelection(key.selection) }
         }
     }
 

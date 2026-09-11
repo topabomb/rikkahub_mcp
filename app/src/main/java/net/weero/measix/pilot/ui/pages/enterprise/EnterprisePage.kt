@@ -13,6 +13,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.clearAndSetSemantics
@@ -22,6 +23,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.ArrowLeft01
+import me.rerere.hugeicons.stroke.Building03
+import me.rerere.hugeicons.stroke.User
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -58,6 +61,9 @@ internal fun EnterpriseSpaceButton(modifier: Modifier = Modifier, vm: Enterprise
     val nav = LocalNavController.current
     val access = state?.selection?.access
     TextButton(onClick = { nav.navigate(Screen.Enterprise) { launchSingleTop = true } }, modifier = modifier) {
+        Icon(if (access is RealmAccess.Enterprise) HugeIcons.Building03 else HugeIcons.User,
+            contentDescription = null, modifier = Modifier.size(18.dp))
+        Spacer(Modifier.width(6.dp))
         Text(
             if (access is RealmAccess.Enterprise) {
                 val name = state?.enterpriseName ?: stringResource(R.string.enterprise_space)
@@ -131,6 +137,7 @@ internal fun EnterprisePage(vm: EnterpriseVM = koinViewModel()) {
                 verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 EnterpriseSection(stringResource(R.string.enterprise_current_space,
                     if (inEnterprise) state?.enterpriseName ?: stringResource(R.string.enterprise_space) else stringResource(R.string.enterprise_personal)),
+                    icon = if (inEnterprise) HugeIcons.Building03 else HugeIcons.User,
                 ) {
                     FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         Button(onClick = openChat, enabled = !busy && state?.selection != null) {
@@ -326,10 +333,13 @@ internal fun EnterprisePage(vm: EnterpriseVM = koinViewModel()) {
 }
 
 @Composable
-private fun EnterpriseSection(title: String, content: @Composable ColumnScope.() -> Unit) {
+private fun EnterpriseSection(title: String, icon: ImageVector? = null, content: @Composable ColumnScope.() -> Unit) {
     OutlinedCard(Modifier.widthIn(max = 720.dp).fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text(title, style = MaterialTheme.typography.titleMedium)
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                icon?.let { Icon(it, contentDescription = null, modifier = Modifier.size(20.dp)) }
+                Text(title, style = MaterialTheme.typography.titleMedium)
+            }
             content()
         }
     }

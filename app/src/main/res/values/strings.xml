@@ -1597,7 +1597,7 @@
   <string name="enterprise_space">Enterprise space</string>
   <string name="enterprise_join_example">Try the example enterprise</string>
   <string name="enterprise_local_notice">Enterprise configuration is provided locally. Models can use the services you configure.</string>
-  <string name="enterprise_join_paste">Paste enrollment JSON</string>
+  <string name="enterprise_join_paste">Paste access details</string>
   <string name="enterprise_join_scan">Scan to join</string>
   <string name="enterprise_join_submit">Join enterprise</string>
   <string name="enterprise_example_code">Show example enrollment code</string>
@@ -1687,7 +1687,7 @@
   <string name="enterprise_model_rename">Rename model</string>
   <string name="enterprise_add_example_model">Add simulated model</string>
   <string name="enterprise_reload_source">Refresh</string>
-  <string name="enterprise_source_changed">The source changed. Reload it before editing.</string>
+  <string name="enterprise_source_changed">The configuration has changed. Refresh before editing again.</string>
   <string name="enterprise_model_still_referenced">This model is referenced by an enterprise assistant or default. Update those references in the full configuration before removing or disabling it.</string>
   <string name="assistant_usage_title">Settings for this space</string>
   <string name="assistant_usage_description">Changes apply to this assistant in this space. Name, description and system prompt come from its definition.</string>
@@ -1709,7 +1709,7 @@
   <string name="enterprise_simulate_revocation">Revoke credentials and leave enterprise space</string>
   <string name="enterprise_expiry_scheduled">This login will expire within 60 seconds. The normal exit flow also applies while in personal space or after restarting the app.</string>
   <string name="enterprise_feed_editor">Local enterprise updates</string>
-  <string name="enterprise_feed_notice">Drafts are private to this editor. Publishing or withdrawing changes the Feed revision; configuration generation stays unchanged.</string>
+  <string name="enterprise_feed_notice">Drafts are only visible here. Publishing shows an update in the workbench; withdrawing hides it. Enterprise configuration stays unchanged.</string>
   <string name="enterprise_feed_revision">Public revision: %1$d · %2$s</string>
   <string name="enterprise_feed_title">Title</string>
   <string name="enterprise_feed_content">Content</string>
@@ -1734,7 +1734,7 @@
   <string name="enterprise_clear_example_confirm">Delete the chats, memories, managed files, updates and space preferences of %1$s, then sign out? Personal data, user configurations, other organizations and the shared Workspace remain. This cannot be undone.</string>
   <string name="enterprise_local_badge">Local mock · %1$s</string>
   <string name="configuration_user_definition_shared_notice">These are your shared configurations. Changes affect every space that allows them; enterprise policies still control their use.</string>
-  <string name="assistant_enterprise_memory_seed">Enterprise memory seed (read-only)</string>
+  <string name="assistant_enterprise_memory_seed">Enterprise reference memory (read-only)</string>
   <string name="assistant_enterprise_memory_seed_description">Provided by your enterprise and included in assistant context. It is separate from the editable memories below and is not affected by their switch or deletion.</string>
   <string name="enterprise_join_options">Join an enterprise</string>
   <string name="enterprise_connected_enterprise">Connected enterprise: %1$s</string>

@@ -58,6 +58,18 @@ class SelectedRealmPagingSourceTest {
         assertEquals(0, delegate.loads)
     }
 
+    @Test fun `expiry during a page load discards the returned rows`() = runTest {
+        var now = 1000L
+        val sessions = EnterpriseSessionController(EnterpriseAppliedStore(temporary.newFolder())) { now }
+        val ready = sessions.enrollFixture(exampleEnterprisePackage())
+        val selection = requireNotNull(sessions.readPresentation().selection)
+        val delegate = Source(afterLoad = { now = ready.manifest.session!!.expiresAtMillis })
+        val result = SelectedRealmPagingSource(delegate, sessions, selection).load(params)
+        assertTrue(result is PagingSource.LoadResult.Error)
+        assertEquals(1, delegate.loads)
+        assertEquals(ready, sessions.state.value)
+    }
+
     @Test fun `invalidation is mutual and cancellation is not converted to load error`() = runTest {
         val sessions = EnterpriseSessionController(EnterpriseAppliedStore(temporary.newFolder()))
         sessions.recover()
@@ -79,12 +91,13 @@ class SelectedRealmPagingSourceTest {
         } catch (_: CancellationException) { }
     }
 
-    private class Source(private val cancel: Boolean = false) : PagingSource<Int, String>() {
+    private class Source(private val cancel: Boolean = false, private val afterLoad: () -> Unit = {}) : PagingSource<Int, String>() {
         var loads = 0
         override fun getRefreshKey(state: PagingState<Int, String>): Int? = null
         override suspend fun load(params: LoadParams<Int>): LoadResult<Int, String> {
             loads++
             if (cancel) throw CancellationException("cancelled")
+            afterLoad()
             return LoadResult.Page(listOf("row"), null, null)
         }
     }

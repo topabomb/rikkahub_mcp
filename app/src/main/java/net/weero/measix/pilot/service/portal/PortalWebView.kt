@@ -164,31 +164,34 @@ internal class PortalWebView private constructor(
             { (view.parent as? android.view.ViewGroup)?.removeView(view) },
         )
     }
-    private var browserCleanup: CompletableDeferred<Unit>? = null
+    private var teardown: CompletableDeferred<Unit>? = null
     private var destroyed = false
 
     private fun destroy(): Deferred<Unit> {
         active.set(false)
-        var failure = attemptTeardown(viewTeardown)
-        // WebView methods cannot be retried after destroy, which also requires a detached view.
-        if (viewTeardown.isEmpty() && !destroyed) {
-            try { view.destroy(); destroyed = true }
-            catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
-            catch (error: Exception) {
-                if (failure == null) failure = error else if (error !== failure) failure?.addSuppressed(error)
-            }
-        }
-        failure?.let { throw it }
-        return browserCleanup?.takeUnless { it.isCancelled } ?: CompletableDeferred<Unit>().also { pending ->
-            browserCleanup = pending
-            try {
-                WebStorageCompat.deleteBrowsingDataForSite(WebStorage.getInstance(), PortalProtocol.LOCAL_ORIGIN) {
-                    pending.complete(Unit)
+        return teardown?.takeUnless { it.isCancelled } ?: CompletableDeferred<Unit>().also { pending ->
+            teardown = pending
+            // Revoke the document immediately, but unwind Chromium's navigation/message callback before destroying its WebView.
+            // The same receipt covers detachment, destruction and site cleanup before a replacement host can open.
+            val posted = main.post {
+                try {
+                    var failure = attemptTeardown(viewTeardown)
+                    // WebView methods cannot be retried after destroy, which also requires a detached view.
+                    if (viewTeardown.isEmpty() && !destroyed) {
+                        try { view.destroy(); destroyed = true }
+                        catch (error: Exception) {
+                            if (failure == null) failure = error else if (error !== failure) failure.addSuppressed(error)
+                        }
+                    }
+                    failure?.let { throw it }
+                    WebStorageCompat.deleteBrowsingDataForSite(WebStorage.getInstance(), PortalProtocol.LOCAL_ORIGIN) {
+                        pending.complete(Unit)
+                    }
+                } catch (error: Exception) {
+                    pending.completeExceptionally(error)
                 }
-            } catch (error: Exception) {
-                pending.completeExceptionally(error)
-                if (error is kotlinx.coroutines.CancellationException) throw error
             }
+            if (!posted) pending.completeExceptionally(IllegalStateException("Portal teardown dispatcher unavailable"))
         }
     }
 

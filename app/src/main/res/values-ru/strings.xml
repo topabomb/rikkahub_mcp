@@ -1596,7 +1596,7 @@
   <string name="enterprise_space">Корпоративное пространство</string>
   <string name="enterprise_join_example">Попробовать пример организации</string>
   <string name="enterprise_local_notice">Конфигурация организации предоставляется этим устройством. Модели могут подключаться к настроенным вами сервисам.</string>
-  <string name="enterprise_join_paste">Вставить JSON для подключения</string>
+  <string name="enterprise_join_paste">Вставить данные подключения</string>
   <string name="enterprise_join_scan">Подключиться по QR-коду</string>
   <string name="enterprise_join_submit">Подключиться к организации</string>
   <string name="enterprise_example_code">Показать пример кода подключения</string>
@@ -1686,7 +1686,7 @@
   <string name="enterprise_model_rename">Переименовать модель</string>
   <string name="enterprise_add_example_model">Добавить имитационную модель</string>
   <string name="enterprise_reload_source">Обновить</string>
-  <string name="enterprise_source_changed">Источник изменился. Перечитайте его перед редактированием.</string>
+  <string name="enterprise_source_changed">Настройки организации изменились. Обновите их перед редактированием.</string>
   <string name="enterprise_model_still_referenced">Модель используется корпоративным ассистентом или настройкой по умолчанию. Измените ссылки в полной конфигурации перед удалением или отключением.</string>
   <string name="assistant_usage_title">Настройки этого пространства</string>
   <string name="assistant_usage_description">Настройки действуют в этом пространстве. Имя, описание и системный промпт берутся из определения.</string>
@@ -1708,7 +1708,7 @@
   <string name="enterprise_simulate_revocation">Отозвать учётные данные и выйти из организации</string>
   <string name="enterprise_expiry_scheduled">Срок входа истечёт в течение 60 секунд. Обычная процедура завершения действует также в личном пространстве и после перезапуска приложения.</string>
   <string name="enterprise_feed_editor">Локальные новости организации</string>
-  <string name="enterprise_feed_notice">Черновики видны только в редакторе. Публикация и отзыв меняют версию новостей, но не поколение конфигурации.</string>
+  <string name="enterprise_feed_notice">Черновики видны только здесь. После публикации запись появится в рабочей панели, после отзыва — исчезнет. Настройки организации не изменятся.</string>
   <string name="enterprise_feed_revision">Публичная версия: %1$d · %2$s</string>
   <string name="enterprise_feed_title">Заголовок</string>
   <string name="enterprise_feed_content">Содержание</string>
@@ -1733,7 +1733,7 @@
   <string name="enterprise_clear_example_confirm">Удалить чаты, память, управляемые файлы, новости и настройки пространства %1$s и выйти? Личные данные, пользовательские конфигурации, другие организации и общий Workspace сохранятся. Отменить удаление нельзя.</string>
   <string name="enterprise_local_badge">Локальная имитация · %1$s</string>
   <string name="configuration_user_definition_shared_notice">Здесь находятся ваши общие настройки. Изменения действуют во всех пространствах, где эти настройки разрешены. Их использование в корпоративном пространстве по-прежнему определяется политикой организации.</string>
-  <string name="assistant_enterprise_memory_seed">Исходная память организации (только чтение)</string>
+  <string name="assistant_enterprise_memory_seed">Справочная память организации (только чтение)</string>
   <string name="assistant_enterprise_memory_seed_description">Предоставляется организацией и включается в контекст ассистента. Хранится отдельно от редактируемых записей ниже и не зависит от их отключения или удаления.</string>
   <string name="enterprise_join_options">Подключиться к организации</string>
   <string name="enterprise_connected_enterprise">Подключённая организация: %1$s</string>

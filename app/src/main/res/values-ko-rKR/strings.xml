@@ -1596,7 +1596,7 @@
   <string name="enterprise_space">기업 공간</string>
   <string name="enterprise_join_example">예시 기업 체험</string>
   <string name="enterprise_local_notice">기업 설정은 이 기기에서 제공됩니다. 모델은 사용자가 설정한 서비스에 연결할 수 있습니다.</string>
-  <string name="enterprise_join_paste">접속 JSON 붙여넣기</string>
+  <string name="enterprise_join_paste">접속 정보 붙여넣기</string>
   <string name="enterprise_join_scan">스캔하여 연결</string>
   <string name="enterprise_join_submit">기업 접속</string>
   <string name="enterprise_example_code">예시 접속 코드 표시</string>
@@ -1686,7 +1686,7 @@
   <string name="enterprise_model_rename">모델 이름 변경</string>
   <string name="enterprise_add_example_model">시뮬레이션 모델 추가</string>
   <string name="enterprise_reload_source">새로고침</string>
-  <string name="enterprise_source_changed">소스가 변경되었습니다. 다시 읽은 후 수정하세요.</string>
+  <string name="enterprise_source_changed">기업 설정이 변경되었습니다. 새로고침한 후 다시 수정하세요.</string>
   <string name="enterprise_model_still_referenced">기업 어시스턴트 또는 기본 설정에서 참조 중입니다. 전체 설정에서 참조를 변경한 후 삭제하거나 비활성화하세요.</string>
   <string name="assistant_usage_title">이 공간의 사용 설정</string>
   <string name="assistant_usage_description">이 공간에서의 사용 설정입니다. 이름, 설명, 시스템 프롬프트는 정의를 따릅니다.</string>
@@ -1708,7 +1708,7 @@
   <string name="enterprise_simulate_revocation">자격 증명 취소 후 기업 공간 나가기</string>
   <string name="enterprise_expiry_scheduled">이 로그인은 60초 이내에 만료됩니다. 개인 공간에 있거나 앱을 다시 시작해도 정상 종료 절차가 적용됩니다.</string>
   <string name="enterprise_feed_editor">로컬 기업 소식</string>
-  <string name="enterprise_feed_notice">초안은 이 편집기에만 표시됩니다. 게시 또는 철회는 소식 버전만 변경하며 구성 세대는 유지됩니다.</string>
+  <string name="enterprise_feed_notice">초안은 여기에서만 표시됩니다. 게시하면 워크벤치에 표시되고 철회하면 숨겨집니다. 기업 설정은 변경되지 않습니다.</string>
   <string name="enterprise_feed_revision">공개 버전: %1$d · %2$s</string>
   <string name="enterprise_feed_title">제목</string>
   <string name="enterprise_feed_content">본문</string>
@@ -1733,7 +1733,7 @@
   <string name="enterprise_clear_example_confirm">%1$s의 채팅, 기억, 관리 파일, 소식, 공간 환경설정을 삭제하고 로그아웃할까요? 개인 데이터, 사용자 구성, 다른 기업, 공유 Workspace는 유지됩니다. 되돌릴 수 없습니다.</string>
   <string name="enterprise_local_badge">로컬 모의 · %1$s</string>
   <string name="configuration_user_definition_shared_notice">공유 사용자 설정을 관리합니다. 변경 사항은 해당 설정을 허용하는 모든 공간에 적용되며, 기업 공간에서의 사용 여부는 기업 정책을 따릅니다.</string>
-  <string name="assistant_enterprise_memory_seed">기업 초기 메모리 (읽기 전용)</string>
+  <string name="assistant_enterprise_memory_seed">기업 참고 메모리 (읽기 전용)</string>
   <string name="assistant_enterprise_memory_seed_description">기업에서 제공하며 어시스턴트 컨텍스트에 포함됩니다. 아래의 편집 가능한 메모리와 별개이며, 메모리 사용 설정이나 삭제의 영향을 받지 않습니다.</string>
   <string name="enterprise_join_options">기업에 연결</string>
   <string name="enterprise_connected_enterprise">연결된 기업: %1$s</string>

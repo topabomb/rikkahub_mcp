@@ -69,7 +69,9 @@ UI 不持有 DAO、ConversationRepository、Runtime Registry、Artifact/Generate
 | 图库生成媒体 row、payload 与删除恢复 | `GeneratedMediaStore` |
 | 跨文件 owner 命令与列表 | `FileManagementApplicationService` / `FileManagementQueryService`；不成为第三个文件 owner |
 | 内部 attachment handle 索引 | `AttachmentReferenceLookup`；查询投影，不是文件读取授权 |
-| Local Settings 与唯一有效读模型 | `SettingsStore`；内部 normalization、managed storage/resolver 与 write rules 不另发状态流 |
+| 用户定义、公用与按域偏好 | `SettingsStore`；`UserSettingsDocument` 单事务提交，个人 Settings 为只读投影 |
+| 企业身份、Session 与 Applied State | `EnterpriseSessionController` 串行写入 `EnterpriseAppliedStore`；本地来源配置另归 `LocalEnterpriseSource` |
+| 按域有效配置 | `ConfigurationResolver` 纯派生 `ResolvedConfiguration`；application/query ports 读取，不持久化镜像 |
 | Provider 配置与连接探测 | `ProviderSettingsApplicationService`；协调 SDK 与 SettingsStore |
 | Skill 身份、文件树与发布 | `SkillManager`；typed parse、导入、读取和可恢复目录事务 |
 | MCP definition / catalog / runtime / OAuth | 分别归 `SettingsStore` / `McpCatalogStore` / `McpServerRuntime` / `McpOAuthCoordinator`；`McpRuntimeCoordinator` 跨 server 编排 |
@@ -141,7 +143,7 @@ pending backup restore
 
 Room/DataStore/文件协议按长期数据保全演进。结构变化必须提供显式 migration、fresh schema 同构与历史数据验证；索引随实体和 migration 维护，不由业务请求临时创建。备份先在 staging 升级和验证，成功后才发布。`BackupDataGraph` 只构建分离的个人备份或恢复 publication，复用生产 Room schema 并重建派生索引；它不成为运行时数据库或文件 owner。冷恢复由 `PendingBackupRestore` 合并最新企业图后执行既有 swap/rollback，禁止用个人包整体覆盖混合域 live 数据库。
 
-兼容只存在于明确的持久化迁移和外部协议解析边界。架构迁移同次删除旧 facade、fallback、deprecated 转发、过渡命名与无调用协议，不能以双路径掩盖不一致。未来配置或工具来源应从既有 TurnContextFactory/TurnToolSetFactory 接入，有真实消费者后再扩展合同；不预埋无消费者的 schema。下一步企业阶段目标见 [Android 企业集成计划](../dev/android-enterprise-integration-plan.md)。
+兼容只存在于明确的持久化迁移和外部协议解析边界。架构迁移同次删除旧 facade、fallback、deprecated 转发、过渡命名与无调用协议，不能以双路径掩盖不一致。未来配置或工具来源应从既有 TurnContextFactory/TurnToolSetFactory 接入，有真实消费者后再扩展合同；不预埋无消费者的 schema。本地企业交付范围与分层验收见 [Android 企业集成计划](../dev/android-enterprise-integration-plan.md)，后续真实平台接入见 [生产接入规划](../dev/android-enterprise-production-integration-roadmap.md)。
 
 验证分层、失败路径、设备要求及门禁命令统一见 [测试策略](testing-strategy.md)。版本号与 changelog 仅随明确的发布需求更新。
 

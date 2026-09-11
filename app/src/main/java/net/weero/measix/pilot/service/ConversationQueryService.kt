@@ -145,7 +145,9 @@ class ConversationQueryService internal constructor(
 
     private suspend fun <T> read(access: RealmAccess, query: suspend () -> T): T {
         recoveryGate.awaitReady()
-        return sessions.withRealmAccess(access, query)
+        return sessions.withRealmAccess(access) {
+            query().also { sessions.requirePublishedRealmAccess(access) }
+        }
     }
 
     fun observeViewAccess(lease: ConversationViewLease): Flow<Boolean> = combine(

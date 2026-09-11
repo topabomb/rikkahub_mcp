@@ -149,6 +149,13 @@ internal fun AssistantUsageEditor(
     if (editShared) AlertDialog(onDismissRequest = { editShared = false },
         title = { Text(stringResource(R.string.assistant_usage_shared_edit)) },
         text = { Text(stringResource(R.string.assistant_usage_shared_warning)) },
-        confirmButton = { TextButton(onClick = { requireOriginal(); editShared = false; onEditSharedDefinition() }) { Text(stringResource(android.R.string.ok)) } },
+        confirmButton = { TextButton(onClick = {
+            try {
+                requireOriginal()
+                editShared = false
+                onEditSharedDefinition()
+            } catch (cancelled: CancellationException) { throw cancelled }
+            catch (error: Exception) { editShared = false; onFailure(error) }
+        }) { Text(stringResource(android.R.string.ok)) } },
         dismissButton = { TextButton(onClick = { editShared = false }) { Text(stringResource(android.R.string.cancel)) } })
 }

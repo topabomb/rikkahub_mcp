@@ -56,6 +56,30 @@ class FileManagementServicesTest {
 
     @After fun tearDown() { root.deleteRecursively() }
 
+    @Test fun `cleanup counts cannot return after expiry while querying either file owner`() = runTest {
+        for (category in FileCleanupCategory.entries) {
+            var now = 1000L
+            val controller = EnterpriseSessionController(EnterpriseAppliedStore(File(root, "count-${category.name}"))) { now }
+            val ready = controller.enrollFixture(exampleEnterprisePackage())
+            val selected = requireNotNull(controller.readPresentation().selection)
+            val artifacts = mockk<ArtifactStore>()
+            val generated = mockk<GeneratedMediaStore>()
+            coEvery { artifacts.countFolderCreatedBefore(selected.access.scope, FileFolders.UPLOAD, any()) } coAnswers {
+                now = ready.manifest.session!!.expiresAtMillis
+                4
+            }
+            coEvery { generated.candidateCount(selected.access.scope, any()) } coAnswers {
+                now = ready.manifest.session!!.expiresAtMillis
+                5
+            }
+            val query = FileManagementQueryService(artifacts, generated, ApplicationRecoveryGate().apply { ready() }, controller)
+            val error = runCatching { query.candidateCount(selected, category, FileCleanupRange.All) }.exceptionOrNull()
+            assertTrue(error is EnterpriseConfigurationException)
+            assertEquals("enterprise_data_access_unavailable", error?.message)
+            assertEquals(ready, controller.state.value)
+        }
+    }
+
     @Test fun `attachment handoff rechecks expiry after waiting for the artifact owner`() = runTest {
         var now = 1_800_000_000_000L
         val controller = EnterpriseSessionController(EnterpriseAppliedStore(File(root, "export-expiry"))) { now }

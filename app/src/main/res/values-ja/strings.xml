@@ -1596,7 +1596,7 @@
   <string name="enterprise_space">企業スペース</string>
   <string name="enterprise_join_example">サンプル企業を試す</string>
   <string name="enterprise_local_notice">企業設定はこの端末から提供されます。モデルは設定したサービスに接続できます。</string>
-  <string name="enterprise_join_paste">接続用 JSON を貼り付け</string>
+  <string name="enterprise_join_paste">接続情報を貼り付け</string>
   <string name="enterprise_join_scan">スキャンして接続</string>
   <string name="enterprise_join_submit">企業に接続</string>
   <string name="enterprise_example_code">サンプル接続コードを表示</string>
@@ -1686,7 +1686,7 @@
   <string name="enterprise_model_rename">モデル名を変更</string>
   <string name="enterprise_add_example_model">シミュレーションモデルを追加</string>
   <string name="enterprise_reload_source">更新</string>
-  <string name="enterprise_source_changed">ソースが変更されました。再読み込みしてから編集してください。</string>
+  <string name="enterprise_source_changed">企業設定が変更されました。更新してから再度編集してください。</string>
   <string name="enterprise_model_still_referenced">企業アシスタントまたは既定設定が参照中です。完全な設定で参照を変更してから削除・無効化してください。</string>
   <string name="assistant_usage_title">このスペースでの設定</string>
   <string name="assistant_usage_description">このスペース内での使用設定です。名前、説明、システムプロンプトは定義に従います。</string>
@@ -1708,7 +1708,7 @@
   <string name="enterprise_simulate_revocation">資格情報を取り消して企業スペースを退出</string>
   <string name="enterprise_expiry_scheduled">60秒以内にログインが期限切れになります。個人スペースにいる場合や再起動後も通常の終了処理が行われます。</string>
   <string name="enterprise_feed_editor">ローカル企業の更新</string>
-  <string name="enterprise_feed_notice">下書きはこの画面でのみ表示されます。公開や撤回は更新情報の版を変更し、設定の世代は変えません。</string>
+  <string name="enterprise_feed_notice">下書きはここでのみ表示されます。公開するとワークベンチに表示され、取り下げると非表示になります。企業設定は変更されません。</string>
   <string name="enterprise_feed_revision">公開版：%1$d · %2$s</string>
   <string name="enterprise_feed_title">タイトル</string>
   <string name="enterprise_feed_content">本文</string>
@@ -1733,7 +1733,7 @@
   <string name="enterprise_clear_example_confirm">%1$s のチャット、記憶、管理ファイル、更新情報、スペース設定を削除して退出しますか？個人データ、ユーザー設定、他の企業、共有 Workspace は保持されます。元に戻せません。</string>
   <string name="enterprise_local_badge">ローカル模擬 · %1$s</string>
   <string name="configuration_user_definition_shared_notice">ここでは共有のユーザー設定を管理します。変更は、その設定の使用が許可されたすべてのスペースに反映されます。企業スペースでの使用可否は引き続き企業ポリシーに従います。</string>
-  <string name="assistant_enterprise_memory_seed">企業の初期メモリ（読み取り専用）</string>
+  <string name="assistant_enterprise_memory_seed">企業の参照メモリ（読み取り専用）</string>
   <string name="assistant_enterprise_memory_seed_description">企業から提供され、アシスタントのコンテキストに含まれます。下の編集可能なメモリとは別で、メモリの切り替えや削除の影響を受けません。</string>
   <string name="enterprise_join_options">企業に接続</string>
   <string name="enterprise_connected_enterprise">接続中の企業：%1$s</string>

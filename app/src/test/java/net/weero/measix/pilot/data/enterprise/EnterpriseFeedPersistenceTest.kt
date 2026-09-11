@@ -22,8 +22,9 @@ class EnterpriseFeedPersistenceTest {
     @get:Rule val temporary = TemporaryFolder()
 
     @Test
-    fun `native Feed reads and writes recheck expiry after storage work`() = runTest {
-        for (writing in listOf(false, true)) {
+    fun `Feed consumers and writes recheck expiry after storage work`() = runTest {
+        for (consumer in listOf("editor", "portal-list", "portal-detail", "gateway-list", "write")) {
+            val writing = consumer == "write"
             var now = 1000L
             var expiresAt = Long.MAX_VALUE
             var expire = false
@@ -42,9 +43,14 @@ class EnterpriseFeedPersistenceTest {
             val original = sessions.readLocalFeed(selection)
             expire = true
             expectReason("enterprise_data_access_unavailable") {
-                if (writing) sessions.changeFeed(selection, original.revision,
-                    EnterpriseFeedCommand.Withdraw(packet.feedSeed!!.items.single().enterpriseUpdateId))
-                else sessions.readLocalFeed(selection)
+                val id = packet.feedSeed!!.items.single().enterpriseUpdateId
+                when (consumer) {
+                    "editor" -> sessions.readLocalFeed(selection)
+                    "portal-list" -> sessions.listFeed(selection, EnterpriseFeedQuery())
+                    "portal-detail" -> sessions.feedDetail(selection, id)
+                    "gateway-list" -> sessions.listFeed(selection.access as RealmAccess.Enterprise, EnterpriseFeedQuery())
+                    else -> sessions.changeFeed(selection, original.revision, EnterpriseFeedCommand.Withdraw(id))
+                }
             }
             assertEquals(applied.manifest, store.readManifest())
             assertEquals(applied, sessions.available())

@@ -74,7 +74,9 @@ internal class SelectedRealmPagingSource<Key : Any, Value : Any>(
 
     override suspend fun load(params: LoadParams<Key>): LoadResult<Key, Value> = try {
         if (invalid) LoadResult.Invalid() else sessions.withSelectedRealmSelection(access) {
-            if (invalid) LoadResult.Invalid() else delegate.load(params)
+            if (invalid) LoadResult.Invalid() else delegate.load(params).also {
+                sessions.requirePublishedSelection(access)
+            }
         }
     } catch (cancelled: CancellationException) {
         throw cancelled

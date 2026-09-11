@@ -15,6 +15,49 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class EnterpriseVMTest {
+    @Test fun `space changes hide prior errors and reject delayed sync failures`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val store = ViewModelStore()
+        try {
+            val packet = exampleEnterprisePackage()
+            val access = RealmAccess.Enterprise(packet.identity.scope, "session")
+            val selection = RealmSelection(access, 1)
+            val overview = MutableStateFlow(EnterpriseOverview(selection, EnterpriseSessionPhase.READY,
+                "Example", "Member", access, true, 1, 1000, null, null, false))
+            val service = mockk<EnterpriseApplicationService>()
+            every { service.observe() } returns overview
+            val syncing = CompletableDeferred<Unit>()
+            coEvery { service.synchronize(access) } coAnswers { syncing.await() }
+            val vm = EnterpriseVM(service)
+            store.put("enterprise", vm)
+            backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.error.collect {} }
+            runCurrent()
+            vm.scanFailed()
+            runCurrent()
+            assertNotNull(vm.error.value)
+            overview.value = overview.value.copy(selection = RealmSelection(RealmAccess.Personal, 2))
+            runCurrent()
+            assertNull(vm.error.value)
+            overview.value = overview.value.copy(selection = RealmSelection(access, 3))
+            runCurrent()
+            vm.synchronize()
+            runCurrent()
+            overview.value = overview.value.copy(selection = RealmSelection(RealmAccess.Personal, 4))
+            runCurrent()
+            syncing.completeExceptionally(IllegalStateException("late failure"))
+            runCurrent()
+            assertNull(vm.error.value)
+            assertFalse(vm.busy.value)
+            overview.value = overview.value.copy(selection = RealmSelection(access, 5))
+            runCurrent()
+            assertNull(vm.error.value)
+        } finally {
+            store.clear()
+            runCurrent()
+            Dispatchers.resetMain()
+        }
+    }
+
     @Test fun `closing an editor invalidates delayed refresh success failure and edit notice`() = runTest {
         Dispatchers.setMain(StandardTestDispatcher(testScheduler))
         val store = ViewModelStore()
@@ -31,7 +74,7 @@ class EnterpriseVMTest {
             coEvery { service.localConfiguration(selection) } coAnswers { reading.await() }
             val vm = EnterpriseVM(service)
             store.put("enterprise", vm)
-            backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.overview.collect {} }
+            backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.error.collect {} }
             runCurrent()
             reading.complete(original)
             vm.showLocalConfiguration()

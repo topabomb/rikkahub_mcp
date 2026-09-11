@@ -157,6 +157,8 @@ checkpoint 写放大是行为事实，归 `service/turn/TurnPersistenceDeltaTest
 
 ## 9. 验证命令
 
+企业只读准入的到期竞态由 `EnterpriseFeedPersistenceTest`、`ScopedConversationQueryTest`、`SelectedRealmPagingSourceTest`、`StatsQueryServiceTest` 和 `FileManagementServicesTest` 覆盖。可控时钟在实际查询协作者返回前推进到原 Session 期限，断言不会返回动态、历史、分页或计数，同时原 manifest 保持不变；这与提交前准入及退出恢复测试分别保护不同边界。
+
 - Windows 用 `gradlew.bat`，macOS/Linux 用 `./gradlew`；本仓库串行运行：`--no-parallel --max-workers=1`。
 - 定向验证：`gradlew :app:testDebugUnitTest --tests "<FQCN>"`（或 `:ai:` 等对应 module）。
 - 架构或跨模块变更的完整门禁：

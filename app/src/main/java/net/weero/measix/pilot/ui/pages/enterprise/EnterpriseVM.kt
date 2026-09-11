@@ -29,8 +29,11 @@ internal class EnterpriseVM(private val service: EnterpriseApplicationService) :
     val overview = service.observe().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
     private val _busy = MutableStateFlow(false)
     val busy = _busy.asStateFlow()
-    private val _error = MutableStateFlow<Int?>(null)
-    val error = _error.asStateFlow()
+    private data class Failure(val resource: Int, val selection: RealmSelection?)
+    private val _error = MutableStateFlow<Failure?>(null)
+    val error = combine(_error, overview) { value, state ->
+        value?.takeIf { it.selection == state?.selection }?.resource
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
     private data class Notice(val resource: Int, val selection: RealmSelection? = null)
     private val _notice = MutableStateFlow<Notice?>(null)
     val notice = combine(_notice, overview) { value, state ->
@@ -67,7 +70,7 @@ internal class EnterpriseVM(private val service: EnterpriseApplicationService) :
     fun join(text: String) = command(enrollment = true) { service.join(text) }
     fun showExampleCode() = command { _exampleCode.value = service.exampleEnrollmentText() }
     fun dismissExampleCode() { _exampleCode.value = null }
-    fun scanFailed() { _error.value = R.string.enterprise_scan_failure }
+    fun scanFailed() { _error.value = Failure(R.string.enterprise_scan_failure, overview.value?.selection) }
     fun showSources() = command { _sources.value = service.installedSources() }
     fun dismissSources() { _sources.value = null }
     fun joinInstalled(source: InstalledEnterpriseSource) {
@@ -147,7 +150,7 @@ internal class EnterpriseVM(private val service: EnterpriseApplicationService) :
     }
     fun synchronize() {
         val selection = overview.value?.selection ?: return
-        overview.value?.access?.let { access -> command {
+        overview.value?.access?.let { access -> command(isCurrent = { overview.value?.selection == selection }) {
             service.synchronize(access)
             if (overview.value?.access == access) _notice.value = Notice(R.string.enterprise_sync_completed, selection)
         } }
@@ -162,7 +165,7 @@ internal class EnterpriseVM(private val service: EnterpriseApplicationService) :
         _exitRequest.value = service.captureExitRequest()?.let { request ->
             EnterpriseExitConfirmation(request, overview.value?.takeIf { it.access == request.access }?.enterpriseName)
         }
-        if (_exitRequest.value == null) _error.value = R.string.enterprise_failure
+        if (_exitRequest.value == null) _error.value = Failure(R.string.enterprise_failure, overview.value?.selection)
     }
     fun dismissExit() { _exitRequest.value = null }
     fun requestExampleDataRemoval() = command {
@@ -185,7 +188,7 @@ internal class EnterpriseVM(private val service: EnterpriseApplicationService) :
     fun portalFailed(original: PortalPresentation) {
         if (_portal.value != original) return
         dismissPortal(original)
-        _error.value = R.string.enterprise_failure
+        _error.value = Failure(R.string.enterprise_failure, overview.value?.selection)
     }
 
     private fun command(enrollment: Boolean = false, failureMessage: Int = R.string.enterprise_failure, isCurrent: () -> Boolean = { true }, action: suspend () -> Unit) {
@@ -197,7 +200,7 @@ internal class EnterpriseVM(private val service: EnterpriseApplicationService) :
             try { action() }
             catch (cancelled: CancellationException) { throw cancelled }
             catch (error: Exception) {
-                if (isCurrent()) _error.value = when {
+                if (isCurrent()) _error.value = Failure(when {
                     error is EnterpriseConfigurationException && error.reason == "platform_enrollment_not_supported" -> R.string.enterprise_platform_unavailable
                     error is EnterpriseConfigurationException && error.reason == "exit_current_enterprise_first" -> R.string.enterprise_import_exit_first
                     error is EnterpriseConfigurationException && error.reason == "enterprise_selection_revoked" -> R.string.enterprise_selection_changed
@@ -208,7 +211,7 @@ internal class EnterpriseVM(private val service: EnterpriseApplicationService) :
                     error is EnterpriseConfigurationException && error.reason in setOf("invalid_assistant_model_reference", "invalid_default_chat_model", "invalid_default_image_model") -> R.string.enterprise_model_still_referenced
                     enrollment -> R.string.enterprise_invalid_enrollment
                     else -> failureMessage
-                }
+                }, overview.value?.selection)
             } finally { _busy.value = false }
         }
     }

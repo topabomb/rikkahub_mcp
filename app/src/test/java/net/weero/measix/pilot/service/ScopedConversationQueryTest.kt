@@ -50,6 +50,26 @@ class ScopedConversationQueryTest {
     @get:Rule val temporary = TemporaryFolder()
     private val assistant = ConfigurationReference.random()
 
+    @Test fun `conversation tools cannot return history when their session expires during the query`() = runTest {
+        var now = 1000L
+        val sessions = EnterpriseSessionController(EnterpriseAppliedStore(temporary.newFolder())) { now }
+        val ready = sessions.enrollFixture(exampleEnterprisePackage())
+        val access = sessions.captureSelectedRealmAccess()
+        val repository = mockk<ConversationRepository>()
+        coEvery { repository.getRecentConversationRecords(access.scope, assistant, 10) } coAnswers {
+            now = ready.manifest.session!!.expiresAtMillis
+            listOf(row(access.scope, "enterprise history"))
+        }
+        val tool = createConversationTools(service(repository, sessions), assistant, access).first { it.name == "recent_chats" }
+        try {
+            tool.execute(buildJsonObject {})
+            fail("Expired query must not disclose history")
+        } catch (error: EnterpriseConfigurationException) {
+            assertEquals("enterprise_data_access_unavailable", error.reason)
+        }
+        assertEquals(ready, sessions.state.value)
+    }
+
     @Test fun `conversation tools retain their original scope and session across selection and reentry`() = runTest {
         val sessions = sessions()
         val packet = exampleEnterprisePackage()
