@@ -23,6 +23,22 @@ internal fun appliedConfiguration(packet: EnterprisePackage): EnterpriseState.Av
 )
 
 class ConfigurationResolverTest {
+    @Test fun `starter catalog and chat suggestions share enabled target filtering and stable order`() {
+        val base = exampleEnterprisePackage()
+        val starter = base.configuration.starters.first()
+        val packet = base.copy(configuration = base.configuration.copy(starters = listOf(
+            starter.copy(id = "str_z", sortOrder = 1), starter.copy(id = "str_a", sortOrder = 1),
+            starter.copy(id = "str_first", sortOrder = -1), starter.copy(id = "str_hidden", enabled = false))))
+        val resolved = ConfigurationResolver.resolve(UserSettingsDocument.empty(), packet.identity.scope, appliedConfiguration(packet))
+        assertEquals(listOf("str_first", "str_a", "str_z"), resolved.availableStarters().map { it.id })
+        val disabled = packet.copy(configuration = packet.configuration.copy(assistants = packet.configuration.assistants.map {
+            if (it.id == starter.assistantId) it.copy(enabled = false) else it
+        }))
+        assertTrue(ConfigurationResolver.resolve(UserSettingsDocument.empty(), disabled.identity.scope, appliedConfiguration(disabled))
+            .availableStarters().isEmpty())
+        assertTrue(resolved.availableStarters(ConfigurationReference.random()).isEmpty())
+    }
+
     @Test
     fun `enterprise memory seeds follow only the authorized assistant bindings and never user memory preferences`() {
         val original = exampleEnterprisePackage()

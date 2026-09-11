@@ -581,7 +581,13 @@ private fun SpeechProviderList(
     val testText = stringResource(R.string.setting_tts_page_test_text)
     LazyColumn(modifier.fillMaxSize().imePadding(), state = lazyState,
         contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        item { Text(stringResource(R.string.configuration_user_definition_shared_notice), style = MaterialTheme.typography.bodySmall) }
+        catalog?.selection?.let { selection -> item {
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text(stringResource(if (selection.access == net.weero.measix.pilot.data.enterprise.RealmAccess.Personal)
+                    R.string.configuration_scope_personal else R.string.configuration_scope_enterprise), style = MaterialTheme.typography.titleSmall)
+                Text(stringResource(R.string.configuration_speech_scope_notice), style = MaterialTheme.typography.bodySmall)
+            }
+        } }
         if (catalog == null) item { Text(stringResource(R.string.configuration_reason_not_ready)) }
         selected?.unavailableReason?.let { reason -> item { Text(configurationUnavailableText(reason), color = MaterialTheme.colorScheme.error) } }
         items(resources, key = { it.key.reference.toString() }) { resource ->
@@ -658,8 +664,8 @@ private fun SpeechProviderItem(
                 dragHandle()
             }
             Text(stringResource(when (resource.key.reference) {
-                is ConfigurationReference.Enterprise -> R.string.managed_configuration_source_managed
-                is ConfigurationReference.User -> if (resource.key.reference == DEFAULT_SYSTEM_TTS_ID) R.string.managed_configuration_source_builtin else R.string.managed_configuration_source_local
+                is ConfigurationReference.Enterprise -> R.string.configuration_source_enterprise
+                is ConfigurationReference.User -> if (resource.key.reference == DEFAULT_SYSTEM_TTS_ID) R.string.managed_configuration_source_builtin else R.string.configuration_source_user
             }), style = MaterialTheme.typography.labelMedium)
             resource.access.unavailableReason?.let { Text(configurationUnavailableText(it), color = MaterialTheme.colorScheme.error) }
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {

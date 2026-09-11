@@ -15,6 +15,10 @@
 
 不重建 Chat/Assistant/Turn/Settings/备份或 UI。用户资源仍用原用户凭据和连接；企业准入由真实 policy 提供。本地模拟身份不能升格真实授权，退出示例后重新接入真实企业；示例历史保持原 scope。
 
+本地客户端已提供工作台原生 Starter 入口及企业助手公开配置/记忆目录，见 [补充实施记录](android-enterprise-experience-completion.md)。
+真实接入时，Seed 随 Managed Snapshot generation 下发并保持只读，运行记忆仍由本主体本地数据 owner 管理；两者不合并，也不据此引入 User Sync。
+Starter 的预填与用户发送沿现有 Draft 协议；不为网页增加未冻结的聊天 Bridge 方法。
+
 ## 2. 合同前提
 
 平台来源为 `D:/RustProject/measix/measix-architecture`。路线图/术语/生命周期、Runtime Foundation、S0 合同、Control Protocol/测试形成权威链。实际接入固定已提交 architecture/core commit、OpenAPI/DTO/fixture hash、profile 与 Freeze evidence，不使用 floating latest 或未提交草案宣称兼容。

@@ -62,8 +62,8 @@
   <string name="assistant_page_delete_dialog_text">确定要删除这个助手吗？此操作无法撤销。</string>
   <string name="assistant_page_delete_header">删除 Header</string>
   <string name="assistant_page_enter_image_url">输入图片URL</string>
-  <string name="assistant_page_global_memory">全局记忆</string>
-  <string name="assistant_page_global_memory_desc">使用全局共享内存而非助手隔离内存。启用后，所有助手共享同一内存存储</string>
+  <string name="assistant_page_global_memory">空间共享记忆</string>
+  <string name="assistant_page_global_memory_desc">使用当前空间内助手共享的记忆，而非此助手的专用记忆。个人空间与各企业空间保持隔离。</string>
   <string name="assistant_page_header_name">Header 名称</string>
   <string name="assistant_page_header_value">Header 值</string>
   <string name="assistant_page_image_url">图片URL</string>
@@ -104,7 +104,7 @@
   <string name="assistant_page_quick_message_title">标题</string>
   <string name="assistant_page_quick_messages">快捷消息</string>
   <string name="assistant_page_recent_chats">参考历史聊天记录</string>
-  <string name="assistant_page_recent_chats_desc">启用后，允许助手在过去的对话中搜索相关信息</string>
+  <string name="assistant_page_recent_chats_desc">允许助手在当前空间的历史对话中查找相关信息。</string>
   <string name="assistant_page_regex_affecting_scopes">影响范围：</string>
   <string name="assistant_page_regex_desc">定义正则表达式模式，在发送/接收消息前对其进行转换</string>
   <string name="assistant_page_regex_find_regex">查找正则表达式</string>
@@ -1409,7 +1409,6 @@
   <string name="sub_assistant_global_tag">全局</string>
   <string name="assistant_picker_show_sub_assistants">子助手</string>
   <string name="assistant_page_no_chat_model_warning">未配置聊天模型，调用时将无法启动</string>
-  <string name="assistant_page_global_memory_warning">被调用时会使用共享全局记忆</string>
   <!-- Sub-Assistant: Local Tools -->
   <string name="assistant_page_local_tools_assistant_collaboration">助手协作</string>
   <string name="assistant_page_local_tools_assistant_management_title">管理其他助手</string>
@@ -1601,7 +1600,7 @@
   <string name="enterprise_join_submit">接入企业</string>
   <string name="enterprise_example_code">显示示例接入码</string>
   <string name="enterprise_example_code_notice">此接入码仅用于本机已安装的示例来源，有效期内可使用一次。</string>
-  <string name="enterprise_portal">打开企业工作台</string>
+  <string name="enterprise_portal">企业工作台</string>
   <string name="enterprise_switch_personal">切换到个人空间</string>
   <string name="enterprise_switch_enterprise">切换到企业空间</string>
   <string name="enterprise_switch_notice">切换空间会保留企业登录。聊天和数据仍保存在原空间。</string>
@@ -1731,7 +1730,7 @@
   <string name="enterprise_clear_example">清除内置示例数据并退出</string>
   <string name="enterprise_clear_example_requires_session">请先接入内置示例企业再清除其数据；这里不能清除导入的其他企业来源。</string>
   <string name="enterprise_clear_example_confirm">删除 %1$s 的聊天、记忆、托管文件、动态和空间偏好，并退出登录？个人数据、用户配置、其他企业以及共享 Workspace 均保留。此操作不可撤销。</string>
-  <string name="enterprise_local_badge">本地模拟 · %1$s</string>
+  <string name="enterprise_local_badge">%1$s · 本地模拟</string>
   <string name="configuration_user_definition_shared_notice">这里管理你的共享配置。修改会影响允许使用这些配置的所有空间；企业策略仍决定能否在企业空间使用。</string>
   <string name="assistant_enterprise_memory_seed">企业参考记忆（只读）</string>
   <string name="assistant_enterprise_memory_seed_description">由企业提供并纳入助手上下文。它与下方可编辑的记忆分开，不受记忆开关或删除操作影响。</string>
@@ -1755,4 +1754,30 @@
   <string name="enterprise_sync_completed">配置同步完成，当前生效版本见下方企业状态。</string>
   <string name="enterprise_management_enter_space">切换到企业空间后，可管理该企业的规则与动态。</string>
   <string name="enterprise_import_version_rejected">文件版本低于本机已安装版本，或相同版本包含不同配置。请将 configuration.generation 改为高于“企业规则与模型”中显示的版本，再重新导入。</string>
+  <string name="assistant_memory_shared_defaults">共享默认设置</string>
+  <string name="assistant_memory_shared_defaults_notice">这些开关修改助手在各空间的默认设置。下方运行记忆归属其标明的空间。</string>
+  <string name="assistant_memory_seed_count">企业参考记忆 · %1$d 条</string>
+  <string name="assistant_memory_seed_empty">此助手暂无企业参考记忆。</string>
+  <string name="assistant_memory_seed_expand">查看全文</string>
+  <string name="assistant_memory_seed_collapse">收起</string>
+  <string name="assistant_runtime_memory_count">运行记忆 · %1$d 条</string>
+  <string name="assistant_runtime_memory_add">添加记忆</string>
+  <string name="assistant_runtime_memory_scope">%1$s · %2$s</string>
+  <string name="assistant_memory_owner_shared">此空间内共享</string>
+  <string name="assistant_memory_owner_private">仅此助手使用</string>
+  <string name="assistant_runtime_memory_notice">可添加、编辑或删除这些记忆。关闭记忆不会删除已有记录，企业配置更新也不会覆盖它们。</string>
+  <string name="assistant_runtime_memory_empty">暂无运行记忆。可在这里添加，或让助手在对话中记录有用信息。</string>
+  <string name="configuration_shared_content_notice">这里管理你的共享配置，修改会影响使用它们的所有空间。</string>
+  <string name="configuration_speech_scope_notice">默认语音服务只为当前空间选择。编辑我的服务会影响使用它们的所有空间；企业提供的服务只读。</string>
+  <string name="enterprise_start_conversation">开始对话</string>
+  <string name="enterprise_starters_description">选择一个话题，打开草稿后可修改，再由你发送。</string>
+  <string name="enterprise_starters_empty">暂无可用的对话入口。</string>
+  <string name="enterprise_assistants">企业助手</string>
+  <string name="enterprise_assistants_empty">暂无可用的企业助手。</string>
+  <string name="enterprise_assistant_configuration">企业配置</string>
+  <string name="enterprise_assistant_definition_description">此定义由企业管理。使用偏好和运行记忆归属当前空间。</string>
+  <string name="enterprise_starter_preview">消息预览</string>
+  <string name="enterprise_starter_open">打开草稿</string>
+  <string name="assistant_runtime_memory_enabled">此助手已启用运行记忆。</string>
+  <string name="assistant_runtime_memory_disabled">运行记忆未启用。已有记录仍可管理，但不会用于对话。</string>
 </resources>

@@ -5,7 +5,6 @@ import me.rerere.hugeicons.stroke.PencilEdit01
 import me.rerere.hugeicons.stroke.Add01
 import me.rerere.hugeicons.stroke.Delete01
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -44,6 +43,8 @@ import androidx.compose.ui.util.fastForEach
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import net.weero.measix.pilot.R
 import net.weero.measix.pilot.data.model.Assistant
+import net.weero.measix.pilot.data.model.MemoryOwner
+import net.weero.measix.pilot.data.configuration.ConfigurationScope
 import net.weero.measix.pilot.service.MemoryRecord
 import net.weero.measix.pilot.service.MemoryView
 import net.weero.measix.pilot.ui.components.nav.BackButton
@@ -99,7 +100,8 @@ fun AssistantMemoryPage(id: String) {
             onUpdateAssistant = { vm.update(assistant, it) },
             onDeleteMemory = { vm.deleteMemory(it) },
             onAddMemory = { vm.addMemory(it) },
-            onUpdateMemory = { vm.updateMemory(it) }
+            onUpdateMemory = { vm.updateMemory(it) },
+            sharedDefaults = true,
         )
     }
 }
@@ -109,11 +111,12 @@ internal fun AssistantMemoryContent(
     innerPadding: PaddingValues,
     assistant: Assistant,
     memories: MemoryView,
-    onUpdateAssistant: (Assistant) -> Unit,
+    onUpdateAssistant: ((Assistant) -> Unit)?,
     onAddMemory: (MemoryRecord) -> Unit,
     onUpdateMemory: (MemoryRecord) -> Unit,
     onDeleteMemory: (MemoryRecord) -> Unit,
     memorySeeds: List<net.weero.measix.pilot.service.AssistantMemorySeedUiModel> = emptyList(),
+    sharedDefaults: Boolean = false,
 ) {
     val memoryDialogState = useEditState<MemoryRecord> {
         if (it.id == 0) {
@@ -176,115 +179,129 @@ internal fun AssistantMemoryContent(
             .imePadding(),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        CardGroup {
-            item(
-                headlineContent = { Text(stringResource(R.string.assistant_page_memory)) },
-                supportingContent = {
-                    Text(
-                        text = stringResource(R.string.assistant_page_memory_desc),
-                    )
-                },
-                trailingContent = {
-                    Switch(
-                        checked = assistant.enableMemory,
-                        onCheckedChange = {
-                            onUpdateAssistant(
-                                assistant.copy(
-                                    enableMemory = it
+        if (onUpdateAssistant != null) {
+            if (sharedDefaults) {
+                Text(stringResource(R.string.assistant_memory_shared_defaults), style = MaterialTheme.typography.titleMedium)
+                Text(stringResource(R.string.assistant_memory_shared_defaults_notice), style = MaterialTheme.typography.bodySmall)
+            }
+            CardGroup {
+                item(
+                    headlineContent = { Text(stringResource(R.string.assistant_page_memory)) },
+                    supportingContent = {
+                        Text(
+                            text = stringResource(R.string.assistant_page_memory_desc),
+                        )
+                    },
+                    trailingContent = {
+                        Switch(
+                            checked = assistant.enableMemory,
+                            onCheckedChange = {
+                                onUpdateAssistant(
+                                    assistant.copy(
+                                        enableMemory = it
+                                    )
                                 )
-                            )
-                        }
-                    )
-                }
-            )
-            item(
-                headlineContent = { Text(stringResource(R.string.assistant_page_global_memory)) },
-                supportingContent = {
-                    Text(
-                        text = stringResource(R.string.assistant_page_global_memory_desc),
-                    )
-                },
-                trailingContent = {
-                    Switch(
-                        checked = assistant.useGlobalMemory,
-                        onCheckedChange = {
-                            onUpdateAssistant(
-                                assistant.copy(
-                                    useGlobalMemory = it
+                            }
+                        )
+                    }
+                )
+                item(
+                    headlineContent = { Text(stringResource(R.string.assistant_page_global_memory)) },
+                    supportingContent = {
+                        Text(
+                            text = stringResource(R.string.assistant_page_global_memory_desc),
+                        )
+                    },
+                    trailingContent = {
+                        Switch(
+                            checked = assistant.useGlobalMemory,
+                            onCheckedChange = {
+                                onUpdateAssistant(
+                                    assistant.copy(
+                                        useGlobalMemory = it
+                                    )
                                 )
-                            )
-                        },
-                        enabled = assistant.enableMemory
-                    )
-                }
-            )
-            item(
-                headlineContent = { Text(stringResource(R.string.assistant_page_recent_chats)) },
-                supportingContent = {
-                    Text(
-                        text = stringResource(R.string.assistant_page_recent_chats_desc),
-                    )
-                },
-                trailingContent = {
-                    Switch(
-                        checked = assistant.enableRecentChatsReference,
-                        onCheckedChange = {
-                            onUpdateAssistant(
-                                assistant.copy(
-                                    enableRecentChatsReference = it
+                            },
+                            enabled = assistant.enableMemory
+                        )
+                    }
+                )
+                item(
+                    headlineContent = { Text(stringResource(R.string.assistant_page_recent_chats)) },
+                    supportingContent = {
+                        Text(
+                            text = stringResource(R.string.assistant_page_recent_chats_desc),
+                        )
+                    },
+                    trailingContent = {
+                        Switch(
+                            checked = assistant.enableRecentChatsReference,
+                            onCheckedChange = {
+                                onUpdateAssistant(
+                                    assistant.copy(
+                                        enableRecentChatsReference = it
+                                    )
                                 )
-                            )
-                        }
-                    )
-                }
-            )
-            item(
-                headlineContent = { Text(stringResource(R.string.assistant_page_time_reminder)) },
-                supportingContent = {
-                    Text(
-                        text = stringResource(R.string.assistant_page_time_reminder_desc),
-                    )
-                },
-                trailingContent = {
-                    Switch(
-                        checked = assistant.enableTimeReminder,
-                        onCheckedChange = {
-                            onUpdateAssistant(
-                                assistant.copy(
-                                    enableTimeReminder = it
+                            }
+                        )
+                    }
+                )
+                item(
+                    headlineContent = { Text(stringResource(R.string.assistant_page_time_reminder)) },
+                    supportingContent = {
+                        Text(
+                            text = stringResource(R.string.assistant_page_time_reminder_desc),
+                        )
+                    },
+                    trailingContent = {
+                        Switch(
+                            checked = assistant.enableTimeReminder,
+                            onCheckedChange = {
+                                onUpdateAssistant(
+                                    assistant.copy(
+                                        enableTimeReminder = it
+                                    )
                                 )
-                            )
-                        }
-                    )
-                }
-            )
-        }
+                            }
+                        )
+                    }
+                )
+            }
 
-        if (memorySeeds.isNotEmpty()) {
-            Text(stringResource(R.string.assistant_enterprise_memory_seed), style = MaterialTheme.typography.titleMedium)
+        }
+        if (memorySeeds.isNotEmpty() || onUpdateAssistant == null) {
+            Text(stringResource(R.string.assistant_memory_seed_count, memorySeeds.size), style = MaterialTheme.typography.titleMedium)
             Text(stringResource(R.string.assistant_enterprise_memory_seed_description), style = MaterialTheme.typography.bodySmall)
+            if (memorySeeds.isEmpty()) Text(stringResource(R.string.assistant_memory_seed_empty), style = MaterialTheme.typography.bodySmall)
             memorySeeds.forEach { seed ->
                 key(seed.id) {
+                    var expanded by remember(seed.content) { mutableStateOf(false) }
                     Card(colors = CustomColors.cardColorsOnSurfaceContainer, modifier = Modifier.fillMaxWidth()) {
-                        androidx.compose.foundation.text.selection.SelectionContainer {
-                            Text(seed.content, Modifier.padding(16.dp))
+                        Column(Modifier.padding(16.dp)) {
+                            androidx.compose.foundation.text.selection.SelectionContainer {
+                                Text(seed.content, maxLines = if (expanded) Int.MAX_VALUE else 3,
+                                    overflow = TextOverflow.Ellipsis)
+                            }
+                            TextButton(onClick = { expanded = !expanded }) {
+                                Text(stringResource(if (expanded) R.string.assistant_memory_seed_collapse else R.string.assistant_memory_seed_expand))
+                            }
                         }
                     }
                 }
             }
         }
 
-        Box(
+        Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 8.dp)
+                .padding(horizontal = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
-                text = stringResource(R.string.assistant_page_manage_memory_title),
+                text = stringResource(R.string.assistant_runtime_memory_count, memories.records.size),
                 style = MaterialTheme.typography.titleMedium,
                 modifier = Modifier
-                    .padding(bottom = 8.dp)
-                    .align(Alignment.CenterStart)
+                    .weight(1f)
             )
 
             IconButton(
@@ -292,17 +309,31 @@ internal fun AssistantMemoryContent(
                     memories.access?.let { memoryDialogState.open(MemoryRecord(it, 0, "")) }
                 },
                 enabled = memories.access != null,
-                modifier = Modifier.align(Alignment.CenterEnd)
             ) {
                 Icon(
                     imageVector = HugeIcons.Add01,
-                    contentDescription = null
+                    contentDescription = stringResource(R.string.assistant_runtime_memory_add)
                 )
             }
         }
 
+        memories.access?.address?.let { address ->
+            Text(stringResource(R.string.assistant_runtime_memory_scope,
+                stringResource(if (address.scope == ConfigurationScope.Personal) R.string.enterprise_personal else R.string.enterprise_space),
+                stringResource(if (address.owner == MemoryOwner.RealmShared) R.string.assistant_memory_owner_shared else R.string.assistant_memory_owner_private)),
+                style = MaterialTheme.typography.bodySmall)
+        }
+        if (onUpdateAssistant == null) {
+            Text(stringResource(if (assistant.enableMemory) R.string.assistant_runtime_memory_enabled
+                else R.string.assistant_runtime_memory_disabled), style = MaterialTheme.typography.bodySmall)
+        }
+        Text(stringResource(R.string.assistant_runtime_memory_notice), style = MaterialTheme.typography.bodySmall)
+
         if (memories.unavailableReason != null) {
             Text(stringResource(R.string.memory_access_unavailable), color = MaterialTheme.colorScheme.error)
+        }
+        if (memories.access != null && memories.records.isEmpty()) {
+            Text(stringResource(R.string.assistant_runtime_memory_empty), style = MaterialTheme.typography.bodySmall)
         }
         memories.records.fastForEach { memory ->
             key(memory.id) {
@@ -375,7 +406,7 @@ private fun MemoryItem(
             IconButton(
                 onClick = { onEditMemory(memory) }
             ) {
-                Icon(HugeIcons.PencilEdit01, null)
+                Icon(HugeIcons.PencilEdit01, stringResource(R.string.edit))
             }
             IconButton(
                 onClick = { onDeleteMemory(memory) }

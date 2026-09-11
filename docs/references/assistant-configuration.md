@@ -70,13 +70,16 @@
 | 字段 | 默认值 | 语义 |
 |------|--------|------|
 | `enableMemory` | `true` | 注入当前记忆并装配 `memory_tool` |
-| `useGlobalMemory` | `false` | 使用全局记忆；否则按助手 ID 隔离 |
+| `useGlobalMemory` | `false` | 使用当前空间主体内共享的运行记忆；否则按助手 ID 隔离 |
 | `enableRecentChatsReference` | `false` | 装配 `recent_chats` 和 `conversation_search` |
 
 关闭记忆不会删除已有数据。`useGlobalMemory` 只改变读取和写入的命名空间。
 
-当前 `memory_tool` 对 `MemoryEntity` 执行 create/edit/delete；`MemoryEntity` 只有自增 `id`、String `assistantId` 和 `content`，
-没有 realm、deployment、managedGeneration 或 provenance；它是可变本地记忆，不承担受管 Memory Seed。
+`memory_tool` 通过 `MemoryService` 与 `MemoryRepository` 修改当前 `MemoryAddress` 的运行记忆；
+`MemoryEntity` 保存完整 scope、assistantId 与内容，更新和删除必须核对 scope、owner 和行 ID。
+空间共享记忆仍按个人或完整企业主体隔离。企业下发 Seed 随配置 generation 切换，单独进入 Disclosure，
+不写入运行记忆表，不受 `enableMemory` 或运行记忆删除影响。Seed 更新保留用户已有运行记忆。
+企业空间和助手目录可直接查看企业公开定义及两类记忆；公开定义与 Seed 只读，运行记忆沿原选择授权编辑。
 
 ### 工具与扩展
 

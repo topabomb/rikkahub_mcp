@@ -40,6 +40,7 @@ internal fun PromptSettingsPage(settings: Settings, vm: SettingVM, contentPaddin
         contentPadding = contentPadding + PaddingValues(horizontal = 16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
+        item { Text(stringResource(R.string.configuration_shared_content_notice), style = MaterialTheme.typography.bodySmall) }
         item {
             PromptSettingItem(
                 title = stringResource(R.string.setting_model_page_prompt_title),

@@ -41,6 +41,14 @@ internal class ConfigurationQueryService(
             configuration.catalog.values.filter { it.key.category == ConfigurationCategory.ASSISTANT }) },
     )
 
+    fun observeEnterpriseExperience(selection: RealmSelection): Flow<EnterpriseExperienceReadState> = observeSelected(
+        { EnterpriseExperienceReadState.Unavailable },
+        { configuration, current ->
+            configuration.takeIf { current == selection }?.enterpriseExperience(current)
+                ?.let { EnterpriseExperienceReadState.Available(it) } ?: EnterpriseExperienceReadState.Unavailable
+        },
+    )
+
     fun observeSpeechCatalog(): Flow<SpeechCatalogUiModel?> = observeSelected(
         { null },
         { configuration, selection -> SpeechCatalogUiModel(selection,

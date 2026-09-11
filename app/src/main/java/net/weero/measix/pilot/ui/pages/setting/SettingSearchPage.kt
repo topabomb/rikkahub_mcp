@@ -103,8 +103,8 @@ fun SettingSearchPage(vm: SettingVM = koinViewModel()) {
         containerColor = CustomColors.topBarColors.containerColor
     ) {
         val reorderableState = rememberReorderableLazyListState(lazyListState) { from, to ->
-            val fromIndex = from.index
-            val toIndex = to.index
+            val fromIndex = settings.searchServices.indexOfFirst { it.id.toString() == from.key }
+            val toIndex = settings.searchServices.indexOfFirst { it.id.toString() == to.key }
 
             if (fromIndex >= 0 && toIndex >= 0 && fromIndex < settings.searchServices.size && toIndex < settings.searchServices.size) {
                 val fromId = settings.searchServices[fromIndex].id
@@ -134,6 +134,7 @@ fun SettingSearchPage(vm: SettingVM = koinViewModel()) {
             verticalArrangement = Arrangement.spacedBy(12.dp),
             state = lazyListState
         ) {
+            item { Text(stringResource(R.string.configuration_shared_content_notice), style = MaterialTheme.typography.bodySmall) }
             items(settings.searchServices, key = { it.id.toString() }) { service ->
                 ReorderableItem(
                     state = reorderableState,

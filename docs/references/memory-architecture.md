@@ -26,4 +26,6 @@ Master 的 START 使用会话持久 scope 捕获 RealmAccess；Child 继承父�
 
 工具卡只提交原会话 ID 与 ToolCallLocator。MemoryService 核对持久 Assistant message 中的成功 memory_tool create/edit 结果，再定位对应域记录；点击删除时再次核实原结果未变。独立消息预览没有会话身份时不提供删除入口；工具卡来源改变时旧删除对象不再显示。
 
-当前事实不代表其他会话查询、文件、备份和全部企业执行路径已经隔离。完整交付范围见 [本期实施方案](../dev/android-enterprise-integration-plan.md)。
+企业助手目录使用 `MemoryService.observe(RealmSelection, assistantId)` 绑定打开页面时的空间选择，切域再返回也不能恢复旧编辑授权。
+`EnterpriseExperienceUiModel` 单独投影公开 Seed，更新 Seed 不回写运行记忆；目录显示只读启用状态及实际助手专用/空间共享地址。
+共享助手定义页面的默认设置与当前空间的运行记忆分别标明范围。完整交付与真实平台限制见 [本期实施方案](../dev/android-enterprise-integration-plan.md)。

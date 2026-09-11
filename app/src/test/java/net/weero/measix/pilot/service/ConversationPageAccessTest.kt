@@ -49,6 +49,36 @@ import kotlin.uuid.Uuid
 class ConversationPageAccessTest {
     @get:Rule val temporary = TemporaryFolder()
 
+    @Test fun `starter opens a distinct unpersisted draft and rejects stale generation and selection`() = runTest {
+        val packet = exampleEnterprisePackage()
+        val sessions = sessions()
+        sessions.enrollFixture(packet)
+        val selection = requireNotNull(sessions.observeSelectedRealmSelection().first())
+        val base = net.weero.measix.pilot.data.configuration.ConfigurationResolver.resolve(
+            net.weero.measix.pilot.data.datastore.UserSettingsDocument.empty(), packet.identity.scope,
+            net.weero.measix.pilot.data.configuration.appliedConfiguration(packet))
+        val settings = mockk<SettingsStore>()
+        coEvery { settings.withResolvedConfiguration<StarterDraftRequest>(any(), any(), any()) } coAnswers {
+            thirdArg<suspend (net.weero.measix.pilot.data.configuration.ResolvedConfiguration) -> StarterDraftRequest>().invoke(base)
+        }
+        val repository = mockk<ConversationRepository>()
+        val coordinator = mockk<ConversationCommandCoordinator>()
+        val application = application(repository, coordinator, sessions, settings)
+        val starter = base.enterpriseExperience(selection)!!.starters.first { it.target.reference.id == "str_writing" }
+        val first = application.newStarterDraftRequest(starter.target)
+        val second = application.newStarterDraftRequest(starter.target)
+        assertEquals(starter.prompt, first.text)
+        assertEquals(ConfigurationReference.Enterprise(packet.identity.authority, "asd_writer"), first.request.assistantId)
+        assertEquals(selection.access, first.request.access)
+        assertNotEquals(first.request.id, second.request.id)
+        assertFails<IllegalStateException> { application.newStarterDraftRequest(starter.target.copy(generation = starter.target.generation + 1)) }
+        assertFails<IllegalStateException> { application.newStarterDraftRequest(starter.target.copy(reference = starter.target.reference.copy(id = "str_missing"))) }
+        sessions.selectPersonalFixture()
+        sessions.selectEnterpriseFixture()
+        assertFails<EnterpriseConfigurationException> { application.newStarterDraftRequest(starter.target) }
+        io.mockk.confirmVerified(repository, coordinator)
+    }
+
     @Test fun `existing missing and foreign headers never load a tree or create a draft`() = runTest {
         val appScope = AppScope(StandardTestDispatcher(testScheduler))
         val repository = mockk<ConversationRepository>()

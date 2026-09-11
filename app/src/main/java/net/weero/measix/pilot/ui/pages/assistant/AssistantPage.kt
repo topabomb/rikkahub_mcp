@@ -85,6 +85,13 @@ import net.weero.measix.pilot.ui.hooks.useEditState
 import net.weero.measix.pilot.ui.modifier.onClick
 import net.weero.measix.pilot.ui.theme.CustomColors
 import org.koin.androidx.compose.koinViewModel
+import org.koin.compose.koinInject
+import net.weero.measix.pilot.utils.base64Encode
+import net.weero.measix.pilot.service.ConfigurationQueryService
+import net.weero.measix.pilot.data.enterprise.RealmAccess
+import net.weero.measix.pilot.data.enterprise.RealmSelection
+import net.weero.measix.pilot.ui.pages.enterprise.EnterpriseExperienceDialog
+import net.weero.measix.pilot.ui.pages.enterprise.EnterpriseExperienceMode
 import sh.calvin.reorderable.ReorderableItem
 import sh.calvin.reorderable.rememberReorderableLazyListState
 import androidx.compose.foundation.lazy.items as lazyItems
@@ -118,6 +125,17 @@ fun AssistantPage(vm: AssistantVM = koinViewModel()) {
         vm.addAssistant(it)
     }
     val navController = LocalNavController.current
+    val queries: ConfigurationQueryService = koinInject()
+    val catalog by remember(queries) { queries.observeAssistantCatalog() }.collectAsStateWithLifecycle(null)
+    var enterpriseSelection by remember { mutableStateOf<RealmSelection?>(null) }
+    LaunchedEffect(catalog?.selection) {
+        if (enterpriseSelection != catalog?.selection) enterpriseSelection = null
+    }
+    enterpriseSelection?.let { original ->
+        EnterpriseExperienceDialog(original, EnterpriseExperienceMode.ASSISTANTS,
+            onOpenDraft = { request -> navController.navigate(Screen.Chat(request.request, text = request.text.base64Encode())) },
+            onDismiss = { enterpriseSelection = null })
+    }
     val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
 
     // 搜索关键词状态
@@ -201,6 +219,11 @@ fun AssistantPage(vm: AssistantVM = koinViewModel()) {
         ) {
             Text(stringResource(R.string.configuration_user_definition_shared_notice),
                 style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(horizontal = 16.dp))
+            if (catalog?.selection?.access is RealmAccess.Enterprise) {
+                TextButton(onClick = { enterpriseSelection = catalog?.selection }, modifier = Modifier.padding(horizontal = 8.dp)) {
+                    Text(stringResource(R.string.enterprise_assistants))
+                }
+            }
             val lazyListState = rememberLazyListState()
             val isFiltering = selectedTagIds.isNotEmpty() || searchQuery.isNotBlank()
             val reorderableState = rememberReorderableLazyListState(lazyListState) { from, to ->

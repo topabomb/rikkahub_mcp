@@ -17,6 +17,21 @@ internal suspend fun EnterpriseSessionController.enrollFixture(packet: Enterpris
     enrollLocal(packet.identity, redeem = { packet.identity }, configuration = { packet })
 
 class EnterprisePackageTest {
+    @Test fun `starter optional fields default explicitly and survive package storage`() {
+        val packet = exampleEnterprisePackage()
+        val minimal = EnterprisePackageCodec.json.decodeFromString<EnterpriseStarter>(
+            """{"id":"str_old","assistantId":"asd_main","title":"Start","prompt":"Review this"}""")
+        assertTrue(minimal.enabled)
+        assertEquals(0, minimal.sortOrder)
+        assertNull(minimal.description)
+        val customized = minimal.copy(description = "Review before sending", sortOrder = -2, enabled = false)
+        val updated = packet.copy(configuration = packet.configuration.copy(starters = listOf(minimal, customized.copy(id = "str_custom"))))
+        assertEquals(updated, EnterprisePackageCodec.decode(EnterprisePackageCodec.encode(updated)))
+        assertThrows(EnterpriseConfigurationException::class.java) {
+            EnterprisePackageCodec.validate(packet.copy(configuration = packet.configuration.copy(starters = listOf(minimal.copy(prompt = " ")))))
+        }
+    }
+
     @Test fun `installed identity fits enrollment and Portal context including namespace prefix`() {
         val base = exampleEnterprisePackage().identity
         val valid = base.copy(authority = me.rerere.common.configuration.EnterpriseAuthority("local:" + "a".repeat(122), "d".repeat(128)),

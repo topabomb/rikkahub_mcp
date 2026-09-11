@@ -116,15 +116,19 @@ fun PromptPage(vm: PromptVM = koinViewModel()) {
         modifier = Modifier.nestedScroll(scrollBehavior.nestedScrollConnection),
         containerColor = CustomColors.topBarColors.containerColor,
     ) { innerPadding ->
-        ModeInjectionTab(
-            modeInjections = settings.modeInjections,
-            onUpdate = { transform ->
-                vm.updateSettings { current ->
-                    current.copy(modeInjections = transform(current.modeInjections))
-                }
-            },
-            modifier = Modifier.padding(innerPadding)
-        )
+        Column(Modifier.padding(innerPadding)) {
+            Text(stringResource(R.string.configuration_shared_content_notice), style = MaterialTheme.typography.bodySmall,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
+            ModeInjectionTab(
+                modeInjections = settings.modeInjections,
+                onUpdate = { transform ->
+                    vm.updateSettings { current ->
+                        current.copy(modeInjections = transform(current.modeInjections))
+                    }
+                },
+                modifier = Modifier.weight(1f)
+            )
+        }
     }
 }
 

@@ -62,8 +62,8 @@
   <string name="assistant_page_delete_dialog_text">Вы уверены, что хотите удалить этого ассистента? Это действие нельзя отменить.</string>
   <string name="assistant_page_delete_header">Удалить заголовок</string>
   <string name="assistant_page_enter_image_url">Введите URL изображения</string>
-  <string name="assistant_page_global_memory">Глобальная память</string>
-  <string name="assistant_page_global_memory_desc">Использовать общую память вместо изолированной для ассистента. При включении все ассистенты используют одно и то же хранилище памяти</string>
+  <string name="assistant_page_global_memory">Общая память пространства</string>
+  <string name="assistant_page_global_memory_desc">Использовать память, общую для ассистентов в этом пространстве, вместо личной памяти ассистента. Личное пространство и пространства организаций остаются раздельными.</string>
   <string name="assistant_page_header_name">Имя заголовка</string>
   <string name="assistant_page_header_value">Значение заголовка</string>
   <string name="assistant_page_image_url">URL изображения</string>
@@ -104,7 +104,7 @@
   <string name="assistant_page_quick_message_title">Заголовок</string>
   <string name="assistant_page_quick_messages">Быстрые сообщения</string>
   <string name="assistant_page_recent_chats">Справка: недавние чаты</string>
-  <string name="assistant_page_recent_chats_desc">Когда включено, позволяет ассистенту искать релевантную информацию в предыдущих разговорах.</string>
+  <string name="assistant_page_recent_chats_desc">Разрешить ассистенту искать нужную информацию в прошлых диалогах текущего пространства.</string>
   <string name="assistant_page_regex_affecting_scopes">Области действия:</string>
   <string name="assistant_page_regex_desc">Задайте шаблоны регулярных выражений для преобразования сообщений перед отправкой/получением</string>
   <string name="assistant_page_regex_find_regex">Найти регулярное выражение</string>
@@ -1409,7 +1409,6 @@
   <string name="sub_assistant_global_tag">Глобально</string>
   <string name="assistant_picker_show_sub_assistants">Суб-ассистенты</string>
   <string name="assistant_page_no_chat_model_warning">Чат-модель не настроена; вызов не запустится</string>
-  <string name="assistant_page_global_memory_warning">Использует общую глобальную память при вызове</string>
   <!-- Sub-Assistant: Local Tools -->
   <string name="assistant_page_local_tools_assistant_collaboration">Сотрудничество ассистентов</string>
   <string name="assistant_page_local_tools_assistant_management_title">Управление ассистентами</string>
@@ -1601,7 +1600,7 @@
   <string name="enterprise_join_submit">Подключиться к организации</string>
   <string name="enterprise_example_code">Показать пример кода подключения</string>
   <string name="enterprise_example_code_notice">Этот код предназначен для примера источника, установленного на этом устройстве. Он имеет срок действия и используется один раз.</string>
-  <string name="enterprise_portal">Открыть корпоративный портал</string>
+  <string name="enterprise_portal">Рабочая панель организации</string>
   <string name="enterprise_switch_personal">Перейти в личное пространство</string>
   <string name="enterprise_switch_enterprise">Перейти в корпоративное пространство</string>
   <string name="enterprise_switch_notice">Смена пространства сохраняет вход в организацию. Чаты и данные остаются в исходном пространстве.</string>
@@ -1731,7 +1730,7 @@
   <string name="enterprise_clear_example">Очистить данные встроенного примера и выйти</string>
   <string name="enterprise_clear_example_requires_session">Сначала подключитесь к встроенному примеру. Другие импортированные организации здесь не очищаются.</string>
   <string name="enterprise_clear_example_confirm">Удалить чаты, память, управляемые файлы, новости и настройки пространства %1$s и выйти? Личные данные, пользовательские конфигурации, другие организации и общий Workspace сохранятся. Отменить удаление нельзя.</string>
-  <string name="enterprise_local_badge">Локальная имитация · %1$s</string>
+  <string name="enterprise_local_badge">%1$s · Локальная симуляция</string>
   <string name="configuration_user_definition_shared_notice">Здесь находятся ваши общие настройки. Изменения действуют во всех пространствах, где эти настройки разрешены. Их использование в корпоративном пространстве по-прежнему определяется политикой организации.</string>
   <string name="assistant_enterprise_memory_seed">Справочная память организации (только чтение)</string>
   <string name="assistant_enterprise_memory_seed_description">Предоставляется организацией и включается в контекст ассистента. Хранится отдельно от редактируемых записей ниже и не зависит от их отключения или удаления.</string>
@@ -1755,4 +1754,30 @@
   <string name="enterprise_sync_completed">Синхронизация завершена. Действующая версия указана ниже в состоянии организации.</string>
   <string name="enterprise_management_enter_space">Переключитесь в пространство организации для управления её правилами и новостями.</string>
   <string name="enterprise_import_version_rejected">Версия файла ниже установленной, либо та же версия содержит другие настройки. Укажите configuration.generation выше версии, показанной в разделе правил и моделей организации, и повторите импорт.</string>
+  <string name="assistant_memory_shared_defaults">Общие настройки по умолчанию</string>
+  <string name="assistant_memory_shared_defaults_notice">Эти переключатели меняют настройки ассистента по умолчанию для всех пространств. Память диалогов ниже относится к указанному пространству.</string>
+  <string name="assistant_memory_seed_count">Справочная память организации · %1$d</string>
+  <string name="assistant_memory_seed_empty">У этого ассистента нет справочной памяти организации.</string>
+  <string name="assistant_memory_seed_expand">Показать полностью</string>
+  <string name="assistant_memory_seed_collapse">Свернуть</string>
+  <string name="assistant_runtime_memory_count">Память диалогов · %1$d</string>
+  <string name="assistant_runtime_memory_add">Добавить запись</string>
+  <string name="assistant_runtime_memory_scope">%1$s · %2$s</string>
+  <string name="assistant_memory_owner_shared">Общая в этом пространстве</string>
+  <string name="assistant_memory_owner_private">Только для этого ассистента</string>
+  <string name="assistant_runtime_memory_notice">Эти записи можно добавлять, изменять и удалять. Отключение памяти сохраняет записи, а обновления настроек организации не перезаписывают их.</string>
+  <string name="assistant_runtime_memory_empty">Записей пока нет. Добавьте их здесь или попросите ассистента запомнить полезную информацию в разговоре.</string>
+  <string name="configuration_shared_content_notice">Это ваши общие настройки. Изменения действуют во всех пространствах, где они используются.</string>
+  <string name="configuration_speech_scope_notice">Сервис речи по умолчанию выбирается для этого пространства. Изменение ваших сервисов влияет на все использующие их пространства; сервисы организации доступны только для чтения.</string>
+  <string name="enterprise_start_conversation">Начать диалог</string>
+  <string name="enterprise_starters_description">Выберите тему. Перед отправкой сообщение можно изменить.</string>
+  <string name="enterprise_starters_empty">Нет доступных тем для начала диалога.</string>
+  <string name="enterprise_assistants">Ассистенты организации</string>
+  <string name="enterprise_assistants_empty">Нет доступных ассистентов организации.</string>
+  <string name="enterprise_assistant_configuration">Настройки организации</string>
+  <string name="enterprise_assistant_definition_description">Это определение управляется организацией. Настройки использования и память диалогов относятся к текущему пространству.</string>
+  <string name="enterprise_starter_preview">Предпросмотр сообщения</string>
+  <string name="enterprise_starter_open">Открыть черновик</string>
+  <string name="assistant_runtime_memory_enabled">Память диалогов для этого ассистента включена.</string>
+  <string name="assistant_runtime_memory_disabled">Память диалогов отключена. Записи можно редактировать, но они не используются в разговорах.</string>
 </resources>

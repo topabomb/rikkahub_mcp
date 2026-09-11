@@ -645,6 +645,12 @@ Android Manifest 关闭 `allowBackup`；`backup_rules.xml` 和 `data_extraction_
 
 ### 企业 Starter 预填
 
+`ResolvedConfiguration.availableStarters` 为工作台与聊天输入提供同一启用/助手准入过滤，按 `sortOrder`、ID 排序。
+本地 `EnterpriseStarter` 的 `description` 可省略，`sortOrder` 默认零，`enabled` 默认开启；公开入口不暴露运行连接。
+工作台的原生“开始对话”入口展示标题、助手、说明和提示词预览。`ConversationApplicationService.newStarterDraftRequest`
+在原 `RealmSelection` 与配置 generation 下复验定义，生成新 Draft 请求；导航保留原聊天项及未发送输入，预填后等待用户发送。
+这一路径不扩展 Portal Bridge，不改变默认助手，也不提前建库或执行工具。
+
 ConversationConfigurationUiModel 只投影当前企业助手绑定的 Starter ID、标题与 prompt；用户助手或其他企业助手的开场白不混入。聊天输入框的输入模板菜单分别展示企业开场白与用户 QuickMessage。点击 Starter 在原页面授权仍有效时把文本追加到现有草稿（有文字时以空行分隔），保留附件；不自动发送、不创建 QuickMessage、不改企业定义。实际发送仍走当前会话的模型与资源准入。
 
 ### 助手管理工具的域内授权

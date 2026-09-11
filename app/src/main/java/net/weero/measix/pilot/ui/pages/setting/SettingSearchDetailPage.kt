@@ -123,6 +123,7 @@ fun SettingSearchDetailPage(
             contentPadding = padding + PaddingValues(16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
+            item { Text(stringResource(R.string.configuration_shared_content_notice), style = MaterialTheme.typography.bodySmall) }
             item("config") {
                 Card(
                     colors = CardDefaults.cardColors(

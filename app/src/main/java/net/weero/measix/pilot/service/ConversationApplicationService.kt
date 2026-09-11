@@ -140,6 +140,22 @@ class ConversationApplicationService internal constructor(
         return sessions.withSelectedRealmSelection(selection) { createDraftRequest(selection, assistantId) }
     }
 
+    internal suspend fun newStarterDraftRequest(target: EnterpriseStarterTarget): StarterDraftRequest {
+        recoveryGate.awaitReady()
+        return sessions.withSelectedRealmSelection(target.selection) {
+            settingsStore.withResolvedConfiguration(target.selection.access.scope, sessions.state.value) { configuration ->
+                sessions.requirePublishedSelection(target.selection)
+                val identity = requireNotNull(configuration.enterpriseIdentity) { "enterprise_configuration_not_ready" }
+                check(configuration.enterpriseConfiguration?.generation == target.generation &&
+                    identity.authority == target.reference.authority) { "enterprise_configuration_changed" }
+                val starter = configuration.availableStarters().singleOrNull { it.id == target.reference.id }
+                    ?: error("enterprise_starter_unavailable")
+                val assistant = ConfigurationReference.Enterprise(identity.authority, starter.assistantId)
+                StarterDraftRequest(ConversationOpenRequest.NewDraft(Uuid.random(), target.selection.access, assistant), starter.prompt)
+            }
+        }
+    }
+
     private suspend fun createDraftRequest(selection: RealmSelection, assistantId: ConfigurationReference?) =
         settingsStore.withResolvedConfiguration(selection.access.scope, sessions.state.value) { configuration ->
             sessions.requirePublishedSelection(selection)

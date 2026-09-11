@@ -140,6 +140,7 @@ class ModelRequestTransportTest {
         for ((prompt, name, arguments) in listOf(
             Triple("演练搜索：Android 官方文档", "search_web", "{\"query\":\"Android 官方文档\"}"),
             Triple("演练技能：my-skill", "use_skill", "{\"name\":\"my-skill\"}"),
+            Triple("演练记忆：简短分点", "memory_tool", "{\"action\":\"create\",\"content\":\"简短分点\"}"),
             Triple("演练工作空间", "workspace_shell", "{\"command\":\"pwd\"}"))) {
             val user = ModelRequestMessage.user(prompt)
             val params = TextGenerationParams(Model(modelId = "example"), tools = listOf(FrozenToolDefinition(name, "", null, "")))

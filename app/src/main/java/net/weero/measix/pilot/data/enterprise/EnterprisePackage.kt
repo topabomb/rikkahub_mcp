@@ -159,7 +159,8 @@ internal object EnterprisePackageCodec {
                 }, "invalid_sub_assistant_reference")
         }
         config.starters.forEach {
-            check(assistants[it.assistantId]?.enabled == true && it.title.isNotBlank() && it.prompt.isNotBlank(), "invalid_enterprise_starter")
+            check(assistants[it.assistantId]?.let { assistant -> !it.enabled || assistant.enabled } == true &&
+                it.title.isNotBlank() && it.prompt.isNotBlank() && it.description?.isBlank() != true, "invalid_enterprise_starter")
         }
         val defaults = config.defaults
         defaults.assistantId?.let { check(assistants[it]?.enabled == true, "invalid_default_assistant") }

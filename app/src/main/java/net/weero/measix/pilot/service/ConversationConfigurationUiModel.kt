@@ -56,7 +56,7 @@ internal fun ResolvedConfiguration.conversationConfiguration(target: Conversatio
                 ?.map { ConfigurationReference.Enterprise(reference.authority, it) }?.toSet()
         }.orEmpty(),
         (target.assistantId as? ConfigurationReference.Enterprise)?.takeIf { assistant != null }?.let { reference ->
-            enterpriseConfiguration?.starters?.filter { it.assistantId == reference.id }?.map {
+            availableStarters(reference).map {
                 ConversationStarterUiModel(ConfigurationReference.Enterprise(reference.authority, it.id), it.title, it.prompt)
             }
         }.orEmpty(),

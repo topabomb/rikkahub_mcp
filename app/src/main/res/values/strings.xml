@@ -62,8 +62,8 @@
   <string name="assistant_page_delete_dialog_text">Are you sure you want to delete this assistant? This action cannot be undone.</string>
   <string name="assistant_page_delete_header">Delete Header</string>
   <string name="assistant_page_enter_image_url">Enter Image URL</string>
-  <string name="assistant_page_global_memory">Global Memory</string>
-  <string name="assistant_page_global_memory_desc">Use global shared memory instead of assistant-isolated memory. When enabled, all assistants share the same memory storage</string>
+  <string name="assistant_page_global_memory">Space-shared memory</string>
+  <string name="assistant_page_global_memory_desc">Use memory shared by assistants in this space instead of memory private to this assistant. Personal and enterprise spaces remain separate.</string>
   <string name="assistant_page_header_name">Header Name</string>
   <string name="assistant_page_header_value">Header Value</string>
   <string name="assistant_page_image_url">Image URL</string>
@@ -104,7 +104,7 @@
   <string name="assistant_page_quick_message_title">Title</string>
   <string name="assistant_page_quick_messages">Quick Messages</string>
   <string name="assistant_page_recent_chats">Reference Recent Chats</string>
-  <string name="assistant_page_recent_chats_desc">When enabled, allows the assistant to search past conversations for relevant information</string>
+  <string name="assistant_page_recent_chats_desc">Allow the assistant to search past conversations in the current space for relevant information.</string>
   <string name="assistant_page_regex_affecting_scopes">Affecting Scopes:</string>
   <string name="assistant_page_regex_desc">Define regex patterns to transform messages before sending/receiving</string>
   <string name="assistant_page_regex_find_regex">Find Regex</string>
@@ -1418,7 +1418,6 @@
   <string name="sub_assistant_global_tag">Global</string>
   <string name="assistant_picker_show_sub_assistants">Sub-assistants</string>
   <string name="assistant_page_no_chat_model_warning">No chat model configured; calls will not start</string>
-  <string name="assistant_page_global_memory_warning">Uses shared global memory when called</string>
   <!-- Sub-Assistant: Local Tools -->
   <string name="assistant_page_local_tools_assistant_collaboration">Assistant Collaboration</string>
   <string name="assistant_page_local_tools_assistant_management_title">Manage Assistants</string>
@@ -1602,7 +1601,7 @@
   <string name="enterprise_join_submit">Join enterprise</string>
   <string name="enterprise_example_code">Show example enrollment code</string>
   <string name="enterprise_example_code_notice">This code is for the example source installed on this device. It expires and can be used once.</string>
-  <string name="enterprise_portal">Open enterprise portal</string>
+  <string name="enterprise_portal">Enterprise workbench</string>
   <string name="enterprise_switch_personal">Switch to personal space</string>
   <string name="enterprise_switch_enterprise">Switch to enterprise space</string>
   <string name="enterprise_switch_notice">Switching spaces keeps your enterprise sign-in. Chats and data remain in their original space.</string>
@@ -1732,7 +1731,7 @@
   <string name="enterprise_clear_example">Clear built-in example data and sign out</string>
   <string name="enterprise_clear_example_requires_session">Join the built-in example before clearing its data. Imported enterprise sources cannot be cleared here.</string>
   <string name="enterprise_clear_example_confirm">Delete the chats, memories, managed files, updates and space preferences of %1$s, then sign out? Personal data, user configurations, other organizations and the shared Workspace remain. This cannot be undone.</string>
-  <string name="enterprise_local_badge">Local mock · %1$s</string>
+  <string name="enterprise_local_badge">%1$s · Local simulation</string>
   <string name="configuration_user_definition_shared_notice">These are your shared configurations. Changes affect every space that allows them; enterprise policies still control their use.</string>
   <string name="assistant_enterprise_memory_seed">Enterprise reference memory (read-only)</string>
   <string name="assistant_enterprise_memory_seed_description">Provided by your enterprise and included in assistant context. It is separate from the editable memories below and is not affected by their switch or deletion.</string>
@@ -1756,4 +1755,30 @@
   <string name="enterprise_sync_completed">Configuration sync completed. The active version is shown below.</string>
   <string name="enterprise_management_enter_space">Switch to the enterprise space to manage its rules and updates.</string>
   <string name="enterprise_import_version_rejected">The file version is older than the installed configuration, or has different settings at the same version. Set configuration.generation higher than the version shown in Enterprise rules and models, then import again.</string>
+  <string name="assistant_memory_shared_defaults">Shared default settings</string>
+  <string name="assistant_memory_shared_defaults_notice">These switches change the assistant defaults across spaces. The runtime memories below belong to the indicated space.</string>
+  <string name="assistant_memory_seed_count">Enterprise reference memory · %1$d</string>
+  <string name="assistant_memory_seed_empty">This assistant has no enterprise reference memory.</string>
+  <string name="assistant_memory_seed_expand">Read full text</string>
+  <string name="assistant_memory_seed_collapse">Collapse</string>
+  <string name="assistant_runtime_memory_count">Runtime memory · %1$d</string>
+  <string name="assistant_runtime_memory_add">Add a memory</string>
+  <string name="assistant_runtime_memory_scope">%1$s · %2$s</string>
+  <string name="assistant_memory_owner_shared">Shared within this space</string>
+  <string name="assistant_memory_owner_private">Only this assistant</string>
+  <string name="assistant_runtime_memory_notice">You can add, edit or delete these memories. Turning memory off keeps existing records. Enterprise configuration updates do not overwrite them.</string>
+  <string name="assistant_runtime_memory_empty">No memories yet. Add one here or let the assistant record useful information during a conversation.</string>
+  <string name="configuration_shared_content_notice">These are your shared settings. Changes apply to every space that uses them.</string>
+  <string name="configuration_speech_scope_notice">The default voice service is selected for this space. Editing your services affects every space that uses them; enterprise services are read-only.</string>
+  <string name="enterprise_start_conversation">Start a conversation</string>
+  <string name="enterprise_starters_description">Choose a starting point. You can edit the message before sending.</string>
+  <string name="enterprise_starters_empty">No conversation starters are available.</string>
+  <string name="enterprise_assistants">Enterprise assistants</string>
+  <string name="enterprise_assistants_empty">No enterprise assistants are available.</string>
+  <string name="enterprise_assistant_configuration">Enterprise configuration</string>
+  <string name="enterprise_assistant_definition_description">Your enterprise manages this definition. Usage preferences and runtime memory belong to the current space.</string>
+  <string name="enterprise_starter_preview">Message preview</string>
+  <string name="enterprise_starter_open">Open draft</string>
+  <string name="assistant_runtime_memory_enabled">Runtime memory is enabled for this assistant.</string>
+  <string name="assistant_runtime_memory_disabled">Runtime memory is off. Records remain available to manage, but are not used in conversations.</string>
 </resources>

@@ -36,6 +36,7 @@ import net.weero.measix.pilot.R
 import net.weero.measix.pilot.Screen
 import net.weero.measix.pilot.data.enterprise.EnterpriseSessionPhase
 import net.weero.measix.pilot.data.enterprise.RealmAccess
+import net.weero.measix.pilot.data.enterprise.RealmSelection
 import net.weero.measix.pilot.service.EnterpriseOverview
 import net.weero.measix.pilot.service.LocalEnterpriseScenario
 import net.weero.measix.pilot.service.portal.PortalWebView
@@ -54,6 +55,13 @@ import net.weero.measix.pilot.ui.context.LocalNavController
 import org.koin.androidx.compose.koinViewModel
 import java.text.DateFormat
 import java.util.Date
+import net.weero.measix.pilot.utils.base64Encode
+
+private data class ExperiencePresentation(
+    val selection: RealmSelection,
+    val mode: EnterpriseExperienceMode,
+    val portal: PortalPresentation? = null,
+)
 
 @Composable
 internal fun EnterpriseSpaceButton(modifier: Modifier = Modifier, vm: EnterpriseVM = koinViewModel()) {
@@ -94,6 +102,12 @@ internal fun EnterprisePage(vm: EnterpriseVM = koinViewModel()) {
     val nav = LocalNavController.current
     var paste by remember { mutableStateOf(false) }
     var localManagement by remember { mutableStateOf(false) }
+    var experience by remember { mutableStateOf<ExperiencePresentation?>(null) }
+    LaunchedEffect(state?.selection, portal) {
+        experience?.let {
+            if (it.selection != state?.selection || (it.portal != null && it.portal != portal)) experience = null
+        }
+    }
     var scenarios by remember { mutableStateOf<EnterpriseOverview?>(null) }
     // Enrollment text contains a credential and is deliberately not saved in Activity state.
     var enrollment by remember { mutableStateOf("") }
@@ -130,7 +144,12 @@ internal fun EnterprisePage(vm: EnterpriseVM = koinViewModel()) {
     }) { padding ->
         val approved = portal
         if (approved != null) {
-            key(approved.id) { EnterprisePortal(approved, vm, Modifier.fillMaxSize().padding(padding)) }
+            Column(Modifier.fillMaxSize().padding(padding)) {
+                TextButton(onClick = {
+                    experience = ExperiencePresentation(approved.selection, EnterpriseExperienceMode.STARTERS, approved)
+                }, modifier = Modifier.fillMaxWidth()) { Text(stringResource(R.string.enterprise_start_conversation)) }
+                key(approved.id) { EnterprisePortal(approved, vm, Modifier.weight(1f).fillMaxWidth()) }
+            }
         } else {
             Column(Modifier.fillMaxSize().padding(padding).verticalScroll(rememberScrollState()).padding(16.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
@@ -145,6 +164,9 @@ internal fun EnterprisePage(vm: EnterpriseVM = koinViewModel()) {
                         }
                         if (inEnterprise && ready) {
                             OutlinedButton(onClick = vm::showPortal, enabled = !busy) { Text(stringResource(R.string.enterprise_portal)) }
+                            TextButton(onClick = {
+                                state?.selection?.let { experience = ExperiencePresentation(it, EnterpriseExperienceMode.ASSISTANTS) }
+                            }, enabled = !busy) { Text(stringResource(R.string.enterprise_assistants)) }
                         }
                     }
                     if (state?.access != null && (inEnterprise || ready)) {
@@ -304,6 +326,18 @@ internal fun EnterprisePage(vm: EnterpriseVM = koinViewModel()) {
                     }
                 }
             } }, confirmButton = { TextButton(onClick = vm::dismissSources) { Text(stringResource(R.string.cancel)) } })
+    }
+    experience?.let { original ->
+        key(original) {
+            EnterpriseExperienceDialog(original.selection, original.mode,
+                onOpenDraft = { request ->
+                    original.portal?.let(vm::dismissPortal)
+                    experience = null
+                    nav.navigate(Screen.Chat(request.request, text = request.text.base64Encode())) {
+                        popUpTo(Screen.Enterprise) { inclusive = true }
+                    }
+                }, onDismiss = { experience = null })
+        }
     }
     if (paste) AlertDialog(onDismissRequest = { paste = false; enrollment = "" },
         title = { Text(stringResource(R.string.enterprise_join_paste)) },

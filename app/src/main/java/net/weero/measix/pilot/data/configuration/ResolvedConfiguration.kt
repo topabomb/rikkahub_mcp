@@ -64,6 +64,15 @@ internal data class ResolvedConfiguration(
     val storedSelections: ResourceSelections,
     val inheritedSubAssistantIds: Map<ConfigurationReference, Set<ConfigurationReference>> = emptyMap(),
 ) {
+    fun availableStarters(assistantId: ConfigurationReference? = null): List<net.weero.measix.pilot.data.enterprise.EnterpriseStarter> {
+        val identity = enterpriseIdentity ?: return emptyList()
+        return enterpriseConfiguration?.starters.orEmpty().filter { starter ->
+            val target = identity.reference(starter.assistantId)
+            starter.enabled && (assistantId == null || assistantId == target) &&
+                selection(ConfigurationCategory.ASSISTANT, target).isAvailable
+        }.sortedWith(compareBy({ it.sortOrder }, { it.id }))
+    }
+
     fun access(category: ConfigurationCategory, reference: ConfigurationReference): ConfigurationAccess =
         catalog[ConfigurationKey(category, reference)]?.access ?: ConfigurationAccess(
             canEditDefinition = reference is ConfigurationReference.User,
@@ -225,7 +234,7 @@ internal object ConfigurationResolver {
                 )
             }
             enterprise.memorySeeds.forEach { add(ConfigurationCategory.MEMORY_SEED, identity.reference(it.id), it.id) }
-            enterprise.starters.forEach { add(ConfigurationCategory.STARTER, identity.reference(it.id), it.title) }
+            enterprise.starters.forEach { add(ConfigurationCategory.STARTER, identity.reference(it.id), it.title, it.enabled) }
             enterprise.assistants.forEach { definition ->
                 val id = identity.reference(definition.id)
                 add(ConfigurationCategory.ASSISTANT, id, definition.name, definition.enabled)

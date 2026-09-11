@@ -175,6 +175,9 @@ class MemoryService internal constructor(
     fun observe(realm: RealmAccess, assistantId: ConfigurationReference, enabledOnly: Boolean = false): Flow<MemoryView> =
         observe(realm, assistantId, enabledOnly, null) {}
 
+    internal fun observe(selection: RealmSelection, assistantId: ConfigurationReference): Flow<MemoryView> =
+        observe(selection.access, assistantId, false, selection) {}
+
     private fun observe(realm: RealmAccess, assistantId: ConfigurationReference, enabledOnly: Boolean,
         page: RealmSelection?, requireView: () -> Unit): Flow<MemoryView> = flow {
         recovery.awaitReady()

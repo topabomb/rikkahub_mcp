@@ -50,6 +50,38 @@ import org.robolectric.annotation.Config
 class MemoryServiceTest {
     @get:Rule val temporary = TemporaryFolder()
 
+    @Test fun `enterprise directory shows runtime rows separately from seeds and rejects selection round trip`() = kotlinx.coroutines.runBlocking {
+        environment { env ->
+            val packet = exampleEnterprisePackage()
+            env.sessions.enrollFixture(packet)
+            val selection = requireNotNull(env.sessions.observeSelectedRealmSelection().first())
+            val id = ConfigurationReference.Enterprise(packet.identity.authority, "asd_writer")
+            val address = MemoryAddress(packet.identity.scope, MemoryOwner.Assistant(id))
+            env.rows(address).value = listOf(AssistantMemory(7, "my writing preference"))
+            val projection = (env.configurations.observeEnterpriseExperience(selection).first() as EnterpriseExperienceReadState.Available).value
+            val assistant = projection.assistants.single { it.assistant.id == id }
+            assertEquals(listOf("seed_writing"), assistant.memorySeeds.map { it.id })
+            val originalView = env.memory.observe(selection, id).first()
+            assertNull(originalView.unavailableReason)
+            val original = originalView.records.single()
+            assertEquals("my writing preference", original.content)
+            assertEquals(address, original.access.address)
+            env.sessions.synchronize(selection.access as RealmAccess.Enterprise, packet.copy(configuration = packet.configuration.copy(
+                generation = packet.configuration.generation + 1,
+                memorySeeds = packet.configuration.memorySeeds.map { if (it.id == "seed_writing") it.copy(content = "Updated enterprise guidance") else it },
+            )))
+            val updated = (env.configurations.observeEnterpriseExperience(selection).first() as EnterpriseExperienceReadState.Available).value
+            assertEquals("Updated enterprise guidance", updated.assistants.single { it.assistant.id == id }.memorySeeds.single().content)
+            assertEquals("my writing preference", env.memory.observe(selection, id).first().records.single().content)
+            env.sessions.selectPersonalFixture()
+            assertNotNull(env.memory.observe(selection, id).first().unavailableReason)
+            env.sessions.selectEnterpriseFixture()
+            expectRejected { env.memory.update(original.copy(content = "stale edit")) }
+            assertTrue(env.memory.observe(selection, id).first().records.isEmpty())
+            coVerify(exactly = 0) { env.repository.update(any(), any(), any(), any()) }
+        }
+    }
+
     @Test
     fun `open editor retains its owner while the live page follows global mode changes`() = runTest {
         environment { env ->

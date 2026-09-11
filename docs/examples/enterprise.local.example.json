@@ -101,12 +101,25 @@
           "seed_company"
         ],
         "allowAsSubAssistant": true
+      },
+      {
+        "id": "asd_writer",
+        "name": "企业写作助手",
+        "description": "整理工作进展与沟通文案，体验独立助手的记忆。",
+        "modelId": "mdl_chat",
+        "systemPrompt": "帮助用户起草简洁清楚的工作文案。缺少事实时保留待填写项，不编造进展。当前运行的是本地模拟模型。",
+        "mcpServerIds": [],
+        "memorySeedIds": ["seed_writing"]
       }
     ],
     "memorySeeds": [
       {
         "id": "seed_company",
         "content": "这是完全运行在本机的示例企业，所提供的示例业务数据不代表真实企业。"
+      },
+      {
+        "id": "seed_writing",
+        "content": "企业写作规范：先说明结论，再列关键事实；待确认的信息必须明确标注。"
       }
     ],
     "starters": [
@@ -114,13 +127,33 @@
         "id": "str_tools",
         "assistantId": "asd_main",
         "title": "体验企业工具",
-        "prompt": "请调用企业示例工具查询企业信息，并整理结论。"
+        "prompt": "请调用企业示例工具查询企业信息，并整理结论。",
+        "description": "调用已配置的企业工具，查询本地示例资料。",
+        "sortOrder": 10
       },
       {
         "id": "str_delegate",
         "assistantId": "asd_main",
         "title": "体验子助手",
-        "prompt": "请委派企业资料助手，整理示例企业信息。"
+        "prompt": "请委派企业资料助手，整理示例企业信息。",
+        "description": "体验资料整理的委派流程。发送前请在助手能力中启用子助手调用。",
+        "sortOrder": 40
+      },
+      {
+        "id": "str_writing",
+        "assistantId": "asd_writer",
+        "title": "起草工作周报",
+        "prompt": "请帮我整理一份工作周报。\n本周完成：[填写工作成果]\n遇到的问题：[填写问题]\n下周计划：[填写计划]",
+        "description": "切换到写作助手，填写自己的工作内容。本地模型仅演示对话流程。",
+        "sortOrder": 20
+      },
+      {
+        "id": "str_memory",
+        "assistantId": "asd_writer",
+        "title": "记住我的表达偏好",
+        "prompt": "演练记忆：我的工作周报偏好简短分点，先说结果，再说下一步。",
+        "description": "发送后通过记忆工具保存偏好；可在企业助手的记忆页查看、修改或删除。不会修改企业下发的写作规范。",
+        "sortOrder": 30
       }
     ],
     "gateways": [

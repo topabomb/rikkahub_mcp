@@ -79,7 +79,7 @@ class LocalEnterpriseMcpServiceTest {
             suspend fun prepare(): TurnMcpCapabilitySnapshot {
                 val state = h.sessions.state.value as EnterpriseState.Available
                 val configuration = net.weero.measix.pilot.data.configuration.ConfigurationResolver.resolve(document, h.access.scope, state)
-                val assistant = configuration.assistants.values.single { it.id is me.rerere.common.configuration.ConfigurationReference.Enterprise && !it.allowAsSubAssistant }
+                val assistant = configuration.assistants.getValue(requireNotNull(configuration.enterpriseIdentity).reference("asd_main"))
                 val conversation = net.weero.measix.pilot.data.model.Conversation(assistantId = assistant.id, scope = h.access.scope, messageNodes = emptyList())
                 val runtime = net.weero.measix.pilot.service.runtime.ConversationRuntime(conversation.id, conversation.toSnapshot(), appScope, {})
                 val turnId = Uuid.random()

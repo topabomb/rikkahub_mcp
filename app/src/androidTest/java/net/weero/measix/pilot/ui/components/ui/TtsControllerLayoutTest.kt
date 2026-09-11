@@ -402,13 +402,17 @@ class TtsControllerLayoutTest {
 
     private fun assertAboveInput() {
         compose.waitForIdle()
-        val panel = compose.onNodeWithTag("input_panel").fetchSemanticsNode().boundsInRoot
-        val toolbar = compose.onNodeWithTag("tts_controller").fetchSemanticsNode().boundsInRoot
-        val density = compose.onNodeWithTag("tts_controller").fetchSemanticsNode().layoutInfo.density
-        val margin = with(density) { 8.dp.toPx() }
-        assertTrue("Toolbar must not cover the input panel", toolbar.bottom <= panel.top)
-        assertEquals(panel.top - margin, toolbar.bottom, 1f)
-        assertEquals(panel.left, toolbar.left, 1f)
+        val panelNode = compose.onNodeWithTag("input_panel").fetchSemanticsNode()
+        val toolbarNode = compose.onNodeWithTag("tts_controller").fetchSemanticsNode()
+        // System IME animation is outside Compose idling; compare both layouts in one UI frame.
+        compose.runOnIdle {
+            val panel = panelNode.boundsInRoot
+            val toolbar = toolbarNode.boundsInRoot
+            val margin = with(toolbarNode.layoutInfo.density) { 8.dp.toPx() }
+            assertTrue("Toolbar must not cover the input panel", toolbar.bottom <= panel.top)
+            assertEquals(panel.top - margin, toolbar.bottom, 1f)
+            assertEquals(panel.left, toolbar.left, 1f)
+        }
     }
 
     private fun assertAtBottom() {

@@ -92,7 +92,15 @@ internal data class EnterpriseAssistant(
 internal data class EnterpriseMemorySeed(val id: String, val content: String)
 
 @Serializable
-internal data class EnterpriseStarter(val id: String, val assistantId: String, val title: String, val prompt: String)
+internal data class EnterpriseStarter(
+    val id: String,
+    val assistantId: String,
+    val title: String,
+    val prompt: String,
+    val description: String? = null,
+    val sortOrder: Int = 0,
+    val enabled: Boolean = true,
+)
 
 @Serializable
 internal data class EnterpriseGateway(

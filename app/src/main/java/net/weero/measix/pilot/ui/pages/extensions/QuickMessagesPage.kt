@@ -94,6 +94,7 @@ fun QuickMessagesPage(vm: QuickMessagesVM = koinViewModel()) {
             contentPadding = innerPadding + PaddingValues(16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
+            item { Text(stringResource(R.string.configuration_shared_content_notice), style = MaterialTheme.typography.bodySmall) }
             if (settings.quickMessages.isEmpty()) {
                 item {
                     Column(

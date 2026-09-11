@@ -4,6 +4,8 @@
 > 本期交付正式企业域功能与本地模拟企业服务，Debug 和 Release 均有完整入口，不依赖真实企业后台或 Debug 开关。
 > 后续真实接入见 [真实企业服务接入规划](android-enterprise-production-integration-roadmap.md)。`docs/references/` 只描述已实现事实。
 
+2026-09-11 基线审查修复已提交 `abec8255a`，见 [复审记录](android-enterprise-review-2026-09-11.md)；后续工作台 Starter、企业助手公开配置与记忆入口、全设置页范围说明见 [补充实施记录](android-enterprise-experience-completion.md)。
+
 ## 1. 目标与范围
 
 升级保留原个人配置、凭据、历史、引用和文件。用户从正式空间入口接入示例企业，使用企业或获准的用户助手、模型、工具、语音、工作台；可以切回个人、退出、重启恢复、修改模拟企业策略和资源，实际观察所有页面及执行行为。

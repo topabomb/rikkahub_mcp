@@ -174,6 +174,10 @@ private fun exampleResponse(messages: List<ModelRequestMessage>, params: TextGen
     val exercise = when {
         prompt.startsWith("演练搜索：") -> "search_web" to buildJsonObject { put("query", prompt.substringAfter("：").trim()) }
         prompt.startsWith("演练技能：") -> "use_skill" to buildJsonObject { put("name", prompt.substringAfter("：").trim()) }
+        prompt.startsWith("演练记忆：") -> "memory_tool" to buildJsonObject {
+            put("action", "create")
+            put("content", prompt.substringAfter("：").trim())
+        }
         prompt.trim() == "演练工作空间" -> "workspace_shell" to buildJsonObject { put("command", "pwd") }
         else -> null
     }
