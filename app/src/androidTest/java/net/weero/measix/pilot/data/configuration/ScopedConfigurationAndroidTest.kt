@@ -59,6 +59,8 @@ class ScopedConfigurationAndroidTest {
                 val target = env.assistantTarget(assistant.id)
                 env.commands.changeAssistantPreference(target, AssistantPreferenceChange.Model(packet.identity.reference("mdl_chat")))
                 env.commands.changeAssistantPreference(target, AssistantPreferenceChange.Search(AssistantSearchMode.LOCAL))
+                val managedTarget = env.assistantTarget(packet.identity.reference(packet.configuration.assistants.first().id))
+                env.commands.changeAssistantPreference(managedTarget, AssistantPreferenceChange.Model(model.id))
                 env.commands.setGatewayEnabled(selection, packet.identity.reference("twg_example"), false)
             }
             withEnvironment(app, root) { env ->
@@ -68,6 +70,7 @@ class ScopedConfigurationAndroidTest {
                 assertEquals(packet.identity.reference("mdl_chat"), enterprise.assistantModel(assistant.id).reference)
                 assertFalse(BuiltInTools.Search in enterprise.availableChatModel(enterprise.assistants.getValue(assistant.id))!!.tools)
                 assertTrue(enterprise.assistants.getValue(assistant.id).enableWebSearch)
+                assertEquals(model.id, enterprise.assistantModel(packet.identity.reference(packet.configuration.assistants.first().id)).reference)
                 val document = env.document()
                 assertFalse(document.preferences.gateway(packet.identity.scope, packet.identity.reference("twg_example"))!!.enabled)
                 val gateway = enterprise.catalog.getValue(ConfigurationKey(ConfigurationCategory.GATEWAY, packet.identity.reference("twg_example")))
@@ -88,6 +91,8 @@ class ScopedConfigurationAndroidTest {
                 val bob = packet.copy(identity = packet.identity.copy(userId = "bob"))
                 env.sessions.enrollLocal(bob.identity, { bob.identity }, { bob })
                 assertNull(env.document().preferences.assistantUsage(bob.identity.scope, assistant.id))
+                assertEquals(bob.identity.reference(packet.configuration.assistants.first().modelId),
+                    env.queries.observeCurrent().first().assistantModel(bob.identity.reference(packet.configuration.assistants.first().id)).reference)
                 assertNull(env.document().preferences.gateway(bob.identity.scope, bob.identity.reference("twg_example")))
                 assertTrue(env.queries.observeCurrent().first().catalog.getValue(
                     ConfigurationKey(ConfigurationCategory.GATEWAY, bob.identity.reference("twg_example"))).gatewayEnablement!!.enabled)

@@ -39,6 +39,76 @@ class PortalWebViewAndroidTest {
     private val context get() = ApplicationProvider.getApplicationContext<Context>()
 
     @Test
+    fun failedOpeningDoesNotPublishAClosureForAnUndeliveredHost() = runBlocking<Unit> {
+        val root = File(context.noBackupFilesDir, "portal-webview-test-${Uuid.random()}").apply { check(mkdirs()) }
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+        val registry = PortalDocumentRegistry()
+        val closed = CompletableDeferred<PortalClosure>()
+        try {
+            val sessions = EnterpriseSessionController(EnterpriseAppliedStore(File(root, "client")))
+            val source = source(root, sessions)
+            source.enrollExample()
+            val selection = requireNotNull(sessions.observeSelectedRealmSelection().first())
+            scope.cancel()
+            var failure: Exception? = null
+            withContext(Dispatchers.Main) {
+                try {
+                    PortalWebView.open(compose.activity, selection, sessions,
+                        EnterpriseSynchronizationService(sessions, source, scope), scope, registry) { closed.complete(it) }
+                } catch (error: Exception) { failure = error }
+            }
+            assertTrue(failure is CancellationException)
+            assertFalse("Opening compensation must not dismiss the UI before its failure is reported", closed.isCompleted)
+            registry.awaitHostAvailable()
+        } finally {
+            scope.cancel()
+            check(root.deleteRecursively())
+        }
+    }
+
+    @Test
+    fun replacementDocumentsAndRebindingRevokeTheOriginalHost() = runBlocking<Unit> {
+        val root = File(context.noBackupFilesDir, "portal-webview-test-${Uuid.random()}").apply { check(mkdirs()) }
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+        val registry = PortalDocumentRegistry()
+        val hosts = mutableListOf<PortalWebView>()
+        var displayed by mutableStateOf<PortalWebView?>(null)
+        compose.setContent { displayed?.let { page -> key(page.document.id) { AndroidView(factory = { page.view }) } } }
+        try {
+            val sessions = EnterpriseSessionController(EnterpriseAppliedStore(File(root, "client")))
+            val source = source(root, sessions)
+            source.enrollExample()
+            val selection = requireNotNull(sessions.observeSelectedRealmSelection().first())
+            val sync = EnterpriseSynchronizationService(sessions, source, scope)
+            for (replacement in listOf("rebind", "about:blank", "same-origin-data")) {
+                val closed = CompletableDeferred<PortalClosure>()
+                val host = withContext(Dispatchers.Main) {
+                    PortalWebView.open(compose.activity, selection, sessions, sync, scope, registry) {
+                        closed.complete(it)
+                    }.also { hosts += it; displayed = it }
+                }
+                awaitPage(host) { it["text"]?.jsonPrimitive?.content?.contains("MEASIX") == true }
+                withContext(Dispatchers.Main) {
+                    when (replacement) {
+                        "rebind" -> host.view.evaluateJavascript(
+                            "MeasixPortalTransport.postMessage(JSON.stringify({instance:'${"b".repeat(32)}',payload:null}))", null)
+                        "about:blank" -> host.view.loadUrl("about:blank")
+                        else -> host.view.loadDataWithBaseURL(PortalProtocol.LOCAL_ENTRY,
+                            "<html><body>replacement</body></html>", "text/html", "UTF-8", null)
+                    }
+                }
+                assertEquals(PortalCloseReason.DOCUMENT_REPLACED, withTimeout(15_000) { closed.await() }.reason)
+                host.document.awaitClosed()
+                assertTrue(host.document.isClosed)
+                withContext(Dispatchers.Main) { assertNull(host.view.parent); displayed = null }
+            }
+        } finally {
+            closeHosts(hosts, scope)
+            check(root.deleteRecursively())
+        }
+    }
+
+    @Test
     fun deliveredPortalLoadsThroughNativeBootstrapAndReloadRevokesOnlyItsDocument() = runBlocking<Unit> {
         val root = File(context.noBackupFilesDir, "portal-webview-test-${Uuid.random()}").apply { check(mkdirs()) }
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
@@ -53,7 +123,8 @@ class PortalWebViewAndroidTest {
             val sync = EnterpriseSynchronizationService(sessions, source, scope)
             val closed = CompletableDeferred<Pair<PortalClosure, Boolean>>()
             host = withContext(Dispatchers.Main) {
-                assertTrue("Installed WebView lacks required v3 features: ${WebViewCompat.getCurrentWebViewPackage(context)}", PortalWebView.supported())
+                assertEquals("Installed WebView lacks required v3 features: ${WebViewCompat.getCurrentWebViewPackage(context)}",
+                    emptyList<String>(), PortalWebView.missingFeatures())
                 PortalWebView.open(compose.activity, selection, sessions, sync, scope, registry) {
                     closed.complete(it to (host?.view?.parent == null))
                 }.also { hosts += it }
@@ -74,6 +145,20 @@ class PortalWebViewAndroidTest {
             withContext(Dispatchers.Main) { original.view.evaluateJavascript("location.hash='within-document'", null) }
             awaitPage(original) { it["url"]?.jsonPrimitive?.content?.endsWith("#within-document") == true }
             assertFalse(original.document.isClosed)
+            withContext(Dispatchers.Main) {
+                original.view.evaluateJavascript("""
+                    window.portalTestResponses=[];
+                    MeasixHost.addEventListener('message',e=>portalTestResponses.push(JSON.parse(e.data)));
+                    MeasixHost.postMessage(JSON.stringify({bridgeVersion:3,documentId:MeasixPortalDocument.documentId,
+                      requestId:'fragment-status',method:'getStatus',params:{}}));
+                """.trimIndent(), null)
+            }
+            val afterFragment = awaitPage(original) { snapshot ->
+                snapshot["responses"]?.jsonArray?.any { it.jsonObject["requestId"]?.jsonPrimitive?.content == "fragment-status" } == true
+            }
+            assertTrue(afterFragment.getValue("responses").jsonArray.single {
+                it.jsonObject["requestId"]?.jsonPrimitive?.content == "fragment-status"
+            }.jsonObject["result"] is JsonObject)
             withContext(Dispatchers.Main) { original.view.reload() }
             val (closure, detachedBeforeNotification) = withTimeout(15_000) { closed.await() }
             assertEquals(PortalClosure(original.document.id, PortalCloseReason.DOCUMENT_REPLACED), closure)

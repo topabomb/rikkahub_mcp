@@ -17,7 +17,7 @@ import net.weero.measix.pilot.data.enterprise.*
 internal fun EnterpriseLocalFeedEditor(
     original: LocalEnterpriseFeedSnapshot,
     busy: Boolean,
-    error: Int?,
+    error: EnterpriseVM.Failure?,
     notice: Int?,
     onChange: (EnterpriseFeedCommand) -> Unit,
     onRefresh: () -> Unit,
@@ -38,7 +38,7 @@ internal fun EnterpriseLocalFeedEditor(
                 Text(stringResource(R.string.enterprise_feed_notice), style = MaterialTheme.typography.bodySmall)
                 Text(stringResource(R.string.enterprise_feed_revision, original.document.publicRevision,
                     original.document.enterpriseTimezone), style = MaterialTheme.typography.bodySmall)
-                error?.let { Text(stringResource(it), color = MaterialTheme.colorScheme.error) }
+                error?.let { Text(stringResource(it.resource, *it.arguments.toTypedArray()), color = MaterialTheme.colorScheme.error) }
                 notice?.let { Text(stringResource(it), style = MaterialTheme.typography.bodySmall) }
                 if (busy) LinearProgressIndicator(Modifier.fillMaxWidth())
                 if (editing) {

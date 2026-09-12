@@ -11,6 +11,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
+import me.rerere.ai.provider.ModelAbility
+import me.rerere.ai.provider.ModelType
 import net.weero.measix.pilot.R
 import net.weero.measix.pilot.data.configuration.GatewayEnablementPolicy
 import net.weero.measix.pilot.service.LocalEnterpriseConfigurationChange
@@ -21,7 +23,7 @@ import net.weero.measix.pilot.service.LocalEnterpriseConfigurationUiModel
 internal fun EnterpriseLocalConfigurationEditor(
     original: LocalEnterpriseConfigurationUiModel,
     busy: Boolean,
-    error: Int?,
+    error: EnterpriseVM.Failure?,
     notice: Int?,
     onChange: (LocalEnterpriseConfigurationChange) -> Unit,
     onRefresh: () -> Unit,
@@ -38,7 +40,7 @@ internal fun EnterpriseLocalConfigurationEditor(
         text = { Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text(stringResource(R.string.enterprise_local_configuration_notice))
             Text(stringResource(R.string.enterprise_source_generation, original.generation))
-            error?.let { Text(stringResource(it), color = MaterialTheme.colorScheme.error) }
+            error?.let { Text(stringResource(it.resource, *it.arguments.toTypedArray()), color = MaterialTheme.colorScheme.error) }
             notice?.let { Text(stringResource(it)) }
             if (busy) LinearProgressIndicator(Modifier.fillMaxWidth())
             Text(stringResource(R.string.enterprise_personal_resources), style = MaterialTheme.typography.titleMedium)
@@ -77,6 +79,11 @@ internal fun EnterpriseLocalConfigurationEditor(
                         Text(model.id, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         ConfigurationToggle(stringResource(R.string.enterprise_model_enabled), model.enabled, !busy) {
                             onChange(LocalEnterpriseConfigurationChange.ModelEnabled(model.id, it))
+                        }
+                        if (model.type == ModelType.CHAT) {
+                            ConfigurationToggle(stringResource(R.string.setting_provider_page_tool), ModelAbility.TOOL in model.abilities, !busy) {
+                                onChange(LocalEnterpriseConfigurationChange.ModelToolSupport(model.id, it))
+                            }
                         }
                         Row {
                             TextButton(enabled = !busy, onClick = { modelId = model.id; modelName = model.name; naming = true }) {

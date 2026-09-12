@@ -15,6 +15,42 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class EnterpriseVMTest {
+    @Test fun `portal failure retains actionable diagnostics and cannot overwrite a replacement request`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val store = ViewModelStore()
+        try {
+            val packet = exampleEnterprisePackage()
+            val access = RealmAccess.Enterprise(packet.identity.scope, "session")
+            val selection = RealmSelection(access, 1)
+            val overview = MutableStateFlow(EnterpriseOverview(selection, EnterpriseSessionPhase.READY,
+                "Example", "Member", access, true, 1, 1000, null, null, false))
+            val service = mockk<EnterpriseApplicationService>()
+            every { service.observe() } returns overview
+            val vm = EnterpriseVM(service)
+            store.put("enterprise", vm)
+            backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.error.collect {} }
+            runCurrent()
+            vm.showPortal()
+            val original = requireNotNull(vm.portal.value)
+            val unavailable = net.weero.measix.pilot.service.portal.PortalHostUnavailable("vendor.webview 130", listOf("REQUIRED_FEATURE"))
+            vm.portalFailed(original, unavailable)
+            runCurrent()
+            assertNull(vm.portal.value)
+            assertEquals(net.weero.measix.pilot.R.string.enterprise_portal_unavailable, vm.error.value?.resource)
+            assertEquals(listOf("vendor.webview 130", "REQUIRED_FEATURE"), vm.error.value?.arguments)
+            vm.showPortal()
+            val replacement = requireNotNull(vm.portal.value)
+            vm.portalFailed(original, unavailable)
+            runCurrent()
+            assertEquals(replacement, vm.portal.value)
+            assertNull(vm.error.value)
+        } finally {
+            store.clear()
+            runCurrent()
+            Dispatchers.resetMain()
+        }
+    }
+
     @Test fun `space changes hide prior errors and reject delayed sync failures`() = runTest {
         Dispatchers.setMain(StandardTestDispatcher(testScheduler))
         val store = ViewModelStore()

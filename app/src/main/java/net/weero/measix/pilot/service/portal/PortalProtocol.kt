@@ -32,12 +32,13 @@ internal object PortalProtocol {
     const val LOCAL_READ_VERSION = 2
     const val LOCAL_ORIGIN = "https://local.measix.invalid"
     const val LOCAL_ENTRY = "$LOCAL_ORIGIN/portal/"
+    const val MAX_REQUEST_BYTES = 65536
     private val integer = Regex("-?(?:0|[1-9][0-9]*)(?:\\.[0-9]+)?(?:[eE][+-]?[0-9]+)?")
     private val date = Regex("\\d{4}-\\d{2}-\\d{2}")
     private val updateId = Regex("eup_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}")
 
-    fun decode(raw: String): JsonObject {
-        if (raw.length > 65536 || raw.toByteArray(Charsets.UTF_8).size > 65536) fail("resource_limit")
+    fun decode(raw: String, maxBytes: Int = MAX_REQUEST_BYTES): JsonObject {
+        if (raw.length > maxBytes || raw.toByteArray(Charsets.UTF_8).size > maxBytes) fail("resource_limit")
         if (raw.toByteArray(Charsets.UTF_8).toString(Charsets.UTF_8) != raw) fail()
         return Reader(raw).read()
     }

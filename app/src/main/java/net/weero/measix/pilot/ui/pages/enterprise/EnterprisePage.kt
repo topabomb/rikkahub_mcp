@@ -180,7 +180,8 @@ internal fun EnterprisePage(vm: EnterpriseVM = koinViewModel()) {
                 val feedback = remember { BringIntoViewRequester() }
                 Column(Modifier.widthIn(max = 720.dp).fillMaxWidth().bringIntoViewRequester(feedback)) {
                     if (error != null || state?.failure != null || state?.exitFailure != null) {
-                        Text(stringResource(error ?: R.string.enterprise_failure), color = MaterialTheme.colorScheme.error)
+                        Text(stringResource(error?.resource ?: R.string.enterprise_failure, *error?.arguments.orEmpty().toTypedArray()),
+                            color = MaterialTheme.colorScheme.error)
                     }
                     notice?.takeIf { it != R.string.enterprise_expiry_scheduled || state?.access != null }
                         ?.let { Text(stringResource(it)) }
@@ -412,7 +413,7 @@ private fun EnterprisePortal(original: PortalPresentation, vm: EnterpriseVM, mod
                 }
             }
             if (failure is CancellationException) throw failure
-            if (failure != null) vm.portalFailed(original)
+            if (failure != null) vm.portalFailed(original, failure)
         }
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_STOP) { opening.cancel(); host?.close(); vm.dismissPortal(original) }

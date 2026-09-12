@@ -70,7 +70,7 @@ updateLocal(latest personalSettings transform)
 
 背景写入由 `AssistantBackgroundService` 接受明确的目的：页面持有原 `RealmSelection`，生成工具持有原 `RealmAccess`，共享定义编辑器显式指定 User 助手。个人域写助手定义，企业域写完整主体下的 `AssistantUsagePreferences.background` 并关闭渐变，不复制整份个人配置，也不修改企业下发定义。生成背景按原域和图库 ID 读取；查看器读取 `ImageSource` 后复验目的域。`AssistantPreferenceChange.Background` 复用 Settings 唯一 typed 写协议，经 `ArtifactSettingsCoordinator` 与 `ArtifactStore.commitSettingsRoots` 在 Session → Settings → Artifact 顺序中验证引用、提交并移交创建 pin。失败精确回收未发布副本；旧图片由 Artifact 按所有域的引用统一回收。
 
-企业聊天的 `AssistantUsageEditor` 借用原 `ConversationAssistantTarget` 与 `ConversationViewLease`，不增加可持久化编辑器或第二配置快照。`EditUsage` 比较页面基线与编辑结果，只将实际修改字段应用到锁内最新偏好；未修改字段保持继承，定义字段、企业固定模型/提示词/MCP 与继承子助手引用不能借此覆盖。额外子助手引用和标签选择使用 typed 字段命令；标签目录仍共享，清理统计所有主体使用偏好。`ResetUsage` 只删除当前主体对该助手的使用覆盖。
+企业聊天的 `AssistantUsageEditor` 借用原 `ConversationAssistantTarget` 与 `ConversationViewLease`，不增加可持久化编辑器或第二配置快照。`EditUsage` 比较页面基线与编辑结果，只将实际修改字段应用到锁内最新偏好；未修改字段保持继承，定义字段、企业固定提示词/MCP 与继承子助手引用不能借此覆盖。额外子助手引用和标签选择使用 typed 字段命令；标签目录仍共享，清理统计所有主体使用偏好。`ResetUsage` 只删除当前主体对该助手的使用覆盖。
 
 头像和背景导入经 `ConfigurationApplicationService.importAssistantImage` 创建原域配置资产，再通过既有 Settings → Artifact 提交引用并移交创建所有权。读取用 `RealmConfiguration` 保留原页面和 Session，允许 Personal 已提交配置根或本主体已提交 usage 根，拒绝其他企业及没有配置根的聊天资产。个人共享图片失去个人根后，只要本企业仍保留已提交引用，本企业可继续读取；个人配置读取不能借用企业根。预设消息文本编辑保留非文本 parts 和 metadata。企业 Prompt 预览不提供重新捕获全局目标的“设为背景”操作，背景在原助手使用设置中编辑。
 
@@ -137,7 +137,7 @@ Seed 不进入用户配置或运行记忆表；关闭可变记忆不删除 Seed�
 
 企业本地示例模型使用既有 RequestAssembler、StepRunner、流式合并和 Turn 提交链，返回明确的模拟文本；图片只确认接收，不声称完成真实视觉推理。私有模型 binding 复用 OpenAI Chat/Responses、Claude、Google 的既有 wire builder；IMAGE 模型使用独立 `OPENAI_IMAGES` binding，复用生成与编辑接口。`RequestCredentials.Fixed` 只存在于请求参数，不轮换、不写用户 key cache，也不序列化到 Settings 或普通备份。自动认证与同名私有 header 不能同时配置；用户 header 不得改写认证、Host 或企业自有 header，用户 body 不得指定模型回退或路由。
 
-辅助模型选择从原域的角色配置解析：标题/建议未配置时尝试 fast，再使用原助手的聊天模型；摘要未配置时使用原助手聊天模型。只有 Personal 的历史 `DEFAULT_AUTO_MODEL_ID` 等同未配置，显式缺失、被撤权或类型不符的引用不回退。辅助角色不受企业助手固定聊天模型的绑定限制，但每个请求仍复验原助手和所选资源准入，保持原 wire shape/企业 binding revision。`ModelExecutionSnapshot` 是进程内执行快照，不持久化私有传输数据。聊天、附件识别与已启用的图片工具在同次配置读取中捕获，工具借用只含 `execute` 的 `ModelRequests`；Runtime 保留唯一模型 lease 和企业 binding，暂停继续只移交这一个资源 owner。模型 lease 在取得 binding 前登记到原 Runtime；辅助任务清理失败不能丢失重试 owner。
+辅助模型选择从原域的角色配置解析：标题/建议未配置时尝试 fast，再使用原助手的聊天模型；摘要未配置时使用原助手聊天模型。只有 Personal 的历史 `DEFAULT_AUTO_MODEL_ID` 等同未配置，显式缺失、被撤权或类型不符的引用不回退。各角色分别冻结其解析模型，每个请求仍复验原助手和所选资源准入，保持原 wire shape/企业 binding revision。`ModelExecutionSnapshot` 是进程内执行快照，不持久化私有传输数据。聊天、附件识别与已启用的图片工具在同次配置读取中捕获，工具借用只含 `execute` 的 `ModelRequests`；Runtime 保留唯一模型 lease 和企业 binding，暂停继续只移交这一个资源 owner。模型 lease 在取得 binding 前登记到原 Runtime；辅助任务清理失败不能丢失重试 owner。
 本地模型适配器按调用方的 `ModelSelectionRole` 生成标题、逐行建议和显式标注的模拟摘要；不通过提示词关键词推断用途，辅助生成不发起工具调用。摘要仅保留有界输入摘录，注明省略，不宣称具备真实语义归纳能力。真实 Provider 仍接收原提示词和参数，标题/建议/摘要均经原会话 owner 提交；没有第二条本地持久化路径。
 
 本地聊天模型支持“创建示例子助手”和“创建并调用示例子助手”（亦接受对应英文请求）。只在本次冻结工具面包含所需工具时生成标准 assistant_manage/assistant_call 调用；委派 ID 仅取本次用户消息之后成功创建的工具结果，失败不委派或重试。创建、共享定义与本域授权、Child 建库及结果回写仍由原工具和会话 owner 执行。用户需在本域使用设置启用管理/调用，企业需允许用户助手；示例不会自动打开权限。
@@ -154,7 +154,8 @@ Seed 不进入用户配置或运行记忆表；关闭可变记忆不删除 Seed�
 
 - 内置定义通过 withBuiltInDefinitions 补齐，显式失效的模型、MCP、注入和快捷消息引用保留。模型选择同时校验用途类型；找不到或被策略排除时返回原因，不按名称或首项替换。企业选择为空时只继承企业默认，不继承个人选择。
 - 重复导入 Provider 可能保留相同模型 ID；新目录将该模型标为引用歧义，不任意选择凭据 owner，也不使其他资源目录整体失败。原用户定义保持不变。
-- AssistantUsagePreferences 只保存企业主体内的显式覆盖。字段缺失继承原定义，UsageValue 中显式 null 清除可空字段；个人助手仍只保存一份共享定义。企业助手使用自身固定核心与普通字段默认值，本域偏好不能改写固定模型、系统提示词或移除固定 MCP/子助手引用。
+- AssistantUsagePreferences 只保存企业主体内的显式覆盖。字段缺失继承原定义，UsageValue 中显式 null 清除可空字段；个人助手仍只保存一份共享定义。企业助手以定义模型为默认，本域可选择任一本域获准的 Chat 模型；缺失覆盖继承定义，显式 null 跟随本域默认模型。选择只写原主体使用偏好，不改写企业定义；系统提示词与固定 MCP/子助手引用仍受保护。显式模型删除或撤权保留不可用引用，不自动换回默认。
+- 本地来源管理的 `AddExampleModel` 声明模拟模型实际支持的 `ModelAbility.TOOL`。聊天模型卡片的工具能力通过 `ModelToolSupport` 字段命令修改，只变更目标模型的 TOOL，保留其他能力、模型 ID 和私有 binding；沿既有来源 revision 校验、完整包发布和同步生效。已保存模型不自动改写，可由来源管理员明确调整；该入口不属于成员使用偏好。
 - ConfigurationApplicationService 的资源选择、收藏和建议开关接收页面捕获的 RealmSelection；Gateway 接收原 RealmAccess.Enterprise。聊天字段命令使用 ConversationAssistantTarget，包含原页面命令目标和助手 ID。切出再切回不会恢复旧页面资格。锁序为 Session → Settings → 根会话；只写最新文档中的目标字段，DataStore actor 确认后才释放已取得的提交所有权并传播取消。通用助手 usage transform 写入口已删除。
 - Settings 更新以 cold DataStore 文档为基线，不能把异步显示 StateFlow 当作最新值。commitUserDocument 统一等待实际写入 ack，个人 aggregate 编辑保留企业偏好。Workspace 使用选择先通过原会话命令清空 cwd，再提交偏好；第二步失败明确报告目录已重置，保留原选择供重试，不声称两个存储具有联合事务。目录选择另核对发起时的 Workspace，切助手也在原 Room patch 中清 cwd。
 - ResourceSelectionSlot 对应模型角色、助手、Search、TTS、ASR 选择；收藏及建议开关使用同一偏好写协议。新增选择校验身份、类别准入、启用状态和模型用途；清除覆盖始终允许，且不会隐式修复仍失效的其他选择。
@@ -187,7 +188,7 @@ Memory 已通过 MemoryAddress/MemoryService 按原域、主体与 Session 进�
 
 `PortalDocument` 在 Main dispatcher 管理单个文档、在途请求与原回复通道，冻结原 RealmSelection、母 Session 和最多十分钟期限。快速切出再切回、重登、到期或关闭均不能恢复旧文档。每次读取和回复重新经过 Session owner 授权；普通请求的十秒期限涵盖授权、执行及回复等待，超时后只能以非等待授权检查返回错误。请求 ID 在文档内不复用，迟到结果不转投新页面。配置刷新复用 EnterpriseSynchronizationService；列表的 notModified 仅在授权成功后比较 ETag，且不携带正文。
 
-`PortalWebView` 为每个批准文档新建实例，在首次加载前注册原生消息监听和 document-start bootstrap。固定 origin 只读取经过版本与摘要校验的 PortalAssets，入口为 text/html；其他地址本地拒绝，网络、文件、content URI、网页直接媒体权限均关闭。静态主文档只交付一次，重载和跨文档导航撤销旧实例，页内导航保留当前文档。响应仅经原 JavaScriptReplyProxy；关闭时撤销请求、销毁 WebView 并清理该 origin 的浏览状态。
+`PortalWebView` 为每个批准文档新建实例，在首次加载前注册原生消息监听和 document-start bootstrap。固定 origin 只读取经过版本与摘要校验的 PortalAssets，入口为 text/html；其他地址本地拒绝，网络、文件、content URI、网页直接媒体权限均关闭。静态主文档只交付一次，`WebViewClient.onPageStarted` 只接受首次固定入口加载，后续主文档加载撤销旧实例，fragment 导航保留当前文档。document-start 为每个 JS Document 生成独立随机实例，通过同一原生消息通道先绑定、再发送附带实例的业务请求；`PortalPageBinding` 只接受首次绑定，重绑或非原实例消息立即撤权，因此不依赖导航回调先于消息到达，也不依赖 `NAVIGATION_LISTENER`。宿主私有 envelope 复用 `PortalProtocol` 有界严格解析，业务请求仍受原大小限制；公开 `MeasixHost.postMessage/onmessage` 和 Portal v3 内容不变。响应仅经原 JavaScriptReplyProxy；关闭时撤销请求、销毁 WebView 并清理该 origin 的浏览状态。
 
 文档创建在原 Session 的选中授权锁内登记到 `PortalDocumentRegistry`；它只索引活动 owner，不另存会话状态。`close` 立即撤权并取消请求，`awaitClosed` 供外部 owner 等待原请求收尾及宿主清理，不能由文档自身请求等待。关闭原因保留首次值；WebView 清理全部步骤成功后才发送带原 documentId 的界面通知，通知异常不占据退出屏障。宿主清理逐项尝试，失败项保留重试；依赖 WebView 的前置清理及 detach 全部成功后才 destroy，销毁后只等待或重试独立浏览状态清理。Registry 按完整原 RealmAccess 关闭所有已捕获文档，全部等待后再汇总失败；成功完成才移除登记，旧 Session 清理不关闭新登录文档。创建交接被取消时仍收口已取得的文档，补偿失败附加到原异常，不覆盖取消原因。
 
@@ -209,7 +210,7 @@ Memory 已通过 MemoryAddress/MemoryService 按原域、主体与 Session 进�
 
 `EnterpriseApplicationService` 是正式空间 UI 的命令与查询入口，复用本地来源、同步、退出和 Portal owner。`RealmSwitchRequest` 冻结原 RealmSelection 与目标 RealmAccess，包含目标 Session 身份；Session 在锁内核验请求并等待宿主清理完成后才发布新选中空间。应用作用域持有已接受的切域任务，页面取消不取消该任务；原请求收尾在 Session 锁外等待。关闭或写盘失败保持原空间，已撤销文档不会复活。普通切域保留登录和原域生成，不走退出 CLOSING。进度投影不重新获取正在等待宿主的 Session 锁。
 
-聊天顶部、抽屉和设置页均有正式空间入口。`EnterprisePage` 展示空间、身份、阶段、已生效 generation 与最近配置同步，并提供一键示例、扫码、粘贴、示例二维码、同步、Portal、切域与原生退出确认。`EnterpriseVM` 只依赖 application service；接入文本不写 Activity saved state。退出确认冻结原请求，Portal 页面每次打开持有独立 UI 身份，旧关闭回调不能关闭新页面。返回聊天重新经过 Startup 获取本域 lease。Portal 页面退出前台或离开组合时关闭原宿主；网页 logout 经原生确认复用退出服务，媒体请求使用同一文档和原生交互 owner。
+聊天顶部、抽屉和设置页均有正式空间入口。`EnterprisePage` 展示空间、身份、阶段、已生效 generation 与最近配置同步，并提供一键示例、扫码、粘贴、示例二维码、同步、Portal、切域与原生退出确认。`EnterpriseVM` 只依赖 application service；接入文本不写 Activity saved state。退出确认冻结原请求，Portal 页面每次打开持有独立 UI 身份，旧关闭回调不能关闭新页面。宿主打开前验证消息监听、document-start 与完整站点清理三项能力；不支持时正式入口显示 WebView 包名、版本和缺失能力，其他打开失败显示诊断原因。错误文案及参数是同一个受原 selection 约束的投影；未交付宿主的补偿关闭不抢先触发页面关闭通知，避免吞掉打开错误。返回聊天重新经过 Startup 获取本域 lease。Portal 页面退出前台或离开组合时关闭原宿主；网页 logout 经原生确认复用退出服务，媒体请求使用同一文档和原生交互 owner。
 
 ## 3. Local Settings 顶层结构
 

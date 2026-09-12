@@ -55,7 +55,7 @@ class AssistantUsagePreferencesTest {
         assertTrue(resolved.enableWebSearch)
         assertEquals(fixed.mcpServerIds.map { packet.identity.reference(it) }.toSet() + additionalMcp, resolved.mcpServers)
         assertEquals(fixed.allowedSubAssistantIds.map { packet.identity.reference(it) }.toSet() + additionalChild, resolved.allowedSubAssistantIds)
-        assertThrows(IllegalArgumentException::class.java) { AssistantUsagePreferences(id, chatModelId = UsageValue(null)) }
+        assertNull(resolveEnterpriseAssistantUsage(packet.identity, fixed, usage.copy(chatModelId = UsageValue(null))).chatModelId)
         assertThrows(IllegalArgumentException::class.java) { AssistantUsagePreferences(id, allowConversationSystemPrompt = UsageValue(true)) }
     }
 

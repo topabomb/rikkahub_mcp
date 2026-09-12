@@ -59,7 +59,6 @@ internal data class AssistantUsagePreferences(
 ) {
     init {
         if (assistantId is ConfigurationReference.Enterprise) {
-            require(chatModelId == null) { "enterprise_assistant_model_is_fixed" }
             require(allowConversationSystemPrompt?.value != true) { "enterprise_assistant_prompt_is_fixed" }
         }
         require(assistantId !in additionalSubAssistantIds) { "assistant_cannot_delegate_to_itself" }

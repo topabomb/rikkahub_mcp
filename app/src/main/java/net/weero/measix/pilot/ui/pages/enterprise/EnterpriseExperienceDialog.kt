@@ -162,7 +162,7 @@ private fun EnterpriseAssistantDetails(selection: RealmSelection, model: Enterpr
             Text(stringResource(R.string.enterprise_assistant_definition_description), style = MaterialTheme.typography.bodySmall)
             model.unavailableReason?.let { Text(configurationUnavailableText(it), color = MaterialTheme.colorScheme.error) }
             SelectionContainer { Text(model.assistant.description) }
-            Text(stringResource(R.string.assistant_page_chat_model), style = MaterialTheme.typography.titleMedium)
+            Text(stringResource(R.string.enterprise_assistant_definition_model), style = MaterialTheme.typography.titleMedium)
             Text(model.modelName)
             Text(stringResource(R.string.assistant_page_system_prompt), style = MaterialTheme.typography.titleMedium)
             var expanded by remember(model.assistant.systemPrompt) { mutableStateOf(false) }

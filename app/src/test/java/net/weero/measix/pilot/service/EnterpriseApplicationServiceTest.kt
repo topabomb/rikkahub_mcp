@@ -205,13 +205,26 @@ class EnterpriseApplicationServiceTest {
             val access = original.selection.access as RealmAccess.Enterprise
             val before = requireNotNull(f.source.candidate(access.scope))
             val referenced = before.packet.configuration.assistants.first().modelId
+            rejects("enterprise_chat_model_required") {
+                f.service.changeLocalConfiguration(original, LocalEnterpriseConfigurationChange.ModelToolSupport(
+                    original.models.first { it.type == me.rerere.ai.provider.ModelType.IMAGE }.id, true))
+            }
             rejects("invalid_assistant_model_reference") {
                 f.service.changeLocalConfiguration(original, LocalEnterpriseConfigurationChange.DeleteModel(referenced))
             }
             assertEquals(before.revision, f.source.candidate(access.scope)?.revision)
             val added = f.service.changeLocalConfiguration(original, LocalEnterpriseConfigurationChange.AddExampleModel("Example B"))
             val newModel = added.configuration.models.single { it.id !in original.models.map { model -> model.id } }
-            var current = f.service.changeLocalConfiguration(added.configuration, LocalEnterpriseConfigurationChange.RenameModel(newModel.id, "Renamed")).configuration
+            assertEquals(listOf(me.rerere.ai.provider.ModelAbility.TOOL), newModel.abilities)
+            val bindings = requireNotNull(f.source.candidate(access.scope)).packet.runtimeBindings
+            var current = f.service.changeLocalConfiguration(added.configuration,
+                LocalEnterpriseConfigurationChange.ModelToolSupport(newModel.id, false)).configuration
+            assertEquals(newModel.copy(abilities = emptyList()), current.models.single { it.id == newModel.id })
+            current = f.service.changeLocalConfiguration(current, LocalEnterpriseConfigurationChange.ModelToolSupport(newModel.id, true)).configuration
+            assertEquals(newModel, current.models.single { it.id == newModel.id })
+            assertEquals(original.models, current.models.filterNot { it.id == newModel.id })
+            assertEquals(bindings, requireNotNull(f.source.candidate(access.scope)).packet.runtimeBindings)
+            current = f.service.changeLocalConfiguration(current, LocalEnterpriseConfigurationChange.RenameModel(newModel.id, "Renamed")).configuration
             assertEquals("Renamed", current.models.single { it.id == newModel.id }.name)
             current = f.service.changeLocalConfiguration(current, LocalEnterpriseConfigurationChange.ModelEnabled(newModel.id, false)).configuration
             assertFalse(current.models.single { it.id == newModel.id }.enabled)

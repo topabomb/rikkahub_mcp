@@ -281,7 +281,64 @@ class ModelExecutionServiceTest {
         }
     }
 
-    @Test fun `enterprise auxiliary slot differs from fixed chat binding and retains its original private revision`() = runBlocking {
+    @Test fun `enterprise assistant overrides freeze the chosen model while revocation still blocks requests`() = runBlocking {
+        environment { env ->
+            val base = exampleEnterprisePackage()
+            val first = base.configuration.models.first { it.id == "mdl_chat" }
+            val second = first.copy(id = "mdl_second", modelId = "second")
+            val packet = base.copy(configuration = base.configuration.copy(models = base.configuration.models + second),
+                runtimeBindings = base.runtimeBindings + base.runtimeBindings.first { it.resourceId == first.id }.copy(resourceId = second.id))
+            env.sessions.enrollFixture(packet)
+            val access = env.sessions.captureSelectedRealmAccess() as RealmAccess.Enterprise
+            val id = packet.identity.reference(packet.configuration.assistants.first().id)
+            suspend fun choose(reference: ConfigurationReference?) {
+                env.sessions.withRealmAccess(access) {
+                    env.settings.changeAssistantPreference(access.scope, env.sessions.state.value, id,
+                        net.weero.measix.pilot.data.configuration.AssistantPreferenceChange.Model(reference),
+                        { env.sessions.requirePublishedRealmAccess(access) }) { it() }
+                }
+            }
+            choose(packet.identity.reference(second.id))
+            val captured = env.capture(access, id)
+            assertEquals(packet.identity.reference(second.id), captured.model.model.id)
+            choose(null)
+            assertEquals(packet.identity.reference(first.id), env.capture(access, id).model.model.id)
+            // A later user choice applies to the next capture; it does not rewrite or revoke this Turn.
+            val original = captured.model.requests.execute { it as ModelRequestTarget.LocalExample }
+            assertEquals(second.id, original.resourceId)
+            env.sessions.synchronize(access, packet.copy(configuration = packet.configuration.copy(generation = 2,
+                models = packet.configuration.models.map { if (it.id == second.id) it.copy(enabled = false) else it })))
+            rejected { captured.model.requests.execute { fail("revoked chosen model reached I/O") } }
+        }
+    }
+
+    @Test fun `enterprise child without explicit model borrows caller instead of fixed definition model`() = runBlocking {
+        environment { env ->
+            val packet = exampleEnterprisePackage()
+            env.sessions.enrollFixture(packet)
+            val access = env.sessions.captureSelectedRealmAccess() as RealmAccess.Enterprise
+            val target = packet.identity.reference(packet.configuration.assistants.first { it.allowAsSubAssistant }.id)
+            val caller = env.assistant.copy(localTools = listOf(LocalToolOption.AssistantDelegation))
+            env.settings.updateLocal { it.copy(assistants = listOf(caller)) }
+            env.sessions.withRealmAccess(access) {
+                for ((id, change) in listOf(
+                    target to net.weero.measix.pilot.data.configuration.AssistantPreferenceChange.Model(null),
+                    caller.id to net.weero.measix.pilot.data.configuration.AssistantPreferenceChange.SubAssistant(target, true))) {
+                    env.settings.changeAssistantPreference(access.scope, env.sessions.state.value, id, change,
+                        { env.sessions.requirePublishedRealmAccess(access) }) { it() }
+                }
+            }
+            val configuration = env.service.read(access).configuration
+            val spec = (resolveSubAssistantRunSpec(configuration::availableChatModel,
+                configuration.assistants.getValue(caller.id), configuration.assistants.getValue(target)) as SubAssistantRunSpecResolution.Ready).spec
+            assertEquals(env.model.id, spec.model.id)
+            val captured = env.capture(access, target, ChildModelAdmission(caller.id, spec))
+            assertEquals(env.model.id, captured.model.model.id)
+            captured.model.requests.execute { assertTrue(it is ModelRequestTarget.Remote) }
+        }
+    }
+
+    @Test fun `enterprise auxiliary slot differs from configured chat model and retains its original private revision`() = runBlocking {
         environment { env ->
             val base = exampleEnterprisePackage()
             val title = base.configuration.models.first { it.id == "mdl_chat" }.copy(id = "mdl_title", modelId = "title-original")
@@ -346,7 +403,7 @@ class ModelExecutionServiceTest {
         }
     }
 
-    @Test fun `inspection shares the original capture and private binding without changing fixed chat`() = runBlocking {
+    @Test fun `inspection shares the original capture and private binding without changing captured chat`() = runBlocking {
         environment { env ->
             val base = exampleEnterprisePackage()
             val vision = base.configuration.models.first { it.id == "mdl_chat" }.copy(id = "mdl_inspection",

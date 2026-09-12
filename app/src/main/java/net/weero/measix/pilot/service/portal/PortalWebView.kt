@@ -19,6 +19,9 @@ import net.weero.measix.pilot.data.enterprise.EnterpriseSessionController
 import net.weero.measix.pilot.data.enterprise.RealmSelection
 import net.weero.measix.pilot.service.EnterpriseSynchronizationService
 
+internal class PortalHostUnavailable(val provider: String, val missing: List<String>) :
+    IllegalStateException("Required WebView features unavailable: ${missing.joinToString()}")
+
 /** Immutable verified bytes. An unlisted request is denied locally and can never fall through to the network. */
 internal class PortalAssets private constructor(private val files: Map<String, ByteArray>) {
     fun response(path: String): WebResourceResponse? = files[path]?.let { bytes ->
@@ -76,6 +79,7 @@ internal class PortalWebView private constructor(
     private val entryRequested = AtomicBoolean(false)
     private val main = Handler(Looper.getMainLooper())
     private var initialNavigation = true
+    private val binding = PortalPageBinding()
 
     @SuppressLint("SetJavaScriptEnabled")
     private fun load() {
@@ -99,6 +103,10 @@ internal class PortalWebView private constructor(
         }
         view.setDownloadListener { _, _, _, _, _ -> document.close(PortalCloseReason.DOCUMENT_REPLACED) }
         view.webViewClient = object : WebViewClient() {
+            override fun onPageStarted(view: WebView, url: String, favicon: android.graphics.Bitmap?) {
+                if (initialNavigation && url == PortalProtocol.LOCAL_ENTRY) initialNavigation = false
+                else document.close(PortalCloseReason.DOCUMENT_REPLACED)
+            }
             override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
                 // Fragment changes stay in the approved document; no other navigation can replace it.
                 val url = request.url
@@ -127,25 +135,32 @@ internal class PortalWebView private constructor(
                 return true
             }
         }
-        WebViewCompat.addNavigationListener(view, { task ->
-            if (Looper.myLooper() == Looper.getMainLooper()) task.run() else main.post(task)
-        }, object : NavigationListener {
-            override fun onNavigationStarted(navigation: Navigation) {
-                if (navigation.isSameDocument) return
-                if (initialNavigation && navigation.url == PortalProtocol.LOCAL_ENTRY && !navigation.wasInitiatedByPage()) {
-                    initialNavigation = false
-                } else document.close(PortalCloseReason.DOCUMENT_REPLACED)
-            }
-            override fun onNavigationRedirected(navigation: Navigation) { document.close(PortalCloseReason.DOCUMENT_REPLACED) }
-        })
         val origins = setOf(PortalProtocol.LOCAL_ORIGIN)
-        WebViewCompat.addWebMessageListener(view, "MeasixHost", origins) { _, message, sourceOrigin, isMainFrame, originalReply ->
-            if (active.get() && message.type == WebMessageCompat.TYPE_STRING) {
-                message.data?.let { document.receive(it, sourceOrigin.toString(), isMainFrame, originalReply::postMessage) }
+        WebViewCompat.addWebMessageListener(view, "MeasixPortalTransport", origins) { _, message, sourceOrigin, isMainFrame, originalReply ->
+            if (active.get() && isMainFrame && sourceOrigin.toString() == PortalProtocol.LOCAL_ORIGIN &&
+                message.type == WebMessageCompat.TYPE_STRING) {
+                val payload = try { message.data?.let(binding::receive) }
+                catch (_: Exception) { document.close(PortalCloseReason.DOCUMENT_REPLACED); null }
+                payload?.let { document.receive(it, sourceOrigin.toString(), true, originalReply::postMessage) }
             }
         }
         WebViewCompat.addDocumentStartJavaScript(view,
-            "if(window===window.top){Object.defineProperty(window,'MeasixPortalDocument',{value:Object.freeze(${document.bootstrap}),writable:false,configurable:false});}", origins)
+            """
+            if(window===window.top){
+              (()=>{
+                const transport=window.MeasixPortalTransport;
+                const instance=Array.from(crypto.getRandomValues(new Uint8Array(16)),b=>b.toString(16).padStart(2,'0')).join('');
+                const send=payload=>transport.postMessage(JSON.stringify({instance,payload}));
+                send(null);
+                const host={postMessage:payload=>send(payload),
+                  addEventListener:(...args)=>transport.addEventListener(...args),
+                  removeEventListener:(...args)=>transport.removeEventListener(...args)};
+                Object.defineProperty(host,'onmessage',{get:()=>transport.onmessage,set:value=>{transport.onmessage=value;}});
+                Object.defineProperty(window,'MeasixHost',{value:Object.freeze(host),writable:false,configurable:false});
+                Object.defineProperty(window,'MeasixPortalDocument',{value:Object.freeze(${document.bootstrap}),writable:false,configurable:false});
+              })();
+            }
+            """.trimIndent(), origins)
         view.loadUrl(PortalProtocol.LOCAL_ENTRY)
     }
 
@@ -159,7 +174,7 @@ internal class PortalWebView private constructor(
     private val viewTeardown by lazy {
         mutableListOf<() -> Unit>(
             { view.stopLoading() },
-            { WebViewCompat.removeWebMessageListener(view, "MeasixHost") },
+            { WebViewCompat.removeWebMessageListener(view, "MeasixPortalTransport") },
             { view.clearHistory() },
             { (view.parent as? android.view.ViewGroup)?.removeView(view) },
         )
@@ -209,24 +224,32 @@ internal class PortalWebView private constructor(
     }
 
     companion object {
-        fun supported(): Boolean = listOf(WebViewFeature.WEB_MESSAGE_LISTENER, WebViewFeature.DOCUMENT_START_SCRIPT,
-            WebViewFeature.NAVIGATION_LISTENER, WebViewFeature.DELETE_BROWSING_DATA).all(WebViewFeature::isFeatureSupported)
+        fun missingFeatures(): List<String> = listOf(WebViewFeature.WEB_MESSAGE_LISTENER,
+            WebViewFeature.DOCUMENT_START_SCRIPT, WebViewFeature.DELETE_BROWSING_DATA)
+            .filterNot(WebViewFeature::isFeatureSupported)
 
         suspend fun open(context: Context, selection: RealmSelection, sessions: EnterpriseSessionController,
             synchronization: EnterpriseSynchronizationService, scope: CoroutineScope,
             registry: PortalDocumentRegistry, createNative: (suspend (PortalDocumentContext) -> PortalNativeActions)? = null,
             onClosed: (PortalClosure) -> Unit): PortalWebView {
             check(Looper.myLooper() == Looper.getMainLooper())
-            if (!supported()) throw PortalFailure("source_unavailable")
+            val missing = missingFeatures()
+            if (missing.isNotEmpty()) {
+                val provider = WebViewCompat.getCurrentWebViewPackage(context)
+                throw PortalHostUnavailable(provider?.let { "${it.packageName} ${it.versionName}" } ?: "unavailable", missing)
+            }
             val assets = PortalAssets.load(context)
             var host: PortalWebView? = null
+            var delivered = false
             val document = PortalDocument.open(selection, sessions, synchronization, scope, registry,
-                closeHost = { host?.destroy() ?: CompletableDeferred(Unit) }, createNative = createNative, onClosed = onClosed)
+                closeHost = { host?.destroy() ?: CompletableDeferred(Unit) }, createNative = createNative,
+                onClosed = { if (delivered) onClosed(it) })
             try {
                 if (document.isClosed) throw kotlinx.coroutines.CancellationException("Portal document unavailable")
                 return PortalWebView(WebView(context), document, assets).also {
                     host = it
                     it.load()
+                    delivered = true
                 }
             } catch (failure: Exception) {
                 try {

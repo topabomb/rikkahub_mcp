@@ -48,7 +48,7 @@
   <string name="assistant_page_chat_background">Chat Background</string>
   <string name="assistant_page_chat_background_desc">Set background image for assistant chat page</string>
   <string name="assistant_page_chat_model">Chat Model</string>
-  <string name="assistant_page_chat_model_desc">Set the default chat model for the assistant. If not set, the global default chat model will be used</string>
+  <string name="assistant_page_chat_model_desc">Choose the chat model for this assistant. If unset, direct chats use this space’s default; when used as a sub-assistant, it uses the caller’s model and parameters.</string>
   <string name="assistant_page_follow_default_model">Follow default model</string>
   <string name="assistant_page_clone">Clone</string>
   <string name="assistant_page_confirm">Confirm</string>
@@ -843,7 +843,7 @@
   <string name="setting_mcp_page_transport_type_desc">Select the transport protocol type for the MCP server</string>
   <string name="setting_mcp_page_url_label">URL</string>
   <string name="setting_model_page_chat_model">Chat Model</string>
-  <string name="setting_model_page_chat_model_desc">Global default chat model</string>
+  <string name="setting_model_page_chat_model_desc">Default chat model for this space</string>
   <string name="setting_model_page_compress_model">Compress Model</string>
   <string name="setting_model_page_fast_model">Fast Model</string>
   <string name="setting_model_page_fast_model_desc">Model for quick background tasks such as titles and suggestions. When unset, these tasks follow the chat model</string>
@@ -1696,7 +1696,6 @@
   <string name="assistant_usage_shared_warning">This is a shared user configuration. Changes affect every space that uses this assistant.</string>
   <string name="assistant_usage_inherited_binding">Inherited from the assistant definition; cannot be removed here</string>
   <string name="assistant_usage_inherit_model">Use the model from the assistant definition</string>
-  <string name="assistant_usage_fixed_model">Model fixed by the enterprise</string>
   <string name="assistant_preset_media_kept">This preset also has non-text content. Editing text keeps that content.</string>
   <string name="enterprise_local_scenarios">Connection and sign-out scenarios</string>
   <string name="enterprise_local_scenarios_notice">These local simulations use the normal session and cleanup flow. Expiry and credential revocation end enterprise access and return to personal space; enterprise records are retained.</string>
@@ -1781,4 +1780,7 @@
   <string name="enterprise_starter_open">Open draft</string>
   <string name="assistant_runtime_memory_enabled">Runtime memory is enabled for this assistant.</string>
   <string name="assistant_runtime_memory_disabled">Runtime memory is off. Records remain available to manage, but are not used in conversations.</string>
+  <string name="enterprise_portal_unavailable">This system WebView is missing capabilities required to securely open the workbench.\nWebView: %1$s\nMissing capabilities: %2$s</string>
+  <string name="enterprise_portal_open_failed">The enterprise workbench could not open. Please retry.\nReason: %1$s</string>
+  <string name="enterprise_assistant_definition_model">Model in the assistant definition</string>
 </resources>

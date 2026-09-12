@@ -229,7 +229,7 @@ Draft 预览、读图和附件导出通过原 `ConversationViewLease` 查询其 
 ```
 
 - `AttachmentInspectionTool` 通过捕获的 `ModelRequests` 发起独立识图请求；借用视图只提供执行能力，原 Runtime 的 `ModelExecutionLease` 唯一持有并释放共享企业 binding，关闭后全部角色立即不可再准入。工具不持有另一份凭据 owner。
-  各请求复验原助手、原模型及 Child caller/target 授权，保持原 endpoint/protocol/model shape。企业助手固定聊天绑定只约束 CHAT；识图使用本域识图选择。用户凭据从原 owner 刷新，企业私有 header/凭据走相同受管请求边界。
+  各请求复验原助手、原模型及 Child caller/target 授权，保持原 endpoint/protocol/model shape。CHAT 使用原助手的有效模型选择，识图使用本域识图选择；两者分别冻结，不受后续用户选择变动影响。用户凭据从原 owner 刷新，企业私有 header/凭据走相同受管请求边界。
   `RequestMediaCapabilities` 在捕获时冻结，IMAGE 模型必须提供结构化 USER 图片编码；远端不兼容由真实 Provider 分类错误表达。企业本地示例接收同样的图片请求并明确返回模拟结果，不调用网络或声称真实识图。
 - paths 与产出 1:1、顺序稳定，重复路径保留对应图片位置；内部标签使用原请求路径。识图与委托入口均不接受 UUID、HTTP(S)、file URI、workspace 或越界路径，不提供旧参数兼容入口。
 - `ArtifactStore` 在同一 lifecycle lock 内校验原操作 scope、ACTIVE/已发布并取得既有 retention pin，锁外读取；成功、失败和取消都在 finally 释放。

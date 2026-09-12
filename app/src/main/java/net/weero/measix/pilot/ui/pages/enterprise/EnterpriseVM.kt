@@ -20,6 +20,8 @@ import net.weero.measix.pilot.service.LocalEnterpriseConfigurationChange
 import net.weero.measix.pilot.service.LocalEnterpriseScenario
 import net.weero.measix.pilot.service.EnterpriseOverview
 import net.weero.measix.pilot.service.portal.PortalClosure
+import net.weero.measix.pilot.service.portal.PortalFailure
+import net.weero.measix.pilot.service.portal.PortalHostUnavailable
 import kotlin.uuid.Uuid
 
 internal data class PortalPresentation(val id: Uuid = Uuid.random(), val selection: RealmSelection)
@@ -29,10 +31,10 @@ internal class EnterpriseVM(private val service: EnterpriseApplicationService) :
     val overview = service.observe().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
     private val _busy = MutableStateFlow(false)
     val busy = _busy.asStateFlow()
-    private data class Failure(val resource: Int, val selection: RealmSelection?)
+    data class Failure(val resource: Int, val selection: RealmSelection?, val arguments: List<String> = emptyList())
     private val _error = MutableStateFlow<Failure?>(null)
     val error = combine(_error, overview) { value, state ->
-        value?.takeIf { it.selection == state?.selection }?.resource
+        value?.takeIf { it.selection == state?.selection }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
     private data class Notice(val resource: Int, val selection: RealmSelection? = null)
     private val _notice = MutableStateFlow<Notice?>(null)
@@ -181,14 +183,25 @@ internal class EnterpriseVM(private val service: EnterpriseApplicationService) :
         }
     }
     fun retryExit() { overview.value?.exitFailure?.let { failure -> command { service.retryExit(failure) } } }
-    fun showPortal() { overview.value?.selection?.let { _portal.value = PortalPresentation(selection = it) } }
+    fun showPortal() { overview.value?.selection?.let {
+        _error.value = null
+        _portal.value = PortalPresentation(selection = it)
+    } }
     fun dismissPortal(original: PortalPresentation) { if (_portal.value == original) _portal.value = null }
     suspend fun openPortal(context: Context, original: PortalPresentation, onClosed: (PortalClosure) -> Unit) =
         service.openPortal(context, original.selection, onClosed)
-    fun portalFailed(original: PortalPresentation) {
-        if (_portal.value != original) return
+    fun portalFailed(original: PortalPresentation, failure: Exception) {
+        if (_portal.value != original || overview.value?.selection != original.selection) return
         dismissPortal(original)
-        _error.value = Failure(R.string.enterprise_failure, overview.value?.selection)
+        _error.value = if (failure is PortalHostUnavailable) {
+            Failure(R.string.enterprise_portal_unavailable, original.selection,
+                listOf(failure.provider, failure.missing.joinToString()))
+        } else {
+            android.util.Log.e("EnterprisePortal", "Portal opening failed", failure)
+            val reason = (failure as? PortalFailure)?.code ?: (failure as? EnterpriseConfigurationException)?.reason
+                ?: failure.javaClass.simpleName
+            Failure(R.string.enterprise_portal_open_failed, original.selection, listOf(reason))
+        }
     }
 
     private fun command(enrollment: Boolean = false, failureMessage: Int = R.string.enterprise_failure, isCurrent: () -> Boolean = { true }, action: suspend () -> Unit) {

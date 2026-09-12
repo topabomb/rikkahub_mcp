@@ -101,18 +101,13 @@ internal fun AssistantUsageEditor(
                         onImportAvatar = { onImportImage(it, true) }, onImportBackground = { onImportImage(it, false) },
                         definitionEditable = false, imageResolver = imageResolver,
                         modelControl = {
-                            if (!configuration.canChangeModel) {
-                                Text(configuration.model?.displayName ?: configuration.modelSelection.reference.toString())
-                                Text(stringResource(R.string.assistant_usage_fixed_model), style = MaterialTheme.typography.bodySmall)
-                            } else {
-                                val state = rememberModelListState(modelId = configuration.modelSelection.reference,
-                                    catalog = configuration.modelCatalog, type = ModelType.CHAT)
-                                ModelSelectorButton(state, onClear = { change(AssistantPreferenceChange.Model(null)) },
-                                    placeholder = stringResource(R.string.assistant_page_follow_default_model))
-                                val inherit = stringResource(R.string.assistant_usage_inherit_model)
-                                ModelListSheet(state, onSelect = { commit(AssistantPreferenceChange.Model(it.id)) },
-                                    additionalActions = if (enterprise) listOf(ModelSelectionAction(inherit) { commit(AssistantPreferenceChange.InheritModel) }) else emptyList())
-                            }
+                            val state = rememberModelListState(modelId = configuration.modelSelection.reference,
+                                catalog = configuration.modelCatalog, type = ModelType.CHAT)
+                            ModelSelectorButton(state, onClear = { change(AssistantPreferenceChange.Model(null)) },
+                                placeholder = stringResource(R.string.assistant_page_follow_default_model))
+                            val inherit = stringResource(R.string.assistant_usage_inherit_model)
+                            ModelListSheet(state, onSelect = { commit(AssistantPreferenceChange.Model(it.id)) },
+                                additionalActions = if (enterprise) listOf(ModelSelectionAction(inherit) { commit(AssistantPreferenceChange.InheritModel) }) else emptyList())
                             configuration.modelSelection.unavailableReason?.let {
                                 Text(configurationUnavailableText(it), color = MaterialTheme.colorScheme.error)
                             }

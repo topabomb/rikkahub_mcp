@@ -243,7 +243,6 @@ internal class ModelExecutionService(
         check(selection.isAvailable) { "model_selection_unavailable:${role.name}:${selection.unavailableReason}" }
         val modelId = requireNotNull(selection.reference)
         requireAvailable(configuration, ConfigurationCategory.MODEL, modelId)
-        if (role == ModelSelectionRole.CHAT) requireFixedBinding(configuration, requireNotNull(assistant).id, modelId)
         val selected = configuration.models[modelId]?.model ?: error("chat_model_unavailable")
         check(selected.type == role.type) { "model_capability_mismatch" }
         val model = selected.copy(
@@ -283,7 +282,6 @@ internal class ModelExecutionService(
                         requireNotNull(latest.configuration.assistants[assistant.id]).localTools) { "tool_revoked" }
                 }
                 requireAvailable(latest.configuration, ConfigurationCategory.MODEL, modelId)
-                if (role == ModelSelectionRole.CHAT) requireFixedBinding(latest.configuration, requireNotNull(assistant).id, modelId)
                 val target = if (privateBinding != null) {
                     // The original lease checks revocation; replacement bindings belong to new Turns.
                     target(requireNotNull(bindings).binding(modelId.id))
@@ -331,12 +329,6 @@ internal class ModelExecutionService(
     private fun requireAvailable(configuration: ResolvedConfiguration, category: ConfigurationCategory, id: ConfigurationReference) {
         val access = configuration.access(category, id)
         check(access.canExecute) { "configuration_resource_unavailable:${category.name}:${access.unavailableReason}" }
-    }
-
-    private fun requireFixedBinding(configuration: ResolvedConfiguration, assistantId: ConfigurationReference, modelId: ConfigurationReference) {
-        if (assistantId is ConfigurationReference.Enterprise) {
-            check(configuration.assistants[assistantId]?.chatModelId == modelId) { "enterprise_assistant_binding_changed" }
-        }
     }
 
     private fun enterpriseTarget(binding: EnterpriseRuntimeBinding, model: Model,

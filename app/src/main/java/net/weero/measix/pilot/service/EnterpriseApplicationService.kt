@@ -2,6 +2,8 @@ package net.weero.measix.pilot.service
 
 import android.content.Context
 import android.net.Uri
+import me.rerere.ai.provider.ModelAbility
+import me.rerere.ai.provider.ModelType
 import net.weero.measix.pilot.data.configuration.ConfigurationScope
 import net.weero.measix.pilot.data.configuration.EnterprisePolicy
 import net.weero.measix.pilot.data.configuration.GatewayEnablementPolicy
@@ -34,6 +36,7 @@ internal sealed interface LocalEnterpriseConfigurationChange {
     data class Gateway(val id: String, val enablement: GatewayEnablementPolicy) : LocalEnterpriseConfigurationChange
     data class RenameModel(val id: String, val name: String) : LocalEnterpriseConfigurationChange
     data class ModelEnabled(val id: String, val enabled: Boolean) : LocalEnterpriseConfigurationChange
+    data class ModelToolSupport(val id: String, val enabled: Boolean) : LocalEnterpriseConfigurationChange
     data class AddExampleModel(val name: String) : LocalEnterpriseConfigurationChange
     data class DeleteModel(val id: String) : LocalEnterpriseConfigurationChange
 }
@@ -182,9 +185,19 @@ internal class EnterpriseApplicationService(
                             if (it.id == change.id) it.copy(enabled = change.enabled) else it
                         }))
                     }
+                    is LocalEnterpriseConfigurationChange.ModelToolSupport -> {
+                        requireModel(change.id)
+                        if (config.models.single { it.id == change.id }.type != ModelType.CHAT) {
+                            throw EnterpriseConfigurationException("enterprise_chat_model_required")
+                        }
+                        packet.copy(configuration = config.copy(models = config.models.map {
+                            if (it.id == change.id) it.copy(abilities = if (change.enabled)
+                                (it.abilities + ModelAbility.TOOL).distinct() else it.abilities - ModelAbility.TOOL) else it
+                        }))
+                    }
                     is LocalEnterpriseConfigurationChange.AddExampleModel -> {
                         val id = "mdl_${Uuid.random()}"
-                        packet.copy(configuration = config.copy(models = config.models + EnterpriseModel(id, change.name.trim(), "local-example")),
+                        packet.copy(configuration = config.copy(models = config.models + EnterpriseModel(id, change.name.trim(), "local-example", abilities = listOf(ModelAbility.TOOL))),
                             runtimeBindings = packet.runtimeBindings + EnterpriseRuntimeBinding(id, EnterpriseRuntimeProtocol.EXAMPLE))
                     }
                     is LocalEnterpriseConfigurationChange.DeleteModel -> {

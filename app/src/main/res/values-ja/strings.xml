@@ -48,7 +48,7 @@
   <string name="assistant_page_chat_background">チャット背景</string>
   <string name="assistant_page_chat_background_desc">アシスタントチャットページの背景画像を設定</string>
   <string name="assistant_page_chat_model">チャットモデル</string>
-  <string name="assistant_page_chat_model_desc">アシスタントのデフォルトチャットモデルを設定します。設定しない場合は、グローバルデフォルトチャットモデルが使用されます</string>
+  <string name="assistant_page_chat_model_desc">このアシスタントが使用するチャットモデルを選択します。未設定の場合、直接のチャットではこのスペースの既定モデルを使用し、サブアシスタントとして動作する場合は呼び出し元のモデルとパラメータを使用します。</string>
   <string name="assistant_page_follow_default_model">デフォルトモデルに従う</string>
   <string name="assistant_page_clone">複製</string>
   <string name="assistant_page_confirm">確認</string>
@@ -816,7 +816,7 @@
   <string name="setting_mcp_page_transport_type_desc">MCPサーバーの転送プロトコルタイプを選択</string>
   <string name="setting_mcp_page_url_label">URL</string>
   <string name="setting_model_page_chat_model">チャットモデル</string>
-  <string name="setting_model_page_chat_model_desc">グローバルデフォルトチャットモデル</string>
+  <string name="setting_model_page_chat_model_desc">このスペースの既定のチャットモデル</string>
   <string name="setting_model_page_compress_model">モデルを圧縮</string>
   <string name="setting_model_page_compress_model_desc">会話履歴を圧縮するモデル。未設定の場合はチャットモデルに従います</string>
   <string name="setting_model_page_follow_chat_model">チャットモデルに従う</string>
@@ -1695,7 +1695,6 @@
   <string name="assistant_usage_shared_warning">これは共有ユーザー設定です。変更はこのアシスタントを使うすべてのスペースに影響します。</string>
   <string name="assistant_usage_inherited_binding">定義から継承されているため、ここでは削除できません</string>
   <string name="assistant_usage_inherit_model">定義のモデルを使用</string>
-  <string name="assistant_usage_fixed_model">企業が指定した固定モデル</string>
   <string name="assistant_preset_media_kept">テキスト以外の内容もあります。テキストを編集しても保持されます。</string>
   <string name="enterprise_local_scenarios">接続とログアウトの検証</string>
   <string name="enterprise_local_scenarios_notice">通常のセッションと終了処理を使用するローカルシミュレーションです。有効期限切れや資格情報の取り消しで個人スペースに戻ります。企業の記録は保持されます。</string>
@@ -1780,4 +1779,7 @@
   <string name="enterprise_starter_open">下書きを開く</string>
   <string name="assistant_runtime_memory_enabled">このアシスタントの実行時メモリは有効です。</string>
   <string name="assistant_runtime_memory_disabled">実行時メモリは無効です。既存の記録は管理できますが、会話には使われません。</string>
+  <string name="enterprise_portal_unavailable">システムの WebView に、企業ワークスペースを安全に開くための機能がありません。\nWebView：%1$s\n不足している機能：%2$s</string>
+  <string name="enterprise_portal_open_failed">企業ワークスペースを開けませんでした。もう一度お試しください。\n理由：%1$s</string>
+  <string name="enterprise_assistant_definition_model">アシスタント定義のモデル</string>
 </resources>

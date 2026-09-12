@@ -7,6 +7,52 @@ import org.junit.Test
 
 class AssistantPreferenceMutationTest {
     @Test
+    fun `enterprise assistant model choices use principal preferences and retain revoked references`() {
+        val base = exampleEnterprisePackage()
+        val first = base.configuration.models.first { it.id == "mdl_chat" }
+        val second = first.copy(id = "mdl_second", name = "Second")
+        val third = first.copy(id = "mdl_third", name = "Third")
+        val packet = base.copy(configuration = base.configuration.copy(models = base.configuration.models + second + third,
+            defaults = base.configuration.defaults.copy(chatModelId = third.id)),
+            runtimeBindings = base.runtimeBindings + listOf(second, third).map { model ->
+                base.runtimeBindings.first { it.resourceId == first.id }.copy(resourceId = model.id)
+            })
+        val scope = packet.identity.scope
+        val id = packet.identity.reference(packet.configuration.assistants.first().id)
+        val original = UserSettingsDocument.empty()
+        var document = original
+        fun change(command: AssistantPreferenceChange) {
+            document = document.changeAssistantPreference(scope, appliedConfiguration(packet), id, command)
+        }
+        fun selected() = ConfigurationResolver.resolve(document, scope, appliedConfiguration(packet)).assistantModel(id)
+        listOf(second, third).forEach { model ->
+            change(AssistantPreferenceChange.Model(packet.identity.reference(model.id)))
+            assertEquals(packet.identity.reference(model.id), selected().reference)
+            assertTrue(selected().isAvailable)
+        }
+        change(AssistantPreferenceChange.Model(null))
+        assertEquals(packet.identity.reference(third.id), selected().reference)
+        change(AssistantPreferenceChange.InheritModel)
+        assertEquals(packet.identity.reference(first.id), selected().reference)
+        val baseline = ConfigurationResolver.resolve(document, scope, appliedConfiguration(packet)).assistants.getValue(id)
+        change(AssistantPreferenceChange.EditUsage(baseline, baseline.copy(chatModelId = packet.identity.reference(second.id))))
+        assertEquals(packet.identity.reference(second.id), selected().reference)
+        val revoked = packet.copy(configuration = packet.configuration.copy(models = packet.configuration.models.filterNot { it.id == second.id }))
+        val unavailable = ConfigurationResolver.resolve(document, scope, appliedConfiguration(revoked)).assistantModel(id)
+        assertEquals(packet.identity.reference(second.id), unavailable.reference)
+        assertFalse(unavailable.isAvailable)
+        listOf(packet.identity.reference("mdl_absent"), packet.identity.reference("mdl_image"),
+            packet.identity.copy(authority = packet.identity.authority.copy(deploymentId = "another")).reference(second.id)).forEach { invalid ->
+            assertThrows(SettingsLockedException::class.java) { change(AssistantPreferenceChange.Model(invalid)) }
+        }
+        assertEquals(original.configuration, document.configuration)
+        assertNull(document.preferences.assistantUsage(scope.copy(userId = "another"), id))
+        change(AssistantPreferenceChange.ResetUsage)
+        assertNull(document.preferences.assistantUsage(scope, id))
+        assertEquals(packet.identity.reference(first.id), selected().reference)
+    }
+
+    @Test
     fun `background edits are principal preferences and revoked personal assistants cannot be edited`() {
         val packet = exampleEnterprisePackage()
         val user = net.weero.measix.pilot.data.model.Assistant(name = "Personal", background = "personal-background")
@@ -84,7 +130,7 @@ class AssistantPreferenceMutationTest {
         val document = UserSettingsDocument.empty()
         val id = packet.identity.reference(packet.configuration.assistants.first().id)
         val baseline = ConfigurationResolver.resolve(document, packet.identity.scope, appliedConfiguration(packet)).assistants.getValue(id)
-        listOf(baseline.copy(name = "changed"), baseline.copy(systemPrompt = "changed"), baseline.copy(chatModelId = null),
+        listOf(baseline.copy(name = "changed"), baseline.copy(systemPrompt = "changed"),
             baseline.copy(allowConversationSystemPrompt = true), baseline.copy(mcpServers = emptySet()),
             baseline.copy(allowedSubAssistantIds = setOf(me.rerere.common.configuration.ConfigurationReference.random())),
             baseline.copy(temperature = Float.NaN), baseline.copy(topP = 2f), baseline.copy(maxTokens = 0),

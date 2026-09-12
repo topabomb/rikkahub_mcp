@@ -48,7 +48,7 @@
   <string name="assistant_page_chat_background">채팅 배경</string>
   <string name="assistant_page_chat_background_desc">어시스턴트 채팅 페이지의 배경 이미지 설정</string>
   <string name="assistant_page_chat_model">채팅 모델</string>
-  <string name="assistant_page_chat_model_desc">어시스턴트의 기본 채팅 모델 설정. 미설정 시 전역 기본 채팅 모델 사용</string>
+  <string name="assistant_page_chat_model_desc">이 어시스턴트가 사용할 채팅 모델을 선택하세요. 설정하지 않으면 직접 채팅할 때는 이 공간의 기본 모델을 사용하고, 하위 어시스턴트로 작동할 때는 호출자의 모델과 매개변수를 사용합니다.</string>
   <string name="assistant_page_follow_default_model">기본 모델 따르기</string>
   <string name="assistant_page_clone">복제</string>
   <string name="assistant_page_confirm">확인</string>
@@ -816,7 +816,7 @@
   <string name="setting_mcp_page_transport_type_desc">MCP 서버의 전송 프로토콜 유형 선택</string>
   <string name="setting_mcp_page_url_label">URL</string>
   <string name="setting_model_page_chat_model">채팅 모델</string>
-  <string name="setting_model_page_chat_model_desc">전역 기본 채팅 모델</string>
+  <string name="setting_model_page_chat_model_desc">이 공간의 기본 채팅 모델</string>
   <string name="setting_model_page_compress_model">모델 압축</string>
   <string name="setting_model_page_compress_model_desc">대화 기록 압축용 모델. 설정하지 않으면 채팅 모델을 따릅니다</string>
   <string name="setting_model_page_follow_chat_model">채팅 모델 따르기</string>
@@ -1695,7 +1695,6 @@
   <string name="assistant_usage_shared_warning">공유 사용자 설정입니다. 변경은 이 어시스턴트를 사용하는 모든 공간에 영향을 줍니다.</string>
   <string name="assistant_usage_inherited_binding">정의에서 상속되어 여기서 제거할 수 없습니다</string>
   <string name="assistant_usage_inherit_model">어시스턴트 정의의 모델 사용</string>
-  <string name="assistant_usage_fixed_model">기업에서 고정한 모델</string>
   <string name="assistant_preset_media_kept">텍스트 외 콘텐츠도 있으며 텍스트를 편집해도 유지됩니다.</string>
   <string name="enterprise_local_scenarios">연결 및 로그아웃 검증</string>
   <string name="enterprise_local_scenarios_notice">정상 세션과 정리 절차를 사용하는 로컬 시뮬레이션입니다. 만료나 자격 증명 취소 시 개인 공간으로 돌아가며 기업 기록은 유지됩니다.</string>
@@ -1780,4 +1779,7 @@
   <string name="enterprise_starter_open">초안 열기</string>
   <string name="assistant_runtime_memory_enabled">이 어시스턴트의 실행 메모리가 켜져 있습니다.</string>
   <string name="assistant_runtime_memory_disabled">실행 메모리가 꺼져 있습니다. 기존 기록은 관리할 수 있지만 대화에는 사용되지 않습니다.</string>
+  <string name="enterprise_portal_unavailable">시스템 WebView에 기업 워크벤치를 안전하게 여는 데 필요한 기능이 없습니다.\nWebView: %1$s\n누락된 기능: %2$s</string>
+  <string name="enterprise_portal_open_failed">기업 워크벤치를 열 수 없습니다. 다시 시도해 주세요.\n이유: %1$s</string>
+  <string name="enterprise_assistant_definition_model">어시스턴트 정의의 모델</string>
 </resources>

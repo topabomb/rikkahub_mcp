@@ -39,7 +39,6 @@ internal fun UserSettingsDocument.changeAssistantPreference(
             require(edited.backgroundOpacity == change.baseline.backgroundOpacity || edited.backgroundOpacity.isFinite() && edited.backgroundOpacity in 0f..1f) { "invalid_background_opacity" }
             require((change.baseline.mcpServers - edited.mcpServers).none { it in fixedMcp }) { "enterprise_assistant_mcp_binding_is_fixed" }
             if (edited.chatModelId != change.baseline.chatModelId) {
-                require(assistantId is ConfigurationReference.User) { "enterprise_assistant_model_is_fixed" }
                 edited.chatModelId?.let { reference ->
                     val choice = resolved.choice(ResourceSelectionSlot.CHAT_MODEL, reference)
                     if (!choice.isAvailable) throw SettingsLockedException("assistant/$assistantId/chatModelId", choice.unavailableReason!!.name)
@@ -68,7 +67,6 @@ internal fun UserSettingsDocument.changeAssistantPreference(
             }
         }
         is AssistantPreferenceChange.Model, AssistantPreferenceChange.InheritModel -> {
-            require(assistantId is ConfigurationReference.User) { "enterprise_assistant_model_is_fixed" }
             (change as? AssistantPreferenceChange.Model)?.reference?.let { reference ->
                 val selected = resolved.choice(ResourceSelectionSlot.CHAT_MODEL, reference)
                 if (!selected.isAvailable) throw SettingsLockedException("assistant/$assistantId/chatModelId", selected.unavailableReason!!.name)

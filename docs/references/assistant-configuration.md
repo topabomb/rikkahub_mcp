@@ -5,14 +5,13 @@
 ## 1. 数据归属与解析
 
 `Assistant` 定义在
-`app/src/main/java/net/weero/measix/pilot/data/model/Assistant.kt`，作为
-`Settings.assistants` 的本地 shadow 由 `SettingsStore` 写入既有 DataStore，并经同一 Store 的有效读模型提供给应用。
+`app/src/main/java/net/weero/measix/pilot/data/model/Assistant.kt`，用户定义由 `SettingsStore` 写入 `UserSettingsDocument.configuration`；企业定义归 Applied Enterprise State，执行与聊天由 `ConfigurationResolver` 按原域解析。
 
 - Assistant 身份及模型、MCP、子助手等配置引用使用 `ConfigurationReference`；个人资源序列化保持原 UUID，企业资源保留 authority 与原始资源 ID。用户定义中的引用只能指向 User，企业域使用选择由独立偏好表达。
-- `Settings.assistantId` 只是全局当前选择。
+- `Settings.assistantId` 是个人选择投影；企业当前选择保存在原主体的 `ResourceSelections`。
 - 已创建会话以 `Conversation.assistantId` 为助手归属权威来源。
 - 聊天由 `ConversationQueryService` 按原域与 `header.assistantId` 解析。定义删除或撤权保留历史与不可用原因，不回退到当前全局助手；聊天使用选择通过 `AssistantPreferenceChange` 修改指定字段。
-- `Settings.getChatModel(assistant)` 优先使用 `assistant.chatModelId`，为空时回退到全局 `Settings.chatModelId`；只在已启用 Provider 的 Chat 模型中解析。
+- 聊天通过 `ResolvedConfiguration.assistantModel` 优先解析助手的有效 `chatModelId`，为空时继承本域 Chat 选择；只接受本域获准的 Chat 模型。企业助手的定义模型是默认值，显式使用偏好不修改原定义。
 - 会话迁移到另一个助手必须显式更新 `Conversation.assistantId`，不能仅切换全局助手。
 
 模型缺失或 Provider 未启用会使生成前的 readiness 检查失败；工具、记忆、工作区或 MCP 未配置通常只会使对应能力不进入本次请求。
@@ -39,7 +38,7 @@
 
 | 字段 | 默认值 | 语义 |
 |------|--------|------|
-| `chatModelId` | `null` | 显式模型；为空时继承全局 Chat 模型 |
+| `chatModelId` | `null` | 显式模型；为空时继承本域 Chat 模型 |
 | `temperature` | `null` | 为空时不覆盖 Provider 默认值；部分推理模式会主动省略 |
 | `topP` | `null` | 为空时不覆盖 Provider 默认值 |
 | `maxTokens` | `null` | 输出 token 上限，不是输入上下文窗口 |
@@ -238,7 +237,7 @@ UI 和 Provider adapter 只消费 typed 配置与有效读模型，不成为配�
 
 ## 7. 本域使用编辑
 
-企业聊天的助手管理与记忆入口打开 `AssistantUsageEditor`，复用基本参数、提示词使用、请求、记忆、本地工具、MCP、QuickMessage、Injection 与 Skill 内容。名称、描述、系统提示词、子助手身份与企业固定模型只读；用户助手可明确进入共享定义编辑，并确认对其他空间的影响。固定子助手引用不可移除，本域额外引用按目录准入选择。重置使用设置恢复定义及默认值，只影响原主体。
+企业聊天的助手管理与记忆入口打开 `AssistantUsageEditor`，复用基本参数、提示词使用、请求、记忆、本地工具、MCP、QuickMessage、Injection 与 Skill 内容。名称、描述、系统提示词与子助手身份只读；用户助手可明确进入共享定义编辑，并确认对其他空间的影响。固定子助手引用不可移除，本域额外引用按目录准入选择。企业和用户助手均可选择本域获准模型、跟随本域默认模型，或恢复继承助手定义模型。重置使用设置恢复定义及默认值，只影响原主体。模型选择显式 null 时，直接聊天继承本域默认；作为子助手 Target 时按共用协议借用 Caller 模型及参数。模型在请求开始时冻结；后续选择影响新请求，不改写在途 Turn，执行仍逐次复验原模型资源与原 Session 授权。
 
 页面向 `ConfigurationApplicationService` 提交 `AssistantPreferenceChange`。页面回调通过基线差量保留并发未编辑字段，资产仍经 Artifact 引用事务；不存在整份解析助手回写。搜索模式和资源选择继续使用聊天的现有选择器。预设文本编辑保留其他消息部分，媒体预览按原配置来源读取，不读取个人历史。
 

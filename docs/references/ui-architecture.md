@@ -572,11 +572,11 @@ Compose 暴露 application/query service；恢复由 `ApplicationRecoveryCoordin
 
 已创建会话的助手归属来自 `ConversationUiModel.snapshot.header.assistantId`。`ConversationQueryService` 在原页面 lease 的 Session → Settings 边界捕获配置，随同一会话投影提供 `ConversationConfigurationUiModel`。标题、背景、模型、搜索、推理、快捷消息、MCP 和生成前检查共用这个助手；定义删除或撤权时保留历史和不可用原因，不回退到全局助手。
 
-聊天模型目录按用途与准入显示；用户助手可选择本域模型、跟随本域默认，或在企业域恢复继承自己的定义。企业助手固定模型不提供改选入口。搜索保留用户开关，即使当前模型失效也显示已选而不可用；传输能力来自模型实际 binding，UI 不读取企业地址或凭据。MCP 显示目录准入与真实 runtime 状态，固定绑定不可移除，已有失效引用可取消。
+聊天模型目录按用途与准入显示；企业和用户助手均可选择本域获准模型、跟随本域默认，或在企业域恢复继承助手定义模型。企业定义只读不等于使用模型不可选择。搜索保留用户开关，即使当前模型失效也显示已选而不可用；传输能力来自模型实际 binding，UI 不读取企业地址或凭据。MCP 显示目录准入与真实 runtime 状态，固定绑定不可移除，已有失效引用可取消。
 
 `ConversationAssistantTarget` 冻结原页面和助手。模型弹窗、助手/工具弹层及输入导入按原目标持有状态；字段命令只更新最新值中的指定字段。会话系统提示、注入与目录仍由 `ConversationApplicationService` 写原会话，提交时复验助手；目录还核对原 Workspace。实际换助手在同一会话命令清空 folder 与 cwd，重新选择同一助手不清空。导入结果在交给输入框前再次验证原目标，失效或取消只释放本批新文件。
 
-本地工具使用既有 `AssistantLocalToolContent`，个人定义编辑和聊天本域使用分别调用各自命令。`AssistantUsageEditor` 通过原 `ConversationAssistantTarget` 编辑本域参数、头像、背景、扩展及额外子助手引用；企业固定的子助手绑定不可移除。企业助手定义与固定模型只读，用户助手可在确认共享影响并复验原目标后进入定义编辑页；目标失效作为操作失败展示。恢复默认清除本域使用覆盖，不修改共享定义。新建会话的默认选择不直接驱动已有会话。
+本地工具使用既有 `AssistantLocalToolContent`，个人定义编辑和聊天本域使用分别调用各自命令。`AssistantUsageEditor` 通过原 `ConversationAssistantTarget` 编辑本域参数、头像、背景、扩展及额外子助手引用；企业固定的子助手绑定不可移除。企业助手定义只读，模型使用选择只写原主体偏好；用户助手可在确认共享影响并复验原目标后进入定义编辑页；目标失效作为操作失败展示。恢复默认清除本域使用覆盖，不修改共享定义。新建会话的默认选择不直接驱动已有会话。
 
 抽屉的助手选择、文件夹和会话列表来自同一个按域助手目录。`ChatDrawerVM` 保留原 `ConversationFolderAccess`，筛选也绑定该目标；切域或换助手先丢弃旧筛选，旧目录不能在新空间继续查询。移动到助手复用同一选择组件，展示企业候选与准入原因，等待原会话命令成功后关闭；提交期间禁用重复选择和定义管理。
 

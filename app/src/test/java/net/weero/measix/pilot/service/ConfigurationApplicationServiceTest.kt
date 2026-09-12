@@ -73,7 +73,10 @@ class ConfigurationApplicationServiceTest {
             assertTrue(saved.preferences.assistantUsage(env.access.scope, env.assistant.id)!!.enableWebSearch!!.value)
             val fixed = exampleEnterprisePackage().configuration.assistants.first()
             val fixedTarget = env.chatTarget(exampleEnterprisePackage().identity.reference(fixed.id))
-            expectCommandFailure { env.commands.changeAssistantPreference(fixedTarget, AssistantPreferenceChange.Model(env.model.id)) }
+            env.commands.changeAssistantPreference(fixedTarget, AssistantPreferenceChange.Model(env.model.id))
+            assertEquals(env.model.id, env.queries.observeCurrent().first().assistantModel(fixedTarget.assistantId).reference)
+            assertTrue(env.queries.observeCurrent().first().conversationConfiguration(fixedTarget).canChangeModel)
+            env.commands.changeAssistantPreference(fixedTarget, AssistantPreferenceChange.InheritModel)
             if (fixed.mcpServerIds.isNotEmpty()) expectCommandFailure {
                 env.commands.changeAssistantPreference(fixedTarget,
                     AssistantPreferenceChange.Mcp(exampleEnterprisePackage().identity.reference(fixed.mcpServerIds.first()), false))

@@ -35,7 +35,7 @@ internal data class ConversationConfigurationUiModel(
     val inheritedSubAssistantIds: Set<ConfigurationReference> = emptySet(),
     val memorySeeds: List<AssistantMemorySeedUiModel> = emptyList(),
 ) {
-    val canChangeModel: Boolean get() = assistant != null && target.assistantId is ConfigurationReference.User
+    val canChangeModel: Boolean get() = assistant != null
     val canEditDefinition: Boolean get() = target.assistantId is ConfigurationReference.User
 }
 
