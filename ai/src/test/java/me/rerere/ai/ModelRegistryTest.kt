@@ -10,6 +10,18 @@ import org.junit.Test
 
 class ModelRegistryTest {
     @Test
+    fun testDeepseekV41FlashExactCapabilities() {
+        listOf("deepseek-v4.1-flash", "deepseek-flash").forEach { id ->
+            assertEquals(listOf(Modality.TEXT, Modality.IMAGE), ModelRegistry.MODEL_INPUT_MODALITIES.getData(id))
+            assertEquals(listOf(ModelAbility.TOOL, ModelAbility.REASONING), ModelRegistry.MODEL_ABILITIES.getData(id))
+            assertTrue(ModelRegistry.DEEPSEEK_V4.match(id))
+        }
+        listOf("deepseek-v4-flash", "deepseek-v4.1-flash-preview", "deepseek-flash-unknown").forEach { id ->
+            assertEquals(listOf(Modality.TEXT), ModelRegistry.MODEL_INPUT_MODALITIES.getData(id))
+        }
+    }
+
+    @Test
     fun testGPT5() {
         assertTrue(ModelRegistry.GPT_5.match("gpt-5"))
         assertFalse(ModelRegistry.GPT_5.match("gpt-5-chat"))

@@ -1,4 +1,4 @@
-﻿package net.weero.measix.pilot.ui.components.richtext
+package net.weero.measix.pilot.ui.components.richtext
 
 import android.content.ClipData
 import androidx.activity.compose.LocalActivity
@@ -120,7 +120,7 @@ fun HighlightCodeBlock(
         }
     }
     var previewMode by remember(canInlinePreview, code, normalizedLanguage) {
-        mutableStateOf(canInlinePreview)
+        mutableStateOf(false)
     }
     var mermaidExportRequestKey by remember(code) { mutableIntStateOf(0) }
 

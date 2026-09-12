@@ -26,6 +26,12 @@ Provider 类型决定原生协议族，`useResponseApi` 只选择 OpenAI 子协�
 
 ### 请求级认证
 
+四条文本协议的流式请求装配（包括文件编码）在 `Dispatchers.IO` 执行，`flowOn` 不改变下游收集上下文；非流式请求也在 IO 装配和读取。装配结束、创建 EventSource 之前复验协程仍 active，避免编码期间已取消的请求继续启动 HTTP。SSE 与 `readResponse` 继续拥有取消和关闭，无第二请求循环。
+
+OpenAI 的 `chatCompletionsPath` 与 `responsesPath` 分别配置两种协议的相对入口，默认 `/chat/completions` 与 `/responses`。Responses 路径保留 baseUrl 前缀，拒绝替换 origin、查询、fragment 和明文/编码穿越。`FrozenProviderWireShape.OpenAI` 在 START 捕获两者，后续凭据更新不能修改请求路径；旧配置缺失 `responsesPath` 时使用默认值。
+
+`configureSessionHeader` 只在实际请求 host 为 `opencode.ai` 时将 `providerSessionId` 写为 `x-opencode-session`，原会话 ID 覆盖自定义同名头。Google Vertex 使用实际 Google URL，残留 baseUrl 不影响判定。自动头带请求标记；宿主的 `ProviderSessionHeaderInterceptor` 在每次网络发送时移除跨 host 重定向携带的自动头，不修改用户手动配置的普通 header。该身份复用会话 owner，不新增持久状态。
+
 `TextGenerationParams`、`ImageGenerationParams` 与 `ImageEditParams` 的 `credentials` 是不参与序列化的 `RequestCredentials`。`UserSettings` 继续使用原 Provider 的 KeyRoulette；`Fixed` 使用单次请求的原始凭据，不按空白或逗号拆分，不访问轮换缓存。未提供固定 credential 时由私有 headers 提供认证；若同时出现自动认证同名 header 则在发请求前拒绝。四种文本协议及 OpenAI 图片生成/编辑共用该认证选择，未创建第二套企业 wire builder。
 
 Fixed 请求带 `PrivateRequest` 网络标记，宿主日志入口不记录其 HTTP 内容，`PrivateRequestBoundaryInterceptor` 在实际重定向边界拒绝跨 origin 转发。Responses 的 `instructions` 与 model/input/tools 一样归协议装配 owner，custom body 不能覆盖已组装系统提示。
@@ -380,6 +386,8 @@ Gemini 支持的 `enum`。grounding metadata 转为 `UIMessageAnnotation.UrlCita
 投影，不由 Google adapter 建立私有媒体路径。
 
 ## 8. ModelRegistry 的职责
+
+`deepseek-v4.1-flash`、`deepseek-flash` 按精确型号登记图片输入、工具和 reasoning，并进入 `DEEPSEEK_V4` 的兼容网关工具回放策略；旧 V4 Flash 与未经确认的后缀型号不因此取得视觉能力。登记不自动修改已有用户模型配置。
 
 `ModelRegistry` 根据 modelId 推断：
 

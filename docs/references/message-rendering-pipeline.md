@@ -189,25 +189,25 @@ HighlightCodeBlock(code, language, completeCodeBlock)
   │
   ├─ canInlinePreview = completeCodeBlock && language ∈ {html, svg}
   │    └─ canInlinePreview && previewMode → CodeBlockPreview (WebView 内联预览)
-  │         默认预览模式，可切换"代码/预览"
+  │         默认源码模式，用户显式切换"代码/预览"
   │         └─ 全屏: RichTextHost → Screen.ContentPreview(document)
   │
   ├─ completeCodeBlock && language == "mermaid" → Mermaid (WebView 渲染)
   │    └─ 全屏: RichTextHost → Screen.ContentPreview(document)
   │
-  └─ 其他（或代码块未闭合）→ 原生 HighlightText (语法高亮)
+  └─ 其他（或代码块未闭合）→ 原生 CodeHighlightText (语法高亮)
         ├─ autoWrap + showLineNumbers → 逐行渲染 (CodeBlockWithLineNumbersWrapped)
         └─ 其他组合 → 整体渲染 + horizontalScroll (CodeBlockDefault)
 ```
 
 > **流式降级**：`completeCodeBlock` 在流式生成中为 `false`（代码围栏未闭合），此时 Mermaid/HTML 预览
-> 均不可用，统一走原生语法高亮路径。生成完成后围栏闭合，重新触发渲染切换到 WebView 预览。
+> 均不可用，统一走原生语法高亮路径。围栏闭合后 Mermaid 渲染图形，HTML/SVG 保持源码直到用户显式选择预览。
 
 ### 4.1 普通代码块 — 原生渲染
 
-- **语法高亮**：`highlight` 模块（`HighlightText` / `Highlighter`）
+- **语法高亮**：`highlight` 模块（`CodeHighlightText` / `Highlighter`）
 - **配色**：`AtomOneDarkPalette` / `AtomOneLightPalette`（跟随 `LocalDarkMode`）
-- **字体**：`JetbrainsMono`
+- **字体**：`JetbrainsMono`；`CodeHighlightText` 禁用 `calt`、`liga`、`clig`，保留代码字符的独立字形。
 - **功能**：复制、下载（`CreateDocument`）、折叠/展开（`codeBlockAutoCollapse` 开启时超过阈值自动折叠）
 - **行号**：`showLineNumbers` 开关控制
 - **换行**：`codeBlockAutoWrap` 开关控制
@@ -368,7 +368,7 @@ WebViewState
 | 内容类型 | 渲染方式 | 关键组件 | 技术 |
 |---|---|---|---|
 | 普通文本 / Markdown | 原生 | `MarkdownBlock` / `MarkdownNew` | IntelliJ Markdown AST / Jsoup DOM |
-| 代码块（普通语言） | 原生 | `HighlightCodeBlock` → `HighlightText` | highlight 模块 |
+| 代码块（普通语言） | 原生 | `HighlightCodeBlock` → `CodeHighlightText` | highlight 模块 |
 | LaTeX 行内公式 | 原生 Canvas | `MathInline` → `LatexText` | JLatexMathDrawable |
 | LaTeX 块级公式 | 原生 Canvas | `MathBlock` → `LatexText` | JLatexMathDrawable |
 | Mermaid 图表 | WebView | `Mermaid` | 本地 mermaid.min.js + JS Bridge |

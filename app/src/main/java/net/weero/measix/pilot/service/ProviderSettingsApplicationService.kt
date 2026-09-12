@@ -46,6 +46,7 @@ class ProviderSettingsApplicationService(
     suspend fun saveConfiguration(id: ConfigurationReference, edited: ProviderSetting) = updateProvider(id) { latest ->
         if (edited.id != id) return@updateProvider latest
         edited.copyProvider(
+            name = edited.name.trim(),
             models = latest.models,
             builtIn = latest.builtIn,
             description = latest.description,
@@ -59,13 +60,17 @@ class ProviderSettingsApplicationService(
         }
     }
 
-    suspend fun addModel(id: ConfigurationReference, model: Model) = updateProvider(id) { it.addModel(model) }
+    suspend fun addModel(id: ConfigurationReference, model: Model) = updateProvider(id) {
+        it.addModel(model.copy(displayName = model.displayName.trim()))
+    }
 
     suspend fun removeModel(id: ConfigurationReference, modelId: ConfigurationReference) = updateProvider(id) { latest ->
         latest.models.firstOrNull { it.id == modelId }?.let(latest::delModel) ?: latest
     }
 
-    suspend fun editModel(id: ConfigurationReference, model: Model) = updateProvider(id) { it.editModel(model) }
+    suspend fun editModel(id: ConfigurationReference, model: Model) = updateProvider(id) {
+        it.editModel(model.copy(displayName = model.displayName.trim()))
+    }
 
     suspend fun addModels(id: ConfigurationReference, models: List<Model>) = updateProvider(id) { latest ->
         val additions = models.filter { model -> latest.models.none { it.modelId == model.modelId } }

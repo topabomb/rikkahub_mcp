@@ -63,7 +63,6 @@ interface SpeechPlayback {
     fun stop()
     fun pause()
     fun resume()
-    fun skipNext()
     fun fastForward(ms: Long = 5_000)
     fun setSpeed(speed: Float)
 }
@@ -136,7 +135,6 @@ internal class SpeechApplicationService(
         override fun stop() = submit { commands.withLock { tts?.capture?.terminate(); closePlayback() } }
         override fun pause() = submit { commands.withLock { player.pause() } }
         override fun resume() = submit { commands.withLock { player.resume() } }
-        override fun skipNext() = submit { commands.withLock { player.skipNext() } }
         override fun fastForward(ms: Long) = submit { commands.withLock { player.fastForward(ms) } }
         override fun setSpeed(speed: Float) = submit { player.setSpeed(speed) }
     }

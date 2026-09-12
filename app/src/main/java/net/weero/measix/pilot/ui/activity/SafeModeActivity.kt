@@ -57,6 +57,7 @@ import net.weero.measix.pilot.data.datastore.SettingsStore
 import net.weero.measix.pilot.data.datastore.getCurrentAssistant
 import net.weero.measix.pilot.ui.hooks.writeStringPreference
 import net.weero.measix.pilot.ui.theme.MeasixTheme
+import net.weero.measix.pilot.ui.theme.WindowSystemBars
 import net.weero.measix.pilot.RouteActivity
 import net.weero.measix.pilot.utils.CrashHandler
 import org.koin.android.ext.android.inject
@@ -73,6 +74,7 @@ class SafeModeActivity : ComponentActivity() {
         enableEdgeToEdge()
         setContent {
             MeasixTheme {
+                WindowSystemBars()
                 val settings by settingsStore.userSettings.collectAsStateWithLifecycle()
                 var showAssistantPicker by remember { mutableStateOf(false) }
                 val scope = rememberCoroutineScope()

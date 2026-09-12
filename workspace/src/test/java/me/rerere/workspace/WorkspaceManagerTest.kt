@@ -9,20 +9,15 @@ import java.nio.file.Files
 
 class WorkspaceManagerTest {
     @Test
-    fun rootfsRequiresShellEntryPoint() {
+    fun rootfsFilesDistinguishMissingAndEmptyDirectoriesFromPresentContent() {
         val baseDir = Files.createTempDirectory("workspace-manager-test").toFile()
         val manager = WorkspaceManager(baseDir)
         val root = "test-workspace"
+        assertFalse(manager.hasRootfsFiles(root))
         manager.ensureWorkspace(root)
-
-        assertFalse(manager.hasRootfs(root))
-
+        assertFalse(manager.hasRootfsFiles(root))
         File(manager.linuxDir(root), "etc").mkdirs()
-        assertFalse(manager.hasRootfs(root))
-
-        File(manager.linuxDir(root), "bin").mkdirs()
-        File(manager.linuxDir(root), "bin/sh").writeText("#!/bin/sh\n")
-        assertTrue(manager.hasRootfs(root))
+        assertTrue(manager.hasRootfsFiles(root))
     }
 
     @Test

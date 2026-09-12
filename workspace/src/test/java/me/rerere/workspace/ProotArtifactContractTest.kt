@@ -24,12 +24,14 @@ class ProotArtifactContractTest {
         assertEquals("7266fb3e8516535682f5a9c8f3a7e70f6506eddb", manifest.getValue("proot").jsonObject.getValue("commit").jsonPrimitive.content)
         assertEquals("29385d1ddb619a9c4449ab512bfd55032034b22f724ddf98fc95ff300ea32135", manifest.getValue("proot").jsonObject.getValue("sourceZipSha256").jsonPrimitive.content)
         assertEquals("f4508dfac2255cf83e75859a8fe37dd7da6778a3", manifest.getValue("proot").jsonObject.getValue("upstreamBinaryCommit").jsonPrimitive.content)
-        assertEquals("byte-identical", manifest.getValue("proot").jsonObject.getValue("upstreamBinaryMatch").jsonPrimitive.content)
+        assertEquals("locally-patched-source-build", manifest.getValue("proot").jsonObject.getValue("upstreamBinaryMatch").jsonPrimitive.content)
         assertEquals("08b49b3ce00b1e14a3a0365200f30e50f8dfafe1", manifest.getValue("termuxPackage").jsonObject.getValue("recipeCommit").jsonPrimitive.content)
-        assertEquals("not-run", manifest.getValue("build").jsonObject.getValue("localRebuildStatus").jsonPrimitive.content)
         assertEquals("fail-if-output-differs-from-recorded-artifacts", manifest.getValue("build").jsonObject.getValue("hashPolicy").jsonPrimitive.content)
         assertEquals("1e5ff8459bc0a8c229dd8a94b27d119987e09ef3414331c2b5ebfff20b98e867", manifest.getValue("dependencies").jsonObject.getValue("libandroidShmem").jsonObject.getValue("sha256").jsonPrimitive.content)
         assertEquals("dc46c40b9f46bb34dd97fe41f548b0e8b247b77a918576733c528e83abd854dd", manifest.getValue("dependencies").jsonObject.getValue("libtalloc").jsonObject.getValue("sha256").jsonPrimitive.content)
+
+        val patch = manifest.getValue("proot").jsonObject.getValue("patch").jsonObject
+        assertEquals(patch.getValue("sha256").jsonPrimitive.content, File(root, patch.getValue("repoPath").jsonPrimitive.content).sha256())
 
         val artifacts = manifest.getValue("artifacts").jsonArray
         assertEquals(4, artifacts.size)
@@ -60,7 +62,7 @@ class ProotArtifactContractTest {
             if (file.name == "libproot_exec.so") {
                 val ascii = bytes.toString(Charsets.ISO_8859_1)
                 assertTrue("missing embedded PRoot version", ascii.contains("5.1.107.92"))
-                assertTrue("missing SysV shared-memory implementation", ascii.contains("libandroid_shmget"))
+                assertTrue("missing SysV shared-memory implementation", ascii.contains("ashv_key_%d"))
             } else {
                 assertEquals("loader must remain platform-independent", emptyList<String>(), elf.neededLibraries())
             }
@@ -72,25 +74,6 @@ class ProotArtifactContractTest {
                 pair.map { File(it.jsonObject.getValue("repoPath").jsonPrimitive.content).name }.toSet(),
             )
         }
-    }
-
-    @Test
-    fun `rebuild script is pinned and rejects artifact drift`() {
-        val scriptFile = File(locateRepositoryRoot(), "workspace/tools/build-proot.sh")
-        val scriptBytes = scriptFile.readBytes()
-        assertTrue("POSIX rebuild script must use LF without carriage returns", scriptBytes.none { it == '\r'.code.toByte() })
-        val script = scriptBytes.toString(Charsets.UTF_8)
-        assertTrue(script.startsWith("#!/usr/bin/env bash\n"))
-        assertTrue(script.contains("08b49b3ce00b1e14a3a0365200f30e50f8dfafe1"))
-        assertTrue(script.contains("TERMUX_NDK_VERSION_NUM=29"))
-        assertTrue(script.contains("TERMUX_PKG_API_LEVEL=24"))
-        assertTrue(script.contains("TERMUX_PKG_VERSION=\"5.1.107.92\""))
-        assertTrue(script.contains("sha256sum --check --status"))
-        assertTrue(script.contains("build-package.sh"))
-        assertTrue(script.contains("mktemp -d \"\$work_parent/proot-build.XXXXXXXX\""))
-        assertTrue(script.contains("work_dir_owned=true"))
-        assertTrue(script.contains("\"\$work_dir_owned\" == \"true\""))
-        assertTrue(!script.contains("work_dir=\"\${PROOT_BUILD_WORK_DIR:-"))
     }
 
     @Test

@@ -224,6 +224,8 @@ nullable usage 字段缺失时默认 `null`。Turn 累计字段不猜测回填�
 
 Stats 表示“当前域在数据库仍保留的 Provider usage”，不是账户终身账单：
 
+`MessageNodeDAO` 在 `json_each` 参数内验证文档为有效数组，在 `json_extract` 参数内保护非对象成员；损坏文档、非数组顶层与非对象成员不参与统计。此防护不改写原行，也不把损坏会话恢复为 Ready；统计仍仅表示可解析记录，不代表数据修复。
+
 - token 汇总包含主会话、Child conversation 和仍保留的 regenerated variants，因为它们都真实发起过请求。
 - 会话数、可见消息数和每日消息数只计本域主会话；Token 汇总按所属会话 scope 包含本域 Child，不因复用同一个个人助手而合并企业与个人用量。应用启动次数仍为全局值。
 - StatsQueryService 在原选中域/Session 授权内读取；StatsVM 切域时清空旧统计并取消旧查询，查询失败显示失败状态，不继续展示旧值或把零值作为成功结果。

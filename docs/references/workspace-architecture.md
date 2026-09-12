@@ -27,7 +27,8 @@ Assistant.workspaceId 有效
 | `WorkspaceShellRunner` | 阻塞式命令执行接口与进程 I/O 收集 |
 | `ProotLaunchSpec` | 两类 PRoot 启动共用的 executable、bind、cwd、env 与 argv |
 | `ProotShellRunner` | 把 `ProotLaunchSpec` 交给 `ProcessBuilder` 执行 |
-| `RootfsInstaller` | 下载、校验路径、解压和原子替换 Rootfs |
+| `RootfsInstaller` | 下载、校验路径、解压，并在兼容性验证和 patch 后替换 Rootfs |
+| `RootfsCompatibility` | 实际 PRoot ELF 架构、对应默认镜像及 guest executable/解释器兼容校验；不拥有安装状态或进程 |
 | `RootfsPatcher` | 修补 DNS、hosts、hostname、locale、group 与临时目录 |
 | `WorkspaceRepository` | Room 实体、协程调度、安装状态和 Manager 调用；不作为 Workspace UI API |
 | `WorkspaceApplicationService` | Workspace typed command 的唯一 owner；UI、模型 Rootfs 操作、安装/删除与终端 mutation 共用互斥协议 |
@@ -50,6 +51,8 @@ Compose、ViewModel、聊天文件补全、cwd 选择和已编辑文件导出都
 文件描述符移交前的取消归原打开调用清理；成功移交后由外部客户端持有和关闭。Workspace gate 保护打开与移交，不覆盖外部客户端之后的每次读写，也不承诺切域或删除能够撤销已打开的 FD。
 
 ## 3. 文件系统与挂载
+
+文件列表图片缩略图和全屏预览均使用 `WorkspaceApplicationService.imageSource`，由既有 ImageSource/Coil 管线读取。读取前复验 workspace、文件修订及大小；UI 不持有裸文件、不复制临时缩略图、不建立第二缓存 owner，行级打开和删除沿原命令。
 
 每个 Workspace 使用独立 root 名称，名称只允许字母、数字、点、下划线和连字符：
 
@@ -78,7 +81,12 @@ Rootfs 内的主要映射：
 `workspace/proot-lock.json` 是唯一机器可读 manifest，固定 PRoot/Termux Packages 来源、版本、源码 archive 校验、
 构建参数以及各 ABI artifact 的路径、SHA-256 和 ELF 契约。`workspace/PROOT.md` 记录来源与许可证；PRoot 源码、
 patch/build scripts、第三方许可证、静态链接依赖的可重链接材料和适用安装信息共同构成独立 Release 合规门禁，
-provenance URL 不能代替该义务。manifest 校验通过也不能表述为已经完成本地 bit-for-bit 可复现构建。
+provenance URL 不能代替该义务。`workspace/tools/build-proot.py` 从固定源码、依赖和本地终止补丁构建双 ABI；
+默认校验最终 hash，候选构建只输出仓库外待审核产物。可复现状态以 manifest 的实际独立重建结果为准，不能代替设备验收。
+
+Android Process 的终止请求由 PRoot 自身处理：启动前阻塞 TERM/QUIT，guest 恢复原 signal mask，tracer 在登记首个子进程、
+安装 handler 后才解除阻塞。两个信号共用既有 tracee registry 和 event loop，持续终止并回收包括晚到 fork/clone 事件中的子进程。
+Shell 保持 ProcessBuilder 和分离管道；WorkspacePtySession 使用现有 PID 发 TERM，不新增 wrapper 或进程监督 owner。
 
 `ProotLaunchSpec` 的关键参数：
 
@@ -93,7 +101,7 @@ provenance URL 不能代替该义务。manifest 校验通过也不能表述为�
 ```
 
 - `--root-id` 只伪装 guest UID/GID，不赋予 Android root 权限。
-- `--kill-on-exit` 防止 PRoot 退出后遗留子进程。
+- `--kill-on-exit` 在初始 guest 退出时终止其余 tracees；主动关闭必须通过 TERM/QUIT 让 PRoot 回收，不能 SIGKILL tracer。
 - 命令作为位置参数传入，避免再次拼接和转义。
 - cwd 必须先由 `WorkspaceManager` 验证为 `files/` 下存在的目录，再转换为 `/workspace` 路径。
 - 环境用 `env -i` 清空后显式设置 `HOME`、`PATH`、`TERM`、locale 与 `PWD`。
@@ -105,6 +113,10 @@ provenance URL 不能代替该义务。manifest 校验通过也不能表述为�
 实现通过 `-k 4.14.0` 让现代 glibc 避免选择 PRoot 无法可靠处理的新 syscall 路径，并用与 `-w` 一致的 `PWD` 作为防御性回退。不得默认设置 `PROOT_NO_SECCOMP=1`：PRoot 自身的 seccomp filter 用 `SECCOMP_RET_TRACE` 触发可靠的 syscall 翻译，禁用后在 Android 14+ 上可能出现 `mkdir`、`stat`、`chdir` 或 `getcwd` 的 `ENOSYS`。
 
 x86_64 设备必须使用 x86_64 PRoot 和 Rootfs，arm64 设备必须使用 arm64 产物。架构不匹配导致的 `SIGILL` 不能通过关闭 seccomp 修复。
+
+`RootfsCompatibility` 读取实际打包 PRoot 的 ELF machine，默认镜像按该事实选择 Ubuntu arm64 或 amd64。不能用模拟器品牌或 `SUPPORTED_ABIS` 中包含某架构推断：原生桥可令列表同时含 x86_64 与 arm64。Installer 在 staging 校验 env/bash 的 64 位 ELF、动态解释器和相同架构，并完成 patch 后才替换原目录；guest 绝对符号链接只在 guest 根解析。启动完整性检查对既存不兼容根标记 BROKEN，Shell 与 PTY 入口再复验。无 QEMU 跨架构执行或默认禁用 seccomp 的旁路。
+
+guest 启动入口与解释器的 LOAD segment 必须满足 `Os.sysconf(_SC_PAGESIZE)` 返回的实际页大小：alignment 为 2 的幂且不小于该值，虚拟地址与文件偏移对页大小同余。读失败不回退猜测 4 KB。这是保守准入，不是完整动态依赖解析或运行成功保证。Ubuntu 24.04.3 amd64 的 4 KB 对齐不适用于 x86_64 16 KB AVD；使用 4 KB AVD 验证 Linux 执行，并在 16 KB AVD 验证拒绝和原目录保全。对应 arm64 镜像使用 64 KB 对齐，保留原启动路径；真实 arm64 执行仍需设备验证。
 
 ## 5. AI 工具
 
@@ -173,10 +185,14 @@ stdout、stderr 和可选 stdin 使用独立 daemon 线程。
 
 ## 7. 交互终端
 
+`WorkspaceTerminalContent` 消费 Scaffold padding 后使用 `WindowInsets.imeAnimationTarget`，避免 IME 动画中反复改变 PTY 高度。单击聚焦和键盘交给 Termux ViewClient，页面不以通用 ACTION_UP 强制显示键盘。终端深色 CompositionLocal 不写 Window，系统栏由 Activity 根据当前可见路由设置。
+
 `WorkspaceTerminalRuntime` 是所有交互终端的 application-scoped owner。它通过 service 层的 `WorkspacePtySession` 创建 Termux PTY，并独占原 RealmAccess、session、创建 Job、字节 writer、tab 顺序、选中项和 shell-exit 清理。UI/VM 只持有 `WorkspaceTerminalTabUiModel`；UI 自己拥有的 `TerminalView` 以 `WorkspaceTerminalViewport` capability 按 tab id bind/unbind，不能取得 runtime-owned `TerminalSession`。页面离开或应用进入后台不关闭 PTY，进程死亡后也不持久化虚假的运行态。
 关闭终端 Tab 前需要二次确认：确认态是 `WorkspaceTerminalPage` 的 UI 临时状态，确认后仍经
 `WorkspaceApplicationService` → `WorkspaceTerminalRuntime` 串行关闭；tab 在确认期间因 shell exit 或
 Workspace 删除而消失时自动清除 pending，不发送无意义命令。
+
+零 tab 显示已退出，只有 PREPARING 显示创建中；退出后不自动重试。非主动关闭的非零进程退出由 Runtime 发布既有 typed failure，正常退出与主动 close 的进程终止保持普通空态。
 
 图片查看借用 `WorkspaceApplicationService.imageSource`：绑定原 workspace/area/entry，通过 FileSystem 的单路径 stat 复验，读取前后检查目标未变化并限制实际字节数。它不依赖有数量上限的目录列表，也不另创建预览临时文件。
 
@@ -202,13 +218,16 @@ shell 工具与交互终端都消费同一份 `ProotLaunchSpec`：executable、l
 ensureWorkspace
   -> 下载到 tmp
   -> 解压到 staging
-  -> 校验 tar 路径、symlink 与 hardlink 不逃逸 staging
+  -> 解压期间校验落盘路径及相对链接不逃逸 staging
+  -> RootfsCompatibility 校验 guest 入口、解释器、ABI 与页对齐
+  -> RootfsPatcher.patch(staging)
   -> 删除旧 linux 并 rename staging -> linux
-  -> RootfsPatcher.patch
   -> 清理 archive / staging
 ```
 
 下载和解压循环检查线程中断，页面取消安装后可以尽快停止。tar 解压支持普通文件、目录、symlink、hardlink、GNU long name/link 与 PAX 路径；所有落盘路径都经过 canonical containment 检查。
+
+`WorkspaceManager.hasRootfsFiles` 只判断 Linux 目录是否非空，不推断它可执行。Shell 的缺失诊断采用相同的目录存在性语义，是否可运行统一由 `RootfsCompatibility` 校验；不得再用宿主 `File(linuxDir, "bin/sh").isFile` 判断 guest 入口，合法的 `/bin -> /usr/bin` 绝对链接只在 guest 根下解析。
 
 `RootfsPatcher` 是幂等修补器：
 
@@ -221,7 +240,7 @@ ensureWorkspace
 
 ## 9. 状态与删除
 
-Workspace shell 状态使用 `DISABLED`、`INSTALLING`、`READY` 和 `BROKEN`。只有 READY 注册工具和打开终端；安装失败进入 BROKEN，Rootfs 缺失可回到 DISABLED。
+Workspace shell 状态使用 `DISABLED`、`INSTALLING`、`READY` 和 `BROKEN`。只有 READY 注册工具和打开终端；安装失败进入 BROKEN，READY 的 Rootfs 缺失可回到 DISABLED。启动时残留 INSTALLING 一律收口 BROKEN 并保留原文件，允许重新安装；旧 root 仍有效不能证明被中断的安装已成功发布，也不能使界面永久停留在安装中。
 
 删除 Workspace 时先把 Room 状态持久化为 `BROKEN`，再将磁盘目录移到 Manager-owned 暂存位置并写入删除 journal；Settings 成功清理所有 Assistant 的 `workspaceId` 引用后才标记并删除暂存树，最后由 `WorkspaceDAO.deleteById` 确认删除 Room 实体。Settings 拒绝或删除尚未开始时中断，完整性检查按 journal 恢复目录、原引用和原 shell 状态。标记物理删除后，递归删除失败或中断都不能假定目录完整：journal 与 `BROKEN` 状态保留，后续删除继续清理，只有树已不存在且 DAO 确认删到一行才清 journal。失败时保留 durable identity 供幂等重试。删除或状态变化后，下一次工具装配不会继续暴露旧 Workspace。
 

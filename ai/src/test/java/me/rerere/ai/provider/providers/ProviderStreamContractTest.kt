@@ -9,6 +9,7 @@ import org.junit.Before
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeout
 import me.rerere.ai.provider.Model
 import me.rerere.ai.provider.ProviderSetting
@@ -32,6 +33,97 @@ import org.junit.Test
 
 /** Exercises the actual SSE listener and Flow closure using an in-process HTTP response body. */
 class ProviderStreamContractTest {
+    @Test
+    fun `cancelling during request assembly never starts an HTTP call`() = runBlocking {
+        for (wire in Wire.entries) {
+            val entered = java.util.concurrent.CountDownLatch(1)
+            val release = java.util.concurrent.CountDownLatch(1)
+            val calls = java.util.concurrent.atomic.AtomicInteger()
+            val headers = object : AbstractList<me.rerere.ai.provider.CustomHeader>() {
+                override val size = 1
+                override fun get(index: Int): me.rerere.ai.provider.CustomHeader {
+                    entered.countDown()
+                    check(release.await(5, java.util.concurrent.TimeUnit.SECONDS))
+                    return me.rerere.ai.provider.CustomHeader("X-Test", "blocked-assembly")
+                }
+            }
+            val client = OkHttpClient.Builder().eventListener(object : okhttp3.EventListener() {
+                override fun callStart(call: okhttp3.Call) { calls.incrementAndGet() }
+            }).build()
+            val collecting = launch {
+                flow(wire, client, params.copy(customHeaders = headers)).collect()
+            }
+            try {
+                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                    check(entered.await(5, java.util.concurrent.TimeUnit.SECONDS))
+                }
+                collecting.cancel()
+                release.countDown()
+                withTimeout(5_000) { collecting.join() }
+                assertEquals(wire.name, 0, calls.get())
+            } finally {
+                release.countDown()
+                collecting.cancel()
+                client.dispatcher.executorService.shutdown()
+                client.connectionPool.evictAll()
+            }
+        }
+    }
+
+    @Test
+    fun `all request builders isolate assembly and use destination session contract`() = runBlocking {
+        val caller = Thread.currentThread()
+        val headers = object : AbstractList<me.rerere.ai.provider.CustomHeader>() {
+            override val size = 1
+            override fun get(index: Int): me.rerere.ai.provider.CustomHeader {
+                assertTrue("Request assembly must leave caller thread", Thread.currentThread() !== caller)
+                return me.rerere.ai.provider.CustomHeader("X-Test", "assembly")
+            }
+        }
+        val generation = params.copy(providerSessionId = "conversation", customHeaders = headers)
+        for (wire in Wire.entries) for (stream in listOf(false, true)) {
+            for (vertex in if (wire == Wire.GOOGLE) listOf(false, true) else listOf(false)) {
+            var captured: okhttp3.Request? = null
+            val client = OkHttpClient.Builder().addInterceptor { chain ->
+                captured = chain.request()
+                Response.Builder().request(chain.request()).protocol(Protocol.HTTP_1_1).code(400).message("Rejected")
+                    .body("{}".toResponseBody("application/json".toMediaType())).build()
+            }.build()
+            val openAI = ProviderSetting.OpenAI(baseUrl = "https://opencode.ai/v1", responsesPath = "/custom/responses", apiKey = "test")
+            val claude = ProviderSetting.Claude(baseUrl = "https://opencode.ai/v1", apiKey = "test")
+            val google = ProviderSetting.Google(baseUrl = "https://opencode.ai/v1beta", apiKey = "test", vertexAI = vertex)
+            try {
+                withTimeout(5_000) {
+                    if (stream) {
+                        val flow = when (wire) {
+                            Wire.CHAT -> ChatCompletionsAPI(client, KeyRoulette.default()).streamText(openAI, emptyList(), generation)
+                            Wire.RESPONSES -> ResponseAPI(client).streamText(openAI, emptyList(), generation)
+                            Wire.CLAUDE -> ClaudeProvider(client).streamText(claude, emptyList(), generation)
+                            Wire.GOOGLE -> GoogleProvider(client).streamText(google, emptyList(), generation)
+                        }
+                        flow.collect { assertTrue(Thread.currentThread() === caller) }
+                    } else when (wire) {
+                        Wire.CHAT -> ChatCompletionsAPI(client, KeyRoulette.default()).generateText(openAI, emptyList(), generation)
+                        Wire.RESPONSES -> ResponseAPI(client).generateText(openAI, emptyList(), generation)
+                        Wire.CLAUDE -> ClaudeProvider(client).generateText(claude, emptyList(), generation)
+                        Wire.GOOGLE -> GoogleProvider(client).generateText(google, emptyList(), generation)
+                    }
+                }
+                error("Expected controlled HTTP rejection")
+            } catch (failure: Exception) {
+                if (failure is kotlinx.coroutines.CancellationException) throw failure
+                val request = requireNotNull(captured)
+                assertEquals("$wire stream=$stream vertex=$vertex", if (vertex) null else "conversation", request.header("x-opencode-session"))
+                if (vertex) assertEquals("aiplatform.googleapis.com", request.url.host)
+                if (wire == Wire.RESPONSES) assertEquals("/v1/custom/responses", request.url.encodedPath)
+            } finally {
+                client.dispatcher.executorService.shutdown()
+                client.connectionPool.evictAll()
+            }
+            }
+        }
+    }
+
     @Before
     fun isolateAndroidLogging() {
         mockkStatic(Log::class)
@@ -62,7 +154,7 @@ class ProviderStreamContractTest {
         Wire.RESPONSES -> listOf("""{"type":"response.completed","response":{"id":"response","status":"completed","output":[]}}""")
     }
 
-    private suspend fun flow(wire: Wire, client: OkHttpClient): Flow<MessageChunk> = when (wire) {
+    private suspend fun flow(wire: Wire, client: OkHttpClient, params: TextGenerationParams = this.params): Flow<MessageChunk> = when (wire) {
         Wire.CHAT -> ChatCompletionsAPI(client, KeyRoulette.default()).streamText(
             ProviderSetting.OpenAI(baseUrl = "https://provider.test/v1", apiKey = "test"), emptyList(), params,
         )
@@ -78,6 +170,7 @@ class ProviderStreamContractTest {
     }
 
     private fun collect(wire: Wire, events: List<String>): Pair<List<MessageChunk>, Throwable?> = runBlocking {
+        val caller = Thread.currentThread()
         val body = events.joinToString("") { "data: $it\n\n" }
         val client = OkHttpClient.Builder().addInterceptor { chain ->
             Response.Builder().request(chain.request()).protocol(Protocol.HTTP_1_1).code(200).message("OK")
@@ -86,7 +179,10 @@ class ProviderStreamContractTest {
         val chunks = mutableListOf<MessageChunk>()
         var error: Throwable? = null
         try {
-            withTimeout(5_000) { flow(wire, client).collect { chunks += it } }
+            withTimeout(5_000) { flow(wire, client).collect {
+                assertTrue("Collector must stay on the caller thread", Thread.currentThread() === caller)
+                chunks += it
+            } }
         } catch (failure: Throwable) {
             error = failure
         } finally {

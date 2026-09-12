@@ -241,7 +241,7 @@ class WorkspaceRepositoryDeleteTest {
             every { manager.workspaceDir("root") } returns rootDir
             every { manager.recoverStagedWorkspaceDeletion("root") } returns true
             every { manager.clearWorkspaceDeletionJournal("root") } returns true
-            every { manager.hasRootfs("root") } returns true
+            every { manager.hasRootfsFiles("root") } returns true
             coEvery { settingsStore.updateLocal(any()) } coAnswers {
                 firstArg<(net.weero.measix.pilot.data.datastore.Settings) -> net.weero.measix.pilot.data.datastore.Settings>()
                     .invoke(localSettings)
@@ -290,6 +290,40 @@ class WorkspaceRepositoryDeleteTest {
         coVerify(exactly = 0) {
             fixture.dao.updateShellStatus(workspaceId.toString(), WorkspaceShellStatus.READY.name, any())
         }
+    }
+
+    @Test
+    fun `startup retains compatible ready and rejects incompatible or interrupted installs without deleting data`() = runTest {
+        val rootDir = Files.createTempDirectory("workspace-abi").toFile()
+        try {
+            for ((status, compatible) in listOf(
+                WorkspaceShellStatus.READY to false,
+                WorkspaceShellStatus.READY to true,
+                WorkspaceShellStatus.INSTALLING to false,
+                WorkspaceShellStatus.INSTALLING to true,
+            )) {
+                val dao = mockk<WorkspaceDAO>()
+                val manager = mockk<WorkspaceManager>()
+                val installer = mockk<RootfsInstaller>()
+                val workspace = WorkspaceEntity("id", "Workspace", "root", shellStatus = status.name, createdAt = 1, updatedAt = 1)
+                coEvery { dao.getAll() } returns listOf(workspace)
+                coEvery { dao.updateShellStatus("id", WorkspaceShellStatus.BROKEN.name, any()) } returns 1
+                every { manager.readWorkspaceDeletionJournal("root") } returns null
+                every { manager.recoverStagedWorkspaceDeletion("root") } returns false
+                every { manager.workspaceDir("root") } returns rootDir
+                every { manager.hasRootfsFiles("root") } returns true
+                every { installer.isCompatible("root") } returns compatible
+
+                WorkspaceRepository(dao, manager, installer, mockk()).checkIntegrity()
+
+                if (status == WorkspaceShellStatus.READY && compatible) {
+                    coVerify(exactly = 0) { dao.updateShellStatus(any(), any(), any()) }
+                } else {
+                    coVerify(exactly = 1) { dao.updateShellStatus("id", WorkspaceShellStatus.BROKEN.name, any()) }
+                }
+                coVerify(exactly = 0) { manager.deleteWorkspace(any()) }
+            }
+        } finally { rootDir.deleteRecursively() }
     }
 
     private fun fixture(

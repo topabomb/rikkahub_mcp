@@ -56,7 +56,8 @@ val repositoryModule = module {
     }
 
     single {
-        RootfsInstaller(get())
+        val context: Context = get()
+        RootfsInstaller(get(), File(context.applicationInfo.nativeLibraryDir))
     }
 
     single {

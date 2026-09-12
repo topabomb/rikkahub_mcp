@@ -74,20 +74,6 @@ fun MeasixTheme(
     }
     val extendColors = if (darkTheme) ExtendDarkColors else ExtendLightColors
 
-    // 更新状态栏图标颜色
-    val activity = LocalActivity.current
-    val view = LocalView.current
-    if (!view.isInEditMode) {
-        SideEffect {
-            activity?.window?.let { window ->
-                WindowCompat.getInsetsController(window, view).apply {
-                    isAppearanceLightStatusBars = !darkTheme
-                    isAppearanceLightNavigationBars = !darkTheme
-                }
-            }
-        }
-    }
-
     CompositionLocalProvider(
         LocalDarkMode provides darkTheme,
         LocalExtendColors provides extendColors,
@@ -106,3 +92,20 @@ val MaterialTheme.extendColors
     @Composable
     @ReadOnlyComposable
     get() = LocalExtendColors.current
+
+/** Only the Activity navigation host owns system bars; nested and export themes are pure styling. */
+@Composable
+fun WindowSystemBars(darkTheme: Boolean = LocalDarkMode.current) {
+    val activity = LocalActivity.current
+    val view = LocalView.current
+    if (!view.isInEditMode) {
+        SideEffect {
+            activity?.window?.let { window ->
+                WindowCompat.getInsetsController(window, view).apply {
+                    isAppearanceLightStatusBars = !darkTheme
+                    isAppearanceLightNavigationBars = !darkTheme
+                }
+            }
+        }
+    }
+}

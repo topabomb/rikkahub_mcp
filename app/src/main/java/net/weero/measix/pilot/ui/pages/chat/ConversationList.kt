@@ -231,6 +231,7 @@ private fun ConversationItem(
     onClick: (ConversationSummary) -> Unit
 ) {
     val interactionSource = remember { MutableInteractionSource() }
+    val focusManager = androidx.compose.ui.platform.LocalFocusManager.current
     val backgroundColor = if (selected) {
         MaterialTheme.colorScheme.surfaceContainerHighest
     } else {
@@ -247,6 +248,7 @@ private fun ConversationItem(
                 indication = LocalIndication.current,
                 onClick = { onClick(conversation) },
                 onLongClick = {
+                    focusManager.clearFocus(force = true)
                     showDropdownMenu = true
                 }
             )

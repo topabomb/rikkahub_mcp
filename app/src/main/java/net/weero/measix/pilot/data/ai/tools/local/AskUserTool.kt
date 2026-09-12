@@ -177,7 +177,7 @@ internal fun buildAskUserTool(): Tool = Tool(
                                 )
                                 put(
                                     "description",
-                                    "Answer type: text (free text input, default), single (select exactly one option), multi (select one or more options)"
+                                    "Answer type: text (free text, default), single (one option or a custom answer), multi (multiple options and/or a custom answer). Every type allows free text."
                                 )
                             })
                         })

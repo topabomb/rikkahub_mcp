@@ -1151,6 +1151,7 @@ class ChatCompletionsAPISerializerTest {
             parameters = { buildJsonObject { put("type", "object") } },
             execute = { emptyList() },
         )
+        listOf("deepseek-v4-flash", "deepseek-v4.1-flash", "deepseek-flash").forEach { modelId ->
         val body = invokeBuildRequest(
             messages = listOf(
                 UIMessage.user("question"),
@@ -1172,7 +1173,7 @@ class ChatCompletionsAPISerializerTest {
             ),
             params = TextGenerationParams(
                 model = Model(
-                    modelId = "deepseek-v4-flash",
+                    modelId = modelId,
                     displayName = "DeepSeek V4 Flash",
                     abilities = listOf(ModelAbility.REASONING, ModelAbility.TOOL),
                 ),
@@ -1189,6 +1190,7 @@ class ChatCompletionsAPISerializerTest {
             it.jsonObject["reasoning_content"]?.jsonPrimitive?.contentOrNull
         }
         assertEquals(listOf("first reasoning", "tool reasoning"), reasoning)
+        }
     }
 
     @Test

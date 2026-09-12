@@ -5,7 +5,11 @@
     "sourceZipUrl": "https://github.com/termux/proot/archive/refs/tags/v5.1.107.92.zip",
     "sourceZipSha256": "29385d1ddb619a9c4449ab512bfd55032034b22f724ddf98fc95ff300ea32135",
     "upstreamBinaryCommit": "f4508dfac2255cf83e75859a8fe37dd7da6778a3",
-    "upstreamBinaryMatch": "byte-identical"
+    "upstreamBinaryMatch": "locally-patched-source-build",
+    "patch": {
+      "repoPath": "workspace/tools/patches/proot-termination.patch",
+      "sha256": "7833f4e942831b067410de66bd1bcc5e960c6ddc3c86e122f0b6f3e3479f1822"
+    }
   },
   "termuxPackage": {
     "recipeCommit": "08b49b3ce00b1e14a3a0365200f30e50f8dfafe1",
@@ -28,27 +32,40 @@
     "api": 24,
     "prootWithLibandroidShmem": true,
     "staticLinking": true,
-    "localRebuildStatus": "not-run",
-    "hashPolicy": "fail-if-output-differs-from-recorded-artifacts"
+    "localRebuildStatus": "verified-two-clean-builds",
+    "hashPolicy": "fail-if-output-differs-from-recorded-artifacts",
+    "ndkRevision": "29.0.14206865",
+    "host": "linux-x86_64",
+    "script": "workspace/tools/build-proot.py",
+    "ndkArchive": {
+      "url": "https://dl.google.com/android/repository/android-ndk-r29-linux.zip",
+      "sha1": "87e2bb7e9be5d6a1c6cdf5ec40dd4e0c6d07c30b"
+    }
   },
   "artifacts": [
     {
       "abi": "arm64-v8a",
       "repoPath": "workspace/src/main/jniLibs/arm64-v8a/libproot_exec.so",
-      "sha256": "06c4b8d620c960e2ae873786e81dc04d797b5af47967819b5ec4cbb7635590c9",
+      "sha256": "ba5c2877027ca47d48831399a80fef22391be93594cd91452dbbde0ce93d77d5",
       "elfMachine": "AArch64",
       "interpreter": "/system/bin/linker64",
       "androidApi": 24,
-      "dtNeeded": ["liblog.so", "libc.so"]
+      "dtNeeded": [
+        "liblog.so",
+        "libc.so"
+      ]
     },
     {
       "abi": "x86_64",
       "repoPath": "workspace/src/main/jniLibs/x86_64/libproot_exec.so",
-      "sha256": "29ad3f63f5a1a030d0db8a58c6f14124386ce4a2fc31c24003b8fac3febe5a02",
+      "sha256": "96dd0de356a072f5b88a4edeef063a4e183b61fb713114258607aecc09ed54ea",
       "elfMachine": "x86-64",
       "interpreter": "/system/bin/linker64",
       "androidApi": 24,
-      "dtNeeded": ["liblog.so", "libc.so"]
+      "dtNeeded": [
+        "liblog.so",
+        "libc.so"
+      ]
     },
     {
       "abi": "arm64-v8a",

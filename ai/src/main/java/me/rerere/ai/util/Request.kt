@@ -8,6 +8,8 @@ import me.rerere.ai.provider.CustomHeader
 import okhttp3.Headers
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.Request
+import okhttp3.Interceptor
+import okhttp3.Response
 import okhttp3.ResponseBody
 import okhttp3.internal.http.RealResponseBody
 
@@ -77,6 +79,27 @@ class CustomBodyReservedKeyException(
 ) {
     val reason: String = "custom_body_reserved_key"
     val conflictingKeys: List<String> = conflictingKeys.sorted()
+}
+
+/** Stable conversation identity is disclosed only to the endpoint that defines this contract. */
+fun Request.Builder.configureSessionHeader(sessionId: String?): Request.Builder {
+    if (build().url.host != "opencode.ai" || sessionId.isNullOrBlank()) return this
+    require(sessionId.all { it in '!'..'~' }) { "invalid_provider_session_id" }
+    // The execution owner, not a custom header, selects the conversation identity.
+    return header("x-opencode-session", sessionId).tag(OpenCodeSessionHeader::class.java, OpenCodeSessionHeader)
+}
+
+private data object OpenCodeSessionHeader
+
+/** Redirects retain request tags: automatic conversation identity must stay on its destination. */
+class ProviderSessionHeaderInterceptor : Interceptor {
+    override fun intercept(chain: Interceptor.Chain): Response {
+        val request = chain.request()
+        val scoped = if (request.tag(OpenCodeSessionHeader::class.java) != null && request.url.host != "opencode.ai") {
+            request.newBuilder().removeHeader("x-opencode-session").build()
+        } else request
+        return chain.proceed(scoped)
+    }
 }
 
 fun JsonObject.mergeCustomBody(

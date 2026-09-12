@@ -50,6 +50,11 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.graphics.vector.rememberVectorPainter
+import coil3.compose.AsyncImage
+import net.weero.measix.pilot.service.ImageSource
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.text.style.TextOverflow
@@ -200,6 +205,7 @@ fun WorkspaceDetailPage(id: String) {
 
                 1 -> WorkspaceFilesPage(
                     state = state,
+                    imageSource = vm::imageSource,
                     contentPadding = PaddingValues(),
                     onSelectArea = vm::selectArea,
                     onGoUp = vm::goUp,
@@ -265,6 +271,7 @@ fun WorkspaceDetailPage(id: String) {
         if (showInstallDialog) {
             InstallRootfsDialog(
                 workspace = workspace,
+                defaultUrl = vm.defaultRootfsUrl,
                 onDismiss = { showInstallDialog = false },
                 onConfirm = { url ->
                     vm.installRootfs(url)
@@ -274,11 +281,14 @@ fun WorkspaceDetailPage(id: String) {
         }
     }
 
-    if (installError) {
+    if (installError != null) {
         AlertDialog(
             onDismissRequest = vm::dismissInstallError,
             title = { Text(stringResource(R.string.workspace_detail_rootfs_install_failed)) },
-            text = { Text(stringResource(R.string.workspace_detail_rootfs_install_failed)) },
+            text = {
+                Text(installError?.takeIf { it.isNotBlank() }
+                    ?: stringResource(R.string.workspace_detail_rootfs_install_failed))
+            },
             confirmButton = {
                 TextButton(onClick = vm::dismissInstallError) {
                     Text(stringResource(R.string.common_confirm))
@@ -564,10 +574,11 @@ private fun RootfsProgress(progress: RootfsInstallProgress) {
 @Composable
 private fun InstallRootfsDialog(
     workspace: WorkspaceUiModel,
+    defaultUrl: String,
     onDismiss: () -> Unit,
     onConfirm: (String) -> Unit,
 ) {
-    var url by rememberSaveable(workspace.id) { mutableStateOf(DEFAULT_ROOTFS_URL) }
+    var url by rememberSaveable(workspace.id) { mutableStateOf(defaultUrl) }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -607,6 +618,7 @@ private fun InstallRootfsDialog(
 @Composable
 private fun WorkspaceFilesPage(
     state: WorkspaceDetailState,
+    imageSource: (WorkspaceFileEntry, WorkspaceStorageArea) -> ImageSource,
     contentPadding: PaddingValues,
     onSelectArea: (WorkspaceStorageArea) -> Unit,
     onGoUp: () -> Unit,
@@ -650,6 +662,9 @@ private fun WorkspaceFilesPage(
         items(state.entries, key = { "${state.area.name}:${it.path}" }) { entry ->
             WorkspaceFileCard(
                 entry = entry,
+                image = if (!entry.isDirectory && entry.detectFileType() == WorkspaceFileType.IMAGE) {
+                    remember(entry, state.area, imageSource) { imageSource(entry, state.area) }
+                } else null,
                 onOpen = { onOpen(entry) },
                 onDelete = { onDelete(entry) },
                 onExport = { onExport(entry) },
@@ -712,6 +727,7 @@ private fun WorkspacePathBar(
 @Composable
 private fun WorkspaceFileCard(
     entry: WorkspaceFileEntry,
+    image: ImageSource?,
     onOpen: () -> Unit,
     onDelete: () -> Unit,
     onExport: () -> Unit,
@@ -731,16 +747,28 @@ private fun WorkspaceFileCard(
                 .padding(start = 16.dp, top = 12.dp, bottom = 12.dp, end = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Icon(
-                imageVector = if (entry.isDirectory) HugeIcons.Folder01 else HugeIcons.File02,
-                contentDescription = null,
-                modifier = Modifier.size(22.dp),
-                tint = if (entry.isDirectory) {
-                    MaterialTheme.colorScheme.primary
-                } else {
-                    MaterialTheme.colorScheme.onSurfaceVariant
-                },
-            )
+            if (image != null) {
+                val placeholder = rememberVectorPainter(HugeIcons.File02)
+                AsyncImage(
+                    model = image,
+                    contentDescription = null,
+                    placeholder = placeholder,
+                    error = placeholder,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.size(40.dp).clip(MaterialTheme.shapes.small),
+                )
+            } else {
+                Icon(
+                    imageVector = if (entry.isDirectory) HugeIcons.Folder01 else HugeIcons.File02,
+                    contentDescription = null,
+                    modifier = Modifier.size(22.dp),
+                    tint = if (entry.isDirectory) {
+                        MaterialTheme.colorScheme.primary
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    },
+                )
+            }
             Column(
                 modifier = Modifier
                     .weight(1f)
@@ -874,6 +902,3 @@ internal fun WorkspaceShellStatus.toShellStatusLabel(): String = when (this) {
     WorkspaceShellStatus.READY -> stringResource(R.string.workspace_detail_shell_ready)
     WorkspaceShellStatus.BROKEN -> stringResource(R.string.workspace_detail_shell_broken)
 }
-
-private const val DEFAULT_ROOTFS_URL =
-    "https://cdimage.ubuntu.com/ubuntu-base/releases/24.04/release/ubuntu-base-24.04.3-base-arm64.tar.gz"

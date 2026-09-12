@@ -5,8 +5,9 @@ app/src/release/generated/baselineProfiles/*.txt text eol=lf
 highlight/src/test/resources/hljs/**/*.txt text eol=lf
 highlight/src/test/resources/hljs/**/*.tokens text eol=lf
 
-# POSIX rebuild scripts must keep an executable shebang and shell syntax on Linux/WSL.
-workspace/tools/*.sh text eol=lf
+# POSIX rebuild scripts and hash-locked patches must retain their original bytes on Windows.
+workspace/tools/*.py text eol=lf
+workspace/tools/patches/*.patch text eol=lf -whitespace
 
 # Upstream contract inputs are pinned by SHA256 and retain their original bytes.
 app/src/test/resources/contracts/portal/*.json -text

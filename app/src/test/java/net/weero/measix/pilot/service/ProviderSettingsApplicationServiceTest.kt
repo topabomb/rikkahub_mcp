@@ -89,7 +89,7 @@ class ProviderSettingsApplicationServiceTest {
             apiKey = "old-key",
             models = listOf(concurrentModel),
         )
-        val edited = latest.copy(name = "Edited", apiKey = "new-key", models = emptyList())
+        val edited = latest.copy(name = "  Edited  ", apiKey = "new-key", models = emptyList())
         val store = mockk<SettingsStore>()
         var persisted: Settings? = null
         coEvery { store.updateLocal(any()) } coAnswers {

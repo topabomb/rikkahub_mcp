@@ -3,6 +3,7 @@ package me.rerere.workspace
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
+import org.junit.Assert.assertThrows
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
@@ -236,9 +237,19 @@ class ProotShellRunnerTest {
     }
 
     @Test
+    fun execute_rejectsForeignRootfsBeforeStartingProot() {
+        val (runner, context) = setupContext()
+        writeTestElf(proot, 62)
+        writeTestElf(File(linuxDir, "usr/bin/env"), 183)
+        writeTestElf(File(linuxDir, "bin/bash"), 183)
+        val failure = assertThrows(IllegalArgumentException::class.java) { runner.execute(context) }
+        assertTrue(failure.message!!.contains("architecture mismatch"))
+    }
+
+    @Test
     fun execute_returnsErrorWhenRootfsNotInstalled() {
         val (runner, ctx) = setupContext()
-        // linuxDir is an empty temp folder — no bin/sh
+        // An empty workspace has no installed Rootfs content.
         val result = runner.execute(ctx)
 
         assertEquals(127, result.exitCode)
@@ -251,11 +262,10 @@ class ProotShellRunnerTest {
 
     @Test
     fun execute_returnsErrorWhenProotBinaryMissing() {
-        // Create a valid rootfs (bin/sh exists) but no proot binary
+        // Native diagnostics precede compatibility checks for an existing Rootfs tree.
         linuxDir = tmp.newFolder("linux-real")
         filesDir = tmp.newFolder("files-real")
-        File(linuxDir, "bin").mkdirs()
-        File(linuxDir, "bin/sh").writeText("#!/bin/sh\n")
+        File(linuxDir, "etc").mkdirs()
 
         val emptyNativeDir = tmp.newFolder("empty-native")
         val runner = ProotShellRunner(emptyNativeDir)

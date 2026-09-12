@@ -141,6 +141,7 @@ import net.weero.measix.pilot.ui.pages.subassistant.SubAssistantDetailPage
 import net.weero.measix.pilot.ui.pages.webview.ContentPreviewPage
 import net.weero.measix.pilot.ui.theme.LocalDarkMode
 import net.weero.measix.pilot.ui.theme.MeasixTheme
+import net.weero.measix.pilot.ui.theme.WindowSystemBars
 import net.weero.measix.pilot.utils.CrashHandler
 import net.weero.measix.pilot.utils.openUsageAccessSettings
 import okhttp3.OkHttpClient
@@ -295,6 +296,10 @@ class RouteActivity : ComponentActivity() {
         val migrationState by DatabaseMigrationTracker.state.collectAsStateWithLifecycle()
 
         val backStack = rememberNavBackStack(Screen.Startup(intent.getStringExtra("conversationId")))
+        WindowSystemBars(
+            darkTheme = LocalDarkMode.current ||
+                (recoveryState is ApplicationRecoveryState.Ready && backStack.lastOrNull() is Screen.WorkspaceTerminal),
+        )
         val adaptiveLayoutInfo = rememberAdaptiveLayoutInfo()
         SideEffect { this@RouteActivity.navStack = backStack }
 

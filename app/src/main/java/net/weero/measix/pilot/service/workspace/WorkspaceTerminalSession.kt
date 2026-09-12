@@ -5,6 +5,9 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.os.Looper
+import android.system.ErrnoException
+import android.system.Os
+import android.system.OsConstants
 import android.net.ConnectivityManager
 import android.util.Log
 import android.view.KeyEvent
@@ -20,6 +23,7 @@ import net.weero.measix.pilot.data.files.FileFolders
 import me.rerere.workspace.ProotLaunchSpec
 import me.rerere.workspace.RootfsPatchOptions
 import me.rerere.workspace.RootfsPatcher
+import me.rerere.workspace.RootfsCompatibility
 import java.io.File
 
 internal fun createWorkspaceTerminalSession(
@@ -39,6 +43,7 @@ internal fun createWorkspaceTerminalSession(
         tempDir = tempDir,
         bindMounts = ProotLaunchSpec.appBindMounts(appContext.filesDir),
     )
+    RootfsCompatibility(File(appContext.applicationInfo.nativeLibraryDir)).requireCompatible(linuxDir)
 
     return WorkspacePtySession(
         spec.executable.absolutePath,
@@ -61,6 +66,18 @@ internal class WorkspacePtySession(
     transcriptRows: Int,
     private val client: WorkspaceTerminalSessionClient,
 ) : TerminalSession(shellPath, cwd, args, env, transcriptRows, client) {
+    override fun finishIfRunning() {
+        check(Looper.myLooper() == Looper.getMainLooper())
+        val processId = pid
+        if (processId <= 0) return
+        try {
+            // PRoot terminates and reaps its tracees before the session closes its PTY.
+            Os.kill(processId, OsConstants.SIGTERM)
+        } catch (error: ErrnoException) {
+            if (error.errno != OsConstants.ESRCH) throw error
+        }
+    }
+
     override fun write(data: ByteArray, offset: Int, count: Int) {
         check(Looper.myLooper() == Looper.getMainLooper())
         require(offset >= 0 && count >= 0 && offset <= data.size - count)
@@ -88,14 +105,14 @@ internal fun prepareWorkspaceTerminalSession(context: Context, root: String) {
 
 internal fun workspaceRootfsReady(context: Context, root: String): Boolean {
     val linuxDir = File(File(File(context.applicationContext.filesDir, "workspaces"), root), "linux")
-    return linuxDir.isDirectory && File(linuxDir, "bin/sh").isFile
+    return RootfsCompatibility(File(context.applicationInfo.nativeLibraryDir)).isCompatible(linuxDir)
 }
 
 internal class WorkspaceTerminalSessionClient(
     private val context: Context,
     private val onAction: (() -> Unit) -> Boolean,
     val onWrite: (WorkspacePtySession, ByteArray, Int, Int) -> Unit,
-    private val onFinished: () -> Unit,
+    private val onFinished: (TerminalSession) -> Unit,
 ) : TerminalSessionClient {
     var terminalView: TerminalView? = null
 
@@ -106,7 +123,7 @@ internal class WorkspaceTerminalSessionClient(
     override fun onTitleChanged(changedSession: TerminalSession) = Unit
 
     override fun onSessionFinished(finishedSession: TerminalSession) {
-        onFinished()
+        onFinished(finishedSession)
     }
 
     override fun onCopyTextToClipboard(session: TerminalSession, text: String) {

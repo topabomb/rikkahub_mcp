@@ -1,77 +1,85 @@
 # PRoot Binary Provenance
 
-## Version
+## Sources and local patch
 
-- **PRoot**: `v5.1.107.92` (commit `7266fb3e8516535682f5a9c8f3a7e70f6506eddb`)
-- **Termux Packages recipe**: commit `08b49b3ce00b1e14a3a0365200f30e50f8dfafe1`
+- PRoot: `v5.1.107.92`, commit `7266fb3e8516535682f5a9c8f3a7e70f6506eddb`.
+- Source archive and dependency checksums: `workspace/proot-lock.json`.
+- Termux recipe reference: commit `08b49b3ce00b1e14a3a0365200f30e50f8dfafe1`,
+  [PRoot](https://github.com/termux/termux-packages/blob/08b49b3ce00b1e14a3a0365200f30e50f8dfafe1/packages/proot/build.sh)
+  and [libtalloc](https://github.com/termux/termux-packages/blob/08b49b3ce00b1e14a3a0365200f30e50f8dfafe1/packages/libtalloc/build.sh).
+- Local termination patch: `workspace/tools/patches/proot-termination.patch`, also hash-locked.
 
-## Source
+The earlier imports came from upstream app commit `f4508dfac2255cf83e75859a8fe37dd7da6778a3`.
+The shipped executables and loader companions are now local source builds; they are not claimed
+byte-identical to those imports. The direct build uses the same fixed source versions, Android API
+floor and static dependencies, with the Termux talloc cross answers. It does not run the entire
+Termux packaging system.
 
-- Source: [Termux/PRoot `v5.1.107.92`](https://github.com/termux/proot/tree/v5.1.107.92)
-- Fixed recipe: [Termux Packages recipe](https://github.com/termux/termux-packages/blob/08b49b3ce00b1e14a3a0365200f30e50f8dfafe1/packages/proot/build.sh)
-- Upstream app binary commit: `f4508dfac2255cf83e75859a8fe37dd7da6778a3`
+## Process termination
 
-The checked-in `arm64-v8a` and `x86_64` `libproot_exec.so` files are byte-identical to that
-upstream app commit. This establishes the exact binary import path. It does not prove that the
-pinned Termux recipe reproduces those bytes; the local rebuild has not been run.
+Android `Process.destroyForcibly()` sends SIGTERM. The upstream PRoot ignores SIGTERM and only
+cleans its tracees for SIGQUIT. The local patch makes both signals request termination through
+PRoot's existing tracee registry and waitpid loop. PRoot blocks these signals before creating the
+first tracee; the guest restores the inherited signal mask, while the tracer restores it only after
+registering the child and installing its handlers. Early cancellation therefore remains pending.
 
-## Dependencies
+The termination request remains set while the loop drains events, so a child first discovered
+through a pending fork/clone event is also killed and reaped. Already reaped PIDs are not signaled.
+Normal termination handlers avoid stdio. The shell adapter retains ProcessBuilder and separate
+stdin/stdout/stderr; WorkspacePtySession sends SIGTERM to its existing PRoot PID. PRoot remains
+the only owner of traced guest processes. No signal-forwarding shell, PID reflection, timer,
+seccomp override or replacement process supervisor is used.
 
-- `libandroid-shmem 0.7` (SHA-256: `1e5ff8459bc0a8c229dd8a94b27d119987e09ef3414331c2b5ebfff20b98e867`)
-- `libtalloc 2.4.3` (SHA-256: `dc46c40b9f46bb34dd97fe41f548b0e8b247b77a918576733c528e83abd854dd`)
+## Rebuild and verification
 
-## Build Configuration
+`workspace/tools/build-proot.py` requires Python 3.12+, make, patch, and the Linux x86_64 Android
+NDK r29 (`29.0.14206865`). The NDK revision, API 24, source/dependency hashes, patch hash and final
+artifact hashes are recorded in `workspace/proot-lock.json`. Native ELF segments support 16 KiB
+host pages; guest Rootfs compatibility remains a separate admission check.
 
-- NDK: r29
-- Android API: 24
-- `PROOT_WITH_LIBANDROID_SHMEM=true`
-- Static linking (no runtime dependency on `libandroid-shmem.so` or `libtalloc.so`)
+```sh
+python3 workspace/tools/build-proot.py \
+  --ndk /path/to/android-ndk-r29 \
+  --work-dir /path/to/build-parent \
+  --cache-dir /path/to/source-cache \
+  --output-dir /path/to/verified-output
+```
 
-`workspace/tools/build-proot.sh` creates an owned temporary directory for each rebuild. Optional
-`PROOT_BUILD_WORK_DIR` names only its parent directory; the script creates a unique
-`proot-build.XXXXXXXX` child and never recursively removes the caller-provided parent. Set
-`PROOT_KEEP_BUILD_WORK_DIR=true` to retain that owned child for inspection.
+All three directories are explicit. The script creates and owns a unique child of `--work-dir`,
+places temporary files and build caches there, and removes only that child. Output must be outside
+the repository. Source checksums and compiler revision are checked before building. The default
+mode rejects output differing from the manifest and never installs artifacts into the repository.
+`--candidate` emits proposed hashes for an intentional native update, without rewriting the
+manifest; it is not a verification pass. `--keep-work-dir` retains exact patched sources, dependency
+objects and configuration for inspection and relinking.
 
-The script is a pinned rebuild candidate and a fail-closed verification command. It refuses to
-install output whose hashes differ from the recorded artifacts; it never updates the manifest or
-silently accepts toolchain drift. Its current status is **not run locally**, so these files must not
-be described as bit-for-bit reproducible from the recipe yet.
+Builds use deterministic archives, a fixed source date and normalized source paths. On 2026-09-12,
+both ABI exec/loader pairs were reproduced byte-for-byte in independent source/build directories
+using the finalized compiler and linker flags. All four hashes match the shipped files and manifest.
+Both rebuilt loader companions also match their earlier imported bytes. Host builds and ELF checks
+do not replace Android device verification.
 
-## Artifacts
+## Runtime contract and device acceptance
 
-See `proot-lock.json` for the machine-readable manifest with SHA-256, ELF machine, interpreter, Android API floor, and allowed `DT_NEEDED` for each artifact.
+Both ABIs retain the shared ProotLaunchSpec: root-id, link2symlink, kill-on-exit, `-k 4.14.0`, existing
+bind mounts, PWD and explicit environment. `PROOT_LOADER` selects the separately built loader.
+`--kill-on-exit` terminates remaining tracees when the initial guest exits; terminating the tracer
+with SIGKILL bypasses its cleanup and is not the workspace shutdown protocol.
 
-## Licenses
+The x86_64 pair passed actual Android API 36 / 4 KiB Rootfs and PTY acceptance: shell/file operations, distinct
+stdin/stdout/stderr, long output, bounded timeout and cancellation, cancellation during startup,
+background process disappearance, and two independently closed PTYs. Tests on x86_64 AVDs do not
+prove arm64 physical-device interoperability. The 16 KiB host rejection of an incompatible 4 KiB
+guest archive is separate from successful execution of compatible guests.
 
-- **PRoot**: GPL-2.0-or-later
-- **libtalloc**: LGPL-3.0-or-later
-- **libandroid-shmem**: BSD-3-Clause
+## Distribution materials
 
-The source URLs and hashes above are provenance records, not a completed distribution bundle. A
-release containing these binaries must separately assemble and verify all applicable materials:
+- PRoot: GPL-2.0-or-later; retain the corresponding source, exact local patch and build scripts,
+  including the GPL text or a compliant source offer.
+- libtalloc 2.4.3: LGPL-3.0-or-later, statically linked. A distribution must provide relinkable
+  application/object material and applicable installation information, or another compliant
+  linkage model. Keep the build directory when preparing those materials.
+- libandroid-shmem 0.7: BSD-3-Clause. Its complete notice is in `THIRD_PARTY_NOTICES.md`.
 
-- PRoot GPL corresponding source for the distributed binary, including the exact patches and build/install scripts, plus the GPL text or a compliant source offer;
-- the Termux recipe and patch set used for the binary;
-- the complete `libandroid-shmem` BSD notice reproduced in the distribution materials;
-- for statically linked libtalloc, Corresponding Application Code/object material that permits relinking with a modified libtalloc and any applicable installation information, or another compliant linkage model.
-
-That release compliance gate is currently **not complete**. The exact obligations depend on the
-actual release distribution method and must be checked as part of release preparation.
-
-## Loader Companion
-
-`libproot_loader.so` has not changed in this upgrade but must be verified alongside `libproot_exec.so` as an exec/loader pair. Both entries continue to use `PROOT_LOADER` and preserve `--root-id --link2symlink --kill-on-exit`, `-k 4.14.0`, existing bind mounts, `PWD`, and explicit environment. `PROOT_NO_SECCOMP=1` must not be set to bypass faults.
-
-## Device Verification Status
-
-**PARTIAL X86_64 SMOKE VERIFICATION ONLY.** The packaged x86_64 Debug artifact was installed on an Android 17/API 37 Pixel Fold AVD. The packaged `libproot_exec.so` reported `5.1.107.92` with process-vm and seccomp accelerators; with the packaged loader and production root-id/link2symlink/kill-on-exit environment it successfully executed `id`, `pwd`, a host bind plus `cat`, kernel-release emulation (`4.14.0`), and 1,000 lines of stdout. This proves basic packaged-binary execution, not a Rootfs or PTY acceptance matrix.
-
-Arm64 Android 14/15/16 real-device verification and the complete x86_64 Rootfs/PTY matrix remain outstanding. The following must still pass before declaring this upgrade fully verified:
-
-- cwd/mkdir/stat/rename
-- symlink/hardlink
-- `/workspace`/`/skills`/`/upload` mount
-- DNS/netlink
-- `ipcmk`/`ipcs` or equivalent SysV shared-memory fixture
-- Long output, timeout/cancel/kill-on-exit
-- Two concurrent PTY sessions
+The source URLs, reproducible build and hash manifest establish provenance. They do not alone
+complete the separate release distribution-materials gate.

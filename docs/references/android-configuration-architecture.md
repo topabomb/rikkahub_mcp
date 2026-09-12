@@ -434,6 +434,8 @@ Search 包含本地用户 API key/URL/账号，不作为 Model/MCP 路由或企�
 
 `selectedTTSProviderId` 选中一个 provider；`defaultTTSPlaybackSpeed` 是播放层公共速度，不是服务端 TTS voice。
 
+公共倍速位于一般偏好的 TTS 组，保持既有字段和播放层设置协议。`TtsController` 仅预取当前位置之后两段；同 turn 的追加只补足该窗口，不能按上次预取位置继续前推。没有自动合成重试或跳过队列项的旁路。
+
 企业公开定义使用 `EnterpriseTtsResource`，字段为 `id/name/enabled/modelId/voice`；`voice` 必须显式非空，不补 Android 默认音色。它与用户 `TTSProviderSetting`、私有 `EnterpriseRuntimeBinding` 分别保存。
 
 `TtsController` 统一管理分片、预取与播放；每个 `TtsPlaybackSession` 提供合成和播放准入回调。停止取消并返回同一组任务的清理回执，恢复播放复验原 worker，销毁等待整个 controller 协程作用域，包含旧队列尚未退出的合成。`SpeechApplicationService` 为唯一应用语音 owner，提供 `SpeechPlayback` / `SpeechRecognition` UI 端口；页面不创建 controller 或通过 AppEvent 发出播放请求。OpenAI/Gemini HTTP 合成使用 `Call.readResponse`，取消实际网络 Call，并等待响应正文读取退出后关闭响应。

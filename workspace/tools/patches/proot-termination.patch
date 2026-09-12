@@ -1,0 +1,151 @@
+--- a/src/tracee/event.c
++++ b/src/tracee/event.c
+@@ -52,6 +52,25 @@
+ #include "attribute.h"
+ #include "compat.h"
+ 
++/* Keep cancellation pending until the initial tracee has a registered pid and
++ * the event loop can terminate and reap it. The guest inherits the old mask. */
++static sigset_t original_signal_mask;
++static volatile sig_atomic_t termination_requested;
++
++int block_termination_signals(void)
++{
++	sigset_t mask;
++	sigemptyset(&mask);
++	sigaddset(&mask, SIGTERM);
++	sigaddset(&mask, SIGQUIT);
++	return sigprocmask(SIG_BLOCK, &mask, &original_signal_mask);
++}
++
++static int restore_signal_mask(void)
++{
++	return sigprocmask(SIG_SETMASK, &original_signal_mask, NULL);
++}
++
+ static bool seccomp_after_ptrace_enter = false;
+ static bool seccomp_ptrace_event_supported = false;
+ 
+@@ -98,6 +117,9 @@
+ 		return -errno;
+ 
+ 	case 0: /* child */
++		if (restore_signal_mask() < 0)
++			_exit(EXIT_FAILURE);
++
+ 		/* SIG_IGN survives fork(2) and execve(2), so an ignored
+ 		 * SIGPIPE anywhere above proot is inherited by every
+ 		 * process of the guest: write(2) then fails with EPIPE
+@@ -151,15 +173,19 @@
+  * signal.  */
+ static void kill_all_tracees2(int signum, siginfo_t *siginfo UNUSED, void *ucontext UNUSED)
+ {
++	/* Normal termination must not enter stdio from a signal handler. */
++	if (signum == SIGTERM || signum == SIGQUIT) {
++		termination_requested = 1;
++		kill_all_tracees();
++		return;
++	}
++
+ 	note(NULL, WARNING, INTERNAL, "signal %d received from process %d",
+ 		signum, siginfo->si_pid);
+ 	kill_all_tracees();
+ 
+-	/* Exit immediately for system signals (segmentation fault,
+-	 * illegal instruction, ...), otherwise exit cleanly through
+-	 * the event loop.  */
+-	if (signum != SIGQUIT)
+-		_exit(EXIT_FAILURE);
++	/* Fatal system signals cannot safely continue tracing. */
++	_exit(EXIT_FAILURE);
+ }
+ 
+ /* Interrupt waitpid(2) so the event loop gets a chance to run its
+@@ -319,6 +345,7 @@
+ 	/* Handle all signals.  */
+ 	for (signum = 0; signum < SIGRTMAX; signum++) {
+ 		switch (signum) {
++		case SIGTERM:
+ 		case SIGQUIT:
+ 		case SIGILL:
+ 		case SIGABRT:
+@@ -375,6 +402,14 @@
+ 	if (status < 0)
+ 		note(NULL, WARNING, SYSTEM, "sigaction(SIGALRM)");
+ 
++	/* The first tracee is registered and both termination handlers are ready.
++	 * A cancellation received during startup is delivered at this boundary. */
++	int mask_status = restore_signal_mask();
++	if (mask_status < 0) {
++		note(NULL, ERROR, SYSTEM, "sigprocmask()");
++		kill_all_tracees();
++	}
++
+ 	while (1) {
+ 		int tracee_status;
+ 		Tracee *tracee;
+@@ -417,6 +452,9 @@
+ 		tracee = get_tracee(NULL, pid, true);
+ 		assert(tracee != NULL);
+ 
++		if (termination_requested && !WIFEXITED(tracee_status) && !WIFSIGNALED(tracee_status))
++			kill(pid, SIGKILL);
++
+ 		tracee->running = false;
+ 
+ 		status = notify_extensions(tracee, NEW_STATUS, tracee_status, 0);
+@@ -433,7 +471,7 @@
+ 		(void) restart_tracee(tracee, signal);
+ 	}
+ 
+-	return last_exit_status;
++	return mask_status < 0 ? EXIT_FAILURE : last_exit_status;
+ }
+ 
+ /**
+--- a/src/tracee/event.h
++++ b/src/tracee/event.h
+@@ -27,6 +27,7 @@
+ 
+ #include "tracee/tracee.h"
+ 
++extern int block_termination_signals(void);
+ extern int launch_process(Tracee *tracee, char *const argv[]);
+ extern int event_loop();
+ extern int handle_tracee_event(Tracee *tracee, int tracee_status);
+--- a/src/cli/cli.c
++++ b/src/cli/cli.c
+@@ -461,6 +461,11 @@
+ 		sysvipc_shm_helper_main();
+ 	}
+ 
++	if (block_termination_signals() < 0) {
++		note(NULL, ERROR, SYSTEM, "sigprocmask()");
++		return EXIT_FAILURE;
++	}
++
+ 	/* Pre-create the first tracee (pid == 0).  */
+ 	tracee = get_tracee(NULL, 0, true);
+ 	if (tracee == NULL)
+--- a/src/tracee/tracee.c
++++ b/src/tracee/tracee.c
+@@ -697,7 +697,8 @@
+ 	Tracee *tracee;
+ 
+ 	LIST_FOREACH(tracee, &tracees, link)
+-		kill(tracee->pid, SIGKILL);
++		if (!tracee->terminated)
++			kill(tracee->pid, SIGKILL);
+ }
+ 
+ Tracees *get_tracees_list_head() {
+--- a/src/extension/ashmem_memfd/ashmem_memfd.c
++++ b/src/extension/ashmem_memfd/ashmem_memfd.c
+@@ -1,6 +1,7 @@
+ #if defined(__ANDROID__) || defined(__BIONIC__)
+ 
+ #include <stdlib.h>
++#include <string.h>
+ #include <signal.h>
+ #include <unistd.h>
+ #include <sys/syscall.h>  /* __NR_memfd_create,  */

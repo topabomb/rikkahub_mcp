@@ -7,7 +7,7 @@ class ProotShellRunner(
     private val patcher: RootfsPatcher = RootfsPatcher(),
 ) : WorkspaceShellRunner {
     override fun execute(context: WorkspaceShellContext): WorkspaceCommandResult {
-        if (!context.linuxDir.hasUsableRootfs()) {
+        if (!context.linuxDir.isDirectory || context.linuxDir.list()?.isNotEmpty() != true) {
             return WorkspaceCommandResult(
                 exitCode = 127,
                 stdout = "",
@@ -31,6 +31,8 @@ class ProotShellRunner(
             )
         }
 
+        RootfsCompatibility(nativeLibraryDir).requireCompatible(context.linuxDir)
+
         context.tempDir.mkdirs()
         patcher.patch(context.linuxDir)
         val process = ProcessBuilder(spec.commandLine)
@@ -46,21 +48,7 @@ class ProotShellRunner(
         return process.readResult(context.timeoutMillis, context.stdin)
     }
 
-    /**
-     * Builds the environment variables for the proot process.
-     *
-     * IMPORTANT: Do NOT add PROOT_NO_SECCOMP=1 here. proot's built-in seccomp filter is
-     * essential for reliable syscall interception on Android 14+. The filter returns
-     * SECCOMP_RET_TRACE for syscalls proot needs to translate (mkdirat, newfstatat,
-     * getcwd, etc.), triggering PTRACE_EVENT_SECCOMP which is far more reliable than
-     * the fallback PTRACE_SYSCALL approach.
-     *
-     * The previous PROOT_NO_SECCOMP=1 was added to fix SIGILL on x86_64 emulators,
-     * but that was actually caused by architecture mismatch (arm64 rootfs on x86_64
-     * CPU), not by seccomp conflicts. On real devices with matching architecture,
-     * proot's seccomp filter works correctly and is required for mkdir/stat/rename
-     * etc. to function.
-     */
+    /** Both entry points retain PRoot's syscall translation policy from the shared launch spec. */
     internal fun buildEnvironment(loader: File, tempDir: File): Map<String, String> =
         ProotLaunchSpec.processEnvironment(loader, tempDir)
 
@@ -85,6 +73,4 @@ class ProotShellRunner(
             command = context.command,
         )
 
-    private fun File.hasUsableRootfs(): Boolean =
-        isDirectory && File(this, "bin/sh").isFile
 }

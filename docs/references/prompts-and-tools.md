@@ -175,6 +175,8 @@ name / description。`SkillManager` 是 Skill 文件树和读取 owner，`use_sk
 内容由 `buildWorkspacePrompt()` 生成：`<workspace>` 内说明 `/workspace`、路径必须在 Rootfs
 内、四个 `workspace_*` 工具的分工、共享 `/skills` 与 `/workspace`，以及 `/upload` 原生只读和 Shell 显式输入副本规则。
 
+Workspace 固定说明提示使用 `workspace_read_file` 阅读 `/root/.agents/AGENTS.md`、`/workspace/AGENTS.md` 及适用项目指引；缺失为可选，指引不能覆盖用户意图与工具权限。不会自动读取文件写入 system；正文经工具结果进入既有 Step 历史和 rolling compaction。
+
 ### 3.6 时间间隔 `TimeReminderTransformer`
 
 `enableTimeReminder` 时，在首条 USER 前以及间隔超过一小时的 USER 前插入：
@@ -205,6 +207,10 @@ name / description。`SkillManager` 是 Skill 文件树和读取 owner，`use_sk
 ---
 
 ## 5. 工具描述与参数
+
+`search_web` 的描述要求时效问题核验发布日期和事件发生日期；检索顺序、抓取时间不能证明新鲜度，缺日期或一手证据时应继续检索/读取来源。此为固定工具指引，不伪造搜索 SDK 的日期字段。
+
+`ask_user` 的 text、single、multi 均允许自由文本。single/text 的选项填入文本框，multi 按选项顺序组合已选项并追加去重后的自由回答；空白不是有效答案。UI 使用同一规则判断可提交性并编码既有字符串答案，等待原提交 owner 接受后禁用，拒绝可以重试。
 
 `TurnToolSetFactory` 依次装配回查、搜索、附件识别、Local、Conversation、Workspace、Skill、调用方
 追加工具与 MCP；Memory 和 Assistant 工具在 START 装配链中加入。同名 definitions / execution bindings

@@ -11,11 +11,11 @@ the license metadata packaged by Gradle dependencies and the source-specific pro
 | libtalloc | 2.4.3 | LGPL-3.0-or-later | Statically linked into the recorded PRoot artifacts; source hash is pinned in `workspace/proot-lock.json` |
 | libandroid-shmem | 0.7 | BSD-3-Clause | Statically linked into the recorded PRoot artifacts; source hash is pinned in `workspace/proot-lock.json` |
 
-The checked-in PRoot executables are byte-identical to upstream app commit
-`f4508dfac2255cf83e75859a8fe37dd7da6778a3`. Source locations, archive hashes, the candidate recipe
-and the fail-closed rebuild command are recorded in `workspace/PROOT.md`,
-`workspace/proot-lock.json` and `workspace/tools/build-proot.sh`. The local rebuild has not been run,
-so bit-for-bit reproducibility from that recipe is not claimed.
+The PRoot source baseline follows upstream app import commit
+`f4508dfac2255cf83e75859a8fe37dd7da6778a3`. The checked-in artifacts are local builds with the
+termination patch recorded in `workspace/proot-lock.json`. Exact source/dependency checksums,
+the patch, build protocol and verification limits are recorded in `workspace/PROOT.md` and
+`workspace/tools/build-proot.py`.
 
 Because libtalloc is statically linked, a source URL and rebuild recipe alone do not complete the
 LGPL-3.0-or-later distribution obligations. A release containing these PRoot artifacts must also

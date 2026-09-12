@@ -3,9 +3,13 @@ package me.rerere.ai.provider.providers.openai
 
 import me.rerere.ai.ui.ProviderToolCallSlot
 import android.util.Log
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.channels.onFailure
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.buffer
 import kotlinx.coroutines.flow.callbackFlow
@@ -56,6 +60,7 @@ import me.rerere.ai.util.ProviderTerminalStatus
 import me.rerere.ai.util.KeyRoulette
 import me.rerere.ai.util.RequestBodyOwnership
 import me.rerere.ai.util.configureReferHeaders
+import me.rerere.ai.util.configureSessionHeader
 import me.rerere.ai.util.encodeNativeImage
 import me.rerere.ai.util.json
 import me.rerere.ai.util.mergeCustomBody
@@ -81,6 +86,18 @@ import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.time.Clock
 
 private const val TAG = "ResponseAPI"
+
+internal fun responsesEndpoint(setting: ProviderSetting.OpenAI): String {
+    val path = setting.responsesPath
+    require(path.startsWith("/") && !path.startsWith("//") &&
+        path.none { it <= ' ' || it == '\\' || it == '?' || it == '#' } &&
+        path.split('/').none { segment ->
+            val decodedDots = segment.replace("%2e", ".", ignoreCase = true)
+            decodedDots == "." || decodedDots == ".."
+        } && !Regex("%2f|%5c", RegexOption.IGNORE_CASE).containsMatchIn(path)
+    ) { "invalid_responses_path" }
+    return setting.baseUrl.trimEnd('/') + path
+}
 
 internal class ResponseStreamState {
     val toolCallIdsByItemId = mutableMapOf<String, String>()
@@ -119,7 +136,7 @@ class ResponseAPI(
         providerSetting: ProviderSetting.OpenAI,
         messages: List<ModelRequestMessage>,
         params: TextGenerationParams
-    ): MessageChunk {
+    ): MessageChunk = withContext(Dispatchers.IO) {
         val requestBody = buildRequestBody(
             providerSetting = providerSetting,
             messages = messages,
@@ -127,12 +144,13 @@ class ResponseAPI(
             stream = false,
         )
         val request = Request.Builder()
-            .url("${providerSetting.baseUrl}/responses")
+            .url(responsesEndpoint(providerSetting))
             .headers(params.customHeaders.toHeaders())
             .post(json.encodeToString(requestBody).toRequestBody("application/json".toMediaType()))
             .authenticate(params.credentials, "Authorization", "Bearer ", providerSetting.apiKey, providerSetting.id.toString(), keyRoulette)
             .addHeader("Content-Type", "application/json")
             .configureReferHeaders(providerSetting.baseUrl)
+            .configureSessionHeader(params.providerSessionId)
             .build()
 
         Log.d(TAG, "generateText: model=${params.model.modelId}")
@@ -160,7 +178,7 @@ class ResponseAPI(
         }
 
         terminalError?.let { throw ProviderResponseException(output, it) }
-        return output
+        output
     }
 
     override suspend fun streamText(
@@ -179,11 +197,12 @@ class ResponseAPI(
             stream = true,
         )
         val request = Request.Builder()
-            .url("${providerSetting.baseUrl}/responses")
+            .url(responsesEndpoint(providerSetting))
             .headers(params.customHeaders.toHeaders())
             .post(json.encodeToString(requestBody).toRequestBody("application/json".toMediaType()))
             .authenticate(params.credentials, "Authorization", "Bearer ", providerSetting.apiKey, providerSetting.id.toString(), keyRoulette)
             .configureReferHeaders(providerSetting.baseUrl)
+            .configureSessionHeader(params.providerSessionId)
             .build()
 
         Log.d(TAG, "streamText: model=${params.model.modelId}")
@@ -269,6 +288,7 @@ class ResponseAPI(
             }
         }
 
+        ensureActive()
         val eventSource = EventSources.createFactory(client)
             .newEventSource(request, listener)
 
@@ -277,7 +297,7 @@ class ResponseAPI(
             eventSource.cancel()
         }
         // trySend 在缓冲满时会静默丢弃 delta，导致回复中间缺字 (#1295)，因此缓冲必须无界
-    }.buffer(Channel.UNLIMITED)
+    }.buffer(Channel.UNLIMITED).flowOn(Dispatchers.IO)
 
     internal fun buildRequestBody(
         providerSetting: ProviderSetting.OpenAI,

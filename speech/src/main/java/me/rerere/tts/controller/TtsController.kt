@@ -58,11 +58,10 @@ class TtsController(context: Context) {
     // 队列与缓存（基于稳定 ID）
     private val playbackQueue = TurnPlaybackQueue()
     private val cache = java.util.concurrent.ConcurrentHashMap<UUID, kotlinx.coroutines.Deferred<TTSResponse>>()
-    private var lastPrefetchedIndex: Int = -1
 
     // 行为参数
     private val chunkDelayMs = 120L
-    private val prefetchCount = 4
+    private val prefetchCount = 2
 
     // Playback projection is published by this controller only.
     private val _isAvailable = MutableStateFlow(false)
@@ -166,7 +165,7 @@ class TtsController(context: Context) {
         }
 
         if (!hasActiveWorker) startWorker()
-        prefetchFrom((_currentChunk.value).coerceAtLeast(0))
+        prefetchFrom(_currentChunk.value.coerceAtLeast(0))
         return cleanup
     }
 
@@ -200,13 +199,6 @@ class TtsController(context: Context) {
         audio.setSpeed(speed)
     }
 
-    /** 跳过下一段（不打断当前正在播放） */
-    fun skipNext() {
-        if (playbackQueue.hasPending()) {
-            playbackQueue.poll()
-        }
-    }
-
     /** 停止并清空状态 */
     fun stop(): TtsPlaybackCleanup {
         val stopped = (listOfNotNull(workerJob) + cache.values).distinct()
@@ -219,7 +211,6 @@ class TtsController(context: Context) {
         isPreparingChunk = false
         playbackQueue.clear()
         cache.clear()
-        lastPrefetchedIndex = -1
         _isSpeaking.update { false }
         _currentChunk.update { 0 }
         _totalChunks.update { 0 }
@@ -328,7 +319,7 @@ class TtsController(context: Context) {
 
     private fun prefetchFrom(startIndex: Int) {
         val session = currentSession ?: return
-        val begin = startIndex.coerceAtLeast(lastPrefetchedIndex + 1)
+        val begin = startIndex
         val endExclusive = (begin + prefetchCount).coerceAtMost(playbackQueue.totalChunkCount())
         if (begin >= endExclusive) return
 
@@ -338,7 +329,6 @@ class TtsController(context: Context) {
                 scope.async(Dispatchers.IO) { session.synthesize(chunk) }
             }
         }
-        lastPrefetchedIndex = endExclusive - 1
     }
 
     private suspend fun awaitOrCreate(chunk: TtsChunk, session: TtsPlaybackSession): TTSResponse {

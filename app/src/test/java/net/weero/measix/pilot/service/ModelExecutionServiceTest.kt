@@ -176,13 +176,19 @@ class ModelExecutionServiceTest {
 
     @Test fun `personal request freezes wire shape and reads credentials from its original live owner`() = runBlocking {
         environment { env ->
+            env.settings.updateLocal { it.copy(providers = listOf(env.provider.copy(
+                useResponseApi = true, responsesPath = "/custom/responses",
+            ))) }
             val captured = env.capture(RealmAccess.Personal)
             env.settings.updateLocal { settings -> settings.copy(providers = listOf(env.provider.copy(
                 baseUrl = "https://replacement.test/v2", apiKey = "rotated", models = listOf(env.model.copy(modelId = "replacement")),
+                useResponseApi = false, responsesPath = "/replacement/responses",
             ))) }
             val target = captured.model.requests.execute { it as ModelRequestTarget.Remote }
             val provider = target.provider as ProviderSetting.OpenAI
             assertEquals(env.provider.baseUrl, provider.baseUrl)
+            assertTrue(provider.useResponseApi)
+            assertEquals("/custom/responses", provider.responsesPath)
             assertEquals("rotated", provider.apiKey)
             assertEquals(env.model.modelId, captured.model.model.modelId)
             assertNotEquals(captured.model.userRevision, env.service.read(RealmAccess.Personal).userRevision)
@@ -208,9 +214,10 @@ class ModelExecutionServiceTest {
 
     @Test fun `private revision stays with the original turn and exit revokes it before reenrollment`() = runBlocking {
         environment { env ->
+            env.settings.updateLocal { it.copy(providers = listOf(env.provider.copy(responsesPath = "/personal/responses"))) }
             val base = exampleEnterprisePackage()
             val first = base.copy(runtimeBindings = base.runtimeBindings.map {
-                if (it.resourceId == "mdl_chat") it.copy(protocol = EnterpriseRuntimeProtocol.OPENAI_CHAT,
+                if (it.resourceId == "mdl_chat") it.copy(protocol = EnterpriseRuntimeProtocol.OPENAI_RESPONSES,
                     endpoint = "https://first.test/v1", credential = "private, opaque") else it
             })
             env.sessions.enrollFixture(first)
@@ -222,6 +229,9 @@ class ModelExecutionServiceTest {
             }))
             val target = captured.model.requests.execute { it as ModelRequestTarget.Remote }
             assertEquals("https://first.test/v1", (target.provider as ProviderSetting.OpenAI).baseUrl)
+            assertTrue((target.provider as ProviderSetting.OpenAI).useResponseApi)
+            assertEquals("/responses", (target.provider as ProviderSetting.OpenAI).responsesPath)
+            assertTrue(target.credentials is me.rerere.ai.provider.RequestCredentials.Fixed)
             assertEquals("", target.provider.apiKey)
             assertEquals(2, env.root.resolve("enterprise/revisions").listFiles()!!.size)
             val exit = env.sessions.beginExit(requireNotNull(env.sessions.captureExitRequest()))

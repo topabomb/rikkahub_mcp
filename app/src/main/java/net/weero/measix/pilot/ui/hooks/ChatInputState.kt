@@ -1,4 +1,4 @@
-﻿package net.weero.measix.pilot.ui.hooks
+package net.weero.measix.pilot.ui.hooks
 
 import android.net.Uri
 import androidx.compose.foundation.text.input.TextFieldState
@@ -59,11 +59,11 @@ class ChatInputState {
                 originalParts.forEachIndexed { index, part ->
                     when {
                         index == editedTextIndex -> {
-                            merged.add(UIMessagePart.Text(text))
+                            if (text.isNotBlank()) merged.add(UIMessagePart.Text(text))
                         }
 
                         part is UIMessagePart.Text -> {
-                            merged.add(part)
+                            if (part.text.isNotBlank()) merged.add(part)
                         }
 
                         else -> {
@@ -74,17 +74,20 @@ class ChatInputState {
                         }
                     }
                 }
+                if (editedTextIndex < 0 && text.isNotBlank()) {
+                    merged.add(0, UIMessagePart.Text(text))
+                }
                 // Newly added attachments are appended in insertion order.
                 merged.addAll(remainingAttachments)
                 return merged
             }
             return if (text.isBlank()) messageContent else listOf(UIMessagePart.Text(text)) + messageContent
         }
-        return listOf(UIMessagePart.Text(text)) + messageContent
+        return if (text.isBlank()) messageContent else listOf(UIMessagePart.Text(text)) + messageContent
     }
 
     fun isEmpty(): Boolean {
-        return textContent.text.isEmpty()
+        return getContents().isEmpty()
     }
 
     fun addImages(uris: List<Uri>) {

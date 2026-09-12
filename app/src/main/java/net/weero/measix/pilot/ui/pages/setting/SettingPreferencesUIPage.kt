@@ -1,5 +1,7 @@
 package net.weero.measix.pilot.ui.pages.setting
 
+import kotlin.math.roundToInt
+
 import android.util.Log
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -156,7 +158,7 @@ fun SettingPreferencesUIPage(vm: SettingVM = koinViewModel()) {
                                     steps = 8,
                                     modifier = Modifier.weight(1f)
                                 )
-                                Text(text = "${(displaySetting.bubbleOpacity * 100).toInt()}%")
+                                Text(text = "${(displaySetting.bubbleOpacity * 100).roundToInt()}%")
                             }
                         }
                     )

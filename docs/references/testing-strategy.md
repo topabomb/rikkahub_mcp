@@ -200,3 +200,7 @@ AndroidX JSON 的 `sampledMetrics` 保留每轮耗时与 `JavaAllocatedBytesAppr
 真实 IME 布局验证要求非零 inset 的停靠软键盘，CI 关闭硬键盘。`TtsControllerLayoutTest` 使用 edge-to-edge/adjustResize 窗口，并等待实际 IME 高度；测试需要临时调整系统手写设置时，只在最小授权作用域写入，任何失败均在 finally 恢复原值。键盘未出现不能转换为跳过，也不能改变生产输入配置来满足测试。
 
 `contracts/runtime/managed-snapshot-required.json` 原样来自 platform-core 的 `api/fixtures/problem/managed-snapshot-required.json`，由 `LocalEnterpriseMcpServiceTest` 消费。其余本地工具行为测试是 Android 自有测试，不宣称已有跨端共享样例覆盖。
+
+`WorkspaceTerminalAndroidTest` 的 native PTY 使用 Android 系统 shell。Linux Rootfs 的实际验收由 `WorkspaceProotAndroidTest` 单独负责，显式传 `-Pandroid.testInstrumentationRunnerArguments.prootRootfsUrl=<匹配 ABI 的已核验 Rootfs URL>` 才下载并执行；未提供 fixture 时明确跳过。该测试使用独立临时 workspace 并在结束后清理，不修改用户已有工作区。x86_64 / 4 KB 场景验证生产 Shell、文件操作、长输出、超时、取消与双 PTY；x86_64 / 16 KB 场景用同一标准 4 KB Ubuntu archive 验证明确拒绝和旧目录保全。两环境的互斥场景跳过必须分别记账，不能汇总成所有 PRoot 场景通过；arm64 仍需对应镜像与设备执行。
+
+`connectedDebugAndroidTest` 使用独立测试 AVD，并以 `ANDROID_SERIAL` 明确目标；AGP 的安装/卸载会清理 Debug 包私有数据，不能对保存日常调试数据的 AVD 直接运行。测试目录的 finally 清理不能保护包级卸载。优先复用匹配 ABI/页大小的测试设备，临时镜像和 AVD 在验收后清理，避免积累快照与重复磁盘。

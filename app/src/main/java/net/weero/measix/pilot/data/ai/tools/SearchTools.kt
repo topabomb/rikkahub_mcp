@@ -29,6 +29,7 @@ internal fun createSearchTools(settings: Settings, configuration: ResolvedConfig
                 name = "search_web",
                 description = """
                     Search the web for current or specific facts. Use focused keywords; run multiple searches if needed.
+                    For time-sensitive facts, verify publication dates and when the events occurred; result order and retrieval time do not prove freshness. If dates or primary evidence are missing, refine the search or inspect the source before claiming a result is current.
                     Cite with `[citation,domain](id)` after the sentence.
                     If images help, embed 2–4 from `images[]` at the start of the reply; never invent urls.
                     """.trimIndent(),

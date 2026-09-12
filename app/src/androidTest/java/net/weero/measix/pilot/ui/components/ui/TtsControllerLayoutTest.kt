@@ -451,7 +451,6 @@ class TtsControllerLayoutTest {
         override fun speak(page: net.weero.measix.pilot.service.ConversationCommandTarget, text: String) = Unit
         override fun speak(selection: net.weero.measix.pilot.data.enterprise.RealmSelection, text: String) = Unit
         override fun speak(context: net.weero.measix.pilot.data.ai.tools.local.TtsToolPlaybackContext, text: String, replaceWithinSession: Boolean) = Unit
-        override fun skipNext() = Unit
         override fun fastForward(ms: Long) = Unit
         override fun setSpeed(speed: Float) = Unit
     }

@@ -65,6 +65,25 @@ class MessageNodeTokenStatsIntegrationTest {
     }
 
     @Test
+    fun malformedContainersAndScalarMembersDoNotCrashOrInflateStatistics() = runBlocking {
+        val sqlite = database.openHelper.writableDatabase
+        listOf("", "{broken", "null", "42", "\"scalar\"", "{}", "[null,42,\"text\",true,[]]").forEachIndexed { index, payload ->
+            sqlite.execSQL(
+                "INSERT INTO message_node (id, conversation_id, node_index, messages, select_index) VALUES (?, 'master', ?, ?, 0)",
+                arrayOf<Any>("invalid-$index", index + 1, payload),
+            )
+        }
+        sqlite.execSQL(
+            "INSERT INTO message_node (id, conversation_id, node_index, messages, select_index) VALUES ('mixed', 'master', 20, ?, 0)",
+            arrayOf("""["not-json",{"role":"user","createdAt":"2026-09-12T12:00:00"}]"""),
+        )
+        val stats = database.messageNodeDao().getTokenStats(ConfigurationScope.Personal)
+        assertEquals(6, stats.totalMessages)
+        assertEquals(67L, stats.inputTokens)
+        assertEquals(listOf(MessageDayCount("2026-09-12", 1)), database.messageNodeDao().getMessageCountPerDay(ConfigurationScope.Personal, "2026-09-01"))
+    }
+
+    @Test
     fun tokenStatsExecuteLegacyCompletePartialAndMissingUsageSemantics() = runBlocking {
         val stats = database.messageNodeDao().getTokenStats(ConfigurationScope.Personal)
 

@@ -14,8 +14,20 @@ import org.tukaani.xz.XZInputStream
 
 class RootfsInstaller(
     private val manager: WorkspaceManager,
+    nativeLibraryDir: File,
     private val patcher: RootfsPatcher = RootfsPatcher(),
 ) {
+    private val compatibility = RootfsCompatibility(nativeLibraryDir)
+
+    val defaultRootfsUrl: String get() = compatibility.defaultRootfsUrl
+
+    fun isCompatible(root: String): Boolean = try {
+        compatibility.isCompatible(manager.linuxDir(root))
+    } catch (_: IllegalArgumentException) {
+        checkInterrupted()
+        false
+    }
+
     fun install(
         root: String,
         url: String,
@@ -34,11 +46,13 @@ class RootfsInstaller(
             stagingDir.mkdirs()
             download(url, archive, onProgress)
             extractTar(archive, stagingDir, format, onProgress)
-            linuxDir.deleteRecursively()
+            compatibility.requireCompatible(stagingDir)
+            patcher.patch(stagingDir)
+            checkInterrupted()
+            require(linuxDir.deleteRecursively()) { "Failed to replace installed Rootfs" }
             require(stagingDir.renameTo(linuxDir)) {
                 "Failed to move rootfs into workspace"
             }
-            patcher.patch(linuxDir)
             onProgress(RootfsInstallProgress(stage = RootfsInstallStage.INSTALLED))
         } finally {
             archive.delete()

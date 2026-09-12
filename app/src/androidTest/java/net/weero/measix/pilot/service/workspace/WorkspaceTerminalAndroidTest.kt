@@ -37,7 +37,7 @@ class WorkspaceTerminalAndroidTest {
             withContext(Dispatchers.Main) {
                 assertTrue(view.isRetired)
                 assertEquals(-1, host.created.single().pid)
-                assertEquals(-9, host.created.single().exitStatus)
+                assertEquals(-android.system.OsConstants.SIGTERM, host.created.single().exitStatus)
                 assertTrue(runtime.workspaces.value.values.all { it.tabs.isEmpty() })
             }
         }

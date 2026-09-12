@@ -23,6 +23,7 @@ internal sealed interface FrozenProviderWireShape {
         val name: String,
         val baseUrl: String,
         val chatCompletionsPath: String,
+        val responsesPath: String,
         val useResponseApi: Boolean,
         val includeHistoryReasoning: Boolean,
     ) : FrozenProviderWireShape
@@ -62,6 +63,7 @@ internal fun freezeProviderWireShape(
         name = setting.name,
         baseUrl = setting.baseUrl,
         chatCompletionsPath = setting.chatCompletionsPath,
+        responsesPath = setting.responsesPath,
         useResponseApi = setting.useResponseApi,
         includeHistoryReasoning = setting.includeHistoryReasoning,
     )
@@ -159,6 +161,7 @@ internal fun mergeProviderTransportCredentials(
                 apiKey = live.apiKey,
                 baseUrl = frozen.baseUrl,
                 chatCompletionsPath = frozen.chatCompletionsPath,
+                responsesPath = frozen.responsesPath,
                 useResponseApi = frozen.useResponseApi,
                 includeHistoryReasoning = frozen.includeHistoryReasoning,
             )

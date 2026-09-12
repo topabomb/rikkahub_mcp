@@ -19,6 +19,7 @@ class ProviderTransportLeaseTest {
             apiKey = "start-secret",
             baseUrl = "https://start.example/v1",
             chatCompletionsPath = "/chat/start",
+            responsesPath = "/responses/start",
             useResponseApi = false,
             includeHistoryReasoning = false,
         )
@@ -32,6 +33,7 @@ class ProviderTransportLeaseTest {
                 apiKey = "rotated-secret",
                 baseUrl = "https://changed.example/v1",
                 chatCompletionsPath = "/chat/changed",
+                responsesPath = "/responses/changed",
                 useResponseApi = true,
                 includeHistoryReasoning = true,
             ),
@@ -40,6 +42,7 @@ class ProviderTransportLeaseTest {
         assertEquals("rotated-secret", merged.apiKey)
         assertEquals("https://start.example/v1", merged.baseUrl)
         assertEquals("/chat/start", merged.chatCompletionsPath)
+        assertEquals("/responses/start", merged.responsesPath)
         assertEquals(false, merged.useResponseApi)
         assertEquals(false, merged.includeHistoryReasoning)
     }

@@ -7,6 +7,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performSemanticsAction
@@ -14,6 +15,7 @@ import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.termux.view.TerminalView
+import net.weero.measix.pilot.R
 import net.weero.measix.pilot.service.workspace.*
 import org.junit.Assert.*
 import org.junit.Rule
@@ -76,5 +78,7 @@ class WorkspaceTerminalCompositionAndroidTest {
         }
         compose.waitForIdle()
         compose.runOnIdle { assertTrue(bound.all { it.second.isRetired }) }
+        compose.onNodeWithText(compose.activity.getString(R.string.workspace_terminal_exited)).assertIsDisplayed()
+        compose.onNodeWithText(compose.activity.getString(R.string.workspace_terminal_loading)).assertDoesNotExist()
     }
 }

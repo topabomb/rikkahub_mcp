@@ -31,6 +31,36 @@ import org.junit.runner.RunWith
 
 @RunWith(AndroidJUnit4::class)
 class SystemTtsSequentialPlaybackInstrumentedTest {
+    @Test
+    fun appendingSpeechDoesNotExtendPrefetchBeyondTheBlockedPlaybackWindow() = runBlocking {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val started = kotlinx.coroutines.channels.Channel<Int>(kotlinx.coroutines.channels.Channel.UNLIMITED)
+        val indices = java.util.concurrent.ConcurrentHashMap.newKeySet<Int>()
+        val controller = withContext(Dispatchers.Main) {
+            TtsController(context).also { controller ->
+                controller.setSession(TtsPlaybackSession(synthesize = { chunk ->
+                    indices.add(chunk.index)
+                    started.send(chunk.index)
+                    kotlinx.coroutines.awaitCancellation()
+                }, admitPlayback = { start -> start() }))
+                controller.speak("First queued sentence", false, queueSessionId = "bounded")
+            }
+        }
+        try {
+            withTimeout(CONTROLLER_TIMEOUT_MS) { started.receive() }
+            withContext(Dispatchers.Main) {
+                repeat(7) { controller.speak("Queued sentence $it", false, queueSessionId = "bounded") }
+            }
+            withTimeout(CONTROLLER_TIMEOUT_MS) { repeat(2) { started.receive() } }
+            withContext(Dispatchers.Main) {
+                repeat(12) { controller.speak("Later sentence $it", false, queueSessionId = "bounded") }
+            }
+        } finally {
+            withContext(Dispatchers.Main) { controller.dispose().awaitClosed() }
+        }
+        assertEquals(setOf(0, 1, 2), indices)
+    }
+
     private fun systemPlayback(context: android.content.Context, setting: TTSProviderSetting): TtsPlaybackSession {
         val synthesizer = TtsSynthesizer(TTSManager(context))
         return TtsPlaybackSession({ chunk -> synthesizer.synthesize(setting, chunk) }, { start -> start() })

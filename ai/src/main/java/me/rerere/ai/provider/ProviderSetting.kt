@@ -63,6 +63,7 @@ sealed class ProviderSetting {
         var apiKey: String = "",
         var baseUrl: String = "https://api.openai.com/v1",
         var chatCompletionsPath: String = "/chat/completions",
+        val responsesPath: String = "/responses",
         var useResponseApi: Boolean = false,
         var includeHistoryReasoning: Boolean = true,
     ) : ProviderSetting() {

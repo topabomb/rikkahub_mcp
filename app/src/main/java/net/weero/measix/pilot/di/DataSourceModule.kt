@@ -196,6 +196,7 @@ val dataSourceModule = module {
             .followRedirects(true)
             .retryOnConnectionFailure(true)
             .addNetworkInterceptor(PrivateRequestBoundaryInterceptor())
+            .addNetworkInterceptor(me.rerere.ai.util.ProviderSessionHeaderInterceptor())
             .addInterceptor { chain ->
                 val originalRequest = chain.request()
                 val requestBuilder = originalRequest.newBuilder()

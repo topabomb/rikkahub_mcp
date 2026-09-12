@@ -146,21 +146,27 @@ private const val MESSAGE_PAYLOAD_SLICE_CHARS = 256 * 1024
 
 data class MessageDayCount(val day: String, val count: Int)
 
+// Guard inside JSON function arguments: SQLite may evaluate them before WHERE filters.
+private const val MESSAGES_ARRAY_SQL =
+    "CASE WHEN json_valid(mn.messages) THEN " +
+        "CASE WHEN json_type(mn.messages) = 'array' THEN mn.messages ELSE '[]' END ELSE '[]' END"
+private const val MESSAGE_OBJECT_SQL = "CASE WHEN j.type = 'object' THEN j.value ELSE '{}' END"
+
 // SQLite json_each() 展开 messages JSON 数组，json_extract() 提取 Token 字段并聚合
 private const val TOKEN_STATS_SQL =
     "SELECT COUNT(CASE WHEN c.parent_conversation_id IS NULL THEN 1 END) AS totalMessages, " +
-        "COALESCE(SUM(CAST(json_extract(j.value, '$.usage.promptTokens') AS INTEGER)), 0) AS inputTokens, " +
-        "COALESCE(SUM(CAST(json_extract(j.value, '$.usage.completionTokens') AS INTEGER)), 0) AS outputTokens, " +
-        "COALESCE(SUM(CAST(json_extract(j.value, '$.usage.cachedTokens') AS INTEGER)), 0) AS cacheReadInputTokens, " +
-        "COALESCE(SUM(CASE WHEN json_extract(j.value, '$.role') = 'assistant' " +
-        "AND COALESCE(json_extract(j.value, '$.usage.coreCompleteness'), 'LEGACY') != 'COMPLETE' " +
+        "COALESCE(SUM(CAST(json_extract($MESSAGE_OBJECT_SQL, '$.usage.promptTokens') AS INTEGER)), 0) AS inputTokens, " +
+        "COALESCE(SUM(CAST(json_extract($MESSAGE_OBJECT_SQL, '$.usage.completionTokens') AS INTEGER)), 0) AS outputTokens, " +
+        "COALESCE(SUM(CAST(json_extract($MESSAGE_OBJECT_SQL, '$.usage.cachedTokens') AS INTEGER)), 0) AS cacheReadInputTokens, " +
+        "COALESCE(SUM(CASE WHEN json_extract($MESSAGE_OBJECT_SQL, '$.role') = 'assistant' " +
+        "AND COALESCE(json_extract($MESSAGE_OBJECT_SQL, '$.usage.coreCompleteness'), 'LEGACY') != 'COMPLETE' " +
         "THEN 1 ELSE 0 END), 0) AS coreNonExactMessages, " +
-        "COALESCE(SUM(CASE WHEN json_extract(j.value, '$.role') = 'assistant' " +
-        "AND COALESCE(json_extract(j.value, '$.usage.cacheReadCompleteness'), 'LEGACY') != 'COMPLETE' " +
+        "COALESCE(SUM(CASE WHEN json_extract($MESSAGE_OBJECT_SQL, '$.role') = 'assistant' " +
+        "AND COALESCE(json_extract($MESSAGE_OBJECT_SQL, '$.usage.cacheReadCompleteness'), 'LEGACY') != 'COMPLETE' " +
         "THEN 1 ELSE 0 END), 0) AS cacheReadNonExactMessages " +
         "FROM message_node mn " +
         "JOIN conversationentity c ON c.id = mn.conversation_id, " +
-        "json_each(mn.messages) j WHERE c.scope = ?"
+        "json_each($MESSAGES_ARRAY_SQL) j WHERE j.type = 'object' AND c.scope = ?"
 
 suspend fun MessageNodeDAO.getTokenStats(scope: ConfigurationScope): MessageTokenStats =
     getTokenStatsRaw(SimpleSQLiteQuery(TOKEN_STATS_SQL, arrayOf(scope.storageKey())))
@@ -169,14 +175,14 @@ suspend fun MessageNodeDAO.getTokenStats(scope: ConfigurationScope): MessageToke
 suspend fun MessageNodeDAO.getMessageCountPerDay(scope: ConfigurationScope, startDate: String): List<MessageDayCount> =
     getMessageCountPerDayRaw(
         SimpleSQLiteQuery(
-            "SELECT substr(json_extract(j.value, '$.createdAt'), 1, 10) AS day, " +
+            "SELECT substr(json_extract($MESSAGE_OBJECT_SQL, '$.createdAt'), 1, 10) AS day, " +
                 "COUNT(*) AS count " +
                 "FROM message_node mn " +
                 "JOIN conversationentity c ON c.id = mn.conversation_id, " +
-                "json_each(mn.messages) j " +
-                "WHERE c.scope = ? AND c.parent_conversation_id IS NULL " +
-                "AND json_extract(j.value, '$.role') = 'user' " +
-                "AND json_extract(j.value, '$.createdAt') >= ? " +
+                "json_each($MESSAGES_ARRAY_SQL) j " +
+                "WHERE j.type = 'object' AND c.scope = ? AND c.parent_conversation_id IS NULL " +
+                "AND json_extract($MESSAGE_OBJECT_SQL, '$.role') = 'user' " +
+                "AND json_extract($MESSAGE_OBJECT_SQL, '$.createdAt') >= ? " +
                 "GROUP BY day",
             arrayOf(scope.storageKey(), startDate)
         )

@@ -31,6 +31,8 @@ class WorkspaceRepository(
     private val rootfsInstaller: RootfsInstaller,
     private val settingsStore: SettingsStore,
 ) {
+    val defaultRootfsUrl: String get() = rootfsInstaller.defaultRootfsUrl
+
     fun listFlow(): Flow<List<WorkspaceEntity>> = dao.listFlow()
 
     suspend fun checkIntegrity() = withContext(Dispatchers.IO) {
@@ -57,11 +59,17 @@ class WorkspaceRepository(
                 continue
             }
             val statusName = workspace.shellStatus
-            if ((statusName == WorkspaceShellStatus.READY.name || statusName == WorkspaceShellStatus.INSTALLING.name)
-                && !manager.hasRootfs(workspace.root)
+            if (statusName == WorkspaceShellStatus.INSTALLING.name) {
+                // A valid old root can remain during installation; its presence does not prove publication succeeded.
+                updateShellState(workspace.id, WorkspaceShellStatus.BROKEN.name)
+            } else if (statusName == WorkspaceShellStatus.READY.name && !manager.hasRootfsFiles(workspace.root)
             ) {
                 Log.w(TAG, "Rootfs missing, resetting shell status: id=${workspace.id}")
                 updateShellState(workspace.id, WorkspaceShellStatus.DISABLED.name)
+            } else if (statusName == WorkspaceShellStatus.READY.name && !rootfsInstaller.isCompatible(workspace.root)
+            ) {
+                Log.w(TAG, "Rootfs incompatible, marking as broken: id=${workspace.id}")
+                updateShellState(workspace.id, WorkspaceShellStatus.BROKEN.name)
             }
         }
     }

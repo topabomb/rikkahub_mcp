@@ -24,13 +24,15 @@ class WorkspaceDetailVM(
     private val workspaceApplicationService: WorkspaceApplicationService,
     private val workspaceQueryService: WorkspaceQueryService,
 ) : ViewModel() {
+    val defaultRootfsUrl: String get() = workspaceQueryService.defaultRootfsUrl
+
     private val _state = MutableStateFlow(WorkspaceDetailState())
     val state = _state.asStateFlow()
 
     private val _installProgress = MutableStateFlow<RootfsInstallProgress?>(null)
     val installProgress = _installProgress.asStateFlow()
 
-    private val _installError = MutableStateFlow(false)
+    private val _installError = MutableStateFlow<String?>(null)
     val installError = _installError.asStateFlow()
 
     init {
@@ -211,7 +213,7 @@ class WorkspaceDetailVM(
 
     fun installRootfs(url: String) {
         viewModelScope.launch {
-            _installError.value = false
+            _installError.value = null
             val workspace = state.value.workspace ?: return@launch
             _installProgress.value = RootfsInstallProgress(stage = RootfsInstallStage.DOWNLOADING)
             try {
@@ -221,8 +223,8 @@ class WorkspaceDetailVM(
                 if (loadWorkspaceNow()) refreshNow()
             } catch (e: CancellationException) {
                 throw e
-            } catch (_: Exception) {
-                _installError.value = true
+            } catch (error: Exception) {
+                _installError.value = error.message.orEmpty()
             } finally {
                 _installProgress.value = null
             }
@@ -230,7 +232,7 @@ class WorkspaceDetailVM(
     }
 
     fun dismissInstallError() {
-        _installError.value = false
+        _installError.value = null
     }
 
     private suspend fun loadWorkspaceNow(): Boolean = try {

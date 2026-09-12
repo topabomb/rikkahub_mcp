@@ -614,7 +614,7 @@ private fun ModelSettingsForm(
                         OutlinedTextField(
                             value = model.displayName,
                             onValueChange = {
-                                onModelChange(model.copy(displayName = it.trim()))
+                                onModelChange(model.copy(displayName = it))
                             },
                             label = { Text(stringResource(if (isEdit) R.string.setting_provider_page_model_name else R.string.setting_provider_page_model_display_name)) },
                             modifier = Modifier.fillMaxWidth(),
@@ -1555,7 +1555,7 @@ private fun ProviderOverrideSettings(
                         }
                         TextButton(
                             onClick = {
-                                onUpdateProviderOverride(internalProvider)
+                                onUpdateProviderOverride(internalProvider.copyProvider(name = internalProvider.name.trim()))
                                 showProviderConfig = false
                                 editingProvider = null
                             },

@@ -17,6 +17,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import io.mockk.Runs
 import io.mockk.coEvery
 import io.mockk.coVerify
+import io.mockk.confirmVerified
 import io.mockk.every
 import io.mockk.just
 import io.mockk.mockk
@@ -182,7 +183,8 @@ class EnterprisePageAndroidTest {
         val host = mockk<PortalWebView>()
         every { host.document } returns document
         every { host.close() } just Runs
-        every { host.view } answers { error("A late Portal view must not be installed") }
+        // Recording the WebView getter creates a framework View proxy even for a throwing answer.
+        // Keep this strict host opaque and verify its complete call set after cleanup instead.
         coEvery { document.awaitClosed() } coAnswers {
             awaitingClose.complete(Unit)
             releaseClose.await()
@@ -208,7 +210,6 @@ class EnterprisePageAndroidTest {
             compose.waitUntil(5_000) { awaitingClose.isCompleted }
             assertFalse("The cancelled opening must retain cleanup ownership", worker.get().isCompleted)
             verify(exactly = 1) { host.close() }
-            verify(exactly = 0) { host.view }
             if (cleanupFailure == null) releaseClose.complete(Unit)
             else releaseClose.completeExceptionally(cleanupFailure)
             compose.waitUntil(5_000) { worker.get().isCompleted }
@@ -227,6 +228,8 @@ class EnterprisePageAndroidTest {
                 assertNull(fixture.vm.portal.value)
                 assertNull(fixture.vm.error.value)
             }
+            verify(exactly = 1) { host.document }
+            confirmVerified(host)
         } finally {
             releaseOpen.complete(Unit)
             releaseClose.complete(Unit)

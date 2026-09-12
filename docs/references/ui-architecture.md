@@ -674,6 +674,12 @@ stateInOnce(scope, initialValue) =
 
 ## 10. 安全区与窗口插入
 
+`MeasixTheme` 只提供页面配色和 CompositionLocal。`WindowSystemBars` 由 `RouteActivity.AppRoutes` 与 `SafeModeActivity` 的根宿主调用；Route 仅在恢复 Ready 且当前顶部为 WorkspaceTerminal 时使用深色系统栏，其余跟随根主题。嵌套主题及导出组合树不写 Window，也不维护恢复颜色栈。
+
+聊天抽屉展开、会话长按时先清除焦点再隐藏 IME。`ChatInputState.getContents` 不产生空白 Text，编辑历史时保留非空旧文本与附件顺序，纯附件可补正文；`isEmpty` 以最终 parts 为准，原附件释放仍交给原 owner。
+
+Provider/模型名称草稿允许内部空格，保存边界统一 trim 首尾；模型 ID 和并发目录不被改写。通用播放倍速仅在一般偏好的 TTS 组设置，复用 `defaultTTSPlaybackSpeed`，语音资源页不重复提供此入口。
+
 - 聊天页 `Scaffold` 设置 `contentWindowInsets = WindowInsets(0)`，让 TopAppBar 自己处理状态栏避让，避免 Scaffold 与 TopAppBar 重复计算状态栏高度导致顶部留白过多
 - 永久会话栏使用 `statusBarsPadding()` 处理顶部安全区
 - `ChatInput` 使用 `navigationBarsPadding()` 与 `imePadding()` 处理底部系统栏和软键盘

@@ -4,7 +4,6 @@ package net.weero.measix.pilot.ui.pages.extensions.workspace
 
 import android.annotation.SuppressLint
 import android.graphics.Typeface
-import android.view.MotionEvent
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
@@ -17,7 +16,11 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.consumeWindowInsets
+import androidx.compose.foundation.layout.imeAnimationTarget
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
@@ -120,6 +123,7 @@ fun WorkspaceTerminalPage(id: String) {
 }
 
 @Composable
+@OptIn(ExperimentalLayoutApi::class)
 internal fun WorkspaceTerminalContent(
     state: WorkspaceTerminalScreenUiModel,
     contentPadding: PaddingValues,
@@ -133,7 +137,12 @@ internal fun WorkspaceTerminalContent(
     onReorder: (List<String>) -> Unit,
 ) {
     val selected = state.terminal.tabs.firstOrNull { it.id == state.terminal.selectedTabId }
-    Surface(Modifier.fillMaxSize().padding(contentPadding).imePadding(), color = Color.Black) {
+    Surface(
+        Modifier.fillMaxSize().padding(contentPadding).consumeWindowInsets(contentPadding)
+            // Keep PTY rows stable throughout the keyboard animation.
+            .windowInsetsPadding(WindowInsets.imeAnimationTarget),
+        color = Color.Black,
+    ) {
         Column(Modifier.fillMaxSize()) {
             WorkspaceTerminalTabs(
                 tabs = state.terminal.tabs,
@@ -148,7 +157,7 @@ internal fun WorkspaceTerminalContent(
             if (selected == null) {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     Text(
-                        if (state.shellReady) stringResource(R.string.workspace_terminal_loading)
+                        if (state.shellReady) stringResource(R.string.workspace_terminal_exited)
                         else stringResource(R.string.workspace_terminal_not_installed),
                         color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f),
                     )
@@ -332,13 +341,6 @@ private fun WorkspaceTerminalView(
                     setTerminalViewClient(viewClient)
                     viewClient.terminalView = this
                     boundView = this
-                    setOnTouchListener { view, event ->
-                        if (event.action == MotionEvent.ACTION_UP) {
-                            view.performClick()
-                            viewClient.focusAndShowKeyboard()
-                        }
-                        false
-                    }
                     post { viewClient.focusAndShowKeyboard() }
                 }
             },

@@ -20,6 +20,8 @@ class WorkspaceQueryService internal constructor(
     private val sessions: EnterpriseSessionController,
     private val recovery: net.weero.measix.pilot.service.ApplicationRecoveryGate,
 ) {
+    val defaultRootfsUrl: String get() = repository.defaultRootfsUrl
+
     suspend fun document(root: String, path: String): WorkspaceDocumentUiModel? {
         recovery.awaitReady()
         val workspace = repository.getByRoot(root) ?: return null

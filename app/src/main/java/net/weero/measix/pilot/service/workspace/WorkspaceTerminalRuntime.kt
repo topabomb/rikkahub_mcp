@@ -231,13 +231,18 @@ class WorkspaceTerminalRuntime internal constructor(
                     val client = WorkspaceTerminalSessionClient(context,
                         onAction = { action -> entry.viewport?.let { dispatchAction(entry, it, action) } ?: false },
                         onWrite = { session, data, offset, count -> enqueue(entry, session, data, offset, count) },
-                        onFinished = {
+                        onFinished = { finishedSession ->
+                            val unexpectedExit = entry.readiness != WorkspaceTerminalReadiness.CLOSING && finishedSession.exitStatus != 0
                             ended.complete(Unit)
                             entry.inputAvailable.cancel()
                             entry.readiness = WorkspaceTerminalReadiness.CLOSING
                             try {
                                 retireViewport(entry)
                                 if (entry.writing == null) remove(entry) else publish(entry.owner)
+                                if (unexpectedExit) {
+                                    Log.w(TAG, "Terminal process exited with status=${finishedSession.exitStatus}")
+                                    publishFailure(entry.owner, WorkspaceTerminalFailureReason.Unexpected)
+                                }
                             }
                             catch (error: Exception) {
                                 entry.readiness = WorkspaceTerminalReadiness.CLOSING

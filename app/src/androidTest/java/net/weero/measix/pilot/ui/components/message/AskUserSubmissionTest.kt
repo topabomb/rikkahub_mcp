@@ -28,22 +28,25 @@ class AskUserSubmissionTest {
     @Test fun waitsForAcceptanceAndAllowsRetryAfterRejection() {
         var attempts = 0
         var result = CompletableDeferred<Boolean>()
-        val tool = question()
+        val tool = question().copy(input = """{"questions":[{"id":"color","question":"Choose a color","selection_type":"multi","options":["red","green"]}]}""")
         compose.setContent {
             MaterialTheme {
                 ChainOfThought(steps = listOf(tool)) {
                     AskUserToolStep(it, ToolLivePhase.AWAITING_INPUT) { payload ->
-                        assertTrue(payload.contains("blue"))
+                        assertEquals("{\"answers\":{\"color\":\"red, blue\"}}", payload)
                         attempts++
                         result.await()
                     }
                 }
             }
         }
+        compose.onNodeWithText("red").performClick()
         compose.onNode(hasSetTextAction()).performTextInput("blue")
         compose.onNodeWithText(submitText).performClick()
         compose.runOnIdle { assertEquals(1, attempts) }
         compose.onNodeWithText(submitText).assertIsNotEnabled()
+        compose.onNodeWithText("blue").assertIsNotEnabled()
+        compose.onNodeWithText("red").assertIsNotEnabled()
         compose.runOnIdle { result.complete(false) }
         compose.onNodeWithText(submitText).assertIsEnabled()
         compose.runOnIdle { result = CompletableDeferred() }

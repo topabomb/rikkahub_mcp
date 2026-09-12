@@ -55,6 +55,8 @@ class SettingsPersistenceContractTest {
 
         val encoded = JsonInstant.encodeToString(goldenFixture())
         assertEquals(golden, encoded)
+        val beforeResponsesPath = golden.replace("\"responsesPath\":\"/responses\",", "")
+        assertEquals(encoded, JsonInstant.encodeToString(JsonInstant.decodeFromString<Settings>(beforeResponsesPath)))
         val legacy = golden.replaceFirst("{", "{\"developerMode\":true,")
         assertEquals(encoded, JsonInstant.encodeToString(JsonInstant.decodeFromString<Settings>(legacy)))
         // 解码后再编码必须逐字相同；不用对象 equals，因为 search SDK 的 BingLocalOptions 非 data class。

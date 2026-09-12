@@ -21,6 +21,7 @@ import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import net.weero.measix.pilot.AppScope
@@ -38,6 +39,11 @@ class WorkspaceTerminalRuntimeTest {
     private val selection = net.weero.measix.pilot.data.enterprise.RealmSelection(net.weero.measix.pilot.data.enterprise.RealmAccess.Personal, 0)
     private val owner = WorkspaceTerminalOwner("workspace", selection.access)
     private val dispatcher = StandardTestDispatcher()
+
+    // Preparation runs on real IO; a virtual deadline must not race ahead of that executor.
+    private suspend fun <T> awaitRuntime(block: suspend () -> T): T = withContext(Dispatchers.Default) {
+        withTimeout(5_000) { block() }
+    }
 
     @Before
     fun setUp() {
@@ -105,7 +111,7 @@ class WorkspaceTerminalRuntimeTest {
         val runtime = WorkspaceTerminalRuntime(context, AppScope(dispatcher), sessionOwner(), host)
         val created = runtime.createForTest("workspace") as WorkspaceTerminalCreateResult.Created
         advanceUntilIdle()
-        withTimeout(5_000) {
+        awaitRuntime {
             runtime.workspaces.map { it[owner]?.tabs?.singleOrNull()?.readiness }
                 .first { it == WorkspaceTerminalReadiness.READY }
         }
@@ -122,6 +128,7 @@ class WorkspaceTerminalRuntimeTest {
         every { context.applicationContext } returns context
         val session = mockk<WorkspacePtySession>()
         every { session.pid } returns 42
+        every { session.exitStatus } returns 137
         lateinit var client: WorkspaceTerminalSessionClient
         var attempts = 0
         every { session.finishIfRunning() } answers {
@@ -137,7 +144,7 @@ class WorkspaceTerminalRuntimeTest {
         }
         val runtime = WorkspaceTerminalRuntime(context, AppScope(dispatcher), sessionOwner(), host)
         val created = runtime.createForTest("workspace") as WorkspaceTerminalCreateResult.Created
-        withTimeout(5_000) {
+        awaitRuntime {
             runtime.workspaces.first { it[owner]?.tabs?.singleOrNull()?.readiness == WorkspaceTerminalReadiness.READY }
         }
         try {
@@ -148,6 +155,7 @@ class WorkspaceTerminalRuntimeTest {
         runtime.close("workspace", selection, created.tabId)
         assertEquals(2, attempts)
         assertTrue(runtime.workspaces.value[owner]?.tabs.orEmpty().isEmpty())
+        assertEquals(null, runtime.workspaces.value[owner]?.lastFailure)
     }
 
     @Test
@@ -201,35 +209,42 @@ class WorkspaceTerminalRuntimeTest {
     }
 
     @Test
-    fun `shell exit removes the tab through the runtime owner`() = runTest(dispatcher) {
-        val context = mockk<Context>()
-        every { context.applicationContext } returns context
-        val session = mockk<WorkspacePtySession>()
-        every { session.pid } returns -1
-        var capturedClient: WorkspaceTerminalSessionClient? = null
-        val host = object : WorkspaceTerminalHost {
-            override fun prepare(context: Context, root: String) = true
-            override fun create(
-                context: Context,
-                root: String,
-                client: WorkspaceTerminalSessionClient,
-            ): WorkspacePtySession {
-                capturedClient = client
-                return session
+    fun `shell exit removes the tab and reports only unexpected nonzero termination`() = runTest(dispatcher) {
+        for (exitStatus in listOf(0, 126)) {
+            val context = mockk<Context>()
+            every { context.applicationContext } returns context
+            val session = mockk<WorkspacePtySession>()
+            every { session.pid } returns -1
+            every { session.exitStatus } returns exitStatus
+            var capturedClient: WorkspaceTerminalSessionClient? = null
+            val host = object : WorkspaceTerminalHost {
+                override fun prepare(context: Context, root: String) = true
+                override fun create(
+                    context: Context,
+                    root: String,
+                    client: WorkspaceTerminalSessionClient,
+                ): WorkspacePtySession {
+                    capturedClient = client
+                    return session
+                }
             }
-        }
-        val runtime = WorkspaceTerminalRuntime(context, AppScope(dispatcher), sessionOwner(), host)
-        runtime.createForTest("workspace")
-        runCurrent()
-        withTimeout(5_000) {
-            runtime.workspaces.map { it[owner]?.tabs?.singleOrNull()?.readiness }
-                .first { it == WorkspaceTerminalReadiness.READY }
-        }
+            val runtime = WorkspaceTerminalRuntime(context, AppScope(dispatcher), sessionOwner(), host)
+            runtime.createForTest("workspace")
+            runCurrent()
+            awaitRuntime {
+                runtime.workspaces.map { it[owner]?.tabs?.singleOrNull()?.readiness }
+                    .first { it == WorkspaceTerminalReadiness.READY }
+            }
 
-        requireNotNull(capturedClient).onSessionFinished(session)
-        advanceUntilIdle()
+            requireNotNull(capturedClient).onSessionFinished(session)
+            advanceUntilIdle()
 
-        assertTrue(owner !in runtime.workspaces.value)
+            assertTrue(runtime.workspaces.value[owner]?.tabs.orEmpty().isEmpty())
+            assertEquals(
+                if (exitStatus == 0) null else WorkspaceTerminalFailureReason.Unexpected,
+                runtime.workspaces.value[owner]?.lastFailure?.reason,
+            )
+        }
     }
 
     @Test
@@ -242,7 +257,7 @@ class WorkspaceTerminalRuntimeTest {
 
         runtime.createForTest("workspace")
         advanceUntilIdle()
-        val failure = withTimeout(5_000) {
+        val failure = awaitRuntime {
             runtime.workspaces.map { it[owner]?.lastFailure }.first { it != null }
         }
 
@@ -263,7 +278,7 @@ class WorkspaceTerminalRuntimeTest {
 
         runtime.createForTest("workspace")
         advanceUntilIdle()
-        val failure = withTimeout(5_000) {
+        val failure = awaitRuntime {
             runtime.workspaces.map { it[owner]?.lastFailure }.first { it != null }
         }
 

@@ -7,8 +7,10 @@ import me.rerere.ai.ui.ProviderToolCallSlot
 import android.util.Log
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.channels.onFailure
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.buffer
 import kotlinx.coroutines.flow.callbackFlow
@@ -58,6 +60,7 @@ import me.rerere.ai.util.HttpException
 import me.rerere.ai.util.KeyRoulette
 import me.rerere.ai.util.RequestBodyOwnership
 import me.rerere.ai.util.configureReferHeaders
+import me.rerere.ai.util.configureSessionHeader
 import me.rerere.ai.util.encodeNativeImage
 import me.rerere.ai.util.json
 import me.rerere.ai.util.mergeCustomBody
@@ -127,6 +130,7 @@ class ChatCompletionsAPI(
             .post(json.encodeToString(requestBody).toRequestBody("application/json".toMediaType()))
             .authenticate(params.credentials, "Authorization", "Bearer ", providerSetting.apiKey, providerSetting.id.toString(), keyRoulette)
             .configureReferHeaders(providerSetting.baseUrl)
+            .configureSessionHeader(params.providerSessionId)
             .build()
 
         Log.d(TAG, "generateText: model=${params.model.modelId}")
@@ -188,6 +192,7 @@ class ChatCompletionsAPI(
             .authenticate(params.credentials, "Authorization", "Bearer ", providerSetting.apiKey, providerSetting.id.toString(), keyRoulette)
             .addHeader("Content-Type", "application/json")
             .configureReferHeaders(providerSetting.baseUrl)
+            .configureSessionHeader(params.providerSessionId)
             .build()
 
         Log.d(TAG, "streamText: model=${params.model.modelId}")
@@ -257,6 +262,7 @@ class ChatCompletionsAPI(
             }
         }
 
+        ensureActive()
         val eventSource = EventSources.createFactory(client).newEventSource(request, listener)
 
         awaitClose {
@@ -264,7 +270,7 @@ class ChatCompletionsAPI(
             eventSource.cancel()
         }
         // trySend 在缓冲满时会静默丢弃 delta，导致回复中间缺字 (#1295)，因此缓冲必须无界
-    }.buffer(Channel.UNLIMITED)
+    }.buffer(Channel.UNLIMITED).flowOn(Dispatchers.IO)
 
 
     internal fun buildChatCompletionRequest(

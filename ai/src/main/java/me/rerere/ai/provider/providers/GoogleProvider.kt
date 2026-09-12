@@ -7,8 +7,10 @@ import android.content.Context
 import android.util.Log
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.channels.onFailure
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.buffer
 import kotlinx.coroutines.flow.callbackFlow
@@ -63,6 +65,7 @@ import me.rerere.ai.util.formatProviderHttpError
 import me.rerere.ai.util.KeyRoulette
 import me.rerere.ai.util.RequestBodyOwnership
 import me.rerere.ai.util.configureReferHeaders
+import me.rerere.ai.util.configureSessionHeader
 import me.rerere.ai.util.encodeNativeImage
 import me.rerere.ai.util.json
 import me.rerere.ai.util.mergeCustomBody
@@ -220,6 +223,7 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
                     json.encodeToString(requestBody).toRequestBody("application/json".toMediaType())
                 )
                 .configureReferHeaders(providerSetting.baseUrl)
+            .configureSessionHeader(params.providerSessionId)
                 .build()
         )
 
@@ -297,6 +301,7 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
                     json.encodeToString(requestBody).toRequestBody("application/json".toMediaType())
                 )
                 .configureReferHeaders(providerSetting.baseUrl)
+            .configureSessionHeader(params.providerSessionId)
                 .build()
         )
 
@@ -421,6 +426,7 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
             }
         }
 
+        ensureActive()
         val eventSource = EventSources.createFactory(client)
                 .newEventSource(request, listener)
 
@@ -428,7 +434,7 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
             eventSource.cancel()
         }
         // trySend 在缓冲满时会静默丢弃 delta，导致回复中间缺字 (#1295)，因此缓冲必须无界
-    }.buffer(Channel.UNLIMITED)
+    }.buffer(Channel.UNLIMITED).flowOn(Dispatchers.IO)
 
     internal fun buildCompletionRequestBody(
         messages: List<ModelRequestMessage>,
