@@ -58,6 +58,7 @@ import net.weero.measix.pilot.ui.components.ui.rememberImageBackgroundHost
 import net.weero.measix.pilot.ui.components.message.localizeSubAssistantReason
 import net.weero.measix.pilot.ui.components.nav.BackButton
 import net.weero.measix.pilot.ui.components.ui.UIAvatar
+import net.weero.measix.pilot.ui.components.ui.SharedConfigurationEditDialog
 import net.weero.measix.pilot.ui.context.LocalNavController
 import net.weero.measix.pilot.service.ConversationViewLease
 import net.weero.measix.pilot.service.SubAssistantDetailUiState
@@ -81,6 +82,7 @@ fun SubAssistantDetailPage(
         settings.assistants.find { it.id == targetId }
     }
     val navController = LocalNavController.current
+    var pendingAssistantSettings by remember(source, targetAssistant?.id) { mutableStateOf(false) }
     val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
 
     Scaffold(
@@ -122,7 +124,11 @@ fun SubAssistantDetailPage(
                     if (targetAssistant != null) {
                         TextButton(
                             onClick = {
-                                navController.navigate(Screen.AssistantDetail(targetAssistant.id.toString()))
+                                if (source?.access is net.weero.measix.pilot.data.enterprise.RealmAccess.Enterprise) {
+                                    pendingAssistantSettings = true
+                                } else {
+                                    navController.navigate(Screen.AssistantDetail(targetAssistant.id.toString()))
+                                }
                             }
                         ) {
                             Text(stringResource(R.string.sub_assistant_detail_assistant_settings))
@@ -147,6 +153,15 @@ fun SubAssistantDetailPage(
                 modifier = Modifier.padding(innerPadding),
             )
         }
+    }
+    if (pendingAssistantSettings && targetAssistant != null) {
+        SharedConfigurationEditDialog(
+            onDismiss = { pendingAssistantSettings = false },
+            onConfirm = {
+                pendingAssistantSettings = false
+                navController.navigate(Screen.AssistantDetail(targetAssistant.id.toString()))
+            },
+        )
     }
 }
 

@@ -10,10 +10,15 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.onEach
 import net.weero.measix.pilot.service.ConfigurationQueryService
 import net.weero.measix.pilot.service.ConversationApplicationService
 import net.weero.measix.pilot.service.ConversationQueryService
 import net.weero.measix.pilot.service.ConversationSummary
+import net.weero.measix.pilot.service.AssistantCatalogReadState
+import net.weero.measix.pilot.utils.userVisibleDiagnostic
 
 private const val TAG = "HistoryVM"
 
@@ -22,12 +27,18 @@ class HistoryVM internal constructor(
     configurationQueryService: ConfigurationQueryService,
     private val conversationApplicationService: ConversationApplicationService,
 ) : ViewModel() {
-    val conversations = configurationQueryService.observeAssistantCatalog().flatMapLatest { catalog ->
-        val reference = catalog?.selected?.reference
+    internal val assistantCatalog = configurationQueryService.observeAssistantCatalog()
+        .stateIn(viewModelScope, SharingStarted.Eagerly, AssistantCatalogReadState.Loading)
+    private val _readFailure = MutableStateFlow<String?>(null)
+    internal val readFailure = _readFailure.asStateFlow()
+    val conversations = assistantCatalog.flatMapLatest { state ->
+        val reference = (state as? AssistantCatalogReadState.Available)?.catalog?.selected?.reference
         if (reference == null) flowOf(emptyList()) else conversationQueryService.conversationsOfAssistant(reference)
-    }.catch {
-        if (it is CancellationException) throw it
-        Log.e(TAG, "Error: ${it.message}")
+    }.onEach { _readFailure.value = null }.catch { error ->
+        if (error is CancellationException) throw error
+        Log.e(TAG, "Conversation history query failed", error)
+        _readFailure.value = error.userVisibleDiagnostic()
+        emit(emptyList())
     }.stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
 
     suspend fun deleteForUndo(conversation: ConversationSummary): ConversationApplicationService.RestoreToken =

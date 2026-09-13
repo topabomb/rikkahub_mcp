@@ -3,7 +3,6 @@ package net.weero.measix.pilot.ui.pages.setting
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
@@ -12,18 +11,17 @@ import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.material3.BottomAppBar
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.LargeFlexibleTopAppBar
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.res.stringResource
@@ -34,6 +32,7 @@ import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.AiBrain01
 import me.rerere.hugeicons.stroke.AiEditing
 import me.rerere.hugeicons.stroke.ArrowRight01
+import me.rerere.hugeicons.stroke.Undo02
 import net.weero.measix.pilot.R
 import net.weero.measix.pilot.data.configuration.ResourceSelectionSlot
 import net.weero.measix.pilot.data.enterprise.RealmAccess
@@ -88,68 +87,113 @@ fun SettingModelPage(vm: SettingVM = koinViewModel(), modelVM: ModelSettingsVM =
     }
 }
 
-private data class ModelSlotUi(val slot: ResourceSelectionSlot, val title: Int, val description: Int)
+private data class ModelSlotUi(val slot: ResourceSelectionSlot, val title: Int)
 private val modelSlots = listOf(
-    ModelSlotUi(ResourceSelectionSlot.CHAT_MODEL, R.string.setting_model_page_chat_model, R.string.setting_model_page_chat_model_desc),
-    ModelSlotUi(ResourceSelectionSlot.FAST_MODEL, R.string.setting_model_page_fast_model, R.string.setting_model_page_fast_model_desc),
-    ModelSlotUi(ResourceSelectionSlot.TITLE_MODEL, R.string.setting_model_page_title_model, R.string.setting_model_page_title_model_desc),
-    ModelSlotUi(ResourceSelectionSlot.SUGGESTION_MODEL, R.string.setting_model_page_suggestion_model, R.string.setting_model_page_suggestion_model_desc),
-    ModelSlotUi(ResourceSelectionSlot.IMAGE_MODEL, R.string.setting_model_page_image_generation_model, R.string.setting_model_page_image_generation_model_desc),
-    ModelSlotUi(ResourceSelectionSlot.ATTACHMENT_INSPECTION_MODEL, R.string.setting_model_page_attachment_inspection_model, R.string.setting_model_page_attachment_inspection_model_desc),
-    ModelSlotUi(ResourceSelectionSlot.COMPRESS_MODEL, R.string.setting_model_page_compress_model, R.string.setting_model_page_compress_model_desc),
+    ModelSlotUi(ResourceSelectionSlot.CHAT_MODEL, R.string.setting_model_page_chat_model),
+    ModelSlotUi(ResourceSelectionSlot.FAST_MODEL, R.string.setting_model_page_fast_model),
+    ModelSlotUi(ResourceSelectionSlot.TITLE_MODEL, R.string.setting_model_page_title_model),
+    ModelSlotUi(ResourceSelectionSlot.SUGGESTION_MODEL, R.string.setting_model_page_suggestion_model),
+    ModelSlotUi(ResourceSelectionSlot.IMAGE_MODEL, R.string.setting_model_page_image_generation_model),
+    ModelSlotUi(ResourceSelectionSlot.ATTACHMENT_INSPECTION_MODEL, R.string.setting_model_page_attachment_inspection_model),
+    ModelSlotUi(ResourceSelectionSlot.COMPRESS_MODEL, R.string.setting_model_page_compress_model),
 )
 
 @Composable
 private fun ModelSettingsPage(catalog: ModelCatalogUiModel, vm: ModelSettingsVM, error: String?, padding: PaddingValues) {
     val selection = requireNotNull(catalog.selection)
     LazyColumn(contentPadding = padding + PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-        item { Text(stringResource(if (selection.access is RealmAccess.Enterprise)
-            R.string.configuration_scope_enterprise else R.string.configuration_scope_personal)) }
-        if (error != null) item { Text(error, color = MaterialTheme.colorScheme.error) }
-        modelSlots.forEach { item -> item(key = item.slot.name) {
-            if (item.slot == ResourceSelectionSlot.SUGGESTION_MODEL) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(stringResource(R.string.setting_model_page_enable_suggestion), modifier = Modifier.weight(1f))
-                    Switch(checked = catalog.selections.enableSuggestion,
-                        onCheckedChange = { vm.enableSuggestion(selection, it) })
-                }
-            }
-            ModelSettingItem(item, catalog, vm)
-        } }
+        if (selection.access is RealmAccess.Enterprise) item {
+            Text(stringResource(R.string.configuration_scope_enterprise), style = MaterialTheme.typography.titleSmall,
+                color = MaterialTheme.colorScheme.primary)
+        }
+        error?.let { detail -> item { Text(detail, color = MaterialTheme.colorScheme.error) } }
+        item("conversationModels") {
+            ModelSettingsGroup(
+                title = stringResource(R.string.setting_model_group_conversation),
+                items = modelSlots.filter { it.slot == ResourceSelectionSlot.CHAT_MODEL ||
+                    it.slot == ResourceSelectionSlot.SUGGESTION_MODEL && catalog.selections.enableSuggestion },
+                catalog = catalog,
+                vm = vm,
+                suggestionToggle = true,
+            )
+        }
+        item("backgroundModels") {
+            ModelSettingsGroup(
+                title = stringResource(R.string.setting_model_group_background),
+                items = modelSlots.filter { it.slot in setOf(ResourceSelectionSlot.FAST_MODEL,
+                    ResourceSelectionSlot.TITLE_MODEL, ResourceSelectionSlot.COMPRESS_MODEL) },
+                catalog = catalog,
+                vm = vm,
+            )
+        }
+        item("mediaModels") {
+            ModelSettingsGroup(
+                title = stringResource(R.string.setting_model_group_media),
+                items = modelSlots.filter { it.slot in setOf(ResourceSelectionSlot.IMAGE_MODEL,
+                    ResourceSelectionSlot.ATTACHMENT_INSPECTION_MODEL) },
+                catalog = catalog,
+                vm = vm,
+            )
+        }
     }
 }
 
 @Composable
-private fun ModelSettingItem(item: ModelSlotUi, catalog: ModelCatalogUiModel, vm: ModelSettingsVM) {
+private fun ModelSettingsGroup(
+    title: String,
+    items: List<ModelSlotUi>,
+    catalog: ModelCatalogUiModel,
+    vm: ModelSettingsVM,
+    suggestionToggle: Boolean = false,
+) {
     val selection = requireNotNull(catalog.selection)
-    val reference = item.slot.reference(catalog.selections)
-    val candidates = catalog.forSlot(item.slot)
-    val state = rememberModelListState(reference, candidates, requireNotNull(item.slot.modelRole).type)
-    val stored = item.slot.reference(catalog.storedSelections)
-    val defaultBehavior = catalog.defaultBehavior(item.slot)
-    val unavailable = catalog.roleSelections[item.slot]?.unavailableReason.takeIf { defaultBehavior == null }
-    Column {
-        CardGroup(title = { Text(stringResource(item.title)) }) {
-            item(onClick = state::open, headlineContent = {
-                Text(state.currentModel?.displayName ?: stringResource(when (defaultBehavior) {
-                    DefaultModelBehavior.FOLLOW_CHAT -> R.string.setting_model_page_follow_chat_model
-                    DefaultModelBehavior.FOLLOW_FAST -> R.string.configuration_follow_fast_model
-                    DefaultModelBehavior.DISABLED -> R.string.chat_readiness_memory_disabled
-                    else -> R.string.chat_readiness_model_not_configured
-                }))
-            }, trailingContent = { Icon(HugeIcons.ArrowRight01, null) })
+    val rows = items.map { item ->
+        val candidates = catalog.forSlot(item.slot)
+        val state = rememberModelListState(item.slot.reference(catalog.selections), candidates,
+            requireNotNull(item.slot.modelRole).type)
+        ModelSettingRow(item, state, item.slot.reference(catalog.storedSelections), catalog.defaultBehavior(item.slot),
+            catalog.roleSelections[item.slot]?.unavailableReason.takeIf { catalog.defaultBehavior(item.slot) == null })
+    }
+    CardGroup(title = { Text(title) }) {
+        rows.forEach { row ->
+            val canReset = row.stored != null && !(selection.access == RealmAccess.Personal && row.defaultBehavior != null)
+            item(
+                onClick = row.state::open,
+                headlineContent = { Text(stringResource(row.item.title)) },
+                supportingContent = {
+                    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                        Text(row.state.currentModel?.displayName ?: stringResource(when (row.defaultBehavior) {
+                            DefaultModelBehavior.FOLLOW_CHAT -> R.string.setting_model_page_follow_chat_model
+                            DefaultModelBehavior.FOLLOW_FAST -> R.string.configuration_follow_fast_model
+                            DefaultModelBehavior.DISABLED -> R.string.chat_readiness_memory_disabled
+                            else -> R.string.chat_readiness_model_not_configured
+                        }), color = MaterialTheme.colorScheme.primary)
+                        row.unavailable?.let { Text(configurationUnavailableText(it), color = MaterialTheme.colorScheme.error) }
+                    }
+                },
+                trailingContent = {
+                    if (canReset) IconButton(onClick = { vm.reset(selection, row.item.slot) }) {
+                        Icon(HugeIcons.Undo02,
+                            contentDescription = stringResource(R.string.configuration_restore_default))
+                    } else Icon(HugeIcons.ArrowRight01, contentDescription = null)
+                },
+            )
+            if (suggestionToggle && row.item.slot == ResourceSelectionSlot.CHAT_MODEL) item(
+                headlineContent = { Text(stringResource(R.string.setting_model_page_enable_suggestion)) },
+                trailingContent = { Switch(checked = catalog.selections.enableSuggestion,
+                    onCheckedChange = { vm.enableSuggestion(selection, it) }) },
+            )
         }
-        if (selection.access == RealmAccess.Personal) {
-            Text(stringResource(item.description), style = MaterialTheme.typography.bodySmall)
-        }
-        if (stored == null && selection.access is RealmAccess.Enterprise) {
-            Text(stringResource(R.string.configuration_inherited), style = MaterialTheme.typography.bodySmall)
-        }
-        unavailable?.let { Text(configurationUnavailableText(it), color = MaterialTheme.colorScheme.error,
-            style = MaterialTheme.typography.bodySmall) }
-        if (stored != null && !(selection.access == RealmAccess.Personal && defaultBehavior != null)) TextButton(onClick = { vm.reset(selection, item.slot) }) {
-            Text(stringResource(R.string.configuration_restore_default))
-        }
-        ModelListSheet(state, onSelect = { model -> vm.select(selection, item.slot, model.id) })
+    }
+    rows.forEach { row ->
+        ModelListSheet(row.state, onSelect = { model -> vm.select(selection, row.item.slot, model.id) })
     }
 }
+
+private data class ModelSettingRow(
+    val item: ModelSlotUi,
+    val state: net.weero.measix.pilot.ui.components.ai.ModelListState,
+    val stored: me.rerere.common.configuration.ConfigurationReference?,
+    val defaultBehavior: DefaultModelBehavior?,
+    val unavailable: net.weero.measix.pilot.data.configuration.ConfigurationUnavailableReason?,
+)

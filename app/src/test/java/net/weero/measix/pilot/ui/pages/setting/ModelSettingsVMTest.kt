@@ -48,10 +48,10 @@ class ModelSettingsVMTest {
             runCurrent()
             vm.enableSuggestion(next, false)
             runCurrent()
-            assertEquals(ModelSettingsError(next, "current_error"), vm.error.value)
+            assertEquals(ModelSettingsError(next, "IOException: current_error"), vm.error.value)
             release.complete(Unit)
             runCurrent()
-            assertEquals(ModelSettingsError(next, "current_error"), vm.error.value)
+            assertEquals(ModelSettingsError(next, "IOException: current_error"), vm.error.value)
         } finally {
             backgroundScope.coroutineContext[Job]!!.cancelAndJoin()
             vm.viewModelScope.coroutineContext[Job]!!.cancelAndJoin()

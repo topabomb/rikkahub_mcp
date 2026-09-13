@@ -134,7 +134,6 @@ fun SettingSearchPage(vm: SettingVM = koinViewModel()) {
             verticalArrangement = Arrangement.spacedBy(12.dp),
             state = lazyListState
         ) {
-            item { Text(stringResource(R.string.configuration_shared_content_notice), style = MaterialTheme.typography.bodySmall) }
             items(settings.searchServices, key = { it.id.toString() }) { service ->
                 ReorderableItem(
                     state = reorderableState,

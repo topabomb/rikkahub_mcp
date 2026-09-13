@@ -59,7 +59,7 @@ class ConfigurationApplicationServiceTest {
     @get:Rule val temporary = TemporaryFolder()
 
     @Test
-    fun `chat field commands preserve personal definitions and fixed enterprise bindings`() = runTest {
+    fun `chat field commands preserve definitions while enterprise assistants override their default model`() = runTest {
         val env = environment()
         try {
             env.initialize()
@@ -75,8 +75,12 @@ class ConfigurationApplicationServiceTest {
             val fixedTarget = env.chatTarget(exampleEnterprisePackage().identity.reference(fixed.id))
             env.commands.changeAssistantPreference(fixedTarget, AssistantPreferenceChange.Model(env.model.id))
             assertEquals(env.model.id, env.queries.observeCurrent().first().assistantModel(fixedTarget.assistantId).reference)
-            assertTrue(env.queries.observeCurrent().first().conversationConfiguration(fixedTarget).canChangeModel)
+            val overridden = env.queries.observeCurrent().first().conversationConfiguration(fixedTarget)
+            assertTrue(overridden.canChangeModel)
+            assertEquals(AssistantModelPreferenceMode.EXPLICIT, overridden.modelPreference!!.mode)
             env.commands.changeAssistantPreference(fixedTarget, AssistantPreferenceChange.InheritModel)
+            assertEquals(AssistantModelPreferenceMode.ASSISTANT_DEFAULT,
+                env.queries.observeCurrent().first().conversationConfiguration(fixedTarget).modelPreference!!.mode)
             if (fixed.mcpServerIds.isNotEmpty()) expectCommandFailure {
                 env.commands.changeAssistantPreference(fixedTarget,
                     AssistantPreferenceChange.Mcp(exampleEnterprisePackage().identity.reference(fixed.mcpServerIds.first()), false))
@@ -111,10 +115,14 @@ class ConfigurationApplicationServiceTest {
             env.commands.changeAssistantPreference(target, AssistantPreferenceChange.Model(null))
             val followsDefault = env.queries.observeCurrent().first()
             assertEquals(exampleEnterprisePackage().identity.reference("mdl_chat"), followsDefault.assistantModel(env.assistant.id).reference)
+            assertEquals(AssistantModelPreferenceMode.SPACE_DEFAULT,
+                followsDefault.conversationConfiguration(target).modelPreference!!.mode)
             assertNotNull(env.diskDocument().preferences.assistantUsage(env.access.scope, env.assistant.id)!!.chatModelId)
             env.commands.changeAssistantPreference(target, AssistantPreferenceChange.InheritModel)
             val inherits = env.queries.observeCurrent().first()
             assertEquals(env.model.id, inherits.assistantModel(env.assistant.id).reference)
+            assertEquals(AssistantModelPreferenceMode.ASSISTANT_DEFAULT,
+                inherits.conversationConfiguration(target).modelPreference!!.mode)
             assertNull(env.diskDocument().preferences.assistantUsage(env.access.scope, env.assistant.id))
         } finally { env.scope.cancel() }
     }

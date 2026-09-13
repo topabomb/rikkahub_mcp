@@ -53,6 +53,7 @@ import kotlinx.coroutines.launch
 import net.weero.measix.pilot.R
 import net.weero.measix.pilot.Screen
 import net.weero.measix.pilot.service.ConversationSummary
+import net.weero.measix.pilot.service.AssistantCatalogReadState
 import net.weero.measix.pilot.ui.components.nav.BackButton
 import net.weero.measix.pilot.ui.context.LocalNavController
 import net.weero.measix.pilot.ui.context.rememberChatNavigation
@@ -83,6 +84,8 @@ fun HistoryPage(vm: HistoryVM = koinViewModel()) {
     }
 
     val conversations = vm.conversations.collectAsStateWithLifecycle().value
+    val assistantCatalog = vm.assistantCatalog.collectAsStateWithLifecycle().value
+    val readFailure = vm.readFailure.collectAsStateWithLifecycle().value
 
     Scaffold(
         topBar = {
@@ -125,6 +128,20 @@ fun HistoryPage(vm: HistoryVM = koinViewModel()) {
             contentPadding = contentPadding + PaddingValues(16.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
+            (assistantCatalog as? AssistantCatalogReadState.Unavailable)?.let { unavailable ->
+                item("configuration_failure") {
+                    androidx.compose.foundation.text.selection.SelectionContainer {
+                        Text(unavailable.detail, color = MaterialTheme.colorScheme.error)
+                    }
+                }
+            }
+            readFailure?.let { detail ->
+                item("history_failure") {
+                    androidx.compose.foundation.text.selection.SelectionContainer {
+                        Text(detail, color = MaterialTheme.colorScheme.error)
+                    }
+                }
+            }
             items(conversations, key = { it.id }) { conversation ->
                 SwipeableConversationItem(
                     conversation = conversation,

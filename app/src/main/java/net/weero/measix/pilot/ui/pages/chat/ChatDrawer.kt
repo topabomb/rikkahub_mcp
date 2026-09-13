@@ -79,6 +79,7 @@ import net.weero.measix.pilot.service.ConversationFolderAccess
 import net.weero.measix.pilot.service.ConversationFolderBusyException
 import net.weero.measix.pilot.service.ConversationFolderDirectory
 import net.weero.measix.pilot.service.ConversationSummary
+import net.weero.measix.pilot.service.AssistantCatalogReadState
 import net.weero.measix.pilot.data.model.Folder
 import net.weero.measix.pilot.service.ConversationQueryService
 import net.weero.measix.pilot.ui.components.ai.AssistantPicker
@@ -90,6 +91,7 @@ import net.weero.measix.pilot.ui.components.ui.BackupReminderCard
 import net.weero.measix.pilot.ui.components.ui.Greeting
 import net.weero.measix.pilot.ui.components.ui.Tooltip
 import net.weero.measix.pilot.ui.components.ui.UIAvatar
+import net.weero.measix.pilot.ui.components.ui.SharedConfigurationEditDialog
 import net.weero.measix.pilot.ui.components.ui.UpdateCard
 import net.weero.measix.pilot.ui.context.LocalToaster
 import net.weero.measix.pilot.ui.context.Navigator
@@ -101,6 +103,7 @@ import net.weero.measix.pilot.ui.hooks.useEditState
 import net.weero.measix.pilot.ui.modifier.onClick
 import net.weero.measix.pilot.ui.context.rememberChatNavigation
 import net.weero.measix.pilot.utils.toDp
+import net.weero.measix.pilot.utils.userVisibleDiagnostic
 import org.koin.androidx.compose.koinViewModel
 import org.koin.compose.koinInject
 import kotlin.uuid.Uuid
@@ -127,7 +130,9 @@ fun ChatDrawerContent(
         ?: error("ChatDrawerContent requires a ComponentActivity host")
     val drawerVm: ChatDrawerVM = koinViewModel(viewModelStoreOwner = activity)
 
-    val assistantCatalog by drawerVm.assistantCatalog.collectAsStateWithLifecycle()
+    val assistantCatalogState by drawerVm.assistantCatalog.collectAsStateWithLifecycle()
+    val assistantCatalog = (assistantCatalogState as? AssistantCatalogReadState.Available)?.catalog
+    val assistantCatalogFailure = (assistantCatalogState as? AssistantCatalogReadState.Unavailable)?.detail
     val conversations = drawerVm.conversations.collectAsLazyPagingItems()
     val folderDirectory = drawerVm.folderDirectory.collectAsStateWithLifecycle().value
     val folders = folderDirectory?.folders.orEmpty()
@@ -174,6 +179,7 @@ fun ChatDrawerContent(
     // 移动对话状态
     var showMoveToAssistantSheet by remember { mutableStateOf(false) }
     var conversationToMove by remember { mutableStateOf<ConversationSummary?>(null) }
+    var pendingSharedNavigation by remember(assistantCatalog?.selection) { mutableStateOf<Screen?>(null) }
 
     // 文件夹相关状态
     var showMoveToFolderSheet by remember { mutableStateOf(false) }
@@ -381,17 +387,35 @@ fun ChatDrawerContent(
                             navigateFromDrawer { navController.clearAndNavigate(Screen.Chat(request)) }
                             true
                         } catch (cancelled: CancellationException) { throw cancelled }
-                        catch (_: Exception) {
-                            toaster.show(operationFailureText, type = ToastType.Error)
+                        catch (error: Exception) {
+                            android.util.Log.e("ChatDrawer", "Assistant selection failed", error)
+                            toaster.show(error.userVisibleDiagnostic(), type = ToastType.Error)
                             false
                         }
                     },
                     modifier = Modifier.fillMaxWidth(),
                     onManageAssistant = (catalog.selected.reference as? ConfigurationReference.User)?.let { id -> {
-                        navigateFromDrawer { navController.navigate(Screen.AssistantDetail(id = id.toString())) }
+                        if (catalog.selection.access is net.weero.measix.pilot.data.enterprise.RealmAccess.Enterprise) {
+                            pendingSharedNavigation = Screen.AssistantDetail(id = id.toString())
+                        } else {
+                            navigateFromDrawer { navController.navigate(Screen.AssistantDetail(id = id.toString())) }
+                        }
                     } },
+                    onEditAssistant = { id ->
+                        val destination = Screen.AssistantDetail(id.toString())
+                        if (catalog.selection.access is net.weero.measix.pilot.data.enterprise.RealmAccess.Enterprise) {
+                            pendingSharedNavigation = destination
+                        } else {
+                            navigateFromDrawer { navController.navigate(destination) }
+                        }
+                    },
                 )
             } }
+            assistantCatalogFailure?.let { detail ->
+                androidx.compose.foundation.text.selection.SelectionContainer {
+                    Text(detail, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                }
+            }
 
             Row(
                 horizontalArrangement = Arrangement.SpaceAround,
@@ -400,8 +424,6 @@ fun ChatDrawerContent(
                     .fillMaxWidth()
                     .padding(horizontal = 8.dp)
             ) {
-                // 2026-9-2 15:01：移除底部"助手设置"入口——与 SettingPage 的助手列表入口重复，
-                // 助手管理仍可经头部助手选择器（onManageAssistant）进入；勿无故恢复。
                 Box {
                     DrawerAction(
                         icon = {
@@ -457,7 +479,7 @@ fun ChatDrawerContent(
 
                 DrawerAction(
                     icon = {
-                        Icon(HugeIcons.Settings03, null)
+                        Icon(HugeIcons.Settings03, stringResource(R.string.settings))
                     },
                     label = { Text(stringResource(R.string.settings)) },
                     onClick = {
@@ -723,7 +745,6 @@ fun ChatDrawerContent(
             currentAssistantId = original.assistantId,
             assistants = catalog?.assistants?.values?.toList().orEmpty(),
             unavailableReasons = catalog?.resources?.associate { it.key.reference to it.access.unavailableReason }.orEmpty(),
-            allowManage = false,
             enabled = !submitting,
             title = stringResource(R.string.chat_page_move_to_assistant),
             onDismiss = { showMoveToAssistantSheet = false; conversationToMove = null },
@@ -736,13 +757,26 @@ fun ChatDrawerContent(
                             showMoveToAssistantSheet = false
                             conversationToMove = null
                         } catch (cancelled: CancellationException) { throw cancelled }
-                        catch (_: Exception) { toaster.show(operationFailureText, type = ToastType.Error) }
+                        catch (error: Exception) {
+                            android.util.Log.e("ChatDrawer", "Moving conversation to assistant failed", error)
+                            toaster.show(error.userVisibleDiagnostic(), type = ToastType.Error)
+                        }
                         finally { submitting = false }
                     }
                 }
             },
         )
     } }
+
+    pendingSharedNavigation?.let { destination ->
+        SharedConfigurationEditDialog(
+            onDismiss = { pendingSharedNavigation = null },
+            onConfirm = {
+                pendingSharedNavigation = null
+                navigateFromDrawer { navController.navigate(destination) }
+            },
+        )
+    }
 
 }
 

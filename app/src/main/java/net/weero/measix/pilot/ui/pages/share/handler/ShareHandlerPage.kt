@@ -35,21 +35,23 @@ import kotlinx.coroutines.launch
 import net.weero.measix.pilot.R
 import net.weero.measix.pilot.Screen
 import net.weero.measix.pilot.data.enterprise.RealmAccess
+import net.weero.measix.pilot.service.AssistantCatalogReadState
 import net.weero.measix.pilot.ui.components.ai.configurationUnavailableText
 import net.weero.measix.pilot.ui.context.LocalNavController
 import net.weero.measix.pilot.ui.context.LocalToaster
 import net.weero.measix.pilot.utils.base64Encode
+import net.weero.measix.pilot.utils.userVisibleDiagnostic
 import org.koin.androidx.compose.koinViewModel
 import org.koin.core.parameter.parametersOf
 
 @Composable
 fun ShareHandlerPage(text: String, image: String?) {
     val vm: ShareHandlerVM = koinViewModel(parameters = { parametersOf(text) })
-    val catalog by vm.catalog.collectAsStateWithLifecycle()
+    val catalogState by vm.catalog.collectAsStateWithLifecycle()
+    val catalog = (catalogState as? AssistantCatalogReadState.Available)?.catalog
     val navController = LocalNavController.current
     val scope = rememberCoroutineScope()
     val toaster = LocalToaster.current
-    val failure = stringResource(R.string.error_title_operation)
     val original = catalog
     var submitting by remember(original?.selection) { mutableStateOf(false) }
     Scaffold(
@@ -67,9 +69,13 @@ fun ShareHandlerPage(text: String, image: String?) {
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             item {
-                Text(if (original == null) stringResource(R.string.configuration_reason_not_ready)
-                else stringResource(R.string.enterprise_current_space, stringResource(
-                    if (original.selection.access == RealmAccess.Personal) R.string.enterprise_personal else R.string.enterprise_space)))
+                val unavailable = catalogState as? AssistantCatalogReadState.Unavailable
+                androidx.compose.foundation.text.selection.SelectionContainer {
+                    Text(if (unavailable != null) unavailable.detail
+                    else if (original == null) stringResource(R.string.configuration_reason_not_ready)
+                    else stringResource(R.string.enterprise_current_space, stringResource(
+                        if (original.selection.access == RealmAccess.Personal) R.string.enterprise_personal else R.string.enterprise_space)))
+                }
             }
             item {
                 Card {
@@ -107,7 +113,10 @@ fun ShareHandlerPage(text: String, image: String?) {
                                     navController.clearAndNavigate(Screen.Chat(request, vm.shareText.base64Encode(),
                                         image?.let { listOf(it.toUri().toString()) } ?: emptyList()))
                                 } catch (cancelled: CancellationException) { throw cancelled }
-                                catch (_: Exception) { toaster.show(failure, type = ToastType.Error) }
+                                catch (error: Exception) {
+                                    android.util.Log.e("ShareHandler", "Creating shared draft failed", error)
+                                    toaster.show(error.userVisibleDiagnostic(), type = ToastType.Error)
+                                }
                                 finally { submitting = false }
                             }
                         }

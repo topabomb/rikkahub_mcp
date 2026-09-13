@@ -52,6 +52,18 @@ internal enum class ModelSelectionRole(val type: ModelType) {
     ATTACHMENT_INSPECTION(ModelType.CHAT), SUGGESTION(ModelType.CHAT), COMPRESS(ModelType.CHAT),
 }
 
+internal enum class AssistantModelPreferenceMode {
+    ASSISTANT_DEFAULT,
+    SPACE_DEFAULT,
+    EXPLICIT,
+}
+
+internal data class AssistantModelPreference(
+    val mode: AssistantModelPreferenceMode,
+    val definitionReference: ConfigurationReference?,
+    val spaceDefaultReference: ConfigurationReference?,
+)
+
 /** Derived catalog and selections for one principal. Enterprise credentials stay with their execution owner. */
 internal data class ResolvedConfiguration(
     val scope: ConfigurationScope,
@@ -63,6 +75,7 @@ internal data class ResolvedConfiguration(
     val selections: ResourceSelections,
     val storedSelections: ResourceSelections,
     val inheritedSubAssistantIds: Map<ConfigurationReference, Set<ConfigurationReference>> = emptyMap(),
+    val assistantModelPreferences: Map<ConfigurationReference, AssistantModelPreference>,
 ) {
     fun availableStarters(assistantId: ConfigurationReference? = null): List<net.weero.measix.pilot.data.enterprise.EnterpriseStarter> {
         val identity = enterpriseIdentity ?: return emptyList()
@@ -272,6 +285,25 @@ internal object ConfigurationResolver {
                 put(identity.reference(definition.id), definition.allowedSubAssistantIds.mapTo(linkedSetOf(), identity::reference))
             }
         }
-        return ResolvedConfiguration(scope, identity, enterprise, catalog, models, assistants, effectiveSelections, selected, inheritedSubAssistants)
+        val assistantModelPreferences = buildMap {
+            fun add(reference: ConfigurationReference, definitionReference: ConfigurationReference?) {
+                val stored = document.preferences.assistantUsage(scope, reference)?.chatModelId
+                put(reference, AssistantModelPreference(
+                    mode = when {
+                        stored == null -> AssistantModelPreferenceMode.ASSISTANT_DEFAULT
+                        stored.value == null -> AssistantModelPreferenceMode.SPACE_DEFAULT
+                        else -> AssistantModelPreferenceMode.EXPLICIT
+                    },
+                    definitionReference = definitionReference,
+                    spaceDefaultReference = effectiveSelections.chatModelId,
+                ))
+            }
+            user.assistants.forEach { add(it.id, it.chatModelId) }
+            if (identity != null) enterprise?.assistants?.forEach { definition ->
+                add(identity.reference(definition.id), identity.reference(definition.modelId))
+            }
+        }
+        return ResolvedConfiguration(scope, identity, enterprise, catalog, models, assistants, effectiveSelections, selected,
+            inheritedSubAssistants, assistantModelPreferences)
     }
 }

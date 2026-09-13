@@ -88,6 +88,8 @@ import net.weero.measix.pilot.ui.components.ai.configurationUnavailableText
 import net.weero.measix.pilot.service.ConfigurationApplicationService
 import net.weero.measix.pilot.service.ConfigurationQueryService
 import net.weero.measix.pilot.service.SpeechCatalogUiModel
+import net.weero.measix.pilot.service.SpeechCatalogReadState
+import net.weero.measix.pilot.utils.userVisibleDiagnostic
 import net.weero.measix.pilot.data.configuration.ConfigurationCategory
 import net.weero.measix.pilot.data.configuration.ConfigurationCatalogItem
 import net.weero.measix.pilot.data.configuration.ResourceSelectionSlot
@@ -98,16 +100,21 @@ fun SettingSpeechPage(vm: SettingVM = koinViewModel()) {
     val settings by vm.settings.collectAsStateWithLifecycle()
     val queries = koinInject<ConfigurationQueryService>()
     val commands = koinInject<ConfigurationApplicationService>()
-    val catalog by remember(queries) { queries.observeSpeechCatalog() }.collectAsStateWithLifecycle(null)
+    val catalogState by remember(queries) { queries.observeSpeechCatalog() }
+        .collectAsStateWithLifecycle(SpeechCatalogReadState.Loading)
+    val catalog = (catalogState as? SpeechCatalogReadState.Available)?.catalog
+    val catalogFailure = (catalogState as? SpeechCatalogReadState.Unavailable)?.detail
     val scope = rememberCoroutineScope()
     val toaster = LocalToaster.current
-    val failureText = stringResource(R.string.configuration_reason_not_ready)
     fun select(slot: ResourceSelectionSlot, reference: ConfigurationReference) {
         val original = catalog?.selection ?: return
         scope.launch {
             try { commands.selectResource(original, slot, reference) }
             catch (cancelled: CancellationException) { throw cancelled }
-            catch (_: Exception) { toaster.show(failureText, type = ToastType.Error) }
+            catch (error: Exception) {
+                android.util.Log.e("SettingSpeech", "Speech selection failed", error)
+                toaster.show(error.userVisibleDiagnostic(), type = ToastType.Error)
+            }
         }
     }
     var editingTTSProvider by remember { mutableStateOf<TTSProviderSetting?>(null) }
@@ -169,7 +176,7 @@ fun SettingSpeechPage(vm: SettingVM = koinViewModel()) {
         when (selectedPage) {
             0 -> Column(modifier = Modifier.padding(innerPadding)) {
                 SpeechProviderList(
-                    settings = settings, catalog = catalog, category = ConfigurationCategory.TTS,
+                    settings = settings, catalog = catalog, readFailure = catalogFailure, category = ConfigurationCategory.TTS,
                     onUpdateSettings = vm::updateSettings,
                     onSelect = { select(ResourceSelectionSlot.TTS, it) },
                     onEditTts = { editingTTSProvider = it }, onEditAsr = { editingASRProvider = it },
@@ -178,7 +185,7 @@ fun SettingSpeechPage(vm: SettingVM = koinViewModel()) {
             }
 
             1 -> SpeechProviderList(
-                settings = settings, catalog = catalog, category = ConfigurationCategory.ASR,
+                settings = settings, catalog = catalog, readFailure = catalogFailure, category = ConfigurationCategory.ASR,
                 onUpdateSettings = vm::updateSettings,
                 onSelect = { select(ResourceSelectionSlot.ASR, it) },
                 onEditTts = { editingTTSProvider = it }, onEditAsr = { editingASRProvider = it },
@@ -493,6 +500,7 @@ private fun AddASRProviderButton(onAdd: (ASRProviderSetting) -> Unit) {
 private fun SpeechProviderList(
     settings: Settings,
     catalog: SpeechCatalogUiModel?,
+    readFailure: String?,
     category: ConfigurationCategory,
     onUpdateSettings: ((Settings) -> Settings) -> Unit,
     onSelect: (ConfigurationReference) -> Unit,
@@ -524,14 +532,27 @@ private fun SpeechProviderList(
     val testText = stringResource(R.string.setting_tts_page_test_text)
     LazyColumn(modifier.fillMaxSize().imePadding(), state = lazyState,
         contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        catalog?.selection?.let { selection -> item {
+        catalog?.selection?.takeIf { it.access is net.weero.measix.pilot.data.enterprise.RealmAccess.Enterprise }?.let { selection -> item {
             Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 Text(stringResource(if (selection.access == net.weero.measix.pilot.data.enterprise.RealmAccess.Personal)
                     R.string.configuration_scope_personal else R.string.configuration_scope_enterprise), style = MaterialTheme.typography.titleSmall)
                 Text(stringResource(R.string.configuration_speech_scope_notice), style = MaterialTheme.typography.bodySmall)
             }
         } }
-        if (catalog == null) item { Text(stringResource(R.string.configuration_reason_not_ready)) }
+        if (catalog == null) item {
+            androidx.compose.foundation.text.selection.SelectionContainer {
+                Text(readFailure ?: stringResource(R.string.configuration_reason_not_ready),
+                    color = if (readFailure == null) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.error)
+            }
+        }
+        if (catalog != null && resources.isEmpty()) item("empty") {
+            Text(
+                stringResource(R.string.speech_provider_empty),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(vertical = 24.dp),
+            )
+        }
         selected?.unavailableReason?.let { reason -> item { Text(configurationUnavailableText(reason), color = MaterialTheme.colorScheme.error) } }
         items(resources, key = { it.key.reference.toString() }) { resource ->
             val reference = resource.key.reference
@@ -553,6 +574,7 @@ private fun SpeechProviderList(
             }
             ReorderableItem(reorder, key = reference.toString()) { dragging ->
                 SpeechProviderItem(resource, details, selected?.reference == reference,
+                    showSource = catalog?.selection?.access is net.weero.measix.pilot.data.enterprise.RealmAccess.Enterprise,
                     modifier = Modifier.fillMaxWidth().scale(if (dragging) .95f else 1f),
                     onSelect = { onSelect(reference) },
                     onEdit = if (tts != null) ({ onEditTts(tts) }) else if (asr != null) ({ onEditAsr(asr) }) else null,
@@ -588,6 +610,7 @@ private fun SpeechProviderItem(
     resource: ConfigurationCatalogItem,
     details: String,
     selected: Boolean,
+    showSource: Boolean,
     modifier: Modifier,
     onSelect: () -> Unit,
     onEdit: (() -> Unit)?,
@@ -606,10 +629,12 @@ private fun SpeechProviderItem(
                 RadioButton(selected, onSelect, enabled = resource.access.canSelect)
                 dragHandle()
             }
-            Text(stringResource(when (resource.key.reference) {
-                is ConfigurationReference.Enterprise -> R.string.configuration_source_enterprise
-                is ConfigurationReference.User -> if (resource.key.reference == DEFAULT_SYSTEM_TTS_ID) R.string.managed_configuration_source_builtin else R.string.configuration_source_user
-            }), style = MaterialTheme.typography.labelMedium)
+            if (showSource) {
+                Text(stringResource(when (resource.key.reference) {
+                    is ConfigurationReference.Enterprise -> R.string.configuration_source_enterprise
+                    is ConfigurationReference.User -> if (resource.key.reference == DEFAULT_SYSTEM_TTS_ID) R.string.managed_configuration_source_builtin else R.string.configuration_source_user
+                }), style = MaterialTheme.typography.labelMedium)
+            }
             resource.access.unavailableReason?.let { Text(configurationUnavailableText(it), color = MaterialTheme.colorScheme.error) }
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
                 test?.invoke()

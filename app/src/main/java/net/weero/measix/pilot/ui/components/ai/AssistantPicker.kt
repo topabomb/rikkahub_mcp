@@ -39,16 +39,16 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.ArrowDown01
+import me.rerere.hugeicons.stroke.Building03
 import me.rerere.hugeicons.stroke.Edit03
+import me.rerere.hugeicons.stroke.User
 import net.weero.measix.pilot.R
-import net.weero.measix.pilot.Screen
 import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.model.Assistant
 import net.weero.measix.pilot.ui.adaptive.AdaptiveModal
 import net.weero.measix.pilot.ui.components.ui.Tag
 import net.weero.measix.pilot.ui.components.ui.TagType
 import net.weero.measix.pilot.ui.components.ui.UIAvatar
-import net.weero.measix.pilot.ui.context.LocalNavController
 import net.weero.measix.pilot.data.model.Avatar
 import kotlinx.coroutines.launch
 import androidx.compose.runtime.rememberCoroutineScope
@@ -62,6 +62,7 @@ internal fun AssistantPicker(
     onSelectAssistant: suspend (ConfigurationReference) -> Boolean,
     modifier: Modifier = Modifier,
     onManageAssistant: (() -> Unit)?,
+    onEditAssistant: ((ConfigurationReference.User) -> Unit)? = null,
 ) {
     val currentAssistant = assistants[currentAssistantId]
     val scope = rememberCoroutineScope()
@@ -150,7 +151,8 @@ internal fun AssistantPicker(
             },
             onDismiss = {
                 showPicker = false
-            }
+            },
+            onEditAssistant = onEditAssistant,
         )
     }
 }
@@ -165,11 +167,13 @@ internal fun AssistantPickerSheet(
     onDismiss: () -> Unit,
     title: String? = null,
     forceDialog: Boolean = false,
-    allowManage: Boolean = true,
+    onEditAssistant: ((ConfigurationReference.User) -> Unit)? = null,
     enabled: Boolean = true,
 ) {
     val defaultAssistantName = stringResource(R.string.assistant_page_default_assistant)
     val sheetTitle = title ?: stringResource(R.string.safe_mode_switch_assistant)
+    val showSource = assistants.any { it.id is ConfigurationReference.Enterprise } &&
+        assistants.any { it.id is ConfigurationReference.User }
 
     // 标签过滤状态
     var selectedTagIds by remember { mutableStateOf(emptySet<ConfigurationReference>()) }
@@ -248,7 +252,6 @@ internal fun AssistantPickerSheet(
             }
 
             // 助手列表
-            val navController = LocalNavController.current
             LazyColumn(
                 modifier = Modifier.weight(1f),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -271,14 +274,10 @@ internal fun AssistantPickerSheet(
                         AssistantItem(
                             assistant = assistant,
                             defaultAssistantName = defaultAssistantName,
-                            onEdit = if (enabled && allowManage && assistant.id is ConfigurationReference.User) {
-                                {
-                                    onDismiss()
-                                    navController.navigate(Screen.AssistantDetail(assistant.id.toString()))
-                                }
-                            } else {
-                                null
-                            },
+                            showSource = showSource,
+                            onEdit = (assistant.id as? ConfigurationReference.User)
+                                ?.takeIf { enabled }
+                                ?.let { id -> onEditAssistant?.let { edit -> { onDismiss(); edit(id) } } },
                         )
                     }
                 }
@@ -291,6 +290,7 @@ internal fun AssistantPickerSheet(
 private fun AssistantItem(
     assistant: Assistant,
     defaultAssistantName: String,
+    showSource: Boolean,
     onEdit: (() -> Unit)? = null,
 ) {
     ListItem(
@@ -321,6 +321,21 @@ private fun AssistantItem(
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
+            if (showSource) {
+                Row(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
+                    val enterprise = assistant.id is ConfigurationReference.Enterprise
+                    Icon(
+                        if (enterprise) HugeIcons.Building03 else HugeIcons.User,
+                        contentDescription = null,
+                        modifier = Modifier.size(14.dp),
+                    )
+                    Text(
+                        stringResource(if (enterprise) R.string.configuration_source_enterprise else R.string.configuration_source_user),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
             if (assistant.description.isNotBlank()) {
                 Text(
                     text = assistant.description,

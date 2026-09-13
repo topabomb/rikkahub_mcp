@@ -140,6 +140,7 @@ internal fun ChatInput(
     canChangeModel: Boolean,
     modelSelectionActions: List<ModelSelectionAction>,
     modelListState: ModelListState,
+    selectedModelId: ConfigurationReference?,
     hazeState: HazeState,
     enableSearch: Boolean,
     onUpdateSearchMode: (AssistantSearchMode) -> Unit,
@@ -148,6 +149,7 @@ internal fun ChatInput(
     onUpdateChatModel: suspend (Model) -> Unit,
     onUpdateReasoning: (me.rerere.ai.core.ReasoningLevel) -> Unit,
     onUpdateSearchService: (ConfigurationReference) -> Unit,
+    onManageSearchServices: () -> Unit,
     onMoreClick: () -> Unit,
     onCancelClick: () -> Unit,
     onSendClick: () -> Unit,
@@ -291,6 +293,7 @@ internal fun ChatInput(
                                 selectedSearchServiceId = selectedSearchServiceId,
                                 onUpdateSearchService = onUpdateSearchService,
                                 builtInSearchEnabled = builtInSearchEnabled,
+                                onManageSearchServices = onManageSearchServices,
                             )
 
                             // Reasoning
@@ -400,6 +403,7 @@ internal fun ChatInput(
                 state = modelListState,
                 onSelect = onUpdateChatModel,
                 additionalActions = modelSelectionActions,
+                selectedModelId = selectedModelId,
             )
         }
     }

@@ -58,9 +58,8 @@ class MemoryServiceTest {
             val id = ConfigurationReference.Enterprise(packet.identity.authority, "asd_writer")
             val address = MemoryAddress(packet.identity.scope, MemoryOwner.Assistant(id))
             env.rows(address).value = listOf(AssistantMemory(7, "my writing preference"))
-            val projection = (env.configurations.observeEnterpriseExperience(selection).first() as EnterpriseExperienceReadState.Available).value
-            val assistant = projection.assistants.single { it.assistant.id == id }
-            assertEquals(listOf("seed_writing"), assistant.memorySeeds.map { it.id })
+            val configuration = env.configurations.observe(packet.identity.scope).first()
+            assertEquals(listOf("seed_writing"), configuration.assistantMemorySeeds(id).map { it.id })
             val originalView = env.memory.observe(selection, id).first()
             assertNull(originalView.unavailableReason)
             val original = originalView.records.single()
@@ -70,8 +69,10 @@ class MemoryServiceTest {
                 generation = packet.configuration.generation + 1,
                 memorySeeds = packet.configuration.memorySeeds.map { if (it.id == "seed_writing") it.copy(content = "Updated enterprise guidance") else it },
             )))
-            val updated = (env.configurations.observeEnterpriseExperience(selection).first() as EnterpriseExperienceReadState.Available).value
-            assertEquals("Updated enterprise guidance", updated.assistants.single { it.assistant.id == id }.memorySeeds.single().content)
+            val updated = env.configurations.observe(packet.identity.scope).first {
+                it.enterpriseConfiguration?.generation == packet.configuration.generation + 1
+            }
+            assertEquals("Updated enterprise guidance", updated.assistantMemorySeeds(id).single().content)
             assertEquals("my writing preference", env.memory.observe(selection, id).first().records.single().content)
             env.sessions.selectPersonalFixture()
             assertNotNull(env.memory.observe(selection, id).first().unavailableReason)

@@ -8,6 +8,7 @@ import me.rerere.common.configuration.ConfigurationReference
 import net.weero.measix.pilot.data.enterprise.RealmSelection
 import net.weero.measix.pilot.service.ConfigurationQueryService
 import net.weero.measix.pilot.service.ConversationApplicationService
+import net.weero.measix.pilot.service.AssistantCatalogReadState
 
 class ShareHandlerVM internal constructor(
     text: String,
@@ -16,7 +17,7 @@ class ShareHandlerVM internal constructor(
 ) : ViewModel() {
     val shareText = text
     internal val catalog = queries.observeAssistantCatalog()
-        .stateIn(viewModelScope, SharingStarted.Eagerly, null)
+        .stateIn(viewModelScope, SharingStarted.Eagerly, AssistantCatalogReadState.Loading)
 
     internal suspend fun newDraft(selection: RealmSelection, assistant: ConfigurationReference) =
         conversations.newDraftRequest(selection, assistant)

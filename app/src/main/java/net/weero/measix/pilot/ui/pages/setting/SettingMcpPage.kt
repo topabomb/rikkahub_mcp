@@ -324,15 +324,25 @@ internal fun SettingMcpPage(
                 if (catalog?.content == net.weero.measix.pilot.service.McpCatalogReadState.Unavailable) {
                     item { Text(stringResource(R.string.configuration_reason_not_ready), color = MaterialTheme.colorScheme.error) }
                 }
+                if (managedServers.isNotEmpty()) {
+                    item {
+                        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Text(stringResource(R.string.mcp_enterprise_definitions), style = MaterialTheme.typography.titleMedium)
+                            Text(stringResource(R.string.mcp_enterprise_read_only), style = MaterialTheme.typography.bodySmall)
+                        }
+                    }
+                }
                 items(managedServers, key = { it.serverId.toString() }) { server ->
                     catalog?.selection?.let { selection ->
                         key(selection) { ManagedMcpServerItem(server, selection, configurationCommands) }
                     }
                 }
-                item {
-                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        Text(stringResource(R.string.mcp_user_definitions), style = MaterialTheme.typography.titleMedium)
-                        Text(stringResource(R.string.mcp_shared_definition_notice), style = MaterialTheme.typography.bodySmall)
+                if (managedServers.isNotEmpty()) {
+                    item {
+                        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Text(stringResource(R.string.mcp_user_definitions), style = MaterialTheme.typography.titleMedium)
+                            Text(stringResource(R.string.mcp_shared_definition_notice), style = MaterialTheme.typography.bodySmall)
+                        }
                     }
                 }
                 items(mcpConfigs, key = { it.id.toString() }) { mcpConfig ->
@@ -464,10 +474,9 @@ private fun ManagedMcpServerItem(server: McpServerPresentation, selection: Realm
                 Text(server.name, Modifier.weight(1f), style = MaterialTheme.typography.titleLarge)
                 Tag(type = TagType.WARNING) { Text(stringResource(R.string.managed_configuration_source_managed)) }
             }
-            Text(stringResource(R.string.mcp_enterprise_read_only), style = MaterialTheme.typography.bodySmall)
             server.gatewayEnablement?.let { gateway ->
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("Gateway", Modifier.weight(1f))
+                    Text(stringResource(R.string.mcp_gateway), Modifier.weight(1f))
                     androidx.compose.material3.Switch(checked = gateway.enabled, enabled = gateway.canChange && !submitting, onCheckedChange = { enabled ->
                         if (!submitting) scope.launch {
                             submitting = true
@@ -1754,4 +1763,3 @@ private fun McpShareSheet(
         }
     }
 }
-

@@ -27,9 +27,11 @@ import kotlinx.coroutines.runBlocking
 import me.rerere.ai.provider.Model
 import me.rerere.ai.provider.ModelType
 import me.rerere.ai.provider.ProviderSetting
+import me.rerere.common.configuration.ConfigurationReference
 import net.weero.measix.pilot.AppScope
 import net.weero.measix.pilot.R
 import net.weero.measix.pilot.Screen
+import net.weero.measix.pilot.data.configuration.ConfigurationUnavailableReason
 import net.weero.measix.pilot.data.configuration.ResourceSelectionSlot
 import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.datastore.SettingsStore
@@ -75,15 +77,25 @@ class ModelCatalogAndroidTest {
             val personal = Model(modelId = "personal-test", displayName = "Personal test model")
             settings.updateLocal { Settings(providers = listOf(ProviderSetting.OpenAI(name = "Personal provider", models = listOf(personal)))) }
             val source = app.assets.open(LocalEnterpriseSource.EXAMPLE_ASSET).use(EnterprisePackageCodec::decode)
-            val packet = source.copy(configuration = source.configuration.copy(policy = source.configuration.policy.copy(allowLocalProviders = false)))
+            val packet = source.copy(configuration = source.configuration.copy(policy = source.configuration.policy.copy(allowLocalProviders = true)))
             val sessions = EnterpriseSessionController(EnterpriseAppliedStore(File(root, "enterprise")))
             sessions.recover()
             sessions.enrollLocal(packet.identity, { packet.identity }, { packet })
             val gate = ApplicationRecoveryGate().apply { ready() }
             val queries = ConfigurationQueryService(settings, sessions, gate)
             val commands = ConfigurationApplicationService(settings, sessions, gate, io.mockk.mockk(), io.mockk.mockk(), io.mockk.mockk())
-            val catalog = (queries.observeModelCatalog().first { it is ModelCatalogReadState.Available }
+            val resolvedCatalog = (queries.observeModelCatalog().first { it is ModelCatalogReadState.Available }
                 as ModelCatalogReadState.Available).catalog
+            val missingSelection = ConfigurationReference.random()
+            val catalog = resolvedCatalog.copy(groups = resolvedCatalog.groups.map { group ->
+                if (group.userProviderId == null) group else {
+                    val choice = group.models.single { it.model.id == personal.id }
+                    group.copy(models = listOf(choice.copy(
+                        unavailableReason = ConfigurationUnavailableReason.RESOURCE_DISABLED,
+                    )))
+                }
+            }, unresolvedModels = resolvedCatalog.unresolvedModels +
+                (missingSelection to ConfigurationUnavailableReason.REFERENCE_MISSING))
             val managed = catalog.groups.single { it.userProviderId == null }.models.first { it.model.type == ModelType.CHAT }.model
             lateinit var picker: ModelListState
             val reject = AtomicBoolean(true)
@@ -95,7 +107,7 @@ class ModelCatalogAndroidTest {
                 MaterialTheme {
                     CompositionLocalProvider(LocalNavController provides Navigator(backStack),
                         LocalAdaptiveLayoutInfo provides rememberAdaptiveLayoutInfo()) {
-                        picker = rememberModelListState(null, catalog, ModelType.CHAT)
+                        picker = rememberModelListState(missingSelection, catalog, ModelType.CHAT)
                         ModelSelectorButton(picker)
                         ModelListSheet(picker, onSelect = { model ->
                             attempts.incrementAndGet()
@@ -109,21 +121,24 @@ class ModelCatalogAndroidTest {
                     }
                 }
             }
-            compose.onNodeWithText(app.getString(R.string.model_list_select_model)).performClick()
+            compose.onNodeWithText(missingSelection.toString()).performClick()
+            compose.onNodeWithText(app.getString(R.string.configuration_reason_missing)).assertExists()
             compose.onNodeWithText(personal.displayName).performScrollTo().assertIsNotEnabled()
             compose.onNodeWithContentDescription(app.getString(R.string.edit)).performClick()
+            compose.onNodeWithText(app.getString(R.string.configuration_shared_edit_title)).assertExists()
+            compose.onNodeWithText(app.getString(android.R.string.ok)).performClick()
             compose.runOnIdle {
                 assertFalse(picker.visible)
                 assertEquals(Screen.SettingProviderDetail(catalog.groups.single { it.userProviderId != null }.userProviderId.toString()), backStack.single())
             }
-            compose.onNodeWithText(app.getString(R.string.model_list_select_model)).performClick()
+            compose.onNodeWithText(missingSelection.toString()).performClick()
             compose.onNodeWithText(managed.displayName).performScrollTo().performClick()
             submissionStarted.await()
             compose.onNodeWithText(managed.displayName).assertIsNotEnabled().performTouchInput { click() }
             compose.runOnIdle { assertEquals(1, attempts.get()) }
             releaseSubmission.complete(Unit)
-            compose.waitUntil(5_000) { compose.onAllNodes(androidx.compose.ui.test.hasText("test_write_failure")).fetchSemanticsNodes().isNotEmpty() }
-            compose.onNodeWithText("test_write_failure").assertExists()
+            compose.waitUntil(5_000) { compose.onAllNodes(androidx.compose.ui.test.hasText("test_write_failure", substring = true)).fetchSemanticsNodes().isNotEmpty() }
+            compose.onNodeWithText("test_write_failure", substring = true).assertExists()
             compose.runOnIdle { assertTrue(picker.visible) }
             val before = (queries.observeModelCatalog().first { it is ModelCatalogReadState.Available }
                 as ModelCatalogReadState.Available).catalog

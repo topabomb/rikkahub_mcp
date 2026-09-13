@@ -11,6 +11,7 @@ import net.weero.measix.pilot.data.configuration.ConfigurationUnavailableReason
 import net.weero.measix.pilot.data.configuration.ModelSelectionRole
 import net.weero.measix.pilot.data.configuration.ResolvedConfiguration
 import net.weero.measix.pilot.data.configuration.ResourceSelectionSlot
+import net.weero.measix.pilot.data.configuration.AssistantModelPreference
 import net.weero.measix.pilot.data.model.Assistant
 
 internal data class ConversationStarterUiModel(val reference: ConfigurationReference.Enterprise, val title: String, val prompt: String)
@@ -34,6 +35,7 @@ internal data class ConversationConfigurationUiModel(
     val starters: List<ConversationStarterUiModel>,
     val inheritedSubAssistantIds: Set<ConfigurationReference> = emptySet(),
     val memorySeeds: List<AssistantMemorySeedUiModel> = emptyList(),
+    val modelPreference: AssistantModelPreference?,
 ) {
     val canChangeModel: Boolean get() = assistant != null
     val canEditDefinition: Boolean get() = target.assistantId is ConfigurationReference.User
@@ -62,5 +64,6 @@ internal fun ResolvedConfiguration.conversationConfiguration(target: Conversatio
         }.orEmpty(),
         inheritedSubAssistantIds[target.assistantId].orEmpty(),
         assistantMemorySeeds(target.assistantId).map { AssistantMemorySeedUiModel(it.id, it.content) },
+        if (assistant == null) null else assistantModelPreferences.getValue(target.assistantId),
     )
 }

@@ -19,6 +19,7 @@ import net.weero.measix.pilot.data.configuration.ConfigurationUnavailableReason
 import net.weero.measix.pilot.data.enterprise.RealmAccess
 import net.weero.measix.pilot.data.enterprise.RealmSelection
 import net.weero.measix.pilot.service.AssistantCatalogUiModel
+import net.weero.measix.pilot.service.AssistantCatalogReadState
 import net.weero.measix.pilot.service.ConfigurationQueryService
 import net.weero.measix.pilot.service.ConversationQueryService
 import net.weero.measix.pilot.service.ConversationSummary
@@ -33,10 +34,10 @@ class HistoryVMTest {
             val scope = ConfigurationScope.Enterprise(EnterpriseAuthority("local:history", "dep_history"), "user")
             val selection = RealmSelection(RealmAccess.Enterprise(scope, "session"), 1)
             val assistant = ConfigurationReference.random()
-            val catalog = MutableStateFlow<AssistantCatalogUiModel?>(AssistantCatalogUiModel(
+            val catalog = MutableStateFlow<AssistantCatalogReadState>(AssistantCatalogReadState.Available(AssistantCatalogUiModel(
                 selection, ConfigurationSelection(assistant, ConfigurationUnavailableReason.USER_CATEGORY_NOT_ALLOWED),
                 emptyMap(), emptyList(),
-            ))
+            )))
             val configuration = mockk<ConfigurationQueryService>()
             every { configuration.observeAssistantCatalog() } returns catalog
             val conversations = mockk<ConversationQueryService>()
@@ -46,7 +47,7 @@ class HistoryVMTest {
             store.put("history", vm)
             runCurrent()
             assertEquals(listOf(row), vm.conversations.value)
-            catalog.value = null
+            catalog.value = AssistantCatalogReadState.Unavailable("revoked")
             runCurrent()
             assertEquals(emptyList<ConversationSummary>(), vm.conversations.value)
         } finally {

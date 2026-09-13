@@ -101,6 +101,7 @@ internal fun FilesPicker(
     onPreferenceChange: (AssistantPreferenceChange) -> Unit,
     onUpdateConversationModeInjectionIds: (Set<ConfigurationReference>) -> Unit,
     onUpdateWorkspaceCwd: (String?) -> Unit,
+    onManageSharedConfiguration: (Screen) -> Unit,
     showInjectionSheet: Boolean,
     onShowInjectionSheetChange: (Boolean) -> Unit,
     showCompressDialog: Boolean,
@@ -151,7 +152,7 @@ internal fun FilesPicker(
                 onUpdateWorkspaceCwd = onUpdateWorkspaceCwd,
                 onNavigateToDetail = { id ->
                     onDismiss()
-                    navController.navigate(Screen.WorkspaceDetail(id))
+                    onManageSharedConfiguration(Screen.WorkspaceDetail(id))
                 },
                 onNavigateToTerminal = { id ->
                     onDismiss()
@@ -159,7 +160,7 @@ internal fun FilesPicker(
                 },
                 onNavigateToManage = {
                     onDismiss()
-                    navController.navigate(Screen.Workspaces)
+                    onManageSharedConfiguration(Screen.Workspaces)
                 },
             )
         }
@@ -168,7 +169,7 @@ internal fun FilesPicker(
             servers = mcpServers,
             onNavigateToSettings = {
                 onDismiss()
-                navController.navigate(Screen.SettingMcp)
+                onManageSharedConfiguration(Screen.SettingMcp)
             },
             onToggle = { id, enabled -> onPreferenceChange(AssistantPreferenceChange.Mcp(id, enabled)) },
         )
@@ -287,6 +288,7 @@ internal fun FilesPicker(
             onUpdateConversationModeInjectionIds = onUpdateConversationModeInjectionIds,
             onDismiss = { onShowInjectionSheetChange(false) },
             onDismissAll = onDismiss,
+            onManageSharedConfiguration = onManageSharedConfiguration,
         )
     }
 
@@ -390,9 +392,8 @@ private fun InjectionQuickConfigSheet(
     onUpdateConversationModeInjectionIds: (Set<ConfigurationReference>) -> Unit,
     onDismiss: () -> Unit,
     onDismissAll: () -> Unit,
+    onManageSharedConfiguration: (Screen) -> Unit,
 ) {
-    val navController = LocalNavController.current
-
     AdaptiveModal(
         onDismissRequest = onDismiss,
     ) {
@@ -411,15 +412,15 @@ private fun InjectionQuickConfigSheet(
                 modifier = Modifier.weight(1f),
                 onNavigateToQuickMessages = {
                     onDismissAll()
-                    navController.navigate(Screen.QuickMessages)
+                    onManageSharedConfiguration(Screen.QuickMessages)
                 },
                 onNavigateToPrompts = {
                     onDismissAll()
-                    navController.navigate(Screen.Prompts)
+                    onManageSharedConfiguration(Screen.Prompts)
                 },
                 onNavigateToSkills = {
                     onDismissAll()
-                    navController.navigate(Screen.Skills)
+                    onManageSharedConfiguration(Screen.Skills)
                 })
 
             Spacer(modifier = Modifier.height(16.dp))

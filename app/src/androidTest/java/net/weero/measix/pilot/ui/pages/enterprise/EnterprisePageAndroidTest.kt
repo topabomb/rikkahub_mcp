@@ -8,6 +8,7 @@ import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.lifecycle.Lifecycle
@@ -83,6 +84,8 @@ class EnterprisePageAndroidTest {
             fixture.show()
             click(R.string.enterprise_join_example)
             compose.waitUntil(5_000) { fixture.vm.overview.value == enrolled }
+            compose.onNodeWithText(text(R.string.enterprise_join_options)).assertDoesNotExist()
+            compose.onNodeWithText(text(R.string.enterprise_start_conversation)).assertIsDisplayed()
             coVerify(exactly = 1) { fixture.service.joinExample() }
             click(R.string.enterprise_switch_personal)
             compose.waitUntil(5_000) { switchStarted.isCompleted }
@@ -96,6 +99,14 @@ class EnterprisePageAndroidTest {
         } finally {
             releaseSwitch.complete(Unit)
         }
+    }
+
+    @Test
+    fun ordinaryBackReturnsToTheSettingsPageThatOpenedSpaces() {
+        val fixture = Fixture(overview(), mutableListOf(Screen.Setting, Screen.Enterprise))
+        fixture.show()
+        compose.onNodeWithContentDescription(text(R.string.back)).performClick()
+        compose.runOnIdle { assertEquals(listOf(Screen.Setting), fixture.backStack) }
     }
 
     @Test
@@ -312,10 +323,12 @@ class EnterprisePageAndroidTest {
         switching = false,
     )
 
-    private inner class Fixture(initial: EnterpriseOverview) {
+    private inner class Fixture(
+        initial: EnterpriseOverview,
+        val backStack: MutableList<NavKey> = mutableListOf(Screen.Enterprise),
+    ) {
         val state = MutableStateFlow(initial)
         val service = mockk<EnterpriseApplicationService>()
-        val backStack = mutableListOf<NavKey>(Screen.Enterprise)
         lateinit var vm: EnterpriseVM
 
         fun show() {

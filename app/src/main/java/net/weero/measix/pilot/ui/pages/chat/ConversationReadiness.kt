@@ -225,7 +225,7 @@ internal fun ConversationReadinessCard(
 
                     ModelReadiness.READY -> readiness.modelName.orEmpty()
                 },
-                description = stringResource(R.string.chat_readiness_model_description),
+                description = null,
                 blocked = !readiness.canSend,
                 onClick = onModelClick,
                 scale = scale,
@@ -271,7 +271,14 @@ internal fun ConversationReadinessCard(
                     description = stringResource(
                         R.string.chat_readiness_mcp_description,
                         stringResource(R.string.chat_readiness_mcp_highlight_term),
-                    ),
+                    ).takeIf {
+                        readiness.mcpState in setOf(
+                            McpReadiness.AUTHORIZATION_REQUIRED,
+                            McpReadiness.RECONNECTING,
+                            McpReadiness.UNAVAILABLE,
+                            McpReadiness.PARTIAL,
+                        )
+                    },
                     highlightTerm = stringResource(R.string.chat_readiness_mcp_highlight_term),
                     onClick = onMcpClick,
                     scale = scale,
@@ -288,7 +295,7 @@ internal fun ConversationReadinessCard(
                             readiness.memoryCount,
                         )
                     },
-                    description = stringResource(R.string.chat_readiness_memory_description),
+                    description = null,
                     onClick = onMemoryClick,
                     scale = scale,
                 )
@@ -307,7 +314,8 @@ internal fun ConversationReadinessCard(
                             readiness.localToolCount,
                         )
                     },
-                    description = stringResource(R.string.chat_readiness_local_tools_description),
+                    description = stringResource(R.string.chat_readiness_local_tools_description)
+                        .takeIf { readiness.localToolCount < readiness.persistedLocalToolCount },
                     onClick = onLocalToolsClick,
                     scale = scale,
                 )
@@ -323,7 +331,7 @@ internal fun ConversationReadinessCard(
 
                         WorkspaceReadiness.READY -> readiness.workspaceName.orEmpty()
                     },
-                    description = stringResource(R.string.chat_readiness_workspace_description),
+                    description = null,
                     onClick = onWorkspaceClick,
                     scale = scale,
                 )
@@ -337,7 +345,7 @@ private fun ReadinessRow(
     icon: ImageVector,
     label: String,
     status: String,
-    description: String,
+    description: String?,
     blocked: Boolean = false,
     onClick: () -> Unit,
     scale: Float,
@@ -387,7 +395,7 @@ private fun ReadinessRow(
                     scale = scale,
                 )
             }
-            if (highlightTerm != null && description.contains(highlightTerm)) {
+            if (description != null && highlightTerm != null && description.contains(highlightTerm)) {
                 val annotated = buildAnnotatedString {
                     val start = description.indexOf(highlightTerm)
                     append(description.substring(0, start))
@@ -409,7 +417,7 @@ private fun ReadinessRow(
                     ),
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-            } else {
+            } else if (description != null) {
                 Text(
                     text = description,
                     style = MaterialTheme.typography.bodySmall.copy(
@@ -472,8 +480,6 @@ private fun ReadinessTitleRow(
 ) {
     val defaultAssistantName = stringResource(R.string.assistant_page_default_assistant)
     val displayName = assistant?.name?.ifEmpty { defaultAssistantName } ?: stringResource(R.string.configuration_reason_missing)
-    val titlePrefix = stringResource(R.string.chat_readiness_title_prefix)
-    val titleSuffix = stringResource(R.string.chat_readiness_title_suffix)
     val titleStyle = MaterialTheme.typography.titleMedium.copy(
         fontSize = MaterialTheme.typography.titleMedium.fontSize * scale,
         lineHeight = MaterialTheme.typography.titleMedium.lineHeight * scale,
@@ -490,21 +496,11 @@ private fun ReadinessTitleRow(
             ),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        // 左侧：prefix + 可点击的头像+名称 + suffix，作为一个不可分割的整体
         Row(
             modifier = Modifier.weight(1f),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(3.dp),
         ) {
-            if (titlePrefix.isNotBlank()) {
-                Text(
-                    text = titlePrefix,
-                    style = titleStyle,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                )
-            }
-            // 可点击的交互区：头像 + 助手名称（宽屏+useAssistantAvatar 时头像已显示在 TopAppBar，此处隐藏）
             Row(
                 modifier = Modifier
                     .weight(1f, fill = false)
@@ -532,16 +528,7 @@ private fun ReadinessTitleRow(
                     overflow = TextOverflow.Ellipsis,
                 )
             }
-            if (titleSuffix.isNotBlank()) {
-                Text(
-                    text = titleSuffix,
-                    style = titleStyle,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                )
-            }
         }
-        // 右侧：配置助手按钮，右对齐
         FilledTonalIconButton(
             onClick = onManageAssistant,
             enabled = assistant != null,

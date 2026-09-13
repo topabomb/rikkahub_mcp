@@ -320,6 +320,13 @@ internal fun McpPicker(
                             Text(configurationUnavailableText(reason), style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.error)
                         }
+                        if (server.fixedByDefinition) {
+                            Text(
+                                stringResource(R.string.assistant_usage_inherited_binding),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
                     }
                     Switch(
                         checked = server.selected,

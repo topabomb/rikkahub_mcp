@@ -1,6 +1,8 @@
 package net.weero.measix.pilot.ui.components.ai
 
+import android.util.Log
 import androidx.compose.foundation.LocalIndication
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
@@ -22,6 +24,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AssistChip
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
@@ -29,6 +32,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -79,6 +83,11 @@ import net.weero.measix.pilot.service.ConfigurationQueryService
 import net.weero.measix.pilot.service.ModelCatalogUiModel
 import net.weero.measix.pilot.service.ModelChoiceUiModel
 import net.weero.measix.pilot.service.ModelGroupUiModel
+import net.weero.measix.pilot.service.ConversationConfigurationUiModel
+import net.weero.measix.pilot.data.configuration.AssistantModelPreferenceMode
+import net.weero.measix.pilot.data.configuration.AssistantPreferenceChange
+import net.weero.measix.pilot.data.configuration.ConfigurationUnavailableReason
+import net.weero.measix.pilot.data.enterprise.RealmAccess
 import net.weero.measix.pilot.ui.adaptive.AdaptiveModal
 import net.weero.measix.pilot.ui.components.ui.AutoAIIcon
 import net.weero.measix.pilot.ui.components.ui.Tag
@@ -87,6 +96,7 @@ import net.weero.measix.pilot.ui.components.ui.icons.HeartIcon
 import net.weero.measix.pilot.ui.context.LocalNavController
 import net.weero.measix.pilot.ui.theme.extendColors
 import net.weero.measix.pilot.utils.toDp
+import net.weero.measix.pilot.utils.userVisibleDiagnostic
 import org.koin.compose.koinInject
 import sh.calvin.reorderable.ReorderableItem
 import sh.calvin.reorderable.rememberReorderableLazyListState
@@ -140,6 +150,7 @@ fun ModelSelectorButton(
     placeholder: String? = null,
 ) {
     val model = state.currentModel
+    val unresolvedReference = state.modelId?.takeIf { model == null }
 
     if (!onlyIcon) {
         Row(
@@ -161,6 +172,7 @@ fun ModelSelectorButton(
                 }
                 Text(
                     text = model?.displayName
+                        ?: unresolvedReference?.toString()
                         ?: placeholder
                         ?: stringResource(R.string.model_list_select_model),
                     maxLines = 1,
@@ -202,13 +214,80 @@ fun ModelSelectorButton(
     }
 }
 
-internal data class ModelSelectionAction(val label: String, val commit: suspend () -> Unit)
+internal data class ModelSelectionAction(
+    val label: String,
+    val selected: Boolean,
+    val unavailableReason: ConfigurationUnavailableReason? = null,
+    val commit: suspend () -> Unit,
+)
+
+internal data class AssistantModelSelectionUi(
+    val actions: List<ModelSelectionAction>,
+    val selectedModelId: ConfigurationReference?,
+    val modeLabel: String?,
+)
+
+/** One presentation owns the distinction between definition inheritance, space inheritance and an explicit model. */
+@Composable
+internal fun assistantModelSelectionUi(
+    configuration: ConversationConfigurationUiModel,
+    commit: suspend (AssistantPreferenceChange) -> Unit,
+): AssistantModelSelectionUi {
+    val assistant = requireNotNull(configuration.assistant)
+    val preference = requireNotNull(configuration.modelPreference)
+    val notConfigured = stringResource(R.string.chat_readiness_model_not_configured)
+    fun reason(reference: ConfigurationReference?): ConfigurationUnavailableReason? {
+        if (reference == null) return ConfigurationUnavailableReason.REFERENCE_MISSING
+        val choice = configuration.modelCatalog.find(reference)
+        if (choice != null) return choice.unavailableReason
+        return configuration.modelCatalog.unresolvedModels[reference]
+            ?: ConfigurationUnavailableReason.REFERENCE_MISSING
+    }
+    fun name(reference: ConfigurationReference?): String = configuration.modelCatalog.find(reference)?.model?.displayName
+        ?: notConfigured
+    val enterprise = configuration.modelCatalog.selection?.access is RealmAccess.Enterprise
+    if (!enterprise) {
+        return AssistantModelSelectionUi(
+            actions = listOf(ModelSelectionAction(
+                label = stringResource(R.string.assistant_page_follow_default_model),
+                selected = assistant.chatModelId == null,
+                unavailableReason = reason(preference.spaceDefaultReference),
+            ) { commit(AssistantPreferenceChange.Model(null)) }),
+            selectedModelId = assistant.chatModelId,
+            modeLabel = null,
+        )
+    }
+    val assistantDefaultReference = preference.definitionReference ?: preference.spaceDefaultReference
+    return AssistantModelSelectionUi(
+        actions = listOf(
+            ModelSelectionAction(
+                label = stringResource(R.string.assistant_model_use_assistant_default, name(assistantDefaultReference)),
+                selected = preference.mode == AssistantModelPreferenceMode.ASSISTANT_DEFAULT,
+                unavailableReason = reason(assistantDefaultReference),
+            ) { commit(AssistantPreferenceChange.InheritModel) },
+            ModelSelectionAction(
+                label = stringResource(R.string.assistant_model_use_space_default, name(preference.spaceDefaultReference)),
+                selected = preference.mode == AssistantModelPreferenceMode.SPACE_DEFAULT,
+                unavailableReason = reason(preference.spaceDefaultReference),
+            ) { commit(AssistantPreferenceChange.Model(null)) },
+        ),
+        selectedModelId = configuration.modelSelection.reference.takeIf {
+            preference.mode == AssistantModelPreferenceMode.EXPLICIT
+        },
+        modeLabel = stringResource(when (preference.mode) {
+            AssistantModelPreferenceMode.ASSISTANT_DEFAULT -> R.string.assistant_model_mode_assistant_default
+            AssistantModelPreferenceMode.SPACE_DEFAULT -> R.string.assistant_model_mode_space_default
+            AssistantModelPreferenceMode.EXPLICIT -> R.string.assistant_model_mode_explicit
+        }),
+    )
+}
 
 @Composable
 internal fun ModelListSheet(
     state: ModelListState,
     onSelect: suspend (Model) -> Unit,
     additionalActions: List<ModelSelectionAction> = emptyList(),
+    selectedModelId: ConfigurationReference? = state.modelId,
     configurationCommands: ConfigurationApplicationService = koinInject(),
     configurationQueries: ConfigurationQueryService = koinInject(),
 ) {
@@ -232,7 +311,8 @@ internal fun ModelListSheet(
             } catch (error: kotlinx.coroutines.CancellationException) {
                 throw error
             } catch (error: Exception) {
-                selectionError = error.message ?: "configuration_change_failed"
+                Log.e("ModelList", "Model selection failed", error)
+                selectionError = error.userVisibleDiagnostic()
             } finally {
                 submitting = false
             }
@@ -251,12 +331,38 @@ internal fun ModelListSheet(
                 .imePadding(),
             verticalArrangement = Arrangement.spacedBy(4.dp)
         ) {
+            Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    stringResource(R.string.model_list_select_model),
+                    style = MaterialTheme.typography.titleLarge,
+                    modifier = Modifier.weight(1f).padding(horizontal = 8.dp),
+                )
+                IconButton(onClick = ::dismiss) {
+                    Icon(HugeIcons.Cancel01, contentDescription = stringResource(R.string.update_card_close))
+                }
+            }
             selectionError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
             additionalActions.forEach { action ->
-                TextButton(enabled = !submitting, onClick = { submit(action.commit) }) { Text(action.label) }
+                val enabled = !submitting && action.unavailableReason == null
+                Row(
+                    modifier = Modifier.fillMaxWidth()
+                        .clickable(enabled = enabled) { submit(action.commit) }
+                        .padding(horizontal = 8.dp, vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    RadioButton(selected = action.selected, enabled = enabled,
+                        onClick = null)
+                    Column(modifier = Modifier.padding(start = 8.dp)) {
+                        Text(action.label)
+                        action.unavailableReason?.let {
+                            Text(configurationUnavailableText(it), style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.error)
+                        }
+                    }
+                }
             }
             ModelList(
-                currentModel = state.modelId,
+                currentModel = selectedModelId,
                 providers = state.filteredGroups,
                 catalog = state.catalog,
                 configurationCommands = configurationCommands,
@@ -285,11 +391,18 @@ private fun ColumnScope.ModelList(
     onDismiss: () -> Unit
 ) {
     val coroutineScope = rememberCoroutineScope()
+    val navController = LocalNavController.current
     var commandError by remember(catalog.selection) { mutableStateOf<String?>(null) }
+    var pendingSharedProvider by remember(catalog.selection) {
+        mutableStateOf<ConfigurationReference.User?>(null)
+    }
     suspend fun command(action: suspend () -> Unit) {
         try { action(); commandError = null }
         catch (error: kotlinx.coroutines.CancellationException) { throw error }
-        catch (error: Exception) { commandError = error.message ?: "configuration_change_failed" }
+        catch (error: Exception) {
+            Log.e("ModelList", "Model catalog command failed", error)
+            commandError = error.userVisibleDiagnostic()
+        }
     }
     val favoriteFlow = remember(catalog) {
         if (catalog.selection == null) configurationQueries.observePersonalModelFavorites()
@@ -313,12 +426,13 @@ private fun ColumnScope.ModelList(
             }
         }
     }
+    val leadingUnresolvedCount = if (currentModel != null && catalog.find(currentModel) == null) 1 else 0
 
     // 计算当前选中模型的位置
-    val selectedModelPosition = remember(currentModel, favoriteModels, providers, typeFilteredModelsByProvider) {
+    val selectedModelPosition = remember(currentModel, favoriteModels, providers, typeFilteredModelsByProvider, leadingUnresolvedCount) {
         if (currentModel == null) return@remember 0
 
-        var position = 0
+        var position = leadingUnresolvedCount
 
         // 跳过无providers提示
         if (providers.isEmpty()) {
@@ -361,7 +475,7 @@ private fun ColumnScope.ModelList(
     )
     val reorderableState = rememberReorderableLazyListState(lazyListState) { from, to ->
         // 计算favorite models在列表中的位置偏移
-        var favoriteStartIndex = 0
+        var favoriteStartIndex = leadingUnresolvedCount
         if (providers.isEmpty()) {
             favoriteStartIndex = 1 // no providers item
         }
@@ -385,8 +499,8 @@ private fun ColumnScope.ModelList(
     }
     val haptic = LocalHapticFeedback.current
 
-    val providerPositions = remember(providers, favoriteModels, searchFilteredModelsByProvider) {
-        var currentIndex = 0
+    val providerPositions = remember(providers, favoriteModels, searchFilteredModelsByProvider, leadingUnresolvedCount) {
+        var currentIndex = leadingUnresolvedCount
         if (providers.isEmpty()) {
             currentIndex = 1 // no providers item
         }
@@ -441,14 +555,52 @@ private fun ColumnScope.ModelList(
             .weight(1f)
             .fillMaxWidth(),
     ) {
+        val unresolvedSelection = currentModel?.takeIf { catalog.find(it) == null }
+        if (unresolvedSelection != null) {
+            item(key = "selected-unresolved:$unresolvedSelection") {
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(16.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    RadioButton(selected = true, enabled = false, onClick = null)
+                    Column(Modifier.weight(1f)) {
+                        Text(unresolvedSelection.toString(), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(
+                            configurationUnavailableText(
+                                catalog.unresolvedModels[unresolvedSelection]
+                                    ?: ConfigurationUnavailableReason.REFERENCE_MISSING,
+                            ),
+                            color = MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                }
+            }
+        }
         if (providers.isEmpty()) {
             item {
-                Text(
-                    text = stringResource(R.string.model_list_no_providers),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.extendColors.gray6,
-                    modifier = Modifier.padding(8.dp)
-                )
+                Column(modifier = Modifier.padding(8.dp)) {
+                    Text(
+                        text = stringResource(R.string.model_list_no_providers),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.extendColors.gray6,
+                    )
+                    TextButton(onClick = {
+                        onDismiss()
+                        navController.navigate(if (catalog.selection?.access is RealmAccess.Enterprise) {
+                            Screen.Enterprise
+                        } else {
+                            Screen.SettingProvider
+                        })
+                    }) {
+                        Text(stringResource(if (catalog.selection?.access is RealmAccess.Enterprise) {
+                            R.string.enterprise_spaces
+                        } else {
+                            R.string.setting_provider_page_title
+                        }))
+                    }
+                }
             }
         }
 
@@ -491,11 +643,7 @@ private fun ColumnScope.ModelList(
                         modifier = Modifier
                             .scale(if (isDragging) 0.95f else 1f)
                             .animateItem(),
-                        providerSetting = provider,
                         select = model.model.id == currentModel,
-                        onDismiss = {
-                            onDismiss()
-                        },
                         tail = {
                             IconButton(
                                 onClick = {
@@ -544,15 +692,27 @@ private fun ColumnScope.ModelList(
                         style = MaterialTheme.typography.labelMedium,
                         color = MaterialTheme.colorScheme.primary,
                     )
-                    Text(stringResource(if (providerSetting.userProviderId == null) R.string.configuration_source_enterprise
-                        else R.string.configuration_source_user), style = MaterialTheme.typography.labelSmall,
-                        modifier = Modifier.padding(start = 8.dp))
+                    if (catalog.selection?.access is RealmAccess.Enterprise) {
+                        Text(stringResource(if (providerSetting.userProviderId == null) R.string.configuration_source_enterprise
+                            else R.string.configuration_source_user), style = MaterialTheme.typography.labelSmall,
+                            modifier = Modifier.padding(start = 8.dp))
+                    }
 
                     Spacer(modifier = Modifier.weight(1f))
 
-                    providerSetting.userProviderId?.takeIf { providerSetting.models.any { it.canSelect } }?.let { providerId ->
+                    providerSetting.userProviderId?.let { providerId ->
                         ProviderBalanceText(providerId = providerId, style = MaterialTheme.typography.labelMedium,
                             color = MaterialTheme.colorScheme.primary)
+                        IconButton(onClick = {
+                            if (catalog.selection?.access is RealmAccess.Enterprise) {
+                                pendingSharedProvider = providerId
+                            } else {
+                                onDismiss()
+                                navController.navigate(Screen.SettingProviderDetail(providerId.toString()))
+                            }
+                        }) {
+                            Icon(HugeIcons.ArrowRight01, contentDescription = stringResource(R.string.edit))
+                        }
                     }
                 }
             }
@@ -567,11 +727,7 @@ private fun ColumnScope.ModelList(
                     selectionEnabled = selectionEnabled,
                     onSelect = onSelect,
                     modifier = Modifier.animateItem(),
-                    providerSetting = providerSetting,
                     select = currentModel == model.model.id,
-                    onDismiss = {
-                        onDismiss()
-                    },
                     tail = {
                         IconButton(
                             enabled = favorite || model.canSelect,
@@ -626,7 +782,7 @@ private fun ColumnScope.ModelList(
                 }
             }
     }
-    if (providers.isNotEmpty()) {
+    if (providers.size > 1) {
         LazyRow(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             modifier = Modifier.fillMaxWidth(),
@@ -651,21 +807,37 @@ private fun ColumnScope.ModelList(
             }
         }
     }
+    pendingSharedProvider?.let { providerId ->
+        AlertDialog(
+            onDismissRequest = { pendingSharedProvider = null },
+            title = { Text(stringResource(R.string.configuration_shared_edit_title)) },
+            text = { Text(stringResource(R.string.configuration_shared_edit_warning)) },
+            confirmButton = {
+                TextButton(onClick = {
+                    pendingSharedProvider = null
+                    onDismiss()
+                    navController.navigate(Screen.SettingProviderDetail(providerId.toString()))
+                }) { Text(stringResource(android.R.string.ok)) }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingSharedProvider = null }) {
+                    Text(stringResource(android.R.string.cancel))
+                }
+            },
+        )
+    }
 }
 
 @Composable
 private fun ModelItem(
     model: ModelChoiceUiModel,
     selectionEnabled: Boolean,
-    providerSetting: ModelGroupUiModel,
     select: Boolean,
     onSelect: (Model) -> Unit,
-    onDismiss: () -> Unit,
     modifier: Modifier = Modifier,
     tail: @Composable RowScope.() -> Unit = {},
     dragHandle: @Composable (RowScope.() -> Unit)? = null
 ) {
-    val navController = LocalNavController.current
     val interactionSource = remember { MutableInteractionSource() }
     Card(
         modifier = modifier,
@@ -725,20 +897,12 @@ private fun ModelItem(
                         horizontalArrangement = Arrangement.spacedBy(4.dp),
                         verticalArrangement = Arrangement.spacedBy(2.dp),
                     ) {
-                        ModelTypeTag(model = model.model)
-
                         ModelModalityTag(model = model.model)
 
                         ModelAbilityTag(model = model.model)
                     }
                 }
                 tail()
-            }
-            providerSetting.userProviderId?.let { providerId ->
-                IconButton(enabled = selectionEnabled, onClick = {
-                    onDismiss()
-                    navController.navigate(Screen.SettingProviderDetail(providerId.toString()))
-                }) { Icon(HugeIcons.ArrowRight01, contentDescription = stringResource(R.string.edit)) }
             }
             dragHandle?.let { it() }
         }
@@ -764,6 +928,12 @@ fun ModelTypeTag(model: Model) {
 
 @Composable
 fun ModelModalityTag(model: Model) {
+    val inputLabel = stringResource(R.string.setting_provider_page_input_modality)
+    val outputLabel = stringResource(R.string.setting_provider_page_output_modality)
+    @Composable fun modalityLabel(modality: Modality): String = stringResource(when (modality) {
+        Modality.TEXT -> R.string.setting_provider_page_text
+        Modality.IMAGE -> R.string.setting_provider_page_image
+    })
     Tag(
         type = TagType.SUCCESS
     ) {
@@ -773,7 +943,7 @@ fun ModelModalityTag(model: Model) {
                     Modality.TEXT -> HugeIcons.Text
                     Modality.IMAGE -> HugeIcons.Image03
                 },
-                contentDescription = null,
+                contentDescription = "$inputLabel: ${modalityLabel(modality)}",
                 modifier = Modifier
                     .size(LocalTextStyle.current.lineHeight.toDp())
                     .padding(1.dp)
@@ -790,7 +960,7 @@ fun ModelModalityTag(model: Model) {
                     Modality.TEXT -> HugeIcons.Text
                     Modality.IMAGE -> HugeIcons.Image03
                 },
-                contentDescription = null,
+                contentDescription = "$outputLabel: ${modalityLabel(modality)}",
                 modifier = Modifier
                     .size(LocalTextStyle.current.lineHeight.toDp())
                     .padding(1.dp)
@@ -809,7 +979,7 @@ fun ModelAbilityTag(model: Model) {
                 ) {
                     Icon(
                         imageVector = HugeIcons.Tools,
-                        contentDescription = null,
+                        contentDescription = stringResource(R.string.setting_mcp_page_tools),
                         modifier = Modifier.size(LocalTextStyle.current.lineHeight.toDp())
                     )
                 }
@@ -821,7 +991,7 @@ fun ModelAbilityTag(model: Model) {
                 ) {
                     Icon(
                         painter = painterResource(R.drawable.deepthink),
-                        contentDescription = null,
+                        contentDescription = stringResource(R.string.setting_provider_page_reasoning),
                         modifier = Modifier.size(LocalTextStyle.current.lineHeight.toDp()),
                     )
                 }

@@ -14,6 +14,7 @@ internal data class AssistantMcpChoice(
     val unavailableReason: ConfigurationUnavailableReason?,
     val status: McpStatus,
     val tools: List<McpToolPresentation>,
+    val fixedByDefinition: Boolean = false,
 ) {
     val isReady: Boolean get() = unavailableReason == null && tools.isNotEmpty()
     val isBusy: Boolean get() = !isReady && (status == McpStatus.Connecting || status == McpStatus.Discovering)
@@ -29,7 +30,7 @@ internal fun ConversationConfigurationUiModel.mcpChoices(runtime: List<McpServer
         val status = runtime.singleOrNull { it.serverId == id && it.access == target.conversation.selection.access }
         AssistantMcpChoice(id, definition?.name ?: id.toString(), id in selected,
             assistant != null && id !in fixedMcpBindings && (id in selected || reason == null), reason,
-            status?.status ?: McpStatus.Idle, status?.tools.orEmpty())
+            status?.status ?: McpStatus.Idle, status?.tools.orEmpty(), id in fixedMcpBindings)
     }
 }
 

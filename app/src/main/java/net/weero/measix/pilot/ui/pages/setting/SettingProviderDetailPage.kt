@@ -213,8 +213,6 @@ fun SettingProviderDetailPage(
         }
     ) {
         Column(Modifier.padding(it).consumeWindowInsets(it)) {
-            Text(stringResource(R.string.configuration_user_definition_shared_notice),
-                style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
             HorizontalPager(
                 state = pager,
                 modifier = Modifier

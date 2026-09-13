@@ -7,6 +7,7 @@ import androidx.compose.runtime.Composable
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.LaunchedEffect
 import net.weero.measix.pilot.service.ConfigurationQueryService
+import net.weero.measix.pilot.service.AssistantCatalogReadState
 import net.weero.measix.pilot.data.enterprise.RealmSelection
 import net.weero.measix.pilot.data.imggen.AssistantBackgroundTarget
 import androidx.compose.runtime.DisposableEffect
@@ -116,7 +117,10 @@ internal fun rememberImageBackgroundHost(
     val context = LocalContext.current
     val backgroundService: AssistantBackgroundService = koinInject()
     val queries: ConfigurationQueryService = koinInject()
-    val catalog by remember(queries) { queries.observeAssistantCatalog() }.collectAsStateWithLifecycle(null)
+    val catalogReadState by remember(queries) { queries.observeAssistantCatalog() }
+        .collectAsStateWithLifecycle(AssistantCatalogReadState.Loading)
+    val catalog = (catalogReadState as? AssistantCatalogReadState.Available)?.catalog
+    val catalogFailure = (catalogReadState as? AssistantCatalogReadState.Unavailable)?.detail
     val catalogState = rememberUpdatedState(catalog)
     val definitionMode = rememberUpdatedState(editSharedDefinition)
     val scope = rememberCoroutineScope()
@@ -142,6 +146,10 @@ internal fun rememberImageBackgroundHost(
             contentDescription = description,
             onClick = { url, toaster ->
                 if (applying.get()) return@ImagePreviewAction
+                if (catalogFailure != null) {
+                    toaster.show(catalogFailure, type = ToastType.Error)
+                    return@ImagePreviewAction
+                }
                 val knownId = assistantIdState.value
                 val current = catalogState.value
                 if (knownId == null && !definitionMode.value && current != null) {
@@ -192,7 +200,6 @@ internal fun rememberImageBackgroundHost(
                     unavailableReasons = currentCatalog.resources.associate { it.key.reference to it.access.unavailableReason },
                     title = pickerTitle,
                     forceDialog = true,
-                    allowManage = false,
                     onAssistantSelected = { assistant ->
                         pendingPick = null
                         pendingConfirm = PendingBackgroundChoice(

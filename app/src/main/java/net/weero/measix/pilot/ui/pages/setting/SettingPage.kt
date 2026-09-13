@@ -59,6 +59,7 @@ import net.weero.measix.pilot.ui.components.nav.BackButton
 import net.weero.measix.pilot.ui.components.ui.CardGroup
 import net.weero.measix.pilot.ui.components.ui.ProviderConfigWarningCard
 import net.weero.measix.pilot.ui.components.ui.Select
+import net.weero.measix.pilot.ui.components.ui.SharedConfigurationEditDialog
 import net.weero.measix.pilot.ui.context.LocalNavController
 import net.weero.measix.pilot.ui.hooks.AppLanguage
 import net.weero.measix.pilot.ui.hooks.rememberAppLanguage
@@ -75,6 +76,7 @@ fun SettingPage(vm: SettingVM = koinViewModel()) {
     val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
     val navController = LocalNavController.current
     val modelCatalog by vm.modelCatalog.collectAsStateWithLifecycle()
+    val realmSelection by vm.realmSelection.collectAsStateWithLifecycle()
     val catalog = (modelCatalog as? net.weero.measix.pilot.service.ModelCatalogReadState.Available)?.catalog
     val lockedChange by vm.lockedChange.collectAsStateWithLifecycle()
     val context = LocalContext.current
@@ -82,6 +84,14 @@ fun SettingPage(vm: SettingVM = koinViewModel()) {
         stringResource(R.string.configuration_change_rejected, it.reason)
     }
     val fileManagementQueryService: FileManagementQueryService = koinInject()
+    var pendingSharedNavigation by remember(realmSelection) { mutableStateOf<Screen?>(null) }
+    val navigateToSharedConfiguration: (Screen) -> Unit = { destination ->
+        when (realmSelection?.access) {
+            is net.weero.measix.pilot.data.enterprise.RealmAccess.Enterprise -> pendingSharedNavigation = destination
+            net.weero.measix.pilot.data.enterprise.RealmAccess.Personal -> navController.navigate(destination)
+            null -> Unit
+        }
+    }
 
     LaunchedEffect(lockedChange) {
         lockedChange?.let {
@@ -116,7 +126,9 @@ fun SettingPage(vm: SettingVM = koinViewModel()) {
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
             item("enterpriseSpace") {
-                net.weero.measix.pilot.ui.pages.enterprise.EnterpriseSpaceButton()
+                net.weero.measix.pilot.ui.pages.enterprise.EnterpriseSpaceSettingsCard(
+                    modifier = Modifier.padding(horizontal = 8.dp),
+                )
             }
             if (catalog?.selection?.access == net.weero.measix.pilot.data.enterprise.RealmAccess.Personal &&
                 catalog.groups.none { group -> group.models.any { it.canSelect } }) {
@@ -194,13 +206,13 @@ fun SettingPage(vm: SettingVM = koinViewModel()) {
                         headlineContent = { Text(stringResource(R.string.setting_page_preferences)) },
                     )
                     item(
-                        onClick = { navController.navigate(Screen.Assistant) },
+                        onClick = { navigateToSharedConfiguration(Screen.Assistant) },
                         leadingContent = { Icon(HugeIcons.LookTop, null) },
                         supportingContent = { Text(stringResource(R.string.setting_page_assistant_desc)) },
                         headlineContent = { Text(stringResource(R.string.setting_page_assistant)) },
                     )
                     item(
-                        onClick = { navController.navigate(Screen.Extensions) },
+                        onClick = { navigateToSharedConfiguration(Screen.Extensions) },
                         leadingContent = { Icon(HugeIcons.Package, null) },
                         supportingContent = { Text(stringResource(R.string.setting_page_extensions_desc)) },
                         headlineContent = { Text(stringResource(R.string.setting_page_extensions)) },
@@ -220,25 +232,25 @@ fun SettingPage(vm: SettingVM = koinViewModel()) {
                         headlineContent = { Text(stringResource(R.string.setting_page_default_model)) },
                     )
                     item(
-                        onClick = { navController.navigate(Screen.SettingProvider) },
+                        onClick = { navigateToSharedConfiguration(Screen.SettingProvider) },
                         leadingContent = { Icon(HugeIcons.Brain02, null) },
                         supportingContent = { Text(stringResource(R.string.setting_page_providers_desc)) },
                         headlineContent = { Text(stringResource(R.string.setting_page_providers)) },
                     )
                     item(
-                        onClick = { navController.navigate(Screen.SettingSearch) },
+                        onClick = { navigateToSharedConfiguration(Screen.SettingSearch) },
                         leadingContent = { Icon(HugeIcons.GlobalSearch, null) },
                         supportingContent = { Text(stringResource(R.string.setting_page_search_service_desc)) },
                         headlineContent = { Text(stringResource(R.string.setting_page_search_service)) },
                     )
                     item(
-                        onClick = { navController.navigate(Screen.SettingSpeech) },
+                        onClick = { navigateToSharedConfiguration(Screen.SettingSpeech) },
                         leadingContent = { Icon(HugeIcons.Megaphone01, null) },
                         supportingContent = { Text(stringResource(R.string.setting_page_tts_service_desc)) },
                         headlineContent = { Text(stringResource(R.string.setting_page_tts_service)) },
                     )
                     item(
-                        onClick = { navController.navigate(Screen.SettingMcp) },
+                        onClick = { navigateToSharedConfiguration(Screen.SettingMcp) },
                         leadingContent = { Icon(HugeIcons.McpServer, null) },
                         supportingContent = { Text(stringResource(R.string.setting_page_mcp_desc)) },
                         headlineContent = { Text(stringResource(R.string.setting_page_mcp)) },
@@ -333,5 +345,14 @@ fun SettingPage(vm: SettingVM = koinViewModel()) {
                 }
             }
         }
+    }
+    pendingSharedNavigation?.let { destination ->
+        SharedConfigurationEditDialog(
+            onDismiss = { pendingSharedNavigation = null },
+            onConfirm = {
+                pendingSharedNavigation = null
+                navController.navigate(destination)
+            },
+        )
     }
 }

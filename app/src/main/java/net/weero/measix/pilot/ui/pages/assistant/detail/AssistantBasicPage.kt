@@ -129,6 +129,7 @@ internal fun AssistantBasicContent(
     onImportAvatar: suspend (android.net.Uri) -> Unit,
     onImportBackground: suspend (android.net.Uri) -> Unit,
     definitionEditable: Boolean = true,
+    usageOnly: Boolean = false,
     modelControl: (@Composable () -> Unit)? = null,
     imageResolver: (suspend (String) -> net.weero.measix.pilot.service.ImageSource?)? = null,
 ) {
@@ -173,7 +174,7 @@ internal fun AssistantBasicContent(
         ) {
             // 身份信息区：名称 → 描述 → Tags → Workspace → 作为子助手 → 全局可见 → 使用助手头像
             // 移除字段间的 HorizontalDivider，依靠 FormItem 自身的 padding 和视觉间距区分
-            FormItem(
+            if (!usageOnly) FormItem(
                 label = {
                     Text(stringResource(R.string.assistant_page_name))
                 },
@@ -193,7 +194,7 @@ internal fun AssistantBasicContent(
                 )
             }
 
-            FormItem(
+            if (!usageOnly) FormItem(
                 label = {
                     Text(stringResource(R.string.assistant_page_description))
                 },
@@ -263,7 +264,7 @@ internal fun AssistantBasicContent(
 
             // 可作为子助手：描述为空时不能开启
             // 描述为空时将提示内联到 FormItem 的 description 槽，不额外占行
-            FormItem(
+            if (!usageOnly) FormItem(
                 modifier = Modifier.padding(8.dp),
                 label = {
                     Text(stringResource(R.string.assistant_page_allow_as_sub_assistant))
@@ -317,7 +318,7 @@ internal fun AssistantBasicContent(
             )
 
             // 全局可见：仅在 allowAsSubAssistant 为 true 时可用
-            if (assistant.allowAsSubAssistant) {
+            if (!usageOnly && assistant.allowAsSubAssistant) {
                 FormItem(
                     modifier = Modifier.padding(8.dp),
                     label = {

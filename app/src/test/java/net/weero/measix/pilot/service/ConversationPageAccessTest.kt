@@ -64,7 +64,7 @@ class ConversationPageAccessTest {
         val repository = mockk<ConversationRepository>()
         val coordinator = mockk<ConversationCommandCoordinator>()
         val application = application(repository, coordinator, sessions, settings)
-        val starter = base.enterpriseExperience(selection)!!.starters.first { it.target.reference.id == "str_writing" }
+        val starter = base.enterpriseStarterCatalog(selection)!!.starters.first { it.target.reference.id == "str_writing" }
         val first = application.newStarterDraftRequest(starter.target)
         val second = application.newStarterDraftRequest(starter.target)
         assertEquals(starter.prompt, first.text)

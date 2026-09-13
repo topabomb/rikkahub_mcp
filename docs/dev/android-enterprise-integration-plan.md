@@ -66,13 +66,13 @@ Policy 横切 A/B/C，不是第四种业务内容。是否含 API Key 不决定 
 
 用户助手的本域显式模型选择优先于定义引用；定义模型为空才使用本域角色默认。显式引用失效或被策略排除时显示未就绪，禁止按首项/名称静默替换。用户可在本域重选有效资源，不必修改其个人助手定义。
 
-企业 Assistant 固定的 model/systemPrompt/managed MCP refs 只读，引用缺失由企业修复。未固定的用户扩展可以通过本域偏好选择，不复制完整个人 Assistant 默认值，也不覆盖受管字段。用户助手可选择本域可用的企业/用户模型和 MCP。
+企业 Assistant 的 systemPrompt 与 managed MCP refs 只读，定义中的 modelId 是默认模型而非强制锁定。策略和资源准入允许时，企业助手与用户助手都可通过本域偏好选择当前空间可用的企业/用户模型；选择不复制完整个人 Assistant 默认值，也不改写受管定义字段。引用缺失仍由企业修复，UI 保留不可用状态而不静默替换。
 
 企业助手不持久化为一份填满个人默认值的 Assistant。配置与使用字段按下表落地：
 
 | 字段 | 企业助手的规则 |
 | --- | --- |
-| id、名称、描述、enabled、modelId、systemPrompt、mcpServerIds、memorySeed | 企业定义只读；固定模型/提示词/MCP 不被本域偏好覆盖 |
+| id、名称、描述、enabled、modelId、systemPrompt、mcpServerIds、memorySeed | 企业定义只读；modelId 作为助手默认模型可被本域使用偏好覆盖，提示词/MCP 等受管定义不被改写 |
 | 会话 systemPrompt 覆盖 | 企业助手始终禁止；历史遗留覆盖不参与新执行，页面解释原因 |
 | temperature/topP/reasoning/maxTokens、stream/context limit、message template、headers/bodies | 平台未提供这些字段，本域使用偏好可调整；初值使用当前普通助手对应默认值，不继承当前个人助手；不能改写已解析模型/认证路由或绕过资源门禁 |
 | Prompt Injection、QuickMessage、Skill、Search、Local Tools、Workspace、Memory/最近聊天、时间提醒 | 本域偏好选择；初值使用普通助手对应默认值（引用集合为空），会话注入允许用户启用；Workspace 必须显式选择 |
@@ -439,7 +439,7 @@ MCP 执行接线已完成本批实现与验证：原 Turn 的 McpExecutionLease 
 本地 Source 经生产 SDK/Streamable HTTP、Coordinator、Catalog 与调用链提供独立的 Direct 企业资料查询，以及 Gateway 动态/指南；同一业务不同时由两条路径暴露。阶段复审提出的暂停/继续收口、查询租约、同 generation binding 轮换、企业内个人 MCP 重连和 GET 428 等问题已修正，并补实际消费者与失败路径验证。本批串行 `test assembleDebug lintDebug assembleRelease connectedDebugAndroidTest` 在 26 分 25 秒内通过：App 2,137 项 JVM、Android 17 模拟器 App 190 项与 Speech 6 项无失败；App/Workspace lint 均为 0 错误，分别有 287/11 项警告。Workspace 保留 11 项 Windows JVM 条件跳过，设备 12 项中保留 1 项硬链接条件跳过。完整回归曾暴露 Portal 测试在异步文档关闭完成前重置 Main dispatcher 的清理竞态，测试已等待原关闭 owner 后再重置；生产 Portal 生命周期未变。证据见 `build/reports/enterprise/mcp-execution-verification.json`。本次设备是既有消费者回归，不代替企业工具端到端或真实平台验收。MCP 管理页面、业务工具卡、模型 Mock 的完整工具续轮、设备企业工具执行及整期目标仍待收口，不标记 C5/E01–E12 完成。
 
 
-聊天配置与抽屉接线已实现：原页面 query 同时提供助手、模型目录、搜索与传输能力；字段命令复用 Session/Settings/会话 owner，删除无消费者的通用 usage 写入口。企业固定模型/MCP 不可修改，用户助手可本域重选、跟随域默认或恢复定义；失效定义不再静默回退。Workspace 目录、系统提示和附件迟到结果绑定原目标，写盘取消等待实际 ack。抽屉助手、目录、分页和筛选共用原 ConversationFolderAccess，旧目标不自动转入新空间；会话移动等待实际提交，换助手同时清 folder/cwd。此次没有增加配置存储区或持久化镜像。
+聊天配置与抽屉接线已实现：原页面 query 同时提供助手、模型目录、搜索与传输能力；字段命令复用 Session/Settings/会话 owner，删除无消费者的通用 usage 写入口。该阶段记录中的“企业固定模型不可修改”已由当前产品契约替代：企业定义 modelId 是默认值，企业助手与用户助手均可本域重选、跟随域默认或恢复定义；固定 MCP 仍不可移除，失效定义不再静默回退。Workspace 目录、系统提示和附件迟到结果绑定原目标，写盘取消等待实际 ack。抽屉助手、目录、分页和筛选共用原 ConversationFolderAccess，旧目标不自动转入新空间；会话移动等待实际提交，换助手同时清 folder/cwd。此次没有增加配置存储区或持久化镜像。
 
 两位独立复审提出的原目标、取消与最新文档写入问题已收口。Pixel_10_Pro_Fold / Android 17 的 ScopedConfigurationAndroidTest、ModelCatalogAndroidTest、EnterprisePageAndroidTest、EnterpriseAppliedStateAndroidTest 共 11 项通过，耗时 2 分 25 秒。另在实际 Debug/Koin 页面走通示例企业聊天、固定 MCP 勾选且不可关闭、重启后从抽屉重开企业历史、企业域内移动到用户助手、模型继承选项，以及切回个人后历史/模型不混用。固定 MCP 尚无已验证工具，此处不算工具执行验收。设备旧消息中的 mock 原始回显保留为历史，新的 mock 回复已去除原始请求回显。
 

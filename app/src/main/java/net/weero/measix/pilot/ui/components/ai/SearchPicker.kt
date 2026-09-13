@@ -62,12 +62,10 @@ import me.rerere.hugeicons.stroke.GlobalSearch
 import me.rerere.hugeicons.stroke.Search01
 import me.rerere.hugeicons.stroke.Settings03
 import net.weero.measix.pilot.R
-import net.weero.measix.pilot.Screen
 import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.ui.adaptive.AdaptiveModal
 import net.weero.measix.pilot.ui.components.ui.AutoAIIcon
 import net.weero.measix.pilot.ui.components.ui.ToggleSurface
-import net.weero.measix.pilot.ui.context.LocalNavController
 import net.weero.measix.pilot.ui.pages.setting.SearchAbilityTagLine
 
 internal fun resolveDisplayedSearchMode(
@@ -89,6 +87,7 @@ fun SearchPickerButton(
     onUpdateSearchService: (ConfigurationReference) -> Unit,
     builtInSearchEnabled: Boolean,
     supportsBuiltInSearch: Boolean,
+    onManageSearchServices: () -> Unit,
 ) {
     var showSearchPicker by remember { mutableStateOf(false) }
     val currentService = settings.searchServices.find { it.id == selectedSearchServiceId }
@@ -170,7 +169,11 @@ fun SearchPickerButton(
                         hasBuiltInSearchEnabled = builtInSearchEnabled,
                         supportsBuiltInSearch = supportsBuiltInSearch,
                         onSelectProvider = { selectingProvider = true },
-                        onDismiss = { showSearchPicker = false }
+                        onDismiss = { showSearchPicker = false },
+                        onManageSearchServices = {
+                            showSearchPicker = false
+                            onManageSearchServices()
+                        },
                     )
                 }
             }
@@ -189,9 +192,8 @@ private fun SearchPicker(
     onUpdateSearchMode: (AssistantSearchMode) -> Unit,
     onSelectProvider: () -> Unit,
     onDismiss: () -> Unit,
+    onManageSearchServices: () -> Unit,
 ) {
-    val navBackStack = LocalNavController.current
-
     val showModelSearch = supportsBuiltInSearch || hasBuiltInSearchEnabled
     val displayedMode = resolveDisplayedSearchMode(enableSearch, hasBuiltInSearchEnabled)
     val isLocalSearchSelected = displayedMode == AssistantSearchMode.LOCAL
@@ -213,12 +215,7 @@ private fun SearchPicker(
                 fontWeight = FontWeight.Bold,
                 modifier = Modifier.weight(1f)
             )
-            IconButton(
-                onClick = {
-                    onDismiss()
-                    navBackStack.navigate(Screen.SettingSearch)
-                }
-            ) {
+            IconButton(onClick = onManageSearchServices) {
                 Icon(HugeIcons.Settings03, contentDescription = null)
             }
         }

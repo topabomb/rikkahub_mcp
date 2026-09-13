@@ -1,5 +1,6 @@
 package net.weero.measix.pilot.service
 
+import android.util.Log
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.catch
@@ -20,6 +21,12 @@ import net.weero.measix.pilot.data.configuration.ResourceSelectionSlot
 import net.weero.measix.pilot.data.model.Assistant
 import me.rerere.common.configuration.ConfigurationReference
 import net.weero.measix.pilot.data.enterprise.RealmAccess
+import net.weero.measix.pilot.utils.userVisibleDiagnostic
+
+private sealed interface ConfigurationReadFailure {
+    data object SelectionUnavailable : ConfigurationReadFailure
+    data class Unexpected(val detail: String) : ConfigurationReadFailure
+}
 
 internal class ConfigurationQueryService(
     private val settings: SettingsStore,
@@ -30,37 +37,46 @@ internal class ConfigurationQueryService(
         .map { it.selections.favoriteModels }
 
     fun observeModelCatalog(): Flow<ModelCatalogReadState> = observeSelected(
-        { ModelCatalogReadState.Unavailable(it) },
+        { failure -> ModelCatalogReadState.Unavailable(when (failure) {
+            ConfigurationReadFailure.SelectionUnavailable -> "configuration_view_unavailable"
+            is ConfigurationReadFailure.Unexpected -> failure.detail
+        }) },
         { configuration, selection -> ModelCatalogReadState.Available(configuration.modelCatalog(selection)) },
     )
 
-    fun observeAssistantCatalog(): Flow<AssistantCatalogUiModel?> = observeSelected(
-        { null },
-        { configuration, selection -> AssistantCatalogUiModel(selection,
+    fun observeAssistantCatalog(): Flow<AssistantCatalogReadState> = observeSelected(
+        { failure -> AssistantCatalogReadState.Unavailable(failure.detail()) },
+        { configuration, selection -> AssistantCatalogReadState.Available(AssistantCatalogUiModel(selection,
             configuration.selection(ResourceSelectionSlot.ASSISTANT), configuration.assistants,
-            configuration.catalog.values.filter { it.key.category == ConfigurationCategory.ASSISTANT }) },
+            configuration.catalog.values.filter { it.key.category == ConfigurationCategory.ASSISTANT })) },
     )
 
-    fun observeEnterpriseExperience(selection: RealmSelection): Flow<EnterpriseExperienceReadState> = observeSelected(
-        { EnterpriseExperienceReadState.Unavailable },
+    fun observeEnterpriseStarters(selection: RealmSelection): Flow<EnterpriseStarterReadState> = observeSelected(
+        { failure -> when (failure) {
+            ConfigurationReadFailure.SelectionUnavailable -> EnterpriseStarterReadState.SourceChanged
+            is ConfigurationReadFailure.Unexpected -> EnterpriseStarterReadState.Failed(failure.detail)
+        } },
         { configuration, current ->
-            configuration.takeIf { current == selection }?.enterpriseExperience(current)
-                ?.let { EnterpriseExperienceReadState.Available(it) } ?: EnterpriseExperienceReadState.Unavailable
+            configuration.takeIf { current == selection }?.enterpriseStarterCatalog(current)
+                ?.let { EnterpriseStarterReadState.Available(it) } ?: EnterpriseStarterReadState.SourceChanged
         },
     )
 
-    fun observeSpeechCatalog(): Flow<SpeechCatalogUiModel?> = observeSelected(
-        { null },
-        { configuration, selection -> SpeechCatalogUiModel(selection,
+    fun observeSpeechCatalog(): Flow<SpeechCatalogReadState> = observeSelected(
+        { failure -> SpeechCatalogReadState.Unavailable(failure.detail()) },
+        { configuration, selection -> SpeechCatalogReadState.Available(SpeechCatalogUiModel(selection,
             configuration.selection(ResourceSelectionSlot.TTS), configuration.selection(ResourceSelectionSlot.ASR),
             configuration.catalog.values.filter { it.key.category in setOf(ConfigurationCategory.TTS, ConfigurationCategory.ASR) },
-            configuration.enterpriseConfiguration?.tts.orEmpty(), configuration.enterpriseConfiguration?.asr.orEmpty()) },
+            configuration.enterpriseConfiguration?.tts.orEmpty(), configuration.enterpriseConfiguration?.asr.orEmpty())) },
     )
 
-    private fun <T> observeSelected(unavailable: (String) -> T, project: (ResolvedConfiguration, RealmSelection) -> T): Flow<T> = flow {
+    private fun <T> observeSelected(
+        unavailable: (ConfigurationReadFailure) -> T,
+        project: (ResolvedConfiguration, RealmSelection) -> T,
+    ): Flow<T> = flow {
         recoveryGate.awaitReady()
         emitAll(enterpriseSessions.observeSelectedRealmSelection().flatMapLatest { selection ->
-            if (selection == null) flowOf(unavailable("configuration_view_unavailable"))
+            if (selection == null) flowOf(unavailable(ConfigurationReadFailure.SelectionUnavailable))
             else settings.observeConfiguration(enterpriseSessions.state, selection.access.scope)
                 .map { enterpriseSessions.withSelectedRealmSelection(selection) {
                     settings.withResolvedConfiguration(selection.access.scope, enterpriseSessions.state.value) { configuration ->
@@ -68,11 +84,11 @@ internal class ConfigurationQueryService(
                         project(configuration, selection)
                     }
                 } }
-                .catch { error ->
-                    if (error is CancellationException) throw error
-                    emit(unavailable(error.message ?: "configuration_view_unavailable"))
-                }
         })
+    }.catch { error ->
+        if (error is CancellationException) throw error
+        Log.e("ConfigurationQuery", "Configuration projection failed", error)
+        emit(unavailable(ConfigurationReadFailure.Unexpected(error.userVisibleDiagnostic())))
     }
 
     suspend fun captureAccess(scope: ConfigurationScope): RealmAccess {
@@ -104,8 +120,27 @@ internal class ConfigurationQueryService(
 
     fun observeCurrent(): Flow<ResolvedConfiguration> = settings.observeConfiguration(enterpriseSessions.state)
 
+    fun observeSelectedRealmSelection(): Flow<RealmSelection?> = enterpriseSessions.observeSelectedRealmSelection()
+
     fun observe(scope: ConfigurationScope): Flow<ResolvedConfiguration> =
         settings.observeConfiguration(enterpriseSessions.state, scope)
+}
+
+private fun ConfigurationReadFailure.detail(): String = when (this) {
+    ConfigurationReadFailure.SelectionUnavailable -> "configuration_view_unavailable"
+    is ConfigurationReadFailure.Unexpected -> detail
+}
+
+internal sealed interface AssistantCatalogReadState {
+    data object Loading : AssistantCatalogReadState
+    data class Available(val catalog: AssistantCatalogUiModel) : AssistantCatalogReadState
+    data class Unavailable(val detail: String) : AssistantCatalogReadState
+}
+
+internal sealed interface SpeechCatalogReadState {
+    data object Loading : SpeechCatalogReadState
+    data class Available(val catalog: SpeechCatalogUiModel) : SpeechCatalogReadState
+    data class Unavailable(val detail: String) : SpeechCatalogReadState
 }
 
 internal data class AssistantCatalogUiModel(

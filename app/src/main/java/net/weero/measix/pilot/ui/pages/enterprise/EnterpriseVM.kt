@@ -22,6 +22,7 @@ import net.weero.measix.pilot.service.EnterpriseOverview
 import net.weero.measix.pilot.service.portal.PortalClosure
 import net.weero.measix.pilot.service.portal.PortalFailure
 import net.weero.measix.pilot.service.portal.PortalHostUnavailable
+import net.weero.measix.pilot.utils.userVisibleDiagnostic
 import kotlin.uuid.Uuid
 
 internal data class PortalPresentation(val id: Uuid = Uuid.random(), val selection: RealmSelection)
@@ -31,7 +32,12 @@ internal class EnterpriseVM(private val service: EnterpriseApplicationService) :
     val overview = service.observe().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
     private val _busy = MutableStateFlow(false)
     val busy = _busy.asStateFlow()
-    data class Failure(val resource: Int, val selection: RealmSelection?, val arguments: List<String> = emptyList())
+    data class Failure(
+        val resource: Int,
+        val selection: RealmSelection?,
+        val arguments: List<String> = emptyList(),
+        val detail: String? = null,
+    )
     private val _error = MutableStateFlow<Failure?>(null)
     val error = combine(_error, overview) { value, state ->
         value?.takeIf { it.selection == state?.selection }
@@ -213,6 +219,7 @@ internal class EnterpriseVM(private val service: EnterpriseApplicationService) :
             try { action() }
             catch (cancelled: CancellationException) { throw cancelled }
             catch (error: Exception) {
+                android.util.Log.e("EnterpriseCommand", "Enterprise command failed", error)
                 if (isCurrent()) _error.value = Failure(when {
                     error is EnterpriseConfigurationException && error.reason == "platform_enrollment_not_supported" -> R.string.enterprise_platform_unavailable
                     error is EnterpriseConfigurationException && error.reason == "exit_current_enterprise_first" -> R.string.enterprise_import_exit_first
@@ -224,7 +231,10 @@ internal class EnterpriseVM(private val service: EnterpriseApplicationService) :
                     error is EnterpriseConfigurationException && error.reason in setOf("invalid_assistant_model_reference", "invalid_default_chat_model", "invalid_default_image_model") -> R.string.enterprise_model_still_referenced
                     enrollment -> R.string.enterprise_invalid_enrollment
                     else -> failureMessage
-                }, overview.value?.selection)
+                }, overview.value?.selection, detail = when (error) {
+                    is EnterpriseConfigurationException -> error.reason
+                    else -> error.userVisibleDiagnostic()
+                })
             } finally { _busy.value = false }
         }
     }

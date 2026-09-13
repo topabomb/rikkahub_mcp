@@ -117,8 +117,6 @@ fun PromptPage(vm: PromptVM = koinViewModel()) {
         containerColor = CustomColors.topBarColors.containerColor,
     ) { innerPadding ->
         Column(Modifier.padding(innerPadding)) {
-            Text(stringResource(R.string.configuration_shared_content_notice), style = MaterialTheme.typography.bodySmall,
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
             ModeInjectionTab(
                 modeInjections = settings.modeInjections,
                 onUpdate = { transform ->

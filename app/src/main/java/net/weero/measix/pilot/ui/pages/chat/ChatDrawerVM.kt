@@ -22,6 +22,7 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import net.weero.measix.pilot.R
 import net.weero.measix.pilot.service.ConfigurationQueryService
+import net.weero.measix.pilot.service.AssistantCatalogReadState
 import net.weero.measix.pilot.data.enterprise.RealmSelection
 import me.rerere.common.configuration.ConfigurationReference
 import kotlinx.coroutines.flow.flowOf
@@ -46,11 +47,13 @@ class ChatDrawerVM internal constructor(
 ) : ViewModel() {
 
     internal val assistantCatalog = configurationQueryService.observeAssistantCatalog()
-        .stateIn(viewModelScope, SharingStarted.Eagerly, null)
+        .stateIn(viewModelScope, SharingStarted.Eagerly, AssistantCatalogReadState.Loading)
 
     private val selectedFolder = MutableStateFlow<Pair<ConversationFolderAccess, Uuid>?>(null)
     private val assistantTarget = assistantCatalog.map { catalog ->
-        catalog?.selected?.reference?.let { ConversationFolderAccess(catalog.selection, it) }
+        (catalog as? AssistantCatalogReadState.Available)?.catalog?.let { available ->
+            available.selected.reference?.let { ConversationFolderAccess(available.selection, it) }
+        }
     }.distinctUntilChanged().onEach {
         selectedFolder.value = null
         saveScrollPosition(0, 0)

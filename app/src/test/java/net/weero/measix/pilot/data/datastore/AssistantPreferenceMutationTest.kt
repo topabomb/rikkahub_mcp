@@ -25,15 +25,47 @@ class AssistantPreferenceMutationTest {
             document = document.changeAssistantPreference(scope, appliedConfiguration(packet), id, command)
         }
         fun selected() = ConfigurationResolver.resolve(document, scope, appliedConfiguration(packet)).assistantModel(id)
+        fun preference() = ConfigurationResolver.resolve(document, scope, appliedConfiguration(packet)).assistantModelPreferences.getValue(id)
+        assertEquals(AssistantModelPreferenceMode.ASSISTANT_DEFAULT, preference().mode)
+        change(AssistantPreferenceChange.Model(null))
+        assertEquals(packet.identity.reference(third.id), selected().reference)
+        assertEquals(AssistantModelPreferenceMode.SPACE_DEFAULT, preference().mode)
+        val sameReferenceDefaults = packet.copy(configuration = packet.configuration.copy(
+            defaults = packet.configuration.defaults.copy(chatModelId = first.id),
+        ))
+        assertEquals(packet.identity.reference(first.id),
+            ConfigurationResolver.resolve(document, scope, appliedConfiguration(sameReferenceDefaults)).assistantModel(id).reference)
+        change(AssistantPreferenceChange.InheritModel)
+        assertEquals(packet.identity.reference(first.id), selected().reference)
+        assertEquals(AssistantModelPreferenceMode.ASSISTANT_DEFAULT, preference().mode)
+        assertEquals(packet.identity.reference(first.id),
+            ConfigurationResolver.resolve(document, scope, appliedConfiguration(sameReferenceDefaults)).assistantModel(id).reference)
         listOf(second, third).forEach { model ->
             change(AssistantPreferenceChange.Model(packet.identity.reference(model.id)))
             assertEquals(packet.identity.reference(model.id), selected().reference)
             assertTrue(selected().isAvailable)
+            assertEquals(AssistantModelPreferenceMode.EXPLICIT, preference().mode)
         }
         change(AssistantPreferenceChange.Model(null))
         assertEquals(packet.identity.reference(third.id), selected().reference)
+        assertEquals(AssistantModelPreferenceMode.SPACE_DEFAULT, preference().mode)
         change(AssistantPreferenceChange.InheritModel)
         assertEquals(packet.identity.reference(first.id), selected().reference)
+        assertEquals(AssistantModelPreferenceMode.ASSISTANT_DEFAULT, preference().mode)
+        val changedDefinition = packet.copy(configuration = packet.configuration.copy(
+            assistants = packet.configuration.assistants.map {
+                if (packet.identity.reference(it.id) == id) it.copy(modelId = second.id) else it
+            },
+        ))
+        assertEquals(packet.identity.reference(second.id),
+            ConfigurationResolver.resolve(document, scope, appliedConfiguration(changedDefinition)).assistantModel(id).reference)
+        change(AssistantPreferenceChange.Model(null))
+        val changedSpaceDefault = packet.copy(configuration = packet.configuration.copy(
+            defaults = packet.configuration.defaults.copy(chatModelId = second.id),
+        ))
+        assertEquals(packet.identity.reference(second.id),
+            ConfigurationResolver.resolve(document, scope, appliedConfiguration(changedSpaceDefault)).assistantModel(id).reference)
+        change(AssistantPreferenceChange.InheritModel)
         val baseline = ConfigurationResolver.resolve(document, scope, appliedConfiguration(packet)).assistants.getValue(id)
         change(AssistantPreferenceChange.EditUsage(baseline, baseline.copy(chatModelId = packet.identity.reference(second.id))))
         assertEquals(packet.identity.reference(second.id), selected().reference)

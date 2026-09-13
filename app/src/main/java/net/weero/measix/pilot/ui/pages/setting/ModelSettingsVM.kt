@@ -14,6 +14,7 @@ import net.weero.measix.pilot.data.enterprise.RealmSelection
 import net.weero.measix.pilot.service.ConfigurationApplicationService
 import net.weero.measix.pilot.service.ConfigurationQueryService
 import net.weero.measix.pilot.service.ModelCatalogReadState
+import net.weero.measix.pilot.utils.userVisibleDiagnostic
 
 internal data class ModelSettingsError(val selection: RealmSelection, val detail: String)
 
@@ -44,8 +45,12 @@ class ModelSettingsVM internal constructor(
         } catch (error: CancellationException) {
             throw error
         } catch (error: Exception) {
+            android.util.Log.e("ModelSettings", "Model settings command failed", error)
             if ((catalog.value as? ModelCatalogReadState.Available)?.catalog?.selection == selection) {
-                _error.value = ModelSettingsError(selection, error.message ?: "configuration_change_failed")
+                _error.value = ModelSettingsError(
+                    selection,
+                    error.userVisibleDiagnostic(),
+                )
             }
         }
     }
