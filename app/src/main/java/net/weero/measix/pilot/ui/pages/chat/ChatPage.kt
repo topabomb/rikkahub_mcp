@@ -50,6 +50,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
@@ -78,12 +79,14 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
+import me.rerere.common.configuration.ConfigurationReference
 import me.rerere.ai.core.MessageRole
 import me.rerere.ai.provider.ModelType
 import me.rerere.ai.ui.UIMessagePart
 import me.rerere.common.android.appTempFolder
 import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.Cancel01
+import me.rerere.hugeicons.stroke.Building03
 import me.rerere.hugeicons.stroke.LeftToRightListBullet
 import me.rerere.hugeicons.stroke.Menu03
 import me.rerere.hugeicons.stroke.MessageAdd01
@@ -100,10 +103,13 @@ import net.weero.measix.pilot.data.model.Assistant
 import net.weero.measix.pilot.data.model.Avatar
 import net.weero.measix.pilot.data.configuration.AssistantPreferenceChange
 import net.weero.measix.pilot.service.ConversationConfigurationUiModel
+import net.weero.measix.pilot.service.AssistantModelSummary
 import net.weero.measix.pilot.service.ConversationAssistantTarget
 import net.weero.measix.pilot.service.ModelCatalogUiModel
+import net.weero.measix.pilot.service.modelSummaryFor
 import net.weero.measix.pilot.service.mcpChoices
 import net.weero.measix.pilot.ui.components.ai.configurationUnavailableText
+import net.weero.measix.pilot.ui.components.ai.quickRestoreAssistantDefault
 import androidx.compose.runtime.key
 import androidx.compose.foundation.layout.PaddingValues
 import net.weero.measix.pilot.service.importInputUris
@@ -283,6 +289,7 @@ fun ChatPage(
     }
 
     val chatListState = rememberLazyListState()
+    var assistantDetailsRequest by remember(currentSnapshot.conversationId) { mutableIntStateOf(0) }
     var initializedChatListKey by remember { mutableStateOf<ChatListInitializationKey?>(null) }
     LaunchedEffect(nodeId, currentSnapshot.nodes.size) {
         val key = ChatListInitializationKey(currentSnapshot.conversationId, nodeId)
@@ -328,6 +335,12 @@ fun ChatPage(
                             ChatDrawerContent(
                                 navController = navController,
                                 currentConversationId = currentSnapshot.conversationId,
+                                currentAssistantId = currentSnapshot.header.assistantId,
+                                onViewCurrentAssistant = {
+                                    if (currentSnapshot.header.scope is net.weero.measix.pilot.data.configuration.ConfigurationScope.Personal) {
+                                        navController.navigate(Screen.AssistantDetail(currentSnapshot.header.assistantId.toString()))
+                                    } else assistantDetailsRequest++
+                                },
                                 vm = vm,
                                 settings = setting,
                                 permanent = true,
@@ -366,6 +379,7 @@ fun ChatPage(
                             errors = errors,
                             onDismissError = { vm.dismissError(it) },
                             onClearAllErrors = { vm.clearAllErrors() },
+                            assistantDetailsRequest = assistantDetailsRequest,
                         )
                     }
                 }
@@ -378,6 +392,12 @@ fun ChatPage(
                         ChatDrawerContent(
                             navController = navController,
                             currentConversationId = currentSnapshot.conversationId,
+                            currentAssistantId = currentSnapshot.header.assistantId,
+                            onViewCurrentAssistant = {
+                                if (currentSnapshot.header.scope is net.weero.measix.pilot.data.configuration.ConfigurationScope.Personal) {
+                                    navController.navigate(Screen.AssistantDetail(currentSnapshot.header.assistantId.toString()))
+                                } else assistantDetailsRequest++
+                            },
                             vm = vm,
                             settings = setting,
                             navigateFromDrawer = { navigate ->
@@ -406,6 +426,7 @@ fun ChatPage(
                         errors = errors,
                         onDismissError = { vm.dismissError(it) },
                         onClearAllErrors = { vm.clearAllErrors() },
+                        assistantDetailsRequest = assistantDetailsRequest,
                     )
                 }
             }
@@ -481,6 +502,7 @@ private fun ChatPageContent(
     onNavigationClick: (() -> Unit)? = null,
     onDismissError: (Uuid) -> Unit,
     onClearAllErrors: () -> Unit,
+    assistantDetailsRequest: Int,
 ) {
     val chatNavigation = rememberChatNavigation(navController)
     KeepScreenOn(enabled = turnPresentation.isActive)
@@ -527,6 +549,9 @@ private fun ChatPageContent(
     var usageEditorSection by remember(target) { mutableStateOf<AssistantSettingsSection?>(null) }
     var showWorkspaceSheet by remember(target) { mutableStateOf(false) }
     var showAssistantPicker by remember(target) { mutableStateOf(false) }
+    var assistantPreview by remember(target) { mutableStateOf<Assistant?>(null) }
+    var showFullModelActions by remember(target) { mutableStateOf(false) }
+    var handledAssistantDetailsRequest by remember(snapshot.conversationId) { mutableIntStateOf(0) }
     var pendingSharedNavigation by remember(target) { mutableStateOf<Screen?>(null) }
     val enterpriseContext = target?.conversation?.selection?.access?.scope is
         net.weero.measix.pilot.data.configuration.ConfigurationScope.Enterprise
@@ -542,7 +567,8 @@ private fun ChatPageContent(
     }
     val memoryService: MemoryService = koinInject()
     val memoryCountFlow = remember(snapshot.header.scope, snapshot.header.assistantId) {
-        memoryService.observe(snapshot.header.scope, snapshot.header.assistantId, enabledOnly = true).map { it.records.size }
+        memoryService.observe(snapshot.header.scope, snapshot.header.assistantId, enabledOnly = true)
+            .map { it.records.size }
     }
     val memoryCount by memoryCountFlow.collectAsStateWithLifecycle(initialValue = 0)
     val imageGenerationAvailable = configuration?.imageGenerationAvailable == true
@@ -576,6 +602,18 @@ private fun ChatPageContent(
         type = ModelType.CHAT,
     ) }
     val modelRequiredMessage = stringResource(R.string.chat_readiness_model_required_toast)
+
+    LaunchedEffect(assistantDetailsRequest, target) {
+        if (
+            assistantDetailsRequest > handledAssistantDetailsRequest &&
+            target != null &&
+            assistant != null
+        ) {
+            handledAssistantDetailsRequest = assistantDetailsRequest
+            usageEditorSection = null
+            showUsageEditor = true
+        }
+    }
 
     fun requestAppendScroll(requestContext: AppendScrollContext) {
         appendScrollJob?.cancel()
@@ -625,6 +663,7 @@ private fun ChatPageContent(
                 TopBar(
                     model = configuration?.model,
                     assistant = assistant,
+                    enterpriseName = configuration?.enterpriseName,
                     snapshot = snapshot,
                     navigationAction = navigationAction,
                     onNavigationClick = onNavigationClick ?: {
@@ -670,9 +709,16 @@ private fun ChatPageContent(
                         builtInSearchEnabled = configuration.builtInSearchEnabled,
                         selectedSearchServiceId = configuration.searchSelection.reference,
                         canChangeModel = configuration.canChangeModel,
-                        modelSelectionActions = modelSelectionUi.actions,
+                        quickModelAction = modelSelectionUi.quickRestoreAssistantDefault()?.let { action ->
+                            if (enterpriseContext) action.copy(
+                                label = stringResource(R.string.assistant_model_restore_assistant_default),
+                            ) else action
+                        },
+                        fullModelActions = if (showFullModelActions) modelSelectionUi.actions else emptyList(),
+                        onOpenQuickModelPicker = { showFullModelActions = false },
                         modelListState = modelListState,
-                        selectedModelId = modelSelectionUi.selectedModelId,
+                        selectedModelId = configuration.modelSelection.reference,
+                        selectedModelUsesDefault = configuration.modelPreference?.mode != net.weero.measix.pilot.data.configuration.AssistantModelPreferenceMode.EXPLICIT,
                         hazeState = hazeState,
                         completionProviders = completionProviders,
                         onCancelClick = {
@@ -792,6 +838,7 @@ private fun ChatPageContent(
                 settings = setting,
                 readiness = readiness,
                 assistant = assistant,
+                starters = configuration?.starters.orEmpty(),
                 modelById = configuration?.modelCatalog?.groups.orEmpty().flatMap { it.models }.associate { it.model.id to it.model },
                 hazeState = hazeState,
                 errors = errors,
@@ -853,32 +900,50 @@ private fun ChatPageContent(
                 onReadinessModelClick = {
                     if (readiness.requiresProviderConfiguration && snapshot.header.scope is net.weero.measix.pilot.data.configuration.ConfigurationScope.Enterprise) {
                         navController.navigate(Screen.Enterprise)
-                    } else if (configuration?.canChangeModel == true) modelListState.open()
+                    } else if (configuration?.canChangeModel == true) {
+                        showFullModelActions = false
+                        modelListState.open()
+                    }
                 },
-                onReadinessMcpClick = {
-                    showMcpPicker = true
-                },
+                onReadinessMcpClick = { showMcpPicker = true },
                 onReadinessLocalToolsClick = {
-                    usageEditorSection = AssistantSettingsSection.LOCAL_TOOLS
-                    showUsageEditor = true
+                    if (enterpriseContext) {
+                        usageEditorSection = AssistantSettingsSection.LOCAL_TOOLS
+                        showUsageEditor = true
+                    } else {
+                        navController.navigate(Screen.AssistantLocalTool(snapshot.header.assistantId.toString()))
+                    }
                 },
                 onReadinessWorkspaceClick = {
                     showWorkspaceSheet = true
                 },
                 onSwitchAssistant = { showAssistantPicker = true },
                 onManageAssistant = {
-                    if (target?.conversation?.selection?.access?.scope is net.weero.measix.pilot.data.configuration.ConfigurationScope.Enterprise) {
+                    if (enterpriseContext) {
                         usageEditorSection = null
                         showUsageEditor = true
+                    } else {
+                        navController.navigate(Screen.AssistantDetail(snapshot.header.assistantId.toString()))
                     }
-                    else navController.navigate(Screen.AssistantDetail(snapshot.header.assistantId.toString()))
                 },
                 onMemoryClick = {
-                    if (target?.conversation?.selection?.access?.scope is net.weero.measix.pilot.data.configuration.ConfigurationScope.Enterprise) {
+                    if (enterpriseContext) {
                         usageEditorSection = AssistantSettingsSection.MEMORY
                         showUsageEditor = true
+                    } else {
+                        navController.navigate(Screen.AssistantMemory(snapshot.header.assistantId.toString()))
                     }
-                    else navController.navigate(Screen.AssistantMemory(snapshot.header.assistantId.toString()))
+                },
+                onStarterClick = { starter ->
+                    try {
+                        configuration?.target?.let(vm::requireConfigurationTarget)
+                        val spacer = if (inputState.textContent.text.isBlank()) "" else "\n\n"
+                        inputState.appendText(spacer + starter.prompt)
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
+                    } catch (error: Exception) {
+                        configurationError = error
+                    }
                 },
             )
             if (isActiveRoute) {
@@ -935,7 +1000,44 @@ private fun ChatPageContent(
                     }
                 },
                 onDismiss = { showAssistantPicker = false },
-                onEditAssistant = { id -> navigateToSharedConfiguration(Screen.AssistantDetail(id.toString())) },
+                onViewAssistant = { selected ->
+                    val unavailable = configuration.resources.firstOrNull {
+                        it.key.category == net.weero.measix.pilot.data.configuration.ConfigurationCategory.ASSISTANT &&
+                            it.key.reference == selected.id
+                    }?.access?.unavailableReason
+                    if (unavailable != null) return@AssistantPickerSheet
+                    showAssistantPicker = false
+                    if (selected.id == configuration.target.assistantId) {
+                        if (enterpriseContext) {
+                            usageEditorSection = null
+                            showUsageEditor = true
+                        } else {
+                            navController.navigate(Screen.AssistantDetail(selected.id.toString()))
+                        }
+                    } else {
+                        assistantPreview = selected
+                    }
+                },
+            )
+        }
+
+        assistantPreview?.let { preview ->
+            net.weero.measix.pilot.ui.components.ai.AssistantCatalogDetails(
+                assistant = preview,
+                modelSummary = configuration?.modelCatalog?.modelSummaryFor(preview)
+                    ?: AssistantModelSummary(
+                        preview.chatModelId,
+                        null,
+                        preview.chatModelId?.let {
+                            net.weero.measix.pilot.data.configuration.ConfigurationUnavailableReason.REFERENCE_MISSING
+                        },
+                    ),
+                enterpriseName = configuration?.enterpriseName,
+                onDismiss = { assistantPreview = null },
+                onEdit = (preview.id as? ConfigurationReference.User)?.let { id -> {
+                    assistantPreview = null
+                    navigateToSharedConfiguration(Screen.AssistantDetail(id.toString()))
+                } },
             )
         }
 
@@ -955,6 +1057,11 @@ private fun ChatPageContent(
                     onManageQuickMessages = { navigateToSharedConfiguration(Screen.QuickMessages) },
                     onManagePrompts = { navigateToSharedConfiguration(Screen.Prompts) },
                     onManageSkills = { navigateToSharedConfiguration(Screen.Skills) },
+                    onOpenModelPicker = {
+                        showUsageEditor = false
+                        showFullModelActions = true
+                        modelListState.open()
+                    },
                     onClose = { showUsageEditor = false },
                     initialSection = usageEditorSection,
                 )
@@ -1421,6 +1528,7 @@ private enum class ChatNavigationAction {
 private fun TopBar(
     model: me.rerere.ai.provider.Model?,
     assistant: Assistant?,
+    enterpriseName: String?,
     snapshot: ConversationPresentationSnapshot,
     navigationAction: ChatNavigationAction,
     onNavigationClick: () -> Unit,
@@ -1461,52 +1569,68 @@ private fun TopBar(
         },
         title = {
             val editTitleWarning = stringResource(R.string.chat_page_edit_title_warning)
-            Surface(
-                onClick = {
-                    if (snapshot.nodes.isNotEmpty()) {
-                        titleState.open(snapshot.header.title)
-                    } else {
-                        toaster.show(editTitleWarning, type = ToastType.Warning)
-                    }
-                },
-                color = Color.Transparent,
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
             ) {
-                val showAvatar = assistant?.useAssistantAvatar == true &&
-                    LocalAdaptiveLayoutInfo.current.chatLayoutMode == ChatLayoutMode.ListDetail
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                if (snapshot.header.scope is net.weero.measix.pilot.data.configuration.ConfigurationScope.Enterprise) {
+                    Icon(
+                        HugeIcons.Building03,
+                        contentDescription = stringResource(
+                            R.string.enterprise_current_space,
+                            enterpriseName ?: stringResource(R.string.enterprise_space),
+                        ),
+                        tint = LocalContentColor.current.copy(0.65f),
+                        modifier = Modifier.size(18.dp),
+                    )
+                }
+                Surface(
+                    onClick = {
+                        if (snapshot.nodes.isNotEmpty()) {
+                            titleState.open(snapshot.header.title)
+                        } else {
+                            toaster.show(editTitleWarning, type = ToastType.Warning)
+                        }
+                    },
+                    color = Color.Transparent,
+                    modifier = Modifier.weight(1f),
                 ) {
-                    if (showAvatar) {
-                        UIAvatar(
-                            name = assistant.name,
-                            value = assistant.avatar,
-                            modifier = Modifier.size(40.dp),
-                            loading = loading,
-                        )
-                    }
-                    Column {
-                        Text(
-                            text = snapshot.header.title.ifBlank { stringResource(R.string.chat_page_new_chat) },
-                            maxLines = 1,
-                            style = MaterialTheme.typography.titleMedium,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                        if (model != null && assistant != null) {
-                            Text(
-                                text = "${assistant.name.ifBlank { stringResource(R.string.assistant_page_default_assistant) }} / ${model.displayName}",
-                                overflow = TextOverflow.Ellipsis,
-                                maxLines = 1,
-                                color = LocalContentColor.current.copy(0.65f),
-                                style = MaterialTheme.typography.bodySmall,
+                    val showAvatar = assistant?.useAssistantAvatar == true &&
+                        LocalAdaptiveLayoutInfo.current.chatLayoutMode == ChatLayoutMode.ListDetail
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        if (showAvatar) {
+                            UIAvatar(
+                                name = assistant.name,
+                                value = assistant.avatar,
+                                modifier = Modifier.size(40.dp),
+                                loading = loading,
                             )
+                        }
+                        Column {
+                            Text(
+                                text = snapshot.header.title.ifBlank { stringResource(R.string.chat_page_new_chat) },
+                                maxLines = 1,
+                                style = MaterialTheme.typography.titleMedium,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                            if (snapshot.nodes.isNotEmpty() && model != null && assistant != null) {
+                                Text(
+                                    text = "${assistant.name.ifBlank { stringResource(R.string.assistant_page_default_assistant) }} / ${model.displayName}",
+                                    overflow = TextOverflow.Ellipsis,
+                                    maxLines = 1,
+                                    color = LocalContentColor.current.copy(0.65f),
+                                    style = MaterialTheme.typography.bodySmall,
+                                )
+                            }
                         }
                     }
                 }
             }
         },
         actions = {
-            net.weero.measix.pilot.ui.pages.enterprise.EnterpriseSpaceButton(showLabel = false)
             IconButton(
                 onClick = {
                     onClickMenu()

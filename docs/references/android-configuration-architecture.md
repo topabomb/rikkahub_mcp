@@ -70,7 +70,7 @@ updateLocal(latest personalSettings transform)
 
 背景写入由 `AssistantBackgroundService` 接受明确的目的：页面持有原 `RealmSelection`，生成工具持有原 `RealmAccess`，共享定义编辑器显式指定 User 助手。个人域写助手定义，企业域写完整主体下的 `AssistantUsagePreferences.background` 并关闭渐变，不复制整份个人配置，也不修改企业下发定义。生成背景按原域和图库 ID 读取；查看器读取 `ImageSource` 后复验目的域。`AssistantPreferenceChange.Background` 复用 Settings 唯一 typed 写协议，经 `ArtifactSettingsCoordinator` 与 `ArtifactStore.commitSettingsRoots` 在 Session → Settings → Artifact 顺序中验证引用、提交并移交创建 pin。失败精确回收未发布副本；旧图片由 Artifact 按所有域的引用统一回收。
 
-企业聊天的 `AssistantUsageEditor` 借用原 `ConversationAssistantTarget` 与 `ConversationViewLease`，不增加可持久化编辑器或第二配置快照。`EditUsage` 比较页面基线与编辑结果，只将实际修改字段应用到锁内最新偏好；未修改字段保持继承，定义字段、企业固定提示词/MCP 与继承子助手引用不能借此覆盖。额外子助手引用和标签选择使用 typed 字段命令；标签目录仍共享，清理统计所有主体使用偏好。`ResetUsage` 只删除当前主体对该助手的使用覆盖。
+企业聊天的 `AssistantUsageEditor` 借用原 `ConversationAssistantTarget` 与 `ConversationViewLease`，复用普通助手配置的分组和内容组件，不增加可持久化编辑器或第二配置快照。当前会话助手才能进入此写页面；抽屉和选择器中尚未选定的候选只把目录快照显示在同一分组表面，不构造写 target，企业候选也不进入个人 Settings 编辑器。`EditUsage` 比较页面基线与编辑结果，只将实际修改字段应用到锁内最新偏好；未修改字段保持继承，定义字段、企业固定提示词/MCP 与继承子助手引用不能借此覆盖。额外子助手引用和标签选择使用 typed 字段命令；标签目录仍共享，清理统计所有主体使用偏好。`ResetUsage` 只在企业域展示，只删除当前主体对该助手的使用覆盖。
 
 头像和背景导入经 `ConfigurationApplicationService.importAssistantImage` 创建原域配置资产，再通过既有 Settings → Artifact 提交引用并移交创建所有权。读取用 `RealmConfiguration` 保留原页面和 Session，允许 Personal 已提交配置根或本主体已提交 usage 根，拒绝其他企业及没有配置根的聊天资产。个人共享图片失去个人根后，只要本企业仍保留已提交引用，本企业可继续读取；个人配置读取不能借用企业根。预设消息文本编辑保留非文本 parts 和 metadata。企业 Prompt 预览不提供重新捕获全局目标的“设为背景”操作，背景在原助手使用设置中编辑。
 
@@ -210,7 +210,7 @@ Memory 已通过 MemoryAddress/MemoryService 按原域、主体与 Session 进�
 
 `EnterpriseApplicationService` 是正式空间 UI 的命令与查询入口，复用本地来源、同步、退出和 Portal owner。`RealmSwitchRequest` 冻结原 RealmSelection 与目标 RealmAccess，包含目标 Session 身份；Session 在锁内核验请求并等待宿主清理完成后才发布新选中空间。应用作用域持有已接受的切域任务，页面取消不取消该任务；原请求收尾在 Session 锁外等待。关闭或写盘失败保持原空间，已撤销文档不会复活。普通切域保留登录和原域生成，不走退出 CLOSING。进度投影不重新获取正在等待宿主的 Session 锁。
 
-聊天顶部、抽屉和设置页均有正式空间入口。`EnterprisePage` 展示空间、身份、阶段、已生效 generation 与最近配置同步，并提供一键示例、扫码、粘贴、示例二维码、同步、Portal、切域与原生退出确认。`EnterpriseVM` 只依赖 application service；接入文本不写 Activity saved state。退出确认冻结原请求，Portal 页面每次打开持有独立 UI 身份，旧关闭回调不能关闭新页面。宿主打开前验证消息监听、document-start 与完整站点清理三项能力；不支持时正式入口显示 WebView 包名、版本和缺失能力，其他打开失败显示诊断原因。错误文案及参数是同一个受原 selection 约束的投影；未交付宿主的补偿关闭不抢先触发页面关闭通知，避免吞掉打开错误。返回聊天重新经过 Startup 获取本域 lease。Portal 页面退出前台或离开组合时关闭原宿主；网页 logout 经原生确认复用退出服务，媒体请求使用同一文档和原生交互 owner。
+正式空间入口位于聊天抽屉昵称下方和设置页；聊天顶部只显示当前会话域的非交互建筑标记。`EnterprisePage` 展示空间、身份、阶段、已生效 generation 与最近配置同步，并提供一键示例、扫码、粘贴、示例二维码、同步、Portal、切域与原生退出确认。`EnterpriseVM` 只依赖 application service；接入文本不写 Activity saved state。退出确认冻结原请求，Portal 页面每次打开持有独立 UI 身份，旧关闭回调不能关闭新页面。宿主打开前验证消息监听、document-start 与完整站点清理三项能力；不支持时正式入口显示 WebView 包名、版本和缺失能力，其他打开失败显示诊断原因。错误文案及参数是同一个受原 selection 约束的投影；未交付宿主的补偿关闭不抢先触发页面关闭通知，避免吞掉打开错误。返回聊天重新经过 Startup 获取本域 lease。Portal 页面退出前台或离开组合时关闭原宿主；网页 logout 经原生确认复用退出服务，媒体请求使用同一文档和原生交互 owner。
 
 ## 3. Local Settings 顶层结构
 
@@ -654,7 +654,7 @@ Android Manifest 关闭 `allowBackup`；`backup_rules.xml` 和 `data_extraction_
 在原 `RealmSelection` 与配置 generation 下复验定义，生成新 Draft 请求；导航保留原聊天项及未发送输入，预填后等待用户发送。
 这一路径不扩展 Portal Bridge，不改变默认助手，也不提前建库或执行工具。
 
-ConversationConfigurationUiModel 只投影当前企业助手绑定的 Starter ID、标题与 prompt；用户助手或其他企业助手的开场白不混入。聊天输入框的输入模板菜单分别展示企业开场白与用户 QuickMessage。点击 Starter 在原页面授权仍有效时把文本追加到现有草稿（有文字时以空行分隔），保留附件；不自动发送、不创建 QuickMessage、不改企业定义。实际发送仍走当前会话的模型与资源准入。
+ConversationConfigurationUiModel 只投影当前企业助手绑定的 Starter ID、标题与 prompt；用户助手或其他企业助手的开场白不混入。企业域空对话引导卡以横向卡片展示这些 Starter，聊天输入框的输入模板菜单也展示同一列表；用户 QuickMessage 仍留在输入模板菜单。点击 Starter 在原页面授权仍有效时把文本追加到现有草稿（有文字时以空行分隔），保留附件；不自动发送、不创建 QuickMessage、不改企业定义。实际发送仍走当前会话的模型与资源准入。
 
 ### 助手管理工具的域内授权
 

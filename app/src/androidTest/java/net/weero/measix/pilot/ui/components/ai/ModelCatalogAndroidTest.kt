@@ -61,7 +61,7 @@ class ModelCatalogAndroidTest {
     @get:Rule val compose = createAndroidComposeRule<ComponentActivity>()
 
     @Test
-    fun managedChoiceAndDisabledPersonalChoiceRenderAndFailedSubmissionCanRetry() = runBlocking {
+    fun selectableManagedChoiceRendersWhileDisabledPersonalChoiceIsHiddenAndFailedSubmissionCanRetry() = runBlocking {
         val app = compose.activity.applicationContext
         val root = File(app.noBackupFilesDir, "model-catalog-test-${Uuid.random()}").apply { check(mkdirs()) }
         val scope = AppScope(Dispatchers.Default)
@@ -123,15 +123,7 @@ class ModelCatalogAndroidTest {
             }
             compose.onNodeWithText(missingSelection.toString()).performClick()
             compose.onNodeWithText(app.getString(R.string.configuration_reason_missing)).assertExists()
-            compose.onNodeWithText(personal.displayName).performScrollTo().assertIsNotEnabled()
-            compose.onNodeWithContentDescription(app.getString(R.string.edit)).performClick()
-            compose.onNodeWithText(app.getString(R.string.configuration_shared_edit_title)).assertExists()
-            compose.onNodeWithText(app.getString(android.R.string.ok)).performClick()
-            compose.runOnIdle {
-                assertFalse(picker.visible)
-                assertEquals(Screen.SettingProviderDetail(catalog.groups.single { it.userProviderId != null }.userProviderId.toString()), backStack.single())
-            }
-            compose.onNodeWithText(missingSelection.toString()).performClick()
+            compose.onNodeWithText(personal.displayName).assertDoesNotExist()
             compose.onNodeWithText(managed.displayName).performScrollTo().performClick()
             submissionStarted.await()
             compose.onNodeWithText(managed.displayName).assertIsNotEnabled().performTouchInput { click() }

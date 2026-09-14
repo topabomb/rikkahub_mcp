@@ -1279,7 +1279,10 @@ class SubAssistantRunCoordinator internal constructor(
 internal fun targetMcpPreparationFailure(
     snapshot: TurnMcpCapabilitySnapshot,
 ): String? = snapshot.serverOutcomes
-    .filter { outcome -> outcome.state != McpServerCapabilityState.READY }
+    .filter { outcome ->
+        outcome.state != McpServerCapabilityState.READY &&
+            outcome.state != McpServerCapabilityState.POLICY_BLOCKED
+    }
     .takeIf { it.isNotEmpty() }
     ?.joinToString(
         prefix = "Target MCP capability preparation failed: ",

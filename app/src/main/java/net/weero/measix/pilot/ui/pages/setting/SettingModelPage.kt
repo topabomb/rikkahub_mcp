@@ -3,8 +3,11 @@ package net.weero.measix.pilot.ui.pages.setting
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
@@ -23,8 +26,10 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.launch
@@ -87,15 +92,15 @@ fun SettingModelPage(vm: SettingVM = koinViewModel(), modelVM: ModelSettingsVM =
     }
 }
 
-private data class ModelSlotUi(val slot: ResourceSelectionSlot, val title: Int)
+private data class ModelSlotUi(val slot: ResourceSelectionSlot, val title: Int, val description: Int)
 private val modelSlots = listOf(
-    ModelSlotUi(ResourceSelectionSlot.CHAT_MODEL, R.string.setting_model_page_chat_model),
-    ModelSlotUi(ResourceSelectionSlot.FAST_MODEL, R.string.setting_model_page_fast_model),
-    ModelSlotUi(ResourceSelectionSlot.TITLE_MODEL, R.string.setting_model_page_title_model),
-    ModelSlotUi(ResourceSelectionSlot.SUGGESTION_MODEL, R.string.setting_model_page_suggestion_model),
-    ModelSlotUi(ResourceSelectionSlot.IMAGE_MODEL, R.string.setting_model_page_image_generation_model),
-    ModelSlotUi(ResourceSelectionSlot.ATTACHMENT_INSPECTION_MODEL, R.string.setting_model_page_attachment_inspection_model),
-    ModelSlotUi(ResourceSelectionSlot.COMPRESS_MODEL, R.string.setting_model_page_compress_model),
+    ModelSlotUi(ResourceSelectionSlot.CHAT_MODEL, R.string.setting_model_page_chat_model, R.string.setting_model_page_chat_model_desc),
+    ModelSlotUi(ResourceSelectionSlot.FAST_MODEL, R.string.setting_model_page_fast_model, R.string.setting_model_page_fast_model_desc),
+    ModelSlotUi(ResourceSelectionSlot.TITLE_MODEL, R.string.setting_model_page_title_model, R.string.setting_model_page_title_model_desc),
+    ModelSlotUi(ResourceSelectionSlot.SUGGESTION_MODEL, R.string.setting_model_page_suggestion_model, R.string.setting_model_page_suggestion_model_desc),
+    ModelSlotUi(ResourceSelectionSlot.IMAGE_MODEL, R.string.setting_model_page_image_generation_model, R.string.setting_model_page_image_generation_model_desc),
+    ModelSlotUi(ResourceSelectionSlot.ATTACHMENT_INSPECTION_MODEL, R.string.setting_model_page_attachment_inspection_model, R.string.setting_model_page_attachment_inspection_model_desc),
+    ModelSlotUi(ResourceSelectionSlot.COMPRESS_MODEL, R.string.setting_model_page_compress_model, R.string.setting_model_page_compress_model_desc),
 )
 
 @Composable
@@ -162,20 +167,38 @@ private fun ModelSettingsGroup(
                 headlineContent = { Text(stringResource(row.item.title)) },
                 supportingContent = {
                     Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                        Text(row.state.currentModel?.displayName ?: stringResource(when (row.defaultBehavior) {
-                            DefaultModelBehavior.FOLLOW_CHAT -> R.string.setting_model_page_follow_chat_model
-                            DefaultModelBehavior.FOLLOW_FAST -> R.string.configuration_follow_fast_model
-                            DefaultModelBehavior.DISABLED -> R.string.chat_readiness_memory_disabled
-                            else -> R.string.chat_readiness_model_not_configured
-                        }), color = MaterialTheme.colorScheme.primary)
+                        Text(
+                            stringResource(row.item.description),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                        )
                         row.unavailable?.let { Text(configurationUnavailableText(it), color = MaterialTheme.colorScheme.error) }
                     }
                 },
                 trailingContent = {
-                    if (canReset) IconButton(onClick = { vm.reset(selection, row.item.slot) }) {
-                        Icon(HugeIcons.Undo02,
-                            contentDescription = stringResource(R.string.configuration_restore_default))
-                    } else Icon(HugeIcons.ArrowRight01, contentDescription = null)
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            row.state.currentModel?.displayName ?: stringResource(when (row.defaultBehavior) {
+                                DefaultModelBehavior.FOLLOW_CHAT -> R.string.setting_model_page_follow_chat_model
+                                DefaultModelBehavior.FOLLOW_FAST -> R.string.configuration_follow_fast_model
+                                DefaultModelBehavior.DISABLED -> R.string.chat_readiness_memory_disabled
+                                else -> R.string.chat_readiness_model_not_configured
+                            }),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.widthIn(max = 132.dp),
+                        )
+                        if (canReset) IconButton(
+                            onClick = { vm.reset(selection, row.item.slot) },
+                            modifier = Modifier.size(40.dp),
+                        ) {
+                            Icon(HugeIcons.Undo02, contentDescription = stringResource(R.string.configuration_restore_default))
+                        } else {
+                            Icon(HugeIcons.ArrowRight01, contentDescription = null)
+                        }
+                    }
                 },
             )
             if (suggestionToggle && row.item.slot == ResourceSelectionSlot.CHAT_MODEL) item(

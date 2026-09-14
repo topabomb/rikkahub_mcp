@@ -1,10 +1,8 @@
 package net.weero.measix.pilot.ui.components.ai
 
 import android.util.Log
-import androidx.compose.foundation.LocalIndication
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.combinedClickable
-import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
@@ -13,7 +11,6 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
@@ -24,7 +21,6 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AssistChip
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
@@ -47,10 +43,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.hapticfeedback.HapticFeedbackType
-import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
@@ -70,11 +64,11 @@ import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.ArrowRight01
 import me.rerere.hugeicons.stroke.Brain02
 import me.rerere.hugeicons.stroke.Cancel01
-import me.rerere.hugeicons.stroke.DragDropHorizontal
 import me.rerere.hugeicons.stroke.Favourite
 import me.rerere.hugeicons.stroke.Image03
 import me.rerere.hugeicons.stroke.Search01
 import me.rerere.hugeicons.stroke.Text
+import me.rerere.hugeicons.stroke.Tick02
 import me.rerere.hugeicons.stroke.Tools
 import net.weero.measix.pilot.R
 import net.weero.measix.pilot.Screen
@@ -98,8 +92,6 @@ import net.weero.measix.pilot.ui.theme.extendColors
 import net.weero.measix.pilot.utils.toDp
 import net.weero.measix.pilot.utils.userVisibleDiagnostic
 import org.koin.compose.koinInject
-import sh.calvin.reorderable.ReorderableItem
-import sh.calvin.reorderable.rememberReorderableLazyListState
 
 class ModelListState internal constructor(
     modelId: ConfigurationReference?,
@@ -115,7 +107,7 @@ class ModelListState internal constructor(
     var visible by mutableStateOf(false)
         private set
     val currentModel: Model? get() = catalog.find(modelId)?.model?.takeIf { it.type == type }
-    internal val filteredGroups: List<ModelGroupUiModel> get() = catalog.filterModels { it.type == type }.groups
+    internal val filteredGroups: List<ModelGroupUiModel> get() = catalog.selectableGroups(type)
 
     fun open() { visible = true }
     fun close() { visible = false }
@@ -148,6 +140,7 @@ fun ModelSelectorButton(
     onlyIcon: Boolean = false,
     onClear: (() -> Unit)? = null,
     placeholder: String? = null,
+    onOpen: (() -> Unit)? = null,
 ) {
     val model = state.currentModel
     val unresolvedReference = state.modelId?.takeIf { model == null }
@@ -158,6 +151,7 @@ fun ModelSelectorButton(
         ) {
             TextButton(
                 onClick = {
+                    onOpen?.invoke()
                     state.open()
                 },
                 modifier = modifier
@@ -194,6 +188,7 @@ fun ModelSelectorButton(
     } else {
         IconButton(
             onClick = {
+                onOpen?.invoke()
                 state.open()
             },
         ) {
@@ -226,6 +221,9 @@ internal data class AssistantModelSelectionUi(
     val selectedModelId: ConfigurationReference?,
     val modeLabel: String?,
 )
+
+internal fun AssistantModelSelectionUi.quickRestoreAssistantDefault(): ModelSelectionAction? =
+    actions.firstOrNull()?.takeUnless { it.selected }
 
 /** One presentation owns the distinction between definition inheritance, space inheritance and an explicit model. */
 @Composable
@@ -287,7 +285,9 @@ internal fun ModelListSheet(
     state: ModelListState,
     onSelect: suspend (Model) -> Unit,
     additionalActions: List<ModelSelectionAction> = emptyList(),
+    compactAction: ModelSelectionAction? = null,
     selectedModelId: ConfigurationReference? = state.modelId,
+    selectedModelUsesDefault: Boolean = false,
     configurationCommands: ConfigurationApplicationService = koinInject(),
     configurationQueries: ConfigurationQueryService = koinInject(),
 ) {
@@ -327,7 +327,7 @@ internal fun ModelListSheet(
         Column(
             modifier = Modifier
                 .padding(8.dp)
-                .fillMaxHeight(0.8f)
+                .fillMaxWidth()
                 .imePadding(),
             verticalArrangement = Arrangement.spacedBy(4.dp)
         ) {
@@ -361,6 +361,15 @@ internal fun ModelListSheet(
                     }
                 }
             }
+            compactAction?.let { action ->
+                TextButton(
+                    enabled = !submitting && action.unavailableReason == null,
+                    onClick = { submit(action.commit) },
+                    modifier = Modifier.align(Alignment.End),
+                ) {
+                    Text(action.label)
+                }
+            }
             ModelList(
                 currentModel = selectedModelId,
                 providers = state.filteredGroups,
@@ -369,6 +378,7 @@ internal fun ModelListSheet(
                 configurationQueries = configurationQueries,
                 modelType = state.type,
                 selectionEnabled = !submitting,
+                selectedModelUsesDefault = selectedModelUsesDefault,
                 onSelect = { model -> submit { onSelect(model) } },
                 onDismiss = {
                     dismiss()
@@ -387,15 +397,13 @@ private fun ColumnScope.ModelList(
     configurationQueries: ConfigurationQueryService,
     modelType: ModelType,
     selectionEnabled: Boolean,
+    selectedModelUsesDefault: Boolean,
     onSelect: (Model) -> Unit,
     onDismiss: () -> Unit
 ) {
     val coroutineScope = rememberCoroutineScope()
     val navController = LocalNavController.current
     var commandError by remember(catalog.selection) { mutableStateOf<String?>(null) }
-    var pendingSharedProvider by remember(catalog.selection) {
-        mutableStateOf<ConfigurationReference.User?>(null)
-    }
     suspend fun command(action: suspend () -> Unit) {
         try { action(); commandError = null }
         catch (error: kotlinx.coroutines.CancellationException) { throw error }
@@ -409,24 +417,31 @@ private fun ColumnScope.ModelList(
         else kotlinx.coroutines.flow.flowOf(catalog.selections.favoriteModels)
     }
     val favoriteModelIds by favoriteFlow.collectAsStateWithLifecycle(initialValue = emptyList())
-    val favoriteModels = catalog.favorites(favoriteModelIds, modelType)
+    val favoriteModels = catalog.selectableFavorites(favoriteModelIds, modelType)
 
     var searchKeywords by remember { mutableStateOf("") }
 
     val typeFilteredModelsByProvider = remember(providers, modelType) {
-        providers.associate { provider ->
-            provider.id to provider.models.fastFilter { it.model.type == modelType }
-        }
+        providers.associate { provider -> provider.id to provider.models }
     }
 
     val searchFilteredModelsByProvider = remember(providers, modelType, searchKeywords) {
         providers.associate { provider ->
             provider.id to provider.models.fastFilter {
-                it.model.type == modelType && it.model.displayName.contains(searchKeywords, true)
+                it.model.displayName.contains(searchKeywords, true)
             }
         }
     }
-    val leadingUnresolvedCount = if (currentModel != null && catalog.find(currentModel) == null) 1 else 0
+    val displayedFavorites = remember(favoriteModels, searchKeywords) {
+        favoriteModels.filter { favorite ->
+            searchKeywords.isBlank() || favorite.choice?.model?.displayName?.contains(searchKeywords, true) == true
+        }
+    }
+    val displayedProviders = remember(providers, searchFilteredModelsByProvider) {
+        providers.filter { searchFilteredModelsByProvider[it.id].orEmpty().isNotEmpty() }
+    }
+    val unavailableSelection = catalog.unavailableSelection(currentModel)
+    val leadingUnresolvedCount = if (unavailableSelection != null) 1 else 0
 
     // 计算当前选中模型的位置
     val selectedModelPosition = remember(currentModel, favoriteModels, providers, typeFilteredModelsByProvider, leadingUnresolvedCount) {
@@ -473,43 +488,17 @@ private fun ColumnScope.ModelList(
     val lazyListState = rememberLazyListState(
         initialFirstVisibleItemIndex = selectedModelPosition
     )
-    val reorderableState = rememberReorderableLazyListState(lazyListState) { from, to ->
-        // 计算favorite models在列表中的位置偏移
-        var favoriteStartIndex = leadingUnresolvedCount
-        if (providers.isEmpty()) {
-            favoriteStartIndex = 1 // no providers item
-        }
-        if (favoriteModels.isNotEmpty()) {
-            favoriteStartIndex += 1 // favorite header
-        }
-
-        val fromIndex = from.index - favoriteStartIndex
-        val toIndex = to.index - favoriteStartIndex
-
-        // 只处理favorite models范围内的拖拽
-        if (fromIndex >= 0 && toIndex >= 0 &&
-            fromIndex < favoriteModels.size && toIndex < favoriteModels.size
-        ) {
-            val fromModelId = favoriteModels[fromIndex].reference
-            val toModelId = favoriteModels[toIndex].reference
-            coroutineScope.launch {
-                command { configurationCommands.moveModelFavorite(catalog.selection, fromModelId, toModelId) }
-            }
-        }
-    }
-    val haptic = LocalHapticFeedback.current
-
-    val providerPositions = remember(providers, favoriteModels, searchFilteredModelsByProvider, leadingUnresolvedCount) {
+    val providerPositions = remember(displayedProviders, displayedFavorites, searchFilteredModelsByProvider, leadingUnresolvedCount) {
         var currentIndex = leadingUnresolvedCount
-        if (providers.isEmpty()) {
+        if (displayedProviders.isEmpty()) {
             currentIndex = 1 // no providers item
         }
-        if (favoriteModels.isNotEmpty()) {
+        if (displayedFavorites.isNotEmpty()) {
             currentIndex += 1 // favorite header
-            currentIndex += favoriteModels.size // favorite models
+            currentIndex += displayedFavorites.size // favorite models
         }
 
-        providers.map { provider ->
+        displayedProviders.map { provider ->
             val position = currentIndex
             currentIndex += 1 // provider header
             currentIndex += searchFilteredModelsByProvider[provider.id].orEmpty().size
@@ -552,12 +541,11 @@ private fun ColumnScope.ModelList(
         verticalArrangement = Arrangement.spacedBy(8.dp),
         contentPadding = PaddingValues(8.dp),
         modifier = Modifier
-            .weight(1f)
+            .weight(1f, fill = false)
             .fillMaxWidth(),
     ) {
-        val unresolvedSelection = currentModel?.takeIf { catalog.find(it) == null }
-        if (unresolvedSelection != null) {
-            item(key = "selected-unresolved:$unresolvedSelection") {
+        if (unavailableSelection != null) {
+            item(key = "selected-unavailable:$currentModel") {
                 Row(
                     modifier = Modifier.fillMaxWidth().padding(16.dp),
                     verticalAlignment = Alignment.CenterVertically,
@@ -565,12 +553,9 @@ private fun ColumnScope.ModelList(
                 ) {
                     RadioButton(selected = true, enabled = false, onClick = null)
                     Column(Modifier.weight(1f)) {
-                        Text(unresolvedSelection.toString(), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(unavailableSelection.first, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         Text(
-                            configurationUnavailableText(
-                                catalog.unresolvedModels[unresolvedSelection]
-                                    ?: ConfigurationUnavailableReason.REFERENCE_MISSING,
-                            ),
+                            configurationUnavailableText(unavailableSelection.second),
                             color = MaterialTheme.colorScheme.error,
                             style = MaterialTheme.typography.bodySmall,
                         )
@@ -578,34 +563,43 @@ private fun ColumnScope.ModelList(
                 }
             }
         }
-        if (providers.isEmpty()) {
+        if (displayedProviders.isEmpty() && displayedFavorites.isEmpty()) {
             item {
                 Column(modifier = Modifier.padding(8.dp)) {
                     Text(
-                        text = stringResource(R.string.model_list_no_providers),
+                        text = stringResource(
+                            if (searchKeywords.isBlank()) R.string.model_list_no_providers
+                            else R.string.search_page_no_results,
+                        ),
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.extendColors.gray6,
                     )
-                    TextButton(onClick = {
-                        onDismiss()
-                        navController.navigate(if (catalog.selection?.access is RealmAccess.Enterprise) {
-                            Screen.Enterprise
-                        } else {
-                            Screen.SettingProvider
-                        })
-                    }) {
-                        Text(stringResource(if (catalog.selection?.access is RealmAccess.Enterprise) {
-                            R.string.enterprise_spaces
-                        } else {
-                            R.string.setting_provider_page_title
-                        }))
+                    if (searchKeywords.isBlank()) {
+                        TextButton(onClick = {
+                            onDismiss()
+                            navController.navigate(if (catalog.selection?.access is RealmAccess.Enterprise) {
+                                Screen.Enterprise
+                            } else {
+                                Screen.SettingProvider
+                            })
+                        }) {
+                            Text(stringResource(if (catalog.selection?.access is RealmAccess.Enterprise) {
+                                R.string.enterprise_spaces
+                            } else {
+                                R.string.setting_provider_page_title
+                            }))
+                        }
+                    } else {
+                        TextButton(onClick = { searchKeywords = "" }) {
+                            Text(stringResource(R.string.clear_search))
+                        }
                     }
                 }
             }
         }
 
-        if (favoriteModels.isNotEmpty()) {
-            stickyHeader {
+        if (displayedFavorites.isNotEmpty()) {
+            item(key = "favorite-header") {
                 Text(
                     text = stringResource(R.string.model_list_favorite),
                     style = MaterialTheme.typography.labelMedium,
@@ -616,34 +610,19 @@ private fun ColumnScope.ModelList(
             }
 
             items(
-                items = favoriteModels,
+                items = displayedFavorites,
                 key = { "favorite:" + it.reference.toString() }
             ) { favorite ->
                 val model = favorite.choice
                 val provider = favorite.group
-                if (model == null || provider == null) {
-                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().padding(16.dp)) {
-                        Column(Modifier.weight(1f)) {
-                            Text(favorite.reference.toString(), maxLines = 1, overflow = TextOverflow.Ellipsis)
-                            Text(configurationUnavailableText(requireNotNull(favorite.unavailableReason)),
-                                color = MaterialTheme.colorScheme.error)
-                        }
-                        IconButton(onClick = { coroutineScope.launch {
-                            command { configurationCommands.setModelFavorite(catalog.selection, favorite.reference, false) }
-                        } }) { Icon(HeartIcon, contentDescription = stringResource(R.string.configuration_remove_favorite)) }
-                    }
-                } else ReorderableItem(
-                    state = reorderableState,
-                    key = "favorite:" + model.model.id.toString()
-                ) { isDragging ->
+                if (model != null && provider != null) {
                     ModelItem(
                         model = model,
                         selectionEnabled = selectionEnabled,
                         onSelect = onSelect,
-                        modifier = Modifier
-                            .scale(if (isDragging) 0.95f else 1f)
-                            .animateItem(),
+                        modifier = Modifier.animateItem(),
                         select = model.model.id == currentModel,
+                        selectedUsesDefault = selectedModelUsesDefault,
                         tail = {
                             IconButton(
                                 onClick = {
@@ -654,36 +633,21 @@ private fun ColumnScope.ModelList(
                             ) {
                                 Icon(
                                     HeartIcon,
-                                    contentDescription = null,
+                                    contentDescription = stringResource(R.string.configuration_remove_favorite),
                                     modifier = Modifier.size(20.dp),
                                     tint = MaterialTheme.colorScheme.primary,
                                 )
                             }
                         },
-                        dragHandle = {
-                            Icon(
-                                imageVector = HugeIcons.DragDropHorizontal,
-                                contentDescription = null,
-                                modifier = Modifier.longPressDraggableHandle(
-                                    onDragStarted = {
-                                        haptic.performHapticFeedback(HapticFeedbackType.GestureThresholdActivate)
-                                    },
-                                    onDragStopped = {
-                                        haptic.performHapticFeedback(HapticFeedbackType.GestureEnd)
-                                    }
-                                )
-                            )
-                        }
                     )
                 }
             }
         }
 
-        providers.fastForEach { providerSetting ->
-            stickyHeader(key = "header:${providerSetting.id}") {
+        displayedProviders.fastForEach { providerSetting ->
+            item(key = "header:${providerSetting.id}") {
                 Row(
                     modifier = Modifier
-                        .padding(horizontal = 8.dp)
                         .padding(bottom = 4.dp, top = 8.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
@@ -692,28 +656,6 @@ private fun ColumnScope.ModelList(
                         style = MaterialTheme.typography.labelMedium,
                         color = MaterialTheme.colorScheme.primary,
                     )
-                    if (catalog.selection?.access is RealmAccess.Enterprise) {
-                        Text(stringResource(if (providerSetting.userProviderId == null) R.string.configuration_source_enterprise
-                            else R.string.configuration_source_user), style = MaterialTheme.typography.labelSmall,
-                            modifier = Modifier.padding(start = 8.dp))
-                    }
-
-                    Spacer(modifier = Modifier.weight(1f))
-
-                    providerSetting.userProviderId?.let { providerId ->
-                        ProviderBalanceText(providerId = providerId, style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.primary)
-                        IconButton(onClick = {
-                            if (catalog.selection?.access is RealmAccess.Enterprise) {
-                                pendingSharedProvider = providerId
-                            } else {
-                                onDismiss()
-                                navController.navigate(Screen.SettingProviderDetail(providerId.toString()))
-                            }
-                        }) {
-                            Icon(HugeIcons.ArrowRight01, contentDescription = stringResource(R.string.edit))
-                        }
-                    }
                 }
             }
 
@@ -728,6 +670,7 @@ private fun ColumnScope.ModelList(
                     onSelect = onSelect,
                     modifier = Modifier.animateItem(),
                     select = currentModel == model.model.id,
+                    selectedUsesDefault = selectedModelUsesDefault,
                     tail = {
                         IconButton(
                             enabled = favorite || model.canSelect,
@@ -740,14 +683,14 @@ private fun ColumnScope.ModelList(
                             if (favorite) {
                                 Icon(
                                     HeartIcon,
-                                    contentDescription = null,
+                                    contentDescription = stringResource(R.string.configuration_remove_favorite),
                                     modifier = Modifier.size(20.dp),
                                     tint = MaterialTheme.colorScheme.primary,
                                 )
                             } else {
                                 Icon(
                                     imageVector = HugeIcons.Favourite,
-                                    contentDescription = null,
+                                    contentDescription = stringResource(R.string.chat_message_add_favorite),
                                     modifier = Modifier.size(20.dp)
                                 )
                             }
@@ -771,7 +714,7 @@ private fun ColumnScope.ModelList(
                     val currentProvider = providerPositions.entries.findLast {
                         index > it.value
                     }
-                    val index = providers.indexOfFirst { it.id == currentProvider?.key }
+                    val index = displayedProviders.indexOfFirst { it.id == currentProvider?.key }
                     if (index >= 0) {
                         providerBadgeListState.animateScrollToItem(index)
                     } else {
@@ -782,14 +725,16 @@ private fun ColumnScope.ModelList(
                 }
             }
     }
-    if (providers.size > 1) {
+    val showProviderNavigation = displayedProviders.size >= 4 &&
+        displayedProviders.sumOf { searchFilteredModelsByProvider[it.id].orEmpty().size } >= 24
+    if (showProviderNavigation) {
         LazyRow(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             modifier = Modifier.fillMaxWidth(),
             contentPadding = PaddingValues(horizontal = 8.dp),
             state = providerBadgeListState
         ) {
-            items(providers) { provider ->
+            items(displayedProviders) { provider ->
                 AssistChip(
                     onClick = {
                         val position = providerPositions[provider.id] ?: 0
@@ -807,25 +752,6 @@ private fun ColumnScope.ModelList(
             }
         }
     }
-    pendingSharedProvider?.let { providerId ->
-        AlertDialog(
-            onDismissRequest = { pendingSharedProvider = null },
-            title = { Text(stringResource(R.string.configuration_shared_edit_title)) },
-            text = { Text(stringResource(R.string.configuration_shared_edit_warning)) },
-            confirmButton = {
-                TextButton(onClick = {
-                    pendingSharedProvider = null
-                    onDismiss()
-                    navController.navigate(Screen.SettingProviderDetail(providerId.toString()))
-                }) { Text(stringResource(android.R.string.ok)) }
-            },
-            dismissButton = {
-                TextButton(onClick = { pendingSharedProvider = null }) {
-                    Text(stringResource(android.R.string.cancel))
-                }
-            },
-        )
-    }
 }
 
 @Composable
@@ -833,12 +759,11 @@ private fun ModelItem(
     model: ModelChoiceUiModel,
     selectionEnabled: Boolean,
     select: Boolean,
+    selectedUsesDefault: Boolean = false,
     onSelect: (Model) -> Unit,
     modifier: Modifier = Modifier,
     tail: @Composable RowScope.() -> Unit = {},
-    dragHandle: @Composable (RowScope.() -> Unit)? = null
 ) {
-    val interactionSource = remember { MutableInteractionSource() }
     Card(
         modifier = modifier,
         colors = CardDefaults.cardColors(
@@ -848,22 +773,22 @@ private fun ModelItem(
     ) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(vertical = 12.dp, horizontal = 16.dp)
+                .padding(vertical = 8.dp, horizontal = 12.dp)
         ) {
             Row(
                 modifier = Modifier
                     .weight(1f)
-                    .combinedClickable(
+                    .selectable(
+                        selected = select,
                         enabled = selectionEnabled && model.canSelect,
                         onClick = { onSelect(model.model) },
-                        interactionSource = interactionSource,
-                        indication = LocalIndication.current
+                        role = Role.RadioButton,
                     ),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 Surface(
                     color = MaterialTheme.colorScheme.secondaryContainer,
@@ -873,7 +798,7 @@ private fun ModelItem(
                         name = model.model.modelId,
                         modifier = Modifier
                             .padding(4.dp)
-                            .size(32.dp)
+                            .size(28.dp)
                     )
                 }
                 Column(
@@ -891,20 +816,44 @@ private fun ModelItem(
                             color = MaterialTheme.colorScheme.error)
                     }
 
-                    FlowRow(
-                        modifier = Modifier
-                            .fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(4.dp),
-                        verticalArrangement = Arrangement.spacedBy(2.dp),
-                    ) {
-                        ModelModalityTag(model = model.model)
-
-                        ModelAbilityTag(model = model.model)
+                    CompactModelCapabilities(model.model)
+                }
+                if (select) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        if (selectedUsesDefault) Text(
+                            stringResource(R.string.model_list_default_badge),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Icon(
+                            HugeIcons.Tick02,
+                            contentDescription = stringResource(R.string.model_list_selected),
+                            modifier = Modifier.size(18.dp),
+                        )
                     }
                 }
                 tail()
             }
-            dragHandle?.let { it() }
+        }
+    }
+}
+
+@Composable
+private fun CompactModelCapabilities(model: Model) {
+    val capabilities = buildList {
+        if (Modality.IMAGE in model.inputModalities) add(HugeIcons.Image03 to R.string.setting_provider_page_image)
+        if (ModelAbility.TOOL in model.abilities) add(HugeIcons.Tools to R.string.setting_mcp_page_tools)
+        if (ModelAbility.REASONING in model.abilities) add(HugeIcons.Brain02 to R.string.setting_provider_page_reasoning)
+    }
+    if (capabilities.isEmpty()) return
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        capabilities.forEach { (icon, label) ->
+            Icon(
+                icon,
+                contentDescription = stringResource(label),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(14.dp),
+            )
         }
     }
 }

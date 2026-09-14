@@ -97,6 +97,7 @@ import net.weero.measix.pilot.data.datastore.getAssistantById
 import net.weero.measix.pilot.data.model.Assistant
 import net.weero.measix.pilot.data.model.MessageNode
 import net.weero.measix.pilot.service.ChatError
+import net.weero.measix.pilot.service.ConversationStarterUiModel
 import net.weero.measix.pilot.service.runtime.ConversationPresentationSnapshot
 import net.weero.measix.pilot.service.runtime.ConversationPresentation
 import net.weero.measix.pilot.service.runtime.TurnLivePhase
@@ -138,6 +139,7 @@ internal fun ChatList(
     settings: Settings,
     readiness: ConversationReadiness,
     assistant: Assistant?,
+    starters: List<ConversationStarterUiModel>,
     modelById: Map<me.rerere.common.configuration.ConfigurationReference, me.rerere.ai.provider.Model>,
     hazeState: HazeState,
     errors: List<ChatError> = emptyList(),
@@ -159,6 +161,7 @@ internal fun ChatList(
     onSwitchAssistant: () -> Unit,
     onManageAssistant: () -> Unit,
     onMemoryClick: () -> Unit,
+    onStarterClick: (ConversationStarterUiModel) -> Unit,
     onToolDecision: (suspend (locator: ToolCallLocator, decision: ToolInteractionDecision) -> Boolean)? = null,
     onSubAssistantAnswer: (suspend (runId: String, interactionId: String, answer: String) -> Boolean)? = null,
     onToggleFavorite: ((MessageNode) -> Unit)? = null,
@@ -193,6 +196,7 @@ internal fun ChatList(
                 settings = settings,
                 readiness = readiness,
                 assistant = assistant,
+                starters = starters,
                 modelById = modelById,
                 hazeState = hazeState,
                 errors = errors,
@@ -213,6 +217,7 @@ internal fun ChatList(
                 onSwitchAssistant = onSwitchAssistant,
                 onManageAssistant = onManageAssistant,
                 onMemoryClick = onMemoryClick,
+                onStarterClick = onStarterClick,
                 animatedVisibilityScope = this@AnimatedContent,
                 onToolDecision = onToolDecision,
                 onSubAssistantAnswer = onSubAssistantAnswer,
@@ -235,6 +240,7 @@ private fun ChatListNormal(
     settings: Settings,
     readiness: ConversationReadiness,
     assistant: Assistant?,
+    starters: List<ConversationStarterUiModel>,
     modelById: Map<me.rerere.common.configuration.ConfigurationReference, me.rerere.ai.provider.Model>,
     hazeState: HazeState,
     errors: List<ChatError>,
@@ -255,6 +261,7 @@ private fun ChatListNormal(
     onSwitchAssistant: () -> Unit,
     onManageAssistant: () -> Unit,
     onMemoryClick: () -> Unit,
+    onStarterClick: (ConversationStarterUiModel) -> Unit,
     animatedVisibilityScope: AnimatedVisibilityScope,
     onToolDecision: (suspend (locator: ToolCallLocator, decision: ToolInteractionDecision) -> Boolean)? = null,
     onSubAssistantAnswer: (suspend (runId: String, interactionId: String, answer: String) -> Boolean)? = null,
@@ -407,6 +414,8 @@ private fun ChatListNormal(
                                     readiness = readiness,
                                     assistant = assistant,
                                     compact = false,
+                                    enterprise = snapshot.header.scope is net.weero.measix.pilot.data.configuration.ConfigurationScope.Enterprise,
+                                    starters = starters,
                                     onModelClick = onReadinessModelClick,
                                     onMcpClick = onReadinessMcpClick,
                                     onLocalToolsClick = onReadinessLocalToolsClick,
@@ -414,6 +423,7 @@ private fun ChatListNormal(
                                     onSwitchAssistant = onSwitchAssistant,
                                     onManageAssistant = onManageAssistant,
                                     onMemoryClick = onMemoryClick,
+                                    onStarterClick = onStarterClick,
                                 )
                             }
                         }
@@ -427,6 +437,8 @@ private fun ChatListNormal(
                                 readiness = readiness,
                                 assistant = assistant,
                                 compact = true,
+                                enterprise = snapshot.header.scope is net.weero.measix.pilot.data.configuration.ConfigurationScope.Enterprise,
+                                starters = emptyList(),
                                 onModelClick = onReadinessModelClick,
                                 onMcpClick = onReadinessMcpClick,
                                 onLocalToolsClick = onReadinessLocalToolsClick,
@@ -434,6 +446,7 @@ private fun ChatListNormal(
                                 onSwitchAssistant = onSwitchAssistant,
                                 onManageAssistant = onManageAssistant,
                                 onMemoryClick = onMemoryClick,
+                                onStarterClick = onStarterClick,
                             )
                         }
                     }

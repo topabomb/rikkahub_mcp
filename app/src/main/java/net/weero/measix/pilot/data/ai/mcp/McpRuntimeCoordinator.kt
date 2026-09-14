@@ -6,6 +6,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.ensureActive
 import net.weero.measix.pilot.data.configuration.ConfigurationCategory
 import net.weero.measix.pilot.data.configuration.ConfigurationKey
+import net.weero.measix.pilot.data.configuration.ConfigurationUnavailableReason
 import net.weero.measix.pilot.data.configuration.ResolvedConfiguration
 import net.weero.measix.pilot.data.enterprise.EnterpriseBindingLease
 import net.weero.measix.pilot.data.enterprise.EnterpriseSessionPhase
@@ -63,6 +64,17 @@ import java.util.concurrent.TimeUnit
 import kotlin.random.Random
 
 private const val TAG = "McpRuntimeCoordinator"
+
+internal enum class McpTurnPreparationFailureReason {
+    REFERENCE_UNAVAILABLE,
+    REQUIRED_GATEWAY_UNAVAILABLE,
+}
+
+internal class McpTurnPreparationException(
+    val reason: McpTurnPreparationFailureReason,
+    val serverNames: List<String>,
+    diagnostics: List<String> = serverNames,
+) : IllegalStateException("${reason.name.lowercase()}:${diagnostics.joinToString(",")}")
 
 /** Android 前台信号 adapter，使 [McpRuntimeCoordinator] 的生命周期订阅可在 JVM 测试中替换。 */
 fun interface ForegroundObserver {
@@ -445,9 +457,22 @@ class McpRuntimeCoordinator internal constructor(
         val original = requireNotNull(bindings)
         check(original.version == captured.model.enterpriseVersion) { "enterprise_configuration_changed_during_capture" }
         val interactionId = "int_$turnId"
-        captured.assistant.mcpServers.forEach { reference ->
+        val policyBlocked = captured.assistant.mcpServers.mapNotNull { reference ->
             val permission = captured.configuration.access(ConfigurationCategory.MCP, reference)
-            check(permission.canExecute) { "mcp_reference_unavailable:$reference:${permission.unavailableReason}" }
+            if (permission.canExecute) return@mapNotNull null
+            val name = captured.configuration.catalog[ConfigurationKey(ConfigurationCategory.MCP, reference)]?.name
+                ?: reference.toString()
+            if (reference is ConfigurationReference.User &&
+                permission.unavailableReason == ConfigurationUnavailableReason.USER_CATEGORY_NOT_ALLOWED
+            ) {
+                McpServerCapabilityOutcome(reference, name, McpServerCapabilityState.POLICY_BLOCKED, 0)
+            } else {
+                throw McpTurnPreparationException(
+                    McpTurnPreparationFailureReason.REFERENCE_UNAVAILABLE,
+                    listOf(name),
+                    listOf("$reference:${permission.unavailableReason}"),
+                )
+            }
         }
         val definitions = connectionDefinitions(access, captured.configuration, captured.userSettings, captured.assistant, original, interactionId)
         val targets = definitions.map { definition ->
@@ -505,12 +530,20 @@ class McpRuntimeCoordinator internal constructor(
             coroutineScope { targets.map { async { it.awaitCurrentOperations() } }.forEach { it.await() } }
             true
         } == true
-        val result = captureCapabilities(definitions, access, interactionId, timedOut = !settled)
+        val result = captureCapabilities(definitions, access, interactionId, timedOut = !settled).let { capturedCapabilities ->
+            capturedCapabilities.copy(serverOutcomes = policyBlocked + capturedCapabilities.serverOutcomes)
+        }
         val requiredGateways = captured.configuration.catalog.values.filter {
             it.key.category == ConfigurationCategory.GATEWAY && it.access.requiredEnabled
         }.mapTo(hashSetOf()) { it.key.reference }
-        check(result.serverOutcomes.none { it.serverId in requiredGateways && it.state != McpServerCapabilityState.READY }) {
-            "required_gateway_unavailable"
+        val unavailableRequiredGateways = result.serverOutcomes.filter {
+            it.serverId in requiredGateways && it.state != McpServerCapabilityState.READY
+        }
+        if (unavailableRequiredGateways.isNotEmpty()) {
+            throw McpTurnPreparationException(
+                McpTurnPreparationFailureReason.REQUIRED_GATEWAY_UNAVAILABLE,
+                unavailableRequiredGateways.map { it.serverName },
+            )
         }
         return result
     }
@@ -524,7 +557,9 @@ class McpRuntimeCoordinator internal constructor(
         interactionId: String,
     ): List<McpConnectionDefinition> = buildList {
         val enterprise = requireNotNull(configuration.enterpriseConfiguration)
-        assistant.mcpServers.forEach { id ->
+        assistant.mcpServers.filter {
+            configuration.access(ConfigurationCategory.MCP, it).canExecute
+        }.forEach { id ->
             when (id) {
                 is ConfigurationReference.User -> settings.mcpServers.find { it.id == id }?.let { add(McpConnectionDefinition.User(it)) }
                 is ConfigurationReference.Enterprise -> enterprise.mcpServers.find { it.id == id.id }?.let { definition ->

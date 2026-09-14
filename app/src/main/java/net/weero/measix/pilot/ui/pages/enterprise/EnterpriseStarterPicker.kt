@@ -4,7 +4,6 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
@@ -63,7 +62,7 @@ internal fun EnterpriseStarterPicker(
     var failure by remember { mutableStateOf<String?>(null) }
 
     AdaptiveModal(onDismissRequest = onDismiss) {
-        Column(Modifier.fillMaxHeight(0.9f).fillMaxWidth()) {
+        Column(Modifier.fillMaxWidth()) {
             Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp)) {
                 if (selected != null) {
                     IconButton(onClick = { selected = null; failure = null }, enabled = !opening) {
@@ -112,7 +111,7 @@ internal fun EnterpriseStarterPicker(
                     style = MaterialTheme.typography.bodySmall,
                 )
                 LazyColumn(
-                    Modifier.weight(1f),
+                    Modifier.weight(1f, fill = false),
                     contentPadding = PaddingValues(16.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
@@ -129,7 +128,7 @@ internal fun EnterpriseStarterPicker(
                 }
             } else {
                 Column(
-                    Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(16.dp),
+                    Modifier.weight(1f, fill = false).verticalScroll(rememberScrollState()).padding(16.dp),
                     verticalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
                     Text(starter.title, style = MaterialTheme.typography.titleLarge)

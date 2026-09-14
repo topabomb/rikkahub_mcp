@@ -15,6 +15,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
@@ -68,29 +69,38 @@ private data class StarterPresentation(
 @Composable
 internal fun EnterpriseSpaceButton(
     modifier: Modifier = Modifier,
-    showLabel: Boolean = true,
     vm: EnterpriseVM = koinViewModel(),
 ) {
     val state by vm.overview.collectAsStateWithLifecycle()
     val nav = LocalNavController.current
     val access = state?.selection?.access
     val label = if (access is RealmAccess.Enterprise) {
-        val name = state?.enterpriseName ?: stringResource(R.string.enterprise_space)
-        if (access.scope.authority.isLocal) stringResource(R.string.enterprise_local_badge, name) else name
+        state?.enterpriseName ?: stringResource(R.string.enterprise_space)
     } else stringResource(R.string.enterprise_personal)
+    val local = access is RealmAccess.Enterprise && access.scope.authority.isLocal
+    val showLocalIndicator = local && LocalDensity.current.fontScale <= 1.15f
     val open = { nav.navigate(Screen.Enterprise) { launchSingleTop = true } }
-    if (showLabel) {
-        TextButton(onClick = open, modifier = modifier) {
-            Icon(if (access is RealmAccess.Enterprise) HugeIcons.Building03 else HugeIcons.User,
-                contentDescription = null, modifier = Modifier.size(18.dp))
+    TextButton(
+        onClick = open,
+        modifier = modifier,
+        contentPadding = PaddingValues(horizontal = 0.dp),
+    ) {
+        Icon(if (access is RealmAccess.Enterprise) HugeIcons.Building03 else HugeIcons.User,
+            contentDescription = null, modifier = Modifier.size(16.dp))
+        Spacer(Modifier.width(6.dp))
+        Text(label, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+        if (showLocalIndicator) {
             Spacer(Modifier.width(6.dp))
-            Text(label, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(
+                stringResource(R.string.enterprise_local_indicator),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+            )
         }
-    } else {
-        IconButton(onClick = open, modifier = modifier) {
-            Icon(if (access is RealmAccess.Enterprise) HugeIcons.Building03 else HugeIcons.User,
-                contentDescription = stringResource(R.string.enterprise_current_space, label))
-        }
+        Spacer(Modifier.width(4.dp))
+        Icon(HugeIcons.ArrowRight01, contentDescription = stringResource(R.string.enterprise_current_space, label),
+            modifier = Modifier.size(16.dp))
     }
 }
 

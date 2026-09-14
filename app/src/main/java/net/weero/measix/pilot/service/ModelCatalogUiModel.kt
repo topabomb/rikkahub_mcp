@@ -63,6 +63,18 @@ internal data class ModelCatalogUiModel(
             .filter { it.models.isNotEmpty() },
     )
 
+    /** Daily pickers expose only actionable choices. The current invalid reference is rendered separately. */
+    fun selectableGroups(type: ModelType): List<ModelGroupUiModel> = groups.map { group ->
+        group.copy(models = group.models.filter { it.model.type == type && it.canSelect })
+    }.filter { it.models.isNotEmpty() }
+
+    fun unavailableSelection(reference: ConfigurationReference?): Pair<String, ConfigurationUnavailableReason>? {
+        if (reference == null) return null
+        val choice = find(reference)
+        val reason = choice?.unavailableReason ?: unresolvedModels[reference] ?: return null
+        return (choice?.model?.displayName ?: reference.toString()) to reason
+    }
+
     fun forSlot(slot: ResourceSelectionSlot): ModelCatalogUiModel = copy(groups = groups.map { group ->
         group.copy(models = group.models.map { it.copy(unavailableReason = it.roleReasons.getValue(slot)) })
     })
@@ -87,6 +99,9 @@ internal data class ModelCatalogUiModel(
             else ModelFavoriteUiModel(reference, choice, group, choice?.unavailableReason
                 ?: if (choice == null) unresolvedModels[reference] ?: ConfigurationUnavailableReason.REFERENCE_MISSING else null)
         }
+
+    fun selectableFavorites(references: List<ConfigurationReference>, type: ModelType): List<ModelFavoriteUiModel> =
+        favorites(references, type).filter { it.choice?.canSelect == true }
 }
 
 internal fun ResolvedConfiguration.modelCatalog(selection: RealmSelection): ModelCatalogUiModel {

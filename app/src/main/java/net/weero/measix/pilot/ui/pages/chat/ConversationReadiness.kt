@@ -3,11 +3,15 @@ package net.weero.measix.pilot.ui.pages.chat
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -16,6 +20,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -49,6 +54,7 @@ import net.weero.measix.pilot.ui.components.ui.UIAvatar
 import net.weero.measix.pilot.ui.theme.LocalChatFontSizeRatio
 import net.weero.measix.pilot.ui.theme.asChatChrome
 import net.weero.measix.pilot.service.AssistantMcpChoice
+import net.weero.measix.pilot.service.ConversationStarterUiModel
 import me.rerere.ai.provider.Model
 import net.weero.measix.pilot.data.model.Avatar
 import kotlin.uuid.Uuid
@@ -182,6 +188,8 @@ internal fun ConversationReadinessCard(
     readiness: ConversationReadiness,
     assistant: Assistant?,
     compact: Boolean,
+    enterprise: Boolean,
+    starters: List<ConversationStarterUiModel>,
     onSwitchAssistant: () -> Unit,
     onManageAssistant: () -> Unit,
     onModelClick: () -> Unit,
@@ -189,6 +197,7 @@ internal fun ConversationReadinessCard(
     onLocalToolsClick: () -> Unit,
     onMemoryClick: () -> Unit,
     onWorkspaceClick: () -> Unit,
+    onStarterClick: (ConversationStarterUiModel) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val rawScale = LocalChatFontSizeRatio.current
@@ -205,135 +214,51 @@ internal fun ConversationReadinessCard(
             modifier = Modifier.padding(if (compact) 4.dp else 8.dp),
         ) {
             if (!compact) {
-                ReadinessTitleRow(
-                    assistant = assistant,
-                    scale = scale,
-                    onSwitchAssistant = onSwitchAssistant,
-                    onManageAssistant = onManageAssistant,
-                )
+                if (enterprise) {
+                    EnterpriseReadinessTitleRow(
+                        assistant = assistant,
+                        scale = scale,
+                        onSwitchAssistant = onSwitchAssistant,
+                        onViewAssistant = onManageAssistant,
+                    )
+                } else {
+                    PersonalReadinessTitleRow(
+                        assistant = assistant,
+                        scale = scale,
+                        onSwitchAssistant = onSwitchAssistant,
+                        onManageAssistant = onManageAssistant,
+                    )
+                }
             }
 
-            ReadinessRow(
-                icon = HugeIcons.Settings03,
-                label = stringResource(R.string.chat_readiness_model_title),
-                status = readiness.modelUnavailableReason?.let { net.weero.measix.pilot.ui.components.ai.configurationUnavailableText(it) } ?: when (readiness.modelState) {
-                    ModelReadiness.NOT_CONFIGURED ->
-                        stringResource(R.string.chat_readiness_model_not_configured)
-
-                    ModelReadiness.NOT_SELECTED ->
-                        stringResource(R.string.chat_readiness_model_not_selected)
-
-                    ModelReadiness.READY -> readiness.modelName.orEmpty()
-                },
-                description = null,
-                blocked = !readiness.canSend,
-                onClick = onModelClick,
-                scale = scale,
-            )
-
-            if (!compact) {
-                ReadinessRow(
-                    icon = HugeIcons.McpServer,
-                    label = stringResource(R.string.chat_readiness_mcp_title),
-                    status = when (readiness.mcpState) {
-                        McpReadiness.NOT_CONFIGURED ->
-                            stringResource(R.string.chat_readiness_mcp_not_configured)
-
-                        McpReadiness.ALL_DISABLED ->
-                            stringResource(R.string.chat_readiness_mcp_all_disabled)
-
-                        McpReadiness.NONE_SELECTED ->
-                            stringResource(R.string.chat_readiness_mcp_none_selected)
-
-                        McpReadiness.CONNECTING ->
-                            stringResource(R.string.chat_readiness_mcp_connecting)
-
-                        McpReadiness.AUTHORIZATION_REQUIRED ->
-                            stringResource(R.string.chat_readiness_mcp_authorization_required)
-
-                        McpReadiness.RECONNECTING ->
-                            stringResource(R.string.chat_readiness_mcp_reconnecting)
-
-                        McpReadiness.UNAVAILABLE ->
-                            stringResource(R.string.chat_readiness_mcp_unavailable)
-
-                        McpReadiness.PARTIAL -> stringResource(
-                            R.string.chat_readiness_mcp_partial,
-                            readiness.readyMcpCount,
-                            readiness.selectedMcpCount,
-                        )
-
-                        McpReadiness.READY -> stringResource(
-                            R.string.chat_readiness_mcp_ready,
-                            readiness.readyMcpCount,
-                        )
-                    },
-                    description = stringResource(
-                        R.string.chat_readiness_mcp_description,
-                        stringResource(R.string.chat_readiness_mcp_highlight_term),
-                    ).takeIf {
-                        readiness.mcpState in setOf(
-                            McpReadiness.AUTHORIZATION_REQUIRED,
-                            McpReadiness.RECONNECTING,
-                            McpReadiness.UNAVAILABLE,
-                            McpReadiness.PARTIAL,
-                        )
-                    },
-                    highlightTerm = stringResource(R.string.chat_readiness_mcp_highlight_term),
-                    onClick = onMcpClick,
+            if (compact || enterprise) {
+                PrimaryModelRow(
+                    readiness = readiness,
                     scale = scale,
+                    showCaption = enterprise && !compact,
+                    onClick = onModelClick,
                 )
-                ReadinessRow(
-                    icon = HugeIcons.Brain02,
-                    label = stringResource(R.string.chat_readiness_memory_title),
-                    status = when (readiness.memoryState) {
-                        MemoryReadiness.DISABLED ->
-                            stringResource(R.string.chat_readiness_memory_disabled)
-
-                        MemoryReadiness.READY -> stringResource(
-                            R.string.chat_readiness_memory_count,
-                            readiness.memoryCount,
-                        )
-                    },
-                    description = null,
-                    onClick = onMemoryClick,
+                if (!compact && starters.isNotEmpty()) {
+                    EnterpriseStarterRow(starters, scale, onStarterClick)
+                }
+                if (!compact && readiness.workspaceState == WorkspaceReadiness.READY) {
+                    CompactReadinessRow(
+                        icon = HugeIcons.Codesandbox,
+                        label = stringResource(R.string.chat_readiness_workspace_title),
+                        status = readiness.workspaceName.orEmpty(),
+                        onClick = onWorkspaceClick,
+                        scale = scale,
+                    )
+                }
+            } else {
+                PersonalReadinessRows(
+                    readiness = readiness,
                     scale = scale,
-                )
-                ReadinessRow(
-                    icon = HugeIcons.Wrench01,
-                    label = stringResource(R.string.chat_readiness_local_tools_title),
-                    status = if (readiness.localToolCount < readiness.persistedLocalToolCount) {
-                        stringResource(
-                            R.string.chat_readiness_local_tools_unavailable,
-                            readiness.localToolCount,
-                            readiness.persistedLocalToolCount,
-                        )
-                    } else {
-                        stringResource(
-                            R.string.chat_readiness_local_tools_count,
-                            readiness.localToolCount,
-                        )
-                    },
-                    description = stringResource(R.string.chat_readiness_local_tools_description)
-                        .takeIf { readiness.localToolCount < readiness.persistedLocalToolCount },
-                    onClick = onLocalToolsClick,
-                    scale = scale,
-                )
-                ReadinessRow(
-                    icon = HugeIcons.Codesandbox,
-                    label = stringResource(R.string.chat_readiness_workspace_title),
-                    status = when (readiness.workspaceState) {
-                        WorkspaceReadiness.NOT_CONFIGURED ->
-                            stringResource(R.string.chat_readiness_workspace_not_configured)
-
-                        WorkspaceReadiness.NOT_BOUND ->
-                            stringResource(R.string.chat_readiness_workspace_not_bound)
-
-                        WorkspaceReadiness.READY -> readiness.workspaceName.orEmpty()
-                    },
-                    description = null,
-                    onClick = onWorkspaceClick,
-                    scale = scale,
+                    onModelClick = onModelClick,
+                    onMcpClick = onMcpClick,
+                    onLocalToolsClick = onLocalToolsClick,
+                    onMemoryClick = onMemoryClick,
+                    onWorkspaceClick = onWorkspaceClick,
                 )
             }
         }
@@ -341,19 +266,201 @@ internal fun ConversationReadinessCard(
 }
 
 @Composable
-private fun ReadinessRow(
+private fun PersonalReadinessRows(
+    readiness: ConversationReadiness,
+    scale: Float,
+    onModelClick: () -> Unit,
+    onMcpClick: () -> Unit,
+    onLocalToolsClick: () -> Unit,
+    onMemoryClick: () -> Unit,
+    onWorkspaceClick: () -> Unit,
+) {
+    DetailedReadinessRow(
+        icon = HugeIcons.Settings03,
+        label = stringResource(R.string.chat_readiness_model_title),
+        status = modelStatus(readiness),
+        description = stringResource(R.string.chat_readiness_model_description),
+        blocked = !readiness.canSend,
+        onClick = onModelClick,
+        scale = scale,
+    )
+    DetailedReadinessRow(
+        icon = HugeIcons.McpServer,
+        label = stringResource(R.string.chat_readiness_mcp_title),
+        status = when (readiness.mcpState) {
+            McpReadiness.NOT_CONFIGURED -> stringResource(R.string.chat_readiness_mcp_not_configured)
+            McpReadiness.ALL_DISABLED -> stringResource(R.string.chat_readiness_mcp_all_disabled)
+            McpReadiness.NONE_SELECTED -> stringResource(R.string.chat_readiness_mcp_none_selected)
+            McpReadiness.CONNECTING -> stringResource(R.string.chat_readiness_mcp_connecting)
+            McpReadiness.AUTHORIZATION_REQUIRED -> stringResource(R.string.chat_readiness_mcp_authorization_required)
+            McpReadiness.RECONNECTING -> stringResource(R.string.chat_readiness_mcp_reconnecting)
+            McpReadiness.UNAVAILABLE -> stringResource(R.string.chat_readiness_mcp_unavailable)
+            McpReadiness.PARTIAL -> stringResource(
+                R.string.chat_readiness_mcp_partial,
+                readiness.readyMcpCount,
+                readiness.selectedMcpCount,
+            )
+            McpReadiness.READY -> stringResource(R.string.chat_readiness_mcp_ready, readiness.readyMcpCount)
+        },
+        description = stringResource(
+            R.string.chat_readiness_mcp_description,
+            stringResource(R.string.chat_readiness_mcp_highlight_term),
+        ),
+        highlightTerm = stringResource(R.string.chat_readiness_mcp_highlight_term),
+        onClick = onMcpClick,
+        scale = scale,
+    )
+    DetailedReadinessRow(
+        icon = HugeIcons.Brain02,
+        label = stringResource(R.string.chat_readiness_memory_title),
+        status = when (readiness.memoryState) {
+            MemoryReadiness.DISABLED -> stringResource(R.string.chat_readiness_memory_disabled)
+            MemoryReadiness.READY -> stringResource(R.string.chat_readiness_memory_count, readiness.memoryCount)
+        },
+        description = stringResource(R.string.chat_readiness_memory_description),
+        onClick = onMemoryClick,
+        scale = scale,
+    )
+    DetailedReadinessRow(
+        icon = HugeIcons.Wrench01,
+        label = stringResource(R.string.chat_readiness_local_tools_title),
+        status = if (readiness.localToolCount < readiness.persistedLocalToolCount) {
+            stringResource(
+                R.string.chat_readiness_local_tools_unavailable,
+                readiness.localToolCount,
+                readiness.persistedLocalToolCount,
+            )
+        } else {
+            stringResource(R.string.chat_readiness_local_tools_count, readiness.localToolCount)
+        },
+        description = stringResource(R.string.chat_readiness_local_tools_description),
+        onClick = onLocalToolsClick,
+        scale = scale,
+    )
+    DetailedReadinessRow(
+        icon = HugeIcons.Codesandbox,
+        label = stringResource(R.string.chat_readiness_workspace_title),
+        status = when (readiness.workspaceState) {
+            WorkspaceReadiness.NOT_CONFIGURED -> stringResource(R.string.chat_readiness_workspace_not_configured)
+            WorkspaceReadiness.NOT_BOUND -> stringResource(R.string.chat_readiness_workspace_not_bound)
+            WorkspaceReadiness.READY -> readiness.workspaceName.orEmpty()
+        },
+        description = stringResource(R.string.chat_readiness_workspace_description),
+        onClick = onWorkspaceClick,
+        scale = scale,
+    )
+}
+
+@Composable
+private fun EnterpriseStarterRow(
+    starters: List<ConversationStarterUiModel>,
+    scale: Float,
+    onClick: (ConversationStarterUiModel) -> Unit,
+) {
+    Text(
+        stringResource(R.string.enterprise_starters),
+        style = MaterialTheme.typography.labelLarge,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.padding(horizontal = 6.dp, vertical = 4.dp),
+    )
+    LazyRow(
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        contentPadding = PaddingValues(horizontal = 6.dp),
+    ) {
+        items(starters, key = { it.reference.toString() }) { starter ->
+            Surface(
+                onClick = { onClick(starter) },
+                shape = RoundedCornerShape(12.dp),
+                color = MaterialTheme.colorScheme.surfaceContainerHighest,
+                modifier = Modifier.widthIn(min = 180.dp, max = 260.dp),
+            ) {
+                Column(Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
+                    Text(
+                        starter.title,
+                        style = MaterialTheme.typography.titleSmall.copy(
+                            fontSize = MaterialTheme.typography.titleSmall.fontSize * scale,
+                        ),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Text(
+                        starter.prompt,
+                        style = MaterialTheme.typography.bodySmall.copy(
+                            fontSize = MaterialTheme.typography.bodySmall.fontSize * scale,
+                        ),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun modelStatus(readiness: ConversationReadiness): String = readiness.modelUnavailableReason?.let {
+    net.weero.measix.pilot.ui.components.ai.configurationUnavailableText(it)
+} ?: when (readiness.modelState) {
+    ModelReadiness.NOT_CONFIGURED -> stringResource(R.string.chat_readiness_model_not_configured)
+    ModelReadiness.NOT_SELECTED -> stringResource(R.string.chat_readiness_model_not_selected)
+    ModelReadiness.READY -> readiness.modelName.orEmpty()
+}
+
+@Composable
+private fun PrimaryModelRow(
+    readiness: ConversationReadiness,
+    scale: Float,
+    showCaption: Boolean,
+    onClick: () -> Unit,
+) {
+    val blocked = !readiness.canSend
+    val status = modelStatus(readiness)
+    Row(
+        modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).clip(RoundedCornerShape(10.dp)).clickable(onClick = onClick)
+            .padding(horizontal = 6.dp, vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Icon(
+            HugeIcons.Settings03,
+            contentDescription = null,
+            tint = if (blocked) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(18.dp),
+        )
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
+            Text(
+                status,
+                style = MaterialTheme.typography.bodyLarge.copy(
+                    fontSize = MaterialTheme.typography.bodyLarge.fontSize * scale,
+                    lineHeight = MaterialTheme.typography.bodyLarge.lineHeight * scale,
+                ),
+                color = if (blocked) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            if (blocked || showCaption) Text(
+                stringResource(R.string.chat_readiness_model_title),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        Icon(HugeIcons.ArrowRight01, contentDescription = null, modifier = Modifier.size(16.dp))
+    }
+}
+
+@Composable
+private fun CompactReadinessRow(
     icon: ImageVector,
     label: String,
     status: String,
-    description: String?,
-    blocked: Boolean = false,
     onClick: () -> Unit,
     scale: Float,
-    highlightTerm: String? = null,
 ) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
+            .heightIn(min = 48.dp)
             .clip(RoundedCornerShape(10.dp))
             .clickable(onClick = onClick)
             .padding(horizontal = 6.dp, vertical = 4.dp),
@@ -363,71 +470,29 @@ private fun ReadinessRow(
         Icon(
             imageVector = icon,
             contentDescription = null,
-            tint = if (blocked) {
-                MaterialTheme.colorScheme.error
-            } else {
-                MaterialTheme.colorScheme.onSurfaceVariant
-            },
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.size(18.dp),
         )
-        Column(
+        Text(
+            text = label,
+            style = MaterialTheme.typography.bodyLarge.copy(
+                fontSize = MaterialTheme.typography.bodyLarge.fontSize * scale,
+                lineHeight = MaterialTheme.typography.bodyLarge.lineHeight * scale,
+            ),
             modifier = Modifier.weight(1f),
-            verticalArrangement = Arrangement.spacedBy(2.dp),
-        ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text(
-                    text = label,
-                    style = MaterialTheme.typography.bodyLarge.copy(
-                        fontSize = MaterialTheme.typography.bodyLarge.fontSize * scale,
-                        lineHeight = MaterialTheme.typography.bodyLarge.lineHeight * scale,
-                    ),
-                    modifier = Modifier.weight(1f),
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                ReadinessStatus(
-                    text = status,
-                    blocked = blocked,
-                    scale = scale,
-                )
-            }
-            if (description != null && highlightTerm != null && description.contains(highlightTerm)) {
-                val annotated = buildAnnotatedString {
-                    val start = description.indexOf(highlightTerm)
-                    append(description.substring(0, start))
-                    withStyle(
-                        SpanStyle(
-                            fontWeight = FontWeight.SemiBold,
-                            color = MaterialTheme.colorScheme.primary,
-                        )
-                    ) {
-                        append(highlightTerm)
-                    }
-                    append(description.substring(start + highlightTerm.length))
-                }
-                Text(
-                    text = annotated,
-                    style = MaterialTheme.typography.bodySmall.copy(
-                        fontSize = MaterialTheme.typography.bodySmall.fontSize * scale,
-                        lineHeight = MaterialTheme.typography.bodySmall.lineHeight * scale,
-                    ),
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            } else if (description != null) {
-                Text(
-                    text = description,
-                    style = MaterialTheme.typography.bodySmall.copy(
-                        fontSize = MaterialTheme.typography.bodySmall.fontSize * scale,
-                        lineHeight = MaterialTheme.typography.bodySmall.lineHeight * scale,
-                    ),
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-        }
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+        Text(
+            text = status,
+            style = MaterialTheme.typography.labelMedium.copy(
+                fontSize = MaterialTheme.typography.labelMedium.fontSize * scale,
+                lineHeight = MaterialTheme.typography.labelMedium.lineHeight * scale,
+            ),
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
         Icon(
             imageVector = HugeIcons.ArrowRight01,
             contentDescription = null,
@@ -438,33 +503,91 @@ private fun ReadinessRow(
 }
 
 @Composable
-private fun ReadinessStatus(
-    text: String,
-    blocked: Boolean,
+private fun DetailedReadinessRow(
+    icon: ImageVector,
+    label: String,
+    status: String,
+    description: String?,
+    blocked: Boolean = false,
+    onClick: () -> Unit,
     scale: Float,
+    highlightTerm: String? = null,
 ) {
+    Row(
+        modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).clickable(onClick = onClick)
+            .padding(horizontal = 6.dp, vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Icon(
+            icon,
+            contentDescription = null,
+            tint = if (blocked) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(18.dp),
+        )
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    label,
+                    style = MaterialTheme.typography.bodyLarge.copy(
+                        fontSize = MaterialTheme.typography.bodyLarge.fontSize * scale,
+                        lineHeight = MaterialTheme.typography.bodyLarge.lineHeight * scale,
+                    ),
+                    modifier = Modifier.weight(1f),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                ReadinessStatus(status, blocked, scale)
+            }
+            val annotatedDescription = if (description != null && highlightTerm != null && description.contains(highlightTerm)) {
+                buildAnnotatedString {
+                    val start = description.indexOf(highlightTerm)
+                    append(description.substring(0, start))
+                    withStyle(SpanStyle(fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.primary)) {
+                        append(highlightTerm)
+                    }
+                    append(description.substring(start + highlightTerm.length))
+                }
+            } else if (description != null) {
+                buildAnnotatedString { append(description) }
+            } else {
+                null
+            }
+            annotatedDescription?.let {
+                Text(
+                    it,
+                    style = MaterialTheme.typography.bodySmall.copy(
+                        fontSize = MaterialTheme.typography.bodySmall.fontSize * scale,
+                        lineHeight = MaterialTheme.typography.bodySmall.lineHeight * scale,
+                    ),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
+        Icon(HugeIcons.ArrowRight01, null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(16.dp))
+    }
+}
+
+@Composable
+private fun ReadinessStatus(text: String, blocked: Boolean, scale: Float) {
     Surface(
         shape = RoundedCornerShape(50),
-        color = if (blocked) {
-            MaterialTheme.colorScheme.errorContainer
-        } else {
-            MaterialTheme.colorScheme.surfaceContainerHighest
-        },
-        contentColor = if (blocked) {
-            MaterialTheme.colorScheme.onErrorContainer
-        } else {
-            MaterialTheme.colorScheme.onSurfaceVariant
-        },
+        color = if (blocked) MaterialTheme.colorScheme.errorContainer else MaterialTheme.colorScheme.surfaceContainerHighest,
+        contentColor = if (blocked) MaterialTheme.colorScheme.onErrorContainer else MaterialTheme.colorScheme.onSurfaceVariant,
     ) {
         Text(
-            text = text,
+            text,
             style = MaterialTheme.typography.labelMedium.copy(
                 fontSize = MaterialTheme.typography.labelMedium.fontSize * scale,
                 lineHeight = MaterialTheme.typography.labelMedium.lineHeight * scale,
             ),
-            modifier = Modifier
-                .widthIn(max = 156.dp)
-                .padding(horizontal = 7.dp, vertical = 2.dp),
+            modifier = Modifier.widthIn(max = 156.dp).padding(horizontal = 7.dp, vertical = 2.dp),
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
         )
@@ -472,11 +595,62 @@ private fun ReadinessStatus(
 }
 
 @Composable
-private fun ReadinessTitleRow(
+private fun PersonalReadinessTitleRow(
     assistant: Assistant?,
     scale: Float,
     onSwitchAssistant: () -> Unit,
     onManageAssistant: () -> Unit,
+) {
+    val defaultAssistantName = stringResource(R.string.assistant_page_default_assistant)
+    val displayName = assistant?.name?.ifEmpty { defaultAssistantName } ?: stringResource(R.string.configuration_reason_missing)
+    val titleStyle = MaterialTheme.typography.titleMedium.copy(
+        fontSize = MaterialTheme.typography.titleMedium.fontSize * scale,
+        lineHeight = MaterialTheme.typography.titleMedium.lineHeight * scale,
+    )
+    Row(
+        Modifier.fillMaxWidth().padding(start = 6.dp, end = 6.dp, top = 2.dp, bottom = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
+            Row(
+                Modifier.weight(1f, fill = false).clip(RoundedCornerShape(8.dp)).clickable(onClick = onSwitchAssistant)
+                    .padding(horizontal = 1.dp, vertical = 1.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                val hideAvatar = assistant?.useAssistantAvatar == true &&
+                    LocalAdaptiveLayoutInfo.current.chatLayoutMode == ChatLayoutMode.ListDetail
+                if (!hideAvatar) UIAvatar(
+                    name = displayName,
+                    value = assistant?.avatar ?: Avatar.Dummy,
+                    modifier = Modifier.size((20 * scale).dp),
+                )
+                Text(
+                    displayName,
+                    style = titleStyle,
+                    color = MaterialTheme.colorScheme.primary,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
+        FilledTonalIconButton(
+            onClick = onManageAssistant,
+            enabled = assistant != null,
+            modifier = Modifier.size(30.dp),
+        ) {
+            Icon(HugeIcons.Edit03, stringResource(R.string.assistant_picker_manage_current), modifier = Modifier.size(15.dp))
+        }
+    }
+}
+
+@Composable
+private fun EnterpriseReadinessTitleRow(
+    assistant: Assistant?,
+    scale: Float,
+    onSwitchAssistant: () -> Unit,
+    onViewAssistant: () -> Unit,
 ) {
     val defaultAssistantName = stringResource(R.string.assistant_page_default_assistant)
     val displayName = assistant?.name?.ifEmpty { defaultAssistantName } ?: stringResource(R.string.configuration_reason_missing)
@@ -503,10 +677,11 @@ private fun ReadinessTitleRow(
         ) {
             Row(
                 modifier = Modifier
-                    .weight(1f, fill = false)
+                    .weight(1f)
+                    .heightIn(min = 48.dp)
                     .clip(RoundedCornerShape(8.dp))
-                    .clickable(onClick = onSwitchAssistant)
-                    .padding(horizontal = 1.dp, vertical = 1.dp),
+                    .clickable(enabled = assistant != null, onClick = onViewAssistant)
+                    .padding(horizontal = 1.dp, vertical = 2.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(4.dp),
             ) {
@@ -519,26 +694,30 @@ private fun ReadinessTitleRow(
                         modifier = Modifier.size((20 * scale).dp),
                     )
                 }
-                Text(
-                    text = displayName,
-                    style = titleStyle,
-                    color = MaterialTheme.colorScheme.primary,
-                    fontWeight = FontWeight.SemiBold,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        stringResource(R.string.assistant_picker_current),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Text(
+                        text = displayName,
+                        style = titleStyle,
+                        color = MaterialTheme.colorScheme.primary,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                Icon(
+                    HugeIcons.ArrowRight01,
+                    contentDescription = stringResource(R.string.assistant_picker_view_details),
+                    modifier = Modifier.size(16.dp),
                 )
             }
         }
-        FilledTonalIconButton(
-            onClick = onManageAssistant,
-            enabled = assistant != null,
-            modifier = Modifier.size(30.dp),
-        ) {
-            Icon(
-                imageVector = HugeIcons.Edit03,
-                contentDescription = stringResource(R.string.assistant_picker_manage_current),
-                modifier = Modifier.size(15.dp),
-            )
+        TextButton(onClick = onSwitchAssistant) {
+            Text(stringResource(R.string.safe_mode_switch_assistant))
         }
     }
 }

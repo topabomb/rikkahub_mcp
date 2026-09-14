@@ -48,4 +48,23 @@ class TargetMcpPreparationTest {
             )
         )
     }
+
+    @Test
+    fun `target continues when enterprise policy excludes a personal MCP`() {
+        assertNull(
+            targetMcpPreparationFailure(
+                TurnMcpCapabilitySnapshot(
+                    tools = emptyList(),
+                    serverOutcomes = listOf(
+                        McpServerCapabilityOutcome(
+                            serverId = ConfigurationReference.random(),
+                            serverName = "personal-server",
+                            state = McpServerCapabilityState.POLICY_BLOCKED,
+                            toolCount = 0,
+                        )
+                    ),
+                )
+            )
+        )
+    }
 }

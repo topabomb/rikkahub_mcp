@@ -9,12 +9,10 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
-import me.rerere.ai.provider.ModelType
 import me.rerere.common.configuration.ConfigurationReference
 import net.weero.measix.pilot.R
 import net.weero.measix.pilot.data.configuration.AssistantPreferenceChange
@@ -46,6 +44,7 @@ internal fun AssistantUsageEditor(
     onManageQuickMessages: () -> Unit,
     onManagePrompts: () -> Unit,
     onManageSkills: () -> Unit,
+    onOpenModelPicker: () -> Unit,
     onClose: () -> Unit,
     initialSection: AssistantSettingsSection? = null,
 ) {
@@ -100,17 +99,26 @@ internal fun AssistantUsageEditor(
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
                 item {
-                    Text(assistant.name.ifBlank { stringResource(R.string.assistant_page_default_assistant) },
-                        style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    Text(stringResource(R.string.assistant_usage_description), style = MaterialTheme.typography.bodySmall,
-                        modifier = Modifier.padding(top = 4.dp))
-                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        if (enterprise) TextButton(onClick = { reset = true }) { Text(stringResource(R.string.assistant_usage_reset)) }
-                        if (configuration.canEditDefinition) TextButton(onClick = { editShared = true }) { Text(stringResource(R.string.assistant_usage_shared_edit)) }
-                    }
+                    AssistantDetailsHome(
+                        assistant = assistant,
+                        sourceLabel = if (assistant.id is ConfigurationReference.Enterprise) stringResource(
+                            R.string.assistant_details_enterprise_source,
+                            configuration.enterpriseName ?: stringResource(R.string.enterprise_space),
+                        ) else stringResource(R.string.configuration_source_user),
+                        onSectionClick = { section = it },
+                        onEdit = if (configuration.canEditDefinition) ({ editShared = true }) else null,
+                    )
                 }
-                item {
-                    AssistantSettingsSectionList(usageOnly = true, onClick = { section = it })
+                if (enterprise) {
+                    item {
+                        TextButton(
+                            onClick = { reset = true },
+                            contentPadding = PaddingValues(horizontal = 0.dp),
+                            modifier = Modifier.heightIn(min = 48.dp),
+                        ) {
+                            Text(stringResource(R.string.assistant_usage_reset))
+                        }
+                    }
                 }
             }
         } else {
@@ -126,14 +134,14 @@ internal fun AssistantUsageEditor(
                         definitionEditable = false, usageOnly = true, imageResolver = imageResolver,
                         modelControl = {
                             val selectionUi = assistantModelSelectionUi(configuration, ::commit)
-                            val state = rememberModelListState(modelId = configuration.modelSelection.reference,
-                                catalog = configuration.modelCatalog, type = ModelType.CHAT)
-                            ModelSelectorButton(state,
-                                placeholder = stringResource(R.string.assistant_page_follow_default_model))
+                            TextButton(onClick = onOpenModelPicker) {
+                                Text(
+                                    configuration.model?.displayName
+                                        ?: configuration.modelSelection.reference?.toString()
+                                        ?: stringResource(R.string.assistant_page_follow_default_model),
+                                )
+                            }
                             selectionUi.modeLabel?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
-                            ModelListSheet(state, onSelect = { commit(AssistantPreferenceChange.Model(it.id)) },
-                                additionalActions = selectionUi.actions,
-                                selectedModelId = selectionUi.selectedModelId)
                             configuration.modelSelection.unavailableReason?.let {
                                 Text(configurationUnavailableText(it), color = MaterialTheme.colorScheme.error)
                             }

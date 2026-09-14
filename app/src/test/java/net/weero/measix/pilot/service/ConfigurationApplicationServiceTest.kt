@@ -234,10 +234,11 @@ class ConfigurationApplicationServiceTest {
             assertEquals(env.assistant.id, initial.configuration!!.assistant!!.id)
             env.settings.updateLocal { it.copy(providers = emptyList()) }
             val missingModel = env.chatQuery.conversationUiModel(lease).first { it?.configuration?.model == null }!!
-            assertNotNull(missingModel.configuration!!.assistant)
-            assertTrue(missingModel.configuration!!.canChangeModel)
-            assertTrue(missingModel.configuration!!.builtInSearchEnabled)
-            assertFalse(missingModel.configuration!!.transportCapabilities.builtInSearch)
+            val missingModelConfiguration = requireNotNull(missingModel.configuration)
+            assertNotNull(missingModelConfiguration.assistant)
+            assertTrue(missingModelConfiguration.canChangeModel)
+            assertTrue(missingModelConfiguration.builtInSearchEnabled)
+            assertFalse(missingModelConfiguration.transportCapabilities.builtInSearch)
             lease.requireOpen()
             env.settings.updateLocal { it.copy(assistants = it.assistants.filterNot { assistant -> assistant.id == env.assistant.id }) }
             val missingAssistant = env.chatQuery.conversationUiModel(lease).first { it?.configuration?.assistant == null }!!
@@ -255,7 +256,10 @@ class ConfigurationApplicationServiceTest {
             env.initialize()
             suspend fun catalog() = (env.queries.observeModelCatalog().first { it is ModelCatalogReadState.Available }
                 as ModelCatalogReadState.Available).catalog
+            suspend fun assistantCatalog() = (env.queries.observeAssistantCatalog().first { it is AssistantCatalogReadState.Available }
+                as AssistantCatalogReadState.Available).catalog
             val initial = catalog()
+            assertEquals(exampleEnterprisePackage().identity.enterpriseName, assistantCatalog().enterpriseName)
             val selection = requireNotNull(initial.selection)
             assertNull(initial.storedSelections.chatModelId)
             assertEquals(exampleEnterprisePackage().identity.reference("mdl_chat"), initial.selections.chatModelId)
@@ -272,6 +276,7 @@ class ConfigurationApplicationServiceTest {
             assertNull(catalog().storedSelections.chatModelId)
             assertEquals(initial.selections.chatModelId, catalog().selections.chatModelId)
             env.sessions.selectPersonalFixture()
+            assertNull(assistantCatalog().enterpriseName)
             env.sessions.selectEnterpriseFixture()
             val before = JsonInstant.encodeToString(env.document())
             try {

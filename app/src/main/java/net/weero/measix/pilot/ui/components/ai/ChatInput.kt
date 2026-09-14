@@ -138,9 +138,12 @@ internal fun ChatInput(
     builtInSearchEnabled: Boolean,
     selectedSearchServiceId: ConfigurationReference?,
     canChangeModel: Boolean,
-    modelSelectionActions: List<ModelSelectionAction>,
+    quickModelAction: ModelSelectionAction?,
+    fullModelActions: List<ModelSelectionAction>,
+    onOpenQuickModelPicker: () -> Unit,
     modelListState: ModelListState,
     selectedModelId: ConfigurationReference?,
+    selectedModelUsesDefault: Boolean,
     hazeState: HazeState,
     enableSearch: Boolean,
     onUpdateSearchMode: (AssistantSearchMode) -> Unit,
@@ -281,6 +284,7 @@ internal fun ChatInput(
                                 state = modelListState,
                                 onlyIcon = true,
                                 modifier = Modifier,
+                                onOpen = onOpenQuickModelPicker,
                             )
                             }
 
@@ -402,8 +406,10 @@ internal fun ChatInput(
             if (canChangeModel) ModelListSheet(
                 state = modelListState,
                 onSelect = onUpdateChatModel,
-                additionalActions = modelSelectionActions,
+                additionalActions = fullModelActions,
+                compactAction = quickModelAction.takeIf { fullModelActions.isEmpty() },
                 selectedModelId = selectedModelId,
+                selectedModelUsesDefault = selectedModelUsesDefault,
             )
         }
     }

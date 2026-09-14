@@ -143,6 +143,7 @@ data class TurnMcpCapabilitySnapshot(
 
 enum class McpServerCapabilityState {
     READY,
+    POLICY_BLOCKED,
     TIMEOUT,
     UNAVAILABLE,
     AUTHORIZATION_REQUIRED,

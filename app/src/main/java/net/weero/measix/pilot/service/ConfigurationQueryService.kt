@@ -46,9 +46,17 @@ internal class ConfigurationQueryService(
 
     fun observeAssistantCatalog(): Flow<AssistantCatalogReadState> = observeSelected(
         { failure -> AssistantCatalogReadState.Unavailable(failure.detail()) },
-        { configuration, selection -> AssistantCatalogReadState.Available(AssistantCatalogUiModel(selection,
-            configuration.selection(ResourceSelectionSlot.ASSISTANT), configuration.assistants,
-            configuration.catalog.values.filter { it.key.category == ConfigurationCategory.ASSISTANT })) },
+        { configuration, selection ->
+            val modelCatalog = configuration.modelCatalog(selection).forSlot(ResourceSelectionSlot.CHAT_MODEL)
+            AssistantCatalogReadState.Available(AssistantCatalogUiModel(
+                selection,
+                configuration.selection(ResourceSelectionSlot.ASSISTANT),
+                configuration.assistants,
+                configuration.catalog.values.filter { it.key.category == ConfigurationCategory.ASSISTANT },
+                configuration.assistants.mapValues { (_, assistant) -> modelCatalog.modelSummaryFor(assistant) },
+                configuration.enterpriseIdentity?.enterpriseName,
+            ))
+        },
     )
 
     fun observeEnterpriseStarters(selection: RealmSelection): Flow<EnterpriseStarterReadState> = observeSelected(
@@ -148,6 +156,8 @@ internal data class AssistantCatalogUiModel(
     val selected: ConfigurationSelection,
     val assistants: Map<ConfigurationReference, Assistant>,
     val resources: List<ConfigurationCatalogItem>,
+    val modelSummaries: Map<ConfigurationReference, AssistantModelSummary> = emptyMap(),
+    val enterpriseName: String? = null,
 )
 
 internal data class SpeechCatalogUiModel(

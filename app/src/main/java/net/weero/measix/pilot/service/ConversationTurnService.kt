@@ -62,6 +62,9 @@ import net.weero.measix.pilot.data.ai.subassistant.getSubAssistantCallMetadata
 import net.weero.measix.pilot.data.ai.subassistant.mergeSubAssistantCallMetadata
 import net.weero.measix.pilot.data.ai.subassistant.parseAssistantCallExtrasFromInput
 import net.weero.measix.pilot.data.ai.mcp.McpRuntimeCoordinator
+import net.weero.measix.pilot.data.ai.mcp.McpServerCapabilityState
+import net.weero.measix.pilot.data.ai.mcp.McpTurnPreparationException
+import net.weero.measix.pilot.data.ai.mcp.McpTurnPreparationFailureReason
 import net.weero.measix.pilot.data.ai.tools.AssistantToolFactory
 import net.weero.measix.pilot.data.ai.tools.buildMemoryTools
 import net.weero.measix.pilot.data.ai.tools.local.TtsToolPlaybackContext
@@ -642,11 +645,36 @@ class ConversationTurnService internal constructor(
                         assistant = assistant,
                         memories = memoryAccess?.let { memoryService.read(it) }.orEmpty(),
                     )
-                    val mcpCapabilities = mcpManager.prepareTurnCapabilities(realmAccess, captured, runtime, turnId, worker) {
-                        turnFinalizer.stopInteraction(runtime, turnId, "managed_snapshot_required")
+                    val mcpCapabilities = try {
+                        mcpManager.prepareTurnCapabilities(realmAccess, captured, runtime, turnId, worker) {
+                            turnFinalizer.stopInteraction(runtime, turnId, "managed_snapshot_required")
+                        }
+                    } catch (failure: McpTurnPreparationException) {
+                        val message = when (failure.reason) {
+                            McpTurnPreparationFailureReason.REFERENCE_UNAVAILABLE ->
+                                context.getString(R.string.error_mcp_reference_unavailable, failure.serverNames.joinToString(", "))
+                            McpTurnPreparationFailureReason.REQUIRED_GATEWAY_UNAVAILABLE ->
+                                context.getString(R.string.error_mcp_required_gateway_unavailable, failure.serverNames.joinToString(", "))
+                        }
+                        throw IllegalStateException(message, failure)
+                    }
+                    val policyBlockedMcp = mcpCapabilities.serverOutcomes.filter {
+                        it.state == McpServerCapabilityState.POLICY_BLOCKED
+                    }
+                    if (policyBlockedMcp.isNotEmpty()) {
+                        chatErrorStore.add(
+                            IllegalStateException(
+                                context.getString(
+                                    R.string.error_mcp_enterprise_policy_skipped,
+                                    policyBlockedMcp.joinToString(", ") { it.serverName },
+                                ),
+                            ),
+                            conversationId,
+                        )
                     }
                     val unavailableMcp = mcpCapabilities.serverOutcomes.filter {
-                        it.state != net.weero.measix.pilot.data.ai.mcp.McpServerCapabilityState.READY
+                        it.state != McpServerCapabilityState.READY
+                            && it.state != McpServerCapabilityState.POLICY_BLOCKED
                     }
                     if (unavailableMcp.isNotEmpty()) {
                         chatErrorStore.add(

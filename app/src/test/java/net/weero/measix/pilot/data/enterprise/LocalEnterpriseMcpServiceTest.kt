@@ -54,17 +54,34 @@ class LocalEnterpriseMcpServiceTest {
     @get:Rule val temporary = TemporaryFolder()
     private var now = Instant.parse("2029-01-01T00:00:00Z").toEpochMilli()
 
-    @Test fun `coordinator prepares and invokes original enterprise tools while new interactions follow Gateway preferences`() = runBlocking {
+    @Test fun `coordinator skips policy blocked personal MCP and prepares enterprise tools while new interactions follow Gateway preferences`() = runBlocking {
         withHarness { h ->
             val appScope = net.weero.measix.pilot.AppScope(Dispatchers.Default)
             val settings = mockk<net.weero.measix.pilot.data.datastore.SettingsStore>()
-            var document = net.weero.measix.pilot.data.datastore.UserSettingsDocument.empty()
-            every { settings.userMcpDefinitions } returns kotlinx.coroutines.flow.flowOf(emptyList())
+            val state = h.sessions.state.value as EnterpriseState.Available
+            val assistantId = requireNotNull(state.configuration).assistants.single { it.id == "asd_main" }
+                .let { requireNotNull(state.manifest.session).identity.reference(it.id) }
+            val personalMcp = McpServerConfig.StreamableHTTPServer(
+                commonOptions = McpCommonOptions(enable = false, name = "personal-server"),
+                url = "https://personal.example/mcp",
+            )
+            val userSettings = Settings(mcpServers = listOf(personalMcp))
+            var document = net.weero.measix.pilot.data.datastore.UserSettingsDocument.empty().copy(
+                configuration = net.weero.measix.pilot.data.datastore.UserConfiguration(mcpServers = listOf(personalMcp)),
+                preferences = net.weero.measix.pilot.data.datastore.UserSettingsDocument.empty().preferences.withAssistantUsage(
+                    h.access.scope,
+                    net.weero.measix.pilot.data.configuration.AssistantUsagePreferences(
+                        assistantId,
+                        mcpServers = net.weero.measix.pilot.data.configuration.UsageValue(setOf(personalMcp.id)),
+                    ),
+                ),
+            )
+            every { settings.userMcpDefinitions } returns kotlinx.coroutines.flow.flowOf(listOf(personalMcp))
             coEvery { settings.pendingMcpCatalogMigration() } returns null
             coEvery { settings.withExecutionConfiguration<Any?>(any(), any(), any()) } coAnswers {
                 val state = secondArg<EnterpriseState>()
                 thirdArg<suspend (net.weero.measix.pilot.data.datastore.ExecutionConfigurationSnapshot) -> Any?>().invoke(
-                    net.weero.measix.pilot.data.datastore.ExecutionConfigurationSnapshot(net.weero.measix.pilot.data.datastore.Settings(),
+                    net.weero.measix.pilot.data.datastore.ExecutionConfigurationSnapshot(userSettings,
                         net.weero.measix.pilot.data.configuration.ConfigurationResolver.resolve(document, h.access.scope, state), "test"))
             }
             val store = McpCatalogStore(androidx.datastore.preferences.core.PreferenceDataStoreFactory.create(scope = appScope,
@@ -78,7 +95,14 @@ class LocalEnterpriseMcpServiceTest {
             val owners = mutableListOf<Triple<net.weero.measix.pilot.service.runtime.ConversationRuntime, Uuid, Job>>()
             suspend fun prepare(): TurnMcpCapabilitySnapshot {
                 val state = h.sessions.state.value as EnterpriseState.Available
-                val configuration = net.weero.measix.pilot.data.configuration.ConfigurationResolver.resolve(document, h.access.scope, state)
+                val policyState = state.copy(configuration = requireNotNull(state.configuration).copy(
+                    policy = state.configuration.policy.copy(allowLocalMcp = false),
+                ))
+                val configuration = net.weero.measix.pilot.data.configuration.ConfigurationResolver.resolve(
+                    document,
+                    h.access.scope,
+                    policyState,
+                )
                 val assistant = configuration.assistants.getValue(requireNotNull(configuration.enterpriseIdentity).reference("asd_main"))
                 val conversation = net.weero.measix.pilot.data.model.Conversation(assistantId = assistant.id, scope = h.access.scope, messageNodes = emptyList())
                 val runtime = net.weero.measix.pilot.service.runtime.ConversationRuntime(conversation.id, conversation.toSnapshot(), appScope, {})
@@ -87,7 +111,7 @@ class LocalEnterpriseMcpServiceTest {
                 runtime.installTurnWorker(turnId, worker)
                 owners += Triple(runtime, turnId, worker)
                 val model = configuration.models.getValue(requireNotNull(configuration.assistantModel(assistant.id).reference)).model
-                val captured = net.weero.measix.pilot.service.CapturedModelConfiguration(net.weero.measix.pilot.data.datastore.Settings(), configuration, assistant,
+                val captured = net.weero.measix.pilot.service.CapturedModelConfiguration(userSettings, configuration, assistant,
                     net.weero.measix.pilot.service.ModelExecutionSnapshot(model, mockk(), "test", state.manifest.applied), selectionRevision = h.sessions.selectionRevision.value, interactionId = turnId)
                 return manager.prepareTurnCapabilities(h.access, captured, runtime, turnId, worker) { error("unexpected barrier") }
             }
@@ -96,6 +120,10 @@ class LocalEnterpriseMcpServiceTest {
                     interactionId = tool.interactionId, onResolvedTool = metadata, onArtifactCreated = {})
             try {
                 val first = prepare()
+                assertEquals(
+                    McpServerCapabilityState.POLICY_BLOCKED,
+                    first.serverOutcomes.single { it.serverId == personalMcp.id }.state,
+                )
                 assertTrue(first.tools.any { it.name == "get_enterprise_profile" })
                 verifyModelToolLoop(h.access, h.sessions.state.value, first, manager)
                 val discover = first.tools.single { it.name == "discover_tools" }

@@ -88,7 +88,6 @@ import androidx.compose.material3.rememberBottomSheetState
 import androidx.compose.material3.SheetValue
 import me.rerere.common.configuration.ConfigurationReference
 import net.weero.measix.pilot.ui.components.ui.BackupReminderCard
-import net.weero.measix.pilot.ui.components.ui.Greeting
 import net.weero.measix.pilot.ui.components.ui.Tooltip
 import net.weero.measix.pilot.ui.components.ui.UIAvatar
 import net.weero.measix.pilot.ui.components.ui.SharedConfigurationEditDialog
@@ -114,6 +113,8 @@ fun ChatDrawerContent(
     vm: ChatVM,
     settings: Settings,
     currentConversationId: Uuid,
+    currentAssistantId: ConfigurationReference,
+    onViewCurrentAssistant: () -> Unit,
     modifier: Modifier = Modifier,
     permanent: Boolean = false,
     onCollapse: (() -> Unit)? = null,
@@ -180,6 +181,7 @@ fun ChatDrawerContent(
     var showMoveToAssistantSheet by remember { mutableStateOf(false) }
     var conversationToMove by remember { mutableStateOf<ConversationSummary?>(null) }
     var pendingSharedNavigation by remember(assistantCatalog?.selection) { mutableStateOf<Screen?>(null) }
+    var assistantPreview by remember(assistantCatalog?.selection) { mutableStateOf<Assistant?>(null) }
 
     // 文件夹相关状态
     var showMoveToFolderSheet by remember { mutableStateOf(false) }
@@ -221,7 +223,6 @@ fun ChatDrawerContent(
                 .padding(horizontal = 8.dp),
             verticalArrangement = Arrangement.spacedBy(2.dp),
         ) {
-            net.weero.measix.pilot.ui.pages.enterprise.EnterpriseSpaceButton()
             // 用户头像和昵称自定义区域
             Row(
                 modifier = Modifier
@@ -272,8 +273,8 @@ fun ChatDrawerContent(
                                 .size(LocalTextStyle.current.fontSize.toDp())
                         )
                     }
-                    Greeting(
-                        style = MaterialTheme.typography.labelMedium,
+                    net.weero.measix.pilot.ui.pages.enterprise.EnterpriseSpaceButton(
+                        modifier = Modifier.fillMaxWidth(),
                     )
                 }
 
@@ -377,7 +378,7 @@ fun ChatDrawerContent(
             assistantCatalog?.let { catalog -> key(catalog.selection) {
                 AssistantPicker(
                     settings = settings,
-                    currentAssistantId = catalog.selected.reference,
+                    currentAssistantId = currentAssistantId,
                     assistants = catalog.assistants,
                     unavailableReasons = catalog.resources.associate { it.key.reference to it.access.unavailableReason },
                     onSelectAssistant = { selectedAssistantId ->
@@ -394,19 +395,20 @@ fun ChatDrawerContent(
                         }
                     },
                     modifier = Modifier.fillMaxWidth(),
-                    onManageAssistant = (catalog.selected.reference as? ConfigurationReference.User)?.let { id -> {
-                        if (catalog.selection.access is net.weero.measix.pilot.data.enterprise.RealmAccess.Enterprise) {
-                            pendingSharedNavigation = Screen.AssistantDetail(id = id.toString())
+                    onManageAssistant = if (
+                        catalog.assistants.containsKey(currentAssistantId) &&
+                        catalog.resources.firstOrNull {
+                            it.key.category == net.weero.measix.pilot.data.configuration.ConfigurationCategory.ASSISTANT &&
+                                it.key.reference == currentAssistantId
+                        }?.access?.unavailableReason == null
+                    ) {
+                        { navigateFromDrawer(onViewCurrentAssistant) }
+                    } else null,
+                    onViewAssistant = { selected ->
+                        if (selected.id == currentAssistantId) {
+                            navigateFromDrawer(onViewCurrentAssistant)
                         } else {
-                            navigateFromDrawer { navController.navigate(Screen.AssistantDetail(id = id.toString())) }
-                        }
-                    } },
-                    onEditAssistant = { id ->
-                        val destination = Screen.AssistantDetail(id.toString())
-                        if (catalog.selection.access is net.weero.measix.pilot.data.enterprise.RealmAccess.Enterprise) {
-                            pendingSharedNavigation = destination
-                        } else {
-                            navigateFromDrawer { navController.navigate(destination) }
+                            assistantPreview = selected
                         }
                     },
                 )
@@ -422,7 +424,7 @@ fun ChatDrawerContent(
                 verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 8.dp)
+                    .padding(start = 8.dp)
             ) {
                 Box {
                     DrawerAction(
@@ -775,6 +777,26 @@ fun ChatDrawerContent(
                 pendingSharedNavigation = null
                 navigateFromDrawer { navController.navigate(destination) }
             },
+        )
+    }
+
+    assistantPreview?.let { preview ->
+        net.weero.measix.pilot.ui.components.ai.AssistantCatalogDetails(
+            assistant = preview,
+            modelSummary = assistantCatalog?.modelSummaries?.get(preview.id)
+                ?: net.weero.measix.pilot.service.AssistantModelSummary(preview.chatModelId, null,
+                    preview.chatModelId?.let { net.weero.measix.pilot.data.configuration.ConfigurationUnavailableReason.REFERENCE_MISSING }),
+            enterpriseName = assistantCatalog?.enterpriseName,
+            onDismiss = { assistantPreview = null },
+            onEdit = (preview.id as? ConfigurationReference.User)?.let { id -> {
+                assistantPreview = null
+                val destination = Screen.AssistantDetail(id.toString())
+                if (assistantCatalog?.selection?.access is net.weero.measix.pilot.data.enterprise.RealmAccess.Enterprise) {
+                    pendingSharedNavigation = destination
+                } else {
+                    navigateFromDrawer { navController.navigate(destination) }
+                }
+            } },
         )
     }
 

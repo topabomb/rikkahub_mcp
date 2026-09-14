@@ -16,6 +16,23 @@ import net.weero.measix.pilot.data.model.Assistant
 
 internal data class ConversationStarterUiModel(val reference: ConfigurationReference.Enterprise, val title: String, val prompt: String)
 internal data class AssistantMemorySeedUiModel(val id: String, val content: String)
+internal data class AssistantModelSummary(
+    val reference: ConfigurationReference?,
+    val displayName: String?,
+    val unavailableReason: ConfigurationUnavailableReason?,
+)
+
+internal fun ModelCatalogUiModel.modelSummaryFor(assistant: Assistant): AssistantModelSummary {
+    val reference = assistant.chatModelId
+    if (reference == null) return AssistantModelSummary(null, null, null)
+    val choice = find(reference)
+    return AssistantModelSummary(
+        reference = reference,
+        displayName = choice?.model?.displayName,
+        unavailableReason = if (choice != null) choice.unavailableReason else unresolvedModels[reference]
+            ?: ConfigurationUnavailableReason.REFERENCE_MISSING,
+    )
+}
 
 /** The assistant and its choices belong to the same rendered conversation and authorized configuration. */
 internal data class ConversationConfigurationUiModel(
@@ -36,6 +53,7 @@ internal data class ConversationConfigurationUiModel(
     val inheritedSubAssistantIds: Set<ConfigurationReference> = emptySet(),
     val memorySeeds: List<AssistantMemorySeedUiModel> = emptyList(),
     val modelPreference: AssistantModelPreference?,
+    val enterpriseName: String?,
 ) {
     val canChangeModel: Boolean get() = assistant != null
     val canEditDefinition: Boolean get() = target.assistantId is ConfigurationReference.User
@@ -65,5 +83,6 @@ internal fun ResolvedConfiguration.conversationConfiguration(target: Conversatio
         inheritedSubAssistantIds[target.assistantId].orEmpty(),
         assistantMemorySeeds(target.assistantId).map { AssistantMemorySeedUiModel(it.id, it.content) },
         if (assistant == null) null else assistantModelPreferences.getValue(target.assistantId),
+        enterpriseIdentity?.enterpriseName,
     )
 }

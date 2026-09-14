@@ -102,9 +102,6 @@ internal class ConfigurationApplicationService(
                 else current.favoriteModels.filterNot { it == reference })
         }
 
-    suspend fun moveModelFavorite(selection: RealmSelection?, from: ConfigurationReference, to: ConfigurationReference) =
-        updateSelectedPreferences(selection) { it.copy(favoriteModels = moveFavoriteModel(it.favoriteModels, from, to)) }
-
     /** Null addresses the personal favorites used while editing shared user definitions. */
     private suspend fun updateSelectedPreferences(selection: RealmSelection?, transform: (ResourceSelections) -> ResourceSelections) {
         recoveryGate.awaitReady()
@@ -131,16 +128,3 @@ internal class ConfigurationApplicationService(
 /** Directory reset is already durable; the previous workspace selection remains if its write failed. */
 internal class WorkspacePreferenceException(cause: Throwable) :
     IllegalStateException("workspace_preference_failed_after_directory_reset", cause)
-
-internal fun moveFavoriteModel(
-    current: List<ConfigurationReference>,
-    fromModelId: ConfigurationReference,
-    toModelId: ConfigurationReference,
-): List<ConfigurationReference> {
-    val fromIndex = current.indexOf(fromModelId)
-    val toIndex = current.indexOf(toModelId)
-    if (fromIndex < 0 || toIndex < 0 || fromIndex == toIndex) return current
-    return current.toMutableList().apply {
-        add(toIndex, removeAt(fromIndex))
-    }
-}

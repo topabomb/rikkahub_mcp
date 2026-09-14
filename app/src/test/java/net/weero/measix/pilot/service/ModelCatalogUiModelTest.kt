@@ -10,10 +10,39 @@ import net.weero.measix.pilot.data.datastore.DEFAULT_AUTO_MODEL_ID
 import net.weero.measix.pilot.data.enterprise.RealmSelection
 import net.weero.measix.pilot.data.enterprise.RealmAccess
 import net.weero.measix.pilot.data.configuration.ConfigurationUnavailableReason
+import net.weero.measix.pilot.data.model.Assistant
 import org.junit.Assert.*
 import org.junit.Test
 
 class ModelCatalogUiModelTest {
+    @Test
+    fun `assistant model summary distinguishes default available and unavailable references`() {
+        val available = Model(modelId = "available", displayName = "Available")
+        val blocked = Model(modelId = "blocked", displayName = "Blocked")
+        val missing = ConfigurationReference.random()
+        val catalog = ModelCatalogUiModel(
+            groups = listOf(ModelGroupUiModel("models", "Models", listOf(
+                ModelChoiceUiModel(available, null),
+                ModelChoiceUiModel(blocked, ConfigurationUnavailableReason.RESOURCE_DISABLED),
+            ), null)),
+            unresolvedModels = mapOf(missing to ConfigurationUnavailableReason.REFERENCE_MISSING),
+        )
+
+        assertEquals(AssistantModelSummary(null, null, null), catalog.modelSummaryFor(Assistant()))
+        assertEquals(
+            AssistantModelSummary(available.id, "Available", null),
+            catalog.modelSummaryFor(Assistant(chatModelId = available.id)),
+        )
+        assertEquals(
+            AssistantModelSummary(blocked.id, "Blocked", ConfigurationUnavailableReason.RESOURCE_DISABLED),
+            catalog.modelSummaryFor(Assistant(chatModelId = blocked.id)),
+        )
+        assertEquals(
+            AssistantModelSummary(missing, null, ConfigurationUnavailableReason.REFERENCE_MISSING),
+            catalog.modelSummaryFor(Assistant(chatModelId = missing)),
+        )
+    }
+
     @Test
     fun `personal default modes are distinct from broken explicit references`() {
         val catalog = ModelCatalogUiModel(emptyList(), RealmSelection(RealmAccess.Personal, 0),
@@ -41,6 +70,34 @@ class ModelCatalogUiModelTest {
         assertEquals(listOf(ConfigurationUnavailableReason.REFERENCE_MISSING, ConfigurationUnavailableReason.REFERENCE_AMBIGUOUS),
             favorites.map { it.unavailableReason })
         assertTrue(favorites.all { it.choice == null && it.group == null })
+    }
+
+    @Test
+    fun `picker projection hides unavailable choices and empty groups without changing catalog facts`() {
+        val available = Model(modelId = "available", displayName = "Available")
+        val blocked = Model(modelId = "blocked", displayName = "Blocked")
+        val image = Model(modelId = "image", displayName = "Image", type = ModelType.IMAGE)
+        val missing = ConfigurationReference.random()
+        val catalog = ModelCatalogUiModel(
+            groups = listOf(
+                ModelGroupUiModel("chat", "Chat", listOf(
+                    ModelChoiceUiModel(available, null),
+                    ModelChoiceUiModel(blocked, ConfigurationUnavailableReason.RESOURCE_DISABLED),
+                ), null),
+                ModelGroupUiModel("image", "Image", listOf(ModelChoiceUiModel(image, null)), null),
+            ),
+            unresolvedModels = mapOf(missing to ConfigurationUnavailableReason.REFERENCE_MISSING),
+        )
+
+        val groups = catalog.selectableGroups(ModelType.CHAT)
+        assertEquals(listOf("chat"), groups.map { it.id })
+        assertEquals(listOf(available.id), groups.single().models.map { it.model.id })
+        assertEquals(blocked.displayName, catalog.unavailableSelection(blocked.id)?.first)
+        assertEquals(ConfigurationUnavailableReason.REFERENCE_MISSING, catalog.unavailableSelection(missing)?.second)
+        assertEquals(listOf(available.id), catalog.selectableFavorites(listOf(blocked.id, missing, available.id), ModelType.CHAT)
+            .map { it.reference })
+        assertEquals(2, catalog.groups.size)
+        assertEquals(2, catalog.favorites(listOf(blocked.id, missing), ModelType.CHAT).size)
     }
     @Test
     fun `unsaved user provider draft is visible but ambiguous model identities are not selectable`() {
