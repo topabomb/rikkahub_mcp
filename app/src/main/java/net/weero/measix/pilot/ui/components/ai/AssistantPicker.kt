@@ -46,6 +46,7 @@ import me.rerere.hugeicons.stroke.ArrowDown01
 import me.rerere.hugeicons.stroke.ArrowRight01
 import me.rerere.hugeicons.stroke.Building03
 import me.rerere.hugeicons.stroke.Edit03
+import me.rerere.hugeicons.stroke.Tick02
 import me.rerere.hugeicons.stroke.User
 import net.weero.measix.pilot.R
 import net.weero.measix.pilot.data.configuration.ConfigurationUnavailableReason
@@ -53,9 +54,8 @@ import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.model.Assistant
 import net.weero.measix.pilot.service.AssistantModelSummary
 import net.weero.measix.pilot.ui.adaptive.AdaptiveModal
-import net.weero.measix.pilot.ui.components.ui.Tag
-import net.weero.measix.pilot.ui.components.ui.TagType
 import net.weero.measix.pilot.ui.components.ui.UIAvatar
+import net.weero.measix.pilot.ui.components.ui.Tooltip
 import net.weero.measix.pilot.ui.pages.assistant.detail.AssistantDetailsHome
 import net.weero.measix.pilot.ui.pages.assistant.detail.AssistantSettingsSection
 import net.weero.measix.pilot.data.model.Avatar
@@ -123,6 +123,7 @@ internal fun AssistantPicker(
                     name = currentAssistant?.name?.ifEmpty { defaultAssistantName } ?: stringResource(R.string.safe_mode_switch_assistant),
                     value = currentAssistant?.avatar ?: Avatar.Dummy,
                     modifier = Modifier.size(36.dp),
+                    subAssistant = currentAssistant?.allowAsSubAssistant == true,
                 )
                 Column(
                     modifier = Modifier.weight(1f),
@@ -217,17 +218,20 @@ internal fun AssistantPickerSheet(
     // 搜索关键词状态
     var searchQuery by remember { mutableStateOf("") }
 
-    // "显示子助手"筛选状态
-    // 当前会话直接使用子助手时默认开启；不存在普通 Assistant 时自动显示全部
-    val hasNormalAssistants = assistants.any { !it.allowAsSubAssistant }
-    var showSubAssistants by remember {
-        mutableStateOf((assistants.find { it.id == currentAssistantId }?.allowAsSubAssistant == true) || !hasNormalAssistants)
-    }
-
-    // 类型筛选先执行，再叠加 name/description 搜索和 Tag 筛选
     val pickerAssistants = remember(assistants, unavailableReasons, currentAssistantId) {
         assistantsForPicker(assistants, unavailableReasons, currentAssistantId)
     }
+    // 当前会话直接使用子助手时默认开启；不存在可选的普通 Assistant 时自动显示全部。
+    val hasNormalAssistants = pickerAssistants.any { !it.allowAsSubAssistant }
+    val hasPickerSubAssistants = pickerAssistants.any { it.allowAsSubAssistant }
+    var showSubAssistants by remember {
+        mutableStateOf(
+            (pickerAssistants.find { it.id == currentAssistantId }?.allowAsSubAssistant == true) ||
+                !hasNormalAssistants,
+        )
+    }
+
+    // 类型筛选先执行，再叠加 name/description 搜索和 Tag 筛选
     val showSource = pickerAssistants.any { it.id is ConfigurationReference.Enterprise } &&
         pickerAssistants.any { it.id is ConfigurationReference.User }
     val visibleTagIds = remember(pickerAssistants) { pickerAssistants.flatMap { it.tags }.toSet() }
@@ -245,6 +249,8 @@ internal fun AssistantPickerSheet(
             matchesType && matchesSearch && matchesTags
         }
     }
+    val hasActiveFilters = searchQuery.isNotBlank() || selectedTagIds.isNotEmpty() ||
+        (hasPickerSubAssistants && !showSubAssistants)
 
     AdaptiveModal(
         onDismissRequest = onDismiss,
@@ -254,27 +260,18 @@ internal fun AssistantPickerSheet(
             modifier = Modifier
                 .fillMaxWidth()
                 .imePadding()
-                .padding(16.dp),
+                .padding(horizontal = 16.dp)
+                .padding(bottom = 16.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    text = sheetTitle,
-                    style = MaterialTheme.typography.titleLarge,
-                    modifier = Modifier.weight(1f),
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                TextButton(onClick = onDismiss) { Text(stringResource(R.string.update_card_close)) }
-            }
+            PickerHeader(title = sheetTitle, onDismiss = onDismiss)
 
             AssistantSearchFilterRow(
                 query = searchQuery,
                 onQueryChange = { searchQuery = it },
                 showSubAssistants = showSubAssistants,
                 onShowSubAssistantsChange = { showSubAssistants = it },
-                stacked = true,
-                showSubAssistantFilter = assistants.any { it.allowAsSubAssistant },
+                showSubAssistantFilter = hasPickerSubAssistants,
             )
 
             if (visibleTags.isNotEmpty()) {
@@ -302,7 +299,7 @@ internal fun AssistantPickerSheet(
             // 助手列表
             LazyColumn(
                 modifier = Modifier.weight(1f, fill = false),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
             ) {
                 if (currentAssistantId != null && assistants.none { it.id == currentAssistantId }) {
                     item(key = "missing-current-assistant") {
@@ -322,12 +319,14 @@ internal fun AssistantPickerSheet(
                                 stringResource(R.string.search_page_no_results),
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
-                            TextButton(onClick = {
-                                searchQuery = ""
-                                selectedTagIds = emptySet()
-                                showSubAssistants = true
-                            }) {
-                                Text(stringResource(R.string.clear_search))
+                            if (hasActiveFilters) {
+                                TextButton(onClick = {
+                                    searchQuery = ""
+                                    selectedTagIds = emptySet()
+                                    showSubAssistants = true
+                                }) {
+                                    Text(stringResource(R.string.clear_search))
+                                }
                             }
                         }
                     }
@@ -351,6 +350,7 @@ internal fun AssistantPickerSheet(
                             assistant = assistant,
                             defaultAssistantName = defaultAssistantName,
                             showSource = showSource,
+                            selected = checked,
                             onView = onViewAssistant?.takeIf {
                                 enabled && unavailableReasons[assistant.id] == null
                             }?.let { view ->
@@ -369,6 +369,7 @@ private fun AssistantItem(
     assistant: Assistant,
     defaultAssistantName: String,
     showSource: Boolean,
+    selected: Boolean,
     onView: (() -> Unit)? = null,
 ) {
     ListItem(
@@ -376,56 +377,58 @@ private fun AssistantItem(
             UIAvatar(
                 name = assistant.name.ifEmpty { defaultAssistantName },
                 value = assistant.avatar,
-                modifier = Modifier.size(32.dp)
+                modifier = Modifier.size(36.dp),
+                subAssistant = assistant.allowAsSubAssistant,
             )
         },
-        trailingContent = onView?.let { view ->
+        trailingContent = if (selected || onView != null) {
             {
-                IconButton(onClick = view) {
-                    Icon(
-                        imageVector = HugeIcons.ArrowRight01,
-                        contentDescription = stringResource(R.string.assistant_picker_view_details),
-                    )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    if (selected) {
+                        Icon(
+                            imageVector = HugeIcons.Tick02,
+                            contentDescription = stringResource(R.string.assistant_picker_current),
+                            modifier = Modifier.size(18.dp),
+                            tint = MaterialTheme.colorScheme.primary,
+                        )
+                    }
+                    val view = onView
+                    if (view != null) {
+                        IconButton(onClick = view) {
+                            Icon(
+                                imageVector = HugeIcons.ArrowRight01,
+                                contentDescription = stringResource(R.string.assistant_picker_view_details),
+                            )
+                        }
+                    }
                 }
             }
-        },
+        } else null,
         colors = ListItemDefaults.colors(containerColor = Color.Transparent),
     ) {
-        Column(
-            verticalArrangement = Arrangement.spacedBy(2.dp),
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
                 text = assistant.name.ifEmpty { defaultAssistantName },
+                modifier = Modifier.weight(1f, fill = false),
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
             if (showSource) {
-                Row(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
-                    val enterprise = assistant.id is ConfigurationReference.Enterprise
-                    Icon(
-                        if (enterprise) HugeIcons.Building03 else HugeIcons.User,
-                        contentDescription = null,
-                        modifier = Modifier.size(14.dp),
-                    )
-                    Text(
-                        stringResource(if (enterprise) R.string.configuration_source_enterprise else R.string.configuration_source_user),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            }
-            if (assistant.description.isNotBlank()) {
-                Text(
-                    text = assistant.description,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
+                val enterprise = assistant.id is ConfigurationReference.Enterprise
+                val source = stringResource(
+                    if (enterprise) R.string.configuration_source_enterprise
+                    else R.string.configuration_source_user,
                 )
-            }
-            if (assistant.allowAsSubAssistant) {
-                Tag(type = TagType.INFO) {
-                    Text(stringResource(R.string.assistant_page_sub_assistant_tag))
+                Tooltip(tooltip = { Text(source) }) {
+                    Icon(
+                        imageVector = if (enterprise) HugeIcons.Building03 else HugeIcons.User,
+                        contentDescription = source,
+                        modifier = Modifier.size(14.dp),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                 }
             }
         }
@@ -448,17 +451,17 @@ internal fun AssistantCatalogDetails(
             modifier = Modifier.fillMaxWidth().padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                if (section != null) IconButton(onClick = { section = null }) {
-                    Icon(HugeIcons.ArrowLeft01, contentDescription = stringResource(R.string.back))
-                }
-                Text(
-                    stringResource(section?.title ?: R.string.assistant_details_title),
-                    style = MaterialTheme.typography.titleLarge,
-                    modifier = Modifier.weight(1f),
-                )
-                TextButton(onClick = onDismiss) { Text(stringResource(R.string.update_card_close)) }
-            }
+            PickerHeader(
+                title = stringResource(section?.title ?: R.string.assistant_details_title),
+                onDismiss = onDismiss,
+                leadingContent = {
+                    if (section != null) {
+                        IconButton(onClick = { section = null }) {
+                            Icon(HugeIcons.ArrowLeft01, contentDescription = stringResource(R.string.back))
+                        }
+                    }
+                },
+            )
             if (section == null) {
                 AssistantDetailsHome(
                     assistant = assistant,

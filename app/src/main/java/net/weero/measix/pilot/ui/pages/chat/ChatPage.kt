@@ -109,7 +109,6 @@ import net.weero.measix.pilot.service.ModelCatalogUiModel
 import net.weero.measix.pilot.service.modelSummaryFor
 import net.weero.measix.pilot.service.mcpChoices
 import net.weero.measix.pilot.ui.components.ai.configurationUnavailableText
-import net.weero.measix.pilot.ui.components.ai.quickRestoreAssistantDefault
 import androidx.compose.runtime.key
 import androidx.compose.foundation.layout.PaddingValues
 import net.weero.measix.pilot.service.importInputUris
@@ -550,7 +549,6 @@ private fun ChatPageContent(
     var showWorkspaceSheet by remember(target) { mutableStateOf(false) }
     var showAssistantPicker by remember(target) { mutableStateOf(false) }
     var assistantPreview by remember(target) { mutableStateOf<Assistant?>(null) }
-    var showFullModelActions by remember(target) { mutableStateOf(false) }
     var handledAssistantDetailsRequest by remember(snapshot.conversationId) { mutableIntStateOf(0) }
     var pendingSharedNavigation by remember(target) { mutableStateOf<Screen?>(null) }
     val enterpriseContext = target?.conversation?.selection?.access?.scope is
@@ -709,16 +707,9 @@ private fun ChatPageContent(
                         builtInSearchEnabled = configuration.builtInSearchEnabled,
                         selectedSearchServiceId = configuration.searchSelection.reference,
                         canChangeModel = configuration.canChangeModel,
-                        quickModelAction = modelSelectionUi.quickRestoreAssistantDefault()?.let { action ->
-                            if (enterpriseContext) action.copy(
-                                label = stringResource(R.string.assistant_model_restore_assistant_default),
-                            ) else action
-                        },
-                        fullModelActions = if (showFullModelActions) modelSelectionUi.actions else emptyList(),
-                        onOpenQuickModelPicker = { showFullModelActions = false },
+                        modelSelectionActions = modelSelectionUi.actions,
                         modelListState = modelListState,
-                        selectedModelId = configuration.modelSelection.reference,
-                        selectedModelUsesDefault = configuration.modelPreference?.mode != net.weero.measix.pilot.data.configuration.AssistantModelPreferenceMode.EXPLICIT,
+                        selectedModelId = modelSelectionUi.selectedModelId,
                         hazeState = hazeState,
                         completionProviders = completionProviders,
                         onCancelClick = {
@@ -901,7 +892,6 @@ private fun ChatPageContent(
                     if (readiness.requiresProviderConfiguration && snapshot.header.scope is net.weero.measix.pilot.data.configuration.ConfigurationScope.Enterprise) {
                         navController.navigate(Screen.Enterprise)
                     } else if (configuration?.canChangeModel == true) {
-                        showFullModelActions = false
                         modelListState.open()
                     }
                 },
@@ -1059,7 +1049,6 @@ private fun ChatPageContent(
                     onManageSkills = { navigateToSharedConfiguration(Screen.Skills) },
                     onOpenModelPicker = {
                         showUsageEditor = false
-                        showFullModelActions = true
                         modelListState.open()
                     },
                     onClose = { showUsageEditor = false },

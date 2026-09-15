@@ -1700,8 +1700,6 @@
   <string name="assistant_usage_shared_edit">내 공유 어시스턴트 정의 편집</string>
   <string name="assistant_usage_shared_warning">공유 사용자 설정입니다. 변경은 이 어시스턴트를 사용하는 모든 공간에 영향을 줍니다.</string>
   <string name="assistant_usage_inherited_binding">정의에서 상속되어 여기서 제거할 수 없습니다</string>
-  <string name="assistant_model_use_assistant_default">어시스턴트 기본값 · %1$s</string>
-  <string name="assistant_model_use_space_default">공간 기본값 · %1$s</string>
   <string name="assistant_model_mode_assistant_default">어시스턴트 기본 모델 사용 중</string>
   <string name="assistant_model_mode_space_default">공간 기본 모델을 따르는 중</string>
   <string name="assistant_model_mode_explicit">이 공간에서 선택한 모델 사용 중</string>
@@ -1788,9 +1786,10 @@
   <string name="assistant_picker_view_details">세부정보 보기</string>
   <string name="assistant_details_title">어시스턴트 세부정보</string>
   <string name="assistant_details_enterprise_source">%1$s 제공</string>
-  <string name="assistant_model_restore_assistant_default">어시스턴트 기본값 사용</string>
-  <string name="model_list_default_badge">기본값</string>
   <string name="model_list_selected">선택한 모델</string>
   <string name="enterprise_local_indicator">로컬 시뮬레이션</string>
   <string name="clear_search">검색 지우기</string>
+  <string name="assistant_model_default_settings">설정 기본값</string>
+  <string name="assistant_model_default_assistant">어시스턴트 기본값</string>
+  <string name="assistant_model_default_space">공간 기본값</string>
 </resources>

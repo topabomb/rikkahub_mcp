@@ -287,13 +287,19 @@ internal object ConfigurationResolver {
         }
         val assistantModelPreferences = buildMap {
             fun add(reference: ConfigurationReference, definitionReference: ConfigurationReference?) {
-                val stored = document.preferences.assistantUsage(scope, reference)?.chatModelId
-                put(reference, AssistantModelPreference(
-                    mode = when {
+                val mode = if (scope is ConfigurationScope.Personal) {
+                    if (definitionReference == null) AssistantModelPreferenceMode.SPACE_DEFAULT
+                    else AssistantModelPreferenceMode.EXPLICIT
+                } else {
+                    val stored = document.preferences.assistantUsage(scope, reference)?.chatModelId
+                    when {
                         stored == null -> AssistantModelPreferenceMode.ASSISTANT_DEFAULT
                         stored.value == null -> AssistantModelPreferenceMode.SPACE_DEFAULT
                         else -> AssistantModelPreferenceMode.EXPLICIT
-                    },
+                    }
+                }
+                put(reference, AssistantModelPreference(
+                    mode = mode,
                     definitionReference = definitionReference,
                     spaceDefaultReference = effectiveSelections.chatModelId,
                 ))

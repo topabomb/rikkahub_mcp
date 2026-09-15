@@ -1,9 +1,9 @@
 package net.weero.measix.pilot.ui.components.ai
 
 import android.util.Log
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.FlowRow
@@ -23,12 +23,13 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -61,6 +62,8 @@ import me.rerere.ai.provider.ModelAbility
 import me.rerere.ai.provider.ModelType
 import me.rerere.common.configuration.ConfigurationReference
 import me.rerere.hugeicons.HugeIcons
+import me.rerere.hugeicons.stroke.AiMagic
+import me.rerere.hugeicons.stroke.ArrowDown01
 import me.rerere.hugeicons.stroke.ArrowRight01
 import me.rerere.hugeicons.stroke.Brain02
 import me.rerere.hugeicons.stroke.Cancel01
@@ -81,7 +84,9 @@ import net.weero.measix.pilot.service.ConversationConfigurationUiModel
 import net.weero.measix.pilot.data.configuration.AssistantModelPreferenceMode
 import net.weero.measix.pilot.data.configuration.AssistantPreferenceChange
 import net.weero.measix.pilot.data.configuration.ConfigurationUnavailableReason
+import net.weero.measix.pilot.data.configuration.ResourceSelectionSlot
 import net.weero.measix.pilot.data.enterprise.RealmAccess
+import net.weero.measix.pilot.service.DefaultModelBehavior
 import net.weero.measix.pilot.ui.adaptive.AdaptiveModal
 import net.weero.measix.pilot.ui.components.ui.AutoAIIcon
 import net.weero.measix.pilot.ui.components.ui.Tag
@@ -140,7 +145,6 @@ fun ModelSelectorButton(
     onlyIcon: Boolean = false,
     onClear: (() -> Unit)? = null,
     placeholder: String? = null,
-    onOpen: (() -> Unit)? = null,
 ) {
     val model = state.currentModel
     val unresolvedReference = state.modelId?.takeIf { model == null }
@@ -151,7 +155,6 @@ fun ModelSelectorButton(
         ) {
             TextButton(
                 onClick = {
-                    onOpen?.invoke()
                     state.open()
                 },
                 modifier = modifier
@@ -188,7 +191,6 @@ fun ModelSelectorButton(
     } else {
         IconButton(
             onClick = {
-                onOpen?.invoke()
                 state.open()
             },
         ) {
@@ -211,8 +213,11 @@ fun ModelSelectorButton(
 
 internal data class ModelSelectionAction(
     val label: String,
+    val value: String,
     val selected: Boolean,
     val unavailableReason: ConfigurationUnavailableReason? = null,
+    val supportingText: String? = null,
+    val valueIsError: Boolean = false,
     val commit: suspend () -> Unit,
 )
 
@@ -222,8 +227,34 @@ internal data class AssistantModelSelectionUi(
     val modeLabel: String?,
 )
 
-internal fun AssistantModelSelectionUi.quickRestoreAssistantDefault(): ModelSelectionAction? =
-    actions.firstOrNull()?.takeUnless { it.selected }
+internal data class ModelSelectionReferencePresentation(
+    val displayName: String?,
+    val unavailableReason: ConfigurationUnavailableReason?,
+    val reasonAsValue: Boolean,
+)
+
+internal fun modelSelectionReferencePresentation(
+    reference: ConfigurationReference?,
+    catalog: ModelCatalogUiModel,
+): ModelSelectionReferencePresentation {
+    val usesUnconfiguredDefault = reference == catalog.selections.chatModelId &&
+        catalog.defaultBehavior(ResourceSelectionSlot.CHAT_MODEL) == DefaultModelBehavior.UNCONFIGURED
+    if (reference == null || usesUnconfiguredDefault) return ModelSelectionReferencePresentation(
+        displayName = null,
+        unavailableReason = ConfigurationUnavailableReason.REFERENCE_MISSING,
+        reasonAsValue = false,
+    )
+    val choice = catalog.find(reference)
+    return ModelSelectionReferencePresentation(
+        displayName = choice?.model?.displayName,
+        unavailableReason = if (choice != null) {
+            choice.unavailableReason
+        } else {
+            catalog.unresolvedModels[reference] ?: ConfigurationUnavailableReason.REFERENCE_MISSING
+        },
+        reasonAsValue = choice == null,
+    )
+}
 
 /** One presentation owns the distinction between definition inheritance, space inheritance and an explicit model. */
 @Composable
@@ -234,23 +265,41 @@ internal fun assistantModelSelectionUi(
     val assistant = requireNotNull(configuration.assistant)
     val preference = requireNotNull(configuration.modelPreference)
     val notConfigured = stringResource(R.string.chat_readiness_model_not_configured)
-    fun reason(reference: ConfigurationReference?): ConfigurationUnavailableReason? {
-        if (reference == null) return ConfigurationUnavailableReason.REFERENCE_MISSING
-        val choice = configuration.modelCatalog.find(reference)
-        if (choice != null) return choice.unavailableReason
-        return configuration.modelCatalog.unresolvedModels[reference]
-            ?: ConfigurationUnavailableReason.REFERENCE_MISSING
+    @Composable
+    fun action(
+        label: String,
+        reference: ConfigurationReference?,
+        selected: Boolean,
+        commitAction: suspend () -> Unit,
+    ): ModelSelectionAction {
+        val presentation = modelSelectionReferencePresentation(reference, configuration.modelCatalog)
+        val value = presentation.displayName ?: if (presentation.reasonAsValue) {
+            configurationUnavailableText(requireNotNull(presentation.unavailableReason))
+        } else {
+            notConfigured
+        }
+        val supportingText = presentation.unavailableReason
+            ?.takeUnless { presentation.reasonAsValue || presentation.displayName == null }
+            ?.let { configurationUnavailableText(it) }
+        return ModelSelectionAction(
+            label = label,
+            value = value,
+            selected = selected,
+            unavailableReason = presentation.unavailableReason,
+            supportingText = supportingText,
+            valueIsError = presentation.reasonAsValue,
+            commit = commitAction,
+        )
     }
-    fun name(reference: ConfigurationReference?): String = configuration.modelCatalog.find(reference)?.model?.displayName
-        ?: notConfigured
     val enterprise = configuration.modelCatalog.selection?.access is RealmAccess.Enterprise
     if (!enterprise) {
         return AssistantModelSelectionUi(
-            actions = listOf(ModelSelectionAction(
-                label = stringResource(R.string.assistant_page_follow_default_model),
+            actions = listOf(action(
+                label = stringResource(R.string.assistant_model_default_settings),
+                reference = preference.spaceDefaultReference,
                 selected = assistant.chatModelId == null,
-                unavailableReason = reason(preference.spaceDefaultReference),
-            ) { commit(AssistantPreferenceChange.Model(null)) }),
+                commitAction = { commit(AssistantPreferenceChange.Model(null)) },
+            )),
             selectedModelId = assistant.chatModelId,
             modeLabel = null,
         )
@@ -258,16 +307,18 @@ internal fun assistantModelSelectionUi(
     val assistantDefaultReference = preference.definitionReference ?: preference.spaceDefaultReference
     return AssistantModelSelectionUi(
         actions = listOf(
-            ModelSelectionAction(
-                label = stringResource(R.string.assistant_model_use_assistant_default, name(assistantDefaultReference)),
+            action(
+                label = stringResource(R.string.assistant_model_default_assistant),
+                reference = assistantDefaultReference,
                 selected = preference.mode == AssistantModelPreferenceMode.ASSISTANT_DEFAULT,
-                unavailableReason = reason(assistantDefaultReference),
-            ) { commit(AssistantPreferenceChange.InheritModel) },
-            ModelSelectionAction(
-                label = stringResource(R.string.assistant_model_use_space_default, name(preference.spaceDefaultReference)),
+                commitAction = { commit(AssistantPreferenceChange.InheritModel) },
+            ),
+            action(
+                label = stringResource(R.string.assistant_model_default_space),
+                reference = preference.spaceDefaultReference,
                 selected = preference.mode == AssistantModelPreferenceMode.SPACE_DEFAULT,
-                unavailableReason = reason(preference.spaceDefaultReference),
-            ) { commit(AssistantPreferenceChange.Model(null)) },
+                commitAction = { commit(AssistantPreferenceChange.Model(null)) },
+            ),
         ),
         selectedModelId = configuration.modelSelection.reference.takeIf {
             preference.mode == AssistantModelPreferenceMode.EXPLICIT
@@ -285,9 +336,7 @@ internal fun ModelListSheet(
     state: ModelListState,
     onSelect: suspend (Model) -> Unit,
     additionalActions: List<ModelSelectionAction> = emptyList(),
-    compactAction: ModelSelectionAction? = null,
     selectedModelId: ConfigurationReference? = state.modelId,
-    selectedModelUsesDefault: Boolean = false,
     configurationCommands: ConfigurationApplicationService = koinInject(),
     configurationQueries: ConfigurationQueryService = koinInject(),
 ) {
@@ -331,54 +380,22 @@ internal fun ModelListSheet(
                 .imePadding(),
             verticalArrangement = Arrangement.spacedBy(4.dp)
         ) {
-            Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    stringResource(R.string.model_list_select_model),
-                    style = MaterialTheme.typography.titleLarge,
-                    modifier = Modifier.weight(1f).padding(horizontal = 8.dp),
-                )
-                IconButton(onClick = ::dismiss) {
-                    Icon(HugeIcons.Cancel01, contentDescription = stringResource(R.string.update_card_close))
-                }
-            }
+            PickerHeader(
+                title = stringResource(R.string.model_list_select_model),
+                onDismiss = ::dismiss,
+                modifier = Modifier.padding(horizontal = 8.dp),
+            )
             selectionError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
-            additionalActions.forEach { action ->
-                val enabled = !submitting && action.unavailableReason == null
-                Row(
-                    modifier = Modifier.fillMaxWidth()
-                        .clickable(enabled = enabled) { submit(action.commit) }
-                        .padding(horizontal = 8.dp, vertical = 4.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    RadioButton(selected = action.selected, enabled = enabled,
-                        onClick = null)
-                    Column(modifier = Modifier.padding(start = 8.dp)) {
-                        Text(action.label)
-                        action.unavailableReason?.let {
-                            Text(configurationUnavailableText(it), style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.error)
-                        }
-                    }
-                }
-            }
-            compactAction?.let { action ->
-                TextButton(
-                    enabled = !submitting && action.unavailableReason == null,
-                    onClick = { submit(action.commit) },
-                    modifier = Modifier.align(Alignment.End),
-                ) {
-                    Text(action.label)
-                }
-            }
             ModelList(
                 currentModel = selectedModelId,
+                defaultActions = additionalActions,
                 providers = state.filteredGroups,
                 catalog = state.catalog,
                 configurationCommands = configurationCommands,
                 configurationQueries = configurationQueries,
                 modelType = state.type,
                 selectionEnabled = !submitting,
-                selectedModelUsesDefault = selectedModelUsesDefault,
+                onSelectDefault = { action -> submit(action.commit) },
                 onSelect = { model -> submit { onSelect(model) } },
                 onDismiss = {
                     dismiss()
@@ -391,13 +408,14 @@ internal fun ModelListSheet(
 @Composable
 private fun ColumnScope.ModelList(
     currentModel: ConfigurationReference? = null,
+    defaultActions: List<ModelSelectionAction>,
     providers: List<ModelGroupUiModel>,
     catalog: ModelCatalogUiModel,
     configurationCommands: ConfigurationApplicationService,
     configurationQueries: ConfigurationQueryService,
     modelType: ModelType,
     selectionEnabled: Boolean,
-    selectedModelUsesDefault: Boolean,
+    onSelectDefault: (ModelSelectionAction) -> Unit,
     onSelect: (Model) -> Unit,
     onDismiss: () -> Unit
 ) {
@@ -441,13 +459,21 @@ private fun ColumnScope.ModelList(
         providers.filter { searchFilteredModelsByProvider[it.id].orEmpty().isNotEmpty() }
     }
     val unavailableSelection = catalog.unavailableSelection(currentModel)
+    val leadingDefaultCount = if (defaultActions.isNotEmpty()) 1 else 0
     val leadingUnresolvedCount = if (unavailableSelection != null) 1 else 0
+    val leadingItemCount = leadingDefaultCount + leadingUnresolvedCount
 
     // 计算当前选中模型的位置
-    val selectedModelPosition = remember(currentModel, favoriteModels, providers, typeFilteredModelsByProvider, leadingUnresolvedCount) {
+    val selectedModelPosition = remember(
+        currentModel,
+        favoriteModels,
+        providers,
+        typeFilteredModelsByProvider,
+        leadingItemCount,
+    ) {
         if (currentModel == null) return@remember 0
 
-        var position = leadingUnresolvedCount
+        var position = leadingItemCount
 
         // 跳过无providers提示
         if (providers.isEmpty()) {
@@ -488,8 +514,8 @@ private fun ColumnScope.ModelList(
     val lazyListState = rememberLazyListState(
         initialFirstVisibleItemIndex = selectedModelPosition
     )
-    val providerPositions = remember(displayedProviders, displayedFavorites, searchFilteredModelsByProvider, leadingUnresolvedCount) {
-        var currentIndex = leadingUnresolvedCount
+    val providerPositions = remember(displayedProviders, displayedFavorites, searchFilteredModelsByProvider, leadingItemCount) {
+        var currentIndex = leadingItemCount
         if (displayedProviders.isEmpty()) {
             currentIndex = 1 // no providers item
         }
@@ -544,23 +570,23 @@ private fun ColumnScope.ModelList(
             .weight(1f, fill = false)
             .fillMaxWidth(),
     ) {
+        if (defaultActions.isNotEmpty()) {
+            item(key = "model-default") {
+                ModelDefaultItem(
+                    actions = defaultActions,
+                    selectionEnabled = selectionEnabled,
+                    onSelect = onSelectDefault,
+                    modifier = Modifier.animateItem(),
+                )
+            }
+        }
         if (unavailableSelection != null) {
             item(key = "selected-unavailable:$currentModel") {
-                Row(
-                    modifier = Modifier.fillMaxWidth().padding(16.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(12.dp),
-                ) {
-                    RadioButton(selected = true, enabled = false, onClick = null)
-                    Column(Modifier.weight(1f)) {
-                        Text(unavailableSelection.first, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        Text(
-                            configurationUnavailableText(unavailableSelection.second),
-                            color = MaterialTheme.colorScheme.error,
-                            style = MaterialTheme.typography.bodySmall,
-                        )
-                    }
-                }
+                UnavailableModelItem(
+                    name = unavailableSelection.first,
+                    reason = configurationUnavailableText(unavailableSelection.second),
+                    modifier = Modifier.animateItem(),
+                )
             }
         }
         if (displayedProviders.isEmpty() && displayedFavorites.isEmpty()) {
@@ -622,7 +648,6 @@ private fun ColumnScope.ModelList(
                         onSelect = onSelect,
                         modifier = Modifier.animateItem(),
                         select = model.model.id == currentModel,
-                        selectedUsesDefault = selectedModelUsesDefault,
                         tail = {
                             IconButton(
                                 onClick = {
@@ -670,7 +695,6 @@ private fun ColumnScope.ModelList(
                     onSelect = onSelect,
                     modifier = Modifier.animateItem(),
                     select = currentModel == model.model.id,
-                    selectedUsesDefault = selectedModelUsesDefault,
                     tail = {
                         IconButton(
                             enabled = favorite || model.canSelect,
@@ -754,12 +778,233 @@ private fun ColumnScope.ModelList(
     }
 }
 
+internal fun primaryDefaultAction(actions: List<ModelSelectionAction>): ModelSelectionAction? =
+    actions.firstOrNull { it.selected }
+        ?: actions.firstOrNull { it.unavailableReason == null }
+        ?: actions.firstOrNull()
+
+@Composable
+private fun ModelDefaultItem(
+    actions: List<ModelSelectionAction>,
+    selectionEnabled: Boolean,
+    onSelect: (ModelSelectionAction) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val action = primaryDefaultAction(actions) ?: return
+    val selected = actions.any { it.selected }
+    var expanded by remember { mutableStateOf(false) }
+    Card(
+        modifier = modifier,
+        colors = CardDefaults.cardColors(
+            containerColor = if (selected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface,
+            contentColor = if (selected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface,
+        ),
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = 8.dp, horizontal = 12.dp),
+        ) {
+            Row(
+                modifier = Modifier
+                    .weight(1f)
+                    .selectable(
+                        selected = selected,
+                        enabled = selectionEnabled && action.unavailableReason == null,
+                        onClick = { onSelect(action) },
+                        role = Role.RadioButton,
+                    ),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Surface(
+                    color = MaterialTheme.colorScheme.secondaryContainer,
+                    shape = MaterialTheme.shapes.small,
+                ) {
+                    Icon(
+                        imageVector = HugeIcons.AiMagic,
+                        contentDescription = null,
+                        modifier = Modifier
+                            .padding(7.dp)
+                            .size(22.dp),
+                    )
+                }
+                Column(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(2.dp),
+                ) {
+                    Text(
+                        text = action.label,
+                        style = MaterialTheme.typography.titleSmall,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Text(
+                        text = action.value,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = if (action.valueIsError) {
+                            MaterialTheme.colorScheme.error
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        },
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    action.supportingText?.let {
+                        Text(
+                            text = it,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                }
+                if (selected) {
+                    Icon(
+                        imageVector = HugeIcons.Tick02,
+                        contentDescription = stringResource(R.string.model_list_selected),
+                        modifier = Modifier.size(18.dp),
+                    )
+                }
+            }
+            if (actions.size > 1) {
+                Box {
+                    IconButton(
+                        enabled = selectionEnabled,
+                        onClick = { expanded = true },
+                    ) {
+                        Icon(
+                            imageVector = HugeIcons.ArrowDown01,
+                            contentDescription = stringResource(R.string.more_options),
+                            modifier = Modifier.size(20.dp),
+                        )
+                    }
+                    DropdownMenu(
+                        expanded = expanded,
+                        onDismissRequest = { expanded = false },
+                    ) {
+                        actions.forEach { option ->
+                            DropdownMenuItem(
+                                enabled = selectionEnabled && option.unavailableReason == null,
+                                onClick = {
+                                    expanded = false
+                                    onSelect(option)
+                                },
+                                text = {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                                    ) {
+                                        Column(
+                                            modifier = Modifier.weight(1f),
+                                            verticalArrangement = Arrangement.spacedBy(2.dp),
+                                        ) {
+                                            Text(option.label, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                            Text(
+                                                text = option.value,
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = if (option.valueIsError) {
+                                                    MaterialTheme.colorScheme.error
+                                                } else {
+                                                    MaterialTheme.colorScheme.onSurfaceVariant
+                                                },
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis,
+                                            )
+                                            option.supportingText?.let {
+                                                Text(
+                                                    text = it,
+                                                    style = MaterialTheme.typography.bodySmall,
+                                                    color = MaterialTheme.colorScheme.error,
+                                                    maxLines = 1,
+                                                    overflow = TextOverflow.Ellipsis,
+                                                )
+                                            }
+                                        }
+                                        if (option.selected) {
+                                            Icon(
+                                                imageVector = HugeIcons.Tick02,
+                                                contentDescription = stringResource(R.string.model_list_selected),
+                                                modifier = Modifier.size(18.dp),
+                                            )
+                                        }
+                                    }
+                                },
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun UnavailableModelItem(
+    name: String,
+    reason: String,
+    modifier: Modifier = Modifier,
+) {
+    Card(
+        modifier = modifier,
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.primaryContainer,
+            contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+        ),
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = 8.dp, horizontal = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Surface(
+                color = MaterialTheme.colorScheme.secondaryContainer,
+                shape = MaterialTheme.shapes.small,
+            ) {
+                AutoAIIcon(
+                    name = name,
+                    modifier = Modifier
+                        .padding(4.dp)
+                        .size(28.dp),
+                )
+            }
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(2.dp),
+            ) {
+                Text(
+                    text = name,
+                    style = MaterialTheme.typography.titleSmall,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    text = reason,
+                    color = MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.bodySmall,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            Icon(
+                imageVector = HugeIcons.Tick02,
+                contentDescription = stringResource(R.string.model_list_selected),
+                modifier = Modifier.size(18.dp),
+            )
+        }
+    }
+}
+
 @Composable
 private fun ModelItem(
     model: ModelChoiceUiModel,
     selectionEnabled: Boolean,
     select: Boolean,
-    selectedUsesDefault: Boolean = false,
     onSelect: (Model) -> Unit,
     modifier: Modifier = Modifier,
     tail: @Composable RowScope.() -> Unit = {},
@@ -819,18 +1064,11 @@ private fun ModelItem(
                     CompactModelCapabilities(model.model)
                 }
                 if (select) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        if (selectedUsesDefault) Text(
-                            stringResource(R.string.model_list_default_badge),
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                        Icon(
-                            HugeIcons.Tick02,
-                            contentDescription = stringResource(R.string.model_list_selected),
-                            modifier = Modifier.size(18.dp),
-                        )
-                    }
+                    Icon(
+                        HugeIcons.Tick02,
+                        contentDescription = stringResource(R.string.model_list_selected),
+                        modifier = Modifier.size(18.dp),
+                    )
                 }
                 tail()
             }

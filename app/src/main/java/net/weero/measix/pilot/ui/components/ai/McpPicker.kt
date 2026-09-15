@@ -7,19 +7,16 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxHeight
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.ui.draw.clip
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearWavyProgressIndicator
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.ListItemDefaults
@@ -27,7 +24,6 @@ import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -36,8 +32,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.util.fastFilter
 import me.rerere.hugeicons.HugeIcons
@@ -128,42 +122,28 @@ internal fun McpPickerSheet(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .fillMaxHeight(0.7f)
-                .padding(16.dp),
+                .padding(horizontal = 16.dp)
+                .padding(bottom = 16.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(16.dp)
+            verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text(
-                    text = stringResource(id = R.string.mcp_picker_title),
-                    style = MaterialTheme.typography.titleLarge.copy(
-                        fontWeight = FontWeight.Bold
-                    ),
-                    modifier = Modifier.weight(1f),
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                TextButton(onClick = onDismiss) { Text(stringResource(R.string.update_card_close)) }
-            }
-            Row(Modifier.fillMaxWidth()) {
-                TextButton(
-                    onClick = {
-                        onDismiss()
-                        onNavigateToSettings()
-                    },
-                ) {
-                    Icon(
-                        imageVector = HugeIcons.Settings03,
-                        contentDescription = null,
-                        modifier = Modifier.size(18.dp),
-                    )
-                    Spacer(Modifier.width(6.dp))
-                    Text(stringResource(R.string.mcp_picker_manage_servers))
-                }
-            }
+            PickerHeader(
+                title = stringResource(R.string.mcp_picker_title),
+                onDismiss = onDismiss,
+                actions = {
+                    IconButton(
+                        onClick = {
+                            onDismiss()
+                            onNavigateToSettings()
+                        },
+                    ) {
+                        Icon(
+                            imageVector = HugeIcons.Settings03,
+                            contentDescription = stringResource(R.string.mcp_picker_manage_servers),
+                        )
+                    }
+                },
+            )
             AnimatedVisibility(loading) {
                 Column(
                     horizontalAlignment = Alignment.CenterHorizontally,
@@ -183,13 +163,13 @@ internal fun McpPickerSheet(
                     onToggle = onToggle,
                     modifier = Modifier
                         .fillMaxWidth()
-                        .weight(1f)
+                        .weight(1f, fill = false)
                 )
             } else {
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .weight(1f),
+                        .padding(vertical = 32.dp),
                     contentAlignment = Alignment.Center,
                 ) {
                     Text(
@@ -217,7 +197,7 @@ internal fun McpPicker(
     onToggle: (ConfigurationReference, Boolean) -> Unit
 ) {
     LazyColumn(
-        modifier = modifier.fillMaxSize(),
+        modifier = modifier.fillMaxWidth(),
         contentPadding = contentPadding,
         verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {

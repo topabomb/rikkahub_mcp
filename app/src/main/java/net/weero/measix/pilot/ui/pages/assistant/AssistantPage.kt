@@ -551,6 +551,7 @@ private fun AssistantItem(
             UIAvatar(
                 name = assistant.name.ifBlank { stringResource(R.string.assistant_page_default_assistant) },
                 value = assistant.avatar,
+                subAssistant = assistant.allowAsSubAssistant,
                 modifier = Modifier
                     .size(48.dp)
                     .heroAnimation("assistant_${assistant.id}")
@@ -582,11 +583,6 @@ private fun AssistantItem(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    if (assistant.allowAsSubAssistant) {
-                        Tag(type = TagType.INFO) {
-                            Text(stringResource(R.string.assistant_page_sub_assistant_tag))
-                        }
-                    }
                     if (assistant.isSubAssistantGloballyVisible) {
                         Tag(type = TagType.WARNING) {
                             Text(stringResource(R.string.sub_assistant_global_tag))

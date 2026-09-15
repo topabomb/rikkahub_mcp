@@ -1700,8 +1700,6 @@
   <string name="assistant_usage_shared_edit">编辑我的助手定义</string>
   <string name="assistant_usage_shared_warning">这是共享用户配置，修改会影响所有使用此助手的空间。</string>
   <string name="assistant_usage_inherited_binding">来自助手定义，不能在本域移除</string>
-  <string name="assistant_model_use_assistant_default">助手默认 · %1$s</string>
-  <string name="assistant_model_use_space_default">空间默认 · %1$s</string>
   <string name="assistant_model_mode_assistant_default">正在使用助手默认模型</string>
   <string name="assistant_model_mode_space_default">正在跟随空间默认模型</string>
   <string name="assistant_model_mode_explicit">正在使用此空间中选择的模型</string>
@@ -1788,9 +1786,10 @@
   <string name="assistant_picker_view_details">查看详情</string>
   <string name="assistant_details_title">助手详情</string>
   <string name="assistant_details_enterprise_source">由%1$s提供</string>
-  <string name="assistant_model_restore_assistant_default">使用助手默认</string>
-  <string name="model_list_default_badge">默认</string>
   <string name="model_list_selected">已选择的模型</string>
   <string name="enterprise_local_indicator">本地模拟</string>
   <string name="clear_search">清除搜索</string>
+  <string name="assistant_model_default_settings">设置默认</string>
+  <string name="assistant_model_default_assistant">助手默认</string>
+  <string name="assistant_model_default_space">空间默认</string>
 </resources>

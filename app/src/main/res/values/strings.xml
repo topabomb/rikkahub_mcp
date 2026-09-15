@@ -1701,8 +1701,6 @@
   <string name="assistant_usage_shared_edit">Edit my shared assistant definition</string>
   <string name="assistant_usage_shared_warning">This is a shared user configuration. Changes affect every space that uses this assistant.</string>
   <string name="assistant_usage_inherited_binding">Inherited from the assistant definition; cannot be removed here</string>
-  <string name="assistant_model_use_assistant_default">Assistant default · %1$s</string>
-  <string name="assistant_model_use_space_default">Space default · %1$s</string>
   <string name="assistant_model_mode_assistant_default">Using the assistant default</string>
   <string name="assistant_model_mode_space_default">Following the space default</string>
   <string name="assistant_model_mode_explicit">Using a model chosen for this space</string>
@@ -1789,9 +1787,10 @@
   <string name="assistant_picker_view_details">View details</string>
   <string name="assistant_details_title">Assistant details</string>
   <string name="assistant_details_enterprise_source">Provided by %1$s</string>
-  <string name="assistant_model_restore_assistant_default">Use assistant default</string>
-  <string name="model_list_default_badge">Default</string>
   <string name="model_list_selected">Selected model</string>
   <string name="enterprise_local_indicator">Local simulation</string>
   <string name="clear_search">Clear search</string>
+  <string name="assistant_model_default_settings">Settings default</string>
+  <string name="assistant_model_default_assistant">Assistant default</string>
+  <string name="assistant_model_default_space">Space default</string>
 </resources>

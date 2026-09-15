@@ -134,18 +134,31 @@ internal fun AssistantUsageEditor(
                         definitionEditable = false, usageOnly = true, imageResolver = imageResolver,
                         modelControl = {
                             val selectionUi = assistantModelSelectionUi(configuration, ::commit)
+                            val selectionPresentation = modelSelectionReferencePresentation(
+                                configuration.modelSelection.reference,
+                                configuration.modelCatalog,
+                            )
+                            val selectedDefault = selectionUi.actions.firstOrNull { it.selected }
                             TextButton(onClick = onOpenModelPicker) {
                                 Text(
-                                    configuration.model?.displayName
-                                        ?: configuration.modelSelection.reference?.toString()
-                                        ?: stringResource(R.string.assistant_page_follow_default_model),
+                                    selectionPresentation.displayName ?: if (selectionPresentation.reasonAsValue) {
+                                        configurationUnavailableText(requireNotNull(selectionPresentation.unavailableReason))
+                                    } else {
+                                        selectedDefault?.value
+                                            ?: stringResource(R.string.chat_readiness_model_not_configured)
+                                    },
                                 )
                             }
                             selectionUi.modeLabel?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
-                            configuration.modelSelection.unavailableReason?.let {
-                                Text(configurationUnavailableText(it), color = MaterialTheme.colorScheme.error)
-                            }
-                        })
+                            selectionPresentation.unavailableReason
+                                ?.takeUnless {
+                                    selectionPresentation.reasonAsValue || selectionPresentation.displayName == null
+                                }
+                                ?.let {
+                                    Text(configurationUnavailableText(it), color = MaterialTheme.colorScheme.error)
+                                }
+                        }
+                    )
                     AssistantSettingsSection.PROMPT -> Column {
                         Text(
                             stringResource(R.string.assistant_usage_prompt_read_only),

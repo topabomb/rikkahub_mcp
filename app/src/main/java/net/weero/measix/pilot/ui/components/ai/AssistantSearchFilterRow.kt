@@ -1,10 +1,9 @@
 package net.weero.measix.pilot.ui.components.ai
 
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -28,39 +27,27 @@ fun AssistantSearchFilterRow(
     showSubAssistants: Boolean,
     onShowSubAssistantsChange: (Boolean) -> Unit,
     modifier: Modifier = Modifier,
-    stacked: Boolean = false,
     showSubAssistantFilter: Boolean = true,
 ) {
-    if (stacked) {
-        Column(modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            AssistantSearchField(query, onQueryChange, Modifier.fillMaxWidth())
-            if (showSubAssistantFilter) {
-                SubAssistantFilterChip(
-                    selected = showSubAssistants,
-                    onSelectedChange = onShowSubAssistantsChange,
-                )
-            }
-        }
-        return
-    }
-    Row(
+    AssistantSearchField(
+        query = query,
+        onQueryChange = onQueryChange,
+        showSubAssistants = showSubAssistants,
+        onShowSubAssistantsChange = onShowSubAssistantsChange,
+        showSubAssistantFilter = showSubAssistantFilter,
         modifier = modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        AssistantSearchField(query, onQueryChange, Modifier.weight(1f))
-        if (showSubAssistantFilter) {
-            SubAssistantFilterChip(
-                selected = showSubAssistants,
-                onSelectedChange = onShowSubAssistantsChange,
-                modifier = Modifier.height(56.dp),
-            )
-        }
-    }
+    )
 }
 
 @Composable
-private fun AssistantSearchField(query: String, onQueryChange: (String) -> Unit, modifier: Modifier) {
+private fun AssistantSearchField(
+    query: String,
+    onQueryChange: (String) -> Unit,
+    showSubAssistants: Boolean,
+    onShowSubAssistantsChange: (Boolean) -> Unit,
+    showSubAssistantFilter: Boolean,
+    modifier: Modifier,
+) {
     OutlinedTextField(
         value = query,
         onValueChange = onQueryChange,
@@ -68,9 +55,21 @@ private fun AssistantSearchField(query: String, onQueryChange: (String) -> Unit,
         placeholder = { Text(stringResource(R.string.assistant_page_search_placeholder)) },
         leadingIcon = { Icon(HugeIcons.Search01, contentDescription = null) },
         trailingIcon = {
-            if (query.isNotBlank()) {
-                IconButton(onClick = { onQueryChange("") }) {
-                    Icon(HugeIcons.Cancel01, contentDescription = stringResource(R.string.clear_search))
+            Row(
+                modifier = Modifier.padding(end = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                if (query.isNotBlank()) {
+                    IconButton(onClick = { onQueryChange("") }) {
+                        Icon(HugeIcons.Cancel01, contentDescription = stringResource(R.string.clear_search))
+                    }
+                }
+                if (showSubAssistantFilter) {
+                    SubAssistantFilterButton(
+                        selected = showSubAssistants,
+                        onSelectedChange = onShowSubAssistantsChange,
+                        modifier = Modifier.size(40.dp),
+                    )
                 }
             }
         },

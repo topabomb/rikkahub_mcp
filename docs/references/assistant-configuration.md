@@ -11,7 +11,7 @@
 - `Settings.assistantId` 是个人选择投影；企业当前选择保存在原主体的 `ResourceSelections`。
 - 已创建会话以 `Conversation.assistantId` 为助手归属权威来源。
 - 聊天由 `ConversationQueryService` 按原域与 `header.assistantId` 解析。定义删除或撤权保留历史与不可用原因，不回退到当前全局助手；聊天使用选择通过 `AssistantPreferenceChange` 修改指定字段。
-- 聊天通过 `ResolvedConfiguration.assistantModel` 优先解析助手的有效 `chatModelId`，为空时继承本域 Chat 选择；只接受本域获准的 Chat 模型。企业助手的定义模型是默认值，显式使用偏好不修改原定义。
+- 聊天通过 `ResolvedConfiguration.assistantModel` 优先解析助手的有效 `chatModelId`，为空时继承本域 Chat 选择；只接受本域获准的 Chat 模型。个人助手以定义中的 `chatModelId` 区分显式模型与本域默认，即使两者当前解析到同一引用也不能合并状态。企业助手的定义模型是默认值，显式使用偏好不修改原定义。
 - 会话迁移到另一个助手必须显式更新 `Conversation.assistantId`，不能仅切换全局助手。
 
 模型缺失或 Provider 未启用会使生成前的 readiness 检查失败；工具、记忆、工作区或 MCP 未配置通常只会使对应能力不进入本次请求。
@@ -237,7 +237,7 @@ UI 和 Provider adapter 只消费 typed 配置与有效读模型，不成为配�
 
 ## 7. 本域使用编辑
 
-聊天中的助手主体和抽屉候选详情入口统一打开原助手配置分组表面：普通助手详情、当前会话助手与候选详情共用 `AssistantSettingsSectionList`，当前会话助手再使用原基本参数、提示词、扩展、记忆、请求、本地工具和 MCP 内容组件。当前会话助手使用原 `ConversationAssistantTarget` 与 `ConversationViewLease` 进入 `AssistantUsageEditor`；未选候选只把当前域目录快照投影到相同分组中的只读值，不构造虚假会话目标、写回调或第二配置 owner。企业助手绝不进入个人 Settings 编辑器。首页只显示头像、名称、真实来源、描述和分组入口，单项详情保留返回和关闭，避免移动端同时堆叠全部类别。名称、描述、系统提示词与子助手身份只读；用户助手可明确进入原共享定义编辑，并确认对其他空间的影响。固定子助手引用不可移除，本域额外引用按目录准入选择。企业和用户助手均可选择本域获准模型、跟随本域默认模型，或恢复继承助手定义模型；`AssistantModelPreferenceMode` 直接投影这三态，UI 不从最终引用反推，显式失效引用保留原引用和失败原因。聊天输入区只在当前不是默认模式时提供一个低强调的恢复动作：企业域恢复助手默认，个人域沿用“跟随默认模型”；三态完整控制留在详情。详情中的模型入口关闭详情后复用聊天页唯一的 `ModelListSheet`，不嵌套弹层。重置使用设置只对企业域显示并只影响原主体。模型选择显式 null 时，直接聊天继承本域默认；作为子助手 Target 时按共用协议借用 Caller 模型及参数。模型在请求开始时冻结；后续选择影响新请求，不改写在途 Turn，执行仍逐次复验原模型资源与原 Session 授权。
+聊天中的助手主体和抽屉候选详情入口统一打开原助手配置分组表面：普通助手详情、当前会话助手与候选详情共用 `AssistantSettingsSectionList`，当前会话助手再使用原基本参数、提示词、扩展、记忆、请求、本地工具和 MCP 内容组件。当前会话助手使用原 `ConversationAssistantTarget` 与 `ConversationViewLease` 进入 `AssistantUsageEditor`；未选候选只把当前域目录快照投影到相同分组中的只读值，不构造虚假会话目标、写回调或第二配置 owner。企业助手绝不进入个人 Settings 编辑器。首页只显示头像、名称、真实来源、描述和分组入口，单项详情保留返回和关闭，避免移动端同时堆叠全部类别。名称、描述、系统提示词与子助手身份只读；用户助手可明确进入原共享定义编辑，并确认对其他空间的影响。固定子助手引用不可移除，本域额外引用按目录准入选择。企业和用户助手均可选择本域获准模型、跟随本域默认模型，或恢复继承助手定义模型；`AssistantModelPreferenceMode` 直接投影这三态，UI 不从最终引用反推，显式失效引用保留原引用和失败原因。聊天输入区与详情中的模型入口复用聊天页根部唯一的 `ModelListSheet`；默认来源在列表中只占一张卡，企业域的助手默认与空间默认由该卡菜单切换，显式模型仍在同一序列中选择，不提供第二条快捷恢复路径，也不嵌套弹层。重置使用设置只对企业域显示并只影响原主体。模型选择显式 null 时，直接聊天继承本域默认；作为子助手 Target 时按共用协议借用 Caller 模型及参数。模型在请求开始时冻结；后续选择影响新请求，不改写在途 Turn，执行仍逐次复验原模型资源与原 Session 授权。
 
 页面向 `ConfigurationApplicationService` 提交 `AssistantPreferenceChange`。页面回调通过基线差量保留并发未编辑字段，资产仍经 Artifact 引用事务；不存在整份解析助手回写。搜索模式和资源选择继续使用聊天的现有选择器。预设文本编辑保留其他消息部分，媒体预览按原配置来源读取，不读取个人历史。
 

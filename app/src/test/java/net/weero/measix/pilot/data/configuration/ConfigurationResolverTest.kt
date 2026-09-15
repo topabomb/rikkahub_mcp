@@ -133,6 +133,30 @@ class ConfigurationResolverTest {
     }
 
     @Test
+    fun `personal assistant model mode follows its definition even when it matches the settings default`() {
+        val explicit = ConfigurationResolver.resolve(document, ConfigurationScope.Personal, EnterpriseState.Loading)
+        val explicitPreference = explicit.assistantModelPreferences.getValue(userAssistant.id)
+        assertEquals(AssistantModelPreferenceMode.EXPLICIT, explicitPreference.mode)
+        assertEquals(userModel.id, explicitPreference.definitionReference)
+        assertEquals(userModel.id, explicitPreference.spaceDefaultReference)
+
+        val inheritedDocument = document.copy(configuration = document.configuration.copy(
+            assistants = document.configuration.assistants.map { assistant ->
+                if (assistant.id == userAssistant.id) assistant.copy(chatModelId = null) else assistant
+            },
+        ))
+        val inherited = ConfigurationResolver.resolve(
+            inheritedDocument,
+            ConfigurationScope.Personal,
+            EnterpriseState.Loading,
+        )
+        val inheritedPreference = inherited.assistantModelPreferences.getValue(userAssistant.id)
+        assertEquals(AssistantModelPreferenceMode.SPACE_DEFAULT, inheritedPreference.mode)
+        assertNull(inheritedPreference.definitionReference)
+        assertEquals(userModel.id, inherited.assistantModel(userAssistant.id).reference)
+    }
+
+    @Test
     fun `closing five admission flags disables only controlled user categories`() {
         val original = exampleEnterprisePackage()
         val packet = original.copy(configuration = original.configuration.copy(policy = EnterprisePolicy(false, false, false, false, false)))

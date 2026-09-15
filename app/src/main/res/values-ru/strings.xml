@@ -1700,8 +1700,6 @@
   <string name="assistant_usage_shared_edit">Изменить общее определение ассистента</string>
   <string name="assistant_usage_shared_warning">Это общая пользовательская конфигурация. Изменения затронут все пространства, использующие этого ассистента.</string>
   <string name="assistant_usage_inherited_binding">Унаследовано из определения; здесь удалить нельзя</string>
-  <string name="assistant_model_use_assistant_default">По умолчанию ассистента · %1$s</string>
-  <string name="assistant_model_use_space_default">По умолчанию пространства · %1$s</string>
   <string name="assistant_model_mode_assistant_default">Используется модель ассистента по умолчанию</string>
   <string name="assistant_model_mode_space_default">Используется модель пространства по умолчанию</string>
   <string name="assistant_model_mode_explicit">Используется модель, выбранная для этого пространства</string>
@@ -1788,9 +1786,10 @@
   <string name="assistant_picker_view_details">Просмотреть сведения</string>
   <string name="assistant_details_title">Сведения об ассистенте</string>
   <string name="assistant_details_enterprise_source">Предоставлено: %1$s</string>
-  <string name="assistant_model_restore_assistant_default">Использовать модель ассистента по умолчанию</string>
-  <string name="model_list_default_badge">По умолчанию</string>
   <string name="model_list_selected">Выбранная модель</string>
   <string name="enterprise_local_indicator">Локальная симуляция</string>
   <string name="clear_search">Очистить поиск</string>
+  <string name="assistant_model_default_settings">По умолчанию в настройках</string>
+  <string name="assistant_model_default_assistant">По умолчанию ассистента</string>
+  <string name="assistant_model_default_space">По умолчанию пространства</string>
 </resources>

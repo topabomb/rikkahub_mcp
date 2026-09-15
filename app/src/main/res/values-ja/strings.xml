@@ -1700,8 +1700,6 @@
   <string name="assistant_usage_shared_edit">共有アシスタント定義を編集</string>
   <string name="assistant_usage_shared_warning">これは共有ユーザー設定です。変更はこのアシスタントを使うすべてのスペースに影響します。</string>
   <string name="assistant_usage_inherited_binding">定義から継承されているため、ここでは削除できません</string>
-  <string name="assistant_model_use_assistant_default">アシスタントの既定 · %1$s</string>
-  <string name="assistant_model_use_space_default">スペースの既定 · %1$s</string>
   <string name="assistant_model_mode_assistant_default">アシスタントの既定モデルを使用中</string>
   <string name="assistant_model_mode_space_default">スペースの既定モデルに追従中</string>
   <string name="assistant_model_mode_explicit">このスペースで選択したモデルを使用中</string>
@@ -1788,9 +1786,10 @@
   <string name="assistant_picker_view_details">詳細を見る</string>
   <string name="assistant_details_title">アシスタントの詳細</string>
   <string name="assistant_details_enterprise_source">%1$s から提供</string>
-  <string name="assistant_model_restore_assistant_default">アシスタントのデフォルトを使用</string>
-  <string name="model_list_default_badge">デフォルト</string>
   <string name="model_list_selected">選択中のモデル</string>
   <string name="enterprise_local_indicator">ローカルシミュレーション</string>
   <string name="clear_search">検索をクリア</string>
+  <string name="assistant_model_default_settings">設定のデフォルト</string>
+  <string name="assistant_model_default_assistant">アシスタントのデフォルト</string>
+  <string name="assistant_model_default_space">スペースのデフォルト</string>
 </resources>

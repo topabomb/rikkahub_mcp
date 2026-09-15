@@ -9,25 +9,23 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import me.rerere.hugeicons.HugeIcons
-import me.rerere.hugeicons.stroke.ArrowRight01
 import me.rerere.hugeicons.stroke.Codesandbox
+import me.rerere.hugeicons.stroke.Settings03
 import me.rerere.hugeicons.stroke.Tick02
 import net.weero.measix.pilot.R
 import net.weero.measix.pilot.service.workspace.WorkspaceUiModel
@@ -53,16 +51,18 @@ internal fun WorkspaceSelectSheet(
                 .padding(bottom = 16.dp),
             verticalArrangement = Arrangement.spacedBy(4.dp),
         ) {
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    text = stringResource(R.string.workspace_select),
-                    style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold),
-                    modifier = Modifier.weight(1f).padding(vertical = 8.dp),
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                TextButton(onClick = onDismiss) { Text(stringResource(R.string.update_card_close)) }
-            }
+            PickerHeader(
+                title = stringResource(R.string.workspace_select),
+                onDismiss = onDismiss,
+                actions = {
+                    IconButton(onClick = onManage) {
+                        Icon(
+                            imageVector = HugeIcons.Settings03,
+                            contentDescription = stringResource(R.string.workspace_manage),
+                        )
+                    }
+                },
+            )
 
             Column(
                 modifier = Modifier
@@ -87,27 +87,6 @@ internal fun WorkspaceSelectSheet(
                 }
             }
 
-            HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
-
-            // 管理工作区
-            ListItem(
-                leadingContent = {
-                    Icon(HugeIcons.Codesandbox, contentDescription = null)
-                },
-                trailingContent = {
-                    Icon(
-                        imageVector = HugeIcons.ArrowRight01,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                },
-                colors = ListItemDefaults.colors(containerColor = Color.Transparent),
-                modifier = Modifier
-                    .clip(MaterialTheme.shapes.large)
-                    .clickable { onManage() },
-            ) {
-                Text(stringResource(R.string.workspace_manage))
-            }
         }
     }
 }

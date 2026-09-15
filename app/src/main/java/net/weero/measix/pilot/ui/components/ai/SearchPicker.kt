@@ -25,6 +25,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.grid.GridCells
@@ -158,7 +159,12 @@ fun SearchPickerButton(
                             onUpdateSearchService(serviceId)
                             selectingProvider = false
                         },
-                        onBack = { selectingProvider = false }
+                        onBack = { selectingProvider = false },
+                        onDismiss = { showSearchPicker = false },
+                        onManageSearchServices = {
+                            showSearchPicker = false
+                            onManageSearchServices()
+                        },
                     )
                 } else {
                     SearchPicker(
@@ -205,20 +211,18 @@ private fun SearchPicker(
             .padding(bottom = 24.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text(
-                text = stringResource(R.string.search_picker_title),
-                style = MaterialTheme.typography.titleLarge,
-                fontWeight = FontWeight.Bold,
-                modifier = Modifier.weight(1f)
-            )
-            IconButton(onClick = onManageSearchServices) {
-                Icon(HugeIcons.Settings03, contentDescription = null)
-            }
-        }
+        PickerHeader(
+            title = stringResource(R.string.search_picker_title),
+            onDismiss = onDismiss,
+            actions = {
+                IconButton(onClick = onManageSearchServices) {
+                    Icon(
+                        imageVector = HugeIcons.Settings03,
+                        contentDescription = stringResource(R.string.setting_page_search_service),
+                    )
+                }
+            },
+        )
 
         Row(
             modifier = Modifier
@@ -401,31 +405,39 @@ private fun SearchProviderPicker(
     selectedSearchServiceId: ConfigurationReference?,
     onUpdateSearchService: (ConfigurationReference) -> Unit,
     onBack: () -> Unit,
+    onDismiss: () -> Unit,
+    onManageSearchServices: () -> Unit,
 ) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .fillMaxHeight(0.7f)
+            .heightIn(min = 120.dp, max = 480.dp)
     ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            IconButton(onClick = onBack) {
-                Icon(HugeIcons.ArrowLeft01, contentDescription = null)
-            }
-            Text(
-                text = stringResource(R.string.search_picker_select_provider),
-                style = MaterialTheme.typography.titleLarge,
-                fontWeight = FontWeight.Bold
-            )
-        }
+        PickerHeader(
+            title = stringResource(R.string.search_picker_select_provider),
+            onDismiss = onDismiss,
+            modifier = Modifier.padding(horizontal = 8.dp),
+            leadingContent = {
+                IconButton(onClick = onBack) {
+                    Icon(
+                        imageVector = HugeIcons.ArrowLeft01,
+                        contentDescription = stringResource(R.string.back),
+                    )
+                }
+            },
+            actions = {
+                IconButton(onClick = onManageSearchServices) {
+                    Icon(
+                        imageVector = HugeIcons.Settings03,
+                        contentDescription = stringResource(R.string.setting_page_search_service),
+                    )
+                }
+            },
+        )
         LazyVerticalGrid(
             modifier = Modifier
-                .fillMaxSize()
+                .weight(1f, fill = false)
+                .fillMaxWidth()
                 .padding(16.dp),
             columns = GridCells.Adaptive(150.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp),
