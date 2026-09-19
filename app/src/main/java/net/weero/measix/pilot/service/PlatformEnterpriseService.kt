@@ -11,6 +11,8 @@ import kotlinx.coroutines.withContext
 import net.weero.measix.pilot.data.enterprise.*
 import net.weero.measix.pilot.utils.userVisibleDiagnostic
 
+internal const val ENROLLMENT_EXPIRED = "enrollment_expired"
+
 /** Network orchestration owns no durable credentials; Session publication remains with its existing owner. */
 internal class PlatformEnterpriseService(
     private val sessions: EnterpriseSessionController,
@@ -29,7 +31,7 @@ internal class PlatformEnterpriseService(
         val pending = sessions.pendingPlatformEnrollment()
         if (pending != null) {
             if (pending.platform.connection.origin != material.platformOrigin) {
-                if (!now().isBefore(material.expiresAt)) throw EnterpriseConfigurationException("enterprise_enrollment_expired")
+                if (!now().isBefore(material.expiresAt)) throw EnterpriseConfigurationException(ENROLLMENT_EXPIRED)
                 try { logoutPending(pending) }
                 catch (cancelled: CancellationException) { throw cancelled }
                 catch (error: Exception) { _pendingLogoutFailure.value = error.userVisibleDiagnostic() }
@@ -39,11 +41,11 @@ internal class PlatformEnterpriseService(
                 return@withLock sessions.completePlatformBootstrap(pending.sessionId, response)
             } catch (error: Exception) {
                 if (!error.isTerminalPendingEnrollmentFailure()) throw error
-                if (!now().isBefore(material.expiresAt)) throw EnterpriseConfigurationException("enterprise_enrollment_expired")
+                if (!now().isBefore(material.expiresAt)) throw EnterpriseConfigurationException(ENROLLMENT_EXPIRED)
                 sessions.abandonPendingPlatformEnrollment(pending.sessionId)
             }
         }
-        if (!now().isBefore(material.expiresAt)) throw EnterpriseConfigurationException("enterprise_enrollment_expired")
+        if (!now().isBefore(material.expiresAt)) throw EnterpriseConfigurationException(ENROLLMENT_EXPIRED)
         val attempt = sessions.beginPlatformEnrollment()
         val sessionId = try {
             val connection = client.discover(material.platformOrigin)

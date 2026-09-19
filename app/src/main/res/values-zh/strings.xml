@@ -1625,8 +1625,8 @@
   <string name="enterprise_generation">当前生效版本：%1$d</string>
   <string name="enterprise_last_sync">最近配置同步：%1$s</string>
   <string name="enterprise_current_space">当前空间：%1$s</string>
-  <string name="enterprise_invalid_enrollment">接入资料无效、已过期、已使用，或不被已安装的来源接受。</string>
-  <string name="enterprise_enrollment_already_used">此接入二维码已被使用。请向企业管理员获取新的二维码。</string>
+  <string name="enterprise_invalid_enrollment">无法识别接入资料。请确认扫描或粘贴的是企业提供的完整接入资料。</string>
+  <string name="enterprise_enrollment_already_used">此接入资料已被使用。请让企业管理员重新生成后再试。</string>
   <string name="enterprise_installation_user_conflict">此设备已关联其他企业账号。请重置企业连接，然后扫描新生成的二维码。</string>
   <string name="enterprise_external_open">打开外部网站</string>
   <string name="enterprise_external_confirm">在其他应用中打开此地址？\n\n%1$s</string>
@@ -1735,4 +1735,5 @@
   <string name="assistant_model_default_space">空间默认</string>
   <string name="enterprise_platform_confirm">是否接入此企业平台？\n\n%1$s</string>
   <string name="speech_no_voice_detected">未检测到语音，请重试。</string>
+  <string name="enterprise_enrollment_expired">此接入资料已过期。请让企业管理员重新生成后再试。</string>
 </resources>

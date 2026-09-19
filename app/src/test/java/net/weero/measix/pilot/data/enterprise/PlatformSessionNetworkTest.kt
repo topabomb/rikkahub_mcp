@@ -43,6 +43,19 @@ class PlatformSessionNetworkTest {
         responseBody.write(bytes)
     }
 
+    @Test fun `expired enrollment uses the current stable reason before network IO`() = runBlocking {
+        val sessions = owner(temporary.newFolder())
+        val error = runCatching {
+            service(sessions).enroll(
+                EnrollmentMaterial.Platform("https://platform.example", "expired", Instant.ofEpochMilli(1000)),
+                "Phone",
+                "1.0.0",
+            )
+        }.exceptionOrNull()
+        assertTrue(error is EnterpriseConfigurationException)
+        assertEquals("enrollment_expired", (error as EnterpriseConfigurationException).reason)
+    }
+
     @Test fun `closing session replays pending refresh before server logout`() = runBlocking {
         val response = PlatformWireCodec.decode<PlatformRefreshResponse>(fixture("refresh-response"))
         val calls = mutableListOf<String>()

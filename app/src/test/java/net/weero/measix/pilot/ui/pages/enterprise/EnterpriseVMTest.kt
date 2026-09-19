@@ -15,6 +15,46 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class EnterpriseVMTest {
+    @Test fun `expired enrollment has a dedicated actionable message`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val store = ViewModelStore()
+        try {
+            val overview = MutableStateFlow(EnterpriseOverview(
+                RealmSelection(RealmAccess.Personal, 1), EnterpriseSessionPhase.SIGNED_OUT,
+                null, null, null, null, null, null, null, false,
+            ))
+            val local = EnterpriseJoinConfirmation(kotlin.uuid.Uuid.random(), "https://platform.example")
+            val remote = EnterpriseJoinConfirmation(kotlin.uuid.Uuid.random(), "https://platform.example")
+            val service = mockk<EnterpriseApplicationService>()
+            every { service.observe() } returns overview
+            coEvery { service.join("local-expired") } returns local
+            coEvery { service.confirmJoin(local) } throws EnterpriseConfigurationException("enrollment_expired")
+            coEvery { service.join("remote-expired") } returns remote
+            coEvery { service.confirmJoin(remote) } throws PlatformHttpException(401,
+                PlatformProblem("about:blank", "Enrollment code expired", 401, "enrollment_expired"),
+                "Enrollment code expired")
+            val vm = EnterpriseVM(service)
+            store.put("enterprise", vm)
+            backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.error.collect {} }
+
+            vm.join("local-expired")
+            runCurrent()
+            vm.confirmJoin()
+            runCurrent()
+            assertEquals(net.weero.measix.pilot.R.string.enterprise_enrollment_expired, vm.error.value?.resource)
+
+            vm.join("remote-expired")
+            runCurrent()
+            vm.confirmJoin()
+            runCurrent()
+            assertEquals(net.weero.measix.pilot.R.string.enterprise_enrollment_expired, vm.error.value?.resource)
+        } finally {
+            store.clear()
+            runCurrent()
+            Dispatchers.resetMain()
+        }
+    }
+
     @Test fun `platform enrollment conflict is actionable and does not expose a runtime class name`() = runTest {
         Dispatchers.setMain(StandardTestDispatcher(testScheduler))
         val store = ViewModelStore()

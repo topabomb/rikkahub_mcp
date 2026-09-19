@@ -8,7 +8,7 @@ Enrollment material 使用 `formatVersion=1`、`kind=PLATFORM_ENROLLMENT`，必�
 
 `platformUrl` 必须是规范化的 HTTP/HTTPS origin，可使用域名、局域网 IP、IPv6 和显式端口；拒绝 userinfo、query、fragment、非根 path 与非法端口。扫码、相册和粘贴都进入同一解析器。解析成功只产生带规范化 origin 的 `EnterpriseJoinConfirmation`，用户确认后才执行 Discovery、Enrollment exchange、Bootstrap 与 Snapshot 同步；取消或被替换的确认不发网络请求。
 
-Core 区分两个 409：一次性码已使用为 `enrollment_already_used`；本机 installation 已绑定另一用户为 `installation_user_conflict`，且不消费新码。Android 必须显示稳定、可操作的诊断。换用户需要用户在“重置与数据处置”中重置企业连接，使 `EnterpriseAppliedStore.resetLocalState()` 删除本机 installation ID；仅撤销 Core 设备不会改变手机 installation 身份。
+Core 使用 `enrollment_expired` 区分过期资料，并区分两个 409：一次性码已使用为 `enrollment_already_used`；本机 installation 已绑定另一用户为 `installation_user_conflict`，且不消费新码。Android 的本地到期预检与 Core 响应使用同一过期 reason，并为过期、已使用、格式无效和 installation 冲突显示各自稳定、可操作的主文案；历史手机端来源不再进入提示。换用户需要用户在“重置与数据处置”中重置企业连接，使 `EnterpriseAppliedStore.resetLocalState()` 删除本机 installation ID；仅撤销 Core 设备不会改变手机 installation 身份。
 
 ## Session 与恢复
 

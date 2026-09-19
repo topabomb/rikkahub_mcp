@@ -1625,8 +1625,8 @@
   <string name="enterprise_generation">적용 중인 설정 버전: %1$d</string>
   <string name="enterprise_last_sync">최근 설정 동기화: %1$s</string>
   <string name="enterprise_current_space">현재 공간: %1$s</string>
-  <string name="enterprise_invalid_enrollment">접속 정보가 잘못되었거나 만료 또는 사용되었거나 설치된 소스에서 허용되지 않습니다.</string>
-  <string name="enterprise_enrollment_already_used">이 접속 QR 코드는 이미 사용되었습니다. 기업 관리자에게 새 QR 코드를 요청하세요.</string>
+  <string name="enterprise_invalid_enrollment">접속 정보를 인식할 수 없습니다. 기업에서 제공한 전체 접속 정보를 스캔하거나 붙여 넣으세요.</string>
+  <string name="enterprise_enrollment_already_used">이 접속 정보는 이미 사용되었습니다. 기업 관리자에게 새로 생성해 달라고 요청하세요.</string>
   <string name="enterprise_installation_user_conflict">이 기기는 다른 기업 계정에 연결되어 있습니다. 기업 연결을 초기화한 다음 새로 생성된 QR 코드를 스캔하세요.</string>
   <string name="enterprise_external_open">외부 웹사이트 열기</string>
   <string name="enterprise_external_confirm">다른 앱에서 이 주소를 여시겠습니까?\n\n%1$s</string>
@@ -1735,4 +1735,5 @@
   <string name="assistant_model_default_space">공간 기본값</string>
   <string name="enterprise_platform_confirm">이 기업 플랫폼에 연결하시겠습니까?\n\n%1$s</string>
   <string name="speech_no_voice_detected">음성이 감지되지 않았습니다. 다시 시도해 주세요.</string>
+  <string name="enterprise_enrollment_expired">이 접속 정보는 만료되었습니다. 기업 관리자에게 새로 생성해 달라고 요청하세요.</string>
 </resources>

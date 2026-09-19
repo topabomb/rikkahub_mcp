@@ -23,7 +23,7 @@ RouteActivity (ComponentActivity)
 
 配置列表的 `ConfigurationReference` 在 Lazy/可拖动列表边界使用 `toString()` 作为可保存 key；业务选择与命令继续传递类型化引用。Lazy item 与 `ReorderableItem` 必须使用同一 key，不能把不可放入 Bundle 的领域对象交给 SaveableStateHolder。
 
-正式空间入口位于聊天抽屉昵称下方和设置页，统一导航到 `Screen.Enterprise`；聊天顶部只显示由当前会话快照域派生的非交互建筑标记，避免把全局切域动作放进高频操作区。抽屉入口用名称作为主信息，不暴露 owner、generation 或准入术语。入口与当前空间卡使用人物/建筑图标辅助识别个人和企业并保留文字名称。`EnterprisePage` / `EnterpriseVM` 只经 `EnterpriseApplicationService` 查询身份、状态与当前空间，以及执行接入、同步、切换、退出和本机企业数据重置；具体授权及关闭屏障见 [Android 配置架构](android-configuration-architecture.md)。退出确认保存原请求；后台或离页会取消打开任务并关闭原 Portal 宿主，未交接实例由创建方清理。切换或退出后经不携带通知 ID 的 `Screen.Startup()` 重新获取本域会话请求，不能重放 Activity 初始通知。接入凭据、`RealmSelection` 和 WebView 不保存进导航或 Activity saved state。空间页按“当前空间”“已接入企业”“接入企业”组织；不提供企业配置导入、来源列表、管理员配置/Feed 编辑或调试场景。相机扫码、相册二维码和粘贴在“接入企业”卡中持续可见；已有企业 Session 时禁用并明确提示先退出，不能把切回个人空间当作退出。“重置与数据处置”入口在空间页常驻：存储损坏时以“修复本机企业接入”呈现，其余状态以“重置与数据处置”呈现。“保留历史 / 全部清除”选择后各自确认，执行期间展示进度并禁用重复提交，失败保留可重试投影，不自动执行删除。备份页面统一说明只包含个人数据。
+聊天抽屉的用户资料保留昵称和按时间显示的问候语；正式空间入口作为资料区下方的独立入口，并与搜索、历史入口共用紧凑的图标列、文字列和行高，同时与设置页入口统一导航到 `Screen.Enterprise`。应用版本更新卡片仍是空间入口之后的独立条件内容，不以空间状态或问候语替代。聊天顶部只显示由当前会话快照域派生的非交互建筑标记，避免把全局切域动作放进高频操作区。抽屉入口用名称作为主信息，不暴露 owner、generation 或准入术语。入口与当前空间卡使用人物/建筑图标辅助识别个人和企业并保留文字名称。`EnterprisePage` / `EnterpriseVM` 只经 `EnterpriseApplicationService` 查询身份、状态与当前空间，以及执行接入、同步、切换、退出和本机企业数据重置；具体授权及关闭屏障见 [Android 配置架构](android-configuration-architecture.md)。退出确认保存原请求；后台或离页会取消打开任务并关闭原 Portal 宿主，未交接实例由创建方清理。切换或退出后经不携带通知 ID 的 `Screen.Startup()` 重新获取本域会话请求，不能重放 Activity 初始通知。接入凭据、`RealmSelection` 和 WebView 不保存进导航或 Activity saved state。空间页按“当前空间”“已接入企业”“接入企业”组织；不提供企业配置导入、来源列表、管理员配置/Feed 编辑或调试场景。相机扫码、相册二维码和粘贴在“接入企业”卡中持续可见；已有企业 Session 时禁用并明确提示先退出，不能把切回个人空间当作退出。“重置与数据处置”入口在空间页常驻：存储损坏时以“修复本机企业接入”呈现，其余状态以“重置与数据处置”呈现。“保留历史 / 全部清除”选择后各自确认，执行期间展示进度并禁用重复提交，失败保留可重试投影，不自动执行删除。备份页面统一说明只包含个人数据。
 
 企业操作反馈由 `EnterpriseVM` 绑定产生结果时的 `RealmSelection`；同步保留发起时的选择，切换空间或退出后不继续显示旧主体结果。Portal 页面由独立 Portal 仓库负责，Android 不维护网页 UI 或静态资源。Android 申请 Core grant 后以原生 POST 打开 Core 同源 `/portal/`；Core 可以分发标准通用工作台，也可以代理企业自有 HTTP/HTTPS 静态站点，Android 对两者使用同一路径且不做 fallback。工作台的动态查询、刷新、外链和媒体各自展示结果；外链只接受绝对 HTTP/HTTPS URL，由 Android 每次确认后交给系统浏览器，不能导航当前 WebView 或向目标转发凭据。关闭工作台保留登录，退出企业登录需要原生确认。
 
@@ -448,7 +448,9 @@ ChatDrawerContent
   ├─ permanent = true  → Surface + statusBarsPadding
   ├─ permanent = false → ModalDrawerSheet（外层 ModalNavigationDrawer 由 ChatPage 持有）
   └─ Column (drawerBody)
-       ├─ 用户头像行 (UIAvatar 50dp + 昵称 + 编辑入口)
+       ├─ 用户资料行 (UIAvatar 50dp + 昵称/问候语 + 编辑入口)
+       ├─ 当前空间入口
+       ├─ 条件式应用更新卡片
        ├─ DrawerActions (搜索入口 + 历史入口，两个独立 Surface)
        ├─ FolderBar (文件夹选择栏)
        ├─ ConversationList (LazyColumn, weight(1f))

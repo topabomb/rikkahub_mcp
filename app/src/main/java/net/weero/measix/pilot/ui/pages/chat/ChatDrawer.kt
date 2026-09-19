@@ -28,6 +28,7 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LocalMinimumInteractiveComponentSize
 import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.MaterialTheme
 import net.weero.measix.pilot.ui.adaptive.AdaptiveModal
@@ -37,6 +38,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableStateOf
@@ -88,6 +90,7 @@ import androidx.compose.material3.rememberBottomSheetState
 import androidx.compose.material3.SheetValue
 import me.rerere.common.configuration.ConfigurationReference
 import net.weero.measix.pilot.ui.components.ui.BackupReminderCard
+import net.weero.measix.pilot.ui.components.ui.Greeting
 import net.weero.measix.pilot.ui.components.ui.Tooltip
 import net.weero.measix.pilot.ui.components.ui.UIAvatar
 import net.weero.measix.pilot.ui.components.ui.SharedConfigurationEditDialog
@@ -273,8 +276,8 @@ fun ChatDrawerContent(
                                 .size(LocalTextStyle.current.fontSize.toDp())
                         )
                     }
-                    net.weero.measix.pilot.ui.pages.enterprise.EnterpriseSpaceButton(
-                        modifier = Modifier.fillMaxWidth(),
+                    Greeting(
+                        style = MaterialTheme.typography.labelMedium,
                     )
                 }
 
@@ -291,6 +294,12 @@ fun ChatDrawerContent(
                     }
                 }
             }
+
+            net.weero.measix.pilot.ui.pages.enterprise.EnterpriseSpaceButton(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 4.dp),
+            )
 
             val updateCheckDisabledUntil = settings.displaySetting.updateCheckDisabledUntilEpochMillis
             var updateChecksEnabled by remember(settings.displaySetting.showUpdates, updateCheckDisabledUntil) {
@@ -807,68 +816,72 @@ private fun DrawerActions(
     navController: Navigator,
     navigateFromDrawer: ((() -> Unit) -> Unit),
 ) {
-    Column {
-        // 搜索入口
-        Surface(
-            onClick = {
-                navigateFromDrawer { navController.navigate(Screen.MessageSearch) }
-            },
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 4.dp),
-            shape = MaterialTheme.shapes.medium,
-            color = MaterialTheme.colorScheme.surfaceContainerLow,
-        ) {
-            Row(
+    CompositionLocalProvider(LocalMinimumInteractiveComponentSize provides 40.dp) {
+        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            // 搜索入口
+            Surface(
+                onClick = {
+                    navigateFromDrawer { navController.navigate(Screen.MessageSearch) }
+                },
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 8.dp, vertical = 10.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    .padding(horizontal = 4.dp),
+                shape = MaterialTheme.shapes.medium,
+                color = MaterialTheme.colorScheme.surfaceContainerLow,
             ) {
-                Icon(
-                    imageVector = HugeIcons.Search01,
-                    contentDescription = null,
-                    modifier = Modifier.size(18.dp),
-                    tint = MaterialTheme.colorScheme.onSurface,
-                )
-                Text(
-                    text = stringResource(R.string.chat_page_search_chats),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurface,
-                )
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 40.dp)
+                        .padding(horizontal = 8.dp, vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    Icon(
+                        imageVector = HugeIcons.Search01,
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp),
+                        tint = MaterialTheme.colorScheme.onSurface,
+                    )
+                    Text(
+                        text = stringResource(R.string.chat_page_search_chats),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurface,
+                    )
+                }
             }
-        }
 
-        // 历史记录入口
-        Surface(
-            onClick = {
-                navigateFromDrawer { navController.navigate(Screen.History) }
-            },
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 4.dp),
-            shape = MaterialTheme.shapes.medium,
-            color = MaterialTheme.colorScheme.surfaceContainerLow,
-        ) {
-            Row(
+            // 历史记录入口
+            Surface(
+                onClick = {
+                    navigateFromDrawer { navController.navigate(Screen.History) }
+                },
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 8.dp, vertical = 10.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    .padding(horizontal = 4.dp),
+                shape = MaterialTheme.shapes.medium,
+                color = MaterialTheme.colorScheme.surfaceContainerLow,
             ) {
-                Icon(
-                    imageVector = HugeIcons.TransactionHistory,
-                    contentDescription = null,
-                    modifier = Modifier.size(18.dp),
-                    tint = MaterialTheme.colorScheme.onSurface,
-                )
-                Text(
-                    text = stringResource(R.string.chat_page_history),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurface,
-                )
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 40.dp)
+                        .padding(horizontal = 8.dp, vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    Icon(
+                        imageVector = HugeIcons.TransactionHistory,
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp),
+                        tint = MaterialTheme.colorScheme.onSurface,
+                    )
+                    Text(
+                        text = stringResource(R.string.chat_page_history),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurface,
+                    )
+                }
             }
         }
     }

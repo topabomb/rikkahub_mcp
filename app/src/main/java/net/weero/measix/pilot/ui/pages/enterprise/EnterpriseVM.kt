@@ -13,6 +13,7 @@ import kotlinx.coroutines.launch
 import net.weero.measix.pilot.R
 import net.weero.measix.pilot.data.enterprise.*
 import net.weero.measix.pilot.service.EnterpriseApplicationService
+import net.weero.measix.pilot.service.ENROLLMENT_EXPIRED
 import net.weero.measix.pilot.service.portal.PortalClosure
 import net.weero.measix.pilot.service.portal.PortalCloseReason
 import net.weero.measix.pilot.service.portal.PortalFailure
@@ -167,11 +168,13 @@ internal class EnterpriseVM(private val service: EnterpriseApplicationService) :
             catch (cancelled: CancellationException) { throw cancelled }
             catch (error: Exception) {
                 android.util.Log.e("EnterpriseCommand", "Enterprise command failed", error)
+                val enrollmentCode = if (enrollment) error.enrollmentCode() else null
                 if (isCurrent()) _error.value = Failure(when {
                     error is EnterpriseConfigurationException && error.reason == "enterprise_selection_revoked" -> R.string.enterprise_selection_changed
-                    enrollment && error is PlatformHttpException && error.problem?.code == "enrollment_already_used" ->
+                    enrollmentCode == ENROLLMENT_EXPIRED -> R.string.enterprise_enrollment_expired
+                    enrollmentCode == "enrollment_already_used" ->
                         R.string.enterprise_enrollment_already_used
-                    enrollment && error is PlatformHttpException && error.problem?.code == "installation_user_conflict" ->
+                    enrollmentCode == "installation_user_conflict" ->
                         R.string.enterprise_installation_user_conflict
                     enrollment -> R.string.enterprise_invalid_enrollment
                     else -> failureMessage
@@ -183,4 +186,10 @@ internal class EnterpriseVM(private val service: EnterpriseApplicationService) :
             } finally { _busy.value = false }
         }
     }
+}
+
+private fun Exception.enrollmentCode(): String? = when (this) {
+    is EnterpriseConfigurationException -> reason
+    is PlatformHttpException -> problem?.code
+    else -> null
 }

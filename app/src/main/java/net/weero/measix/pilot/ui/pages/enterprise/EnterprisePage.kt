@@ -12,6 +12,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
@@ -74,18 +75,41 @@ internal fun EnterpriseSpaceButton(
         state?.enterpriseName ?: stringResource(R.string.enterprise_space)
     } else stringResource(R.string.enterprise_personal)
     val open = { nav.navigate(Screen.Enterprise) { launchSingleTop = true } }
-    TextButton(
-        onClick = open,
-        modifier = modifier,
-        contentPadding = PaddingValues(horizontal = 0.dp),
-    ) {
-        Icon(if (access is RealmAccess.Enterprise) HugeIcons.Building03 else HugeIcons.User,
-            contentDescription = null, modifier = Modifier.size(16.dp))
-        Spacer(Modifier.width(6.dp))
-        Text(label, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
-        Spacer(Modifier.width(4.dp))
-        Icon(HugeIcons.ArrowRight01, contentDescription = stringResource(R.string.enterprise_current_space, label),
-            modifier = Modifier.size(16.dp))
+    CompositionLocalProvider(LocalMinimumInteractiveComponentSize provides 40.dp) {
+        Surface(
+            onClick = open,
+            modifier = modifier,
+            shape = MaterialTheme.shapes.medium,
+            color = Color.Transparent,
+            contentColor = MaterialTheme.colorScheme.primary,
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 40.dp)
+                    .padding(horizontal = 8.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Icon(
+                    if (access is RealmAccess.Enterprise) HugeIcons.Building03 else HugeIcons.User,
+                    contentDescription = null,
+                    modifier = Modifier.size(18.dp),
+                )
+                Text(
+                    label,
+                    style = MaterialTheme.typography.bodyMedium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
+                )
+                Icon(
+                    HugeIcons.ArrowRight01,
+                    contentDescription = stringResource(R.string.enterprise_current_space, label),
+                    modifier = Modifier.size(16.dp),
+                )
+            }
+        }
     }
 }
 
