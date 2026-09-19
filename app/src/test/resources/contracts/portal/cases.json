@@ -57,7 +57,7 @@
     {
       "name": "http-production",
       "raw": "{\"formatVersion\":1,\"kind\":\"PLATFORM_ENROLLMENT\",\"platformUrl\":\"http://127.0.0.1:8080\",\"code\":\"fixture-enrollment-code\",\"expiresAt\":\"2030-01-01T00:10:00Z\"}",
-      "result": "invalid"
+      "result": "valid"
     },
     {
       "name": "origin-path",
@@ -172,6 +172,51 @@
     {
       "name": "platform-non-utc",
       "raw": "{\"formatVersion\":1,\"kind\":\"PLATFORM_ENROLLMENT\",\"platformUrl\":\"https://platform.example\",\"code\":\"fixture-enrollment-code\",\"expiresAt\":\"2030-01-01T00:10:00+08:00\"}",
+      "result": "invalid"
+    },
+    {
+      "name": "http-lan",
+      "raw": "{\"formatVersion\":1,\"kind\":\"PLATFORM_ENROLLMENT\",\"platformUrl\":\"http://192.168.1.20:9000\",\"code\":\"fixture-enrollment-code\",\"expiresAt\":\"2030-01-01T00:10:00Z\"}",
+      "result": "valid"
+    },
+    {
+      "name": "http-public-ip",
+      "raw": "{\"formatVersion\":1,\"kind\":\"PLATFORM_ENROLLMENT\",\"platformUrl\":\"http://203.0.113.20:9000\",\"code\":\"fixture-enrollment-code\",\"expiresAt\":\"2030-01-01T00:10:00Z\"}",
+      "result": "valid"
+    },
+    {
+      "name": "http-domain",
+      "raw": "{\"formatVersion\":1,\"kind\":\"PLATFORM_ENROLLMENT\",\"platformUrl\":\"http://platform.example:9000\",\"code\":\"fixture-enrollment-code\",\"expiresAt\":\"2030-01-01T00:10:00Z\"}",
+      "result": "valid"
+    },
+    {
+      "name": "http-ipv6",
+      "raw": "{\"formatVersion\":1,\"kind\":\"PLATFORM_ENROLLMENT\",\"platformUrl\":\"http://[2001:db8::1]:9000\",\"code\":\"fixture-enrollment-code\",\"expiresAt\":\"2030-01-01T00:10:00Z\"}",
+      "result": "valid"
+    },
+    {
+      "name": "missing-host",
+      "raw": "{\"formatVersion\":1,\"kind\":\"PLATFORM_ENROLLMENT\",\"platformUrl\":\"http://:9000\",\"code\":\"fixture-enrollment-code\",\"expiresAt\":\"2030-01-01T00:10:00Z\"}",
+      "result": "invalid"
+    },
+    {
+      "name": "zero-port",
+      "raw": "{\"formatVersion\":1,\"kind\":\"PLATFORM_ENROLLMENT\",\"platformUrl\":\"http://platform.example:0\",\"code\":\"fixture-enrollment-code\",\"expiresAt\":\"2030-01-01T00:10:00Z\"}",
+      "result": "invalid"
+    },
+    {
+      "name": "out-of-range-port",
+      "raw": "{\"formatVersion\":1,\"kind\":\"PLATFORM_ENROLLMENT\",\"platformUrl\":\"http://platform.example:65536\",\"code\":\"fixture-enrollment-code\",\"expiresAt\":\"2030-01-01T00:10:00Z\"}",
+      "result": "invalid"
+    },
+    {
+      "name": "empty-query",
+      "raw": "{\"formatVersion\":1,\"kind\":\"PLATFORM_ENROLLMENT\",\"platformUrl\":\"http://platform.example?\",\"code\":\"fixture-enrollment-code\",\"expiresAt\":\"2030-01-01T00:10:00Z\"}",
+      "result": "invalid"
+    },
+    {
+      "name": "empty-fragment",
+      "raw": "{\"formatVersion\":1,\"kind\":\"PLATFORM_ENROLLMENT\",\"platformUrl\":\"http://platform.example#\",\"code\":\"fixture-enrollment-code\",\"expiresAt\":\"2030-01-01T00:10:00Z\"}",
       "result": "invalid"
     }
   ]

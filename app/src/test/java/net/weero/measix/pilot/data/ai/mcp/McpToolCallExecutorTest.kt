@@ -1,6 +1,7 @@
 package net.weero.measix.pilot.data.ai.mcp
 
 import net.weero.measix.pilot.data.enterprise.ManagedSnapshotRequired
+import net.weero.measix.pilot.utils.userVisibleDiagnostic
 
 import io.mockk.coEvery
 import io.mockk.mockk
@@ -13,25 +14,23 @@ import kotlinx.serialization.json.JsonObject
 import net.weero.measix.pilot.data.configuration.ConfigurationScope
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
-import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
 import org.junit.Test
 
 class McpToolCallExecutorTest {
-    @Test fun `managed transport failure preserves outcome but excludes private diagnostics from the public exception`() = runTest {
+    @Test fun `managed transport failure retains original cause while public diagnostics redact credentials`() = runTest {
         val client = mockk<Client>()
         val transportError = IOException("https://private.example/mcp?token=private-credential")
         coEvery { client.callTool(any<CallToolRequest>(), any<RequestOptions>()) } throws transportError
         val executor = McpToolCallExecutor(mockk())
-        for (managed in listOf(false, true)) {
-            val outcome = executor.execute(ConfigurationScope.Personal, McpInvocationLease(client, "Test", 1, managed),
-                "query", JsonObject(emptyMap()), {}) as McpInvocationOutcome.Failed
-            assertEquals(McpInvocationFailureKind.CONNECTION, outcome.kind)
-            if (managed) {
-                assertNull(outcome.failure.cause)
-                assertFalse(outcome.failure.stackTraceToString().contains("private-credential"))
-            } else assertSame(transportError, outcome.failure.cause)
-        }
+        val outcome = executor.execute(ConfigurationScope.Personal, McpInvocationLease(client, "Test", 1),
+            "query", JsonObject(emptyMap()), {}) as McpInvocationOutcome.Failed
+        assertEquals(McpInvocationFailureKind.CONNECTION, outcome.kind)
+        assertSame(transportError, outcome.failure.cause)
+        val diagnostic = outcome.failure.userVisibleDiagnostic()
+        assertFalse(diagnostic.contains("private-credential"))
+        org.junit.Assert.assertTrue(diagnostic.contains("IOException"))
+        org.junit.Assert.assertTrue(diagnostic.contains("private.example"))
     }
 
     @Test fun `managed barrier remains typed for the original interaction owner`() = runTest {
@@ -39,7 +38,7 @@ class McpToolCallExecutorTest {
         val barrier = ManagedSnapshotRequired(2, "req_test")
         coEvery { client.callTool(any<CallToolRequest>(), any<RequestOptions>()) } throws barrier
         try {
-            McpToolCallExecutor(mockk()).execute(ConfigurationScope.Personal, McpInvocationLease(client, "Test", 1, true),
+            McpToolCallExecutor(mockk()).execute(ConfigurationScope.Personal, McpInvocationLease(client, "Test", 1),
                 "query", JsonObject(emptyMap()), {})
             org.junit.Assert.fail("barrier became a tool result")
         } catch (actual: ManagedSnapshotRequired) { assertSame(barrier, actual) }

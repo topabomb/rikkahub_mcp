@@ -39,7 +39,7 @@ internal class LocalEnterpriseConfigurationStore(
                     fail("local_enterprise_directory_invalid")
                 }
                 value.installations.forEach { installation ->
-                    EnterprisePackageCodec.validateIdentity(installation.identity)
+                    EnterprisePackageCodec.validateLocalIdentity(installation.identity)
                     if ((installation.revision == null) != (installation.generation == null) || installation.generation?.let { it <= 0 } == true) {
                         fail("local_enterprise_directory_invalid")
                     }
@@ -69,7 +69,7 @@ internal class LocalEnterpriseConfigurationStore(
 
     fun initialize(identity: EnterpriseIdentity, packet: EnterprisePackage?) {
         check(installations() == null)
-        EnterprisePackageCodec.validateIdentity(identity)
+        EnterprisePackageCodec.validateLocalIdentity(identity)
         if (packet != null && packet.identity != identity) fail("enterprise_enrollment_identity_mismatch")
         val revision = packet?.let(::stage)
         commit(listOf(LocalEnterpriseInstallation(identity, revision, packet?.configuration?.generation)))

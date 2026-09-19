@@ -8,6 +8,7 @@ import java.time.Instant
 import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.runBlocking
 import me.rerere.common.configuration.ConfigurationReference
+import me.rerere.common.http.RoutedHttpException
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody
 import okio.BufferedSink
@@ -29,11 +30,11 @@ class EnterpriseSpeechTransportTest {
 
     @Test fun `installed service consumes encoded speech and multipart recording through the real decoders`() = runBlocking {
         val (source, sessions, access) = installed()
-        val lease = sessions.captureBindings(access)
+        val lease = sessions.captureExecution(access)
         val packet = requireNotNull(source.candidate(access.scope)).packet
         val local = LocalEnterpriseSpeechService(source, sessions, ::audio)
         val transport = EnterpriseSpeechTransport(local::execute, calls = { error("example must not open a network Call") })
-        fun target(id: String) = target(access, lease.version, lease.binding(id))
+        fun target(id: String) = target(access, lease.version, lease.localBinding(id))
         try {
             val tts = packet.configuration.tts.first()
             assertArrayEquals(audio(), transport.synthesize(target(tts.id), tts, "朗读测试" ).audioData)
@@ -47,18 +48,21 @@ class EnterpriseSpeechTransportTest {
             assertTrue(transport.transcribe(target(asr.id), asr, recording).contains("4 字节录音"))
             recording.writeText("not recorded audio")
             try { transport.transcribe(target(asr.id), asr, recording); fail("Invalid file accepted") }
-            catch (expected: IllegalStateException) { assertEquals("enterprise_speech_http_400", expected.message) }
+            catch (expected: RoutedHttpException) {
+                assertEquals(400, expected.status)
+                assertTrue(expected.detail.isNotBlank())
+            }
         } finally { lease.release() }
     }
 
     @Test fun `generation barrier rejects before reading a stale recording request and remains typed`() = runBlocking {
         val (source, sessions, access) = installed()
-        val lease = sessions.captureBindings(access)
+        val lease = sessions.captureExecution(access)
         try {
             val packet = requireNotNull(source.candidate(access.scope)).packet
             val tts = packet.configuration.tts.first()
             source.importPackage(requireNotNull(sessions.readPresentation().selection), EnterprisePackageCodec.encode(packet.copy(configuration = packet.configuration.copy(generation = packet.configuration.generation + 1))).inputStream())
-            val target = target(access, lease.version, lease.binding(tts.id))
+            val target = target(access, lease.version, lease.localBinding(tts.id))
             val writes = AtomicInteger()
             val body = object : RequestBody() {
                 override fun contentType() = "application/json".toMediaType()
@@ -118,10 +122,17 @@ class EnterpriseSpeechTransportTest {
             assertNull(seen.get().getFirst("X-Measix-Resource-Id"))
             problem.set(problem.get().replace("\"forwarded\": false", "\"forwarded\": false, \"forwarded\": true"))
             try { transport.synthesize(target, tts, "second"); fail("Duplicate field accepted") }
-            catch (expected: IllegalStateException) { assertFalse(expected is ManagedSnapshotRequired) }
+            catch (expected: RoutedHttpException) {
+                assertEquals(428, expected.status)
+                assertNull(ManagedSnapshotRequired.find(expected))
+                assertTrue(expected.detail.contains("\"forwarded\": true"))
+            }
             status.set(302)
             try { transport.synthesize(target, tts, "third"); fail("Redirect accepted") }
-            catch (expected: IllegalStateException) { assertEquals("enterprise_speech_http_302", expected.message) }
+            catch (expected: RoutedHttpException) {
+                assertEquals(302, expected.status)
+                assertEquals(problem.get(), expected.detail)
+            }
             assertEquals(3, requests.get())
             assertEquals(0, redirects.get())
         } finally { server.stop(0) }

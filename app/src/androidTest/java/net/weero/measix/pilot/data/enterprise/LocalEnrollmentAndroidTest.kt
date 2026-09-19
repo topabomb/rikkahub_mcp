@@ -40,7 +40,7 @@ class LocalEnrollmentAndroidTest {
             assertEquals(ready, controller.state.value)
             val reopenedSource = source(controller, authorityRoot)
             assertEquals(published, reopenedSource.candidate(fullPackage.identity.scope))
-            val synchronized = EnterpriseSynchronizationService(controller, reopenedSource, this)
+            val synchronized = EnterpriseSynchronizationService(controller, reopenedSource, this, net.weero.measix.pilot.service.PlatformEnterpriseService(controller, net.weero.measix.pilot.data.enterprise.PlatformControlClient(okhttp3.OkHttpClient())))
                 .synchronize(RealmAccess.Enterprise(fullPackage.identity.scope, ready.manifest.session.id))
             assertEquals(ready.manifest.session, synchronized.manifest.session)
             assertFalse(synchronized.configuration!!.policy.allowLocalMcp)

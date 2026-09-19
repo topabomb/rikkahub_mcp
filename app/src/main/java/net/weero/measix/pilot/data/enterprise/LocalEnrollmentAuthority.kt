@@ -39,7 +39,7 @@ internal class LocalEnrollmentAuthority(
     private val file get() = AtomicFile(File(root, "enrollments.json"))
 
     suspend fun issue(identity: EnterpriseIdentity): EnrollmentMaterial.LocalExample = mutex.withLock {
-        EnterprisePackageCodec.validateIdentity(identity)
+        EnterprisePackageCodec.validateLocalIdentity(identity)
         currentCoroutineContext().ensureActive()
         val material = withContext(Dispatchers.IO + NonCancellable) {
             val now = nowMillis()
@@ -102,7 +102,7 @@ internal class LocalEnrollmentAuthority(
                     ledger.tickets.map { it.digest }.distinct().size != ledger.tickets.size) fail("local_enrollment_store_invalid")
                 ledger.tickets.forEach { ticket ->
                     if (!Regex("[0-9a-f]{64}").matches(ticket.digest)) fail("local_enrollment_store_invalid")
-                    EnterprisePackageCodec.validateIdentity(ticket.identity)
+                    EnterprisePackageCodec.validateLocalIdentity(ticket.identity)
                 }
             }
         } catch (error: Exception) {

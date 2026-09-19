@@ -58,7 +58,7 @@ internal fun testModelExecutionService(store: SettingsStore, sessions: Enterpris
             RequestMediaCapabilities(userImages = me.rerere.ai.provider.RequestImageSupport.STRUCTURED)
         else RequestMediaCapabilities.NONE
     }
-    return ModelExecutionService(store, sessions, gate, providers, mockk(), mockk(), mockk())
+    return ModelExecutionService(store, sessions, gate, providers, mockk(), mockk(), mockk(), io.mockk.mockk())
 }
 
 /** Transport/lease tests own admission explicitly; source authorization has separate real-owner tests. */

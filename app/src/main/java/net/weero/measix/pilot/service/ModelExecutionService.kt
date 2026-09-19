@@ -23,7 +23,9 @@ import net.weero.measix.pilot.data.datastore.ExecutionConfigurationSnapshot
 import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.datastore.SettingsStore
 import net.weero.measix.pilot.data.datastore.findProvider
-import net.weero.measix.pilot.data.enterprise.EnterpriseBindingLease
+import net.weero.measix.pilot.data.enterprise.EnterpriseExecution
+import net.weero.measix.pilot.data.enterprise.PlatformProviderDefinitionClientProtocol
+import net.weero.measix.pilot.data.enterprise.EnterpriseExecutionLease
 import net.weero.measix.pilot.data.enterprise.EnterpriseRuntimeBinding
 import net.weero.measix.pilot.data.enterprise.EnterpriseRuntimeProtocol
 import net.weero.measix.pilot.data.enterprise.EnterpriseSessionController
@@ -82,6 +84,7 @@ internal class ModelExecutionService(
     private val localSource: net.weero.measix.pilot.data.enterprise.LocalEnterpriseSource,
     private val appScope: net.weero.measix.pilot.AppScope,
     private val synchronization: EnterpriseSynchronizationService,
+    private val platform: PlatformEnterpriseService,
 ) {
     suspend fun read(access: RealmAccess): ExecutionConfigurationSnapshot {
         recoveryGate.awaitReady()
@@ -124,11 +127,14 @@ internal class ModelExecutionService(
         modelId: ConfigurationReference,
         stopRequest: suspend () -> Unit,
         bindOwner: (ModelExecutionLease) -> Unit,
-    ): ModelExecutionSnapshot = captureResources(selection.access, worker, bindOwner, selection,
-        barrier(selection.access, { worker.cancel(CancellationException("managed_snapshot_required")) }, stopRequest)) { snapshot, bindings, _, primary ->
-        captureSelection(selection.access, snapshot, bindings, ModelSelectionRole.IMAGE,
-            snapshot.configuration.choice(net.weero.measix.pilot.data.configuration.ResourceSelectionSlot.IMAGE_MODEL, modelId),
-            null, primary, selection) { }
+    ): ModelExecutionSnapshot {
+        val interactionId = Uuid.random()
+        return captureResources(selection.access, worker, bindOwner, selection,
+            barrier(selection.access, { worker.cancel(CancellationException("managed_snapshot_required")) }, stopRequest)) { snapshot, bindings, _, primary ->
+            captureSelection(selection.access, snapshot, bindings, ModelSelectionRole.IMAGE,
+                snapshot.configuration.choice(net.weero.measix.pilot.data.configuration.ResourceSelectionSlot.IMAGE_MODEL, modelId),
+                null, primary, interactionId, selection) { }
+        }
     }
 
     private suspend fun captureModel(
@@ -142,6 +148,7 @@ internal class ModelExecutionService(
         onBarrier: () -> Unit,
         bindOwner: (ModelExecutionLease) -> Unit,
     ): CapturedModelConfiguration {
+        val interactionId = turnId ?: Uuid.random()
         val selectionRevision = sessions.selectionRevision.value
         check(runtime.durable.header.scope == access.scope) { "conversation_scope_mismatch" }
         if (role == ModelSelectionRole.CHAT) {
@@ -171,16 +178,16 @@ internal class ModelExecutionService(
             }
             val selected = if (role == ModelSelectionRole.CHAT) configuration.assistantModel(assistant)
                 else configuration.auxiliaryModel(role, assistant)
-            val model = captureSelection(access, snapshot, bindings, role, selected, assistant, primary, validateAssistant = validateAssistant)
+            val model = captureSelection(access, snapshot, bindings, role, selected, assistant, primary, interactionId, validateAssistant = validateAssistant)
             fun captureTool(toolRole: ModelSelectionRole): ModelExecutionSnapshot? =
                 configuration.modelSelection(toolRole).takeIf { it.isAvailable }?.let {
-                    captureSelection(access, snapshot, bindings, toolRole, it, assistant, execution::borrow, validateAssistant = validateAssistant)
+                    captureSelection(access, snapshot, bindings, toolRole, it, assistant, execution::borrow, interactionId, validateAssistant = validateAssistant)
                 }
             val inspection = if (role == ModelSelectionRole.CHAT) captureTool(ModelSelectionRole.ATTACHMENT_INSPECTION) else null
             val image = if (role == ModelSelectionRole.CHAT &&
                 net.weero.measix.pilot.data.ai.tools.local.LocalToolOption.TextToImage in assistant.localTools)
                 captureTool(ModelSelectionRole.IMAGE) else null
-            CapturedModelConfiguration(snapshot.userSettings, configuration, assistant, model, selectionRevision, turnId ?: Uuid.random(), inspection, image)
+            CapturedModelConfiguration(snapshot.userSettings, configuration, assistant, model, selectionRevision, interactionId, inspection, image)
         }
     }
 
@@ -190,18 +197,21 @@ internal class ModelExecutionService(
         bindOwner: (ModelExecutionLease) -> Unit,
         page: RealmSelection? = null,
         onBarrier: () -> Unit,
-        prepare: (ExecutionConfigurationSnapshot, EnterpriseBindingLease?, ModelExecutionLease,
+        prepare: (ExecutionConfigurationSnapshot, EnterpriseExecutionLease?, ModelExecutionLease,
             (suspend ((ModelRequestTarget) -> Unit) -> Unit) -> ModelRequests) -> T,
     ): T {
         recoveryGate.awaitReady()
         worker.ensureActive()
-        var bindings: EnterpriseBindingLease? = null
+        var bindings: EnterpriseExecutionLease? = null
         var admission: (suspend ((ModelRequestTarget) -> Unit) -> Unit)? = null
         val execution = ModelExecutionLease(releaseOwner = { bindings?.release() }, onManagedSnapshotRequired = onBarrier) { accept ->
             requireNotNull(admission) { "model_execution_not_prepared" }(accept)
         }
         bindOwner(execution)
-        if (access is RealmAccess.Enterprise) bindings = sessions.captureBindings(access)
+        if (access is RealmAccess.Enterprise) {
+            val checkedVersion = if (access.scope.authority.isLocal) null else synchronization.prepareExecution(access)
+            bindings = sessions.captureExecution(access, checkedVersion)
+        }
         val originalBindings = bindings
         return withConfiguration(access, page) { snapshot ->
             if (originalBindings != null) {
@@ -224,18 +234,19 @@ internal class ModelExecutionService(
                 stop()
                 synchronization.synchronize(access)
             } catch (cancelled: CancellationException) { throw cancelled }
-            catch (_: Exception) { android.util.Log.e("ModelExecutionService", "Model barrier cleanup or synchronization failed") }
+            catch (error: Exception) { android.util.Log.e("ModelExecutionService", "Model barrier cleanup or synchronization failed", error) }
         }
     }
 
     private fun captureSelection(
         access: RealmAccess,
         snapshot: ExecutionConfigurationSnapshot,
-        bindings: EnterpriseBindingLease?,
+        bindings: EnterpriseExecutionLease?,
         role: ModelSelectionRole,
         selection: net.weero.measix.pilot.data.configuration.ConfigurationSelection,
         assistant: Assistant?,
         requestView: (suspend ((ModelRequestTarget) -> Unit) -> Unit) -> ModelRequests,
+        interactionId: Uuid,
         page: RealmSelection? = null,
         validateAssistant: (ResolvedConfiguration) -> Unit,
     ): ModelExecutionSnapshot {
@@ -250,12 +261,36 @@ internal class ModelExecutionService(
             inputModalities = selected.inputModalities.toList(), outputModalities = selected.outputModalities.toList(),
             abilities = selected.abilities.toList(), tools = selected.tools.toSet(), providerOverwrite = null,
         ).let { if (role == ModelSelectionRole.CHAT) it.withAssistantSearch(requireNotNull(assistant)) else it.copy(tools = emptySet()) }
-        val privateBinding = (modelId as? ConfigurationReference.Enterprise)?.let {
-            requireNotNull(bindings) { "enterprise_binding_owner_missing" }.binding(it.id)
+        val enterpriseId = modelId as? ConfigurationReference.Enterprise
+        val enterpriseExecution = enterpriseId?.let {
+            requireNotNull(bindings) { "enterprise_execution_owner_missing" }.execution
+        }
+        val platformExecution = enterpriseExecution as? EnterpriseExecution.Platform
+        val privateBinding = enterpriseId?.takeIf { enterpriseExecution is EnterpriseExecution.Local }?.let {
+            requireNotNull(bindings).localBinding(it.id)
+        }
+        val platformProvider = platformExecution?.let {
+            val definitions = requireNotNull(bindings).configuration
+            val definition = definitions.models.single { it.id == modelId.id }
+            val protocol = definitions.providers.single { it.id == definition.providerId }.protocol
+            when (protocol) {
+                PlatformProviderDefinitionClientProtocol.OPENAI_CHAT_COMPLETIONS,
+                PlatformProviderDefinitionClientProtocol.OPENAI_RESPONSES -> ProviderSetting.OpenAI(
+                    id = model.id, name = model.displayName, models = listOf(model), baseUrl = it.connection.origin,
+                    apiKey = "", useResponseApi = protocol == PlatformProviderDefinitionClientProtocol.OPENAI_RESPONSES,
+                )
+                PlatformProviderDefinitionClientProtocol.GOOGLE_GENERATE_CONTENT -> ProviderSetting.Google(
+                    id = model.id, name = model.displayName, models = listOf(model), baseUrl = it.connection.origin, apiKey = "",
+                )
+                PlatformProviderDefinitionClientProtocol.ANTHROPIC_MESSAGES -> ProviderSetting.Claude(
+                    id = model.id, name = model.displayName, models = listOf(model), baseUrl = it.connection.origin, apiKey = "",
+                )
+            }
         }
         fun target(binding: EnterpriseRuntimeBinding) = enterpriseTarget(binding, model,
             access as RealmAccess.Enterprise, requireNotNull(bindings).version)
-        val initialTarget = if (privateBinding != null) target(privateBinding)
+        val initialTarget = if (platformProvider != null) ModelRequestTarget.Remote(platformProvider)
+            else if (privateBinding != null) target(privateBinding)
             else ModelRequestTarget.Remote(selected.findProvider(snapshot.userSettings.providers)
                 ?: error("model_provider_unavailable"))
         check(BuiltInTools.Search !in model.tools ||
@@ -263,7 +298,7 @@ internal class ModelExecutionService(
             "model_builtin_search_not_supported"
         }
         val frozenShape = (initialTarget as? ModelRequestTarget.Remote)?.let { freezeProviderWireShape(it.provider, model) }
-        val credentialOwner = if (privateBinding == null) {
+        val credentialOwner = if (enterpriseId == null) {
             captureProviderCredentialOwner(snapshot.userSettings, selected, (initialTarget as ModelRequestTarget.Remote).provider)
         } else null
         val media = when (initialTarget) {
@@ -274,6 +309,8 @@ internal class ModelExecutionService(
                 else providers.getProviderByType(initialTarget.provider).requestMediaCapabilities(initialTarget.provider, model)
         }
         val modelAdmission: suspend ((ModelRequestTarget) -> Unit) -> Unit = { accept ->
+            // Refresh belongs to the Session owner and must happen outside its configuration lock.
+            val platformToken = platformExecution?.let { platform.accessToken((access as RealmAccess.Enterprise).sessionId) }
             withConfiguration(access, page) { latest ->
                 currentCoroutineContext().ensureActive()
                 validateAssistant(latest.configuration)
@@ -282,9 +319,18 @@ internal class ModelExecutionService(
                         requireNotNull(latest.configuration.assistants[assistant.id]).localTools) { "tool_revoked" }
                 }
                 requireAvailable(latest.configuration, ConfigurationCategory.MODEL, modelId)
-                val target = if (privateBinding != null) {
+                val target = if (platformExecution != null) {
+                    check(requireNotNull(bindings).execution == platformExecution) { "platform_execution_changed" }
+                    var endpoint = platformExecution.connection.runtime(modelId.id,
+                        platformExecution.runtimePaths.getValue(modelId.id))
+                    if (platformProvider is ProviderSetting.Google) endpoint += "?alt=sse"
+                    ModelRequestTarget.Remote(requireNotNull(platformProvider), listOf(
+                        CustomHeader("X-Measix-Managed-Generation", bindings.configuration.generation.toString()),
+                        CustomHeader("X-Measix-Interaction-Id", "int_$interactionId"),
+                    ), RequestCredentials.Routed(endpoint, requireNotNull(platformToken).value))
+                } else if (privateBinding != null) {
                     // The original lease checks revocation; replacement bindings belong to new Turns.
-                    target(requireNotNull(bindings).binding(modelId.id))
+                    target(requireNotNull(bindings).localBinding(modelId.id))
                 } else ModelRequestTarget.Remote(mergeProviderTransportCredentials(
                     requireNotNull(frozenShape),
                     resolveProviderTransportOwner(latest.userSettings, requireNotNull(credentialOwner)),

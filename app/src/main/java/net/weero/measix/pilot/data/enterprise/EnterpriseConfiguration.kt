@@ -34,6 +34,15 @@ internal data class EnterpriseConfiguration(
     val starters: List<EnterpriseStarter>,
     val gateways: List<EnterpriseGateway>,
     val defaults: EnterpriseDefaults,
+    val providers: List<EnterpriseProvider>,
+)
+
+@Serializable
+internal data class EnterpriseProvider(
+    val id: String,
+    val name: String,
+    val protocol: PlatformProviderDefinitionClientProtocol,
+    val enabled: Boolean,
 )
 
 @Serializable
@@ -46,6 +55,7 @@ internal data class EnterpriseModel(
     val inputModalities: List<Modality> = listOf(Modality.TEXT),
     val outputModalities: List<Modality> = listOf(Modality.TEXT),
     val abilities: List<ModelAbility> = emptyList(),
+    val providerId: String? = null,
 )
 
 @Serializable
@@ -53,9 +63,19 @@ internal data class EnterpriseTtsResource(
     val id: String,
     val name: String,
     val enabled: Boolean = true,
-    val modelId: String,
-    val voice: String,
+    val protocol: EnterpriseTtsProtocol,
+    val modelId: String? = null,
+    val voice: String? = null,
+    val voiceDesignPrompt: String? = null,
+    val speechRate: Double? = null,
+    val pitch: Double? = null,
 )
+
+@Serializable
+internal enum class EnterpriseTtsProtocol { OPENAI, GEMINI, MIMO, SYSTEM }
+
+@Serializable
+internal enum class EnterpriseAsrProtocol { OPENAI_HTTP, DASHSCOPE_HTTP, OPENAI_REALTIME, DASHSCOPE }
 
 @Serializable
 internal data class EnterpriseAsrResource(
@@ -64,6 +84,12 @@ internal data class EnterpriseAsrResource(
     val enabled: Boolean = true,
     val modelId: String,
     val language: String? = null,
+    val protocol: EnterpriseAsrProtocol,
+    val sampleRate: Int? = null,
+    val vadThreshold: Double? = null,
+    val silenceDurationMs: Int? = null,
+    val prefixPaddingMs: Int? = null,
+    val prompt: String? = null,
 )
 
 @Serializable
@@ -71,6 +97,7 @@ internal data class EnterpriseMcpResource(
     val id: String,
     val name: String,
     val enabled: Boolean = true,
+    val authOwnership: PlatformMcpDefinitionAuthOwnership? = null,
 )
 
 /** Only enterprise-owned fields belong here; local usage choices are user preferences. */
@@ -135,7 +162,7 @@ internal fun EnterpriseIdentity.reference(id: String): ConfigurationReference.En
 
 internal fun EnterpriseConfiguration.runtimeResources(): Map<String, EnterpriseResourceKind> = buildMap {
     models.forEach { put(it.id, EnterpriseResourceKind.MODEL) }
-    tts.forEach { put(it.id, EnterpriseResourceKind.TTS) }
+    tts.filter { it.protocol != EnterpriseTtsProtocol.SYSTEM }.forEach { put(it.id, EnterpriseResourceKind.TTS) }
     asr.forEach { put(it.id, EnterpriseResourceKind.ASR) }
     mcpServers.forEach { put(it.id, EnterpriseResourceKind.MCP) }
     gateways.forEach { put(it.id, EnterpriseResourceKind.GATEWAY) }

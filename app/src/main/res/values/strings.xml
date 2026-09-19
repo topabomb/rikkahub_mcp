@@ -1614,6 +1614,7 @@
   <string name="enterprise_switch_notice">Switching spaces keeps your enterprise sign-in. Chats and data remain in their original space.</string>
   <string name="enterprise_sync">Sync enterprise configuration</string>
   <string name="enterprise_exit">Sign out of enterprise</string>
+  <string name="enterprise_logout_unconfirmed">Signed out on this device. Server sign-out could not be confirmed.</string>
   <string name="enterprise_exit_confirm">Sign out of %1$s? Enterprise work will stop and the app will return to personal space. Existing enterprise data stays isolated.</string>
   <string name="enterprise_signed_out">Not signed in</string>
   <string name="enterprise_pending">Joined, waiting for configuration</string>
@@ -1627,7 +1628,6 @@
   <string name="enterprise_generation">Active configuration version: %1$d</string>
   <string name="enterprise_last_sync">Last configuration sync: %1$s</string>
   <string name="enterprise_current_space">Current space: %1$s</string>
-  <string name="enterprise_platform_unavailable">Real enterprise server enrollment is not supported yet. You can try the local example enterprise.</string>
   <string name="enterprise_invalid_enrollment">The enrollment information is invalid, expired, already used, or not accepted by an installed source.</string>
   <string name="enterprise_external_open">Open external website</string>
   <string name="enterprise_external_confirm">Open this address in another app?\n\n%1$s</string>
@@ -1793,4 +1793,6 @@
   <string name="assistant_model_default_settings">Settings default</string>
   <string name="assistant_model_default_assistant">Assistant default</string>
   <string name="assistant_model_default_space">Space default</string>
+  <string name="enterprise_platform_confirm">Connect to this enterprise platform?\n\n%1$s</string>
+  <string name="speech_no_voice_detected">No speech detected. Please try again.</string>
 </resources>

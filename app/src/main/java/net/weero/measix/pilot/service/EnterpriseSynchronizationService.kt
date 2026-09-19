@@ -13,15 +13,22 @@ import net.weero.measix.pilot.data.enterprise.EnterpriseConfigurationException
 import net.weero.measix.pilot.data.enterprise.EnterpriseSessionController
 import net.weero.measix.pilot.data.enterprise.EnterpriseState
 import net.weero.measix.pilot.data.enterprise.LocalEnterpriseSource
+import net.weero.measix.pilot.data.enterprise.toCandidate
 
 /** Native and Portal callers share one synchronization. Cancelling a waiter does not replay or undo the work. */
 internal class EnterpriseSynchronizationService(
     private val sessions: EnterpriseSessionController,
     private val source: LocalEnterpriseSource,
     private val scope: CoroutineScope,
+    private val platform: PlatformEnterpriseService,
 ) {
     private val mutex = Mutex()
     private val active = mutableMapOf<RealmAccess.Enterprise, Deferred<EnterpriseState.Available>>()
+
+    suspend fun prepareExecution(access: RealmAccess.Enterprise): net.weero.measix.pilot.data.enterprise.EnterpriseAppliedVersion {
+        require(!access.scope.authority.isLocal) { "platform_session_required" }
+        return platform.prepareExecution(access) { synchronize(access) }
+    }
 
     suspend fun cancelAndAwait(access: RealmAccess.Enterprise) {
         val pending = mutex.withLock { active[access]?.also { it.cancel() } }
@@ -33,9 +40,11 @@ internal class EnterpriseSynchronizationService(
             active[access] ?: scope.async(start = CoroutineStart.LAZY) {
                 try {
                     sessions.withRealmAccess(access) { Unit }
-                    val candidate = source.candidate(access.scope)
-                        ?: throw EnterpriseConfigurationException("enterprise_configuration_not_ready")
-                    sessions.synchronize(access, candidate.packet)
+                    if (access.scope.authority.isLocal) {
+                        val candidate = source.candidate(access.scope)
+                            ?: throw EnterpriseConfigurationException("enterprise_configuration_not_ready")
+                        sessions.synchronize(access, candidate.packet.toCandidate())
+                    } else platform.synchronize(access)
                 } finally {
                     withContext(NonCancellable) { mutex.withLock { active.remove(access) } }
                 }

@@ -304,7 +304,7 @@ class AuxiliaryGenerationOwnershipTest {
             net.weero.measix.pilot.data.enterprise.LocalEnterpriseConfigurationStore(sourceRoot),
         )
         val actualModels = ModelExecutionService(settings, sessions, gate, manager, source, appScope,
-            EnterpriseSynchronizationService(sessions, source, appScope))
+            EnterpriseSynchronizationService(sessions, source, appScope, net.weero.measix.pilot.service.PlatformEnterpriseService(sessions, net.weero.measix.pilot.data.enterprise.PlatformControlClient(okhttp3.OkHttpClient()))), io.mockk.mockk())
         val models = spyk(actualModels)
         val effects = GenerationSideEffects(context, appScope, models, manager, registry,
             coordinator, mockk(), JsonInstant, ChatErrorStore(), titles, sessions)

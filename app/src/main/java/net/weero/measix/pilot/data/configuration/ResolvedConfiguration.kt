@@ -221,7 +221,10 @@ internal object ConfigurationResolver {
         if (enterprise != null && identity != null) {
             enterprise.models.forEach { definition ->
                 val id = identity.reference(definition.id)
-                add(ConfigurationCategory.MODEL, id, definition.name, definition.enabled)
+                val providerEnabled = definition.providerId?.let { providerId ->
+                    enterprise.providers.singleOrNull { it.id == providerId }?.enabled == true
+                } ?: true
+                add(ConfigurationCategory.MODEL, id, definition.name, definition.enabled && providerEnabled)
                 models[id] = ResolvedModelConfiguration(
                     Model(id = id, modelId = definition.modelId, displayName = definition.name, type = definition.type,
                         inputModalities = definition.inputModalities, outputModalities = definition.outputModalities, abilities = definition.abilities),

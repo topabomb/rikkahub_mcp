@@ -1,5 +1,6 @@
 package net.weero.measix.pilot.service
 
+import net.weero.measix.pilot.data.enterprise.toCandidate
 import android.content.Context
 import android.content.ContextWrapper
 import androidx.datastore.preferences.core.PreferenceDataStoreFactory
@@ -68,7 +69,7 @@ class MemoryServiceTest {
             env.sessions.synchronize(selection.access as RealmAccess.Enterprise, packet.copy(configuration = packet.configuration.copy(
                 generation = packet.configuration.generation + 1,
                 memorySeeds = packet.configuration.memorySeeds.map { if (it.id == "seed_writing") it.copy(content = "Updated enterprise guidance") else it },
-            )))
+            )).toCandidate())
             val updated = env.configurations.observe(packet.identity.scope).first {
                 it.enterpriseConfiguration?.generation == packet.configuration.generation + 1
             }
@@ -161,7 +162,7 @@ class MemoryServiceTest {
             assertTrue(env.memory.inspect(realm, env.caller.id, env.target.id).memories.isEmpty())
             env.sessions.synchronize(realm as RealmAccess.Enterprise, packet.copy(configuration = packet.configuration.copy(
                 generation = packet.configuration.generation + 1, policy = packet.configuration.policy.copy(allowLocalAssistants = false),
-            )))
+            )).toCandidate())
             assertEquals(realm, env.sessions.captureRealmAccess(packet.identity.scope))
             expectRejected { env.memory.inspect(realm, env.caller.id, env.target.id) }
         }

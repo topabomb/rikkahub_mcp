@@ -1,4 +1,5 @@
 package net.weero.measix.pilot.di
+import net.weero.measix.pilot.utils.userVisibleDiagnostic
 import net.weero.measix.pilot.service.turn.TurnContextFactory
 import net.weero.measix.pilot.service.turn.TurnPipelineFactory
 
@@ -29,6 +30,7 @@ import net.weero.measix.pilot.service.ConversationTitleCoordinator
 import net.weero.measix.pilot.service.MediaExportService
 import net.weero.measix.pilot.service.ApplicationRecoveryCoordinator
 import net.weero.measix.pilot.service.ApplicationRecoveryGate
+import net.weero.measix.pilot.service.PlatformEnterpriseService
 import net.weero.measix.pilot.service.ConfigurationApplicationService
 import net.weero.measix.pilot.service.ConfigurationQueryService
 import net.weero.measix.pilot.data.enterprise.EnterpriseSessionController
@@ -72,7 +74,7 @@ val appModule = module {
     single { ApplicationRecoveryGate() }
     single { ConfigurationApplicationService(get(), get(), get(), get(), get(), get()) }
     single { ConfigurationQueryService(get(), get(), get()) }
-    single { net.weero.measix.pilot.service.ModelExecutionService(get(), get(), get(), get(), get(), get(), get()) }
+    single { net.weero.measix.pilot.service.ModelExecutionService(get(), get(), get(), get(), get(), get(), get(), get()) }
     single { net.weero.measix.pilot.service.MemoryService(get(), get(), get(), get(), get()) }
     single { ArtifactUseCase(get(), get(), get()) }
     single { FileManagementApplicationService(get(), get(), get(), get(), remoteMediaFetcher = get()) }
@@ -346,10 +348,11 @@ val appModule = module {
     single { net.weero.measix.pilot.service.portal.PortalDocumentRegistry() }
     single { net.weero.measix.pilot.service.portal.PortalMediaStore(java.io.File(get<Context>().noBackupFilesDir, "portal_media")) }
     single {
-        net.weero.measix.pilot.service.SpeechApplicationService(get(), get(), get(), get(), get(), get(), get(), get(), get<AppScope>(), me.rerere.tts.controller.TtsController(get()))
+        net.weero.measix.pilot.service.SpeechApplicationService(get(), get(), get(), get(), get(), get(), get(), get(), get<AppScope>(),
+            me.rerere.tts.controller.TtsController(get()) { it.userVisibleDiagnostic() }, get())
     }
-    single { net.weero.measix.pilot.service.EnterpriseExitService(get(), get(), get(), get(), get<AppScope>(), get(), get(), get(), get(), get(), get(), get(), get(), get()) }
-    single { net.weero.measix.pilot.service.EnterpriseApplicationService(get(), get(), get(), get(), get(), get(), get<AppScope>(), get(), get(), get()) }
+    single { net.weero.measix.pilot.service.EnterpriseExitService(get(), get(), get(), get(), get<AppScope>(), get(), get(), get(), get(), get(), get(), get(), get(), get()) { get<PlatformEnterpriseService>().logout(it) } }
+    single(createdAtStart = true) { net.weero.measix.pilot.service.EnterpriseApplicationService(get(), get(), get(), get(), get(), get(), get<AppScope>(), get(), get(), get(), get()) }
 
     single {
         GenerationSideEffects(

@@ -62,7 +62,7 @@ class LocalEnterpriseSourceTest {
             } catch (barrier: ManagedSnapshotRequired) { assertEquals(original.generation + 1, barrier.targetGeneration) }
         }
         io.mockk.verify { providers wasNot io.mockk.Called }
-        h.sessions.synchronize(access, requireNotNull(h.source.candidate(access.scope)).packet)
+        h.sessions.synchronize(access, requireNotNull(h.source.candidate(access.scope)).packet.toCandidate())
         try { target.verifyRequest(); fail("old capture revived by sync") }
         catch (_: ManagedSnapshotRequired) { }
         val current = requireNotNull((h.sessions.state.value as EnterpriseState.Available).manifest.applied)
@@ -102,7 +102,7 @@ class LocalEnterpriseSourceTest {
         val source = LocalEnterpriseSource({ opened = true; error("must not load a local source") }, h.sessions, h.authority,
             { opened = true; error("must not load local identity") }, LocalEnterpriseConfigurationStore(h.authorityRoot)) { now }
         val platform = requireNotNull(javaClass.getResourceAsStream("/contracts/portal/platform-v1.json")).bufferedReader().use { it.readText() }
-        rejected("platform_enrollment_not_supported") { source.enroll(platform) }
+        rejected("local_enrollment_required") { source.enroll(platform) }
         assertFalse(opened)
         assertSignedOut(h)
         assertFalse(File(h.authorityRoot, "enrollments.json").exists())
@@ -429,7 +429,7 @@ class LocalEnterpriseSourceTest {
         try { h.source.enroll(text); fail("consumed enrollment must fail") }
         catch (_: EnterpriseConfigurationException) { }
         assertEquals(pending, h.sessions.state.value)
-        val ready = h.sessions.synchronize(RealmAccess.Enterprise(session.identity.scope, session.id), candidate.packet)
+        val ready = h.sessions.synchronize(RealmAccess.Enterprise(session.identity.scope, session.id), candidate.packet.toCandidate())
         assertEquals(EnterpriseSessionPhase.READY, ready.manifest.phase)
         assertEquals(session, ready.manifest.session)
         assertEquals(ConfigurationScope.Personal, ready.manifest.selectedScope)
@@ -452,7 +452,7 @@ class LocalEnterpriseSourceTest {
         clientCheckpoint: (EnterpriseStorageCheckpoint) -> Unit = {}, sourceCheckpoint: () -> Unit = {}): Harness {
         val clientRoot = temporary.newFolder()
         val authorityRoot = temporary.newFolder()
-        val sessions = EnterpriseSessionController(EnterpriseAppliedStore(clientRoot, clientCheckpoint)) { now }
+        val sessions = EnterpriseSessionController(EnterpriseAppliedStore(clientRoot, checkpoint = clientCheckpoint)) { now }
         val authority = LocalEnrollmentAuthority(authorityRoot, { now }, authorityCheckpoint)
         return Harness(clientRoot, authorityRoot, sessions, authority, LocalEnterpriseSource({ bytes.inputStream() }, sessions, authority,
             ::identityStream, LocalEnterpriseConfigurationStore(authorityRoot, sourceCheckpoint)) { now })

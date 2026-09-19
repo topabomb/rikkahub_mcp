@@ -7,7 +7,15 @@ internal class ManagedSnapshotRequired(val targetGeneration: Long, val requestId
     IllegalStateException("managed_snapshot_required") {
     companion object {
         fun find(error: Throwable): ManagedSnapshotRequired? = generateSequence(error) { it.cause }
-            .filterIsInstance<ManagedSnapshotRequired>().firstOrNull()
+            .mapNotNull { cause ->
+                when {
+                    cause is ManagedSnapshotRequired -> cause
+                    cause is me.rerere.common.http.RoutedHttpException && cause.status == 428 ->
+                        try { parse(cause.detail) } catch (_: IllegalArgumentException) { null }
+                        catch (_: IllegalStateException) { null }
+                    else -> null
+                }
+            }.firstOrNull()
 
         fun parse(body: String): ManagedSnapshotRequired {
             val value = StrictJsonValue.parse(body, 16 * 1024 * 1024) as? kotlinx.serialization.json.JsonObject

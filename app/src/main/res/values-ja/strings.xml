@@ -1613,6 +1613,7 @@
   <string name="enterprise_switch_notice">スペースを切り替えても企業へのログインは維持されます。チャットとデータは元のスペースに残ります。</string>
   <string name="enterprise_sync">企業設定を同期</string>
   <string name="enterprise_exit">企業からログアウト</string>
+  <string name="enterprise_logout_unconfirmed">この端末ではログアウトしました。サーバー側のログアウトは確認できませんでした。</string>
   <string name="enterprise_exit_confirm">%1$s からログアウトしますか？企業の処理が停止し、個人スペースに戻ります。既存の企業データは引き続き分離されます。</string>
   <string name="enterprise_signed_out">未ログイン</string>
   <string name="enterprise_pending">接続済み、設定待ち</string>
@@ -1626,7 +1627,6 @@
   <string name="enterprise_generation">適用中の設定バージョン：%1$d</string>
   <string name="enterprise_last_sync">最終設定同期：%1$s</string>
   <string name="enterprise_current_space">現在のスペース：%1$s</string>
-  <string name="enterprise_platform_unavailable">実際の企業サーバーへの接続にはまだ対応していません。端末内のサンプル企業をお試しください。</string>
   <string name="enterprise_invalid_enrollment">接続情報が無効、期限切れ、使用済み、またはインストール済みの接続元で受け付けられません。</string>
   <string name="enterprise_external_open">外部サイトを開く</string>
   <string name="enterprise_external_confirm">このアドレスを別のアプリで開きますか？\n\n%1$s</string>
@@ -1792,4 +1792,6 @@
   <string name="assistant_model_default_settings">設定のデフォルト</string>
   <string name="assistant_model_default_assistant">アシスタントのデフォルト</string>
   <string name="assistant_model_default_space">スペースのデフォルト</string>
+  <string name="enterprise_platform_confirm">この企業プラットフォームに接続しますか？\n\n%1$s</string>
+  <string name="speech_no_voice_detected">音声が検出されませんでした。もう一度お試しください。</string>
 </resources>

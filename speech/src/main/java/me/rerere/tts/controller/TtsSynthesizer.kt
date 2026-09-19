@@ -19,10 +19,11 @@ class TtsSynthesizer(
 ) {
     suspend fun synthesize(
         setting: TTSProviderSetting,
-        chunk: TtsChunk
+        chunk: TtsChunk,
+        transport: me.rerere.speech.SpeechHttpTransport? = null,
     ): TTSResponse = withContext(Dispatchers.IO) {
         collectToResponse(
-            ttsManager.generateSpeech(setting, TTSRequest(text = chunk.text))
+            ttsManager.generateSpeech(setting, TTSRequest(text = chunk.text, transport = transport))
         )
     }
 

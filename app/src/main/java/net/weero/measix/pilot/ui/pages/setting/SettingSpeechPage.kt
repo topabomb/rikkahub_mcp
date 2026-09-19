@@ -562,8 +562,18 @@ private fun SpeechProviderList(
             val managedTts = catalog?.managedTts?.find { it.id == managedId }
             val managedAsr = catalog?.managedAsr?.find { it.id == managedId }
             val details = when {
-                managedTts != null -> "${managedTts.modelId} · ${managedTts.voice}"
-                managedAsr != null -> listOfNotNull(managedAsr.modelId, managedAsr.language).joinToString(" · ")
+                managedTts != null -> when (managedTts.protocol) {
+                    net.weero.measix.pilot.data.enterprise.EnterpriseTtsProtocol.OPENAI -> stringResource(R.string.setting_tts_page_provider_openai)
+                    net.weero.measix.pilot.data.enterprise.EnterpriseTtsProtocol.GEMINI -> stringResource(R.string.setting_tts_page_provider_gemini)
+                    net.weero.measix.pilot.data.enterprise.EnterpriseTtsProtocol.MIMO -> stringResource(R.string.setting_tts_page_provider_mimo)
+                    net.weero.measix.pilot.data.enterprise.EnterpriseTtsProtocol.SYSTEM -> stringResource(R.string.setting_tts_page_provider_system)
+                }
+                managedAsr != null -> when (managedAsr.protocol) {
+                    net.weero.measix.pilot.data.enterprise.EnterpriseAsrProtocol.OPENAI_HTTP -> stringResource(R.string.setting_tts_page_provider_openai)
+                    net.weero.measix.pilot.data.enterprise.EnterpriseAsrProtocol.OPENAI_REALTIME -> "OpenAI Realtime"
+                    net.weero.measix.pilot.data.enterprise.EnterpriseAsrProtocol.DASHSCOPE,
+                    net.weero.measix.pilot.data.enterprise.EnterpriseAsrProtocol.DASHSCOPE_HTTP -> "DashScope"
+                }
                 tts is TTSProviderSetting.OpenAI -> stringResource(R.string.setting_tts_page_provider_openai)
                 tts is TTSProviderSetting.Gemini -> stringResource(R.string.setting_tts_page_provider_gemini)
                 tts is TTSProviderSetting.MiMo -> stringResource(R.string.setting_tts_page_provider_mimo)

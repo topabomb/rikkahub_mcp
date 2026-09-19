@@ -144,8 +144,7 @@ internal abstract class McpRuntimeCoordinatorTestBase {
             transportOverride = { FakeTransport().also(createdTransports::add) },
             clientOverride = { config -> fakeClient(config) },
             oauthCallbackKeepAlive = NoOpOAuthCallbackKeepAlive,
-            retryJitter = { it },
-        )
+            retryJitter = { it }, platform = io.mockk.mockk())
     }
 
     @After

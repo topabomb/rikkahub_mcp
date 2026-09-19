@@ -32,7 +32,36 @@ internal sealed interface McpConnectionDefinition {
         override fun toolPolicy(name: String) = config.commonOptions.toolPolicyByName()[name]
     }
 
-    class Managed(
+    class ManagedPlatform(
+        val access: RealmAccess.Enterprise,
+        override val id: ConfigurationReference.Enterprise,
+        override val name: String,
+        val execution: net.weero.measix.pilot.data.enterprise.EnterpriseExecution.Platform,
+        val authOwnership: net.weero.measix.pilot.data.enterprise.PlatformMcpDefinitionAuthOwnership,
+        val version: EnterpriseAppliedVersion,
+        val interactionId: String,
+        private val credential: suspend () -> String,
+    ) : McpConnectionDefinition {
+        init {
+            require(id.authority == access.scope.authority)
+            require(interactionId.matches(Regex("int_[0-9a-f-]{36}")))
+        }
+        override val enabled get() = true
+        override val catalogKey get() = McpCatalogKey(access.scope, id)
+        override val managed = McpManagedCatalog(version.generation, null)
+        override val namespace get() = managedMcpNamespace(id)
+        val url get() = execution.connection.runtime(id.id, execution.runtimePaths.getValue(id.id))
+        private val publicHeaders get() = listOf(
+            "X-Measix-Managed-Generation" to version.generation.toString(),
+            "X-Measix-Interaction-Id" to interactionId,
+        )
+        suspend fun requestHeaders() = publicHeaders + ("Authorization" to "Bearer ${credential()}")
+        override fun connectionFingerprint() = McpConnectionFingerprint("platform_streamable_http", url, name, publicHeaders)
+        override fun mcpDefinitionDigest() = platformMcpDefinitionDigest(id, name, execution, version.generation, authOwnership)
+        override fun toolPolicy(name: String): McpToolPolicy? = null
+    }
+
+    class ManagedLocal(
         val access: RealmAccess.Enterprise,
         override val id: ConfigurationReference.Enterprise,
         override val name: String,
@@ -89,3 +118,14 @@ internal fun managedMcpDefinitionDigest(
 ): String = sha256(
     JsonInstant.encodeToString(binding.copy(headers = binding.headers.toSortedMap(String.CASE_INSENSITIVE_ORDER))) + "\u0000" + id + "\u0000" + name + "\u0000" + generation,
 )
+
+/** Public route and release facts define catalog identity; access-token rotation never invalidates schemas. */
+internal fun platformMcpDefinitionDigest(
+    id: ConfigurationReference.Enterprise,
+    name: String,
+    execution: net.weero.measix.pilot.data.enterprise.EnterpriseExecution.Platform,
+    generation: Long,
+    authOwnership: net.weero.measix.pilot.data.enterprise.PlatformMcpDefinitionAuthOwnership,
+): String = sha256(JsonInstant.encodeToString(listOf(id.toString(), name, execution.connection.origin,
+    execution.connection.discovery.deploymentId, execution.releaseId, execution.snapshotHash, generation.toString(),
+    execution.connection.runtime(id.id, execution.runtimePaths.getValue(id.id)), authOwnership.name)))

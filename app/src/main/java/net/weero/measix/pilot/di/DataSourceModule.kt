@@ -5,6 +5,7 @@ import io.ktor.client.HttpClient
 import io.ktor.client.engine.okhttp.OkHttp
 import io.ktor.http.HttpHeaders
 import io.pebbletemplates.pebble.PebbleEngine
+import kotlinx.coroutines.launch
 import kotlinx.serialization.json.Json
 import me.rerere.ai.provider.ProviderManager
 import me.rerere.common.http.AcceptLanguageBuilder
@@ -15,6 +16,10 @@ import net.weero.measix.pilot.data.ai.transformers.TemplateTransformer
 import net.weero.measix.pilot.data.datastore.SettingsStore
 import net.weero.measix.pilot.data.enterprise.EnterpriseAppliedStore
 import net.weero.measix.pilot.data.enterprise.EnterpriseSessionController
+import net.weero.measix.pilot.data.enterprise.EnterpriseExitReason
+import net.weero.measix.pilot.data.enterprise.PlatformControlClient
+import net.weero.measix.pilot.service.PlatformEnterpriseService
+import net.weero.measix.pilot.service.EnterpriseExitService
 import net.weero.measix.pilot.data.enterprise.LocalEnterpriseSource
 import net.weero.measix.pilot.data.enterprise.LocalEnrollmentAuthority
 import net.weero.measix.pilot.data.enterprise.LocalEnterpriseConfigurationStore
@@ -50,6 +55,13 @@ val dataSourceModule = module {
         EnterpriseAppliedStore(File(get<Context>().noBackupFilesDir, "enterprise"))
     }
     single { EnterpriseSessionController(get()) }
+    single { PlatformControlClient(get()) }
+    single {
+        val scope = get<AppScope>()
+        PlatformEnterpriseService(get(), get(), onSessionRevoked = { access ->
+            scope.launch { get<EnterpriseExitService>().invalidate(access, EnterpriseExitReason.AUTHORIZATION_REVOKED) }
+        })
+    }
     single {
         val context = get<Context>()
         LocalEnterpriseSource(
@@ -60,7 +72,7 @@ val dataSourceModule = module {
     }
     single { LocalEnrollmentAuthority(File(get<Context>().noBackupFilesDir, "local_enterprise_service")) }
     single { LocalEnterpriseConfigurationStore(File(get<Context>().noBackupFilesDir, "local_enterprise_service")) }
-    single { EnterpriseSynchronizationService(get(), get(), get<AppScope>()) }
+    single { EnterpriseSynchronizationService(get(), get(), get<AppScope>(), get()) }
     single {
         SettingsStore(appContext = get(), scope = get())
     }
@@ -165,6 +177,7 @@ val dataSourceModule = module {
             artifactStore = get(),
             networkMonitor = get(),
             oauthCallbackKeepAlive = get(),
+            platform = get(),
         )
     }
 

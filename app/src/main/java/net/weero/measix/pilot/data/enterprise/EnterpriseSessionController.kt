@@ -43,23 +43,30 @@ internal sealed interface EnterpriseExitSignal {
     data class Expired(val access: RealmAccess.Enterprise) : EnterpriseExitSignal
 }
 
-/** A binding lease owns immutable connection inputs, not permission to execute a capability. */
-internal class EnterpriseBindingLease internal constructor(
+/** A lease pins one immutable execution source; authoritative preflight and local policy grant admission. */
+internal class EnterpriseExecutionLease internal constructor(
     internal val id: String,
     val sessionId: String,
     val scope: ConfigurationScope.Enterprise,
     val version: EnterpriseAppliedVersion,
-    private val bindings: Map<String, EnterpriseRuntimeBinding>,
-    private val releaseOwner: suspend (EnterpriseBindingLease) -> Unit,
+    private val candidate: EnterpriseCandidate,
+    private val releaseOwner: suspend (EnterpriseExecutionLease) -> Unit,
 ) {
     private val closed = AtomicBoolean(false)
     private val revoked = AtomicBoolean(false)
     private val releaseMutex = Mutex()
     private var released = false
 
-    fun binding(resourceId: String): EnterpriseRuntimeBinding {
-        if (closed.get() || revoked.get()) throw EnterpriseConfigurationException("enterprise_binding_lease_unavailable")
-        return bindings[resourceId] ?: throw EnterpriseConfigurationException("enterprise_binding_missing")
+    val execution: EnterpriseExecution get() { requireAvailable(); return candidate.execution }
+    val configuration: EnterpriseConfiguration get() { requireAvailable(); return candidate.configuration }
+
+    private fun requireAvailable() {
+        if (closed.get() || revoked.get()) throw EnterpriseConfigurationException("enterprise_execution_lease_unavailable")
+    }
+
+    fun localBinding(resourceId: String): EnterpriseRuntimeBinding {
+        val local = execution as? EnterpriseExecution.Local ?: throw EnterpriseConfigurationException("local_bindings_required")
+        return local.bindings.firstOrNull { it.resourceId == resourceId } ?: throw EnterpriseConfigurationException("enterprise_binding_missing")
     }
 
     internal fun revoke() { revoked.set(true) }
@@ -70,7 +77,7 @@ internal class EnterpriseBindingLease internal constructor(
         withContext(NonCancellable) {
             releaseMutex.withLock {
                 if (!released) {
-                    releaseOwner(this@EnterpriseBindingLease)
+                    releaseOwner(this@EnterpriseExecutionLease)
                     released = true
                 }
             }
@@ -85,11 +92,144 @@ internal class EnterpriseSessionController(
 ) {
     private val mutex = Mutex()
     private var loaded: LoadedEnterpriseState? = null
-    private val leases = mutableMapOf<String, EnterpriseBindingLease>()
+    private val leases = mutableMapOf<String, EnterpriseExecutionLease>()
     private val _state = MutableStateFlow<EnterpriseState>(EnterpriseState.Loading)
     val state: StateFlow<EnterpriseState> = _state.asStateFlow()
     private val _selectionRevision = MutableStateFlow(0L)
     val selectionRevision: StateFlow<Long> = _selectionRevision.asStateFlow()
+    private var enrollmentAttempt: PlatformEnrollmentAttempt? = null
+    private val platformAccessTokens = mutableMapOf<String, PlatformAccessToken>()
+
+    suspend fun beginPlatformEnrollment(): PlatformEnrollmentAttempt = mutex.withLock {
+        val manifest = ensureLoaded().manifest
+        if (manifest.session != null || manifest.pendingEnrollment != null) fail("exit_current_enterprise_first")
+        if (enrollmentAttempt != null) fail("enterprise_enrollment_in_progress")
+        PlatformEnrollmentAttempt(Uuid.random().toString(), withContext(Dispatchers.IO) { store.installationId() })
+            .also { enrollmentAttempt = it }
+    }
+
+    suspend fun finishEnrollmentAttempt(attempt: PlatformEnrollmentAttempt) = mutex.withLock {
+        if (enrollmentAttempt == attempt) enrollmentAttempt = null
+    }
+
+    /** An exchanged one-use code now belongs to this operation; persist its refresh credential before Bootstrap. */
+    suspend fun acceptPlatformEnrollment(attempt: PlatformEnrollmentAttempt, connection: PlatformConnection,
+        response: PlatformEnrollmentExchangeResponse): String = withContext(NonCancellable) { mutex.withLock {
+        val current = ensureLoaded().manifest
+        if (enrollmentAttempt != attempt || current.session != null || current.pendingEnrollment != null) fail("enterprise_enrollment_replaced")
+        if (response.deploymentId != connection.discovery.deploymentId) fail("enterprise_enrollment_identity_mismatch")
+        val idle = Instant.parse(response.sessionIdleExpiresAt).toEpochMilli()
+        val refresh = PlatformRefreshCredential(response.sessionId, response.refreshToken, Instant.parse(response.refreshExpiresAt).toEpochMilli())
+        val credential = withContext(Dispatchers.IO) { store.prepareCredential(refresh) }
+        val pending = PendingPlatformEnrollment(response.sessionId, response.userId, idle,
+            PlatformSessionDetails(connection, response.deviceId, credential))
+        publish(current.copy(pendingEnrollment = pending))
+        platformAccessTokens[response.sessionId] = PlatformAccessToken(response.accessToken, Instant.parse(response.accessTokenExpiresAt).toEpochMilli())
+        enrollmentAttempt = null
+        response.sessionId
+    } }
+
+    suspend fun pendingPlatformEnrollment(): PendingPlatformEnrollment? = mutex.withLock { ensureLoaded().manifest.pendingEnrollment }
+
+    /** Only a confirmed replacement may discard an exchanged but uncompleted enrollment. */
+    suspend fun abandonPendingPlatformEnrollment(expectedSessionId: String) = mutex.withLock {
+        val manifest = ensureLoaded().manifest
+        if (manifest.session != null || manifest.pendingEnrollment?.sessionId != expectedSessionId) fail("enterprise_enrollment_replaced")
+        publish(manifest.copy(pendingEnrollment = null))
+        prune(requireNotNull(loaded).manifest)
+    }
+
+    suspend fun capturePendingPlatformLogout(expected: PendingPlatformEnrollment): PlatformLogoutRequest = mutex.withLock {
+        if (ensureLoaded().manifest.pendingEnrollment != expected) fail("enterprise_enrollment_replaced")
+        PlatformLogoutRequest(expected.platform.connection, withContext(Dispatchers.IO) {
+            store.credential(expected.platform.credential, expected.sessionId)
+        })
+    }
+
+    suspend fun platformSessionAccess(sessionId: String): RealmAccess.Enterprise? = mutex.withLock {
+        ensureLoaded().manifest.session?.takeIf { it.id == sessionId && it.platform != null }?.let {
+            RealmAccess.Enterprise(it.identity.scope, it.id)
+        }
+    }
+
+    suspend fun recoverablePlatformAccess(): RealmAccess.Enterprise? = mutex.withLock {
+        val manifest = ensureLoaded().manifest
+        manifest.session?.takeIf { session ->
+            session.platform != null && session.expiresAtMillis > nowMillis() &&
+                manifest.phase in setOf(EnterpriseSessionPhase.READY, EnterpriseSessionPhase.OFFLINE,
+                    EnterpriseSessionPhase.CONFIGURATION_PENDING)
+        }?.let { RealmAccess.Enterprise(it.identity.scope, it.id) }
+    }
+
+    suspend fun platformContext(sessionId: String): PlatformSessionContext = mutex.withLock { platformContextLocked(sessionId) }
+
+    private suspend fun platformContextLocked(sessionId: String): PlatformSessionContext {
+        val manifest = ensureLoaded().manifest
+        if (manifest.phase == EnterpriseSessionPhase.CLOSING) fail("enterprise_exit_in_progress")
+        val context = manifest.pendingEnrollment?.takeIf { it.sessionId == sessionId }?.let {
+            PlatformSessionContext(it.sessionId, it.userId, it.expiresAtMillis, it.platform)
+        } ?: manifest.session?.takeIf { it.id == sessionId }?.let {
+            PlatformSessionContext(it.id, it.identity.userId, it.expiresAtMillis, it.platform ?: fail("platform_session_required"))
+        } ?: fail("enterprise_data_access_unavailable")
+        if (context.expiresAtMillis <= nowMillis()) fail("enterprise_session_expired")
+        return context
+    }
+
+    suspend fun platformAccessToken(sessionId: String): PlatformAccessToken? = mutex.withLock {
+        platformContextLocked(sessionId)
+        platformAccessTokens[sessionId]?.takeIf { it.expiresAtMillis > nowMillis() + 30_000 }
+    }
+
+    suspend fun beginPlatformRefresh(sessionId: String): PlatformRefreshAttempt = mutex.withLock {
+        val context = platformContextLocked(sessionId)
+        val stored = withContext(Dispatchers.IO) { store.credential(context.platform.credential, sessionId) }
+        if (stored.refreshExpiresAtMillis <= nowMillis()) fail("enterprise_refresh_expired")
+        if (stored.pendingIdempotencyKey != null) return@withLock PlatformRefreshAttempt(context, stored)
+        val pending = stored.copy(pendingIdempotencyKey = "idem_${Uuid.random()}")
+        val version = withContext(Dispatchers.IO) { store.prepareCredential(pending) }
+        val updated = context.copy(platform = context.platform.copy(credential = version))
+        publishPlatformCredential(updated)
+        platformAccessTokens.remove(sessionId)
+        PlatformRefreshAttempt(updated, pending)
+    }
+
+    suspend fun acceptPlatformRefresh(attempt: PlatformRefreshAttempt, response: PlatformRefreshResponse) = mutex.withLock {
+        val current = platformContextLocked(attempt.context.sessionId)
+        if (current.platform.credential != attempt.context.platform.credential) fail("enterprise_refresh_replaced")
+        val next = PlatformRefreshCredential(current.sessionId, response.refreshToken, Instant.parse(response.refreshExpiresAt).toEpochMilli())
+        val version = withContext(Dispatchers.IO) { store.prepareCredential(next) }
+        publishPlatformCredential(current.copy(expiresAtMillis = Instant.parse(response.sessionIdleExpiresAt).toEpochMilli(),
+            platform = current.platform.copy(credential = version)))
+        platformAccessTokens[current.sessionId] = PlatformAccessToken(response.accessToken, Instant.parse(response.accessTokenExpiresAt).toEpochMilli())
+    }
+
+    private suspend fun publishPlatformCredential(context: PlatformSessionContext) {
+        val manifest = ensureLoaded().manifest
+        val pending = manifest.pendingEnrollment
+        if (pending?.sessionId == context.sessionId) {
+            publish(manifest.copy(pendingEnrollment = pending.copy(platform = context.platform, expiresAtMillis = context.expiresAtMillis)))
+        } else {
+            val session = manifest.session ?: fail("enterprise_session_required")
+            if (session.id != context.sessionId) fail("enterprise_data_access_unavailable")
+            publish(manifest.copy(session = session.copy(platform = context.platform, expiresAtMillis = context.expiresAtMillis)))
+        }
+    }
+
+    suspend fun completePlatformBootstrap(sessionId: String, bootstrap: PlatformBootstrap): RealmAccess.Enterprise = mutex.withLock {
+        val current = ensureLoaded().manifest
+        val pending = current.pendingEnrollment ?: fail("platform_bootstrap_not_pending")
+        if (pending.sessionId != sessionId || bootstrap.session.sessionId != sessionId || bootstrap.user.userId != pending.userId ||
+            bootstrap.device.deviceId != pending.platform.deviceId || bootstrap.deployment.deploymentId != pending.platform.connection.discovery.deploymentId) {
+            fail("platform_bootstrap_identity_mismatch")
+        }
+        if (bootstrap.device.status != PlatformBootstrapDeviceStatus.ACTIVE || 4L !in bootstrap.supportedSnapshotSchemaVersions) fail("platform_bootstrap_unavailable")
+        val identity = EnterpriseIdentity(pending.platform.connection.authority, bootstrap.deployment.name, pending.userId, bootstrap.user.displayName)
+        EnterprisePackageCodec.validateIdentity(identity)
+        val expires = minOf(Instant.parse(bootstrap.session.expiresAt).toEpochMilli(), Instant.parse(bootstrap.session.sessionIdleExpiresAt).toEpochMilli())
+        val session = EnterpriseSession(sessionId, identity, expires, pending.platform)
+        publish(current.copy(phase = EnterpriseSessionPhase.CONFIGURATION_PENDING, session = session, lastIdentity = identity, pendingEnrollment = null))
+        RealmAccess.Enterprise(identity.scope, session.id)
+    }
 
     suspend fun recover(): EnterpriseState = mutex.withLock {
         try {
@@ -103,6 +243,30 @@ internal class EnterpriseSessionController(
         state.value
     }
 
+    suspend fun platformConfiguration(access: RealmAccess.Enterprise): PlatformConfigurationInput = mutex.withLock {
+        val current = ensureLoaded()
+        if (!allowsDataAccess(current.manifest, access)) fail("enterprise_data_access_unavailable")
+        val session = requireNotNull(current.manifest.session)
+        if (session.platform == null) fail("platform_session_required")
+        PlatformConfigurationInput(session, withContext(Dispatchers.IO) { store.appliedCandidate(current.manifest) })
+    }
+
+    suspend fun recordPlatformPending(access: RealmAccess.Enterprise): EnterpriseState.Available = mutex.withLock {
+        val current = ensureLoaded()
+        if (!allowsDataAccess(current.manifest, access)) fail("enterprise_data_access_unavailable")
+        if (current.manifest.session?.platform == null) fail("platform_session_required")
+        if (current.manifest.applied != null) fail("enterprise_generation_regression")
+        publish(current.manifest.copy(phase = EnterpriseSessionPhase.CONFIGURATION_PENDING, lastConfigurationSyncMillis = nowMillis()))
+    }
+
+    suspend fun confirmPlatformExecution(access: RealmAccess.Enterprise, checked: EnterpriseCandidate): EnterpriseAppliedVersion = mutex.withLock {
+        val current = requireSession(allowOffline = false)
+        if (!allowsDataAccess(current.manifest, access)) fail("enterprise_data_access_unavailable")
+        val latest = withContext(Dispatchers.IO) { store.appliedCandidate(current.manifest) }
+        if (latest != checked) fail("enterprise_configuration_changed_during_preflight")
+        requireNotNull(current.manifest.applied)
+    }
+
     /** Admission conflicts precede code consumption. Only this owner publishes the resulting client session. */
     suspend fun enrollLocal(
         installedIdentity: EnterpriseIdentity,
@@ -110,7 +274,7 @@ internal class EnterpriseSessionController(
         configuration: suspend () -> EnterprisePackage?,
         requireSignedOut: Boolean = false,
     ): EnterpriseState.Available = mutex.withLock {
-        EnterprisePackageCodec.validateIdentity(installedIdentity)
+        EnterprisePackageCodec.validateLocalIdentity(installedIdentity)
         val current = ensureLoaded()
         if (current.manifest.phase == EnterpriseSessionPhase.CLOSING) fail("enterprise_exit_in_progress")
         if (requireSignedOut && current.manifest.session != null) fail("exit_current_enterprise_first")
@@ -121,7 +285,7 @@ internal class EnterpriseSessionController(
         if (candidate != null) {
             if (candidate.identity != installedIdentity) fail("enterprise_enrollment_identity_mismatch")
             EnterprisePackageCodec.validate(candidate)
-            applyValidated(candidate, enter = true, replaceSession = true)
+            applyValidated(candidate.toCandidate(), enter = true, replaceSession = true)
         } else {
             val session = EnterpriseSession(Uuid.random().toString(), installedIdentity, nowMillis() + SESSION_LIFETIME_MILLIS)
             publish(EnterpriseManifest(ENTERPRISE_MANIFEST_SCHEMA_VERSION, EnterpriseSessionPhase.CONFIGURATION_PENDING, session, null, ConfigurationScope.Personal, installedIdentity, current.manifest.feeds))
@@ -129,17 +293,17 @@ internal class EnterpriseSessionController(
     }
 
     /** A fetched candidate cannot renew, recreate or switch the session that requested it. */
-    suspend fun synchronize(access: RealmAccess.Enterprise, candidate: EnterprisePackage): EnterpriseState.Available = mutex.withLock {
+    suspend fun synchronize(access: RealmAccess.Enterprise, candidate: EnterpriseCandidate): EnterpriseState.Available = mutex.withLock {
         val current = ensureLoaded()
         if (!allowsDataAccess(current.manifest, access)) fail("enterprise_data_access_unavailable")
         if (candidate.identity.scope != access.scope) fail("enterprise_principal_mismatch")
-        EnterprisePackageCodec.validate(candidate)
+        candidate.validate()
         applyValidated(candidate, current.manifest.selectedScope is ConfigurationScope.Enterprise, expectedAccess = access)
     }
 
     /** Explicit native installation publishes source facts before applying them; application failure is observable. */
     suspend fun importLocal(selection: RealmSelection, identity: EnterpriseIdentity, publishSource: suspend () -> LocalEnterpriseCandidate): LocalEnterpriseImportResult = mutex.withLock {
-        EnterprisePackageCodec.validateIdentity(identity)
+        EnterprisePackageCodec.validateLocalIdentity(identity)
         val current = ensureLoaded()
         requirePublishedSelection(selection)
         requireSamePrincipal(current.manifest, identity)
@@ -147,7 +311,7 @@ internal class EnterpriseSessionController(
         check(candidate.packet.identity == identity)
         try {
             requirePublishedSelection(selection)
-            val applied = applyValidated(candidate.packet,
+            val applied = applyValidated(candidate.packet.toCandidate(),
                 current.manifest.session == null || current.manifest.selectedScope is ConfigurationScope.Enterprise,
                 expectedAccess = current.manifest.session?.let { RealmAccess.Enterprise(it.identity.scope, it.id) })
             LocalEnterpriseImportResult(candidate.revision, applied, null)
@@ -158,7 +322,7 @@ internal class EnterpriseSessionController(
         }
     }
 
-    private suspend fun applyValidated(candidate: EnterprisePackage, enter: Boolean, replaceSession: Boolean = false,
+    private suspend fun applyValidated(candidate: EnterpriseCandidate, enter: Boolean, replaceSession: Boolean = false,
         expectedAccess: RealmAccess.Enterprise? = null): EnterpriseState.Available {
         val current = ensureLoaded()
         val manifest = current.manifest
@@ -169,11 +333,17 @@ internal class EnterpriseSessionController(
             if (candidate.configuration.generation == version.generation && current.configuration != candidate.configuration) {
                 fail("enterprise_generation_conflict")
             }
+            if (candidate.configuration.generation == version.generation && candidate.execution is EnterpriseExecution.Platform) {
+                val previous = withContext(Dispatchers.IO) { store.execution(manifest) } as? EnterpriseExecution.Platform
+                    ?: fail("enterprise_source_changed")
+                if (previous.releaseId != candidate.execution.releaseId || previous.snapshotHash != candidate.execution.snapshotHash ||
+                    previous.runtimePaths != candidate.execution.runtimePaths) fail("enterprise_generation_conflict")
+            }
         }
         prune(manifest)
         val version = withContext(Dispatchers.IO) {
             manifest.applied?.takeIf { current.configuration == candidate.configuration &&
-                manifest.session?.identity == candidate.identity && store.bindings(manifest) == candidate.runtimeBindings }
+                manifest.session?.identity == candidate.identity && store.execution(manifest) == candidate.execution }
                 ?: store.prepare(candidate)
         }
         val feeds = if (candidate.feedSeed != null && manifest.feeds.none { it.scope == candidate.identity.scope }) {
@@ -516,6 +686,16 @@ internal class EnterpriseSessionController(
         operation()
     }
 
+    /** The closing token is the sole authority to read a refresh credential after admission is revoked. */
+    suspend fun capturePlatformLogout(token: EnterpriseExitToken): PlatformLogoutRequest? = mutex.withLock {
+        val manifest = manifestForExit()
+        if (manifest.phase != EnterpriseSessionPhase.CLOSING || closingToken(manifest) != token) fail("stale_enterprise_exit")
+        val platform = manifest.session?.platform ?: return@withLock null
+        PlatformLogoutRequest(platform.connection, withContext(Dispatchers.IO) {
+            store.credential(platform.credential, token.access.sessionId)
+        })
+    }
+
     /** One clock and durable owner drive expiry independently of the selected UI space. */
     fun observeExitSignals(): Flow<EnterpriseExitSignal> = state.flatMapLatest { published -> flow {
         val manifest = (published as? EnterpriseState.Available)?.manifest ?: return@flow
@@ -585,34 +765,37 @@ internal class EnterpriseSessionController(
     suspend fun pruneUnusedRevisions() = mutex.withLock { prune(manifestForExit()) }
 
     /** A synchronous projection needs no execution lease or revision retention beyond this read. */
-    suspend fun <T> readBindings(
+    suspend fun <T> readExecution(
         access: RealmAccess.Enterprise,
-        project: (EnterpriseAppliedVersion, List<EnterpriseRuntimeBinding>) -> T,
+        project: (EnterpriseAppliedVersion, EnterpriseExecution) -> T,
     ): T = mutex.withLock {
         val current = requireSession(allowOffline = true)
         if (!allowsDataAccess(current.manifest, access)) fail("enterprise_data_access_unavailable")
-        val bindings = withContext(Dispatchers.IO) { store.bindings(current.manifest) }
+        val execution = withContext(Dispatchers.IO) { store.execution(current.manifest) }
         currentCoroutineContext().ensureActive()
         requireSession(allowOffline = true)
-        project(requireNotNull(current.manifest.applied), bindings)
+        project(requireNotNull(current.manifest.applied), execution)
     }
 
-    suspend fun captureBindings(access: RealmAccess.Enterprise): EnterpriseBindingLease = mutex.withLock {
+    suspend fun captureExecution(access: RealmAccess.Enterprise, expectedVersion: EnterpriseAppliedVersion? = null): EnterpriseExecutionLease = mutex.withLock {
         val current = requireSession(allowOffline = false)
         val session = requireNotNull(current.manifest.session)
         if (!allowsDataAccess(current.manifest, access)) fail("enterprise_data_access_unavailable")
-        val bindings = withContext(Dispatchers.IO) { store.bindings(current.manifest) }
+        if (!access.scope.authority.isLocal && (expectedVersion == null || current.manifest.applied != expectedVersion)) {
+            fail("enterprise_configuration_changed_during_preflight")
+        }
+        val candidate = withContext(Dispatchers.IO) { requireNotNull(store.appliedCandidate(current.manifest)) }
         // Disk reads can outlive the session even while publication is serialized.
         currentCoroutineContext().ensureActive()
         requireSession(allowOffline = false)
-        EnterpriseBindingLease(
+        EnterpriseExecutionLease(
             id = Uuid.random().toString(), sessionId = session.id, scope = access.scope,
-            version = requireNotNull(current.manifest.applied), bindings = bindings.associateBy { it.resourceId },
+            version = requireNotNull(current.manifest.applied), candidate = candidate,
             releaseOwner = ::releaseLease,
         ).also { leases[it.id] = it }
     }
 
-    private suspend fun releaseLease(lease: EnterpriseBindingLease) = mutex.withLock {
+    private suspend fun releaseLease(lease: EnterpriseExecutionLease) = mutex.withLock {
         if (leases[lease.id] !== lease) fail("unknown_enterprise_binding_lease")
         prune(requireNotNull(loaded).manifest, excluding = lease)
         leases.remove(lease.id)
@@ -655,9 +838,9 @@ internal class EnterpriseSessionController(
             val committed = store.commit(manifest)
             loaded = committed
             if (manifest.phase !in setOf(EnterpriseSessionPhase.READY, EnterpriseSessionPhase.OFFLINE)) {
-                leases.values.forEach(EnterpriseBindingLease::revoke)
+                leases.values.forEach(EnterpriseExecutionLease::revoke)
             } else {
-                leases.values.filter { it.sessionId != manifest.session?.id }.forEach(EnterpriseBindingLease::revoke)
+                leases.values.filter { it.sessionId != manifest.session?.id }.forEach(EnterpriseExecutionLease::revoke)
             }
             committed.toAvailable().also(::publishState)
         }
@@ -665,6 +848,11 @@ internal class EnterpriseSessionController(
 
     /** A page must notice leaving its selection even when observers conflate a quick round trip. */
     private fun publishState(next: EnterpriseState) {
+        val manifest = (next as? EnterpriseState.Available)?.manifest
+        val activeSession = manifest?.takeUnless { it.phase == EnterpriseSessionPhase.CLOSING }?.let {
+            it.session?.id ?: it.pendingEnrollment?.sessionId
+        }
+        platformAccessTokens.keys.retainAll(listOfNotNull(activeSession).toSet())
         fun identity(state: EnterpriseState): Pair<ConfigurationScope, String?> {
             val manifest = (state as? EnterpriseState.Available)?.manifest
             val scope = manifest?.selectedScope ?: ConfigurationScope.Personal
@@ -674,7 +862,7 @@ internal class EnterpriseSessionController(
         _state.value = next
     }
 
-    private suspend fun prune(manifest: EnterpriseManifest, excluding: EnterpriseBindingLease? = null) = withContext(Dispatchers.IO) {
+    private suspend fun prune(manifest: EnterpriseManifest, excluding: EnterpriseExecutionLease? = null) = withContext(Dispatchers.IO) {
         store.prune(
             leases.values.filter { it !== excluding }.mapTo(mutableSetOf()) { it.version.revision }
                 .apply { manifest.applied?.let { add(it.revision) } },
@@ -683,6 +871,7 @@ internal class EnterpriseSessionController(
     }
 
     private fun requireSamePrincipal(manifest: EnterpriseManifest, identity: EnterpriseIdentity) {
+        if (manifest.pendingEnrollment != null || enrollmentAttempt != null) fail("enterprise_enrollment_in_progress")
         if (manifest.phase == EnterpriseSessionPhase.CLOSING) fail("enterprise_exit_in_progress")
         manifest.session?.let { if (it.identity.scope != identity.scope) fail("exit_current_enterprise_first") }
     }

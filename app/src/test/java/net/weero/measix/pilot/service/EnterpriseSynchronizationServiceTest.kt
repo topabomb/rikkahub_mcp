@@ -154,7 +154,7 @@ class EnterpriseSynchronizationServiceTest {
             val entered = CompletableDeferred<Unit>()
             val release = CountDownLatch(1)
             val h = harness(clientCheckpoint = { point ->
-                if (pause && expire && point == EnterpriseStorageCheckpoint.BINDINGS_STAGED) now = expiry
+                if (pause && expire && point == EnterpriseStorageCheckpoint.EXECUTION_STAGED) now = expiry
                 if (pause && !expire && point == EnterpriseStorageCheckpoint.MANIFEST_WRITTEN) {
                     entered.complete(Unit); check(release.await(10, TimeUnit.SECONDS))
                 }
@@ -188,10 +188,10 @@ class EnterpriseSynchronizationServiceTest {
     private fun TestScope.harness(sourceCheckpoint: () -> Unit = {}, clientCheckpoint: (EnterpriseStorageCheckpoint) -> Unit = {}): Harness {
         val clientRoot = temporary.newFolder()
         val sourceRoot = temporary.newFolder()
-        val sessions = EnterpriseSessionController(EnterpriseAppliedStore(clientRoot, clientCheckpoint)) { now }
+        val sessions = EnterpriseSessionController(EnterpriseAppliedStore(clientRoot, checkpoint = clientCheckpoint)) { now }
         val source = source(sessions, sourceRoot, sourceCheckpoint)
         val work = CoroutineScope(SupervisorJob() + StandardTestDispatcher(testScheduler))
-        return Harness(clientRoot, sourceRoot, sessions, source, EnterpriseSynchronizationService(sessions, source, work), work)
+        return Harness(clientRoot, sourceRoot, sessions, source, EnterpriseSynchronizationService(sessions, source, work, net.weero.measix.pilot.service.PlatformEnterpriseService(sessions, net.weero.measix.pilot.data.enterprise.PlatformControlClient(okhttp3.OkHttpClient()))), work)
     }
 
     private fun source(sessions: EnterpriseSessionController, root: File, checkpoint: () -> Unit = {}) = LocalEnterpriseSource(

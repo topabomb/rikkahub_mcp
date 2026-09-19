@@ -1,6 +1,8 @@
 package net.weero.measix.pilot.data.ai.mcp
 
+import me.rerere.common.http.withSingleAttemptBody
 import net.weero.measix.pilot.data.enterprise.ManagedSnapshotRequired
+import net.weero.measix.pilot.data.enterprise.EnterpriseExecution
 
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.ensureActive
@@ -8,7 +10,7 @@ import net.weero.measix.pilot.data.configuration.ConfigurationCategory
 import net.weero.measix.pilot.data.configuration.ConfigurationKey
 import net.weero.measix.pilot.data.configuration.ConfigurationUnavailableReason
 import net.weero.measix.pilot.data.configuration.ResolvedConfiguration
-import net.weero.measix.pilot.data.enterprise.EnterpriseBindingLease
+import net.weero.measix.pilot.data.enterprise.EnterpriseExecutionLease
 import net.weero.measix.pilot.data.enterprise.EnterpriseSessionPhase
 import net.weero.measix.pilot.data.enterprise.EnterpriseState
 import net.weero.measix.pilot.data.enterprise.RealmAccess
@@ -111,6 +113,7 @@ class McpRuntimeCoordinator internal constructor(
     private val appScope: AppScope,
     private val artifactStore: ArtifactStore,
     private val networkMonitor: NetworkMonitor,
+    private val platform: net.weero.measix.pilot.service.PlatformEnterpriseService,
     private val foregroundObserver: ForegroundObserver = ProcessLifecycleForegroundObserver,
     private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
     private val transportOverride: ((McpServerConfig) -> AbstractTransport)? = null,
@@ -170,7 +173,7 @@ class McpRuntimeCoordinator internal constructor(
                         .followRedirects(false).followSslRedirects(false).retryOnConnectionFailure(false)
                         .addInterceptor { chain ->
                             chain.proceed(chain.request().newBuilder()
-                                .tag(me.rerere.common.http.PrivateRequest::class.java, me.rerere.common.http.PrivateRequest).build())
+                                .tag(me.rerere.common.http.PrivateRequest::class.java, me.rerere.common.http.PrivateRequest).build().withSingleAttemptBody())
                         }.build()
                 }
             }
@@ -262,12 +265,12 @@ class McpRuntimeCoordinator internal constructor(
         check(snapshot.configuration.scope == access.scope)
         catalogStore.awaitReady()
         return when (access) {
-            RealmAccess.Personal -> projectCatalogCapabilities(access, snapshot, emptyMap())
-            is RealmAccess.Enterprise -> sessions.readBindings(access) { version, bindings ->
+            RealmAccess.Personal -> projectCatalogCapabilities(access, snapshot, null)
+            is RealmAccess.Enterprise -> sessions.readExecution(access) { version, execution ->
                 check(version.generation == snapshot.configuration.enterpriseConfiguration?.generation) {
                     "enterprise_configuration_changed_during_inspection"
                 }
-                projectCatalogCapabilities(access, snapshot, bindings.associateBy { it.resourceId })
+                projectCatalogCapabilities(access, snapshot, execution)
             }
         }
     }
@@ -275,7 +278,7 @@ class McpRuntimeCoordinator internal constructor(
     private fun projectCatalogCapabilities(
         access: RealmAccess,
         snapshot: net.weero.measix.pilot.data.datastore.ExecutionConfigurationSnapshot,
-        bindings: Map<String, net.weero.measix.pilot.data.enterprise.EnterpriseRuntimeBinding>,
+        execution: EnterpriseExecution?,
     ): Map<ConfigurationReference, McpRuntimeCapability> {
         val configuration = snapshot.configuration
         return configuration.catalog.values.filter {
@@ -288,10 +291,19 @@ class McpRuntimeCoordinator internal constructor(
             val catalog = catalogs.value[key]?.takeIf {
                 when (id) {
                     is ConfigurationReference.User -> user != null && it.definitionDigest == user.mcpDefinitionDigest()
-                    is ConfigurationReference.Enterprise -> bindings[id.id]?.let { binding ->
-                        it.managed == McpManagedCatalog(requireNotNull(configuration.enterpriseConfiguration).generation, gateway?.surface) &&
-                            it.definitionDigest == managedMcpDefinitionDigest(id, resource.name, binding, configuration.enterpriseConfiguration.generation)
-                    } == true
+                    is ConfigurationReference.Enterprise -> {
+                        val enterprise = requireNotNull(configuration.enterpriseConfiguration)
+                        val digest = when (execution) {
+                            is EnterpriseExecution.Local -> execution.bindings.find { binding -> binding.resourceId == id.id }?.let { binding ->
+                                managedMcpDefinitionDigest(id, resource.name, binding, enterprise.generation)
+                            }
+                            is EnterpriseExecution.Platform -> enterprise.mcpServers.find { definition -> definition.id == id.id }?.let { definition ->
+                                platformMcpDefinitionDigest(id, resource.name, execution, enterprise.generation, requireNotNull(definition.authOwnership))
+                            }
+                            null -> null
+                        }
+                        it.managed == McpManagedCatalog(enterprise.generation, gateway?.surface) && it.definitionDigest == digest
+                    }
                 }
             }
             val connections = runtimeCapabilities.value.filter { (key, value) ->
@@ -445,7 +457,7 @@ class McpRuntimeCoordinator internal constructor(
         check(captured.configuration.scope == access.scope && owner.durable.header.scope == access.scope)
         if (access == RealmAccess.Personal) return prepareTurnCapabilities(captured.assistant)
         access as RealmAccess.Enterprise
-        var bindings: EnterpriseBindingLease? = null
+        var bindings: EnterpriseExecutionLease? = null
         val owned = mutableListOf<McpServerRuntime>()
         val lease = McpExecutionLease {
             owned.forEach { it.closeAndAwait() }
@@ -453,10 +465,10 @@ class McpRuntimeCoordinator internal constructor(
         }
         owner.bindMcpExecution(turnId, worker, captured.assistant.id, lease)
         worker.ensureActive()
-        bindings = sessions.captureBindings(access)
+        bindings = sessions.captureExecution(access, captured.model.enterpriseVersion)
         val original = requireNotNull(bindings)
         check(original.version == captured.model.enterpriseVersion) { "enterprise_configuration_changed_during_capture" }
-        val interactionId = "int_$turnId"
+        val interactionId = "int_${captured.interactionId}"
         val policyBlocked = captured.assistant.mcpServers.mapNotNull { reference ->
             val permission = captured.configuration.access(ConfigurationCategory.MCP, reference)
             if (permission.canExecute) return@mapNotNull null
@@ -495,8 +507,8 @@ class McpRuntimeCoordinator internal constructor(
                             val current = when {
                                 !allowed -> null
                                 use == McpDefinitionUse.CATALOG_PUBLICATION && state.manifest.applied != original.version -> null
-                                definition is McpConnectionDefinition.Managed -> {
-                                    original.binding(definition.id.id)
+                                definition.managed != null -> {
+                                    original.execution
                                     definition
                                 }
                                 else -> latest.userSettings.mcpServers.find { it.id == definition.id }
@@ -553,7 +565,7 @@ class McpRuntimeCoordinator internal constructor(
         configuration: ResolvedConfiguration,
         settings: net.weero.measix.pilot.data.datastore.Settings,
         assistant: Assistant,
-        bindings: EnterpriseBindingLease,
+        bindings: EnterpriseExecutionLease,
         interactionId: String,
     ): List<McpConnectionDefinition> = buildList {
         val enterprise = requireNotNull(configuration.enterpriseConfiguration)
@@ -563,14 +575,25 @@ class McpRuntimeCoordinator internal constructor(
             when (id) {
                 is ConfigurationReference.User -> settings.mcpServers.find { it.id == id }?.let { add(McpConnectionDefinition.User(it)) }
                 is ConfigurationReference.Enterprise -> enterprise.mcpServers.find { it.id == id.id }?.let { definition ->
-                    add(McpConnectionDefinition.Managed(access, id, definition.name, bindings.binding(id.id), bindings.version, interactionId, null))
+                    add(when (val execution = bindings.execution) {
+                        is EnterpriseExecution.Local -> McpConnectionDefinition.ManagedLocal(access, id, definition.name,
+                            bindings.localBinding(id.id), bindings.version, interactionId, null)
+                        is EnterpriseExecution.Platform -> McpConnectionDefinition.ManagedPlatform(access, id, definition.name,
+                            execution, requireNotNull(definition.authOwnership), bindings.version, interactionId) {
+                            check(bindings.execution == execution) { "enterprise_execution_changed_during_mcp_request" }
+                            val token = platform.accessToken(access.sessionId)
+                            check(bindings.execution == execution) { "enterprise_execution_changed_during_mcp_request" }
+                            sessions.requirePublishedRealmAccess(access)
+                            token.value
+                        }
+                    })
                 }
             }
         }
         configuration.catalog.values.filter { it.key.category == ConfigurationCategory.GATEWAY && it.access.canExecute }.forEach { item ->
             val id = item.key.reference as ConfigurationReference.Enterprise
             val gateway = enterprise.gateways.single { it.id == id.id }
-            add(McpConnectionDefinition.Managed(access, id, gateway.name, bindings.binding(id.id), bindings.version, interactionId, gateway.surface))
+            add(McpConnectionDefinition.ManagedLocal(access, id, gateway.name, bindings.localBinding(id.id), bindings.version, interactionId, gateway.surface))
         }
     }
 
@@ -684,7 +707,6 @@ class McpRuntimeCoordinator internal constructor(
             client = preparation.client,
             serverName = preparation.serverName,
             generation = preparation.generation,
-            managed = admission.config is McpConnectionDefinition.Managed,
         )
         val outcome = try {
             toolCallExecutor.execute(realmAccess.scope, lease, toolName, args, onArtifactCreated) { metadata ->

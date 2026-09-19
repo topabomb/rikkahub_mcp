@@ -354,9 +354,9 @@ class RouteActivity : ComponentActivity() {
                         },
                         entryProvider = entryProvider {
                             entry<Screen.Startup> { startup ->
-                                InitialConversationContent(startup.notificationId) { request ->
+                                InitialConversationContent(startup.notificationId) { destination ->
                                     val index = backStack.indexOf(startup)
-                                    if (index >= 0) backStack[index] = Screen.Chat(request)
+                                    if (index >= 0) backStack[index] = destination
                                 }
                             }
                             entry<Screen.Chat>(
@@ -626,7 +626,7 @@ class RouteActivity : ComponentActivity() {
     }
 
     @Composable
-    private fun InitialConversationContent(notificationId: String?, onReady: (ConversationOpenRequest) -> Unit) {
+    private fun InitialConversationContent(notificationId: String?, onReady: (Screen) -> Unit) {
         var retry by remember { mutableIntStateOf(0) }
         var failure by remember { mutableStateOf<Throwable?>(null) }
         LaunchedEffect(retry) {
@@ -634,9 +634,13 @@ class RouteActivity : ComponentActivity() {
             try {
                 val notification = notificationId?.let(Uuid::parseOrNull)
                 val request = if (notification != null) {
-                    ConversationOpenRequest.OpenExisting(notification, conversationQueries.captureCurrentAccess())
+                    net.weero.measix.pilot.service.InitialConversationRequest.Open(
+                        ConversationOpenRequest.OpenExisting(notification, conversationQueries.captureCurrentAccess()))
                 } else conversations.initialRequest(readBooleanPreference("create_new_conversation_on_start", true))
-                onReady(request)
+                onReady(when (request) {
+                    is net.weero.measix.pilot.service.InitialConversationRequest.Open -> Screen.Chat(request.request)
+                    net.weero.measix.pilot.service.InitialConversationRequest.SelectEnterpriseAssistant -> Screen.Enterprise
+                })
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: Exception) {

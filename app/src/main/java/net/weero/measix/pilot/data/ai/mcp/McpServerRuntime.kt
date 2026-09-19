@@ -1,5 +1,7 @@
 package net.weero.measix.pilot.data.ai.mcp
 
+import net.weero.measix.pilot.utils.userVisibleDiagnostic
+
 import net.weero.measix.pilot.data.enterprise.ManagedSnapshotRequired
 
 import me.rerere.common.configuration.ConfigurationReference
@@ -516,7 +518,7 @@ internal class McpServerRuntime(
 
     internal suspend fun refreshCredentials(config: McpConnectionDefinition): McpConnectionDefinition = when (config) {
         is McpConnectionDefinition.User -> McpConnectionDefinition.User(oauthCoordinator.ensureFreshToken(config.config))
-        is McpConnectionDefinition.Managed -> config
+        is McpConnectionDefinition.ManagedLocal, is McpConnectionDefinition.ManagedPlatform -> config
     }
 
     private fun needsAuthorization(config: McpConnectionDefinition, error: Throwable): Boolean =
@@ -1205,10 +1207,10 @@ internal class McpServerRuntime(
     }
 
     private fun failureDetail(error: Throwable): String? =
-        if (serverId is ConfigurationReference.Enterprise) "Managed MCP operation failed (${error::class.simpleName})" else error.message
+        error.userVisibleDiagnostic()
 
     private fun failureStatus(error: Throwable, fallback: String? = null): McpStatus.Error =
-        if (serverId is ConfigurationReference.Enterprise) McpStatus.Error(failureDetail(error)) else McpStatus.Error.from(error, fallback)
+        McpStatus.Error.from(error, fallback)
 
     private fun getServerName(): String = displayName
 }

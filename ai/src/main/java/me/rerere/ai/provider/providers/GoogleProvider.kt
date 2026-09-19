@@ -71,6 +71,7 @@ import me.rerere.ai.util.json
 import me.rerere.ai.util.mergeCustomBody
 import me.rerere.ai.util.removeElements
 import me.rerere.ai.util.stringSafe
+import me.rerere.ai.provider.forCredentials
 import me.rerere.ai.provider.RequestCredentials
 import me.rerere.ai.provider.authenticate
 import me.rerere.ai.util.toHeaders
@@ -129,7 +130,7 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
         request: Request,
         credentials: RequestCredentials = RequestCredentials.UserSettings,
     ): Request {
-        if (credentials is RequestCredentials.Fixed) {
+        if (credentials != RequestCredentials.UserSettings) {
             check(!providerSetting.vertexAI) { "fixed_credentials_require_explicit_endpoint" }
             return request.newBuilder().authenticate(credentials, "x-goog-api-key",
                 userKeys = "", providerId = providerSetting.id.toString(), roulette = keyRoulette).build()
@@ -227,7 +228,7 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
                 .build()
         )
 
-        val bodyStr = client.newCall(request).readResponse { response ->
+        val bodyStr = client.forCredentials(params.credentials).newCall(request).readResponse { response ->
             if (!response.isSuccessful) {
                 throw formatProviderHttpError(response.code, response.body?.string())
             }
@@ -373,8 +374,8 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
                         usage = usage
                     )
 
-                    trySend(messageChunk).onFailure { e ->
-                        Log.w(TAG, "onEvent: chunk dropped (${e?.message})")
+                    trySend(messageChunk).onFailure {
+                        Log.w(TAG, "onEvent: chunk dropped")
                     }
                     candidates.firstOrNull()?.jsonObject
                         ?.get("finishReason")?.jsonPrimitive?.contentOrNull
@@ -387,7 +388,7 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
                                 }
                         }
                 } catch (e: Exception) {
-                    Log.w(TAG, "onEvent: failed to parse Gemini stream event", e)
+                    Log.w(TAG, "onEvent: failed to parse Gemini stream event (${e.javaClass.name})")
                     eventSource.cancel()
                     close(e)
                 }
@@ -427,7 +428,7 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
         }
 
         ensureActive()
-        val eventSource = EventSources.createFactory(client)
+        val eventSource = EventSources.createFactory(client.forCredentials(params.credentials))
                 .newEventSource(request, listener)
 
         awaitClose {
@@ -617,7 +618,6 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
         } ?: emptyList()
 
         val groundingMetadata = message["groundingMetadata"]?.jsonObject
-        Log.i(TAG, "parseMessage: $groundingMetadata")
         val annotations = parseSearchGroundingMetadata(groundingMetadata)
 
         return UIMessage(
@@ -639,7 +639,6 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
                 url = uri
             )
         }
-        Log.i(TAG, "parseSearchGroundingMetadata: $chunks")
         return chunks
     }
 

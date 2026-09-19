@@ -27,7 +27,7 @@ internal sealed interface EnrollmentMaterial {
 }
 
 /** Native scan/paste contract. Parsing never registers a source, contacts a server, or establishes a session. */
-internal class EnrollmentMaterialParser(private val allowLoopbackHttp: Boolean = false) {
+internal class EnrollmentMaterialParser {
     fun parse(raw: String): EnrollmentMaterial {
         // Bound the original bytes, including whitespace, before any normalization or JSON allocation.
         if (raw.length > MAX_BYTES) fail("enterprise_enrollment_too_large")
@@ -49,26 +49,12 @@ internal class EnrollmentMaterialParser(private val allowLoopbackHttp: Boolean =
         val code = fields.string("code").also(::requireIdentifier)
         val expiresAt = parseUtc(fields.string("expiresAt"))
         return when (kind) {
-            PLATFORM -> EnrollmentMaterial.Platform(parseOrigin(fields.string("platformUrl")), code, expiresAt)
+            PLATFORM -> EnrollmentMaterial.Platform(normalizeOrigin(fields.string("platformUrl")), code, expiresAt)
             else -> EnrollmentMaterial.LocalExample(
                 fields.string("sourceNamespace").also(::requireIdentifier),
                 fields.string("deploymentId").also(::requireIdentifier), code, expiresAt,
             )
         }
-    }
-
-    private fun parseOrigin(value: String): String {
-        if (value.length !in 1..1024) fail("invalid_enterprise_platform_origin")
-        val uri = try { URI(value) } catch (_: Exception) { fail("invalid_enterprise_platform_origin") }
-        val scheme = uri.scheme?.lowercase(Locale.ROOT)
-        val host = uri.host?.lowercase(Locale.ROOT) ?: fail("invalid_enterprise_platform_origin")
-        val loopback = host == "localhost" || host == "127.0.0.1" || host == "[::1]"
-        if (scheme != "https" && !(allowLoopbackHttp && scheme == "http" && loopback)) fail("invalid_enterprise_platform_origin")
-        if (uri.isOpaque || uri.rawUserInfo != null || uri.rawQuery != null || uri.rawFragment != null ||
-            uri.rawPath !in listOf("", "/") || uri.port !in -1..65535 || uri.port == 0 ||
-            uri.rawAuthority.endsWith(':')) fail("invalid_enterprise_platform_origin")
-        val port = uri.port.takeUnless { it == -1 || (scheme == "https" && it == 443) || (scheme == "http" && it == 80) }
-        return "$scheme://$host${port?.let { ":$it" } ?: ""}"
     }
 
     private fun parseUtc(value: String): Instant {
@@ -146,6 +132,19 @@ internal class EnrollmentMaterialParser(private val allowLoopbackHttp: Boolean =
     }
 
     companion object {
+        internal fun normalizeOrigin(value: String): String {
+            if (value.length !in 1..1024) fail("invalid_enterprise_platform_origin")
+            val uri = try { URI(value) } catch (_: Exception) { fail("invalid_enterprise_platform_origin") }
+            val scheme = uri.scheme?.lowercase(Locale.ROOT)
+            val host = uri.host?.lowercase(Locale.ROOT) ?: fail("invalid_enterprise_platform_origin")
+            if (scheme !in setOf("http", "https")) fail("invalid_enterprise_platform_origin")
+            if (uri.isOpaque || uri.rawUserInfo != null || uri.rawQuery != null || uri.rawFragment != null ||
+                uri.rawPath !in listOf("", "/") || uri.port !in -1..65535 || uri.port == 0 ||
+                uri.rawAuthority.endsWith(':')) fail("invalid_enterprise_platform_origin")
+            val port = uri.port.takeUnless { it == -1 || (scheme == "https" && it == 443) || (scheme == "http" && it == 80) }
+            return "$scheme://$host${port?.let { ":$it" } ?: ""}"
+        }
+
         const val MAX_BYTES = 2048
         const val PLATFORM = "PLATFORM_ENROLLMENT"
         const val LOCAL = "LOCAL_EXAMPLE_ENROLLMENT"

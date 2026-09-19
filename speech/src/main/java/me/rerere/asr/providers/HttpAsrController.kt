@@ -27,6 +27,7 @@ import me.rerere.asr.AsrCleanup
 import me.rerere.asr.ASRController
 import me.rerere.asr.ASRState
 import me.rerere.asr.ASRStatus
+import me.rerere.asr.PcmSignalStatistics
 import me.rerere.asr.PcmAudioCapture
 import me.rerere.asr.appendAmplitude
 import me.rerere.asr.calculateRmsAmplitude
@@ -37,12 +38,15 @@ class HttpAsrController(
     private val admitRecording: suspend (() -> Unit) -> Unit,
     private val transcribe: suspend (File) -> String,
     private val admitTranscript: suspend (() -> Unit) -> Unit,
+    private val describeFailure: (Throwable) -> String = { "${it.javaClass.simpleName}: ${it.message}" },
+    private val maxAudioBytes: Long = Long.MAX_VALUE,
 ) : ASRController {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val _state = MutableStateFlow(ASRState(isAvailable = true))
     override val state = _state.asStateFlow()
     private class Recording {
         val stopped = CompletableDeferred<Unit>()
+        val signal = PcmSignalStatistics()
         var capture: PcmAudioCapture? = null
         var audio: File? = null
     }
@@ -71,7 +75,9 @@ class HttpAsrController(
                                 check(recording === original) { "asr_recording_replaced" }
                                 if (original.stopped.isCompleted) throw CancellationException("asr_stopped_before_recording")
                                 original.capture = PcmAudioCapture.start(scope, SAMPLE_RATE, onFrame = { bytes, count ->
+                                    check(output.length() + count <= maxAudioBytes) { "asr_recording_size_limit_exceeded" }
                                     output.write(bytes, 0, count)
+                                    original.signal.append(bytes, count)
                                     val amplitude = calculateRmsAmplitude(bytes, count)
                                     scope.launch {
                                         if (recording === original && !disposed) _state.update {
@@ -93,6 +99,7 @@ class HttpAsrController(
                         }
                     }
                     currentCoroutineContext().ensureActive()
+                    original.signal.requireEffectiveSpeech()
                     writePcmWaveHeader(output, SAMPLE_RATE)
                 }
                 val text = transcribe(audio)
@@ -105,10 +112,11 @@ class HttpAsrController(
                 }
             } catch (cancelled: CancellationException) {
                 throw cancelled
-            } catch (_: Exception) {
+            } catch (error: Exception) {
+                android.util.Log.e("HttpAsrController", "Transcription failed", error)
                 withContext(Dispatchers.Main.immediate) {
                     if (recording === original && !disposed) _state.update {
-                        it.copy(status = ASRStatus.Error, errorMessage = "ASR transcription failed")
+                        it.copy(status = ASRStatus.Error, errorMessage = describeFailure(error))
                     }
                 }
             } finally {

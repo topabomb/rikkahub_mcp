@@ -37,14 +37,15 @@ class OpenAITTSProvider : TTSProvider<TTSProviderSetting.OpenAI> {
     ): Flow<AudioChunk> = flow {
         val requestBody = buildOpenAiSpeechRequest(providerSetting.model, providerSetting.voice, request.text)
 
-        val httpRequest = Request.Builder()
+        val body = requestBody.toString().toRequestBody("application/json".toMediaType())
+        val httpRequest = request.transport?.request(body) ?: Request.Builder()
             .url("${providerSetting.baseUrl}/audio/speech")
             .addHeader("Authorization", "Bearer ${providerSetting.apiKey}")
             .addHeader("Content-Type", "application/json")
-            .post(requestBody.toString().toRequestBody("application/json".toMediaType()))
+            .post(body)
             .build()
 
-        val audioData = httpClient.newCall(httpRequest).readResponse { response ->
+        val audioData = (request.transport?.client ?: httpClient).newCall(httpRequest).readResponse { response ->
             check(response.isSuccessful) { "TTS request failed: ${response.code}" }
             response.body.bytes()
         }

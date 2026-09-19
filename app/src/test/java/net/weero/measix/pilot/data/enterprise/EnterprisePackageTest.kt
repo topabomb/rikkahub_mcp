@@ -96,6 +96,31 @@ class EnterprisePackageTest {
         }
     }
 
+    @Test fun `local package rejects speech protocols that require platform transport`() {
+        val base = exampleEnterprisePackage()
+        val system = EnterpriseTtsResource("tts_local_system", "Device voice", protocol = EnterpriseTtsProtocol.SYSTEM,
+            speechRate = 1.0, pitch = 1.0)
+        EnterprisePackageCodec.validate(base.copy(configuration = base.configuration.copy(
+            tts = base.configuration.tts + system)))
+        for (protocol in listOf(EnterpriseTtsProtocol.GEMINI, EnterpriseTtsProtocol.MIMO)) {
+            val candidate = base.copy(configuration = base.configuration.copy(
+                tts = base.configuration.tts.map { it.copy(protocol = protocol) }))
+            val error = assertThrows(EnterpriseConfigurationException::class.java) {
+                EnterprisePackageCodec.validate(candidate)
+            }
+            assertEquals("unsupported_local_tts_protocol", error.reason)
+        }
+        for (protocol in listOf(EnterpriseAsrProtocol.DASHSCOPE_HTTP, EnterpriseAsrProtocol.OPENAI_REALTIME,
+            EnterpriseAsrProtocol.DASHSCOPE)) {
+            val candidate = base.copy(configuration = base.configuration.copy(
+                asr = base.configuration.asr.map { it.copy(protocol = protocol) }))
+            val error = assertThrows(EnterpriseConfigurationException::class.java) {
+                EnterprisePackageCodec.validate(candidate)
+            }
+            assertEquals("unsupported_local_asr_protocol", error.reason)
+        }
+    }
+
     @Test fun `private image models require the implemented image wire and preserve authentication ownership`() {
         val base = exampleEnterprisePackage()
         val model = base.configuration.models.first().copy(id = "mdl_image_test", type = me.rerere.ai.provider.ModelType.IMAGE)

@@ -1,5 +1,6 @@
 package net.weero.measix.pilot.service
 
+import net.weero.measix.pilot.data.enterprise.toCandidate
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.every
@@ -229,7 +230,7 @@ class ConversationFolderAccessTest {
             f.sessions.synchronize(original.selection.access as RealmAccess.Enterprise, packet.copy(configuration = packet.configuration.copy(
                 generation = packet.configuration.generation + 1,
                 policy = packet.configuration.policy.copy(allowLocalAssistants = false),
-            )))
+            )).toCandidate())
             rejects<IllegalStateException> { f.application.createFolder(original, "not allowed") }
             assertTrue(f.folders.value.isEmpty())
         }

@@ -33,8 +33,64 @@ class EnterpriseApplicationServiceTest {
     @get:Rule val temporary = TemporaryFolder()
     private val main = Executors.newSingleThreadExecutor().asCoroutineDispatcher()
 
+    @Test fun `pending enrollment network failure is visible without closing recovery gate`() = runBlocking(Dispatchers.Main) {
+        fixture { f ->
+            val platform = mockk<PlatformEnterpriseService> {
+                io.mockk.coEvery { recoverPlatformAccess() } throws java.io.IOException("bootstrap offline")
+                every { pendingLogoutFailure } returns MutableStateFlow<String?>(null)
+            }
+            val gate = ApplicationRecoveryGate().apply { ready() }
+            val service = EnterpriseApplicationService(f.sessions, f.source, f.synchronization, f.exit,
+                f.portals, gate, f.scope, mockk(), mockk { io.mockk.coEvery { revokeViewports(any()) } returns Unit },
+                speech = mockk(relaxed = true), platform = platform)
+            val presentation = withTimeout(5_000) { service.observe().first { it.enrollmentRecoveryFailure != null } }
+            assertTrue(presentation.enrollmentRecoveryFailure.orEmpty().contains("bootstrap offline"))
+            assertEquals(ApplicationRecoveryState.Ready, gate.state.value)
+            assertNotNull(f.sessions.readPresentation().selection)
+        }
+    }
+
+    @Test fun `startup synchronizes recovered platform access after the recovery gate opens`() = runBlocking(Dispatchers.Main) {
+        fixture { f ->
+            val access = f.selection().access as RealmAccess.Enterprise
+            val synchronized = CompletableDeferred<RealmAccess.Enterprise>()
+            val platform = mockk<PlatformEnterpriseService> {
+                io.mockk.coEvery { recoverPlatformAccess() } returns access
+                every { pendingLogoutFailure } returns MutableStateFlow<String?>(null)
+            }
+            val sync = mockk<EnterpriseSynchronizationService> {
+                io.mockk.coEvery { synchronize(any()) } coAnswers {
+                    synchronized.complete(firstArg())
+                    f.sessions.state.value as EnterpriseState.Available
+                }
+            }
+            val gate = ApplicationRecoveryGate()
+            EnterpriseApplicationService(f.sessions, f.source, sync, f.exit, f.portals, gate, f.scope,
+                mockk(), mockk { io.mockk.coEvery { revokeViewports(any()) } returns Unit },
+                speech = mockk(relaxed = true), platform = platform)
+            assertFalse(synchronized.isCompleted)
+            gate.ready()
+            assertEquals(access, withTimeout(5_000) { synchronized.await() })
+        }
+    }
+
     @Before fun installMain() { Dispatchers.setMain(main) }
     @After fun resetMain() { Dispatchers.resetMain(); main.close() }
+
+    @Test(timeout = 30_000)
+    fun `platform paste only prepares origin confirmation and cancelled or replaced requests cannot connect`() = runBlocking(Dispatchers.Main) {
+        fixture { f ->
+            val text = """{"formatVersion":1,"kind":"PLATFORM_ENROLLMENT","platformUrl":"http://192.168.1.20:8080","code":"private-code","expiresAt":"2030-01-01T00:00:00Z"}"""
+            val first = requireNotNull(f.service.join(text))
+            assertEquals("http://192.168.1.20:8080", first.platformOrigin)
+            assertFalse(first.toString().contains("private-code"))
+            val second = requireNotNull(f.service.join(text))
+            rejects("enterprise_enrollment_replaced") { f.service.confirmJoin(first) }
+            f.service.dismissJoin(second)
+            rejects("enterprise_enrollment_replaced") { f.service.confirmJoin(second) }
+            io.mockk.coVerify(exactly = 0) { f.platform.enroll(any(), any(), any()) }
+        }
+    }
 
     @Test(timeout = 30_000)
     fun `native Feed authoring shares publication and rejects stale revision and returned selection`() = runBlocking(Dispatchers.Main) {
@@ -361,12 +417,17 @@ class EnterpriseApplicationServiceTest {
             LocalEnterpriseConfigurationStore(sourceRoot), { 1000L },
         )
         val source = io.mockk.spyk(realSource)
-        val synchronization = EnterpriseSynchronizationService(sessions, source, scope)
+        val synchronization = EnterpriseSynchronizationService(sessions, source, scope, net.weero.measix.pilot.service.PlatformEnterpriseService(sessions, net.weero.measix.pilot.data.enterprise.PlatformControlClient(okhttp3.OkHttpClient())))
         val exit = mockk<EnterpriseExitService> {
             every { failure } returns MutableStateFlow<EnterpriseExitFailure?>(null)
+            every { recoveryLogoutFailure } returns MutableStateFlow<String?>(null)
+        }
+        val platform = mockk<PlatformEnterpriseService> {
+            io.mockk.coEvery { recoverPlatformAccess() } returns null
+            every { pendingLogoutFailure } returns MutableStateFlow<String?>(null)
         }
         val service = EnterpriseApplicationService(sessions, source, synchronization, exit, portals,
-            ApplicationRecoveryGate().apply { ready() }, scope, mockk(), mockk { io.mockk.coEvery { revokeViewports(any()) } returns Unit }, speech = mockk(relaxed = true))
+            ApplicationRecoveryGate().apply { ready() }, scope, mockk(), mockk { io.mockk.coEvery { revokeViewports(any()) } returns Unit }, speech = mockk(relaxed = true), platform = platform)
         val documents = mutableListOf<PortalDocument>()
         val hosts = mutableListOf<BlockedHost>()
 

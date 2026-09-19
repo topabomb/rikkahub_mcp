@@ -41,6 +41,46 @@ import kotlin.uuid.Uuid
 class ConversationCommandAccessTest {
     @get:Rule val temporary = TemporaryFolder()
 
+    @Test fun `initial enterprise route consumes configured assistant and uses space entry when absent without persisting a draft`() = runTest {
+        fixture { f ->
+            coEvery { f.settings.lastConversation(f.scope) } returns null
+            val packet = exampleEnterprisePackage()
+            val initial = f.application.initialRequest(true) as InitialConversationRequest.Open
+            assertEquals(packet.identity.reference(requireNotNull(packet.configuration.defaults.assistantId)),
+                (initial.request as ConversationOpenRequest.NewDraft).assistantId)
+            val access = f.sessions.captureSelectedRealmAccess() as RealmAccess.Enterprise
+            f.sessions.synchronize(access, packet.copy(configuration = packet.configuration.copy(
+                generation = packet.configuration.generation + 1,
+                defaults = packet.configuration.defaults.copy(assistantId = null),
+            )).toCandidate())
+            assertEquals(InitialConversationRequest.SelectEnterpriseAssistant, f.application.initialRequest(true))
+            coEvery { f.settings.lastConversation(f.scope) } returns f.rootId
+            assertEquals(InitialConversationRequest.Open(ConversationOpenRequest.OpenExisting(f.rootId, access)),
+                f.application.initialRequest(false))
+            coVerify(exactly = 0) { f.repository.commit(any()) }
+        }
+    }
+
+    @Test fun `saved assistant wins over enterprise default and invalid saved choice opens selection without rewriting it`() = runTest {
+        fixture { f ->
+            coEvery { f.settings.lastConversation(f.scope) } returns null
+            val packet = exampleEnterprisePackage()
+            var selected: ConfigurationReference = DEFAULT_ASSISTANT_ID
+            coEvery { f.settings.withResolvedConfiguration<Any?>(any(), any(), any()) } coAnswers {
+                val document = UserSettingsDocument.empty().withPersonalSettings(f.settings.userSettings.value)
+                val preferences = document.preferences.withSelections(f.scope,
+                    net.weero.measix.pilot.data.datastore.ResourceSelections(assistantId = selected))
+                thirdArg<suspend (ResolvedConfiguration) -> Any?>()(ConfigurationResolver.resolve(
+                    document.copy(preferences = preferences), f.scope, f.sessions.state.value))
+            }
+            val initial = f.application.initialRequest(true) as InitialConversationRequest.Open
+            assertEquals(selected, (initial.request as ConversationOpenRequest.NewDraft).assistantId)
+            selected = packet.identity.reference("asd_missing")
+            assertEquals(InitialConversationRequest.SelectEnterpriseAssistant, f.application.initialRequest(true))
+            coVerify(exactly = 0) { f.repository.commit(any()) }
+        }
+    }
+
     @Test fun `old page commands reject a conflated selection round trip before reading or writing data`() = runTest {
         fixture { f ->
             val target = f.page.commandTarget

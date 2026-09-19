@@ -354,7 +354,6 @@ internal class PortalDocument private constructor(
                     registry.awaitHostAvailable()
                     val state = sessions.portalState(selection)
                     val session = requireNotNull(state.manifest.session)
-                    if (!session.identity.authority.isLocal) throw PortalFailure("source_forbidden")
                     val id = Base64.getUrlEncoder().withoutPadding().encodeToString(ByteArray(32).also { SecureRandom().nextBytes(it) })
                     sessions.withSelectedRealmSelection(selection) {
                         registry.requireHostAvailable()

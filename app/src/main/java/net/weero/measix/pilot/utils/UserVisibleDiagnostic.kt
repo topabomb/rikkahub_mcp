@@ -22,7 +22,7 @@ internal fun Throwable.userVisibleDiagnostic(): String {
     return lines.joinToString(separator = "\nCaused by: ")
 }
 
-private fun String.redactDiagnosticSecrets(): String {
+internal fun String.redactDiagnosticSecrets(): String {
     val withoutHeaders = sensitiveHeaders.replace(this) { match ->
         match.groupValues[1] + match.groupValues[2] + "<redacted>"
     }

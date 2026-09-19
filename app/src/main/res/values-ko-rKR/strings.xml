@@ -1613,6 +1613,7 @@
   <string name="enterprise_switch_notice">공간을 전환해도 기업 로그인은 유지됩니다. 채팅과 데이터는 원래 공간에 남습니다.</string>
   <string name="enterprise_sync">기업 설정 동기화</string>
   <string name="enterprise_exit">기업 로그아웃</string>
+  <string name="enterprise_logout_unconfirmed">이 기기에서는 로그아웃했습니다. 서버 로그아웃은 확인하지 못했습니다.</string>
   <string name="enterprise_exit_confirm">%1$s에서 로그아웃할까요? 기업 작업이 중지되고 개인 공간으로 돌아갑니다. 기존 기업 데이터는 계속 분리됩니다.</string>
   <string name="enterprise_signed_out">로그인되지 않음</string>
   <string name="enterprise_pending">접속 완료, 설정 대기 중</string>
@@ -1626,7 +1627,6 @@
   <string name="enterprise_generation">적용 중인 설정 버전: %1$d</string>
   <string name="enterprise_last_sync">최근 설정 동기화: %1$s</string>
   <string name="enterprise_current_space">현재 공간: %1$s</string>
-  <string name="enterprise_platform_unavailable">실제 기업 서버 접속은 아직 지원하지 않습니다. 로컬 예시 기업을 체험할 수 있습니다.</string>
   <string name="enterprise_invalid_enrollment">접속 정보가 잘못되었거나 만료 또는 사용되었거나 설치된 소스에서 허용되지 않습니다.</string>
   <string name="enterprise_external_open">외부 웹사이트 열기</string>
   <string name="enterprise_external_confirm">다른 앱에서 이 주소를 여시겠습니까?\n\n%1$s</string>
@@ -1792,4 +1792,6 @@
   <string name="assistant_model_default_settings">설정 기본값</string>
   <string name="assistant_model_default_assistant">어시스턴트 기본값</string>
   <string name="assistant_model_default_space">공간 기본값</string>
+  <string name="enterprise_platform_confirm">이 기업 플랫폼에 연결하시겠습니까?\n\n%1$s</string>
+  <string name="speech_no_voice_detected">음성이 감지되지 않았습니다. 다시 시도해 주세요.</string>
 </resources>

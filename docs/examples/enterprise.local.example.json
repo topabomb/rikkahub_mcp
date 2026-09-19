@@ -54,14 +54,16 @@
         "id": "tts_example",
         "name": "企业示例朗读",
         "modelId": "example-tts",
-        "voice": "example"
+        "voice": "example",
+        "protocol": "OPENAI"
       }
     ],
     "asr": [
       {
         "id": "asr_example",
         "name": "企业示例转写",
-        "modelId": "example-asr"
+        "modelId": "example-asr",
+        "protocol": "OPENAI_HTTP"
       }
     ],
     "mcpServers": [
@@ -109,7 +111,9 @@
         "modelId": "mdl_chat",
         "systemPrompt": "帮助用户起草简洁清楚的工作文案。缺少事实时保留待填写项，不编造进展。当前运行的是本地模拟模型。",
         "mcpServerIds": [],
-        "memorySeedIds": ["seed_writing"]
+        "memorySeedIds": [
+          "seed_writing"
+        ]
       }
     ],
     "memorySeeds": [
@@ -176,7 +180,8 @@
       "compressModelId": "mdl_chat",
       "ttsId": "tts_example",
       "asrId": "asr_example"
-    }
+    },
+    "providers": []
   },
   "runtimeBindings": [
     {

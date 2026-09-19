@@ -1,0 +1,1334 @@
+openapi: 3.0.3
+info:
+  title: MEASIX Client Control API
+  version: 1.0.0
+paths:
+  /api/client/v1/managed/applied:
+    put:
+      operationId: reportManagedApplied
+      security:
+      - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ManagedAppliedReport'
+      responses:
+        '204':
+          description: Current session application report recorded; does not renew session or authorize runtime.
+        '400':
+          $ref: '#/components/responses/Problem'
+        '401':
+          $ref: '#/components/responses/Problem'
+        '403':
+          $ref: '#/components/responses/Problem'
+        '409':
+          $ref: '#/components/responses/Problem'
+        '422':
+          $ref: '#/components/responses/Problem'
+  /api/client/v1/portal/grants:
+    post:
+      operationId: createPortalGrant
+      security:
+      - bearerAuth: []
+      responses:
+        '201':
+          description: One-use native WebView POST grant
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PortalGrant'
+        '401':
+          $ref: '#/components/responses/Problem'
+        '503':
+          $ref: '#/components/responses/Problem'
+        '403':
+          $ref: '#/components/responses/Problem'
+  /portal/session/exchange:
+    post:
+      operationId: exchangePortalGrant
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [ticket]
+              properties:
+                ticket:
+                  type: string
+                  minLength: 32
+                  maxLength: 128
+      responses:
+        '303':
+          description: Cookie established; navigate to /portal/
+          headers:
+            Location:
+              schema:
+                type: string
+            Set-Cookie:
+              schema:
+                type: string
+        '401':
+          $ref: '#/components/responses/Problem'
+        '403':
+          $ref: '#/components/responses/Problem'
+        '400':
+          $ref: '#/components/responses/Problem'
+  /api/portal/v1/session:
+    get:
+      operationId: getPortalSession
+      security:
+      - portalCookie: []
+      responses:
+        '200':
+          description: Restricted Portal identity summary
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PortalSession'
+        '401':
+          $ref: '#/components/responses/Problem'
+        '403':
+          $ref: '#/components/responses/Problem'
+    delete:
+      description: Close only this restricted Portal session; exact Origin and CSRF are required.
+      operationId: closePortalSession
+      security:
+      - portalCookie: []
+      parameters:
+      - name: Origin
+        in: header
+        required: true
+        schema:
+          type: string
+      - name: X-CSRF-Token
+        in: header
+        required: true
+        schema:
+          type: string
+      responses:
+        '204':
+          description: Portal session closed; parent session unchanged
+        '401':
+          $ref: '#/components/responses/Problem'
+        '403':
+          $ref: '#/components/responses/Problem'
+  /.well-known/measix:
+    get:
+      operationId: discover
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Discovery'
+  /api/client/v1/enrollments/exchange:
+    post:
+      operationId: exchangeEnrollment
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EnrollmentExchangeRequest'
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EnrollmentExchangeResponse'
+        '400':
+          $ref: '#/components/responses/Problem'
+        '401':
+          $ref: '#/components/responses/Problem'
+        '409':
+          $ref: '#/components/responses/Problem'
+  /api/client/v1/sessions/refresh:
+    post:
+      operationId: refreshSession
+      parameters:
+      - name: Idempotency-Key
+        in: header
+        required: true
+        schema:
+          $ref: '#/components/schemas/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RefreshRequest'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RefreshResponse'
+        '400':
+          $ref: '#/components/responses/Problem'
+        '401':
+          $ref: '#/components/responses/Problem'
+        '403':
+          $ref: '#/components/responses/Problem'
+        '409':
+          $ref: '#/components/responses/Problem'
+  /api/client/v1/sessions/logout:
+    post:
+      operationId: logoutSession
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RefreshRequest'
+      responses:
+        '204':
+          description: Logged out
+        '400':
+          $ref: '#/components/responses/Problem'
+        '401':
+          $ref: '#/components/responses/Problem'
+        '403':
+          $ref: '#/components/responses/Problem'
+  /api/client/v1/bootstrap:
+    get:
+      operationId: bootstrap
+      security:
+      - bearerAuth: []
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Bootstrap'
+        '401':
+          $ref: '#/components/responses/Problem'
+        '403':
+          $ref: '#/components/responses/Problem'
+  /api/client/v1/managed/state:
+    get:
+      operationId: getManagedState
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: X-Measix-Applied-Managed-Generation
+        in: header
+        required: false
+        schema:
+          type: integer
+          minimum: 1
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ManagedState'
+        '401':
+          $ref: '#/components/responses/Problem'
+        '403':
+          $ref: '#/components/responses/Problem'
+        '503':
+          $ref: '#/components/responses/Problem'
+  /api/client/v1/managed/snapshots/{generation}:
+    get:
+      operationId: getManagedSnapshot
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: generation
+        in: path
+        required: true
+        schema:
+          type: integer
+          minimum: 1
+      - name: If-None-Match
+        in: header
+        required: false
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Snapshot
+          headers:
+            ETag:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ManagedSnapshot'
+        '304':
+          description: Not Modified
+        '401':
+          $ref: '#/components/responses/Problem'
+        '403':
+          $ref: '#/components/responses/Problem'
+        '404':
+          $ref: '#/components/responses/Problem'
+  /api/client/v1/enterprise/updates:
+    get:
+      operationId: listEnterpriseUpdates
+      security:
+      - bearerAuth: []
+      - portalCookie: []
+      parameters:
+      - name: startDate
+        in: query
+        required: false
+        schema:
+          type: string
+          format: date
+      - name: endDate
+        in: query
+        required: false
+        schema:
+          type: string
+          format: date
+      - name: limit
+        in: query
+        required: false
+        schema:
+          type: integer
+          minimum: 1
+          maximum: 20
+          default: 10
+      - name: If-None-Match
+        in: header
+        required: false
+        schema:
+          type: string
+      responses:
+        '200':
+          description: OK
+          headers:
+            ETag:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EnterpriseUpdateFeed'
+        '304':
+          description: Not Modified
+        '401':
+          $ref: '#/components/responses/Problem'
+        '403':
+          $ref: '#/components/responses/Problem'
+  /api/client/v1/enterprise/updates/{enterpriseUpdateId}:
+    get:
+      operationId: getEnterpriseUpdate
+      security:
+      - bearerAuth: []
+      - portalCookie: []
+      parameters:
+      - name: enterpriseUpdateId
+        in: path
+        required: true
+        schema:
+          $ref: '#/components/schemas/EnterpriseUpdateId'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EnterpriseUpdateItem'
+        '401':
+          $ref: '#/components/responses/Problem'
+        '403':
+          $ref: '#/components/responses/Problem'
+        '404':
+          $ref: '#/components/responses/Problem'
+components:
+  schemas:
+    ManagedAppliedReport:
+      type: object
+      additionalProperties: false
+      required: [managedGeneration, snapshotHash]
+      properties:
+        managedGeneration:
+          type: integer
+          minimum: 1
+        snapshotHash:
+          type: string
+          minLength: 1
+    PlatformEnrollmentMaterial:
+      description: Versioned native scan/paste material; not an HTTP enrollment request. See Control Protocol section 8. The explicit deployment public HTTP/HTTPS origin is used, never the browser origin or an internal Hub/Relay address.
+      type: object
+      additionalProperties: false
+      required: [formatVersion, kind, platformUrl, code, expiresAt]
+      properties:
+        formatVersion:
+          type: integer
+          enum: [1]
+        kind:
+          type: string
+          enum: [PLATFORM_ENROLLMENT]
+        platformUrl:
+          type: string
+          format: uri
+          maxLength: 1024
+        code:
+          type: string
+          minLength: 1
+          maxLength: 128
+        expiresAt:
+          type: string
+          format: date-time
+          pattern: '^\d{4}-\d{2}-\d{2}[Tt](?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d{1,9})?(?:[Zz]|\+00:00)$'
+
+    PortalGrant:
+      type: object
+      additionalProperties: false
+      required: [exchangeUrl, ticket, expiresAt]
+      properties:
+        exchangeUrl:
+          type: string
+          format: uri
+        ticket:
+          type: string
+        expiresAt:
+          type: string
+          format: date-time
+    PortalSession:
+      type: object
+      additionalProperties: false
+      required: [deploymentId, userId, deviceId, sessionId, enterpriseName, userDisplayName, expiresAt, sessionIdleExpiresAt, csrfToken]
+      properties:
+        deploymentId:
+          $ref: '#/components/schemas/DeploymentId'
+        userId:
+          $ref: '#/components/schemas/UserId'
+        deviceId:
+          $ref: '#/components/schemas/DeviceId'
+        sessionId:
+          $ref: '#/components/schemas/SessionId'
+        enterpriseName:
+          type: string
+        userDisplayName:
+          type: string
+        expiresAt:
+          type: string
+          format: date-time
+        sessionIdleExpiresAt:
+          type: string
+          format: date-time
+        csrfToken:
+          type: string
+    DeploymentId:
+      type: string
+      pattern: ^dep_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$
+    UserId:
+      type: string
+      pattern: ^usr_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$
+    DeviceId:
+      type: string
+      pattern: ^dev_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$
+    EnrollmentId:
+      type: string
+      pattern: ^enr_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$
+    SessionId:
+      type: string
+      pattern: ^ses_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$
+    InstallationId:
+      type: string
+      pattern: ^ins_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$
+    ProviderId:
+      type: string
+      pattern: ^prv_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$
+    ModelId:
+      type: string
+      pattern: ^mdl_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$
+    TtsId:
+      type: string
+      pattern: ^tts_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$
+    AsrId:
+      type: string
+      pattern: ^asr_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$
+    McpServerId:
+      type: string
+      pattern: ^mcp_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$
+    PolicyId:
+      type: string
+      pattern: ^pol_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$
+    DraftId:
+      type: string
+      pattern: ^drf_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$
+    ReleaseId:
+      type: string
+      pattern: ^rel_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$
+    UpstreamId:
+      type: string
+      pattern: ^ups_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$
+    SecretId:
+      type: string
+      pattern: ^sec_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$
+    RuntimeRouteId:
+      type: string
+      pattern: ^rte_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$
+    ActivationId:
+      type: string
+      pattern: ^act_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$
+    RequestId:
+      type: string
+      pattern: ^req_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$
+    InteractionId:
+      type: string
+      pattern: ^int_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$
+    PricingRuleId:
+      type: string
+      pattern: ^prc_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$
+    IdempotencyKey:
+      type: string
+      pattern: ^idem_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$
+    AssistantDefinitionId:
+      type: string
+      pattern: ^asd_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$
+    StarterId:
+      type: string
+      pattern: ^str_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$
+    EnterpriseUpdateId:
+      type: string
+      pattern: ^eup_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$
+    Sha256Hash:
+      type: string
+      pattern: ^sha256:[0-9a-f]{64}$
+    Problem:
+      type: object
+      additionalProperties: false
+      required:
+      - type
+      - title
+      - status
+      - code
+      properties:
+        type:
+          type: string
+          default: about:blank
+        title:
+          type: string
+        status:
+          type: integer
+          minimum: 400
+          maximum: 599
+        code:
+          type: string
+        detail:
+          type: string
+        requestId:
+          $ref: '#/components/schemas/RequestId'
+        activationId:
+          $ref: '#/components/schemas/ActivationId'
+        targetManagedGeneration:
+          type: integer
+          minimum: 0
+        currentDraftRevision:
+          type: integer
+          minimum: 0
+        forwarded:
+          type: boolean
+    ValidationIssue:
+      type: object
+      additionalProperties: false
+      required:
+      - code
+      - severity
+      - path
+      - message
+      properties:
+        code:
+          type: string
+        severity:
+          type: string
+          enum:
+          - ERROR
+          - WARNING
+        path:
+          type: string
+        message:
+          type: string
+    ProviderDefinition:
+      type: object
+      additionalProperties: false
+      required:
+      - providerId
+      - displayName
+      - clientProtocol
+      - enabled
+      properties:
+        providerId:
+          $ref: '#/components/schemas/ProviderId'
+        displayName:
+          type: string
+          minLength: 1
+        clientProtocol:
+          type: string
+          enum:
+          - OPENAI_CHAT_COMPLETIONS
+          - OPENAI_RESPONSES
+          - GOOGLE_GENERATE_CONTENT
+          - ANTHROPIC_MESSAGES
+        enabled:
+          type: boolean
+    ModelDefinition:
+      type: object
+      additionalProperties: false
+      required:
+      - modelId
+      - providerId
+      - displayName
+      - upstreamModelKey
+      - runtimePath
+      - inputModalities
+      - outputModalities
+      - capabilities
+      - enabled
+      properties:
+        modelId:
+          $ref: '#/components/schemas/ModelId'
+        providerId:
+          $ref: '#/components/schemas/ProviderId'
+        displayName:
+          type: string
+          minLength: 1
+        upstreamModelKey:
+          type: string
+          minLength: 1
+        runtimePath:
+          type: string
+          pattern: ^/[^?#]*$
+        inputModalities:
+          type: array
+          minItems: 1
+          items:
+            type: string
+            enum:
+            - TEXT
+            - IMAGE
+        outputModalities:
+          type: array
+          minItems: 1
+          items:
+            type: string
+            enum:
+            - TEXT
+        capabilities:
+          type: array
+          items:
+            type: string
+            enum:
+            - TOOL
+            - REASONING
+        enabled:
+          type: boolean
+    TtsDefinition:
+      type: object
+      additionalProperties: false
+      required:
+      - ttsId
+      - displayName
+      - clientProtocol
+      - enabled
+      properties:
+        ttsId:
+          $ref: '#/components/schemas/TtsId'
+        displayName:
+          type: string
+          minLength: 1
+        clientProtocol:
+          type: string
+          enum:
+          - OPENAI_AUDIO_SPEECH
+          - GEMINI_GENERATE_CONTENT_TTS
+          - MIMO_CHAT_COMPLETIONS_TTS
+          - SYSTEM_TTS
+        upstreamModelKey:
+          type: string
+          minLength: 1
+          x-go-type-skip-optional-pointer: true
+        voice:
+          type: string
+          minLength: 1
+          x-go-type-skip-optional-pointer: true
+        runtimePath:
+          type: string
+          pattern: ^/[^?#]*$
+          x-go-type-skip-optional-pointer: true
+        voiceDesignPrompt:
+          type: string
+          minLength: 1
+          x-go-type-skip-optional-pointer: true
+        speechRate:
+          type: number
+          format: double
+          minimum: 0
+          exclusiveMinimum: true
+        pitch:
+          type: number
+          format: double
+          minimum: 0
+          exclusiveMinimum: true
+        enabled:
+          type: boolean
+    AsrDefinition:
+      type: object
+      additionalProperties: false
+      required:
+      - asrId
+      - displayName
+      - clientProtocol
+      - upstreamModelKey
+      - runtimePath
+      - enabled
+      properties:
+        asrId:
+          $ref: '#/components/schemas/AsrId'
+        displayName:
+          type: string
+          minLength: 1
+        clientProtocol:
+          type: string
+          enum:
+          - OPENAI_AUDIO_TRANSCRIPTIONS
+          - DASHSCOPE_HTTP_ASR
+          - OPENAI_REALTIME_TRANSCRIPTION
+          - DASHSCOPE_REALTIME_ASR
+        upstreamModelKey:
+          type: string
+          minLength: 1
+        language:
+          type: string
+          minLength: 1
+        sampleRate:
+          type: integer
+          enum: [8000, 16000, 24000]
+        vadThreshold:
+          type: number
+          format: double
+          minimum: 0
+          maximum: 1
+        silenceDurationMs:
+          type: integer
+          minimum: 1
+        prefixPaddingMs:
+          type: integer
+          minimum: 0
+        prompt:
+          type: string
+          minLength: 1
+        runtimePath:
+          type: string
+          pattern: ^/[^?#]*$
+        enabled:
+          type: boolean
+    McpDefinition:
+      type: object
+      additionalProperties: false
+      required:
+      - mcpServerId
+      - displayName
+      - clientProtocol
+      - runtimePath
+      - authOwnership
+      - enabled
+      properties:
+        mcpServerId:
+          $ref: '#/components/schemas/McpServerId'
+        displayName:
+          type: string
+          minLength: 1
+        clientProtocol:
+          type: string
+          enum:
+          - MCP_STREAMABLE_HTTP
+        runtimePath:
+          type: string
+          pattern: ^/[^?#]*$
+        authOwnership:
+          type: string
+          enum:
+          - ENTERPRISE_MANAGED
+          - NONE
+        enabled:
+          type: boolean
+    TimeoutPolicy:
+      type: object
+      additionalProperties: false
+      required:
+      - connectMs
+      - responseHeaderMs
+      - idleMs
+      properties:
+        connectMs:
+          type: integer
+          minimum: 1
+        responseHeaderMs:
+          type: integer
+          minimum: 1
+        idleMs:
+          type: integer
+          minimum: 1
+        overallMs:
+          type: integer
+          minimum: 1
+    RuntimeBindingDefinition:
+      type: object
+      additionalProperties: false
+      required:
+      - runtimeRouteId
+      - resourceId
+      - upstreamId
+      - allowedMethods
+      - allowedPathPrefixes
+      - transportPolicy
+      properties:
+        runtimeRouteId:
+          $ref: '#/components/schemas/RuntimeRouteId'
+        resourceId:
+          type: string
+        upstreamId:
+          $ref: '#/components/schemas/UpstreamId'
+        allowedMethods:
+          type: array
+          minItems: 1
+          items:
+            type: string
+        allowedPathPrefixes:
+          type: array
+          minItems: 1
+          items:
+            type: string
+            pattern: ^/
+        transportPolicy:
+          type: string
+          enum:
+          - HTTP_REQUEST_RESPONSE
+          - HTTP_STREAMING_SSE
+          - HTTP_BINARY_STREAM
+          - HTTP_MULTIPART
+          - WEBSOCKET
+        timeoutPolicy:
+          $ref: '#/components/schemas/TimeoutPolicy'
+    ManagedPolicy:
+      type: object
+      additionalProperties: false
+      description: Current policy. All five admission flags are required; new policies initialize all five to false.
+      required:
+      - policyId
+      - allowLocalProviders
+      - allowLocalTts
+      - allowLocalAsr
+      - allowLocalMcp
+      - allowLocalAssistants
+      properties:
+        policyId:
+          $ref: '#/components/schemas/PolicyId'
+        allowLocalProviders:
+          type: boolean
+        allowLocalTts:
+          type: boolean
+        allowLocalAsr:
+          type: boolean
+        allowLocalMcp:
+          type: boolean
+        allowLocalAssistants:
+          type: boolean
+          description: Allows user assistants; referenced resources remain independently governed.
+        defaultModelId:
+          $ref: '#/components/schemas/ModelId'
+        defaultTtsId:
+          $ref: '#/components/schemas/TtsId'
+        defaultAsrId:
+          $ref: '#/components/schemas/AsrId'
+        defaultAssistantId:
+          $ref: '#/components/schemas/AssistantDefinitionId'
+    ManagedDraftContent:
+      type: object
+      additionalProperties: false
+      required:
+      - providers
+      - models
+      - tts
+      - asr
+      - mcp
+      - bindings
+      - policy
+      - assistants
+      - starters
+      properties:
+        providers:
+          type: array
+          items:
+            $ref: '#/components/schemas/ProviderDefinition'
+        models:
+          type: array
+          items:
+            $ref: '#/components/schemas/ModelDefinition'
+        tts:
+          type: array
+          items:
+            $ref: '#/components/schemas/TtsDefinition'
+        asr:
+          type: array
+          items:
+            $ref: '#/components/schemas/AsrDefinition'
+        mcp:
+          type: array
+          items:
+            $ref: '#/components/schemas/McpDefinition'
+        bindings:
+          type: array
+          items:
+            $ref: '#/components/schemas/RuntimeBindingDefinition'
+        policy:
+          $ref: '#/components/schemas/ManagedPolicy'
+        assistants:
+          type: array
+          items:
+            $ref: '#/components/schemas/ManagedAssistantDefinition'
+        starters:
+          type: array
+          items:
+            $ref: '#/components/schemas/AssistantStarterDefinition'
+    Discovery:
+      type: object
+      additionalProperties: false
+      required:
+      - product
+      - protocolVersion
+      - deploymentId
+      - deploymentName
+      - clientApiBase
+      - runtimeApiBase
+      - supportedSnapshotSchemaVersions
+      properties:
+        product:
+          type: string
+          enum:
+          - MEASIX_AGENT_PLATFORM
+        protocolVersion:
+          type: string
+          enum:
+          - '1'
+        deploymentId:
+          $ref: '#/components/schemas/DeploymentId'
+        deploymentName:
+          type: string
+        clientApiBase:
+          type: string
+          pattern: ^/
+        runtimeApiBase:
+          type: string
+          pattern: ^/
+        supportedSnapshotSchemaVersions:
+          type: array
+          items:
+            type: integer
+    EnrollmentExchangeRequest:
+      type: object
+      additionalProperties: false
+      required:
+      - code
+      - installationId
+      - deviceName
+      - appVersion
+      - platform
+      properties:
+        code:
+          type: string
+        installationId:
+          $ref: '#/components/schemas/InstallationId'
+        deviceName:
+          type: string
+        appVersion:
+          type: string
+        platform:
+          type: string
+          enum:
+          - ANDROID
+    EnrollmentExchangeResponse:
+      type: object
+      additionalProperties: false
+      required:
+      - deploymentId
+      - userId
+      - deviceId
+      - sessionId
+      - accessToken
+      - accessTokenExpiresAt
+      - refreshToken
+      - refreshExpiresAt
+      - sessionIdleExpiresAt
+      properties:
+        deploymentId:
+          $ref: '#/components/schemas/DeploymentId'
+        userId:
+          $ref: '#/components/schemas/UserId'
+        deviceId:
+          $ref: '#/components/schemas/DeviceId'
+        sessionId:
+          $ref: '#/components/schemas/SessionId'
+        accessToken:
+          type: string
+        accessTokenExpiresAt:
+          type: string
+          format: date-time
+        refreshToken:
+          type: string
+        refreshExpiresAt:
+          type: string
+          format: date-time
+        sessionIdleExpiresAt:
+          type: string
+          format: date-time
+    RefreshRequest:
+      type: object
+      additionalProperties: false
+      required:
+      - refreshToken
+      properties:
+        refreshToken:
+          type: string
+    RefreshResponse:
+      type: object
+      additionalProperties: false
+      required:
+      - accessToken
+      - accessTokenExpiresAt
+      - refreshToken
+      - refreshExpiresAt
+      - sessionIdleExpiresAt
+      properties:
+        accessToken:
+          type: string
+        accessTokenExpiresAt:
+          type: string
+          format: date-time
+        refreshToken:
+          type: string
+        refreshExpiresAt:
+          type: string
+          format: date-time
+        sessionIdleExpiresAt:
+          type: string
+          format: date-time
+    ManagedState:
+      type: object
+      additionalProperties: false
+      required:
+      - runtimeStatus
+      - activeManagedGeneration
+      - managedStateRevision
+      - syncRequired
+      - runtimeBlocked
+      properties:
+        runtimeStatus:
+          type: string
+          enum:
+          - READY
+          - ACTIVATING
+          - DEGRADED
+        activeManagedGeneration:
+          type: integer
+          minimum: 0
+        managedStateRevision:
+          type: integer
+          minimum: 0
+        syncRequired:
+          type: boolean
+        targetManagedGeneration:
+          type: integer
+          minimum: 1
+        runtimeBlocked:
+          type: boolean
+    Bootstrap:
+      type: object
+      additionalProperties: false
+      required:
+      - deployment
+      - user
+      - device
+      - session
+      - supportedSnapshotSchemaVersions
+      - managedState
+      properties:
+        deployment:
+          type: object
+          additionalProperties: false
+          required:
+          - deploymentId
+          - name
+          properties:
+            deploymentId:
+              $ref: '#/components/schemas/DeploymentId'
+            name:
+              type: string
+        user:
+          type: object
+          additionalProperties: false
+          required:
+          - userId
+          - displayName
+          properties:
+            userId:
+              $ref: '#/components/schemas/UserId'
+            displayName:
+              type: string
+        device:
+          type: object
+          additionalProperties: false
+          required:
+          - deviceId
+          - status
+          properties:
+            deviceId:
+              $ref: '#/components/schemas/DeviceId'
+            status:
+              type: string
+              enum:
+              - ACTIVE
+              - REVOKED
+        session:
+          type: object
+          additionalProperties: false
+          required:
+          - sessionId
+          - expiresAt
+          - sessionIdleExpiresAt
+          properties:
+            sessionId:
+              $ref: '#/components/schemas/SessionId'
+            expiresAt:
+              type: string
+              format: date-time
+            sessionIdleExpiresAt:
+              type: string
+              format: date-time
+        supportedSnapshotSchemaVersions:
+          type: array
+          items:
+            type: integer
+        managedState:
+          $ref: '#/components/schemas/ManagedState'
+    ManagedSnapshot:
+      type: object
+      additionalProperties: false
+      required:
+      - deploymentId
+      - schemaVersion
+      - managedGeneration
+      - releaseId
+      - snapshotHash
+      - providers
+      - models
+      - tts
+      - asr
+      - mcp
+      - policy
+      - metadata
+      - assistants
+      - starters
+      properties:
+        deploymentId:
+          $ref: '#/components/schemas/DeploymentId'
+        schemaVersion:
+          type: integer
+          enum:
+          - 4
+        managedGeneration:
+          type: integer
+          minimum: 1
+        releaseId:
+          $ref: '#/components/schemas/ReleaseId'
+        snapshotHash:
+          $ref: '#/components/schemas/Sha256Hash'
+        providers:
+          type: array
+          items:
+            $ref: '#/components/schemas/ProviderDefinition'
+        models:
+          type: array
+          items:
+            $ref: '#/components/schemas/ModelDefinition'
+        tts:
+          type: array
+          items:
+            $ref: '#/components/schemas/TtsDefinition'
+        asr:
+          type: array
+          items:
+            $ref: '#/components/schemas/AsrDefinition'
+        mcp:
+          type: array
+          items:
+            $ref: '#/components/schemas/McpDefinition'
+        policy:
+          $ref: '#/components/schemas/ManagedPolicy'
+        metadata:
+          type: object
+          additionalProperties: false
+          required:
+          - publishedAt
+          properties:
+            publishedAt:
+              type: string
+              format: date-time
+            publishedByUserId:
+              $ref: '#/components/schemas/UserId'
+        assistants:
+          type: array
+          items:
+            $ref: '#/components/schemas/ManagedAssistantDefinition'
+        starters:
+          type: array
+          items:
+            $ref: '#/components/schemas/AssistantStarterDefinition'
+    ManagedAssistantDefinition:
+      type: object
+      additionalProperties: false
+      required:
+      - assistantDefinitionId
+      - displayName
+      - systemPrompt
+      - modelId
+      - memorySeed
+      - mcpServerIds
+      - enabled
+      properties:
+        assistantDefinitionId:
+          $ref: '#/components/schemas/AssistantDefinitionId'
+        displayName:
+          type: string
+          minLength: 1
+        description:
+          type: string
+        systemPrompt:
+          type: string
+          minLength: 1
+        modelId:
+          $ref: '#/components/schemas/ModelId'
+        memorySeed:
+          type: array
+          items:
+            type: string
+            minLength: 1
+        mcpServerIds:
+          type: array
+          items:
+            $ref: '#/components/schemas/McpServerId'
+        enabled:
+          type: boolean
+    AssistantStarterDefinition:
+      type: object
+      additionalProperties: false
+      required:
+      - starterId
+      - assistantDefinitionId
+      - title
+      - prompt
+      - sortOrder
+      - enabled
+      properties:
+        starterId:
+          $ref: '#/components/schemas/StarterId'
+        assistantDefinitionId:
+          $ref: '#/components/schemas/AssistantDefinitionId'
+        title:
+          type: string
+          minLength: 1
+        prompt:
+          type: string
+          minLength: 1
+        description:
+          type: string
+        sortOrder:
+          type: integer
+          minimum: 0
+        enabled:
+          type: boolean
+    EnterpriseUpdateCategory:
+      type: string
+      enum:
+      - ANNOUNCEMENT
+      - MAINTENANCE
+      - NOTICE
+    EnterpriseUpdateSeverity:
+      type: string
+      enum:
+      - INFO
+      - WARNING
+      - CRITICAL
+    EnterpriseUpdateContentFormat:
+      type: string
+      enum:
+      - MARKDOWN
+      - PLAIN
+    EnterpriseUpdateItem:
+      type: object
+      additionalProperties: false
+      required:
+      - enterpriseUpdateId
+      - title
+      - content
+      - contentFormat
+      - category
+      - severity
+      - publishedAt
+      properties:
+        enterpriseUpdateId:
+          $ref: '#/components/schemas/EnterpriseUpdateId'
+        title:
+          type: string
+          minLength: 1
+        content:
+          type: string
+          minLength: 1
+        contentFormat:
+          $ref: '#/components/schemas/EnterpriseUpdateContentFormat'
+        category:
+          $ref: '#/components/schemas/EnterpriseUpdateCategory'
+        severity:
+          $ref: '#/components/schemas/EnterpriseUpdateSeverity'
+        publishedAt:
+          type: string
+          format: date-time
+    EnterpriseUpdateFeed:
+      type: object
+      additionalProperties: false
+      required:
+      - enterpriseTimezone
+      - items
+      - truncated
+      properties:
+        enterpriseTimezone:
+          type: string
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/EnterpriseUpdateItem'
+        truncated:
+          type: boolean
+  responses:
+    Problem:
+      description: Problem response
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+  securitySchemes:
+    portalCookie:
+      type: apiKey
+      in: cookie
+      name: measix_portal_session
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT

@@ -18,6 +18,7 @@ import kotlinx.coroutines.withContext
 import net.weero.measix.pilot.data.enterprise.*
 import net.weero.measix.pilot.service.portal.PortalCloseReason
 import net.weero.measix.pilot.service.portal.PortalDocumentRegistry
+import net.weero.measix.pilot.utils.userVisibleDiagnostic
 
 internal sealed interface EnterpriseExitFailure {
     val reason: String
@@ -28,7 +29,7 @@ internal sealed interface EnterpriseExitFailure {
         override val reason: String,
     ) : EnterpriseExitFailure
 }
-internal data class EnterpriseExitResult(val maintenanceFailure: String? = null)
+internal data class EnterpriseExitResult(val maintenanceFailure: String? = null, val remoteLogoutFailure: String? = null)
 
 /** Owns accepted exit work; the Session manifest remains the only source of enterprise state. */
 internal class EnterpriseExitService(
@@ -46,12 +47,15 @@ internal class EnterpriseExitService(
     private val memories: net.weero.measix.pilot.data.repository.MemoryRepository,
     private val catalogs: net.weero.measix.pilot.data.ai.mcp.McpCatalogStore,
     private val files: FileManagementApplicationService,
+    private val platformLogout: suspend (EnterpriseExitToken) -> Unit,
 ) {
     private val mutex = Mutex()
     private data class ExitTask(val reason: EnterpriseExitReason, val result: Deferred<EnterpriseExitResult>)
     private val active = mutableMapOf<RealmAccess.Enterprise, ExitTask>()
     private val _failure = MutableStateFlow<EnterpriseExitFailure?>(null)
     val failure = _failure.asStateFlow()
+    private val _recoveryLogoutFailure = MutableStateFlow<String?>(null)
+    val recoveryLogoutFailure = _recoveryLogoutFailure.asStateFlow()
 
     init {
         scope.launch {
@@ -166,7 +170,7 @@ internal class EnterpriseExitService(
     suspend fun completeDuringRecovery() {
         if (sessions.state.value !is EnterpriseState.Available) return
         val token = sessions.pendingExit() ?: return
-        finish(token, duringRecovery = true)
+        _recoveryLogoutFailure.value = finish(token, duringRecovery = true).remoteLogoutFailure
     }
 
     private suspend fun finish(token: EnterpriseExitToken, duringRecovery: Boolean): EnterpriseExitResult {
@@ -201,22 +205,31 @@ internal class EnterpriseExitService(
             catalogs.clearEnterpriseScope(token.access.scope)
             sessions.prepareExampleDataRemovalCompletion(token)
         }
+        val logoutFailure = if (token.reason == EnterpriseExitReason.USER_REQUEST) try {
+            platformLogout(token)
+            null
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Exception) {
+            android.util.Log.e("EnterpriseExit", "Platform logout was not confirmed", error)
+            error.userVisibleDiagnostic()
+        } else null
         sessions.finishExit(token)
         _failure.value = null
         if (token.reason == EnterpriseExitReason.CLEAR_EXAMPLE_DATA) return EnterpriseExitResult()
         return try {
             sessions.pruneUnusedRevisions()
-            EnterpriseExitResult()
+            EnterpriseExitResult(logoutFailure, logoutFailure)
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (error: Exception) {
-            EnterpriseExitResult(reason(error))
+            EnterpriseExitResult(listOfNotNull(logoutFailure, reason(error)).joinToString("; "), logoutFailure)
         }
     }
 
     private fun reason(error: Exception): String = when (error) {
         is EnterpriseConfigurationException -> error.reason
         is EnterpriseStorageException -> error.reason
-        else -> "enterprise_exit_failed"
+        else -> error.userVisibleDiagnostic()
     }
 }

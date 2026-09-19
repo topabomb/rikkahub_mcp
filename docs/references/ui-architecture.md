@@ -25,7 +25,7 @@ RouteActivity (ComponentActivity)
 
 正式空间入口位于聊天抽屉昵称下方和设置页，统一导航到 `Screen.Enterprise`；聊天顶部只显示由当前会话快照域派生的非交互建筑标记，避免把全局切域动作放进高频操作区。抽屉入口用名称作为主信息，本地来源只显示低强调的“本地模拟”；大字体下省略该标记，优先保留企业名称和进入动作，不暴露 owner、generation 或准入术语。入口与当前空间卡使用人物/建筑图标辅助识别个人和企业，保留文字名称；普通操作不重复添加图标。`EnterprisePage` / `EnterpriseVM` 只经 `EnterpriseApplicationService` 查询身份、状态与当前空间，以及执行接入、同步、切换和退出；具体授权及关闭屏障见 [Android 配置架构](android-configuration-architecture.md)。退出确认保存原请求，Portal 展示保存一次打开的独立身份；后台或离页会取消打开任务并关闭原宿主，未交接实例由创建方清理。切换或退出后经不携带通知 ID 的 `Screen.Startup()` 重新获取本域会话请求，不能重放 Activity 初始通知。接入凭据、RealmSelection 和 WebView 不保存进导航或 Activity saved state。原生完整配置通过系统文件选择器导入，保留打开选择器时的 RealmSelection；来源发布前后复验原选择，切域后的旧文件结果不可应用。空间页按“当前空间”“已接入企业”“接入企业”“导入企业配置”“本地企业管理”组织。聊天和工作台位于当前空间卡，切换空间保留企业登录；企业状态、同步与退出位于独立企业卡。扫码和粘贴接入资料在“接入企业”卡中持续可见；已有企业 Session 时禁用并明确提示先退出，不能把切回个人空间当作退出。本地管理默认收起，展开后提供“企业规则与模型”“企业动态”和“连接与退出演练”，明确这些操作模拟企业管理员，不是成员使用偏好。规则编辑逐项保存并同步，无额外保存按钮；关闭不撤销修改。原生页面分开显示“已生效”与“来源已更新、待同步”，已安装来源列表通过同一接入资料解析和票据兑换链重新接入。备份页面统一说明个人备份范围，适用于文件、WebDAV 和 S3。
 
-企业操作反馈由 EnterpriseVM 绑定产生结果时的 RealmSelection；同步还保留发起时的选择，切换空间或退出后不继续显示旧主体的成功或失败结果。动态编辑器的标题、刷新和关闭固定在滚动内容之外，编辑草稿时禁用刷新，避免覆盖未保存输入。Portal 页面展示由 Portal 仓库 App.vue 负责，通过正式 local 包交付，Android 不维护另一份网页 UI。工作台按配置状态、企业动态、能力体验组织；重新检查只读取状态，立即同步执行同步，两者即使版本未变化也明确反馈结果。动态查询、刷新、外链和媒体各自展示结果，避免无关操作清除反馈；外链异步结果不得返回已关闭或已切换的详情。拍照和录音用于当前页面预览，取消反馈位于操作按钮之前；关闭工作台保留登录，退出企业登录需要原生确认。
+企业操作反馈由 EnterpriseVM 绑定产生结果时的 RealmSelection；同步还保留发起时的选择，切换空间或退出后不继续显示旧主体的成功或失败结果。动态编辑器的标题、刷新和关闭固定在滚动内容之外，编辑草稿时禁用刷新，避免覆盖未保存输入。Portal 页面展示由 Portal 仓库 App.vue 负责，通过正式 local 包交付，Android 不维护另一份网页 UI。Local 与 Platform 企业空间的“企业工作台”都打开这份本地页面，并绑定当前企业 Session；远端 Portal 仍是独立的后续接线。工作台按配置状态、企业动态、能力体验组织；重新检查只读取状态，立即同步执行同步，两者即使版本未变化也明确反馈结果。动态查询、刷新、外链和媒体各自展示结果，避免无关操作清除反馈；外链异步结果不得返回已关闭或已切换的详情。拍照和录音用于当前页面预览，取消反馈位于操作按钮之前；关闭工作台保留登录，退出企业登录需要原生确认。
 
 Portal 导航或消息回调触发关闭时，先同步撤销文档授权，物理移除与销毁 WebView 在回调返回后的主线程消息中执行，避免重入 Chromium。原关闭回执同时等待站点数据清理；替换宿主不能提前打开。
 
@@ -99,6 +99,8 @@ class Navigator(private val backStack: MutableList<NavKey>) {
 历史、搜索、收藏和通知使用已有会话请求；分享和新建按钮显式创建 Draft。`rememberChatNavigation` 的回调保留渲染时的域，
 助手切换由 `selectAssistantRequest` 在同一授权边界完成选择和最近会话查询，等待后不重新捕获 Session。
 系统分享页复用 `ConfigurationQueryService.observeAssistantCatalog` 显示当前空间的企业与用户助手及不可用原因；创建 Draft 使用所显示目录的原 `RealmSelection`，切域往返或授权到期后拒绝旧选择。分享只预填输入，不自动发送，也不改默认助手。
+
+冷启动由 `ConversationApplicationService.initialRequest` 返回类型化入口：已有最近会话继续打开；新会话使用本域有效的用户选择，无选择时使用企业下发的 `policy.defaultAssistantId`。企业未下发默认助手或已保存的选择失效时，`RouteActivity` 打开已有空间页，不创建空会话、不自动选目录首项、不重写失效引用。空间“开始对话”的 `EnterpriseStarterPicker` 复用个人 `AssistantPicker` 与同一助手目录、选择命令；推荐开场仍可预览后打开，推荐开场为空时也能选择可用助手创建普通新聊天。个人空间沿用原默认助手规则。
 抽屉切换使用助手目录捕获的 `RealmSelection`，由 `ChatDrawerVM` 等待命令后导航；不通过另一条全局助手状态或导航写入分支。
 冷启动的 `Screen.Startup` 在恢复完成后读取本域的最近会话或生成新请求，再替换为稳定的聊天导航项。
 
@@ -793,3 +795,5 @@ insets，不能重复加上键盘高度。多行、编辑态、附件及键盘�
 图片生成页的原生参考图选择由 `ImgGenVM` 保存并一次性消费打开时的 `ImageReferenceImport`，Activity 重建不依赖组合内状态恢复目标；切域或重置后原 Job 失效。`FileManagementApplicationService.importImageReference` 在复制前后验证原选择，复用 `TemporaryImage` 的图片校验与失败清理。缩略图使用带原选择/Job 的 `ImageSource`，不直接读取文件路径；只有已交给生成请求的路径按实际借用 Job 延迟删除，其他副本立即清理。
 
 富文本交互由 `RichTextHost` 统一接收原来源，链接、代码/表格导出与 HTML 预览不在各渲染器中直接操作文件或重新捕获当前域。`Screen.ContentPreview` 只序列化导航 ID，实际 `RenderedContent` 借用原来源且不持久化；恢复后必须从原页重开。内联 HTML/SVG 与全屏页共用来源观察、受管图片读取及独立文档 origin。详细机制见 [消息渲染管线](message-rendering-pipeline.md)。
+
+企业语音列表在 SettingSpeechPage 复用个人空间的类型标签（OpenAI、Gemini、MiMo、系统 TTS 与各实时 ASR），不把模型名和音色拼成企业专用摘要。来源、只读和选择权限仍由既有 SpeechCatalog 投影决定，未新增企业编辑器。

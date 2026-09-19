@@ -43,6 +43,40 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class ModelRequestTransportTest {
+    @Test fun `platform auxiliary generation aggregates streaming output metadata and partial usage`() = runBlocking {
+        val provider = mockk<me.rerere.ai.provider.Provider<ProviderSetting.OpenAI>>()
+        val providers = mockk<ProviderManager>()
+        val setting = ProviderSetting.OpenAI()
+        io.mockk.every { providers.getProviderByType(setting) } returns provider
+        val params = TextGenerationParams(Model(modelId = "upstream"))
+        io.mockk.coEvery { provider.streamText(setting, any(), any()) } returns kotlinx.coroutines.flow.flowOf(
+            me.rerere.ai.ui.MessageChunk("response", "upstream", listOf(me.rerere.ai.ui.UIMessageChoice(0,
+                UIMessage.assistant("hello "), null, null)), me.rerere.ai.core.ProviderUsageSnapshot(inputTokens = 7)),
+            me.rerere.ai.ui.MessageChunk("response", "upstream", listOf(me.rerere.ai.ui.UIMessageChoice(0,
+                UIMessage.assistant("world").copy(providerMetadata = buildJsonObject { put("opaque", "keep") }), null, "stop")),
+                me.rerere.ai.core.ProviderUsageSnapshot(outputTokens = 2, canDeriveTotalFromInputAndOutput = true)),
+        )
+        val target = ModelRequestTarget.Remote(setting, credentials = RequestCredentials.Routed("http://platform.test/runtime", "test"))
+        val chunk = target.generateText(providers, emptyList(), params, net.weero.measix.pilot.data.configuration.ModelSelectionRole.TITLE)
+        assertEquals("hello world", chunk.choices.single().message!!.toText())
+        assertEquals("stop", chunk.choices.single().finishReason)
+        assertEquals(JsonPrimitive("keep"), chunk.choices.single().message!!.providerMetadata!!["opaque"])
+        assertFalse(chunk.choices.single().message!!.parts.any { it is UIMessagePart.Step })
+        assertEquals(7L, chunk.usage!!.inputTokens); assertEquals(2L, chunk.usage!!.outputTokens)
+        io.mockk.coVerify(exactly = 0) { provider.generateText(any(), any(), any()) }
+    }
+
+    @Test fun `only verified routed 428 becomes synchronization barrier`() {
+        val body = """{"code":"managed_snapshot_required","targetManagedGeneration":42,"forwarded":false,"requestId":"req_fixture"}"""
+        val valid = me.rerere.common.http.RoutedHttpException(428, body)
+        assertEquals(42L, net.weero.measix.pilot.data.enterprise.ManagedSnapshotRequired.find(IllegalStateException("transport", valid))!!.targetGeneration)
+        for (invalid in listOf(me.rerere.common.http.RoutedHttpException(503, body),
+            me.rerere.common.http.RoutedHttpException(428, body.replace("false", "true")),
+            me.rerere.common.http.RoutedHttpException(428, "not-json"))) {
+            assertNull(net.weero.measix.pilot.data.enterprise.ManagedSnapshotRequired.find(invalid))
+        }
+    }
+
     @Test fun `resolved realm catalog survives START and request projection with user admission enforced`() = runBlocking {
         val packet = exampleEnterprisePackage()
         val mainId = packet.identity.reference("asd_main")

@@ -40,7 +40,7 @@ internal class LocalEnterpriseSource(
     suspend fun enroll(text: String, configurationUnavailable: Boolean = false): EnterpriseState.Available {
         val material = parser.parse(text)
         requireEnrollmentNotExpired(material, Instant.ofEpochMilli(nowMillis()))
-        if (material is EnrollmentMaterial.Platform) fail("platform_enrollment_not_supported")
+        if (material is EnrollmentMaterial.Platform) fail("local_enrollment_required")
         material as EnrollmentMaterial.LocalExample
         val directory = installations()
         requireInstalledEnrollmentSource(material, directory.map { it.identity.authority.sourceNamespace }.toSet())

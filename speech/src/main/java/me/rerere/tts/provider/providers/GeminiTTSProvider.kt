@@ -83,14 +83,15 @@ class GeminiTTSProvider : TTSProvider<TTSProviderSetting.Gemini> {
             put("model", providerSetting.model)
         }
 
-        val httpRequest = Request.Builder()
+        val body = requestBody.toString().toRequestBody("application/json".toMediaType())
+        val httpRequest = request.transport?.request(body) ?: Request.Builder()
             .url("${providerSetting.baseUrl}/models/${providerSetting.model}:generateContent")
             .addHeader("x-goog-api-key", providerSetting.apiKey)
             .addHeader("Content-Type", "application/json")
-            .post(requestBody.toString().toRequestBody("application/json".toMediaType()))
+            .post(body)
             .build()
 
-        val geminiResponse = httpClient.newCall(httpRequest).readResponse { response ->
+        val geminiResponse = (request.transport?.client ?: httpClient).newCall(httpRequest).readResponse { response ->
             check(response.isSuccessful) { "Gemini TTS request failed: ${response.code}" }
             json.decodeFromString<GeminiTTSResponse>(response.body.string())
         }

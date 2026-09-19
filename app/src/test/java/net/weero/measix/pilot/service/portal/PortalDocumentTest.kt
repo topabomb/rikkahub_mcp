@@ -4,6 +4,7 @@ import java.time.Instant
 import android.content.Context
 import io.mockk.verify
 import java.util.concurrent.Executors
+import javax.crypto.spec.SecretKeySpec
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.mockk
@@ -72,6 +73,25 @@ class PortalDocumentTest {
             assertEquals(before.manifest.session, (h.sessions.state.value as EnterpriseState.Available).manifest.session)
             assertEquals(Instant.ofEpochMilli(now).toString(), status.getValue("lastEnterpriseUpdateRefresh").jsonPrimitive.content)
         } finally { doc.close(); doc.awaitClosed() }
+    }
+
+    @Test
+    fun `platform Session opens the bundled local Portal with its original selection`() = runBlocking(Dispatchers.Main) {
+        val h = platformHarness(this)
+        val selection = requireNotNull(h.sessions.observeSelectedRealmSelection().first())
+        val session = requireNotNull((h.sessions.state.value as EnterpriseState.Available).manifest.session)
+        assertFalse(session.identity.authority.isLocal)
+
+        val doc = h.open()
+        try {
+            assertEquals(selection, doc.selection)
+            val status = h.call(doc, "getStatus").getValue("result").jsonObject
+            assertTrue(status.getValue("managedReady").jsonPrimitive.boolean)
+            assertEquals(42L, status.getValue("appliedManagedGeneration").jsonPrimitive.long)
+        } finally {
+            doc.close()
+            doc.awaitClosed()
+        }
     }
 
     @Test
@@ -187,7 +207,7 @@ class PortalDocumentTest {
         val conversations = mockk<ConversationApplicationService>()
         coEvery { conversations.stopEnterpriseWork(any()) } returns Unit
         val exit = EnterpriseExitService(h.sessions, h.sync, conversations,
-            ApplicationRecoveryGate().apply { ready() }, appScope, h.registry, mockk(relaxed = true), mockk { io.mockk.coEvery { closeRealm(any()) } returns Unit }, mcp = mockk { io.mockk.coEvery { closeRealm(any()) } returns Unit }, speech = mockk(relaxed = true), settings = mockk(), memories = mockk(), catalogs = mockk(), files = mockk())
+            ApplicationRecoveryGate().apply { ready() }, appScope, h.registry, mockk(relaxed = true), mockk { io.mockk.coEvery { closeRealm(any()) } returns Unit }, mcp = mockk { io.mockk.coEvery { closeRealm(any()) } returns Unit }, speech = mockk(relaxed = true), settings = mockk(), memories = mockk(), catalogs = mockk(), files = mockk(), platformLogout = {})
         try {
             started.await()
             val request = requireNotNull(exit.captureRequest())
@@ -398,7 +418,7 @@ class PortalDocumentTest {
         val conversations = mockk<ConversationApplicationService>()
         coEvery { conversations.stopEnterpriseWork(any()) } returns Unit
         val exit = EnterpriseExitService(h.sessions, h.sync, conversations,
-            ApplicationRecoveryGate().apply { ready() }, appScope, h.registry, mockk(relaxed = true), mockk { io.mockk.coEvery { closeRealm(any()) } returns Unit }, mcp = mockk { io.mockk.coEvery { closeRealm(any()) } returns Unit }, speech = mockk(relaxed = true), settings = mockk(), memories = mockk(), catalogs = mockk(), files = mockk())
+            ApplicationRecoveryGate().apply { ready() }, appScope, h.registry, mockk(relaxed = true), mockk { io.mockk.coEvery { closeRealm(any()) } returns Unit }, mcp = mockk { io.mockk.coEvery { closeRealm(any()) } returns Unit }, speech = mockk(relaxed = true), settings = mockk(), memories = mockk(), catalogs = mockk(), files = mockk(), platformLogout = {})
         lateinit var native: PortalNativeActions
         val doc = h.open(createNative = { h.native(mockk(), it, exit).also { native = it } })
         try {
@@ -693,7 +713,46 @@ class PortalDocumentTest {
             LocalEnterpriseConfigurationStore(sourceRoot), { now },
         )
         source.enrollExample()
-        return Harness(sessions, source, EnterpriseSynchronizationService(sessions, source, scope), scope)
+        return Harness(sessions, source, EnterpriseSynchronizationService(sessions, source, scope, net.weero.measix.pilot.service.PlatformEnterpriseService(sessions, net.weero.measix.pilot.data.enterprise.PlatformControlClient(okhttp3.OkHttpClient()))), scope)
+    }
+
+    private suspend fun platformHarness(scope: CoroutineScope): Harness {
+        val cipher = EnterpriseCredentialCipher { SecretKeySpec(ByteArray(32) { it.toByte() }, "AES") }
+        val sessions = EnterpriseSessionController(EnterpriseAppliedStore(temporary.newFolder(), credentialCipher = cipher)) { now }
+        val sourceRoot = temporary.newFolder()
+        val source = LocalEnterpriseSource(
+            { requireNotNull(javaClass.getResourceAsStream("/${LocalEnterpriseSource.EXAMPLE_ASSET}")) }, sessions,
+            LocalEnrollmentAuthority(sourceRoot, { now }),
+            { requireNotNull(javaClass.getResourceAsStream("/${LocalEnterpriseSource.IDENTITY_ASSET}")) },
+            LocalEnterpriseConfigurationStore(sourceRoot), { now },
+        )
+        val cases = requireNotNull(javaClass.getResourceAsStream("/contracts/platform/cases.json"))
+            .bufferedReader().use { Json.parseToJsonElement(it.readText()).jsonArray }
+        fun fixture(name: String) = cases.first { it.jsonObject.getValue("name").jsonPrimitive.content == name }
+            .jsonObject.getValue("value").toString()
+        val connection = PlatformConnection("http://192.168.1.20:8080", PlatformWireCodec.decode(fixture("discovery")))
+        val enrollmentId = sessions.acceptPlatformEnrollment(
+            sessions.beginPlatformEnrollment(),
+            connection,
+            PlatformWireCodec.decode(fixture("enrollment-response")),
+        )
+        val bootstrap = PlatformWireCodec.decode<PlatformBootstrap>(fixture("bootstrap"))
+        val access = sessions.completePlatformBootstrap(
+            enrollmentId,
+            bootstrap.copy(session = bootstrap.session.copy(
+                expiresAt = "2030-01-01T00:00:00Z",
+                sessionIdleExpiresAt = "2030-01-01T00:00:00Z",
+            )),
+        )
+        val identity = requireNotNull((sessions.state.value as EnterpriseState.Available).manifest.session).identity
+        val snapshot = PlatformWireCodec.decode<PlatformManagedSnapshot>(fixture("v4-full"))
+        sessions.synchronize(access, PlatformSnapshotMapper.map(connection, identity, snapshot))
+        sessions.selectEnterpriseFixture()
+        val platform = net.weero.measix.pilot.service.PlatformEnterpriseService(
+            sessions,
+            net.weero.measix.pilot.data.enterprise.PlatformControlClient(okhttp3.OkHttpClient()),
+        )
+        return Harness(sessions, source, EnterpriseSynchronizationService(sessions, source, scope, platform), scope)
     }
 
     private inner class Harness(val sessions: EnterpriseSessionController, val source: LocalEnterpriseSource,

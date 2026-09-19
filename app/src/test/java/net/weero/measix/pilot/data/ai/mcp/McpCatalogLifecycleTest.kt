@@ -570,8 +570,7 @@ internal class McpCatalogLifecycleTest : McpRuntimeCoordinatorTestBase() {
             transportOverride = { FakeTransport() },
             clientOverride = { config -> fakeClient(config).also(restartClients::add) },
             oauthCallbackKeepAlive = NoOpOAuthCallbackKeepAlive,
-            retryJitter = { it },
-        )
+            retryJitter = { it }, platform = io.mockk.mockk())
         runCurrent()
 
         assertTrue("startup must not queue every configured server", restartClients.isEmpty())

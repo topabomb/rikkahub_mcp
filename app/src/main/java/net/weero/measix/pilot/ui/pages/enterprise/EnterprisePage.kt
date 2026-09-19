@@ -141,6 +141,7 @@ internal fun EnterprisePage(vm: EnterpriseVM = koinViewModel()) {
     val exit by vm.exitRequest.collectAsStateWithLifecycle()
     val example by vm.exampleCode.collectAsStateWithLifecycle()
     val portal by vm.portal.collectAsStateWithLifecycle()
+    val joinConfirmation by vm.joinConfirmation.collectAsStateWithLifecycle()
     val nav = LocalNavController.current
     var initialSelection by remember { mutableStateOf<RealmSelection?>(null) }
     var initialSelectionCaptured by remember { mutableStateOf(false) }
@@ -230,13 +231,17 @@ internal fun EnterprisePage(vm: EnterpriseVM = koinViewModel()) {
                 if (state == null || busy) LinearProgressIndicator(Modifier.fillMaxWidth())
                 val feedback = remember { BringIntoViewRequester() }
                 Column(Modifier.widthIn(max = 720.dp).fillMaxWidth().bringIntoViewRequester(feedback)) {
-                    if (error != null || state?.failure != null || state?.exitFailure != null) {
+                    if (error != null || state?.failure != null || state?.exitFailure != null ||
+                        state?.enrollmentRecoveryFailure != null || state?.recoveryLogoutFailure != null) {
                         Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                             Text(
-                                stringResource(error?.resource ?: R.string.enterprise_failure, *error?.arguments.orEmpty().toTypedArray()),
+                                stringResource(error?.resource ?: if (state?.recoveryLogoutFailure != null)
+                                    R.string.enterprise_logout_unconfirmed else R.string.enterprise_failure,
+                                    *error?.arguments.orEmpty().toTypedArray()),
                                 color = MaterialTheme.colorScheme.error,
                             )
-                            listOfNotNull(error?.detail, state?.failure, state?.exitFailure?.reason)
+                            listOfNotNull(error?.detail, state?.failure, state?.exitFailure?.reason,
+                                state?.enrollmentRecoveryFailure, state?.recoveryLogoutFailure)
                                 .distinct()
                                 .forEach { detail ->
                                     SelectionContainer {
@@ -426,6 +431,13 @@ internal fun EnterprisePage(vm: EnterpriseVM = koinViewModel()) {
         confirmButton = { TextButton(onClick = { val text = enrollment; enrollment = ""; paste = false; vm.join(text) }, enabled = enrollment.isNotBlank()) {
             Text(stringResource(R.string.enterprise_join_submit))
         } }, dismissButton = { TextButton(onClick = { paste = false; enrollment = "" }) { Text(stringResource(R.string.cancel)) } })
+    joinConfirmation?.let { confirmation ->
+        AlertDialog(onDismissRequest = vm::dismissJoin,
+            title = { Text(stringResource(R.string.enterprise_join_submit)) },
+            text = { Text(stringResource(R.string.enterprise_platform_confirm, confirmation.platformOrigin)) },
+            confirmButton = { TextButton(onClick = vm::confirmJoin, enabled = !busy) { Text(stringResource(R.string.confirm)) } },
+            dismissButton = { TextButton(onClick = vm::dismissJoin) { Text(stringResource(R.string.cancel)) } })
+    }
     if (exit != null) AlertDialog(onDismissRequest = vm::dismissExit,
         title = { Text(stringResource(if (exit?.clearExampleData == true) R.string.enterprise_clear_example else R.string.enterprise_exit)) },
         text = { Text(stringResource(if (exit?.clearExampleData == true) R.string.enterprise_clear_example_confirm else R.string.enterprise_exit_confirm,

@@ -4,23 +4,23 @@ import java.io.File
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
-import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.JsonPrimitive
 import me.rerere.common.configuration.ConfigurationReference
 import me.rerere.common.http.readResponse
+import me.rerere.common.http.withExplicitRoute
+import me.rerere.asr.providers.FileTranscriptionProtocol
+import me.rerere.asr.providers.fileTranscriptionBody
+import me.rerere.asr.providers.decodeFileTranscription
 import me.rerere.tts.model.AudioFormat
 import me.rerere.tts.model.TTSResponse
 import me.rerere.tts.provider.providers.buildOpenAiSpeechRequest
-import net.weero.measix.pilot.utils.StrictJsonValue
 import okhttp3.Call
 import okhttp3.MediaType.Companion.toMediaType
-import okhttp3.MultipartBody
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody
-import okhttp3.RequestBody.Companion.asRequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
+import okhttp3.HttpUrl.Companion.toHttpUrl
 
 /** Frozen private transport input; the application operation retains its binding lease and admission. */
 internal class EnterpriseSpeechTarget(
@@ -56,10 +56,47 @@ internal class EnterpriseSpeechTransport(
         .followRedirects(false).followSslRedirects(false).retryOnConnectionFailure(false)
         .readTimeout(120, TimeUnit.SECONDS).build(),
 ) {
+    private val platformClient = OkHttpClient.Builder().readTimeout(120, TimeUnit.SECONDS).build()
+
+    fun platformRealtimeTarget(execution: EnterpriseExecution.Platform, reference: ConfigurationReference.Enterprise,
+        definition: EnterpriseAsrResource, version: EnterpriseAppliedVersion, interactionId: String,
+        token: String): me.rerere.asr.providers.RealtimeAsrTransport {
+        require(reference.authority == execution.connection.authority && reference.id == definition.id)
+        val url = execution.connection.runtime(reference.id, execution.runtimePaths.getValue(reference.id)).toHttpUrl()
+            .newBuilder().apply {
+                when (definition.protocol) {
+                    EnterpriseAsrProtocol.OPENAI_REALTIME -> addQueryParameter("intent", "transcription")
+                    EnterpriseAsrProtocol.DASHSCOPE -> addQueryParameter("model", definition.modelId)
+                    else -> error("realtime_asr_protocol_required")
+                }
+            }.build()
+        // OkHttp represents ws/wss requests as http/https internally and owns the upgrade handshake.
+        val request = Request.Builder().url(url)
+            .header("Authorization", "Bearer $token")
+            .header("X-Measix-Managed-Generation", version.generation.toString())
+            .header("X-Measix-Interaction-Id", interactionId)
+            .tag(me.rerere.common.http.PrivateRequest::class.java, me.rerere.common.http.PrivateRequest)
+            .build()
+        val sockets = me.rerere.common.http.SingleAttemptWebSocketFactory(platformClient, token,
+            me.rerere.common.http.MAX_ROUTED_REQUEST_BYTES)
+        return me.rerere.asr.providers.RealtimeAsrTransport(sockets, request)
+    }
+
+    fun platformTarget(execution: EnterpriseExecution.Platform, reference: ConfigurationReference.Enterprise,
+        version: EnterpriseAppliedVersion, interactionId: String, token: String): me.rerere.speech.SpeechHttpTransport {
+        require(reference.authority == execution.connection.authority)
+        val endpoint = execution.connection.runtime(reference.id, execution.runtimePaths.getValue(reference.id))
+        return me.rerere.speech.SpeechHttpTransport(platformClient.withExplicitRoute(endpoint, token), endpoint, mapOf(
+            "Authorization" to "Bearer $token",
+            "X-Measix-Managed-Generation" to version.generation.toString(),
+            "X-Measix-Interaction-Id" to interactionId,
+        ))
+    }
+
     suspend fun synthesize(target: EnterpriseSpeechTarget, definition: EnterpriseTtsResource, text: String): TTSResponse {
-        require(definition.id == target.id.id && definition.voice.isNotBlank())
+        require(definition.id == target.id.id && definition.protocol == EnterpriseTtsProtocol.OPENAI)
         require(target.binding.protocol in setOf(EnterpriseRuntimeProtocol.EXAMPLE, EnterpriseRuntimeProtocol.OPENAI_TTS))
-        val body = buildOpenAiSpeechRequest(definition.modelId, definition.voice, text)
+        val body = buildOpenAiSpeechRequest(requireNotNull(definition.modelId), requireNotNull(definition.voice), text)
             .toString().toRequestBody("application/json".toMediaType())
         return execute(target, target.request("/audio/speech", body)) { response ->
             requireSuccess(response)
@@ -72,17 +109,19 @@ internal class EnterpriseSpeechTransport(
     suspend fun transcribe(target: EnterpriseSpeechTarget, definition: EnterpriseAsrResource, audio: File): String {
         require(definition.id == target.id.id)
         require(target.binding.protocol in setOf(EnterpriseRuntimeProtocol.EXAMPLE, EnterpriseRuntimeProtocol.OPENAI_HTTP_ASR))
-        val body = MultipartBody.Builder().setType(MultipartBody.FORM)
-            .addFormDataPart("model", definition.modelId)
-            .addFormDataPart("file", "recording.wav", audio.asRequestBody("audio/wav".toMediaType()))
-            .apply { definition.language?.let { addFormDataPart("language", it) } }
-            .build()
+        val body = fileTranscriptionBody(FileTranscriptionProtocol.OPENAI, definition.modelId, definition.language, audio, me.rerere.common.http.MAX_ROUTED_REQUEST_BYTES)
         return execute(target, target.request("/audio/transcriptions", body)) { response ->
             requireSuccess(response)
-            val json = StrictJsonValue.parse(readJsonBody(response), MAX_JSON_BYTES) as? JsonObject
-                ?: error("enterprise_asr_invalid_response")
-            (json["text"] as? JsonPrimitive)?.takeIf { it.isString }?.content
-                ?: error("enterprise_asr_invalid_response")
+            decodeFileTranscription(FileTranscriptionProtocol.OPENAI, readJsonBody(response))
+        }
+    }
+
+    suspend fun transcribe(target: me.rerere.speech.SpeechHttpTransport, definition: EnterpriseAsrResource, audio: File): String {
+        val protocol = definition.fileProtocol()
+        val body = fileTranscriptionBody(protocol, definition.modelId, definition.language, audio, me.rerere.common.http.MAX_ROUTED_REQUEST_BYTES)
+        return target.client.newCall(target.request(body)).readResponse { response ->
+            requireSuccess(response)
+            decodeFileTranscription(protocol, readJsonBody(response))
         }
     }
 
@@ -93,8 +132,10 @@ internal class EnterpriseSpeechTransport(
     }
 
     private fun requireSuccess(response: Response) {
-        if (response.code == 428) throw ManagedSnapshotRequired.parse(readJsonBody(response))
-        check(response.isSuccessful) { "enterprise_speech_http_${response.code}" }
+        if (response.isSuccessful) return
+        val detail = readJsonBody(response)
+        val error = me.rerere.common.http.RoutedHttpException(response.code, detail.ifBlank { response.message })
+        throw ManagedSnapshotRequired.find(error) ?: error
     }
 
     private fun readJsonBody(response: Response): String {

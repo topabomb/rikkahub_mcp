@@ -34,7 +34,6 @@ internal data class McpInvocationLease(
     val client: Client,
     val serverName: String,
     val generation: Long,
-    val managed: Boolean = false,
 )
 
 internal enum class McpInvocationFailureKind {
@@ -129,7 +128,7 @@ internal class McpToolCallExecutor(
                     } else {
                         McpToolFailureKind.OUTCOME_UNKNOWN
                     },
-                    cause = timeout.takeUnless { lease.managed },
+                    cause = timeout,
                 ),
             )
         } catch (cancelled: CancellationException) {
@@ -156,7 +155,7 @@ internal class McpToolCallExecutor(
                 McpToolFailureProjector.project(
                     kind = projectedKind,
                     remoteMessage = (error as? McpException)?.message,
-                    cause = error.takeUnless { lease.managed },
+                    cause = error,
                 ),
             )
         }

@@ -190,13 +190,14 @@ class MiMoTTSProvider : TTSProvider<TTSProviderSetting.MiMo> {
         )
 
         // baseUrl 允许用户在设置页自定义 这里直接拼接路径
-        val httpRequest = Request.Builder()
+        val body = requestBody.toString().toRequestBody(JSON_MEDIA_TYPE)
+        val httpRequest = request.transport?.request(body) ?: Request.Builder()
             .url("${providerSetting.baseUrl}/chat/completions")
             // MiMo 使用 api-key 头传 token
             .addHeader("api-key", providerSetting.apiKey)
             .addHeader("Content-Type", "application/json")
             // JsonObject 的 toString 会输出 JSON 字符串
-            .post(requestBody.toString().toRequestBody(JSON_MEDIA_TYPE))
+            .post(body)
             .build()
 
         val processor = MiMoSseProcessor(
@@ -204,7 +205,7 @@ class MiMoTTSProvider : TTSProvider<TTSProviderSetting.MiMo> {
             voice = providerSetting.voice
         )
 
-        httpClient.sseFlow(httpRequest).collect { event ->
+        (request.transport?.client ?: httpClient).sseFlow(httpRequest).collect { event ->
             processor.process(event)?.let { emit(it) }
         }
     }

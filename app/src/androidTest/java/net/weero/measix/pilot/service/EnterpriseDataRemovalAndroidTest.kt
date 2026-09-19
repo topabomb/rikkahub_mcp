@@ -246,7 +246,7 @@ class EnterpriseDataRemovalAndroidTest {
         exit = EnterpriseExitService(sessions, sync, conversations, gate, appScope, PortalDocumentRegistry(),
             mockk(relaxed = true), mockk(relaxed = true), mockk(relaxed = true), mockk(relaxed = true), settings,
             MemoryRepository(room.memoryDao(), RoomDatabaseTransactionRunner(room)), catalogs,
-            FileManagementApplicationService(artifacts, media, gate, sessions))
+            FileManagementApplicationService(artifacts, media, gate, sessions), platformLogout = {})
     }
 
     private suspend fun conversation(domain: ConfigurationScope, text: String, parentId: String? = null): String {

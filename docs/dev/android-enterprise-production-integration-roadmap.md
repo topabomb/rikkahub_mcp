@@ -1,5 +1,7 @@
 # Android 真实企业服务接入规划
 
+> 2026-09-18：当前 Snapshot v4 的详细执行与真实用户功能验收以 [Android 与 Core 真实企业接入执行方案](android-core-enterprise-integration-plan.md) 为准。本文保留总体路线与历史分期；其中 Gateway 不属于本轮，正式阶段 Freeze 不阻止当前 v4 适配与联调。
+
 > 状态：后续规划，不是 0.0.20 的前置条件或验收标准。
 > 当期唯一权威：[Android 企业域本期实施方案](android-enterprise-integration-plan.md)。本文只规定正式功能如何连接真实平台，不重复本期 UI、迁移和三类配置规则。
 
@@ -37,7 +39,7 @@ Starter 的预填与用户发送沿现有 Draft 协议；不为网页增加未�
 
 ## 3. 认证、下发与 Runtime
 
-扫码/粘贴沿用已实现的 formatVersion=1 / PLATFORM_ENROLLMENT 原生资料解析器，将本期明确 unsupported 的分流替换为真实接入。用户确认解析后的 HTTPS origin 后，在同一 origin 执行 Discovery 和固定 Enrollment endpoint；API base 只允许同源 path，禁止跨 origin 重定向，code 不进入 Discovery URL。expiresAt 的客户端预检查不替代服务端消费/到期权威；本地 code 和身份目录不得用于平台交换。installation 只是关联值。Refresh Credential 安全存储，Access Token 仅内存；pending refresh key 和轮换响应遵守正式原子持久化/恢复协议。只有 authenticated Refresh 续期，不后台 heartbeat 保活。
+扫码/粘贴沿用已实现的 formatVersion=1 / PLATFORM_ENROLLMENT 原生资料解析器，将本期明确 unsupported 的分流替换为真实接入。正式支持 HTTP/HTTPS，包括局域网域名、IP 与显式端口；移除仅 loopback HTTP 的限制，不要求 HTTPS、域名或证书。用户确认解析后的完整 origin 后，在同一 origin 执行 Discovery 和固定 Enrollment endpoint；API base 只允许同源 path，禁止跨 origin 重定向，code 不进入 Discovery URL。Core 资料生成器、Portal origin 校验与共享合同同步适配，详细步骤见最新执行方案。expiresAt 的客户端预检查不替代服务端消费/到期权威；本地 code 和身份目录不得用于平台交换。installation 只是关联值。Refresh Credential 安全存储，Access Token 仅内存；pending refresh key 和轮换响应遵守正式原子持久化/恢复协议。只有 authenticated Refresh 续期，不后台 heartbeat 保活。
 
 切域保留登录；网络失败不退出但不得绕过需权威验证的企业执行；Portal 过期不等于母 Session 失效。退出先收口本机授权/任务/网页，尝试远端撤销，失败明确报告，不以断网阻止本机退出。
 

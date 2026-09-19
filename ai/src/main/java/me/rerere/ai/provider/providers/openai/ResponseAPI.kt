@@ -1,6 +1,7 @@
 @file:Suppress("UNNECESSARY_SAFE_CALL")
 package me.rerere.ai.provider.providers.openai
 
+import me.rerere.ai.provider.forCredentials
 import me.rerere.ai.ui.ProviderToolCallSlot
 import android.util.Log
 import kotlinx.coroutines.Dispatchers
@@ -155,7 +156,7 @@ class ResponseAPI(
 
         Log.d(TAG, "generateText: model=${params.model.modelId}")
 
-        val bodyStr = client.newCall(request).readResponse { response ->
+        val bodyStr = client.forCredentials(params.credentials).newCall(request).readResponse { response ->
             if (!response.isSuccessful) {
                 throw Exception("Failed to get response: ${response.code} ${response.body.string()}")
             }
@@ -222,8 +223,8 @@ class ResponseAPI(
                         endpointProfile = endpointProfile,
                         finishReason = "done",
                     ).let { chunk ->
-                        trySend(chunk).onFailure { e ->
-                            Log.w(TAG, "onEvent: terminal protocol state dropped (${e?.message})")
+                        trySend(chunk).onFailure {
+                            Log.w(TAG, "onEvent: terminal protocol state dropped")
                         }
                     }
                     streamState.markTerminal()
@@ -236,8 +237,8 @@ class ResponseAPI(
                         ?: error("response event type not found")
                     val chunk = parseResponseDelta(eventJson, streamState, endpointProfile)
                     if (chunk != null) {
-                        trySend(chunk).onFailure { e ->
-                            Log.w(TAG, "onEvent: chunk dropped (${e?.message})")
+                        trySend(chunk).onFailure {
+                            Log.w(TAG, "onEvent: chunk dropped")
                         }
                     }
 
@@ -256,7 +257,7 @@ class ResponseAPI(
                         }
                     }
                 } catch (e: Throwable) {
-                    Log.w(TAG, "onEvent: failed to process response event (sseType=$type)", e)
+                    Log.w(TAG, "onEvent: failed to process response event (sseType=$type, type=${e.javaClass.name})")
                     close(e)
                 }
             }
@@ -265,7 +266,7 @@ class ResponseAPI(
                 var exception = t
 
                 if (t != null) {
-                    Log.w(TAG, "onFailure: stream transport failed (http=${response?.code})", t)
+                    Log.w(TAG, "onFailure: stream transport failed (http=${response?.code}, type=${t.javaClass.name})")
                 }
 
                 val bodyRaw = response?.body?.stringSafe()
@@ -275,7 +276,7 @@ class ResponseAPI(
                         exception = bodyElement.parseErrorDetail()
                     }
                 } catch (e: Throwable) {
-                    Log.w(TAG, "onFailure: failed to parse error response", e)
+                    Log.w(TAG, "onFailure: failed to parse error response (${e.javaClass.name})")
                     if (exception == null) exception = e
                 } finally {
                     close(exception ?: HttpException("Response stream failed without an error detail"))
@@ -289,7 +290,7 @@ class ResponseAPI(
         }
 
         ensureActive()
-        val eventSource = EventSources.createFactory(client)
+        val eventSource = EventSources.createFactory(client.forCredentials(params.credentials))
             .newEventSource(request, listener)
 
         awaitClose {

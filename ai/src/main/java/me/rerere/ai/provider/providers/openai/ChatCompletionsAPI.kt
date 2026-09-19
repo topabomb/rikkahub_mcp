@@ -1,6 +1,7 @@
 @file:Suppress("UNNECESSARY_SAFE_CALL")
 package me.rerere.ai.provider.providers.openai
 
+import me.rerere.ai.provider.forCredentials
 import me.rerere.ai.provider.ProviderResponseException
 import me.rerere.ai.util.ProviderTerminalStatus
 import me.rerere.ai.ui.ProviderToolCallSlot
@@ -135,7 +136,7 @@ class ChatCompletionsAPI(
 
         Log.d(TAG, "generateText: model=${params.model.modelId}")
 
-        val bodyStr = client.newCall(request).readResponse { response ->
+        val bodyStr = client.forCredentials(params.credentials).newCall(request).readResponse { response ->
             if (!response.isSuccessful) {
                 throw Exception("Failed to get response: ${response.code} ${response.body?.string()}")
             }
@@ -226,12 +227,12 @@ class ChatCompletionsAPI(
                                 return
                             }
                             val messageChunk = parseStreamPayload(it, streamState, endpointVendor)
-                            trySend(messageChunk).onFailure { e ->
-                                Log.w(TAG, "onEvent: chunk dropped (${e?.message})")
+                            trySend(messageChunk).onFailure {
+                                Log.w(TAG, "onEvent: chunk dropped")
                             }
                         }
                 } catch (e: Throwable) {
-                    Log.w(TAG, "onEvent: failed to process chat completion event", e)
+                    Log.w(TAG, "onEvent: failed to process chat completion event (${e.javaClass.name})")
                     close(e)
                 }
             }
@@ -240,7 +241,7 @@ class ChatCompletionsAPI(
                 var exception = t
 
                 if (t != null) {
-                    Log.w(TAG, "onFailure: stream transport failed (http=${response?.code})", t)
+                    Log.w(TAG, "onFailure: stream transport failed (http=${response?.code}, type=${t.javaClass.name})")
                 }
 
                 val bodyRaw = response?.body?.stringSafe()
@@ -250,7 +251,7 @@ class ChatCompletionsAPI(
                         exception = bodyElement.parseErrorDetail()
                     }
                 } catch (e: Throwable) {
-                    Log.w(TAG, "onFailure: failed to parse error response", e)
+                    Log.w(TAG, "onFailure: failed to parse error response (${e.javaClass.name})")
                     if (exception == null) exception = e
                 } finally {
                     close(exception ?: HttpException("Chat completion stream failed without an error detail"))
@@ -263,7 +264,7 @@ class ChatCompletionsAPI(
         }
 
         ensureActive()
-        val eventSource = EventSources.createFactory(client).newEventSource(request, listener)
+        val eventSource = EventSources.createFactory(client.forCredentials(params.credentials)).newEventSource(request, listener)
 
         awaitClose {
             Log.d(TAG, "awaitClose: cancel event source")

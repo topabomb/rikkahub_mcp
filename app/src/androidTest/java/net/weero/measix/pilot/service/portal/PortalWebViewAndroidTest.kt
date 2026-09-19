@@ -54,7 +54,7 @@ class PortalWebViewAndroidTest {
             withContext(Dispatchers.Main) {
                 try {
                     PortalWebView.open(compose.activity, selection, sessions,
-                        EnterpriseSynchronizationService(sessions, source, scope), scope, registry) { closed.complete(it) }
+                        EnterpriseSynchronizationService(sessions, source, scope, net.weero.measix.pilot.service.PlatformEnterpriseService(sessions, net.weero.measix.pilot.data.enterprise.PlatformControlClient(okhttp3.OkHttpClient()))), scope, registry) { closed.complete(it) }
                 } catch (error: Exception) { failure = error }
             }
             assertTrue(failure is CancellationException)
@@ -79,7 +79,7 @@ class PortalWebViewAndroidTest {
             val source = source(root, sessions)
             source.enrollExample()
             val selection = requireNotNull(sessions.observeSelectedRealmSelection().first())
-            val sync = EnterpriseSynchronizationService(sessions, source, scope)
+            val sync = EnterpriseSynchronizationService(sessions, source, scope, net.weero.measix.pilot.service.PlatformEnterpriseService(sessions, net.weero.measix.pilot.data.enterprise.PlatformControlClient(okhttp3.OkHttpClient())))
             for (replacement in listOf("rebind", "about:blank", "same-origin-data")) {
                 val closed = CompletableDeferred<PortalClosure>()
                 val host = withContext(Dispatchers.Main) {
@@ -120,7 +120,7 @@ class PortalWebViewAndroidTest {
             val source = source(root, sessions)
             val enrolled = source.enrollExample()
             val selection = requireNotNull(sessions.observeSelectedRealmSelection().first())
-            val sync = EnterpriseSynchronizationService(sessions, source, scope)
+            val sync = EnterpriseSynchronizationService(sessions, source, scope, net.weero.measix.pilot.service.PlatformEnterpriseService(sessions, net.weero.measix.pilot.data.enterprise.PlatformControlClient(okhttp3.OkHttpClient())))
             val closed = CompletableDeferred<Pair<PortalClosure, Boolean>>()
             host = withContext(Dispatchers.Main) {
                 assertEquals("Installed WebView lacks required v3 features: ${WebViewCompat.getCurrentWebViewPackage(context)}",
@@ -198,7 +198,7 @@ class PortalWebViewAndroidTest {
             val closed = CompletableDeferred<Unit>()
             val selection = requireNotNull(sessions.observeSelectedRealmSelection().first())
             val original = withContext(Dispatchers.Main) {
-                PortalWebView.open(compose.activity, selection, sessions, EnterpriseSynchronizationService(sessions, source, scope), scope, registry) {
+                PortalWebView.open(compose.activity, selection, sessions, EnterpriseSynchronizationService(sessions, source, scope, net.weero.measix.pilot.service.PlatformEnterpriseService(sessions, net.weero.measix.pilot.data.enterprise.PlatformControlClient(okhttp3.OkHttpClient()))), scope, registry) {
                     closed.complete(Unit)
                 }.also { hosts += it }
             }
@@ -252,7 +252,7 @@ class PortalWebViewAndroidTest {
             withContext(Dispatchers.Main) { original.view.reload() }
             compose.waitUntil(10_000) { compose.runOnUiThread { original.document.isClosed } }
             val replacement = withContext(Dispatchers.Main) {
-                PortalWebView.open(compose.activity, selection, sessions, EnterpriseSynchronizationService(sessions, source, scope), scope, registry) {}.also { hosts += it }
+                PortalWebView.open(compose.activity, selection, sessions, EnterpriseSynchronizationService(sessions, source, scope, net.weero.measix.pilot.service.PlatformEnterpriseService(sessions, net.weero.measix.pilot.data.enterprise.PlatformControlClient(okhttp3.OkHttpClient()))), scope, registry) {}.also { hosts += it }
             }
             withContext(Dispatchers.Main) { displayed = replacement }
             awaitPage(replacement) { it["text"]?.jsonPrimitive?.content?.contains("同步企业配置") == true }
@@ -299,7 +299,7 @@ class PortalWebViewAndroidTest {
             val source = source(root, sessions)
             source.enrollExample()
             val selection = requireNotNull(sessions.observeSelectedRealmSelection().first())
-            val sync = EnterpriseSynchronizationService(sessions, source, scope)
+            val sync = EnterpriseSynchronizationService(sessions, source, scope, net.weero.measix.pilot.service.PlatformEnterpriseService(sessions, net.weero.measix.pilot.data.enterprise.PlatformControlClient(okhttp3.OkHttpClient())))
             val original = withContext(Dispatchers.Main) {
                 PortalWebView.open(compose.activity, selection, sessions, sync, scope, registry) {}.also { hosts += it }
             }
@@ -358,11 +358,11 @@ class PortalWebViewAndroidTest {
             val source = source(root, sessions)
             val enrolled = source.enrollExample()
             val selection = requireNotNull(sessions.observeSelectedRealmSelection().first())
-            val sync = EnterpriseSynchronizationService(sessions, source, scope)
+            val sync = EnterpriseSynchronizationService(sessions, source, scope, net.weero.measix.pilot.service.PlatformEnterpriseService(sessions, net.weero.measix.pilot.data.enterprise.PlatformControlClient(okhttp3.OkHttpClient())))
             val conversations = mockk<ConversationApplicationService>()
             coEvery { conversations.stopEnterpriseWork(any()) } returns Unit
             val exit = EnterpriseExitService(sessions, sync, conversations,
-                ApplicationRecoveryGate().apply { ready() }, scope, registry, mockk(relaxed = true), mockk { io.mockk.coEvery { closeRealm(any()) } returns Unit }, mcp = mockk { io.mockk.coEvery { closeRealm(any()) } returns Unit }, speech = mockk(relaxed = true), settings = mockk(), memories = mockk(), catalogs = mockk(), files = mockk())
+                ApplicationRecoveryGate().apply { ready() }, scope, registry, mockk(relaxed = true), mockk { io.mockk.coEvery { closeRealm(any()) } returns Unit }, mcp = mockk { io.mockk.coEvery { closeRealm(any()) } returns Unit }, speech = mockk(relaxed = true), settings = mockk(), memories = mockk(), catalogs = mockk(), files = mockk(), platformLogout = {})
             lateinit var native: PortalNativeActions
             val media = PortalMediaStore(File(root, "media")).also { it.recover() }
             var displayed by mutableStateOf<PortalWebView?>(null)
@@ -420,11 +420,11 @@ class PortalWebViewAndroidTest {
             val sessions = EnterpriseSessionController(EnterpriseAppliedStore(File(root, "client")))
             val source = source(root, sessions)
             source.enrollExample()
-            val sync = EnterpriseSynchronizationService(sessions, source, scope)
+            val sync = EnterpriseSynchronizationService(sessions, source, scope, net.weero.measix.pilot.service.PlatformEnterpriseService(sessions, net.weero.measix.pilot.data.enterprise.PlatformControlClient(okhttp3.OkHttpClient())))
             val registry = PortalDocumentRegistry()
             val mediaRoot = File(root, "media")
             val media = PortalMediaStore(mediaRoot).also { it.recover() }
-            val exit = EnterpriseExitService(sessions, sync, mockk(), ApplicationRecoveryGate().apply { ready() }, scope, registry, mockk(relaxed = true), mockk { io.mockk.coEvery { closeRealm(any()) } returns Unit }, mcp = mockk { io.mockk.coEvery { closeRealm(any()) } returns Unit }, speech = mockk(relaxed = true), settings = mockk(), memories = mockk(), catalogs = mockk(), files = mockk())
+            val exit = EnterpriseExitService(sessions, sync, mockk(), ApplicationRecoveryGate().apply { ready() }, scope, registry, mockk(relaxed = true), mockk { io.mockk.coEvery { closeRealm(any()) } returns Unit }, mcp = mockk { io.mockk.coEvery { closeRealm(any()) } returns Unit }, speech = mockk(relaxed = true), settings = mockk(), memories = mockk(), catalogs = mockk(), files = mockk(), platformLogout = {})
             lateinit var native: PortalNativeActions
             var displayed by mutableStateOf<PortalWebView?>(null)
             val host = withContext(Dispatchers.Main) {

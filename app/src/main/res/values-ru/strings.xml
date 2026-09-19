@@ -1613,6 +1613,7 @@
   <string name="enterprise_switch_notice">Смена пространства сохраняет вход в организацию. Чаты и данные остаются в исходном пространстве.</string>
   <string name="enterprise_sync">Синхронизировать настройки организации</string>
   <string name="enterprise_exit">Выйти из организации</string>
+  <string name="enterprise_logout_unconfirmed">Выход на этом устройстве выполнен. Выход на сервере не подтверждён.</string>
   <string name="enterprise_exit_confirm">Выйти из %1$s? Корпоративные задачи остановятся, и приложение вернётся в личное пространство. Данные организации останутся изолированными.</string>
   <string name="enterprise_signed_out">Вход не выполнен</string>
   <string name="enterprise_pending">Подключено, ожидание настроек</string>
@@ -1626,7 +1627,6 @@
   <string name="enterprise_generation">Действующая версия конфигурации: %1$d</string>
   <string name="enterprise_last_sync">Последняя синхронизация настроек: %1$s</string>
   <string name="enterprise_current_space">Текущее пространство: %1$s</string>
-  <string name="enterprise_platform_unavailable">Подключение к реальному корпоративному серверу пока не поддерживается. Можно попробовать локальный пример организации.</string>
   <string name="enterprise_invalid_enrollment">Данные подключения недействительны, просрочены, уже использованы или не принимаются установленным источником.</string>
   <string name="enterprise_external_open">Открыть внешний сайт</string>
   <string name="enterprise_external_confirm">Открыть этот адрес в другом приложении?\n\n%1$s</string>
@@ -1792,4 +1792,6 @@
   <string name="assistant_model_default_settings">По умолчанию в настройках</string>
   <string name="assistant_model_default_assistant">По умолчанию ассистента</string>
   <string name="assistant_model_default_space">По умолчанию пространства</string>
+  <string name="enterprise_platform_confirm">Подключиться к этой корпоративной платформе?\n\n%1$s</string>
+  <string name="speech_no_voice_detected">Речь не обнаружена. Повторите попытку.</string>
 </resources>

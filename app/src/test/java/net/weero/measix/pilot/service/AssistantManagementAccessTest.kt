@@ -1,5 +1,6 @@
 package net.weero.measix.pilot.service
 
+import net.weero.measix.pilot.data.enterprise.toCandidate
 import android.content.Context
 import android.content.ContextWrapper
 import androidx.datastore.core.DataStore
@@ -56,10 +57,10 @@ class AssistantManagementAccessTest {
             val initial = JsonInstant.encodeToString(f.settings.snapshotUserDocument())
             val access = caller.realmAccess as RealmAccess.Enterprise
             f.sessions.synchronize(access, f.packet.copy(configuration = f.packet.configuration.copy(generation = 2,
-                policy = f.packet.configuration.policy.copy(allowLocalAssistants = false))))
+                policy = f.packet.configuration.policy.copy(allowLocalAssistants = false))).toCandidate())
             assertTrue(f.service.createAssistant("Denied", "d", "p", caller).isFailure)
             assertEquals(initial, JsonInstant.encodeToString(f.settings.snapshotUserDocument()))
-            f.sessions.synchronize(access, f.packet.copy(configuration = f.packet.configuration.copy(generation = 3)))
+            f.sessions.synchronize(access, f.packet.copy(configuration = f.packet.configuration.copy(generation = 3)).toCandidate())
             f.beforeCommit = { f.now = (f.sessions.state.value as EnterpriseState.Available).manifest.session!!.expiresAtMillis }
             assertTrue(f.service.createAssistant("Expired", "d", "p", caller).isFailure)
             assertEquals(initial, JsonInstant.encodeToString(f.settings.snapshotUserDocument()))

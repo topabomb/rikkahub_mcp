@@ -34,7 +34,13 @@ internal class McpProtocolClientFactory(
                 currentCoroutineContext().ensureActive()
                 userTransport(definition.config, shared)
             }
-            is McpConnectionDefinition.Managed -> {
+            is McpConnectionDefinition.ManagedPlatform -> {
+                val shared = managedHttpClient
+                currentCoroutineContext().ensureActive()
+                McpStreamableHttpTransport(url = definition.url, client = shared, managed = true,
+                    requestHeaders = definition::requestHeaders)
+            }
+            is McpConnectionDefinition.ManagedLocal -> {
                 val local = definition.binding.protocol == net.weero.measix.pilot.data.enterprise.EnterpriseRuntimeProtocol.EXAMPLE
                 val shared = if (local) localHttpClient else managedHttpClient
                 currentCoroutineContext().ensureActive()
@@ -69,7 +75,7 @@ internal class McpProtocolClientFactory(
     }
 }
 
-internal val LocalMcpRequestDefinition = io.ktor.util.AttributeKey<McpConnectionDefinition.Managed>("LocalMcpRequestDefinition")
+internal val LocalMcpRequestDefinition = io.ktor.util.AttributeKey<McpConnectionDefinition.ManagedLocal>("LocalMcpRequestDefinition")
 
 /** Shared protocol failure classification used by lifecycle and invocation execution. */
 internal object McpProtocolFailureClassifier {

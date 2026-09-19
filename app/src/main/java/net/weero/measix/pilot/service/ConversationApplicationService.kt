@@ -52,6 +52,11 @@ import net.weero.measix.pilot.service.runtime.currentTurnPresentation
 import kotlinx.serialization.json.Json
 import kotlin.uuid.Uuid
 
+internal sealed interface InitialConversationRequest {
+    data class Open(val request: ConversationOpenRequest) : InitialConversationRequest
+    data object SelectEnterpriseAssistant : InitialConversationRequest
+}
+
 /** 用户会话命令、创建、删除与 fork 的唯一 Application owner。 */
 class ConversationApplicationService internal constructor(
     private val settingsStore: SettingsStore,
@@ -222,12 +227,25 @@ class ConversationApplicationService internal constructor(
         }
     }
 
-    suspend fun initialRequest(createNew: Boolean): ConversationOpenRequest {
+    internal suspend fun initialRequest(createNew: Boolean): InitialConversationRequest {
         recoveryGate.awaitReady()
         val access = sessions.captureSelectedRealmAccess()
-        val existing = sessions.withSelectedRealmAccess(access) { settingsStore.lastConversation(access.scope) }
-        return if (!createNew && existing != null) ConversationOpenRequest.OpenExisting(existing, access)
-            else newDraftRequest(access)
+        return sessions.withSelectedRealmAccess(access) {
+            val existing = settingsStore.lastConversation(access.scope)
+            if (!createNew && existing != null) {
+                InitialConversationRequest.Open(ConversationOpenRequest.OpenExisting(existing, access))
+            } else settingsStore.withResolvedConfiguration(access.scope, sessions.state.value) { configuration ->
+                sessions.requirePublishedRealmAccess(access)
+                val selected = configuration.selections.assistantId
+                val available = selected != null && configuration.selection(ConfigurationCategory.ASSISTANT, selected).isAvailable
+                if (!available && access is RealmAccess.Enterprise) InitialConversationRequest.SelectEnterpriseAssistant
+                else {
+                    requireNotNull(selected) { "conversation_assistant_missing" }
+                    check(available) { "conversation_assistant_unavailable" }
+                    InitialConversationRequest.Open(ConversationOpenRequest.NewDraft(Uuid.random(), access, selected))
+                }
+            }
+        }
     }
 
     suspend fun rememberConversation(lease: ConversationViewLease) {

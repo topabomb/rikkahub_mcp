@@ -38,24 +38,30 @@ import me.rerere.hugeicons.stroke.Cancel01
 import net.weero.measix.pilot.R
 import net.weero.measix.pilot.data.enterprise.RealmSelection
 import net.weero.measix.pilot.service.ConfigurationQueryService
+import net.weero.measix.pilot.service.AssistantCatalogReadState
+import net.weero.measix.pilot.service.ConversationOpenRequest
 import net.weero.measix.pilot.service.ConversationApplicationService
 import net.weero.measix.pilot.service.EnterpriseStarterReadState
 import net.weero.measix.pilot.service.StarterDraftRequest
 import net.weero.measix.pilot.ui.adaptive.AdaptiveModal
+import net.weero.measix.pilot.ui.components.ai.AssistantPicker
+import net.weero.measix.pilot.ui.context.LocalSettings
 import net.weero.measix.pilot.utils.userVisibleDiagnostic
 import org.koin.compose.koinInject
 
-/** Selects enterprise-provided draft starters without creating another assistant-detail surface. */
+/** Opens a draft through the shared assistant picker or an enterprise-provided starter. */
 @Composable
 internal fun EnterpriseStarterPicker(
     selection: RealmSelection,
     onOpenDraft: (StarterDraftRequest) -> Unit,
     onDismiss: () -> Unit,
+    queries: ConfigurationQueryService = koinInject(),
+    conversations: ConversationApplicationService = koinInject(),
 ) {
-    val queries: ConfigurationQueryService = koinInject()
-    val conversations: ConversationApplicationService = koinInject()
     val state by remember(queries, selection) { queries.observeEnterpriseStarters(selection) }
         .collectAsStateWithLifecycle(null)
+    val assistantState by remember(queries) { queries.observeAssistantCatalog() }
+        .collectAsStateWithLifecycle(AssistantCatalogReadState.Loading)
     val scope = rememberCoroutineScope()
     var selected by remember { mutableStateOf<ConfigurationReference.Enterprise?>(null) }
     var opening by remember { mutableStateOf(false) }
@@ -105,6 +111,37 @@ internal fun EnterpriseStarterPicker(
             if (opening) LinearProgressIndicator(Modifier.fillMaxWidth())
             val starter = available.starters.singleOrNull { it.target.reference == selected }
             if (starter == null) {
+                val catalog = (assistantState as? AssistantCatalogReadState.Available)?.catalog
+                    ?.takeIf { it.selection == selection }
+                if (catalog != null) AssistantPicker(
+                    settings = LocalSettings.current,
+                    currentAssistantId = catalog.selected.reference,
+                    assistants = catalog.assistants,
+                    unavailableReasons = catalog.resources.associate { it.key.reference to it.access.unavailableReason },
+                    modifier = Modifier.fillMaxWidth().padding(16.dp),
+                    onManageAssistant = null,
+                    onSelectAssistant = { assistantId ->
+                        opening = true
+                        failure = null
+                        try {
+                            val request = conversations.selectAssistantRequest(selection, assistantId, createNew = true)
+                            queries.requireSelection(selection)
+                            onOpenDraft(StarterDraftRequest(request as ConversationOpenRequest.NewDraft, ""))
+                            true
+                        } catch (cancelled: CancellationException) {
+                            throw cancelled
+                        } catch (error: Exception) {
+                            android.util.Log.e("EnterpriseStarter", "Assistant selection failed", error)
+                            failure = error.userVisibleDiagnostic()
+                            false
+                        } finally {
+                            opening = false
+                        }
+                    },
+                )
+                (assistantState as? AssistantCatalogReadState.Unavailable)?.let {
+                    SelectionContainer { Text(it.detail, Modifier.padding(16.dp), color = MaterialTheme.colorScheme.error) }
+                }
                 Text(
                     stringResource(R.string.enterprise_starters_description),
                     Modifier.padding(16.dp),

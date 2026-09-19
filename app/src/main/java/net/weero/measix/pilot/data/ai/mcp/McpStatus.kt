@@ -1,5 +1,8 @@
 package net.weero.measix.pilot.data.ai.mcp
 
+import net.weero.measix.pilot.utils.userVisibleDiagnostic
+import net.weero.measix.pilot.utils.redactDiagnosticSecrets
+
 sealed class McpStatus {
     data object Idle : McpStatus()
     data object Connecting : McpStatus()
@@ -33,9 +36,8 @@ sealed class McpStatus {
     data class Error(val message: String?, val detail: String? = null) : McpStatus() {
         companion object {
             fun from(throwable: Throwable, fallbackMessage: String? = null): Error {
-                val summary = throwable.message?.takeIf { it.isNotBlank() }
-                    ?: fallbackMessage
-                return Error(message = summary, detail = throwable.stackTraceToString())
+                val summary = throwable.userVisibleDiagnostic().ifBlank { fallbackMessage.orEmpty() }
+                return Error(message = summary, detail = throwable.stackTraceToString().redactDiagnosticSecrets())
             }
         }
     }

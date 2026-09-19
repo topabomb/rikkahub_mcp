@@ -47,8 +47,8 @@ internal class McpTurnCapabilitySnapshotTest : McpRuntimeCoordinatorTestBase() {
         var currentBindings = example.runtimeBindings.associateBy { it.resourceId }
         val access = net.weero.measix.pilot.data.enterprise.RealmAccess.Enterprise(scope, "inspection")
         var currentVersion = net.weero.measix.pilot.data.enterprise.EnterpriseAppliedVersion("inspection", example.configuration.generation, "configuration", "bindings")
-        coEvery { sessions.readBindings<Any?>(access, any()) } coAnswers {
-            secondArg<(net.weero.measix.pilot.data.enterprise.EnterpriseAppliedVersion, List<net.weero.measix.pilot.data.enterprise.EnterpriseRuntimeBinding>) -> Any?>()(currentVersion, currentBindings.values.toList())
+        coEvery { sessions.readExecution<Any?>(access, any()) } coAnswers {
+            secondArg<(net.weero.measix.pilot.data.enterprise.EnterpriseAppliedVersion, net.weero.measix.pilot.data.enterprise.EnterpriseExecution) -> Any?>()(currentVersion, net.weero.measix.pilot.data.enterprise.EnterpriseExecution.Local(currentBindings.values.toList()))
         }
         val assistant = Assistant(mcpServers = setOf(SERVER_ID))
         val settings = Settings(assistants = listOf(assistant), mcpServers = listOf(personal))
@@ -363,8 +363,7 @@ internal class McpTurnCapabilitySnapshotTest : McpRuntimeCoordinatorTestBase() {
             transportOverride = { FakeTransport() },
             clientOverride = { config -> fakeClient(config).also(isolatedClients::add) },
             oauthCallbackKeepAlive = NoOpOAuthCallbackKeepAlive,
-            oauthClientOverride = oauthClient,
-        )
+            oauthClientOverride = oauthClient, platform = io.mockk.mockk())
         val authorized = McpOAuthState(
             enabled = true,
             clientId = "client",

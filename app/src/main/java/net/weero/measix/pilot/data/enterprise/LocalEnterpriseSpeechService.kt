@@ -70,7 +70,7 @@ internal class LocalEnterpriseSpeechService(
                         ?: return@withContext response(400)
                     val text = (value["input"] as? JsonPrimitive)?.takeIf { it.isString }?.content
                         ?.takeIf { it.isNotBlank() } ?: return@withContext response(400)
-                    if (value != buildOpenAiSpeechRequest(tts.modelId, tts.voice, text)) return@withContext response(400)
+                    if (value != buildOpenAiSpeechRequest(requireNotNull(tts.modelId), requireNotNull(tts.voice), text)) return@withContext response(400)
                     response(200, readAudio(), "audio/mpeg")
                 }
                 asr != null && request.url.encodedPath == "/runtime/v1/resources/${asr.id}/audio/transcriptions" -> {

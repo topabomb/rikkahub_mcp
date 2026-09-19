@@ -3,6 +3,8 @@
 // Source and local changes: docs/references/mcp-architecture.md.
 package net.weero.measix.pilot.data.ai.mcp
 
+import net.weero.measix.pilot.utils.redactDiagnosticSecrets
+
 import net.weero.measix.pilot.data.enterprise.ManagedSnapshotRequired
 
 import io.modelcontextprotocol.kotlin.sdk.client.ReconnectionOptions
@@ -83,6 +85,7 @@ internal class McpStreamableHttpTransport(
     private val reconnectionOptions: ReconnectionOptions = ReconnectionOptions(),
     private val maxInlineSseEventSize: Int = DEFAULT_MAX_INLINE_SSE_EVENT_SIZE,
     private val requestBuilder: HttpRequestBuilder.() -> Unit = {},
+    private val requestHeaders: suspend () -> List<Pair<String, String>> = { emptyList() },
 ) : McpClientTransport() {
 
     init {
@@ -133,7 +136,12 @@ internal class McpStreamableHttpTransport(
         }
 
         val jsonBody = McpJson.encodeToString(message)
+        if (managed && jsonBody.toByteArray(Charsets.UTF_8).size > 10 * 1024 * 1024) {
+            throw IllegalArgumentException("platform_request_body_limit_exceeded")
+        }
+        val currentHeaders = requestHeaders()
         client.preparePost(url) {
+            currentHeaders.forEach { (name, value) -> headers.append(name, value) }
             applyCommonHeaders(this)
             applyStandardPostHeaders(this, message)
             headers.append(HttpHeaders.Accept, "${ContentType.Application.Json}, ${ContentType.Text.EventStream}")
@@ -152,8 +160,7 @@ internal class McpStreamableHttpTransport(
 
             if (!response.status.isSuccess()) {
                 val body = response.readMcpBody()
-                val error = if (managed && response.status.value == 428) ManagedSnapshotRequired.parse(body)
-                    else StreamableHttpError(response.status.value, if (managed) "Managed MCP request rejected" else body)
+                val error = responseError(response.status.value, body)
                 _onError(error)
                 throw error
             }
@@ -259,20 +266,33 @@ internal class McpStreamableHttpTransport(
         onResumptionToken: (String) -> Unit,
         onRetry: (Duration) -> Unit,
         onConnected: () -> Unit,
-    ): SseStreamResult? = client.prepareGet(url) {
-        applyCommonHeaders(this)
-        headers.append(HttpHeaders.Accept, "${ContentType.Application.Json}, ${ContentType.Text.EventStream}")
-        lastEventId?.let { headers.append(MCP_RESUMPTION_TOKEN_HEADER, it) }
-        requestBuilder()
-    }.execute { response ->
-        if (managed && response.status.value == 428) throw ManagedSnapshotRequired.parse(response.readMcpBody())
-        if (response.status == HttpStatusCode.NotFound || response.status == HttpStatusCode.MethodNotAllowed ||
-            response.contentType()?.match(ContentType.Application.Json) == true) return@execute null
-        if (!response.status.isSuccess() || response.contentType()?.match(ContentType.Text.EventStream) != true) {
-            throw StreamableHttpError(response.status.value, "MCP notification stream unavailable")
+    ): SseStreamResult? {
+        val currentHeaders = requestHeaders()
+        return client.prepareGet(url) {
+            currentHeaders.forEach { (name, value) -> headers.append(name, value) }
+            applyCommonHeaders(this)
+            headers.append(HttpHeaders.Accept, "${ContentType.Application.Json}, ${ContentType.Text.EventStream}")
+            lastEventId?.let { headers.append(MCP_RESUMPTION_TOKEN_HEADER, it) }
+            requestBuilder()
+        }.execute { response ->
+            if (response.status == HttpStatusCode.NotFound || response.status == HttpStatusCode.MethodNotAllowed) return@execute null
+            if (!response.status.isSuccess()) throw responseError(response.status.value, response.readMcpBody())
+            if (response.contentType()?.match(ContentType.Application.Json) == true) return@execute null
+            if (response.contentType()?.match(ContentType.Text.EventStream) != true) {
+                throw StreamableHttpError(response.status.value, "MCP notification stream has unexpected Content-Type: ${response.contentType()}")
+            }
+            onConnected()
+            readSseResponse(response, replayMessageId, onResumptionToken, onRetry)
         }
-        onConnected()
-        readSseResponse(response, replayMessageId, onResumptionToken, onRetry)
+    }
+
+    private fun responseError(status: Int, body: String): Throwable {
+        if (managed && status == 428) {
+            try { return ManagedSnapshotRequired.parse(body) }
+            catch (_: IllegalArgumentException) { }
+            catch (_: IllegalStateException) { }
+        }
+        return StreamableHttpError(status, body.redactDiagnosticSecrets())
     }
 
     private fun getNextReconnectionDelay(attempt: Int, serverRetryDelay: Duration?): Duration {

@@ -1613,6 +1613,7 @@
   <string name="enterprise_switch_notice">切换空间会保留企业登录。聊天和数据仍保存在原空间。</string>
   <string name="enterprise_sync">同步企业配置</string>
   <string name="enterprise_exit">退出企业</string>
+  <string name="enterprise_logout_unconfirmed">已在此设备退出，尚无法确认服务器端注销。</string>
   <string name="enterprise_exit_confirm">退出 %1$s？企业任务将停止，应用将返回个人空间。已有企业数据继续保持隔离。</string>
   <string name="enterprise_signed_out">未登录</string>
   <string name="enterprise_pending">已接入，待配置</string>
@@ -1626,7 +1627,6 @@
   <string name="enterprise_generation">当前生效版本：%1$d</string>
   <string name="enterprise_last_sync">最近配置同步：%1$s</string>
   <string name="enterprise_current_space">当前空间：%1$s</string>
-  <string name="enterprise_platform_unavailable">暂不支持接入真实企业服务器，可以先体验本机示例企业。</string>
   <string name="enterprise_invalid_enrollment">接入资料无效、已过期、已使用，或不被已安装的来源接受。</string>
   <string name="enterprise_external_open">打开外部网站</string>
   <string name="enterprise_external_confirm">在其他应用中打开此地址？\n\n%1$s</string>
@@ -1792,4 +1792,6 @@
   <string name="assistant_model_default_settings">设置默认</string>
   <string name="assistant_model_default_assistant">助手默认</string>
   <string name="assistant_model_default_space">空间默认</string>
+  <string name="enterprise_platform_confirm">是否接入此企业平台？\n\n%1$s</string>
+  <string name="speech_no_voice_detected">未检测到语音，请重试。</string>
 </resources>

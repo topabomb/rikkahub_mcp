@@ -78,7 +78,7 @@ UI 不持有 DAO、ConversationRepository、Runtime Registry、Artifact/Generate
 | Workspace 命令、只读投影、PTY | `WorkspaceApplicationService` / `WorkspaceQueryService` / `WorkspaceTerminalRuntime`；模型与 UI mutation 共用 Workspace command gate |
 | 备份恢复请求与 archive staging | `BackupRestoreApplicationService` / `BackupArchiveService`；`PendingBackupRestore` 执行可恢复发布 |
 | 应用启动恢复与全局写门禁 | `ApplicationRecoveryCoordinator` / `ApplicationRecoveryGate` |
-| 企业退出、自动到期与内置示例数据清除 | `EnterpriseExitService`；Session manifest 仍是唯一持久状态，运行取消和终态仍经原会话 owner；显式清除复用各数据 owner 的范围命令，文件修订清完才完成退出 |
+| 企业退出、自动到期与内置示例数据清除 | `EnterpriseExitService`；Session manifest 仍是唯一持久状态，运行取消和终态仍经原会话 owner；平台用户退出复用 `PlatformEnterpriseService` 的刷新串行锁取得当前凭据并向 Core 注销，网络失败不阻断本机退出；显式清除复用各数据 owner 的范围命令，文件修订清完才完成退出 |
 | 生成期后台保活 | `ChatGenerationForegroundService` / `GenerationForegroundLifetime`；只消费活动投影，不拥有运行事实 |
 
 同一 durable 事实只有一个 owner 和一个写协议。禁止旁路 DAO/Repository 写入、整聚合回写、服务定位器、兼容转发和第二状态源。
@@ -143,7 +143,7 @@ pending backup restore
 
 Room/DataStore/文件协议按长期数据保全演进。结构变化必须提供显式 migration、fresh schema 同构与历史数据验证；索引随实体和 migration 维护，不由业务请求临时创建。备份先在 staging 升级和验证，成功后才发布。`BackupDataGraph` 只构建分离的个人备份或恢复 publication，复用生产 Room schema 并重建派生索引；它不成为运行时数据库或文件 owner。冷恢复由 `PendingBackupRestore` 合并最新企业图后执行既有 swap/rollback，禁止用个人包整体覆盖混合域 live 数据库。
 
-兼容只存在于明确的持久化迁移和外部协议解析边界。架构迁移同次删除旧 facade、fallback、deprecated 转发、过渡命名与无调用协议，不能以双路径掩盖不一致。未来配置或工具来源应从既有 TurnContextFactory/TurnToolSetFactory 接入，有真实消费者后再扩展合同；不预埋无消费者的 schema。本地企业交付范围与分层验收见 [Android 企业集成计划](../dev/android-enterprise-integration-plan.md)，后续真实平台接入见 [生产接入规划](../dev/android-enterprise-production-integration-roadmap.md)。
+兼容只存在于明确的持久化迁移和外部协议解析边界。架构迁移同次删除旧 facade、fallback、deprecated 转发、过渡命名与无调用协议，不能以双路径掩盖不一致。未来配置或工具来源应从既有 TurnContextFactory/TurnToolSetFactory 接入，有真实消费者后再扩展合同；不预埋无消费者的 schema。本地企业交付范围与分层验收见 [Android 企业集成计划](../dev/android-enterprise-integration-plan.md)；当前 Core 平台接入与尚待验收的资源见 [真实接入执行方案](../dev/android-core-enterprise-integration-plan.md)。
 
 验证分层、失败路径、设备要求及门禁命令统一见 [测试策略](testing-strategy.md)。版本号与 changelog 仅随明确的发布需求更新。
 

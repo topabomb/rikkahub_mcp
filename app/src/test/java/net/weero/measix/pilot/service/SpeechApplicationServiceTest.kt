@@ -1,5 +1,6 @@
 package net.weero.measix.pilot.service
 
+import net.weero.measix.pilot.data.enterprise.toCandidate
 import android.content.Context
 import android.content.ContextWrapper
 import androidx.datastore.preferences.core.PreferenceDataStoreFactory
@@ -34,6 +35,30 @@ class SpeechApplicationServiceTest {
     @Before fun installMain() { Dispatchers.setMain(main) }
     @After fun resetMain() { Dispatchers.resetMain(); main.close() }
 
+    @Test fun `enterprise system speech works with local TTS forbidden and owns no network binding`() = runBlocking {
+        environment { e ->
+            val id = requireNotNull(e.packet.configuration.defaults.ttsId)
+            val resource = EnterpriseTtsResource(id, "Device engine", true, EnterpriseTtsProtocol.SYSTEM,
+                speechRate = 1.25, pitch = 0.9)
+            val configuration = e.packet.configuration.copy(generation = e.packet.configuration.generation + 1,
+                policy = e.packet.configuration.policy.copy(allowLocalTts = false),
+                tts = e.packet.configuration.tts.map { if (it.id == id) resource else it })
+            val access = e.sessions.captureSelectedRealmAccess() as RealmAccess.Enterprise
+            e.sessions.synchronize(access, e.packet.copy(configuration = configuration,
+                runtimeBindings = e.packet.runtimeBindings.filterNot { it.resourceId == id }).toCandidate())
+            every { e.manager.generateSpeech(any(), any()) } returns kotlinx.coroutines.flow.flowOf(
+                me.rerere.tts.model.AudioChunk(byteArrayOf(0, 1), me.rerere.tts.model.AudioFormat.WAV, isLast = true))
+            e.service.enqueue(e.capture(), "system", "Device voice", false, null)
+            val response = requireNotNull(e.playbackSession).synthesize(TtsChunk(index = 0, text = "Device voice"))
+            assertArrayEquals(byteArrayOf(0, 1), response.audioData)
+            verify { e.manager.generateSpeech(match {
+                it is me.rerere.tts.provider.TTSProviderSetting.SystemTTS && it.speechRate == 1.25f && it.pitch == 0.9f
+            }, any()) }
+            coVerify(exactly = 0) { e.transport.synthesize(any(), any(), any()) }
+            e.exit()
+        }
+    }
+
     @Test fun `capture cannot survive leaving and reentering the same enterprise`() = runBlocking {
         environment { e ->
             val capture = e.capture()
@@ -51,7 +76,7 @@ class SpeechApplicationServiceTest {
         environment { e ->
             val capture = e.capture()
             e.sessions.synchronize(capture.selection.access as RealmAccess.Enterprise,
-                e.packet.copy(runtimeBindings = e.packet.runtimeBindings.map { if (it.resourceId == e.packet.configuration.defaults.ttsId) it.copy(protocol = EnterpriseRuntimeProtocol.OPENAI_TTS, endpoint = "https://speech.test/v1/audio/speech", credential = "changed") else it }))
+                e.packet.copy(runtimeBindings = e.packet.runtimeBindings.map { if (it.resourceId == e.packet.configuration.defaults.ttsId) it.copy(protocol = EnterpriseRuntimeProtocol.OPENAI_TTS, endpoint = "https://speech.test/v1/audio/speech", credential = "changed") else it }).toCandidate())
             // A private publication always has its own revision, independently of generation.
             rejected { e.service.enqueue(capture, "original", "old reply", false, null) }
             verify(exactly = 0) { e.player.speak(any(), any(), any(), any()) }
@@ -99,7 +124,7 @@ class SpeechApplicationServiceTest {
             ConfigurationApplicationService(e.settings, e.sessions, e.gate, mockk(), mockk(), mockk()).selectResource(
                 RealmSelection(access, e.sessions.selectionRevision.value), ResourceSelectionSlot.TTS, DEFAULT_SYSTEM_TTS_ID)
             e.sessions.synchronize(access as RealmAccess.Enterprise, e.packet.copy(configuration = e.packet.configuration.copy(
-                generation = 2, policy = e.packet.configuration.policy.copy(allowLocalTts = false))))
+                generation = 2, policy = e.packet.configuration.policy.copy(allowLocalTts = false))).toCandidate())
             rejected { e.service.enqueue(e.capture(), "blocked", "system voice", false, null) }
             assertTrue(e.queries.read(RealmAccess.Personal).access(ConfigurationCategory.TTS, DEFAULT_SYSTEM_TTS_ID).canExecute)
             assertFalse(e.queries.read(access).access(ConfigurationCategory.TTS, DEFAULT_SYSTEM_TTS_ID).canExecute)
@@ -201,7 +226,8 @@ class SpeechApplicationServiceTest {
         val synchronized = CompletableDeferred<Unit>()
         val sync = mockk<EnterpriseSynchronizationService> { coEvery { synchronize(any()) } coAnswers { synchronized.complete(Unit); sessions.state.value as EnterpriseState.Available } }
         val transport = mockk<EnterpriseSpeechTransport>()
-        val service = SpeechApplicationService(context, settings, sessions, queries, sync, mockk(relaxed = true), transport, mockk(), scope, player)
+        val manager = mockk<me.rerere.tts.provider.TTSManager>(relaxed = true)
+        val service = SpeechApplicationService(context, settings, sessions, queries, sync, manager, transport, mockk(), scope, player, mockk())
         suspend fun capture(stopParent: suspend () -> Unit = {}): SpeechCapture {
             val access = sessions.captureSelectedRealmAccess()
             val configuration = queries.readExecution(access)

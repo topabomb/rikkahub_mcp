@@ -40,7 +40,7 @@ class TtsPlaybackCleanup internal constructor(private val jobs: List<Job>) {
 }
 
 /** One shared chunking, prefetch and playback pipeline; callers own resource admission and lease release. */
-class TtsController(context: Context) {
+class TtsController(context: Context, private val describeFailure: (Throwable) -> String = { "${it.javaClass.simpleName}: ${it.message}" }) {
     // 协程作用域
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
 
@@ -276,7 +276,7 @@ class TtsController(context: Context) {
                         if (e is CancellationException) throw e
                         Log.e(TAG, "Synthesis error", e)
                         isPreparingChunk = false
-                        _error.update { e.message ?: "TTS synthesis error" }
+                        _error.update { describeFailure(e) }
                         continue
                     }
 
@@ -297,7 +297,7 @@ class TtsController(context: Context) {
                     } catch (e: Exception) {
                         if (e is CancellationException) throw e
                         Log.e(TAG, "Playback error", e)
-                        _error.update { e.message ?: "Audio playback error" }
+                        _error.update { describeFailure(e) }
                     }
 
                     if (playbackQueue.hasPending()) delay(chunkDelayMs)

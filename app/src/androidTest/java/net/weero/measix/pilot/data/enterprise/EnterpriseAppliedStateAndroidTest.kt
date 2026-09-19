@@ -44,8 +44,8 @@ class EnterpriseAppliedStateAndroidTest {
         assertEquals(first.state.value, reopened.recover())
         assertEquals(ConfigurationScope.Personal, (reopened.state.value as EnterpriseState.Available).manifest.selectedScope)
         reopened.selectEnterpriseFixture()
-        val lease = reopened.captureBindings(reopened.captureRealmAccess(example.identity.scope) as RealmAccess.Enterprise)
-        assertEquals("device-test-secret", lease.binding("mdl_chat").credential)
+        val lease = reopened.captureExecution(reopened.captureRealmAccess(example.identity.scope) as RealmAccess.Enterprise)
+        assertEquals("device-test-secret", lease.localBinding("mdl_chat").credential)
         val token = reopened.beginExit(requireNotNull(reopened.captureExitRequest()))
         lease.release()
         reopened.finishExit(token)
@@ -69,7 +69,7 @@ class EnterpriseAppliedStateAndroidTest {
         breakRename = true
         try {
             controller.synchronize(RealmAccess.Enterprise(example.identity.scope, first.manifest.session!!.id),
-                example.copy(configuration = example.configuration.copy(generation = 2)))
+                example.copy(configuration = example.configuration.copy(generation = 2)).toCandidate())
             fail("Broken rename must reject publication")
         } catch (_: EnterpriseStorageException) { }
         assertEquals(original, controller.state.value)
@@ -81,16 +81,16 @@ class EnterpriseAppliedStateAndroidTest {
         val store = EnterpriseAppliedStore(root)
         val controller = EnterpriseSessionController(store) { 1000L }
         val original = controller.enrollLocal(example.identity, { example.identity }, { example })
-        val bindings = store.bindings(original.manifest)
+        val bindings = store.execution(original.manifest)
         val reopenedStore = EnterpriseAppliedStore(root)
         val reopened = EnterpriseSessionController(reopenedStore) { 1000L }
         val restored = reopened.recover() as EnterpriseState.Available
         assertEquals(original, restored)
         assertEquals(ENTERPRISE_MANIFEST_SCHEMA_VERSION, restored.manifest.schemaVersion)
-        assertEquals(bindings, reopenedStore.bindings(restored.manifest))
+        assertEquals(bindings, reopenedStore.execution(restored.manifest))
         val access = reopened.captureSelectedRealmAccess() as RealmAccess.Enterprise
         val token = reopened.beginInvalidation(access, EnterpriseExitReason.AUTHORIZATION_REVOKED)
-        File(root, "revisions/${requireNotNull(restored.manifest.applied).revision}/bindings.json").writeText("corrupt")
+        File(root, "revisions/${requireNotNull(restored.manifest.applied).revision}/execution.json").writeText("corrupt")
         val interrupted = EnterpriseSessionController(EnterpriseAppliedStore(root)) { 1000L }
         val closing = interrupted.recover() as EnterpriseState.Available
         assertEquals(EnterpriseSessionPhase.CLOSING, closing.manifest.phase)
@@ -107,7 +107,7 @@ class EnterpriseAppliedStateAndroidTest {
         val controller = EnterpriseSessionController(EnterpriseAppliedStore(root))
         controller.enrollLocal(example.identity, { example.identity }, { example })
         val version = (controller.state.value as EnterpriseState.Available).manifest.applied!!
-        File(root, "revisions/${version.revision}/bindings.json").writeText("corrupt")
+        File(root, "revisions/${version.revision}/execution.json").writeText("corrupt")
         val reopened = EnterpriseSessionController(EnterpriseAppliedStore(root))
         assertTrue(reopened.recover() is EnterpriseState.Failed)
         reopened.finishExit(reopened.beginExit(requireNotNull(reopened.captureExitRequest())))

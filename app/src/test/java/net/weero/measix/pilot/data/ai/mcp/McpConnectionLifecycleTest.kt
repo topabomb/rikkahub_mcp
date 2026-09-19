@@ -315,8 +315,7 @@ internal class McpConnectionLifecycleTest : McpRuntimeCoordinatorTestBase() {
             transportOverride = { FakeTransport().also(createdTransports::add) },
             clientOverride = { config -> fakeClient(config) },
             oauthCallbackKeepAlive = NoOpOAuthCallbackKeepAlive,
-            oauthClientOverride = oauthClient,
-        )
+            oauthClientOverride = oauthClient, platform = io.mockk.mockk())
         emit(listOf(serverConfig(url = "https://a.example/mcp", oauth = expiredOauth)))
         val refreshJob = launch { gatedManager.refreshAllRegisteredServers() }
         advanceUntilIdle()
@@ -363,8 +362,7 @@ internal class McpConnectionLifecycleTest : McpRuntimeCoordinatorTestBase() {
             transportOverride = { FakeTransport().also(createdTransports::add) },
             clientOverride = { config -> fakeClient(config) },
             oauthCallbackKeepAlive = NoOpOAuthCallbackKeepAlive,
-            oauthClientOverride = oauthClient,
-        )
+            oauthClientOverride = oauthClient, platform = io.mockk.mockk())
         val job = launch { gatedManager.refreshAllRegisteredServers() }
         runCurrent()
         job.cancel()

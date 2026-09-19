@@ -91,7 +91,6 @@ internal object EnterprisePackageCodec {
     }
 
     fun validateIdentity(identity: EnterpriseIdentity) {
-        check(identity.authority.isLocal, "local_package_requires_local_authority")
         listOf(identity.authority.sourceNamespace, identity.authority.deploymentId, identity.userId).forEach {
             check(it.codePointCount(0, it.length) in 1..128, "invalid_enterprise_identity_length")
         }
@@ -100,11 +99,33 @@ internal object EnterprisePackageCodec {
         try { identity.scope } catch (_: IllegalArgumentException) { fail("invalid_enterprise_user_id") }
     }
 
+    fun validateLocalIdentity(identity: EnterpriseIdentity) {
+        check(identity.authority.isLocal, "local_package_requires_local_authority")
+        validateIdentity(identity)
+    }
+
     fun validate(value: EnterprisePackage) {
         check(value.formatVersion == FORMAT_VERSION, "unsupported_enterprise_package_version")
         val identity = value.identity
-        validateIdentity(identity)
+        validateLocalIdentity(identity)
         val config = value.configuration
+        check(config.tts.all { it.protocol in setOf(EnterpriseTtsProtocol.OPENAI, EnterpriseTtsProtocol.SYSTEM) },
+            "unsupported_local_tts_protocol")
+        check(config.asr.all { it.protocol == EnterpriseAsrProtocol.OPENAI_HTTP }, "unsupported_local_asr_protocol")
+        validateConfiguration(identity, config)
+        check(value.runtimeBindings.map { it.resourceId }.distinct().size == value.runtimeBindings.size, "duplicate_runtime_binding")
+        val resources = config.runtimeResources()
+        check(resources.keys == value.runtimeBindings.map { it.resourceId }.toSet(), "runtime_binding_set_mismatch")
+        value.runtimeBindings.forEach { binding -> validateBinding(binding, resources.getValue(binding.resourceId), config.models.firstOrNull { it.id == binding.resourceId }?.type) }
+
+        value.feedSeed?.let { seed ->
+            try { EnterpriseFeed.initialize(seed) }
+            catch (_: EnterpriseFeedException) { fail("invalid_enterprise_feed") }
+        }
+    }
+
+    fun validateConfiguration(identity: EnterpriseIdentity, config: EnterpriseConfiguration) {
+        validateIdentity(identity)
         check(config.generation > 0, "invalid_enterprise_generation")
         check(config.gateways.size <= 1, "multiple_enterprise_gateways")
         check(config.mcpServers.all { it.id.startsWith("mcp_") }, "invalid_enterprise_mcp_id")
@@ -113,7 +134,8 @@ internal object EnterprisePackageCodec {
             try { it.surface }
             catch (_: IllegalArgumentException) { fail("invalid_gateway_surface") }
         }
-        val ids = config.runtimeResources().keys.toList() + config.assistants.map { it.id } +
+        val ids = config.models.map { it.id } + config.tts.map { it.id } + config.asr.map { it.id } +
+            config.mcpServers.map { it.id } + config.gateways.map { it.id } + config.assistants.map { it.id } +
             config.memorySeeds.map { it.id } + config.starters.map { it.id }
         val expectedCount = config.models.size + config.tts.size + config.asr.size + config.mcpServers.size +
             config.gateways.size + config.assistants.size + config.memorySeeds.size + config.starters.size
@@ -121,11 +143,6 @@ internal object EnterprisePackageCodec {
         ids.forEach { id ->
             try { identity.reference(id) } catch (_: IllegalArgumentException) { fail("invalid_enterprise_resource_id") }
         }
-        check(value.runtimeBindings.map { it.resourceId }.distinct().size == value.runtimeBindings.size, "duplicate_runtime_binding")
-        val resources = config.runtimeResources()
-        check(resources.keys == value.runtimeBindings.map { it.resourceId }.toSet(), "runtime_binding_set_mismatch")
-        value.runtimeBindings.forEach { binding -> validateBinding(binding, resources.getValue(binding.resourceId), config.models.firstOrNull { it.id == binding.resourceId }?.type) }
-
         val models = config.models.associateBy { it.id }
         val assistants = config.assistants.associateBy { it.id }
         val mcp = config.mcpServers.associateBy { it.id }
@@ -134,14 +151,8 @@ internal object EnterprisePackageCodec {
             check(it.name.isNotBlank() && it.modelId.isNotBlank(), "invalid_enterprise_model")
             check(it.inputModalities.isNotEmpty() && it.outputModalities.isNotEmpty(), "invalid_model_modalities")
         }
-        config.tts.forEach {
-            check(it.id.startsWith("tts_") && it.name.isNotBlank() && it.modelId.isNotBlank() && it.voice.isNotBlank(),
-                "invalid_enterprise_tts_resource")
-        }
-        config.asr.forEach {
-            check(it.id.startsWith("asr_") && it.name.isNotBlank() && it.modelId.isNotBlank() &&
-                (it.language == null || it.language.isNotBlank()), "invalid_enterprise_asr_resource")
-        }
+        config.tts.forEach(EnterpriseTtsResource::validate)
+        config.asr.forEach(EnterpriseAsrResource::validate)
         (config.mcpServers.map { it.name } + config.gateways.map { it.name }).forEach {
             check(it.isNotBlank(), "invalid_enterprise_tool_resource")
         }
@@ -160,7 +171,7 @@ internal object EnterprisePackageCodec {
         }
         config.starters.forEach {
             check(assistants[it.assistantId]?.let { assistant -> !it.enabled || assistant.enabled } == true &&
-                it.title.isNotBlank() && it.prompt.isNotBlank() && it.description?.isBlank() != true, "invalid_enterprise_starter")
+                it.title.isNotBlank() && it.prompt.isNotBlank(), "invalid_enterprise_starter")
         }
         val defaults = config.defaults
         defaults.assistantId?.let { check(assistants[it]?.enabled == true, "invalid_default_assistant") }
@@ -173,10 +184,6 @@ internal object EnterprisePackageCodec {
         }
         defaults.ttsId?.let { check(config.tts.any { resource -> resource.id == it && resource.enabled }, "invalid_default_tts") }
         defaults.asrId?.let { check(config.asr.any { resource -> resource.id == it && resource.enabled }, "invalid_default_asr") }
-        value.feedSeed?.let { seed ->
-            try { EnterpriseFeed.initialize(seed) }
-            catch (_: EnterpriseFeedException) { fail("invalid_enterprise_feed") }
-        }
     }
 
     private fun validateBinding(binding: EnterpriseRuntimeBinding, kind: EnterpriseResourceKind, modelType: ModelType?) {

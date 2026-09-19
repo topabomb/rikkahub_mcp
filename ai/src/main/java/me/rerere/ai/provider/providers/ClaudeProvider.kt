@@ -1,6 +1,7 @@
 @file:Suppress("UNNECESSARY_SAFE_CALL")
 package me.rerere.ai.provider.providers
 
+import me.rerere.ai.provider.forCredentials
 import me.rerere.common.configuration.ConfigurationReference
 import me.rerere.ai.provider.ProviderResponseException
 import me.rerere.ai.util.ProviderTerminalStatus
@@ -216,9 +217,7 @@ class ClaudeProvider(private val client: OkHttpClient, context: Context? = null)
             .configureSessionHeader(params.providerSessionId)
             .build()
 
-        Log.i(TAG, "generateText: ${json.encodeToString(requestBody)}")
-
-        val bodyStr = client.newCall(request).readResponse { response ->
+        val bodyStr = client.forCredentials(params.credentials).newCall(request).readResponse { response ->
             if (!response.isSuccessful) {
                 throw Exception("Failed to get response: ${response.code} ${response.body?.string()}")
             }
@@ -267,12 +266,6 @@ class ClaudeProvider(private val client: OkHttpClient, context: Context? = null)
             .configureSessionHeader(params.providerSessionId)
             .build()
 
-        Log.i(TAG, "streamText: ${json.encodeToString(requestBody)}")
-
-        requestBody["messages"]!!.jsonArray.forEach {
-            Log.i(TAG, "streamText: $it")
-        }
-
         val streamState = ClaudeStreamState()
         val listener = object : EventSourceListener() {
             override fun onEvent(
@@ -281,7 +274,6 @@ class ClaudeProvider(private val client: OkHttpClient, context: Context? = null)
                 type: String?,
                 data: String
             ) {
-                Log.d(TAG, "onEvent: type=$type, data=$data")
                 if (data == "[DONE]") {
                     return
                 }
@@ -290,7 +282,7 @@ class ClaudeProvider(private val client: OkHttpClient, context: Context? = null)
                     val dataJson = json.parseToJsonElement(data).jsonObject
                     val eventType = dataJson["type"]?.jsonPrimitive?.contentOrNull ?: type
                     val chunk = parseStreamEvent(dataJson, streamState)
-                    trySend(chunk).onFailure { e -> Log.w(TAG, "onEvent: chunk dropped (${e?.message})") }
+                    trySend(chunk).onFailure { Log.w(TAG, "onEvent: chunk dropped") }
                     when (eventType) {
                         "message_stop" -> close(streamState.completionError())
                         "error" -> close(dataJson["error"]?.parseErrorDetail()
@@ -304,19 +296,16 @@ class ClaudeProvider(private val client: OkHttpClient, context: Context? = null)
             override fun onFailure(eventSource: EventSource, t: Throwable?, response: Response?) {
                 var exception = t
 
-                t?.printStackTrace()
-                Log.e(TAG, "onFailure: ${t?.javaClass?.name} ${t?.message} / $response")
+                Log.e(TAG, "onFailure: ${t?.javaClass?.name} (http=${response?.code})")
 
                 val bodyRaw = response?.body?.stringSafe()
                 try {
                     if (!bodyRaw.isNullOrBlank()) {
                         val bodyElement = Json.parseToJsonElement(bodyRaw)
-                        Log.i(TAG, "Error response: $bodyElement")
                         exception = bodyElement.parseErrorDetail()
                     }
-                } catch (e: Throwable) {
-                    Log.w(TAG, "onFailure: failed to parse from $bodyRaw")
-                    e.printStackTrace()
+                } catch (_: Throwable) {
+                    Log.w(TAG, "onFailure: failed to parse error response")
                 } finally {
                     close(exception ?: streamState.completionError() ?: HttpException("Claude stream transport failed"))
                 }
@@ -328,7 +317,7 @@ class ClaudeProvider(private val client: OkHttpClient, context: Context? = null)
         }
 
         ensureActive()
-        val eventSource = EventSources.createFactory(client)
+        val eventSource = EventSources.createFactory(client.forCredentials(params.credentials))
             .newEventSource(request, listener)
 
         awaitClose {

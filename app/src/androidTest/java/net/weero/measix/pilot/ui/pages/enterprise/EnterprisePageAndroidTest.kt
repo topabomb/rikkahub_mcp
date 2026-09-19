@@ -6,10 +6,12 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.hasText
+import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performScrollTo
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.ViewModelStore
@@ -65,6 +67,38 @@ class EnterprisePageAndroidTest {
     @After
     fun clearViewModels() {
         compose.runOnUiThread { viewModels.clear() }
+    }
+
+    @Test
+    fun platformPasteShowsOriginBeforeConnectingAndCancelDoesNotEnroll() {
+        val fixture = Fixture(overview(access = null))
+        val origin = "http://192.168.1.20:8080"
+        val confirmation = net.weero.measix.pilot.service.EnterpriseJoinConfirmation(kotlin.uuid.Uuid.random(), origin)
+        val raw = """{"formatVersion":1,"kind":"PLATFORM_ENROLLMENT","platformUrl":"$origin","code":"test-code","expiresAt":"2030-01-01T00:00:00Z"}"""
+        coEvery { fixture.service.join(raw) } returns confirmation
+        coEvery { fixture.service.dismissJoin(confirmation) } just Runs
+        coEvery { fixture.service.confirmJoin(confirmation) } just Runs
+        fixture.show()
+        click(R.string.enterprise_join_paste)
+        compose.onNode(hasSetTextAction()).performTextInput(raw)
+        compose.onNode(hasText(text(R.string.enterprise_join_submit)) and hasClickAction()).performClick()
+        compose.onNodeWithText(text(R.string.enterprise_platform_confirm, origin)).assertIsDisplayed()
+        coVerify(exactly = 0) { fixture.service.confirmJoin(any()) }
+        val instrumentation = androidx.test.platform.app.InstrumentationRegistry.getInstrumentation()
+        val screenshot = requireNotNull(instrumentation.uiAutomation.takeScreenshot())
+        java.io.File(compose.activity.cacheDir, "enterprise-platform-confirm.png").outputStream().use {
+            screenshot.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it)
+        }
+        screenshot.recycle()
+        compose.onNode(hasText(text(R.string.cancel)) and hasClickAction()).performClick()
+        compose.waitUntil(5_000) { fixture.vm.joinConfirmation.value == null }
+        coVerify(exactly = 1) { fixture.service.dismissJoin(confirmation) }
+        coVerify(exactly = 0) { fixture.service.confirmJoin(any()) }
+        compose.runOnUiThread { fixture.vm.join(raw) }
+        compose.waitUntil(5_000) { fixture.vm.joinConfirmation.value != null }
+        compose.onNode(hasText(text(R.string.confirm)) and hasClickAction()).performClick()
+        compose.waitUntil(5_000) { !fixture.vm.busy.value }
+        coVerify(exactly = 1) { fixture.service.confirmJoin(confirmation) }
     }
 
     @Test
@@ -148,6 +182,7 @@ class EnterprisePageAndroidTest {
         coEvery { fixture.service.exit(any()) } coAnswers {
             exitStarted.complete(Unit)
             releaseExit.await()
+            net.weero.measix.pilot.service.EnterpriseExitResult()
         }
         try {
             fixture.show()

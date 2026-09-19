@@ -40,7 +40,7 @@ internal class EnterpriseVM(private val service: EnterpriseApplicationService) :
     )
     private val _error = MutableStateFlow<Failure?>(null)
     val error = combine(_error, overview) { value, state ->
-        value?.takeIf { it.selection == state?.selection }
+        value?.takeIf { it.selection == null || it.selection == state?.selection }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
     private data class Notice(val resource: Int, val selection: RealmSelection? = null)
     private val _notice = MutableStateFlow<Notice?>(null)
@@ -62,6 +62,8 @@ internal class EnterpriseVM(private val service: EnterpriseApplicationService) :
     val exampleCode = _exampleCode.asStateFlow()
     private val _portal = MutableStateFlow<PortalPresentation?>(null)
     val portal = _portal.asStateFlow()
+    private val _joinConfirmation = MutableStateFlow<net.weero.measix.pilot.service.EnterpriseJoinConfirmation?>(null)
+    val joinConfirmation = _joinConfirmation.asStateFlow()
 
     fun joinExample() = command(enrollment = true) { service.joinExample() }
     fun joinPendingExample() = command(enrollment = true) { service.joinPendingExample() }
@@ -75,7 +77,19 @@ internal class EnterpriseVM(private val service: EnterpriseApplicationService) :
             }
         }
     }
-    fun join(text: String) = command(enrollment = true) { service.join(text) }
+    fun join(text: String) = command(enrollment = true) { _joinConfirmation.value = service.join(text) }
+    fun dismissJoin() {
+        val original = _joinConfirmation.value ?: return
+        _joinConfirmation.value = null
+        viewModelScope.launch { service.dismissJoin(original) }
+    }
+    fun confirmJoin() {
+        val original = _joinConfirmation.value ?: return
+        command {
+            _joinConfirmation.value = null
+            service.confirmJoin(original)
+        }
+    }
     fun showExampleCode() = command { _exampleCode.value = service.exampleEnrollmentText() }
     fun dismissExampleCode() { _exampleCode.value = null }
     fun scanFailed() { _error.value = Failure(R.string.enterprise_scan_failure, overview.value?.selection) }
@@ -184,8 +198,14 @@ internal class EnterpriseVM(private val service: EnterpriseApplicationService) :
         val original = _exitRequest.value ?: return
         _exitRequest.value = null
         command {
-            if (original.clearExampleData) service.clearExampleData(original.request) else service.exit(original.request)
+            val result = if (original.clearExampleData) {
+                service.clearExampleData(original.request)
+                null
+            } else service.exit(original.request)
             onExited()
+            result?.maintenanceFailure?.let {
+                _error.value = Failure(R.string.enterprise_logout_unconfirmed, null, detail = it)
+            }
         }
     }
     fun retryExit() { overview.value?.exitFailure?.let { failure -> command { service.retryExit(failure) } } }
@@ -221,7 +241,6 @@ internal class EnterpriseVM(private val service: EnterpriseApplicationService) :
             catch (error: Exception) {
                 android.util.Log.e("EnterpriseCommand", "Enterprise command failed", error)
                 if (isCurrent()) _error.value = Failure(when {
-                    error is EnterpriseConfigurationException && error.reason == "platform_enrollment_not_supported" -> R.string.enterprise_platform_unavailable
                     error is EnterpriseConfigurationException && error.reason == "exit_current_enterprise_first" -> R.string.enterprise_import_exit_first
                     error is EnterpriseConfigurationException && error.reason == "enterprise_selection_revoked" -> R.string.enterprise_selection_changed
                     error is EnterpriseConfigurationException && error.reason == "local_enterprise_configuration_changed" -> R.string.enterprise_source_changed

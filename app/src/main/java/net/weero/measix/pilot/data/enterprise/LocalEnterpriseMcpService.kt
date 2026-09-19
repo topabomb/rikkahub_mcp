@@ -59,7 +59,7 @@ internal class LocalEnterpriseMcpService(
     }) { followRedirects = false }
 
     private suspend fun handle(
-        target: McpConnectionDefinition.Managed,
+        target: McpConnectionDefinition.ManagedLocal,
         method: HttpMethod,
         generationHeader: String?,
         interactionHeader: String?,
@@ -133,7 +133,7 @@ internal class LocalEnterpriseMcpService(
         return Response(HttpStatusCode.OK, buildJsonObject { put("jsonrpc", "2.0"); put("id", id); put("result", result) })
     }
 
-    private fun discover(target: McpConnectionDefinition.Managed, args: JsonObject): JsonObject {
+    private fun discover(target: McpConnectionDefinition.ManagedLocal, args: JsonObject): JsonObject {
         val queries = args["queries"] as? JsonArray ?: return failure("tool_arguments_invalid")
         val limit = if ("limitPerQuery" in args) (args["limitPerQuery"] as? JsonPrimitive)?.takeUnless { it.isString }?.intOrNull
             ?: return failure("tool_arguments_invalid") else 3
@@ -161,7 +161,7 @@ internal class LocalEnterpriseMcpService(
         })
     }
 
-    private suspend fun invoke(target: McpConnectionDefinition.Managed, args: JsonObject): JsonObject {
+    private suspend fun invoke(target: McpConnectionDefinition.ManagedLocal, args: JsonObject): JsonObject {
         val ref = (args["toolRef"] as? JsonPrimitive)?.takeIf { it.isString }?.content ?: return failure("tool_arguments_invalid")
         val arguments = args["arguments"] as? JsonObject ?: return failure("tool_arguments_invalid")
         if (args.keys != setOf("toolRef", "arguments")) return failure("tool_arguments_invalid")
@@ -175,7 +175,7 @@ internal class LocalEnterpriseMcpService(
         return execute(target, tool, arguments)
     }
 
-    private suspend fun execute(target: McpConnectionDefinition.Managed, tool: PublishedTool, args: JsonObject): JsonObject {
+    private suspend fun execute(target: McpConnectionDefinition.ManagedLocal, tool: PublishedTool, args: JsonObject): JsonObject {
         val requestId = "req_${Uuid.random()}"
         val result = try {
             when (tool.id) {
@@ -204,7 +204,7 @@ internal class LocalEnterpriseMcpService(
         return withResolved(success(result), tool, requestId, "SUCCEEDED")
     }
 
-    private fun principal(target: McpConnectionDefinition.Managed) = digest(json.encodeToString(listOf(
+    private fun principal(target: McpConnectionDefinition.ManagedLocal) = digest(json.encodeToString(listOf(
         target.access.scope.storageKey(), deviceId, target.access.sessionId, target.interactionId,
     )))
 

@@ -54,6 +54,8 @@ Session 锁可阻止退出状态并发写入，但不能阻止墙上时钟越过
 `McpExecutionLease` 在捕获 binding 前交给原 Turn owner，等待用户期间保留，CONTINUE 转交同一租约。
 终态与退出在原 owner 上关闭并等待全部 transport，之后释放 binding；失败保留清理所有权。
 
+平台来源使用 `McpConnectionDefinition.ManagedPlatform`，本地包使用 `ManagedLocal`。平台连接消费同一顶层模型捕获的 AppliedVersion 与 interactionId，以原 Session 签发执行 lease；完整 URL 来自 Platform execution，不构造 Local binding。`McpProtocolClientFactory` 仍唯一创建 SDK transport/client，平台 Bearer 由原 lease 的请求回调在每个 POST/GET 之前取得，刷新 I/O 不进入配置/Runtime 锁。平台 catalog digest 只含身份、公开 route、release/hash、generation 和 authOwnership，token 轮换不改变目录或连接身份。只读目录检查使用 `readExecution`，不要求网络或额外执行 lease。
+
 Direct MCP 只装配已解析助手选中的服务；企业固定引用不可删，允许的扩展来自本域偏好。
 企业策略禁用用户 MCP 时，准备结果保留 `POLICY_BLOCKED` 结果供界面提示，但不建立连接或阻断对话；设置页仍显示原选择并允许移除。
 其他显式引用不可执行时准备失败。Gateway 独立装配完整工具对，REQUIRED 目录未就绪时拒绝准备。
@@ -62,7 +64,7 @@ Gateway 使用开关只影响新 interaction；在途执行仍复验原 Session�
 
 受管 Streamable HTTP 使用禁止重定向、关闭透明请求重试并带 `PrivateRequest` 的专用共享 client。
 原 generation 与 interaction headers 来自捕获的 binding owner，私有包不能覆盖这些协议头。
-受管连接状态与日志不输出底层异常正文/堆栈；调用保留失败分类，向上抛出的工具异常不携带私有 transport cause。
+受管连接失败保留异常类型、原始 message/detail 和 cause；`McpStatus.Error` 使用 `userVisibleDiagnostic` 与脱敏堆栈供诊断。仅删除凭据、令牌和认证字段，不能用通用连接错误替代实际 HTTP 状态或底层原因。`McpToolCallExecutor` 继续携带原异常，取消保持传播。
 POST 与通知/恢复 GET 都解析有效 `428 managed_snapshot_required`，先封闭该 Runtime 的连接/调用准入，随后由原 `TurnFinalizer.stopInteraction`
 按 Runtime/turnId 捕获当前 worker、提交终态并等待租约清理，成功后才走既有同步服务。
 暂停已完成的 worker 和 CONTINUE 后的新 worker 都走这一收口；不等待过时的 START Job，也不停止后续新 turn。

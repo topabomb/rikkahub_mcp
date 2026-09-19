@@ -109,17 +109,23 @@ class EnrollmentMaterialParserTest {
     }
 
     @Test
-    fun `platform accepts only HTTPS origins except explicitly enabled loopback development`() {
+    fun `platform accepts HTTP and HTTPS domain and IP origins without development overrides`() {
         fun wire(url: String) = """{"formatVersion":1,"kind":"PLATFORM_ENROLLMENT","platformUrl":"$url","code":"c","expiresAt":"2030-01-01T00:00:00Z"}"""
         assertEquals("https://example.com", (parser.parse(wire("https://EXAMPLE.com:443/")) as EnrollmentMaterial.Platform).platformOrigin)
         assertEquals("https://example.com:8443", (parser.parse(wire("https://example.com:8443")) as EnrollmentMaterial.Platform).platformOrigin)
-        listOf("http://example.com", "http://127.0.0.1", "http://192.168.1.2", "https://user:secret@example.com",
+        listOf("ftp://example.com", "ws://example.com", "http://user:secret@example.com", "https://user:secret@example.com",
             "https://example.com/path", "https://example.com/%2f", "https://example.com?", "https://example.com#",
             "https://example.com:0", "https://example.com:65536", "https://example.com:", "//example.com", "https:///example.com").forEach { assertRejected(wire(it)) }
-        val development = EnrollmentMaterialParser(allowLoopbackHttp = true)
-        assertEquals("http://127.0.0.1:8080", (development.parse(wire("http://127.0.0.1:8080/")) as EnrollmentMaterial.Platform).platformOrigin)
-        assertEquals("http://[::1]", (development.parse(wire("http://[::1]")) as EnrollmentMaterial.Platform).platformOrigin)
-        assertThrows(EnterpriseConfigurationException::class.java) { development.parse(wire("http://192.168.1.2")) }
+        mapOf(
+            "http://127.0.0.1:8080/" to "http://127.0.0.1:8080",
+            "http://[::1]" to "http://[::1]",
+            "http://192.168.1.2:8080" to "http://192.168.1.2:8080",
+            "HTTP://CORE.LAN:80/" to "http://core.lan",
+            "http://[fd00::1]:8080/" to "http://[fd00::1]:8080",
+            "https://192.168.1.2:8443" to "https://192.168.1.2:8443",
+        ).forEach { (input, expected) ->
+            assertEquals(expected, (parser.parse(wire(input)) as EnrollmentMaterial.Platform).platformOrigin)
+        }
         assertRejected(wire("https://" + "a".repeat(1024)))
     }
 

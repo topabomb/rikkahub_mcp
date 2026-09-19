@@ -188,6 +188,60 @@ class RequestCredentialsTest {
         }
     }
 
+    @Test fun `relay uses exact full paths bearer and frozen headers for all four streaming codecs`() = runBlocking {
+        for (wire in Wire.entries) {
+            val requests = java.util.concurrent.CopyOnWriteArrayList<Pair<String, String>>()
+            val capturedHeaders = java.util.concurrent.CopyOnWriteArrayList<com.sun.net.httpserver.Headers>()
+            val server = com.sun.net.httpserver.HttpServer.create(java.net.InetSocketAddress("127.0.0.1", 0), 0)
+            val events = when (wire) {
+                Wire.CHAT -> listOf("""{"choices":[{"delta":{"content":"result"},"finish_reason":"stop"}]}""", "[DONE]")
+                Wire.CLAUDE -> listOf("""{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"result"}}""",
+                    """{"type":"message_delta","delta":{"stop_reason":"end_turn"}}""", """{"type":"message_stop"}""")
+                Wire.GOOGLE -> listOf("""{"candidates":[{"content":{"parts":[{"text":"result"}]},"finishReason":"STOP"}]}""")
+                Wire.RESPONSES -> listOf("""{"type":"response.output_text.delta","item_id":"message","delta":"result"}""",
+                    """{"type":"response.completed","response":{"id":"response","status":"completed","output":[]}}""")
+            }
+            server.createContext("/") { exchange -> exchange.use {
+                requests += it.requestURI.toString() to it.requestBody.readBytes().toString(Charsets.UTF_8)
+                capturedHeaders += it.requestHeaders
+                val bytes = events.joinToString("") { event -> "data: $event\n\n" }.toByteArray()
+                it.responseHeaders.set("Content-Type", "text/event-stream")
+                it.sendResponseHeaders(200, bytes.size.toLong()); it.responseBody.write(bytes)
+            } }
+            server.start()
+            val client = OkHttpClient()
+            try {
+                val suffix = when (wire) {
+                    Wire.CHAT -> "/v1/chat/completions"
+                    Wire.RESPONSES -> "/v1/responses"
+                    Wire.CLAUDE -> "/v1/messages"
+                    Wire.GOOGLE -> "/v1beta/models/upstream:streamGenerateContent?alt=sse"
+                }
+                val path = "/runtime/v1/resources/mdl_fixture$suffix"
+                val endpoint = "http://127.0.0.1:${server.address.port}$path"
+                val (provider, setting) = consumer(wire, client, null)
+                val params = TextGenerationParams(Model(modelId = "upstream"), credentials = RequestCredentials.Routed(endpoint, "fixture-token"),
+                    customHeaders = listOf(CustomHeader("X-Measix-Managed-Generation", "42"),
+                        CustomHeader("X-Measix-Interaction-Id", "int_frozen")))
+                val chunks = mutableListOf<me.rerere.ai.ui.MessageChunk>()
+                provider.streamText(setting, emptyList(), params).collect { chunks += it }
+                assertEquals(1, requests.size)
+                assertEquals(path, requests.single().first)
+                val headers = capturedHeaders.single()
+                assertEquals("Bearer fixture-token", headers.getFirst("Authorization"))
+                assertEquals("42", headers.getFirst("X-Measix-Managed-Generation"))
+                assertEquals("int_frozen", headers.getFirst("X-Measix-Interaction-Id"))
+                assertNull(headers.getFirst("x-api-key")); assertNull(headers.getFirst("x-goog-api-key"))
+                if (wire == Wire.CLAUDE) assertNotNull(headers.getFirst("anthropic-version"))
+                val body = Json.parseToJsonElement(requests.single().second).toString()
+                if (wire != Wire.GOOGLE) assertTrue(body.contains("\"stream\":true"))
+                if (wire == Wire.RESPONSES) assertTrue(body.contains("\"store\":false"))
+                assertTrue(chunks.any { chunk -> chunk.choices.any { it.finishReason != null } })
+                assertTrue(chunks.any { chunk -> chunk.choices.any { it.delta?.toText() == "result" } })
+            } finally { server.stop(0); client.dispatcher.executorService.shutdown(); client.connectionPool.evictAll() }
+        }
+    }
+
     @Suppress("UNCHECKED_CAST")
     private fun consumer(wire: Wire, client: OkHttpClient, context: Context?): Pair<Provider<ProviderSetting>, ProviderSetting> {
         val pair = when (wire) {

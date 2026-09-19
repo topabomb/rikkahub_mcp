@@ -36,11 +36,14 @@ import okhttp3.WebSocket
 import okhttp3.WebSocketListener
 import org.json.JSONObject
 
-/** One local realtime connection/recorder owner; provider settings retain their distinct wire profiles. */
+/** One realtime connection/recorder owner; provider settings retain their distinct wire profiles. */
 class RealtimeAsrController(
     private val context: Context,
     private val sockets: WebSocket.Factory,
     private val provider: ASRProviderSetting,
+    private val transport: RealtimeAsrTransport? = null,
+    private val describeFailure: (Throwable) -> String = { "${it.javaClass.simpleName}: ${it.message}" },
+    private val onFailure: (Throwable) -> Unit = {},
     private val admitRecording: suspend (() -> Unit) -> Unit,
 ) : ASRController {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
@@ -76,7 +79,8 @@ class RealtimeAsrController(
         }
         val terminal = CompletableDeferred<Unit>()
         try {
-            val created = sockets.newWebSocket(Request.Builder().url(endpoint).header("Authorization", "Bearer $apiKey").build(),
+            val request = transport?.request ?: Request.Builder().url(endpoint).header("Authorization", "Bearer $apiKey").build()
+            val created = (transport?.sockets ?: sockets).newWebSocket(request,
                 object : WebSocketListener() {
                     override fun onOpen(webSocket: WebSocket, response: Response) {
                         scope.launch(Dispatchers.Main) {
@@ -88,23 +92,32 @@ class RealtimeAsrController(
                                 is ASRProviderSetting.OpenAIRealtime -> provider.sessionUpdateEvent()
                                 is ASRProviderSetting.DashScope -> provider.sessionUpdateEvent()
                             }
-                            if (!webSocket.send(update.toString())) { fail("ASR session initialization failed"); return@launch }
                             try {
+                                send(webSocket, update.toString())
                                 admitRecording {
                                     check(socket === webSocket && state.value.status == ASRStatus.Connecting) { "asr_connection_replaced" }
                                     startCapture(webSocket)
                                     _state.update { it.copy(status = ASRStatus.Listening) }
                                 }
                             } catch (cancelled: CancellationException) { throw cancelled }
-                            catch (_: Exception) { fail("Microphone recording failed") }
+                            catch (error: Exception) { fail(error) }
                         }
                     }
                     override fun onMessage(webSocket: WebSocket, text: String) {
                         scope.launch(Dispatchers.Main) { if (socket === webSocket) receive(webSocket, text) }
                     }
                     override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-                        try { response?.close() } finally { terminal.complete(Unit) }
-                        scope.launch(Dispatchers.Main) { if (socket === webSocket) fail("ASR connection failed") }
+                        val error = try {
+                            if (response != null && response.code != 101) {
+                                val source = response.body.source()
+                                source.request(128L * 1024)
+                                val detail = source.readUtf8(minOf(source.buffer.size, 128L * 1024))
+                                me.rerere.common.http.RoutedHttpException(response.code, detail.ifBlank { response.message })
+                                    .also { it.initCause(t) }
+                            } else t
+                        } catch (read: Exception) { t.also { it.addSuppressed(read) } }
+                        finally { try { response?.close() } finally { terminal.complete(Unit) } }
+                        scope.launch(Dispatchers.Main) { if (socket === webSocket) fail(error) }
                     }
                     override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
                         scope.launch(Dispatchers.Main) {
@@ -133,7 +146,7 @@ class RealtimeAsrController(
                 }
             }
         } catch (cancelled: CancellationException) { throw cancelled }
-        catch (_: Exception) { fail("ASR connection failed") }
+        catch (error: Exception) { fail(error) }
     }
 
     @MainThread
@@ -159,17 +172,18 @@ class RealtimeAsrController(
         capture = PcmAudioCapture.start(scope, sampleRate, onFrame = { buffer, read ->
             val amplitude = calculateRmsAmplitude(buffer, read)
             scope.launch { if (socket === original) _state.update { it.copy(amplitudes = it.amplitudes.appendAmplitude(amplitude)) } }
-            if (original.queueSize() < 100_000L) {
+            check(original.queueSize() < 100_000L) { "asr_audio_send_queue_exceeded" }
+            run {
                 val event = JSONObject().put("type", "input_audio_buffer.append")
                     .put("audio", Base64.encodeToString(buffer, 0, read, Base64.NO_WRAP))
                 if (provider is ASRProviderSetting.DashScope) event.put("event_id", "evt_${System.currentTimeMillis()}")
-                if (!original.send(event.toString())) scope.launch { if (socket === original) fail("ASR audio transmission failed") }
+                send(original, event.toString())
             }
-        }, onFailure = { scope.launch { if (socket === original) fail("Microphone recording failed") } })
+        }, onFailure = { error -> scope.launch { if (socket === original) fail(error) } })
     }
 
     private fun receive(original: WebSocket, text: String) {
-        val event = try { JSONObject(text) } catch (_: Exception) { fail("Invalid ASR response"); return }
+        val event = try { JSONObject(text) } catch (error: Exception) { fail(error); return }
         val itemId = event.optString("item_id", "default")
         when (event.optString("type")) {
             "conversation.item.input_audio_transcription.delta" -> {
@@ -188,9 +202,9 @@ class RealtimeAsrController(
             "conversation.item.input_audio_transcription.failed" -> {
                 partial.remove(itemId)
                 publishTranscript()
-                _state.update { it.copy(errorMessage = "ASR transcription failed") }
+                fail(IllegalStateException(event.optJSONObject("error")?.toString() ?: text))
             }
-            "error" -> fail("ASR service error")
+            "error" -> fail(IllegalStateException(event.optJSONObject("error")?.toString() ?: text))
             "session.finished" -> if (provider is ASRProviderSetting.DashScope) finishSocket(original, remote = true)
         }
     }
@@ -216,10 +230,9 @@ class RealtimeAsrController(
                 return@launch
             }
             if (!ended.isCompleted) {
-                if (provider is ASRProviderSetting.DashScope && !original.send(sessionFinishEvent().toString())) {
-                    fail("ASR session finish failed")
-                    return@launch
-                }
+                try {
+                    if (provider is ASRProviderSetting.DashScope) send(original, sessionFinishEvent().toString())
+                } catch (error: Exception) { fail(error); return@launch }
                 withTimeoutOrNull(if (provider is ASRProviderSetting.DashScope) 10_000L else 500L) { ended.await() }
             }
             // false means closing/closed in the WebSocket API; its terminal callback remains authoritative.
@@ -234,9 +247,15 @@ class RealtimeAsrController(
         onTranscriptChange?.invoke(value)
     }
 
-    private fun fail(message: String) {
+    private fun send(original: WebSocket, text: String) {
+        check(original.send(text)) { "asr_audio_transmission_failed" }
+    }
+
+    private fun fail(error: Throwable) {
+        android.util.Log.e("RealtimeAsrController", "Recognition failed", error)
         abandon()
-        _state.update { it.copy(status = ASRStatus.Error, errorMessage = message) }
+        _state.update { it.copy(status = ASRStatus.Error, errorMessage = describeFailure(error)) }
+        onFailure(error)
     }
 
     private fun stopCapture(): Job? = capture?.let { original -> capture = null; original.stop(); original.job }

@@ -74,7 +74,7 @@ class EnterpriseFeedPersistenceTest {
         assertEquals(original.publicRevision + 1, changed.manifest.feeds.single().publicRevision)
         expectReason("enterprise_feed_changed") { sessions.changeFeed(RealmSelection(access, sessions.selectionRevision.value), original.revision, EnterpriseFeedCommand.Withdraw(id)) }
         // A changed seed at the same generation is neither a configuration conflict nor a replacement Feed.
-        sessions.synchronize(access, packet.copy(feedSeed = packet.feedSeed!!.copy(items = emptyList())))
+        sessions.synchronize(access, packet.copy(feedSeed = packet.feedSeed!!.copy(items = emptyList())).toCandidate())
         assertEquals(access, sessions.captureRealmAccess(packet.identity.scope))
         assertEquals(changed.manifest.feeds, sessions.available().manifest.feeds)
         sessions.finishExit(sessions.beginExit(requireNotNull(sessions.captureExitRequest())))

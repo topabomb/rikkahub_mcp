@@ -8,7 +8,7 @@
     },
     "client-feed.schemas.json": {
       "source": "api/portal/client-feed.schemas.json",
-      "sha256": "31eec383a85c988c4a9471b73aeb540502a7302c27806ee3dbd64606d47fa571"
+      "sha256": "685d6f017e2627f703bcdc7581201745a3167391490ccf281a3fddc765724412"
     },
     "native-vectors.json": {
       "source": "api/fixtures/portal/native-vectors.json",
@@ -32,7 +32,7 @@
     },
     "cases.json": {
       "source": "api/fixtures/enrollment/cases.json",
-      "sha256": "71e50a526bde376a3b5511564589cf9ed1cac68d0798348abded54449dbf1bf4"
+      "sha256": "11fd406efd93d48a4a24ee5100dcd890c9d124486c612c3ad683e6cab3cb82e8"
     }
   }
 }

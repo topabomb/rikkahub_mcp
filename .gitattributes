@@ -11,4 +11,5 @@ workspace/tools/patches/*.patch text eol=lf -whitespace
 
 # Upstream contract inputs are pinned by SHA256 and retain their original bytes.
 app/src/test/resources/contracts/portal/*.json -text
+app/src/test/resources/contracts/platform/** -text whitespace=cr-at-eol
 app/src/main/enterprisePortal/** -text

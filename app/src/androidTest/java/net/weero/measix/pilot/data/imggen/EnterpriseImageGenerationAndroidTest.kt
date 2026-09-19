@@ -83,7 +83,7 @@ class EnterpriseImageGenerationAndroidTest {
                 { app.assets.open(LocalEnterpriseSource.IDENTITY_ASSET) }, LocalEnterpriseConfigurationStore(authorityRoot),
             )
             val models = ModelExecutionService(settings, sessions, gate, providers, localSource, scope,
-                net.weero.measix.pilot.service.EnterpriseSynchronizationService(sessions, localSource, scope))
+                net.weero.measix.pilot.service.EnterpriseSynchronizationService(sessions, localSource, scope, net.weero.measix.pilot.service.PlatformEnterpriseService(sessions, net.weero.measix.pilot.data.enterprise.PlatformControlClient(okhttp3.OkHttpClient()))), net.weero.measix.pilot.service.PlatformEnterpriseService(sessions, net.weero.measix.pilot.data.enterprise.PlatformControlClient(okhttp3.OkHttpClient())))
             val mediaStore = GeneratedMediaStore(context.filesDir, repository, artifacts)
             val coordinator = ImageGenerationCoordinator(scope, mediaStore, models, providers, sessions)
             artifacts.reconcileStartup()

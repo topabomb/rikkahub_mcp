@@ -26,6 +26,42 @@ import org.junit.runner.RunWith
 
 @RunWith(AndroidJUnit4::class)
 class RealtimeAsrLifecycleInstrumentedTest {
+    @Test fun explicitPlatformTransportKeepsSessionParametersAndOriginalServiceFailure() = runBlocking {
+        val context = microphoneContext()
+        for (provider in providers()) {
+            val factory = Sockets()
+            val request = Request.Builder().url("http://127.0.0.1:9100/runtime/v1/resources/asr_fixture/realtime?model=encoded")
+                .header("Authorization", "Bearer platform-fixture").header("X-Measix-Managed-Generation", "7").build()
+            val failure = CompletableDeferred<Throwable>()
+            val controller = withContext(Dispatchers.Main) {
+                RealtimeAsrController(context, WebSocket.Factory { _, _ -> error("Native route used") }, provider,
+                    transport = me.rerere.asr.providers.RealtimeAsrTransport(factory, request),
+                    onFailure = { failure.complete(it) }, admitRecording = { it() }).also { it.start { } }
+            }
+            val socket = factory.values.single()
+            try {
+                assertSame(request, socket.request())
+                socket.open()
+                withTimeout(10_000) { socket.firstAudio.await() }
+                val update = org.json.JSONObject(socket.sent.first()).getJSONObject("session")
+                if (provider is ASRProviderSetting.OpenAIRealtime) {
+                    assertEquals(provider.sampleRate, update.getJSONObject("audio").getJSONObject("input").getJSONObject("format").getInt("rate"))
+                } else {
+                    assertEquals((provider as ASRProviderSetting.DashScope).sampleRate, update.getInt("sample_rate"))
+                    assertFalse(update.has("audio"))
+                }
+                socket.listener.onMessage(socket, """{"type":"error","error":{"code":"supplier_busy","message":"Original service diagnostic"}}""")
+                val state = withTimeout(10_000) { controller.state.first { it.status == ASRStatus.Error } }
+                assertTrue(state.errorMessage.orEmpty().contains("supplier_busy"))
+                assertTrue(state.errorMessage.orEmpty().contains("Original service diagnostic"))
+                assertTrue(withTimeout(10_000) { failure.await() }.message.orEmpty().contains("supplier_busy"))
+            } finally {
+                val cleanup = withContext(Dispatchers.Main) { controller.dispose() }
+                withTimeout(10_000) { cleanup.awaitClosed() }
+            }
+        }
+    }
+
     private fun providers() = listOf(
         ASRProviderSetting.OpenAIRealtime(apiKey = "fixture", websocketUrl = "wss://asr.invalid/realtime"),
         ASRProviderSetting.DashScope(apiKey = "fixture", websocketUrl = "wss://asr.invalid/realtime"),
@@ -141,6 +177,7 @@ class RealtimeAsrLifecycleInstrumentedTest {
     }
 
     private class Socket(private val request: Request, val listener: WebSocketListener) : WebSocket {
+        val sent = CopyOnWriteArrayList<String>()
         val cancellations = AtomicInteger()
         val firstAudio = CompletableDeferred<Unit>()
         val closeRequested = CompletableDeferred<Unit>()
@@ -150,6 +187,7 @@ class RealtimeAsrLifecycleInstrumentedTest {
         override fun request() = request
         override fun queueSize() = 0L
         override fun send(text: String): Boolean {
+            sent += text
             if (text.contains("input_audio_buffer.append")) { audioFrames.incrementAndGet(); firstAudio.complete(Unit) }
             return cancellations.get() == 0
         }

@@ -31,6 +31,38 @@ import org.robolectric.annotation.Config
 class EnterpriseExitServiceTest {
     @get:Rule val temporary = TemporaryFolder()
 
+    @Test fun `remote logout failure completes local exit and reports unconfirmed revocation`() = runTest {
+        fixture { f ->
+            f.sessions.enrollFixture(exampleEnterprisePackage())
+            val request = requireNotNull(f.service.captureRequest())
+            var calls = 0
+            f.logout = {
+                calls++
+                assertEquals(EnterpriseSessionPhase.CLOSING, f.manifest.phase)
+                throw IOException("server offline")
+            }
+            val result = f.service.exit(request)
+            assertEquals(1, calls)
+            assertEquals(EnterpriseSessionPhase.SIGNED_OUT, f.manifest.phase)
+            assertNull(f.manifest.session)
+            assertTrue(result.maintenanceFailure.orEmpty().contains("server offline"))
+            assertTrue(result.remoteLogoutFailure.orEmpty().contains("server offline"))
+        }
+    }
+
+    @Test fun `recovered closing session exposes unconfirmed remote logout after local completion`() = runTest {
+        fixture { f ->
+            f.sessions.enrollFixture(exampleEnterprisePackage())
+            val request = requireNotNull(f.service.captureRequest())
+            f.gate.loading()
+            f.logout = { throw IOException("server offline during recovery") }
+            f.sessions.beginExit(request)
+            f.service.completeDuringRecovery()
+            assertEquals(EnterpriseSessionPhase.SIGNED_OUT, f.manifest.phase)
+            assertTrue(f.service.recoveryLogoutFailure.value.orEmpty().contains("server offline during recovery"))
+        }
+    }
+
     @Test fun `example removal keeps closing through data failure and resumes before Ready`() = runTest {
         fixture { f ->
             val packet = exampleEnterprisePackage()
@@ -315,6 +347,7 @@ class EnterpriseExitServiceTest {
         val catalogs = mockk<net.weero.measix.pilot.data.ai.mcp.McpCatalogStore>()
         val files = mockk<FileManagementApplicationService>()
         var cleanup: suspend (EnterpriseExitToken) -> Unit = {}
+        var logout: suspend (EnterpriseExitToken) -> Unit = {}
         val service: EnterpriseExitService
         val manifest get() = (sessions.state.value as EnterpriseState.Available).manifest
         init {
@@ -326,7 +359,7 @@ class EnterpriseExitServiceTest {
             coEvery { memories.clearEnterpriseScope(any()) } returns Unit
             coEvery { catalogs.clearEnterpriseScope(any()) } returns Unit
             coEvery { files.clearEnterpriseData(any()) } returns Unit
-            service = EnterpriseExitService(sessions, sync, conversations, gate, scope, net.weero.measix.pilot.service.portal.PortalDocumentRegistry(), mockk(relaxed = true), mockk { io.mockk.coEvery { closeRealm(any()) } returns Unit }, mcp = mockk { io.mockk.coEvery { closeRealm(any()) } returns Unit }, speech = mockk(relaxed = true), settings = settings, memories = memories, catalogs = catalogs, files = files)
+            service = EnterpriseExitService(sessions, sync, conversations, gate, scope, net.weero.measix.pilot.service.portal.PortalDocumentRegistry(), mockk(relaxed = true), mockk { io.mockk.coEvery { closeRealm(any()) } returns Unit }, mcp = mockk { io.mockk.coEvery { closeRealm(any()) } returns Unit }, speech = mockk(relaxed = true), settings = settings, memories = memories, catalogs = catalogs, files = files, platformLogout = { logout(it) })
         }
 
         fun recovery(): ApplicationRecoveryCoordinator = ApplicationRecoveryCoordinator(

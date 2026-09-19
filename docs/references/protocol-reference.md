@@ -34,7 +34,13 @@ OpenAI 的 `chatCompletionsPath` 与 `responsesPath` 分别配置两种协议的
 
 `TextGenerationParams`、`ImageGenerationParams` 与 `ImageEditParams` 的 `credentials` 是不参与序列化的 `RequestCredentials`。`UserSettings` 继续使用原 Provider 的 KeyRoulette；`Fixed` 使用单次请求的原始凭据，不按空白或逗号拆分，不访问轮换缓存。未提供固定 credential 时由私有 headers 提供认证；若同时出现自动认证同名 header 则在发请求前拒绝。四种文本协议及 OpenAI 图片生成/编辑共用该认证选择，未创建第二套企业 wire builder。
 
+`Routed` 表示平台 Relay 的完整 HTTP/HTTPS endpoint 与单请求 Bearer。`ModelExecutionService` 从冻结的 Platform execution、资源 ID 和 runtimePath 装配 URL，Google 流式额外保留 `alt=sse`，四种现有文本编码器直接使用此 URL，不再次拼接供应商后缀，也不读取用户 KeyRoulette。generation 与 interaction headers 由原捕获上下文提供，刷新只替换认证，不改变路径、模型或代际。平台辅助生成复用流式编码器、`StepOutputAccumulator` 和 `RequestUsageReducer`，返回聚合结果，不建立第二持久会话。
+
+Routed 请求带 `PrivateRequest`，禁止重定向、自动认证和透明重放，body 上限 10 MiB；非成功响应保留状态与脱敏后的原始 detail。只有 status=428 且 body 严格满足 `managed_snapshot_required`、forwarded=false、正 target generation 和合法 requestId 时，才触发原 interaction 停止及同步；不自动重发业务请求。
+
 Fixed 请求带 `PrivateRequest` 网络标记，宿主日志入口不记录其 HTTP 内容，`PrivateRequestBoundaryInterceptor` 在实际重定向边界拒绝跨 origin 转发。Responses 的 `instructions` 与 model/input/tools 一样归协议装配 owner，custom body 不能覆盖已组装系统提示。
+
+`ClaudeProvider` 不记录请求 body、逐条 messages、SSE data 或错误响应 body；OpenAI Chat/Responses 与 Google 流式回调也不把异常 message/原始响应记录到 Log，Google 不记录引用元数据。企业 Routed 和私有 Fixed 请求因此不会通过 Provider 自身的日志绕过 `PrivateRequest` 的网络日志边界。错误仍按原解析结果和 cause 传给调用方，日志仅记录异常类型及 HTTP 状态。
 
 非流式文本、图片生成/编辑及结果下载、模型目录、余额和 embedding 的完整响应读取统一使用 `Call.readResponse`，由同一调用持有 HTTP Call 到响应体消费并关闭为止。取消等待响应头或阻塞读取成功/错误响应体都会取消原 Call；退出不依赖网络读取超时收口。流式请求继续由各协议的 EventSource 生命周期负责取消。
 

@@ -24,6 +24,7 @@ import net.weero.measix.pilot.data.datastore.ExecutionConfigurationSnapshot
 import net.weero.measix.pilot.data.datastore.SettingsStore
 import net.weero.measix.pilot.data.enterprise.*
 import net.weero.measix.pilot.utils.stripMarkdown
+import net.weero.measix.pilot.utils.userVisibleDiagnostic
 import okhttp3.OkHttpClient
 import kotlin.uuid.Uuid
 
@@ -86,6 +87,7 @@ internal class SpeechApplicationService(
     private val sockets: OkHttpClient,
     private val scope: CoroutineScope,
     private val player: TtsController,
+    private val platform: PlatformEnterpriseService,
 ) {
     private val commands = Mutex()
     private val synthesizer = TtsSynthesizer(manager)
@@ -96,11 +98,11 @@ internal class SpeechApplicationService(
     private var asr: Recognition? = null
     private var asrAvailable = false
 
-    private class Playback(val capture: SpeechCapture, val queueId: String, var bindings: EnterpriseBindingLease?) {
+    private class Playback(val capture: SpeechCapture, val queueId: String, var bindings: EnterpriseExecutionLease?) {
         var cleanup: TtsPlaybackCleanup? = null
         var revoked = false
     }
-    private class Recognition(val capture: SpeechCapture, val page: ConversationCommandTarget, var bindings: EnterpriseBindingLease?) {
+    private class Recognition(val capture: SpeechCapture, val page: ConversationCommandTarget, var bindings: EnterpriseExecutionLease?) {
         val deliveries = SupervisorJob()
         var controller: ASRController? = null
         var projection: Job? = null
@@ -184,9 +186,15 @@ internal class SpeechApplicationService(
 
     private suspend fun capturePage(selection: RealmSelection, category: ConfigurationCategory, owner: () -> Unit = {}): SpeechCapture {
         queries.requireSelection(selection)
+        val access = selection.access
+        val checkedVersion = if (access is RealmAccess.Enterprise && !access.scope.authority.isLocal)
+            synchronization.prepareExecution(access) else null
         return sessions.withSelectedRealmSelection(selection) {
             owner()
             settings.withExecutionConfiguration(selection.access.scope, sessions.state.value) { snapshot ->
+                if (checkedVersion != null) check((sessions.state.value as? EnterpriseState.Available)?.manifest?.applied == checkedVersion) {
+                    "enterprise_configuration_changed_during_speech_capture"
+                }
                 freeze(selection, category, snapshot, (sessions.state.value as? EnterpriseState.Available)?.manifest?.applied,
                     "int_${Uuid.random()}", owner, {})
             }
@@ -204,7 +212,9 @@ internal class SpeechApplicationService(
             managed?.let { snapshot.configuration.enterpriseConfiguration?.tts?.find { value -> value.id == it.id } },
             managed?.let { snapshot.configuration.enterpriseConfiguration?.asr?.find { value -> value.id == it.id } },
             version.takeIf { selection.access is RealmAccess.Enterprise }, interactionId, owner, stopParent,
-            userTts?.takeIf { selected.isAvailable }?.let(manager::getPromptGuidance).orEmpty(), !selected.isAvailable, snapshot.userSettings.displaySetting.ttsToolSequentialPlayback)
+            (userTts ?: managed?.let { ref -> snapshot.configuration.enterpriseConfiguration?.tts?.find { it.id == ref.id }
+                ?.providerSetting(ref) })?.takeIf { selected.isAvailable }?.let(manager::getPromptGuidance).orEmpty(),
+            !selected.isAvailable, snapshot.userSettings.displaySetting.ttsToolSequentialPlayback)
     }
 
     /** Completion acknowledges queue acceptance, while the queue retains its own binding through playback. */
@@ -246,11 +256,21 @@ internal class SpeechApplicationService(
             check(tts === original && !original.revoked)
             if (capture.userTts != null) personal = ttsCredentials(capture.userTts, latest.userSettings.ttsProviders.single { it.id == capture.reference })
         }
-        if (capture.enterpriseTts != null) transport.synthesize(target(capture, original.bindings), capture.enterpriseTts, chunk.text)
+        if (capture.enterpriseTts != null) {
+            val definition = capture.enterpriseTts
+            val reference = requireNotNull(capture.reference)
+            if (definition.protocol == EnterpriseTtsProtocol.SYSTEM) {
+                synthesizer.synthesize(definition.providerSetting(reference), chunk)
+            } else if (original.bindings?.execution is EnterpriseExecution.Platform) {
+                val routed = platformTarget(capture, requireNotNull(original.bindings))
+                admit(capture) { check(tts === original && !original.revoked) }
+                synthesizer.synthesize(definition.providerSetting(reference), chunk, routed)
+            } else transport.synthesize(target(capture, original.bindings), definition, chunk.text)
+        }
         else synthesizer.synthesize(requireNotNull(personal) { "speech_resource_unavailable" }, chunk)
-    } catch (barrier: ManagedSnapshotRequired) {
-        handleBarrier(original.capture)
-        throw barrier
+    } catch (error: Exception) {
+        ManagedSnapshotRequired.find(error)?.let { handleBarrier(original.capture) }
+        throw error
     }
 
     private suspend fun startRecognition(page: ConversationCommandTarget, deliver: (String) -> Unit) {
@@ -261,29 +281,58 @@ internal class SpeechApplicationService(
             val original = Recognition(capture, page, null).also { asr = it }
             try {
                 captureBinding(capture) { original.bindings = it }
+                val realtimeDefinition = capture.enterpriseAsr?.takeIf {
+                    it.protocol in setOf(EnterpriseAsrProtocol.OPENAI_REALTIME, EnterpriseAsrProtocol.DASHSCOPE)
+                }
+                val realtimeTransport = realtimeDefinition?.let { definition ->
+                    val lease = requireNotNull(original.bindings)
+                    val token = platform.accessToken(lease.sessionId)
+                    transport.platformRealtimeTarget(lease.execution as EnterpriseExecution.Platform,
+                        capture.reference as ConfigurationReference.Enterprise, definition, lease.version,
+                        capture.interactionId, token.value)
+                }
                 admit(capture) { latest ->
                     check(asr === original && !original.revoked)
                     check(audioManager.requestAudioFocus(audioFocus) == AudioManager.AUDIOFOCUS_REQUEST_GRANTED) { "speech_audio_focus_unavailable" }
                     val recordingAdmission: suspend (() -> Unit) -> Unit = { start -> admit(capture) {
                         check(asr === original && !original.revoked); start()
                     } }
-                    original.controller = if (capture.enterpriseAsr != null) HttpAsrController(context, recordingAdmission,
+                    original.controller = if (realtimeDefinition != null) RealtimeAsrController(context, sockets,
+                        realtimeDefinition.realtimeSetting(requireNotNull(capture.reference)),
+                        transport = realtimeTransport, describeFailure = { it.userVisibleDiagnostic() },
+                        onFailure = { error -> ManagedSnapshotRequired.find(error)?.let { handleBarrier(capture) } },
+                        admitRecording = recordingAdmission)
+                    else if (capture.enterpriseAsr != null) HttpAsrController(context, recordingAdmission,
                         transcribe = { file ->
                             try {
                                 admit(capture) { check(asr === original && !original.revoked) }
-                                transport.transcribe(target(capture, original.bindings), capture.enterpriseAsr, file)
-                            } catch (barrier: ManagedSnapshotRequired) { handleBarrier(capture); throw barrier }
-                        }, admitTranscript = recordingAdmission)
+                                if (original.bindings?.execution is EnterpriseExecution.Platform) {
+                                    val routed = platformTarget(capture, requireNotNull(original.bindings))
+                                    admit(capture) { check(asr === original && !original.revoked) }
+                                    transport.transcribe(routed, capture.enterpriseAsr, file)
+                                } else transport.transcribe(target(capture, original.bindings), capture.enterpriseAsr, file)
+                            } catch (error: Exception) {
+                                ManagedSnapshotRequired.find(error)?.let { handleBarrier(capture) }
+                                throw error
+                            }
+                        }, admitTranscript = recordingAdmission, describeFailure = { error ->
+                            if (error is NoSpeechDetectedException) context.getString(R.string.speech_no_voice_detected)
+                            else error.userVisibleDiagnostic()
+                        },
+                        maxAudioBytes = me.rerere.asr.providers.maxFileTranscriptionAudioBytes(capture.enterpriseAsr.fileProtocol(),
+                            capture.enterpriseAsr.modelId, capture.enterpriseAsr.language, me.rerere.common.http.MAX_ROUTED_REQUEST_BYTES))
                     else RealtimeAsrController(context, sockets, asrCredentials(requireNotNull(capture.userAsr),
-                        latest.userSettings.asrProviders.single { it.id == capture.reference }), recordingAdmission)
+                        latest.userSettings.asrProviders.single { it.id == capture.reference }),
+                        describeFailure = { it.userVisibleDiagnostic() }, admitRecording = recordingAdmission)
                     original.controller!!.start { text ->
                         scope.launch(original.deliveries + Dispatchers.Main.immediate) {
                             try {
                                 admit(capture) { if (asr === original && !original.revoked) deliver(text) }
                             } catch (cancelled: CancellationException) { throw cancelled }
-                            catch (_: Exception) {
+                            catch (error: Exception) {
+                                android.util.Log.e("SpeechApplication", "Transcript delivery failed", error)
                                 if (asr === original && !original.revoked) asrState.value = ASRState(
-                                    status = ASRStatus.Error, isAvailable = asrAvailable, errorMessage = context.getString(R.string.speech_operation_unavailable))
+                                    status = ASRStatus.Error, isAvailable = asrAvailable, errorMessage = error.userVisibleDiagnostic())
                             }
                         }
                     }
@@ -312,19 +361,26 @@ internal class SpeechApplicationService(
         }
     }
 
-    private suspend fun captureBinding(capture: SpeechCapture, retain: (EnterpriseBindingLease) -> Unit) {
+    private suspend fun captureBinding(capture: SpeechCapture, retain: (EnterpriseExecutionLease) -> Unit) {
         admit(capture) { }
-        if (capture.reference !is ConfigurationReference.Enterprise) return
-        val binding = sessions.captureBindings(capture.selection.access as RealmAccess.Enterprise)
+        if (capture.reference !is ConfigurationReference.Enterprise || capture.enterpriseTts?.protocol == EnterpriseTtsProtocol.SYSTEM) return
+        val binding = sessions.captureExecution(capture.selection.access as RealmAccess.Enterprise, capture.version)
         retain(binding)
         check(binding.version == capture.version) { "enterprise_configuration_changed_during_speech_capture" }
     }
 
-    private fun target(capture: SpeechCapture, bindings: EnterpriseBindingLease?): EnterpriseSpeechTarget {
+    private fun target(capture: SpeechCapture, bindings: EnterpriseExecutionLease?): EnterpriseSpeechTarget {
         val reference = capture.reference as ConfigurationReference.Enterprise
         val lease = requireNotNull(bindings)
         return EnterpriseSpeechTarget(capture.selection.access as RealmAccess.Enterprise, reference,
-            lease.binding(reference.id), lease.version, capture.interactionId)
+            lease.localBinding(reference.id), lease.version, capture.interactionId)
+    }
+
+    private suspend fun platformTarget(capture: SpeechCapture, lease: EnterpriseExecutionLease): me.rerere.speech.SpeechHttpTransport {
+        val token = platform.accessToken(lease.sessionId)
+        val execution = lease.execution as EnterpriseExecution.Platform
+        return transport.platformTarget(execution, capture.reference as ConfigurationReference.Enterprise,
+            lease.version, capture.interactionId, token.value)
     }
 
     private suspend fun <T> admit(capture: SpeechCapture, accept: (ExecutionConfigurationSnapshot) -> T): T =
@@ -411,13 +467,16 @@ internal class SpeechApplicationService(
     private fun submit(action: suspend () -> Unit) {
         scope.launch(Dispatchers.Main.immediate) {
             try { action() } catch (cancelled: CancellationException) { throw cancelled }
-            catch (_: Exception) { failure.value = context.getString(R.string.speech_operation_unavailable) }
+            catch (error: Exception) {
+                android.util.Log.e("SpeechApplication", "Speech operation failed", error)
+                failure.value = error.userVisibleDiagnostic()
+            }
         }
     }
     private fun submitRecognition(action: suspend () -> Unit) = submit {
         try { action() } catch (cancelled: CancellationException) { throw cancelled }
         catch (error: Exception) {
-            asrState.value = ASRState(status = ASRStatus.Error, isAvailable = asrAvailable, errorMessage = context.getString(R.string.speech_operation_unavailable))
+            asrState.value = ASRState(status = ASRStatus.Error, isAvailable = asrAvailable, errorMessage = error.userVisibleDiagnostic())
             throw error
         }
     }

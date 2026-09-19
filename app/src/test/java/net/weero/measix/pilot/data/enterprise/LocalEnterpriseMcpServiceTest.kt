@@ -91,7 +91,7 @@ class LocalEnterpriseMcpServiceTest {
             val network = mockk<NetworkMonitor>()
             every { network.isOnline } returns kotlinx.coroutines.flow.MutableStateFlow(true)
             val manager = McpRuntimeCoordinator(settings, h.sessions, mockk(), local, store, appScope, mockk(), network,
-                foregroundObserver = ForegroundObserver {}, oauthCallbackKeepAlive = NoOpOAuthCallbackKeepAlive)
+                foregroundObserver = ForegroundObserver {}, oauthCallbackKeepAlive = NoOpOAuthCallbackKeepAlive, platform = io.mockk.mockk())
             val owners = mutableListOf<Triple<net.weero.measix.pilot.service.runtime.ConversationRuntime, Uuid, Job>>()
             suspend fun prepare(): TurnMcpCapabilitySnapshot {
                 val state = h.sessions.state.value as EnterpriseState.Available
@@ -295,14 +295,14 @@ class LocalEnterpriseMcpServiceTest {
     }
 
     private class Harness(val source: LocalEnterpriseSource, val sessions: EnterpriseSessionController, val access: RealmAccess.Enterprise, val http: HttpClient) {
-        suspend fun connect(gateway: Boolean = true, block: suspend (Client, McpConnectionDefinition.Managed) -> Unit) {
-            val bindings = sessions.captureBindings(access)
+        suspend fun connect(gateway: Boolean = true, block: suspend (Client, McpConnectionDefinition.ManagedLocal) -> Unit) {
+            val bindings = sessions.captureExecution(access)
             val config = (sessions.state.value as EnterpriseState.Available).configuration!!
             val resource = if (gateway) config.gateways.single().id else config.mcpServers.first().id
             val name = if (gateway) config.gateways.single().name else config.mcpServers.first().name
-            val target = McpConnectionDefinition.Managed(access,
+            val target = McpConnectionDefinition.ManagedLocal(access,
                 me.rerere.common.configuration.ConfigurationReference.Enterprise(access.scope.authority, resource), name,
-                bindings.binding(resource), bindings.version, "int_${Uuid.random()}", if (gateway) config.gateways.single().surface else null)
+                bindings.localBinding(resource), bindings.version, "int_${Uuid.random()}", if (gateway) config.gateways.single().surface else null)
             val factory = McpProtocolClientFactory(createHttpClient = { error("local service must not open user HTTP") },
                 createManagedHttpClient = { error("local service must not open network HTTP") }, createLocalHttpClient = { http })
             val client = factory.createClient(target)

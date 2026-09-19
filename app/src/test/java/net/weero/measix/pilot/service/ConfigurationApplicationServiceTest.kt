@@ -1,5 +1,6 @@
 package net.weero.measix.pilot.service
 
+import net.weero.measix.pilot.data.enterprise.toCandidate
 import android.content.Context
 import android.content.ContextWrapper
 import androidx.datastore.core.FileStorage
@@ -267,7 +268,7 @@ class ConfigurationApplicationServiceTest {
             env.commands.setModelFavorite(selection, env.model.id, true)
             val packet = exampleEnterprisePackage()
             env.sessions.synchronize(env.access, packet.copy(configuration = packet.configuration.copy(
-                generation = 2, policy = packet.configuration.policy.copy(allowLocalProviders = false))))
+                generation = 2, policy = packet.configuration.policy.copy(allowLocalProviders = false))).toCandidate())
             val restricted = catalog()
             assertEquals(env.model.id, restricted.storedSelections.chatModelId)
             assertEquals(ConfigurationUnavailableReason.USER_CATEGORY_NOT_ALLOWED, restricted.find(env.model.id)!!.unavailableReason)
@@ -367,7 +368,7 @@ class ConfigurationApplicationServiceTest {
             val current = env.sessions.state.value as EnterpriseState.Available
             val policyUpdate = launch {
                 env.sessions.synchronize(RealmAccess.Enterprise(packet.identity.scope, current.manifest.session!!.id),
-                    packet.copy(configuration = packet.configuration.copy(generation = 2, policy = packet.configuration.policy.copy(allowLocalMcp = false))))
+                    packet.copy(configuration = packet.configuration.copy(generation = 2, policy = packet.configuration.policy.copy(allowLocalMcp = false))).toCandidate())
             }
             runCurrent()
             assertFalse(writer.isCompleted)
@@ -424,7 +425,7 @@ class ConfigurationApplicationServiceTest {
             env.commands.changeAssistantPreference(env.target, AssistantPreferenceChange.Mcp(second.id, true))
             val current = env.sessions.state.value as EnterpriseState.Available
             env.sessions.synchronize(RealmAccess.Enterprise(packet.identity.scope, current.manifest.session!!.id),
-                packet.copy(configuration = packet.configuration.copy(generation = 2, policy = packet.configuration.policy.copy(allowLocalMcp = false))))
+                packet.copy(configuration = packet.configuration.copy(generation = 2, policy = packet.configuration.policy.copy(allowLocalMcp = false))).toCandidate())
             env.commands.changeAssistantPreference(env.target, AssistantPreferenceChange.Mcp(env.mcp.id, false))
             assertEquals(setOf(second.id), env.document().preferences.assistantUsage(packet.identity.scope, env.assistant.id)!!.mcpServers!!.value)
             env.commands.changeAssistantPreference(env.target, AssistantPreferenceChange.Mcp(second.id, false))
@@ -457,7 +458,7 @@ class ConfigurationApplicationServiceTest {
 
             val required = packet.copy(configuration = packet.configuration.copy(generation = 2,
                 gateways = packet.configuration.gateways.map { if (it.id == reference.id) it.copy(enablement = GatewayEnablementPolicy.REQUIRED) else it }))
-            env.sessions.synchronize(env.access, required)
+            env.sessions.synchronize(env.access, required.toCandidate())
             val requiredItem = env.queries.read(env.access).catalog.getValue(key)
             assertEquals(ResolvedGatewayEnablement(true, false), requiredItem.gatewayEnablement)
             assertTrue(requiredItem.access.requiredEnabled)
@@ -472,7 +473,7 @@ class ConfigurationApplicationServiceTest {
             }
             assertEquals(JsonInstant.encodeToString(before), JsonInstant.encodeToString(env.document()))
             assertFalse(before.preferences.gateway(packet.identity.scope, reference)!!.enabled)
-            env.sessions.synchronize(env.access, packet.copy(configuration = packet.configuration.copy(generation = 3)))
+            env.sessions.synchronize(env.access, packet.copy(configuration = packet.configuration.copy(generation = 3)).toCandidate())
             assertEquals(ResolvedGatewayEnablement(false, true), env.queries.read(env.access).catalog.getValue(key).gatewayEnablement)
         } finally { env.scope.cancel() }
     }
@@ -527,7 +528,7 @@ class ConfigurationApplicationServiceTest {
             val ownConfiguration = JsonInstant.encodeToString(env.document().configuration)
             val applied = env.sessions.state.value as EnterpriseState.Available
             env.sessions.synchronize(RealmAccess.Enterprise(packet.identity.scope, applied.manifest.session!!.id),
-                packet.copy(configuration = packet.configuration.copy(generation = 2, policy = packet.configuration.policy.copy(allowLocalProviders = false))))
+                packet.copy(configuration = packet.configuration.copy(generation = 2, policy = packet.configuration.policy.copy(allowLocalProviders = false))).toCandidate())
             val restricted = env.queries.observeCurrent().first()
             assertEquals(env.model.id, restricted.selection(ResourceSelectionSlot.CHAT_MODEL).reference)
             assertEquals(ConfigurationUnavailableReason.USER_CATEGORY_NOT_ALLOWED, restricted.selection(ResourceSelectionSlot.CHAT_MODEL).unavailableReason)

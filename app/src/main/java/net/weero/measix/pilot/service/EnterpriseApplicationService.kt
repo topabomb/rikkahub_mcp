@@ -14,6 +14,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import net.weero.measix.pilot.data.enterprise.*
 import net.weero.measix.pilot.service.portal.*
+import net.weero.measix.pilot.utils.userVisibleDiagnostic
 
 internal data class InstalledEnterpriseSource(
     val scope: ConfigurationScope.Enterprise,
@@ -45,6 +46,8 @@ internal data class LocalEnterpriseConfigurationEditResult(val configuration: Lo
 
 internal enum class LocalEnterpriseScenario { DISCONNECT, RECONNECT, EXPIRE_SOON, REVOKE }
 
+internal data class EnterpriseJoinConfirmation(val id: Uuid, val platformOrigin: String)
+
 internal data class EnterpriseOverview(
     val selection: RealmSelection?,
     val phase: EnterpriseSessionPhase?,
@@ -57,6 +60,8 @@ internal data class EnterpriseOverview(
     val failure: String?,
     val exitFailure: EnterpriseExitFailure?,
     val switching: Boolean,
+    val enrollmentRecoveryFailure: String? = null,
+    val recoveryLogoutFailure: String? = null,
 )
 
 /** Native enterprise UI commands share the existing source, Session, synchronization and exit owners. */
@@ -71,10 +76,29 @@ internal class EnterpriseApplicationService(
     private val media: PortalMediaStore,
     private val terminals: net.weero.measix.pilot.service.workspace.WorkspaceTerminalRuntime,
     private val speech: SpeechApplicationService,
+    private val platform: PlatformEnterpriseService,
 ) {
     private data class Switching(val request: RealmSwitchRequest, val result: Deferred<RealmSelection>)
     private val mutex = Mutex()
     private val switching = MutableStateFlow<Switching?>(null)
+    private val joinMutex = Mutex()
+    private var pendingJoin: Pair<EnterpriseJoinConfirmation, EnrollmentMaterial.Platform>? = null
+    private val enrollmentRecoveryFailure = MutableStateFlow<String?>(null)
+
+    init {
+        scope.launch {
+            try {
+                recovery.awaitReady()
+                platform.recoverPlatformAccess()?.let { synchronization.synchronize(it) }
+                enrollmentRecoveryFailure.value = null
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                android.util.Log.e("EnterpriseEnrollment", "Platform session recovery could not synchronize", error)
+                enrollmentRecoveryFailure.value = error.userVisibleDiagnostic()
+            }
+        }
+    }
 
     private fun observePresentation(): Flow<EnterprisePresentation> =
         combine(sessions.state, sessions.selectionRevision) { _, _ -> Unit }
@@ -82,8 +106,11 @@ internal class EnterpriseApplicationService(
             .distinctUntilChanged()
 
     // Task progress must remain observable while Session admission waits for host teardown.
-    fun observe(): Flow<EnterpriseOverview> = combine(observePresentation(), exit.failure, switching) {
-            presentation, exitFailure, activeSwitch ->
+    fun observe(): Flow<EnterpriseOverview> = combine(observePresentation(), exit.failure, switching,
+        enrollmentRecoveryFailure, combine(exit.recoveryLogoutFailure, platform.pendingLogoutFailure) { exitFailure, pendingFailure ->
+            exitFailure to pendingFailure
+        }) {
+            presentation, exitFailure, activeSwitch, resumeFailure, logoutFailures ->
             val available = presentation.state as? EnterpriseState.Available
             val manifest = available?.manifest
             val identity = manifest?.session?.identity ?: manifest?.lastIdentity
@@ -99,6 +126,8 @@ internal class EnterpriseApplicationService(
                 failure = (presentation.state as? EnterpriseState.Failed)?.reason,
                 exitFailure = exitFailure,
                 switching = activeSwitch != null,
+                enrollmentRecoveryFailure = resumeFailure,
+                recoveryLogoutFailure = logoutFailures.first.takeIf { manifest?.session == null } ?: logoutFailures.second,
             )
         }.distinctUntilChanged()
 
@@ -117,7 +146,36 @@ internal class EnterpriseApplicationService(
             }
         }
     }
-    suspend fun join(text: String) { recovery.awaitReady(); source.enroll(text) }
+    suspend fun join(text: String): EnterpriseJoinConfirmation? {
+        recovery.awaitReady()
+        return when (val material = EnrollmentMaterialParser().parse(text)) {
+            is EnrollmentMaterial.LocalExample -> { source.enroll(text); null }
+            is EnrollmentMaterial.Platform -> joinMutex.withLock {
+                EnterpriseJoinConfirmation(Uuid.random(), material.platformOrigin).also { pendingJoin = it to material }
+            }
+        }
+    }
+
+    suspend fun dismissJoin(confirmation: EnterpriseJoinConfirmation) = joinMutex.withLock {
+        if (pendingJoin?.first == confirmation) pendingJoin = null
+    }
+
+    suspend fun confirmJoin(confirmation: EnterpriseJoinConfirmation) {
+        recovery.awaitReady()
+        val material = joinMutex.withLock {
+            val pending = pendingJoin?.takeIf { it.first == confirmation }
+                ?: throw EnterpriseConfigurationException("enterprise_enrollment_replaced")
+            pendingJoin = null
+            pending.second
+        }
+        val access = platform.enroll(material, android.os.Build.MODEL, net.weero.measix.pilot.BuildConfig.VERSION_NAME)
+        enrollmentRecoveryFailure.value = null
+        val applied = synchronization.synchronize(access)
+        if (applied.configuration != null) {
+            val selection = requireNotNull(sessions.readPresentation().selection)
+            switchRealm(RealmSwitchRequest(selection, access))
+        }
+    }
     suspend fun exampleEnrollmentText(): String { recovery.awaitReady(); return source.exampleEnrollmentText() }
     suspend fun installedSources(): List<InstalledEnterpriseSource> {
         recovery.awaitReady()
@@ -230,7 +288,7 @@ internal class EnterpriseApplicationService(
         return request
     }
     suspend fun clearExampleData(request: EnterpriseExitRequest) { exit.clearExampleData(request, source.bundledScope()) }
-    suspend fun exit(request: EnterpriseExitRequest) { exit.exit(request) }
+    suspend fun exit(request: EnterpriseExitRequest): EnterpriseExitResult = exit.exit(request)
     suspend fun retryExit(failure: EnterpriseExitFailure) { exit.retry(failure) }
 
     suspend fun openPortal(context: Context, selection: RealmSelection, onClosed: (PortalClosure) -> Unit): PortalWebView {

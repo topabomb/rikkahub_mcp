@@ -4,7 +4,8 @@ import kotlinx.serialization.Serializable
 
 @Serializable
 data class TTSRequest(
-    val text: String
+    val text: String,
+    @kotlinx.serialization.Transient val transport: me.rerere.speech.SpeechHttpTransport? = null,
 )
 
 @Serializable

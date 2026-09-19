@@ -1,5 +1,6 @@
 package net.weero.measix.pilot.service
 
+import net.weero.measix.pilot.data.enterprise.toCandidate
 import android.content.Context
 import android.content.ContextWrapper
 import androidx.datastore.preferences.core.PreferenceDataStoreFactory
@@ -95,7 +96,7 @@ class ModelExecutionServiceTest {
             val access = env.sessions.captureSelectedRealmAccess() as RealmAccess.Enterprise
             val providers = io.mockk.mockk<me.rerere.ai.provider.ProviderManager>()
             env.service = ModelExecutionService(env.settings, env.sessions, env.gate, providers, source, env.scope,
-                EnterpriseSynchronizationService(env.sessions, source, env.scope))
+                EnterpriseSynchronizationService(env.sessions, source, env.scope, net.weero.measix.pilot.service.PlatformEnterpriseService(env.sessions, net.weero.measix.pilot.data.enterprise.PlatformControlClient(okhttp3.OkHttpClient()))), io.mockk.mockk())
             val stopped = CompletableDeferred<Unit>()
             val permitCleanup = CompletableDeferred<Unit>()
             val cleanupAttempted = CompletableDeferred<Unit>()
@@ -205,7 +206,7 @@ class ModelExecutionServiceTest {
             val captured = env.capture(access)
             assertTrue(captured.model.requests.execute { it } is ModelRequestTarget.Remote)
             env.sessions.synchronize(access, packet.copy(configuration = packet.configuration.copy(
-                generation = 2, policy = packet.configuration.policy.copy(allowLocalProviders = false))))
+                generation = 2, policy = packet.configuration.policy.copy(allowLocalProviders = false))).toCandidate())
             rejected { captured.model.requests.execute { fail("revoked provider reached I/O") } }
             val personal = env.capture(RealmAccess.Personal)
             assertTrue(personal.model.requests.execute { it } is ModelRequestTarget.Remote)
@@ -226,7 +227,7 @@ class ModelExecutionServiceTest {
             val captured = env.capture(access, id)
             env.sessions.synchronize(access, first.copy(runtimeBindings = first.runtimeBindings.map {
                 if (it.resourceId == "mdl_chat") it.copy(endpoint = "https://second.test/v1", credential = "second") else it
-            }))
+            }).toCandidate())
             val target = captured.model.requests.execute { it as ModelRequestTarget.Remote }
             assertEquals("https://first.test/v1", (target.provider as ProviderSetting.OpenAI).baseUrl)
             assertTrue((target.provider as ProviderSetting.OpenAI).useResponseApi)
@@ -307,7 +308,7 @@ class ModelExecutionServiceTest {
             val original = captured.model.requests.execute { it as ModelRequestTarget.LocalExample }
             assertEquals(second.id, original.resourceId)
             env.sessions.synchronize(access, packet.copy(configuration = packet.configuration.copy(generation = 2,
-                models = packet.configuration.models.map { if (it.id == second.id) it.copy(enabled = false) else it })))
+                models = packet.configuration.models.map { if (it.id == second.id) it.copy(enabled = false) else it })).toCandidate())
             rejected { captured.model.requests.execute { fail("revoked chosen model reached I/O") } }
         }
     }
@@ -354,7 +355,7 @@ class ModelExecutionServiceTest {
             assertNotEquals(captured.assistant.chatModelId, captured.model.model.id)
             env.sessions.synchronize(access, packet.copy(configuration = packet.configuration.copy(generation = 2,
                 models = packet.configuration.models.map { if (it.id == title.id) it.copy(modelId = "title-replacement") else it }),
-                runtimeBindings = packet.runtimeBindings.map { if (it.resourceId == title.id) it.copy(endpoint = "https://replacement.test/v1") else it }))
+                runtimeBindings = packet.runtimeBindings.map { if (it.resourceId == title.id) it.copy(endpoint = "https://replacement.test/v1") else it }).toCandidate())
             val target = captured.model.requests.execute { it as ModelRequestTarget.Remote }
             assertEquals("title-original", captured.model.model.modelId)
             assertEquals("https://title-original.test/v1", (target.provider as ProviderSetting.OpenAI).baseUrl)
@@ -421,7 +422,7 @@ class ModelExecutionServiceTest {
             assertNotEquals(captured.model.model.id, inspection.model.id)
             env.sessions.synchronize(access, packet.copy(configuration = packet.configuration.copy(generation = 2,
                 models = packet.configuration.models.map { if (it.id == vision.id) it.copy(modelId = "replacement") else it }),
-                runtimeBindings = packet.runtimeBindings.map { if (it.resourceId == vision.id) it.copy(endpoint = "https://replacement.test/v1") else it }))
+                runtimeBindings = packet.runtimeBindings.map { if (it.resourceId == vision.id) it.copy(endpoint = "https://replacement.test/v1") else it }).toCandidate())
             val target = inspection.requests.execute { it as ModelRequestTarget.Remote }
             assertEquals("https://vision-original.test/v1", (target.provider as ProviderSetting.OpenAI).baseUrl)
             assertEquals("vision-original", inspection.model.modelId)
@@ -448,7 +449,7 @@ class ModelExecutionServiceTest {
             val inspection = requireNotNull(captured.inspectionModel)
             inspection.requests.execute { assertTrue(it is ModelRequestTarget.Remote) }
             env.sessions.synchronize(access, packet.copy(configuration = packet.configuration.copy(generation = 2,
-                policy = packet.configuration.policy.copy(allowLocalProviders = false))))
+                policy = packet.configuration.policy.copy(allowLocalProviders = false))).toCandidate())
             rejected { inspection.requests.execute { fail("revoked inspection reached I/O") } }
             assertNotNull(env.capture(RealmAccess.Personal).inspectionModel)
             assertNull(env.capture(access, captured.assistant.id).inspectionModel)
@@ -468,7 +469,7 @@ class ModelExecutionServiceTest {
             val provider = io.mockk.mockk<me.rerere.ai.provider.Provider<ProviderSetting>>()
             io.mockk.every { providers.getProviderByType(any<ProviderSetting>()) } returns provider
             io.mockk.every { provider.requestMediaCapabilities(any(), any()) } returns me.rerere.ai.provider.RequestMediaCapabilities.NONE
-            env.service = ModelExecutionService(env.settings, env.sessions, env.gate, providers, io.mockk.mockk(), env.scope, io.mockk.mockk())
+            env.service = ModelExecutionService(env.settings, env.sessions, env.gate, providers, io.mockk.mockk(), env.scope, io.mockk.mockk(), io.mockk.mockk())
             env.sessions.enrollFixture(packet)
             val access = env.sessions.captureSelectedRealmAccess() as RealmAccess.Enterprise
             rejected { env.capture(access, packet.identity.reference(packet.configuration.defaults.assistantId!!)) }

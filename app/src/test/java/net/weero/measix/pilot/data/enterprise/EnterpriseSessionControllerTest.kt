@@ -80,10 +80,10 @@ class EnterpriseSessionControllerTest {
                 endpoint = "https://generativelanguage.googleapis.com", credential = "fixture-key") else binding
         })
         failCommit = true
-        expectFailure<IOException> { controller.synchronize(access, google) }
+        expectFailure<IOException> { controller.synchronize(access, google.toCandidate()) }
         assertEquals(first, controller.available())
         failCommit = false
-        controller.synchronize(access, google)
+        controller.synchronize(access, google.toCandidate())
         val current = controller.available()
         assertEquals(first.manifest.applied!!.generation, current.manifest.applied!!.generation)
         assertNotEquals(first.manifest.applied!!.revision, current.manifest.applied!!.revision)
@@ -136,7 +136,7 @@ class EnterpriseSessionControllerTest {
         val pending = controller.enrollLocal(packet.identity, { packet.identity }, { null })
         assertEquals(EnterpriseSessionPhase.CONFIGURATION_PENDING, controller.available().manifest.phase)
         expectReason("enterprise_session_not_ready") { controller.selectEnterpriseFixture() }
-        controller.synchronize(RealmAccess.Enterprise(packet.identity.scope, pending.manifest.session!!.id), packet)
+        controller.synchronize(RealmAccess.Enterprise(packet.identity.scope, pending.manifest.session!!.id), packet.toCandidate())
         controller.selectEnterpriseFixture()
         val ready = controller.available()
         controller.selectPersonalFixture()
@@ -150,7 +150,7 @@ class EnterpriseSessionControllerTest {
 
     @Test
     fun `staging and manifest failures preserve previous durable state and recovery removes orphans`() = runTest {
-        for (point in listOf(EnterpriseStorageCheckpoint.CONFIGURATION_STAGED, EnterpriseStorageCheckpoint.BINDINGS_STAGED, EnterpriseStorageCheckpoint.BEFORE_MANIFEST_COMMIT, EnterpriseStorageCheckpoint.MANIFEST_WRITTEN)) {
+        for (point in listOf(EnterpriseStorageCheckpoint.CONFIGURATION_STAGED, EnterpriseStorageCheckpoint.EXECUTION_STAGED, EnterpriseStorageCheckpoint.BEFORE_MANIFEST_COMMIT, EnterpriseStorageCheckpoint.MANIFEST_WRITTEN)) {
             val root = temporary.newFolder()
             var fault: EnterpriseStorageCheckpoint? = null
             val store = EnterpriseAppliedStore(root) { if (it == fault) throw IOException("injected") }
@@ -161,7 +161,7 @@ class EnterpriseSessionControllerTest {
             fault = point
             expectFailure<IOException> {
                 controller.synchronize(RealmAccess.Enterprise(packet.identity.scope, original.manifest.session!!.id),
-                    packet.copy(configuration = packet.configuration.copy(generation = 2)))
+                    packet.copy(configuration = packet.configuration.copy(generation = 2)).toCandidate())
             }
             assertEquals(original, controller.available())
             fault = null
@@ -178,14 +178,14 @@ class EnterpriseSessionControllerTest {
         val original = withCredential(exampleEnterprisePackage(), "first-private-key")
         controller.enrollFixture(original)
         val selectionRevision = controller.selectionRevision.value
-        val old = controller.captureBindings(controller.captureRealmAccess(original.identity.scope) as RealmAccess.Enterprise)
-        val peer = controller.captureBindings(controller.captureRealmAccess(original.identity.scope) as RealmAccess.Enterprise)
+        val old = controller.captureExecution(controller.captureRealmAccess(original.identity.scope) as RealmAccess.Enterprise)
+        val peer = controller.captureExecution(controller.captureRealmAccess(original.identity.scope) as RealmAccess.Enterprise)
         val changed = withCredential(original, "second-private-key")
-        controller.synchronize(RealmAccess.Enterprise(original.identity.scope, old.sessionId), changed)
+        controller.synchronize(RealmAccess.Enterprise(original.identity.scope, old.sessionId), changed.toCandidate())
         assertEquals(selectionRevision, controller.selectionRevision.value)
-        val newer = controller.captureBindings(controller.captureRealmAccess(original.identity.scope) as RealmAccess.Enterprise)
-        assertEquals("first-private-key", old.binding("mdl_chat").credential)
-        assertEquals("second-private-key", newer.binding("mdl_chat").credential)
+        val newer = controller.captureExecution(controller.captureRealmAccess(original.identity.scope) as RealmAccess.Enterprise)
+        assertEquals("first-private-key", old.localBinding("mdl_chat").credential)
+        assertEquals("second-private-key", newer.localBinding("mdl_chat").credential)
         assertEquals(2, File(root, "revisions").listFiles()!!.size)
         val publicFile = File(root, "revisions/${newer.version.revision}/configuration.json")
         assertFalse(publicFile.readText().contains("private-key"))
@@ -193,7 +193,7 @@ class EnterpriseSessionControllerTest {
         old.release()
         old.release()
         assertEquals(2, File(root, "revisions").listFiles()!!.size)
-        assertEquals("first-private-key", peer.binding("mdl_chat").credential)
+        assertEquals("first-private-key", peer.localBinding("mdl_chat").credential)
         peer.release()
         assertEquals(1, File(root, "revisions").listFiles()!!.size)
         newer.release()
@@ -205,9 +205,9 @@ class EnterpriseSessionControllerTest {
         val packet = exampleEnterprisePackage()
         val controller = EnterpriseSessionController(EnterpriseAppliedStore(root))
         controller.enrollFixture(packet)
-        val lease = controller.captureBindings(controller.captureRealmAccess(packet.identity.scope) as RealmAccess.Enterprise)
+        val lease = controller.captureExecution(controller.captureRealmAccess(packet.identity.scope) as RealmAccess.Enterprise)
         val token = controller.beginExit(requireNotNull(controller.captureExitRequest()))
-        expectReason("enterprise_binding_lease_unavailable") { lease.binding("mdl_chat") }
+        expectReason("enterprise_execution_lease_unavailable") { lease.localBinding("mdl_chat") }
         expectReason("enterprise_executions_pending") { controller.finishExit(token) }
         lease.release()
         controller.finishExit(token)
@@ -218,7 +218,7 @@ class EnterpriseSessionControllerTest {
         controller.enrollFixture(packet)
         val version = controller.available().manifest.applied!!
         val pending = controller.beginExit(requireNotNull(controller.captureExitRequest()))
-        File(root, "revisions/${version.revision}/bindings.json").writeText("damaged")
+        File(root, "revisions/${version.revision}/execution.json").writeText("damaged")
         val recovered = EnterpriseSessionController(EnterpriseAppliedStore(root))
         assertEquals(EnterpriseSessionPhase.CLOSING, (recovered.recover() as EnterpriseState.Available).manifest.phase)
         assertEquals(pending, recovered.pendingExit())
@@ -233,14 +233,14 @@ class EnterpriseSessionControllerTest {
         val controller = EnterpriseSessionController(EnterpriseAppliedStore(temporary.newFolder())) { 1000L }
         val first = controller.enrollFixture(packet)
         val original = RealmAccess.Enterprise(packet.identity.scope, first.manifest.session!!.id)
-        val old = controller.captureBindings(original)
+        val old = controller.captureExecution(original)
         val second = controller.enrollFixture(withCredential(packet, "replacement-key"))
         val replacement = RealmAccess.Enterprise(packet.identity.scope, second.manifest.session!!.id)
         assertNotEquals(original, replacement)
-        expectReason("enterprise_data_access_unavailable") { controller.captureBindings(original) }
-        expectReason("enterprise_binding_lease_unavailable") { old.binding("mdl_chat") }
-        val current = controller.captureBindings(replacement)
-        assertEquals("replacement-key", current.binding("mdl_chat").credential)
+        expectReason("enterprise_data_access_unavailable") { controller.captureExecution(original) }
+        expectReason("enterprise_execution_lease_unavailable") { old.localBinding("mdl_chat") }
+        val current = controller.captureExecution(replacement)
+        assertEquals("replacement-key", current.localBinding("mdl_chat").credential)
         old.release()
         current.release()
         controller.finishExit(controller.beginExit(requireNotNull(controller.captureExitRequest())))
@@ -250,16 +250,16 @@ class EnterpriseSessionControllerTest {
     fun `failed binding projection owns no execution lease and cannot block exit`() = runTest {
         var failRead = false
         val controller = EnterpriseSessionController(EnterpriseAppliedStore(temporary.newFolder()) {
-            if (failRead && it == EnterpriseStorageCheckpoint.BINDINGS_READ) throw IOException("injected")
+            if (failRead && it == EnterpriseStorageCheckpoint.EXECUTION_READ) throw IOException("injected")
         }) { 1000L }
         val packet = exampleEnterprisePackage()
         val ready = controller.enrollFixture(packet)
         val access = RealmAccess.Enterprise(packet.identity.scope, ready.manifest.session!!.id)
         failRead = true
-        try { controller.readBindings(access) { _, _ -> Unit }; fail("read succeeded") }
+        try { controller.readExecution(access) { _, _ -> Unit }; fail("read succeeded") }
         catch (_: IOException) { }
         failRead = false
-        try { controller.readBindings(access) { _, _ -> error("projection failed") }; fail("projection succeeded") }
+        try { controller.readExecution(access) { _, _ -> error("projection failed") }; fail("projection succeeded") }
         catch (_: IllegalStateException) { }
         val token = controller.beginExit(requireNotNull(controller.captureExitRequest()))
         controller.finishExit(token)
@@ -274,7 +274,7 @@ class EnterpriseSessionControllerTest {
             val entered = CompletableDeferred<Unit>()
             val resume = CountDownLatch(1)
             val store = EnterpriseAppliedStore(temporary.newFolder()) {
-                if (pauseRead && it == EnterpriseStorageCheckpoint.BINDINGS_READ) {
+                if (pauseRead && it == EnterpriseStorageCheckpoint.EXECUTION_READ) {
                     entered.complete(Unit)
                     check(resume.await(10, TimeUnit.SECONDS))
                 }
@@ -286,10 +286,10 @@ class EnterpriseSessionControllerTest {
             pauseRead = true
             val request = launch {
                 if (cancel) {
-                    controller.captureBindings(access)
+                    controller.captureExecution(access)
                     fail("Cancelled capture returned a lease")
                 } else {
-                    expectReason("enterprise_session_expired") { controller.captureBindings(access) }
+                    expectReason("enterprise_session_expired") { controller.captureExecution(access) }
                 }
             }
             entered.await()
@@ -312,11 +312,11 @@ class EnterpriseSessionControllerTest {
         }) { 1000L }
         val packet = exampleEnterprisePackage()
         val ready = controller.enrollFixture(packet)
-        val lease = controller.captureBindings(RealmAccess.Enterprise(packet.identity.scope, ready.manifest.session!!.id))
+        val lease = controller.captureExecution(RealmAccess.Enterprise(packet.identity.scope, ready.manifest.session!!.id))
         val token = controller.beginExit(requireNotNull(controller.captureExitRequest()))
         failPrune = true
         expectFailure<IOException> { lease.release() }
-        expectReason("enterprise_binding_lease_unavailable") { lease.binding("mdl_chat") }
+        expectReason("enterprise_execution_lease_unavailable") { lease.localBinding("mdl_chat") }
         expectReason("enterprise_executions_pending") { controller.finishExit(token) }
         failPrune = false
         lease.release()
@@ -333,8 +333,8 @@ class EnterpriseSessionControllerTest {
         val entered = CompletableDeferred<Unit>()
         val resume = CompletableDeferred<Unit>()
         var releases = 0
-        val lease = EnterpriseBindingLease("test-lease", ready.manifest.session!!.id, packet.identity.scope,
-            ready.manifest.applied!!, packet.runtimeBindings.associateBy { it.resourceId }) {
+        val lease = EnterpriseExecutionLease("test-lease", ready.manifest.session!!.id, packet.identity.scope,
+            ready.manifest.applied!!, packet.toCandidate()) {
             releases++
             entered.complete(Unit)
             resume.await()
@@ -345,7 +345,7 @@ class EnterpriseSessionControllerTest {
         runCurrent()
         assertFalse(first.isCompleted)
         assertFalse(second.isCompleted)
-        expectReason("enterprise_binding_lease_unavailable") { lease.binding("mdl_chat") }
+        expectReason("enterprise_execution_lease_unavailable") { lease.localBinding("mdl_chat") }
         first.cancel()
         second.cancel()
         runCurrent()
@@ -366,7 +366,7 @@ class EnterpriseSessionControllerTest {
         controller.enrollFixture(packet)
         val expiry = controller.available().manifest.session!!.expiresAtMillis
         controller.captureExitRequest()!!.let { controller.setLocalOffline(it.selection, it.access, true) }
-        expectReason("enterprise_session_not_ready") { controller.captureBindings(controller.captureRealmAccess(packet.identity.scope) as RealmAccess.Enterprise) }
+        expectReason("enterprise_session_not_ready") { controller.captureExecution(controller.captureRealmAccess(packet.identity.scope) as RealmAccess.Enterprise) }
         controller.selectPersonalFixture()
         controller.selectEnterpriseFixture()
         assertEquals(EnterpriseSessionPhase.OFFLINE, controller.available().manifest.phase)
@@ -385,7 +385,7 @@ class EnterpriseSessionControllerTest {
         val controller = EnterpriseSessionController(EnterpriseAppliedStore(root)) { 1000L }
         controller.enrollFixture(packet)
         val manifest = controller.available().manifest
-        File(root, "revisions/${manifest.applied!!.revision}/bindings.json").writeText("corrupt")
+        File(root, "revisions/${manifest.applied!!.revision}/execution.json").writeText("corrupt")
         val recovered = EnterpriseSessionController(EnterpriseAppliedStore(root)) { 1001L }
         assertEquals(EnterpriseState.Failed("enterprise_revision_hash_mismatch"), recovered.recover())
         val expired = EnterpriseSessionController(EnterpriseAppliedStore(root)) { manifest.session!!.expiresAtMillis }
@@ -428,7 +428,7 @@ class EnterpriseSessionControllerTest {
         breakRename = true
         expectFailure<EnterpriseStorageException> {
             controller.synchronize(RealmAccess.Enterprise(packet.identity.scope, previous.manifest.session!!.id),
-                packet.copy(configuration = packet.configuration.copy(generation = 2)))
+                packet.copy(configuration = packet.configuration.copy(generation = 2)).toCandidate())
         }
         assertEquals(previous, controller.available())
         assertEquals(previous.manifest, store.readManifest())
@@ -436,7 +436,7 @@ class EnterpriseSessionControllerTest {
 
     @Test
     fun `cancellation before commit retains old state while cancellation during owned commit publishes durable state`() = runTest {
-        for (point in listOf(EnterpriseStorageCheckpoint.BINDINGS_STAGED, EnterpriseStorageCheckpoint.MANIFEST_WRITTEN)) {
+        for (point in listOf(EnterpriseStorageCheckpoint.EXECUTION_STAGED, EnterpriseStorageCheckpoint.MANIFEST_WRITTEN)) {
             val root = temporary.newFolder()
             var pause = false
             val entered = CompletableDeferred<Unit>()
@@ -454,7 +454,7 @@ class EnterpriseSessionControllerTest {
             pause = true
             val operation = launch {
                 controller.synchronize(RealmAccess.Enterprise(packet.identity.scope, previous.manifest.session!!.id),
-                    packet.copy(configuration = packet.configuration.copy(generation = 2)))
+                    packet.copy(configuration = packet.configuration.copy(generation = 2)).toCandidate())
             }
             entered.await()
             operation.cancel()
@@ -462,7 +462,7 @@ class EnterpriseSessionControllerTest {
             operation.join()
             assertTrue(operation.isCancelled)
             assertEquals(controller.available().manifest, store.readManifest())
-            if (point == EnterpriseStorageCheckpoint.BINDINGS_STAGED) {
+            if (point == EnterpriseStorageCheckpoint.EXECUTION_STAGED) {
                 assertEquals(previous, controller.available())
             } else {
                 assertEquals(2L, controller.available().manifest.applied!!.generation)
@@ -478,14 +478,14 @@ class EnterpriseSessionControllerTest {
         val original = controller.available().manifest.applied!!
         controller.captureExitRequest()!!.let { controller.setLocalOffline(it.selection, it.access, true) }
         val access = RealmAccess.Enterprise(packet.identity.scope, first.manifest.session!!.id)
-        controller.synchronize(access, packet.copy(configuration = packet.configuration.copy(generation = 2, policy = packet.configuration.policy.copy(allowLocalMcp = false))))
+        controller.synchronize(access, packet.copy(configuration = packet.configuration.copy(generation = 2, policy = packet.configuration.policy.copy(allowLocalMcp = false))).toCandidate())
         assertEquals(original.generation + 1, controller.available().manifest.applied!!.generation)
         assertFalse(controller.available().configuration!!.policy.allowLocalMcp)
         assertEquals(first.manifest.session, controller.available().manifest.session)
         assertEquals(EnterpriseSessionPhase.OFFLINE, controller.available().manifest.phase)
-        expectReason("enterprise_session_not_ready") { controller.captureBindings(access) }
+        expectReason("enterprise_session_not_ready") { controller.captureExecution(access) }
         expectReason("enterprise_generation_regression") {
-            controller.synchronize(access, packet)
+            controller.synchronize(access, packet.toCandidate())
         }
     }
 
@@ -498,11 +498,11 @@ class EnterpriseSessionControllerTest {
         controller.synchronize(access, packet.copy(
             configuration = packet.configuration.copy(generation = 2, models = packet.configuration.models + EnterpriseModel("mdl_spare", "Spare", "spare")),
             runtimeBindings = packet.runtimeBindings + EnterpriseRuntimeBinding("mdl_spare", EnterpriseRuntimeProtocol.EXAMPLE),
-        ))
-        val lease = controller.captureBindings(controller.captureRealmAccess(packet.identity.scope) as RealmAccess.Enterprise)
-        assertEquals(EnterpriseRuntimeProtocol.EXAMPLE, lease.binding("mdl_spare").protocol)
+        ).toCandidate())
+        val lease = controller.captureExecution(controller.captureRealmAccess(packet.identity.scope) as RealmAccess.Enterprise)
+        assertEquals(EnterpriseRuntimeProtocol.EXAMPLE, lease.localBinding("mdl_spare").protocol)
         lease.release()
-        controller.synchronize(access, packet.copy(configuration = packet.configuration.copy(generation = 3)))
+        controller.synchronize(access, packet.copy(configuration = packet.configuration.copy(generation = 3)).toCandidate())
         assertFalse(controller.available().configuration!!.models.any { it.id == "mdl_spare" })
     }
 
@@ -513,9 +513,9 @@ class EnterpriseSessionControllerTest {
         controller.enrollFixture(packet.copy(configuration = packet.configuration.copy(generation = 2)))
         val original = controller.available()
         val access = RealmAccess.Enterprise(packet.identity.scope, original.manifest.session!!.id)
-        expectReason("enterprise_generation_regression") { controller.synchronize(access, packet) }
+        expectReason("enterprise_generation_regression") { controller.synchronize(access, packet.toCandidate()) }
         val conflicting = packet.copy(configuration = packet.configuration.copy(generation = 2, policy = packet.configuration.policy.copy(allowLocalProviders = false)))
-        expectReason("enterprise_generation_conflict") { controller.synchronize(access, conflicting) }
+        expectReason("enterprise_generation_conflict") { controller.synchronize(access, conflicting.toCandidate()) }
         expectReason("exit_current_enterprise_first") {
             controller.enrollFixture(packet.copy(identity = packet.identity.copy(userId = "someone_else")))
         }
