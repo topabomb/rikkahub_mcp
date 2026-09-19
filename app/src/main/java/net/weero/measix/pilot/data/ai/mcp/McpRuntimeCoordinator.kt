@@ -108,7 +108,6 @@ class McpRuntimeCoordinator internal constructor(
     private val settingsStore: SettingsStore,
     private val sessions: net.weero.measix.pilot.data.enterprise.EnterpriseSessionController,
     private val synchronization: net.weero.measix.pilot.service.EnterpriseSynchronizationService,
-    private val localMcp: net.weero.measix.pilot.data.enterprise.LocalEnterpriseMcpService,
     private val catalogStore: McpCatalogStore,
     private val appScope: AppScope,
     private val artifactStore: ArtifactStore,
@@ -178,7 +177,6 @@ class McpRuntimeCoordinator internal constructor(
                 }
             }
         },
-        createLocalHttpClient = localMcp::createClient,
         transportOverride = transportOverride,
         clientOverride = clientOverride,
     )
@@ -294,9 +292,6 @@ class McpRuntimeCoordinator internal constructor(
                     is ConfigurationReference.Enterprise -> {
                         val enterprise = requireNotNull(configuration.enterpriseConfiguration)
                         val digest = when (execution) {
-                            is EnterpriseExecution.Local -> execution.bindings.find { binding -> binding.resourceId == id.id }?.let { binding ->
-                                managedMcpDefinitionDigest(id, resource.name, binding, enterprise.generation)
-                            }
                             is EnterpriseExecution.Platform -> enterprise.mcpServers.find { definition -> definition.id == id.id }?.let { definition ->
                                 platformMcpDefinitionDigest(id, resource.name, execution, enterprise.generation, requireNotNull(definition.authOwnership))
                             }
@@ -575,25 +570,17 @@ class McpRuntimeCoordinator internal constructor(
             when (id) {
                 is ConfigurationReference.User -> settings.mcpServers.find { it.id == id }?.let { add(McpConnectionDefinition.User(it)) }
                 is ConfigurationReference.Enterprise -> enterprise.mcpServers.find { it.id == id.id }?.let { definition ->
-                    add(when (val execution = bindings.execution) {
-                        is EnterpriseExecution.Local -> McpConnectionDefinition.ManagedLocal(access, id, definition.name,
-                            bindings.localBinding(id.id), bindings.version, interactionId, null)
-                        is EnterpriseExecution.Platform -> McpConnectionDefinition.ManagedPlatform(access, id, definition.name,
-                            execution, requireNotNull(definition.authOwnership), bindings.version, interactionId) {
-                            check(bindings.execution == execution) { "enterprise_execution_changed_during_mcp_request" }
-                            val token = platform.accessToken(access.sessionId)
-                            check(bindings.execution == execution) { "enterprise_execution_changed_during_mcp_request" }
-                            sessions.requirePublishedRealmAccess(access)
-                            token.value
-                        }
+                    val execution = bindings.execution as EnterpriseExecution.Platform
+                    add(McpConnectionDefinition.ManagedPlatform(access, id, definition.name,
+                        execution, requireNotNull(definition.authOwnership), bindings.version, interactionId) {
+                        check(bindings.execution == execution) { "enterprise_execution_changed_during_mcp_request" }
+                        val token = platform.accessToken(access.sessionId)
+                        check(bindings.execution == execution) { "enterprise_execution_changed_during_mcp_request" }
+                        sessions.requirePublishedRealmAccess(access)
+                        token.value
                     })
                 }
             }
-        }
-        configuration.catalog.values.filter { it.key.category == ConfigurationCategory.GATEWAY && it.access.canExecute }.forEach { item ->
-            val id = item.key.reference as ConfigurationReference.Enterprise
-            val gateway = enterprise.gateways.single { it.id == id.id }
-            add(McpConnectionDefinition.ManagedLocal(access, id, gateway.name, bindings.localBinding(id.id), bindings.version, interactionId, gateway.surface))
         }
     }
 

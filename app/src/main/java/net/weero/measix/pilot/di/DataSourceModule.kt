@@ -20,9 +20,6 @@ import net.weero.measix.pilot.data.enterprise.EnterpriseExitReason
 import net.weero.measix.pilot.data.enterprise.PlatformControlClient
 import net.weero.measix.pilot.service.PlatformEnterpriseService
 import net.weero.measix.pilot.service.EnterpriseExitService
-import net.weero.measix.pilot.data.enterprise.LocalEnterpriseSource
-import net.weero.measix.pilot.data.enterprise.LocalEnrollmentAuthority
-import net.weero.measix.pilot.data.enterprise.LocalEnterpriseConfigurationStore
 import net.weero.measix.pilot.service.EnterpriseSynchronizationService
 import net.weero.measix.pilot.AppScope
 import java.io.File
@@ -55,6 +52,7 @@ val dataSourceModule = module {
         EnterpriseAppliedStore(File(get<Context>().noBackupFilesDir, "enterprise"))
     }
     single { EnterpriseSessionController(get()) }
+    single { net.weero.measix.pilot.data.enterprise.EnterpriseDataResetStore(File(get<Context>().noBackupFilesDir, "enterprise-reset")) }
     single { PlatformControlClient(get()) }
     single {
         val scope = get<AppScope>()
@@ -62,17 +60,7 @@ val dataSourceModule = module {
             scope.launch { get<EnterpriseExitService>().invalidate(access, EnterpriseExitReason.AUTHORIZATION_REVOKED) }
         })
     }
-    single {
-        val context = get<Context>()
-        LocalEnterpriseSource(
-            openExample = { context.assets.open(LocalEnterpriseSource.EXAMPLE_ASSET) },
-            openIdentity = { context.assets.open(LocalEnterpriseSource.IDENTITY_ASSET) },
-            sessions = get(), enrollmentAuthority = get(), configurations = get(),
-        )
-    }
-    single { LocalEnrollmentAuthority(File(get<Context>().noBackupFilesDir, "local_enterprise_service")) }
-    single { LocalEnterpriseConfigurationStore(File(get<Context>().noBackupFilesDir, "local_enterprise_service")) }
-    single { EnterpriseSynchronizationService(get(), get(), get<AppScope>(), get()) }
+    single { EnterpriseSynchronizationService(get(), get<AppScope>(), get()) }
     single {
         SettingsStore(appContext = get(), scope = get())
     }
@@ -151,17 +139,7 @@ val dataSourceModule = module {
         McpCatalogStore(context = get(), scope = get(), settingsStore = get())
     }
 
-    single { net.weero.measix.pilot.data.enterprise.LocalEnterpriseMcpService(get(), get()) }
-    single {
-        val context = get<Context>()
-        net.weero.measix.pilot.data.enterprise.LocalEnterpriseSpeechService(get(), get()) {
-            context.assets.open("enterprise/speech-example.mp3").use { it.readBytes() }
-        }
-    }
-    single {
-        val local = get<net.weero.measix.pilot.data.enterprise.LocalEnterpriseSpeechService>()
-        net.weero.measix.pilot.data.enterprise.EnterpriseSpeechTransport(local::execute)
-    }
+    single { net.weero.measix.pilot.data.enterprise.EnterpriseSpeechTransport() }
 
 
     single<OAuthCallbackKeepAlive> { McpOAuthCallbackKeepAlive() }
@@ -170,7 +148,6 @@ val dataSourceModule = module {
         McpRuntimeCoordinator(
             settingsStore = get(),
             sessions = get(),
-            localMcp = get(),
             synchronization = get(),
             catalogStore = get(),
             appScope = get(),

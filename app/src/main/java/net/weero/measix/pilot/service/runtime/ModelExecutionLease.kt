@@ -23,14 +23,6 @@ internal sealed interface ModelRequestTarget {
         val headers: List<CustomHeader> = emptyList(),
         val credentials: RequestCredentials = RequestCredentials.UserSettings,
     ) : ModelRequestTarget
-    class LocalExample(
-        val access: net.weero.measix.pilot.data.enterprise.RealmAccess.Enterprise,
-        val version: net.weero.measix.pilot.data.enterprise.EnterpriseAppliedVersion,
-        val resourceId: String,
-        private val source: net.weero.measix.pilot.data.enterprise.LocalEnterpriseSource,
-    ) : ModelRequestTarget {
-        suspend fun verifyRequest() = source.verifyModelRequest(access, version, resourceId)
-    }
 }
 
 /** A request view can execute against its original owner but cannot release shared resources. */

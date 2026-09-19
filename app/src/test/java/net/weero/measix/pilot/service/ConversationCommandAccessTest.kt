@@ -794,7 +794,7 @@ class ConversationCommandAccessTest {
 
     private inner class Fixture(test: TestScope) {
         val appScope = AppScope(StandardTestDispatcher(test.testScheduler))
-        val sessions = EnterpriseSessionController(EnterpriseAppliedStore(temporary.newFolder()))
+        val sessions = EnterpriseSessionController(net.weero.measix.pilot.data.enterprise.enterpriseTestStore(temporary.newFolder()))
         val scope = exampleEnterprisePackage().identity.scope
         val repository = mockk<ConversationRepository>()
         val settings = mockk<SettingsStore>()

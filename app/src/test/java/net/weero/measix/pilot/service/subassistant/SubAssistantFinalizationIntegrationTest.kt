@@ -125,7 +125,7 @@ class SubAssistantFinalizationIntegrationTest {
 
     @Test
     fun `enterprise child is interrupted without requiring a personal assistant definition`() {
-        val authority = EnterpriseAuthority("local:recovery", "dep_recovery")
+        val authority = EnterpriseAuthority("platform:recovery", "dep_recovery")
         val scope = ConfigurationScope.Enterprise(authority, "user")
         val target = ConfigurationReference.Enterprise(authority, "asd_child")
         val enterpriseChild = child.copy(assistantId = target, scope = scope)

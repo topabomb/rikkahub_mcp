@@ -68,7 +68,7 @@ class ConversationQueryServiceTest {
             folderRepository = mockk<FolderRepository>(relaxed = true),
             titleCoordinator = mockk<ConversationTitleCoordinator>(relaxed = true),
             attachmentPreviewProjector = mockk(relaxed = true),
-            sessions = EnterpriseSessionController(EnterpriseAppliedStore(temporary.newFolder())).apply { recover() },
+            sessions = EnterpriseSessionController(net.weero.measix.pilot.data.enterprise.enterpriseTestStore(temporary.newFolder())).apply { recover() },
             recoveryGate = ApplicationRecoveryGate().also { it.ready() },
             settings = mockk(),
             coordinator = mockk(),

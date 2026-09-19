@@ -50,7 +50,7 @@ class ChatNotificationManagerTest {
         val scope = AppScope(StandardTestDispatcher(testScheduler))
         val settings = mockk<SettingsStore> { every { userSettings } returns MutableStateFlow(Settings()) }
         var now = 1_000L
-        val sessions = EnterpriseSessionController(EnterpriseAppliedStore(temporary.newFolder())) { now }
+        val sessions = EnterpriseSessionController(net.weero.measix.pilot.data.enterprise.enterpriseTestStore(temporary.newFolder())) { now }
         val owner = ChatNotificationManager(app, scope, AppEventBus(), settings, sessions)
         try {
             val packet = exampleEnterprisePackage()
@@ -69,6 +69,7 @@ class ChatNotificationManagerTest {
             sessions.finishExit(exit)
             for (event in listOf(update, awaiting, ended)) owner.handleEvent(event)
             assertTrue(notifications.activeNotifications.isEmpty())
+            now = 1_000L
             sessions.enrollFixture(packet)
             for (event in listOf(update, awaiting, ended)) owner.handleEvent(event)
             assertTrue(notifications.activeNotifications.isEmpty())

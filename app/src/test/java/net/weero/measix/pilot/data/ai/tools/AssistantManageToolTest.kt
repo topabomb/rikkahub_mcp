@@ -228,7 +228,7 @@ class AssistantManageToolTest {
     }
 
     @Test fun `management execution passes the original enterprise caller to its sole command owner`() = runTest {
-        val authority = me.rerere.common.configuration.EnterpriseAuthority("local:example", "dep_example")
+        val authority = me.rerere.common.configuration.EnterpriseAuthority("platform:example", "dep_example")
         val reference = ConfigurationReference.Enterprise(authority, "asd_main")
         val access = net.weero.measix.pilot.data.enterprise.RealmAccess.Enterprise(
             net.weero.measix.pilot.data.configuration.ConfigurationScope.Enterprise(authority, "member"), "session-original")

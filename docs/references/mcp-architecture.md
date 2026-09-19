@@ -305,20 +305,10 @@ Gateway 按发布 policy 对完整工具对启停，REQUIRED 只读；写入携�
 构建/JVM 通过不等于真实 Android 验收。前后台、Wi-Fi/蜂窝、Doze、OAuth 浏览器回调、真实通知通道和 MCP UI/Agent
 仍需连接设备后执行对应 instrumentation 与现场场景。
 
-## 本地企业执行与只读检查
+## 企业平台执行与只读检查
 
-`LocalEnterpriseMcpService` 是已安装本地来源的 HTTP engine adapter；Client、Streamable HTTP transport、
-初始化、发现、surface 验证和调用仍走生产 MCP 链。它不创建网络 socket，也不把平台资料转成本地来源。
-Direct MCP 独立提供企业和成员显示资料，Gateway 提供动态与指南的 discover/invoke；两侧不重复暴露同一业务工具。动态查询复用原 Session 的 Feed owner。
-ToolRef 验证原来源/Deployment/User、Session、interaction、generation、schema、期限和签名，不能按名称回退。
-来源已发布新 generation 时返回共享契约要求的 428，不能先执行业务再报屏障。
-Gateway 返回的安全业务元数据经原 ToolExecutionContext 的 deferred metadata 协议提交，不另写执行记录。
+企业 Direct MCP 使用 Snapshot 中的 `runtimePath`、`authOwnership` 与当前 Applied generation，经 Core Relay 的 Streamable HTTP 进入既有 MCP Client/Runtime/Catalog 链。Android 不持有企业上游凭据，不创建本地 engine，也不将平台资料转换为用户 MCP 定义。Managed State 与 428 在执行准入前验证，不能先执行业务再报告版本屏障。
 
-助手 `assistant_inspect` 的工具清单读取原域配置和已确认 Catalog，不建立连接，也不借用当前页面的配置。
-用户目录要求 definition digest 匹配；企业目录要求原主体、generation、当前 binding 的 definition digest 和 Gateway surface 匹配。
-查询仅在既有 Session owner 锁内短读取 binding 并计算目录匹配，不创建执行租约、不缓存凭据或获得调用权限。
-该只读清单不包含 execution interaction，不能充当调用租约。MCP 管理页面与助手检查复用同一目录匹配规则。
+助手 `assistant_inspect` 只读取原域配置和已确认 Catalog，不建立连接，也不借用当前页面配置。用户目录要求 definition digest 匹配；企业目录还要求原主体、generation 和当前 platform execution 描述匹配。该查询不创建 execution lease、不缓存凭据，也不能充当调用授权。MCP 管理页面与助手检查复用同一目录匹配规则。
 
-本地示例模型在 `ModelRequestTransport` 消费同一请求的冻结工具目录，对公告、指南、企业信息请求发出标准工具调用。
-Gateway 只使用本轮成功发现结果中的 `toolRef`，失败不重试或回退 Direct；执行仍由 TurnToolSetFactory、TurnRunner 和 MCP owner 完成。
-流式调用携带正常 Provider transport slot，Step accumulator 分配 durable 身份。工具卡业务摘要来自提交后的受限 metadata，归档详情沿用同一摘要，不读取归档正文。
+实际调用仍由 `TurnToolSetFactory`、`TurnRunner` 和 MCP owner 完成。流式调用携带正常 Provider transport slot，Step accumulator 分配 durable 身份；安全业务元数据经 `ToolExecutionContext` 的 deferred metadata 协议提交，不另写执行记录。发现、调用或 428 失败不自动重试、不回退到同名用户工具，也不从名称猜测资源身份。

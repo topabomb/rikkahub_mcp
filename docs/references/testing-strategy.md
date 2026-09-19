@@ -36,14 +36,14 @@
 | commit-then-publish 与命令锁 | `ConversationCommandCoordinatorTest` |
 | active Turn session 与 live phase | `ConversationRuntimeTest` |
 | 模型执行原域、准入与绑定 | `ModelExecutionServiceTest` 使用真实 DataStore/企业存储验证同次聊天/识图/图片工具捕获、页面选择撤销、准备失败清理、原绑定保留、原凭据刷新、撤权与旧 Session；`ModelExecutionLeaseTest` 验证借用角色共同关闭、释放失败重试、准入取消和请求清理等待；`SubAssistantTurnIntegrationTest` 验证真实主子执行链撤权后的终态与原因一致 |
-| 模型来源版本屏障 | `LocalEnterpriseSourceTest` 验证实际流式/非流式 Mock 消费拒绝陈旧 generation；`ModelExecutionLeaseTest` 验证屏障永久关闭借用请求；`ModelExecutionServiceTest` 验证原 owner 释放后才同步，释放失败不得开放旧捕获 |
+| 模型来源版本屏障 | `PlatformControlClientTest` / `PlatformSessionNetworkTest` 验证 Managed State、Snapshot 与 428；`ModelRequestTransportTest` 和 execution lease 覆盖拒绝陈旧 generation、原 owner 释放后同步且不重放 |
 | 迟到通知 | `ChatNotificationManagerTest` 直接调用实际通知 owner，验证过期、退出、同主体重新登录后原事件不得发布，取消进度和已发布完成通知各守原生命周期；不以此宣称验证了系统通知权限 UI |
 | 图片任务与交接 | `ImageGenerationCoordinatorTest` 验证原页面 lease、取消准备/失败释放/退出重试、重复 ID 隔离及 Tool 借用；`GeneratedMediaStoreTest` 验证图库提交与副本接收失败、取消回交；`ImgGenVMTest` 验证连续替换等待清理；`EnterpriseImageGenerationAndroidTest` 使用实际 DataStore、Room、原生 PNG 和生产本地队列验证生成/编辑、域隔离、旧页面拒绝及退出，无真实 Provider 网络 |
 | 助手搜索偏好 | `AssistantModelTest` 验证共用模型与 Child 搜索独立性、缺失/显式空覆盖；`ModelExecutionServiceTest` 验证实际捕获及不支持传输的拒绝。旧无字段原文经 `UserSettingsMigrationTest` 和 `BackupArchiveServiceTest` 的生产迁移/恢复入口验证；实际 DataStore 重开归 `ScopedConfigurationAndroidTest` |
 | 请求凭据与传输保密 | `RequestCredentialsTest` 验证聊天四线及图片生成/编辑的实际请求构建、认证唯一性、私有图片下载与个人轮换缓存隔离；`ModelRequestTransportTest` 验证受管请求覆盖拒绝；`RequestPrivacyTest` 通过两个 HTTP 服务验证跨 origin 跳转阻断，`RequestLoggingInterceptorTest` 验证应用日志隔离 |
 | 辅助生成任务、原 Session 与摘要取消 | `AuxiliaryGenerationOwnershipTest` 使用实际生成与应用服务、延迟 Provider 验证取消等待、旧 Session、切域、手动标题、移交后原助手清理、清理失败重试、建议迟到清空拒绝及摘要先释放后提交；模型回退、原企业辅助 binding 和捕获前助手变化由 `ModelExecutionServiceTest` 验证；`ConversationRepositoryTreeIntegrationTest` 在真实 Room 注入 Child 删除失败，验证整个摘要树事务回滚及重试 |
 | 原生切域与 Portal 清理 | `EnterpriseApplicationServiceTest` 用真实 Session/store 和可控宿主回执验证发布屏障、进度与原选择/目标 Session；`PortalDocumentTest` 验证原请求、宿主超时及重开准入；`PortalWebViewAndroidTest` 验证系统 Cookie/站点存储清理和真实网页消息，`EnterprisePageAndroidTest` 验证原生页面接线与后台交接取消 |
-| MCP 本地企业执行 | `LocalEnterpriseMcpServiceTest` 经真实 SDK/Streamable HTTP 与本地 source engine 验证标准发现/调用、ToolRef 身份/期限、原 Session Feed 和 generation 屏障，并用实际 TurnToolSetFactory/TurnRunner 验证本地模型在流式和非流式下的 Direct/Gateway 工具续轮（捕获 checkpoint，不作 Room 提交验收）；`McpToolCallExecutorTest` 验证受管错误保密与 typed barrier；`McpTurnCapabilitySnapshotTest` 验证只读检查的策略、开关、目录版本与 binding 轮换。均不代表设备或真实平台互操作 |
+| MCP 企业执行 | `PlatformMcpProtocolTest`、`McpCatalog*Test` 与 `McpConnectionLifecycleTest` 验证平台 Streamable HTTP、目录提交、身份和 generation；`McpToolCallExecutorTest` 验证受管错误与 typed barrier。真实 Core/Firecrawl 调用和设备 UI 仍需单独证据 |
 | MCP 页面与业务工具卡 | `McpQueryServiceTest` 验证原选择目录、不可用恢复及旧 Session 清空；`SettingMcpPageAndroidTest` 挂载正式页面验证受管只读、Gateway 强制/可控与等待提交；`GatewayToolCardAndroidTest` 挂载归档工具卡验证安全业务 metadata，不读取归档正文 |
 | 语音传输与清理 | `RequestCancellationTest` 经本机 HTTP 服务验证响应头等待和正文读取中的实际 Call 取消；`OpenAITtsWireTest` 验证显式模型/音色与 MP3 请求；`EnterprisePackageTest` 验证 TTS/ASR 字段边界。`SystemTtsSequentialPlaybackInstrumentedTest` 验证系统音频、顺序队列、暂停、停止/销毁等待合成退出和迟到恢复拒绝；不代表企业语音端到端验收 |
 | 企业语音协议 | `EnterpriseSpeechTransportTest` 消费原 Session/source、本地 MP3 资产和实际 multipart 编码，验证 WAV 内容、generation 屏障先于正文消费、共享 Problem 样例及私有 HTTP 不重放/不重定向。该层测试不代表麦克风、播放或 UI 接线验收 |
@@ -86,9 +86,8 @@
 | 企业助手选择、当前空间设置与 Starter | `EnterprisePackageTest` 验证可选字段缺省值与保存保全；`ConfigurationResolverTest` 验证排序和助手准入；`ConversationPageAccessTest` 验证原选择/配置拒绝与新 Draft 不建库；`MemoryServiceTest` 验证 Seed 更新与运行记录独立、旧会话目标编辑失效；`RetiredSurfaceContractTest` 防止独立企业助手目录复活。预填路由、返回原草稿及键盘交互需实际应用验证 |
 | 会话目录、FTS 与统计域过滤 | `ScopedConversationQueryTest`、`SelectedRealmPagingSourceTest` 验证原 Session 工具、列表恢复及实际 Pager 失效；`ConversationDAOIntegrationTest` 和使用生产数据库工厂的 `ScopedMessageSearchAndroidTest` 验证真实 Room/Requery/Jieba 的完整主体过滤与限额前过滤，不替代按 ID 页面/命令授权验收 |
 | 聊天页面打开与生命周期 | `ConversationPageAccessTest` 验证显式 Draft/Existing、原 Session、header 前置检查与投影撤销；`ChatPageLifecycleTest` 验证实际 ViewModel 的授权先行、取消/回收、分享输入消费；`UserSettingsMigrationAndroidTest` 验证实际 DataStore/SharedPreferences 的最近聊天迁移、失败重试和保全；不替代普通命令/Turn 或正式企业 UI 验收 |
-| Portal 消息与文档授权 | `PortalProtocolTest` 核验完整共享输入摘要，执行全部 BridgeRequest 案例和原始重复键；`PortalDocumentTest` 使用真实本地 Session/Feed owner 验证原文档、ETag、配置同步、切域往返、文档替换及迟到同步结果；`PortalWebViewAndroidTest` 覆盖随包网页首次读取、实际 bootstrap、页内导航、重载后新页面、快速切域和旧同步错误隔离。设备验证结果见实施方案；请求解析不代表共享响应反例全部消费，页面测试不替代媒体、扫码或真实平台验收 |
-| 清除内置示例数据 | `EnterpriseExitServiceTest` 验证原主体、旧选择、普通退出不可代替清除、CLOSING 重试与 Feed 回收失败；`EnterpriseDataRemovalAndroidTest` 经实际 Room/DataStore/会话命令与文件 owner 验证完整主体清除、其他主体保全、Draft/staging 和媒体回执的启动恢复。未运行的 Provider 协作者使用替身，不等同于全部在途任务设备验收 |
-| 本地模型的子助手示例 | `ModelRequestTransportTest` 消费随包委派 Starter 和正式 Disclosure renderer，验证最新目录 ID、流式/非流式标准调用、结果续轮、缺工具、同名歧义与目录文本不触发用户动作；它只证明 Mock 模型输出，实际 Child 创建/运行/持久化由既有子助手组件和正式设备聊天分别验证 |
+| Portal 消息与文档授权 | `PortalProtocolTest` 核验共享 manifest、全部 BridgeRequest vectors、重复键与 HTTP/HTTPS 外链；`PortalPageBindingTest` 验证文档 owner、原回复通道和迟到结果隔离；`PortalCaptureAndroidTest` 覆盖媒体原生交互。Core grant → 原生 POST → Cookie → `/portal/`、系统浏览器外链和真实网页仍需端到端设备场景 |
+| 本机企业数据重置 | `EnterpriseDataResetServiceTest` 使用真实 AppliedStore/Session owner 验证两分支对所有企业 realm 的范围、损坏存储、intent 续跑、失败重试和 installation ID 清理；`ApplicationRecoveryCoordinatorTest` 验证恢复顺序；`EnterprisePageAndroidTest` 验证常驻入口与确认不自动执行。真实 Core 换用户需设备场景验证 reset 后使用新 installation ID |
 
 企业聊天配置由 `ConfigurationApplicationServiceTest` 验证实际字段命令、DataStore 失败/取消与根会话锁，
 `AssistantPreferenceMutationTest` 验证固定 MCP 与旧显式偏好的保全。`ConversationCommandAccessTest` 验证原助手、
@@ -136,13 +135,13 @@ checkpoint 写放大是行为事实，归 `service/turn/TurnPersistenceDeltaTest
 
 `PortalDocumentTest` 使用真实 Session、Registry 和退出 service 验证退出等待原网页请求收尾、CLOSING 拒绝新文档、旧 Session 不关闭新登录文档；两份文档的关闭测试以显式门阻挡第二份请求，验证首份清理失败不能提前结束全体等待，失败可重试且 UI 通知异常不阻塞退出。`PortalWebViewAndroidTest` 消费实际 Portal 包和 Android WebView，核实导航关闭通知携带原文档原因且发生在 detach 后，并通过 `awaitClosed` 等待迟到请求。
 
-网页原生操作同样由 `PortalDocumentTest` 验证：真实退出 owner 在取消发起请求后继续完成，拒绝/超时/旧提示不能执行外部操作，固定时钟推进超过文档期限时即使关闭定时任务未执行也拒绝确认。`PortalWebViewAndroidTest` 的网页退出用随包页面触发真实 Bridge、Compose 原生确认、Session/store/Exit owner；只替换会话运行停止 port，分别核实取消保留登录及确认后关闭并退出，不以这一用例替代真实会话运行停止的独立集成测试。
+网页原生操作由 `PortalPageBindingTest`、`PortalProtocolTest` 与 `PortalCaptureAndroidTest` 分层验证。JVM 测试覆盖文档绑定、参数和迟到结果，instrumentation 覆盖 Android 媒体交互；真实 Core grant、Compose 确认、系统浏览器外链、关闭/退出及 Session owner 收口需要设备端到端验证。
 
 `PortalMediaStoreTest` 使用真实临时文件和注入时钟验证文档归属、预留额度、格式与分块、五分钟期限、仍在写入的文件保留、取消回交、删除失败后的额度/所有权和重试。大 MP4 brand 表只验证容器扫描的有界实现与发布，不替代音频解码或硬件采集测试。`PortalDocumentTest` 使用实际文件 owner 和可控硬件回执验证取消发布、回复失败补偿、取消读取保留已交付句柄，以及清理失败重试和切域屏障。`PortalWebViewAndroidTest` 使用实际包触发原生采集，核实照片/音频预览及网页释放；`PortalCaptureAndroidTest` 验证实际录音限时自动停止、硬件重用、权限拒绝和相机打开期间关闭。原生 Activity 权限弹窗与正式页面后台行为单独记录设备证据；分层执行结果见实施方案。
 
 企业退出由 `EnterpriseExitServiceTest` 验证调用者取消、重复请求、到期准入写盘失败、清理失败及重试；坏企业 manifest 使用真实恢复编排验证个人启动不被阻断。`ConversationCommandAccessTest` 使用真实会话 owner 验证按域停止、辅助任务等待、终态提交失败与空闲 Runtime 淘汰竞态。`SubAssistantTurnIntegrationTest` 在真实主/子 Runner 链的 Child 创建、父 link 提交及 Child START 提交窗口触发真实退出，验证原 Session 拒绝迟到 START、lease 释放、存留 Child 的完整 link 及子运行终态失败重试；IO double 从成功提交记录归并最新事实，不能以默认空集合绕过退出核验。`EnterpriseSessionControllerTest` 与设备上的 `EnterpriseAppliedStateAndroidTest` 验证退出原因、CLOSING 重开及当前磁盘 manifest 重开保全及旧原型版本拒绝；`ConversationRepositoryTreeIntegrationTest` 验证真实 Room 的未完成主/子运行按完整主体计数。这些测试不代表正式页面、媒体或真实平台退出已验收。
 
-平台接入的离线协议门禁由 `PlatformWireTest`、`PlatformSnapshotMapperTest` 和共享 Core cases 检查结构、引用闭包、重复 MCP 引用与 generation；`PlatformAuthenticationTest`、`PlatformSessionNetworkTest` 结合加密存储和本机 HTTP 验证一次性兑换后的 Bootstrap 临时/终态恢复、跨 origin 离线切换、Core 撤销信号、刷新幂等键、应用回报及 CLOSING 时先恢复 pending refresh 再 logout。`EnterpriseExitServiceTest` 验证远端注销失败后本机完成退出、重启恢复时仍暴露未确认诊断。设备上的 `PlatformCredentialAndroidTest` 负责真实 AndroidKeyStore；`PlatformModelLiveAndroidTest` 仅在显式 `platformLive=true` 且已有平台 Session 时验证实际发布的模型流式/辅助、MCP 目录、MiMo/系统播放、已知 WAV 转写及真实 Core 428 未转发屏障，不由 JVM 替身或仅构建通过替代。未发布资源、麦克风声学输入、Realtime ASR 与 Release 首次接入须分别验收；个人空间无可用模型时，入口和隔离回归不能算作个人真实对话验收。
+平台接入的离线协议门禁由 `PlatformWireTest`、`PlatformSnapshotMapperTest` 和共享 Core cases 检查结构、引用闭包、重复 MCP 引用与 generation；`PlatformControlClientTest` 还验证 Portal grant 使用当前 Bearer、固定同源 exchange endpoint 且服务端明确拒绝后不产生请求重放。`PlatformAuthenticationTest`、`PlatformSessionNetworkTest` 结合加密存储和本机 HTTP 验证一次性兑换后的 Bootstrap 临时/终态恢复、跨 origin 离线切换、Core 撤销信号、刷新幂等键、应用回报及 CLOSING 时先恢复 pending refresh 再 logout。`EnterpriseExitServiceTest` 验证远端注销失败后本机完成退出、重启恢复时仍暴露未确认诊断。设备上的 `PlatformCredentialAndroidTest` 负责真实 AndroidKeyStore；`PlatformModelLiveAndroidTest` 仅在显式 `platformLive=true` 且已有平台 Session 时验证实际发布的模型流式/辅助、MCP 目录、MiMo/系统播放、已知 WAV 转写及真实 Core 428 未转发屏障，不由 JVM 替身或仅构建通过替代。未发布资源、麦克风声学输入、Realtime ASR、remote Portal 与 Release 首次接入须分别验收；个人空间无可用模型时，入口和隔离回归不能算作个人真实对话验收。
 
 - **禁止 wall-clock 等待**：不用 `Thread.sleep`、固定 `delay` 后猜状态、轮询到 timeout。用 `runTest`、`CompletableDeferred`、`Channel`、`Mutex` barrier、`TestCoroutineScheduler`、`advanceUntilIdle`。
 - 真实平台的负行为测试可保留明确的观察窗口（如暂停期间不得开始播放）；窗口只观察该时间段的禁止行为，不能用它猜测合成或 collector 已完成。完成与顺序断言等待真实可观测状态，跨线程记录用 StateFlow/Channel 交接。
@@ -201,7 +200,7 @@ AndroidX JSON 的 `sampledMetrics` 保留每轮耗时与 `JavaAllocatedBytesAppr
 
 真实 IME 布局验证要求非零 inset 的停靠软键盘，CI 关闭硬键盘。`TtsControllerLayoutTest` 使用 edge-to-edge/adjustResize 窗口，并等待实际 IME 高度；测试需要临时调整系统手写设置时，只在最小授权作用域写入，任何失败均在 finally 恢复原值。键盘未出现不能转换为跳过，也不能改变生产输入配置来满足测试。
 
-`contracts/runtime/managed-snapshot-required.json` 原样来自 platform-core 的 `api/fixtures/problem/managed-snapshot-required.json`，由 `LocalEnterpriseMcpServiceTest` 消费。其余本地工具行为测试是 Android 自有测试，不宣称已有跨端共享样例覆盖。
+`contracts/runtime/managed-snapshot-required.json` 原样来自 platform-core 的 `api/fixtures/problem/managed-snapshot-required.json`，由平台 Runtime/MCP 测试消费。Android 自有工具测试不宣称跨端共享样例或真实服务互操作。
 
 `WorkspaceTerminalAndroidTest` 的 native PTY 使用 Android 系统 shell。Linux Rootfs 的实际验收由 `WorkspaceProotAndroidTest` 单独负责，显式传 `-Pandroid.testInstrumentationRunnerArguments.prootRootfsUrl=<匹配 ABI 的已核验 Rootfs URL>` 才下载并执行；未提供 fixture 时明确跳过。该测试使用独立临时 workspace 并在结束后清理，不修改用户已有工作区。x86_64 / 4 KB 场景验证生产 Shell、文件操作、长输出、超时、取消与双 PTY；x86_64 / 16 KB 场景用同一标准 4 KB Ubuntu archive 验证明确拒绝和旧目录保全。两环境的互斥场景跳过必须分别记账，不能汇总成所有 PRoot 场景通过；arm64 仍需对应镜像与设备执行。
 

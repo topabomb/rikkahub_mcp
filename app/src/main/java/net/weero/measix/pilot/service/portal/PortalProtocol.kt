@@ -2,9 +2,7 @@ package net.weero.measix.pilot.service.portal
 
 import java.math.BigDecimal
 import java.net.URI
-import java.time.LocalDate
 import kotlinx.serialization.json.*
-import net.weero.measix.pilot.data.enterprise.EnterpriseFeedQuery
 
 internal class PortalFailure(val code: String) : IllegalArgumentException(code)
 
@@ -19,9 +17,6 @@ internal sealed interface PortalCommand {
     data class ReadMedia(val mediaId: String, val offset: Int, val maxBytes: Int) : PortalCommand
     data class ReleaseMedia(val mediaId: String) : PortalCommand
     data class Cancel(val targetRequestId: String) : PortalCommand
-    data object GetLocalContext : PortalCommand
-    data class ListLocalUpdates(val query: EnterpriseFeedQuery, val ifNoneMatch: String?) : PortalCommand
-    data class GetLocalUpdate(val id: String) : PortalCommand
 }
 
 internal data class PortalRequest(val documentId: String, val requestId: String, val command: PortalCommand)
@@ -29,13 +24,8 @@ internal data class PortalRequest(val documentId: String, val requestId: String,
 /** The wire boundary accepts only the object/primitive grammar used by Bridge v3 requests. */
 internal object PortalProtocol {
     const val VERSION = 3
-    const val LOCAL_READ_VERSION = 2
-    const val LOCAL_ORIGIN = "https://local.measix.invalid"
-    const val LOCAL_ENTRY = "$LOCAL_ORIGIN/portal/"
     const val MAX_REQUEST_BYTES = 65536
     private val integer = Regex("-?(?:0|[1-9][0-9]*)(?:\\.[0-9]+)?(?:[eE][+-]?[0-9]+)?")
-    private val date = Regex("\\d{4}-\\d{2}-\\d{2}")
-    private val updateId = Regex("eup_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}")
 
     fun decode(raw: String, maxBytes: Int = MAX_REQUEST_BYTES): JsonObject {
         if (raw.length > maxBytes || raw.toByteArray(Charsets.UTF_8).size > maxBytes) fail("resource_limit")
@@ -58,11 +48,10 @@ internal object PortalProtocol {
             "close" -> params.empty(PortalCommand.Close)
             "logout" -> params.empty(PortalCommand.Logout)
             "capturePhoto" -> params.empty(PortalCommand.CapturePhoto)
-            "getLocalContext" -> params.empty(PortalCommand.GetLocalContext)
             "openExternal" -> {
                 params.keys(setOf("url"))
                 val uri = try { URI(params.text("url")) } catch (_: Exception) { fail() }
-                if (uri.scheme != "https" || uri.host.isNullOrEmpty() || uri.rawUserInfo != null || uri.port == 0 ||
+                if (uri.scheme !in setOf("http", "https") || uri.host.isNullOrEmpty() || uri.rawUserInfo != null || uri.port == 0 ||
                     uri.port > 65535 || uri.rawAuthority.endsWith(':')) fail()
                 PortalCommand.OpenExternal(uri)
             }
@@ -82,19 +71,6 @@ internal object PortalProtocol {
             "cancel" -> {
                 params.keys(setOf("targetRequestId"))
                 PortalCommand.Cancel(params.text("targetRequestId", 128))
-            }
-            "listLocalUpdates" -> {
-                if (params.keys.any { it !in setOf("startDate", "endDate", "limit", "ifNoneMatch") }) fail()
-                val start = params.optionalDate("startDate")
-                val end = params.optionalDate("endDate")
-                if (start != null && end != null && start > end) fail()
-                PortalCommand.ListLocalUpdates(EnterpriseFeedQuery(start, end,
-                    if ("limit" in params) params.number("limit", 1, 20).toInt() else 10),
-                    if ("ifNoneMatch" in params) params.text("ifNoneMatch", 256) else null)
-            }
-            "getLocalUpdate" -> {
-                params.keys(setOf("enterpriseUpdateId"))
-                PortalCommand.GetLocalUpdate(params.text("enterpriseUpdateId").also { if (!updateId.matches(it)) fail() })
             }
             else -> fail("unsupported_method")
         }
@@ -125,10 +101,6 @@ internal object PortalProtocol {
         body()
     }.toString()
 
-    private fun JsonObject.optionalDate(name: String): String? = if (name !in this) null else text(name).also {
-        if (!date.matches(it)) fail()
-        try { LocalDate.parse(it) } catch (_: Exception) { fail() }
-    }
     private fun JsonObject.keys(expected: Set<String>) { if (keys != expected) fail() }
     private fun <T> JsonObject.empty(value: T): T { keys(emptySet()); return value }
     private fun JsonObject.text(name: String, max: Int = 65536): String {

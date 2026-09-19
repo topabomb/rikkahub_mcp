@@ -107,7 +107,7 @@ class SubAssistantTurnIntegrationTest {
         val entered = CompletableDeferred<Unit>()
         val release = CompletableDeferred<Unit>()
         try {
-            val sessions = EnterpriseSessionController(EnterpriseAppliedStore(root))
+            val sessions = EnterpriseSessionController(net.weero.measix.pilot.data.enterprise.enterpriseTestStore(root))
             val access = if (exitWindow == null) RealmAccess.Personal else {
                 sessions.enrollFixture(exampleEnterprisePackage())
                 sessions.captureSelectedRealmAccess()
@@ -312,7 +312,7 @@ class SubAssistantTurnIntegrationTest {
                     SubAssistantLifecycle(repository, registry, commands, JsonInstant), mockk(), artifacts, mockk(), finalizer,
                     JsonInstant, mockk(), ConversationTitleCoordinator(), sessions, runGate)
                 val synchronization = mockk<EnterpriseSynchronizationService> { coEvery { cancelAndAwait(any()) } returns Unit }
-                val exit = EnterpriseExitService(sessions, synchronization, application, gate, appScope, net.weero.measix.pilot.service.portal.PortalDocumentRegistry(), mockk(relaxed = true), mockk { io.mockk.coEvery { closeRealm(any()) } returns Unit }, mcp = mockk { io.mockk.coEvery { closeRealm(any()) } returns Unit }, speech = mockk(relaxed = true), settings = mockk(), memories = mockk(), catalogs = mockk(), files = mockk(), platformLogout = {})
+                val exit = EnterpriseExitService(sessions, synchronization, application, gate, appScope, net.weero.measix.pilot.service.portal.PortalDocumentRegistry(), mockk(relaxed = true), mockk { io.mockk.coEvery { closeRealm(any()) } returns Unit }, mcp = mockk { io.mockk.coEvery { closeRealm(any()) } returns Unit }, speech = mockk(relaxed = true), platformLogout = {})
                 val request = requireNotNull(exit.captureRequest())
                 val pending = async { try { exit.exit(request); null } catch (error: Exception) { error } }
                 sessions.state.first { it is EnterpriseState.Available && it.manifest.phase == EnterpriseSessionPhase.CLOSING }

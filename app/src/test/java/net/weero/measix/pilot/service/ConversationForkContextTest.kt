@@ -93,7 +93,7 @@ class ConversationForkContextTest {
         val gate = ApplicationRecoveryGate().apply { ready() }
         val commandCoordinator = ConversationCommandCoordinator(registry, repository, gate, locks)
         val sessions = net.weero.measix.pilot.data.enterprise.EnterpriseSessionController(
-            net.weero.measix.pilot.data.enterprise.EnterpriseAppliedStore(temporary.newFolder()),
+            net.weero.measix.pilot.data.enterprise.enterpriseTestStore(temporary.newFolder()),
         )
         sessions.recover()
         registry.registerSnapshot(snapshot)

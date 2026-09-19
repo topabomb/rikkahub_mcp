@@ -1391,6 +1391,9 @@ class ArtifactStore(
         result
     }
 
+    internal suspend fun enterpriseScopes(): Set<ConfigurationScope.Enterprise> =
+        artifactDAO.scopes().filterIsInstance<ConfigurationScope.Enterprise>().toSet()
+
     /** Includes every folder and lifecycle state; an outstanding owner must release its pin first. */
     internal suspend fun clearEnterpriseScope(scope: ConfigurationScope.Enterprise) = withSettingsDetach { detach ->
         val result = deleteEntitiesLocked(artifactDAO.listInScope(scope), detach)

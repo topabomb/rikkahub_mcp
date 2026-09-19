@@ -37,7 +37,7 @@ class UserSettingsMigrationAndroidTest {
         val legacy = context.getSharedPreferences("MeasixPilot.preferences", Context.MODE_PRIVATE)
         val personalId = Uuid.random()
         val enterpriseId = Uuid.random()
-        val enterprise = ConfigurationScope.Enterprise(EnterpriseAuthority("local:example", "deployment"), "alice")
+        val enterprise = ConfigurationScope.Enterprise(EnterpriseAuthority("platform:example", "deployment"), "alice")
         val initial = UserSettingsDocument.empty().let { document ->
             document.copy(preferences = document.preferences.withLastConversation(enterprise, enterpriseId))
         }

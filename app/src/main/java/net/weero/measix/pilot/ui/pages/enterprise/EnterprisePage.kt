@@ -12,13 +12,9 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.Alignment
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.semantics.clearAndSetSemantics
-import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -35,13 +31,12 @@ import io.github.g00fy2.quickie.QRResult
 import io.github.g00fy2.quickie.ScanQRCode
 import kotlinx.coroutines.*
 import net.weero.measix.pilot.R
-import net.weero.measix.pilot.BuildConfig
 import net.weero.measix.pilot.Screen
 import net.weero.measix.pilot.data.enterprise.EnterpriseSessionPhase
 import net.weero.measix.pilot.data.enterprise.RealmAccess
 import net.weero.measix.pilot.data.enterprise.RealmSelection
-import net.weero.measix.pilot.service.EnterpriseOverview
-import net.weero.measix.pilot.service.LocalEnterpriseScenario
+import net.weero.measix.pilot.data.enterprise.EnterpriseDataResetMode
+import net.weero.measix.pilot.service.EnterpriseResetPath
 import net.weero.measix.pilot.service.portal.PortalWebView
 import net.weero.measix.pilot.service.portal.PortalNativeActions
 import net.weero.measix.pilot.service.portal.PortalNativePrompt
@@ -50,16 +45,17 @@ import net.weero.measix.pilot.service.portal.PortalCapturePhase
 import android.Manifest
 import android.content.pm.PackageManager
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.activity.result.PickVisualMediaRequest
 import androidx.core.content.ContextCompat
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
-import net.weero.measix.pilot.ui.components.ui.QRCode
 import net.weero.measix.pilot.ui.components.ui.CardGroup
 import net.weero.measix.pilot.ui.context.LocalNavController
 import org.koin.androidx.compose.koinViewModel
 import java.text.DateFormat
 import java.util.Date
 import net.weero.measix.pilot.utils.base64Encode
+import net.weero.measix.pilot.utils.ImageUtils
 
 private data class StarterPresentation(
     val selection: RealmSelection,
@@ -77,8 +73,6 @@ internal fun EnterpriseSpaceButton(
     val label = if (access is RealmAccess.Enterprise) {
         state?.enterpriseName ?: stringResource(R.string.enterprise_space)
     } else stringResource(R.string.enterprise_personal)
-    val local = access is RealmAccess.Enterprise && access.scope.authority.isLocal
-    val showLocalIndicator = local && LocalDensity.current.fontScale <= 1.15f
     val open = { nav.navigate(Screen.Enterprise) { launchSingleTop = true } }
     TextButton(
         onClick = open,
@@ -89,15 +83,6 @@ internal fun EnterpriseSpaceButton(
             contentDescription = null, modifier = Modifier.size(16.dp))
         Spacer(Modifier.width(6.dp))
         Text(label, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
-        if (showLocalIndicator) {
-            Spacer(Modifier.width(6.dp))
-            Text(
-                stringResource(R.string.enterprise_local_indicator),
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
-            )
-        }
         Spacer(Modifier.width(4.dp))
         Icon(HugeIcons.ArrowRight01, contentDescription = stringResource(R.string.enterprise_current_space, label),
             modifier = Modifier.size(16.dp))
@@ -131,17 +116,13 @@ internal fun EnterprisePage(vm: EnterpriseVM = koinViewModel()) {
     val working by vm.busy.collectAsStateWithLifecycle()
     val error by vm.error.collectAsStateWithLifecycle()
     val notice by vm.notice.collectAsStateWithLifecycle()
-    val sources by vm.sources.collectAsStateWithLifecycle()
-    val localConfiguration by vm.localConfiguration.collectAsStateWithLifecycle()
-    val localFeed by vm.localFeed.collectAsStateWithLifecycle()
     val context = LocalContext.current
-    val filePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-        vm.importConfiguration(context, uri)
-    }
+    val pageScope = rememberCoroutineScope()
     val exit by vm.exitRequest.collectAsStateWithLifecycle()
-    val example by vm.exampleCode.collectAsStateWithLifecycle()
     val portal by vm.portal.collectAsStateWithLifecycle()
     val joinConfirmation by vm.joinConfirmation.collectAsStateWithLifecycle()
+    val resetChoice by vm.resetChoice.collectAsStateWithLifecycle()
+    val resetConfirmation by vm.resetConfirmation.collectAsStateWithLifecycle()
     val nav = LocalNavController.current
     var initialSelection by remember { mutableStateOf<RealmSelection?>(null) }
     var initialSelectionCaptured by remember { mutableStateOf(false) }
@@ -152,7 +133,6 @@ internal fun EnterprisePage(vm: EnterpriseVM = koinViewModel()) {
         }
     }
     var paste by remember { mutableStateOf(false) }
-    var localManagement by remember { mutableStateOf(false) }
     var connectionDetails by remember { mutableStateOf(false) }
     var starterPicker by remember { mutableStateOf<StarterPresentation?>(null) }
     LaunchedEffect(state?.selection, portal) {
@@ -160,7 +140,6 @@ internal fun EnterprisePage(vm: EnterpriseVM = koinViewModel()) {
             if (it.selection != state?.selection || (it.portal != null && it.portal != portal)) starterPicker = null
         }
     }
-    var scenarios by remember { mutableStateOf<EnterpriseOverview?>(null) }
     // Enrollment text contains a credential and is deliberately not saved in Activity state.
     var enrollment by remember { mutableStateOf("") }
     val scanner = rememberLauncherForActivityResult(ScanQRCode()) { result ->
@@ -170,17 +149,20 @@ internal fun EnterprisePage(vm: EnterpriseVM = koinViewModel()) {
             else -> vm.scanFailed()
         }
     }
+    val imageScanner = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
+        uri ?: return@rememberLauncherForActivityResult
+        pageScope.launch {
+            try {
+                val content = withContext(Dispatchers.IO) { ImageUtils.decodeQRCodeFromUri(context, uri) }
+                if (content.isNullOrBlank()) vm.scanFailed() else vm.join(content)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                vm.scanFailed()
+            }
+        }
+    }
     val busy = working || state?.switching == true || state?.phase == EnterpriseSessionPhase.CLOSING
-    LaunchedEffect(state?.access) { if (state?.access != null) vm.dismissSources() }
-    LaunchedEffect(state?.selection) {
-        localManagement = false
-        if (localConfiguration?.selection != state?.selection) vm.dismissLocalConfiguration()
-        if (localFeed?.selection != state?.selection) vm.dismissLocalFeed()
-    }
-    LaunchedEffect(state?.selection, state?.access, state?.phase) {
-        if (scenarios?.selection != state?.selection || scenarios?.access != state?.access ||
-            state?.phase == EnterpriseSessionPhase.CLOSING) scenarios = null
-    }
     val inEnterprise = state?.selection?.access is RealmAccess.Enterprise
     val ready = state?.phase in setOf(EnterpriseSessionPhase.READY, EnterpriseSessionPhase.OFFLINE)
     val openChat = { nav.clearAndNavigate(Screen.Startup()) }
@@ -254,8 +236,7 @@ internal fun EnterprisePage(vm: EnterpriseVM = koinViewModel()) {
                                 }
                         }
                     }
-                    notice?.takeIf { it != R.string.enterprise_expiry_scheduled || state?.access != null }
-                        ?.let { Text(stringResource(it)) }
+                    notice?.let { Text(stringResource(it)) }
                 }
                 LaunchedEffect(error, notice) {
                     if (error != null || notice != null) feedback.bringIntoView()
@@ -263,8 +244,30 @@ internal fun EnterprisePage(vm: EnterpriseVM = koinViewModel()) {
                 if (state?.exitFailure != null) {
                     Button(onClick = vm::retryExit, enabled = !working) { Text(stringResource(R.string.application_recovery_retry)) }
                 }
+                // Reset formats every enterprise realm this device holds; the entry stays reachable in every state.
+                state?.resetPath?.let { path ->
+                    TextButton(onClick = vm::showReset, enabled = !busy && state?.reset == null) {
+                        Text(stringResource(if (path == EnterpriseResetPath.STORAGE_FAILURE)
+                            R.string.enterprise_reset_repair else R.string.enterprise_reset_title))
+                    }
+                }
                 if (state?.failure != null) {
                     TextButton(onClick = vm::requestExit, enabled = !busy) { Text(stringResource(R.string.enterprise_exit)) }
+                }
+                state?.reset?.let { reset ->
+                    if (reset.failure != null) {
+                        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Text(stringResource(R.string.enterprise_reset_failed), color = MaterialTheme.colorScheme.error)
+                            reset.failure.let { SelectionContainer { Text(it, style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.error) } }
+                            Button(onClick = vm::retryReset, enabled = !working) { Text(stringResource(R.string.application_recovery_retry)) }
+                        }
+                    } else {
+                        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            LinearProgressIndicator(Modifier.fillMaxWidth())
+                            Text(stringResource(R.string.enterprise_reset_progress), style = MaterialTheme.typography.bodySmall)
+                        }
+                    }
                 }
                 if (state?.access != null) {
                     EnterpriseSection(stringResource(R.string.enterprise_connected_enterprise,
@@ -287,7 +290,6 @@ internal fun EnterprisePage(vm: EnterpriseVM = koinViewModel()) {
                             Text(stringResource(if (connectionDetails) R.string.enterprise_connection_details_hide else R.string.enterprise_connection_details_show))
                         }
                         if (connectionDetails) {
-                            if (state?.isLocal == true) Text(stringResource(R.string.enterprise_local_notice), style = MaterialTheme.typography.bodySmall)
                             state?.generation?.let { Text(stringResource(R.string.enterprise_generation, it), style = MaterialTheme.typography.bodySmall) }
                             state?.lastSyncMillis?.let { Text(stringResource(R.string.enterprise_last_sync, DateFormat.getDateTimeInstance().format(Date(it))), style = MaterialTheme.typography.bodySmall) }
                         }
@@ -301,114 +303,19 @@ internal fun EnterprisePage(vm: EnterpriseVM = koinViewModel()) {
                             OutlinedButton(onClick = { scanner.launch(null) }, enabled = canJoin) {
                                 Text(stringResource(R.string.enterprise_join_scan))
                             }
+                            OutlinedButton(onClick = {
+                                imageScanner.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+                            }, enabled = canJoin) {
+                                Text(stringResource(R.string.enterprise_join_scan_gallery))
+                            }
                             OutlinedButton(onClick = { paste = true }, enabled = canJoin) {
                                 Text(stringResource(R.string.enterprise_join_paste))
-                            }
-                        }
-                        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Button(onClick = vm::joinExample, enabled = canJoin) { Text(stringResource(R.string.enterprise_join_example)) }
-                            TextButton(onClick = vm::showSources, enabled = canJoin) { Text(stringResource(R.string.enterprise_installed_sources)) }
-                        }
-                    }
-                }
-                if (state?.selection != null) {
-                    if (state?.failure == null) {
-                        EnterpriseSection(stringResource(R.string.enterprise_import_configuration)) {
-                            Text(stringResource(R.string.enterprise_import_notice), style = MaterialTheme.typography.bodySmall)
-                            OutlinedButton(
-                                onClick = { if (vm.beginImport()) filePicker.launch(arrayOf("*/*")) },
-                                enabled = !busy,
-                            ) {
-                                Text(stringResource(R.string.enterprise_select_configuration_file))
-                            }
-                        }
-                    }
-                    if ((BuildConfig.DEBUG || state?.isLocal == true) &&
-                        state?.failure == null && (state?.access == null || state?.isLocal == true)
-                    ) {
-                        EnterpriseSection(stringResource(R.string.enterprise_local_management)) {
-                            Text(stringResource(R.string.enterprise_local_management_notice), style = MaterialTheme.typography.bodySmall)
-                            TextButton(onClick = { localManagement = !localManagement }) {
-                                Text(stringResource(if (localManagement) R.string.enterprise_management_collapse else R.string.enterprise_management_expand))
-                            }
-                            if (localManagement) {
-                                if (state?.access != null && state?.isLocal == true) {
-                                    if (!inEnterprise) Text(stringResource(R.string.enterprise_management_enter_space), style = MaterialTheme.typography.bodySmall)
-                                    OutlinedButton(onClick = vm::showLocalConfiguration, enabled = !busy && inEnterprise) {
-                                        Text(stringResource(R.string.enterprise_local_configuration))
-                                    }
-                                    OutlinedButton(onClick = vm::showLocalFeed, enabled = !busy && inEnterprise && ready) {
-                                        Text(stringResource(R.string.enterprise_feed_editor))
-                                    }
-                                }
-                                OutlinedButton(onClick = { scenarios = state }, enabled = !busy) {
-                                    Text(stringResource(R.string.enterprise_local_scenarios))
-                                }
-                                if (state?.access == null) TextButton(onClick = vm::showExampleCode, enabled = !busy) {
-                                    Text(stringResource(R.string.enterprise_example_code))
-                                }
                             }
                         }
                     }
                 }
             }
         }
-    }
-    localConfiguration?.let { original ->
-        EnterpriseLocalConfigurationEditor(original, busy, error, notice,
-            onChange = { vm.changeLocalConfiguration(original, it) },
-            onRefresh = vm::showLocalConfiguration, onDismiss = vm::dismissLocalConfiguration)
-    }
-    localFeed?.let { original ->
-        EnterpriseLocalFeedEditor(original, busy, error, notice,
-            onChange = { vm.changeLocalFeed(original, it) },
-            onRefresh = vm::showLocalFeed, onDismiss = vm::dismissLocalFeed)
-    }
-    scenarios?.let { original ->
-        AlertDialog(onDismissRequest = { scenarios = null },
-            title = { Text(stringResource(R.string.enterprise_local_scenarios)) },
-            text = { Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text(stringResource(R.string.enterprise_local_scenarios_notice))
-                if (original.access == null) {
-                    Text(stringResource(R.string.enterprise_pending_example_notice))
-                    Text(stringResource(R.string.enterprise_clear_example_requires_session))
-                    OutlinedButton(onClick = { scenarios = null; vm.joinPendingExample() }, enabled = !busy) {
-                        Text(stringResource(R.string.enterprise_join_pending_example))
-                    }
-                } else {
-                    val connected = original.phase == EnterpriseSessionPhase.READY
-                    OutlinedButton(onClick = {
-                        scenarios = null
-                        vm.runLocalScenario(original, if (connected) LocalEnterpriseScenario.DISCONNECT else LocalEnterpriseScenario.RECONNECT)
-                    }, enabled = !busy && original.phase in setOf(EnterpriseSessionPhase.READY, EnterpriseSessionPhase.OFFLINE)) {
-                        Text(stringResource(if (connected) R.string.enterprise_simulate_disconnect else R.string.enterprise_simulate_reconnect))
-                    }
-                    OutlinedButton(onClick = { scenarios = null; vm.runLocalScenario(original, LocalEnterpriseScenario.EXPIRE_SOON) }, enabled = !busy) {
-                        Text(stringResource(R.string.enterprise_simulate_expiry))
-                    }
-                    TextButton(onClick = { scenarios = null; vm.runLocalScenario(original, LocalEnterpriseScenario.REVOKE) }, enabled = !busy) {
-                        Text(stringResource(R.string.enterprise_simulate_revocation))
-                    }
-                    Text(stringResource(R.string.enterprise_clear_example_requires_session), style = MaterialTheme.typography.bodySmall)
-                    TextButton(onClick = { scenarios = null; vm.requestExampleDataRemoval() }, enabled = !busy) {
-                        Text(stringResource(R.string.enterprise_clear_example))
-                    }
-                }
-            } }, confirmButton = { TextButton(onClick = { scenarios = null }) { Text(stringResource(R.string.cancel)) } })
-    }
-    sources?.let { installed ->
-        AlertDialog(onDismissRequest = vm::dismissSources,
-            title = { Text(stringResource(R.string.enterprise_installed_sources)) },
-            text = { Column(Modifier.verticalScroll(rememberScrollState())) {
-                installed.forEach { source ->
-                    TextButton(onClick = { vm.joinInstalled(source) }, enabled = !busy) {
-                        Column(Modifier.fillMaxWidth()) {
-                            Text(source.enterpriseName, style = MaterialTheme.typography.titleMedium)
-                            Text(source.userName)
-                        }
-                    }
-                }
-            } }, confirmButton = { TextButton(onClick = vm::dismissSources) { Text(stringResource(R.string.cancel)) } })
     }
     starterPicker?.let { original ->
         key(original) {
@@ -438,22 +345,51 @@ internal fun EnterprisePage(vm: EnterpriseVM = koinViewModel()) {
             confirmButton = { TextButton(onClick = vm::confirmJoin, enabled = !busy) { Text(stringResource(R.string.confirm)) } },
             dismissButton = { TextButton(onClick = vm::dismissJoin) { Text(stringResource(R.string.cancel)) } })
     }
+    resetChoice?.let { path ->
+        val storageFailure = path == EnterpriseResetPath.STORAGE_FAILURE
+        AlertDialog(onDismissRequest = vm::dismissReset,
+            title = { Text(stringResource(if (storageFailure) R.string.enterprise_reset_repair else R.string.enterprise_reset_title)) },
+            text = { Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(stringResource(R.string.enterprise_reset_option_notice))
+                OutlinedButton(onClick = { vm.requestReset(EnterpriseDataResetMode.KEEP_HISTORY) },
+                    enabled = !busy, modifier = Modifier.fillMaxWidth()) {
+                    Text(stringResource(R.string.enterprise_reset_keep_history))
+                }
+                OutlinedButton(onClick = { vm.requestReset(EnterpriseDataResetMode.CLEAR_ALL) },
+                    enabled = !busy, modifier = Modifier.fillMaxWidth()) {
+                    Text(stringResource(R.string.enterprise_reset_clear_all))
+                }
+            } }, confirmButton = { TextButton(onClick = vm::dismissReset) { Text(stringResource(R.string.cancel)) } })
+    }
+    resetConfirmation?.let { confirmation ->
+        val destructive = confirmation.request.mode == EnterpriseDataResetMode.CLEAR_ALL
+        val storageFailure = confirmation.path == EnterpriseResetPath.STORAGE_FAILURE
+        AlertDialog(onDismissRequest = vm::dismissReset,
+            title = { Text(stringResource(when (confirmation.request.mode) {
+                EnterpriseDataResetMode.CLEAR_ALL -> R.string.enterprise_reset_clear_all
+                EnterpriseDataResetMode.KEEP_HISTORY -> if (storageFailure) R.string.enterprise_reset_repair
+                    else R.string.enterprise_reset_keep_history
+            })) },
+            text = { Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(stringResource(when (confirmation.request.mode) {
+                    EnterpriseDataResetMode.CLEAR_ALL -> R.string.enterprise_reset_clear_all_confirm
+                    EnterpriseDataResetMode.KEEP_HISTORY -> if (storageFailure) R.string.enterprise_reset_repair_confirm
+                        else R.string.enterprise_reset_keep_history_confirm
+                }))
+                Text(stringResource(R.string.enterprise_reset_option_notice), style = MaterialTheme.typography.bodySmall)
+            } },
+            confirmButton = { Button(onClick = { vm.confirmReset(openChat) }, enabled = !busy,
+                colors = if (destructive) ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error,
+                    contentColor = MaterialTheme.colorScheme.onError) else ButtonDefaults.buttonColors()) {
+                Text(stringResource(R.string.confirm))
+            } }, dismissButton = { TextButton(onClick = vm::dismissReset) { Text(stringResource(R.string.cancel)) } })
+    }
     if (exit != null) AlertDialog(onDismissRequest = vm::dismissExit,
-        title = { Text(stringResource(if (exit?.clearExampleData == true) R.string.enterprise_clear_example else R.string.enterprise_exit)) },
-        text = { Text(stringResource(if (exit?.clearExampleData == true) R.string.enterprise_clear_example_confirm else R.string.enterprise_exit_confirm,
+        title = { Text(stringResource(R.string.enterprise_exit)) },
+        text = { Text(stringResource(R.string.enterprise_exit_confirm,
             exit?.enterpriseName ?: stringResource(R.string.enterprise_space))) },
         confirmButton = { TextButton(onClick = { vm.confirmExit(openChat) }) { Text(stringResource(R.string.confirm)) } },
         dismissButton = { TextButton(onClick = vm::dismissExit) { Text(stringResource(R.string.cancel)) } })
-    example?.let { code ->
-        val label = stringResource(R.string.enterprise_example_code)
-        AlertDialog(onDismissRequest = vm::dismissExampleCode, title = { Text(label) },
-            text = { Column(Modifier.verticalScroll(rememberScrollState())) {
-                Text(stringResource(R.string.enterprise_example_code_notice))
-                QRCode(code, Modifier.fillMaxWidth().aspectRatio(1f).clearAndSetSemantics { contentDescription = label },
-                    color = Color.Black, backgroundColor = Color.White)
-                SelectionContainer { Text(code, style = MaterialTheme.typography.bodySmall) }
-            } }, confirmButton = { TextButton(onClick = vm::dismissExampleCode) { Text(stringResource(R.string.update_card_close)) } })
-    }
 }
 
 @Composable
@@ -490,7 +426,7 @@ private fun EnterprisePortal(original: PortalPresentation, vm: EnterpriseVM, mod
             var acquired: PortalWebView? = null
             var failure: Exception? = null
             try {
-                acquired = vm.openPortal(context, original) { vm.dismissPortal(original) }
+                acquired = vm.openPortal(context, original) { vm.portalClosed(original, it) }
                 ensureActive()
                 if (vm.portal.value == original && lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) host = acquired
             } catch (error: Exception) { failure = error }

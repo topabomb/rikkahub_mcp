@@ -13,7 +13,7 @@ import org.junit.Test
 import kotlin.uuid.Uuid
 
 class ConfigurationPolicyTest {
-    private val authority = EnterpriseAuthority("local:example", "dep_example")
+    private val authority = EnterpriseAuthority("platform:example", "dep_example")
     private val scope = ConfigurationScope.Enterprise(authority, "usr_example")
     private val userReference = ConfigurationReference.User(
         Uuid.parse("00000000-0000-0000-0000-000000000123"),
@@ -76,10 +76,10 @@ class ConfigurationPolicyTest {
     }
 
     @Test
-    fun `mock and platform cannot share resource or data identity even with identical IDs`() {
-        val platform = authority.copy(sourceNamespace = "platform:example")
-        val managed = ConfigurationReference.Enterprise(platform, "mdl_example")
-        assertNotEquals(scope, scope.copy(authority = platform))
+    fun `different enterprise authorities cannot share resource or data identity even with identical IDs`() {
+        val otherAuthority = authority.copy(sourceNamespace = "platform:other")
+        val managed = ConfigurationReference.Enterprise(otherAuthority, "mdl_example")
+        assertNotEquals(scope, scope.copy(authority = otherAuthority))
         assertNotEquals(managed, managed.copy(authority = authority))
         assertEquals(
             ConfigurationUnavailableReason.DIFFERENT_ENTERPRISE,

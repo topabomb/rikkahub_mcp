@@ -27,7 +27,7 @@ class SelectedRealmPagingSourceTest {
     private val params = PagingSource.LoadParams.Refresh<Int>(null, 20, false)
 
     @Test fun `lazy loads reject another selection and cannot revive after exit and reentry`() = runTest {
-        val sessions = EnterpriseSessionController(EnterpriseAppliedStore(temporary.newFolder()))
+        val sessions = EnterpriseSessionController(net.weero.measix.pilot.data.enterprise.enterpriseTestStore(temporary.newFolder()))
         val packet = exampleEnterprisePackage()
         sessions.enrollFixture(packet)
         val access = sessions.observeSelectedRealmSelection().first { it != null }!!
@@ -49,7 +49,7 @@ class SelectedRealmPagingSourceTest {
 
     @Test fun `expiry blocks queued load without a manifest change`() = runTest {
         var now = 1_800_000_000_000L
-        val sessions = EnterpriseSessionController(EnterpriseAppliedStore(temporary.newFolder())) { now }
+        val sessions = EnterpriseSessionController(net.weero.measix.pilot.data.enterprise.enterpriseTestStore(temporary.newFolder())) { now }
         val state = sessions.enrollFixture(exampleEnterprisePackage())
         val delegate = Source()
         val page = SelectedRealmPagingSource(delegate, sessions, sessions.observeSelectedRealmSelection().first { it != null }!!)
@@ -60,7 +60,7 @@ class SelectedRealmPagingSourceTest {
 
     @Test fun `expiry during a page load discards the returned rows`() = runTest {
         var now = 1000L
-        val sessions = EnterpriseSessionController(EnterpriseAppliedStore(temporary.newFolder())) { now }
+        val sessions = EnterpriseSessionController(net.weero.measix.pilot.data.enterprise.enterpriseTestStore(temporary.newFolder())) { now }
         val ready = sessions.enrollFixture(exampleEnterprisePackage())
         val selection = requireNotNull(sessions.readPresentation().selection)
         val delegate = Source(afterLoad = { now = ready.manifest.session!!.expiresAtMillis })
@@ -71,7 +71,7 @@ class SelectedRealmPagingSourceTest {
     }
 
     @Test fun `invalidation is mutual and cancellation is not converted to load error`() = runTest {
-        val sessions = EnterpriseSessionController(EnterpriseAppliedStore(temporary.newFolder()))
+        val sessions = EnterpriseSessionController(net.weero.measix.pilot.data.enterprise.enterpriseTestStore(temporary.newFolder()))
         sessions.recover()
         val access = sessions.observeSelectedRealmSelection().first { it != null }!!
         val delegate = Source()

@@ -117,6 +117,24 @@ class RetiredSurfaceContractTest {
     }
 
     @Test
+    fun `phone side enterprise administration and example specific cleanup cannot return`() {
+        listOf(
+            "EnterpriseLocalConfigurationEditor",
+            "EnterpriseLocalFeedEditor",
+            "LocalEnterpriseScenario",
+            "InstalledEnterpriseSource",
+            "EnterpriseLocalConfigurationUiModel",
+            "clearExampleData(",
+            "CLEAR_EXAMPLE_DATA",
+            "joinInstalled(",
+            "importLocalConfiguration(",
+            "runLocalScenario(",
+            "changeLocalFeed(",
+            "changeLocalConfiguration(",
+        ).forEach(::assertNoHits)
+    }
+
+    @Test
     fun `legacy master persistence skeleton cannot return`() {
         assertNoHits("handleMessageComplete")
         assertNoHits("finalizeMasterTurn")

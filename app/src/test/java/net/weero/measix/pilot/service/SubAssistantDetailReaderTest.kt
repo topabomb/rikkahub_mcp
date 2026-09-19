@@ -236,7 +236,7 @@ class SubAssistantDetailReaderTest {
     }
 
     private suspend fun TestScope.fixture(): Fixture {
-        val sessions = EnterpriseSessionController(EnterpriseAppliedStore(temporary.newFolder()))
+        val sessions = EnterpriseSessionController(net.weero.measix.pilot.data.enterprise.enterpriseTestStore(temporary.newFolder()))
         sessions.enrollFixture(exampleEnterprisePackage())
         return Fixture(sessions, sessions.captureSelectedRealmAccess(), StandardTestDispatcher(testScheduler))
     }

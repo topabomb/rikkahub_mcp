@@ -33,7 +33,7 @@ class McpCatalogPersistenceTest {
         val old = McpServerConfig.StreamableHTTPServer(url = "https://old.example/mcp")
         val restored = McpServerConfig.StreamableHTTPServer(url = "https://restored.example/mcp")
         val replacement = candidate(restored, "restored").initialSnapshot()
-        val local = EnterpriseAuthority("local:example", "deployment")
+        val local = EnterpriseAuthority("platform:example", "deployment")
         val platform = EnterpriseAuthority("platform:example", "deployment")
         val enterpriseCatalogs = listOf(
             ConfigurationScope.Enterprise(local, "a"),

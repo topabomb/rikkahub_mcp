@@ -49,7 +49,7 @@ class FileManagementServicesTest {
 
     @Before fun setUp() = runBlocking {
         root = kotlin.io.path.createTempDirectory("file-session").toFile()
-        sessions = EnterpriseSessionController(EnterpriseAppliedStore(root), nowMillis = { 1_800_000_000_000L })
+        sessions = EnterpriseSessionController(net.weero.measix.pilot.data.enterprise.enterpriseTestStore(root), nowMillis = { 1_800_000_000_000L })
         sessions.recover()
         selection = requireNotNull(sessions.observeSelectedRealmSelection().first())
     }
@@ -59,7 +59,7 @@ class FileManagementServicesTest {
     @Test fun `cleanup counts cannot return after expiry while querying either file owner`() = runTest {
         for (category in FileCleanupCategory.entries) {
             var now = 1000L
-            val controller = EnterpriseSessionController(EnterpriseAppliedStore(File(root, "count-${category.name}"))) { now }
+            val controller = EnterpriseSessionController(net.weero.measix.pilot.data.enterprise.enterpriseTestStore(File(root, "count-${category.name}"))) { now }
             val ready = controller.enrollFixture(exampleEnterprisePackage())
             val selected = requireNotNull(controller.readPresentation().selection)
             val artifacts = mockk<ArtifactStore>()
@@ -82,7 +82,7 @@ class FileManagementServicesTest {
 
     @Test fun `attachment handoff rechecks expiry after waiting for the artifact owner`() = runTest {
         var now = 1_800_000_000_000L
-        val controller = EnterpriseSessionController(EnterpriseAppliedStore(File(root, "export-expiry"))) { now }
+        val controller = EnterpriseSessionController(net.weero.measix.pilot.data.enterprise.enterpriseTestStore(File(root, "export-expiry"))) { now }
         val ready = controller.enrollFixture(exampleEnterprisePackage())
         val selected = requireNotNull(controller.observeSelectedRealmSelection().first())
         val artifacts = mockk<ArtifactStore>()
@@ -196,7 +196,7 @@ class FileManagementServicesTest {
     @Test fun `image authorization and bytes cannot return after expiry during owner work`() = runTest {
         for (artifact in listOf(true, false)) for (checkOnly in listOf(true, false)) {
             var now = 1_800_000_000_000L
-            val controller = EnterpriseSessionController(EnterpriseAppliedStore(File(root, "$artifact-$checkOnly"))) { now }
+            val controller = EnterpriseSessionController(net.weero.measix.pilot.data.enterprise.enterpriseTestStore(File(root, "$artifact-$checkOnly"))) { now }
             val ready = controller.enrollFixture(exampleEnterprisePackage())
             val selected = requireNotNull(controller.observeSelectedRealmSelection().first())
             val artifacts = mockk<ArtifactStore>()

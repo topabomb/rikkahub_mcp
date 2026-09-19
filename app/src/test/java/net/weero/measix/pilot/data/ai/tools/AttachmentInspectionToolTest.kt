@@ -633,21 +633,5 @@ class AttachmentInspectionToolTest {
         assertEquals(ReasoningLevel.AUTO, sentParams?.reasoningLevel)
     }
 
-    @Test
-    fun `local example consumes structured attachments without contacting a provider`() = runTest {
-        val captured = net.weero.measix.pilot.service.ModelExecutionSnapshot(
-            visionModel, net.weero.measix.pilot.service.runtime.ModelExecutionLease {
-                it(net.weero.measix.pilot.test.exampleModelTarget)
-            }, "test", null, inspectionCapabilities,
-        )
-        val result = executeInspection(args(listOf("/upload/a.png")), captured, providerManager) {
-            ToolAttachmentResolution(parts = listOf(image("data:image/png;base64,cGljdHVyZQ==")))
-        }
-        val text = (result.single() as UIMessagePart.Text).text
-        assertTrue(text.contains("1 张图片"))
-        assertTrue(text.contains("模拟"))
-        coVerify(exactly = 0) { provider.generateText(any(), any(), any()) }
-    }
-
     private fun image(url: String) = UIMessagePart.Image(url = url)
 }

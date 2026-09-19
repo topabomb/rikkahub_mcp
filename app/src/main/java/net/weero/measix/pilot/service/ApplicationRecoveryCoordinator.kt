@@ -48,8 +48,9 @@ class ApplicationRecoveryGate internal constructor() {
 }
 
 /**
- * 唯一启动恢复入口。顺序固定为 Settings → enterprise configuration → artifact/generated-media reconcile → projection →
- * interrupted run/turn → pending assistant deletion；任一步失败都保持 fail-closed，可显式 retry。
+ * 唯一启动恢复入口。顺序固定为 Settings → artifact/generated-media reconcile → enterprise data reset →
+ * enterprise configuration → projection → interrupted run/turn → pending assistant deletion；任一步失败都保持
+ * fail-closed，可显式 retry。
  */
 class ApplicationRecoveryCoordinator(
     private val appScope: CoroutineScope,
@@ -61,6 +62,7 @@ class ApplicationRecoveryCoordinator(
     private val assistantManagementService: Lazy<AssistantManagementService>,
     private val gate: ApplicationRecoveryGate,
     private val recoverEnterpriseConfiguration: suspend () -> Unit,
+    private val recoverEnterpriseDataReset: suspend () -> Unit = {},
     private val completePendingEnterpriseExit: suspend () -> Unit = {},
     private val restorePendingBackup: suspend () -> Unit = {},
     private val completePendingBackup: () -> Unit = {},
@@ -98,10 +100,11 @@ class ApplicationRecoveryCoordinator(
             try {
                 restorePendingBackup()
                 settingsStore.userSettings.first { !it.init }
-                // Enterprise validation failure is published by its owner; personal data recovery remains independent.
-                recoverEnterpriseConfiguration()
                 artifactStore.reconcileStartup()
                 generatedMediaStore.reconcile()
+                recoverEnterpriseDataReset()
+                // Enterprise validation failure is published by its owner; personal data recovery remains independent.
+                recoverEnterpriseConfiguration()
                 artifactStore.ensureReferenceProjection()
                 conversationRepository.ensureSearchProjection()
                 turnRecovery.recoverInterruptedRuns()

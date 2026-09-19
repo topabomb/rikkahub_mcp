@@ -22,7 +22,7 @@ class McpProtocolClientFactoryTest {
     @Test fun `constructing factory and using overrides never initializes HTTP`() = runTest {
         val transport = mockk<AbstractTransport>()
         val client = mockk<Client>()
-        val factory = McpProtocolClientFactory(createManagedHttpClient = { error("unexpected managed connection") }, createLocalHttpClient = { error("unexpected local connection") },
+        val factory = McpProtocolClientFactory(createManagedHttpClient = { error("unexpected managed connection") },
             createHttpClient = { error("HTTP must remain uninitialized") },
             transportOverride = { transport },
             clientOverride = { client },
@@ -35,7 +35,7 @@ class McpProtocolClientFactoryTest {
     @Test fun `parallel real transport creation shares one HTTP client without connecting`() = runTest {
         val created = AtomicInteger()
         lateinit var http: HttpClient
-        val factory = McpProtocolClientFactory(createManagedHttpClient = { error("unexpected managed connection") }, createLocalHttpClient = { error("unexpected local connection") }, createHttpClient = {
+        val factory = McpProtocolClientFactory(createManagedHttpClient = { error("unexpected managed connection") }, createHttpClient = {
             created.incrementAndGet()
             HttpClient(OkHttp) { install(SSE) }.also { http = it }
         })
@@ -59,7 +59,7 @@ class McpProtocolClientFactoryTest {
         val created = AtomicInteger()
         lateinit var cancelled: Deferred<AbstractTransport>
         val handedOff = AtomicBoolean(false)
-        val factory = McpProtocolClientFactory(createManagedHttpClient = { error("unexpected managed connection") }, createLocalHttpClient = { error("unexpected local connection") }, createHttpClient = {
+        val factory = McpProtocolClientFactory(createManagedHttpClient = { error("unexpected managed connection") }, createHttpClient = {
             created.incrementAndGet()
             cancelled.cancel()
             http

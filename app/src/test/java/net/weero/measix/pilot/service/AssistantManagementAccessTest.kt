@@ -56,11 +56,14 @@ class AssistantManagementAccessTest {
             val caller = f.enroll()
             val initial = JsonInstant.encodeToString(f.settings.snapshotUserDocument())
             val access = caller.realmAccess as RealmAccess.Enterprise
-            f.sessions.synchronize(access, f.packet.copy(configuration = f.packet.configuration.copy(generation = 2,
+            f.sessions.synchronize(access, f.packet.copy(configuration = f.packet.configuration.copy(
+                generation = f.packet.configuration.generation + 1,
                 policy = f.packet.configuration.policy.copy(allowLocalAssistants = false))).toCandidate())
             assertTrue(f.service.createAssistant("Denied", "d", "p", caller).isFailure)
             assertEquals(initial, JsonInstant.encodeToString(f.settings.snapshotUserDocument()))
-            f.sessions.synchronize(access, f.packet.copy(configuration = f.packet.configuration.copy(generation = 3)).toCandidate())
+            f.sessions.synchronize(access, f.packet.copy(configuration = f.packet.configuration.copy(
+                generation = f.packet.configuration.generation + 2,
+            )).toCandidate())
             f.beforeCommit = { f.now = (f.sessions.state.value as EnterpriseState.Available).manifest.session!!.expiresAtMillis }
             assertTrue(f.service.createAssistant("Expired", "d", "p", caller).isFailure)
             assertEquals(initial, JsonInstant.encodeToString(f.settings.snapshotUserDocument()))
@@ -71,7 +74,7 @@ class AssistantManagementAccessTest {
         val packet = exampleEnterprisePackage()
         var now = 1000L
         var beforeCommit: suspend () -> Unit = {}
-        val sessions = EnterpriseSessionController(EnterpriseAppliedStore(temporary.newFolder())) { now }
+        val sessions = EnterpriseSessionController(net.weero.measix.pilot.data.enterprise.enterpriseTestStore(temporary.newFolder())) { now }
         private val callerId = packet.identity.reference(packet.configuration.assistants.first().id)
         private val root = temporary.newFolder()
         private val context = object : ContextWrapper(ApplicationProvider.getApplicationContext<Context>()) {

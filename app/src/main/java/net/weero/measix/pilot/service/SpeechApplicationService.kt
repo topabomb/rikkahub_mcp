@@ -187,8 +187,7 @@ internal class SpeechApplicationService(
     private suspend fun capturePage(selection: RealmSelection, category: ConfigurationCategory, owner: () -> Unit = {}): SpeechCapture {
         queries.requireSelection(selection)
         val access = selection.access
-        val checkedVersion = if (access is RealmAccess.Enterprise && !access.scope.authority.isLocal)
-            synchronization.prepareExecution(access) else null
+        val checkedVersion = (access as? RealmAccess.Enterprise)?.let { synchronization.prepareExecution(it) }
         return sessions.withSelectedRealmSelection(selection) {
             owner()
             settings.withExecutionConfiguration(selection.access.scope, sessions.state.value) { snapshot ->
@@ -261,11 +260,11 @@ internal class SpeechApplicationService(
             val reference = requireNotNull(capture.reference)
             if (definition.protocol == EnterpriseTtsProtocol.SYSTEM) {
                 synthesizer.synthesize(definition.providerSetting(reference), chunk)
-            } else if (original.bindings?.execution is EnterpriseExecution.Platform) {
+            } else {
                 val routed = platformTarget(capture, requireNotNull(original.bindings))
                 admit(capture) { check(tts === original && !original.revoked) }
                 synthesizer.synthesize(definition.providerSetting(reference), chunk, routed)
-            } else transport.synthesize(target(capture, original.bindings), definition, chunk.text)
+            }
         }
         else synthesizer.synthesize(requireNotNull(personal) { "speech_resource_unavailable" }, chunk)
     } catch (error: Exception) {
@@ -306,11 +305,9 @@ internal class SpeechApplicationService(
                         transcribe = { file ->
                             try {
                                 admit(capture) { check(asr === original && !original.revoked) }
-                                if (original.bindings?.execution is EnterpriseExecution.Platform) {
-                                    val routed = platformTarget(capture, requireNotNull(original.bindings))
-                                    admit(capture) { check(asr === original && !original.revoked) }
-                                    transport.transcribe(routed, capture.enterpriseAsr, file)
-                                } else transport.transcribe(target(capture, original.bindings), capture.enterpriseAsr, file)
+                                val routed = platformTarget(capture, requireNotNull(original.bindings))
+                                admit(capture) { check(asr === original && !original.revoked) }
+                                transport.transcribe(routed, capture.enterpriseAsr, file)
                             } catch (error: Exception) {
                                 ManagedSnapshotRequired.find(error)?.let { handleBarrier(capture) }
                                 throw error
@@ -367,13 +364,6 @@ internal class SpeechApplicationService(
         val binding = sessions.captureExecution(capture.selection.access as RealmAccess.Enterprise, capture.version)
         retain(binding)
         check(binding.version == capture.version) { "enterprise_configuration_changed_during_speech_capture" }
-    }
-
-    private fun target(capture: SpeechCapture, bindings: EnterpriseExecutionLease?): EnterpriseSpeechTarget {
-        val reference = capture.reference as ConfigurationReference.Enterprise
-        val lease = requireNotNull(bindings)
-        return EnterpriseSpeechTarget(capture.selection.access as RealmAccess.Enterprise, reference,
-            lease.localBinding(reference.id), lease.version, capture.interactionId)
     }
 
     private suspend fun platformTarget(capture: SpeechCapture, lease: EnterpriseExecutionLease): me.rerere.speech.SpeechHttpTransport {

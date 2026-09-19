@@ -7,64 +7,31 @@ import android.os.Looper
 import android.webkit.*
 import androidx.webkit.*
 import java.io.ByteArrayInputStream
-import java.security.MessageDigest
+import java.net.URI
+import java.net.URLEncoder
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import kotlinx.serialization.json.*
 import net.weero.measix.pilot.data.enterprise.EnterpriseSessionController
 import net.weero.measix.pilot.data.enterprise.RealmSelection
 import net.weero.measix.pilot.service.EnterpriseSynchronizationService
+import kotlin.coroutines.resume
 
 internal class PortalHostUnavailable(val provider: String, val missing: List<String>) :
     IllegalStateException("Required WebView features unavailable: ${missing.joinToString()}")
 
-/** Immutable verified bytes. An unlisted request is denied locally and can never fall through to the network. */
-internal class PortalAssets private constructor(private val files: Map<String, ByteArray>) {
-    fun response(path: String): WebResourceResponse? = files[path]?.let { bytes ->
-        val mime = when (if (path == "/portal/") "html" else path.substringAfterLast('.')) {
-            "html" -> "text/html"
-            "js" -> "application/javascript"
-            "css" -> "text/css"
-            "svg" -> "image/svg+xml"
-            "png" -> "image/png"
-            "jpg", "jpeg" -> "image/jpeg"
-            "woff2" -> "font/woff2"
-            else -> "application/octet-stream"
-        }
-        WebResourceResponse(mime, "UTF-8", 200, "OK", HEADERS, ByteArrayInputStream(bytes))
-    }
+internal class PortalPageSource(val grant: net.weero.measix.pilot.data.enterprise.PlatformPortalGrant) {
+    private val exchange = URI(grant.exchangeUrl)
+    val origin = "${exchange.scheme}://${exchange.rawAuthority}"
+    val entry = "$origin/portal/"
 
-    companion object {
-        private val HEADERS = mapOf(
-            "Cache-Control" to "no-store",
-            "X-Content-Type-Options" to "nosniff",
-            "Referrer-Policy" to "no-referrer",
-            "Content-Security-Policy" to "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src blob:; font-src 'self'; connect-src 'none'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'",
-        )
-        suspend fun load(context: Context): PortalAssets = withContext(Dispatchers.IO) {
-            val identity = context.assets.open("enterprise_portal/build-identity.json").use {
-                Json.parseToJsonElement(it.bufferedReader().readText()).jsonObject
-            }
-            if (identity["bridgeVersion"]?.jsonPrimitive?.int != PortalProtocol.VERSION ||
-                identity["localReadVersion"]?.jsonPrimitive?.int != PortalProtocol.LOCAL_READ_VERSION ||
-                identity["sourceKind"]?.jsonPrimitive?.content != "local" ||
-                identity["origin"]?.jsonPrimitive?.content != PortalProtocol.LOCAL_ORIGIN) throw PortalFailure("source_unavailable")
-            val assets = identity.getValue("assets").jsonObject
-            if ("index.html" !in assets) throw PortalFailure("source_unavailable")
-            val files = assets.map { (path, hash) ->
-                if (path.startsWith('/') || '\\' in path || ':' in path || path.split('/').any { it in setOf("", ".", "..") }) {
-                    throw PortalFailure("source_unavailable")
-                }
-                val bytes = context.assets.open("enterprise_portal/$path").use { it.readBytes() }
-                val digest = MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) }
-                if (digest != hash.jsonPrimitive.content) throw PortalFailure("source_unavailable")
-                (if (path == "index.html") "/portal/" else "/portal/$path") to bytes
-            }.toMap()
-            PortalAssets(files)
+    init {
+        require(exchange.scheme in setOf("http", "https") && exchange.rawUserInfo == null &&
+            exchange.rawQuery == null && exchange.rawFragment == null && exchange.rawPath == "/portal/session/exchange") {
+            "invalid_platform_portal_exchange_url"
         }
     }
 }
@@ -73,12 +40,11 @@ internal class PortalAssets private constructor(private val files: Map<String, B
 internal class PortalWebView private constructor(
     val view: WebView,
     val document: PortalDocument,
-    private val assets: PortalAssets,
+    private val source: PortalPageSource,
 ) : AutoCloseable {
     private val active = AtomicBoolean(true)
-    private val entryRequested = AtomicBoolean(false)
     private val main = Handler(Looper.getMainLooper())
-    private var initialNavigation = true
+    private var navigationPhase = 0
     private val binding = PortalPageBinding()
 
     @SuppressLint("SetJavaScriptEnabled")
@@ -89,12 +55,15 @@ internal class PortalWebView private constructor(
             allowFileAccess = false
             allowContentAccess = false
             cacheMode = WebSettings.LOAD_NO_CACHE
-            blockNetworkLoads = true
+            blockNetworkLoads = false
             mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
             javaScriptCanOpenWindowsAutomatically = false
             setSupportMultipleWindows(false)
         }
-        CookieManager.getInstance().setAcceptThirdPartyCookies(view, false)
+        CookieManager.getInstance().apply {
+            setAcceptCookie(true)
+            setAcceptThirdPartyCookies(view, false)
+        }
         view.webChromeClient = object : WebChromeClient() {
             override fun onPermissionRequest(request: PermissionRequest) { request.deny() }
             override fun onGeolocationPermissionsShowPrompt(origin: String, callback: GeolocationPermissions.Callback) {
@@ -104,40 +73,61 @@ internal class PortalWebView private constructor(
         view.setDownloadListener { _, _, _, _, _ -> document.close(PortalCloseReason.DOCUMENT_REPLACED) }
         view.webViewClient = object : WebViewClient() {
             override fun onPageStarted(view: WebView, url: String, favicon: android.graphics.Bitmap?) {
-                if (initialNavigation && url == PortalProtocol.LOCAL_ENTRY) initialNavigation = false
-                else document.close(PortalCloseReason.DOCUMENT_REPLACED)
+                val accepted = when {
+                    navigationPhase == 0 && url == source.grant.exchangeUrl -> true
+                    navigationPhase <= 1 && withoutFragment(url) == source.entry -> true
+                    navigationPhase == 2 && withoutFragment(url) == source.entry && android.net.Uri.parse(url).fragment != null -> true
+                    else -> false
+                }
+                if (!accepted) document.close(PortalCloseReason.DOCUMENT_REPLACED)
+                else if (withoutFragment(url) == source.entry) navigationPhase = 2 else navigationPhase = 1
             }
             override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
                 // Fragment changes stay in the approved document; no other navigation can replace it.
                 val url = request.url
-                if (request.isForMainFrame && url.buildUpon().fragment(null).build().toString() == PortalProtocol.LOCAL_ENTRY &&
-                    url.fragment != null) return false
+                if (request.isForMainFrame && url.buildUpon().fragment(null).build().toString() == source.entry &&
+                    (navigationPhase < 2 || url.fragment != null)) return false
                 if (request.isForMainFrame) document.close(PortalCloseReason.DOCUMENT_REPLACED)
                 return true
             }
-            override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse {
+            override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse? {
                 if (!active.get()) return denied()
                 val uri = request.url
-                if (request.method != "GET" || uri.scheme != "https" || uri.encodedAuthority != "local.measix.invalid" ||
-                    uri.query != null || uri.encodedPath != uri.path) return denied()
-                if (request.isForMainFrame && (uri.path != "/portal/" || !entryRequested.compareAndSet(false, true))) {
-                    revokeFromIo()
-                    return denied()
+                if (uri.encodedPath != uri.path) return denied()
+                if (uri.scheme + "://" + uri.encodedAuthority != source.origin) return denied()
+                val path = uri.path.orEmpty()
+                val allowed = if (request.isForMainFrame) {
+                    (request.method == "POST" && path == "/portal/session/exchange" && navigationPhase <= 1) ||
+                        (request.method == "GET" && path == "/portal/" && navigationPhase <= 2)
+                } else {
+                    (request.method == "GET" && path.startsWith("/portal/") && path != "/portal/") ||
+                        (path == "/api/portal/v1/session" && request.method in setOf("GET", "DELETE") && uri.query == null) ||
+                        (request.method == "GET" && (path == "/api/client/v1/enterprise/updates" ||
+                            path.startsWith("/api/client/v1/enterprise/updates/")))
                 }
-                if (!request.isForMainFrame && uri.path == "/portal/") return denied()
-                return assets.response(uri.path.orEmpty()) ?: denied()
+                return if (allowed) null else denied()
             }
             override fun onReceivedError(view: WebView, request: WebResourceRequest, error: WebResourceError) {
-                if (request.isForMainFrame) document.close(PortalCloseReason.HOST_FAILURE)
+                if (request.isForMainFrame) {
+                    android.util.Log.e("EnterprisePortal", "Main-frame load failed: ${request.url} (${error.errorCode}: ${error.description})")
+                    document.close(PortalCloseReason.HOST_FAILURE)
+                }
+            }
+            override fun onReceivedHttpError(view: WebView, request: WebResourceRequest, errorResponse: WebResourceResponse) {
+                if (request.isForMainFrame && errorResponse.statusCode >= 400) {
+                    android.util.Log.e("EnterprisePortal", "Main-frame HTTP failure: ${request.url} (${errorResponse.statusCode} ${errorResponse.reasonPhrase})")
+                    document.close(PortalCloseReason.HOST_FAILURE)
+                }
             }
             override fun onRenderProcessGone(view: WebView, detail: RenderProcessGoneDetail): Boolean {
+                android.util.Log.e("EnterprisePortal", "Portal renderer exited (crashed=${detail.didCrash()}, priority=${detail.rendererPriorityAtExit()})")
                 document.close(PortalCloseReason.HOST_FAILURE)
                 return true
             }
         }
-        val origins = setOf(PortalProtocol.LOCAL_ORIGIN)
+        val origins = setOf(source.origin)
         WebViewCompat.addWebMessageListener(view, "MeasixPortalTransport", origins) { _, message, sourceOrigin, isMainFrame, originalReply ->
-            if (active.get() && isMainFrame && sourceOrigin.toString() == PortalProtocol.LOCAL_ORIGIN &&
+            if (active.get() && isMainFrame && sourceOrigin.toString() == source.origin &&
                 message.type == WebMessageCompat.TYPE_STRING) {
                 val payload = try { message.data?.let(binding::receive) }
                 catch (_: Exception) { document.close(PortalCloseReason.DOCUMENT_REPLACED); null }
@@ -146,7 +136,7 @@ internal class PortalWebView private constructor(
         }
         WebViewCompat.addDocumentStartJavaScript(view,
             """
-            if(window===window.top){
+            if(window===window.top&&location.pathname==='/portal/'){
               (()=>{
                 const transport=window.MeasixPortalTransport;
                 const instance=Array.from(crypto.getRandomValues(new Uint8Array(16)),b=>b.toString(16).padStart(2,'0')).join('');
@@ -161,13 +151,11 @@ internal class PortalWebView private constructor(
               })();
             }
             """.trimIndent(), origins)
-        view.loadUrl(PortalProtocol.LOCAL_ENTRY)
+        view.postUrl(source.grant.exchangeUrl,
+            ("ticket=" + URLEncoder.encode(source.grant.ticket, Charsets.UTF_8.name())).toByteArray(Charsets.UTF_8))
     }
 
-    private fun revokeFromIo() {
-        active.set(false)
-        main.post { document.close(PortalCloseReason.DOCUMENT_REPLACED) }
-    }
+    private fun withoutFragment(url: String): String = android.net.Uri.parse(url).buildUpon().fragment(null).build().toString()
 
     override fun close() = document.close()
 
@@ -199,9 +187,7 @@ internal class PortalWebView private constructor(
                         }
                     }
                     failure?.let { throw it }
-                    WebStorageCompat.deleteBrowsingDataForSite(WebStorage.getInstance(), PortalProtocol.LOCAL_ORIGIN) {
-                        pending.complete(Unit)
-                    }
+                    clearBrowsingData(source) { pending.complete(Unit) }
                 } catch (error: Exception) {
                     pending.completeExceptionally(error)
                 }
@@ -217,7 +203,8 @@ internal class PortalWebView private constructor(
             try { remaining.next().invoke(); remaining.remove() }
             catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
             catch (error: Exception) {
-                if (failure == null) failure = error else if (error !== failure) failure?.addSuppressed(error)
+                val previous = failure
+                if (previous == null) failure = error else if (error !== previous) previous.addSuppressed(error)
             }
         }
         return failure
@@ -230,7 +217,8 @@ internal class PortalWebView private constructor(
 
         suspend fun open(context: Context, selection: RealmSelection, sessions: EnterpriseSessionController,
             synchronization: EnterpriseSynchronizationService, scope: CoroutineScope,
-            registry: PortalDocumentRegistry, createNative: (suspend (PortalDocumentContext) -> PortalNativeActions)? = null,
+            registry: PortalDocumentRegistry, source: PortalPageSource,
+            createNative: (suspend (PortalDocumentContext) -> PortalNativeActions)? = null,
             onClosed: (PortalClosure) -> Unit): PortalWebView {
             check(Looper.myLooper() == Looper.getMainLooper())
             val missing = missingFeatures()
@@ -238,15 +226,16 @@ internal class PortalWebView private constructor(
                 val provider = WebViewCompat.getCurrentWebViewPackage(context)
                 throw PortalHostUnavailable(provider?.let { "${it.packageName} ${it.versionName}" } ?: "unavailable", missing)
             }
-            val assets = PortalAssets.load(context)
+            clearBrowsingDataAwait(source)
             var host: PortalWebView? = null
             var delivered = false
             val document = PortalDocument.open(selection, sessions, synchronization, scope, registry,
+                sourceOrigin = source.origin,
                 closeHost = { host?.destroy() ?: CompletableDeferred(Unit) }, createNative = createNative,
                 onClosed = { if (delivered) onClosed(it) })
             try {
                 if (document.isClosed) throw kotlinx.coroutines.CancellationException("Portal document unavailable")
-                return PortalWebView(WebView(context), document, assets).also {
+                return PortalWebView(WebView(context), document, source).also {
                     host = it
                     it.load()
                     delivered = true
@@ -265,5 +254,24 @@ internal class PortalWebView private constructor(
 
         private fun denied() = WebResourceResponse("text/plain", "UTF-8", 403, "Forbidden",
             mapOf("Cache-Control" to "no-store"), ByteArrayInputStream(ByteArray(0)))
+
+        private suspend fun clearBrowsingDataAwait(source: PortalPageSource) =
+            kotlinx.coroutines.suspendCancellableCoroutine { continuation ->
+                clearBrowsingData(source) {
+                    if (continuation.isActive) continuation.resume(Unit)
+                }
+            }
+
+        private fun clearBrowsingData(source: PortalPageSource, done: () -> Unit) {
+            val clearStorage = {
+                WebStorageCompat.deleteBrowsingDataForSite(WebStorage.getInstance(), source.origin, done)
+            }
+            val secure = if (source.origin.startsWith("https://")) "; Secure" else ""
+            CookieManager.getInstance().setCookie(source.origin,
+                "measix_portal_session=; Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT; Path=/; HttpOnly; SameSite=Strict$secure") {
+                CookieManager.getInstance().flush()
+                clearStorage()
+            }
+        }
     }
 }

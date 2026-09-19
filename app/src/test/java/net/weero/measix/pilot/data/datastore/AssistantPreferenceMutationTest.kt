@@ -9,14 +9,11 @@ class AssistantPreferenceMutationTest {
     @Test
     fun `enterprise assistant model choices use principal preferences and retain revoked references`() {
         val base = exampleEnterprisePackage()
-        val first = base.configuration.models.first { it.id == "mdl_chat" }
+        val first = base.configuration.models.first()
         val second = first.copy(id = "mdl_second", name = "Second")
         val third = first.copy(id = "mdl_third", name = "Third")
         val packet = base.copy(configuration = base.configuration.copy(models = base.configuration.models + second + third,
-            defaults = base.configuration.defaults.copy(chatModelId = third.id)),
-            runtimeBindings = base.runtimeBindings + listOf(second, third).map { model ->
-                base.runtimeBindings.first { it.resourceId == first.id }.copy(resourceId = model.id)
-            })
+            defaults = base.configuration.defaults.copy(chatModelId = third.id)))
         val scope = packet.identity.scope
         val id = packet.identity.reference(packet.configuration.assistants.first().id)
         val original = UserSettingsDocument.empty()

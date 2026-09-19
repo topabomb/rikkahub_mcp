@@ -35,7 +35,7 @@ import org.junit.Test
 class WorkspaceTerminalRuntimeTest {
     @get:org.junit.Rule val temporary = org.junit.rules.TemporaryFolder()
     private suspend fun sessionOwner() = net.weero.measix.pilot.data.enterprise.EnterpriseSessionController(
-        net.weero.measix.pilot.data.enterprise.EnterpriseAppliedStore(temporary.newFolder())).also { it.recover() }
+        net.weero.measix.pilot.data.enterprise.enterpriseTestStore(temporary.newFolder())).also { it.recover() }
     private val selection = net.weero.measix.pilot.data.enterprise.RealmSelection(net.weero.measix.pilot.data.enterprise.RealmAccess.Personal, 0)
     private val owner = WorkspaceTerminalOwner("workspace", selection.access)
     private val dispatcher = StandardTestDispatcher()

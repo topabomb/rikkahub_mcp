@@ -59,4 +59,8 @@ interface ArtifactDAO {
 
     @Query("SELECT * FROM artifact WHERE scope = :scope ORDER BY created_at DESC")
     suspend fun listInScope(scope: ConfigurationScope): List<ArtifactEntity>
+
+    @Query("SELECT DISTINCT scope FROM artifact")
+    suspend fun scopes(): List<ConfigurationScope>
+
 }

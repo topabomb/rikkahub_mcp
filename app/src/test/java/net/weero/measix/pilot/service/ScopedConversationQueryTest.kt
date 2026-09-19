@@ -52,7 +52,7 @@ class ScopedConversationQueryTest {
 
     @Test fun `conversation tools cannot return history when their session expires during the query`() = runTest {
         var now = 1000L
-        val sessions = EnterpriseSessionController(EnterpriseAppliedStore(temporary.newFolder())) { now }
+        val sessions = EnterpriseSessionController(net.weero.measix.pilot.data.enterprise.enterpriseTestStore(temporary.newFolder())) { now }
         val ready = sessions.enrollFixture(exampleEnterprisePackage())
         val access = sessions.captureSelectedRealmAccess()
         val repository = mockk<ConversationRepository>()
@@ -190,7 +190,7 @@ class ScopedConversationQueryTest {
         assertTrue(sources.all { it.invalid })
     }
 
-    private fun sessions() = EnterpriseSessionController(EnterpriseAppliedStore(temporary.newFolder()))
+    private fun sessions() = EnterpriseSessionController(net.weero.measix.pilot.data.enterprise.enterpriseTestStore(temporary.newFolder()))
     private fun service(repository: ConversationRepository, sessions: EnterpriseSessionController) = ConversationQueryService(
         repository, mockk(), mockk(), mockk(), mockk(), sessions, ApplicationRecoveryGate().apply { ready() }, mockk(), mockk())
     private fun row(scope: ConfigurationScope, title: String) = ConversationListRecord(

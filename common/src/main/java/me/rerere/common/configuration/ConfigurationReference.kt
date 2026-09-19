@@ -14,13 +14,11 @@ data class EnterpriseAuthority(
     val deploymentId: String,
 ) {
     init {
-        require(sourceNamespace.matches(Regex("(local|platform):[A-Za-z0-9._-]{1,128}"))) {
+        require(sourceNamespace.matches(Regex("platform:[A-Za-z0-9._-]{1,128}"))) {
             "invalid_source_namespace"
         }
         require(deploymentId.matches(Regex("[A-Za-z0-9._-]{1,256}"))) { "invalid_deployment_id" }
     }
-
-    val isLocal: Boolean get() = sourceNamespace.startsWith("local:")
 }
 
 /** User UUIDs and authority-qualified enterprise IDs share a lossless scalar wire format. */

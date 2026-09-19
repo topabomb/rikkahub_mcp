@@ -8,7 +8,6 @@ import kotlinx.coroutines.ensureActive
 import me.rerere.ai.provider.CustomHeader
 import me.rerere.ai.provider.BuiltInTools
 import me.rerere.ai.provider.supportsBuiltInSearch
-import me.rerere.ai.provider.Modality
 import me.rerere.ai.provider.Model
 import me.rerere.ai.provider.ModelType
 import me.rerere.ai.provider.ProviderManager
@@ -26,8 +25,6 @@ import net.weero.measix.pilot.data.datastore.findProvider
 import net.weero.measix.pilot.data.enterprise.EnterpriseExecution
 import net.weero.measix.pilot.data.enterprise.PlatformProviderDefinitionClientProtocol
 import net.weero.measix.pilot.data.enterprise.EnterpriseExecutionLease
-import net.weero.measix.pilot.data.enterprise.EnterpriseRuntimeBinding
-import net.weero.measix.pilot.data.enterprise.EnterpriseRuntimeProtocol
 import net.weero.measix.pilot.data.enterprise.EnterpriseSessionController
 import net.weero.measix.pilot.data.enterprise.EnterpriseState
 import net.weero.measix.pilot.data.enterprise.RealmSelection
@@ -81,7 +78,6 @@ internal class ModelExecutionService(
     private val sessions: EnterpriseSessionController,
     private val recoveryGate: ApplicationRecoveryGate,
     private val providers: ProviderManager,
-    private val localSource: net.weero.measix.pilot.data.enterprise.LocalEnterpriseSource,
     private val appScope: net.weero.measix.pilot.AppScope,
     private val synchronization: EnterpriseSynchronizationService,
     private val platform: PlatformEnterpriseService,
@@ -209,7 +205,7 @@ internal class ModelExecutionService(
         }
         bindOwner(execution)
         if (access is RealmAccess.Enterprise) {
-            val checkedVersion = if (access.scope.authority.isLocal) null else synchronization.prepareExecution(access)
+            val checkedVersion = synchronization.prepareExecution(access)
             bindings = sessions.captureExecution(access, checkedVersion)
         }
         val originalBindings = bindings
@@ -262,12 +258,8 @@ internal class ModelExecutionService(
             abilities = selected.abilities.toList(), tools = selected.tools.toSet(), providerOverwrite = null,
         ).let { if (role == ModelSelectionRole.CHAT) it.withAssistantSearch(requireNotNull(assistant)) else it.copy(tools = emptySet()) }
         val enterpriseId = modelId as? ConfigurationReference.Enterprise
-        val enterpriseExecution = enterpriseId?.let {
-            requireNotNull(bindings) { "enterprise_execution_owner_missing" }.execution
-        }
-        val platformExecution = enterpriseExecution as? EnterpriseExecution.Platform
-        val privateBinding = enterpriseId?.takeIf { enterpriseExecution is EnterpriseExecution.Local }?.let {
-            requireNotNull(bindings).localBinding(it.id)
+        val platformExecution = enterpriseId?.let {
+            requireNotNull(bindings) { "enterprise_execution_owner_missing" }.execution as EnterpriseExecution.Platform
         }
         val platformProvider = platformExecution?.let {
             val definitions = requireNotNull(bindings).configuration
@@ -287,27 +279,19 @@ internal class ModelExecutionService(
                 )
             }
         }
-        fun target(binding: EnterpriseRuntimeBinding) = enterpriseTarget(binding, model,
-            access as RealmAccess.Enterprise, requireNotNull(bindings).version)
         val initialTarget = if (platformProvider != null) ModelRequestTarget.Remote(platformProvider)
-            else if (privateBinding != null) target(privateBinding)
             else ModelRequestTarget.Remote(selected.findProvider(snapshot.userSettings.providers)
                 ?: error("model_provider_unavailable"))
         check(BuiltInTools.Search !in model.tools ||
-            (initialTarget is ModelRequestTarget.Remote && supportsBuiltInSearch(initialTarget.provider))) {
+            supportsBuiltInSearch(initialTarget.provider)) {
             "model_builtin_search_not_supported"
         }
-        val frozenShape = (initialTarget as? ModelRequestTarget.Remote)?.let { freezeProviderWireShape(it.provider, model) }
+        val frozenShape = freezeProviderWireShape(initialTarget.provider, model)
         val credentialOwner = if (enterpriseId == null) {
-            captureProviderCredentialOwner(snapshot.userSettings, selected, (initialTarget as ModelRequestTarget.Remote).provider)
+            captureProviderCredentialOwner(snapshot.userSettings, selected, initialTarget.provider)
         } else null
-        val media = when (initialTarget) {
-            is ModelRequestTarget.LocalExample -> if (Modality.IMAGE in model.inputModalities) {
-                RequestMediaCapabilities(RequestImageSupport.STRUCTURED, RequestImageSupport.STRUCTURED, RequestImageSupport.STRUCTURED)
-            } else RequestMediaCapabilities.NONE
-            is ModelRequestTarget.Remote -> if (role.type == ModelType.IMAGE) RequestMediaCapabilities.NONE
-                else providers.getProviderByType(initialTarget.provider).requestMediaCapabilities(initialTarget.provider, model)
-        }
+        val media = if (role.type == ModelType.IMAGE) RequestMediaCapabilities.NONE
+            else providers.getProviderByType(initialTarget.provider).requestMediaCapabilities(initialTarget.provider, model)
         val modelAdmission: suspend ((ModelRequestTarget) -> Unit) -> Unit = { accept ->
             // Refresh belongs to the Session owner and must happen outside its configuration lock.
             val platformToken = platformExecution?.let { platform.accessToken((access as RealmAccess.Enterprise).sessionId) }
@@ -328,9 +312,6 @@ internal class ModelExecutionService(
                         CustomHeader("X-Measix-Managed-Generation", bindings.configuration.generation.toString()),
                         CustomHeader("X-Measix-Interaction-Id", "int_$interactionId"),
                     ), RequestCredentials.Routed(endpoint, requireNotNull(platformToken).value))
-                } else if (privateBinding != null) {
-                    // The original lease checks revocation; replacement bindings belong to new Turns.
-                    target(requireNotNull(bindings).localBinding(modelId.id))
                 } else ModelRequestTarget.Remote(mergeProviderTransportCredentials(
                     requireNotNull(frozenShape),
                     resolveProviderTransportOwner(latest.userSettings, requireNotNull(credentialOwner)),
@@ -377,24 +358,4 @@ internal class ModelExecutionService(
         check(access.canExecute) { "configuration_resource_unavailable:${category.name}:${access.unavailableReason}" }
     }
 
-    private fun enterpriseTarget(binding: EnterpriseRuntimeBinding, model: Model,
-        access: RealmAccess.Enterprise, version: EnterpriseAppliedVersion): ModelRequestTarget {
-        val endpoint = binding.endpoint.orEmpty()
-        val credential = RequestCredentials.fixed(binding.credential)
-        val provider = when (binding.protocol) {
-            EnterpriseRuntimeProtocol.EXAMPLE -> return ModelRequestTarget.LocalExample(access, version, binding.resourceId, localSource)
-            EnterpriseRuntimeProtocol.OPENAI_CHAT, EnterpriseRuntimeProtocol.OPENAI_RESPONSES, EnterpriseRuntimeProtocol.OPENAI_IMAGES -> ProviderSetting.OpenAI(
-                id = model.id, name = model.displayName, models = listOf(model), baseUrl = endpoint, apiKey = "",
-                useResponseApi = binding.protocol == EnterpriseRuntimeProtocol.OPENAI_RESPONSES,
-            )
-            EnterpriseRuntimeProtocol.GOOGLE_GENERATE -> ProviderSetting.Google(
-                id = model.id, name = model.displayName, models = listOf(model), baseUrl = endpoint, apiKey = "",
-            )
-            EnterpriseRuntimeProtocol.CLAUDE_MESSAGES -> ProviderSetting.Claude(
-                id = model.id, name = model.displayName, models = listOf(model), baseUrl = endpoint, apiKey = "",
-            )
-            else -> error("enterprise_model_protocol_mismatch")
-        }
-        return ModelRequestTarget.Remote(provider, binding.headers.map { CustomHeader(it.key, it.value) }, credential)
-    }
 }

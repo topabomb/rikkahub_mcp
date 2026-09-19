@@ -193,7 +193,8 @@ internal class PortalNativeActions(
             receipts.forEach { receipt ->
                 try { receipt.await() }
                 catch (error: Exception) {
-                    if (failure == null) failure = error else if (error !== failure) failure?.addSuppressed(error)
+                    val previous = failure
+                    if (previous == null) failure = error else if (error !== previous) previous.addSuppressed(error)
                 }
             }
             failure?.let { throw it }

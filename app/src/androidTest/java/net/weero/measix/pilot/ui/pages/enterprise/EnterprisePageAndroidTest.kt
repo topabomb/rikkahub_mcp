@@ -44,7 +44,6 @@ import net.weero.measix.pilot.data.enterprise.RealmSelection
 import net.weero.measix.pilot.data.enterprise.RealmSwitchRequest
 import net.weero.measix.pilot.service.EnterpriseApplicationService
 import net.weero.measix.pilot.service.EnterpriseOverview
-import net.weero.measix.pilot.service.InstalledEnterpriseSource
 import net.weero.measix.pilot.service.portal.PortalDocument
 import net.weero.measix.pilot.service.portal.PortalFailure
 import net.weero.measix.pilot.service.portal.PortalWebView
@@ -79,6 +78,7 @@ class EnterprisePageAndroidTest {
         coEvery { fixture.service.dismissJoin(confirmation) } just Runs
         coEvery { fixture.service.confirmJoin(confirmation) } just Runs
         fixture.show()
+        compose.onNodeWithText(text(R.string.enterprise_join_scan_gallery)).assertIsDisplayed()
         click(R.string.enterprise_join_paste)
         compose.onNode(hasSetTextAction()).performTextInput(raw)
         compose.onNode(hasText(text(R.string.enterprise_join_submit)) and hasClickAction()).performClick()
@@ -101,38 +101,41 @@ class EnterprisePageAndroidTest {
         coVerify(exactly = 1) { fixture.service.confirmJoin(confirmation) }
     }
 
+
     @Test
-    fun nativeExampleEnrollmentAndSwitchUseThePresentedSelectionAndReturnToFreshChat() {
-        val enrolled = overview()
-        val fixture = Fixture(overview(access = null))
-        val switchStarted = CompletableDeferred<RealmSwitchRequest>()
-        val releaseSwitch = CompletableDeferred<Unit>()
-        val personal = RealmSelection(RealmAccess.Personal, 2L)
-        coEvery { fixture.service.joinExample() } coAnswers { fixture.state.value = enrolled }
-        coEvery { fixture.service.switchRealm(any()) } coAnswers {
-            switchStarted.complete(firstArg())
-            releaseSwitch.await()
-            personal
-        }
-        try {
-            fixture.show()
-            click(R.string.enterprise_join_example)
-            compose.waitUntil(5_000) { fixture.vm.overview.value == enrolled }
-            compose.onNodeWithText(text(R.string.enterprise_join_options)).assertDoesNotExist()
-            compose.onNodeWithText(text(R.string.enterprise_start_conversation)).assertIsDisplayed()
-            coVerify(exactly = 1) { fixture.service.joinExample() }
-            click(R.string.enterprise_switch_personal)
-            compose.waitUntil(5_000) { switchStarted.isCompleted }
-            coVerify(exactly = 1) {
-                fixture.service.switchRealm(RealmSwitchRequest(requireNotNull(enrolled.selection), RealmAccess.Personal))
-            }
-            compose.runOnUiThread { assertEquals(listOf(Screen.Enterprise), fixture.backStack) }
-            releaseSwitch.complete(Unit)
-            compose.waitUntil(5_000) { !fixture.vm.busy.value }
-            compose.runOnUiThread { assertEquals(listOf(Screen.Startup()), fixture.backStack) }
-        } finally {
-            releaseSwitch.complete(Unit)
-        }
+    fun storageFailureRepairEntryOpensChoiceThenConfirmationAndNeverAutoExecutes() {
+        val fixture = Fixture(overview(access = null).copy(
+            failure = "invalid_enterprise_storage",
+            resetPath = net.weero.measix.pilot.service.EnterpriseResetPath.STORAGE_FAILURE,
+        ))
+        coEvery { fixture.service.localDataReset(any()) } returns Unit
+        fixture.show()
+        click(R.string.enterprise_reset_repair)
+        compose.onNodeWithText(text(R.string.enterprise_reset_option_notice)).assertIsDisplayed()
+        coVerify(exactly = 0) { fixture.service.localDataReset(any()) }
+        click(R.string.enterprise_reset_keep_history)
+        compose.onNodeWithText(text(R.string.enterprise_reset_repair_confirm)).assertIsDisplayed()
+        coVerify(exactly = 0) { fixture.service.localDataReset(any()) }
+        compose.onNodeWithText(text(R.string.cancel)).performClick()
+        compose.waitUntil(5_000) { fixture.vm.resetConfirmation.value == null }
+        coVerify(exactly = 0) { fixture.service.localDataReset(any()) }
+    }
+
+    @Test
+    fun connectedResetOffersBothModesAndClearAllConfirmationStaysUserDriven() {
+        val fixture = Fixture(overview().copy(
+            resetPath = net.weero.measix.pilot.service.EnterpriseResetPath.CONNECTED,
+        ))
+        coEvery { fixture.service.localDataReset(any()) } coAnswers { fixture.state.value = overview(access = null) }
+        fixture.show()
+        click(R.string.enterprise_reset_title)
+        compose.onNodeWithText(text(R.string.enterprise_reset_clear_all)).assertIsDisplayed()
+        click(R.string.enterprise_reset_clear_all)
+        compose.onNodeWithText(text(R.string.enterprise_reset_clear_all_confirm)).assertIsDisplayed()
+        coVerify(exactly = 0) { fixture.service.localDataReset(any()) }
+        compose.onNodeWithText(text(R.string.confirm)).performClick()
+        compose.waitUntil(5_000) { !fixture.vm.busy.value }
+        coVerify(exactly = 1) { fixture.service.localDataReset(any()) }
     }
 
     @Test
@@ -141,21 +144,6 @@ class EnterprisePageAndroidTest {
         fixture.show()
         compose.onNodeWithContentDescription(text(R.string.back)).performClick()
         compose.runOnIdle { assertEquals(listOf(Screen.Setting), fixture.backStack) }
-    }
-
-    @Test
-    fun installedEnterpriseListUsesTheChosenSourceIdentity() {
-        val fixture = Fixture(overview(access = null))
-        val installed = InstalledEnterpriseSource(access("installed").scope, "Private enterprise", "Private user")
-        coEvery { fixture.service.installedSources() } returns listOf(installed)
-        coEvery { fixture.service.joinInstalled(installed.scope) } coAnswers { fixture.state.value = overview() }
-        fixture.show()
-        click(R.string.enterprise_installed_sources)
-        compose.onNodeWithText("Private enterprise").assertIsDisplayed()
-        compose.onNodeWithText("Private user").assertIsDisplayed()
-        compose.onNodeWithText("Private enterprise").performClick()
-        compose.waitUntil(5_000) { fixture.vm.overview.value?.access != null }
-        coVerify(exactly = 1) { fixture.service.joinInstalled(installed.scope) }
     }
 
     @Test
@@ -337,7 +325,7 @@ class EnterprisePageAndroidTest {
     private fun text(resource: Int, vararg args: Any): String = compose.activity.getString(resource, *args)
 
     private fun access(session: String = "original-session") = RealmAccess.Enterprise(
-        ConfigurationScope.Enterprise(EnterpriseAuthority("local:example", "deployment"), "user"), session,
+        ConfigurationScope.Enterprise(EnterpriseAuthority("platform:example", "deployment"), "user"), session,
     )
 
     private fun overview(
@@ -350,7 +338,6 @@ class EnterprisePageAndroidTest {
         enterpriseName = name.takeIf { access != null },
         userName = "Example user".takeIf { access != null },
         access = access,
-        isLocal = access != null,
         generation = 1L.takeIf { access != null },
         lastSyncMillis = null,
         failure = null,

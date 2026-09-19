@@ -246,7 +246,7 @@ class ConversationFolderAccessTest {
 
     private inner class Fixture(test: TestScope) {
         val appScope = AppScope(StandardTestDispatcher(test.testScheduler))
-        val sessions = EnterpriseSessionController(EnterpriseAppliedStore(temporary.newFolder()))
+        val sessions = EnterpriseSessionController(net.weero.measix.pilot.data.enterprise.enterpriseTestStore(temporary.newFolder()))
         val folderDao = mockk<FolderDAO>()
         val conversationDao = mockk<ConversationDAO>()
         val repository = mockk<ConversationRepository>()

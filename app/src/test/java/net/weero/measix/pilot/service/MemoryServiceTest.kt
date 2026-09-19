@@ -56,24 +56,29 @@ class MemoryServiceTest {
             val packet = exampleEnterprisePackage()
             env.sessions.enrollFixture(packet)
             val selection = requireNotNull(env.sessions.observeSelectedRealmSelection().first())
-            val id = ConfigurationReference.Enterprise(packet.identity.authority, "asd_writer")
+            val assistant = packet.configuration.assistants.first { it.memorySeedIds.isNotEmpty() }
+            val id = ConfigurationReference.Enterprise(packet.identity.authority, assistant.id)
             val address = MemoryAddress(packet.identity.scope, MemoryOwner.Assistant(id))
             env.rows(address).value = listOf(AssistantMemory(7, "my writing preference"))
             val configuration = env.configurations.observe(packet.identity.scope).first()
-            assertEquals(listOf("seed_writing"), configuration.assistantMemorySeeds(id).map { it.id })
+            assertEquals(assistant.memorySeedIds, configuration.assistantMemorySeeds(id).map { it.id })
             val originalView = env.memory.observe(selection, id).first()
             assertNull(originalView.unavailableReason)
             val original = originalView.records.single()
             assertEquals("my writing preference", original.content)
             assertEquals(address, original.access.address)
+            val seedId = assistant.memorySeedIds.first()
             env.sessions.synchronize(selection.access as RealmAccess.Enterprise, packet.copy(configuration = packet.configuration.copy(
                 generation = packet.configuration.generation + 1,
-                memorySeeds = packet.configuration.memorySeeds.map { if (it.id == "seed_writing") it.copy(content = "Updated enterprise guidance") else it },
+                memorySeeds = packet.configuration.memorySeeds.map {
+                    if (it.id == seedId) it.copy(content = "Updated enterprise guidance") else it
+                },
             )).toCandidate())
             val updated = env.configurations.observe(packet.identity.scope).first {
                 it.enterpriseConfiguration?.generation == packet.configuration.generation + 1
             }
-            assertEquals("Updated enterprise guidance", updated.assistantMemorySeeds(id).single().content)
+            assertEquals("Updated enterprise guidance",
+                updated.assistantMemorySeeds(id).first { it.id == seedId }.content)
             assertEquals("my writing preference", env.memory.observe(selection, id).first().records.single().content)
             env.sessions.selectPersonalFixture()
             assertNotNull(env.memory.observe(selection, id).first().unavailableReason)
@@ -326,7 +331,7 @@ class MemoryServiceTest {
             produceFile = { File(root, "settings.preferences_pb") })
         val settings = SettingsStore(context, scope, dataStore = preferences)
         var now = System.currentTimeMillis()
-        val sessions = EnterpriseSessionController(EnterpriseAppliedStore(File(root, "enterprise"))) { now }
+        val sessions = EnterpriseSessionController(net.weero.measix.pilot.data.enterprise.enterpriseTestStore(File(root, "enterprise"))) { now }
         val gate = ApplicationRecoveryGate()
         val configurations = ConfigurationQueryService(settings, sessions, gate)
         val repository = mockk<MemoryRepository>()

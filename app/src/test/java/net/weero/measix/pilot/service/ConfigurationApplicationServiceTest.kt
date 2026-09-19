@@ -65,7 +65,8 @@ class ConfigurationApplicationServiceTest {
         try {
             env.initialize()
             val target = env.chatTarget()
-            val model = exampleEnterprisePackage().identity.reference("mdl_chat")
+            val packet = exampleEnterprisePackage()
+            val model = packet.identity.reference(requireNotNull(packet.configuration.defaults.chatModelId))
             env.commands.changeAssistantPreference(target, AssistantPreferenceChange.Model(model))
             env.commands.changeAssistantPreference(target, AssistantPreferenceChange.Search(AssistantSearchMode.LOCAL))
             val saved = env.diskDocument()
@@ -115,7 +116,9 @@ class ConfigurationApplicationServiceTest {
             val target = env.chatTarget()
             env.commands.changeAssistantPreference(target, AssistantPreferenceChange.Model(null))
             val followsDefault = env.queries.observeCurrent().first()
-            assertEquals(exampleEnterprisePackage().identity.reference("mdl_chat"), followsDefault.assistantModel(env.assistant.id).reference)
+            val packet = exampleEnterprisePackage()
+            assertEquals(packet.identity.reference(requireNotNull(packet.configuration.defaults.chatModelId)),
+                followsDefault.assistantModel(env.assistant.id).reference)
             assertEquals(AssistantModelPreferenceMode.SPACE_DEFAULT,
                 followsDefault.conversationConfiguration(target).modelPreference!!.mode)
             assertNotNull(env.diskDocument().preferences.assistantUsage(env.access.scope, env.assistant.id)!!.chatModelId)
@@ -263,12 +266,14 @@ class ConfigurationApplicationServiceTest {
             assertEquals(exampleEnterprisePackage().identity.enterpriseName, assistantCatalog().enterpriseName)
             val selection = requireNotNull(initial.selection)
             assertNull(initial.storedSelections.chatModelId)
-            assertEquals(exampleEnterprisePackage().identity.reference("mdl_chat"), initial.selections.chatModelId)
+            val packet = exampleEnterprisePackage()
+            assertEquals(packet.identity.reference(requireNotNull(packet.configuration.defaults.chatModelId)),
+                initial.selections.chatModelId)
             env.commands.selectResource(selection, ResourceSelectionSlot.CHAT_MODEL, env.model.id)
             env.commands.setModelFavorite(selection, env.model.id, true)
-            val packet = exampleEnterprisePackage()
             env.sessions.synchronize(env.access, packet.copy(configuration = packet.configuration.copy(
-                generation = 2, policy = packet.configuration.policy.copy(allowLocalProviders = false))).toCandidate())
+                generation = packet.configuration.generation + 1,
+                policy = packet.configuration.policy.copy(allowLocalProviders = false))).toCandidate())
             val restricted = catalog()
             assertEquals(env.model.id, restricted.storedSelections.chatModelId)
             assertEquals(ConfigurationUnavailableReason.USER_CATEGORY_NOT_ALLOWED, restricted.find(env.model.id)!!.unavailableReason)
@@ -327,7 +332,7 @@ class ConfigurationApplicationServiceTest {
         try {
             env.initialize()
             val packet = exampleEnterprisePackage()
-            val selected = packet.identity.reference("mdl_chat")
+            val selected = packet.identity.reference(requireNotNull(packet.configuration.defaults.chatModelId))
             env.commands.changeAssistantPreference(env.target, AssistantPreferenceChange.Model(selected))
             env.commands.changeAssistantPreference(env.target, AssistantPreferenceChange.Search(AssistantSearchMode.LOCAL))
             val durable = env.document()
@@ -368,7 +373,9 @@ class ConfigurationApplicationServiceTest {
             val current = env.sessions.state.value as EnterpriseState.Available
             val policyUpdate = launch {
                 env.sessions.synchronize(RealmAccess.Enterprise(packet.identity.scope, current.manifest.session!!.id),
-                    packet.copy(configuration = packet.configuration.copy(generation = 2, policy = packet.configuration.policy.copy(allowLocalMcp = false))).toCandidate())
+                    packet.copy(configuration = packet.configuration.copy(
+                        generation = packet.configuration.generation + 1,
+                        policy = packet.configuration.policy.copy(allowLocalMcp = false))).toCandidate())
             }
             runCurrent()
             assertFalse(writer.isCompleted)
@@ -400,7 +407,9 @@ class ConfigurationApplicationServiceTest {
             val alice = exampleEnterprisePackage()
             env.commands.changeAssistantPreference(env.target, AssistantPreferenceChange.Search(AssistantSearchMode.LOCAL))
             env.sessions.finishExit(env.sessions.beginExit(requireNotNull(env.sessions.captureExitRequest())))
-            val bob = alice.copy(identity = alice.identity.copy(userId = "bob"))
+            val bob = alice.copy(identity = alice.identity.copy(
+                userId = "usr_00000000-0000-4000-8000-000000000002",
+            ))
             env.sessions.enrollFixture(bob)
             assertNull(env.document().preferences.assistantUsage(bob.identity.scope, env.assistant.id))
             try {
@@ -425,7 +434,9 @@ class ConfigurationApplicationServiceTest {
             env.commands.changeAssistantPreference(env.target, AssistantPreferenceChange.Mcp(second.id, true))
             val current = env.sessions.state.value as EnterpriseState.Available
             env.sessions.synchronize(RealmAccess.Enterprise(packet.identity.scope, current.manifest.session!!.id),
-                packet.copy(configuration = packet.configuration.copy(generation = 2, policy = packet.configuration.policy.copy(allowLocalMcp = false))).toCandidate())
+                packet.copy(configuration = packet.configuration.copy(
+                    generation = packet.configuration.generation + 1,
+                    policy = packet.configuration.policy.copy(allowLocalMcp = false))).toCandidate())
             env.commands.changeAssistantPreference(env.target, AssistantPreferenceChange.Mcp(env.mcp.id, false))
             assertEquals(setOf(second.id), env.document().preferences.assistantUsage(packet.identity.scope, env.assistant.id)!!.mcpServers!!.value)
             env.commands.changeAssistantPreference(env.target, AssistantPreferenceChange.Mcp(second.id, false))
@@ -434,85 +445,6 @@ class ConfigurationApplicationServiceTest {
     }
 
     private fun TestScope.environment(): Environment = Environment(temporary.newFolder(), AppScope(StandardTestDispatcher(testScheduler)))
-
-    @Test
-    fun `gateway preference follows published policy without changing configuration or losing the user choice`() = runTest {
-        val env = environment()
-        try {
-            env.initialize()
-            val packet = exampleEnterprisePackage()
-            val reference = packet.identity.reference("twg_example")
-            val key = ConfigurationKey(ConfigurationCategory.GATEWAY, reference)
-            assertEquals(ResolvedGatewayEnablement(true, true), env.queries.read(env.access).catalog.getValue(key).gatewayEnablement)
-            val manifest = (env.sessions.state.value as EnterpriseState.Available).manifest
-            val beforeStaleWrite = env.document()
-            try {
-                env.commands.setGatewayEnabled(env.selection.copy(revision = env.selection.revision - 1), reference, false)
-                fail("An old rendered directory cannot mutate Gateway preferences")
-            } catch (error: EnterpriseConfigurationException) { assertEquals("enterprise_selection_revoked", error.reason) }
-            assertEquals(JsonInstant.encodeToString(beforeStaleWrite), JsonInstant.encodeToString(env.document()))
-            env.commands.setGatewayEnabled(env.selection, reference, false)
-            assertEquals(manifest, (env.sessions.state.value as EnterpriseState.Available).manifest)
-            assertEquals(ResolvedGatewayEnablement(false, true), env.queries.read(env.access).catalog.getValue(key).gatewayEnablement)
-            assertFalse(env.queries.read(env.access).access(ConfigurationCategory.GATEWAY, reference).canExecute)
-
-            val required = packet.copy(configuration = packet.configuration.copy(generation = 2,
-                gateways = packet.configuration.gateways.map { if (it.id == reference.id) it.copy(enablement = GatewayEnablementPolicy.REQUIRED) else it }))
-            env.sessions.synchronize(env.access, required.toCandidate())
-            val requiredItem = env.queries.read(env.access).catalog.getValue(key)
-            assertEquals(ResolvedGatewayEnablement(true, false), requiredItem.gatewayEnablement)
-            assertTrue(requiredItem.access.requiredEnabled)
-            assertFalse(requiredItem.access.canEditDefinition)
-            val before = env.document()
-            for (gateway in listOf(reference, reference.copy(id = "gw_missing"),
-                reference.copy(authority = reference.authority.copy(sourceNamespace = "local:other")))) {
-                try {
-                    env.commands.setGatewayEnabled(env.selection, gateway, false)
-                    fail("Required, missing and foreign gateways must reject preference writes")
-                } catch (_: SettingsLockedException) { }
-            }
-            assertEquals(JsonInstant.encodeToString(before), JsonInstant.encodeToString(env.document()))
-            assertFalse(before.preferences.gateway(packet.identity.scope, reference)!!.enabled)
-            env.sessions.synchronize(env.access, packet.copy(configuration = packet.configuration.copy(generation = 3)).toCandidate())
-            assertEquals(ResolvedGatewayEnablement(false, true), env.queries.read(env.access).catalog.getValue(key).gatewayEnablement)
-        } finally { env.scope.cancel() }
-    }
-
-    @Test
-    fun `same gateway has separate user choices and an old session cannot mutate any preference after reentry`() = runTest {
-        val env = environment()
-        try {
-            env.initialize()
-            val alice = exampleEnterprisePackage()
-            val reference = alice.identity.reference("twg_example")
-            env.commands.setGatewayEnabled(env.selection, reference, false)
-            env.sessions.finishExit(env.sessions.beginExit(requireNotNull(env.sessions.captureExitRequest())))
-            val bob = alice.copy(identity = alice.identity.copy(userId = "bob"))
-            env.sessions.enrollFixture(bob)
-            val bobAccess = env.sessions.captureRealmAccess(bob.identity.scope) as RealmAccess.Enterprise
-            assertNull(env.document().preferences.gateway(bob.identity.scope, reference))
-            assertTrue(env.queries.read(bobAccess).catalog.getValue(ConfigurationKey(ConfigurationCategory.GATEWAY, reference)).gatewayEnablement!!.enabled)
-            env.commands.setGatewayEnabled(requireNotNull(env.sessions.observeSelectedRealmSelection().first()), reference, true)
-            assertFalse(env.document().preferences.gateway(alice.identity.scope, reference)!!.enabled)
-            env.sessions.finishExit(env.sessions.beginExit(requireNotNull(env.sessions.captureExitRequest())))
-            env.sessions.enrollFixture(alice)
-            val before = env.document()
-            val staleActions: List<suspend () -> Unit> = listOf(
-                { env.commands.setGatewayEnabled(env.selection, reference, true) },
-                { env.commands.selectResource(env.selection, ResourceSelectionSlot.CHAT_MODEL, env.model.id) },
-                { env.commands.setModelFavorite(env.selection, env.model.id, true) },
-                { env.commands.setSuggestionEnabled(env.selection, false) },
-                { env.commands.changeAssistantPreference(env.target, AssistantPreferenceChange.Search(AssistantSearchMode.OFF)) },
-            )
-            staleActions.forEach { action ->
-                try { action(); fail("Reentry must not revive the original session") }
-                catch (error: EnterpriseConfigurationException) { assertEquals("enterprise_data_access_unavailable", error.reason) }
-            }
-            assertEquals(JsonInstant.encodeToString(before), JsonInstant.encodeToString(env.document()))
-            env.commands.setGatewayEnabled(requireNotNull(env.sessions.observeSelectedRealmSelection().first()), reference, true)
-            assertTrue(env.document().preferences.gateway(alice.identity.scope, reference)!!.enabled)
-        } finally { env.scope.cancel() }
-    }
 
     @Test
     fun `realm resource choices retain invalid references and reject replacements that do not satisfy policy or capability`() = runTest {
@@ -528,7 +460,9 @@ class ConfigurationApplicationServiceTest {
             val ownConfiguration = JsonInstant.encodeToString(env.document().configuration)
             val applied = env.sessions.state.value as EnterpriseState.Available
             env.sessions.synchronize(RealmAccess.Enterprise(packet.identity.scope, applied.manifest.session!!.id),
-                packet.copy(configuration = packet.configuration.copy(generation = 2, policy = packet.configuration.policy.copy(allowLocalProviders = false))).toCandidate())
+                packet.copy(configuration = packet.configuration.copy(
+                    generation = packet.configuration.generation + 1,
+                    policy = packet.configuration.policy.copy(allowLocalProviders = false))).toCandidate())
             val restricted = env.queries.observeCurrent().first()
             assertEquals(env.model.id, restricted.selection(ResourceSelectionSlot.CHAT_MODEL).reference)
             assertEquals(ConfigurationUnavailableReason.USER_CATEGORY_NOT_ALLOWED, restricted.selection(ResourceSelectionSlot.CHAT_MODEL).unavailableReason)
@@ -536,16 +470,13 @@ class ConfigurationApplicationServiceTest {
             commands.setSuggestionEnabled(env.selection, false)
             commands.setModelFavorite(env.selection, env.model.id, false)
             commands.selectResource(env.selection, ResourceSelectionSlot.CHAT_MODEL, null)
-            assertEquals(packet.identity.reference("mdl_chat"), env.queries.observeCurrent().first().selection(ResourceSelectionSlot.CHAT_MODEL).reference)
-            for (reference in listOf(env.model.id, packet.identity.reference("mdl_image"))) {
-                try {
-                    commands.selectResource(env.selection, ResourceSelectionSlot.CHAT_MODEL, reference)
-                    fail("A forbidden or incompatible model must not be selected")
-                } catch (_: SettingsLockedException) { }
-            }
+            assertEquals(packet.identity.reference(requireNotNull(packet.configuration.defaults.chatModelId)),
+                env.queries.observeCurrent().first().selection(ResourceSelectionSlot.CHAT_MODEL).reference)
+            try {
+                commands.selectResource(env.selection, ResourceSelectionSlot.CHAT_MODEL, env.model.id)
+                fail("A forbidden model must not be selected")
+            } catch (_: SettingsLockedException) { }
             assertNull(env.document().preferences.forScope(scope).chatModelId)
-            commands.selectResource(env.selection, ResourceSelectionSlot.IMAGE_MODEL, packet.identity.reference("mdl_image"))
-            assertTrue(env.queries.observeCurrent().first().selection(ResourceSelectionSlot.IMAGE_MODEL).isAvailable)
             assertEquals(env.model.id, env.document().preferences.forScope(ConfigurationScope.Personal).chatModelId)
             assertEquals(ownConfiguration, JsonInstant.encodeToString(env.document().configuration))
         } finally { env.scope.cancel() }
@@ -612,34 +543,31 @@ class ConfigurationApplicationServiceTest {
 
     @Test
     fun `queued realm preferences reject expiry before the settings transaction`() = runTest {
-        for (gateway in listOf(false, true)) {
-            val env = environment()
-            try {
-                env.initialize()
-                val before = JsonInstant.encodeToString(env.document())
-                val held = CompletableDeferred<Unit>()
-                val release = CompletableDeferred<Unit>()
-                val holder = launch {
-                    env.settings.withResolvedConfiguration(ConfigurationScope.Personal, env.sessions.state.value) {
-                        held.complete(Unit)
-                        release.await()
-                    }
+        val env = environment()
+        try {
+            env.initialize()
+            val before = JsonInstant.encodeToString(env.document())
+            val held = CompletableDeferred<Unit>()
+            val release = CompletableDeferred<Unit>()
+            val holder = launch {
+                env.settings.withResolvedConfiguration(ConfigurationScope.Personal, env.sessions.state.value) {
+                    held.complete(Unit)
+                    release.await()
                 }
-                held.await()
-                val pending = launch(start = kotlinx.coroutines.CoroutineStart.UNDISPATCHED) {
-                    try {
-                        if (gateway) env.commands.setGatewayEnabled(env.selection, exampleEnterprisePackage().identity.reference("twg_example"), false)
-                        else env.commands.setSuggestionEnabled(env.selection, false)
-                        fail("Expired preference write must fail")
-                    } catch (_: net.weero.measix.pilot.data.enterprise.EnterpriseConfigurationException) { }
-                }
-                env.now = (env.sessions.state.value as EnterpriseState.Available).manifest.session!!.expiresAtMillis
-                release.complete(Unit)
-                holder.join()
-                pending.join()
-                assertEquals(before, JsonInstant.encodeToString(env.diskDocument()))
-            } finally { env.scope.cancel() }
-        }
+            }
+            held.await()
+            val pending = launch(start = kotlinx.coroutines.CoroutineStart.UNDISPATCHED) {
+                try {
+                    env.commands.setSuggestionEnabled(env.selection, false)
+                    fail("Expired preference write must fail")
+                } catch (_: net.weero.measix.pilot.data.enterprise.EnterpriseConfigurationException) { }
+            }
+            env.now = (env.sessions.state.value as EnterpriseState.Available).manifest.session!!.expiresAtMillis
+            release.complete(Unit)
+            holder.join()
+            pending.join()
+            assertEquals(before, JsonInstant.encodeToString(env.diskDocument()))
+        } finally { env.scope.cancel() }
     }
 
     private class Environment(root: File, val scope: AppScope) {
@@ -661,7 +589,7 @@ class ConfigurationApplicationServiceTest {
         }
         val settings = SettingsStore(context, scope, dataStore = preferences)
         var now = System.currentTimeMillis()
-        val sessions = EnterpriseSessionController(EnterpriseAppliedStore(File(root, "enterprise"))) { now }
+        val sessions = EnterpriseSessionController(net.weero.measix.pilot.data.enterprise.enterpriseTestStore(File(root, "enterprise"))) { now }
         private val gate = ApplicationRecoveryGate()
         lateinit var access: RealmAccess.Enterprise
         lateinit var target: ConversationAssistantTarget

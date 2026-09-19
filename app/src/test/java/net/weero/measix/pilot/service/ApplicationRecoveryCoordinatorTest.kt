@@ -52,6 +52,7 @@ class ApplicationRecoveryCoordinatorTest {
         val env = Env(
             scope = this,
             restorePendingBackup = { events += "restore" },
+            recoverEnterpriseDataReset = { events += "reset" },
             recoverEnterpriseConfiguration = { events += "enterprise" },
             completePendingEnterpriseExit = { events += "exit" },
             postRecoveryMaintenance = { events += "maintenance" },
@@ -72,9 +73,10 @@ class ApplicationRecoveryCoordinatorTest {
         assertEquals(
             listOf(
                 "restore",
-                "enterprise",
                 "artifact",
                 "generated",
+                "reset",
+                "enterprise",
                 "references",
                 "search",
                 "runs",
@@ -171,6 +173,7 @@ class ApplicationRecoveryCoordinatorTest {
         recoveryDispatcher: CoroutineDispatcher = StandardTestDispatcher(scope.testScheduler),
         onAssistantInitialization: () -> Unit = {},
         restorePendingBackup: suspend () -> Unit = {},
+        recoverEnterpriseDataReset: suspend () -> Unit = {},
         recoverEnterpriseConfiguration: suspend () -> Unit = {},
         completePendingEnterpriseExit: suspend () -> Unit = {},
         completePendingBackup: () -> Unit = {},
@@ -207,6 +210,7 @@ class ApplicationRecoveryCoordinatorTest {
                 recoveryDispatcher = recoveryDispatcher,
                 gate = gate,
                 restorePendingBackup = restorePendingBackup,
+                recoverEnterpriseDataReset = recoverEnterpriseDataReset,
                 recoverEnterpriseConfiguration = recoverEnterpriseConfiguration,
                 completePendingEnterpriseExit = completePendingEnterpriseExit,
                 completePendingBackup = completePendingBackup,

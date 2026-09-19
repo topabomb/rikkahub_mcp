@@ -20,7 +20,7 @@ class WorkspaceApplicationServiceTest {
     @get:org.junit.Rule val temporary = org.junit.rules.TemporaryFolder()
     private fun workspaceService(repository: WorkspaceRepository, terminals: WorkspaceTerminalRuntime) = WorkspaceApplicationService(
         repository, terminals, mockk(),
-        net.weero.measix.pilot.data.enterprise.EnterpriseSessionController(net.weero.measix.pilot.data.enterprise.EnterpriseAppliedStore(temporary.newFolder())),
+        net.weero.measix.pilot.data.enterprise.EnterpriseSessionController(net.weero.measix.pilot.data.enterprise.enterpriseTestStore(temporary.newFolder())),
         temporary.newFolder(), net.weero.measix.pilot.service.ApplicationRecoveryGate().apply { ready() },
     )
 
@@ -59,7 +59,7 @@ class WorkspaceApplicationServiceTest {
             kotlinx.coroutines.awaitCancellation()
         }
         val service = WorkspaceApplicationService(repository, mockk(), artifacts,
-            net.weero.measix.pilot.data.enterprise.EnterpriseSessionController(net.weero.measix.pilot.data.enterprise.EnterpriseAppliedStore(temporary.newFolder())),
+            net.weero.measix.pilot.data.enterprise.EnterpriseSessionController(net.weero.measix.pilot.data.enterprise.enterpriseTestStore(temporary.newFolder())),
             temporary.newFolder(), net.weero.measix.pilot.service.ApplicationRecoveryGate().apply { ready() })
         val access = net.weero.measix.pilot.data.enterprise.RealmAccess.Personal
         val request = async { service.executeTool("id", access) { executeCommand("cat", uploads = listOf("/upload/a")) } }

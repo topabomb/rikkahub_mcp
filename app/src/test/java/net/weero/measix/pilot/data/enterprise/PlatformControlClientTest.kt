@@ -25,7 +25,7 @@ class PlatformControlClientTest {
             val connection = client.discover(origin)
             assertEquals(origin, connection.origin)
             assertEquals(origin + "/api/client/v1/bootstrap", connection.control("/bootstrap"))
-            assertFalse(connection.authority.isLocal)
+            assertTrue(connection.authority.sourceNamespace.startsWith("platform:"))
             listOf("//other.test/api", "https://other.test/api", "/api/../private", "/api/%2e%2e/private", "/api?token=x").forEach { base ->
                 assertThrows(IllegalArgumentException::class.java) { connection.copy(discovery = connection.discovery.copy(clientApiBase = base)) }
             }
@@ -47,6 +47,24 @@ class PlatformControlClientTest {
                 assertTrue(error.message.orEmpty().contains("origin moved"))
             }
             assertEquals(1, calls.get())
+        } finally { server.stop(0) }
+    }
+
+    @Test
+    fun `Problem title is retained when the server omits detail`() = runBlocking {
+        val server = server {
+            reply(409, """{"type":"about:blank","title":"Installation is already bound to another user","status":409,"code":"installation_user_conflict"}""")
+        }
+        try {
+            val connection = PlatformConnection(origin(server), PlatformWireCodec.decode(fixture("discovery")))
+            try {
+                client.enroll(connection, PlatformEnrollmentExchangeRequest("one-use-code",
+                    "ins_12345678-1234-4234-8234-123456789012", "Android", "test",
+                    PlatformEnrollmentExchangeRequestPlatform.ANDROID))
+                fail("HTTP conflict accepted")
+            } catch (error: PlatformHttpException) {
+                assertEquals("HTTP 409: installation_user_conflict: Installation is already bound to another user", error.message)
+            }
         } finally { server.stop(0) }
     }
 
@@ -116,6 +134,7 @@ class PlatformControlClientTest {
                 "/api/client/v1/managed/applied" to {
                     client.reportApplied(connection, "access", PlatformManagedAppliedReport(snapshot.managedGeneration, snapshot.snapshotHash))
                 },
+                "/api/client/v1/portal/grants" to { client.createPortalGrant(connection, "access") },
                 "/api/client/v1/sessions/logout" to { client.logout(connection, "refresh") },
             )
             for ((path, send) in requests) {
@@ -123,6 +142,25 @@ class PlatformControlClientTest {
                 catch (error: PlatformHttpException) { assertEquals(503, error.status) }
                 assertEquals("Unexpected replay for $path", 1, calls[path]?.get())
             }
+        } finally { server.stop(0) }
+    }
+
+    @Test
+    fun `Portal grant uses current bearer and accepts only the bound exchange endpoint`() = runBlocking {
+        var authorization: String? = null
+        val server = server {
+            authorization = requestHeaders.getFirst("Authorization")
+            assertEquals("/api/client/v1/portal/grants", requestURI.path)
+            assertEquals("POST", requestMethod)
+            assertEquals(0, requestBody.readBytes().size)
+            reply(201, """{"exchangeUrl":"http://127.0.0.1:${localAddress.port}/portal/session/exchange","ticket":"ticket-secret","expiresAt":"2099-01-01T00:00:00Z"}""")
+        }
+        try {
+            val connection = PlatformConnection(origin(server), PlatformWireCodec.decode(fixture("discovery")))
+            val grant = client.createPortalGrant(connection, "current-session")
+            assertEquals("Bearer current-session", authorization)
+            assertEquals(connection.origin + "/portal/session/exchange", grant.exchangeUrl)
+            assertEquals("ticket-secret", grant.ticket)
         } finally { server.stop(0) }
     }
 

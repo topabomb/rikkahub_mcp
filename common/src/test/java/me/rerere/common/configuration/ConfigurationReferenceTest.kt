@@ -21,23 +21,24 @@ class ConfigurationReferenceTest {
     @Test
     fun `enterprise identity retains source deployment and original resource id`() {
         val reference: ConfigurationReference = ConfigurationReference.Enterprise(
-            EnterpriseAuthority("local:example", "dep_example"), "mdl_chat",
+            EnterpriseAuthority("platform:example", "dep_example"), "mdl_chat",
         )
-        val wire = "managed~local~example~dep_example~mdl_chat"
+        val wire = "managed~platform~example~dep_example~mdl_chat"
         assertEquals(wire, reference.toString())
         assertEquals(reference, Json.decodeFromString<ConfigurationReference>(Json.encodeToString(reference)))
-        assertNotEquals(reference, ConfigurationReference.parse(wire.replace("local", "platform")))
+        assertNotEquals(reference, ConfigurationReference.parse(wire.replace("platform~example", "platform~other")))
         assertNotEquals(reference, ConfigurationReference.parse(wire.replace("dep_example", "dep_other")))
     }
 
     @Test
     fun `invalid or ambiguous enterprise identities are rejected`() {
         listOf(
-            "managed~local~example~dep~mdl_one~extra",
-            "managed~local~example~dep~",
+            "managed~platform~example~dep~mdl_one~extra",
+            "managed~platform~example~dep~",
             "managed~unknown~example~dep~mdl_one",
-            "managed~local~example~../dep~mdl_one",
-            "managed~local~example~dep~mdl_one/another",
+            "managed~local~example~dep~mdl_one",
+            "managed~platform~example~../dep~mdl_one",
+            "managed~platform~example~dep~mdl_one/another",
         ).forEach { wire ->
             assertThrows(IllegalArgumentException::class.java) { ConfigurationReference.parse(wire) }
         }

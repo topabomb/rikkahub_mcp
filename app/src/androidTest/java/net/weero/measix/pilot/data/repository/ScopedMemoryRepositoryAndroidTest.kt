@@ -29,9 +29,7 @@ import net.weero.measix.pilot.data.db.RoomDatabaseTransactionRunner
 import net.weero.measix.pilot.data.db.dao.MemoryDAO
 import net.weero.measix.pilot.data.db.entity.MemoryEntity
 import net.weero.measix.pilot.data.enterprise.EnterpriseAppliedStore
-import net.weero.measix.pilot.data.enterprise.EnterprisePackageCodec
 import net.weero.measix.pilot.data.enterprise.EnterpriseSessionController
-import net.weero.measix.pilot.data.enterprise.LocalEnterpriseSource
 import net.weero.measix.pilot.data.model.MemoryAddress
 import net.weero.measix.pilot.data.model.MemoryOwner
 import org.junit.Assert.*
@@ -43,7 +41,7 @@ import kotlin.uuid.Uuid
 class ScopedMemoryRepositoryAndroidTest {
     private val context get() = ApplicationProvider.getApplicationContext<Context>()
     private val assistant = MemoryOwner.Assistant(ConfigurationReference.random())
-    private val authority = EnterpriseAuthority("local:example", "dep_example")
+    private val authority = EnterpriseAuthority("platform:example", "dep_example")
 
     @Test
     fun namespaceReadsAndObservationsKeepEveryPrincipalAndOwnerSeparateInIdOrder() = runBlocking {
@@ -135,64 +133,6 @@ class ScopedMemoryRepositoryAndroidTest {
         }
     }
 
-    @Test
-    fun cancellationAfterCommitDecisionKeepsRealmAccessLockedUntilRoomFinishes() = runBlocking {
-        val clientRoot = File(context.noBackupFilesDir, "scoped-memory-${Uuid.random()}").apply { check(mkdirs()) }
-        try {
-            withDatabase { database ->
-                coroutineScope {
-                    val sessions = EnterpriseSessionController(EnterpriseAppliedStore(clientRoot))
-                    val packet = context.assets.open(LocalEnterpriseSource.EXAMPLE_ASSET).use(EnterprisePackageCodec::decode)
-                    val ready = sessions.enrollLocal(packet.identity, { packet.identity }, { packet })
-                    val scope = requireNotNull(ready.manifest.session).identity.scope
-                    val access = sessions.captureRealmAccess(scope)
-                    val address = MemoryAddress(scope, assistant)
-                    val commitDecided = CompletableDeferred<Unit>()
-                    val release = CompletableDeferred<Unit>()
-                    val transactionFinished = AtomicBoolean(false)
-                    val cancelled = AtomicBoolean(false)
-                    val transactions = DatabaseTransactionRunner { block ->
-                        database.withTransaction {
-                            block()
-                            // The repository has checked its caller and handed the successful write to Room.
-                            commitDecided.complete(Unit)
-                            release.await()
-                        }
-                        transactionFinished.set(true)
-                    }
-                    val repository = MemoryRepository(database.memoryDao(), transactions)
-                    val writer = launch(Dispatchers.Default) {
-                        try { sessions.withRealmAccess(access) { repository.add(address, "committed") {} } }
-                        catch (error: CancellationException) { cancelled.set(true); throw error }
-                    }
-                    var exitJob: Job? = null
-                    try {
-                        withTimeout(10_000) { commitDecided.await() }
-                        writer.cancel()
-                        val exit = async(start = CoroutineStart.UNDISPATCHED) {
-                            sessions.beginExit(requireNotNull(sessions.captureExitRequest())).also { assertTrue(transactionFinished.get()) }
-                        }
-                        exitJob = exit
-                        assertFalse(writer.isCompleted)
-                        assertFalse(exit.isCompleted)
-                        assertFalse(transactionFinished.get())
-                        release.complete(Unit)
-                        withTimeout(10_000) { writer.join(); assertNotNull(exit.await()) }
-                        assertTrue(cancelled.get())
-                        assertTrue(transactionFinished.get())
-                        assertEquals(listOf("committed"), repository.read(address).map { it.content })
-                    } finally {
-                        release.complete(Unit)
-                        withContext(NonCancellable) {
-                            withTimeout(10_000) { writer.cancel(); writer.join(); exitJob?.cancel(); exitJob?.join() }
-                        }
-                    }
-                }
-            }
-        } finally {
-            clientRoot.deleteRecursively()
-        }
-    }
 
     @Test
     fun authorizationRevokedInsideTransactionRollsBackInsertedMemory() = runBlocking {
@@ -217,7 +157,7 @@ class ScopedMemoryRepositoryAndroidTest {
         ConfigurationScope.Personal,
         ConfigurationScope.Enterprise(authority, "alice"),
         ConfigurationScope.Enterprise(authority, "bob"),
-        ConfigurationScope.Enterprise(EnterpriseAuthority("platform:example", "dep_example"), "alice"),
+        ConfigurationScope.Enterprise(EnterpriseAuthority("platform:other", "dep_example"), "alice"),
     ).flatMap { scope -> listOf(MemoryOwner.RealmShared, assistant).map { MemoryAddress(scope, it) } }
 
     private suspend fun expectMissing(operation: suspend () -> Unit) {

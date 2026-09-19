@@ -15,8 +15,8 @@ import org.junit.Test
 import kotlin.uuid.Uuid
 
 internal fun appliedConfiguration(packet: EnterprisePackage): EnterpriseState.Available = EnterpriseState.Available(
-    EnterpriseManifest(2, EnterpriseSessionPhase.READY,
-        EnterpriseSession(Uuid.random().toString(), packet.identity, Long.MAX_VALUE),
+    EnterpriseManifest(ENTERPRISE_MANIFEST_SCHEMA_VERSION, EnterpriseSessionPhase.READY,
+        EnterpriseSession("ses_${Uuid.random()}", packet.identity, Long.MAX_VALUE),
         EnterpriseAppliedVersion(Uuid.random().toString(), packet.configuration.generation, "0".repeat(64), "0".repeat(64)),
         packet.identity.scope, packet.identity),
     packet.configuration,
@@ -160,15 +160,18 @@ class ConfigurationResolverTest {
     fun `closing five admission flags disables only controlled user categories`() {
         val original = exampleEnterprisePackage()
         val packet = original.copy(configuration = original.configuration.copy(policy = EnterprisePolicy(false, false, false, false, false)))
-        val resolved = ConfigurationResolver.resolve(document, packet.identity.scope, appliedConfiguration(packet))
+        val search = SearchServiceOptions.BingLocalOptions()
+        val withSearch = document.copy(configuration = document.configuration.copy(searchServices = listOf(search)))
+        val resolved = ConfigurationResolver.resolve(withSearch, packet.identity.scope, appliedConfiguration(packet))
         listOf(ConfigurationCategory.PROVIDER to userProvider.id, ConfigurationCategory.MODEL to userModel.id,
             ConfigurationCategory.MCP to userMcp.id, ConfigurationCategory.ASSISTANT to userAssistant.id,
             ConfigurationCategory.TTS to DEFAULT_SYSTEM_TTS_ID).forEach { (kind, id) ->
             assertEquals(ConfigurationUnavailableReason.USER_CATEGORY_NOT_ALLOWED, resolved.access(kind, id).unavailableReason)
             assertTrue(resolved.access(kind, id).canEditDefinition)
         }
-        assertTrue(resolved.access(ConfigurationCategory.SEARCH, document.configuration.searchServices.first().id).canSelect)
-        val managedMcp = resolved.access(ConfigurationCategory.MCP, packet.identity.reference("mcp_example"))
+        assertTrue(resolved.access(ConfigurationCategory.SEARCH, search.id).canSelect)
+        val managedMcp = resolved.access(ConfigurationCategory.MCP,
+            packet.identity.reference(packet.configuration.mcpServers.first().id))
         assertTrue(managedMcp.canSelect)
         assertTrue(managedMcp.requiredEnabled)
         assertFalse(managedMcp.canEditDefinition)
@@ -189,7 +192,7 @@ class ConfigurationResolverTest {
     @Test
     fun `user assistant can use an enterprise model without rewriting its personal binding`() {
         val packet = exampleEnterprisePackage()
-        val managedModel = packet.identity.reference("mdl_chat")
+        val managedModel = packet.identity.reference(packet.configuration.models.first().id)
         val scoped = document.copy(preferences = document.preferences.withAssistantUsage(packet.identity.scope,
             AssistantUsagePreferences(userAssistant.id, chatModelId = UsageValue(managedModel))))
         val resolved = ConfigurationResolver.resolve(scoped, packet.identity.scope, appliedConfiguration(packet))
@@ -235,7 +238,10 @@ class ConfigurationResolverTest {
 
     @Test
     fun `search labels never contain API keys and image models cannot satisfy a chat role`() {
-        val packet = exampleEnterprisePackage()
+        val original = exampleEnterprisePackage()
+        val image = original.configuration.models.first().copy(id = "mdl_image", type = ModelType.IMAGE,
+            outputModalities = listOf(me.rerere.ai.provider.Modality.IMAGE))
+        val packet = original.copy(configuration = original.configuration.copy(models = original.configuration.models + image))
         val search = SearchServiceOptions.TavilyOptions(apiKey = "search-private-key")
         val scoped = document.copy(configuration = document.configuration.copy(searchServices = listOf(search)),
             preferences = document.preferences.copy(scopes = document.preferences.scopes + ScopedUserPreferences(packet.identity.scope,

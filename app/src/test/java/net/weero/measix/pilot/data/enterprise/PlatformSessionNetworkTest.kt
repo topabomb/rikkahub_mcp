@@ -27,7 +27,7 @@ import org.robolectric.annotation.Config
 class PlatformSessionNetworkTest {
     @get:Rule val temporary = TemporaryFolder()
     private val cipher = EnterpriseCredentialCipher { SecretKeySpec(ByteArray(32) { it.toByte() }, "AES") }
-    private fun owner(root: File) = EnterpriseSessionController(EnterpriseAppliedStore(root, credentialCipher = cipher)) { 1000L }
+    private fun owner(root: File) = EnterpriseSessionController(net.weero.measix.pilot.data.enterprise.enterpriseTestStore(root, credentialCipher = cipher)) { 1000L }
     private fun service(owner: EnterpriseSessionController) = PlatformEnterpriseService(owner, PlatformControlClient(OkHttpClient())) { Instant.ofEpochMilli(1000) }
     private fun fixture(name: String) = requireNotNull(javaClass.getResourceAsStream("/contracts/platform/cases.json"))
         .bufferedReader().use { Json.parseToJsonElement(it.readText()).jsonArray }
@@ -190,7 +190,7 @@ class PlatformSessionNetworkTest {
     @Test fun `snapshot commits before report and restart retries report using validated cache`() = runBlocking {
         val root = temporary.newFolder()
         val snapshot = PlatformWireCodec.decode<PlatformManagedSnapshot>(fixture("v4-full"))
-        val store = EnterpriseAppliedStore(root, credentialCipher = cipher)
+        val store = net.weero.measix.pilot.data.enterprise.enterpriseTestStore(root, credentialCipher = cipher)
         val reads = mutableListOf<String?>()
         val appliedHeaders = mutableListOf<String?>()
         var reportFails = true
@@ -297,8 +297,7 @@ class PlatformSessionNetworkTest {
             val lease = first.captureExecution(access, applied.manifest.applied)
             assertEquals(candidate.execution, lease.execution)
             assertEquals(candidate.configuration, lease.configuration)
-            val failure = assertThrows(EnterpriseConfigurationException::class.java) { lease.localBinding(snapshot.models.first().modelId) }
-            assertEquals("local_bindings_required", failure.reason)
+            assertTrue(lease.execution is EnterpriseExecution.Platform)
             status.set("DEGRADED")
             try { platform.prepareExecution(access) { fail("unexpected synchronization") }; fail("degraded runtime admitted") }
             catch (error: EnterpriseConfigurationException) { assertEquals("platform_runtime_degraded", error.reason) }

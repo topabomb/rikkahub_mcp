@@ -24,7 +24,7 @@ import kotlin.uuid.Uuid
 @RunWith(AndroidJUnit4::class)
 @Config(sdk = [34])
 internal class ArtifactScopeTest : ArtifactStoreLifecycleTestBase() {
-    private val enterprise = ConfigurationScope.Enterprise(EnterpriseAuthority("local:example", "deployment"), "user")
+    private val enterprise = ConfigurationScope.Enterprise(EnterpriseAuthority("platform:example", "deployment"), "user")
 
     @Test
     fun `creation and clone preserve the original principal independently of later selection`() = runTest {
@@ -43,7 +43,7 @@ internal class ArtifactScopeTest : ArtifactStoreLifecycleTestBase() {
         val node = node(owned)
         assertEquals(owned.entity.id, store.prepareReferenceDelta(enterprise, listOf(node), emptyList()).references.single().artifactId)
         val denied = listOf(ConfigurationScope.Personal, enterprise.copy(userId = "other"),
-            enterprise.copy(authority = EnterpriseAuthority("platform:example", "deployment")))
+            enterprise.copy(authority = EnterpriseAuthority("platform:other", "deployment")))
         for (scope in denied) {
             assertTrue(runCatching { store.prepareReferenceDelta(scope, listOf(node), emptyList()) }.exceptionOrNull() is ArtifactProjectionException)
             assertTrue(runCatching { store.retainInputUris(scope, setOf(owned.uri.toString())) }.exceptionOrNull() is ArtifactProjectionException)

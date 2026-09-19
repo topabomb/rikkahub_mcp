@@ -16,9 +16,11 @@ import me.rerere.ai.provider.ChatTransportCapabilities
 internal enum class EnterpriseSessionPhase { SIGNED_OUT, CONFIGURATION_PENDING, READY, OFFLINE, CLOSING, REAUTH_REQUIRED }
 
 @Serializable
-internal enum class EnterpriseExitReason { USER_REQUEST, AUTHORIZATION_EXPIRED, AUTHORIZATION_REVOKED, CLEAR_EXAMPLE_DATA }
+internal enum class EnterpriseExitReason {
+    USER_REQUEST, AUTHORIZATION_EXPIRED, AUTHORIZATION_REVOKED, LOCAL_DATA_RESET,
+}
 
-internal const val ENTERPRISE_MANIFEST_SCHEMA_VERSION = 4
+internal const val ENTERPRISE_MANIFEST_SCHEMA_VERSION = 5
 
 @Serializable
 internal data class EnterpriseSession(
@@ -36,17 +38,6 @@ internal data class EnterpriseAppliedVersion(
     val executionHash: String,
 )
 
-@Serializable
-internal data class EnterpriseFeedVersion(
-    val scope: ConfigurationScope.Enterprise,
-    val revision: String,
-    val publicRevision: Long,
-    val hash: String,
-)
-
-@Serializable
-private data class StoredEnterpriseFeed(val scope: ConfigurationScope.Enterprise, val document: EnterpriseFeedDocument)
-
 /** The manifest is the only durable publication point for identity, definitions, and execution inputs. */
 @Serializable
 internal data class EnterpriseManifest(
@@ -56,14 +47,13 @@ internal data class EnterpriseManifest(
     val applied: EnterpriseAppliedVersion?,
     val selectedScope: ConfigurationScope,
     val lastIdentity: EnterpriseIdentity?,
-    val feeds: List<EnterpriseFeedVersion> = emptyList(),
     val lastConfigurationSyncMillis: Long? = null,
     val exitReason: EnterpriseExitReason? = null,
     val pendingEnrollment: PendingPlatformEnrollment? = null,
 ) {
     companion object {
-        fun signedOut(identity: EnterpriseIdentity? = null, feeds: List<EnterpriseFeedVersion> = emptyList()) = EnterpriseManifest(
-            ENTERPRISE_MANIFEST_SCHEMA_VERSION, EnterpriseSessionPhase.SIGNED_OUT, null, null, ConfigurationScope.Personal, identity, feeds,
+        fun signedOut(identity: EnterpriseIdentity? = null) = EnterpriseManifest(
+            ENTERPRISE_MANIFEST_SCHEMA_VERSION, EnterpriseSessionPhase.SIGNED_OUT, null, null, ConfigurationScope.Personal, identity,
         )
     }
 }
@@ -91,7 +81,7 @@ private fun EnterpriseCandidate?.loaded(manifest: EnterpriseManifest) = LoadedEn
 )
 
 internal enum class EnterpriseStorageCheckpoint {
-    CONFIGURATION_STAGED, EXECUTION_STAGED, FEED_STAGED, BEFORE_MANIFEST_COMMIT, MANIFEST_WRITTEN,
+    CONFIGURATION_STAGED, EXECUTION_STAGED, BEFORE_MANIFEST_COMMIT, MANIFEST_WRITTEN,
     EXECUTION_READ, BEFORE_REVISION_PRUNE,
 }
 
@@ -103,14 +93,14 @@ internal class EnterpriseAppliedStore(
     private val credentialCipher: EnterpriseCredentialCipher = EnterpriseCredentialCipher(),
     private val checkpoint: (EnterpriseStorageCheckpoint) -> Unit = {},
 ) {
-    private val json get() = EnterprisePackageCodec.json
+    private val json get() = EnterpriseConfigurationCodec.json
     private val manifestFile get() = AtomicFile(File(root, "manifest.json"))
     private val revisions get() = File(root, "revisions")
-    private val feedRevisions get() = File(root, "feed-revisions")
     private val credentialRevisions get() = File(root, "credentials")
+    private val installationIdentity get() = AtomicFile(File(root, "installation-id"))
 
     fun installationId(): String {
-        val file = AtomicFile(File(root, "installation-id"))
+        val file = installationIdentity
         if (file.baseFile.exists() || File(root, "installation-id.bak").exists()) {
             return file.readFully().toString(Charsets.UTF_8).also {
                 require(it.matches(Regex("ins_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}"))) { "invalid_installation_identity" }
@@ -159,7 +149,7 @@ internal class EnterpriseAppliedStore(
 
     fun readManifest(): EnterpriseManifest {
         val manifest = if (manifestFile.baseFile.exists() || File(root, "manifest.json.bak").exists()) {
-            decode<EnterpriseManifest>(manifestFile.readFully())
+            decodeManifest(manifestFile.readFully())
         } else {
             EnterpriseManifest.signedOut()
         }
@@ -186,8 +176,6 @@ internal class EnterpriseAppliedStore(
         manifest.session?.platform?.let { credential(it.credential, requireNotNull(manifest.session).id) }
         manifest.pendingEnrollment?.let { credential(it.platform.credential, it.sessionId) }
         val candidate = manifest.applied?.let { readCandidate(manifest, it) }
-        val previousFeeds = readManifest().feeds.associateBy { it.scope }
-        manifest.feeds.filter { previousFeeds[it.scope] != it }.forEach(::readFeed)
         writeManifest(manifest)
         return candidate.loaded(manifest)
     }
@@ -220,36 +208,29 @@ internal class EnterpriseAppliedStore(
     fun appliedCandidate(manifest: EnterpriseManifest): EnterpriseCandidate? =
         manifest.applied?.let { readCandidate(manifest, it).also { checkpoint(EnterpriseStorageCheckpoint.EXECUTION_READ) } }
 
-    fun prepareFeed(scope: ConfigurationScope.Enterprise, document: EnterpriseFeedDocument): EnterpriseFeedVersion {
-        EnterpriseFeed.validate(document)
-        val revision = Uuid.random().toString()
-        val directory = File(feedRevisions, revision)
-        if (!directory.mkdirs()) throw EnterpriseStorageException("enterprise_feed_staging_failed")
-        val bytes = json.encodeToString(StoredEnterpriseFeed(scope, document)).toByteArray(Charsets.UTF_8)
-        writeSynced(File(directory, "feed.json"), bytes)
-        checkpoint(EnterpriseStorageCheckpoint.FEED_STAGED)
-        return EnterpriseFeedVersion(scope, revision, document.publicRevision, hash(bytes))
-    }
-
-    fun readFeed(version: EnterpriseFeedVersion): EnterpriseFeedDocument {
-        validateFeedVersion(version)
-        val bytes = readBounded(File(File(feedRevisions, version.revision), "feed.json"))
-        if (hash(bytes) != version.hash) throw EnterpriseStorageException("enterprise_feed_hash_mismatch")
-        val stored = decode<StoredEnterpriseFeed>(bytes)
-        if (stored.scope != version.scope || stored.document.publicRevision != version.publicRevision) {
-            throw EnterpriseStorageException("enterprise_feed_identity_mismatch")
-        }
-        return stored.document.also(EnterpriseFeed::validate)
-    }
-
     /** Keep the active revision and every in-flight lease; uncommitted staging has no authority. */
-    fun prune(retainedRevisions: Set<String>, retainedFeedRevisions: Set<String>) {
+    fun prune(retainedRevisions: Set<String>) {
         checkpoint(EnterpriseStorageCheckpoint.BEFORE_REVISION_PRUNE)
         pruneDirectory(revisions, retainedRevisions)
-        pruneDirectory(feedRevisions, retainedFeedRevisions)
         val manifest = readManifest()
         val credentials = listOfNotNull(manifest.session?.platform?.credential?.revision, manifest.pendingEnrollment?.platform?.credential?.revision).toSet()
         pruneDirectory(credentialRevisions, credentials)
+    }
+
+    /**
+     * Replaces unreadable or stale enterprise access state without reading it back. The signed-out manifest
+     * becomes authoritative first; a later recovery prunes any orphaned revision left by interruption.
+     */
+    fun resetLocalState(retainedIdentity: EnterpriseIdentity?): LoadedEnterpriseState {
+        val manifest = EnterpriseManifest.signedOut(retainedIdentity)
+        writeManifest(manifest)
+        installationIdentity.delete()
+        if (listOf("installation-id", "installation-id.bak", "installation-id.new").any { File(root, it).exists() }) {
+            throw EnterpriseStorageException("installation_identity_clear_failed")
+        }
+        pruneDirectory(revisions, emptySet())
+        pruneDirectory(credentialRevisions, emptySet())
+        return LoadedEnterpriseState(manifest, null)
     }
 
     private fun pruneDirectory(parent: File, retainedRevisions: Set<String>) {
@@ -296,17 +277,14 @@ internal class EnterpriseAppliedStore(
         if (manifest.lastConfigurationSyncMillis?.let { it < 0 || (manifest.applied == null && manifest.session?.platform == null) } == true) {
             throw EnterpriseStorageException("invalid_enterprise_sync_time")
         }
-        if (manifest.feeds.map { it.scope }.distinct().size != manifest.feeds.size) throw EnterpriseStorageException("duplicate_enterprise_feed")
-        manifest.feeds.forEach(::validateFeedVersion)
         manifest.session?.let { session ->
-            EnterprisePackageCodec.validateIdentity(session.identity)
-            val validSessionId = if (session.identity.authority.isLocal) isRevision(session.id)
-                else session.id.matches(Regex("ses_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}"))
+            EnterpriseConfigurationCodec.validateIdentity(session.identity)
+            val validSessionId = session.id.matches(Regex("ses_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}"))
             if (!validSessionId || session.expiresAtMillis <= 0) {
                 throw EnterpriseStorageException("invalid_enterprise_session")
             }
         }
-        manifest.lastIdentity?.let(EnterprisePackageCodec::validateIdentity)
+        manifest.lastIdentity?.let(EnterpriseConfigurationCodec::validateIdentity)
         manifest.applied?.let { version ->
             if (!isRevision(version.revision) || version.generation <= 0 ||
                 !version.configurationHash.matches(Regex("[0-9a-f]{64}")) || !version.executionHash.matches(Regex("[0-9a-f]{64}"))) {
@@ -332,22 +310,17 @@ internal class EnterpriseAppliedStore(
         return File(revisions, revision)
     }
 
-    private fun validateFeedVersion(version: EnterpriseFeedVersion) {
-        if (!version.scope.authority.isLocal || !isRevision(version.revision) || version.publicRevision < 0 ||
-            !version.hash.matches(Regex("[0-9a-f]{64}"))) throw EnterpriseStorageException("invalid_enterprise_feed_version")
-    }
-
     private fun isRevision(value: String): Boolean = runCatching { Uuid.parse(value).toString() == value }.getOrDefault(false)
 
     private fun readBounded(file: File): ByteArray {
-        if (!file.isFile || file.length() > EnterprisePackageCodec.MAX_BYTES) throw EnterpriseStorageException("enterprise_revision_unreadable")
+        if (!file.isFile || file.length() > EnterpriseConfigurationCodec.MAX_BYTES) throw EnterpriseStorageException("enterprise_revision_unreadable")
         return file.inputStream().use { stream ->
             val output = java.io.ByteArrayOutputStream()
             val buffer = ByteArray(8192)
             while (true) {
                 val count = stream.read(buffer)
                 if (count < 0) break
-                if (output.size() + count > EnterprisePackageCodec.MAX_BYTES) throw EnterpriseStorageException("enterprise_revision_too_large")
+                if (output.size() + count > EnterpriseConfigurationCodec.MAX_BYTES) throw EnterpriseStorageException("enterprise_revision_too_large")
                 output.write(buffer, 0, count)
             }
             output.toByteArray()
@@ -355,7 +328,7 @@ internal class EnterpriseAppliedStore(
     }
 
     private fun writeSynced(file: File, bytes: ByteArray) {
-        if (bytes.size > EnterprisePackageCodec.MAX_BYTES) throw EnterpriseStorageException("enterprise_revision_too_large")
+        if (bytes.size > EnterpriseConfigurationCodec.MAX_BYTES) throw EnterpriseStorageException("enterprise_revision_too_large")
         FileOutputStream(file).use { stream -> stream.write(bytes); stream.fd.sync() }
     }
 
@@ -364,6 +337,8 @@ internal class EnterpriseAppliedStore(
     } catch (_: IllegalArgumentException) {
         throw EnterpriseStorageException("invalid_enterprise_storage")
     }
+
+    private fun decodeManifest(bytes: ByteArray): EnterpriseManifest = decode(bytes)
 
     private fun hash(bytes: ByteArray): String = MessageDigest.getInstance("SHA-256").digest(bytes)
         .joinToString("") { "%02x".format(it) }

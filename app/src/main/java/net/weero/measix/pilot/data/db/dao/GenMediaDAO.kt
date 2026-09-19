@@ -19,6 +19,9 @@ interface GenMediaDAO {
     @Query("SELECT * FROM genmediaentity WHERE scope = :scope ORDER BY create_at DESC")
     suspend fun listInScope(scope: ConfigurationScope): List<GenMediaEntity>
 
+    @Query("SELECT DISTINCT scope FROM genmediaentity")
+    suspend fun scopes(): List<ConfigurationScope>
+
     @Query("SELECT * FROM genmediaentity WHERE scope = :scope ORDER BY create_at DESC")
     fun observeAll(scope: ConfigurationScope): Flow<List<GenMediaEntity>>
 

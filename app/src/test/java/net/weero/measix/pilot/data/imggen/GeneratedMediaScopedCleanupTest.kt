@@ -22,7 +22,7 @@ class GeneratedMediaScopedCleanupTest {
 
     @Test
     fun `scope cleanup rejects unreadable media directory and non-file deletion receipt`() = runTest {
-        val enterprise = ConfigurationScope.Enterprise(me.rerere.common.configuration.EnterpriseAuthority("local:cleanup", "deployment"), "user")
+        val enterprise = ConfigurationScope.Enterprise(me.rerere.common.configuration.EnterpriseAuthority("platform:cleanup", "deployment"), "user")
         for (receipt in listOf(false, true)) {
             val root = tempDir("media-invalid-directory")
             try {

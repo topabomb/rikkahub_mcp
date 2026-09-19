@@ -3,32 +3,17 @@ package net.weero.measix.pilot.data.enterprise
 import java.net.URI
 import java.time.Instant
 import java.util.Locale
-import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.buildJsonObject
-import kotlinx.serialization.json.put
 
-internal sealed interface EnrollmentMaterial {
-    val code: String
-    val expiresAt: Instant
-
-    data class Platform(val platformOrigin: String, override val code: String, override val expiresAt: Instant) : EnrollmentMaterial {
+internal object EnrollmentMaterial {
+    data class Platform(val platformOrigin: String, val code: String, val expiresAt: Instant) {
         override fun toString() = "PlatformEnrollmentMaterial(origin=$platformOrigin)"
-    }
-
-    data class LocalExample(
-        val sourceNamespace: String,
-        val deploymentId: String,
-        override val code: String,
-        override val expiresAt: Instant,
-    ) : EnrollmentMaterial {
-        override fun toString() = "LocalExampleEnrollmentMaterial(source=$sourceNamespace, deployment=$deploymentId)"
     }
 }
 
 /** Native scan/paste contract. Parsing never registers a source, contacts a server, or establishes a session. */
 internal class EnrollmentMaterialParser {
-    fun parse(raw: String): EnrollmentMaterial {
+    fun parse(raw: String): EnrollmentMaterial.Platform {
         // Bound the original bytes, including whitespace, before any normalization or JSON allocation.
         if (raw.length > MAX_BYTES) fail("enterprise_enrollment_too_large")
         val bytes = raw.toByteArray(Charsets.UTF_8)
@@ -40,21 +25,12 @@ internal class EnrollmentMaterialParser {
             fail("invalid_enterprise_enrollment")
         }
         val kind = fields.string("kind")
-        val expected = when (kind) {
-            PLATFORM -> setOf("formatVersion", "kind", "platformUrl", "code", "expiresAt")
-            LOCAL -> setOf("formatVersion", "kind", "sourceNamespace", "deploymentId", "code", "expiresAt")
-            else -> fail("unsupported_enterprise_enrollment_kind")
-        }
+        if (kind != PLATFORM) fail("unsupported_enterprise_enrollment_kind")
+        val expected = setOf("formatVersion", "kind", "platformUrl", "code", "expiresAt")
         if (fields.keys != expected) fail("invalid_enterprise_enrollment_fields")
         val code = fields.string("code").also(::requireIdentifier)
         val expiresAt = parseUtc(fields.string("expiresAt"))
-        return when (kind) {
-            PLATFORM -> EnrollmentMaterial.Platform(normalizeOrigin(fields.string("platformUrl")), code, expiresAt)
-            else -> EnrollmentMaterial.LocalExample(
-                fields.string("sourceNamespace").also(::requireIdentifier),
-                fields.string("deploymentId").also(::requireIdentifier), code, expiresAt,
-            )
-        }
+        return EnrollmentMaterial.Platform(normalizeOrigin(fields.string("platformUrl")), code, expiresAt)
     }
 
     private fun parseUtc(value: String): Instant {
@@ -147,18 +123,8 @@ internal class EnrollmentMaterialParser {
 
         const val MAX_BYTES = 2048
         const val PLATFORM = "PLATFORM_ENROLLMENT"
-        const val LOCAL = "LOCAL_EXAMPLE_ENROLLMENT"
         private val INTEGER = Regex("-?(0|[1-9][0-9]*)")
         private val UTC_TIMESTAMP = Regex("\\d{4}-\\d{2}-\\d{2}[Tt](?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d{1,9})?(?:[Zz]|\\+00:00)")
-
-        fun encodeLocal(material: EnrollmentMaterial.LocalExample): String = Json.encodeToString(buildJsonObject {
-            put("formatVersion", 1)
-            put("kind", LOCAL)
-            put("sourceNamespace", material.sourceNamespace)
-            put("deploymentId", material.deploymentId)
-            put("code", material.code)
-            put("expiresAt", material.expiresAt.toString())
-        })
 
         private fun Map<String, Field>.string(name: String): String =
             (this[name] as? Field.Text)?.value ?: fail("invalid_enterprise_enrollment")

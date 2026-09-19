@@ -34,4 +34,8 @@ interface MemoryDAO {
     /** Scope removal includes global and no-longer-configured assistant owners. */
     @Query("DELETE FROM memoryentity WHERE scope = :scope")
     suspend fun deleteScope(scope: ConfigurationScope)
+
+    @Query("SELECT DISTINCT scope FROM memoryentity")
+    suspend fun scopes(): List<ConfigurationScope>
+
 }

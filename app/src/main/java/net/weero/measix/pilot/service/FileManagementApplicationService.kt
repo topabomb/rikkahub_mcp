@@ -62,12 +62,13 @@ class FileManagementApplicationService internal constructor(
 ) {
     suspend fun requireContentAccess(source: RenderedContentSource) = withContentAccess(source) { }
 
-    /** Existing exit recovery owns admission; these owners complete deletion without waiting for Ready. */
-    internal suspend fun clearEnterpriseData(token: net.weero.measix.pilot.data.enterprise.EnterpriseExitToken) {
-        require(token.reason == net.weero.measix.pilot.data.enterprise.EnterpriseExitReason.CLEAR_EXAMPLE_DATA)
-        sessions.withClosingSession(token) { }
-        artifactStore.clearEnterpriseScope(token.access.scope)
-        generatedMediaStore.clearEnterpriseScope(token.access.scope)
+    internal suspend fun enterpriseScopes(): Set<net.weero.measix.pilot.data.configuration.ConfigurationScope.Enterprise> =
+        artifactStore.enterpriseScopes() + generatedMediaStore.enterpriseScopes()
+
+    /** The reset coordinator owns the stop barrier before invoking this scope command. */
+    internal suspend fun clearEnterpriseScope(scope: net.weero.measix.pilot.data.configuration.ConfigurationScope.Enterprise) {
+        artifactStore.clearEnterpriseScope(scope)
+        generatedMediaStore.clearEnterpriseScope(scope)
     }
 
     internal suspend fun <T> withContentAccess(source: RenderedContentSource, action: suspend () -> T): T {

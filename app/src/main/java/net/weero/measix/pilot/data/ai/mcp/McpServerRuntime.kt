@@ -518,7 +518,7 @@ internal class McpServerRuntime(
 
     internal suspend fun refreshCredentials(config: McpConnectionDefinition): McpConnectionDefinition = when (config) {
         is McpConnectionDefinition.User -> McpConnectionDefinition.User(oauthCoordinator.ensureFreshToken(config.config))
-        is McpConnectionDefinition.ManagedLocal, is McpConnectionDefinition.ManagedPlatform -> config
+        is McpConnectionDefinition.ManagedPlatform -> config
     }
 
     private fun needsAuthorization(config: McpConnectionDefinition, error: Throwable): Boolean =

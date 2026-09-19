@@ -1,6 +1,6 @@
 # Android 配置架构与资源边界
 
-本文定义 Android 当前配置的 owner、持久化载体、字段目录、引用关系及个人/本地企业域边界。Assistant 逐字段运行语义见 [助手配置](assistant-configuration.md)，总体依赖与启动恢复见 [应用架构](application-architecture.md)。本地企业交付范围与验证记录见 [企业集成计划](../dev/android-enterprise-integration-plan.md)，真实平台接入的执行范围和验收记录见 [Core 接入实施计划](../dev/android-core-enterprise-integration-plan.md)。
+本文定义 Android 当前配置的 owner、持久化载体、字段目录、引用关系及个人/企业域边界。Assistant 逐字段运行语义见 [助手配置](assistant-configuration.md)，总体依赖与启动恢复见 [应用架构](application-architecture.md)，平台接入见 [Enrollment 合同](enrollment-material-contract.md)。
 
 ## 1. 配置组成
 
@@ -10,7 +10,7 @@ UserSettingsDocument（用户定义 + 公用/按域偏好）+ Applied Enterprise
       → ResolvedConfiguration → application / query ports → 执行与 UI
 ```
 
-完整配置分属 DataStore、轻量 UI preferences、Room、资源文件和可重建缓存，不能整体替换为远端 Settings JSON。本地与真实平台接入共用 Session、配置发布与按域解析；来源分别提供本地 binding 或平台执行描述，平台令牌不进入用户配置。企业配置使用独立身份与定义，不通过全局 Settings overlay 覆盖用户配置。
+完整配置分属 DataStore、轻量 UI preferences、Room、资源文件和可重建缓存，不能整体替换为远端 Settings JSON。企业平台接入复用现有 Session、配置发布与按域解析，平台令牌不进入用户配置。企业配置使用独立身份与定义，不通过全局 Settings overlay 覆盖用户配置。
 
 ## 2. 配置 owner 与读写架构
 
@@ -62,7 +62,7 @@ updateLocal(latest personalSettings transform)
 
 - `UserConfiguration` 保存现有 Provider/Model、TTS/ASR、MCP、Search、Assistant、注入/QuickMessage/标签、辅助提示词、备份连接及 UserProfile。用户昵称/头像不重复放入显示偏好。
 - `UserPreferences.common` 保存 DataStore 原有的外观、DisplayPreferences、播放速度和提醒；`scopes` 以完整 ConfigurationScope 保存 ResourceSelections、企业域的 AssistantUsagePreferences 和 GatewayPreference。Gateway 偏好随来源、Deployment、User 与资源 ID 隔离，未交付的顶层 gateways 字段已删除，不将无用户归属的原型偏好猜测归入某个主体。SharedPreferences 表中的偏好仍由原 owner 管理。
-- `common.configuration.ConfigurationReference` 保留原用户 UUID 或企业来源/原始字符串 ID，不生成替代 UUID。个人引用的 JSON 仍是原 UUID 字符串；企业引用序列化为 `managed~来源类型~来源标识~deploymentId~资源ID`，完整保留来源和原始资源 ID。ConfigurationScope 企业身份包括 sourceNamespace/deploymentId/userId，本地与平台来源不相交。Settings 投影只提供个人配置；本地企业的聊天、子助手、辅助模型、MCP、语音与配置界面通过原域的 ResolvedConfiguration 读取资源和选择。
+- `common.configuration.ConfigurationReference` 保留原用户 UUID 或企业来源/原始字符串 ID，不生成替代 UUID。个人引用的 JSON 仍是原 UUID 字符串；企业引用序列化为 `managed~来源类型~来源标识~deploymentId~资源ID`，完整保留来源和原始资源 ID。ConfigurationScope 企业身份包括 sourceNamespace/deploymentId/userId。Settings 投影只提供个人配置；企业聊天、子助手、辅助模型、MCP、语音与配置界面通过原域的 `ResolvedConfiguration` 读取资源和选择。
 - `UserSettingsMigration` 在旧 OCR/Search/MCP 迁移之后，将旧键转换并在同一次 DataStore 迁移提交中移除；MCP Catalog 的 pending staging 保留给 Catalog owner。旧资源或 tombstone 解码失败会中止迁移，原输入不变。正常读写只访问新文档，没有旧键 fallback。
 - 用户定义及其配置绑定只接受 User 引用；按企业保存的选择允许 User 或同 authority 的 Enterprise 引用，拒绝外域引用。会话、Message、Turn、文件与 Workspace 的自身 ID 继续使用 UUID。
 - 已删除无功能消费者的 developerMode 字段；迁移清除旧 developer_mode 键，旧备份中的字段由 JSON codec 忽略。构建类型标记不使用此配置。
@@ -74,33 +74,17 @@ updateLocal(latest personalSettings transform)
 
 头像和背景导入经 `ConfigurationApplicationService.importAssistantImage` 创建原域配置资产，再通过既有 Settings → Artifact 提交引用并移交创建所有权。读取用 `RealmConfiguration` 保留原页面和 Session，允许 Personal 已提交配置根或本主体已提交 usage 根，拒绝其他企业及没有配置根的聊天资产。个人共享图片失去个人根后，只要本企业仍保留已提交引用，本企业可继续读取；个人配置读取不能借用企业根。预设消息文本编辑保留非文本 parts 和 metadata。企业 Prompt 预览不提供重新捕获全局目标的“设为背景”操作，背景在原助手使用设置中编辑。
 
-### 2.4 本地企业接入基础
+### 2.4 企业平台接入基础
 
-`data/enterprise` 提供独立的企业配置、接入资料及持久状态组件。DataSourceModule 注册其单例，私有存储位于 noBackupFilesDir/enterprise；ApplicationRecoveryCoordinator 在 Settings 就绪之后恢复企业状态。企业校验错误由企业 owner 发布，不阻塞个人数据恢复。正式入口、Portal、会话、模型、MCP 和 Speech 执行及管理页已接入本地企业域；真实平台认证、下发和 Relay 传输仍属后续接入范围。
+`data/enterprise` 提供独立的企业配置、接入资料及持久状态组件。`DataSourceModule` 注册其单例，私有存储位于 `noBackupFilesDir/enterprise`；`ApplicationRecoveryCoordinator` 在 Settings 就绪后依次执行 Artifact/GeneratedMedia reconcile、本机企业数据重置恢复，然后恢复企业状态。企业校验错误由企业 owner 发布，不阻塞个人数据恢复。平台 Discovery/Enrollment/Snapshot、正式入口、Portal、会话、模型、MCP 和 Speech 共用唯一企业域，不存在手机端模拟企业或第二来源。
 
-- `EnterprisePackageCodec` 校验 formatVersion=2 的完整本地资料：显式五项准入、资源/助手引用、默认选择与完整运行绑定，顶层可携带 feedSeed 初值。该格式独立于接入资料和平台 Snapshot；旧企业原型格式拒绝，不保留双格式兼容。定义与运行连接分开；异常不带可能含凭据的原始反序列化错误。
-- `EnterpriseAppliedStore` 在调用者指定的私有目录暂存不可变 configuration.json、execution.json 及独立 Feed 文件，以 schemaVersion=4 的单个 manifest 原子发布身份、版本、当前空间及退出原因。只接受当前企业格式，未交付原型的旧版本明确拒绝，不自动改写身份或推断退出原因；接入资料和完整配置使用各自独立版本。Feed 指针按来源/Deployment/User 保存，退出保留且不可跨主体读取。提交显式同步文件并核验实际 manifest，不能把 AtomicFile 仅记录日志的失败当作成功。
-- `EnterpriseSessionController` 是上述存储的串行写 owner。enrollLocal 处理已验证接入（配置不可用时待配置），importLocal 处理显式原生安装后的应用，synchronize 只接受原 Session 的候选。无 registerIdentity/applyPackage 通用旁路。主动退出复验原企业 Session 与确认时的 RealmSelection；到期/撤销绑定原 Session，不依赖当前选中空间。beginExit/beginInvalidation 先发布 CLOSING 并撤销新动作及 execution lease；finishExit 只接受原 token，在 lease 全部释放后发布 SIGNED_OUT 或 REAUTH_REQUIRED。配置损坏时仍能依靠已验证身份退出；重启保留 CLOSING，不能在运行恢复前假报已退出。
+- `EnterpriseAppliedStore` 在调用者指定的私有目录暂存不可变 configuration.json、execution.json 及独立 Feed 文件，以 schemaVersion=4 的单个 manifest 原子发布身份、版本、当前空间及退出原因。只接受当前企业格式，未交付原型的旧版本明确拒绝，不自动改写身份或推断退出原因；接入资料和完整配置使用各自独立版本。Feed 指针按来源/Deployment/User 保存，退出保留且不可跨主体读取。提交显式同步文件并核验实际 manifest，不能把 AtomicFile 仅记录日志的失败当作成功。`resetLocalState(retainIdentity)` 是本机数据重置的第二条写协议：不回读旧 manifest（commit 会回读，损坏态不可用），先写 signed-out manifest，再清空 revision、凭据与全部 Feed 缓存目录，中断后由下一次 recover() 的 prune 收敛。
+- `EnterpriseSessionController` 是上述存储的串行写 owner。平台兑换与 Bootstrap 只提交已验证候选，`synchronize` 只接受原 Session 的 Snapshot 候选；不存在原生整包安装、`registerIdentity`、`applyPackage` 或本地接入旁路。主动退出复验原企业 Session 与确认时的 `RealmSelection`；到期/撤销绑定原 Session，不依赖当前选中空间。`beginExit` / `beginInvalidation` 先发布 CLOSING 并撤销新动作及 execution lease；`finishExit` 只接受原 token，在 lease 全部释放后发布 SIGNED_OUT 或 REAUTH_REQUIRED。配置损坏时仍能依靠已验证身份退出；重启保留 CLOSING，不能在运行恢复前假报已退出。
 - `EnterpriseExitService` 在应用作用域持有已接受的退出任务并合并重复请求；页面取消不取消退出。释放 Session 锁后并发取消并等待原 Session 的 Portal、同步、主/子 Runtime 与辅助生成，通过既有 TurnFinalizer 提交终态，并核验该域没有未完成运行事实后才完成 Session 退出。任一非取消失败不跳过其他 owner 的收口，失败保留原 CLOSING 和可显式重试的投影；到期准入写盘失败单独记录原授权与原因，不假报已接受。自动观察器与重试共享同一任务准入锁。退出成功后的版本文件清理失败单独返回维护结果。此 owner 已接入启动恢复与授权到期观察；正式入口与 Portal logout 已接线，媒体清理纳入原文档关闭屏障。
-- LocalEnterpriseSource 通过 LocalEnterpriseConfigurationStore 唯一管理 noBackupFilesDir/local_enterprise_service 中的安装目录和来源配置。这是模拟服务的来源事实，不是第四个客户端配置区或 enterprise_local。目录按完整主体保存身份、generation 与内容摘要引用，配置使用独立不可变文件；身份读取不依赖配置可读。场景修改按来源 revision 做 CAS 并推进 generation，尚未同步时客户端 Applied 保持原值。损坏来源不能静默重置为随包示例；显式完整文件导入可以在 CAS 校验后以更高 generation 修复。
-- 正式空间页“本地企业管理”中的“企业规则与模型”读取公开来源投影，提供五项用户准入、Gateway 强制/可控策略，以及示例模型增加、改名、启停和删除。命令捕获原 RealmSelection 和来源 revision，在 Session → Source 锁序下复验并发布完整候选；企业助手或默认配置仍引用的模型不能直接删除/停用，需通过完整配置显式调整引用。新增模型使用本地 EXAMPLE binding，不复制其他模型的地址或凭据。发布后走原 EnterpriseSynchronizationService，只有返回的 Applied generation 已覆盖本次发布才提示已生效；旧在途同步或应用失败显示待同步。编辑器关闭使其读取/修改反馈失效，不撤销已提交来源，也不让迟到刷新重开页面。
+- `EnterpriseDataResetService` 是本机企业接入重置与数据处置的唯一协调者，只拥有 `noBackupFilesDir/enterprise-reset` 中独立的 reset intent 与进度投影，不拥有会话、文件或配置事实。两个分支、范围都是本机所有企业：删接入清空 manifest、平台 `installation-id`、刷新凭据、配置快照和企业受管 MCP 目录；删接入 + 历史额外清空所有企业 scope 的会话、文件、媒体、记忆和按域偏好，等价于回到只有个人空间。范围由各 owner 的只读枚举先写入 intent；存在活跃 Session 时，经 `EnterpriseExitReason.LOCAL_DATA_RESET` 发布 CLOSING 并复用 `EnterpriseExitService.closeEnterpriseDomain`，停止屏障完成后再次枚举并把并集写回 intent。个人 scope 永不进入；入口在空间页常驻。无 Session 时由 `resetLocalDataState` 直接重写，不解析损坏存储；启动恢复在 reconcile 之后、enterprise session recovery 之前幂等续跑。重置不调用 Core logout，因为 installation 与本地凭据可能已损坏或属于未知远端结果。
 - EnterpriseSynchronizationService 在 Session 准入锁内登记并合并同一主体/Session 的同步请求，读取来源候选后交给 Session owner 复核原授权并原子应用，不创建、续期或切换 Session。成功提交同时保存 lastConfigurationSyncMillis；同版本检查复用 Applied revision，失败保留原配置和成功时间。取消等待者不会回滚或重放同步；退出通过 cancelAndAwait 取消原 Session 的在途同步，在 Session 锁外等待。同步同会话更新保留离线状态。
 - EnterpriseExecutionLease 由 EnterpriseSessionController.captureExecution 签发；捕获时校验发起动作时的完整 RealmAccess，读取当前类型化执行来源后复验 Session 有效期；相同主体重新接入不能授权旧请求。在途 lease 保留捕获的配置与执行来源直至最后一个引用释放。释放立即禁止继续读取执行来源；并发调用均等待真实清理，清理失败保留 owner 并允许重试，finishExit 不能越过失败的清理。lease 不充当执行授权，运行链接入时还需统一准入门禁。
-- `LocalEnterpriseSource` 统一验证一键、粘贴和扫码解析后的公开示例接入资料，并支持私有整包导入。`docs/examples/enterprise.local.example.json` 是唯一公开示例输入，通过构建任务进入 assets；根目录 `enterprise.local.json` 被 Git 忽略且不参与打包。配置内 HTML 与 EnterprisePortal 原型已删除。Portal local 消费包固定在 app/src/main/enterprisePortal，保留上游 build-identity.json；PrepareEnterprisePortalAssets 检查来源、版本、完整文件集合和 SHA256 后，为全部构建生成 enterprise_portal assets。普通构建不依赖 sibling checkout；当前随包协议为 Bridge v3 / 本地读取 v2，原生宿主见下节。
-
-`EnterpriseFeed` 集中管理草稿创建/编辑、发布、撤回与日期查询，EnterpriseSessionController 使用原 Session 写锁和同一 manifest 发布其结果。动态不再属于 EnterpriseConfiguration；仅改变动态不推进配置 generation 或替换 Applied。Seed 仅在该主体没有 Feed 时初始化，重复导入、同步和重入不恢复撤回内容。公开 revision 只随发布/撤回变化；草稿编辑只改变存储 revision。查询遵守 Client Feed 字段、枚举和 eup_UUIDv4 标识，按企业时区日历日界线过滤，ETag 包含主体、公开 revision、规范化日期/limit 与返回表示。查询接受原 RealmSelection，在同一次 Session 锁内验证完整主体、母 Session、选中空间与 selectionRevision；当前本地 Portal 使用 modified/notModified 消息结果，不构造 HTTP 304。
-
-`EnterpriseLocalFeedEditor` 位于正式“本地企业管理”入口，通过 `EnterpriseApplicationService` 调用 `EnterpriseSessionController.readLocalFeed/changeFeed`。编辑快照包含原选中域、存储 revision 和 Feed 内容；原生编辑器可以查看草稿和撤回记录，Portal 只读公开动态。新建、编辑、发布、撤回均复用原 Feed 命令和 manifest 提交，无第二份持久化状态。写入要求原 RealmSelection 与存储 revision 同时有效，读取返回与写入提交前再次检查原 Session 期限；切域、重接入、并发修改或到期后的旧页面不能继续提交。
-
-原生资料使用独立 EnrollmentMaterialParser 对齐 formatVersion=1 的 PLATFORM_ENROLLMENT / LOCAL_EXAMPLE_ENROLLMENT；原文上限 2048 UTF-8 字节、严格字段与重复键验证。本地资料不包含 userId，运行时由 LocalEnrollmentAuthority 领取一次性 code；该模拟服务账本位于 noBackupFilesDir/local_enterprise_service，独立拥有消费事实，Session 仍只归 EnterpriseSessionController。详见 [接入资料契约](enrollment-material-contract.md)。真实平台资料经来源确认后由 PlatformEnterpriseService 完成 Discovery、Enrollment 与配置同步，Session owner 原子发布接入与应用状态；本地完整私有配置使用独立格式，不承载平台凭据。
-
-PrepareEnterpriseExampleAssets 从公开完整模板派生 enterprise.local.identity.json，只用于安装目录的首次初始化。原生完整文件导入可安装其他本地来源/Deployment/User；换主体必须先退出，扫码和粘贴无安装权限。票据固定登录身份，同企业的不同用户分别存储。重新接入读取来源当前发布版本，没有“旧安装包时保留较新 Applied”的特殊分支。配置文件缺失/损坏时，已兑换身份可发布 CONFIGURATION_PENDING，不能因读不到配置而猜测用户。有效导入的来源发布成功但客户端应用失败时，LocalEnterpriseImportResult 明确返回来源 revision 与失败原因，后续可重试同步；不会谎报已应用。EnterpriseApplicationService 接收原生文件 URI 并拥有输入流的关闭；LocalEnterpriseSource 负责严格解码，Session owner 在发布前后复验文件选择时的 RealmSelection。来源发布期间到期不续期原 Session，已提交来源仍可供后续重新接入。原生已安装来源列表只投影名称和主体，不返回私有 binding。
-
-正式空间页“本地企业管理”中的“连接与退出演练”仅作用于本地来源。EnterpriseApplicationService 将原 RealmSelection 和目标 Session 交给 Session owner；断连/恢复只改变 phase，普通配置同步保持 OFFLINE。缩短登录期限只更新原 Session 的 expiresAtMillis，不能延长已有期限，由既有 EnterpriseExitService 到期观察与启动恢复完成清理；凭据撤销在 Session 锁外进入同一退出流程。没有额外计时器、故障存储或配置镜像。待配置体验仍经过原资料解析、身份验证和一次性兑换，仅本次读取返回无配置；准入在消费前拒绝替换活动 Session。正常同步恢复 READY 后仍留在个人空间，用户明确切入企业。
-
-“清除内置示例数据并退出”要求已接入安装包内置示例的完整主体，允许当前选中个人空间或 CONFIGURATION_PENDING。独立确认保存原 RealmSelection/Session；导入的其他本地企业不能通过此入口清除。`EnterpriseExitService` 以 `CLEAR_EXAMPLE_DATA` 保存原 CLOSING 意图，先执行普通退出的运行屏障，再交给 `ConversationApplicationService` 删除完整会话树、释放同域 Draft 并删除空 Folder；SettingsStore 移除该主体的选择、助手使用、Gateway 偏好和导航，MemoryRepository 清除该域所有记忆 owner。FileManagementApplicationService 只编排 ArtifactStore 的全目录生命周期删除和 GeneratedMediaStore 的 row/文件删除；McpCatalogStore 在原 writer 内移除该主体目录并失效 head token。所有共享用户定义、个人数据、其他主体、已安装来源配置和共享 Workspace 均保留。
-
-清除失败保留原 token，重试和启动恢复复用同一 owner，不能等待恢复自身持有的 Ready gate。Artifact 的 pin、失败或待清理结果均阻止完成；图库沿已有 tombstone 协议完成已提交删除，不运行全局孤儿清扫，不把目录读取失败当作空目录。无 row 的图库 tombstone 已没有主体信息，其收口仅完成此前删除，不移除其他主体的活跃 row。`prepareExampleDataRemovalCompletion` 在 CLOSING 内移除目标 Feed 引用并清理退休配置/绑定/Feed 文件，成功后 `finishExit` 才清除 Session 与最近身份。普通退出保留数据，不能合并为清除成功；本流程不新增数据库表、manifest 字段或第二套持久化清理状态。
+原生资料由 `EnrollmentMaterialParser` 严格解析当前 `PLATFORM_ENROLLMENT`。粘贴、相机扫码和相册二维码进入同一解析与确认流程；确认后由 `PlatformEnterpriseService` 完成 Discovery、Enrollment、Bootstrap 与配置同步，Session owner 原子发布接入和 Applied 状态。详见 [接入资料契约](enrollment-material-contract.md)。企业动态由 Portal 通过 Core 同源 HTTP Session/Feed 读取，Android 不持久化第二份 Feed 或提供创作入口。
 
 ### 模型执行中的配置与私有连接
 
@@ -131,7 +115,7 @@ PrepareEnterpriseExampleAssets 从公开完整模板派生 enterprise.local.iden
 UI 仅展示只读内容，执行通过主/子 START 的 `ConversationDisclosureSnapshotService` 捕获。
 Seed 不进入用户配置或运行记忆表；关闭可变记忆不删除 Seed，工具不能修改它，企业更新只影响下一次捕获。
 
-本地模型在实际消费请求时由 `LocalEnterpriseSource.verifyModelRequest` 对原 Session、资源和来源 generation 执行前置校验，读取来源后再次检查授权。`ModelExecutionLease` 识别 `ManagedSnapshotRequired` 后永久关闭原 lease 及借用请求；`ModelExecutionService` 立即撤销原任务，再在应用作用域等待原 Turn、辅助 worker 或图片队列的停止与释放，之后调用 `EnterpriseSynchronizationService`。失败不重放、不换用新 binding，也不因同步恢复旧 lease。
+平台模型执行在捕获时经 `EnterpriseSynchronizationService.prepareExecution` 查询 Core Managed State，并由 Session owner 复验原 Session、资源和 generation。`ModelExecutionLease` 识别 `ManagedSnapshotRequired` 后永久关闭原 lease 及借用请求；`ModelExecutionService` 立即撤销原任务，再在应用作用域等待原 Turn、辅助 worker 或图片队列停止和释放，之后调用共享同步入口。失败不重放、不换用新 binding，也不因同步恢复旧 lease。
 
 聊天通知事件携带生成任务原 `RealmAccess`；`ChatNotificationManager` 在实际发布通知时通过 Session owner 授权。迟到更新、审批和完成通知不能跨退出、过期或新登录发布；取消进度通知无需授权，已合法发布的完成通知不因此删除。
 
@@ -182,13 +166,13 @@ Memory 已通过 MemoryAddress/MemoryService 按原域、主体与 Session 进�
 
 发送、编辑重发、重生成和主助手审批接收原页面 ConversationCommandTarget。请求安装前验证选中域与 Session，接受后仍以原 RealmAccess 执行 USER/结构修改和 START；切域不改变后台请求归属，退出重登不能恢复旧请求。TurnContext 冻结 RealmAccess，审批继续复用它并校验当前页面的原 Session。输入附件创建 pin 从编辑器交给已接受请求，每个请求另持有独立的 Artifact 保留 lease，页面关闭或前驱取消不能提前释放后继正在引用的附件；前驱终态失败保留原 worker，可通过精确 stop 重试。主动退出经 EnterpriseExitService 撤销准入并等待原域运行终态；文件读写继续通过原 Artifact/GeneratedMedia owner 授权，不以会话准入替代文件权限。
 
-### 2.7 本地 Portal 文档与消息
+### 2.7 Portal 文档、来源与消息
 
 `PortalProtocol` 严格解析 Bridge v3 请求：固定版本、原文档/请求关联、准确字段与参数类型，原始 JSON 中的重复键不会先折叠为 Map。三个本地读方法复用现有 Feed DTO 和规则；不提供本地 GET、旧 CustomEvent 或通用 URL 代理。
 
-`PortalDocument` 在 Main dispatcher 管理单个文档、在途请求与原回复通道，冻结原 RealmSelection、母 Session 和最多十分钟期限。Local 与 Platform 来源的当前企业 Session 都可打开这份随应用交付的本地 Portal；页面身份、状态与同步仍使用被冻结的当前 Session，这不代表接入远端 Portal。快速切出再切回、重登、到期或关闭均不能恢复旧文档。每次读取和回复重新经过 Session owner 授权；普通请求的十秒期限涵盖授权、执行及回复等待，超时后只能以非等待授权检查返回错误。请求 ID 在文档内不复用，迟到结果不转投新页面。配置刷新复用 EnterpriseSynchronizationService；列表的 notModified 仅在授权成功后比较 ETag，且不携带正文。
+`PortalDocument` 在 Main dispatcher 管理单个文档、在途请求与原回复通道，冻结原 `RealmSelection`、母 Session、Core origin 和最多十分钟期限。它通过 `PlatformEnterpriseService` 申请一次性 grant，再以原生 POST 建立 Core HttpOnly Portal Cookie并打开同源 `/portal/`。Core 可分发标准通用工作台或代理企业自有 HTTP/HTTPS 静态站点，Android 不接收上游 URL、不直连、不探测也不回退。快速切出再切回、重登、到期或关闭均不能恢复旧文档。每次 Bridge 请求和回复重新经过 Session owner 授权；普通请求的十秒期限涵盖授权、执行及回复等待。请求 ID 在文档内不复用，迟到结果不转投新页面。配置刷新复用 `EnterpriseSynchronizationService`；身份、Portal Session 与 Feed 始终由 Core 同源 HTTP 提供。
 
-`PortalWebView` 为每个批准文档新建实例，在首次加载前注册原生消息监听和 document-start bootstrap。固定 origin 只读取经过版本与摘要校验的 PortalAssets，入口为 text/html；其他地址本地拒绝，网络、文件、content URI、网页直接媒体权限均关闭。静态主文档只交付一次，`WebViewClient.onPageStarted` 只接受首次固定入口加载，后续主文档加载撤销旧实例，fragment 导航保留当前文档。document-start 为每个 JS Document 生成独立随机实例，通过同一原生消息通道先绑定、再发送附带实例的业务请求；`PortalPageBinding` 只接受首次绑定，重绑或非原实例消息立即撤权，因此不依赖导航回调先于消息到达，也不依赖 `NAVIGATION_LISTENER`。宿主私有 envelope 复用 `PortalProtocol` 有界严格解析，业务请求仍受原大小限制；公开 `MeasixHost.postMessage/onmessage` 和 Portal v3 内容不变。响应仅经原 JavaScriptReplyProxy；关闭时撤销请求、销毁 WebView 并清理该 origin 的浏览状态。
+`PortalWebView` 为每个批准文档新建实例，在首次加载前注册原生消息监听和 document-start bootstrap。Local 固定 origin 只读取经过版本与摘要校验的 `PortalAssets`，网络、文件、content URI 与网页直接媒体权限均关闭。Platform 固定为 Binding 的公共 origin：原生以表单 POST 将 ticket 送到已校验的 `/portal/session/exchange`，允许同源 303 到 `/portal/`、Portal 静态资源、Portal Session 与 Enterprise Update 只读接口，其他网络路径和所有跨源请求本地拒绝。ticket 不进入 URL、JavaScript 或历史；remote 加载失败不改用 local 包。静态主文档只交付一次，后续主文档加载撤销旧实例，fragment 导航保留当前文档。document-start 为每个 JS Document 生成独立随机实例，通过同一原生消息通道先绑定、再发送附带实例的业务请求；`PortalPageBinding` 只接受首次绑定，重绑或非原实例消息立即撤权，因此不依赖导航回调先于消息到达，也不依赖 `NAVIGATION_LISTENER`。宿主私有 envelope 复用 `PortalProtocol` 有界严格解析，业务请求仍受原大小限制；公开 `MeasixHost.postMessage/onmessage` 和 Portal v3 内容不变。响应仅经原 JavaScriptReplyProxy；关闭时撤销请求、销毁 WebView，并清理该准确 origin 的 Portal Cookie、缓存和站点存储。
 
 文档创建在原 Session 的选中授权锁内登记到 `PortalDocumentRegistry`；它只索引活动 owner，不另存会话状态。`close` 立即撤权并取消请求，`awaitClosed` 供外部 owner 等待原请求收尾及宿主清理，不能由文档自身请求等待。关闭原因保留首次值；WebView 清理全部步骤成功后才发送带原 documentId 的界面通知，通知异常不占据退出屏障。宿主清理逐项尝试，失败项保留重试；依赖 WebView 的前置清理及 detach 全部成功后才 destroy，销毁后只等待或重试独立浏览状态清理。Registry 按完整原 RealmAccess 关闭所有已捕获文档，全部等待后再汇总失败；成功完成才移除登记，旧 Session 清理不关闭新登录文档。创建交接被取消时仍收口已取得的文档，补偿失败附加到原异常，不覆盖取消原因。
 
@@ -198,7 +182,7 @@ Memory 已通过 MemoryAddress/MemoryService 按原域、主体与 Session 进�
 
 `openExternal` 展示完整 HTTPS 地址并要求原生确认，在原 Session 选中授权锁内再次检查文档期限后发出外部 Intent。它不在 WebView 内导航。原生确认界面只消费当前文档的提示投影，并回传原提示对象；旧界面决策不能接受新提示。正式宿主接通 logout/openExternal、capturePhoto/recordAudio、readMedia/releaseMedia，并声明相应能力。
 
-宿主基础方法为 getStatus、refresh、close、cancel 和三个本地读取方法；原生交互能力见上文。状态中的动态刷新时间只表示当前文档已完成的读取，未知时为 null。以上实现不代表设备媒体验收或真实平台接入。
+宿主基础方法为 getStatus、refresh、close、cancel，正式宿主另声明 logout/openExternal、capturePhoto/recordAudio、readMedia/releaseMedia。状态只投影 Android 拥有的配置就绪、已应用 generation、最近配置同步时间及能力；Enterprise Update Feed 和页面刷新时间归 Portal 的同源 HTTP 会话，不复制进 Native Host。以上实现不代表设备媒体验收或真实平台接入。
 
 `PortalMediaStore` 独占 noBackupFilesDir 下的 portal_media 目录，复用应用既有企业恢复步骤清除进程遗留文件。Store 独占传入目录，恢复清理后才能按 documentId 打开 Session；各 Session 预留、发布、读取及释放自身句柄，不作全局媒体查找。预留占用两项/20 MiB 额度，单项上限 10 MiB，期限从预留起最多五分钟；发布冻结文件并检查 JPEG/MP4 容器，分块返回最多 65536 字节。容器扫描使用有限缓冲，不解码音视频。删除失败立即撤销读取并保留清理责任和额度，未交接资源的补偿失败可由原 owner 重试；取消异常保留原因为主，清理错误附加。过期扫描只触及已发布结果；调用方必须先停止写入者，再发布、丢弃或关闭 Session。硬件由 `AndroidPortalCaptureFactory` 创建：Camera2 与 TextureView 提供应用内预览，ImageReader 获取 JPEG 后由原适配器写入并设置 Exif；MediaRecorder 生成 MPEG-4/AAC，原生开始/停止、时长和大小限制共用同一停止与释放路径。
 
@@ -206,11 +190,11 @@ Memory 已通过 MemoryAddress/MemoryService 按原域、主体与 Session 进�
 
 `PortalDocument` 同时启动网页清理与原生媒体清理，全部成功后才确认 hostClosed。媒体清理先等待原相机设备、录音器和文件写入结束，再删除媒体 Session 文件；CameraDevice 的关闭回调同时确认其 CaptureSession 失效，不再等待可能被设备关闭截断的采集序列回调；它不进入 Session 授权锁或等待桥接请求任务。迟到硬件回调只关闭原实例，超时不遗弃实际清理回执，失败保留 owner 供重试。新文档和切域均受同一关闭屏障约束。
 
-浏览状态清理由 WebStorageCompat.deleteBrowsingDataForSite 的系统完成回调确认，包含 Cookie、缓存和站点存储。API 的边界是本地保留站点 measix.invalid（包含子域），不删除无关站点；不支持该 API 的 WebView 明确拒绝打开 Portal。系统删除不可取消，十秒限制只结束等待者，重试继续等待原操作。Registry 在创建新宿主前等待旧宿主完成，并在 Session 授权锁内再次检查准入；同一站点不同时打开两个活动文档。原请求尚在取消收尾但宿主清理已完成时，可以批准新文档，原回复仍只归原文档。
+浏览状态清理由 `WebStorageCompat.deleteBrowsingDataForSite` 的系统完成回调确认，并对 Platform origin 精确过期 `measix_portal_session` Cookie；不使用全局 Cookie/站点清理，也不删除无关站点。Local 清理固定虚拟 origin，Platform 清理本次绑定的准确公共 origin。不支持完整站点清理 API 的 WebView 明确拒绝打开 Portal。系统删除不可取消，十秒限制只结束等待者，重试继续等待原操作。Registry 在创建新宿主前等待旧宿主完成，并在 Session 授权锁内再次检查准入；同一 Session 不同时打开两个活动文档。原请求尚在取消收尾但宿主清理已完成时，可以批准新文档，原回复仍只归原文档。
 
 `EnterpriseApplicationService` 是正式空间 UI 的命令与查询入口，复用本地来源、同步、退出和 Portal owner。`RealmSwitchRequest` 冻结原 RealmSelection 与目标 RealmAccess，包含目标 Session 身份；Session 在锁内核验请求并等待宿主清理完成后才发布新选中空间。应用作用域持有已接受的切域任务，页面取消不取消该任务；原请求收尾在 Session 锁外等待。关闭或写盘失败保持原空间，已撤销文档不会复活。普通切域保留登录和原域生成，不走退出 CLOSING。进度投影不重新获取正在等待宿主的 Session 锁。
 
-正式空间入口位于聊天抽屉昵称下方和设置页；聊天顶部只显示当前会话域的非交互建筑标记。`EnterprisePage` 展示空间、身份、阶段、已生效 generation 与最近配置同步，并提供一键示例、扫码、粘贴、示例二维码、同步、Portal、切域与原生退出确认。`EnterpriseVM` 只依赖 application service；接入文本不写 Activity saved state。退出确认冻结原请求，Portal 页面每次打开持有独立 UI 身份，旧关闭回调不能关闭新页面。宿主打开前验证消息监听、document-start 与完整站点清理三项能力；不支持时正式入口显示 WebView 包名、版本和缺失能力，其他打开失败显示诊断原因。错误文案及参数是同一个受原 selection 约束的投影；未交付宿主的补偿关闭不抢先触发页面关闭通知，避免吞掉打开错误。返回聊天重新经过 Startup 获取本域 lease。Portal 页面退出前台或离开组合时关闭原宿主；网页 logout 经原生确认复用退出服务，媒体请求使用同一文档和原生交互 owner。
+正式空间入口位于聊天抽屉昵称下方和设置页；聊天顶部只显示当前会话域的非交互建筑标记。`EnterprisePage` 展示空间、身份、阶段、已生效 generation 与最近配置同步，并提供相机扫码、相册二维码、粘贴、一键示例、同步、通用 Portal、切域、全设备企业数据重置与原生退出确认。页面不提供来源安装/选择、企业配置或 Feed 编辑、连接场景演练及示例专用清除。`EnterpriseVM` 只依赖 application service；接入文本不写 Activity saved state。退出确认冻结原请求，Portal 页面每次打开持有独立 UI 身份，旧关闭回调不能关闭新页面。宿主打开前验证消息监听、document-start 与完整站点清理三项能力；不支持时正式入口显示 WebView 包名、版本和缺失能力，其他打开失败显示诊断原因。错误文案及参数是同一个受原 selection 约束的投影；未交付宿主的补偿关闭不抢先触发页面关闭通知，避免吞掉打开错误。返回聊天重新经过 Startup 获取本域 lease。Portal 页面退出前台或离开组合时关闭原宿主；网页 logout 经原生确认复用退出服务，媒体请求使用同一文档和原生交互 owner。
 
 ## 3. Local Settings 顶层结构
 
@@ -464,7 +448,7 @@ Search 包含本地用户 API key/URL/账号，不作为 Model/MCP 路由或企�
 
 独立语音交互先经权威 Managed State 检查再冻结配置；工具朗读沿用父 turn 的上下文。平台租约以原 AppliedVersion 获取，请求前取得当前 Session 令牌并复验原语音 owner。模型与语音共用 `common.http.withExplicitRoute` 的完整地址、请求体上限、禁止自动重放和真实 HTTP 诊断；有效 428 仍由原语音 owner 终止与同步。播放器和文件识别的失败由应用提供 `userVisibleDiagnostic`，保留异常类型与 cause，不以通用语音失败替换。
 
-`EnterpriseSpeechTransport` 编码显式 TTS/MP3 和 ASR multipart file/model/language 请求，注入原 generation/interaction；私有 binding 的 endpoint 是完整请求地址，凭据仅归 transport。其 HTTP client 不重定向或自动重试。本地企业包在发布前只接受 OpenAI 或系统 TTS 与 OpenAI HTTP ASR；本地私有语音 binding 仅接受 `OPENAI_TTS` / `OPENAI_HTTP_ASR`，拒绝尚未接通的 Gemini/MiMo、DashScope HTTP 与 realtime 本地协议，避免已发布配置在执行期失败。`EXAMPLE` 交由 `LocalEnterpriseSpeechService` 消费同一编码正文：先校验原 Session/generation，再处理合成请求或实际 WAV 内容。共享 `ManagedSnapshotRequired` 解析 428 barrier，严格 JSON 解码归 `StrictJsonValue`。应用 owner 在原 RealmSelection 下捕获资源和完整 AppliedVersion，队列/录音自行持有 binding 至实际清理完成。独立播放/录音创建交互，工具和主/子助手共用原 turn 的冻结语音上下文。完成事件携带原回复和该上下文，自动朗读不查询新 turn 的全局选择。428 永久终止原语音交互，分别收口父 turn、语音资源与同步，不重放；文件清理失败不能跳过父 turn 停止或同步，旧 binding 仍由原 owner 保留。空间切换在 Session 锁内只撤销和停止硬件，锁外等待清理。
+`EnterpriseSpeechTransport` 按平台 Snapshot 的协议编码 TTS 与 ASR 请求，注入原 generation/interaction；Runtime endpoint 与认证只归 platform execution transport。HTTP client 不重定向或自动重试。共享 `ManagedSnapshotRequired` 解析 428 barrier，严格 JSON 解码归 `StrictJsonValue`。应用 owner 在原 `RealmSelection` 下捕获资源和完整 AppliedVersion，队列/录音自行持有 execution lease 至实际清理完成。独立播放/录音创建交互，工具和主/子助手共用原 turn 的冻结语音上下文。完成事件携带原回复和该上下文，自动朗读不查询新 turn 的全局选择。428 永久终止原语音交互，分别收口父 turn、语音资源与同步，不重放；文件清理失败不能跳过父 turn 停止或同步。空间切换在 Session 锁内只撤销和停止硬件，锁外等待清理。
 
 
 ### 4.7 MCP
@@ -615,7 +599,7 @@ Conversation.folderId            → Folder.id
 
 企业定义、策略、generation 与完整性校验归企业 Applied State owner。用户定义与偏好只写 UserSettingsDocument；受管模型、助手和 MCP 的固定字段不能通过用户编辑器修改。生效目录由 ConfigurationResolver 按完整来源/Deployment/User 解析。
 
-本地企业来源与真实平台接入共用原生 Session、配置解析和业务资源消费者。平台 Enrollment、Bootstrap、Snapshot 同步及模型、MCP、语音运行均由独立平台来源提供执行输入；完整生产互操作仍以各资源和设备的实际验收结果为准。
+平台 Enrollment、Bootstrap、Snapshot 同步及模型、MCP、语音运行共用原生 Session、配置解析和业务资源消费者；完整生产互操作仍以各资源和设备的实际验收结果为准。
 
 ## 8. 关键架构文件
 
@@ -670,10 +654,10 @@ AssistantToolFactory 将原 RealmAccess 与 caller 引用交给 AssistantManagem
 
 ### 当前平台快照映射与存储
 
-PlatformSnapshotMapper 将当前 Snapshot v4 映射为 EnterpriseCandidate；Core 合同允许助手重复引用同一 MCP 服务，映射时对该助手的服务 ID 去重，不拒绝整份快照。Local 私有包通过 toCandidate 进入同一发布输入。EnterpriseExecution.Local 保存本地连接，EnterpriseExecution.Platform 保存已确认来源、releaseId、snapshotHash 与资源相对路径；平台候选没有伪造的供应商凭据或本地 binding。AppliedStore 校验候选，单 manifest 发布两份不可变文件，加载时校验摘要/身份/generation，类型区分两种执行来源；旧企业格式不迁移、不双读。登录、启动继续接入与退出凭据编排见接入资料契约。当前模型、语音和 Direct MCP 消费已接入平台执行描述；远端 Portal/Feed 尚未接线。
+PlatformSnapshotMapper 将当前 Snapshot v4 映射为 EnterpriseCandidate；Core 合同允许助手重复引用同一 MCP 服务，映射时对该助手的服务 ID 去重，不拒绝整份快照。Local 私有包通过 toCandidate 进入同一发布输入。EnterpriseExecution.Local 保存本地连接，EnterpriseExecution.Platform 保存已确认来源、releaseId、snapshotHash 与资源相对路径；平台候选没有伪造的供应商凭据或本地 binding。AppliedStore 校验候选，单 manifest 发布两份不可变文件，加载时校验摘要/身份/generation，类型区分两种执行来源；旧企业格式不迁移、不双读。登录、启动继续接入与退出凭据编排见接入资料契约。当前模型、语音和 Direct MCP 消费已接入平台执行描述；Local 使用内置 local Portal，Platform 使用 Core 已选择的标准或企业自定义 remote Portal。客户自定义页面是 Core 部署产物，不是 Android 兼容分支；两种 Platform 页面使用同一授权与 Bridge 合同。
 
 EnterpriseSynchronizationService 为 Local/Platform 来源共用并发合并与取消入口。PlatformEnterpriseService 通过 Session owner 捕获当前身份与已验证候选，网络查询仅发送实际 Applied generation；activeManagedGeneration=0 保持待配置且不下载 Snapshot 0。同一主体/generation 的校验缓存才发送 If-None-Match，304 复用该候选，经原 synchronize 再核验 Session 并提交。提交后 PUT managed/applied 回报 generation/hash；失败保留已提交配置并向调用方暴露诊断，下次同步可经 304 重报。配置发布不代表平台 Runtime 准入成功，权威执行前检查仍须独立完成。
 
 企业定义保留 Provider 协议/启用状态，ConfigurationResolver 同时检查模型与 Provider 是否启用。TTS/ASR 使用显式协议和条件参数；System TTS 不属于远端 runtimeResources，MiMo 音色设计无 preset voice。企业 Speech 列表沿用个人类型标签，不显示固定的模型名与音色拼接。平台 Seed 保留顺序与重复条目，内部 ID 从来源、助手、generation 和索引确定，不创建可变运行记忆；辅助默认、Gateway 和子助手关系不从普通默认模型推导。
 
-平台模型捕获经 EnterpriseSynchronizationService.prepareExecution 查询 Core Managed State，不使用 TTL 缓存；发现版本缺失或不同可通过共享同步入口同步一次，再查询权威状态。只有非零 generation、READY、未阻止且版本一致才返回经 Session owner 复核的 AppliedVersion。captureExecution 对平台强制校验该版本，再签发 EnterpriseExecutionLease，冻结 EnterpriseExecution.Platform 和公开配置；不会生成本地私有 binding。lease.localBinding 只接受 Local 来源；模型、云端 TTS、文件 ASR 与 MCP 已按平台执行描述装配请求；远端 Portal 接线仍在实施。preflight 通过不能代表资源已经执行成功。
+平台模型捕获经 `EnterpriseSynchronizationService.prepareExecution` 查询 Core Managed State，不使用 TTL 缓存；发现版本缺失或不同可通过共享同步入口同步一次，再查询权威状态。只有非零 generation、READY、未阻止且版本一致才返回经 Session owner 复核的 AppliedVersion。`captureExecution` 强制校验该版本，再签发 `EnterpriseExecutionLease`，冻结 `EnterpriseExecution.Platform` 和公开配置；模型、云端 TTS、文件 ASR 与 MCP 按平台执行描述装配请求。Portal 独立仓库只产出一套标准静态工作台；Core 选择默认分发或企业 CUSTOM 上游，Android 始终打开 Core `/portal/`。preflight 通过不能代表资源已经执行成功。

@@ -43,10 +43,6 @@ internal class EnterpriseExitService(
     private val terminals: net.weero.measix.pilot.service.workspace.WorkspaceTerminalRuntime,
     private val mcp: net.weero.measix.pilot.data.ai.mcp.McpRuntimeCoordinator,
     private val speech: SpeechApplicationService,
-    private val settings: net.weero.measix.pilot.data.datastore.SettingsStore,
-    private val memories: net.weero.measix.pilot.data.repository.MemoryRepository,
-    private val catalogs: net.weero.measix.pilot.data.ai.mcp.McpCatalogStore,
-    private val files: FileManagementApplicationService,
     private val platformLogout: suspend (EnterpriseExitToken) -> Unit,
 ) {
     private val mutex = Mutex()
@@ -86,13 +82,6 @@ internal class EnterpriseExitService(
         return enqueue(request.access, EnterpriseExitReason.USER_REQUEST) { sessions.beginExit(request) }.await()
     }
 
-    suspend fun clearExampleData(request: EnterpriseExitRequest, bundledScope: net.weero.measix.pilot.data.configuration.ConfigurationScope.Enterprise): EnterpriseExitResult {
-        recoveryGate.awaitReady()
-        return enqueue(request.access, EnterpriseExitReason.CLEAR_EXAMPLE_DATA) {
-            sessions.beginExampleDataRemoval(request, bundledScope)
-        }.await()
-    }
-
     suspend fun invalidate(access: RealmAccess.Enterprise, reason: EnterpriseExitReason): EnterpriseExitResult {
         recoveryGate.awaitReady()
         return enqueue(access, reason, invalidationReason = reason) { sessions.beginInvalidation(access, reason) }.await()
@@ -106,7 +95,7 @@ internal class EnterpriseExitService(
     suspend fun retry(token: EnterpriseExitToken): EnterpriseExitResult {
         recoveryGate.awaitReady()
         return enqueue(token.access, token.reason) {
-            sessions.withClosingSession(token) { Unit }
+            sessions.withClosingSession(token) {}
             token
         }.await()
     }
@@ -115,7 +104,7 @@ internal class EnterpriseExitService(
         val pending = mutex.withLock {
             if ((_failure.value as? EnterpriseExitFailure.Closing)?.token == token || sessions.pendingExit() != token) null
             else enqueueLocked(token.access, token.reason, null) {
-                sessions.withClosingSession(token) { Unit }
+                sessions.withClosingSession(token) {}
                 token
             }
         }
@@ -135,13 +124,7 @@ internal class EnterpriseExitService(
         invalidationReason: EnterpriseExitReason?,
         admit: suspend () -> EnterpriseExitToken,
     ): Deferred<EnterpriseExitResult> {
-        active[access]?.let { existing ->
-            // A normal sign-out retains data and must never satisfy an explicit removal request.
-            if (requestedReason == EnterpriseExitReason.CLEAR_EXAMPLE_DATA && existing.reason != requestedReason) {
-                throw EnterpriseConfigurationException("enterprise_exit_in_progress")
-            }
-            return existing.result
-        }
+        active[access]?.let { return it.result }
         return scope.async(start = CoroutineStart.LAZY) {
             var token: EnterpriseExitToken? = null
             try {
@@ -170,10 +153,14 @@ internal class EnterpriseExitService(
     suspend fun completeDuringRecovery() {
         if (sessions.state.value !is EnterpriseState.Available) return
         val token = sessions.pendingExit() ?: return
+        if (token.reason == EnterpriseExitReason.LOCAL_DATA_RESET) {
+            throw EnterpriseConfigurationException("enterprise_reset_in_progress")
+        }
         _recoveryLogoutFailure.value = finish(token, duringRecovery = true).remoteLogoutFailure
     }
 
-    private suspend fun finish(token: EnterpriseExitToken, duringRecovery: Boolean): EnterpriseExitResult {
+    /** Shared stop barrier after Session admission is durably revoked. */
+    internal suspend fun closeEnterpriseDomain(token: EnterpriseExitToken, duringRecovery: Boolean = false) {
         supervisorScope {
             val cleanup = listOf(
                 async { portals.closeAndAwait(token.access, PortalCloseReason.AUTHORIZATION_REVOKED) },
@@ -191,20 +178,15 @@ internal class EnterpriseExitService(
                 try { pending.await() }
                 catch (cancelled: CancellationException) { throw cancelled }
                 catch (error: Exception) {
-                    if (failure == null) failure = error else if (error !== failure) failure?.addSuppressed(error)
+                    if (failure == null) failure = error else if (error !== failure) requireNotNull(failure).addSuppressed(error)
                 }
             }
             failure?.let { throw it }
         }
-        if (token.reason == EnterpriseExitReason.CLEAR_EXAMPLE_DATA) {
-            sessions.withClosingSession(token) { }
-            conversations.clearEnterpriseData(token)
-            settings.clearEnterprisePreferences(token.access.scope)
-            memories.clearEnterpriseScope(token.access.scope)
-            files.clearEnterpriseData(token)
-            catalogs.clearEnterpriseScope(token.access.scope)
-            sessions.prepareExampleDataRemovalCompletion(token)
-        }
+    }
+
+    private suspend fun finish(token: EnterpriseExitToken, duringRecovery: Boolean): EnterpriseExitResult {
+        closeEnterpriseDomain(token, duringRecovery)
         val logoutFailure = if (token.reason == EnterpriseExitReason.USER_REQUEST) try {
             platformLogout(token)
             null
@@ -216,7 +198,6 @@ internal class EnterpriseExitService(
         } else null
         sessions.finishExit(token)
         _failure.value = null
-        if (token.reason == EnterpriseExitReason.CLEAR_EXAMPLE_DATA) return EnterpriseExitResult()
         return try {
             sessions.pruneUnusedRevisions()
             EnterpriseExitResult(logoutFailure, logoutFailure)

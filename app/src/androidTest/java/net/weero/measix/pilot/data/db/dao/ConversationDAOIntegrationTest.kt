@@ -44,10 +44,10 @@ class ConversationDAOIntegrationTest {
     fun sharedAssistantQueriesAndStatisticsArePartitionedByCompletePrincipal() = runBlocking {
         val scopes = listOf(
             ConfigurationScope.Personal,
-            ConfigurationScope.Enterprise(EnterpriseAuthority("local:example", "deployment"), "alice"),
-            ConfigurationScope.Enterprise(EnterpriseAuthority("local:example", "deployment"), "bob"),
-            ConfigurationScope.Enterprise(EnterpriseAuthority("local:other", "deployment"), "alice"),
-            ConfigurationScope.Enterprise(EnterpriseAuthority("local:example", "other"), "alice"),
+            ConfigurationScope.Enterprise(EnterpriseAuthority("platform:example", "deployment"), "alice"),
+            ConfigurationScope.Enterprise(EnterpriseAuthority("platform:example", "deployment"), "bob"),
+            ConfigurationScope.Enterprise(EnterpriseAuthority("platform:other", "deployment"), "alice"),
+            ConfigurationScope.Enterprise(EnterpriseAuthority("platform:example", "other"), "alice"),
         )
         val assistant = "0950e2dc-9bd5-4801-afa3-aa887aa36b4e"
         val roots = scopes.mapIndexed { index, scope ->

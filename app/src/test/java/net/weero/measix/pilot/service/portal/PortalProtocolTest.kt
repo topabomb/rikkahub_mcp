@@ -7,12 +7,20 @@ import org.junit.Test
 
 class PortalProtocolTest {
     @Test
+    fun `shared HostStatus contains only state owned by the Android native host`() {
+        val contract = Json.parseToJsonElement(resource("portal-contract.openapi.json").decodeToString()).jsonObject
+        val required = contract.getValue("components").jsonObject.getValue("schemas").jsonObject
+            .getValue("HostStatus").jsonObject.getValue("required").jsonArray
+            .map { it.jsonPrimitive.content }.toSet()
+        assertEquals(setOf("managedReady", "appliedManagedGeneration", "lastConfigurationSync", "capabilities"), required)
+    }
+
+    @Test
     fun `Android parser consumes all shared BridgeRequest cases with pinned contract bytes`() {
         val manifest = Json.parseToJsonElement(resource("manifest.json").decodeToString()).jsonObject
         assertEquals(PortalProtocol.VERSION, manifest.getValue("bridgeVersion").jsonPrimitive.int)
-        assertEquals(PortalProtocol.LOCAL_READ_VERSION, manifest.getValue("localReadVersion").jsonPrimitive.int)
         assertEquals(setOf("portal-contract.openapi.json", "client-feed.schemas.json", "native-vectors.json",
-            "local-context.json", "feed-vectors.json", "platform-v1.json", "local-v1.json", "cases.json"),
+            "feed-vectors.json", "platform-v1.json", "cases.json"),
             manifest.getValue("artifacts").jsonObject.keys)
         manifest.getValue("artifacts").jsonObject.forEach { (name, entry) ->
             val actual = MessageDigest.getInstance("SHA-256").digest(resource(name)).joinToString("") { "%02x".format(it) }
@@ -49,10 +57,12 @@ class PortalProtocolTest {
     }
 
     @Test
-    fun `method validation keeps opaque etags and rejects unsafe external URLs`() {
-        val request = PortalProtocol.request(PortalProtocol.decode(raw("listLocalUpdates", """{"ifNoneMatch":" opaque-中文 ","limit":20}""")))
-        assertEquals(" opaque-中文 ", (request.command as PortalCommand.ListLocalUpdates).ifNoneMatch)
-        listOf("http://example.com", "https://user:secret@example.com", "https://example.com:0", "https://example.com:65536", "https://example.com:")
+    fun `external links accept only safe web URLs`() {
+        listOf("http://example.com", "https://example.com:8443/path?q=1#section").forEach { url ->
+            assertEquals(url, (PortalProtocol.request(PortalProtocol.decode(raw("openExternal",
+                buildJsonObject { put("url", url) }.toString()))).command as PortalCommand.OpenExternal).url.toASCIIString())
+        }
+        listOf("ftp://example.com", "https://user:secret@example.com", "https://example.com:0", "https://example.com:65536", "https://example.com:")
             .forEach { url -> assertThrows(PortalFailure::class.java) { PortalProtocol.request(PortalProtocol.decode(raw("openExternal", buildJsonObject { put("url", url) }.toString()))) } }
     }
 

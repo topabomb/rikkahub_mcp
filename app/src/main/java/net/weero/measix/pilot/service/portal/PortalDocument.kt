@@ -17,6 +17,7 @@ internal data class PortalClosure(val documentId: String, val reason: PortalClos
 internal class PortalDocumentContext(
     val id: String,
     val selection: RealmSelection,
+    val sourceOrigin: String,
     val expiresAtMillis: Long,
     val nowMillis: () -> Long,
 ) {
@@ -37,6 +38,7 @@ internal class PortalDocument private constructor(
 ) : AutoCloseable {
     val id get() = context.id
     val selection get() = context.selection
+    internal val sourceOrigin get() = context.sourceOrigin
     private val expiresAtMillis get() = context.expiresAtMillis
     private val nowMillis get() = context.nowMillis
     private val lifetime = SupervisorJob(parentScope.coroutineContext[Job])
@@ -49,7 +51,6 @@ internal class PortalDocument private constructor(
     private val completion = CompletableDeferred<Unit>()
     private val seen = mutableSetOf<String>()
     private val requests = mutableMapOf<String, Job>()
-    private var lastFeedRefresh: Long? = null
     val bootstrap: String get() = PortalProtocol.bootstrap(id)
     val isClosed: Boolean get() = closed
     internal val isHostClosed: Boolean get() = hostClosed
@@ -81,7 +82,7 @@ internal class PortalDocument private constructor(
     /** reply is the original JavaScriptReplyProxy, never a lookup of the current WebView or page. */
     @MainThread
     fun receive(raw: String, sourceOrigin: String, isMainFrame: Boolean, reply: (String) -> Unit): Job? {
-        if (closed || sourceOrigin != PortalProtocol.LOCAL_ORIGIN || !isMainFrame) return null
+        if (closed || sourceOrigin != context.sourceOrigin || !isMainFrame) return null
         val fields = try { PortalProtocol.decode(raw) } catch (_: PortalFailure) { return null }
         val documentId = try { PortalProtocol.identifier(fields, "documentId") } catch (_: PortalFailure) { return null }
         if (documentId != id) return null
@@ -135,13 +136,6 @@ internal class PortalDocument private constructor(
         } catch (failure: PortalFailure) {
             primary = failure
             respond(requestId, reply, failure = failure)
-        } catch (failure: EnterpriseFeedException) {
-            primary = failure
-            respond(requestId, reply, failure = PortalFailure(when (failure.reason) {
-                "enterprise_update_not_found" -> "enterprise_update_not_found"
-                "invalid_request" -> "invalid_request"
-                else -> "source_unavailable"
-            }))
         } catch (failure: EnterpriseConfigurationException) {
             primary = failure
             val code = if ((fields["method"] as? JsonPrimitive)?.content == "refresh" &&
@@ -173,29 +167,6 @@ internal class PortalDocument private constructor(
 
     private suspend fun execute(command: PortalCommand): JsonObject = when (command) {
         PortalCommand.GetStatus -> status()
-        PortalCommand.GetLocalContext -> {
-            val session = requireNotNull(sessions.portalState(selection).manifest.session)
-            buildJsonObject {
-                put("formatVersion", 1); put("kind", "LOCAL_EXAMPLE")
-                put("sourceNamespace", session.identity.authority.sourceNamespace)
-                put("deploymentId", session.identity.authority.deploymentId)
-                put("userId", session.identity.userId); put("sessionId", session.id); put("documentId", id)
-                put("enterpriseName", session.identity.enterpriseName); put("userDisplayName", session.identity.userName)
-                put("expiresAt", Instant.ofEpochMilli(expiresAtMillis).toString())
-                put("sessionIdleExpiresAt", Instant.ofEpochMilli(session.expiresAtMillis).toString())
-            }
-        }
-        is PortalCommand.ListLocalUpdates -> {
-            val result = sessions.listFeed(selection, command.query)
-            lastFeedRefresh = nowMillis()
-            buildJsonObject {
-                put("kind", if (result.etag == command.ifNoneMatch) "notModified" else "modified")
-                put("etag", result.etag)
-                if (result.etag != command.ifNoneMatch) put("feed", EnterprisePackageCodec.json.encodeToJsonElement(result.body))
-            }
-        }
-        is PortalCommand.GetLocalUpdate ->
-            EnterprisePackageCodec.json.encodeToJsonElement(sessions.feedDetail(selection, command.id)).jsonObject
         PortalCommand.Refresh -> {
             synchronization.synchronize(selection.access as RealmAccess.Enterprise)
             status()
@@ -220,8 +191,10 @@ internal class PortalDocument private constructor(
             put("managedReady", state.configuration != null && state.manifest.applied != null)
             put("appliedManagedGeneration", state.manifest.applied?.generation?.let(::JsonPrimitive) ?: JsonNull)
             put("lastConfigurationSync", state.manifest.lastConfigurationSyncMillis?.let { JsonPrimitive(Instant.ofEpochMilli(it).toString()) } ?: JsonNull)
-            put("lastEnterpriseUpdateRefresh", lastFeedRefresh?.let { JsonPrimitive(Instant.ofEpochMilli(it).toString()) } ?: JsonNull)
-            putJsonArray("capabilities") { (CAPABILITIES + native?.capabilities.orEmpty()).forEach { add(it) } }
+            putJsonArray("capabilities") {
+                (CAPABILITIES + native?.capabilities.orEmpty())
+                    .forEach { add(it) }
+            }
         }
     }
 
@@ -276,7 +249,6 @@ internal class PortalDocument private constructor(
             closure = PortalClosure(id, reason)
             requests.clear()
             seen.clear()
-            lastFeedRefresh = null
             lifetime.cancel()
         }
         if (hostClosed || hostClosing?.isActive == true) return
@@ -289,7 +261,8 @@ internal class PortalDocument private constructor(
             receipts.forEach { receipt ->
                 try { receipt.await() }
                 catch (error: Exception) {
-                    if (failure == null) failure = error else if (error !== failure) failure?.addSuppressed(error)
+                    val previous = failure
+                    if (previous == null) failure = error else if (error !== previous) previous.addSuppressed(error)
                 }
             }
             failure?.let { throw it }
@@ -335,13 +308,14 @@ internal class PortalDocument private constructor(
     internal fun invokeOnCompletion(handler: () -> Unit) { completion.invokeOnCompletion { handler() } }
 
     companion object {
-        private val CAPABILITIES = listOf("getStatus", "refresh", "close", "cancel", "getLocalContext", "listLocalUpdates", "getLocalUpdate")
+        private val CAPABILITIES = listOf("getStatus", "refresh", "close", "cancel")
         suspend fun open(
             selection: RealmSelection,
             sessions: EnterpriseSessionController,
             synchronization: EnterpriseSynchronizationService,
             scope: CoroutineScope,
             registry: PortalDocumentRegistry,
+            sourceOrigin: String,
             nowMillis: () -> Long = System::currentTimeMillis,
             closeHost: () -> Deferred<Unit> = { CompletableDeferred(Unit) },
             createNative: (suspend (PortalDocumentContext) -> PortalNativeActions)? = null,
@@ -357,7 +331,8 @@ internal class PortalDocument private constructor(
                     val id = Base64.getUrlEncoder().withoutPadding().encodeToString(ByteArray(32).also { SecureRandom().nextBytes(it) })
                     sessions.withSelectedRealmSelection(selection) {
                         registry.requireHostAvailable()
-                        val context = PortalDocumentContext(id, selection, minOf(session.expiresAtMillis, nowMillis() + 600_000), nowMillis)
+                        val context = PortalDocumentContext(id, selection, sourceOrigin,
+                            minOf(session.expiresAtMillis, nowMillis() + 600_000), nowMillis)
                         native = createNative?.invoke(context)
                         PortalDocument(context, sessions, synchronization, scope, closeHost, native, onClosed).also {
                             created = it

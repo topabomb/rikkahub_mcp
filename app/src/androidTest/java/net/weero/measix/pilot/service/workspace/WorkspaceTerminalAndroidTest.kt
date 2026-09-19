@@ -62,53 +62,6 @@ class WorkspaceTerminalAndroidTest {
         }
     }
 
-    @Test
-    fun failedSwitchAndTabReattachmentUseFreshViewsWhileRetainingOriginalPty() = runBlocking {
-        withRuntime { runtime, sessions, host, _ ->
-            val example = context.assets.open(LocalEnterpriseSource.EXAMPLE_ASSET).use(EnterprisePackageCodec::decode)
-            sessions.enrollLocal(example.identity, { example.identity }, { example })
-            val original = requireNotNull(sessions.readPresentation().selection)
-            val first = ready(runtime, original)
-            val second = ready(runtime, original)
-            val oldView = bind(runtime, original, first)
-            await { host.created.first().emulator?.screen?.transcriptText?.contains("READY") == true }
-            val pid = withContext(Dispatchers.Main) { host.created.first().pid }
-            val oldInput = withContext(Dispatchers.Main) { oldView.onCreateInputConnection(EditorInfo()) }
-            try {
-                sessions.switchRealm(RealmSwitchRequest(original, RealmAccess.Personal)) {
-                    runtime.revokeViewports(it)
-                    throw java.io.IOException("portal close failed")
-                }
-                fail("Expected failed switch")
-            } catch (_: java.io.IOException) { }
-            val refreshed = requireNotNull(sessions.readPresentation().selection)
-            assertEquals(original.access, refreshed.access)
-            assertNotEquals(original, refreshed)
-            withContext(Dispatchers.Main) {
-                assertTrue(oldView.isRetired)
-                oldInput?.commitText("RETIRED_INPUT", 1)
-                oldInput?.finishComposingText()
-                oldView.autofill(AutofillValue.forText("RETIRED_AUTOFILL"))
-                oldView.onKeyDown(KeyEvent.KEYCODE_A, KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_A))
-                assertEquals(pid, host.created.first().pid)
-            }
-            val replacement = bind(runtime, refreshed, first)
-            withContext(Dispatchers.Main) { runtime.unbind(first, replacement) }
-            val peerView = bind(runtime, refreshed, second)
-            withContext(Dispatchers.Main) { runtime.unbind(second, peerView) }
-            val back = bind(runtime, refreshed, first)
-            withContext(Dispatchers.Main) {
-                assertTrue(replacement.isRetired)
-                assertNotSame(replacement, back)
-                assertEquals(pid, host.created.first().pid)
-                runtime.write(refreshed, first, "CURRENT_INPUT\n")
-            }
-            await { host.created.first().emulator.screen.transcriptText.contains("CURRENT_INPUT") }
-            withContext(Dispatchers.Main) {
-                assertFalse(host.created.first().emulator.screen.transcriptText.contains("RETIRED_"))
-            }
-        }
-    }
 
     @Test
     fun multibyteImePasteIsBufferedAsBytesWithoutRejectingItsCharacterCount() = runBlocking {

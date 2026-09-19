@@ -174,9 +174,9 @@ class ConversationRepositoryTreeIntegrationTest {
 
     @Test
     fun enterpriseConfigurationReferencesRoundTripWithoutChangingConversationOrMessageIds() = runBlocking {
-        val scope = ConfigurationScope.Enterprise(EnterpriseAuthority("local:example", "dep_example"), "alice")
-        val assistantId = ConfigurationReference.parse("managed~local~example~dep_example~assistant_review")
-        val modelId = ConfigurationReference.parse("managed~local~example~dep_example~mdl_chat")
+        val scope = ConfigurationScope.Enterprise(EnterpriseAuthority("platform:example", "dep_example"), "alice")
+        val assistantId = ConfigurationReference.parse("managed~platform~example~dep_example~assistant_review")
+        val modelId = ConfigurationReference.parse("managed~platform~example~dep_example~mdl_chat")
         val original = conversation(Uuid.random(), assistantId, null).let { conversation ->
             conversation.copy(scope = scope, messageNodes = listOf(UIMessage(
                 role = MessageRole.ASSISTANT,
@@ -197,7 +197,7 @@ class ConversationRepositoryTreeIntegrationTest {
 
     @Test
     fun childInsertAndTreeImportRejectAnotherPrincipalWithoutPublishingRows() = runBlocking {
-        val authority = EnterpriseAuthority("local:example", "dep_example")
+        val authority = EnterpriseAuthority("platform:example", "dep_example")
         val alice = ConfigurationScope.Enterprise(authority, "alice")
         val bob = ConfigurationScope.Enterprise(authority, "bob")
         val assistantId = ConfigurationReference.random()
@@ -228,7 +228,7 @@ class ConversationRepositoryTreeIntegrationTest {
     fun treeDeleteAndRestoreKeepScopedNodesAndArtifactReferencesAtomic() = runBlocking {
         val masterId = Uuid.random()
         val assistantId = ConfigurationReference.random()
-        val scope = ConfigurationScope.Enterprise(EnterpriseAuthority("local:example", "dep_example"), "alice")
+        val scope = ConfigurationScope.Enterprise(EnterpriseAuthority("platform:example", "dep_example"), "alice")
         val owned = artifactStore.createFromBytes(scope,
             byteArrayOf(1, 2, 3),
             "tree.txt",
@@ -560,9 +560,9 @@ class ConversationRepositoryTreeIntegrationTest {
 
     @Test
     fun unfinishedTurnCountIncludesChildrenAndIsolatesCompleteEnterpriseIdentity() = runBlocking {
-        val alice = ConfigurationScope.Enterprise(EnterpriseAuthority("local:example", "dep_example"), "alice")
+        val alice = ConfigurationScope.Enterprise(EnterpriseAuthority("platform:example", "dep_example"), "alice")
         val scopes = listOf(ConfigurationScope.Personal, alice, alice.copy(userId = "bob"),
-            alice.copy(authority = EnterpriseAuthority("platform:example", "dep_example")))
+            alice.copy(authority = EnterpriseAuthority("platform:other", "dep_example")))
         val roots = scopes.map { scope ->
             conversation(Uuid.random(), ConfigurationReference.random(), null).copy(scope = scope).also {
                 repository.insertConversation(it)

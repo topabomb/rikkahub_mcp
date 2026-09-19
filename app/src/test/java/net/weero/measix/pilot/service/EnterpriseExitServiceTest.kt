@@ -63,100 +63,6 @@ class EnterpriseExitServiceTest {
         }
     }
 
-    @Test fun `example removal keeps closing through data failure and resumes before Ready`() = runTest {
-        fixture { f ->
-            val packet = exampleEnterprisePackage()
-            f.sessions.enrollFixture(packet)
-            f.sessions.selectPersonalFixture()
-            val request = requireNotNull(f.service.captureRequest())
-            coEvery { f.files.clearEnterpriseData(any()) } throws IOException("payload pending")
-            try { f.service.clearExampleData(request, packet.identity.scope); fail("Expected cleanup failure") }
-            catch (_: IOException) { }
-            val token = requireNotNull(f.sessions.pendingExit())
-            assertEquals(EnterpriseExitReason.CLEAR_EXAMPLE_DATA, token.reason)
-            assertNotNull(f.manifest.session)
-            assertTrue(f.manifest.feeds.isNotEmpty())
-            coVerify(exactly = 0) { f.catalogs.clearEnterpriseScope(any()) }
-            assertEquals(token, EnterpriseSessionController(EnterpriseAppliedStore(f.root)) { f.now }.let { it.recover(); it.pendingExit() })
-            coEvery { f.files.clearEnterpriseData(token) } returns Unit
-            f.gate.loading()
-            f.service.completeDuringRecovery()
-            assertEquals(ApplicationRecoveryState.Loading, f.gate.state.value)
-            assertEquals(EnterpriseSessionPhase.SIGNED_OUT, f.manifest.phase)
-            assertNull(f.manifest.session)
-            assertNull(f.manifest.lastIdentity)
-            assertTrue(f.manifest.feeds.isEmpty())
-            coVerify(exactly = 2) { f.settings.clearEnterprisePreferences(packet.identity.scope) }
-            coVerify(exactly = 2) { f.memories.clearEnterpriseScope(packet.identity.scope) }
-            coVerify(exactly = 1) { f.catalogs.clearEnterpriseScope(packet.identity.scope) }
-        }
-    }
-
-    @Test fun `normal exit cannot satisfy a concurrent explicit data removal`() = runTest {
-        fixture { f ->
-            val packet = exampleEnterprisePackage()
-            f.sessions.enrollFixture(packet)
-            val request = requireNotNull(f.service.captureRequest())
-            val entered = CompletableDeferred<Unit>()
-            val release = CompletableDeferred<Unit>()
-            f.cleanup = { entered.complete(Unit); release.await() }
-            val normal = async { f.service.exit(request) }
-            try {
-                entered.await()
-                try { f.service.clearExampleData(request, packet.identity.scope); fail("Normal exit retains data") }
-                catch (error: EnterpriseConfigurationException) { assertEquals("enterprise_exit_in_progress", error.reason) }
-                release.complete(Unit)
-                normal.await()
-                assertTrue(f.manifest.feeds.isNotEmpty())
-                coVerify(exactly = 0) { f.conversations.clearEnterpriseData(any()) }
-                coVerify(exactly = 0) { f.files.clearEnterpriseData(any()) }
-            } finally { release.complete(Unit); normal.cancelAndJoin() }
-        }
-    }
-
-    @Test fun `retired Feed payload failure retains removal token until pruning succeeds`() = runTest {
-        fixture { f ->
-            val packet = exampleEnterprisePackage()
-            f.sessions.enrollFixture(packet)
-            val feed = f.manifest.feeds.single()
-            val request = requireNotNull(f.service.captureRequest())
-            f.failPrune = true
-            try { f.service.clearExampleData(request, packet.identity.scope); fail("Expected prune failure") }
-            catch (_: IOException) { }
-            val token = requireNotNull(f.sessions.pendingExit())
-            assertEquals(EnterpriseExitReason.CLEAR_EXAMPLE_DATA, token.reason)
-            assertTrue(f.manifest.feeds.isEmpty())
-            assertTrue(File(f.root, "feed-revisions/${feed.revision}/feed.json").isFile)
-            f.failPrune = false
-            f.service.retry(token)
-            assertEquals(EnterpriseSessionPhase.SIGNED_OUT, f.manifest.phase)
-            assertFalse(File(f.root, "feed-revisions/${feed.revision}").exists())
-        }
-    }
-
-    @Test fun `example removal rejects another principal and stale selection but accepts pending personal session`() = runTest {
-        fixture { f ->
-            val packet = exampleEnterprisePackage()
-            f.sessions.enrollFixture(packet)
-            val old = requireNotNull(f.service.captureRequest())
-            val before = f.manifest
-            try { f.service.clearExampleData(old, packet.identity.scope.copy(userId = "another")); fail("Wrong principal") }
-            catch (error: EnterpriseConfigurationException) { assertEquals("bundled_example_session_required", error.reason) }
-            assertEquals(before, f.manifest)
-            f.sessions.selectPersonalFixture()
-            f.sessions.selectEnterpriseFixture()
-            try { f.service.clearExampleData(old, packet.identity.scope); fail("Stale selection") }
-            catch (error: EnterpriseConfigurationException) { assertEquals("enterprise_selection_revoked", error.reason) }
-            val pending = f.sessions.enrollLocal(packet.identity, { packet.identity }, { null })
-            assertEquals(EnterpriseSessionPhase.CONFIGURATION_PENDING, pending.manifest.phase)
-            val request = requireNotNull(f.service.captureRequest())
-            assertEquals(RealmAccess.Personal, request.selection.access)
-            f.service.clearExampleData(request, packet.identity.scope)
-            assertEquals(EnterpriseSessionPhase.SIGNED_OUT, f.manifest.phase)
-            assertNull(f.manifest.lastIdentity)
-        }
-    }
-
     @Test fun `accepted exit survives caller cancellation and duplicate requests share cleanup`() = runTest {
         fixture { f ->
             f.sessions.enrollFixture(exampleEnterprisePackage())
@@ -255,21 +161,6 @@ class EnterpriseExitServiceTest {
         }
     }
 
-    @Test fun `old personal confirmation cannot exit a replacement pending session`() = runTest {
-        fixture { f ->
-            val identity = exampleEnterprisePackage().identity
-            f.sessions.enrollLocal(identity, { identity }, { null })
-            val old = requireNotNull(f.service.captureRequest())
-            f.sessions.enrollLocal(identity, { identity }, { null })
-            val replacement = f.manifest
-            assertEquals(old.selection.revision, f.sessions.selectionRevision.value)
-            try { f.service.exit(old); fail("Expected stale confirmation") }
-            catch (error: EnterpriseConfigurationException) { assertEquals("stale_enterprise_exit", error.reason) }
-            assertEquals(replacement, f.manifest)
-            coVerify(exactly = 0) { f.conversations.stopEnterpriseWork(any()) }
-        }
-    }
-
     @Test fun `expiry admission failure is observable and retries the original session`() = runTest {
         fixture(virtualTime = true) { f ->
             f.sessions.enrollFixture(exampleEnterprisePackage())
@@ -332,9 +223,7 @@ class EnterpriseExitServiceTest {
             SupervisorJob(test.backgroundScope.coroutineContext[Job]))
         val root = temporary.newFolder()
         var failCommit = false
-        var failPrune = false
-        val sessions = EnterpriseSessionController(EnterpriseAppliedStore(root) { checkpoint ->
-            if (failPrune && checkpoint == EnterpriseStorageCheckpoint.BEFORE_REVISION_PRUNE) throw IOException("prune unavailable")
+        val sessions = EnterpriseSessionController(net.weero.measix.pilot.data.enterprise.enterpriseTestStore(root) { checkpoint ->
             if (failCommit && checkpoint == EnterpriseStorageCheckpoint.BEFORE_MANIFEST_COMMIT) {
                 throw IOException("manifest unavailable")
             }
@@ -342,10 +231,6 @@ class EnterpriseExitServiceTest {
         val gate = ApplicationRecoveryGate().apply { if (!virtualTime) ready() }
         val conversations = mockk<ConversationApplicationService>()
         val sync = mockk<EnterpriseSynchronizationService>()
-        val settings = mockk<SettingsStore>()
-        val memories = mockk<net.weero.measix.pilot.data.repository.MemoryRepository>()
-        val catalogs = mockk<net.weero.measix.pilot.data.ai.mcp.McpCatalogStore>()
-        val files = mockk<FileManagementApplicationService>()
         var cleanup: suspend (EnterpriseExitToken) -> Unit = {}
         var logout: suspend (EnterpriseExitToken) -> Unit = {}
         val service: EnterpriseExitService
@@ -354,12 +239,7 @@ class EnterpriseExitServiceTest {
             coEvery { sync.cancelAndAwait(any()) } returns Unit
             coEvery { conversations.stopEnterpriseWork(any()) } coAnswers { cleanup(firstArg()) }
             coEvery { conversations.requireEnterpriseStopped(any()) } returns Unit
-            coEvery { conversations.clearEnterpriseData(any()) } returns Unit
-            coEvery { settings.clearEnterprisePreferences(any()) } returns Unit
-            coEvery { memories.clearEnterpriseScope(any()) } returns Unit
-            coEvery { catalogs.clearEnterpriseScope(any()) } returns Unit
-            coEvery { files.clearEnterpriseData(any()) } returns Unit
-            service = EnterpriseExitService(sessions, sync, conversations, gate, scope, net.weero.measix.pilot.service.portal.PortalDocumentRegistry(), mockk(relaxed = true), mockk { io.mockk.coEvery { closeRealm(any()) } returns Unit }, mcp = mockk { io.mockk.coEvery { closeRealm(any()) } returns Unit }, speech = mockk(relaxed = true), settings = settings, memories = memories, catalogs = catalogs, files = files, platformLogout = { logout(it) })
+            service = EnterpriseExitService(sessions, sync, conversations, gate, scope, net.weero.measix.pilot.service.portal.PortalDocumentRegistry(), mockk(relaxed = true), mockk { io.mockk.coEvery { closeRealm(any()) } returns Unit }, mcp = mockk { io.mockk.coEvery { closeRealm(any()) } returns Unit }, speech = mockk(relaxed = true), platformLogout = { logout(it) })
         }
 
         fun recovery(): ApplicationRecoveryCoordinator = ApplicationRecoveryCoordinator(

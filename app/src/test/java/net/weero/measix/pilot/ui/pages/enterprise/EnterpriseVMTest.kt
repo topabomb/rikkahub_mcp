@@ -15,6 +15,53 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class EnterpriseVMTest {
+    @Test fun `platform enrollment conflict is actionable and does not expose a runtime class name`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val store = ViewModelStore()
+        try {
+            val overview = MutableStateFlow(EnterpriseOverview(
+                RealmSelection(RealmAccess.Personal, 1), EnterpriseSessionPhase.SIGNED_OUT,
+                null, null, null, null, null, null, null, false,
+            ))
+            val confirmation = EnterpriseJoinConfirmation(kotlin.uuid.Uuid.random(), "https://platform.example")
+            val service = mockk<EnterpriseApplicationService>()
+            every { service.observe() } returns overview
+            coEvery { service.join("payload") } returns confirmation
+            coEvery { service.confirmJoin(confirmation) } throws PlatformHttpException(409,
+                PlatformProblem("about:blank", "Installation is already bound to another user", 409,
+                    "installation_user_conflict"),
+                "Installation is already bound to another user")
+            val vm = EnterpriseVM(service)
+            store.put("enterprise", vm)
+            backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.error.collect {} }
+
+            vm.join("payload")
+            runCurrent()
+            vm.confirmJoin()
+            runCurrent()
+
+            assertEquals(net.weero.measix.pilot.R.string.enterprise_installation_user_conflict, vm.error.value?.resource)
+            assertEquals("HTTP 409: installation_user_conflict: Installation is already bound to another user",
+                vm.error.value?.detail)
+
+            val used = EnterpriseJoinConfirmation(kotlin.uuid.Uuid.random(), "https://platform.example")
+            coEvery { service.join("used") } returns used
+            coEvery { service.confirmJoin(used) } throws PlatformHttpException(409,
+                PlatformProblem("about:blank", "Enrollment code already used", 409, "enrollment_already_used"),
+                "Enrollment code already used")
+            vm.join("used")
+            runCurrent()
+            vm.confirmJoin()
+            runCurrent()
+            assertEquals(net.weero.measix.pilot.R.string.enterprise_enrollment_already_used, vm.error.value?.resource)
+            assertEquals("HTTP 409: enrollment_already_used: Enrollment code already used", vm.error.value?.detail)
+        } finally {
+            store.clear()
+            runCurrent()
+            Dispatchers.resetMain()
+        }
+    }
+
     @Test fun `portal failure retains actionable diagnostics and cannot overwrite a replacement request`() = runTest {
         Dispatchers.setMain(StandardTestDispatcher(testScheduler))
         val store = ViewModelStore()
@@ -23,7 +70,7 @@ class EnterpriseVMTest {
             val access = RealmAccess.Enterprise(packet.identity.scope, "session")
             val selection = RealmSelection(access, 1)
             val overview = MutableStateFlow(EnterpriseOverview(selection, EnterpriseSessionPhase.READY,
-                "Example", "Member", access, true, 1, 1000, null, null, false))
+                "Example", "Member", access, 1, 1000, null, null, false))
             val service = mockk<EnterpriseApplicationService>()
             every { service.observe() } returns overview
             val vm = EnterpriseVM(service)
@@ -51,6 +98,45 @@ class EnterpriseVMTest {
         }
     }
 
+    @Test fun `abnormal portal closure is visible while user closure is silent`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val store = ViewModelStore()
+        try {
+            val packet = exampleEnterprisePackage()
+            val access = RealmAccess.Enterprise(packet.identity.scope, "session")
+            val selection = RealmSelection(access, 1)
+            val overview = MutableStateFlow(EnterpriseOverview(selection, EnterpriseSessionPhase.READY,
+                "Example", "Member", access, 1, 1000, null, null, false))
+            val service = mockk<EnterpriseApplicationService>()
+            every { service.observe() } returns overview
+            val vm = EnterpriseVM(service)
+            store.put("enterprise", vm)
+            backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.error.collect {} }
+            runCurrent()
+
+            vm.showPortal()
+            val failed = requireNotNull(vm.portal.value)
+            vm.portalClosed(failed, net.weero.measix.pilot.service.portal.PortalClosure(
+                "document", net.weero.measix.pilot.service.portal.PortalCloseReason.HOST_FAILURE))
+            runCurrent()
+            assertNull(vm.portal.value)
+            assertEquals(net.weero.measix.pilot.R.string.enterprise_portal_open_failed, vm.error.value?.resource)
+            assertEquals(listOf("host_failure"), vm.error.value?.arguments)
+
+            vm.showPortal()
+            val dismissed = requireNotNull(vm.portal.value)
+            vm.portalClosed(dismissed, net.weero.measix.pilot.service.portal.PortalClosure(
+                "document", net.weero.measix.pilot.service.portal.PortalCloseReason.USER_REQUEST))
+            runCurrent()
+            assertNull(vm.portal.value)
+            assertNull(vm.error.value)
+        } finally {
+            store.clear()
+            runCurrent()
+            Dispatchers.resetMain()
+        }
+    }
+
     @Test fun `space changes hide prior errors and reject delayed sync failures`() = runTest {
         Dispatchers.setMain(StandardTestDispatcher(testScheduler))
         val store = ViewModelStore()
@@ -59,7 +145,7 @@ class EnterpriseVMTest {
             val access = RealmAccess.Enterprise(packet.identity.scope, "session")
             val selection = RealmSelection(access, 1)
             val overview = MutableStateFlow(EnterpriseOverview(selection, EnterpriseSessionPhase.READY,
-                "Example", "Member", access, true, 1, 1000, null, null, false))
+                "Example", "Member", access, 1, 1000, null, null, false))
             val service = mockk<EnterpriseApplicationService>()
             every { service.observe() } returns overview
             val syncing = CompletableDeferred<Unit>()
@@ -94,64 +180,4 @@ class EnterpriseVMTest {
         }
     }
 
-    @Test fun `closing an editor invalidates delayed refresh success failure and edit notice`() = runTest {
-        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
-        val store = ViewModelStore()
-        try {
-            val packet = exampleEnterprisePackage()
-            val selection = RealmSelection(RealmAccess.Enterprise(packet.identity.scope, "session"), 1)
-            val overview = MutableStateFlow(EnterpriseOverview(selection, EnterpriseSessionPhase.READY,
-                "Example", "Member", selection.access as RealmAccess.Enterprise, true, 1, 1000, null, null, false))
-            val original = LocalEnterpriseConfigurationUiModel(selection, "revision", 1,
-                packet.configuration.policy, packet.configuration.models, packet.configuration.gateways)
-            val service = mockk<EnterpriseApplicationService>()
-            every { service.observe() } returns overview
-            var reading = CompletableDeferred<LocalEnterpriseConfigurationUiModel>()
-            coEvery { service.localConfiguration(selection) } coAnswers { reading.await() }
-            val vm = EnterpriseVM(service)
-            store.put("enterprise", vm)
-            backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.error.collect {} }
-            runCurrent()
-            reading.complete(original)
-            vm.showLocalConfiguration()
-            runCurrent()
-            assertEquals(original, vm.localConfiguration.value)
-
-            reading = CompletableDeferred()
-            vm.showLocalConfiguration()
-            runCurrent()
-            vm.dismissLocalConfiguration()
-            reading.complete(original)
-            runCurrent()
-            assertNull(vm.localConfiguration.value)
-
-            reading = CompletableDeferred()
-            vm.showLocalConfiguration()
-            runCurrent()
-            vm.dismissLocalConfiguration()
-            reading.completeExceptionally(EnterpriseConfigurationException("local_enterprise_configuration_changed"))
-            runCurrent()
-            assertNull(vm.error.value)
-            assertNull(vm.localConfiguration.value)
-
-            reading = CompletableDeferred<LocalEnterpriseConfigurationUiModel>().apply { complete(original) }
-            vm.showLocalConfiguration()
-            runCurrent()
-            val editing = CompletableDeferred<LocalEnterpriseConfigurationEditResult>()
-            val change = LocalEnterpriseConfigurationChange.Policy(original.policy.copy(allowLocalMcp = false))
-            coEvery { service.changeLocalConfiguration(original, change) } coAnswers { editing.await() }
-            vm.changeLocalConfiguration(original, change)
-            runCurrent()
-            vm.dismissLocalConfiguration()
-            editing.complete(LocalEnterpriseConfigurationEditResult(original.copy(revision = "next", generation = 2), true))
-            runCurrent()
-            assertNull(vm.localConfiguration.value)
-            assertNull(vm.notice.value)
-            assertFalse(vm.busy.value)
-        } finally {
-            store.clear()
-            runCurrent()
-            Dispatchers.resetMain()
-        }
-    }
 }

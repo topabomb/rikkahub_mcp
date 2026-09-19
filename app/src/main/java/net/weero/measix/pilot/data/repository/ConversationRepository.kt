@@ -572,6 +572,9 @@ class ConversationRepository(
     internal suspend fun countUnfinishedTurns(scope: ConfigurationScope): Int =
         turnExecutionDAO.countByScopeAndStatuses(scope, RECOVERABLE_TURN_STATUSES)
 
+    internal suspend fun enterpriseScopes(): Set<ConfigurationScope.Enterprise> =
+        conversationDAO.scopes().filterIsInstance<ConfigurationScope.Enterprise>().toSet()
+
     suspend fun getToolExecutions(turnId: String): List<ToolExecutionEntity> =
         toolExecutionDAO.getByTurnId(turnId)
 

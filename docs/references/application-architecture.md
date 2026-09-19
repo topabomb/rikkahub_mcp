@@ -70,7 +70,7 @@ UI 不持有 DAO、ConversationRepository、Runtime Registry、Artifact/Generate
 | 跨文件 owner 命令与列表 | `FileManagementApplicationService` / `FileManagementQueryService`；不成为第三个文件 owner |
 | 内部 attachment handle 索引 | `AttachmentReferenceLookup`；查询投影，不是文件读取授权 |
 | 用户定义、公用与按域偏好 | `SettingsStore`；`UserSettingsDocument` 单事务提交，个人 Settings 为只读投影 |
-| 企业身份、Session 与 Applied State | `EnterpriseSessionController` 串行写入 `EnterpriseAppliedStore`；本地来源配置另归 `LocalEnterpriseSource` |
+| 企业身份、Session 与 Applied State | `EnterpriseSessionController` 串行写入 `EnterpriseAppliedStore`；平台 Discovery/Enrollment/Snapshot I/O 归 `PlatformEnterpriseService` |
 | 按域有效配置 | `ConfigurationResolver` 纯派生 `ResolvedConfiguration`；application/query ports 读取，不持久化镜像 |
 | Provider 配置与连接探测 | `ProviderSettingsApplicationService`；协调 SDK 与 SettingsStore |
 | Skill 身份、文件树与发布 | `SkillManager`；typed parse、导入、读取和可恢复目录事务 |
@@ -78,7 +78,8 @@ UI 不持有 DAO、ConversationRepository、Runtime Registry、Artifact/Generate
 | Workspace 命令、只读投影、PTY | `WorkspaceApplicationService` / `WorkspaceQueryService` / `WorkspaceTerminalRuntime`；模型与 UI mutation 共用 Workspace command gate |
 | 备份恢复请求与 archive staging | `BackupRestoreApplicationService` / `BackupArchiveService`；`PendingBackupRestore` 执行可恢复发布 |
 | 应用启动恢复与全局写门禁 | `ApplicationRecoveryCoordinator` / `ApplicationRecoveryGate` |
-| 企业退出、自动到期与内置示例数据清除 | `EnterpriseExitService`；Session manifest 仍是唯一持久状态，运行取消和终态仍经原会话 owner；平台用户退出复用 `PlatformEnterpriseService` 的刷新串行锁取得当前凭据并向 Core 注销，网络失败不阻断本机退出；显式清除复用各数据 owner 的范围命令，文件修订清完才完成退出 |
+| 企业退出与自动到期 | `EnterpriseExitService`；Session manifest 仍是唯一持久状态，运行取消和终态仍经原会话 owner；平台用户退出复用 `PlatformEnterpriseService` 的刷新串行锁取得当前凭据并向 Core 注销，网络失败不阻断本机退出 |
+| 全设备企业接入/数据格式化 | `EnterpriseDataResetService`；持久 reset intent 只协调各 owner 的企业 scope 命令，停止屏障后重新冻结范围；保留历史与清空历史共用同一可恢复状态机，个人 scope 永不进入 |
 | 生成期后台保活 | `ChatGenerationForegroundService` / `GenerationForegroundLifetime`；只消费活动投影，不拥有运行事实 |
 
 同一 durable 事实只有一个 owner 和一个写协议。禁止旁路 DAO/Repository 写入、整聚合回写、服务定位器、兼容转发和第二状态源。
@@ -143,7 +144,7 @@ pending backup restore
 
 Room/DataStore/文件协议按长期数据保全演进。结构变化必须提供显式 migration、fresh schema 同构与历史数据验证；索引随实体和 migration 维护，不由业务请求临时创建。备份先在 staging 升级和验证，成功后才发布。`BackupDataGraph` 只构建分离的个人备份或恢复 publication，复用生产 Room schema 并重建派生索引；它不成为运行时数据库或文件 owner。冷恢复由 `PendingBackupRestore` 合并最新企业图后执行既有 swap/rollback，禁止用个人包整体覆盖混合域 live 数据库。
 
-兼容只存在于明确的持久化迁移和外部协议解析边界。架构迁移同次删除旧 facade、fallback、deprecated 转发、过渡命名与无调用协议，不能以双路径掩盖不一致。未来配置或工具来源应从既有 TurnContextFactory/TurnToolSetFactory 接入，有真实消费者后再扩展合同；不预埋无消费者的 schema。本地企业交付范围与分层验收见 [Android 企业集成计划](../dev/android-enterprise-integration-plan.md)；当前 Core 平台接入与尚待验收的资源见 [真实接入执行方案](../dev/android-core-enterprise-integration-plan.md)。
+兼容只存在于明确的持久化迁移和外部协议解析边界。架构迁移同次删除旧 facade、fallback、deprecated 转发、过渡命名与无调用协议，不能以双路径掩盖不一致。未来配置或工具来源应从既有 `TurnContextFactory` / `TurnToolSetFactory` 接入，有真实消费者后再扩展合同；不预埋无消费者的 schema。当前企业接入以 [Enrollment 合同](enrollment-material-contract.md)、[配置架构](android-configuration-architecture.md)和平台 Control Protocol 为准。
 
 验证分层、失败路径、设备要求及门禁命令统一见 [测试策略](testing-strategy.md)。版本号与 changelog 仅随明确的发布需求更新。
 

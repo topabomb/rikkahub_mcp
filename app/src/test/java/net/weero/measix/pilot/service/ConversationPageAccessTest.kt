@@ -64,11 +64,15 @@ class ConversationPageAccessTest {
         val repository = mockk<ConversationRepository>()
         val coordinator = mockk<ConversationCommandCoordinator>()
         val application = application(repository, coordinator, sessions, settings)
-        val starter = base.enterpriseStarterCatalog(selection)!!.starters.first { it.target.reference.id == "str_writing" }
+        val definition = packet.configuration.starters.first { it.enabled }
+        val starter = base.enterpriseStarterCatalog(selection)!!.starters.first {
+            it.target.reference.id == definition.id
+        }
         val first = application.newStarterDraftRequest(starter.target)
         val second = application.newStarterDraftRequest(starter.target)
         assertEquals(starter.prompt, first.text)
-        assertEquals(ConfigurationReference.Enterprise(packet.identity.authority, "asd_writer"), first.request.assistantId)
+        assertEquals(ConfigurationReference.Enterprise(packet.identity.authority, definition.assistantId),
+            first.request.assistantId)
         assertEquals(selection.access, first.request.access)
         assertNotEquals(first.request.id, second.request.id)
         assertFails<IllegalStateException> { application.newStarterDraftRequest(starter.target.copy(generation = starter.target.generation + 1)) }
@@ -303,7 +307,7 @@ class ConversationPageAccessTest {
     }
 
     private fun gate() = ApplicationRecoveryGate().apply { ready() }
-    private fun sessions() = EnterpriseSessionController(EnterpriseAppliedStore(temporary.newFolder()))
+    private fun sessions() = EnterpriseSessionController(net.weero.measix.pilot.data.enterprise.enterpriseTestStore(temporary.newFolder()))
     private fun query(sessions: EnterpriseSessionController) = ConversationQueryService(
         mockk(), mockk(), mockk(), mockk(), mockk(), sessions, gate(), mockk(), mockk())
     private fun application(

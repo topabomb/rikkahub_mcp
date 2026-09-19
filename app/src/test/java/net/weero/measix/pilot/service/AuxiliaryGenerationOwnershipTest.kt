@@ -9,6 +9,7 @@ import io.mockk.mockk
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.test.*
+import kotlinx.coroutines.selects.select
 import me.rerere.ai.provider.*
 import me.rerere.ai.ui.MessageChunk
 import me.rerere.ai.ui.UIMessage
@@ -41,7 +42,7 @@ class AuxiliaryGenerationOwnershipTest {
         fixture { f ->
             val initial = f.runtime.durable
             val operation = launch { f.application.compress(f.page.commandTarget, "", 100, 0) }
-            f.started.await()
+            f.awaitStarted(operation)
             operation.cancel()
             runCurrent()
             assertFalse(operation.isCompleted)
@@ -74,7 +75,7 @@ class AuxiliaryGenerationOwnershipTest {
     @Test fun `selection switch preserves original session title but manual title wins its late reply`() = runTest {
         fixture { f ->
             val title = f.effects.launchTitle(f.runtime, f.page.access, true)
-            f.started.await()
+            f.awaitStarted(title)
             f.application.updateTitle(f.page.commandTarget, "manual")
             f.sessions.selectPersonalFixture()
             f.reply.complete("generated")
@@ -83,7 +84,7 @@ class AuxiliaryGenerationOwnershipTest {
         }
         fixture { f ->
             val title = f.effects.launchTitle(f.runtime, f.page.access, true)
-            f.started.await()
+            f.awaitStarted(title)
             f.sessions.selectPersonalFixture()
             f.reply.complete("generated")
             title.await()
@@ -94,7 +95,7 @@ class AuxiliaryGenerationOwnershipTest {
     @Test fun `summary rejects a tree edited while provider was running`() = runTest {
         fixture { f ->
             val summary = async { f.application.compress(f.page.commandTarget, "", 100, 0) }
-            f.started.await()
+            f.awaitStarted(summary)
             f.coordinator.executeOrThrow(f.runtime.id, AppendUserMessage(UIMessage.user("new input")))
             val edited = f.runtime.durable
             f.reply.complete("stale summary")
@@ -106,7 +107,7 @@ class AuxiliaryGenerationOwnershipTest {
     @Test fun `cancellation after summary commit admission still publishes the complete committed snapshot`() = runTest {
         fixture { f ->
             val operation = launch { f.application.compress(f.page.commandTarget, "", 100, 0) }
-            f.started.await()
+            f.awaitStarted(operation)
             f.onCommit = { write -> if (write is ConversationWrite.MutateTree) operation.cancel() }
             f.reply.complete("committed summary")
             operation.join()
@@ -120,7 +121,7 @@ class AuxiliaryGenerationOwnershipTest {
     @Test fun `assistant generation cancellation times out without losing auxiliary cleanup ownership`() = runTest {
         fixture { f ->
             val title = f.effects.launchTitle(f.runtime, f.page.access, true)
-            f.started.await()
+            f.awaitStarted(title)
             val stopped = async { withTimeoutOrNull(100) {
                 f.application.cancelGenerationsForAssistant(DEFAULT_ASSISTANT_ID, "assistant_removed")
                 true
@@ -165,7 +166,7 @@ class AuxiliaryGenerationOwnershipTest {
     @Test fun `assistant cleanup follows original auxiliary identity after moving the conversation`() = runTest {
         fixture { f ->
             val title = f.effects.launchTitle(f.runtime, f.page.access, true)
-            f.started.await()
+            f.awaitStarted(title)
             f.coordinator.executeOrThrow(f.runtime.id, MoveToAssistant(me.rerere.common.configuration.ConfigurationReference.random()))
             val newerWorker = Job()
             val newerTurn = Uuid.random()
@@ -201,7 +202,7 @@ class AuxiliaryGenerationOwnershipTest {
                 captured
             }
             val summary = async { f.application.compress(f.page.commandTarget, "", 100, 0) }
-            f.started.await()
+            f.awaitStarted(summary)
             f.reply.complete("replacement summary")
             assertTrue(summary.await().isFailure)
             assertEquals(initial, f.runtime.durable)
@@ -232,53 +233,15 @@ class AuxiliaryGenerationOwnershipTest {
         }
     }
 
-    @Test fun `local auxiliary requests commit title suggestions and an explicit simulated summary through original owners`() = runTest {
-        fixture(local = true) { f ->
-            f.effects.launchTitle(f.runtime, f.page.access, true).await()
-            val title = f.runtime.durable.header.title
-            assertTrue(title.isNotBlank() && title.length <= 10)
-            assertFalse(title.contains("已收到"))
-            f.effects.launchSuggestion(f.runtime, f.page.access).await()
-            val suggestions = f.runtime.durable.header.chatSuggestions
-            assertTrue(suggestions.size in 3..5)
-            assertTrue(suggestions.all { it.isNotBlank() && it.length <= 10 })
-            f.coordinator.executeOrThrow(f.runtime.id, AppendUserMessage(UIMessage.user("long context "+ "x".repeat(1000))))
-            assertTrue(f.application.compress(f.page.commandTarget, "", 100, 0).isSuccess)
-            val summary = f.runtime.durable.currentMessages().single().toText()
-            assertTrue(summary.contains("本地模拟摘要"))
-            assertTrue(summary.contains("original"))
-            assertTrue(summary.contains("其余输入已省略"))
-            assertTrue(summary.length < 600)
-            assertFalse(summary.contains("You are a conversation compression assistant"))
-            assertEquals(title, f.runtime.durable.header.title)
-            assertTrue(f.runtime.durable.header.chatSuggestions.isEmpty())
-            assertFalse(f.runtime.hasAuxiliaryWork)
-            coVerify(exactly = 0) { f.provider.generateText(any(), any(), any()) }
-        }
-    }
-
-    @Test fun `suggestion generation follows enterprise preference independently of personal preference`() = runTest {
-        fixture(local = true) { f ->
-            f.realmSuggestion = false
-            f.personalSuggestion = true
-            f.effects.launchSuggestion(f.runtime, f.page.access).await()
-            assertTrue(f.runtime.durable.header.chatSuggestions.isEmpty())
-            f.realmSuggestion = true
-            f.personalSuggestion = false
-            f.effects.launchSuggestion(f.runtime, f.page.access).await()
-            assertTrue(f.runtime.durable.header.chatSuggestions.isNotEmpty())
-        }
-    }
-
-    private suspend fun TestScope.fixture(local: Boolean = false, block: suspend (Fixture) -> Unit) {
-        val f = Fixture(this, local)
+    private suspend fun TestScope.fixture(block: suspend (Fixture) -> Unit) {
+        val f = Fixture(this)
         try { f.initialize(); block(f) }
         finally { f.reply.complete("cleanup"); f.appScope.cancel(); f.appScope.coroutineContext[Job]?.join() }
     }
 
-    private inner class Fixture(test: TestScope, local: Boolean) {
+    private inner class Fixture(test: TestScope) {
         val appScope = AppScope(StandardTestDispatcher(test.testScheduler))
-        val sessions = EnterpriseSessionController(EnterpriseAppliedStore(temporary.newFolder()))
+        val sessions = EnterpriseSessionController(net.weero.measix.pilot.data.enterprise.enterpriseTestStore(temporary.newFolder()))
         val repository = mockk<ConversationRepository>()
         val settings = mockk<SettingsStore>()
         val artifacts = mockk<ArtifactStore>()
@@ -295,16 +258,9 @@ class AuxiliaryGenerationOwnershipTest {
         var onCommit: (ConversationWrite) -> Unit = {}
         var personalSuggestion = true
         var realmSuggestion = true
-        private val sourceRoot = temporary.newFolder()
-        private val source = net.weero.measix.pilot.data.enterprise.LocalEnterpriseSource(
-            { net.weero.measix.pilot.data.enterprise.EnterprisePackageCodec.encode(exampleEnterprisePackage()).inputStream() }, sessions,
-            net.weero.measix.pilot.data.enterprise.LocalEnrollmentAuthority(sourceRoot),
-            { net.weero.measix.pilot.data.enterprise.EnterprisePackageCodec.json.encodeToString(
-                net.weero.measix.pilot.data.enterprise.EnterpriseIdentity.serializer(), exampleEnterprisePackage().identity).byteInputStream() },
-            net.weero.measix.pilot.data.enterprise.LocalEnterpriseConfigurationStore(sourceRoot),
-        )
-        val actualModels = ModelExecutionService(settings, sessions, gate, manager, source, appScope,
-            EnterpriseSynchronizationService(sessions, source, appScope, net.weero.measix.pilot.service.PlatformEnterpriseService(sessions, net.weero.measix.pilot.data.enterprise.PlatformControlClient(okhttp3.OkHttpClient()))), io.mockk.mockk())
+        private val platformService = mockk<PlatformEnterpriseService>()
+        private val synchronization = mockk<EnterpriseSynchronizationService>()
+        val actualModels = ModelExecutionService(settings, sessions, gate, manager, appScope, synchronization, platformService)
         val models = spyk(actualModels)
         val effects = GenerationSideEffects(context, appScope, models, manager, registry,
             coordinator, mockk(), JsonInstant, ChatErrorStore(), titles, sessions)
@@ -321,22 +277,24 @@ class AuxiliaryGenerationOwnershipTest {
             val model = Model(modelId = "test")
             val configuration = Settings(providers = listOf(ProviderSetting.OpenAI(models = listOf(model))),
                 chatModelId = model.id, titleModelId = model.id, suggestionModelId = model.id,
-                compressModelId = model.id, enableSuggestion = true).let {
-                if (local) it.copy(titlePrompt = "custom 查看企业公告 {content}", suggestionPrompt = "custom 查看企业公告 {content}") else it
-            }
+                compressModelId = model.id, enableSuggestion = true)
             every { settings.userSettings } returns MutableStateFlow(configuration)
             net.weero.measix.pilot.test.installExecutionConfigurationFixture(settings)
             coEvery { settings.withExecutionConfiguration<Any?>(any(), any(), any()) } coAnswers {
                 val scope = firstArg<net.weero.measix.pilot.data.configuration.ConfigurationScope>()
                 val document = UserSettingsDocument.empty().withPersonalSettings(configuration).let { document ->
                     document.copy(preferences = document.preferences.withSelections(scope,
-                        (if (local) ResourceSelections() else document.preferences.forScope(net.weero.measix.pilot.data.configuration.ConfigurationScope.Personal)).copy(enableSuggestion = realmSuggestion)))
+                        document.preferences.forScope(net.weero.measix.pilot.data.configuration.ConfigurationScope.Personal)
+                            .copy(enableSuggestion = realmSuggestion)))
                 }
                 thirdArg<suspend (ExecutionConfigurationSnapshot) -> Any?>()(ExecutionConfigurationSnapshot(
                     configuration.copy(enableSuggestion = personalSuggestion), net.weero.measix.pilot.data.configuration.ConfigurationResolver.resolve(document, scope, secondArg()), "fixture"))
             }
             every { provider.requestMediaCapabilities(any(), any()) } returns RequestMediaCapabilities.NONE
             every { manager.getProviderByType(any<ProviderSetting>()) } returns provider
+            coEvery { synchronization.prepareExecution(any()) } coAnswers {
+                requireNotNull((sessions.state.value as EnterpriseState.Available).manifest.applied)
+            }
             every { context.getString(any()) } returns "operation failed"
             coEvery { provider.generateText(any(), any(), any()) } coAnswers {
                 started.complete(Unit)
@@ -353,9 +311,19 @@ class AuxiliaryGenerationOwnershipTest {
         }
 
         suspend fun initialize() {
-            source.enrollExample()
+            sessions.enrollFixture(exampleEnterprisePackage())
             runtime = registry.registerSnapshot(initial)
             page = ConversationViewLease(runtime.id, sessions.captureSelectedRealmAccess(), sessions.selectionRevision.value) {}
+        }
+
+        suspend fun awaitStarted(worker: Job) {
+            select<Unit> {
+                started.onAwait { }
+                worker.onJoin {
+                    (worker as? Deferred<*>)?.await()
+                    error("auxiliary_generation_completed_before_provider_request")
+                }
+            }
         }
     }
 }

@@ -20,7 +20,7 @@ internal object PlatformWireCodec {
     val json = Json { encodeDefaults = true; explicitNulls = false }
 
     inline fun <reified T> decode(raw: String): T {
-        val element = StrictJsonValue.parse(raw, EnterprisePackageCodec.MAX_BYTES)
+        val element = StrictJsonValue.parse(raw, EnterpriseConfigurationCodec.MAX_BYTES)
         requireTypes(element, serializer<T>().descriptor)
         return json.decodeFromJsonElement(element)
     }

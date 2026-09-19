@@ -116,6 +116,17 @@ internal class PlatformControlClient(client: OkHttpClient) {
             .readResponse { requireStatus(it, 204) }
     }
 
+    suspend fun createPortalGrant(connection: PlatformConnection, accessToken: String): PlatformPortalGrant {
+        val httpRequest = builder(connection.control("/portal/grants"), accessToken)
+            .post(ByteArray(0).toRequestBody(null)).build().withSingleAttemptBody()
+        return request<PlatformPortalGrant>(httpRequest, 201, callTimeoutSeconds = 15).also { grant ->
+            require(grant.exchangeUrl == connection.origin + "/portal/session/exchange") {
+                "platform_portal_exchange_url_mismatch"
+            }
+            require(grant.ticket.isNotBlank() && grant.ticket.length <= 128) { "invalid_platform_PortalGrant_ticket" }
+        }
+    }
+
     suspend fun logout(connection: PlatformConnection, refreshToken: String) {
         client.newCall(post(connection.control("/sessions/logout"), PlatformRefreshRequest(refreshToken))).also {
             it.timeout().timeout(15, java.util.concurrent.TimeUnit.SECONDS)
@@ -140,7 +151,7 @@ internal class PlatformControlClient(client: OkHttpClient) {
 
     private fun body(response: Response): String {
         val source = response.body.source()
-        if (source.request(EnterprisePackageCodec.MAX_BYTES.toLong() + 1)) throw IOException("platform_response_too_large")
+        if (source.request(EnterpriseConfigurationCodec.MAX_BYTES.toLong() + 1)) throw IOException("platform_response_too_large")
         return source.readUtf8()
     }
 
@@ -150,6 +161,7 @@ internal class PlatformControlClient(client: OkHttpClient) {
         val problem = try { PlatformWireCodec.decode<PlatformProblem>(raw) }
             catch (_: IllegalArgumentException) { null }
             catch (_: IllegalStateException) { null }
-        throw PlatformHttpException(response.code, problem, problem?.detail ?: raw.ifBlank { response.message })
+        throw PlatformHttpException(response.code, problem,
+            problem?.detail ?: problem?.title ?: raw.ifBlank { response.message })
     }
 }

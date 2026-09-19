@@ -250,6 +250,9 @@ class GeneratedMediaStore(
         }
     }
 
+    internal suspend fun enterpriseScopes(): Set<ConfigurationScope.Enterprise> =
+        genMediaRepository.enterpriseScopes()
+
     /** Scope removal reuses row deletion and its recoverable payload receipt. */
     internal suspend fun clearEnterpriseScope(scope: ConfigurationScope.Enterprise) = withPersistLock {
         withContext(Dispatchers.IO) {

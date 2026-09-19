@@ -530,11 +530,11 @@ class ConversationApplicationService internal constructor(
         }
     }
 
-    /** CLOSING owns this maintenance request, including cold recovery before the application gate opens. */
-    internal suspend fun clearEnterpriseData(token: net.weero.measix.pilot.data.enterprise.EnterpriseExitToken) {
-        require(token.reason == net.weero.measix.pilot.data.enterprise.EnterpriseExitReason.CLEAR_EXAMPLE_DATA)
-        requireEnterpriseStopped(token)
-        val scope = token.access.scope
+    internal suspend fun enterpriseScopes(): Set<net.weero.measix.pilot.data.configuration.ConfigurationScope.Enterprise> =
+        conversationRepo.enterpriseScopes() + folderRepository.enterpriseScopes()
+
+    /** The reset coordinator owns the stop barrier before invoking this scope command. */
+    internal suspend fun clearEnterpriseScope(scope: net.weero.measix.pilot.data.configuration.ConfigurationScope.Enterprise) {
         conversationRepo.getRootIds(scope).forEach { id ->
             val childIds = conversationRepo.getChildConversationIds(id)
             commandCoordinator.deleteFromPendingCleanup(id)

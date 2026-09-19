@@ -54,7 +54,7 @@ class PlatformMcpProtocolTest {
         val digest = definition.mcpDefinitionDigest()
         val http = HttpClient(OkHttp)
         val factory = McpProtocolClientFactory(createHttpClient = { error("personal transport") },
-            createManagedHttpClient = { http }, createLocalHttpClient = { error("local transport") })
+            createManagedHttpClient = { http })
         val client = factory.createClient(definition)
         try {
             withTimeout(10_000) {

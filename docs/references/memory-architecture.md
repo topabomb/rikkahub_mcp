@@ -4,7 +4,7 @@
 
 ## 持久归属
 
-MemoryAddress 包含不可变 ConfigurationScope 和 MemoryOwner。RealmShared 使用既有 `__global__` 存储值，含义是该域主体内共享；Assistant 使用稳定 ConfigurationReference。个人、本地企业、平台企业以及同部署的不同用户不能共享运行记忆行。
+`MemoryAddress` 包含不可变 `ConfigurationScope` 和 `MemoryOwner`。`RealmShared` 使用既有 `__global__` 存储值，含义是该域主体内共享；Assistant 使用稳定 `ConfigurationReference`。个人与企业、不同企业来源以及同部署的不同用户不能共享运行记忆行。
 
 MemoryDAO 的列表、读取、更新、删除均含 scope 和 owner，单行修改还要求 id；列表按 id 升序。工具结果定位仅允许在明确 scope 内按 id 查到 canonical owner，再以完整地址写入，没有跨域裸 ID 删除。已有 schema 12 和旧个人行不变；当前 assistant_id 索引用于缩小 namespace 查询，再应用 scope 条件。
 
@@ -28,4 +28,4 @@ Master 的 START 使用会话持久 scope 捕获 RealmAccess；Child 继承父�
 
 聊天中的当前空间助手设置使用 `MemoryService.observe(ConversationViewLease, assistantId)` 绑定打开时的会话目标，切域再返回也不能恢复旧编辑授权；不另设企业助手目录或第二套记忆页面。
 `ConversationConfigurationUiModel.memorySeeds` 单独投影当前会话助手的公开 Seed，更新 Seed 不回写运行记忆；`AssistantUsageEditor` 在记忆子页分开显示只读 Seed 与实际助手专用/空间共享地址中的运行记忆。
-共享助手定义页面的默认设置与当前空间的运行记忆分别标明范围。完整交付与真实平台限制见 [本期实施方案](../dev/android-enterprise-integration-plan.md)。
+共享助手定义页面的默认设置与当前空间的运行记忆分别标明范围。企业 Realm 与运行边界由本文、[应用架构](application-architecture.md)和[配置架构](android-configuration-architecture.md)共同约束。

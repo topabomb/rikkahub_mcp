@@ -313,6 +313,11 @@ class McpCatalogStore internal constructor(
         headTokens[key] = (headTokens[key] ?: 0L) + 1L
     }
 
+    /** Reset scope discovery reads the durable catalog under the same writer as removal. */
+    internal suspend fun enterpriseScopes(): Set<ConfigurationScope.Enterprise> = commit {
+        readCurrentCatalogs().keys.mapNotNull { it.scope as? ConfigurationScope.Enterprise }.toSet()
+    }
+
     /** Domain removal reads the durable catalog under the existing writer, including hidden entries. */
     internal suspend fun clearEnterpriseScope(scope: ConfigurationScope.Enterprise) = commit {
         val current = readCurrentCatalogs()

@@ -3,21 +3,13 @@ import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 import org.jetbrains.kotlin.gradle.tasks.KotlinCompile
 import org.gradle.api.DefaultTask
 import org.gradle.api.file.DirectoryProperty
-import org.gradle.api.file.RegularFileProperty
 import org.gradle.api.provider.Property
 import org.gradle.api.tasks.Input
 import org.gradle.api.tasks.InputDirectory
-import org.gradle.api.tasks.InputFile
-import org.gradle.api.tasks.Internal
-import org.gradle.api.tasks.OutputDirectory
 import org.gradle.api.tasks.TaskAction
 import java.io.File
 import java.io.FileInputStream
 import java.util.Properties
-import java.security.MessageDigest
-import java.nio.file.Files
-import groovy.json.JsonOutput
-import groovy.json.JsonSlurper
 
 abstract class RenameApkTask : DefaultTask() {
     @get:Input
@@ -43,85 +35,6 @@ plugins {
     alias(libs.plugins.baselineprofile)
 }
 
-abstract class PrepareEnterpriseExampleAssets : DefaultTask() {
-    @get:InputFile
-    abstract val exampleFile: RegularFileProperty
-
-    @get:OutputDirectory
-    abstract val outputDirectory: DirectoryProperty
-
-    @TaskAction
-    fun prepare() {
-        val directory = outputDirectory.get().asFile
-        directory.mkdirs()
-        exampleFile.get().asFile.copyTo(File(directory, "enterprise.local.example.json"), overwrite = true)
-        val example = JsonSlurper().parse(exampleFile.get().asFile) as Map<*, *>
-        val identity = requireNotNull(example["identity"]) { "Public enterprise example must declare its installed identity" }
-        File(directory, "enterprise.local.identity.json").writeText(JsonOutput.toJson(identity), Charsets.UTF_8)
-    }
-}
-
-// Package only the public example; private local imports never become build inputs.
-val enterpriseExampleAssets = tasks.register<PrepareEnterpriseExampleAssets>("prepareEnterpriseExampleAssets") {
-    exampleFile.set(rootProject.layout.projectDirectory.file("docs/examples/enterprise.local.example.json"))
-    outputDirectory.set(layout.buildDirectory.dir("generated/enterpriseExampleAssets"))
-}
-
-abstract class PrepareEnterprisePortalAssets : DefaultTask() {
-    @get:InputDirectory
-    abstract val bundleDirectory: DirectoryProperty
-
-    @get:OutputDirectory
-    abstract val outputDirectory: DirectoryProperty
-
-    @get:Internal
-    abstract val buildDirectory: DirectoryProperty
-
-    @TaskAction
-    fun prepare() {
-        val bundle = bundleDirectory.get().asFile.canonicalFile
-        val identity = JsonSlurper().parse(File(bundle, "build-identity.json")) as Map<*, *>
-        require(identity["sourceKind"] == "local" && identity["bridgeVersion"] == 3 && identity["localReadVersion"] == 2 &&
-            identity["origin"] == "https://local.measix.invalid") { "Unsupported enterprise Portal bundle" }
-        val assets = identity["assets"] as Map<*, *>
-        require(assets.containsKey("index.html")) { "Portal entry is missing" }
-        val files = bundle.walkTopDown().onEnter {
-            require(!Files.isSymbolicLink(it.toPath())) { "Portal bundle contains a symlink" }
-            true
-        }.filter { it.isFile }.toList()
-        require(files.map { it.relativeTo(bundle).invariantSeparatorsPath }.toSet() == assets.keys + "build-identity.json") {
-            "Portal bundle has missing or unlisted files"
-        }
-        assets.forEach { (key, value) ->
-            val name = key as String
-            require(!name.startsWith('/') && '\\' !in name && ':' !in name && name.split('/').none { it in setOf("", ".", "..") }) {
-                "Unsafe Portal asset path"
-            }
-            val file = File(bundle, name)
-            require(!Files.isSymbolicLink(file.toPath()) && file.canonicalFile.toPath().startsWith(bundle.toPath())) { "Unsafe Portal asset" }
-            val digest = MessageDigest.getInstance("SHA-256").digest(file.readBytes()).joinToString("") { "%02x".format(it) }
-            require(digest == value) { "Portal asset digest mismatch: $name" }
-        }
-        val output = outputDirectory.get().asFile
-        val outputPath = output.canonicalFile.toPath()
-        val buildPath = buildDirectory.get().asFile.canonicalFile.toPath()
-        require(outputPath != buildPath && outputPath.startsWith(buildPath)) { "Portal output must be inside the build directory" }
-        if (output.exists()) check(output.deleteRecursively()) { "Cannot replace generated Portal assets" }
-        val target = File(output, "enterprise_portal")
-        files.forEach { file ->
-            val copy = File(target, file.relativeTo(bundle).path)
-            copy.parentFile.mkdirs()
-            file.copyTo(copy)
-        }
-    }
-}
-
-val enterprisePortalAssets = tasks.register<PrepareEnterprisePortalAssets>("prepareEnterprisePortalAssets") {
-    bundleDirectory.set(layout.projectDirectory.dir("src/main/enterprisePortal"))
-    outputDirectory.set(layout.buildDirectory.dir("generated/enterprisePortalAssets"))
-    buildDirectory.set(layout.buildDirectory)
-}
-
 android {
     namespace = "net.weero.measix.pilot"
     compileSdk = 37
@@ -141,7 +54,6 @@ android {
     }
 
     sourceSets {
-        getByName("test").resources.srcDir(layout.buildDirectory.dir("generated/enterpriseExampleAssets").get().asFile)
         // Room MigrationTestHelper（androidTest 插桩迁移测试）需要 schema JSON 作为插桩测试 assets
         getByName("androidTest").assets.srcDirs("$projectDir/schemas")
     }
@@ -242,12 +154,6 @@ android {
         compilerOptions.optIn.add("kotlin.time.ExperimentalTime")
         compilerOptions.optIn.add("kotlinx.coroutines.ExperimentalCoroutinesApi")
     }
-}
-
-tasks.named("preBuild").configure { dependsOn(enterpriseExampleAssets) }
-androidComponents.onVariants { variant ->
-    variant.sources.assets?.addGeneratedSourceDirectory(enterpriseExampleAssets, PrepareEnterpriseExampleAssets::outputDirectory)
-    variant.sources.assets?.addGeneratedSourceDirectory(enterprisePortalAssets, PrepareEnterprisePortalAssets::outputDirectory)
 }
 
 // Rename APK output: app-arm64-v8a-release.apk → MeasixPilot_<version>_arm64-v8a-release.apk

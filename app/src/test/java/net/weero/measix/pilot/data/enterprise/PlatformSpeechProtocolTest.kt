@@ -41,7 +41,7 @@ class PlatformSpeechProtocolTest {
                     EnterpriseAsrProtocol.DASHSCOPE, sampleRate = 16000, vadThreshold = 0.5, silenceDurationMs = 400)
                 val (execution, version) = route(server, resource.id)
                 val reference = me.rerere.common.configuration.ConfigurationReference.Enterprise(execution.connection.authority, resource.id)
-                val target = EnterpriseSpeechTransport({ _, _ -> error("local transport used") })
+                val target = EnterpriseSpeechTransport()
                     .platformRealtimeTarget(execution, reference, resource, version, "int_${Uuid.random()}", "realtime-token")
                 assertEquals(resource.modelId, target.request.url.queryParameter("model"))
                 assertEquals(server.address.port, target.request.url.port)
@@ -70,7 +70,7 @@ class PlatformSpeechProtocolTest {
             server { server, received ->
                 val definition = EnterpriseTtsResource("tts_${Uuid.random()}", "Speech", true, protocol,
                     modelId = "test-model", voice = "test-voice")
-                val transport = EnterpriseSpeechTransport({ _, _ -> error("local transport used") })
+                val transport = EnterpriseSpeechTransport()
                 val (execution, version) = route(server, definition.id)
                 val reference = me.rerere.common.configuration.ConfigurationReference.Enterprise(execution.connection.authority, definition.id)
                 val target = transport.platformTarget(execution, reference, version, "int_${Uuid.random()}", "speech-token")
@@ -98,7 +98,7 @@ class PlatformSpeechProtocolTest {
             val resource = EnterpriseAsrResource("asr_${Uuid.random()}", "Transcription", true, "qwen-asr", "zh", EnterpriseAsrProtocol.DASHSCOPE_HTTP)
             val (execution, version) = route(server, resource.id)
             val reference = me.rerere.common.configuration.ConfigurationReference.Enterprise(execution.connection.authority, resource.id)
-            val transport = EnterpriseSpeechTransport({ _, _ -> error("local transport used") })
+            val transport = EnterpriseSpeechTransport()
             val audio = temporary.newFile().apply { writeBytes(byteArrayOf(0, 1, 2, 3)) }
             assertEquals("recognized", transport.transcribe(transport.platformTarget(execution, reference, version,
                 "int_${Uuid.random()}", "asr-token"), resource, audio))

@@ -17,13 +17,11 @@ import kotlinx.coroutines.ensureActive
 internal class McpProtocolClientFactory(
     createHttpClient: () -> HttpClient,
     private val createManagedHttpClient: () -> HttpClient,
-    private val createLocalHttpClient: () -> HttpClient,
     private val transportOverride: ((McpServerConfig) -> AbstractTransport)? = null,
     private val clientOverride: ((McpServerConfig) -> Client)? = null,
 ) {
     private val httpClient by lazy(LazyThreadSafetyMode.SYNCHRONIZED, createHttpClient)
     private val managedHttpClient by lazy(LazyThreadSafetyMode.SYNCHRONIZED, createManagedHttpClient)
-    private val localHttpClient by lazy(LazyThreadSafetyMode.SYNCHRONIZED, createLocalHttpClient)
 
     suspend fun createTransport(definition: McpConnectionDefinition): AbstractTransport {
         currentCoroutineContext().ensureActive()
@@ -39,15 +37,6 @@ internal class McpProtocolClientFactory(
                 currentCoroutineContext().ensureActive()
                 McpStreamableHttpTransport(url = definition.url, client = shared, managed = true,
                     requestHeaders = definition::requestHeaders)
-            }
-            is McpConnectionDefinition.ManagedLocal -> {
-                val local = definition.binding.protocol == net.weero.measix.pilot.data.enterprise.EnterpriseRuntimeProtocol.EXAMPLE
-                val shared = if (local) localHttpClient else managedHttpClient
-                currentCoroutineContext().ensureActive()
-                McpStreamableHttpTransport(url = definition.url, client = shared, managed = true, requestBuilder = {
-                    definition.headers.forEach { (key, value) -> headers.append(key, value) }
-                    if (local) attributes.put(LocalMcpRequestDefinition, definition)
-                })
             }
         }
     }
@@ -74,8 +63,6 @@ internal class McpProtocolClientFactory(
         }
     }
 }
-
-internal val LocalMcpRequestDefinition = io.ktor.util.AttributeKey<McpConnectionDefinition.ManagedLocal>("LocalMcpRequestDefinition")
 
 /** Shared protocol failure classification used by lifecycle and invocation execution. */
 internal object McpProtocolFailureClassifier {

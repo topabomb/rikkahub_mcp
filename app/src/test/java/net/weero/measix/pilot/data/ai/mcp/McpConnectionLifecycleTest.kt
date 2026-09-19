@@ -301,7 +301,6 @@ internal class McpConnectionLifecycleTest : McpRuntimeCoordinatorTestBase() {
         )
         val gatedManager = McpRuntimeCoordinator(
             sessions = io.mockk.mockk(),
-            localMcp = io.mockk.mockk(),
             synchronization = io.mockk.mockk(),
             settingsStore = settingsStore,
             catalogStore = catalogStore,
@@ -348,7 +347,6 @@ internal class McpConnectionLifecycleTest : McpRuntimeCoordinatorTestBase() {
         effective.snapshot = snapshotOf(listOf(serverConfig(url = "https://a.example/mcp", oauth = expiredOauth)))
         val gatedManager = McpRuntimeCoordinator(
             sessions = io.mockk.mockk(),
-            localMcp = io.mockk.mockk(),
             synchronization = io.mockk.mockk(),
             settingsStore = settingsStore,
             catalogStore = catalogStore,

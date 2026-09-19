@@ -126,14 +126,14 @@ class PlatformSnapshotMapperTest {
     @Test fun `platform candidate survives the single manifest publication and store recreation`() {
         val candidate = map(snapshot("v4-speech"))
         val folder = temporary.newFolder()
-        val store = EnterpriseAppliedStore(folder)
+        val store = net.weero.measix.pilot.data.enterprise.enterpriseTestStore(folder)
         val version = store.prepare(candidate)
         val session = EnterpriseSession("ses_12345678-1234-4234-8234-123456789012", identity, 2000000000000L)
         val manifest = EnterpriseManifest(ENTERPRISE_MANIFEST_SCHEMA_VERSION, EnterpriseSessionPhase.READY,
             session, version, identity.scope, identity)
         assertNull(store.load().configuration)
         store.commit(manifest)
-        val reopened = EnterpriseAppliedStore(folder)
+        val reopened = net.weero.measix.pilot.data.enterprise.enterpriseTestStore(folder)
         assertEquals(candidate.configuration, reopened.load().configuration)
         assertEquals(candidate.execution, reopened.execution(manifest))
         assertTrue(reopened.execution(manifest) is EnterpriseExecution.Platform)
@@ -141,7 +141,7 @@ class PlatformSnapshotMapperTest {
 
     @Test fun `same generation cannot replace the published platform hash`() = runBlocking {
         val candidate = map(snapshot())
-        val store = EnterpriseAppliedStore(temporary.newFolder())
+        val store = net.weero.measix.pilot.data.enterprise.enterpriseTestStore(temporary.newFolder())
         val version = store.prepare(candidate)
         val session = EnterpriseSession("ses_12345678-1234-4234-8234-123456789012", identity, 2000000000000L)
         store.commit(EnterpriseManifest(ENTERPRISE_MANIFEST_SCHEMA_VERSION, EnterpriseSessionPhase.READY,

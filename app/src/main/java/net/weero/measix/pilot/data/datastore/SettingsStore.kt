@@ -366,6 +366,10 @@ class SettingsStore internal constructor(
         }
     }
 
+    /** Returns every enterprise realm that still owns scoped preferences. */
+    internal suspend fun enterpriseScopes(): Set<ConfigurationScope.Enterprise> =
+        snapshotUserDocument().preferences.scopes.mapNotNull { it.scope as? ConfigurationScope.Enterprise }.toSet()
+
     /** Called only after enterprise admission is durably closed; shared user definitions remain intact. */
     internal suspend fun clearEnterprisePreferences(scope: ConfigurationScope.Enterprise) = updateMutex.withLock {
         commitUserDocument { document ->

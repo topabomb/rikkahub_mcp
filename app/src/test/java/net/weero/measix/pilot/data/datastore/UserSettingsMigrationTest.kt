@@ -43,7 +43,7 @@ class UserSettingsMigrationTest {
 
     @Test
     fun `user directory rejects enterprise identities and nested bindings on write and decode`() {
-        val reference = ConfigurationReference.Enterprise(EnterpriseAuthority("local:example", "dep_example"), "mdl_example")
+        val reference = ConfigurationReference.Enterprise(EnterpriseAuthority("platform:example", "dep_example"), "mdl_example")
         val original = golden()
         val invalid = listOf(
             original.copy(providers = original.providers.mapIndexed { i, provider ->
@@ -73,7 +73,7 @@ class UserSettingsMigrationTest {
         assertThrows(IllegalArgumentException::class.java) {
             JsonInstant.decodeFromString<UserSettingsDocument>(encoded)
         }
-        val other = ConfigurationScope.Enterprise(EnterpriseAuthority("local:another", "dep_example"), "usr_one")
+        val other = ConfigurationScope.Enterprise(EnterpriseAuthority("platform:another", "dep_example"), "usr_one")
         assertThrows(IllegalArgumentException::class.java) {
             UserPreferences(scopes = listOf(ScopedUserPreferences(other, ResourceSelections(chatModelId = reference))))
         }
@@ -159,7 +159,7 @@ class UserSettingsMigrationTest {
 
     @Test
     fun `personal updates preserve another principal preferences and never copy its resources`() {
-        val authority = EnterpriseAuthority("local:example", "dep_example")
+        val authority = EnterpriseAuthority("platform:example", "dep_example")
         val enterprise = ScopedUserPreferences(
             ConfigurationScope.Enterprise(authority, "usr_one"),
             ResourceSelections(chatModelId = ConfigurationReference.Enterprise(authority, "mdl_example")),
@@ -181,14 +181,14 @@ class UserSettingsMigrationTest {
 
     @Test
     fun `gateway preferences require one matching enterprise principal and reject duplicate resource entries`() {
-        val authority = EnterpriseAuthority("local:example", "dep_example")
+        val authority = EnterpriseAuthority("platform:example", "dep_example")
         val scope = ConfigurationScope.Enterprise(authority, "alice")
         val preference = GatewayPreference(ConfigurationReference.Enterprise(authority, "gw_example"), false)
         assertThrows(IllegalArgumentException::class.java) {
             ScopedUserPreferences(ConfigurationScope.Personal, gateways = listOf(preference))
         }
         assertThrows(IllegalArgumentException::class.java) {
-            ScopedUserPreferences(scope.copy(authority = authority.copy(sourceNamespace = "platform:example")), gateways = listOf(preference))
+            ScopedUserPreferences(scope.copy(authority = authority.copy(sourceNamespace = "platform:other")), gateways = listOf(preference))
         }
         assertThrows(IllegalArgumentException::class.java) {
             ScopedUserPreferences(scope, gateways = listOf(preference, preference))

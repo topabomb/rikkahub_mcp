@@ -1,17 +1,9 @@
 {
   "now": "2030-01-01T00:00:00Z",
-  "installedSources": [
-    "local.example"
-  ],
   "cases": [
     {
       "name": "platform",
       "raw": "{\"formatVersion\":1,\"kind\":\"PLATFORM_ENROLLMENT\",\"platformUrl\":\"https://platform.example\",\"code\":\"fixture-enrollment-code\",\"expiresAt\":\"2030-01-01T00:10:00Z\"}",
-      "result": "valid"
-    },
-    {
-      "name": "local",
-      "raw": "{\"formatVersion\":1,\"kind\":\"LOCAL_EXAMPLE_ENROLLMENT\",\"sourceNamespace\":\"local.example\",\"deploymentId\":\"dep_example\",\"code\":\"fixture-local-code\",\"expiresAt\":\"2030-01-01T00:10:00Z\"}",
       "result": "valid"
     },
     {
@@ -41,12 +33,7 @@
     },
     {
       "name": "wrong-kind",
-      "raw": "{\"formatVersion\":1,\"kind\":\"PLATFORM_ENROLLMENT\",\"sourceNamespace\":\"local.example\",\"deploymentId\":\"dep_example\",\"code\":\"fixture-local-code\",\"expiresAt\":\"2030-01-01T00:10:00Z\"}",
-      "result": "invalid"
-    },
-    {
-      "name": "missing-code",
-      "raw": "{\"formatVersion\":1,\"kind\":\"LOCAL_EXAMPLE_ENROLLMENT\",\"sourceNamespace\":\"local.example\",\"deploymentId\":\"dep_example\",\"expiresAt\":\"2030-01-01T00:10:00Z\"}",
+      "raw": "{\"formatVersion\":1,\"kind\":\"UNKNOWN_ENROLLMENT\",\"platformUrl\":\"https://platform.example\",\"code\":\"fixture-enrollment-code\",\"expiresAt\":\"2030-01-01T00:10:00Z\"}",
       "result": "invalid"
     },
     {
@@ -65,16 +52,6 @@
       "result": "invalid"
     },
     {
-      "name": "invalid-date",
-      "raw": "{\"formatVersion\":1,\"kind\":\"LOCAL_EXAMPLE_ENROLLMENT\",\"sourceNamespace\":\"local.example\",\"deploymentId\":\"dep_example\",\"code\":\"fixture-local-code\",\"expiresAt\":\"2030-02-30T00:00:00Z\"}",
-      "result": "invalid"
-    },
-    {
-      "name": "old-local-format",
-      "raw": "{\"formatVersion\":1,\"sourceNamespace\":\"local.example\",\"deploymentId\":\"dep_example\",\"userId\":\"u\",\"enrollmentCode\":\"c\",\"expiresAtMillis\":1893456600000}",
-      "result": "invalid"
-    },
-    {
       "name": "over-byte-limit",
       "raw": "{\"formatVersion\":1,\"kind\":\"PLATFORM_ENROLLMENT\",\"platformUrl\":\"https://platform.example\",\"code\":\"测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测测\",\"expiresAt\":\"2030-01-01T00:10:00Z\"}",
       "result": "invalid"
@@ -85,38 +62,13 @@
       "result": "expired"
     },
     {
-      "name": "unknown-local-source",
-      "raw": "{\"formatVersion\":1,\"kind\":\"LOCAL_EXAMPLE_ENROLLMENT\",\"sourceNamespace\":\"not-installed\",\"deploymentId\":\"dep_example\",\"code\":\"fixture-local-code\",\"expiresAt\":\"2030-01-01T00:10:00Z\"}",
-      "result": "unknown_source"
-    },
-    {
-      "name": "local-cannot-target-network",
-      "raw": "{\"formatVersion\":1,\"kind\":\"LOCAL_EXAMPLE_ENROLLMENT\",\"sourceNamespace\":\"local.example\",\"deploymentId\":\"dep_example\",\"code\":\"fixture-local-code\",\"expiresAt\":\"2030-01-01T00:10:00Z\",\"platformUrl\":\"https://platform.example\"}",
-      "result": "invalid"
-    },
-    {
       "name": "bare-code",
       "raw": "fixture-enrollment-code",
       "result": "invalid"
     },
     {
-      "name": "trailing-json",
-      "raw": "{\"formatVersion\":1,\"kind\":\"LOCAL_EXAMPLE_ENROLLMENT\",\"sourceNamespace\":\"local.example\",\"deploymentId\":\"dep_example\",\"code\":\"fixture-local-code\",\"expiresAt\":\"2030-01-01T00:10:00Z\"}{}",
-      "result": "invalid"
-    },
-    {
-      "name": "local-utc-zero-offset",
-      "raw": "{\"formatVersion\":1,\"kind\":\"LOCAL_EXAMPLE_ENROLLMENT\",\"sourceNamespace\":\"local.example\",\"deploymentId\":\"dep_example\",\"code\":\"fixture-local-code\",\"expiresAt\":\"2030-01-01T00:10:00+00:00\"}",
-      "result": "valid"
-    },
-    {
       "name": "platform-utc-zero-offset",
       "raw": "{\"formatVersion\":1,\"kind\":\"PLATFORM_ENROLLMENT\",\"platformUrl\":\"https://platform.example\",\"code\":\"fixture-enrollment-code\",\"expiresAt\":\"2030-01-01T00:10:00+00:00\"}",
-      "result": "valid"
-    },
-    {
-      "name": "local-utc-lowercase",
-      "raw": "{\"formatVersion\":1,\"kind\":\"LOCAL_EXAMPLE_ENROLLMENT\",\"sourceNamespace\":\"local.example\",\"deploymentId\":\"dep_example\",\"code\":\"fixture-local-code\",\"expiresAt\":\"2030-01-01t00:10:00z\"}",
       "result": "valid"
     },
     {
@@ -125,28 +77,13 @@
       "result": "valid"
     },
     {
-      "name": "local-nanoseconds",
-      "raw": "{\"formatVersion\":1,\"kind\":\"LOCAL_EXAMPLE_ENROLLMENT\",\"sourceNamespace\":\"local.example\",\"deploymentId\":\"dep_example\",\"code\":\"fixture-local-code\",\"expiresAt\":\"2030-01-01T00:10:00.123456789Z\"}",
-      "result": "valid"
-    },
-    {
       "name": "platform-nanoseconds",
       "raw": "{\"formatVersion\":1,\"kind\":\"PLATFORM_ENROLLMENT\",\"platformUrl\":\"https://platform.example\",\"code\":\"fixture-enrollment-code\",\"expiresAt\":\"2030-01-01T00:10:00.123456789Z\"}",
       "result": "valid"
     },
     {
-      "name": "local-excess-precision",
-      "raw": "{\"formatVersion\":1,\"kind\":\"LOCAL_EXAMPLE_ENROLLMENT\",\"sourceNamespace\":\"local.example\",\"deploymentId\":\"dep_example\",\"code\":\"fixture-local-code\",\"expiresAt\":\"2030-01-01T00:10:00.1234567891Z\"}",
-      "result": "invalid"
-    },
-    {
       "name": "platform-excess-precision",
       "raw": "{\"formatVersion\":1,\"kind\":\"PLATFORM_ENROLLMENT\",\"platformUrl\":\"https://platform.example\",\"code\":\"fixture-enrollment-code\",\"expiresAt\":\"2030-01-01T00:10:00.1234567891Z\"}",
-      "result": "invalid"
-    },
-    {
-      "name": "local-leap-second",
-      "raw": "{\"formatVersion\":1,\"kind\":\"LOCAL_EXAMPLE_ENROLLMENT\",\"sourceNamespace\":\"local.example\",\"deploymentId\":\"dep_example\",\"code\":\"fixture-local-code\",\"expiresAt\":\"2030-01-01T00:10:60Z\"}",
       "result": "invalid"
     },
     {
@@ -155,18 +92,8 @@
       "result": "invalid"
     },
     {
-      "name": "local-unknown-offset",
-      "raw": "{\"formatVersion\":1,\"kind\":\"LOCAL_EXAMPLE_ENROLLMENT\",\"sourceNamespace\":\"local.example\",\"deploymentId\":\"dep_example\",\"code\":\"fixture-local-code\",\"expiresAt\":\"2030-01-01T00:10:00-00:00\"}",
-      "result": "invalid"
-    },
-    {
       "name": "platform-unknown-offset",
       "raw": "{\"formatVersion\":1,\"kind\":\"PLATFORM_ENROLLMENT\",\"platformUrl\":\"https://platform.example\",\"code\":\"fixture-enrollment-code\",\"expiresAt\":\"2030-01-01T00:10:00-00:00\"}",
-      "result": "invalid"
-    },
-    {
-      "name": "local-non-utc",
-      "raw": "{\"formatVersion\":1,\"kind\":\"LOCAL_EXAMPLE_ENROLLMENT\",\"sourceNamespace\":\"local.example\",\"deploymentId\":\"dep_example\",\"code\":\"fixture-local-code\",\"expiresAt\":\"2030-01-01T00:10:00+08:00\"}",
       "result": "invalid"
     },
     {

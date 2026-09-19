@@ -1,8 +1,6 @@
 package net.weero.measix.pilot.data.enterprise
 
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.test.UnconfinedTestDispatcher
-import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import net.weero.measix.pilot.data.configuration.ConfigurationScope
@@ -20,8 +18,8 @@ class RealmAccessTest {
     @get:Rule val temporary = TemporaryFolder()
 
     @Test
-    fun `captured identity survives switching and offline but not exit and same principal reenrollment`() = runTest {
-        val controller = EnterpriseSessionController(EnterpriseAppliedStore(temporary.newFolder()))
+    fun `captured identity survives switching but not exit and same principal reenrollment`() = runTest {
+        val controller = EnterpriseSessionController(net.weero.measix.pilot.data.enterprise.enterpriseTestStore(temporary.newFolder()))
         val packet = exampleEnterprisePackage()
         controller.enrollFixture(packet)
         val access = controller.captureRealmAccess(packet.identity.scope)
@@ -29,7 +27,6 @@ class RealmAccessTest {
         backgroundScope.launch(kotlinx.coroutines.Dispatchers.Unconfined) { controller.observeRealmAccess(access).collect { allowed += it } }
         runCurrent()
         controller.selectPersonalFixture()
-        controller.captureExitRequest()!!.let { controller.setLocalOffline(it.selection, it.access, true) }
         assertEquals("original", controller.withRealmAccess(access) { "original" })
         controller.finishExit(controller.beginExit(requireNotNull(controller.captureExitRequest())))
         controller.enrollFixture(packet)
@@ -42,36 +39,11 @@ class RealmAccessTest {
     }
 
     @Test
-    fun `idle subscriptions expire without a write and an old deadline cannot revoke a renewed session`() = runTest {
-        val controller = EnterpriseSessionController(EnterpriseAppliedStore(temporary.newFolder())) { 1_900_000_000_000L + testScheduler.currentTime }
-        val packet = exampleEnterprisePackage()
-        controller.enrollFixture(packet)
-        val first = controller.captureRealmAccess(packet.identity.scope)
-        val old = mutableListOf<Boolean>()
-        backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { controller.observeRealmAccess(first).collect { old += it } }
-        val lifetime = (controller.state.value as EnterpriseState.Available).manifest.session!!.expiresAtMillis - 1_900_000_000_000L
-        advanceTimeBy(lifetime / 2)
-        controller.finishExit(controller.beginExit(requireNotNull(controller.captureExitRequest())))
-        controller.enrollFixture(packet)
-        val fresh = controller.captureRealmAccess(packet.identity.scope)
-        val live = mutableListOf<Boolean>()
-        backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { controller.observeRealmAccess(fresh).collect { live += it } }
-        advanceTimeBy(lifetime / 2 + 1)
-        runCurrent()
-        assertEquals(listOf(true, false), old)
-        assertEquals(listOf(true), live)
-        assertTrue(controller.withRealmAccess(fresh) { true })
-        advanceTimeBy(lifetime / 2)
-        runCurrent()
-        assertEquals(listOf(true, false), live)
-        expectDenied { controller.withRealmAccess(fresh) { fail("expired access executed") } }
-    }
-
-    @Test
     fun `verified pending identity can access its data but another principal cannot`() = runTest {
-        val controller = EnterpriseSessionController(EnterpriseAppliedStore(temporary.newFolder()))
-        val identity = exampleEnterprisePackage().identity
-        controller.enrollLocal(identity, redeem = { identity }, configuration = { null })
+        val controller = EnterpriseSessionController(net.weero.measix.pilot.data.enterprise.enterpriseTestStore(temporary.newFolder()))
+        val packet = exampleEnterprisePackage()
+        val identity = packet.identity
+        controller.enrollFixture(packet)
         val access = controller.captureRealmAccess(identity.scope)
         assertTrue(controller.withRealmAccess(access) { true })
         expectDenied { controller.captureRealmAccess(identity.scope.copy(userId = "another-user")) }

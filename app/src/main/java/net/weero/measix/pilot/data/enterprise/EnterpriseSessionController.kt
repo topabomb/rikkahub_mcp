@@ -64,11 +64,6 @@ internal class EnterpriseExecutionLease internal constructor(
         if (closed.get() || revoked.get()) throw EnterpriseConfigurationException("enterprise_execution_lease_unavailable")
     }
 
-    fun localBinding(resourceId: String): EnterpriseRuntimeBinding {
-        val local = execution as? EnterpriseExecution.Local ?: throw EnterpriseConfigurationException("local_bindings_required")
-        return local.bindings.firstOrNull { it.resourceId == resourceId } ?: throw EnterpriseConfigurationException("enterprise_binding_missing")
-    }
-
     internal fun revoke() { revoked.set(true) }
 
     /** Await outside Session admission; failure retains ownership so another call can retry cleanup. */
@@ -123,7 +118,7 @@ internal class EnterpriseSessionController(
         val credential = withContext(Dispatchers.IO) { store.prepareCredential(refresh) }
         val pending = PendingPlatformEnrollment(response.sessionId, response.userId, idle,
             PlatformSessionDetails(connection, response.deviceId, credential))
-        publish(current.copy(pendingEnrollment = pending))
+        publish(current.copy(phase = EnterpriseSessionPhase.SIGNED_OUT, pendingEnrollment = pending))
         platformAccessTokens[response.sessionId] = PlatformAccessToken(response.accessToken, Instant.parse(response.accessTokenExpiresAt).toEpochMilli())
         enrollmentAttempt = null
         response.sessionId
@@ -224,7 +219,7 @@ internal class EnterpriseSessionController(
         }
         if (bootstrap.device.status != PlatformBootstrapDeviceStatus.ACTIVE || 4L !in bootstrap.supportedSnapshotSchemaVersions) fail("platform_bootstrap_unavailable")
         val identity = EnterpriseIdentity(pending.platform.connection.authority, bootstrap.deployment.name, pending.userId, bootstrap.user.displayName)
-        EnterprisePackageCodec.validateIdentity(identity)
+        EnterpriseConfigurationCodec.validateIdentity(identity)
         val expires = minOf(Instant.parse(bootstrap.session.expiresAt).toEpochMilli(), Instant.parse(bootstrap.session.sessionIdleExpiresAt).toEpochMilli())
         val session = EnterpriseSession(sessionId, identity, expires, pending.platform)
         publish(current.copy(phase = EnterpriseSessionPhase.CONFIGURATION_PENDING, session = session, lastIdentity = identity, pendingEnrollment = null))
@@ -267,31 +262,6 @@ internal class EnterpriseSessionController(
         requireNotNull(current.manifest.applied)
     }
 
-    /** Admission conflicts precede code consumption. Only this owner publishes the resulting client session. */
-    suspend fun enrollLocal(
-        installedIdentity: EnterpriseIdentity,
-        redeem: suspend () -> EnterpriseIdentity,
-        configuration: suspend () -> EnterprisePackage?,
-        requireSignedOut: Boolean = false,
-    ): EnterpriseState.Available = mutex.withLock {
-        EnterprisePackageCodec.validateLocalIdentity(installedIdentity)
-        val current = ensureLoaded()
-        if (current.manifest.phase == EnterpriseSessionPhase.CLOSING) fail("enterprise_exit_in_progress")
-        if (requireSignedOut && current.manifest.session != null) fail("exit_current_enterprise_first")
-        requireSamePrincipal(current.manifest, installedIdentity)
-        if (redeem() != installedIdentity) fail("enterprise_enrollment_identity_mismatch")
-        currentCoroutineContext().ensureActive()
-        val candidate = configuration()
-        if (candidate != null) {
-            if (candidate.identity != installedIdentity) fail("enterprise_enrollment_identity_mismatch")
-            EnterprisePackageCodec.validate(candidate)
-            applyValidated(candidate.toCandidate(), enter = true, replaceSession = true)
-        } else {
-            val session = EnterpriseSession(Uuid.random().toString(), installedIdentity, nowMillis() + SESSION_LIFETIME_MILLIS)
-            publish(EnterpriseManifest(ENTERPRISE_MANIFEST_SCHEMA_VERSION, EnterpriseSessionPhase.CONFIGURATION_PENDING, session, null, ConfigurationScope.Personal, installedIdentity, current.manifest.feeds))
-        }
-    }
-
     /** A fetched candidate cannot renew, recreate or switch the session that requested it. */
     suspend fun synchronize(access: RealmAccess.Enterprise, candidate: EnterpriseCandidate): EnterpriseState.Available = mutex.withLock {
         val current = ensureLoaded()
@@ -301,28 +271,7 @@ internal class EnterpriseSessionController(
         applyValidated(candidate, current.manifest.selectedScope is ConfigurationScope.Enterprise, expectedAccess = access)
     }
 
-    /** Explicit native installation publishes source facts before applying them; application failure is observable. */
-    suspend fun importLocal(selection: RealmSelection, identity: EnterpriseIdentity, publishSource: suspend () -> LocalEnterpriseCandidate): LocalEnterpriseImportResult = mutex.withLock {
-        EnterprisePackageCodec.validateLocalIdentity(identity)
-        val current = ensureLoaded()
-        requirePublishedSelection(selection)
-        requireSamePrincipal(current.manifest, identity)
-        val candidate = publishSource()
-        check(candidate.packet.identity == identity)
-        try {
-            requirePublishedSelection(selection)
-            val applied = applyValidated(candidate.packet.toCandidate(),
-                current.manifest.session == null || current.manifest.selectedScope is ConfigurationScope.Enterprise,
-                expectedAccess = current.manifest.session?.let { RealmAccess.Enterprise(it.identity.scope, it.id) })
-            LocalEnterpriseImportResult(candidate.revision, applied, null)
-        } catch (cancelled: CancellationException) {
-            throw cancelled
-        } catch (error: Exception) {
-            LocalEnterpriseImportResult(candidate.revision, null, safeReason(error))
-        }
-    }
-
-    private suspend fun applyValidated(candidate: EnterpriseCandidate, enter: Boolean, replaceSession: Boolean = false,
+    private suspend fun applyValidated(candidate: EnterpriseCandidate, enter: Boolean,
         expectedAccess: RealmAccess.Enterprise? = null): EnterpriseState.Available {
         val current = ensureLoaded()
         val manifest = current.manifest
@@ -346,21 +295,16 @@ internal class EnterpriseSessionController(
                 manifest.session?.identity == candidate.identity && store.execution(manifest) == candidate.execution }
                 ?: store.prepare(candidate)
         }
-        val feeds = if (candidate.feedSeed != null && manifest.feeds.none { it.scope == candidate.identity.scope }) {
-            manifest.feeds + withContext(Dispatchers.IO) {
-                store.prepareFeed(candidate.identity.scope, EnterpriseFeed.initialize(candidate.feedSeed))
-            }
-        } else manifest.feeds
         if (expectedAccess != null && !allowsDataAccess(manifest, expectedAccess)) fail("enterprise_data_access_unavailable")
-        val session = if (expectedAccess != null) requireNotNull(manifest.session).copy(identity = candidate.identity)
-        else manifest.session?.takeIf { !replaceSession && it.expiresAtMillis > nowMillis() }
-            ?.copy(identity = candidate.identity)
-            ?: EnterpriseSession(Uuid.random().toString(), candidate.identity, nowMillis() + SESSION_LIFETIME_MILLIS)
+        val session = requireNotNull(manifest.session).copy(identity = candidate.identity)
         val next = EnterpriseManifest(
-            ENTERPRISE_MANIFEST_SCHEMA_VERSION, if (manifest.phase == EnterpriseSessionPhase.OFFLINE && session.id == manifest.session?.id) {
-                EnterpriseSessionPhase.OFFLINE
-            } else EnterpriseSessionPhase.READY, session, version,
-            if (enter) candidate.identity.scope else ConfigurationScope.Personal, candidate.identity, feeds, nowMillis(),
+            schemaVersion = ENTERPRISE_MANIFEST_SCHEMA_VERSION,
+            phase = if (manifest.phase == EnterpriseSessionPhase.OFFLINE) EnterpriseSessionPhase.OFFLINE else EnterpriseSessionPhase.READY,
+            session = session,
+            applied = version,
+            selectedScope = if (enter) candidate.identity.scope else ConfigurationScope.Personal,
+            lastIdentity = candidate.identity,
+            lastConfigurationSyncMillis = nowMillis(),
         )
         return publish(next)
     }
@@ -403,62 +347,6 @@ internal class EnterpriseSessionController(
             if (selectionRevision.value == selected.revision) _selectionRevision.value++
             throw error
         }
-    }
-
-    suspend fun readLocalFeed(selection: RealmSelection): LocalEnterpriseFeedSnapshot = mutex.withLock {
-        val current = requireLocalFeedSelection(selection)
-        val version = current.manifest.feeds.find { it.scope == selection.access.scope } ?: fail("enterprise_feed_not_ready")
-        val document = withContext(Dispatchers.IO) { store.readFeed(version) }
-        requirePublishedSelection(selection)
-        LocalEnterpriseFeedSnapshot(selection, version.revision, document)
-    }
-
-    suspend fun changeFeed(selection: RealmSelection, expectedRevision: String, command: EnterpriseFeedCommand): LocalEnterpriseFeedSnapshot = mutex.withLock {
-        val current = requireLocalFeedSelection(selection)
-        val access = selection.access as RealmAccess.Enterprise
-        val previous = current.manifest.feeds.find { it.scope == access.scope } ?: fail("enterprise_feed_not_ready")
-        if (previous.revision != expectedRevision) fail("enterprise_feed_changed")
-        prune(current.manifest)
-        val document = withContext(Dispatchers.IO) {
-            EnterpriseFeed.change(store.readFeed(previous), command, Instant.ofEpochMilli(nowMillis()))
-        }
-        val next = withContext(Dispatchers.IO) { store.prepareFeed(access.scope, document) }
-        requirePublishedSelection(selection)
-        publish(current.manifest.copy(feeds = current.manifest.feeds.map { if (it.scope == access.scope) next else it }))
-        LocalEnterpriseFeedSnapshot(selection, next.revision, document)
-    }
-
-    suspend fun listFeed(selection: RealmSelection, query: EnterpriseFeedQuery): EnterpriseFeedResult = mutex.withLock {
-        val current = requirePortalSelection(selection)
-        val access = selection.access as RealmAccess.Enterprise
-        val version = current.manifest.feeds.find { it.scope == access.scope } ?: fail("enterprise_feed_not_ready")
-        withContext(Dispatchers.IO) {
-            EnterpriseFeed.list(store.readFeed(version), access.scope, query, Instant.ofEpochMilli(nowMillis()))
-        }.also { requirePublishedSelection(selection) }
-    }
-
-    suspend fun listFeed(access: RealmAccess.Enterprise, query: EnterpriseFeedQuery): EnterpriseFeedResult = mutex.withLock {
-        val current = requireSession(allowOffline = true)
-        if (!allowsDataAccess(current.manifest, access)) fail("enterprise_data_access_unavailable")
-        val version = current.manifest.feeds.find { it.scope == access.scope } ?: fail("enterprise_feed_not_ready")
-        withContext(Dispatchers.IO) {
-            EnterpriseFeed.list(store.readFeed(version), access.scope, query, Instant.ofEpochMilli(nowMillis()))
-        }.also { requirePublishedRealmAccess(access) }
-    }
-
-    suspend fun feedDetail(selection: RealmSelection, id: String): EnterpriseUpdateItem = mutex.withLock {
-        val current = requirePortalSelection(selection)
-        val access = selection.access as RealmAccess.Enterprise
-        val version = current.manifest.feeds.find { it.scope == access.scope } ?: fail("enterprise_feed_not_ready")
-        withContext(Dispatchers.IO) { EnterpriseFeed.detail(store.readFeed(version), id) }
-            .also { requirePublishedSelection(selection) }
-    }
-
-    private suspend fun requireLocalFeedSelection(selection: RealmSelection): LoadedEnterpriseState {
-        val current = requirePortalSelection(selection)
-        if (!selection.access.scope.let { it is ConfigurationScope.Enterprise && it.authority.isLocal }) fail("local_enterprise_required")
-        if (current.manifest.phase !in setOf(EnterpriseSessionPhase.READY, EnterpriseSessionPhase.OFFLINE)) fail("enterprise_session_not_ready")
-        return current
     }
 
     suspend fun portalState(selection: RealmSelection): EnterpriseState.Available = mutex.withLock {
@@ -593,7 +481,7 @@ internal class EnterpriseSessionController(
                 val allowed = manifest != null && allowsDataAccess(manifest, access as RealmAccess.Enterprise)
                 emit(allowed)
                 if (allowed) {
-                    delay((requireNotNull(manifest?.session).expiresAtMillis - nowMillis()).coerceAtLeast(1))
+                    delay((requireNotNull(manifest.session).expiresAtMillis - nowMillis()).coerceAtLeast(1))
                     emit(false)
                 }
             }
@@ -614,32 +502,6 @@ internal class EnterpriseSessionController(
         val current = requireSession(allowOffline = true)
         if (!allowsDataAccess(current.manifest, access)) fail("enterprise_data_access_unavailable")
         operation(current.toAvailable())
-    }
-
-    suspend fun setLocalOffline(selection: RealmSelection, access: RealmAccess.Enterprise, offline: Boolean) = mutex.withLock {
-        val current = requireLocalSessionTarget(selection, access)
-        if (current.manifest.phase !in setOf(EnterpriseSessionPhase.READY, EnterpriseSessionPhase.OFFLINE)) fail("enterprise_session_not_ready")
-        publish(current.manifest.copy(phase = if (offline) EnterpriseSessionPhase.OFFLINE else EnterpriseSessionPhase.READY))
-    }
-
-    /** Shortening the existing durable deadline exercises the normal expiry and recovery owners. */
-    suspend fun shortenLocalSession(selection: RealmSelection, access: RealmAccess.Enterprise) = mutex.withLock {
-        val current = requireLocalSessionTarget(selection, access)
-        val session = requireNotNull(current.manifest.session)
-        publish(current.manifest.copy(session = session.copy(expiresAtMillis = minOf(session.expiresAtMillis, nowMillis() + 60_000))))
-    }
-
-    suspend fun validateLocalSessionTarget(selection: RealmSelection, access: RealmAccess.Enterprise) = mutex.withLock {
-        requireLocalSessionTarget(selection, access)
-        Unit
-    }
-
-    private suspend fun requireLocalSessionTarget(selection: RealmSelection, access: RealmAccess.Enterprise): LoadedEnterpriseState {
-        val current = ensureLoaded()
-        requirePublishedSelection(selection)
-        if (!access.scope.authority.isLocal) fail("local_enterprise_required")
-        if (!allowsDataAccess(current.manifest, access)) fail("enterprise_data_access_unavailable")
-        return current
     }
 
     suspend fun captureExitRequest(): EnterpriseExitRequest? = mutex.withLock {
@@ -663,17 +525,11 @@ internal class EnterpriseSessionController(
         require(reason in setOf(EnterpriseExitReason.AUTHORIZATION_EXPIRED, EnterpriseExitReason.AUTHORIZATION_REVOKED))
         val manifest = manifestForExit()
         requireExitIdentity(manifest, access)
-        if (manifest.phase == EnterpriseSessionPhase.CLOSING) closingToken(manifest)
-        else beginClosing(manifest, reason)
-    }
-
-    suspend fun beginExampleDataRemoval(request: EnterpriseExitRequest, bundledScope: ConfigurationScope.Enterprise): EnterpriseExitToken = mutex.withLock {
-        if (!bundledScope.authority.isLocal || request.access.scope != bundledScope) fail("bundled_example_session_required")
-        val manifest = manifestForExit()
-        requireExitIdentity(manifest, request.access)
-        if (manifest.phase == EnterpriseSessionPhase.CLOSING) fail("enterprise_exit_in_progress")
-        if (exitSelection(manifest) != request.selection) fail("enterprise_selection_revoked")
-        beginClosing(manifest, EnterpriseExitReason.CLEAR_EXAMPLE_DATA)
+        when {
+            manifest.exitReason == EnterpriseExitReason.LOCAL_DATA_RESET -> fail("enterprise_reset_in_progress")
+            manifest.phase == EnterpriseSessionPhase.CLOSING -> closingToken(manifest)
+            else -> beginClosing(manifest, reason)
+        }
     }
 
     suspend fun pendingExit(): EnterpriseExitToken? = mutex.withLock {
@@ -700,7 +556,11 @@ internal class EnterpriseSessionController(
     fun observeExitSignals(): Flow<EnterpriseExitSignal> = state.flatMapLatest { published -> flow {
         val manifest = (published as? EnterpriseState.Available)?.manifest ?: return@flow
         val session = manifest.session ?: return@flow
-        if (manifest.phase == EnterpriseSessionPhase.CLOSING) emit(EnterpriseExitSignal.Closing(closingToken(manifest)))
+        if (manifest.phase == EnterpriseSessionPhase.CLOSING) {
+            if (manifest.exitReason != EnterpriseExitReason.LOCAL_DATA_RESET) {
+                emit(EnterpriseExitSignal.Closing(closingToken(manifest)))
+            }
+        }
         else {
             delay((session.expiresAtMillis - nowMillis()).coerceAtLeast(0))
             emit(EnterpriseExitSignal.Expired(RealmAccess.Enterprise(session.identity.scope, session.id)))
@@ -735,31 +595,48 @@ internal class EnterpriseSessionController(
     private suspend fun manifestForExit(): EnterpriseManifest =
         loaded?.manifest ?: withContext(Dispatchers.IO) { store.readManifest() }
 
-    /** Keep the durable removal intent until both Feed references and retired payload revisions are gone. */
-    suspend fun prepareExampleDataRemovalCompletion(token: EnterpriseExitToken) = mutex.withLock {
-        require(token.reason == EnterpriseExitReason.CLEAR_EXAMPLE_DATA)
-        val manifest = manifestForExit()
-        if (manifest.phase != EnterpriseSessionPhase.CLOSING || closingToken(manifest) != token) fail("stale_enterprise_exit")
-        if (leases.values.any { it.scope == token.access.scope }) fail("enterprise_executions_pending")
-        val retained = manifest.feeds.filterNot { it.scope == token.access.scope }
-        val cleared = if (retained != manifest.feeds) publish(manifest.copy(feeds = retained)).manifest else manifest
-        prune(cleared)
-    }
-
     suspend fun finishExit(token: EnterpriseExitToken) = mutex.withLock {
         val manifest = manifestForExit()
         if (manifest.phase != EnterpriseSessionPhase.CLOSING || closingToken(manifest) != token) fail("stale_enterprise_exit")
         if (leases.values.any { it.sessionId == token.access.sessionId }) fail("enterprise_executions_pending")
-        val clearing = token.reason == EnterpriseExitReason.CLEAR_EXAMPLE_DATA
-        if (clearing && manifest.feeds.any { it.scope == token.access.scope }) fail("enterprise_feed_cleanup_pending")
         val phase = when (token.reason) {
-            EnterpriseExitReason.USER_REQUEST, EnterpriseExitReason.CLEAR_EXAMPLE_DATA -> EnterpriseSessionPhase.SIGNED_OUT
+            EnterpriseExitReason.USER_REQUEST -> EnterpriseSessionPhase.SIGNED_OUT
             EnterpriseExitReason.AUTHORIZATION_EXPIRED, EnterpriseExitReason.AUTHORIZATION_REVOKED -> EnterpriseSessionPhase.REAUTH_REQUIRED
+            EnterpriseExitReason.LOCAL_DATA_RESET -> fail("stale_enterprise_exit")
         }
-        publish(EnterpriseManifest.signedOut(
-            if (clearing) null else requireNotNull(manifest.session).identity,
-            manifest.feeds,
-        ).copy(phase = phase))
+        publish(EnterpriseManifest.signedOut(requireNotNull(manifest.session).identity).copy(phase = phase))
+    }
+
+    /** Revokes live enterprise admission before the reset coordinator closes domain work and deletes data. */
+    suspend fun beginLocalDataReset(request: EnterpriseExitRequest): EnterpriseExitToken = mutex.withLock {
+        val manifest = manifestForExit()
+        requireExitIdentity(manifest, request.access)
+        if (manifest.phase == EnterpriseSessionPhase.CLOSING) fail("enterprise_exit_in_progress")
+        if (exitSelection(manifest) != request.selection) fail("enterprise_selection_revoked")
+        beginClosing(manifest, EnterpriseExitReason.LOCAL_DATA_RESET)
+    }
+
+    suspend fun completeLocalDataReset(token: EnterpriseExitToken, retainIdentity: Boolean) = mutex.withLock {
+        if (token.reason != EnterpriseExitReason.LOCAL_DATA_RESET) fail("stale_enterprise_exit")
+        val manifest = manifestForExit()
+        if (manifest.phase != EnterpriseSessionPhase.CLOSING || closingToken(manifest) != token) fail("stale_enterprise_exit")
+        if (leases.values.any { it.sessionId == token.access.sessionId }) fail("enterprise_executions_pending")
+        val identity = if (retainIdentity) requireNotNull(manifest.session).identity else null
+        val committed = withContext(NonCancellable + Dispatchers.IO) { store.resetLocalState(identity) }
+        loaded = committed
+        publishState(committed.toAvailable())
+    }
+
+    /** Rewrites damaged or already signed-out access state; an active Session must use beginLocalDataReset first. */
+    suspend fun resetLocalDataState(retainIdentity: Boolean): EnterpriseState = mutex.withLock {
+        val current = loaded?.manifest
+        if (current?.phase == EnterpriseSessionPhase.CLOSING) fail("enterprise_reset_in_progress")
+        if (current?.session != null) fail("enterprise_reset_requires_freeze")
+        val identity = if (retainIdentity) current?.lastIdentity else null
+        val committed = withContext(NonCancellable + Dispatchers.IO) { store.resetLocalState(identity) }
+        loaded = committed
+        publishState(committed.toAvailable())
+        state.value
     }
 
     suspend fun pruneUnusedRevisions() = mutex.withLock { prune(manifestForExit()) }
@@ -781,7 +658,7 @@ internal class EnterpriseSessionController(
         val current = requireSession(allowOffline = false)
         val session = requireNotNull(current.manifest.session)
         if (!allowsDataAccess(current.manifest, access)) fail("enterprise_data_access_unavailable")
-        if (!access.scope.authority.isLocal && (expectedVersion == null || current.manifest.applied != expectedVersion)) {
+        if (expectedVersion == null || current.manifest.applied != expectedVersion) {
             fail("enterprise_configuration_changed_during_preflight")
         }
         val candidate = withContext(Dispatchers.IO) { requireNotNull(store.appliedCandidate(current.manifest)) }
@@ -863,11 +740,8 @@ internal class EnterpriseSessionController(
     }
 
     private suspend fun prune(manifest: EnterpriseManifest, excluding: EnterpriseExecutionLease? = null) = withContext(Dispatchers.IO) {
-        store.prune(
-            leases.values.filter { it !== excluding }.mapTo(mutableSetOf()) { it.version.revision }
-                .apply { manifest.applied?.let { add(it.revision) } },
-            manifest.feeds.mapTo(mutableSetOf()) { it.revision },
-        )
+        store.prune(leases.values.filter { it !== excluding }.mapTo(mutableSetOf()) { it.version.revision }
+            .apply { manifest.applied?.let { add(it.revision) } })
     }
 
     private fun requireSamePrincipal(manifest: EnterpriseManifest, identity: EnterpriseIdentity) {
@@ -885,6 +759,5 @@ internal class EnterpriseSessionController(
     private fun fail(reason: String): Nothing = throw EnterpriseConfigurationException(reason)
 
     companion object {
-        private const val SESSION_LIFETIME_MILLIS = 7L * 24 * 60 * 60 * 1000
     }
 }

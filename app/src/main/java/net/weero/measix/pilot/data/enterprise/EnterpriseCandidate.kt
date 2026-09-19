@@ -8,14 +8,10 @@ internal data class EnterpriseCandidate(
     val identity: EnterpriseIdentity,
     val configuration: EnterpriseConfiguration,
     val execution: EnterpriseExecution,
-    val feedSeed: EnterpriseFeedSeed? = null,
 )
 
 @Serializable
 internal sealed interface EnterpriseExecution {
-    @Serializable
-    data class Local(val bindings: List<EnterpriseRuntimeBinding>) : EnterpriseExecution
-
     @Serializable
     data class Platform(
         val connection: PlatformConnection,
@@ -25,19 +21,11 @@ internal sealed interface EnterpriseExecution {
     ) : EnterpriseExecution
 }
 
-internal fun EnterprisePackage.toCandidate(): EnterpriseCandidate {
-    EnterprisePackageCodec.validate(this)
-    return EnterpriseCandidate(identity, configuration, EnterpriseExecution.Local(runtimeBindings), feedSeed)
-}
-
 internal fun EnterpriseCandidate.validate() {
     when (val source = execution) {
-        is EnterpriseExecution.Local -> EnterprisePackageCodec.validate(EnterprisePackage(
-            EnterprisePackageCodec.FORMAT_VERSION, identity, configuration, source.bindings, feedSeed,
-        ))
         is EnterpriseExecution.Platform -> {
-            EnterprisePackageCodec.validateConfiguration(identity, configuration)
-            require(identity.authority == source.connection.authority && feedSeed == null) { "platform_candidate_identity_mismatch" }
+            EnterpriseConfigurationCodec.validateConfiguration(identity, configuration)
+            require(identity.authority == source.connection.authority) { "platform_candidate_identity_mismatch" }
             require(source.releaseId.matches(Regex("rel_[0-9a-f-]{36}")) && source.snapshotHash.matches(Regex("sha256:[0-9a-f]{64}"))) {
                 "invalid_platform_release"
             }
@@ -55,11 +43,6 @@ internal fun EnterpriseCandidate.validate() {
 
 internal fun EnterpriseCandidate.modelCapabilities(): Map<String, ChatTransportCapabilities> = configuration.models.associate { model ->
     val capability = when (val source = execution) {
-        is EnterpriseExecution.Local -> when (source.bindings.single { it.resourceId == model.id }.protocol) {
-            EnterpriseRuntimeProtocol.GOOGLE_GENERATE -> ChatTransportCapabilities.GOOGLE
-            EnterpriseRuntimeProtocol.OPENAI_RESPONSES -> ChatTransportCapabilities.RESPONSES
-            else -> ChatTransportCapabilities.BASIC
-        }
         is EnterpriseExecution.Platform -> when (configuration.providers.single { it.id == model.providerId }.protocol) {
             PlatformProviderDefinitionClientProtocol.GOOGLE_GENERATE_CONTENT -> ChatTransportCapabilities.GOOGLE
             PlatformProviderDefinitionClientProtocol.OPENAI_RESPONSES -> ChatTransportCapabilities.RESPONSES

@@ -48,8 +48,7 @@ class McpQueryServiceTest {
     }
     @Test
     fun `scoped catalog recovers after a failed read and observes private revisions without editable managed copies`() = kotlinx.coroutines.test.runTest {
-        val packet = net.weero.measix.pilot.data.enterprise.EnterprisePackageCodec.decode(
-            requireNotNull(javaClass.getResourceAsStream("/enterprise.local.example.json")))
+        val packet = net.weero.measix.pilot.data.enterprise.exampleEnterprisePackage()
         val scope = packet.identity.scope
         val access = net.weero.measix.pilot.data.enterprise.RealmAccess.Enterprise(scope, "query")
         val manifest = net.weero.measix.pilot.data.enterprise.EnterpriseManifest.signedOut().copy(
@@ -98,7 +97,7 @@ class McpQueryServiceTest {
             val managed = rows.filter { it.serverId is me.rerere.common.configuration.ConfigurationReference.Enterprise }
             assertTrue(managed.isNotEmpty() && managed.all { it.definition == null && it.scope == scope })
             assertTrue(managed.filter { it.gatewayEnablement == null }.all { it.requiredEnabled })
-            org.junit.Assert.assertEquals(net.weero.measix.pilot.data.configuration.ResolvedGatewayEnablement(true, false), managed.single { it.gatewayEnablement != null }.gatewayEnablement)
+            assertTrue(managed.none { it.gatewayEnablement != null })
             collector.cancel()
 
             val personal = net.weero.measix.pilot.data.enterprise.RealmAccess.Personal

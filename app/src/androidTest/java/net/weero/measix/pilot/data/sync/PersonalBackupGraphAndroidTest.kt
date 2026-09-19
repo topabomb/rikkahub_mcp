@@ -49,7 +49,7 @@ import kotlin.uuid.Uuid
 /** Production Room/FTS, file owners, archive creation and cold restore; no platform backend. */
 @RunWith(AndroidJUnit4::class)
 class PersonalBackupGraphAndroidTest {
-    private val enterprise = ConfigurationScope.Enterprise(EnterpriseAuthority("local:backup", "deployment"), "user")
+    private val enterprise = ConfigurationScope.Enterprise(EnterpriseAuthority("platform:backup", "deployment"), "user")
     private val personal = ConfigurationScope.Personal
     private lateinit var root: File
     private lateinit var context: Context

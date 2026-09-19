@@ -28,6 +28,9 @@ interface ConversationDAO {
     @Query("SELECT id FROM conversationentity WHERE scope = :scope AND parent_conversation_id IS NULL")
     suspend fun getRootIds(scope: ConfigurationScope): List<String>
 
+    @Query("SELECT DISTINCT scope FROM conversationentity")
+    suspend fun scopes(): List<ConfigurationScope>
+
     @Query("SELECT id FROM conversationentity WHERE parent_conversation_id IS NULL AND folder_id = :folderId")
     suspend fun getIdsByFolder(folderId: String): List<String>
 

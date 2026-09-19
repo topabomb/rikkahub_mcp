@@ -20,7 +20,7 @@ class PlatformAuthenticationTest {
     private fun fixture(name: String) = requireNotNull(javaClass.getResourceAsStream("/contracts/platform/cases.json"))
         .bufferedReader().use { Json.parseToJsonElement(it.readText()).jsonArray }
         .first { it.jsonObject.getValue("name").jsonPrimitive.content == name }.jsonObject.getValue("value").toString()
-    private fun controller(root: File) = EnterpriseSessionController(EnterpriseAppliedStore(root, credentialCipher = cipher)) { 1000L }
+    private fun controller(root: File) = EnterpriseSessionController(net.weero.measix.pilot.data.enterprise.enterpriseTestStore(root, credentialCipher = cipher)) { 1000L }
     private val connection get() = PlatformConnection("http://192.168.1.20:8080", PlatformWireCodec.decode(fixture("discovery")))
     private val response get() = PlatformWireCodec.decode<PlatformEnrollmentExchangeResponse>(fixture("enrollment-response"))
 
@@ -37,7 +37,18 @@ class PlatformAuthenticationTest {
         val text = root.walkTopDown().filter { it.isFile }.joinToString { it.readBytes().toString(Charsets.UTF_8) }
         assertFalse(text.contains(response.refreshToken))
         assertFalse(text.contains(response.accessToken))
-        assertEquals(attempt.installationId, EnterpriseAppliedStore(root, credentialCipher = cipher).installationId())
+        assertEquals(attempt.installationId, net.weero.measix.pilot.data.enterprise.enterpriseTestStore(root, credentialCipher = cipher).installationId())
+    }
+
+    @Test fun `local data reset removes the prior installation binding identity`() {
+        val root = temporary.newFolder()
+        val store = net.weero.measix.pilot.data.enterprise.enterpriseTestStore(root, credentialCipher = cipher)
+        val previous = store.installationId()
+
+        store.resetLocalState(null)
+
+        assertFalse(File(root, "installation-id").exists())
+        assertNotEquals(previous, store.installationId())
     }
 
     @Test fun `refresh recovery retains the same old credential and key across owner recreation`() = runBlocking {

@@ -13,6 +13,9 @@ class GenMediaRepository(private val dao: GenMediaDAO) {
 
     suspend fun getAllMediaList(): List<GenMediaEntity> = dao.getAllMedia()
 
+    internal suspend fun enterpriseScopes(): Set<ConfigurationScope.Enterprise> =
+        dao.scopes().filterIsInstance<ConfigurationScope.Enterprise>().toSet()
+
     internal suspend fun listInScope(scope: ConfigurationScope): List<GenMediaEntity> = dao.listInScope(scope)
 
     fun observeAllMedia(scope: ConfigurationScope): Flow<List<GenMediaEntity>> = dao.observeAll(scope)

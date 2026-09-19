@@ -24,7 +24,7 @@ class ConfigurationListStateTest {
 
     @Test
     fun configurationListCanComposeSelectAndRestoreItsSaveableState() {
-        val reference = ConfigurationReference.parse("managed~local~example~dep_example~quick_example")
+        val reference = ConfigurationReference.parse("managed~platform~example~dep_example~quick_example")
         var selected by mutableStateOf(emptySet<ConfigurationReference>())
         val restoration = StateRestorationTester(compose)
         restoration.setContent {

@@ -155,6 +155,10 @@ internal class PlatformEnterpriseService(
         throw error
     }
 
+    /** A 401 is emitted before Core mints a ticket, so the existing one-refresh control retry remains non-replaying. */
+    suspend fun createPortalGrant(access: RealmAccess.Enterprise): PlatformPortalGrant =
+        read(access.sessionId) { connection, token -> client.createPortalGrant(connection, token) }
+
     private suspend fun notifyRevoked(sessionId: String, error: PlatformHttpException) {
         if (error.status == 403 && error.problem?.code == "session_revoked") {
             sessions.platformSessionAccess(sessionId)?.let(onSessionRevoked)
