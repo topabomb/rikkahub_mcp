@@ -43,7 +43,7 @@ class RealtimeAsrController(
     private val provider: ASRProviderSetting,
     private val transport: RealtimeAsrTransport? = null,
     private val describeFailure: (Throwable) -> String = { "${it.javaClass.simpleName}: ${it.message}" },
-    private val onFailure: (Throwable) -> Unit = {},
+    private val onFailure: suspend (Throwable) -> Unit = {},
     private val admitRecording: suspend (() -> Unit) -> Unit,
 ) : ASRController {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
@@ -52,6 +52,7 @@ class RealtimeAsrController(
     private var socket: WebSocket? = null
     private var capture: PcmAudioCapture? = null
     private var finishing: Job? = null
+    private var failing: Job? = null
     private var peerEnded: CompletableDeferred<Unit>? = null
     private var onTranscriptChange: ((String) -> Unit)? = null
     private val completed = mutableListOf<String>()
@@ -253,9 +254,20 @@ class RealtimeAsrController(
 
     private fun fail(error: Throwable) {
         android.util.Log.e("RealtimeAsrController", "Recognition failed", error)
+        if (failing != null) return
         abandon()
-        _state.update { it.copy(status = ASRStatus.Error, errorMessage = describeFailure(error)) }
-        onFailure(error)
+        failing = scope.launch(start = CoroutineStart.UNDISPATCHED) {
+            try {
+                onFailure(error)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (callbackFailure: Throwable) {
+                if (callbackFailure !== error) error.addSuppressed(callbackFailure)
+            }
+            if (requireNotNull(scope.coroutineContext[Job]).isActive) {
+                _state.update { it.copy(status = ASRStatus.Error, errorMessage = describeFailure(error)) }
+            }
+        }
     }
 
     private fun stopCapture(): Job? = capture?.let { original -> capture = null; original.stop(); original.job }

@@ -62,6 +62,37 @@ class RealtimeAsrLifecycleInstrumentedTest {
         }
     }
 
+    @Test fun failureOwnerCompletesBeforeErrorStateIsPublished() = runBlocking {
+        val context = microphoneContext()
+        val factory = Sockets()
+        val accepted = CompletableDeferred<Unit>()
+        val callbackEntered = CompletableDeferred<Unit>()
+        val controller = withContext(Dispatchers.Main) {
+            RealtimeAsrController(
+                context,
+                factory,
+                providers().first(),
+                onFailure = {
+                    callbackEntered.complete(Unit)
+                    accepted.await()
+                },
+                admitRecording = { it() },
+            ).also { it.start { } }
+        }
+        val socket = factory.values.single()
+        try {
+            socket.listener.onFailure(socket, IllegalStateException("terminal"), null)
+            withTimeout(10_000) { callbackEntered.await() }
+            assertNotEquals(ASRStatus.Error, controller.state.value.status)
+            accepted.complete(Unit)
+            withTimeout(10_000) { controller.state.first { it.status == ASRStatus.Error } }
+        } finally {
+            val cleanup = withContext(Dispatchers.Main) { controller.dispose() }
+            withTimeout(10_000) { cleanup.awaitClosed() }
+        }
+        Unit
+    }
+
     private fun providers() = listOf(
         ASRProviderSetting.OpenAIRealtime(apiKey = "fixture", websocketUrl = "wss://asr.invalid/realtime"),
         ASRProviderSetting.DashScope(apiKey = "fixture", websocketUrl = "wss://asr.invalid/realtime"),
