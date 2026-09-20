@@ -1781,4 +1781,5 @@
   <string name="enterprise_budget_request_not_forwarded">Этот запрос не был отправлен вышестоящему сервису.</string>
   <string name="enterprise_runtime_request_id">Идентификатор запроса: %1$s</string>
   <string name="enterprise_runtime_resource_id">Ресурс: %1$s</string>
+  <string name="enterprise_address">Адрес предприятия</string>
 </resources>

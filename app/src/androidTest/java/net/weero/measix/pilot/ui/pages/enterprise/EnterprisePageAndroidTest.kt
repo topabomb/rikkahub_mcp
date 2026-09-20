@@ -70,6 +70,19 @@ class EnterprisePageAndroidTest {
     }
 
     @Test
+    fun connectedDetailsShowTheEnterpriseAddressAndCopyAction() {
+        val origin = "https://core.example"
+        val fixture = Fixture(overview().copy(platformOrigin = origin))
+        fixture.show()
+
+        click(R.string.enterprise_connection_details_show)
+        compose.onNodeWithText(text(R.string.enterprise_address)).assertIsDisplayed()
+        compose.onNodeWithText(origin).assertIsDisplayed()
+        compose.onNodeWithContentDescription(text(R.string.copy)).assertIsDisplayed().performClick()
+        compose.onNodeWithText(text(R.string.copied)).assertIsDisplayed()
+    }
+
+    @Test
     fun platformPasteShowsOriginBeforeConnectingAndCancelDoesNotEnroll() {
         val fixture = Fixture(overview(access = null))
         val origin = "http://192.168.1.20:8080"

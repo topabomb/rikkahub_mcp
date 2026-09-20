@@ -200,9 +200,9 @@ Memory 已通过 MemoryAddress/MemoryService 按原域、主体与 Session 进�
 
 浏览状态清理由 `WebStorageCompat.deleteBrowsingDataForSite` 的系统完成回调确认，并对 Platform origin 精确过期 `measix_portal_session` Cookie；不使用全局 Cookie/站点清理，也不删除无关站点。Local 清理固定虚拟 origin，Platform 清理本次绑定的准确公共 origin。不支持完整站点清理 API 的 WebView 明确拒绝打开 Portal。系统删除不可取消，十秒限制只结束等待者，重试继续等待原操作。Registry 在创建新宿主前等待旧宿主完成，并在 Session 授权锁内再次检查准入；同一 Session 不同时打开两个活动文档。原请求尚在取消收尾但宿主清理已完成时，可以批准新文档，原回复仍只归原文档。
 
-`EnterpriseApplicationService` 是正式空间 UI 的命令与查询入口，复用本地来源、同步、退出和 Portal owner。`RealmSwitchRequest` 冻结原 RealmSelection 与目标 RealmAccess，包含目标 Session 身份；Session 在锁内核验请求并等待宿主清理完成后才发布新选中空间。应用作用域持有已接受的切域任务，页面取消不取消该任务；原请求收尾在 Session 锁外等待。关闭或写盘失败保持原空间，已撤销文档不会复活。普通切域保留登录和原域生成，不走退出 CLOSING。进度投影不重新获取正在等待宿主的 Session 锁。
+`EnterpriseApplicationService` 是正式空间 UI 的命令与查询入口，复用本地来源、同步、退出和 Portal owner。`EnterpriseOverview.platformOrigin` 只读投影当前 Session 的 `PlatformConnection.origin`，供连接详情以“企业地址”展示和复制；它不是可编辑设置，也不从显示名称、Discovery 路径或失败响应反推。`RealmSwitchRequest` 冻结原 RealmSelection 与目标 RealmAccess，包含目标 Session 身份；Session 在锁内核验请求并等待宿主清理完成后才发布新选中空间。应用作用域持有已接受的切域任务，页面取消不取消该任务；原请求收尾在 Session 锁外等待。关闭或写盘失败保持原空间，已撤销文档不会复活。普通切域保留登录和原域生成，不走退出 CLOSING。进度投影不重新获取正在等待宿主的 Session 锁。
 
-正式空间入口位于聊天抽屉昵称下方和设置页；聊天顶部只显示当前会话域的非交互建筑标记。`EnterprisePage` 展示空间、身份、阶段、已生效 generation 与最近配置同步，并提供相机扫码、相册二维码、粘贴、一键示例、同步、通用 Portal、切域、全设备企业数据重置与原生退出确认。页面不提供来源安装/选择、企业配置或 Feed 编辑、连接场景演练及示例专用清除。`EnterpriseVM` 只依赖 application service；接入文本不写 Activity saved state。退出确认冻结原请求，Portal 页面每次打开持有独立 UI 身份，旧关闭回调不能关闭新页面。宿主打开前验证消息监听、document-start 与完整站点清理三项能力；不支持时正式入口显示 WebView 包名、版本和缺失能力，其他打开失败显示诊断原因。错误文案及参数是同一个受原 selection 约束的投影；未交付宿主的补偿关闭不抢先触发页面关闭通知，避免吞掉打开错误。返回聊天重新经过 Startup 获取本域 lease。Portal 页面退出前台或离开组合时关闭原宿主；网页 logout 经原生确认复用退出服务，媒体请求使用同一文档和原生交互 owner。
+正式空间入口位于聊天抽屉昵称下方和设置页；聊天顶部只显示当前会话域的非交互建筑标记。`EnterprisePage` 展示空间、身份、阶段、已生效 generation 与最近配置同步；连接详情还只读展示并可复制当前 Session 实际绑定的“企业地址”。页面提供相机扫码、相册二维码、粘贴、一键示例、同步、通用 Portal、切域、全设备企业数据重置与原生退出确认，但不提供企业地址编辑、来源安装/选择、企业配置或 Feed 编辑、连接场景演练及示例专用清除。`EnterpriseVM` 只依赖 application service；接入文本不写 Activity saved state。退出确认冻结原请求，Portal 页面每次打开持有独立 UI 身份，旧关闭回调不能关闭新页面。宿主打开前验证消息监听、document-start 与完整站点清理三项能力；不支持时正式入口显示 WebView 包名、版本和缺失能力，其他打开失败显示诊断原因。错误文案及参数是同一个受原 selection 约束的投影；未交付宿主的补偿关闭不抢先触发页面关闭通知，避免吞掉打开错误。返回聊天重新经过 Startup 获取本域 lease。Portal 页面退出前台或离开组合时关闭原宿主；网页 logout 经原生确认复用退出服务，媒体请求使用同一文档和原生交互 owner。
 
 ## 3. Local Settings 顶层结构
 

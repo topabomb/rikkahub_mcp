@@ -1782,4 +1782,5 @@
   <string name="enterprise_budget_request_not_forwarded">This request was not sent upstream.</string>
   <string name="enterprise_runtime_request_id">Request ID: %1$s</string>
   <string name="enterprise_runtime_resource_id">Resource: %1$s</string>
+  <string name="enterprise_address">Enterprise address</string>
 </resources>

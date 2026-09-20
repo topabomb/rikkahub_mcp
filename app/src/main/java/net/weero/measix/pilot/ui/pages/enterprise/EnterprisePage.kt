@@ -1,5 +1,6 @@
 package net.weero.measix.pilot.ui.pages.enterprise
 
+import android.content.ClipData
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.compose.foundation.layout.*
@@ -14,6 +15,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.ClipEntry
+import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
@@ -23,6 +26,7 @@ import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.ArrowLeft01
 import me.rerere.hugeicons.stroke.ArrowRight01
 import me.rerere.hugeicons.stroke.Building03
+import me.rerere.hugeicons.stroke.Copy01
 import me.rerere.hugeicons.stroke.User
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
@@ -57,8 +61,10 @@ import androidx.activity.result.PickVisualMediaRequest
 import androidx.core.content.ContextCompat
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import com.dokar.sonner.ToastType
 import net.weero.measix.pilot.ui.components.ui.CardGroup
 import net.weero.measix.pilot.ui.context.LocalNavController
+import net.weero.measix.pilot.ui.context.LocalToaster
 import org.koin.androidx.compose.koinViewModel
 import java.text.DateFormat
 import java.util.Date
@@ -148,7 +154,11 @@ internal fun EnterprisePage(openUsage: Boolean = false, vm: EnterpriseVM = koinV
     val error by vm.error.collectAsStateWithLifecycle()
     val notice by vm.notice.collectAsStateWithLifecycle()
     val context = LocalContext.current
+    val clipboard = LocalClipboard.current
+    val toaster = LocalToaster.current
     val pageScope = rememberCoroutineScope()
+    val copiedText = stringResource(R.string.copied)
+    val copyText = stringResource(R.string.copy)
     val exit by vm.exitRequest.collectAsStateWithLifecycle()
     val portal by vm.portal.collectAsStateWithLifecycle()
     val joinConfirmation by vm.joinConfirmation.collectAsStateWithLifecycle()
@@ -352,6 +362,26 @@ internal fun EnterprisePage(openUsage: Boolean = false, vm: EnterpriseVM = koinV
                             Text(stringResource(if (connectionDetails) R.string.enterprise_connection_details_hide else R.string.enterprise_connection_details_show))
                         }
                         if (connectionDetails) {
+                            state?.platformOrigin?.let { origin ->
+                                Row(
+                                    Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                        Text(stringResource(R.string.enterprise_address), style = MaterialTheme.typography.labelMedium)
+                                        SelectionContainer { Text(origin, style = MaterialTheme.typography.bodySmall) }
+                                    }
+                                    IconButton(onClick = {
+                                        pageScope.launch {
+                                            clipboard.setClipEntry(ClipEntry(ClipData.newPlainText("Enterprise address", origin)))
+                                        }
+                                        toaster.show(copiedText, type = ToastType.Success)
+                                    }) {
+                                        Icon(HugeIcons.Copy01, contentDescription = copyText)
+                                    }
+                                }
+                            }
                             state?.generation?.let { Text(stringResource(R.string.enterprise_generation, it), style = MaterialTheme.typography.bodySmall) }
                             state?.lastSyncMillis?.let { Text(stringResource(R.string.enterprise_last_sync, DateFormat.getDateTimeInstance().format(Date(it))), style = MaterialTheme.typography.bodySmall) }
                         }

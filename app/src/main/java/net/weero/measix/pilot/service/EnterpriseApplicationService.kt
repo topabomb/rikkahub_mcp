@@ -30,6 +30,7 @@ internal data class EnterpriseOverview(
     val enrollmentRecoveryFailure: String? = null,
     val recoveryLogoutFailure: String? = null,
     val exitReason: EnterpriseExitReason? = null,
+    val platformOrigin: String? = null,
 )
 
 /** Native enterprise UI commands share the existing source, Session, synchronization and exit owners. */
@@ -104,6 +105,7 @@ internal class EnterpriseApplicationService(
                 enrollmentRecoveryFailure = resumeFailure,
                 recoveryLogoutFailure = logoutFailures.first.takeIf { manifest?.session == null } ?: logoutFailures.second,
                 exitReason = manifest?.exitReason,
+                platformOrigin = manifest?.session?.platform?.connection?.origin,
             )
         }.distinctUntilChanged()
 

@@ -1781,4 +1781,5 @@
   <string name="enterprise_budget_request_not_forwarded">이 요청은 업스트림으로 전송되지 않았습니다.</string>
   <string name="enterprise_runtime_request_id">요청 ID: %1$s</string>
   <string name="enterprise_runtime_resource_id">리소스: %1$s</string>
+  <string name="enterprise_address">기업 주소</string>
 </resources>
