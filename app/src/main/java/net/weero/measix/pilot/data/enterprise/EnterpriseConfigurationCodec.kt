@@ -11,7 +11,7 @@ internal object EnterpriseConfigurationCodec {
     internal val json = Json { encodeDefaults = true }
 
     fun validateIdentity(identity: EnterpriseIdentity) {
-        listOf(identity.authority.sourceNamespace, identity.authority.deploymentId, identity.userId).forEach {
+        listOf(identity.authority.deploymentId, identity.userId).forEach {
             check(it.codePointCount(0, it.length) in 1..128, "invalid_enterprise_identity_length")
         }
         check(identity.enterpriseName.isNotBlank() && identity.enterpriseName.length <= 256, "invalid_enterprise_name")

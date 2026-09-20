@@ -41,7 +41,7 @@ import kotlin.uuid.Uuid
 class ScopedMemoryRepositoryAndroidTest {
     private val context get() = ApplicationProvider.getApplicationContext<Context>()
     private val assistant = MemoryOwner.Assistant(ConfigurationReference.random())
-    private val authority = EnterpriseAuthority("platform:example", "dep_example")
+    private val authority = EnterpriseAuthority("dep_example")
 
     @Test
     fun namespaceReadsAndObservationsKeepEveryPrincipalAndOwnerSeparateInIdOrder() = runBlocking {
@@ -157,7 +157,7 @@ class ScopedMemoryRepositoryAndroidTest {
         ConfigurationScope.Personal,
         ConfigurationScope.Enterprise(authority, "alice"),
         ConfigurationScope.Enterprise(authority, "bob"),
-        ConfigurationScope.Enterprise(EnterpriseAuthority("platform:other", "dep_example"), "alice"),
+        ConfigurationScope.Enterprise(EnterpriseAuthority("dep_other"), "alice"),
     ).flatMap { scope -> listOf(MemoryOwner.RealmShared, assistant).map { MemoryAddress(scope, it) } }
 
     private suspend fun expectMissing(operation: suspend () -> Unit) {

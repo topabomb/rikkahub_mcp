@@ -9,6 +9,7 @@ import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.jsonObject
 import net.weero.measix.pilot.data.configuration.ConfigurationScope
 import net.weero.measix.pilot.data.configuration.GatewayPreference
+import net.weero.measix.pilot.data.configuration.LegacyEnterprisePrincipalEncoding
 import kotlinx.serialization.encodeToString
 import me.rerere.common.configuration.EnterpriseAuthority
 import net.weero.measix.pilot.utils.JsonInstant
@@ -19,6 +20,35 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class UserSettingsMigrationTest {
+    @Test
+    fun `enterprise principal migration removes URL source from scopes and references exactly once`() = runTest {
+        val hash = "a".repeat(64)
+        val encoded = """{"preferences":{"scope":{"type":"enterprise","authority":{"sourceNamespace":"platform:$hash","deploymentId":"dep_example"},"userId":"user"},"reference":"managed~platform~$hash~dep_example~mdl_example"}}"""
+        val before = mutablePreferencesOf(SettingsStore.USER_SETTINGS to encoded)
+        val migration = EnterprisePrincipalPreferencesMigration(
+            SettingsStore.USER_SETTINGS,
+            LegacyEnterprisePrincipalEncoding::migrateSettingsJson,
+        )
+        assertTrue(migration.shouldMigrate(before))
+        val after = migration.migrate(before)
+        val migrated = after[SettingsStore.USER_SETTINGS]!!
+        assertFalse(migrated.contains("sourceNamespace"))
+        assertTrue(migrated.contains("managed~dep_example~mdl_example"))
+        assertFalse(migration.shouldMigrate(after))
+    }
+
+    @Test
+    fun `MCP migration changes only catalog ownership and preserves opaque tool schemas`() {
+        val hash = "b".repeat(64)
+        val legacyReference = "managed~platform~$hash~dep_example~mcp_example"
+        val encoded = """{"formatVersion":1,"catalogs":[{"scope":{"type":"enterprise","authority":{"sourceNamespace":"platform:$hash","deploymentId":"dep_example"},"userId":"user"},"serverId":"$legacyReference","tools":[{"name":"opaque","inputSchema":{"sourceNamespace":"platform:$hash","deploymentId":"dep_example","default":"$legacyReference"}}]}]}"""
+        val migrated = requireNotNull(LegacyEnterprisePrincipalEncoding.migrateMcpCatalogJson(encoded))
+        assertTrue(migrated.contains("\"serverId\":\"managed~dep_example~mcp_example\""))
+        assertTrue(migrated.contains("\"authority\":{\"deploymentId\":\"dep_example\"}"))
+        assertTrue(migrated.contains("\"sourceNamespace\":\"platform:$hash\""))
+        assertTrue(migrated.contains("\"default\":\"$legacyReference\""))
+    }
+
     @Test
     fun `legacy assistant search inherits unchanged model tools through the real key migration`() = runTest {
         val model = me.rerere.ai.provider.Model(tools = setOf(me.rerere.ai.provider.BuiltInTools.Search))
@@ -43,7 +73,7 @@ class UserSettingsMigrationTest {
 
     @Test
     fun `user directory rejects enterprise identities and nested bindings on write and decode`() {
-        val reference = ConfigurationReference.Enterprise(EnterpriseAuthority("platform:example", "dep_example"), "mdl_example")
+        val reference = ConfigurationReference.Enterprise(EnterpriseAuthority("dep_example"), "mdl_example")
         val original = golden()
         val invalid = listOf(
             original.copy(providers = original.providers.mapIndexed { i, provider ->
@@ -73,7 +103,7 @@ class UserSettingsMigrationTest {
         assertThrows(IllegalArgumentException::class.java) {
             JsonInstant.decodeFromString<UserSettingsDocument>(encoded)
         }
-        val other = ConfigurationScope.Enterprise(EnterpriseAuthority("platform:another", "dep_example"), "usr_one")
+        val other = ConfigurationScope.Enterprise(EnterpriseAuthority("dep_other"), "usr_one")
         assertThrows(IllegalArgumentException::class.java) {
             UserPreferences(scopes = listOf(ScopedUserPreferences(other, ResourceSelections(chatModelId = reference))))
         }
@@ -159,7 +189,7 @@ class UserSettingsMigrationTest {
 
     @Test
     fun `personal updates preserve another principal preferences and never copy its resources`() {
-        val authority = EnterpriseAuthority("platform:example", "dep_example")
+        val authority = EnterpriseAuthority("dep_example")
         val enterprise = ScopedUserPreferences(
             ConfigurationScope.Enterprise(authority, "usr_one"),
             ResourceSelections(chatModelId = ConfigurationReference.Enterprise(authority, "mdl_example")),
@@ -181,14 +211,14 @@ class UserSettingsMigrationTest {
 
     @Test
     fun `gateway preferences require one matching enterprise principal and reject duplicate resource entries`() {
-        val authority = EnterpriseAuthority("platform:example", "dep_example")
+        val authority = EnterpriseAuthority("dep_example")
         val scope = ConfigurationScope.Enterprise(authority, "alice")
         val preference = GatewayPreference(ConfigurationReference.Enterprise(authority, "gw_example"), false)
         assertThrows(IllegalArgumentException::class.java) {
             ScopedUserPreferences(ConfigurationScope.Personal, gateways = listOf(preference))
         }
         assertThrows(IllegalArgumentException::class.java) {
-            ScopedUserPreferences(scope.copy(authority = authority.copy(sourceNamespace = "platform:other")), gateways = listOf(preference))
+            ScopedUserPreferences(scope.copy(authority = authority.copy(deploymentId = "dep_other")), gateways = listOf(preference))
         }
         assertThrows(IllegalArgumentException::class.java) {
             ScopedUserPreferences(scope, gateways = listOf(preference, preference))

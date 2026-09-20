@@ -10,13 +10,9 @@ import kotlin.uuid.Uuid
 
 @Serializable
 data class EnterpriseAuthority(
-    val sourceNamespace: String,
     val deploymentId: String,
 ) {
     init {
-        require(sourceNamespace.matches(Regex("platform:[A-Za-z0-9._-]{1,128}"))) {
-            "invalid_source_namespace"
-        }
         require(deploymentId.matches(Regex("[A-Za-z0-9._-]{1,256}"))) { "invalid_deployment_id" }
     }
 }
@@ -40,7 +36,7 @@ sealed class ConfigurationReference {
 
     final override fun toString(): String = when (this) {
         is User -> id.toString()
-        is Enterprise -> "managed~${authority.sourceNamespace.replace(':', '~')}~${authority.deploymentId}~$id"
+        is Enterprise -> "managed~${authority.deploymentId}~$id"
     }
 
     companion object {
@@ -49,10 +45,10 @@ sealed class ConfigurationReference {
         fun parse(value: String): ConfigurationReference {
             if (!value.startsWith("managed~")) return User(Uuid.parse(value))
             val parts = value.split('~')
-            require(parts.size == 5) { "invalid_enterprise_reference" }
+            require(parts.size == 3) { "invalid_enterprise_reference" }
             return Enterprise(
-                EnterpriseAuthority("${parts[1]}:${parts[2]}", parts[3]),
-                parts[4],
+                EnterpriseAuthority(parts[1]),
+                parts[2],
             )
         }
     }

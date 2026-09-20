@@ -30,7 +30,7 @@ class EnterpriseIdentityDataDisposerTest {
             coEvery { clearEnterpriseScope(any()) } returns Unit
         }
         val scope = ConfigurationScope.Enterprise(
-            EnterpriseAuthority("platform:test", "dep_12345678-1234-4123-8123-123456789abc"),
+            EnterpriseAuthority("dep_12345678-1234-4123-8123-123456789abc"),
             "usr_12345678-1234-4123-8123-123456789abc",
         )
 

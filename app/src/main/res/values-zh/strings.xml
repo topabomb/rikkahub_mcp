@@ -1782,4 +1782,8 @@
   <string name="enterprise_runtime_request_id">请求 ID：%1$s</string>
   <string name="enterprise_runtime_resource_id">资源：%1$s</string>
   <string name="enterprise_address">企业地址</string>
+  <string name="enterprise_address_edit_title">更改企业地址</string>
+  <string name="enterprise_address_edit_supporting">更改地址不会改变当前企业、用户、会话和本机数据。新地址必须属于当前企业。</string>
+  <string name="enterprise_address_changed">企业地址已更改</string>
+  <string name="enterprise_address_change_failed">无法更改企业地址</string>
 </resources>

@@ -184,7 +184,7 @@ class PlatformModelLiveAndroidTest {
             koin.get<ApplicationRecoveryGate>().awaitReady()
             val sessions = koin.get<EnterpriseSessionController>()
             val access = sessions.captureSelectedRealmAccess() as RealmAccess.Enterprise
-            check(access.scope.authority.sourceNamespace.startsWith("platform:"))
+            check(access.scope.authority.deploymentId.isNotBlank())
             koin.get<net.weero.measix.pilot.service.PlatformEnterpriseService>().synchronize(access)
             val models = koin.get<ModelExecutionService>()
             val assistant = models.read(access).configuration.assistants.values.first {
@@ -217,7 +217,7 @@ class PlatformModelLiveAndroidTest {
             koin.get<ApplicationRecoveryGate>().awaitReady()
             val sessions = koin.get<EnterpriseSessionController>()
             val access = sessions.captureSelectedRealmAccess() as RealmAccess.Enterprise
-            check(access.scope.authority.sourceNamespace.startsWith("platform:"))
+            check(access.scope.authority.deploymentId.isNotBlank())
             val models = koin.get<ModelExecutionService>()
             val configuration = models.read(access).configuration
             val assistant = configuration.assistants.values.first { it.id is me.rerere.common.configuration.ConfigurationReference.Enterprise }

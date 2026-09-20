@@ -17,6 +17,7 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.*
+import kotlinx.serialization.encodeToString
 import me.rerere.common.http.RoutedHttpException
 import net.weero.measix.pilot.service.PlatformEnterpriseService
 import okhttp3.OkHttpClient
@@ -61,6 +62,117 @@ class PlatformSessionNetworkTest {
         }.exceptionOrNull()
         assertTrue(error is EnterpriseConfigurationException)
         assertEquals("enrollment_expired", (error as EnterpriseConfigurationException).reason)
+    }
+
+    @Test fun `changing address after restart preserves principal session data and freezes existing execution`() = runBlocking {
+        val root = temporary.newFolder()
+        owner(root).enrollFixture(exampleEnterprisePackage())
+        val sessions = owner(root)
+        val before = (sessions.recover() as EnterpriseState.Available).manifest
+        val selection = requireNotNull(sessions.readPresentation().selection)
+        val access = selection.access as RealmAccess.Enterprise
+        val oldLease = sessions.captureExecution(access, before.applied)
+        val oldExecution = oldLease.execution as EnterpriseExecution.Platform
+        val session = requireNotNull(before.session)
+        val discovery = PlatformWireCodec.decode<PlatformDiscovery>(fixture("discovery")).copy(
+            deploymentId = session.identity.authority.deploymentId,
+            deploymentName = session.identity.enterpriseName,
+        )
+        val bootstrap = PlatformWireCodec.decode<PlatformBootstrap>(fixture("bootstrap")).let { value ->
+            value.copy(
+                deployment = value.deployment.copy(
+                    deploymentId = session.identity.authority.deploymentId,
+                    name = session.identity.enterpriseName,
+                ),
+                user = value.user.copy(userId = session.identity.userId, displayName = session.identity.userName),
+                device = value.device.copy(deviceId = requireNotNull(session.platform).deviceId),
+                session = value.session.copy(sessionId = session.id),
+            )
+        }
+        val refreshes = AtomicInteger()
+        val server = server {
+            when (requestURI.path) {
+                "/.well-known/measix" -> reply(200, PlatformWireCodec.json.encodeToString(discovery))
+                "/api/client/v1/sessions/refresh" -> {
+                    refreshes.incrementAndGet()
+                    reply(200, fixture("refresh-response"))
+                }
+                "/api/client/v1/bootstrap" -> reply(200, PlatformWireCodec.json.encodeToString(bootstrap))
+                else -> reply(404, "unexpected route")
+            }
+        }
+        val other = server {
+            when (requestURI.path) {
+                "/.well-known/measix" -> reply(200, PlatformWireCodec.json.encodeToString(
+                    discovery.copy(deploymentId = "dep_00000000-0000-4000-8000-000000000099"),
+                ))
+                else -> reply(404, "unexpected route")
+            }
+        }
+        val mismatchedBootstrap = server {
+            when (requestURI.path) {
+                "/.well-known/measix" -> reply(200, PlatformWireCodec.json.encodeToString(discovery))
+                "/api/client/v1/sessions/refresh" -> reply(200, fixture("refresh-response"))
+                "/api/client/v1/bootstrap" -> reply(200, PlatformWireCodec.json.encodeToString(
+                    bootstrap.copy(user = bootstrap.user.copy(
+                        userId = "usr_00000000-0000-4000-8000-000000000099",
+                    )),
+                ))
+                else -> reply(404, "unexpected route")
+            }
+        }
+        try {
+            val newOrigin = "http://127.0.0.1:${server.address.port}"
+            service(sessions).changeAddress(selection, newOrigin)
+            assertEquals(1, refreshes.get())
+            val after = (sessions.state.value as EnterpriseState.Available).manifest
+            assertEquals(before.session.id, after.session?.id)
+            assertEquals(before.session.identity.scope, after.session?.identity?.scope)
+            assertEquals(before.session.platform?.deviceId, after.session?.platform?.deviceId)
+            assertEquals(before.applied, after.applied)
+            assertEquals(newOrigin, after.session?.platform?.connection?.origin)
+            assertEquals("https://platform.test", oldExecution.connection.origin)
+            val newLease = sessions.captureExecution(access, after.applied)
+            try {
+                assertEquals(newOrigin, (newLease.execution as EnterpriseExecution.Platform).connection.origin)
+            } finally {
+                newLease.release()
+            }
+
+            val failure = runCatching {
+                service(sessions).changeAddress(
+                    requireNotNull(sessions.readPresentation().selection),
+                    "http://127.0.0.1:${other.address.port}",
+                )
+            }.exceptionOrNull()
+            assertTrue(failure is EnterpriseConfigurationException)
+            assertEquals("enterprise_address_deployment_mismatch", (failure as EnterpriseConfigurationException).reason)
+            assertEquals(newOrigin, (sessions.state.value as EnterpriseState.Available)
+                .manifest.session?.platform?.connection?.origin)
+
+            val restarted = owner(root)
+            val beforeFailure = (restarted.recover() as EnterpriseState.Available).manifest
+            val failureSelection = requireNotNull(restarted.readPresentation().selection)
+            val identityFailure = runCatching {
+                service(restarted).changeAddress(
+                    failureSelection,
+                    "http://127.0.0.1:${mismatchedBootstrap.address.port}",
+                )
+            }.exceptionOrNull()
+            assertTrue(identityFailure is EnterpriseConfigurationException)
+            assertEquals("enterprise_address_identity_mismatch",
+                (identityFailure as EnterpriseConfigurationException).reason)
+            val afterFailure = (restarted.state.value as EnterpriseState.Available).manifest
+            assertEquals(beforeFailure.session?.id, afterFailure.session?.id)
+            assertEquals(beforeFailure.session?.identity?.scope, afterFailure.session?.identity?.scope)
+            assertEquals(newOrigin, afterFailure.session?.platform?.connection?.origin)
+            assertNotEquals(beforeFailure.session?.platform?.credential, afterFailure.session?.platform?.credential)
+        } finally {
+            oldLease.release()
+            server.stop(0)
+            other.stop(0)
+            mismatchedBootstrap.stop(0)
+        }
     }
 
     @Test fun `closing session replays pending refresh before server logout`() = runBlocking {
@@ -324,25 +436,48 @@ class PlatformSessionNetworkTest {
         } finally { server.stop(0) }
     }
 
-    @Test fun `revoked active session signals the application exit owner`() = runBlocking {
-        for (revokedCode in listOf("user_disabled", "device_revoked", "session_revoked")) {
-            val server = server {
-                assertEquals("/api/client/v1/managed/state", requestURI.path)
-                reply(403, """{"type":"about:blank","title":"Forbidden","status":403,"code":"$revokedCode"}""")
-            }
-            try {
+    @Test fun `terminal active session signals the application exit owner with the exact reason`() = runBlocking {
+        val cases = listOf(
+            Triple(403, "user_disabled", EnterpriseExitReason.AUTHORIZATION_REVOKED),
+            Triple(403, "device_revoked", EnterpriseExitReason.AUTHORIZATION_REVOKED),
+            Triple(403, "session_revoked", EnterpriseExitReason.AUTHORIZATION_REVOKED),
+            Triple(401, "session_expired", EnterpriseExitReason.AUTHORIZATION_EXPIRED),
+            Triple(401, "invalid_credential", EnterpriseExitReason.AUTHORIZATION_EXPIRED),
+        )
+        val current = AtomicReference(cases.first())
+        val server = server {
+            assertEquals("/api/client/v1/sessions/refresh", requestURI.path)
+            val (status, code) = current.get()
+            reply(status, """{"type":"about:blank","title":"Unauthorized","status":$status,"code":"$code","forwarded":false}""")
+        }
+        try {
+            for (case in cases) {
+                current.set(case)
+                val (status, code, reason) = case
                 val sessions = owner(temporary.newFolder())
-                val connection = PlatformConnection("http://127.0.0.1:${server.address.port}", PlatformWireCodec.decode(fixture("discovery")))
-                val id = sessions.acceptPlatformEnrollment(sessions.beginPlatformEnrollment(), connection,
-                    PlatformWireCodec.decode(fixture("enrollment-response")))
+                val connection = PlatformConnection(
+                    "http://127.0.0.1:${server.address.port}",
+                    PlatformWireCodec.decode(fixture("discovery")),
+                )
+                val response = PlatformWireCodec.decode<PlatformEnrollmentExchangeResponse>(fixture("enrollment-response"))
+                    .copy(accessTokenExpiresAt = "1970-01-01T00:00:01Z")
+                val id = sessions.acceptPlatformEnrollment(sessions.beginPlatformEnrollment(), connection, response)
                 val access = sessions.completePlatformBootstrap(id, PlatformWireCodec.decode(fixture("bootstrap")))
-                val revoked = mutableListOf<RealmAccess.Enterprise>()
-                val platform = PlatformEnterpriseService(sessions, PlatformControlClient(OkHttpClient()), { Instant.ofEpochMilli(1000) },
-                    onSessionRevoked = { revoked += it })
-                try { platform.synchronize(access); fail("Revocation was ignored") }
-                catch (error: PlatformHttpException) { assertEquals(revokedCode, error.problem?.code) }
-                assertEquals(listOf(access), revoked)
-            } finally { server.stop(0) }
+                val invalidated = mutableListOf<Pair<RealmAccess.Enterprise, EnterpriseExitReason>>()
+                val platform = PlatformEnterpriseService(
+                    sessions,
+                    PlatformControlClient(OkHttpClient()),
+                    { Instant.ofEpochMilli(1000) },
+                    onSessionInvalidated = { captured, capturedReason -> invalidated += captured to capturedReason },
+                )
+                val failure = runCatching { platform.accessToken(access.sessionId) }.exceptionOrNull()
+                assertTrue(failure is PlatformHttpException)
+                assertEquals(status, (failure as PlatformHttpException).status)
+                assertEquals(code, failure.problem?.code)
+                assertEquals(listOf(access to reason), invalidated)
+            }
+        } finally {
+            server.stop(0)
         }
     }
 

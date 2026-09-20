@@ -30,7 +30,7 @@ class ScopedStatisticsPresentationTest {
         val store = ViewModelStore()
         try {
             val enterprise = RealmAccess.Enterprise(ConfigurationScope.Enterprise(
-                EnterpriseAuthority("platform:example", "deployment"), "alice"), "session")
+                EnterpriseAuthority("deployment"), "alice"), "session")
             val access = MutableStateFlow<RealmAccess?>(RealmAccess.Personal)
             val query = mockk<ConversationQueryService>()
             every { query.observeCurrentAccess() } returns access

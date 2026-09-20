@@ -6,15 +6,15 @@
 
 | 表 | 索引与用途 |
 | --- | --- |
-| `ConversationEntity` | `(assistant_id, parent_conversation_id, is_pinned, update_at)` 支持助手列表与最近会话；`(assistant_id, parent_conversation_id, folder_id, is_pinned, update_at)` 支持未归档分页；`(folder_id, parent_conversation_id, is_pinned, update_at)` 支持文件夹分页；`(parent_conversation_id, is_pinned, update_at)` 支持置顶列表、子会话查找与外键级联 |
+| `ConversationEntity` | `(scope, assistant_id, parent_conversation_id, is_pinned, update_at)` 支持域内助手列表与最近会话；`(scope, assistant_id, parent_conversation_id, folder_id, is_pinned, update_at)` 支持域内未归档分页；`(scope, folder_id, parent_conversation_id, is_pinned, update_at)` 支持域内文件夹分页；`(scope, parent_conversation_id, is_pinned, update_at)` 支持域内置顶、根会话与统计入口；`(parent_conversation_id)` 单独覆盖 Child 查询和自引用外键级联 |
 | `message_node` | `(conversation_id, node_index)` 按会话读取有序消息节点，同时覆盖会话外键 |
 | `conversation_model_context` | 主键 `(owner_node_id, owner_message_id)` 覆盖按 owner 点查与 insert-once；`(anchor_node_id)` 覆盖按因果 USER node 收口。按会话装载走 `owner_node_id JOIN message_node` 并按 `message_node.conversation_id` 过滤，由 `message_node(conversation_id, node_index)` 覆盖，不在 context 行重复保存 `conversation_id` |
-| `MemoryEntity` | `(assistant_id)` 缩小 owner 范围，列表/修改同时约束 `scope`，列表按 `id ASC` |
-| `GenMediaEntity` | `(path)` 支持文件名查重；`(create_at)` 支持图库时间排序与清理候选 |
-| `artifact` | 保留 `relative_path` 唯一索引；`(folder, created_at)` 支持分目录列表与清理；`(state, created_at)` 支持生命周期候选。目录查询的状态条件可作为剩余过滤，不破坏全状态清理的时间顺序 |
+| `MemoryEntity` | `(scope, assistant_id)` 直接定位企业用户范围与 owner，列表按主键 `id ASC` |
+| `GenMediaEntity` | `(path)` 支持文件名查重；`(create_at)` 支持全库恢复读取；`(scope, create_at)` 支持域内图库分页、观察与清理候选 |
+| `artifact` | 保留 `relative_path` 唯一索引；`(folder, created_at)` 支持跨域生命周期恢复；`(state, created_at)` 支持状态候选；`(scope, folder, created_at)` 支持域内目录列表与清理；`(scope, created_at)` 支持整域读取与清理。目录查询的状态条件可作为剩余过滤，不破坏时间顺序 |
 | `artifact_reference` | 保留 `(artifact_id, node_id, reference_type)` 唯一索引与 `(node_id)`；唯一索引的左前缀同时覆盖附件引用检查与外键，不另存同列普通索引 |
-| `conversation_folder` | `(assistant_id, sort_index, create_at)` 支持助手文件夹排序 |
-| `favorites` | 保留 `ref_key` 唯一索引与 `(created_at)`；`(type, created_at)` 支持分类后的时间排序 |
+| `conversation_folder` | `(scope, assistant_id, sort_index, create_at)` 支持域内助手文件夹排序 |
+| `favorites` | 保留 `ref_key` 唯一索引与 `(created_at)`；`(scope, type, created_at)` 支持域内分类后的时间排序 |
 | `turn_execution` | 保留 `(conversation_id)` 与 `(status)`，分别支持归属查询、非终态恢复 |
 | `tool_execution` | `(turn_id)` 支持归属查询；唯一 `(turn_id, local_call_id)` 约束调用身份；`(child_conversation_id)` 保留 Child 关系查询。恢复按 `turn_id` 读取执行事实并验证 Child Turn/run，不为无独立查询的 `child_turn_id`、`sub_assistant_run_id` 建索引；无全局 status 查询，不建 status 索引 |
 | `workspaces` | 保留 `root` 唯一索引与 `(updated_at)`，支持路径唯一性、SAF 的 `getByRoot` 注册查找及列表排序；主键用于 Workspace 点查，SAF 不新增表或索引 |
@@ -32,10 +32,12 @@
 
 `Migration_10_11` 将旧 Assistant transcript 转成显式 Step 与稳定 Tool locator，新增 `transcript_schema = 3`，重建 `tool_execution`，并转换等待用户与未开始的 turn 状态。消息按 SQLite 字符切片读取，避免大 tool output 超过 CursorWindow；转换后验证 Step/Tool 身份、顺序和终态，仅 `Continue` 可接后续 Step，Tool output 不得嵌套 Step。已转换内容只验证、不重复改写。
 
-`Migration_11_12` 给 Conversation、Memory、Artifact、生成媒体、会话文件夹和收藏六类根记录追加 `scope TEXT NOT NULL DEFAULT 'personal'`。旧行的 ID、payload、引用、索引和外键不变；消息、turn、tool 和 context 通过所属会话确定域，不重复保存。ConfigurationScopeConverter 使用规范身份编码保存企业来源、部署与用户，非法编码不能回退个人域。
+`Migration_11_12` 给 Conversation、Memory、Artifact、生成媒体、会话文件夹和收藏六类根记录追加 `scope TEXT NOT NULL DEFAULT 'personal'`。旧行的 ID、payload、引用、索引和外键不变；消息、turn、tool 和 context 通过所属会话确定域，不重复保存。ConfigurationScopeConverter 使用当时的来源、部署与用户编码，非法编码不能回退个人域。
+
+`Migration_12_13` 将上述六类根记录的企业 scope 从 `enterprise~sourceNamespace~deploymentId~userId` 一次性改写为 `enterprise~deploymentId~userId`，并同步改写 Conversation、Memory 与文件夹中的企业 ConfigurationReference 为 `managed~deploymentId~resourceId`。同一次迁移把高频域内读取索引改为以 `scope` 开头，避免地址变化后保留下来的多企业数据在列表、分页、记忆、文件、媒体、文件夹和收藏查询中互相扩大扫描；Child 外键、全库恢复、生命周期状态与唯一性查询继续保留各自不带 scope 的必要索引。迁移不改变 deploymentId、userId、资源 ID、主键、关系或内容；非规范旧值使迁移失败，运行时转换器只接受新格式。
 
 会话助手列表、最近聊天、置顶、未归类/文件夹分页、文件夹列表和统计均在 SQL 内过滤完整 scope。FTS 在排序与限额之前经所属会话过滤 scope 和主会话，包含全局搜索与助手内搜索；索引仍是既有 message_fts 投影，不复制域数据。ConversationQueryService 负责选中域订阅及原 Session 授权，SelectedRealmPagingSource 对每次惰性加载重新校验，切域或结束订阅使旧源失效。此查询调整不改变 schema 或索引；按 ID 的页面与命令授权另由对应 application owner 校验，不能以索引代替访问授权。
 
 迁移由 Room 在事务内执行，新安装直接使用同构 schema。所有角色的消息均须可解码；旧字段的显式 null 按既有缺省语义处理，错误类型、未知 turn 状态或未知消息 part 必须中止迁移，不得置空后继续。备份校验接受受支持的历史数据库，在 staging 内由同一 Room migration 链升级到当前版本并验证后才发布 pending；当前版本在 staging 移除派生的 `room_master_table`，使 Room 打开时执行生成的 schema 校验并重建标记，不能仅凭既有 identity hash 信任表、列和索引。所有版本另行校验外键和 transcript；当前版本不转换 transcript，不为旧文件名引入额外读取路径。
 
-架构相关入口：`AppDatabase`、`AppDatabaseFactory`、各 `*Entity` / `*DAO`、`Migration_8_9`、`Migration_9_10`、`Migration_10_11`、`Migration_11_12`、`BackupArchiveService`。迁移验证覆盖历史链、新旧 schema、数据与约束保全，并用 Android SQLite 的 `EXPLAIN QUERY PLAN` 检查主要查询的索引和排序行为；查询计划验证不等于设备耗时基准。
+架构相关入口：`AppDatabase`、`AppDatabaseFactory`、各 `*Entity` / `*DAO`、`Migration_8_9`、`Migration_9_10`、`Migration_10_11`、`Migration_11_12`、`Migration_12_13`、`BackupArchiveService`。迁移验证覆盖历史链、新旧 schema、数据与约束保全，并用 Android SQLite 的 `EXPLAIN QUERY PLAN` 检查主要查询的索引和排序行为；查询计划验证不等于设备耗时基准。

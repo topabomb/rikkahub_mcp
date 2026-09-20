@@ -91,6 +91,36 @@ internal class PlatformEnterpriseService(
             ?: sessions.recoverablePlatformAccess()
     }
 
+    /** Changes only the current Session's network route after the same Core principal proves itself. */
+    suspend fun changeAddress(selection: RealmSelection, rawOrigin: String): RealmAccess.Enterprise {
+        val access = selection.access as? RealmAccess.Enterprise
+            ?: throw EnterpriseConfigurationException("enterprise_session_required")
+        val operation = sessions.capturePlatformOperation(access.sessionId)
+        try {
+            val current = sessions.platformContext(access.sessionId)
+            val normalized = EnrollmentMaterialParser.normalizeOrigin(rawOrigin)
+            if (normalized == current.platform.connection.origin) return access
+            val candidate = client.discover(normalized)
+            if (candidate.discovery.deploymentId != access.scope.authority.deploymentId) {
+                throw EnterpriseConfigurationException("enterprise_address_deployment_mismatch")
+            }
+            return refresh.withLock {
+                val existing = sessions.platformAccessToken(access.sessionId)
+                var token = existing ?: refreshLocked(access.sessionId, candidate)
+                val bootstrap = try {
+                    client.bootstrap(candidate, token.value)
+                } catch (error: PlatformHttpException) {
+                    if (error.status != 401 || error.problem?.code != "invalid_credential" || existing == null) throw error
+                    token = refreshLocked(access.sessionId, candidate)
+                    client.bootstrap(candidate, token.value)
+                }
+                sessions.acceptPlatformAddress(selection, candidate, bootstrap)
+            }
+        } finally {
+            operation.release()
+        }
+    }
+
     private suspend fun bootstrap(sessionId: String): RealmAccess.Enterprise {
         return try {
             val bootstrap = read(sessionId) { connection, token -> client.bootstrap(connection, token) }
@@ -234,14 +264,19 @@ internal class PlatformEnterpriseService(
                 EnterpriseExitReason.AUTHORIZATION_REVOKED
             error.status == 401 && error.problem?.code == EnterpriseRuntimeProblemCodes.IDENTITY_DELETED ->
                 EnterpriseExitReason.IDENTITY_DELETED
+            error.status == 401 && error.problem?.code in setOf("session_expired", "invalid_credential") ->
+                EnterpriseExitReason.AUTHORIZATION_EXPIRED
             else -> return
         }
         onSessionInvalidated(access, reason)
     }
 
-    private suspend fun refreshLocked(sessionId: String): PlatformAccessToken {
+    private suspend fun refreshLocked(
+        sessionId: String,
+        connection: PlatformConnection? = null,
+    ): PlatformAccessToken {
         val attempt = sessions.beginPlatformRefresh(sessionId)
-        val response = client.refresh(attempt.context.platform.connection, attempt.credential.refreshToken,
+        val response = client.refresh(connection ?: attempt.context.platform.connection, attempt.credential.refreshToken,
             requireNotNull(attempt.credential.pendingIdempotencyKey))
         sessions.acceptPlatformRefresh(attempt, response)
         return sessions.platformAccessToken(sessionId)

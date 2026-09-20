@@ -2,7 +2,6 @@ package net.weero.measix.pilot.data.enterprise
 
 import java.io.IOException
 import java.net.URI
-import java.security.MessageDigest
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import me.rerere.common.configuration.EnterpriseAuthority
@@ -24,10 +23,7 @@ internal data class PlatformConnection(val origin: String, val discovery: Platfo
         requirePlatformPath(discovery.runtimeApiBase)
     }
 
-    val authority: EnterpriseAuthority get() = EnterpriseAuthority(
-        "platform:" + MessageDigest.getInstance("SHA-256").digest(origin.toByteArray(Charsets.UTF_8))
-            .joinToString("") { "%02x".format(it) }, discovery.deploymentId,
-    )
+    val authority: EnterpriseAuthority get() = EnterpriseAuthority(discovery.deploymentId)
 
     fun control(path: String): String {
         requirePlatformPath(path)

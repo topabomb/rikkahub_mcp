@@ -33,12 +33,12 @@ class McpCatalogPersistenceTest {
         val old = McpServerConfig.StreamableHTTPServer(url = "https://old.example/mcp")
         val restored = McpServerConfig.StreamableHTTPServer(url = "https://restored.example/mcp")
         val replacement = candidate(restored, "restored").initialSnapshot()
-        val local = EnterpriseAuthority("platform:example", "deployment")
-        val platform = EnterpriseAuthority("platform:example", "deployment")
+        val firstDeployment = EnterpriseAuthority("deployment")
+        val secondDeployment = EnterpriseAuthority("other-deployment")
         val enterpriseCatalogs = listOf(
-            ConfigurationScope.Enterprise(local, "a"),
-            ConfigurationScope.Enterprise(local, "b"),
-            ConfigurationScope.Enterprise(platform, "a"),
+            ConfigurationScope.Enterprise(firstDeployment, "a"),
+            ConfigurationScope.Enterprise(firstDeployment, "b"),
+            ConfigurationScope.Enterprise(secondDeployment, "a"),
         ).map { scope ->
             McpCatalogCandidate(
                 scope, ConfigurationReference.Enterprise(scope.authority, "mcp_shared"), "definition",

@@ -1782,4 +1782,8 @@
   <string name="enterprise_runtime_request_id">Идентификатор запроса: %1$s</string>
   <string name="enterprise_runtime_resource_id">Ресурс: %1$s</string>
   <string name="enterprise_address">Адрес предприятия</string>
+  <string name="enterprise_address_edit_title">Изменить адрес организации</string>
+  <string name="enterprise_address_edit_supporting">При изменении адреса текущая организация, пользователь, сеанс и локальные данные сохраняются. Новый адрес должен принадлежать этой организации.</string>
+  <string name="enterprise_address_changed">Адрес организации изменён</string>
+  <string name="enterprise_address_change_failed">Не удалось изменить адрес организации</string>
 </resources>

@@ -25,7 +25,7 @@ class PlatformControlClientTest {
             val connection = client.discover(origin)
             assertEquals(origin, connection.origin)
             assertEquals(origin + "/api/client/v1/bootstrap", connection.control("/bootstrap"))
-            assertTrue(connection.authority.sourceNamespace.startsWith("platform:"))
+            assertEquals(connection.discovery.deploymentId, connection.authority.deploymentId)
             listOf("//other.test/api", "https://other.test/api", "/api/../private", "/api/%2e%2e/private", "/api?token=x").forEach { base ->
                 assertThrows(IllegalArgumentException::class.java) { connection.copy(discovery = connection.discovery.copy(clientApiBase = base)) }
             }

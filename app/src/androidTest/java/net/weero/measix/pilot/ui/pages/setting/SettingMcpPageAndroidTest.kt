@@ -40,7 +40,7 @@ class SettingMcpPageAndroidTest {
 
     @Test
     fun managedToolsStayReadOnlyAndGatewayUsesTheRenderedSelectionBeforeLeavingTheRealm() {
-        val authority = EnterpriseAuthority("platform:example", "deployment")
+        val authority = EnterpriseAuthority("deployment")
         val access = RealmAccess.Enterprise(ConfigurationScope.Enterprise(authority, "user"), "original")
         val selection = RealmSelection(access, 1)
         val user = McpServerConfig.StreamableHTTPServer(commonOptions = McpCommonOptions(name = "Shared MCP"), url = "https://example.test/mcp")

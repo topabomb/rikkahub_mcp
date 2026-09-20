@@ -58,7 +58,9 @@ class Migration_11_12Test {
             db.execSQL("INSERT INTO artifact_reference(artifact_id,node_id,reference_type) VALUES(9,'node','ATTACHMENT')")
         }
         helper.runMigrationsAndValidate(name, 12, true, Migration_11_12).close()
-        val database = Room.databaseBuilder(context, AppDatabase::class.java, name).build()
+        val database = Room.databaseBuilder(context, AppDatabase::class.java, name)
+            .addMigrations(Migration_12_13)
+            .build()
         val appScope = AppScope()
         try {
             val store = ArtifactStore(

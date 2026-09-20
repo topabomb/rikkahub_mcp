@@ -80,7 +80,7 @@ internal class EnterpriseDataResetStore(private val root: File) {
         }
         if (intent.schemaVersion != EnterpriseDataResetIntent.SCHEMA_VERSION || !idsValid ||
             intent.scopes.distinct().size != intent.scopes.size ||
-            intent.scopes.any { it.userId.isBlank() || it.authority.sourceNamespace.isBlank() || it.authority.deploymentId.isBlank() } ||
+            intent.scopes.any { it.userId.isBlank() || it.authority.deploymentId.isBlank() } ||
             intent.completedOwners.any { it !in EnterpriseDataResetIntent.OWNERS } ||
             intent.completedOwners.distinct().size != intent.completedOwners.size ||
             intent.operationId.isBlank()) {

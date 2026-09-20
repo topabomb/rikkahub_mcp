@@ -1783,4 +1783,8 @@
   <string name="enterprise_runtime_request_id">Request ID: %1$s</string>
   <string name="enterprise_runtime_resource_id">Resource: %1$s</string>
   <string name="enterprise_address">Enterprise address</string>
+  <string name="enterprise_address_edit_title">Change enterprise address</string>
+  <string name="enterprise_address_edit_supporting">Changing the address keeps the current enterprise, user, session, and local data. The new address must belong to this enterprise.</string>
+  <string name="enterprise_address_changed">Enterprise address changed</string>
+  <string name="enterprise_address_change_failed">Could not change enterprise address</string>
 </resources>

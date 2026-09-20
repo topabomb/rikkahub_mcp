@@ -18,7 +18,7 @@ import kotlin.uuid.Uuid
 internal class ConversationTransitionTest : ConversationTransitionTestBase() {
     @Test
     fun `first user append preserves enterprise principal when materializing a draft`() {
-        val scope = ConfigurationScope.Enterprise(EnterpriseAuthority("platform:example", "dep_example"), "user")
+        val scope = ConfigurationScope.Enterprise(EnterpriseAuthority("dep_example"), "user")
         val draft = Conversation.ofId(Uuid.random(), newConversation = true, scope = scope).toSnapshot()
         val change = ConversationTransition.plan(draft, AppendUserMessage(user(Uuid.random())), draft.header.updateAt) as ConversationChange.Durable
         val persisted = (change.write as ConversationWrite.MaterializeDraft).conversation

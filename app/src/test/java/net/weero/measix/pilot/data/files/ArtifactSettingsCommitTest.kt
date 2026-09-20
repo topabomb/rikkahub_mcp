@@ -47,7 +47,7 @@ import org.robolectric.annotation.Config
 @Config(sdk = [34])
 internal class ArtifactSettingsCommitTest {
     @get:Rule val temporary = TemporaryFolder()
-    private val enterprise = ConfigurationScope.Enterprise(EnterpriseAuthority("platform:example", "deployment"), "user")
+    private val enterprise = ConfigurationScope.Enterprise(EnterpriseAuthority("deployment"), "user")
 
     @Test
     fun `root commit keeps lifecycle through disk acknowledgement and cancellation`() = runBlocking {

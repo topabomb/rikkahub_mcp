@@ -320,7 +320,7 @@ class ArtifactUploadImageReadTest {
     @Test
     fun `foreign tool and request files are rejected without partial retention`() = runBlocking {
         val personal = register("personal.png")
-        val scope = ConfigurationScope.Enterprise(me.rerere.common.configuration.EnterpriseAuthority("platform:example", "deployment"), "user")
+        val scope = ConfigurationScope.Enterprise(me.rerere.common.configuration.EnterpriseAuthority("deployment"), "user")
         val foreign = register("foreign.png", scope = scope)
         assertFailure(ArtifactImageReadResult.Reason.NOT_FOUND,
             store.withUploadImages(ConfigurationScope.Personal, listOf("/upload/foreign.png")) { it })

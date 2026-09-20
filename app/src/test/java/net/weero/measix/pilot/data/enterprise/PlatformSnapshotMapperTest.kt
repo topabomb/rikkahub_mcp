@@ -2,6 +2,7 @@ package net.weero.measix.pilot.data.enterprise
 
 import kotlinx.serialization.json.*
 import kotlinx.coroutines.runBlocking
+import java.security.MessageDigest
 import org.junit.Assert.*
 import org.junit.Rule
 import org.junit.Test
@@ -128,7 +129,11 @@ class PlatformSnapshotMapperTest {
         val folder = temporary.newFolder()
         val store = net.weero.measix.pilot.data.enterprise.enterpriseTestStore(folder)
         val version = store.prepare(candidate)
-        val session = EnterpriseSession("ses_12345678-1234-4234-8234-123456789012", identity, 2000000000000L)
+        val sessionId = "ses_12345678-1234-4234-8234-123456789012"
+        val credential = store.prepareCredential(PlatformRefreshCredential(sessionId, "refresh", 2000000000000L))
+        val execution = candidate.execution as EnterpriseExecution.Platform
+        val session = EnterpriseSession(sessionId, identity, 2000000000000L,
+            PlatformSessionDetails(execution.connection, "dev_12345678-1234-4234-8234-123456789012", credential))
         val manifest = EnterpriseManifest(ENTERPRISE_MANIFEST_SCHEMA_VERSION, EnterpriseSessionPhase.READY,
             session, version, identity.scope, identity)
         assertNull(store.load().configuration)
@@ -139,16 +144,73 @@ class PlatformSnapshotMapperTest {
         assertTrue(reopened.execution(manifest) is EnterpriseExecution.Platform)
     }
 
+    @Test fun `schema five URL-qualified state migrates once without changing principal or session`() {
+        val candidate = map(snapshot("v4-speech"))
+        val folder = temporary.newFolder()
+        val store = enterpriseTestStore(folder)
+        val legacyVersion = store.prepare(candidate)
+        val sessionId = "ses_12345678-1234-4234-8234-123456789012"
+        val credential = store.prepareCredential(PlatformRefreshCredential(sessionId, "refresh", 2000000000000L))
+        val execution = candidate.execution as EnterpriseExecution.Platform
+        val session = EnterpriseSession(sessionId, identity, 2000000000000L,
+            PlatformSessionDetails(execution.connection, "dev_12345678-1234-4234-8234-123456789012", credential))
+
+        val sourceHash = MessageDigest.getInstance("SHA-256")
+            .digest(connection.origin.toByteArray()).joinToString("") { "%02x".format(it) }
+        fun legacy(element: JsonElement): JsonElement = when (element) {
+            is JsonObject -> JsonObject(element.mapValues { legacy(it.value) }.toMutableMap().apply {
+                if (keys == setOf("deploymentId")) put("sourceNamespace", JsonPrimitive("platform:$sourceHash"))
+            })
+            is JsonArray -> JsonArray(element.map(::legacy))
+            is JsonPrimitive -> if (element.isString && element.content.startsWith("managed~")) {
+                val parts = element.content.split('~')
+                JsonPrimitive("managed~platform~$sourceHash~${parts[1]}~${parts[2]}")
+            } else element
+        }
+        val json = EnterpriseConfigurationCodec.json
+        val revision = java.io.File(folder, "revisions/${legacyVersion.revision}")
+        val currentConfiguration = json.parseToJsonElement(java.io.File(revision, "configuration.json").readText()).jsonObject
+        val legacyConfiguration = legacy(JsonObject(currentConfiguration +
+            ("identity" to json.encodeToJsonElement(EnterpriseIdentity.serializer(), identity)))).toString().toByteArray()
+        val legacyExecution = legacy(buildJsonObject {
+            put("revision", legacyVersion.revision)
+            put("execution", json.encodeToJsonElement(EnterpriseExecution.serializer(), execution))
+        }).toString().toByteArray()
+        java.io.File(revision, "configuration.json").writeBytes(legacyConfiguration)
+        java.io.File(revision, "execution.json").writeBytes(legacyExecution)
+        fun hash(bytes: ByteArray) = MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) }
+        val legacyApplied = legacyVersion.copy(
+            configurationHash = hash(legacyConfiguration),
+            executionHash = hash(legacyExecution),
+        )
+        val manifest = EnterpriseManifest(5, EnterpriseSessionPhase.READY, session, legacyApplied, identity.scope, identity)
+        val legacyManifest = legacy(json.encodeToJsonElement(EnterpriseManifest.serializer(), manifest)).toString()
+        java.io.File(folder, "manifest.json").writeText(legacyManifest)
+
+        val reopened = enterpriseTestStore(folder)
+        val loaded = reopened.load()
+        assertEquals(ENTERPRISE_MANIFEST_SCHEMA_VERSION, loaded.manifest.schemaVersion)
+        assertEquals(sessionId, loaded.manifest.session?.id)
+        assertEquals(identity.scope, loaded.manifest.selectedScope)
+        assertEquals(candidate.configuration, loaded.configuration)
+        assertEquals(candidate.execution, reopened.execution(loaded.manifest))
+        assertNotEquals(legacyVersion.revision, loaded.manifest.applied?.revision)
+    }
+
     @Test fun `same generation cannot replace the published platform hash`() = runBlocking {
         val candidate = map(snapshot())
         val store = net.weero.measix.pilot.data.enterprise.enterpriseTestStore(temporary.newFolder())
         val version = store.prepare(candidate)
-        val session = EnterpriseSession("ses_12345678-1234-4234-8234-123456789012", identity, 2000000000000L)
+        val sessionId = "ses_12345678-1234-4234-8234-123456789012"
+        val credential = store.prepareCredential(PlatformRefreshCredential(sessionId, "refresh", 2000000000000L))
+        val execution = candidate.execution as EnterpriseExecution.Platform
+        val session = EnterpriseSession(sessionId, identity, 2000000000000L,
+            PlatformSessionDetails(execution.connection, "dev_12345678-1234-4234-8234-123456789012", credential))
         store.commit(EnterpriseManifest(ENTERPRISE_MANIFEST_SCHEMA_VERSION, EnterpriseSessionPhase.READY,
             session, version, identity.scope, identity))
         val controller = EnterpriseSessionController(store) { 1000L }
         controller.recover()
-        val altered = candidate.copy(execution = (candidate.execution as EnterpriseExecution.Platform).copy(snapshotHash = "sha256:" + "0".repeat(64)))
+        val altered = candidate.copy(execution = candidate.execution.copy(snapshotHash = "sha256:" + "0".repeat(64)))
         try {
             controller.synchronize(RealmAccess.Enterprise(identity.scope, session.id), altered)
             fail("published generation was replaced")

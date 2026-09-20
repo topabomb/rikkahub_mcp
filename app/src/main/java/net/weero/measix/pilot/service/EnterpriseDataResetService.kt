@@ -100,7 +100,7 @@ internal class EnterpriseDataResetService(
     private suspend fun freezeScopes(): List<ConfigurationScope.Enterprise> =
         (conversations.enterpriseScopes() + files.enterpriseScopes() + memories.enterpriseScopes() +
             settings.enterpriseScopes() + catalogs.enterpriseScopes())
-            .sortedWith(compareBy({ it.authority.sourceNamespace }, { it.authority.deploymentId }, { it.userId }))
+            .sortedWith(compareBy({ it.authority.deploymentId }, { it.userId }))
 
     private suspend fun execute(intent: EnterpriseDataResetIntent, stopDomainWork: Boolean) {
         try {
@@ -239,7 +239,7 @@ internal class EnterpriseDataResetService(
         )
 
     private fun normalizeScopes(scopes: Collection<ConfigurationScope.Enterprise>) = scopes.distinct()
-        .sortedWith(compareBy({ it.authority.sourceNamespace }, { it.authority.deploymentId }, { it.userId }))
+        .sortedWith(compareBy({ it.authority.deploymentId }, { it.userId }))
 
     private fun progressOf(intent: EnterpriseDataResetIntent) = EnterpriseDataResetProgress(
         operationId = Uuid.parse(intent.operationId),

@@ -295,6 +295,56 @@ internal class EnterpriseSessionController(
         RealmAccess.Enterprise(identity.scope, session.id)
     }
 
+    /** Rebinds the current Session to another network origin without changing its durable principal. */
+    suspend fun acceptPlatformAddress(
+        selection: RealmSelection,
+        connection: PlatformConnection,
+        bootstrap: PlatformBootstrap,
+    ): RealmAccess.Enterprise = mutex.withLock {
+        val access = selection.access as? RealmAccess.Enterprise
+            ?: fail("enterprise_session_required")
+        val current = ensureLoaded()
+        if (selection.revision != selectionRevision.value ||
+            current.manifest.selectedScope != access.scope ||
+            !allowsDataAccess(current.manifest, access)
+        ) {
+            fail("enterprise_selection_revoked")
+        }
+        val session = current.manifest.session ?: fail("enterprise_session_required")
+        val platform = session.platform ?: fail("platform_session_required")
+        if (connection.authority != session.identity.authority ||
+            bootstrap.deployment.deploymentId != session.identity.authority.deploymentId ||
+            bootstrap.user.userId != session.identity.userId ||
+            bootstrap.device.deviceId != platform.deviceId ||
+            bootstrap.session.sessionId != session.id
+        ) {
+            fail("enterprise_address_identity_mismatch")
+        }
+        if (bootstrap.device.status != PlatformBootstrapDeviceStatus.ACTIVE ||
+            4L !in bootstrap.supportedSnapshotSchemaVersions
+        ) {
+            fail("platform_bootstrap_unavailable")
+        }
+        val identity = session.identity.copy(
+            enterpriseName = bootstrap.deployment.name,
+            userName = bootstrap.user.displayName,
+        )
+        EnterpriseConfigurationCodec.validateIdentity(identity)
+        val expires = minOf(
+            Instant.parse(bootstrap.session.expiresAt).toEpochMilli(),
+            Instant.parse(bootstrap.session.sessionIdleExpiresAt).toEpochMilli(),
+        )
+        publish(current.manifest.copy(
+            session = session.copy(
+                identity = identity,
+                expiresAtMillis = expires,
+                platform = platform.copy(connection = connection),
+            ),
+            lastIdentity = identity,
+        ))
+        RealmAccess.Enterprise(identity.scope, session.id)
+    }
+
     suspend fun recover(): EnterpriseState = mutex.withLock {
         try {
             ensureLoaded()

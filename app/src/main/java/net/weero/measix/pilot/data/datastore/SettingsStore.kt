@@ -85,6 +85,10 @@ private val Context.settingsStore by preferencesDataStore(
             OcrSettingsMigration(context),
             SearchSelectionMigration(),
             McpLegacyCatalogSettingsMigration(),
+            EnterprisePrincipalPreferencesMigration(
+                SettingsStore.USER_SETTINGS,
+                net.weero.measix.pilot.data.configuration.LegacyEnterprisePrincipalEncoding::migrateSettingsJson,
+            ),
             UserSettingsMigration(),
             ConversationHistoryPreferenceMigration(context),
         )

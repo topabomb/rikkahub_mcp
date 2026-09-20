@@ -46,7 +46,7 @@ class EnterpriseAssistantEntryAndroidTest {
     @Test fun invalidSavedAssistantKeepsItsDiagnosticUntilExplicitReselection() = verifyEntry(true)
 
     private fun verifyEntry(invalidSavedSelection: Boolean) {
-        val authority = EnterpriseAuthority("platform:entry-test", "deployment")
+        val authority = EnterpriseAuthority("deployment")
         val access = RealmAccess.Enterprise(ConfigurationScope.Enterprise(authority, "user"), "entry-session")
         val selection = RealmSelection(access, 1)
         val id = ConfigurationReference.Enterprise(authority, "asd_available")

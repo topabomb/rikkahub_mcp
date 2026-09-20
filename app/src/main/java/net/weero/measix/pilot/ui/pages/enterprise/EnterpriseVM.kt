@@ -28,6 +28,7 @@ internal data class PortalPresentation(
     val destination: PortalDestination = PortalDestination.HOME,
 )
 internal data class EnterpriseExitConfirmation(val request: EnterpriseExitRequest, val enterpriseName: String?)
+internal data class EnterpriseAddressEditor(val selection: RealmSelection, val origin: String)
 internal data class EnterpriseResetConfirmation(
     val request: EnterpriseDataResetRequest,
     val path: net.weero.measix.pilot.service.EnterpriseResetPath,
@@ -67,6 +68,8 @@ internal class EnterpriseVM(private val service: EnterpriseApplicationService) :
     val portal = _portal.asStateFlow()
     private val _joinConfirmation = MutableStateFlow<net.weero.measix.pilot.service.EnterpriseJoinConfirmation?>(null)
     val joinConfirmation = _joinConfirmation.asStateFlow()
+    private val _addressEditor = MutableStateFlow<EnterpriseAddressEditor?>(null)
+    val addressEditor = _addressEditor.asStateFlow()
     private val _resetChoice = MutableStateFlow<net.weero.measix.pilot.service.EnterpriseResetPath?>(null)
     val resetChoice = _resetChoice.asStateFlow()
     private val _resetConfirmation = MutableStateFlow<EnterpriseResetConfirmation?>(null)
@@ -142,6 +145,27 @@ internal class EnterpriseVM(private val service: EnterpriseApplicationService) :
             if (overview.value?.access == access) _notice.value = Notice(R.string.enterprise_sync_completed, selection)
         } }
     }
+    fun editAddress() {
+        val state = overview.value ?: return
+        val selection = state.selection ?: return
+        val origin = state.platformOrigin ?: return
+        if (selection.access !is RealmAccess.Enterprise) return
+        _addressEditor.value = EnterpriseAddressEditor(selection, origin)
+    }
+    fun dismissAddressEditor() { _addressEditor.value = null }
+    fun changeAddress(origin: String) {
+        val editor = _addressEditor.value ?: return
+        _addressEditor.value = null
+        command(
+            failureMessage = R.string.enterprise_address_change_failed,
+            isCurrent = { overview.value?.selection == editor.selection },
+        ) {
+            service.changeAddress(editor.selection, origin)
+            if (overview.value?.selection == editor.selection) {
+                _notice.value = Notice(R.string.enterprise_address_changed, editor.selection)
+            }
+        }
+    }
     fun switchSpace(onSelected: () -> Unit) {
         val state = overview.value ?: return
         val selected = state.selection ?: return
@@ -198,7 +222,8 @@ internal class EnterpriseVM(private val service: EnterpriseApplicationService) :
         if (_portal.value != original || overview.value?.selection != original.selection) return
         dismissPortal(original)
         val reason = when (closure.reason) {
-            PortalCloseReason.USER_REQUEST, PortalCloseReason.HOST_DISPOSED -> null
+            PortalCloseReason.USER_REQUEST, PortalCloseReason.HOST_DISPOSED,
+            PortalCloseReason.CONNECTION_CHANGED -> null
             PortalCloseReason.DOCUMENT_REPLACED -> "document_replaced"
             PortalCloseReason.DOCUMENT_EXPIRED -> "session_expired"
             PortalCloseReason.AUTHORIZATION_REVOKED -> "authorization_revoked"

@@ -14,10 +14,11 @@ import net.weero.measix.pilot.data.configuration.ConfigurationScope
 @Entity(
     tableName = "ConversationEntity",
     indices = [
-        Index(value = ["parent_conversation_id", "is_pinned", "update_at"]),
-        Index(value = ["assistant_id", "parent_conversation_id", "is_pinned", "update_at"]),
-        Index(value = ["assistant_id", "parent_conversation_id", "folder_id", "is_pinned", "update_at"]),
-        Index(value = ["folder_id", "parent_conversation_id", "is_pinned", "update_at"]),
+        Index(value = ["parent_conversation_id"]),
+        Index(value = ["scope", "parent_conversation_id", "is_pinned", "update_at"]),
+        Index(value = ["scope", "assistant_id", "parent_conversation_id", "is_pinned", "update_at"]),
+        Index(value = ["scope", "assistant_id", "parent_conversation_id", "folder_id", "is_pinned", "update_at"]),
+        Index(value = ["scope", "folder_id", "parent_conversation_id", "is_pinned", "update_at"]),
     ],
     foreignKeys = [
         ForeignKey(

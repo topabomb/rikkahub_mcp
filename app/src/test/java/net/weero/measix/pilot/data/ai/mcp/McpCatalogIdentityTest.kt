@@ -52,10 +52,10 @@ class McpCatalogIdentityTest {
         }
     }
 
-    @Test fun `source user and personal ownership remain isolated across restore and delete`() = runBlocking {
+    @Test fun `deployment user and personal ownership remain isolated across restore and delete`() = runBlocking {
         withDisk { store, disk ->
-            val first = EnterpriseAuthority("platform:first", "deployment")
-            val second = EnterpriseAuthority("platform:second", "deployment")
+            val first = EnterpriseAuthority("deployment")
+            val second = EnterpriseAuthority("other")
             val a = enterpriseCandidate(ConfigurationScope.Enterprise(first, "a")).initialSnapshot()
             val b = enterpriseCandidate(ConfigurationScope.Enterprise(first, "b")).initialSnapshot()
             val remote = enterpriseCandidate(ConfigurationScope.Enterprise(second, "a")).initialSnapshot()
@@ -82,7 +82,7 @@ class McpCatalogIdentityTest {
 
     @Test fun `personal restore preserves enterprise publication rollback ownership`() = runBlocking {
         withDisk { store, _ ->
-            val scope = ConfigurationScope.Enterprise(EnterpriseAuthority("platform:example", "deployment"), "user")
+            val scope = ConfigurationScope.Enterprise(EnterpriseAuthority("deployment"), "user")
             val candidate = enterpriseCandidate(scope)
             val first = store.commitCandidate(candidate) as McpCatalogCommitResult.Committed
             val next = store.commitCandidate(candidate.copy(tools = listOf(tool("updated")))) as McpCatalogCommitResult.Committed
@@ -101,7 +101,7 @@ class McpCatalogIdentityTest {
 
     @Test fun `damaged scoped document cannot fall back to old personal key or erase enterprise facts`() = runBlocking {
         val original = personalCandidate("old").initialSnapshot()
-        val enterprise = enterpriseCandidate(ConfigurationScope.Enterprise(EnterpriseAuthority("platform:example", "deployment"), "a"))
+        val enterprise = enterpriseCandidate(ConfigurationScope.Enterprise(EnterpriseAuthority("deployment"), "a"))
             .initialSnapshot().copy(catalogDigest = "damaged")
         listOf("{", encodeMcpCatalogDocument(listOf(enterprise))).forEach { corrupt ->
             withDisk(mutablePreferencesOf(documentKey to corrupt, oldKey to releasedArray(original))) { store, disk ->
@@ -117,13 +117,13 @@ class McpCatalogIdentityTest {
     }
 
     @Test fun `catalog keys reject inconsistent resource owners`() {
-        val authority = EnterpriseAuthority("platform:example", "deployment")
+        val authority = EnterpriseAuthority("deployment")
         val scope = ConfigurationScope.Enterprise(authority, "user")
         val resource = ConfigurationReference.Enterprise(authority, "mcp_shared")
         listOf(
             { McpCatalogKey(scope, personal.id) },
             { McpCatalogKey(ConfigurationScope.Personal, resource) },
-            { McpCatalogKey(scope, ConfigurationReference.Enterprise(EnterpriseAuthority("platform:other", "deployment"), "mcp_shared")) },
+            { McpCatalogKey(scope, ConfigurationReference.Enterprise(EnterpriseAuthority("other"), "mcp_shared")) },
         ).forEach { create ->
             try { create(); fail("Catalog accepted inconsistent scope") }
             catch (_: IllegalArgumentException) { }
@@ -132,7 +132,7 @@ class McpCatalogIdentityTest {
 
     @Test fun `new managed generation advances even for identical tools and stale work cannot replace or protect it`() = runBlocking {
         withDisk { store, disk ->
-            val scope = ConfigurationScope.Enterprise(EnterpriseAuthority("platform:example", "deployment"), "user")
+            val scope = ConfigurationScope.Enterprise(EnterpriseAuthority("deployment"), "user")
             val candidate = enterpriseCandidate(scope)
             val first = store.commitCandidate(candidate) as McpCatalogCommitResult.Committed
             val newer = candidate.copy(managed = McpManagedCatalog(2))
@@ -152,7 +152,7 @@ class McpCatalogIdentityTest {
 
     @Test fun `same managed generation may rotate private binding identity without changing the surface`() = runBlocking {
         withDisk { store, _ ->
-            val scope = ConfigurationScope.Enterprise(EnterpriseAuthority("platform:example", "deployment"), "user")
+            val scope = ConfigurationScope.Enterprise(EnterpriseAuthority("deployment"), "user")
             val first = store.commitCandidate(enterpriseCandidate(scope)) as McpCatalogCommitResult.Committed
             val rotated = store.commitCandidate(enterpriseCandidate(scope).copy(definitionDigest = "rotated-binding")) as McpCatalogCommitResult.Committed
             assertEquals(first.snapshot.managed, rotated.snapshot.managed)
@@ -163,7 +163,7 @@ class McpCatalogIdentityTest {
     }
 
     @Test fun `managed metadata cannot be omitted or attached to a personal catalog`() {
-        val scope = ConfigurationScope.Enterprise(EnterpriseAuthority("platform:example", "deployment"), "user")
+        val scope = ConfigurationScope.Enterprise(EnterpriseAuthority("deployment"), "user")
         assertThrows(IllegalArgumentException::class.java) { enterpriseCandidate(scope).copy(managed = null) }
         assertThrows(IllegalArgumentException::class.java) { personalCandidate("personal").copy(managed = McpManagedCatalog(1)) }
         val serialized = JsonInstant.encodeToJsonElement(personalCandidate("personal").initialSnapshot()) as JsonObject

@@ -1782,4 +1782,8 @@
   <string name="enterprise_runtime_request_id">リクエスト ID：%1$s</string>
   <string name="enterprise_runtime_resource_id">リソース：%1$s</string>
   <string name="enterprise_address">企業アドレス</string>
+  <string name="enterprise_address_edit_title">企業アドレスを変更</string>
+  <string name="enterprise_address_edit_supporting">アドレスを変更しても、現在の企業、ユーザー、セッション、端末内データは維持されます。新しいアドレスはこの企業に属している必要があります。</string>
+  <string name="enterprise_address_changed">企業アドレスを変更しました</string>
+  <string name="enterprise_address_change_failed">企業アドレスを変更できませんでした</string>
 </resources>

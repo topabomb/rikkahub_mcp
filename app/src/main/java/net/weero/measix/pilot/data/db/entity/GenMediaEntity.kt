@@ -6,7 +6,11 @@ import androidx.room.Index
 import androidx.room.PrimaryKey
 import net.weero.measix.pilot.data.configuration.ConfigurationScope
 
-@Entity(indices = [Index(value = ["path"]), Index(value = ["create_at"])])
+@Entity(indices = [
+    Index(value = ["path"]),
+    Index(value = ["create_at"]),
+    Index(value = ["scope", "create_at"]),
+])
 data class GenMediaEntity(
     @PrimaryKey(autoGenerate = true)
     val id: Int = 0,

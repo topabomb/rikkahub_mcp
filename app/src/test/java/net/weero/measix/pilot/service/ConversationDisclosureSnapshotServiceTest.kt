@@ -104,9 +104,7 @@ class ConversationDisclosureSnapshotServiceTest {
 
     @Test
     fun `enterprise child identities survive durable disclosure validation`() {
-        val authority = exampleEnterprisePackage().identity.authority.copy(
-            sourceNamespace = "platform:${"a".repeat(64)}",
-        )
+        val authority = exampleEnterprisePackage().identity.authority
         val enterpriseId = ConfigurationReference.Enterprise(authority, "assistant_reviewer")
         val content = render(candidate(all = listOf(caller, reviewer.copy(id = enterpriseId))))
         assertEquals(enterpriseId.toString(), rows(envelope(content), "sub_assistants").single().jsonArray[0].jsonPrimitive.content)

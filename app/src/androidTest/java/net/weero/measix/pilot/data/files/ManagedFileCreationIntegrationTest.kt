@@ -356,7 +356,7 @@ class ManagedFileCreationIntegrationTest {
     }
 
     private fun scopeFor(index: Int): ConfigurationScope = if (index % 2 == 0) ConfigurationScope.Personal else
-        ConfigurationScope.Enterprise(me.rerere.common.configuration.EnterpriseAuthority("platform:example", "deployment"), "user-$index")
+        ConfigurationScope.Enterprise(me.rerere.common.configuration.EnterpriseAuthority("deployment"), "user-$index")
 
     @Test
     fun metadataWithoutPayloadStillReservesItsName() = runBlocking {

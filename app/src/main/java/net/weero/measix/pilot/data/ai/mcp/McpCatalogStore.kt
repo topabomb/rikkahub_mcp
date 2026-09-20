@@ -35,10 +35,20 @@ import kotlinx.serialization.json.decodeFromJsonElement
 import net.weero.measix.pilot.data.configuration.ConfigurationScope
 import net.weero.measix.pilot.AppScope
 import net.weero.measix.pilot.data.datastore.SettingsStore
+import net.weero.measix.pilot.data.datastore.EnterprisePrincipalPreferencesMigration
+import net.weero.measix.pilot.data.configuration.LegacyEnterprisePrincipalEncoding
 import net.weero.measix.pilot.utils.JsonInstant
 import me.rerere.common.configuration.ConfigurationReference
 
-private val Context.mcpCatalogDataStore by preferencesDataStore(name = "mcp_catalog")
+private val Context.mcpCatalogDataStore by preferencesDataStore(
+    name = "mcp_catalog",
+    produceMigrations = {
+        listOf(EnterprisePrincipalPreferencesMigration(
+            stringPreferencesKey("catalog_document"),
+            LegacyEnterprisePrincipalEncoding::migrateMcpCatalogJson,
+        ))
+    },
+)
 
 /** The complete remote Tool object is the sole catalog fact; consumers read projections. */
 @Serializable(with = McpCatalogToolSerializer::class)

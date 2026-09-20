@@ -6,7 +6,7 @@ import androidx.room.Index
 import androidx.room.PrimaryKey
 import net.weero.measix.pilot.data.configuration.ConfigurationScope
 
-@Entity(indices = [Index(value = ["assistant_id"])])
+@Entity(indices = [Index(value = ["scope", "assistant_id"])])
 data class MemoryEntity(
     @PrimaryKey(true)
     val id: Int = 0,

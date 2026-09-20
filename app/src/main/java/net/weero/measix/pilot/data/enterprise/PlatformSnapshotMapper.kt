@@ -51,7 +51,7 @@ internal object PlatformSnapshotMapper {
         }
         routes.values.forEach(::requirePlatformPath)
         fun seedId(assistantId: String, index: Int): String {
-            val input = "${identity.authority.sourceNamespace}/${snapshot.deploymentId}/$assistantId/${snapshot.managedGeneration}/$index"
+            val input = "${snapshot.deploymentId}/$assistantId/${snapshot.managedGeneration}/$index"
             return "mem_" + MessageDigest.getInstance("SHA-256").digest(input.toByteArray(Charsets.UTF_8))
                 .joinToString("") { "%02x".format(it) }
         }

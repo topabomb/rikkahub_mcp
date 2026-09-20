@@ -229,7 +229,7 @@ class ArtifactUploadImageReadIntegrationTest {
     fun requestReadAuthorizesOriginalScopeAndProtectsActualProviderEncoding() = runBlocking {
         val personal = register("personal-provider.png")
         val enterprise = ConfigurationScope.Enterprise(
-            me.rerere.common.configuration.EnterpriseAuthority("platform:example", "deployment"), "user",
+            me.rerere.common.configuration.EnterpriseAuthority("deployment"), "user",
         )
         val resource = register("enterprise-provider.png", scope = enterprise)
         val image = me.rerere.ai.ui.UIMessagePart.Image(

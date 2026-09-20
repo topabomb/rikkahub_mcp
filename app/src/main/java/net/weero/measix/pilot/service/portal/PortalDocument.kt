@@ -10,7 +10,15 @@ import net.weero.measix.pilot.data.enterprise.*
 import net.weero.measix.pilot.service.EnterpriseSynchronizationService
 import kotlin.coroutines.EmptyCoroutineContext
 
-internal enum class PortalCloseReason { USER_REQUEST, HOST_DISPOSED, DOCUMENT_REPLACED, DOCUMENT_EXPIRED, AUTHORIZATION_REVOKED, HOST_FAILURE }
+internal enum class PortalCloseReason {
+    USER_REQUEST,
+    HOST_DISPOSED,
+    DOCUMENT_REPLACED,
+    DOCUMENT_EXPIRED,
+    AUTHORIZATION_REVOKED,
+    CONNECTION_CHANGED,
+    HOST_FAILURE,
+}
 internal data class PortalClosure(val documentId: String, val reason: PortalCloseReason)
 
 /** Immutable identity and deadline shared by bridge dispatch and this document's native actions. */

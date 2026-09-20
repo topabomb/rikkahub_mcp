@@ -10,7 +10,7 @@ import net.weero.measix.pilot.data.configuration.ConfigurationScope
     tableName = "favorites",
     indices = [
         Index(value = ["ref_key"], unique = true),
-        Index(value = ["type", "created_at"]),
+        Index(value = ["scope", "type", "created_at"]),
         Index(value = ["created_at"])
     ]
 )

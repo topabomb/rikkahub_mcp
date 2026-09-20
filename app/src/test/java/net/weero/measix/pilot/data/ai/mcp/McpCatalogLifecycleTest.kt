@@ -54,7 +54,7 @@ internal class McpCatalogLifecycleTest : McpRuntimeCoordinatorTestBase() {
             var authorized = true
             val config = McpConnectionDefinition.User(serverConfig())
             val access = net.weero.measix.pilot.data.enterprise.RealmAccess.Enterprise(
-                ConfigurationScope.Enterprise(me.rerere.common.configuration.EnterpriseAuthority("platform:test", "dep_test"), "user_test"), "session_test")
+                ConfigurationScope.Enterprise(me.rerere.common.configuration.EnterpriseAuthority("dep_test"), "user_test"), "session_test")
             val key = McpRuntimeKey(SERVER_ID, access, "int_${kotlin.uuid.Uuid.random()}")
             val states = McpRuntimeStateStore()
             val appScope = AppScope(dispatcher)
@@ -180,7 +180,7 @@ internal class McpCatalogLifecycleTest : McpRuntimeCoordinatorTestBase() {
             var mayPublish = initiallyReady
             val config = McpConnectionDefinition.User(serverConfig())
             val access = net.weero.measix.pilot.data.enterprise.RealmAccess.Enterprise(
-                ConfigurationScope.Enterprise(me.rerere.common.configuration.EnterpriseAuthority("platform:test", "dep_test"), "user_test"), "session_test")
+                ConfigurationScope.Enterprise(me.rerere.common.configuration.EnterpriseAuthority("dep_test"), "user_test"), "session_test")
             val key = McpRuntimeKey(SERVER_ID, access, "int_${kotlin.uuid.Uuid.random()}")
             val states = McpRuntimeStateStore()
             val appScope = AppScope(dispatcher)

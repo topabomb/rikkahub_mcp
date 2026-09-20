@@ -40,8 +40,9 @@ import net.weero.measix.pilot.utils.JsonInstant
  * v12：Conversation、Memory、Artifact、生成媒体、会话文件夹和收藏记录持有不可变的域主体。
  * `Migration_11_12` 将既有记录归入个人域，保留原 ID、payload 和引用关系。
  * 消息、turn、tool 和 context 从所属会话取得域，不重复存储第二份主体。
+ * v13：企业主体仅由 deploymentId 与 userId 构成，删除 URL 派生的来源字段。
  */
-const val APP_DATABASE_VERSION = 12
+const val APP_DATABASE_VERSION = 13
 
 @Database(
     entities = [

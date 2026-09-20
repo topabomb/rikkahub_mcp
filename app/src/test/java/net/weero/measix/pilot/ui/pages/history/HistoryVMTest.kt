@@ -31,7 +31,7 @@ class HistoryVMTest {
         Dispatchers.setMain(StandardTestDispatcher(testScheduler))
         val store = ViewModelStore()
         try {
-            val scope = ConfigurationScope.Enterprise(EnterpriseAuthority("platform:history", "dep_history"), "user")
+            val scope = ConfigurationScope.Enterprise(EnterpriseAuthority("dep_history"), "user")
             val selection = RealmSelection(RealmAccess.Enterprise(scope, "session"), 1)
             val assistant = ConfigurationReference.random()
             val catalog = MutableStateFlow<AssistantCatalogReadState>(AssistantCatalogReadState.Available(AssistantCatalogUiModel(

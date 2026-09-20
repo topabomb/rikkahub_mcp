@@ -15,7 +15,7 @@ import net.weero.measix.pilot.data.configuration.ConfigurationScope
  */
 @Entity(
     tableName = "conversation_folder",
-    indices = [Index(value = ["assistant_id", "sort_index", "create_at"])]
+    indices = [Index(value = ["scope", "assistant_id", "sort_index", "create_at"])]
 )
 data class FolderEntity(
     @PrimaryKey

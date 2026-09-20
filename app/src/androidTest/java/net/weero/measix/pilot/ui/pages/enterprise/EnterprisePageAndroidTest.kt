@@ -3,6 +3,9 @@ package net.weero.measix.pilot.ui.pages.enterprise
 import androidx.activity.ComponentActivity
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.ui.Alignment
+import com.dokar.sonner.rememberToasterState
+import com.dokar.sonner.Toaster
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.hasText
@@ -12,6 +15,7 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTextInput
+import androidx.compose.ui.test.performTextReplacement
 import androidx.compose.ui.test.performScrollTo
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.ViewModelStore
@@ -49,6 +53,7 @@ import net.weero.measix.pilot.service.portal.PortalDocument
 import net.weero.measix.pilot.service.portal.PortalFailure
 import net.weero.measix.pilot.service.portal.PortalWebView
 import net.weero.measix.pilot.ui.context.LocalNavController
+import net.weero.measix.pilot.ui.context.LocalToaster
 import net.weero.measix.pilot.ui.context.Navigator
 import org.junit.After
 import org.junit.Assert.*
@@ -80,6 +85,27 @@ class EnterprisePageAndroidTest {
         compose.onNodeWithText(origin).assertIsDisplayed()
         compose.onNodeWithContentDescription(text(R.string.copy)).assertIsDisplayed().performClick()
         compose.onNodeWithText(text(R.string.copied)).assertIsDisplayed()
+    }
+
+    @Test
+    fun connectedDetailsEditTheAddressWithoutStartingEnrollment() {
+        val oldOrigin = "https://old.example"
+        val newOrigin = "https://new.example"
+        val initial = overview().copy(platformOrigin = oldOrigin)
+        val fixture = Fixture(initial)
+        coEvery { fixture.service.changeAddress(initial.selection!!, newOrigin) } just Runs
+        fixture.show()
+
+        click(R.string.enterprise_connection_details_show)
+        click(R.string.edit)
+        compose.onNodeWithText(text(R.string.enterprise_address_edit_title)).assertIsDisplayed()
+        compose.onNode(hasSetTextAction()).performTextReplacement(newOrigin)
+        compose.onNode(hasText(text(R.string.confirm)) and hasClickAction()).performClick()
+        compose.waitUntil(5_000) { !fixture.vm.busy.value }
+
+        coVerify(exactly = 1) { fixture.service.changeAddress(initial.selection!!, newOrigin) }
+        coVerify(exactly = 0) { fixture.service.confirmJoin(any()) }
+        compose.onNodeWithText(text(R.string.enterprise_address_changed)).assertIsDisplayed()
     }
 
     @Test
@@ -339,7 +365,7 @@ class EnterprisePageAndroidTest {
     private fun text(resource: Int, vararg args: Any): String = compose.activity.getString(resource, *args)
 
     private fun access(session: String = "original-session") = RealmAccess.Enterprise(
-        ConfigurationScope.Enterprise(EnterpriseAuthority("platform:example", "deployment"), "user"), session,
+        ConfigurationScope.Enterprise(EnterpriseAuthority("deployment"), "user"), session,
     )
 
     private fun overview(
@@ -376,8 +402,15 @@ class EnterprisePageAndroidTest {
             }
             val navigator = Navigator(backStack)
             compose.setContent {
+                val toaster = rememberToasterState()
                 MaterialTheme {
-                    CompositionLocalProvider(LocalNavController provides navigator) { EnterprisePage(vm = vm) }
+                    CompositionLocalProvider(
+                        LocalNavController provides navigator,
+                        LocalToaster provides toaster,
+                    ) {
+                        Toaster(state = toaster, alignment = Alignment.TopCenter)
+                        EnterprisePage(vm = vm)
+                    }
                 }
             }
             compose.waitUntil(5_000) { vm.overview.value == state.value }

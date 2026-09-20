@@ -71,7 +71,7 @@ class ImageGenerationCoordinatorTest {
     @Test
     fun `page cleanup failure keeps committed media and original owner for exit retry`() = runTest {
         val access = net.weero.measix.pilot.data.enterprise.RealmAccess.Enterprise(
-            ConfigurationScope.Enterprise(me.rerere.common.configuration.EnterpriseAuthority("platform:example", "deployment"), "user"), "original")
+            ConfigurationScope.Enterprise(me.rerere.common.configuration.EnterpriseAuthority("deployment"), "user"), "original")
         val selection = net.weero.measix.pilot.data.enterprise.RealmSelection(access, 7)
         coEvery { sessions.withSelectedRealmSelection<Any?>(selection, any()) } coAnswers { secondArg<suspend () -> Any?>().invoke() }
         val provider = mockk<Provider<ProviderSetting>>()
@@ -105,7 +105,7 @@ class ImageGenerationCoordinatorTest {
     @Test
     fun `cancel during page capture retains failed release without replacing cancellation`() = runTest {
         val access = net.weero.measix.pilot.data.enterprise.RealmAccess.Enterprise(
-            ConfigurationScope.Enterprise(me.rerere.common.configuration.EnterpriseAuthority("platform:example", "deployment"), "user"), "original")
+            ConfigurationScope.Enterprise(me.rerere.common.configuration.EnterpriseAuthority("deployment"), "user"), "original")
         val selection = net.weero.measix.pilot.data.enterprise.RealmSelection(access, 7)
         coEvery { sessions.withSelectedRealmSelection<Any?>(selection, any()) } coAnswers { secondArg<suspend () -> Any?>().invoke() }
         val entered = CompletableDeferred<Unit>()
@@ -180,7 +180,7 @@ class ImageGenerationCoordinatorTest {
         val firstProvider = mockk<Provider<ProviderSetting>>()
         val secondProvider = mockk<Provider<ProviderSetting>>()
         val order = mutableListOf<String>()
-        val enterprise = ConfigurationScope.Enterprise(me.rerere.common.configuration.EnterpriseAuthority("platform:example", "deployment"), "user")
+        val enterprise = ConfigurationScope.Enterprise(me.rerere.common.configuration.EnterpriseAuthority("deployment"), "user")
         coEvery { firstProvider.generateImage(any(), any()) } answers {
             flow {
                 order.add("first")

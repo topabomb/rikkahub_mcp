@@ -1782,4 +1782,8 @@
   <string name="enterprise_runtime_request_id">요청 ID: %1$s</string>
   <string name="enterprise_runtime_resource_id">리소스: %1$s</string>
   <string name="enterprise_address">기업 주소</string>
+  <string name="enterprise_address_edit_title">기업 주소 변경</string>
+  <string name="enterprise_address_edit_supporting">주소를 변경해도 현재 기업, 사용자, 세션 및 기기 내 데이터는 유지됩니다. 새 주소는 이 기업에 속해야 합니다.</string>
+  <string name="enterprise_address_changed">기업 주소가 변경되었습니다</string>
+  <string name="enterprise_address_change_failed">기업 주소를 변경할 수 없습니다</string>
 </resources>

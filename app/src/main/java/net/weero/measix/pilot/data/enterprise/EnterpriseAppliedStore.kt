@@ -8,7 +8,13 @@ import java.nio.file.Files
 import java.security.MessageDigest
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.int
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import net.weero.measix.pilot.data.configuration.ConfigurationScope
+import net.weero.measix.pilot.data.configuration.LegacyEnterprisePrincipalEncoding
 import kotlin.uuid.Uuid
 import me.rerere.ai.provider.ChatTransportCapabilities
 
@@ -20,7 +26,7 @@ internal enum class EnterpriseExitReason {
     USER_REQUEST, AUTHORIZATION_EXPIRED, AUTHORIZATION_REVOKED, IDENTITY_DELETED, LOCAL_DATA_RESET,
 }
 
-internal const val ENTERPRISE_MANIFEST_SCHEMA_VERSION = 5
+internal const val ENTERPRISE_MANIFEST_SCHEMA_VERSION = 6
 
 @Serializable
 internal data class EnterpriseSession(
@@ -61,12 +67,29 @@ internal data class EnterpriseManifest(
 @Serializable
 private data class StoredEnterpriseConfiguration(
     val revision: String,
+    val configuration: EnterpriseConfiguration,
+)
+
+@Serializable
+private data class StoredEnterpriseExecution(
+    val revision: String,
+    val releaseId: String,
+    val snapshotHash: String,
+    val runtimePaths: Map<String, String>,
+)
+
+@Serializable
+private data class LegacyStoredEnterpriseConfiguration(
+    val revision: String,
     val identity: EnterpriseIdentity,
     val configuration: EnterpriseConfiguration,
 )
 
 @Serializable
-private data class StoredEnterpriseExecution(val revision: String, val execution: EnterpriseExecution)
+private data class LegacyStoredEnterpriseExecution(
+    val revision: String,
+    val execution: EnterpriseExecution,
+)
 
 internal data class LoadedEnterpriseState(
     val manifest: EnterpriseManifest,
@@ -149,7 +172,7 @@ internal class EnterpriseAppliedStore(
 
     fun readManifest(): EnterpriseManifest {
         val manifest = if (manifestFile.baseFile.exists() || File(root, "manifest.json.bak").exists()) {
-            decodeManifest(manifestFile.readFully())
+            decodeOrMigrateManifest(manifestFile.readFully())
         } else {
             EnterpriseManifest.signedOut()
         }
@@ -162,8 +185,14 @@ internal class EnterpriseAppliedStore(
         val revision = Uuid.random().toString()
         val directory = revisionDirectory(revision)
         if (!directory.mkdirs()) throw EnterpriseStorageException("enterprise_staging_directory_failed")
-        val configuration = json.encodeToString(StoredEnterpriseConfiguration(revision, value.identity, value.configuration)).toByteArray()
-        val executionBytes = json.encodeToString(StoredEnterpriseExecution(revision, value.execution)).toByteArray()
+        val configuration = json.encodeToString(StoredEnterpriseConfiguration(revision, value.configuration)).toByteArray()
+        val execution = value.execution as EnterpriseExecution.Platform
+        val executionBytes = json.encodeToString(StoredEnterpriseExecution(
+            revision,
+            execution.releaseId,
+            execution.snapshotHash,
+            execution.runtimePaths,
+        )).toByteArray()
         writeSynced(File(directory, "configuration.json"), configuration)
         checkpoint(EnterpriseStorageCheckpoint.CONFIGURATION_STAGED)
         writeSynced(File(directory, "execution.json"), executionBytes)
@@ -261,10 +290,20 @@ internal class EnterpriseAppliedStore(
         val public = decode<StoredEnterpriseConfiguration>(configurationBytes)
         val private = decode<StoredEnterpriseExecution>(executionBytes)
         if (public.revision != version.revision || private.revision != version.revision ||
-            public.identity != manifest.session?.identity || public.configuration.generation != version.generation) {
+            public.configuration.generation != version.generation) {
             throw EnterpriseStorageException("enterprise_revision_identity_mismatch")
         }
-        return EnterpriseCandidate(public.identity, public.configuration, private.execution).also(EnterpriseCandidate::validate)
+        val identity = manifest.session?.identity
+            ?: throw EnterpriseStorageException("enterprise_session_required")
+        val connection = manifest.session.platform?.connection
+            ?: throw EnterpriseStorageException("platform_session_required")
+        val execution = EnterpriseExecution.Platform(
+            connection,
+            private.releaseId,
+            private.snapshotHash,
+            private.runtimePaths,
+        )
+        return EnterpriseCandidate(identity, public.configuration, execution).also(EnterpriseCandidate::validate)
     }
 
     private fun validateManifest(manifest: EnterpriseManifest) {
@@ -344,7 +383,59 @@ internal class EnterpriseAppliedStore(
         throw EnterpriseStorageException("invalid_enterprise_storage")
     }
 
-    private fun decodeManifest(bytes: ByteArray): EnterpriseManifest = decode(bytes)
+    private fun decodeOrMigrateManifest(bytes: ByteArray): EnterpriseManifest {
+        val encoded = bytes.toString(Charsets.UTF_8)
+        val schemaVersion = try {
+            json.parseToJsonElement(encoded).jsonObject.getValue("schemaVersion").jsonPrimitive.int
+        } catch (_: IllegalArgumentException) {
+            throw EnterpriseStorageException("invalid_enterprise_storage")
+        }
+        return when (schemaVersion) {
+            ENTERPRISE_MANIFEST_SCHEMA_VERSION -> decode(bytes)
+            5 -> migrateManifestV5(encoded)
+            else -> throw EnterpriseStorageException("unsupported_enterprise_manifest")
+        }
+    }
+
+    /** One durable conversion removes URL-qualified identity from the last development manifest. */
+    private fun migrateManifestV5(encoded: String): EnterpriseManifest {
+        val migratedJson = LegacyEnterprisePrincipalEncoding.migrateStorageJson(encoded) ?: encoded
+        val fields = try {
+            json.parseToJsonElement(migratedJson).jsonObject.toMutableMap()
+        } catch (_: IllegalArgumentException) {
+            throw EnterpriseStorageException("invalid_enterprise_storage")
+        }
+        fields["schemaVersion"] = JsonPrimitive(ENTERPRISE_MANIFEST_SCHEMA_VERSION)
+        val decoded = decode<EnterpriseManifest>(JsonObject(fields).toString().toByteArray())
+        val migrated = decoded.applied?.let { version ->
+            decoded.copy(applied = prepare(readLegacyCandidate(decoded, version)))
+        } ?: decoded
+        return commit(migrated).manifest
+    }
+
+    private fun readLegacyCandidate(
+        manifest: EnterpriseManifest,
+        version: EnterpriseAppliedVersion,
+    ): EnterpriseCandidate {
+        val directory = revisionDirectory(version.revision)
+        val configurationBytes = readBounded(File(directory, "configuration.json"))
+        val executionBytes = readBounded(File(directory, "execution.json"))
+        if (hash(configurationBytes) != version.configurationHash || hash(executionBytes) != version.executionHash) {
+            throw EnterpriseStorageException("enterprise_revision_hash_mismatch")
+        }
+        fun migrate(bytes: ByteArray): ByteArray {
+            val value = bytes.toString(Charsets.UTF_8)
+            return (LegacyEnterprisePrincipalEncoding.migrateStorageJson(value) ?: value).toByteArray()
+        }
+        val configuration = decode<LegacyStoredEnterpriseConfiguration>(migrate(configurationBytes))
+        val execution = decode<LegacyStoredEnterpriseExecution>(migrate(executionBytes))
+        if (configuration.revision != version.revision || execution.revision != version.revision ||
+            configuration.identity != manifest.session?.identity || configuration.configuration.generation != version.generation) {
+            throw EnterpriseStorageException("enterprise_revision_identity_mismatch")
+        }
+        return EnterpriseCandidate(configuration.identity, configuration.configuration, execution.execution)
+            .also(EnterpriseCandidate::validate)
+    }
 
     private fun hash(bytes: ByteArray): String = MessageDigest.getInstance("SHA-256").digest(bytes)
         .joinToString("") { "%02x".format(it) }

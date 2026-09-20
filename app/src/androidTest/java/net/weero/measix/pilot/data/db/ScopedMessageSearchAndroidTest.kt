@@ -42,10 +42,9 @@ class ScopedMessageSearchAndroidTest {
     @Test fun nativeSearchFiltersCompleteScopeAndChildrenBeforeLimitForEverySort() = runBlocking {
         val scopes = listOf(
             ConfigurationScope.Personal,
-            ConfigurationScope.Enterprise(EnterpriseAuthority("platform:example", "deployment"), "alice"),
-            ConfigurationScope.Enterprise(EnterpriseAuthority("platform:example", "deployment"), "bob"),
-            ConfigurationScope.Enterprise(EnterpriseAuthority("platform:other", "deployment"), "alice"),
-            ConfigurationScope.Enterprise(EnterpriseAuthority("platform:example", "other"), "alice"),
+            ConfigurationScope.Enterprise(EnterpriseAuthority("deployment"), "alice"),
+            ConfigurationScope.Enterprise(EnterpriseAuthority("deployment"), "bob"),
+            ConfigurationScope.Enterprise(EnterpriseAuthority("other"), "alice"),
         )
         val assistant = Uuid.random().toString()
         val otherAssistant = Uuid.random().toString()
@@ -58,7 +57,7 @@ class ScopedMessageSearchAndroidTest {
         repeat(60) { insert(scopes[2], assistant) }
         val other = insert(scopes[1], otherAssistant)
         for (sort in MessageSearchSort.entries) {
-            for (index in listOf(0, 1, 3, 4)) {
+            for (index in listOf(0, 1, 3)) {
                 val expected = if (index == 1) setOf(roots[index], other) else setOf(roots[index])
                 assertEquals(expected, search.search(scopes[index], "boundary", sort).map { it.conversationId }.toSet())
                 assertEquals(setOf(roots[index]), search.search(scopes[index], "boundary", sort, assistant).map { it.conversationId }.toSet())

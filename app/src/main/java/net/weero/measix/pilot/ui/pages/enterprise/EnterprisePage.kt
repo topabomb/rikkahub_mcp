@@ -162,6 +162,7 @@ internal fun EnterprisePage(openUsage: Boolean = false, vm: EnterpriseVM = koinV
     val exit by vm.exitRequest.collectAsStateWithLifecycle()
     val portal by vm.portal.collectAsStateWithLifecycle()
     val joinConfirmation by vm.joinConfirmation.collectAsStateWithLifecycle()
+    val addressEditor by vm.addressEditor.collectAsStateWithLifecycle()
     val resetChoice by vm.resetChoice.collectAsStateWithLifecycle()
     val resetConfirmation by vm.resetConfirmation.collectAsStateWithLifecycle()
     val budgets by vm.budgets.collectAsStateWithLifecycle()
@@ -372,13 +373,18 @@ internal fun EnterprisePage(openUsage: Boolean = false, vm: EnterpriseVM = koinV
                                         Text(stringResource(R.string.enterprise_address), style = MaterialTheme.typography.labelMedium)
                                         SelectionContainer { Text(origin, style = MaterialTheme.typography.bodySmall) }
                                     }
-                                    IconButton(onClick = {
-                                        pageScope.launch {
-                                            clipboard.setClipEntry(ClipEntry(ClipData.newPlainText("Enterprise address", origin)))
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        TextButton(onClick = vm::editAddress, enabled = !busy) {
+                                            Text(stringResource(R.string.edit))
                                         }
-                                        toaster.show(copiedText, type = ToastType.Success)
-                                    }) {
-                                        Icon(HugeIcons.Copy01, contentDescription = copyText)
+                                        IconButton(onClick = {
+                                            pageScope.launch {
+                                                clipboard.setClipEntry(ClipEntry(ClipData.newPlainText("Enterprise address", origin)))
+                                            }
+                                            toaster.show(copiedText, type = ToastType.Success)
+                                        }) {
+                                            Icon(HugeIcons.Copy01, contentDescription = copyText)
+                                        }
                                     }
                                 }
                             }
@@ -431,6 +437,35 @@ internal fun EnterprisePage(openUsage: Boolean = false, vm: EnterpriseVM = koinV
         confirmButton = { TextButton(onClick = { val text = enrollment; enrollment = ""; paste = false; vm.join(text) }, enabled = enrollment.isNotBlank()) {
             Text(stringResource(R.string.enterprise_join_submit))
         } }, dismissButton = { TextButton(onClick = { paste = false; enrollment = "" }) { Text(stringResource(R.string.cancel)) } })
+    addressEditor?.let { editor ->
+        var origin by remember(editor) { mutableStateOf(editor.origin) }
+        AlertDialog(
+            onDismissRequest = vm::dismissAddressEditor,
+            title = { Text(stringResource(R.string.enterprise_address_edit_title)) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text(
+                        stringResource(R.string.enterprise_address_edit_supporting),
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                    OutlinedTextField(
+                        value = origin,
+                        onValueChange = { origin = it },
+                        label = { Text(stringResource(R.string.enterprise_address)) },
+                        singleLine = true,
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { vm.changeAddress(origin) }, enabled = !busy && origin.isNotBlank()) {
+                    Text(stringResource(R.string.confirm))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = vm::dismissAddressEditor) { Text(stringResource(R.string.cancel)) }
+            },
+        )
+    }
     joinConfirmation?.let { confirmation ->
         AlertDialog(onDismissRequest = vm::dismissJoin,
             title = { Text(stringResource(R.string.enterprise_join_submit)) },

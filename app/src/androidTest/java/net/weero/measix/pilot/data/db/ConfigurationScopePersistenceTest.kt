@@ -28,10 +28,9 @@ class ConfigurationScopePersistenceTest {
         context.deleteDatabase(name)
         val scopes = listOf(
             ConfigurationScope.Personal,
-            ConfigurationScope.Enterprise(EnterpriseAuthority("platform:example", "dep_example"), "用户~alice"),
-            ConfigurationScope.Enterprise(EnterpriseAuthority("platform:example", "dep_example"), "bob"),
-            ConfigurationScope.Enterprise(EnterpriseAuthority("platform:other", "dep_example"), "用户~alice"),
-            ConfigurationScope.Enterprise(EnterpriseAuthority("platform:example", "dep_other"), "用户~alice"),
+            ConfigurationScope.Enterprise(EnterpriseAuthority("dep_example"), "用户~alice"),
+            ConfigurationScope.Enterprise(EnterpriseAuthority("dep_example"), "bob"),
+            ConfigurationScope.Enterprise(EnterpriseAuthority("dep_other"), "用户~alice"),
         )
         fun open() = Room.databaseBuilder(context, AppDatabase::class.java, name).build()
         try {
@@ -89,9 +88,9 @@ class ConfigurationScopePersistenceTest {
         val assistant = me.rerere.common.configuration.ConfigurationReference.random()
         val scopes = listOf(
             ConfigurationScope.Personal,
-            ConfigurationScope.Enterprise(EnterpriseAuthority("platform:example", "dep_example"), "alice"),
-            ConfigurationScope.Enterprise(EnterpriseAuthority("platform:example", "dep_example"), "bob"),
-            ConfigurationScope.Enterprise(EnterpriseAuthority("platform:other", "dep_example"), "alice"),
+            ConfigurationScope.Enterprise(EnterpriseAuthority("dep_example"), "alice"),
+            ConfigurationScope.Enterprise(EnterpriseAuthority("dep_example"), "bob"),
+            ConfigurationScope.Enterprise(EnterpriseAuthority("dep_other"), "alice"),
         )
         context.deleteDatabase(name)
         fun open() = Room.databaseBuilder(context, AppDatabase::class.java, name).build()
