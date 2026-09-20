@@ -27,6 +27,7 @@ import me.rerere.ai.provider.ProviderSetting
 import me.rerere.ai.provider.RequestCredentials
 import me.rerere.ai.provider.RequestMediaCapabilities
 import me.rerere.ai.provider.authenticate
+import me.rerere.ai.provider.forCredentials
 import me.rerere.ai.provider.TextGenerationParams
 import me.rerere.ai.provider.providers.openai.ChatCompletionsAPI
 import me.rerere.ai.provider.providers.openai.ResponseAPI
@@ -266,7 +267,7 @@ class OpenAIProvider(
             .build()
 
         val items = withContext(Dispatchers.IO) {
-            val bodyStr = client.newCall(request).readResponse { response ->
+            val bodyStr = client.forCredentials(params.credentials).newCall(request).readResponse { response ->
                 if (!response.isSuccessful) {
                     throw formatProviderHttpError(response.code, response.body?.string())
                 }
@@ -346,7 +347,7 @@ class OpenAIProvider(
             .build()
 
         val items = withContext(Dispatchers.IO) {
-            val bodyStr = client.newCall(request).readResponse { response ->
+            val bodyStr = client.forCredentials(params.credentials).newCall(request).readResponse { response ->
                 if (!response.isSuccessful) {
                     throw formatProviderHttpError(response.code, response.body?.string())
                 }

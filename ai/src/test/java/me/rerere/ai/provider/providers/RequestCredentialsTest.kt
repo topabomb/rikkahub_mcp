@@ -20,6 +20,7 @@ import me.rerere.ai.provider.ProviderSetting
 import me.rerere.ai.provider.RequestCredentials
 import me.rerere.ai.provider.TextGenerationParams
 import me.rerere.common.http.isPrivate
+import me.rerere.common.http.RoutedHttpException
 import okhttp3.OkHttpClient
 import okhttp3.Protocol
 import okhttp3.Request
@@ -261,6 +262,43 @@ class RequestCredentialsTest {
             }
             assertEquals(0, requests)
         } finally {
+            client.dispatcher.executorService.shutdown()
+            client.connectionPool.evictAll()
+        }
+    }
+
+    @Test fun `routed image generation never follows redirects or replays the request`() = runBlocking {
+        val paths = java.util.concurrent.CopyOnWriteArrayList<String>()
+        val server = com.sun.net.httpserver.HttpServer.create(java.net.InetSocketAddress("127.0.0.1", 0), 0)
+        server.createContext("/") { exchange -> exchange.use {
+            paths += it.requestURI.toString()
+            it.requestBody.readBytes()
+            it.responseHeaders.set("Location", "/redirected")
+            it.sendResponseHeaders(307, -1)
+        } }
+        server.start()
+        val client = OkHttpClient()
+        try {
+            val path = "/runtime/v1/resources/img_fixture/images/generations"
+            val endpoint = "http://127.0.0.1:${server.address.port}$path"
+            val provider = OpenAIProvider(client)
+            val setting = ProviderSetting.OpenAI(baseUrl = "https://provider.test/v1")
+            try {
+                provider.generateImage(
+                    setting,
+                    ImageGenerationParams(
+                        model = Model(modelId = "image"),
+                        prompt = "draw",
+                        credentials = RequestCredentials.Routed(endpoint, "relay-token"),
+                    ),
+                ).collect()
+                fail("routed image redirect was followed")
+            } catch (error: RoutedHttpException) {
+                assertEquals(307, error.status)
+            }
+            assertEquals(listOf(path), paths)
+        } finally {
+            server.stop(0)
             client.dispatcher.executorService.shutdown()
             client.connectionPool.evictAll()
         }
