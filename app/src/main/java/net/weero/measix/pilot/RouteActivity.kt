@@ -431,6 +431,10 @@ class RouteActivity : ComponentActivity() {
                                 net.weero.measix.pilot.ui.pages.enterprise.EnterprisePage()
                             }
 
+                            entry<Screen.EnterpriseUsage> {
+                                net.weero.measix.pilot.ui.pages.enterprise.EnterprisePage(openUsage = true)
+                            }
+
                             entry<Screen.Backup> {
                                 BackupPage()
                             }
@@ -696,6 +700,9 @@ class RouteActivity : ComponentActivity() {
 sealed interface Screen : NavKey {
     @Serializable
     data object Enterprise : Screen
+
+    @Serializable
+    data object EnterpriseUsage : Screen
 
     @Serializable
     data class Startup(val notificationId: String? = null) : Screen

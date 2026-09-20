@@ -7,11 +7,17 @@ import java.net.InetSocketAddress
 import java.time.Instant
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicReference
 import javax.crypto.spec.SecretKeySpec
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.*
+import me.rerere.common.http.RoutedHttpException
 import net.weero.measix.pilot.service.PlatformEnterpriseService
 import okhttp3.OkHttpClient
 import org.junit.Assert.*
@@ -28,7 +34,8 @@ class PlatformSessionNetworkTest {
     @get:Rule val temporary = TemporaryFolder()
     private val cipher = EnterpriseCredentialCipher { SecretKeySpec(ByteArray(32) { it.toByte() }, "AES") }
     private fun owner(root: File) = EnterpriseSessionController(net.weero.measix.pilot.data.enterprise.enterpriseTestStore(root, credentialCipher = cipher)) { 1000L }
-    private fun service(owner: EnterpriseSessionController) = PlatformEnterpriseService(owner, PlatformControlClient(OkHttpClient())) { Instant.ofEpochMilli(1000) }
+    private fun service(owner: EnterpriseSessionController) = PlatformEnterpriseService(
+        owner, PlatformControlClient(OkHttpClient()), now = { Instant.ofEpochMilli(1000) })
     private fun fixture(name: String) = requireNotNull(javaClass.getResourceAsStream("/contracts/platform/cases.json"))
         .bufferedReader().use { Json.parseToJsonElement(it.readText()).jsonArray }
         .first { it.jsonObject.getValue("name").jsonPrimitive.content == name }.jsonObject.getValue("value").toString()
@@ -124,38 +131,90 @@ class PlatformSessionNetworkTest {
         } finally { server.stop(0) }
     }
 
-    @Test fun `terminal pending Bootstrap permits confirmed new code after restart`() = runBlocking {
+    @Test fun `principal deleted before Bootstrap retires pending credentials and permits a fresh enrollment`() = runBlocking {
         val exchanges = AtomicInteger()
         val bootstraps = AtomicInteger()
-        val replacementId = "ses_aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
-        val originalId = "ses_550e8400-e29b-41d4-a716-446655440000"
+        val firstExchange = PlatformWireCodec.decode<PlatformEnrollmentExchangeResponse>(fixture("enrollment-response"))
+        val firstBootstrap = PlatformWireCodec.decode<PlatformBootstrap>(fixture("bootstrap"))
+        val freshUserId = "usr_00000000-0000-4000-8000-000000000099"
         val server = server {
             when (requestURI.path) {
                 "/.well-known/measix" -> reply(200, fixture("discovery"))
                 "/api/client/v1/enrollments/exchange" -> {
-                    val number = exchanges.incrementAndGet()
-                    reply(201, if (number == 1) fixture("enrollment-response") else fixture("enrollment-response").replace(originalId, replacementId))
+                    val body = if (exchanges.incrementAndGet() == 1) fixture("enrollment-response")
+                    else fixture("enrollment-response").replace(firstExchange.userId, freshUserId)
+                    reply(201, body)
                 }
-                "/api/client/v1/sessions/refresh" -> reply(200, fixture("refresh-response"))
-                "/api/client/v1/bootstrap" -> when (bootstraps.incrementAndGet()) {
-                    1 -> reply(503, "temporarily unavailable")
-                    2 -> reply(403, """{"type":"about:blank","title":"Forbidden","status":403,"code":"session_revoked"}""")
-                    else -> reply(200, fixture("bootstrap").replace(originalId, replacementId))
+                "/api/client/v1/bootstrap" -> {
+                    if (bootstraps.incrementAndGet() == 1) {
+                        reply(401, """{"type":"about:blank","title":"Unauthorized","status":401,"code":"enterprise_identity_deleted","detail":"Enterprise identity was deleted"}""")
+                    } else {
+                        reply(200, fixture("bootstrap").replace(firstBootstrap.user.userId, freshUserId))
+                    }
                 }
                 else -> reply(404, "unexpected route")
             }
         }
         try {
-            val root = temporary.newFolder()
-            val material = EnrollmentMaterial.Platform("http://127.0.0.1:${server.address.port}", "first-code", Instant.parse("2030-01-01T00:00:00Z"))
-            assertThrows(PlatformHttpException::class.java) { runBlocking { service(owner(root)).enroll(material, "Android", "test") } }
-            val recovered = owner(root)
-            val access = service(recovered).enroll(material.copy(code = "fresh-code"), "Android", "test")
-            assertEquals(replacementId, access.sessionId)
+            val sessions = owner(temporary.newFolder())
+            val platform = service(sessions)
+            val material = EnrollmentMaterial.Platform(
+                "http://127.0.0.1:${server.address.port}", "first-code", Instant.parse("2030-01-01T00:00:00Z"))
+
+            val firstFailure = runCatching { platform.enroll(material, "Android test", "test") }.exceptionOrNull()
+            assertTrue(firstFailure is PlatformHttpException)
+            assertEquals(EnterpriseRuntimeProblemCodes.IDENTITY_DELETED,
+                (firstFailure as PlatformHttpException).problem?.code)
+            val deleted = (sessions.state.value as EnterpriseState.Available).manifest
+            assertNull(deleted.pendingEnrollment)
+            assertEquals(EnterpriseSessionPhase.SIGNED_OUT, deleted.phase)
+            assertEquals(EnterpriseExitReason.IDENTITY_DELETED, deleted.exitReason)
+
+            val access = platform.enroll(material.copy(code = "fresh-code"), "Android test", "test")
+            assertEquals(freshUserId, access.scope.userId)
             assertEquals(2, exchanges.get())
-            assertEquals(3, bootstraps.get())
-            assertNull(recovered.pendingPlatformEnrollment())
+            val active = (sessions.state.value as EnterpriseState.Available).manifest
+            assertNull(active.pendingEnrollment)
+            assertEquals(EnterpriseSessionPhase.CONFIGURATION_PENDING, active.phase)
+            assertNull(active.exitReason)
+            assertEquals(freshUserId, active.session?.identity?.userId)
         } finally { server.stop(0) }
+    }
+
+    @Test fun `terminal pending Bootstrap permits confirmed new code after restart`() = runBlocking {
+        for (revokedCode in listOf("user_disabled", "device_revoked", "session_revoked")) {
+            val exchanges = AtomicInteger()
+            val bootstraps = AtomicInteger()
+            val replacementId = "ses_aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+            val originalId = "ses_550e8400-e29b-41d4-a716-446655440000"
+            val server = server {
+                when (requestURI.path) {
+                    "/.well-known/measix" -> reply(200, fixture("discovery"))
+                    "/api/client/v1/enrollments/exchange" -> {
+                        val number = exchanges.incrementAndGet()
+                        reply(201, if (number == 1) fixture("enrollment-response") else fixture("enrollment-response").replace(originalId, replacementId))
+                    }
+                    "/api/client/v1/sessions/refresh" -> reply(200, fixture("refresh-response"))
+                    "/api/client/v1/bootstrap" -> when (bootstraps.incrementAndGet()) {
+                        1 -> reply(503, "temporarily unavailable")
+                        2 -> reply(403, """{"type":"about:blank","title":"Forbidden","status":403,"code":"$revokedCode"}""")
+                        else -> reply(200, fixture("bootstrap").replace(originalId, replacementId))
+                    }
+                    else -> reply(404, "unexpected route")
+                }
+            }
+            try {
+                val root = temporary.newFolder()
+                val material = EnrollmentMaterial.Platform("http://127.0.0.1:${server.address.port}", "first-code", Instant.parse("2030-01-01T00:00:00Z"))
+                assertThrows(PlatformHttpException::class.java) { runBlocking { service(owner(root)).enroll(material, "Android", "test") } }
+                val recovered = owner(root)
+                val access = service(recovered).enroll(material.copy(code = "fresh-code"), "Android", "test")
+                assertEquals(replacementId, access.sessionId)
+                assertEquals(2, exchanges.get())
+                assertEquals(3, bootstraps.get())
+                assertNull(recovered.pendingPlatformEnrollment())
+            } finally { server.stop(0) }
+        }
     }
 
     @Test fun `confirmed different origin replaces offline pending enrollment and reports uncertain logout`() = runBlocking {
@@ -266,23 +325,171 @@ class PlatformSessionNetworkTest {
     }
 
     @Test fun `revoked active session signals the application exit owner`() = runBlocking {
+        for (revokedCode in listOf("user_disabled", "device_revoked", "session_revoked")) {
+            val server = server {
+                assertEquals("/api/client/v1/managed/state", requestURI.path)
+                reply(403, """{"type":"about:blank","title":"Forbidden","status":403,"code":"$revokedCode"}""")
+            }
+            try {
+                val sessions = owner(temporary.newFolder())
+                val connection = PlatformConnection("http://127.0.0.1:${server.address.port}", PlatformWireCodec.decode(fixture("discovery")))
+                val id = sessions.acceptPlatformEnrollment(sessions.beginPlatformEnrollment(), connection,
+                    PlatformWireCodec.decode(fixture("enrollment-response")))
+                val access = sessions.completePlatformBootstrap(id, PlatformWireCodec.decode(fixture("bootstrap")))
+                val revoked = mutableListOf<RealmAccess.Enterprise>()
+                val platform = PlatformEnterpriseService(sessions, PlatformControlClient(OkHttpClient()), { Instant.ofEpochMilli(1000) },
+                    onSessionRevoked = { revoked += it })
+                try { platform.synchronize(access); fail("Revocation was ignored") }
+                catch (error: PlatformHttpException) { assertEquals(revokedCode, error.problem?.code) }
+                assertEquals(listOf(access), revoked)
+            } finally { server.stop(0) }
+        }
+    }
+
+    @Test fun `managed runtime revocation signals the application exit owner`() = runBlocking {
+        val sessions = owner(temporary.newFolder())
+        val connection = PlatformConnection("https://platform.example", PlatformWireCodec.decode(fixture("discovery")))
+        val id = sessions.acceptPlatformEnrollment(
+            sessions.beginPlatformEnrollment(),
+            connection,
+            PlatformWireCodec.decode(fixture("enrollment-response")),
+        )
+        val access = sessions.completePlatformBootstrap(id, PlatformWireCodec.decode(fixture("bootstrap")))
+        val invalidations = mutableListOf<EnterpriseExitReason>()
+        val platform = PlatformEnterpriseService(
+            sessions,
+            PlatformControlClient(OkHttpClient()),
+            onSessionInvalidated = { _, reason -> invalidations += reason },
+        )
+
+        for (code in EnterpriseRuntimeProblemCodes.authorizationRevoked) {
+            val body = """{"type":"about:blank","title":"Revoked","status":403,"code":"$code","forwarded":false}"""
+            assertTrue(platform.managedRuntimeFailure(access, RoutedHttpException(403, body)) is EnterpriseRuntimeProblemException)
+        }
+        assertEquals(
+            List(EnterpriseRuntimeProblemCodes.authorizationRevoked.size) { EnterpriseExitReason.AUTHORIZATION_REVOKED },
+            invalidations,
+        )
+    }
+
+    @Test fun `in flight applied report accepts identity deletion before releasing reset barrier`() = runBlocking {
+        val snapshot = PlatformWireCodec.decode<PlatformManagedSnapshot>(fixture("v4-full"))
+        val reportEntered = CountDownLatch(1)
+        val releaseReport = CountDownLatch(1)
+        val handlerFailure = AtomicReference<Throwable?>()
         val server = server {
-            assertEquals("/api/client/v1/managed/state", requestURI.path)
-            reply(403, """{"type":"about:blank","title":"Forbidden","status":403,"code":"session_revoked"}""")
+            try {
+                when (requestURI.path) {
+                    "/api/client/v1/managed/state" -> reply(
+                        200,
+                        """{"runtimeStatus":"READY","activeManagedGeneration":${snapshot.managedGeneration},"managedStateRevision":1,"syncRequired":true,"targetManagedGeneration":${snapshot.managedGeneration},"runtimeBlocked":true}""",
+                    )
+                    "/api/client/v1/managed/snapshots/${snapshot.managedGeneration}" -> {
+                        responseHeaders.set("ETag", "\"${snapshot.snapshotHash}\"")
+                        reply(200, fixture("v4-full"))
+                    }
+                    "/api/client/v1/managed/applied" -> {
+                        reportEntered.countDown()
+                        check(releaseReport.await(5, TimeUnit.SECONDS))
+                        reply(
+                            401,
+                            """{"type":"about:blank","title":"Deleted","status":401,"code":"enterprise_identity_deleted"}""",
+                        )
+                    }
+                    else -> reply(404, "unexpected route")
+                }
+            } catch (error: Throwable) {
+                handlerFailure.set(error)
+                throw error
+            }
         }
         try {
             val sessions = owner(temporary.newFolder())
-            val connection = PlatformConnection("http://127.0.0.1:${server.address.port}", PlatformWireCodec.decode(fixture("discovery")))
-            val id = sessions.acceptPlatformEnrollment(sessions.beginPlatformEnrollment(), connection,
-                PlatformWireCodec.decode(fixture("enrollment-response")))
+            val connection = PlatformConnection(
+                "http://127.0.0.1:${server.address.port}",
+                PlatformWireCodec.decode(fixture("discovery")),
+            )
+            val id = sessions.acceptPlatformEnrollment(
+                sessions.beginPlatformEnrollment(),
+                connection,
+                PlatformWireCodec.decode(fixture("enrollment-response")),
+            )
             val access = sessions.completePlatformBootstrap(id, PlatformWireCodec.decode(fixture("bootstrap")))
-            val revoked = mutableListOf<RealmAccess.Enterprise>()
-            val platform = PlatformEnterpriseService(sessions, PlatformControlClient(OkHttpClient()), { Instant.ofEpochMilli(1000) },
-                onSessionRevoked = { revoked += it })
-            try { platform.synchronize(access); fail("Revocation was ignored") }
-            catch (error: PlatformHttpException) { assertEquals("session_revoked", error.problem?.code) }
-            assertEquals(listOf(access), revoked)
-        } finally { server.stop(0) }
+            val accepted = CompletableDeferred<Unit>()
+            val platform = PlatformEnterpriseService(
+                sessions,
+                PlatformControlClient(OkHttpClient()),
+                now = { Instant.ofEpochMilli(1000) },
+                onSessionInvalidated = { captured, reason ->
+                    sessions.beginInvalidation(captured, reason)
+                    accepted.complete(Unit)
+                },
+            )
+
+            val syncing = async(Dispatchers.IO) { runCatching { platform.synchronize(access) } }
+            if (!reportEntered.await(5, TimeUnit.SECONDS)) {
+                fail("Applied report was not reached: handler=${handlerFailure.get()}, client=${syncing.await().exceptionOrNull()}")
+            }
+            sessions.beginLocalDataReset(requireNotNull(sessions.captureExitRequest()))
+            val operationsReleased = async { sessions.awaitPlatformOperations(access) }
+            assertFalse(operationsReleased.isCompleted)
+
+            releaseReport.countDown()
+            assertTrue(syncing.await().exceptionOrNull() is PlatformHttpException)
+            accepted.await()
+            operationsReleased.await()
+            assertEquals(EnterpriseExitReason.IDENTITY_DELETED, sessions.pendingExit()?.reason)
+        } finally {
+            releaseReport.countDown()
+            server.stop(0)
+        }
+    }
+
+    @Test fun `in flight Client deletion upgrades local reset before its operation lease is released`() = runBlocking {
+        val sessions = owner(temporary.newFolder())
+        val connection = PlatformConnection("https://platform.example", PlatformWireCodec.decode(fixture("discovery")))
+        val id = sessions.acceptPlatformEnrollment(
+            sessions.beginPlatformEnrollment(),
+            connection,
+            PlatformWireCodec.decode(fixture("enrollment-response")),
+        )
+        val access = sessions.completePlatformBootstrap(id, PlatformWireCodec.decode(fixture("bootstrap")))
+        val entered = CompletableDeferred<Unit>()
+        val respond = CompletableDeferred<Unit>()
+        val accepted = CompletableDeferred<Unit>()
+        val platform = PlatformEnterpriseService(
+            sessions,
+            PlatformControlClient(OkHttpClient()),
+            now = { Instant.ofEpochMilli(1000) },
+            onSessionInvalidated = { captured, reason ->
+                sessions.beginInvalidation(captured, reason)
+                accepted.complete(Unit)
+            },
+        )
+
+        val request = async {
+            runCatching {
+                platform.read<Unit>(id) { _, _ ->
+                    entered.complete(Unit)
+                    respond.await()
+                    throw PlatformHttpException(
+                        401,
+                        PlatformProblem("about:blank", "Deleted", 401, "enterprise_identity_deleted"),
+                        "deleted",
+                    )
+                }
+            }
+        }
+        entered.await()
+        sessions.beginLocalDataReset(requireNotNull(sessions.captureExitRequest()))
+        val operationsReleased = async { sessions.awaitPlatformOperations(access) }
+        assertFalse(operationsReleased.isCompleted)
+
+        respond.complete(Unit)
+        assertTrue(request.await().exceptionOrNull() is PlatformHttpException)
+        accepted.await()
+        operationsReleased.await()
+        assertEquals(EnterpriseExitReason.IDENTITY_DELETED, sessions.pendingExit()?.reason)
     }
 
     @Test fun `every interaction preflight checks authority and degraded status rejects retained configuration`() = runBlocking {

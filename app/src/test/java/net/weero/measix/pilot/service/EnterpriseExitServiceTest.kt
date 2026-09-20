@@ -210,6 +210,63 @@ class EnterpriseExitServiceTest {
         }
     }
 
+    @Test fun `identity deletion clears the principal scope before committing signed out`() = runTest {
+        fixture { f ->
+            f.sessions.enrollFixture(exampleEnterprisePackage())
+            val access = f.sessions.captureSelectedRealmAccess() as RealmAccess.Enterprise
+
+            f.service.invalidate(access, EnterpriseExitReason.IDENTITY_DELETED)
+
+            coVerify(exactly = 1) { f.identityData.clear(access.scope) }
+            assertEquals(EnterpriseSessionPhase.SIGNED_OUT, f.manifest.phase)
+            assertEquals(EnterpriseExitReason.IDENTITY_DELETED, f.manifest.exitReason)
+        }
+    }
+
+    @Test fun `accepted invalidation returns after durable closing without waiting for runtime cleanup`() = runTest {
+        fixture { f ->
+            f.sessions.enrollFixture(exampleEnterprisePackage())
+            val access = f.sessions.captureSelectedRealmAccess() as RealmAccess.Enterprise
+            val entered = CompletableDeferred<Unit>()
+            val release = CompletableDeferred<Unit>()
+            f.cleanup = { entered.complete(Unit); release.await() }
+
+            f.service.acceptInvalidation(access, EnterpriseExitReason.IDENTITY_DELETED)
+
+            assertEquals(EnterpriseSessionPhase.CLOSING, f.manifest.phase)
+            assertEquals(EnterpriseExitReason.IDENTITY_DELETED, f.manifest.exitReason)
+            entered.await()
+            val completion = async { f.service.invalidate(access, EnterpriseExitReason.IDENTITY_DELETED) }
+            release.complete(Unit)
+            completion.await()
+            assertEquals(EnterpriseSessionPhase.SIGNED_OUT, f.manifest.phase)
+        }
+    }
+
+    @Test fun `identity deletion upgrades an active revocation and clears deleted principal data`() = runTest {
+        fixture { f ->
+            f.sessions.enrollFixture(exampleEnterprisePackage())
+            val access = f.sessions.captureSelectedRealmAccess() as RealmAccess.Enterprise
+            val entered = CompletableDeferred<Unit>()
+            val release = CompletableDeferred<Unit>()
+            f.cleanup = { entered.complete(Unit); release.await() }
+
+            val revoked = async { f.service.invalidate(access, EnterpriseExitReason.AUTHORIZATION_REVOKED) }
+            entered.await()
+            f.service.acceptInvalidation(access, EnterpriseExitReason.IDENTITY_DELETED)
+
+            assertEquals(EnterpriseExitReason.IDENTITY_DELETED, f.sessions.pendingExit()?.reason)
+            release.complete(Unit)
+            revoked.await()
+            advanceUntilIdle()
+
+            coVerify(exactly = 1) { f.identityData.clear(access.scope) }
+            assertEquals(EnterpriseSessionPhase.SIGNED_OUT, f.manifest.phase)
+            assertEquals(EnterpriseExitReason.IDENTITY_DELETED, f.manifest.exitReason)
+            assertNull(f.manifest.lastIdentity)
+        }
+    }
+
     private suspend fun TestScope.fixture(virtualTime: Boolean = false, block: suspend (Fixture) -> Unit) {
         val f = Fixture(this, virtualTime)
         try { block(f) }
@@ -230,6 +287,7 @@ class EnterpriseExitServiceTest {
         }) { now }
         val gate = ApplicationRecoveryGate().apply { if (!virtualTime) ready() }
         val conversations = mockk<ConversationApplicationService>()
+        val identityData = mockk<EnterpriseIdentityDataDisposer>(relaxed = true)
         val sync = mockk<EnterpriseSynchronizationService>()
         var cleanup: suspend (EnterpriseExitToken) -> Unit = {}
         var logout: suspend (EnterpriseExitToken) -> Unit = {}
@@ -239,7 +297,7 @@ class EnterpriseExitServiceTest {
             coEvery { sync.cancelAndAwait(any()) } returns Unit
             coEvery { conversations.stopEnterpriseWork(any()) } coAnswers { cleanup(firstArg()) }
             coEvery { conversations.requireEnterpriseStopped(any()) } returns Unit
-            service = EnterpriseExitService(sessions, sync, conversations, gate, scope, net.weero.measix.pilot.service.portal.PortalDocumentRegistry(), mockk(relaxed = true), mockk { io.mockk.coEvery { closeRealm(any()) } returns Unit }, mcp = mockk { io.mockk.coEvery { closeRealm(any()) } returns Unit }, speech = mockk(relaxed = true), platformLogout = { logout(it) })
+            service = EnterpriseExitService(sessions, sync, conversations, gate, scope, net.weero.measix.pilot.service.portal.PortalDocumentRegistry(), mockk(relaxed = true), mockk { io.mockk.coEvery { closeRealm(any()) } returns Unit }, mcp = mockk { io.mockk.coEvery { closeRealm(any()) } returns Unit }, speech = mockk(relaxed = true), identityData = identityData, platformLogout = { logout(it) })
         }
 
         fun recovery(): ApplicationRecoveryCoordinator = ApplicationRecoveryCoordinator(

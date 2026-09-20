@@ -1,6 +1,9 @@
 package net.weero.measix.pilot.service
 
 import android.content.Context
+import java.text.DateFormat
+import java.time.Instant
+import java.util.Date
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -12,6 +15,11 @@ import me.rerere.ai.ui.TurnTerminalReasons
 import me.rerere.ai.util.ProviderFailureKind
 import me.rerere.ai.util.classifyProviderFailure
 import net.weero.measix.pilot.R
+import net.weero.measix.pilot.data.enterprise.EnterpriseRuntimeProblemException
+import net.weero.measix.pilot.data.enterprise.PlatformBudgetCapability
+import net.weero.measix.pilot.data.enterprise.PlatformBudgetPeriod
+import net.weero.measix.pilot.data.enterprise.PlatformProblem
+import net.weero.measix.pilot.data.enterprise.PlatformUsageMeter
 import kotlin.uuid.Uuid
 
 data class ChatError(
@@ -28,6 +36,7 @@ data class ChatError(
 enum class ChatErrorSolution {
     CheckTitleModelSettings,
     CheckProviderSettings,
+    ViewEnterpriseUsage,
 }
 
 enum class ChatErrorRetention {
@@ -95,6 +104,35 @@ fun terminalMessagePresentation(
     status: MessageTerminalStatus,
     reason: String?,
 ): TerminalMessagePresentation = when (reason) {
+    net.weero.measix.pilot.data.enterprise.EnterpriseRuntimeProblemCodes.BUDGET_EXHAUSTED -> terminalPresentation(
+        R.string.enterprise_budget_exhausted,
+        R.string.enterprise_budget_exhausted_detail,
+        ChatErrorSolution.ViewEnterpriseUsage,
+    )
+
+    net.weero.measix.pilot.data.enterprise.EnterpriseRuntimeProblemCodes.BUDGET_SERVICE_UNAVAILABLE -> terminalPresentation(
+        R.string.enterprise_budget_service_unavailable,
+        R.string.enterprise_budget_service_unavailable_detail,
+        ChatErrorSolution.ViewEnterpriseUsage,
+    )
+
+    net.weero.measix.pilot.data.enterprise.EnterpriseRuntimeProblemCodes.USAGE_RECONCILIATION_REQUIRED -> terminalPresentation(
+        R.string.enterprise_usage_reconciliation_required,
+        R.string.enterprise_usage_reconciliation_required_detail,
+        ChatErrorSolution.ViewEnterpriseUsage,
+    )
+
+    net.weero.measix.pilot.data.enterprise.EnterpriseRuntimeProblemCodes.USAGE_METER_UNAVAILABLE -> terminalPresentation(
+        R.string.enterprise_usage_meter_unavailable,
+        R.string.enterprise_usage_meter_unavailable_detail,
+        ChatErrorSolution.ViewEnterpriseUsage,
+    )
+
+    net.weero.measix.pilot.data.enterprise.EnterpriseRuntimeProblemCodes.IDENTITY_DELETED -> terminalPresentation(
+        R.string.enterprise_identity_deleted,
+        R.string.enterprise_identity_deleted_detail,
+    )
+
     ProviderFailureKind.RATE_LIMITED.reason -> terminalPresentation(
         R.string.error_title_rate_limited,
         R.string.chat_error_detail_unavailable,
@@ -228,13 +266,72 @@ fun terminalChatError(
         return null
     }
     val presentation = terminalMessagePresentation(status, reason)
+    val structured = EnterpriseRuntimeProblemException.parseTerminalDetail(detail)
     return ChatError(
         title = context.getString(presentation.titleResource),
-        detail = detail?.trim()?.takeIf(String::isNotEmpty)
+        detail = structured?.let { enterpriseRuntimeDetail(context, it, presentation.fallbackDetailResource) }
+            ?: detail?.trim()?.takeIf(String::isNotEmpty)
             ?: context.getString(presentation.fallbackDetailResource),
         conversationId = conversationId,
         solution = presentation.solution,
         retention = ChatErrorRetention.UNTIL_DISMISSED,
         sourceMessageId = messageId,
     )
+}
+
+private fun enterpriseRuntimeDetail(context: Context, problem: PlatformProblem, fallback: Int): String {
+    if (problem.code != net.weero.measix.pilot.data.enterprise.EnterpriseRuntimeProblemCodes.BUDGET_EXHAUSTED) {
+        return problem.detail?.trim()?.takeIf(String::isNotEmpty) ?: context.getString(fallback)
+    }
+    val budget = problem.budget ?: return context.getString(fallback)
+    return buildList {
+        problem.detail?.trim()?.takeIf(String::isNotEmpty)?.let(::add)
+        add(context.getString(capabilityResource(budget.capability)))
+        budget.resourceId?.let { add(context.getString(R.string.enterprise_runtime_resource_id, it)) }
+        budget.blockingLimits.forEach { limit ->
+            val afterUsed = (limit.limit - limit.used).coerceAtLeast(0)
+            val remaining = (afterUsed - limit.reserved).coerceAtLeast(0)
+            add(context.getString(
+                R.string.enterprise_budget_limit,
+                context.getString(periodResource(limit.period)),
+                context.getString(meterResource(limit.meter)),
+                limit.used.toString(),
+                limit.reserved.toString(),
+                limit.limit.toString(),
+                remaining.toString(),
+            ))
+            limit.resetAt?.let { resetAt ->
+                val formatted = runCatching {
+                    DateFormat.getDateTimeInstance().format(Date.from(Instant.parse(resetAt)))
+                }.getOrDefault(resetAt)
+                add(context.getString(R.string.enterprise_budget_reset_at, formatted))
+            }
+        }
+        if (problem.forwarded == false) add(context.getString(R.string.enterprise_budget_request_not_forwarded))
+        problem.requestId?.let { add(context.getString(R.string.enterprise_runtime_request_id, it)) }
+    }.joinToString("\n")
+}
+
+private fun capabilityResource(value: PlatformBudgetCapability): Int = when (value) {
+    PlatformBudgetCapability.MODEL -> R.string.enterprise_budget_capability_model
+    PlatformBudgetCapability.TTS -> R.string.enterprise_budget_capability_tts
+    PlatformBudgetCapability.ASR -> R.string.enterprise_budget_capability_asr
+    PlatformBudgetCapability.MCP -> R.string.enterprise_budget_capability_mcp
+}
+
+private fun periodResource(value: PlatformBudgetPeriod): Int = when (value) {
+    PlatformBudgetPeriod.DAY -> R.string.enterprise_budget_period_day
+    PlatformBudgetPeriod.WEEK -> R.string.enterprise_budget_period_week
+    PlatformBudgetPeriod.MONTH -> R.string.enterprise_budget_period_month
+    PlatformBudgetPeriod.LIFETIME -> R.string.enterprise_budget_period_lifetime
+}
+
+private fun meterResource(value: PlatformUsageMeter): Int = when (value) {
+    PlatformUsageMeter.REQUESTS -> R.string.enterprise_budget_meter_requests
+    PlatformUsageMeter.INPUT_TOKENS -> R.string.enterprise_budget_meter_input_tokens
+    PlatformUsageMeter.OUTPUT_TOKENS -> R.string.enterprise_budget_meter_output_tokens
+    PlatformUsageMeter.CACHED_TOKENS -> R.string.enterprise_budget_meter_cached_tokens
+    PlatformUsageMeter.TOTAL_TOKENS -> R.string.enterprise_budget_meter_total_tokens
+    PlatformUsageMeter.CHARACTERS -> R.string.enterprise_budget_meter_characters
+    PlatformUsageMeter.AUDIO_SECONDS -> R.string.enterprise_budget_meter_audio_seconds
 }

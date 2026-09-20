@@ -18,14 +18,28 @@ import net.weero.measix.pilot.service.portal.PortalClosure
 import net.weero.measix.pilot.service.portal.PortalCloseReason
 import net.weero.measix.pilot.service.portal.PortalFailure
 import net.weero.measix.pilot.service.portal.PortalHostUnavailable
+import net.weero.measix.pilot.service.portal.PortalDestination
 import net.weero.measix.pilot.utils.userVisibleDiagnostic
 import kotlin.uuid.Uuid
 
-internal data class PortalPresentation(val id: Uuid = Uuid.random(), val selection: RealmSelection)
+internal data class PortalPresentation(
+    val id: Uuid = Uuid.random(),
+    val selection: RealmSelection,
+    val destination: PortalDestination = PortalDestination.HOME,
+)
 internal data class EnterpriseExitConfirmation(val request: EnterpriseExitRequest, val enterpriseName: String?)
 internal data class EnterpriseResetConfirmation(
     val request: EnterpriseDataResetRequest,
     val path: net.weero.measix.pilot.service.EnterpriseResetPath,
+)
+
+internal data class EnterpriseBudgetPresentation(
+    val selection: RealmSelection,
+    val access: RealmAccess.Enterprise,
+    val loading: Boolean,
+    val value: PlatformUserBudgetView? = null,
+    val failure: String? = null,
+    val stale: Boolean = false,
 )
 
 internal class EnterpriseVM(private val service: EnterpriseApplicationService) : ViewModel() {
@@ -57,6 +71,55 @@ internal class EnterpriseVM(private val service: EnterpriseApplicationService) :
     val resetChoice = _resetChoice.asStateFlow()
     private val _resetConfirmation = MutableStateFlow<EnterpriseResetConfirmation?>(null)
     val resetConfirmation = _resetConfirmation.asStateFlow()
+    private val _budgets = MutableStateFlow<EnterpriseBudgetPresentation?>(null)
+    val budgets = combine(_budgets, overview) { value, state ->
+        value?.takeIf { it.selection == state?.selection && it.access == state.access }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
+
+    private var budgetListenerStarted = false
+    private var budgetRefreshPending = false
+
+    fun refreshBudgets() {
+        if (!budgetListenerStarted) {
+            budgetListenerStarted = true
+            viewModelScope.launch {
+                service.runtimeUsageChanges().collect { access ->
+                    if (overview.value?.access == access) refreshBudgets()
+                }
+            }
+        }
+        val state = overview.value ?: return
+        val selection = state.selection ?: return
+        val access = state.access ?: return
+        val current = _budgets.value?.takeIf { it.selection == selection && it.access == access }
+        if (current?.loading == true) {
+            budgetRefreshPending = true
+            return
+        }
+        budgetRefreshPending = false
+        _budgets.value = EnterpriseBudgetPresentation(selection, access, loading = true,
+            value = current?.value, stale = current?.value != null)
+        viewModelScope.launch {
+            try {
+                val value = service.budgets(selection, access)
+                if (overview.value?.selection == selection && overview.value?.access == access) {
+                    _budgets.value = EnterpriseBudgetPresentation(selection, access, loading = false, value = value)
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                if (overview.value?.selection == selection && overview.value?.access == access) {
+                    _budgets.value = EnterpriseBudgetPresentation(selection, access, loading = false,
+                        value = current?.value, failure = error.userVisibleDiagnostic(), stale = current?.value != null)
+                }
+            } finally {
+                if (budgetRefreshPending && overview.value?.selection == selection && overview.value?.access == access) {
+                    budgetRefreshPending = false
+                    refreshBudgets()
+                }
+            }
+        }
+    }
 
     fun join(text: String) = command(enrollment = true) { _joinConfirmation.value = service.join(text) }
     fun dismissJoin() {
@@ -126,6 +189,10 @@ internal class EnterpriseVM(private val service: EnterpriseApplicationService) :
         _error.value = null
         _portal.value = PortalPresentation(selection = it)
     } }
+    fun showUsagePortal() { overview.value?.selection?.let {
+        _error.value = null
+        _portal.value = PortalPresentation(selection = it, destination = PortalDestination.USAGE)
+    } }
     fun dismissPortal(original: PortalPresentation) { if (_portal.value == original) _portal.value = null }
     fun portalClosed(original: PortalPresentation, closure: PortalClosure) {
         if (_portal.value != original || overview.value?.selection != original.selection) return
@@ -143,7 +210,10 @@ internal class EnterpriseVM(private val service: EnterpriseApplicationService) :
         }
     }
     suspend fun openPortal(context: Context, original: PortalPresentation, onClosed: (PortalClosure) -> Unit) =
-        service.openPortal(context, original.selection, onClosed)
+        when (original.destination) {
+            PortalDestination.HOME -> service.openPortal(context, original.selection, onClosed)
+            PortalDestination.USAGE -> service.openPortal(context, original.selection, original.destination, onClosed)
+        }
     fun portalFailed(original: PortalPresentation, failure: Exception) {
         if (_portal.value != original || overview.value?.selection != original.selection) return
         dismissPortal(original)
@@ -176,6 +246,8 @@ internal class EnterpriseVM(private val service: EnterpriseApplicationService) :
                         R.string.enterprise_enrollment_already_used
                     enrollmentCode == "installation_user_conflict" ->
                         R.string.enterprise_installation_user_conflict
+                    enrollmentCode == EnterpriseRuntimeProblemCodes.IDENTITY_DELETED ->
+                        R.string.enterprise_identity_deleted
                     enrollment -> R.string.enterprise_invalid_enrollment
                     else -> failureMessage
                 }, overview.value?.selection, detail = when (error) {

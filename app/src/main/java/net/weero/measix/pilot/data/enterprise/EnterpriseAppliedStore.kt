@@ -17,7 +17,7 @@ internal enum class EnterpriseSessionPhase { SIGNED_OUT, CONFIGURATION_PENDING, 
 
 @Serializable
 internal enum class EnterpriseExitReason {
-    USER_REQUEST, AUTHORIZATION_EXPIRED, AUTHORIZATION_REVOKED, LOCAL_DATA_RESET,
+    USER_REQUEST, AUTHORIZATION_EXPIRED, AUTHORIZATION_REVOKED, IDENTITY_DELETED, LOCAL_DATA_RESET,
 }
 
 internal const val ENTERPRISE_MANIFEST_SCHEMA_VERSION = 5
@@ -221,8 +221,12 @@ internal class EnterpriseAppliedStore(
      * Replaces unreadable or stale enterprise access state without reading it back. The signed-out manifest
      * becomes authoritative first; a later recovery prunes any orphaned revision left by interruption.
      */
-    fun resetLocalState(retainedIdentity: EnterpriseIdentity?): LoadedEnterpriseState {
-        val manifest = EnterpriseManifest.signedOut(retainedIdentity)
+    fun resetLocalState(
+        retainedIdentity: EnterpriseIdentity?,
+        terminalReason: EnterpriseExitReason? = null,
+    ): LoadedEnterpriseState {
+        require(terminalReason == null || terminalReason == EnterpriseExitReason.IDENTITY_DELETED)
+        val manifest = EnterpriseManifest.signedOut(retainedIdentity).copy(exitReason = terminalReason)
         writeManifest(manifest)
         installationIdentity.delete()
         if (listOf("installation-id", "installation-id.bak", "installation-id.new").any { File(root, it).exists() }) {
@@ -271,7 +275,9 @@ internal class EnterpriseAppliedStore(
         manifest.session?.platform?.let {
             require(it.connection.authority == manifest.session.identity.authority) { "platform_session_authority_mismatch" }
         }
-        if ((manifest.phase == EnterpriseSessionPhase.CLOSING) != (manifest.exitReason != null)) {
+        val terminalDeletion = manifest.phase == EnterpriseSessionPhase.SIGNED_OUT &&
+            manifest.exitReason == EnterpriseExitReason.IDENTITY_DELETED
+        if (!terminalDeletion && (manifest.phase == EnterpriseSessionPhase.CLOSING) != (manifest.exitReason != null)) {
             throw EnterpriseStorageException("inconsistent_enterprise_exit_reason")
         }
         if (manifest.lastConfigurationSyncMillis?.let { it < 0 || (manifest.applied == null && manifest.session?.platform == null) } == true) {

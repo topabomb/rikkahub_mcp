@@ -352,7 +352,8 @@ val appModule = module {
         net.weero.measix.pilot.service.SpeechApplicationService(get(), get(), get(), get(), get(), get(), get(), get(), get<AppScope>(),
             me.rerere.tts.controller.TtsController(get()) { it.userVisibleDiagnostic() }, get())
     }
-    single { net.weero.measix.pilot.service.EnterpriseExitService(get(), get(), get(), get(), get<AppScope>(), get(), get(), get(), get(), get()) { get<PlatformEnterpriseService>().logout(it) } }
+    single { net.weero.measix.pilot.service.EnterpriseIdentityDataDisposer(get(), get(), get(), get(), get()) }
+    single { net.weero.measix.pilot.service.EnterpriseExitService(get(), get(), get(), get(), get<AppScope>(), get(), get(), get(), get(), get(), get()) { get<PlatformEnterpriseService>().logout(it) } }
     single { net.weero.measix.pilot.service.EnterpriseDataResetService(get(), get(), get(), get(), get(), get(), get(), get(), get()) }
     single(createdAtStart = true) { net.weero.measix.pilot.service.EnterpriseApplicationService(
         sessions = get(), synchronization = get(), exit = get(), dataReset = get(), portals = get(), recovery = get(),

@@ -8,6 +8,7 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.test.*
 import net.weero.measix.pilot.data.enterprise.*
 import net.weero.measix.pilot.service.*
@@ -15,6 +16,49 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class EnterpriseVMTest {
+    @Test fun `runtime completion during budget load queues a fresh projection`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val store = ViewModelStore()
+        try {
+            val packet = exampleEnterprisePackage()
+            val access = RealmAccess.Enterprise(packet.identity.scope, "session")
+            val selection = RealmSelection(access, 1)
+            val overview = MutableStateFlow(EnterpriseOverview(selection, EnterpriseSessionPhase.READY,
+                "Example", "Member", access, 1, 1000, null, null, false))
+            val changes = MutableSharedFlow<RealmAccess.Enterprise>(extraBufferCapacity = 1)
+            val first = CompletableDeferred<PlatformUserBudgetView>()
+            val firstView = budgetView(access.scope.userId, "2026-09-20T12:00:00Z")
+            val secondView = budgetView(access.scope.userId, "2026-09-20T12:00:01Z")
+            var calls = 0
+            val service = mockk<EnterpriseApplicationService>()
+            every { service.observe() } returns overview
+            every { service.runtimeUsageChanges() } returns changes
+            coEvery { service.budgets(selection, access) } coAnswers {
+                calls++
+                if (calls == 1) first.await() else secondView
+            }
+            val vm = EnterpriseVM(service)
+            store.put("enterprise", vm)
+            backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.budgets.collect {} }
+            runCurrent()
+
+            vm.refreshBudgets()
+            runCurrent()
+            assertTrue(vm.budgets.value?.loading == true)
+            changes.emit(access)
+            runCurrent()
+            first.complete(firstView)
+            runCurrent()
+
+            assertEquals(2, calls)
+            assertEquals(secondView.asOf, vm.budgets.value?.value?.asOf)
+        } finally {
+            store.clear()
+            runCurrent()
+            Dispatchers.resetMain()
+        }
+    }
+
     @Test fun `expired enrollment has a dedicated actionable message`() = runTest {
         Dispatchers.setMain(StandardTestDispatcher(testScheduler))
         val store = ViewModelStore()
@@ -95,6 +139,19 @@ class EnterpriseVMTest {
             runCurrent()
             assertEquals(net.weero.measix.pilot.R.string.enterprise_enrollment_already_used, vm.error.value?.resource)
             assertEquals("HTTP 409: enrollment_already_used: Enrollment code already used", vm.error.value?.detail)
+
+            val deleted = EnterpriseJoinConfirmation(kotlin.uuid.Uuid.random(), "https://platform.example")
+            coEvery { service.join("deleted") } returns deleted
+            coEvery { service.confirmJoin(deleted) } throws PlatformHttpException(401,
+                PlatformProblem("about:blank", "Unauthorized", 401,
+                    EnterpriseRuntimeProblemCodes.IDENTITY_DELETED, "Enterprise identity was deleted"),
+                "Enterprise identity was deleted")
+            vm.join("deleted")
+            runCurrent()
+            vm.confirmJoin()
+            runCurrent()
+            assertEquals(net.weero.measix.pilot.R.string.enterprise_identity_deleted, vm.error.value?.resource)
+            assertEquals("HTTP 401: enterprise_identity_deleted: Enterprise identity was deleted", vm.error.value?.detail)
         } finally {
             store.clear()
             runCurrent()
@@ -220,4 +277,41 @@ class EnterpriseVMTest {
         }
     }
 
+    @Test fun `budget projection requires every capability exactly once`() {
+        val view = budgetView("usr_12345678-1234-4234-8234-123456789abc", "2026-09-20T12:00:00Z")
+        assertThrows(IllegalArgumentException::class.java) {
+            view.copy(items = view.items.dropLast(1) + view.items.first())
+        }
+    }
 }
+
+private fun budgetView(userId: String, asOf: String) = PlatformUserBudgetView(
+    userId = userId,
+    timezone = "Asia/Shanghai",
+    items = listOf(
+        PlatformBudgetCapability.MODEL,
+        PlatformBudgetCapability.TTS,
+        PlatformBudgetCapability.ASR,
+        PlatformBudgetCapability.MCP,
+    ).map { capability ->
+        PlatformBudgetCapabilityView(
+            capability = capability,
+            mode = PlatformBudgetMode.UNLIMITED,
+            source = PlatformBudgetSource.DEFAULT,
+            revision = 0,
+            effectiveFrom = asOf,
+            asOf = asOf,
+            inFlightRequests = 0,
+            limits = emptyList(),
+            usageMeters = if (capability == PlatformBudgetCapability.TTS) listOf(
+                PlatformMeterQuantity(
+                    meter = PlatformUsageMeter.CHARACTERS,
+                    quantity = "1200",
+                    completeness = PlatformUsageCompleteness.EXACT,
+                ),
+            ) else emptyList(),
+            status = PlatformBudgetStatus.AVAILABLE,
+        )
+    },
+    asOf = asOf,
+)

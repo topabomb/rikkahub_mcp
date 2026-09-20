@@ -83,6 +83,7 @@ class ApplicationRecoveryCoordinatorTest {
                 "turns",
                 "assistants",
                 "exit",
+                "reset",
                 "maintenance",
                 "complete",
             ),

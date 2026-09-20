@@ -88,6 +88,42 @@ class PlatformAuthenticationTest {
         assertEquals(bootstrap.user.displayName, state.manifest.session?.identity?.userName)
     }
 
+    @Test fun `accepted enrollment after identity deletion resumes Bootstrap across restart`() = runBlocking {
+        val root = temporary.newFolder()
+        val original = controller(root)
+        val packet = exampleEnterprisePackage()
+        original.enrollFixture(packet)
+        val retired = original.captureRealmAccess(packet.identity.scope) as RealmAccess.Enterprise
+        original.finishExit(original.beginInvalidation(retired, EnterpriseExitReason.IDENTITY_DELETED))
+
+        val freshUserId = "usr_00000000-0000-4000-8000-000000000099"
+        val exchanged = response.copy(userId = freshUserId)
+        val sessionId = original.acceptPlatformEnrollment(
+            original.beginPlatformEnrollment(),
+            connection,
+            exchanged,
+        )
+        val pendingManifest = (original.state.value as EnterpriseState.Available).manifest
+        assertNotNull(pendingManifest.pendingEnrollment)
+        assertEquals(EnterpriseExitReason.IDENTITY_DELETED, pendingManifest.exitReason)
+
+        val restored = controller(root)
+        restored.recover()
+        val baseBootstrap = PlatformWireCodec.decode<PlatformBootstrap>(fixture("bootstrap"))
+        val bootstrap = baseBootstrap.copy(
+            user = baseBootstrap.user.copy(userId = freshUserId, displayName = "Recreated member"),
+            session = baseBootstrap.session.copy(sessionId = sessionId),
+        )
+        val access = restored.completePlatformBootstrap(sessionId, bootstrap)
+
+        val manifest = (restored.state.value as EnterpriseState.Available).manifest
+        assertEquals(freshUserId, access.scope.userId)
+        assertEquals(EnterpriseSessionPhase.CONFIGURATION_PENDING, manifest.phase)
+        assertNull(manifest.exitReason)
+        assertEquals(freshUserId, manifest.session?.identity?.userId)
+        assertNull(manifest.pendingEnrollment)
+    }
+
     @Test fun `ciphertext is bound to its immutable revision and tampering is rejected`() {
         val encrypted = cipher.encrypt("secret".toByteArray(), "first")
         assertEquals("secret", cipher.decrypt(encrypted, "first").toString(Charsets.UTF_8))

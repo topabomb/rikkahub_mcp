@@ -116,6 +116,179 @@ paths:
           $ref: '#/components/responses/Problem'
         '403':
           $ref: '#/components/responses/Problem'
+  /api/client/v1/budgets:
+    get:
+      operationId: getClientBudgets
+      security:
+      - bearerAuth: []
+      responses:
+        '200':
+          description: Effective budget state for the authenticated enterprise user.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserBudgetView'
+        '401':
+          $ref: '#/components/responses/Problem'
+        '403':
+          $ref: '#/components/responses/Problem'
+        '503':
+          $ref: '#/components/responses/Problem'
+  /api/portal/v1/budgets:
+    get:
+      operationId: getPortalBudgets
+      security:
+      - portalCookie: []
+      responses:
+        '200':
+          description: Effective budget state for the restricted Portal session owner.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserBudgetView'
+        '401':
+          $ref: '#/components/responses/Problem'
+        '403':
+          $ref: '#/components/responses/Problem'
+        '503':
+          $ref: '#/components/responses/Problem'
+  /api/portal/v1/usage/summary:
+    get:
+      operationId: getPortalUsageSummary
+      security:
+      - portalCookie: []
+      responses:
+        '200':
+          description: Usage summary scoped to the Portal session owner.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UsageSummary'
+        '400':
+          $ref: '#/components/responses/Problem'
+        '401':
+          $ref: '#/components/responses/Problem'
+        '403':
+          $ref: '#/components/responses/Problem'
+      parameters: &portalUsageFilters
+      - &puf_from
+        name: from
+        in: query
+        schema:
+          type: string
+          format: date-time
+      - &puf_to
+        name: to
+        in: query
+        schema:
+          type: string
+          format: date-time
+      - &puf_resourceKind
+        name: resourceKind
+        in: query
+        schema:
+          $ref: '#/components/schemas/ResourceKind'
+      - &puf_clientProtocol
+        name: clientProtocol
+        in: query
+        schema:
+          $ref: '#/components/schemas/UsageClientProtocol'
+  /api/portal/v1/usage/trend:
+    get:
+      operationId: getPortalUsageTrend
+      security:
+      - portalCookie: []
+      responses:
+        '200':
+          description: Daily self-usage aggregates.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UsageTrend'
+        '400':
+          $ref: '#/components/responses/Problem'
+        '401':
+          $ref: '#/components/responses/Problem'
+        '403':
+          $ref: '#/components/responses/Problem'
+      parameters: *portalUsageFilters
+  /api/portal/v1/usage/distribution:
+    get:
+      operationId: getPortalUsageDistribution
+      security:
+      - portalCookie: []
+      responses:
+        '200':
+          description: Self-usage distribution grouped by resource and protocol.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UsageDistribution'
+        '400':
+          $ref: '#/components/responses/Problem'
+        '401':
+          $ref: '#/components/responses/Problem'
+        '403':
+          $ref: '#/components/responses/Problem'
+      parameters: *portalUsageFilters
+  /api/portal/v1/usage/requests:
+    get:
+      operationId: listPortalUsageRequests
+      security:
+      - portalCookie: []
+      responses:
+        '200':
+          description: Paged self-usage request history.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RequestUsagePage'
+        '400':
+          $ref: '#/components/responses/Problem'
+        '401':
+          $ref: '#/components/responses/Problem'
+        '403':
+          $ref: '#/components/responses/Problem'
+      parameters:
+      - name: limit
+        in: query
+        schema:
+          type: integer
+          minimum: 1
+          maximum: 200
+          default: 50
+      - name: cursor
+        in: query
+        schema:
+          type: string
+      - *puf_from
+      - *puf_to
+      - *puf_resourceKind
+      - *puf_clientProtocol
+  /api/portal/v1/usage/requests/{requestId}:
+    get:
+      operationId: getPortalUsageRequest
+      security:
+      - portalCookie: []
+      responses:
+        '200':
+          description: One request owned by the Portal session user.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RequestUsageView'
+        '401':
+          $ref: '#/components/responses/Problem'
+        '403':
+          $ref: '#/components/responses/Problem'
+        '404':
+          $ref: '#/components/responses/Problem'
+      parameters:
+      - name: requestId
+        in: path
+        required: true
+        schema:
+          $ref: '#/components/schemas/RequestId'
   /.well-known/measix:
     get:
       operationId: discover
@@ -501,6 +674,364 @@ components:
     Sha256Hash:
       type: string
       pattern: ^sha256:[0-9a-f]{64}$
+    ResourceKind:
+      type: string
+      enum: [MODEL, TTS, ASR, MCP]
+    UsageClientProtocol:
+      type: string
+      enum:
+      - OPENAI_CHAT_COMPLETIONS
+      - OPENAI_RESPONSES
+      - ANTHROPIC_MESSAGES
+      - GOOGLE_GENERATE_CONTENT
+      - OPENAI_AUDIO_SPEECH
+      - GEMINI_GENERATE_CONTENT_TTS
+      - MIMO_CHAT_COMPLETIONS_TTS
+      - OPENAI_AUDIO_TRANSCRIPTIONS
+      - DASHSCOPE_HTTP_ASR
+      - OPENAI_REALTIME_TRANSCRIPTION
+      - DASHSCOPE_REALTIME_ASR
+      - MCP_STREAMABLE_HTTP
+    UsageMeter:
+      type: string
+      enum: [REQUESTS, INPUT_TOKENS, OUTPUT_TOKENS, CACHED_TOKENS, TOTAL_TOKENS, CHARACTERS, AUDIO_SECONDS]
+    UsageCompleteness:
+      type: string
+      enum: [EXACT, PARTIAL, UNKNOWN]
+    BudgetCapability:
+      type: string
+      enum: [MODEL, TTS, ASR, MCP]
+    BudgetMode:
+      type: string
+      enum: [UNLIMITED, LIMITED]
+    BudgetSource:
+      type: string
+      enum: [DEFAULT, EXPLICIT]
+    BudgetPeriod:
+      type: string
+      enum: [DAY, WEEK, MONTH, LIFETIME]
+    BudgetStatus:
+      type: string
+      enum: [AVAILABLE, EXHAUSTED, PENDING_RECONCILIATION]
+    MeterQuantity:
+      type: object
+      additionalProperties: false
+      required: [meter, quantity, completeness]
+      properties:
+        meter:
+          $ref: '#/components/schemas/UsageMeter'
+        quantity:
+          type: string
+          pattern: '^(0|[1-9][0-9]*)(\.[0-9]{1,9})?$'
+        completeness:
+          $ref: '#/components/schemas/UsageCompleteness'
+    BudgetLimitState:
+      type: object
+      additionalProperties: false
+      required: [period, meter, limit, used, reserved, remaining, overage, scopeStart]
+      properties:
+        period:
+          $ref: '#/components/schemas/BudgetPeriod'
+        meter:
+          $ref: '#/components/schemas/UsageMeter'
+        limit:
+          type: string
+          pattern: '^(0|[1-9][0-9]*)(\.[0-9]{1,9})?$'
+        used:
+          type: string
+          pattern: '^(0|[1-9][0-9]*)(\.[0-9]{1,9})?$'
+        reserved:
+          type: string
+          pattern: '^(0|[1-9][0-9]*)(\.[0-9]{1,9})?$'
+        remaining:
+          type: string
+          pattern: '^(0|[1-9][0-9]*)(\.[0-9]{1,9})?$'
+        overage:
+          type: string
+          pattern: '^(0|[1-9][0-9]*)(\.[0-9]{1,9})?$'
+        scopeStart:
+          type: string
+          format: date-time
+        resetAt:
+          type: string
+          format: date-time
+    BudgetCapabilityView:
+      type: object
+      additionalProperties: false
+      required: [capability, mode, source, revision, effectiveFrom, asOf, inFlightRequests, limits, usageMeters, status]
+      properties:
+        capability:
+          $ref: '#/components/schemas/BudgetCapability'
+        resourceId:
+          type: string
+        mode:
+          $ref: '#/components/schemas/BudgetMode'
+        source:
+          $ref: '#/components/schemas/BudgetSource'
+        revision:
+          type: integer
+          minimum: 0
+        effectiveFrom:
+          type: string
+          format: date-time
+        asOf:
+          type: string
+          format: date-time
+        inFlightRequests:
+          type: integer
+          minimum: 0
+        limits:
+          type: array
+          items:
+            $ref: '#/components/schemas/BudgetLimitState'
+        usageMeters:
+          type: array
+          description: Retained cumulative usage history for this capability. It remains available for unlimited budgets and is independent of the current-window used and reserved values in limits.
+          items:
+            $ref: '#/components/schemas/MeterQuantity'
+        status:
+          $ref: '#/components/schemas/BudgetStatus'
+    UserBudgetView:
+      type: object
+      additionalProperties: false
+      required: [userId, timezone, items, asOf]
+      properties:
+        userId:
+          $ref: '#/components/schemas/UserId'
+        timezone:
+          type: string
+        items:
+          type: array
+          minItems: 4
+          maxItems: 4
+          items:
+            $ref: '#/components/schemas/BudgetCapabilityView'
+        asOf:
+          type: string
+          format: date-time
+    BudgetContext:
+      type: object
+      additionalProperties: false
+      required: [capability, mode, revision, blockers, asOf]
+      properties:
+        capability:
+          $ref: '#/components/schemas/BudgetCapability'
+        mode:
+          $ref: '#/components/schemas/BudgetMode'
+        revision:
+          type: integer
+          minimum: 0
+        blockers:
+          type: array
+          items:
+            $ref: '#/components/schemas/BudgetLimitState'
+        resetAt:
+          type: string
+          format: date-time
+        asOf:
+          type: string
+          format: date-time
+    RuntimeBudgetContext:
+      type: object
+      additionalProperties: false
+      required: [capability, mode, blockingLimits, asOf]
+      properties:
+        capability:
+          $ref: '#/components/schemas/BudgetCapability'
+        resourceId:
+          type: string
+        mode:
+          $ref: '#/components/schemas/BudgetMode'
+        blockingLimits:
+          type: array
+          items:
+            $ref: '#/components/schemas/RuntimeBudgetLimitState'
+        resetAt:
+          type: string
+          format: date-time
+          nullable: true
+        asOf:
+          type: string
+          format: date-time
+    RuntimeBudgetLimitState:
+      type: object
+      additionalProperties: false
+      required: [meter, period, limit, used, reserved]
+      properties:
+        meter:
+          $ref: '#/components/schemas/UsageMeter'
+        period:
+          $ref: '#/components/schemas/BudgetPeriod'
+        limit:
+          type: integer
+          format: int64
+          minimum: 0
+        used:
+          type: integer
+          format: int64
+          minimum: 0
+        reserved:
+          type: integer
+          format: int64
+          minimum: 0
+        resetAt:
+          type: string
+          format: date-time
+          nullable: true
+    UsageSummary:
+      type: object
+      additionalProperties: false
+      required: [from, to, requestCount, forwardedRequestCount, requestBytes, responseBytes, semanticMeters]
+      properties:
+        from:
+          type: string
+          format: date-time
+        to:
+          type: string
+          format: date-time
+        requestCount:
+          type: integer
+          minimum: 0
+        forwardedRequestCount:
+          type: integer
+          minimum: 0
+        requestBytes:
+          type: integer
+          minimum: 0
+        responseBytes:
+          type: integer
+          minimum: 0
+        semanticMeters:
+          type: array
+          items:
+            $ref: '#/components/schemas/MeterQuantity'
+    UsageTrendPoint:
+      type: object
+      additionalProperties: false
+      required: [date, requestCount, semanticMeters]
+      properties:
+        date:
+          type: string
+          format: date
+        requestCount:
+          type: integer
+          minimum: 0
+        semanticMeters:
+          type: array
+          items:
+            $ref: '#/components/schemas/MeterQuantity'
+    UsageTrend:
+      type: object
+      additionalProperties: false
+      required: [from, to, timezone, points]
+      properties:
+        from:
+          type: string
+          format: date-time
+        to:
+          type: string
+          format: date-time
+        timezone:
+          type: string
+        points:
+          type: array
+          items:
+            $ref: '#/components/schemas/UsageTrendPoint'
+    UsageDistributionItem:
+      type: object
+      additionalProperties: false
+      required: [resourceKind, clientProtocol, requestCount, semanticMeters]
+      properties:
+        resourceKind:
+          $ref: '#/components/schemas/ResourceKind'
+        clientProtocol:
+          $ref: '#/components/schemas/UsageClientProtocol'
+        resourceId:
+          type: string
+        resourceDisplayName:
+          type: string
+        requestCount:
+          type: integer
+          minimum: 0
+        semanticMeters:
+          type: array
+          items:
+            $ref: '#/components/schemas/MeterQuantity'
+    UsageDistribution:
+      type: object
+      additionalProperties: false
+      required: [from, to, items]
+      properties:
+        from:
+          type: string
+          format: date-time
+        to:
+          type: string
+          format: date-time
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/UsageDistributionItem'
+    RequestUsageView:
+      type: object
+      additionalProperties: false
+      required: [requestId, resourceKind, clientProtocol, startedAt, completedAt, forwarded, requestBytes, responseBytes, durationMs, requestCompleteness, settlementState, semanticMeters]
+      properties:
+        requestId:
+          $ref: '#/components/schemas/RequestId'
+        interactionId:
+          $ref: '#/components/schemas/InteractionId'
+        resourceId:
+          type: string
+        resourceDisplayName:
+          type: string
+        resourceKind:
+          $ref: '#/components/schemas/ResourceKind'
+        clientProtocol:
+          $ref: '#/components/schemas/UsageClientProtocol'
+        startedAt:
+          type: string
+          format: date-time
+        completedAt:
+          type: string
+          format: date-time
+        forwarded:
+          type: boolean
+        httpStatus:
+          type: integer
+        requestBytes:
+          type: integer
+          minimum: 0
+        responseBytes:
+          type: integer
+          minimum: 0
+        durationMs:
+          type: integer
+          minimum: 0
+        errorClass:
+          type: string
+        requestCompleteness:
+          $ref: '#/components/schemas/UsageCompleteness'
+        settlementState:
+          type: string
+          enum: [NOT_REQUIRED, PENDING, SETTLED, RECONCILIATION_REQUIRED]
+        semanticMeters:
+          type: array
+          items:
+            $ref: '#/components/schemas/MeterQuantity'
+        budget:
+          $ref: '#/components/schemas/BudgetContext'
+    RequestUsagePage:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/RequestUsageView'
+        nextCursor:
+          type: string
     Problem:
       type: object
       additionalProperties: false
@@ -521,6 +1052,11 @@ components:
           maximum: 599
         code:
           type: string
+          description: >-
+            Stable machine-readable reason. Authentication and lifecycle values include
+            unauthenticated, invalid_credential, enrollment_expired, session_expired,
+            enterprise_identity_deleted, user_disabled, device_revoked, session_revoked,
+            enrollment_already_used, installation_user_conflict and refresh_conflict.
         detail:
           type: string
         requestId:
@@ -535,6 +1071,8 @@ components:
           minimum: 0
         forwarded:
           type: boolean
+        budget:
+          $ref: '#/components/schemas/RuntimeBudgetContext'
     ValidationIssue:
       type: object
       additionalProperties: false

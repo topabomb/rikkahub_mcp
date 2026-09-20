@@ -34,6 +34,8 @@ internal sealed interface ModelRequests {
 internal class ModelExecutionLease(
     private val releaseOwner: suspend () -> Unit = {},
     private val onManagedSnapshotRequired: () -> Unit = {},
+    private val normalizeFailure: suspend (ModelRequestTarget, Throwable) -> Throwable = { _, error -> error },
+    private val onRequestFinished: (ModelRequestTarget) -> Unit = {},
     private val admit: suspend ((ModelRequestTarget) -> Unit) -> Unit,
 ) : ModelRequests {
     private val closed = AtomicBoolean(false)
@@ -68,10 +70,11 @@ internal class ModelExecutionLease(
             request = async(Dispatchers.IO, start = CoroutineStart.LAZY) {
                 try { operation(target) }
                 catch (error: Exception) {
+                    if (error is kotlinx.coroutines.CancellationException) throw error
                     if (net.weero.measix.pilot.data.enterprise.ManagedSnapshotRequired.find(error) != null &&
                         closed.compareAndSet(false, true)) onManagedSnapshotRequired()
-                    throw error
-                }
+                    throw normalizeFailure(target, error)
+                } finally { onRequestFinished(target) }
             }.also { it.start() }
         }
         requireNotNull(request) { "model_request_not_admitted" }.await()

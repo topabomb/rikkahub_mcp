@@ -258,7 +258,9 @@ class AuxiliaryGenerationOwnershipTest {
         var onCommit: (ConversationWrite) -> Unit = {}
         var personalSuggestion = true
         var realmSuggestion = true
-        private val platformService = mockk<PlatformEnterpriseService>()
+        private val platformService = mockk<PlatformEnterpriseService> {
+            every { runtimeCompleted(any()) } returns Unit
+        }
         private val synchronization = mockk<EnterpriseSynchronizationService>()
         val actualModels = ModelExecutionService(settings, sessions, gate, manager, appScope, synchronization, platformService)
         val models = spyk(actualModels)

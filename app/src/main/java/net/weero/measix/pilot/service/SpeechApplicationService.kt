@@ -269,7 +269,9 @@ internal class SpeechApplicationService(
         else synthesizer.synthesize(requireNotNull(personal) { "speech_resource_unavailable" }, chunk)
     } catch (error: Exception) {
         ManagedSnapshotRequired.find(error)?.let { handleBarrier(original.capture) }
-        throw error
+        throw normalizeManagedFailure(original.capture, error)
+    } finally {
+        notifyManagedRuntimeFinished(original.capture)
     }
 
     private suspend fun startRecognition(page: ConversationCommandTarget, deliver: (String) -> Unit) {
@@ -298,8 +300,13 @@ internal class SpeechApplicationService(
                     } }
                     original.controller = if (realtimeDefinition != null) RealtimeAsrController(context, sockets,
                         realtimeDefinition.realtimeSetting(requireNotNull(capture.reference)),
-                        transport = realtimeTransport, describeFailure = { it.userVisibleDiagnostic() },
-                        onFailure = { error -> ManagedSnapshotRequired.find(error)?.let { handleBarrier(capture) } },
+                        transport = realtimeTransport,
+                        describeFailure = { managedFailureForDisplay(capture, it).userVisibleDiagnostic() },
+                        onFailure = { error ->
+                            ManagedSnapshotRequired.find(error)?.let { handleBarrier(capture) }
+                            normalizeManagedFailure(capture, error)
+                            notifyManagedRuntimeFinished(capture)
+                        },
                         admitRecording = recordingAdmission)
                     else if (capture.enterpriseAsr != null) HttpAsrController(context, recordingAdmission,
                         transcribe = { file ->
@@ -310,7 +317,9 @@ internal class SpeechApplicationService(
                                 transport.transcribe(routed, capture.enterpriseAsr, file)
                             } catch (error: Exception) {
                                 ManagedSnapshotRequired.find(error)?.let { handleBarrier(capture) }
-                                throw error
+                                throw normalizeManagedFailure(capture, error)
+                            } finally {
+                                notifyManagedRuntimeFinished(capture)
                             }
                         }, admitTranscript = recordingAdmission, describeFailure = { error ->
                             if (error is NoSpeechDetectedException) context.getString(R.string.speech_no_voice_detected)
@@ -334,11 +343,17 @@ internal class SpeechApplicationService(
                         }
                     }
                     original.projection = scope.launch(Dispatchers.Main) {
+                        var recordingObserved = false
                         original.controller!!.state.collect { state ->
                             if (asr === original && !original.revoked) {
+                                if (state.isRecording) recordingObserved = true
                                 asrState.value = state
                                 if (!state.isRecording) audioManager.abandonAudioFocusRequest(audioFocus)
                                 if (state.status in setOf(ASRStatus.Idle, ASRStatus.Error)) submit {
+                                    if (recordingObserved) {
+                                        recordingObserved = false
+                                        notifyManagedRuntimeFinished(capture)
+                                    }
                                     commands.withLock {
                                         if (asr === original && !original.revoked) {
                                             original.deliveries.children.toList().joinAll()
@@ -371,6 +386,23 @@ internal class SpeechApplicationService(
         val execution = lease.execution as EnterpriseExecution.Platform
         return transport.platformTarget(execution, capture.reference as ConfigurationReference.Enterprise,
             lease.version, capture.interactionId, token.value)
+    }
+
+    private fun managedFailureForDisplay(capture: SpeechCapture, error: Throwable): Throwable {
+        val access = capture.selection.access as? RealmAccess.Enterprise ?: return error
+        if (capture.reference !is ConfigurationReference.Enterprise) return error
+        return EnterpriseRuntimeProblemException.fromManagedFailure(error) ?: error
+    }
+
+    private suspend fun normalizeManagedFailure(capture: SpeechCapture, error: Throwable): Throwable {
+        val access = capture.selection.access as? RealmAccess.Enterprise ?: return error
+        if (capture.reference !is ConfigurationReference.Enterprise) return error
+        return platform.managedRuntimeFailure(access, error)
+    }
+
+    private fun notifyManagedRuntimeFinished(capture: SpeechCapture) {
+        val access = capture.selection.access as? RealmAccess.Enterprise ?: return
+        if (capture.reference is ConfigurationReference.Enterprise) platform.runtimeCompleted(access)
     }
 
     private suspend fun <T> admit(capture: SpeechCapture, accept: (ExecutionConfigurationSnapshot) -> T): T =
@@ -439,7 +471,7 @@ internal class SpeechApplicationService(
                 var failure: Exception? = null
                 suspend fun attempt(action: suspend () -> Unit) {
                     try { action() } catch (error: Exception) {
-                        if (failure == null) failure = error else if (error !== failure) failure!!.addSuppressed(error)
+                        if (failure == null) failure = error else if (error !== failure) requireNotNull(failure).addSuppressed(error)
                     }
                 }
                 attempt { capture.stopParent() }

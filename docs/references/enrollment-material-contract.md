@@ -8,11 +8,11 @@ Enrollment material 使用 `formatVersion=1`、`kind=PLATFORM_ENROLLMENT`，必�
 
 `platformUrl` 必须是规范化的 HTTP/HTTPS origin，可使用域名、局域网 IP、IPv6 和显式端口；拒绝 userinfo、query、fragment、非根 path 与非法端口。扫码、相册和粘贴都进入同一解析器。解析成功只产生带规范化 origin 的 `EnterpriseJoinConfirmation`，用户确认后才执行 Discovery、Enrollment exchange、Bootstrap 与 Snapshot 同步；取消或被替换的确认不发网络请求。
 
-Core 使用 `enrollment_expired` 区分过期资料，并区分两个 409：一次性码已使用为 `enrollment_already_used`；本机 installation 已绑定另一用户为 `installation_user_conflict`，且不消费新码。Android 的本地到期预检与 Core 响应使用同一过期 reason，并为过期、已使用、格式无效和 installation 冲突显示各自稳定、可操作的主文案；历史手机端来源不再进入提示。换用户需要用户在“重置与数据处置”中重置企业连接，使 `EnterpriseAppliedStore.resetLocalState()` 删除本机 installation ID；仅撤销 Core 设备不会改变手机 installation 身份。
+Core 使用 `enrollment_expired` 区分过期资料，并区分两个 409：一次性码已使用为 `enrollment_already_used`；本机 installation 已绑定另一用户为 `installation_user_conflict`，且不消费新码。Android 的本地到期预检与 Core 响应使用同一过期 reason，并为过期、已使用、格式无效和 installation 冲突显示各自稳定、可操作的主文案；历史手机端来源不再进入提示。普通换用户需要用户在“重置与数据处置”中重置企业连接，使 `EnterpriseAppliedStore.resetLocalState()` 删除本机 installation ID；仅撤销 Core 设备不会改变手机 installation 身份。管理员 hard delete COMPLETED 后是明确例外：旧 Device 已由 Core 删除，同一 installation 可用新 Enrollment 绑定新 principal，不要求 Android 为绕过校验而轮换 installation ID。
 
 ## Session 与恢复
 
-`PlatformEnterpriseService` 编排网络 I/O，`EnterpriseSessionController` 是身份、pending enrollment 和 Applied 状态的串行写 owner。兑换成功后先保存 pending；Bootstrap 核对 Session/User/Device/Deployment 才发布企业身份。临时网络失败保留 pending 并在应用恢复后继续 Bootstrap，不重复兑换一次性 code。
+`PlatformEnterpriseService` 编排网络 I/O，`EnterpriseSessionController` 是身份、pending enrollment 和 Applied 状态的串行写 owner。兑换成功后先保存 pending；Bootstrap 核对 Session/User/Device/Deployment 才发布企业身份。临时网络失败保留 pending 并在应用恢复后继续 Bootstrap，不重复兑换一次性 code。若前一 principal 已被管理员删除，pending 阶段继续保留 `IDENTITY_DELETED` 终态；只有 Bootstrap 确认 Core 签发的新 principal 后，Session owner 才在同一 manifest 提交中发布新 Session 并清除旧 reason。若 pending 所属 principal 在 Bootstrap 前也被删除，删除响应会原子移除 pending credential 并保留 `SIGNED_OUT + IDENTITY_DELETED`，下一份新接入资料可重新兑换。相同 username 不代表相同 principal，旧 Access/Refresh credential 和旧域数据不会因此恢复。
 
 installation ID 在一次本机企业连接生命周期内稳定，不能为绕过跨用户限制而自动更换。refresh credential 与 pending idempotency key 由 `EnterpriseAppliedStore` 加密、原子持久化；access token 只在内存。退出或 reset 的具体边界见 [Android 配置架构](android-configuration-architecture.md)。
 

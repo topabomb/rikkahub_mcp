@@ -207,6 +207,31 @@ fun ErrorCard(
                         overflow = TextOverflow.Ellipsis,
                     )
                 }
+                if (error.solution == ChatErrorSolution.ViewEnterpriseUsage) {
+                    Text(
+                        text = buildAnnotatedString {
+                            withLink(
+                                LinkAnnotation.Clickable(
+                                    tag = "view_enterprise_usage",
+                                    styles = TextLinkStyles(
+                                        style = SpanStyle(
+                                            color = linkColor,
+                                            textDecoration = TextDecoration.Underline,
+                                        )
+                                    ),
+                                    linkInteractionListener = {
+                                        navController.navigate(Screen.EnterpriseUsage) { launchSingleTop = true }
+                                    },
+                                )
+                            ) {
+                                append(stringResource(R.string.enterprise_budget_details))
+                            }
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
             }
             IconButton(
                 onClick = {

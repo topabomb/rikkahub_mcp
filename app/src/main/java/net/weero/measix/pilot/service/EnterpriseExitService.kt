@@ -3,6 +3,7 @@ package net.weero.measix.pilot.service
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.async
@@ -43,10 +44,15 @@ internal class EnterpriseExitService(
     private val terminals: net.weero.measix.pilot.service.workspace.WorkspaceTerminalRuntime,
     private val mcp: net.weero.measix.pilot.data.ai.mcp.McpRuntimeCoordinator,
     private val speech: SpeechApplicationService,
+    private val identityData: EnterpriseIdentityDataDisposer,
     private val platformLogout: suspend (EnterpriseExitToken) -> Unit,
 ) {
     private val mutex = Mutex()
-    private data class ExitTask(val reason: EnterpriseExitReason, val result: Deferred<EnterpriseExitResult>)
+    private data class ExitTask(
+        val reason: EnterpriseExitReason,
+        val accepted: Deferred<Unit>,
+        val result: Deferred<EnterpriseExitResult>,
+    )
     private val active = mutableMapOf<RealmAccess.Enterprise, ExitTask>()
     private val _failure = MutableStateFlow<EnterpriseExitFailure?>(null)
     val failure = _failure.asStateFlow()
@@ -79,12 +85,54 @@ internal class EnterpriseExitService(
 
     suspend fun exit(request: EnterpriseExitRequest): EnterpriseExitResult {
         recoveryGate.awaitReady()
-        return enqueue(request.access, EnterpriseExitReason.USER_REQUEST) { sessions.beginExit(request) }.await()
+        return enqueue(request.access, EnterpriseExitReason.USER_REQUEST) { sessions.beginExit(request) }.result.await()
     }
 
     suspend fun invalidate(access: RealmAccess.Enterprise, reason: EnterpriseExitReason): EnterpriseExitResult {
         recoveryGate.awaitReady()
-        return enqueue(access, reason, invalidationReason = reason) { sessions.beginInvalidation(access, reason) }.await()
+        if (reason == EnterpriseExitReason.IDENTITY_DELETED) {
+            val token = sessions.beginInvalidation(access, reason)
+            return enqueueIdentityDeletion(token).result.await()
+        }
+        return enqueue(access, reason, invalidationReason = reason) { sessions.beginInvalidation(access, reason) }.result.await()
+    }
+
+    /** Returns once CLOSING is durable; cleanup remains owned by this service. */
+    suspend fun acceptInvalidation(access: RealmAccess.Enterprise, reason: EnterpriseExitReason) {
+        recoveryGate.awaitReady()
+        if (reason == EnterpriseExitReason.IDENTITY_DELETED) {
+            val token = sessions.beginInvalidation(access, reason)
+            enqueueIdentityDeletion(token).accepted.await()
+            return
+        }
+        enqueue(access, reason, invalidationReason = reason) {
+            sessions.beginInvalidation(access, reason)
+        }.accepted.await()
+    }
+
+    /** A deletion terminal state durably upgrades any weaker close and owns the eventual retry. */
+    private fun enqueueIdentityDeletion(token: EnterpriseExitToken): ExitTask {
+        val accepted = CompletableDeferred<Unit>().apply { complete(Unit) }
+        val result = scope.async(start = CoroutineStart.LAZY) {
+            val previous = mutex.withLock { active[token.access] }
+            if (previous != null) {
+                try {
+                    previous.result.await()
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (_: Exception) {
+                    // The upgraded durable token intentionally makes weaker work stale.
+                }
+            }
+            val pending = sessions.pendingExit()
+            if (pending == null) return@async EnterpriseExitResult()
+            check(pending == token) { "stale_enterprise_identity_deletion" }
+            enqueue(token.access, token.reason) {
+                sessions.withClosingSession(token) {}
+                token
+            }.result.await()
+        }
+        return ExitTask(token.reason, accepted, result).also { result.start() }
     }
 
     suspend fun retry(failure: EnterpriseExitFailure): EnterpriseExitResult = when (failure) {
@@ -97,7 +145,7 @@ internal class EnterpriseExitService(
         return enqueue(token.access, token.reason) {
             sessions.withClosingSession(token) {}
             token
-        }.await()
+        }.result.await()
     }
 
     private suspend fun resumeClosing(token: EnterpriseExitToken) {
@@ -108,7 +156,7 @@ internal class EnterpriseExitService(
                 token
             }
         }
-        pending?.await()
+        pending?.result?.await()
     }
 
     private suspend fun enqueue(
@@ -116,22 +164,25 @@ internal class EnterpriseExitService(
         requestedReason: EnterpriseExitReason,
         invalidationReason: EnterpriseExitReason? = null,
         admit: suspend () -> EnterpriseExitToken,
-    ): Deferred<EnterpriseExitResult> = mutex.withLock { enqueueLocked(access, requestedReason, invalidationReason, admit) }
+    ): ExitTask = mutex.withLock { enqueueLocked(access, requestedReason, invalidationReason, admit) }
 
     private fun enqueueLocked(
         access: RealmAccess.Enterprise,
         requestedReason: EnterpriseExitReason,
         invalidationReason: EnterpriseExitReason?,
         admit: suspend () -> EnterpriseExitToken,
-    ): Deferred<EnterpriseExitResult> {
-        active[access]?.let { return it.result }
-        return scope.async(start = CoroutineStart.LAZY) {
+    ): ExitTask {
+        active[access]?.let { return it }
+        val accepted = CompletableDeferred<Unit>()
+        val result = scope.async(start = CoroutineStart.LAZY) {
             var token: EnterpriseExitToken? = null
             try {
                 token = admit()
+                accepted.complete(Unit)
                 _failure.value = null
                 finish(token, duringRecovery = false)
             } catch (error: Exception) {
+                accepted.completeExceptionally(error)
                 withContext(NonCancellable) {
                     val manifest = (sessions.state.value as? EnterpriseState.Available)?.manifest
                     if (manifest?.session?.id == access.sessionId && manifest.session.identity.scope == access.scope) {
@@ -146,7 +197,11 @@ internal class EnterpriseExitService(
             } finally {
                 withContext(NonCancellable) { mutex.withLock { active.remove(access) } }
             }
-        }.also { active[access] = ExitTask(requestedReason, it); it.start() }
+        }
+        return ExitTask(requestedReason, accepted, result).also {
+            active[access] = it
+            result.start()
+        }
     }
 
     /** Runs after Child/Turn recovery and before gate.ready; it must never wait on that gate. */
@@ -161,6 +216,7 @@ internal class EnterpriseExitService(
 
     /** Shared stop barrier after Session admission is durably revoked. */
     internal suspend fun closeEnterpriseDomain(token: EnterpriseExitToken, duringRecovery: Boolean = false) {
+        sessions.awaitPlatformOperations(token.access)
         supervisorScope {
             val cleanup = listOf(
                 async { portals.closeAndAwait(token.access, PortalCloseReason.AUTHORIZATION_REVOKED) },
@@ -187,8 +243,9 @@ internal class EnterpriseExitService(
 
     private suspend fun finish(token: EnterpriseExitToken, duringRecovery: Boolean): EnterpriseExitResult {
         closeEnterpriseDomain(token, duringRecovery)
-        val logoutFailure = if (token.reason == EnterpriseExitReason.USER_REQUEST) try {
-            platformLogout(token)
+        val effectiveToken = sessions.pendingExit()?.takeIf { it.access == token.access } ?: token
+        val logoutFailure = if (effectiveToken.reason == EnterpriseExitReason.USER_REQUEST) try {
+            platformLogout(effectiveToken)
             null
         } catch (cancelled: CancellationException) {
             throw cancelled
@@ -196,7 +253,10 @@ internal class EnterpriseExitService(
             android.util.Log.e("EnterpriseExit", "Platform logout was not confirmed", error)
             error.userVisibleDiagnostic()
         } else null
-        sessions.finishExit(token)
+        if (effectiveToken.reason == EnterpriseExitReason.IDENTITY_DELETED) {
+            identityData.clear(effectiveToken.access.scope)
+        }
+        sessions.finishExit(effectiveToken)
         _failure.value = null
         return try {
             sessions.pruneUnusedRevisions()

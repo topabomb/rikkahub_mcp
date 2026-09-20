@@ -17,6 +17,7 @@ import kotlinx.coroutines.ensureActive
 internal class McpProtocolClientFactory(
     createHttpClient: () -> HttpClient,
     private val createManagedHttpClient: () -> HttpClient,
+    private val managedProblem: (net.weero.measix.pilot.data.enterprise.RealmAccess.Enterprise, Int, String) -> Throwable? = { _, _, _ -> null },
     private val transportOverride: ((McpServerConfig) -> AbstractTransport)? = null,
     private val clientOverride: ((McpServerConfig) -> Client)? = null,
 ) {
@@ -36,7 +37,8 @@ internal class McpProtocolClientFactory(
                 val shared = managedHttpClient
                 currentCoroutineContext().ensureActive()
                 McpStreamableHttpTransport(url = definition.url, client = shared, managed = true,
-                    requestHeaders = definition::requestHeaders)
+                    requestHeaders = definition::requestHeaders,
+                    managedProblem = { status, body -> managedProblem(definition.access, status, body) })
             }
         }
     }
@@ -91,6 +93,7 @@ internal object McpProtocolFailureClassifier {
     }
 
     fun isConnectionError(error: Throwable): Boolean {
+        if (net.weero.measix.pilot.data.enterprise.EnterpriseRuntimeProblemException.find(error) != null) return false
         if (isUnauthorized(error)) return false
         if (error is StreamableHttpError) {
             return error.code == 404 || error.code == 408 || error.code == 425 ||

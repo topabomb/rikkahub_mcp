@@ -32,6 +32,7 @@ import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.withContext
 import me.rerere.common.configuration.EnterpriseAuthority
 import net.weero.measix.pilot.R
@@ -355,6 +356,7 @@ class EnterprisePageAndroidTest {
 
         fun show() {
             every { service.observe() } returns state
+            every { service.runtimeUsageChanges() } returns emptyFlow()
             compose.runOnUiThread {
                 vm = EnterpriseVM(service)
                 viewModels.put("enterprise", vm)
@@ -362,7 +364,7 @@ class EnterprisePageAndroidTest {
             val navigator = Navigator(backStack)
             compose.setContent {
                 MaterialTheme {
-                    CompositionLocalProvider(LocalNavController provides navigator) { EnterprisePage(vm) }
+                    CompositionLocalProvider(LocalNavController provides navigator) { EnterprisePage(vm = vm) }
                 }
             }
             compose.waitUntil(5_000) { vm.overview.value == state.value }

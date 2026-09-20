@@ -116,7 +116,7 @@ internal class EnterpriseDataResetService(
     }
 
     private suspend fun run(original: EnterpriseDataResetIntent, stopDomainWork: Boolean) {
-        var current = original
+        var current = strengthenIdentityDeletion(original)
 
         // Stage 1: stop barrier for the live Session. Wiping it without CLOSING is refused by the owner.
         if (current.stage == EnterpriseDataResetStage.FROZEN) {
@@ -138,7 +138,10 @@ internal class EnterpriseDataResetService(
         }
 
         // Stage 2: the chosen branch over every frozen scope; completed owners are recorded for resumption.
-        if (current.stage != EnterpriseDataResetStage.DATA_CLEARED) {
+        // Identity deletion may arrive after any checkpoint. Its stronger branch rolls DATA_CLEARED back
+        // once and resumes the missing history owners instead of accepting the earlier KEEP_HISTORY result.
+        while (current.stage != EnterpriseDataResetStage.DATA_CLEARED) {
+            current = strengthenIdentityDeletion(current)
             val scopes = current.scopes
             val done = current.completedOwners.toMutableSet()
             suspend fun step(owner: String, clear: suspend () -> Unit) {
@@ -149,6 +152,7 @@ internal class EnterpriseDataResetService(
             }
             // Reset access always drops delivered managed catalogs at the access trust boundary.
             step(EnterpriseDataResetIntent.OWNER_CATALOGS) { scopes.forEach { catalogs.clearEnterpriseScope(it) } }
+            current = strengthenIdentityDeletion(current)
             if (current.mode == EnterpriseDataResetMode.CLEAR_ALL) {
                 step(EnterpriseDataResetIntent.OWNER_CONVERSATIONS) { scopes.forEach { conversations.clearEnterpriseScope(it) } }
                 step(EnterpriseDataResetIntent.OWNER_FILES) { scopes.forEach { files.clearEnterpriseScope(it) } }
@@ -160,6 +164,12 @@ internal class EnterpriseDataResetService(
             _progress.value = progressOf(current)
         }
 
+        current = strengthenIdentityDeletion(current)
+        if (current.stage != EnterpriseDataResetStage.DATA_CLEARED) {
+            run(current, stopDomainWork)
+            return
+        }
+
         // Stage 3: rewrite the applied store to signed-out (idempotent when an earlier attempt reached here).
         val retainIdentity = current.mode == EnterpriseDataResetMode.KEEP_HISTORY
         val pending = pendingResetToken()
@@ -168,6 +178,25 @@ internal class EnterpriseDataResetService(
 
         store.clear()
         _progress.value = null
+    }
+
+    /** Identity deletion is terminal and stronger than either user-selected reset branch. */
+    private suspend fun strengthenIdentityDeletion(intent: EnterpriseDataResetIntent): EnterpriseDataResetIntent {
+        val manifest = (sessions.state.value as? EnterpriseState.Available)?.manifest
+        if (manifest?.exitReason != EnterpriseExitReason.IDENTITY_DELETED ||
+            intent.mode == EnterpriseDataResetMode.CLEAR_ALL) {
+            return intent
+        }
+        val strengthened = intent.copy(
+            mode = EnterpriseDataResetMode.CLEAR_ALL,
+            scopes = normalizeScopes(intent.scopes + freezeScopes()),
+            stage = if (intent.stage == EnterpriseDataResetStage.DATA_CLEARED) {
+                EnterpriseDataResetStage.DOMAINS_CLOSED
+            } else intent.stage,
+        )
+        store.write(strengthened)
+        _progress.value = progressOf(strengthened)
+        return strengthened
     }
 
     /**

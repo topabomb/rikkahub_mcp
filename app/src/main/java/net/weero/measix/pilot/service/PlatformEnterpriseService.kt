@@ -4,7 +4,9 @@ import java.time.Instant
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -19,11 +21,16 @@ internal class PlatformEnterpriseService(
     private val client: PlatformControlClient,
     private val now: () -> Instant = Instant::now,
     private val onSessionRevoked: (RealmAccess.Enterprise) -> Unit = {},
+    private val onSessionInvalidated: suspend (RealmAccess.Enterprise, EnterpriseExitReason) -> Unit = { access, reason ->
+        if (reason == EnterpriseExitReason.AUTHORIZATION_REVOKED) onSessionRevoked(access)
+    },
 ) {
     private val enrollment = Mutex()
     private val refresh = Mutex()
     private val _pendingLogoutFailure = MutableStateFlow<String?>(null)
     val pendingLogoutFailure = _pendingLogoutFailure.asStateFlow()
+    private val _runtimeUsageChanged = MutableSharedFlow<RealmAccess.Enterprise>(extraBufferCapacity = 32)
+    val runtimeUsageChanged = _runtimeUsageChanged.asSharedFlow()
 
     /** Called only after the native origin confirmation. A saved exchange resumes without consuming another code. */
     suspend fun enroll(material: EnrollmentMaterial.Platform, deviceName: String, appVersion: String): RealmAccess.Enterprise = enrollment.withLock {
@@ -75,7 +82,7 @@ internal class PlatformEnterpriseService(
     private fun Exception.isTerminalPendingEnrollmentFailure(): Boolean = when (this) {
         is EnterpriseConfigurationException -> reason in setOf("enterprise_refresh_expired", "enterprise_session_expired")
         is PlatformHttpException -> (status == 401 && problem?.code in setOf("session_expired", "invalid_credential")) ||
-            (status == 403 && problem?.code == "session_revoked")
+            (status == 403 && problem?.code in EnterpriseRuntimeProblemCodes.authorizationRevoked)
         else -> false
     }
 
@@ -85,8 +92,15 @@ internal class PlatformEnterpriseService(
     }
 
     private suspend fun bootstrap(sessionId: String): RealmAccess.Enterprise {
-        val bootstrap = read(sessionId) { connection, token -> client.bootstrap(connection, token) }
-        return sessions.completePlatformBootstrap(sessionId, bootstrap)
+        return try {
+            val bootstrap = read(sessionId) { connection, token -> client.bootstrap(connection, token) }
+            sessions.completePlatformBootstrap(sessionId, bootstrap)
+        } catch (error: PlatformHttpException) {
+            if (error.status == 401 && error.problem?.code == EnterpriseRuntimeProblemCodes.IDENTITY_DELETED) {
+                withContext(NonCancellable) { sessions.finishDeletedPendingPlatformEnrollment(sessionId) }
+            }
+            throw error
+        }
     }
 
     /** Shared synchronization owns deduplication; this source performs network I/O outside Session admission. */
@@ -113,9 +127,13 @@ internal class PlatformEnterpriseService(
         }
         val applied = sessions.synchronize(access, candidate)
         val execution = candidate.execution as EnterpriseExecution.Platform
-        val token = accessToken(access.sessionId)
-        sessions.platformContext(access.sessionId)
-        client.reportApplied(connection, token.value, PlatformManagedAppliedReport(candidate.configuration.generation, execution.snapshotHash))
+        read(access.sessionId) { current, token ->
+            client.reportApplied(
+                current,
+                token,
+                PlatformManagedAppliedReport(candidate.configuration.generation, execution.snapshotHash),
+            )
+        }
         return applied
     }
 
@@ -150,21 +168,75 @@ internal class PlatformEnterpriseService(
         sessions.platformAccessToken(sessionId) ?: refreshLocked(sessionId)
     }
 
-    suspend fun accessToken(sessionId: String): PlatformAccessToken = try {
-        currentAccessToken(sessionId)
-    } catch (error: PlatformHttpException) {
-        notifyRevoked(sessionId, error)
-        throw error
+    suspend fun accessToken(sessionId: String): PlatformAccessToken {
+        val operation = sessions.capturePlatformOperation(sessionId)
+        return try {
+            currentAccessToken(sessionId)
+        } catch (error: PlatformHttpException) {
+            operation.access?.let { notifyRevoked(it, error) }
+            throw error
+        } finally {
+            operation.release()
+        }
     }
 
     /** A 401 is emitted before Core mints a ticket, so the existing one-refresh control retry remains non-replaying. */
     suspend fun createPortalGrant(access: RealmAccess.Enterprise): PlatformPortalGrant =
         read(access.sessionId) { connection, token -> client.createPortalGrant(connection, token) }
 
-    private suspend fun notifyRevoked(sessionId: String, error: PlatformHttpException) {
-        if (error.status == 403 && error.problem?.code == "session_revoked") {
-            sessions.platformSessionAccess(sessionId)?.let(onSessionRevoked)
+    suspend fun budgets(access: RealmAccess.Enterprise): PlatformUserBudgetView {
+        sessions.platformConfiguration(access)
+        val result = read(access.sessionId) { connection, token -> client.budgets(connection, token) }
+        sessions.platformConfiguration(access)
+        return result
+    }
+
+    fun runtimeCompleted(access: RealmAccess.Enterprise) { _runtimeUsageChanged.tryEmit(access) }
+
+    /** Only managed routes call this; ordinary provider failures must retain provider semantics. */
+    suspend fun managedRuntimeFailure(access: RealmAccess.Enterprise, error: Throwable): Throwable {
+        val problem = EnterpriseRuntimeProblemException.fromManagedFailure(error) ?: return error
+        acceptRuntimeProblem(access, problem)
+        return problem
+    }
+
+    fun managedRuntimeProblem(access: RealmAccess.Enterprise, status: Int, body: String): Throwable? =
+        EnterpriseRuntimeProblemException.parse(status, body)
+
+    suspend fun acceptManagedRuntimeProblem(
+        access: RealmAccess.Enterprise,
+        error: Throwable,
+    ): EnterpriseRuntimeProblemException? {
+        val problem = EnterpriseRuntimeProblemException.find(error) ?: return null
+        acceptRuntimeProblem(access, problem)
+        return problem
+    }
+
+    private suspend fun acceptRuntimeProblem(
+        access: RealmAccess.Enterprise,
+        problem: EnterpriseRuntimeProblemException,
+    ) {
+        _runtimeUsageChanged.tryEmit(access)
+        if (problem.code == EnterpriseRuntimeProblemCodes.IDENTITY_DELETED) {
+            withContext(NonCancellable) {
+                onSessionInvalidated(access, EnterpriseExitReason.IDENTITY_DELETED)
+            }
+        } else if (problem.code in EnterpriseRuntimeProblemCodes.authorizationRevoked) {
+            withContext(NonCancellable) {
+                onSessionInvalidated(access, EnterpriseExitReason.AUTHORIZATION_REVOKED)
+            }
         }
+    }
+
+    private suspend fun notifyRevoked(access: RealmAccess.Enterprise, error: PlatformHttpException) {
+        val reason = when {
+            error.status == 403 && error.problem?.code in EnterpriseRuntimeProblemCodes.authorizationRevoked ->
+                EnterpriseExitReason.AUTHORIZATION_REVOKED
+            error.status == 401 && error.problem?.code == EnterpriseRuntimeProblemCodes.IDENTITY_DELETED ->
+                EnterpriseExitReason.IDENTITY_DELETED
+            else -> return
+        }
+        onSessionInvalidated(access, reason)
     }
 
     private suspend fun refreshLocked(sessionId: String): PlatformAccessToken {
@@ -188,6 +260,7 @@ internal class PlatformEnterpriseService(
 
     /** Only side-effect-free Client reads may use this retry; Runtime and code exchange never do. */
     suspend fun <T> read(sessionId: String, request: suspend (PlatformConnection, String) -> T): T {
+        val operation = sessions.capturePlatformOperation(sessionId)
         return try {
             val token = currentAccessToken(sessionId)
             val connection = sessions.platformContext(sessionId).platform.connection
@@ -203,8 +276,10 @@ internal class PlatformEnterpriseService(
                 request(connection, replacement.value)
             }
         } catch (error: PlatformHttpException) {
-            notifyRevoked(sessionId, error)
+            operation.access?.let { notifyRevoked(it, error) }
             throw error
+        } finally {
+            operation.release()
         }
     }
 }

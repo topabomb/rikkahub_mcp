@@ -111,6 +111,9 @@ class ApplicationRecoveryCoordinator(
                 turnRecovery.recoverInterruptedTurns()
                 assistantManagementService.value.performPendingDeletionCleanupDuringRecovery()
                 completePendingEnterpriseExit()
+                // A stronger identity-deletion exit may have owned the first reset continuation.
+                // Once it is terminal, the same startup must finish the retained CLEAR_ALL intent.
+                recoverEnterpriseDataReset()
                 postRecoveryMaintenance()
                 completePendingBackup()
                 gate.ready()

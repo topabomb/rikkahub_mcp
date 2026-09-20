@@ -137,6 +137,7 @@ internal class McpToolCallExecutor(
         } catch (error: Throwable) {
             discardCreatedArtifacts(createdArtifacts, "MCP tool result rollback", error)
             ManagedSnapshotRequired.find(error)?.let { throw it }
+            net.weero.measix.pilot.data.enterprise.EnterpriseRuntimeProblemException.find(error)?.let { throw it }
             val kind = when {
                 receivedResult -> McpInvocationFailureKind.PROTOCOL
                 error is McpException -> McpInvocationFailureKind.REMOTE

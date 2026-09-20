@@ -86,6 +86,7 @@ internal class McpStreamableHttpTransport(
     private val maxInlineSseEventSize: Int = DEFAULT_MAX_INLINE_SSE_EVENT_SIZE,
     private val requestBuilder: HttpRequestBuilder.() -> Unit = {},
     private val requestHeaders: suspend () -> List<Pair<String, String>> = { emptyList() },
+    private val managedProblem: (Int, String) -> Throwable? = { _, _ -> null },
 ) : McpClientTransport() {
 
     init {
@@ -238,6 +239,7 @@ internal class McpStreamableHttpTransport(
                     throw cancelled
                 } catch (error: Exception) {
                     val retryable = (error is java.io.IOException &&
+                        error !is net.weero.measix.pilot.data.enterprise.EnterpriseRuntimeProblemException &&
                         error !is io.modelcontextprotocol.kotlin.sdk.shared.TooLongFrameException &&
                         error !is java.nio.charset.CharacterCodingException) ||
                         (error is StreamableHttpError &&
@@ -292,6 +294,7 @@ internal class McpStreamableHttpTransport(
             catch (_: IllegalArgumentException) { }
             catch (_: IllegalStateException) { }
         }
+        if (managed) managedProblem(status, body)?.let { return it }
         return StreamableHttpError(status, body.redactDiagnosticSecrets())
     }
 

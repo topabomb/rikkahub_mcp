@@ -9,9 +9,11 @@ import java.io.IOException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.test.runCurrent
 import net.weero.measix.pilot.data.ai.mcp.McpCatalogStore
 import net.weero.measix.pilot.data.configuration.ConfigurationScope
 import net.weero.measix.pilot.data.datastore.SettingsStore
@@ -326,6 +328,77 @@ class EnterpriseDataResetServiceTest {
         }
     }
 
+    @Test fun `identity deletion strengthens keep history reset at every durable stage and survives restart`() = runTest {
+        for (stage in EnterpriseDataResetStage.entries) fixture { f ->
+            val original = EnterpriseSessionController(
+                net.weero.measix.pilot.data.enterprise.enterpriseTestStore(f.root),
+            ) { f.now }
+            val scope = f.enroll(original)
+            val access = original.captureRealmAccess(scope) as RealmAccess.Enterprise
+            original.beginLocalDataReset(requireNotNull(original.captureExitRequest()))
+            f.store.write(f.frozenIntent(scope).copy(
+                stage = stage,
+                completedOwners = if (stage == EnterpriseDataResetStage.FROZEN) emptyList()
+                else listOf(EnterpriseDataResetIntent.OWNER_CATALOGS),
+            ))
+            original.beginInvalidation(access, EnterpriseExitReason.IDENTITY_DELETED)
+
+            val (restarted, reset) = f.restart()
+            reset.resumePending()
+
+            val retained = requireNotNull(f.store.read())
+            assertEquals(EnterpriseDataResetMode.CLEAR_ALL, retained.mode)
+            assertEquals(EnterpriseExitReason.IDENTITY_DELETED, restarted.pendingExit()?.reason)
+            restarted.finishExit(requireNotNull(restarted.pendingExit()))
+            reset.retryReset()
+
+            val manifest = (restarted.state.value as EnterpriseState.Available).manifest
+            assertEquals(EnterpriseSessionPhase.SIGNED_OUT, manifest.phase)
+            assertEquals(EnterpriseExitReason.IDENTITY_DELETED, manifest.exitReason)
+            assertNull(manifest.lastIdentity)
+            coVerify(exactly = 1) { f.conversations.clearEnterpriseScope(scope) }
+            coVerify(exactly = 1) { f.files.clearEnterpriseScope(scope) }
+            coVerify(exactly = 1) { f.memories.clearEnterpriseScope(scope) }
+            coVerify(exactly = 1) { f.settings.clearEnterprisePreferences(scope) }
+            assertNull(f.store.read())
+            f.assertStoreClean()
+        }
+    }
+
+    @Test fun `in flight platform deletion is admitted before keep history reset can finalize`() = runTest {
+        fixture { f ->
+            val (sessions, _, reset) = f.new()
+            val scope = f.enroll(sessions)
+            val access = sessions.captureRealmAccess(scope) as RealmAccess.Enterprise
+            val operation = sessions.capturePlatformOperation(access.sessionId)
+
+            val resetting = async {
+                runCatching { f.reset(reset, EnterpriseDataResetMode.KEEP_HISTORY) }
+            }
+            runCurrent()
+            assertFalse(resetting.isCompleted)
+            assertEquals(
+                EnterpriseExitReason.LOCAL_DATA_RESET,
+                requireNotNull(sessions.pendingExit()).reason,
+            )
+
+            sessions.beginInvalidation(access, EnterpriseExitReason.IDENTITY_DELETED)
+            operation.release()
+            val failure = resetting.await().exceptionOrNull() as EnterpriseConfigurationException
+            assertEquals("enterprise_reset_in_progress", failure.reason)
+            assertEquals(EnterpriseDataResetMode.CLEAR_ALL, requireNotNull(f.store.read()).mode)
+
+            sessions.finishExit(requireNotNull(sessions.pendingExit()))
+            reset.retryReset()
+
+            val manifest = (sessions.state.value as EnterpriseState.Available).manifest
+            assertEquals(EnterpriseExitReason.IDENTITY_DELETED, manifest.exitReason)
+            assertNull(manifest.lastIdentity)
+            coVerify(exactly = 1) { f.conversations.clearEnterpriseScope(scope) }
+            assertNull(f.store.read())
+        }
+    }
+
     private suspend fun TestScope.fixture(block: suspend (Fixture) -> Unit) {
         val f = Fixture()
         try { block(f) } finally { f.scope.coroutineContext[Job]?.cancel() }
@@ -387,6 +460,7 @@ class EnterpriseDataResetServiceTest {
                 net.weero.measix.pilot.service.portal.PortalDocumentRegistry(),
                 mockk(relaxed = true), terminals = mockk { io.mockk.coEvery { closeRealm(any()) } returns Unit },
                 mcp = mockk { io.mockk.coEvery { closeRealm(any()) } returns Unit }, speech = mockk(relaxed = true),
+                identityData = mockk(relaxed = true),
                 platformLogout = { logoutCalls++ })
             val reset = EnterpriseDataResetService(store, sessions, exits, conversations, settings, memories,
                 catalogs, files, gate) { now }

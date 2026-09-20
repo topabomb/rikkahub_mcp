@@ -71,6 +71,7 @@ UI 不持有 DAO、ConversationRepository、Runtime Registry、Artifact/Generate
 | 内部 attachment handle 索引 | `AttachmentReferenceLookup`；查询投影，不是文件读取授权 |
 | 用户定义、公用与按域偏好 | `SettingsStore`；`UserSettingsDocument` 单事务提交，个人 Settings 为只读投影 |
 | 企业身份、Session 与 Applied State | `EnterpriseSessionController` 串行写入 `EnterpriseAppliedStore`；平台 Discovery/Enrollment/Snapshot I/O 归 `PlatformEnterpriseService` |
+| 企业生产用量与预算 | Core 是准入、结算与持久事实 owner；`PlatformEnterpriseService` 只读取用户预算并归一化受管 runtime Problem，`EnterpriseApplicationService` / `EnterpriseVM` 提供绑定原选择的瞬时投影 |
 | 按域有效配置 | `ConfigurationResolver` 纯派生 `ResolvedConfiguration`；application/query ports 读取，不持久化镜像 |
 | Provider 配置与连接探测 | `ProviderSettingsApplicationService`；协调 SDK 与 SettingsStore |
 | Skill 身份、文件树与发布 | `SkillManager`；typed parse、导入、读取和可恢复目录事务 |
@@ -78,7 +79,7 @@ UI 不持有 DAO、ConversationRepository、Runtime Registry、Artifact/Generate
 | Workspace 命令、只读投影、PTY | `WorkspaceApplicationService` / `WorkspaceQueryService` / `WorkspaceTerminalRuntime`；模型与 UI mutation 共用 Workspace command gate |
 | 备份恢复请求与 archive staging | `BackupRestoreApplicationService` / `BackupArchiveService`；`PendingBackupRestore` 执行可恢复发布 |
 | 应用启动恢复与全局写门禁 | `ApplicationRecoveryCoordinator` / `ApplicationRecoveryGate` |
-| 企业退出与自动到期 | `EnterpriseExitService`；Session manifest 仍是唯一持久状态，运行取消和终态仍经原会话 owner；平台用户退出复用 `PlatformEnterpriseService` 的刷新串行锁取得当前凭据并向 Core 注销，网络失败不阻断本机退出 |
+| 企业退出与自动到期 | `EnterpriseExitService`；Session manifest 仍是唯一持久状态，自动失效先持久接受 CLOSING 再返回；运行取消和终态仍经原会话 owner；身份删除由 `EnterpriseIdentityDataDisposer` 编排原数据 owner 精确清除该 principal 的企业本地数据；平台用户退出复用 `PlatformEnterpriseService` 的刷新串行锁取得当前凭据并向 Core 注销，网络失败不阻断本机退出 |
 | 全设备企业接入/数据格式化 | `EnterpriseDataResetService`；持久 reset intent 只协调各 owner 的企业 scope 命令，停止屏障后重新冻结范围；保留历史与清空历史共用同一可恢复状态机，个人 scope 永不进入 |
 | 生成期后台保活 | `ChatGenerationForegroundService` / `GenerationForegroundLifetime`；只消费活动投影，不拥有运行事实 |
 

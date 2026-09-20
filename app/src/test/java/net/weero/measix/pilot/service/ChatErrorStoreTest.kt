@@ -104,5 +104,13 @@ class ChatErrorStoreTest {
                 TurnTerminalReasons.USER_STOP,
             ).statusResource,
         )
+        assertEquals(
+            ChatErrorSolution.ViewEnterpriseUsage,
+            terminalMessagePresentation(
+                MessageTerminalStatus.FAILED,
+                net.weero.measix.pilot.data.enterprise.EnterpriseRuntimeProblemCodes.BUDGET_EXHAUSTED,
+            ).solution,
+        )
     }
+
 }

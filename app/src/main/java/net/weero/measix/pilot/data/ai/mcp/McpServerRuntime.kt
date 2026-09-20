@@ -3,6 +3,7 @@ package net.weero.measix.pilot.data.ai.mcp
 import net.weero.measix.pilot.utils.userVisibleDiagnostic
 
 import net.weero.measix.pilot.data.enterprise.ManagedSnapshotRequired
+import net.weero.measix.pilot.data.enterprise.RealmAccess
 
 import me.rerere.common.configuration.ConfigurationReference
 import android.content.Context
@@ -112,6 +113,7 @@ internal class McpServerRuntime(
     private val logger: (String, String) -> Unit,
     private val onClosed: (McpRuntimeKey) -> Unit,
     private val onManagedSnapshotRequired: (ManagedSnapshotRequired) -> Unit,
+    private val onManagedRuntimeProblem: suspend (RealmAccess.Enterprise, Throwable) -> Unit = { _, _ -> },
 ) {
     val serverId: ConfigurationReference get() = key.serverId
     val mutex = Mutex()
@@ -497,6 +499,7 @@ internal class McpServerRuntime(
             acceptManagedBarrier(assignedGeneration, it)
             return
         }
+        acceptManagedRuntimeProblem(requestedConfig, error)
         val authorizationRequired = needsAuthorization(requestedConfig, error)
         mutex.withLock {
             if (generation.get() != assignedGeneration) return@withLock
@@ -514,6 +517,13 @@ internal class McpServerRuntime(
             }
         }
         logger(getServerName(), "Connection failed: ${failureDetail(error)}")
+    }
+
+    private suspend fun acceptManagedRuntimeProblem(config: McpConnectionDefinition, error: Throwable) {
+        val managed = config as? McpConnectionDefinition.ManagedPlatform ?: return
+        if (net.weero.measix.pilot.data.enterprise.EnterpriseRuntimeProblemException.find(error) != null) {
+            onManagedRuntimeProblem(managed.access, error)
+        }
     }
 
     internal suspend fun refreshCredentials(config: McpConnectionDefinition): McpConnectionDefinition = when (config) {
@@ -1038,6 +1048,7 @@ internal class McpServerRuntime(
                     }
                     throw cancelled
                 } catch (error: Throwable) {
+                    acceptManagedRuntimeProblem(lease.config, error)
                     mutex.withLock {
                         if (generation.get() != assignedGeneration || client !== lease.client) return@withLock
                         when {

@@ -1,4 +1,5 @@
 package net.weero.measix.pilot.service.turn
+import net.weero.measix.pilot.data.enterprise.EnterpriseRuntimeProblemException
 import net.weero.measix.pilot.service.runtime.ConversationCommandCoordinator
 import net.weero.measix.pilot.service.runtime.ConversationRuntime
 import net.weero.measix.pilot.service.runtime.FinalizeTurn
@@ -288,6 +289,9 @@ sealed interface TurnOutcome : TurnRunResult {
 
     companion object {
         fun fromFailure(error: Throwable): TurnOutcome {
+            EnterpriseRuntimeProblemException.find(error)?.let { problem ->
+                return Failed(error, problem.code, problem.terminalDetail())
+            }
             val causeChain = errorCauseChain(error).toList()
             val incompleteProviderFailure = causeChain
                 .filterIsInstance<HttpException>()

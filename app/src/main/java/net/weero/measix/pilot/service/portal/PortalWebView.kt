@@ -23,10 +23,21 @@ import kotlin.coroutines.resume
 internal class PortalHostUnavailable(val provider: String, val missing: List<String>) :
     IllegalStateException("Required WebView features unavailable: ${missing.joinToString()}")
 
-internal class PortalPageSource(val grant: net.weero.measix.pilot.data.enterprise.PlatformPortalGrant) {
+internal enum class PortalDestination { HOME, USAGE }
+
+internal class PortalPageSource(
+    val grant: net.weero.measix.pilot.data.enterprise.PlatformPortalGrant,
+    destination: PortalDestination = PortalDestination.HOME,
+) {
+    private val requestDetail = Regex("^/api/portal/v1/usage/requests/req_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")
+    private val updateDetail = Regex("^/api/client/v1/enterprise/updates/eup_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")
     private val exchange = URI(grant.exchangeUrl)
     val origin = "${exchange.scheme}://${exchange.rawAuthority}"
     val entry = "$origin/portal/"
+    val initialLocationScript = when (destination) {
+        PortalDestination.HOME -> ""
+        PortalDestination.USAGE -> "history.replaceState(null,'','/portal/?view=usage');"
+    }
 
     init {
         require(exchange.scheme in setOf("http", "https") && exchange.rawUserInfo == null &&
@@ -34,6 +45,18 @@ internal class PortalPageSource(val grant: net.weero.measix.pilot.data.enterpris
             "invalid_platform_portal_exchange_url"
         }
     }
+
+    fun permitsSubresource(method: String, path: String): Boolean =
+        (path == "/api/portal/v1/session" && method in setOf("GET", "DELETE")) ||
+            (method == "GET" && path in setOf(
+                "/api/portal/v1/budgets",
+                "/api/portal/v1/usage/summary",
+                "/api/portal/v1/usage/trend",
+                "/api/portal/v1/usage/distribution",
+                "/api/portal/v1/usage/requests",
+            )) ||
+            (method == "GET" && requestDetail.matches(path)) ||
+            (method == "GET" && (path == "/api/client/v1/enterprise/updates" || updateDetail.matches(path)))
 }
 
 /** A WebView is never reused for a second authorized document, including same-origin reloads. */
@@ -101,9 +124,8 @@ internal class PortalWebView private constructor(
                         (request.method == "GET" && path == "/portal/" && navigationPhase <= 2)
                 } else {
                     (request.method == "GET" && path.startsWith("/portal/") && path != "/portal/") ||
-                        (path == "/api/portal/v1/session" && request.method in setOf("GET", "DELETE") && uri.query == null) ||
-                        (request.method == "GET" && (path == "/api/client/v1/enterprise/updates" ||
-                            path.startsWith("/api/client/v1/enterprise/updates/")))
+                        (source.permitsSubresource(request.method, path) &&
+                            (path != "/api/portal/v1/session" || uri.query == null))
                 }
                 return if (allowed) null else denied()
             }
@@ -138,6 +160,7 @@ internal class PortalWebView private constructor(
             """
             if(window===window.top&&location.pathname==='/portal/'){
               (()=>{
+                ${source.initialLocationScript}
                 const transport=window.MeasixPortalTransport;
                 const instance=Array.from(crypto.getRandomValues(new Uint8Array(16)),b=>b.toString(16).padStart(2,'0')).join('');
                 const send=payload=>transport.postMessage(JSON.stringify({instance,payload}));

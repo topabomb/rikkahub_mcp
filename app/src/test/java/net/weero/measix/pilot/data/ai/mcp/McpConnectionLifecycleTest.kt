@@ -646,5 +646,16 @@ internal class McpConnectionLifecycleTest : McpRuntimeCoordinatorTestBase() {
             )
         )
         assertFalse(McpProtocolFailureClassifier.isConnectionError(RuntimeException("Tool not found")))
+        val budgetProblem = net.weero.measix.pilot.data.enterprise.EnterpriseRuntimeProblemException(
+            429,
+            net.weero.measix.pilot.data.enterprise.PlatformProblem(
+                type = "about:blank",
+                title = "Budget exhausted",
+                status = 429,
+                code = net.weero.measix.pilot.data.enterprise.EnterpriseRuntimeProblemCodes.BUDGET_EXHAUSTED,
+                forwarded = false,
+            ),
+        )
+        assertFalse(McpProtocolFailureClassifier.isConnectionError(budgetProblem))
     }
 }

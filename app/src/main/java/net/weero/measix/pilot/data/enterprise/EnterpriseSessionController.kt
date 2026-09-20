@@ -3,6 +3,7 @@ package net.weero.measix.pilot.data.enterprise
 import java.util.concurrent.atomic.AtomicBoolean
 import java.time.Instant
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.currentCoroutineContext
@@ -80,6 +81,24 @@ internal class EnterpriseExecutionLease internal constructor(
     }
 }
 
+/** Pins one in-flight platform Client request so reset/exit cannot erase its terminal response. */
+internal class EnterprisePlatformOperationLease internal constructor(
+    internal val id: String,
+    val access: RealmAccess.Enterprise?,
+    private val releaseOwner: (suspend (EnterprisePlatformOperationLease) -> Unit)?,
+) {
+    private val released = AtomicBoolean(false)
+    internal val completion = CompletableDeferred<Unit>()
+
+    suspend fun release() {
+        if (!released.compareAndSet(false, true)) return
+        withContext(NonCancellable) {
+            releaseOwner?.invoke(this@EnterprisePlatformOperationLease)
+            completion.complete(Unit)
+        }
+    }
+}
+
 /** Serializes session changes with the only durable enterprise publication protocol. */
 internal class EnterpriseSessionController(
     private val store: EnterpriseAppliedStore,
@@ -88,6 +107,7 @@ internal class EnterpriseSessionController(
     private val mutex = Mutex()
     private var loaded: LoadedEnterpriseState? = null
     private val leases = mutableMapOf<String, EnterpriseExecutionLease>()
+    private val platformOperations = mutableMapOf<String, EnterprisePlatformOperationLease>()
     private val _state = MutableStateFlow<EnterpriseState>(EnterpriseState.Loading)
     val state: StateFlow<EnterpriseState> = _state.asStateFlow()
     private val _selectionRevision = MutableStateFlow(0L)
@@ -134,6 +154,21 @@ internal class EnterpriseSessionController(
         prune(requireNotNull(loaded).manifest)
     }
 
+    /** Core deleted the exchanged principal before Bootstrap; retire this pending credential as a terminal identity. */
+    suspend fun finishDeletedPendingPlatformEnrollment(expectedSessionId: String) = mutex.withLock {
+        val manifest = ensureLoaded().manifest
+        if (manifest.session != null || manifest.pendingEnrollment?.sessionId != expectedSessionId) {
+            fail("enterprise_enrollment_replaced")
+        }
+        platformAccessTokens.remove(expectedSessionId)
+        publish(manifest.copy(
+            pendingEnrollment = null,
+            lastIdentity = null,
+            exitReason = EnterpriseExitReason.IDENTITY_DELETED,
+        ))
+        prune(requireNotNull(loaded).manifest)
+    }
+
     suspend fun capturePendingPlatformLogout(expected: PendingPlatformEnrollment): PlatformLogoutRequest = mutex.withLock {
         if (ensureLoaded().manifest.pendingEnrollment != expected) fail("enterprise_enrollment_replaced")
         PlatformLogoutRequest(expected.platform.connection, withContext(Dispatchers.IO) {
@@ -145,6 +180,34 @@ internal class EnterpriseSessionController(
         ensureLoaded().manifest.session?.takeIf { it.id == sessionId && it.platform != null }?.let {
             RealmAccess.Enterprise(it.identity.scope, it.id)
         }
+    }
+
+    /** Admission and registration are one Session-owner operation; CLOSING rejects every new request. */
+    suspend fun capturePlatformOperation(sessionId: String): EnterprisePlatformOperationLease = mutex.withLock {
+        val context = platformContextLocked(sessionId)
+        val manifest = requireNotNull(loaded).manifest
+        val session = manifest.session?.takeIf { it.id == context.sessionId }
+        val operation = EnterprisePlatformOperationLease(
+            id = Uuid.random().toString(),
+            access = session?.let { RealmAccess.Enterprise(it.identity.scope, it.id) },
+            releaseOwner = ::releasePlatformOperation.takeIf { session != null },
+        )
+        if (session != null) platformOperations[operation.id] = operation
+        operation
+    }
+
+    private suspend fun releasePlatformOperation(operation: EnterprisePlatformOperationLease) = mutex.withLock {
+        if (platformOperations[operation.id] !== operation) fail("unknown_enterprise_platform_operation")
+        platformOperations.remove(operation.id)
+        Unit
+    }
+
+    /** CLOSING prevents new admission, so one captured snapshot is sufficient and cannot grow. */
+    suspend fun awaitPlatformOperations(access: RealmAccess.Enterprise) {
+        val pending = mutex.withLock {
+            platformOperations.values.filter { it.access == access }.map { it.completion }
+        }
+        pending.forEach { it.await() }
     }
 
     suspend fun recoverablePlatformAccess(): RealmAccess.Enterprise? = mutex.withLock {
@@ -222,7 +285,13 @@ internal class EnterpriseSessionController(
         EnterpriseConfigurationCodec.validateIdentity(identity)
         val expires = minOf(Instant.parse(bootstrap.session.expiresAt).toEpochMilli(), Instant.parse(bootstrap.session.sessionIdleExpiresAt).toEpochMilli())
         val session = EnterpriseSession(sessionId, identity, expires, pending.platform)
-        publish(current.copy(phase = EnterpriseSessionPhase.CONFIGURATION_PENDING, session = session, lastIdentity = identity, pendingEnrollment = null))
+        publish(current.copy(
+            phase = EnterpriseSessionPhase.CONFIGURATION_PENDING,
+            session = session,
+            lastIdentity = identity,
+            pendingEnrollment = null,
+            exitReason = null,
+        ))
         RealmAccess.Enterprise(identity.scope, session.id)
     }
 
@@ -522,10 +591,14 @@ internal class EnterpriseSessionController(
 
     /** Revocation targets the original Session even from personal space or after its expiry. */
     suspend fun beginInvalidation(access: RealmAccess.Enterprise, reason: EnterpriseExitReason): EnterpriseExitToken = mutex.withLock {
-        require(reason in setOf(EnterpriseExitReason.AUTHORIZATION_EXPIRED, EnterpriseExitReason.AUTHORIZATION_REVOKED))
+        require(reason in setOf(EnterpriseExitReason.AUTHORIZATION_EXPIRED, EnterpriseExitReason.AUTHORIZATION_REVOKED,
+            EnterpriseExitReason.IDENTITY_DELETED))
         val manifest = manifestForExit()
         requireExitIdentity(manifest, access)
         when {
+            manifest.phase == EnterpriseSessionPhase.CLOSING &&
+                reason == EnterpriseExitReason.IDENTITY_DELETED &&
+                manifest.exitReason != EnterpriseExitReason.IDENTITY_DELETED -> beginClosing(manifest, reason)
             manifest.exitReason == EnterpriseExitReason.LOCAL_DATA_RESET -> fail("enterprise_reset_in_progress")
             manifest.phase == EnterpriseSessionPhase.CLOSING -> closingToken(manifest)
             else -> beginClosing(manifest, reason)
@@ -598,13 +671,20 @@ internal class EnterpriseSessionController(
     suspend fun finishExit(token: EnterpriseExitToken) = mutex.withLock {
         val manifest = manifestForExit()
         if (manifest.phase != EnterpriseSessionPhase.CLOSING || closingToken(manifest) != token) fail("stale_enterprise_exit")
-        if (leases.values.any { it.sessionId == token.access.sessionId }) fail("enterprise_executions_pending")
+        if (leases.values.any { it.sessionId == token.access.sessionId } ||
+            platformOperations.values.any { it.access == token.access }) fail("enterprise_executions_pending")
         val phase = when (token.reason) {
             EnterpriseExitReason.USER_REQUEST -> EnterpriseSessionPhase.SIGNED_OUT
             EnterpriseExitReason.AUTHORIZATION_EXPIRED, EnterpriseExitReason.AUTHORIZATION_REVOKED -> EnterpriseSessionPhase.REAUTH_REQUIRED
+            EnterpriseExitReason.IDENTITY_DELETED -> EnterpriseSessionPhase.SIGNED_OUT
             EnterpriseExitReason.LOCAL_DATA_RESET -> fail("stale_enterprise_exit")
         }
-        publish(EnterpriseManifest.signedOut(requireNotNull(manifest.session).identity).copy(phase = phase))
+        val retainedIdentity = requireNotNull(manifest.session).identity
+            .takeUnless { token.reason == EnterpriseExitReason.IDENTITY_DELETED }
+        publish(EnterpriseManifest.signedOut(retainedIdentity).copy(
+            phase = phase,
+            exitReason = EnterpriseExitReason.IDENTITY_DELETED.takeIf { token.reason == it },
+        ))
     }
 
     /** Revokes live enterprise admission before the reset coordinator closes domain work and deletes data. */
@@ -620,7 +700,8 @@ internal class EnterpriseSessionController(
         if (token.reason != EnterpriseExitReason.LOCAL_DATA_RESET) fail("stale_enterprise_exit")
         val manifest = manifestForExit()
         if (manifest.phase != EnterpriseSessionPhase.CLOSING || closingToken(manifest) != token) fail("stale_enterprise_exit")
-        if (leases.values.any { it.sessionId == token.access.sessionId }) fail("enterprise_executions_pending")
+        if (leases.values.any { it.sessionId == token.access.sessionId } ||
+            platformOperations.values.any { it.access == token.access }) fail("enterprise_executions_pending")
         val identity = if (retainIdentity) requireNotNull(manifest.session).identity else null
         val committed = withContext(NonCancellable + Dispatchers.IO) { store.resetLocalState(identity) }
         loaded = committed
@@ -632,8 +713,12 @@ internal class EnterpriseSessionController(
         val current = loaded?.manifest
         if (current?.phase == EnterpriseSessionPhase.CLOSING) fail("enterprise_reset_in_progress")
         if (current?.session != null) fail("enterprise_reset_requires_freeze")
-        val identity = if (retainIdentity) current?.lastIdentity else null
-        val committed = withContext(NonCancellable + Dispatchers.IO) { store.resetLocalState(identity) }
+        val deletedIdentity = current?.exitReason == EnterpriseExitReason.IDENTITY_DELETED
+        val identity = if (retainIdentity && !deletedIdentity) current?.lastIdentity else null
+        val terminalReason = EnterpriseExitReason.IDENTITY_DELETED.takeIf { deletedIdentity }
+        val committed = withContext(NonCancellable + Dispatchers.IO) {
+            store.resetLocalState(identity, terminalReason)
+        }
         loaded = committed
         publishState(committed.toAvailable())
         state.value

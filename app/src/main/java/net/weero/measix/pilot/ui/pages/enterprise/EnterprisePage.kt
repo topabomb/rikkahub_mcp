@@ -37,6 +37,13 @@ import net.weero.measix.pilot.data.enterprise.EnterpriseSessionPhase
 import net.weero.measix.pilot.data.enterprise.RealmAccess
 import net.weero.measix.pilot.data.enterprise.RealmSelection
 import net.weero.measix.pilot.data.enterprise.EnterpriseDataResetMode
+import net.weero.measix.pilot.data.enterprise.PlatformBudgetCapability
+import net.weero.measix.pilot.data.enterprise.PlatformBudgetCapabilityView
+import net.weero.measix.pilot.data.enterprise.PlatformBudgetMode
+import net.weero.measix.pilot.data.enterprise.PlatformBudgetStatus
+import net.weero.measix.pilot.data.enterprise.PlatformBudgetPeriod
+import net.weero.measix.pilot.data.enterprise.PlatformUsageCompleteness
+import net.weero.measix.pilot.data.enterprise.PlatformUsageMeter
 import net.weero.measix.pilot.service.EnterpriseResetPath
 import net.weero.measix.pilot.service.portal.PortalWebView
 import net.weero.measix.pilot.service.portal.PortalNativeActions
@@ -135,7 +142,7 @@ internal fun EnterpriseSpaceSettingsCard(modifier: Modifier = Modifier, vm: Ente
 }
 
 @Composable
-internal fun EnterprisePage(vm: EnterpriseVM = koinViewModel()) {
+internal fun EnterprisePage(openUsage: Boolean = false, vm: EnterpriseVM = koinViewModel()) {
     val state by vm.overview.collectAsStateWithLifecycle()
     val working by vm.busy.collectAsStateWithLifecycle()
     val error by vm.error.collectAsStateWithLifecycle()
@@ -147,9 +154,12 @@ internal fun EnterprisePage(vm: EnterpriseVM = koinViewModel()) {
     val joinConfirmation by vm.joinConfirmation.collectAsStateWithLifecycle()
     val resetChoice by vm.resetChoice.collectAsStateWithLifecycle()
     val resetConfirmation by vm.resetConfirmation.collectAsStateWithLifecycle()
+    val budgets by vm.budgets.collectAsStateWithLifecycle()
+    val lifecycleOwner = LocalLifecycleOwner.current
     val nav = LocalNavController.current
     var initialSelection by remember { mutableStateOf<RealmSelection?>(null) }
     var initialSelectionCaptured by remember { mutableStateOf(false) }
+    var usageDestinationOpened by remember { mutableStateOf(false) }
     LaunchedEffect(state) {
         if (!initialSelectionCaptured && state != null) {
             initialSelection = state?.selection
@@ -195,6 +205,29 @@ internal fun EnterprisePage(vm: EnterpriseVM = koinViewModel()) {
     }
     BackHandler(enabled = portal != null) { vm.dismissPortal(requireNotNull(portal)) }
     BackHandler(enabled = portal == null && initialSelectionCaptured && state?.selection != initialSelection) { leavePage() }
+    LaunchedEffect(state?.selection, state?.access) {
+        if (state?.access != null) vm.refreshBudgets()
+    }
+    LaunchedEffect(openUsage, state?.selection) {
+        if (openUsage && !usageDestinationOpened && state?.selection?.access is RealmAccess.Enterprise) {
+            usageDestinationOpened = true
+            vm.showUsagePortal()
+        }
+    }
+    val budgetInFlight = budgets?.value?.items?.sumOf { it.inFlightRequests } ?: 0L
+    LaunchedEffect(state?.selection, state?.access, budgetInFlight) {
+        while (budgetInFlight > 0) {
+            kotlinx.coroutines.delay(30_000)
+            vm.refreshBudgets()
+        }
+    }
+    DisposableEffect(lifecycleOwner, state?.access) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME && state?.access != null) vm.refreshBudgets()
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
 
     Scaffold(topBar = {
         TopAppBar(title = { Text(stringResource(if (portal != null) R.string.enterprise_portal else R.string.enterprise_spaces)) },
@@ -235,6 +268,11 @@ internal fun EnterprisePage(vm: EnterpriseVM = koinViewModel()) {
                     }
                 }
                 if (state == null || busy) LinearProgressIndicator(Modifier.fillMaxWidth())
+                if (state?.exitReason == net.weero.measix.pilot.data.enterprise.EnterpriseExitReason.IDENTITY_DELETED) {
+                    EnterpriseSection(stringResource(R.string.enterprise_identity_deleted)) {
+                        Text(stringResource(R.string.enterprise_identity_deleted_detail), color = MaterialTheme.colorScheme.error)
+                    }
+                }
                 val feedback = remember { BringIntoViewRequester() }
                 Column(Modifier.widthIn(max = 720.dp).fillMaxWidth().bringIntoViewRequester(feedback)) {
                     if (error != null || state?.failure != null || state?.exitFailure != null ||
@@ -318,6 +356,7 @@ internal fun EnterprisePage(vm: EnterpriseVM = koinViewModel()) {
                             state?.lastSyncMillis?.let { Text(stringResource(R.string.enterprise_last_sync, DateFormat.getDateTimeInstance().format(Date(it))), style = MaterialTheme.typography.bodySmall) }
                         }
                     }
+                    EnterpriseBudgetSection(budgets, vm::refreshBudgets, vm::showUsagePortal)
                 }
                 if (state?.selection != null && state?.access == null) {
                     EnterpriseSection(stringResource(R.string.enterprise_join_options)) {
@@ -415,6 +454,117 @@ internal fun EnterprisePage(vm: EnterpriseVM = koinViewModel()) {
         confirmButton = { TextButton(onClick = { vm.confirmExit(openChat) }) { Text(stringResource(R.string.confirm)) } },
         dismissButton = { TextButton(onClick = vm::dismissExit) { Text(stringResource(R.string.cancel)) } })
 }
+
+@Composable
+private fun EnterpriseBudgetSection(
+    state: EnterpriseBudgetPresentation?,
+    onRefresh: () -> Unit,
+    onDetails: () -> Unit,
+) {
+    EnterpriseSection(stringResource(R.string.enterprise_budget_title)) {
+        when {
+            state == null || state.loading && state.value == null -> {
+                LinearProgressIndicator(Modifier.fillMaxWidth())
+                Text(stringResource(R.string.enterprise_budget_loading), style = MaterialTheme.typography.bodySmall)
+            }
+            state.value != null -> {
+                if (state.stale) Text(stringResource(R.string.enterprise_budget_stale),
+                    color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                state.value.items.forEach { item -> EnterpriseBudgetCapabilityCard(item) }
+                Text(stringResource(R.string.enterprise_budget_as_of, formatBudgetTime(state.value.asOf)),
+                    style = MaterialTheme.typography.labelSmall)
+            }
+        }
+        state?.failure?.let {
+            SelectionContainer { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
+        }
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedButton(onClick = onRefresh, enabled = state?.loading != true) {
+                Text(stringResource(R.string.enterprise_budget_refresh))
+            }
+            TextButton(onClick = onDetails) { Text(stringResource(R.string.enterprise_budget_details)) }
+        }
+    }
+}
+
+@Composable
+private fun EnterpriseBudgetCapabilityCard(item: PlatformBudgetCapabilityView) {
+    val capability = stringResource(when (item.capability) {
+        PlatformBudgetCapability.MODEL -> R.string.enterprise_budget_capability_model
+        PlatformBudgetCapability.TTS -> R.string.enterprise_budget_capability_tts
+        PlatformBudgetCapability.ASR -> R.string.enterprise_budget_capability_asr
+        PlatformBudgetCapability.MCP -> R.string.enterprise_budget_capability_mcp
+    })
+    ElevatedCard(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                Text(capability, style = MaterialTheme.typography.titleSmall)
+                Text(stringResource(when {
+                    item.mode == PlatformBudgetMode.UNLIMITED -> R.string.enterprise_budget_unlimited
+                    item.status == PlatformBudgetStatus.EXHAUSTED -> R.string.enterprise_budget_exhausted
+                    item.status == PlatformBudgetStatus.PENDING_RECONCILIATION -> R.string.enterprise_budget_pending
+                    else -> R.string.enterprise_budget_available
+                }), color = when (item.status) {
+                    PlatformBudgetStatus.EXHAUSTED -> MaterialTheme.colorScheme.error
+                    PlatformBudgetStatus.PENDING_RECONCILIATION -> MaterialTheme.colorScheme.tertiary
+                    PlatformBudgetStatus.AVAILABLE -> MaterialTheme.colorScheme.primary
+                })
+            }
+            if (item.mode == PlatformBudgetMode.LIMITED) item.limits.forEach { limit ->
+                Text(stringResource(R.string.enterprise_budget_limit,
+                    stringResource(budgetPeriodResource(limit.period)), stringResource(budgetMeterResource(limit.meter)),
+                    limit.used, limit.reserved, limit.limit, limit.remaining),
+                    style = MaterialTheme.typography.bodySmall)
+                limit.resetAt?.let { Text(stringResource(R.string.enterprise_budget_reset_at, formatBudgetTime(it)),
+                    style = MaterialTheme.typography.labelSmall) }
+            }
+            if (item.usageMeters.isNotEmpty()) {
+                Text(stringResource(R.string.enterprise_budget_usage_total), style = MaterialTheme.typography.labelSmall)
+                item.usageMeters.forEach { usage ->
+                    Text(
+                        stringResource(
+                            R.string.enterprise_budget_usage_meter,
+                            stringResource(budgetMeterResource(usage.meter)),
+                            usage.quantity,
+                            stringResource(budgetCompletenessResource(usage.completeness)),
+                        ),
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+            }
+            if (item.inFlightRequests > 0) Text(stringResource(R.string.enterprise_budget_in_flight, item.inFlightRequests),
+                style = MaterialTheme.typography.labelSmall)
+        }
+    }
+}
+
+private fun budgetPeriodResource(value: PlatformBudgetPeriod): Int = when (value) {
+    PlatformBudgetPeriod.DAY -> R.string.enterprise_budget_period_day
+    PlatformBudgetPeriod.WEEK -> R.string.enterprise_budget_period_week
+    PlatformBudgetPeriod.MONTH -> R.string.enterprise_budget_period_month
+    PlatformBudgetPeriod.LIFETIME -> R.string.enterprise_budget_period_lifetime
+}
+
+private fun budgetMeterResource(value: PlatformUsageMeter): Int = when (value) {
+    PlatformUsageMeter.REQUESTS -> R.string.enterprise_budget_meter_requests
+    PlatformUsageMeter.INPUT_TOKENS -> R.string.enterprise_budget_meter_input_tokens
+    PlatformUsageMeter.OUTPUT_TOKENS -> R.string.enterprise_budget_meter_output_tokens
+    PlatformUsageMeter.CACHED_TOKENS -> R.string.enterprise_budget_meter_cached_tokens
+    PlatformUsageMeter.TOTAL_TOKENS -> R.string.enterprise_budget_meter_total_tokens
+    PlatformUsageMeter.CHARACTERS -> R.string.enterprise_budget_meter_characters
+    PlatformUsageMeter.AUDIO_SECONDS -> R.string.enterprise_budget_meter_audio_seconds
+}
+
+private fun budgetCompletenessResource(value: PlatformUsageCompleteness): Int = when (value) {
+    PlatformUsageCompleteness.EXACT -> R.string.enterprise_budget_completeness_exact
+    PlatformUsageCompleteness.PARTIAL -> R.string.enterprise_budget_completeness_partial
+    PlatformUsageCompleteness.UNKNOWN -> R.string.enterprise_budget_completeness_unknown
+}
+
+private fun formatBudgetTime(value: String): String = try {
+    DateFormat.getDateTimeInstance(DateFormat.MEDIUM, DateFormat.SHORT).format(
+        Date.from(java.time.Instant.parse(value)))
+} catch (_: java.time.format.DateTimeParseException) { value }
 
 @Composable
 private fun EnterpriseSection(title: String, icon: ImageVector? = null, content: @Composable ColumnScope.() -> Unit) {

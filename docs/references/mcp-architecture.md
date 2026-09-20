@@ -311,4 +311,4 @@ Gateway 按发布 policy 对完整工具对启停，REQUIRED 只读；写入携�
 
 助手 `assistant_inspect` 只读取原域配置和已确认 Catalog，不建立连接，也不借用当前页面配置。用户目录要求 definition digest 匹配；企业目录还要求原主体、generation 和当前 platform execution 描述匹配。该查询不创建 execution lease、不缓存凭据，也不能充当调用授权。MCP 管理页面与助手检查复用同一目录匹配规则。
 
-实际调用仍由 `TurnToolSetFactory`、`TurnRunner` 和 MCP owner 完成。流式调用携带正常 Provider transport slot，Step accumulator 分配 durable 身份；安全业务元数据经 `ToolExecutionContext` 的 deferred metadata 协议提交，不另写执行记录。发现、调用或 428 失败不自动重试、不回退到同名用户工具，也不从名称猜测资源身份。
+实际调用仍由 `TurnToolSetFactory`、`TurnRunner` 和 MCP owner 完成。流式调用携带正常 Provider transport slot，Step accumulator 分配 durable 身份；安全业务元数据经 `ToolExecutionContext` 的 deferred metadata 协议提交，不另写执行记录。发现、调用或 428 失败不自动重试、不回退到同名用户工具，也不从名称猜测资源身份。受管 Streamable HTTP 的 POST 与 SSE GET 在转成 SDK 通用错误前先解析 Core Problem；额度/计量/核对阻断抛回统一企业运行时错误，身份删除触发正式 Session 退出。该解析器不装配到个人 MCP，不能把普通远端 429 重分类为企业额度。

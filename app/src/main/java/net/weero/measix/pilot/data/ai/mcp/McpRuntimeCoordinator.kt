@@ -177,6 +177,7 @@ class McpRuntimeCoordinator internal constructor(
                 }
             }
         },
+        managedProblem = platform::managedRuntimeProblem,
         transportOverride = transportOverride,
         clientOverride = clientOverride,
     )
@@ -702,6 +703,13 @@ class McpRuntimeCoordinator internal constructor(
         } catch (barrier: ManagedSnapshotRequired) {
             serverRuntime.acceptManagedBarrier(preparation.generation, barrier)
             throw barrier
+        } catch (problem: net.weero.measix.pilot.data.enterprise.EnterpriseRuntimeProblemException) {
+            (realmAccess as? RealmAccess.Enterprise)?.let {
+                platform.acceptManagedRuntimeProblem(it, problem)
+            }
+            throw problem
+        } finally {
+            (realmAccess as? RealmAccess.Enterprise)?.let(platform::runtimeCompleted)
         }
         return when (outcome) {
             is McpInvocationOutcome.Succeeded -> outcome.content.also {
@@ -774,6 +782,9 @@ class McpRuntimeCoordinator internal constructor(
                 ioDispatcher = ioDispatcher, foregroundState = foregroundState,
                 policy = runtimePolicy, logger = ::logMcp,
                 onManagedSnapshotRequired = onManagedSnapshotRequired,
+                onManagedRuntimeProblem = { access, error ->
+                    platform.acceptManagedRuntimeProblem(access, error)
+                },
                 onClosed = { closed ->
                     if (closed.access == null) appScope.launch {
                         val enabled = settingsStore.userMcpDefinitions.first()

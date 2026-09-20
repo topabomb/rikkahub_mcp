@@ -16,7 +16,8 @@ OUTPUT = ROOT / "app/src/main/java/net/weero/measix/pilot/data/enterprise/Platfo
 SCHEMAS = yaml.safe_load(SOURCE.read_text(encoding="utf-8"))["components"]["schemas"]
 ROOTS = ["Discovery", "EnrollmentExchangeRequest", "EnrollmentExchangeResponse",
          "RefreshRequest", "RefreshResponse", "ManagedState", "Bootstrap",
-         "ManagedSnapshot", "ManagedAppliedReport", "PortalGrant", "Problem"]
+         "ManagedSnapshot", "ManagedAppliedReport", "PortalGrant", "UserBudgetView",
+         "Problem"]
 definitions = {}
 
 
@@ -52,6 +53,11 @@ def kotlin_type(schema, name):
                 optional = key not in required
                 fields.append(f'    val {key}: {field_type}' + ("? = null," if optional else ","))
                 validations.extend(checks(value, key, field_type, optional, name))
+            if name == "UserBudgetView":
+                validations.append(
+                    '        require(items.map { it.capability }.toSet() == PlatformBudgetCapability.entries.toSet()) '
+                    '{ "invalid_platform_UserBudgetView_items_capabilities" }'
+                )
             body = "@Serializable\ninternal data class Platform" + name + "(\n" + "\n".join(fields) + "\n)"
             if validations or sensitive:
                 body += " {\n"
@@ -87,6 +93,8 @@ def checks(schema, key, field_type, optional, owner):
         predicates.append(f'{target}.isFinite()')
     if "minItems" in schema:
         predicates.append(f'{target}.size >= {schema["minItems"]}')
+    if "maxItems" in schema:
+        predicates.append(f'{target}.size <= {schema["maxItems"]}')
     if schema.get("uniqueItems"):
         predicates.append(f'{target}.distinct().size == {target}.size')
     if "enum" in schema and not field_type.startswith("Platform"):

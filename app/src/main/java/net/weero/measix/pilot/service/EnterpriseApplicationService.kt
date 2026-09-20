@@ -29,6 +29,7 @@ internal data class EnterpriseOverview(
     val reset: EnterpriseDataResetProgress? = null,
     val enrollmentRecoveryFailure: String? = null,
     val recoveryLogoutFailure: String? = null,
+    val exitReason: EnterpriseExitReason? = null,
 )
 
 /** Native enterprise UI commands share the existing source, Session, synchronization and exit owners. */
@@ -102,6 +103,7 @@ internal class EnterpriseApplicationService(
                 reset = resetProgress,
                 enrollmentRecoveryFailure = resumeFailure,
                 recoveryLogoutFailure = logoutFailures.first.takeIf { manifest?.session == null } ?: logoutFailures.second,
+                exitReason = manifest?.exitReason,
             )
         }.distinctUntilChanged()
 
@@ -134,6 +136,18 @@ internal class EnterpriseApplicationService(
         }
     }
     suspend fun synchronize(access: RealmAccess.Enterprise) { recovery.awaitReady(); synchronization.synchronize(access) }
+    suspend fun budgets(selection: RealmSelection, access: RealmAccess.Enterprise): PlatformUserBudgetView {
+        recovery.awaitReady()
+        if (sessions.readPresentation().selection != selection) {
+            throw EnterpriseConfigurationException("enterprise_selection_revoked")
+        }
+        val result = platform.budgets(access)
+        if (sessions.readPresentation().selection != selection) {
+            throw EnterpriseConfigurationException("enterprise_selection_revoked")
+        }
+        return result
+    }
+    fun runtimeUsageChanges(): Flow<RealmAccess.Enterprise> = platform.runtimeUsageChanged
     suspend fun localDataReset(request: EnterpriseDataResetRequest) = dataReset.reset(request)
     suspend fun retryLocalDataReset() = dataReset.retryReset()
 
@@ -142,10 +156,15 @@ internal class EnterpriseApplicationService(
     suspend fun retryExit(failure: EnterpriseExitFailure) { exit.retry(failure) }
 
     suspend fun openPortal(context: Context, selection: RealmSelection, onClosed: (PortalClosure) -> Unit): PortalWebView {
+        return openPortal(context, selection, PortalDestination.HOME, onClosed)
+    }
+
+    suspend fun openPortal(context: Context, selection: RealmSelection, destination: PortalDestination,
+        onClosed: (PortalClosure) -> Unit): PortalWebView {
         recovery.awaitReady()
         val access = selection.access as? RealmAccess.Enterprise
             ?: throw EnterpriseConfigurationException("enterprise_session_required")
-        val source = PortalPageSource(platform.createPortalGrant(access))
+        val source = PortalPageSource(platform.createPortalGrant(access), destination)
         return PortalWebView.open(context, selection, sessions, synchronization, scope, portals, source,
             { document -> PortalNativeActions(context, document, sessions, exit, media.open(document.id),
                 AndroidPortalCaptureFactory(context, scope), scope) }, onClosed)

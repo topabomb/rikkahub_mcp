@@ -1,5 +1,6 @@
 package net.weero.measix.pilot.service.runtime
 
+import io.mockk.mockk
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.awaitCancellation
@@ -7,10 +8,32 @@ import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.test.runTest
 import org.junit.Assert.*
 import org.junit.Test
 
 class ModelExecutionLeaseTest {
+    @Test fun `managed failure normalization and completion happen exactly once without replay`() = runTest {
+        var completed = 0
+        val original = IllegalStateException("managed")
+        val normalized = java.io.IOException("budget_exhausted", original)
+        val lease = ModelExecutionLease(
+            normalizeFailure = { _, error -> assertSame(original, error); normalized },
+            onRequestFinished = { completed++ },
+        ) { accept -> accept(ModelRequestTarget.Remote(mockk(relaxed = true))) }
+
+        try {
+            lease.execute<Unit> { throw original }
+            fail("expected normalized failure")
+        } catch (error: java.io.IOException) {
+            assertEquals(normalized.message, error.message)
+            val root = generateSequence<Throwable>(error) { it.cause }.last()
+            assertEquals(original::class, root::class)
+            assertEquals(original.message, root.message)
+        }
+        assertEquals(1, completed)
+    }
+
     @Test fun `managed generation barrier permanently closes all borrowed requests before notifying the owner`() = runBlocking {
         var barriers = 0
         var releases = 0

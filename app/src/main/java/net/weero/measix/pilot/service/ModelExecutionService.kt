@@ -200,7 +200,21 @@ internal class ModelExecutionService(
         worker.ensureActive()
         var bindings: EnterpriseExecutionLease? = null
         var admission: (suspend ((ModelRequestTarget) -> Unit) -> Unit)? = null
-        val execution = ModelExecutionLease(releaseOwner = { bindings?.release() }, onManagedSnapshotRequired = onBarrier) { accept ->
+        val enterpriseAccess = access as? RealmAccess.Enterprise
+        val execution = ModelExecutionLease(
+            releaseOwner = { bindings?.release() },
+            onManagedSnapshotRequired = onBarrier,
+            normalizeFailure = { target, error ->
+                if (enterpriseAccess != null && target is ModelRequestTarget.Remote &&
+                    target.credentials is RequestCredentials.Routed) {
+                    platform.managedRuntimeFailure(enterpriseAccess, error)
+                } else error
+            },
+            onRequestFinished = { target ->
+                if (enterpriseAccess != null && target is ModelRequestTarget.Remote &&
+                    target.credentials is RequestCredentials.Routed) platform.runtimeCompleted(enterpriseAccess)
+            },
+        ) { accept ->
             requireNotNull(admission) { "model_execution_not_prepared" }(accept)
         }
         bindOwner(execution)

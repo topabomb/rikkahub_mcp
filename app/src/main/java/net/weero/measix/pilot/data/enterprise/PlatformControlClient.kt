@@ -127,6 +127,9 @@ internal class PlatformControlClient(client: OkHttpClient) {
         }
     }
 
+    suspend fun budgets(connection: PlatformConnection, accessToken: String): PlatformUserBudgetView =
+        request(builder(connection.control("/budgets"), accessToken).get().build(), 200, callTimeoutSeconds = 15)
+
     suspend fun logout(connection: PlatformConnection, refreshToken: String) {
         client.newCall(post(connection.control("/sessions/logout"), PlatformRefreshRequest(refreshToken))).also {
             it.timeout().timeout(15, java.util.concurrent.TimeUnit.SECONDS)

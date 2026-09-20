@@ -5,7 +5,6 @@ import io.ktor.client.HttpClient
 import io.ktor.client.engine.okhttp.OkHttp
 import io.ktor.http.HttpHeaders
 import io.pebbletemplates.pebble.PebbleEngine
-import kotlinx.coroutines.launch
 import kotlinx.serialization.json.Json
 import me.rerere.ai.provider.ProviderManager
 import me.rerere.common.http.AcceptLanguageBuilder
@@ -55,9 +54,8 @@ val dataSourceModule = module {
     single { net.weero.measix.pilot.data.enterprise.EnterpriseDataResetStore(File(get<Context>().noBackupFilesDir, "enterprise-reset")) }
     single { PlatformControlClient(get()) }
     single {
-        val scope = get<AppScope>()
-        PlatformEnterpriseService(get(), get(), onSessionRevoked = { access ->
-            scope.launch { get<EnterpriseExitService>().invalidate(access, EnterpriseExitReason.AUTHORIZATION_REVOKED) }
+        PlatformEnterpriseService(get(), get(), onSessionInvalidated = { access, reason ->
+            get<EnterpriseExitService>().acceptInvalidation(access, reason)
         })
     }
     single { EnterpriseSynchronizationService(get(), get<AppScope>(), get()) }
