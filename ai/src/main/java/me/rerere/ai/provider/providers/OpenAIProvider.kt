@@ -34,10 +34,8 @@ import me.rerere.ai.provider.providers.openai.ResponseAPI
 import me.rerere.ai.provider.providers.openai.openAIRequestMediaCapabilities
 import me.rerere.ai.provider.images.ImageGenerationResponseParse
 import me.rerere.ai.provider.images.ParsedImageGenerationItem
-import me.rerere.ai.provider.images.SafeRoutedImageDownloader
 import me.rerere.ai.provider.images.moderationBlockedImageException
 import me.rerere.ai.provider.images.parseImageGenerationResponseBody
-import me.rerere.ai.provider.images.readBoundedImageGenerationResponse
 import me.rerere.ai.ui.ImageGenerationItem
 import me.rerere.ai.ui.MessageChunk
 import me.rerere.ai.core.ModelRequestMessage
@@ -77,9 +75,6 @@ class OpenAIProvider(
 
     private val chatCompletionsAPI = ChatCompletionsAPI(client = client, keyRoulette = keyRoulette)
     private val responseAPI = ResponseAPI(client = client, keyRoulette = keyRoulette)
-    private val safeRoutedImageDownloader = SafeRoutedImageDownloader(client)
-
-
     override suspend fun listModels(providerSetting: ProviderSetting.OpenAI): List<Model> =
         withContext(Dispatchers.IO) {
             val key = keyRoulette.next(providerSetting.apiKey, providerSetting.id.toString())
@@ -234,8 +229,10 @@ class OpenAIProvider(
         require(providerSetting is ProviderSetting.OpenAI) {
             "Expected OpenAI provider setting"
         }
+        check(params.credentials !is RequestCredentials.Routed) {
+            "routed_image_requires_managed_provider"
+        }
 
-        val routedRequest = params.credentials is RequestCredentials.Routed
         val requestBody = json.encodeToString(
             buildJsonObject {
                 put("model", params.model.modelId)
@@ -245,18 +242,11 @@ class OpenAIProvider(
                 val isGrok = providerSetting.baseUrl.contains("x.ai", ignoreCase = true) ||
                     params.model.modelId.contains("grok", ignoreCase = true)
 
-                if (params.size.isNotBlank() && (!isGrok || routedRequest)) {
+                if (params.size.isNotBlank() && !isGrok) {
                     put("size", params.size)
                 }
             }
-                .mergeCustomBody(
-                    params.customBody,
-                    if (routedRequest) {
-                        OPENAI_ROUTED_IMAGE_GENERATION_OWNERSHIP
-                    } else {
-                        OPENAI_IMAGE_GENERATION_OWNERSHIP
-                    },
-                )
+                .mergeCustomBody(params.customBody, OPENAI_IMAGE_GENERATION_OWNERSHIP)
         )
 
         val request = Request.Builder()
@@ -273,13 +263,11 @@ class OpenAIProvider(
                 if (!response.isSuccessful) {
                     throw formatProviderHttpError(response.code, response.body.string())
                 }
-                if (routedRequest) response.readBoundedImageGenerationResponse(params.numOfImages)
-                else parseImageGenerationResponseBody(response.body.string())
+                parseImageGenerationResponseBody(response.body.string())
             }
             parseImageResponse(
                 parsed = parsed,
                 privateRequest = request.isPrivate,
-                routedRequest = routedRequest,
             )
         }
 
@@ -292,6 +280,9 @@ class OpenAIProvider(
     ): Flow<ImageGenerationItem> = flow {
         require(providerSetting is ProviderSetting.OpenAI) {
             "Expected OpenAI provider setting"
+        }
+        check(params.credentials !is RequestCredentials.Routed) {
+            "routed_image_edit_unsupported"
         }
         require(params.images.isNotEmpty()) {
             "At least one image is required"
@@ -359,7 +350,6 @@ class OpenAIProvider(
             parseImageResponse(
                 parsed = parseImageGenerationResponseBody(bodyStr),
                 privateRequest = request.isPrivate,
-                routedRequest = params.credentials is RequestCredentials.Routed,
             )
         }
 
@@ -369,7 +359,6 @@ class OpenAIProvider(
     private suspend fun parseImageResponse(
         parsed: ImageGenerationResponseParse,
         privateRequest: Boolean,
-        routedRequest: Boolean,
     ): List<ImageGenerationItem> {
         if (parsed.allBlockedByModeration && parsed.items.isEmpty()) {
             throw moderationBlockedImageException()
@@ -380,11 +369,7 @@ class OpenAIProvider(
                     data = item.data,
                     mimeType = item.mimeType,
                 )
-                is ParsedImageGenerationItem.RemoteUrl -> if (routedRequest) {
-                    safeRoutedImageDownloader.downloadAsBase64(item.url)
-                } else {
-                    downloadImageAsBase64(item.url, privateRequest)
-                }
+                is ParsedImageGenerationItem.RemoteUrl -> downloadImageAsBase64(item.url, privateRequest)
             }
         }
     }
@@ -441,12 +426,6 @@ internal val OPENAI_IMAGE_GENERATION_OWNERSHIP = RequestBodyOwnership(
         "prompt",
         "n",
     ),
-)
-
-/** Routed generation must preserve the size captured by the enterprise request owner. */
-internal val OPENAI_ROUTED_IMAGE_GENERATION_OWNERSHIP = RequestBodyOwnership(
-    protocol = "openai-images-generations-routed",
-    reservedKeys = OPENAI_IMAGE_GENERATION_OWNERSHIP.reservedKeys + "size",
 )
 
 /**

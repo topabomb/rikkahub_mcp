@@ -44,6 +44,7 @@ import net.weero.measix.pilot.service.runtime.captureProviderCredentialOwner
 import net.weero.measix.pilot.service.runtime.freezeProviderWireShape
 import net.weero.measix.pilot.service.runtime.mergeProviderTransportCredentials
 import net.weero.measix.pilot.service.runtime.resolveProviderTransportOwner
+import net.weero.measix.pilot.service.runtime.routedCredentialsOrNull
 import net.weero.measix.pilot.data.enterprise.EnterpriseAppliedVersion
 import net.weero.measix.pilot.data.configuration.ModelSelectionRole
 import kotlin.uuid.Uuid
@@ -206,14 +207,12 @@ internal class ModelExecutionService(
             releaseOwner = { bindings?.release() },
             onManagedSnapshotRequired = onBarrier,
             normalizeFailure = { target, error ->
-                if (enterpriseAccess != null && target is ModelRequestTarget.Remote &&
-                    target.credentials is RequestCredentials.Routed) {
+                if (enterpriseAccess != null && target.routedCredentialsOrNull() != null) {
                     platform.managedRuntimeFailure(enterpriseAccess, error)
                 } else error
             },
             onRequestFinished = { target ->
-                if (enterpriseAccess != null && target is ModelRequestTarget.Remote &&
-                    target.credentials is RequestCredentials.Routed) platform.runtimeCompleted(enterpriseAccess)
+                if (enterpriseAccess != null && target.routedCredentialsOrNull() != null) platform.runtimeCompleted(enterpriseAccess)
             },
         ) { accept ->
             requireNotNull(admission) { "model_execution_not_prepared" }(accept)
@@ -277,51 +276,39 @@ internal class ModelExecutionService(
         val platformExecution = enterpriseId?.let {
             requireNotNull(bindings) { "enterprise_execution_owner_missing" }.execution as EnterpriseExecution.Platform
         }
-        val platformProvider = platformExecution?.let {
+        val platformImageProtocol = platformExecution?.takeIf { role == ModelSelectionRole.IMAGE }?.let {
+            requireNotNull(bindings).configuration.imageGenerators.single { definition -> definition.id == modelId.id }.protocol
+        }
+        val platformProvider = platformExecution?.takeIf { role != ModelSelectionRole.IMAGE }?.let {
             val definitions = requireNotNull(bindings).configuration
-            if (role == ModelSelectionRole.IMAGE) {
-                val definition = definitions.imageGenerators.single { it.id == modelId.id }
-                check(definition.protocol == net.weero.measix.pilot.data.enterprise.PlatformImageGenerationDefinitionClientProtocol.OPENAI_IMAGES_GENERATIONS) {
-                    "unsupported_platform_image_protocol"
-                }
-                ProviderSetting.OpenAI(
-                    id = model.id,
-                    name = model.displayName,
-                    models = listOf(model),
-                    baseUrl = it.connection.origin,
-                    apiKey = "",
+            val definition = definitions.models.single { it.id == modelId.id }
+            val protocol = definitions.providers.single { it.id == definition.providerId }.protocol
+            when (protocol) {
+                PlatformProviderDefinitionClientProtocol.OPENAI_CHAT_COMPLETIONS,
+                PlatformProviderDefinitionClientProtocol.OPENAI_RESPONSES -> ProviderSetting.OpenAI(
+                    id = model.id, name = model.displayName, models = listOf(model), baseUrl = it.connection.origin,
+                    apiKey = "", useResponseApi = protocol == PlatformProviderDefinitionClientProtocol.OPENAI_RESPONSES,
                 )
-            } else {
-                val definition = definitions.models.single { it.id == modelId.id }
-                val protocol = definitions.providers.single { it.id == definition.providerId }.protocol
-                when (protocol) {
-                    PlatformProviderDefinitionClientProtocol.OPENAI_CHAT_COMPLETIONS,
-                    PlatformProviderDefinitionClientProtocol.OPENAI_RESPONSES -> ProviderSetting.OpenAI(
-                        id = model.id, name = model.displayName, models = listOf(model), baseUrl = it.connection.origin,
-                        apiKey = "", useResponseApi = protocol == PlatformProviderDefinitionClientProtocol.OPENAI_RESPONSES,
-                    )
-                    PlatformProviderDefinitionClientProtocol.GOOGLE_GENERATE_CONTENT -> ProviderSetting.Google(
-                        id = model.id, name = model.displayName, models = listOf(model), baseUrl = it.connection.origin, apiKey = "",
-                    )
-                    PlatformProviderDefinitionClientProtocol.ANTHROPIC_MESSAGES -> ProviderSetting.Claude(
-                        id = model.id, name = model.displayName, models = listOf(model), baseUrl = it.connection.origin, apiKey = "",
-                    )
-                }
+                PlatformProviderDefinitionClientProtocol.GOOGLE_GENERATE_CONTENT -> ProviderSetting.Google(
+                    id = model.id, name = model.displayName, models = listOf(model), baseUrl = it.connection.origin, apiKey = "",
+                )
+                PlatformProviderDefinitionClientProtocol.ANTHROPIC_MESSAGES -> ProviderSetting.Claude(
+                    id = model.id, name = model.displayName, models = listOf(model), baseUrl = it.connection.origin, apiKey = "",
+                )
             }
         }
-        val initialTarget = if (platformProvider != null) ModelRequestTarget.Remote(platformProvider)
-            else ModelRequestTarget.Remote(selected.findProvider(snapshot.userSettings.providers)
-                ?: error("model_provider_unavailable"))
-        check(BuiltInTools.Search !in model.tools ||
-            supportsBuiltInSearch(initialTarget.provider)) {
+        val initialRemote = if (platformProvider != null) ModelRequestTarget.Remote(platformProvider)
+            else if (platformImageProtocol == null) ModelRequestTarget.Remote(selected.findProvider(snapshot.userSettings.providers)
+                ?: error("model_provider_unavailable")) else null
+        check(BuiltInTools.Search !in model.tools || supportsBuiltInSearch(requireNotNull(initialRemote).provider)) {
             "model_builtin_search_not_supported"
         }
-        val frozenShape = freezeProviderWireShape(initialTarget.provider, model)
+        val frozenShape = initialRemote?.let { freezeProviderWireShape(it.provider, model) }
         val credentialOwner = if (enterpriseId == null) {
-            captureProviderCredentialOwner(snapshot.userSettings, selected, initialTarget.provider)
+            captureProviderCredentialOwner(snapshot.userSettings, selected, requireNotNull(initialRemote).provider)
         } else null
         val media = if (role.type == ModelType.IMAGE) RequestMediaCapabilities.NONE
-            else providers.getProviderByType(initialTarget.provider).requestMediaCapabilities(initialTarget.provider, model)
+            else providers.getProviderByType(requireNotNull(initialRemote).provider).requestMediaCapabilities(initialRemote.provider, model)
         val modelAdmission: suspend ((ModelRequestTarget) -> Unit) -> Unit = { accept ->
             // Refresh belongs to the Session owner and must happen outside its configuration lock.
             val platformToken = platformExecution?.let {
@@ -340,10 +327,14 @@ internal class ModelExecutionService(
                     var endpoint = platformExecution.connection.runtime(modelId.id,
                         platformExecution.runtimePaths.getValue(modelId.id))
                     if (platformProvider is ProviderSetting.Google) endpoint += "?alt=sse"
-                    ModelRequestTarget.Remote(requireNotNull(platformProvider), listOf(
+                    val headers = listOf(
                         CustomHeader("X-Measix-Managed-Generation", bindings.configuration.generation.toString()),
                         CustomHeader("X-Measix-Interaction-Id", "int_$interactionId"),
-                    ), RequestCredentials.Routed(endpoint, requireNotNull(platformToken).value))
+                    )
+                    val credentials = RequestCredentials.Routed(endpoint, requireNotNull(platformToken).value)
+                    if (role == ModelSelectionRole.IMAGE) {
+                        ModelRequestTarget.ManagedImage(requireNotNull(platformImageProtocol), headers, credentials)
+                    } else ModelRequestTarget.Remote(requireNotNull(platformProvider), headers, credentials)
                 } else ModelRequestTarget.Remote(mergeProviderTransportCredentials(
                     requireNotNull(frozenShape),
                     resolveProviderTransportOwner(latest.userSettings, requireNotNull(credentialOwner)),

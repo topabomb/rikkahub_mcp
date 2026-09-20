@@ -9,8 +9,6 @@ import io.mockk.unmockkStatic
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.JsonPrimitive
-import me.rerere.ai.provider.CustomBody
 import me.rerere.ai.provider.CustomHeader
 import me.rerere.ai.provider.ImageGenerationParams
 import me.rerere.ai.provider.ImageEditParams
@@ -19,15 +17,11 @@ import me.rerere.ai.provider.Provider
 import me.rerere.ai.provider.ProviderSetting
 import me.rerere.ai.provider.RequestCredentials
 import me.rerere.ai.provider.TextGenerationParams
-import me.rerere.ai.provider.images.MAX_ROUTED_IMAGE_BYTES
-import me.rerere.ai.provider.images.maxRoutedImageResponseBytes
 import me.rerere.common.http.isPrivate
-import me.rerere.common.http.RoutedHttpException
 import okhttp3.OkHttpClient
 import okhttp3.Protocol
 import okhttp3.Request
 import okhttp3.Response
-import okhttp3.ResponseBody
 import okhttp3.ResponseBody.Companion.toResponseBody
 import org.junit.After
 import org.junit.Assert.*
@@ -194,216 +188,38 @@ class RequestCredentialsTest {
         }
     }
 
-    @Test fun `routed grok generation preserves caller size while personal grok keeps legacy omission`() = runBlocking {
-        val requests = mutableListOf<Request>()
-        val client = OkHttpClient.Builder().addInterceptor { chain ->
-            requests += chain.request()
-            Response.Builder().request(chain.request()).protocol(Protocol.HTTP_1_1)
-                .code(503).message("Fixture end").body("fixture".toResponseBody()).build()
-        }.build()
-        try {
-            val provider = OpenAIProvider(client)
-            val setting = ProviderSetting.OpenAI(
-                baseUrl = "https://api.x.ai/v1",
-                apiKey = "personal-key",
-            )
-            val params = ImageGenerationParams(
-                model = Model(modelId = "grok-imagine"),
-                prompt = "draw",
-                size = "1024x768",
-            )
-
-            try {
-                provider.generateImage(
-                    setting,
-                    params.copy(
-                        credentials = RequestCredentials.Routed(
-                            "https://relay.test/runtime/v1/resources/image/images/generations",
-                            "relay-token",
-                        ),
-                    ),
-                ).collect()
-                fail("fixture rejection must propagate")
-            } catch (_: Exception) { /* Inspect the routed request body below. */ }
-            try {
-                provider.generateImage(setting, params).collect()
-                fail("fixture rejection must propagate")
-            } catch (_: Exception) { /* Inspect the personal request body below. */ }
-
-            assertEquals(2, requests.size)
-            val routedBody = okio.Buffer().also { requests[0].body!!.writeTo(it) }.readUtf8()
-            val personalBody = okio.Buffer().also { requests[1].body!!.writeTo(it) }.readUtf8()
-            assertTrue(routedBody.contains("\"size\":\"1024x768\""))
-            assertFalse(personalBody.contains("\"size\""))
-        } finally {
-            client.dispatcher.executorService.shutdown()
-            client.connectionPool.evictAll()
-        }
-    }
-
-    @Test fun `routed generation size cannot be replaced by custom body`() = runBlocking {
+    @Test fun `routed image requests belong only to the managed provider`() = runBlocking {
         var requests = 0
         val client = OkHttpClient.Builder().addInterceptor { requests++; error("unexpected request") }.build()
         try {
             val provider = OpenAIProvider(client)
-            val setting = ProviderSetting.OpenAI(baseUrl = "https://api.x.ai/v1")
-            val params = ImageGenerationParams(
-                model = Model(modelId = "grok-imagine"),
-                prompt = "draw",
-                size = "1024x768",
-                customBody = listOf(CustomBody("size", JsonPrimitive("1x1"))),
-                credentials = RequestCredentials.Routed(
-                    "https://relay.test/runtime/v1/resources/image/images/generations",
-                    "relay-token",
-                ),
+            val setting = ProviderSetting.OpenAI(baseUrl = "https://provider.test/v1")
+            val model = Model(modelId = "image")
+            val credentials = RequestCredentials.Routed(
+                "https://relay.test/runtime/v1/resources/img_fixture/v1/images/generations",
+                "relay-token",
             )
+            val image = temporary.newFile("managed-only.png").apply { writeBytes(byteArrayOf(1)) }
+
             try {
-                provider.generateImage(setting, params).collect()
-                fail("custom body replaced routed size")
-            } catch (error: me.rerere.ai.util.CustomBodyReservedKeyException) {
-                assertEquals(listOf("size"), error.conflictingKeys)
+                provider.generateImage(
+                    setting,
+                    ImageGenerationParams(model, "draw", credentials = credentials),
+                ).collect()
+                fail("routed generation used the personal provider")
+            } catch (error: IllegalStateException) {
+                assertEquals("routed_image_requires_managed_provider", error.message)
+            }
+            try {
+                provider.editImage(
+                    setting,
+                    ImageEditParams(model, "edit", listOf(image.path), credentials = credentials),
+                ).collect()
+                fail("routed edit used the personal provider")
+            } catch (error: IllegalStateException) {
+                assertEquals("routed_image_edit_unsupported", error.message)
             }
             assertEquals(0, requests)
-        } finally {
-            client.dispatcher.executorService.shutdown()
-            client.connectionPool.evictAll()
-        }
-    }
-
-    @Test fun `routed image generation never follows redirects or replays the request`() = runBlocking {
-        val paths = java.util.concurrent.CopyOnWriteArrayList<String>()
-        val server = com.sun.net.httpserver.HttpServer.create(java.net.InetSocketAddress("127.0.0.1", 0), 0)
-        server.createContext("/") { exchange -> exchange.use {
-            paths += it.requestURI.toString()
-            it.requestBody.readBytes()
-            it.responseHeaders.set("Location", "/redirected")
-            it.sendResponseHeaders(307, -1)
-        } }
-        server.start()
-        val client = OkHttpClient()
-        try {
-            val path = "/runtime/v1/resources/img_fixture/images/generations"
-            val endpoint = "http://127.0.0.1:${server.address.port}$path"
-            val provider = OpenAIProvider(client)
-            val setting = ProviderSetting.OpenAI(baseUrl = "https://provider.test/v1")
-            try {
-                provider.generateImage(
-                    setting,
-                    ImageGenerationParams(
-                        model = Model(modelId = "image"),
-                        prompt = "draw",
-                        credentials = RequestCredentials.Routed(endpoint, "relay-token"),
-                    ),
-                ).collect()
-                fail("routed image redirect was followed")
-            } catch (error: RoutedHttpException) {
-                assertEquals(307, error.status)
-            }
-            assertEquals(listOf(path), paths)
-        } finally {
-            server.stop(0)
-            client.dispatcher.executorService.shutdown()
-            client.connectionPool.evictAll()
-        }
-    }
-
-    @Test fun `routed image generation rejects oversized JSON before parsing`() = runBlocking {
-        val maxBytes = maxRoutedImageResponseBytes(1)
-        val oversized = object : ResponseBody() {
-            override fun contentType(): okhttp3.MediaType? = null
-            override fun contentLength(): Long = maxBytes + 1
-            override fun source(): okio.BufferedSource = okio.Buffer()
-        }
-        val client = OkHttpClient.Builder().addInterceptor { chain ->
-            Response.Builder().request(chain.request()).protocol(Protocol.HTTP_1_1)
-                .code(200).message("OK").body(oversized).build()
-        }.build()
-        try {
-            val provider = OpenAIProvider(client)
-            val params = ImageGenerationParams(
-                model = Model(modelId = "image"),
-                prompt = "draw",
-                credentials = RequestCredentials.Routed(
-                    "https://relay.test/runtime/v1/resources/img_fixture/images/generations",
-                    "relay-token",
-                ),
-            )
-            try {
-                provider.generateImage(ProviderSetting.OpenAI(baseUrl = "https://provider.test/v1"), params).collect()
-                fail("oversized routed image JSON was parsed")
-            } catch (error: java.io.IOException) {
-                assertEquals("routed_image_response_limit_exceeded", error.message)
-            }
-        } finally {
-            client.dispatcher.executorService.shutdown()
-            client.connectionPool.evictAll()
-        }
-    }
-
-    @Test fun `routed response budget accepts two legal maximum-sized base64 images`() {
-        val encodedImageBytes = ((MAX_ROUTED_IMAGE_BYTES + 2L) / 3L) * 4L
-        assertTrue(maxRoutedImageResponseBytes(2) > encodedImageBytes * 2L)
-        assertTrue(maxRoutedImageResponseBytes(2) < maxRoutedImageResponseBytes(3))
-    }
-
-    @Test fun `routed image generation streams two requested items`() = runBlocking {
-        val client = OkHttpClient.Builder().addInterceptor { chain ->
-            Response.Builder().request(chain.request()).protocol(Protocol.HTTP_1_1)
-                .code(200).message("OK")
-                .body("""{"data":[{"b64_json":"QUJD"},{"b64_json":"REVG"}]}""".toResponseBody())
-                .build()
-        }.build()
-        try {
-            val items = mutableListOf<me.rerere.ai.ui.ImageGenerationItem>()
-            val params = ImageGenerationParams(
-                model = Model(modelId = "image"),
-                prompt = "draw two",
-                numOfImages = 2,
-                credentials = RequestCredentials.Routed(
-                    "https://relay.test/runtime/v1/resources/img_fixture/images/generations",
-                    "relay-token",
-                ),
-            )
-            OpenAIProvider(client)
-                .generateImage(ProviderSetting.OpenAI(baseUrl = "https://provider.test/v1"), params)
-                .collect(items::add)
-            assertEquals(2, items.size)
-        } finally {
-            client.dispatcher.executorService.shutdown()
-            client.connectionPool.evictAll()
-        }
-    }
-
-    @Test fun `routed remote image uses strict downloader while fixed behavior stays compatible`() = runBlocking {
-        val requests = mutableListOf<Request>()
-        val client = OkHttpClient.Builder().addInterceptor { chain ->
-            requests += chain.request()
-            Response.Builder().request(chain.request()).protocol(Protocol.HTTP_1_1)
-                .code(200).message("OK")
-                .body("""{"data":[{"url":"http://127.0.0.1/private.png"}]}""".toResponseBody())
-                .build()
-        }.build()
-        try {
-            val provider = OpenAIProvider(client)
-            val setting = ProviderSetting.OpenAI(baseUrl = "https://provider.test/v1")
-            try {
-                provider.generateImage(
-                    setting,
-                    ImageGenerationParams(
-                        model = Model(modelId = "image"),
-                        prompt = "draw",
-                        credentials = RequestCredentials.Routed(
-                            "https://relay.test/runtime/v1/resources/image/images/generations",
-                            "relay-token",
-                        ),
-                    ),
-                ).collect()
-                fail("routed HTTP image URL was accepted")
-            } catch (error: java.io.IOException) {
-                assertEquals("routed_image_unsafe_url", error.message)
-            }
-            assertEquals(1, requests.size)
-            assertEquals("relay.test", requests.single().url.host)
         } finally {
             client.dispatcher.executorService.shutdown()
             client.connectionPool.evictAll()

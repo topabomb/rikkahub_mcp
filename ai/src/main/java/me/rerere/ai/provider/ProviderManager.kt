@@ -4,6 +4,10 @@ import android.content.Context
 import me.rerere.ai.provider.providers.ClaudeProvider
 import me.rerere.ai.provider.providers.GoogleProvider
 import me.rerere.ai.provider.providers.OpenAIProvider
+import kotlinx.coroutines.flow.Flow
+import me.rerere.ai.provider.images.ImageGenerationClientProtocol
+import me.rerere.ai.provider.images.ManagedImageGenerationProvider
+import me.rerere.ai.ui.ImageGenerationItem
 import okhttp3.OkHttpClient
 
 /**
@@ -12,6 +16,7 @@ import okhttp3.OkHttpClient
 class ProviderManager(client: OkHttpClient, context: Context) {
     // 存储已注册的Provider实例
     private val providers = mutableMapOf<String, Provider<*>>()
+    private val managedImageGeneration = ManagedImageGenerationProvider(client)
 
     init {
         // 注册默认Provider
@@ -54,4 +59,11 @@ class ProviderManager(client: OkHttpClient, context: Context) {
             is ProviderSetting.Claude -> getProvider("claude")
         } as Provider<T>
     }
+
+    suspend fun generateManagedImage(
+        protocol: ImageGenerationClientProtocol,
+        params: ImageGenerationParams,
+        headers: List<CustomHeader>,
+        credentials: RequestCredentials.Routed,
+    ): Flow<ImageGenerationItem> = managedImageGeneration.generate(protocol, params, headers, credentials)
 }

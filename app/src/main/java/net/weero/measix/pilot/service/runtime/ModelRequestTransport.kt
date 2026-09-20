@@ -24,6 +24,7 @@ internal suspend fun ModelRequestTarget.streamText(
     params: TextGenerationParams,
 ): Flow<MessageChunk> = when (this) {
     is ModelRequestTarget.Remote -> providers.getProviderByType(provider).streamText(provider, messages, requestParams(params))
+    is ModelRequestTarget.ManagedImage -> error("managed_image_text_unsupported")
 }
 
 internal suspend fun ModelRequestTarget.generateText(
@@ -37,6 +38,7 @@ internal suspend fun ModelRequestTarget.generateText(
         is ModelRequestTarget.Remote -> if (credentials is RequestCredentials.Routed) {
             collectRoutedText(streamText(providers, messages, params), params)
         } else providers.getProviderByType(provider).generateText(provider, messages, requestParams(params))
+        is ModelRequestTarget.ManagedImage -> error("managed_image_text_unsupported")
     }
 }
 
@@ -77,6 +79,10 @@ internal suspend fun ModelRequestTarget.generateImage(
             providers.getProviderByType(provider).generateImage(provider,
                 params.copy(customHeaders = params.customHeaders + headers, credentials = credentials))
         }
+        is ModelRequestTarget.ManagedImage -> {
+            validateManagedOverrides(headers, params.customHeaders, params.customBody)
+            providers.generateManagedImage(protocol, params, headers, credentials)
+        }
     }
 }
 
@@ -90,6 +96,7 @@ internal suspend fun ModelRequestTarget.editImage(
             providers.getProviderByType(provider).editImage(provider,
                 params.copy(customHeaders = params.customHeaders + headers, credentials = credentials))
         }
+        is ModelRequestTarget.ManagedImage -> error("managed_image_edit_unsupported")
     }
 }
 
@@ -111,4 +118,20 @@ private fun ModelRequestTarget.Remote.validateOverrides(customHeaders: List<Cust
             "enterprise_request_routing_override"
         }
     }
+}
+
+private fun validateManagedOverrides(
+    headers: List<CustomHeader>,
+    customHeaders: List<CustomHeader>,
+    customBody: List<CustomBody>,
+) {
+    val ownedHeaders = headers.map { it.name.lowercase(java.util.Locale.ROOT) }.toSet() + setOf(
+        "authorization", "proxy-authorization", "x-api-key", "x-goog-api-key", "host",
+        "content-length", "transfer-encoding", "connection",
+    )
+    check(customHeaders.none { it.name.lowercase(java.util.Locale.ROOT) in ownedHeaders }) {
+        "enterprise_request_header_conflict"
+    }
+    check(customBody.isEmpty()) { "enterprise_image_request_override" }
+    check(customHeaders.isEmpty()) { "enterprise_image_request_override" }
 }

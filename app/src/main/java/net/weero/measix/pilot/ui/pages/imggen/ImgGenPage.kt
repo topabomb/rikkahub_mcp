@@ -899,11 +899,12 @@ private fun SettingsBottomSheet(
                     verticalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
                     val allowed = capabilities?.allowedSizes
-                    ImageGenSize.entries.filter { allowed == null || it.value in allowed }.forEach { sizeOption ->
+                    val sizeOptions = allowed?.toList()?.sorted() ?: ImageGenSize.entries.map { it.value }
+                    sizeOptions.forEach { sizeOption ->
                         FilterChip(
-                            selected = size == sizeOption.value,
-                            onClick = { vm.updateSize(sizeOption.value) },
-                            label = { Text(sizeOption.value) }
+                            selected = size == sizeOption,
+                            onClick = { vm.updateSize(sizeOption) },
+                            label = { Text(sizeOption) }
                         )
                     }
 

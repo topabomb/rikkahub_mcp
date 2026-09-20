@@ -291,7 +291,7 @@ class EnterpriseVMTest {
             name = "Managed image",
             modelId = "private-upstream-model",
             enabled = false,
-            protocol = PlatformImageGenerationDefinitionClientProtocol.OPENAI_IMAGES_GENERATIONS,
+            protocol = me.rerere.ai.provider.images.ImageGenerationClientProtocol.OPENAI_IMAGES_GENERATIONS,
             maxImagesPerRequest = 3,
             allowedSizes = listOf("1024x1024"),
         )

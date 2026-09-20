@@ -23,6 +23,15 @@ internal object PlatformSnapshotMapper {
             require(model.displayName.isNotBlank() && model.upstreamModelKey.isNotBlank()) { "invalid_platform_model" }
         }
         snapshot.providers.forEach { require(it.displayName.isNotBlank()) { "invalid_platform_provider_name" } }
+        snapshot.imageGenerators.orEmpty().forEach { image ->
+            val validPath = when (image.clientProtocol) {
+                PlatformImageGenerationDefinitionClientProtocol.OPENAI_IMAGES_GENERATIONS ->
+                    image.runtimePath.endsWith("/images/generations")
+                PlatformImageGenerationDefinitionClientProtocol.DASHSCOPE_MULTIMODAL_GENERATION ->
+                    image.runtimePath == "/api/v1/services/aigc/multimodal-generation/generation"
+            }
+            require(validPath) { "invalid_platform_image_generation_path" }
+        }
         snapshot.mcp.forEach { require(it.displayName.isNotBlank()) { "invalid_platform_mcp_name" } }
         snapshot.assistants.forEach { assistant ->
             require(assistant.displayName.isNotBlank() && assistant.systemPrompt.isNotBlank()) { "invalid_platform_assistant" }
@@ -83,10 +92,15 @@ internal object PlatformSnapshotMapper {
                 name = value.displayName,
                 modelId = value.upstreamModelKey,
                 enabled = value.enabled,
-                protocol = value.clientProtocol,
+                protocol = when (value.clientProtocol) {
+                    PlatformImageGenerationDefinitionClientProtocol.OPENAI_IMAGES_GENERATIONS ->
+                        me.rerere.ai.provider.images.ImageGenerationClientProtocol.OPENAI_IMAGES_GENERATIONS
+                    PlatformImageGenerationDefinitionClientProtocol.DASHSCOPE_MULTIMODAL_GENERATION ->
+                        me.rerere.ai.provider.images.ImageGenerationClientProtocol.DASHSCOPE_MULTIMODAL_GENERATION
+                },
                 maxImagesPerRequest = value.maxImagesPerRequest.checkedInt(),
                 allowedSizes = value.allowedSizes,
-            ) },
+            ).also(EnterpriseImageGenerationResource::validate) },
             tts = snapshot.tts.map { value -> EnterpriseTtsResource(
                 id = value.ttsId, name = value.displayName, enabled = value.enabled,
                 protocol = when (value.clientProtocol) {

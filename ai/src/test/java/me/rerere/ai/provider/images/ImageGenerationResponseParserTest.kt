@@ -4,6 +4,7 @@ import me.rerere.ai.util.HttpException
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
+import org.junit.Assert.assertThrows
 import org.junit.Test
 
 class ImageGenerationResponseParserTest {
@@ -63,5 +64,23 @@ class ImageGenerationResponseParserTest {
         val parsed = parseImageGenerationResponseBody("""{"data":[]}""")
         assertTrue(parsed.items.isEmpty())
         assertFalse(parsed.allBlockedByModeration)
+    }
+
+    @Test
+    fun `parses DashScope nested image URLs and enforces requested count`() {
+        val parsed = parseDashScopeImageGenerationResponseBody(
+            """{"output":{"choices":[{"message":{"content":[{"image":"https://cdn.example/a.png"}]}},{"message":{"content":[{"image":"https://cdn.example/b.png"}]}}]}}""",
+            requestedImages = 2,
+        )
+        assertEquals(
+            listOf("https://cdn.example/a.png", "https://cdn.example/b.png"),
+            parsed.items.map { (it as ParsedImageGenerationItem.RemoteUrl).url },
+        )
+        assertThrows(IllegalStateException::class.java) {
+            parseDashScopeImageGenerationResponseBody(
+                """{"output":{"choices":[{"message":{"content":[]}}]}}""",
+                requestedImages = 1,
+            )
+        }
     }
 }

@@ -30,6 +30,7 @@ import kotlin.io.encoding.ExperimentalEncodingApi
 
 internal const val MAX_ROUTED_IMAGE_BYTES = 20L * 1024 * 1024
 private const val MAX_ROUTED_IMAGE_JSON_OVERHEAD_BYTES = 128L * 1024
+private const val MAX_DASHSCOPE_IMAGE_URL_BYTES = 16L * 1024
 internal const val MAX_ROUTED_IMAGE_REDIRECTS = 5
 
 internal fun maxRoutedImageResponseBytes(requestedImages: Int): Long {
@@ -37,6 +38,11 @@ internal fun maxRoutedImageResponseBytes(requestedImages: Int): Long {
     val encodedImageBytes = ((MAX_ROUTED_IMAGE_BYTES + 2L) / 3L) * 4L
     return requestedImages * (encodedImageBytes + MAX_ROUTED_IMAGE_JSON_OVERHEAD_BYTES) +
         MAX_ROUTED_IMAGE_JSON_OVERHEAD_BYTES
+}
+
+internal fun maxRoutedDashScopeImageResponseBytes(requestedImages: Int): Long {
+    require(requestedImages in 1..6) { "routed_image_invalid_requested_count" }
+    return MAX_ROUTED_IMAGE_JSON_OVERHEAD_BYTES + requestedImages * MAX_DASHSCOPE_IMAGE_URL_BYTES
 }
 
 internal data class RoutedImageHttpResponse(
@@ -291,6 +297,16 @@ internal fun Response.readBoundedImageGenerationResponse(requestedImages: Int): 
     val length = body.contentLength()
     if (length > maxBytes) throw IOException("routed_image_response_limit_exceeded")
     return parseImageGenerationResponseStream(BoundedImageResponseInputStream(body.byteStream(), maxBytes))
+}
+
+internal fun Response.readBoundedDashScopeImageGenerationResponse(requestedImages: Int): ImageGenerationResponseParse {
+    val maxBytes = maxRoutedDashScopeImageResponseBytes(requestedImages)
+    val length = body.contentLength()
+    if (length > maxBytes) throw IOException("routed_image_response_limit_exceeded")
+    return parseDashScopeImageGenerationResponseStream(
+        BoundedImageResponseInputStream(body.byteStream(), maxBytes),
+        requestedImages,
+    )
 }
 
 private class BoundedImageResponseInputStream(

@@ -48,6 +48,8 @@ internal data class ImageGenerationCapabilities(
     /** Null means the user-owned provider accepts its native size surface. */
     val allowedSizes: Set<String>?,
     val supportsPartialImages: Boolean,
+    val protocol: me.rerere.ai.provider.images.ImageGenerationClientProtocol =
+        me.rerere.ai.provider.images.ImageGenerationClientProtocol.OPENAI_IMAGES_GENERATIONS,
 )
 
 /** An explicit invalid reference remains visible; it never turns into a different selection. */
@@ -265,6 +267,7 @@ internal object ConfigurationResolver {
                         maxImagesPerRequest = definition.maxImagesPerRequest,
                         allowedSizes = definition.allowedSizes.toSet(),
                         supportsPartialImages = false,
+                        protocol = definition.protocol,
                     ),
                     ChatTransportCapabilities.BASIC,
                 )

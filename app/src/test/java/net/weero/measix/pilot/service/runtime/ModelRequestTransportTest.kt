@@ -79,16 +79,18 @@ class ModelRequestTransportTest {
 
     @Test fun `managed image requests reject user routing overrides before network IO`() = runBlocking {
         val providers = mockk<ProviderManager>()
-        val target = ModelRequestTarget.Remote(ProviderSetting.OpenAI(),
-            listOf(CustomHeader("X-Tenant", "binding")), RequestCredentials.fixed("fixed"))
+        val target = ModelRequestTarget.ManagedImage(
+            me.rerere.ai.provider.images.ImageGenerationClientProtocol.DASHSCOPE_MULTIMODAL_GENERATION,
+            listOf(CustomHeader("X-Tenant", "binding")),
+            RequestCredentials.Routed("https://platform.test/runtime/image", "fixed"),
+        )
         val model = Model(modelId = "image")
         assertThrows(IllegalStateException::class.java) {
             runBlocking { target.generateImage(providers, ImageGenerationParams(model, "draw",
                 customBody = listOf(CustomBody("route", JsonPrimitive("override"))))).collect() }
         }
         assertThrows(IllegalStateException::class.java) {
-            runBlocking { target.editImage(providers, ImageEditParams(model, "edit", listOf("unused.png"),
-                customHeaders = listOf(CustomHeader("Authorization", "other")))).collect() }
+            runBlocking { target.editImage(providers, ImageEditParams(model, "edit", listOf("unused.png"))).collect() }
         }
         io.mockk.verify { providers wasNot io.mockk.Called }
     }

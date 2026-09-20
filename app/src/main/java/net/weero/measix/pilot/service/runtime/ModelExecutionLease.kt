@@ -15,6 +15,7 @@ import kotlinx.coroutines.withContext
 import me.rerere.ai.provider.CustomHeader
 import me.rerere.ai.provider.ProviderSetting
 import me.rerere.ai.provider.RequestCredentials
+import me.rerere.ai.provider.images.ImageGenerationClientProtocol
 
 /** Request-local connection inputs; neither variant belongs in persisted or UI-visible Settings. */
 internal sealed interface ModelRequestTarget {
@@ -23,6 +24,17 @@ internal sealed interface ModelRequestTarget {
         val headers: List<CustomHeader> = emptyList(),
         val credentials: RequestCredentials = RequestCredentials.UserSettings,
     ) : ModelRequestTarget
+
+    class ManagedImage(
+        val protocol: ImageGenerationClientProtocol,
+        val headers: List<CustomHeader>,
+        val credentials: RequestCredentials.Routed,
+    ) : ModelRequestTarget
+}
+
+internal fun ModelRequestTarget.routedCredentialsOrNull(): RequestCredentials.Routed? = when (this) {
+    is ModelRequestTarget.Remote -> credentials as? RequestCredentials.Routed
+    is ModelRequestTarget.ManagedImage -> credentials
 }
 
 /** A request view can execute against its original owner but cannot release shared resources. */

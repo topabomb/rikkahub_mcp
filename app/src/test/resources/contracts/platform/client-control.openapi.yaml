@@ -688,6 +688,7 @@ components:
       - ANTHROPIC_MESSAGES
       - GOOGLE_GENERATE_CONTENT
       - OPENAI_IMAGES_GENERATIONS
+      - DASHSCOPE_MULTIMODAL_GENERATION
       - OPENAI_AUDIO_SPEECH
       - GEMINI_GENERATE_CONTENT_TTS
       - MIMO_CHAT_COMPLETIONS_TTS
@@ -1189,7 +1190,7 @@ components:
           minLength: 1
         clientProtocol:
           type: string
-          enum: [OPENAI_IMAGES_GENERATIONS]
+          enum: [OPENAI_IMAGES_GENERATIONS, DASHSCOPE_MULTIMODAL_GENERATION]
         upstreamModelKey:
           type: string
           minLength: 1

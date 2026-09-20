@@ -4,6 +4,7 @@ import kotlinx.serialization.Serializable
 import me.rerere.ai.provider.ModelAbility
 import me.rerere.ai.provider.ModelType
 import me.rerere.ai.provider.Modality
+import me.rerere.ai.provider.images.ImageGenerationClientProtocol
 import me.rerere.common.configuration.ConfigurationReference
 import me.rerere.common.configuration.EnterpriseAuthority
 import net.weero.measix.pilot.data.configuration.ConfigurationScope
@@ -65,10 +66,22 @@ internal data class EnterpriseImageGenerationResource(
     val name: String,
     val modelId: String,
     val enabled: Boolean = true,
-    val protocol: PlatformImageGenerationDefinitionClientProtocol,
+    val protocol: ImageGenerationClientProtocol,
     val maxImagesPerRequest: Int,
     val allowedSizes: List<String>,
 )
+
+internal fun EnterpriseImageGenerationResource.validate() {
+    check(name.isNotBlank() && modelId.isNotBlank()) { "invalid_enterprise_image_generation" }
+    check(maxImagesPerRequest in 1..6 && allowedSizes.isNotEmpty() &&
+        allowedSizes.distinct().size == allowedSizes.size && allowedSizes.all { size ->
+            val canonical = Regex("^[1-9][0-9]*x[1-9][0-9]*$").matches(size)
+            when (protocol) {
+                ImageGenerationClientProtocol.OPENAI_IMAGES_GENERATIONS -> size == "auto" || canonical
+                ImageGenerationClientProtocol.DASHSCOPE_MULTIMODAL_GENERATION -> canonical
+            }
+        }) { "invalid_enterprise_image_generation_capabilities" }
+}
 
 @Serializable
 internal data class EnterpriseTtsResource(

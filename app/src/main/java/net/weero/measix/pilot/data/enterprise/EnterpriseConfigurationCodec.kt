@@ -47,11 +47,7 @@ internal object EnterpriseConfigurationCodec {
             check(it.inputModalities.isNotEmpty() && it.outputModalities.isNotEmpty(), "invalid_model_modalities")
         }
         config.imageGenerators.forEach {
-            check(it.name.isNotBlank() && it.modelId.isNotBlank(), "invalid_enterprise_image_generation")
-            check(it.maxImagesPerRequest in 1..6 && it.allowedSizes.isNotEmpty() &&
-                it.allowedSizes.distinct().size == it.allowedSizes.size &&
-                it.allowedSizes.all { size -> size == "auto" || Regex("^[1-9][0-9]*x[1-9][0-9]*$").matches(size) },
-                "invalid_enterprise_image_generation_capabilities")
+            it.validate()
         }
         config.tts.forEach(EnterpriseTtsResource::validate)
         config.asr.forEach(EnterpriseAsrResource::validate)

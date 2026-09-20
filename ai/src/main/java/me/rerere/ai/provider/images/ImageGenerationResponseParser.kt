@@ -46,6 +46,33 @@ private data class ImageGenerationItemWire(
     val moderated: JsonElement? = null,
 )
 
+@Serializable
+private data class DashScopeImageGenerationResponseWire(
+    val output: DashScopeImageOutputWire? = null,
+    val code: String? = null,
+    val message: String? = null,
+)
+
+@Serializable
+private data class DashScopeImageOutputWire(
+    val choices: List<DashScopeImageChoiceWire> = emptyList(),
+)
+
+@Serializable
+private data class DashScopeImageChoiceWire(
+    val message: DashScopeImageMessageWire? = null,
+)
+
+@Serializable
+private data class DashScopeImageMessageWire(
+    val content: List<DashScopeImageContentWire> = emptyList(),
+)
+
+@Serializable
+private data class DashScopeImageContentWire(
+    val image: String? = null,
+)
+
 fun parseImageGenerationResponseBody(body: String): ImageGenerationResponseParse =
     parseImageGenerationResponse(json.decodeFromString<ImageGenerationResponseWire>(body))
 
@@ -53,6 +80,50 @@ fun parseImageGenerationResponseBody(body: String): ImageGenerationResponseParse
 @OptIn(ExperimentalSerializationApi::class)
 internal fun parseImageGenerationResponseStream(stream: InputStream): ImageGenerationResponseParse =
     parseImageGenerationResponse(json.decodeFromStream<ImageGenerationResponseWire>(stream))
+
+internal fun parseDashScopeImageGenerationResponseBody(
+    body: String,
+    requestedImages: Int,
+): ImageGenerationResponseParse = parseDashScopeImageGenerationResponse(
+    json.decodeFromString<DashScopeImageGenerationResponseWire>(body),
+    requestedImages,
+)
+
+@OptIn(ExperimentalSerializationApi::class)
+internal fun parseDashScopeImageGenerationResponseStream(
+    stream: InputStream,
+    requestedImages: Int,
+): ImageGenerationResponseParse = parseDashScopeImageGenerationResponse(
+    json.decodeFromStream<DashScopeImageGenerationResponseWire>(stream),
+    requestedImages,
+)
+
+private fun parseDashScopeImageGenerationResponse(
+    wire: DashScopeImageGenerationResponseWire,
+    requestedImages: Int,
+): ImageGenerationResponseParse {
+    require(requestedImages in 1..6) { "dashscope_image_invalid_requested_count" }
+    val items = wire.output?.choices.orEmpty()
+        .flatMap { it.message?.content.orEmpty() }
+        .mapNotNull { it.image?.takeIf(String::isNotBlank) }
+        .map { ParsedImageGenerationItem.RemoteUrl(it) }
+    if (items.isEmpty() && (!wire.code.isNullOrBlank() || !wire.message.isNullOrBlank())) {
+        throw formatProviderHttpError(
+            400,
+            json.encodeToString(
+                JsonObject(
+                    buildMap {
+                        wire.code?.let { put("code", JsonPrimitive(it)) }
+                        wire.message?.let { put("message", JsonPrimitive(it)) }
+                    },
+                ),
+            ),
+        )
+    }
+    check(items.isNotEmpty()) { "dashscope_image_response_empty" }
+    check(items.size <= requestedImages) { "dashscope_image_response_count_exceeded" }
+    return ImageGenerationResponseParse(items, allBlockedByModeration = false)
+}
 
 private fun parseImageGenerationResponse(wire: ImageGenerationResponseWire): ImageGenerationResponseParse {
     val items = mutableListOf<ParsedImageGenerationItem>()

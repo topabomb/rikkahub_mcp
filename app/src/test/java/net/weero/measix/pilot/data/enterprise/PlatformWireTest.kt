@@ -58,4 +58,24 @@ class PlatformWireTest {
         assertFalse(credentials.toString().contains(credentials.accessToken))
         assertFalse(credentials.toString().contains(credentials.refreshToken))
     }
+
+    @Test
+    fun `image generation wire accepts both declared protocols and rejects unknown values`() {
+        val snapshot = cases().first().jsonObject.getValue("value").jsonObject
+        val image = snapshot.getValue("imageGenerators").jsonArray.single().jsonObject
+        val dashScope = JsonObject(image + ("clientProtocol" to JsonPrimitive("DASHSCOPE_MULTIMODAL_GENERATION")))
+        val decoded = PlatformWireCodec.decode<PlatformManagedSnapshot>(
+            JsonObject(snapshot + ("imageGenerators" to JsonArray(listOf(dashScope)))).toString(),
+        )
+        assertEquals(
+            PlatformImageGenerationDefinitionClientProtocol.DASHSCOPE_MULTIMODAL_GENERATION,
+            requireNotNull(decoded.imageGenerators).single().clientProtocol,
+        )
+        val unknown = JsonObject(image + ("clientProtocol" to JsonPrimitive("UNKNOWN_IMAGE_PROTOCOL")))
+        assertThrows(IllegalArgumentException::class.java) {
+            PlatformWireCodec.decode<PlatformManagedSnapshot>(
+                JsonObject(snapshot + ("imageGenerators" to JsonArray(listOf(unknown)))).toString(),
+            )
+        }
+    }
 }

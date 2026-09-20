@@ -11,9 +11,9 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.runTest
 import me.rerere.ai.provider.ProviderManager
-import me.rerere.ai.provider.ProviderSetting
 import me.rerere.ai.provider.RequestCredentials
 import me.rerere.ai.provider.ModelType
+import me.rerere.ai.provider.images.ImageGenerationClientProtocol
 import net.weero.measix.pilot.AppScope
 import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.datastore.SettingsStore
@@ -82,14 +82,13 @@ class ModelExecutionServiceImageTest {
                 stopRequest = {},
                 bindOwner = { owner = it },
             )
-            var target: ModelRequestTarget.Remote? = null
-            snapshot.requests.execute { captured -> target = captured as ModelRequestTarget.Remote }
+            var target: ModelRequestTarget.ManagedImage? = null
+            snapshot.requests.execute { captured -> target = captured as ModelRequestTarget.ManagedImage }
             val routed = requireNotNull(target)
-            val credentials = routed.credentials as RequestCredentials.Routed
-            val provider = routed.provider as ProviderSetting.OpenAI
+            val credentials = routed.credentials
 
             assertEquals(image.modelId, snapshot.model.modelId)
-            assertEquals(image.modelId, provider.models.single().modelId)
+            assertEquals(ImageGenerationClientProtocol.OPENAI_IMAGES_GENERATIONS, routed.protocol)
             assertEquals(
                 execution.connection.runtime(image.id, execution.runtimePaths.getValue(image.id)),
                 credentials.endpoint,
@@ -104,6 +103,8 @@ class ModelExecutionServiceImageTest {
             assertEquals(image.maxImagesPerRequest, requireNotNull(snapshot.imageGeneration).maxImagesPerRequest)
             assertEquals(image.allowedSizes.toSet(), requireNotNull(snapshot.imageGeneration).allowedSizes)
             assertFalse(requireNotNull(snapshot.imageGeneration).supportsPartialImages)
+            assertEquals(ImageGenerationClientProtocol.OPENAI_IMAGES_GENERATIONS,
+                requireNotNull(snapshot.imageGeneration).protocol)
             assertEquals(ModelType.IMAGE, snapshot.model.type)
         } finally {
             owner?.release()

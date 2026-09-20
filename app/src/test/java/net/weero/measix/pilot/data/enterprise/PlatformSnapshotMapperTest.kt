@@ -168,6 +168,23 @@ class PlatformSnapshotMapperTest {
             assertThrows(IllegalArgumentException::class.java) { map(missing) }.message)
     }
 
+    @Test fun `DashScope image protocol maps to one domain protocol with canonical sizes`() {
+        val original = snapshot()
+        val image = requireNotNull(original.imageGenerators).single().copy(
+            clientProtocol = PlatformImageGenerationDefinitionClientProtocol.DASHSCOPE_MULTIMODAL_GENERATION,
+            upstreamModelKey = "wan2.7-image",
+            runtimePath = "/api/v1/services/aigc/multimodal-generation/generation",
+            allowedSizes = listOf("1024x1024"),
+        )
+        val candidate = map(original.copy(imageGenerators = listOf(image)))
+        val definition = candidate.configuration.imageGenerators.single()
+        assertEquals(me.rerere.ai.provider.images.ImageGenerationClientProtocol.DASHSCOPE_MULTIMODAL_GENERATION,
+            definition.protocol)
+        assertEquals(listOf("1024x1024"), definition.allowedSizes)
+        assertEquals(image.runtimePath,
+            (candidate.execution as EnterpriseExecution.Platform).runtimePaths.getValue(image.imageId))
+    }
+
     @Test fun `persisted configuration without additive image collection decodes as empty without schema migration`() {
         val configuration = map(snapshot()).configuration
         val json = EnterpriseConfigurationCodec.json
