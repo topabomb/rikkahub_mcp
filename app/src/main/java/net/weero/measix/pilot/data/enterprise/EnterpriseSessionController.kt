@@ -84,6 +84,7 @@ internal class EnterpriseExecutionLease internal constructor(
 /** Pins one in-flight platform Client request so reset/exit cannot erase its terminal response. */
 internal class EnterprisePlatformOperationLease internal constructor(
     internal val id: String,
+    val context: PlatformSessionContext,
     val access: RealmAccess.Enterprise?,
     private val releaseOwner: (suspend (EnterprisePlatformOperationLease) -> Unit)?,
 ) {
@@ -189,6 +190,7 @@ internal class EnterpriseSessionController(
         val session = manifest.session?.takeIf { it.id == context.sessionId }
         val operation = EnterprisePlatformOperationLease(
             id = Uuid.random().toString(),
+            context = context,
             access = session?.let { RealmAccess.Enterprise(it.identity.scope, it.id) },
             releaseOwner = ::releasePlatformOperation.takeIf { session != null },
         )

@@ -10,6 +10,7 @@ import net.weero.measix.pilot.data.configuration.configurationScopeFromStorageKe
 import net.weero.measix.pilot.data.db.AppDatabase
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -100,6 +101,21 @@ class Migration_12_13Test {
                 "SELECT * FROM ConversationEntity WHERE parent_conversation_id='parent'",
                 "index_ConversationEntity_parent_conversation_id",
             )
+        }
+    }
+
+    @Test
+    fun malformedLegacyEnterprisePrincipalAbortsInsteadOfLeavingUnreadableRows() {
+        val name = "migration-enterprise-malformed-principal"
+        helper.createDatabase(name, 12).use { db ->
+            db.execSQL(
+                "INSERT INTO ConversationEntity(id,assistant_id,title,create_at,update_at,suggestions,is_pinned,scope) " +
+                    "VALUES('conversation','managed~platform~bad~dep_example~asd_one','title',1,2,'[]',0," +
+                    "'enterprise~platform:bad!source~dep_example~dXNlcg')",
+            )
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            helper.runMigrationsAndValidate(name, 13, true, Migration_12_13).close()
         }
     }
 

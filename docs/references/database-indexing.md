@@ -34,7 +34,7 @@
 
 `Migration_11_12` 给 Conversation、Memory、Artifact、生成媒体、会话文件夹和收藏六类根记录追加 `scope TEXT NOT NULL DEFAULT 'personal'`。旧行的 ID、payload、引用、索引和外键不变；消息、turn、tool 和 context 通过所属会话确定域，不重复保存。ConfigurationScopeConverter 使用当时的来源、部署与用户编码，非法编码不能回退个人域。
 
-`Migration_12_13` 将上述六类根记录的企业 scope 从 `enterprise~sourceNamespace~deploymentId~userId` 一次性改写为 `enterprise~deploymentId~userId`，并同步改写 Conversation、Memory 与文件夹中的企业 ConfigurationReference 为 `managed~deploymentId~resourceId`。同一次迁移把高频域内读取索引改为以 `scope` 开头，避免地址变化后保留下来的多企业数据在列表、分页、记忆、文件、媒体、文件夹和收藏查询中互相扩大扫描；Child 外键、全库恢复、生命周期状态与唯一性查询继续保留各自不带 scope 的必要索引。迁移不改变 deploymentId、userId、资源 ID、主键、关系或内容；非规范旧值使迁移失败，运行时转换器只接受新格式。
+`Migration_12_13` 先验证上述六类根记录中的全部非 Personal scope，以及 Conversation、Memory 与文件夹中的全部 managed ConfigurationReference；任一旧值不规范即回滚。验证通过后，把企业 scope 从 `enterprise~sourceNamespace~deploymentId~userId` 一次性改写为 `enterprise~deploymentId~userId`，并把企业引用改写为 `managed~deploymentId~resourceId`。同一次迁移把高频域内读取索引改为以 `scope` 开头，避免地址变化后保留下来的多企业数据在列表、分页、记忆、文件、媒体、文件夹和收藏查询中互相扩大扫描；Child 外键、全库恢复、生命周期状态与唯一性查询继续保留各自不带 scope 的必要索引。迁移不改变 deploymentId、userId、资源 ID、主键、关系或内容；运行时转换器只接受新格式。
 
 会话助手列表、最近聊天、置顶、未归类/文件夹分页、文件夹列表和统计均在 SQL 内过滤完整 scope。FTS 在排序与限额之前经所属会话过滤 scope 和主会话，包含全局搜索与助手内搜索；索引仍是既有 message_fts 投影，不复制域数据。ConversationQueryService 负责选中域订阅及原 Session 授权，SelectedRealmPagingSource 对每次惰性加载重新校验，切域或结束订阅使旧源失效。此查询调整不改变 schema 或索引；按 ID 的页面与命令授权另由对应 application owner 校验，不能以索引代替访问授权。
 

@@ -72,6 +72,7 @@ class PlatformSessionNetworkTest {
         val selection = requireNotNull(sessions.readPresentation().selection)
         val access = selection.access as RealmAccess.Enterprise
         val oldLease = sessions.captureExecution(access, before.applied)
+        val oldOperation = sessions.capturePlatformOperation(access.sessionId)
         val oldExecution = oldLease.execution as EnterpriseExecution.Platform
         val session = requireNotNull(before.session)
         val discovery = PlatformWireCodec.decode<PlatformDiscovery>(fixture("discovery")).copy(
@@ -132,6 +133,7 @@ class PlatformSessionNetworkTest {
             assertEquals(before.applied, after.applied)
             assertEquals(newOrigin, after.session?.platform?.connection?.origin)
             assertEquals("https://platform.test", oldExecution.connection.origin)
+            assertEquals("https://platform.test", oldOperation.context.platform.connection.origin)
             val newLease = sessions.captureExecution(access, after.applied)
             try {
                 assertEquals(newOrigin, (newLease.execution as EnterpriseExecution.Platform).connection.origin)
@@ -168,6 +170,7 @@ class PlatformSessionNetworkTest {
             assertEquals(newOrigin, afterFailure.session?.platform?.connection?.origin)
             assertNotEquals(beforeFailure.session?.platform?.credential, afterFailure.session?.platform?.credential)
         } finally {
+            oldOperation.release()
             oldLease.release()
             server.stop(0)
             other.stop(0)
@@ -476,6 +479,49 @@ class PlatformSessionNetworkTest {
                 assertEquals(code, failure.problem?.code)
                 assertEquals(listOf(access to reason), invalidated)
             }
+        } finally {
+            server.stop(0)
+        }
+    }
+
+    @Test fun `terminal refresh while changing address invalidates the existing session`() = runBlocking {
+        val discovery = PlatformWireCodec.decode<PlatformDiscovery>(fixture("discovery"))
+        val current = AtomicReference(Triple(401, "session_expired", EnterpriseExitReason.AUTHORIZATION_EXPIRED))
+        val server = server {
+            when (requestURI.path) {
+                "/.well-known/measix" -> reply(200, PlatformWireCodec.json.encodeToString(discovery))
+                "/api/client/v1/sessions/refresh" -> {
+                    val (status, code) = current.get()
+                    reply(status, """{"type":"about:blank","title":"Unauthorized","status":$status,"code":"$code","forwarded":false}""")
+                }
+                else -> reply(404, "unexpected route")
+            }
+        }
+        try {
+            val sessions = owner(temporary.newFolder())
+            val old = PlatformConnection("https://platform.example", discovery)
+            val expired = PlatformWireCodec.decode<PlatformEnrollmentExchangeResponse>(fixture("enrollment-response"))
+                .copy(accessTokenExpiresAt = "1970-01-01T00:00:01Z")
+            val id = sessions.acceptPlatformEnrollment(sessions.beginPlatformEnrollment(), old, expired)
+            val access = sessions.completePlatformBootstrap(id, PlatformWireCodec.decode(fixture("bootstrap")))
+            sessions.synchronize(access, platformCandidate(exampleEnterprisePackage()))
+            val selection = sessions.switchRealm(
+                RealmSwitchRequest(requireNotNull(sessions.readPresentation().selection), access),
+            ) {}
+            val invalidated = mutableListOf<Pair<RealmAccess.Enterprise, EnterpriseExitReason>>()
+            val platform = PlatformEnterpriseService(
+                sessions,
+                PlatformControlClient(OkHttpClient()),
+                { Instant.ofEpochMilli(1000) },
+                onSessionInvalidated = { captured, reason -> invalidated += captured to reason },
+            )
+
+            val failure = runCatching {
+                platform.changeAddress(selection, "http://127.0.0.1:${server.address.port}")
+            }.exceptionOrNull()
+            assertTrue(failure.toString(), failure is PlatformHttpException)
+            assertEquals(listOf(access to EnterpriseExitReason.AUTHORIZATION_EXPIRED), invalidated)
+            assertEquals(old.origin, sessions.platformContext(access.sessionId).platform.connection.origin)
         } finally {
             server.stop(0)
         }

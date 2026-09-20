@@ -97,7 +97,7 @@ internal class PlatformEnterpriseService(
             ?: throw EnterpriseConfigurationException("enterprise_session_required")
         val operation = sessions.capturePlatformOperation(access.sessionId)
         try {
-            val current = sessions.platformContext(access.sessionId)
+            val current = operation.context
             val normalized = EnrollmentMaterialParser.normalizeOrigin(rawOrigin)
             if (normalized == current.platform.connection.origin) return access
             val candidate = client.discover(normalized)
@@ -116,6 +116,9 @@ internal class PlatformEnterpriseService(
                 }
                 sessions.acceptPlatformAddress(selection, candidate, bootstrap)
             }
+        } catch (error: PlatformHttpException) {
+            operation.access?.let { notifyRevoked(it, error) }
+            throw error
         } finally {
             operation.release()
         }
@@ -194,14 +197,24 @@ internal class PlatformEnterpriseService(
         return sessions.confirmPlatformExecution(access, requireNotNull(input.candidate))
     }
 
-    private suspend fun currentAccessToken(sessionId: String): PlatformAccessToken = refresh.withLock {
-        sessions.platformAccessToken(sessionId) ?: refreshLocked(sessionId)
+    private suspend fun currentAccessToken(
+        sessionId: String,
+        connection: PlatformConnection,
+    ): PlatformAccessToken = refresh.withLock {
+        sessions.platformAccessToken(sessionId) ?: refreshLocked(sessionId, connection)
     }
 
-    suspend fun accessToken(sessionId: String): PlatformAccessToken {
+    suspend fun accessToken(
+        sessionId: String,
+        connection: PlatformConnection? = null,
+    ): PlatformAccessToken {
         val operation = sessions.capturePlatformOperation(sessionId)
         return try {
-            currentAccessToken(sessionId)
+            val frozen = connection ?: operation.context.platform.connection
+            check(frozen.authority == operation.context.platform.connection.authority) {
+                "enterprise_platform_authority_changed"
+            }
+            currentAccessToken(sessionId, frozen)
         } catch (error: PlatformHttpException) {
             operation.access?.let { notifyRevoked(it, error) }
             throw error
@@ -297,15 +310,15 @@ internal class PlatformEnterpriseService(
     suspend fun <T> read(sessionId: String, request: suspend (PlatformConnection, String) -> T): T {
         val operation = sessions.capturePlatformOperation(sessionId)
         return try {
-            val token = currentAccessToken(sessionId)
-            val connection = sessions.platformContext(sessionId).platform.connection
+            val connection = operation.context.platform.connection
+            val token = currentAccessToken(sessionId, connection)
             try {
                 request(connection, token.value)
             } catch (error: PlatformHttpException) {
                 if (error.status != 401 || error.problem?.code != "invalid_credential") throw error
                 val replacement = refresh.withLock {
                     val latest = sessions.platformAccessToken(sessionId)
-                    if (latest != null && latest !== token) latest else refreshLocked(sessionId)
+                    if (latest != null && latest !== token) latest else refreshLocked(sessionId, connection)
                 }
                 sessions.platformContext(sessionId)
                 request(connection, replacement.value)

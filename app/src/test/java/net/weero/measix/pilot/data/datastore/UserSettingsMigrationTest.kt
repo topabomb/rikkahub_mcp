@@ -6,7 +6,10 @@ import androidx.datastore.preferences.core.emptyPreferences
 import androidx.datastore.preferences.core.mutablePreferencesOf
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.SerializationException
+import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.int
 import net.weero.measix.pilot.data.configuration.ConfigurationScope
 import net.weero.measix.pilot.data.configuration.GatewayPreference
 import net.weero.measix.pilot.data.configuration.LegacyEnterprisePrincipalEncoding
@@ -47,6 +50,39 @@ class UserSettingsMigrationTest {
         assertTrue(migrated.contains("\"authority\":{\"deploymentId\":\"dep_example\"}"))
         assertTrue(migrated.contains("\"sourceNamespace\":\"platform:$hash\""))
         assertTrue(migrated.contains("\"default\":\"$legacyReference\""))
+    }
+
+    @Test
+    fun `enterprise principal migration merges scopes and catalog owners retired from two addresses`() {
+        val firstHash = "a".repeat(64)
+        val secondHash = "b".repeat(64)
+        fun scope(hash: String) =
+            """{"type":"enterprise","authority":{"sourceNamespace":"platform:$hash","deploymentId":"dep_example"},"userId":"usr_example"}"""
+        val settings = """{"preferences":{"scopes":[
+            {"scope":${scope(firstHash)},"selections":{"assistantId":"managed~platform~$firstHash~dep_example~asd_first"},"assistantUsage":[{"assistantId":"managed~platform~$firstHash~dep_example~asd_first"}],"gateways":[],"lastConversationId":null},
+            {"scope":${scope(secondHash)},"selections":{"assistantId":"managed~platform~$secondHash~dep_example~asd_second"},"assistantUsage":[{"assistantId":"managed~platform~$secondHash~dep_example~asd_second"}],"gateways":[],"lastConversationId":"00000000-0000-0000-0000-000000000002"}
+        ]}}""".trimIndent()
+        val migratedSettings = JsonInstant.parseToJsonElement(
+            requireNotNull(LegacyEnterprisePrincipalEncoding.migrateSettingsJson(settings)),
+        ).jsonObject.getValue("preferences").jsonObject.getValue("scopes").jsonArray
+        assertEquals(1, migratedSettings.size)
+        val merged = migratedSettings.single().jsonObject
+        assertEquals("managed~dep_example~asd_second",
+            merged.getValue("selections").jsonObject.getValue("assistantId").jsonPrimitive.content)
+        assertEquals(2, merged.getValue("assistantUsage").jsonArray.size)
+
+        fun catalog(hash: String, generation: Int) = """{
+            "scope":${scope(hash)},"serverId":"managed~platform~$hash~dep_example~mcp_one",
+            "revision":$generation,"definitionDigest":"sha256:${"c".repeat(64)}","catalogDigest":"sha256:${"d".repeat(64)}",
+            "tools":[{"name":"tool-$generation","inputSchema":{"type":"object"}}],
+            "managed":{"generation":$generation,"snapshotHash":"sha256:${"e".repeat(64)}","gatewaySurface":{"version":1,"hash":"sha256:${"f".repeat(64)}"}}
+        }""".trimIndent()
+        val catalogs = """{"formatVersion":1,"catalogs":[${catalog(firstHash, 1)},${catalog(secondHash, 2)}]}"""
+        val migratedCatalogs = JsonInstant.parseToJsonElement(
+            requireNotNull(LegacyEnterprisePrincipalEncoding.migrateMcpCatalogJson(catalogs)),
+        ).jsonObject.getValue("catalogs").jsonArray
+        assertEquals(1, migratedCatalogs.size)
+        assertEquals(2, migratedCatalogs.single().jsonObject.getValue("revision").jsonPrimitive.int)
     }
 
     @Test

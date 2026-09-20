@@ -4,6 +4,7 @@ import java.net.URI
 import java.time.Instant
 import java.util.Locale
 import kotlinx.serialization.json.Json
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 
 internal object EnrollmentMaterial {
     data class Platform(val platformOrigin: String, val code: String, val expiresAt: Instant) {
@@ -109,16 +110,30 @@ internal class EnrollmentMaterialParser {
 
     companion object {
         internal fun normalizeOrigin(value: String): String {
-            if (value.length !in 1..1024) fail("invalid_enterprise_platform_origin")
-            val uri = try { URI(value) } catch (_: Exception) { fail("invalid_enterprise_platform_origin") }
+            val trimmed = value.trim()
+            if (trimmed.length !in 1..1024) fail("invalid_enterprise_platform_origin")
+            val uri = try { URI(trimmed) } catch (_: Exception) { fail("invalid_enterprise_platform_origin") }
             val scheme = uri.scheme?.lowercase(Locale.ROOT)
             val host = uri.host?.lowercase(Locale.ROOT) ?: fail("invalid_enterprise_platform_origin")
             if (scheme !in setOf("http", "https")) fail("invalid_enterprise_platform_origin")
             if (uri.isOpaque || uri.rawUserInfo != null || uri.rawQuery != null || uri.rawFragment != null ||
                 uri.rawPath !in listOf("", "/") || uri.port !in -1..65535 || uri.port == 0 ||
                 uri.rawAuthority.endsWith(':')) fail("invalid_enterprise_platform_origin")
+            val canonicalHost = if (host.startsWith('[')) {
+                val literal = trimmed.toHttpUrlOrNull()?.host ?: fail("invalid_enterprise_platform_origin")
+                if (':' !in literal || '%' in literal) fail("invalid_enterprise_platform_origin")
+                "[$literal]"
+            } else {
+                if (!validDnsHostname(host)) fail("invalid_enterprise_platform_origin")
+                host
+            }
             val port = uri.port.takeUnless { it == -1 || (scheme == "https" && it == 443) || (scheme == "http" && it == 80) }
-            return "$scheme://$host${port?.let { ":$it" } ?: ""}"
+            return "$scheme://$canonicalHost${port?.let { ":$it" } ?: ""}"
+        }
+
+        private fun validDnsHostname(host: String): Boolean = host.length <= 253 && host.split('.').all { label ->
+            label.length in 1..63 && label.first().isLetterOrDigit() && label.last().isLetterOrDigit() &&
+                label.all { it in 'a'..'z' || it in '0'..'9' || it == '-' }
         }
 
         const val MAX_BYTES = 2048

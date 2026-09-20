@@ -36,9 +36,11 @@ class EnrollmentMaterialParserTest {
         mapOf(
             "http://127.0.0.1:8080/" to "http://127.0.0.1:8080",
             "http://[::1]" to "http://[::1]",
+            "http://[0:0:0:0:0:0:0:1]" to "http://[::1]",
             "HTTP://CORE.LAN:80/" to "http://core.lan",
             "https://192.168.1.2:8443" to "https://192.168.1.2:8443",
         ).forEach { (input, expected) -> assertEquals(expected, parser.parse(wire(input)).platformOrigin) }
+        assertEquals("https://core.example", EnrollmentMaterialParser.normalizeOrigin(" HTTPS://Core.Example:443/ "))
         listOf(
             "ftp://example.com",
             "http://user:secret@example.com",
@@ -48,6 +50,8 @@ class EnrollmentMaterialParserTest {
             "https://example.com:0",
             "https://example.com:65536",
             "https:///example.com",
+            "https://under_score.example",
+            "http://[fe80::1%25eth0]",
         ).forEach { assertRejected(wire(it)) }
         listOf(
             "not-a-time",

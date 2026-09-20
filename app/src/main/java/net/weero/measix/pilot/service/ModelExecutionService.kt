@@ -308,7 +308,9 @@ internal class ModelExecutionService(
             else providers.getProviderByType(initialTarget.provider).requestMediaCapabilities(initialTarget.provider, model)
         val modelAdmission: suspend ((ModelRequestTarget) -> Unit) -> Unit = { accept ->
             // Refresh belongs to the Session owner and must happen outside its configuration lock.
-            val platformToken = platformExecution?.let { platform.accessToken((access as RealmAccess.Enterprise).sessionId) }
+            val platformToken = platformExecution?.let {
+                platform.accessToken((access as RealmAccess.Enterprise).sessionId, it.connection)
+            }
             withConfiguration(access, page) { latest ->
                 currentCoroutineContext().ensureActive()
                 validateAssistant(latest.configuration)

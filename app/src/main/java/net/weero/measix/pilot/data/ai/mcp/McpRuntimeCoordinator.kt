@@ -575,7 +575,7 @@ class McpRuntimeCoordinator internal constructor(
                     add(McpConnectionDefinition.ManagedPlatform(access, id, definition.name,
                         execution, requireNotNull(definition.authOwnership), bindings.version, interactionId) {
                         check(bindings.execution == execution) { "enterprise_execution_changed_during_mcp_request" }
-                        val token = platform.accessToken(access.sessionId)
+                        val token = platform.accessToken(access.sessionId, execution.connection)
                         check(bindings.execution == execution) { "enterprise_execution_changed_during_mcp_request" }
                         sessions.requirePublishedRealmAccess(access)
                         token.value

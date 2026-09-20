@@ -287,8 +287,9 @@ internal class SpeechApplicationService(
                 }
                 val realtimeTransport = realtimeDefinition?.let { definition ->
                     val lease = requireNotNull(original.bindings)
-                    val token = platform.accessToken(lease.sessionId)
-                    transport.platformRealtimeTarget(lease.execution as EnterpriseExecution.Platform,
+                    val execution = lease.execution as EnterpriseExecution.Platform
+                    val token = platform.accessToken(lease.sessionId, execution.connection)
+                    transport.platformRealtimeTarget(execution,
                         capture.reference as ConfigurationReference.Enterprise, definition, lease.version,
                         capture.interactionId, token.value)
                 }
@@ -382,8 +383,8 @@ internal class SpeechApplicationService(
     }
 
     private suspend fun platformTarget(capture: SpeechCapture, lease: EnterpriseExecutionLease): me.rerere.speech.SpeechHttpTransport {
-        val token = platform.accessToken(lease.sessionId)
         val execution = lease.execution as EnterpriseExecution.Platform
+        val token = platform.accessToken(lease.sessionId, execution.connection)
         return transport.platformTarget(execution, capture.reference as ConfigurationReference.Enterprise,
             lease.version, capture.interactionId, token.value)
     }

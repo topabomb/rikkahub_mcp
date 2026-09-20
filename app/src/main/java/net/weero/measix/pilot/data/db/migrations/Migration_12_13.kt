@@ -2,36 +2,52 @@ package net.weero.measix.pilot.data.db.migrations
 
 import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
+import net.weero.measix.pilot.data.configuration.LegacyEnterprisePrincipalEncoding
 
 /** Drops the retired URL-derived source from every durable enterprise principal and reference. */
 val Migration_12_13 = object : Migration(12, 13) {
     override fun migrate(db: SupportSQLiteDatabase) {
-        listOf(
+        val scopedTables = listOf(
             "ConversationEntity",
             "MemoryEntity",
             "artifact",
             "GenMediaEntity",
             "conversation_folder",
             "favorites",
-        ).forEach { table ->
-            db.execSQL(
-                """UPDATE `$table`
-                    SET `scope` = 'enterprise~' || substr(`scope`, 12 + instr(substr(`scope`, 12), '~'))
-                    WHERE `scope` LIKE 'enterprise~platform:%~%~%'""".trimIndent(),
-            )
+        )
+        scopedTables.forEach { table ->
+            val replacements = mutableListOf<Pair<String, String>>()
+            db.query("SELECT DISTINCT `scope` FROM `$table` WHERE `scope` <> 'personal'").use { cursor ->
+                while (cursor.moveToNext()) {
+                    val old = cursor.getString(0)
+                    val new = requireNotNull(LegacyEnterprisePrincipalEncoding.migrateScopeStorageKey(old)) {
+                        "invalid_legacy_enterprise_scope"
+                    }
+                    replacements += old to new
+                }
+            }
+            replacements.forEach { (old, new) ->
+                db.execSQL("UPDATE `$table` SET `scope` = ? WHERE `scope` = ?", arrayOf(new, old))
+            }
         }
         listOf(
             "ConversationEntity" to "assistant_id",
             "MemoryEntity" to "assistant_id",
             "conversation_folder" to "assistant_id",
         ).forEach { (table, column) ->
-            db.execSQL(
-                """UPDATE `$table`
-                    SET `$column` = 'managed~' || substr(`$column`, 9 +
-                        instr(substr(`$column`, 9), '~') +
-                        instr(substr(substr(`$column`, 9), instr(substr(`$column`, 9), '~') + 1), '~'))
-                    WHERE `$column` LIKE 'managed~platform~%~%~%'""".trimIndent(),
-            )
+            val replacements = mutableListOf<Pair<String, String>>()
+            db.query("SELECT DISTINCT `$column` FROM `$table` WHERE `$column` LIKE 'managed~%'").use { cursor ->
+                while (cursor.moveToNext()) {
+                    val old = cursor.getString(0)
+                    val new = requireNotNull(LegacyEnterprisePrincipalEncoding.migrateReference(old)) {
+                        "invalid_legacy_enterprise_reference"
+                    }
+                    replacements += old to new
+                }
+            }
+            replacements.forEach { (old, new) ->
+                db.execSQL("UPDATE `$table` SET `$column` = ? WHERE `$column` = ?", arrayOf(new, old))
+            }
         }
 
         listOf(
