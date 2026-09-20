@@ -36,6 +36,10 @@ internal sealed interface EnterpriseState {
 }
 
 internal data class EnterpriseExitRequest(val access: RealmAccess.Enterprise, val selection: RealmSelection)
+internal data class EnterpriseAddressChangeRequest(
+    val access: RealmAccess.Enterprise,
+    val selection: RealmSelection,
+)
 internal data class RealmSwitchRequest(val selection: RealmSelection, val target: RealmAccess)
 internal data class EnterprisePresentation(val state: EnterpriseState, val selection: RealmSelection?)
 internal data class EnterpriseExitToken(val access: RealmAccess.Enterprise, val reason: EnterpriseExitReason)
@@ -299,16 +303,14 @@ internal class EnterpriseSessionController(
 
     /** Rebinds the current Session to another network origin without changing its durable principal. */
     suspend fun acceptPlatformAddress(
-        selection: RealmSelection,
+        request: EnterpriseAddressChangeRequest,
         connection: PlatformConnection,
         bootstrap: PlatformBootstrap,
     ): RealmAccess.Enterprise = mutex.withLock {
-        val access = selection.access as? RealmAccess.Enterprise
-            ?: fail("enterprise_session_required")
         val current = ensureLoaded()
-        if (selection.revision != selectionRevision.value ||
-            current.manifest.selectedScope != access.scope ||
-            !allowsDataAccess(current.manifest, access)
+        if (request.selection.revision != selectionRevision.value ||
+            exitSelection(current.manifest).access != request.selection.access ||
+            !allowsDataAccess(current.manifest, request.access)
         ) {
             fail("enterprise_selection_revoked")
         }

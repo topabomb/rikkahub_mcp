@@ -1615,7 +1615,7 @@
   <string name="enterprise_exit_confirm">Выйти из %1$s? Корпоративные задачи остановятся, и приложение вернётся в личное пространство. Данные организации останутся изолированными.</string>
   <string name="enterprise_signed_out">Вход не выполнен</string>
   <string name="enterprise_pending">Подключено, ожидание настроек</string>
-  <string name="enterprise_ready">Готово</string>
+  <string name="enterprise_ready">Локальная конфигурация доступна</string>
   <string name="enterprise_offline">Нет сети</string>
   <string name="enterprise_closing">Выход из организации</string>
   <string name="enterprise_reauth">Войдите снова</string>
@@ -1786,4 +1786,5 @@
   <string name="enterprise_address_edit_supporting">При изменении адреса текущая организация, пользователь, сеанс и локальные данные сохраняются. Новый адрес должен принадлежать этой организации.</string>
   <string name="enterprise_address_changed">Адрес организации изменён</string>
   <string name="enterprise_address_change_failed">Не удалось изменить адрес организации</string>
+  <string name="enterprise_sync_failed_cached">Последняя синхронизация конфигурации не удалась. Локально примененная конфигурация по-прежнему доступна. Повторите попытку, когда корпоративный сервис станет доступен.</string>
 </resources>

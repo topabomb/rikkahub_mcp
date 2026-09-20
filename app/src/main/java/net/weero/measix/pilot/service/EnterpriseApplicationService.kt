@@ -137,18 +137,20 @@ internal class EnterpriseApplicationService(
             switchRealm(RealmSwitchRequest(selection, access))
         }
     }
-    suspend fun synchronize(access: RealmAccess.Enterprise) { recovery.awaitReady(); synchronization.synchronize(access) }
-    suspend fun changeAddress(selection: RealmSelection, origin: String) {
+    suspend fun synchronize(access: RealmAccess.Enterprise) {
         recovery.awaitReady()
-        val access = selection.access as? RealmAccess.Enterprise
-            ?: throw EnterpriseConfigurationException("enterprise_session_required")
-        if (sessions.readPresentation().selection != selection) {
+        synchronization.synchronize(access)
+        enrollmentRecoveryFailure.value = null
+    }
+    suspend fun changeAddress(request: EnterpriseAddressChangeRequest, origin: String) {
+        recovery.awaitReady()
+        if (sessions.readPresentation().selection != request.selection) {
             throw EnterpriseConfigurationException("enterprise_selection_revoked")
         }
         val normalized = EnrollmentMaterialParser.normalizeOrigin(origin)
-        if (sessions.platformContext(access.sessionId).platform.connection.origin == normalized) return
-        platform.changeAddress(selection, normalized)
-        portals.closeAndAwait(access, PortalCloseReason.CONNECTION_CHANGED)
+        if (sessions.platformContext(request.access.sessionId).platform.connection.origin == normalized) return
+        platform.changeAddress(request, normalized)
+        portals.closeAndAwait(request.access, PortalCloseReason.CONNECTION_CHANGED)
     }
     suspend fun budgets(selection: RealmSelection, access: RealmAccess.Enterprise): PlatformUserBudgetView {
         recovery.awaitReady()

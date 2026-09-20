@@ -1615,7 +1615,7 @@
   <string name="enterprise_exit_confirm">Sign out of %1$s? Enterprise work will stop and the app will return to personal space. Existing enterprise data stays isolated.</string>
   <string name="enterprise_signed_out">Not signed in</string>
   <string name="enterprise_pending">Joined, waiting for configuration</string>
-  <string name="enterprise_ready">Ready</string>
+  <string name="enterprise_ready">Local configuration available</string>
   <string name="enterprise_offline">Offline</string>
   <string name="enterprise_closing">Signing out</string>
   <string name="enterprise_reauth">Sign in again</string>
@@ -1787,4 +1787,5 @@
   <string name="enterprise_address_edit_supporting">Changing the address keeps the current enterprise, user, session, and local data. The new address must belong to this enterprise.</string>
   <string name="enterprise_address_changed">Enterprise address changed</string>
   <string name="enterprise_address_change_failed">Could not change enterprise address</string>
+  <string name="enterprise_sync_failed_cached">The latest configuration sync failed. The locally applied configuration remains available. Retry when the enterprise service is reachable.</string>
 </resources>

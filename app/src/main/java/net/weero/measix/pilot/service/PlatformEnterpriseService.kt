@@ -92,33 +92,31 @@ internal class PlatformEnterpriseService(
     }
 
     /** Changes only the current Session's network route after the same Core principal proves itself. */
-    suspend fun changeAddress(selection: RealmSelection, rawOrigin: String): RealmAccess.Enterprise {
-        val access = selection.access as? RealmAccess.Enterprise
-            ?: throw EnterpriseConfigurationException("enterprise_session_required")
-        val operation = sessions.capturePlatformOperation(access.sessionId)
+    suspend fun changeAddress(request: EnterpriseAddressChangeRequest, rawOrigin: String): RealmAccess.Enterprise {
+        val operation = sessions.capturePlatformOperation(request.access.sessionId)
         try {
+            if (operation.access != request.access) {
+                throw EnterpriseConfigurationException("enterprise_data_access_unavailable")
+            }
             val current = operation.context
             val normalized = EnrollmentMaterialParser.normalizeOrigin(rawOrigin)
-            if (normalized == current.platform.connection.origin) return access
+            if (normalized == current.platform.connection.origin) return request.access
             val candidate = client.discover(normalized)
-            if (candidate.discovery.deploymentId != access.scope.authority.deploymentId) {
+            if (candidate.discovery.deploymentId != request.access.scope.authority.deploymentId) {
                 throw EnterpriseConfigurationException("enterprise_address_deployment_mismatch")
             }
             return refresh.withLock {
-                val existing = sessions.platformAccessToken(access.sessionId)
-                var token = existing ?: refreshLocked(access.sessionId, candidate)
+                val existing = sessions.platformAccessToken(request.access.sessionId)
+                var token = existing ?: refreshLocked(request.access.sessionId, candidate)
                 val bootstrap = try {
                     client.bootstrap(candidate, token.value)
                 } catch (error: PlatformHttpException) {
                     if (error.status != 401 || error.problem?.code != "invalid_credential" || existing == null) throw error
-                    token = refreshLocked(access.sessionId, candidate)
+                    token = refreshLocked(request.access.sessionId, candidate)
                     client.bootstrap(candidate, token.value)
                 }
-                sessions.acceptPlatformAddress(selection, candidate, bootstrap)
+                sessions.acceptPlatformAddress(request, candidate, bootstrap)
             }
-        } catch (error: PlatformHttpException) {
-            operation.access?.let { notifyRevoked(it, error) }
-            throw error
         } finally {
             operation.release()
         }

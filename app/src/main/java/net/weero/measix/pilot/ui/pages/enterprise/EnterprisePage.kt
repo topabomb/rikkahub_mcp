@@ -284,10 +284,14 @@ internal fun EnterprisePage(openUsage: Boolean = false, vm: EnterpriseVM = koinV
                         Text(stringResource(R.string.enterprise_identity_deleted_detail), color = MaterialTheme.colorScheme.error)
                     }
                 }
+                val cachedSyncFailure = state?.enrollmentRecoveryFailure?.takeIf {
+                    state?.access != null && state?.generation != null
+                }
+                val pageRecoveryFailure = state?.enrollmentRecoveryFailure.takeIf { cachedSyncFailure == null }
                 val feedback = remember { BringIntoViewRequester() }
                 Column(Modifier.widthIn(max = 720.dp).fillMaxWidth().bringIntoViewRequester(feedback)) {
                     if (error != null || state?.failure != null || state?.exitFailure != null ||
-                        state?.enrollmentRecoveryFailure != null || state?.recoveryLogoutFailure != null) {
+                        pageRecoveryFailure != null || state?.recoveryLogoutFailure != null) {
                         Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                             Text(
                                 stringResource(error?.resource ?: if (state?.recoveryLogoutFailure != null)
@@ -296,7 +300,7 @@ internal fun EnterprisePage(openUsage: Boolean = false, vm: EnterpriseVM = koinV
                                 color = MaterialTheme.colorScheme.error,
                             )
                             listOfNotNull(error?.detail, state?.failure, state?.exitFailure?.reason,
-                                state?.enrollmentRecoveryFailure, state?.recoveryLogoutFailure)
+                                pageRecoveryFailure, state?.recoveryLogoutFailure)
                                 .distinct()
                                 .forEach { detail ->
                                     SelectionContainer {
@@ -352,6 +356,20 @@ internal fun EnterprisePage(openUsage: Boolean = false, vm: EnterpriseVM = koinV
                         }
                         if (state?.phase == EnterpriseSessionPhase.CONFIGURATION_PENDING) {
                             Text(stringResource(R.string.enterprise_pending_next_step), style = MaterialTheme.typography.bodySmall)
+                        }
+                        cachedSyncFailure?.let { detail ->
+                            Text(
+                                stringResource(R.string.enterprise_sync_failed_cached),
+                                color = MaterialTheme.colorScheme.error,
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                            SelectionContainer {
+                                Text(
+                                    detail,
+                                    color = MaterialTheme.colorScheme.error,
+                                    style = MaterialTheme.typography.labelSmall,
+                                )
+                            }
                         }
                         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             OutlinedButton(onClick = vm::synchronize, enabled = !busy && state?.phase != EnterpriseSessionPhase.REAUTH_REQUIRED) {

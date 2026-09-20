@@ -1615,7 +1615,7 @@
   <string name="enterprise_exit_confirm">%1$s からログアウトしますか？企業の処理が停止し、個人スペースに戻ります。既存の企業データは引き続き分離されます。</string>
   <string name="enterprise_signed_out">未ログイン</string>
   <string name="enterprise_pending">接続済み、設定待ち</string>
-  <string name="enterprise_ready">準備完了</string>
+  <string name="enterprise_ready">端末内の設定を利用可能</string>
   <string name="enterprise_offline">オフライン</string>
   <string name="enterprise_closing">ログアウト中</string>
   <string name="enterprise_reauth">再ログインが必要</string>
@@ -1786,4 +1786,5 @@
   <string name="enterprise_address_edit_supporting">アドレスを変更しても、現在の企業、ユーザー、セッション、端末内データは維持されます。新しいアドレスはこの企業に属している必要があります。</string>
   <string name="enterprise_address_changed">企業アドレスを変更しました</string>
   <string name="enterprise_address_change_failed">企業アドレスを変更できませんでした</string>
+  <string name="enterprise_sync_failed_cached">最新の設定同期に失敗しました。端末に適用済みの設定は引き続き利用できます。企業サービスが利用可能になってから再試行してください。</string>
 </resources>

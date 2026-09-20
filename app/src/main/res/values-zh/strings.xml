@@ -1615,7 +1615,7 @@
   <string name="enterprise_exit_confirm">退出 %1$s？企业任务将停止，应用将返回个人空间。已有企业数据继续保持隔离。</string>
   <string name="enterprise_signed_out">未登录</string>
   <string name="enterprise_pending">已接入，待配置</string>
-  <string name="enterprise_ready">已就绪</string>
+  <string name="enterprise_ready">本机配置可用</string>
   <string name="enterprise_offline">离线</string>
   <string name="enterprise_closing">正在退出</string>
   <string name="enterprise_reauth">请重新登录</string>
@@ -1786,4 +1786,5 @@
   <string name="enterprise_address_edit_supporting">更改地址不会改变当前企业、用户、会话和本机数据。新地址必须属于当前企业。</string>
   <string name="enterprise_address_changed">企业地址已更改</string>
   <string name="enterprise_address_change_failed">无法更改企业地址</string>
+  <string name="enterprise_sync_failed_cached">最近一次配置同步失败。本机已生效配置仍可用，请在企业服务恢复后重试。</string>
 </resources>

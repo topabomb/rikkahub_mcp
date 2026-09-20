@@ -28,7 +28,7 @@ internal data class PortalPresentation(
     val destination: PortalDestination = PortalDestination.HOME,
 )
 internal data class EnterpriseExitConfirmation(val request: EnterpriseExitRequest, val enterpriseName: String?)
-internal data class EnterpriseAddressEditor(val selection: RealmSelection, val origin: String)
+internal data class EnterpriseAddressEditor(val request: EnterpriseAddressChangeRequest, val origin: String)
 internal data class EnterpriseResetConfirmation(
     val request: EnterpriseDataResetRequest,
     val path: net.weero.measix.pilot.service.EnterpriseResetPath,
@@ -148,9 +148,9 @@ internal class EnterpriseVM(private val service: EnterpriseApplicationService) :
     fun editAddress() {
         val state = overview.value ?: return
         val selection = state.selection ?: return
+        val access = state.access ?: return
         val origin = state.platformOrigin ?: return
-        if (selection.access !is RealmAccess.Enterprise) return
-        _addressEditor.value = EnterpriseAddressEditor(selection, origin)
+        _addressEditor.value = EnterpriseAddressEditor(EnterpriseAddressChangeRequest(access, selection), origin)
     }
     fun dismissAddressEditor() { _addressEditor.value = null }
     fun changeAddress(origin: String) {
@@ -158,11 +158,11 @@ internal class EnterpriseVM(private val service: EnterpriseApplicationService) :
         _addressEditor.value = null
         command(
             failureMessage = R.string.enterprise_address_change_failed,
-            isCurrent = { overview.value?.selection == editor.selection },
+            isCurrent = { overview.value?.selection == editor.request.selection },
         ) {
-            service.changeAddress(editor.selection, origin)
-            if (overview.value?.selection == editor.selection) {
-                _notice.value = Notice(R.string.enterprise_address_changed, editor.selection)
+            service.changeAddress(editor.request, origin)
+            if (overview.value?.selection == editor.request.selection) {
+                _notice.value = Notice(R.string.enterprise_address_changed, editor.request.selection)
             }
         }
     }

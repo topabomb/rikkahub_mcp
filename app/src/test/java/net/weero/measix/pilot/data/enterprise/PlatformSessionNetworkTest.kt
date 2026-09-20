@@ -64,13 +64,14 @@ class PlatformSessionNetworkTest {
         assertEquals("enrollment_expired", (error as EnterpriseConfigurationException).reason)
     }
 
-    @Test fun `changing address after restart preserves principal session data and freezes existing execution`() = runBlocking {
+    @Test fun `changing address from personal space preserves principal session data and freezes existing execution`() = runBlocking {
         val root = temporary.newFolder()
         owner(root).enrollFixture(exampleEnterprisePackage())
         val sessions = owner(root)
         val before = (sessions.recover() as EnterpriseState.Available).manifest
-        val selection = requireNotNull(sessions.readPresentation().selection)
-        val access = selection.access as RealmAccess.Enterprise
+        val enterpriseSelection = requireNotNull(sessions.readPresentation().selection)
+        val access = enterpriseSelection.access as RealmAccess.Enterprise
+        val selection = sessions.switchRealm(RealmSwitchRequest(enterpriseSelection, RealmAccess.Personal)) {}
         val oldLease = sessions.captureExecution(access, before.applied)
         val oldOperation = sessions.capturePlatformOperation(access.sessionId)
         val oldExecution = oldLease.execution as EnterpriseExecution.Platform
@@ -90,12 +91,19 @@ class PlatformSessionNetworkTest {
                 session = value.session.copy(sessionId = session.id),
             )
         }
+        val refreshResponse = PlatformWireCodec.decode<PlatformRefreshResponse>(fixture("refresh-response"))
+        val rejectedRefreshResponse = refreshResponse.copy(refreshToken = "rejected-candidate-refresh-token")
         val refreshes = AtomicInteger()
+        val retainedCandidateCredential = AtomicBoolean(false)
         val server = server {
             when (requestURI.path) {
                 "/.well-known/measix" -> reply(200, PlatformWireCodec.json.encodeToString(discovery))
                 "/api/client/v1/sessions/refresh" -> {
                     refreshes.incrementAndGet()
+                    val body = Json.parseToJsonElement(requestBody.bufferedReader().readText()).jsonObject
+                    if (body.getValue("refreshToken").jsonPrimitive.content == "rejected-candidate-refresh-token") {
+                        retainedCandidateCredential.set(true)
+                    }
                     reply(200, fixture("refresh-response"))
                 }
                 "/api/client/v1/bootstrap" -> reply(200, PlatformWireCodec.json.encodeToString(bootstrap))
@@ -113,7 +121,8 @@ class PlatformSessionNetworkTest {
         val mismatchedBootstrap = server {
             when (requestURI.path) {
                 "/.well-known/measix" -> reply(200, PlatformWireCodec.json.encodeToString(discovery))
-                "/api/client/v1/sessions/refresh" -> reply(200, fixture("refresh-response"))
+                "/api/client/v1/sessions/refresh" -> reply(200,
+                    PlatformWireCodec.json.encodeToString(rejectedRefreshResponse))
                 "/api/client/v1/bootstrap" -> reply(200, PlatformWireCodec.json.encodeToString(
                     bootstrap.copy(user = bootstrap.user.copy(
                         userId = "usr_00000000-0000-4000-8000-000000000099",
@@ -124,7 +133,7 @@ class PlatformSessionNetworkTest {
         }
         try {
             val newOrigin = "http://127.0.0.1:${server.address.port}"
-            service(sessions).changeAddress(selection, newOrigin)
+            service(sessions).changeAddress(EnterpriseAddressChangeRequest(access, selection), newOrigin)
             assertEquals(1, refreshes.get())
             val after = (sessions.state.value as EnterpriseState.Available).manifest
             assertEquals(before.session.id, after.session?.id)
@@ -142,8 +151,9 @@ class PlatformSessionNetworkTest {
             }
 
             val failure = runCatching {
+                val currentSelection = requireNotNull(sessions.readPresentation().selection)
                 service(sessions).changeAddress(
-                    requireNotNull(sessions.readPresentation().selection),
+                    EnterpriseAddressChangeRequest(access, currentSelection),
                     "http://127.0.0.1:${other.address.port}",
                 )
             }.exceptionOrNull()
@@ -155,9 +165,13 @@ class PlatformSessionNetworkTest {
             val restarted = owner(root)
             val beforeFailure = (restarted.recover() as EnterpriseState.Available).manifest
             val failureSelection = requireNotNull(restarted.readPresentation().selection)
+            val failureAccess = RealmAccess.Enterprise(
+                requireNotNull(beforeFailure.session).identity.scope,
+                beforeFailure.session.id,
+            )
             val identityFailure = runCatching {
                 service(restarted).changeAddress(
-                    failureSelection,
+                    EnterpriseAddressChangeRequest(failureAccess, failureSelection),
                     "http://127.0.0.1:${mismatchedBootstrap.address.port}",
                 )
             }.exceptionOrNull()
@@ -168,7 +182,17 @@ class PlatformSessionNetworkTest {
             assertEquals(beforeFailure.session?.id, afterFailure.session?.id)
             assertEquals(beforeFailure.session?.identity?.scope, afterFailure.session?.identity?.scope)
             assertEquals(newOrigin, afterFailure.session?.platform?.connection?.origin)
-            assertNotEquals(beforeFailure.session?.platform?.credential, afterFailure.session?.platform?.credential)
+            assertNotEquals(
+                "a successful candidate refresh must retain its rotated credential even when Bootstrap is rejected",
+                beforeFailure.session?.platform?.credential,
+                afterFailure.session?.platform?.credential,
+            )
+            val recoveredAfterFailure = owner(root)
+            recoveredAfterFailure.recover()
+            val recoveredToken = service(recoveredAfterFailure).accessToken(requireNotNull(afterFailure.session).id)
+            assertEquals(refreshResponse.accessToken, recoveredToken.value)
+            assertEquals(2, refreshes.get())
+            assertTrue(retainedCandidateCredential.get())
         } finally {
             oldOperation.release()
             oldLease.release()
@@ -484,7 +508,7 @@ class PlatformSessionNetworkTest {
         }
     }
 
-    @Test fun `terminal refresh while changing address invalidates the existing session`() = runBlocking {
+    @Test fun `candidate refresh rejection while changing address does not invalidate the existing session`() = runBlocking {
         val discovery = PlatformWireCodec.decode<PlatformDiscovery>(fixture("discovery"))
         val current = AtomicReference(Triple(401, "session_expired", EnterpriseExitReason.AUTHORIZATION_EXPIRED))
         val server = server {
@@ -517,11 +541,16 @@ class PlatformSessionNetworkTest {
             )
 
             val failure = runCatching {
-                platform.changeAddress(selection, "http://127.0.0.1:${server.address.port}")
+                platform.changeAddress(
+                    EnterpriseAddressChangeRequest(access, selection),
+                    "http://127.0.0.1:${server.address.port}",
+                )
             }.exceptionOrNull()
             assertTrue(failure.toString(), failure is PlatformHttpException)
-            assertEquals(listOf(access to EnterpriseExitReason.AUTHORIZATION_EXPIRED), invalidated)
+            assertTrue(invalidated.isEmpty())
             assertEquals(old.origin, sessions.platformContext(access.sessionId).platform.connection.origin)
+            assertEquals(EnterpriseSessionPhase.READY,
+                (sessions.state.value as EnterpriseState.Available).manifest.phase)
         } finally {
             server.stop(0)
         }

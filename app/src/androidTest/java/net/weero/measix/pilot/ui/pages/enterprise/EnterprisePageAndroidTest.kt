@@ -4,8 +4,6 @@ import androidx.activity.ComponentActivity
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Alignment
-import com.dokar.sonner.rememberToasterState
-import com.dokar.sonner.Toaster
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.hasText
@@ -21,6 +19,8 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.ViewModelStore
 import androidx.navigation3.runtime.NavKey
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import com.dokar.sonner.Toaster
+import com.dokar.sonner.rememberToasterState
 import io.mockk.Runs
 import io.mockk.coEvery
 import io.mockk.coVerify
@@ -43,6 +43,7 @@ import net.weero.measix.pilot.R
 import net.weero.measix.pilot.Screen
 import net.weero.measix.pilot.data.configuration.ConfigurationScope
 import net.weero.measix.pilot.data.enterprise.EnterpriseExitRequest
+import net.weero.measix.pilot.data.enterprise.EnterpriseAddressChangeRequest
 import net.weero.measix.pilot.data.enterprise.EnterpriseSessionPhase
 import net.weero.measix.pilot.data.enterprise.RealmAccess
 import net.weero.measix.pilot.data.enterprise.RealmSelection
@@ -93,7 +94,8 @@ class EnterprisePageAndroidTest {
         val newOrigin = "https://new.example"
         val initial = overview().copy(platformOrigin = oldOrigin)
         val fixture = Fixture(initial)
-        coEvery { fixture.service.changeAddress(initial.selection!!, newOrigin) } just Runs
+        val request = EnterpriseAddressChangeRequest(initial.access!!, initial.selection!!)
+        coEvery { fixture.service.changeAddress(request, newOrigin) } just Runs
         fixture.show()
 
         click(R.string.enterprise_connection_details_show)
@@ -103,9 +105,50 @@ class EnterprisePageAndroidTest {
         compose.onNode(hasText(text(R.string.confirm)) and hasClickAction()).performClick()
         compose.waitUntil(5_000) { !fixture.vm.busy.value }
 
-        coVerify(exactly = 1) { fixture.service.changeAddress(initial.selection!!, newOrigin) }
+        coVerify(exactly = 1) { fixture.service.changeAddress(request, newOrigin) }
         coVerify(exactly = 0) { fixture.service.confirmJoin(any()) }
         compose.onNodeWithText(text(R.string.enterprise_address_changed)).assertIsDisplayed()
+    }
+
+    @Test
+    fun connectedDetailsEditTheAddressWhilePersonalSpaceIsSelected() {
+        val oldOrigin = "https://old.example"
+        val newOrigin = "https://new.example"
+        val enterpriseAccess = access()
+        val personalSelection = RealmSelection(RealmAccess.Personal, 7)
+        val initial = overview(enterpriseAccess).copy(
+            selection = personalSelection,
+            platformOrigin = oldOrigin,
+        )
+        val request = EnterpriseAddressChangeRequest(enterpriseAccess, personalSelection)
+        val fixture = Fixture(initial)
+        coEvery { fixture.service.changeAddress(request, newOrigin) } just Runs
+        fixture.show()
+
+        click(R.string.enterprise_connection_details_show)
+        click(R.string.edit)
+        compose.onNodeWithText(text(R.string.enterprise_address_edit_title)).assertIsDisplayed()
+        compose.onNode(hasSetTextAction()).performTextReplacement(newOrigin)
+        compose.onNode(hasText(text(R.string.confirm)) and hasClickAction()).performClick()
+        compose.waitUntil(5_000) { !fixture.vm.busy.value }
+
+        coVerify(exactly = 1) { fixture.service.changeAddress(request, newOrigin) }
+        compose.onNodeWithText(text(R.string.enterprise_address_changed)).assertIsDisplayed()
+    }
+
+    @Test
+    fun cachedConfigurationRemainsAvailableWhenStartupSyncFails() {
+        val diagnostic = "InterruptedIOException: timeout\nCaused by: SocketException: Socket closed"
+        val fixture = Fixture(overview().copy(
+            enrollmentRecoveryFailure = diagnostic,
+            lastSyncMillis = 1_000,
+        ))
+        fixture.show()
+
+        compose.onNodeWithText(text(R.string.enterprise_ready)).assertIsDisplayed()
+        compose.onNodeWithText(text(R.string.enterprise_sync_failed_cached)).assertIsDisplayed()
+        compose.onNodeWithText(diagnostic).assertIsDisplayed()
+        compose.onNodeWithText(text(R.string.enterprise_failure)).assertDoesNotExist()
     }
 
     @Test
