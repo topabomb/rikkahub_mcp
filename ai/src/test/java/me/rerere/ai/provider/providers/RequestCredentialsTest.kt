@@ -19,7 +19,8 @@ import me.rerere.ai.provider.Provider
 import me.rerere.ai.provider.ProviderSetting
 import me.rerere.ai.provider.RequestCredentials
 import me.rerere.ai.provider.TextGenerationParams
-import me.rerere.ai.provider.images.MAX_ROUTED_IMAGE_RESPONSE_BYTES
+import me.rerere.ai.provider.images.MAX_ROUTED_IMAGE_BYTES
+import me.rerere.ai.provider.images.maxRoutedImageResponseBytes
 import me.rerere.common.http.isPrivate
 import me.rerere.common.http.RoutedHttpException
 import okhttp3.OkHttpClient
@@ -307,9 +308,10 @@ class RequestCredentialsTest {
     }
 
     @Test fun `routed image generation rejects oversized JSON before parsing`() = runBlocking {
+        val maxBytes = maxRoutedImageResponseBytes(1)
         val oversized = object : ResponseBody() {
             override fun contentType(): okhttp3.MediaType? = null
-            override fun contentLength(): Long = MAX_ROUTED_IMAGE_RESPONSE_BYTES + 1
+            override fun contentLength(): Long = maxBytes + 1
             override fun source(): okio.BufferedSource = okio.Buffer()
         }
         val client = OkHttpClient.Builder().addInterceptor { chain ->
@@ -332,6 +334,40 @@ class RequestCredentialsTest {
             } catch (error: java.io.IOException) {
                 assertEquals("routed_image_response_limit_exceeded", error.message)
             }
+        } finally {
+            client.dispatcher.executorService.shutdown()
+            client.connectionPool.evictAll()
+        }
+    }
+
+    @Test fun `routed response budget accepts two legal maximum-sized base64 images`() {
+        val encodedImageBytes = ((MAX_ROUTED_IMAGE_BYTES + 2L) / 3L) * 4L
+        assertTrue(maxRoutedImageResponseBytes(2) > encodedImageBytes * 2L)
+        assertTrue(maxRoutedImageResponseBytes(2) < maxRoutedImageResponseBytes(3))
+    }
+
+    @Test fun `routed image generation streams two requested items`() = runBlocking {
+        val client = OkHttpClient.Builder().addInterceptor { chain ->
+            Response.Builder().request(chain.request()).protocol(Protocol.HTTP_1_1)
+                .code(200).message("OK")
+                .body("""{"data":[{"b64_json":"QUJD"},{"b64_json":"REVG"}]}""".toResponseBody())
+                .build()
+        }.build()
+        try {
+            val items = mutableListOf<me.rerere.ai.ui.ImageGenerationItem>()
+            val params = ImageGenerationParams(
+                model = Model(modelId = "image"),
+                prompt = "draw two",
+                numOfImages = 2,
+                credentials = RequestCredentials.Routed(
+                    "https://relay.test/runtime/v1/resources/img_fixture/images/generations",
+                    "relay-token",
+                ),
+            )
+            OpenAIProvider(client)
+                .generateImage(ProviderSetting.OpenAI(baseUrl = "https://provider.test/v1"), params)
+                .collect(items::add)
+            assertEquals(2, items.size)
         } finally {
             client.dispatcher.executorService.shutdown()
             client.connectionPool.evictAll()

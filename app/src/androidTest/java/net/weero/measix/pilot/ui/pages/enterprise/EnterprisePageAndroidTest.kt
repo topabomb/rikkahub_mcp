@@ -12,6 +12,8 @@ import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
+import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performTextReplacement
@@ -57,6 +59,7 @@ import net.weero.measix.pilot.ui.context.LocalNavController
 import net.weero.measix.pilot.ui.context.LocalToaster
 import net.weero.measix.pilot.ui.context.Navigator
 import net.weero.measix.pilot.ui.adaptive.LocalAdaptiveLayoutInfo
+import net.weero.measix.pilot.ui.adaptive.AdaptiveHingeBounds
 import net.weero.measix.pilot.ui.adaptive.rememberAdaptiveLayoutInfo
 import org.junit.After
 import org.junit.Assert.*
@@ -140,6 +143,20 @@ class EnterprisePageAndroidTest {
         coVerify(exactly = 1) { fixture.service.changeAddress(request, newOrigin) }
         compose.onNodeWithText(text(R.string.enterprise_address_changed)).assertIsDisplayed()
         compose.onNodeWithText(text(R.string.enterprise_configuration_details_open)).assertIsDisplayed()
+    }
+
+    @Test
+    fun configurationDetailsStayInTheRightPaneOfAVerticalSeparatingHinge() {
+        val fixture = Fixture(overview())
+        fixture.show(withVerticalHinge = true)
+
+        click(R.string.enterprise_configuration_details_open)
+        val rootBounds = compose.onRoot().fetchSemanticsNode().boundsInRoot
+        val contentBounds = compose.onNodeWithTag("enterprise-configuration-details-content")
+            .fetchSemanticsNode().boundsInRoot
+
+        assertTrue("content must start to the right of the centered hinge", contentBounds.left > rootBounds.center.x)
+        assertTrue("content must remain inside the dialog", contentBounds.right <= rootBounds.right)
     }
 
     @Test
@@ -530,7 +547,7 @@ class EnterprisePageAndroidTest {
         val service = mockk<EnterpriseApplicationService>()
         lateinit var vm: EnterpriseVM
 
-        fun show() {
+        fun show(withVerticalHinge: Boolean = false) {
             every { service.observe() } returns state
             every { service.runtimeUsageChanges() } returns emptyFlow()
             compose.runOnUiThread {
@@ -540,11 +557,23 @@ class EnterprisePageAndroidTest {
             val navigator = Navigator(backStack)
             compose.setContent {
                 val toaster = rememberToasterState()
+                val measuredAdaptive = rememberAdaptiveLayoutInfo()
+                val adaptive = if (withVerticalHinge) {
+                    val width = measuredAdaptive.windowSize.width.value
+                    val height = measuredAdaptive.windowSize.height.value
+                    measuredAdaptive.copy(
+                        separatingVerticalHingeBounds = listOf(
+                            AdaptiveHingeBounds(width * 0.49f, 0f, width * 0.51f, height),
+                        ),
+                    )
+                } else {
+                    measuredAdaptive
+                }
                 MaterialTheme {
                     CompositionLocalProvider(
                         LocalNavController provides navigator,
                         LocalToaster provides toaster,
-                        LocalAdaptiveLayoutInfo provides rememberAdaptiveLayoutInfo(),
+                        LocalAdaptiveLayoutInfo provides adaptive,
                     ) {
                         Toaster(state = toaster, alignment = Alignment.TopCenter)
                         EnterprisePage(vm = vm)

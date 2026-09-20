@@ -1,6 +1,8 @@
 package me.rerere.ai.provider.images
 
+import java.io.FilterInputStream
 import java.io.IOException
+import java.io.InputStream
 import java.net.IDN
 import java.net.Inet4Address
 import java.net.Inet6Address
@@ -27,9 +29,15 @@ import kotlin.io.encoding.Base64
 import kotlin.io.encoding.ExperimentalEncodingApi
 
 internal const val MAX_ROUTED_IMAGE_BYTES = 20L * 1024 * 1024
-internal const val MAX_ROUTED_IMAGE_RESPONSE_BYTES = 48L * 1024 * 1024
-internal const val MAX_ROUTED_IMAGE_ERROR_BYTES = 64L * 1024
+private const val MAX_ROUTED_IMAGE_JSON_OVERHEAD_BYTES = 128L * 1024
 internal const val MAX_ROUTED_IMAGE_REDIRECTS = 5
+
+internal fun maxRoutedImageResponseBytes(requestedImages: Int): Long {
+    require(requestedImages in 1..6) { "routed_image_invalid_requested_count" }
+    val encodedImageBytes = ((MAX_ROUTED_IMAGE_BYTES + 2L) / 3L) * 4L
+    return requestedImages * (encodedImageBytes + MAX_ROUTED_IMAGE_JSON_OVERHEAD_BYTES) +
+        MAX_ROUTED_IMAGE_JSON_OVERHEAD_BYTES
+}
 
 internal data class RoutedImageHttpResponse(
     val code: Int,
@@ -278,18 +286,35 @@ private fun okhttp3.Response.readBoundedBody(maxBytes: Long): ByteArray {
     return output.readByteArray()
 }
 
-internal fun Response.readBoundedUtf8(maxBytes: Long): String {
-    require(maxBytes > 0) { "routed_image_invalid_response_limit" }
+internal fun Response.readBoundedImageGenerationResponse(requestedImages: Int): ImageGenerationResponseParse {
+    val maxBytes = maxRoutedImageResponseBytes(requestedImages)
     val length = body.contentLength()
     if (length > maxBytes) throw IOException("routed_image_response_limit_exceeded")
-    val source = body.source()
-    val output = Buffer()
-    var total = 0L
-    while (true) {
-        val read = source.read(output, minOf(8_192L, maxBytes - total + 1L))
-        if (read == -1L) break
-        total += read
+    return parseImageGenerationResponseStream(BoundedImageResponseInputStream(body.byteStream(), maxBytes))
+}
+
+private class BoundedImageResponseInputStream(
+    input: InputStream,
+    private val maxBytes: Long,
+) : FilterInputStream(input) {
+    private var total = 0L
+
+    override fun read(): Int {
+        val value = super.read()
+        if (value != -1) record(1)
+        return value
+    }
+
+    override fun read(buffer: ByteArray, offset: Int, length: Int): Int {
+        if (length == 0) return 0
+        val allowed = minOf(length.toLong(), maxBytes - total + 1L).coerceAtLeast(1L).toInt()
+        val read = super.read(buffer, offset, allowed)
+        if (read > 0) record(read.toLong())
+        return read
+    }
+
+    private fun record(bytes: Long) {
+        total += bytes
         if (total > maxBytes) throw IOException("routed_image_response_limit_exceeded")
     }
-    return output.readUtf8()
 }

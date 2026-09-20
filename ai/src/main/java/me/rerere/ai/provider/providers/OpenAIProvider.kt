@@ -32,13 +32,12 @@ import me.rerere.ai.provider.TextGenerationParams
 import me.rerere.ai.provider.providers.openai.ChatCompletionsAPI
 import me.rerere.ai.provider.providers.openai.ResponseAPI
 import me.rerere.ai.provider.providers.openai.openAIRequestMediaCapabilities
+import me.rerere.ai.provider.images.ImageGenerationResponseParse
 import me.rerere.ai.provider.images.ParsedImageGenerationItem
 import me.rerere.ai.provider.images.SafeRoutedImageDownloader
-import me.rerere.ai.provider.images.MAX_ROUTED_IMAGE_ERROR_BYTES
-import me.rerere.ai.provider.images.MAX_ROUTED_IMAGE_RESPONSE_BYTES
 import me.rerere.ai.provider.images.moderationBlockedImageException
 import me.rerere.ai.provider.images.parseImageGenerationResponseBody
-import me.rerere.ai.provider.images.readBoundedUtf8
+import me.rerere.ai.provider.images.readBoundedImageGenerationResponse
 import me.rerere.ai.ui.ImageGenerationItem
 import me.rerere.ai.ui.MessageChunk
 import me.rerere.ai.core.ModelRequestMessage
@@ -270,15 +269,15 @@ class OpenAIProvider(
             .build()
 
         val items = withContext(Dispatchers.IO) {
-            val bodyStr = client.forCredentials(params.credentials).newCall(request).readResponse { response ->
+            val parsed = client.forCredentials(params.credentials).newCall(request).readResponse { response ->
                 if (!response.isSuccessful) {
-                    throw formatProviderHttpError(response.code, response.readBoundedUtf8(MAX_ROUTED_IMAGE_ERROR_BYTES))
+                    throw formatProviderHttpError(response.code, response.body.string())
                 }
-                if (routedRequest) response.readBoundedUtf8(MAX_ROUTED_IMAGE_RESPONSE_BYTES)
-                else response.body.string()
+                if (routedRequest) response.readBoundedImageGenerationResponse(params.numOfImages)
+                else parseImageGenerationResponseBody(response.body.string())
             }
             parseImageResponse(
-                bodyStr = bodyStr,
+                parsed = parsed,
                 privateRequest = request.isPrivate,
                 routedRequest = routedRequest,
             )
@@ -358,7 +357,7 @@ class OpenAIProvider(
                 response.body.string()
             }
             parseImageResponse(
-                bodyStr = bodyStr,
+                parsed = parseImageGenerationResponseBody(bodyStr),
                 privateRequest = request.isPrivate,
                 routedRequest = params.credentials is RequestCredentials.Routed,
             )
@@ -368,11 +367,10 @@ class OpenAIProvider(
     }
 
     private suspend fun parseImageResponse(
-        bodyStr: String,
+        parsed: ImageGenerationResponseParse,
         privateRequest: Boolean,
         routedRequest: Boolean,
     ): List<ImageGenerationItem> {
-        val parsed = parseImageGenerationResponseBody(bodyStr)
         if (parsed.allBlockedByModeration && parsed.items.isEmpty()) {
             throw moderationBlockedImageException()
         }

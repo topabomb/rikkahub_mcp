@@ -24,6 +24,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.viewinterop.AndroidView
 import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.ArrowLeft01
@@ -651,6 +652,7 @@ private fun EnterpriseConfigurationDetailsPage(
         } else null
         Column(
             Modifier
+                .testTag("enterprise-configuration-details-content")
                 .align(if (verticalHinge == null) Alignment.TopCenter else Alignment.TopEnd)
                 .then(if (paneWidth == null) Modifier.fillMaxWidth() else Modifier.width(paneWidth))
                 .then(if (paneHeight == null) Modifier.fillMaxHeight() else Modifier.height(paneHeight))
