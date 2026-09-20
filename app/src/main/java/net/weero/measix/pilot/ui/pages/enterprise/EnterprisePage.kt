@@ -16,6 +16,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.platform.ClipEntry
 import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.platform.LocalContext
@@ -71,6 +73,7 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.dokar.sonner.ToastType
 import net.weero.measix.pilot.ui.components.ui.CardGroup
+import net.weero.measix.pilot.ui.adaptive.LocalAdaptiveLayoutInfo
 import net.weero.measix.pilot.ui.context.LocalNavController
 import net.weero.measix.pilot.ui.context.LocalToaster
 import org.koin.androidx.compose.koinViewModel
@@ -627,17 +630,42 @@ private fun EnterpriseConfigurationDetailsPage(
 ) {
     val group = details.resources.firstOrNull { it.kind == resourceKind }
     val resource = group?.items?.firstOrNull { it.key == resourceKey }
-    Column(
-        modifier.verticalScroll(rememberScrollState()).padding(16.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(12.dp),
+    val adaptive = LocalAdaptiveLayoutInfo.current
+    val density = androidx.compose.ui.platform.LocalDensity.current
+    var rootLeft by remember { mutableStateOf(0.dp) }
+    var rootTop by remember { mutableStateOf(0.dp) }
+    BoxWithConstraints(
+        modifier.onGloballyPositioned { coordinates ->
+            val position = coordinates.positionInWindow()
+            with(density) {
+                rootLeft = position.x.toDp()
+                rootTop = position.y.toDp()
+            }
+        },
     ) {
-        when {
-            resource != null -> EnterpriseConfigurationResourceDetails(resource, requireNotNull(resourceKind))
-            group != null -> EnterpriseConfigurationResourceGroup(group.kind, group.items, onResource)
-            section == EnterpriseConfigurationDetailsSection.DEFAULTS -> EnterpriseConfigurationDefaults(details)
-            section == EnterpriseConfigurationDetailsSection.POLICIES -> EnterpriseConfigurationPolicies(details)
-            else -> EnterpriseConfigurationDetailsOverview(details, onSection, onResourceKind, onCopyAddress)
+        val verticalHinge = adaptive.primaryVerticalHingeBounds
+        val leftUnavailable = verticalHinge?.let { (it.rightDp.dp - rootLeft).coerceAtLeast(0.dp) }
+        val paneWidth = leftUnavailable?.let { (maxWidth - it).coerceAtLeast(1.dp) }
+        val paneHeight = if (adaptive.isTabletop) {
+            adaptive.primaryHorizontalHingeBounds?.let { (it.topDp.dp - rootTop).coerceAtLeast(1.dp) }
+        } else null
+        Column(
+            Modifier
+                .align(if (verticalHinge == null) Alignment.TopCenter else Alignment.TopEnd)
+                .then(if (paneWidth == null) Modifier.fillMaxWidth() else Modifier.width(paneWidth))
+                .then(if (paneHeight == null) Modifier.fillMaxHeight() else Modifier.height(paneHeight))
+                .verticalScroll(rememberScrollState())
+                .padding(16.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            when {
+                resource != null -> EnterpriseConfigurationResourceDetails(resource, requireNotNull(resourceKind))
+                group != null -> EnterpriseConfigurationResourceGroup(group, onResource)
+                section == EnterpriseConfigurationDetailsSection.DEFAULTS -> EnterpriseConfigurationDefaults(details)
+                section == EnterpriseConfigurationDetailsSection.POLICIES -> EnterpriseConfigurationPolicies(details)
+                else -> EnterpriseConfigurationDetailsOverview(details, onSection, onResourceKind, onCopyAddress)
+            }
         }
     }
 }
@@ -707,7 +735,7 @@ private fun EnterpriseConfigurationDetailsOverview(
                     horizontalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
                     Text(stringResource(configurationResourceKindResource(resourceGroup.kind)), modifier = Modifier.weight(1f))
-                    Text(resourceGroup.items.size.toString(), style = MaterialTheme.typography.labelLarge)
+                    Text(resourceGroup.itemCount.toString(), style = MaterialTheme.typography.labelLarge)
                     Icon(HugeIcons.ArrowRight01, contentDescription = null, modifier = Modifier.size(18.dp))
                 }
             }
@@ -786,20 +814,23 @@ private fun EnterpriseConfigurationPolicies(details: EnterpriseConfigurationDeta
 
 @Composable
 private fun EnterpriseConfigurationResourceGroup(
-    kind: EnterpriseConfigurationResourceKind,
-    items: List<EnterpriseConfigurationResourceUiModel>,
+    group: net.weero.measix.pilot.service.EnterpriseConfigurationResourceGroupUiModel,
     onResource: (String) -> Unit,
 ) {
     Text(
-        stringResource(configurationResourceKindResource(kind)),
+        stringResource(configurationResourceKindResource(group.kind)),
         style = MaterialTheme.typography.headlineSmall,
         modifier = Modifier.widthIn(max = 720.dp).fillMaxWidth(),
     )
-    if (items.isEmpty()) {
+    if (group.redactedItemCount > 0) {
+        EnterpriseSection(stringResource(R.string.enterprise_configuration_resources_title)) {
+            Text(stringResource(R.string.enterprise_configuration_redacted_resource_count, group.redactedItemCount))
+        }
+    } else if (group.items.isEmpty()) {
         EnterpriseSection(stringResource(R.string.enterprise_configuration_resources_title)) {
             Text(stringResource(R.string.enterprise_configuration_no_resources))
         }
-    } else items.forEach { item ->
+    } else group.items.forEach { item ->
         ElevatedCard(onClick = { onResource(item.key) }, modifier = Modifier.widthIn(max = 720.dp).fillMaxWidth()) {
             Row(Modifier.fillMaxWidth().padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
@@ -848,7 +879,12 @@ private fun ConfigurationValueRow(label: String, value: String) {
 private fun configurationDefaultKindResource(kind: EnterpriseConfigurationDefaultKind): Int = when (kind) {
     EnterpriseConfigurationDefaultKind.ASSISTANT -> R.string.enterprise_configuration_default_assistant
     EnterpriseConfigurationDefaultKind.CHAT_MODEL -> R.string.enterprise_configuration_default_chat_model
+    EnterpriseConfigurationDefaultKind.FAST_MODEL -> R.string.enterprise_configuration_default_fast_model
+    EnterpriseConfigurationDefaultKind.TITLE_MODEL -> R.string.enterprise_configuration_default_title_model
     EnterpriseConfigurationDefaultKind.IMAGE_GENERATION -> R.string.enterprise_configuration_default_image_generation
+    EnterpriseConfigurationDefaultKind.ATTACHMENT_INSPECTION_MODEL -> R.string.enterprise_configuration_default_attachment_inspection_model
+    EnterpriseConfigurationDefaultKind.SUGGESTION_MODEL -> R.string.enterprise_configuration_default_suggestion_model
+    EnterpriseConfigurationDefaultKind.COMPRESS_MODEL -> R.string.enterprise_configuration_default_compress_model
     EnterpriseConfigurationDefaultKind.TTS -> R.string.enterprise_configuration_default_tts
     EnterpriseConfigurationDefaultKind.ASR -> R.string.enterprise_configuration_default_asr
 }
@@ -870,6 +906,8 @@ private fun configurationResourceKindResource(kind: EnterpriseConfigurationResou
     EnterpriseConfigurationResourceKind.MCP -> R.string.enterprise_configuration_resource_mcp
     EnterpriseConfigurationResourceKind.ASSISTANT -> R.string.enterprise_configuration_resource_assistants
     EnterpriseConfigurationResourceKind.STARTER -> R.string.enterprise_configuration_resource_starters
+    EnterpriseConfigurationResourceKind.MEMORY_SEED -> R.string.enterprise_configuration_resource_memory_seeds
+    EnterpriseConfigurationResourceKind.GATEWAY -> R.string.enterprise_configuration_resource_gateways
 }
 
 private fun configurationResourceFactResource(kind: EnterpriseConfigurationResourceFactKind): Int = when (kind) {

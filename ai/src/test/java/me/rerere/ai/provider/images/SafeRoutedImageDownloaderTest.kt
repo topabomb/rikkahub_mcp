@@ -1,13 +1,23 @@
 package me.rerere.ai.provider.images
 
+import com.sun.net.httpserver.HttpServer
 import java.io.IOException
 import java.net.InetAddress
+import java.net.InetSocketAddress
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import me.rerere.common.http.isPrivate
 import okhttp3.Authenticator
+import okhttp3.Call
 import okhttp3.Cookie
 import okhttp3.CookieJar
+import okhttp3.EventListener
 import okhttp3.HttpUrl
 import okhttp3.Interceptor
 import okhttp3.OkHttpClient
@@ -128,6 +138,123 @@ class SafeRoutedImageDownloaderTest {
         assertFalse(restricted.followSslRedirects)
         assertFalse(restricted.retryOnConnectionFailure)
         assertEquals(java.net.Proxy.NO_PROXY, restricted.proxy)
+    }
+
+    @Test fun `real transport uses pinned DNS and does not follow redirects`() = runBlocking {
+        val server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
+        var requests = 0
+        server.createContext("/") { exchange ->
+            requests++
+            exchange.responseHeaders.add("Location", "http://unexpected.example/leak")
+            exchange.sendResponseHeaders(302, -1)
+            exchange.close()
+        }
+        server.start()
+        val client = OkHttpClient()
+        try {
+            val request = Request.Builder()
+                .url("http://cdn.example:${server.address.port}/image")
+                .build()
+            val response = OkHttpRoutedImageHttpTransport(client).execute(
+                request,
+                listOf(InetAddress.getByName("127.0.0.1")),
+                1_024,
+            )
+
+            assertEquals(302, response.code)
+            assertEquals("http://unexpected.example/leak", response.location)
+            assertEquals(1, requests)
+        } finally {
+            server.stop(0)
+            client.dispatcher.executorService.shutdownNow()
+            client.connectionPool.evictAll()
+        }
+    }
+
+    @Test fun `real transport aborts a chunked body beyond the limit`() = runBlocking {
+        val server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
+        server.createContext("/") { exchange ->
+            try {
+                exchange.responseHeaders.add("Content-Type", "image/png")
+                exchange.sendResponseHeaders(200, 0)
+                exchange.responseBody.write(ByteArray(64) { 1 })
+            } catch (_: IOException) {
+                // The client is expected to close the stream as soon as the cap is crossed.
+            } finally {
+                exchange.close()
+            }
+        }
+        server.start()
+        val client = OkHttpClient()
+        try {
+            val request = Request.Builder().url("http://cdn.example:${server.address.port}/image").build()
+            assertFailure("routed_image_payload_limit_exceeded") {
+                OkHttpRoutedImageHttpTransport(client).execute(
+                    request,
+                    listOf(InetAddress.getByName("127.0.0.1")),
+                    8,
+                )
+            }
+        } finally {
+            server.stop(0)
+            client.dispatcher.executorService.shutdownNow()
+            client.connectionPool.evictAll()
+        }
+    }
+
+    @Test fun `cancelling a real transport read cancels its call`() = runBlocking {
+        val release = CountDownLatch(1)
+        val consuming = CompletableDeferred<Call>()
+        val cancelled = CompletableDeferred<Unit>()
+        val server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
+        server.createContext("/") { exchange ->
+            try {
+                exchange.sendResponseHeaders(200, 1_024)
+                exchange.responseBody.write(1)
+                exchange.responseBody.flush()
+                release.await(30, TimeUnit.SECONDS)
+            } finally {
+                exchange.close()
+            }
+        }
+        server.start()
+        val client = OkHttpClient.Builder()
+            .readTimeout(1, TimeUnit.MINUTES)
+            .eventListener(object : EventListener() {
+                override fun responseBodyStart(call: Call) {
+                    consuming.complete(call)
+                }
+            })
+            .build()
+        val request = Request.Builder().url("http://cdn.example:${server.address.port}/image").build()
+        val job = launch(Dispatchers.IO) {
+            try {
+                OkHttpRoutedImageHttpTransport(client).execute(
+                    request,
+                    listOf(InetAddress.getByName("127.0.0.1")),
+                    2_048,
+                )
+            } catch (error: CancellationException) {
+                cancelled.complete(Unit)
+                throw error
+            }
+        }
+        try {
+            val call = withTimeout(5_000) { consuming.await() }
+            job.cancel()
+            withTimeout(5_000) {
+                job.join()
+                cancelled.await()
+            }
+            assertTrue(call.isCanceled())
+        } finally {
+            release.countDown()
+            job.cancel()
+            job.join()
+            server.stop(0)
+            client.dispatcher.executorService.shutdownNow()
+            client.connectionPool.evictAll()
+        }
     }
 
     private fun downloader(

@@ -17,7 +17,12 @@ internal enum class EnterpriseResetPath { CONNECTED, STORAGE_FAILURE }
 internal enum class EnterpriseConfigurationDefaultKind {
     ASSISTANT,
     CHAT_MODEL,
+    FAST_MODEL,
+    TITLE_MODEL,
     IMAGE_GENERATION,
+    ATTACHMENT_INSPECTION_MODEL,
+    SUGGESTION_MODEL,
+    COMPRESS_MODEL,
     TTS,
     ASR,
 }
@@ -52,6 +57,8 @@ internal enum class EnterpriseConfigurationResourceKind {
     MCP,
     ASSISTANT,
     STARTER,
+    MEMORY_SEED,
+    GATEWAY,
 }
 
 internal enum class EnterpriseConfigurationResourceFactKind {
@@ -77,7 +84,11 @@ internal data class EnterpriseConfigurationResourceUiModel(
 internal data class EnterpriseConfigurationResourceGroupUiModel(
     val kind: EnterpriseConfigurationResourceKind,
     val items: List<EnterpriseConfigurationResourceUiModel>,
-)
+    /** Count-only resources deliberately omit item payloads from the UI projection. */
+    val redactedItemCount: Int = 0,
+) {
+    val itemCount: Int get() = items.size + redactedItemCount
+}
 
 internal data class EnterpriseConfigurationDetailsUiModel(
     val enterpriseName: String,
@@ -235,6 +246,21 @@ internal fun projectEnterpriseConfigurationDetails(
                 )
             },
         ),
+        EnterpriseConfigurationResourceGroupUiModel(
+            kind = EnterpriseConfigurationResourceKind.MEMORY_SEED,
+            items = emptyList(),
+            redactedItemCount = configuration.memorySeeds.size,
+        ),
+        EnterpriseConfigurationResourceGroupUiModel(
+            EnterpriseConfigurationResourceKind.GATEWAY,
+            configuration.gateways.mapIndexed { index, value ->
+                EnterpriseConfigurationResourceUiModel(
+                    resourceKey(EnterpriseConfigurationResourceKind.GATEWAY, index),
+                    value.name,
+                    enabled = true,
+                )
+            },
+        ),
     )
 
     return EnterpriseConfigurationDetailsUiModel(
@@ -246,7 +272,16 @@ internal fun projectEnterpriseConfigurationDetails(
         defaults = listOf(
             reference(EnterpriseConfigurationDefaultKind.ASSISTANT, defaults.assistantId, assistantTargets),
             reference(EnterpriseConfigurationDefaultKind.CHAT_MODEL, defaults.chatModelId, chatModelTargets),
+            reference(EnterpriseConfigurationDefaultKind.FAST_MODEL, defaults.fastModelId, chatModelTargets),
+            reference(EnterpriseConfigurationDefaultKind.TITLE_MODEL, defaults.titleModelId, chatModelTargets),
             reference(EnterpriseConfigurationDefaultKind.IMAGE_GENERATION, defaults.imageGenerationModelId, imageTargets),
+            reference(
+                EnterpriseConfigurationDefaultKind.ATTACHMENT_INSPECTION_MODEL,
+                defaults.attachmentInspectionModelId,
+                chatModelTargets,
+            ),
+            reference(EnterpriseConfigurationDefaultKind.SUGGESTION_MODEL, defaults.suggestionModelId, chatModelTargets),
+            reference(EnterpriseConfigurationDefaultKind.COMPRESS_MODEL, defaults.compressModelId, chatModelTargets),
             reference(EnterpriseConfigurationDefaultKind.TTS, defaults.ttsId, ttsTargets),
             reference(EnterpriseConfigurationDefaultKind.ASR, defaults.asrId, asrTargets),
         ),
@@ -373,7 +408,7 @@ internal class EnterpriseApplicationService(
                 exitReason = manifest?.exitReason,
                 platformOrigin = platformOrigin,
                 configurationDetails = if (
-                    selection?.access == access && access != null && identity != null && platformOrigin != null &&
+                    access != null && identity != null && platformOrigin != null &&
                     available.configuration != null &&
                     manifest.phase in setOf(EnterpriseSessionPhase.READY, EnterpriseSessionPhase.OFFLINE)
                 ) {

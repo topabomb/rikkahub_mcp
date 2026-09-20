@@ -384,7 +384,9 @@ Android:
 - Core/Admin 已实现图片资源发布与 Relay 路由、`REQUESTED_IMAGES` 计量、Budget Template CRUD、指派与覆盖，以及当前 schema 和生成合同；真实生产构建的 Admin 浏览器流程已验证。
 - Portal 已按第五类 `IMAGE_GENERATION` 展示有效额度，且没有接收模板管理元数据；真实生产构建浏览器流程已验证。
 - Android 已接收可选 `imageGenerators`，按 realm 解析个人与企业图片模型，冻结执行能力并在 Provider I/O 前校验数量、尺寸、编辑和 partial image；企业 URL 图片下载采用隔离 transport 和 HTTPS、DNS、重定向、大小、MIME、签名校验。
-- Android 配置详情已实现默认值、策略、资源分类、单项详情和同步诊断的渐进披露，不展示 secret、route、prompt、内部 ID 或原始协议；只展示当前活动企业域的 READY/OFFLINE 最近成功配置。
+- Android 配置详情已实现 10 类默认值、10 类资源、策略、单项详情和同步诊断的渐进披露，不展示 secret、route、prompt、内部 ID 或原始协议；个人域和企业域都可读取当前连接企业的 READY/OFFLINE 最近成功配置，但只有企业域参与 managed 解析与执行。
+- 配置详情全屏页面按设备姿态避让垂直和水平折叠铰链；默认值的 AVAILABLE/UNSET/UNAVAILABLE 三态、个人域入口、正常态及半开横竖屏均已由设备测试覆盖。
+- 企业路由图片响应在 JSON 解析前限制为 48 MiB，错误响应限制为 64 KiB；真实 OkHttp transport 测试覆盖 DNS 固定、禁止自动重定向、分块超限中止和取消传播，成功媒体仍只交给 `GeneratedMediaStore` 持久化。
 - 五套 Android 常用语言资源、静态契约、架构参考和测试同步完成。
 
 最终验证证据：
@@ -393,8 +395,8 @@ Android:
 | --- | --- |
 | Core/Admin | 生成物、漂移、Go test/vet、smoke、Console test/typecheck/build、公开来源检查、真实生产构建浏览器 E2E 全部通过 |
 | Portal | API 生成、typecheck、11 个测试文件共 87 个用例、build、format、真实 Core + production Portal + Chromium E2E 全部通过 |
-| Android JVM/构建 | `test assembleDebug lintDebug assembleRelease --no-parallel --max-workers=1` 通过，827 tasks，10m37s |
-| Android 设备 | Pixel 10 Pro Fold API 37：Enterprise 页面 14/14；完整 `connectedDebugAndroidTest` 215 个测试、9 个既有 live/PRoot 前置条件跳过、0 失败；折叠屏半开态配置详情地址与复制场景单独通过 |
+| Android JVM/构建 | `test assembleDebug lintDebug assembleRelease --no-parallel --max-workers=1` 通过，827 tasks，9m55s |
+| Android 设备 | Pixel 10 Pro Fold API 37：Enterprise 页面 15/15，正常态、半开竖屏、半开横屏各自独立运行均为 0 失败；完整 `connectedDebugAndroidTest` 的 app 216、speech 17、workspace 13 个测试全部完成，10 个既有 live/PRoot 前置条件跳过、0 失败 |
 | Android 合同 | `python tools/generate-enterprise-wire.py --check` 通过；Snapshot 有或无图片字段、严格未知字段、resolver、execution、coordinator、UI projection 和安全下载测试通过 |
 
 边界：本轮没有在 Android 上使用真实外部图片供应商 URL 完成一次生成并落入媒体库，因此 `IMG-004` 和 `FINAL-001` 中“真实供应商生成”这一段不作为已验收项；其余 Core/Portal 真实浏览器链、Android 设备链和传输安全、媒体 owner 自动化验证均已完成。真实供应商联调需要可用的企业图片 binding、凭据和上游服务环境，不通过 mock 结果冒充。

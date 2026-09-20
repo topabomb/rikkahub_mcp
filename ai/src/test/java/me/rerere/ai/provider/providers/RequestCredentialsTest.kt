@@ -19,12 +19,14 @@ import me.rerere.ai.provider.Provider
 import me.rerere.ai.provider.ProviderSetting
 import me.rerere.ai.provider.RequestCredentials
 import me.rerere.ai.provider.TextGenerationParams
+import me.rerere.ai.provider.images.MAX_ROUTED_IMAGE_RESPONSE_BYTES
 import me.rerere.common.http.isPrivate
 import me.rerere.common.http.RoutedHttpException
 import okhttp3.OkHttpClient
 import okhttp3.Protocol
 import okhttp3.Request
 import okhttp3.Response
+import okhttp3.ResponseBody
 import okhttp3.ResponseBody.Companion.toResponseBody
 import org.junit.After
 import org.junit.Assert.*
@@ -299,6 +301,38 @@ class RequestCredentialsTest {
             assertEquals(listOf(path), paths)
         } finally {
             server.stop(0)
+            client.dispatcher.executorService.shutdown()
+            client.connectionPool.evictAll()
+        }
+    }
+
+    @Test fun `routed image generation rejects oversized JSON before parsing`() = runBlocking {
+        val oversized = object : ResponseBody() {
+            override fun contentType(): okhttp3.MediaType? = null
+            override fun contentLength(): Long = MAX_ROUTED_IMAGE_RESPONSE_BYTES + 1
+            override fun source(): okio.BufferedSource = okio.Buffer()
+        }
+        val client = OkHttpClient.Builder().addInterceptor { chain ->
+            Response.Builder().request(chain.request()).protocol(Protocol.HTTP_1_1)
+                .code(200).message("OK").body(oversized).build()
+        }.build()
+        try {
+            val provider = OpenAIProvider(client)
+            val params = ImageGenerationParams(
+                model = Model(modelId = "image"),
+                prompt = "draw",
+                credentials = RequestCredentials.Routed(
+                    "https://relay.test/runtime/v1/resources/img_fixture/images/generations",
+                    "relay-token",
+                ),
+            )
+            try {
+                provider.generateImage(ProviderSetting.OpenAI(baseUrl = "https://provider.test/v1"), params).collect()
+                fail("oversized routed image JSON was parsed")
+            } catch (error: java.io.IOException) {
+                assertEquals("routed_image_response_limit_exceeded", error.message)
+            }
+        } finally {
             client.dispatcher.executorService.shutdown()
             client.connectionPool.evictAll()
         }

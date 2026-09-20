@@ -1641,6 +1641,14 @@
   <string name="enterprise_configuration_fact_allowed_sizes">允许尺寸</string>
   <string name="enterprise_configuration_fact_assistant">助手</string>
   <string name="enterprise_configuration_fact_description">说明</string>
+  <string name="enterprise_configuration_default_fast_model">快速模型</string>
+  <string name="enterprise_configuration_default_title_model">标题模型</string>
+  <string name="enterprise_configuration_default_attachment_inspection_model">附件检查</string>
+  <string name="enterprise_configuration_default_suggestion_model">建议生成</string>
+  <string name="enterprise_configuration_default_compress_model">对话压缩</string>
+  <string name="enterprise_configuration_resource_memory_seeds">记忆种子</string>
+  <string name="enterprise_configuration_resource_gateways">网关</string>
+  <string name="enterprise_configuration_redacted_resource_count">%1$d 项；内容已隐藏</string>
   <string name="enterprise_personal">个人空间</string>
   <string name="enterprise_space">企业空间</string>
   <string name="enterprise_local_notice">企业配置由本机提供，模型可连接你配置的服务。</string>

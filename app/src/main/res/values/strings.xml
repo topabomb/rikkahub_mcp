@@ -1833,4 +1833,12 @@
   <string name="enterprise_address_changed">Enterprise address changed</string>
   <string name="enterprise_address_change_failed">Could not change enterprise address</string>
   <string name="enterprise_sync_failed_cached">The latest configuration sync failed. The locally applied configuration remains available. Retry when the enterprise service is reachable.</string>
+  <string name="enterprise_configuration_default_fast_model">Fast model</string>
+  <string name="enterprise_configuration_default_title_model">Title model</string>
+  <string name="enterprise_configuration_default_attachment_inspection_model">Attachment inspection</string>
+  <string name="enterprise_configuration_default_suggestion_model">Suggestions</string>
+  <string name="enterprise_configuration_default_compress_model">Conversation compression</string>
+  <string name="enterprise_configuration_resource_memory_seeds">Memory seeds</string>
+  <string name="enterprise_configuration_resource_gateways">Gateways</string>
+  <string name="enterprise_configuration_redacted_resource_count">%1$d entries; contents are hidden</string>
 </resources>

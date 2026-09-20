@@ -316,7 +316,7 @@ class EnterpriseVMTest {
             configuration = configuration,
         )
 
-        assertEquals(5, projected.defaults.size)
+        assertEquals(10, projected.defaults.size)
         assertEquals(
             EnterpriseConfigurationReferenceState.UNAVAILABLE,
             projected.defaults.single { it.kind == EnterpriseConfigurationDefaultKind.CHAT_MODEL }.state,
@@ -324,7 +324,11 @@ class EnterpriseVMTest {
         val imageDefault = projected.defaults.single { it.kind == EnterpriseConfigurationDefaultKind.IMAGE_GENERATION }
         assertEquals("Managed image", imageDefault.displayName)
         assertEquals(EnterpriseConfigurationReferenceState.UNAVAILABLE, imageDefault.state)
-        assertEquals(8, projected.resources.size)
+        assertEquals(10, projected.resources.size)
+        assertEquals(
+            configuration.memorySeeds.size,
+            projected.resources.single { it.kind == EnterpriseConfigurationResourceKind.MEMORY_SEED }.itemCount,
+        )
         assertTrue(projected.resources.single { it.kind == EnterpriseConfigurationResourceKind.IMAGE_GENERATOR }
             .items.single().facts.any { it.kind == EnterpriseConfigurationResourceFactKind.MAX_IMAGES && it.value == "3" })
         assertFalse(projected.toString().contains(image.id))

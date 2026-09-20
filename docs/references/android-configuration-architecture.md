@@ -162,7 +162,7 @@ Seed 不进入用户配置或运行记忆表；关闭可变记忆不删除 Seed�
 
 按域模型目录和共享定义的模型选择器只传真实用户 Provider ID，由 ProviderSettingsApplicationService.observeBalance 读取当前用户配置。受禁止或无可选模型的分组不启动余额读取；企业资源不进入用户余额接口。配置变更取消旧请求，页面离开取消 collection；结果缓存仍只归既有服务，按凭据/endpoint/查询路径指纹隔离。Provider 编辑页通过明确的 previewBalance 预览未保存草稿，不把草稿写入配置。ModelGroupUiModel 不携带 balanceSource/连接凭据，UI 不保留第二套请求映射。
 
-用户图片模型的目录、原子选择和执行解析共用 `supportsImageGeneration`，以模型覆盖连接或实际 Provider 协议判断，不以分组 Provider 替代真实传输。附件识别选择要求 CHAT 类型及 IMAGE 输入。企业 `imageGenerators` 是独立 `img_*` 定义；`ConfigurationResolver` 仅把它投影为统一 IMAGE 目录项，并保留 `canGenerate/canEdit/maxImagesPerRequest/allowedSizes/supportsPartialImages` typed profile。`ModelExecutionService` 冻结原 Session、generation、精确 runtimePath 与 profile，原 `ImageGenerationCoordinator` 在 Provider I/O 前再次校验；企业 profile 只允许同步生成，不允许编辑、参考图、partial 或任意尺寸。结果仍只由 `GeneratedMediaStore` 提交。收藏移动使用原引用对作用于最新完整列表；缺失或歧义收藏仍可从 UI 移除，不凭空构造模型定义。原 FavoriteModelService 已删除。
+用户图片模型的目录、原子选择和执行解析共用 `supportsImageGeneration`，以模型覆盖连接或实际 Provider 协议判断，不以分组 Provider 替代真实传输。附件识别选择要求 CHAT 类型及 IMAGE 输入。企业 `imageGenerators` 是独立 `img_*` 定义；`ConfigurationResolver` 仅把它投影为统一 IMAGE 目录项，并保留 `canGenerate/canEdit/maxImagesPerRequest/allowedSizes/supportsPartialImages` typed profile。`ModelExecutionService` 冻结原 Session、generation、精确 runtimePath 与 profile，原 `ImageGenerationCoordinator` 在 Provider I/O 前再次校验；企业 profile 只允许同步生成，不允许编辑、参考图、partial 或任意尺寸。Routed 生成响应在解析 JSON 前执行 48 MiB 总体传输上限，错误正文上限 64 KiB；URL 结果再由隔离的 `SafeRoutedImageDownloader` 执行逐跳 HTTPS/公网 DNS、无凭据、20 MiB 单图、MIME 与签名校验。结果仍只由 `GeneratedMediaStore` 提交。收藏移动使用原引用对作用于最新完整列表；缺失或歧义收藏仍可从 UI 移除，不凭空构造模型定义。原 FavoriteModelService 已删除。
 
 ### 2.6 数据根记录的域身份
 
@@ -208,7 +208,7 @@ Memory 已通过 MemoryAddress/MemoryService 按原域、主体与 Session 进�
 
 正式空间入口位于聊天抽屉昵称下方和设置页；聊天顶部只显示当前会话域的非交互建筑标记。`EnterprisePage` 展示空间、身份、阶段、已生效 generation 与最近配置同步；READY 表示本机配置可用，不冒充当前网络健康。启动同步失败且已有 Applied 配置时，连接卡保留本机可用状态、最近成功时间和原始诊断，并提供原同步动作重试；成功重试清除旧失败。连接详情展示并可复制当前 Session 实际绑定的“企业地址”，编辑对话框说明它只改变连接地址且必须指向同一企业。地址编辑冻结当前 `RealmSelection` 与目标企业 `RealmAccess`，因此在个人空间保留企业登录时也能编辑；切域、退出或 Session 替换会拒绝旧请求。页面还提供相机扫码、相册二维码、粘贴、同步、通用 Portal、切域、全设备企业数据重置与原生退出确认，但不提供来源安装/选择、企业配置或 Feed 编辑、连接场景演练、示例接入及示例专用清除。`EnterpriseVM` 只依赖 application service；接入文本和地址编辑草稿不写持久状态。退出确认冻结原请求，Portal 页面每次打开持有独立 UI 身份，旧关闭回调不能关闭新页面。宿主打开前验证消息监听、document-start 与完整站点清理三项能力；不支持时正式入口显示 WebView 包名、版本和缺失能力，其他打开失败显示诊断原因。错误文案及参数是同一个受原 selection 约束的投影；未交付宿主的补偿关闭不抢先触发页面关闭通知，避免吞掉打开错误。返回聊天重新经过 Startup 获取本域 lease。Portal 页面退出前台或离开组合时关闭原宿主；网页 logout 经原生确认复用退出服务，媒体请求使用同一文档和原生交互 owner。
 
-配置详情同样只能经 `EnterpriseApplicationService` 从当前 `EnterpriseConfiguration` 构造白名单只读 UiModel；UI 不读取 Store、Session、wire 或 execution，也不显示 token、secret、runtimePath、upstreamModelKey、header、system prompt、memory seed 或 Starter prompt。连接卡保留地址复制/编辑等动作，独立详情页按 Provider、聊天模型、图片生成、TTS、ASR、MCP、助手和 Starter 渐进披露；默认项明确区分已设置、未设置和失效引用，策略明确显示五项个人资源准入。
+配置详情同样只能经 `EnterpriseApplicationService` 从已连接 Session 的当前 `EnterpriseConfiguration` 构造白名单只读 UiModel；即使当前选择个人域，已连接企业的 READY/OFFLINE 最近成功配置仍可查看，命令权限继续在提交时按 `RealmSelection` 复验。UI 不读取 Store、Session、wire 或 execution，也不显示 token、secret、runtimePath、upstreamModelKey、header、system prompt、memory seed 正文或 Starter prompt。连接卡保留地址复制/编辑等动作，独立详情页按 Provider、聊天模型、图片生成、TTS、ASR、MCP、助手、Starter、Memory Seed 和 Gateway 渐进披露；Memory Seed 只显示数量。十个默认项明确区分已设置、未设置和失效引用，策略明确显示五项个人资源准入。详情内容在竖向分隔铰链时只占右侧可用 pane，在 Tabletop 姿态限制于上半屏并在 pane 内滚动。
 
 ## 3. Local Settings 顶层结构
 

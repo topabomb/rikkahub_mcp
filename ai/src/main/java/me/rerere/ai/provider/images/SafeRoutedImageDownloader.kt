@@ -21,11 +21,14 @@ import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.Response
 import okio.Buffer
 import kotlin.io.encoding.Base64
 import kotlin.io.encoding.ExperimentalEncodingApi
 
 internal const val MAX_ROUTED_IMAGE_BYTES = 20L * 1024 * 1024
+internal const val MAX_ROUTED_IMAGE_RESPONSE_BYTES = 48L * 1024 * 1024
+internal const val MAX_ROUTED_IMAGE_ERROR_BYTES = 64L * 1024
 internal const val MAX_ROUTED_IMAGE_REDIRECTS = 5
 
 internal data class RoutedImageHttpResponse(
@@ -212,7 +215,7 @@ internal class SafeRoutedImageDownloader(
     }
 }
 
-private class OkHttpRoutedImageHttpTransport(
+internal class OkHttpRoutedImageHttpTransport(
     private val baseClient: OkHttpClient,
 ) : RoutedImageHttpTransport {
     override suspend fun execute(
@@ -273,4 +276,20 @@ private fun okhttp3.Response.readBoundedBody(maxBytes: Long): ByteArray {
         if (total > maxBytes) throw IOException("routed_image_payload_limit_exceeded")
     }
     return output.readByteArray()
+}
+
+internal fun Response.readBoundedUtf8(maxBytes: Long): String {
+    require(maxBytes > 0) { "routed_image_invalid_response_limit" }
+    val length = body.contentLength()
+    if (length > maxBytes) throw IOException("routed_image_response_limit_exceeded")
+    val source = body.source()
+    val output = Buffer()
+    var total = 0L
+    while (true) {
+        val read = source.read(output, minOf(8_192L, maxBytes - total + 1L))
+        if (read == -1L) break
+        total += read
+        if (total > maxBytes) throw IOException("routed_image_response_limit_exceeded")
+    }
+    return output.readUtf8()
 }

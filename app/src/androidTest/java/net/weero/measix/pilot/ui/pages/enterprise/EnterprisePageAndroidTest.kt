@@ -10,6 +10,7 @@ import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTextInput
@@ -55,6 +56,8 @@ import net.weero.measix.pilot.service.portal.PortalWebView
 import net.weero.measix.pilot.ui.context.LocalNavController
 import net.weero.measix.pilot.ui.context.LocalToaster
 import net.weero.measix.pilot.ui.context.Navigator
+import net.weero.measix.pilot.ui.adaptive.LocalAdaptiveLayoutInfo
+import net.weero.measix.pilot.ui.adaptive.rememberAdaptiveLayoutInfo
 import org.junit.After
 import org.junit.Assert.*
 import org.junit.Rule
@@ -136,6 +139,41 @@ class EnterprisePageAndroidTest {
 
         coVerify(exactly = 1) { fixture.service.changeAddress(request, newOrigin) }
         compose.onNodeWithText(text(R.string.enterprise_address_changed)).assertIsDisplayed()
+        compose.onNodeWithText(text(R.string.enterprise_configuration_details_open)).assertIsDisplayed()
+    }
+
+    @Test
+    fun configurationDetailsShowAvailableUnsetAndUnavailableDefaults() {
+        val initial = overview()
+        val defaults = EnterpriseConfigurationDefaultKind.entries.mapIndexed { index, kind ->
+            when (index) {
+                0 -> EnterpriseConfigurationDefaultUiModel(
+                    kind,
+                    "Available default",
+                    EnterpriseConfigurationReferenceState.AVAILABLE,
+                )
+                1 -> EnterpriseConfigurationDefaultUiModel(
+                    kind,
+                    null,
+                    EnterpriseConfigurationReferenceState.UNAVAILABLE,
+                )
+                else -> EnterpriseConfigurationDefaultUiModel(
+                    kind,
+                    null,
+                    EnterpriseConfigurationReferenceState.UNSET,
+                )
+            }
+        }
+        val fixture = Fixture(initial.copy(
+            configurationDetails = requireNotNull(initial.configurationDetails).copy(defaults = defaults),
+        ))
+        fixture.show()
+
+        click(R.string.enterprise_configuration_details_open)
+        compose.onNode(hasText(text(R.string.enterprise_configuration_defaults_title)) and hasClickAction()).performClick()
+        compose.onNodeWithText("Available default").assertIsDisplayed()
+        compose.onAllNodesWithText(text(R.string.enterprise_configuration_unset))[0].assertIsDisplayed()
+        compose.onNodeWithText(text(R.string.enterprise_configuration_reference_unavailable)).assertIsDisplayed()
     }
 
     @Test
@@ -506,6 +544,7 @@ class EnterprisePageAndroidTest {
                     CompositionLocalProvider(
                         LocalNavController provides navigator,
                         LocalToaster provides toaster,
+                        LocalAdaptiveLayoutInfo provides rememberAdaptiveLayoutInfo(),
                     ) {
                         Toaster(state = toaster, alignment = Alignment.TopCenter)
                         EnterprisePage(vm = vm)

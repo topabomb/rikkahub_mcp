@@ -1641,6 +1641,14 @@
   <string name="enterprise_configuration_fact_allowed_sizes">Разрешённые размеры</string>
   <string name="enterprise_configuration_fact_assistant">Ассистент</string>
   <string name="enterprise_configuration_fact_description">Описание</string>
+  <string name="enterprise_configuration_default_fast_model">Быстрая модель</string>
+  <string name="enterprise_configuration_default_title_model">Модель заголовков</string>
+  <string name="enterprise_configuration_default_attachment_inspection_model">Проверка вложений</string>
+  <string name="enterprise_configuration_default_suggestion_model">Создание подсказок</string>
+  <string name="enterprise_configuration_default_compress_model">Сжатие диалога</string>
+  <string name="enterprise_configuration_resource_memory_seeds">Начальные данные памяти</string>
+  <string name="enterprise_configuration_resource_gateways">Шлюзы</string>
+  <string name="enterprise_configuration_redacted_resource_count">%1$d эл.; содержимое скрыто</string>
   <string name="enterprise_personal">Личное пространство</string>
   <string name="enterprise_space">Корпоративное пространство</string>
   <string name="enterprise_local_notice">Конфигурация организации предоставляется этим устройством. Модели могут подключаться к настроенным вами сервисам.</string>

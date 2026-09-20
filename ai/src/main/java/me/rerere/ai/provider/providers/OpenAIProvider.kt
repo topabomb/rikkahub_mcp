@@ -34,8 +34,11 @@ import me.rerere.ai.provider.providers.openai.ResponseAPI
 import me.rerere.ai.provider.providers.openai.openAIRequestMediaCapabilities
 import me.rerere.ai.provider.images.ParsedImageGenerationItem
 import me.rerere.ai.provider.images.SafeRoutedImageDownloader
+import me.rerere.ai.provider.images.MAX_ROUTED_IMAGE_ERROR_BYTES
+import me.rerere.ai.provider.images.MAX_ROUTED_IMAGE_RESPONSE_BYTES
 import me.rerere.ai.provider.images.moderationBlockedImageException
 import me.rerere.ai.provider.images.parseImageGenerationResponseBody
+import me.rerere.ai.provider.images.readBoundedUtf8
 import me.rerere.ai.ui.ImageGenerationItem
 import me.rerere.ai.ui.MessageChunk
 import me.rerere.ai.core.ModelRequestMessage
@@ -269,9 +272,10 @@ class OpenAIProvider(
         val items = withContext(Dispatchers.IO) {
             val bodyStr = client.forCredentials(params.credentials).newCall(request).readResponse { response ->
                 if (!response.isSuccessful) {
-                    throw formatProviderHttpError(response.code, response.body?.string())
+                    throw formatProviderHttpError(response.code, response.readBoundedUtf8(MAX_ROUTED_IMAGE_ERROR_BYTES))
                 }
-                response.body.string()
+                if (routedRequest) response.readBoundedUtf8(MAX_ROUTED_IMAGE_RESPONSE_BYTES)
+                else response.body.string()
             }
             parseImageResponse(
                 bodyStr = bodyStr,
