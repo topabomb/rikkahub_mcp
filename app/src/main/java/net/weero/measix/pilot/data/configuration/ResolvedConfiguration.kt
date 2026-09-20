@@ -35,8 +35,19 @@ internal data class ResolvedGatewayEnablement(val enabled: Boolean, val canChang
 internal data class ResolvedModelConfiguration(
     val model: Model,
     val userProviderId: ConfigurationReference.User?,
-    val imageGenerationSupported: Boolean,
+    val imageGeneration: ImageGenerationCapabilities?,
     val transportCapabilities: ChatTransportCapabilities,
+) {
+    val imageGenerationSupported: Boolean get() = imageGeneration?.canGenerate == true
+}
+
+internal data class ImageGenerationCapabilities(
+    val canGenerate: Boolean,
+    val canEdit: Boolean,
+    val maxImagesPerRequest: Int,
+    /** Null means the user-owned provider accepts its native size surface. */
+    val allowedSizes: Set<String>?,
+    val supportsPartialImages: Boolean,
 )
 
 /** An explicit invalid reference remains visible; it never turns into a different selection. */
@@ -198,8 +209,10 @@ internal object ConfigurationResolver {
                 if (only != null) {
                     val (provider, model) = only
                     add(ConfigurationCategory.MODEL, id, model.displayName, provider.enabled)
+                    val supported = supportsImageGeneration(model.providerOverwrite ?: provider)
                     models[id] = ResolvedModelConfiguration(model, provider.id as ConfigurationReference.User,
-                        supportsImageGeneration(model.providerOverwrite ?: provider), chatTransportCapabilities(model.providerOverwrite ?: provider))
+                        ImageGenerationCapabilities(supported, supported, 4, null, true).takeIf { supported },
+                        chatTransportCapabilities(model.providerOverwrite ?: provider))
                 } else {
                     // Imported providers can retain model IDs. No owner may be chosen arbitrarily.
                     val key = ConfigurationKey(ConfigurationCategory.MODEL, id)
@@ -229,8 +242,31 @@ internal object ConfigurationResolver {
                     Model(id = id, modelId = definition.modelId, displayName = definition.name, type = definition.type,
                         inputModalities = definition.inputModalities, outputModalities = definition.outputModalities, abilities = definition.abilities),
                     null,
-                    true,
+                    null,
                     available.modelCapabilities[definition.id] ?: ChatTransportCapabilities.BASIC,
+                )
+            }
+            enterprise.imageGenerators.forEach { definition ->
+                val id = identity.reference(definition.id)
+                add(ConfigurationCategory.MODEL, id, definition.name, definition.enabled)
+                models[id] = ResolvedModelConfiguration(
+                    Model(
+                        id = id,
+                        modelId = definition.modelId,
+                        displayName = definition.name,
+                        type = ModelType.IMAGE,
+                        inputModalities = listOf(Modality.TEXT),
+                        outputModalities = listOf(Modality.IMAGE),
+                    ),
+                    null,
+                    ImageGenerationCapabilities(
+                        canGenerate = true,
+                        canEdit = false,
+                        maxImagesPerRequest = definition.maxImagesPerRequest,
+                        allowedSizes = definition.allowedSizes.toSet(),
+                        supportsPartialImages = false,
+                    ),
+                    ChatTransportCapabilities.BASIC,
                 )
             }
             enterprise.tts.forEach { add(ConfigurationCategory.TTS, identity.reference(it.id), it.name, it.enabled) }

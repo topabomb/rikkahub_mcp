@@ -20,6 +20,7 @@ import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -79,6 +80,14 @@ class ImgGenVM internal constructor(
 ) : AndroidViewModel(context) {
     internal val modelCatalog = configurationQueryService.observeModelCatalog()
         .stateIn(viewModelScope, SharingStarted.Eagerly, net.weero.measix.pilot.service.ModelCatalogReadState.Loading)
+    internal val imageCapabilities = modelCatalog.map { state ->
+        val catalog = (state as? net.weero.measix.pilot.service.ModelCatalogReadState.Available)?.catalog
+        catalog?.roleSelections
+            ?.get(net.weero.measix.pilot.data.configuration.ResourceSelectionSlot.IMAGE_MODEL)
+            ?.reference
+            ?.let(catalog::find)
+            ?.imageGeneration
+    }.distinctUntilChanged().stateIn(viewModelScope, SharingStarted.Eagerly, null)
     val settings: StateFlow<Settings> = settingsStore.userSettings
         .stateIn(viewModelScope, SharingStarted.Eagerly, Settings.dummy())
 
@@ -136,6 +145,18 @@ class ImgGenVM internal constructor(
         viewModelScope.launch {
             realmSelection.collect { startNewSession() }
         }
+        viewModelScope.launch {
+            imageCapabilities.collect { capabilities ->
+                capabilities ?: return@collect
+                _numberOfImages.value = _numberOfImages.value.coerceIn(1, capabilities.maxImagesPerRequest)
+                capabilities.allowedSizes?.let { allowed ->
+                    if (_size.value !in allowed) _size.value = if (ImageGenSize.AUTO.value in allowed) {
+                        ImageGenSize.AUTO.value
+                    } else allowed.first()
+                }
+                if (!capabilities.canEdit && _referenceImages.value.isNotEmpty()) clearReferenceImages()
+            }
+        }
     }
 
     fun updatePrompt(prompt: String) {
@@ -143,14 +164,16 @@ class ImgGenVM internal constructor(
     }
 
     fun updateNumberOfImages(count: Int) {
-        _numberOfImages.value = count.coerceIn(1, 4)
+        _numberOfImages.value = count.coerceIn(1, imageCapabilities.value?.maxImagesPerRequest ?: 4)
     }
 
     fun updateSize(size: String) {
-        _size.value = size
+        val allowed = imageCapabilities.value?.allowedSizes
+        if (allowed == null || size in allowed) _size.value = size
     }
 
     internal fun beginReferenceImport(): Boolean {
+        if (imageCapabilities.value?.canEdit != true) return false
         if (pendingReferenceImport != null) return false
         val selected = realmSelection.value ?: return false
         pendingReferenceImport = ImageReferenceImport(selected, referenceOwner)
@@ -218,6 +241,8 @@ class ImgGenVM internal constructor(
         val requestPrompt = _prompt.value
         val references = if (edit) _referenceImages.value.toList() else emptyList()
         if (requestPrompt.isBlank() || (edit && references.isEmpty())) return
+        val capabilities = imageCapabilities.value ?: return
+        if (edit && !capabilities.canEdit) { _error.value = "invalid_request"; return }
         val catalog = (modelCatalog.value as? net.weero.measix.pilot.service.ModelCatalogReadState.Available)?.catalog ?: return
         val selection = catalog.selection ?: return
         if (references.any { it.selection != selection }) return
@@ -244,7 +269,8 @@ class ImgGenVM internal constructor(
                 _currentGeneratedImages.value = emptyList()
                 val request = ImageGenerationRequest(
                     source = ImageGenerationSource.Page(selection, model.id),
-                    prompt = requestPrompt, numOfImages = count, size = size, partialImages = 2,
+                    prompt = requestPrompt, numOfImages = count, size = size,
+                    partialImages = if (capabilities.supportsPartialImages) 2 else 0,
                     mediaKind = if (edit) GeneratedMediaKind.EDIT else GeneratedMediaKind.GENERATION,
                     sourcePaths = sourceImages.takeIf { it.isNotEmpty() }?.joinToString("\n"),
                     editImages = sourceImages,

@@ -24,6 +24,7 @@ import me.rerere.ai.provider.ImageGenerationParams
 import me.rerere.ai.provider.Model
 import me.rerere.ai.provider.Provider
 import me.rerere.ai.provider.ProviderSetting
+import me.rerere.ai.provider.RequestCredentials
 import me.rerere.ai.provider.RequestMediaCapabilities
 import me.rerere.ai.provider.authenticate
 import me.rerere.ai.provider.TextGenerationParams
@@ -31,6 +32,7 @@ import me.rerere.ai.provider.providers.openai.ChatCompletionsAPI
 import me.rerere.ai.provider.providers.openai.ResponseAPI
 import me.rerere.ai.provider.providers.openai.openAIRequestMediaCapabilities
 import me.rerere.ai.provider.images.ParsedImageGenerationItem
+import me.rerere.ai.provider.images.SafeRoutedImageDownloader
 import me.rerere.ai.provider.images.moderationBlockedImageException
 import me.rerere.ai.provider.images.parseImageGenerationResponseBody
 import me.rerere.ai.ui.ImageGenerationItem
@@ -72,6 +74,7 @@ class OpenAIProvider(
 
     private val chatCompletionsAPI = ChatCompletionsAPI(client = client, keyRoulette = keyRoulette)
     private val responseAPI = ResponseAPI(client = client, keyRoulette = keyRoulette)
+    private val safeRoutedImageDownloader = SafeRoutedImageDownloader(client)
 
 
     override suspend fun listModels(providerSetting: ProviderSetting.OpenAI): List<Model> =
@@ -229,7 +232,7 @@ class OpenAIProvider(
             "Expected OpenAI provider setting"
         }
 
-
+        val routedRequest = params.credentials is RequestCredentials.Routed
         val requestBody = json.encodeToString(
             buildJsonObject {
                 put("model", params.model.modelId)
@@ -239,13 +242,17 @@ class OpenAIProvider(
                 val isGrok = providerSetting.baseUrl.contains("x.ai", ignoreCase = true) ||
                     params.model.modelId.contains("grok", ignoreCase = true)
 
-                if (params.size.isNotBlank() && !isGrok) {
+                if (params.size.isNotBlank() && (!isGrok || routedRequest)) {
                     put("size", params.size)
                 }
             }
                 .mergeCustomBody(
                     params.customBody,
-                    OPENAI_IMAGE_GENERATION_OWNERSHIP,
+                    if (routedRequest) {
+                        OPENAI_ROUTED_IMAGE_GENERATION_OWNERSHIP
+                    } else {
+                        OPENAI_IMAGE_GENERATION_OWNERSHIP
+                    },
                 )
         )
 
@@ -265,7 +272,11 @@ class OpenAIProvider(
                 }
                 response.body.string()
             }
-            parseImageResponse(bodyStr, request.isPrivate)
+            parseImageResponse(
+                bodyStr = bodyStr,
+                privateRequest = request.isPrivate,
+                routedRequest = routedRequest,
+            )
         }
 
         items.forEach { emit(it) }
@@ -341,13 +352,21 @@ class OpenAIProvider(
                 }
                 response.body.string()
             }
-            parseImageResponse(bodyStr, request.isPrivate)
+            parseImageResponse(
+                bodyStr = bodyStr,
+                privateRequest = request.isPrivate,
+                routedRequest = params.credentials is RequestCredentials.Routed,
+            )
         }
 
         items.forEach { emit(it) }
     }
 
-    private suspend fun parseImageResponse(bodyStr: String, privateRequest: Boolean): List<ImageGenerationItem> {
+    private suspend fun parseImageResponse(
+        bodyStr: String,
+        privateRequest: Boolean,
+        routedRequest: Boolean,
+    ): List<ImageGenerationItem> {
         val parsed = parseImageGenerationResponseBody(bodyStr)
         if (parsed.allBlockedByModeration && parsed.items.isEmpty()) {
             throw moderationBlockedImageException()
@@ -358,7 +377,11 @@ class OpenAIProvider(
                     data = item.data,
                     mimeType = item.mimeType,
                 )
-                is ParsedImageGenerationItem.RemoteUrl -> downloadImageAsBase64(item.url, privateRequest)
+                is ParsedImageGenerationItem.RemoteUrl -> if (routedRequest) {
+                    safeRoutedImageDownloader.downloadAsBase64(item.url)
+                } else {
+                    downloadImageAsBase64(item.url, privateRequest)
+                }
             }
         }
     }
@@ -415,6 +438,12 @@ internal val OPENAI_IMAGE_GENERATION_OWNERSHIP = RequestBodyOwnership(
         "prompt",
         "n",
     ),
+)
+
+/** Routed generation must preserve the size captured by the enterprise request owner. */
+internal val OPENAI_ROUTED_IMAGE_GENERATION_OWNERSHIP = RequestBodyOwnership(
+    protocol = "openai-images-generations-routed",
+    reservedKeys = OPENAI_IMAGE_GENERATION_OWNERSHIP.reservedKeys + "size",
 )
 
 /**

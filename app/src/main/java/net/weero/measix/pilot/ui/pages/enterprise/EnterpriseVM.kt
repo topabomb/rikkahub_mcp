@@ -8,6 +8,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import net.weero.measix.pilot.R
@@ -45,6 +46,8 @@ internal data class EnterpriseBudgetPresentation(
 
 internal class EnterpriseVM(private val service: EnterpriseApplicationService) : ViewModel() {
     val overview = service.observe().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
+    val configurationDetails = overview.map { it?.configurationDetails }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
     private val _busy = MutableStateFlow(false)
     val busy = _busy.asStateFlow()
     data class Failure(

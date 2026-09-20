@@ -259,6 +259,7 @@ private fun ImageGenScreen(
     val isGenerating by vm.isGenerating.collectAsStateWithLifecycle()
     val currentGeneratedImages by vm.currentGeneratedImages.collectAsStateWithLifecycle()
     val referenceImages by vm.referenceImages.collectAsStateWithLifecycle()
+    val imageCapabilities by vm.imageCapabilities.collectAsStateWithLifecycle()
     val settings by vm.settings.collectAsStateWithLifecycle()
     val scope = rememberCoroutineScope()
     var showSettingsSheet by remember { mutableStateOf(false) }
@@ -314,6 +315,7 @@ private fun ImageGenScreen(
             vm = vm,
             isGenerating = isGenerating,
             referenceImages = referenceImages,
+            canEdit = imageCapabilities?.canEdit == true,
             onShowSettings = { showSettingsSheet = true },
             modifier = Modifier
         )
@@ -337,6 +339,7 @@ private fun ImageGenScreen(
             vm = vm,
             numberOfImages = numberOfImages,
             size = size,
+            capabilities = imageCapabilities,
             scope = scope,
             sheetState = sheetState,
             onDismiss = { showSettingsSheet = false }
@@ -350,6 +353,7 @@ private fun InputBar(
     vm: ImgGenVM,
     isGenerating: Boolean,
     referenceImages: List<net.weero.measix.pilot.service.TemporaryImage>,
+    canEdit: Boolean,
     onShowSettings: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -420,15 +424,17 @@ private fun InputBar(
                 Icon(HugeIcons.Tools, null)
             }
 
-            IconButton(
-                onClick = {
-                    if (vm.beginReferenceImport()) imagePickerLauncher.launch("image/*")
+            if (canEdit) {
+                IconButton(
+                    onClick = {
+                        if (vm.beginReferenceImport()) imagePickerLauncher.launch("image/*")
+                    }
+                ) {
+                    Icon(
+                        imageVector = HugeIcons.Add01,
+                        contentDescription = addReferenceImage,
+                    )
                 }
-            ) {
-                Icon(
-                    imageVector = HugeIcons.Add01,
-                    contentDescription = addReferenceImage,
-                )
             }
 
             Spacer(modifier = Modifier.weight(1f))
@@ -851,6 +857,7 @@ private fun SettingsBottomSheet(
     vm: ImgGenVM,
     numberOfImages: Int,
     size: String,
+    capabilities: net.weero.measix.pilot.data.configuration.ImageGenerationCapabilities?,
     scope: CoroutineScope,
     sheetState: SheetState,
     onDismiss: () -> Unit
@@ -891,7 +898,8 @@ private fun SettingsBottomSheet(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
-                    ImageGenSize.entries.forEach { sizeOption ->
+                    val allowed = capabilities?.allowedSizes
+                    ImageGenSize.entries.filter { allowed == null || it.value in allowed }.forEach { sizeOption ->
                         FilterChip(
                             selected = size == sizeOption.value,
                             onClick = { vm.updateSize(sizeOption.value) },
@@ -901,15 +909,17 @@ private fun SettingsBottomSheet(
 
                     Spacer(modifier = Modifier.height(8.dp))
 
-                    OutlinedTextField(
-                        value = size,
-                        onValueChange = vm::updateSize,
-                        label = { Text(stringResource(R.string.imggen_page_custom_size)) },
-                        placeholder = { Text(stringResource(R.string.imggen_page_custom_size_placeholder)) },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth(),
-                        textStyle = MaterialTheme.typography.bodySmall,
-                    )
+                    if (allowed == null) {
+                        OutlinedTextField(
+                            value = size,
+                            onValueChange = vm::updateSize,
+                            label = { Text(stringResource(R.string.imggen_page_custom_size)) },
+                            placeholder = { Text(stringResource(R.string.imggen_page_custom_size_placeholder)) },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth(),
+                            textStyle = MaterialTheme.typography.bodySmall,
+                        )
+                    }
                 }
             }
 

@@ -27,6 +27,14 @@ internal fun testResolvedConfiguration(
     state: EnterpriseState = EnterpriseState.Loading,
 ): ResolvedConfiguration = ConfigurationResolver.resolve(UserSettingsDocument.empty().withPersonalSettings(settings), scope, state)
 
+internal val testPersonalImageCapabilities = net.weero.measix.pilot.data.configuration.ImageGenerationCapabilities(
+    canGenerate = true,
+    canEdit = true,
+    maxImagesPerRequest = 4,
+    allowedSizes = null,
+    supportsPartialImages = true,
+)
+
 /** Reuse real resolution and admission while an existing test owns its in-memory Settings publisher. */
 internal fun installExecutionConfigurationFixture(store: SettingsStore) {
     coEvery { store.withExecutionConfiguration<Any?>(any(), any(), any()) } coAnswers {

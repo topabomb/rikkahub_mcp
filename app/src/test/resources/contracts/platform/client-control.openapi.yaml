@@ -620,6 +620,9 @@ components:
     ModelId:
       type: string
       pattern: ^mdl_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$
+    ImageGenerationId:
+      type: string
+      pattern: ^img_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$
     TtsId:
       type: string
       pattern: ^tts_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$
@@ -676,7 +679,7 @@ components:
       pattern: ^sha256:[0-9a-f]{64}$
     ResourceKind:
       type: string
-      enum: [MODEL, TTS, ASR, MCP]
+      enum: [MODEL, TTS, ASR, MCP, IMAGE_GENERATION]
     UsageClientProtocol:
       type: string
       enum:
@@ -684,6 +687,7 @@ components:
       - OPENAI_RESPONSES
       - ANTHROPIC_MESSAGES
       - GOOGLE_GENERATE_CONTENT
+      - OPENAI_IMAGES_GENERATIONS
       - OPENAI_AUDIO_SPEECH
       - GEMINI_GENERATE_CONTENT_TTS
       - MIMO_CHAT_COMPLETIONS_TTS
@@ -694,13 +698,13 @@ components:
       - MCP_STREAMABLE_HTTP
     UsageMeter:
       type: string
-      enum: [REQUESTS, INPUT_TOKENS, OUTPUT_TOKENS, CACHED_TOKENS, TOTAL_TOKENS, CHARACTERS, AUDIO_SECONDS]
+      enum: [REQUESTS, REQUESTED_IMAGES, INPUT_TOKENS, OUTPUT_TOKENS, CACHED_TOKENS, TOTAL_TOKENS, CHARACTERS, AUDIO_SECONDS]
     UsageCompleteness:
       type: string
       enum: [EXACT, PARTIAL, UNKNOWN]
     BudgetCapability:
       type: string
-      enum: [MODEL, TTS, ASR, MCP]
+      enum: [MODEL, TTS, ASR, MCP, IMAGE_GENERATION]
     BudgetMode:
       type: string
       enum: [UNLIMITED, LIMITED]
@@ -762,8 +766,6 @@ components:
       properties:
         capability:
           $ref: '#/components/schemas/BudgetCapability'
-        resourceId:
-          type: string
         mode:
           $ref: '#/components/schemas/BudgetMode'
         source:
@@ -802,8 +804,8 @@ components:
           type: string
         items:
           type: array
-          minItems: 4
-          maxItems: 4
+          minItems: 5
+          maxItems: 5
           items:
             $ref: '#/components/schemas/BudgetCapabilityView'
         asOf:
@@ -1167,6 +1169,46 @@ components:
             - REASONING
         enabled:
           type: boolean
+    ImageGenerationDefinition:
+      type: object
+      additionalProperties: false
+      required:
+      - imageId
+      - displayName
+      - clientProtocol
+      - upstreamModelKey
+      - runtimePath
+      - maxImagesPerRequest
+      - allowedSizes
+      - enabled
+      properties:
+        imageId:
+          $ref: '#/components/schemas/ImageGenerationId'
+        displayName:
+          type: string
+          minLength: 1
+        clientProtocol:
+          type: string
+          enum: [OPENAI_IMAGES_GENERATIONS]
+        upstreamModelKey:
+          type: string
+          minLength: 1
+        runtimePath:
+          type: string
+          pattern: ^/[^?#]*$
+        maxImagesPerRequest:
+          type: integer
+          minimum: 1
+          maximum: 6
+        allowedSizes:
+          type: array
+          minItems: 1
+          uniqueItems: true
+          items:
+            type: string
+            pattern: '^(auto|[1-9][0-9]*x[1-9][0-9]*)$'
+        enabled:
+          type: boolean
     TtsDefinition:
       type: object
       additionalProperties: false
@@ -1382,6 +1424,8 @@ components:
           description: Allows user assistants; referenced resources remain independently governed.
         defaultModelId:
           $ref: '#/components/schemas/ModelId'
+        defaultImageGenerationId:
+          $ref: '#/components/schemas/ImageGenerationId'
         defaultTtsId:
           $ref: '#/components/schemas/TtsId'
         defaultAsrId:
@@ -1410,6 +1454,11 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/ModelDefinition'
+        imageGenerators:
+          type: array
+          description: Additive Snapshot v4 field; omission means an empty list.
+          items:
+            $ref: '#/components/schemas/ImageGenerationDefinition'
         tts:
           type: array
           items:
@@ -1696,6 +1745,11 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/ModelDefinition'
+        imageGenerators:
+          type: array
+          description: Additive Snapshot v4 field; omission means an empty list.
+          items:
+            $ref: '#/components/schemas/ImageGenerationDefinition'
         tts:
           type: array
           items:

@@ -35,6 +35,7 @@ internal data class ModelChoiceUiModel(
     val model: Model,
     val unavailableReason: ConfigurationUnavailableReason?,
     val roleReasons: Map<ResourceSelectionSlot, ConfigurationUnavailableReason?> = emptyMap(),
+    val imageGeneration: net.weero.measix.pilot.data.configuration.ImageGenerationCapabilities? = null,
 ) {
     val canSelect: Boolean get() = unavailableReason == null
 }
@@ -119,6 +120,7 @@ internal fun ResolvedConfiguration.modelCatalog(selection: RealmSelection): Mode
                         choice(ResourceSelectionSlot.IMAGE_MODEL, definition.model.id).unavailableReason
                     else access(ConfigurationCategory.MODEL, definition.model.id).unavailableReason,
                     roleReasons = modelSlots.associateWith { choice(it, definition.model.id).unavailableReason },
+                    imageGeneration = definition.imageGeneration,
                 )
             },
             userProviderId = providerId,
@@ -143,6 +145,14 @@ internal fun userDefinitionModelCatalog(providers: List<ProviderSetting>): Model
                     model.type == ModelType.IMAGE && !supportsImageGeneration(model.providerOverwrite ?: provider) ->
                         ConfigurationUnavailableReason.RESOURCE_CAPABILITY_MISMATCH
                     else -> null
+                }, imageGeneration = supportsImageGeneration(model.providerOverwrite ?: provider).takeIf { it }?.let {
+                    net.weero.measix.pilot.data.configuration.ImageGenerationCapabilities(
+                        canGenerate = true,
+                        canEdit = true,
+                        maxImagesPerRequest = 4,
+                        allowedSizes = null,
+                        supportsPartialImages = true,
+                    )
                 })
             },
             userProviderId = provider.id as ConfigurationReference.User,

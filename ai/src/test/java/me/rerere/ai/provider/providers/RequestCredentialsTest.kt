@@ -9,6 +9,8 @@ import io.mockk.unmockkStatic
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonPrimitive
+import me.rerere.ai.provider.CustomBody
 import me.rerere.ai.provider.CustomHeader
 import me.rerere.ai.provider.ImageGenerationParams
 import me.rerere.ai.provider.ImageEditParams
@@ -185,6 +187,118 @@ class RequestCredentialsTest {
                 assertNull(requests.last().header("Authorization"))
                 assertNull(requests.last().header("X-Tenant"))
             } finally { client.dispatcher.executorService.shutdown(); client.connectionPool.evictAll() }
+        }
+    }
+
+    @Test fun `routed grok generation preserves caller size while personal grok keeps legacy omission`() = runBlocking {
+        val requests = mutableListOf<Request>()
+        val client = OkHttpClient.Builder().addInterceptor { chain ->
+            requests += chain.request()
+            Response.Builder().request(chain.request()).protocol(Protocol.HTTP_1_1)
+                .code(503).message("Fixture end").body("fixture".toResponseBody()).build()
+        }.build()
+        try {
+            val provider = OpenAIProvider(client)
+            val setting = ProviderSetting.OpenAI(
+                baseUrl = "https://api.x.ai/v1",
+                apiKey = "personal-key",
+            )
+            val params = ImageGenerationParams(
+                model = Model(modelId = "grok-imagine"),
+                prompt = "draw",
+                size = "1024x768",
+            )
+
+            try {
+                provider.generateImage(
+                    setting,
+                    params.copy(
+                        credentials = RequestCredentials.Routed(
+                            "https://relay.test/runtime/v1/resources/image/images/generations",
+                            "relay-token",
+                        ),
+                    ),
+                ).collect()
+                fail("fixture rejection must propagate")
+            } catch (_: Exception) { /* Inspect the routed request body below. */ }
+            try {
+                provider.generateImage(setting, params).collect()
+                fail("fixture rejection must propagate")
+            } catch (_: Exception) { /* Inspect the personal request body below. */ }
+
+            assertEquals(2, requests.size)
+            val routedBody = okio.Buffer().also { requests[0].body!!.writeTo(it) }.readUtf8()
+            val personalBody = okio.Buffer().also { requests[1].body!!.writeTo(it) }.readUtf8()
+            assertTrue(routedBody.contains("\"size\":\"1024x768\""))
+            assertFalse(personalBody.contains("\"size\""))
+        } finally {
+            client.dispatcher.executorService.shutdown()
+            client.connectionPool.evictAll()
+        }
+    }
+
+    @Test fun `routed generation size cannot be replaced by custom body`() = runBlocking {
+        var requests = 0
+        val client = OkHttpClient.Builder().addInterceptor { requests++; error("unexpected request") }.build()
+        try {
+            val provider = OpenAIProvider(client)
+            val setting = ProviderSetting.OpenAI(baseUrl = "https://api.x.ai/v1")
+            val params = ImageGenerationParams(
+                model = Model(modelId = "grok-imagine"),
+                prompt = "draw",
+                size = "1024x768",
+                customBody = listOf(CustomBody("size", JsonPrimitive("1x1"))),
+                credentials = RequestCredentials.Routed(
+                    "https://relay.test/runtime/v1/resources/image/images/generations",
+                    "relay-token",
+                ),
+            )
+            try {
+                provider.generateImage(setting, params).collect()
+                fail("custom body replaced routed size")
+            } catch (error: me.rerere.ai.util.CustomBodyReservedKeyException) {
+                assertEquals(listOf("size"), error.conflictingKeys)
+            }
+            assertEquals(0, requests)
+        } finally {
+            client.dispatcher.executorService.shutdown()
+            client.connectionPool.evictAll()
+        }
+    }
+
+    @Test fun `routed remote image uses strict downloader while fixed behavior stays compatible`() = runBlocking {
+        val requests = mutableListOf<Request>()
+        val client = OkHttpClient.Builder().addInterceptor { chain ->
+            requests += chain.request()
+            Response.Builder().request(chain.request()).protocol(Protocol.HTTP_1_1)
+                .code(200).message("OK")
+                .body("""{"data":[{"url":"http://127.0.0.1/private.png"}]}""".toResponseBody())
+                .build()
+        }.build()
+        try {
+            val provider = OpenAIProvider(client)
+            val setting = ProviderSetting.OpenAI(baseUrl = "https://provider.test/v1")
+            try {
+                provider.generateImage(
+                    setting,
+                    ImageGenerationParams(
+                        model = Model(modelId = "image"),
+                        prompt = "draw",
+                        credentials = RequestCredentials.Routed(
+                            "https://relay.test/runtime/v1/resources/image/images/generations",
+                            "relay-token",
+                        ),
+                    ),
+                ).collect()
+                fail("routed HTTP image URL was accepted")
+            } catch (error: java.io.IOException) {
+                assertEquals("routed_image_unsafe_url", error.message)
+            }
+            assertEquals(1, requests.size)
+            assertEquals("relay.test", requests.single().url.host)
+        } finally {
+            client.dispatcher.executorService.shutdown()
+            client.connectionPool.evictAll()
         }
     }
 

@@ -43,6 +43,11 @@ class PlatformWireTest {
         assertThrows(EnterpriseConfigurationException::class.java) {
             PlatformWireCodec.decode<PlatformManagedSnapshot>(JsonObject(snapshot + ("policy" to JsonObject(policy + ("defaultModelId" to JsonNull)))).toString())
         }
+        val withoutImages = JsonObject(snapshot - "imageGenerators")
+        assertNull(PlatformWireCodec.decode<PlatformManagedSnapshot>(withoutImages.toString()).imageGenerators)
+        assertThrows(EnterpriseConfigurationException::class.java) {
+            PlatformWireCodec.decode<PlatformManagedSnapshot>(JsonObject(snapshot + ("imageGenerators" to JsonNull)).toString())
+        }
     }
 
     @Test

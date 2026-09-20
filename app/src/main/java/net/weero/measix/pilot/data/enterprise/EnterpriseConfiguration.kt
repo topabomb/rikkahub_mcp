@@ -26,6 +26,7 @@ internal data class EnterpriseConfiguration(
     val generation: Long,
     val policy: EnterprisePolicy,
     val models: List<EnterpriseModel>,
+    val imageGenerators: List<EnterpriseImageGenerationResource> = emptyList(),
     val tts: List<EnterpriseTtsResource>,
     val asr: List<EnterpriseAsrResource>,
     val mcpServers: List<EnterpriseMcpResource>,
@@ -56,6 +57,17 @@ internal data class EnterpriseModel(
     val outputModalities: List<Modality> = listOf(Modality.TEXT),
     val abilities: List<ModelAbility> = emptyList(),
     val providerId: String? = null,
+)
+
+@Serializable
+internal data class EnterpriseImageGenerationResource(
+    val id: String,
+    val name: String,
+    val modelId: String,
+    val enabled: Boolean = true,
+    val protocol: PlatformImageGenerationDefinitionClientProtocol,
+    val maxImagesPerRequest: Int,
+    val allowedSizes: List<String>,
 )
 
 @Serializable
@@ -155,13 +167,14 @@ internal data class EnterpriseDefaults(
     val asrId: String? = null,
 )
 
-internal enum class EnterpriseResourceKind { MODEL, TTS, ASR, MCP, GATEWAY }
+internal enum class EnterpriseResourceKind { MODEL, IMAGE_GENERATION, TTS, ASR, MCP, GATEWAY }
 
 internal fun EnterpriseIdentity.reference(id: String): ConfigurationReference.Enterprise =
     ConfigurationReference.Enterprise(authority, id)
 
 internal fun EnterpriseConfiguration.runtimeResources(): Map<String, EnterpriseResourceKind> = buildMap {
     models.forEach { put(it.id, EnterpriseResourceKind.MODEL) }
+    imageGenerators.forEach { put(it.id, EnterpriseResourceKind.IMAGE_GENERATION) }
     tts.filter { it.protocol != EnterpriseTtsProtocol.SYSTEM }.forEach { put(it.id, EnterpriseResourceKind.TTS) }
     asr.forEach { put(it.id, EnterpriseResourceKind.ASR) }
     mcpServers.forEach { put(it.id, EnterpriseResourceKind.MCP) }

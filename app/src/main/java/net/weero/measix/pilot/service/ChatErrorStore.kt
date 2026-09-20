@@ -317,6 +317,7 @@ private fun capabilityResource(value: PlatformBudgetCapability): Int = when (val
     PlatformBudgetCapability.TTS -> R.string.enterprise_budget_capability_tts
     PlatformBudgetCapability.ASR -> R.string.enterprise_budget_capability_asr
     PlatformBudgetCapability.MCP -> R.string.enterprise_budget_capability_mcp
+    PlatformBudgetCapability.IMAGE_GENERATION -> R.string.enterprise_budget_capability_image_generation
 }
 
 private fun periodResource(value: PlatformBudgetPeriod): Int = when (value) {
@@ -328,6 +329,7 @@ private fun periodResource(value: PlatformBudgetPeriod): Int = when (value) {
 
 private fun meterResource(value: PlatformUsageMeter): Int = when (value) {
     PlatformUsageMeter.REQUESTS -> R.string.enterprise_budget_meter_requests
+    PlatformUsageMeter.REQUESTED_IMAGES -> R.string.enterprise_budget_meter_requested_images
     PlatformUsageMeter.INPUT_TOKENS -> R.string.enterprise_budget_meter_input_tokens
     PlatformUsageMeter.OUTPUT_TOKENS -> R.string.enterprise_budget_meter_output_tokens
     PlatformUsageMeter.CACHED_TOKENS -> R.string.enterprise_budget_meter_cached_tokens

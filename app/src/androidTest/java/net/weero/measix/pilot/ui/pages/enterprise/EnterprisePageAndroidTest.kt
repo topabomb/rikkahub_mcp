@@ -48,8 +48,7 @@ import net.weero.measix.pilot.data.enterprise.EnterpriseSessionPhase
 import net.weero.measix.pilot.data.enterprise.RealmAccess
 import net.weero.measix.pilot.data.enterprise.RealmSelection
 import net.weero.measix.pilot.data.enterprise.RealmSwitchRequest
-import net.weero.measix.pilot.service.EnterpriseApplicationService
-import net.weero.measix.pilot.service.EnterpriseOverview
+import net.weero.measix.pilot.service.*
 import net.weero.measix.pilot.service.portal.PortalDocument
 import net.weero.measix.pilot.service.portal.PortalFailure
 import net.weero.measix.pilot.service.portal.PortalWebView
@@ -76,20 +75,25 @@ class EnterprisePageAndroidTest {
     }
 
     @Test
-    fun connectedDetailsShowTheEnterpriseAddressAndCopyAction() {
+    fun configurationDetailsShowTheEnterpriseAddressAndCopyAction() {
         val origin = "https://core.example"
-        val fixture = Fixture(overview().copy(platformOrigin = origin))
+        val initial = overview()
+        val fixture = Fixture(initial.copy(
+            platformOrigin = origin,
+            configurationDetails = requireNotNull(initial.configurationDetails).copy(platformOrigin = origin),
+        ))
         fixture.show()
 
-        click(R.string.enterprise_connection_details_show)
-        compose.onNodeWithText(text(R.string.enterprise_address)).assertIsDisplayed()
-        compose.onNodeWithText(origin).assertIsDisplayed()
-        compose.onNodeWithContentDescription(text(R.string.copy)).assertIsDisplayed().performClick()
+        click(R.string.enterprise_configuration_details_open)
+        compose.onNodeWithText(text(R.string.enterprise_configuration_diagnostics_title)).performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText(text(R.string.enterprise_address)).performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText(origin).performScrollTo().assertIsDisplayed()
+        compose.onNodeWithContentDescription(text(R.string.copy)).performScrollTo().assertIsDisplayed().performClick()
         compose.onNodeWithText(text(R.string.copied)).assertIsDisplayed()
     }
 
     @Test
-    fun connectedDetailsEditTheAddressWithoutStartingEnrollment() {
+    fun connectedCardEditsTheAddressWithoutStartingEnrollment() {
         val oldOrigin = "https://old.example"
         val newOrigin = "https://new.example"
         val initial = overview().copy(platformOrigin = oldOrigin)
@@ -98,7 +102,6 @@ class EnterprisePageAndroidTest {
         coEvery { fixture.service.changeAddress(request, newOrigin) } just Runs
         fixture.show()
 
-        click(R.string.enterprise_connection_details_show)
         click(R.string.edit)
         compose.onNodeWithText(text(R.string.enterprise_address_edit_title)).assertIsDisplayed()
         compose.onNode(hasSetTextAction()).performTextReplacement(newOrigin)
@@ -111,7 +114,7 @@ class EnterprisePageAndroidTest {
     }
 
     @Test
-    fun connectedDetailsEditTheAddressWhilePersonalSpaceIsSelected() {
+    fun connectedCardEditsTheAddressWhilePersonalSpaceIsSelected() {
         val oldOrigin = "https://old.example"
         val newOrigin = "https://new.example"
         val enterpriseAccess = access()
@@ -125,7 +128,6 @@ class EnterprisePageAndroidTest {
         coEvery { fixture.service.changeAddress(request, newOrigin) } just Runs
         fixture.show()
 
-        click(R.string.enterprise_connection_details_show)
         click(R.string.edit)
         compose.onNodeWithText(text(R.string.enterprise_address_edit_title)).assertIsDisplayed()
         compose.onNode(hasSetTextAction()).performTextReplacement(newOrigin)
@@ -134,6 +136,25 @@ class EnterprisePageAndroidTest {
 
         coVerify(exactly = 1) { fixture.service.changeAddress(request, newOrigin) }
         compose.onNodeWithText(text(R.string.enterprise_address_changed)).assertIsDisplayed()
+    }
+
+    @Test
+    fun configurationDetailsUseOverviewCategoryItemDisclosureAndLayeredBack() {
+        val fixture = Fixture(overview())
+        fixture.show()
+
+        click(R.string.enterprise_configuration_details_open)
+        click(R.string.enterprise_configuration_resource_image_generators)
+        compose.onNodeWithText("Managed image").assertIsDisplayed().performClick()
+        compose.onNodeWithText("img_example").assertDoesNotExist()
+        compose.onNodeWithText(text(R.string.enterprise_configuration_disabled)).assertIsDisplayed()
+
+        compose.onNodeWithContentDescription(text(R.string.back)).performClick()
+        compose.onNodeWithText("Managed image").assertIsDisplayed()
+        compose.onNodeWithContentDescription(text(R.string.back)).performClick()
+        compose.onNodeWithText(text(R.string.enterprise_configuration_defaults_title)).assertIsDisplayed()
+        compose.onNodeWithContentDescription(text(R.string.back)).performClick()
+        compose.onNodeWithText(text(R.string.enterprise_configuration_details_open)).assertIsDisplayed()
     }
 
     @Test
@@ -415,8 +436,10 @@ class EnterprisePageAndroidTest {
         access: RealmAccess.Enterprise? = access(),
         name: String = "Example enterprise",
         revision: Long = 1L,
-    ) = EnterpriseOverview(
-        selection = RealmSelection(access ?: RealmAccess.Personal, revision),
+    ): EnterpriseOverview {
+        val selection = RealmSelection(access ?: RealmAccess.Personal, revision)
+        return EnterpriseOverview(
+        selection = selection,
         phase = if (access == null) EnterpriseSessionPhase.SIGNED_OUT else EnterpriseSessionPhase.READY,
         enterpriseName = name.takeIf { access != null },
         userName = "Example user".takeIf { access != null },
@@ -426,6 +449,39 @@ class EnterprisePageAndroidTest {
         failure = null,
         exitFailure = null,
         switching = false,
+        platformOrigin = "https://core.example".takeIf { access != null },
+        configurationDetails = access?.let { configurationDetails(name) },
+    )
+    }
+
+    private fun configurationDetails(name: String) = EnterpriseConfigurationDetailsUiModel(
+        enterpriseName = name,
+        phase = EnterpriseSessionPhase.READY,
+        generation = 1,
+        lastSyncMillis = 1_000,
+        platformOrigin = "https://core.example",
+        defaults = EnterpriseConfigurationDefaultKind.entries.map { kind ->
+            EnterpriseConfigurationDefaultUiModel(
+                kind = kind,
+                displayName = null,
+                state = EnterpriseConfigurationReferenceState.UNSET,
+            )
+        },
+        policies = EnterpriseConfigurationPolicyKind.entries.map { kind ->
+            EnterpriseConfigurationPolicyUiModel(kind, allowed = false)
+        },
+        resources = EnterpriseConfigurationResourceKind.entries.map { kind ->
+            EnterpriseConfigurationResourceGroupUiModel(
+                kind,
+                if (kind == EnterpriseConfigurationResourceKind.IMAGE_GENERATOR) listOf(
+                    EnterpriseConfigurationResourceUiModel(
+                        key = "1:IMAGE_GENERATOR:0",
+                        displayName = "Managed image",
+                        enabled = false,
+                    ),
+                ) else emptyList(),
+            )
+        },
     )
 
     private inner class Fixture(

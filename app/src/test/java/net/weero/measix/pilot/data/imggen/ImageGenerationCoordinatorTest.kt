@@ -62,11 +62,43 @@ class ImageGenerationCoordinatorTest {
         return net.weero.measix.pilot.service.ModelExecutionSnapshot(model,
             net.weero.measix.pilot.service.runtime.ModelExecutionLease { accept ->
                 accept(net.weero.measix.pilot.service.runtime.ModelRequestTarget.Remote(setting))
-            }, "fixture", null)
+            }, "fixture", null, imageGeneration = net.weero.measix.pilot.test.testPersonalImageCapabilities)
     }
 
     private fun coordinator(scope: kotlinx.coroutines.CoroutineScope, store: GeneratedMediaStore): ImageGenerationCoordinator =
         ImageGenerationCoordinator(scope, store, mockk(), providers, sessions)
+
+    @Test
+    fun `frozen managed image profile rejects edit count size and partial before provider IO`() = runTest {
+        val provider = mockk<Provider<ProviderSetting>>()
+        val captured = available(provider).copy(imageGeneration =
+            net.weero.measix.pilot.data.configuration.ImageGenerationCapabilities(
+                canGenerate = true,
+                canEdit = false,
+                maxImagesPerRequest = 2,
+                allowedSizes = setOf("1024x1024"),
+                supportsPartialImages = false,
+            ))
+        val coordinator = coordinator(this, mockk())
+        suspend fun execute(request: ImageGenerationRequest): ImageGenerationOutcome.Failure =
+            coordinator.enqueue(request).let { it as ImageGenerationOutcome.Failure }
+        val source = ImageGenerationSource.Tool(net.weero.measix.pilot.data.enterprise.RealmAccess.Personal, captured)
+
+        assertEquals("image_edit_not_supported", execute(ImageGenerationRequest(
+            source = source, prompt = "edit", size = "1024x1024", editImages = listOf("reference.png"),
+        )).detail)
+        assertEquals("image_count_not_allowed", execute(ImageGenerationRequest(
+            source = source, prompt = "many", numOfImages = 3, size = "1024x1024",
+        )).detail)
+        assertEquals("image_size_not_allowed", execute(ImageGenerationRequest(
+            source = source, prompt = "size", size = "512x512",
+        )).detail)
+        assertEquals("partial_images_not_supported", execute(ImageGenerationRequest(
+            source = source, prompt = "partial", size = "1024x1024", partialImages = 1,
+        )).detail)
+        coVerify(exactly = 0) { provider.generateImage(any(), any()) }
+        coVerify(exactly = 0) { provider.editImage(any(), any()) }
+    }
 
     @Test
     fun `page cleanup failure keeps committed media and original owner for exit retry`() = runTest {

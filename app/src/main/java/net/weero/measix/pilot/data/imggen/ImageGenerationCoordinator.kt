@@ -201,6 +201,17 @@ internal class ImageGenerationCoordinator(
         request: ImageGenerationRequest,
         captured: net.weero.measix.pilot.service.ModelExecutionSnapshot,
     ): ImageGenerationOutcome {
+        val capabilities = captured.imageGeneration
+            ?: return ImageGenerationOutcome.Failure("image_model_unavailable")
+        val invalid = when {
+            !capabilities.canGenerate -> "image_generation_not_supported"
+            request.editImages.isNotEmpty() && !capabilities.canEdit -> "image_edit_not_supported"
+            request.numOfImages !in 1..capabilities.maxImagesPerRequest -> "image_count_not_allowed"
+            capabilities.allowedSizes != null && request.size !in capabilities.allowedSizes -> "image_size_not_allowed"
+            request.partialImages > 0 && !capabilities.supportsPartialImages -> "partial_images_not_supported"
+            else -> null
+        }
+        if (invalid != null) return ImageGenerationOutcome.Failure("invalid_request", invalid)
         request.onPhase?.invoke(ImageGenerationPhase.GENERATING)
         val finals = captured.requests.execute { target -> collectFinals(request, captured.model, target) }
         if (finals.isEmpty()) return ImageGenerationOutcome.Failure("invalid_result")

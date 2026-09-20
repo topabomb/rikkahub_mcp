@@ -270,6 +270,10 @@ private fun File.guessMimeType(): Result<String> = runCatching {
     inputStream().use(::guessImageMimeType)
 }
 
+internal fun detectImageMimeTypeBySignature(bytes: ByteArray): String? = runCatching {
+    bytes.inputStream().use(::guessImageMimeType)
+}.getOrNull()
+
 private fun guessImageMimeType(input: InputStream): String {
     val bytes = ByteArray(16)
     val read = input.read(bytes)

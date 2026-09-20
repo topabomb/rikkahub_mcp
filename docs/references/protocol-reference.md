@@ -34,7 +34,7 @@ OpenAI 的 `chatCompletionsPath` 与 `responsesPath` 分别配置两种协议的
 
 `TextGenerationParams`、`ImageGenerationParams` 与 `ImageEditParams` 的 `credentials` 是不参与序列化的 `RequestCredentials`。`UserSettings` 继续使用原 Provider 的 KeyRoulette；`Fixed` 使用单次请求的原始凭据，不按空白或逗号拆分，不访问轮换缓存。未提供固定 credential 时由私有 headers 提供认证；若同时出现自动认证同名 header 则在发请求前拒绝。四种文本协议及 OpenAI 图片生成/编辑共用该认证选择，未创建第二套企业 wire builder。
 
-`Routed` 表示平台 Relay 的完整 HTTP/HTTPS endpoint 与单请求 Bearer。`ModelExecutionService` 从冻结的 Platform execution、资源 ID 和 runtimePath 装配 URL，Google 流式额外保留 `alt=sse`，四种现有文本编码器直接使用此 URL，不再次拼接供应商后缀，也不读取用户 KeyRoulette。generation 与 interaction headers 由原捕获上下文提供，刷新只替换认证，不改变路径、模型或代际。平台辅助生成复用流式编码器、`StepOutputAccumulator` 和 `RequestUsageReducer`，返回聚合结果，不建立第二持久会话。
+`Routed` 表示平台 Relay 的完整 HTTP/HTTPS endpoint 与单请求 Bearer。`ModelExecutionService` 从冻结的 Platform execution、资源 ID 和 runtimePath 装配 URL，Google 流式额外保留 `alt=sse`，四种现有文本编码器和 OpenAI 图片生成编码器直接使用此 URL，不再次拼接供应商后缀，也不读取用户 KeyRoulette。generation 与 interaction headers 由原捕获上下文提供，刷新只替换认证，不改变路径、模型或代际。企业图片生成总是发送冻结 profile 允许的 `size`，不套用个人 xAI/Grok 省略启发式；URL 结果只允许安全 HTTPS 公网目标，每跳重验并固定 DNS，不携带 Relay Bearer/Cookie，按图片上限有界读取且校验 MIME 与签名。平台辅助文本生成复用流式编码器、`StepOutputAccumulator` 和 `RequestUsageReducer`，返回聚合结果，不建立第二持久会话。
 
 Routed 请求带 `PrivateRequest`，禁止重定向、自动认证和透明重放，body 上限 10 MiB；非成功响应保留状态与脱敏后的原始 detail。只有 status=428 且 body 严格满足 `managed_snapshot_required`、forwarded=false、正 target generation 和合法 requestId 时，才触发原 interaction 停止及同步；不自动重发业务请求。
 

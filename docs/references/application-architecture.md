@@ -72,6 +72,7 @@ UI 不持有 DAO、ConversationRepository、Runtime Registry、Artifact/Generate
 | 用户定义、公用与按域偏好 | `SettingsStore`；`UserSettingsDocument` 单事务提交，个人 Settings 为只读投影 |
 | 企业身份、Session 与 Applied State | `EnterpriseSessionController` 串行写入 `EnterpriseAppliedStore`；平台 Discovery/Enrollment/Snapshot I/O 归 `PlatformEnterpriseService` |
 | 企业生产用量与预算 | Core 是准入、结算与持久事实 owner；`PlatformEnterpriseService` 只读取用户预算并归一化受管 runtime Problem，`EnterpriseApplicationService` / `EnterpriseVM` 提供绑定原选择的瞬时投影 |
+| 企业图片生成定义与执行 | 企业定义归 Enterprise owner；`ConfigurationResolver` 只把独立 `img_*` 投影到统一图片目录，`ModelExecutionService` 冻结 profile/route，`ImageGenerationCoordinator` 与 `GeneratedMediaStore` 继续拥有队列和媒体生命周期 |
 | 按域有效配置 | `ConfigurationResolver` 纯派生 `ResolvedConfiguration`；application/query ports 读取，不持久化镜像 |
 | Provider 配置与连接探测 | `ProviderSettingsApplicationService`；协调 SDK 与 SettingsStore |
 | Skill 身份、文件树与发布 | `SkillManager`；typed parse、导入、读取和可恢复目录事务 |

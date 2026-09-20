@@ -206,13 +206,17 @@ private suspend fun executeGenerateImage(
     }
 
     var lastPhaseOrdinal = -1
+    val capabilities = requireNotNull(capturedModel.imageGeneration) { "image_model_unavailable" }
+    val requestSize = capabilities.allowedSizes?.let { sizes ->
+        if (me.rerere.ai.ui.ImageGenSize.AUTO.value in sizes) me.rerere.ai.ui.ImageGenSize.AUTO.value else sizes.first()
+    } ?: me.rerere.ai.ui.ImageGenSize.AUTO.value
     val request = ImageGenerationRequest(
         source = ImageGenerationSource.Tool(realmAccess, capturedModel) { owned ->
             context.registerUnpublishedResource(artifactStore.unpublishedLease(owned))
         },
         prompt = parsed.prompt,
         numOfImages = 1,
-        size = me.rerere.ai.ui.ImageGenSize.AUTO.value,
+        size = requestSize,
         partialImages = 0,
         onPhase = { phase ->
             val ordinal = phase.ordinal

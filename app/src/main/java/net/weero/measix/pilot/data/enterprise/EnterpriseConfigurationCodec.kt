@@ -29,10 +29,10 @@ internal object EnterpriseConfigurationCodec {
             try { it.surface }
             catch (_: IllegalArgumentException) { fail("invalid_gateway_surface") }
         }
-        val ids = config.models.map { it.id } + config.tts.map { it.id } + config.asr.map { it.id } +
+        val ids = config.models.map { it.id } + config.imageGenerators.map { it.id } + config.tts.map { it.id } + config.asr.map { it.id } +
             config.mcpServers.map { it.id } + config.gateways.map { it.id } + config.assistants.map { it.id } +
             config.memorySeeds.map { it.id } + config.starters.map { it.id }
-        val expectedCount = config.models.size + config.tts.size + config.asr.size + config.mcpServers.size +
+        val expectedCount = config.models.size + config.imageGenerators.size + config.tts.size + config.asr.size + config.mcpServers.size +
             config.gateways.size + config.assistants.size + config.memorySeeds.size + config.starters.size
         check(ids.size == expectedCount && ids.distinct().size == ids.size, "duplicate_enterprise_resource_id")
         ids.forEach { id ->
@@ -45,6 +45,13 @@ internal object EnterpriseConfigurationCodec {
         config.models.forEach {
             check(it.name.isNotBlank() && it.modelId.isNotBlank(), "invalid_enterprise_model")
             check(it.inputModalities.isNotEmpty() && it.outputModalities.isNotEmpty(), "invalid_model_modalities")
+        }
+        config.imageGenerators.forEach {
+            check(it.name.isNotBlank() && it.modelId.isNotBlank(), "invalid_enterprise_image_generation")
+            check(it.maxImagesPerRequest in 1..6 && it.allowedSizes.isNotEmpty() &&
+                it.allowedSizes.distinct().size == it.allowedSizes.size &&
+                it.allowedSizes.all { size -> size == "auto" || Regex("^[1-9][0-9]*x[1-9][0-9]*$").matches(size) },
+                "invalid_enterprise_image_generation_capabilities")
         }
         config.tts.forEach(EnterpriseTtsResource::validate)
         config.asr.forEach(EnterpriseAsrResource::validate)
@@ -75,7 +82,7 @@ internal object EnterpriseConfigurationCodec {
             check(models[it]?.let { model -> model.enabled && model.type == ModelType.CHAT } == true, "invalid_default_chat_model")
         }
         defaults.imageGenerationModelId?.let {
-            check(models[it]?.let { model -> model.enabled && model.type == ModelType.IMAGE } == true, "invalid_default_image_model")
+            check(config.imageGenerators.any { resource -> resource.id == it && resource.enabled }, "invalid_default_image_model")
         }
         defaults.ttsId?.let { check(config.tts.any { resource -> resource.id == it && resource.enabled }, "invalid_default_tts") }
         defaults.asrId?.let { check(config.asr.any { resource -> resource.id == it && resource.enabled }, "invalid_default_asr") }

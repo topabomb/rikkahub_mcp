@@ -14,6 +14,268 @@ internal data class EnterpriseJoinConfirmation(val id: Uuid, val platformOrigin:
 
 internal enum class EnterpriseResetPath { CONNECTED, STORAGE_FAILURE }
 
+internal enum class EnterpriseConfigurationDefaultKind {
+    ASSISTANT,
+    CHAT_MODEL,
+    IMAGE_GENERATION,
+    TTS,
+    ASR,
+}
+
+internal enum class EnterpriseConfigurationReferenceState { AVAILABLE, UNSET, UNAVAILABLE }
+
+internal data class EnterpriseConfigurationDefaultUiModel(
+    val kind: EnterpriseConfigurationDefaultKind,
+    val displayName: String?,
+    val state: EnterpriseConfigurationReferenceState,
+)
+
+internal enum class EnterpriseConfigurationPolicyKind {
+    LOCAL_PROVIDERS,
+    LOCAL_TTS,
+    LOCAL_ASR,
+    LOCAL_MCP,
+    LOCAL_ASSISTANTS,
+}
+
+internal data class EnterpriseConfigurationPolicyUiModel(
+    val kind: EnterpriseConfigurationPolicyKind,
+    val allowed: Boolean,
+)
+
+internal enum class EnterpriseConfigurationResourceKind {
+    PROVIDER,
+    CHAT_MODEL,
+    IMAGE_GENERATOR,
+    TTS,
+    ASR,
+    MCP,
+    ASSISTANT,
+    STARTER,
+}
+
+internal enum class EnterpriseConfigurationResourceFactKind {
+    PROVIDER,
+    MAX_IMAGES,
+    ALLOWED_SIZES,
+    ASSISTANT,
+    DESCRIPTION,
+}
+
+internal data class EnterpriseConfigurationResourceFactUiModel(
+    val kind: EnterpriseConfigurationResourceFactKind,
+    val value: String,
+)
+
+internal data class EnterpriseConfigurationResourceUiModel(
+    val key: String,
+    val displayName: String,
+    val enabled: Boolean,
+    val facts: List<EnterpriseConfigurationResourceFactUiModel> = emptyList(),
+)
+
+internal data class EnterpriseConfigurationResourceGroupUiModel(
+    val kind: EnterpriseConfigurationResourceKind,
+    val items: List<EnterpriseConfigurationResourceUiModel>,
+)
+
+internal data class EnterpriseConfigurationDetailsUiModel(
+    val enterpriseName: String,
+    val phase: EnterpriseSessionPhase,
+    val generation: Long,
+    val lastSyncMillis: Long?,
+    val platformOrigin: String,
+    val defaults: List<EnterpriseConfigurationDefaultUiModel>,
+    val policies: List<EnterpriseConfigurationPolicyUiModel>,
+    val resources: List<EnterpriseConfigurationResourceGroupUiModel>,
+)
+
+private data class EnterpriseConfigurationReferenceTarget(
+    val id: String,
+    val name: String,
+    val enabled: Boolean,
+)
+
+internal fun projectEnterpriseConfigurationDetails(
+    identity: EnterpriseIdentity,
+    phase: EnterpriseSessionPhase,
+    generation: Long,
+    lastSyncMillis: Long?,
+    platformOrigin: String,
+    configuration: EnterpriseConfiguration,
+): EnterpriseConfigurationDetailsUiModel {
+    require(phase in setOf(EnterpriseSessionPhase.READY, EnterpriseSessionPhase.OFFLINE))
+
+    fun reference(
+        kind: EnterpriseConfigurationDefaultKind,
+        id: String?,
+        targets: List<EnterpriseConfigurationReferenceTarget>,
+    ): EnterpriseConfigurationDefaultUiModel {
+        val target = id?.let { reference -> targets.firstOrNull { it.id == reference } }
+        return EnterpriseConfigurationDefaultUiModel(
+            kind = kind,
+            displayName = target?.name,
+            state = when {
+                id == null -> EnterpriseConfigurationReferenceState.UNSET
+                target?.enabled == true -> EnterpriseConfigurationReferenceState.AVAILABLE
+                else -> EnterpriseConfigurationReferenceState.UNAVAILABLE
+            },
+        )
+    }
+
+    fun fact(kind: EnterpriseConfigurationResourceFactKind, value: String?): EnterpriseConfigurationResourceFactUiModel? =
+        value?.takeIf(String::isNotBlank)?.let { EnterpriseConfigurationResourceFactUiModel(kind, it) }
+    fun resourceKey(kind: EnterpriseConfigurationResourceKind, index: Int): String =
+        "$generation:${kind.name}:$index"
+
+    val providers = configuration.providers.map { EnterpriseConfigurationReferenceTarget(it.id, it.name, it.enabled) }
+    val chatModels = configuration.models.filter { it.type == me.rerere.ai.provider.ModelType.CHAT }
+    val chatModelTargets = chatModels.map { EnterpriseConfigurationReferenceTarget(it.id, it.name, it.enabled) }
+    val imageTargets = configuration.imageGenerators.map { EnterpriseConfigurationReferenceTarget(it.id, it.name, it.enabled) }
+    val ttsTargets = configuration.tts.map { EnterpriseConfigurationReferenceTarget(it.id, it.name, it.enabled) }
+    val asrTargets = configuration.asr.map { EnterpriseConfigurationReferenceTarget(it.id, it.name, it.enabled) }
+    val assistantTargets = configuration.assistants.map { EnterpriseConfigurationReferenceTarget(it.id, it.name, it.enabled) }
+    val providerNames = providers.associate { it.id to it.name }
+    val assistantNames = assistantTargets.associate { it.id to it.name }
+    val defaults = configuration.defaults
+
+    val resourceGroups = listOf(
+        EnterpriseConfigurationResourceGroupUiModel(
+            EnterpriseConfigurationResourceKind.PROVIDER,
+            configuration.providers.mapIndexed { index, provider ->
+                EnterpriseConfigurationResourceUiModel(
+                    key = resourceKey(EnterpriseConfigurationResourceKind.PROVIDER, index),
+                    displayName = provider.name,
+                    enabled = provider.enabled,
+                )
+            },
+        ),
+        EnterpriseConfigurationResourceGroupUiModel(
+            EnterpriseConfigurationResourceKind.CHAT_MODEL,
+            chatModels.mapIndexed { index, model ->
+                EnterpriseConfigurationResourceUiModel(
+                    key = resourceKey(EnterpriseConfigurationResourceKind.CHAT_MODEL, index),
+                    displayName = model.name,
+                    enabled = model.enabled,
+                    facts = listOfNotNull(
+                        fact(EnterpriseConfigurationResourceFactKind.PROVIDER, model.providerId?.let(providerNames::get)),
+                    ),
+                )
+            },
+        ),
+        EnterpriseConfigurationResourceGroupUiModel(
+            EnterpriseConfigurationResourceKind.IMAGE_GENERATOR,
+            configuration.imageGenerators.mapIndexed { index, image ->
+                EnterpriseConfigurationResourceUiModel(
+                    key = resourceKey(EnterpriseConfigurationResourceKind.IMAGE_GENERATOR, index),
+                    displayName = image.name,
+                    enabled = image.enabled,
+                    facts = listOfNotNull(
+                        fact(EnterpriseConfigurationResourceFactKind.MAX_IMAGES, image.maxImagesPerRequest.toString()),
+                        fact(EnterpriseConfigurationResourceFactKind.ALLOWED_SIZES, image.allowedSizes.joinToString()),
+                    ),
+                )
+            },
+        ),
+        EnterpriseConfigurationResourceGroupUiModel(
+            EnterpriseConfigurationResourceKind.TTS,
+            configuration.tts.mapIndexed { index, value ->
+                EnterpriseConfigurationResourceUiModel(
+                    resourceKey(EnterpriseConfigurationResourceKind.TTS, index),
+                    value.name,
+                    value.enabled,
+                )
+            },
+        ),
+        EnterpriseConfigurationResourceGroupUiModel(
+            EnterpriseConfigurationResourceKind.ASR,
+            configuration.asr.mapIndexed { index, value ->
+                EnterpriseConfigurationResourceUiModel(
+                    resourceKey(EnterpriseConfigurationResourceKind.ASR, index),
+                    value.name,
+                    value.enabled,
+                )
+            },
+        ),
+        EnterpriseConfigurationResourceGroupUiModel(
+            EnterpriseConfigurationResourceKind.MCP,
+            configuration.mcpServers.mapIndexed { index, value ->
+                EnterpriseConfigurationResourceUiModel(
+                    resourceKey(EnterpriseConfigurationResourceKind.MCP, index),
+                    value.name,
+                    value.enabled,
+                )
+            },
+        ),
+        EnterpriseConfigurationResourceGroupUiModel(
+            EnterpriseConfigurationResourceKind.ASSISTANT,
+            configuration.assistants.mapIndexed { index, value ->
+                EnterpriseConfigurationResourceUiModel(
+                    resourceKey(EnterpriseConfigurationResourceKind.ASSISTANT, index),
+                    value.name,
+                    value.enabled,
+                    listOfNotNull(fact(EnterpriseConfigurationResourceFactKind.DESCRIPTION, value.description)),
+                )
+            },
+        ),
+        EnterpriseConfigurationResourceGroupUiModel(
+            EnterpriseConfigurationResourceKind.STARTER,
+            configuration.starters.mapIndexed { index, value ->
+                EnterpriseConfigurationResourceUiModel(
+                    resourceKey(EnterpriseConfigurationResourceKind.STARTER, index),
+                    value.title,
+                    value.enabled,
+                    listOfNotNull(
+                        fact(
+                            EnterpriseConfigurationResourceFactKind.ASSISTANT,
+                            assistantNames[value.assistantId],
+                        ),
+                        fact(EnterpriseConfigurationResourceFactKind.DESCRIPTION, value.description),
+                    ),
+                )
+            },
+        ),
+    )
+
+    return EnterpriseConfigurationDetailsUiModel(
+        enterpriseName = identity.enterpriseName,
+        phase = phase,
+        generation = generation,
+        lastSyncMillis = lastSyncMillis,
+        platformOrigin = platformOrigin,
+        defaults = listOf(
+            reference(EnterpriseConfigurationDefaultKind.ASSISTANT, defaults.assistantId, assistantTargets),
+            reference(EnterpriseConfigurationDefaultKind.CHAT_MODEL, defaults.chatModelId, chatModelTargets),
+            reference(EnterpriseConfigurationDefaultKind.IMAGE_GENERATION, defaults.imageGenerationModelId, imageTargets),
+            reference(EnterpriseConfigurationDefaultKind.TTS, defaults.ttsId, ttsTargets),
+            reference(EnterpriseConfigurationDefaultKind.ASR, defaults.asrId, asrTargets),
+        ),
+        policies = listOf(
+            EnterpriseConfigurationPolicyUiModel(
+                EnterpriseConfigurationPolicyKind.LOCAL_PROVIDERS,
+                configuration.policy.allowLocalProviders,
+            ),
+            EnterpriseConfigurationPolicyUiModel(
+                EnterpriseConfigurationPolicyKind.LOCAL_TTS,
+                configuration.policy.allowLocalTts,
+            ),
+            EnterpriseConfigurationPolicyUiModel(
+                EnterpriseConfigurationPolicyKind.LOCAL_ASR,
+                configuration.policy.allowLocalAsr,
+            ),
+            EnterpriseConfigurationPolicyUiModel(
+                EnterpriseConfigurationPolicyKind.LOCAL_MCP,
+                configuration.policy.allowLocalMcp,
+            ),
+            EnterpriseConfigurationPolicyUiModel(
+                EnterpriseConfigurationPolicyKind.LOCAL_ASSISTANTS,
+                configuration.policy.allowLocalAssistants,
+            ),
+        ),
+        resources = resourceGroups,
+    )
+}
+
 internal data class EnterpriseOverview(
     val selection: RealmSelection?,
     val phase: EnterpriseSessionPhase?,
@@ -31,6 +293,7 @@ internal data class EnterpriseOverview(
     val recoveryLogoutFailure: String? = null,
     val exitReason: EnterpriseExitReason? = null,
     val platformOrigin: String? = null,
+    val configurationDetails: EnterpriseConfigurationDetailsUiModel? = null,
 )
 
 /** Native enterprise UI commands share the existing source, Session, synchronization and exit owners. */
@@ -85,12 +348,15 @@ internal class EnterpriseApplicationService(
             val available = presentation.state as? EnterpriseState.Available
             val manifest = available?.manifest
             val identity = manifest?.session?.identity ?: manifest?.lastIdentity
+            val access = manifest?.session?.let { RealmAccess.Enterprise(it.identity.scope, it.id) }
+            val selection = presentation.selection
+            val platformOrigin = manifest?.session?.platform?.connection?.origin
             EnterpriseOverview(
-                selection = presentation.selection,
+                selection = selection,
                 phase = manifest?.phase,
                 enterpriseName = identity?.enterpriseName,
                 userName = identity?.userName,
-                access = manifest?.session?.let { RealmAccess.Enterprise(it.identity.scope, it.id) },
+                access = access,
                 generation = manifest?.applied?.generation,
                 lastSyncMillis = manifest?.lastConfigurationSyncMillis,
                 failure = (presentation.state as? EnterpriseState.Failed)?.reason,
@@ -105,7 +371,21 @@ internal class EnterpriseApplicationService(
                 enrollmentRecoveryFailure = resumeFailure,
                 recoveryLogoutFailure = logoutFailures.first.takeIf { manifest?.session == null } ?: logoutFailures.second,
                 exitReason = manifest?.exitReason,
-                platformOrigin = manifest?.session?.platform?.connection?.origin,
+                platformOrigin = platformOrigin,
+                configurationDetails = if (
+                    selection?.access == access && access != null && identity != null && platformOrigin != null &&
+                    available.configuration != null &&
+                    manifest.phase in setOf(EnterpriseSessionPhase.READY, EnterpriseSessionPhase.OFFLINE)
+                ) {
+                    projectEnterpriseConfigurationDetails(
+                        identity = identity,
+                        phase = manifest.phase,
+                        generation = requireNotNull(manifest.applied).generation,
+                        lastSyncMillis = manifest.lastConfigurationSyncMillis,
+                        platformOrigin = platformOrigin,
+                        configuration = available.configuration,
+                    )
+                } else null,
             )
         }.distinctUntilChanged()
 

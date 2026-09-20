@@ -68,6 +68,7 @@ internal fun androidTestTurnContext(
             },
             userRevision = "test",
             enterpriseVersion = null,
+            imageGeneration = null,
         ),
         mediaCapabilities = mediaCapabilities,
         promptInputs = promptInputs,

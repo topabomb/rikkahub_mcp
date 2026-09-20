@@ -127,7 +127,7 @@ class AttachmentInspectionToolTest {
     ) = net.weero.measix.pilot.service.ModelExecutionSnapshot(
         model.copy(providerOverwrite = null),
         net.weero.measix.pilot.service.runtime.ModelExecutionLease { it(net.weero.measix.pilot.service.runtime.ModelRequestTarget.Remote(providerSetting)) },
-        "test", null, mediaCapabilities,
+        "test", null, mediaCapabilities, imageGeneration = null,
     )
 
     /** Resolve the inspection contract the same way createAttachmentInspectionTool does. */

@@ -133,6 +133,33 @@ class ConfigurationResolverTest {
     }
 
     @Test
+    fun `enterprise image generation projects into the unified image catalog with frozen capabilities`() {
+        val packet = exampleEnterprisePackage()
+        val image = packet.configuration.imageGenerators.single()
+        val reference = packet.identity.reference(image.id)
+        val resolved = ConfigurationResolver.resolve(document, packet.identity.scope, appliedConfiguration(packet))
+        val projected = resolved.models.getValue(reference)
+        assertEquals(ModelType.IMAGE, projected.model.type)
+        assertEquals(listOf(me.rerere.ai.provider.Modality.TEXT), projected.model.inputModalities)
+        assertEquals(listOf(me.rerere.ai.provider.Modality.IMAGE), projected.model.outputModalities)
+        assertEquals(image.modelId, projected.model.modelId)
+        assertTrue(projected.imageGenerationSupported)
+        assertFalse(requireNotNull(projected.imageGeneration).canEdit)
+        assertEquals(image.maxImagesPerRequest, projected.imageGeneration.maxImagesPerRequest)
+        assertEquals(image.allowedSizes.toSet(), projected.imageGeneration.allowedSizes)
+        assertEquals(reference, resolved.modelSelection(ModelSelectionRole.IMAGE).reference)
+        assertTrue(resolved.modelSelection(ModelSelectionRole.IMAGE).isAvailable)
+
+        val denied = packet.copy(configuration = packet.configuration.copy(
+            policy = packet.configuration.policy.copy(allowLocalProviders = false),
+        ))
+        val deniedResolved = ConfigurationResolver.resolve(document, packet.identity.scope, appliedConfiguration(denied))
+        assertEquals(ConfigurationUnavailableReason.USER_CATEGORY_NOT_ALLOWED,
+            deniedResolved.access(ConfigurationCategory.MODEL, userModel.id).unavailableReason)
+        assertTrue(deniedResolved.access(ConfigurationCategory.MODEL, reference).canExecute)
+    }
+
+    @Test
     fun `personal assistant model mode follows its definition even when it matches the settings default`() {
         val explicit = ConfigurationResolver.resolve(document, ConfigurationScope.Personal, EnterpriseState.Loading)
         val explicitPreference = explicit.assistantModelPreferences.getValue(userAssistant.id)

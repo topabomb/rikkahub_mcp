@@ -11,6 +11,7 @@ import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.graphics.Color
@@ -49,6 +50,13 @@ import net.weero.measix.pilot.data.enterprise.PlatformBudgetPeriod
 import net.weero.measix.pilot.data.enterprise.PlatformUsageCompleteness
 import net.weero.measix.pilot.data.enterprise.PlatformUsageMeter
 import net.weero.measix.pilot.service.EnterpriseResetPath
+import net.weero.measix.pilot.service.EnterpriseConfigurationDefaultKind
+import net.weero.measix.pilot.service.EnterpriseConfigurationDetailsUiModel
+import net.weero.measix.pilot.service.EnterpriseConfigurationPolicyKind
+import net.weero.measix.pilot.service.EnterpriseConfigurationReferenceState
+import net.weero.measix.pilot.service.EnterpriseConfigurationResourceFactKind
+import net.weero.measix.pilot.service.EnterpriseConfigurationResourceKind
+import net.weero.measix.pilot.service.EnterpriseConfigurationResourceUiModel
 import net.weero.measix.pilot.service.portal.PortalWebView
 import net.weero.measix.pilot.service.portal.PortalNativeActions
 import net.weero.measix.pilot.service.portal.PortalNativePrompt
@@ -75,6 +83,8 @@ private data class StarterPresentation(
     val selection: RealmSelection,
     val portal: PortalPresentation? = null,
 )
+
+private enum class EnterpriseConfigurationDetailsSection { DEFAULTS, POLICIES }
 
 @Composable
 internal fun EnterpriseSpaceButton(
@@ -166,6 +176,7 @@ internal fun EnterprisePage(openUsage: Boolean = false, vm: EnterpriseVM = koinV
     val resetChoice by vm.resetChoice.collectAsStateWithLifecycle()
     val resetConfirmation by vm.resetConfirmation.collectAsStateWithLifecycle()
     val budgets by vm.budgets.collectAsStateWithLifecycle()
+    val configurationDetails by vm.configurationDetails.collectAsStateWithLifecycle()
     val lifecycleOwner = LocalLifecycleOwner.current
     val nav = LocalNavController.current
     var initialSelection by remember { mutableStateOf<RealmSelection?>(null) }
@@ -178,11 +189,32 @@ internal fun EnterprisePage(openUsage: Boolean = false, vm: EnterpriseVM = koinV
         }
     }
     var paste by remember { mutableStateOf(false) }
-    var connectionDetails by remember { mutableStateOf(false) }
+    var configurationDetailsOpen by rememberSaveable { mutableStateOf(false) }
+    var configurationDetailsSection by rememberSaveable {
+        mutableStateOf<EnterpriseConfigurationDetailsSection?>(null)
+    }
+    var configurationResourceKind by rememberSaveable {
+        mutableStateOf<EnterpriseConfigurationResourceKind?>(null)
+    }
+    var configurationResourceKey by rememberSaveable { mutableStateOf<String?>(null) }
     var starterPicker by remember { mutableStateOf<StarterPresentation?>(null) }
     LaunchedEffect(state?.selection, portal) {
         starterPicker?.let {
             if (it.selection != state?.selection || (it.portal != null && it.portal != portal)) starterPicker = null
+        }
+    }
+    LaunchedEffect(configurationDetails) {
+        if (configurationDetails == null) {
+            configurationDetailsOpen = false
+            configurationDetailsSection = null
+            configurationResourceKind = null
+            configurationResourceKey = null
+        } else if (configurationResourceKey != null) {
+            val itemExists = configurationDetails?.resources
+                ?.firstOrNull { it.kind == configurationResourceKind }
+                ?.items
+                ?.any { it.key == configurationResourceKey } == true
+            if (!itemExists) configurationResourceKey = null
         }
     }
     // Enrollment text contains a credential and is deliberately not saved in Activity state.
@@ -214,8 +246,18 @@ internal fun EnterprisePage(openUsage: Boolean = false, vm: EnterpriseVM = koinV
     val leavePage = {
         if (initialSelectionCaptured && state?.selection != initialSelection) openChat() else nav.popBackStack()
     }
+    val closeConfigurationDetailsLayer = {
+        when {
+            configurationResourceKey != null -> configurationResourceKey = null
+            configurationResourceKind != null -> configurationResourceKind = null
+            configurationDetailsSection != null -> configurationDetailsSection = null
+            else -> configurationDetailsOpen = false
+        }
+    }
     BackHandler(enabled = portal != null) { vm.dismissPortal(requireNotNull(portal)) }
-    BackHandler(enabled = portal == null && initialSelectionCaptured && state?.selection != initialSelection) { leavePage() }
+    BackHandler(enabled = portal == null && configurationDetailsOpen) { closeConfigurationDetailsLayer() }
+    BackHandler(enabled = portal == null && !configurationDetailsOpen &&
+        initialSelectionCaptured && state?.selection != initialSelection) { leavePage() }
     LaunchedEffect(state?.selection, state?.access) {
         if (state?.access != null) vm.refreshBudgets()
     }
@@ -241,9 +283,19 @@ internal fun EnterprisePage(openUsage: Boolean = false, vm: EnterpriseVM = koinV
     }
 
     Scaffold(topBar = {
-        TopAppBar(title = { Text(stringResource(if (portal != null) R.string.enterprise_portal else R.string.enterprise_spaces)) },
-            navigationIcon = { IconButton(enabled = portal != null || !busy,
-                onClick = { if (portal != null) vm.dismissPortal(portal!!) else leavePage() }) {
+        TopAppBar(title = { Text(stringResource(when {
+            portal != null -> R.string.enterprise_portal
+            configurationDetailsOpen -> R.string.enterprise_configuration_details_title
+            else -> R.string.enterprise_spaces
+        })) },
+            navigationIcon = { IconButton(enabled = portal != null || configurationDetailsOpen || !busy,
+                onClick = {
+                    when {
+                        portal != null -> vm.dismissPortal(portal!!)
+                        configurationDetailsOpen -> closeConfigurationDetailsLayer()
+                        else -> leavePage()
+                    }
+                }) {
                 Icon(HugeIcons.ArrowLeft01, stringResource(R.string.back))
             } })
     }) { padding ->
@@ -255,6 +307,27 @@ internal fun EnterprisePage(openUsage: Boolean = false, vm: EnterpriseVM = koinV
                 }, modifier = Modifier.fillMaxWidth()) { Text(stringResource(R.string.enterprise_start_conversation)) }
                 key(approved.id) { EnterprisePortal(approved, vm, Modifier.weight(1f).fillMaxWidth()) }
             }
+        } else if (configurationDetailsOpen && configurationDetails != null) {
+            EnterpriseConfigurationDetailsPage(
+                details = requireNotNull(configurationDetails),
+                section = configurationDetailsSection,
+                resourceKind = configurationResourceKind,
+                resourceKey = configurationResourceKey,
+                onSection = { configurationDetailsSection = it },
+                onResourceKind = {
+                    configurationDetailsSection = null
+                    configurationResourceKind = it
+                    configurationResourceKey = null
+                },
+                onResource = { configurationResourceKey = it },
+                onCopyAddress = { origin ->
+                    pageScope.launch {
+                        clipboard.setClipEntry(ClipEntry(ClipData.newPlainText("Enterprise address", origin)))
+                    }
+                    toaster.show(copiedText, type = ToastType.Success)
+                },
+                modifier = Modifier.fillMaxSize().padding(padding),
+            )
         } else {
             Column(Modifier.fillMaxSize().padding(padding).verticalScroll(rememberScrollState()).padding(16.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
@@ -377,37 +450,39 @@ internal fun EnterprisePage(openUsage: Boolean = false, vm: EnterpriseVM = koinV
                             }
                             TextButton(onClick = vm::requestExit, enabled = !busy) { Text(stringResource(R.string.enterprise_exit)) }
                         }
-                        TextButton(onClick = { connectionDetails = !connectionDetails }) {
-                            Text(stringResource(if (connectionDetails) R.string.enterprise_connection_details_hide else R.string.enterprise_connection_details_show))
-                        }
-                        if (connectionDetails) {
-                            state?.platformOrigin?.let { origin ->
-                                Row(
-                                    Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.SpaceBetween,
-                                    verticalAlignment = Alignment.CenterVertically,
-                                ) {
-                                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                                        Text(stringResource(R.string.enterprise_address), style = MaterialTheme.typography.labelMedium)
-                                        SelectionContainer { Text(origin, style = MaterialTheme.typography.bodySmall) }
+                        state?.platformOrigin?.let { origin ->
+                            Row(
+                                Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                    Text(stringResource(R.string.enterprise_address), style = MaterialTheme.typography.labelMedium)
+                                    SelectionContainer { Text(origin, style = MaterialTheme.typography.bodySmall) }
+                                }
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    TextButton(onClick = vm::editAddress, enabled = !busy) {
+                                        Text(stringResource(R.string.edit))
                                     }
-                                    Row(verticalAlignment = Alignment.CenterVertically) {
-                                        TextButton(onClick = vm::editAddress, enabled = !busy) {
-                                            Text(stringResource(R.string.edit))
+                                    IconButton(onClick = {
+                                        pageScope.launch {
+                                            clipboard.setClipEntry(ClipEntry(ClipData.newPlainText("Enterprise address", origin)))
                                         }
-                                        IconButton(onClick = {
-                                            pageScope.launch {
-                                                clipboard.setClipEntry(ClipEntry(ClipData.newPlainText("Enterprise address", origin)))
-                                            }
-                                            toaster.show(copiedText, type = ToastType.Success)
-                                        }) {
-                                            Icon(HugeIcons.Copy01, contentDescription = copyText)
-                                        }
+                                        toaster.show(copiedText, type = ToastType.Success)
+                                    }) {
+                                        Icon(HugeIcons.Copy01, contentDescription = copyText)
                                     }
                                 }
                             }
-                            state?.generation?.let { Text(stringResource(R.string.enterprise_generation, it), style = MaterialTheme.typography.bodySmall) }
-                            state?.lastSyncMillis?.let { Text(stringResource(R.string.enterprise_last_sync, DateFormat.getDateTimeInstance().format(Date(it))), style = MaterialTheme.typography.bodySmall) }
+                        }
+                        if (configurationDetails != null) {
+                            OutlinedButton(
+                                onClick = { configurationDetailsOpen = true },
+                                enabled = !busy,
+                                modifier = Modifier.fillMaxWidth(),
+                            ) {
+                                Text(stringResource(R.string.enterprise_configuration_details_open))
+                            }
                         }
                     }
                     EnterpriseBudgetSection(budgets, vm::refreshBudgets, vm::showUsagePortal)
@@ -539,6 +614,273 @@ internal fun EnterprisePage(openUsage: Boolean = false, vm: EnterpriseVM = koinV
 }
 
 @Composable
+private fun EnterpriseConfigurationDetailsPage(
+    details: EnterpriseConfigurationDetailsUiModel,
+    section: EnterpriseConfigurationDetailsSection?,
+    resourceKind: EnterpriseConfigurationResourceKind?,
+    resourceKey: String?,
+    onSection: (EnterpriseConfigurationDetailsSection) -> Unit,
+    onResourceKind: (EnterpriseConfigurationResourceKind) -> Unit,
+    onResource: (String) -> Unit,
+    onCopyAddress: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val group = details.resources.firstOrNull { it.kind == resourceKind }
+    val resource = group?.items?.firstOrNull { it.key == resourceKey }
+    Column(
+        modifier.verticalScroll(rememberScrollState()).padding(16.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        when {
+            resource != null -> EnterpriseConfigurationResourceDetails(resource, requireNotNull(resourceKind))
+            group != null -> EnterpriseConfigurationResourceGroup(group.kind, group.items, onResource)
+            section == EnterpriseConfigurationDetailsSection.DEFAULTS -> EnterpriseConfigurationDefaults(details)
+            section == EnterpriseConfigurationDetailsSection.POLICIES -> EnterpriseConfigurationPolicies(details)
+            else -> EnterpriseConfigurationDetailsOverview(details, onSection, onResourceKind, onCopyAddress)
+        }
+    }
+}
+
+@Composable
+private fun EnterpriseConfigurationDetailsOverview(
+    details: EnterpriseConfigurationDetailsUiModel,
+    onSection: (EnterpriseConfigurationDetailsSection) -> Unit,
+    onResourceKind: (EnterpriseConfigurationResourceKind) -> Unit,
+    onCopyAddress: (String) -> Unit,
+) {
+    Text(details.enterpriseName, style = MaterialTheme.typography.headlineSmall, modifier = Modifier.widthIn(max = 720.dp).fillMaxWidth())
+    if (details.phase == EnterpriseSessionPhase.OFFLINE) {
+        Text(
+            stringResource(R.string.enterprise_configuration_details_offline),
+            color = MaterialTheme.colorScheme.tertiary,
+            style = MaterialTheme.typography.bodySmall,
+            modifier = Modifier.widthIn(max = 720.dp).fillMaxWidth(),
+        )
+    }
+    ElevatedCard(
+        onClick = { onSection(EnterpriseConfigurationDetailsSection.DEFAULTS) },
+        modifier = Modifier.widthIn(max = 720.dp).fillMaxWidth(),
+    ) {
+        Row(Modifier.fillMaxWidth().padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text(stringResource(R.string.enterprise_configuration_defaults_title), style = MaterialTheme.typography.titleMedium)
+                Text(
+                    stringResource(
+                        R.string.enterprise_configuration_defaults_summary,
+                        details.defaults.count { it.state == EnterpriseConfigurationReferenceState.AVAILABLE },
+                        details.defaults.count { it.state == EnterpriseConfigurationReferenceState.UNSET },
+                        details.defaults.count { it.state == EnterpriseConfigurationReferenceState.UNAVAILABLE },
+                    ),
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+            Icon(HugeIcons.ArrowRight01, contentDescription = null)
+        }
+    }
+    ElevatedCard(
+        onClick = { onSection(EnterpriseConfigurationDetailsSection.POLICIES) },
+        modifier = Modifier.widthIn(max = 720.dp).fillMaxWidth(),
+    ) {
+        Row(Modifier.fillMaxWidth().padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text(stringResource(R.string.enterprise_configuration_policies_title), style = MaterialTheme.typography.titleMedium)
+                Text(
+                    stringResource(
+                        R.string.enterprise_configuration_policies_summary,
+                        details.policies.count { it.allowed },
+                        details.policies.size,
+                    ),
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+            Icon(HugeIcons.ArrowRight01, contentDescription = null)
+        }
+    }
+    EnterpriseSection(stringResource(R.string.enterprise_configuration_resources_title)) {
+        details.resources.forEachIndexed { index, resourceGroup ->
+            if (index > 0) HorizontalDivider()
+            Surface(onClick = { onResourceKind(resourceGroup.kind) }, color = Color.Transparent) {
+                Row(
+                    Modifier.fillMaxWidth().padding(vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    Text(stringResource(configurationResourceKindResource(resourceGroup.kind)), modifier = Modifier.weight(1f))
+                    Text(resourceGroup.items.size.toString(), style = MaterialTheme.typography.labelLarge)
+                    Icon(HugeIcons.ArrowRight01, contentDescription = null, modifier = Modifier.size(18.dp))
+                }
+            }
+        }
+    }
+    EnterpriseSection(stringResource(R.string.enterprise_configuration_diagnostics_title)) {
+        ConfigurationValueRow(
+            stringResource(R.string.enterprise_configuration_status),
+            stringResource(phaseText(details.phase)),
+        )
+        ConfigurationValueRow(
+            stringResource(R.string.enterprise_configuration_generation),
+            details.generation.toString(),
+        )
+        ConfigurationValueRow(
+            stringResource(R.string.enterprise_configuration_last_sync),
+            details.lastSyncMillis?.let { DateFormat.getDateTimeInstance().format(Date(it)) }
+                ?: stringResource(R.string.enterprise_configuration_not_available),
+        )
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(stringResource(R.string.enterprise_address), style = MaterialTheme.typography.labelMedium)
+                SelectionContainer { Text(details.platformOrigin, style = MaterialTheme.typography.bodySmall) }
+            }
+            IconButton(onClick = { onCopyAddress(details.platformOrigin) }) {
+                Icon(HugeIcons.Copy01, contentDescription = stringResource(R.string.copy))
+            }
+        }
+    }
+}
+
+@Composable
+private fun EnterpriseConfigurationDefaults(details: EnterpriseConfigurationDetailsUiModel) {
+    EnterpriseSection(stringResource(R.string.enterprise_configuration_defaults_title)) {
+        details.defaults.forEachIndexed { index, value ->
+            if (index > 0) HorizontalDivider()
+            Column(Modifier.fillMaxWidth().padding(vertical = 6.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(stringResource(configurationDefaultKindResource(value.kind)), style = MaterialTheme.typography.labelLarge)
+                when (value.state) {
+                    EnterpriseConfigurationReferenceState.AVAILABLE -> {
+                        Text(requireNotNull(value.displayName))
+                    }
+                    EnterpriseConfigurationReferenceState.UNSET -> Text(
+                        stringResource(R.string.enterprise_configuration_unset),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    EnterpriseConfigurationReferenceState.UNAVAILABLE -> {
+                        value.displayName?.let { Text(it) }
+                        Text(
+                            stringResource(R.string.enterprise_configuration_reference_unavailable),
+                            color = MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.labelSmall,
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun EnterpriseConfigurationPolicies(details: EnterpriseConfigurationDetailsUiModel) {
+    EnterpriseSection(stringResource(R.string.enterprise_configuration_policies_title)) {
+        details.policies.forEachIndexed { index, value ->
+            if (index > 0) HorizontalDivider()
+            Row(Modifier.fillMaxWidth().padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text(stringResource(configurationPolicyKindResource(value.kind)), modifier = Modifier.weight(1f))
+                Text(
+                    stringResource(if (value.allowed) R.string.enterprise_configuration_allowed else R.string.enterprise_configuration_not_allowed),
+                    color = if (value.allowed) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun EnterpriseConfigurationResourceGroup(
+    kind: EnterpriseConfigurationResourceKind,
+    items: List<EnterpriseConfigurationResourceUiModel>,
+    onResource: (String) -> Unit,
+) {
+    Text(
+        stringResource(configurationResourceKindResource(kind)),
+        style = MaterialTheme.typography.headlineSmall,
+        modifier = Modifier.widthIn(max = 720.dp).fillMaxWidth(),
+    )
+    if (items.isEmpty()) {
+        EnterpriseSection(stringResource(R.string.enterprise_configuration_resources_title)) {
+            Text(stringResource(R.string.enterprise_configuration_no_resources))
+        }
+    } else items.forEach { item ->
+        ElevatedCard(onClick = { onResource(item.key) }, modifier = Modifier.widthIn(max = 720.dp).fillMaxWidth()) {
+            Row(Modifier.fillMaxWidth().padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text(item.displayName, style = MaterialTheme.typography.titleSmall)
+                    Text(
+                        stringResource(if (item.enabled) R.string.enterprise_configuration_enabled else R.string.enterprise_configuration_disabled),
+                        color = if (item.enabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.labelSmall,
+                    )
+                }
+                Icon(HugeIcons.ArrowRight01, contentDescription = null)
+            }
+        }
+    }
+}
+
+@Composable
+private fun EnterpriseConfigurationResourceDetails(
+    resource: EnterpriseConfigurationResourceUiModel,
+    kind: EnterpriseConfigurationResourceKind,
+) {
+    Text(
+        resource.displayName,
+        style = MaterialTheme.typography.headlineSmall,
+        modifier = Modifier.widthIn(max = 720.dp).fillMaxWidth(),
+    )
+    EnterpriseSection(stringResource(R.string.enterprise_configuration_resource_details_title)) {
+        ConfigurationValueRow(
+            stringResource(R.string.enterprise_configuration_resource_status),
+            stringResource(if (resource.enabled) R.string.enterprise_configuration_enabled else R.string.enterprise_configuration_disabled),
+        )
+        resource.facts.forEach { value ->
+            ConfigurationValueRow(stringResource(configurationResourceFactResource(value.kind)), value.value)
+        }
+    }
+}
+
+@Composable
+private fun ConfigurationValueRow(label: String, value: String) {
+    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        Text(label, style = MaterialTheme.typography.labelMedium)
+        SelectionContainer { Text(value, style = MaterialTheme.typography.bodySmall) }
+    }
+}
+
+private fun configurationDefaultKindResource(kind: EnterpriseConfigurationDefaultKind): Int = when (kind) {
+    EnterpriseConfigurationDefaultKind.ASSISTANT -> R.string.enterprise_configuration_default_assistant
+    EnterpriseConfigurationDefaultKind.CHAT_MODEL -> R.string.enterprise_configuration_default_chat_model
+    EnterpriseConfigurationDefaultKind.IMAGE_GENERATION -> R.string.enterprise_configuration_default_image_generation
+    EnterpriseConfigurationDefaultKind.TTS -> R.string.enterprise_configuration_default_tts
+    EnterpriseConfigurationDefaultKind.ASR -> R.string.enterprise_configuration_default_asr
+}
+
+private fun configurationPolicyKindResource(kind: EnterpriseConfigurationPolicyKind): Int = when (kind) {
+    EnterpriseConfigurationPolicyKind.LOCAL_PROVIDERS -> R.string.enterprise_configuration_policy_local_providers
+    EnterpriseConfigurationPolicyKind.LOCAL_TTS -> R.string.enterprise_configuration_policy_local_tts
+    EnterpriseConfigurationPolicyKind.LOCAL_ASR -> R.string.enterprise_configuration_policy_local_asr
+    EnterpriseConfigurationPolicyKind.LOCAL_MCP -> R.string.enterprise_configuration_policy_local_mcp
+    EnterpriseConfigurationPolicyKind.LOCAL_ASSISTANTS -> R.string.enterprise_configuration_policy_local_assistants
+}
+
+private fun configurationResourceKindResource(kind: EnterpriseConfigurationResourceKind): Int = when (kind) {
+    EnterpriseConfigurationResourceKind.PROVIDER -> R.string.enterprise_configuration_resource_providers
+    EnterpriseConfigurationResourceKind.CHAT_MODEL -> R.string.enterprise_configuration_resource_chat_models
+    EnterpriseConfigurationResourceKind.IMAGE_GENERATOR -> R.string.enterprise_configuration_resource_image_generators
+    EnterpriseConfigurationResourceKind.TTS -> R.string.enterprise_configuration_resource_tts
+    EnterpriseConfigurationResourceKind.ASR -> R.string.enterprise_configuration_resource_asr
+    EnterpriseConfigurationResourceKind.MCP -> R.string.enterprise_configuration_resource_mcp
+    EnterpriseConfigurationResourceKind.ASSISTANT -> R.string.enterprise_configuration_resource_assistants
+    EnterpriseConfigurationResourceKind.STARTER -> R.string.enterprise_configuration_resource_starters
+}
+
+private fun configurationResourceFactResource(kind: EnterpriseConfigurationResourceFactKind): Int = when (kind) {
+    EnterpriseConfigurationResourceFactKind.PROVIDER -> R.string.enterprise_configuration_fact_provider
+    EnterpriseConfigurationResourceFactKind.MAX_IMAGES -> R.string.enterprise_configuration_fact_max_images
+    EnterpriseConfigurationResourceFactKind.ALLOWED_SIZES -> R.string.enterprise_configuration_fact_allowed_sizes
+    EnterpriseConfigurationResourceFactKind.ASSISTANT -> R.string.enterprise_configuration_fact_assistant
+    EnterpriseConfigurationResourceFactKind.DESCRIPTION -> R.string.enterprise_configuration_fact_description
+}
+
+@Composable
 private fun EnterpriseBudgetSection(
     state: EnterpriseBudgetPresentation?,
     onRefresh: () -> Unit,
@@ -577,6 +919,7 @@ private fun EnterpriseBudgetCapabilityCard(item: PlatformBudgetCapabilityView) {
         PlatformBudgetCapability.TTS -> R.string.enterprise_budget_capability_tts
         PlatformBudgetCapability.ASR -> R.string.enterprise_budget_capability_asr
         PlatformBudgetCapability.MCP -> R.string.enterprise_budget_capability_mcp
+        PlatformBudgetCapability.IMAGE_GENERATION -> R.string.enterprise_budget_capability_image_generation
     })
     ElevatedCard(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -630,6 +973,7 @@ private fun budgetPeriodResource(value: PlatformBudgetPeriod): Int = when (value
 
 private fun budgetMeterResource(value: PlatformUsageMeter): Int = when (value) {
     PlatformUsageMeter.REQUESTS -> R.string.enterprise_budget_meter_requests
+    PlatformUsageMeter.REQUESTED_IMAGES -> R.string.enterprise_budget_meter_requested_images
     PlatformUsageMeter.INPUT_TOKENS -> R.string.enterprise_budget_meter_input_tokens
     PlatformUsageMeter.OUTPUT_TOKENS -> R.string.enterprise_budget_meter_output_tokens
     PlatformUsageMeter.CACHED_TOKENS -> R.string.enterprise_budget_meter_cached_tokens

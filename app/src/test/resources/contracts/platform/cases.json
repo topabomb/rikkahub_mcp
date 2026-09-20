@@ -42,6 +42,20 @@
         }
       ],
       "deploymentId": "dep_550e8400-e29b-41d4-a716-446655440000",
+      "imageGenerators": [
+        {
+          "allowedSizes": [
+            "1024x1024"
+          ],
+          "clientProtocol": "OPENAI_IMAGES_GENERATIONS",
+          "displayName": "Managed Image Generator",
+          "enabled": true,
+          "imageId": "img_ffffffff-ffff-4fff-8fff-ffffffffffff",
+          "maxImagesPerRequest": 4,
+          "runtimePath": "/v1/images/generations",
+          "upstreamModelKey": "gpt-image-1"
+        }
+      ],
       "managedGeneration": 42,
       "mcp": [
         {
@@ -86,6 +100,7 @@
         "allowLocalTts": true,
         "defaultAsrId": "asr_dddddddd-dddd-4ddd-8ddd-dddddddddddd",
         "defaultAssistantId": "asd_11111111-1111-4111-8111-111111111111",
+        "defaultImageGenerationId": "img_ffffffff-ffff-4fff-8fff-ffffffffffff",
         "defaultModelId": "mdl_bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
         "defaultTtsId": "tts_cccccccc-cccc-4ccc-8ccc-cccccccccccc",
         "policyId": "pol_550e8400-e29b-41d4-a716-446655440000"
@@ -100,7 +115,7 @@
       ],
       "releaseId": "rel_550e8400-e29b-41d4-a716-446655440000",
       "schemaVersion": 4,
-      "snapshotHash": "sha256:5f8fefa988bf4e825d6b14ab76198c3a742083a69f52a151668153aee5843c8a",
+      "snapshotHash": "sha256:d26018b7ee827e7bf65ea891dee7a6138bb08b21fa678688384d550906eb79fc",
       "starters": [
         {
           "assistantDefinitionId": "asd_11111111-1111-4111-8111-111111111111",
@@ -184,6 +199,20 @@
         }
       ],
       "deploymentId": "dep_550e8400-e29b-41d4-a716-446655440000",
+      "imageGenerators": [
+        {
+          "allowedSizes": [
+            "1024x1024"
+          ],
+          "clientProtocol": "OPENAI_IMAGES_GENERATIONS",
+          "displayName": "Managed Image Generator",
+          "enabled": true,
+          "imageId": "img_ffffffff-ffff-4fff-8fff-ffffffffffff",
+          "maxImagesPerRequest": 4,
+          "runtimePath": "/v1/images/generations",
+          "upstreamModelKey": "gpt-image-1"
+        }
+      ],
       "managedGeneration": 42,
       "mcp": [
         {
@@ -228,6 +257,7 @@
         "allowLocalTts": true,
         "defaultAsrId": "asr_dddddddd-dddd-4ddd-8ddd-dddddddddddd",
         "defaultAssistantId": "asd_11111111-1111-4111-8111-111111111111",
+        "defaultImageGenerationId": "img_ffffffff-ffff-4fff-8fff-ffffffffffff",
         "defaultModelId": "mdl_bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
         "defaultTtsId": "tts_cccccccc-cccc-4ccc-8ccc-cccccccccccc",
         "policyId": "pol_550e8400-e29b-41d4-a716-446655440000"
@@ -242,7 +272,7 @@
       ],
       "releaseId": "rel_550e8400-e29b-41d4-a716-446655440000",
       "schemaVersion": 4,
-      "snapshotHash": "sha256:325c3881effccd8c2a7bd648250f5972357fcc2873713b24a63d8cbbc758730a",
+      "snapshotHash": "sha256:3ae3ef4ad31ffe1c3c89d41a0b4284561b7f81a5d2ead9f6231907792ff2a9df",
       "starters": [
         {
           "assistantDefinitionId": "asd_11111111-1111-4111-8111-111111111111",
@@ -326,6 +356,20 @@
         }
       ],
       "deploymentId": "dep_550e8400-e29b-41d4-a716-446655440000",
+      "imageGenerators": [
+        {
+          "allowedSizes": [
+            "1024x1024"
+          ],
+          "clientProtocol": "OPENAI_IMAGES_GENERATIONS",
+          "displayName": "Managed Image Generator",
+          "enabled": true,
+          "imageId": "img_ffffffff-ffff-4fff-8fff-ffffffffffff",
+          "maxImagesPerRequest": 4,
+          "runtimePath": "/v1/images/generations",
+          "upstreamModelKey": "gpt-image-1"
+        }
+      ],
       "managedGeneration": 42,
       "mcp": [
         {
@@ -370,6 +414,7 @@
         "allowLocalTts": true,
         "defaultAsrId": "asr_dddddddd-dddd-4ddd-8ddd-dddddddddddd",
         "defaultAssistantId": "asd_11111111-1111-4111-8111-111111111111",
+        "defaultImageGenerationId": "img_ffffffff-ffff-4fff-8fff-ffffffffffff",
         "defaultModelId": "mdl_bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
         "defaultTtsId": "tts_cccccccc-cccc-4ccc-8ccc-cccccccccccc",
         "policyId": "pol_550e8400-e29b-41d4-a716-446655440000"
@@ -384,7 +429,7 @@
       ],
       "releaseId": "rel_550e8400-e29b-41d4-a716-446655440000",
       "schemaVersion": 4,
-      "snapshotHash": "sha256:adbc48b2a641808ef329eaa50c5c01019a17cb9cadbadf1dca9ab943ec07fdb6",
+      "snapshotHash": "sha256:da463df2b0c0acb278951d207fbf7ca75988cf5eef2a8620b9149cc5abd8c4ed",
       "starters": [
         {
           "assistantDefinitionId": "asd_11111111-1111-4111-8111-111111111111",
@@ -468,6 +513,20 @@
         }
       ],
       "deploymentId": "dep_550e8400-e29b-41d4-a716-446655440000",
+      "imageGenerators": [
+        {
+          "allowedSizes": [
+            "1024x1024"
+          ],
+          "clientProtocol": "OPENAI_IMAGES_GENERATIONS",
+          "displayName": "Managed Image Generator",
+          "enabled": true,
+          "imageId": "img_ffffffff-ffff-4fff-8fff-ffffffffffff",
+          "maxImagesPerRequest": 4,
+          "runtimePath": "/v1/images/generations",
+          "upstreamModelKey": "gpt-image-1"
+        }
+      ],
       "managedGeneration": 42,
       "mcp": [
         {
@@ -512,6 +571,7 @@
         "allowLocalTts": true,
         "defaultAsrId": "asr_dddddddd-dddd-4ddd-8ddd-dddddddddddd",
         "defaultAssistantId": "asd_11111111-1111-4111-8111-111111111111",
+        "defaultImageGenerationId": "img_ffffffff-ffff-4fff-8fff-ffffffffffff",
         "defaultModelId": "mdl_bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
         "defaultTtsId": "tts_cccccccc-cccc-4ccc-8ccc-cccccccccccc",
         "policyId": "pol_550e8400-e29b-41d4-a716-446655440000"
@@ -526,7 +586,7 @@
       ],
       "releaseId": "rel_550e8400-e29b-41d4-a716-446655440000",
       "schemaVersion": 4,
-      "snapshotHash": "sha256:250aa43104ca0bc6b23cc5b3ca5f1ed01921098919ea748552944ab9df581b78",
+      "snapshotHash": "sha256:919c3c9c4f776b1a7736c93cbcfc91fb708e76dff23add9fa5bcc4d70ada7874",
       "starters": [
         {
           "assistantDefinitionId": "asd_11111111-1111-4111-8111-111111111111",
@@ -610,6 +670,20 @@
         }
       ],
       "deploymentId": "dep_550e8400-e29b-41d4-a716-446655440000",
+      "imageGenerators": [
+        {
+          "allowedSizes": [
+            "1024x1024"
+          ],
+          "clientProtocol": "OPENAI_IMAGES_GENERATIONS",
+          "displayName": "Managed Image Generator",
+          "enabled": true,
+          "imageId": "img_ffffffff-ffff-4fff-8fff-ffffffffffff",
+          "maxImagesPerRequest": 4,
+          "runtimePath": "/v1/images/generations",
+          "upstreamModelKey": "gpt-image-1"
+        }
+      ],
       "managedGeneration": 42,
       "mcp": [
         {
@@ -654,6 +728,7 @@
         "allowLocalTts": false,
         "defaultAsrId": "asr_dddddddd-dddd-4ddd-8ddd-dddddddddddd",
         "defaultAssistantId": "asd_11111111-1111-4111-8111-111111111111",
+        "defaultImageGenerationId": "img_ffffffff-ffff-4fff-8fff-ffffffffffff",
         "defaultModelId": "mdl_bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
         "defaultTtsId": "tts_55555555-5555-4555-8555-555555555555",
         "policyId": "pol_550e8400-e29b-41d4-a716-446655440000"
@@ -668,7 +743,7 @@
       ],
       "releaseId": "rel_550e8400-e29b-41d4-a716-446655440000",
       "schemaVersion": 4,
-      "snapshotHash": "sha256:cf8ecee55d2c2231abcb775d6d6e1ddcceecca6f5ae9a8aa1e858414c9b2af9b",
+      "snapshotHash": "sha256:8b183c928caed5ed4e4596eb2128b6d907580a6390c39cafb47eeb6726114d19",
       "starters": [
         {
           "assistantDefinitionId": "asd_11111111-1111-4111-8111-111111111111",
@@ -818,6 +893,20 @@
         }
       ],
       "deploymentId": "dep_550e8400-e29b-41d4-a716-446655440000",
+      "imageGenerators": [
+        {
+          "allowedSizes": [
+            "1024x1024"
+          ],
+          "clientProtocol": "OPENAI_IMAGES_GENERATIONS",
+          "displayName": "Managed Image Generator",
+          "enabled": true,
+          "imageId": "img_ffffffff-ffff-4fff-8fff-ffffffffffff",
+          "maxImagesPerRequest": 4,
+          "runtimePath": "/v1/images/generations",
+          "upstreamModelKey": "gpt-image-1"
+        }
+      ],
       "managedGeneration": 42,
       "mcp": [
         {
@@ -862,6 +951,7 @@
         "allowLocalTts": true,
         "defaultAsrId": "asr_44444444-4444-4444-8444-444444444444",
         "defaultAssistantId": "asd_11111111-1111-4111-8111-111111111111",
+        "defaultImageGenerationId": "img_ffffffff-ffff-4fff-8fff-ffffffffffff",
         "defaultModelId": "mdl_bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
         "defaultTtsId": "tts_cccccccc-cccc-4ccc-8ccc-cccccccccccc",
         "policyId": "pol_550e8400-e29b-41d4-a716-446655440000"
@@ -876,7 +966,7 @@
       ],
       "releaseId": "rel_550e8400-e29b-41d4-a716-446655440000",
       "schemaVersion": 4,
-      "snapshotHash": "sha256:b66a8fdd933c470e7a815a09af6434a1b117883ed68a4d2cd69026bcf0488246",
+      "snapshotHash": "sha256:038f89cb154a363e1f42c1dd7e332b786b78eb818abf72b42e8155b4c63ff08a",
       "starters": [
         {
           "assistantDefinitionId": "asd_11111111-1111-4111-8111-111111111111",
@@ -960,6 +1050,20 @@
         }
       ],
       "deploymentId": "dep_550e8400-e29b-41d4-a716-446655440000",
+      "imageGenerators": [
+        {
+          "allowedSizes": [
+            "1024x1024"
+          ],
+          "clientProtocol": "OPENAI_IMAGES_GENERATIONS",
+          "displayName": "Managed Image Generator",
+          "enabled": true,
+          "imageId": "img_ffffffff-ffff-4fff-8fff-ffffffffffff",
+          "maxImagesPerRequest": 4,
+          "runtimePath": "/v1/images/generations",
+          "upstreamModelKey": "gpt-image-1"
+        }
+      ],
       "managedGeneration": 43,
       "mcp": [
         {
@@ -1004,6 +1108,7 @@
         "allowLocalTts": false,
         "defaultAsrId": "asr_dddddddd-dddd-4ddd-8ddd-dddddddddddd",
         "defaultAssistantId": "asd_11111111-1111-4111-8111-111111111111",
+        "defaultImageGenerationId": "img_ffffffff-ffff-4fff-8fff-ffffffffffff",
         "defaultModelId": "mdl_bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
         "defaultTtsId": "tts_cccccccc-cccc-4ccc-8ccc-cccccccccccc",
         "policyId": "pol_550e8400-e29b-41d4-a716-446655440000"
@@ -1018,7 +1123,7 @@
       ],
       "releaseId": "rel_660e8400-e29b-41d4-a716-446655440000",
       "schemaVersion": 4,
-      "snapshotHash": "sha256:baaa688c6cfa76670c51d1e3e2e0ac61a6e8d86ea79bbe59a72b8a5f9924d795",
+      "snapshotHash": "sha256:1ee5b1c8a159600a6520f39b106a281db39d542c75415176552d9078ab69dbf3",
       "starters": [
         {
           "assistantDefinitionId": "asd_11111111-1111-4111-8111-111111111111",
@@ -1102,6 +1207,20 @@
         }
       ],
       "deploymentId": "dep_550e8400-e29b-41d4-a716-446655440000",
+      "imageGenerators": [
+        {
+          "allowedSizes": [
+            "1024x1024"
+          ],
+          "clientProtocol": "OPENAI_IMAGES_GENERATIONS",
+          "displayName": "Managed Image Generator",
+          "enabled": true,
+          "imageId": "img_ffffffff-ffff-4fff-8fff-ffffffffffff",
+          "maxImagesPerRequest": 4,
+          "runtimePath": "/v1/images/generations",
+          "upstreamModelKey": "gpt-image-1"
+        }
+      ],
       "managedGeneration": 42,
       "mcp": [
         {
@@ -1145,6 +1264,7 @@
         "allowLocalTts": true,
         "defaultAsrId": "asr_dddddddd-dddd-4ddd-8ddd-dddddddddddd",
         "defaultAssistantId": "asd_11111111-1111-4111-8111-111111111111",
+        "defaultImageGenerationId": "img_ffffffff-ffff-4fff-8fff-ffffffffffff",
         "defaultModelId": "mdl_bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
         "defaultTtsId": "tts_cccccccc-cccc-4ccc-8ccc-cccccccccccc",
         "policyId": "pol_550e8400-e29b-41d4-a716-446655440000"
@@ -1159,7 +1279,7 @@
       ],
       "releaseId": "rel_550e8400-e29b-41d4-a716-446655440000",
       "schemaVersion": 4,
-      "snapshotHash": "sha256:5f8fefa988bf4e825d6b14ab76198c3a742083a69f52a151668153aee5843c8a",
+      "snapshotHash": "sha256:d26018b7ee827e7bf65ea891dee7a6138bb08b21fa678688384d550906eb79fc",
       "starters": [
         {
           "assistantDefinitionId": "asd_11111111-1111-4111-8111-111111111111",
@@ -1243,6 +1363,20 @@
         }
       ],
       "deploymentId": "dep_550e8400-e29b-41d4-a716-446655440000",
+      "imageGenerators": [
+        {
+          "allowedSizes": [
+            "1024x1024"
+          ],
+          "clientProtocol": "OPENAI_IMAGES_GENERATIONS",
+          "displayName": "Managed Image Generator",
+          "enabled": true,
+          "imageId": "img_ffffffff-ffff-4fff-8fff-ffffffffffff",
+          "maxImagesPerRequest": 4,
+          "runtimePath": "/v1/images/generations",
+          "upstreamModelKey": "gpt-image-1"
+        }
+      ],
       "managedGeneration": 42,
       "mcp": [
         {
@@ -1287,6 +1421,7 @@
         "allowLocalTts": true,
         "defaultAsrId": "asr_dddddddd-dddd-4ddd-8ddd-dddddddddddd",
         "defaultAssistantId": "asd_11111111-1111-4111-8111-111111111111",
+        "defaultImageGenerationId": "img_ffffffff-ffff-4fff-8fff-ffffffffffff",
         "defaultModelId": "mdl_bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
         "defaultTtsId": "tts_cccccccc-cccc-4ccc-8ccc-cccccccccccc",
         "policyId": "pol_550e8400-e29b-41d4-a716-446655440000"
@@ -1301,7 +1436,7 @@
       ],
       "releaseId": "rel_550e8400-e29b-41d4-a716-446655440000",
       "schemaVersion": 4,
-      "snapshotHash": "sha256:5f8fefa988bf4e825d6b14ab76198c3a742083a69f52a151668153aee5843c8a",
+      "snapshotHash": "sha256:d26018b7ee827e7bf65ea891dee7a6138bb08b21fa678688384d550906eb79fc",
       "starters": [
         {
           "assistantDefinitionId": "asd_11111111-1111-4111-8111-111111111111",
@@ -1385,6 +1520,20 @@
         }
       ],
       "deploymentId": "dep_550e8400-e29b-41d4-a716-446655440000",
+      "imageGenerators": [
+        {
+          "allowedSizes": [
+            "1024x1024"
+          ],
+          "clientProtocol": "OPENAI_IMAGES_GENERATIONS",
+          "displayName": "Managed Image Generator",
+          "enabled": true,
+          "imageId": "img_ffffffff-ffff-4fff-8fff-ffffffffffff",
+          "maxImagesPerRequest": 4,
+          "runtimePath": "/v1/images/generations",
+          "upstreamModelKey": "gpt-image-1"
+        }
+      ],
       "managedGeneration": 42,
       "mcp": [
         {
@@ -1429,6 +1578,7 @@
         "allowLocalTts": true,
         "defaultAsrId": "asr_dddddddd-dddd-4ddd-8ddd-dddddddddddd",
         "defaultAssistantId": "asd_11111111-1111-4111-8111-111111111111",
+        "defaultImageGenerationId": "img_ffffffff-ffff-4fff-8fff-ffffffffffff",
         "defaultModelId": "mdl_bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
         "defaultTtsId": "tts_cccccccc-cccc-4ccc-8ccc-cccccccccccc",
         "policyId": "pol_550e8400-e29b-41d4-a716-446655440000"
@@ -1443,7 +1593,7 @@
       ],
       "releaseId": "rel_550e8400-e29b-41d4-a716-446655440000",
       "schemaVersion": 4,
-      "snapshotHash": "sha256:5f8fefa988bf4e825d6b14ab76198c3a742083a69f52a151668153aee5843c8a",
+      "snapshotHash": "sha256:d26018b7ee827e7bf65ea891dee7a6138bb08b21fa678688384d550906eb79fc",
       "starters": [
         {
           "assistantDefinitionId": "asd_11111111-1111-4111-8111-111111111111",
@@ -1527,6 +1677,20 @@
         }
       ],
       "deploymentId": "dep_550e8400-e29b-41d4-a716-446655440000",
+      "imageGenerators": [
+        {
+          "allowedSizes": [
+            "1024x1024"
+          ],
+          "clientProtocol": "OPENAI_IMAGES_GENERATIONS",
+          "displayName": "Managed Image Generator",
+          "enabled": true,
+          "imageId": "img_ffffffff-ffff-4fff-8fff-ffffffffffff",
+          "maxImagesPerRequest": 4,
+          "runtimePath": "/v1/images/generations",
+          "upstreamModelKey": "gpt-image-1"
+        }
+      ],
       "managedGeneration": 42,
       "mcp": [
         {
@@ -1570,6 +1734,7 @@
         "allowLocalProviders": true,
         "defaultAsrId": "asr_dddddddd-dddd-4ddd-8ddd-dddddddddddd",
         "defaultAssistantId": "asd_11111111-1111-4111-8111-111111111111",
+        "defaultImageGenerationId": "img_ffffffff-ffff-4fff-8fff-ffffffffffff",
         "defaultModelId": "mdl_bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
         "defaultTtsId": "tts_cccccccc-cccc-4ccc-8ccc-cccccccccccc",
         "policyId": "pol_550e8400-e29b-41d4-a716-446655440000"
@@ -1584,7 +1749,7 @@
       ],
       "releaseId": "rel_550e8400-e29b-41d4-a716-446655440000",
       "schemaVersion": 4,
-      "snapshotHash": "sha256:5f8fefa988bf4e825d6b14ab76198c3a742083a69f52a151668153aee5843c8a",
+      "snapshotHash": "sha256:d26018b7ee827e7bf65ea891dee7a6138bb08b21fa678688384d550906eb79fc",
       "starters": [
         {
           "assistantDefinitionId": "asd_11111111-1111-4111-8111-111111111111",
@@ -1668,6 +1833,20 @@
         }
       ],
       "deploymentId": "dep_550e8400-e29b-41d4-a716-446655440000",
+      "imageGenerators": [
+        {
+          "allowedSizes": [
+            "1024x1024"
+          ],
+          "clientProtocol": "OPENAI_IMAGES_GENERATIONS",
+          "displayName": "Managed Image Generator",
+          "enabled": true,
+          "imageId": "img_ffffffff-ffff-4fff-8fff-ffffffffffff",
+          "maxImagesPerRequest": 4,
+          "runtimePath": "/v1/images/generations",
+          "upstreamModelKey": "gpt-image-1"
+        }
+      ],
       "managedGeneration": 42,
       "mcp": [
         {
@@ -1712,6 +1891,7 @@
         "allowLocalTts": null,
         "defaultAsrId": "asr_dddddddd-dddd-4ddd-8ddd-dddddddddddd",
         "defaultAssistantId": "asd_11111111-1111-4111-8111-111111111111",
+        "defaultImageGenerationId": "img_ffffffff-ffff-4fff-8fff-ffffffffffff",
         "defaultModelId": "mdl_bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
         "defaultTtsId": "tts_cccccccc-cccc-4ccc-8ccc-cccccccccccc",
         "policyId": "pol_550e8400-e29b-41d4-a716-446655440000"
@@ -1726,7 +1906,7 @@
       ],
       "releaseId": "rel_550e8400-e29b-41d4-a716-446655440000",
       "schemaVersion": 4,
-      "snapshotHash": "sha256:5f8fefa988bf4e825d6b14ab76198c3a742083a69f52a151668153aee5843c8a",
+      "snapshotHash": "sha256:d26018b7ee827e7bf65ea891dee7a6138bb08b21fa678688384d550906eb79fc",
       "starters": [
         {
           "assistantDefinitionId": "asd_11111111-1111-4111-8111-111111111111",
@@ -1810,6 +1990,20 @@
         }
       ],
       "deploymentId": "dep_550e8400-e29b-41d4-a716-446655440000",
+      "imageGenerators": [
+        {
+          "allowedSizes": [
+            "1024x1024"
+          ],
+          "clientProtocol": "OPENAI_IMAGES_GENERATIONS",
+          "displayName": "Managed Image Generator",
+          "enabled": true,
+          "imageId": "img_ffffffff-ffff-4fff-8fff-ffffffffffff",
+          "maxImagesPerRequest": 4,
+          "runtimePath": "/v1/images/generations",
+          "upstreamModelKey": "gpt-image-1"
+        }
+      ],
       "managedGeneration": 42,
       "mcp": [
         {
@@ -1854,6 +2048,7 @@
         "allowLocalTts": "true",
         "defaultAsrId": "asr_dddddddd-dddd-4ddd-8ddd-dddddddddddd",
         "defaultAssistantId": "asd_11111111-1111-4111-8111-111111111111",
+        "defaultImageGenerationId": "img_ffffffff-ffff-4fff-8fff-ffffffffffff",
         "defaultModelId": "mdl_bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
         "defaultTtsId": "tts_cccccccc-cccc-4ccc-8ccc-cccccccccccc",
         "policyId": "pol_550e8400-e29b-41d4-a716-446655440000"
@@ -1868,7 +2063,7 @@
       ],
       "releaseId": "rel_550e8400-e29b-41d4-a716-446655440000",
       "schemaVersion": 4,
-      "snapshotHash": "sha256:5f8fefa988bf4e825d6b14ab76198c3a742083a69f52a151668153aee5843c8a",
+      "snapshotHash": "sha256:d26018b7ee827e7bf65ea891dee7a6138bb08b21fa678688384d550906eb79fc",
       "starters": [
         {
           "assistantDefinitionId": "asd_11111111-1111-4111-8111-111111111111",
@@ -1952,6 +2147,20 @@
         }
       ],
       "deploymentId": "dep_550e8400-e29b-41d4-a716-446655440000",
+      "imageGenerators": [
+        {
+          "allowedSizes": [
+            "1024x1024"
+          ],
+          "clientProtocol": "OPENAI_IMAGES_GENERATIONS",
+          "displayName": "Managed Image Generator",
+          "enabled": true,
+          "imageId": "img_ffffffff-ffff-4fff-8fff-ffffffffffff",
+          "maxImagesPerRequest": 4,
+          "runtimePath": "/v1/images/generations",
+          "upstreamModelKey": "gpt-image-1"
+        }
+      ],
       "managedGeneration": 42,
       "mcp": [
         {
@@ -1995,6 +2204,7 @@
         "allowLocalTts": true,
         "defaultAsrId": "asr_dddddddd-dddd-4ddd-8ddd-dddddddddddd",
         "defaultAssistantId": "asd_11111111-1111-4111-8111-111111111111",
+        "defaultImageGenerationId": "img_ffffffff-ffff-4fff-8fff-ffffffffffff",
         "defaultModelId": "mdl_bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
         "defaultTtsId": "tts_cccccccc-cccc-4ccc-8ccc-cccccccccccc",
         "policyId": "pol_550e8400-e29b-41d4-a716-446655440000"
@@ -2009,7 +2219,7 @@
       ],
       "releaseId": "rel_550e8400-e29b-41d4-a716-446655440000",
       "schemaVersion": 4,
-      "snapshotHash": "sha256:5f8fefa988bf4e825d6b14ab76198c3a742083a69f52a151668153aee5843c8a",
+      "snapshotHash": "sha256:d26018b7ee827e7bf65ea891dee7a6138bb08b21fa678688384d550906eb79fc",
       "starters": [
         {
           "assistantDefinitionId": "asd_11111111-1111-4111-8111-111111111111",
@@ -2093,6 +2303,20 @@
         }
       ],
       "deploymentId": "dep_550e8400-e29b-41d4-a716-446655440000",
+      "imageGenerators": [
+        {
+          "allowedSizes": [
+            "1024x1024"
+          ],
+          "clientProtocol": "OPENAI_IMAGES_GENERATIONS",
+          "displayName": "Managed Image Generator",
+          "enabled": true,
+          "imageId": "img_ffffffff-ffff-4fff-8fff-ffffffffffff",
+          "maxImagesPerRequest": 4,
+          "runtimePath": "/v1/images/generations",
+          "upstreamModelKey": "gpt-image-1"
+        }
+      ],
       "managedGeneration": 42,
       "mcp": [
         {
@@ -2137,6 +2361,7 @@
         "allowLocalTts": true,
         "defaultAsrId": "asr_dddddddd-dddd-4ddd-8ddd-dddddddddddd",
         "defaultAssistantId": "asd_11111111-1111-4111-8111-111111111111",
+        "defaultImageGenerationId": "img_ffffffff-ffff-4fff-8fff-ffffffffffff",
         "defaultModelId": "mdl_bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
         "defaultTtsId": "tts_cccccccc-cccc-4ccc-8ccc-cccccccccccc",
         "policyId": "pol_550e8400-e29b-41d4-a716-446655440000"
@@ -2151,7 +2376,7 @@
       ],
       "releaseId": "rel_550e8400-e29b-41d4-a716-446655440000",
       "schemaVersion": 4,
-      "snapshotHash": "sha256:5f8fefa988bf4e825d6b14ab76198c3a742083a69f52a151668153aee5843c8a",
+      "snapshotHash": "sha256:d26018b7ee827e7bf65ea891dee7a6138bb08b21fa678688384d550906eb79fc",
       "starters": [
         {
           "assistantDefinitionId": "asd_11111111-1111-4111-8111-111111111111",
@@ -2235,6 +2460,20 @@
         }
       ],
       "deploymentId": "dep_550e8400-e29b-41d4-a716-446655440000",
+      "imageGenerators": [
+        {
+          "allowedSizes": [
+            "1024x1024"
+          ],
+          "clientProtocol": "OPENAI_IMAGES_GENERATIONS",
+          "displayName": "Managed Image Generator",
+          "enabled": true,
+          "imageId": "img_ffffffff-ffff-4fff-8fff-ffffffffffff",
+          "maxImagesPerRequest": 4,
+          "runtimePath": "/v1/images/generations",
+          "upstreamModelKey": "gpt-image-1"
+        }
+      ],
       "managedGeneration": 42,
       "mcp": [
         {
@@ -2279,6 +2518,7 @@
         "allowLocalTts": true,
         "defaultAsrId": "asr_dddddddd-dddd-4ddd-8ddd-dddddddddddd",
         "defaultAssistantId": "asd_11111111-1111-4111-8111-111111111111",
+        "defaultImageGenerationId": "img_ffffffff-ffff-4fff-8fff-ffffffffffff",
         "defaultModelId": "mdl_bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
         "defaultTtsId": "tts_cccccccc-cccc-4ccc-8ccc-cccccccccccc",
         "policyId": "pol_550e8400-e29b-41d4-a716-446655440000"
@@ -2293,7 +2533,7 @@
       ],
       "releaseId": "rel_550e8400-e29b-41d4-a716-446655440000",
       "schemaVersion": 4,
-      "snapshotHash": "sha256:5f8fefa988bf4e825d6b14ab76198c3a742083a69f52a151668153aee5843c8a",
+      "snapshotHash": "sha256:d26018b7ee827e7bf65ea891dee7a6138bb08b21fa678688384d550906eb79fc",
       "starters": [
         {
           "assistantDefinitionId": "asd_11111111-1111-4111-8111-111111111111",
@@ -2377,6 +2617,20 @@
         }
       ],
       "deploymentId": "dep_550e8400-e29b-41d4-a716-446655440000",
+      "imageGenerators": [
+        {
+          "allowedSizes": [
+            "1024x1024"
+          ],
+          "clientProtocol": "OPENAI_IMAGES_GENERATIONS",
+          "displayName": "Managed Image Generator",
+          "enabled": true,
+          "imageId": "img_ffffffff-ffff-4fff-8fff-ffffffffffff",
+          "maxImagesPerRequest": 4,
+          "runtimePath": "/v1/images/generations",
+          "upstreamModelKey": "gpt-image-1"
+        }
+      ],
       "managedGeneration": 42,
       "mcp": [
         {
@@ -2420,6 +2674,7 @@
         "allowLocalTts": true,
         "defaultAsrId": "asr_dddddddd-dddd-4ddd-8ddd-dddddddddddd",
         "defaultAssistantId": "asd_11111111-1111-4111-8111-111111111111",
+        "defaultImageGenerationId": "img_ffffffff-ffff-4fff-8fff-ffffffffffff",
         "defaultModelId": "mdl_bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
         "defaultTtsId": "tts_cccccccc-cccc-4ccc-8ccc-cccccccccccc",
         "policyId": "pol_550e8400-e29b-41d4-a716-446655440000"
@@ -2434,7 +2689,7 @@
       ],
       "releaseId": "rel_550e8400-e29b-41d4-a716-446655440000",
       "schemaVersion": 4,
-      "snapshotHash": "sha256:5f8fefa988bf4e825d6b14ab76198c3a742083a69f52a151668153aee5843c8a",
+      "snapshotHash": "sha256:d26018b7ee827e7bf65ea891dee7a6138bb08b21fa678688384d550906eb79fc",
       "starters": [
         {
           "assistantDefinitionId": "asd_11111111-1111-4111-8111-111111111111",
@@ -2518,6 +2773,20 @@
         }
       ],
       "deploymentId": "dep_550e8400-e29b-41d4-a716-446655440000",
+      "imageGenerators": [
+        {
+          "allowedSizes": [
+            "1024x1024"
+          ],
+          "clientProtocol": "OPENAI_IMAGES_GENERATIONS",
+          "displayName": "Managed Image Generator",
+          "enabled": true,
+          "imageId": "img_ffffffff-ffff-4fff-8fff-ffffffffffff",
+          "maxImagesPerRequest": 4,
+          "runtimePath": "/v1/images/generations",
+          "upstreamModelKey": "gpt-image-1"
+        }
+      ],
       "managedGeneration": 42,
       "mcp": [
         {
@@ -2562,6 +2831,7 @@
         "allowLocalTts": true,
         "defaultAsrId": "asr_dddddddd-dddd-4ddd-8ddd-dddddddddddd",
         "defaultAssistantId": "asd_11111111-1111-4111-8111-111111111111",
+        "defaultImageGenerationId": "img_ffffffff-ffff-4fff-8fff-ffffffffffff",
         "defaultModelId": "mdl_bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
         "defaultTtsId": "tts_cccccccc-cccc-4ccc-8ccc-cccccccccccc",
         "policyId": "pol_550e8400-e29b-41d4-a716-446655440000"
@@ -2576,7 +2846,7 @@
       ],
       "releaseId": "rel_550e8400-e29b-41d4-a716-446655440000",
       "schemaVersion": 4,
-      "snapshotHash": "sha256:5f8fefa988bf4e825d6b14ab76198c3a742083a69f52a151668153aee5843c8a",
+      "snapshotHash": "sha256:d26018b7ee827e7bf65ea891dee7a6138bb08b21fa678688384d550906eb79fc",
       "starters": [
         {
           "assistantDefinitionId": "asd_11111111-1111-4111-8111-111111111111",
@@ -2660,6 +2930,20 @@
         }
       ],
       "deploymentId": "dep_550e8400-e29b-41d4-a716-446655440000",
+      "imageGenerators": [
+        {
+          "allowedSizes": [
+            "1024x1024"
+          ],
+          "clientProtocol": "OPENAI_IMAGES_GENERATIONS",
+          "displayName": "Managed Image Generator",
+          "enabled": true,
+          "imageId": "img_ffffffff-ffff-4fff-8fff-ffffffffffff",
+          "maxImagesPerRequest": 4,
+          "runtimePath": "/v1/images/generations",
+          "upstreamModelKey": "gpt-image-1"
+        }
+      ],
       "managedGeneration": 42,
       "mcp": [
         {
@@ -2704,6 +2988,7 @@
         "allowLocalTts": true,
         "defaultAsrId": "asr_dddddddd-dddd-4ddd-8ddd-dddddddddddd",
         "defaultAssistantId": "asd_11111111-1111-4111-8111-111111111111",
+        "defaultImageGenerationId": "img_ffffffff-ffff-4fff-8fff-ffffffffffff",
         "defaultModelId": "mdl_bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
         "defaultTtsId": "tts_cccccccc-cccc-4ccc-8ccc-cccccccccccc",
         "policyId": "pol_550e8400-e29b-41d4-a716-446655440000"
@@ -2718,7 +3003,7 @@
       ],
       "releaseId": "rel_550e8400-e29b-41d4-a716-446655440000",
       "schemaVersion": 4,
-      "snapshotHash": "sha256:5f8fefa988bf4e825d6b14ab76198c3a742083a69f52a151668153aee5843c8a",
+      "snapshotHash": "sha256:d26018b7ee827e7bf65ea891dee7a6138bb08b21fa678688384d550906eb79fc",
       "starters": [
         {
           "assistantDefinitionId": "asd_11111111-1111-4111-8111-111111111111",
@@ -2802,6 +3087,20 @@
         }
       ],
       "deploymentId": "dep_550e8400-e29b-41d4-a716-446655440000",
+      "imageGenerators": [
+        {
+          "allowedSizes": [
+            "1024x1024"
+          ],
+          "clientProtocol": "OPENAI_IMAGES_GENERATIONS",
+          "displayName": "Managed Image Generator",
+          "enabled": true,
+          "imageId": "img_ffffffff-ffff-4fff-8fff-ffffffffffff",
+          "maxImagesPerRequest": 4,
+          "runtimePath": "/v1/images/generations",
+          "upstreamModelKey": "gpt-image-1"
+        }
+      ],
       "managedGeneration": 42,
       "mcp": [
         {
@@ -2845,6 +3144,7 @@
         "allowLocalTts": true,
         "defaultAsrId": "asr_dddddddd-dddd-4ddd-8ddd-dddddddddddd",
         "defaultAssistantId": "asd_11111111-1111-4111-8111-111111111111",
+        "defaultImageGenerationId": "img_ffffffff-ffff-4fff-8fff-ffffffffffff",
         "defaultModelId": "mdl_bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
         "defaultTtsId": "tts_cccccccc-cccc-4ccc-8ccc-cccccccccccc",
         "policyId": "pol_550e8400-e29b-41d4-a716-446655440000"
@@ -2859,7 +3159,7 @@
       ],
       "releaseId": "rel_550e8400-e29b-41d4-a716-446655440000",
       "schemaVersion": 4,
-      "snapshotHash": "sha256:5f8fefa988bf4e825d6b14ab76198c3a742083a69f52a151668153aee5843c8a",
+      "snapshotHash": "sha256:d26018b7ee827e7bf65ea891dee7a6138bb08b21fa678688384d550906eb79fc",
       "starters": [
         {
           "assistantDefinitionId": "asd_11111111-1111-4111-8111-111111111111",
@@ -2943,6 +3243,20 @@
         }
       ],
       "deploymentId": "dep_550e8400-e29b-41d4-a716-446655440000",
+      "imageGenerators": [
+        {
+          "allowedSizes": [
+            "1024x1024"
+          ],
+          "clientProtocol": "OPENAI_IMAGES_GENERATIONS",
+          "displayName": "Managed Image Generator",
+          "enabled": true,
+          "imageId": "img_ffffffff-ffff-4fff-8fff-ffffffffffff",
+          "maxImagesPerRequest": 4,
+          "runtimePath": "/v1/images/generations",
+          "upstreamModelKey": "gpt-image-1"
+        }
+      ],
       "managedGeneration": 42,
       "mcp": [
         {
@@ -2987,6 +3301,7 @@
         "allowLocalTts": true,
         "defaultAsrId": "asr_dddddddd-dddd-4ddd-8ddd-dddddddddddd",
         "defaultAssistantId": "asd_11111111-1111-4111-8111-111111111111",
+        "defaultImageGenerationId": "img_ffffffff-ffff-4fff-8fff-ffffffffffff",
         "defaultModelId": "mdl_bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
         "defaultTtsId": "tts_cccccccc-cccc-4ccc-8ccc-cccccccccccc",
         "policyId": "pol_550e8400-e29b-41d4-a716-446655440000"
@@ -3001,7 +3316,7 @@
       ],
       "releaseId": "rel_550e8400-e29b-41d4-a716-446655440000",
       "schemaVersion": 4,
-      "snapshotHash": "sha256:5f8fefa988bf4e825d6b14ab76198c3a742083a69f52a151668153aee5843c8a",
+      "snapshotHash": "sha256:d26018b7ee827e7bf65ea891dee7a6138bb08b21fa678688384d550906eb79fc",
       "starters": [
         {
           "assistantDefinitionId": "asd_11111111-1111-4111-8111-111111111111",
@@ -3085,6 +3400,20 @@
         }
       ],
       "deploymentId": "dep_550e8400-e29b-41d4-a716-446655440000",
+      "imageGenerators": [
+        {
+          "allowedSizes": [
+            "1024x1024"
+          ],
+          "clientProtocol": "OPENAI_IMAGES_GENERATIONS",
+          "displayName": "Managed Image Generator",
+          "enabled": true,
+          "imageId": "img_ffffffff-ffff-4fff-8fff-ffffffffffff",
+          "maxImagesPerRequest": 4,
+          "runtimePath": "/v1/images/generations",
+          "upstreamModelKey": "gpt-image-1"
+        }
+      ],
       "managedGeneration": 42,
       "mcp": [
         {
@@ -3129,6 +3458,7 @@
         "allowLocalTts": true,
         "defaultAsrId": "asr_dddddddd-dddd-4ddd-8ddd-dddddddddddd",
         "defaultAssistantId": "asd_11111111-1111-4111-8111-111111111111",
+        "defaultImageGenerationId": "img_ffffffff-ffff-4fff-8fff-ffffffffffff",
         "defaultModelId": "mdl_bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
         "defaultTtsId": "tts_cccccccc-cccc-4ccc-8ccc-cccccccccccc",
         "policyId": "pol_550e8400-e29b-41d4-a716-446655440000"
@@ -3143,7 +3473,7 @@
       ],
       "releaseId": "rel_550e8400-e29b-41d4-a716-446655440000",
       "schemaVersion": 4,
-      "snapshotHash": "sha256:5f8fefa988bf4e825d6b14ab76198c3a742083a69f52a151668153aee5843c8a",
+      "snapshotHash": "sha256:d26018b7ee827e7bf65ea891dee7a6138bb08b21fa678688384d550906eb79fc",
       "starters": [
         {
           "assistantDefinitionId": "asd_11111111-1111-4111-8111-111111111111",
@@ -3201,6 +3531,20 @@
         }
       ],
       "deploymentId": "dep_550e8400-e29b-41d4-a716-446655440000",
+      "imageGenerators": [
+        {
+          "allowedSizes": [
+            "1024x1024"
+          ],
+          "clientProtocol": "OPENAI_IMAGES_GENERATIONS",
+          "displayName": "Managed Image Generator",
+          "enabled": true,
+          "imageId": "img_ffffffff-ffff-4fff-8fff-ffffffffffff",
+          "maxImagesPerRequest": 4,
+          "runtimePath": "/v1/images/generations",
+          "upstreamModelKey": "gpt-image-1"
+        }
+      ],
       "managedGeneration": 42,
       "mcp": [
         {
@@ -3245,6 +3589,7 @@
         "allowLocalTts": true,
         "defaultAsrId": "asr_dddddddd-dddd-4ddd-8ddd-dddddddddddd",
         "defaultAssistantId": "asd_11111111-1111-4111-8111-111111111111",
+        "defaultImageGenerationId": "img_ffffffff-ffff-4fff-8fff-ffffffffffff",
         "defaultModelId": "mdl_bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
         "defaultTtsId": "tts_cccccccc-cccc-4ccc-8ccc-cccccccccccc",
         "policyId": "pol_550e8400-e29b-41d4-a716-446655440000"
@@ -3259,7 +3604,7 @@
       ],
       "releaseId": "rel_550e8400-e29b-41d4-a716-446655440000",
       "schemaVersion": 4,
-      "snapshotHash": "sha256:5f8fefa988bf4e825d6b14ab76198c3a742083a69f52a151668153aee5843c8a",
+      "snapshotHash": "sha256:d26018b7ee827e7bf65ea891dee7a6138bb08b21fa678688384d550906eb79fc",
       "starters": [
         {
           "assistantDefinitionId": "asd_11111111-1111-4111-8111-111111111111",
@@ -3343,6 +3688,20 @@
         }
       ],
       "deploymentId": "dep_550e8400-e29b-41d4-a716-446655440000",
+      "imageGenerators": [
+        {
+          "allowedSizes": [
+            "1024x1024"
+          ],
+          "clientProtocol": "OPENAI_IMAGES_GENERATIONS",
+          "displayName": "Managed Image Generator",
+          "enabled": true,
+          "imageId": "img_ffffffff-ffff-4fff-8fff-ffffffffffff",
+          "maxImagesPerRequest": 4,
+          "runtimePath": "/v1/images/generations",
+          "upstreamModelKey": "gpt-image-1"
+        }
+      ],
       "managedGeneration": 42,
       "mcp": [
         {
@@ -3387,6 +3746,7 @@
         "allowLocalTts": true,
         "defaultAsrId": "asr_dddddddd-dddd-4ddd-8ddd-dddddddddddd",
         "defaultAssistantId": "asd_11111111-1111-4111-8111-111111111111",
+        "defaultImageGenerationId": "img_ffffffff-ffff-4fff-8fff-ffffffffffff",
         "defaultModelId": "mdl_bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
         "defaultTtsId": "tts_cccccccc-cccc-4ccc-8ccc-cccccccccccc",
         "policyId": "pol_550e8400-e29b-41d4-a716-446655440000"
@@ -3401,7 +3761,7 @@
       ],
       "releaseId": "rel_550e8400-e29b-41d4-a716-446655440000",
       "schemaVersion": 4,
-      "snapshotHash": "sha256:5f8fefa988bf4e825d6b14ab76198c3a742083a69f52a151668153aee5843c8a",
+      "snapshotHash": "sha256:d26018b7ee827e7bf65ea891dee7a6138bb08b21fa678688384d550906eb79fc",
       "tts": [
         {
           "clientProtocol": "OPENAI_AUDIO_SPEECH",
@@ -3458,6 +3818,20 @@
         }
       ],
       "deploymentId": "dep_550e8400-e29b-41d4-a716-446655440000",
+      "imageGenerators": [
+        {
+          "allowedSizes": [
+            "1024x1024"
+          ],
+          "clientProtocol": "OPENAI_IMAGES_GENERATIONS",
+          "displayName": "Managed Image Generator",
+          "enabled": true,
+          "imageId": "img_ffffffff-ffff-4fff-8fff-ffffffffffff",
+          "maxImagesPerRequest": 4,
+          "runtimePath": "/v1/images/generations",
+          "upstreamModelKey": "gpt-image-1"
+        }
+      ],
       "managedGeneration": 42,
       "mcp": [
         {
@@ -3502,6 +3876,7 @@
         "allowLocalTts": true,
         "defaultAsrId": "asr_dddddddd-dddd-4ddd-8ddd-dddddddddddd",
         "defaultAssistantId": "asd_11111111-1111-4111-8111-111111111111",
+        "defaultImageGenerationId": "img_ffffffff-ffff-4fff-8fff-ffffffffffff",
         "defaultModelId": "mdl_bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
         "defaultTtsId": "tts_cccccccc-cccc-4ccc-8ccc-cccccccccccc",
         "policyId": "pol_550e8400-e29b-41d4-a716-446655440000"
@@ -3516,7 +3891,7 @@
       ],
       "releaseId": "rel_550e8400-e29b-41d4-a716-446655440000",
       "schemaVersion": 5,
-      "snapshotHash": "sha256:5f8fefa988bf4e825d6b14ab76198c3a742083a69f52a151668153aee5843c8a",
+      "snapshotHash": "sha256:d26018b7ee827e7bf65ea891dee7a6138bb08b21fa678688384d550906eb79fc",
       "starters": [
         {
           "assistantDefinitionId": "asd_11111111-1111-4111-8111-111111111111",
@@ -3600,6 +3975,20 @@
         }
       ],
       "deploymentId": "dep_550e8400-e29b-41d4-a716-446655440000",
+      "imageGenerators": [
+        {
+          "allowedSizes": [
+            "1024x1024"
+          ],
+          "clientProtocol": "OPENAI_IMAGES_GENERATIONS",
+          "displayName": "Managed Image Generator",
+          "enabled": true,
+          "imageId": "img_ffffffff-ffff-4fff-8fff-ffffffffffff",
+          "maxImagesPerRequest": 4,
+          "runtimePath": "/v1/images/generations",
+          "upstreamModelKey": "gpt-image-1"
+        }
+      ],
       "managedGeneration": 42,
       "mcp": [
         {
@@ -3645,6 +4034,7 @@
         "allowLocalTts": true,
         "defaultAsrId": "asr_dddddddd-dddd-4ddd-8ddd-dddddddddddd",
         "defaultAssistantId": "asd_11111111-1111-4111-8111-111111111111",
+        "defaultImageGenerationId": "img_ffffffff-ffff-4fff-8fff-ffffffffffff",
         "defaultModelId": "mdl_bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
         "defaultTtsId": "tts_cccccccc-cccc-4ccc-8ccc-cccccccccccc",
         "policyId": "pol_550e8400-e29b-41d4-a716-446655440000"
@@ -3659,7 +4049,7 @@
       ],
       "releaseId": "rel_550e8400-e29b-41d4-a716-446655440000",
       "schemaVersion": 4,
-      "snapshotHash": "sha256:5f8fefa988bf4e825d6b14ab76198c3a742083a69f52a151668153aee5843c8a",
+      "snapshotHash": "sha256:d26018b7ee827e7bf65ea891dee7a6138bb08b21fa678688384d550906eb79fc",
       "starters": [
         {
           "assistantDefinitionId": "asd_11111111-1111-4111-8111-111111111111",
@@ -3743,6 +4133,20 @@
         }
       ],
       "deploymentId": "dep_550e8400-e29b-41d4-a716-446655440000",
+      "imageGenerators": [
+        {
+          "allowedSizes": [
+            "1024x1024"
+          ],
+          "clientProtocol": "OPENAI_IMAGES_GENERATIONS",
+          "displayName": "Managed Image Generator",
+          "enabled": true,
+          "imageId": "img_ffffffff-ffff-4fff-8fff-ffffffffffff",
+          "maxImagesPerRequest": 4,
+          "runtimePath": "/v1/images/generations",
+          "upstreamModelKey": "gpt-image-1"
+        }
+      ],
       "managedGeneration": 42,
       "mcp": [
         {
@@ -3788,6 +4192,7 @@
         "allowLocalTts": true,
         "defaultAsrId": "asr_dddddddd-dddd-4ddd-8ddd-dddddddddddd",
         "defaultAssistantId": "asd_11111111-1111-4111-8111-111111111111",
+        "defaultImageGenerationId": "img_ffffffff-ffff-4fff-8fff-ffffffffffff",
         "defaultModelId": "mdl_bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
         "defaultTtsId": "tts_cccccccc-cccc-4ccc-8ccc-cccccccccccc",
         "policyId": "pol_550e8400-e29b-41d4-a716-446655440000"
@@ -3802,7 +4207,7 @@
       ],
       "releaseId": "rel_550e8400-e29b-41d4-a716-446655440000",
       "schemaVersion": 4,
-      "snapshotHash": "sha256:5f8fefa988bf4e825d6b14ab76198c3a742083a69f52a151668153aee5843c8a",
+      "snapshotHash": "sha256:d26018b7ee827e7bf65ea891dee7a6138bb08b21fa678688384d550906eb79fc",
       "starters": [
         {
           "assistantDefinitionId": "asd_11111111-1111-4111-8111-111111111111",
@@ -3886,6 +4291,20 @@
         }
       ],
       "deploymentId": "dep_550e8400-e29b-41d4-a716-446655440000",
+      "imageGenerators": [
+        {
+          "allowedSizes": [
+            "1024x1024"
+          ],
+          "clientProtocol": "OPENAI_IMAGES_GENERATIONS",
+          "displayName": "Managed Image Generator",
+          "enabled": true,
+          "imageId": "img_ffffffff-ffff-4fff-8fff-ffffffffffff",
+          "maxImagesPerRequest": 4,
+          "runtimePath": "/v1/images/generations",
+          "upstreamModelKey": "gpt-image-1"
+        }
+      ],
       "managedGeneration": 42,
       "mcp": [
         {
@@ -3931,6 +4350,7 @@
         "allowLocalTts": true,
         "defaultAsrId": "asr_dddddddd-dddd-4ddd-8ddd-dddddddddddd",
         "defaultAssistantId": "asd_11111111-1111-4111-8111-111111111111",
+        "defaultImageGenerationId": "img_ffffffff-ffff-4fff-8fff-ffffffffffff",
         "defaultModelId": "mdl_bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
         "defaultTtsId": "tts_cccccccc-cccc-4ccc-8ccc-cccccccccccc",
         "policyId": "pol_550e8400-e29b-41d4-a716-446655440000"
@@ -3945,7 +4365,7 @@
       ],
       "releaseId": "rel_550e8400-e29b-41d4-a716-446655440000",
       "schemaVersion": 4,
-      "snapshotHash": "sha256:5f8fefa988bf4e825d6b14ab76198c3a742083a69f52a151668153aee5843c8a",
+      "snapshotHash": "sha256:d26018b7ee827e7bf65ea891dee7a6138bb08b21fa678688384d550906eb79fc",
       "starters": [
         {
           "assistantDefinitionId": "asd_11111111-1111-4111-8111-111111111111",
@@ -4029,6 +4449,20 @@
         }
       ],
       "deploymentId": "dep_550e8400-e29b-41d4-a716-446655440000",
+      "imageGenerators": [
+        {
+          "allowedSizes": [
+            "1024x1024"
+          ],
+          "clientProtocol": "OPENAI_IMAGES_GENERATIONS",
+          "displayName": "Managed Image Generator",
+          "enabled": true,
+          "imageId": "img_ffffffff-ffff-4fff-8fff-ffffffffffff",
+          "maxImagesPerRequest": 4,
+          "runtimePath": "/v1/images/generations",
+          "upstreamModelKey": "gpt-image-1"
+        }
+      ],
       "managedGeneration": 42,
       "mcp": [
         {
@@ -4074,6 +4508,7 @@
         "allowLocalTts": true,
         "defaultAsrId": "asr_dddddddd-dddd-4ddd-8ddd-dddddddddddd",
         "defaultAssistantId": "asd_11111111-1111-4111-8111-111111111111",
+        "defaultImageGenerationId": "img_ffffffff-ffff-4fff-8fff-ffffffffffff",
         "defaultModelId": "mdl_bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
         "defaultTtsId": "tts_cccccccc-cccc-4ccc-8ccc-cccccccccccc",
         "policyId": "pol_550e8400-e29b-41d4-a716-446655440000"
@@ -4088,7 +4523,7 @@
       ],
       "releaseId": "rel_550e8400-e29b-41d4-a716-446655440000",
       "schemaVersion": 4,
-      "snapshotHash": "sha256:5f8fefa988bf4e825d6b14ab76198c3a742083a69f52a151668153aee5843c8a",
+      "snapshotHash": "sha256:d26018b7ee827e7bf65ea891dee7a6138bb08b21fa678688384d550906eb79fc",
       "starters": [
         {
           "assistantDefinitionId": "asd_11111111-1111-4111-8111-111111111111",
@@ -4263,7 +4698,7 @@
     "valid": true,
     "value": {
       "managedGeneration": 42,
-      "snapshotHash": "sha256:5f8fefa988bf4e825d6b14ab76198c3a742083a69f52a151668153aee5843c8a"
+      "snapshotHash": "sha256:d26018b7ee827e7bf65ea891dee7a6138bb08b21fa678688384d550906eb79fc"
     }
   },
   {
@@ -4272,7 +4707,7 @@
     "valid": false,
     "value": {
       "managedGeneration": 0,
-      "snapshotHash": "sha256:5f8fefa988bf4e825d6b14ab76198c3a742083a69f52a151668153aee5843c8a"
+      "snapshotHash": "sha256:d26018b7ee827e7bf65ea891dee7a6138bb08b21fa678688384d550906eb79fc"
     }
   },
   {
@@ -4299,7 +4734,7 @@
     "value": {
       "deviceId": "dev_550e8400-e29b-41d4-a716-446655440000",
       "managedGeneration": 42,
-      "snapshotHash": "sha256:5f8fefa988bf4e825d6b14ab76198c3a742083a69f52a151668153aee5843c8a"
+      "snapshotHash": "sha256:d26018b7ee827e7bf65ea891dee7a6138bb08b21fa678688384d550906eb79fc"
     }
   }
 ]

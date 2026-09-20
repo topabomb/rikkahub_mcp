@@ -57,6 +57,7 @@ class AttachmentInspectionAssemblyTest {
                         inspection,
                         net.weero.measix.pilot.service.runtime.ModelExecutionLease { error("catalog assembly cannot execute") },
                         "test", null, RequestMediaCapabilities(userImages = RequestImageSupport.STRUCTURED),
+                        imageGeneration = null,
                     ),
                     turnKind = mode,
                     mcpCapabilities = TurnMcpCapabilitySnapshot(tools = emptyList()),

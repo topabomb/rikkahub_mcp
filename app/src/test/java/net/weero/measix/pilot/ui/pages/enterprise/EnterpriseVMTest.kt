@@ -283,6 +283,57 @@ class EnterpriseVMTest {
             view.copy(items = view.items.dropLast(1) + view.items.first())
         }
     }
+
+    @Test fun `configuration details preserve unset and unavailable references without sensitive fields`() {
+        val packet = exampleEnterprisePackage()
+        val image = EnterpriseImageGenerationResource(
+            id = "img_12345678-1234-4234-8234-123456789abc",
+            name = "Managed image",
+            modelId = "private-upstream-model",
+            enabled = false,
+            protocol = PlatformImageGenerationDefinitionClientProtocol.OPENAI_IMAGES_GENERATIONS,
+            maxImagesPerRequest = 3,
+            allowedSizes = listOf("1024x1024"),
+        )
+        val configuration = packet.configuration.copy(
+            imageGenerators = listOf(image),
+            defaults = packet.configuration.defaults.copy(
+                chatModelId = "mdl_missing",
+                imageGenerationModelId = image.id,
+            ),
+            assistants = packet.configuration.assistants.mapIndexed { index, assistant ->
+                if (index == 0) assistant.copy(systemPrompt = "private-system-prompt") else assistant
+            },
+            memorySeeds = packet.configuration.memorySeeds + EnterpriseMemorySeed("seed_private", "private-memory-seed"),
+        )
+
+        val projected = projectEnterpriseConfigurationDetails(
+            identity = packet.identity,
+            phase = EnterpriseSessionPhase.OFFLINE,
+            generation = 12,
+            lastSyncMillis = 1_000,
+            platformOrigin = "https://core.example",
+            configuration = configuration,
+        )
+
+        assertEquals(5, projected.defaults.size)
+        assertEquals(
+            EnterpriseConfigurationReferenceState.UNAVAILABLE,
+            projected.defaults.single { it.kind == EnterpriseConfigurationDefaultKind.CHAT_MODEL }.state,
+        )
+        val imageDefault = projected.defaults.single { it.kind == EnterpriseConfigurationDefaultKind.IMAGE_GENERATION }
+        assertEquals("Managed image", imageDefault.displayName)
+        assertEquals(EnterpriseConfigurationReferenceState.UNAVAILABLE, imageDefault.state)
+        assertEquals(8, projected.resources.size)
+        assertTrue(projected.resources.single { it.kind == EnterpriseConfigurationResourceKind.IMAGE_GENERATOR }
+            .items.single().facts.any { it.kind == EnterpriseConfigurationResourceFactKind.MAX_IMAGES && it.value == "3" })
+        assertFalse(projected.toString().contains(image.id))
+        assertFalse(projected.toString().contains("mdl_missing"))
+        assertFalse(projected.toString().contains("OPENAI_IMAGES_GENERATIONS"))
+        assertFalse(projected.toString().contains("private-upstream-model"))
+        assertFalse(projected.toString().contains("private-system-prompt"))
+        assertFalse(projected.toString().contains("private-memory-seed"))
+    }
 }
 
 private fun budgetView(userId: String, asOf: String) = PlatformUserBudgetView(
@@ -293,6 +344,7 @@ private fun budgetView(userId: String, asOf: String) = PlatformUserBudgetView(
         PlatformBudgetCapability.TTS,
         PlatformBudgetCapability.ASR,
         PlatformBudgetCapability.MCP,
+        PlatformBudgetCapability.IMAGE_GENERATION,
     ).map { capability ->
         PlatformBudgetCapabilityView(
             capability = capability,

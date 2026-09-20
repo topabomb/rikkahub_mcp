@@ -55,6 +55,7 @@ internal data class ModelExecutionSnapshot(
     val userRevision: String,
     val enterpriseVersion: EnterpriseAppliedVersion?,
     val mediaCapabilities: RequestMediaCapabilities = RequestMediaCapabilities.NONE,
+    val imageGeneration: net.weero.measix.pilot.data.configuration.ImageGenerationCapabilities?,
 )
 
 internal class CapturedModelConfiguration(
@@ -264,7 +265,8 @@ internal class ModelExecutionService(
         check(selection.isAvailable) { "model_selection_unavailable:${role.name}:${selection.unavailableReason}" }
         val modelId = requireNotNull(selection.reference)
         requireAvailable(configuration, ConfigurationCategory.MODEL, modelId)
-        val selected = configuration.models[modelId]?.model ?: error("chat_model_unavailable")
+        val resolvedModel = configuration.models[modelId] ?: error("chat_model_unavailable")
+        val selected = resolvedModel.model
         check(selected.type == role.type) { "model_capability_mismatch" }
         val model = selected.copy(
             customHeaders = selected.customHeaders.toList(), customBodies = selected.customBodies.toList(),
@@ -277,20 +279,34 @@ internal class ModelExecutionService(
         }
         val platformProvider = platformExecution?.let {
             val definitions = requireNotNull(bindings).configuration
-            val definition = definitions.models.single { it.id == modelId.id }
-            val protocol = definitions.providers.single { it.id == definition.providerId }.protocol
-            when (protocol) {
-                PlatformProviderDefinitionClientProtocol.OPENAI_CHAT_COMPLETIONS,
-                PlatformProviderDefinitionClientProtocol.OPENAI_RESPONSES -> ProviderSetting.OpenAI(
-                    id = model.id, name = model.displayName, models = listOf(model), baseUrl = it.connection.origin,
-                    apiKey = "", useResponseApi = protocol == PlatformProviderDefinitionClientProtocol.OPENAI_RESPONSES,
+            if (role == ModelSelectionRole.IMAGE) {
+                val definition = definitions.imageGenerators.single { it.id == modelId.id }
+                check(definition.protocol == net.weero.measix.pilot.data.enterprise.PlatformImageGenerationDefinitionClientProtocol.OPENAI_IMAGES_GENERATIONS) {
+                    "unsupported_platform_image_protocol"
+                }
+                ProviderSetting.OpenAI(
+                    id = model.id,
+                    name = model.displayName,
+                    models = listOf(model),
+                    baseUrl = it.connection.origin,
+                    apiKey = "",
                 )
-                PlatformProviderDefinitionClientProtocol.GOOGLE_GENERATE_CONTENT -> ProviderSetting.Google(
-                    id = model.id, name = model.displayName, models = listOf(model), baseUrl = it.connection.origin, apiKey = "",
-                )
-                PlatformProviderDefinitionClientProtocol.ANTHROPIC_MESSAGES -> ProviderSetting.Claude(
-                    id = model.id, name = model.displayName, models = listOf(model), baseUrl = it.connection.origin, apiKey = "",
-                )
+            } else {
+                val definition = definitions.models.single { it.id == modelId.id }
+                val protocol = definitions.providers.single { it.id == definition.providerId }.protocol
+                when (protocol) {
+                    PlatformProviderDefinitionClientProtocol.OPENAI_CHAT_COMPLETIONS,
+                    PlatformProviderDefinitionClientProtocol.OPENAI_RESPONSES -> ProviderSetting.OpenAI(
+                        id = model.id, name = model.displayName, models = listOf(model), baseUrl = it.connection.origin,
+                        apiKey = "", useResponseApi = protocol == PlatformProviderDefinitionClientProtocol.OPENAI_RESPONSES,
+                    )
+                    PlatformProviderDefinitionClientProtocol.GOOGLE_GENERATE_CONTENT -> ProviderSetting.Google(
+                        id = model.id, name = model.displayName, models = listOf(model), baseUrl = it.connection.origin, apiKey = "",
+                    )
+                    PlatformProviderDefinitionClientProtocol.ANTHROPIC_MESSAGES -> ProviderSetting.Claude(
+                        id = model.id, name = model.displayName, models = listOf(model), baseUrl = it.connection.origin, apiKey = "",
+                    )
+                }
             }
         }
         val initialTarget = if (platformProvider != null) ModelRequestTarget.Remote(platformProvider)
@@ -340,7 +356,8 @@ internal class ModelExecutionService(
                 "Provider contract violation: IMAGE model cannot encode structured USER images"
             }
         }
-        return ModelExecutionSnapshot(model, requestView(modelAdmission), snapshot.userRevision, bindings?.version, media)
+        return ModelExecutionSnapshot(model, requestView(modelAdmission), snapshot.userRevision, bindings?.version, media,
+            resolvedModel.imageGeneration)
     }
 
     private suspend fun <T> withConfiguration(

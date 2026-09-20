@@ -1,7 +1,7 @@
 # 企业文生图、限额模板与配置详情执行方案
 
-> 状态：执行中
-> 日期：2026-09-20
+> 状态：已执行
+> 日期：2026-09-20（2026-09-21 完成验证）
 > 覆盖仓库：`measix-architecture`、`measix-platform-core`（含 Admin Console）、`measix-enterprise-portal`、`rikkahub_mcp`
 > 目标：在保持单一当前协议和清晰 owner 的前提下，交付企业文生图可选下发、五类能力限额模板、Android 企业配置详情，并完成真实 UI 与跨端验证。
 
@@ -287,6 +287,7 @@ allowedSizes
 - `EnterpriseApplicationService` 输出 immutable `EnterpriseConfigurationDetailsUiModel`。
 - `EnterpriseVM` 只消费 application/query port；Compose 不直接依赖 raw `EnterpriseConfiguration`、Store、Session 或 Execution。
 - 新建全屏详情页面：总览卡为默认值、策略、资源、同步诊断；资源类别进入二级列表，单项技术信息再次渐进披露。
+- 默认值逐项区分“已设置且可用 / 未设置 / 已设置但引用不可用”；未设置不能以目录首项或名称匹配补齐。
 - 地址编辑仍留在企业连接卡；详情页地址只读可复制。
 - READY/OFFLINE+LKG 可展示，PENDING/退出不可展示；Session/generation 更新立即替换投影，迟到旧结果不污染。
 - 五套常用语言资源同步。
@@ -325,6 +326,7 @@ allowedSizes
 | CFG-002 | OFFLINE/LKG、同步失败、失效引用准确 | state tests + UI |
 | CFG-003 | 不显示 secret/route/prompt 原文 | projection/static/security tests |
 | CFG-004 | 切域、退出、同步迟到不污染 | coroutine/realm tests |
+| CFG-005 | Admin 设置/清空每个 Policy 与默认值后，Preview、Snapshot、Android 详情及 resolver 一致 | contract tests + production browser + emulator |
 | ADM-UI-001 | 模板创建编辑、用户指派、覆盖恢复、冲突 | production browser 操作 |
 | ADM-UI-002 | 桌面/窄屏、loading/empty/error/assigned | Playwright + 实际截图 |
 | AND-UI-001 | 配置详情在手机/折叠屏可读 | emulator/真机操作 |
@@ -371,3 +373,28 @@ Android:
 ```
 
 构建/JVM 通过不代表设备、真实 Core、真实 Provider 或 production UI 验收通过。所有仓库交付前必须执行 `git diff --check`、最终 diff、生成物漂移、测试报告和工作树检查。
+
+## 11. 执行结果
+
+本次交付保持单一当前合同：Snapshot 仍为 v4，Bridge 仍为 v3，API 仍为 `/v1`；Core 直接更新当前 Ent schema、初始化 SQL、OpenAPI 和生成物，没有新增数据库 migration、协议升版、兼容 reader、运行时 fallback 或双写。Android 也没有增加 Room、DataStore 或 manifest migration。
+
+已完成：
+
+- Architecture 已移除 Image Generation 非目标，并固定独立图片资源、五类 capability budget、模板实时继承与无逐资源预算层。
+- Core/Admin 已实现图片资源发布与 Relay 路由、`REQUESTED_IMAGES` 计量、Budget Template CRUD、指派与覆盖，以及当前 schema 和生成合同；真实生产构建的 Admin 浏览器流程已验证。
+- Portal 已按第五类 `IMAGE_GENERATION` 展示有效额度，且没有接收模板管理元数据；真实生产构建浏览器流程已验证。
+- Android 已接收可选 `imageGenerators`，按 realm 解析个人与企业图片模型，冻结执行能力并在 Provider I/O 前校验数量、尺寸、编辑和 partial image；企业 URL 图片下载采用隔离 transport 和 HTTPS、DNS、重定向、大小、MIME、签名校验。
+- Android 配置详情已实现默认值、策略、资源分类、单项详情和同步诊断的渐进披露，不展示 secret、route、prompt、内部 ID 或原始协议；只展示当前活动企业域的 READY/OFFLINE 最近成功配置。
+- 五套 Android 常用语言资源、静态契约、架构参考和测试同步完成。
+
+最终验证证据：
+
+| 端 | 结果 |
+| --- | --- |
+| Core/Admin | 生成物、漂移、Go test/vet、smoke、Console test/typecheck/build、公开来源检查、真实生产构建浏览器 E2E 全部通过 |
+| Portal | API 生成、typecheck、11 个测试文件共 87 个用例、build、format、真实 Core + production Portal + Chromium E2E 全部通过 |
+| Android JVM/构建 | `test assembleDebug lintDebug assembleRelease --no-parallel --max-workers=1` 通过，827 tasks，10m37s |
+| Android 设备 | Pixel 10 Pro Fold API 37：Enterprise 页面 14/14；完整 `connectedDebugAndroidTest` 215 个测试、9 个既有 live/PRoot 前置条件跳过、0 失败；折叠屏半开态配置详情地址与复制场景单独通过 |
+| Android 合同 | `python tools/generate-enterprise-wire.py --check` 通过；Snapshot 有或无图片字段、严格未知字段、resolver、execution、coordinator、UI projection 和安全下载测试通过 |
+
+边界：本轮没有在 Android 上使用真实外部图片供应商 URL 完成一次生成并落入媒体库，因此 `IMG-004` 和 `FINAL-001` 中“真实供应商生成”这一段不作为已验收项；其余 Core/Portal 真实浏览器链、Android 设备链和传输安全、媒体 owner 自动化验证均已完成。真实供应商联调需要可用的企业图片 binding、凭据和上游服务环境，不通过 mock 结果冒充。

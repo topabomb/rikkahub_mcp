@@ -34,6 +34,8 @@ class PlatformSnapshotMapperTest {
                 assertEquals(wire.managedGeneration, candidate.configuration.generation)
                 assertEquals(wire.policy.defaultModelId, candidate.configuration.defaults.chatModelId)
                 assertEquals(wire.policy.defaultAssistantId, candidate.configuration.defaults.assistantId)
+                assertEquals(wire.policy.defaultImageGenerationId, candidate.configuration.defaults.imageGenerationModelId)
+                assertEquals(wire.imageGenerators.orEmpty().map { it.imageId }, candidate.configuration.imageGenerators.map { it.id })
                 assertNull(candidate.configuration.defaults.titleModelId)
                 assertTrue(candidate.configuration.gateways.isEmpty())
                 assertTrue(candidate.configuration.assistants.all { !it.allowAsSubAssistant && it.allowedSubAssistantIds.isEmpty() })
@@ -142,6 +144,37 @@ class PlatformSnapshotMapperTest {
         assertEquals(candidate.configuration, reopened.load().configuration)
         assertEquals(candidate.execution, reopened.execution(manifest))
         assertTrue(reopened.execution(manifest) is EnterpriseExecution.Platform)
+    }
+
+    @Test fun `image generation remains an independent resource with a strict default and route`() {
+        val original = snapshot()
+        val image = requireNotNull(original.imageGenerators).single()
+        val candidate = map(original)
+        val definition = candidate.configuration.imageGenerators.single()
+        assertEquals(image.imageId, definition.id)
+        assertEquals(image.upstreamModelKey, definition.modelId)
+        assertEquals(image.maxImagesPerRequest.toInt(), definition.maxImagesPerRequest)
+        assertEquals(image.allowedSizes, definition.allowedSizes)
+        assertEquals(image.imageId, candidate.configuration.defaults.imageGenerationModelId)
+        assertEquals(image.runtimePath, (candidate.execution as EnterpriseExecution.Platform).runtimePaths.getValue(image.imageId))
+
+        val unset = original.copy(policy = original.policy.copy(defaultImageGenerationId = null))
+        assertNull(map(unset).configuration.defaults.imageGenerationModelId)
+        val disabled = original.copy(imageGenerators = listOf(image.copy(enabled = false)))
+        assertEquals("invalid_platform_default_image_generation",
+            assertThrows(IllegalArgumentException::class.java) { map(disabled) }.message)
+        val missing = original.copy(imageGenerators = emptyList())
+        assertEquals("invalid_platform_default_image_generation",
+            assertThrows(IllegalArgumentException::class.java) { map(missing) }.message)
+    }
+
+    @Test fun `persisted configuration without additive image collection decodes as empty without schema migration`() {
+        val configuration = map(snapshot()).configuration
+        val json = EnterpriseConfigurationCodec.json
+        val encoded = json.encodeToJsonElement(EnterpriseConfiguration.serializer(), configuration).jsonObject
+        val decoded = json.decodeFromJsonElement(EnterpriseConfiguration.serializer(), JsonObject(encoded - "imageGenerators"))
+        assertTrue(decoded.imageGenerators.isEmpty())
+        assertEquals(configuration.defaults, decoded.defaults)
     }
 
     @Test fun `schema five URL-qualified state migrates once without changing principal or session`() {

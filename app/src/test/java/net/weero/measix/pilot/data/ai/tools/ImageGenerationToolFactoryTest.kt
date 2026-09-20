@@ -33,7 +33,7 @@ class ImageGenerationToolFactoryTest {
     private fun available() = net.weero.measix.pilot.service.ModelExecutionSnapshot(
         model, net.weero.measix.pilot.service.runtime.ModelExecutionLease { accept ->
             accept(net.weero.measix.pilot.service.runtime.ModelRequestTarget.Remote(providerSetting))
-        }, "fixture", null,
+        }, "fixture", null, imageGeneration = net.weero.measix.pilot.test.testPersonalImageCapabilities,
     )
 
     private fun factory(): ImageGenerationToolFactory {

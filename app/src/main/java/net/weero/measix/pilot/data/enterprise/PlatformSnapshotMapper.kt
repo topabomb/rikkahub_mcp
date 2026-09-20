@@ -12,6 +12,7 @@ internal object PlatformSnapshotMapper {
         }
         val providers = snapshot.providers.unique { it.providerId }
         val models = snapshot.models.unique { it.modelId }
+        val imageGenerators = snapshot.imageGenerators.orEmpty().unique { it.imageId }
         val tts = snapshot.tts.unique { it.ttsId }
         val asr = snapshot.asr.unique { it.asrId }
         val mcp = snapshot.mcp.unique { it.mcpServerId }
@@ -36,11 +37,15 @@ internal object PlatformSnapshotMapper {
         }
         val policy = snapshot.policy
         policy.defaultModelId?.let { require(models[it]?.enabled == true) { "invalid_platform_default_model" } }
+        policy.defaultImageGenerationId?.let {
+            require(imageGenerators[it]?.enabled == true) { "invalid_platform_default_image_generation" }
+        }
         policy.defaultTtsId?.let { require(tts[it]?.enabled == true) { "invalid_platform_default_tts" } }
         policy.defaultAsrId?.let { require(asr[it]?.enabled == true) { "invalid_platform_default_asr" } }
         policy.defaultAssistantId?.let { require(assistants[it]?.enabled == true) { "invalid_platform_default_assistant" } }
         val routes = buildMap {
             snapshot.models.forEach { put(it.modelId, it.runtimePath) }
+            snapshot.imageGenerators.orEmpty().forEach { put(it.imageId, it.runtimePath) }
             snapshot.tts.forEach {
                 if (it.clientProtocol == PlatformTtsDefinitionClientProtocol.SYSTEM_TTS) {
                     require(it.runtimePath == null) { "system_tts_runtime_path" }
@@ -72,6 +77,15 @@ internal object PlatformSnapshotMapper {
                     PlatformModelDefinitionCapabilitiesItem.TOOL -> ModelAbility.TOOL
                     PlatformModelDefinitionCapabilitiesItem.REASONING -> ModelAbility.REASONING
                 } },
+            ) },
+            imageGenerators = snapshot.imageGenerators.orEmpty().map { value -> EnterpriseImageGenerationResource(
+                id = value.imageId,
+                name = value.displayName,
+                modelId = value.upstreamModelKey,
+                enabled = value.enabled,
+                protocol = value.clientProtocol,
+                maxImagesPerRequest = value.maxImagesPerRequest.checkedInt(),
+                allowedSizes = value.allowedSizes,
             ) },
             tts = snapshot.tts.map { value -> EnterpriseTtsResource(
                 id = value.ttsId, name = value.displayName, enabled = value.enabled,
@@ -108,6 +122,7 @@ internal object PlatformSnapshotMapper {
                 it.description, it.sortOrder.checkedInt(), it.enabled) },
             gateways = emptyList(),
             defaults = EnterpriseDefaults(assistantId = policy.defaultAssistantId, chatModelId = policy.defaultModelId,
+                imageGenerationModelId = policy.defaultImageGenerationId,
                 ttsId = policy.defaultTtsId, asrId = policy.defaultAsrId),
         )
         require(routes.keys == configuration.runtimeResources().keys) { "platform_runtime_resource_set_mismatch" }
