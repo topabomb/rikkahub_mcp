@@ -7,7 +7,7 @@
     },
     "client-feed.schemas.json": {
       "source": "api/portal/client-feed.schemas.json",
-      "sha256": "e2216426d1530a7413e05bd74c1b5b128e7d085c4b32886dc35b3560da62e6cb"
+      "sha256": "009462dda2c165758c01e571541a36872a261dcf8971e979bba71e03c3d50dc7"
     },
     "native-vectors.json": {
       "source": "api/fixtures/portal/native-vectors.json",
