@@ -2,6 +2,7 @@ package net.weero.measix.pilot.data.enterprise
 
 import kotlinx.serialization.json.Json
 import me.rerere.ai.provider.ModelType
+import me.rerere.ai.provider.Modality
 
 /** Stable validation failures cross the application boundary without exposing credential-bearing wire input. */
 internal class EnterpriseConfigurationException(val reason: String) : IllegalArgumentException(reason)
@@ -76,6 +77,9 @@ internal object EnterpriseConfigurationCodec {
         listOfNotNull(defaults.chatModelId, defaults.fastModelId, defaults.titleModelId, defaults.attachmentInspectionModelId,
             defaults.suggestionModelId, defaults.compressModelId).forEach {
             check(models[it]?.let { model -> model.enabled && model.type == ModelType.CHAT } == true, "invalid_default_chat_model")
+        }
+        defaults.attachmentInspectionModelId?.let {
+            check(Modality.IMAGE in requireNotNull(models[it]).inputModalities, "invalid_default_attachment_inspection_model_modality")
         }
         defaults.imageGenerationModelId?.let {
             check(config.imageGenerators.any { resource -> resource.id == it && resource.enabled }, "invalid_default_image_model")

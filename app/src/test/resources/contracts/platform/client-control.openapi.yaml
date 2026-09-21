@@ -1401,7 +1401,7 @@ components:
     ManagedPolicy:
       type: object
       additionalProperties: false
-      description: Current policy. All five admission flags are required; new policies initialize all five to false.
+      description: Current policy. All five admission flags are required; all ten defaults are optional and remain unset when omitted.
       required:
       - policyId
       - allowLocalProviders
@@ -1424,6 +1424,16 @@ components:
           type: boolean
           description: Allows user assistants; referenced resources remain independently governed.
         defaultModelId:
+          $ref: '#/components/schemas/ModelId'
+        defaultFastModelId:
+          $ref: '#/components/schemas/ModelId'
+        defaultTitleModelId:
+          $ref: '#/components/schemas/ModelId'
+        defaultAttachmentInspectionModelId:
+          $ref: '#/components/schemas/ModelId'
+        defaultSuggestionModelId:
+          $ref: '#/components/schemas/ModelId'
+        defaultCompressModelId:
           $ref: '#/components/schemas/ModelId'
         defaultImageGenerationId:
           $ref: '#/components/schemas/ImageGenerationId'

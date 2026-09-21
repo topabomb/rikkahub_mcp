@@ -4,6 +4,10 @@ import android.content.Context
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.asStateFlow
@@ -38,6 +42,7 @@ internal data class EnterpriseResetConfirmation(
 internal data class EnterpriseBudgetPresentation(
     val selection: RealmSelection,
     val access: RealmAccess.Enterprise,
+    val platformOrigin: String,
     val loading: Boolean,
     val value: PlatformUserBudgetView? = null,
     val failure: String? = null,
@@ -79,10 +84,18 @@ internal class EnterpriseVM(private val service: EnterpriseApplicationService) :
     val resetConfirmation = _resetConfirmation.asStateFlow()
     private val _budgets = MutableStateFlow<EnterpriseBudgetPresentation?>(null)
     val budgets = combine(_budgets, overview) { value, state ->
-        value?.takeIf { it.selection == state?.selection && it.access == state.access }
+        value?.takeIf { it.selection == state?.selection && it.access == state.access &&
+            it.platformOrigin == state.platformOrigin }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
 
+    private data class BudgetTarget(
+        val selection: RealmSelection,
+        val access: RealmAccess.Enterprise,
+        val platformOrigin: String,
+    )
     private var budgetListenerStarted = false
+    private var budgetRefreshJob: Job? = null
+    private var budgetRefreshTarget: BudgetTarget? = null
     private var budgetRefreshPending = false
 
     fun refreshBudgets() {
@@ -97,34 +110,49 @@ internal class EnterpriseVM(private val service: EnterpriseApplicationService) :
         val state = overview.value ?: return
         val selection = state.selection ?: return
         val access = state.access ?: return
-        val current = _budgets.value?.takeIf { it.selection == selection && it.access == access }
-        if (current?.loading == true) {
-            budgetRefreshPending = true
-            return
+        val platformOrigin = state.platformOrigin ?: return
+        val target = BudgetTarget(selection, access, platformOrigin)
+        budgetRefreshJob?.takeIf { it.isActive }?.let { active ->
+            if (budgetRefreshTarget == target) {
+                budgetRefreshPending = true
+                return
+            }
+            active.cancel()
+            budgetRefreshPending = false
         }
-        budgetRefreshPending = false
-        _budgets.value = EnterpriseBudgetPresentation(selection, access, loading = true,
-            value = current?.value, stale = current?.value != null)
-        viewModelScope.launch {
+        val current = _budgets.value?.takeIf { it.matches(target) }
+        _budgets.value = EnterpriseBudgetPresentation(selection, access, platformOrigin, loading = true,
+            value = current?.value)
+        lateinit var launched: Job
+        launched = viewModelScope.launch(start = CoroutineStart.LAZY) {
             try {
                 val value = service.budgets(selection, access)
-                if (overview.value?.selection == selection && overview.value?.access == access) {
-                    _budgets.value = EnterpriseBudgetPresentation(selection, access, loading = false, value = value)
+                if (isCurrent(target)) {
+                    _budgets.value = EnterpriseBudgetPresentation(
+                        selection, access, platformOrigin, loading = false, value = value)
                 }
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: Exception) {
-                if (overview.value?.selection == selection && overview.value?.access == access) {
-                    _budgets.value = EnterpriseBudgetPresentation(selection, access, loading = false,
-                        value = current?.value, failure = error.userVisibleDiagnostic(), stale = current?.value != null)
+                currentCoroutineContext().ensureActive()
+                if (isCurrent(target)) {
+                    _budgets.value = EnterpriseBudgetPresentation(selection, access, platformOrigin, loading = false,
+                        value = current?.value, failure = error.userVisibleDiagnostic(),
+                        stale = current?.value != null)
                 }
             } finally {
-                if (budgetRefreshPending && overview.value?.selection == selection && overview.value?.access == access) {
+                if (budgetRefreshJob === launched) {
+                    val rerun = budgetRefreshPending && isCurrent(target)
+                    budgetRefreshJob = null
+                    budgetRefreshTarget = null
                     budgetRefreshPending = false
-                    refreshBudgets()
+                    if (rerun) refreshBudgets()
                 }
             }
         }
+        budgetRefreshTarget = target
+        budgetRefreshJob = launched
+        launched.start()
     }
 
     fun join(text: String) = command(enrollment = true) { _joinConfirmation.value = service.join(text) }
@@ -214,10 +242,12 @@ internal class EnterpriseVM(private val service: EnterpriseApplicationService) :
     fun retryReset() { if (overview.value?.reset?.failure != null) command { service.retryLocalDataReset() } }
     fun showPortal() { overview.value?.selection?.let {
         _error.value = null
+        _notice.value = null
         _portal.value = PortalPresentation(selection = it)
     } }
     fun showUsagePortal() { overview.value?.selection?.let {
         _error.value = null
+        _notice.value = null
         _portal.value = PortalPresentation(selection = it, destination = PortalDestination.USAGE)
     } }
     fun dismissPortal(original: PortalPresentation) { if (_portal.value == original) _portal.value = null }
@@ -245,16 +275,31 @@ internal class EnterpriseVM(private val service: EnterpriseApplicationService) :
     fun portalFailed(original: PortalPresentation, failure: Exception) {
         if (_portal.value != original || overview.value?.selection != original.selection) return
         dismissPortal(original)
+        _notice.value = null
         _error.value = if (failure is PortalHostUnavailable) {
             Failure(R.string.enterprise_portal_unavailable, original.selection,
                 listOf(failure.provider, failure.missing.joinToString()))
         } else {
             android.util.Log.e("EnterprisePortal", "Portal opening failed", failure)
             val reason = (failure as? PortalFailure)?.code ?: (failure as? EnterpriseConfigurationException)?.reason
+                ?: failure.message?.takeIf { it.matches(Regex("[a-z][a-z0-9_]{2,80}")) }
                 ?: failure.javaClass.simpleName
-            Failure(R.string.enterprise_portal_open_failed, original.selection, listOf(reason))
+            if (reason == "platform_portal_exchange_url_mismatch") {
+                Failure(R.string.enterprise_portal_origin_mismatch, original.selection,
+                    detail = failure.userVisibleDiagnostic())
+            } else {
+                Failure(R.string.enterprise_portal_open_failed, original.selection, listOf(reason),
+                    detail = failure.userVisibleDiagnostic())
+            }
         }
     }
+
+    private fun EnterpriseBudgetPresentation.matches(target: BudgetTarget): Boolean =
+        selection == target.selection && access == target.access && platformOrigin == target.platformOrigin
+
+    private fun isCurrent(target: BudgetTarget): Boolean = overview.value?.let {
+        it.selection == target.selection && it.access == target.access && it.platformOrigin == target.platformOrigin
+    } == true
 
     private fun command(enrollment: Boolean = false, failureMessage: Int = R.string.enterprise_failure, isCurrent: () -> Boolean = { true }, action: suspend () -> Unit) {
         if (_busy.value) return

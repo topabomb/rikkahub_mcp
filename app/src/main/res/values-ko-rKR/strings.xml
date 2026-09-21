@@ -1773,6 +1773,7 @@
   <string name="assistant_runtime_memory_disabled">실행 메모리가 꺼져 있습니다. 기존 기록은 관리할 수 있지만 대화에는 사용되지 않습니다.</string>
   <string name="enterprise_portal_unavailable">시스템 WebView에 기업 워크벤치를 안전하게 여는 데 필요한 기능이 없습니다.\nWebView: %1$s\n누락된 기능: %2$s</string>
   <string name="enterprise_portal_open_failed">기업 워크벤치를 열 수 없습니다. 다시 시도해 주세요.\n이유: %1$s</string>
+  <string name="enterprise_portal_origin_mismatch">기업 워크벤치 주소가 이 기기의 현재 기업 주소와 일치하지 않습니다. Core의 공개 기업 주소를 업데이트한 후 다시 시도해 주세요.</string>
   <string name="assistant_usage_prompt_read_only">시스템 프롬프트는 어시스턴트 정의에서 제공되며 여기서는 읽기 전용입니다</string>
   <string name="speech_provider_empty">음성 서비스가 없습니다. +를 눌러 추가하세요.</string>
   <string name="assistant_picker_view_details">세부정보 보기</string>
@@ -1840,4 +1841,5 @@
   <string name="enterprise_address_changed">기업 주소가 변경되었습니다</string>
   <string name="enterprise_address_change_failed">기업 주소를 변경할 수 없습니다</string>
   <string name="enterprise_sync_failed_cached">최근 구성 동기화에 실패했습니다. 기기에 적용된 구성은 계속 사용할 수 있습니다. 기업 서비스에 연결할 수 있을 때 다시 시도하세요.</string>
+  <string name="enterprise_budget_refreshing">최신 사용량을 새로 고치는 중...</string>
 </resources>

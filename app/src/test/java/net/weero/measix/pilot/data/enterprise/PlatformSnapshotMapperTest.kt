@@ -33,10 +33,15 @@ class PlatformSnapshotMapperTest {
                 val candidate = map(wire)
                 assertEquals(wire.managedGeneration, candidate.configuration.generation)
                 assertEquals(wire.policy.defaultModelId, candidate.configuration.defaults.chatModelId)
+                assertEquals(wire.policy.defaultFastModelId, candidate.configuration.defaults.fastModelId)
+                assertEquals(wire.policy.defaultTitleModelId, candidate.configuration.defaults.titleModelId)
+                assertEquals(wire.policy.defaultAttachmentInspectionModelId,
+                    candidate.configuration.defaults.attachmentInspectionModelId)
+                assertEquals(wire.policy.defaultSuggestionModelId, candidate.configuration.defaults.suggestionModelId)
+                assertEquals(wire.policy.defaultCompressModelId, candidate.configuration.defaults.compressModelId)
                 assertEquals(wire.policy.defaultAssistantId, candidate.configuration.defaults.assistantId)
                 assertEquals(wire.policy.defaultImageGenerationId, candidate.configuration.defaults.imageGenerationModelId)
                 assertEquals(wire.imageGenerators.orEmpty().map { it.imageId }, candidate.configuration.imageGenerators.map { it.id })
-                assertNull(candidate.configuration.defaults.titleModelId)
                 assertTrue(candidate.configuration.gateways.isEmpty())
                 assertTrue(candidate.configuration.assistants.all { !it.allowAsSubAssistant && it.allowedSubAssistantIds.isEmpty() })
                 assertEquals(wire.providers.size, candidate.configuration.providers.size)
@@ -144,6 +149,40 @@ class PlatformSnapshotMapperTest {
         assertEquals(candidate.configuration, reopened.load().configuration)
         assertEquals(candidate.execution, reopened.execution(manifest))
         assertTrue(reopened.execution(manifest) is EnterpriseExecution.Platform)
+    }
+
+    @Test fun `all model defaults are optional and attachment inspection requires image input`() {
+        val original = snapshot()
+        val defaultsUnset = original.policy.copy(
+            defaultModelId = null,
+            defaultFastModelId = null,
+            defaultTitleModelId = null,
+            defaultAttachmentInspectionModelId = null,
+            defaultSuggestionModelId = null,
+            defaultCompressModelId = null,
+        )
+        assertEquals(EnterpriseDefaults(), map(original.copy(policy = defaultsUnset)).configuration.defaults.copy(
+            assistantId = null,
+            imageGenerationModelId = null,
+            ttsId = null,
+            asrId = null,
+        ))
+
+        val attachmentId = requireNotNull(original.policy.defaultAttachmentInspectionModelId)
+        val withoutImage = original.copy(models = original.models.map { model ->
+            if (model.modelId == attachmentId) model.copy(inputModalities = listOf(PlatformModelDefinitionInputModalitiesItem.TEXT)) else model
+        })
+        assertEquals("invalid_platform_default_attachment_inspection_model_modality",
+            assertThrows(IllegalArgumentException::class.java) { map(withoutImage) }.message)
+
+        val candidate = map(original)
+        val canonicalWithoutImage = candidate.configuration.copy(models = candidate.configuration.models.map { model ->
+            if (model.id == attachmentId) model.copy(inputModalities = listOf(me.rerere.ai.provider.Modality.TEXT)) else model
+        })
+        assertEquals("invalid_default_attachment_inspection_model_modality",
+            assertThrows(EnterpriseConfigurationException::class.java) {
+                EnterpriseConfigurationCodec.validateConfiguration(candidate.identity, canonicalWithoutImage)
+            }.reason)
     }
 
     @Test fun `image generation remains an independent resource with a strict default and route`() {

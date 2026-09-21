@@ -16,6 +16,57 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class EnterpriseVMTest {
+    @Test fun `cached budget refresh is neutral until a completed request actually fails`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val store = ViewModelStore()
+        try {
+            val packet = exampleEnterprisePackage()
+            val access = RealmAccess.Enterprise(packet.identity.scope, "session")
+            val selection = RealmSelection(access, 1)
+            val overview = MutableStateFlow(EnterpriseOverview(selection, EnterpriseSessionPhase.READY,
+                "Example", "Member", access, 1, 1000, null, null, false,
+                platformOrigin = "https://old.example"))
+            val changes = MutableSharedFlow<RealmAccess.Enterprise>(extraBufferCapacity = 1)
+            val cached = budgetView(access.scope.userId, "2026-09-20T12:00:00Z")
+            val retry = CompletableDeferred<PlatformUserBudgetView>()
+            var calls = 0
+            val service = mockk<EnterpriseApplicationService>()
+            every { service.observe() } returns overview
+            every { service.runtimeUsageChanges() } returns changes
+            coEvery { service.budgets(selection, access) } coAnswers {
+                calls++
+                if (calls == 1) cached else retry.await()
+            }
+            val vm = EnterpriseVM(service)
+            store.put("enterprise", vm)
+            backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.budgets.collect {} }
+            runCurrent()
+
+            vm.refreshBudgets()
+            runCurrent()
+            assertEquals(cached, vm.budgets.value?.value)
+            assertFalse(vm.budgets.value?.stale == true)
+
+            vm.refreshBudgets()
+            runCurrent()
+            assertTrue(vm.budgets.value?.loading == true)
+            assertEquals(cached, vm.budgets.value?.value)
+            assertFalse(vm.budgets.value?.stale == true)
+            assertNull(vm.budgets.value?.failure)
+
+            retry.completeExceptionally(IllegalStateException("upstream unavailable"))
+            runCurrent()
+            assertFalse(vm.budgets.value?.loading == true)
+            assertTrue(vm.budgets.value?.stale == true)
+            assertEquals(cached, vm.budgets.value?.value)
+            assertTrue(vm.budgets.value?.failure?.contains("upstream unavailable") == true)
+        } finally {
+            store.clear()
+            runCurrent()
+            Dispatchers.resetMain()
+        }
+    }
+
     @Test fun `runtime completion during budget load queues a fresh projection`() = runTest {
         Dispatchers.setMain(StandardTestDispatcher(testScheduler))
         val store = ViewModelStore()
@@ -24,7 +75,8 @@ class EnterpriseVMTest {
             val access = RealmAccess.Enterprise(packet.identity.scope, "session")
             val selection = RealmSelection(access, 1)
             val overview = MutableStateFlow(EnterpriseOverview(selection, EnterpriseSessionPhase.READY,
-                "Example", "Member", access, 1, 1000, null, null, false))
+                "Example", "Member", access, 1, 1000, null, null, false,
+                platformOrigin = "https://old.example"))
             val changes = MutableSharedFlow<RealmAccess.Enterprise>(extraBufferCapacity = 1)
             val first = CompletableDeferred<PlatformUserBudgetView>()
             val firstView = budgetView(access.scope.userId, "2026-09-20T12:00:00Z")
@@ -52,6 +104,99 @@ class EnterpriseVMTest {
 
             assertEquals(2, calls)
             assertEquals(secondView.asOf, vm.budgets.value?.value?.asOf)
+        } finally {
+            store.clear()
+            runCurrent()
+            Dispatchers.resetMain()
+        }
+    }
+
+    @Test fun `address change cancels the old budget target and cannot publish its failure`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val store = ViewModelStore()
+        try {
+            val packet = exampleEnterprisePackage()
+            val access = RealmAccess.Enterprise(packet.identity.scope, "session")
+            val selection = RealmSelection(access, 1)
+            val overview = MutableStateFlow(EnterpriseOverview(selection, EnterpriseSessionPhase.READY,
+                "Example", "Member", access, 1, 1000, null, null, false,
+                platformOrigin = "https://old.example"))
+            val changes = MutableSharedFlow<RealmAccess.Enterprise>(extraBufferCapacity = 1)
+            val old = CompletableDeferred<PlatformUserBudgetView>()
+            val current = budgetView(access.scope.userId, "2026-09-20T12:00:01Z")
+            var calls = 0
+            val service = mockk<EnterpriseApplicationService>()
+            every { service.observe() } returns overview
+            every { service.runtimeUsageChanges() } returns changes
+            coEvery { service.budgets(selection, access) } coAnswers {
+                calls++
+                if (calls == 1) old.await() else current
+            }
+            val vm = EnterpriseVM(service)
+            store.put("enterprise", vm)
+            backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.budgets.collect {} }
+            runCurrent()
+
+            vm.refreshBudgets()
+            runCurrent()
+            overview.value = overview.value.copy(platformOrigin = "https://new.example")
+            runCurrent()
+            vm.refreshBudgets()
+            runCurrent()
+
+            assertEquals(2, calls)
+            assertEquals(current, vm.budgets.value?.value)
+            old.completeExceptionally(java.io.InterruptedIOException("old origin timeout"))
+            runCurrent()
+            assertEquals(current, vm.budgets.value?.value)
+            assertNull(vm.budgets.value?.failure)
+        } finally {
+            store.clear()
+            runCurrent()
+            Dispatchers.resetMain()
+        }
+    }
+
+    @Test fun `opening a portal clears stale success and preserves an unexpected failure diagnostic`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val store = ViewModelStore()
+        try {
+            val packet = exampleEnterprisePackage()
+            val access = RealmAccess.Enterprise(packet.identity.scope, "session")
+            val selection = RealmSelection(access, 1)
+            val overview = MutableStateFlow(EnterpriseOverview(selection, EnterpriseSessionPhase.READY,
+                "Example", "Member", access, 1, 1000, null, null, false,
+                platformOrigin = "https://core.example"))
+            val service = mockk<EnterpriseApplicationService>()
+            every { service.observe() } returns overview
+            coEvery { service.synchronize(access) } returns Unit
+            val vm = EnterpriseVM(service)
+            store.put("enterprise", vm)
+            backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.notice.collect {} }
+            backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.error.collect {} }
+            runCurrent()
+
+            vm.synchronize()
+            runCurrent()
+            assertEquals(net.weero.measix.pilot.R.string.enterprise_sync_completed, vm.notice.value)
+            vm.showPortal()
+            runCurrent()
+            assertNull(vm.notice.value)
+
+            val portal = requireNotNull(vm.portal.value)
+            vm.portalFailed(portal, IllegalArgumentException("specific_portal_failure"))
+            runCurrent()
+            assertEquals(listOf("specific_portal_failure"), vm.error.value?.arguments)
+            assertTrue(vm.error.value?.detail?.contains("IllegalArgumentException") == true)
+            assertTrue(vm.error.value?.detail?.contains("specific_portal_failure") == true)
+
+            vm.showPortal()
+            val mismatch = requireNotNull(vm.portal.value)
+            vm.portalFailed(mismatch, EnterpriseConfigurationException("platform_portal_exchange_url_mismatch"))
+            runCurrent()
+            assertEquals(net.weero.measix.pilot.R.string.enterprise_portal_origin_mismatch,
+                vm.error.value?.resource)
+            assertTrue(vm.error.value?.arguments.isNullOrEmpty())
         } finally {
             store.clear()
             runCurrent()

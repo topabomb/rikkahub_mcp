@@ -1773,6 +1773,7 @@
   <string name="assistant_runtime_memory_disabled">実行時メモリは無効です。既存の記録は管理できますが、会話には使われません。</string>
   <string name="enterprise_portal_unavailable">システムの WebView に、企業ワークスペースを安全に開くための機能がありません。\nWebView：%1$s\n不足している機能：%2$s</string>
   <string name="enterprise_portal_open_failed">企業ワークスペースを開けませんでした。もう一度お試しください。\n理由：%1$s</string>
+  <string name="enterprise_portal_origin_mismatch">企業ワークスペースのアドレスが、この端末の現在の企業アドレスと一致しません。Core の公開企業アドレスを更新してから、もう一度お試しください。</string>
   <string name="assistant_usage_prompt_read_only">システムプロンプトはアシスタント定義から提供され、この画面では読み取り専用です</string>
   <string name="speech_provider_empty">音声サービスはまだありません。+ をタップして追加してください。</string>
   <string name="assistant_picker_view_details">詳細を見る</string>
@@ -1840,4 +1841,5 @@
   <string name="enterprise_address_changed">企業アドレスを変更しました</string>
   <string name="enterprise_address_change_failed">企業アドレスを変更できませんでした</string>
   <string name="enterprise_sync_failed_cached">最新の設定同期に失敗しました。端末に適用済みの設定は引き続き利用できます。企業サービスが利用可能になってから再試行してください。</string>
+  <string name="enterprise_budget_refreshing">最新の使用状況を更新しています...</string>
 </resources>

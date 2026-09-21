@@ -349,6 +349,8 @@ internal class EnterpriseApplicationService(
     private val mutex = Mutex()
     private val switching = MutableStateFlow<Switching?>(null)
     private val joinMutex = Mutex()
+    /** Prevents an old-origin Portal document from registering after a new connection is committed. */
+    private val portalConnectionMutex = Mutex()
     private var pendingJoin: Pair<EnterpriseJoinConfirmation, EnrollmentMaterial.Platform>? = null
     private val enrollmentRecoveryFailure = MutableStateFlow<String?>(null)
 
@@ -458,14 +460,16 @@ internal class EnterpriseApplicationService(
         enrollmentRecoveryFailure.value = null
     }
     suspend fun changeAddress(request: EnterpriseAddressChangeRequest, origin: String) {
-        recovery.awaitReady()
-        if (sessions.readPresentation().selection != request.selection) {
-            throw EnterpriseConfigurationException("enterprise_selection_revoked")
+        portalConnectionMutex.withLock {
+            recovery.awaitReady()
+            if (sessions.readPresentation().selection != request.selection) {
+                throw EnterpriseConfigurationException("enterprise_selection_revoked")
+            }
+            val normalized = EnrollmentMaterialParser.normalizeOrigin(origin)
+            if (sessions.platformContext(request.access.sessionId).platform.connection.origin == normalized) return
+            platform.changeAddress(request, normalized)
+            portals.closeAndAwait(request.access, PortalCloseReason.CONNECTION_CHANGED)
         }
-        val normalized = EnrollmentMaterialParser.normalizeOrigin(origin)
-        if (sessions.platformContext(request.access.sessionId).platform.connection.origin == normalized) return
-        platform.changeAddress(request, normalized)
-        portals.closeAndAwait(request.access, PortalCloseReason.CONNECTION_CHANGED)
     }
     suspend fun budgets(selection: RealmSelection, access: RealmAccess.Enterprise): PlatformUserBudgetView {
         recovery.awaitReady()
@@ -492,13 +496,15 @@ internal class EnterpriseApplicationService(
 
     suspend fun openPortal(context: Context, selection: RealmSelection, destination: PortalDestination,
         onClosed: (PortalClosure) -> Unit): PortalWebView {
-        recovery.awaitReady()
-        val access = selection.access as? RealmAccess.Enterprise
-            ?: throw EnterpriseConfigurationException("enterprise_session_required")
-        val source = PortalPageSource(platform.createPortalGrant(access), destination)
-        return PortalWebView.open(context, selection, sessions, synchronization, scope, portals, source,
-            { document -> PortalNativeActions(context, document, sessions, exit, media.open(document.id),
-                AndroidPortalCaptureFactory(context, scope), scope) }, onClosed)
+        return portalConnectionMutex.withLock {
+            recovery.awaitReady()
+            val access = selection.access as? RealmAccess.Enterprise
+                ?: throw EnterpriseConfigurationException("enterprise_session_required")
+            val source = PortalPageSource(platform.createPortalGrant(access), destination)
+            PortalWebView.open(context, selection, sessions, synchronization, scope, portals, source,
+                { document -> PortalNativeActions(context, document, sessions, exit, media.open(document.id),
+                    AndroidPortalCaptureFactory(context, scope), scope) }, onClosed)
+        }
     }
 
     suspend fun switchRealm(request: RealmSwitchRequest): RealmSelection {

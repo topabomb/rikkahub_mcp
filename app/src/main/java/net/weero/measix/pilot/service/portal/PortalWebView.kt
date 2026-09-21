@@ -15,6 +15,7 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import net.weero.measix.pilot.data.enterprise.EnterpriseConfigurationException
 import net.weero.measix.pilot.data.enterprise.EnterpriseSessionController
 import net.weero.measix.pilot.data.enterprise.RealmSelection
 import net.weero.measix.pilot.service.EnterpriseSynchronizationService
@@ -31,7 +32,11 @@ internal class PortalPageSource(
 ) {
     private val requestDetail = Regex("^/api/portal/v1/usage/requests/req_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")
     private val updateDetail = Regex("^/api/client/v1/enterprise/updates/eup_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")
-    private val exchange = URI(grant.exchangeUrl)
+    private val exchange = try {
+        URI(grant.exchangeUrl)
+    } catch (_: Exception) {
+        throw EnterpriseConfigurationException("invalid_platform_portal_exchange_url")
+    }
     val origin = "${exchange.scheme}://${exchange.rawAuthority}"
     val entry = "$origin/portal/"
     val initialLocationScript = when (destination) {
@@ -40,9 +45,11 @@ internal class PortalPageSource(
     }
 
     init {
-        require(exchange.scheme in setOf("http", "https") && exchange.rawUserInfo == null &&
-            exchange.rawQuery == null && exchange.rawFragment == null && exchange.rawPath == "/portal/session/exchange") {
-            "invalid_platform_portal_exchange_url"
+        if (exchange.scheme !in setOf("http", "https") || exchange.rawAuthority == null ||
+            exchange.rawUserInfo != null ||
+            exchange.rawQuery != null || exchange.rawFragment != null ||
+            exchange.rawPath != "/portal/session/exchange") {
+            throw EnterpriseConfigurationException("invalid_platform_portal_exchange_url")
         }
     }
 

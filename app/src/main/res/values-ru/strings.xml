@@ -1773,6 +1773,7 @@
   <string name="assistant_runtime_memory_disabled">Память диалогов отключена. Записи можно редактировать, но они не используются в разговорах.</string>
   <string name="enterprise_portal_unavailable">В системном WebView отсутствуют функции, необходимые для безопасного открытия корпоративной панели.\nWebView: %1$s\nНедостающие функции: %2$s</string>
   <string name="enterprise_portal_open_failed">Не удалось открыть корпоративную панель. Повторите попытку.\nПричина: %1$s</string>
+  <string name="enterprise_portal_origin_mismatch">Адрес корпоративной панели не совпадает с текущим корпоративным адресом на этом устройстве. Обновите публичный корпоративный адрес Core и повторите попытку.</string>
   <string name="assistant_usage_prompt_read_only">Системная инструкция берётся из определения ассистента и доступна здесь только для чтения</string>
   <string name="speech_provider_empty">Служб речи пока нет. Нажмите +, чтобы добавить.</string>
   <string name="assistant_picker_view_details">Просмотреть сведения</string>
@@ -1840,4 +1841,5 @@
   <string name="enterprise_address_changed">Адрес организации изменён</string>
   <string name="enterprise_address_change_failed">Не удалось изменить адрес организации</string>
   <string name="enterprise_sync_failed_cached">Последняя синхронизация конфигурации не удалась. Локально примененная конфигурация по-прежнему доступна. Повторите попытку, когда корпоративный сервис станет доступен.</string>
+  <string name="enterprise_budget_refreshing">Обновление последних данных об использовании...</string>
 </resources>

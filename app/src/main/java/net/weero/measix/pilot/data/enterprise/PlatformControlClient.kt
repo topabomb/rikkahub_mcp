@@ -116,10 +116,12 @@ internal class PlatformControlClient(client: OkHttpClient) {
         val httpRequest = builder(connection.control("/portal/grants"), accessToken)
             .post(ByteArray(0).toRequestBody(null)).build().withSingleAttemptBody()
         return request<PlatformPortalGrant>(httpRequest, 201, callTimeoutSeconds = 15).also { grant ->
-            require(grant.exchangeUrl == connection.origin + "/portal/session/exchange") {
-                "platform_portal_exchange_url_mismatch"
+            if (grant.exchangeUrl != connection.origin + "/portal/session/exchange") {
+                throw EnterpriseConfigurationException("platform_portal_exchange_url_mismatch")
             }
-            require(grant.ticket.isNotBlank() && grant.ticket.length <= 128) { "invalid_platform_PortalGrant_ticket" }
+            if (grant.ticket.isBlank() || grant.ticket.length > 128) {
+                throw EnterpriseConfigurationException("invalid_platform_portal_grant_ticket")
+            }
         }
     }
 

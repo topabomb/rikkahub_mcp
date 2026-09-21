@@ -46,6 +46,17 @@ internal object PlatformSnapshotMapper {
         }
         val policy = snapshot.policy
         policy.defaultModelId?.let { require(models[it]?.enabled == true) { "invalid_platform_default_model" } }
+        policy.defaultFastModelId?.let { require(models[it]?.enabled == true) { "invalid_platform_default_fast_model" } }
+        policy.defaultTitleModelId?.let { require(models[it]?.enabled == true) { "invalid_platform_default_title_model" } }
+        policy.defaultAttachmentInspectionModelId?.let {
+            val model = models[it]
+            require(model?.enabled == true) { "invalid_platform_default_attachment_inspection_model" }
+            require(PlatformModelDefinitionInputModalitiesItem.IMAGE in model.inputModalities) {
+                "invalid_platform_default_attachment_inspection_model_modality"
+            }
+        }
+        policy.defaultSuggestionModelId?.let { require(models[it]?.enabled == true) { "invalid_platform_default_suggestion_model" } }
+        policy.defaultCompressModelId?.let { require(models[it]?.enabled == true) { "invalid_platform_default_compress_model" } }
         policy.defaultImageGenerationId?.let {
             require(imageGenerators[it]?.enabled == true) { "invalid_platform_default_image_generation" }
         }
@@ -136,6 +147,9 @@ internal object PlatformSnapshotMapper {
                 it.description, it.sortOrder.checkedInt(), it.enabled) },
             gateways = emptyList(),
             defaults = EnterpriseDefaults(assistantId = policy.defaultAssistantId, chatModelId = policy.defaultModelId,
+                fastModelId = policy.defaultFastModelId, titleModelId = policy.defaultTitleModelId,
+                attachmentInspectionModelId = policy.defaultAttachmentInspectionModelId,
+                suggestionModelId = policy.defaultSuggestionModelId, compressModelId = policy.defaultCompressModelId,
                 imageGenerationModelId = policy.defaultImageGenerationId,
                 ttsId = policy.defaultTtsId, asrId = policy.defaultAsrId),
         )

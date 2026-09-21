@@ -1,8 +1,11 @@
 package net.weero.measix.pilot.service.portal
 
 import net.weero.measix.pilot.data.enterprise.PlatformPortalGrant
+import net.weero.measix.pilot.data.enterprise.EnterpriseConfigurationException
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
+import org.junit.Assert.assertThrows
 import org.junit.Test
 
 class PortalPageSourceTest {
@@ -43,5 +46,15 @@ class PortalPageSourceTest {
         assertTrue(usage.initialLocationScript.contains("/portal/?view=usage"))
         assertFalse(usage.initialLocationScript.contains(source.grant.exchangeUrl))
         assertTrue(PortalPageSource(source.grant).initialLocationScript.isEmpty())
+    }
+
+    @Test
+    fun invalidExchangeUrlUsesAStableConfigurationReason() {
+        listOf("https://enterprise.example/other", "not a URI", "https:/portal/session/exchange").forEach { url ->
+            val error = assertThrows(EnterpriseConfigurationException::class.java) {
+                PortalPageSource(source.grant.copy(exchangeUrl = url))
+            }
+            assertEquals("invalid_platform_portal_exchange_url", error.reason)
+        }
     }
 }

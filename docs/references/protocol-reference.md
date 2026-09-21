@@ -36,6 +36,8 @@ OpenAI 的 `chatCompletionsPath` 与 `responsesPath` 分别配置两种协议的
 
 `Routed` 表示平台 Relay 的完整 HTTP/HTTPS endpoint 与单请求 Bearer。`ModelExecutionService` 从冻结的 Platform execution、资源 ID 和 runtimePath 装配 URL，Google 流式额外保留 `alt=sse`，四种现有文本编码器和企业图片 typed client 直接使用此 URL，不再次拼接供应商后缀，也不读取用户 KeyRoulette。generation 与 interaction headers 由原捕获上下文提供，刷新只替换认证，不改变路径、模型或代际。`OPENAI_IMAGES_GENERATIONS` 发送顶层 `model/prompt/n/size`；`DASHSCOPE_MULTIMODAL_GENERATION` 发送 `model/input.messages/parameters`，把冻结 canonical `宽x高` 只在 wire builder 转为 `宽*高`，并固定 `watermark=false`。两者的 URL 结果都只允许安全 HTTPS 公网目标，每跳重验并固定 DNS，不携带 Relay Bearer/Cookie，按图片上限有界读取且校验 MIME 与签名。平台辅助文本生成复用流式编码器、`StepOutputAccumulator` 和 `RequestUsageReducer`，返回聚合结果，不建立第二持久会话。
 
+当前 Snapshot v4 的 `ManagedPolicy` 携带十个独立、可省略的默认引用：助手、对话、快速、标题、附件检查、建议、上下文压缩、图片生成、TTS 与 ASR。缺失字段只表示对应企业默认未设置，不允许按资源顺序回退，也不允许把对话默认复制到辅助槽位；附件检查默认必须引用已启用且支持 IMAGE 输入的模型。该合同尚未发布，本次字段补齐不递增 Snapshot 版本，也不引入迁移或兼容路径。
+
 Routed 请求带 `PrivateRequest`，禁止重定向、自动认证和透明重放，body 上限 10 MiB；非成功响应保留状态与脱敏后的原始 detail。只有 status=428 且 body 严格满足 `managed_snapshot_required`、forwarded=false、正 target generation 和合法 requestId 时，才触发原 interaction 停止及同步；不自动重发业务请求。
 
 Fixed 请求带 `PrivateRequest` 网络标记，宿主日志入口不记录其 HTTP 内容，`PrivateRequestBoundaryInterceptor` 在实际重定向边界拒绝跨 origin 转发。Responses 的 `instructions` 与 model/input/tools 一样归协议装配 owner，custom body 不能覆盖已组装系统提示。

@@ -262,7 +262,7 @@ internal fun EnterprisePage(openUsage: Boolean = false, vm: EnterpriseVM = koinV
     BackHandler(enabled = portal == null && configurationDetailsOpen) { closeConfigurationDetailsLayer() }
     BackHandler(enabled = portal == null && !configurationDetailsOpen &&
         initialSelectionCaptured && state?.selection != initialSelection) { leavePage() }
-    LaunchedEffect(state?.selection, state?.access) {
+    LaunchedEffect(state?.selection, state?.access, state?.platformOrigin) {
         if (state?.access != null) vm.refreshBudgets()
     }
     LaunchedEffect(openUsage, state?.selection) {
@@ -272,13 +272,13 @@ internal fun EnterprisePage(openUsage: Boolean = false, vm: EnterpriseVM = koinV
         }
     }
     val budgetInFlight = budgets?.value?.items?.sumOf { it.inFlightRequests } ?: 0L
-    LaunchedEffect(state?.selection, state?.access, budgetInFlight) {
+    LaunchedEffect(state?.selection, state?.access, state?.platformOrigin, budgetInFlight) {
         while (budgetInFlight > 0) {
             kotlinx.coroutines.delay(30_000)
             vm.refreshBudgets()
         }
     }
-    DisposableEffect(lifecycleOwner, state?.access) {
+    DisposableEffect(lifecycleOwner, state?.access, state?.platformOrigin) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME && state?.access != null) vm.refreshBudgets()
         }
@@ -933,8 +933,12 @@ private fun EnterpriseBudgetSection(
                 Text(stringResource(R.string.enterprise_budget_loading), style = MaterialTheme.typography.bodySmall)
             }
             state.value != null -> {
-                if (state.stale) Text(stringResource(R.string.enterprise_budget_stale),
-                    color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                when {
+                    state.loading -> Text(stringResource(R.string.enterprise_budget_refreshing),
+                        color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.bodySmall)
+                    state.stale -> Text(stringResource(R.string.enterprise_budget_stale),
+                        color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                }
                 state.value.items.forEach { item -> EnterpriseBudgetCapabilityCard(item) }
                 Text(stringResource(R.string.enterprise_budget_as_of, formatBudgetTime(state.value.asOf)),
                     style = MaterialTheme.typography.labelSmall)

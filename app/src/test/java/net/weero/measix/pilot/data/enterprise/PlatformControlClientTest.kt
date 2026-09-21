@@ -164,6 +164,22 @@ class PlatformControlClientTest {
         } finally { server.stop(0) }
     }
 
+    @Test
+    fun `Portal grant rejects a stale exchange origin with a stable configuration reason`() = runBlocking {
+        val server = server {
+            reply(201, """{"exchangeUrl":"https://old.example/portal/session/exchange","ticket":"ticket-secret","expiresAt":"2099-01-01T00:00:00Z"}""")
+        }
+        try {
+            val connection = PlatformConnection(origin(server), PlatformWireCodec.decode(fixture("discovery")))
+            try {
+                client.createPortalGrant(connection, "current-session")
+                fail("stale Portal grant accepted")
+            } catch (error: EnterpriseConfigurationException) {
+                assertEquals("platform_portal_exchange_url_mismatch", error.reason)
+            }
+        } finally { server.stop(0) }
+    }
+
     private fun server(handler: HttpExchange.() -> Unit): HttpServer = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0).apply {
         createContext("/") { exchange -> exchange.use { it.handler() } }
         start()

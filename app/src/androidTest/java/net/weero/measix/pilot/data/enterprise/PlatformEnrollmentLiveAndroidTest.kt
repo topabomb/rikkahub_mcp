@@ -7,6 +7,7 @@ import java.util.Base64
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
+import me.rerere.ai.provider.Modality
 import me.rerere.ai.provider.images.ImageGenerationClientProtocol
 import net.weero.measix.pilot.data.imggen.ImageGenerationCoordinator
 import net.weero.measix.pilot.data.imggen.ImageGenerationOutcome
@@ -43,10 +44,27 @@ class PlatformEnrollmentLiveAndroidTest {
                 koin.get<ModelExecutionService>().read(access).configuration.enterpriseConfiguration,
             )
             val image = configuration.imageGenerators.single()
+            val defaults = configuration.defaults
+            assertNotNull(defaults.assistantId)
+            listOf(
+                defaults.chatModelId,
+                defaults.fastModelId,
+                defaults.titleModelId,
+                defaults.suggestionModelId,
+                defaults.compressModelId,
+            ).forEach { defaultModelId ->
+                val model = configuration.models.single { it.id == requireNotNull(defaultModelId) }
+                assertTrue(model.enabled)
+            }
+            val attachmentModelId = requireNotNull(defaults.attachmentInspectionModelId)
+            val attachmentModel = configuration.models.single { it.id == attachmentModelId }
+            assertTrue(attachmentModel.enabled)
+            assertTrue(Modality.IMAGE in attachmentModel.inputModalities)
             assertEquals(ImageGenerationClientProtocol.DASHSCOPE_MULTIMODAL_GENERATION, image.protocol)
             assertEquals("wan2.7-image", image.modelId)
-            assertEquals(image.id, configuration.defaults.imageGenerationModelId)
-            assertNotNull(configuration.defaults.imageGenerationModelId)
+            assertEquals(image.id, defaults.imageGenerationModelId)
+            assertNotNull(defaults.ttsId)
+            assertNotNull(defaults.asrId)
 
             val selection = koin.get<EnterpriseSessionController>()
                 .observeSelectedRealmSelection().first { it?.access == access }!!

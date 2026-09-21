@@ -188,6 +188,20 @@ class EnterprisePageAndroidTest {
 
         click(R.string.enterprise_configuration_details_open)
         compose.onNode(hasText(text(R.string.enterprise_configuration_defaults_title)) and hasClickAction()).performClick()
+        listOf(
+            R.string.enterprise_configuration_default_assistant,
+            R.string.enterprise_configuration_default_chat_model,
+            R.string.enterprise_configuration_default_fast_model,
+            R.string.enterprise_configuration_default_title_model,
+            R.string.enterprise_configuration_default_image_generation,
+            R.string.enterprise_configuration_default_attachment_inspection_model,
+            R.string.enterprise_configuration_default_suggestion_model,
+            R.string.enterprise_configuration_default_compress_model,
+            R.string.enterprise_configuration_default_tts,
+            R.string.enterprise_configuration_default_asr,
+        ).forEach { resource ->
+            compose.onNodeWithText(text(resource)).performScrollTo().assertIsDisplayed()
+        }
         compose.onNodeWithText("Available default").assertIsDisplayed()
         compose.onAllNodesWithText(text(R.string.enterprise_configuration_unset))[0].assertIsDisplayed()
         compose.onNodeWithText(text(R.string.enterprise_configuration_reference_unavailable)).assertIsDisplayed()
