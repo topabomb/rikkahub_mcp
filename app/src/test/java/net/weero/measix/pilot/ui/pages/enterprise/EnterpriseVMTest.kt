@@ -28,7 +28,7 @@ class EnterpriseVMTest {
                 platformOrigin = "https://old.example"))
             val changes = MutableSharedFlow<RealmAccess.Enterprise>(extraBufferCapacity = 1)
             val cached = budgetView(access.scope.userId, "2026-09-20T12:00:00Z")
-            val retry = CompletableDeferred<PlatformUserBudgetView>()
+            val retry = CompletableDeferred<EnterpriseBudgetSummaryUiModel>()
             var calls = 0
             val service = mockk<EnterpriseApplicationService>()
             every { service.observe() } returns overview
@@ -78,7 +78,7 @@ class EnterpriseVMTest {
                 "Example", "Member", access, 1, 1000, null, null, false,
                 platformOrigin = "https://old.example"))
             val changes = MutableSharedFlow<RealmAccess.Enterprise>(extraBufferCapacity = 1)
-            val first = CompletableDeferred<PlatformUserBudgetView>()
+            val first = CompletableDeferred<EnterpriseBudgetSummaryUiModel>()
             val firstView = budgetView(access.scope.userId, "2026-09-20T12:00:00Z")
             val secondView = budgetView(access.scope.userId, "2026-09-20T12:00:01Z")
             var calls = 0
@@ -122,7 +122,7 @@ class EnterpriseVMTest {
                 "Example", "Member", access, 1, 1000, null, null, false,
                 platformOrigin = "https://old.example"))
             val changes = MutableSharedFlow<RealmAccess.Enterprise>(extraBufferCapacity = 1)
-            val old = CompletableDeferred<PlatformUserBudgetView>()
+            val old = CompletableDeferred<EnterpriseBudgetSummaryUiModel>()
             val current = budgetView(access.scope.userId, "2026-09-20T12:00:01Z")
             var calls = 0
             val service = mockk<EnterpriseApplicationService>()
@@ -423,7 +423,7 @@ class EnterpriseVMTest {
     }
 
     @Test fun `budget projection requires every capability exactly once`() {
-        val view = budgetView("usr_12345678-1234-4234-8234-123456789abc", "2026-09-20T12:00:00Z")
+        val view = platformBudgetView("usr_12345678-1234-4234-8234-123456789abc", "2026-09-20T12:00:00Z")
         assertThrows(IllegalArgumentException::class.java) {
             view.copy(items = view.items.dropLast(1) + view.items.first())
         }
@@ -485,7 +485,9 @@ class EnterpriseVMTest {
     }
 }
 
-private fun budgetView(userId: String, asOf: String) = PlatformUserBudgetView(
+private fun budgetView(userId: String, asOf: String) = projectEnterpriseBudget(platformBudgetView(userId, asOf))
+
+private fun platformBudgetView(userId: String, asOf: String) = PlatformUserBudgetView(
     userId = userId,
     timezone = "Asia/Shanghai",
     items = listOf(

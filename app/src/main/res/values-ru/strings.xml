@@ -1802,7 +1802,7 @@
   <string name="enterprise_budget_loading">Загрузка текущих лимитов организации…</string>
   <string name="enterprise_budget_stale">Не удалось обновить данные. Показан последний успешно полученный снимок.</string>
   <string name="enterprise_budget_refresh">Обновить</string>
-  <string name="enterprise_budget_details">Мои сведения об использовании</string>
+  <string name="enterprise_budget_details">Посмотреть подробности использования</string>
   <string name="enterprise_budget_as_of">Обновлено %1$s</string>
   <string name="enterprise_budget_capability_model">Модели</string>
   <string name="enterprise_budget_capability_tts">Синтез речи</string>
@@ -1810,7 +1810,7 @@
   <string name="enterprise_budget_capability_mcp">Инструменты и MCP</string>
   <string name="enterprise_budget_capability_image_generation">Создание изображений</string>
   <string name="enterprise_budget_unlimited">Без ограничений</string>
-  <string name="enterprise_budget_pending">Ожидает сверки</string>
+  <string name="enterprise_budget_pending">Сверка использования</string>
   <string name="enterprise_budget_available">Доступно</string>
   <string name="enterprise_budget_limit">%1$s · %2$s: использовано %3$s + зарезервировано %4$s из %5$s; осталось %6$s</string>
   <string name="enterprise_budget_usage_total">Накопленное использование</string>
@@ -1819,7 +1819,7 @@
   <string name="enterprise_budget_completeness_partial">Частично</string>
   <string name="enterprise_budget_completeness_unknown">Неизвестно</string>
   <string name="enterprise_budget_reset_at">Сброс %1$s</string>
-  <string name="enterprise_budget_in_flight">Выполняется запросов: %1$d</string>
+  <string name="enterprise_budget_in_flight">%1$d запроса(ов) ожидают расчёта</string>
   <string name="enterprise_budget_period_day">За день</string>
   <string name="enterprise_budget_period_week">За неделю</string>
   <string name="enterprise_budget_period_month">За месяц</string>
@@ -1845,4 +1845,18 @@
   <string name="chat_message_tool_read_trimmed_result">Читать сокращённый результат</string>
   <string name="chat_message_tool_search_trimmed_result">Искать в сокращённом результате</string>
   <string name="enterprise_switch_space">Сменить пространство</string>
+  <string name="enterprise_budget_unavailable">Недоступно</string>
+  <string name="enterprise_budget_reconciliation_notice">Сверка использования не влияет на текущую доступность.</string>
+  <string name="enterprise_budget_near_limit">Близко к лимиту</string>
+  <string name="enterprise_budget_remaining">Осталось %1$s</string>
+  <string name="enterprise_budget_resets_today">Сброс сегодня в %1$s</string>
+  <string name="enterprise_budget_no_usage">Нет зарегистрированного использования</string>
+  <string name="enterprise_budget_limit_summary">%1$s: %2$s / %3$s</string>
+  <string name="enterprise_budget_no_reset">Без сброса</string>
+  <string name="enterprise_budget_usage_recorded">%1$s: зарегистрировано %2$s</string>
+  <string name="enterprise_budget_additional_limits">Ещё лимитов: %1$d</string>
+  <string name="enterprise_budget_limit_summary_with_reserved">%1$s: использовано %2$s · обрабатывается %3$s / %4$s</string>
+  <string name="enterprise_budget_completeness_unknown_summary">Полнота неизвестна</string>
+  <string name="enterprise_budget_resets_tomorrow">Сброс завтра в %1$s</string>
+  <string name="enterprise_budget_completeness_partial_summary">Неполные итоги</string>
 </resources>

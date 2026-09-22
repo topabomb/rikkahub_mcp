@@ -1802,7 +1802,7 @@
   <string name="enterprise_budget_loading">現在の企業上限を読み込んでいます…</string>
   <string name="enterprise_budget_stale">最新の更新に失敗したため、最後に取得できた情報を表示しています。</string>
   <string name="enterprise_budget_refresh">更新</string>
-  <string name="enterprise_budget_details">利用状況の詳細</string>
+  <string name="enterprise_budget_details">使用量の詳細を見る</string>
   <string name="enterprise_budget_as_of">更新日時 %1$s</string>
   <string name="enterprise_budget_capability_model">モデル</string>
   <string name="enterprise_budget_capability_tts">音声合成</string>
@@ -1810,7 +1810,7 @@
   <string name="enterprise_budget_capability_mcp">ツールと MCP</string>
   <string name="enterprise_budget_capability_image_generation">画像生成</string>
   <string name="enterprise_budget_unlimited">無制限</string>
-  <string name="enterprise_budget_pending">照合待ち</string>
+  <string name="enterprise_budget_pending">使用量を照合中</string>
   <string name="enterprise_budget_available">利用可能</string>
   <string name="enterprise_budget_limit">%1$s · %2$s：使用済み %3$s + 予約 %4$s / %5$s、残り %6$s</string>
   <string name="enterprise_budget_usage_total">累計使用量</string>
@@ -1819,7 +1819,7 @@
   <string name="enterprise_budget_completeness_partial">部分的</string>
   <string name="enterprise_budget_completeness_unknown">不明</string>
   <string name="enterprise_budget_reset_at">リセット %1$s</string>
-  <string name="enterprise_budget_in_flight">%1$d 件のリクエストを処理中</string>
+  <string name="enterprise_budget_in_flight">%1$d 件のリクエストを精算中</string>
   <string name="enterprise_budget_period_day">日次</string>
   <string name="enterprise_budget_period_week">週次</string>
   <string name="enterprise_budget_period_month">月次</string>
@@ -1845,4 +1845,18 @@
   <string name="chat_message_tool_read_trimmed_result">圧縮結果を読む</string>
   <string name="chat_message_tool_search_trimmed_result">圧縮結果を検索</string>
   <string name="enterprise_switch_space">スペースを切り替え</string>
+  <string name="enterprise_budget_reconciliation_notice">使用量の照合中でも現在の利用には影響しません。</string>
+  <string name="enterprise_budget_additional_limits">ほか %1$d 件の上限</string>
+  <string name="enterprise_budget_no_usage">記録された使用量はありません</string>
+  <string name="enterprise_budget_resets_tomorrow">明日 %1$s にリセット</string>
+  <string name="enterprise_budget_limit_summary_with_reserved">%1$s：使用済み %2$s・処理中 %3$s / %4$s</string>
+  <string name="enterprise_budget_near_limit">上限に接近</string>
+  <string name="enterprise_budget_usage_recorded">%1$s：%2$s を記録</string>
+  <string name="enterprise_budget_resets_today">今日 %1$s にリセット</string>
+  <string name="enterprise_budget_no_reset">リセットなし</string>
+  <string name="enterprise_budget_completeness_unknown_summary">完全性は不明</string>
+  <string name="enterprise_budget_unavailable">利用不可</string>
+  <string name="enterprise_budget_completeness_partial_summary">集計は不完全</string>
+  <string name="enterprise_budget_remaining">残り %1$s</string>
+  <string name="enterprise_budget_limit_summary">%1$s：%2$s / %3$s</string>
 </resources>

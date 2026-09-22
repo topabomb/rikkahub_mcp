@@ -9,6 +9,8 @@ import kotlinx.coroutines.sync.withLock
 import net.weero.measix.pilot.data.enterprise.*
 import net.weero.measix.pilot.service.portal.*
 import net.weero.measix.pilot.utils.userVisibleDiagnostic
+import java.math.BigDecimal
+import java.math.RoundingMode
 
 internal data class EnterpriseJoinConfirmation(val id: Uuid, val platformOrigin: String)
 
@@ -100,6 +102,169 @@ internal data class EnterpriseConfigurationDetailsUiModel(
     val policies: List<EnterpriseConfigurationPolicyUiModel>,
     val resources: List<EnterpriseConfigurationResourceGroupUiModel>,
 )
+
+internal enum class EnterpriseBudgetCapabilityKind { MODEL, TTS, ASR, MCP, IMAGE_GENERATION }
+
+internal enum class EnterpriseBudgetPeriodKind { DAY, WEEK, MONTH, LIFETIME }
+
+internal enum class EnterpriseBudgetMeterKind {
+    REQUESTS,
+    REQUESTED_IMAGES,
+    INPUT_TOKENS,
+    OUTPUT_TOKENS,
+    CACHED_TOKENS,
+    TOTAL_TOKENS,
+    CHARACTERS,
+    AUDIO_SECONDS,
+}
+
+internal enum class EnterpriseBudgetCompleteness { EXACT, PARTIAL, UNKNOWN }
+
+internal enum class EnterpriseBudgetAvailability {
+    UNLIMITED,
+    AVAILABLE,
+    NEAR_LIMIT,
+    EXHAUSTED,
+    RECONCILING,
+    UNAVAILABLE,
+}
+
+internal data class EnterpriseBudgetLimitUiModel(
+    val period: EnterpriseBudgetPeriodKind,
+    val meter: EnterpriseBudgetMeterKind,
+    val limit: String,
+    val used: String,
+    val reserved: String,
+    val remaining: String,
+    val occupiedFraction: Float,
+    val resetAt: String?,
+)
+
+internal data class EnterpriseBudgetUsageUiModel(
+    val meter: EnterpriseBudgetMeterKind,
+    val quantity: String,
+    val completeness: EnterpriseBudgetCompleteness,
+)
+
+internal data class EnterpriseBudgetCapabilityUiModel(
+    val capability: EnterpriseBudgetCapabilityKind,
+    val availability: EnterpriseBudgetAvailability,
+    val primaryLimit: EnterpriseBudgetLimitUiModel?,
+    val additionalLimitCount: Int,
+    val usageSummary: List<EnterpriseBudgetUsageUiModel>,
+)
+
+internal data class EnterpriseBudgetSummaryUiModel(
+    val timezone: String,
+    val items: List<EnterpriseBudgetCapabilityUiModel>,
+    val totalInFlightRequests: Long,
+    val asOf: String,
+)
+
+internal fun projectEnterpriseBudget(value: PlatformUserBudgetView): EnterpriseBudgetSummaryUiModel {
+    val items = value.items.map { item ->
+        val projectedLimits = item.limits.map { limit ->
+            val used = limit.used.toBigDecimal()
+            val reserved = limit.reserved.toBigDecimal()
+            val maximum = limit.limit.toBigDecimal()
+            val occupied = if (maximum.signum() == 0) {
+                BigDecimal.ONE
+            } else {
+                used.add(reserved).divide(maximum, 8, RoundingMode.HALF_UP)
+            }
+            EnterpriseBudgetLimitUiModel(
+                period = limit.period.toUiModel(),
+                meter = limit.meter.toUiModel(),
+                limit = limit.limit,
+                used = limit.used,
+                reserved = limit.reserved,
+                remaining = limit.remaining,
+                occupiedFraction = occupied.coerceIn(BigDecimal.ZERO, BigDecimal.ONE).toFloat(),
+                resetAt = limit.resetAt,
+            )
+        }
+        val primaryLimit = projectedLimits.maxByOrNull { it.occupiedFraction }
+        val availability = when {
+            item.mode == PlatformBudgetMode.UNLIMITED -> EnterpriseBudgetAvailability.UNLIMITED
+            primaryLimit == null -> EnterpriseBudgetAvailability.UNAVAILABLE
+            item.status == PlatformBudgetStatus.PENDING_RECONCILIATION -> EnterpriseBudgetAvailability.RECONCILING
+            item.status == PlatformBudgetStatus.EXHAUSTED || primaryLimit.occupiedFraction >= 1f ->
+                EnterpriseBudgetAvailability.EXHAUSTED
+            primaryLimit.occupiedFraction >= 0.8f -> EnterpriseBudgetAvailability.NEAR_LIMIT
+            else -> EnterpriseBudgetAvailability.AVAILABLE
+        }
+        EnterpriseBudgetCapabilityUiModel(
+            capability = item.capability.toUiModel(),
+            availability = availability,
+            primaryLimit = primaryLimit,
+            additionalLimitCount = (projectedLimits.size - 1).coerceAtLeast(0),
+            usageSummary = if (item.mode == PlatformBudgetMode.UNLIMITED) {
+                item.usageMeters
+                    .sortedBy { item.capability.usageMeterPriority(it.meter) }
+                    .take(2)
+                    .map { usage ->
+                        EnterpriseBudgetUsageUiModel(
+                            meter = usage.meter.toUiModel(),
+                            quantity = usage.quantity,
+                            completeness = usage.completeness.toUiModel(),
+                        )
+                    }
+            } else {
+                emptyList()
+            },
+        )
+    }
+    return EnterpriseBudgetSummaryUiModel(
+        timezone = value.timezone,
+        items = items,
+        totalInFlightRequests = value.items.sumOf(PlatformBudgetCapabilityView::inFlightRequests),
+        asOf = value.asOf,
+    )
+}
+
+private fun PlatformBudgetCapability.toUiModel(): EnterpriseBudgetCapabilityKind = when (this) {
+    PlatformBudgetCapability.MODEL -> EnterpriseBudgetCapabilityKind.MODEL
+    PlatformBudgetCapability.TTS -> EnterpriseBudgetCapabilityKind.TTS
+    PlatformBudgetCapability.ASR -> EnterpriseBudgetCapabilityKind.ASR
+    PlatformBudgetCapability.MCP -> EnterpriseBudgetCapabilityKind.MCP
+    PlatformBudgetCapability.IMAGE_GENERATION -> EnterpriseBudgetCapabilityKind.IMAGE_GENERATION
+}
+
+private fun PlatformBudgetPeriod.toUiModel(): EnterpriseBudgetPeriodKind = when (this) {
+    PlatformBudgetPeriod.DAY -> EnterpriseBudgetPeriodKind.DAY
+    PlatformBudgetPeriod.WEEK -> EnterpriseBudgetPeriodKind.WEEK
+    PlatformBudgetPeriod.MONTH -> EnterpriseBudgetPeriodKind.MONTH
+    PlatformBudgetPeriod.LIFETIME -> EnterpriseBudgetPeriodKind.LIFETIME
+}
+
+private fun PlatformUsageMeter.toUiModel(): EnterpriseBudgetMeterKind = when (this) {
+    PlatformUsageMeter.REQUESTS -> EnterpriseBudgetMeterKind.REQUESTS
+    PlatformUsageMeter.REQUESTED_IMAGES -> EnterpriseBudgetMeterKind.REQUESTED_IMAGES
+    PlatformUsageMeter.INPUT_TOKENS -> EnterpriseBudgetMeterKind.INPUT_TOKENS
+    PlatformUsageMeter.OUTPUT_TOKENS -> EnterpriseBudgetMeterKind.OUTPUT_TOKENS
+    PlatformUsageMeter.CACHED_TOKENS -> EnterpriseBudgetMeterKind.CACHED_TOKENS
+    PlatformUsageMeter.TOTAL_TOKENS -> EnterpriseBudgetMeterKind.TOTAL_TOKENS
+    PlatformUsageMeter.CHARACTERS -> EnterpriseBudgetMeterKind.CHARACTERS
+    PlatformUsageMeter.AUDIO_SECONDS -> EnterpriseBudgetMeterKind.AUDIO_SECONDS
+}
+
+private fun PlatformUsageCompleteness.toUiModel(): EnterpriseBudgetCompleteness = when (this) {
+    PlatformUsageCompleteness.EXACT -> EnterpriseBudgetCompleteness.EXACT
+    PlatformUsageCompleteness.PARTIAL -> EnterpriseBudgetCompleteness.PARTIAL
+    PlatformUsageCompleteness.UNKNOWN -> EnterpriseBudgetCompleteness.UNKNOWN
+}
+
+private fun PlatformBudgetCapability.usageMeterPriority(meter: PlatformUsageMeter): Int {
+    val preferred = when (this) {
+        PlatformBudgetCapability.MODEL -> listOf(PlatformUsageMeter.TOTAL_TOKENS, PlatformUsageMeter.REQUESTS)
+        PlatformBudgetCapability.TTS -> listOf(PlatformUsageMeter.CHARACTERS, PlatformUsageMeter.REQUESTS)
+        PlatformBudgetCapability.ASR -> listOf(PlatformUsageMeter.AUDIO_SECONDS, PlatformUsageMeter.REQUESTS)
+        PlatformBudgetCapability.MCP -> listOf(PlatformUsageMeter.REQUESTS)
+        PlatformBudgetCapability.IMAGE_GENERATION ->
+            listOf(PlatformUsageMeter.REQUESTED_IMAGES, PlatformUsageMeter.REQUESTS)
+    }
+    return preferred.indexOf(meter).takeIf { it >= 0 } ?: (preferred.size + meter.ordinal)
+}
 
 private data class EnterpriseConfigurationReferenceTarget(
     val id: String,
@@ -471,7 +636,7 @@ internal class EnterpriseApplicationService(
             portals.closeAndAwait(request.access, PortalCloseReason.CONNECTION_CHANGED)
         }
     }
-    suspend fun budgets(selection: RealmSelection, access: RealmAccess.Enterprise): PlatformUserBudgetView {
+    suspend fun budgets(selection: RealmSelection, access: RealmAccess.Enterprise): EnterpriseBudgetSummaryUiModel {
         recovery.awaitReady()
         if (sessions.readPresentation().selection != selection) {
             throw EnterpriseConfigurationException("enterprise_selection_revoked")
@@ -480,7 +645,7 @@ internal class EnterpriseApplicationService(
         if (sessions.readPresentation().selection != selection) {
             throw EnterpriseConfigurationException("enterprise_selection_revoked")
         }
-        return result
+        return projectEnterpriseBudget(result)
     }
     fun runtimeUsageChanges(): Flow<RealmAccess.Enterprise> = platform.runtimeUsageChanged
     suspend fun localDataReset(request: EnterpriseDataResetRequest) = dataReset.reset(request)

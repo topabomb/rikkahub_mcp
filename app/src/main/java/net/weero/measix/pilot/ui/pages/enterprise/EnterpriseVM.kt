@@ -17,6 +17,7 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import net.weero.measix.pilot.R
 import net.weero.measix.pilot.data.enterprise.*
+import net.weero.measix.pilot.service.EnterpriseBudgetSummaryUiModel
 import net.weero.measix.pilot.service.EnterpriseApplicationService
 import net.weero.measix.pilot.service.ENROLLMENT_EXPIRED
 import net.weero.measix.pilot.service.portal.PortalClosure
@@ -44,7 +45,7 @@ internal data class EnterpriseBudgetPresentation(
     val access: RealmAccess.Enterprise,
     val platformOrigin: String,
     val loading: Boolean,
-    val value: PlatformUserBudgetView? = null,
+    val value: EnterpriseBudgetSummaryUiModel? = null,
     val failure: String? = null,
     val stale: Boolean = false,
 )

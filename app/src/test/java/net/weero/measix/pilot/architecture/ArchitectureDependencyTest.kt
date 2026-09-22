@@ -80,6 +80,17 @@ class ArchitectureDependencyTest {
     }
 
     @Test
+    fun `enterprise budget UI consumes only the application projection`() {
+        val enterpriseUi = sourcesUnder("ui/pages/enterprise")
+        listOf(
+            "PlatformUserBudgetView",
+            "PlatformBudgetCapabilityView",
+            "PlatformBudgetLimitState",
+            "PlatformMeterQuantity",
+        ).forEach { wireType -> assertNoHits(wireType, enterpriseUi) }
+    }
+
+    @Test
     fun `presentation and query ports do not expose the durable aggregate or model context`() {
         // The Runtime keeps one authoritative durable shape; the presentation projection and the
         // public query shapes must not leak the aggregate snapshot or its model-context entries.

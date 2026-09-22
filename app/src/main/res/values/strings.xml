@@ -1794,7 +1794,7 @@
   <string name="enterprise_budget_loading">Loading current enterprise limits…</string>
   <string name="enterprise_budget_stale">Showing the last successful snapshot because the latest refresh failed.</string>
   <string name="enterprise_budget_refresh">Refresh</string>
-  <string name="enterprise_budget_details">My usage details</string>
+  <string name="enterprise_budget_details">View usage details</string>
   <string name="enterprise_budget_as_of">Updated %1$s</string>
   <string name="enterprise_budget_capability_model">Models</string>
   <string name="enterprise_budget_capability_tts">Text to speech</string>
@@ -1802,7 +1802,7 @@
   <string name="enterprise_budget_capability_mcp">Tools and MCP</string>
   <string name="enterprise_budget_capability_image_generation">Image generation</string>
   <string name="enterprise_budget_unlimited">Unlimited</string>
-  <string name="enterprise_budget_pending">Pending reconciliation</string>
+  <string name="enterprise_budget_pending">Reconciling usage</string>
   <string name="enterprise_budget_available">Available</string>
   <string name="enterprise_budget_limit">%1$s · %2$s: used %3$s + reserved %4$s of %5$s; %6$s remaining</string>
   <string name="enterprise_budget_usage_total">Retained total usage</string>
@@ -1811,7 +1811,7 @@
   <string name="enterprise_budget_completeness_partial">Partial</string>
   <string name="enterprise_budget_completeness_unknown">Unknown</string>
   <string name="enterprise_budget_reset_at">Resets %1$s</string>
-  <string name="enterprise_budget_in_flight">%1$d request(s) in progress</string>
+  <string name="enterprise_budget_in_flight">%1$d request(s) settling</string>
   <string name="enterprise_budget_period_day">Daily</string>
   <string name="enterprise_budget_period_week">Weekly</string>
   <string name="enterprise_budget_period_month">Monthly</string>
@@ -1846,4 +1846,18 @@
   <string name="chat_message_tool_read_trimmed_result">Read trimmed result</string>
   <string name="chat_message_tool_search_trimmed_result">Search trimmed result</string>
   <string name="enterprise_switch_space">Switch spaces</string>
+  <string name="enterprise_budget_near_limit">Near limit</string>
+  <string name="enterprise_budget_unavailable">Unavailable</string>
+  <string name="enterprise_budget_reconciliation_notice">Usage reconciliation does not affect current availability.</string>
+  <string name="enterprise_budget_limit_summary">%1$s: %2$s / %3$s</string>
+  <string name="enterprise_budget_limit_summary_with_reserved">%1$s: %2$s used · %3$s processing / %4$s</string>
+  <string name="enterprise_budget_remaining">%1$s remaining</string>
+  <string name="enterprise_budget_no_reset">Does not reset</string>
+  <string name="enterprise_budget_additional_limits">%1$d more limit(s)</string>
+  <string name="enterprise_budget_no_usage">No recorded usage yet</string>
+  <string name="enterprise_budget_usage_recorded">%1$s: %2$s recorded</string>
+  <string name="enterprise_budget_completeness_partial_summary">Incomplete totals</string>
+  <string name="enterprise_budget_completeness_unknown_summary">Completeness unknown</string>
+  <string name="enterprise_budget_resets_today">Resets today at %1$s</string>
+  <string name="enterprise_budget_resets_tomorrow">Resets tomorrow at %1$s</string>
 </resources>

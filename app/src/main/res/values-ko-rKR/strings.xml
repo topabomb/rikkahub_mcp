@@ -1802,7 +1802,7 @@
   <string name="enterprise_budget_loading">현재 기업 한도를 불러오는 중…</string>
   <string name="enterprise_budget_stale">최신 새로 고침에 실패하여 마지막으로 가져온 정보를 표시합니다.</string>
   <string name="enterprise_budget_refresh">새로 고침</string>
-  <string name="enterprise_budget_details">내 사용량 세부 정보</string>
+  <string name="enterprise_budget_details">사용량 상세 보기</string>
   <string name="enterprise_budget_as_of">업데이트 %1$s</string>
   <string name="enterprise_budget_capability_model">모델</string>
   <string name="enterprise_budget_capability_tts">텍스트 음성 변환</string>
@@ -1810,7 +1810,7 @@
   <string name="enterprise_budget_capability_mcp">도구 및 MCP</string>
   <string name="enterprise_budget_capability_image_generation">이미지 생성</string>
   <string name="enterprise_budget_unlimited">무제한</string>
-  <string name="enterprise_budget_pending">조정 대기 중</string>
+  <string name="enterprise_budget_pending">사용량 조정 중</string>
   <string name="enterprise_budget_available">사용 가능</string>
   <string name="enterprise_budget_limit">%1$s · %2$s: 사용 %3$s + 예약 %4$s / %5$s, 남음 %6$s</string>
   <string name="enterprise_budget_usage_total">누적 사용량</string>
@@ -1819,7 +1819,7 @@
   <string name="enterprise_budget_completeness_partial">부분</string>
   <string name="enterprise_budget_completeness_unknown">알 수 없음</string>
   <string name="enterprise_budget_reset_at">재설정 %1$s</string>
-  <string name="enterprise_budget_in_flight">%1$d개 요청 진행 중</string>
+  <string name="enterprise_budget_in_flight">%1$d개 요청 정산 중</string>
   <string name="enterprise_budget_period_day">일별</string>
   <string name="enterprise_budget_period_week">주별</string>
   <string name="enterprise_budget_period_month">월별</string>
@@ -1845,4 +1845,18 @@
   <string name="chat_message_tool_read_trimmed_result">압축 결과 읽기</string>
   <string name="chat_message_tool_search_trimmed_result">압축 결과 검색</string>
   <string name="enterprise_switch_space">공간 전환</string>
+  <string name="enterprise_budget_usage_recorded">%1$s: %2$s 기록</string>
+  <string name="enterprise_budget_near_limit">한도 임박</string>
+  <string name="enterprise_budget_completeness_partial_summary">집계 불완전</string>
+  <string name="enterprise_budget_no_reset">초기화되지 않음</string>
+  <string name="enterprise_budget_resets_today">오늘 %1$s에 초기화</string>
+  <string name="enterprise_budget_completeness_unknown_summary">완전성 알 수 없음</string>
+  <string name="enterprise_budget_resets_tomorrow">내일 %1$s에 초기화</string>
+  <string name="enterprise_budget_no_usage">기록된 사용량 없음</string>
+  <string name="enterprise_budget_limit_summary_with_reserved">%1$s: 사용 %2$s · 처리 중 %3$s / %4$s</string>
+  <string name="enterprise_budget_limit_summary">%1$s: %2$s / %3$s</string>
+  <string name="enterprise_budget_unavailable">사용 불가</string>
+  <string name="enterprise_budget_remaining">%1$s 남음</string>
+  <string name="enterprise_budget_reconciliation_notice">사용량 조정은 현재 사용 가능 여부에 영향을 주지 않습니다.</string>
+  <string name="enterprise_budget_additional_limits">추가 한도 %1$d개</string>
 </resources>

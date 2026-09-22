@@ -1802,7 +1802,7 @@
   <string name="enterprise_budget_loading">正在加载当前企业额度…</string>
   <string name="enterprise_budget_stale">最新刷新失败，当前显示上次成功获取的数据。</string>
   <string name="enterprise_budget_refresh">刷新</string>
-  <string name="enterprise_budget_details">我的用量详情</string>
+  <string name="enterprise_budget_details">查看用量明细</string>
   <string name="enterprise_budget_as_of">更新于 %1$s</string>
   <string name="enterprise_budget_capability_model">模型</string>
   <string name="enterprise_budget_capability_tts">文字转语音</string>
@@ -1810,7 +1810,7 @@
   <string name="enterprise_budget_capability_mcp">工具与 MCP</string>
   <string name="enterprise_budget_capability_image_generation">文生图</string>
   <string name="enterprise_budget_unlimited">无限制</string>
-  <string name="enterprise_budget_pending">等待用量核对</string>
+  <string name="enterprise_budget_pending">用量核对中</string>
   <string name="enterprise_budget_available">可用</string>
   <string name="enterprise_budget_limit">%1$s · %2$s：已用 %3$s + 预留 %4$s / %5$s；剩余 %6$s</string>
   <string name="enterprise_budget_usage_total">累计用量</string>
@@ -1819,7 +1819,7 @@
   <string name="enterprise_budget_completeness_partial">部分</string>
   <string name="enterprise_budget_completeness_unknown">未知</string>
   <string name="enterprise_budget_reset_at">重置时间 %1$s</string>
-  <string name="enterprise_budget_in_flight">%1$d 个请求进行中</string>
+  <string name="enterprise_budget_in_flight">%1$d 个请求正在结算</string>
   <string name="enterprise_budget_period_day">每日</string>
   <string name="enterprise_budget_period_week">每周</string>
   <string name="enterprise_budget_period_month">每月</string>
@@ -1845,4 +1845,18 @@
   <string name="chat_message_tool_read_trimmed_result">读剪裁结果</string>
   <string name="chat_message_tool_search_trimmed_result">搜剪裁结果</string>
   <string name="enterprise_switch_space">切换空间</string>
+  <string name="enterprise_budget_unavailable">暂不可用</string>
+  <string name="enterprise_budget_remaining">剩余 %1$s</string>
+  <string name="enterprise_budget_usage_recorded">%1$s：已记录 %2$s</string>
+  <string name="enterprise_budget_limit_summary_with_reserved">%1$s：已用 %2$s · 处理中 %3$s / %4$s</string>
+  <string name="enterprise_budget_no_reset">不自动恢复</string>
+  <string name="enterprise_budget_near_limit">接近额度</string>
+  <string name="enterprise_budget_reconciliation_notice">用量核对不影响当前能力使用。</string>
+  <string name="enterprise_budget_completeness_unknown_summary">完整度未知</string>
+  <string name="enterprise_budget_resets_tomorrow">明天 %1$s 重置</string>
+  <string name="enterprise_budget_resets_today">今天 %1$s 重置</string>
+  <string name="enterprise_budget_additional_limits">另有 %1$d 项额度</string>
+  <string name="enterprise_budget_no_usage">暂无已记录用量</string>
+  <string name="enterprise_budget_completeness_partial_summary">统计不完整</string>
+  <string name="enterprise_budget_limit_summary">%1$s：%2$s / %3$s</string>
 </resources>

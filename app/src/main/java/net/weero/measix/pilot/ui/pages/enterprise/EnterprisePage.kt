@@ -19,6 +19,7 @@ import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.platform.ClipEntry
 import androidx.compose.ui.platform.LocalClipboard
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
@@ -28,7 +29,9 @@ import androidx.compose.ui.viewinterop.AndroidView
 import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.ArrowLeft01
 import me.rerere.hugeicons.stroke.ArrowRight01
+import me.rerere.hugeicons.stroke.ChartAnalysis
 import me.rerere.hugeicons.stroke.Copy01
+import me.rerere.hugeicons.stroke.Refresh
 import me.rerere.hugeicons.stroke.User
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
@@ -43,13 +46,12 @@ import net.weero.measix.pilot.data.enterprise.EnterpriseSessionPhase
 import net.weero.measix.pilot.data.enterprise.RealmAccess
 import net.weero.measix.pilot.data.enterprise.RealmSelection
 import net.weero.measix.pilot.data.enterprise.EnterpriseDataResetMode
-import net.weero.measix.pilot.data.enterprise.PlatformBudgetCapability
-import net.weero.measix.pilot.data.enterprise.PlatformBudgetCapabilityView
-import net.weero.measix.pilot.data.enterprise.PlatformBudgetMode
-import net.weero.measix.pilot.data.enterprise.PlatformBudgetStatus
-import net.weero.measix.pilot.data.enterprise.PlatformBudgetPeriod
-import net.weero.measix.pilot.data.enterprise.PlatformUsageCompleteness
-import net.weero.measix.pilot.data.enterprise.PlatformUsageMeter
+import net.weero.measix.pilot.service.EnterpriseBudgetAvailability
+import net.weero.measix.pilot.service.EnterpriseBudgetCapabilityKind
+import net.weero.measix.pilot.service.EnterpriseBudgetCapabilityUiModel
+import net.weero.measix.pilot.service.EnterpriseBudgetCompleteness
+import net.weero.measix.pilot.service.EnterpriseBudgetMeterKind
+import net.weero.measix.pilot.service.EnterpriseBudgetPeriodKind
 import net.weero.measix.pilot.service.EnterpriseResetPath
 import net.weero.measix.pilot.service.EnterpriseConfigurationDefaultKind
 import net.weero.measix.pilot.service.EnterpriseConfigurationDetailsUiModel
@@ -77,8 +79,17 @@ import net.weero.measix.pilot.ui.adaptive.LocalAdaptiveLayoutInfo
 import net.weero.measix.pilot.ui.context.LocalNavController
 import net.weero.measix.pilot.ui.context.LocalToaster
 import org.koin.androidx.compose.koinViewModel
+import java.math.BigDecimal
+import java.math.RoundingMode
 import java.text.DateFormat
+import java.text.NumberFormat
+import java.time.Instant
+import java.time.LocalDate
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
+import java.time.format.FormatStyle
 import java.util.Date
+import java.util.Locale
 import net.weero.measix.pilot.utils.base64Encode
 import net.weero.measix.pilot.utils.ImageUtils
 
@@ -266,7 +277,7 @@ internal fun EnterprisePage(openUsage: Boolean = false, vm: EnterpriseVM = koinV
             vm.showUsagePortal()
         }
     }
-    val budgetInFlight = budgets?.value?.items?.sumOf { it.inFlightRequests } ?: 0L
+    val budgetInFlight = budgets?.value?.totalInFlightRequests ?: 0L
     LaunchedEffect(state?.selection, state?.access, state?.platformOrigin, budgetInFlight) {
         while (budgetInFlight > 0) {
             kotlinx.coroutines.delay(30_000)
@@ -924,7 +935,14 @@ private fun EnterpriseBudgetSection(
     onRefresh: () -> Unit,
     onDetails: () -> Unit,
 ) {
-    EnterpriseSection(stringResource(R.string.enterprise_budget_title)) {
+    EnterpriseSection(
+        title = stringResource(R.string.enterprise_budget_title),
+        trailingContent = {
+            IconButton(onClick = onRefresh, enabled = state?.loading != true) {
+                Icon(HugeIcons.Refresh, contentDescription = stringResource(R.string.enterprise_budget_refresh))
+            }
+        },
+    ) {
         when {
             state == null || state.loading && state.value == null -> {
                 LinearProgressIndicator(Modifier.fillMaxWidth())
@@ -937,115 +955,258 @@ private fun EnterpriseBudgetSection(
                     state.stale -> Text(stringResource(R.string.enterprise_budget_stale),
                         color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
                 }
-                state.value.items.forEach { item -> EnterpriseBudgetCapabilityCard(item) }
-                Text(stringResource(R.string.enterprise_budget_as_of, formatBudgetTime(state.value.asOf)),
+                state.value.items.forEachIndexed { index, item ->
+                    EnterpriseBudgetCapabilityRow(item, state.value.timezone)
+                    if (index != state.value.items.lastIndex) HorizontalDivider()
+                }
+                if (state.value.totalInFlightRequests > 0) {
+                    Text(
+                        stringResource(R.string.enterprise_budget_in_flight, state.value.totalInFlightRequests),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.tertiary,
+                    )
+                }
+                if (state.value.items.any { it.availability == EnterpriseBudgetAvailability.RECONCILING }) {
+                    Text(
+                        stringResource(R.string.enterprise_budget_reconciliation_notice),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.tertiary,
+                    )
+                }
+                Text(stringResource(R.string.enterprise_budget_as_of,
+                    formatBudgetTimestamp(state.value.asOf, state.value.timezone, currentLocale())),
                     style = MaterialTheme.typography.labelSmall)
             }
         }
         state?.failure?.let {
             SelectionContainer { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
         }
-        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedButton(onClick = onRefresh, enabled = state?.loading != true) {
-                Text(stringResource(R.string.enterprise_budget_refresh))
+        Surface(
+            onClick = onDetails,
+            modifier = Modifier.fillMaxWidth(),
+            shape = MaterialTheme.shapes.medium,
+            color = Color.Transparent,
+            contentColor = MaterialTheme.colorScheme.primary,
+        ) {
+            Row(
+                Modifier.fillMaxWidth().padding(vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                Icon(HugeIcons.ChartAnalysis, contentDescription = null, modifier = Modifier.size(20.dp))
+                Text(stringResource(R.string.enterprise_budget_details), modifier = Modifier.weight(1f))
+                Icon(HugeIcons.ArrowRight01, contentDescription = null, modifier = Modifier.size(18.dp))
             }
-            TextButton(onClick = onDetails) { Text(stringResource(R.string.enterprise_budget_details)) }
         }
     }
 }
 
 @Composable
-private fun EnterpriseBudgetCapabilityCard(item: PlatformBudgetCapabilityView) {
+private fun EnterpriseBudgetCapabilityRow(
+    item: EnterpriseBudgetCapabilityUiModel,
+    timezone: String,
+) {
+    val locale = currentLocale()
     val capability = stringResource(when (item.capability) {
-        PlatformBudgetCapability.MODEL -> R.string.enterprise_budget_capability_model
-        PlatformBudgetCapability.TTS -> R.string.enterprise_budget_capability_tts
-        PlatformBudgetCapability.ASR -> R.string.enterprise_budget_capability_asr
-        PlatformBudgetCapability.MCP -> R.string.enterprise_budget_capability_mcp
-        PlatformBudgetCapability.IMAGE_GENERATION -> R.string.enterprise_budget_capability_image_generation
+        EnterpriseBudgetCapabilityKind.MODEL -> R.string.enterprise_budget_capability_model
+        EnterpriseBudgetCapabilityKind.TTS -> R.string.enterprise_budget_capability_tts
+        EnterpriseBudgetCapabilityKind.ASR -> R.string.enterprise_budget_capability_asr
+        EnterpriseBudgetCapabilityKind.MCP -> R.string.enterprise_budget_capability_mcp
+        EnterpriseBudgetCapabilityKind.IMAGE_GENERATION -> R.string.enterprise_budget_capability_image_generation
     })
-    ElevatedCard(Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Text(capability, style = MaterialTheme.typography.titleSmall)
-                Text(stringResource(when {
-                    item.mode == PlatformBudgetMode.UNLIMITED -> R.string.enterprise_budget_unlimited
-                    item.status == PlatformBudgetStatus.EXHAUSTED -> R.string.enterprise_budget_exhausted
-                    item.status == PlatformBudgetStatus.PENDING_RECONCILIATION -> R.string.enterprise_budget_pending
-                    else -> R.string.enterprise_budget_available
-                }), color = when (item.status) {
-                    PlatformBudgetStatus.EXHAUSTED -> MaterialTheme.colorScheme.error
-                    PlatformBudgetStatus.PENDING_RECONCILIATION -> MaterialTheme.colorScheme.tertiary
-                    PlatformBudgetStatus.AVAILABLE -> MaterialTheme.colorScheme.primary
-                })
+    val statusColor = when (item.availability) {
+        EnterpriseBudgetAvailability.EXHAUSTED, EnterpriseBudgetAvailability.UNAVAILABLE ->
+            MaterialTheme.colorScheme.error
+        EnterpriseBudgetAvailability.NEAR_LIMIT, EnterpriseBudgetAvailability.RECONCILING ->
+            MaterialTheme.colorScheme.tertiary
+        EnterpriseBudgetAvailability.UNLIMITED, EnterpriseBudgetAvailability.AVAILABLE ->
+            MaterialTheme.colorScheme.primary
+    }
+    Column(Modifier.fillMaxWidth().padding(vertical = 6.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically) {
+            Text(capability, style = MaterialTheme.typography.titleSmall)
+            Text(
+                stringResource(budgetAvailabilityResource(item.availability)),
+                color = statusColor,
+                style = MaterialTheme.typography.labelLarge,
+            )
+        }
+        item.primaryLimit?.let { limit ->
+            LinearProgressIndicator(
+                progress = { limit.occupiedFraction },
+                modifier = Modifier.fillMaxWidth(),
+                color = statusColor,
+            )
+            val used = formatBudgetQuantity(limit.used, limit.meter, locale)
+            val reserved = formatBudgetQuantity(limit.reserved, limit.meter, locale)
+            val maximum = formatBudgetQuantity(limit.limit, limit.meter, locale)
+            val limitSummary = if (limit.reserved.toBigDecimalOrNull()?.signum() == 1) {
+                stringResource(
+                    R.string.enterprise_budget_limit_summary_with_reserved,
+                    stringResource(budgetMeterResource(limit.meter)),
+                    used,
+                    reserved,
+                    maximum,
+                )
+            } else {
+                stringResource(
+                    R.string.enterprise_budget_limit_summary,
+                    stringResource(budgetMeterResource(limit.meter)),
+                    used,
+                    maximum,
+                )
             }
-            if (item.mode == PlatformBudgetMode.LIMITED) item.limits.forEach { limit ->
-                Text(stringResource(R.string.enterprise_budget_limit,
-                    stringResource(budgetPeriodResource(limit.period)), stringResource(budgetMeterResource(limit.meter)),
-                    limit.used, limit.reserved, limit.limit, limit.remaining),
-                    style = MaterialTheme.typography.bodySmall)
-                limit.resetAt?.let { Text(stringResource(R.string.enterprise_budget_reset_at, formatBudgetTime(it)),
-                    style = MaterialTheme.typography.labelSmall) }
-            }
-            if (item.usageMeters.isNotEmpty()) {
-                Text(stringResource(R.string.enterprise_budget_usage_total), style = MaterialTheme.typography.labelSmall)
-                item.usageMeters.forEach { usage ->
-                    Text(
-                        stringResource(
-                            R.string.enterprise_budget_usage_meter,
-                            stringResource(budgetMeterResource(usage.meter)),
-                            usage.quantity,
-                            stringResource(budgetCompletenessResource(usage.completeness)),
-                        ),
-                        style = MaterialTheme.typography.bodySmall,
-                    )
+            Text(limitSummary, style = MaterialTheme.typography.bodySmall)
+            val details = buildList {
+                add(stringResource(budgetPeriodResource(limit.period)))
+                add(stringResource(R.string.enterprise_budget_remaining,
+                    formatBudgetQuantity(limit.remaining, limit.meter, locale)))
+                val reset = limit.resetAt?.let { formatBudgetReset(it, timezone, locale) }
+                    ?: if (limit.period == EnterpriseBudgetPeriodKind.LIFETIME) {
+                        stringResource(R.string.enterprise_budget_no_reset)
+                    } else null
+                reset?.let(::add)
+                if (item.additionalLimitCount > 0) {
+                    add(stringResource(R.string.enterprise_budget_additional_limits, item.additionalLimitCount))
                 }
             }
-            if (item.inFlightRequests > 0) Text(stringResource(R.string.enterprise_budget_in_flight, item.inFlightRequests),
-                style = MaterialTheme.typography.labelSmall)
+            Text(details.joinToString(" · "), style = MaterialTheme.typography.labelSmall)
+        } ?: run {
+            if (item.availability == EnterpriseBudgetAvailability.UNLIMITED) {
+                if (item.usageSummary.isEmpty()) {
+                    Text(stringResource(R.string.enterprise_budget_no_usage), style = MaterialTheme.typography.bodySmall)
+                } else {
+                    item.usageSummary.forEach { usage ->
+                        val recorded = stringResource(
+                            R.string.enterprise_budget_usage_recorded,
+                            stringResource(budgetMeterResource(usage.meter)),
+                            formatBudgetQuantity(usage.quantity, usage.meter, locale),
+                        )
+                        val completeness = when (usage.completeness) {
+                            EnterpriseBudgetCompleteness.EXACT -> null
+                            EnterpriseBudgetCompleteness.PARTIAL ->
+                                stringResource(R.string.enterprise_budget_completeness_partial_summary)
+                            EnterpriseBudgetCompleteness.UNKNOWN ->
+                                stringResource(R.string.enterprise_budget_completeness_unknown_summary)
+                        }
+                        Text(listOfNotNull(recorded, completeness).joinToString(" · "),
+                            style = MaterialTheme.typography.bodySmall)
+                    }
+                }
+            }
         }
     }
 }
 
-private fun budgetPeriodResource(value: PlatformBudgetPeriod): Int = when (value) {
-    PlatformBudgetPeriod.DAY -> R.string.enterprise_budget_period_day
-    PlatformBudgetPeriod.WEEK -> R.string.enterprise_budget_period_week
-    PlatformBudgetPeriod.MONTH -> R.string.enterprise_budget_period_month
-    PlatformBudgetPeriod.LIFETIME -> R.string.enterprise_budget_period_lifetime
+private fun budgetAvailabilityResource(value: EnterpriseBudgetAvailability): Int = when (value) {
+    EnterpriseBudgetAvailability.UNLIMITED -> R.string.enterprise_budget_unlimited
+    EnterpriseBudgetAvailability.AVAILABLE -> R.string.enterprise_budget_available
+    EnterpriseBudgetAvailability.NEAR_LIMIT -> R.string.enterprise_budget_near_limit
+    EnterpriseBudgetAvailability.EXHAUSTED -> R.string.enterprise_budget_exhausted
+    EnterpriseBudgetAvailability.RECONCILING -> R.string.enterprise_budget_pending
+    EnterpriseBudgetAvailability.UNAVAILABLE -> R.string.enterprise_budget_unavailable
 }
 
-private fun budgetMeterResource(value: PlatformUsageMeter): Int = when (value) {
-    PlatformUsageMeter.REQUESTS -> R.string.enterprise_budget_meter_requests
-    PlatformUsageMeter.REQUESTED_IMAGES -> R.string.enterprise_budget_meter_requested_images
-    PlatformUsageMeter.INPUT_TOKENS -> R.string.enterprise_budget_meter_input_tokens
-    PlatformUsageMeter.OUTPUT_TOKENS -> R.string.enterprise_budget_meter_output_tokens
-    PlatformUsageMeter.CACHED_TOKENS -> R.string.enterprise_budget_meter_cached_tokens
-    PlatformUsageMeter.TOTAL_TOKENS -> R.string.enterprise_budget_meter_total_tokens
-    PlatformUsageMeter.CHARACTERS -> R.string.enterprise_budget_meter_characters
-    PlatformUsageMeter.AUDIO_SECONDS -> R.string.enterprise_budget_meter_audio_seconds
+private fun budgetPeriodResource(value: EnterpriseBudgetPeriodKind): Int = when (value) {
+    EnterpriseBudgetPeriodKind.DAY -> R.string.enterprise_budget_period_day
+    EnterpriseBudgetPeriodKind.WEEK -> R.string.enterprise_budget_period_week
+    EnterpriseBudgetPeriodKind.MONTH -> R.string.enterprise_budget_period_month
+    EnterpriseBudgetPeriodKind.LIFETIME -> R.string.enterprise_budget_period_lifetime
 }
 
-private fun budgetCompletenessResource(value: PlatformUsageCompleteness): Int = when (value) {
-    PlatformUsageCompleteness.EXACT -> R.string.enterprise_budget_completeness_exact
-    PlatformUsageCompleteness.PARTIAL -> R.string.enterprise_budget_completeness_partial
-    PlatformUsageCompleteness.UNKNOWN -> R.string.enterprise_budget_completeness_unknown
+private fun budgetMeterResource(value: EnterpriseBudgetMeterKind): Int = when (value) {
+    EnterpriseBudgetMeterKind.REQUESTS -> R.string.enterprise_budget_meter_requests
+    EnterpriseBudgetMeterKind.REQUESTED_IMAGES -> R.string.enterprise_budget_meter_requested_images
+    EnterpriseBudgetMeterKind.INPUT_TOKENS -> R.string.enterprise_budget_meter_input_tokens
+    EnterpriseBudgetMeterKind.OUTPUT_TOKENS -> R.string.enterprise_budget_meter_output_tokens
+    EnterpriseBudgetMeterKind.CACHED_TOKENS -> R.string.enterprise_budget_meter_cached_tokens
+    EnterpriseBudgetMeterKind.TOTAL_TOKENS -> R.string.enterprise_budget_meter_total_tokens
+    EnterpriseBudgetMeterKind.CHARACTERS -> R.string.enterprise_budget_meter_characters
+    EnterpriseBudgetMeterKind.AUDIO_SECONDS -> R.string.enterprise_budget_meter_audio_seconds
 }
 
-private fun formatBudgetTime(value: String): String = try {
-    DateFormat.getDateTimeInstance(DateFormat.MEDIUM, DateFormat.SHORT).format(
-        Date.from(java.time.Instant.parse(value)))
-} catch (_: java.time.format.DateTimeParseException) { value }
+@Composable
+private fun currentLocale(): Locale = LocalConfiguration.current.locales[0]
+
+private fun formatBudgetQuantity(value: String, meter: EnterpriseBudgetMeterKind, locale: Locale): String {
+    val quantity = value.toBigDecimalOrNull() ?: return value
+    if (meter == EnterpriseBudgetMeterKind.AUDIO_SECONDS) {
+        val divisor = when {
+            quantity >= BigDecimal("3600") -> BigDecimal("3600")
+            quantity >= BigDecimal("60") -> BigDecimal("60")
+            else -> BigDecimal.ONE
+        }
+        val unit = when (divisor) {
+            BigDecimal("3600") -> "h"
+            BigDecimal("60") -> "min"
+            else -> "s"
+        }
+        return "${formatCompactNumber(quantity.divide(divisor, 1, RoundingMode.HALF_UP), locale)} $unit"
+    }
+    return formatCompactNumber(quantity, locale)
+}
+
+private fun formatCompactNumber(value: BigDecimal, locale: Locale): String {
+    val formatter = if (value.abs() >= BigDecimal("10000")) {
+        android.icu.text.CompactDecimalFormat.getInstance(
+            locale,
+            android.icu.text.CompactDecimalFormat.CompactStyle.SHORT,
+        ).apply { maximumFractionDigits = 1 }
+    } else {
+        NumberFormat.getNumberInstance(locale).apply {
+            maximumFractionDigits = 1
+            isGroupingUsed = true
+        }
+    }
+    return formatter.format(value)
+}
+
+private fun formatBudgetTimestamp(value: String, timezone: String, locale: Locale): String = try {
+    val zone = ZoneId.of(timezone)
+    DateTimeFormatter.ofLocalizedDateTime(FormatStyle.MEDIUM, FormatStyle.SHORT)
+        .withLocale(locale)
+        .format(Instant.parse(value).atZone(zone))
+} catch (_: Exception) {
+    value
+}
+
+@Composable
+private fun formatBudgetReset(value: String, timezone: String, locale: Locale): String {
+    val formatted = runCatching {
+        val zone = ZoneId.of(timezone)
+        val reset = Instant.parse(value).atZone(zone)
+        Triple(
+            reset.toLocalDate(),
+            LocalDate.now(zone),
+            DateTimeFormatter.ofLocalizedTime(FormatStyle.SHORT).withLocale(locale).format(reset),
+        ) to DateTimeFormatter.ofLocalizedDateTime(FormatStyle.MEDIUM, FormatStyle.SHORT)
+            .withLocale(locale).format(reset)
+    }.getOrNull() ?: return stringResource(R.string.enterprise_budget_reset_at, value)
+    val (dates, fullTimestamp) = formatted
+    val (resetDate, today, time) = dates
+    return when (resetDate) {
+        today -> stringResource(R.string.enterprise_budget_resets_today, time)
+        today.plusDays(1) -> stringResource(R.string.enterprise_budget_resets_tomorrow, time)
+        else -> stringResource(R.string.enterprise_budget_reset_at, fullTimestamp)
+    }
+}
 
 @Composable
 private fun EnterpriseSection(
     title: String,
     leadingContent: (@Composable () -> Unit)? = null,
+    trailingContent: (@Composable () -> Unit)? = null,
     content: @Composable ColumnScope.() -> Unit,
 ) {
     OutlinedCard(Modifier.widthIn(max = 720.dp).fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 leadingContent?.invoke()
-                Text(title, style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(title, style = MaterialTheme.typography.titleMedium, maxLines = 1,
+                    overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                trailingContent?.invoke()
             }
             content()
         }

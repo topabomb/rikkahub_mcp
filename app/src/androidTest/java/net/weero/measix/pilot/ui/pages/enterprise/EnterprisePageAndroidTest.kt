@@ -53,6 +53,7 @@ import net.weero.measix.pilot.data.enterprise.RealmSelection
 import net.weero.measix.pilot.data.enterprise.RealmSwitchRequest
 import net.weero.measix.pilot.service.*
 import net.weero.measix.pilot.service.portal.PortalDocument
+import net.weero.measix.pilot.service.portal.PortalDestination
 import net.weero.measix.pilot.service.portal.PortalFailure
 import net.weero.measix.pilot.service.portal.PortalWebView
 import net.weero.measix.pilot.ui.context.LocalNavController
@@ -78,6 +79,57 @@ class EnterprisePageAndroidTest {
     @After
     fun clearViewModels() {
         compose.runOnUiThread { viewModels.clear() }
+    }
+
+    @Test
+    fun budgetSummaryUsesCompactRowsAndTheDetailsEntryOpensUsage() {
+        val fixture = Fixture(overview())
+        coEvery { fixture.service.budgets(any(), any()) } returns EnterpriseBudgetSummaryUiModel(
+            timezone = "Asia/Shanghai",
+            items = listOf(
+                EnterpriseBudgetCapabilityUiModel(
+                    capability = EnterpriseBudgetCapabilityKind.MODEL,
+                    availability = EnterpriseBudgetAvailability.NEAR_LIMIT,
+                    primaryLimit = EnterpriseBudgetLimitUiModel(
+                        period = EnterpriseBudgetPeriodKind.DAY,
+                        meter = EnterpriseBudgetMeterKind.REQUESTS,
+                        limit = "1000",
+                        used = "830",
+                        reserved = "50",
+                        remaining = "120",
+                        occupiedFraction = 0.88f,
+                        resetAt = "2026-09-23T00:00:00Z",
+                    ),
+                    additionalLimitCount = 1,
+                    usageSummary = emptyList(),
+                ),
+                EnterpriseBudgetCapabilityUiModel(
+                    capability = EnterpriseBudgetCapabilityKind.TTS,
+                    availability = EnterpriseBudgetAvailability.UNLIMITED,
+                    primaryLimit = null,
+                    additionalLimitCount = 0,
+                    usageSummary = listOf(
+                        EnterpriseBudgetUsageUiModel(
+                            EnterpriseBudgetMeterKind.CHARACTERS,
+                            "1983",
+                            EnterpriseBudgetCompleteness.EXACT,
+                        ),
+                    ),
+                ),
+            ),
+            totalInFlightRequests = 3,
+            asOf = "2026-09-22T06:00:00Z",
+        )
+        coEvery { fixture.service.openPortal(any(), any(), any()) } coAnswers { awaitCancellation() }
+
+        fixture.show()
+
+        compose.onNodeWithText(text(R.string.enterprise_budget_capability_model)).assertIsDisplayed()
+        compose.onNodeWithText(text(R.string.enterprise_budget_near_limit)).assertIsDisplayed()
+        compose.onNodeWithText(text(R.string.enterprise_budget_capability_tts)).performScrollTo().assertIsDisplayed()
+        val details = compose.onNodeWithText(text(R.string.enterprise_budget_details)).performScrollTo().assertIsDisplayed()
+        details.performClick()
+        compose.waitUntil(5_000) { fixture.vm.portal.value?.destination == PortalDestination.USAGE }
     }
 
     @Test
