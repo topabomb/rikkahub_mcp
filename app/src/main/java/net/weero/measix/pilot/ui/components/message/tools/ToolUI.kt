@@ -93,13 +93,17 @@ interface ToolUIRenderer {
     /** 渲染器对应的工具名 */
     val toolName: String
 
+    /** 用户可见的工具身份；协议名仍由 [toolName] 和 Tool part 持有。 */
+    @Composable
+    fun displayName(context: ToolUIContext): String = context.tool.displayToolName
+
     /** 折叠步骤的图标 */
     fun icon(context: ToolUIContext): ImageVector = HugeIcons.Tools
 
     /** 折叠步骤的标题 */
     @Composable
     fun title(context: ToolUIContext): String =
-        stringResource(R.string.chat_message_tool_call_generic, context.tool.displayToolName)
+        stringResource(R.string.chat_message_tool_call_generic, displayName(context))
 
     /** 步骤展开时是否显示内联摘要 */
     fun hasSummary(context: ToolUIContext): Boolean = false
@@ -112,7 +116,10 @@ interface ToolUIRenderer {
     /** 点击步骤后的详情, 渲染在 BottomSheet 内 */
     @Composable
     fun Preview(context: ToolUIContext, onDismissRequest: () -> Unit) {
-        DefaultToolPreview(context = context)
+        DefaultToolPreview(
+            context = context,
+            toolDisplayName = displayName(context),
+        )
     }
 }
 
@@ -144,6 +151,8 @@ object ToolUIRegistry {
         ShellToolUI,
         ImageGenerationToolUI,
         AttachmentInspectionToolUI,
+        ReadToolOutputUI,
+        GrepToolOutputUI,
     ).associateBy { it.toolName }
 
     /** 查找工具对应的渲染器, 未注册时返回默认渲染器 */
@@ -181,6 +190,7 @@ internal fun GatewayActionDetails(tool: UIMessagePart.Tool) {
 fun DefaultToolPreview(
     context: ToolUIContext,
     headerActions: (@Composable () -> Unit)? = null,
+    toolDisplayName: String = context.tool.displayToolName,
 ) {
     Column(
         modifier = Modifier
@@ -201,7 +211,11 @@ fun DefaultToolPreview(
             )
             headerActions?.invoke()
         }
-        ToolCallJsonDetails(context = context, includeImages = true)
+        ToolCallJsonDetails(
+            context = context,
+            includeImages = true,
+            toolDisplayName = toolDisplayName,
+        )
     }
 }
 
@@ -212,11 +226,12 @@ fun DefaultToolPreview(
 fun ToolCallJsonDetails(
     context: ToolUIContext,
     includeImages: Boolean = true,
+    toolDisplayName: String = context.tool.displayToolName,
 ) {
     GatewayActionDetails(context.tool)
     FormItem(
         label = {
-            Text(stringResource(R.string.chat_message_tool_call_label, context.tool.displayToolName))
+            Text(stringResource(R.string.chat_message_tool_call_label, toolDisplayName))
         }
     ) {
         HighlightCodeBlock(

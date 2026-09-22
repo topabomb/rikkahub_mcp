@@ -1842,4 +1842,7 @@
   <string name="enterprise_address_change_failed">기업 주소를 변경할 수 없습니다</string>
   <string name="enterprise_sync_failed_cached">최근 구성 동기화에 실패했습니다. 기기에 적용된 구성은 계속 사용할 수 있습니다. 기업 서비스에 연결할 수 있을 때 다시 시도하세요.</string>
   <string name="enterprise_budget_refreshing">최신 사용량을 새로 고치는 중...</string>
+  <string name="chat_message_tool_read_trimmed_result">압축 결과 읽기</string>
+  <string name="chat_message_tool_search_trimmed_result">압축 결과 검색</string>
+  <string name="enterprise_switch_space">공간 전환</string>
 </resources>

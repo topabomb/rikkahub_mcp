@@ -1843,4 +1843,7 @@
   <string name="enterprise_configuration_redacted_resource_count">%1$d entries; contents are hidden</string>
   <string name="enterprise_budget_refreshing">Refreshing latest usage...</string>
   <string name="enterprise_portal_origin_mismatch">The enterprise workbench address does not match the current enterprise address on this device. Update the Core public enterprise address, then retry.</string>
+  <string name="chat_message_tool_read_trimmed_result">Read trimmed result</string>
+  <string name="chat_message_tool_search_trimmed_result">Search trimmed result</string>
+  <string name="enterprise_switch_space">Switch spaces</string>
 </resources>

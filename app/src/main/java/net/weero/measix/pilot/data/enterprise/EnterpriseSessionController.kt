@@ -301,6 +301,39 @@ internal class EnterpriseSessionController(
         RealmAccess.Enterprise(identity.scope, session.id)
     }
 
+    /** Refreshes mutable display and authorization facts without changing the durable enterprise principal. */
+    suspend fun acceptPlatformBootstrap(access: RealmAccess.Enterprise, bootstrap: PlatformBootstrap) = mutex.withLock {
+        val current = ensureLoaded()
+        if (!allowsDataAccess(current.manifest, access)) fail("enterprise_data_access_unavailable")
+        val session = current.manifest.session ?: fail("enterprise_session_required")
+        val platform = session.platform ?: fail("platform_session_required")
+        if (bootstrap.deployment.deploymentId != session.identity.authority.deploymentId ||
+            bootstrap.user.userId != session.identity.userId ||
+            bootstrap.device.deviceId != platform.deviceId ||
+            bootstrap.session.sessionId != session.id
+        ) {
+            fail("platform_bootstrap_identity_mismatch")
+        }
+        if (bootstrap.device.status != PlatformBootstrapDeviceStatus.ACTIVE ||
+            4L !in bootstrap.supportedSnapshotSchemaVersions
+        ) {
+            fail("platform_bootstrap_unavailable")
+        }
+        val identity = session.identity.copy(
+            enterpriseName = bootstrap.deployment.name,
+            userName = bootstrap.user.displayName,
+        )
+        EnterpriseConfigurationCodec.validateIdentity(identity)
+        val expires = minOf(
+            Instant.parse(bootstrap.session.expiresAt).toEpochMilli(),
+            Instant.parse(bootstrap.session.sessionIdleExpiresAt).toEpochMilli(),
+        )
+        val refreshed = session.copy(identity = identity, expiresAtMillis = expires)
+        if (refreshed != session || current.manifest.lastIdentity != identity) {
+            publish(current.manifest.copy(session = refreshed, lastIdentity = identity))
+        }
+    }
+
     /** Rebinds the current Session to another network origin without changing its durable principal. */
     suspend fun acceptPlatformAddress(
         request: EnterpriseAddressChangeRequest,

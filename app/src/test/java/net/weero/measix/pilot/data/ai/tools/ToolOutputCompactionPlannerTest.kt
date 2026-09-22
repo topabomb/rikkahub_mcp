@@ -28,7 +28,13 @@ class ToolOutputCompactionPlannerTest {
 
     @Test
     fun `compaction waits for receipt and estimated token high watermark`() {
-        val message = UIMessage(role = MessageRole.ASSISTANT, parts = listOf(tool("shell", "x".repeat(200_000))))
+        val message = UIMessage(
+            role = MessageRole.ASSISTANT,
+            parts = listOf(tool(
+                "shell",
+                "x".repeat((ContextBudget.TOOL_OUTPUT_HIGH_WATERMARK_ESTIMATED_TOKENS * 4).toInt()),
+            )),
+        )
         assertTrue(compactionPlanner.planAfterSuccessfulRequest(messageList(message), ModelRequestReceipt(emptySet())).candidates.isEmpty())
         val receipt = ModelRequestReceipt(setOf(loc(message.id, "shell")))
         assertTrue(compactionPlanner.planAfterSuccessfulRequest(messageList(message), receipt).candidates.isEmpty())
@@ -40,7 +46,7 @@ class ToolOutputCompactionPlannerTest {
     }
 
     @Test
-    fun `estimated token high watermark triggers at exactly 48K`() {
+    fun `estimated token high watermark triggers at the production boundary`() {
         val highWatermark = ContextBudget.TOOL_OUTPUT_HIGH_WATERMARK_ESTIMATED_TOKENS
         val below = UIMessage(
             role = MessageRole.ASSISTANT,
@@ -70,7 +76,7 @@ class ToolOutputCompactionPlannerTest {
     }
 
     @Test
-    fun `batch net reclaim triggers at exactly 24K`() {
+    fun `batch net reclaim triggers at the production boundary`() {
         val minimumBatch = ContextBudget.TOOL_OUTPUT_MINIMUM_BATCH_NET_RECLAIM_ESTIMATED_TOKENS
         val markerTokens = estimateStableTextTokens(REGENERABLE_TOOL_OUTPUT_FOLDED_MARKER)
         fun message(name: String, netReclaim: Long) = UIMessage(

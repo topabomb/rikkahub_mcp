@@ -44,7 +44,6 @@ import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.ArrowLeft01
 import me.rerere.hugeicons.stroke.ArrowDown01
 import me.rerere.hugeicons.stroke.ArrowRight01
-import me.rerere.hugeicons.stroke.Building03
 import me.rerere.hugeicons.stroke.Edit03
 import me.rerere.hugeicons.stroke.Tick02
 import me.rerere.hugeicons.stroke.User
@@ -55,6 +54,7 @@ import net.weero.measix.pilot.data.model.Assistant
 import net.weero.measix.pilot.service.AssistantModelSummary
 import net.weero.measix.pilot.ui.adaptive.AdaptiveModal
 import net.weero.measix.pilot.ui.components.ui.UIAvatar
+import net.weero.measix.pilot.ui.components.ui.OrchelmLogo
 import net.weero.measix.pilot.ui.components.ui.Tooltip
 import net.weero.measix.pilot.ui.pages.assistant.detail.AssistantDetailsHome
 import net.weero.measix.pilot.ui.pages.assistant.detail.AssistantSettingsSection
@@ -423,12 +423,20 @@ private fun AssistantItem(
                     else R.string.configuration_source_user,
                 )
                 Tooltip(tooltip = { Text(source) }) {
-                    Icon(
-                        imageVector = if (enterprise) HugeIcons.Building03 else HugeIcons.User,
-                        contentDescription = source,
-                        modifier = Modifier.size(14.dp),
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
+                    if (enterprise) {
+                        OrchelmLogo(
+                            contentDescription = source,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(14.dp),
+                        )
+                    } else {
+                        Icon(
+                            imageVector = HugeIcons.User,
+                            contentDescription = source,
+                            modifier = Modifier.size(14.dp),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                 }
             }
         }

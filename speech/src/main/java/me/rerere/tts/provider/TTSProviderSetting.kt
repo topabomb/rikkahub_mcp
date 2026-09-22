@@ -4,6 +4,22 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import me.rerere.common.configuration.ConfigurationReference
 
+object SystemTtsParameterPolicy {
+    const val MIN_SPEECH_RATE = 0.1
+    const val MAX_SPEECH_RATE = 3.0
+    const val MIN_PITCH = 0.1
+    const val MAX_PITCH = 2.0
+
+    fun requireValid(speechRate: Double, pitch: Double) {
+        require(speechRate.isFinite() && speechRate in MIN_SPEECH_RATE..MAX_SPEECH_RATE) {
+            "invalid_system_tts_speech_rate"
+        }
+        require(pitch.isFinite() && pitch in MIN_PITCH..MAX_PITCH) {
+            "invalid_system_tts_pitch"
+        }
+    }
+}
+
 @Serializable
 sealed class TTSProviderSetting {
     abstract val id: ConfigurationReference

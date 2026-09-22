@@ -86,7 +86,6 @@ import me.rerere.ai.ui.UIMessagePart
 import me.rerere.common.android.appTempFolder
 import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.Cancel01
-import me.rerere.hugeicons.stroke.Building03
 import me.rerere.hugeicons.stroke.LeftToRightListBullet
 import me.rerere.hugeicons.stroke.Menu03
 import me.rerere.hugeicons.stroke.MessageAdd01
@@ -129,6 +128,7 @@ import net.weero.measix.pilot.ui.adaptive.ChatLayoutMode
 import net.weero.measix.pilot.ui.adaptive.LocalAdaptiveLayoutInfo
 import net.weero.measix.pilot.ui.components.ai.AssistantPickerSheet
 import net.weero.measix.pilot.ui.components.ui.UIAvatar
+import net.weero.measix.pilot.ui.components.ui.OrchelmLogo
 import net.weero.measix.pilot.ui.components.ai.ChatInput
 import net.weero.measix.pilot.ui.components.ai.FilesPicker
 import net.weero.measix.pilot.ui.components.ai.McpPickerSheet
@@ -1563,13 +1563,12 @@ private fun TopBar(
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
             ) {
                 if (snapshot.header.scope is net.weero.measix.pilot.data.configuration.ConfigurationScope.Enterprise) {
-                    Icon(
-                        HugeIcons.Building03,
+                    OrchelmLogo(
                         contentDescription = stringResource(
                             R.string.enterprise_current_space,
                             enterpriseName ?: stringResource(R.string.enterprise_space),
                         ),
-                        tint = LocalContentColor.current.copy(0.65f),
+                        color = LocalContentColor.current.copy(0.65f),
                         modifier = Modifier.size(18.dp),
                     )
                 }

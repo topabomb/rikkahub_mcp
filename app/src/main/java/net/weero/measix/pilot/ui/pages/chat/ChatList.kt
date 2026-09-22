@@ -92,6 +92,7 @@ import kotlinx.coroutines.launch
 import me.rerere.ai.core.ToolCallLocator
 import me.rerere.ai.ui.UIMessage
 import net.weero.measix.pilot.R
+import net.weero.measix.pilot.data.configuration.ConfigurationScope
 import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.datastore.getAssistantById
 import net.weero.measix.pilot.data.model.Assistant
@@ -114,6 +115,7 @@ import net.weero.measix.pilot.ui.components.ui.rememberImageBackgroundHost
 import net.weero.measix.pilot.ui.theme.asChatChrome
 import net.weero.measix.pilot.ui.components.ui.ErrorCardsDisplay
 import net.weero.measix.pilot.ui.components.ui.ListSelectableItem
+import net.weero.measix.pilot.ui.components.ui.ModelIconFallback
 import net.weero.measix.pilot.ui.components.ui.ProviderConfigWarningCard
 import net.weero.measix.pilot.ui.components.ui.RabbitLoadingIndicator
 import net.weero.measix.pilot.ui.components.ui.Tooltip
@@ -324,6 +326,11 @@ private fun ChatListNormal(
     // 消息列表数据源来自 snapshot.nodes（未变节点引用相同；流式期间
     // 仅末节点由流式投影覆盖 → Compose skip 生效）。key = node.id 不变。
     val snapshotNodes = snapshot.nodes
+    val modelIconFallback = if (snapshot.header.scope is ConfigurationScope.Enterprise) {
+        ModelIconFallback.NOETRAL
+    } else {
+        ModelIconFallback.INITIALS
+    }
     val snapshotNodesUpdated by rememberUpdatedState(snapshotNodes)
     val lastMessageIndex = snapshotNodes.lastIndex
     val isEmptyConversation = snapshotNodes.isEmpty()
@@ -472,6 +479,7 @@ private fun ChatListNormal(
                                     node = node,
                                     detailSource = detailSource,
                                     model = node.currentMessage.modelId?.let(modelById::get),
+                                    modelIconFallback = modelIconFallback,
                                     assistant = messageAssistant,
                                     loading = loading && index == lastMessageIndex,
                                     onRegenerate = {
@@ -648,6 +656,7 @@ private fun ChatListNormal(
             // 导出对话框
             ChatExportSheet(
                 source = detailSource,
+                modelIconFallback = modelIconFallback,
                 visible = showExportSheet,
                 onDismissRequest = {
                     showExportSheet = false

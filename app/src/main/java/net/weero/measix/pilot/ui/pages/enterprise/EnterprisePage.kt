@@ -15,7 +15,6 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.platform.ClipEntry
@@ -29,7 +28,6 @@ import androidx.compose.ui.viewinterop.AndroidView
 import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.ArrowLeft01
 import me.rerere.hugeicons.stroke.ArrowRight01
-import me.rerere.hugeicons.stroke.Building03
 import me.rerere.hugeicons.stroke.Copy01
 import me.rerere.hugeicons.stroke.User
 import androidx.lifecycle.Lifecycle
@@ -74,6 +72,7 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.dokar.sonner.ToastType
 import net.weero.measix.pilot.ui.components.ui.CardGroup
+import net.weero.measix.pilot.ui.components.ui.OrchelmLogo
 import net.weero.measix.pilot.ui.adaptive.LocalAdaptiveLayoutInfo
 import net.weero.measix.pilot.ui.context.LocalNavController
 import net.weero.measix.pilot.ui.context.LocalToaster
@@ -100,7 +99,7 @@ internal fun EnterpriseSpaceButton(
     val access = state?.selection?.access
     val label = if (access is RealmAccess.Enterprise) {
         state?.enterpriseName ?: stringResource(R.string.enterprise_space)
-    } else stringResource(R.string.enterprise_personal)
+    } else stringResource(R.string.enterprise_switch_space)
     val open = { nav.navigate(Screen.Enterprise) { launchSingleTop = true } }
     CompositionLocalProvider(LocalMinimumInteractiveComponentSize provides 40.dp) {
         Surface(
@@ -118,11 +117,7 @@ internal fun EnterpriseSpaceButton(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-                Icon(
-                    if (access is RealmAccess.Enterprise) HugeIcons.Building03 else HugeIcons.User,
-                    contentDescription = null,
-                    modifier = Modifier.size(18.dp),
-                )
+                OrchelmLogo(Modifier.size(20.dp))
                 Text(
                     label,
                     style = MaterialTheme.typography.bodyMedium,
@@ -152,7 +147,7 @@ internal fun EnterpriseSpaceSettingsCard(modifier: Modifier = Modifier, vm: Ente
         item(
             onClick = { nav.navigate(Screen.Enterprise) { launchSingleTop = true } },
             leadingContent = {
-                Icon(if (access is RealmAccess.Enterprise) HugeIcons.Building03 else HugeIcons.User, contentDescription = null)
+                OrchelmLogo(Modifier.size(24.dp))
             },
             headlineContent = { Text(label, maxLines = 1, overflow = TextOverflow.Ellipsis) },
             supportingContent = { Text(stringResource(R.string.enterprise_spaces_desc)) },
@@ -338,7 +333,10 @@ internal fun EnterprisePage(openUsage: Boolean = false, vm: EnterpriseVM = koinV
                 verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 EnterpriseSection(stringResource(R.string.enterprise_current_space,
                     if (inEnterprise) state?.enterpriseName ?: stringResource(R.string.enterprise_space) else stringResource(R.string.enterprise_personal)),
-                    icon = if (inEnterprise) HugeIcons.Building03 else HugeIcons.User,
+                    leadingContent = {
+                        if (inEnterprise) OrchelmLogo(Modifier.size(20.dp))
+                        else Icon(HugeIcons.User, contentDescription = null, modifier = Modifier.size(20.dp))
+                    },
                 ) {
                     FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         if (inEnterprise && ready) {
@@ -1038,12 +1036,16 @@ private fun formatBudgetTime(value: String): String = try {
 } catch (_: java.time.format.DateTimeParseException) { value }
 
 @Composable
-private fun EnterpriseSection(title: String, icon: ImageVector? = null, content: @Composable ColumnScope.() -> Unit) {
+private fun EnterpriseSection(
+    title: String,
+    leadingContent: (@Composable () -> Unit)? = null,
+    content: @Composable ColumnScope.() -> Unit,
+) {
     OutlinedCard(Modifier.widthIn(max = 720.dp).fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                icon?.let { Icon(it, contentDescription = null, modifier = Modifier.size(20.dp)) }
-                Text(title, style = MaterialTheme.typography.titleMedium)
+                leadingContent?.invoke()
+                Text(title, style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
             content()
         }

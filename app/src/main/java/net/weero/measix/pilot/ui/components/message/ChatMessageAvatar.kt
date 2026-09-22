@@ -1,4 +1,4 @@
-﻿package net.weero.measix.pilot.ui.components.message
+package net.weero.measix.pilot.ui.components.message
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Row
@@ -17,7 +17,8 @@ import me.rerere.ai.ui.UIMessage
 import net.weero.measix.pilot.R
 import net.weero.measix.pilot.data.model.Assistant
 import net.weero.measix.pilot.data.model.Avatar
-import net.weero.measix.pilot.ui.components.ui.AutoAIIcon
+import net.weero.measix.pilot.ui.components.ui.ModelIcon
+import net.weero.measix.pilot.ui.components.ui.ModelIconFallback
 import net.weero.measix.pilot.ui.components.ui.UIAvatar
 import net.weero.measix.pilot.ui.context.LocalSettings
 
@@ -55,6 +56,7 @@ fun ChatMessageAssistantAvatar(
     message: UIMessage,
     loading: Boolean,
     model: Model?,
+    modelIconFallback: ModelIconFallback,
     assistant: Assistant?,
     modifier: Modifier = Modifier,
 ) {
@@ -91,8 +93,9 @@ fun ChatMessageAssistantAvatar(
                 }
             } else if (model != null) {
                 if (showIcon) {
-                    AutoAIIcon(
+                    ModelIcon(
                         name = model.modelId,
+                        fallback = modelIconFallback,
                         modifier = Modifier.size(28.dp),
                         loading = loading
                     )

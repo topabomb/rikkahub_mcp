@@ -3,17 +3,17 @@ package net.weero.measix.pilot.data.ai.request
 /** 请求裁剪的生产阈值唯一来源。 */
 internal object ContextBudget {
     /** inline Tool 文本估算 token 达到该高水位时启动滚动压缩。 */
-    const val TOOL_OUTPUT_HIGH_WATERMARK_ESTIMATED_TOKENS = 48 * 1024L
+    const val TOOL_OUTPUT_HIGH_WATERMARK_ESTIMATED_TOKENS = 64 * 1024L
     /** 每次滚动压缩尽量把 inline Tool 文本降到该低水位。 */
-    const val TOOL_OUTPUT_LOW_WATERMARK_ESTIMATED_TOKENS = 16 * 1024L
+    const val TOOL_OUTPUT_LOW_WATERMARK_ESTIMATED_TOKENS = 24 * 1024L
     /** 整批净回收不足该值时不改写历史。 */
-    const val TOOL_OUTPUT_MINIMUM_BATCH_NET_RECLAIM_ESTIMATED_TOKENS = 24 * 1024L
+    const val TOOL_OUTPUT_MINIMUM_BATCH_NET_RECLAIM_ESTIMATED_TOKENS = 32 * 1024L
     /** 单个结果替换 marker 后至少净回收的估算 token。 */
-    const val TOOL_OUTPUT_MINIMUM_RESULT_NET_RECLAIM_ESTIMATED_TOKENS = 128L
+    const val TOOL_OUTPUT_MINIMUM_RESULT_NET_RECLAIM_ESTIMATED_TOKENS = 256L
     /** 最近两个连续 Tool Result 批次不参与普通滚动压缩。 */
     const val TOOL_OUTPUT_PROTECTED_RECENT_BATCHES = 2
     /** 从尾部累计的最近估算 token 不参与普通滚动压缩。 */
-    const val TOOL_OUTPUT_PROTECTED_RECENT_ESTIMATED_TOKENS = 8 * 1024L
+    const val TOOL_OUTPUT_PROTECTED_RECENT_ESTIMATED_TOKENS = 12 * 1024L
 
     /** TurnRunner 唯一生产入口使用的默认滚动压缩预算。 */
     val TOOL_OUTPUT_BUDGET = ToolOutputBudget(

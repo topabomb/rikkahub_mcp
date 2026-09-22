@@ -84,6 +84,16 @@ class PlatformSnapshotMapperTest {
         assertNull(design.voice)
         assertFalse(design.voiceDesignPrompt.isNullOrBlank())
         assertThrows(IllegalArgumentException::class.java) { system.copy(voice = "fake").validate() }
+        assertEquals("invalid_system_tts_speech_rate",
+            assertThrows(IllegalArgumentException::class.java) { system.copy(speechRate = null).validate() }.message)
+        assertEquals("invalid_system_tts_speech_rate",
+            assertThrows(IllegalArgumentException::class.java) { system.copy(speechRate = 3.01).validate() }.message)
+        assertEquals("invalid_system_tts_speech_rate",
+            assertThrows(IllegalArgumentException::class.java) { system.copy(speechRate = Double.MAX_VALUE).validate() }.message)
+        assertEquals("invalid_system_tts_pitch",
+            assertThrows(IllegalArgumentException::class.java) { system.copy(pitch = null).validate() }.message)
+        assertEquals("invalid_system_tts_pitch",
+            assertThrows(IllegalArgumentException::class.java) { system.copy(pitch = 2.01).validate() }.message)
         assertThrows(IllegalArgumentException::class.java) { design.copy(voiceDesignPrompt = null).validate() }
     }
 

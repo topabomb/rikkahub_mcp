@@ -41,9 +41,9 @@ Presentation / FTS / UI。
 `ToolOutputCompactionPlanner.planAfterSuccessfulRequest` 只规划本次成功请求确实可见且模型已消费的
 历史 inline Tool Result。输入资格来自 `ModelRequestReceipt`；规划阶段没有消息或文件写入。
 
-全部阈值只来自 `ContextBudget`：inline Tool 正文达到 48 × 1024 estimated tokens 才触发，目标低水位
-16 × 1024，整批至少净回收 24 × 1024。最近两个 Step 工具批次与最近 8 × 1024 estimated tokens
-受保护；单个结果净回收至少 128。不额外保护整个已完成 USER 轮次，也不使用 Provider input/cache 指标决策。
+全部阈值只来自 `ContextBudget`：inline Tool 正文达到 64 × 1024 estimated tokens 才触发，目标低水位
+24 × 1024，整批至少净回收 32 × 1024。最近两个 Step 工具批次与最近 12 × 1024 estimated tokens
+受保护；单个结果净回收至少 256。不额外保护整个已完成 USER 轮次，也不使用 Provider input/cache 指标决策。
 
 候选须有 COMPLETED / FAILED Result、纯文本 output 与可压缩策略。已归档结果、PRESERVE、混合媒体、
 Provider opaque replay、Denied / Answered 和无终态调用不参与。整批回收不足时不改历史。

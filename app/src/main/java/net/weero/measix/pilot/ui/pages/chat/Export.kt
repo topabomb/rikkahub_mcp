@@ -8,6 +8,7 @@ import me.rerere.hugeicons.stroke.Book02
 import me.rerere.hugeicons.stroke.Book04
 import me.rerere.hugeicons.stroke.Earth
 import me.rerere.hugeicons.stroke.File02
+import me.rerere.hugeicons.stroke.FileView
 import me.rerere.hugeicons.stroke.Image02
 import me.rerere.hugeicons.stroke.Search01
 import me.rerere.hugeicons.stroke.Wrench01
@@ -78,6 +79,7 @@ import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
 import me.rerere.ai.ui.isEmptyUIMessage
 import net.weero.measix.pilot.R
+import net.weero.measix.pilot.data.ai.tools.ToolOutputToolNames
 import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.datastore.findModelById
 import net.weero.measix.pilot.ui.components.message.MessagePartBlock
@@ -86,10 +88,11 @@ import net.weero.measix.pilot.ui.components.message.groupMessageParts
 import net.weero.measix.pilot.ui.components.message.resolveAttachmentImageSource
 import net.weero.measix.pilot.ui.components.message.resolveAttachmentMediaUrl
 import net.weero.measix.pilot.ui.components.richtext.MarkdownBlock
-import net.weero.measix.pilot.ui.components.ui.AutoAIIcon
 import net.weero.measix.pilot.ui.components.ui.BitmapComposer
 import net.weero.measix.pilot.ui.components.ui.ChainOfThought
 import net.weero.measix.pilot.ui.components.ui.ChainOfThoughtScope
+import net.weero.measix.pilot.ui.components.ui.ModelIcon
+import net.weero.measix.pilot.ui.components.ui.ModelIconFallback
 import net.weero.measix.pilot.ui.context.LocalNavController
 import net.weero.measix.pilot.ui.context.LocalSettings
 import com.dokar.sonner.rememberToasterState
@@ -107,6 +110,7 @@ import kotlin.time.DurationUnit
 @Composable
 fun ChatExportSheet(
     source: net.weero.measix.pilot.service.ConversationViewLease?,
+    modelIconFallback: ModelIconFallback = ModelIconFallback.INITIALS,
     visible: Boolean,
     onDismissRequest: () -> Unit,
     conversationTitle: String,
@@ -242,6 +246,7 @@ fun ChatExportSheet(
                                                 imageResolver = imageResolver,
                                                 contentSource = contentSource,
                                                 verifyAccess = verifyAccess,
+                                                modelIconFallback = modelIconFallback,
                                                 options = imageExportOptions
                                             )
                                             toaster.show(imageSuccessMessage, type = ToastType.Success)
@@ -411,6 +416,7 @@ internal suspend fun exportToImage(
     imageResolver: (suspend (String) -> net.weero.measix.pilot.service.ImageSource?)?,
     contentSource: net.weero.measix.pilot.service.RenderedContentSource?,
     verifyAccess: suspend () -> Unit,
+    modelIconFallback: ModelIconFallback = ModelIconFallback.INITIALS,
     options: ImageExportOptions = ImageExportOptions()
 ) {
     val filename = "chat-export-${LocalDateTime.now().format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd_HH-mm-ss"))}.png"
@@ -433,6 +439,7 @@ internal suspend fun exportToImage(
                     conversationTitle = conversationTitle,
                     messages = messages,
                     attachmentPreview = attachmentPreview,
+                    modelIconFallback = modelIconFallback,
                     options = options
                 )
             }
@@ -453,6 +460,7 @@ private fun ExportedChatImage(
     conversationTitle: String,
     messages: List<UIMessage>,
     attachmentPreview: (String) -> net.weero.measix.pilot.service.AttachmentPreview?,
+    modelIconFallback: ModelIconFallback,
     options: ImageExportOptions = ImageExportOptions()
 ) {
     val navBackStack = remember { mutableStateListOf<NavKey>() }
@@ -504,6 +512,7 @@ private fun ExportedChatImage(
                         ExportedChatMessage(
                             message = message,
                             attachmentPreview = attachmentPreview,
+                            modelIconFallback = modelIconFallback,
                             options = options,
                             prevMessage = messages.getOrNull(messages.indexOf(message) - 1)
                         )
@@ -528,6 +537,7 @@ private fun ExportedChatImage(
 private fun ExportedChatMessage(
     message: UIMessage,
     attachmentPreview: (String) -> net.weero.measix.pilot.service.AttachmentPreview?,
+    modelIconFallback: ModelIconFallback,
     prevMessage: UIMessage? = null,
     options: ImageExportOptions = ImageExportOptions()
 ) {
@@ -669,8 +679,9 @@ private fun ExportedChatMessage(
             verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier.padding(top = 8.dp)
         ) {
-            AutoAIIcon(
+            ModelIcon(
                 name = iconLabel,
+                fallback = modelIconFallback,
                 modifier = Modifier
                     .padding(top = 8.dp)
                     .size(36.dp)
@@ -758,6 +769,8 @@ private fun ChainOfThoughtScope.ExportedToolStep(
         }
 
         "scrape_web" -> stringResource(R.string.chat_message_tool_scrape_web)
+        ToolOutputToolNames.READ -> stringResource(R.string.chat_message_tool_read_trimmed_result)
+        ToolOutputToolNames.GREP -> stringResource(R.string.chat_message_tool_search_trimmed_result)
         else -> stringResource(R.string.chat_message_tool_call_generic, tool.toolName)
     }
     ControlledChainOfThoughtStep(
@@ -774,6 +787,8 @@ private fun ChainOfThoughtScope.ExportedToolStep(
 
                     "search_web" -> HugeIcons.Search01
                     "scrape_web" -> HugeIcons.Earth
+                    ToolOutputToolNames.READ -> HugeIcons.FileView
+                    ToolOutputToolNames.GREP -> HugeIcons.Search01
                     else -> HugeIcons.Wrench01
                 },
                 contentDescription = null,

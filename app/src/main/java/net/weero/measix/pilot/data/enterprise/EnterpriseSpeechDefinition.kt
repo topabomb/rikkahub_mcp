@@ -1,5 +1,6 @@
 package net.weero.measix.pilot.data.enterprise
 
+import me.rerere.tts.provider.SystemTtsParameterPolicy
 import me.rerere.tts.provider.TTSProviderSetting
 
 internal fun EnterpriseAsrResource.realtimeSetting(reference: me.rerere.common.configuration.ConfigurationReference): me.rerere.asr.ASRProviderSetting =
@@ -37,9 +38,10 @@ internal fun EnterpriseTtsResource.providerSetting(reference: me.rerere.common.c
 internal fun EnterpriseTtsResource.validate() {
     require(id.startsWith("tts_") && name.isNotBlank()) { "invalid_enterprise_tts_resource" }
     if (protocol == EnterpriseTtsProtocol.SYSTEM) {
-        require(speechRate?.let { it.isFinite() && it > 0 } == true && pitch?.let { it.isFinite() && it > 0 } == true) {
-            "invalid_system_tts_settings"
-        }
+        SystemTtsParameterPolicy.requireValid(
+            requireNotNull(speechRate) { "invalid_system_tts_speech_rate" },
+            requireNotNull(pitch) { "invalid_system_tts_pitch" },
+        )
         require(modelId == null && voice == null && voiceDesignPrompt == null) { "system_tts_cloud_fields" }
         return
     }

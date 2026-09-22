@@ -1842,4 +1842,7 @@
   <string name="enterprise_address_change_failed">Не удалось изменить адрес организации</string>
   <string name="enterprise_sync_failed_cached">Последняя синхронизация конфигурации не удалась. Локально примененная конфигурация по-прежнему доступна. Повторите попытку, когда корпоративный сервис станет доступен.</string>
   <string name="enterprise_budget_refreshing">Обновление последних данных об использовании...</string>
+  <string name="chat_message_tool_read_trimmed_result">Читать сокращённый результат</string>
+  <string name="chat_message_tool_search_trimmed_result">Искать в сокращённом результате</string>
+  <string name="enterprise_switch_space">Сменить пространство</string>
 </resources>

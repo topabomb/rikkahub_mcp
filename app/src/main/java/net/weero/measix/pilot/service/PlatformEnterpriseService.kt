@@ -136,12 +136,14 @@ internal class PlatformEnterpriseService(
 
     /** Shared synchronization owns deduplication; this source performs network I/O outside Session admission. */
     suspend fun synchronize(access: RealmAccess.Enterprise): EnterpriseState.Available {
+        val bootstrap = read(access.sessionId) { connection, token ->
+            client.bootstrap(connection, token)
+        }
+        sessions.acceptPlatformBootstrap(access, bootstrap)
         val input = sessions.platformConfiguration(access)
         val connection = requireNotNull(input.session.platform).connection
         val cached = input.candidate
-        val state = read(access.sessionId) { current, token ->
-            client.state(current, token, cached?.configuration?.generation)
-        }
+        val state = bootstrap.managedState
         val generation = state.activeManagedGeneration
         require(state.targetManagedGeneration == null || state.targetManagedGeneration == generation) {
             "platform_snapshot_target_mismatch"

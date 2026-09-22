@@ -83,6 +83,7 @@ import net.weero.measix.pilot.ui.components.richtext.ZoomableAsyncImage
 import net.weero.measix.pilot.ui.components.richtext.buildMarkdownPreviewHtml
 import net.weero.measix.pilot.ui.components.ui.ChainOfThought
 import net.weero.measix.pilot.ui.components.ui.Favicon
+import net.weero.measix.pilot.ui.components.ui.ModelIconFallback
 import net.weero.measix.pilot.ui.context.LocalNavController
 import net.weero.measix.pilot.ui.modifier.shimmer
 import net.weero.measix.pilot.ui.theme.asChatChrome
@@ -105,6 +106,7 @@ fun ChatMessage(
     loading: Boolean = false,
     turnFinished: Boolean = !loading,
     model: Model? = null,
+    modelIconFallback: ModelIconFallback = ModelIconFallback.INITIALS,
     assistant: Assistant? = null,
     lastMessage: Boolean = false,
     onFork: () -> Unit,
@@ -168,6 +170,7 @@ fun ChatMessage(
                 ChatMessageAssistantAvatar(
                     message = message,
                     model = model,
+                    modelIconFallback = modelIconFallback,
                     assistant = assistant,
                     loading = loading,
                     modifier = Modifier.weight(1f)

@@ -1,4 +1,4 @@
-﻿package net.weero.measix.pilot.ui.components.ui
+package net.weero.measix.pilot.ui.components.ui
 
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.padding
@@ -21,6 +21,17 @@ import net.weero.measix.pilot.ui.hooks.rememberAvatarShape
 import net.weero.measix.pilot.ui.theme.LocalDarkMode
 import net.weero.measix.pilot.utils.computeAIIconByName
 import net.weero.measix.pilot.utils.toCssHex
+
+enum class ModelIconFallback {
+    INITIALS,
+    NOETRAL,
+}
+
+internal fun resolveModelIconPath(name: String, fallback: ModelIconFallback): String? =
+    computeAIIconByName(name) ?: when (fallback) {
+        ModelIconFallback.INITIALS -> null
+        ModelIconFallback.NOETRAL -> "noetral.svg"
+    }
 
 @Composable
 private fun AIIcon(
@@ -65,6 +76,27 @@ fun AutoAIIcon(
     color: Color = MaterialTheme.colorScheme.secondaryContainer,
 ) {
     val path = remember(name) { computeAIIconByName(name) } ?: run {
+        TextAvatar(text = name, modifier = modifier, loading = loading, color = color)
+        return
+    }
+    AIIcon(
+        path = path,
+        name = name,
+        modifier = modifier,
+        loading = loading,
+        color = color,
+    )
+}
+
+@Composable
+fun ModelIcon(
+    name: String,
+    fallback: ModelIconFallback,
+    modifier: Modifier = Modifier,
+    loading: Boolean = false,
+    color: Color = MaterialTheme.colorScheme.secondaryContainer,
+) {
+    val path = remember(name, fallback) { resolveModelIconPath(name, fallback) } ?: run {
         TextAvatar(text = name, modifier = modifier, loading = loading, color = color)
         return
     }

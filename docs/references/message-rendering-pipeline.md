@@ -93,6 +93,10 @@ Text part 在传入 `MarkdownBlock` 之前，先经过 `replaceRegexes()` 处理
 - `ReasoningStep` → `ChatMessageReasoningStep`（推理文本）
 - `ToolStep` → `ChatMessageToolStep`（工具调用卡片，含输入/输出/审批）
 
+工具协议名继续作为执行与持久化身份；`ToolUIRenderer.displayName` 只提供用户可见身份。内置的
+`read_tool_output` / `grep_tool_output` 在聊天卡片、展开详情和图片/PDF 导出中分别显示本地化的
+“读剪裁结果”与“搜剪裁结果”，诊断型原始导出仍保留协议名。
+
 折叠只隐藏普通的早期步骤。`isPending`（无结果且 interaction 为 `AwaitingApproval` / `AwaitingInput`）的 Tool step 与 `generate_image` 都被固定
 展示，且不计入隐藏数量。前者保证 HITL 审批不会被「再显示 N 步」收走；后者保证穿插在搜索/读写/
 shell 中间的文生图结果仍留在时间线原位。`generate_image` 不拆成 `SubAssistantCallBlock`：它没有

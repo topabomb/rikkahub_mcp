@@ -1842,4 +1842,7 @@
   <string name="enterprise_address_change_failed">企業アドレスを変更できませんでした</string>
   <string name="enterprise_sync_failed_cached">最新の設定同期に失敗しました。端末に適用済みの設定は引き続き利用できます。企業サービスが利用可能になってから再試行してください。</string>
   <string name="enterprise_budget_refreshing">最新の使用状況を更新しています...</string>
+  <string name="chat_message_tool_read_trimmed_result">圧縮結果を読む</string>
+  <string name="chat_message_tool_search_trimmed_result">圧縮結果を検索</string>
+  <string name="enterprise_switch_space">スペースを切り替え</string>
 </resources>

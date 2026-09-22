@@ -1842,4 +1842,7 @@
   <string name="enterprise_address_change_failed">无法更改企业地址</string>
   <string name="enterprise_sync_failed_cached">最近一次配置同步失败。本机已生效配置仍可用，请在企业服务恢复后重试。</string>
   <string name="enterprise_budget_refreshing">正在刷新最新用量...</string>
+  <string name="chat_message_tool_read_trimmed_result">读剪裁结果</string>
+  <string name="chat_message_tool_search_trimmed_result">搜剪裁结果</string>
+  <string name="enterprise_switch_space">切换空间</string>
 </resources>

@@ -1,4 +1,4 @@
-﻿package net.weero.measix.pilot.ui.pages.setting.components
+package net.weero.measix.pilot.ui.pages.setting.components
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -17,6 +17,7 @@ import net.weero.measix.pilot.ui.components.ui.FormItem
 import net.weero.measix.pilot.ui.components.ui.OutlinedNumberInput
 import net.weero.measix.pilot.ui.components.ui.SelectTextField
 import me.rerere.tts.provider.TTSProviderSetting
+import me.rerere.tts.provider.SystemTtsParameterPolicy
 import kotlin.reflect.KClass
 
 @Composable
@@ -250,7 +251,7 @@ private fun SystemTTSConfiguration(
         OutlinedNumberInput(
             value = setting.speechRate,
             onValueChange = { newRate ->
-                if (newRate in 0.1f..3.0f) {
+                if (newRate.toDouble() in SystemTtsParameterPolicy.MIN_SPEECH_RATE..SystemTtsParameterPolicy.MAX_SPEECH_RATE) {
                     onValueChange(setting.copy(speechRate = newRate))
                 }
             },
@@ -267,7 +268,7 @@ private fun SystemTTSConfiguration(
         OutlinedNumberInput(
             value = setting.pitch,
             onValueChange = { newPitch ->
-                if (newPitch in 0.1f..2.0f) {
+                if (newPitch.toDouble() in SystemTtsParameterPolicy.MIN_PITCH..SystemTtsParameterPolicy.MAX_PITCH) {
                     onValueChange(setting.copy(pitch = newPitch))
                 }
             },

@@ -403,14 +403,14 @@ class PlatformSessionNetworkTest {
         val snapshot = PlatformWireCodec.decode<PlatformManagedSnapshot>(fixture("v4-full"))
         val store = net.weero.measix.pilot.data.enterprise.enterpriseTestStore(root, credentialCipher = cipher)
         val reads = mutableListOf<String?>()
-        val appliedHeaders = mutableListOf<String?>()
+        val bootstraps = AtomicInteger()
         var reportFails = true
         val server = server {
             when (requestURI.path) {
                 "/api/client/v1/sessions/refresh" -> reply(200, fixture("refresh-response"))
-                "/api/client/v1/managed/state" -> {
-                    appliedHeaders += requestHeaders.getFirst("X-Measix-Applied-Managed-Generation")
-                    reply(200, """{"runtimeStatus":"READY","activeManagedGeneration":${snapshot.managedGeneration},"managedStateRevision":1,"syncRequired":true,"targetManagedGeneration":${snapshot.managedGeneration},"runtimeBlocked":true}""")
+                "/api/client/v1/bootstrap" -> {
+                    bootstraps.incrementAndGet()
+                    reply(200, fixture("bootstrap"))
                 }
                 "/api/client/v1/managed/snapshots/${snapshot.managedGeneration}" -> {
                     reads += requestHeaders.getFirst("If-None-Match")
@@ -440,16 +440,28 @@ class PlatformSessionNetworkTest {
             val restored = service(recoveredOwner).synchronize(access)
             assertEquals(snapshot.managedGeneration, restored.configuration?.generation)
             assertEquals(listOf(null, "\"${snapshot.snapshotHash}\""), reads)
-            assertEquals(listOf(null, snapshot.managedGeneration.toString()), appliedHeaders)
+            assertEquals(2, bootstraps.get())
         } finally { server.stop(0) }
     }
 
-    @Test fun `generation zero stays pending and performs no snapshot request or report`() = runBlocking {
+    @Test fun `synchronization refreshes Bootstrap identity and generation zero performs no snapshot or report`() = runBlocking {
         val requests = AtomicInteger()
+        val base = PlatformWireCodec.decode<PlatformBootstrap>(fixture("bootstrap"))
+        val refreshed = base.copy(
+            deployment = base.deployment.copy(name = "Renamed enterprise"),
+            user = base.user.copy(displayName = "Renamed member"),
+            managedState = base.managedState.copy(
+                activeManagedGeneration = 0,
+                managedStateRevision = 0,
+                syncRequired = true,
+                targetManagedGeneration = null,
+                runtimeBlocked = true,
+            ),
+        )
         val server = server {
             requests.incrementAndGet()
-            assertEquals("/api/client/v1/managed/state", requestURI.path)
-            reply(200, """{"runtimeStatus":"READY","activeManagedGeneration":0,"managedStateRevision":0,"syncRequired":true,"runtimeBlocked":true}""")
+            assertEquals("/api/client/v1/bootstrap", requestURI.path)
+            reply(200, PlatformWireCodec.json.encodeToString(refreshed))
         }
         try {
             val first = owner(temporary.newFolder())
@@ -459,6 +471,8 @@ class PlatformSessionNetworkTest {
             val result = service(first).synchronize(access)
             assertEquals(EnterpriseSessionPhase.CONFIGURATION_PENDING, result.manifest.phase)
             assertNull(result.configuration)
+            assertEquals(refreshed.deployment.name, result.manifest.session?.identity?.enterpriseName)
+            assertEquals(refreshed.user.displayName, result.manifest.session?.identity?.userName)
             assertEquals(1, requests.get())
         } finally { server.stop(0) }
     }
@@ -590,10 +604,7 @@ class PlatformSessionNetworkTest {
         val server = server {
             try {
                 when (requestURI.path) {
-                    "/api/client/v1/managed/state" -> reply(
-                        200,
-                        """{"runtimeStatus":"READY","activeManagedGeneration":${snapshot.managedGeneration},"managedStateRevision":1,"syncRequired":true,"targetManagedGeneration":${snapshot.managedGeneration},"runtimeBlocked":true}""",
-                    )
+                    "/api/client/v1/bootstrap" -> reply(200, fixture("bootstrap"))
                     "/api/client/v1/managed/snapshots/${snapshot.managedGeneration}" -> {
                         responseHeaders.set("ETag", "\"${snapshot.snapshotHash}\"")
                         reply(200, fixture("v4-full"))

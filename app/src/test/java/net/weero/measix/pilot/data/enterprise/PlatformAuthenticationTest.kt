@@ -88,6 +88,52 @@ class PlatformAuthenticationTest {
         assertEquals(bootstrap.user.displayName, state.manifest.session?.identity?.userName)
     }
 
+    @Test fun `accepted Bootstrap refreshes mutable identity and session facts without changing the principal`() = runBlocking {
+        val owner = controller(temporary.newFolder())
+        val id = owner.acceptPlatformEnrollment(owner.beginPlatformEnrollment(), connection, response)
+        val bootstrap = PlatformWireCodec.decode<PlatformBootstrap>(fixture("bootstrap"))
+        val access = owner.completePlatformBootstrap(id, bootstrap)
+        val before = (owner.state.value as EnterpriseState.Available).manifest
+        val refreshed = bootstrap.copy(
+            deployment = bootstrap.deployment.copy(name = "A very long renamed enterprise for display verification"),
+            user = bootstrap.user.copy(displayName = "Renamed member"),
+            session = bootstrap.session.copy(
+                expiresAt = "2030-01-02T00:00:00Z",
+                sessionIdleExpiresAt = "2030-01-01T00:00:00Z",
+            ),
+        )
+
+        owner.acceptPlatformBootstrap(access, refreshed)
+
+        val after = (owner.state.value as EnterpriseState.Available).manifest
+        assertEquals(before.session?.id, after.session?.id)
+        assertEquals(before.session?.identity?.scope, after.session?.identity?.scope)
+        assertEquals(before.session?.platform, after.session?.platform)
+        assertEquals(refreshed.deployment.name, after.session?.identity?.enterpriseName)
+        assertEquals(refreshed.user.displayName, after.session?.identity?.userName)
+        assertEquals(java.time.Instant.parse(refreshed.session.sessionIdleExpiresAt).toEpochMilli(), after.session?.expiresAtMillis)
+
+        val mismatch = refreshed.copy(device = refreshed.device.copy(
+            deviceId = "dev_12345678-1234-4234-8234-123456789012",
+        ))
+        val failure = runCatching { owner.acceptPlatformBootstrap(access, mismatch) }.exceptionOrNull()
+        assertTrue(failure is EnterpriseConfigurationException)
+        assertEquals("platform_bootstrap_identity_mismatch", (failure as EnterpriseConfigurationException).reason)
+        assertEquals(after, (owner.state.value as EnterpriseState.Available).manifest)
+
+        listOf(
+            refreshed.copy(device = refreshed.device.copy(status = PlatformBootstrapDeviceStatus.REVOKED)),
+            refreshed.copy(supportedSnapshotSchemaVersions = emptyList()),
+        ).forEach { unavailable ->
+            val unavailableFailure = runCatching {
+                owner.acceptPlatformBootstrap(access, unavailable)
+            }.exceptionOrNull()
+            assertTrue(unavailableFailure is EnterpriseConfigurationException)
+            assertEquals("platform_bootstrap_unavailable", (unavailableFailure as EnterpriseConfigurationException).reason)
+            assertEquals(after, (owner.state.value as EnterpriseState.Available).manifest)
+        }
+    }
+
     @Test fun `accepted enrollment after identity deletion resumes Bootstrap across restart`() = runBlocking {
         val root = temporary.newFolder()
         val original = controller(root)

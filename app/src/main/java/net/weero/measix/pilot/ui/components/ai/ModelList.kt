@@ -89,6 +89,8 @@ import net.weero.measix.pilot.data.enterprise.RealmAccess
 import net.weero.measix.pilot.service.DefaultModelBehavior
 import net.weero.measix.pilot.ui.adaptive.AdaptiveModal
 import net.weero.measix.pilot.ui.components.ui.AutoAIIcon
+import net.weero.measix.pilot.ui.components.ui.ModelIcon
+import net.weero.measix.pilot.ui.components.ui.ModelIconFallback
 import net.weero.measix.pilot.ui.components.ui.Tag
 import net.weero.measix.pilot.ui.components.ui.TagType
 import net.weero.measix.pilot.ui.components.ui.icons.HeartIcon
@@ -148,6 +150,11 @@ fun ModelSelectorButton(
 ) {
     val model = state.currentModel
     val unresolvedReference = state.modelId?.takeIf { model == null }
+    val iconFallback = if (state.catalog.selection?.access is RealmAccess.Enterprise) {
+        ModelIconFallback.NOETRAL
+    } else {
+        ModelIconFallback.INITIALS
+    }
 
     if (!onlyIcon) {
         Row(
@@ -160,8 +167,10 @@ fun ModelSelectorButton(
                 modifier = modifier
             ) {
                 model?.modelId?.let {
-                    AutoAIIcon(
-                        it, Modifier
+                    ModelIcon(
+                        name = it,
+                        fallback = iconFallback,
+                        modifier = Modifier
                             .padding(end = 4.dp)
                             .size(36.dp),
                         color = Color.Transparent
@@ -195,9 +204,10 @@ fun ModelSelectorButton(
             },
         ) {
             if (model != null) {
-                AutoAIIcon(
+                ModelIcon(
                     modifier = Modifier.size(36.dp),
                     name = model.modelId,
+                    fallback = iconFallback,
                     color = Color.Transparent
                 )
             } else {
@@ -459,6 +469,11 @@ private fun ColumnScope.ModelList(
         providers.filter { searchFilteredModelsByProvider[it.id].orEmpty().isNotEmpty() }
     }
     val unavailableSelection = catalog.unavailableSelection(currentModel)
+    val iconFallback = if (catalog.selection?.access is RealmAccess.Enterprise) {
+        ModelIconFallback.NOETRAL
+    } else {
+        ModelIconFallback.INITIALS
+    }
     val leadingDefaultCount = if (defaultActions.isNotEmpty()) 1 else 0
     val leadingUnresolvedCount = if (unavailableSelection != null) 1 else 0
     val leadingItemCount = leadingDefaultCount + leadingUnresolvedCount
@@ -585,6 +600,7 @@ private fun ColumnScope.ModelList(
                 UnavailableModelItem(
                     name = unavailableSelection.first,
                     reason = configurationUnavailableText(unavailableSelection.second),
+                    iconFallback = iconFallback,
                     modifier = Modifier.animateItem(),
                 )
             }
@@ -644,6 +660,7 @@ private fun ColumnScope.ModelList(
                 if (model != null && provider != null) {
                     ModelItem(
                         model = model,
+                        iconFallback = iconFallback,
                         selectionEnabled = selectionEnabled,
                         onSelect = onSelect,
                         modifier = Modifier.animateItem(),
@@ -691,6 +708,7 @@ private fun ColumnScope.ModelList(
                 val favorite = model.model.id in favoriteModelIds
                 ModelItem(
                     model = model,
+                    iconFallback = iconFallback,
                     selectionEnabled = selectionEnabled,
                     onSelect = onSelect,
                     modifier = Modifier.animateItem(),
@@ -946,6 +964,7 @@ private fun ModelDefaultItem(
 private fun UnavailableModelItem(
     name: String,
     reason: String,
+    iconFallback: ModelIconFallback,
     modifier: Modifier = Modifier,
 ) {
     Card(
@@ -966,8 +985,9 @@ private fun UnavailableModelItem(
                 color = MaterialTheme.colorScheme.secondaryContainer,
                 shape = MaterialTheme.shapes.small,
             ) {
-                AutoAIIcon(
+                ModelIcon(
                     name = name,
+                    fallback = iconFallback,
                     modifier = Modifier
                         .padding(4.dp)
                         .size(28.dp),
@@ -1003,6 +1023,7 @@ private fun UnavailableModelItem(
 @Composable
 private fun ModelItem(
     model: ModelChoiceUiModel,
+    iconFallback: ModelIconFallback,
     selectionEnabled: Boolean,
     select: Boolean,
     onSelect: (Model) -> Unit,
@@ -1039,8 +1060,9 @@ private fun ModelItem(
                     color = MaterialTheme.colorScheme.secondaryContainer,
                     shape = MaterialTheme.shapes.small,
                 ) {
-                    AutoAIIcon(
+                    ModelIcon(
                         name = model.model.modelId,
+                        fallback = iconFallback,
                         modifier = Modifier
                             .padding(4.dp)
                             .size(28.dp)
