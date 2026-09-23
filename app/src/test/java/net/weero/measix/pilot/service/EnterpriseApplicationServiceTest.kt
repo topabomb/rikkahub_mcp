@@ -24,6 +24,63 @@ import org.junit.Test
 
 class EnterpriseApplicationServiceTest {
     @Test
+    fun `recent updates reject a revoked selection before returning enterprise content`() = runTest {
+        val sessions = mockk<EnterpriseSessionController>()
+        val platform = mockk<PlatformEnterpriseService>()
+        val access = RealmAccess.Enterprise(
+            net.weero.measix.pilot.data.enterprise.exampleEnterprisePackage().identity.scope, "session")
+        val selection = RealmSelection(access, 1)
+        var current = selection
+        val presentation = mockk<EnterprisePresentation> {
+            coEvery { this@mockk.selection } answers { current }
+        }
+        coEvery { sessions.readPresentation() } returns presentation
+        coEvery { platform.recoverPlatformAccess() } returns null
+        val response = CompletableDeferred<net.weero.measix.pilot.data.enterprise.PlatformEnterpriseUpdateFeed>()
+        coEvery { platform.recentUpdates(access) } coAnswers { response.await() }
+        val service = EnterpriseApplicationService(
+            sessions = sessions,
+            synchronization = mockk(relaxed = true),
+            exit = mockk(relaxed = true),
+            dataReset = mockk(relaxed = true),
+            portals = PortalDocumentRegistry(),
+            recovery = ApplicationRecoveryGate().apply { ready() },
+            scope = backgroundScope,
+            media = mockk(relaxed = true),
+            terminals = mockk(relaxed = true),
+            speech = mockk(relaxed = true),
+            platform = platform,
+        )
+        val read = async {
+            try { service.recentUpdates(selection, access); false }
+            catch (error: EnterpriseConfigurationException) { error.message == "enterprise_selection_revoked" }
+        }
+        runCurrent()
+        coVerify(exactly = 1) { platform.recentUpdates(access) }
+        current = RealmSelection(RealmAccess.Personal, 2)
+        val content = "**Notice**\n\nFull enterprise update"
+        response.complete(net.weero.measix.pilot.data.enterprise.PlatformEnterpriseUpdateFeed("UTC", List(6) { index ->
+            net.weero.measix.pilot.data.enterprise.PlatformEnterpriseUpdateItem(
+                "eup_12345678-1234-4234-8234-12345678901$index", "Notice $index", content,
+                net.weero.measix.pilot.data.enterprise.PlatformEnterpriseUpdateContentFormat.MARKDOWN,
+                net.weero.measix.pilot.data.enterprise.PlatformEnterpriseUpdateCategory.entries[index % 3],
+                net.weero.measix.pilot.data.enterprise.PlatformEnterpriseUpdateSeverity.entries[index % 3],
+                "2026-09-22T00:00:00Z",
+            )
+        }, true))
+        assertTrue(read.await())
+        try { service.recentUpdates(selection, access); org.junit.Assert.fail("stale selection accepted") }
+        catch (error: EnterpriseConfigurationException) { assertTrue(error.message == "enterprise_selection_revoked") }
+        coVerify(exactly = 1) { platform.recentUpdates(access) }
+        val feed = service.recentUpdates(current, access)
+        org.junit.Assert.assertEquals(5, feed.items.size)
+        org.junit.Assert.assertEquals(content, feed.items.first().content)
+        assertTrue(feed.items.first().markdown)
+        org.junit.Assert.assertEquals(EnterpriseUpdateCategory.entries, feed.items.take(3).map { it.category })
+        org.junit.Assert.assertEquals(EnterpriseUpdateSeverity.entries, feed.items.take(3).map { it.severity })
+    }
+
+    @Test
     fun `address change waits for an in flight Portal grant before committing the new route`() = runTest {
         val sessions = mockk<EnterpriseSessionController>()
         val synchronization = mockk<EnterpriseSynchronizationService>(relaxed = true)

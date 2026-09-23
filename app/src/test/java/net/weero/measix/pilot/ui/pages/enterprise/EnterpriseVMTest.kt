@@ -16,6 +16,99 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class EnterpriseVMTest {
+    @Test fun `synchronizing configuration reloads recent updates once`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val store = ViewModelStore()
+        try {
+            val access = RealmAccess.Enterprise(exampleEnterprisePackage().identity.scope, "session")
+            val selection = RealmSelection(access, 1)
+            val overview = MutableStateFlow(EnterpriseOverview(selection, EnterpriseSessionPhase.READY,
+                "Example", "Member", access, 1, 1000, null, null, false, platformOrigin = "https://core.example"))
+            val service = mockk<EnterpriseApplicationService>()
+            every { service.observe() } returns overview
+            val feed = EnterpriseUpdatesUiModel("UTC", emptyList())
+            var reads = 0
+            coEvery { service.recentUpdates(selection, access) } coAnswers { reads++; feed }
+            coEvery { service.synchronize(access) } coAnswers {
+                overview.value = overview.value.copy(phase = EnterpriseSessionPhase.OFFLINE)
+                overview.value = overview.value.copy(phase = EnterpriseSessionPhase.READY,
+                    generation = 2, lastSyncMillis = 2000)
+            }
+            val vm = EnterpriseVM(service)
+            store.put("enterprise", vm)
+            backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.updates.collect {} }
+            runCurrent()
+            assertEquals(1, reads)
+
+            vm.synchronize()
+            runCurrent()
+            assertEquals(2, reads)
+            assertEquals(feed, vm.updates.value?.value)
+            overview.value = overview.value.copy(userName = "Another member")
+            runCurrent()
+            assertEquals(2, reads)
+            vm.refreshUpdates()
+            runCurrent()
+            assertEquals(3, reads)
+        } finally {
+            store.clear()
+            runCurrent()
+            Dispatchers.resetMain()
+        }
+    }
+
+    @Test fun `updates preserve diagnostics retry in personal space and cancel on logout`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val store = ViewModelStore()
+        try {
+            val access = RealmAccess.Enterprise(exampleEnterprisePackage().identity.scope, "session")
+            val selection = RealmSelection(access, 1)
+            val overview = MutableStateFlow(EnterpriseOverview(selection, EnterpriseSessionPhase.READY,
+                "Example", "Member", access, 1, 1000, null, null, false, platformOrigin = "https://core.example"))
+            val service = mockk<EnterpriseApplicationService>()
+            every { service.observe() } returns overview
+            val delayed = CompletableDeferred<EnterpriseUpdatesUiModel>()
+            val value = EnterpriseUpdatesUiModel("UTC", listOf(EnterpriseUpdateSummaryUiModel("notice", "Notice", "2026-09-22T00:00:00Z", "Details", false,
+                EnterpriseUpdateCategory.NOTICE, EnterpriseUpdateSeverity.INFO)))
+            var calls = 0
+            coEvery { service.recentUpdates(any(), access) } coAnswers {
+                when (++calls) {
+                    1 -> throw IllegalStateException("feed failed", java.io.IOException("connection closed"))
+                    2 -> delayed.await()
+                    else -> value
+                }
+            }
+            val vm = EnterpriseVM(service)
+            store.put("enterprise", vm)
+            backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.updates.collect {} }
+            runCurrent()
+            assertTrue(vm.updates.value?.failure?.contains("IllegalStateException") == true)
+            assertTrue(vm.updates.value?.failure?.contains("connection closed") == true)
+            vm.refreshUpdates()
+            runCurrent()
+            assertTrue(vm.updates.value?.loading == true)
+            overview.value = overview.value.copy(selection = RealmSelection(RealmAccess.Personal, 2))
+            runCurrent()
+            assertEquals(value, vm.updates.value?.value)
+            assertEquals(RealmAccess.Personal, vm.updates.value?.selection?.access)
+            delayed.complete(value.copy(items = emptyList()))
+            runCurrent()
+            assertEquals(value, vm.updates.value?.value)
+            assertEquals(3, calls)
+            overview.value = overview.value.copy(access = null)
+            runCurrent()
+            assertNull(vm.updates.value)
+            overview.value = overview.value.copy(selection = RealmSelection(access, 3), access = access)
+            runCurrent()
+            assertEquals(value, vm.updates.value?.value)
+            assertNull(vm.updates.value?.failure)
+        } finally {
+            store.clear()
+            runCurrent()
+            Dispatchers.resetMain()
+        }
+    }
+
     @Test fun `cached budget refresh is neutral until a completed request actually fails`() = runTest {
         Dispatchers.setMain(StandardTestDispatcher(testScheduler))
         val store = ViewModelStore()

@@ -17,7 +17,7 @@ SCHEMAS = yaml.safe_load(SOURCE.read_text(encoding="utf-8"))["components"]["sche
 ROOTS = ["Discovery", "EnrollmentExchangeRequest", "EnrollmentExchangeResponse",
          "RefreshRequest", "RefreshResponse", "ManagedState", "Bootstrap",
          "ManagedSnapshot", "ManagedAppliedReport", "PortalGrant", "UserBudgetView",
-         "Problem"]
+         "Problem", "EnterpriseUpdateFeed"]
 definitions = {}
 
 

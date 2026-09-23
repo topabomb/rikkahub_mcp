@@ -4,6 +4,7 @@ import android.content.ClipData
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.relocation.BringIntoViewRequester
 import androidx.compose.foundation.relocation.bringIntoViewRequester
@@ -31,6 +32,10 @@ import me.rerere.hugeicons.stroke.ArrowLeft01
 import me.rerere.hugeicons.stroke.ArrowRight01
 import me.rerere.hugeicons.stroke.ChartAnalysis
 import me.rerere.hugeicons.stroke.Copy01
+import me.rerere.hugeicons.stroke.MoreVertical
+import me.rerere.hugeicons.stroke.Megaphone01
+import me.rerere.hugeicons.stroke.Notification01
+import me.rerere.hugeicons.stroke.Wrench01
 import me.rerere.hugeicons.stroke.Refresh
 import me.rerere.hugeicons.stroke.User
 import androidx.lifecycle.Lifecycle
@@ -75,6 +80,11 @@ import androidx.compose.ui.window.DialogProperties
 import com.dokar.sonner.ToastType
 import net.weero.measix.pilot.ui.components.ui.CardGroup
 import net.weero.measix.pilot.ui.components.ui.OrchelmLogo
+import net.weero.measix.pilot.ui.components.richtext.MarkdownSummary
+import net.weero.measix.pilot.ui.components.richtext.MarkdownBlock
+import net.weero.measix.pilot.service.EnterpriseUpdateSummaryUiModel
+import net.weero.measix.pilot.service.EnterpriseUpdateCategory
+import net.weero.measix.pilot.service.EnterpriseUpdateSeverity
 import net.weero.measix.pilot.ui.adaptive.LocalAdaptiveLayoutInfo
 import net.weero.measix.pilot.ui.context.LocalNavController
 import net.weero.measix.pilot.ui.context.LocalToaster
@@ -178,7 +188,6 @@ internal fun EnterprisePage(openUsage: Boolean = false, vm: EnterpriseVM = koinV
     val toaster = LocalToaster.current
     val pageScope = rememberCoroutineScope()
     val copiedText = stringResource(R.string.copied)
-    val copyText = stringResource(R.string.copy)
     val exit by vm.exitRequest.collectAsStateWithLifecycle()
     val portal by vm.portal.collectAsStateWithLifecycle()
     val joinConfirmation by vm.joinConfirmation.collectAsStateWithLifecycle()
@@ -186,6 +195,7 @@ internal fun EnterprisePage(openUsage: Boolean = false, vm: EnterpriseVM = koinV
     val resetChoice by vm.resetChoice.collectAsStateWithLifecycle()
     val resetConfirmation by vm.resetConfirmation.collectAsStateWithLifecycle()
     val budgets by vm.budgets.collectAsStateWithLifecycle()
+    val updates by vm.updates.collectAsStateWithLifecycle()
     val configurationDetails by vm.configurationDetails.collectAsStateWithLifecycle()
     val lifecycleOwner = LocalLifecycleOwner.current
     val nav = LocalNavController.current
@@ -198,6 +208,9 @@ internal fun EnterprisePage(openUsage: Boolean = false, vm: EnterpriseVM = koinV
             initialSelectionCaptured = true
         }
     }
+    var pageMenuOpen by remember { mutableStateOf(false) }
+    var connectionMenuOpen by remember { mutableStateOf(false) }
+    var usageOpen by rememberSaveable { mutableStateOf(false) }
     var paste by remember { mutableStateOf(false) }
     var configurationDetailsOpen by rememberSaveable { mutableStateOf(false) }
     var configurationDetailsSection by rememberSaveable {
@@ -265,8 +278,9 @@ internal fun EnterprisePage(openUsage: Boolean = false, vm: EnterpriseVM = koinV
         }
     }
     BackHandler(enabled = portal != null) { vm.dismissPortal(requireNotNull(portal)) }
+    BackHandler(enabled = portal == null && usageOpen) { usageOpen = false }
     BackHandler(enabled = portal == null && configurationDetailsOpen) { closeConfigurationDetailsLayer() }
-    BackHandler(enabled = portal == null && !configurationDetailsOpen &&
+    BackHandler(enabled = portal == null && !configurationDetailsOpen && !usageOpen &&
         initialSelectionCaptured && state?.selection != initialSelection) { leavePage() }
     LaunchedEffect(state?.selection, state?.access, state?.platformOrigin) {
         if (state?.access != null) vm.refreshBudgets()
@@ -295,19 +309,44 @@ internal fun EnterprisePage(openUsage: Boolean = false, vm: EnterpriseVM = koinV
     Scaffold(topBar = {
         TopAppBar(title = { Text(stringResource(when {
             portal != null -> R.string.enterprise_portal
+            usageOpen -> R.string.enterprise_budget_title
             configurationDetailsOpen -> R.string.enterprise_configuration_details_title
             else -> R.string.enterprise_spaces
         })) },
-            navigationIcon = { IconButton(enabled = portal != null || configurationDetailsOpen || !busy,
+            navigationIcon = { IconButton(enabled = portal != null || configurationDetailsOpen || usageOpen || !busy,
                 onClick = {
                     when {
                         portal != null -> vm.dismissPortal(portal!!)
+                        usageOpen -> usageOpen = false
                         configurationDetailsOpen -> closeConfigurationDetailsLayer()
                         else -> leavePage()
                     }
                 }) {
                 Icon(HugeIcons.ArrowLeft01, stringResource(R.string.back))
-            } })
+            } }, actions = {
+                if (portal == null && !configurationDetailsOpen && !usageOpen) {
+                    Box {
+                        IconButton(onClick = { pageMenuOpen = true }, modifier = Modifier.testTag("enterprise-page-menu")) {
+                            Icon(HugeIcons.MoreVertical, stringResource(R.string.more_options))
+                        }
+                        DropdownMenu(expanded = pageMenuOpen, onDismissRequest = { pageMenuOpen = false }) {
+                            DropdownMenuItem(
+                                text = { Text(stringResource(R.string.enterprise_budget_title)) },
+                                enabled = state?.access != null && !busy,
+                                onClick = { pageMenuOpen = false; usageOpen = true },
+                            )
+                            state?.resetPath?.let { path ->
+                                DropdownMenuItem(
+                                    text = { Text(stringResource(if (path == EnterpriseResetPath.STORAGE_FAILURE)
+                                        R.string.enterprise_reset_repair else R.string.enterprise_reset_title)) },
+                                    enabled = !busy && state?.reset == null,
+                                    onClick = { pageMenuOpen = false; vm.showReset() },
+                                )
+                            }
+                        }
+                    }
+                }
+            })
     }) { padding ->
         val approved = portal
         if (approved != null) {
@@ -316,6 +355,28 @@ internal fun EnterprisePage(openUsage: Boolean = false, vm: EnterpriseVM = koinV
                     starterPicker = StarterPresentation(approved.selection, approved)
                 }, modifier = Modifier.fillMaxWidth()) { Text(stringResource(R.string.enterprise_start_conversation)) }
                 key(approved.id) { EnterprisePortal(approved, vm, Modifier.weight(1f).fillMaxWidth()) }
+            }
+        } else if (usageOpen) {
+            Column(
+                Modifier.fillMaxSize().padding(padding).verticalScroll(rememberScrollState()).padding(16.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                if (state?.access != null) {
+                    EnterpriseBudgetSection(
+                        budgets,
+                        vm::refreshBudgets,
+                        onDetails = { if (inEnterprise) vm.showUsagePortal() else vm.switchSpace(openChat) },
+                        detailsLabel = if (inEnterprise) R.string.enterprise_budget_details else R.string.enterprise_switch_enterprise,
+                    )
+                    error?.let { failure ->
+                        Text(stringResource(failure.resource, *failure.arguments.toTypedArray()),
+                            color = MaterialTheme.colorScheme.error)
+                        failure.detail?.let { SelectionContainer { Text(it, color = MaterialTheme.colorScheme.error) } }
+                    }
+                } else {
+                    Text(stringResource(R.string.enterprise_signed_out))
+                }
             }
         } else if (configurationDetailsOpen && configurationDetails != null) {
             EnterpriseConfigurationDetailsPage(
@@ -339,29 +400,43 @@ internal fun EnterprisePage(openUsage: Boolean = false, vm: EnterpriseVM = koinV
                 modifier = Modifier.fillMaxSize().padding(padding),
             )
         } else {
-            Column(Modifier.fillMaxSize().padding(padding).verticalScroll(rememberScrollState()).padding(16.dp),
+            Column(Modifier.fillMaxSize().padding(padding).verticalScroll(rememberScrollState())
+                .padding(horizontal = 16.dp, vertical = 8.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                EnterpriseSection(stringResource(R.string.enterprise_current_space,
-                    if (inEnterprise) state?.enterpriseName ?: stringResource(R.string.enterprise_space) else stringResource(R.string.enterprise_personal)),
+                verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                EnterpriseSection(
+                    if (inEnterprise) state?.enterpriseName ?: stringResource(R.string.enterprise_space) else stringResource(R.string.enterprise_personal),
+                    prominent = inEnterprise,
                     leadingContent = {
-                        if (inEnterprise) OrchelmLogo(Modifier.size(20.dp))
+                        if (inEnterprise) OrchelmLogo(Modifier.size(20.dp), stringResource(R.string.enterprise_space))
                         else Icon(HugeIcons.User, contentDescription = null, modifier = Modifier.size(20.dp))
                     },
+                    trailingContent = {
+                        if (!inEnterprise) {
+                            TextButton(onClick = openChat, enabled = !busy && state?.selection != null) {
+                                Text(stringResource(R.string.enterprise_start_conversation))
+                            }
+                        }
+                    },
                 ) {
-                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        if (inEnterprise && ready) {
-                            Button(onClick = {
+                    if (inEnterprise) FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        if (ready) {
+                            Button(onClick = vm::showPortal, enabled = !busy,
+                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)) {
+                                Text(stringResource(R.string.enterprise_portal))
+                            }
+                        }
+                        if (state?.access != null) {
+                            OutlinedButton(onClick = { vm.switchSpace(openChat) }, enabled = !busy,
+                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)) {
+                                Text(stringResource(R.string.enterprise_switch_personal))
+                            }
+                        }
+                        if (ready) {
+                            TextButton(onClick = {
                                 state?.selection?.let { starterPicker = StarterPresentation(it) }
                             }, enabled = !busy) { Text(stringResource(R.string.enterprise_start_conversation)) }
-                            OutlinedButton(onClick = vm::showPortal, enabled = !busy) { Text(stringResource(R.string.enterprise_portal)) }
                         }
-                    }
-                    if (state?.access != null && (inEnterprise || ready)) {
-                        TextButton(onClick = { vm.switchSpace(openChat) }, enabled = !busy) {
-                            Text(stringResource(if (inEnterprise) R.string.enterprise_switch_personal else R.string.enterprise_switch_enterprise))
-                        }
-                        Text(stringResource(R.string.enterprise_switch_notice), style = MaterialTheme.typography.bodySmall)
                     }
                 }
                 if (state == null || busy) LinearProgressIndicator(Modifier.fillMaxWidth())
@@ -375,44 +450,40 @@ internal fun EnterprisePage(openUsage: Boolean = false, vm: EnterpriseVM = koinV
                 }
                 val pageRecoveryFailure = state?.enrollmentRecoveryFailure.takeIf { cachedSyncFailure == null }
                 val feedback = remember { BringIntoViewRequester() }
-                Column(Modifier.widthIn(max = 720.dp).fillMaxWidth().bringIntoViewRequester(feedback)) {
-                    if (error != null || state?.failure != null || state?.exitFailure != null ||
-                        pageRecoveryFailure != null || state?.recoveryLogoutFailure != null) {
-                        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                            Text(
-                                stringResource(error?.resource ?: if (state?.recoveryLogoutFailure != null)
-                                    R.string.enterprise_logout_unconfirmed else R.string.enterprise_failure,
-                                    *error?.arguments.orEmpty().toTypedArray()),
-                                color = MaterialTheme.colorScheme.error,
-                            )
-                            listOfNotNull(error?.detail, state?.failure, state?.exitFailure?.reason,
-                                pageRecoveryFailure, state?.recoveryLogoutFailure)
-                                .distinct()
-                                .forEach { detail ->
-                                    SelectionContainer {
-                                        Text(
-                                            detail,
-                                            style = MaterialTheme.typography.bodySmall,
-                                            color = MaterialTheme.colorScheme.error,
-                                        )
+                val hasPageFailure = error != null || state?.failure != null || state?.exitFailure != null ||
+                    pageRecoveryFailure != null || state?.recoveryLogoutFailure != null
+                if (hasPageFailure || notice != null) {
+                    Column(Modifier.widthIn(max = 720.dp).fillMaxWidth().bringIntoViewRequester(feedback)) {
+                        if (hasPageFailure) {
+                            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                Text(
+                                    stringResource(error?.resource ?: if (state?.recoveryLogoutFailure != null)
+                                        R.string.enterprise_logout_unconfirmed else R.string.enterprise_failure,
+                                        *error?.arguments.orEmpty().toTypedArray()),
+                                    color = MaterialTheme.colorScheme.error,
+                                )
+                                listOfNotNull(error?.detail, state?.failure, state?.exitFailure?.reason,
+                                    pageRecoveryFailure, state?.recoveryLogoutFailure)
+                                    .distinct()
+                                    .forEach { detail ->
+                                        SelectionContainer {
+                                            Text(
+                                                detail,
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = MaterialTheme.colorScheme.error,
+                                            )
+                                        }
                                     }
-                                }
+                            }
                         }
+                        notice?.let { Text(stringResource(it)) }
                     }
-                    notice?.let { Text(stringResource(it)) }
                 }
                 LaunchedEffect(error, notice) {
                     if (error != null || notice != null) feedback.bringIntoView()
                 }
                 if (state?.exitFailure != null) {
                     Button(onClick = vm::retryExit, enabled = !working) { Text(stringResource(R.string.application_recovery_retry)) }
-                }
-                // Reset formats every enterprise realm this device holds; the entry stays reachable in every state.
-                state?.resetPath?.let { path ->
-                    TextButton(onClick = vm::showReset, enabled = !busy && state?.reset == null) {
-                        Text(stringResource(if (path == EnterpriseResetPath.STORAGE_FAILURE)
-                            R.string.enterprise_reset_repair else R.string.enterprise_reset_title))
-                    }
                 }
                 if (state?.failure != null) {
                     TextButton(onClick = vm::requestExit, enabled = !busy) { Text(stringResource(R.string.enterprise_exit)) }
@@ -433,8 +504,31 @@ internal fun EnterprisePage(openUsage: Boolean = false, vm: EnterpriseVM = koinV
                     }
                 }
                 if (state?.access != null) {
-                    EnterpriseSection(stringResource(R.string.enterprise_connected_enterprise,
-                        state?.enterpriseName ?: stringResource(R.string.enterprise_space))) {
+                    EnterpriseSection(if (inEnterprise) stringResource(R.string.enterprise_connection_title)
+                        else stringResource(R.string.enterprise_connected_enterprise,
+                            state?.enterpriseName ?: stringResource(R.string.enterprise_space)),
+                        leadingContent = { OrchelmLogo(Modifier.size(24.dp)) },
+                        trailingContent = {
+                            Box {
+                                IconButton(onClick = { connectionMenuOpen = true }, enabled = !busy,
+                                    modifier = Modifier.size(28.dp).testTag("enterprise-connection-menu")) {
+                                    Icon(HugeIcons.MoreVertical, stringResource(R.string.more_options))
+                                }
+                                DropdownMenu(expanded = connectionMenuOpen, onDismissRequest = { connectionMenuOpen = false }) {
+                                    if (state?.platformOrigin != null) {
+                                        DropdownMenuItem(
+                                            text = { Text(stringResource(R.string.enterprise_address_edit_title)) },
+                                            onClick = { connectionMenuOpen = false; vm.editAddress() },
+                                        )
+                                    }
+                                    DropdownMenuItem(
+                                        text = { Text(stringResource(R.string.enterprise_exit)) },
+                                        onClick = { connectionMenuOpen = false; vm.requestExit() },
+                                    )
+                                }
+                            }
+                        },
+                    ) {
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically) {
                             state?.userName?.let { Text(it, modifier = Modifier.weight(1f)) }
@@ -458,63 +552,102 @@ internal fun EnterprisePage(openUsage: Boolean = false, vm: EnterpriseVM = koinV
                             }
                         }
                         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            OutlinedButton(onClick = vm::synchronize, enabled = !busy && state?.phase != EnterpriseSessionPhase.REAUTH_REQUIRED) {
+                            if (!inEnterprise && ready) {
+                                Button(onClick = { vm.switchSpace(openChat) }, enabled = !busy,
+                                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)) {
+                                    Text(stringResource(R.string.enterprise_switch_enterprise))
+                                }
+                            }
+                            FilledTonalButton(onClick = vm::synchronize,
+                                enabled = !busy && state?.phase != EnterpriseSessionPhase.REAUTH_REQUIRED,
+                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)) {
+                                Icon(HugeIcons.Refresh, contentDescription = null, modifier = Modifier.size(18.dp))
+                                Spacer(Modifier.width(8.dp))
                                 Text(stringResource(R.string.enterprise_sync))
                             }
-                            TextButton(onClick = vm::requestExit, enabled = !busy) { Text(stringResource(R.string.enterprise_exit)) }
-                        }
-                        state?.platformOrigin?.let { origin ->
-                            Row(
-                                Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically,
-                            ) {
-                                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                                    Text(stringResource(R.string.enterprise_address), style = MaterialTheme.typography.labelMedium)
-                                    SelectionContainer { Text(origin, style = MaterialTheme.typography.bodySmall) }
-                                }
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    TextButton(onClick = vm::editAddress, enabled = !busy) {
-                                        Text(stringResource(R.string.edit))
-                                    }
-                                    IconButton(onClick = {
-                                        pageScope.launch {
-                                            clipboard.setClipEntry(ClipEntry(ClipData.newPlainText("Enterprise address", origin)))
-                                        }
-                                        toaster.show(copiedText, type = ToastType.Success)
-                                    }) {
-                                        Icon(HugeIcons.Copy01, contentDescription = copyText)
-                                    }
+                            if (configurationDetails != null) {
+                                TextButton(onClick = { configurationDetailsOpen = true }, enabled = !busy) {
+                                    Text(stringResource(R.string.enterprise_configuration_details_open))
                                 }
                             }
                         }
-                        if (configurationDetails != null) {
-                            OutlinedButton(
-                                onClick = { configurationDetailsOpen = true },
-                                enabled = !busy,
-                                modifier = Modifier.fillMaxWidth(),
-                            ) {
-                                Text(stringResource(R.string.enterprise_configuration_details_open))
+                        state?.platformOrigin?.let { origin ->
+                            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Column(Modifier.weight(1f)) {
+                                    Text(stringResource(R.string.enterprise_address), style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    Text(origin, style = MaterialTheme.typography.bodySmall,
+                                        maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                }
+                                IconButton(onClick = { pageScope.launch {
+                                    clipboard.setClipEntry(ClipEntry(ClipData.newPlainText("Enterprise address", origin)))
+                                    toaster.show(copiedText)
+                                } }) {
+                                    Icon(HugeIcons.Copy01, stringResource(R.string.copy), modifier = Modifier.size(20.dp))
+                                }
                             }
                         }
                     }
-                    EnterpriseBudgetSection(budgets, vm::refreshBudgets, vm::showUsagePortal)
+                }
+                EnterpriseBudgetAlerts(budgets, onOpenUsage = { usageOpen = true })
+                updates?.takeIf {
+                    it.access == state?.access && it.selection == state?.selection && it.platformOrigin == state?.platformOrigin
+                }?.let { recent ->
+                    if (recent.loading || recent.failure != null || recent.value?.items?.isNotEmpty() == true) {
+                        EnterpriseSection(if (recent.value == null) stringResource(R.string.enterprise_recent_updates)
+                            else stringResource(R.string.enterprise_recent_updates_count, recent.value.items.size), trailingContent = {
+                            IconButton(onClick = vm::refreshUpdates, enabled = !recent.loading && !busy,
+                                modifier = Modifier.size(28.dp)) {
+                                Icon(HugeIcons.Refresh, stringResource(R.string.enterprise_budget_refresh), modifier = Modifier.size(20.dp))
+                            }
+                        }) {
+                            if (recent.loading) LinearProgressIndicator(Modifier.fillMaxWidth())
+                            recent.failure?.let { detail ->
+                                SelectionContainer { Text(detail, style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.error) }
+                            }
+                            recent.value?.let { feed ->
+                                feed.items.forEachIndexed { index, item ->
+                                    if (index > 0) HorizontalDivider()
+                                    key(recent.selection, item.id) {
+                                        EnterpriseUpdateRow(item, feed.timezone)
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
                 if (state?.selection != null && state?.access == null) {
-                    EnterpriseSection(stringResource(R.string.enterprise_join_options)) {
-                        Text(stringResource(R.string.enterprise_enrollment_notice), style = MaterialTheme.typography.bodySmall)
-                        val canJoin = !busy && state?.failure == null
-                        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            OutlinedButton(onClick = { scanner.launch(null) }, enabled = canJoin) {
-                                Text(stringResource(R.string.enterprise_join_scan))
-                            }
-                            OutlinedButton(onClick = {
+                    val canJoin = !busy && state?.failure == null
+                    EnterpriseSection(stringResource(R.string.enterprise_join_options), prominent = true,
+                        trailingContent = {
+                            TextButton(onClick = {
                                 imageScanner.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
                             }, enabled = canJoin) {
                                 Text(stringResource(R.string.enterprise_join_scan_gallery))
                             }
+                        }) {
+                        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Button(onClick = { scanner.launch(null) }, enabled = canJoin) {
+                                Text(stringResource(R.string.enterprise_join_scan))
+                            }
                             OutlinedButton(onClick = { paste = true }, enabled = canJoin) {
                                 Text(stringResource(R.string.enterprise_join_paste))
+                            }
+                        }
+                    }
+                    EnterpriseSection(stringResource(R.string.enterprise_orchelm_intro),
+                        leadingContent = { OrchelmLogo(Modifier.size(20.dp)) }) {
+                        listOf(
+                            R.string.enterprise_orchelm_hosting to R.string.enterprise_orchelm_hosting_detail,
+                            R.string.enterprise_orchelm_delivery to R.string.enterprise_orchelm_delivery_detail,
+                            R.string.enterprise_orchelm_collaboration to R.string.enterprise_orchelm_collaboration_detail,
+                        ).forEach { (title, detail) ->
+                            Column(Modifier.padding(vertical = 4.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                Text(stringResource(title), style = MaterialTheme.typography.titleSmall)
+                                Text(stringResource(detail), style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant)
                             }
                         }
                     }
@@ -930,10 +1063,86 @@ private fun configurationResourceFactResource(kind: EnterpriseConfigurationResou
 }
 
 @Composable
+private fun EnterpriseUpdateRow(item: EnterpriseUpdateSummaryUiModel, timezone: String) {
+    var expanded by remember(item.id, item.content) { mutableStateOf(false) }
+    var overflows by remember(item.id, item.content) { mutableStateOf(false) }
+    val toggleLabel = stringResource(if (expanded) R.string.assistant_memory_seed_collapse else R.string.assistant_memory_seed_expand)
+    Column(Modifier.fillMaxWidth()
+        .clickable(enabled = expanded || overflows, onClickLabel = toggleLabel) { expanded = !expanded }
+        .padding(vertical = 6.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            val (categoryIcon, categoryLabel) = when (item.category) {
+                EnterpriseUpdateCategory.ANNOUNCEMENT -> HugeIcons.Megaphone01 to R.string.enterprise_update_announcement
+                EnterpriseUpdateCategory.MAINTENANCE -> HugeIcons.Wrench01 to R.string.enterprise_update_maintenance
+                EnterpriseUpdateCategory.NOTICE -> HugeIcons.Notification01 to R.string.enterprise_update_notice
+            }
+            Icon(categoryIcon, stringResource(categoryLabel), modifier = Modifier.size(18.dp),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(item.title, style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f),
+                maxLines = 1, overflow = TextOverflow.Ellipsis)
+            if (item.severity != EnterpriseUpdateSeverity.INFO) {
+                val critical = item.severity == EnterpriseUpdateSeverity.CRITICAL
+                Surface(shape = MaterialTheme.shapes.extraSmall,
+                    color = if (critical) MaterialTheme.colorScheme.errorContainer else MaterialTheme.colorScheme.tertiaryContainer,
+                    contentColor = if (critical) MaterialTheme.colorScheme.onErrorContainer else MaterialTheme.colorScheme.onTertiaryContainer) {
+                    Text(stringResource(if (critical) R.string.enterprise_update_critical else R.string.enterprise_update_important),
+                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                        style = MaterialTheme.typography.labelSmall)
+                }
+            }
+        }
+        val lines = if (expanded) Int.MAX_VALUE else 3
+        if (item.markdown && expanded) {
+            MarkdownBlock(item.content, style = MaterialTheme.typography.bodyMedium)
+        } else if (item.markdown) {
+            MarkdownSummary(item.content, maxLines = lines, style = MaterialTheme.typography.bodyMedium,
+                onTextLayout = { if (!expanded) overflows = it.hasVisualOverflow })
+        } else {
+            Text(item.content, style = MaterialTheme.typography.bodyMedium, maxLines = lines,
+                overflow = TextOverflow.Ellipsis, onTextLayout = { if (!expanded) overflows = it.hasVisualOverflow })
+        }
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically) {
+            Text(formatBudgetTimestamp(item.publishedAt, timezone, currentLocale()),
+                style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            if (expanded || overflows) {
+                Text(toggleLabel, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+            }
+        }
+    }
+}
+
+@Composable
+private fun EnterpriseBudgetAlerts(state: EnterpriseBudgetPresentation?, onOpenUsage: () -> Unit) {
+    val exceeded = state?.value?.items?.filter {
+        it.availability == EnterpriseBudgetAvailability.EXHAUSTED || (it.primaryLimit?.occupiedFraction ?: 0f) >= 1f
+    }.orEmpty()
+    if (exceeded.isEmpty()) return
+    EnterpriseSection(stringResource(R.string.enterprise_budget_alerts), trailingContent = {
+        TextButton(onClick = onOpenUsage) { Text(stringResource(R.string.enterprise_budget_title)) }
+    }) {
+        exceeded.forEach { item ->
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically) {
+                Text(stringResource(budgetCapabilityResource(item.capability)),
+                    modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
+                Text(stringResource(budgetAvailabilityResource(item.availability)),
+                    color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.labelMedium)
+            }
+        }
+        if (state?.stale == true || state?.loading == true) {
+            Text(stringResource(if (state.loading) R.string.enterprise_budget_refreshing else R.string.enterprise_budget_stale),
+                style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+    }
+}
+
+@Composable
 private fun EnterpriseBudgetSection(
     state: EnterpriseBudgetPresentation?,
     onRefresh: () -> Unit,
     onDetails: () -> Unit,
+    detailsLabel: Int,
 ) {
     EnterpriseSection(
         title = stringResource(R.string.enterprise_budget_title),
@@ -994,7 +1203,7 @@ private fun EnterpriseBudgetSection(
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
             ) {
                 Icon(HugeIcons.ChartAnalysis, contentDescription = null, modifier = Modifier.size(20.dp))
-                Text(stringResource(R.string.enterprise_budget_details), modifier = Modifier.weight(1f))
+                Text(stringResource(detailsLabel), modifier = Modifier.weight(1f))
                 Icon(HugeIcons.ArrowRight01, contentDescription = null, modifier = Modifier.size(18.dp))
             }
         }
@@ -1007,13 +1216,7 @@ private fun EnterpriseBudgetCapabilityRow(
     timezone: String,
 ) {
     val locale = currentLocale()
-    val capability = stringResource(when (item.capability) {
-        EnterpriseBudgetCapabilityKind.MODEL -> R.string.enterprise_budget_capability_model
-        EnterpriseBudgetCapabilityKind.TTS -> R.string.enterprise_budget_capability_tts
-        EnterpriseBudgetCapabilityKind.ASR -> R.string.enterprise_budget_capability_asr
-        EnterpriseBudgetCapabilityKind.MCP -> R.string.enterprise_budget_capability_mcp
-        EnterpriseBudgetCapabilityKind.IMAGE_GENERATION -> R.string.enterprise_budget_capability_image_generation
-    })
+    val capability = stringResource(budgetCapabilityResource(item.capability))
     val statusColor = when (item.availability) {
         EnterpriseBudgetAvailability.EXHAUSTED, EnterpriseBudgetAvailability.UNAVAILABLE ->
             MaterialTheme.colorScheme.error
@@ -1195,12 +1398,17 @@ private fun formatBudgetReset(value: String, timezone: String, locale: Locale): 
 @Composable
 private fun EnterpriseSection(
     title: String,
+    prominent: Boolean = false,
     leadingContent: (@Composable () -> Unit)? = null,
     trailingContent: (@Composable () -> Unit)? = null,
     content: @Composable ColumnScope.() -> Unit,
 ) {
-    OutlinedCard(Modifier.widthIn(max = 720.dp).fillMaxWidth()) {
-        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    Card(
+        modifier = Modifier.widthIn(max = 720.dp).fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = if (prominent)
+            MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceContainerLow),
+    ) {
+        Column(Modifier.padding(horizontal = 12.dp, vertical = 4.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 leadingContent?.invoke()
@@ -1211,6 +1419,14 @@ private fun EnterpriseSection(
             content()
         }
     }
+}
+
+private fun budgetCapabilityResource(kind: EnterpriseBudgetCapabilityKind): Int = when (kind) {
+    EnterpriseBudgetCapabilityKind.MODEL -> R.string.enterprise_budget_capability_model
+    EnterpriseBudgetCapabilityKind.TTS -> R.string.enterprise_budget_capability_tts
+    EnterpriseBudgetCapabilityKind.ASR -> R.string.enterprise_budget_capability_asr
+    EnterpriseBudgetCapabilityKind.MCP -> R.string.enterprise_budget_capability_mcp
+    EnterpriseBudgetCapabilityKind.IMAGE_GENERATION -> R.string.enterprise_budget_capability_image_generation
 }
 
 private fun phaseText(phase: EnterpriseSessionPhase?): Int = when (phase) {

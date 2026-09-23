@@ -17,6 +17,24 @@ class PlatformControlClientTest {
         .bufferedReader().use { Json.parseToJsonElement(it.readText()).jsonArray }
         .first { it.jsonObject.getValue("name").jsonPrimitive.content == name }.jsonObject.getValue("value").toString()
 
+    @Test fun `recent updates use the authenticated canonical feed with a five item limit`() = runBlocking {
+        var path: String? = null
+        var authorization: String? = null
+        val server = server {
+            path = requestURI.toString()
+            authorization = requestHeaders.getFirst("Authorization")
+            reply(200, """{"enterpriseTimezone":"Asia/Shanghai","truncated":false,"items":[{"enterpriseUpdateId":"eup_12345678-1234-4234-8234-123456789012","title":"Notice","content":"Details","contentFormat":"PLAIN","category":"NOTICE","severity":"INFO","publishedAt":"2026-09-22T00:00:00Z"}]}""")
+        }
+        try {
+            val connection = PlatformConnection(origin(server), PlatformWireCodec.decode(fixture("discovery")))
+            val result = client.recentUpdates(connection, "test-token")
+            assertEquals("/api/client/v1/enterprise/updates?limit=5", path)
+            assertEquals("Bearer test-token", authorization)
+            assertEquals("Notice", result.items.single().title)
+            assertEquals("Asia/Shanghai", result.enterpriseTimezone)
+        } finally { server.stop(0) }
+    }
+
     @Test
     fun `HTTP discovery preserves origin and rejects cross origin or traversing API bases`() = runBlocking {
         val server = server { reply(200, fixture("discovery")) }

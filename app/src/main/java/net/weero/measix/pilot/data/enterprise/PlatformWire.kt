@@ -605,3 +605,37 @@ internal data class PlatformRuntimeBudgetLimitState(
         require(resetAt?.let { platformWireTimestamp(it) } != false) { "invalid_platform_RuntimeBudgetLimitState_resetAt" }
     }
 }
+
+@Serializable
+internal data class PlatformEnterpriseUpdateFeed(
+    val enterpriseTimezone: String,
+    val items: List<PlatformEnterpriseUpdateItem>,
+    val truncated: Boolean,
+)
+
+@Serializable
+internal data class PlatformEnterpriseUpdateItem(
+    val enterpriseUpdateId: String,
+    val title: String,
+    val content: String,
+    val contentFormat: PlatformEnterpriseUpdateContentFormat,
+    val category: PlatformEnterpriseUpdateCategory,
+    val severity: PlatformEnterpriseUpdateSeverity,
+    val publishedAt: String,
+) {
+    init {
+        require(Regex("^eup_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\$").containsMatchIn(enterpriseUpdateId)) { "invalid_platform_EnterpriseUpdateItem_enterpriseUpdateId" }
+        require(title.codePointCount(0, title.length) >= 1) { "invalid_platform_EnterpriseUpdateItem_title" }
+        require(content.codePointCount(0, content.length) >= 1) { "invalid_platform_EnterpriseUpdateItem_content" }
+        require(platformWireTimestamp(publishedAt)) { "invalid_platform_EnterpriseUpdateItem_publishedAt" }
+    }
+}
+
+@Serializable
+internal enum class PlatformEnterpriseUpdateContentFormat { MARKDOWN, PLAIN }
+
+@Serializable
+internal enum class PlatformEnterpriseUpdateCategory { ANNOUNCEMENT, MAINTENANCE, NOTICE }
+
+@Serializable
+internal enum class PlatformEnterpriseUpdateSeverity { INFO, WARNING, CRITICAL }

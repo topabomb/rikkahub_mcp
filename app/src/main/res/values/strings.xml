@@ -1598,7 +1598,7 @@
   <string name="enterprise_spaces">Spaces</string>
   <string name="enterprise_spaces_desc">Manage personal and enterprise spaces</string>
   <string name="enterprise_configuration_details_title">Configuration details</string>
-  <string name="enterprise_configuration_details_open">View configuration details</string>
+  <string name="enterprise_configuration_details_open">Configuration details</string>
   <string name="enterprise_configuration_details_offline">Offline. Showing the last successfully synchronized configuration.</string>
   <string name="enterprise_configuration_defaults_title">Enterprise defaults</string>
   <string name="enterprise_configuration_defaults_summary">%1$d available · %2$d not set · %3$d unavailable</string>
@@ -1649,16 +1649,15 @@
   <string name="enterprise_join_scan">Scan to join</string>
   <string name="enterprise_join_submit">Join enterprise</string>
   <string name="enterprise_portal">Enterprise workbench</string>
-  <string name="enterprise_switch_personal">Switch to personal space</string>
-  <string name="enterprise_switch_enterprise">Switch to enterprise space</string>
-  <string name="enterprise_switch_notice">Switching spaces keeps your enterprise sign-in. Chats and data remain in their original space.</string>
-  <string name="enterprise_sync">Sync enterprise configuration</string>
+  <string name="enterprise_switch_personal">Back to personal space</string>
+  <string name="enterprise_switch_enterprise">Back to enterprise space</string>
+  <string name="enterprise_sync">Sync configuration</string>
   <string name="enterprise_exit">Sign out of enterprise</string>
   <string name="enterprise_logout_unconfirmed">Signed out on this device. Server sign-out could not be confirmed.</string>
   <string name="enterprise_exit_confirm">Sign out of %1$s? Enterprise work will stop and the app will return to personal space. Existing enterprise data stays isolated.</string>
   <string name="enterprise_signed_out">Not signed in</string>
   <string name="enterprise_pending">Joined, waiting for configuration</string>
-  <string name="enterprise_ready">Local configuration available</string>
+  <string name="enterprise_ready">Configuration available</string>
   <string name="enterprise_offline">Offline</string>
   <string name="enterprise_closing">Signing out</string>
   <string name="enterprise_reauth">Sign in again</string>
@@ -1735,11 +1734,11 @@
   <string name="assistant_model_mode_explicit">Using a model chosen for this space</string>
   <string name="assistant_preset_media_kept">This preset also has non-text content. Editing text keeps that content.</string>
   <string name="assistant_enterprise_memory_seed_description">Provided by your enterprise and included in assistant context. It is separate from the editable memories below and is not affected by their switch or deletion.</string>
-  <string name="enterprise_join_options">Join an enterprise</string>
-  <string name="enterprise_connected_enterprise">Connected enterprise: %1$s</string>
+  <string name="enterprise_join_options">Connect to enterprise</string>
+  <string name="enterprise_connected_enterprise">Enterprise: %1$s</string>
   <string name="enterprise_pending_next_step">You are signed in, but enterprise configuration is not ready. Sync the configuration, then switch to the enterprise space.</string>
   <string name="enterprise_enrollment_notice">Scan a QR code, choose one from photos, or paste the enrollment details provided by your enterprise.</string>
-  <string name="enterprise_sync_completed">Configuration sync completed. The active version is shown below.</string>
+  <string name="enterprise_sync_completed">Enterprise configuration synced. View the active version in configuration details.</string>
   <string name="assistant_memory_shared_defaults">Shared default settings</string>
   <string name="assistant_memory_shared_defaults_notice">These switches change the assistant defaults across spaces. The runtime memories below belong to the indicated space.</string>
   <string name="assistant_memory_seed_count">Enterprise reference memory · %1$d</string>
@@ -1776,7 +1775,7 @@
   <string name="assistant_model_default_space">Space default</string>
   <string name="enterprise_platform_confirm">Connect to this enterprise platform?\n\n%1$s</string>
   <string name="speech_no_voice_detected">No speech detected. Please try again.</string>
-  <string name="enterprise_join_scan_gallery">Choose QR code from photos</string>
+  <string name="enterprise_join_scan_gallery">QR code from photos</string>
   <string name="enterprise_enrollment_already_used">This enrollment information has already been used. Ask your enterprise administrator to generate a new one.</string>
   <string name="enterprise_installation_user_conflict">This device is linked to another enterprise account. Reset the enterprise connection, then scan a newly generated QR code.</string>
   <string name="enterprise_enrollment_expired">This enrollment information has expired. Ask your enterprise administrator to generate a new one.</string>
@@ -1860,4 +1859,20 @@
   <string name="enterprise_budget_completeness_unknown_summary">Completeness unknown</string>
   <string name="enterprise_budget_resets_today">Resets today at %1$s</string>
   <string name="enterprise_budget_resets_tomorrow">Resets tomorrow at %1$s</string>
+  <string name="enterprise_recent_updates">Recent updates</string>
+  <string name="enterprise_recent_updates_count">Recent updates (%1$d)</string>
+  <string name="enterprise_budget_alerts">Quota alerts</string>
+  <string name="enterprise_update_announcement">Announcement</string>
+  <string name="enterprise_update_maintenance">Maintenance</string>
+  <string name="enterprise_update_notice">Notice</string>
+  <string name="enterprise_update_important">Important</string>
+  <string name="enterprise_update_critical">Urgent</string>
+  <string name="enterprise_orchelm_intro" translatable="false">枢策 Orchelm · 企业自托管</string>
+  <string name="enterprise_orchelm_hosting" translatable="false">自主掌握使用边界</string>
+  <string name="enterprise_orchelm_hosting_detail" translatable="false">企业自行部署，统一管理成员权限、额度与用量；共享密钥留在服务端。</string>
+  <string name="enterprise_orchelm_delivery" translatable="false">员工少配置，团队统一维护</string>
+  <string name="enterprise_orchelm_delivery_detail" translatable="false">统一发布模型、语音、工具和助手，员工接入并同步后即可使用。</string>
+  <string name="enterprise_orchelm_collaboration" translatable="false">让成熟方法成为团队资产</string>
+  <string name="enterprise_orchelm_collaboration_detail" translatable="false">将成熟方法发布为助手、参考记忆和推荐开场；后续让使用经验经审核后再发布。</string>
+  <string name="enterprise_connection_title">Enterprise connection</string>
 </resources>

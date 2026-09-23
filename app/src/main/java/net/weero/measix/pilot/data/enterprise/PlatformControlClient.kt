@@ -125,6 +125,10 @@ internal class PlatformControlClient(client: OkHttpClient) {
         }
     }
 
+    suspend fun recentUpdates(connection: PlatformConnection, accessToken: String): PlatformEnterpriseUpdateFeed =
+        request(builder(connection.control("/enterprise/updates") + "?limit=5", accessToken).get().build(),
+            200, callTimeoutSeconds = 15)
+
     suspend fun budgets(connection: PlatformConnection, accessToken: String): PlatformUserBudgetView =
         request(builder(connection.control("/budgets"), accessToken).get().build(), 200, callTimeoutSeconds = 15)
 

@@ -103,6 +103,23 @@ internal data class EnterpriseConfigurationDetailsUiModel(
     val resources: List<EnterpriseConfigurationResourceGroupUiModel>,
 )
 
+internal enum class EnterpriseUpdateCategory { ANNOUNCEMENT, MAINTENANCE, NOTICE }
+internal enum class EnterpriseUpdateSeverity { INFO, WARNING, CRITICAL }
+
+internal data class EnterpriseUpdateSummaryUiModel(
+    val id: String,
+    val title: String,
+    val publishedAt: String,
+    val content: String,
+    val markdown: Boolean,
+    val category: EnterpriseUpdateCategory,
+    val severity: EnterpriseUpdateSeverity,
+)
+internal data class EnterpriseUpdatesUiModel(
+    val timezone: String,
+    val items: List<EnterpriseUpdateSummaryUiModel>,
+)
+
 internal enum class EnterpriseBudgetCapabilityKind { MODEL, TTS, ASR, MCP, IMAGE_GENERATION }
 
 internal enum class EnterpriseBudgetPeriodKind { DAY, WEEK, MONTH, LIFETIME }
@@ -636,6 +653,32 @@ internal class EnterpriseApplicationService(
             portals.closeAndAwait(request.access, PortalCloseReason.CONNECTION_CHANGED)
         }
     }
+    suspend fun recentUpdates(selection: RealmSelection, access: RealmAccess.Enterprise): EnterpriseUpdatesUiModel {
+        recovery.awaitReady()
+        if (sessions.readPresentation().selection != selection) {
+            throw EnterpriseConfigurationException("enterprise_selection_revoked")
+        }
+        val result = platform.recentUpdates(access)
+        if (sessions.readPresentation().selection != selection) {
+            throw EnterpriseConfigurationException("enterprise_selection_revoked")
+        }
+        return EnterpriseUpdatesUiModel(result.enterpriseTimezone,
+            result.items.take(5).map { EnterpriseUpdateSummaryUiModel(
+                it.enterpriseUpdateId, it.title, it.publishedAt, it.content,
+                it.contentFormat == PlatformEnterpriseUpdateContentFormat.MARKDOWN,
+                when (it.category) {
+                    PlatformEnterpriseUpdateCategory.ANNOUNCEMENT -> EnterpriseUpdateCategory.ANNOUNCEMENT
+                    PlatformEnterpriseUpdateCategory.MAINTENANCE -> EnterpriseUpdateCategory.MAINTENANCE
+                    PlatformEnterpriseUpdateCategory.NOTICE -> EnterpriseUpdateCategory.NOTICE
+                },
+                when (it.severity) {
+                    PlatformEnterpriseUpdateSeverity.INFO -> EnterpriseUpdateSeverity.INFO
+                    PlatformEnterpriseUpdateSeverity.WARNING -> EnterpriseUpdateSeverity.WARNING
+                    PlatformEnterpriseUpdateSeverity.CRITICAL -> EnterpriseUpdateSeverity.CRITICAL
+                },
+            ) })
+    }
+
     suspend fun budgets(selection: RealmSelection, access: RealmAccess.Enterprise): EnterpriseBudgetSummaryUiModel {
         recovery.awaitReady()
         if (sessions.readPresentation().selection != selection) {

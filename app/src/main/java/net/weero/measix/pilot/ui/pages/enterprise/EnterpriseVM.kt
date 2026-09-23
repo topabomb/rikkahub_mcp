@@ -12,7 +12,10 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.transformLatest
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import net.weero.measix.pilot.R
@@ -48,6 +51,21 @@ internal data class EnterpriseBudgetPresentation(
     val value: EnterpriseBudgetSummaryUiModel? = null,
     val failure: String? = null,
     val stale: Boolean = false,
+)
+
+internal data class EnterpriseUpdatesPresentation(
+    val selection: RealmSelection,
+    val access: RealmAccess.Enterprise,
+    val platformOrigin: String?,
+    val loading: Boolean = false,
+    val value: net.weero.measix.pilot.service.EnterpriseUpdatesUiModel? = null,
+    val failure: String? = null,
+)
+
+private data class EnterpriseUpdatesTarget(
+    val selection: RealmSelection,
+    val access: RealmAccess.Enterprise,
+    val platformOrigin: String?,
 )
 
 internal class EnterpriseVM(private val service: EnterpriseApplicationService) : ViewModel() {
@@ -88,6 +106,34 @@ internal class EnterpriseVM(private val service: EnterpriseApplicationService) :
         value?.takeIf { it.selection == state?.selection && it.access == state.access &&
             it.platformOrigin == state.platformOrigin }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
+
+    private val updatesRefresh = MutableStateFlow(0L)
+    val updates: StateFlow<EnterpriseUpdatesPresentation?> = combine(overview.map { state ->
+        val selection = state?.selection
+        val access = state?.access
+        if (selection == null || access == null) null
+        else EnterpriseUpdatesTarget(selection, access, state.platformOrigin)
+    }.distinctUntilChanged(), updatesRefresh) { target, _ -> target }
+        .transformLatest { target ->
+            if (target == null) {
+                emit(null)
+                return@transformLatest
+            }
+            val (selection, access, platformOrigin) = target
+            emit(EnterpriseUpdatesPresentation(selection, access, platformOrigin, loading = true))
+            try {
+                val value = service.recentUpdates(selection, access)
+                emit(EnterpriseUpdatesPresentation(selection, access, platformOrigin, value = value))
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                currentCoroutineContext().ensureActive()
+                android.util.Log.e("EnterpriseVM", "Enterprise updates failed", error)
+                emit(EnterpriseUpdatesPresentation(selection, access, platformOrigin, failure = error.userVisibleDiagnostic()))
+            }
+        }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
+
+    fun refreshUpdates() { updatesRefresh.value += 1 }
 
     private data class BudgetTarget(
         val selection: RealmSelection,
@@ -174,6 +220,7 @@ internal class EnterpriseVM(private val service: EnterpriseApplicationService) :
         val selection = overview.value?.selection ?: return
         overview.value?.access?.let { access -> command(isCurrent = { overview.value?.selection == selection }) {
             service.synchronize(access)
+            if (overview.value?.selection == selection && overview.value?.access == access) refreshUpdates()
             if (overview.value?.access == access) _notice.value = Notice(R.string.enterprise_sync_completed, selection)
         } }
     }

@@ -24,9 +24,30 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.koin.core.context.GlobalContext
 
-/** Explicit live setup: consumes one caller-created enrollment and completes one managed image request. */
+/** Opt-in live checks consume caller-provided enrollment and retain the connected enterprise. */
 @RunWith(AndroidJUnit4::class)
 class PlatformEnrollmentLiveAndroidTest {
+    @Test fun enrollsForSpaceReview() = runBlocking {
+        val arguments = InstrumentationRegistry.getArguments()
+        assumeTrue(arguments.getString("platformSpaceLive") == "true")
+        val encoded = requireNotNull(arguments.getString("platformEnrollmentMaterialBase64"))
+        val material = String(Base64.getDecoder().decode(encoded), StandardCharsets.UTF_8)
+        withTimeout(120_000) {
+            val koin = GlobalContext.get()
+            koin.get<ApplicationRecoveryGate>().awaitReady()
+            val service = koin.get<EnterpriseApplicationService>()
+            val confirmation = requireNotNull(service.join(material))
+            service.confirmJoin(confirmation)
+            val selection = requireNotNull(koin.get<EnterpriseSessionController>()
+                .observeSelectedRealmSelection().first { it?.access is RealmAccess.Enterprise })
+            val access = selection.access as RealmAccess.Enterprise
+            val overview = service.observe().first { it.access == access }
+            assertEquals(EnterpriseSessionPhase.READY, overview.phase)
+            assertNotNull(overview.configurationDetails)
+            assertTrue(service.budgets(selection, access).items.isNotEmpty())
+        }
+    }
+
     @Test fun enrollsSelectsAndPersistsManagedImage() = runBlocking {
         val arguments = InstrumentationRegistry.getArguments()
         assumeTrue(arguments.getString("platformEnrollmentLive") == "true")

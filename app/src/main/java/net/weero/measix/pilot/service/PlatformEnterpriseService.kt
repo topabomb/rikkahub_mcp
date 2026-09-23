@@ -227,6 +227,13 @@ internal class PlatformEnterpriseService(
     suspend fun createPortalGrant(access: RealmAccess.Enterprise): PlatformPortalGrant =
         read(access.sessionId) { connection, token -> client.createPortalGrant(connection, token) }
 
+    suspend fun recentUpdates(access: RealmAccess.Enterprise): PlatformEnterpriseUpdateFeed {
+        sessions.platformConfiguration(access)
+        val result = read(access.sessionId) { connection, token -> client.recentUpdates(connection, token) }
+        sessions.platformConfiguration(access)
+        return result
+    }
+
     suspend fun budgets(access: RealmAccess.Enterprise): PlatformUserBudgetView {
         sessions.platformConfiguration(access)
         val result = read(access.sessionId) { connection, token -> client.budgets(connection, token) }

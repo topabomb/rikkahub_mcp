@@ -12,12 +12,15 @@ import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
+import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performTextReplacement
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.hasScrollAction
+import androidx.compose.ui.test.performSemanticsAction
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.ViewModelStore
 import androidx.navigation3.runtime.NavKey
@@ -82,8 +85,123 @@ class EnterprisePageAndroidTest {
     }
 
     @Test
+    fun personalUsageSummaryOffersExplicitSpaceSwitchInsteadOfAnUnauthorizedPortal() {
+        val fixture = Fixture(overview().copy(selection = RealmSelection(RealmAccess.Personal, 2)))
+        fixture.show()
+        compose.onNodeWithTag("enterprise-page-menu").performClick()
+        compose.onNodeWithText(text(R.string.enterprise_budget_title)).performClick()
+        compose.onNodeWithText(text(R.string.enterprise_budget_details)).assertDoesNotExist()
+        compose.onNodeWithText(text(R.string.enterprise_switch_enterprise)).performScrollTo().assertIsDisplayed()
+        assertNull(fixture.vm.portal.value)
+    }
+
+    @Test
+    fun recentUpdatesStayInPersonalSpaceAndDisappearOnLogout() {
+        val titles = listOf("本周设备巡检安排", "测量报告模板已更新", "企业服务维护通知", "新员工测量培训指引", "数据归档与查询功能说明")
+        val bodies = listOf(
+            "**巡检通知**：请各班组在本周五前完成测量设备巡检，重点检查探头状态、校准记录和设备运行环境。\n" +
+                "巡检结果请记录在企业台账中，发现异常及时联系设备管理员。\n" +
+                "详细操作步骤和注意事项已更新，请在操作前仔细阅读。\n完整正文最后一行。",
+            "新版报告增加了**公差判定**与测量趋势摘要，可在配置详情中确认当前使用的模板。历史报告仍按生成时的模板保存。",
+            "今晚 23:00–23:30 进行例行维护。期间配置同步和新任务提交可能暂时不可用，已完成的测量记录不受影响。",
+            "培训内容包括设备校准、测量流程和异常记录。请先阅读操作指引，再由班组负责人带领完成首次测量。",
+            "归档记录支持按设备、零件编号与日期查询。打开企业工作台即可检索历史测量结果，并查看对应报告。",
+        )
+        val fixture = Fixture(overview(name = "示例制造企业 · Measix Orchelm 企业配置中心").copy(
+            platformOrigin = "https://measix-orchelm.weero.net",
+        ), recentUpdates = EnterpriseUpdatesUiModel("Asia/Shanghai",
+            titles.mapIndexed { index, title -> EnterpriseUpdateSummaryUiModel("update-$index", title, "2026-09-22T08:00:00Z",
+                bodies[index], true, when (index) {
+                    0, 3 -> EnterpriseUpdateCategory.ANNOUNCEMENT
+                    2 -> EnterpriseUpdateCategory.MAINTENANCE
+                    else -> EnterpriseUpdateCategory.NOTICE
+                }, when (index) {
+                    1 -> EnterpriseUpdateSeverity.WARNING
+                    2 -> EnterpriseUpdateSeverity.CRITICAL
+                    else -> EnterpriseUpdateSeverity.INFO
+                }) }))
+        fixture.show()
+        compose.onNodeWithText(text(R.string.enterprise_recent_updates_count, 5)).assertIsDisplayed()
+        compose.onAllNodesWithContentDescription(text(R.string.enterprise_update_announcement))[0].assertIsDisplayed()
+        compose.onAllNodesWithContentDescription(text(R.string.enterprise_update_maintenance))[0].assertIsDisplayed()
+        compose.onAllNodesWithText(text(R.string.enterprise_update_important))[0].assertIsDisplayed()
+        val preview = compose.onAllNodesWithText("巡检通知", substring = true, useUnmergedTree = true)[0]
+        val layouts = mutableListOf<androidx.compose.ui.text.TextLayoutResult>()
+        assertTrue(preview.fetchSemanticsNode().config[androidx.compose.ui.semantics.SemanticsActions.GetTextLayoutResult]
+            .action!!.invoke(layouts))
+        assertEquals(3, layouts.single().lineCount)
+        assertTrue(layouts.single().hasVisualOverflow)
+        assertFalse(layouts.single().layoutInput.text.text.contains("**"))
+        capturePage("enterprise-content-home.png")
+        compose.onNodeWithText(titles.first()).performClick()
+        compose.waitForIdle()
+        layouts.clear()
+        preview.fetchSemanticsNode().config[androidx.compose.ui.semantics.SemanticsActions.GetTextLayoutResult].action!!.invoke(layouts)
+        assertFalse(layouts.single().hasVisualOverflow)
+        compose.onNodeWithText(titles.first()).performClick()
+        compose.onNodeWithText(titles.last()).performScrollTo().assertIsDisplayed()
+        capturePage("enterprise-recent-updates.png")
+        fixture.state.value = fixture.state.value.copy(selection = RealmSelection(RealmAccess.Personal, 2))
+        compose.waitForIdle()
+        compose.onNodeWithText(text(R.string.enterprise_personal)).performScrollTo()
+        compose.onNode(hasScrollAction()).performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.ScrollBy) {
+            it(0f, -10_000f)
+        }
+        compose.onNodeWithText(text(R.string.enterprise_recent_updates_count, 5)).assertIsDisplayed()
+        capturePage("enterprise-personal-updates.png")
+        coVerify { fixture.service.recentUpdates(match { it.access == RealmAccess.Personal }, any()) }
+        fixture.state.value = overview(access = null, revision = 3)
+        compose.waitForIdle()
+        compose.onNodeWithText(text(R.string.enterprise_recent_updates_count, 5)).assertDoesNotExist()
+        compose.onNodeWithText(titles.first()).assertDoesNotExist()
+    }
+
+    @Test
+    fun enrollmentPrioritizesScanAndPasteWithPracticalIntroduction() {
+        val fixture = Fixture(overview(access = null))
+        fixture.show()
+        compose.onNodeWithText(text(R.string.enterprise_join_scan)).assertIsDisplayed()
+        compose.onNodeWithText(text(R.string.enterprise_join_paste)).assertIsDisplayed()
+        compose.onNodeWithText(text(R.string.enterprise_join_scan_gallery)).assertIsDisplayed()
+        compose.onNodeWithText(text(R.string.enterprise_orchelm_collaboration_detail)).assertIsDisplayed()
+        capturePage("enterprise-join-introduction.png")
+        compose.onNodeWithText(text(R.string.enterprise_join_paste)).performClick()
+        compose.onNodeWithText(text(R.string.enterprise_join_submit)).assertIsDisplayed()
+        coVerify(exactly = 0) { fixture.service.recentUpdates(any(), any()) }
+    }
+
+    @Test
+    fun homeShowsOnlyExceededQuotaAndKeepsAddressCopyVisible() {
+        val fixture = Fixture(overview(name = "麦睿菱-Measix Orchelm 生产测量企业空间").copy(
+            platformOrigin = "https://measix-orchelm.weero.net",
+        ))
+        coEvery { fixture.service.budgets(any(), any()) } returns EnterpriseBudgetSummaryUiModel(
+            "Asia/Shanghai",
+            listOf(
+                EnterpriseBudgetCapabilityUiModel(EnterpriseBudgetCapabilityKind.MODEL,
+                    EnterpriseBudgetAvailability.EXHAUSTED, null, 0, emptyList()),
+                EnterpriseBudgetCapabilityUiModel(EnterpriseBudgetCapabilityKind.TTS,
+                    EnterpriseBudgetAvailability.AVAILABLE, null, 0, emptyList()),
+            ), 0, "2026-09-22T08:00:00Z",
+        )
+        fixture.show()
+        compose.onNodeWithText("https://measix-orchelm.weero.net").assertIsDisplayed()
+        compose.onNodeWithText(text(R.string.enterprise_budget_alerts)).assertIsDisplayed()
+        compose.onNodeWithText(text(R.string.enterprise_budget_capability_model)).assertIsDisplayed()
+        compose.onNodeWithText(text(R.string.enterprise_budget_capability_tts)).assertDoesNotExist()
+        capturePage("enterprise-quota-alert.png")
+        compose.onNodeWithContentDescription(text(R.string.copy)).performClick()
+        compose.onNodeWithText(text(R.string.copied)).assertIsDisplayed()
+        compose.onNodeWithText(text(R.string.enterprise_budget_title)).performClick()
+        compose.onNodeWithText(text(R.string.enterprise_budget_capability_tts)).assertIsDisplayed()
+    }
+
+    @Test
     fun budgetSummaryUsesCompactRowsAndTheDetailsEntryOpensUsage() {
-        val fixture = Fixture(overview())
+        val fixture = Fixture(overview(name = "示例制造企业").copy(
+            userName = "张工",
+            resetPath = EnterpriseResetPath.CONNECTED,
+        ))
         coEvery { fixture.service.budgets(any(), any()) } returns EnterpriseBudgetSummaryUiModel(
             timezone = "Asia/Shanghai",
             items = listOf(
@@ -124,8 +242,20 @@ class EnterprisePageAndroidTest {
 
         fixture.show()
 
+        capturePage("enterprise-spaces.png")
+        compose.onNodeWithText(text(R.string.enterprise_budget_capability_model)).assertDoesNotExist()
+        compose.onNodeWithText(text(R.string.enterprise_reset_title)).assertDoesNotExist()
+        compose.onNodeWithTag("enterprise-page-menu").performClick()
+        capturePage("enterprise-space-menu.png")
+        compose.onNodeWithText(text(R.string.enterprise_budget_title)).performClick()
         compose.onNodeWithText(text(R.string.enterprise_budget_capability_model)).assertIsDisplayed()
         compose.onNodeWithText(text(R.string.enterprise_budget_near_limit)).assertIsDisplayed()
+        capturePage("enterprise-usage.png")
+        compose.onNodeWithContentDescription(text(R.string.back)).performClick()
+        compose.onNodeWithTag("enterprise-connection-menu").assertIsDisplayed()
+        compose.onNodeWithText(text(R.string.enterprise_budget_capability_model)).assertDoesNotExist()
+        compose.onNodeWithTag("enterprise-page-menu").performClick()
+        compose.onNodeWithText(text(R.string.enterprise_budget_title)).performClick()
         compose.onNodeWithText(text(R.string.enterprise_budget_capability_tts)).performScrollTo().assertIsDisplayed()
         val details = compose.onNodeWithText(text(R.string.enterprise_budget_details)).performScrollTo().assertIsDisplayed()
         details.performClick()
@@ -160,7 +290,8 @@ class EnterprisePageAndroidTest {
         coEvery { fixture.service.changeAddress(request, newOrigin) } just Runs
         fixture.show()
 
-        click(R.string.edit)
+        compose.onNodeWithTag("enterprise-connection-menu").performClick()
+        compose.onNodeWithText(text(R.string.enterprise_address_edit_title)).performClick()
         compose.onNodeWithText(text(R.string.enterprise_address_edit_title)).assertIsDisplayed()
         compose.onNode(hasSetTextAction()).performTextReplacement(newOrigin)
         compose.onNode(hasText(text(R.string.confirm)) and hasClickAction()).performClick()
@@ -185,8 +316,10 @@ class EnterprisePageAndroidTest {
         val fixture = Fixture(initial)
         coEvery { fixture.service.changeAddress(request, newOrigin) } just Runs
         fixture.show()
+        capturePage("enterprise-personal-space.png")
 
-        click(R.string.edit)
+        compose.onNodeWithTag("enterprise-connection-menu").performClick()
+        compose.onNodeWithText(text(R.string.enterprise_address_edit_title)).performClick()
         compose.onNodeWithText(text(R.string.enterprise_address_edit_title)).assertIsDisplayed()
         compose.onNode(hasSetTextAction()).performTextReplacement(newOrigin)
         compose.onNode(hasText(text(R.string.confirm)) and hasClickAction()).performClick()
@@ -310,6 +443,9 @@ class EnterprisePageAndroidTest {
         compose.onNodeWithText(text(R.string.enterprise_platform_confirm, origin)).assertIsDisplayed()
         coVerify(exactly = 0) { fixture.service.confirmJoin(any()) }
         val instrumentation = androidx.test.platform.app.InstrumentationRegistry.getInstrumentation()
+        instrumentation.waitForIdleSync()
+        // Allow the display compositor to present the committed Compose frame before capture.
+        android.os.SystemClock.sleep(250)
         val screenshot = requireNotNull(instrumentation.uiAutomation.takeScreenshot())
         java.io.File(compose.activity.cacheDir, "enterprise-platform-confirm.png").outputStream().use {
             screenshot.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it)
@@ -335,7 +471,8 @@ class EnterprisePageAndroidTest {
         ))
         coEvery { fixture.service.localDataReset(any()) } returns Unit
         fixture.show()
-        click(R.string.enterprise_reset_repair)
+        compose.onNodeWithTag("enterprise-page-menu").performClick()
+        compose.onNodeWithText(text(R.string.enterprise_reset_repair)).performClick()
         compose.onNodeWithText(text(R.string.enterprise_reset_option_notice)).assertIsDisplayed()
         coVerify(exactly = 0) { fixture.service.localDataReset(any()) }
         click(R.string.enterprise_reset_keep_history)
@@ -353,7 +490,8 @@ class EnterprisePageAndroidTest {
         ))
         coEvery { fixture.service.localDataReset(any()) } coAnswers { fixture.state.value = overview(access = null) }
         fixture.show()
-        click(R.string.enterprise_reset_title)
+        compose.onNodeWithTag("enterprise-page-menu").performClick()
+        compose.onNodeWithText(text(R.string.enterprise_reset_title)).performClick()
         compose.onNodeWithText(text(R.string.enterprise_reset_clear_all)).assertIsDisplayed()
         click(R.string.enterprise_reset_clear_all)
         compose.onNodeWithText(text(R.string.enterprise_reset_clear_all_confirm)).assertIsDisplayed()
@@ -399,7 +537,8 @@ class EnterprisePageAndroidTest {
         }
         try {
             fixture.show()
-            click(R.string.enterprise_exit)
+            compose.onNodeWithTag("enterprise-connection-menu").performClick()
+            compose.onNodeWithText(text(R.string.enterprise_exit)).performClick()
             compose.waitUntil(5_000) { fixture.vm.exitRequest.value != null }
             val confirmation = text(R.string.enterprise_exit_confirm, "Original enterprise")
             compose.onNodeWithText(confirmation).assertIsDisplayed()
@@ -543,6 +682,19 @@ class EnterprisePageAndroidTest {
         }
     }
 
+    private fun capturePage(name: String) {
+        compose.waitForIdle()
+        val instrumentation = androidx.test.platform.app.InstrumentationRegistry.getInstrumentation()
+        instrumentation.waitForIdleSync()
+        // Window transitions are rendered outside Compose's idle tracking.
+        android.os.SystemClock.sleep(1_000)
+        val screenshot = requireNotNull(instrumentation.uiAutomation.takeScreenshot())
+        java.io.File(compose.activity.cacheDir, name).outputStream().use {
+            screenshot.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it)
+        }
+        screenshot.recycle()
+    }
+
     private fun click(resource: Int) {
         compose.onNode(hasText(text(resource)) and hasClickAction()).performScrollTo().performClick()
     }
@@ -608,6 +760,7 @@ class EnterprisePageAndroidTest {
     private inner class Fixture(
         initial: EnterpriseOverview,
         val backStack: MutableList<NavKey> = mutableListOf(Screen.Enterprise),
+        val recentUpdates: EnterpriseUpdatesUiModel = EnterpriseUpdatesUiModel("Asia/Shanghai", emptyList()),
     ) {
         val state = MutableStateFlow(initial)
         val service = mockk<EnterpriseApplicationService>()
@@ -616,6 +769,7 @@ class EnterprisePageAndroidTest {
         fun show(withVerticalHinge: Boolean = false) {
             every { service.observe() } returns state
             every { service.runtimeUsageChanges() } returns emptyFlow()
+            coEvery { service.recentUpdates(any(), any()) } returns recentUpdates
             compose.runOnUiThread {
                 vm = EnterpriseVM(service)
                 viewModels.put("enterprise", vm)
@@ -640,6 +794,7 @@ class EnterprisePageAndroidTest {
                         LocalNavController provides navigator,
                         LocalToaster provides toaster,
                         LocalAdaptiveLayoutInfo provides adaptive,
+                        net.weero.measix.pilot.ui.context.LocalSettings provides net.weero.measix.pilot.data.datastore.Settings(),
                     ) {
                         Toaster(state = toaster, alignment = Alignment.TopCenter)
                         EnterprisePage(vm = vm)

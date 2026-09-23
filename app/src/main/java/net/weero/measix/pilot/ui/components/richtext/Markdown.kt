@@ -1,4 +1,4 @@
-﻿package net.weero.measix.pilot.ui.components.richtext
+package net.weero.measix.pilot.ui.components.richtext
 
 import android.content.ClipData
 import androidx.compose.foundation.BorderStroke
@@ -225,6 +225,54 @@ private fun parseMarkdown(content: String): MarkdownParseResult {
     val preprocessed = preProcess(content)
     val astTree = parser.buildMarkdownTreeFromString(preprocessed)
     return MarkdownParseResult(preprocessed, astTree, astTree.containsHtml())
+}
+
+/** Text-only previews share the Markdown parser and inline styles, without media or link actions. */
+@Composable
+fun MarkdownSummary(
+    content: String,
+    modifier: Modifier = Modifier,
+    maxLines: Int = 3,
+    style: TextStyle = LocalTextStyle.current,
+    onTextLayout: (androidx.compose.ui.text.TextLayoutResult) -> Unit = {},
+) {
+    val colors = MaterialTheme.colorScheme
+    val density = LocalDensity.current
+    val text = remember(content, colors, density, style) {
+        val parsed = parseMarkdown(content)
+        val annotated = buildAnnotatedString {
+            fun appendBlock(node: ASTNode) {
+                when (node.type) {
+                    MarkdownElementTypes.PARAGRAPH, MarkdownTokenTypes.ATX_CONTENT,
+                    MarkdownTokenTypes.SETEXT_CONTENT, GFMTokenTypes.CELL -> {
+                        if (length > 0) append('\n')
+                        appendMarkdownNodeContent(node, parsed.preprocessed, inlineContents = mutableMapOf(),
+                            colorScheme = colors, density = density, style = style, enableLatexRendering = false)
+                    }
+                    MarkdownTokenTypes.CODE_FENCE_CONTENT, MarkdownTokenTypes.CODE_LINE -> {
+                        if (length > 0) append('\n')
+                        withStyle(SpanStyle(fontFamily = FontFamily.Monospace)) {
+                            append(node.getTextInNode(parsed.preprocessed))
+                        }
+                    }
+                    MarkdownElementTypes.HTML_BLOCK -> {
+                        if (length > 0) append('\n')
+                        append(org.jsoup.Jsoup.parse(node.getTextInNode(parsed.preprocessed)).text())
+                    }
+                    else -> node.children.forEach(::appendBlock)
+                }
+            }
+            appendBlock(parsed.astTree)
+        }
+        AnnotatedString(annotated.text.trim(), annotated.spanStyles.mapNotNull {
+            val leading = annotated.text.length - annotated.text.trimStart().length
+            val start = (it.start - leading).coerceAtLeast(0)
+            val end = (it.end - leading).coerceAtMost(annotated.text.trim().length)
+            if (end > start) AnnotatedString.Range(it.item, start, end) else null
+        })
+    }
+    Text(text, modifier = modifier, style = style, maxLines = maxLines,
+        overflow = TextOverflow.Ellipsis, onTextLayout = onTextLayout)
 }
 
 @Composable
