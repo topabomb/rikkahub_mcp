@@ -16,11 +16,25 @@ import net.weero.measix.pilot.data.db.entity.ArtifactOrigin
 import net.weero.measix.pilot.data.files.ArtifactStore
 import net.weero.measix.pilot.service.workspace.WorkspaceApplicationService
 import net.weero.measix.pilot.service.workspace.WorkspaceToolSession
+import net.weero.measix.pilot.service.workspace.WorkspaceToolUnavailableException
+import net.weero.measix.pilot.data.enterprise.RealmAccess
 import net.weero.measix.pilot.utils.generateUnifiedDiff
 import me.rerere.workspace.WorkspaceFileEntry
 import me.rerere.workspace.WorkspaceManager
 
 private const val MAX_READ_FILE_BYTES = 8L * 1024 * 1024
+
+private suspend fun <T> WorkspaceApplicationService.executeModelTool(
+    workspaceId: String,
+    access: RealmAccess,
+    operation: suspend WorkspaceToolSession.() -> T,
+): T = try {
+    executeTool(workspaceId, access, operation)
+} catch (error: WorkspaceToolUnavailableException) {
+    failToolResult(error.reason, error.message)
+} catch (error: net.weero.measix.pilot.data.enterprise.EnterpriseConfigurationException) {
+    failToolResult("tool_not_permitted", "Workspace access was revoked: ${error.reason}.")
+}
 
 val WorkspaceToolDefaultApprovals: Map<String, Boolean> = mapOf(
     "workspace_read_file" to false,
@@ -93,7 +107,7 @@ private fun createReadFileTool(
         val registerArtifact: (net.weero.measix.pilot.data.files.OwnedArtifact) -> Unit = { owned ->
             registerUnpublishedResource(artifactStore.unpublishedLease(owned))
         }
-        workspaceApplicationService.executeTool(workspaceId, access) {
+        workspaceApplicationService.executeModelTool(workspaceId, access) {
             if (path.isImagePath()) {
                 readImageInRootfs(
                     scope = access.scope,
@@ -151,7 +165,7 @@ private fun createWriteFileTool(
     contextualExecute = {
         val args = parseWorkspaceWriteArguments(it)
         val approval = approvedByUser
-        val entry = workspaceApplicationService.executeTool(workspaceId, access) {
+        val entry = workspaceApplicationService.executeModelTool(workspaceId, access) {
             writeRootfsText(args.path.value, args.text, args.overwrite, approval)
         }
         listOf(UIMessagePart.Text(entry.toJson().toString()))
@@ -200,7 +214,7 @@ private fun createEditFileTool(
         val path = args.path.value
         val approval = approvedByUser
 
-        workspaceApplicationService.executeTool(workspaceId, access) {
+        workspaceApplicationService.executeModelTool(workspaceId, access) {
             var original = ""
             lateinit var result: ReplaceTextResult
             val entry = updateRootfsText(path, MAX_READ_FILE_BYTES, approval) { content ->
@@ -284,7 +298,7 @@ private fun createShellTool(
     },
     execute = {
         val args = parseWorkspaceShellArguments(it, defaultCwd)
-        val result = workspaceApplicationService.executeTool(workspaceId, access) {
+        val result = workspaceApplicationService.executeModelTool(workspaceId, access) {
             executeCommand(args.command, args.cwd, args.timeoutMillis, uploads = args.uploads)
         }
         val output = listOf(
@@ -300,8 +314,8 @@ private fun createShellTool(
             )
         )
         when {
-            result.timedOut -> failToolResult(output, "shell_timeout")
-            result.exitCode != 0 -> failToolResult(output, "shell_exit_nonzero")
+            result.timedOut -> failToolResult(output, "shell_timeout", "Workspace command timed out; inspect stdout and stderr.")
+            result.exitCode != 0 -> failToolResult(output, "shell_exit_nonzero", "Workspace command exited with code ${result.exitCode}; inspect stderr.")
             else -> output
         }
     },

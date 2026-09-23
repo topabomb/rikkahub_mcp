@@ -61,16 +61,27 @@ class ToolExecutionFailure(
 
 /** A rejected input has a replay result, but must never enter approval or execution. */
 class ToolArgumentsException(details: JsonObject) : IllegalArgumentException("invalid_arguments") {
-    val output: List<UIMessagePart> = listOf(UIMessagePart.Text(buildJsonObject {
-        details.forEach { (key, value) -> put(key, value) }
-        put("error", details["error"] ?: JsonPrimitive("invalid_arguments"))
-        put("type", "error")
-    }.toString()))
+    val output: List<UIMessagePart> = listOf(UIMessagePart.Text(
+        ToolErrorProtocol.envelope(
+            status = "failed",
+            reason = details["reason"]?.let { (it as? JsonPrimitive)?.content } ?: "invalid_arguments",
+            detail = details["detail"]?.let { (it as? JsonPrimitive)?.content }
+                ?: listOfNotNull(
+                    details["field"]?.let { (it as? JsonPrimitive)?.content },
+                    details["expected"]?.let { (it as? JsonPrimitive)?.content }?.let { "must be $it" },
+                    details["hint"]?.let { (it as? JsonPrimitive)?.content },
+                ).joinToString(" ").takeIf(String::isNotBlank) ?: run {
+                    if (details["reason"]?.let { (it as? JsonPrimitive)?.content } == "invalid_arguments") {
+                        "Invalid tool arguments."
+                    } else null
+                },
+        ).toString(),
+    ))
 }
 
 private fun invalidToolArguments(detail: String): ToolArgumentsException = ToolArgumentsException(
     buildJsonObject {
-        put("error", "invalid_arguments")
+        put("reason", "invalid_arguments")
         put("detail", detail)
     }
 )

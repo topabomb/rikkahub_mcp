@@ -164,7 +164,7 @@ class SkillManager(
                 is SkillTextRead.Success -> read.content
                 SkillTextRead.InvalidEncoding -> return@withBlockingLock SkillContentReadResult.InvalidEncoding
                 SkillTextRead.ResourceLimit -> return@withBlockingLock SkillContentReadResult.ResourceLimit
-                SkillTextRead.ReadFailure -> return@withBlockingLock SkillContentReadResult.ReadFailure
+                is SkillTextRead.ReadFailure -> return@withBlockingLock SkillContentReadResult.ReadFailure(read.cause)
             }
             if (relativePath.isNullOrBlank()) {
                 when (val parsed = SkillFrontmatterParser.parseDocument(content)) {
@@ -604,7 +604,7 @@ class SkillManager(
                     Log.w(TAG, "parseSkillFile: SKILL.md exceeds the byte limit")
                     return null
                 }
-                SkillTextRead.ReadFailure -> return null
+                is SkillTextRead.ReadFailure -> return null
             }
             when (val result = SkillFrontmatterParser.parseDocument(content)) {
                 is SkillParseResult.Success -> SkillMetadata(
@@ -628,7 +628,7 @@ class SkillManager(
     }
 
     private fun File.readUtf8Limited(): SkillTextRead {
-        if (!isFile) return SkillTextRead.ReadFailure
+        if (!isFile) return SkillTextRead.ReadFailure(java.io.FileNotFoundException(path))
         if (length() > MAX_SKILL_TEXT_BYTES) return SkillTextRead.ResourceLimit
         return try {
             val bytes = inputStream().use { input ->
@@ -652,7 +652,7 @@ class SkillManager(
             SkillTextRead.InvalidEncoding
         } catch (error: Exception) {
             Log.w(TAG, "Failed to read bounded Skill text", error)
-            SkillTextRead.ReadFailure
+            SkillTextRead.ReadFailure(error)
         }
     }
 
@@ -675,7 +675,7 @@ private sealed interface SkillTextRead {
     data class Success(val content: String) : SkillTextRead
     data object InvalidEncoding : SkillTextRead
     data object ResourceLimit : SkillTextRead
-    data object ReadFailure : SkillTextRead
+    data class ReadFailure(val cause: Exception) : SkillTextRead
 }
 
 data class SkillMetadata(
@@ -736,5 +736,5 @@ sealed interface SkillContentReadResult {
     data object InvalidSkill : SkillContentReadResult
     data object InvalidEncoding : SkillContentReadResult
     data object ResourceLimit : SkillContentReadResult
-    data object ReadFailure : SkillContentReadResult
+    data class ReadFailure(val cause: Exception) : SkillContentReadResult
 }

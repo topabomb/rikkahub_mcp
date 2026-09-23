@@ -76,7 +76,7 @@ internal fun createToolOutputLookupTools(
             val lineCount = (args["limit"] as? JsonPrimitive)?.intOrNull
                 ?: ToolOutputProtocol.TOOL_OUTPUT_DEFAULT_READ_LINES
             when (val result = store.read(conversationId, ref, startLine, lineCount)) {
-                ToolOutputReadResult.Unavailable -> failToolResult("archive_unavailable")
+                ToolOutputReadResult.Unavailable -> failToolResult("archive_unavailable", "The archived tool result is unavailable in this conversation.")
                 is ToolOutputReadResult.Success -> listOf(
                     UIMessagePart.Text(formatReadResult(result)),
                 )
@@ -159,8 +159,8 @@ internal fun createToolOutputLookupTools(
             val contextLines = (args["context"] as? JsonPrimitive)?.intOrNull ?: 0
             val maxMatches = (args["limit"] as? JsonPrimitive)?.intOrNull ?: 20
             when (val result = store.grep(conversationId, ref, pattern, ignoreCase, contextLines, maxMatches)) {
-                ToolOutputGrepResult.Unavailable -> failToolResult("archive_unavailable")
-                ToolOutputGrepResult.InvalidPattern -> failToolResult("invalid_pattern")
+                ToolOutputGrepResult.Unavailable -> failToolResult("archive_unavailable", "The archived tool result is unavailable in this conversation.")
+                ToolOutputGrepResult.InvalidPattern -> failToolResult("invalid_pattern", "The search pattern is invalid for this tool.")
                 is ToolOutputGrepResult.Success -> listOf(
                     UIMessagePart.Text(formatGrepResult(result)),
                 )
@@ -203,7 +203,7 @@ private fun requireBoundedToolOutputText(text: String) {
 }
 
 private fun rejection(error: String, detail: String): JsonObject = buildJsonObject {
-    put("error", error)
+    put("reason", error)
     put("detail", detail)
 }
 

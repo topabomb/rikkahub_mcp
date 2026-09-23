@@ -67,6 +67,7 @@ import net.weero.measix.pilot.data.event.AppEvent
 import net.weero.measix.pilot.data.event.AppEventBus
 import net.weero.measix.pilot.service.MemoryService
 import net.weero.measix.pilot.service.MemoryToolRecord
+import net.weero.measix.pilot.service.runtime.ToolLivePhase
 import androidx.compose.runtime.getValue
 import net.weero.measix.pilot.ui.components.richtext.MarkdownBlock
 import net.weero.measix.pilot.ui.components.ui.Favicon
@@ -100,7 +101,9 @@ object MemoryToolUI : ToolUIRenderer {
     }
 
     @Composable
-    override fun title(context: ToolUIContext): String = when (action(context)) {
+    override fun title(context: ToolUIContext): String = if (context.phase == ToolLivePhase.FAILED) {
+        stringResource(R.string.chat_message_tool_memory_failed)
+    } else when (action(context)) {
         ACTION_CREATE -> stringResource(R.string.chat_message_tool_create_memory)
         ACTION_EDIT -> stringResource(R.string.chat_message_tool_edit_memory)
         ACTION_DELETE -> stringResource(R.string.chat_message_tool_delete_memory)
@@ -108,7 +111,8 @@ object MemoryToolUI : ToolUIRenderer {
     }
 
     override fun hasSummary(context: ToolUIContext): Boolean =
-        action(context) in listOf(ACTION_CREATE, ACTION_EDIT) &&
+        context.phase != ToolLivePhase.FAILED &&
+            action(context) in listOf(ACTION_CREATE, ACTION_EDIT) &&
             context.arguments.getStringContent("content") != null
 
     @Composable

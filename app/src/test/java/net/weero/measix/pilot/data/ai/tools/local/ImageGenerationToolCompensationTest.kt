@@ -74,14 +74,14 @@ class ImageGenerationToolCompensationTest {
         val failure = assertThrows(ToolArgumentsException::class.java) { tool.parseArguments("{}", Json) }
         val replay = Json.parseToJsonElement((failure.output.single() as UIMessagePart.Text).text).jsonObject
         val domainFailure = requireNotNull(tool.validateArguments(buildJsonObject {}))
-        val toolFailure = assertThrows(ToolExecutionFailure::class.java) { failedResult("invalid_arguments") }
+        val toolFailure = assertThrows(ToolExecutionFailure::class.java) {
+            failedResult("invalid_arguments", "prompt must be a non-empty string.")
+        }
         val executionFailure = Json.parseToJsonElement((toolFailure.output.single() as UIMessagePart.Text).text)
         assertEquals(domainFailure, executionFailure)
         assertFalse(domainFailure.containsKey("type"))
         assertFalse(domainFailure.containsKey("error"))
-        assertEquals(domainFailure, JsonObject(replay.filterKeys { it != "type" && it != "error" }))
-        assertEquals("invalid_arguments", replay["error"]!!.jsonPrimitive.content)
-        assertEquals("error", replay["type"]!!.jsonPrimitive.content)
+        assertEquals(domainFailure, replay)
         assertEquals(
             ToolInteractionRequirement.None,
             tool.interactionRequirement(tool.parseArguments("""{"prompt":"a cat"}""", Json)),

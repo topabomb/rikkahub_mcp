@@ -17,6 +17,7 @@ import me.rerere.ai.core.ToolCallLocator
 import me.rerere.ai.core.ToolChildRunLink
 import me.rerere.ai.core.ToolExecutionContext
 import me.rerere.ai.core.ToolExecutionFailure
+import me.rerere.ai.core.ToolErrorProtocol
 import me.rerere.ai.core.ToolInteractionRequirement
 import me.rerere.ai.core.ToolMetadataDelivery
 import me.rerere.ai.core.ToolOutputPolicy
@@ -176,6 +177,19 @@ internal class ToolCallRuntime(
                 immediateResults += ToolResultFact(locator = locator, status = ToolResultStatus.FAILED)
             }
 
+            fun rejectUnexpected(error: Exception) {
+                if (error is ToolRuntimeInfrastructureException) throw error
+                net.weero.measix.pilot.data.enterprise.ManagedSnapshotRequired.find(error)?.let { throw it }
+                net.weero.measix.pilot.data.enterprise.EnterpriseRuntimeProblemException.find(error)?.let { throw it }
+                Log.w(TAG, "Tool ${tool.toolName} preparation failed: ${error.message}", error)
+                reject(
+                    listOf(UIMessagePart.Text(ToolErrorProtocol.envelope(
+                        "failed", "runtime_error", ToolErrorProtocol.exceptionDetail(error),
+                    ).toString())),
+                    wasPending = tool.isPending,
+                )
+            }
+
             fun resolveDenied() {
                 val reason = (tool.interactionState as ToolInteractionState.Denied).reason
                 resolvedCalls += ResolvedToolCall.Denied(
@@ -234,18 +248,10 @@ internal class ToolCallRuntime(
 
             if (definition == null) {
                 reject(
-                    output = listOf(
-                        UIMessagePart.Text(
-                            buildJsonObject {
-                                put("error", "tool_not_available")
-                                put("type", "error")
-                                put("status", "failed")
-                                put("reason", "tool_not_available")
-                                put("tool", tool.toolName)
-                                put("message", "This tool is not available in the current run. Do not retry unchanged.")
-                            }.toString(),
-                        ),
-                    ),
+                    output = listOf(UIMessagePart.Text(ToolErrorProtocol.envelope(
+                        "failed", "tool_not_available",
+                        "Tool ${tool.toolName} is unavailable in this run. Do not retry unchanged.",
+                    ).toString())),
                     wasPending = tool.isPending,
                 )
                 continue
@@ -256,9 +262,21 @@ internal class ToolCallRuntime(
             } catch (rejection: ToolArgumentsException) {
                 reject(rejection.output, wasPending = tool.isPending)
                 continue
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                rejectUnexpected(error)
+                continue
             }
 
-            val requirement = definition.interactionRequirement(args)
+            val requirement = try {
+                definition.interactionRequirement(args)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                rejectUnexpected(error)
+                continue
+            }
             val pendingRequirement = requirement.takeIf { it != ToolInteractionRequirement.None }
             val currentRequirement = pendingRequirement ?: ToolInteractionRequirement.None
 
@@ -381,6 +399,7 @@ internal class ToolCallRuntime(
         call: PreparedToolCall,
         hooks: ToolExecutionHooks,
     ): ToolCallOutcome {
+        currentCoroutineContext().ensureActive()
         var registeredArtifact = false
         val context = ToolExecutionContext(
             locator = call.locator,
@@ -433,11 +452,9 @@ internal class ToolCallRuntime(
             currentCoroutineContext().ensureActive()
             Log.w(TAG, "Tool ${call.source.toolName} timed out: ${timeout.message}")
             ToolCallOutcome(
-                output = listOf(
-                    UIMessagePart.Text(
-                        "{\"status\":\"failed\",\"reason\":\"tool_timeout\"}",
-                    ),
-                ),
+                output = listOf(UIMessagePart.Text(ToolErrorProtocol.envelope(
+                    "failed", "tool_timeout", timeout.message?.takeIf(String::isNotBlank) ?: "Tool execution timed out.",
+                ).toString())),
                 resultStatus = ToolResultStatus.FAILED,
                 outputPolicy = artifactSafeOutputPolicy(call, registeredArtifact),
             )
@@ -448,12 +465,9 @@ internal class ToolCallRuntime(
         } catch (error: Exception) {
             Log.w(TAG, "Tool ${call.source.toolName} failed: ${error.message}", error)
             ToolCallOutcome(
-                output = listOf(
-                    UIMessagePart.Text(
-                        // 完整异常只进 Logcat；Provider replay 只保留稳定、短小且不泄漏路径的 reason。
-                        "{\"status\":\"failed\",\"reason\":\"tool_failed\"}",
-                    ),
-                ),
+                output = listOf(UIMessagePart.Text(ToolErrorProtocol.envelope(
+                    "failed", "runtime_error", ToolErrorProtocol.exceptionDetail(error),
+                ).toString())),
                 resultStatus = ToolResultStatus.FAILED,
                 outputPolicy = artifactSafeOutputPolicy(call, registeredArtifact),
             )
@@ -500,7 +514,9 @@ internal fun ensureProviderReplayResult(
 ): List<UIMessagePart> = output.ifEmpty {
     val fallback = when (emptyStatus) {
         EmptyToolResultStatus.COMPLETED -> "{\"status\":\"completed\",\"result\":null}"
-        EmptyToolResultStatus.FAILED -> "{\"status\":\"failed\",\"reason\":\"tool_failed_without_output\"}"
+        EmptyToolResultStatus.FAILED -> ToolErrorProtocol.envelope(
+            "failed", "tool_failed_without_output",
+        ).toString()
     }
     listOf(UIMessagePart.Text(fallback))
 }
@@ -539,16 +555,7 @@ private fun rejectionEnvelope(rejection: ToolGateRejection, toolName: String): L
         ToolGateRejection.INTERACTION_STATE_INVALID -> "interaction_state_invalid" to
             "The stored user-interaction state does not match this tool. Do not retry unchanged."
     }
-    return listOf(
-        UIMessagePart.Text(
-            buildJsonObject {
-                put("error", "tool_not_permitted")
-                put("type", "error")
-                put("status", "failed")
-                put("reason", reason)
-                put("tool", toolName)
-                put("message", message)
-            }.toString(),
-        ),
-    )
+    return listOf(UIMessagePart.Text(ToolErrorProtocol.envelope(
+        "failed", reason, "Tool $toolName: $message",
+    ).toString()))
 }

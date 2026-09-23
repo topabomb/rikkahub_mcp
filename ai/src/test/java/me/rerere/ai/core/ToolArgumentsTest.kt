@@ -38,23 +38,27 @@ class ToolArgumentsTest {
     }
 
     @Test
-    fun `domain fields are preserved with a standard runtime failure marker`() {
+    fun `domain validation becomes the common bounded failure envelope`() {
         val details = Json.parseToJsonElement("{\"error\":\"invalid_arguments\",\"field\":\"path\"}").jsonObject
         val failure = assertThrows(ToolArgumentsException::class.java) {
             tool { details }.parseArguments("{}", Json)
         }
         val result = Json.parseToJsonElement((failure.output.single() as UIMessagePart.Text).text).jsonObject
-        assertEquals(JsonObject(details + ("type" to JsonPrimitive("error"))), result)
+        assertEquals(setOf("status", "reason", "detail"), result.keys)
+        assertEquals("failed", result.getValue("status").let { (it as JsonPrimitive).content })
+        assertEquals("invalid_arguments", result.getValue("reason").let { (it as JsonPrimitive).content })
+        assertEquals("path", result.getValue("detail").let { (it as JsonPrimitive).content })
     }
 
     @Test
-    fun `domain status rejection acquires error without changing its reason`() {
+    fun `domain status rejection receives an explicit detail`() {
         val details = Json.parseToJsonElement("{\"status\":\"failed\",\"reason\":\"invalid_arguments\"}").jsonObject
         val failure = assertThrows(ToolArgumentsException::class.java) { tool { details }.parseArguments("{}", Json) }
         val result = Json.parseToJsonElement((failure.output.single() as UIMessagePart.Text).text).jsonObject
-        assertEquals(JsonPrimitive("invalid_arguments"), result["error"])
-        assertEquals(JsonPrimitive("error"), result["type"])
-        details.forEach { (key, value) -> assertEquals(value, result[key]) }
+        assertEquals(setOf("status", "reason", "detail"), result.keys)
+        assertEquals(JsonPrimitive("failed"), result["status"])
+        assertEquals(JsonPrimitive("invalid_arguments"), result["reason"])
+        assertEquals(JsonPrimitive("Invalid tool arguments."), result["detail"])
     }
 
     @Test

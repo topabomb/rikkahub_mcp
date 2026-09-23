@@ -244,6 +244,7 @@
   <string name="chat_message_tool_clipboard_write">Write clipboard</string>
   <string name="chat_message_tool_create_memory">Created memory</string>
   <string name="chat_message_tool_delete_memory">Deleted memory</string>
+  <string name="chat_message_tool_memory_failed">Memory change failed</string>
   <string name="chat_message_tool_denied">Denied</string>
   <string name="chat_message_tool_deny">Deny</string>
   <string name="chat_message_tool_deny_dialog_hint">Reason (optional)</string>

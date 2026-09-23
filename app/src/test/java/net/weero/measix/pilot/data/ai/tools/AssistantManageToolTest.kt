@@ -165,7 +165,7 @@ class AssistantManageToolTest {
         for (raw in invalid) {
             val args = json.parseToJsonElement(raw)
             val expected = requireNotNull(tool.validateArguments(args))
-            assertEquals("invalid_arguments", expected["error"]!!.jsonPrimitive.content)
+            assertEquals("invalid_arguments", expected["reason"]!!.jsonPrimitive.content)
             val executionFailure = failureResult(tool, args)
             assertEquals("failed", executionFailure["status"]!!.jsonPrimitive.content)
             assertEquals("invalid_arguments", executionFailure["reason"]!!.jsonPrimitive.content)
@@ -176,8 +176,9 @@ class AssistantManageToolTest {
                 throw AssertionError("invalid input must not reach approval")
             } catch (failure: ToolArgumentsException) {
                 val replay = parseResult(failure.output)
-                assertEquals(expected, JsonObject(replay.filterKeys { it != "type" }))
-                assertEquals("error", replay["type"]!!.jsonPrimitive.content)
+                assertEquals("failed", replay["status"]!!.jsonPrimitive.content)
+                assertEquals(expected["reason"], replay["reason"])
+                assertEquals(expected["detail"], replay["detail"])
             }
         }
         verify { service wasNot Called }
@@ -186,7 +187,9 @@ class AssistantManageToolTest {
     @Test
     fun `pure validator accepts unknown target while execution rechecks dynamic access`() = runTest {
         val service = mockk<AssistantManagementService>()
-        coEvery { service.deleteAssistant(any(), any()) } returns Result.failure(IllegalArgumentException("target_not_allowed"))
+        coEvery { service.deleteAssistant(any(), any()) } returns Result.failure(
+            net.weero.measix.pilot.data.datastore.AssistantManagementRejection("target_not_allowed")
+        )
         val tool = manageTool(AssistantToolFactory(service, json, mockk(), mockk(), mockk(), mockk()), caller())
         val args = buildJsonObject {
             put("action", "DELETE")

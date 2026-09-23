@@ -162,7 +162,7 @@ class ScopedMemoryRepositoryAndroidTest {
 
     private suspend fun expectMissing(operation: suspend () -> Unit) {
         try { operation(); fail("Expected a namespace miss") }
-        catch (error: IllegalStateException) { assertEquals("memory_not_found_in_namespace", error.message) }
+        catch (error: MemoryNotFoundException) { assertEquals("memory_not_found_in_namespace", error.message) }
     }
 
     private suspend fun withDatabase(operation: suspend (AppDatabase) -> Unit) {

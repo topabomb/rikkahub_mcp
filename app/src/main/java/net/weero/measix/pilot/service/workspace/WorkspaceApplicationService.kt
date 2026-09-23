@@ -36,6 +36,8 @@ import java.io.OutputStream
 internal const val MAX_WORKSPACE_UPLOADS = 32
 internal const val MAX_WORKSPACE_UPLOAD_BYTES = 64L * 1024 * 1024
 
+class WorkspaceToolUnavailableException(val reason: String, message: String) : IllegalStateException(message)
+
 class WorkspaceApplicationService internal constructor(
     private val repository: WorkspaceRepository,
     private val terminals: WorkspaceTerminalRuntime,
@@ -214,9 +216,10 @@ class WorkspaceApplicationService internal constructor(
     ): T = gated(workspaceId) {
         recovery.awaitReady()
         sessions.withRealmAccess(access) { currentCoroutineContext().ensureActive() }
-        val workspace = requireWorkspace(workspaceId)
-        check(workspace.resolvedShellStatus() == WorkspaceShellStatus.READY) {
-            "Workspace shell is not ready: $workspaceId"
+        val workspace = repository.getById(workspaceId)
+            ?: throw WorkspaceToolUnavailableException("workspace_unavailable", "Workspace $workspaceId no longer exists.")
+        if (workspace.resolvedShellStatus() != WorkspaceShellStatus.READY) {
+            throw WorkspaceToolUnavailableException("workspace_not_ready", "Workspace shell is not ready: $workspaceId")
         }
         val tool = ScopedWorkspaceToolSession(workspaceId, access)
         try {

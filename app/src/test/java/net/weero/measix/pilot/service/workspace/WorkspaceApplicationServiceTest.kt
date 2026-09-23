@@ -24,6 +24,18 @@ class WorkspaceApplicationServiceTest {
         temporary.newFolder(), net.weero.measix.pilot.service.ApplicationRecoveryGate().apply { ready() },
     )
 
+    @Test fun `model tool sees typed workspace absence and shell readiness refusals`() = runTest {
+        val repository = mockk<WorkspaceRepository>()
+        val service = workspaceService(repository, mockk())
+        val access = net.weero.measix.pilot.data.enterprise.RealmAccess.Personal
+        coEvery { repository.getById("id") } returns null
+        val missing = kotlin.runCatching { service.executeTool("id", access) { "executed" } }.exceptionOrNull()
+        assertEquals("workspace_unavailable", (missing as WorkspaceToolUnavailableException).reason)
+        coEvery { repository.getById("id") } returns workspace().copy(shellStatus = WorkspaceShellStatus.DISABLED.name)
+        val notReady = kotlin.runCatching { service.executeTool("id", access) { "executed" } }.exceptionOrNull()
+        assertEquals("workspace_not_ready", (notReady as WorkspaceToolUnavailableException).reason)
+    }
+
     @Test fun `document mutation rechecks registration after waiting for the existing workspace gate`() = runTest {
         val repository = mockk<WorkspaceRepository>()
         var registered: WorkspaceEntity? = workspace()

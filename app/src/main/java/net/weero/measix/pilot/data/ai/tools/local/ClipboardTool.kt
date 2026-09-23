@@ -6,12 +6,16 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.put
 import me.rerere.ai.core.InputSchema
 import me.rerere.ai.core.Tool
 import me.rerere.ai.ui.UIMessagePart
 import net.weero.measix.pilot.utils.readClipboardText
 import net.weero.measix.pilot.utils.writeClipboardText
+import net.weero.measix.pilot.data.ai.tools.invalidToolArguments
 
 internal fun buildClipboardTool(context: Context): Tool = Tool(
     name = "clipboard_tool",
@@ -40,9 +44,19 @@ internal fun buildClipboardTool(context: Context): Tool = Tool(
             required = listOf("action")
         )
     },
+    validateArguments = { element: JsonElement ->
+        val params = element as? JsonObject
+        val action = (params?.get("action") as? JsonPrimitive)?.takeIf { it.isString }?.contentOrNull
+        when {
+            action !in setOf("read", "write") -> invalidToolArguments("action must be read or write.")
+            action == "write" && (params?.get("text") as? JsonPrimitive)?.takeIf { it.isString } == null ->
+                invalidToolArguments("text must be a string for write.")
+            else -> null
+        }
+    },
     execute = {
         val params = it.jsonObject
-        val action = params["action"]?.jsonPrimitive?.contentOrNull ?: error("action is required")
+        val action = requireNotNull(params["action"]?.jsonPrimitive?.contentOrNull)
         when (action) {
             "read" -> {
                 val payload = buildJsonObject {
@@ -52,7 +66,7 @@ internal fun buildClipboardTool(context: Context): Tool = Tool(
             }
 
             "write" -> {
-                val text = params["text"]?.jsonPrimitive?.contentOrNull ?: error("text is required")
+                val text = requireNotNull(params["text"]?.jsonPrimitive?.contentOrNull)
                 context.writeClipboardText(text)
                 val payload = buildJsonObject {
                     put("success", true)
@@ -60,7 +74,7 @@ internal fun buildClipboardTool(context: Context): Tool = Tool(
                 listOf(UIMessagePart.Text(payload.toString()))
             }
 
-            else -> error("unknown action: $action, must be one of [read, write]")
+            else -> error("Validated clipboard action changed: $action")
         }
     }
 )

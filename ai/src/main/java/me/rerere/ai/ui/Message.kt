@@ -306,7 +306,7 @@ fun stripUnpersistableBase64(parts: List<UIMessagePart>): List<UIMessagePart> = 
 }
 
 private const val MEDIA_FAILURE_TOOL_RESULT =
-    "{\"status\":\"failed\",\"error\":\"Image bytes could not be persisted and are unavailable.\"}"
+    "{\"status\":\"unavailable\",\"reason\":\"media_persistence_failed\",\"detail\":\"Image bytes could not be persisted and are unavailable.\"}"
 private const val TERMINAL_REPLAY_MARKER = "[Previous assistant response did not complete.]"
 
 /**

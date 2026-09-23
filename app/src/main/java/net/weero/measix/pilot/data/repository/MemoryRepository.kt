@@ -15,6 +15,8 @@ import net.weero.measix.pilot.data.model.MemoryOwner
 import net.weero.measix.pilot.data.configuration.ConfigurationScope
 import net.weero.measix.pilot.data.model.storageId
 
+class MemoryNotFoundException(val memoryId: Int) : IllegalStateException("memory_not_found_in_namespace")
+
 class MemoryRepository(private val dao: MemoryDAO, private val transactions: DatabaseTransactionRunner) {
     internal suspend fun findToolResult(scope: ConfigurationScope, id: Int): Pair<MemoryAddress, AssistantMemory>? =
         dao.find(scope, id)?.let { row ->
@@ -36,12 +38,12 @@ class MemoryRepository(private val dao: MemoryDAO, private val transactions: Dat
     }
 
     suspend fun update(address: MemoryAddress, id: Int, content: String, requireOwner: () -> Unit): AssistantMemory {
-        commit(requireOwner) { check(dao.update(address.scope, address.owner.storageId, id, content) == 1) { "memory_not_found_in_namespace" } }
+        commit(requireOwner) { if (dao.update(address.scope, address.owner.storageId, id, content) != 1) throw MemoryNotFoundException(id) }
         return AssistantMemory(id, content)
     }
 
     suspend fun delete(address: MemoryAddress, id: Int, requireOwner: () -> Unit) = commit(requireOwner) {
-        check(dao.delete(address.scope, address.owner.storageId, id) == 1) { "memory_not_found_in_namespace" }
+        if (dao.delete(address.scope, address.owner.storageId, id) != 1) throw MemoryNotFoundException(id)
     }
 
     suspend fun deleteAll(address: MemoryAddress) = commit { dao.deleteAll(address.scope, address.owner.storageId) }

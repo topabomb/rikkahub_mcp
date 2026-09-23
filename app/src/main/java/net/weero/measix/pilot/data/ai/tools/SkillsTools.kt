@@ -1,6 +1,9 @@
 package net.weero.measix.pilot.data.ai.tools
 
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
@@ -55,20 +58,31 @@ fun createSkillTools(
                     required = listOf("name")
                 )
             },
+            validateArguments = { element ->
+                val obj = element as? JsonObject
+                val name = (obj?.get("name") as? JsonPrimitive)?.takeIf { it.isString }?.contentOrNull
+                val path = obj?.get("path")
+                when {
+                    name.isNullOrBlank() -> invalidToolArguments("name must be a non-empty skill name.")
+                    path != null && (path as? JsonPrimitive)?.takeIf { it.isString } == null ->
+                        invalidToolArguments("path must be a string when provided.")
+                    else -> null
+                }
+            },
             execute = {
                 val name = it.jsonObject["name"]?.jsonPrimitive?.content
-                    ?: error("name is required")
+                    ?: error("Validated skill name changed")
                 val skill = available.firstOrNull { skill -> skill.name == name }
-                    ?: error("Skill '$name' is not available. Available skills: ${available.joinToString { it.name }}")
+                    ?: failToolResult("skill_unavailable", "Skill '$name' is unavailable. Available: ${available.joinToString { it.name }}")
                 val path = it.jsonObject["path"]?.jsonPrimitive?.content
                 val content = when (val result = skillManager.readSkillContent(name, path)) {
                     is SkillContentReadResult.Success -> result.content
-                    SkillContentReadResult.InvalidPath -> error("Path '$path' is outside the skill directory")
-                    SkillContentReadResult.InvalidSkill -> error("Skill '$name' is invalid")
-                    SkillContentReadResult.InvalidEncoding -> error("File '${path ?: "SKILL.md"}' is not valid UTF-8")
-                    SkillContentReadResult.ResourceLimit -> error("File '${path ?: "SKILL.md"}' exceeds the Skill text limit")
-                    SkillContentReadResult.NotFound -> error("File '${path ?: "SKILL.md"}' not found in skill '$name'")
-                    SkillContentReadResult.ReadFailure -> error("Failed to read '${path ?: "SKILL.md"}' from skill '$name'")
+                    SkillContentReadResult.InvalidPath -> failToolResult("skill_invalid_path", "Path '$path' is outside skill '$name'.")
+                    SkillContentReadResult.InvalidSkill -> failToolResult("skill_invalid", "Skill '$name' has invalid instructions.")
+                    SkillContentReadResult.InvalidEncoding -> failToolResult("skill_invalid_encoding", "File '${path ?: "SKILL.md"}' is not valid UTF-8.")
+                    SkillContentReadResult.ResourceLimit -> failToolResult("skill_too_large", "File '${path ?: "SKILL.md"}' exceeds the Skill text limit.")
+                    SkillContentReadResult.NotFound -> failToolResult("skill_file_not_found", "File '${path ?: "SKILL.md"}' was not found in skill '$name'.")
+                    is SkillContentReadResult.ReadFailure -> throw result.cause
                 }
                 listOf(UIMessagePart.Text(content))
             }

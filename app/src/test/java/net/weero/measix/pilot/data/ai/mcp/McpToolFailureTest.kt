@@ -16,18 +16,19 @@ class McpToolFailureTest {
     @Test
     fun `local failure projections contain only stable decision fields`() {
         val expected = mapOf(
-            McpToolFailureKind.TOOL_UNAVAILABLE to Triple("unavailable", "tool_unavailable", null),
-            McpToolFailureKind.SERVER_UNAVAILABLE to Triple("unavailable", "server_unavailable", "Try again later."),
+            McpToolFailureKind.TOOL_UNAVAILABLE to Triple("unavailable", "tool_unavailable", McpToolFailureKind.TOOL_UNAVAILABLE.detail),
+            McpToolFailureKind.SERVER_UNAVAILABLE to Triple("unavailable", "server_unavailable", McpToolFailureKind.SERVER_UNAVAILABLE.detail),
             McpToolFailureKind.AUTHORIZATION_REQUIRED to Triple(
                 "unavailable",
                 "authorization_required",
-                "User authorization is required.",
+                McpToolFailureKind.AUTHORIZATION_REQUIRED.detail,
             ),
-            McpToolFailureKind.PROTOCOL_INCOMPATIBLE to Triple("failed", "protocol_incompatible", null),
+            McpToolFailureKind.PROTOCOL_INCOMPATIBLE to Triple("failed", "protocol_incompatible", McpToolFailureKind.PROTOCOL_INCOMPATIBLE.detail),
+            McpToolFailureKind.RESULT_PROCESSING_FAILED to Triple("failed", "result_processing_failed", McpToolFailureKind.RESULT_PROCESSING_FAILED.detail),
             McpToolFailureKind.OUTCOME_UNKNOWN to Triple(
                 "unknown",
                 "outcome_unknown",
-                "The request may have completed.",
+                McpToolFailureKind.OUTCOME_UNKNOWN.detail,
             ),
         )
 
@@ -36,16 +37,14 @@ class McpToolFailureTest {
             val json = Json.parseToJsonElement(
                 (projected.output.single() as UIMessagePart.Text).text
             ).jsonObject
-            val expectedKeys = if (values.third != null) {
-                setOf("status", "reason", "message")
-            } else {
-                setOf("status", "reason")
-            }
-            assertEquals(expectedKeys, json.keys)
+            assertEquals(
+                if (values.third == null) setOf("status", "reason") else setOf("status", "reason", "detail"),
+                json.keys,
+            )
             assertEquals(values.first, json.getValue("status").jsonPrimitive.content)
             assertEquals(values.second, json.getValue("reason").jsonPrimitive.content)
-            assertEquals(values.third, json["message"]?.jsonPrimitive?.content)
-            assertFalse(json.containsKey("detail"))
+            assertEquals(values.third, json["detail"]?.jsonPrimitive?.content)
+            assertFalse(json.containsKey("message"))
         }
     }
 
@@ -71,13 +70,12 @@ class McpToolFailureTest {
     }
 
     @Test
-    fun `empty remote error includes one actionable fallback message`() {
+    fun `empty remote error is fully described by its reason`() {
         val projected = McpToolFailureProjector.project(McpToolFailureKind.REMOTE_ERROR)
         val json = Json.parseToJsonElement(
             (projected.output.single() as UIMessagePart.Text).text
         ).jsonObject
 
-        assertEquals(setOf("status", "reason", "message"), json.keys)
-        assertEquals("The MCP server reported an error.", json.getValue("message").jsonPrimitive.content)
+        assertEquals(setOf("status", "reason"), json.keys)
     }
 }

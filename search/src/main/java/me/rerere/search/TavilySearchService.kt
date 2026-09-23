@@ -102,7 +102,7 @@ object TavilySearchService : SearchService<SearchServiceOptions.TavilyOptions> {
                         images = response.images,
                     ))
             } else {
-                error("response failed #${response.code}")
+                throw SearchHttpException("Tavily", response.code)
             }
         }
     }
@@ -141,7 +141,7 @@ object TavilySearchService : SearchService<SearchServiceOptions.TavilyOptions> {
                     )
                 )
             } else {
-                error("response failed #${response.code}")
+                throw SearchHttpException("Tavily", response.code)
             }
         }
     }

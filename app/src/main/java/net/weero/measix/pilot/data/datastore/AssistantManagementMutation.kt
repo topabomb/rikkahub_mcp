@@ -20,6 +20,12 @@ internal sealed interface AssistantManagementChange {
 internal data class AssistantManagementResult(val assistant: Assistant, val deletion: PendingAssistantDeletion? = null)
 internal data class AssistantManagementMutation(val document: UserSettingsDocument, val result: AssistantManagementResult)
 
+internal class AssistantManagementRejection(val reason: String) : IllegalArgumentException(reason)
+
+private fun requireManagement(condition: Boolean, reason: String) {
+    if (!condition) throw AssistantManagementRejection(reason)
+}
+
 /** One typed mutation owns the shared definition, per-principal grants and durable cleanup receipt. */
 internal fun UserSettingsDocument.manageAssistant(
     scope: ConfigurationScope,
@@ -30,29 +36,29 @@ internal fun UserSettingsDocument.manageAssistant(
     val definitions = configuration.assistants.withBuiltInAssistantDefinitions()
     val resolved = ConfigurationResolver.resolve(this, scope, state)
     val caller = callerId?.let {
-        require(resolved.access(ConfigurationCategory.ASSISTANT, it).canSelect) { "tool_not_permitted" }
-        requireNotNull(resolved.assistants[it]) { "tool_not_permitted" }.also { assistant ->
-            require(LocalToolOption.AssistantManagement in assistant.localTools) { "tool_not_permitted" }
+        requireManagement(resolved.access(ConfigurationCategory.ASSISTANT, it).canSelect, "tool_not_permitted")
+        (resolved.assistants[it] ?: throw AssistantManagementRejection("tool_not_permitted")).also { assistant ->
+            requireManagement(LocalToolOption.AssistantManagement in assistant.localTools, "tool_not_permitted")
         }
     }
     if (scope is ConfigurationScope.Enterprise) {
-        require(caller != null) { "assistant_management_caller_required" }
-        require(resolved.enterpriseConfiguration?.policy?.allowLocalAssistants == true) { "user_assistants_not_allowed" }
+        requireManagement(caller != null, "assistant_management_caller_required")
+        requireManagement(resolved.enterpriseConfiguration?.policy?.allowLocalAssistants == true, "user_assistants_not_allowed")
     }
     fun target(id: ConfigurationReference): Assistant {
-        require(id is ConfigurationReference.User) { "enterprise_assistant_read_only" }
+        requireManagement(id is ConfigurationReference.User, "enterprise_assistant_read_only")
         val target = definitions.singleOrNull { it.id == id }
             ?: throw NoSuchElementException("assistant_not_found")
         if (caller != null) {
-            require(resolved.access(ConfigurationCategory.ASSISTANT, id).canSelect &&
-                resolved.assistants[id]?.let { SubAssistantAccessPolicy.canAccess(caller, it) } == true) { "target_not_allowed" }
+            requireManagement(resolved.access(ConfigurationCategory.ASSISTANT, id).canSelect &&
+                resolved.assistants[id]?.let { SubAssistantAccessPolicy.canAccess(caller, it) } == true, "target_not_allowed")
         }
         return target
     }
     return when (change) {
         is AssistantManagementChange.Create -> {
             val assistant = change.assistant
-            require(assistant.id is ConfigurationReference.User && definitions.none { it.id == assistant.id }) { "invalid_assistant_identity" }
+            requireManagement(assistant.id is ConfigurationReference.User && definitions.none { it.id == assistant.id }, "invalid_assistant_identity")
             var next = copy(configuration = configuration.copy(assistants = definitions + assistant))
             if (caller != null) when (scope) {
                 ConfigurationScope.Personal -> {
@@ -82,9 +88,9 @@ internal fun UserSettingsDocument.manageAssistant(
             })), AssistantManagementResult(updated))
         }
         is AssistantManagementChange.Delete -> {
-            require(change.id != callerId) { "target_is_caller" }
+            requireManagement(change.id != callerId, "target_is_caller")
             val removed = target(change.id)
-            require(definitions.size > 1) { "last_assistant" }
+            requireManagement(definitions.size > 1, "last_assistant")
             val remainingDefinitions = definitions.filterNot { it.id == removed.id }
                 .map { it.copy(allowedSubAssistantIds = it.allowedSubAssistantIds - removed.id) }
             val remaining = remainingDefinitions.firstOrNull { !it.allowAsSubAssistant } ?: remainingDefinitions.first()

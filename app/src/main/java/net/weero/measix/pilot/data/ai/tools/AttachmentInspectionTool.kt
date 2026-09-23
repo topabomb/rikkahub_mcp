@@ -237,4 +237,5 @@ internal fun inspectionFailure(reason: String, detail: String? = null): Nothing 
         ),
     ),
     reason = reason,
+    detail = detail,
 )

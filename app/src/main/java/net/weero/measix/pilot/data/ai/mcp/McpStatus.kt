@@ -1,7 +1,7 @@
 package net.weero.measix.pilot.data.ai.mcp
 
 import net.weero.measix.pilot.utils.userVisibleDiagnostic
-import net.weero.measix.pilot.utils.redactDiagnosticSecrets
+import me.rerere.ai.core.ToolErrorProtocol
 
 sealed class McpStatus {
     data object Idle : McpStatus()
@@ -37,7 +37,7 @@ sealed class McpStatus {
         companion object {
             fun from(throwable: Throwable, fallbackMessage: String? = null): Error {
                 val summary = throwable.userVisibleDiagnostic().ifBlank { fallbackMessage.orEmpty() }
-                return Error(message = summary, detail = throwable.stackTraceToString().redactDiagnosticSecrets())
+                return Error(message = summary, detail = ToolErrorProtocol.redactSecrets(throwable.stackTraceToString()))
             }
         }
     }

@@ -102,7 +102,7 @@ object SearXNGService : SearchService<SearchServiceOptions.SearXNGOptions> {
             } else {
                 val errorBody = response.body.string()
                 println("SearXNG API error: ${response.code} - $errorBody")
-                error("SearXNG request failed with status ${response.code}")
+                throw SearchHttpException("SearXNG", response.code)
             }
         }
     }

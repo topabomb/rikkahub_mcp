@@ -6,6 +6,9 @@ import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.intOrNull
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
@@ -46,6 +49,7 @@ fun createConversationTools(
                 }
             )
         },
+        validateArguments = { validateConversationLimit(it, 30) },
         execute = {
             val limit = (it.jsonObject["limit"]?.jsonPrimitive?.intOrNull ?: 10).coerceIn(1, 30)
             val recent = conversationQueryService.recentConversations(
@@ -89,9 +93,15 @@ fun createConversationTools(
                 required = listOf("query")
             )
         },
+        validateArguments = { element ->
+            val limitFailure = validateConversationLimit(element, 50)
+            val obj = element as? JsonObject
+            val query = (obj?.get("query") as? JsonPrimitive)?.takeIf { it.isString }?.contentOrNull
+            limitFailure ?: if (query.isNullOrBlank()) invalidToolArguments("query must be a non-empty string.") else null
+        },
         execute = {
             val query = it.jsonObject["query"]?.jsonPrimitive?.contentOrNull
-                ?: error("query is required")
+                ?: error("Validated conversation query changed")
             val limit = (it.jsonObject["limit"]?.jsonPrimitive?.intOrNull ?: 15).coerceIn(1, 50)
             val results = conversationQueryService
                 .searchMessagesOfAssistant(realmAccess, assistantId, query, MessageSearchSort.RELEVANCE)
@@ -110,3 +120,10 @@ fun createConversationTools(
         }
     )
 )
+
+private fun validateConversationLimit(element: JsonElement, max: Int): JsonObject? {
+    val obj = element as? JsonObject ?: return invalidToolArguments("Arguments must be a JSON object.")
+    val raw = obj["limit"] ?: return null
+    val limit = (raw as? JsonPrimitive)?.takeIf { !it.isString }?.intOrNull
+    return if (limit == null || limit !in 1..max) invalidToolArguments("limit must be an integer in 1..$max.") else null
+}

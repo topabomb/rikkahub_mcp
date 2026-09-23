@@ -90,8 +90,9 @@ class AskUserToolTest {
         assertNull(validation["type"])
         val rejection = assertThrows(ToolArgumentsException::class.java) { tool.parseArguments(args.toString(), json) }
         val replay = parseResult(rejection.output)
-        assertEquals(validation, JsonObject(replay.filterKeys { it != "type" }))
-        assertEquals("error", replay["type"]!!.jsonPrimitive.content)
+        assertEquals("failed", replay["status"]!!.jsonPrimitive.content)
+        assertEquals("invalid_arguments", replay["reason"]!!.jsonPrimitive.content)
+        assertTrue(replay["detail"]!!.jsonPrimitive.content.contains("questions[0].options[0]"))
     }
 
     @Test

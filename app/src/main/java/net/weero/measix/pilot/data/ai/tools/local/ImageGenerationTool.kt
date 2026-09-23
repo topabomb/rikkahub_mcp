@@ -45,8 +45,8 @@ internal data class GenerateImageArguments(
 )
 
 internal class GenerateImageArgumentError(
-    val reason: String = "invalid_arguments",
-) : Exception(reason)
+    detail: String,
+) : IllegalArgumentException(detail)
 
 @Serializable
 data class ImageGenerationToolMetadata(
@@ -66,15 +66,15 @@ data class ImageGenerationToolMetadata(
 }
 
 internal fun parseGenerateImageArguments(args: JsonElement): Result<GenerateImageArguments> {
-    val obj = args as? JsonObject ?: return Result.failure(GenerateImageArgumentError())
+    val obj = args as? JsonObject ?: return Result.failure(GenerateImageArgumentError("Arguments must be an object."))
     val promptRaw = obj["prompt"]
     val prompt = (promptRaw as? JsonPrimitive)?.takeIf { it.isString }?.contentOrNull?.trim()
-    if (prompt.isNullOrEmpty()) return Result.failure(GenerateImageArgumentError())
+    if (prompt.isNullOrEmpty()) return Result.failure(GenerateImageArgumentError("prompt must be a non-empty string."))
     val backgroundRaw = obj["set_as_background"]
     val setAsBackground = when {
         backgroundRaw == null -> false
         backgroundRaw is JsonPrimitive && !backgroundRaw.isString && backgroundRaw.booleanOrNull != null -> backgroundRaw.booleanOrNull!!
-        else -> return Result.failure(GenerateImageArgumentError())
+        else -> return Result.failure(GenerateImageArgumentError("set_as_background must be a boolean."))
     }
     return Result.success(GenerateImageArguments(prompt, setAsBackground))
 }
@@ -96,6 +96,7 @@ internal fun failedResult(reason: String, detail: String? = null): Nothing =
     failToolResult(
         output = listOf(UIMessagePart.Text(imageGenerationFailureJson(reason, detail).toString())),
         reason = reason,
+        detail = detail,
     )
 
 internal data class AssistantToolBuildContext(
@@ -153,7 +154,9 @@ internal class ImageGenerationToolFactory(
                 }
             },
             validateArguments = { args ->
-                parseGenerateImageArguments(args).exceptionOrNull()?.let { imageGenerationFailureJson("invalid_arguments") }
+                parseGenerateImageArguments(args).exceptionOrNull()?.let {
+                    imageGenerationFailureJson("invalid_arguments", it.message)
+                }
             },
             outputPolicy = ToolOutputPolicy.PRESERVE,
             execute = { failedResult("invalid_arguments") },
@@ -192,7 +195,7 @@ private suspend fun executeGenerateImage(
     json: Json,
 ): List<UIMessagePart> {
     val parsed = parseGenerateImageArguments(args).getOrElse {
-        return failedResult("invalid_arguments")
+        return failedResult("invalid_arguments", it.message)
     }
     suspend fun reportPhase(phase: String, delivery: ToolMetadataDelivery, extra: ImageGenerationToolMetadata? = null) {
         val metadata = extra ?: ImageGenerationToolMetadata(

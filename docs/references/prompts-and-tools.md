@@ -206,7 +206,51 @@ Workspace 固定说明提示使用 `workspace_read_file` 阅读 `/root/.agents/A
 
 ---
 
-## 5. 工具描述与参数
+## 5. 工具错误返回协议
+
+工具调用的模型可见错误以一个 Text part 中的 JSON object 开头。公共字段是 `status` 与 `reason`；只有原因代码不足以说明具体对象、修正动作或异常诊断时才加 `detail`。成功结果仍保留各工具的领域形状，durable 终态仍由 `ToolResultStatus` 和执行记录决定。
+
+```json
+{"status":"failed","reason":"memory_not_found_in_namespace","detail":"Memory 111 does not exist in the current namespace. Do not retry this ID unchanged."}
+```
+
+- `status`：执行或业务失败为 `failed`；已确认当前不能调用为 `unavailable`；调用已承诺但无法确认结果为 `unknown`。`assistant_call` 等委派工具与 MCP 工具可返回后两者；`unknown` 不能盲目重试。
+- `reason`：必有、稳定的小写下划线代码，只表达已确认的失败类别。保留已有明确领域代码，不用异常 message、动态资源名或仅表示“工具失败”的泛码代替事实。
+- `detail`：可选。若存在，App 生成的最终值必须非空、单行，最多 128 个 Unicode code point（含尾部省略号）；先脱敏、压平空白，再裁剪。省略它表示 `reason` 已足以决策，不能用空字符串或重复解释来占位。远端 MCP 正文仍按原协议保留，不受本地 `detail` 上限约束。
+
+原有业务字段可与公共字段并存，例如 Shell 退出码与 stderr、子助手交付摘要；它们不能覆盖公共语义。App 生成错误不另用 `error`、`type`、`message` 表达平行代码或说明。参数纯校验在审批前返回相同信封，不创建执行行。用户拒绝与 `ask_user` 回答沿用 typed interaction 终态。取消向上传播，不生成失败结果。
+
+### 明确错误与意外异常
+
+参数缺失或类型不符返回 `invalid_arguments`，`detail` 指出字段及期望；当前 owner/namespace 中资源确实不存在时返回领域 not found 代码，并在需要时指出 ID 与边界。读取快照曾有 ID 不是当前可写证明；未知读取异常也不能解释成权限拒绝。Shell 非零退出与超时分别返回 `shell_exit_nonzero`、`shell_timeout`，保留命令输出。
+
+搜索和网页抓取在请求前校验必需字符串及 Tavily `topic` 枚举；搜索服务的明确 HTTP 拒绝按状态返回 `invalid_request`、`auth_failed`、`rate_limited` 或 `search_provider_error`，`detail` 保留服务名和 HTTP 状态。JavaScript 在创建 QuickJS 上下文前校验 `code`；日历查询和屏幕使用时间在权限动作前校验时间字段类型、格式、预设范围和数量字段。Workspace 工具在同一工作区门内复核存在性及 Shell ready 状态，分别返回 `workspace_unavailable`、`workspace_not_ready`；企业访问撤销返回 `tool_not_permitted`。这些都是明确拒绝；其他外部服务、文件 IO 等未知异常由 Runtime 保留诊断。
+
+无法预期的工具实现异常返回 `failed/runtime_error`，其 `detail` 必有异常类型与 cause 链中最深的非空 message；message 为空至少保留异常类型。完整异常、cause 与堆栈写入诊断日志。Runtime 持有的 checkpoint、资源登记等基础设施异常继续向 Turn owner 传播。只脱敏凭据、token、Cookie、Authorization、密钥和明确的隐私 payload；不删除定位相关的非敏感细节。
+
+本地分类失败不得用 `tool_failed`、`operation_failed` 或固定“稍后重试”掩盖已知原因。历史工具输出中的图片字节若未能持久化，回放投影使用 `unavailable/media_persistence_failed` 说明媒体不可读取，不倒改原工具执行终态。
+
+### MCP 阶段与结果
+
+| 已确认事实 | `status` / `reason` | `detail` 的条件 |
+| --- | --- | --- |
+| 本地定义或工具已撤销 | `unavailable/tool_unavailable` | 通常省略 |
+| 调用前无可用 session | `unavailable/server_unavailable` | 恢复动作或底层原因有用时附上 |
+| 调用前需要用户授权 | `unavailable/authorization_required` | 通常省略 |
+| 服务端明确返回 MCP error 或 `isError` | `failed/remote_error` | 无远端正文时可附有界远端 message；否则保留原始文本及 structuredContent。错误中的图片等非文本内容只标明已省略，不经本地 Artifact 写入，不能覆盖远端错误性质 |
+| 结果不符合 MCP 内容协议 | `failed/protocol_incompatible` | 有具体违规约束时附上 |
+| 已收到结果，本地投影或保存失败 | `failed/result_processing_failed` | 附本地异常，并提示核实远端副作用 |
+| 调用承诺后无可确认结果 | `unknown/outcome_unknown` | 附失败原因和先核实、勿盲重试的提示 |
+
+SDK `McpException` 同时可表达本地连接关闭、超时和明确 RPC 错误，必须按 code 与已完成阶段分类，不能仅凭类型声称来自服务端。客户端的 commitment 不等于网络字节已发送；不能自动重放 unknown 调用。server/tool、transport、generation、`retryable` 和 `request_sent` 不进入模型结果；本地异常可在脱敏后进入有界 `detail`。
+
+新工具、渐进披露工具和代理调用工具先定义稳定的明确失败原因，再把意外异常交给统一 Runtime。回查工具把 ref 格式错误归为 `invalid_arguments`，把合法但不可用的归档引用归为 `archive_unavailable`；意外读取异常交给 Runtime。委派工具保留子任务失败、不可用或未知事实及交付状态，父工具不能把子任务失败伪装为完成。可归档的错误信封仍须由原回查工具读取；有不可恢复交付引用时沿用 `PRESERVE`。
+
+工具卡片以 typed 终态决定成功或失败标题。已知用户操作类别可显示简短本地化提示；技术性 `reason` 保留代码，`detail` 在详情中可展开，不用泛化文案遮盖。验证覆盖参数拒绝时序、领域失败、意外异常和 cause、脱敏及 128 字符边界、取消、MCP 承诺前后状态、明确远端错误与本地结果处理错误，并核对模型 Text part 与 durable 终态。
+
+---
+
+## 6. 工具描述与参数
 
 `search_web` 的描述要求时效问题核验发布日期和事件发生日期；检索顺序、抓取时间不能证明新鲜度，缺日期或一手证据时应继续检索/读取来源。此为固定工具指引，不伪造搜索 SDK 的日期字段。
 
@@ -258,7 +302,7 @@ TextToImage 且模型有效时可使用 `generate_image`。运行和检查均显
 提供审批，不要原样重试”。该错误只拒绝当前 ToolCall，Target 可调整参数后继续运行。
 
 > Generate one image from a text prompt, show it to the user, and return a local path that follow-up tools can use.
-> Failures return a stable reason and a short detail when available.
+> Failures return a stable reason and, when needed, a short detail.
 
 `text_to_image` 的 `systemPromptContribution` 只在 START 注册时注入当前非敏感配置，字段由
 `ImageGenerationModelDescriptor` 统一生成：`provider_type`、`provider_name`、`model_id`、
@@ -272,7 +316,7 @@ TextToImage 且模型有效时可使用 `generate_image`。运行和检查均显
 
 `set_as_background` 默认 false，纯生成不审批；`set_as_background=true` 必须审批。通用入口先验证合法 JSON object；
 prompt 为空或 boolean 类型不合法时，审批前的最终结果为
-`{"status":"failed","reason":"invalid_arguments","error":"invalid_arguments","type":"error"}`。
+`{"status":"failed","reason":"invalid_arguments","detail":"..."}`。
 
 成功结果是 bounded JSON + `UIMessagePart.Image`，使用 `ToolOutputPolicy.PRESERVE`，不回显 prompt：
 
@@ -292,12 +336,11 @@ Android host path、file URI 和内部 relative path 不进入 Tool Result。
 会话 fork / 恢复按 metadata 中的 `LocalArtifactRef.relativePath` 重写该字段；文件缺失时不得
 伪造 completed + readable path。
 
-失败结果只有 Text part，带稳定 `reason`。本地前置失败没有 `detail`：
+失败结果只有 Text part，按[工具错误返回协议](#5-工具错误返回协议)带稳定 `reason`，必要时带不超过 128 字符的 `detail`。本地前置失败包括：
 `invalid_arguments`、`image_model_unavailable`、`tool_revoked`、`image_model_changed`、
 `assistant_not_found`（执行前发现会话所属 Assistant 已删除）。
 
-工具在当前运行中未注册时，返回 `tool_not_available`（结构化 JSON，含 `tool` 名称与
-`message`），不抛内部异常。模型收到后不应原样重试。
+工具在当前运行中未注册时，返回 `tool_not_available` 和明确 `detail`，不抛内部异常。模型收到后不应原样重试。
 生图调用失败由 `classifyProviderFailure()` 分类，并带回裁剪后的 `detail`
 （默认字符上限，脱敏 API key / Bearer / 内联 base64，不含堆栈）：
 
@@ -370,7 +413,7 @@ JSON：
 | `attachment_read_failed` | 本地读取 IO 失败 |
 | `attachment_resolution_unavailable` | 执行环境未提供附件解析能力 |
 | `rate_limited` / `quota_exhausted` / `auth_failed` / `permission_denied` / `invalid_request` / `provider_unavailable` / `provider_error` / `content_blocked` / `runtime_error` | Provider 调用失败，`classifyProviderFailure` 细分（与 `ProviderFailureKind` 字面一致）；失败信封可携带 `detail`（sanitized 诊断文本） |
-| `inspection_failed` | 识别输出为空（兜底，无 `detail`） |
+| `inspection_failed` | 识别输出为空（附明确 `detail`） |
 
 媒体资源引用（全工具链统一语义）：
 
@@ -420,8 +463,8 @@ read：`{"text":"..."}`。write：`{"success":true}`。
 
 启用：`LocalToolOption.AskUser`。`interactionRequirement=UserInput`；合法调用经统一 ToolCallRuntime 暂停并由 typed `Answer` 决定回填结果，`execute` 不直接跑。
 问题字段不合法时在审批门口直接失败：写入
-`{"error":"invalid_arguments","field":"...","expected":"...","type":"error"}`，不 Pending、不自动执行。
-`options` 格式错误时额外带 `hint`。Target 上由 Coordinator 桥到主聊天子助手卡片。
+`{"status":"failed","reason":"invalid_arguments","detail":"..."}`，不 Pending、不自动执行。
+`detail` 指出错误字段与期望；`options` 格式错误时也包含修正提示。Target 上由 Coordinator 桥到主聊天子助手卡片。
 
 > Ask the user one or more questions when you need clarification or confirmation.
 
@@ -499,6 +542,7 @@ Memory 行的顺序由 DAO 的 `ORDER BY id ASC` 固定。
 | `content` | Note text (required for create/edit) |
 
 create：`{"id":N}`。edit / delete：`{"success":true,"id":N}`。
+edit / delete 在当前 owner namespace 中影响 0 行时返回 `memory_not_found_in_namespace`，`detail` 给出 ID 与“不原样重试”的提示；读取过旧快照不构成当前可写证明。工具错误不触发 Memory Snapshot 重新注入。
 聊天卡片摘要读的是 tool **入参**的 `content`，不是结果。
 
 ### `recent_chats`
@@ -618,7 +662,7 @@ caller 自身返回 `target_is_caller`。
 完成：`{"status":"completed","assistant_name":"...","content":"..."}`，必要时
 `has_non_text_output`。本次 run 有可持久化交付物时，无论是否点名 extras 都带轻量
 `artifacts[]`（仅 `path` / `type` / `mime`，无可用 path 的项不披露）；超出上限时另带
-`artifacts_omitted`。其他终态带稳定 `reason`。`content_blocked`、`provider_error` 与 `runtime_error` 另带提炼后的 `detail`。`provider_error` / `runtime_error` 含单行异常类型与消息（按字符上限裁剪，不含因果链和堆栈）；`content_blocked` 使用稳定政策说明，不回传检查类型（含 OpenAI `content_filter`）。
+`artifacts_omitted`。其他终态按[工具错误返回协议](#5-工具错误返回协议)带稳定 `reason`，必要时带有界 `detail`。`provider_error` / `runtime_error` 的 `detail` 保留可定位的异常类型、消息和有意义的 cause；`content_blocked` 使用稳定政策说明，不回传检查类型（含 OpenAI `content_filter`）。
 
 默认清单是 Text JSON，没有 Image 或 `[Attachment ...]` 事实行。需要后续检查时，可以直接使用 `artifacts[].path`
 调用识图；无需重跑子助手。`extras` 只在原委托调用时选择内容，不是事后补取接口。
@@ -643,20 +687,15 @@ caller 自身返回 `target_is_caller`。
 
 用户手工刷新与 `notifications/tools/list_changed` 成功提交后只更新后续 turn；同一 run 继续使用启动 revision。
 
-失败结果只包含调用决策所需的 `status`、稳定 `reason` 和真正增加信息时的短 `message`：撤销返回
-`unavailable/tool_unavailable`；无 live session 返回 `unavailable/server_unavailable` 并触发内部恢复；需要用户授权返回
-`unavailable/authorization_required`；server 未声明 tools capability 或完整响应无法投影返回
-`failed/protocol_incompatible`；远端 `CallToolResult.isError` 或明确 MCP error 返回 `failed/remote_error` 并保留服务端
-content、`structured_content` 或经裁剪的 message；调用承诺后未取得可确认结果返回 `unknown/outcome_unknown`。
-客户端不声称本地 commitment 等于网络请求已发送，也不自动重放 unknown 调用。server/tool、transport、generation、SDK/HTTP detail、
-`retryable` 和 `request_sent` 不进入 Agent 输出。
+失败的阶段分类、公共字段与远端正文边界见[工具错误返回协议](#5-工具错误返回协议)。无 live session 时内部触发恢复；
+调用承诺后不能自动重放未知结果。
 
 成功 `TextContent` 进文本，`ImageContent` 先取得 Artifact lease 再转 Image part，成功 `structuredContent` 也进入工具结果。
 调用总时限 120 秒，取消向上传播。
 
 ---
 
-## 6. 工具输出归档与回查
+## 7. 工具输出归档与回查
 
 工具结果的压缩资格与预算由 [请求上下文](request-context.md) 定义；此处只说明模型能看到的策略与回查接口。
 `ARCHIVABLE_TEXT` 在成功请求消费后可变为 `[Archived tool result: ref=...]`；`REGENERABLE_TEXT` 只变为
@@ -676,13 +715,11 @@ PRESERVE；只有单 Text、status=completed、assistant_name / content 为字�
 ref 不授予权限，也不会暴露 relative path、`file://` 或 App 私有路径。原 ref 对应的归档正文保持不可变；回查结果满足
 统一阈值后只折叠 marker，不再归档，不建立复制链或递归读取协议。
 
-内建工具成功时直接返回领域数据，由 typed `ToolResultStatus` 提交 COMPLETED；通用领域失败通过 `ToolExecutionFailure` 返回短小
-`status=failed` / `reason` / 可选 `detail`，并提交 FAILED。参数校验拒绝、Denied、Answered 不创建执行行。
-MCP 远端正文保持原协议，不强制套用内建信封，但其 typed 终态、输出策略与裁剪资格仍由同一 Runtime/Planner 决定。
+工具结果的错误信封与 typed 终态见[工具错误返回协议](#5-工具错误返回协议)；本节的归档规则对内建及 MCP 结果共用。
 
 ---
 
-## 7. 结果里不回写入参原文
+## 8. 结果里不回写入参原文
 
 入参已留在同一条消息的 tool call 中。结果只保留模型单看 output 无法知道的信息：
 

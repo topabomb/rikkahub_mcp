@@ -7,6 +7,7 @@ import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import me.rerere.ai.core.Tool
 import me.rerere.ai.core.ToolArgumentsException
@@ -82,6 +83,23 @@ class ToolCallRuntimeTest {
     /** The batch as it stands after replacements (keyed by stable localCallId) are applied. */
     private fun List<UIMessagePart.Tool>.after(preparation: ToolBatchPreparation): List<UIMessagePart.Tool> =
         map { tool -> preparation.replacements[tool.localCallId] ?: tool }
+
+    @Test
+    fun `unexpected preparation error becomes a bounded failed tool result`() {
+        val definition = Tool(
+            name = "broken_validator",
+            description = "broken validator",
+            validateArguments = { throw IllegalStateException("validator crashed for record 111") },
+            execute = { error("Must not execute") },
+        )
+        val call = tool("id", definition.name, "{}")
+        val preparation = prepare(listOf(call), listOf(definition))
+        val result = listOf(call).after(preparation).single()
+        val envelope = Json.parseToJsonElement((result.output.single() as UIMessagePart.Text).text).jsonObject
+        assertEquals("runtime_error", envelope.getValue("reason").jsonPrimitive.content)
+        assertTrue(envelope.getValue("detail").jsonPrimitive.content.contains("IllegalStateException"))
+        assertEquals(ToolResultStatus.FAILED, result.resultStatus)
+    }
 
     @Test
     fun `invalid inputs fail in every availability mode for all undecided or approved states`() {
@@ -373,7 +391,7 @@ class ToolCallRuntimeTest {
 
         assertEquals(me.rerere.ai.ui.ToolResultStatus.FAILED, outcome.resultStatus)
         assertEquals(
-            "{\"status\":\"failed\",\"reason\":\"tool_failed\"}",
+            "{\"status\":\"failed\",\"reason\":\"runtime_error\",\"detail\":\"IllegalStateException: secret path\"}",
             (outcome.output.single() as UIMessagePart.Text).text,
         )
         assertEquals(ToolResultStatus.FAILED, outcome.resultStatus)
@@ -464,10 +482,10 @@ class ToolCallRuntimeTest {
             execute = { withTimeout(1) { awaitCancellation() } },
         )
         val innerOutcome = runtime.execute(prepared(inner), hooks())
-        assertEquals(
-            "{\"status\":\"failed\",\"reason\":\"tool_timeout\"}",
-            (innerOutcome.output.single() as UIMessagePart.Text).text,
-        )
+        val innerError = Json.parseToJsonElement((innerOutcome.output.single() as UIMessagePart.Text).text).jsonObject
+        assertEquals("failed", innerError.getValue("status").jsonPrimitive.content)
+        assertEquals("tool_timeout", innerError.getValue("reason").jsonPrimitive.content)
+        assertTrue(innerError.getValue("detail").jsonPrimitive.content.isNotBlank())
 
         val outer = Tool("outer", "outer", execute = { awaitCancellation() })
         var cancelled = false

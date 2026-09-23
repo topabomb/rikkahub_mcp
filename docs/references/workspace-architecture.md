@@ -40,7 +40,7 @@ Assistant.workspaceId 有效
 `workspace` Gradle 模块不依赖应用 UI；`app` 模块负责 Room、Compose、文件上传、工具注册和 DI。
 Workspace 工具由 `TurnToolSetFactory` 在 Master/Target 共用的 `TurnCommitter` 管道中装配；工具执行事实经 `TurnCheckpoint` / `FinalizeTurn` 写入，不另开落库路径。
 
-`TurnToolSetFactory` 只从 `WorkspaceQueryService` 取得 typed readiness 与审批投影。真正执行时，`WorkspaceApplicationService.executeTool` 在 per-workspace gate 内重新校验 Workspace 仍存在且为 `READY`，再交付只含 Rootfs read/write/update/command 的 `WorkspaceToolSession`；工具代码不能取得 Repository。这样从装配到执行之间发生删除、重装或状态变化时 fail-closed，且 `workspace_edit_file` 的 read/replace/write 整体不会与 UI 写入、安装或删除交错。
+`TurnToolSetFactory` 只从 `WorkspaceQueryService` 取得 typed readiness 与审批投影。真正执行时，`WorkspaceApplicationService.executeTool` 在 per-workspace gate 内重新校验 Workspace 仍存在且为 `READY`，再交付只含 Rootfs read/write/update/command 的 `WorkspaceToolSession`；工具代码不能取得 Repository。删除或状态变化分别通过 `WorkspaceToolUnavailableException` 映射为 `workspace_unavailable`、`workspace_not_ready`，企业访问撤销映射为 `tool_not_permitted`，不会冒充未知运行时异常。`workspace_edit_file` 的 read/replace/write 整体不会与 UI 写入、安装或删除交错。
 
 Compose、ViewModel、聊天文件补全、cwd 选择和已编辑文件导出都只能依赖 `WorkspaceQueryService` / `WorkspaceApplicationService`；不得持有 `WorkspaceRepository` 或 Room `WorkspaceEntity`。`WorkspaceUiModel` 只公开 UI 所需的 id、名称、typed `WorkspaceShellStatus` 和工具审批投影，不把持久化实体或 `shell_status` 字符串编码当作页面协议。字符串只存在于 Room 边界，并由 `WorkspaceEntity.resolvedShellStatus` 一次解析；未知值按 `BROKEN` fail-closed，不能意外开放工具或终端。
 

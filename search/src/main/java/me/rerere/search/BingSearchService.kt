@@ -9,6 +9,7 @@ import kotlinx.serialization.json.put
 import me.rerere.ai.core.InputSchema
 import me.rerere.search.SearchResult.SearchResultItem
 import org.jsoup.Jsoup
+import org.jsoup.HttpStatusException
 import java.net.URLEncoder
 import java.util.Locale
 
@@ -36,7 +37,7 @@ object BingSearchService : SearchService<SearchServiceOptions.BingLocalOptions> 
             val url = "https://www.bing.com/search?q=" + URLEncoder.encode(query, "UTF-8")
             val locale = Locale.getDefault()
             val acceptLanguage = "${locale.language}-${locale.country},${locale.language}"
-            val doc = Jsoup.connect(url)
+            val doc = try { Jsoup.connect(url)
                 .userAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
                 .header(
                     "Accept",
@@ -50,6 +51,9 @@ object BingSearchService : SearchService<SearchServiceOptions.BingLocalOptions> 
                 .cookie("SRCHHPGUSR", "ULSR=1")
                 .timeout(5000)
                 .get()
+            } catch (error: HttpStatusException) {
+                throw SearchHttpException("Bing", error.statusCode)
+            }
 
             // 解析搜索结果
             val results = doc.select("li.b_algo")
@@ -65,9 +69,7 @@ object BingSearchService : SearchService<SearchServiceOptions.BingLocalOptions> 
                     )
                 }
 
-            require(results.isNotEmpty()) {
-                "Search failed: no results found"
-            }
+            if (results.isEmpty()) throw SearchNoResultsException()
 
             SearchResult(items = results)
         }

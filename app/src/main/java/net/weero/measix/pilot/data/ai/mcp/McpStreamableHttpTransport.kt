@@ -3,7 +3,7 @@
 // Source and local changes: docs/references/mcp-architecture.md.
 package net.weero.measix.pilot.data.ai.mcp
 
-import net.weero.measix.pilot.utils.redactDiagnosticSecrets
+import me.rerere.ai.core.ToolErrorProtocol
 
 import net.weero.measix.pilot.data.enterprise.ManagedSnapshotRequired
 
@@ -295,7 +295,7 @@ internal class McpStreamableHttpTransport(
             catch (_: IllegalStateException) { }
         }
         if (managed) managedProblem(status, body)?.let { return it }
-        return StreamableHttpError(status, body.redactDiagnosticSecrets())
+        return StreamableHttpError(status, ToolErrorProtocol.redactSecrets(body))
     }
 
     private fun getNextReconnectionDelay(attempt: Int, serverRetryDelay: Duration?): Duration {

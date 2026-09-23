@@ -16,6 +16,7 @@ import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
@@ -84,6 +85,8 @@ internal fun buildCalendarQueryTool(context: Context): Tool = Tool(
             }
         )
     },
+    validateArguments = { args -> validateLocalTimeRangeArguments(args, setOf("today", "week", "month"), "limit", "query")
+        ?: validateCalendarQueryTimes(args) },
     execute = { args ->
         if (!hasCalendarReadPermission(context)) {
             failToolResult(
@@ -119,7 +122,11 @@ internal fun buildCalendarQueryTool(context: Context): Tool = Tool(
                 "month" -> startTime.plusMonths(1)
                 else -> now.toLocalDate().plusDays(1).atStartOfDay(zone)
             }
-        } catch (e: Exception) {
+        } catch (e: java.time.DateTimeException) {
+            failToolResult("invalid_time", e.message ?: "Invalid time format for begin/end.")
+        } catch (e: IllegalStateException) {
+            failToolResult("invalid_time", e.message ?: "Invalid time format for begin/end.")
+        } catch (e: ArithmeticException) {
             failToolResult("invalid_time", e.message ?: "Invalid time format for begin/end.")
         }
 
@@ -210,6 +217,51 @@ internal fun buildCalendarQueryTool(context: Context): Tool = Tool(
     }
 )
 
+internal fun invalidLocalToolArgument(reason: String, detail: String): JsonObject = buildJsonObject {
+    put("reason", reason)
+    put("detail", detail)
+}
+
+internal fun validateLocalTimeRangeArguments(
+    args: JsonElement,
+    allowedRanges: Set<String>,
+    countField: String,
+    extraStringField: String? = null,
+): JsonObject? {
+    val obj = args as? JsonObject ?: return invalidLocalToolArgument("invalid_arguments", "Arguments must be an object.")
+    for (field in listOfNotNull("begin", "end", extraStringField)) {
+        if (field in obj && (obj[field] as? JsonPrimitive)?.isString != true) {
+            return invalidLocalToolArgument("invalid_arguments", "$field must be a string.")
+        }
+    }
+    val range = obj["range"]
+    if (range != null && (range !is JsonPrimitive || !range.isString || range.content !in allowedRanges)) {
+        return invalidLocalToolArgument("invalid_arguments", "range must be one of ${allowedRanges.joinToString()}.")
+    }
+    val count = obj[countField]
+    if (count != null && (count !is JsonPrimitive || count.isString || count.intOrNull == null || count.intOrNull!! < 1)) {
+        return invalidLocalToolArgument("invalid_arguments", "$countField must be a positive integer.")
+    }
+    return null
+}
+
+private fun validateCalendarQueryTimes(args: JsonElement): JsonObject? {
+    val obj = args as JsonObject
+    for (field in listOf("begin", "end")) {
+        val value = (obj[field] as? JsonPrimitive)?.content ?: continue
+        try {
+            parseCalendarTime(value, ZoneId.systemDefault())
+        } catch (error: java.time.DateTimeException) {
+            return invalidLocalToolArgument("invalid_time", "$field: ${error.message ?: "Invalid time format."}")
+        } catch (error: IllegalStateException) {
+            return invalidLocalToolArgument("invalid_time", "$field: ${error.message ?: "Invalid time format."}")
+        } catch (error: ArithmeticException) {
+            return invalidLocalToolArgument("invalid_time", "$field: ${error.message ?: "Invalid time range."}")
+        }
+    }
+    return null
+}
+
 internal data class CalendarCreateArguments(
     val title: String,
     val description: String,
@@ -226,8 +278,8 @@ internal sealed interface CalendarCreateParseResult {
     data class Valid(val event: CalendarCreateArguments) : CalendarCreateParseResult
     data class Invalid(val error: String, val message: String) : CalendarCreateParseResult {
         fun toErrorJson(): JsonObject = buildJsonObject {
-            put("error", error)
-            put("message", message)
+            put("reason", error.lowercase())
+            put("detail", message)
         }
 
         fun toToolResult(): Nothing = failToolResult(error.lowercase(), message)

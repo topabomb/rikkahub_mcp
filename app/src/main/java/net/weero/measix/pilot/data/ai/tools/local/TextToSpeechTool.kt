@@ -8,6 +8,7 @@ import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import me.rerere.ai.core.InputSchema
 import me.rerere.ai.core.Tool
+import net.weero.measix.pilot.data.ai.tools.invalidToolArguments
 import me.rerere.ai.ui.UIMessagePart
 import net.weero.measix.pilot.data.ai.tts.TtsPlaybackSource
 
@@ -52,10 +53,16 @@ internal fun buildTextToSpeechTool(
                 required = listOf("text")
             )
         },
+        validateArguments = { element ->
+            val obj = element as? kotlinx.serialization.json.JsonObject
+            val text = (obj?.get("text") as? kotlinx.serialization.json.JsonPrimitive)
+                ?.takeIf { it.isString }?.contentOrNull
+            if (text.isNullOrBlank()) invalidToolArguments("text must be a non-empty string.") else null
+        },
         execute = {
             val text = it.jsonObject["text"]?.jsonPrimitive?.contentOrNull
                 ?.takeIf { value -> value.isNotBlank() }
-                ?: error("text is required and must not be blank")
+                ?: error("Validated speech text changed")
 
             speech.enqueue(playbackContext.capture, playbackContext.sessionId, text,
                 ttsToolReplacesWithinTurn(playbackContext.capture.sequential), playbackContext.toPlaybackSource())

@@ -244,6 +244,7 @@
   <string name="chat_message_tool_clipboard_write">写入剪贴板</string>
   <string name="chat_message_tool_create_memory">创建了记忆</string>
   <string name="chat_message_tool_delete_memory">删除了记忆</string>
+  <string name="chat_message_tool_memory_failed">记忆操作失败</string>
   <string name="chat_message_tool_denied">已拒绝</string>
   <string name="chat_message_tool_deny">拒绝</string>
   <string name="chat_message_tool_deny_dialog_hint">原因（可选）</string>

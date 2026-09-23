@@ -47,7 +47,7 @@ class AssistantManagementService internal constructor(
         val trimmedDescription = normalizeDescription(description)
         val trimmedInstructions = instructions.trim()
         if (trimmedName.isEmpty() || trimmedDescription.isEmpty() || trimmedInstructions.isEmpty()) {
-            return Result.failure(IllegalArgumentException("invalid_arguments"))
+            return Result.failure(net.weero.measix.pilot.data.datastore.AssistantManagementRejection("invalid_arguments"))
         }
         val assistant = buildToolCreatedAssistant(trimmedName, trimmedDescription, trimmedInstructions)
         return manage(caller, AssistantManagementChange.Create(assistant)).map { it.assistant }
@@ -67,7 +67,7 @@ class AssistantManagementService internal constructor(
         val normalizedDescription = description?.let(::normalizeDescription)
         val normalizedInstructions = instructions?.trim()
         if (normalizedName?.isEmpty() == true || normalizedDescription?.isEmpty() == true || normalizedInstructions?.isEmpty() == true) {
-            return Result.failure(IllegalArgumentException("invalid_arguments"))
+            return Result.failure(net.weero.measix.pilot.data.datastore.AssistantManagementRejection("invalid_arguments"))
         }
         return manage(caller, AssistantManagementChange.Update(assistantId, normalizedName, normalizedDescription, normalizedInstructions)).map { it.assistant }
     }
@@ -93,7 +93,8 @@ class AssistantManagementService internal constructor(
             }
             Result.success(result)
         } catch (missing: NoSuchElementException) { Result.failure(missing) }
-        catch (rejected: IllegalArgumentException) { Result.failure(rejected) }
+        catch (rejected: net.weero.measix.pilot.data.datastore.AssistantManagementRejection) { Result.failure(rejected) }
+        catch (rejected: net.weero.measix.pilot.data.enterprise.EnterpriseConfigurationException) { Result.failure(rejected) }
     }
 
     /** App 启动时幂等消费尚未完成的删除 tombstone。 */

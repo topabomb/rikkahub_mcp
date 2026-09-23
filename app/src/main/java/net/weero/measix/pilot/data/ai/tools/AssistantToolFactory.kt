@@ -28,12 +28,15 @@ import net.weero.measix.pilot.data.ai.subassistant.parseAssistantCallExtras
 import net.weero.measix.pilot.data.ai.tools.local.LocalToolOption
 import net.weero.measix.pilot.data.ai.tools.local.TtsToolPlaybackContext
 import net.weero.measix.pilot.data.datastore.Settings
+import net.weero.measix.pilot.data.datastore.AssistantManagementRejection
+import net.weero.measix.pilot.data.enterprise.EnterpriseConfigurationException
 import net.weero.measix.pilot.data.datastore.getChatModel
 import net.weero.measix.pilot.data.model.Assistant
 import net.weero.measix.pilot.data.model.normalizeDescription
 import net.weero.measix.pilot.utils.jsonPrimitiveOrNull
 import net.weero.measix.pilot.service.AssistantDeletionResult
 import net.weero.measix.pilot.service.AssistantManagementService
+import net.weero.measix.pilot.service.MemoryAccessRejectedException
 import net.weero.measix.pilot.service.subassistant.SubAssistantRunCoordinator
 import net.weero.measix.pilot.service.runtime.TurnKind
 import kotlin.uuid.Uuid
@@ -239,17 +242,19 @@ class AssistantToolFactory internal constructor(
                             }
                         }
                     }
-                    else -> errorResult("operation_failed")
+                    else -> error("Unexpected assistant management result: ${data::class.simpleName}")
                 }
             },
             onFailure = { error ->
                 if (error is CancellationException) throw error
-                val reason = when (error) {
-                    is NoSuchElementException -> "assistant_not_found"
-                    is IllegalArgumentException -> error.message ?: "invalid_arguments"
-                    else -> "operation_failed"
+                when (error) {
+                    is NoSuchElementException -> errorResult("assistant_not_found")
+                    is AssistantManagementRejection -> errorResult(error.reason)
+                    is EnterpriseConfigurationException -> errorResult(
+                        "tool_not_permitted", "Assistant access was revoked: ${error.reason}."
+                    )
+                    else -> throw error
                 }
-                errorResult(reason)
             },
         )
         return listOf(UIMessagePart.Text(resultJson.toString()))
@@ -315,7 +320,9 @@ class AssistantToolFactory internal constructor(
 
         val snapshot = try { configurations.readExecution(realmAccess) }
         catch (cancelled: CancellationException) { throw cancelled }
-        catch (_: Exception) { return errorResult("tool_not_permitted") }
+        catch (rejected: EnterpriseConfigurationException) {
+            return errorResult("tool_not_permitted", "Assistant access was revoked: ${rejected.reason}.")
+        }
         val configuration = snapshot.configuration
         val caller = configuration.assistants[callerAssistantId]
             ?: return errorResult("tool_not_permitted")
@@ -342,7 +349,10 @@ class AssistantToolFactory internal constructor(
         val memory = if (INSPECT_SECTION_MEMORY in sections) {
             try { memoryService.inspect(realmAccess, callerAssistantId, assistantId) }
             catch (cancelled: CancellationException) { throw cancelled }
-            catch (_: Exception) { return errorResult("operation_failed") }
+            catch (rejected: MemoryAccessRejectedException) { return errorResult(rejected.reason) }
+            catch (rejected: EnterpriseConfigurationException) {
+                return errorResult("tool_not_permitted", "Assistant access was revoked: ${rejected.reason}.")
+            }
         } else {
             null
         }
@@ -580,7 +590,10 @@ class AssistantToolFactory internal constructor(
                 ?.takeIf { it.isString }?.contentOrNull
                 ?: status
                 ?: "invalid_result"
-            failToolResult(output, reason)
+            val detail = envelope?.get("detail")?.jsonPrimitiveOrNull?.contentOrNull
+                ?: envelope?.get("content")?.jsonPrimitiveOrNull?.contentOrNull?.takeIf(String::isNotBlank)
+                ?: assistantErrorDetail(reason)
+            failToolResult(output, reason, detail, status = if (status == "unavailable") "unavailable" else "failed")
         }
         return output
     }
@@ -599,6 +612,7 @@ class AssistantToolFactory internal constructor(
             ),
             ),
             reason = reason,
+            detail = assistantErrorDetail(reason),
         )
     }
 
@@ -606,8 +620,26 @@ class AssistantToolFactory internal constructor(
 
     /** 仅供审批前纯参数校验返回字段级 reason；执行期失败统一走 [failToolResult]。 */
     private fun errorJson(errorCode: String): JsonObject = buildJsonObject {
-        put("error", errorCode)
+        put("reason", errorCode)
+        assistantErrorDetail(errorCode)?.let { put("detail", it) }
     }
 
-    private fun errorResult(errorCode: String): Nothing = failToolResult(errorCode)
+    private fun errorResult(errorCode: String, detail: String? = assistantErrorDetail(errorCode)): Nothing =
+        failToolResult(errorCode, detail)
+}
+
+private fun assistantErrorDetail(reason: String): String? = when (reason) {
+    "invalid_arguments", "invalid_assistant_id" -> "Assistant tool arguments are invalid; check action, ID, and required fields."
+    "assistant_id_required" -> "assistant_id is required."
+    "request_required" -> "A non-empty request is required for the sub-assistant."
+    "context_required" -> "This sub-assistant call requires the active Tool execution context."
+    "assistant_not_found" -> "The selected assistant no longer exists."
+    "tool_not_permitted", "target_not_allowed", "user_assistants_not_allowed" ->
+        "Assistant management is not permitted in the current scope."
+    "target_is_caller" -> "An assistant cannot manage or call itself."
+    "enterprise_assistant_read_only" -> "Managed assistant definitions cannot be edited or deleted."
+    "last_assistant" -> "The final assistant definition cannot be deleted."
+    "invalid_attachments" -> "One or more attachment references are invalid."
+    "target_busy" -> "The target assistant is busy; wait before calling it again."
+    else -> null
 }

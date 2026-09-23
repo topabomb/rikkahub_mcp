@@ -69,7 +69,7 @@ internal fun freezeToolSet(tools: List<Tool>): FrozenToolSet {
 
 private fun invalidArguments(detail: String): ToolArgumentsException = ToolArgumentsException(
     buildJsonObject {
-        put("error", JsonPrimitive("invalid_arguments"))
+        put("reason", JsonPrimitive("invalid_arguments"))
         put("detail", JsonPrimitive(detail))
     },
 )

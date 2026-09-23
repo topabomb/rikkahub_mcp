@@ -242,6 +242,7 @@
   <string name="chat_message_tool_clipboard_write">클립보드에 쓰기</string>
   <string name="chat_message_tool_create_memory">기억 생성됨</string>
   <string name="chat_message_tool_delete_memory">기억 삭제됨</string>
+  <string name="chat_message_tool_memory_failed">기억 변경 실패</string>
   <string name="chat_message_tool_denied">거부됨</string>
   <string name="chat_message_tool_deny">거부</string>
   <string name="chat_message_tool_deny_dialog_hint">거절 사유(선택 사항)</string>

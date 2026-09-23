@@ -17,6 +17,11 @@ import okio.IOException
 import java.util.concurrent.TimeUnit
 import kotlin.coroutines.resumeWithException
 
+class SearchHttpException(val provider: String, val statusCode: Int) :
+    IllegalStateException("$provider returned HTTP $statusCode")
+
+class SearchNoResultsException : IllegalStateException("Search returned no results")
+
 interface SearchService<T : SearchServiceOptions> {
     fun parameters(options: T): JsonObject?
 

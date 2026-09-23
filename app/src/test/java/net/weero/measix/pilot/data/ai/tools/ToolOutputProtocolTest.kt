@@ -144,11 +144,11 @@ class ToolOutputProtocolTest {
         val tools = createToolOutputLookupTools(store, Uuid.random())
 
         assertEquals(
-            "{\"status\":\"failed\",\"reason\":\"archive_unavailable\"}",
+            "{\"status\":\"failed\",\"reason\":\"archive_unavailable\",\"detail\":\"The archived tool result is unavailable in this conversation.\"}",
             failureText { tools.first().execute(Json.parseToJsonElement("""{"ref":7}""")) },
         )
         assertEquals(
-            "{\"status\":\"failed\",\"reason\":\"invalid_pattern\"}",
+            "{\"status\":\"failed\",\"reason\":\"invalid_pattern\",\"detail\":\"The search pattern is invalid for this tool.\"}",
             failureText {
                 tools.last().execute(Json.parseToJsonElement("""{"ref":7,"pattern":"(?=x)"}"""))
             },

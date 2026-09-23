@@ -29,6 +29,9 @@ import net.weero.measix.pilot.data.model.AssistantMemory
 import net.weero.measix.pilot.data.model.MemoryAddress
 import net.weero.measix.pilot.data.model.memoryAddress
 import net.weero.measix.pilot.data.repository.MemoryRepository
+import net.weero.measix.pilot.data.enterprise.EnterpriseConfigurationException
+
+internal class MemoryAccessRejectedException(val reason: String) : IllegalStateException(reason)
 
 @ConsistentCopyVisibility
 data class MemoryAccess internal constructor(
@@ -80,13 +83,13 @@ class MemoryService internal constructor(
         return sessions.withRealmAccess(realm) {
             settings.withResolvedConfiguration(realm.scope, sessions.state.value) { configuration ->
                 sessions.requirePublishedRealmAccess(realm)
-                val caller = configuration.assistants[callerId] ?: error("assistant_not_found")
-                val target = configuration.assistants[assistantId] ?: error("assistant_not_found")
-                check(configuration.access(ConfigurationCategory.ASSISTANT, callerId).canExecute &&
+                val caller = configuration.assistants[callerId] ?: throw MemoryAccessRejectedException("assistant_not_found")
+                val target = configuration.assistants[assistantId] ?: throw MemoryAccessRejectedException("assistant_not_found")
+                if (!(configuration.access(ConfigurationCategory.ASSISTANT, callerId).canExecute &&
                     configuration.access(ConfigurationCategory.ASSISTANT, assistantId).canExecute &&
                     net.weero.measix.pilot.data.ai.tools.local.LocalToolOption.AssistantManagement in caller.localTools &&
-                    callerId != assistantId && net.weero.measix.pilot.data.ai.subassistant.SubAssistantAccessPolicy.canAccess(caller, target)) {
-                    "target_not_allowed"
+                    callerId != assistantId && net.weero.measix.pilot.data.ai.subassistant.SubAssistantAccessPolicy.canAccess(caller, target))) {
+                    throw MemoryAccessRejectedException("target_not_allowed")
                 }
                 val mode = when { !target.enableMemory -> "disabled"; target.useGlobalMemory -> "global"; else -> "local" }
                 val rows = if (mode == "local") repository.read(target.memoryAddress(realm.scope)) else emptyList()
@@ -105,7 +108,8 @@ class MemoryService internal constructor(
 
     suspend fun isAllowed(access: MemoryAccess): Boolean = try { authorized(access) { true } }
         catch (cancelled: CancellationException) { throw cancelled }
-        catch (_: Exception) { false }
+        catch (_: MemoryAccessRejectedException) { false }
+        catch (_: EnterpriseConfigurationException) { false }
 
     suspend fun captureExecution(realm: RealmAccess, assistant: Assistant): MemoryAccess? {
         if (!assistant.enableMemory) return null
@@ -233,11 +237,12 @@ class MemoryService internal constructor(
     }
 
     private fun validate(configuration: ResolvedConfiguration, access: MemoryAccess) {
-        check(access.realm.scope == access.address.scope) { "memory_scope_mismatch" }
-        val assistant = configuration.assistants[access.assistantId] ?: error("memory_assistant_unavailable")
-        check(configuration.access(ConfigurationCategory.ASSISTANT, access.assistantId).canSelect &&
-            (!access.requireEnabled || assistant.enableMemory) && assistant.memoryAddress(access.address.scope) == access.address) {
-            "memory_access_unavailable"
+        if (access.realm.scope != access.address.scope) throw MemoryAccessRejectedException("memory_scope_mismatch")
+        val assistant = configuration.assistants[access.assistantId]
+            ?: throw MemoryAccessRejectedException("memory_assistant_unavailable")
+        if (!configuration.access(ConfigurationCategory.ASSISTANT, access.assistantId).canSelect ||
+            access.requireEnabled && !assistant.enableMemory || assistant.memoryAddress(access.address.scope) != access.address) {
+            throw MemoryAccessRejectedException("memory_access_unavailable")
         }
     }
 }

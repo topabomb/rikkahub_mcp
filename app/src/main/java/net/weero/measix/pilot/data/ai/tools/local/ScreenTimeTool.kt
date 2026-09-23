@@ -6,6 +6,9 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import kotlinx.serialization.json.add
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
@@ -73,6 +76,8 @@ internal fun buildScreenTimeTool(context: Context, eventBus: AppEventBus): Tool 
             }
         )
     },
+    validateArguments = { args -> validateLocalTimeRangeArguments(args, setOf("today", "week"), "top")
+        ?: validateScreenTimeRange(args) },
     execute = {
         if (!context.hasUsageStatsPermission()) {
             eventBus.emit(AppEvent.OpenUsageAccessSettings)
@@ -101,7 +106,11 @@ internal fun buildScreenTimeTool(context: Context, eventBus: AppEventBus): Tool 
                 "week" -> now.minusDays(7)
                 else -> now.toLocalDate().atStartOfDay(zone)
             }
-        } catch (e: Exception) {
+        } catch (e: java.time.DateTimeException) {
+            failToolResult("invalid_time", e.message ?: "Invalid time format for begin/end.")
+        } catch (e: IllegalStateException) {
+            failToolResult("invalid_time", e.message ?: "Invalid time format for begin/end.")
+        } catch (e: ArithmeticException) {
             failToolResult("invalid_time", e.message ?: "Invalid time format for begin/end.")
         }
 
@@ -149,6 +158,23 @@ internal fun buildScreenTimeTool(context: Context, eventBus: AppEventBus): Tool 
         listOf(UIMessagePart.Text(payload.toString()))
     }
 )
+
+private fun validateScreenTimeRange(args: JsonElement): JsonObject? {
+    val obj = args as JsonObject
+    for (field in listOf("begin", "end")) {
+        val value = (obj[field] as? JsonPrimitive)?.content ?: continue
+        try {
+            parseUsageTime(value, ZoneId.systemDefault())
+        } catch (error: java.time.DateTimeException) {
+            return invalidLocalToolArgument("invalid_time", "$field: ${error.message ?: "Invalid time format."}")
+        } catch (error: IllegalStateException) {
+            return invalidLocalToolArgument("invalid_time", "$field: ${error.message ?: "Invalid time format."}")
+        } catch (error: ArithmeticException) {
+            return invalidLocalToolArgument("invalid_time", "$field: ${error.message ?: "Invalid time range."}")
+    }
+    }
+    return null
+}
 
 // 计算屏幕时间时向前回看的窗口(12h), 用于还原区间开始时刻已在前台的 App;
 // 取值需覆盖典型的一次连续使用时长, 过小会漏算开头, 过大只是多遍历些事件.

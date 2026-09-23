@@ -617,7 +617,7 @@ internal class McpConnectionLifecycleTest : McpRuntimeCoordinatorTestBase() {
         }.exceptionOrNull() as ToolExecutionFailure
         val envelope = (failure.output.single() as me.rerere.ai.ui.UIMessagePart.Text).text
         val json = Json.parseToJsonElement(envelope).jsonObject
-        assertEquals(setOf("status", "reason", "message"), json.keys)
+        assertEquals(setOf("status", "reason", "detail"), json.keys)
         assertEquals("server_unavailable", json.getValue("reason").toString().trim('"'))
     }
 

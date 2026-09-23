@@ -242,6 +242,7 @@
   <string name="chat_message_tool_clipboard_write">Записать в буфер обмена</string>
   <string name="chat_message_tool_create_memory">Создана заметка</string>
   <string name="chat_message_tool_delete_memory">Удалённая память</string>
+  <string name="chat_message_tool_memory_failed">Не удалось изменить память</string>
   <string name="chat_message_tool_denied">Отклонено</string>
   <string name="chat_message_tool_deny">Отклонить</string>
   <string name="chat_message_tool_deny_dialog_hint">Причина (необязательно)</string>

@@ -636,7 +636,7 @@ internal class McpCatalogLifecycleTest : McpRuntimeCoordinatorTestBase() {
         emit(listOf(serverConfig()))
         advanceUntilIdle()
         val tool = manager.captureTurnCapabilities(Assistant(mcpServers = setOf(SERVER_ID))).tools.single()
-        callToolResponder = { throw McpException(code = -32_001, message = "Remote validation failed") }
+        callToolResponder = { throw McpException(code = -32_010, message = "Remote validation failed") }
 
         val failure = runCatching {
             manager.callTool(net.weero.measix.pilot.data.enterprise.RealmAccess.Personal,
@@ -650,9 +650,9 @@ internal class McpCatalogLifecycleTest : McpRuntimeCoordinatorTestBase() {
 
         val envelope = (failure.output.single() as me.rerere.ai.ui.UIMessagePart.Text).text
         val json = Json.parseToJsonElement(envelope).jsonObject
-        assertEquals(setOf("status", "reason", "message"), json.keys)
+        assertEquals(setOf("status", "reason", "detail"), json.keys)
         assertEquals("remote_error", json.getValue("reason").toString().trim('"'))
-        assertEquals("Remote validation failed", json.getValue("message").toString().trim('"'))
+        assertEquals("Remote validation failed", json.getValue("detail").toString().trim('"'))
     }
 
     @Test
@@ -673,7 +673,7 @@ internal class McpCatalogLifecycleTest : McpRuntimeCoordinatorTestBase() {
         }.exceptionOrNull() as ToolExecutionFailure
         val envelope = (failure.output.single() as me.rerere.ai.ui.UIMessagePart.Text).text
         val json = Json.parseToJsonElement(envelope).jsonObject
-        assertEquals(setOf("status", "reason", "message"), json.keys)
+        assertEquals(setOf("status", "reason", "detail"), json.keys)
         assertEquals("outcome_unknown", json.getValue("reason").toString().trim('"'))
         assertFalse(envelope.contains("request_sent"))
         assertFalse(envelope.contains("retryable"))

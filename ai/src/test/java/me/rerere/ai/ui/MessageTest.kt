@@ -55,7 +55,7 @@ class MessageTest {
     @Test
     fun `replay preserves empty results and replaces only failed media`() {
         val image = UIMessagePart.Image("data:image/png;base64,broken")
-        val failure = UIMessagePart.Text("{\"status\":\"failed\",\"error\":\"Image bytes could not be persisted and are unavailable.\"}")
+        val failure = UIMessagePart.Text("{\"status\":\"unavailable\",\"reason\":\"media_persistence_failed\",\"detail\":\"Image bytes could not be persisted and are unavailable.\"}")
         val outputs = listOf(
             emptyList<UIMessagePart>() to emptyList(),
             listOf(UIMessagePart.Text("")) to listOf(UIMessagePart.Text("")),

@@ -258,17 +258,18 @@ Assistant 选择
 
 `McpRuntimeCoordinator.callTool()` 先从对应 `McpServerRuntime` 取得冻结 invocation lease，再由 `McpToolCallExecutor` 执行。
 失败使用 `ToolExecutionFailure` 向 TurnRunner 返回稳定的 Agent 可见结果，并把 durable tool terminal 记录为 FAILED。
-Agent 只看见 `status + reason + 必要 message`：
+Agent 看到[工具错误返回协议](prompts-and-tools.md#5-工具错误返回协议)的 `status + reason`，必要时有 `detail`：
 
 - `unavailable/tool_unavailable`：本地 definition、policy 或工具已经明确撤销；
-- `unavailable/server_unavailable`：当前没有可调用 session，内部恢复已经触发；仅补充 `Try again later.`；
+- `unavailable/server_unavailable`：当前没有可调用 session，内部恢复已经触发；
 - `unavailable/authorization_required`：调用前需要用户授权；
 - `failed/protocol_incompatible`：server 未声明 tools capability，或完整结果无法按 MCP 内容契约投影；
-- `failed/remote_error`：保留 `CallToolResult.isError` 的 content 与 `structured_content`，或保留经裁剪的明确 MCP error message；
-- `unknown/outcome_unknown`：承诺后未取得可确认结果；仅说明请求可能已经完成。
+- `failed/remote_error`：保留 `CallToolResult.isError` 的文本 content 与 `structured_content`，非文本内容用省略标记表示；明确 MCP error message 经裁剪后保留；
+- `failed/result_processing_failed`：完整结果已收到，但本地投影或保存失败；远端副作用可能已经发生；
+- `unknown/outcome_unknown`：承诺后未取得可确认结果；提示先核实远端状态。
 
-server/tool 身份、generation、transport 阶段、HTTP/SDK 异常、`retryable`、`request_sent` 和恢复动作只属于内部诊断，
-不进入模型上下文。工具撤销和协议不兼容的 reason 已足够明确，因此不重复附加 message。
+server/tool 身份、generation、transport 阶段、`retryable`、`request_sent` 和恢复动作只属于内部诊断，
+不进入模型上下文；本地异常的脱敏类型、消息和 cause 可进入有界 `detail`。
 
 成功结果保留 text/image content 和 `structuredContent`。Image 先取得 Artifact lease，checkpoint 成功后发布；本地失败或未知
 结果会精确回滚未发布 Artifact。取消始终向上传播，客户端不自动重放工具调用。

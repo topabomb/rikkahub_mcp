@@ -57,17 +57,18 @@ class CalendarCreateToolTest {
             val execution = Json.parseToJsonElement((failure.output.single() as UIMessagePart.Text).text).jsonObject
             assertEquals("failed", execution["status"]!!.jsonPrimitive.content)
             assertEquals(
-                rejection["error"]!!.jsonPrimitive.content.lowercase(),
+                rejection["reason"]!!.jsonPrimitive.content,
                 execution["reason"]!!.jsonPrimitive.content,
             )
-            assertNull(rejection["type"])
+            assertEquals(rejection["detail"], execution["detail"])
             try {
                 tool.parseArguments(raw, Json)
                 throw AssertionError("invalid input must not reach approval")
             } catch (failure: ToolArgumentsException) {
                 val replay = Json.parseToJsonElement((failure.output.single() as UIMessagePart.Text).text).jsonObject
-                assertEquals(rejection, JsonObject(replay.filterKeys { it != "type" }))
-                assertEquals("error", replay["type"]!!.jsonPrimitive.content)
+                assertEquals("failed", replay["status"]!!.jsonPrimitive.content)
+                assertEquals(rejection["reason"], replay["reason"])
+                assertEquals(rejection["detail"], replay["detail"])
             }
         }
         verify { context wasNot Called }
@@ -174,7 +175,7 @@ class CalendarCreateToolTest {
             assertNotSame(firstCreate, nextCreate)
             assertTrue(nextCreate.description.contains("'UTC'"))
             val rejected = requireNotNull(nextCreate.validateArguments(args))
-            assertEquals("INVALID_RANGE", rejected["error"]!!.jsonPrimitive.content)
+            assertEquals("invalid_range", rejected["reason"]!!.jsonPrimitive.content)
             assertNull(firstCreate.validateArguments(args))
             assertSame(
                 firstStep.single { it.name == "calendar_query" },

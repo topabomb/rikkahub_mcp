@@ -10,6 +10,9 @@ import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import me.rerere.ai.core.InputSchema
 import me.rerere.ai.core.Tool
+import net.weero.measix.pilot.data.repository.MemoryNotFoundException
+import net.weero.measix.pilot.service.MemoryAccessRejectedException
+import net.weero.measix.pilot.data.enterprise.EnterpriseConfigurationException
 import me.rerere.ai.ui.UIMessagePart
 import net.weero.measix.pilot.data.model.AssistantMemory
 
@@ -62,22 +65,23 @@ fun buildMemoryTools(
                 required = listOf("action")
             )
         },
+        validateArguments = ::validateMemoryArguments,
         execute = execute@{
             if (!isStillAllowed()) {
-                failToolResult("tool_not_permitted")
+                failToolResult("tool_not_permitted", "Memory access is no longer permitted in this run.")
             }
             val params = it.jsonObject
-            val action = params["action"]?.jsonPrimitive?.contentOrNull ?: error("action is required")
-            val payload = when (action) {
+            val action = requireNotNull(params["action"]?.jsonPrimitive?.contentOrNull)
+            val payload = try { when (action) {
                 "create" -> {
-                    val content = params["content"]?.jsonPrimitive?.contentOrNull ?: error("content is required")
+                    val content = requireNotNull(params["content"]?.jsonPrimitive?.contentOrNull)
                     val created = onCreation(content)
                     buildJsonObject { put("id", created.id) }
                 }
 
                 "edit" -> {
-                    val id = params["id"]?.jsonPrimitive?.intOrNull ?: error("id is required")
-                    val content = params["content"]?.jsonPrimitive?.contentOrNull ?: error("content is required")
+                    val id = requireNotNull(params["id"]?.jsonPrimitive?.intOrNull)
+                    val content = requireNotNull(params["content"]?.jsonPrimitive?.contentOrNull)
                     val updated = onUpdate(id, content)
                     buildJsonObject {
                         put("success", true)
@@ -86,7 +90,7 @@ fun buildMemoryTools(
                 }
 
                 "delete" -> {
-                    val id = params["id"]?.jsonPrimitive?.intOrNull ?: error("id is required")
+                    val id = requireNotNull(params["id"]?.jsonPrimitive?.intOrNull)
                     onDelete(id)
                     buildJsonObject {
                         put("success", true)
@@ -94,9 +98,39 @@ fun buildMemoryTools(
                     }
                 }
 
-                else -> error("unknown action: $action, must be one of [create, edit, delete]")
+                else -> error("Validated memory action changed: $action")
+            } } catch (missing: MemoryNotFoundException) {
+                failToolResult("memory_not_found_in_namespace",
+                    "Memory ${missing.memoryId} does not exist in the current namespace. Do not retry this ID unchanged.")
+            } catch (rejected: MemoryAccessRejectedException) {
+                failToolResult("tool_not_permitted", "Memory access was revoked: ${rejected.reason}.")
+            } catch (rejected: EnterpriseConfigurationException) {
+                failToolResult("tool_not_permitted", "Memory access was revoked: ${rejected.reason}.")
             }
             listOf(UIMessagePart.Text(payload.toString()))
         }
     )
 )
+
+private fun validateMemoryArguments(element: kotlinx.serialization.json.JsonElement): kotlinx.serialization.json.JsonObject? {
+    val params = element as? kotlinx.serialization.json.JsonObject
+        ?: return invalidMemoryArguments("Arguments must be a JSON object.")
+    val action = (params["action"] as? kotlinx.serialization.json.JsonPrimitive)
+        ?.takeIf { it.isString }?.contentOrNull
+    if (action !in setOf("create", "edit", "delete")) {
+        return invalidMemoryArguments("action must be create, edit, or delete.")
+    }
+    if (action == "edit" || action == "delete") {
+        val id = (params["id"] as? kotlinx.serialization.json.JsonPrimitive)
+            ?.takeIf { !it.isString }?.intOrNull
+        if (id == null || id <= 0) return invalidMemoryArguments("id must be a positive integer for $action.")
+    }
+    if (action == "create" || action == "edit") {
+        val content = (params["content"] as? kotlinx.serialization.json.JsonPrimitive)
+            ?.takeIf { it.isString }?.contentOrNull
+        if (content == null) return invalidMemoryArguments("content must be a string for $action.")
+    }
+    return null
+}
+
+private fun invalidMemoryArguments(detail: String) = invalidToolArguments(detail)

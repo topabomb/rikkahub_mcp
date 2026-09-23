@@ -3,6 +3,7 @@ package net.weero.measix.pilot.data.ai.tools
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.encodeToJsonElement
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
@@ -13,6 +14,9 @@ import net.weero.measix.pilot.data.configuration.ResolvedConfiguration
 import net.weero.measix.pilot.data.configuration.ResourceSelectionSlot
 import net.weero.measix.pilot.utils.JsonInstantPretty
 import me.rerere.search.SearchService
+import me.rerere.search.SearchServiceOptions
+import me.rerere.search.SearchHttpException
+import me.rerere.search.SearchNoResultsException
 import kotlin.uuid.Uuid
 
 internal fun createSearchTools(settings: Settings, configuration: ResolvedConfiguration): Set<Tool> {
@@ -36,6 +40,9 @@ internal fun createSearchTools(settings: Settings, configuration: ResolvedConfig
                 parameters = {
                     service.parameters(options)
                 },
+                validateArguments = { args ->
+                    validateSearchArguments(args, options is SearchServiceOptions.TavilyOptions)
+                },
                 execute = {
                     val result = service.search(
                         params = it.jsonObject,
@@ -43,7 +50,7 @@ internal fun createSearchTools(settings: Settings, configuration: ResolvedConfig
                         serviceOptions = options,
                     )
                     val results =
-                        JsonInstantPretty.encodeToJsonElement(result.getOrThrow()).jsonObject.let { json ->
+                        JsonInstantPretty.encodeToJsonElement(result.searchToolValue()).jsonObject.let { json ->
                             val map = json.toMutableMap()
                             map["items"] =
                                 JsonArray(map["items"]!!.jsonArray.mapIndexed { index, item ->
@@ -70,16 +77,56 @@ internal fun createSearchTools(settings: Settings, configuration: ResolvedConfig
                     parameters = {
                         service.scrapingParameters(options)
                     },
+                    validateArguments = { args ->
+                        requireWebString(args, "url")
+                    },
                     execute = {
                         val result = service.scrape(
                             params = it.jsonObject,
                             commonOptions = settings.searchCommonOptions,
                             serviceOptions = options,
                         )
-                        val payload = JsonInstantPretty.encodeToJsonElement(result.getOrThrow()).jsonObject
+                        val payload = JsonInstantPretty.encodeToJsonElement(result.searchToolValue()).jsonObject
                         listOf(UIMessagePart.Text(payload.toString()))
                     }
                 ))
         }
     }
+}
+
+private fun searchHttpReason(statusCode: Int): String = when (statusCode) {
+    400, 422 -> "invalid_request"
+    401, 403 -> "auth_failed"
+    429 -> "rate_limited"
+    else -> "search_provider_error"
+}
+
+internal fun <T> Result<T>.searchToolValue(): T = try {
+    getOrThrow()
+} catch (error: SearchHttpException) {
+    failToolResult(searchHttpReason(error.statusCode), error.message)
+} catch (error: SearchNoResultsException) {
+    failToolResult("no_results")
+}
+
+internal fun requireWebString(args: JsonElement, field: String): JsonObject? {
+    val value = (args as? JsonObject)?.get(field) as? JsonPrimitive
+    if (value?.isString == true && value.content.isNotBlank()) return null
+    return JsonObject(mapOf(
+        "reason" to JsonPrimitive("invalid_arguments"),
+        "detail" to JsonPrimitive("$field must be a non-empty string."),
+    ))
+}
+
+internal fun validateSearchArguments(args: JsonElement, tavily: Boolean): JsonObject? {
+    requireWebString(args, "query")?.let { return it }
+    if (!tavily) return null
+    val topic = (args as? JsonObject)?.get("topic") ?: return null
+    if (topic is JsonPrimitive && topic.isString && topic.content in setOf("general", "news", "finance")) {
+        return null
+    }
+    return JsonObject(mapOf(
+        "reason" to JsonPrimitive("invalid_arguments"),
+        "detail" to JsonPrimitive("topic must be general, news, or finance."),
+    ))
 }
