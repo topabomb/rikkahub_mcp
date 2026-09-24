@@ -22,9 +22,10 @@ data class McpRefreshReceipt(
 data class McpRuntimeCapability(
     val status: McpStatus,
     val catalog: McpCatalogSnapshot?,
+    val sessionCallable: Boolean,
 ) {
     companion object {
-        val EMPTY = McpRuntimeCapability(McpStatus.Idle, null)
+        val EMPTY = McpRuntimeCapability(McpStatus.Idle, null, false)
     }
 }
 

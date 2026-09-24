@@ -10,8 +10,11 @@ import io.modelcontextprotocol.kotlin.sdk.types.Implementation
 import io.modelcontextprotocol.kotlin.sdk.types.ListToolsRequest
 import io.modelcontextprotocol.kotlin.sdk.types.PaginatedRequestParams
 import io.modelcontextprotocol.kotlin.sdk.client.StreamableHttpError
+import io.modelcontextprotocol.kotlin.sdk.types.McpException
+import io.modelcontextprotocol.kotlin.sdk.types.RPCError
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.TimeoutCancellationException
 
 /** Owns the process-shared HTTP client, but no per-server connection state. */
 internal class McpProtocolClientFactory(
@@ -68,47 +71,58 @@ internal class McpProtocolClientFactory(
 
 /** Shared protocol failure classification used by lifecycle and invocation execution. */
 internal object McpProtocolFailureClassifier {
+    private fun causes(error: Throwable): Sequence<Throwable> = generateSequence(error) { it.cause }
+
+    private fun retryableHttpCode(code: Int?): Boolean =
+        code == 404 || code == 408 || code == 425 || code == 429 ||
+            (code != null && code in 500..599)
+
     fun httpCode(error: Throwable): String {
-        val httpError = generateSequence(error) { it.cause }
-            .filterIsInstance<StreamableHttpError>()
-            .firstOrNull()
-        return httpError?.code?.let { "HTTP $it" } ?: ""
+        val code = causes(error).firstNotNullOfOrNull {
+            when (it) {
+                is StreamableHttpError -> it.code
+                is McpOAuthResponseException -> it.statusCode
+                else -> null
+            }
+        }
+        return code?.takeIf { it in 100..599 }?.let { "HTTP $it" } ?: ""
     }
 
     fun isUnauthorized(error: Throwable): Boolean {
-        val httpError = generateSequence(error) { it.cause }
-            .filterIsInstance<StreamableHttpError>()
-            .firstOrNull()
-        if (httpError?.code == 401) return true
-        val message = generateSequence(error) { it.cause }
-            .mapNotNull { it.message }
-            .joinToString(" ")
-            .lowercase()
-        return message.contains("401") ||
-            message.contains("unauthorized") ||
-            message.contains("invalid_token") ||
-            message.contains("invalid access token") ||
-            message.contains("missing or invalid") ||
-            message.contains("missing required authorization")
+        val http = causes(error).firstOrNull {
+            it is StreamableHttpError || it is McpOAuthResponseException
+        }
+        return when (http) {
+            is StreamableHttpError -> http.code == 401
+            is McpOAuthResponseException -> http.statusCode == 401 ||
+                http.errorCode == "invalid_token" || http.errorCode == "invalid_grant"
+            else -> false
+        }
     }
 
     fun isConnectionError(error: Throwable): Boolean {
         if (net.weero.measix.pilot.data.enterprise.EnterpriseRuntimeProblemException.find(error) != null) return false
         if (isUnauthorized(error)) return false
-        if (error is StreamableHttpError) {
-            return error.code == 404 || error.code == 408 || error.code == 425 ||
-                error.code == 429 || error.code in 500..599
+        val http = causes(error).firstOrNull {
+            it is StreamableHttpError || it is McpOAuthResponseException
         }
-        return error is java.io.IOException ||
-            error.message?.contains("connection", ignoreCase = true) == true ||
-            error.message?.contains("timeout", ignoreCase = true) == true ||
-            error.message?.contains("closed", ignoreCase = true) == true
+        if (http != null) {
+            return when (http) {
+                is StreamableHttpError -> retryableHttpCode(http.code)
+                is McpOAuthResponseException -> http.statusCode != 404 && retryableHttpCode(http.statusCode)
+                else -> false
+            }
+        }
+        return causes(error).any {
+            it is java.io.IOException || it is TimeoutCancellationException ||
+                it is McpException &&
+                (it.code == RPCError.ErrorCode.CONNECTION_CLOSED ||
+                    it.code == RPCError.ErrorCode.REQUEST_TIMEOUT)
+        }
     }
 
-    fun isSseStreamGiveUp(error: Throwable): Boolean = generateSequence(error) { it.cause }
-        .mapNotNull { it.message }
-        .joinToString(" ")
-        .contains("Maximum reconnection attempts exceeded", ignoreCase = true)
+    fun isSseStreamGiveUp(error: Throwable): Boolean =
+        causes(error).any { it is McpNotificationStreamExhausted }
 }
 
 /** Performs complete, bounded tools/list pagination and returns an uncommitted candidate. */

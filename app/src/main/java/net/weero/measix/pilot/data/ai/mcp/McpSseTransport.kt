@@ -16,6 +16,7 @@ import io.ktor.http.append
 import io.ktor.http.isSuccess
 import io.ktor.http.contentType
 import io.ktor.http.protocolWithAuthority
+import io.modelcontextprotocol.kotlin.sdk.client.StreamableHttpError
 import io.modelcontextprotocol.kotlin.sdk.shared.TransportSendOptions
 import io.modelcontextprotocol.kotlin.sdk.types.JSONRPCMessage
 import io.modelcontextprotocol.kotlin.sdk.types.McpJson
@@ -55,7 +56,9 @@ internal class McpSseTransport(
                     headers.append(HttpHeaders.Accept, ContentType.Text.EventStream.toString())
                     requestBuilder()
                 }.execute { response ->
-                    check(response.status.isSuccess()) { "MCP SSE connection failed: HTTP ${response.status.value}" }
+                    if (!response.status.isSuccess()) {
+                        throw StreamableHttpError(response.status.value, "MCP SSE connection failed: HTTP ${response.status.value}")
+                    }
                     check(response.contentType()?.match(ContentType.Text.EventStream) == true) { "Invalid MCP SSE content type" }
                     val url = response.call.request.url
                     origin = url.protocolWithAuthority
@@ -99,7 +102,7 @@ internal class McpSseTransport(
         }.execute { response ->
             if (!response.status.isSuccess()) {
                 val text = response.readMcpBody()
-                error("Error POSTing to endpoint (HTTP ${response.status}): $text")
+                throw StreamableHttpError(response.status.value, "Error POSTing to endpoint (HTTP ${response.status}): $text")
             }
         }
 

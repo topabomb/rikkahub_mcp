@@ -604,19 +604,19 @@ private fun McpServerItem(
             ) {
                 when (status) {
                     McpStatus.Idle -> Icon(HugeIcons.MessageBlocked, null)
-                    McpStatus.Connecting -> if (presentation?.isReady == true) {
+                    McpStatus.Connecting -> if (presentation?.hasCatalogTools == true) {
                         Icon(HugeIcons.McpServer, null)
                     } else {
                         CircularProgressIndicator(modifier = Modifier.size(24.dp))
                     }
 
-                    McpStatus.Discovering -> if (presentation?.isReady == true) {
+                    McpStatus.Discovering -> if (presentation?.hasCatalogTools == true) {
                         Icon(HugeIcons.McpServer, null)
                     } else {
                         CircularProgressIndicator(modifier = Modifier.size(24.dp))
                     }
                     is McpStatus.Ready -> Icon(HugeIcons.McpServer, null)
-                    is McpStatus.Reconnecting -> if (status.maintenance || presentation?.isReady == true) {
+                    is McpStatus.Reconnecting -> if (status.maintenance || presentation?.hasCatalogTools == true) {
                         Icon(HugeIcons.Clock02, null)
                     } else {
                         CircularProgressIndicator(modifier = Modifier.size(24.dp))
@@ -627,7 +627,7 @@ private fun McpServerItem(
                     McpStatus.CatalogRejectedEmpty,
                     is McpStatus.Error -> Icon(HugeIcons.AlertCircle, null)
                     McpStatus.NeedsAuthorization -> Icon(HugeIcons.AlertCircle, null)
-                    McpStatus.Authorizing -> if (presentation?.isReady == true) {
+                    McpStatus.Authorizing -> if (presentation?.hasCatalogTools == true) {
                         Icon(HugeIcons.Clock02, null)
                     } else {
                         CircularProgressIndicator(modifier = Modifier.size(24.dp))
@@ -686,7 +686,7 @@ private fun McpServerItem(
                             )
                         }
                     }
-                    if (presentation?.isReady == true) {
+                    if (presentation?.hasCatalogTools == true) {
                         val enabledToolCount = presentation.tools.count { it.enabled }
                         Tag(type = TagType.INFO) {
                             Text(
@@ -1366,7 +1366,7 @@ private fun McpToolsConfigure(
         verticalArrangement = Arrangement.spacedBy(8.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        if (presentation?.isReady != true) {
+        if (presentation?.hasCatalogTools != true) {
             item {
                 Text(stringResource(R.string.setting_mcp_page_tools_unavailable_message))
             }

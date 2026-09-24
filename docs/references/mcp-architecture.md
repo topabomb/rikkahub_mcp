@@ -148,7 +148,7 @@ Gateway 的目录 digest 使用已验证的 canonical surface digest；仅 JSON 
 保留已确认 Tool 对象和请求前缀。个人与 Direct MCP 的既有目录摘要算法保持。
 
 `McpRuntimeCoordinator.runtimeCapabilities` 是 runtime 的唯一公开状态源；底层由 `McpRuntimeStateStore` 对每个键以一个 immutable
-`McpRuntimeCapability(status, catalog)` 原子发布。Settings、Catalog DataStore flow 和 UI 不再形成第二条 runtime
+`McpRuntimeCapability(status, catalog, sessionCallable)` 原子发布。Settings、Catalog DataStore flow 和 UI 不再形成第二条 runtime
 读写路径。status 可变化而 catalog 保持不变，这正是离线仍披露 LKG 工具的协议。
 
 ## 3. 进程启动与按需激活
@@ -218,6 +218,14 @@ Catalog Store 对 commit/no-op/rejection 都推进进程内 head token。若 Ser
 - 8 次耗尽后进入明确 Error，但 LKG 仍可见。下一次工具调用、validated network 变化、回前台、单 server 重试或手工刷新
   会重置恢复预算并立即尝试；
 - 401 进入授权状态；404/408/425/429/5xx 与 I/O 类错误可恢复；其他 4xx/协议/配置错误不做盲目重试；
+- 首次目录发现期间的 transport close 也进入同一恢复调度；握手后和目录刷新后的提交均复验
+  当前 client、transport 与状态，关闭或授权期间的迟到结果不能发布 `Ready`；
+- 失败分类检查 cause 链中的明确 HTTP 状态、OAuth 响应错误、SDK 连接/超时错误及 I/O 异常；本地超时按可恢复处理。
+  SSE 的 GET/POST HTTP 错误保留状态码，OAuth 响应/协议错误不伪装成网络 I/O；OAuth endpoint 的 404
+  属于配置/协议失败，不按 MCP transport 的 404 恢复；通知流耗尽使用明确异常。
+  已排队的恢复操作独占 `RetryScheduled`/`WaitingNetwork` 状态，后续调用失败不能覆盖等待状态；
+  已承诺调用返回授权错误时取消该代的恢复与目录刷新；迟到的 close、通知流错误和刷新收口不得覆盖
+  `NeedsAuthorization`，由用户授权或显式重试重新建立连接；
 - 当前 SDK 的 `StreamableHttpError` 不暴露响应头，故暂时无法读取 `Retry-After`；若 SDK 暴露该字段，应由同一调度器
   将其作为服务端最小等待时间，而不是新增第二个 timer。
 
@@ -261,9 +269,9 @@ Assistant 选择
 Agent 看到[工具错误返回协议](prompts-and-tools.md#5-工具错误返回协议)的 `status + reason`，必要时有 `detail`：
 
 - `unavailable/tool_unavailable`：本地 definition、policy 或工具已经明确撤销；
-- `unavailable/server_unavailable`：当前没有可调用 session，内部恢复已经触发；
+- `unavailable/server_unavailable`：当前没有可调用 session、正处于连接恢复，或当前 session 尚未完成 capability 握手；内部恢复已经触发；
 - `unavailable/authorization_required`：调用前需要用户授权；
-- `failed/protocol_incompatible`：server 未声明 tools capability，或完整结果无法按 MCP 内容契约投影；
+- `failed/protocol_incompatible`：已完成握手的 server 明确未声明 tools capability，或完整结果无法按 MCP 内容契约投影；
 - `failed/remote_error`：保留 `CallToolResult.isError` 的文本 content 与 `structured_content`，非文本内容用省略标记表示；明确 MCP error message 经裁剪后保留；
 - `failed/result_processing_failed`：完整结果已收到，但本地投影或保存失败；远端副作用可能已经发生；
 - `unknown/outcome_unknown`：承诺后未取得可确认结果；提示先核实远端状态。
@@ -277,6 +285,11 @@ server/tool 身份、generation、transport 阶段、`retryable`、`request_sent
 ## 8. UI 投影
 
 `McpQueryService` 是唯一 UI read port。UI 的工具计数来自有效 Catalog 与本地 policy，不从连接 status 猜测：
+
+`McpRuntimeCapability` 同时原子发布 `catalog` 与由当前 client、transport、握手和调用准入阶段计算的
+`sessionCallable`。前者只表示已确认的工具目录，后者表示当前会话能否进入工具调用；聊天页“就绪”还要求
+至少一个本地启用的目录工具。断连后的 LKG 继续显示，但不计入就绪数量；设置页和选择器仍用目录存在性
+决定是否显示工具与 loading。`CatalogStale` 的不同原因由状态详情表达，调用能力以 `sessionCallable` 为准。
 
 - 有 LKG 时，无论 Ready、Reconnecting、WaitingNetwork、RetryScheduled、NeedsAuthorization 或 Error，都显示真实工具数；
 - 只有首次无目录的 Connecting/Discovering/Authorizing 使用 spinner；maintenance recovery 使用静态状态和下次重试信息；

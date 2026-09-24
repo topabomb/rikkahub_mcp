@@ -96,6 +96,29 @@ class McpTransportOwnershipIntegrationTest {
         }
     }
 
+    @Test fun `legacy SSE HTTP authorization failure keeps its status code`() = runBlocking {
+        val server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
+        server.createContext("/mcp") { exchange ->
+            exchange.sendResponseHeaders(401, -1)
+            exchange.close()
+        }
+        server.start()
+        val http = HttpClient(OkHttp)
+        val transport = McpSseTransport(http, "http://127.0.0.1:${server.address.port}/mcp")
+        try {
+            val failure = withTimeout(5_000) {
+                runCatching { transport.start() }.exceptionOrNull()
+            }
+            assertNotNull(failure)
+            assertTrue(McpProtocolFailureClassifier.isUnauthorized(requireNotNull(failure)))
+            assertEquals("HTTP 401", McpProtocolFailureClassifier.httpCode(failure))
+        } finally {
+            transport.close()
+            http.close()
+            server.stop(0)
+        }
+    }
+
     @Test fun `invalid SSE JSON reports protocol failure instead of silently reconnecting`() = runBlocking {
         val server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
         val requests = AtomicInteger()

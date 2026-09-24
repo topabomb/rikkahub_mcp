@@ -27,6 +27,12 @@ import kotlin.io.encoding.Base64
 
 private const val TAG = "McpOAuthClient"
 
+internal class McpOAuthResponseException(
+    val statusCode: Int,
+    val errorCode: String? = null,
+    message: String,
+) : Exception(message)
+
 /**
  * MCP OAuth 2.1 授权客户端，实现规范 (2025-11-25 basic/authorization) 所需的各环节：
  *
@@ -291,16 +297,20 @@ class McpOAuthClient(
                 if (token?.accessToken != null) return token
                 val err = runCatching { json.decodeFromString(OAuthErrorResponse.serializer(), body) }.getOrNull()
                 if (err != null) {
-                    throw IOException("OAuth token error: ${err.error}${err.errorDescription?.let { " - $it" } ?: ""}")
+                    throw McpOAuthResponseException(response.code, err.error,
+                        "OAuth token error: ${err.error}${err.errorDescription?.let { " - $it" } ?: ""}")
                 }
-                throw IOException("OAuth token response missing access_token: ${body.take(300)}")
+                throw McpOAuthResponseException(response.code, message =
+                    "OAuth token response missing access_token: ${body.take(300)}")
             } else {
                 // HTTP 4xx/5xx: 解析标准 OAuth 错误响应 (RFC 6749 §5.2)
                 val err = runCatching { json.decodeFromString(OAuthErrorResponse.serializer(), body) }.getOrNull()
                 if (err != null) {
-                    throw IOException("OAuth token error (${response.code}): ${err.error}${err.errorDescription?.let { " - $it" } ?: ""}")
+                    throw McpOAuthResponseException(response.code, err.error,
+                        "OAuth token error (${response.code}): ${err.error}${err.errorDescription?.let { " - $it" } ?: ""}")
                 }
-                throw IOException("HTTP ${response.code} for $tokenEndpoint: ${body.take(300)}")
+                throw McpOAuthResponseException(response.code, message =
+                    "HTTP ${response.code} for $tokenEndpoint: ${body.take(300)}")
             }
         }
     }
@@ -380,7 +390,8 @@ class McpOAuthClient(
         executeRaw(request).use { response ->
             val body = response.body.string()
             if (!response.isSuccessful) {
-                throw IOException("HTTP ${response.code} for ${request.url}: ${body.take(300)}")
+                throw McpOAuthResponseException(response.code, message =
+                    "HTTP ${response.code} for ${request.url}: ${body.take(300)}")
             }
             return body
         }

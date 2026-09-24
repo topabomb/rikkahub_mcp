@@ -856,7 +856,7 @@ class ConversationTurnService internal constructor(
             } else {
                 sourceMessages
             }
-            val soundTracker = sideEffects.soundTracker()
+            val soundTracker = sideEffects.soundTracker(generationMessages.lastOrNull())
             val phaseReporter = runtime.livePhaseReporter()
             val speechContext = runtime.peekTtsPlaybackContext()?.takeIf { it.capture.interactionId == "int_$turnId" }
             val turnResult = turnRunner.run(
@@ -871,7 +871,19 @@ class ConversationTurnService internal constructor(
                     providerSessionId = conversationId.toString(),
                     inputTransformers = turnPipelineFactory.input(TurnKind.USER),
                     outputTransformers = turnPipelineFactory.output(),
-                    onCheckpoint = activeTurnCommitter::onCheckpoint,
+                    onCheckpoint = { checkpoint ->
+                        activeTurnCommitter.onCheckpoint(checkpoint)
+                        try {
+                            soundTracker.onCheckpoint(
+                                checkpoint.assistantMessage,
+                                enabled = isForeground.value && generationSoundEnabled,
+                            )
+                        } catch (cancelled: CancellationException) {
+                            throw cancelled
+                        } catch (error: Exception) {
+                            android.util.Log.w(TAG, "Approval sound failed after checkpoint", error)
+                        }
+                    },
                     onAssistantObserved = activeTurnCommitter::observeAssistant,
                     modelContextEntries = modelContextProjection.entries,
                     durableMessageLocators = modelContextProjection.locators,
@@ -898,10 +910,8 @@ class ConversationTurnService internal constructor(
                             )
                         )
 
-                        // 前台声音反馈: 单步生成完成 + 工具待审批
-                        if (isForeground.value && generationSoundEnabled) {
-                            soundTracker.onStreaming(lastMessage)
-                        }
+                        // Streamed output can signal a completed step; user gates are heard only after checkpoint.
+                        soundTracker.onStreaming(lastMessage, enabled = isForeground.value && generationSoundEnabled)
                     },
                     onResult = activeTurnCommitter::commitRunResult,
                     cancelReason = { runtime.peekCancelReason(started.handle.turnId) },

@@ -213,19 +213,19 @@ internal fun McpPicker(
                 ) {
                     when (status) {
                         McpStatus.Idle -> Icon(HugeIcons.Icon1stBracket, null)
-                        McpStatus.Connecting -> if (server.isReady) {
+                        McpStatus.Connecting -> if (server.hasCatalogTools) {
                             Icon(HugeIcons.McpServer, null)
                         } else {
                             CircularProgressIndicator(modifier = Modifier.size(24.dp))
                         }
 
-                        McpStatus.Discovering -> if (server.isReady) {
+                        McpStatus.Discovering -> if (server.hasCatalogTools) {
                             Icon(HugeIcons.McpServer, null)
                         } else {
                             CircularProgressIndicator(modifier = Modifier.size(24.dp))
                         }
                         is McpStatus.Ready -> Icon(HugeIcons.McpServer, null)
-                        is McpStatus.Reconnecting -> if (status.maintenance || server.isReady) {
+                        is McpStatus.Reconnecting -> if (status.maintenance || server.hasCatalogTools) {
                             Icon(HugeIcons.Clock02, null)
                         } else {
                             CircularProgressIndicator(modifier = Modifier.size(24.dp))
@@ -236,7 +236,7 @@ internal fun McpPicker(
                         McpStatus.CatalogRejectedEmpty,
                         is McpStatus.Error -> Icon(HugeIcons.Alert01, null)
                         McpStatus.NeedsAuthorization -> Icon(HugeIcons.Alert01, null)
-                        McpStatus.Authorizing -> if (server.isReady) {
+                        McpStatus.Authorizing -> if (server.hasCatalogTools) {
                             Icon(HugeIcons.Clock02, null)
                         } else {
                             CircularProgressIndicator(modifier = Modifier.size(24.dp))

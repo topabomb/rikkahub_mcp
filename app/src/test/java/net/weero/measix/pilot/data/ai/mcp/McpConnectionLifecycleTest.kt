@@ -9,6 +9,8 @@ import io.mockk.coVerify
 import io.mockk.every
 import io.mockk.mockk
 import io.modelcontextprotocol.kotlin.sdk.client.StreamableHttpError
+import io.modelcontextprotocol.kotlin.sdk.shared.RequestOptions
+import io.modelcontextprotocol.kotlin.sdk.types.CallToolRequest
 import io.modelcontextprotocol.kotlin.sdk.types.ListToolsResult
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.withContext
@@ -38,6 +40,149 @@ import org.junit.Test
 /** 连接生命周期：建连与重连、传输关闭、定义变更重建客户端、授权状态写入、超时与维护退避、并行准入与按服务器状态。 */
 @OptIn(ExperimentalCoroutinesApi::class)
 internal class McpConnectionLifecycleTest : McpRuntimeCoordinatorTestBase() {
+
+    @Test
+    fun `close during initial catalog discovery cannot publish ready`() = runTest(dispatcher) {
+        val discoveryGate = CompletableDeferred<Unit>()
+        listToolsResponder = { _, _ ->
+            discoveryGate.await()
+            ListToolsResult(tools = listOf(serverTool("search")))
+        }
+        emit(listOf(serverConfig()))
+        runCurrent()
+        assertEquals(McpStatus.Discovering, manager.syncingStatus.value[SERVER_ID])
+
+        createdTransports.single().simulateClose()
+        runCurrent()
+        assertTrue(manager.syncingStatus.value[SERVER_ID] is McpStatus.RetryScheduled)
+
+        discoveryGate.complete(Unit)
+        runCurrent()
+        assertTrue(manager.syncingStatus.value[SERVER_ID] is McpStatus.RetryScheduled)
+        assertFalse(manager.runtimeCapabilities.value[McpRuntimeKey(SERVER_ID)]?.sessionCallable == true)
+    }
+
+    @Test
+    fun `disconnected client with retained capabilities is unavailable before commitment`() = runTest(dispatcher) {
+        emit(listOf(serverConfig()))
+        advanceUntilIdle()
+        val client = createdClients.single()
+        val tool = manager.captureTurnCapabilities(Assistant(mcpServers = setOf(SERVER_ID))).tools.single()
+        assertTrue(manager.runtimeCapabilities.value[McpRuntimeKey(SERVER_ID)]?.sessionCallable == true)
+
+        createdTransports.single().simulateClose()
+        runCurrent()
+        assertTrue(manager.syncingStatus.value[SERVER_ID] is McpStatus.RetryScheduled)
+        assertFalse(manager.runtimeCapabilities.value[McpRuntimeKey(SERVER_ID)]?.sessionCallable == true)
+
+        val failure = runCatching {
+            manager.callTool(net.weero.measix.pilot.data.enterprise.RealmAccess.Personal,
+                serverId = tool.serverId,
+                toolName = tool.name,
+                expectedDefinitionDigest = tool.definitionDigest,
+                expectedNeedsApproval = tool.needsApproval,
+                args = JsonObject(emptyMap()),
+            ) { }
+        }.exceptionOrNull() as ToolExecutionFailure
+
+        val envelope = (failure.output.single() as me.rerere.ai.ui.UIMessagePart.Text).text
+        val json = Json.parseToJsonElement(envelope).jsonObject
+        assertEquals("server_unavailable", json.getValue("reason").toString().trim('"'))
+        coVerify(exactly = 0) { client.callTool(any<CallToolRequest>(), any<RequestOptions>()) }
+    }
+
+    @Test
+    fun `in flight connection failure preserves scheduled recovery status`() = runTest(dispatcher) {
+        emit(listOf(serverConfig()))
+        advanceUntilIdle()
+        val tool = manager.captureTurnCapabilities(Assistant(mcpServers = setOf(SERVER_ID))).tools.single()
+        val gate = CompletableDeferred<Unit>()
+        callToolGate = gate
+        callToolResponder = { throw java.io.IOException("network reset") }
+
+        val call = async {
+            runCatching {
+                manager.callTool(net.weero.measix.pilot.data.enterprise.RealmAccess.Personal,
+                    serverId = tool.serverId,
+                    toolName = tool.name,
+                    expectedDefinitionDigest = tool.definitionDigest,
+                    expectedNeedsApproval = tool.needsApproval,
+                    args = JsonObject(emptyMap()),
+                ) { }
+            }
+        }
+        runCurrent()
+        createdTransports.single().simulateClose()
+        runCurrent()
+        assertTrue(manager.syncingStatus.value[SERVER_ID] is McpStatus.RetryScheduled)
+
+        gate.complete(Unit)
+        runCurrent()
+        assertTrue(call.await().exceptionOrNull() is ToolExecutionFailure)
+        assertTrue(manager.syncingStatus.value[SERVER_ID] is McpStatus.RetryScheduled)
+        assertEquals(1, createdClients.size)
+    }
+
+    @Test
+    fun `in flight authorization failure stops scheduled recovery`() = runTest(dispatcher) {
+        emit(listOf(serverConfig(oauth = McpOAuthState(enabled = true, clientId = "id"))))
+        advanceUntilIdle()
+        val tool = manager.captureTurnCapabilities(Assistant(mcpServers = setOf(SERVER_ID))).tools.single()
+        val refreshGate = CompletableDeferred<Unit>()
+        listToolsResponder = { _, _ ->
+            refreshGate.await()
+            ListToolsResult(tools = listOf(serverTool("refreshed")))
+        }
+        toolListChangedHandlers.getValue(SERVER_ID).invoke(io.modelcontextprotocol.kotlin.sdk.types.ToolListChangedNotification())
+        runCurrent()
+        advanceTimeBy(McpServerRuntimePolicy.CATALOG_REFRESH_DEBOUNCE_MS + 1L)
+        runCurrent()
+        val gate = CompletableDeferred<Unit>()
+        callToolGate = gate
+        callToolResponder = { throw StreamableHttpError(code = 401, message = "Unauthorized") }
+
+        val call = async {
+            runCatching {
+                manager.callTool(net.weero.measix.pilot.data.enterprise.RealmAccess.Personal,
+                    serverId = tool.serverId,
+                    toolName = tool.name,
+                    expectedDefinitionDigest = tool.definitionDigest,
+                    expectedNeedsApproval = tool.needsApproval,
+                    args = JsonObject(emptyMap()),
+                ) { }
+            }
+        }
+        runCurrent()
+        createdTransports.single().simulateClose()
+        runCurrent()
+        assertTrue(manager.syncingStatus.value[SERVER_ID] is McpStatus.RetryScheduled)
+
+        gate.complete(Unit)
+        runCurrent()
+        assertTrue(call.await().exceptionOrNull() is ToolExecutionFailure)
+        assertEquals(McpStatus.NeedsAuthorization, manager.syncingStatus.value[SERVER_ID])
+        assertFalse(manager.runtimeCapabilities.value[McpRuntimeKey(SERVER_ID)]?.sessionCallable == true)
+        advanceUntilIdle()
+        assertEquals(1, createdClients.size)
+        createdTransports.single().simulateClose()
+        createdTransports.single().simulateError(McpNotificationStreamExhausted())
+        runCurrent()
+        assertEquals(McpStatus.NeedsAuthorization, manager.syncingStatus.value[SERVER_ID])
+    }
+
+    @Test
+    fun `notification stream degradation keeps command session callable`() = runTest(dispatcher) {
+        emit(listOf(serverConfig()))
+        advanceUntilIdle()
+
+        createdTransports.single().simulateError(McpNotificationStreamExhausted())
+        runCurrent()
+
+        val capability = manager.runtimeCapabilities.value[McpRuntimeKey(SERVER_ID)]
+        assertTrue(capability?.status is McpStatus.CatalogStale)
+        assertTrue(capability?.sessionCallable == true)
+        assertEquals(1, createdClients.size)
+    }
 
     @Test
     fun `transport internal cancellation cannot leave a connecting client owned as ready`() = runTest(dispatcher) {
@@ -639,7 +784,27 @@ internal class McpConnectionLifecycleTest : McpRuntimeCoordinatorTestBase() {
                 StreamableHttpError(code = 503, message = "Service Unavailable")
             )
         )
-        assertTrue(McpProtocolFailureClassifier.isConnectionError(RuntimeException("Connection refused")))
+        assertTrue(McpProtocolFailureClassifier.isConnectionError(
+            RuntimeException("wrapped", java.io.IOException("Connection refused"))))
+        assertTrue(McpProtocolFailureClassifier.isConnectionError(
+            RuntimeException("wrapped", StreamableHttpError(code = 503, message = "Service Unavailable"))))
+        assertFalse(McpProtocolFailureClassifier.isConnectionError(RuntimeException("Connection refused")))
+        assertFalse(McpProtocolFailureClassifier.isConnectionError(
+            RuntimeException("wrapped", StreamableHttpError(code = 400, message = "Connection closed"))))
+        assertFalse(McpProtocolFailureClassifier.isConnectionError(
+            McpOAuthResponseException(200, message = "OAuth token response missing access_token")))
+        assertFalse(McpProtocolFailureClassifier.isConnectionError(
+            McpOAuthResponseException(400, "invalid_request", "OAuth token error")))
+        assertFalse(McpProtocolFailureClassifier.isConnectionError(
+            McpOAuthResponseException(404, message = "OAuth endpoint not found")))
+        assertTrue(McpProtocolFailureClassifier.isUnauthorized(
+            McpOAuthResponseException(400, "invalid_grant", "OAuth token error")))
+        assertTrue(McpProtocolFailureClassifier.isSseStreamGiveUp(
+            RuntimeException("wrapped", McpNotificationStreamExhausted())))
+        assertFalse(McpProtocolFailureClassifier.isSseStreamGiveUp(
+            RuntimeException("Maximum reconnection attempts exceeded")))
+        assertEquals("", McpProtocolFailureClassifier.httpCode(
+            StreamableHttpError(code = -1, message = "invalid content type")))
         assertFalse(
             McpProtocolFailureClassifier.isConnectionError(
                 StreamableHttpError(code = 401, message = "Unauthorized")

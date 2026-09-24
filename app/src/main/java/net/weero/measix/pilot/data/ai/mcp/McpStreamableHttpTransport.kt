@@ -55,6 +55,8 @@ private const val MCP_NAME_HEADER = "Mcp-Name"
 private const val MCP_BASE64_PREFIX = "=?base64?"
 private const val MCP_BASE64_SUFFIX = "?="
 
+internal class McpNotificationStreamExhausted : Exception("Maximum reconnection attempts exceeded")
+
 /**
  * Default maximum size, in characters, of a single inline SSE event assembled from a POST response.
  *
@@ -249,7 +251,7 @@ internal class McpStreamableHttpTransport(
                         return@launch
                     }
                     if (!connected && ++attempt >= reconnectionOptions.maxRetries) {
-                        _onError(StreamableHttpError(null, "Maximum reconnection attempts exceeded"))
+                        _onError(McpNotificationStreamExhausted())
                         return@launch
                     }
                     continue

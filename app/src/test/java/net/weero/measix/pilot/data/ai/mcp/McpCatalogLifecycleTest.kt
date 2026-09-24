@@ -607,6 +607,31 @@ internal class McpCatalogLifecycleTest : McpRuntimeCoordinatorTestBase() {
     }
 
     @Test
+    fun `missing capability handshake is unavailable before call commitment`() = runTest(dispatcher) {
+        emit(listOf(serverConfig()))
+        advanceUntilIdle()
+        val client = createdClients.single()
+        val tool = manager.captureTurnCapabilities(Assistant(mcpServers = setOf(SERVER_ID))).tools.single()
+        every { client.serverCapabilities } returns null
+
+        val failure = runCatching {
+            manager.callTool(net.weero.measix.pilot.data.enterprise.RealmAccess.Personal,
+                serverId = tool.serverId,
+                toolName = tool.name,
+                expectedDefinitionDigest = tool.definitionDigest,
+                expectedNeedsApproval = tool.needsApproval,
+                args = JsonObject(emptyMap()),
+            ) { }
+        }.exceptionOrNull() as ToolExecutionFailure
+
+        val envelope = (failure.output.single() as me.rerere.ai.ui.UIMessagePart.Text).text
+        val json = Json.parseToJsonElement(envelope).jsonObject
+        assertEquals("unavailable", json.getValue("status").toString().trim('"'))
+        assertEquals("server_unavailable", json.getValue("reason").toString().trim('"'))
+        coVerify(exactly = 0) { client.callTool(any<CallToolRequest>(), any<RequestOptions>()) }
+    }
+
+    @Test
     fun `server without tools capability is rejected before call commitment`() = runTest(dispatcher) {
         emit(listOf(serverConfig()))
         advanceUntilIdle()

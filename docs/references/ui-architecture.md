@@ -506,6 +506,7 @@ ChatPageContent
 新的待审批或当前执行子助手的待回答交互重击两次，间隔 200ms，表达“需要用户处理”，随后暂停工作心跳，不周期催促；交互身份在当前观察期间去重。
 初次观察、恢复前台、重新开启设置和切换 turn 只建立现状基线，不重播既有输出或待处理提示。
 进入 `STOPPING`、`IDLE`，离开页面、失去 `RESUMED` 或关闭开关时取消所有后续触觉，包括双振的第二下。
+前台声音由 `GenerationSideEffects` 的 `GenerationSoundTracker` 管理：流式消息只触发新完成的 step 音，待审批与子助手待回答音在对应 checkpoint 成功提交后按交互身份去重播放；播放失败只记录日志，不回滚已提交的 checkpoint；续跑以已有 Assistant 消息建立基线，不重播旧提醒或 step。
 
 MCP 设置页只保留列表下拉刷新，避免顶部栏重复入口。下拉只调用 `McpApplicationService.refreshAll()`，指示器偏移到可折叠
 TopAppBar 下方；它最多绑定 20 秒用户 receipt，不绑定 AppScope 中可能持续数分钟的后台恢复。receipt 结束时若仍有 server
@@ -581,7 +582,7 @@ Compose 暴露 application/query service；恢复由 `ApplicationRecoveryCoordin
 
 已创建会话的助手归属来自 `ConversationUiModel.snapshot.header.assistantId`。`ConversationQueryService` 在原页面 lease 的 Session → Settings 边界捕获配置，随同一会话投影提供 `ConversationConfigurationUiModel`。标题、背景、模型、搜索、推理、快捷消息、MCP 和生成前检查共用这个助手；定义删除或撤权时保留历史和不可用原因，不回退到全局助手。
 
-聊天模型目录按用途与准入显示；企业和用户助手均可选择本域获准模型、跟随本域默认，或在企业域恢复继承助手定义模型。企业定义只读不等于使用模型不可选择。搜索保留用户开关，即使当前模型失效也显示已选而不可用；传输能力来自模型实际 binding，UI 不读取企业地址或凭据。MCP 显示目录准入与真实 runtime 状态，固定绑定不可移除，已有失效引用可取消。企业策略禁用已选个人 MCP 时，本轮跳过该工具并显示一条短提示，对话继续；必需企业工具不可用时才阻止生成，并给出刷新配置或联系管理员的操作说明。
+聊天模型目录按用途与准入显示；企业和用户助手均可选择本域获准模型、跟随本域默认，或在企业域恢复继承助手定义模型。企业定义只读不等于使用模型不可选择。搜索保留用户开关，即使当前模型失效也显示已选而不可用；传输能力来自模型实际 binding，UI 不读取企业地址或凭据。MCP 显示目录准入与真实 runtime 状态，固定绑定不可移除，已有失效引用可取消；聊天页“就绪”数量只计入当前会话可调用且有本地启用工具的服务器，离线保留的目录仍展示工具但不冒充已连接。企业策略禁用已选个人 MCP 时，本轮跳过该工具并显示一条短提示，对话继续；必需企业工具不可用时才阻止生成，并给出刷新配置或联系管理员的操作说明。
 
 `ConversationAssistantTarget` 冻结原页面和助手。模型弹窗、助手/工具弹层及输入导入按原目标持有状态；字段命令只更新最新值中的指定字段。会话系统提示、注入与目录仍由 `ConversationApplicationService` 写原会话，提交时复验助手；目录还核对原 Workspace。实际换助手在同一会话命令清空 folder 与 cwd，重新选择同一助手不清空。导入结果在交给输入框前再次验证原目标，失效或取消只释放本批新文件。
 

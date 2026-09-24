@@ -39,7 +39,7 @@ internal fun buildTextToSpeechTool(
         description = """
             Speak text aloud when the user asks you to read something, or when audio is appropriate.
             Returns immediately; playback continues in the background.
-            Provide natural speech text without markdown.
+            Provide natural speech text without markdown in the required `text` argument.
         """.trimIndent().replace("\n", " "),
         systemPromptContribution = playbackContext.capture.guidance,
         parameters = {

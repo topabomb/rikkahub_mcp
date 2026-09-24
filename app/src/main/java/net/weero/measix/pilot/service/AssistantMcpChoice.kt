@@ -13,11 +13,13 @@ internal data class AssistantMcpChoice(
     val canToggle: Boolean,
     val unavailableReason: ConfigurationUnavailableReason?,
     val status: McpStatus,
+    val sessionCallable: Boolean,
     val tools: List<McpToolPresentation>,
     val fixedByDefinition: Boolean = false,
 ) {
-    val isReady: Boolean get() = unavailableReason == null && tools.isNotEmpty()
-    val isBusy: Boolean get() = !isReady && (status == McpStatus.Connecting || status == McpStatus.Discovering)
+    val hasCatalogTools: Boolean get() = tools.isNotEmpty()
+    val isCallable: Boolean get() = unavailableReason == null && sessionCallable && tools.any { it.enabled }
+    val isBusy: Boolean get() = !hasCatalogTools && (status == McpStatus.Connecting || status == McpStatus.Discovering)
 }
 
 internal fun ConversationConfigurationUiModel.mcpChoices(runtime: List<McpServerPresentation>): List<AssistantMcpChoice> {
@@ -30,12 +32,14 @@ internal fun ConversationConfigurationUiModel.mcpChoices(runtime: List<McpServer
         val status = runtime.singleOrNull { it.serverId == id && it.access == target.conversation.selection.access }
         AssistantMcpChoice(id, definition?.name ?: id.toString(), id in selected,
             assistant != null && id !in fixedMcpBindings && (id in selected || reason == null), reason,
-            status?.status ?: McpStatus.Idle, status?.tools.orEmpty(), id in fixedMcpBindings)
+            status?.status ?: McpStatus.Idle, status?.sessionCallable == true,
+            status?.tools.orEmpty(), id in fixedMcpBindings)
     }
 }
 
 internal fun List<McpServerPresentation>.assistantChoices(assistant: Assistant): List<AssistantMcpChoice> = map { server ->
     AssistantMcpChoice(server.serverId, server.name, server.serverId in assistant.mcpServers,
         server.enabled || server.serverId in assistant.mcpServers,
-        if (server.enabled) null else ConfigurationUnavailableReason.RESOURCE_DISABLED, server.status, server.tools)
+        if (server.enabled) null else ConfigurationUnavailableReason.RESOURCE_DISABLED,
+        server.status, server.sessionCallable, server.tools)
 }

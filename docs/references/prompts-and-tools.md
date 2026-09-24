@@ -442,7 +442,7 @@ datetime、timezone、utc_offset、timestamp_ms。
 
 > Speak text aloud when the user asks you to read something, or when audio is appropriate.
 > Returns immediately; playback continues in the background.
-> Provide natural speech text without markdown.
+> Provide natural speech text without markdown in the required `text` argument.
 
 参数：`text`（Plain text to speak）。结果：`{"success":true}`。
 

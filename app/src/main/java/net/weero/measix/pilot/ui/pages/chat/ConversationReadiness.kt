@@ -137,7 +137,7 @@ internal fun Settings.buildConversationReadiness(
     val enabledMcpServers = mcpServers.filter { it.unavailableReason == null }
     val selectedMcpServers = enabledMcpServers.filter { it.selected }
     val selectedMcpCount = selectedMcpServers.size
-    val readyMcpCount = selectedMcpServers.count { it.isReady }
+    val readyMcpCount = selectedMcpServers.count { it.isCallable }
     val selectedStatuses = selectedMcpServers.map { it.status }
     val mcpState = when {
         mcpServers.isEmpty() -> McpReadiness.NOT_CONFIGURED

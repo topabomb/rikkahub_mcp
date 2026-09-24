@@ -180,29 +180,12 @@ class GenerationSideEffects internal constructor(
         titleCoordinator.clear(conversationId)
     }
 
-    /**
-     * 前台流式音效（launchRun 的 Streaming 事件消费）：
-     * 末条消息 finishedAt 变化 → step；出现新的注意力键（待审批工具 / 子助手 ask_user）
-     * → approval。per-turn 实例持有去重状态。
-     */
-    inner class StreamingSoundTracker {
-        private var previousFinishedAt: LocalDateTime? = null
-        private val previousAttentionKeys = mutableSetOf<String>()
-
-        fun onStreaming(lastMessage: UIMessage?) {
-            if (lastMessage?.finishedAt != null && lastMessage.finishedAt != previousFinishedAt) {
-                playStepSound()
-            }
-            previousFinishedAt = lastMessage?.finishedAt
-
-            val attentionKeys = collectUserAttentionKeys(listOfNotNull(lastMessage), json)
-            if (attentionKeys.any { previousAttentionKeys.add(it) }) {
-                playApprovalSound()
-            }
-        }
-    }
-
-    fun soundTracker(): StreamingSoundTracker = StreamingSoundTracker()
+    internal fun soundTracker(initialMessage: UIMessage?): GenerationSoundTracker = GenerationSoundTracker(
+        initialMessage = initialMessage,
+        json = json,
+        playStep = ::playStepSound,
+        playAttention = ::playApprovalSound,
+    )
 
     // ---- 后台生成公共骨架（标题 / 建议 / 压缩共用） ----
 
@@ -432,6 +415,33 @@ class GenerationSideEffects internal constructor(
             addAll(messagesToKeep.map { it.toMessageNode() })
         }
 
+    }
+}
+
+/** A run observes new stream steps and committed user interactions from the same turn owner. */
+internal class GenerationSoundTracker(
+    initialMessage: UIMessage?,
+    private val json: Json,
+    private val playStep: () -> Unit,
+    private val playAttention: () -> Unit,
+) {
+    private var previousFinishedAt: LocalDateTime? = initialMessage?.finishedAt
+    private val previousAttentionKeys = collectUserAttentionKeys(listOfNotNull(initialMessage), json).toMutableSet()
+
+    fun onStreaming(lastMessage: UIMessage?, enabled: Boolean) {
+        if (enabled && lastMessage?.finishedAt != null && lastMessage.finishedAt != previousFinishedAt) {
+            playStep()
+        }
+        previousFinishedAt = lastMessage?.finishedAt
+    }
+
+    fun onCheckpoint(lastMessage: UIMessage, enabled: Boolean) {
+        val attentionKeys = collectUserAttentionKeys(listOf(lastMessage), json)
+        val hasNewAttention = attentionKeys.any { it !in previousAttentionKeys }
+        previousAttentionKeys.addAll(attentionKeys)
+        if (hasNewAttention && enabled) {
+            playAttention()
+        }
     }
 }
 

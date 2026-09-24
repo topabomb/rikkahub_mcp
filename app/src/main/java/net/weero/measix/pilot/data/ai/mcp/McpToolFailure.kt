@@ -20,7 +20,7 @@ internal enum class McpToolFailureKind(
     SERVER_UNAVAILABLE(
         status = "unavailable",
         reason = "server_unavailable",
-        detail = "The MCP session is unavailable; connection recovery is in progress. Try again later.",
+        detail = "The MCP session is unavailable. Try again later.",
     ),
     AUTHORIZATION_REQUIRED(
         status = "unavailable",

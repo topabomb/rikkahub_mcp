@@ -42,7 +42,7 @@ class ConversationReadinessTest {
     fun `optional tools do not block model readiness and directory capability is not a runtime catalog`() {
         val workspace = Uuid.random()
         val assistant = Assistant(workspaceId = workspace, localTools = listOf(LocalToolOption.TimeInfo, LocalToolOption.TextToImage))
-        val choice = AssistantMcpChoice(ConfigurationReference.random(), "Managed", true, false, null, McpStatus.Idle, emptyList())
+        val choice = AssistantMcpChoice(ConfigurationReference.random(), "Managed", true, false, null, McpStatus.Idle, false, emptyList())
         val readiness = Settings().buildConversationReadiness(assistant, mapOf(workspace to "Shared workspace"), 3,
             mcpServers = listOf(choice), selectedModel = Model(), hasAvailableChatModel = true)
         assertTrue(readiness.canSend)
@@ -55,21 +55,28 @@ class ConversationReadinessTest {
     }
 
     @Test
-    fun `catalog and runtime failure states retain their distinct display semantics`() {
+    fun `cached tools do not mark a disconnected MCP session ready`() {
         val states = listOf(McpStatus.Discovering to McpReadiness.CONNECTING,
             McpStatus.NeedsAuthorization to McpReadiness.AUTHORIZATION_REQUIRED,
             McpStatus.Reconnecting(1, 5) to McpReadiness.RECONNECTING,
             McpStatus.Error("unavailable") to McpReadiness.UNAVAILABLE)
         val assistant = Assistant()
         states.forEach { (status, expected) ->
-            val choice = AssistantMcpChoice(ConfigurationReference.random(), "MCP", true, true, null, status, emptyList())
+            val choice = AssistantMcpChoice(ConfigurationReference.random(), "MCP", true, true, null, status, false, emptyList())
             val blocked = Settings().buildConversationReadiness(assistant, emptyMap(), 0,
                 mcpServers = listOf(choice), selectedModel = Model(), hasAvailableChatModel = true)
             assertEquals(expected, blocked.mcpState)
             val withCatalog = choice.copy(tools = listOf(McpToolPresentation("tool", null, JsonObject(emptyMap()), true, false)))
-            val ready = Settings().buildConversationReadiness(assistant, emptyMap(), 0,
+            val cached = Settings().buildConversationReadiness(assistant, emptyMap(), 0,
                 mcpServers = listOf(withCatalog), selectedModel = Model(), hasAvailableChatModel = true)
-            assertEquals(McpReadiness.READY, ready.mcpState)
+            assertEquals(expected, cached.mcpState)
+            assertEquals(0, cached.readyMcpCount)
         }
+        val callable = AssistantMcpChoice(ConfigurationReference.random(), "MCP", true, true, null,
+            McpStatus.Ready(1, 1), true, listOf(McpToolPresentation("tool", null, JsonObject(emptyMap()), true, false)))
+        val ready = Settings().buildConversationReadiness(assistant, emptyMap(), 0,
+            mcpServers = listOf(callable), selectedModel = Model(), hasAvailableChatModel = true)
+        assertEquals(McpReadiness.READY, ready.mcpState)
+        assertEquals(1, ready.readyMcpCount)
     }
 }

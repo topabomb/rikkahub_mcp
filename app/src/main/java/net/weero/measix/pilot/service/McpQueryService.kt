@@ -50,12 +50,14 @@ internal data class McpServerPresentation(
     val requiredEnabled: Boolean = false,
     val gatewayEnablement: ResolvedGatewayEnablement? = null,
     val status: McpStatus,
+    val sessionCallable: Boolean,
     val tools: List<McpToolPresentation>,
 ) {
     val scope: ConfigurationScope get() = access.scope
-    val isReady: Boolean get() = tools.isNotEmpty()
+    val hasCatalogTools: Boolean get() = tools.isNotEmpty()
+    val isCallable: Boolean get() = enabled && unavailableReason == null && sessionCallable && tools.any { it.enabled }
     val isBusy: Boolean
-        get() = !isReady && (status == McpStatus.Connecting || status == McpStatus.Discovering)
+        get() = !hasCatalogTools && (status == McpStatus.Connecting || status == McpStatus.Discovering)
 }
 
 internal sealed interface McpCatalogReadState {
@@ -135,6 +137,7 @@ internal fun ExecutionConfigurationSnapshot.mcpPresentations(
             definition = null, access = access,
             unavailableReason = resource.access.unavailableReason, requiredEnabled = resource.access.requiredEnabled,
             gatewayEnablement = resource.gatewayEnablement, status = capability.status,
+            sessionCallable = capability.sessionCallable,
             tools = capability.catalog?.tools.orEmpty().map { McpToolPresentation(it.name, it.description, it.inputSchema, true, false) },
         )
     }
@@ -162,6 +165,7 @@ internal fun net.weero.measix.pilot.data.ai.mcp.McpServerConfig.toPresentation(
         enabled = commonOptions.enable,
         definition = this,
         status = presentedStatus,
+        sessionCallable = runtime.sessionCallable && activeCatalog != null,
         tools = activeCatalog?.tools.orEmpty().map { descriptor ->
             val policy = policies[descriptor.name]
             McpToolPresentation(

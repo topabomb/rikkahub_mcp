@@ -15,6 +15,7 @@ import net.weero.measix.pilot.data.ai.mcp.McpCommonOptions
 import net.weero.measix.pilot.data.ai.mcp.McpServerConfig
 import net.weero.measix.pilot.data.ai.mcp.McpStatus
 import org.junit.Assert.assertTrue
+import org.junit.Assert.assertFalse
 import org.junit.Test
 
 @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
@@ -28,6 +29,7 @@ class McpQueryServiceTest {
         val presentation = server.toPresentation(
             runtime = net.weero.measix.pilot.data.ai.mcp.McpRuntimeCapability(
                 status = McpStatus.Ready(toolCount = 1, catalogRevision = 1L),
+                sessionCallable = true,
                 catalog = McpCatalogSnapshot(ConfigurationScope.Personal,
                 serverId = server.id,
                 revision = 1L,
@@ -45,6 +47,7 @@ class McpQueryServiceTest {
 
         assertTrue(presentation.status is McpStatus.Error)
         assertTrue(presentation.tools.isEmpty())
+        assertFalse(presentation.isCallable)
     }
     @Test
     fun `scoped catalog recovers after a failed read and observes private revisions without editable managed copies`() = kotlinx.coroutines.test.runTest {

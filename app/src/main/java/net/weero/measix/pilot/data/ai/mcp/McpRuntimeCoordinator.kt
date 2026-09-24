@@ -307,7 +307,8 @@ class McpRuntimeCoordinator internal constructor(
                     (value.catalog == null || value.catalog.definitionDigest == catalog?.definitionDigest)
             }.values
             // A resource may serve several interactions; no individual connection represents them all.
-            id to McpRuntimeCapability(connections.singleOrNull()?.status ?: McpStatus.Idle, catalog)
+            val session = connections.singleOrNull()
+            id to McpRuntimeCapability(session?.status ?: McpStatus.Idle, catalog, session?.sessionCallable == true)
         }
     }
 
