@@ -21,30 +21,25 @@ RouteActivity (ComponentActivity)
                  └─ entry<Screen.*> (全屏逐页导航)
 ```
 
-配置列表的 `ConfigurationReference` 在 Lazy/可拖动列表边界使用 `toString()` 作为可保存 key；业务选择与命令继续传递类型化引用。Lazy item 与 `ReorderableItem` 必须使用同一 key，不能把不可放入 Bundle 的领域对象交给 SaveableStateHolder。
+### 页面与状态边界
 
-聊天抽屉的用户资料保留昵称和按时间显示的问候语；正式空间入口作为资料区下方的独立入口，并与搜索、历史入口共用紧凑的图标列、文字列和行高，同时与设置页入口统一导航到 `Screen.Enterprise`。应用版本更新卡片仍是空间入口之后的独立条件内容，不以空间状态或问候语替代。聊天顶部只显示由当前会话快照域派生的非交互企业标记，避免把全局切域动作放进高频操作区。抽屉入口在个人域显示“切换空间”，在企业域显示企业名称；企业名称保持单行省略，不能挤压入口图形或尾部箭头。企业空间入口、当前企业空间、企业会话和企业定义来源统一使用 `OrchelmLogo`，按所在 Material 内容色着色；设置页原有标题和说明不变，个人身份继续使用人物图标。`EnterprisePage` / `EnterpriseVM` 只经 `EnterpriseApplicationService` 查询身份、状态与当前空间，以及执行接入、同步、切换、退出和本机企业数据重置；具体授权及关闭屏障见 [Android 配置架构](android-configuration-architecture.md)。退出确认保存原请求；后台或离页会取消打开任务并关闭原 Portal 宿主，未交接实例由创建方清理。切换或退出后经不携带通知 ID 的 `Screen.Startup()` 重新获取本域会话请求，不能重放 Activity 初始通知。接入凭据、`RealmSelection` 和 WebView 不保存进导航或 Activity saved state。空间页以当前身份和“企业”两张卡片为主，未接入时个人身份与开始对话合为紧凑一行，接入卡将相册二维码放在标题行，扫码主按钮与粘贴描边按钮并列；另以简短中文说明枢策 Orchelm 自托管对使用边界、统一维护和团队经验复用的价值。企业空间首卡用强调底色、企业图标和单行省略的企业名称呈现，不重复“当前空间”前缀；企业工作台为主按钮，“回个人空间”为描边按钮，“开始对话”为常显文字按钮，按可用宽度换行；当前为个人且企业可用时，切入企业动作归企业卡。企业域的连接卡标题为“企业连接”，不重复主卡的企业名称；个人域保留“企业：名称”以识别已连接对象。连接卡展示账号、状态、同步配置和配置详情；企业地址默认显示并可复制，地址编辑和退出归卡片菜单；同步使用强调按钮。相机扫码、相册二维码和粘贴只在未接入时展示，切回个人空间不等于退出。右上角菜单提供“用量与额度”和“重置与数据处置”；没有企业 Session 时用量禁用，重置入口仍按 application 投影保持可达，存储损坏时显示“修复本机企业接入”。完整用量摘要在独立内容页展示，返回回到空间首页；首页的“额度提醒”仅列出已用尽或已占满额度的能力，保留刷新中/陈旧提示，点击进入完整用量页；个人空间可查看已连接企业的摘要，明细位置提供明确的切入企业动作，不以个人 selection 打开企业 Portal。已连接企业在主卡之后展示“最近动态”：经 `EnterpriseApplicationService.recentUpdates` 读取现有 Client Feed 的最新五条，标题显示实际条数；ANNOUNCEMENT、MAINTENANCE、NOTICE 分别使用扩音器、扳手、铃铛图标，WARNING 与 CRITICAL 显示“重要”“紧急”标记，INFO 使用中性样式。每条显示标题、时间和三行正文摘要，超长省略并可点击展开/收起。Markdown 摘要使用现有解析器与原生文字样式，展开后由 MarkdownBlock 保留全文结构；此处为只读渲染，不提供媒体读取或正文链接操作；卡尾不重复工作台入口。成功空列表不占卡片；加载和失败显式区分，保留诊断与刷新入口。动态查询只以当前选择、已连接企业和地址作为目标；手动刷新或配置同步成功显式触发一次读取，概览中的配置版本、时间、状态等变化不重复读取。切换空间或 Session/地址变化时撤销旧请求及投影，再按新目标读取；个人空间仍可查看企业动态，退出企业后清除，不建立第二持久化缓存。异常、重置进度和重试仍直接展示。“保留历史 / 全部清除”选择后各自确认，执行期间展示进度并禁用重复提交，失败保留可重试投影，不自动执行删除。备份页面统一说明只包含个人数据。
+- UI/ViewModel 只消费 application/query UiModel 并提交 typed 命令。页面打开时捕获的 `RealmSelection`、会话 lease 或 Portal 文档身份贯穿异步操作；切域、退出、离页及地址变化撤销旧投影，返回同一空间不复活旧写权限。接入凭据、WebView 和领域授权对象不写进导航或 Activity saved state。
+- `ConfigurationReference` 在 Lazy/拖动列表的 Saveable key 边界转为字符串；业务选择和命令仍用类型化引用，同一个 item 与拖动容器使用同一 key。
+- 配置目录的 Loading、Available、预期不可用和非预期失败保持可区分；失败保留可操作原因和必要诊断，取消不展示为失败。空间与资源来源有文字或本地化说明，不能只靠颜色/图标；可点击图标有 content description。
 
-企业操作反馈由 `EnterpriseVM` 绑定产生结果时的 `RealmSelection`；同步与预算查询保留发起时的选择，切换空间或退出后不继续显示旧主体结果。空间页的“用量与额度”只消费 `EnterpriseApplicationService` 的摘要 UiModel，按 MODEL/TTS/ASR/MCP/IMAGE_GENERATION 各展示一行。受限能力选择 `used + reserved` 占额度比例最高的一条限制作为主限制，以横向进度条、已用/额度、剩余量、周期和重置时间呈现；不同 meter 或周期不得相加，其余限制只提示数量。无限能力不伪造额度或剩余量，只按能力优先级展示最多两项累计真实用量。进行中请求、核对中、加载、刷新、陈旧与失败保持可区分；完整限制和调用明细统一由“查看用量明细”进入既有 Portal，不在 Android 复制报表。连接动作与只读“配置详情”分离；详情只消费 application UiModel，按分类和单项渐进披露十个默认值、五项策略及十类资源，不展示内部 ID、路由、凭据、上游模型键或提示词正文。已连接企业的详情在个人域仍可读取；竖向折叠只使用铰链右侧 pane，Tabletop 只使用上方 pane 并独立滚动。额度/核对错误卡在原操作位置提供同一入口并保留 requestId、resourceId 与平台 detail。删除身份终态显示明确说明并保持 Personal 可用。Portal 页面由独立 Portal 仓库负责，Android 不维护网页 UI 或静态资源。Android 申请 Core grant 后以原生 POST 打开 Core 同源 `/portal/`；Core 可以分发标准通用工作台，也可以代理企业自有 HTTP/HTTPS 静态站点，Android 对两者使用同一路径且不做 fallback。工作台的动态查询、刷新、外链和媒体各自展示结果；原生深链只接受固定页面及精确 UUID 形态的 request/update 子资源，外链只接受绝对 HTTP/HTTPS URL，由 Android 每次确认后交给系统浏览器，不能导航当前 WebView 或向目标转发凭据。关闭工作台保留登录，退出企业登录需要原生确认。
+### 企业空间与工作台
 
-Portal 导航或消息回调触发关闭时，先同步撤销文档授权，物理移除与销毁 WebView 在回调返回后的主线程消息中执行，避免重入 Chromium。原关闭回执同时等待站点数据清理；替换宿主不能提前打开。
+`EnterprisePage` 是接入、同步、切换、退出和本机企业重置的正式入口，只经 `EnterpriseApplicationService` 读取身份与状态。聊天顶部只显示由当前会话派生的非交互空间标记；空间切换归抽屉和设置入口。空间页区分当前身份、企业连接、最近动态、预算提醒和只读配置详情；可用值、加载、刷新、陈旧与失败不能用同一个空态表示。重置先选择保留或清空历史，再确认；执行期间展示进度和重试，不自动执行删除。个人备份入口说明仅包含个人数据。
 
-网页退出与外链由 `PortalNativeControls` 展示原生确认，状态及决策归当前文档的 `PortalNativeActions`。退出显示已冻结的企业名称，外链显示完整地址；拒绝、关闭或超时使原提示失效。网页退出复用同一企业退出命令，关闭工作台仍保留企业登录。 拍照/录音使用同一文档的原生弹窗申请权限、展示相机预览及开始/停止/取消动作；UI 只持有采集操作投影，不接触文件路径。取消回传原操作对象，不能取消替换后的操作；离开前台由 Portal 宿主关闭协议停止硬件并清理文件。
+预算页按 MODEL、IMAGE_GENERATION、TTS、ASR、MCP 展示能力级摘要。每项只选一条实际限制作为主显示，不能把不同 meter/周期相加；无限额不伪造剩余量。详细调用记录仍由 Portal 展示。配置详情按默认值、策略和资源渐进披露，不显示凭据、路由、内部 ID 或提示词正文；已连接企业在个人空间可只读查看，但不能借个人 selection 执行企业业务。
 
-聊天配置弹层使用同一标题与关闭图标，助手、模型和 Starter 等短任务弹层按内容收紧，内容超过自适应最大高度后才在剩余高度内滚动；不能用固定屏高比例制造空白，也不能直接把填满整页的 Content 作为唯一弹层内容。助手选择器把子助手图标切换作为搜索框尾部控件，未选中保持透明、选中才显示轻量底色；选择条目只显示名称、按需来源图标、子助手头像标记、选中状态和详情动作，描述仍参与搜索并留在详情页。模型选择器把默认来源收拢为列表顶部一张与模型项对齐的卡片，卡片显示当前默认模式和解析值；企业域的助手默认与空间默认通过卡片菜单切换，显式模型继续在同一列表选择，三态仍按 typed 投影区分。个人助手明确区分设置默认和显式模型，不把当前解析到的具体模型标记为默认。助手本域使用页先展示与普通助手详情一致的分组入口，进入单项后在标题行同时保留返回与关闭；扩展的三个子类只在扩展详情内部使用页签。基本参数中的模型入口先关闭助手详情，再打开聊天页根部唯一的 `ModelListSheet`，不得在一个 Modal 内再叠加第二个 Modal。Workspace 选择列表按剩余高度滚动，管理动作位于标题行。ChatVM 的配置命令返回 Result<Unit>，保留原失败并传播取消；模型选择由 ModelListSheet 就近显示失败，其他聊天配置操作由原 target 绑定的页面失败对话框显示，保留原选择上下文，不再把失败只写到背后的聊天错误列表。
+Android 只承载 Core `/portal/` 的文档，不维护第二套网页。`PortalDocument` 绑定原 Session/选择和每次打开的独立身份；关闭先撤销授权，再在 WebView 回调返回后销毁宿主并等待站点数据清理。外链和网页退出使用原生确认；拍照/录音归当前文档的硬件与文件 owner，页面只持有操作投影。关闭工作台保留登录，退出另走正式 Session 命令。
 
-聊天搜索模式更新助手的外挂/内建搜索偏好，不改共享模型工具目录。搜索按钮与主执行消费相同的助手模型派生；
-当前模型覆盖连接不支持内建搜索时，选择器保留原选择并显示不可用原因，用户可关闭或改用外挂搜索。
-聊天使用 `ConversationConfigurationUiModel` 投影原会话域的助手与资源，通过原 `ConversationAssistantTarget` 提交本域偏好；企业助手固定定义不进入用户定义编辑器。`AssistantUsageEditor` 的记忆页将企业绑定的只读 Seed 与可编辑运行记忆分开显示，Seed 由 `ResolvedConfiguration.assistantMemorySeeds` 按原企业身份及助手引用解析，不通过运行记忆开关或删除操作修改。
+### 聊天配置入口
 
-`EnterpriseStarterPicker` 是企业 Starter 的唯一独立入口，只投影标题、说明和预填文本。企业助手不维护第二套目录与详情页；选择助手和管理当前空间使用偏好统一经过聊天页及 `AssistantUsageEditor`，定义字段仍按配置 owner 保持只读。
-工作台原生宿主另提供 Starter 列表和预览，打开操作固定在滚动内容外；路由按既有编码传递文本并保留原聊天导航项，网页 Bridge 权限不变。
-Provider、用户助手、搜索、Prompt 与 Quick Message 页面保持个人配置原有密度，不常驻重复的跨空间提示；只有从企业上下文进入共享定义编辑时才确认影响。语音和 MCP 仅在企业/用户资源混合目录中分组并标记来源。企业可用性继续由既有模型、助手和语音目录投影；企业聊天没有可用模型时展示本域就绪状态，模型行转到正式空间恢复入口，不引导用户填写个人 API Key 代替企业资源。
+聊天配置消费 `ConversationConfigurationUiModel`。助手、模型、Starter、MCP、Workspace 等短任务使用同一自适应弹层；标题、关闭及管理入口保持可达，长列表只滚动内容区。企业助手的固定定义只读，当前空间使用偏好通过原 `ConversationAssistantTarget` 编辑；共享用户定义从企业上下文编辑时提示影响，不复制第二套编辑器。
 
-配置目录读取使用 `ModelCatalogReadState`、`AssistantCatalogReadState`、`SpeechCatalogReadState` 与
-`EnterpriseStarterReadState` 区分 Loading、Available、预期失效和非预期失败。UI 不用空列表或旧投影冒充读取
-成功；非预期失败显示经过凭据脱敏的异常类型、message 与 cause，完整堆栈写日志，取消继续传播。熟悉动作可
-使用纯图标，但每个可点击图标必须有本地化 content description；来源与空间身份不能只依赖颜色或图形。
+模型选择只使用聊天页根部的一张 `ModelListSheet`：默认来源与显式模型在同一列表，企业助手默认/空间默认/指定模型三态由 typed 投影区分，不能由最终显示模型反推。Starter 只预填并保留原草稿/附件，不自动发送。配置命令失败在发起操作的弹层或页面显示原始诊断，保留原选择；不能仅把错误写到被弹层遮住的聊天列表。
 
 ### 技术栈
 
@@ -494,7 +489,7 @@ ChatPageContent
 
 模型 Logo 先按现有品牌规则匹配；未命中时个人域保留模型名首字母，企业域使用 Noetral 图形。模型目录直接从自身 `RealmSelection` 选择该纯展示策略，聊天消息从会话快照的 `ConversationHeader.scope` 选择；图标组件不读取全局空间，也不持有 Realm、Session 或配置职责。Provider、搜索和语音图标继续使用通用首字母回退。
 
-`SettingModelPage` 的模型页通过 `ModelSettingsVM` 订阅当前域目录；显示原覆盖、当前选择与不可用原因，清除企业覆盖只继承企业默认。个人页区分未配置、跟随聊天模型、跟随快速模型和未启用附件识别，不将默认哨兵当成丢失资源。建议开关写当前域偏好，关闭后仍保留模型选择。提示词管理页仍编辑共享用户内容；企业聊天使用 AssistantUsageEditor 编辑原主体偏好，独立图片生成通过原域模型请求执行。设备验收范围以实施方案中的实际证据为准。
+`SettingModelPage` 的模型页通过 `ModelSettingsVM` 订阅当前域目录；显示原覆盖、当前选择与不可用原因，清除企业覆盖只继承企业默认。个人页区分未配置、跟随聊天模型、跟随快速模型和未启用附件识别，不将默认哨兵当成丢失资源。建议开关写当前域偏好，关闭后仍保留模型选择。提示词管理页仍编辑共享用户内容；企业聊天使用 AssistantUsageEditor 编辑原主体偏好，独立图片生成通过原域模型请求执行。
 
 前台 turn 触觉只由 `ChatPage` 的 `TurnHapticFeedback` 管理，调用位于自适应布局分支之外，不依赖消息列表项的组合生命周期。
 它直接收集 `ChatVM` 既有热流中的 `ConversationUiModel.turnFeedback` 同版本查询投影与设置，不经渲染快照转发，避免恢复前台时旧组合值造成误提醒；投影尚未就绪时静默，UI 不解析子助手 metadata 或读取 Runtime Job。
@@ -528,7 +523,7 @@ loading、配置提示等临时 LazyColumn item 数量变化当作消息提交�
 取消旧请求，不使用固定时间延迟猜测布局完成。
 
 会话底部 `ErrorCardsDisplay` 是需要展示明确诊断原文的主通道。普通命令和标题/建议/压缩等边缘失败维持 5 秒自动关闭；
-本轮 Master 回复 `FAILED` / `INCOMPLETE` 使用手动关闭卡片，并按当前 `conversationId` 过滤。消息终态条只显示 durable
+Master 回复 `FAILED` / `INCOMPLETE` 使用手动关闭卡片，并按当前 `conversationId` 过滤。消息终态条只显示 durable
 reason 对应的短状态，取消使用中性色而不冒充错误；失败或未完成条可再次打开消息 `terminalDetail`。工具与子助手卡片
 自行显示其领域失败，不向主会话重复投递卡片。
 
@@ -700,37 +695,9 @@ Provider/模型名称草稿允许内部空格，保存边界统一 trim 首尾�
 
 ---
 
-## 11. 消息渲染管线
+## 11. 渲染边界
 
-消息渲染的稳定层次是：
-
-```
-ChatList (LazyColumn)
-  └─ items: messageNodes
-       └─ ChatMessage（单条消息与分支容器）
-            ├─ avatar / branch / actions / compact footer
-            └─ groupMessageParts（按原始 Part 顺序分组）
-                 ├─ ContentBlock → 文本、图片、音频、视频、文档等
-                 ├─ ThinkingBlock → reasoning 与普通工具 step（折叠时钉住 Pending 与 generate_image）
-                 └─ SubAssistantCallBlock → SubAssistantCallCard
-```
-
-文本从 `MarkdownBlock` 进入；无 HTML 时走 Markdown AST，含 HTML 时转入 `MarkdownNew` 的 DOM
-路径。工具审批和 Target 卡片必须保留在 Part 的语义位置。节点级细节统一见
-[消息渲染管线](message-rendering-pipeline.md)，生成侧见 [Turn/Step 执行链路](turn-step-execution.md)。
-
-`ChatMessageNerdLine` 使用低对比度单行摘要与最多两行展开详情。聊天列表顶层 item 间距和同一消息主要区块均为 4dp，
-统计详情与芯片换行使用 2dp；被动统计摘要没有额外纵向 padding。消息末尾的操作栏、Workspace 产出文件与 usage 组成一个
-footer，footer 内部只保留 2dp 区块间距；操作栏和分支按钮保留 8dp 横向内边距，纵向内边距统一为 4dp。终态提示和 Workspace 文件芯片
-使用紧凑的 4dp 纵向内边距。`ChainOfThought` 只收紧卡片外沿与展开内容的重复留白，步骤和折叠控制仍保留原有点击行内边距；
-子助手卡使用 8dp 上下内边距和 4dp 区块间距，子助手详情中的消息 item 同样使用 4dp；审批按钮、媒体缩略图、气泡正文与
-弹层内容仍保留原有可读空间。只有确实显示头像或名称时才创建消息 Header，避免关闭身份信息后
-留下空 Header 间距。`ChatList` 的独立 loading/审批状态行使用 2dp 上下留白；
-它不进入 usage 行。`ChatSizeChecker` 与 `StatsVM`
-各自只消费 application/query 投影。Compose 不解析四种线协议、不累计 token，也不从 UI 状态推断完整性；精确口径见
-[`token-usage-accounting.md`](token-usage-accounting.md)。
-
----
+`ChatMessage` 消费 `ConversationPresentation` 的有序 Part，展示分组不得改写 durable transcript；工具审批、待执行和子助手卡片仍保持原 Step 的语义位置。Markdown、WebView、媒体及富文本交互的具体渲染 owner 由 [消息渲染管线](message-rendering-pipeline.md)说明，本篇只定义页面承载、导航与授权边界。
 
 ## 12. 显示投影与生成管道的边界
 
@@ -785,20 +752,3 @@ insets，不能重复加上键盘高度。多行、编辑态、附件及键盘�
 不自行订阅配置 Store。承载页面切换不改变播放 owner；其他 Activity 和独立 Dialog 窗口不承载此覆盖层。
 
 完整配置、执行状态、详情解析和生命周期见 [sub-assistant-architecture.md](sub-assistant-architecture.md)。
-
----
-
-## 附录：相关设计资料
-
-- [Material 3 Canonical layouts](https://m3.material.io/foundations/layout/canonical-layouts/list-detail)
-- [Android Developers: Support different screen sizes](https://developer.android.com/develop/ui/compose/layouts/adaptive/support-different-screen-sizes)
-- [Android Developers: Navigation 3](https://developer.android.com/guide/navigation/navigation-3)
-- [Material 3 Adaptive](https://m3.material.io/develop/android/jetpack-compose/adaptive-layouts)
-
-助手定义编辑调用 `AssistantDetailVM.update(pageSnapshot, edited)`，两者来自同一次页面快照；现有字段 delta 合并应用到最新持久定义。长期存活的提示词输入回调不能将后来更新的背景或其他字段误判成待撤销的编辑。
-
-图片生成页的原生参考图选择由 `ImgGenVM` 保存并一次性消费打开时的 `ImageReferenceImport`，Activity 重建不依赖组合内状态恢复目标；切域或重置后原 Job 失效。`FileManagementApplicationService.importImageReference` 在复制前后验证原选择，复用 `TemporaryImage` 的图片校验与失败清理。缩略图使用带原选择/Job 的 `ImageSource`，不直接读取文件路径；只有已交给生成请求的路径按实际借用 Job 延迟删除，其他副本立即清理。
-
-富文本交互由 `RichTextHost` 统一接收原来源，链接、代码/表格导出与 HTML 预览不在各渲染器中直接操作文件或重新捕获当前域。`Screen.ContentPreview` 只序列化导航 ID，实际 `RenderedContent` 借用原来源且不持久化；恢复后必须从原页重开。内联 HTML/SVG 与全屏页共用来源观察、受管图片读取及独立文档 origin。详细机制见 [消息渲染管线](message-rendering-pipeline.md)。
-
-企业语音列表在 SettingSpeechPage 复用个人空间的类型标签（OpenAI、Gemini、MiMo、系统 TTS 与各实时 ASR），不把模型名和音色拼成企业专用摘要。来源、只读和选择权限仍由既有 SpeechCatalog 投影决定，未新增企业编辑器。

@@ -101,17 +101,19 @@ common/       通用工具
 | [子助手架构](docs/references/sub-assistant-architecture.md) | Target 访问、同步调用、Child lineage、撤权、恢复与只读详情 |
 | [子助手多模态](docs/references/sub-assistant-multimodal.md) | 图片输入、产出清单、附件交付与主助手请求投影 |
 | [提示词与工具](docs/references/prompts-and-tools.md) | 模型可见的系统注入、实际工具名、参数和 Tool Result 形状 |
+| [运行记忆](docs/references/memory-architecture.md) | 记忆的域归属、授权与写入边界 |
+| [企业接入资料](docs/references/enrollment-material-contract.md) | 原生接入格式、信任与恢复契约 |
 
 ### 开发文档（`docs/dev/`）
 
 | 文档 | 说明 |
 |------|------|
-| [Android 企业域本期实施方案](docs/dev/android-enterprise-integration-plan.md) | 0.0.20 架构、配置迁移、正式 UI、本地企业服务及完整验收 |
-| [Android 真实企业服务接入规划](docs/dev/android-enterprise-production-integration-roadmap.md) | 后续真实认证、配置下发、运行服务与 Portal 接入；不阻塞本期 |
 | [版本变更记录](docs/dev/changelog.md) | 各发布版本的功能与修复摘要 |
-| [Fork 精简计划](docs/dev/fork-simplification-plan.md) | Fork 精简规划与落地记录（已归档） |
-| [原始架构文档](docs/dev/original-architecture.md) | Fork 前 RikkaHub 架构详解（已归档） |
-| [上游同步记录](docs/dev/upstream-sync.md) | RikkaHub 上游提交检查与同步历史 |
+| [Fork 精简计划](docs/dev/fork-simplification-plan.md) | 已完成的 Fork 改造历史，不作为当前实现依据 |
+| [原始架构文档](docs/dev/original-architecture.md) | Fork 前的架构历史，不作为当前实现依据 |
+| [上游同步总账](docs/dev/upstream-sync.md) | 冻结范围、判定与各批详细审查记录 |
+| [自主通知设计](docs/dev/android-autonomous-notifications-v1.md) | 尚未实施；按文中研究基线阅读，实施前重新核对代码 |
+| [Gemini 后续设计](docs/dev/google-gemini-protocol-correction-plan.md) | 尚未实现的协议扩展范围与验收要求 |
 
 ## Fork 说明
 

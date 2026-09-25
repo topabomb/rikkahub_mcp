@@ -309,7 +309,15 @@ Gateway 按发布 policy 对完整工具对启停，REQUIRED 只读；写入携�
 `com.measix/resolvedTool` 的安全元数据随原工具 checkpoint 持久化；默认工具卡用其业务 name，详情仅展示 gatewayToolId/name/status/requestId。
 显示不解析下游输出猜测身份、不再次请求 Gateway，输出归档不删除这份业务身份。
 
-## 9. 验证边界
+## 9. 企业平台执行与只读检查
+
+企业 Direct MCP 使用 Snapshot 中的 `runtimePath`、`authOwnership` 与当前 Applied generation，经 Core Relay 的 Streamable HTTP 进入既有 MCP Client/Runtime/Catalog 链。Android 不持有企业上游凭据，不创建本地 engine，也不将平台资料转换为用户 MCP 定义。Managed State 与 428 在执行准入前验证，不能先执行业务再报告版本屏障。
+
+助手 `assistant_inspect` 只读取原域配置和已确认 Catalog，不建立连接，也不借用当前页面配置。用户目录要求 definition digest 匹配；企业目录还要求原主体、generation 和当前 platform execution 描述匹配。该查询不创建 execution lease、不缓存凭据，也不能充当调用授权。MCP 管理页面与助手检查复用同一目录匹配规则。
+
+实际调用仍由 `TurnToolSetFactory`、`TurnRunner` 和 MCP owner 完成。流式调用携带正常 Provider transport slot，Step accumulator 分配 durable 身份；安全业务元数据经 `ToolExecutionContext` 的 deferred metadata 协议提交，不另写执行记录。发现、调用或 428 失败不自动重试、不回退到同名用户工具，也不从名称猜测资源身份。受管 Streamable HTTP 的 POST 与 SSE GET 在转成 SDK 通用错误前先解析 Core Problem；额度/计量/核对阻断抛回统一企业运行时错误，身份删除触发正式 Session 退出。该解析器不装配到个人 MCP，不能把普通远端 429 重分类为企业额度。
+
+## 10. 验证边界
 
 修改 MCP 时至少验证：旧 Settings/备份迁移与恢复竞态不会破坏 durable LKG；启动激活有界；分页、空目录拒绝、
 手工刷新和 `list_changed` single-flight 保持目录提交规则；断连、maintenance recovery 与远端错误不改写已承诺事实；
@@ -318,11 +326,3 @@ Gateway 按发布 policy 对完整工具对启停，REQUIRED 只读；写入携�
 
 构建/JVM 通过不等于真实 Android 验收。前后台、Wi-Fi/蜂窝、Doze、OAuth 浏览器回调、真实通知通道和 MCP UI/Agent
 仍需连接设备后执行对应 instrumentation 与现场场景。
-
-## 企业平台执行与只读检查
-
-企业 Direct MCP 使用 Snapshot 中的 `runtimePath`、`authOwnership` 与当前 Applied generation，经 Core Relay 的 Streamable HTTP 进入既有 MCP Client/Runtime/Catalog 链。Android 不持有企业上游凭据，不创建本地 engine，也不将平台资料转换为用户 MCP 定义。Managed State 与 428 在执行准入前验证，不能先执行业务再报告版本屏障。
-
-助手 `assistant_inspect` 只读取原域配置和已确认 Catalog，不建立连接，也不借用当前页面配置。用户目录要求 definition digest 匹配；企业目录还要求原主体、generation 和当前 platform execution 描述匹配。该查询不创建 execution lease、不缓存凭据，也不能充当调用授权。MCP 管理页面与助手检查复用同一目录匹配规则。
-
-实际调用仍由 `TurnToolSetFactory`、`TurnRunner` 和 MCP owner 完成。流式调用携带正常 Provider transport slot，Step accumulator 分配 durable 身份；安全业务元数据经 `ToolExecutionContext` 的 deferred metadata 协议提交，不另写执行记录。发现、调用或 428 失败不自动重试、不回退到同名用户工具，也不从名称猜测资源身份。受管 Streamable HTTP 的 POST 与 SSE GET 在转成 SDK 通用错误前先解析 Core Problem；额度/计量/核对阻断抛回统一企业运行时错误，身份删除触发正式 Session 退出。该解析器不装配到个人 MCP，不能把普通远端 429 重分类为企业额度。

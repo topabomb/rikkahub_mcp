@@ -235,7 +235,7 @@ Runtime 只有在任务完成且模型 lease 释放成功后才移除登记，�
 `ConversationWrite.MutateTree` 先取得 Artifact 生命周期锁并准备引用，再进入一个 Room 事务，
 事务成功后才在不可取消段发布 Runtime 和移除已删除 Child；失败不发布任何半完成的树。
 Artifact 垃圾清理由既有维护入口处理，不改变摘要已提交的结果。后台资源配置仍从有效设置读取，
-按原域解析 Provider/binding 的完整执行适配范围见企业实施方案，不能将任务身份验证当作其已完成。
+Provider/binding 的执行装配从冻结的原域配置与 Session 取得；任务身份验证不能代替实际资源准入、请求发送和结果提交。
 
 `ConversationTitleCoordinator` 拥有标题阶段、去重和有限重试。首条 USER 的确定性本地标题随
 `AppendUserMessage` 提交。模型标题使用 generation token + expected-title CAS，手动标题与模型提交共用

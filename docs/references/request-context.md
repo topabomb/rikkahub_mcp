@@ -1,12 +1,8 @@
 # 请求上下文
 
-本文档是请求级上下文策略的当前总览：条数窗口、Tool Result 滚动压缩、Disclosure Snapshot 与
-用户触发的语义摘要如何叠在同一次 Provider 请求上。Turn / checkpoint 协议见
-[`turn-step-execution.md`](turn-step-execution.md)，模型看见的文案与工具形状见
-[`prompts-and-tools.md`](prompts-and-tools.md)，披露表与 Artifact 见
-[`multimodal-context-and-turn-durability.md`](multimodal-context-and-turn-durability.md)，
-用量与估算口径见 [`token-usage-accounting.md`](token-usage-accounting.md)，条数旋钮见
-[`assistant-configuration.md`](assistant-configuration.md)。
+本文定义条数窗口、Tool Result 滚动压缩、Disclosure Snapshot 和手动摘要在一次 Provider 请求中的叠加顺序。
+Turn/checkpoint 归 [`turn-step-execution.md`](turn-step-execution.md)，模型可见文案与工具形状归
+[`prompts-and-tools.md`](prompts-and-tools.md)；其余依赖在对应规则处引用。
 
 Durable Conversation、Conversation Presentation 和 Model Request Plan 是三个概念。请求投影不能
 成为第二持久化事实源。`conversation_model_context` 属于 Conversation aggregate，不进入

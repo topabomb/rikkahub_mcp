@@ -63,7 +63,7 @@ UI 不持有 DAO、ConversationRepository、Runtime Registry、Artifact/Generate
 | 标题/建议/手动摘要任务 | `GenerationSideEffects` 登记到原 `ConversationRuntime`，`ModelExecutionService` 捕获原域模型与逐请求准入；停止及删除等待原助手任务并重试资源释放，摘要先释放模型资源再经 `ConversationWrite.MutateTree` 原子提交树与 Child retention |
 | 会话读模型 | `ConversationQueryService` 与专用 reader/query port；目录与 Pager 归 Query，Repository/DAO 提供带 scope 的查询及 PagingSource，原 Session 校验归 EnterpriseSessionController |
 | 当前域统计 | `StatsQueryService` 在原选中域/Session 内聚合；StatsVM 负责取消旧查询及清空旧显示 |
-| 运行记忆 | `MemoryRepository` 唯一写入；`MemoryService` 编排原域 Session、配置授权和 UI 投影，见 [运行记忆](memory-architecture.md) |
+| 运行记忆 | `MemoryRepository` 唯一写入；`MemoryService` 编排原域 Session、配置授权和 UI 投影 |
 | Artifact metadata、reference、生命周期 | `ArtifactStore`；`ArtifactPayloadStore` 只做磁盘 IO，不持有 DAO |
 | 配置文件引用 | `SettingsStore` 唯一写入；`ArtifactSettingsCoordinator` 适配 Settings → Artifact 提交与清理协议，不另持锁或状态 |
 | 图库生成媒体 row、payload 与删除恢复 | `GeneratedMediaStore` |
@@ -128,12 +128,13 @@ Settings 与文件删除跨 owner 时，使用可恢复暂存和同一 Settings 
 ```text
 pending backup restore
   → Settings/userSettings（用户文档初始化成功）
-  → 企业配置恢复（企业错误保留为企业不可用状态）
   → Artifact reconcile → GeneratedMedia reconcile
+  → pending enterprise data reset → 企业配置恢复
   → reference projection → FTS projection
   → Child run recovery → Master turn recovery
   → pending assistant deletion
   → pending enterprise exit（复验已收口的原域运行）
+  → pending enterprise data reset 再次收口
   → post-recovery maintenance → pending backup complete
   → Ready
 ```
@@ -171,7 +172,5 @@ Room/DataStore/文件协议按长期数据保全演进。结构变化必须提�
 | Workspace/PRoot | [`workspace-architecture.md`](workspace-architecture.md) |
 | 更新与发布 | [`update-mechanism.md`](update-mechanism.md) |
 | 测试分层、契约 owner、CI 与性能测量 | [`testing-strategy.md`](testing-strategy.md) |
-
-### 文件目录与原请求取消
-
-FileManagementQueryService 和 FileManagementApplicationService 直接组合 ArtifactStore 与 GeneratedMediaStore；ArtifactUseCase 保留配置资产和 Draft 入口，不再转发文件目录与删除。目录投影和文件命令携带原 RealmSelection，Session → Settings writer → Artifact lifecycle 为上传删除准入顺序。会话与图库分页统一复用 selectedRealmPaging 的数据源生命周期。ImageGenerationCoordinator 独占排队、执行与取消收口；原请求节点持有页面模型 lease，工具只借用所属 Turn 的 ModelRequests。取消等待实际执行结束，释放失败保留原节点供企业退出重试。图像页只取消拥有 enqueue 的协程，不按固定页面 ID 启动第二次扫描取消。模型目录与选择命令复用 ConfigurationQueryService/ConfigurationApplicationService。
+| 运行记忆的归属与授权 | [`memory-architecture.md`](memory-architecture.md) |
+| 企业接入资料与 Session 恢复 | [`enrollment-material-contract.md`](enrollment-material-contract.md) |

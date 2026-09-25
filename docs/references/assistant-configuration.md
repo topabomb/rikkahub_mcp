@@ -246,7 +246,7 @@ UI 和 Provider adapter 只消费 typed 配置与有效读模型，不成为配�
 | 边界 | 文件 |
 | --- | --- |
 | Assistant 数据模型 | `app/src/main/java/net/weero/measix/pilot/data/model/Assistant.kt` |
-| 用户配置写入与域内解析 | `app/src/main/java/net/weero/measix/pilot/data/datastore/SettingsStore.kt`、`data/configuration/ConfigurationResolver.kt` |
+| 用户配置写入与域内解析 | `app/src/main/java/net/weero/measix/pilot/data/datastore/SettingsStore.kt`、`data/configuration/ResolvedConfiguration.kt`（`ConfigurationResolver`） |
 | 读取物化、写规则与提交 | `app/src/main/java/net/weero/measix/pilot/data/datastore/SettingsNormalization.kt`、`SettingsWriteRules.kt` |
 | 会话归属与生成装配 | `app/src/main/java/net/weero/measix/pilot/service/ConversationApplicationService.kt`、`ConversationTurnService.kt`、`service/turn/TurnRunner.kt`、`service/turn/StepRunner.kt`、`service/turn/ToolBatchRunner.kt`、`service/turn/TurnRunState.kt`、`data/ai/tools/TurnToolSetFactory.kt` |
 | 助手管理工具 | `app/src/main/java/net/weero/measix/pilot/service/AssistantManagementService.kt`、`data/ai/tools/AssistantToolFactory.kt` |

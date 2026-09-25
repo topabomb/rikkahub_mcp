@@ -1,6 +1,8 @@
 # 多模态上下文与资源持久化
 
-本文描述附件身份、请求级媒体投影、Artifact 与工具输出资源的持久化交接。Turn/Step、审批、取消与恢复的通用协议见 [turn-step-execution.md](turn-step-execution.md)；请求预算与披露见 [request-context.md](request-context.md)；子助手入站和交付物见 [sub-assistant-multimodal.md](sub-assistant-multimodal.md)；模型可见参数与失败 reason 见 [prompts-and-tools.md](prompts-and-tools.md)。
+本文定义附件身份、请求级媒体投影，以及 Artifact 与工具输出资源的持久化交接。通用 checkpoint 和取消协议见
+[Turn/Step 执行链路](turn-step-execution.md)；子助手特有的入站和交付物见
+[子助手多模态](sub-assistant-multimodal.md)。
 
 ## 1. 行为总览
 
@@ -88,7 +90,7 @@ Tool Result checkpoint（消息与 Artifact 引用同事务）
 
 `ArtifactStore` 的创建入口显式接收 `ConfigurationScope`，在 CREATING 行写入后一直保留该归属；`copyFilePreservingOrigin` 保留源文件的域与 origin。聊天输入的 `ArtifactDraftScope` 绑定原 `ConversationCommandTarget`，提交和消息编辑不能借用另一个页面的 draft，即使它们属于同一用户或会话。关闭后的补偿仍归原 lease。
 
-模型输出转换、MCP/Workspace 图片、rolling compaction 归档沿原 Turn 传递 scope；`ImageGenerationRequest.source` 固定原页面选择或原工具任务的域与模型请求视图，`GeneratedMediaStore` 将同一归属写入图库原件及聊天副本。共享助手定义的头像/背景导入仍创建个人配置资产。目录、统计和删除已按原 RealmSelection 授权；预览、导出、归档工具读取与 Workspace 挂载的完整域授权仍在企业集成计划中。
+模型输出转换、MCP/Workspace 图片、rolling compaction 归档沿原 Turn 传递 scope；`ImageGenerationRequest.source` 固定原页面选择或原工具任务的域与模型请求视图，`GeneratedMediaStore` 将同一归属写入图库原件及聊天副本。共享助手定义的头像/背景导入仍创建个人配置资产。目录、统计、删除、预览、导出和归档工具读取均复验原页面或执行主体；Workspace 挂载遵守其独立的显式共享边界。
 
 `StepRunner` 在每次请求的上下文裁剪完成后，通过 `ArtifactStore.retainForRequest` 取得原 scope 的 `ArtifactReadLease`，覆盖输入转换、请求装配与完整 Provider 流收集。该临时读视图复用既有 retention pin，不新增持久化记录。主、子 Turn 共用此边界；成功、失败或取消后释放，既不保留窗口外历史，也不跨 Step 长期占用文件。
 
@@ -131,7 +133,7 @@ Draft 预览、读图和附件导出通过原 `ConversationViewLease` 查询其 
 
 文件目录与图库缩略图将 `ManagedFileKey.Artifact` / `Generated` 交给 `FileManagementApplicationService.imageSource`，取得携带原 RealmSelection 和稳定文件身份的 `ImageSource`。该对象只借用原 owner 的校验和有界读取能力，不管理文件生命周期或 Job；UI 不直接构造它。文件服务在原 Session 内调用文件 owner 验证归属、状态和文件边界，并在 owner 操作结束后复验原选择。Artifact lifecycle lock 与 GeneratedMedia persist lock 各自保护有界读取，解码使用返回的字节，不持有 owner 锁；共用 `FileUtils.readBoundedBytes` 按实际读入字节限制大小并传播取消。`ImageSourceInterceptor` 在 Coil 内存缓存命中前及解码结果回交前复验权限，缓存键包含原选择身份；未发布、已删除或跨域资源不能靠旧缓存恢复显示。该入口不创建新的 durable 状态或文件 owner。
 
-会话预览由 `ConversationAttachmentPreviewProjector` 携带原 `ConversationViewLease` 解析。`ArtifactMediaPreview` 在 Store 锁内同时取得稳定 ID 与 URI；`AttachmentPreview` 中的图片读取对象由文件 application port 绑定该 ID 和原页面，后续读取不重新按同路径认领文件。同一页面重复投影使用同一缓存身份；原页面关闭后不可读，新页面即使打开同一会话也取得独立身份。会话大图、富文本图片及导出沿用该对象，聊天整体导出另复验原页面。共享配置图片每次读取要求仍有已提交的配置根；此准入不会开放普通个人文件。背景写入目标及其他文件出口的剩余工作见实施方案。
+会话预览由 `ConversationAttachmentPreviewProjector` 携带原 `ConversationViewLease` 解析。`ArtifactMediaPreview` 在 Store 锁内同时取得稳定 ID 与 URI；`AttachmentPreview` 中的图片读取对象由文件 application port 绑定该 ID 和原页面，后续读取不重新按同路径认领文件。同一页面重复投影使用同一缓存身份；原页面关闭后不可读，新页面即使打开同一会话也取得独立身份。会话大图、富文本图片及导出沿用该对象，聊天整体导出另复验原页面。共享配置图片每次读取要求仍有已提交的配置根；此准入不会开放普通个人文件。
 
 非图片附件导出由 `ArtifactStore.copyMediaTo` 在同一生命周期锁内验证原 scope、ACTIVE、已发布与 canonical upload/images 根，并通过 `ArtifactPayloadStore.copyTo` 流式写入导出者的文件；不套用图片大小上限，也不返回原件读取权限。`FileManagementApplicationService` 保护原 ConversationViewLease/RealmSelection，文件读取后、最终系统交付前重新取得授权；最后接受边界不等待 Artifact IO。`MediaExportService` 只持有独立临时副本，失败/取消精确清理，已发出的 Intent 保留副本。启动在 application owner 创建新文件前分离旧 temp 目录，异步清理只处理已分离目录，不能递归删除当前会话的新导出文件。
 
@@ -145,6 +147,8 @@ Draft 预览、读图和附件导出通过原 `ConversationViewLease` 查询其 
 - 候选计数只用于确认提示，不锁定待删集合；真正执行时由 owner 在锁内重新取候选。取消在单项之间传播，已经取得删除所有权的单项按既有终态或补偿协议完成；
 - 两个领域分别返回结构化结果。`FileManagementApplicationService` 只映射为 UI 所需的 `deleted`、`cleanupPending`、`skippedInProgress` 与 `failed`，不把部分成功压成 Boolean，也不为没有该状态的领域伪造结果；
 - `FileManagementApplicationService` 的 owner 命令与 `FileManagementQueryService` 中会读取 row/payload 状态的列表、分页、统计和检查均等待全局 `ApplicationRecoveryGate`。纯 canonical-root 路径分类不读取 row 或 payload 状态，只用于本地图片来源标签。`ApplicationRecoveryCoordinator` 在发布文件读写能力前依次完成 Artifact 与 GeneratedMedia reconcile，页面不会观察或操作尚未收口的 tombstone、staging 或孤儿 payload。
+
+图片生成页的参考图由 `ImgGenVM` 一次性消费打开时的 `ImageReferenceImport`；`FileManagementApplicationService.importImageReference` 在复制前后验证原选择并沿用 `TemporaryImage` 的图片校验与失败清理。缩略图借用带原选择和任务身份的 `ImageSource`，不直接读取文件路径。只有已交给生成请求的副本按实际任务借用延迟删除，其余副本立即清理。
 
 输入框由原 `ArtifactDraftScope.describeInputs` 同时投影附件名称和图片 `ImageSource`；按规范化路径和 scope 匹配，不订阅全局上传目录，也不按 basename 反查其他文件。草稿新导入的图片必须同时通过原 draft 所有权和 Artifact 创建 token 校验；编辑已有图片则验证同域已发布 ID，不能读取其他创建者尚未发布的文件。读取遵守 Session → Draft → Artifact 锁序，返回前复验原页面、选择和草稿状态。提交认领后原草稿不能读取已交出的图片；拒绝退回由同一 owner 恢复原创建权。`inputRevision` 仅通知同一草稿的所有权变更，驱动查询与输入缩略图重试，不保存第二份附件事实，也不推进企业配置 generation。名称读取失败可回退显示，取消继续传播。生成 partial 的文件与图片对象由同一次创建返回；预览借用 enqueue 外层请求 Job，在短期 collector 结束后仍可读取，创建检查原 RealmAccess，显示检查原 RealmSelection。图像页切域仍显式取消并清空本页请求。图像页取消沿 enqueue 的原请求收口，Coordinator 的取消返回前等待真实执行结束；下个页面请求等待旧协程完成，旧图片投影不能跨选择继续展示。
 
