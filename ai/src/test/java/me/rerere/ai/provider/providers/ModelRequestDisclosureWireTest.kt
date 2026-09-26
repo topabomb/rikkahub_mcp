@@ -4,9 +4,12 @@ import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import me.rerere.ai.core.MessageRole
 import me.rerere.ai.core.ModelRequestMessage
 import me.rerere.ai.testsupport.toModelRequests
+import me.rerere.ai.testsupport.executedTool
+import kotlin.uuid.Uuid
 import me.rerere.ai.provider.ClaudePromptCacheTtl
 import me.rerere.ai.provider.RequestImageSupport
 import me.rerere.ai.provider.RequestMediaCapabilities
@@ -15,6 +18,8 @@ import me.rerere.ai.provider.providers.openai.OpaqueReasoningReplay
 import me.rerere.ai.provider.providers.openai.ResponseAPI
 import me.rerere.ai.provider.providers.openai.resolveChatReasoningReplayPolicy
 import me.rerere.ai.provider.providers.openai.resolveOpenAIEndpointVendor
+import me.rerere.ai.ui.GoogleThoughtMetadata
+import me.rerere.ai.ui.toMetadata
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
 import me.rerere.ai.util.KeyRoulette
@@ -61,6 +66,36 @@ private fun injectedUserTurn(): UIMessage = UIMessage(
         UIMessagePart.Text(VIDEO),
     ),
 )
+
+private const val UPDATE = """{"type":"conversation_disclosure_snapshot","format":3,"memory":{"enabled":true,"scope":"local","header":["id","content"],"rows":[[3,"external change"]]}}"""
+private val CALL_IDS = listOf("call_memory", "call_assistant")
+
+/** Common application projection: both results precede the optional external-state contribution. */
+private fun completedWriteBatch(externalChange: Boolean): List<ModelRequestMessage> {
+    val step = Uuid.random()
+    return buildList {
+        add(UIMessage.system("Stable system prompt"))
+        add(injectedUserTurn())
+        add(UIMessage(role = MessageRole.ASSISTANT, parts = listOf(
+            executedTool(CALL_IDS[0], "memory_tool", """{"action":"edit","id":3,"content":"own change"}""",
+                """{"success":true,"id":3}""", step).copy(metadata = GoogleThoughtMetadata(functionCallId = CALL_IDS[0]).toMetadata()),
+            executedTool(CALL_IDS[1], "assistant_manage", """{"action":"delete","id":"assistant-2"}""",
+                """{"action":"delete","id":"assistant-2"}""", step).copy(metadata = GoogleThoughtMetadata(functionCallId = CALL_IDS[1]).toMetadata()),
+        )))
+        if (externalChange) add(UIMessage.user(UPDATE))
+        add(UIMessage.assistant("done"))
+    }.toModelRequests()
+}
+
+private fun JsonArray.assertOriginalPartOrder(contentField: String = "content") {
+    val first = entriesWithRole("user").first().getValue(contentField) as JsonArray
+    assertEquals(6, first.size)
+    val blocks = first.map { it.jsonObject }
+    assertEquals(SNAPSHOT, blocks[0].field("text")?.content)
+    assertEquals(ORIGINAL, blocks[1].field("text")?.content)
+    assertTrue(blocks[2].keys.any { it in setOf("image_url", "source", "inlineData") } || blocks[2].field("type")?.content == "input_image")
+    assertEquals(listOf(DOCUMENT, AUDIO, VIDEO), blocks.drop(3).map { it.field("text")?.content })
+}
 
 private val turnWithAnswer: List<ModelRequestMessage> = listOf(
     UIMessage.system("Stable system prompt"),
@@ -123,6 +158,27 @@ class DisclosureContextChatCompletionsTest {
     }
 
     @Test
+    fun `format3 external state follows the entire tool batch while own writes add no user message`() {
+        listOf(false, true).forEach { external ->
+            val wire = api.buildMessages(completedWriteBatch(external), replayPolicy = replayPolicy(),
+                mediaCapabilities = RequestMediaCapabilities(userImages = RequestImageSupport.STRUCTURED))
+            wire.assertOriginalPartOrder()
+            val items = wire.map { it.jsonObject }
+            val tools = items.filter { it.field("role")?.content == "tool" }
+            assertEquals(CALL_IDS, tools.map { it.field("tool_call_id")?.content })
+            val calls = items.flatMap { (it["tool_calls"] as? JsonArray).orEmpty() }.map { it.jsonObject.field("id")?.content }
+            assertEquals(CALL_IDS, calls)
+            assertEquals(if (external) 2 else 1, wire.entriesWithRole("user").size)
+            if (external) {
+                val updateIndex = items.indexOfFirst { it.toString().contains("external change") }
+                assertTrue(updateIndex > items.indexOfLast { it.field("role")?.content == "tool" })
+                assertEquals(UPDATE, items[updateIndex].getValue("content").jsonPrimitive.content)
+            }
+            assertFalse(wire.entriesWithRole("system").single().toString().contains("external change"))
+        }
+    }
+
+    @Test
     fun `developer role system also excludes the disclosure snapshot`() {
         val wire = api.buildMessages(
             messages = turnWithAnswer,
@@ -138,6 +194,25 @@ class DisclosureContextChatCompletionsTest {
 
 class DisclosureContextResponsesTest {
     private val api = ResponseAPI(OkHttpClient())
+
+    @Test
+    fun `format3 follows all call outputs and own success requires no extra input item`() {
+        listOf(false, true).forEach { external ->
+            val wire = api.buildMessages(completedWriteBatch(external),
+                mediaCapabilities = RequestMediaCapabilities(userImages = RequestImageSupport.STRUCTURED))
+            wire.assertOriginalPartOrder()
+            val items = wire.map { it.jsonObject }
+            assertEquals(CALL_IDS, items.filter { it.field("type")?.content == "function_call" }.map { it.field("call_id")?.content })
+            assertEquals(CALL_IDS, items.filter { it.field("type")?.content == "function_call_output" }.map { it.field("call_id")?.content })
+            assertEquals(if (external) 2 else 1, wire.entriesWithRole("user").size)
+            if (external) {
+                val updateIndex = items.indexOfFirst { it.field("role")?.content == "user" && it.toString().contains("external change") }
+                assertTrue(updateIndex > items.indexOfLast { it.field("type")?.content == "function_call_output" })
+                assertEquals(UPDATE, items[updateIndex].getValue("content").jsonPrimitive.content)
+            }
+        }
+    }
+
 
     @Test
     fun `one user input item carries context as first input_text block`() {
@@ -183,10 +258,33 @@ class DisclosureContextClaudeTest {
     }
 
     @Test
+    fun `format3 is after both tool result blocks and absent for own writes`() {
+        listOf(false, true).forEach { external ->
+            val wire = invokeBuildMessages(completedWriteBatch(external))
+            wire.assertOriginalPartOrder()
+            val users = wire.entriesWithRole("user")
+            assertEquals(if (external) 3 else 2, users.size)
+            val tail = (users[1].getValue("content") as JsonArray).map { it.jsonObject }
+            assertEquals(CALL_IDS, tail.filter { it.field("type")?.content == "tool_result" }.map { it.field("tool_use_id")?.content })
+            assertEquals(listOf("tool_result", "tool_result"), tail.map { it.field("type")?.content })
+            assertEquals(if (external) listOf("user", "assistant", "user", "user", "assistant")
+                else listOf("user", "assistant", "user", "assistant"), wire.map { it.jsonObject.field("role")?.content })
+            if (external) {
+                val update = (users[2].getValue("content") as JsonArray).single().jsonObject
+                assertEquals("text", update.field("type")?.content)
+                assertEquals(UPDATE, update.field("text")?.content)
+            }
+            val calls = wire.entriesWithRole("assistant").flatMap { (it.getValue("content") as JsonArray).map { block -> block.jsonObject } }
+                .filter { it.field("type")?.content == "tool_use" }.map { it.field("id")?.content }
+            assertEquals(CALL_IDS, calls)
+        }
+    }
+
+    @Test
     fun `one user content block list carries context as first text block`() {
         val wire = invokeBuildMessages(turnWithAnswer)
         wire.assertSingleUserTurnWithLeadingContext("text")
-        // Claude 会合并连续 user turns；应用侧只产出一个 USER，wire 上不得多出伪造 turn。
+        // 应用侧只产出一个 USER，adapter 保持对应消息且不得多出伪造 turn。
         assertEquals(1, wire.entriesWithRole("assistant").size)
         // System 在 Messages API 里是请求级独立字段，messages 数组只允许 user/assistant；
         // snapshot 只能出现在 anchor USER turn 内。
@@ -199,6 +297,26 @@ class DisclosureContextClaudeTest {
 
 class DisclosureContextGeminiTest {
     private val provider = GoogleProvider(OkHttpClient())
+
+    @Test
+    fun `format3 stays after complete function responses when adjacent user contents merge`() {
+        listOf(false, true).forEach { external ->
+            val wire = provider.buildContents(completedWriteBatch(external),
+                mediaCapabilities = RequestMediaCapabilities(userImages = RequestImageSupport.STRUCTURED),
+                modelId = "gemini-test", sourceProfile = "google:developer:test.example.com")
+            wire.assertOriginalPartOrder("parts")
+            assertEquals(listOf("user", "model", "user", "model"), wire.map { it.jsonObject.field("role")?.content })
+            val tail = (wire.entriesWithRole("user").last().getValue("parts") as JsonArray).map { it.jsonObject }
+            assertEquals(CALL_IDS, tail.filter { "functionResponse" in it }.map { it.getValue("functionResponse").jsonObject.field("id")?.content })
+            assertEquals(if (external) listOf(UPDATE) else emptyList<String>(), tail.mapNotNull { it.field("text")?.content })
+            assertEquals(if (external) 3 else 2, tail.size)
+            assertTrue(tail.take(2).all { "functionResponse" in it })
+            val calls = wire.entriesWithRole("model").flatMap { (it.getValue("parts") as JsonArray).map { block -> block.jsonObject } }
+                .filter { "functionCall" in it }.map { it.getValue("functionCall").jsonObject.field("id")?.content }
+            assertEquals(CALL_IDS, calls)
+        }
+    }
+
 
     @Test
     fun `one user content carries context as first part and keeps alternation`() {

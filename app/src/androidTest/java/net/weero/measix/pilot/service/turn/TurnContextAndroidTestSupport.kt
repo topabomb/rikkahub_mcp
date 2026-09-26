@@ -47,6 +47,13 @@ internal fun androidTestTurnContext(
     mediaCapabilities: RequestMediaCapabilities = RequestMediaCapabilities.NONE,
 ): TurnContext {
     val frozen = freezeToolSet(tools)
+    val configuration = net.weero.measix.pilot.data.configuration.ConfigurationResolver.resolve(
+        net.weero.measix.pilot.data.datastore.UserSettingsDocument.empty().withPersonalSettings(
+            settings.copy(assistants = settings.assistants.filterNot { it.id == assistant.id } + assistant)),
+        net.weero.measix.pilot.data.configuration.ConfigurationScope.Personal,
+        net.weero.measix.pilot.data.enterprise.EnterpriseState.Loading,
+    )
+
     val promptInputs = TurnPromptSnapshot(
         messageTemplate = "{{ message }}",
         promptInjections = emptyList(),
@@ -74,5 +81,11 @@ internal fun androidTestTurnContext(
         promptInputs = promptInputs,
         toolDefinitions = frozen.definitions,
         toolBindingsByName = frozen.bindingsByName,
+        system = freezeTurnSystem(resolveTurnAssistantSnapshot(assistant), promptInputs, frozen.definitions),
+        disclosure = net.weero.measix.pilot.service.turn.TurnDisclosureSource.capture(
+            configuration, assistant,
+            net.weero.measix.pilot.data.model.DisclosureNamespace(null, assistant.id),
+            readConfiguration = { configuration }, readMemory = { emptyList() },
+        ),
     )
 }

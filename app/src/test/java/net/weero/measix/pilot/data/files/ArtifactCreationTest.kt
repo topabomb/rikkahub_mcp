@@ -343,6 +343,7 @@ internal class ArtifactCreationTest : ArtifactStoreLifecycleTestBase() {
             systemMetaDAO = database.systemMetaDao(),
             conversationDAO = database.conversationDao(),
             messageNodeDAO = database.messageNodeDao(),
+            contextDAO = database.conversationModelContextDao(),
             settingsCoordinator = mockk(relaxed = true),
             transactionRunner = RoomDatabaseTransactionRunner(database),
             fileNameCandidates = { List(4) { "000000" } },

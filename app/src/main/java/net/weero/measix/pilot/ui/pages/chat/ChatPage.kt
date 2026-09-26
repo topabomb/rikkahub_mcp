@@ -70,6 +70,7 @@ import androidx.core.content.FileProvider
 import androidx.core.net.toFile
 import androidx.core.net.toUri
 import com.dokar.sonner.ToastType
+import com.dokar.sonner.rememberToasterState
 import dev.chrisbanes.haze.hazeSource
 import dev.chrisbanes.haze.rememberHazeState
 import kotlinx.coroutines.CancellationException
@@ -532,14 +533,47 @@ private fun ChatPageContent(
     val assistant = configuration?.assistant
     val inputImports = target?.let(vm::importsFor)
     var configurationError by remember(target) { mutableStateOf<Throwable?>(null) }
+    var showOpeningDetails by remember(target) { mutableStateOf(false) }
+    val openingClearedMessage = stringResource(R.string.opening_cleared_assistant)
+    val configurationSavedMessage = stringResource(R.string.configuration_saved_next_send)
+    val latestTurnActive by rememberUpdatedState(turnPresentation.isActive)
+    suspend fun commitPreference(original: net.weero.measix.pilot.service.ConversationAssistantTarget, change: AssistantPreferenceChange,
+        onSaved: () -> Unit = { toaster.show(configurationSavedMessage) }): Result<Unit> {
+        return vm.changeAssistantPreference(original, change).onSuccess {
+            if (latestTurnActive && change.affectsNextSend()) onSaved()
+        }
+    }
+    val useStarter: (net.weero.measix.pilot.service.ConversationStarterUiModel) -> Unit = { starter ->
+        if (starter.selected) showOpeningDetails = true
+        else if (target != null) scope.launch {
+            try { vm.selectStarter(target, starter) }
+            catch (cancelled: CancellationException) { throw cancelled }
+            catch (error: Exception) {
+                Log.e("ChatPage", "Opening selection failed", error)
+                configurationError = error
+            }
+        }
+    }
+    if (showOpeningDetails && target != null) {
+        net.weero.measix.pilot.ui.components.ai.StarterOpeningDetails(target,
+            load = { vm.openingDetails(target) }, refresh = { vm.refreshOpening(target) }, clear = { vm.clearOpening(target) },
+            onDismiss = { showOpeningDetails = false })
+    }
     val acceptConfigurationResult: (Result<Unit>) -> Boolean = { result ->
         configurationError = result.exceptionOrNull()?.also { error ->
             Log.e("ChatPage", "Conversation configuration command failed", error)
         }
         result.isSuccess
     }
+    fun acceptRequestConfigurationResult(result: Result<Unit>, onSaved: () -> Unit = { toaster.show(configurationSavedMessage) }): Boolean {
+        if (acceptConfigurationResult(result)) {
+            if (latestTurnActive) onSaved()
+            return true
+        }
+        return false
+    }
     val changePreference: (AssistantPreferenceChange) -> Unit = { change ->
-        if (target != null) scope.launch { acceptConfigurationResult(vm.changeAssistantPreference(target, change)) }
+        if (target != null) scope.launch { acceptConfigurationResult(commitPreference(target, change)) }
     }
     val mcpChoices = configuration?.mcpChoices(mcpPresentations).orEmpty()
     var showFilesSheet by remember(target) { mutableStateOf(false) }
@@ -688,7 +722,7 @@ private fun ChatPageContent(
                 ) {
                     if (assistant != null && inputImports != null) key(configuration.target) {
                     val modelSelectionUi = net.weero.measix.pilot.ui.components.ai.assistantModelSelectionUi(configuration) {
-                        vm.changeAssistantPreference(configuration.target, it).getOrThrow()
+                        commitPreference(configuration.target, it).getOrThrow()
                     }
                     ChatInput(
                         modifier = Modifier
@@ -699,6 +733,10 @@ private fun ChatPageContent(
                         requireInputOwner = { vm.requireConfigurationTarget(configuration.target) },
                         speechPage = configuration.target.conversation,
                         starters = configuration.starters,
+                        opening = configuration.opening,
+                        isDraft = configuration.isDraft,
+                        onStarterClick = useStarter,
+                        onOpeningDetails = { showOpeningDetails = true },
                         loading = turnPresentation.isActive,
                         settings = setting,
                         assistant = assistant,
@@ -751,10 +789,8 @@ private fun ChatPageContent(
                                 )
                                 inputState.clearInput()
                             } else {
-                                val contents = inputState.getContents()
                                 scope.launch {
-                                    vm.handleMessageSend(contents)?.let { receipt ->
-                                        inputState.clearInput()
+                                    vm.handleMessageSend(configuration.target)?.let { receipt ->
                                         requestAppendScroll(
                                             AppendScrollContext.from(
                                                 snapshot = snapshot,
@@ -778,10 +814,8 @@ private fun ChatPageContent(
                                     messageId = inputState.editingMessage!!,
                                 )
                             } else {
-                                val contents = inputState.getContents()
                                 scope.launch {
-                                    vm.handleMessageSend(content = contents, answer = false)?.let { receipt ->
-                                        inputState.clearInput()
+                                    vm.handleMessageSend(target = configuration.target, answer = false)?.let { receipt ->
                                         requestAppendScroll(
                                             AppendScrollContext.from(
                                                 snapshot = snapshot,
@@ -795,9 +829,9 @@ private fun ChatPageContent(
                             }
                             inputState.clearInput()
                         },
-                        onUpdateChatModel = { vm.changeAssistantPreference(configuration.target, AssistantPreferenceChange.Model(it.id)).getOrThrow() },
+                        onUpdateChatModel = { commitPreference(configuration.target, AssistantPreferenceChange.Model(it.id)).getOrThrow() },
                         onUpdateReasoning = { changePreference(AssistantPreferenceChange.Reasoning(it)) },
-                        onUpdateSearchService = { id -> scope.launch { acceptConfigurationResult(vm.selectSearchService(configuration.target, id)) } },
+                        onUpdateSearchService = { id -> scope.launch { acceptRequestConfigurationResult(vm.selectSearchService(configuration.target, id)) } },
                         onManageSearchServices = { navigateToSharedConfiguration(Screen.SettingSearch) },
                         onMoreClick = {
                             showFilesSheet = true
@@ -883,7 +917,7 @@ private fun ChatPageContent(
                     vm.toggleMessageFavorite(node)
                 },
                 onConversationSystemPromptChange = { newPrompt ->
-                    target?.let { original -> scope.launch { acceptConfigurationResult(vm.updateCustomSystemPrompt(original, newPrompt)) } }
+                    target?.let { original -> scope.launch { acceptRequestConfigurationResult(vm.updateCustomSystemPrompt(original, newPrompt)) } }
                 },
                 onProviderConfigClick = {
                     navigateToSharedConfiguration(Screen.SettingProvider)
@@ -924,17 +958,7 @@ private fun ChatPageContent(
                         navController.navigate(Screen.AssistantMemory(snapshot.header.assistantId.toString()))
                     }
                 },
-                onStarterClick = { starter ->
-                    try {
-                        configuration?.target?.let(vm::requireConfigurationTarget)
-                        val spacer = if (inputState.textContent.text.isBlank()) "" else "\n\n"
-                        inputState.appendText(spacer + starter.prompt)
-                    } catch (cancelled: CancellationException) {
-                        throw cancelled
-                    } catch (error: Exception) {
-                        configurationError = error
-                    }
-                },
+                onStarterClick = useStarter,
             )
             if (isActiveRoute) {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
@@ -949,6 +973,7 @@ private fun ChatPageContent(
         }
 
         if (showFilesSheet && assistant != null && inputImports != null) key(configuration.target) {
+            val modalToaster = rememberToasterState()
             ChatFilesPickerSheet(
                 inputState = inputState,
                 setting = setting,
@@ -958,17 +983,24 @@ private fun ChatPageContent(
                 configuration = configuration,
                 originalImports = inputImports,
                 mcpChoices = mcpChoices,
-                onPreferenceChange = changePreference,
-                onConfigurationResult = acceptConfigurationResult,
+                onPreferenceChange = { change -> scope.launch {
+                    acceptConfigurationResult(commitPreference(configuration.target, change) { modalToaster.show(configurationSavedMessage) })
+                } },
+                onConfigurationResult = { acceptRequestConfigurationResult(it) { modalToaster.show(configurationSavedMessage) } },
+                feedback = modalToaster,
                 onManageSharedConfiguration = navigateToSharedConfiguration,
                 onDismiss = { showFilesSheet = false },
             )
         }
 
         if (showMcpPicker && assistant != null) key(configuration.target) {
+            val modalToaster = rememberToasterState()
             McpPickerSheet(
                 servers = mcpChoices,
-                onToggle = { id, enabled -> changePreference(AssistantPreferenceChange.Mcp(id, enabled)) },
+                onToggle = { id, enabled -> scope.launch {
+                    acceptConfigurationResult(commitPreference(configuration.target, AssistantPreferenceChange.Mcp(id, enabled)) { modalToaster.show(configurationSavedMessage) })
+                } },
+                feedback = modalToaster,
                 onNavigateToSettings = {
                     showMcpPicker = false
                     navigateToSharedConfiguration(Screen.SettingMcp)
@@ -986,7 +1018,11 @@ private fun ChatPageContent(
                     .associate { it.key.reference to it.access.unavailableReason },
                 onAssistantSelected = { newAssistant ->
                     scope.launch {
-                        if (acceptConfigurationResult(vm.moveConversationToAssistant(configuration.target, newAssistant.id))) showAssistantPicker = false
+                        val clearsOpening = configuration.isDraft && configuration.opening != null && newAssistant.id != configuration.target.assistantId
+                        if (acceptConfigurationResult(vm.moveConversationToAssistant(configuration.target, newAssistant.id))) {
+                            showAssistantPicker = false
+                            if (clearsOpening) toaster.show(openingClearedMessage)
+                        }
                     }
                 },
                 onDismiss = { showAssistantPicker = false },
@@ -1033,10 +1069,11 @@ private fun ChatPageContent(
 
         if (showUsageEditor && assistant != null) key(configuration.target) {
             val originalView = vm.detailSource(configuration.target)
-            if (originalView != null) AdaptiveModal(onDismissRequest = { showUsageEditor = false }) {
+            val modalToaster = rememberToasterState()
+            if (originalView != null) AdaptiveModal(onDismissRequest = { showUsageEditor = false }, feedback = modalToaster) {
                 net.weero.measix.pilot.ui.pages.assistant.detail.AssistantUsageEditor(
                     configuration, originalView, setting, workspaces, mcpChoices,
-                    onChange = { vm.changeAssistantPreference(configuration.target, it) },
+                    onChange = { commitPreference(configuration.target, it) { modalToaster.show(configurationSavedMessage) } },
                     onFailure = { configurationError = it },
                     onImportImage = { uri, avatar -> vm.importAssistantUsageImage(configuration.target, uri, avatar) },
                     requireOriginal = { vm.requireConfigurationTarget(configuration.target) },
@@ -1063,7 +1100,7 @@ private fun ChatPageContent(
                 workspaces = workspaces,
                 onSelect = { workspaceId ->
                     scope.launch {
-                        if (acceptConfigurationResult(vm.changeAssistantPreference(configuration.target, AssistantPreferenceChange.Workspace(workspaceId?.let(Uuid::parse))))) {
+                        if (acceptConfigurationResult(commitPreference(configuration.target, AssistantPreferenceChange.Workspace(workspaceId?.let(Uuid::parse))))) {
                             showWorkspaceSheet = false
                         }
                     }
@@ -1082,7 +1119,14 @@ private fun ChatPageContent(
                 onDismissRequest = { configurationError = null },
                 title = { Text(stringResource(R.string.error_title_operation)) },
                 text = {
-                    SelectionContainer { Text(error.userVisibleDiagnostic()) }
+                    SelectionContainer {
+                        Column {
+                            if (error is net.weero.measix.pilot.service.StarterOpeningException) {
+                                Text(net.weero.measix.pilot.ui.components.ai.starterOpeningIssueText(error.issue))
+                            }
+                            Text(error.userVisibleDiagnostic())
+                        }
+                    }
                 },
                 confirmButton = {
                     TextButton(onClick = { configurationError = null }) { Text(stringResource(android.R.string.ok)) }
@@ -1233,6 +1277,7 @@ private fun ChatFilesPickerSheet(
     mcpChoices: List<net.weero.measix.pilot.service.AssistantMcpChoice>,
     onPreferenceChange: (AssistantPreferenceChange) -> Unit,
     onConfigurationResult: (Result<Unit>) -> Boolean,
+    feedback: com.dokar.sonner.ToasterState,
     onManageSharedConfiguration: (Screen) -> Unit,
     onDismiss: () -> Unit,
 ) {
@@ -1241,6 +1286,7 @@ private fun ChatFilesPickerSheet(
     val artifactUseCase: ArtifactUseCase = koinInject()
     val scope = rememberCoroutineScope()
     var showInjectionSheet by remember { mutableStateOf(false) }
+    var showNestedMcpPicker by remember { mutableStateOf(false) }
     var showCompressDialog by remember { mutableStateOf(false) }
     val fileReadFailedFormat = stringResource(R.string.chat_input_file_read_failed)
     val unsupportedFileTypeFormat = stringResource(R.string.chat_input_unsupported_file_type)
@@ -1473,8 +1519,12 @@ private fun ChatFilesPickerSheet(
     AdaptiveModal(
         onDismissRequest = { dismissAll() },
         dialogMaxHeight = 800.dp,
+        feedback = feedback,
+        feedbackVisible = !showInjectionSheet && !showNestedMcpPicker,
     ) {
         FilesPicker(
+            feedback = feedback,
+            onMcpPickerVisibilityChange = { showNestedMcpPicker = it },
             conversationModeInjectionIds = snapshot.header.modeInjectionIds,
             messageNodeCount = snapshot.nodes.size,
             workspaceCwd = snapshot.header.workspaceCwd,

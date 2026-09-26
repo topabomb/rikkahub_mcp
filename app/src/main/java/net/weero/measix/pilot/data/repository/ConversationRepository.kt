@@ -25,6 +25,9 @@ import net.weero.measix.pilot.data.db.dao.ToolExecutionDAO
 import net.weero.measix.pilot.data.db.dao.TurnExecutionDAO
 import net.weero.measix.pilot.data.db.entity.ConversationEntity
 import net.weero.measix.pilot.data.db.entity.ConversationModelContextEntity
+import net.weero.measix.pilot.data.db.entity.ConversationContextAdmissionEntity
+import net.weero.measix.pilot.data.db.entity.ConversationContextUseEntity
+import net.weero.measix.pilot.data.db.entity.ConversationOpeningEntity
 import net.weero.measix.pilot.data.db.entity.MessageNodeEntity
 import net.weero.measix.pilot.data.db.entity.ToolExecutionEntity
 import net.weero.measix.pilot.data.db.entity.ToolExecutionStatus
@@ -34,6 +37,15 @@ import net.weero.measix.pilot.data.files.ArtifactStore
 import net.weero.measix.pilot.data.files.ArtifactReferenceDelta
 import net.weero.measix.pilot.data.model.Conversation
 import net.weero.measix.pilot.data.model.ConversationModelContextEntry
+import net.weero.measix.pilot.data.model.ConversationContextBody
+import net.weero.measix.pilot.data.model.ConversationContextCodec
+import net.weero.measix.pilot.data.model.ConversationContextSource
+import net.weero.measix.pilot.data.model.ConversationContextAdmission
+import net.weero.measix.pilot.data.model.ConversationContextUse
+import net.weero.measix.pilot.data.model.ConversationContextIntegrity
+import net.weero.measix.pilot.data.model.ContextMessageLocator
+import net.weero.measix.pilot.data.model.ConversationOpeningCodec
+import net.weero.measix.pilot.data.model.kind
 import net.weero.measix.pilot.data.model.MessageNode
 import net.weero.measix.pilot.service.runtime.ConversationHeaderPatch
 import net.weero.measix.pilot.service.runtime.ConversationHeader
@@ -102,9 +114,7 @@ class ConversationRepository(
         database.withTransaction {
             val entity = conversationDAO.getConversationById(uuid.toString()) ?: return@withTransaction null
             val nodes = loadMessageNodes(entity.id)
-            conversationEntityToConversation(entity, nodes).toSnapshot(
-                modelContextEntries = loadModelContextEntries(entity.id, nodes),
-            )
+            loadPersistedConversationContext(modelContextDAO, conversationEntityToConversation(entity, nodes))
         }
 
     suspend fun existsConversationById(uuid: Uuid): Boolean {
@@ -137,14 +147,17 @@ class ConversationRepository(
 
     /** Inserts one already-remapped internal aggregate without exposing context through Conversation. */
     internal suspend fun insertConversationSnapshot(snapshot: ConversationAggregateSnapshot) {
+        validateContext(snapshot)
         val conversation = snapshotToConversation(snapshot)
         artifactStore.withLifecycleLock {
-            val referenceDelta = artifactStore.prepareReferenceDelta(snapshot.header.scope, snapshot.nodes, emptyList())
+            val referenceDelta = artifactStore.prepareReferenceDelta(snapshot.header.scope, snapshot.nodes, emptyList(), contextBodies(snapshot.modelContextEntries))
             database.withTransaction {
                 requireValidParent(conversation)
                 conversationDAO.insert(conversationToConversationEntity(conversation))
                 saveMessageNodes(snapshot.conversationId.toString(), snapshot.nodes)
                 saveModelContextEntries(snapshot.modelContextEntries)
+                saveContextAdmissions(snapshot.contextAdmissions)
+                saveOpening(snapshot)
                 artifactStore.applyReferenceDeltaInTransaction(referenceDelta)
                 if (snapshot.header.parentConversationId == null) {
                     messageFtsManager.indexConversationInTransaction(conversation)
@@ -157,18 +170,58 @@ class ConversationRepository(
      * 随整棵 Conversation 原子落库的 context entries（Fork / undo-restore 携带历史 entries）。
      * 走同一条 insert-once 主键语义；entries 均来自已通过校验的装载结果。
      */
+    private fun contextBodies(entries: List<ConversationModelContextEntry>): Map<Uuid, List<ConversationContextBody.Artifact>> =
+        entries.groupBy { it.ownerNodeId }.mapValues { (_, values) ->
+            values.mapNotNull { it.payload.body as? ConversationContextBody.Artifact }
+        }
+
     private suspend fun saveModelContextEntries(entries: List<ConversationModelContextEntry>) {
         if (entries.isEmpty()) return
         modelContextDAO.insertOnce(entries.map(::modelContextEntityOf))
     }
 
+    private suspend fun saveContextAdmissions(admissions: List<ConversationContextAdmission>) {
+        admissions.forEach { admission ->
+            modelContextDAO.insertAdmissionOnce(admissionEntityOf(admission), admission.uses.mapIndexed { index, use ->
+                ConversationContextUseEntity(admission.id.toString(), index, use.entryId.toString(),
+                    use.role.name, ConversationContextCodec.encodePlacement(use.placement))
+            })
+        }
+    }
+
+    private fun admissionEntityOf(admission: ConversationContextAdmission) = ConversationContextAdmissionEntity(
+        id = admission.id.toString(),
+        ownerNodeId = admission.owner.nodeId.toString(),
+        ownerMessageId = admission.owner.messageId.toString(),
+        stepId = admission.stepId.toString(),
+        windowStartNodeId = admission.windowStart.nodeId.toString(),
+        windowStartMessageId = admission.windowStart.messageId.toString(),
+        selectionPayload = admission.selection?.let(ConversationContextCodec::encodeSelection),
+    )
+
+    private suspend fun saveOpening(snapshot: ConversationAggregateSnapshot) {
+        snapshot.opening?.let {
+            modelContextDAO.insertOpeningOnce(ConversationOpeningEntity(snapshot.conversationId.toString(),
+                ConversationOpeningCodec.encode(it)))
+        }
+    }
+
+    private fun validateContext(snapshot: ConversationAggregateSnapshot) {
+        ConversationContextIntegrity.validate(snapshot.nodes, snapshot.modelContextEntries, snapshot.contextAdmissions,
+            snapshot.opening, snapshot.header.scope)
+    }
+
     private fun modelContextEntityOf(entry: ConversationModelContextEntry): ConversationModelContextEntity =
         ConversationModelContextEntity(
+            id = entry.id.toString(),
             ownerMessageId = entry.ownerMessageId.toString(),
             ownerNodeId = entry.ownerNodeId.toString(),
             anchorNodeId = entry.anchorNodeId.toString(),
             anchorMessageId = entry.anchorMessageId.toString(),
-            content = entry.content,
+            occurrence = entry.occurrence,
+            stepId = entry.stepId?.toString(),
+            sourceKind = entry.payload.source.kind,
+            payload = ConversationContextCodec.encode(entry.payload),
         )
 
     suspend fun getConversationHeader(uuid: Uuid): ConversationHeader? =
@@ -206,23 +259,29 @@ class ConversationRepository(
             "Every forked Child must reference the new Master"
         }
         require(children.all { it.header.scope == master.header.scope }) { "Child and Master must have the same scope" }
+        validateContext(master)
+        children.forEach(::validateContext)
         val masterConversation = snapshotToConversation(master)
         val childConversations = children.associate { it.conversationId to snapshotToConversation(it) }
         artifactStore.withLifecycleLock {
-            val masterReferences = artifactStore.prepareReferenceDelta(master.header.scope, master.nodes, emptyList())
+            val masterReferences = artifactStore.prepareReferenceDelta(master.header.scope, master.nodes, emptyList(), contextBodies(master.modelContextEntries))
             val childReferences = children.associate { child ->
-                child.conversationId to artifactStore.prepareReferenceDelta(child.header.scope, child.nodes, emptyList())
+                child.conversationId to artifactStore.prepareReferenceDelta(child.header.scope, child.nodes, emptyList(), contextBodies(child.modelContextEntries))
             }
             database.withTransaction {
                 conversationDAO.insert(conversationToConversationEntity(masterConversation))
                 saveMessageNodes(master.conversationId.toString(), master.nodes)
                 saveModelContextEntries(master.modelContextEntries)
+                saveContextAdmissions(master.contextAdmissions)
+                saveOpening(master)
                 artifactStore.applyReferenceDeltaInTransaction(masterReferences)
                 children.forEach { child ->
                     val conversation = childConversations.getValue(child.conversationId)
                     conversationDAO.insert(conversationToConversationEntity(conversation))
                     saveMessageNodes(child.conversationId.toString(), child.nodes)
                     saveModelContextEntries(child.modelContextEntries)
+                    saveContextAdmissions(child.contextAdmissions)
+                    saveOpening(child)
                     artifactStore.applyReferenceDeltaInTransaction(requireNotNull(childReferences[child.conversationId]))
                 }
                 messageFtsManager.indexConversationInTransaction(masterConversation)
@@ -236,7 +295,7 @@ class ConversationRepository(
      */
     internal suspend fun commit(write: ConversationWrite): Boolean = when (write) {
         is ConversationWrite.MaterializeDraft -> {
-            insertConversation(write.conversation)
+            insertConversationSnapshot(write.snapshot)
             true
         }
         is ConversationWrite.Mutate -> {
@@ -284,7 +343,8 @@ class ConversationRepository(
             val apply = prepareMutation(mutation, executionFacts)
             database.withTransaction { apply() }
         }
-        if (mutation.upsertedNodes.isNotEmpty() || mutation.deletedNodeIds.isNotEmpty()) {
+        if (mutation.upsertedNodes.isNotEmpty() || mutation.deletedNodeIds.isNotEmpty() ||
+            mutation.insertedModelContextEntries.isNotEmpty() || mutation.deletedModelContextEntries.isNotEmpty()) {
             artifactStore.withLifecycleLock { commitPrepared() }
         } else commitPrepared()
         return true
@@ -311,12 +371,32 @@ class ConversationRepository(
                 selectIndex = node.selectIndex,
             )
         }
-        val referenceDelta = if (hasNodeChange) artifactStore.prepareReferenceDelta(
+        val contextOwners = (mutation.insertedModelContextEntries + mutation.deletedModelContextEntries)
+            .mapTo(linkedSetOf()) { it.ownerNodeId } - mutation.deletedNodeIds.toSet()
+        val contextReferences = if (contextOwners.isEmpty()) emptyMap() else {
+            val removed = mutation.deletedModelContextEntries.mapTo(hashSetOf()) { it.id.toString() }
+            val inserted = mutation.insertedModelContextEntries.associateBy { it.id.toString() }
+            val retained = modelContextDAO.getEntryHeadersOfConversation(conversationId)
+                .filter { Uuid.parse(it.ownerNodeId) in contextOwners && it.id !in removed && it.id !in inserted }
+                .map { header -> requireNotNull(modelContextDAO.findById(header.id)) { "context_entry_disappeared" } }
+            contextOwners.associateWith { owner ->
+                retained.filter { it.ownerNodeId == owner.toString() }.mapNotNull {
+                    ConversationContextCodec.decode(it.payload).body as? ConversationContextBody.Artifact
+                } + inserted.values.filter { it.ownerNodeId == owner }.mapNotNull {
+                    it.payload.body as? ConversationContextBody.Artifact
+                }
+            }
+        }
+        val referenceDelta = if (hasNodeChange || contextOwners.isNotEmpty()) artifactStore.prepareReferenceDelta(
             requireNotNull(conversationDAO.getConversationById(conversationId)) { "conversation_not_found" }.scope,
-            mutation.upsertedNodes, mutation.deletedNodeIds,
+            mutation.upsertedNodes, mutation.deletedNodeIds, contextReferences,
         ) else null
         return {
             headerPatch?.let { patch -> applyHeaderPatch(mutation.conversationId, patch, mutation.updateAt) }
+            // Remove contribution references before an entry/node can be removed by cascade.
+            if (mutation.deletedContextAdmissions.isNotEmpty()) {
+                modelContextDAO.deleteAdmissions(mutation.deletedContextAdmissions.map(::admissionEntityOf))
+            }
             if (mutation.deletedNodeIds.isNotEmpty()) {
                 val deletedIds = mutation.deletedNodeIds.map { it.toString() }
                 favoriteDAO.deleteNodeFavoritesByRefKeys(deletedIds.map { "node:$conversationId:$it" })
@@ -336,6 +416,7 @@ class ConversationRepository(
             if (mutation.insertedModelContextEntries.isNotEmpty()) {
                 modelContextDAO.insertOnce(mutation.insertedModelContextEntries.map(::modelContextEntityOf))
             }
+            saveContextAdmissions(mutation.insertedContextAdmissions)
             persistExecutionFacts(executionFacts)
             referenceDelta?.let { artifactStore.applyReferenceDeltaInTransaction(it) }
             if (mutation.indexForSearch) {
@@ -578,6 +659,19 @@ class ConversationRepository(
     suspend fun getToolExecutions(turnId: String): List<ToolExecutionEntity> =
         toolExecutionDAO.getByTurnId(turnId)
 
+    internal suspend fun getContextToolHistory(conversationId: Uuid): ContextToolExecutionHistory {
+        val rows = toolExecutionDAO.getConversationOutcomes(conversationId.toString())
+        return ContextToolExecutionHistory(
+            trackedAssistantMessageIds = rows.mapTo(mutableSetOf()) { Uuid.parse(it.assistantMessageId) },
+            outcomes = rows.mapNotNull { row ->
+                row.status?.let { status ->
+                    me.rerere.ai.core.ToolCallLocator(Uuid.parse(row.assistantMessageId), Uuid.parse(requireNotNull(row.stepId)),
+                        Uuid.parse(requireNotNull(row.localCallId))) to status
+                }
+            }.toMap(),
+        )
+    }
+
     internal suspend fun deleteConversation(conversationId: Uuid) {
         val persisted = conversationDAO.getConversationById(conversationId.toString()) ?: return
         val conversationIds = if (persisted.parentConversationId == null) {
@@ -645,9 +739,7 @@ class ConversationRepository(
     ): List<ConversationAggregateSnapshot> = database.withTransaction {
         conversationDAO.getChildConversations(parentConversationId.toString()).map { entity ->
             val nodes = loadMessageNodes(entity.id)
-            conversationEntityToConversation(entity, nodes).toSnapshot(
-                modelContextEntries = loadModelContextEntries(entity.id, nodes),
-            )
+            loadPersistedConversationContext(modelContextDAO, conversationEntityToConversation(entity, nodes))
         }
     }
 
@@ -730,18 +822,6 @@ class ConversationRepository(
             scope = entity.scope,
         )
 
-    /**
-     * 模型上下文的唯一装载入口：先取归属本 Conversation 的行，再交给 mapper 校验
-     * owner / anchor node 与 variant identity。任何不一致都抛出，不静默当作没有 context。
-     */
-    private suspend fun loadModelContextEntries(
-        conversationId: String,
-        nodes: List<MessageNode>,
-    ): List<ConversationModelContextEntry> = mapModelContextEntries(
-        rows = modelContextDAO.getEntriesOfConversation(conversationId),
-        nodes = nodes,
-        conversationId = conversationId,
-    )
     private suspend fun loadMessageNodes(conversationId: String): List<MessageNode> {
         val favoriteNodeIds = favoriteDAO
             .getFavoriteNodeIdsOfConversation(conversationId)
@@ -804,6 +884,37 @@ class ConversationRepository(
     }
 }
 
+internal suspend fun loadPersistedConversationContext(
+    modelContextDAO: ConversationModelContextDAO,
+    conversation: Conversation,
+): ConversationAggregateSnapshot {
+    val id = conversation.id.toString()
+    val entries = mapModelContextEntries(modelContextDAO.getEntriesOfConversation(id), conversation.messageNodes, id)
+    val uses = modelContextDAO.getUsesOfConversation(id).groupBy { it.admissionId }
+    val admissions = modelContextDAO.getAdmissionsOfConversation(id).map { row ->
+        val contributions = uses[row.id].orEmpty()
+        require(contributions.map { it.ordinal } == contributions.indices.toList()) {
+            "invalid_context_contribution_order: ${row.id}"
+        }
+        ConversationContextAdmission(
+            id = Uuid.parse(row.id),
+            owner = ContextMessageLocator(Uuid.parse(row.ownerNodeId), Uuid.parse(row.ownerMessageId)),
+            stepId = Uuid.parse(row.stepId),
+            windowStart = ContextMessageLocator(Uuid.parse(row.windowStartNodeId), Uuid.parse(row.windowStartMessageId)),
+            selection = row.selectionPayload?.let(ConversationContextCodec::decodeSelection),
+            uses = contributions.map { use ->
+                ConversationContextUse(Uuid.parse(use.entryId), MessageRole.valueOf(use.role),
+                    ConversationContextCodec.decodePlacement(use.placement))
+            },
+        )
+    }
+    val opening = modelContextDAO.getOpening(id)?.let { ConversationOpeningCodec.decode(it.payload) }
+    return conversation.toSnapshot(entries, admissions, opening).also { snapshot ->
+        ConversationContextIntegrity.validate(snapshot.nodes, snapshot.modelContextEntries, snapshot.contextAdmissions,
+            snapshot.opening, snapshot.header.scope)
+    }
+}
+
 /**
  * 模型上下文行的 Repository mapper。
  *
@@ -849,37 +960,55 @@ internal fun mapModelContextEntries(
                 "$conversationId/$row: $what message $messageId is not a variant of node $nodeId",
             )
     }
-    val contentByOwner = HashMap<Uuid, String>()
+    val ids = HashSet<Uuid>()
+    val occurrences = HashSet<Triple<Uuid, Uuid, Int>>()
     return rows.map { row ->
+        val id = uuidOf(row.id, "id", row.id)
+        if (!ids.add(id)) throw ConversationModelContextIntegrityException("$conversationId: duplicate context identity $id")
+        val payload = ConversationContextCodec.decode(row.payload)
+        if (row.sourceKind != payload.source.kind) {
+            throw ConversationModelContextIntegrityException("$conversationId/$id: context source kind disagrees with payload")
+        }
         val ownerNodeId = uuidOf(row.ownerNodeId, "owner_node_id", row.ownerMessageId)
         val ownerMessageId = uuidOf(row.ownerMessageId, "owner_message_id", row.ownerMessageId)
         val anchorNodeId = uuidOf(row.anchorNodeId, "anchor_node_id", row.ownerMessageId)
         val anchorMessageId = uuidOf(row.anchorMessageId, "anchor_message_id", row.ownerMessageId)
         val owner = variantOf(ownerNodeId, ownerMessageId, "owner", row.ownerMessageId)
-        if (owner.role != MessageRole.ASSISTANT) {
+        val historyOrigin = payload.source is ConversationContextSource.Preset ||
+            payload.source is ConversationContextSource.HistorySummary
+        if (!historyOrigin && owner.role != MessageRole.ASSISTANT) {
             throw ConversationModelContextIntegrityException(
                 "$conversationId/${row.ownerMessageId}: owner variant must be ASSISTANT, got ${owner.role}",
             )
         }
         val anchor = variantOf(anchorNodeId, anchorMessageId, "anchor", row.ownerMessageId)
-        if (anchor.role != MessageRole.USER) {
+        if (historyOrigin && (ownerNodeId != anchorNodeId || ownerMessageId != anchorMessageId)) {
+            throw ConversationModelContextIntegrityException("$conversationId/$id: history source must belong to its own message")
+        }
+        if (!historyOrigin && anchor.role != MessageRole.USER) {
             throw ConversationModelContextIntegrityException(
                 "$conversationId/${row.ownerMessageId}: anchor variant must be USER, got ${anchor.role}",
             )
         }
-        validateContent(row.content)
-        val previous = contentByOwner.put(ownerMessageId, row.content)
-        if (previous != null && previous != row.content) {
-            throw ConversationModelContextIntegrityException(
-                "$conversationId/${row.ownerMessageId}: two different contents for one owner",
-            )
+        val stepId = row.stepId?.let { uuidOf(it, "step_id", row.id) }
+        if (stepId != null && owner.parts.filterIsInstance<me.rerere.ai.ui.UIMessagePart.Step>().none { it.stepId == stepId }) {
+            throw ConversationModelContextIntegrityException("$conversationId/$id: context Step is not owned by its message")
+        }
+        if (row.occurrence < 0 || !occurrences.add(Triple(ownerNodeId, ownerMessageId, row.occurrence))) {
+            throw ConversationModelContextIntegrityException("$conversationId/$id: invalid or duplicate context occurrence")
+        }
+        if (payload.source is ConversationContextSource.Disclosure && payload.body is ConversationContextBody.Inline) {
+            validateContent(payload.body.text)
         }
         ConversationModelContextEntry(
+            id = id,
             ownerNodeId = ownerNodeId,
             ownerMessageId = ownerMessageId,
             anchorNodeId = anchorNodeId,
             anchorMessageId = anchorMessageId,
-            content = row.content,
+            payload = payload,
+            occurrence = row.occurrence,
+            stepId = stepId,
         )
     }
 }

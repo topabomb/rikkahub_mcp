@@ -27,6 +27,19 @@ class ConversationCommandCoordinator(
     suspend fun load(conversationId: Uuid): ConversationRuntime =
         operationLocks.withLock(conversationId) { registry.loadRuntime(conversationId) }
 
+    internal suspend fun readRequestContext(handle: TurnHandle): net.weero.measix.pilot.service.turn.TurnRequestHistory =
+        gated { operationLocks.withLock(handle.conversationId) {
+            val runtime = requireNotNull(registry.findRuntime(handle.conversationId)) { "context_runtime_missing" }
+            check(runtime.snapshot.value.stream?.matches(handle) == true &&
+                runtime.currentGenerationTurnId() == handle.turnId) { "context_turn_owner_changed" }
+            val tools = repository.getContextToolHistory(handle.conversationId)
+            net.weero.measix.pilot.service.turn.TurnRequestHistory(
+                conversation = runtime.durable,
+                toolOutcomes = tools.outcomes,
+                trackedAssistantMessageIds = tools.trackedAssistantMessageIds,
+            )
+        } }
+
     /** A lineage change commits all aggregates before any runtime publishes or disappears. */
     internal suspend fun commitTreeMutation(
         scope: ConfigurationScope,
@@ -482,6 +495,15 @@ internal fun validateConversationCommandOwner(
                 throw ConversationCommandConflictException("stale checkpoint for turn ${command.turn.turnId}")
             }
         }
+        is AdmitRequestContext -> {
+            requireActiveIdentity(command.handle.turnId)
+            if (command.handle.conversationId != conversationId || activeTurn?.matches(command.handle) != true) {
+                throw ConversationCommandConflictException("stale_context_admission")
+            }
+        }
+        is BindDraftOpening -> if (activeTurnId != null) {
+            throw ConversationCommandConflictException("opening_selection_requires_idle_draft")
+        }
         is FinalizeTurn -> if (
             command.handle.conversationId != conversationId ||
             activeTurn?.matches(command.handle) != true
@@ -545,6 +567,7 @@ internal class ConversationDraft(
     val conversation: Conversation,
     private val store: net.weero.measix.pilot.data.files.ArtifactStore,
     artifacts: List<net.weero.measix.pilot.data.files.OwnedArtifact>,
+    val messageOrigins: List<net.weero.measix.pilot.data.model.ConversationModelContextEntry> = emptyList(),
 ) : AutoCloseable {
     val artifacts = artifacts.toList()
     suspend fun publish() = store.publishAllUnpublished(artifacts)

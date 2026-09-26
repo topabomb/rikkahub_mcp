@@ -38,8 +38,8 @@ class TurnWorkloadActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val workload = requireNotNull(intent.getStringExtra("workload"))
-        if (workload == "compose_100") {
-            setContent { ComposeTurnWorkload() }
+        if (workload == "compose_100" || workload == "compose_context_100") {
+            setContent { ComposeTurnWorkload(withContext = workload == "compose_context_100") }
             return
         }
         lifecycleScope.launch(Dispatchers.IO) {

@@ -1,5 +1,6 @@
 package net.weero.measix.pilot.service.turn
 
+import net.weero.measix.pilot.service.runtime.disclosurePayload
 import net.weero.measix.pilot.service.turn.TurnRunPhase
 
 import android.content.Context
@@ -252,7 +253,11 @@ class StepRunnerTest {
             )
         )
 
-        assertEquals(listOf(user.toText()), harness.providerMessages.captured.map { it.toText() })
+        assertEquals(listOf(MessageRole.SYSTEM, MessageRole.USER), harness.providerMessages.captured.map { it.role })
+        assertEquals(user.parts, harness.providerMessages.captured.last().parts.drop(1))
+        assertTrue(harness.providerMessages.captured.last().parts.first().let {
+            it is UIMessagePart.Text && it.text.contains("conversation_disclosure_snapshot")
+        })
         assertTrue(harness.providerMessages.captured.none { message ->
             message.role == MessageRole.ASSISTANT && message.parts.isEmpty()
         })
@@ -308,7 +313,7 @@ class StepRunnerTest {
         assertTrue(projected.parts.filterIsInstance<UIMessagePart.Tool>().isEmpty())
         assertTrue(projected.toText().contains("visible partial draft"))
         assertTrue(projected.toText().contains("did not complete"))
-        assertEquals(latestUser.toText(), harness.providerMessages.captured.last().toText())
+        assertEquals(latestUser.parts, harness.providerMessages.captured.last().parts.drop(1))
     }
 
     @Test
@@ -454,47 +459,24 @@ class StepRunnerTest {
     }
 
     @Test
-    fun `frozen projection injects snapshot before user parts and appends the fixed system rule`() = runTest {
+    fun `fixed system is admitted before provider and keeps application rules without disclosure`() = runTest {
         val harness = createProviderHarness()
-        val user = UIMessage.user("real question")
-        val snapshot = """{"type":"conversation_disclosure_snapshot","format":1,"memory":{"enabled":false,"scope":"disabled","header":["id","content"],"rows":[]},"sub_assistants":{"mode":"disabled","header":["id","name","description"],"rows":[]}}"""
-        harness.handler.run(
-            turnRunInputsFixture(
-                conversationId = kotlin.uuid.Uuid.random(),
-                settings = harness.settings,
-                model = harness.model,
-                mediaCapabilities = RequestMediaCapabilities.NONE,
-                messages = listOf(user),
-                assistant = harness.assistant,
-                promptInputs = testPromptInputs(),
-                modelContextEntries = listOf(
-                    net.weero.measix.pilot.data.model.ConversationModelContextEntry(
-                        ownerNodeId = kotlin.uuid.Uuid.random(),
-                        ownerMessageId = kotlin.uuid.Uuid.random(),
-                        anchorNodeId = kotlin.uuid.Uuid.random(),
-                        anchorMessageId = user.id,
-                        content = snapshot,
-                    ),
-                ),
-                durableMessageLocators = mapOf(
-                    user.id to DurableMessageLocator(kotlin.uuid.Uuid.random(), user.id),
-                ),
-                maxSteps = 1,
-            )
-        )
-
-        val wire = harness.providerMessages.captured
-        val system = wire.first { it.role == MessageRole.SYSTEM }.toText()
-        assertTrue(
-            system.contains(
-                "A conversation_disclosure_snapshot is application-provided context data",
-            ),
-        )
-        val wireUser = wire.first { it.role == MessageRole.USER }
-        assertEquals(
-            listOf(snapshot, "real question"),
-            wireUser.parts.filterIsInstance<UIMessagePart.Text>().map { it.text },
-        )
+        val capture = net.weero.measix.pilot.test.TurnRunCapture()
+        harness.handler.run(turnRunInputsFixture(
+            conversationId = kotlin.uuid.Uuid.random(), settings = harness.settings,
+            model = harness.model, mediaCapabilities = RequestMediaCapabilities.NONE,
+            messages = listOf(UIMessage.user("real question")), assistant = harness.assistant,
+            capture = capture, maxSteps = 1,
+        ))
+        val system = harness.providerMessages.captured.first { it.role == MessageRole.SYSTEM }.toText()
+        assertTrue(system.contains(APPLICATION_CONTEXT_RULES))
+        assertTrue(system.contains(net.weero.measix.pilot.service.ConversationDisclosureSnapshotService.MODEL_RULES))
+        assertEquals(1, capture.admissions.size)
+        val savedSystem = capture.contextEntries.single {
+            it.payload.source is net.weero.measix.pilot.data.model.ConversationContextSource.System
+        }
+        assertEquals(system, (savedSystem.payload.body as net.weero.measix.pilot.data.model.ConversationContextBody.Inline).text)
+        assertEquals(savedSystem.id, capture.admissions.single().selection!!.systemEntryId)
     }
 
     @Test

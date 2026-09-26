@@ -19,6 +19,7 @@ import net.weero.measix.pilot.data.db.migrations.Migration_9_10
 import net.weero.measix.pilot.data.db.migrations.Migration_10_11
 import net.weero.measix.pilot.data.db.migrations.Migration_11_12
 import net.weero.measix.pilot.data.db.migrations.Migration_12_13
+import net.weero.measix.pilot.data.db.migrations.Migration_13_14
 
 /**
  * The single Room construction recipe for [AppDatabase]: migration chain, FTS/dictionary open
@@ -42,6 +43,7 @@ fun createAppDatabase(context: Context, name: String): AppDatabase =
             Migration_10_11,
             Migration_11_12,
             Migration_12_13,
+            Migration_13_14,
         )
         .addCallback(object : RoomDatabase.Callback() {
             override fun onOpen(db: SupportSQLiteDatabase) {

@@ -9,6 +9,8 @@ import net.weero.measix.pilot.data.ai.attachments.AttachmentRefBackfill
 import net.weero.measix.pilot.data.db.entity.ToolExecutionEntity
 import net.weero.measix.pilot.data.db.entity.TurnExecutionEntity
 import net.weero.measix.pilot.data.model.ConversationModelContextEntry
+import net.weero.measix.pilot.data.model.ConversationContextAdmission
+import net.weero.measix.pilot.data.model.ConversationOpening
 import net.weero.measix.pilot.data.model.MessageNode
 import kotlin.uuid.Uuid
 
@@ -20,6 +22,22 @@ import kotlin.uuid.Uuid
 
 /** 所有命令的统一密封接口 */
 sealed interface ConversationCommand
+
+/** Draft selection uses CAS so a late completion cannot clear a newer user choice. */
+internal data class BindDraftOpening(
+    val opening: ConversationOpening?,
+    val expectedSelectionToken: Uuid?,
+    val selectionToken: Uuid? = if (opening == null) null else Uuid.random(),
+) : ConversationCommand {
+    init { require((opening == null) == (selectionToken == null)) }
+}
+
+/** Commits one immutable application-input boundary before the Provider may be invoked. */
+internal data class AdmitRequestContext(
+    val handle: TurnHandle,
+    val entries: List<ConversationModelContextEntry>,
+    val admission: ConversationContextAdmission,
+) : ConversationCommand
 
 /** Header-only commands share one [ConversationTransition.applyHeader] implementation. */
 internal sealed interface HeaderConversationCommand : ConversationCommand
@@ -43,7 +61,11 @@ data class SelectNodeVariant(val nodeId: Uuid, val selectIndex: Int) : Conversat
 data class TruncateToNodeIndex(val nodeIndexInclusive: Int) : ConversationCommand
 
 /** 整树替换（压缩 / 恢复 / fork 载入 / 新会话初始化） */
-data class ReplaceMessageTree(val nodes: List<MessageNode>, val clearSuggestions: Boolean = false) : ConversationCommand
+internal data class ReplaceMessageTree(
+    val nodes: List<MessageNode>,
+    val clearSuggestions: Boolean = false,
+    val messageOrigins: List<net.weero.measix.pilot.data.model.ConversationModelContextEntry> = emptyList(),
+) : ConversationCommand
 
 /** Adds exact missing attachment handles without accepting a replacement tree. */
 data class BackfillAttachmentRefs(val backfills: List<AttachmentRefBackfill>) : ConversationCommand {
@@ -124,6 +146,8 @@ internal data class ConversationMutation(
      * (owner_node_id, owner_message_id) 主键删除，不按全局 message id 误伤其他 Conversation。
      */
     val deletedModelContextEntries: List<ConversationModelContextEntry> = emptyList(),
+    val insertedContextAdmissions: List<ConversationContextAdmission> = emptyList(),
+    val deletedContextAdmissions: List<ConversationContextAdmission> = emptyList(),
     /** Only title/activity changes require updating metadata on existing FTS rows. */
     val searchMetadataChanged: Boolean = false,
     /**
@@ -165,7 +189,9 @@ internal fun ConversationMutation.hasChanges(): Boolean =
     upsertedNodes.isNotEmpty() ||
     deletedNodeIds.isNotEmpty() ||
     insertedModelContextEntries.isNotEmpty() ||
-    deletedModelContextEntries.isNotEmpty()
+    deletedModelContextEntries.isNotEmpty() ||
+    insertedContextAdmissions.isNotEmpty() ||
+    deletedContextAdmissions.isNotEmpty()
 
 /** 会话头（snapshot 的一部分；header 变更不触碰 nodes） */
 data class ConversationHeader(
@@ -203,6 +229,10 @@ internal data class ConversationAggregateSnapshot(
     val header: ConversationHeader,
     val nodes: List<MessageNode>,
     val modelContextEntries: List<ConversationModelContextEntry> = emptyList(),
+    val contextAdmissions: List<ConversationContextAdmission> = emptyList(),
+    val opening: ConversationOpening? = null,
+    /** Draft-only operation identity. Cleared on promotion and never persisted as opening content. */
+    val draftOpeningSelectionToken: Uuid? = null,
 ) {
     /**
      * 命令语义读取入口：当前选中消息序列，纯 durable 树（不含流式草稿）。

@@ -33,38 +33,33 @@ object DefaultPlaceholderProvider {
     )
 }
 
+/** Values are substituted once; braces in an inserted value are literal data. */
+private val promptPlaceholderPattern = Regex("\\{\\{([^{}]+)\\}\\}|\\{([^{}]+)\\}")
+
+fun renderPromptPlaceholders(text: String, values: Map<String, String>): String {
+    val keys = values.mapKeys { it.key.lowercase(java.util.Locale.ROOT) }
+    return promptPlaceholderPattern.replace(text) { match ->
+        val key = match.groups[1]?.value ?: requireNotNull(match.groups[2]).value
+        keys[key.lowercase(java.util.Locale.ROOT)] ?: match.value
+    }
+}
+
+/** Store only variables actually used by this declared template, not the entire captured environment. */
+internal fun usedPromptPlaceholderValues(text: String, values: Map<String, String>): Map<String, String> {
+    val keys = promptPlaceholderPattern.findAll(text).map {
+        (it.groups[1]?.value ?: requireNotNull(it.groups[2]).value).lowercase(java.util.Locale.ROOT)
+    }.toSet()
+    return values.filterKeys { it.lowercase(java.util.Locale.ROOT) in keys }
+}
+
 object PlaceholderTransformer : InputMessageTransformer {
-    private val defaultProvider = DefaultPlaceholderProvider
-
-    override suspend fun transform(
-        ctx: TransformerContext,
-        messages: List<UIMessage>,
-    ): List<UIMessage> {
-        return messages.map {
-            it.copy(
-                parts = it.parts.map { part ->
-                    if (part is UIMessagePart.Text) {
-                        part.copy(
-                            text = replacePlaceholders(text = part.text, ctx = ctx)
-                        )
-                    } else {
-                        part
-                    }
-                }
-            )
+    override suspend fun transform(ctx: TransformerContext, messages: List<UIMessage>): List<UIMessage> =
+        messages.map { message ->
+            if (ctx.requestOrigins.isApplicationHistory(message.id)) return@map message
+            message.copy(parts = message.parts.map { part ->
+                if (part is UIMessagePart.Text && !ctx.requestOrigins.isOpaque(part)) {
+                    part.copy(text = renderPromptPlaceholders(part.text, ctx.promptInputs.placeholderValues))
+                } else part
+            })
         }
-    }
-
-    private fun replacePlaceholders(
-        text: String,
-        ctx: TransformerContext,
-    ): String {
-        var result = text
-        ctx.promptInputs.placeholderValues.forEach { (key, value) ->
-            result = result
-                .replace(oldValue = "{{$key}}", newValue = value, ignoreCase = true)
-                .replace(oldValue = "{$key}", newValue = value, ignoreCase = true)
-        }
-        return result
-    }
 }

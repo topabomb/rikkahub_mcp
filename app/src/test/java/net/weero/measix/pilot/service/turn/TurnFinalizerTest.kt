@@ -530,7 +530,7 @@ class TurnFinalizerTest {
                 anchorNodeId = Uuid.random(),
                 anchorMessageId = Uuid.random(),
                 expectedSelectedPrefixMessageIds = emptyList(),
-                modelContextCandidate = "",
+
                 epoch = epoch,
             ),
             durable,

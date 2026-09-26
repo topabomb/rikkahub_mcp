@@ -76,6 +76,7 @@ val repositoryModule = module {
             systemMetaDAO = get(),
             conversationDAO = get(),
             messageNodeDAO = get(),
+            contextDAO = get(),
             settingsCoordinator = get(),
             transactionRunner = get(),
         )

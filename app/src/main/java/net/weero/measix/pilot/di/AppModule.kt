@@ -17,7 +17,6 @@ import net.weero.measix.pilot.data.imggen.AssistantBackgroundService
 import net.weero.measix.pilot.data.imggen.GeneratedMediaStore
 import net.weero.measix.pilot.data.imggen.ImageGenerationCoordinator
 import net.weero.measix.pilot.data.ai.transformers.TemplateTransformer
-import net.weero.measix.pilot.data.ai.transformers.WorkspaceReminderTransformer
 import net.weero.measix.pilot.data.ai.transformers.ToolArtifactReplayTransformer
 import net.weero.measix.pilot.data.ai.transformers.AttachmentProjectionTransformer
 import net.weero.measix.pilot.data.ai.transformers.Base64ImageToLocalFileTransformer
@@ -245,7 +244,6 @@ val appModule = module {
     single {
         TurnPipelineFactory(
             templateTransformer = get(),
-            workspaceReminderTransformer = WorkspaceReminderTransformer(),
             toolArtifactReplayTransformer = ToolArtifactReplayTransformer(get()),
             attachmentProjectionTransformer = AttachmentProjectionTransformer(),
             base64ImageToLocalFileTransformer = Base64ImageToLocalFileTransformer(get()),
@@ -426,7 +424,7 @@ val appModule = module {
     }
 
     single { ConversationAttachmentPreviewProjector(get(), get()) }
-    single { ConversationQueryService(get(), get(), get(), get(), get(), get(), get(), get(), get()) }
+    single { ConversationQueryService(get(), get(), get(), get(), get(), get(), get(), get(), get(), get()) }
     single { CustomChatFontService(get(), get()) }
     single { SearchIndexMaintenanceService(get(), get()) }
     single { FavoriteService(get(), get(), get(), get()) }

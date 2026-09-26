@@ -8,12 +8,18 @@ import me.rerere.ai.ui.UIMessagePart
 import net.weero.measix.pilot.data.model.InjectionPosition
 import net.weero.measix.pilot.service.turn.ResolvedPromptInjection
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import kotlin.uuid.Uuid
 
 class PromptInjectionTransformerTest {
+    @Test fun `an empty active step does not move depth one past the user`() {
+        val user = UIMessage.user("question")
+        val active = UIMessage(role = MessageRole.ASSISTANT,
+            parts = listOf(net.weero.measix.pilot.service.runtime.TurnTransition.openStep(0)))
+        val result = transformMessages(listOf(user, active), listOf(injection("rule", InjectionPosition.AT_DEPTH)))
+        assertEquals(listOf("rule", "question", ""), result.map { it.toText() })
+    }
     private fun injection(
         content: String,
         position: InjectionPosition,
@@ -30,22 +36,9 @@ class PromptInjectionTransformerTest {
     )
 
     @Test
-    fun `empty frozen injections preserve message identity`() {
+    fun `empty frozen injections preserve content and order`() {
         val messages = listOf(UIMessage.user("question"))
-        assertSame(messages, transformMessages(messages, emptyList()))
-    }
-
-    @Test
-    fun `system injections are ordered by priority around original system`() {
-        val result = transformMessages(
-            messages = listOf(UIMessage.system("SYSTEM"), UIMessage.user("question")),
-            injections = listOf(
-                injection("after", InjectionPosition.AFTER_SYSTEM_PROMPT),
-                injection("low", InjectionPosition.BEFORE_SYSTEM_PROMPT, priority = 1),
-                injection("high", InjectionPosition.BEFORE_SYSTEM_PROMPT, priority = 10),
-            ),
-        )
-        assertEquals("high\nlow\nSYSTEM\nafter", result.first().toText())
+        assertEquals(messages, transformMessages(messages, emptyList()))
     }
 
     @Test
@@ -64,7 +57,7 @@ class PromptInjectionTransformerTest {
                 injection("bottom", InjectionPosition.BOTTOM_OF_CHAT),
             ),
         )
-        assertEquals(listOf("system", "top", "u1", "a1", "depth", "bottom", "u2"), result.map { it.toText() })
+        assertEquals(listOf("system", "top", "u1", "depth", "a1", "bottom", "u2"), result.map { it.toText() })
         assertEquals(MessageRole.ASSISTANT, result.first { it.toText() == "depth" }.role)
     }
 
@@ -84,5 +77,42 @@ class PromptInjectionTransformerTest {
         )
         assertEquals("injected", result.first().toText())
         assertTrue(result[1] === messages[0] && result[2] === messages[1])
+    }
+    @Test
+    fun `mixed roles retain priority order and equal priorities retain directory order`() {
+        val result = transformMessages(listOf(UIMessage.user("question")), listOf(
+            injection("user-high", InjectionPosition.TOP_OF_CHAT, 3),
+            injection("assistant", InjectionPosition.TOP_OF_CHAT, 2, role = MessageRole.ASSISTANT),
+            injection("user-low", InjectionPosition.TOP_OF_CHAT, 1),
+            injection("user-tie", InjectionPosition.TOP_OF_CHAT, 1),
+        ))
+        assertEquals(listOf("user-high", "assistant", "user-low\nuser-tie", "question"), result.map { it.toText() })
+    }
+    @Test
+    fun `depth ignores projections and normalizes nonpositive values without changing history`() {
+        val reminder = UIMessage.user("reminder")
+        val history = listOf(UIMessage.system("s"), UIMessage.user("u"), reminder, UIMessage.assistant("a"))
+        for (depth in listOf(-5, 0, 1)) {
+            val result = transformMessages(history, listOf(injection("rule", InjectionPosition.AT_DEPTH, depth = depth)),
+                isHistory = { it.id != reminder.id })
+            assertEquals(listOf("s", "u", "rule", "reminder", "a"), result.map { it.toText() })
+        }
+        val result = transformMessages(history, listOf(injection("rule", InjectionPosition.AT_DEPTH, depth = 99)),
+            isHistory = { it.id != reminder.id })
+        assertEquals(listOf("s", "rule", "u", "reminder", "a"), result.map { it.toText() })
+    }
+
+    @Test
+    fun `merged rules retain each source and global priority at the same resolved boundary`() {
+        val low = injection("low", InjectionPosition.TOP_OF_CHAT, priority = 1)
+        val high = injection("high", InjectionPosition.AT_DEPTH, priority = 3, depth = 1)
+        val sources = mutableListOf<ResolvedPromptInjection>()
+        val result = transformMessages(listOf(UIMessage.user("question")), listOf(low, high),
+            onInjection = { message, rules ->
+                assertEquals(rules.map { it.content }, message.parts.filterIsInstance<UIMessagePart.Text>().map { it.text })
+                sources += rules
+            })
+        assertEquals(listOf(high, low), sources)
+        assertEquals(listOf("high\nlow", "question"), result.map { it.toText() })
     }
 }

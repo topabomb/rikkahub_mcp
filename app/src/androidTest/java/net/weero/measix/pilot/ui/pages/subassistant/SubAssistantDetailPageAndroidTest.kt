@@ -7,6 +7,10 @@ import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.StateRestorationTester
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.onAllNodesWithContentDescription
+import androidx.compose.ui.test.assertCountEquals
+import androidx.compose.ui.test.onNodeWithContentDescription
+import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.navigation3.runtime.rememberNavBackStack
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import io.mockk.every
@@ -42,6 +46,42 @@ import kotlin.uuid.Uuid
 @RunWith(AndroidJUnit4::class)
 class SubAssistantDetailPageAndroidTest {
     @get:Rule val compose = createAndroidComposeRule<ComponentActivity>()
+
+    @Test fun contextEntryStaysInRequestRegionWhenEmptyCancelledTaskLaterHasOutput() {
+        val source = ConversationViewLease(Uuid.random(), RealmAccess.Personal, 0L) {}
+        val target = ConfigurationReference.random()
+        val task = net.weero.measix.pilot.data.model.MessageNode.of(me.rerere.ai.ui.UIMessage.user("Task"))
+        val cancelled = net.weero.measix.pilot.data.model.MessageNode.of(me.rerere.ai.ui.UIMessage.assistant("").copy(
+            terminalStatus = me.rerere.ai.ui.MessageTerminalStatus.CANCELLED))
+        val child = Conversation(assistantId = target, parentConversationId = source.conversationId, messageNodes = listOf(task, cancelled))
+        val snapshot = ConversationRuntimeSnapshot(child.toSnapshot(), null).toPresentationSnapshot().copy(
+            context = net.weero.measix.pilot.service.ConversationContextSummary(mapOf(
+                task.currentMessage.id to net.weero.measix.pilot.service.MessageContextSummary(true),
+                cancelled.currentMessage.id to net.weero.measix.pilot.service.MessageContextSummary(true, true))))
+        val initial = SubAssistantDetailUiState.Ready(
+            SubAssistantDetailLink(buildInitialSubAssistantCallMetadata("run", target, "Target"), "Task", child.id, task.currentMessage.id, target),
+            snapshot, listOf(cancelled))
+        val state = MutableStateFlow<SubAssistantDetailUiState>(initial)
+        val vm = mockk<SubAssistantDetailVM>()
+        every { vm.uiState } returns state
+        every { vm.settings } returns MutableStateFlow(Settings.dummy())
+        every { vm.attachmentPreviews() } returns emptyMap()
+        compose.setContent {
+            val backStack = rememberNavBackStack(Screen.SubAssistantDetail("run", source))
+            MaterialTheme { CompositionLocalProvider(LocalNavController provides Navigator(backStack),
+                LocalSettings provides Settings.dummy(), LocalToaster provides rememberToasterState()) {
+                SubAssistantDetailPage(source, "run", vm)
+            } }
+        }
+        val description = compose.activity.getString(R.string.context_updated_accessibility)
+        compose.onAllNodesWithContentDescription(description).assertCountEquals(1)
+        val before = compose.onNodeWithContentDescription(description).getUnclippedBoundsInRoot()
+        val output = cancelled.copy(messages = listOf(cancelled.currentMessage.copy(parts = listOf(me.rerere.ai.ui.UIMessagePart.Text("Later answer")), terminalStatus = null)))
+        compose.runOnIdle { state.value = initial.copy(child = snapshot.copy(nodes = listOf(task, output)), timeline = listOf(output)) }
+        compose.onNodeWithText("Later answer").assertIsDisplayed()
+        compose.onAllNodesWithContentDescription(description).assertCountEquals(1)
+        org.junit.Assert.assertEquals(before.top, compose.onNodeWithContentDescription(description).getUnclippedBoundsInRoot().top)
+    }
 
     @Test fun restoredNavigationCannotDisplayReadyRetainedByTheOldViewModel() {
         val source = ConversationViewLease(Uuid.random(), RealmAccess.Personal, 0L) {}

@@ -48,6 +48,7 @@ import net.weero.measix.pilot.service.runtime.OptionalConfigurationReferenceSet
 import net.weero.measix.pilot.service.runtime.SelectNodeVariant
 import net.weero.measix.pilot.service.runtime.TogglePinned
 import net.weero.measix.pilot.service.runtime.UpdateHeader
+import net.weero.measix.pilot.service.runtime.BindDraftOpening
 import net.weero.measix.pilot.service.runtime.currentTurnPresentation
 import kotlinx.serialization.json.Json
 import kotlin.uuid.Uuid
@@ -147,7 +148,7 @@ class ConversationApplicationService internal constructor(
 
     internal suspend fun newStarterDraftRequest(target: EnterpriseStarterTarget): StarterDraftRequest {
         recoveryGate.awaitReady()
-        return sessions.withSelectedRealmSelection(target.selection) {
+        return sessions.withSelectedPlatformCandidate(target.selection) { candidate ->
             settingsStore.withResolvedConfiguration(target.selection.access.scope, sessions.state.value) { configuration ->
                 sessions.requirePublishedSelection(target.selection)
                 val identity = requireNotNull(configuration.enterpriseIdentity) { "enterprise_configuration_not_ready" }
@@ -156,8 +157,102 @@ class ConversationApplicationService internal constructor(
                 val starter = configuration.availableStarters().singleOrNull { it.id == target.reference.id }
                     ?: error("enterprise_starter_unavailable")
                 val assistant = ConfigurationReference.Enterprise(identity.authority, starter.assistantId)
-                StarterDraftRequest(ConversationOpenRequest.NewDraft(Uuid.random(), target.selection.access, assistant), starter.prompt)
+                val opening = starter.openingSnapshot?.let { candidate.opening(starter) }
+                StarterDraftRequest(ConversationOpenRequest.NewDraft(Uuid.random(), target.selection.access, assistant,
+                    opening?.navigationReference()), starter.prompt)
             }
+        }
+    }
+
+    /** The callback only accepts the text in the original UI owner; failed acceptance restores this operation's binding. */
+    internal suspend fun selectDraftStarter(
+        target: ConversationAssistantTarget,
+        reference: ConfigurationReference.Enterprise,
+        expectedSelectionToken: Uuid?,
+        selectionToken: Uuid,
+        acceptPrompt: (String) -> Unit,
+    ) = changeDraftOpening(target, expectedSelectionToken, selectionToken, reference, appendPrompt = true, acceptPrompt)
+
+    internal suspend fun refreshDraftOpening(target: ConversationAssistantTarget, expectedSelectionToken: Uuid, selectionToken: Uuid) =
+        changeDraftOpening(target, expectedSelectionToken, selectionToken, reference = null, appendPrompt = false) {}
+
+    private suspend fun changeDraftOpening(
+        target: ConversationAssistantTarget,
+        expectedSelectionToken: Uuid?,
+        selectionToken: Uuid,
+        reference: ConfigurationReference.Enterprise?,
+        appendPrompt: Boolean,
+        acceptPrompt: (String) -> Unit,
+    ) {
+        recoveryGate.awaitReady()
+        sessions.withSelectedPlatformCandidate(target.conversation.selection) { candidate ->
+            settingsStore.withResolvedConfiguration(target.conversation.selection.access.scope, sessions.state.value) { configuration ->
+                target.conversation.requireOpen()
+                commandCoordinator.withRootHeaders(target.conversation.selection.access.scope, listOf(target.conversation.conversationId)) {
+                    val runtime = commandCoordinator.load(target.conversation.conversationId)
+                    val before = runtime.durable
+                    check(before.header.newConversation && before.header.assistantId == target.assistantId) { "conversation_draft_target_changed" }
+                    val selected = reference ?: before.opening?.navigationReference()?.reference
+                        ?: error("enterprise_starter_not_selected")
+                    val starter = configuration.availableStarters(target.assistantId).singleOrNull {
+                        it.id == selected.id && selected.authority == candidate.identity.authority
+                    } ?: throw StarterOpeningException(StarterOpeningIssue.UNAVAILABLE)
+                    val opening = starter.openingSnapshot?.let { candidate.opening(starter) }
+                    if (!appendPrompt && opening == null) throw StarterOpeningException(StarterOpeningIssue.NOT_SUPPLIED)
+                    sessions.requirePublishedSelection(target.conversation.selection)
+                    target.conversation.requireOpen()
+                    withContext(NonCancellable) {
+                        commandCoordinator.executeOrThrow(runtime.id, BindDraftOpening(opening, expectedSelectionToken, selectionToken.takeIf { opening != null }))
+                        try {
+                            target.conversation.requireOpen()
+                            acceptPrompt(if (appendPrompt) starter.prompt else "")
+                        } catch (error: Throwable) {
+                            if (runtime.durable.draftOpeningSelectionToken == selectionToken.takeIf { opening != null }) {
+                                try {
+                                    commandCoordinator.executeOrThrow(runtime.id, BindDraftOpening(before.opening, selectionToken.takeIf { opening != null },
+                                        before.draftOpeningSelectionToken))
+                                } catch (cleanup: Throwable) { error.addSuppressed(cleanup) }
+                            }
+                            throw error
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    internal suspend fun clearDraftOpening(target: ConversationAssistantTarget, expectedSelectionToken: Uuid) = withRootCommand(target.conversation) {
+        val runtime = commandCoordinator.load(target.conversation.conversationId)
+        check(runtime.durable.header.assistantId == target.assistantId) { "conversation_draft_target_changed" }
+        commandCoordinator.executeOrThrow(runtime.id, BindDraftOpening(null, expectedSelectionToken))
+    }
+
+    internal suspend fun appendStarterPrompt(target: ConversationAssistantTarget, reference: ConfigurationReference.Enterprise, acceptPrompt: (String) -> Unit) =
+        withRootCommand(target.conversation) {
+            val snapshot = commandCoordinator.load(target.conversation.conversationId).durable
+            check(!snapshot.header.newConversation && snapshot.header.assistantId == target.assistantId) { "conversation_starter_target_changed" }
+            settingsStore.withResolvedConfiguration(target.conversation.selection.access.scope, sessions.state.value) { configuration ->
+                val starter = configuration.availableStarters(target.assistantId).singleOrNull {
+                    it.id == reference.id && configuration.enterpriseIdentity?.authority == reference.authority
+                } ?: throw StarterOpeningException(StarterOpeningIssue.UNAVAILABLE)
+                sessions.requirePublishedSelection(target.conversation.selection)
+                target.conversation.requireOpen()
+                acceptPrompt(starter.prompt)
+            }
+        }
+
+    internal suspend fun openingDetails(target: ConversationAssistantTarget): StarterOpeningDetailUiModel = withRootCommand(target.conversation) {
+        val snapshot = commandCoordinator.load(target.conversation.conversationId).durable
+        val opening = requireNotNull(snapshot.opening) { "enterprise_starter_not_selected" }
+        settingsStore.withResolvedConfiguration(target.conversation.selection.access.scope, sessions.state.value) { configuration ->
+            sessions.requirePublishedSelection(target.conversation.selection)
+            val issue = if (snapshot.header.newConversation) try {
+                requireCurrentStarterOpening(opening, snapshot.header.assistantId, configuration)
+                null
+            } catch (error: StarterOpeningException) { error.issue } else null
+            val canRefresh = issue == StarterOpeningIssue.UPDATED && configuration.availableStarters(opening.assistant)
+                .any { it.id == opening.definition.id && it.openingSnapshot != null }
+            opening.definition.details(snapshot.header.newConversation, opening.assistant == snapshot.header.assistantId, issue, canRefresh)
         }
     }
 
@@ -171,19 +266,30 @@ class ConversationApplicationService internal constructor(
 
     suspend fun initialize(request: ConversationOpenRequest): ConversationViewLease {
         recoveryGate.awaitReady()
-        return sessions.withSelectedRealmAccess(request.access) {
+        suspend fun open(candidate: net.weero.measix.pilot.data.enterprise.EnterpriseCandidate?): ConversationViewLease {
+            var initialOpening: net.weero.measix.pilot.data.model.ConversationOpening? = null
             val lease = if (request is ConversationOpenRequest.NewDraft) {
                 settingsStore.withResolvedConfiguration(request.access.scope, sessions.state.value) { configuration ->
                     commandCoordinator.openForView(request) {
                         val assistant = requireNotNull(configuration.assistants[request.assistantId]) { "conversation_assistant_missing" }
                         check(configuration.selection(ConfigurationCategory.ASSISTANT, assistant.id).isAvailable) { "conversation_assistant_unavailable" }
+                        request.starter?.let { reference ->
+                            val starter = configuration.availableStarters(request.assistantId).singleOrNull { it.id == reference.reference.id }
+                                ?: throw StarterOpeningException(StarterOpeningIssue.UNAVAILABLE)
+                            initialOpening = reference.restore(requireNotNull(candidate), starter)
+                        }
                         val owned = mutableListOf<net.weero.measix.pilot.data.files.OwnedArtifact>()
                         try {
                             val presets = artifactStore.materializeConfigurationMessages(request.access.scope, assistant.presetMessages, owned)
+                            val conversation = Conversation.ofId(id = request.id, assistantId = assistant.id, newConversation = true)
+                                .copy(scope = request.access.scope).updateCurrentMessages(presets)
                             net.weero.measix.pilot.service.runtime.ConversationDraft(
-                                Conversation.ofId(id = request.id, assistantId = assistant.id, newConversation = true)
-                                    .copy(scope = request.access.scope).updateCurrentMessages(presets),
+                                conversation,
                                 artifactStore, owned.toList(),
+                                conversation.messageNodes.mapIndexed { index, node ->
+                                    net.weero.measix.pilot.data.model.messageOriginEntry(node,
+                                        net.weero.measix.pilot.data.model.ConversationContextSource.Preset(assistant.id, index))
+                                },
                             )
                         } catch (error: Throwable) {
                             withContext(NonCancellable) {
@@ -197,8 +303,14 @@ class ConversationApplicationService internal constructor(
                     }
                 }
             } else commandCoordinator.openForView(request)
-            ConversationViewLease(request.id, request.access, sessions.selectionRevision.value, lease::draftArtifacts, lease::close)
+            try {
+                initialOpening?.let { commandCoordinator.executeOrThrow(request.id, BindDraftOpening(it, null)) }
+                return ConversationViewLease(request.id, request.access, sessions.selectionRevision.value, lease::draftArtifacts, lease::close)
+            } catch (error: Throwable) { lease.close(); throw error }
         }
+        return if (request is ConversationOpenRequest.NewDraft && request.starter != null) {
+            sessions.withSelectedPlatformCandidate(RealmSelection(request.access, sessions.selectionRevision.value)) { open(it) }
+        } else sessions.withSelectedRealmAccess(request.access) { open(null) }
     }
 
     suspend fun selectAssistantRequest(
@@ -316,8 +428,8 @@ class ConversationApplicationService internal constructor(
             withTreeCommand(target) {
                 val runtime = commandCoordinator.load(target.conversationId)
                 ownerRuntime = runtime
-                owned = sideEffects.launchCompression(runtime, target.selection.access, additionalPrompt, targetTokens, keepRecentMessages) { nodes ->
-                    subAssistantLifecycle.commitSummary(runtime.durable, nodes)
+                owned = sideEffects.launchCompression(runtime, target.selection.access, additionalPrompt, targetTokens, keepRecentMessages) { summary ->
+                    subAssistantLifecycle.commitSummary(runtime.durable, summary.nodes, summary.origins)
                 }
             }
             return requireNotNull(owned).await()
@@ -665,6 +777,9 @@ class ConversationApplicationService internal constructor(
                     nodeIdMap = copiedNodeIdMap,
                     messageIdMap = emptyMap(),
                     clonedNodes = tree.masterNodes,
+                ),
+                contextAdmissions = net.weero.measix.pilot.data.model.remapContextAdmissionsForClone(
+                    current.contextAdmissions, current.modelContextEntries, copiedNodeIdMap, emptyMap(),
                 ),
             )
             val children = tree.children.map { child ->

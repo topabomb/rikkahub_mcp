@@ -121,7 +121,9 @@ class RequestMessageOriginTest {
 
     @Test
     fun `prompt injections at every position are not wrapped by the template`() = runTest {
-        InjectionPosition.entries.forEach { position ->
+        InjectionPosition.entries.filterNot {
+            it == InjectionPosition.BEFORE_SYSTEM_PROMPT || it == InjectionPosition.AFTER_SYSTEM_PROMPT
+        }.forEach { position ->
             val tracker = RequestMessageOriginTracker()
             val injectionId = ConfigurationReference.random()
             val injection = PromptInjection.ModeInjection(
@@ -169,30 +171,17 @@ class RequestMessageOriginTest {
     }
 
     @Test
-    fun `workspace reminder follows the production template ordering`() = runTest {
+    fun `frozen system stays opaque through placeholder and user template`() = runTest {
         val tracker = RequestMessageOriginTracker()
-        val workspaceId = Uuid.random()
-        val transformer = WorkspaceReminderTransformer()
-        val ctx = context(
-            tracker,
-            assistant = assistant(workspaceId = workspaceId),
-            promptInputs = testPromptInputs(
-                messageTemplate = wrapTemplate,
-                workspaceReminder = "<workspace>frozen</workspace>",
-            ),
-        )
-        val messages = listOf(UIMessage.system("system"), UIMessage.user("hello"))
-
-        // TurnPipelineFactory 的真实顺序是 Template → WorkspaceReminder：durable System 先按
-        // 用户模板渲染，随后只追加本次请求的 Workspace 内容，不能反向把整条 durable 消息免模板。
-        val afterTemplate = templateTransformer().transform(ctx, messages)
-        val templatedSystem = afterTemplate.first { it.role == MessageRole.SYSTEM }
-        val afterReminder = transformer.transform(ctx, afterTemplate)
-        val systemMessage = afterReminder.first { it.role == MessageRole.SYSTEM }
-        assertTrue("rewritten system must be marked synthetic", tracker.isSynthetic(systemMessage))
-        assertTrue(text(systemMessage).startsWith(text(templatedSystem) + "\n\n"))
-        assertTrue(text(systemMessage).startsWith("PREFIX[system]SUFFIX"))
-        assertEquals(1, Regex("PREFIX\\[").findAll(text(systemMessage)).count())
+        val ctx = context(tracker, promptInputs = testPromptInputs(messageTemplate = wrapTemplate)
+            .copy(placeholderValues = mapOf("user" to "replacement")))
+        val system = UIMessage.system("tool {{user}}\n\nworkspace {user}")
+        tracker.markSynthetic(system, SyntheticMessageKind.SYSTEM_PROMPT)
+        system.parts.forEach { tracker.markPart(it, RequestPartSource.RenderedSystem) }
+        val afterPlaceholder = PlaceholderTransformer.transform(ctx, listOf(system, UIMessage.user("{{user}}")))
+        val result = templateTransformer().transform(ctx, afterPlaceholder)
+        assertEquals(text(system), text(result.first()))
+        assertEquals("PREFIX[replacement]SUFFIX", text(result.last()))
     }
 
     @Test
@@ -275,5 +264,23 @@ class RequestMessageOriginTest {
         override fun resolveRelativePath(relativePath: String?, anchorPath: String?): String? = relativePath
         override fun createCacheKey(templateName: String?): String? = templateName
         override fun resourceExists(templateName: String?): Boolean = templateName != null
+    }
+    @Test
+    fun `placeholder values are literal and rendered context never executes as a template`() = runTest {
+        assertEquals("{{user}} Bob UNKNOWN", renderPromptPlaceholders("{char} {{USER}} UNKNOWN",
+            mapOf("char" to "{{user}}", "user" to "Bob")))
+        val tracker = RequestMessageOriginTracker()
+        val opaque = UIMessagePart.Text("{{char}} {% if true %}data{% endif %}")
+        tracker.markPart(opaque, RequestPartSource.RenderedSystem)
+        val message = UIMessage(role = MessageRole.USER, parts = listOf(opaque, UIMessagePart.Text("{char}")))
+        val ctx = context(tracker, promptInputs = testPromptInputs(messageTemplate = wrapTemplate,
+            placeholderValues = mapOf("char" to "Alice")))
+        val result = templateTransformer().transform(ctx, PlaceholderTransformer.transform(ctx, listOf(message))).single()
+        assertTrue(result.parts[0] === opaque)
+        assertEquals("PREFIX[Alice]SUFFIX", (result.parts[1] as UIMessagePart.Text).text)
+        val copy = opaque.copy(text = "projected")
+        tracker.transferPartSource(opaque, copy)
+        assertEquals(RequestPartSource.RenderedSystem, tracker.source(copy))
+        assertEquals(null, RequestMessageOriginTracker().source(copy))
     }
 }

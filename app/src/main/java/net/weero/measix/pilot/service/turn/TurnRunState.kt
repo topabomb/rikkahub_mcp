@@ -92,8 +92,6 @@ internal class TurnRunState(
     val interactionAvailability = inputs.interactionAvailability
     val assistantMessageId = inputs.assistantMessageId
     val providerSessionId = inputs.providerSessionId
-    val modelContextEntries = inputs.modelContextEntries
-    val durableMessageLocators = inputs.durableMessageLocators
     val mediaCapabilities = turnContext.mediaCapabilities
     val handle = inputs.handle
 

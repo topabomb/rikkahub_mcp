@@ -365,7 +365,7 @@ private fun ModeInjectionCard(
 }
 
 @Composable
-private fun ModeInjectionEditSheet(
+internal fun ModeInjectionEditSheet(
     injection: PromptInjection.ModeInjection,
     onDismiss: () -> Unit,
     onConfirm: () -> Unit,

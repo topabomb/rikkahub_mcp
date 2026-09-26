@@ -19,6 +19,9 @@ import net.weero.measix.pilot.data.datastore.*
 import net.weero.measix.pilot.data.enterprise.*
 import net.weero.measix.pilot.data.files.ArtifactStore
 import net.weero.measix.pilot.data.model.Conversation
+import net.weero.measix.pilot.data.model.ConversationContextSource
+import net.weero.measix.pilot.data.model.ConversationContextBody
+import net.weero.measix.pilot.data.model.toMessageNode
 import net.weero.measix.pilot.data.repository.ConversationRepository
 import net.weero.measix.pilot.service.runtime.*
 import net.weero.measix.pilot.service.subassistant.SubAssistantLifecycle
@@ -326,6 +329,55 @@ class AuxiliaryGenerationOwnershipTest {
                     error("auxiliary_generation_completed_before_provider_request")
                 }
             }
+        }
+    }
+
+    @Test fun `summary commits its source with text and preserves recent variant identities`() = runTest {
+        fixture { f ->
+            val recentUser = UIMessage.user("recent input").toMessageNode()
+            val recentAssistant = UIMessage.assistant("recent answer").toMessageNode().let {
+                it.copy(messages = it.messages + UIMessage.assistant("alternate answer"))
+            }
+            f.coordinator.executeOrThrow(f.runtime.id,
+                ReplaceMessageTree(f.runtime.durable.nodes + recentUser + recentAssistant))
+            val operation = async { f.application.compress(f.page.commandTarget, "keep decisions", 250, 2) }
+            f.awaitStarted(operation)
+            f.reply.complete("  compressed facts  ")
+            assertTrue(operation.await().isSuccess)
+            val actual = f.runtime.durable
+            assertEquals(listOf(recentUser, recentAssistant), actual.nodes.drop(1))
+            val summary = actual.nodes.first()
+            assertEquals("compressed facts", summary.currentMessage.toText())
+            val entry = actual.modelContextEntries.single()
+            val source = entry.payload.source as ConversationContextSource.HistorySummary
+            assertEquals("keep decisions", source.additionalPrompt)
+            assertEquals(250, source.targetTokens)
+            assertEquals(summary.id, entry.ownerNodeId)
+            assertEquals(summary.currentMessage.id, entry.ownerMessageId)
+            val locator = (entry.payload.body as ConversationContextBody.MessageReference).message
+            assertEquals(entry.ownerNodeId, locator.nodeId)
+            assertEquals(entry.ownerMessageId, locator.messageId)
+            assertFalse(f.runtime.hasAuxiliaryWork)
+        }
+    }
+
+    @Test fun `failed summary transaction publishes neither summary nor source and preserves diagnostic`() = runTest {
+        fixture { f ->
+            val initial = f.runtime.durable
+            val failure = IllegalStateException("summary transaction disk failure")
+            val operation = async { f.application.compress(f.page.commandTarget, "", 100, 0) }
+            f.awaitStarted(operation)
+            f.onCommit = { write -> if (write is ConversationWrite.MutateTree) throw failure }
+            f.reply.complete("uncommitted summary")
+            val actual = operation.await()
+            assertTrue(actual.isFailure)
+            val diagnostic = requireNotNull(actual.exceptionOrNull())
+            assertEquals(failure.javaClass, diagnostic.javaClass)
+            assertEquals(failure.message, diagnostic.message)
+            assertTrue(generateSequence(diagnostic) { it.cause }.any { it === failure })
+            assertEquals(initial, f.runtime.durable)
+            assertTrue(f.runtime.durable.modelContextEntries.isEmpty())
+            assertFalse(f.runtime.hasAuxiliaryWork)
         }
     }
 }

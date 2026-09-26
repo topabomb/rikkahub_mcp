@@ -25,7 +25,6 @@ import androidx.room.PrimaryKey
  */
 @Entity(
     tableName = "conversation_model_context",
-    primaryKeys = ["owner_node_id", "owner_message_id"],
     foreignKeys = [
         ForeignKey(
             entity = MessageNodeEntity::class,
@@ -41,10 +40,14 @@ import androidx.room.PrimaryKey
         ),
     ],
     indices = [
+        Index(value = ["owner_node_id", "owner_message_id", "occurrence"], unique = true),
         Index("anchor_node_id"),
     ],
 )
 data class ConversationModelContextEntity(
+    @PrimaryKey
+    @ColumnInfo("id")
+    val id: String,
     @ColumnInfo("owner_node_id")
     val ownerNodeId: String,
     @ColumnInfo("owner_message_id")
@@ -53,6 +56,12 @@ data class ConversationModelContextEntity(
     val anchorNodeId: String,
     @ColumnInfo("anchor_message_id")
     val anchorMessageId: String,
-    @ColumnInfo("content")
-    val content: String,
+    @ColumnInfo("occurrence")
+    val occurrence: Int,
+    @ColumnInfo("step_id")
+    val stepId: String?,
+    @ColumnInfo("source_kind")
+    val sourceKind: String,
+    @ColumnInfo("payload")
+    val payload: String,
 )

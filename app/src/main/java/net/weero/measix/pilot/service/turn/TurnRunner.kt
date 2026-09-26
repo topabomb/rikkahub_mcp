@@ -15,7 +15,6 @@ import me.rerere.ai.ui.TurnTerminalReasons
 import me.rerere.ai.ui.UIMessage
 import net.weero.measix.pilot.data.ai.request.RequestAssembler
 import net.weero.measix.pilot.data.ai.request.RequestContextPlanner
-import net.weero.measix.pilot.data.ai.request.DurableMessageLocator
 import net.weero.measix.pilot.data.ai.attachments.AttachmentResolver
 import net.weero.measix.pilot.data.ai.tools.ToolCallRuntime
 import net.weero.measix.pilot.data.ai.tools.ToolOutputCompactionPlanner
@@ -23,7 +22,6 @@ import net.weero.measix.pilot.data.ai.tools.TurnInteractionCapability
 import net.weero.measix.pilot.data.ai.tools.ToolOutputStore
 import net.weero.measix.pilot.data.ai.transformers.InputMessageTransformer
 import net.weero.measix.pilot.data.ai.transformers.OutputMessageTransformer
-import net.weero.measix.pilot.data.model.ConversationModelContextEntry
 import net.weero.measix.pilot.service.runtime.TurnCheckpoint
 import net.weero.measix.pilot.service.runtime.TurnHandle
 import kotlin.uuid.Uuid
@@ -43,6 +41,7 @@ internal data class TurnRunInputs(
     /** 本次 durable Turn 的权威句柄；loop 用它构造具名 checkpoint 变体。 */
     val handle: TurnHandle,
     val messages: List<UIMessage>,
+    val requestContext: TurnRequestContextAccess,
     val inputTransformers: List<InputMessageTransformer> = emptyList(),
     val outputTransformers: List<OutputMessageTransformer> = emptyList(),
     val maxSteps: Int = 256,
@@ -50,10 +49,6 @@ internal data class TurnRunInputs(
     /** Which user interactions this run may pause for. */
     val interactionAvailability: TurnInteractionCapability = TurnInteractionCapability.FULL,
     val assistantMessageId: Uuid? = null,
-    /** Turn START 提交的 disclosure baseline（冻结适用集合）；Provider step 不重新捕获。 */
-    val modelContextEntries: List<ConversationModelContextEntry> = emptyList(),
-    /** message ID → durable 树位置；Planner 的 Durable origin 唯一来源。 */
-    val durableMessageLocators: Map<Uuid, DurableMessageLocator> = emptyMap(),
     val providerSessionId: String? = null,
     /** Synchronous handoff of the current Assistant draft to the turn owner; independent of cancellable presentation delivery. */
     val onAssistantObserved: (UIMessage) -> Unit = {},

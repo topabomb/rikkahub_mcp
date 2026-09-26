@@ -261,14 +261,20 @@ class ArtifactDraftScope internal constructor(
         ArtifactSubmission(store, claimed, retention)
     }
 
-    internal suspend fun returnUnaccepted(submission: ArtifactSubmission) = withContext(NonCancellable) {
-        mutex.withLock {
-            val artifacts = submission.returnOwnership()
-            if (closeRequested.get()) artifacts.forEach(store::abandonUnpublished)
-            else artifacts.forEach { artifact ->
-                check(owned.put(artifact.uri.toString(), artifact) == null) { "artifact draft ownership duplicated" }
+    /** Returns an uncommitted request's creation ownership before its failure is exposed to the editor. */
+    internal suspend fun returnToDraft(submission: ArtifactSubmission) = withContext(NonCancellable) {
+        try {
+            mutex.withLock {
+                val artifacts = submission.returnOwnership()
+                if (closeRequested.get()) artifacts.forEach(store::abandonUnpublished)
+                else artifacts.forEach { artifact ->
+                    check(owned.put(artifact.uri.toString(), artifact) == null) { "artifact draft ownership duplicated" }
+                }
+                if (artifacts.isNotEmpty()) inputsChanged()
             }
-            if (artifacts.isNotEmpty()) inputsChanged()
+        } finally {
+            // close() may have observed this mutex locked after the last in-lock state check.
+            releaseClosedPins()
         }
     }
 
@@ -284,19 +290,26 @@ class ArtifactDraftScope internal constructor(
      * Batch validation happens before any creation pin is consumed.
      */
     suspend fun publishCommittedReferences(parts: List<UIMessagePart>) = withContext(NonCancellable) {
-        mutex.withLock {
-            val committed = parts.collectArtifactUris().mapNotNull(owned::get)
-            if (committed.isNotEmpty()) store.publishAllUnpublished(committed)
-            committed.forEach { owned.remove(it.uri.toString()) }
-            if (committed.isNotEmpty()) inputsChanged()
-            if (closeRequested.get()) releasePinsLocked()
+        try {
+            mutex.withLock {
+                val committed = parts.collectArtifactUris().mapNotNull(owned::get)
+                if (committed.isNotEmpty()) store.publishAllUnpublished(committed)
+                committed.forEach { owned.remove(it.uri.toString()) }
+                if (committed.isNotEmpty()) inputsChanged()
+            }
+        } finally {
+            releaseClosedPins()
         }
     }
 
     override fun close() {
         if (!closeRequested.compareAndSet(false, true)) return
         inputsChanged()
-        if (mutex.tryLock()) {
+        releaseClosedPins()
+    }
+
+    private fun releaseClosedPins() {
+        if (closeRequested.get() && mutex.tryLock()) {
             try {
                 releasePinsLocked()
             } finally {
@@ -307,15 +320,16 @@ class ArtifactDraftScope internal constructor(
 
     private fun ensureOpen() = check(!closeRequested.get()) { "artifact draft scope is closed" }
 
-    private suspend inline fun <T> withOwnershipLock(crossinline action: suspend () -> T): T = mutex.withLock {
+    private suspend inline fun <T> withOwnershipLock(crossinline action: suspend () -> T): T =
         try {
-            ensureOpen()
-            recoveryGate.awaitReady()
-            action()
+            mutex.withLock {
+                ensureOpen()
+                recoveryGate.awaitReady()
+                action()
+            }
         } finally {
-            if (closeRequested.get()) releasePinsLocked()
+            releaseClosedPins()
         }
-    }
 
     /**
      * ViewModel disposal cannot suspend. Closing therefore releases only the in-process creation

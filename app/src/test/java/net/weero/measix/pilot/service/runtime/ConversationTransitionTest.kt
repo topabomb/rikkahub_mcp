@@ -21,9 +21,9 @@ internal class ConversationTransitionTest : ConversationTransitionTestBase() {
         val scope = ConfigurationScope.Enterprise(EnterpriseAuthority("dep_example"), "user")
         val draft = Conversation.ofId(Uuid.random(), newConversation = true, scope = scope).toSnapshot()
         val change = ConversationTransition.plan(draft, AppendUserMessage(user(Uuid.random())), draft.header.updateAt) as ConversationChange.Durable
-        val persisted = (change.write as ConversationWrite.MaterializeDraft).conversation
-        assertEquals(scope, persisted.scope)
-        assertEquals(scope, persisted.toSnapshot().header.scope)
+        val persisted = (change.write as ConversationWrite.MaterializeDraft).snapshot
+        assertEquals(scope, persisted.header.scope)
+        assertEquals(scope, persisted.materializeConversation().scope)
     }
 
     @Test

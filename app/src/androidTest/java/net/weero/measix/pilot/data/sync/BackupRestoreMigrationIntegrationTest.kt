@@ -1,8 +1,11 @@
 package net.weero.measix.pilot.data.sync
 
+import net.weero.measix.pilot.service.runtime.inlineContextText
+import net.weero.measix.pilot.service.runtime.historicalContextRow
 import me.rerere.common.configuration.ConfigurationReference
 
 import android.content.Context
+import android.content.ContextWrapper
 import androidx.core.net.toUri
 import net.weero.measix.pilot.data.model.Avatar
 import android.database.sqlite.SQLiteDatabase
@@ -29,6 +32,11 @@ import net.weero.measix.pilot.data.datastore.SettingsStore
 import net.weero.measix.pilot.data.db.AppDatabase
 import net.weero.measix.pilot.data.db.APP_DATABASE_VERSION
 import net.weero.measix.pilot.data.db.createAppDatabase
+import net.weero.measix.pilot.data.db.entity.ConversationEntity
+import net.weero.measix.pilot.data.db.entity.ConversationOpeningEntity
+import net.weero.measix.pilot.data.configuration.ConfigurationScope
+import net.weero.measix.pilot.data.model.ConversationOpeningCodec
+import net.weero.measix.pilot.data.model.largeConversationOpening
 import net.weero.measix.pilot.data.db.entity.ConversationModelContextEntity
 import net.weero.measix.pilot.data.db.fts.MessageFtsManager
 import net.weero.measix.pilot.data.db.migrations.Migration_1_2
@@ -66,7 +74,8 @@ class BackupRestoreMigrationIntegrationTest {
         FrameworkSQLiteOpenHelperFactory(),
     )
 
-    private val context: Context get() = ApplicationProvider.getApplicationContext()
+    private lateinit var root: File
+    private lateinit var context: Context
     private val sourceName = "restore-source-v9"
     private val conversationId = Uuid.parse("00000000-0000-0000-0000-000000000301")
     private val assistantId = ConfigurationReference.parse("00000000-0000-0000-0000-000000000302")
@@ -78,18 +87,31 @@ class BackupRestoreMigrationIntegrationTest {
 
     @Before
     fun setUp() {
-        PendingBackupRestore.pendingDir(context).parentFile?.deleteRecursively()
-        context.deleteDatabase("measix_pilot")
-        context.deleteDatabase(sourceName)
+        val base = ApplicationProvider.getApplicationContext<Context>()
+        root = File(base.cacheDir, "backup-restore-migration-${Uuid.random()}").apply { mkdirs() }
+        context = object : ContextWrapper(base) {
+            override fun getApplicationContext(): Context = this
+            override fun getFilesDir() = File(root, "files").apply { mkdirs() }
+            override fun getCacheDir() = File(root, "cache").apply { mkdirs() }
+            override fun getNoBackupFilesDir() = File(root, "no-backup").apply { mkdirs() }
+            override fun getDatabasePath(name: String): File =
+                (if (File(name).isAbsolute) File(name) else File(root, "databases/$name"))
+                    .also { it.parentFile?.mkdirs() }
+
+            override fun deleteDatabase(name: String): Boolean {
+                val file = getDatabasePath(name).canonicalFile
+                check(file.toPath().startsWith(root.canonicalFile.toPath())) { "test_database_outside_isolated_root" }
+                return SQLiteDatabase.deleteDatabase(file)
+            }
+        }
+        assertTrue(context.getDatabasePath("measix_pilot").canonicalFile != base.getDatabasePath("measix_pilot").canonicalFile)
+        assertTrue(context.getDatabasePath(sourceName).canonicalFile.toPath().startsWith(root.canonicalFile.toPath()))
         archive = File(context.cacheDir, "restore-v9-${System.nanoTime()}.zip")
     }
 
     @After
     fun tearDown() {
-        archive.delete()
-        PendingBackupRestore.pendingDir(context).parentFile?.deleteRecursively()
-        context.deleteDatabase("measix_pilot")
-        context.deleteDatabase(sourceName)
+        if (::root.isInitialized) root.deleteRecursively()
     }
 
     @Test
@@ -105,7 +127,7 @@ class BackupRestoreMigrationIntegrationTest {
             role = MessageRole.ASSISTANT,
             parts = listOf(UIMessagePart.Text("preserved answer")),
         )
-        migrationHelper.createDatabase(sourceName, sourceVersion).use { db ->
+        migrationHelper.createDatabase(context.getDatabasePath(sourceName).absolutePath, sourceVersion).use { db ->
             db.execSQL(
                 "INSERT INTO ConversationEntity(id, assistant_id, title, create_at, update_at, suggestions, " +
                     "is_pinned, custom_system_prompt, mode_injection_ids, workspace_cwd, tags, folder_id, " +
@@ -177,7 +199,7 @@ class BackupRestoreMigrationIntegrationTest {
             )
             database.conversationModelContextDao().insertOnce(
                 listOf(
-                    ConversationModelContextEntity(
+                    historicalContextRow(
                         ownerNodeId = ownerNodeId.toString(),
                         ownerMessageId = ownerMessageId.toString(),
                         anchorNodeId = anchorNodeId.toString(),
@@ -187,7 +209,7 @@ class BackupRestoreMigrationIntegrationTest {
                 ),
             )
             assertEquals(content, repository.getConversationSnapshotById(conversationId)!!
-                .modelContextEntries.single().content)
+                .modelContextEntries.single().inlineContextText())
         } finally {
             database.close()
         }
@@ -199,23 +221,12 @@ class BackupRestoreMigrationIntegrationTest {
      */
     @Test
     fun durableV4Db10RestorePreservesCanonicalContextRows() = runBlocking {
-        val content = ConversationDisclosureSnapshotService.render(
-            ConversationDisclosureSnapshotService.Candidate(
-                assistant = Settings().assistants.first(),
-                allAssistants = Settings().assistants,
-                memories = listOf(
-                    net.weero.measix.pilot.data.model.AssistantMemory(
-                        id = 1,
-                        content = "sentinel memory",
-                    ),
-                ),
-            ),
-        )
+        val content = """{"type":"conversation_disclosure_snapshot","format":2,"memory":{"enabled":true,"scope":"local","header":["id","content"],"rows":[[1,"sentinel memory"]]},"sub_assistants":{"mode":"disabled","header":["id","name","description"],"rows":[]},"enterprise_memory_seeds":{"header":["id","content"],"rows":[]}}"""
         val sourceV10 = "restore-source-v10"
         context.deleteDatabase(sourceV10)
-        migrationHelper.createDatabase(sourceV10, 9).use { }
+        migrationHelper.createDatabase(context.getDatabasePath(sourceV10).absolutePath, 9).use { }
         val migrated = migrationHelper.runMigrationsAndValidate(
-            sourceV10, 10, true,
+            context.getDatabasePath(sourceV10).absolutePath, 10, true,
             Migration_1_2, Migration_2_3, Migration_3_4, Migration_4_5, Migration_5_6,
             Migration_6_7, Migration_7_8, Migration_8_9, Migration_9_10,
         )
@@ -290,12 +301,12 @@ class BackupRestoreMigrationIntegrationTest {
                 )
                 val loaded = repository.getConversationSnapshotById(conversationId)
                 assertNotNull(loaded)
-                assertEquals(listOf(content), loaded!!.modelContextEntries.map { it.content })
+                assertEquals(listOf(content), loaded!!.modelContextEntries.map { it.inlineContextText() })
                 assertEquals(
                     content,
                     database.conversationModelContextDao()
-                        .findByOwner(ownerNodeId.toString(), ownerMessageId.toString())
-                        ?.content,
+                        .findById(net.weero.measix.pilot.data.model.contextEntryIdentity(ownerNodeId, ownerMessageId, 0).toString())
+                        ?.inlineContextText(),
                 )
             } finally {
                 database.close()
@@ -316,12 +327,12 @@ class BackupRestoreMigrationIntegrationTest {
     fun interruptedV19RestoreRollsBackBeforeMigratingItsOriginalInput() = assertPublishedV5Restore("interrupted")
 
     private fun assertPublishedV5Restore(entry: String) = runBlocking {
-        migrationHelper.createDatabase(sourceName, 5).use { db ->
+        migrationHelper.createDatabase(context.getDatabasePath(sourceName).absolutePath, 5).use { db ->
             db.execSQL("INSERT INTO managed_files(id,folder,relative_path,display_name,mime_type,size_bytes,created_at,updated_at) VALUES(9,'upload','upload/legacy.txt','legacy','text/plain',6,1,1)")
             db.execSQL("INSERT INTO managed_files(id,folder,relative_path,display_name,mime_type,size_bytes,created_at,updated_at) VALUES(123,'upload','upload/deleted.txt','deleted','text/plain',1,1,1)")
             db.execSQL("DELETE FROM managed_files WHERE id=123")
         }
-        migrationHelper.runMigrationsAndValidate(sourceName, 11, true,
+        migrationHelper.runMigrationsAndValidate(context.getDatabasePath(sourceName).absolutePath, 11, true,
             Migration_5_6, Migration_6_7, Migration_7_8, Migration_8_9, Migration_9_10, Migration_10_11).use { db ->
             val columns = buildList {
                 db.query("PRAGMA table_info(artifact)").use { while (it.moveToNext()) add(it.getString(1)) }
@@ -353,7 +364,7 @@ class BackupRestoreMigrationIntegrationTest {
         val original = File(pending, BackupArchiveService.DATABASE_ENTRY).readBytes()
         val originalSettings = File(pending, BackupArchiveService.SETTINGS_ENTRY).readBytes()
         if (entry == "interrupted") {
-            migrationHelper.createDatabase("measix_pilot", 11).close()
+            migrationHelper.createDatabase(context.getDatabasePath("measix_pilot").absolutePath, 11).close()
             val live = context.getDatabasePath("measix_pilot")
             val rollback = File(pending.parentFile, "rollback").apply { mkdirs() }
             assertTrue(live.renameTo(File(rollback, live.name)))
@@ -393,6 +404,47 @@ class BackupRestoreMigrationIntegrationTest {
             assertTrue(!File(pending.parentFile, "completed").exists())
             assertTrue(!File(pending.parentFile, "publication").exists())
         }
+    }
+
+    @Test
+    fun personalBackupRestorePreservesLiveLargeEnterpriseOpeningThroughMergeAndRepository() = runBlocking {
+        val opening = largeConversationOpening()
+        val original = ConversationOpeningCodec.encode(opening)
+        // Personal archives exclude enterprise content; bootstrap must retain the live enterprise graph.
+        val source = createAppDatabase(context, "measix_pilot")
+        try {
+            source.conversationDao().insert(ConversationEntity(conversationId.toString(), opening.assistant.toString(),
+                "Original enterprise opening", 1, 1, "[]", false,
+                scope = ConfigurationScope.Enterprise(opening.assistant.authority, "user")))
+            val user = UIMessage.user("edited user prompt").copy(id = anchorMessageId)
+            source.openHelper.writableDatabase.execSQL(
+                "INSERT INTO message_node(id,conversation_id,node_index,messages,select_index,transcript_schema) VALUES(?,?,?,?,0,3)",
+                arrayOf<Any>(anchorNodeId.toString(), conversationId.toString(), 0, JsonInstant.encodeToString(listOf(user))))
+            source.conversationModelContextDao().insertOpeningOnce(ConversationOpeningEntity(conversationId.toString(), original))
+            source.openHelper.writableDatabase.query("PRAGMA wal_checkpoint(FULL)").use { while (it.moveToNext()) Unit }
+        } finally { source.close() }
+        val personal = createAppDatabase(context, sourceName)
+        try { personal.openHelper.writableDatabase } finally { personal.close() }
+        createDurableArchive(context.getDatabasePath(sourceName), archive, version = BackupArchiveService.MANIFEST_VERSION)
+        val catalog = mockk<McpCatalogStore>(relaxed = true)
+        coEvery { catalog.snapshotForBackup(any()) } returns emptyList()
+        val service = BackupArchiveService(context, mockk<SettingsStore>(relaxed = true), catalog, JsonInstant,
+            mockk(), mockk(), mockk<GeneratedMediaStore>())
+        service.stageRestore(archive, BackupSelection(true, true))
+        PendingBackupRestore.applyBeforeDatabaseOpen(context,
+            readSettings = { net.weero.measix.pilot.data.datastore.UserSettingsDocument.empty() })
+        val restored = createAppDatabase(context, "measix_pilot")
+        try {
+            assertEquals(original, restored.conversationModelContextDao().getOpening(conversationId.toString())?.payload)
+            val repository = ConversationRepository(restored.conversationDao(), restored.messageNodeDao(), restored.favoriteDao(),
+                restored, mockk<MessageFtsManager>(relaxed = true), restored.turnExecutionDao(), restored.toolExecutionDao(),
+                restored.conversationModelContextDao(), mockk<ArtifactStore>(relaxed = true))
+            val snapshot = requireNotNull(repository.getConversationSnapshotById(conversationId))
+            assertEquals(opening, snapshot.opening)
+            assertEquals("edited user prompt", snapshot.currentMessages().single().parts.filterIsInstance<UIMessagePart.Text>().single().text)
+            assertTrue(snapshot.contextAdmissions.isEmpty())
+            assertTrue(snapshot.modelContextEntries.isEmpty())
+        } finally { restored.close() }
     }
 
     private fun createDurableArchive(database: File, target: File, version: String = "rikkahub-durable-v4", payloads: Map<String, ByteArray> = emptyMap(), settingsOverride: Settings? = null) {

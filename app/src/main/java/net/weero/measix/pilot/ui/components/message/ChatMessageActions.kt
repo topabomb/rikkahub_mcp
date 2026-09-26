@@ -1,4 +1,4 @@
-﻿package net.weero.measix.pilot.ui.components.message
+package net.weero.measix.pilot.ui.components.message
 
 import androidx.compose.foundation.LocalIndication
 import androidx.compose.foundation.clickable
@@ -214,6 +214,7 @@ fun ChatMessageActionsSheet(
     onSelectAndCopy: () -> Unit,
     isFavorite: Boolean = false,
     onToggleFavorite: (() -> Unit)? = null,
+    onContext: (() -> Unit)? = null,
     onWebViewPreview: () -> Unit,
     onDismissRequest: () -> Unit
 ) {
@@ -228,6 +229,12 @@ fun ChatMessageActionsSheet(
             verticalArrangement = Arrangement.spacedBy(8.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
+            if (onContext != null) {
+                Card(onClick = { onDismissRequest(); onContext() }, shape = MaterialTheme.shapes.medium) {
+                    Text(stringResource(R.string.context_title),
+                        modifier = Modifier.fillMaxWidth().padding(16.dp), style = MaterialTheme.typography.titleMedium)
+                }
+            }
             // Select and Copy
             Card(
                 onClick = {

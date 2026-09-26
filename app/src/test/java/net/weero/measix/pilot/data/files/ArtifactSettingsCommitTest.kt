@@ -222,7 +222,7 @@ internal class ArtifactSettingsCommitTest {
         val database = Room.inMemoryDatabaseBuilder(app, AppDatabase::class.java).build()
         val payload = ArtifactPayloadStore(context)
         val artifacts = ArtifactStore(payload, database.artifactDao(), database.artifactReferenceDao(), database.systemMetaDao(),
-            database.conversationDao(), database.messageNodeDao(), ArtifactSettingsCoordinator(settings), RoomDatabaseTransactionRunner(database))
+            database.conversationDao(), database.messageNodeDao(), database.conversationModelContextDao(), ArtifactSettingsCoordinator(settings), RoomDatabaseTransactionRunner(database))
         try {
             artifacts.ensureReferenceProjection()
             withTimeout(15_000) { block(Environment(settings, disk, database, payload, artifacts)) }

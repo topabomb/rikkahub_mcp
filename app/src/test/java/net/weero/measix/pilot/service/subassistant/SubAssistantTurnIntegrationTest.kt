@@ -253,7 +253,7 @@ class SubAssistantTurnIntegrationTest {
             var pausedStepId: Uuid? = null
             var pausedLocalCallId: Uuid? = null
             val worker = appScope.async(start = CoroutineStart.LAZY) {
-                val started = TurnCommitter.start(commands, runtime, turnId, disclosureCandidate(), finalizer)
+                val started = TurnCommitter.start(commands, runtime, turnId, finalizer)
                 runner.run(turnRunInputsFixture(
                     conversationId = runtime.id, settings = settings, model = model,
                     mediaCapabilities = me.rerere.ai.provider.RequestMediaCapabilities.NONE,

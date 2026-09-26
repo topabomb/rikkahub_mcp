@@ -20,6 +20,7 @@ sealed interface ConversationOpenRequest {
         override val id: Uuid,
         override val access: RealmAccess,
         val assistantId: ConfigurationReference,
+        val starter: StarterOpeningReference? = null,
     ) : ConversationOpenRequest
 
     @Serializable
@@ -27,6 +28,23 @@ sealed interface ConversationOpenRequest {
         override val id: Uuid,
         override val access: RealmAccess,
     ) : ConversationOpenRequest
+}
+
+/** Navigation carries content identity and provenance, never enterprise prompt bodies. */
+@Serializable
+data class StarterOpeningReference(
+    val reference: ConfigurationReference.Enterprise,
+    val definitionHash: String,
+    val releaseId: String,
+    val generation: Long,
+    val snapshotHash: String,
+) {
+    init {
+        require(definitionHash.matches(Regex("[0-9a-f]{64}")) && generation > 0 &&
+            releaseId.matches(Regex("rel_[0-9a-f-]{36}")) && snapshotHash.matches(Regex("sha256:[0-9a-f]{64}"))) {
+            "invalid_starter_opening_reference"
+        }
+    }
 }
 
 /** Opaque page ownership; closing or revoking it cannot authorize a later subscription. */

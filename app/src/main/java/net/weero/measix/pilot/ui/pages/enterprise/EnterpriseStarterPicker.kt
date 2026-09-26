@@ -174,6 +174,9 @@ internal fun EnterpriseStarterPicker(
                     Text(stringResource(R.string.enterprise_starter_preview), style = MaterialTheme.typography.titleMedium)
                     SelectionContainer { Text(starter.prompt) }
                     Text(stringResource(R.string.enterprise_starters_description), style = MaterialTheme.typography.bodySmall)
+                    if (starter.openingAvailable) net.weero.measix.pilot.ui.components.ai.StarterOpeningContext(starter.target) {
+                        queries.readEnterpriseStarterDetails(starter.target)
+                    }
                 }
                 Button(
                     onClick = {

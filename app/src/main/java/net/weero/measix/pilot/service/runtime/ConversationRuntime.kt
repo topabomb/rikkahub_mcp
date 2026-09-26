@@ -18,7 +18,6 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import me.rerere.ai.ui.UIMessage
-import net.weero.measix.pilot.data.ai.request.TurnModelContextProjection
 import net.weero.measix.pilot.data.model.Conversation
 import net.weero.measix.pilot.data.enterprise.RealmAccess
 import java.util.concurrent.ConcurrentHashMap
@@ -92,7 +91,6 @@ class ConversationRuntime internal constructor(
         handle: TurnHandle? = null,
         phase: TurnLivePhase = TurnLivePhase.PREPARING,
         turnContext: TurnContext? = null,
-        modelContextProjection: TurnModelContextProjection? = null,
         var modelExecutionLease: ModelExecutionLease? = null,
         var mcpExecutionLease: McpExecutionLease? = null,
     ) {
@@ -100,7 +98,6 @@ class ConversationRuntime internal constructor(
         private val _phase = AtomicReference(phase)
         private val _handle = AtomicReference(handle)
         private val _turnContext = AtomicReference(turnContext)
-        private val _modelContextProjection = AtomicReference(modelContextProjection)
         private val _cancelReason = AtomicReference<String?>(null)
         private val _processingText = AtomicReference<String?>(null)
 
@@ -112,7 +109,6 @@ class ConversationRuntime internal constructor(
          */
         val turnContext: TurnContext
             get() = requireNotNull(_turnContext.get()) { "turn context is missing for turn $turnId" }
-        val modelContextProjection: TurnModelContextProjection? get() = _modelContextProjection.get()
         val processingText: String? get() = _processingText.get()
         val workerIdentity: Int get() = System.identityHashCode(worker)
 
@@ -121,12 +117,6 @@ class ConversationRuntime internal constructor(
         fun bindTurnContext(context: TurnContext) {
             check(_turnContext.compareAndSet(null, context)) {
                 "turn context is already bound for turn $turnId"
-            }
-        }
-
-        fun bindModelContextProjection(projection: TurnModelContextProjection) {
-            check(_modelContextProjection.compareAndSet(null, projection)) {
-                "model context projection is already bound for turn $turnId"
             }
         }
 
@@ -379,34 +369,6 @@ class ConversationRuntime internal constructor(
         return current.turnContext
     }
 
-    /**
-     * Binds the START-frozen model-context projection once, right after the StartTurn
-     * transaction commits. Continuations reuse it instead of re-evaluating the
-     * applicability predicate.
-     */
-    @Synchronized
-    internal fun bindModelContextProjection(
-        turnId: Uuid,
-        worker: Job,
-        projection: TurnModelContextProjection,
-    ) {
-        val current = _activeTurn.value
-        check(current != null && current.turnId == turnId && current.worker === worker) {
-            "model context projection owner does not match turn $turnId"
-        }
-        current.bindModelContextProjection(projection)
-    }
-
-    internal fun requireTurnModelContextProjection(turnId: Uuid, worker: Job): TurnModelContextProjection {
-        val current = _activeTurn.value
-        check(current != null && current.turnId == turnId && current.worker === worker) {
-            "model context projection owner does not match turn $turnId"
-        }
-        return requireNotNull(current.modelContextProjection) {
-            "model context projection is missing for turn $turnId"
-        }
-    }
-
     internal fun activeTurnPresentationFacts(): ActiveTurnPresentationFacts? {
         val current = _activeTurn.value ?: return null
         return ActiveTurnPresentationFacts(
@@ -465,7 +427,6 @@ class ConversationRuntime internal constructor(
         phase: TurnLivePhase = TurnLivePhase.PREPARING,
         supersedeReason: String? = null,
         turnContext: TurnContext? = null,
-        modelContextProjection: TurnModelContextProjection? = null,
         modelExecutionLease: ModelExecutionLease? = null,
         mcpExecutionLease: McpExecutionLease? = null,
     ): InstalledTurnWorker {
@@ -482,7 +443,6 @@ class ConversationRuntime internal constructor(
             handle = handle,
             phase = phase,
             turnContext = turnContext,
-            modelContextProjection = modelContextProjection,
             modelExecutionLease = modelExecutionLease,
             mcpExecutionLease = mcpExecutionLease,
         )
@@ -533,9 +493,6 @@ class ConversationRuntime internal constructor(
             )
         }
         val context = current.turnContext
-        val projection = requireNotNull(current.modelContextProjection) {
-            "continuation ${handle.turnId} has no model context projection"
-        }
         check(!current.releaseStarted) { "turn_execution_release_started" }
         return installTurnWorker(
             turnId = handle.turnId,
@@ -543,7 +500,6 @@ class ConversationRuntime internal constructor(
             handle = handle,
             phase = TurnLivePhase.PREPARING,
             turnContext = context,
-            modelContextProjection = projection,
             modelExecutionLease = current.modelExecutionLease,
             mcpExecutionLease = current.mcpExecutionLease,
         ).also { current.modelExecutionLease = null; current.mcpExecutionLease = null }
@@ -762,6 +718,8 @@ internal fun TurnStreamProjection.matches(handle: TurnHandle): Boolean =
 
 internal fun Conversation.toSnapshot(
     modelContextEntries: List<net.weero.measix.pilot.data.model.ConversationModelContextEntry> = emptyList(),
+    contextAdmissions: List<net.weero.measix.pilot.data.model.ConversationContextAdmission> = emptyList(),
+    opening: net.weero.measix.pilot.data.model.ConversationOpening? = null,
 ): ConversationAggregateSnapshot = ConversationAggregateSnapshot(
     conversationId = id,
     header = ConversationHeader(
@@ -783,4 +741,6 @@ internal fun Conversation.toSnapshot(
     nodes = messageNodes,
     // durable context 只进入 internal aggregate，不进入 public Conversation。
     modelContextEntries = modelContextEntries,
+    contextAdmissions = contextAdmissions,
+    opening = opening,
 )

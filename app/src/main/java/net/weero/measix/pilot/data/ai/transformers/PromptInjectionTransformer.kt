@@ -1,188 +1,81 @@
 package net.weero.measix.pilot.data.ai.transformers
-import net.weero.measix.pilot.service.turn.ResolvedPromptInjection
 
 import me.rerere.ai.core.MessageRole
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
 import net.weero.measix.pilot.data.ai.request.SyntheticMessageKind
 import net.weero.measix.pilot.data.model.InjectionPosition
-import kotlin.uuid.Uuid
+import net.weero.measix.pilot.service.turn.ResolvedPromptInjection
 
-/**
- * 提示词注入转换器
- *
- * 根据 Assistant 关联的 ModeInjection 进行提示词注入
- */
 object PromptInjectionTransformer : InputMessageTransformer {
-    override suspend fun transform(
-        ctx: TransformerContext,
-        messages: List<UIMessage>,
-    ): List<UIMessage> {
-        val transformed = transformMessages(
+    override suspend fun transform(ctx: TransformerContext, messages: List<UIMessage>): List<UIMessage> =
+        transformMessages(
             messages = messages,
             injections = ctx.promptInputs.promptInjections,
-        )
-        if (transformed === messages) return messages
-        // 注入产生的新消息，以及被注入内容改写过的既有 System，都是本次请求的合成内容
-        val originalById = HashMap<Uuid, UIMessage>(messages.size).apply {
-            messages.forEach { message -> put(message.id, message) }
-        }
-        transformed.forEach { message ->
-            if (originalById[message.id] !== message) {
+            isHistory = { !ctx.requestOrigins.isSynthetic(it) },
+            onInjection = { message, rules ->
                 ctx.requestOrigins.markSynthetic(message, SyntheticMessageKind.PROMPT_INJECTION)
-            }
-        }
-        return transformed
-    }
+                message.parts.filterIsInstance<UIMessagePart.Text>().zip(rules).forEach { (part, rule) ->
+                    ctx.requestOrigins.markPart(part, RequestPartSource.PromptRule(rule))
+                }
+            },
+        )
 }
 
-/**
- * 核心注入逻辑（可测试的纯函数）
- */
+/** Resolve every position against the same retained history before adding request projections. */
 internal fun transformMessages(
     messages: List<UIMessage>,
     injections: List<ResolvedPromptInjection>,
+    isHistory: (UIMessage) -> Boolean = { true },
+    onInjection: (UIMessage, List<ResolvedPromptInjection>) -> Unit = { _, _ -> },
 ): List<UIMessage> {
     if (injections.isEmpty()) return messages
-    return applyInjections(
-        messages = messages,
-        byPosition = injections.sortedByDescending { it.priority }.groupBy { it.position },
-    )
-}
-
-/**
- * 应用注入到消息列表
- */
-internal fun applyInjections(
-    messages: List<UIMessage>,
-    byPosition: Map<InjectionPosition, List<ResolvedPromptInjection>>
-): List<UIMessage> {
-    val result = messages.toMutableList()
-
-    // 找到系统消息的索引（通常是第一条）
-    val systemIndex = result.indexOfFirst { it.role == MessageRole.SYSTEM }
-
-    // 处理 BEFORE_SYSTEM_PROMPT 和 AFTER_SYSTEM_PROMPT
-    if (systemIndex >= 0) {
-        val beforeContent = byPosition[InjectionPosition.BEFORE_SYSTEM_PROMPT]
-            ?.joinToString("\n") { it.content } ?: ""
-        val afterContent = byPosition[InjectionPosition.AFTER_SYSTEM_PROMPT]
-            ?.joinToString("\n") { it.content } ?: ""
-
-        if (beforeContent.isNotEmpty() || afterContent.isNotEmpty()) {
-            val systemMessage = result[systemIndex]
-            val originalText = systemMessage.parts
-                .filterIsInstance<UIMessagePart.Text>()
-                .joinToString("") { it.text }
-
-            val newText = buildString {
-                if (beforeContent.isNotEmpty()) {
-                    append(beforeContent)
-                    appendLine()
-                }
-                append(originalText)
-                if (afterContent.isNotEmpty()) {
-                    appendLine()
-                    append(afterContent)
+    val ordered = injections.sortedByDescending { it.priority }
+    val historyIndices = messages.indices.filter {
+        messages[it].role != MessageRole.SYSTEM && isHistory(messages[it]) &&
+            messages[it].parts.any { part -> part !is UIMessagePart.Step }
+    }
+    val history = historyIndices.map(messages::get)
+    val atBoundary = linkedMapOf<Int, MutableList<ResolvedPromptInjection>>()
+    for (rule in ordered) {
+        val historyIndex = when (rule.position) {
+            InjectionPosition.TOP_OF_CHAT -> history.indexOfFirst { it.role == MessageRole.USER }
+                .takeIf { it >= 0 } ?: history.size
+            InjectionPosition.BOTTOM_OF_CHAT -> (history.size - 1).coerceAtLeast(0)
+            InjectionPosition.AT_DEPTH -> (history.size - rule.injectDepth.coerceAtLeast(1)).coerceAtLeast(0)
+            else -> continue
+        }
+        val safe = findSafeInsertIndex(history, historyIndex)
+        var boundary = historyIndices.getOrNull(safe) ?: messages.size
+        // Keep a time reminder next to its USER instead of inserting a rule between the pair.
+        val precedingHistory = historyIndices.getOrNull(safe - 1) ?: -1
+        while (boundary > precedingHistory + 1 && messages[boundary - 1].role != MessageRole.SYSTEM) boundary--
+        atBoundary.getOrPut(boundary) { mutableListOf() } += rule
+    }
+    return buildList {
+        for (index in 0..messages.size) {
+            atBoundary[index]?.let { rules ->
+                var start = 0
+                while (start < rules.size) {
+                    var end = start + 1
+                    while (end < rules.size && rules[end].role == rules[start].role) end++
+                    val group = rules.subList(start, end)
+                    val injection = UIMessage(role = rules[start].role, parts = group.map { UIMessagePart.Text(it.content) })
+                    onInjection(injection, group)
+                    add(injection)
+                    start = end
                 }
             }
-
-            result[systemIndex] = systemMessage.copy(
-                parts = listOf(UIMessagePart.Text(newText))
-            )
-        }
-    } else {
-        // 没有系统消息时，创建一个新的系统消息
-        val beforeContent = byPosition[InjectionPosition.BEFORE_SYSTEM_PROMPT]
-            ?.joinToString("\n") { it.content } ?: ""
-        val afterContent = byPosition[InjectionPosition.AFTER_SYSTEM_PROMPT]
-            ?.joinToString("\n") { it.content } ?: ""
-
-        val combinedContent = buildString {
-            if (beforeContent.isNotEmpty()) {
-                append(beforeContent)
-            }
-            if (afterContent.isNotEmpty()) {
-                if (isNotEmpty()) appendLine()
-                append(afterContent)
-            }
-        }
-
-        if (combinedContent.isNotEmpty()) {
-            result.add(0, UIMessage.system(combinedContent))
+            if (index == messages.size) break
+            add(messages[index])
         }
     }
-
-    // 处理 TOP_OF_CHAT：在第一条用户消息之前插入
-    val topInjections = byPosition[InjectionPosition.TOP_OF_CHAT]
-    if (!topInjections.isNullOrEmpty()) {
-        var insertIndex = result.indexOfFirst { it.role == MessageRole.USER }
-            .takeIf { it >= 0 } ?: result.size
-        insertIndex = findSafeInsertIndex(result, insertIndex)
-        createMergedInjectionMessages(topInjections).forEach { message ->
-            result.add(insertIndex, message)
-            insertIndex++
-        }
-    }
-
-    // 处理 BOTTOM_OF_CHAT：在最后一条消息之前插入
-    val bottomInjections = byPosition[InjectionPosition.BOTTOM_OF_CHAT]
-    if (!bottomInjections.isNullOrEmpty()) {
-        var insertIndex = (result.size - 1).coerceAtLeast(0)
-        insertIndex = findSafeInsertIndex(result, insertIndex)
-        createMergedInjectionMessages(bottomInjections).forEach { message ->
-            result.add(insertIndex, message)
-            insertIndex++
-        }
-    }
-
-    // 处理 AT_DEPTH：在指定深度位置插入
-    val atDepthInjections = byPosition[InjectionPosition.AT_DEPTH]
-    if (!atDepthInjections.isNullOrEmpty()) {
-        val byDepth = atDepthInjections.groupBy { it.injectDepth }
-        byDepth.keys.sortedDescending().forEach { depth ->
-            val injections = byDepth[depth] ?: return@forEach
-            var insertIndex = (result.size - depth.coerceAtLeast(1)).coerceIn(0, result.size)
-            insertIndex = findSafeInsertIndex(result, insertIndex)
-            createMergedInjectionMessages(injections).forEach { message ->
-                result.add(insertIndex, message)
-                insertIndex++
-            }
-        }
-    }
-
-    return result
-}
-
-private fun createMergedInjectionMessages(injections: List<ResolvedPromptInjection>): List<UIMessage> {
-    return injections
-        .groupBy { it.role }
-        .map { (role, grouped) ->
-            val mergedContent = grouped.joinToString("\n") { it.content }
-            when (role) {
-                MessageRole.ASSISTANT -> UIMessage.assistant(mergedContent)
-                else -> UIMessage.user(mergedContent)
-            }
-        }
 }
 
 internal fun findSafeInsertIndex(messages: List<UIMessage>, targetIndex: Int): Int {
     var index = targetIndex.coerceIn(0, messages.size)
-
-    while (index > 0) {
-        val prevMessage = messages.getOrNull(index - 1)
-        val currentMessage = messages.getOrNull(index)
-
-        val isPrevUser = prevMessage?.role == MessageRole.USER
-        val isCurrentAssistantWithTools = currentMessage?.role == MessageRole.ASSISTANT
-            && currentMessage.getTools().isNotEmpty()
-
-        if (isPrevUser && isCurrentAssistantWithTools) {
-            index--
-        } else {
-            break
-        }
-    }
-
+    while (index > 0 && messages.getOrNull(index)?.let {
+        it.role == MessageRole.ASSISTANT && it.getTools().isNotEmpty()
+    } == true && messages[index - 1].role == MessageRole.USER) index--
     return index
 }

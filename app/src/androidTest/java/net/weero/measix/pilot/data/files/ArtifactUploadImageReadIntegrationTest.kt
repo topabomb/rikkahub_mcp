@@ -72,6 +72,7 @@ class ArtifactUploadImageReadIntegrationTest {
             systemMetaDAO = database.systemMetaDao(),
             conversationDAO = database.conversationDao(),
             messageNodeDAO = database.messageNodeDao(),
+            contextDAO = database.conversationModelContextDao(),
             settingsCoordinator = ArtifactSettingsCoordinator(SettingsStore(application, appScope)),
             transactionRunner = RoomDatabaseTransactionRunner(database),
         )
@@ -127,7 +128,7 @@ class ArtifactUploadImageReadIntegrationTest {
             val submission = draft.claimSubmission(draft.target, listOf(document))
             val artifact = store.list(ConfigurationScope.Personal).single()
             if (closed) draft.close()
-            draft.returnUnaccepted(submission)
+            draft.returnToDraft(submission)
             if (!closed) {
                 assertTrue(store.deleteUserRequested(ConfigurationScope.Personal, artifact.id) is ArtifactDeleteResult.Rejected)
                 draft.close()

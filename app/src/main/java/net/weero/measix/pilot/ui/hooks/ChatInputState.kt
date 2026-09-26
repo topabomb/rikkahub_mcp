@@ -11,12 +11,45 @@ import kotlin.uuid.Uuid
 
 class ChatInputState {
     val textContent = TextFieldState()
-    var messageContent by mutableStateOf(listOf<UIMessagePart>())
+    private data class InputAttachment(val part: UIMessagePart, val identity: Any = Any())
+    private var attachments by mutableStateOf(emptyList<InputAttachment>())
+    var messageContent: List<UIMessagePart>
+        get() = attachments.map { it.part }
+        set(value) {
+            val retained = attachments.toMutableList()
+            attachments = value.map { part ->
+                val index = retained.indexOfFirst { it.part === part }
+                if (index >= 0) retained.removeAt(index) else InputAttachment(part)
+            }
+        }
     var editingMessage by mutableStateOf<Uuid?>(null)
     private var editingParts: List<UIMessagePart>? = null
     private var editingAttachmentUrls: Set<String> = emptySet()
+    private var inputIdentity = Any()
+
+    internal class Submission internal constructor(
+        internal val identity: Any,
+        internal val text: String,
+        internal val attachmentIdentities: Set<Any>,
+        internal val editingMessage: Uuid?,
+        val contents: List<UIMessagePart>,
+    )
+
+    internal fun captureSubmission() = Submission(
+        inputIdentity, textContent.text.toString(), attachments.mapTo(mutableSetOf()) { it.identity }, editingMessage, getContents(),
+    )
+
+    /** A completed append owns its captured input, never edits made while it was waiting. */
+    internal fun completeSubmission(submission: Submission) {
+        if (submission.identity !== inputIdentity || submission.editingMessage != editingMessage) return
+        if (textContent.text.toString() == submission.text) textContent.setTextAndPlaceCursorAtEnd("")
+        // Equal file payloads can be removed and selected again while append is pending.
+        attachments = attachments.filterNot { it.identity in submission.attachmentIdentities }
+        inputIdentity = Any()
+    }
 
     fun clearInput() {
+        inputIdentity = Any()
         textContent.setTextAndPlaceCursorAtEnd("")
         messageContent = emptyList()
         editingMessage = null
@@ -35,6 +68,7 @@ class ChatInputState {
     }
 
     fun setContents(contents: List<UIMessagePart>) {
+        inputIdentity = Any()
         val lastTextIndex = contents.indexOfLast { it is UIMessagePart.Text }
         val text = if (lastTextIndex >= 0) {
             (contents[lastTextIndex] as UIMessagePart.Text).text

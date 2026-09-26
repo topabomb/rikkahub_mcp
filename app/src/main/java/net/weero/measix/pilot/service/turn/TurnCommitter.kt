@@ -27,7 +27,6 @@ import net.weero.measix.pilot.data.ai.transformers.RegexOutputTransformer
 import net.weero.measix.pilot.data.ai.transformers.ThinkTagTransformer
 import net.weero.measix.pilot.data.ai.transformers.TimeReminderTransformer
 import net.weero.measix.pilot.data.ai.transformers.ToolArtifactReplayTransformer
-import net.weero.measix.pilot.data.ai.transformers.WorkspaceReminderTransformer
 import net.weero.measix.pilot.data.ai.transformers.TemplateTransformer
 import net.weero.measix.pilot.data.db.entity.TurnExecutionStatus
 import net.weero.measix.pilot.service.turn.TurnFinalizer
@@ -50,6 +49,17 @@ class TurnCommitter(
     private val handle: TurnHandle,
     private val turnFinalizer: TurnFinalizer,
 ) {
+    internal val requestContext: TurnRequestContextAccess = object : TurnRequestContextAccess {
+        override suspend fun read(): TurnRequestHistory = commandCoordinator.readRequestContext(handle)
+
+        override suspend fun admit(
+            entries: List<net.weero.measix.pilot.data.model.ConversationModelContextEntry>,
+            admission: net.weero.measix.pilot.data.model.ConversationContextAdmission,
+        ) {
+            commandCoordinator.executeOrThrow(runtime.id,
+                net.weero.measix.pilot.service.runtime.AdmitRequestContext(handle, entries, admission))
+        }
+    }
     /** turn 骨架启动结果：新 Assistant owner slot id（START 恒新建；continuation 携带活动消息）与权威 handle。 */
     data class StartedTurn(
         val turnCommitter: TurnCommitter,
@@ -58,28 +68,17 @@ class TurnCommitter(
         val resumableMessage: UIMessage?,
     )
 
-    /**
-     * turn 生命周期骨架唯一实现（Master 与 Target 共用）。
-     *
-     * `START` 没有 slot 复用分支：每个新 Turn 预生成全新的 Assistant node/message，由
-     * [TurnTransition.planStartTarget] 得到结构变换后的目标 selected branch 与因果
-     * USER anchor，随 [StartTurn] 在同一事务提交 Assistant slot、turn_execution 与可选
-     * model-context entry。审批 / ask-user 恢复走 [continueActive]，保留原 handle。
-     *
-     * @param modelContextCandidate 本次 START 捕获的完整 canonical Disclosure candidate
-     */
+    /** START commits the new assistant slot and turn; request context is admitted separately. */
     companion object {
         suspend fun start(
             commandCoordinator: ConversationCommandCoordinator,
             runtime: ConversationRuntime,
             turnId: Uuid,
-            modelContextCandidate: String,
             turnFinalizer: TurnFinalizer,
         ): StartedTurn {
             val command = TurnTransition.buildStartTurnCommand(
                 current = runtime.durable,
                 turnId = turnId,
-                modelContextCandidate = modelContextCandidate,
             )
             val handle = commandCoordinator.startTurn(runtime.id, command)
             runtime.markRunning(handle)
@@ -338,7 +337,6 @@ sealed interface TurnOutcome : TurnRunResult {
  */
 class TurnPipelineFactory(
     private val templateTransformer: TemplateTransformer,
-    private val workspaceReminderTransformer: WorkspaceReminderTransformer,
     private val toolArtifactReplayTransformer: ToolArtifactReplayTransformer,
     private val attachmentProjectionTransformer: AttachmentProjectionTransformer,
     private val base64ImageToLocalFileTransformer: Base64ImageToLocalFileTransformer,
@@ -366,7 +364,6 @@ class TurnPipelineFactory(
     fun input(turnKind: TurnKind): List<InputMessageTransformer> = buildList {
         addAll(baseInput)
         add(templateTransformer)
-        add(workspaceReminderTransformer)
         if (turnKind == TurnKind.USER) {
             add(toolArtifactReplayTransformer)
         }

@@ -1,6 +1,7 @@
 package net.weero.measix.pilot.ui.adaptive
 
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.asPaddingValues
@@ -20,6 +21,11 @@ import androidx.compose.material3.SheetValue
 import androidx.compose.material3.Surface
 import androidx.compose.material3.rememberBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import com.dokar.sonner.Toaster
+import com.dokar.sonner.ToasterState
+import net.weero.measix.pilot.ui.context.LocalToaster
+import net.weero.measix.pilot.ui.theme.LocalDarkMode
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalLayoutDirection
@@ -46,6 +52,8 @@ fun AdaptiveModal(
     sheetGesturesEnabled: Boolean = true,
     dragHandle: @Composable (() -> Unit)? = { BottomSheetDefaults.DragHandle() },
     forceDialog: Boolean = false,
+    feedback: ToasterState? = null,
+    feedbackVisible: Boolean = true,
     content: @Composable ColumnScope.() -> Unit,
 ) {
     val adaptiveInfo = LocalAdaptiveLayoutInfo.current
@@ -113,10 +121,7 @@ fun AdaptiveModal(
                     tonalElevation = 6.dp,
                     shadowElevation = 12.dp,
                 ) {
-                    Column(
-                        modifier = modifier.fillMaxWidth(),
-                        content = content,
-                    )
+                    AdaptiveModalContent(modifier, feedback, feedbackVisible, content)
                 }
             }
         }
@@ -130,10 +135,20 @@ fun AdaptiveModal(
             sheetGesturesEnabled = sheetGesturesEnabled,
             dragHandle = dragHandle,
         ) {
-            Column(
-                modifier = modifier.fillMaxWidth(),
-                content = content,
-            )
+            AdaptiveModalContent(modifier, feedback, feedbackVisible, content)
+        }
+    }
+}
+
+/** A caller-owned feedback state is displayed only by its active modal. */
+@Composable
+private fun AdaptiveModalContent(modifier: Modifier, feedback: ToasterState?, feedbackVisible: Boolean, content: @Composable ColumnScope.() -> Unit) {
+    if (feedback == null) Column(modifier.fillMaxWidth(), content = content)
+    else CompositionLocalProvider(LocalToaster provides feedback) {
+        Box(Modifier.fillMaxWidth()) {
+            Column(modifier.fillMaxWidth(), content = content)
+            if (feedbackVisible) Toaster(state = feedback, darkTheme = LocalDarkMode.current,
+                richColors = true, alignment = Alignment.TopCenter, showCloseButton = true)
         }
     }
 }

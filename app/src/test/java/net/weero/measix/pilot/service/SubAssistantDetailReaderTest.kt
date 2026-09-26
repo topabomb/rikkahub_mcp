@@ -198,7 +198,7 @@ class SubAssistantDetailReaderTest {
         val parentLease = registry.acquireRegisteredRuntime(f.master.id, parent)
         val source = ConversationViewLease(f.master.id, f.source.access, f.source.selectionRevision, closeAction = parentLease::close)
         val reader = SubAssistantDetailReader(ConversationQueryService(f.repository, registry, mockk(), mockk(), f.projector,
-            f.sessions, ApplicationRecoveryGate().apply { ready() }, mockk(), coordinator), dispatcher)
+            f.sessions, ApplicationRecoveryGate().apply { ready() }, mockk(), coordinator, mockk()), dispatcher)
         val states = mutableListOf<SubAssistantDetailUiState>()
         try {
             val first = backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { reader.observe(source, "run").toList(states) }
@@ -264,7 +264,7 @@ class SubAssistantDetailReaderTest {
         val childLease = mockk<ConversationRuntimeLease>(relaxed = true)
         val coordinator = ConversationCommandCoordinator(registry, repository, ApplicationRecoveryGate().apply { ready() }, ConversationOperationLocks())
         val reader = SubAssistantDetailReader(ConversationQueryService(repository, registry, mockk(), mockk(), projector,
-            sessions, ApplicationRecoveryGate().apply { ready() }, mockk(), coordinator), dispatcher)
+            sessions, ApplicationRecoveryGate().apply { ready() }, mockk(), coordinator, mockk()), dispatcher)
 
         init {
             every { masterRuntime.snapshot } returns masterSnapshots

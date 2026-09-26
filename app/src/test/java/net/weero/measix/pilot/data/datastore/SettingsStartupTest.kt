@@ -75,6 +75,27 @@ class SettingsStartupTest {
         } finally { scope.cancel() }
     }
 
+    @Test fun `clearing a recent conversation preserves other scopes and saved selections`() = runTest {
+        val scope = AppScope(StandardTestDispatcher(testScheduler))
+        val settings = SettingsStore(isolatedContext(), scope, AcknowledgedPreferences())
+        val personal = net.weero.measix.pilot.data.configuration.ConfigurationScope.Personal
+        val enterprise = net.weero.measix.pilot.data.configuration.ConfigurationScope.Enterprise(
+            me.rerere.common.configuration.EnterpriseAuthority("dep_recent"), "usr_recent")
+        val personalId = kotlin.uuid.Uuid.random()
+        val enterpriseId = kotlin.uuid.Uuid.random()
+        try {
+            runCurrent()
+            val selected = settings.snapshotUserDocument().preferences.forScope(personal)
+            settings.rememberConversation(personal, personalId)
+            settings.rememberConversation(enterprise, enterpriseId)
+            assertEquals(personalId, settings.lastConversation(personal))
+            settings.rememberConversation(personal, null)
+            assertEquals(null, settings.lastConversation(personal))
+            assertEquals(enterpriseId, settings.lastConversation(enterprise))
+            assertEquals(selected, settings.snapshotUserDocument().preferences.forScope(personal))
+        } finally { scope.cancel() }
+    }
+
     @Test fun `accepted write waits for acknowledgement and publishes before propagating cancellation`() = runTest {
         val scope = AppScope(StandardTestDispatcher(testScheduler))
         val acknowledgement = CompletableDeferred<Unit>()

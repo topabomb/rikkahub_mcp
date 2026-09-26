@@ -286,7 +286,8 @@ internal class EnterpriseSessionController(
             bootstrap.device.deviceId != pending.platform.deviceId || bootstrap.deployment.deploymentId != pending.platform.connection.discovery.deploymentId) {
             fail("platform_bootstrap_identity_mismatch")
         }
-        if (bootstrap.device.status != PlatformBootstrapDeviceStatus.ACTIVE || 4L !in bootstrap.supportedSnapshotSchemaVersions) fail("platform_bootstrap_unavailable")
+        if (bootstrap.device.status != PlatformBootstrapDeviceStatus.ACTIVE) fail("platform_bootstrap_unavailable")
+        requireCurrentPlatformSnapshotSchema(bootstrap.supportedSnapshotSchemaVersions)
         val identity = EnterpriseIdentity(pending.platform.connection.authority, bootstrap.deployment.name, pending.userId, bootstrap.user.displayName)
         EnterpriseConfigurationCodec.validateIdentity(identity)
         val expires = minOf(Instant.parse(bootstrap.session.expiresAt).toEpochMilli(), Instant.parse(bootstrap.session.sessionIdleExpiresAt).toEpochMilli())
@@ -314,11 +315,8 @@ internal class EnterpriseSessionController(
         ) {
             fail("platform_bootstrap_identity_mismatch")
         }
-        if (bootstrap.device.status != PlatformBootstrapDeviceStatus.ACTIVE ||
-            4L !in bootstrap.supportedSnapshotSchemaVersions
-        ) {
-            fail("platform_bootstrap_unavailable")
-        }
+        if (bootstrap.device.status != PlatformBootstrapDeviceStatus.ACTIVE) fail("platform_bootstrap_unavailable")
+        requireCurrentPlatformSnapshotSchema(bootstrap.supportedSnapshotSchemaVersions)
         val identity = session.identity.copy(
             enterpriseName = bootstrap.deployment.name,
             userName = bootstrap.user.displayName,
@@ -357,11 +355,8 @@ internal class EnterpriseSessionController(
         ) {
             fail("enterprise_address_identity_mismatch")
         }
-        if (bootstrap.device.status != PlatformBootstrapDeviceStatus.ACTIVE ||
-            4L !in bootstrap.supportedSnapshotSchemaVersions
-        ) {
-            fail("platform_bootstrap_unavailable")
-        }
+        if (bootstrap.device.status != PlatformBootstrapDeviceStatus.ACTIVE) fail("platform_bootstrap_unavailable")
+        requireCurrentPlatformSnapshotSchema(bootstrap.supportedSnapshotSchemaVersions)
         val identity = session.identity.copy(
             enterpriseName = bootstrap.deployment.name,
             userName = bootstrap.user.displayName,
@@ -400,6 +395,16 @@ internal class EnterpriseSessionController(
         val session = requireNotNull(current.manifest.session)
         if (session.platform == null) fail("platform_session_required")
         PlatformConfigurationInput(session, withContext(Dispatchers.IO) { store.appliedCandidate(current.manifest) })
+    }
+
+    /** Keeps the selected publication and its provenance together while preparing a local opening. */
+    internal suspend fun <T> withSelectedPlatformCandidate(selection: RealmSelection, operation: suspend (EnterpriseCandidate) -> T): T = mutex.withLock {
+        val current = ensureLoaded()
+        requirePublishedSelection(selection)
+        if (selection.access !is RealmAccess.Enterprise) fail("enterprise_session_required")
+        val candidate = withContext(Dispatchers.IO) { store.appliedCandidate(current.manifest) }
+            ?: fail("enterprise_configuration_not_ready")
+        operation(candidate)
     }
 
     suspend fun recordPlatformPending(access: RealmAccess.Enterprise): EnterpriseState.Available = mutex.withLock {

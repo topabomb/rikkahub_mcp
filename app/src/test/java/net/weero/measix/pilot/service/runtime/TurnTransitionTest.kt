@@ -46,7 +46,7 @@ internal class TurnTransitionTest : ConversationTransitionTestBase() {
             TurnTransition.buildStartTurnCommand(
                 c.toSnapshot(),
                 turnId = Uuid.random(),
-                modelContextCandidate = disclosureCandidate(),
+
             )
         }
     }
@@ -60,7 +60,7 @@ internal class TurnTransitionTest : ConversationTransitionTestBase() {
         val command = TurnTransition.buildStartTurnCommand(
             c.toSnapshot(),
             turnId = Uuid.random(),
-            modelContextCandidate = disclosureCandidate(),
+
             assistantMessageId = assistantMessageId,
         )
         assertEquals(userId, command.anchorMessageId)
@@ -82,7 +82,7 @@ internal class TurnTransitionTest : ConversationTransitionTestBase() {
         val command = TurnTransition.buildStartTurnCommand(
             c.toSnapshot(),
             turnId = Uuid.random(),
-            modelContextCandidate = disclosureCandidate(),
+
             assistantMessageId = replacementId,
         )
         // variant 追加：owner node 是既有 Assistant node，anchor 是其因果 USER。
@@ -112,7 +112,7 @@ internal class TurnTransitionTest : ConversationTransitionTestBase() {
         val command = TurnTransition.buildStartTurnCommand(
             c.toSnapshot(),
             turnId = Uuid.random(),
-            modelContextCandidate = disclosureCandidate(),
+
             assistantMessageId = replacementId,
         )
         // regenerate 语义不豁免终态：旧 variant 退出目标 prefix，新 variant 追加到同一 node。
@@ -132,7 +132,7 @@ internal class TurnTransitionTest : ConversationTransitionTestBase() {
         val command = TurnTransition.buildStartTurnCommand(
             c.toSnapshot(),
             turnId = Uuid.random(),
-            modelContextCandidate = disclosureCandidate(),
+
         )
         // 并发改成另一个 USER variant：锁内重算的 prefix token 不再匹配。
         val racedUserId = Uuid.random()
@@ -168,7 +168,7 @@ internal class TurnTransitionTest : ConversationTransitionTestBase() {
             TurnTransition.buildStartTurnCommand(
                 current = initial,
                 turnId = Uuid.random(),
-                modelContextCandidate = disclosureCandidate(),
+
                 assistantMessageId = assistantMessageId,
                 epoch = 1,
             ),
@@ -379,7 +379,7 @@ internal class TurnTransitionTest : ConversationTransitionTestBase() {
             TurnTransition.buildStartTurnCommand(
                 current = base,
                 turnId = turnId,
-                modelContextCandidate = disclosureCandidate(),
+
                 assistantMessageId = assistantMessageId,
                 epoch = 1,
             ),
@@ -491,7 +491,7 @@ internal class TurnTransitionTest : ConversationTransitionTestBase() {
             TurnTransition.buildStartTurnCommand(
                 current = base,
                 turnId = Uuid.random(),
-                modelContextCandidate = disclosureCandidate(),
+
                 assistantMessageId = replacementId,
             ),
         )
@@ -700,7 +700,7 @@ internal class TurnTransitionTest : ConversationTransitionTestBase() {
     @Test
     fun `START and terminal commands preserve allocated identities and timestamps when reduced again`() {
         val current = Conversation.ofId(Uuid.random()).copy(messageNodes = listOf(MessageNode.of(user(Uuid.random())))).toSnapshot()
-        val start = TurnTransition.buildStartTurnCommand(current, Uuid.random(), disclosureCandidate())
+        val start = TurnTransition.buildStartTurnCommand(current, Uuid.random())
         val first = ConversationTransition.apply(current, start)
         val repeated = ConversationTransition.apply(current, start)
         assertEquals(first, repeated)

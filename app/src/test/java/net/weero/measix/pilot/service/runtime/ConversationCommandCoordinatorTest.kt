@@ -139,7 +139,7 @@ class ConversationCommandCoordinatorTest {
         val coordinator = coordinator(registry, repository)
         val before = runtime.snapshot.value
         runtime.publishCommitted(
-            StartTurn(turnId = Uuid.random(), assistantNodeId = Uuid.random(), assistantMessageId = Uuid.random(), anchorNodeId = Uuid.random(), anchorMessageId = Uuid.random(), expectedSelectedPrefixMessageIds = emptyList(), modelContextCandidate = "", epoch = 1L),
+            StartTurn(turnId = Uuid.random(), assistantNodeId = Uuid.random(), assistantMessageId = Uuid.random(), anchorNodeId = Uuid.random(), anchorMessageId = Uuid.random(), expectedSelectedPrefixMessageIds = emptyList(), epoch = 1L),
             before.durable,
         )
 
@@ -274,10 +274,10 @@ class ConversationCommandCoordinatorTest {
 
         coVerify(exactly = 1) { repository.commit(any()) }
         assertFalse(registry.isDraft(id))
-        val inserted = (write.captured as ConversationWrite.MaterializeDraft).conversation
-        assertEquals("configured draft", inserted.title)
-        assertEquals(updatedAssistantId, inserted.assistantId)
-        assertEquals("first", inserted.messageNodes.single().currentMessage.toText())
+        val inserted = (write.captured as ConversationWrite.MaterializeDraft).snapshot
+        assertEquals("configured draft", inserted.header.title)
+        assertEquals(updatedAssistantId, inserted.header.assistantId)
+        assertEquals("first", inserted.nodes.single().currentMessage.toText())
         assertEquals("first", draft.snapshot.value.durable.nodes.single().currentMessage.toText())
         appScope.cancel()
     }
@@ -421,7 +421,7 @@ class ConversationCommandCoordinatorTest {
             TurnTransition.buildStartTurnCommand(
                 current = runtime.durable,
                 turnId = turnId,
-                modelContextCandidate = disclosureCandidate(),
+
                 assistantMessageId = assistantMessageId,
             ),
         )
@@ -433,17 +433,13 @@ class ConversationCommandCoordinatorTest {
         assertEquals(TurnExecutionStatus.RUNNING, mutate.executionFacts?.turn?.status)
         assertEquals(assistantMessageId.toString(), mutate.executionFacts?.turn?.assistantMessageId)
         assertEquals(123L, mutate.executionFacts?.turn?.createdAt)
-        // 首次 START 的目标分支没有历史 entry：candidate 必然构成新 baseline，随同一事务插入。
-        assertEquals(
-            listOf(assistantMessageId),
-            mutate.mutation.insertedModelContextEntries.map { it.ownerMessageId },
-        )
+        assertTrue(mutate.mutation.insertedModelContextEntries.isEmpty())
         coVerify(exactly = 1) { repository.commit(any()) }
         scope.cancel()
     }
 
     /**
-     * entry 写失败不得发布 StartTurn Runtime snapshot；已提交 USER 保留：
+     * START 写失败不得发布 Runtime snapshot；已提交 USER 保留：
      * durable commit 抛错时，Runtime 仍停留在 USER-only 树，没有流式投影，也没有 Assistant slot。
      */
     @Test
@@ -469,7 +465,7 @@ class ConversationCommandCoordinatorTest {
                 TurnTransition.buildStartTurnCommand(
                     current = before.durable,
                     turnId = turnId,
-                    modelContextCandidate = disclosureCandidate(),
+
                     assistantMessageId = Uuid.random(),
                 ),
             )
@@ -502,7 +498,7 @@ class ConversationCommandCoordinatorTest {
         val command = TurnTransition.buildStartTurnCommand(
             current = runtime.durable,
             turnId = turnId,
-            modelContextCandidate = disclosureCandidate(),
+
             assistantMessageId = assistantMessageId,
         )
 
@@ -636,7 +632,7 @@ class ConversationCommandCoordinatorTest {
                 anchorNodeId = Uuid.random(),
                 anchorMessageId = Uuid.random(),
                 expectedSelectedPrefixMessageIds = emptyList(),
-                modelContextCandidate = "",
+
                 epoch = 1L,
             ),
             runtime.durable,

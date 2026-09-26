@@ -115,6 +115,22 @@
           "assistantDefinitionId": "asd_11111111-1111-4111-8111-111111111111",
           "description": "用户确认后发送",
           "enabled": true,
+          "openingSnapshot": {
+            "format": 1,
+            "initialContexts": [
+              {
+                "content": "Preserve literal {{ user }} and `code`.\nAuthored context.",
+                "id": "background",
+                "title": "Enterprise background"
+              },
+              {
+                "content": "",
+                "id": "empty-note",
+                "title": "Additional note"
+              }
+            ],
+            "systemPrompt": "按企业规范回答。"
+          },
           "prompt": "请查询企业最新信息。",
           "sortOrder": 20,
           "starterId": "str_11111111-1111-4111-8111-111111111111",
@@ -123,6 +139,11 @@
         {
           "assistantDefinitionId": "asd_22222222-2222-4222-8222-222222222222",
           "enabled": true,
+          "openingSnapshot": {
+            "format": 1,
+            "initialContexts": [],
+            "systemPrompt": "帮助用户整理周报。"
+          },
           "prompt": "请帮我整理本周工作。",
           "sortOrder": 10,
           "starterId": "str_22222222-2222-4222-8222-222222222222",
@@ -131,6 +152,11 @@
         {
           "assistantDefinitionId": "asd_11111111-1111-4111-8111-111111111111",
           "enabled": false,
+          "openingSnapshot": {
+            "format": 1,
+            "initialContexts": [],
+            "systemPrompt": "按企业规范回答。"
+          },
           "prompt": "不能自动显示或发送。",
           "sortOrder": 0,
           "starterId": "str_33333333-3333-4333-8333-333333333333",
@@ -268,6 +294,22 @@
           "assistantDefinitionId": "asd_11111111-1111-4111-8111-111111111111",
           "description": "用户确认后发送",
           "enabled": true,
+          "openingSnapshot": {
+            "format": 1,
+            "initialContexts": [
+              {
+                "content": "Preserve literal {{ user }} and `code`.\nAuthored context.",
+                "id": "background",
+                "title": "Enterprise background"
+              },
+              {
+                "content": "",
+                "id": "empty-note",
+                "title": "Additional note"
+              }
+            ],
+            "systemPrompt": "按企业规范回答。"
+          },
           "prompt": "请查询企业最新信息。",
           "sortOrder": 20,
           "starterId": "str_11111111-1111-4111-8111-111111111111",
@@ -276,6 +318,11 @@
         {
           "assistantDefinitionId": "asd_22222222-2222-4222-8222-222222222222",
           "enabled": true,
+          "openingSnapshot": {
+            "format": 1,
+            "initialContexts": [],
+            "systemPrompt": "帮助用户整理周报。"
+          },
           "prompt": "请帮我整理本周工作。",
           "sortOrder": 10,
           "starterId": "str_22222222-2222-4222-8222-222222222222",
@@ -284,6 +331,11 @@
         {
           "assistantDefinitionId": "asd_11111111-1111-4111-8111-111111111111",
           "enabled": false,
+          "openingSnapshot": {
+            "format": 1,
+            "initialContexts": [],
+            "systemPrompt": "按企业规范回答。"
+          },
           "prompt": "不能自动显示或发送。",
           "sortOrder": 0,
           "starterId": "str_33333333-3333-4333-8333-333333333333",
@@ -421,6 +473,22 @@
           "assistantDefinitionId": "asd_11111111-1111-4111-8111-111111111111",
           "description": "用户确认后发送",
           "enabled": true,
+          "openingSnapshot": {
+            "format": 1,
+            "initialContexts": [
+              {
+                "content": "Preserve literal {{ user }} and `code`.\nAuthored context.",
+                "id": "background",
+                "title": "Enterprise background"
+              },
+              {
+                "content": "",
+                "id": "empty-note",
+                "title": "Additional note"
+              }
+            ],
+            "systemPrompt": "按企业规范回答。"
+          },
           "prompt": "请查询企业最新信息。",
           "sortOrder": 20,
           "starterId": "str_11111111-1111-4111-8111-111111111111",
@@ -429,6 +497,11 @@
         {
           "assistantDefinitionId": "asd_22222222-2222-4222-8222-222222222222",
           "enabled": true,
+          "openingSnapshot": {
+            "format": 1,
+            "initialContexts": [],
+            "systemPrompt": "帮助用户整理周报。"
+          },
           "prompt": "请帮我整理本周工作。",
           "sortOrder": 10,
           "starterId": "str_22222222-2222-4222-8222-222222222222",
@@ -437,6 +510,11 @@
         {
           "assistantDefinitionId": "asd_11111111-1111-4111-8111-111111111111",
           "enabled": false,
+          "openingSnapshot": {
+            "format": 1,
+            "initialContexts": [],
+            "systemPrompt": "按企业规范回答。"
+          },
           "prompt": "不能自动显示或发送。",
           "sortOrder": 0,
           "starterId": "str_33333333-3333-4333-8333-333333333333",
@@ -574,6 +652,22 @@
           "assistantDefinitionId": "asd_11111111-1111-4111-8111-111111111111",
           "description": "用户确认后发送",
           "enabled": true,
+          "openingSnapshot": {
+            "format": 1,
+            "initialContexts": [
+              {
+                "content": "Preserve literal {{ user }} and `code`.\nAuthored context.",
+                "id": "background",
+                "title": "Enterprise background"
+              },
+              {
+                "content": "",
+                "id": "empty-note",
+                "title": "Additional note"
+              }
+            ],
+            "systemPrompt": "按企业规范回答。"
+          },
           "prompt": "请查询企业最新信息。",
           "sortOrder": 20,
           "starterId": "str_11111111-1111-4111-8111-111111111111",
@@ -582,6 +676,11 @@
         {
           "assistantDefinitionId": "asd_22222222-2222-4222-8222-222222222222",
           "enabled": true,
+          "openingSnapshot": {
+            "format": 1,
+            "initialContexts": [],
+            "systemPrompt": "帮助用户整理周报。"
+          },
           "prompt": "请帮我整理本周工作。",
           "sortOrder": 10,
           "starterId": "str_22222222-2222-4222-8222-222222222222",
@@ -590,6 +689,11 @@
         {
           "assistantDefinitionId": "asd_11111111-1111-4111-8111-111111111111",
           "enabled": false,
+          "openingSnapshot": {
+            "format": 1,
+            "initialContexts": [],
+            "systemPrompt": "按企业规范回答。"
+          },
           "prompt": "不能自动显示或发送。",
           "sortOrder": 0,
           "starterId": "str_33333333-3333-4333-8333-333333333333",
@@ -727,6 +831,22 @@
           "assistantDefinitionId": "asd_11111111-1111-4111-8111-111111111111",
           "description": "用户确认后发送",
           "enabled": true,
+          "openingSnapshot": {
+            "format": 1,
+            "initialContexts": [
+              {
+                "content": "Preserve literal {{ user }} and `code`.\nAuthored context.",
+                "id": "background",
+                "title": "Enterprise background"
+              },
+              {
+                "content": "",
+                "id": "empty-note",
+                "title": "Additional note"
+              }
+            ],
+            "systemPrompt": "按企业规范回答。"
+          },
           "prompt": "请查询企业最新信息。",
           "sortOrder": 20,
           "starterId": "str_11111111-1111-4111-8111-111111111111",
@@ -735,6 +855,11 @@
         {
           "assistantDefinitionId": "asd_22222222-2222-4222-8222-222222222222",
           "enabled": true,
+          "openingSnapshot": {
+            "format": 1,
+            "initialContexts": [],
+            "systemPrompt": "帮助用户整理周报。"
+          },
           "prompt": "请帮我整理本周工作。",
           "sortOrder": 10,
           "starterId": "str_22222222-2222-4222-8222-222222222222",
@@ -743,6 +868,11 @@
         {
           "assistantDefinitionId": "asd_11111111-1111-4111-8111-111111111111",
           "enabled": false,
+          "openingSnapshot": {
+            "format": 1,
+            "initialContexts": [],
+            "systemPrompt": "按企业规范回答。"
+          },
           "prompt": "不能自动显示或发送。",
           "sortOrder": 0,
           "starterId": "str_33333333-3333-4333-8333-333333333333",
@@ -880,6 +1010,22 @@
           "assistantDefinitionId": "asd_11111111-1111-4111-8111-111111111111",
           "description": "用户确认后发送",
           "enabled": true,
+          "openingSnapshot": {
+            "format": 1,
+            "initialContexts": [
+              {
+                "content": "Preserve literal {{ user }} and `code`.\nAuthored context.",
+                "id": "background",
+                "title": "Enterprise background"
+              },
+              {
+                "content": "",
+                "id": "empty-note",
+                "title": "Additional note"
+              }
+            ],
+            "systemPrompt": "按企业规范回答。"
+          },
           "prompt": "请查询企业最新信息。",
           "sortOrder": 20,
           "starterId": "str_11111111-1111-4111-8111-111111111111",
@@ -888,6 +1034,11 @@
         {
           "assistantDefinitionId": "asd_22222222-2222-4222-8222-222222222222",
           "enabled": true,
+          "openingSnapshot": {
+            "format": 1,
+            "initialContexts": [],
+            "systemPrompt": "帮助用户整理周报。"
+          },
           "prompt": "请帮我整理本周工作。",
           "sortOrder": 10,
           "starterId": "str_22222222-2222-4222-8222-222222222222",
@@ -896,6 +1047,11 @@
         {
           "assistantDefinitionId": "asd_11111111-1111-4111-8111-111111111111",
           "enabled": false,
+          "openingSnapshot": {
+            "format": 1,
+            "initialContexts": [],
+            "systemPrompt": "按企业规范回答。"
+          },
           "prompt": "不能自动显示或发送。",
           "sortOrder": 0,
           "starterId": "str_33333333-3333-4333-8333-333333333333",
@@ -1033,6 +1189,22 @@
           "assistantDefinitionId": "asd_11111111-1111-4111-8111-111111111111",
           "description": "用户确认后发送",
           "enabled": true,
+          "openingSnapshot": {
+            "format": 1,
+            "initialContexts": [
+              {
+                "content": "Preserve literal {{ user }} and `code`.\nAuthored context.",
+                "id": "background",
+                "title": "Enterprise background"
+              },
+              {
+                "content": "",
+                "id": "empty-note",
+                "title": "Additional note"
+              }
+            ],
+            "systemPrompt": "按企业规范回答。"
+          },
           "prompt": "请查询企业最新信息。",
           "sortOrder": 20,
           "starterId": "str_11111111-1111-4111-8111-111111111111",
@@ -1041,6 +1213,11 @@
         {
           "assistantDefinitionId": "asd_22222222-2222-4222-8222-222222222222",
           "enabled": true,
+          "openingSnapshot": {
+            "format": 1,
+            "initialContexts": [],
+            "systemPrompt": "帮助用户整理周报。"
+          },
           "prompt": "请帮我整理本周工作。",
           "sortOrder": 10,
           "starterId": "str_22222222-2222-4222-8222-222222222222",
@@ -1049,6 +1226,11 @@
         {
           "assistantDefinitionId": "asd_11111111-1111-4111-8111-111111111111",
           "enabled": false,
+          "openingSnapshot": {
+            "format": 1,
+            "initialContexts": [],
+            "systemPrompt": "按企业规范回答。"
+          },
           "prompt": "不能自动显示或发送。",
           "sortOrder": 0,
           "starterId": "str_33333333-3333-4333-8333-333333333333",
@@ -1186,6 +1368,22 @@
           "assistantDefinitionId": "asd_11111111-1111-4111-8111-111111111111",
           "description": "用户确认后发送",
           "enabled": true,
+          "openingSnapshot": {
+            "format": 1,
+            "initialContexts": [
+              {
+                "content": "Preserve literal {{ user }} and `code`.\nAuthored context.",
+                "id": "background",
+                "title": "Enterprise background"
+              },
+              {
+                "content": "",
+                "id": "empty-note",
+                "title": "Additional note"
+              }
+            ],
+            "systemPrompt": "按企业规范回答。"
+          },
           "prompt": "请查询企业最新信息。",
           "sortOrder": 20,
           "starterId": "str_11111111-1111-4111-8111-111111111111",
@@ -1194,6 +1392,11 @@
         {
           "assistantDefinitionId": "asd_22222222-2222-4222-8222-222222222222",
           "enabled": true,
+          "openingSnapshot": {
+            "format": 1,
+            "initialContexts": [],
+            "systemPrompt": "帮助用户整理周报。"
+          },
           "prompt": "请帮我整理本周工作。",
           "sortOrder": 10,
           "starterId": "str_22222222-2222-4222-8222-222222222222",
@@ -1202,6 +1405,11 @@
         {
           "assistantDefinitionId": "asd_11111111-1111-4111-8111-111111111111",
           "enabled": false,
+          "openingSnapshot": {
+            "format": 1,
+            "initialContexts": [],
+            "systemPrompt": "按企业规范回答。"
+          },
           "prompt": "不能自动显示或发送。",
           "sortOrder": 0,
           "starterId": "str_33333333-3333-4333-8333-333333333333",
@@ -1339,6 +1547,22 @@
           "assistantDefinitionId": "asd_11111111-1111-4111-8111-111111111111",
           "description": "用户确认后发送",
           "enabled": true,
+          "openingSnapshot": {
+            "format": 1,
+            "initialContexts": [
+              {
+                "content": "Preserve literal {{ user }} and `code`.\nAuthored context.",
+                "id": "background",
+                "title": "Enterprise background"
+              },
+              {
+                "content": "",
+                "id": "empty-note",
+                "title": "Additional note"
+              }
+            ],
+            "systemPrompt": "按企业规范回答。"
+          },
           "prompt": "请查询企业最新信息。",
           "sortOrder": 20,
           "starterId": "str_11111111-1111-4111-8111-111111111111",
@@ -1347,6 +1571,11 @@
         {
           "assistantDefinitionId": "asd_22222222-2222-4222-8222-222222222222",
           "enabled": true,
+          "openingSnapshot": {
+            "format": 1,
+            "initialContexts": [],
+            "systemPrompt": "帮助用户整理周报。"
+          },
           "prompt": "请帮我整理本周工作。",
           "sortOrder": 10,
           "starterId": "str_22222222-2222-4222-8222-222222222222",
@@ -1355,6 +1584,11 @@
         {
           "assistantDefinitionId": "asd_11111111-1111-4111-8111-111111111111",
           "enabled": false,
+          "openingSnapshot": {
+            "format": 1,
+            "initialContexts": [],
+            "systemPrompt": "按企业规范回答。"
+          },
           "prompt": "不能自动显示或发送。",
           "sortOrder": 0,
           "starterId": "str_33333333-3333-4333-8333-333333333333",
@@ -1491,6 +1725,22 @@
           "assistantDefinitionId": "asd_11111111-1111-4111-8111-111111111111",
           "description": "用户确认后发送",
           "enabled": true,
+          "openingSnapshot": {
+            "format": 1,
+            "initialContexts": [
+              {
+                "content": "Preserve literal {{ user }} and `code`.\nAuthored context.",
+                "id": "background",
+                "title": "Enterprise background"
+              },
+              {
+                "content": "",
+                "id": "empty-note",
+                "title": "Additional note"
+              }
+            ],
+            "systemPrompt": "按企业规范回答。"
+          },
           "prompt": "请查询企业最新信息。",
           "sortOrder": 20,
           "starterId": "str_11111111-1111-4111-8111-111111111111",
@@ -1499,6 +1749,11 @@
         {
           "assistantDefinitionId": "asd_22222222-2222-4222-8222-222222222222",
           "enabled": true,
+          "openingSnapshot": {
+            "format": 1,
+            "initialContexts": [],
+            "systemPrompt": "帮助用户整理周报。"
+          },
           "prompt": "请帮我整理本周工作。",
           "sortOrder": 10,
           "starterId": "str_22222222-2222-4222-8222-222222222222",
@@ -1507,6 +1762,11 @@
         {
           "assistantDefinitionId": "asd_11111111-1111-4111-8111-111111111111",
           "enabled": false,
+          "openingSnapshot": {
+            "format": 1,
+            "initialContexts": [],
+            "systemPrompt": "按企业规范回答。"
+          },
           "prompt": "不能自动显示或发送。",
           "sortOrder": 0,
           "starterId": "str_33333333-3333-4333-8333-333333333333",
@@ -1644,6 +1904,22 @@
           "assistantDefinitionId": "asd_11111111-1111-4111-8111-111111111111",
           "description": "用户确认后发送",
           "enabled": true,
+          "openingSnapshot": {
+            "format": 1,
+            "initialContexts": [
+              {
+                "content": "Preserve literal {{ user }} and `code`.\nAuthored context.",
+                "id": "background",
+                "title": "Enterprise background"
+              },
+              {
+                "content": "",
+                "id": "empty-note",
+                "title": "Additional note"
+              }
+            ],
+            "systemPrompt": "按企业规范回答。"
+          },
           "prompt": "请查询企业最新信息。",
           "sortOrder": 20,
           "starterId": "str_11111111-1111-4111-8111-111111111111",
@@ -1652,6 +1928,11 @@
         {
           "assistantDefinitionId": "asd_22222222-2222-4222-8222-222222222222",
           "enabled": true,
+          "openingSnapshot": {
+            "format": 1,
+            "initialContexts": [],
+            "systemPrompt": "帮助用户整理周报。"
+          },
           "prompt": "请帮我整理本周工作。",
           "sortOrder": 10,
           "starterId": "str_22222222-2222-4222-8222-222222222222",
@@ -1660,6 +1941,11 @@
         {
           "assistantDefinitionId": "asd_11111111-1111-4111-8111-111111111111",
           "enabled": false,
+          "openingSnapshot": {
+            "format": 1,
+            "initialContexts": [],
+            "systemPrompt": "按企业规范回答。"
+          },
           "prompt": "不能自动显示或发送。",
           "sortOrder": 0,
           "starterId": "str_33333333-3333-4333-8333-333333333333",
@@ -1797,6 +2083,22 @@
           "assistantDefinitionId": "asd_11111111-1111-4111-8111-111111111111",
           "description": "用户确认后发送",
           "enabled": true,
+          "openingSnapshot": {
+            "format": 1,
+            "initialContexts": [
+              {
+                "content": "Preserve literal {{ user }} and `code`.\nAuthored context.",
+                "id": "background",
+                "title": "Enterprise background"
+              },
+              {
+                "content": "",
+                "id": "empty-note",
+                "title": "Additional note"
+              }
+            ],
+            "systemPrompt": "按企业规范回答。"
+          },
           "prompt": "请查询企业最新信息。",
           "sortOrder": 20,
           "starterId": "str_11111111-1111-4111-8111-111111111111",
@@ -1805,6 +2107,11 @@
         {
           "assistantDefinitionId": "asd_22222222-2222-4222-8222-222222222222",
           "enabled": true,
+          "openingSnapshot": {
+            "format": 1,
+            "initialContexts": [],
+            "systemPrompt": "帮助用户整理周报。"
+          },
           "prompt": "请帮我整理本周工作。",
           "sortOrder": 10,
           "starterId": "str_22222222-2222-4222-8222-222222222222",
@@ -1813,6 +2120,11 @@
         {
           "assistantDefinitionId": "asd_11111111-1111-4111-8111-111111111111",
           "enabled": false,
+          "openingSnapshot": {
+            "format": 1,
+            "initialContexts": [],
+            "systemPrompt": "按企业规范回答。"
+          },
           "prompt": "不能自动显示或发送。",
           "sortOrder": 0,
           "starterId": "str_33333333-3333-4333-8333-333333333333",
@@ -1950,6 +2262,22 @@
           "assistantDefinitionId": "asd_11111111-1111-4111-8111-111111111111",
           "description": "用户确认后发送",
           "enabled": true,
+          "openingSnapshot": {
+            "format": 1,
+            "initialContexts": [
+              {
+                "content": "Preserve literal {{ user }} and `code`.\nAuthored context.",
+                "id": "background",
+                "title": "Enterprise background"
+              },
+              {
+                "content": "",
+                "id": "empty-note",
+                "title": "Additional note"
+              }
+            ],
+            "systemPrompt": "按企业规范回答。"
+          },
           "prompt": "请查询企业最新信息。",
           "sortOrder": 20,
           "starterId": "str_11111111-1111-4111-8111-111111111111",
@@ -1958,6 +2286,11 @@
         {
           "assistantDefinitionId": "asd_22222222-2222-4222-8222-222222222222",
           "enabled": true,
+          "openingSnapshot": {
+            "format": 1,
+            "initialContexts": [],
+            "systemPrompt": "帮助用户整理周报。"
+          },
           "prompt": "请帮我整理本周工作。",
           "sortOrder": 10,
           "starterId": "str_22222222-2222-4222-8222-222222222222",
@@ -1966,6 +2299,11 @@
         {
           "assistantDefinitionId": "asd_11111111-1111-4111-8111-111111111111",
           "enabled": false,
+          "openingSnapshot": {
+            "format": 1,
+            "initialContexts": [],
+            "systemPrompt": "按企业规范回答。"
+          },
           "prompt": "不能自动显示或发送。",
           "sortOrder": 0,
           "starterId": "str_33333333-3333-4333-8333-333333333333",
@@ -2103,6 +2441,22 @@
           "assistantDefinitionId": "asd_11111111-1111-4111-8111-111111111111",
           "description": "用户确认后发送",
           "enabled": true,
+          "openingSnapshot": {
+            "format": 1,
+            "initialContexts": [
+              {
+                "content": "Preserve literal {{ user }} and `code`.\nAuthored context.",
+                "id": "background",
+                "title": "Enterprise background"
+              },
+              {
+                "content": "",
+                "id": "empty-note",
+                "title": "Additional note"
+              }
+            ],
+            "systemPrompt": "按企业规范回答。"
+          },
           "prompt": "请查询企业最新信息。",
           "sortOrder": 20,
           "starterId": "str_11111111-1111-4111-8111-111111111111",
@@ -2111,6 +2465,11 @@
         {
           "assistantDefinitionId": "asd_22222222-2222-4222-8222-222222222222",
           "enabled": true,
+          "openingSnapshot": {
+            "format": 1,
+            "initialContexts": [],
+            "systemPrompt": "帮助用户整理周报。"
+          },
           "prompt": "请帮我整理本周工作。",
           "sortOrder": 10,
           "starterId": "str_22222222-2222-4222-8222-222222222222",
@@ -2119,6 +2478,11 @@
         {
           "assistantDefinitionId": "asd_11111111-1111-4111-8111-111111111111",
           "enabled": false,
+          "openingSnapshot": {
+            "format": 1,
+            "initialContexts": [],
+            "systemPrompt": "按企业规范回答。"
+          },
           "prompt": "不能自动显示或发送。",
           "sortOrder": 0,
           "starterId": "str_33333333-3333-4333-8333-333333333333",
@@ -2256,6 +2620,22 @@
           "assistantDefinitionId": "asd_11111111-1111-4111-8111-111111111111",
           "description": "用户确认后发送",
           "enabled": true,
+          "openingSnapshot": {
+            "format": 1,
+            "initialContexts": [
+              {
+                "content": "Preserve literal {{ user }} and `code`.\nAuthored context.",
+                "id": "background",
+                "title": "Enterprise background"
+              },
+              {
+                "content": "",
+                "id": "empty-note",
+                "title": "Additional note"
+              }
+            ],
+            "systemPrompt": "按企业规范回答。"
+          },
           "prompt": "请查询企业最新信息。",
           "sortOrder": 20,
           "starterId": "str_11111111-1111-4111-8111-111111111111",
@@ -2264,6 +2644,11 @@
         {
           "assistantDefinitionId": "asd_22222222-2222-4222-8222-222222222222",
           "enabled": true,
+          "openingSnapshot": {
+            "format": 1,
+            "initialContexts": [],
+            "systemPrompt": "帮助用户整理周报。"
+          },
           "prompt": "请帮我整理本周工作。",
           "sortOrder": 10,
           "starterId": "str_22222222-2222-4222-8222-222222222222",
@@ -2272,6 +2657,11 @@
         {
           "assistantDefinitionId": "asd_11111111-1111-4111-8111-111111111111",
           "enabled": false,
+          "openingSnapshot": {
+            "format": 1,
+            "initialContexts": [],
+            "systemPrompt": "按企业规范回答。"
+          },
           "prompt": "不能自动显示或发送。",
           "sortOrder": 0,
           "starterId": "str_33333333-3333-4333-8333-333333333333",
@@ -2409,6 +2799,22 @@
           "assistantDefinitionId": "asd_11111111-1111-4111-8111-111111111111",
           "description": "用户确认后发送",
           "enabled": true,
+          "openingSnapshot": {
+            "format": 1,
+            "initialContexts": [
+              {
+                "content": "Preserve literal {{ user }} and `code`.\nAuthored context.",
+                "id": "background",
+                "title": "Enterprise background"
+              },
+              {
+                "content": "",
+                "id": "empty-note",
+                "title": "Additional note"
+              }
+            ],
+            "systemPrompt": "按企业规范回答。"
+          },
           "prompt": "请查询企业最新信息。",
           "sortOrder": 20,
           "starterId": "str_11111111-1111-4111-8111-111111111111",
@@ -2417,6 +2823,11 @@
         {
           "assistantDefinitionId": "asd_22222222-2222-4222-8222-222222222222",
           "enabled": true,
+          "openingSnapshot": {
+            "format": 1,
+            "initialContexts": [],
+            "systemPrompt": "帮助用户整理周报。"
+          },
           "prompt": "请帮我整理本周工作。",
           "sortOrder": 10,
           "starterId": "str_22222222-2222-4222-8222-222222222222",
@@ -2425,6 +2836,11 @@
         {
           "assistantDefinitionId": "asd_11111111-1111-4111-8111-111111111111",
           "enabled": false,
+          "openingSnapshot": {
+            "format": 1,
+            "initialContexts": [],
+            "systemPrompt": "按企业规范回答。"
+          },
           "prompt": "不能自动显示或发送。",
           "sortOrder": 0,
           "starterId": "str_33333333-3333-4333-8333-333333333333",
@@ -2562,6 +2978,22 @@
           "assistantDefinitionId": "asd_11111111-1111-4111-8111-111111111111",
           "description": "用户确认后发送",
           "enabled": true,
+          "openingSnapshot": {
+            "format": 1,
+            "initialContexts": [
+              {
+                "content": "Preserve literal {{ user }} and `code`.\nAuthored context.",
+                "id": "background",
+                "title": "Enterprise background"
+              },
+              {
+                "content": "",
+                "id": "empty-note",
+                "title": "Additional note"
+              }
+            ],
+            "systemPrompt": "按企业规范回答。"
+          },
           "prompt": "请查询企业最新信息。",
           "sortOrder": 20,
           "starterId": "str_11111111-1111-4111-8111-111111111111",
@@ -2570,6 +3002,11 @@
         {
           "assistantDefinitionId": "asd_22222222-2222-4222-8222-222222222222",
           "enabled": true,
+          "openingSnapshot": {
+            "format": 1,
+            "initialContexts": [],
+            "systemPrompt": "帮助用户整理周报。"
+          },
           "prompt": "请帮我整理本周工作。",
           "sortOrder": 10,
           "starterId": "str_22222222-2222-4222-8222-222222222222",
@@ -2578,6 +3015,11 @@
         {
           "assistantDefinitionId": "asd_11111111-1111-4111-8111-111111111111",
           "enabled": false,
+          "openingSnapshot": {
+            "format": 1,
+            "initialContexts": [],
+            "systemPrompt": "按企业规范回答。"
+          },
           "prompt": "不能自动显示或发送。",
           "sortOrder": 0,
           "starterId": "str_33333333-3333-4333-8333-333333333333",
@@ -2715,6 +3157,22 @@
           "assistantDefinitionId": "asd_11111111-1111-4111-8111-111111111111",
           "description": "用户确认后发送",
           "enabled": true,
+          "openingSnapshot": {
+            "format": 1,
+            "initialContexts": [
+              {
+                "content": "Preserve literal {{ user }} and `code`.\nAuthored context.",
+                "id": "background",
+                "title": "Enterprise background"
+              },
+              {
+                "content": "",
+                "id": "empty-note",
+                "title": "Additional note"
+              }
+            ],
+            "systemPrompt": "按企业规范回答。"
+          },
           "prompt": "请查询企业最新信息。",
           "sortOrder": 20,
           "starterId": "str_11111111-1111-4111-8111-111111111111",
@@ -2723,6 +3181,11 @@
         {
           "assistantDefinitionId": "asd_22222222-2222-4222-8222-222222222222",
           "enabled": true,
+          "openingSnapshot": {
+            "format": 1,
+            "initialContexts": [],
+            "systemPrompt": "帮助用户整理周报。"
+          },
           "prompt": "请帮我整理本周工作。",
           "sortOrder": 10,
           "starterId": "str_22222222-2222-4222-8222-222222222222",
@@ -2731,6 +3194,11 @@
         {
           "assistantDefinitionId": "asd_11111111-1111-4111-8111-111111111111",
           "enabled": false,
+          "openingSnapshot": {
+            "format": 1,
+            "initialContexts": [],
+            "systemPrompt": "按企业规范回答。"
+          },
           "prompt": "不能自动显示或发送。",
           "sortOrder": 0,
           "starterId": "str_33333333-3333-4333-8333-333333333333",

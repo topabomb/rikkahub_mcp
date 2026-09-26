@@ -14,7 +14,7 @@ import net.weero.measix.pilot.data.configuration.ResourceSelectionSlot
 import net.weero.measix.pilot.data.configuration.AssistantModelPreference
 import net.weero.measix.pilot.data.model.Assistant
 
-internal data class ConversationStarterUiModel(val reference: ConfigurationReference.Enterprise, val title: String, val prompt: String)
+internal data class ConversationStarterUiModel(val reference: ConfigurationReference.Enterprise, val title: String, val prompt: String, val selected: Boolean = false)
 internal data class AssistantMemorySeedUiModel(val id: String, val content: String)
 internal data class AssistantModelSummary(
     val reference: ConfigurationReference?,
@@ -54,12 +54,18 @@ internal data class ConversationConfigurationUiModel(
     val memorySeeds: List<AssistantMemorySeedUiModel> = emptyList(),
     val modelPreference: AssistantModelPreference?,
     val enterpriseName: String?,
+    val opening: ConversationOpeningSummary? = null,
+    val isDraft: Boolean = false,
 ) {
     val canChangeModel: Boolean get() = assistant != null
     val canEditDefinition: Boolean get() = target.assistantId is ConfigurationReference.User
 }
 
-internal fun ResolvedConfiguration.conversationConfiguration(target: ConversationAssistantTarget): ConversationConfigurationUiModel {
+internal fun ResolvedConfiguration.conversationConfiguration(
+    target: ConversationAssistantTarget,
+    opening: ConversationOpeningSummary? = null,
+    isDraft: Boolean = false,
+): ConversationConfigurationUiModel {
     val reason = access(ConfigurationCategory.ASSISTANT, target.assistantId).unavailableReason
     val assistant = assistants[target.assistantId].takeIf { reason == null }
     val modelSelection = assistant?.let(::assistantModel) ?: ConfigurationSelection(null, reason)
@@ -77,12 +83,14 @@ internal fun ResolvedConfiguration.conversationConfiguration(target: Conversatio
         }.orEmpty(),
         (target.assistantId as? ConfigurationReference.Enterprise)?.takeIf { assistant != null }?.let { reference ->
             availableStarters(reference).map {
-                ConversationStarterUiModel(ConfigurationReference.Enterprise(reference.authority, it.id), it.title, it.prompt)
+                ConversationStarterUiModel(ConfigurationReference.Enterprise(reference.authority, it.id), it.title, it.prompt,
+                    isDraft && opening?.reference == ConfigurationReference.Enterprise(reference.authority, it.id))
             }
         }.orEmpty(),
         inheritedSubAssistantIds[target.assistantId].orEmpty(),
         assistantMemorySeeds(target.assistantId).map { AssistantMemorySeedUiModel(it.id, it.content) },
         if (assistant == null) null else assistantModelPreferences.getValue(target.assistantId),
         enterpriseIdentity?.enterpriseName,
+        opening, isDraft,
     )
 }

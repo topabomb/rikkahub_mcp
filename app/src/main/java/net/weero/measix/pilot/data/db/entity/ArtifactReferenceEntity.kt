@@ -6,10 +6,11 @@ import androidx.room.ForeignKey
 import androidx.room.Index
 import androidx.room.PrimaryKey
 
-/** 消息历史对 artifact 的引用投影。可从消息 JSON 全量重建，永不当事实源。 */
+/** Derived references from durable messages and context entries; never an independent fact source. */
 enum class ArtifactReferenceType {
     ATTACHMENT,
     TOOL_OUTPUT,
+    CONTEXT,
 }
 
 @Entity(

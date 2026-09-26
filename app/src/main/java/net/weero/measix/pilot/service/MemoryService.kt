@@ -213,6 +213,7 @@ class MemoryService internal constructor(
     }
 
     suspend fun read(access: MemoryAccess): List<AssistantMemory> = authorized(access) { checkOwner -> repository.read(access.address).also { checkOwner() } }
+    internal suspend fun requireAccess(access: MemoryAccess) = authorized(access) { checkOwner -> checkOwner() }
     suspend fun add(access: MemoryAccess, content: String): AssistantMemory = authorized(access) { checkOwner -> repository.add(access.address, content, checkOwner) }
     suspend fun update(record: MemoryRecord): AssistantMemory = update(record.access, record.id, record.content)
     suspend fun update(access: MemoryAccess, id: Int, content: String): AssistantMemory =

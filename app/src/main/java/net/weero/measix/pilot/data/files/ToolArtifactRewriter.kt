@@ -82,6 +82,7 @@ class ToolArtifactRewriter(
         reads: ArtifactReadLease,
         output: List<UIMessagePart>,
         metadata: JsonObject?,
+        onRewritten: (UIMessagePart, UIMessagePart) -> Unit = { _, _ -> },
     ): List<UIMessagePart> {
         val ref = metadata?.let { decodeArtifactRef(it) } ?: return output
         val materialized = reads.resolve(ref)
@@ -93,7 +94,7 @@ class ToolArtifactRewriter(
                 is UIMessagePart.Image -> part.copy(url = materialized.fileUri(filesDir))
                 is UIMessagePart.Text -> part.copy(text = rewriteFilePathJson(part.text, materialized))
                 else -> part
-            }
+            }.also { onRewritten(part, it) }
         }
     }
 

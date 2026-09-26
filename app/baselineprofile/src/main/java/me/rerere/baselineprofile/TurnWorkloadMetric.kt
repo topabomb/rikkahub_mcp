@@ -14,6 +14,7 @@ internal class TurnWorkloadMetric(
         captureInfo: CaptureInfo,
         traceSession: TraceProcessor.Session,
     ): List<Measurement> = buildList {
+        val compose = workload == "compose_100" || workload == "compose_context_100"
         val processName = captureInfo.targetPackageName.replace("'", "''")
         fun counter(name: String, cumulative: Boolean = false): Double {
             val row = traceSession.query("""
@@ -39,13 +40,13 @@ internal class TurnWorkloadMetric(
                 WHERE process.name = '$processName' AND slice.name = '$section' AND slice.dur >= 0
             """.trimIndent()).single()
             val count = row.long("samples")
-            check(if (workload == "compose_100") count > 0 else count == 1L) {
+            check(if (compose) count > 0 else count == 1L) {
                 "Unexpected workload trace count for $section: $count"
             }
             // One total per iteration lets AndroidX emit pooled P50/P90/P95/P99, including raw runs.
             add(Measurement("${section}Ms", listOf(row.long("duration_ns") / 1_000_000.0)))
             add(Measurement("${section}Count", count.toDouble()))
-            if (workload != "compose_100") {
+            if (!compose) {
                 add(Measurement("${section}JavaAllocatedBytesApprox",
                     listOf(counter("${section}_java_allocated_bytes_approx"))))
             }
@@ -53,7 +54,7 @@ internal class TurnWorkloadMetric(
         when (workload) {
             "migration_1000" -> add(Measurement("migratedRows", counter("turn_migration_rows")))
             "output_100mb" -> add(Measurement("toolOutputInputBytes", counter("turn_output_input_bytes")))
-            "compose_100" -> {
+            "compose_100", "compose_context_100" -> {
                 add(Measurement("activeAssistantCompositions", counter("turn_active_compositions", cumulative = true)))
                 add(Measurement("activeUpdatesJavaAllocatedBytesApprox",
                     listOf(counter("turn_compose_updates_java_allocated_bytes_approx"))))

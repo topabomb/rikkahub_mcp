@@ -7,8 +7,11 @@ import me.rerere.ai.provider.Model
 import me.rerere.ai.provider.RequestMediaCapabilities
 import net.weero.measix.pilot.data.ai.tools.freezeToolSet
 import net.weero.measix.pilot.data.ai.transformers.buildWorkspacePrompt
+import net.weero.measix.pilot.data.ai.transformers.renderPromptPlaceholders
 import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.model.Assistant
+import net.weero.measix.pilot.data.model.ConversationOpening
+import net.weero.measix.pilot.data.model.InjectionPosition
 import net.weero.measix.pilot.data.model.effectiveContextMessageLimit
 import net.weero.measix.pilot.data.repository.WorkspaceRepository
 import java.time.ZoneId
@@ -40,6 +43,8 @@ class TurnContextFactory(
         conversationSystemPrompt: String?,
         conversationModeInjectionIds: Set<ConfigurationReference>,
         tools: List<me.rerere.ai.core.Tool>,
+        opening: ConversationOpening? = null,
+        disclosure: TurnDisclosureSource,
     ): TurnLaunchPlan {
         val workspaceReminder = assistant.workspaceId
             ?.let { workspaceRepository.getById(it.toString()) }
@@ -62,6 +67,8 @@ class TurnContextFactory(
             mediaCapabilities = mediaCapabilities,
             promptInputs = promptInputs,
             tools = tools,
+            opening = opening?.takeIf { it.assistant == assistant.id },
+            disclosure = disclosure,
         )
     }
 
@@ -72,14 +79,21 @@ class TurnContextFactory(
      */
     internal fun materialize(plan: TurnLaunchPlan): TurnContext {
         val frozenTools = freezeToolSet(plan.tools)
+        val assistant = resolveTurnAssistantSnapshot(plan.assistant)
+        val system = freezeTurnSystem(assistant, plan.promptInputs, frozenTools.definitions, plan.opening)
         return TurnContext(
             realmAccess = plan.realmAccess,
-            assistant = resolveTurnAssistantSnapshot(plan.assistant),
+            assistant = assistant,
             model = plan.model,
             mediaCapabilities = plan.mediaCapabilities,
-            promptInputs = plan.promptInputs,
+            promptInputs = plan.promptInputs.copy(
+                promptInjections = plan.promptInputs.promptInjections.filterNot { it.position.isSystemPosition() },
+                workspaceReminder = null,
+            ),
             toolDefinitions = frozenTools.definitions,
             toolBindingsByName = frozenTools.bindingsByName,
+            system = system,
+            disclosure = plan.disclosure.withInstalledTools(frozenTools.bindingsByName),
         )
     }
 }
@@ -95,7 +109,12 @@ internal class TurnLaunchPlan(
     val mediaCapabilities: RequestMediaCapabilities,
     val promptInputs: TurnPromptSnapshot,
     val tools: List<me.rerere.ai.core.Tool>,
+    val opening: ConversationOpening? = null,
+    val disclosure: TurnDisclosureSource,
 )
+
+internal fun InjectionPosition.isSystemPosition(): Boolean =
+    this == InjectionPosition.BEFORE_SYSTEM_PROMPT || this == InjectionPosition.AFTER_SYSTEM_PROMPT
 
 /** Pure snapshot of every transformer input; callers must supply already-read Workspace disclosure and clock values. */
 fun freezeTurnPromptSnapshot(
@@ -109,6 +128,7 @@ fun freezeTurnPromptSnapshot(
     locale: Locale,
     zoneId: ZoneId,
 ): TurnPromptSnapshot {
+    val variables = placeholderValues(settings, assistant, model, instant, locale, zoneId)
     val effectiveInjectionIds = if (assistant.allowConversationPromptInjection) {
         conversationModeInjectionIds
     } else {
@@ -122,9 +142,11 @@ fun freezeTurnPromptSnapshot(
                 id = injection.id,
                 priority = injection.priority,
                 position = injection.position,
-                content = injection.content,
+                content = renderPromptPlaceholders(injection.content, variables),
                 injectDepth = injection.injectDepth,
                 role = injection.role,
+                name = injection.name,
+                template = injection.content,
             )
         }
         .toList()
@@ -138,7 +160,7 @@ fun freezeTurnPromptSnapshot(
             ?.takeIf { assistant.allowConversationSystemPrompt && it.isNotBlank() },
         modeInjectionIds = effectiveInjectionIds.toSet(),
         enableTimeReminder = assistant.enableTimeReminder,
-        placeholderValues = placeholderValues(settings, assistant, model, instant, locale, zoneId),
+        placeholderValues = variables,
     )
 }
 

@@ -151,12 +151,28 @@ internal class PlatformEnterpriseService(
         if (generation == 0L) return sessions.recordPlatformPending(access)
         val matching = cached?.takeIf { it.configuration.generation == generation }
         val cachedExecution = matching?.execution as? EnterpriseExecution.Platform
+        val cachedSchemaAccepted = cachedExecution?.snapshotSchemaVersion?.let { schema ->
+            schema in PLATFORM_SUPPORTED_SNAPSHOT_SCHEMAS && schema in bootstrap.supportedSnapshotSchemaVersions
+        } == true
         val response = read(access.sessionId) { current, token ->
-            client.snapshot(current, token, generation, cachedExecution?.snapshotHash)
+            client.snapshot(current, token, generation, cachedExecution?.takeIf { cachedSchemaAccepted }?.snapshotHash)
         }
         val candidate = when (response) {
-            is PlatformSnapshotResponse.Downloaded -> PlatformSnapshotMapper.map(connection, input.session.identity, response.snapshot)
-            PlatformSnapshotResponse.NotModified -> requireNotNull(matching) { "snapshot_304_without_cache" }
+            is PlatformSnapshotResponse.Downloaded -> {
+                require(response.snapshot.schemaVersion in bootstrap.supportedSnapshotSchemaVersions) {
+                    "platform_snapshot_schema_not_advertised"
+                }
+                PlatformSnapshotMapper.map(connection, input.session.identity, response.snapshot)
+            }
+            PlatformSnapshotResponse.NotModified -> {
+                val retained = requireNotNull(matching) { "snapshot_304_without_cache" }
+                if (!cachedSchemaAccepted) {
+                    throw EnterpriseConfigurationException("enterprise_configuration_version_unsupported",
+                        "The server returned 304 without a cache schema accepted by this client and the current Bootstrap. " +
+                            "A complete supported snapshot response is required; synchronize again after the server is corrected.")
+                }
+                retained
+            }
         }
         val applied = sessions.synchronize(access, candidate)
         val execution = candidate.execution as EnterpriseExecution.Platform

@@ -39,7 +39,9 @@ Android 只承载 Core `/portal/` 的文档，不维护第二套网页。`Portal
 
 聊天配置消费 `ConversationConfigurationUiModel`。助手、模型、Starter、MCP、Workspace 等短任务使用同一自适应弹层；标题、关闭及管理入口保持可达，长列表只滚动内容区。企业助手的固定定义只读，当前空间使用偏好通过原 `ConversationAssistantTarget` 编辑；共享用户定义从企业上下文编辑时提示影响，不复制第二套编辑器。
 
-模型选择只使用聊天页根部的一张 `ModelListSheet`：默认来源与显式模型在同一列表，企业助手默认/空间默认/指定模型三态由 typed 投影区分，不能由最终显示模型反推。Starter 只预填并保留原草稿/附件，不自动发送。配置命令失败在发起操作的弹层或页面显示原始诊断，保留原选择；不能仅把错误写到被弹层遮住的聊天列表。
+模型选择只使用聊天页根部的一张 `ModelListSheet`：默认来源与显式模型在同一列表，企业助手默认/空间默认/指定模型三态由 typed 投影区分，不能由最终显示模型反推。Starter 在 Draft 中绑定开场并追加提示词，保留原草稿/附件，不自动发送；Ready 中仅追加提示词。配置命令失败在发起操作的弹层或页面显示原始诊断，保留原选择；不能仅把错误写到被弹层遮住的聊天列表。
+
+开场目录只带 `ConversationOpeningSummary` 等轻量投影。`EnterpriseStarterPicker` 原预览内部增加默认折叠的 `StarterOpeningContext`；聊天卡片仅以描边及无障碍选中状态表达选择，再点已选项打开详情。`PromptPresetButton` 保持原入口，在已有开场时显示详情菜单项，即使目录已无该项也不隐藏入口。`StarterOpeningDetails` 使用原 `AdaptiveModal`，正文按需查询，不在空态或输入框常驻 System、背景、发布身份；刷新和取消开场只位于详情，刷新不再次填充提示词。切换助手清除 Draft 开场时使用一次原 toast 提示，保留用户文字。Ready 开场不随企业新发布改变。
 
 ### 技术栈
 
@@ -485,6 +487,10 @@ ChatPageContent
 只有 turn 进入 `IDLE` 或页面退出组合时才释放；`STOPPING` 期间工具审批、工具回答和子助手回答 callback 统一为空，不向正在收口的 turn 发命令。可因 IME 和自适应布局切换位置的 `ChatInput` 按钮不管理 Window flag。
 模型选择 sheet（`ModelListSheet`）由输入区的稳定根级组合一次，不随 action row 的 IME 显隐分支进入或离开组合；同一页面只存在一个 `ModelListState`，选择、清空与 dismiss 都只修改同一状态。
 
+`ChatPage` 在模型与普通请求配置保存成功、当前 Turn 仍运行时，沿原 toaster 显示“已保存，下次发送生效”；失败仍进入原配置错误反馈，不显示成功。`AssistantPreferenceChange.affectsNextSend` 区分请求字段与立即呈现的头像、背景、标签、快捷输入和视觉正则；纯视觉修改不显示延迟生效。提示词注入编辑仍使用 `ModeInjectionEditSheet` 的原字段顺序、role 条件显隐和 200dp 内容编辑区，末条消息前与从 1 起的深度含义仅通过原标签表达，不增加说明行或预览。
+
+运行中配置模态使用 `AdaptiveModal.feedback` 承载调用方原有的独立 `ToasterState`，默认关闭。助手使用设置、MCP 和文件扩展把成功提示发送到当前模态；文件弹层打开 MCP 或扩展子弹层时，以 `feedbackVisible` 隐藏父 host，保留父内容的 composition，避免重复显示或销毁正在打开的子弹层。该能力只叠放反馈，不增加常驻布局，也不改变保存与关闭语义。
+
 共享模型选择器消费 `ModelCatalogUiModel` 的可选投影：隐藏不可选模型和因此为空的来源组，收藏只显示仍可选择的引用；当前显式选择失效时在列表顶部保留一张不可操作、保持选中外观的诊断卡。模型项只显示名称、必要能力图标、收藏或取消收藏，以及当前选择状态；收藏保持加入顺序，不在移动端模型选择流程提供拖拽排序。来源标题随内容普通滚动；搜索覆盖列表宽度，无结果时只显示空态与清除搜索。来源快捷导航仅在组数与模型数都较多时出现，Provider 编辑和余额留在设置页。默认来源只有一张列表卡：个人域直接选择设置默认，企业域用卡片菜单切换助手默认与空间默认；卡片主动作优先使用当前默认模式，否则选择第一个可用默认模式，不持久化虚假的“上次默认模式”。显式模型和默认卡统一用右侧勾选反馈，不混用左侧单选圆圈。助手详情和 readiness 进入模型选择时分别显式选择完整或精简模式，并复用聊天页根部同一个 `ModelListState` 与 `ModelListSheet`；关闭一次弹层不会改变后续入口的模式。`ModelListSheet` 等待选择命令成功才关闭；提交中只接受一个选择，失败保留弹窗并恢复重试。目录的 `RealmSelection` 变化会关闭旧弹窗，异步错误属于原选择。
 
 模型 Logo 先按现有品牌规则匹配；未命中时个人域保留模型名首字母，企业域使用 Noetral 图形。模型目录直接从自身 `RealmSelection` 选择该纯展示策略，聊天消息从会话快照的 `ConversationHeader.scope` 选择；图标组件不读取全局空间，也不持有 Realm、Session 或配置职责。Provider、搜索和语音图标继续使用通用首字母回退。
@@ -581,7 +587,7 @@ Compose 暴露 application/query service；恢复由 `ApplicationRecoveryCoordin
 
 `ConversationAssistantTarget` 冻结原页面和助手。模型弹窗、助手/工具弹层及输入导入按原目标持有状态；字段命令只更新最新值中的指定字段。会话系统提示、注入与目录仍由 `ConversationApplicationService` 写原会话，提交时复验助手；目录还核对原 Workspace。实际换助手在同一会话命令清空 folder 与 cwd，重新选择同一助手不清空。导入结果在交给输入框前再次验证原目标，失效或取消只释放本批新文件。
 
-新聊天空态按域编排。个人域保留既有完整引导卡：助手标题、模型、MCP、记忆、本地工具和 Workspace 均保持原状态、单行作用说明与原功能入口，避免企业改造削弱个人配置能力；说明只解释用户能获得什么，不展示内部机制。企业域使用低密度卡片，只常驻当前助手、带“对话模型”说明的模型、适用于该助手的 Starter，以及已绑定 Workspace；MCP、本地工具和记忆从助手详情渐进查看。Starter 以“开场建议 · 点选填入草稿”和可横向浏览的标题、提示词预览呈现，点击只把提示词追加到当前草稿并保留附件，不自动发送。企业域当前助手主体打开详情，“切换”是独立文字动作，避免查看与切换竞争同一点击区域。
+新聊天空态按域编排。个人域保留既有完整引导卡：助手标题、模型、MCP、记忆、本地工具和 Workspace 均保持原状态、单行作用说明与原功能入口，避免企业改造削弱个人配置能力；说明只解释用户能获得什么，不展示内部机制。企业域使用低密度卡片，只常驻当前助手、带“对话模型”说明的模型、适用于该助手的 Starter，以及已绑定 Workspace；MCP、本地工具和记忆从助手详情渐进查看。Starter 保持可横向浏览的标题、两行提示词预览；Draft 点选先经 application 绑定开场再追加提示词，已选同项只打开详情，保留附件，不自动发送。企业域当前助手主体打开详情，“切换”是独立文字动作，避免查看与切换竞争同一点击区域。
 
 本地工具使用既有 `AssistantLocalToolContent`，个人定义编辑和聊天本域使用分别调用各自命令。普通助手详情、当前会话助手和未选候选共用 `AssistantSettingsSectionList` 的分组结构；当前会话由 `AssistantUsageEditor` 复用原基本参数、提示词、扩展、记忆、请求、MCP 和本地工具内容组件，并通过原 `ConversationAssistantTarget` 编辑本域参数、头像、背景、扩展及额外子助手引用。首页只显示头像、名称、真实来源、描述和设置分组，机制说明进入对应设置项或失败诊断。未选候选只在同一分组表面展示目录快照中的只读值，不构造可写页面或第二配置 owner。企业固定的子助手绑定不可移除。企业助手定义只读，模型使用选择只写原主体偏好；用户助手可在确认共享影响并复验原目标后进入原共享定义编辑页；目标失效作为操作失败展示。恢复默认只在企业域出现，清除本域使用覆盖且不修改共享定义。新建会话的默认选择不直接驱动已有会话。
 
@@ -685,6 +691,11 @@ stateInOnce(scope, initialValue) =
 
 聊天抽屉展开、会话长按时先清除焦点再隐藏 IME。`ChatInputState.getContents` 不产生空白 Text，编辑历史时保留非空旧文本与附件顺序，纯附件可补正文；`isEmpty` 以最终 parts 为准，原附件释放仍交给原 owner。
 
+普通发送与仅发送不生成由 `ChatVM.handleMessageSend` 在 Starter 选择共用的操作锁内捕获输入。
+`SendMessageReceipt` 表示 USER 已提交；同一页面才用 `ChatInputState.completeSubmission` 清理匹配的文字和原附件实例。
+等待期间改写的文字、新增或重新添加的附件保留；清空/替换输入或进入历史编辑会使旧提交无法清理新草稿。
+提交前失败不调用清理，重复点击不排队追加同一输入；清理不等待模型响应，也不增加界面确认步骤。
+
 Provider/模型名称草稿允许内部空格，保存边界统一 trim 首尾；模型 ID 和并发目录不被改写。通用播放倍速仅在一般偏好的 TTS 组设置，复用 `defaultTTSPlaybackSpeed`，语音资源页不重复提供此入口。
 
 - 聊天页 `Scaffold` 设置 `contentWindowInsets = WindowInsets(0)`，让 TopAppBar 自己处理状态栏避让，避免 Scaffold 与 TopAppBar 重复计算状态栏高度导致顶部留白过多
@@ -702,6 +713,19 @@ Provider/模型名称草稿允许内部空格，保存边界统一 trim 首尾�
 ## 12. 显示投影与生成管道的边界
 
 UI 消费 `ConversationPresentation` 的消息、typed phase、工具 locator 和附件预览映射，不持有 Runtime Job，也不据显示列表反推 durable 写入。工具交互经 application port 提交；`resultStatus` 表达结果存在性，不能代替活跃执行 phase 或详情页访问门禁。
+
+`ConversationPresentationSnapshot.context` 只携带逐消息的上下文存在性、外部变化和摘要/预置来源标签。`ConversationPresentationProjector` 以订阅内的 durable 引用复用该摘要，纯 streaming 更新不重新扫描历史；durable 更新时以一次性选中分支/因果 USER 与接纳 entry 索引投影，沿 ConversationModelContextApplicability 唯一谓词判断适用性。正文不进入列表模型。`ConversationQueryService.contextDetails` 返回请求和来源目录，`observeContextDetails` 仅在 durable 更新时刷新目录；目录纯计算运行于 Dispatchers.Default，contextContent 只解析指定请求的目录并在展开时读取原文，同一读取前后 durable 引用未变时复用本次定位，变化后重新校验；这些读取保持原 `ConversationViewLease`、域与所选分支，Artifact 文本只经 `ArtifactStore.readContextText` 校验资源身份后读取，IO 结束后再次核对页面与请求关联。摘要与预置内容的 `MessageReference` 直接定位不可变消息 variant，不复制正文或从显示文本推断来源。
+
+`ChatMessageActionsSheet` 的“上下文”与 `ChatMessage` 正文下的单行“上下文已更新”共用 `ConversationContextDetails` 自适应弹层。初始、时间、提示规则、恢复和自身工具操作不增加主列表行；实际外部变化每个助手消息最多一行，独立于动作栏显隐。空助手不创建头像/气泡，因果 USER 的更多菜单仍可查询。详情首次到达只展开当时最新的请求，所有请求都可通过“请求 N”标题显式切换；展开状态按请求身份保留，新 Step 到来不折叠正在查看的正文或自动展开新请求。时间复用本地日期时间格式；请求与正文分别折叠，协议角色、消息/Step 定位只在原“来源”组展开后显示，不挤入正文区；正文按 entry 身份在弹层内复用，关闭或页面撤权取消读取，读取异常保留原诊断。无接纳凭据的历史仅标“无请求记录”，不能把可读原文标为缺失；预置/摘要等已知保存内容不显示缺请求警告。普通复制、编辑、TTS、分享及附件点击维持原行为。
+
+请求目录展示该 Turn 明确选用/追加及同 Turn Step 继承的应用记录；前序 Turn 原文从其原消息查看，
+不提供全部历史应用输入或 HTTP 快照。保存的 USER window/placement variant 只要求仍存在于原节点，
+不要求当前选中；查看的助手 owner、页面与域授权仍按当前状态校验。不能从当前较早 Assistant variant
+推算并归因于历史请求。开场及自身预置/摘要的原文入口保持原语义，无额外常驻说明或列表行。
+
+`SubAssistantDetailPage` 把初始与外部变化共用入口固定放在原“请求”区，不跟随输出消息出现而搬移；`SubAssistantDetailUiState.Ready` 提供该任务的发现标记。timeline 不再重复显示上下文入口。新摘要/预置内容在原署名位置标明来源，署名隐藏时仍保留必要标签，不把它们冒充真实用户发言。
+
+`ChatInputState` 的附件单一输入状态为 part 与本次选择 identity。提交捕获这批 identity，持久 Append 完成只清理仍属于本次提交的附件；移除后重新加入即使 payload 相同也属于新选择，迟到完成不得移除。输入框被替换或进入不同消息编辑时，旧提交不能清理新输入。
 
 `visualTransform()` 只形成流式显示投影，输入转换和终态输出处理归生成管道。Transformer 装配、顺序与提交时机统一见 [Turn/Step 执行链路](turn-step-execution.md)；图片请求表示与资源交接见 [多模态上下文与资源持久化](multimodal-context-and-turn-durability.md)。
 

@@ -59,6 +59,7 @@ fun ChatMessageAssistantAvatar(
     modelIconFallback: ModelIconFallback,
     assistant: Assistant?,
     modifier: Modifier = Modifier,
+    sourceLabel: String? = null,
 ) {
     val settings = LocalSettings.current
     val showIcon = settings.displaySetting.showModelIcon
@@ -85,7 +86,7 @@ fun ChatMessageAssistantAvatar(
                 ) {
                     if (settings.displaySetting.showModelName) {
                         Text(
-                            text = assistant.name.ifEmpty { stringResource(R.string.assistant_page_default_assistant) },
+                            text = sourceLabel ?: assistant.name.ifEmpty { stringResource(R.string.assistant_page_default_assistant) },
                             style = MaterialTheme.typography.labelLargeEmphasized,
                             maxLines = 1,
                         )
@@ -107,7 +108,7 @@ fun ChatMessageAssistantAvatar(
                 ) {
                     if (settings.displaySetting.showModelName) {
                         Text(
-                            text = model.displayName,
+                            text = sourceLabel ?: model.displayName,
                             style = MaterialTheme.typography.labelLargeEmphasized,
                             maxLines = 2,
                             overflow = TextOverflow.Ellipsis,

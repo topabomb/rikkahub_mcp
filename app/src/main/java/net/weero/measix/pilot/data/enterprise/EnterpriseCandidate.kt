@@ -18,6 +18,8 @@ internal sealed interface EnterpriseExecution {
         val releaseId: String,
         val snapshotHash: String,
         val runtimePaths: Map<String, String>,
+        /** Version verified at download; historical Applied files have no such evidence. */
+        val snapshotSchemaVersion: Long? = null,
     ) : EnterpriseExecution
 }
 
@@ -30,6 +32,7 @@ internal fun EnterpriseCandidate.validate() {
                 "invalid_platform_release"
             }
             require(source.runtimePaths.keys == configuration.runtimeResources().keys) { "platform_runtime_resource_set_mismatch" }
+            require(source.snapshotSchemaVersion == null || source.snapshotSchemaVersion > 0) { "invalid_platform_snapshot_schema_version" }
             source.runtimePaths.values.forEach(::requirePlatformPath)
             require(configuration.providers.map { it.id }.distinct().size == configuration.providers.size) { "duplicate_platform_provider" }
             require(configuration.models.all { model -> configuration.providers.any { it.id == model.providerId } }) { "unknown_platform_model_provider" }

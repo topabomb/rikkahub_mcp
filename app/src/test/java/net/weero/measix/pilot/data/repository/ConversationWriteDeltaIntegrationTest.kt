@@ -60,7 +60,7 @@ class ConversationWriteDeltaIntegrationTest {
         coEvery { nodeDAO.upsertAll(capture(upserts)) } just runs
 
         val artifactStore = mockk<ArtifactStore>()
-        coEvery { artifactStore.prepareReferenceDelta(any(), any(), any()) } returns
+        coEvery { artifactStore.prepareReferenceDelta(any(), any(), any(), any()) } returns
             ArtifactReferenceDelta(emptyList(), emptyList(), emptyList())
         coEvery { artifactStore.withLifecycleLock<Any>(any()) } coAnswers {
             firstArg<suspend () -> Any>().invoke()

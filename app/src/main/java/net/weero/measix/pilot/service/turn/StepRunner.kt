@@ -2,7 +2,6 @@ package net.weero.measix.pilot.service.turn
 
 import net.weero.measix.pilot.data.enterprise.RealmAccess
 import net.weero.measix.pilot.data.ai.request.RequestContextPlanner
-import net.weero.measix.pilot.data.ai.request.DurableMessageLocator
 import net.weero.measix.pilot.data.ai.request.ModelRequestReceipt
 import net.weero.measix.pilot.data.ai.ProviderRequestOutcome
 import net.weero.measix.pilot.data.ai.request.RequestMessageOrigin
@@ -38,11 +37,10 @@ import net.weero.measix.pilot.data.ai.request.RequestAssembler
 import net.weero.measix.pilot.data.ai.transformers.InputMessageTransformer
 import net.weero.measix.pilot.data.ai.transformers.MessageTransformer
 import net.weero.measix.pilot.data.ai.transformers.RequestMessageOriginTracker
+import net.weero.measix.pilot.data.ai.transformers.RequestPartSource
 import net.weero.measix.pilot.data.ai.transformers.ThinkTagTransformer
 import net.weero.measix.pilot.data.ai.transformers.transforms
 import net.weero.measix.pilot.data.db.entity.TurnExecutionStatus
-import net.weero.measix.pilot.data.model.ConversationModelContextEntry
-import net.weero.measix.pilot.service.ConversationDisclosureSnapshotService
 import net.weero.measix.pilot.service.runtime.generateText
 import net.weero.measix.pilot.service.runtime.streamText
 import net.weero.measix.pilot.service.runtime.ModelRequests
@@ -79,10 +77,13 @@ internal class StepRunner(
 ) {
     suspend fun run(state: TurnRunState): StepExecutionResult {
         state.sendPhase(TurnRunPhase.PREPARING)
+        val admission = TurnRequestAdmission(state.turnContext, state.inputs.requestContext.read(),
+            state.inputs.requestContext, state.handle, state.currentStepId, contextPlanner, artifactStore)
         val receipt = generateInternal(
             realmAccess = state.turnContext.realmAccess,
             assistant = state.assistant,
             promptInputs = state.promptInputs,
+            system = state.turnContext.system.text,
             messages = state.messages,
             onUpdateMessages = { updatedMessages ->
                 // Publish the turn-owned raw projection before the first suspension so
@@ -115,8 +116,7 @@ internal class StepRunner(
             mediaCapabilities = state.mediaCapabilities,
             onPhase = { phase -> state.sendPhase(phase) },
             providerSessionId = state.providerSessionId,
-            modelContextEntries = state.modelContextEntries,
-            durableLocators = state.durableMessageLocators,
+            admission = admission,
         )
         state.replaceMessages(state.finishStreamingLast(state.messages))
         state.replaceMessages(state.messages.withAssistant(state.messages.last().copy(
@@ -196,6 +196,7 @@ internal class StepRunner(
         realmAccess: RealmAccess,
         assistant: TurnAssistantSnapshot,
         promptInputs: TurnPromptSnapshot,
+        system: String,
         messages: List<UIMessage>,
         onUpdateMessages: suspend (List<UIMessage>) -> Unit,
         accumulator: StepOutputAccumulator,
@@ -210,64 +211,27 @@ internal class StepRunner(
         mediaCapabilities: RequestMediaCapabilities,
         onPhase: (suspend (TurnRunPhase) -> Unit)? = null,
         providerSessionId: String? = null,
-        modelContextEntries: List<ConversationModelContextEntry> = emptyList(),
-        durableLocators: Map<Uuid, DurableMessageLocator> = emptyMap(),
+        admission: TurnRequestAdmission,
     ): ModelRequestReceipt {
-        val requestPlan = contextPlanner.planRequest(
-            durableMessages = messages.filterNot { message ->
-                message.id == assistantMessageId &&
-                    message.role == MessageRole.ASSISTANT &&
-                    message.parts.all { it is UIMessagePart.Step }
-            },
-            durableLocators = durableLocators,
-            modelContextEntries = modelContextEntries,
-            messageLimit = assistant.contextMessageLimit,
-        )
+        val requestPlan = admission.plan(messages)
         val contextMessages = requestPlan.messages
-        val system = buildString {
-            val effectiveSystemPrompt = promptInputs.conversationSystemPrompt ?: assistant.systemPrompt
-            if (effectiveSystemPrompt.isNotBlank()) {
-                append(effectiveSystemPrompt)
-            }
-
-            // Memory 内容不再进入 System：唯一披露路径是 START 提交的 canonical Snapshot。
-
-            // 工具prompt：只使用装配时冻结的 contribution，不按 step 重新求值。
-            toolDefinitions.forEach { definition ->
-                appendLine()
-                append(definition.systemPromptContribution)
-            }
-
-            // 请求携带 Snapshot 时才追加固定规则；规则本身无任何动态内容。
-            if (requestPlan.contextProjections.isNotEmpty()) {
-                appendLine()
-                append(ConversationDisclosureSnapshotService.MODEL_RULES)
-            }
-        }
-        // 本次请求唯一的来源跟踪器：System 与后续注入内容由管线合成，不能被 messageTemplate 包裹。
-        // 只标记本次新建的 System；preset 等 durable SYSTEM 消息仍是用户配置，保持原模板行为。
+        // 本次请求唯一的来源跟踪器：合成输入和有明确来源的预置/摘要不进入真实 USER 模板。
+        // 本次 System 单独登记；历史应用内容由 markOrigins 按已提交来源登记。
         val requestOrigins = RequestMessageOriginTracker()
         // 唯一 origin 表的 durable 半边在此登记；transformers 完成后 frozenOrigins 是
         // Durable + Synthetic 的完整来源事实。
         requestPlan.originsByMessageId.forEach { (messageId, origin) ->
             (origin as? RequestMessageOrigin.Durable)?.let { requestOrigins.markDurable(messageId, it.locator) }
         }
+        admission.markOrigins(requestOrigins, requestPlan.messages)
         val requestMessages = buildList {
             if (system.isNotBlank()) {
                 val systemMessage = UIMessage.system(prompt = system)
                 requestOrigins.markSynthetic(systemMessage, SyntheticMessageKind.SYSTEM_PROMPT)
+                systemMessage.parts.forEach { requestOrigins.markPart(it, RequestPartSource.RenderedSystem) }
                 add(systemMessage)
             }
-            val durableById = messages.associateBy(UIMessage::id)
-            addAll(contextMessages.map { projected ->
-                val durable = durableById[projected.id]
-                projected.copy(
-                    terminalStatus = durable?.terminalStatus,
-                    terminalReason = durable?.terminalReason,
-                    terminalDetail = durable?.terminalDetail,
-                    providerReplayProjection = null,
-                )
-            })
+            addAll(contextMessages)
         }
         return artifactStore.retainForRequest(realmAccess.scope, requestMessages).use { artifactReads ->
             val transformedMessages = requestMessages.transforms(
@@ -282,23 +246,31 @@ internal class StepRunner(
                 reportProcessingText = reportProcessingText,
                 mediaCapabilities = mediaCapabilities,
                 registerUnpublishedResource = registerUnpublishedResource,
-            ).replaySafeProjection()
+            ).mapNotNull { transformed ->
+                // Re-evaluate a terminal draft after input transforms. Only its terminal identity
+                // comes from durable history; never restore a whole message's later protocol state.
+                val terminal = messages.firstOrNull {
+                    it.id == transformed.id && it.id != admission.owner.messageId && it.terminalStatus != null
+                }
+                if (terminal == null) transformed else transformed.copy(
+                    terminalStatus = terminal.terminalStatus,
+                    terminalReason = terminal.terminalReason,
+                    terminalDetail = terminal.terminalDetail,
+                ).replaySafeProjection()
+            }
 
-            // context part 在全部 input transformers 之后注入，只附着 Durable USER；
-            // Token estimate 与 receipt 使用包含 context 的最终 projection。
-            // RequestAssembler 是 Step 的唯一丢弃点与 UIMessage → ModelRequestMessage 的唯一转换边界：
-            // Step 是 durable 边界事实，绝不进入 Provider 线协议，也不计入发给模型的 token。
-            val assembled = requestAssembler.assemble(
-                contextPlanner.applyContextProjections(
-                    transformedMessages = transformedMessages,
-                    projections = requestPlan.contextProjections,
-                    originsByMessageId = requestOrigins.frozenOrigins(),
-                ),
-            )
+            // Validate the complete request projection before committing its application inputs.
+            val assembled = admission.admit(requestPlan, transformedMessages, requestOrigins) { projection ->
+                requestAssembler.assemble(projection).also {
+                    artifactReads.requireAuthorizedFiles(it.providerVisibleMessages)
+                    contextPlanner.estimateRequestContextTokens(it.providerVisibleMessages, toolDefinitions)
+                }
+            }
             val internalMessages = assembled.providerVisibleMessages
-            artifactReads.requireAuthorizedFiles(internalMessages)
 
             modelRequests.execute { target ->
+                admission.requireReadable()
+                artifactReads.requireAuthorizedFiles(internalMessages)
                 val pendingReceipt = contextPlanner.receiptOf(internalMessages)
                 val estimatedRequestContextTokens = contextPlanner.estimateRequestContextTokens(
                     providerVisibleMessages = internalMessages,

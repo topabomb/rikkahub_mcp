@@ -152,7 +152,31 @@ internal data class EnterpriseStarter(
     val description: String? = null,
     val sortOrder: Int = 0,
     val enabled: Boolean = true,
+    /** Absent only in historical Applied data; current network snapshots require an opening. */
+    val openingSnapshot: EnterpriseStarterOpeningSnapshot? = null,
 )
+
+@Serializable
+internal data class EnterpriseStarterOpeningSnapshot(
+    val format: Int,
+    val systemPrompt: String,
+    val initialContexts: List<EnterpriseStarterInitialContext>,
+) {
+    init {
+        require(format == 1) { "unsupported_enterprise_starter_opening_format" }
+        require(initialContexts.map { it.id }.distinct().size == initialContexts.size) {
+            "duplicate_enterprise_starter_context_id"
+        }
+    }
+}
+
+@Serializable
+internal data class EnterpriseStarterInitialContext(val id: String, val title: String, val content: String) {
+    init {
+        require(id.isNotBlank()) { "invalid_enterprise_starter_context_id" }
+        require(title.isNotBlank()) { "invalid_enterprise_starter_context_title" }
+    }
+}
 
 @Serializable
 internal data class EnterpriseGateway(

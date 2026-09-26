@@ -478,6 +478,7 @@ private fun ChatListNormal(
                                 ChatMessage(
                                     node = node,
                                     detailSource = detailSource,
+                                    contextSummary = snapshot.context.messages[node.currentMessage.id],
                                     model = node.currentMessage.modelId?.let(modelById::get),
                                     modelIconFallback = modelIconFallback,
                                     assistant = messageAssistant,

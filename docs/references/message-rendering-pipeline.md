@@ -32,6 +32,11 @@ UIMessage.parts[]
 | 全文预览 | `app/src/main/java/net/weero/measix/pilot/ui/components/richtext/MarkdownWeb.kt`、`ui/pages/webview/ContentPreviewPage.kt`、`app/src/main/assets/html/mark.html` |
 | WebView 封装 | `app/src/main/java/net/weero/measix/pilot/ui/components/webview/WebView.kt` |
 
+应用上下文不写入 `UIMessage.parts` 或插入列表节点。`MessageContextSummary` 给原消息更多菜单提供
+“上下文”入口；同一助手消息发生外部变化时最多一行轻量提示，初始状态不增加提示行。详情通过
+Conversation query 按请求和来源逐项展开；子助手只读页使用原请求区域的固定唯一入口。
+预置/摘要的正文仍沿原消息渲染，来源由旁侧上下文详情解释；`Step` 仍不参与 COT 分组。
+
 ## 2. 第一层：Part 分组与分发
 
 ### 2.1 分组逻辑

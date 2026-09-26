@@ -3,7 +3,6 @@ import net.weero.measix.pilot.service.turn.TurnCommitter
 import net.weero.measix.pilot.service.turn.TurnOutcome
 import net.weero.measix.pilot.service.turn.TurnPause
 import net.weero.measix.pilot.service.turn.androidTestTurnContext
-import net.weero.measix.pilot.service.turn.disclosureCandidate
 
 import android.content.Context
 import androidx.room.Room
@@ -97,6 +96,7 @@ class TurnInteractionContinuationIntegrationTest {
             systemMetaDAO = database.systemMetaDao(),
             conversationDAO = database.conversationDao(),
             messageNodeDAO = database.messageNodeDao(),
+            contextDAO = database.conversationModelContextDao(),
             settingsCoordinator = ArtifactSettingsCoordinator(settingsStore),
             transactionRunner = RoomDatabaseTransactionRunner(database),
         )
@@ -197,16 +197,12 @@ class TurnInteractionContinuationIntegrationTest {
                     commandCoordinator = coordinator,
                     runtime = runtime,
                     turnId = turnId,
-                    modelContextCandidate = disclosureCandidate(),
+
                     turnFinalizer = turnFinalizer,
                 )
                 // 与 ConversationTurnService.launchRun 同一协议：START 提交后立即绑定冻结
                 // projection，审批续接才能复用同一引用。
-                runtime.bindModelContextProjection(
-                    turnId,
-                    worker,
-                    TurnTransition.projectTurnModelContext(runtime.durable),
-                )
+
                 startedTurn = started
                 val initialStep = runtime.durable.currentMessages().last().parts.filterIsInstance<UIMessagePart.Step>().single()
                 val sampledStep = initialStep.copy(modelResult = me.rerere.ai.ui.StepModelResult(
@@ -233,6 +229,7 @@ class TurnInteractionContinuationIntegrationTest {
                     TurnRunInputs(
                         turnContext = turnContext,
                         handle = started.handle,
+                        requestContext = started.turnCommitter.requestContext,
                         messages = listOf(userMessage, waitingMessage),
                         maxSteps = 1,
                         assistantMessageId = waitingMessage.id,
@@ -321,6 +318,7 @@ class TurnInteractionContinuationIntegrationTest {
                             TurnRunInputs(
                                 turnContext = turnContext,
                                 handle = continuation.handle,
+                                requestContext = continuation.turnCommitter.requestContext,
                                 messages = approvedMessages,
                                 maxSteps = 1,
                                 assistantMessageId = continuation.assistantMessageId,

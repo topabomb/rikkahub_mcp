@@ -148,6 +148,8 @@ sealed interface SubAssistantDetailUiState {
         val child: ConversationPresentationSnapshot,
         val timeline: List<MessageNode>,
         val attachmentPreviews: Map<String, net.weero.measix.pilot.service.AttachmentPreview> = emptyMap(),
+        val hasRequestContext: Boolean = child.context.messages[link.childTaskMessageId]?.hasContent == true,
+        val hasExternalContextUpdate: Boolean = timeline.any { child.context.messages[it.currentMessage.id]?.hasExternalUpdate == true },
     ) : SubAssistantDetailUiState
 }
 

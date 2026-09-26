@@ -13,9 +13,44 @@ import org.junit.Test
 
 class PlatformControlClientTest {
     private val client = PlatformControlClient(OkHttpClient())
-    private fun fixture(name: String): String = requireNotNull(javaClass.getResourceAsStream("/contracts/platform/cases.json"))
+    private fun fixture(name: String, target: Boolean = true): String = requireNotNull(javaClass.getResourceAsStream("/contracts/platform/cases.json"))
         .bufferedReader().use { Json.parseToJsonElement(it.readText()).jsonArray }
-        .first { it.jsonObject.getValue("name").jsonPrimitive.content == name }.jsonObject.getValue("value").toString()
+        .first { it.jsonObject.getValue("name").jsonPrimitive.content == name }.jsonObject.getValue("value").toString().let { if (target) withStarterOpeningMock(it) else it }
+
+    @Test
+    fun `live discovery accepts v4 and v5 but rejects an unsupported server`() = runBlocking {
+        for (versions in listOf(listOf(4L), listOf(5L), listOf(4L, 5L), listOf(6L))) {
+            val discovery = PlatformWireCodec.decode<PlatformDiscovery>(fixture("discovery"))
+                .copy(supportedSnapshotSchemaVersions = versions)
+            val server = server { reply(200, PlatformWireCodec.json.encodeToString(PlatformDiscovery.serializer(), discovery)) }
+            try {
+                if (versions == listOf(6L)) {
+                    try { client.discover(origin(server)); fail("unsupported discovery accepted") }
+                    catch (error: EnterpriseConfigurationException) {
+                        assertEquals("enterprise_configuration_version_unsupported", error.reason)
+                        assertTrue(error.message.orEmpty().contains("supports [4, 5]"))
+                    }
+                } else assertEquals(versions, client.discover(origin(server)).discovery.supportedSnapshotSchemaVersions)
+            } finally { server.stop(0) }
+        }
+    }
+
+    @Test
+    fun `v4 snapshot download preserves original bytes identity and absent opening`() = runBlocking {
+        val raw = fixture("v4-full", target = false)
+        val original = PlatformWireCodec.decode<PlatformManagedSnapshot>(raw)
+        val server = server {
+            responseHeaders.set("ETag", "\"${original.snapshotHash}\"")
+            reply(200, raw)
+        }
+        try {
+            val connection = PlatformConnection(origin(server), PlatformWireCodec.decode(fixture("discovery", target = false)))
+            val response = client.snapshot(connection, "access", original.managedGeneration, null) as PlatformSnapshotResponse.Downloaded
+            assertEquals(original, response.snapshot)
+            assertEquals(4L, response.snapshot.schemaVersion)
+            assertTrue(response.snapshot.starters.all { it.openingSnapshot == null })
+        } finally { server.stop(0) }
+    }
 
     @Test fun `recent updates use the authenticated canonical feed with a five item limit`() = runBlocking {
         var path: String? = null

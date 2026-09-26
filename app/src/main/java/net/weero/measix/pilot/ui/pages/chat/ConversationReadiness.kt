@@ -24,6 +24,10 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.stringResource
@@ -352,7 +356,7 @@ private fun PersonalReadinessRows(
 }
 
 @Composable
-private fun EnterpriseStarterRow(
+internal fun EnterpriseStarterRow(
     starters: List<ConversationStarterUiModel>,
     scale: Float,
     onClick: (ConversationStarterUiModel) -> Unit,
@@ -368,11 +372,16 @@ private fun EnterpriseStarterRow(
         contentPadding = PaddingValues(horizontal = 6.dp),
     ) {
         items(starters, key = { it.reference.toString() }) { starter ->
+            val selectedDescription = stringResource(R.string.opening_selected, starter.title)
             Surface(
                 onClick = { onClick(starter) },
                 shape = RoundedCornerShape(12.dp),
                 color = MaterialTheme.colorScheme.surfaceContainerHighest,
-                modifier = Modifier.widthIn(min = 180.dp, max = 260.dp),
+                border = if (starter.selected) BorderStroke(1.dp, MaterialTheme.colorScheme.primary) else null,
+                modifier = Modifier.widthIn(min = 180.dp, max = 260.dp).semantics {
+                    selected = starter.selected
+                    if (starter.selected) contentDescription = selectedDescription
+                },
             ) {
                 Column(Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
                     Text(

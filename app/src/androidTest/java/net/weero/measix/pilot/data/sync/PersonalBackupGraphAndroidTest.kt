@@ -36,7 +36,11 @@ import net.weero.measix.pilot.data.files.ArtifactPayloadStore
 import net.weero.measix.pilot.data.files.ArtifactSettingsCoordinator
 import net.weero.measix.pilot.data.files.ArtifactStore
 import net.weero.measix.pilot.data.imggen.GeneratedMediaStore
-import net.weero.measix.pilot.data.model.MessageNode
+import net.weero.measix.pilot.data.model.*
+import net.weero.measix.pilot.data.db.entity.ConversationModelContextEntity
+import net.weero.measix.pilot.data.db.entity.ArtifactReferenceType
+import net.weero.measix.pilot.data.files.OwnedArtifact
+import net.weero.measix.pilot.data.db.dao.readMessagesPayload
 import net.weero.measix.pilot.data.repository.GenMediaRepository
 import net.weero.measix.pilot.utils.JsonInstant
 import org.junit.After
@@ -89,6 +93,67 @@ class PersonalBackupGraphAndroidTest {
         scope.coroutineContext[Job]!!.cancelAndJoin()
         root.deleteRecursively()
         Unit
+    }
+
+    @Test
+    fun contextArtifactsExportOnlyPersonalAndRestoreRetainsEnterpriseReferences() = runBlocking {
+        val userId = conversation(personal, "personal context")
+        val enterpriseId = conversation(enterprise, "enterprise context")
+        val own = artifacts.createText(personal, "personal immutable body", displayName = "context.txt")
+        val managed = artifacts.createText(enterprise, "enterprise immutable body", displayName = "context.txt")
+        val ownBody = contextEntry(userId, own)
+        val managedBody = contextEntry(enterpriseId, managed)
+        artifacts.ensureReferenceProjection()
+        artifacts.publishUnpublished(own)
+        artifacts.publishUnpublished(managed)
+        val archive = archiveService.prepare(BackupSelection(true, true))
+        val archiveDb = File(context.cacheDir, "context-export.sqlite")
+        ZipFile(archive).use { zip ->
+            val names = zip.entries().asSequence().map { it.name }.toSet()
+            assertTrue(own.entity.relativePath in names)
+            assertFalse(managed.entity.relativePath in names)
+            archiveDb.writeBytes(zip.getInputStream(zip.getEntry(BackupArchiveService.DATABASE_ENTRY)).readBytes())
+        }
+        val exported = createAppDatabase(context, archiveDb.absolutePath)
+        try {
+            assertEquals(1L, scalar(exported, "SELECT COUNT(*) FROM conversation_model_context"))
+            assertTrue(exported.artifactReferenceDao().existsInConversation(own.entity.id, userId, ArtifactReferenceType.CONTEXT.name))
+            assertNull(exported.artifactDao().getById(managed.entity.id))
+        } finally { exported.close() }
+        archiveService.stageRestore(archive, BackupSelection(true, true))
+        room.close()
+        PendingBackupRestore.applyBeforeDatabaseOpen(context, readSettings = settings::snapshotUserDocument)
+        openOwners()
+        assertEquals("personal immutable body", artifacts.readContextText(personal, ownBody))
+        assertEquals("enterprise immutable body", artifacts.readContextText(enterprise, managedBody))
+        assertTrue(room.artifactReferenceDao().existsInConversation(own.entity.id, userId, ArtifactReferenceType.CONTEXT.name))
+        assertTrue(room.artifactReferenceDao().existsInConversation(managed.entity.id, enterpriseId, ArtifactReferenceType.CONTEXT.name))
+        assertTrue(artifacts.collectGarbage(protectionWindowMillis = 0).isEmpty())
+        room.openHelper.readableDatabase.query("PRAGMA foreign_key_check").use { assertFalse(it.moveToFirst()) }
+        PendingBackupRestore.complete(context)
+    }
+
+    @Test
+    fun crossScopeContextCannotBecomePersonalArchiveContent() = runBlocking {
+        val userId = conversation(personal, "invalid personal context")
+        val managed = artifacts.createText(enterprise, "enterprise secret", displayName = "context.txt")
+        contextEntry(userId, managed)
+        val failure = runCatching { archiveService.prepare(BackupSelection(true, true)) }.exceptionOrNull()
+        assertNotNull(failure)
+        assertEquals("enterprise secret", artifacts.file(managed.entity).readText())
+        assertEquals(enterprise, room.artifactDao().getById(managed.entity.id)!!.scope)
+        assertEquals(1L, scalar(room, "SELECT COUNT(*) FROM conversation_model_context"))
+    }
+
+    private suspend fun contextEntry(conversationId: String, artifact: OwnedArtifact): ConversationContextBody.Artifact {
+        val node = room.messageNodeDao().getNodeHeadersOfConversation(conversationId).single()
+        val message = JsonInstant.decodeFromString<List<UIMessage>>(room.messageNodeDao().readMessagesPayload(node, "test")).single()
+        val body = ConversationContextBody.Artifact(artifact.entity.id, artifact.entity.relativePath)
+        val payload = ConversationContextPayload(source = ConversationContextSource.HistorySummary(null, "summary"), body = body)
+        room.conversationModelContextDao().insertOnce(listOf(ConversationModelContextEntity(
+            contextEntryIdentity(Uuid.parse(node.id), message.id, 0).toString(), node.id, message.id.toString(),
+            node.id, message.id.toString(), 0, null, payload.source.kind, ConversationContextCodec.encode(payload))))
+        return body
     }
 
     @Test
@@ -320,7 +385,7 @@ class PersonalBackupGraphAndroidTest {
     private fun openOwners() {
         room = createAppDatabase(context, "measix_pilot")
         artifacts = ArtifactStore(ArtifactPayloadStore(context), room.artifactDao(), room.artifactReferenceDao(),
-            room.systemMetaDao(), room.conversationDao(), room.messageNodeDao(), ArtifactSettingsCoordinator(settings),
+            room.systemMetaDao(), room.conversationDao(), room.messageNodeDao(), room.conversationModelContextDao(), ArtifactSettingsCoordinator(settings),
             RoomDatabaseTransactionRunner(room))
         media = GeneratedMediaStore(context.filesDir, GenMediaRepository(room.genMediaDao()), artifacts)
         archiveService = BackupArchiveService(context, settings, catalogs, JsonInstant, room, artifacts, media)

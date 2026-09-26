@@ -9,7 +9,10 @@ import me.rerere.ai.ui.UIMessagePart
 import me.rerere.ai.ui.confirmedReplayableToolOrdinals
 import me.rerere.ai.ui.findUserTurnStart
 import me.rerere.ai.ui.replaySafeProjection
-import net.weero.measix.pilot.data.model.ConversationModelContextEntry
+import net.weero.measix.pilot.data.model.*
+import net.weero.measix.pilot.service.ConversationDisclosureSnapshotService
+import net.weero.measix.pilot.service.DisclosureFact
+import net.weero.measix.pilot.service.DisclosureToolOutcome
 import kotlin.uuid.Uuid
 
 /** 一条请求消息在 durable 树中的精确位置。 */
@@ -32,22 +35,17 @@ enum class SyntheticMessageKind {
     SYSTEM_PROMPT,
     PROMPT_INJECTION,
     TIME_REMINDER,
-    WORKSPACE_REMINDER,
+    APPLICATION_CONTEXT,
 }
 
-/** 一条 context 投影：content 放到 anchor USER message 的最前面。 */
+/** The admitted source and exact location travel together; content is already rendered. */
 internal data class ModelContextProjection(
-    val anchorMessageId: Uuid,
+    val entryId: Uuid,
+    val owner: ContextMessageLocator,
+    val role: MessageRole,
+    val placement: ContextPlacement,
     val content: String,
-)
-
-/**
- * Turn 启动时确定的请求侧 context 投影：START 用唯一适用谓词过滤后的冻结 entries +
- * durable 树的位置表。同一 Turn 的 continuation / 重试只复用这份投影。
- */
-internal data class TurnModelContextProjection(
-    val entries: List<ConversationModelContextEntry>,
-    val locators: Map<Uuid, DurableMessageLocator>,
+    val source: ConversationContextSource,
 )
 
 /** Tool system prompt 与 Provider 请求共用的请求级投影。 */
@@ -55,6 +53,8 @@ internal data class RequestContextPlan(
     val messages: List<UIMessage>,
     val originsByMessageId: Map<Uuid, RequestMessageOrigin>,
     val contextProjections: List<ModelContextProjection>,
+    val disclosureFacts: List<DisclosureFact> = emptyList(),
+    val previouslyDisclosed: Set<DisclosureSection> = emptySet(),
 )
 
 /** 成功 Provider 请求中可保守确认已进入最终投影的 inline Tool Result locator。 */
@@ -66,120 +66,209 @@ internal data class ModelRequestReceipt(
 internal class RequestContextPlanner {
 
     /**
-     * 请求窗口的唯一规划入口：
-     * selected durable branch → replay-safe projection → messageLimit 裁剪 →
-     * 按 anchor 位置选择 context 投影与 durable origin 表。
-     *
-     * [modelContextEntries] 必须是 START 时经唯一适用谓词过滤的冻结集合；窗口内不再做
-     * 适用性推断。开启 context 时每条窗口消息都必须已有 durable locator，否则请求失败，
-     * 绝不按 role 或位置伪造来源。
+     * Only admitted historical disclosure is replayed here. Other sources are selected by the
+     * current frozen request. Current configuration never enters this historical projection.
+     * The caller certifies built-in identity, namespace and execution phase for every tool fact.
      */
     fun planRequest(
         durableMessages: List<UIMessage>,
         durableLocators: Map<Uuid, DurableMessageLocator> = emptyMap(),
         modelContextEntries: List<ConversationModelContextEntry> = emptyList(),
+        contextAdmissions: List<ConversationContextAdmission> = emptyList(),
         messageLimit: Int,
+        requestOwner: ContextMessageLocator? = null,
+        requestStepId: Uuid? = null,
+        applicableDisclosureSections: (ConversationModelContextEntry) -> Set<DisclosureSection> = { emptySet() },
+        classifyTool: (ToolCallLocator, UIMessagePart.Tool) -> DisclosureFact.Tool? = { _, _ -> null },
     ): RequestContextPlan {
-        val projected = durableMessages.replaySafeProjection()
-        val window = limitContext(projected, messageLimit)
-        // 位置对齐必须以投影后列表为基准：replay projection 会丢弃空白等不可上传消息，
-        // 用未投影 branch 推导窗口起点会把无关数据形状放大成永久请求失败。
-        val contextProjections = planContextProjections(
-            branch = projected,
-            window = window,
-            entries = modelContextEntries,
-        )
-        if (contextProjections.isNotEmpty()) {
-            window.forEach { message ->
-                require(durableLocators.containsKey(message.id)) {
-                    "retained request message has no durable locator: ${message.id}"
-                }
+        require((requestOwner == null) == (requestStepId == null)) { "context_request_boundary_incomplete" }
+        val branch = if (requestOwner == null) durableMessages else {
+            val index = durableMessages.indexOfFirst { it.id == requestOwner.messageId }
+            require(index >= 0 && durableLocators[requestOwner.messageId]?.nodeId == requestOwner.nodeId) {
+                "context_request_owner_missing"
             }
+            val message = durableMessages[index]
+            val boundary = message.parts.indexOfFirst { it is UIMessagePart.Step && it.stepId == requestStepId }
+            require(boundary >= 0) { "context_request_step_missing" }
+            val past = message.parts.take(boundary)
+            val boundaryStep = (message.parts[boundary] as UIMessagePart.Step).copy(modelResult = null, outcome = null, finishedAt = null)
+            durableMessages.take(index) + message.copy(parts = past + boundaryStep,
+                providerMetadata = metadataForParts(past),
+                terminalStatus = null, terminalReason = null, terminalDetail = null, providerReplayProjection = null)
+        }
+        val projected = branch.mapNotNull { message ->
+            message.replaySafeProjection() ?: message.takeIf { it.id == requestOwner?.messageId }
+        }
+        val boundaryOnly = projected.lastOrNull()?.takeIf { it.id == requestOwner?.messageId && !it.isValidToUpload() }
+        val history = if (boundaryOnly == null) projected else projected.dropLast(1)
+        val window = limitContext(history, messageLimit) + listOfNotNull(boundaryOnly)
+        val branchIndex = branch.withIndex().associate { it.value.id to it.index }
+        val applicability = ConversationModelContextApplicability.index(branch)
+        val byId = modelContextEntries.associateBy { it.id }
+        val events = mutableListOf<DisclosureEvent>()
+        val seen = mutableSetOf<DisclosureSection>()
+        val projections = mutableListOf<ModelContextProjection>()
+        val candidates = mutableListOf<ModelContextProjection>()
+        val closed = mutableListOf<ModelContextProjection>()
+        fun missingAt(entry: ConversationModelContextEntry, owner: ContextMessageLocator, stepId: Uuid?) {
+            val source = entry.payload.source as ConversationContextSource.Disclosure
+            val supplied = ConversationDisclosureSnapshotService.readSections(
+                (entry.payload.body as ConversationContextBody.Inline).text).keys
+            val sections = supplied.intersect(applicableDisclosureSections(entry)).ifEmpty {
+                if (source.namespace == null) supplied else emptySet()
+            }
+            if (sections.isEmpty()) return
+            seen += sections
+            val index = branchIndex.getValue(owner.messageId)
+            val boundary = stepId?.let { id -> branch[index].parts.indexOfFirst {
+                it is UIMessagePart.Step && it.stepId == id
+            }.also { require(it >= 0) { "context_request_step_missing" } } * 2 } ?: -1
+            events += DisclosureEvent(index, boundary, DisclosureFact.Missing(sections))
+        }
+        val orderedAdmissions = contextAdmissions.filter { admission ->
+            val index = branchIndex[admission.owner.messageId] ?: return@filter false
+            val message = branch[index]
+            message.parts.any { it is UIMessagePart.Step && it.stepId == admission.stepId }
+        }.sortedWith(compareBy({ branchIndex.getValue(it.owner.messageId) }, { admission ->
+            branch[branchIndex.getValue(admission.owner.messageId)].parts.indexOfFirst {
+                it is UIMessagePart.Step && it.stepId == admission.stepId }
+        }))
+        orderedAdmissions.groupBy { it.owner }.forEach { (owner, admissions) ->
+            val steps = branch[branchIndex.getValue(owner.messageId)].parts.filterIsInstance<UIMessagePart.Step>()
+            val resolved = resolveUsesAt(admissions, owner, admissions.last().stepId, steps, includeOmitted = true)
+            resolved.uses.forEach { use ->
+                val entry = requireNotNull(byId[use.entryId]) { "context_contribution_missing: ${use.entryId}" }
+                if (entry.payload.source !is ConversationContextSource.Disclosure) return@forEach
+                if (!applicability.applicable(entry)) {
+                    // A selected Assistant can outlive an edit to its causal USER. Its saved
+                    // body remains historical, but must not be replayed at that retired anchor.
+                    missingAt(entry, owner, admissions.last { request -> request.uses.any { it.entryId == use.entryId } }.stepId)
+                    return@forEach
+                }
+                val projection = ModelContextProjection(entry.id, owner, use.role, use.placement,
+                    (entry.payload.body as ConversationContextBody.Inline).text, entry.payload.source)
+                if (use.placement == ContextPlacement.Omitted) {
+                    val boundary = admissions.last { request -> request.uses.any { it.entryId == use.entryId } }
+                    closed += projection.copy(placement = ContextPlacement.BeforeStep(boundary.stepId))
+                } else candidates += projection
+            }
+        }
+        // Historical format 1/2 rows have no request admission. Their saved causal anchor is their
+        // original location, never a license to move the old body to the current window start.
+        val admittedIds = orderedAdmissions.flatMap { it.uses }.mapTo(mutableSetOf()) { it.entryId }
+        modelContextEntries.filter { it.id !in admittedIds && it.stepId == null &&
+            it.payload.source is ConversationContextSource.Disclosure && it.ownerMessageId in branchIndex }.forEach { entry ->
+            if (!applicability.applicable(entry)) {
+                missingAt(entry, ContextMessageLocator(entry.ownerNodeId, entry.ownerMessageId), null)
+                return@forEach
+            }
+            candidates += ModelContextProjection(entry.id, ContextMessageLocator(entry.ownerNodeId, entry.ownerMessageId),
+                MessageRole.USER, ContextPlacement.BeforeMessage(ContextMessageLocator(entry.anchorNodeId, entry.anchorMessageId)),
+                (entry.payload.body as ConversationContextBody.Inline).text, entry.payload.source)
+        }
+        // An entry may be reused at a later request location. Keep its earliest retained location,
+        // so the same immutable contribution is not inserted twice in a single model request.
+        val chosen = candidates.groupBy { it.entryId }.values.map { uses ->
+            uses.firstOrNull { placementVisible(it, window) } ?: uses.first()
+        }
+        val activeIds = chosen.mapTo(hashSetOf()) { it.entryId }
+        closed.filter { it.entryId !in activeIds }.forEach { projection ->
+            val entry = byId.getValue(projection.entryId)
+            val supplied = ConversationDisclosureSnapshotService.readSections(projection.content).keys
+            val applicable = supplied.intersect(applicableDisclosureSections(entry))
+            val sections = applicable.ifEmpty {
+                if ((entry.payload.source as ConversationContextSource.Disclosure).namespace == null) supplied else emptySet()
+            }
+            if (sections.isNotEmpty()) {
+                seen += sections
+                val position = positionOf(projection, branch)
+                events += DisclosureEvent(position.first, position.second, DisclosureFact.Missing(sections))
+            }
+        }
+        chosen.forEach { projection ->
+            val entry = byId.getValue(projection.entryId)
+            val supplied = ConversationDisclosureSnapshotService.readSections(projection.content).keys
+            val sections = supplied.intersect(applicableDisclosureSections(entry))
+            val position = positionOf(projection, branch)
+            if (sections.isEmpty()) {
+                // Unknown historical scope proves prior disclosure, not current-scope knowledge.
+                // Explicitly incompatible known scopes do not establish even this evidence.
+                if ((entry.payload.source as ConversationContextSource.Disclosure).namespace == null) {
+                    seen += supplied
+                    events += DisclosureEvent(position.first, position.second, DisclosureFact.Missing(supplied))
+                }
+                return@forEach
+            }
+            seen += sections
+            if (sections == supplied && placementVisible(projection, window)) {
+                projections += projection
+                events += DisclosureEvent(position.first, position.second, DisclosureFact.Snapshot(projection.content, sections))
+            } else events += DisclosureEvent(position.first, position.second, DisclosureFact.Missing(sections))
+        }
+        val visibleById = window.associateBy { it.id }
+        branch.forEachIndexed { messageIndex, original ->
+            val visible = visibleById[original.id]
+            val confirmed = visible?.confirmedReplayableToolOrdinals().orEmpty()
+            val actualTools = visible?.parts?.filterIsInstance<UIMessagePart.Tool>().orEmpty()
+            original.parts.forEachIndexed { partIndex, part ->
+                if (part !is UIMessagePart.Tool) return@forEachIndexed
+                val locator = ToolCallLocator(original.id, part.stepId, part.localCallId)
+                val ordinal = actualTools.indexOfFirst { it.stepId == part.stepId && it.localCallId == part.localCallId }
+                val actual = actualTools.getOrNull(ordinal)
+                val fact = classifyTool(locator, actual ?: part) ?: return@forEachIndexed
+                if (!fact.appliesToCurrentScope || fact.outcome == DisclosureToolOutcome.NOT_EXECUTED) return@forEachIndexed
+                seen += fact.builtin.section
+                val known = ordinal in confirmed && actual?.runtimeState?.archive == null
+                events += DisclosureEvent(messageIndex, partIndex * 2 + 1,
+                    if (known) fact else DisclosureFact.Missing(setOf(fact.builtin.section)))
+            }
+        }
+        if (projections.isNotEmpty()) window.forEach { message ->
+            require(durableLocators.containsKey(message.id)) { "retained request message has no durable locator: ${message.id}" }
         }
         val origins = window.mapNotNull { message ->
             durableLocators[message.id]?.let { message.id to RequestMessageOrigin.Durable(it) }
         }.toMap()
-        return RequestContextPlan(window, origins, contextProjections)
+        return RequestContextPlan(window, origins, projections,
+            events.sortedWith(compareBy({ it.messageIndex }, { it.partPosition })).map { it.fact }, seen)
     }
 
-    /**
-     * 裁剪后的 context 选择：baseline = retained 第一条真实 USER 之前（含同位置）
-     * 最近一条 Snapshot，投影到该 USER；窗口内更晚 anchor 的 Snapshot 保持在各自 anchor 前；
-     * baseline 之前与窗口外的条目不发送。只移动请求投影位置，不修改 durable owner/anchor。
-     *
-     * [branch] 是 replay-safe projection 之后的 durable 序列；anchor 被投影丢弃（如空白
-     * USER）视同“retained anchor 找不到”，fail-closed。
-     */
-    private fun planContextProjections(
-        branch: List<UIMessage>,
-        window: List<UIMessage>,
-        entries: List<ConversationModelContextEntry>,
-    ): List<ModelContextProjection> {
-        if (entries.isEmpty()) return emptyList()
-        val firstUserWindowIndex = window.indexOfFirst { it.role == MessageRole.USER }
-        check(firstUserWindowIndex >= 0) { "retained request window contains no real USER turn" }
-        // limitContext 产生连续后缀窗口：branch 索引 = 窗口起点偏移 + 窗口内索引。
-        val windowStart = branch.size - window.size
-        check(windowStart >= 0 && branch.subList(windowStart, branch.size).map { it.id } == window.map { it.id }) {
-            "request window is not a contiguous suffix of the durable branch"
-        }
-        val branchIndexOf = HashMap<Uuid, Int>(branch.size)
-        branch.forEachIndexed { index, message -> branchIndexOf.putIfAbsent(message.id, index) }
-        val firstUserBranchIndex = windowStart + firstUserWindowIndex
-        val placements = entries.map { entry ->
-            val anchorIndex = branchIndexOf[entry.anchorMessageId]
-                ?: error("applicable model-context anchor is off the request branch: ${entry.anchorMessageId}")
-            anchorIndex to entry
-        }
-        val baseline = placements.filter { (anchorIndex, _) -> anchorIndex <= firstUserBranchIndex }
-            .maxByOrNull { (anchorIndex, _) -> anchorIndex }
-        return buildList {
-            baseline?.let { (_, entry) ->
-                add(ModelContextProjection(window[firstUserWindowIndex].id, entry.content))
-            }
-            placements
-                .filter { (anchorIndex, entry) ->
-                    anchorIndex > firstUserBranchIndex && anchorIndex >= windowStart
-                }
-                .sortedBy { (anchorIndex, _) -> anchorIndex }
-                .forEach { (_, entry) ->
-                    add(ModelContextProjection(entry.anchorMessageId, entry.content))
-                }
-        }
-    }
-
-    /**
-     * transformers 完成后、token estimate 与 Provider 调用之前，把 context
-     * part 作为 anchor USER 的第一个 part 注入，用户原始 parts 的顺序与内容保持不变。
-     * retained anchor 在变换后缺失、重复、或不是 Durable USER 时请求失败：绝不把 Snapshot
-     * 附着到 synthetic 消息。
-     */
+    /** Caller supplies the exact admitted current selection as additional projections. */
     fun applyContextProjections(
         transformedMessages: List<UIMessage>,
         projections: List<ModelContextProjection>,
         originsByMessageId: Map<Uuid, RequestMessageOrigin>,
-    ): List<UIMessage> {
-        if (projections.isEmpty()) return transformedMessages
-        val contentByAnchor = LinkedHashMap<Uuid, MutableList<String>>()
-        projections.forEach { projection ->
-            contentByAnchor.getOrPut(projection.anchorMessageId) { mutableListOf() }.add(projection.content)
+        onProjected: (ModelContextProjection, UIMessagePart.Text, Uuid, Boolean) -> Unit = { _, _, _, _ -> },
+    ): List<UIMessage> = projectAdmittedContext(transformedMessages, projections, originsByMessageId, onProjected)
+
+    private data class DisclosureEvent(val messageIndex: Int, val partPosition: Int, val fact: DisclosureFact)
+
+    private fun positionOf(projection: ModelContextProjection, messages: List<UIMessage>): Pair<Int, Int> {
+        val placement = projection.placement
+        val messageId = when (placement) {
+            is ContextPlacement.BeforeMessage -> placement.message.messageId
+            is ContextPlacement.MessagePart -> placement.message.messageId
+            else -> projection.owner.messageId
         }
-        contentByAnchor.forEach { (anchorMessageId, _) ->
-            val matches = transformedMessages.count { it.id == anchorMessageId }
-            check(matches == 1) { "model-context anchor appears $matches times after transforms: $anchorMessageId" }
+        val index = messages.indexOfFirst { it.id == messageId }
+        require(index >= 0) { "context_placement_off_branch: $messageId" }
+        val part = when (placement) {
+            is ContextPlacement.MessagePart -> placement.partIndex * 2
+            is ContextPlacement.BeforeStep -> messages[index].parts.indexOfFirst {
+                it is UIMessagePart.Step && it.stepId == placement.stepId }.also {
+                    require(it >= 0) { "context_placement_step_missing" }
+                } * 2
+            else -> -1
         }
-        return transformedMessages.map { message ->
-            val contents = contentByAnchor[message.id] ?: return@map message
-            check(message.role == MessageRole.USER) {
-                "model-context anchor must be a USER message: ${message.id}"
-            }
-            check(originsByMessageId[message.id] is RequestMessageOrigin.Durable) {
-                "model-context must not attach to a synthetic message: ${message.id}"
-            }
-            message.copy(
-                parts = contents.map { UIMessagePart.Text(it) } + message.parts,
-            )
-        }
+        return index to part
+    }
+
+    private fun placementVisible(projection: ModelContextProjection, window: List<UIMessage>): Boolean = when (val placement = projection.placement) {
+        is ContextPlacement.BeforeMessage -> window.any { it.id == placement.message.messageId }
+        is ContextPlacement.MessagePart -> window.any { it.id == placement.message.messageId && placement.partIndex <= it.parts.size }
+        is ContextPlacement.BeforeStep -> window.any { it.id == projection.owner.messageId && it.parts.any { part ->
+            part is UIMessagePart.Step && part.stepId == placement.stepId } }
+        else -> false
     }
 
     /**

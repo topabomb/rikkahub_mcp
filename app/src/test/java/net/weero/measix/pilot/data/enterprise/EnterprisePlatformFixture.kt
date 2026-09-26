@@ -8,7 +8,7 @@ import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 
-/** Test projection of the current Core contract. It deliberately has no private bindings or local source. */
+/** Test projection of the Android target contract with explicit v5 mock input. It deliberately has no private bindings or local source. */
 internal data class EnterprisePackage(
     val identity: EnterpriseIdentity,
     val configuration: EnterpriseConfiguration,
@@ -27,7 +27,7 @@ private fun platformCase(name: String): String = requireNotNull(
 ).bufferedReader().use { reader ->
     Json.parseToJsonElement(reader.readText()).jsonArray
         .first { it.jsonObject.getValue("name").jsonPrimitive.content == name }
-        .jsonObject.getValue("value").toString()
+        .jsonObject.getValue("value").toString().let(::withStarterOpeningMock)
 }
 
 private fun basePlatformCandidate(): EnterpriseCandidate {

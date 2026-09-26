@@ -239,7 +239,7 @@ internal data class UserPreferences(
     fun lastConversation(scope: ConfigurationScope): kotlin.uuid.Uuid? =
         scopes.singleOrNull { it.scope == scope }?.lastConversationId
 
-    fun withLastConversation(scope: ConfigurationScope, id: kotlin.uuid.Uuid): UserPreferences {
+    fun withLastConversation(scope: ConfigurationScope, id: kotlin.uuid.Uuid?): UserPreferences {
         val existing = scopes.singleOrNull { it.scope == scope } ?: ScopedUserPreferences(scope)
         return copy(scopes = scopes.filterNot { it.scope == scope } + existing.copy(lastConversationId = id))
     }

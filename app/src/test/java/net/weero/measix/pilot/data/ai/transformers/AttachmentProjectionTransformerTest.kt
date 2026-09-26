@@ -328,6 +328,30 @@ class AttachmentProjectionTransformerTest {
     }
 
     @Test
+    fun `rematerialized tool image keeps durable source identity for context admission`() = runTest {
+        val original = stampedImage(fileName = "old.png")
+        val ref = LocalArtifactRef(relativePath = "upload/restored.png", mimeType = "image/png")
+        every { reads.resolve(ref) } returns ref
+        val rewriter = net.weero.measix.pilot.data.files.ToolArtifactRewriter(context.filesDir, mockk())
+        val tool = UIMessagePart.Tool(
+            localCallId = Uuid.random(), stepId = Uuid.random(), providerCallId = "restored-call",
+            toolName = "generate_image", input = "{}", output = listOf(original),
+            metadata = rewriter.encodeArtifactRef(null, ref),
+        )
+        val message = UIMessage(role = MessageRole.ASSISTANT, parts = listOf(tool))
+        val ctx = ctxFor(visionModel)
+        val restored = ToolArtifactReplayTransformer(rewriter).transform(ctx, listOf(message))
+        val projected = transformer.transform(ctx, restored).single().parts.single() as UIMessagePart.Tool
+        val marker = projected.output.first() as UIMessagePart.Text
+        val source = ctx.requestOrigins.source(marker) as RequestPartSource.AttachmentInput
+        org.junit.Assert.assertSame(original, source.attachment)
+        assertEquals("[Attachment path=/upload/restored.png type=image input=native]", marker.text)
+        assertEquals(ref.fileUri(context.filesDir), (projected.output.last() as UIMessagePart.Image).url)
+        org.junit.Assert.assertSame(original, tool.output.single())
+        assertEquals("file:///tmp/old.png", original.url)
+    }
+
+    @Test
     fun `assistant image fact stays in assistant message`() = runTest {
         val ref = AttachmentRefs.format(Uuid.random())
         val message = UIMessage(role = MessageRole.ASSISTANT, parts = listOf(stampedImage(ref)))

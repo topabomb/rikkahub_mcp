@@ -139,6 +139,38 @@ AndroidX JSON 的 `sampledMetrics` 保留每轮耗时与 `JavaAllocatedBytesAppr
 
 `contracts/runtime/managed-snapshot-required.json` 原样来自 platform-core 的 `api/fixtures/problem/managed-snapshot-required.json`，由平台 Runtime/MCP 测试消费。Android 自有工具测试不宣称跨端共享样例或真实服务互操作。
 
+Starter v4/v5 使用 Core 导出的单一 OpenAPI、manifest 和共享 cases，来源见 [配置架构](android-configuration-architecture.md)。`PlatformContractSourceTest` 验证来源摘要，`PlatformCoreStarterContractTest` 消费 Core v5 canonical opening 并核对字面内容/顺序，`PlatformWireTest` 验证各版本严格解析。`withStarterOpeningMock` 仅为独立网络错误/变化场景构造确定性输入与 Mock hash，不承担 wire schema 权威。`EnterpriseStarterAppliedStoreTest` 在真实临时文件上验证 opening 原文/顺序、历史缺失、Session Discovery `[4]` 与 revision 保全；`PlatformSessionNetworkTest` 覆盖 Bootstrap 仍支持的已知 v4/v5 缓存使用 304、未知或已撤销版本不发送 ETag、意外 304 拒绝且保全 Applied，以及 v4→v5 下载后的原子发布和重开。`EnterpriseStarterPersistenceAndroidTest` 在独立 noBackup 目录使用真实 Android Keystore 和 AtomicFile，验证发布后重开及历史文件原文不被改写。测试存在不表示设备或真实 Core 联调已经通过，须分别记录执行结果。
+
+`StarterOpeningSelectionTest` 覆盖轻量导航、原发布来源保留、定义变更与撤销；`ConversationPageAccessTest` 以真实 runtime/command 链验证提交后 UI 拒收的精确补偿，以及旧选择 token 不能覆盖后来绑定。`StarterOpeningDetailsAndroidTest` 验证默认折叠时不读取正文、展开后的字面文本和重复展开的查询次数；不能据此代替三个完整入口、首发失败及 IME/旋转场景的实际设备验证。
+
+`StarterEntryFlowAndroidTest` 共用真实 Applied/Keystore、Session、Application、Runtime 和 command owner，遍历 v4/v5 的空间预览、聊天快捷菜单与空白聊天卡片；验证原输入和附件保留、v4 仅填提示词、v5 绑定原定义/发布 hash，以及 Ready 再选仅追加提示词。该测试的 Repository 提交使用明确 ACK mock，落盘保全由 opening Room 与 Applied 设备测试独立覆盖，不能视作完整平台网络或全页面导航验收。
+
+`StarterV5ChatFlowAndroidTest` 在独立且从未绑定企业的设备上显式运行：`starterV5MockLive=true` 使用本地 Mock；`starterV5CoreLive=true` 和 `coreStarterInput` 由 Core 提供实际 Snapshot、目标 Starter 与临时接入资料，可分别连接 Admin→Publish 的本地确定性 adapter harness 或 `device:real` 实际供应商环境。Core lane 经正式 HTTP 同步，复用首发/Room/详情/重开断言；确定性 adapter 独立捕获并核验请求，实际供应商场景保留真实响应与原始失败诊断，二者分开记录，不以其中一种替代另一种验收。输入文件读取后删除。Android 自有 `androidTest/assets/contracts/starter-v5-e2e.json` 标明来源与 Mock 身份；本机 HTTP 提供 discovery、接入、v5 同步及 OpenAI runtime，实际 Applied/Session、RouteActivity 空态卡片、ChatVM 首发、Room 与 Provider 适配器贯通。选择目标 Starter 时先定位可见且具有横向滚动语义的卡片列表，再滚动到标题并点击；覆盖第三张等初始屏外卡片，不把隐藏导航的 LazyRow 误作目标。验证不自动发送/建库、opening System、有序背景、原发布来源、详情、Repository 直接 Room 读回与 Activity 重开（未关闭重开 AppDatabase，也不代表进程重启验收），结束通过正常会话删除和企业退出清理本 fixture。不得在已绑定生产 Demo 的 AVD 上执行，也不通过覆盖企业文件恢复数据；普通全套设备测试明确跳过，定向运行结果单独记录，文件存在不代表整链验收通过。
+
+`StarterSubmissionOwnershipAndroidTest` 经真实 Room、Artifact 与发送 owner 验证 Starter 更新拒绝后的附件归还、立即 GC 与刷新重试，安装前拒绝只补偿一次，提交前取消和草稿关闭，以及提交中取消/发布失败时的 durable 引用保全。发布失败保留异常类型、message 和 cause；故障注入等待真实 Repository 提交完成，不将挂起 spy 的原方法返回强转为 Boolean。`ArtifactUseCaseTest` 以确定的交错点覆盖关闭发生在归还检查后、重新插入前的 pin 释放。
+
+`StarterOpeningConcurrencyTest` 通过配置读取 barrier 验证并发选择串行、过期 CAS 不追加文字也不覆盖绑定，以及重新同步 v4 后显式选择清除 Draft 的 v5 开场绑定；原输入与原发布定义保全。
+
+`ConversationContextPresentationTest` 以实际 1000 节点和 500 条接纳记录的节点访问计数验证摘要投影不重复扫描选中分支，并验证指定请求的目录与完整投影一致；同时覆盖外部变化与恢复区分、空助手的因果 USER 入口、variant 隔离、窗口/namespace 选择，以及 `Omitted` 不复活已关闭的贡献。`ConversationContextQueryTest` 覆盖目录读取不读 Artifact 正文、按需原文保全、页关闭/分支切换期间的迟到结果拒绝、原异常与取消传播。`ConversationContextAndroidTest` 使用真实 Compose 验证正文折叠、原文和来源分别展开、关闭时取消读取及失败重试、新请求到达不折叠原正文，以及历史请求凭据缺失不冒充正文缺失；`SubAssistantDetailPageAndroidTest` 覆盖空取消输出到后续文本之间，请求区上下文入口仍只有一处且位置不搬移。`ChatInputStateAndroidTest` 覆盖持久提交后清理、迟到回调、相同文件重新选择和编辑输入保全。`ConversationContextAndroidTest` 另以 320dp 宽度、1.8 倍字体和真实 IME 验证无外部变化时不增加行、外部变化最多一行且正文位置稳定。测试文件存在不等于模拟器已验收，需记录定向执行结果。
+
+`ConfigurationFeedbackTest` 区分下一次发送（START）生效的配置与立即呈现的视觉配置，避免背景或视觉正则显示延迟生效。`PromptPageAndroidTest` 通过实际编辑弹层切换位置、修改深度和提交，验证 role 保留、条件显隐与 200dp 正文编辑区不随标签变更而改变；既有 `AssistantPromptPageAndroidTest` 继续验证后台更新后提交使用原编辑基线。
+
+`AdaptiveModalFeedbackAndroidTest` 验证嵌套配置模态只有活动 host 显示一条反馈，父内容不会因暂时隐藏反馈而重建。`ConversationCommandAccessTest` 通过原 worker 清理 barrier 区分接受请求与 Append 已提交：等待期间退出并重新登录不补写旧请求，多次替换必须等待全部原清理且只有最终请求取得 durable receipt。
+
+`TurnWorkloadBenchmarks.renderHundredActiveAssistantUpdatesWithContext` 使用独立 `compose_context_100` 场景：1000 个节点、26 组有效 System/披露与接纳记录，生产 `ConversationPresentationProjector` 和真实 `ChatMessage` 的轻量摘要；仅最后助手出现一条外部更新，100 次流式更新期间正文保持折叠。沿用原 Trace、分配与 frame 指标；原 `compose_100` 场景保留。两者 fixture 的历史角色结构不同，不能把耗时差简单当作上下文功能开销；该场景也不代表详情正文展开、查询或真实模型网络成本。
+
+`ChatContextFlowAndroidTest` 经真实 `RouteActivity`、Settings/Memory/Conversation owner、Room 和 OpenAI 适配器驱动连续三次发送及工具续步；HTTP 仅连接本机 Mock。首请求等待时从原选择器切模型，通过 owner 改 System、提示规则、Memory 和子助手目录；两次记忆写入与一次助手管理沿正式审批执行，验证同 Turn 模型/System/规则固定、完整工具结果先于外部变化、自身操作不额外注入。下一 START 采用新配置，聊天扩展中关闭规则后第三 START 不再含该规则；核对实际入口、详情原文与唯一外部更新行。测试截图优先保存在 instrumentation `additionalTestOutputDir` 下的 `context-ui-evidence`，未提供参数时才使用应用外部文件目录；fixture 只创建随机身份的助手/Provider/会话，结束后恢复原选择、域与最近会话引用。`SettingsStartupTest` 验证最近会话设值后以 null 清除只影响指定域，不改变其他域或资源选择。
+
+`ChatDocumentContextFlowAndroidTest` 从实际上传菜单导入含占位符和反引号的文档，再经 ChatVM、Room 与 Provider adapter 发送。系统文件选择器的返回 URI 和 HTTP 是 fixture，Artifact 导入与上下文接纳为真实路径。断言用户模板、文档和时间不二次渲染，DOCUMENT_TEXT/REFERENCE_ONLY 保持各自来源与实际位置，详情原文与 wire 一致，Activity 重开保留接纳且无外部更新行。截图与请求位于 `document-context-ui-evidence`。持久会话基线使用授权 `recentConversations` 查询，不以会先发出 loading 空列表的 Flow 首次发射当作数据库为空。
+
+`ManagedFileCreationIntegrationTest.mountedInputThumbnailRecoversWhenRejectedSubmissionReturnsOwnership` 在缩略图仍挂载时转移并归还输入 ownership。与 Compose 预览协程争用 draft mutex 的操作经 `awaitWithCompose` 后台执行，由有界 `compose.waitUntil` 推进测试调度，结束后 `await` 传播异常；不能嵌套 `runBlocking` 阻断持锁读取协程的恢复。原实际红色像素和输入保全断言继续保留。
+
+`PlatformContextLiveAndroidTest` 仅在显式 `platformContextLive=true` 且专用设备已接入企业时运行；普通设备门禁明确跳过。通过真实 RouteActivity 验证当前发布的 v4 Starter 仅预填、编辑后发送、真实 Provider 完成，以及消息“更多 → 上下文”展示本次接纳原文。可选 `platformContextModelSwitch=true` 通过原模型选择器切换到另一个本域已发布 CHAT 模型并再次发送，断言不额外生成状态披露。测试使用现有发布资源，不修改受管配置，保留 demo 会话并恢复临时助手/模型选择；截图和不含凭据的 release/hash、接纳数量及结果写入 instrumentation 输出目录。接入由 `PlatformEnrollmentLiveAndroidTest.enrollsForSpaceReview` 单独完成，不能把 service 接入测试声称为手工扫码 UI 验收，也不能把真实 v4 结果作为 v5 opening 证据。执行此 opt-in 流程前先完成会卸载 Debug 包的普通 connected 门禁，之后采用保留数据的安装与直接 instrumentation。
 `WorkspaceTerminalAndroidTest` 的 native PTY 使用 Android 系统 shell。Linux Rootfs 的实际验收由 `WorkspaceProotAndroidTest` 单独负责，显式传 `-Pandroid.testInstrumentationRunnerArguments.prootRootfsUrl=<匹配 ABI 的已核验 Rootfs URL>` 才下载并执行；未提供 fixture 时明确跳过。该测试使用独立临时 workspace 并在结束后清理，不修改用户已有工作区。x86_64 / 4 KB 场景验证生产 Shell、文件操作、长输出、超时、取消与双 PTY；x86_64 / 16 KB 场景用同一标准 4 KB Ubuntu archive 验证明确拒绝和旧目录保全。两环境的互斥场景跳过必须分别记账，不能汇总成所有 PRoot 场景通过；arm64 仍需对应镜像与设备执行。
 
 `connectedDebugAndroidTest` 使用独立测试 AVD，并以 `ANDROID_SERIAL` 明确目标；AGP 的安装/卸载会清理 Debug 包私有数据，不能对保存日常调试数据的 AVD 直接运行。测试目录的 finally 清理不能保护包级卸载。优先复用匹配 ABI/页大小的测试设备，临时镜像和 AVD 在验收后清理，避免积累快照与重复磁盘。
+
+
+### HTTP ASR 设备输入前提
+
+`HttpAsrLifecycleInstrumentedTest` 的录音中取消和 revoked admission 用例不依赖有声输入，覆盖不上传、原文件清理与状态复位。两个完整 WAV 上传/上传中取消用例使用 `httpAsrLiveAudio=true` 显式启用，要求测试期间向设备麦克风持续提供有声输入；每次采样保持 1.5 秒，并在等待时立即呈现 ASR Error 原诊断。普通模拟器底噪不满足 `PcmSignalStatistics` 的有效信号要求，未提供音源时这两项跳过，不能记录为成功上传验收。运行参数为 `-Pandroid.testInstrumentationRunnerArguments.httpAsrLiveAudio=true`；仅指定 `HttpAsrLifecycleInstrumentedTest` 可执行该声学场景。

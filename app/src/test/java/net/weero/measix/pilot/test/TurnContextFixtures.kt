@@ -10,6 +10,8 @@ import net.weero.measix.pilot.data.model.Assistant
 import net.weero.measix.pilot.service.ModelExecutionSnapshot
 import net.weero.measix.pilot.service.turn.TurnContext
 import net.weero.measix.pilot.service.turn.resolveTurnAssistantSnapshot
+import net.weero.measix.pilot.service.turn.freezeTurnSystem
+import net.weero.measix.pilot.service.turn.isSystemPosition
 
 internal fun testTurnContext(
     settings: Settings,
@@ -21,6 +23,13 @@ internal fun testTurnContext(
     realmAccess: net.weero.measix.pilot.data.enterprise.RealmAccess = net.weero.measix.pilot.data.enterprise.RealmAccess.Personal,
 ): TurnContext {
     val frozen = freezeToolSet(tools)
+    val configuration = net.weero.measix.pilot.data.configuration.ConfigurationResolver.resolve(
+        net.weero.measix.pilot.data.datastore.UserSettingsDocument.empty().withPersonalSettings(
+            settings.copy(assistants = settings.assistants.filterNot { it.id == assistant.id } + assistant)),
+        net.weero.measix.pilot.data.configuration.ConfigurationScope.Personal,
+        net.weero.measix.pilot.data.enterprise.EnterpriseState.Loading,
+    )
+
     return TurnContext(
         realmAccess = realmAccess,
         assistant = resolveTurnAssistantSnapshot(assistant),
@@ -34,8 +43,17 @@ internal fun testTurnContext(
             imageGeneration = null,
         ),
         mediaCapabilities = mediaCapabilities,
-        promptInputs = promptInputs,
+        promptInputs = promptInputs.copy(
+            promptInjections = promptInputs.promptInjections.filterNot { it.position.isSystemPosition() },
+            workspaceReminder = null,
+        ),
         toolDefinitions = frozen.definitions,
         toolBindingsByName = frozen.bindingsByName,
+        system = freezeTurnSystem(resolveTurnAssistantSnapshot(assistant), promptInputs, frozen.definitions),
+        disclosure = net.weero.measix.pilot.service.turn.TurnDisclosureSource.capture(
+            configuration, assistant,
+            net.weero.measix.pilot.data.model.DisclosureNamespace(null, assistant.id),
+            readConfiguration = { configuration }, readMemory = { emptyList() },
+        ),
     )
 }

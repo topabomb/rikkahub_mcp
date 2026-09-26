@@ -10,39 +10,35 @@ import net.weero.measix.pilot.data.model.Conversation
 import net.weero.measix.pilot.data.model.ConversationModelContextApplicability
 import net.weero.measix.pilot.data.model.ConversationModelContextEntry
 import net.weero.measix.pilot.data.model.MessageNode
-import net.weero.measix.pilot.service.ConversationDisclosureSnapshotService
-import net.weero.measix.pilot.service.DisclosureContentException
 import net.weero.measix.pilot.testkit.sampledModelResult
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import kotlin.uuid.Uuid
 
 /**
- * model-context entry 的原子命令语义验收：
- * insert-once、baseline 判等、regenerate 排除旧 owner、variant 删除与截断收口。
+ * 支持的历史 model-context row 在编辑、variant、删除与截断后的保全及适用性。
+ * 新 START 只创建请求 owner；新内容写入由 ConversationContextTransitionTest 保护。
  * 全部经由纯 Transition，不触碰 IO。
  */
 class ConversationModelContextTransitionTest {
 
     private val turnFinishedAt = LocalDateTime(2026, 1, 2, 3, 4, 5)
 
-    @Test fun `format upgrade appends one baseline and preserves published personal history bytes`() {
-        val old = """{"type":"conversation_disclosure_snapshot","format":1,"memory":{"enabled":false,"scope":"disabled","header":["id","content"],"rows":[]},"sub_assistants":{"mode":"disabled","header":["id","name","description"],"rows":[]}}"""
-        var snapshot = Conversation.ofId(Uuid.random()).copy(messageNodes = listOf(userNode("old"))).toSnapshot()
+    @Test
+    fun `START adds owner without creating or replacing context entries`() {
+        val base = Conversation.ofId(Uuid.random()).copy(messageNodes = listOf(userNode("first"))).toSnapshot()
         val first = Uuid.random()
-        snapshot = finalize(startAt(snapshot, first, old), first)
-        val oldEntry = snapshot.modelContextEntries.single()
-        val current = stableCandidate(7)
-        snapshot = ConversationTransition.apply(snapshot, AppendUserMessage(UIMessage.user("new")))
-        val second = Uuid.random()
-        snapshot = finalize(startAt(snapshot, second, current), second)
-        assertEquals(listOf(old, current), snapshot.modelContextEntries.map { it.content })
-        assertEquals(oldEntry, snapshot.modelContextEntries.first())
-        snapshot = ConversationTransition.apply(snapshot, AppendUserMessage(UIMessage.user("same")))
-        val after = startAt(snapshot, Uuid.random(), current)
-        assertEquals(snapshot.modelContextEntries, after.modelContextEntries)
+        val command = TurnTransition.buildStartTurnCommand(base, Uuid.random(), assistantMessageId = first)
+        val mutation = plan(base, command)
+        assertTrue(mutation.insertedModelContextEntries.isEmpty())
+        assertTrue(mutation.deletedModelContextEntries.isEmpty())
+        assertTrue(ConversationTransition.apply(base, command).contextAdmissions.isEmpty())
+        val history = finalize(withHistoricalTurn(base, first, stableCandidate(1)), first)
+        val second = ConversationTransition.apply(history, AppendUserMessage(UIMessage.user("next")))
+        val next = ConversationTransition.apply(second, TurnTransition.buildStartTurnCommand(second, Uuid.random()))
+        assertEquals(history.modelContextEntries, next.modelContextEntries)
+        assertTrue(next.contextAdmissions.isEmpty())
     }
 
     private fun userNode(text: String) = MessageNode.of(UIMessage.user(text))
@@ -52,7 +48,7 @@ class ConversationModelContextTransitionTest {
         return ((change as ConversationChange.Durable).write as ConversationWrite.Mutate).mutation
     }
 
-    private fun startAt(
+    private fun withHistoricalTurn(
         current: ConversationAggregateSnapshot,
         assistantMessageId: Uuid,
         candidate: String,
@@ -60,10 +56,18 @@ class ConversationModelContextTransitionTest {
         val command = TurnTransition.buildStartTurnCommand(
             current = current,
             turnId = Uuid.random(),
-            modelContextCandidate = candidate,
             assistantMessageId = assistantMessageId,
         )
-        return ConversationTransition.apply(current, command)
+        val started = ConversationTransition.apply(current, command)
+        // Supported legacy history fixture: modern START never creates this disclosure row.
+        val historical = ConversationModelContextEntry(
+            ownerNodeId = command.assistantNodeId,
+            ownerMessageId = command.assistantMessageId,
+            anchorNodeId = command.anchorNodeId,
+            anchorMessageId = command.anchorMessageId,
+            payload = disclosurePayload(candidate),
+        )
+        return started.copy(modelContextEntries = started.modelContextEntries + historical)
     }
 
     private fun finalize(snapshot: ConversationAggregateSnapshot, assistantMessageId: Uuid): ConversationAggregateSnapshot {
@@ -88,175 +92,13 @@ class ConversationModelContextTransitionTest {
     }
 
     @Test
-    fun `first START inserts the candidate and the entry is anchored to its causal USER`() {
-        val user = userNode("first")
-        val base = Conversation.ofId(Uuid.random()).copy(messageNodes = listOf(user)).toSnapshot()
-        val candidate = stableCandidate(1)
-        val assistantMessageId = Uuid.random()
-
-        val mutation = plan(base, TurnTransition.buildStartTurnCommand(
-            current = base,
-            turnId = Uuid.random(),
-            modelContextCandidate = candidate,
-            assistantMessageId = assistantMessageId,
-        ))
-
-        val inserted = mutation.insertedModelContextEntries.single()
-        assertEquals(assistantMessageId, inserted.ownerMessageId)
-        assertEquals(user.currentMessage.id, inserted.anchorMessageId)
-        assertEquals(candidate, inserted.content)
-        assertTrue(mutation.deletedModelContextEntries.isEmpty())
-    }
-
-    @Test
-    fun `unchanged candidate on the next START does not append a row`() {
-        val candidate = stableCandidate(1)
-        var snapshot = Conversation.ofId(Uuid.random())
-            .copy(messageNodes = listOf(userNode("u1"))).toSnapshot()
-        val firstAssistant = Uuid.random()
-        snapshot = startAt(snapshot, firstAssistant, candidate)
-        snapshot = finalize(snapshot, firstAssistant)
-
-        snapshot = ConversationTransition.apply(snapshot, AppendUserMessage(UIMessage.user("u2")))
-        val command = TurnTransition.buildStartTurnCommand(
-            current = snapshot,
-            turnId = Uuid.random(),
-            modelContextCandidate = candidate,
-            assistantMessageId = Uuid.random(),
-        )
-        val mutation = plan(snapshot, command)
-        val after = ConversationTransition.apply(snapshot, command)
-
-        assertTrue("identical wire content must not append", mutation.insertedModelContextEntries.isEmpty())
-        assertEquals(1, after.modelContextEntries.size)
-    }
-
-    @Test
-    fun `changed candidate appends a complete baseline owned by the new assistant variant`() {
-        var snapshot = Conversation.ofId(Uuid.random())
-            .copy(messageNodes = listOf(userNode("u1"))).toSnapshot()
-        val firstAssistant = Uuid.random()
-        snapshot = startAt(snapshot, firstAssistant, stableCandidate(1))
-        snapshot = finalize(snapshot, firstAssistant)
-
-        snapshot = ConversationTransition.apply(snapshot, AppendUserMessage(UIMessage.user("u2")))
-        val secondAssistant = Uuid.random()
-        val changed = stableCandidate(2)
-        snapshot = startAt(snapshot, secondAssistant, changed)
-
-        assertEquals(2, snapshot.modelContextEntries.size)
-        val latest = snapshot.modelContextEntries.last()
-        assertEquals(secondAssistant, latest.ownerMessageId)
-        assertEquals(changed, latest.content)
-    }
-
-    @Test
-    fun `regenerate on an open assistant excludes the replaced owner so identical content is re-appended`() {
-        val candidate = stableCandidate(1)
-        var snapshot = Conversation.ofId(Uuid.random())
-            .copy(messageNodes = listOf(userNode("u1"))).toSnapshot()
-        val original = Uuid.random()
-        snapshot = startAt(snapshot, original, candidate)
-        assertEquals(1, snapshot.modelContextEntries.size)
-
-        // 未收口的旧 Assistant variant 正是 baseline owner；regenerate 不复制 USER，
-        // 旧 owner 先退出目标分支，相同 live content 相对更早 baseline 判定为变化，
-        // 由新 owner 重新落一条，不会丢基线。
-        val replacement = Uuid.random()
-        val command = TurnTransition.buildStartTurnCommand(
-            current = snapshot,
-            turnId = Uuid.random(),
-            modelContextCandidate = candidate,
-            assistantMessageId = replacement,
-        )
-        assertEquals(
-            listOf(snapshot.nodes.first().currentMessage.id),
-            command.expectedSelectedPrefixMessageIds,
-        )
-
-        snapshot = ConversationTransition.apply(snapshot, command)
-        assertEquals(2, snapshot.modelContextEntries.size)
-        assertEquals(replacement, snapshot.modelContextEntries.last().ownerMessageId)
-        assertEquals(candidate, snapshot.modelContextEntries.last().content)
-    }
-
-    @Test
-    fun `edit USER then START re-anchors the baseline on the target branch to the edited variant`() {
-        val candidate = stableCandidate(1)
-        val userNode = userNode("u1")
-        var snapshot = Conversation.ofId(Uuid.random())
-            .copy(messageNodes = listOf(userNode)).toSnapshot()
-        val original = Uuid.random()
-        snapshot = startAt(snapshot, original, candidate)
-        snapshot = finalize(snapshot, original)
-
-        // 编辑后发送：结构命令先提交新 USER variant，再在变换后的目标分支上计算 baseline。
-        val editedUser = UIMessage.user("u1 edited")
-        snapshot = ConversationTransition.apply(snapshot, EditMessageVariant(userNode.id, editedUser))
-        val replacement = Uuid.random()
-        val command = TurnTransition.buildStartTurnCommand(
-            current = snapshot,
-            turnId = Uuid.random(),
-            modelContextCandidate = candidate,
-            assistantMessageId = replacement,
-        )
-        assertEquals(editedUser.id, command.anchorMessageId)
-
-        snapshot = ConversationTransition.apply(snapshot, command)
-        // 旧 entry（anchor=被替换前的 USER variant）不再适用于目标分支：相同 live content
-        // 也必须由新 owner 重新落一条完整 baseline，绝不丢基线。
-        assertEquals(2, snapshot.modelContextEntries.size)
-        val latest = snapshot.modelContextEntries.last()
-        assertEquals(replacement, latest.ownerMessageId)
-        assertEquals(editedUser.id, latest.anchorMessageId)
-        assertEquals(candidate, latest.content)
-    }
-
-    @Test
-    fun `edit-and-resend truncates later history then re-anchors START on the new USER variant`() {
-        var snapshot = Conversation.ofId(Uuid.random())
-            .copy(messageNodes = listOf(userNode("u1"))).toSnapshot()
-        val firstAssistant = Uuid.random()
-        val firstCandidate = stableCandidate(1)
-        snapshot = finalize(startAt(snapshot, firstAssistant, firstCandidate), firstAssistant)
-        snapshot = ConversationTransition.apply(snapshot, AppendUserMessage(UIMessage.user("u2")))
-        val laterAssistant = Uuid.random()
-        snapshot = finalize(startAt(snapshot, laterAssistant, stableCandidate(2)), laterAssistant)
-
-        val firstUserNode = snapshot.nodes.first()
-        val truncated = ConversationTransition.apply(snapshot, TruncateToNodeIndex(0))
-        assertTrue(truncated.modelContextEntries.isEmpty())
-        assertEquals(1, truncated.nodes.size)
-
-        val editedUser = UIMessage.user("u1 edited")
-        val edited = ConversationTransition.apply(
-            truncated,
-            EditMessageVariant(firstUserNode.id, editedUser),
-        )
-        assertTrue(
-            "pure edit after truncate must not invent a context row",
-            edited.modelContextEntries.isEmpty(),
-        )
-
-        val replacement = Uuid.random()
-        val regeneratedCandidate = stableCandidate(3)
-        val started = startAt(edited, replacement, regeneratedCandidate)
-        val inserted = started.modelContextEntries.single()
-        assertEquals(replacement, inserted.ownerMessageId)
-        assertEquals(editedUser.id, inserted.anchorMessageId)
-        assertEquals(regeneratedCandidate, inserted.content)
-        assertEquals(firstUserNode.id, started.nodes.first().id)
-        assertEquals(editedUser.id, started.nodes.first().currentMessage.id)
-    }
-
-    @Test
     fun `pure USER edit without START keeps historical entries and does not insert`() {
         val candidate = stableCandidate(1)
         val userNode = userNode("u1")
         var snapshot = Conversation.ofId(Uuid.random())
             .copy(messageNodes = listOf(userNode)).toSnapshot()
         val original = Uuid.random()
-        snapshot = finalize(startAt(snapshot, original, candidate), original)
+        snapshot = finalize(withHistoricalTurn(snapshot, original, candidate), original)
 
         val mutation = plan(snapshot, EditMessageVariant(userNode.id, UIMessage.user("u1 edited")))
         assertTrue(mutation.insertedModelContextEntries.isEmpty())
@@ -273,7 +115,7 @@ class ConversationModelContextTransitionTest {
         var snapshot = Conversation.ofId(Uuid.random())
             .copy(messageNodes = listOf(userNode("u1"))).toSnapshot()
         val assistantMessageId = Uuid.random()
-        snapshot = finalize(startAt(snapshot, assistantMessageId, stableCandidate(1)), assistantMessageId)
+        snapshot = finalize(withHistoricalTurn(snapshot, assistantMessageId, stableCandidate(1)), assistantMessageId)
         val assistantNode = snapshot.nodes.last()
 
         val mutation = plan(
@@ -294,9 +136,9 @@ class ConversationModelContextTransitionTest {
         var snapshot = Conversation.ofId(Uuid.random())
             .copy(messageNodes = listOf(userNode("u1"))).toSnapshot()
         val firstAssistant = Uuid.random()
-        snapshot = startAt(snapshot, firstAssistant, stableCandidate(1))
+        snapshot = withHistoricalTurn(snapshot, firstAssistant, stableCandidate(1))
         val secondAssistant = Uuid.random()
-        snapshot = startAt(snapshot, secondAssistant, stableCandidate(2))
+        snapshot = withHistoricalTurn(snapshot, secondAssistant, stableCandidate(2))
         val assistantNode = snapshot.nodes.last()
         assertEquals(2, assistantNode.messages.size)
         assertEquals(2, snapshot.modelContextEntries.size)
@@ -339,11 +181,11 @@ class ConversationModelContextTransitionTest {
             ownerMessageId = first.id,
             anchorNodeId = userNode.id,
             anchorMessageId = user.id,
-            content = stableCandidate(1),
+            payload = disclosurePayload(stableCandidate(1)),
         )
         val secondEntry = firstEntry.copy(
             ownerMessageId = second.id,
-            content = stableCandidate(2),
+            payload = disclosurePayload(stableCandidate(2)),
         )
         val nodeIdMap = mapOf(userNode.id to Uuid.random(), assistantNode.id to Uuid.random())
         val cloned = listOf(
@@ -377,7 +219,7 @@ class ConversationModelContextTransitionTest {
             .copy(messageNodes = listOf(MessageNode(messages = listOf(oldAnchor, newAnchor), selectIndex = 1)))
             .toSnapshot()
         val assistantMessageId = Uuid.random()
-        snapshot = startAt(snapshot, assistantMessageId, stableCandidate(1))
+        snapshot = withHistoricalTurn(snapshot, assistantMessageId, stableCandidate(1))
         // 因果 anchor 是 owner 之前最后一条 USER variant：v2。
         assertEquals(newAnchor.id, snapshot.modelContextEntries.single().anchorMessageId)
 
@@ -393,11 +235,11 @@ class ConversationModelContextTransitionTest {
         var snapshot = Conversation.ofId(Uuid.random())
             .copy(messageNodes = listOf(userNode("u1"))).toSnapshot()
         val firstAssistant = Uuid.random()
-        snapshot = startAt(snapshot, firstAssistant, stableCandidate(1))
+        snapshot = withHistoricalTurn(snapshot, firstAssistant, stableCandidate(1))
         snapshot = finalize(snapshot, firstAssistant)
         snapshot = ConversationTransition.apply(snapshot, AppendUserMessage(UIMessage.user("u2")))
         val secondAssistant = Uuid.random()
-        snapshot = startAt(snapshot, secondAssistant, stableCandidate(2))
+        snapshot = withHistoricalTurn(snapshot, secondAssistant, stableCandidate(2))
 
         // 截断到第一条 USER：两次 START 的 owner 与第二条 anchor 全部退出。
         val mutation = plan(snapshot, TruncateToNodeIndex(0))
@@ -410,41 +252,11 @@ class ConversationModelContextTransitionTest {
     }
 
     @Test
-    fun `historical Assistant regenerate truncates later history before planning its new owner`() {
-        var snapshot = Conversation.ofId(Uuid.random())
-            .copy(messageNodes = listOf(userNode("u1"))).toSnapshot()
-        val firstAssistant = Uuid.random()
-        val firstCandidate = stableCandidate(1)
-        snapshot = finalize(startAt(snapshot, firstAssistant, firstCandidate), firstAssistant)
-        snapshot = ConversationTransition.apply(snapshot, AppendUserMessage(UIMessage.user("u2")))
-        val secondAssistant = Uuid.random()
-        snapshot = finalize(startAt(snapshot, secondAssistant, stableCandidate(2)), secondAssistant)
-
-        val historicalAssistantNode = snapshot.nodes[1]
-        val truncated = ConversationTransition.apply(
-            snapshot,
-            TruncateToNodeIndex(nodeIndexInclusive = 1),
-        )
-        val regeneratedOwner = Uuid.random()
-        val regeneratedCandidate = stableCandidate(3)
-        val regenerated = startAt(truncated, regeneratedOwner, regeneratedCandidate)
-
-        assertEquals(2, regenerated.nodes.size)
-        assertEquals(2, regenerated.nodes[1].messages.size)
-        assertEquals(historicalAssistantNode.id, regenerated.nodes[1].id)
-        assertEquals(regeneratedOwner, regenerated.nodes[1].currentMessage.id)
-        val regeneratedEntry = regenerated.modelContextEntries.single { it.ownerMessageId == regeneratedOwner }
-        assertEquals(snapshot.nodes[0].id, regeneratedEntry.anchorNodeId)
-        assertEquals(snapshot.nodes[0].currentMessage.id, regeneratedEntry.anchorMessageId)
-        assertEquals(listOf(firstCandidate, regeneratedCandidate), regenerated.modelContextEntries.map { it.content })
-    }
-
-    @Test
     fun `deleting the owner node prunes via existence and reports its entry for deletion`() {
         var snapshot = Conversation.ofId(Uuid.random())
             .copy(messageNodes = listOf(userNode("u1"))).toSnapshot()
         val assistantMessageId = Uuid.random()
-        snapshot = startAt(snapshot, assistantMessageId, stableCandidate(1))
+        snapshot = withHistoricalTurn(snapshot, assistantMessageId, stableCandidate(1))
         snapshot = finalize(snapshot, assistantMessageId)
 
         val assistantNode = snapshot.nodes.last()
@@ -453,27 +265,4 @@ class ConversationModelContextTransitionTest {
         assertEquals(listOf(assistantNode.id), mutation.deletedNodeIds)
     }
 
-    @Test
-    fun `a malformed candidate cannot enter the durable command`() {
-        val snapshot = Conversation.ofId(Uuid.random())
-            .copy(messageNodes = listOf(userNode("u1"))).toSnapshot()
-        val command = TurnTransition.buildStartTurnCommand(
-            current = snapshot,
-            turnId = Uuid.random(),
-            modelContextCandidate = "{\"type\":\"user_request\"}",
-        )
-        assertThrows(DisclosureContentException::class.java) {
-            ConversationTransition.apply(snapshot, command)
-        }
-    }
-
-    @Test
-    fun `start turn carries the canonical candidate verbatim into the inserted entry`() {
-        val snapshot = Conversation.ofId(Uuid.random())
-            .copy(messageNodes = listOf(userNode("u1"))).toSnapshot()
-        val candidate = stableCandidate(7)
-        val after = startAt(snapshot, Uuid.random(), candidate)
-        assertEquals(candidate, after.modelContextEntries.single().content)
-        assertEquals(2, ConversationDisclosureSnapshotService.requireCanonical(after.modelContextEntries.single().content))
-    }
 }

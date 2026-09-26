@@ -14,10 +14,8 @@ import me.rerere.ai.ui.ToolResultStatus
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
 import net.weero.measix.pilot.data.ai.request.ContextBudget
-import net.weero.measix.pilot.data.ai.request.DurableMessageLocator
 import net.weero.measix.pilot.data.ai.ToolExecutionFact
 import net.weero.measix.pilot.data.ai.ToolOutputCompactionPatch
-import net.weero.measix.pilot.data.ai.request.TurnModelContextProjection
 import net.weero.measix.pilot.data.ai.request.estimateStableTextTokens
 import net.weero.measix.pilot.data.ai.tools.REGENERABLE_TOOL_OUTPUT_FOLDED_MARKER
 import net.weero.measix.pilot.data.ai.tools.buildToolOutputMarker
@@ -26,10 +24,7 @@ import net.weero.measix.pilot.data.ai.tools.virtualLineCount
 import net.weero.measix.pilot.data.db.entity.ToolExecutionEntity
 import net.weero.measix.pilot.data.db.entity.TurnExecutionEntity
 import net.weero.measix.pilot.data.db.entity.TurnExecutionStatus
-import net.weero.measix.pilot.data.model.ConversationModelContextApplicability
-import net.weero.measix.pilot.data.model.ConversationModelContextEntry
 import net.weero.measix.pilot.data.model.MessageNode
-import net.weero.measix.pilot.service.ConversationDisclosureSnapshotService
 import kotlinx.datetime.TimeZone
 import kotlinx.datetime.toInstant
 import kotlinx.datetime.toLocalDateTime
@@ -238,28 +233,6 @@ internal object TurnTransition {
         nodes.firstOrNull { node -> node.messages.any { it.id == messageId } }
 
     /**
-     * Turn 启动时请求侧 model-context 投影的唯一入口：
-     * branch = 当前 selected 消息序列（含 active owner 末条），entries 用唯一适用谓词过滤。
-     * 该 Turn 的所有 step、审批 continuation 与重试只复用这份结果，不重新判定。
-     */
-    internal fun projectTurnModelContext(
-        current: ConversationAggregateSnapshot,
-    ): TurnModelContextProjection {
-        val branch = current.currentMessages()
-        val locators = buildMap {
-            current.nodes.forEach { node ->
-                node.messages.forEach { message -> put(message.id, DurableMessageLocator(node.id, message.id)) }
-            }
-        }
-        return TurnModelContextProjection(
-            entries = current.modelContextEntries.filter {
-                ConversationModelContextApplicability.applicable(it, branch)
-            },
-            locators = locators,
-        )
-    }
-
-    /**
      * 完整 StartTurn 命令的唯一构造入口（调用方与测试共用，杜绝手拼 anchor/token）。
      * 锁内 plan 会重算目标分支；stale 计划在 [ConversationCommandCoordinator.startTurn]
      * 一律 conflict。
@@ -267,7 +240,6 @@ internal object TurnTransition {
     internal fun buildStartTurnCommand(
         current: ConversationAggregateSnapshot,
         turnId: Uuid,
-        modelContextCandidate: String,
         assistantNodeId: Uuid = Uuid.random(),
         assistantMessageId: Uuid = Uuid.random(),
         epoch: Long = 0L,
@@ -280,7 +252,6 @@ internal object TurnTransition {
             anchorNodeId = target.anchorNodeId,
             anchorMessageId = target.anchorMessageId,
             expectedSelectedPrefixMessageIds = target.selectedPrefixMessageIds,
-            modelContextCandidate = modelContextCandidate,
             epoch = epoch,
         )
     }
@@ -304,9 +275,6 @@ internal object TurnTransition {
                 "START owner node identity changed after planStartTarget: ${command.assistantNodeId}",
             )
         }
-        // 命令协议只接受合法 canonical envelope；畸形内容不得进入 durable 历史。
-        ConversationDisclosureSnapshotService.requireCanonical(command.modelContextCandidate)
-
         require(command.initialStep.ordinal == 0 && command.initialStep.outcome == null && command.initialStep.modelResult == null)
         require(command.initialStep.stepId != Uuid.NIL)
         val slot = openAssistantMessage(command.assistantMessageId, command.initialStep)
@@ -326,27 +294,7 @@ internal object TurnTransition {
                 ),
             )
         }
-        // baseline 判等：目标分支上最近一份适用 Snapshot 的 content 与 candidate
-        // 逐字相同则不新增 row；变化才由新 owner 追加完整 baseline。
-        val branch = nodes.map { it.currentMessage }
-        val applicable = current.modelContextEntries.filter {
-            ConversationModelContextApplicability.applicable(it, branch)
-        }
-        val baseline = applicable.maxByOrNull { entry ->
-            branch.indexOfFirst { it.id == entry.ownerMessageId }
-        }
-        val entries = if (baseline?.content == command.modelContextCandidate) {
-            current.modelContextEntries
-        } else {
-            current.modelContextEntries + ConversationModelContextEntry(
-                ownerNodeId = target.assistantNodeId,
-                ownerMessageId = target.assistantMessageId,
-                anchorNodeId = target.anchorNodeId,
-                anchorMessageId = target.anchorMessageId,
-                content = command.modelContextCandidate,
-            )
-        }
-        return current.copy(nodes = nodes, modelContextEntries = entries)
+        return current.copy(nodes = nodes)
     }
 
     private fun finalizeTurn(current: ConversationAggregateSnapshot, command: FinalizeTurn): ConversationAggregateSnapshot {

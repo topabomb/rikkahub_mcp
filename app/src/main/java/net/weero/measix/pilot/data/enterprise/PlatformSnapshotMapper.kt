@@ -143,8 +143,16 @@ internal object PlatformSnapshotMapper {
             memorySeeds = snapshot.assistants.flatMap { assistant -> assistant.memorySeed.mapIndexed { index, text ->
                 EnterpriseMemorySeed(seedId(assistant.assistantDefinitionId, index), text)
             } },
-            starters = snapshot.starters.map { EnterpriseStarter(it.starterId, it.assistantDefinitionId, it.title, it.prompt,
-                it.description, it.sortOrder.checkedInt(), it.enabled) },
+            starters = snapshot.starters.map { starter ->
+                EnterpriseStarter(starter.starterId, starter.assistantDefinitionId, starter.title, starter.prompt,
+                    starter.description, starter.sortOrder.checkedInt(), starter.enabled,
+                    starter.openingSnapshot?.let { opening ->
+                        EnterpriseStarterOpeningSnapshot(opening.format.checkedInt(), opening.systemPrompt,
+                            opening.initialContexts.map { block ->
+                                EnterpriseStarterInitialContext(block.id, block.title, block.content)
+                            })
+                    })
+            },
             gateways = emptyList(),
             defaults = EnterpriseDefaults(assistantId = policy.defaultAssistantId, chatModelId = policy.defaultModelId,
                 fastModelId = policy.defaultFastModelId, titleModelId = policy.defaultTitleModelId,
@@ -155,7 +163,8 @@ internal object PlatformSnapshotMapper {
         )
         require(routes.keys == configuration.runtimeResources().keys) { "platform_runtime_resource_set_mismatch" }
         return EnterpriseCandidate(identity, configuration,
-            EnterpriseExecution.Platform(connection, snapshot.releaseId, snapshot.snapshotHash, routes)).also(EnterpriseCandidate::validate)
+            EnterpriseExecution.Platform(connection, snapshot.releaseId, snapshot.snapshotHash, routes,
+                snapshot.schemaVersion)).also(EnterpriseCandidate::validate)
     }
 
     private fun Long.checkedInt(): Int {

@@ -30,6 +30,33 @@ import org.junit.Test
 @OptIn(ExperimentalCoroutinesApi::class)
 class ArtifactUseCaseTest {
     @Test
+    fun `editor closing between return decision and reinsertion releases the returned creation pin`() = runTest {
+        val store = mockk<ArtifactStore>()
+        val uri = mockk<Uri>()
+        val entity = ArtifactEntity(id = 8, folder = "upload", relativePath = "upload/returned.png",
+            displayName = "returned.png", mimeType = "image/png", sizeBytes = 1, createdAt = 1, updatedAt = 1,
+            state = ArtifactState.ACTIVE.name, origin = ArtifactOrigin.USER.name)
+        val artifact = OwnedArtifact(entity, uri, LocalArtifactRef(relativePath = entity.relativePath, mimeType = entity.mimeType))
+        val draft = ArtifactUseCase(store, ApplicationRecoveryGate().apply { ready() }, mockk()).openDraftScope(
+            ConversationViewLease(kotlin.uuid.Uuid.random(), net.weero.measix.pilot.data.enterprise.RealmAccess.Personal, 0L) {})
+        var retentionClosed = false
+        val submission = ArtifactSubmission(store, listOf(artifact), net.weero.measix.pilot.data.files.ArtifactRetentionLease {
+            retentionClosed = true
+        })
+        every { store.abandonUnpublished(artifact) } just Runs
+        // URI evaluation occurs after the open/closed decision, while returnToDraft still holds its mutex.
+        every { uri.toString() } answers { draft.close(); "file:///files/upload/returned.png" }
+
+        draft.returnToDraft(submission)
+        submission.close()
+        draft.close()
+
+        org.junit.Assert.assertTrue(retentionClosed)
+        verify(exactly = 1) { store.abandonUnpublished(artifact) }
+        coVerify(exactly = 0) { store.discardUnpublished(any()) }
+    }
+
+    @Test
     fun `draft cannot be submitted by another view even with the same principal and conversation`() = runTest {
         val store = mockk<ArtifactStore>()
         val id = kotlin.uuid.Uuid.random()

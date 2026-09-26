@@ -1,5 +1,6 @@
 package net.weero.measix.pilot.data.repository
 
+import net.weero.measix.pilot.service.runtime.disclosurePayload
 import me.rerere.common.configuration.ConfigurationReference
 import me.rerere.common.configuration.EnterpriseAuthority
 import net.weero.measix.pilot.data.configuration.ConfigurationScope
@@ -77,6 +78,7 @@ class ConversationRepositoryTreeIntegrationTest {
             systemMetaDAO = database.systemMetaDao(),
             conversationDAO = database.conversationDao(),
             messageNodeDAO = database.messageNodeDao(),
+            contextDAO = database.conversationModelContextDao(),
             settingsCoordinator = ArtifactSettingsCoordinator(settingsStore),
             transactionRunner = RoomDatabaseTransactionRunner(database),
         )
@@ -112,11 +114,11 @@ class ConversationRepositoryTreeIntegrationTest {
         val defaults = net.weero.measix.pilot.data.datastore.Settings()
         val entry = net.weero.measix.pilot.data.model.ConversationModelContextEntry(
             answer.id, answer.currentMessage.id, user.id, user.currentMessage.id,
-            net.weero.measix.pilot.service.ConversationDisclosureSnapshotService.render(
+            disclosurePayload(net.weero.measix.pilot.service.ConversationDisclosureSnapshotService.render(
                 net.weero.measix.pilot.service.ConversationDisclosureSnapshotService.Candidate(
                     assistant = defaults.assistants.first(), allAssistants = defaults.assistants, memories = emptyList(),
                 ),
-            ),
+            )),
         )
         val original = master.toSnapshot(modelContextEntries = listOf(entry))
         repository.insertConversationTree(original, listOf(child.toSnapshot()))

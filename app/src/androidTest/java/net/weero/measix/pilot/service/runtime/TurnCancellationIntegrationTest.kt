@@ -3,7 +3,6 @@ package net.weero.measix.pilot.service.runtime
 import net.weero.measix.pilot.data.configuration.ConfigurationScope
 import net.weero.measix.pilot.service.turn.TurnCommitter
 import net.weero.measix.pilot.service.turn.androidTestTurnContext
-import net.weero.measix.pilot.service.turn.disclosureCandidate
 
 import android.content.Context
 import android.content.ContextWrapper
@@ -125,6 +124,7 @@ class TurnCancellationIntegrationTest {
             systemMetaDAO = database.systemMetaDao(),
             conversationDAO = database.conversationDao(),
             messageNodeDAO = database.messageNodeDao(),
+            contextDAO = database.conversationModelContextDao(),
             settingsCoordinator = ArtifactSettingsCoordinator(settingsStore),
             transactionRunner = RoomDatabaseTransactionRunner(database),
             fileNameCandidates = { listOf("aaa111", "bbb2222", "ccc33333", "Ddd44444") },
@@ -314,7 +314,7 @@ class TurnCancellationIntegrationTest {
                     commandCoordinator = coordinator,
                     runtime = runtime,
                     turnId = turnId,
-                    modelContextCandidate = disclosureCandidate(),
+
                     turnFinalizer = turnFinalizer,
                 )
                 turnCommitter = started.turnCommitter
@@ -342,6 +342,7 @@ class TurnCancellationIntegrationTest {
                     TurnRunInputs(
                         turnContext = turnContext,
                         handle = started.handle,
+                        requestContext = started.turnCommitter.requestContext,
                         messages = currentMessages,
                         maxSteps = 1,
                         assistantMessageId = started.assistantMessageId,

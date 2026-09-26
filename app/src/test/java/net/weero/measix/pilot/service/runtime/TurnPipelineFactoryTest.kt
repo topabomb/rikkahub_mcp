@@ -12,7 +12,6 @@ import net.weero.measix.pilot.data.ai.transformers.TemplateTransformer
 import net.weero.measix.pilot.data.ai.transformers.ThinkTagTransformer
 import net.weero.measix.pilot.data.ai.transformers.TimeReminderTransformer
 import net.weero.measix.pilot.data.ai.transformers.ToolArtifactReplayTransformer
-import net.weero.measix.pilot.data.ai.transformers.WorkspaceReminderTransformer
 import net.weero.measix.pilot.data.files.ArtifactStore
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -26,7 +25,6 @@ class TurnPipelineFactoryTest {
 
     private fun factory(): TurnPipelineFactory = TurnPipelineFactory(
         templateTransformer = mockk<TemplateTransformer>(relaxed = true),
-        workspaceReminderTransformer = mockk<WorkspaceReminderTransformer>(relaxed = true),
         toolArtifactReplayTransformer = mockk<ToolArtifactReplayTransformer>(relaxed = true),
         attachmentProjectionTransformer = AttachmentProjectionTransformer(),
         base64ImageToLocalFileTransformer = Base64ImageToLocalFileTransformer(mockk<ArtifactStore>(relaxed = true)),
@@ -59,7 +57,7 @@ class TurnPipelineFactoryTest {
     }
 
     @Test
-    fun `USER input appends template workspace replay then projection`() {
+    fun `USER input appends template replay then projection`() {
         val classes = factory().input(TurnKind.USER).map { it::class }
         assertEquals(
             listOf(
@@ -68,7 +66,6 @@ class TurnPipelineFactoryTest {
                 PlaceholderTransformer::class,
                 DocumentAsPromptTransformer::class,
                 TemplateTransformer::class,
-                WorkspaceReminderTransformer::class,
                 ToolArtifactReplayTransformer::class,
                 AttachmentProjectionTransformer::class,
             ),
@@ -87,7 +84,6 @@ class TurnPipelineFactoryTest {
                 PlaceholderTransformer::class,
                 DocumentAsPromptTransformer::class,
                 TemplateTransformer::class,
-                WorkspaceReminderTransformer::class,
                 AttachmentProjectionTransformer::class,
             ),
             classes,

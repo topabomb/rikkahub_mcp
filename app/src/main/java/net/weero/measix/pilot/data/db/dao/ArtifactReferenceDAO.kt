@@ -38,6 +38,12 @@ interface ArtifactReferenceDAO {
     suspend fun deleteAll()
 
     /** upserted 节点的引用替换语义第一步（第二步 insertAll） */
+    @Query("DELETE FROM artifact_reference WHERE node_id IN (:nodeIds) AND reference_type <> 'CONTEXT'")
+    suspend fun deleteMessageReferencesByNodeIds(nodeIds: List<String>)
+
+    @Query("DELETE FROM artifact_reference WHERE node_id IN (:nodeIds) AND reference_type = 'CONTEXT'")
+    suspend fun deleteContextReferencesByNodeIds(nodeIds: List<String>)
+
     @Query("DELETE FROM artifact_reference WHERE node_id IN (:nodeIds)")
     suspend fun deleteByNodeIds(nodeIds: List<String>)
 

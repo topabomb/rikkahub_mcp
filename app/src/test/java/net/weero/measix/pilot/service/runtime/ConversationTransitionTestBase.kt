@@ -81,7 +81,7 @@ internal abstract class ConversationTransitionTestBase {
             TurnTransition.buildStartTurnCommand(
                 current = base,
                 turnId = turnId,
-                modelContextCandidate = disclosureCandidate(),
+
                 assistantMessageId = activeId,
                 epoch = 1,
             ),
@@ -154,7 +154,7 @@ internal abstract class ConversationTransitionTestBase {
             TurnTransition.buildStartTurnCommand(
                 current = baseSnapshot,
                 turnId = turnId,
-                modelContextCandidate = disclosureCandidate(),
+
                 assistantMessageId = activeId,
                 epoch = 1,
             ),

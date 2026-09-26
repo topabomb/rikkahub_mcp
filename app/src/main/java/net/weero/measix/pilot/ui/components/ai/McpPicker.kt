@@ -54,7 +54,9 @@ internal fun McpPickerListItem(
     servers: List<AssistantMcpChoice>,
     modifier: Modifier = Modifier,
     onNavigateToSettings: () -> Unit,
-    onToggle: (ConfigurationReference, Boolean) -> Unit
+    onToggle: (ConfigurationReference, Boolean) -> Unit,
+    feedback: com.dokar.sonner.ToasterState? = null,
+    onPickerVisibilityChange: (Boolean) -> Unit = {},
 ) {
     var showMcpPicker by remember { mutableStateOf(false) }
     val enabledServers = servers.fastFilter {
@@ -89,6 +91,7 @@ internal fun McpPickerListItem(
             .clip(MaterialTheme.shapes.large)
             .clickable {
                 showMcpPicker = true
+                onPickerVisibilityChange(true)
             },
     ) {
         Text(stringResource(R.string.mcp_picker_title))
@@ -99,7 +102,8 @@ internal fun McpPickerListItem(
             servers = servers,
             onToggle = onToggle,
             onNavigateToSettings = onNavigateToSettings,
-            onDismiss = { showMcpPicker = false },
+            onDismiss = { showMcpPicker = false; onPickerVisibilityChange(false) },
+            feedback = feedback,
         )
     }
 }
@@ -110,6 +114,7 @@ internal fun McpPickerSheet(
     onToggle: (ConfigurationReference, Boolean) -> Unit,
     onNavigateToSettings: () -> Unit,
     onDismiss: () -> Unit,
+    feedback: com.dokar.sonner.ToasterState? = null,
 ) {
     val selectedServers = servers.fastFilter {
         it.selected
@@ -118,6 +123,7 @@ internal fun McpPickerSheet(
     val hasEnabledServers = servers.isNotEmpty()
     AdaptiveModal(
         onDismissRequest = onDismiss,
+        feedback = feedback,
     ) {
         Column(
             modifier = Modifier

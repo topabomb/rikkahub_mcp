@@ -78,4 +78,22 @@ class MemoryToolsTest {
         assertEquals("tool_not_permitted", resultObject["reason"]?.jsonPrimitive?.content)
         assertFalse(mutated)
     }
+    @Test
+    fun `successful mutations preserve concise receipts without echoing content`() = runTest {
+        val tool = buildMemoryTools(
+            onCreation = { AssistantMemory(id = 17, content = it) },
+            onUpdate = { id, content -> AssistantMemory(id = id, content = content) },
+            onDelete = {},
+        ).single()
+        for (action in listOf("create", "edit", "delete")) {
+            val output = tool.execute(buildJsonObject {
+                put("action", action); put("id", 17)
+                if (action != "delete") put("content", "unmodified {{content}}")
+            })
+            val result = Json.parseToJsonElement((output.single() as UIMessagePart.Text).text).jsonObject
+            assertEquals(if (action == "create") setOf("id") else setOf("success", "id"), result.keys)
+            assertEquals("17", result.getValue("id").jsonPrimitive.content)
+            assertEquals(me.rerere.ai.core.ToolOutputPolicy.PRESERVE, tool.successfulOutputPolicy(output))
+        }
+    }
 }

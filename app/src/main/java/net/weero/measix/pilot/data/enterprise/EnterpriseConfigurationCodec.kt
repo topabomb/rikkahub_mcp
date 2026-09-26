@@ -5,7 +5,8 @@ import me.rerere.ai.provider.ModelType
 import me.rerere.ai.provider.Modality
 
 /** Stable validation failures cross the application boundary without exposing credential-bearing wire input. */
-internal class EnterpriseConfigurationException(val reason: String) : IllegalArgumentException(reason)
+internal class EnterpriseConfigurationException(val reason: String, detail: String? = null) :
+    IllegalArgumentException(if (detail == null) reason else "$reason: $detail")
 
 internal object EnterpriseConfigurationCodec {
     const val MAX_BYTES = 4 * 1024 * 1024

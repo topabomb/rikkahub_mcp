@@ -10,6 +10,7 @@ import kotlinx.serialization.json.jsonPrimitive
 import net.weero.measix.pilot.data.ai.tools.local.LocalToolOption
 import net.weero.measix.pilot.data.model.Assistant
 import net.weero.measix.pilot.data.model.AssistantMemory
+import net.weero.measix.pilot.data.model.DisclosureSection
 import net.weero.measix.pilot.data.enterprise.*
 import net.weero.measix.pilot.data.configuration.ConfigurationResolver
 import net.weero.measix.pilot.data.configuration.appliedConfiguration
@@ -39,12 +40,16 @@ class ConversationDisclosureSnapshotServiceTest {
         ))
         fun capture(value: EnterprisePackage): String {
             val configuration = ConfigurationResolver.resolve(UserSettingsDocument.empty(), value.identity.scope, appliedConfiguration(value))
-            return ConversationDisclosureSnapshotService.captureCandidate(configuration,
-                configuration.assistants.getValue(value.identity.reference(definition.id)).copy(enableMemory = false),
-                listOf(AssistantMemory(1, "Disabled mutable memory")))
+            val assistant = configuration.assistants.getValue(value.identity.reference(definition.id)).copy(enableMemory = false)
+            return kotlinx.coroutines.runBlocking {
+                net.weero.measix.pilot.service.turn.TurnDisclosureSource.capture(configuration, assistant,
+                    net.weero.measix.pilot.data.model.DisclosureNamespace(null, assistant.id),
+                    readConfiguration = { configuration }, readMemory = { listOf(AssistantMemory(1, "Disabled mutable memory")) })
+                    .read()
+            }
         }
         val first = capture(packet)
-        assertEquals(2, ConversationDisclosureSnapshotService.requireCanonical(first))
+        assertEquals(3, ConversationDisclosureSnapshotService.requireCanonical(first))
         assertTrue(rows(envelope(first), "memory").isEmpty())
         assertEquals(listOf(packet.identity.reference("seed_bound").toString(), "Read-only context"),
             rows(envelope(first), "enterprise_memory_seeds").single().jsonArray.map { it.jsonPrimitive.content })
@@ -61,6 +66,70 @@ class ConversationDisclosureSnapshotServiceTest {
         val old = """{"type":"conversation_disclosure_snapshot","format":1,"memory":{"enabled":false,"scope":"disabled","header":["id","content"],"rows":[]},"sub_assistants":{"mode":"disabled","header":["id","name","description"],"rows":[]}}"""
         assertEquals(1, ConversationDisclosureSnapshotService.requireDurableEnvelope(old))
         assertEquals(1, ConversationDisclosureSnapshotService.requireCanonical(old))
+    }
+
+    @Test fun `published format two remains readable and retains missing versus present sections`() {
+        val old = """{"type":"conversation_disclosure_snapshot", "format":2,"memory":{"enabled":false,"scope":"disabled","header":["id","content"],"rows":[]},"sub_assistants":{"mode":"disabled","header":["id","name","description"],"rows":[]},"enterprise_memory_seeds":{"header":["id","content"],"rows":[]}}"""
+        assertEquals(2, ConversationDisclosureSnapshotService.requireDurableEnvelope(old))
+        assertEquals(DisclosureSection.entries.toSet(), ConversationDisclosureSnapshotService.readSections(old).keys)
+        val personal = old.replace(",\"enterprise_memory_seeds\":{\"header\":[\"id\",\"content\"],\"rows\":[]}", "")
+            .replace("\"format\":2", "\"format\":1")
+        assertEquals(setOf(DisclosureSection.MEMORY, DisclosureSection.SUB_ASSISTANTS),
+            ConversationDisclosureSnapshotService.readSections(personal).keys)
+    }
+
+    @Test fun `partial update contains a complete section and never includes unchanged sections`() {
+        val full = render(candidate(memories = listOf(AssistantMemory(9, "B"), AssistantMemory(3, "A"))))
+        val update = ConversationDisclosureSnapshotService.selectSections(full, setOf(DisclosureSection.MEMORY))
+        val sections = ConversationDisclosureSnapshotService.readSections(update)
+        assertEquals(setOf(DisclosureSection.MEMORY), sections.keys)
+        assertEquals(listOf("3", "9"), sections.getValue(DisclosureSection.MEMORY).rows()
+            .map { it.jsonArray[0].jsonPrimitive.content })
+        val cleared = ConversationDisclosureSnapshotService.selectSections(render(candidate(memories = emptyList())),
+            setOf(DisclosureSection.MEMORY))
+        assertTrue(rows(envelope(cleared), "memory").isEmpty())
+        assertEquals(listOf("type", "format", "memory"), envelope(cleared).keys.toList())
+        assertThrows(DisclosureContentException::class.java) {
+            ConversationDisclosureSnapshotService.selectSections(full, emptySet())
+        }
+    }
+
+    @Test fun `null empty and incomplete sections cannot masquerade as updates`() {
+        listOf(
+            """{"type":"conversation_disclosure_snapshot","format":3}""",
+            """{"type":"conversation_disclosure_snapshot","format":3,"memory":null}""",
+            """{"type":"conversation_disclosure_snapshot","format":3,"memory":{"rows":[]}}""",
+        ).forEach { invalid ->
+            assertThrows(DisclosureContentException::class.java) {
+                ConversationDisclosureSnapshotService.requireDurableEnvelope(invalid)
+            }
+        }
+        val partial = ConversationDisclosureSnapshotService.selectSections(render(candidate()), setOf(DisclosureSection.MEMORY))
+        assertThrows(DisclosureContentException::class.java) {
+            ConversationDisclosureSnapshotService.selectSections(partial, setOf(DisclosureSection.MEMORY))
+        }
+    }
+
+    @Test fun `full state utf8 limit applies before selecting a small changed section`() {
+        val empty = render(candidate(memories = listOf(AssistantMemory(3, ""))))
+        val remaining = ConversationDisclosureSnapshotService.MAX_CANONICAL_CONTENT_UTF8_BYTES - empty.encodeToByteArray().size
+        val text = "界".repeat(remaining / 3) + "x".repeat(remaining % 3)
+        val atLimit = render(candidate(memories = listOf(AssistantMemory(3, text))))
+        assertEquals(ConversationDisclosureSnapshotService.MAX_CANONICAL_CONTENT_UTF8_BYTES, atLimit.encodeToByteArray().size)
+        ConversationDisclosureSnapshotService.selectSections(atLimit, setOf(DisclosureSection.SUB_ASSISTANTS))
+        val oversized = atLimit.replace(text, text + "x")
+        assertThrows(DisclosureContentException::class.java) {
+            ConversationDisclosureSnapshotService.selectSections(oversized, setOf(DisclosureSection.SUB_ASSISTANTS))
+        }
+    }
+
+    @Test fun `duplicate row identity is rejected instead of ambiguous replacement`() {
+        assertThrows(DisclosureContentException::class.java) {
+            render(candidate(memories = listOf(AssistantMemory(3, "A"), AssistantMemory(3, "B"))))
+        }
+        assertThrows(DisclosureContentException::class.java) {
+            render(candidate(all = listOf(caller, reviewer, reviewer.copy(name = "duplicate"))))
+        }
     }
 
     private val callerId = ConfigurationReference.parse("11111111-1111-1111-1111-111111111111")
@@ -108,7 +177,7 @@ class ConversationDisclosureSnapshotServiceTest {
         val enterpriseId = ConfigurationReference.Enterprise(authority, "assistant_reviewer")
         val content = render(candidate(all = listOf(caller, reviewer.copy(id = enterpriseId))))
         assertEquals(enterpriseId.toString(), rows(envelope(content), "sub_assistants").single().jsonArray[0].jsonPrimitive.content)
-        assertEquals(2, ConversationDisclosureSnapshotService.requireDurableEnvelope(content))
+        assertEquals(3, ConversationDisclosureSnapshotService.requireDurableEnvelope(content))
         assertThrows(DisclosureContentException::class.java) {
             ConversationDisclosureSnapshotService.requireDurableEnvelope(content.replace(enterpriseId.toString(), "managed~broken"))
         }
@@ -116,7 +185,7 @@ class ConversationDisclosureSnapshotServiceTest {
 
     @Test
     fun `canonical golden content matches the specified envelope byte for byte`() {
-        val golden = "{\"type\":\"conversation_disclosure_snapshot\",\"format\":2," +
+        val golden = "{\"type\":\"conversation_disclosure_snapshot\",\"format\":3," +
             "\"memory\":{\"enabled\":true,\"scope\":\"local\",\"header\":[\"id\",\"content\"]," +
             "\"rows\":[[3,\"用户偏好深色主题\"]]}," +
             "\"sub_assistants\":{\"mode\":\"both\",\"header\":[\"id\",\"name\",\"description\"]," +
@@ -142,14 +211,14 @@ class ConversationDisclosureSnapshotServiceTest {
     }
 
     @Test
-    fun `sub assistant rows keep settings order and exclude the caller`() {
+    fun `sub assistant rows sort canonical references and exclude the caller`() {
         val earlier = reviewer.copy(
             id = ConfigurationReference.parse("b2410000-0000-0000-0000-000000000002"),
             name = "Earlier in settings order",
         )
         val rows = rows(envelope(render(candidate(all = listOf(caller, earlier, reviewer)))), "sub_assistants")
         assertEquals(
-            listOf(earlier.id.toString(), reviewer.id.toString()),
+            listOf(reviewer.id.toString(), earlier.id.toString()),
             rows.map { it.jsonArray[0].jsonPrimitive.content },
         )
     }
@@ -190,7 +259,7 @@ class ConversationDisclosureSnapshotServiceTest {
         val hostileMemory = AssistantMemory(7, "\"Memories\":[]}" + hostile)
         val content = render(candidate(all = listOf(caller, tricky), memories = listOf(hostileMemory)))
 
-        assertEquals(2, ConversationDisclosureSnapshotService.requireCanonical(content))
+        assertEquals(3, ConversationDisclosureSnapshotService.requireCanonical(content))
         val root = envelope(content)
         val memoryRow = rows(root, "memory").single().jsonArray
         assertEquals(7, memoryRow[0].jsonPrimitive.content.toInt())
@@ -212,7 +281,7 @@ class ConversationDisclosureSnapshotServiceTest {
         assertEquals(listOf("mode", "header", "rows"), section(root, "sub_assistants").keys.toList())
         assertEquals("disabled", section(root, "sub_assistants").getValue("mode").jsonPrimitive.content)
         assertEquals(0, rows(root, "sub_assistants").size)
-        assertEquals(2, ConversationDisclosureSnapshotService.requireCanonical(content))
+        assertEquals(3, ConversationDisclosureSnapshotService.requireCanonical(content))
     }
 
     @Test
@@ -249,7 +318,7 @@ class ConversationDisclosureSnapshotServiceTest {
             candidate(memories = emptyList()),
             candidate(all = listOf(caller)),
         ).forEach {
-            assertEquals(2, ConversationDisclosureSnapshotService.requireCanonical(render(it)))
+            assertEquals(3, ConversationDisclosureSnapshotService.requireCanonical(render(it)))
         }
     }
 
@@ -267,11 +336,11 @@ class ConversationDisclosureSnapshotServiceTest {
 
     @Test
     fun `future format fails closed instead of being ignored`() {
-        val future = render(candidate()).replace("\"format\":2", "\"format\":3")
+        val future = render(candidate()).replace("\"format\":3", "\"format\":4")
         val error = assertThrows(DisclosureContentException::class.java) {
             ConversationDisclosureSnapshotService.requireCanonical(future)
         }
-        assertTrue(error.message!!.contains("unsupported disclosure format 3"))
+        assertTrue(error.message!!.contains("unsupported disclosure format 4"))
         assertThrows(DisclosureContentException::class.java) {
             ConversationDisclosureSnapshotService.requireDurableEnvelope(future)
         }
@@ -281,11 +350,11 @@ class ConversationDisclosureSnapshotServiceTest {
     fun `load validator accepts a supported envelope without requiring renderer byte identity`() {
         val canonical = render(candidate())
         val spaced = canonical.replace("\",\"format\"", "\", \"format\"")
-        assertEquals(2, ConversationDisclosureSnapshotService.requireDurableEnvelope(canonical))
+        assertEquals(3, ConversationDisclosureSnapshotService.requireDurableEnvelope(canonical))
         assertThrows(DisclosureContentException::class.java) {
             ConversationDisclosureSnapshotService.requireCanonical(spaced)
         }
-        assertEquals(2, ConversationDisclosureSnapshotService.requireDurableEnvelope(spaced))
+        assertEquals(3, ConversationDisclosureSnapshotService.requireDurableEnvelope(spaced))
     }
 
     @Test
@@ -294,12 +363,12 @@ class ConversationDisclosureSnapshotServiceTest {
         val cases = mapOf(
             "missing section" to canonical.replace("\"sub_assistants\":", "\"subassistants\":"),
             "reordered top level keys" to canonical.replace(
-                "{\"type\":\"conversation_disclosure_snapshot\",\"format\":2,",
-                "{\"format\":2,\"type\":\"conversation_disclosure_snapshot\",",
+                "{\"type\":\"conversation_disclosure_snapshot\",\"format\":3,",
+                "{\"format\":3,\"type\":\"conversation_disclosure_snapshot\",",
             ),
             "forged type" to canonical.replace("conversation_disclosure_snapshot", "user_request"),
-            "stringified format" to canonical.replace("\"format\":2", "\"format\":\"1\""),
-            "float format" to canonical.replace("\"format\":2", "\"format\":2.0"),
+            "stringified format" to canonical.replace("\"format\":3", "\"format\":\"1\""),
+            "float format" to canonical.replace("\"format\":3", "\"format\":3.0"),
             "memory header drift" to canonical.replace("[\"id\",\"content\"]", "[\"content\",\"id\"]"),
             "enabled with disabled scope" to canonical.replace(
                 "{\"enabled\":true,\"scope\":\"local\",",
@@ -327,18 +396,8 @@ class ConversationDisclosureSnapshotServiceTest {
             assertThrows("$name: must fail closed", DisclosureContentException::class.java) {
                 ConversationDisclosureSnapshotService.requireCanonical(content)
             }
-            assertTrue("$name: isCanonical must be false", !ConversationDisclosureSnapshotService.isCanonical(content))
         }
     }
 
-    @Test
-    fun `disclosure constants are the only place the content protocol is spelled out`() {
-        assertEquals("conversation_disclosure_snapshot", ConversationDisclosureSnapshotService.CONTENT_TYPE)
-        assertEquals(setOf(1, 2), ConversationDisclosureSnapshotService.SUPPORTED_FORMATS)
-        assertEquals(listOf("id", "content"), ConversationDisclosureSnapshotService.MEMORY_HEADER)
-        assertEquals(
-            listOf("id", "name", "description"),
-            ConversationDisclosureSnapshotService.SUB_ASSISTANT_HEADER,
-        )
-    }
+
 }

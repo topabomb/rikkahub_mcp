@@ -76,6 +76,7 @@ private data class StoredEnterpriseExecution(
     val releaseId: String,
     val snapshotHash: String,
     val runtimePaths: Map<String, String>,
+    val snapshotSchemaVersion: Long? = null,
 )
 
 @Serializable
@@ -192,6 +193,7 @@ internal class EnterpriseAppliedStore(
             execution.releaseId,
             execution.snapshotHash,
             execution.runtimePaths,
+            execution.snapshotSchemaVersion,
         )).toByteArray()
         writeSynced(File(directory, "configuration.json"), configuration)
         checkpoint(EnterpriseStorageCheckpoint.CONFIGURATION_STAGED)
@@ -302,6 +304,7 @@ internal class EnterpriseAppliedStore(
             private.releaseId,
             private.snapshotHash,
             private.runtimePaths,
+            private.snapshotSchemaVersion,
         )
         return EnterpriseCandidate(identity, public.configuration, execution).also(EnterpriseCandidate::validate)
     }

@@ -217,6 +217,9 @@ data class Tool(
      */
     @Transient
     val contextualExecute: (suspend ToolExecutionContext.(JsonElement) -> List<UIMessagePart>)? = null,
+    /** Local producer identity, assigned by the factory; never part of the Provider schema. */
+    @Transient
+    val executionIdentity: String? = null,
 ) {
     /** Same parser for approval and execution; remote schema semantics remain with the server. */
     fun parseArguments(input: String, json: Json): JsonObject {

@@ -25,6 +25,7 @@ internal data class ToolExecutionBinding(
     val outputPolicy: ToolOutputPolicy,
     val successfulOutputPolicy: (List<UIMessagePart>) -> ToolOutputPolicy,
     val execute: suspend ToolExecutionContext.(JsonElement) -> List<UIMessagePart>,
+    val executionIdentity: String? = null,
 ) {
     fun parseArguments(input: String, json: Json): JsonObject {
         val parsed = try {
@@ -59,6 +60,7 @@ internal fun freezeToolSet(tools: List<Tool>): FrozenToolSet {
             outputPolicy = tool.outputPolicy,
             successfulOutputPolicy = tool.successfulOutputPolicy,
             execute = { arguments -> tool.executeWithContext(this, arguments) },
+            executionIdentity = tool.executionIdentity,
         )
     }
     return FrozenToolSet(

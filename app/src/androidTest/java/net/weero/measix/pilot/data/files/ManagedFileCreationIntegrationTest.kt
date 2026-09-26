@@ -33,6 +33,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import java.io.File
 import java.nio.file.Files
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.cancel
@@ -98,6 +99,7 @@ class ManagedFileCreationIntegrationTest {
         systemMetaDAO = database.systemMetaDao(),
         conversationDAO = database.conversationDao(),
         messageNodeDAO = database.messageNodeDao(),
+        contextDAO = database.conversationModelContextDao(),
         settingsCoordinator = settingsCoordinator,
         transactionRunner = RoomDatabaseTransactionRunner(database),
         fileNameCandidates = { listOf("aaaaaa", "bbbbbbb", "cccccccc", "Dddddddd") },
@@ -150,11 +152,11 @@ class ManagedFileCreationIntegrationTest {
                 net.weero.measix.pilot.ui.components.ai.MediaFileInputRow(state, draft)
             } }
             compose.waitUntil(30_000) { entered.isCompleted }
-            val submission = runBlocking { draft.claimSubmission(draft.target, listOf(part)) }
+            val submission = awaitWithCompose { draft.claimSubmission(draft.target, listOf(part)) }
             resume.complete(Unit)
             compose.waitUntil(30_000) { finished.isCompleted }
             compose.waitForIdle()
-            runBlocking { draft.returnUnaccepted(submission) }
+            awaitWithCompose { draft.returnToDraft(submission) }
             compose.waitUntil(30_000) {
                 val pixels = compose.onRoot().captureToImage().toPixelMap()
                 var red = 0
@@ -173,6 +175,19 @@ class ManagedFileCreationIntegrationTest {
     }
 
 
+
+    private fun <T> awaitWithCompose(action: suspend () -> T): T {
+        // Mounted preview reads can hold the draft mutex while resuming on Compose's test
+        // dispatcher. Keep that scheduler advancing instead of blocking the test thread.
+        val scope = CoroutineScope(Dispatchers.Default)
+        val pending = scope.async { action() }
+        return try {
+            compose.waitUntil(30_000) { pending.isCompleted }
+            runBlocking { pending.await() }
+        } finally {
+            scope.cancel()
+        }
+    }
 
     @Test fun renderedDocumentsReadOnlyTheirSourceAndNeverShareBrowserStorage() = runBlocking {
         store.ensureReferenceProjection()

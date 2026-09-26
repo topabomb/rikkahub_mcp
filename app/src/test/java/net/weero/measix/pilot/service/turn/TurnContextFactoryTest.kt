@@ -28,6 +28,52 @@ class TurnContextFactoryTest {
     private val instant: Instant = Instant.parse("2026-09-03T10:15:30Z")
     private val zoneId: ZoneId = ZoneId.of("Asia/Shanghai")
 
+    @Test
+    fun `materialize freezes final system and removes system producers from step inputs`() {
+        val assistant = Assistant(systemPrompt = "domain {{user}}")
+        val systemRule = net.weero.measix.pilot.service.turn.ResolvedPromptInjection(
+            ConfigurationReference.random(), 0,
+            net.weero.measix.pilot.data.model.InjectionPosition.AFTER_SYSTEM_PROMPT,
+            "rule captured", 1, me.rerere.ai.core.MessageRole.USER,
+            "rule", "rule {{user}}",
+        )
+        val historyRule = systemRule.copy(id = ConfigurationReference.random(),
+            position = net.weero.measix.pilot.data.model.InjectionPosition.TOP_OF_CHAT)
+        val inputs = net.weero.measix.pilot.test.testPromptInputs().copy(
+            placeholderValues = mapOf("user" to "captured"),
+            workspaceReminder = "workspace {{user}}",
+            promptInjections = listOf(systemRule, historyRule),
+        )
+        var schemaReads = 0
+        val tool = me.rerere.ai.core.Tool("tool", "description", parameters = { schemaReads++; null },
+            systemPromptContribution = "tool {{user}}", execute = { emptyList() })
+        val plan = TurnLaunchPlan(
+            realmAccess = net.weero.measix.pilot.data.enterprise.RealmAccess.Personal,
+            assistant = assistant,
+            model = io.mockk.mockk(),
+            mediaCapabilities = me.rerere.ai.provider.RequestMediaCapabilities.NONE,
+            promptInputs = inputs,
+            tools = listOf(tool),
+            disclosure = io.mockk.mockk {
+                io.mockk.every { withInstalledTools(any()) } returns this
+            },
+        )
+        val context = TurnContextFactory(io.mockk.mockk()).materialize(plan)
+        assertEquals(1, schemaReads)
+        assertEquals(listOf(historyRule), context.promptInputs.promptInjections)
+        assertEquals(null, context.promptInputs.workspaceReminder)
+        assertTrue(context.system.text.contains("domain captured"))
+        assertTrue(context.system.text.contains("workspace {{user}}"))
+        assertTrue(context.system.text.contains("tool {{user}}"))
+        assertTrue(context.system.text.endsWith("rule captured"))
+        val payload = net.weero.measix.pilot.data.model.ConversationContextPayload(
+            source = net.weero.measix.pilot.data.model.ConversationContextSource.System(context.system.contributions),
+            body = net.weero.measix.pilot.data.model.ConversationContextBody.Inline(context.system.text),
+        )
+        assertEquals(payload, net.weero.measix.pilot.data.model.ConversationContextCodec.decode(
+            net.weero.measix.pilot.data.model.ConversationContextCodec.encode(payload)))
+    }
+
     private fun freeze(
         settings: Settings = Settings(),
         assistant: Assistant = Assistant(name = "Tester", description = "desc"),

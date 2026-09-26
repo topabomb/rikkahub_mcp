@@ -36,7 +36,7 @@ ConversationTurnService / SubAssistantRunCoordinator
 
 结构与执行 reducer 共用一个命令入口和事务。未变化节点保持引用；UI/ViewModel 只消费
 `ConversationPresentationSnapshot`，不持有 Repository、Runtime Registry 或 worker Job。
-`ConversationAggregateSnapshot` 保存 header、nodes 与 model-context entries；streaming 不进入它。
+`ConversationAggregateSnapshot` 保存 header、nodes、opening、model-context entries 与 request admissions；streaming 不进入它。
 
 ## 会话文件夹命令
 
@@ -84,7 +84,8 @@ START/交互继续、辅助生成和文件授权各自验证原执行身份，�
 Tool batch，Provider 透明重试不创建新 Step。Step 保存在消息 parts，不设独立 Step 表。
 
 `StartTurn` 在构造命令时固定首个 Step 身份和时间，单事务建立 Assistant 槽、`Step(ordinal=0)`、
-RUNNING turn fact 与可选 model-context entry。`StepOutputAccumulator` 只更新已预开的未采样 Step。
+RUNNING turn fact。应用输入在请求组装校验后以独立 `AdmitRequestContext` 事务接纳，
+无新增内容也保存请求边界；接纳详情见 [请求上下文](request-context.md)。`StepOutputAccumulator` 只更新已预开的未采样 Step。
 `StepModelResult` 保存采样的 finish reason、usage、请求数、时间与 Provider metadata；计量算法见
 [Token 用量](token-usage-accounting.md)。
 
@@ -140,8 +141,9 @@ USER 预处理按原 RealmAccess 的已解析助手执行。START 前由 `ModelE
 
 等待用户时，继续 worker 接手同一上下文及 lease；旧 worker 的结束不能释放它。终态或准备失败的资源释放在 Session/会话锁外等待；清理失败保留原 Runtime owner 供 stop 重试。持有执行 lease 的 Runtime 不得被空闲回收、显式驱逐或删除，清理成功后才移除 owner。
 
-`sendMessage` 返回的 `SendMessageReceipt.userMessageId` 是本次 USER 的稳定身份，返回只证明 worker
-已安装，不证明 USER 已提交。UI 通过正式消息投影观察该 ID。`editAndResend` 截断到目标 USER node、
+`sendMessage` 返回的 `SendMessageReceipt.userMessageId` 是已持久提交 USER 的稳定身份；worker
+仅安装尚不足以返回成功。Draft 首条 USER 与 opening 同事务晋升 Ready，UI 只清理本次提交的文字/附件，
+不清理等待期间的新输入。START 或 Provider 后续失败保留已提交 USER，通过 Ready 重试。`editAndResend` 截断到目标 USER node、
 提交新 variant 后 START；纯 `editMessage` 不启动 Turn，也不创建 model-context entry。
 
 `TurnEntry.START` 可执行建议清理、无效消息清理和附件引用回填；`CONTINUE_USER_INTERACTION`
@@ -163,6 +165,7 @@ Pending 是整批屏障，任何自动工具都不抢先执行。合法 Denied /
 
 | 命令 | durable 边界 |
 | --- | --- |
+| `AdmitRequestContext` | Provider IO 前的应用内容、selection 与实际位置差异、零变化边界及 Artifact CONTEXT roots |
 | `ModelResponseCheckpoint` | 采样结果、Tool Calls、即时失败、Pending、压缩 patch 与 RUNNING / AWAITING_USER |
 | `ToolExecutionStartedCheckpoint` | 副作用前 STARTED 与 Turn / Step / Call 身份；成功返回后才执行 |
 | `ToolExecutionUpdatedCheckpoint` | Child link 或必须持久化的中间事实 |

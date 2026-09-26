@@ -74,7 +74,7 @@ class ArtifactUploadImageReadTest {
         payloadStore = spyk(ArtifactPayloadStore(context))
         store = ArtifactStore(
             payloadStore, database.artifactDao(), database.artifactReferenceDao(),
-            database.systemMetaDao(), database.conversationDao(), database.messageNodeDao(),
+            database.systemMetaDao(), database.conversationDao(), database.messageNodeDao(), database.conversationModelContextDao(),
             ArtifactSettingsCoordinator(settingsStore), RoomDatabaseTransactionRunner(database),
         )
     }

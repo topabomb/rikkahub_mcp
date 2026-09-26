@@ -1,5 +1,7 @@
 package net.weero.measix.pilot.data.db.migrations
 
+import net.weero.measix.pilot.service.runtime.inlineContextText
+import net.weero.measix.pilot.service.runtime.historicalContextRow
 import me.rerere.common.configuration.ConfigurationReference
 
 import android.content.Context
@@ -222,25 +224,26 @@ class Migration_9_10Test {
     }
 
     @Test
-    fun thePrimaryKeyRejectsASecondRowForTheSameOwnerNodeAndMessage() = runBlocking {
+    fun uniqueOccurrenceRejectsASecondRowForTheSameOwnerNodeAndMessage() = runBlocking {
         withModelContextDatabase { db ->
             seedNodes(db)
             db.conversationModelContextDao().insertOnce(listOf(entry()))
             // 绕过 insertOnce 的幂等判定，证明唯一性来自数据库约束而不是 Kotlin 分支。
             val failure = runCatching {
                 db.openHelper.writableDatabase.execSQL(
-                    "INSERT INTO " + CONTEXT_TABLE + " (owner_node_id, owner_message_id, anchor_node_id, " +
-                        "anchor_message_id, content) VALUES (?,?,?,?,?)",
+                    "INSERT INTO " + CONTEXT_TABLE + " (id,owner_node_id,owner_message_id,anchor_node_id," +
+                        "anchor_message_id,occurrence,step_id,source_kind,payload) VALUES (?,?,?,?,?,0,NULL,'disclosure',?)",
                     arrayOf<Any?>(
+                        Uuid.random().toString(),
                         "node-assistant",
                         OWNER_ASSISTANT,
                         "node-user",
                         ANCHOR_USER,
-                        canonicalContent("note B"),
+                        entry(canonicalContent("note B")).payload,
                     ),
                 )
             }.exceptionOrNull()
-            assertTrue("expected a UNIQUE failure, got " + failure, failure != null)
+            assertTrue("expected a UNIQUE failure, got " + failure, failure is android.database.sqlite.SQLiteConstraintException)
             assertEquals(1, countEntries(db))
         }
     }
@@ -259,8 +262,8 @@ class Migration_9_10Test {
             dao.insertOnce(listOf(entry(content, ownerNodeId = "node-assistant-later")))
             assertEquals(2, countEntries(db))
             // 每条克隆分支各自拥有自己的 row：同 owner message id、不同 owner node。
-            assertEquals(content, dao.findByOwner("node-assistant", OWNER_ASSISTANT)?.content)
-            assertEquals(content, dao.findByOwner("node-assistant-later", OWNER_ASSISTANT)?.content)
+            assertEquals(content, dao.findById(entry(content).id)?.inlineContextText())
+            assertEquals(content, dao.findById(entry(content, ownerNodeId = "node-assistant-later").id)?.inlineContextText())
         }
     }
 
@@ -407,7 +410,7 @@ class Migration_9_10Test {
         helper.createDatabase(name, 9).close()
         helper.runMigrationsAndValidate(name, 10, true, Migration_9_10).close()
         val db = Room.databaseBuilder(context, AppDatabase::class.java, name)
-            .addMigrations(Migration_9_10, Migration_10_11, Migration_11_12, Migration_12_13)
+            .addMigrations(Migration_9_10, Migration_10_11, Migration_11_12, Migration_12_13, Migration_13_14)
             .allowMainThreadQueries()
             .build()
         try {
@@ -462,7 +465,7 @@ class Migration_9_10Test {
         content: String = canonicalContent("note A"),
         ownerNodeId: String = "node-assistant",
         ownerMessageId: String = OWNER_ASSISTANT,
-    ) = ConversationModelContextEntity(
+    ) = historicalContextRow(
         ownerMessageId = ownerMessageId,
         ownerNodeId = ownerNodeId,
         anchorNodeId = "node-user",
@@ -470,13 +473,8 @@ class Migration_9_10Test {
         content = content,
     )
 
-    private fun canonicalContent(memory: String) = ConversationDisclosureSnapshotService.render(
-        ConversationDisclosureSnapshotService.Candidate(
-            assistant = Assistant(id = ConfigurationReference.random(), name = "Master", enableMemory = true),
-            allAssistants = emptyList(),
-            memories = listOf(AssistantMemory(1, memory)),
-        ),
-    )
+    private fun canonicalContent(memory: String): String =
+        """{"type":"conversation_disclosure_snapshot","format":2,"memory":{"enabled":true,"scope":"local","header":["id","content"],"rows":[[1,${kotlinx.serialization.json.JsonPrimitive(memory)}]]},"sub_assistants":{"mode":"disabled","header":["id","name","description"],"rows":[]},"enterprise_memory_seeds":{"header":["id","content"],"rows":[]}}"""
 
     /** FK 约束按连接启用，与 DataSourceModule 的 onOpen 回调同一前提。 */
     private suspend fun withModelContextDatabase(block: suspend (AppDatabase) -> Unit) {
@@ -499,13 +497,13 @@ class Migration_9_10Test {
 
     private fun onlyContent(db: AppDatabase, ownerMessageId: String): String =
         db.openHelper.readableDatabase.query(
-            "SELECT content FROM " + CONTEXT_TABLE + " WHERE owner_message_id = ?",
+            "SELECT payload FROM " + CONTEXT_TABLE + " WHERE owner_message_id = ?",
             arrayOf(ownerMessageId),
         ).use { cursor ->
             assertTrue("no entry owned by " + ownerMessageId, cursor.moveToFirst())
-            val content = cursor.getString(0)
+            val payload = net.weero.measix.pilot.data.model.ConversationContextCodec.decode(cursor.getString(0))
             assertTrue("more than one entry for " + ownerMessageId, !cursor.moveToNext())
-            content
+            (payload.body as net.weero.measix.pilot.data.model.ConversationContextBody.Inline).text
         }
 
     private fun scalar(db: AppDatabase, sql: String): Int =

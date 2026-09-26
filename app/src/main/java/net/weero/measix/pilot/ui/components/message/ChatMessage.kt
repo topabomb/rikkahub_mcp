@@ -122,6 +122,9 @@ fun ChatMessage(
     toolLivePhases: Map<ToolCallLocator, ToolLivePhase> = emptyMap(),
     onShowTerminalError: ((UIMessage) -> Unit)? = null,
     readOnly: Boolean = false,
+    contextSummary: net.weero.measix.pilot.service.MessageContextSummary? = null,
+    contextConversationId: Uuid? = detailSource?.conversationId,
+    showContextEntry: Boolean = true,
 ) {
     val message = node.messages[node.selectIndex]
     val settings = LocalSettings.current.displaySetting
@@ -133,6 +136,7 @@ fun ChatMessage(
     )
     var showActionsSheet by remember { mutableStateOf(false) }
     var showSelectCopySheet by remember { mutableStateOf(false) }
+    var showContext by remember(message.id, detailSource) { mutableStateOf(false) }
     val navController = LocalNavController.current
     val richTextActions = net.weero.measix.pilot.ui.components.richtext.LocalRichTextActions.current
     val context = LocalContext.current
@@ -146,6 +150,7 @@ fun ChatMessage(
     }
     val hasRenderableParts = !renderableParts.isEmptyUIMessage()
     val hasVisibleMessage = hasRenderableParts || message.terminalStatus != null
+    val originLabel = contextSummary?.origin?.let { contextCategoryText(it) }
     val showHeader = shouldShowChatMessageHeader(
         role = message.role,
         hasRenderableParts = hasRenderableParts,
@@ -173,17 +178,22 @@ fun ChatMessage(
                     modelIconFallback = modelIconFallback,
                     assistant = assistant,
                     loading = loading,
+                    sourceLabel = originLabel,
                     modifier = Modifier.weight(1f)
                 )
                 ChatMessageUserAvatar(
                     message = message,
                     avatar = settings.userAvatar,
-                    nickname = settings.userNickname,
+                    nickname = originLabel ?: settings.userNickname,
                     modifier = Modifier.weight(1f)
                 )
             }
         }
         ProvideTextStyle(textStyle) {
+            if (originLabel != null && !(showHeader && (message.role == MessageRole.USER || settings.showModelName))) {
+                Text(originLabel, style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
             MessagePartsBlock(
                 detailSource = detailSource,
                 assistant = assistant,
@@ -206,6 +216,11 @@ fun ChatMessage(
                 status = terminalStatus,
                 onShowTerminalError = onShowTerminalError,
             )
+        }
+
+        if (showContextEntry && hasVisibleMessage && detailSource != null && contextConversationId != null && contextSummary?.hasContent == true &&
+            contextSummary.hasExternalUpdate) {
+            ContextMessageEntry(contextSummary.hasExternalUpdate) { showContext = true }
         }
 
         val showActions = if (readOnly) {
@@ -273,6 +288,9 @@ fun ChatMessage(
             },
             isFavorite = isFavorite,
             onToggleFavorite = onToggleFavorite,
+            onContext = if (contextSummary?.hasContent == true && detailSource != null && contextConversationId != null) {
+                { showContext = true }
+            } else null,
             onWebViewPreview = {
                 val textContent = message.parts
                     .filterIsInstance<UIMessagePart.Text>()
@@ -300,6 +318,10 @@ fun ChatMessage(
                 showSelectCopySheet = false
             }
         )
+    }
+    if (showContext && detailSource != null && contextConversationId != null) {
+        ConversationContextDetails(detailSource, contextConversationId, message.id,
+            onDismiss = { showContext = false })
     }
 }
 

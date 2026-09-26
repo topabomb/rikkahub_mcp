@@ -9,13 +9,25 @@ class PlatformWireTest {
         .bufferedReader().use { Json.parseToJsonElement(it.readText()).jsonArray }
 
     @Test
-    fun `Core shared control and snapshot cases use the generated current schema`() {
+    fun `published Core v4 snapshots retain their declared version and absent opening`() {
+        cases().filter {
+            it.jsonObject.getValue("schema").jsonPrimitive.content == "ManagedSnapshotV4" &&
+                it.jsonObject.getValue("valid").jsonPrimitive.boolean
+        }.forEach { case ->
+            val decoded = PlatformWireCodec.decode<PlatformManagedSnapshot>(case.jsonObject.getValue("value").toString())
+            assertEquals(4L, decoded.schemaVersion)
+            assertTrue(decoded.starters.all { it.openingSnapshot == null })
+        }
+    }
+
+    @Test
+    fun `Core shared control and snapshot cases use their declared schemas`() {
         cases().forEach { value ->
             val case = value.jsonObject
             val raw = case.getValue("value").toString()
             val decode = {
                 when (val schema = case.getValue("schema").jsonPrimitive.content) {
-                    "ManagedSnapshot" -> PlatformWireCodec.decode<PlatformManagedSnapshot>(raw)
+                    "ManagedSnapshot", "ManagedSnapshotV4" -> PlatformWireCodec.decode<PlatformManagedSnapshot>(raw)
                     "Discovery" -> PlatformWireCodec.decode<PlatformDiscovery>(raw)
                     "EnrollmentExchangeRequest" -> PlatformWireCodec.decode<PlatformEnrollmentExchangeRequest>(raw)
                     "EnrollmentExchangeResponse" -> PlatformWireCodec.decode<PlatformEnrollmentExchangeResponse>(raw)
@@ -33,7 +45,7 @@ class PlatformWireTest {
 
     @Test
     fun `absent optional fields differ from explicit null and unknown enum`() {
-        val snapshot = cases().first().jsonObject.getValue("value").jsonObject
+        val snapshot = Json.parseToJsonElement(withStarterOpeningMock(cases().first().jsonObject.getValue("value").toString())).jsonObject
         val model = snapshot.getValue("models").jsonArray.first().jsonObject
         val unknownModel = JsonObject(model + ("inputModalities" to JsonArray(listOf(JsonPrimitive("AUDIO")))))
         assertThrows(IllegalArgumentException::class.java) {
@@ -61,7 +73,7 @@ class PlatformWireTest {
 
     @Test
     fun `image generation wire accepts both declared protocols and rejects unknown values`() {
-        val snapshot = cases().first().jsonObject.getValue("value").jsonObject
+        val snapshot = Json.parseToJsonElement(withStarterOpeningMock(cases().first().jsonObject.getValue("value").toString())).jsonObject
         val image = snapshot.getValue("imageGenerators").jsonArray.single().jsonObject
         val dashScope = JsonObject(image + ("clientProtocol" to JsonPrimitive("DASHSCOPE_MULTIMODAL_GENERATION")))
         val decoded = PlatformWireCodec.decode<PlatformManagedSnapshot>(

@@ -1,5 +1,6 @@
 package net.weero.measix.pilot.service.subassistant
 
+import net.weero.measix.pilot.service.runtime.disclosurePayload
 import me.rerere.common.configuration.ConfigurationReference
 
 
@@ -492,7 +493,7 @@ class SubAssistantLineageTest {
                 ownerMessageId = answer1.id,
                 anchorNodeId = forkChildConversation.messageNodes[0].id,
                 anchorMessageId = forkTask1.id,
-                content = "snapshot-1",
+                payload = disclosurePayload("snapshot-1"),
             ),
         ),
     )

@@ -21,6 +21,13 @@ internal data class TurnContext(
     val promptInputs: TurnPromptSnapshot,
     val toolDefinitions: List<FrozenToolDefinition>,
     val toolBindingsByName: Map<String, ToolExecutionBinding>,
+    val system: FrozenTurnSystem,
+    val disclosure: TurnDisclosureSource,
+)
+
+internal data class FrozenTurnSystem(
+    val text: String,
+    val contributions: List<net.weero.measix.pilot.data.model.SystemContextContribution>,
 )
 
 /**
@@ -53,6 +60,8 @@ data class ResolvedPromptInjection(
     val content: String,
     val injectDepth: Int,
     val role: MessageRole,
+    val name: String = "",
+    val template: String = content,
 )
 
 /**

@@ -3,9 +3,11 @@ package net.weero.measix.pilot.data.repository
 import me.rerere.ai.core.MessageRole
 import me.rerere.ai.ui.UIMessage
 import net.weero.measix.pilot.data.db.entity.ConversationModelContextEntity
-import net.weero.measix.pilot.data.model.Assistant
 import net.weero.measix.pilot.data.model.MessageNode
-import net.weero.measix.pilot.service.ConversationDisclosureSnapshotService
+import net.weero.measix.pilot.data.model.ConversationContextBody
+import net.weero.measix.pilot.data.model.ConversationContextCodec
+import net.weero.measix.pilot.data.model.contextEntryIdentity
+import net.weero.measix.pilot.service.runtime.disclosurePayload
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertThrows
 import org.junit.Test
@@ -23,12 +25,18 @@ class ConversationModelContextMapperTest {
         anchorNodeId: Uuid = anchorNode.id,
         anchorMessageId: Uuid = anchor.id,
         content: String = "canonical",
+        occurrence: Int = 0,
+        stepId: Uuid? = null,
     ) = ConversationModelContextEntity(
+        id = contextEntryIdentity(ownerNodeId, ownerMessageId, occurrence).toString(),
         ownerMessageId = ownerMessageId.toString(),
         ownerNodeId = ownerNodeId.toString(),
         anchorNodeId = anchorNodeId.toString(),
         anchorMessageId = anchorMessageId.toString(),
-        content = content,
+        occurrence = occurrence,
+        stepId = stepId?.toString(),
+        sourceKind = "disclosure",
+        payload = ConversationContextCodec.encode(disclosurePayload(content)),
     )
 
     @Test
@@ -82,20 +90,13 @@ class ConversationModelContextMapperTest {
 
     @Test
     fun `load mapper accepts a supported envelope that is not renderer-canonical bytes`() {
-        val canonical = ConversationDisclosureSnapshotService.render(
-            ConversationDisclosureSnapshotService.Candidate(
-                assistant = Assistant(enableMemory = false, localTools = emptyList()),
-                allAssistants = emptyList(),
-                memories = emptyList(),
-            ),
-        )
-        val spaced = canonical.replace("\",\"format\"", "\", \"format\"")
+        val spaced = """{"type":"conversation_disclosure_snapshot", "format":2,"memory":{"enabled":false,"scope":"disabled","header":["id","content"],"rows":[]},"sub_assistants":{"mode":"disabled","header":["id","name","description"],"rows":[]},"enterprise_memory_seeds":{"header":["id","content"],"rows":[]}}"""
         val mapped = mapModelContextEntries(
             rows = listOf(row(content = spaced)),
             nodes = listOf(anchorNode, ownerNode),
             conversationId = "conversation",
         ).single()
-        assertEquals(spaced, mapped.content)
+        assertEquals(spaced, (mapped.payload.body as ConversationContextBody.Inline).text)
     }
 
     @Test
@@ -121,4 +122,29 @@ class ConversationModelContextMapperTest {
             }
         }
     }
+    @Test
+    fun `several occurrences can share a variant but duplicate identities and occurrences cannot`() {
+        val rows = listOf(row(content = "first"), row(content = "second", occurrence = 1))
+        val mapped = mapModelContextEntries(rows, listOf(anchorNode, ownerNode), "conversation", {})
+        assertEquals(listOf(0, 1), mapped.map { it.occurrence })
+        assertEquals(2, mapped.map { it.id }.distinct().size)
+        assertThrows(ConversationModelContextIntegrityException::class.java) {
+            mapModelContextEntries(listOf(rows[0], rows[0]), listOf(anchorNode, ownerNode), "conversation", {})
+        }
+        assertThrows(ConversationModelContextIntegrityException::class.java) {
+            mapModelContextEntries(listOf(rows[0], rows[0].copy(id = Uuid.random().toString())),
+                listOf(anchorNode, ownerNode), "conversation", {})
+        }
+    }
+
+    @Test
+    fun `source discriminator and step membership must match persisted payload and transcript`() {
+        assertThrows(ConversationModelContextIntegrityException::class.java) {
+            mapModelContextEntries(listOf(row().copy(sourceKind = "system")), listOf(anchorNode, ownerNode), "conversation", {})
+        }
+        assertThrows(ConversationModelContextIntegrityException::class.java) {
+            mapModelContextEntries(listOf(row(stepId = Uuid.random())), listOf(anchorNode, ownerNode), "conversation", {})
+        }
+    }
+
 }

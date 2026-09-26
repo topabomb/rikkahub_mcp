@@ -458,12 +458,23 @@ class ConversationCommandAccessTest {
         }
     }
 
-    @Test fun `closing Session after acceptance prevents an append from running under a later login`() = runTest {
+    @Test fun `closing Session after worker acceptance prevents an append from running under a later login`() = runTest {
         fixture { f ->
-            f.turns.sendMessage(f.page.commandTarget, listOf(UIMessagePart.Text("revoked")), false)
+            val cleanup = CompletableDeferred<Unit>()
+            val release = CompletableDeferred<Unit>()
+            val previous = backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) {
+                try { awaitCancellation() }
+                finally { withContext(NonCancellable) { cleanup.complete(Unit); release.await() } }
+            }
+            f.runtime.installTurnWorker(Uuid.random(), previous)
+            val sending = async { f.turns.sendMessage(f.page.commandTarget, listOf(UIMessagePart.Text("revoked")), false) }
+            cleanup.await()
+            assertFalse(sending.isCompleted)
             f.sessions.finishExit(f.sessions.beginExit(requireNotNull(f.sessions.captureExitRequest())))
             f.sessions.enrollFixture(exampleEnterprisePackage())
+            release.complete(Unit)
             runCurrent()
+            assertNull(sending.await())
             assertEquals("original", f.runtime.durable.currentMessages().single().toText())
             assertNull(f.runtime.currentWorker())
             assertEquals(1, f.errors.errors.value.size)
@@ -500,13 +511,16 @@ class ConversationCommandAccessTest {
                 finally { withContext(NonCancellable) { cleanup.complete(Unit); release.await() } }
             }
             f.runtime.installTurnWorker(Uuid.random(), original)
-            f.turns.sendMessage(f.page.commandTarget, listOf(UIMessagePart.Text("B")), false)
-            val latest = requireNotNull(f.turns.sendMessage(f.page.commandTarget, listOf(UIMessagePart.Text("C")), false))
+            val first = async { f.turns.sendMessage(f.page.commandTarget, listOf(UIMessagePart.Text("B")), false) }
             cleanup.await()
+            val last = async { f.turns.sendMessage(f.page.commandTarget, listOf(UIMessagePart.Text("C")), false) }
             runCurrent()
+            assertFalse(last.isCompleted)
             assertEquals("original", f.runtime.durable.currentMessages().single().toText())
             release.complete(Unit)
             runCurrent()
+            assertNull(first.await())
+            val latest = requireNotNull(last.await())
             assertEquals(f.errors.errors.value.toString(), listOf("original", "C"), f.runtime.durable.currentMessages().map { it.toText() })
             assertEquals(latest.userMessageId, f.runtime.durable.currentMessages().last().id)
             assertNull(f.runtime.currentWorker())
@@ -519,7 +533,7 @@ class ConversationCommandAccessTest {
             val originalTurn = Uuid.random()
             val originalWorker = Job()
             f.runtime.installTurnWorker(originalTurn, originalWorker)
-            net.weero.measix.pilot.service.turn.TurnCommitter.start(f.coordinator, f.runtime, originalTurn, disclosureCandidate(), f.finalizer)
+            net.weero.measix.pilot.service.turn.TurnCommitter.start(f.coordinator, f.runtime, originalTurn, f.finalizer)
             f.failTerminal = true
             f.turns.sendMessage(f.page.commandTarget, listOf(UIMessagePart.Text("B")), false)
             f.turns.sendMessage(f.page.commandTarget, listOf(UIMessagePart.Text("C")), false)
@@ -540,7 +554,7 @@ class ConversationCommandAccessTest {
             val originalTurn = Uuid.random()
             val originalWorker = Job()
             f.runtime.installTurnWorker(originalTurn, originalWorker)
-            net.weero.measix.pilot.service.turn.TurnCommitter.start(f.coordinator, f.runtime, originalTurn, disclosureCandidate(), f.finalizer)
+            net.weero.measix.pilot.service.turn.TurnCommitter.start(f.coordinator, f.runtime, originalTurn, f.finalizer)
             f.failTerminal = true
             f.turns.sendMessage(f.page.commandTarget, listOf(UIMessagePart.Text("B")), false)
             val stop = requireNotNull(f.finalizer.captureStop(f.rootId))
@@ -558,7 +572,7 @@ class ConversationCommandAccessTest {
         fixture { f ->
             val originalTurn = Uuid.random()
             f.runtime.installTurnWorker(originalTurn, Job())
-            net.weero.measix.pilot.service.turn.TurnCommitter.start(f.coordinator, f.runtime, originalTurn, disclosureCandidate(), f.finalizer)
+            net.weero.measix.pilot.service.turn.TurnCommitter.start(f.coordinator, f.runtime, originalTurn, f.finalizer)
             val stop = requireNotNull(f.finalizer.captureStop(f.rootId))
             val receipt = requireNotNull(f.turns.sendMessage(f.page.commandTarget, listOf(UIMessagePart.Text("B")), false))
             f.finalizer.finishStop(stop)
@@ -578,7 +592,7 @@ class ConversationCommandAccessTest {
             val worker = Job()
             f.runtime.installTurnWorker(turnId, worker)
             val started = net.weero.measix.pilot.service.turn.TurnCommitter.start(
-                f.coordinator, f.runtime, turnId, disclosureCandidate(), f.finalizer)
+                f.coordinator, f.runtime, turnId, f.finalizer)
             val lease = net.weero.measix.pilot.service.runtime.ModelExecutionLease { error("no request expected") }
             f.runtime.bindModelExecution(turnId, worker, f.runtime.durable.header.assistantId, lease)
             f.runtime.bindTurnContext(turnId, worker, mockk {
@@ -715,7 +729,7 @@ class ConversationCommandAccessTest {
             val turn = Uuid.random()
             val worker = Job()
             f.runtime.installTurnWorker(turn, worker)
-            net.weero.measix.pilot.service.turn.TurnCommitter.start(f.coordinator, f.runtime, turn, disclosureCandidate(), f.finalizer)
+            net.weero.measix.pilot.service.turn.TurnCommitter.start(f.coordinator, f.runtime, turn, f.finalizer)
             val release = CompletableDeferred<Unit>()
             val auxiliary = f.appScope.launch(start = CoroutineStart.UNDISPATCHED) {
                 try { awaitCancellation() }
@@ -745,7 +759,7 @@ class ConversationCommandAccessTest {
             val turn = Uuid.random()
             val worker = Job()
             f.runtime.installTurnWorker(turn, worker)
-            net.weero.measix.pilot.service.turn.TurnCommitter.start(f.coordinator, f.runtime, turn, disclosureCandidate(), f.finalizer)
+            net.weero.measix.pilot.service.turn.TurnCommitter.start(f.coordinator, f.runtime, turn, f.finalizer)
             val token = f.sessions.beginExit(requireNotNull(f.sessions.captureExitRequest()))
             f.failTerminal = true
             rejects<java.io.IOException> { f.application.stopEnterpriseWork(token) }
@@ -766,7 +780,7 @@ class ConversationCommandAccessTest {
         fixture { f ->
             val turn = Uuid.random()
             f.runtime.installTurnWorker(turn, Job())
-            net.weero.measix.pilot.service.turn.TurnCommitter.start(f.coordinator, f.runtime, turn, disclosureCandidate(), f.finalizer)
+            net.weero.measix.pilot.service.turn.TurnCommitter.start(f.coordinator, f.runtime, turn, f.finalizer)
             val token = f.sessions.beginExit(requireNotNull(f.sessions.captureExitRequest()))
             val idleId = f.put(f.scope, parent = f.rootId)
             f.registry.registerSnapshot(f.rows.getValue(idleId))

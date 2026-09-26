@@ -17,17 +17,14 @@ import kotlin.uuid.Uuid
  */
 
 /**
- * 一次新的 `START`：唯一能打开 Assistant request owner、原子提交 turn_execution 与可选
- * model-context entry 的 durable command。
+ * 一次新的 `START`：打开 Assistant request owner，并原子提交 turn_execution。
+ * 请求上下文随后经 [AdmitRequestContext] 接纳，不属于 START 的写入。
  *
  * 每个 StartTurn 都创建新的 Assistant owner；没有 slot 复用分支——审批 / ask-user
  * continuation 只走 `continueActive` 并保留原 handle，进程恢复只收口旧 Turn。
  * 因此一个 owner message 永远只对应一次 START 请求语义。
  *
- * 命令始终携带完整 canonical candidate，而不是调用者判定好的 nullable entry：执行锁内
- * [TurnTransition] 重新计算目标 selected prefix（token 不同即 conflict），相同才对
- * 当前适用 baseline 做 exact-content comparison 并决定是否插入——branch CAS 与判等属于
- * 同一个纯 Transition / transaction 计划，不存在 stale null。
+ * 锁内重算目标 selected prefix，token 不同即 conflict，避免向过期分支创建 owner。
  */
 internal data class StartTurn(
     val turnId: Uuid,
@@ -40,8 +37,6 @@ internal data class StartTurn(
     val anchorMessageId: Uuid,
     /** 调用者经 [TurnTransition.planStartTarget] 得到的目标 selected prefix；锁内逐项复核。 */
     val expectedSelectedPrefixMessageIds: List<Uuid>,
-    /** 合法 canonical Disclosure envelope；内容相对目标分支 baseline 变化才追加 entry。 */
-    val modelContextCandidate: String,
     val epoch: Long = 0L,
     /** Allocated once with the command; reducing the same START preserves identity and time. */
     val initialStep: me.rerere.ai.ui.UIMessagePart.Step = TurnTransition.openStep(0),

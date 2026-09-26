@@ -24,6 +24,12 @@ import net.weero.measix.pilot.data.files.ArtifactStore
 import net.weero.measix.pilot.data.files.FileFolders
 import net.weero.measix.pilot.data.imggen.GeneratedMediaStore
 import net.weero.measix.pilot.data.model.MessageNode
+import net.weero.measix.pilot.data.model.Conversation
+import net.weero.measix.pilot.data.model.ConversationContextCodec
+import net.weero.measix.pilot.data.model.ConversationContextBody
+import net.weero.measix.pilot.data.db.entity.ArtifactReferenceType
+import net.weero.measix.pilot.data.repository.loadPersistedConversationContext
+import me.rerere.common.configuration.ConfigurationReference
 import net.weero.measix.pilot.data.model.NodeFavoriteRef
 import net.weero.measix.pilot.data.model.collectArtifactReferences
 import net.weero.measix.pilot.utils.JsonInstant
@@ -176,6 +182,35 @@ internal class BackupDataGraph(private val context: Context) {
     }
 
     private fun copyGraph(db: SupportSQLiteDatabase, source: String, predicate: String, retainSharedAssets: Boolean = false) {
+        // Validate against the complete source before scope filtering can hide a foreign target.
+        db.query("SELECT x.id,c.scope FROM $source.conversation_model_context x " +
+            "JOIN $source.message_node n ON n.id=x.owner_node_id " +
+            "JOIN $source.ConversationEntity c ON c.id=n.conversation_id WHERE c.id IN " +
+            "(SELECT id FROM $source.ConversationEntity WHERE $predicate)").use { rows ->
+            while (rows.moveToNext()) {
+                val id = rows.getString(0)
+                val raw = buildString {
+                    var start = 1
+                    while (true) {
+                        val chunk = db.query("SELECT substr(payload,?,262144) FROM $source.conversation_model_context WHERE id=?",
+                            arrayOf<Any>(start, id)).use {
+                            check(it.moveToFirst() && !it.isNull(0)) { "Context disappeared during backup: $id" }
+                            it.getString(0)
+                        }
+                        if (chunk.isEmpty()) break
+                        append(chunk)
+                        start += chunk.codePointCount(0, chunk.length)
+                    }
+                }
+                val body = ConversationContextCodec.decode(raw).body as? ConversationContextBody.Artifact ?: continue
+                db.query("SELECT scope FROM $source.artifact WHERE id=? AND relative_path=? AND state='ACTIVE'",
+                    arrayOf<Any>(body.artifactId, body.relativePath)).use { artifact ->
+                    check(!artifact.moveToFirst() || artifact.getString(0) == rows.getString(1)) {
+                        "Context artifact is outside its scope: ${body.relativePath}"
+                    }
+                }
+            }
+        }
         listOf("ConversationEntity", "MemoryEntity", "GenMediaEntity", "conversation_folder", "favorites")
             .forEach { copyTable(db, source, it, predicate) }
         val artifacts = if (retainSharedAssets) "$predicate OR relative_path IN (SELECT path FROM retained_artifact_path)" else predicate
@@ -190,6 +225,9 @@ internal class BackupDataGraph(private val context: Context) {
         copyTable(db, source, "turn_execution", "conversation_id IN (SELECT id FROM $source.ConversationEntity WHERE $predicate)")
         copyTable(db, source, "tool_execution", "turn_id IN (SELECT turn_id FROM $source.turn_execution WHERE conversation_id IN (SELECT id FROM $source.ConversationEntity WHERE $predicate))")
         copyTable(db, source, "conversation_model_context", "owner_node_id IN (SELECT id FROM $source.message_node WHERE conversation_id IN (SELECT id FROM $source.ConversationEntity WHERE $predicate))")
+        copyTable(db, source, "conversation_context_admission", "owner_node_id IN (SELECT id FROM $source.message_node WHERE conversation_id IN (SELECT id FROM $source.ConversationEntity WHERE $predicate))")
+        copyTable(db, source, "conversation_context_use", "admission_id IN (SELECT id FROM $source.conversation_context_admission WHERE owner_node_id IN (SELECT id FROM $source.message_node WHERE conversation_id IN (SELECT id FROM $source.ConversationEntity WHERE $predicate)))")
+        copyTable(db, source, "conversation_opening", "conversation_id IN (SELECT id FROM $source.ConversationEntity WHERE $predicate)")
     }
 
     private fun copyTable(db: SupportSQLiteDatabase, source: String, table: String, predicate: String = "1") {
@@ -268,6 +306,43 @@ internal class BackupDataGraph(private val context: Context) {
                 check(owner == ConfigurationScope.Personal || owner == scope) { "Configuration artifact is outside its scope: $path" }
             }
         } }
+        // A node FK does not validate message variants, Step IDs or typed contribution references.
+        // Validate one conversation at a time using the same reader as normal Runtime loading.
+        db.query("SELECT id, assistant_id, scope FROM ConversationEntity").use { conversations ->
+            while (conversations.moveToNext()) {
+                currentCoroutineContext().ensureActive()
+                val conversationId = conversations.getString(0)
+                val nodes = buildList {
+                    db.query("SELECT id, select_index FROM message_node WHERE conversation_id=? ORDER BY node_index",
+                        arrayOf(conversationId)).use { rows ->
+                        while (rows.moveToNext()) {
+                            val nodeId = rows.getString(0)
+                            add(MessageNode(Uuid.parse(nodeId),
+                                JsonInstant.decodeFromString<List<UIMessage>>(readTranscriptPayload(db, nodeId)),
+                                rows.getInt(1)))
+                        }
+                    }
+                }
+                val snapshot = loadPersistedConversationContext(room.conversationModelContextDao(), Conversation(
+                    id = Uuid.parse(conversationId),
+                    assistantId = ConfigurationReference.parse(conversations.getString(1)),
+                    messageNodes = nodes,
+                    scope = configurationScopeFromStorageKey(conversations.getString(2)),
+                ))
+                snapshot.modelContextEntries.forEach { entry ->
+                    val body = entry.payload.body as? ConversationContextBody.Artifact ?: return@forEach
+                    db.query("SELECT id,scope,state FROM artifact WHERE relative_path=?", arrayOf(body.relativePath)).use { artifact ->
+                        // Deleted payloads remain unavailable; an old path must never bind a replacement identity.
+                        if (!artifact.moveToFirst() || artifact.getString(2) != "ACTIVE" || artifact.getLong(0) != body.artifactId) return@use
+                        check(artifact.getString(1) == snapshot.header.scope.storageKey()) {
+                            "Context artifact is outside its scope: ${body.relativePath}"
+                        }
+                        db.execSQL("INSERT OR IGNORE INTO artifact_reference(artifact_id,node_id,reference_type) VALUES (?,?,?)",
+                            arrayOf<Any>(body.artifactId, entry.ownerNodeId.toString(), ArtifactReferenceType.CONTEXT.name))
+                    }
+                }
+            }
+        }
         fts.markProjectionCurrentInTransaction()
         db.execSQL("INSERT INTO system_meta(`key`,value) VALUES (?,?)", arrayOf(ArtifactStore.REFERENCE_PROJECTION_VERSION_KEY,"true"))
     }

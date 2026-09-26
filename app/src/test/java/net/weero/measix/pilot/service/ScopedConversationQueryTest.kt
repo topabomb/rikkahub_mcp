@@ -192,7 +192,7 @@ class ScopedConversationQueryTest {
 
     private fun sessions() = EnterpriseSessionController(net.weero.measix.pilot.data.enterprise.enterpriseTestStore(temporary.newFolder()))
     private fun service(repository: ConversationRepository, sessions: EnterpriseSessionController) = ConversationQueryService(
-        repository, mockk(), mockk(), mockk(), mockk(), sessions, ApplicationRecoveryGate().apply { ready() }, mockk(), mockk())
+        repository, mockk(), mockk(), mockk(), mockk(), sessions, ApplicationRecoveryGate().apply { ready() }, mockk(), mockk(), mockk())
     private fun row(scope: ConfigurationScope, title: String) = ConversationListRecord(
         Uuid.random(), assistant, title, null, false, Instant.EPOCH, Instant.EPOCH, scope,
     )

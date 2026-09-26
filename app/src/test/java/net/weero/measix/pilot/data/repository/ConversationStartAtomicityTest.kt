@@ -1,5 +1,7 @@
 package net.weero.measix.pilot.data.repository
 
+import net.weero.measix.pilot.service.runtime.inlineContextText
+import net.weero.measix.pilot.service.runtime.disclosurePayload
 import me.rerere.common.configuration.ConfigurationReference
 
 import android.content.Context
@@ -24,7 +26,8 @@ import net.weero.measix.pilot.data.db.entity.TurnExecutionStatus
 import net.weero.measix.pilot.data.db.fts.MessageFtsManager
 import net.weero.measix.pilot.data.files.ArtifactReferenceDelta
 import net.weero.measix.pilot.data.files.ArtifactStore
-import net.weero.measix.pilot.data.model.Conversation
+import net.weero.measix.pilot.data.model.*
+import net.weero.measix.pilot.service.runtime.AdmitRequestContext
 import net.weero.measix.pilot.data.model.ConversationModelContextApplicability
 import net.weero.measix.pilot.data.model.ConversationModelContextEntry
 import net.weero.measix.pilot.data.model.MessageNode
@@ -68,7 +71,7 @@ class ConversationStartAtomicityTest {
         coEvery { artifactStore.withLifecycleLock<Any>(any()) } coAnswers {
             firstArg<suspend () -> Any>().invoke()
         }
-        coEvery { artifactStore.prepareReferenceDelta(any(), any(), any()) } returns
+        coEvery { artifactStore.prepareReferenceDelta(any(), any(), any(), any()) } returns
             ArtifactReferenceDelta(emptyList(), emptyList(), emptyList())
         coJustRun { artifactStore.applyReferenceDeltaInTransaction(any()) }
         repository = ConversationRepository(
@@ -127,7 +130,7 @@ class ConversationStartAtomicityTest {
             messageIdMap = emptyMap(),
             clonedNodes = clonedNodes,
         )
-        assertEquals(listOf(committed.context.content), clonedEntries.map { it.content })
+        assertEquals(listOf(committed.context.inlineContextText()), clonedEntries.map { it.inlineContextText() })
 
         repository.insertConversationSnapshot(
             Conversation.ofId(forkId)
@@ -152,7 +155,7 @@ class ConversationStartAtomicityTest {
         repository.applyMutation(committed.mutation, committed.executionFacts)
         val extraNode = MessageNode.of(UIMessage.user("must roll back"))
         val conflictingTurnId = Uuid.random()
-        val conflicting = committed.context.copy(content = committed.context.content + " ")
+        val conflicting = committed.context.copy(payload = disclosurePayload(committed.context.inlineContextText() + " "))
         val conflictMutation = ConversationMutation(
             conversationId = conversationId,
             headerPatch = null,
@@ -175,21 +178,18 @@ class ConversationStartAtomicityTest {
         assertEquals(2, database.messageNodeDao().getNodeHeadersOfConversation(conversationId.toString()).size)
         assertNull(database.turnExecutionDao().getById(conflictingTurnId.toString()))
         assertEquals(
-            committed.context.content,
-            database.conversationModelContextDao().findByOwner(
-                committed.context.ownerNodeId.toString(),
-                committed.context.ownerMessageId.toString(),
-            )?.content,
+            committed.context.inlineContextText(),
+            database.conversationModelContextDao().findById(committed.context.id.toString())?.inlineContextText(),
         )
     }
 
     /**
      * 端到端成功路径：START 经唯一的 `ConversationCommandCoordinator.startTurn`，
-     * Assistant slot、turn_execution 与 model-context entry 在同一个 Room 事务落库，
+     * Assistant slot 与 turn_execution 在同一个 Room 事务落库；上下文经后续接纳事务提交，
      * 并且只有提交成功后 Runtime snapshot 才携带当前 Turn 的流式投影与新节点。
      */
     @Test
-    fun `coordinator START commits slot turn fact and context together then publishes`() = runTest {
+    fun `START commits owner first and request admission atomically preserves retry after failure`() = runTest {
         val user = UIMessage.user("committed request")
         val userNode = MessageNode.of(user)
         repository.insertConversation(
@@ -208,14 +208,12 @@ class ConversationStartAtomicityTest {
         val turnId = Uuid.random()
         val assistantMessageId = Uuid.random()
         runtime.installTurnWorker(turnId, Job())
-        val candidate = canonicalContent()
-
-        coordinator.startTurn(
+        val handle = coordinator.startTurn(
             conversationId,
             TurnTransition.buildStartTurnCommand(
                 current = runtime.durable,
                 turnId = turnId,
-                modelContextCandidate = candidate,
+
                 assistantMessageId = assistantMessageId,
             ),
         )
@@ -223,24 +221,44 @@ class ConversationStartAtomicityTest {
         val published = runtime.snapshot.value
         assertEquals(assistantMessageId, published.stream?.assistantMessageId)
         assertEquals(2, published.durable.nodes.size)
-        assertEquals(listOf(candidate), published.durable.modelContextEntries.map { it.content })
+        assertEquals(emptyList<ConversationModelContextEntry>(), published.durable.modelContextEntries)
         assertEquals(
             TurnExecutionStatus.RUNNING,
             database.turnExecutionDao().getById(turnId.toString())?.status,
         )
-        assertEquals(
-            candidate,
-            database.conversationModelContextDao().findByOwner(
-                published.durable.nodes.last().id.toString(),
-                assistantMessageId.toString(),
-            )?.content,
-        )
         assertEquals(2, database.messageNodeDao().getNodeHeadersOfConversation(conversationId.toString()).size)
+        val assistantNode = published.durable.nodes.last()
+        val step = assistantNode.currentMessage.parts.filterIsInstance<UIMessagePart.Step>().single()
+        val owner = ContextMessageLocator(assistantNode.id, assistantMessageId)
+        val anchor = ContextMessageLocator(userNode.id, user.id)
+        val entry = ConversationModelContextEntry(owner.nodeId, owner.messageId, anchor.nodeId, anchor.messageId,
+            ConversationContextPayload(source = ConversationContextSource.System(listOf(
+                SystemContextContribution(SystemContextKind.DOMAIN, "assistant", "stable system"))),
+                body = ConversationContextBody.Inline("stable system")), stepId = step.stepId)
+        val admission = ConversationContextAdmission(owner, step.stepId, anchor,
+            TurnContextSelection(systemEntryId = entry.id, ruleEntryIds = emptyList(), timeReminderEnabled = false, timeZoneId = "UTC"),
+            listOf(ConversationContextUse(entry.id, MessageRole.SYSTEM, ContextPlacement.System)))
+        val command = AdmitRequestContext(handle, listOf(entry), admission)
+        database.openHelper.writableDatabase.execSQL(
+            "CREATE TRIGGER reject_context BEFORE INSERT ON conversation_context_admission BEGIN SELECT RAISE(ABORT, 'injected admission failure'); END")
+        val beforeAdmission = runtime.snapshot.value
+        val failure = runCatching { coordinator.executeOrThrow(conversationId, command) }.exceptionOrNull()
+        assertNotNull(failure)
+        org.junit.Assert.assertSame(beforeAdmission, runtime.snapshot.value)
+        assertEquals(emptyList<ConversationModelContextEntry>(), repository.getConversationSnapshotById(conversationId)!!.modelContextEntries)
+        assertEquals(TurnExecutionStatus.RUNNING, database.turnExecutionDao().getById(turnId.toString())?.status)
+        database.openHelper.writableDatabase.execSQL("DROP TRIGGER reject_context")
+        coordinator.executeOrThrow(conversationId, command)
+        coordinator.executeOrThrow(conversationId, command)
+        val reopened = repository.getConversationSnapshotById(conversationId)!!
+        assertEquals(listOf(entry), reopened.modelContextEntries)
+        assertEquals(listOf(admission), reopened.contextAdmissions)
+        assertEquals(reopened.modelContextEntries, runtime.durable.modelContextEntries)
         appScope.cancel()
     }
 
     @Test
-    fun `turn insert failure rolls back START slot context and runtime publication`() = runTest {
+    fun `turn insert failure rolls back START slot and runtime publication`() = runTest {
         val userNode = MessageNode.of(UIMessage.user("preserved request"))
         repository.insertConversation(Conversation.ofId(conversationId).copy(messageNodes = listOf(userNode)))
         database.openHelper.writableDatabase.execSQL(
@@ -257,7 +275,7 @@ class ConversationStartAtomicityTest {
             val turnId = Uuid.random()
             runtime.installTurnWorker(turnId, Job())
             val before = runtime.snapshot.value
-            val command = TurnTransition.buildStartTurnCommand(runtime.durable, turnId, canonicalContent())
+            val command = TurnTransition.buildStartTurnCommand(runtime.durable, turnId)
 
             val failure = runCatching { coordinator.startTurn(conversationId, command) }.exceptionOrNull()
 
@@ -300,7 +318,7 @@ class ConversationStartAtomicityTest {
             ownerMessageId = owner.id,
             anchorNodeId = anchorNode.id,
             anchorMessageId = anchor.id,
-            content = canonicalContent(),
+            payload = disclosurePayload(canonicalContent()),
         )
         val turnId = Uuid.random()
         return Fixture(

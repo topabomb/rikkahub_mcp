@@ -188,7 +188,7 @@ class TurnFinalizationAssistantCallTest {
         val callObserved = CompletableDeferred<Unit>()
         val collector = launch {
             loop.run(turnRunInputsFixture(
-                conversationId = kotlin.uuid.Uuid.random(),
+                conversationId = harness.handle.conversationId,
                 settings = Settings(providers = listOf(providerSetting)),
                 model = model,
                 mediaCapabilities = RequestMediaCapabilities.NONE,

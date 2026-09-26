@@ -150,7 +150,7 @@ Draft 预览、读图和附件导出通过原 `ConversationViewLease` 查询其 
 
 图片生成页的参考图由 `ImgGenVM` 一次性消费打开时的 `ImageReferenceImport`；`FileManagementApplicationService.importImageReference` 在复制前后验证原选择并沿用 `TemporaryImage` 的图片校验与失败清理。缩略图借用带原选择和任务身份的 `ImageSource`，不直接读取文件路径。只有已交给生成请求的副本按实际任务借用延迟删除，其余副本立即清理。
 
-输入框由原 `ArtifactDraftScope.describeInputs` 同时投影附件名称和图片 `ImageSource`；按规范化路径和 scope 匹配，不订阅全局上传目录，也不按 basename 反查其他文件。草稿新导入的图片必须同时通过原 draft 所有权和 Artifact 创建 token 校验；编辑已有图片则验证同域已发布 ID，不能读取其他创建者尚未发布的文件。读取遵守 Session → Draft → Artifact 锁序，返回前复验原页面、选择和草稿状态。提交认领后原草稿不能读取已交出的图片；拒绝退回由同一 owner 恢复原创建权。`inputRevision` 仅通知同一草稿的所有权变更，驱动查询与输入缩略图重试，不保存第二份附件事实，也不推进企业配置 generation。名称读取失败可回退显示，取消继续传播。生成 partial 的文件与图片对象由同一次创建返回；预览借用 enqueue 外层请求 Job，在短期 collector 结束后仍可读取，创建检查原 RealmAccess，显示检查原 RealmSelection。图像页切域仍显式取消并清空本页请求。图像页取消沿 enqueue 的原请求收口，Coordinator 的取消返回前等待真实执行结束；下个页面请求等待旧协程完成，旧图片投影不能跨选择继续展示。
+输入框由原 `ArtifactDraftScope.describeInputs` 同时投影附件名称和图片 `ImageSource`；按规范化路径和 scope 匹配，不订阅全局上传目录，也不按 basename 反查其他文件。草稿新导入的图片必须同时通过原 draft 所有权和 Artifact 创建 token 校验；编辑已有图片则验证同域已发布 ID，不能读取其他创建者尚未发布的文件。读取遵守 Session → Draft → Artifact 锁序，返回前复验原页面、选择和草稿状态。提交认领后原草稿不能读取已交出的图片；拒绝退回由同一 owner 恢复原创建权。`ConversationTurnService.sendMessage` 在安装被拒绝或首条 Append 未提交时，通过 `ArtifactDraftScope.returnToDraft` 归还创建权；首发失败回执必须等待归还完成。编辑器已关闭时释放创建 pin，仍打开时保留输入及附件供重试。取消若发生在 Append 提交期间，以 Runtime 已发布的 USER 身份判定提交成功；已提交消息的附件不退回草稿，后续发布失败仍由 durable 引用保护。`startRequest` 的准备、发布与清理失败通过 `userVisibleDiagnostic` 保留异常类型、原始 message 与 cause，写入 `ChatError` 并记录完整异常栈；取消继续传播而不显示为错误。`inputRevision` 仅通知同一草稿的所有权变更，驱动查询与输入缩略图重试，不保存第二份附件事实，也不推进企业配置 generation。名称读取失败可回退显示，取消继续传播。生成 partial 的文件与图片对象由同一次创建返回；预览借用 enqueue 外层请求 Job，在短期 collector 结束后仍可读取，创建检查原 RealmAccess，显示检查原 RealmSelection。图像页切域仍显式取消并清空本页请求。图像页取消沿 enqueue 的原请求收口，Coordinator 的取消返回前等待真实执行结束；下个页面请求等待旧协程完成，旧图片投影不能跨选择继续展示。
 
 ## 3. 请求级投影（`AttachmentProjectionTransformer`）
 
@@ -251,7 +251,7 @@ Draft 预览、读图和附件导出通过原 `ConversationViewLease` 查询其 
 
 | 链路 | Transformer 顺序要点 |
 |------|---------------------|
-| Master 聊天 | `DocumentAsPromptTransformer` → Template → Workspace → 可选 `ToolArtifactReplayTransformer` → `AttachmentProjectionTransformer` |
+| Master 聊天 | `DocumentAsPromptTransformer` → Template → 可选 `ToolArtifactReplayTransformer` → `AttachmentProjectionTransformer`；Workspace 说明在 START 并入冻结 System |
 | `generate_image` 产出 | 成功时 Image part 落入本次 Tool.output 并盖章；下一个 step 的请求由投影管线回放（原图或引用行）。识别这张图 = 把它的 `file.path` 传给 `inspect_attachments` |
 | Target（`assistant_call`） | Child 拥有完整 Assistant 级 transformer 链 + 自己的 resolved model；入站只校验 path / 资产，视觉能力由 Target run 自己的投影与工具集表达；`AttachmentProjectionTransformer` 同样位于动态模板之后、Provider 序列化之前 |
 
@@ -264,6 +264,10 @@ Draft 预览、读图和附件导出通过原 `ConversationViewLease` 查询其 
 同一次 base64 output transform 产生的多个 Artifact 只注册一个 `unpublishedBatchLease`。`ArtifactStore.publishAllUnpublished` 在交接前验证整批 durable roots 与 ownership token；失败或取消精确清理该 owner 取得的未发布资源，不留下半批发布状态。
 
 Artifact metadata、引用和生命周期归 `ArtifactStore`；`ArtifactPayloadStore` 只处理磁盘 IO。启动时按 CREATING / ACTIVE / DELETING 状态与 durable roots 收口，不能仅凭 payload 存在认领资源。图库生成媒体由 `GeneratedMediaStore` 独立恢复；全局恢复门禁在两者完成前阻止文件查询和写入。
+
+`ConversationContextBody.Artifact` 以 Artifact ID 与相对路径共同定位已渲染的不可变正文。`ArtifactStore.readContextText` 在生命周期锁内校验原 scope、ACTIVE、发布状态、ID/path、文本类型及真实文件；旧路径复用不能替换历史正文。读取返回原文本，不再次执行模板。接纳前创建仍返回 `OwnedArtifact`，Conversation 提交 durable root 后才由原资源 lease 发布，失败或取消精确回收尚未交接的正文。
+
+上下文正文使用原 `artifact_reference` 的 `CONTEXT` 类型，引用归 entry 的 owner node；无需另一张引用表。`prepareReferenceDelta` 分开替换消息附件引用和上下文引用：普通消息更新保留上下文，context-only 提交也取得同一个生命周期锁并在 Conversation 事务更新引用。Fork 各自建立节点引用，删除一个 owner 不释放其他消费者使用的正文；最后引用消失后由原 GC 收口。启动投影版本 `artifact_reference_projection_context_v4` 从消息树与上下文条目共同重建。备份先在完整来源库验证上下文 Artifact scope，再按会话域过滤、重建引用；个人恢复保留本机企业正文及引用。显式删除的文件保持历史不可用，不因路径相同重新绑定另一个 Artifact。
 
 工具副作用之前的 STARTED、checkpoint、终态 CAS、UNKNOWN 与父子恢复顺序统一见 [turn-step-execution.md](turn-step-execution.md)。资源 durability 复用这条提交链，不建立第二张执行表或旁路写协议。
 

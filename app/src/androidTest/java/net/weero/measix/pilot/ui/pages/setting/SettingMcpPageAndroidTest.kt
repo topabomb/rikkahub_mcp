@@ -46,10 +46,10 @@ class SettingMcpPageAndroidTest {
         val user = McpServerConfig.StreamableHTTPServer(commonOptions = McpCommonOptions(name = "Shared MCP"), url = "https://example.test/mcp")
             .toPresentation(McpRuntimeCapability.EMPTY)
         val direct = McpServerPresentation(ConfigurationReference.Enterprise(authority, "mcp_direct"), "Enterprise profile", true,
-            null, access, requiredEnabled = true, status = McpStatus.Idle,
+            null, access, requiredEnabled = true, status = McpStatus.Idle, sessionCallable = false,
             tools = listOf(McpToolPresentation("get_enterprise_profile", null, JsonObject(emptyMap()), true, false)))
         val gateway = McpServerPresentation(ConfigurationReference.Enterprise(authority, "twg_example"), "Enterprise gateway", true,
-            null, access, gatewayEnablement = ResolvedGatewayEnablement(true, true), status = McpStatus.Idle,
+            null, access, gatewayEnablement = ResolvedGatewayEnablement(true, true), status = McpStatus.Idle, sessionCallable = false,
             tools = listOf("discover_tools", "invoke_tool").map { McpToolPresentation(it, null, JsonObject(emptyMap()), true, false) })
         fun catalog(gatewayRow: McpServerPresentation) = McpCatalogUiModel(selection, McpCatalogReadState.Available(listOf(direct, gatewayRow,
             user.copy(access = access, unavailableReason = ConfigurationUnavailableReason.USER_CATEGORY_NOT_ALLOWED))))

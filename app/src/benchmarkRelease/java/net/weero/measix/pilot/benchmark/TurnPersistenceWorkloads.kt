@@ -18,6 +18,7 @@ import net.weero.measix.pilot.data.ai.tools.ToolOutputStore
 import net.weero.measix.pilot.data.ai.tools.ToolOutputReadResult
 import net.weero.measix.pilot.data.ai.tools.ToolOutputGrepResult
 import net.weero.measix.pilot.data.datastore.SettingsStore
+import net.weero.measix.pilot.data.configuration.ConfigurationScope
 import net.weero.measix.pilot.data.db.*
 import net.weero.measix.pilot.data.db.entity.ArtifactOrigin
 import net.weero.measix.pilot.data.db.fts.MessageFtsManager
@@ -92,9 +93,10 @@ internal class TurnPersistenceWorkloads(application: Context) : AutoCloseable {
             val artifacts = ArtifactStore(
                 ArtifactPayloadStore(context), database.artifactDao(), database.artifactReferenceDao(),
                 database.systemMetaDao(), database.conversationDao(), database.messageNodeDao(),
+                database.conversationModelContextDao(),
                 ArtifactSettingsCoordinator(SettingsStore(context, scope)), RoomDatabaseTransactionRunner(database),
             )
-            val owned = artifacts.copyFile(source, "text/plain", "tool-output.txt", FileFolders.TOOL_OUTPUTS, ArtifactOrigin.SYSTEM)
+            val owned = artifacts.copyFile(ConfigurationScope.Personal, source, "text/plain", "tool-output.txt", FileFolders.TOOL_OUTPUTS, ArtifactOrigin.SYSTEM)
             val archive = ToolOutputArchive(owned.entity.id, ToolOutputArchiveRef(owned.entity.relativePath, "text/plain"), source.length(), count)
             fun completedStep(ordinal: Int, outcome: StepOutcome) =
                 net.weero.measix.pilot.service.runtime.TurnTransition.openStep(ordinal).copy(

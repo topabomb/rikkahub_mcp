@@ -32,6 +32,9 @@ class AttachmentProjectionTransformer : InputMessageTransformer {
                     role = message.role,
                     capabilities = ctx.mediaCapabilities,
                     artifactReads = requireNotNull(ctx.artifactReads),
+                    onProjection = { original, text, mode ->
+                        ctx.requestOrigins.markPart(text, RequestPartSource.AttachmentInput(ctx.requestOrigins.originalPart(original), mode.name))
+                    },
                 ),
             )
         }
@@ -43,6 +46,7 @@ class AttachmentProjectionTransformer : InputMessageTransformer {
         capabilities: RequestMediaCapabilities,
         artifactReads: ArtifactReadLease,
         insideToolOutput: Boolean = false,
+        onProjection: (UIMessagePart, UIMessagePart.Text, AttachmentInputMode) -> Unit,
     ): List<UIMessagePart> {
         val result = ArrayList<UIMessagePart>(parts.size + 2)
         for (part in parts) {
@@ -54,6 +58,7 @@ class AttachmentProjectionTransformer : InputMessageTransformer {
                         capabilities = capabilities,
                         artifactReads = artifactReads,
                         insideToolOutput = true,
+                        onProjection = onProjection,
                     ),
                 )
 
@@ -63,17 +68,18 @@ class AttachmentProjectionTransformer : InputMessageTransformer {
                     val local = part.url.startsWith("file:", ignoreCase = true)
                     val native = support == RequestImageSupport.STRUCTURED &&
                         (!local || artifactReads.resolveUri(part.url) != null)
+                    val mode = when {
+                        native -> AttachmentInputMode.NATIVE
+                        path != null -> AttachmentInputMode.REFERENCE_ONLY
+                        else -> AttachmentInputMode.UNAVAILABLE
+                    }
                     result += attachmentProjectionText(
                         attachmentPathLine(
                             path = path,
                             type = "image",
-                            imageInput = when {
-                                native -> AttachmentInputMode.NATIVE
-                                path != null -> AttachmentInputMode.REFERENCE_ONLY
-                                else -> AttachmentInputMode.UNAVAILABLE
-                            },
+                            imageInput = mode,
                         ),
-                    )
+                    ).also { onProjection(part, it, mode) }
                     if (native) {
                         result += part
                     }
@@ -83,7 +89,7 @@ class AttachmentProjectionTransformer : InputMessageTransformer {
                     pathOf(part, artifactReads)?.let { path ->
                         result += attachmentProjectionText(
                             attachmentPathLine(path, "document"),
-                        )
+                        ).also { onProjection(part, it, AttachmentInputMode.REFERENCE_ONLY) }
                     }
                     if (!part.url.startsWith("file:", ignoreCase = true) || artifactReads.resolveUri(part.url) != null) {
                         result += part
@@ -94,7 +100,7 @@ class AttachmentProjectionTransformer : InputMessageTransformer {
                     pathOf(part, artifactReads)?.let { path ->
                         result += attachmentProjectionText(
                             attachmentPathLine(path, "audio"),
-                        )
+                        ).also { onProjection(part, it, AttachmentInputMode.REFERENCE_ONLY) }
                     }
                     if (!part.url.startsWith("file:", ignoreCase = true) || artifactReads.resolveUri(part.url) != null) {
                         result += part
@@ -105,7 +111,7 @@ class AttachmentProjectionTransformer : InputMessageTransformer {
                     pathOf(part, artifactReads)?.let { path ->
                         result += attachmentProjectionText(
                             attachmentPathLine(path, "video"),
-                        )
+                        ).also { onProjection(part, it, AttachmentInputMode.REFERENCE_ONLY) }
                     }
                     if (!part.url.startsWith("file:", ignoreCase = true) || artifactReads.resolveUri(part.url) != null) {
                         result += part

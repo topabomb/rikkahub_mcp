@@ -253,6 +253,7 @@ class AssistantManageToolTest {
             id = ConfigurationReference.random(),
             name = "New helper",
             description = "Should not appear",
+            systemPrompt = "Be brief.",
         )
         val caller = caller()
         val result = parseResult(
@@ -265,6 +266,7 @@ class AssistantManageToolTest {
                 },
             ),
         )
+        assertEquals(setOf("action", "id"), result.keys)
         assertEquals("create", result["action"]!!.jsonPrimitive.content)
         assertEquals(created.id.toString(), result["id"]!!.jsonPrimitive.content)
         assertFalse(result.containsKey("assistant"))
@@ -288,6 +290,7 @@ class AssistantManageToolTest {
                 },
             ),
         )
+        assertEquals(setOf("action", "id"), result.keys)
         assertEquals("update", result["action"]!!.jsonPrimitive.content)
         assertEquals(targetId.toString(), result["id"]!!.jsonPrimitive.content)
         assertFalse(result.containsKey("assistant"))
@@ -316,5 +319,39 @@ class AssistantManageToolTest {
         assertFalse(result.containsKey("assistant"))
         assertFalse(result.containsKey("name"))
         assertFalse(result.containsKey("cleanup_pending"))
+    }
+    @Test
+    fun `applied contains only touched values that differ from raw input`() = runTest {
+        val saved = target().copy(name = "Renamed", description = "external edit", systemPrompt = "external instructions")
+        val tool = manageTool(createFactory(updated = saved), caller())
+        val output = tool.execute(buildJsonObject {
+            put("action", "UPDATE"); put("assistant_id", targetId.toString()); put("name", "  Renamed  ")
+        })
+        val result = parseResult(output)
+        assertEquals(buildJsonObject { put("name", "Renamed") }, result["applied"])
+        assertEquals(me.rerere.ai.core.ToolOutputPolicy.PRESERVE, tool.successfulOutputPolicy(output))
+    }
+    @Test
+    fun `create receipt reports submitted normalization without echoing unchanged instructions`() = runTest {
+        val rawDescription = "  " + "\uD83D\uDE00".repeat(241) + "   tail"
+        val savedDescription = net.weero.measix.pilot.data.model.normalizeDescription(rawDescription)
+        val saved = target().copy(name = "Helper", description = savedDescription, systemPrompt = "Keep instructions")
+        val tool = manageTool(createFactory(created = saved), caller())
+        val result = parseResult(tool.execute(buildJsonObject {
+            put("action", "CREATE"); put("name", " Helper "); put("description", rawDescription)
+            put("instructions", "Keep instructions")
+        }))
+        assertEquals(buildJsonObject { put("name", "Helper"); put("description", savedDescription) }, result["applied"])
+        assertEquals(setOf("action", "id", "applied"), result.keys)
+    }
+
+    @Test
+    fun `instruction normalization is reported only when touched`() = runTest {
+        val saved = target().copy(systemPrompt = "Do this")
+        val tool = manageTool(createFactory(updated = saved), caller())
+        val result = parseResult(tool.execute(buildJsonObject {
+            put("action", "UPDATE"); put("assistant_id", targetId.toString()); put("instructions", "  Do this\n")
+        }))
+        assertEquals(buildJsonObject { put("instructions", "Do this") }, result["applied"])
     }
 }

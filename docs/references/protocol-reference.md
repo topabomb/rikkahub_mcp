@@ -93,9 +93,10 @@ Provider 不直接消费 `UIMessage`。app 层 `RequestAssembler` 把最终 dura
 
 `UIMessagePart.Tool` 保存调用身份与参数、typed interaction 和 replay Result；execution 副作用事实由 app 的 `tool_execution` 持久化。Provider 序列化时再展开为各自的 tool call/result 结构，数据库不会插入独立的持久化 `MessageRole.TOOL`。
 
-Disclosure Snapshot 是因果 USER turn 的第一个 Text part，其后保持用户原始 parts 同序；OpenAI、Claude 和 Gemini
-都编码这一个合法 USER turn，不伪造 ASSISTANT，也不把 Snapshot 提升为 System / Developer。为何不是相邻两条
-USER，见 [`request-context.md`](request-context.md)。形状与注入时机见
+Disclosure Snapshot 由共有 planner 在接纳位置投影：START 的初始内容可附在因果 USER 的前置 Text part，
+后续 Step 的外部状态位于完整工具结果批次之后、下一次模型生成之前。自身成功写入仅回放原 input/output，
+不追加同义 USER 通知。OpenAI、Claude 和 Gemini 沿各自合法 role/part 编码，不将 Snapshot 提升为 System / Developer；
+相邻 USER 合并仍须保持完整工具结果、状态文本与原媒体 part 的顺序。共享接纳见 [`request-context.md`](request-context.md)。形状与注入时机见
 [`prompts-and-tools.md`](prompts-and-tools.md)。
 
 生成图片在解析源头就必须是可渲染 URL。Chat Completions 保留完整 `data:` URI，Gemini 使用真实 mime 组装 `data:<mime>;base64,<payload>`。合并层只把无前缀的 base64 碎片追加到当前图片，不会给已经完整的 URL 再补 `image/png` 前缀，也不会把两张完整图片拼成一条。

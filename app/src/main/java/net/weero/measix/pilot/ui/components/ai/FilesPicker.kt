@@ -112,6 +112,8 @@ internal fun FilesPicker(
     onPickVideo: () -> Unit,
     onPickAudio: () -> Unit,
     onPickFile: () -> Unit,
+    feedback: com.dokar.sonner.ToasterState? = null,
+    onMcpPickerVisibilityChange: (Boolean) -> Unit = {},
 ) {
     val settings = LocalSettings.current
     val navController = LocalNavController.current
@@ -167,6 +169,8 @@ internal fun FilesPicker(
 
         McpPickerListItem(
             servers = mcpServers,
+            feedback = feedback,
+            onPickerVisibilityChange = onMcpPickerVisibilityChange,
             onNavigateToSettings = {
                 onDismiss()
                 onManageSharedConfiguration(Screen.SettingMcp)
@@ -281,6 +285,7 @@ internal fun FilesPicker(
     // Injection Bottom Sheet
     if (showInjectionSheet) {
         InjectionQuickConfigSheet(
+            feedback = feedback,
             conversationModeInjectionIds = conversationModeInjectionIds,
             assistant = assistant,
             settings = settings,
@@ -385,6 +390,7 @@ private fun WorkspacePickerListItem(
 
 @Composable
 private fun InjectionQuickConfigSheet(
+    feedback: com.dokar.sonner.ToasterState?,
     conversationModeInjectionIds: Set<ConfigurationReference>,
     assistant: Assistant,
     settings: Settings,
@@ -396,6 +402,7 @@ private fun InjectionQuickConfigSheet(
 ) {
     AdaptiveModal(
         onDismissRequest = onDismiss,
+        feedback = feedback,
     ) {
         Column(
             modifier = Modifier

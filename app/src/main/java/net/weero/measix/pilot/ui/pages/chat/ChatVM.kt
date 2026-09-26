@@ -126,6 +126,7 @@ class ChatVM internal constructor(
     val inputState = ChatInputState()
     val artifactDraftScope: ArtifactDraftScope get() = requirePage().imports
     private val initialInputMutex = Mutex()
+    private var inputSubmissionPending = false
     private var initialInputConsumed = false
 
     suspend fun initializeInput(text: String?, files: List<Uri>) = initialInputMutex.withLock {
@@ -324,6 +325,42 @@ class ChatVM internal constructor(
         }
     }
 
+    internal suspend fun selectStarter(target: ConversationAssistantTarget, starter: net.weero.measix.pilot.service.ConversationStarterUiModel) =
+        initialInputMutex.withLock {
+            requireConfigurationTarget(target)
+            val original = requirePage()
+            val configuration = requireNotNull(conversationUiModel.value?.configuration)
+            fun accept(prompt: String) {
+                check(requirePage() === original) { "conversation_view_unavailable" }
+                requireConfigurationTarget(target)
+                val spacer = if (inputState.textContent.text.isBlank()) "" else "\n\n"
+                inputState.appendText(spacer + prompt)
+            }
+            if (currentSnapshot().header.newConversation) {
+                conversationApplicationService.selectDraftStarter(target, starter.reference, configuration.opening?.selectionToken,
+                    Uuid.random(), ::accept)
+            } else conversationApplicationService.appendStarterPrompt(target, starter.reference, ::accept)
+        }
+
+    internal suspend fun openingDetails(target: ConversationAssistantTarget): net.weero.measix.pilot.service.StarterOpeningDetailUiModel {
+        requireConfigurationTarget(target)
+        return conversationApplicationService.openingDetails(target).also { requireConfigurationTarget(target) }
+    }
+
+    internal suspend fun refreshOpening(target: ConversationAssistantTarget) = initialInputMutex.withLock {
+        requireConfigurationTarget(target)
+        val token = requireNotNull(conversationUiModel.value?.configuration?.opening?.selectionToken)
+        conversationApplicationService.refreshDraftOpening(target, token, Uuid.random())
+        requireConfigurationTarget(target)
+    }
+
+    internal suspend fun clearOpening(target: ConversationAssistantTarget) = initialInputMutex.withLock {
+        requireConfigurationTarget(target)
+        val token = requireNotNull(conversationUiModel.value?.configuration?.opening?.selectionToken)
+        conversationApplicationService.clearDraftOpening(target, token)
+        requireConfigurationTarget(target)
+    }
+
     internal fun detailSource(target: ConversationAssistantTarget): net.weero.measix.pilot.service.ConversationViewLease? =
         (page.value as? PageState.Open)?.takeIf { it.lease.commandTarget === target.conversation }?.lease
 
@@ -344,12 +381,28 @@ class ChatVM internal constructor(
     /**
      * 处理消息发送
      *
-     * @param content 消息内容
      * @param answer 是否触发消息生成，如果为false，则仅添加消息到消息列表中
-     * @return 已接受请求的稳定消息身份；空输入返回 null，receipt 不代表 durable 提交已经成功
+     * @return 已持久提交的消息身份；提交前失败或页面已变化返回 null。
      */
-    suspend fun handleMessageSend(content: List<UIMessagePart>, answer: Boolean = true) =
-        requirePage().let { turnService.sendMessage(it.lease.commandTarget, content, answer, it.imports) }
+    internal suspend fun handleMessageSend(target: ConversationAssistantTarget, answer: Boolean = true): net.weero.measix.pilot.service.SendMessageReceipt? {
+        if (inputSubmissionPending) return null
+        inputSubmissionPending = true
+        try {
+            return initialInputMutex.withLock {
+                val opened = (page.value as? PageState.Open)?.takeIf {
+                    it.lease.commandTarget === target.conversation && snapshot.value?.header?.assistantId == target.assistantId
+                } ?: return@withLock null
+                val submission = inputState.captureSubmission()
+                val receipt = turnService.sendMessage(opened.lease.commandTarget, submission.contents, answer, opened.imports)
+                    ?: return@withLock null
+                if (page.value !== opened) return@withLock null
+                inputState.completeSubmission(submission)
+                receipt
+            }
+        } finally {
+            inputSubmissionPending = false
+        }
+    }
 
     fun handleMessageEdit(parts: List<UIMessagePart>, messageId: Uuid) {
         if (parts.isEmptyInputMessage()) return
@@ -463,9 +516,9 @@ class ChatVM internal constructor(
     }
 
     internal suspend fun moveConversationToAssistant(target: ConversationAssistantTarget, targetAssistantId: ConfigurationReference): Result<Unit> =
-        runConfigurationCommand(target) {
+        initialInputMutex.withLock { runConfigurationCommand(target) {
             conversationApplicationService.moveToAssistant(target, targetAssistantId, selectForNewChats = true)
-        }
+        } }
 
     fun generateTitle(conversation: ConversationSummary, force: Boolean = false) {
         val target = conversation.commandTarget

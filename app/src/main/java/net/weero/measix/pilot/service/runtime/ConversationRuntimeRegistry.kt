@@ -145,7 +145,8 @@ class ConversationRuntimeRegistry(
                     is ConversationRuntimeState.Ready -> error(
                         "draft cannot replace a durable runtime: ${conversation.id}",
                     )
-                    else -> installRuntime(entry, conversation.toSnapshot(), draft = true, draftAssets = assets)
+                    else -> installRuntime(entry, conversation.toSnapshot(modelContextEntries = assets?.messageOrigins.orEmpty()),
+                        draft = true, draftAssets = assets)
                 }
             }
         }

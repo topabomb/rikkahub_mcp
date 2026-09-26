@@ -45,13 +45,16 @@ class TurnWorkloadBenchmarks {
     @Test
     fun renderHundredActiveAssistantUpdates() = benchmark("compose_100", "turn_compose_active")
 
+    @Test
+    fun renderHundredActiveAssistantUpdatesWithContext() = benchmark("compose_context_100", "turn_compose_active")
+
     @OptIn(androidx.benchmark.macro.ExperimentalMetricApi::class)
     private fun benchmark(workload: String, vararg sections: String) {
         val target = requireNotNull(InstrumentationRegistry.getArguments().getString("targetAppId"))
         rule.measureRepeated(
             packageName = target,
             metrics = listOf(TurnWorkloadMetric(workload, sections.toList())) +
-                if (workload == "compose_100") listOf(FrameTimingMetric()) else emptyList(),
+                if (workload == "compose_100" || workload == "compose_context_100") listOf(FrameTimingMetric()) else emptyList(),
             compilationMode = CompilationMode.Full(),
             startupMode = StartupMode.COLD,
             iterations = 10,

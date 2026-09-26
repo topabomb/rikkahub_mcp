@@ -22,7 +22,7 @@ internal sealed interface ConversationChange {
 }
 
 internal sealed interface ConversationWrite {
-    data class MaterializeDraft(val conversation: Conversation) : ConversationWrite
+    data class MaterializeDraft(val snapshot: ConversationAggregateSnapshot) : ConversationWrite
     data class Mutate(
         val mutation: ConversationMutation,
         val executionFacts: ExecutionFacts? = null,
@@ -94,6 +94,8 @@ internal object ConversationTransition {
         command: ConversationCommand,
     ): ConversationAggregateSnapshot {
         val reduced = when (command) {
+            is BindDraftOpening -> bindDraftOpening(current, command)
+            is AdmitRequestContext -> ConversationContextTransition.admit(current, command)
             is StartTurn,
             is TurnCheckpoint,
             is FinalizeTurn,
@@ -107,24 +109,33 @@ internal object ConversationTransition {
             is TruncateToNodeIndex -> truncateTo(current, command.nodeIndexInclusive)
             is ReplaceMessageTree -> current.copy(
                 nodes = command.nodes,
+                modelContextEntries = current.modelContextEntries + command.messageOrigins.also { entries ->
+                    require(entries.all { it.payload.source is net.weero.measix.pilot.data.model.ConversationContextSource.HistorySummary &&
+                        current.nodes.none { old -> old.id == it.ownerNodeId } &&
+                        command.nodes.any { node -> node.id == it.ownerNodeId && node.currentMessage.id == it.ownerMessageId } }) {
+                        "summary_origin_requires_new_message"
+                    }
+                },
                 header = if (command.clearSuggestions) current.header.copy(chatSuggestions = emptyList()) else current.header,
             )
             is BackfillAttachmentRefs -> backfillAttachmentRefs(current, command.backfills)
-            is HeaderConversationCommand -> current.copy(header = applyHeader(current.header, command))
+            is HeaderConversationCommand -> current.copy(
+                header = applyHeader(current.header, command),
+                opening = if (current.header.newConversation && command is MoveToAssistant &&
+                    command.assistantId != current.header.assistantId) null else current.opening,
+                draftOpeningSelectionToken = if (current.header.newConversation && command is MoveToAssistant &&
+                    command.assistantId != current.header.assistantId) null else current.draftOpeningSelectionToken,
+            )
         }
         // context 生命周期收口的唯一位置：node/variant 一旦被任何树命令删除，其 entry 即从
         // aggregate 消失（DB 侧由同一 mutation 的显式 owner/anchor 删除与 FK cascade 对齐）。
         // 选择变体不会剪枝——unselected owner 的 entry 保留，切回时恢复其 baseline。
-        val pruned = reduced.modelContextEntries.filter {
-            ConversationModelContextApplicability.stillExists(it, reduced.nodes)
+        val next = ConversationContextTransition.prune(reduced, current)
+        if (command is ReplaceMessageTree && command.messageOrigins.isNotEmpty()) {
+            net.weero.measix.pilot.data.model.ConversationContextIntegrity.validate(
+                next.nodes, next.modelContextEntries, next.contextAdmissions, next.opening, next.header.scope,
+            )
         }
-        val next = reduced.copy(
-            modelContextEntries = if (pruned.size == reduced.modelContextEntries.size) {
-                reduced.modelContextEntries
-            } else {
-                pruned
-            },
-        )
         return if (next == current) current else next
     }
 
@@ -174,12 +185,13 @@ internal object ConversationTransition {
     ): ConversationChange = when (command) {
         is UpdateHeader,
         is MoveToAssistant,
+        is BindDraftOpening,
         -> ConversationChange.DraftOnly(apply(current, command))
         is AppendUserMessage -> {
             val snapshot = stampActivity(current, apply(current, command), command, nowMillis)
             ConversationChange.Durable(
                 snapshot = snapshot,
-                write = ConversationWrite.MaterializeDraft(snapshot.materializeConversation()),
+                write = ConversationWrite.MaterializeDraft(snapshot),
             )
         }
         else -> throw ConversationCommandConflictException(
@@ -246,6 +258,8 @@ internal object ConversationTransition {
             if (old.nodes.getOrNull(index) !== node) upsert(index, node)
         }
         when (command) {
+            is BindDraftOpening,
+            is AdmitRequestContext,
             is HeaderConversationCommand -> Unit
             is StartTurn,
             is AppendUserMessage,
@@ -325,12 +339,14 @@ internal object ConversationTransition {
         }
         // model-context 窄 delta：插入只来自 StartTurn 的判等结果；删除覆盖
         // node 级（FK cascade 之外的 anchor 悬挂行）与 variant 级两种收口。
-        val oldContextOwners = old.modelContextEntries.mapTo(HashSet()) { it.ownerNodeId to it.ownerMessageId }
+        val oldContextIds = old.modelContextEntries.mapTo(HashSet()) { it.id }
         val insertedContextEntries = new.modelContextEntries.filter {
-            (it.ownerNodeId to it.ownerMessageId) !in oldContextOwners
+            it.id !in oldContextIds
         }
-        val deletedContextEntries = old.modelContextEntries
-            .filterNot { ConversationModelContextApplicability.stillExists(it, new.nodes) }
+        val newContextIds = new.modelContextEntries.mapTo(HashSet()) { it.id }
+        val deletedContextEntries = old.modelContextEntries.filterNot { it.id in newContextIds }
+        val oldAdmissions = old.contextAdmissions.associateBy { it.id }
+        val newAdmissions = new.contextAdmissions.associateBy { it.id }
         return ConversationMutation(
             conversationId = new.header.id,
             headerPatch = headerPatchFor(old.header, new.header, command),
@@ -340,6 +356,8 @@ internal object ConversationTransition {
             upsertedNodeIndices = changedIndices,
             insertedModelContextEntries = insertedContextEntries,
             deletedModelContextEntries = deletedContextEntries,
+            insertedContextAdmissions = new.contextAdmissions.filter { oldAdmissions[it.id] != it },
+            deletedContextAdmissions = old.contextAdmissions.filter { newAdmissions[it.id] != it },
             indexForSearch = new.header.parentConversationId == null,
             searchMetadataChanged = new.header.title != old.header.title ||
                 new.header.updateAt != old.header.updateAt,
@@ -413,6 +431,7 @@ internal object ConversationTransition {
 
     private fun appendUser(current: ConversationAggregateSnapshot, command: AppendUserMessage): ConversationAggregateSnapshot =
         current.copy(
+            draftOpeningSelectionToken = null,
             nodes = current.nodes + MessageNode.of(command.message),
             header = current.header.copy(
                 title = if (current.header.title.isBlank()) {
@@ -423,6 +442,28 @@ internal object ConversationTransition {
                 newConversation = false,
             ),
         )
+
+    private fun bindDraftOpening(
+        current: ConversationAggregateSnapshot,
+        command: BindDraftOpening,
+    ): ConversationAggregateSnapshot {
+        if (!current.header.newConversation) {
+            throw ConversationCommandConflictException("opening_selection_requires_draft")
+        }
+        if (current.draftOpeningSelectionToken == command.selectionToken && current.opening == command.opening) {
+            return current
+        }
+        if (current.draftOpeningSelectionToken != command.expectedSelectionToken) {
+            throw ConversationCommandConflictException("stale_opening_selection")
+        }
+        command.opening?.let { opening ->
+            val scope = current.header.scope as? net.weero.measix.pilot.data.configuration.ConfigurationScope.Enterprise
+            require(scope?.authority == opening.assistant.authority && current.header.assistantId == opening.assistant) {
+                "opening_assistant_scope_mismatch"
+            }
+        }
+        return current.copy(opening = command.opening, draftOpeningSelectionToken = command.selectionToken)
+    }
 
     private fun editVariant(current: ConversationAggregateSnapshot, command: EditMessageVariant): ConversationAggregateSnapshot {
         val nodeIndex = current.nodes.indexOfFirst { it.id == command.nodeId }
@@ -496,7 +537,8 @@ internal object ConversationTransition {
     }
 }
 
-internal fun ConversationCommand.updatesConversationActivity(): Boolean = this !is HeaderConversationCommand
+internal fun ConversationCommand.updatesConversationActivity(): Boolean =
+    this !is HeaderConversationCommand && this !is AdmitRequestContext && this !is BindDraftOpening
 
 internal fun ConversationAggregateSnapshot.materializeConversation(): Conversation = Conversation(
     id = conversationId,

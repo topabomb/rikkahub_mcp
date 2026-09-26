@@ -79,7 +79,7 @@ class GenerationSideEffects internal constructor(
         additionalPrompt: String,
         targetTokens: Int,
         keepRecentMessages: Int,
-        commit: suspend (List<MessageNode>) -> Unit,
+        commit: suspend (GeneratedHistorySummary) -> Unit,
     ): Deferred<Result<Unit>> = launchOwned(runtime, access) { owner, snapshot ->
         runCatchingPreservingCancellation {
             val nodes = compressConversation(owner, snapshot, additionalPrompt, targetTokens, keepRecentMessages)
@@ -347,7 +347,7 @@ class GenerationSideEffects internal constructor(
         additionalPrompt: String,
         targetTokens: Int,
         keepRecentMessages: Int = 32
-    ): List<MessageNode> {
+    ): GeneratedHistorySummary {
         val captured = modelExecutions.captureAuxiliary(owner.access, owner.runtime, owner.worker,
             snapshot.header.assistantId, ModelSelectionRole.COMPRESS)
         val settings = captured.userSettings
@@ -408,15 +408,24 @@ class GenerationSideEffects internal constructor(
         }
 
         // Replace older history with summary messages while preserving complete recent turns.
-        return buildList {
-            compressedSummaries.forEach { summary ->
-                add(UIMessage.user(summary).toMessageNode())
-            }
-            addAll(messagesToKeep.map { it.toMessageNode() })
-        }
+        val summaryNodes = compressedSummaries.map { UIMessage.user(it).toMessageNode() }
+        val source = net.weero.measix.pilot.data.model.ConversationContextSource.HistorySummary(
+            model = captured.model.model.id, prompt = settings.compressPrompt,
+            additionalPrompt = additionalPrompt, targetTokens = targetTokens)
+        return GeneratedHistorySummary(
+            nodes = summaryNodes + messagesToKeep.map { message ->
+                snapshot.nodes.single { it.currentMessage.id == message.id }
+            },
+            origins = summaryNodes.map { net.weero.measix.pilot.data.model.messageOriginEntry(it, source) },
+        )
 
     }
 }
+
+internal data class GeneratedHistorySummary(
+    val nodes: List<MessageNode>,
+    val origins: List<net.weero.measix.pilot.data.model.ConversationModelContextEntry>,
+)
 
 /** A run observes new stream steps and committed user interactions from the same turn owner. */
 internal class GenerationSoundTracker(

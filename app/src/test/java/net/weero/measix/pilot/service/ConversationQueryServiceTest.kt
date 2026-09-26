@@ -72,6 +72,7 @@ class ConversationQueryServiceTest {
             recoveryGate = ApplicationRecoveryGate().also { it.ready() },
             settings = mockk(),
             coordinator = mockk(),
+            artifacts = mockk(),
         )
     }
 }

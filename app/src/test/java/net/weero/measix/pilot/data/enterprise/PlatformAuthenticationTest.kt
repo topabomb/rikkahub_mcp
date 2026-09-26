@@ -19,7 +19,7 @@ class PlatformAuthenticationTest {
     private val cipher = EnterpriseCredentialCipher { SecretKeySpec(ByteArray(32) { it.toByte() }, "AES") }
     private fun fixture(name: String) = requireNotNull(javaClass.getResourceAsStream("/contracts/platform/cases.json"))
         .bufferedReader().use { Json.parseToJsonElement(it.readText()).jsonArray }
-        .first { it.jsonObject.getValue("name").jsonPrimitive.content == name }.jsonObject.getValue("value").toString()
+        .first { it.jsonObject.getValue("name").jsonPrimitive.content == name }.jsonObject.getValue("value").toString().let(::withStarterOpeningMock)
     private fun controller(root: File) = EnterpriseSessionController(net.weero.measix.pilot.data.enterprise.enterpriseTestStore(root, credentialCipher = cipher)) { 1000L }
     private val connection get() = PlatformConnection("http://192.168.1.20:8080", PlatformWireCodec.decode(fixture("discovery")))
     private val response get() = PlatformWireCodec.decode<PlatformEnrollmentExchangeResponse>(fixture("enrollment-response"))
@@ -124,12 +124,15 @@ class PlatformAuthenticationTest {
         listOf(
             refreshed.copy(device = refreshed.device.copy(status = PlatformBootstrapDeviceStatus.REVOKED)),
             refreshed.copy(supportedSnapshotSchemaVersions = emptyList()),
+            refreshed.copy(supportedSnapshotSchemaVersions = listOf(6)),
         ).forEach { unavailable ->
             val unavailableFailure = runCatching {
                 owner.acceptPlatformBootstrap(access, unavailable)
             }.exceptionOrNull()
             assertTrue(unavailableFailure is EnterpriseConfigurationException)
-            assertEquals("platform_bootstrap_unavailable", (unavailableFailure as EnterpriseConfigurationException).reason)
+            val expected = if (unavailable.device.status != PlatformBootstrapDeviceStatus.ACTIVE)
+                "platform_bootstrap_unavailable" else "enterprise_configuration_version_unsupported"
+            assertEquals(expected, (unavailableFailure as EnterpriseConfigurationException).reason)
             assertEquals(after, (owner.state.value as EnterpriseState.Available).manifest)
         }
     }

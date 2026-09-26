@@ -59,13 +59,13 @@ class Migration_11_12Test {
         }
         helper.runMigrationsAndValidate(name, 12, true, Migration_11_12).close()
         val database = Room.databaseBuilder(context, AppDatabase::class.java, name)
-            .addMigrations(Migration_12_13)
+            .addMigrations(Migration_12_13, Migration_13_14)
             .build()
         val appScope = AppScope()
         try {
             val store = ArtifactStore(
                 ArtifactPayloadStore(payloadContext), database.artifactDao(), database.artifactReferenceDao(),
-                database.systemMetaDao(), database.conversationDao(), database.messageNodeDao(),
+                database.systemMetaDao(), database.conversationDao(), database.messageNodeDao(), database.conversationModelContextDao(),
                 ArtifactSettingsCoordinator(SettingsStore(context, appScope)), RoomDatabaseTransactionRunner(database),
             )
             repeat(2) {

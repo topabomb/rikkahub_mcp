@@ -51,7 +51,8 @@ Target.allowAsSubAssistant
 
 可见子助手集合（`id` / `name` / `description`）由
 `ConversationDisclosureSnapshotService` 渲染为 Disclosure Snapshot 的 `sub_assistants` section，
-在每次主/子助手新 `START` 前从同次 `ResolvedConfiguration` 的准入目录捕获，内容变化才随新 Assistant owner 追加；
+在每个新请求边界从合法当前目录采样，与本次请求可见状态和已确认工具效果对账；自身调用已表达的修改
+无需再通知，外部差异在完整工具批次之后、下一 Step 前追加。当前 Turn 的 System/工具定义保持冻结；
 企业固定助手和获准个人助手均参与。执行期仍按原 Session 复验当前域准入，并用
 `SubAssistantAccessPolicy` 重算访问范围，不把 Snapshot 当作授权凭据。详细配置由
 `assistant_inspect` 按需读取。请求级叠加见 [`request-context.md`](request-context.md)。

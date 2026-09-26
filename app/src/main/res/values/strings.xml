@@ -572,7 +572,7 @@
   <string name="prompt_page_enabled">Enabled</string>
   <string name="prompt_page_entries_count_format">%d entries</string>
   <string name="prompt_page_entries_format">Entries (%d)</string>
-  <string name="prompt_page_inject_depth">Inject Depth</string>
+  <string name="prompt_page_inject_depth">Distance from last message (starts at 1)</string>
   <string name="prompt_page_injection_content">Injection Content</string>
   <string name="prompt_page_injection_position">Injection Position</string>
   <string name="prompt_page_injection_role">Injection Role</string>
@@ -585,7 +585,7 @@
   <string name="prompt_page_position_after_system">After System Prompt</string>
   <string name="prompt_page_position_at_depth">At Depth</string>
   <string name="prompt_page_position_before_system">Before System Prompt</string>
-  <string name="prompt_page_position_bottom_of_chat">Before Latest Message</string>
+  <string name="prompt_page_position_bottom_of_chat">Before last message</string>
   <string name="prompt_page_position_top_of_chat">Top of Chat</string>
   <string name="prompt_page_priority_format">Priority: %d</string>
   <string name="prompt_page_priority_label">Priority</string>
@@ -1876,4 +1876,43 @@
   <string name="enterprise_orchelm_collaboration" translatable="false">让成熟方法成为团队资产</string>
   <string name="enterprise_orchelm_collaboration_detail" translatable="false">将成熟方法发布为助手、参考记忆和推荐开场；后续让使用经验经审核后再发布。</string>
   <string name="enterprise_connection_title">Enterprise connection</string>
+  <string name="opening_context">Opening context</string>
+  <string name="opening_details">Opening details</string>
+  <string name="opening_details_named">Opening details, %1$s</string>
+  <string name="opening_selected">Selected opening, %1$s, view details</string>
+  <string name="opening_background">Background</string>
+  <string name="opening_prompt_only">Opening prompts - inserts text only</string>
+  <string name="opening_update">Update opening</string>
+  <string name="opening_remove">Remove opening</string>
+  <string name="opening_updated">This opening has changed. Update it in the details before sending.</string>
+  <string name="opening_unavailable">This opening is unavailable. Synchronize enterprise configuration or ask your administrator.</string>
+  <string name="opening_missing">This opening has no context snapshot. Ask your administrator to publish it.</string>
+  <string name="opening_not_applicable">These system instructions do not apply to the current assistant.</string>
+  <string name="opening_system">System instructions</string>
+  <string name="opening_cleared_assistant">Opening context removed after switching assistants. Your draft text is unchanged.</string>
+  <string name="context_title">Context</string>
+  <string name="context_updated">Context updated</string>
+  <string name="context_updated_accessibility">Context updated. View details.</string>
+  <string name="context_opening">Opening</string>
+  <string name="context_system">System instructions</string>
+  <string name="context_memory">Memory</string>
+  <string name="context_assistants">Available assistants</string>
+  <string name="context_enterprise_background">Enterprise background</string>
+  <string name="context_prompt_rule">Prompt injection</string>
+  <string name="context_time">Message time</string>
+  <string name="context_restore">State restoration</string>
+  <string name="context_attachment">Attachment input</string>
+  <string name="context_history_summary">History summary</string>
+  <string name="context_preset">Preset content</string>
+  <string name="context_historical">Historical context</string>
+  <string name="context_added">Added to context</string>
+  <string name="context_incomplete">Request incomplete</string>
+  <string name="context_delivery_unknown">Delivery unconfirmed</string>
+  <string name="context_copy_original">Copy original</string>
+  <string name="context_source">Source</string>
+  <string name="context_empty_memory">Memory is empty</string>
+  <string name="context_empty_assistants">No available sub-assistants</string>
+  <string name="configuration_saved_next_send">Saved; applies to your next message</string>
+  <string name="context_request">Request %1$d</string>
+  <string name="context_unrecorded_request">Request record unavailable</string>
 </resources>

@@ -26,6 +26,7 @@ UserSettingsDocument（用户定义 + 公用/按域偏好）+ Applied Enterprise
 | 企业状态 | `noBackupFilesDir/enterprise`；EnterpriseAppliedStore / EnterpriseSessionController | Session、完整配置、binding、独立 Feed 与当前空间；按 Deployment/User | 否 |
 
 最近聊天 ID 位于 `ScopedUserPreferences.lastConversationId`，按个人域或完整 Deployment/User 保存。
+`SettingsStore.rememberConversation(scope, id)` 沿原 writer 更新该引用；`id = null` 明确清除指定域的最近聊天，不改变其资源选择或其他域。
 `ConversationHistoryPreferenceMigration` 在旧 Settings 键迁移之后，把已发行的 SharedPreferences `lastConversationId`
 一次性归入个人域；已有域内值优先，DataStore 提交成功后才删除旧键，失败可重试。运行时不再读取全局旧键。
 普通个人配置更新保留各域最近聊天与企业使用偏好；新聊天 Draft 不写入最近聊天，删除后恢复缺失会话由页面明确处理。
@@ -90,7 +91,13 @@ updateLocal(latest personalSettings transform)
 - 主动退出、到期、撤销和身份删除都绑定原 Session；重复请求合并。`IDENTITY_DELETED` 是更强的持久终态，不能被重启或较弱的退出原因覆盖。远端注销失败仍须完成可恢复的本机收口并保留原诊断。
 - 本机重置区分“仅删除接入”与“接入和全部企业历史”，范围先写入 intent，再由原数据 owner 清理；强删除终态到达时扩大清理范围，重启继续。两个分支都不删除个人域，也不依赖 Core logout 成功。
 
-`PlatformSnapshotMapper` 将当前 Snapshot v4 映射为候选；`EnterpriseConfigurationCodec` 在读取 canonical Applied 时再次校验同一领域约束。`ManagedPolicy` 的助手、对话、快速、标题、附件检查、建议、压缩、图片、TTS、ASR 十项默认引用均可省略；缺失表示未设置，不取资源首项，也不复制对话默认。非空模型引用必须指向同一快照内已启用模型，附件检查模型还需 IMAGE 输入。可选 `imageGenerators` 缺失表示空集合；显式 null、未知字段和未知枚举失败关闭。平台 Snapshot 版本与本地 Applied manifest 版本是不同契约，不能混用。
+`PlatformSnapshotMapper` 将受支持的 Snapshot v4/v5 映射为候选；`EnterpriseConfigurationCodec` 在读取 canonical Applied 时再次校验同一领域约束。`ManagedPolicy` 的助手、对话、快速、标题、附件检查、建议、压缩、图片、TTS、ASR 十项默认引用均可省略；缺失表示未设置，不取资源首项，也不复制对话默认。非空模型引用必须指向同一快照内已启用模型，附件检查模型还需 IMAGE 输入。可选 `imageGenerators` 缺失表示空集合；显式 null、未知字段和未知枚举失败关闭。平台 Snapshot 版本与本地 Applied manifest 版本是不同契约，不能混用。
+
+Android v4/v5 的唯一 wire 来源为 Core 导出的 `contracts/platform/client-control.openapi.yaml` 与 `manifest.json`。`tools/generate-enterprise-wire.py` 校验 LF 规范化来源摘要，从 Core 的 ManagedSnapshotV4 与 ManagedSnapshot 合成客户端版本化类型并生成唯一 `PlatformWire.kt`，`--check` 验证漂移。Core 共享 cases 同时覆盖 v4/v5，旧 v4 golden 保留；Android 不再维护目标版本增量 schema。仓库内固定导出使普通构建不依赖 sibling checkout，实际部署能力与本地生成契约仍分别验证。`PLATFORM_SUPPORTED_SNAPSHOT_SCHEMAS` 明确支持 4、5；Discovery 与首次/刷新/地址变更 Bootstrap 须与客户端有版本交集，下载版本还必须出现在本次 Bootstrap 的能力列表中。按外层 schema 严格校验字段，不将非法 v5 当作 v4 继续解析。
+
+`PlatformConnection` 的持久构造只校验 origin/身份/路径，不用当前在线能力门禁拒绝旧 Session 中的 Discovery `[4]`。`EnterpriseAppliedStore` 仍使用 manifest 6，先验证原 revision hash 再解码；旧 `EnterpriseStarter.openingSnapshot` 缺失保留为 null，不补造 System、不改原 release/hash，也不因字段增加重写 revision。v4 网络 Starter 不含 openingSnapshot，mapper 保留 null；v5 必须提供 `format=1` 的 openingSnapshot，System 与背景正文允许显式空串，背景数组允许空且保留顺序，块 ID/标题非空白、ID 唯一。v4 携带该字段、v5 缺失或 null 均拒绝；完整响应和 Applied 文件仍共享既有 4 MiB 上限。版本不支持、合法 v4 无 opening 与内容损坏是不同结果；保全旧状态不绕过原远端执行准入。
+
+`EnterpriseExecution.Platform.snapshotSchemaVersion` 保存下载时验证的网络版本，沿原 `StoredEnterpriseExecution` 私有 payload 持久化；历史文件缺失时为 null，不能根据当前 Discovery、字段形状或客户端版本补造。`PlatformEnterpriseService.synchronize` 仅在缓存原版本同时受客户端和最新 Bootstrap 支持时携带 ETag，并允许 304 复用及上报 Applied；已知 v4/v5 均适用。未知版本或服务端不再支持的缓存发起原 generation 的无条件完整下载；异常 304 由 `PlatformControlClient.snapshot` 以 `snapshot_304_without_cache` 拒绝，保全原 Applied，不循环重试或伪造版本。完整响应校验后沿原发布事务保存已验证版本；v4 升级为含开场的 v5 由服务端发布新 generation/release，原发布 hash 不改写。
 
 `EnterpriseSynchronizationService.prepareExecution` 查询 Core Managed State；仅在非零 generation、READY、版本一致且未阻断时，Session owner 才签发执行 lease。版本缺失或不同可通过同一同步入口更新后再查，不能用本机缓存替代权威检查。请求若收到 `ManagedSnapshotRequired`，原 lease 永久关闭，等待原任务停止和释放后再同步；旧请求不重放，也不因新配置到达而复活。
 
@@ -100,7 +107,7 @@ updateLocal(latest personalSettings transform)
 
 资源选择和修改在 Settings 写锁内依据最新文档、原域与准入规则完成；UI 只消费有效目录和不可用原因，不从显示名称推断持久化引用。企业 `img_*` 是独立图片定义，仅由 resolver 投影到统一图片目录；模型、图片、云端语音和 Direct MCP 执行都须冻结原 Session、generation 与具体 route，并在 Provider I/O 前执行前述受管版本准入。准入成功不代表远端请求成功。
 
-`ModelExecutionService` 在用户配置事务中捕获同一文档的目录与选择，主聊天、子助手和辅助生成沿原域复验。内建搜索选择必须匹配 Provider wire 能力；外挂搜索以同次 `ResolvedConfiguration` 的 SEARCH 选择查用户目录，企业域未选或失效不回退首项。企业固定 Memory Seed 由 resolver 派生，START 时进入 disclosure，不进入可变记忆表。
+`ModelExecutionService` 在用户配置事务中捕获同一文档的目录与选择，主聊天、子助手和辅助生成沿原域复验。内建搜索选择必须匹配 Provider wire 能力；外挂搜索以同次 `ResolvedConfiguration` 的 SEARCH 选择查用户目录，企业域未选或失效不回退首项。企业固定 Memory Seed 由 resolver 派生，START 捕获后经请求接纳进入 disclosure，不进入可变记忆表。
 
 ### 2.6 预算、Portal 与数据边界
 
@@ -273,7 +280,9 @@ Model
 
 `Assistant` 的字段、默认值、运行语义及本域使用编辑只在 [助手配置参考](assistant-configuration.md)维护。此处只记录它引用的其他配置事实：`QuickMessage`、`AssistantRegex`、`ModeInjection`、MCP server、Skill、Workspace 与本地工具开关仍属于用户文档或各自 owner，不因 Assistant 引用而转移写入所有权。
 
-`presetMessages` 保存完整 `UIMessage` 图，可能包含 Provider metadata、usage、terminal state 和多模态/工具 parts；它不是可直接下发的轻量示例文本。企业 Starter 使用独立受限定义，不把本地运行历史或 URI 当作受管配置。
+`presetMessages` 保存完整 `UIMessage` 图，可能包含 Provider metadata、usage、terminal state 和多模态/工具 parts；它不是可直接下发的轻量示例文本。企业 Starter 使用独立受限定义，不把本地运行历史或 URI 当作受管配置。其 `EnterpriseStarterOpeningSnapshot` 保存完整领域 System 与有序 `EnterpriseStarterInitialContext(id,title,content)`，mapper 保留原文；`EnterpriseStarterUiModel.openingAvailable` 只投影可用性，不向目录热路径复制长正文。
+
+`ConversationApplicationService` 是 Draft 开场选择、刷新、清除的 application 入口；`BindDraftOpening` 在原 Conversation owner 中保存唯一绑定，并以非持久 selection token 做 CAS。选择提交后的输入接纳失败只补偿本 token，不能清掉后续选择；`ChatVM` 使用同一输入 Mutex 串行选择、刷新、清除、切助手和首次发送。跨页 `StarterOpeningReference` 只含定义摘要和原发布来源，初始化复验完整定义摘要后绑定，不传 System/背景正文。`requireCurrentStarterOpening` 首发比较仍获准的完整定义，独立 generation 变化不阻断；内容变化或撤销保留草稿并给出原因。目录与选择摘要均不复制长正文，详情由原授权查询按需投影。
 
 ### 4.4 Search
 

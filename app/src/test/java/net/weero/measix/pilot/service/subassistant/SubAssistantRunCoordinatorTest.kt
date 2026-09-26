@@ -260,7 +260,6 @@ class SubAssistantRunCoordinatorTest {
         val result = execution.await()
         assertTrue(result.filterIsInstance<UIMessagePart.Text>().single().text.contains("target_access_revoked"))
         coVerify(exactly = 0) { childRuntime.bindTurnContext(any(), any(), any()) }
-        coVerify(exactly = 0) { childRuntime.bindModelContextProjection(any(), any(), any()) }
         coVerify(exactly = 0) { harness.commandCoordinator.startTurn(any(), any()) }
     }
 
@@ -387,6 +386,7 @@ class SubAssistantRunCoordinatorTest {
         val target = Assistant(
             id = targetId,
             name = "Target",
+            enableMemory = false,
             allowAsSubAssistant = true,
             chatModelId = modelId,
         )
@@ -458,6 +458,8 @@ class SubAssistantRunCoordinatorTest {
             coEvery { artifactStore.copyFilePreservingOrigin(any(), any(), any(), any()) } returns cloneArtifact
         }
         val turnFinalizer = mockk<TurnFinalizer>(relaxed = true)
+        val memoryService = mockk<MemoryService>()
+        coEvery { memoryService.captureExecution(any(), target) } returns null
         val toolSetFactory = mockk<TurnToolSetFactory>(relaxed = true)
         if (preparationGate != null) {
             coEvery { toolSetFactory.prepareMcpCapabilities(any(), any(), any(), any(), any(), any()) } coAnswers {
@@ -475,7 +477,7 @@ class SubAssistantRunCoordinatorTest {
             commandCoordinator = commandCoordinator,
             toolSetFactory = toolSetFactory,
             settingsStore = settingsStore,
-            memoryService = mockk<MemoryService>(relaxed = true),
+            memoryService = memoryService,
             configurations = configurations ?: net.weero.measix.pilot.service.ConfigurationQueryService(settingsStore, sessions, gate),
             modelExecutions = net.weero.measix.pilot.test.testModelExecutionService(settingsStore, sessions, gate),
             turnPipelineFactory = mockk<TurnPipelineFactory>(relaxed = true),

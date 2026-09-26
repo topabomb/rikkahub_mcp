@@ -20,6 +20,8 @@ import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import net.weero.measix.pilot.data.enterprise.EnterpriseSessionController
 import net.weero.measix.pilot.data.enterprise.EnterpriseConfigurationException
 import net.weero.measix.pilot.data.enterprise.RealmAccess
@@ -113,6 +115,7 @@ class ConversationQueryService internal constructor(
     private val recoveryGate: ApplicationRecoveryGate,
     private val settings: SettingsStore,
     private val coordinator: net.weero.measix.pilot.service.runtime.ConversationCommandCoordinator,
+    private val artifacts: net.weero.measix.pilot.data.files.ArtifactStore,
 ) {
     suspend fun captureCurrentAccess(): RealmAccess {
         recoveryGate.awaitReady()
@@ -173,12 +176,117 @@ class ConversationQueryService internal constructor(
         sessions.withSelectedRealmAccess(lease.access) {
             lease.requireOpen()
             check(lease.selectionRevision == sessions.selectionRevision.value) { "conversation_view_revoked" }
-            action()
+            action().also {
+                lease.requireOpen()
+                check(lease.selectionRevision == sessions.selectionRevision.value) { "conversation_view_revoked" }
+                sessions.requirePublishedRealmAccess(lease.access)
+            }
         }
 
     suspend fun requireViewAccess(lease: ConversationViewLease) {
         recoveryGate.awaitReady()
         withViewAccess(lease) { }
+    }
+
+    /** A parent page may inspect only its own tree or an already linked child in the same realm. */
+    private suspend fun contextSnapshot(lease: ConversationViewLease, conversationId: Uuid): ConversationAggregateSnapshot {
+        val snapshot = requireNotNull(aggregateSnapshot(conversationId)) { "context_conversation_unavailable" }
+        check(snapshot.conversationId == conversationId && snapshot.header.scope == lease.access.scope && (conversationId == lease.conversationId ||
+            snapshot.header.parentConversationId == lease.conversationId)) { "context_conversation_scope_mismatch" }
+        return snapshot
+    }
+
+    suspend fun contextDetails(
+        lease: ConversationViewLease,
+        conversationId: Uuid,
+        messageId: Uuid,
+    ): ConversationContextDetailsUiModel = withViewAccess(lease) {
+        val snapshot = contextSnapshot(lease, conversationId)
+        val detail = withContext(Dispatchers.Default) { projectConversationContextDetails(snapshot, messageId) }
+        val current = contextSnapshot(lease, conversationId)
+        check(current === snapshot || current.nodes.map { it.currentMessage.id } == snapshot.nodes.map { it.currentMessage.id }) {
+            "context_selection_changed_during_read"
+        }
+        detail
+    }
+
+    fun observeContextDetails(
+        lease: ConversationViewLease,
+        conversationId: Uuid,
+        messageId: Uuid,
+    ): Flow<ConversationContextDetailsUiModel> = flow {
+        requireViewAccess(lease)
+        emitAll(runtimeRegistry.observeRuntimeState(conversationId).flatMapLatest { state ->
+            val runtime = when (state) {
+                is ConversationRuntimeState.Ready -> state.runtime
+                is ConversationRuntimeState.Draft -> state.runtime
+                is ConversationRuntimeState.Failed -> throw state.error
+                else -> error("context_conversation_unavailable")
+            }
+            runtime.snapshot.map { it.durable }.distinctUntilChanged { previous, next -> previous === next }
+                .map { contextDetails(lease, conversationId, messageId) }
+        })
+    }
+
+    suspend fun contextContent(
+        lease: ConversationViewLease,
+        conversationId: Uuid,
+        messageId: Uuid,
+        requestId: Uuid?,
+        itemKey: String,
+    ): ConversationContextContentUiModel = withViewAccess(lease) {
+        val snapshot = contextSnapshot(lease, conversationId)
+        val item = withContext(Dispatchers.Default) {
+            projectConversationContextDetails(snapshot, messageId, setOf(requestId)).requests
+                .single { it.id == requestId }.items.single { it.key == itemKey }
+        }
+        suspend fun requireCurrentItem() {
+            lease.requireOpen()
+            val current = contextSnapshot(lease, conversationId)
+            if (current !== snapshot) check(withContext(Dispatchers.Default) {
+                projectConversationContextDetails(current, messageId, setOf(requestId)).requests.any { request ->
+                    request.id == requestId && request.items.any { it.key == itemKey && it.entryId == item.entryId }
+                }
+            }) { "context_selection_changed_during_read" }
+        }
+        requireCurrentItem()
+        if (item.entryId == null) {
+            val opening = requireNotNull(snapshot.opening) { "context_opening_unavailable" }
+            return@withViewAccess ConversationContextContentUiModel(
+                kotlinx.serialization.json.Json.encodeToString(
+                    net.weero.measix.pilot.data.enterprise.EnterpriseStarterOpeningSnapshot.serializer(),
+                    requireNotNull(opening.definition.openingSnapshot)),
+                net.weero.measix.pilot.data.model.ConversationOpeningCodec.encode(opening),
+            )
+        }
+        val entry = snapshot.modelContextEntries.single { it.id == item.entryId }
+        val text = when (val body = entry.payload.body) {
+            is net.weero.measix.pilot.data.model.ConversationContextBody.Inline -> body.text
+            is net.weero.measix.pilot.data.model.ConversationContextBody.Artifact -> artifacts.readContextText(snapshot.header.scope, body)
+            is net.weero.measix.pilot.data.model.ConversationContextBody.MessageReference -> snapshot.nodes
+                .single { it.id == body.message.nodeId }.messages.single { it.id == body.message.messageId }.toText()
+            net.weero.measix.pilot.data.model.ConversationContextBody.Opening -> {
+                val blocks = requireNotNull(snapshot.opening?.definition?.openingSnapshot).initialContexts
+                kotlinx.serialization.json.buildJsonObject {
+                    put("type", kotlinx.serialization.json.JsonPrimitive("starter_context"))
+                    put("format", kotlinx.serialization.json.JsonPrimitive(1))
+                    put("blocks", kotlinx.serialization.json.Json.encodeToJsonElement(
+                        kotlinx.serialization.builtins.ListSerializer(net.weero.measix.pilot.data.enterprise.EnterpriseStarterInitialContext.serializer()), blocks))
+                }.toString()
+            }
+        }
+        requireCurrentItem()
+        val emptySections = if (entry.payload.source is net.weero.measix.pilot.data.model.ConversationContextSource.Disclosure) {
+            ConversationDisclosureSnapshotService.readSections(text).mapNotNull { (section, value) ->
+                if ((value["rows"] as? kotlinx.serialization.json.JsonArray)?.isEmpty() != true) null else when (section) {
+                    net.weero.measix.pilot.data.model.DisclosureSection.MEMORY -> ConversationContextCategory.MEMORY
+                    net.weero.measix.pilot.data.model.DisclosureSection.SUB_ASSISTANTS -> ConversationContextCategory.ASSISTANTS
+                    net.weero.measix.pilot.data.model.DisclosureSection.ENTERPRISE_MEMORY_SEEDS -> null
+                }
+            }
+        } else emptyList()
+        ConversationContextContentUiModel(text, kotlinx.serialization.json.Json.encodeToString(
+            net.weero.measix.pilot.data.model.ConversationContextSource.serializer(), entry.payload.source), emptySections)
     }
 
     fun observeConversation(lease: ConversationViewLease): Flow<ConversationReadState> =
@@ -197,9 +305,10 @@ class ConversationQueryService internal constructor(
 
     private fun observeRegisteredConversation(conversationId: Uuid): Flow<ConversationReadState> =
         runtimeRegistry.observeRuntimeState(conversationId).flatMapLatest { state ->
+            val projector = net.weero.measix.pilot.service.runtime.ConversationPresentationProjector()
             when (state) {
-                is ConversationRuntimeState.Draft -> state.runtime.snapshot.map { it.toPresentationSnapshot() }.map(ConversationReadState::Ready)
-                is ConversationRuntimeState.Ready -> state.runtime.snapshot.map { it.toPresentationSnapshot() }.map(ConversationReadState::Ready)
+                is ConversationRuntimeState.Draft -> state.runtime.snapshot.map(projector::project).map(ConversationReadState::Ready)
+                is ConversationRuntimeState.Ready -> state.runtime.snapshot.map(projector::project).map(ConversationReadState::Ready)
                 ConversationRuntimeState.Loading -> flowOf(ConversationReadState.Loading)
                 ConversationRuntimeState.Missing -> flowOf(ConversationReadState.Missing)
                 is ConversationRuntimeState.Failed -> flowOf(ConversationReadState.Failed(state.error))
@@ -210,7 +319,9 @@ class ConversationQueryService internal constructor(
         observeForView(lease, ConversationPresentation.IDLE) { runtimeRegistry.getTurnPresentationFlow(lease.conversationId) }
 
     fun conversationUiModel(lease: ConversationViewLease): Flow<ConversationUiModel?> =
-        observeForView<ConversationUiModel?>(lease, null) { runtimeRegistry.getConversationUiFlow(lease.conversationId)
+        observeForView<ConversationUiModel?>(lease, null) {
+            val projector = net.weero.measix.pilot.service.runtime.ConversationPresentationProjector()
+            runtimeRegistry.getConversationUiFlow(lease.conversationId)
             .combine(attachmentPreviewProjector.lifecycleChanges()) { joined, _ -> joined }
             .combine(settings.observeConfiguration(sessions.state, lease.access.scope).map {
                 withViewAccess(lease) {
@@ -218,13 +329,15 @@ class ConversationQueryService internal constructor(
                 }
             }) { joined, resolved -> Triple(joined.first, joined.second, resolved) }
             .mapLatest { (aggregate, presentation, resolved) ->
-                val snapshot = aggregate.toPresentationSnapshot()
+                val snapshot = projector.project(aggregate)
                 requireViewSnapshot(lease, snapshot)
                 ConversationUiModel(
                     snapshot = snapshot,
                     presentation = presentation,
                     attachmentPreviews = attachmentPreviewProjector.project(snapshot, lease),
-                    configuration = resolved.conversationConfiguration(ConversationAssistantTarget(lease.commandTarget, snapshot.header.assistantId)),
+                    configuration = resolved.conversationConfiguration(ConversationAssistantTarget(lease.commandTarget, snapshot.header.assistantId),
+                        aggregate.durable.opening?.let { ConversationOpeningSummary(it.assistant.copy(id = it.definition.id), it.definition.title,
+                            aggregate.durable.draftOpeningSelectionToken) }, snapshot.header.newConversation),
                 )
             }
         }

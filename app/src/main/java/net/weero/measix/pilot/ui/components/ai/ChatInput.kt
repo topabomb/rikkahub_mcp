@@ -45,6 +45,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.input.TextFieldLineLimits
 import androidx.compose.material3.BasicAlertDialog
 import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -64,6 +65,9 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
@@ -130,6 +134,10 @@ internal fun ChatInput(
     requireInputOwner: () -> Unit,
     speechPage: net.weero.measix.pilot.service.ConversationCommandTarget,
     starters: List<ConversationStarterUiModel>,
+    opening: net.weero.measix.pilot.service.ConversationOpeningSummary?,
+    isDraft: Boolean,
+    onStarterClick: (ConversationStarterUiModel) -> Unit,
+    onOpeningDetails: () -> Unit,
     loading: Boolean,
     settings: Settings,
     assistant: Assistant,
@@ -366,6 +374,7 @@ internal fun ChatInput(
                                 artifactDraftScope = artifactDraftScope,
                                 requireInputOwner = requireInputOwner,
                                 starters = starters,
+                                opening = opening, isDraft = isDraft, onStarterClick = onStarterClick, onOpeningDetails = onOpeningDetails,
                                 assistant = assistant,
                                 completionProviders = completionProviders,
                                 onSendMessage = { sendMessage() },
@@ -381,6 +390,7 @@ internal fun ChatInput(
                             artifactDraftScope = artifactDraftScope,
                             requireInputOwner = requireInputOwner,
                             starters = starters,
+                            opening = opening, isDraft = isDraft, onStarterClick = onStarterClick, onOpeningDetails = onOpeningDetails,
                             assistant = assistant,
                             completionProviders = completionProviders,
                             onSendMessage = { sendMessage() },
@@ -483,6 +493,10 @@ private fun ActionIconButton(
 private fun TextInputRow(
     state: ChatInputState,
     starters: List<ConversationStarterUiModel>,
+    opening: net.weero.measix.pilot.service.ConversationOpeningSummary?,
+    isDraft: Boolean,
+    onStarterClick: (ConversationStarterUiModel) -> Unit,
+    onOpeningDetails: () -> Unit,
     artifactDraftScope: ArtifactDraftScope,
     requireInputOwner: () -> Unit,
     assistant: Assistant,
@@ -674,9 +688,10 @@ private fun TextInputRow(
                     trailingContent()
                 }
             },
-            leadingIcon = if (quickMessages.isNotEmpty() || starters.isNotEmpty()) {
+            leadingIcon = if (quickMessages.isNotEmpty() || starters.isNotEmpty() || opening != null) {
                 {
-                    PromptPresetButton(quickMessages = quickMessages, starters = starters, state = state, requireInputOwner = requireInputOwner)
+                    PromptPresetButton(quickMessages = quickMessages, starters = starters, state = state, requireInputOwner = requireInputOwner,
+                        opening = opening, isDraft = isDraft, onStarterClick = onStarterClick, onOpeningDetails = onOpeningDetails)
                 }
             } else null,
         )
@@ -770,11 +785,15 @@ private fun ChatInputState.applyCompletion(
 }
 
 @Composable
-private fun PromptPresetButton(
+internal fun PromptPresetButton(
     quickMessages: List<QuickMessage>,
     starters: List<ConversationStarterUiModel>,
     state: ChatInputState,
     requireInputOwner: () -> Unit,
+    opening: net.weero.measix.pilot.service.ConversationOpeningSummary?,
+    isDraft: Boolean,
+    onStarterClick: (ConversationStarterUiModel) -> Unit,
+    onOpeningDetails: () -> Unit,
 ) {
     var expanded by remember { mutableStateOf(false) }
     val toaster = LocalToaster.current
@@ -796,10 +815,19 @@ private fun PromptPresetButton(
             modifier = Modifier.widthIn(min = 200.dp, max = 360.dp),
         ) {
             if (starters.isNotEmpty()) {
-                Text(stringResource(R.string.enterprise_starters), Modifier.padding(8.dp), style = MaterialTheme.typography.labelMedium)
+                Text(stringResource(if (isDraft) R.string.enterprise_starters else R.string.opening_prompt_only), Modifier.padding(8.dp), style = MaterialTheme.typography.labelMedium)
                 starters.forEach { starter ->
-                    PromptPresetItem(starter.title, starter.prompt) { append(starter.prompt, separate = true) }
+                    PromptPresetItem(starter.title, starter.prompt, selected = starter.selected) {
+                        expanded = false
+                        onStarterClick(starter)
+                    }
                 }
+            }
+            opening?.let { selected ->
+                val description = stringResource(R.string.opening_details_named, selected.title)
+                DropdownMenuItem(text = { Text(stringResource(R.string.opening_details)) },
+                    modifier = Modifier.semantics { contentDescription = description },
+                    onClick = { expanded = false; onOpeningDetails() })
             }
             if (quickMessages.isNotEmpty()) {
                 Text(stringResource(R.string.assistant_page_quick_messages), Modifier.padding(8.dp), style = MaterialTheme.typography.labelMedium)
@@ -812,8 +840,9 @@ private fun PromptPresetButton(
 }
 
 @Composable
-private fun PromptPresetItem(title: String, content: String, onClick: () -> Unit) {
-    Surface(onClick = onClick, color = Color.Transparent, modifier = Modifier.fillMaxWidth()) {
+private fun PromptPresetItem(title: String, content: String, selected: Boolean = false, onClick: () -> Unit) {
+    Surface(onClick = onClick, color = if (selected) MaterialTheme.colorScheme.secondaryContainer else Color.Transparent,
+        modifier = Modifier.fillMaxWidth().semantics { this.selected = selected }) {
         Column(Modifier.padding(8.dp)) {
             Text(title, style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
             Text(content, style = MaterialTheme.typography.bodySmall, maxLines = 2, overflow = TextOverflow.Ellipsis)

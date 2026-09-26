@@ -1,5 +1,7 @@
 package net.weero.measix.pilot.data.sync
 
+import net.weero.measix.pilot.service.runtime.inlineContextText
+import net.weero.measix.pilot.service.runtime.historicalContextRow
 import net.weero.measix.pilot.data.configuration.ConfigurationScope
 
 import me.rerere.common.configuration.ConfigurationReference
@@ -477,7 +479,7 @@ class BackupArchiveServiceTest {
         val database = Room.databaseBuilder(context, AppDatabase::class.java, "measix_pilot")
             .setJournalMode(androidx.room.RoomDatabase.JournalMode.TRUNCATE).build()
         val artifacts = ArtifactStore(ArtifactPayloadStore(context), database.artifactDao(), database.artifactReferenceDao(),
-            database.systemMetaDao(), database.conversationDao(), database.messageNodeDao(),
+            database.systemMetaDao(), database.conversationDao(), database.messageNodeDao(), database.conversationModelContextDao(),
             ArtifactSettingsCoordinator(settings), RoomDatabaseTransactionRunner(database))
         try {
             PendingBackupRestore.restoreSettingsIfPending(context, artifacts, catalogStore, JsonInstant)
@@ -579,7 +581,7 @@ class BackupArchiveServiceTest {
         )
         room.conversationModelContextDao().insertOnce(
             listOf(
-                ConversationModelContextEntity(
+                historicalContextRow(
                     ownerMessageId = ownerMessageId,
                     ownerNodeId = ownerNodeId,
                     anchorNodeId = anchorNodeId,
@@ -607,7 +609,7 @@ class BackupArchiveServiceTest {
             .build()
         val entries = restored.conversationModelContextDao().getEntriesOfConversation(conversationId)
         assertEquals(listOf(ownerMessageId), entries.map { it.ownerMessageId })
-        assertEquals(content, entries.single().content)
+        assertEquals(content, entries.single().inlineContextText())
         restored.close()
         context.deleteDatabase(sourceName)
     }

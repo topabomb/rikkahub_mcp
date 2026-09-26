@@ -222,7 +222,8 @@ class SettingsStore internal constructor(
     internal suspend fun lastConversation(scope: ConfigurationScope): kotlin.uuid.Uuid? =
         userDocuments.first().preferences.lastConversation(scope)
 
-    internal suspend fun rememberConversation(scope: ConfigurationScope, id: kotlin.uuid.Uuid) = updateMutex.withLock {
+    /** Null clears only this scope's recent-conversation reference. */
+    internal suspend fun rememberConversation(scope: ConfigurationScope, id: kotlin.uuid.Uuid?) = updateMutex.withLock {
         commitUserDocument { document ->
             document.copy(preferences = document.preferences.withLastConversation(scope, id))
         }

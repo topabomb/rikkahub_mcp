@@ -9,7 +9,7 @@
 
 相关实现：`StepRunner.generateInternal()`、`PlaceholderTransformer`、
 `TemplateTransformer`、`AssistantToolFactory`、
-`WorkspaceReminderTransformer`、`ToolArtifactReplayTransformer`、
+`freezeTurnSystem`、`ToolArtifactReplayTransformer`、
 `TimeReminderTransformer`、`AttachmentProjectionTransformer`、
 `AttachmentInspectionTool`、`ConversationDisclosureSnapshotService`、
 `TurnContextFactory`。
@@ -18,30 +18,33 @@
 
 ## 1. 一次请求里的上下文顺序
 
-`generateInternal()` 使用 START 时冻结的 `TurnContext`（`TurnPromptSnapshot` +
-`FrozenToolDefinition`）装配请求；同一 Turn 的 Step、审批与重试复用这些冻结输入，历史消息和工具结果随 checkpoint 推进。Master 装配顺序为：
+`TurnContextFactory.materialize()` 在冻结工具定义后用 `freezeTurnSystem` 生成完整 System 与组成来源。
+`generateInternal()` 直接使用 `TurnContext.system.text`；同一 Turn 的 Step、审批与重试复用这些冻结输入，历史消息和工具结果随 checkpoint 推进。Master 装配顺序为：
 
 ```text
-System（合成消息，标记 SyntheticMessageKind.SYSTEM_PROMPT）
-  1. Assistant.systemPrompt
-     （allowConversationSystemPrompt 且会话 customSystemPrompt 非空时，用会话提示覆盖）
-  2. 各 FrozenToolDefinition.systemPromptContribution ← START 装配时求值一次并冻结
-  3. 请求携带 Disclosure Snapshot 时追加固定 MODEL_RULES（ConversationDisclosureSnapshotService）
+System（SyntheticMessageKind.SYSTEM_PROMPT；Text 标记 RequestPartSource.RenderedSystem）
+  1. BEFORE_SYSTEM_PROMPT 规则（priority 降序，同优先级保留目录顺序）
+  2. 合法非空会话覆盖 → 同来源助手适用 opening → Assistant.systemPrompt
+  3. 固定 APPLICATION_CONTEXT_RULES 与独立 MODEL_RULES（不随本 Step 是否投影 Disclosure 变化）
+  4. 各 FrozenToolDefinition.systemPromptContribution
+  5. 已捕获 Workspace 固定说明
+  6. AFTER_SYSTEM_PROMPT 规则（同上述排序）
 
 Durable 消息（selected branch → replay-safe projection → messageLimit 窗口）
 随后 Input Transformer（不在 transform 时重读 Settings / 时钟 / Locale / Workspace）：
   TimeReminderTransformer
   PromptInjectionTransformer
-  PlaceholderTransformer      ← 替换 {{char}} / {{description}} 等
-  DocumentAsPromptTransformer
-  TemplateTransformer         ← 渲染 messageTemplate
-  WorkspaceReminderTransformer
+  PlaceholderTransformer      ← 普通文本单次替换；已渲染来源跳过
+  DocumentAsPromptTransformer ← 每个 Document 前插派生正文并登记 part 来源
+  TemplateTransformer         ← 仅对普通文本渲染 messageTemplate
   ToolArtifactReplayTransformer ← 先按 artifact metadata 重写历史 Tool Result 路径与 Image URL
   AttachmentProjectionTransformer ← 最后按本次模型能力投影附件：可读 IMAGE 时保留图片并前插
                                   input=native 事实；不可读时只保留 input=reference_only 事实
 Transformer 全部完成后：
-  RequestContextPlanner.applyContextProjections 把 Disclosure Snapshot 作为 anchor USER
-  turn 的第一个 Text part 注入；不经过任何模板、占位符、提醒或附件投影改写。
+  TurnRequestAdmission 依据已提交历史对账并接纳本次实际贡献；
+  RequestContextPlanner.applyContextProjections 按 typed placement 投影历史和新增正文。
+  首个 Step 的新 Disclosure 是 anchor USER 的首个 Text；后续 Step 的变化是完整工具结果批次
+  之后的独立应用 USER。接纳正文不再经过模板、占位符、提醒或附件投影改写。
 ```
 
 Target 与 Master 共用 `TurnPipelineFactory`，输入顺序仅少 `ToolArtifactReplayTransformer`，其余一致。
@@ -81,6 +84,14 @@ Child 附件投影见 [子助手多模态](sub-assistant-multimodal.md)，执行
 跨日 / 切换 Locale / 时区不改变本 Turn 的替换结果；`DefaultPlaceholderProvider` 只服务
 提示词页的变量芯片展示。
 
+`renderPromptPlaceholders` 单次匹配并替换：值中的 `{key}` / `{{key}}` 是字面数据，不递归执行。
+`freezeTurnPromptSnapshot` 在捕获时渲染选中的规则，并保留 `ResolvedPromptInjection.template/name`；
+规则 part 的 `RequestPartSource.PromptRule` 使后续 Placeholder 不再重写它。
+`freezeTurnSystem` 只对选定领域模板执行一次占位符替换，System 位置规则使用已捕获的渲染值；
+工具与 Workspace 文本按字面拼接。`SystemContextContribution` 保存原模板、实际使用变量、定义引用，
+System 位置规则另保留完整 `ModeInjection`；整个最终 System 不再经过后续模板或占位符变换。
+已登记的其他应用 part 和 application history 同样跳过；普通消息维持显式配置的变换。
+
 ### 2.2 `TemplateTransformer`（Pebble `messageTemplate`）
 
 | 变量 | 含义 |
@@ -91,8 +102,11 @@ Child 附件投影见 [子助手多模态](sub-assistant-multimodal.md)，执行
 | `description` | `assistant.description` |
 
 默认模板 `"{{ message }}"` 原样输出文本。
-管线为本次请求合成的内容（System、时间提醒、模式注入、Workspace 提醒）由 request-scoped
+管线为本次请求合成的内容（System、时间提醒、模式注入、Disclosure）由 request-scoped
 `RequestMessageOriginTracker` 标记，不应用该模板；普通 durable 消息仍按用户配置渲染。
+同一 USER 内的文档派生 Text 使用 `RequestPartSource.DocumentInput`，只跳过该 part，保留用户正文
+的模板处理。Tool Call / Tool Result 不递归进入 Placeholder 或 Pebble。来源表仅属于本次请求；
+part 被复制替换时通过 `transferPartSource` 明确转交，不能将对象身份当作持久标识。
 
 ---
 
@@ -104,7 +118,7 @@ Child 附件投影见 [子助手多模态](sub-assistant-multimodal.md)，执行
 ```json
 {
   "type": "conversation_disclosure_snapshot",
-  "format": 2,
+  "format": 3,
   "memory": { "enabled": false, "scope": "disabled", "header": ["id", "content"], "rows": [] },
   "sub_assistants": { "mode": "disabled", "header": ["id", "name", "description"], "rows": [] },
   "enterprise_memory_seeds": { "header": ["id", "content"], "rows": [] }
@@ -112,17 +126,20 @@ Child 附件投影见 [子助手多模态](sub-assistant-multimodal.md)，执行
 ```
 
 memory scope 为 local / global / disabled，子助手 mode 为 management_only / delegation_only / both / disabled。
-内容不包含捕获时间、Locale 或 revision；关闭的 section 也保留固定形状。完整性、大小上限、baseline
+内容不包含捕获时间、Locale 或 revision。format 3 只携带需要披露的完整分区；省略表示本包未涉及，
+不能解释为关闭或清空。关闭的分区明确保留固定形状与空 rows。完整性、大小上限、baseline
 与窗口适用规则见 [请求上下文](request-context.md)。
 
 
 ### 3.1 记忆：Disclosure Snapshot 的 memory section
 
-Memory 内容的唯一披露路径是每次新 `START` 前由
-`MemoryService` 按会话原域、Session 与助手权限读取一次 `ORDER BY id ASC` 的有序 Memory，
-再交给纯渲染入口 `ConversationDisclosureSnapshotService.captureCandidate()`，与固定配置快照生成
-canonical Snapshot；内容变化才随新 Assistant owner
-追加 entry（见 [请求上下文](request-context.md)）。memory section
+`START` 捕获 `TurnDisclosureSource` 的 namespace、能力和企业 Seed；System 与工具定义在本 Turn 内固定。
+每个尚未接纳的 Step 由该 source 按原域与权限读取当前 Memory 和可见目录，
+经 `ConversationDisclosureSnapshotService.render()` 生成完整当前状态。
+`TurnRequestAdmission` 将实际可见的历史分区与已提交内置工具 input/output 按因果顺序交给
+`ConversationDisclosureReconciliation`，只接纳首次披露、外部变化或缺失恢复的完整分区。
+本会话成功工具已表达的变化不追加 USER；下一 `START` 也沿用这段历史证据，不能仅因 owner 改变就重复披露。
+已接纳 Step 重试复用原正文与位置，不重采样当前状态（见 [请求上下文](request-context.md)）。memory section
 形状（`enabled` / `scope` / `header` / `rows`）由该 service 的 canonical renderer 唯一定义；关闭时仍输出
 固定形状，不写日期、Locale 或 revision，相同业务数据必须逐字相同。
 
@@ -131,7 +148,7 @@ Snapshot 中是否存在某条 Memory 不代表它仍可写，也不妨碍按真
 
 企业 Memory Seed 使用独立 `enterprise_memory_seeds` section，行 ID 为完整企业资源引用，内容只读；
 它不是 `memory_tool` 可更新的整数记忆 ID。按当前企业助手的固定绑定顺序捕获，不因关闭可变 Memory
-而丢失。format 2 新增该 section，已发布个人历史 format 1 继续原样读取，不回填或重写。
+而丢失。历史 format 1 / 2 继续原样读取，不升级正文；format 1 缺少 Seed 表示未披露，不能当作已披露空集合。
 
 ### 3.2 子助手：Disclosure Snapshot 的 sub_assistants section
 
@@ -139,10 +156,18 @@ Snapshot 中是否存在某条 Memory 不代表它仍可写，也不妨碍按真
 （`id` / `name` / `description`）作为 canonical Snapshot 的 `sub_assistants` section 披露；
 `mode` 由 caller 的 `AssistantManagement` / `AssistantDelegation` 开关决定，关闭时是固定
 `disabled` 形状。列表来自 `SubAssistantAccessPolicy.accessibleSubAssistants()`，排除 caller，
-保持 `Settings.assistants` 顺序。详细配置继续由 `assistant_inspect` 按需读取。
+按完整配置引用排序。详细配置继续由 `assistant_inspect` 按需读取。
 
 执行期不信任 Snapshot：三个 Assistant 工具都会从最新 Settings 与 `SubAssistantAccessPolicy`
 重算访问范围；本 Turn 内经 `assistant_manage` 成功创建的 Target 按 live policy 即可调用。
+
+`ConversationDisclosureReconciliation.reconcile` 是工具效果与完整当前分区的纯对账入口：调用方提供
+实际请求里的因果有序 `DisclosureFact`，并核定内置工具身份、适用域/Memory owner/Caller 和执行终态。
+它从适用 Snapshot 建立已知状态，顺序归并成功 input/output；未执行失败不改状态，已执行但未确认
+或必要历史缺失使相关分区不完整。完整已知差异为 EXTERNAL_STATE，缺失基线为 BASELINE_RESTORE，
+从未披露为 INITIAL；输出仅含需追加的完整分区及各分区原因，不读配置、数据库或时钟。
+Memory/目录按 ID 比较，Seed 保持绑定顺序；format 1 缺少 Seed 不代表空 Seed。当前完整候选先验证
+形状与总大小上限，再选出变化分区，不能以小更新绕过完整状态上限。
 
 ### 3.3 技能 `use_skill` contribution
 
@@ -168,24 +193,53 @@ name / description。`SkillManager` 是 Skill 文件树和读取 owner，`use_sk
 当前选中 TTS Provider 的 `TTSManager.getPromptGuidance()`；无指导时为空串。该值在 START 装配时
 求值一次并冻结为 `FrozenToolDefinition.systemPromptContribution`。
 
-### 3.5 工作区 `WorkspaceReminderTransformer`
+### 3.5 工作区 `buildWorkspacePrompt`
 
-`workspaceId` 已绑定且 `WorkspaceShellStatus.READY` 时追加到第一条 System。不注入 cwd。
+`workspaceId` 已绑定且 `WorkspaceShellStatus.READY` 时，捕获说明并纳入冻结 System。不注入 cwd，也无逐 Step Workspace transformer。
 
 内容由 `buildWorkspacePrompt()` 生成：`<workspace>` 内说明 `/workspace`、路径必须在 Rootfs
 内、四个 `workspace_*` 工具的分工、共享 `/skills` 与 `/workspace`，以及 `/upload` 原生只读和 Shell 显式输入副本规则。
 
 Workspace 固定说明提示使用 `workspace_read_file` 阅读 `/root/.agents/AGENTS.md`、`/workspace/AGENTS.md` 及适用项目指引；缺失为可选，指引不能覆盖用户意图与工具权限。不会自动读取文件写入 system；正文经工具结果进入既有 Step 历史和 rolling compaction。
 
-### 3.6 时间间隔 `TimeReminderTransformer`
+### 3.6 时间背景 `TimeReminderTransformer`
 
-`enableTimeReminder` 时，在首条 USER 前以及间隔超过一小时的 USER 前插入：
+`enableTimeReminder` 开启时，`applyTimeReminder` 使用真实 USER 判定和前驱时间映射，从消息的
+`createdAt` 与捕获时区计算时间，不使用模型响应时钟或 Locale。首条真实 USER 前插入：
 
 ```text
-<time_reminder>Current time: <weekday>, <local datetime></time_reminder>
+<time_reminder>Message time: 2026-09-26T10:00:00+08:00</time_reminder>
 ```
 
-有间隔时附加 `(<gap> since last message)`。
+与前一真实 USER 相隔超过一小时才附加 gap，例如：
+
+```text
+<time_reminder>Message time: 2026-09-26T12:00:00+08:00; gap: 2 h</time_reminder>
+```
+
+小于一天取整数 h，达到一天取整数 d。助手/工具完成时间以及登记为 synthetic 或 application history
+的 USER 不重置间隔。前驱时间通过 `RequestMessageOriginTracker.markPreviousRealUserTime` 提供；
+来源登记和该映射属于请求投影，不是独立持久状态。
+
+### 3.7 位置规则 `PromptInjectionTransformer`
+
+所有位置先在同一份未加入请求合成内容的历史上解析，不让先插入的提醒或规则影响后续 depth。
+历史排除 System 和 request synthetic，保留预置/摘要这样的持久消息。depth 至少为 1，表示末条
+历史消息之前；超范围取历史起点，工具批次的安全边界仍由 `findSafeInsertIndex` 保证。
+TOP_OF_CHAT 在首条历史 USER 前，BOTTOM_OF_CHAT 在末条历史消息前。
+
+同一实际位置按 priority 降序，同优先级保持目录顺序；仅相邻同 role 合并成消息，每条规则仍是
+独立 Text part 并登记原规则来源。System 前/后规则归 `freezeTurnSystem`，不进入此 transformer；那里不使用配置的 role，原 role 仍保存在定义来源中。
+
+### 3.8 托管文档 `DocumentAsPromptTransformer`
+
+只通过 `ArtifactReadLease` 解析文件；未授权 URI、MIME 不一致或文件不可用明确失败，不读取
+任意本地路径，也不把失败包装为成功的文件背景。文件/解析异常保留原类型、message 与 cause，
+取消向上继续传播。
+
+每个原 Document 之前放一段 `<UploadFile name="..." path="...">` 派生正文，保持原附件顺序；
+仅存在实际工具路径时才提供 path。name/path 转义引号、尖括号、& 和控制空白；正文使用不少于
+三个、且长于正文最长连续反引号的围栏。正文不执行占位符或消息模板，不改写原文件内容。
 
 ---
 
@@ -527,7 +581,7 @@ read：`{"text":"..."}`。write：`{"success":true}`。
 
 描述是常量文本：工具名称、描述、Schema 与列表排序共同构成 Provider 请求的可缓存前缀，
 描述里没有当前日期（原先的 `Today is ...` 会让整条前缀每天被击穿一次）。
-当前时间只由 `TimeReminderTransformer` 与 `{{cur_date}}` 负责。
+消息时间由 `TimeReminderTransformer` 表达，捕获日期由 `{{cur_date}}` 表达。
 Memory 行的顺序由 DAO 的 `ORDER BY id ASC` 固定。
 
 > Store long-term notes across conversations (create/edit/delete).
@@ -542,7 +596,11 @@ Memory 行的顺序由 DAO 的 `ORDER BY id ASC` 固定。
 | `content` | Note text (required for create/edit) |
 
 create：`{"id":N}`。edit / delete：`{"success":true,"id":N}`。
-edit / delete 在当前 owner namespace 中影响 0 行时返回 `memory_not_found_in_namespace`，`detail` 给出 ID 与“不原样重试”的提示；读取过旧快照不构成当前可写证明。工具错误不触发 Memory Snapshot 重新注入。
+成功写入结果通过 `successfulOutputPolicy` 保持 `PRESERVE`，原 input 已包含正文，不再次回显。
+这只改变成功结果的压缩策略，不改权限校验、失败终态或其他工具的归档策略。
+edit / delete 在当前 owner namespace 中影响 0 行时返回 `memory_not_found_in_namespace`，`detail` 给出 ID 与“不原样重试”的提示；读取过旧快照不构成当前可写证明。
+未进入执行的拒绝不使已知分区失效；已执行但结果无法确认时，不能从失败文本推断未发生修改，
+下一安全请求边界通过完整分区恢复。成功短结果和原 input 已表达的变更不另行通知。
 聊天卡片摘要读的是 tool **入参**的 `content`，不是结果。
 
 ### `recent_chats`
@@ -613,7 +671,8 @@ unified diff 只进 part metadata，不进发给模型的文本。
 启用：`LocalToolOption.AssistantManagement`。合法 `CREATE` 不审批；合法 `UPDATE` / `DELETE` 必须审批。
 缺失或非法 action、错误字段类型、非法 ID 和不完整操作参数在审批前直接返回 `invalid_arguments`。
 
-> Create, update, or delete a sub-assistant (sub-agent). New ones join your allowed list.
+> Create, update, or delete a user sub-assistant (sub-agent). New ones join your allowed list in this realm.
+> User definitions are shared across spaces; updates and deletion affect that shared definition. Enterprise definitions are read-only.
 
 | 参数 | description |
 |------|-------------|
@@ -623,7 +682,14 @@ unified diff 只进 part metadata，不进发给模型的文本。
 | `description` | Specialty and when to call it. Required and non-empty for CREATE; optional replacement for UPDATE. Not a system prompt. |
 | `instructions` | System prompt for the sub-assistant: role, method, output style. Required and non-empty for CREATE; optional replacement for UPDATE. Do not invent tools or skills. |
 
-成功只回 `action` 与 `id`，不回显 `name` / `description` / `instructions`。DELETE 可带 `cleanup_pending`。
+成功返回 `action` 与 `id`；仅当本次 input 修改过的字段与 owner 提交返回的实际值不同时，增加
+`applied` 对象，字段限 `name` / `description` / `instructions`。比较原始 input，而不是已经 trim/
+规范化的参数；未修改字段及没有差异的正文不回显。结果来自本次提交，不在提交后重读 Settings。
+DELETE 可带 `cleanup_pending`，不带 applied。成功写入结果使用 `PRESERVE`。
+
+```json
+{"action":"update","id":"<target-reference>","applied":{"description":"实际保存的规范化描述"}}
+```
 
 ### `assistant_inspect`
 
@@ -721,7 +787,7 @@ ref 不授予权限，也不会暴露 relative path、`file://` 或 App 私有�
 
 ## 8. 结果里不回写入参原文
 
-入参已留在同一条消息的 tool call 中。结果只保留模型单看 output 无法知道的信息：
+入参已留在同一条消息的 tool call 中。结果只保留 input 尚未表达的执行结果或实际差异，结合两者理解操作：
 
 | 工具 | 结果保留 |
 |------|----------|
@@ -731,7 +797,7 @@ ref 不授予权限，也不会暴露 relative path、`file://` 或 App 私有�
 | `calendar_create` | `event_id` + 规范化 `start` / `end` |
 | `text_to_speech` | `success` |
 | `workspace_write_file` / `workspace_edit_file` | 文件元数据，不含正文 |
-| `assistant_manage` | `action` + `id`（DELETE 可加 `cleanup_pending`） |
+| `assistant_manage` | `action` + `id`；有实际规范化差异时仅加 touched 字段的 `applied`，DELETE 可加 `cleanup_pending` |
 | `generate_image` | bounded JSON + Image part；成功不回显 prompt |
 
 `clipboard_tool` read 的 `text`、`assistant_call` 的 `content` 是新数据，不是回显。

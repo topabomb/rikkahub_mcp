@@ -7,6 +7,14 @@ import net.weero.measix.pilot.data.db.entity.ToolExecutionStatus
 
 @Dao
 interface ToolExecutionDAO {
+    @Query(
+        "SELECT t.assistant_message_id AS assistantMessageId, e.step_id AS stepId, " +
+            "e.local_call_id AS localCallId, e.status AS status FROM turn_execution t " +
+            "LEFT JOIN tool_execution e ON e.turn_id=t.turn_id " +
+            "WHERE t.conversation_id=:conversationId AND t.assistant_message_id IS NOT NULL"
+    )
+    suspend fun getConversationOutcomes(conversationId: String): List<ConversationToolOutcomeRow>
+
     /** Atomically creates STARTED only while the owning turn is active; no turn pre-read. */
     @Query(
         "INSERT OR IGNORE INTO tool_execution " +
@@ -99,3 +107,10 @@ interface ToolExecutionDAO {
     suspend fun getByTurnId(turnId: String): List<ToolExecutionEntity>
 
 }
+
+data class ConversationToolOutcomeRow(
+    val assistantMessageId: String,
+    val stepId: String?,
+    val localCallId: String?,
+    val status: ToolExecutionStatus?,
+)

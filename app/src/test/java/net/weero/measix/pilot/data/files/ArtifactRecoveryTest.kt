@@ -331,6 +331,7 @@ internal class ArtifactRecoveryTest : ArtifactStoreLifecycleTestBase() {
             systemMetaDAO = database.systemMetaDao(),
             conversationDAO = database.conversationDao(),
             messageNodeDAO = database.messageNodeDao(),
+            contextDAO = database.conversationModelContextDao(),
             settingsCoordinator = ArtifactSettingsCoordinator(settingsStore),
             transactionRunner = RoomDatabaseTransactionRunner(database),
             fileNameCandidates = { List(4) { "000000" } },

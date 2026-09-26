@@ -143,6 +143,8 @@ class AssistantToolFactory internal constructor(
         caller: net.weero.measix.pilot.service.AssistantManagementCaller,
     ): Tool = Tool(
         name = TOOL_ASSISTANT_MANAGE,
+        executionIdentity = net.weero.measix.pilot.data.model.DisclosureBuiltinTool.ASSISTANT_MANAGE.executionIdentity,
+        successfulOutputPolicy = { ToolOutputPolicy.PRESERVE },
         description = "Create, update, or delete a user sub-assistant (sub-agent). New ones join your allowed list in this realm. " +
             "User definitions are shared across spaces; updates and deletion affect that shared definition. Enterprise definitions are read-only.",
         parameters = {
@@ -231,6 +233,15 @@ class AssistantToolFactory internal constructor(
                         buildJsonObject {
                             put("action", action.name.lowercase())
                             put("id", data.id.toString())
+                            val raw = args as JsonObject
+                            val applied = buildJsonObject {
+                                mapOf("name" to data.name, "description" to data.description,
+                                    "instructions" to data.systemPrompt).forEach { (field, saved) ->
+                                    val input = raw[field]?.jsonPrimitive?.content
+                                    if (input != null && input != saved) put(field, saved)
+                                }
+                            }
+                            if (applied.isNotEmpty()) put("applied", applied)
                         }
                     }
                     is AssistantDeletionResult -> {

@@ -25,6 +25,7 @@ data class ConversationPresentationSnapshot(
     val header: ConversationHeader,
     val nodes: List<MessageNode>,
     val stream: TurnStreamProjection?,
+    val context: net.weero.measix.pilot.service.ConversationContextSummary = net.weero.measix.pilot.service.ConversationContextSummary(),
 ) {
     /**
      * 与 aggregate 的 internal currentMessages() 逐项等价：末节点在 [nodes] 里已被
@@ -37,7 +38,9 @@ data class ConversationPresentationSnapshot(
  * aggregate 到 presentation 的唯一 projector。方向单一：presentation 永不回写 durable 事实，
  * 也不向调用方暴露 aggregate 引用。durable 树与流式草稿在此合并，历史节点保持共享引用。
  */
-internal fun ConversationRuntimeSnapshot.toPresentationSnapshot(): ConversationPresentationSnapshot {
+internal fun ConversationRuntimeSnapshot.toPresentationSnapshot(
+    context: net.weero.measix.pilot.service.ConversationContextSummary = net.weero.measix.pilot.service.projectConversationContextSummary(durable),
+): ConversationPresentationSnapshot {
     val turn = stream
     val draft = turn?.assistantMessage
     val rendered = if (draft == null || durable.nodes.isEmpty()) {
@@ -56,7 +59,22 @@ internal fun ConversationRuntimeSnapshot.toPresentationSnapshot(): ConversationP
         header = durable.header,
         nodes = rendered,
         stream = stream,
+        context = context,
     )
+}
+
+/** A subscription reuses discovery metadata while only the streaming tail changes. */
+internal class ConversationPresentationProjector {
+    private var lastDurable: ConversationAggregateSnapshot? = null
+    private var context = net.weero.measix.pilot.service.ConversationContextSummary()
+
+    fun project(snapshot: ConversationRuntimeSnapshot): ConversationPresentationSnapshot {
+        if (snapshot.durable !== lastDurable) {
+            context = net.weero.measix.pilot.service.projectConversationContextSummary(snapshot.durable)
+            lastDurable = snapshot.durable
+        }
+        return snapshot.toPresentationSnapshot(context)
+    }
 }
 
 /** A read-only overlay shares the durable history without enumerating it for each chunk. */

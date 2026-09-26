@@ -14,15 +14,15 @@ class ToolArtifactReplayTransformer(
     ): List<UIMessage> {
         val reads = requireNotNull(ctx.artifactReads)
         return messages.map { message ->
-            message.copy(parts = message.parts.map { rematerializePart(it, reads) })
+            message.copy(parts = message.parts.map { rematerializePart(it, reads, ctx.requestOrigins) })
         }
     }
 
-    private suspend fun rematerializePart(part: UIMessagePart, reads: ArtifactReadLease): UIMessagePart {
+    private suspend fun rematerializePart(part: UIMessagePart, reads: ArtifactReadLease, origins: RequestMessageOriginTracker): UIMessagePart {
         return when (part) {
             is UIMessagePart.Tool -> part.copy(
-                output = rewriter.materializeToolOutput(reads, part.output, part.metadata)
-                    .map { rematerializePart(it, reads) },
+                output = rewriter.materializeToolOutput(reads, part.output, part.metadata, origins::rememberOriginalPart)
+                    .map { rematerializePart(it, reads, origins) },
             )
             else -> part
         }

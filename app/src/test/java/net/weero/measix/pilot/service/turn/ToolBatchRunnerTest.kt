@@ -611,7 +611,6 @@ class ToolBatchRunnerTest {
                 })
             val stepId = Uuid.random()
             val message = UIMessage(role = MessageRole.ASSISTANT, parts = listOf(
-                UIMessagePart.Step(stepId, 0, kotlin.time.Instant.fromEpochMilliseconds(1)),
                 UIMessagePart.Tool(Uuid.random(), stepId, "call", tool.name, "{}"),
             ))
             val checkpoints = mutableListOf<TurnCheckpoint>()

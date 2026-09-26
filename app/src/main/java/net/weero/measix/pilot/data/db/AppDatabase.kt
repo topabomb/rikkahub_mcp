@@ -22,6 +22,9 @@ import net.weero.measix.pilot.data.db.entity.ArtifactEntity
 import net.weero.measix.pilot.data.db.entity.ArtifactReferenceEntity
 import net.weero.measix.pilot.data.db.entity.ConversationEntity
 import net.weero.measix.pilot.data.db.entity.ConversationModelContextEntity
+import net.weero.measix.pilot.data.db.entity.ConversationContextAdmissionEntity
+import net.weero.measix.pilot.data.db.entity.ConversationContextUseEntity
+import net.weero.measix.pilot.data.db.entity.ConversationOpeningEntity
 import net.weero.measix.pilot.data.db.entity.FavoriteEntity
 import net.weero.measix.pilot.data.db.entity.FolderEntity
 import net.weero.measix.pilot.data.db.entity.GenMediaEntity
@@ -42,7 +45,7 @@ import net.weero.measix.pilot.utils.JsonInstant
  * 消息、turn、tool 和 context 从所属会话取得域，不重复存储第二份主体。
  * v13：企业主体仅由 deploymentId 与 userId 构成，删除 URL 派生的来源字段。
  */
-const val APP_DATABASE_VERSION = 13
+const val APP_DATABASE_VERSION = 14
 
 @Database(
     entities = [
@@ -59,6 +62,9 @@ const val APP_DATABASE_VERSION = 13
         TurnExecutionEntity::class,
         ToolExecutionEntity::class,
         ConversationModelContextEntity::class,
+        ConversationContextAdmissionEntity::class,
+        ConversationContextUseEntity::class,
+        ConversationOpeningEntity::class,
     ],
     version = APP_DATABASE_VERSION,
     autoMigrations = [],

@@ -4,6 +4,7 @@ import com.sun.net.httpserver.HttpExchange
 import com.sun.net.httpserver.HttpServer
 import java.io.File
 import java.net.InetSocketAddress
+import java.security.MessageDigest
 import java.time.Instant
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
@@ -37,7 +38,8 @@ class PlatformSessionNetworkTest {
     private fun owner(root: File) = EnterpriseSessionController(net.weero.measix.pilot.data.enterprise.enterpriseTestStore(root, credentialCipher = cipher)) { 1000L }
     private fun service(owner: EnterpriseSessionController) = PlatformEnterpriseService(
         owner, PlatformControlClient(OkHttpClient()), now = { Instant.ofEpochMilli(1000) })
-    private fun fixture(name: String) = requireNotNull(javaClass.getResourceAsStream("/contracts/platform/cases.json"))
+    private fun fixture(name: String) = withStarterOpeningMock(rawFixture(name))
+    private fun rawFixture(name: String) = requireNotNull(javaClass.getResourceAsStream("/contracts/platform/cases.json"))
         .bufferedReader().use { Json.parseToJsonElement(it.readText()).jsonArray }
         .first { it.jsonObject.getValue("name").jsonPrimitive.content == name }.jsonObject.getValue("value").toString()
     private fun server(handler: HttpExchange.() -> Unit) = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0).apply {
@@ -398,24 +400,24 @@ class PlatformSessionNetworkTest {
         } finally { old.stop(0); next.stop(0) }
     }
 
-    @Test fun `snapshot commits before report and restart retries report using validated cache`() = runBlocking {
+    @Test fun `verified v4 snapshot commits before report and restart retries report using its original cached version`() = runBlocking {
         val root = temporary.newFolder()
-        val snapshot = PlatformWireCodec.decode<PlatformManagedSnapshot>(fixture("v4-full"))
+        val snapshot = PlatformWireCodec.decode<PlatformManagedSnapshot>(rawFixture("v4-full"))
         val store = net.weero.measix.pilot.data.enterprise.enterpriseTestStore(root, credentialCipher = cipher)
         val reads = mutableListOf<String?>()
         val bootstraps = AtomicInteger()
         var reportFails = true
         val server = server {
             when (requestURI.path) {
-                "/api/client/v1/sessions/refresh" -> reply(200, fixture("refresh-response"))
+                "/api/client/v1/sessions/refresh" -> reply(200, rawFixture("refresh-response"))
                 "/api/client/v1/bootstrap" -> {
                     bootstraps.incrementAndGet()
-                    reply(200, fixture("bootstrap"))
+                    reply(200, rawFixture("bootstrap"))
                 }
                 "/api/client/v1/managed/snapshots/${snapshot.managedGeneration}" -> {
                     reads += requestHeaders.getFirst("If-None-Match")
                     if (reads.last() != null) sendResponseHeaders(304, -1)
-                    else { responseHeaders.set("ETag", "\"${snapshot.snapshotHash}\""); reply(200, fixture("v4-full")) }
+                    else { responseHeaders.set("ETag", "\"${snapshot.snapshotHash}\""); reply(200, rawFixture("v4-full")) }
                 }
                 "/api/client/v1/managed/applied" -> {
                     assertEquals(snapshot.managedGeneration, store.load().configuration?.generation)
@@ -428,9 +430,9 @@ class PlatformSessionNetworkTest {
         }
         try {
             val first = owner(root)
-            val connection = PlatformConnection("http://127.0.0.1:${server.address.port}", PlatformWireCodec.decode(fixture("discovery")))
-            val id = first.acceptPlatformEnrollment(first.beginPlatformEnrollment(), connection, PlatformWireCodec.decode(fixture("enrollment-response")))
-            val access = first.completePlatformBootstrap(id, PlatformWireCodec.decode(fixture("bootstrap")))
+            val connection = PlatformConnection("http://127.0.0.1:${server.address.port}", PlatformWireCodec.decode(rawFixture("discovery")))
+            val id = first.acceptPlatformEnrollment(first.beginPlatformEnrollment(), connection, PlatformWireCodec.decode(rawFixture("enrollment-response")))
+            val access = first.completePlatformBootstrap(id, PlatformWireCodec.decode(rawFixture("bootstrap")))
             try { service(first).synchronize(access); fail("report failure hidden") }
             catch (error: PlatformHttpException) { assertEquals(503, error.status) }
             assertEquals(snapshot.managedGeneration, store.load().configuration?.generation)
@@ -441,6 +443,242 @@ class PlatformSessionNetworkTest {
             assertEquals(snapshot.managedGeneration, restored.configuration?.generation)
             assertEquals(listOf(null, "\"${snapshot.snapshotHash}\""), reads)
             assertEquals(2, bootstraps.get())
+        } finally { server.stop(0) }
+    }
+
+    @Test fun `unknown cached schema rejects unsolicited 304 and validates a full response for the same generation`() = runBlocking {
+        val root = temporary.newFolder()
+        val json = EnterpriseConfigurationCodec.json
+        val base = PlatformWireCodec.decode<PlatformManagedSnapshot>(rawFixture("v4-full"))
+        val bootstrap = PlatformWireCodec.decode<PlatformBootstrap>(rawFixture("bootstrap"))
+        fun hash(bytes: ByteArray) = MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) }
+        val completeResponse = AtomicBoolean(false)
+        val reports = AtomicInteger()
+        val reads = mutableListOf<String?>()
+        val server = server {
+            when (requestURI.path) {
+                "/api/client/v1/sessions/refresh" -> reply(200, rawFixture("refresh-response"))
+                "/api/client/v1/bootstrap" -> reply(200, rawFixture("bootstrap"))
+                "/api/client/v1/managed/snapshots/${base.managedGeneration}" -> {
+                    reads += requestHeaders.getFirst("If-None-Match")
+                    if (!completeResponse.get()) sendResponseHeaders(304, -1)
+                    else {
+                        responseHeaders.set("ETag", "\"${base.snapshotHash}\"")
+                        reply(200, rawFixture("v4-full"))
+                    }
+                }
+                "/api/client/v1/managed/applied" -> { reports.incrementAndGet(); sendResponseHeaders(204, -1) }
+                else -> reply(404, "unexpected route")
+            }
+        }
+        try {
+            val connection = PlatformConnection("http://127.0.0.1:${server.address.port}",
+                PlatformWireCodec.decode<PlatformDiscovery>(rawFixture("discovery")).copy(supportedSnapshotSchemaVersions = listOf(4L)))
+            val first = owner(root)
+            val id = first.acceptPlatformEnrollment(first.beginPlatformEnrollment(), connection, PlatformWireCodec.decode(rawFixture("enrollment-response")))
+            val access = first.completePlatformBootstrap(id, bootstrap)
+            val current = PlatformSnapshotMapper.map(connection, first.platformConfiguration(access).session.identity, base)
+            val legacy = current.copy(
+                configuration = current.configuration.copy(starters = current.configuration.starters.map { it.copy(openingSnapshot = null) }),
+                execution = (current.execution as EnterpriseExecution.Platform).copy(snapshotSchemaVersion = null),
+            )
+            val state = first.synchronize(access, legacy)
+            val applied = requireNotNull(state.manifest.applied)
+            val configurationFile = File(root, "revisions/${applied.revision}/configuration.json")
+            val executionFile = File(root, "revisions/${applied.revision}/execution.json")
+            val document = json.parseToJsonElement(configurationFile.readText()).jsonObject
+            val configuration = document.getValue("configuration").jsonObject
+            val starters = configuration.getValue("starters").jsonArray.map { JsonObject(it.jsonObject - "openingSnapshot") }
+            val configurationBytes = JsonObject(document + ("configuration" to JsonObject(configuration + ("starters" to JsonArray(starters)))))
+                .toString().toByteArray()
+            val executionBytes = JsonObject(json.parseToJsonElement(executionFile.readText()).jsonObject - "snapshotSchemaVersion").toString().toByteArray()
+            configurationFile.writeBytes(configurationBytes)
+            executionFile.writeBytes(executionBytes)
+            val oldApplied = applied.copy(configurationHash = hash(configurationBytes), executionHash = hash(executionBytes))
+            File(root, "manifest.json").writeText(json.encodeToString(state.manifest.copy(applied = oldApplied)))
+
+            val recovered = owner(root)
+            recovered.recover()
+            val failure = runCatching { service(recovered).synchronize(access) }.exceptionOrNull()
+            assertTrue(failure.toString(), failure is IllegalArgumentException)
+            assertEquals("snapshot_304_without_cache", failure?.message)
+            assertEquals(oldApplied, (recovered.state.value as EnterpriseState.Available).manifest.applied)
+            assertTrue((recovered.state.value as EnterpriseState.Available).configuration!!.starters.all { it.openingSnapshot == null })
+            assertEquals(0, reports.get())
+            assertArrayEquals(configurationBytes, configurationFile.readBytes())
+            assertArrayEquals(executionBytes, executionFile.readBytes())
+
+            completeResponse.set(true)
+            val updated = service(recovered).synchronize(access)
+            assertEquals(base.managedGeneration, updated.configuration!!.generation)
+            assertEquals(current.configuration, updated.configuration)
+            assertTrue(updated.configuration.starters.all { it.openingSnapshot == null })
+            assertEquals(1, reports.get())
+            assertEquals(listOf(null, null), reads)
+            val reopened = net.weero.measix.pilot.data.enterprise.enterpriseTestStore(root, credentialCipher = cipher)
+            assertEquals(4L, (reopened.execution(reopened.load().manifest) as EnterpriseExecution.Platform).snapshotSchemaVersion)
+        } finally { server.stop(0) }
+    }
+
+    @Test fun `current Bootstrap withdrawing cached v4 rejects 304 without replacing Applied`() = runBlocking {
+        val root = temporary.newFolder()
+        val base = PlatformWireCodec.decode<PlatformManagedSnapshot>(rawFixture("v4-full"))
+        val bootstrap = PlatformWireCodec.decode<PlatformBootstrap>(rawFixture("bootstrap"))
+        val reads = mutableListOf<String?>()
+        val reports = AtomicInteger()
+        val server = server {
+            when (requestURI.path) {
+                "/api/client/v1/sessions/refresh" -> reply(200, rawFixture("refresh-response"))
+                "/api/client/v1/bootstrap" -> reply(200, PlatformWireCodec.json.encodeToString(
+                    bootstrap.copy(supportedSnapshotSchemaVersions = listOf(5L))))
+                "/api/client/v1/managed/snapshots/${base.managedGeneration}" -> {
+                    reads += requestHeaders.getFirst("If-None-Match")
+                    sendResponseHeaders(304, -1)
+                }
+                "/api/client/v1/managed/applied" -> { reports.incrementAndGet(); sendResponseHeaders(204, -1) }
+                else -> reply(404, "unexpected route")
+            }
+        }
+        try {
+            val sessions = owner(root)
+            val connection = PlatformConnection("http://127.0.0.1:${server.address.port}", PlatformWireCodec.decode(rawFixture("discovery")))
+            val id = sessions.acceptPlatformEnrollment(sessions.beginPlatformEnrollment(), connection, PlatformWireCodec.decode(rawFixture("enrollment-response")))
+            val access = sessions.completePlatformBootstrap(id, bootstrap)
+            val candidate = PlatformSnapshotMapper.map(connection, sessions.platformConfiguration(access).session.identity, base)
+            val before = sessions.synchronize(access, candidate)
+            val revision = File(root, "revisions/${before.manifest.applied!!.revision}")
+            val bytes = revision.walkTopDown().filter { it.isFile }.associate { it.relativeTo(revision).path to it.readBytes() }
+
+            val failure = runCatching { service(sessions).synchronize(access) }.exceptionOrNull()
+            assertTrue(failure.toString(), failure is IllegalArgumentException)
+            assertEquals("snapshot_304_without_cache", failure?.message)
+            assertEquals(listOf<String?>(null), reads)
+            assertEquals(0, reports.get())
+            val reopened = enterpriseTestStore(root, credentialCipher = cipher)
+            val after = reopened.load()
+            assertEquals(before.manifest.applied, after.manifest.applied)
+            assertEquals(before.manifest.session?.id, after.manifest.session?.id)
+            assertEquals(candidate.configuration, after.configuration)
+            assertEquals(4L, (reopened.execution(after.manifest) as EnterpriseExecution.Platform).snapshotSchemaVersion)
+            bytes.forEach { (path, original) -> assertArrayEquals(path, original, File(revision, path).readBytes()) }
+        } finally { server.stop(0) }
+    }
+
+    @Test fun `downloaded supported schema absent from current Bootstrap preserves previous Applied`() = runBlocking {
+        val root = temporary.newFolder()
+        val base = PlatformWireCodec.decode<PlatformManagedSnapshot>(rawFixture("v4-full"))
+        val response = PlatformWireCodec.decode<PlatformManagedSnapshot>(fixture("v4-full"))
+        val bootstrap = PlatformWireCodec.decode<PlatformBootstrap>(rawFixture("bootstrap"))
+            .copy(supportedSnapshotSchemaVersions = listOf(4L))
+        val reports = AtomicInteger()
+        val server = server {
+            when (requestURI.path) {
+                "/api/client/v1/sessions/refresh" -> reply(200, rawFixture("refresh-response"))
+                "/api/client/v1/bootstrap" -> reply(200, PlatformWireCodec.json.encodeToString(bootstrap))
+                "/api/client/v1/managed/snapshots/${base.managedGeneration}" -> {
+                    responseHeaders.set("ETag", "\"${response.snapshotHash}\"")
+                    reply(200, fixture("v4-full"))
+                }
+                "/api/client/v1/managed/applied" -> { reports.incrementAndGet(); sendResponseHeaders(204, -1) }
+                else -> reply(404, "unexpected route")
+            }
+        }
+        try {
+            val sessions = owner(root)
+            val connection = PlatformConnection("http://127.0.0.1:${server.address.port}", PlatformWireCodec.decode(rawFixture("discovery")))
+            val id = sessions.acceptPlatformEnrollment(sessions.beginPlatformEnrollment(), connection, PlatformWireCodec.decode(rawFixture("enrollment-response")))
+            val access = sessions.completePlatformBootstrap(id, bootstrap)
+            val candidate = PlatformSnapshotMapper.map(connection, sessions.platformConfiguration(access).session.identity, base)
+            val before = sessions.synchronize(access, candidate)
+
+            val failure = runCatching { service(sessions).synchronize(access) }.exceptionOrNull()
+            assertTrue(failure.toString(), failure is IllegalArgumentException)
+            assertEquals("platform_snapshot_schema_not_advertised", failure?.message)
+            assertEquals(0, reports.get())
+            val after = enterpriseTestStore(root, credentialCipher = cipher).load()
+            assertEquals(before.manifest.applied, after.manifest.applied)
+            assertEquals(candidate.configuration, after.configuration)
+        } finally { server.stop(0) }
+    }
+
+    @Test fun `v4 publication switches atomically to full v5 opening in a new generation and reuses verified v5 cache`() = runBlocking {
+        val root = temporary.newFolder()
+        val base = PlatformWireCodec.decode<PlatformManagedSnapshot>(rawFixture("v4-full"))
+        val bootstrap = PlatformWireCodec.decode<PlatformBootstrap>(rawFixture("bootstrap"))
+        val nextBody = JsonObject(PlatformWireCodec.json.parseToJsonElement(fixture("v4-full")).jsonObject + mapOf(
+            "managedGeneration" to JsonPrimitive(base.managedGeneration + 1),
+            "releaseId" to JsonPrimitive("rel_00000000-0000-4000-8000-000000000099"),
+        ) - "snapshotHash")
+        val nextHash = MessageDigest.getInstance("SHA-256").digest(nextBody.toString().toByteArray(Charsets.UTF_8))
+            .joinToString("") { "%02x".format(it) }
+        val nextRaw = JsonObject(nextBody + ("snapshotHash" to JsonPrimitive("sha256:$nextHash"))).toString()
+        val next = PlatformWireCodec.decode<PlatformManagedSnapshot>(nextRaw)
+        val published = AtomicBoolean(false)
+        val reads = mutableListOf<Pair<Long, String?>>()
+        val reports = mutableListOf<PlatformManagedAppliedReport>()
+        val server = server {
+            when (requestURI.path) {
+                "/api/client/v1/sessions/refresh" -> reply(200, rawFixture("refresh-response"))
+                "/api/client/v1/bootstrap" -> reply(200, PlatformWireCodec.json.encodeToString(
+                    if (!published.get()) bootstrap else bootstrap.copy(
+                        supportedSnapshotSchemaVersions = listOf(4L, 5L),
+                        managedState = bootstrap.managedState.copy(activeManagedGeneration = next.managedGeneration,
+                            targetManagedGeneration = next.managedGeneration,
+                            managedStateRevision = bootstrap.managedState.managedStateRevision + 1))))
+                "/api/client/v1/managed/snapshots/${base.managedGeneration}" -> {
+                    reads += base.managedGeneration to requestHeaders.getFirst("If-None-Match")
+                    responseHeaders.set("ETag", "\"${base.snapshotHash}\"")
+                    reply(200, rawFixture("v4-full"))
+                }
+                "/api/client/v1/managed/snapshots/${next.managedGeneration}" -> {
+                    val cached = requestHeaders.getFirst("If-None-Match")
+                    reads += next.managedGeneration to cached
+                    if (cached == null) {
+                        responseHeaders.set("ETag", "\"${next.snapshotHash}\"")
+                        reply(200, nextRaw)
+                    } else sendResponseHeaders(304, -1)
+                }
+                "/api/client/v1/managed/applied" -> {
+                    reports += PlatformWireCodec.decode<PlatformManagedAppliedReport>(requestBody.bufferedReader().readText())
+                    sendResponseHeaders(204, -1)
+                }
+                else -> reply(404, "unexpected route")
+            }
+        }
+        try {
+            val first = owner(root)
+            val connection = PlatformConnection("http://127.0.0.1:${server.address.port}", PlatformWireCodec.decode(rawFixture("discovery")))
+            val id = first.acceptPlatformEnrollment(first.beginPlatformEnrollment(), connection, PlatformWireCodec.decode(rawFixture("enrollment-response")))
+            val access = first.completePlatformBootstrap(id, bootstrap)
+            val old = service(first).synchronize(access)
+            assertEquals(PlatformSnapshotMapper.map(connection, first.platformConfiguration(access).session.identity, base).configuration, old.configuration)
+            assertTrue(old.configuration!!.starters.isNotEmpty())
+            assertTrue(old.configuration.starters.all { it.openingSnapshot == null })
+            assertEquals(4L, (enterpriseTestStore(root, credentialCipher = cipher).execution(old.manifest) as EnterpriseExecution.Platform).snapshotSchemaVersion)
+
+            published.set(true)
+            val updated = service(first).synchronize(access)
+            val expected = PlatformSnapshotMapper.map(connection, first.platformConfiguration(access).session.identity, next)
+            assertEquals(expected.configuration, updated.configuration)
+            assertTrue(updated.configuration!!.starters.all { it.openingSnapshot != null })
+            assertEquals(old.manifest.session!!.id, updated.manifest.session!!.id)
+            assertNotEquals(old.manifest.applied, updated.manifest.applied)
+            val store = enterpriseTestStore(root, credentialCipher = cipher)
+            val persisted = store.load()
+            assertEquals(updated.manifest.applied, persisted.manifest.applied)
+            assertEquals(expected.configuration, persisted.configuration)
+            assertEquals(expected.execution, store.execution(persisted.manifest))
+
+            val recovered = owner(root)
+            recovered.recover()
+            val cached = service(recovered).synchronize(access)
+            assertEquals(updated.manifest.applied, cached.manifest.applied)
+            assertEquals(expected.configuration, cached.configuration)
+            assertEquals(listOf(base.managedGeneration to null, next.managedGeneration to null,
+                next.managedGeneration to "\"${next.snapshotHash}\""), reads)
+            assertEquals(listOf(PlatformManagedAppliedReport(base.managedGeneration, base.snapshotHash),
+                PlatformManagedAppliedReport(next.managedGeneration, next.snapshotHash),
+                PlatformManagedAppliedReport(next.managedGeneration, next.snapshotHash)), reports)
         } finally { server.stop(0) }
     }
 

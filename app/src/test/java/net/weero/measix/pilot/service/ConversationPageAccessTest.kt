@@ -75,6 +75,8 @@ class ConversationPageAccessTest {
             first.request.assistantId)
         assertEquals(selection.access, first.request.access)
         assertNotEquals(first.request.id, second.request.id)
+        assertEquals(definition.definitionHash(), first.request.starter!!.definitionHash)
+        assertEquals(definition.id, first.request.starter.reference.id)
         assertFails<IllegalStateException> { application.newStarterDraftRequest(starter.target.copy(generation = starter.target.generation + 1)) }
         assertFails<IllegalStateException> { application.newStarterDraftRequest(starter.target.copy(reference = starter.target.reference.copy(id = "str_missing"))) }
         sessions.selectPersonalFixture()
@@ -107,6 +109,59 @@ class ConversationPageAccessTest {
         } finally { appScope.cancel() }
     }
 
+    @Test fun `starter binding rolls back rejected UI acceptance and stale tokens cannot clear a later choice`() = runTest {
+        val packet = exampleEnterprisePackage()
+        val sessions = sessions().apply { enrollFixture(packet) }
+        val selection = requireNotNull(sessions.observeSelectedRealmSelection().first())
+        val definition = packet.configuration.starters.first { it.enabled }
+        val assistant = ConfigurationReference.Enterprise(packet.identity.authority, definition.assistantId)
+        val base = net.weero.measix.pilot.data.configuration.ConfigurationResolver.resolve(
+            net.weero.measix.pilot.data.datastore.UserSettingsDocument.empty(), packet.identity.scope,
+            net.weero.measix.pilot.data.configuration.appliedConfiguration(packet))
+        val settings = mockk<SettingsStore>()
+        coEvery { settings.withResolvedConfiguration<Unit>(any(), any(), any()) } coAnswers {
+            thirdArg<suspend (net.weero.measix.pilot.data.configuration.ResolvedConfiguration) -> Unit>().invoke(base)
+        }
+        val appScope = AppScope(StandardTestDispatcher(testScheduler))
+        val repository = mockk<ConversationRepository>()
+        val locks = ConversationOperationLocks()
+        val registry = ConversationRuntimeRegistry(appScope, repository, locks)
+        val coordinator = ConversationCommandCoordinator(registry, repository, gate(), locks)
+        val id = Uuid.random()
+        val runtime = registry.installDraft(Conversation.ofId(id, assistant, newConversation = true).copy(scope = packet.identity.scope))
+        val runtimeLease = registry.acquireRegisteredRuntime(id, runtime)
+        val target = ConversationAssistantTarget(ConversationCommandTarget(id, selection) {}, assistant)
+        val service = application(repository, coordinator, sessions, settings)
+        val reference = ConfigurationReference.Enterprise(packet.identity.authority, definition.id)
+        try {
+            val rejected = IllegalStateException("original page expired after commit")
+            try {
+                service.selectDraftStarter(target, reference, null, Uuid.random()) { throw rejected }
+                fail("acceptance failure hidden")
+            } catch (error: IllegalStateException) {
+                assertEquals(rejected.message, error.message)
+                assertTrue(generateSequence<Throwable>(error) { it.cause }.any { it === rejected })
+            }
+            assertNull(runtime.durable.opening)
+            assertNull(runtime.durable.draftOpeningSelectionToken)
+            val acceptedToken = Uuid.random()
+            var text = "user draft"
+            service.selectDraftStarter(target, reference, null, acceptedToken) { text += it }
+            assertEquals("user draft" + definition.prompt, text)
+            assertEquals(acceptedToken, runtime.durable.draftOpeningSelectionToken)
+            val acceptedOpening = runtime.durable.opening
+            assertFails<IllegalStateException> {
+                service.selectDraftStarter(target, reference, null, Uuid.random()) { fail("stale selection accepted") }
+            }
+            assertEquals(acceptedOpening, runtime.durable.opening)
+            assertEquals(acceptedToken, runtime.durable.draftOpeningSelectionToken)
+            service.clearDraftOpening(target, acceptedToken)
+            assertNull(runtime.durable.opening)
+            assertEquals("user draft" + definition.prompt, text)
+            coVerify(exactly = 0) { repository.commit(any()) }
+        } finally { runtimeLease.close(); appScope.cancel() }
+    }
+
     @Test fun `explicit draft promotes in place and its restored route opens committed messages`() = runTest {
         val appScope = AppScope(StandardTestDispatcher(testScheduler))
         val repository = mockk<ConversationRepository>()
@@ -115,11 +170,11 @@ class ConversationPageAccessTest {
         val coordinator = ConversationCommandCoordinator(registry, repository, gate(), locks)
         val id = Uuid.random()
         val request = ConversationOpenRequest.NewDraft(id, RealmAccess.Personal, ConfigurationReference.random())
-        var persisted: Conversation? = null
-        coEvery { repository.getConversationHeader(id) } answers { persisted?.toSnapshot()?.header }
-        coEvery { repository.getConversationSnapshotById(id) } answers { persisted?.toSnapshot() }
+        var persisted: net.weero.measix.pilot.service.runtime.ConversationAggregateSnapshot? = null
+        coEvery { repository.getConversationHeader(id) } answers { persisted?.header }
+        coEvery { repository.getConversationSnapshotById(id) } answers { persisted }
         coEvery { repository.commit(any()) } answers {
-            persisted = (firstArg<ConversationWrite>() as ConversationWrite.MaterializeDraft).conversation
+            persisted = (firstArg<ConversationWrite>() as ConversationWrite.MaterializeDraft).snapshot
             true
         }
         coEvery { repository.existsConversationById(id) } answers { persisted != null }
@@ -309,7 +364,7 @@ class ConversationPageAccessTest {
     private fun gate() = ApplicationRecoveryGate().apply { ready() }
     private fun sessions() = EnterpriseSessionController(net.weero.measix.pilot.data.enterprise.enterpriseTestStore(temporary.newFolder()))
     private fun query(sessions: EnterpriseSessionController) = ConversationQueryService(
-        mockk(), mockk(), mockk(), mockk(), mockk(), sessions, gate(), mockk(), mockk())
+        mockk(), mockk(), mockk(), mockk(), mockk(), sessions, gate(), mockk(), mockk(), mockk())
     private fun application(
         repository: ConversationRepository,
         coordinator: ConversationCommandCoordinator,

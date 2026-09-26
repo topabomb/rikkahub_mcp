@@ -106,6 +106,9 @@ internal fun forkSubAssistantTree(
                         messageIdMap = messageIdMap,
                         clonedNodes = clonedNodes,
                     ),
+                    contextAdmissions = net.weero.measix.pilot.data.model.remapContextAdmissionsForClone(
+                        sourceChild.contextAdmissions, sourceChild.modelContextEntries, nodeIdMap, messageIdMap,
+                    ),
                 ),
                 messageIdMap = messageIdMap,
             )

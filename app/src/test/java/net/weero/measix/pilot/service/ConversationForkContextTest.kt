@@ -1,5 +1,7 @@
 package net.weero.measix.pilot.service
 
+import net.weero.measix.pilot.service.runtime.inlineContextText
+import net.weero.measix.pilot.service.runtime.disclosurePayload
 import me.rerere.common.configuration.ConfigurationReference
 import net.weero.measix.pilot.service.subassistant.SubAssistantLifecycle
 import net.weero.measix.pilot.service.turn.TurnFinalizer
@@ -75,14 +77,14 @@ class ConversationForkContextTest {
                     ownerMessageId = owner.id,
                     anchorNodeId = anchorNode.id,
                     anchorMessageId = anchor.id,
-                    content = copiedContent,
+                    payload = disclosurePayload(copiedContent),
                 ),
                 ConversationModelContextEntry(
                     ownerNodeId = futureOwnerNode.id,
                     ownerMessageId = futureOwner.id,
                     anchorNodeId = futureAnchorNode.id,
                     anchorMessageId = futureAnchor.id,
-                    content = copiedContent,
+                    payload = disclosurePayload(copiedContent),
                 ),
             ),
         )
@@ -139,7 +141,7 @@ class ConversationForkContextTest {
             assertEquals(anchor.id, copiedEntry.anchorMessageId)
             assertEquals(fork.nodes[1].id, copiedEntry.ownerNodeId)
             assertEquals(owner.id, copiedEntry.ownerMessageId)
-            assertEquals(copiedContent, copiedEntry.content)
+            assertEquals(copiedContent, copiedEntry.inlineContextText())
             coVerify(exactly = 1) { repository.insertConversationTree(any(), emptyList()) }
         } finally { appScope.cancel() }
     }

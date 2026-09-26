@@ -10,6 +10,7 @@ import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import me.rerere.ai.core.InputSchema
 import me.rerere.ai.core.Tool
+import me.rerere.ai.core.ToolOutputPolicy
 import net.weero.measix.pilot.data.repository.MemoryNotFoundException
 import net.weero.measix.pilot.service.MemoryAccessRejectedException
 import net.weero.measix.pilot.data.enterprise.EnterpriseConfigurationException
@@ -32,6 +33,8 @@ fun buildMemoryTools(
 ): List<Tool> = listOf(
     Tool(
         name = "memory_tool",
+        executionIdentity = net.weero.measix.pilot.data.model.DisclosureBuiltinTool.MEMORY.executionIdentity,
+        successfulOutputPolicy = { ToolOutputPolicy.PRESERVE },
         description = """
             Store long-term notes across conversations (create/edit/delete).
             Merge similar records; prefer edit over create.

@@ -43,6 +43,9 @@ import me.rerere.ai.ui.UIMessagePart
 import me.rerere.ai.ui.TurnTerminalReasons
 import net.weero.measix.pilot.service.turn.TurnRunner
 import net.weero.measix.pilot.service.turn.TurnRunInputs
+import net.weero.measix.pilot.service.turn.TurnDisclosureSource
+import net.weero.measix.pilot.data.model.DisclosureNamespace
+import net.weero.measix.pilot.data.model.storageId
 import net.weero.measix.pilot.data.ai.mcp.McpServerCapabilityState
 import net.weero.measix.pilot.data.ai.mcp.TurnMcpCapabilitySnapshot
 import net.weero.measix.pilot.data.ai.subassistant.SubAssistantCallMetadata
@@ -926,6 +929,9 @@ class SubAssistantRunCoordinator internal constructor(
                 messageIdMap = emptyMap(),
                 clonedNodes = clonedNodes,
             ),
+            contextAdmissions = net.weero.measix.pilot.data.model.remapContextAdmissionsForClone(
+                sourceConversation.contextAdmissions, sourceConversation.modelContextEntries, clonedNodeIdMap, emptyMap(),
+            ),
         )
         createOwnedChild(snapshot)
 
@@ -1005,11 +1011,6 @@ class SubAssistantRunCoordinator internal constructor(
         val mediaCapabilities = captured.mediaCapabilities
         check(snapshot.header.scope == realmAccess.scope) { "sub_assistant_realm_mismatch" }
         val memoryAccess = memoryService.captureExecution(realmAccess, target)
-        val disclosureCandidate = ConversationDisclosureSnapshotService.captureCandidate(
-            configuration = captured.configuration,
-            assistant = target,
-            memories = memoryAccess?.let { memoryService.read(it) }.orEmpty(),
-        )
         val mcpCapabilities = toolSetFactory.prepareMcpCapabilities(realmAccess, captured, runtime, childTurnId, activeWorker) {
             turnFinalizer.stopInteraction(runtime, childTurnId, "managed_snapshot_required")
         }
@@ -1050,6 +1051,15 @@ class SubAssistantRunCoordinator internal constructor(
             conversationSystemPrompt = null,
             conversationModeInjectionIds = target.modeInjectionIds,
             tools = tools,
+            opening = snapshot.opening,
+            disclosure = TurnDisclosureSource.capture(
+                configuration = captured.configuration,
+                assistant = target,
+                namespace = DisclosureNamespace(memoryAccess?.address?.owner?.storageId, target.id),
+                readConfiguration = { configurations.read(realmAccess) },
+                readMemory = { memoryAccess?.let { memoryService.read(it) }.orEmpty() },
+                validateMemory = { memoryAccess?.let { memoryService.requireAccess(it) } },
+            ),
         )
         // START admission is checked after all suspending preparation. Live state may revoke the
         // run, but it cannot change the already frozen wire shape for an admitted START.
@@ -1066,7 +1076,6 @@ class SubAssistantRunCoordinator internal constructor(
             commandCoordinator = commandCoordinator,
             runtime = runtime,
             turnId = childTurnId,
-            modelContextCandidate = disclosureCandidate,
             turnFinalizer = turnFinalizer,
         )
         val turnCommitter = started.turnCommitter
@@ -1089,12 +1098,6 @@ class SubAssistantRunCoordinator internal constructor(
         var lastPreviewUpdate = 0L
         var result: TurnRunResult? = null
         var interactionCount = 0
-        runtime.bindModelContextProjection(
-            childTurnId,
-            activeWorker,
-            TurnTransition.projectTurnModelContext(runtime.durable),
-        )
-        val modelContextProjection = runtime.requireTurnModelContextProjection(childTurnId, activeWorker)
         while (true) {
             result = turnRunner.run(
                 TurnRunInputs(
@@ -1105,8 +1108,7 @@ class SubAssistantRunCoordinator internal constructor(
                     outputTransformers = turnPipelineFactory.output(),
                     interactionAvailability = TurnInteractionCapability.USER_INPUT_ONLY,
                     assistantMessageId = started.assistantMessageId,
-                    modelContextEntries = modelContextProjection.entries,
-                    durableMessageLocators = modelContextProjection.locators,
+                    requestContext = turnCommitter.requestContext,
                     onAssistantObserved = turnCommitter::observeAssistant,
                     reportProcessingText = runtime.processingReporter(),
                     providerSessionId = childConversationId.toString(),

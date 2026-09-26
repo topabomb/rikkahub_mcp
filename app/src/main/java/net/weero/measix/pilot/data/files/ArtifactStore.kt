@@ -27,6 +27,10 @@ import net.weero.measix.pilot.data.ai.attachments.AttachmentRefs
 import net.weero.measix.pilot.data.ai.attachments.ImageMime
 import net.weero.measix.pilot.data.db.dao.ArtifactDAO
 import net.weero.measix.pilot.data.db.dao.ArtifactReferenceDAO
+import net.weero.measix.pilot.data.db.dao.ConversationModelContextDAO
+import net.weero.measix.pilot.data.model.ConversationContextBody
+import net.weero.measix.pilot.data.model.ConversationContextCodec
+import net.weero.measix.pilot.data.model.MessageArtifactReference
 import net.weero.measix.pilot.data.db.dao.ConversationDAO
 import net.weero.measix.pilot.data.db.dao.MessageNodeDAO
 import net.weero.measix.pilot.data.db.dao.MessagePayloadReadException
@@ -188,6 +192,7 @@ internal data class ArtifactReferenceDelta(
     val replacedNodeIds: List<String>,
     val deletedNodeIds: List<String>,
     val references: List<ArtifactReferenceEntity>,
+    val replacedContextNodeIds: List<String> = emptyList(),
 )
 
 class ArtifactProjectionException(message: String, cause: Throwable? = null) :
@@ -213,6 +218,7 @@ class ArtifactStore(
     private val systemMetaDAO: SystemMetaDAO,
     private val conversationDAO: ConversationDAO,
     private val messageNodeDAO: MessageNodeDAO,
+    private val contextDAO: ConversationModelContextDAO,
     private val settingsCoordinator: ArtifactSettingsCoordinator,
     private val transactionRunner: DatabaseTransactionRunner,
     private val fileNameCandidates: () -> List<String> = AssetFileNames::candidates,
@@ -446,6 +452,15 @@ class ArtifactStore(
     }
 
     /** Upload file reads and invocation copies remain under the canonical artifact lifetime. */
+    internal suspend fun readContextText(scope: ConfigurationScope, reference: ConversationContextBody.Artifact): String = withContext(Dispatchers.IO) {
+        withLifecycleLock {
+            val entity = requireReadableMedia(scope, reference.artifactId)
+            check(entity.relativePath == reference.relativePath) { "context_artifact_identity_mismatch" }
+            check(entity.mimeType == "text/plain") { "context_artifact_content_type_invalid" }
+            payloadStore.readBytes(entity.relativePath, entity.sizeBytes).decodeToString(throwOnInvalidSequence = true)
+        }
+    }
+
     internal suspend fun readUpload(scope: ConfigurationScope, path: String, maxBytes: Long): ByteArray = withContext(Dispatchers.IO) {
         withLifecycleLock { payloadStore.readBytes(requireUpload(scope, path).relativePath, maxBytes) }
     }
@@ -1218,19 +1233,28 @@ class ArtifactStore(
         scope: ConfigurationScope,
         upsertedNodes: List<MessageNode>,
         deletedNodeIds: List<Uuid>,
+        contextBodiesByOwner: Map<Uuid, List<ConversationContextBody.Artifact>> = emptyMap(),
     ): ArtifactReferenceDelta {
         require(upsertedNodes.all { node -> node.id.toString().isNotBlank() })
         return ArtifactReferenceDelta(
             replacedNodeIds = upsertedNodes.map { it.id.toString() },
             deletedNodeIds = deletedNodeIds.map { it.toString() },
-            references = buildMutableReferencesForNodes(scope, upsertedNodes),
+            references = buildMutableReferencesForNodes(scope, upsertedNodes) + contextBodiesByOwner.flatMap { (owner, bodies) ->
+                resolveReferenceEntities(scope, owner.toString(), bodies.map {
+                    MessageArtifactReference(it.relativePath, ArtifactReferenceType.CONTEXT, it.artifactId)
+                })
+            },
+            replacedContextNodeIds = contextBodiesByOwner.keys.map(Uuid::toString),
         )
     }
 
     /** Must be called from the same Room transaction that writes the corresponding nodes. */
     internal suspend fun applyReferenceDeltaInTransaction(delta: ArtifactReferenceDelta) {
         if (delta.replacedNodeIds.isNotEmpty()) {
-            artifactReferenceDAO.deleteByNodeIds(delta.replacedNodeIds)
+            artifactReferenceDAO.deleteMessageReferencesByNodeIds(delta.replacedNodeIds)
+        }
+        if (delta.replacedContextNodeIds.isNotEmpty()) {
+            artifactReferenceDAO.deleteContextReferencesByNodeIds(delta.replacedContextNodeIds)
         }
         if (delta.references.isNotEmpty()) {
             val artifactIds = delta.references.mapTo(linkedSetOf()) { it.artifactId }
@@ -1251,6 +1275,7 @@ class ArtifactStore(
         val inserted = mutableListOf<ArtifactReferenceEntity>()
         try {
             conversationDAO.getAllConversations().forEach { conversationEntity ->
+                val contextByOwner = contextDAO.getEntriesOfConversation(conversationEntity.id).groupBy { it.ownerNodeId }
                 messageNodeDAO.getNodeHeadersOfConversation(conversationEntity.id).forEach { header ->
                     val messagesJson = try {
                         messageNodeDAO.readMessagesPayload(header, "conversation=${conversationEntity.id}")
@@ -1266,6 +1291,12 @@ class ArtifactStore(
                         )
                     }
                     inserted.addAll(resolveNodeReferenceEntities(conversationEntity.scope, header.id, messages))
+                    val contextReferences = contextByOwner[header.id].orEmpty().mapNotNull { row ->
+                        (ConversationContextCodec.decode(row.payload).body as? ConversationContextBody.Artifact)?.let {
+                            MessageArtifactReference(it.relativePath, ArtifactReferenceType.CONTEXT, it.artifactId)
+                        }
+                    }
+                    inserted.addAll(resolveReferenceEntities(conversationEntity.scope, header.id, contextReferences))
                 }
             }
         } catch (cancelled: CancellationException) {
@@ -1590,9 +1621,17 @@ class ArtifactStore(
      * metadata-only 引用（generate_image artifact 等）同样登记、阻止 GC 回收。
      */
     private suspend fun resolveNodeReferenceEntities(scope: ConfigurationScope, nodeId: String, messages: List<UIMessage>): List<ArtifactReferenceEntity> {
+        return resolveReferenceEntities(scope, nodeId, messages.collectArtifactReferences())
+    }
+
+    private suspend fun resolveReferenceEntities(
+        scope: ConfigurationScope,
+        nodeId: String,
+        references: List<MessageArtifactReference>,
+    ): List<ArtifactReferenceEntity> {
         val refs = mutableListOf<ArtifactReferenceEntity>()
         val seen = mutableSetOf<Pair<Long, String>>()
-        messages.collectArtifactReferences().forEach { reference ->
+        references.forEach { reference ->
             val relativePath = if (reference.token.startsWith("file:", ignoreCase = true)) {
                 payloadStore.relativePathForUri(Uri.parse(reference.token)) ?: return@forEach
             } else {
@@ -1698,6 +1737,6 @@ class ArtifactStore(
     companion object {
         private const val TAG = "ArtifactStore"
         private const val MAX_BASE64_IMAGE_CHARS = 32 * 1024 * 1024
-        const val REFERENCE_PROJECTION_VERSION_KEY = "artifact_reference_projection_scoped_v3"
+        const val REFERENCE_PROJECTION_VERSION_KEY = "artifact_reference_projection_context_v4"
     }
 }

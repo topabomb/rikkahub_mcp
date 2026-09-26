@@ -1,41 +1,7 @@
 package net.weero.measix.pilot.data.ai.transformers
 
-import me.rerere.ai.core.MessageRole
-import me.rerere.ai.ui.UIMessage
-import me.rerere.ai.ui.UIMessagePart
-import net.weero.measix.pilot.data.ai.request.SyntheticMessageKind
 import net.weero.measix.pilot.data.db.entity.WorkspaceEntity
 import me.rerere.workspace.WorkspaceShellStatus
-
-/**
- * Workspace 系统提示注入转换器
- *
- * 当助手绑定了一个 shell 已就绪的 workspace 时, 在系统提示词中追加一段引导,
- * 让模型了解 workspace 环境与 workspace_* 工具的使用方式。
- */
-class WorkspaceReminderTransformer : InputMessageTransformer {
-    override suspend fun transform(
-        ctx: TransformerContext,
-        messages: List<UIMessage>,
-    ): List<UIMessage> {
-        val prompt = ctx.promptInputs.workspaceReminder ?: return messages
-
-        // 追加到第一条 system 消息; 若不存在则插入一条
-        val systemIndex = messages.indexOfFirst { it.role == MessageRole.SYSTEM }
-        return if (systemIndex >= 0) {
-            messages.toMutableList().apply {
-                val rewritten = this[systemIndex].appendText("\n\n$prompt")
-                this[systemIndex] = rewritten
-                // 被本次请求改写过的 System 属于合成内容，不再走用户模板
-                ctx.requestOrigins.markSynthetic(rewritten, SyntheticMessageKind.WORKSPACE_REMINDER)
-            }
-        } else {
-            val created = UIMessage.system(prompt)
-            ctx.requestOrigins.markSynthetic(created, SyntheticMessageKind.WORKSPACE_REMINDER)
-            listOf(created) + messages
-        }
-    }
-}
 
 /** Captures the stable model-visible Workspace disclosure before START. */
 internal fun buildWorkspacePrompt(workspace: WorkspaceEntity): String? {
@@ -55,16 +21,4 @@ internal fun buildWorkspacePrompt(workspace: WorkspaceEntity): String? {
     appendLine("- Use `workspace_read_file` to read an authorized `/upload/<file-name>` directly; file tools never write or edit original uploads. For `workspace_shell`, list the exact needed paths in `uploads`; only those files are copied into this invocation's `/upload`, which is empty by default. These copies are removed when the command ends and modifications never change original attachments. Copy results to `/workspace` only when they should persist in the shared workspace.")
         append("</workspace>")
     }
-}
-
-private fun UIMessage.appendText(extra: String): UIMessage {
-    val updatedParts = parts.toMutableList()
-    val firstTextIndex = updatedParts.indexOfFirst { it is UIMessagePart.Text }
-    if (firstTextIndex >= 0) {
-        val text = updatedParts[firstTextIndex] as UIMessagePart.Text
-        updatedParts[firstTextIndex] = text.copy(text = text.text + extra)
-    } else {
-        updatedParts.add(UIMessagePart.Text(extra))
-    }
-    return copy(parts = updatedParts)
 }

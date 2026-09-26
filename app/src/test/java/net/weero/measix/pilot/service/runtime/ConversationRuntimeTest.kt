@@ -32,7 +32,6 @@ import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.model.Assistant
 import net.weero.measix.pilot.test.testTurnContext
 import net.weero.measix.pilot.data.ai.ToolResultFact
-import net.weero.measix.pilot.data.ai.request.TurnModelContextProjection
 import me.rerere.ai.ui.ToolResultStatus
 import net.weero.measix.pilot.data.ai.attachments.AttachmentRefs
 import net.weero.measix.pilot.data.model.Conversation
@@ -225,7 +224,7 @@ class ConversationRuntimeTest {
             TurnTransition.buildStartTurnCommand(
                 current = snapshot.value.durable,
                 turnId = turnId,
-                modelContextCandidate = disclosureCandidate(),
+
                 assistantMessageId = assistantMessageId,
             ),
         )
@@ -407,15 +406,9 @@ class ConversationRuntimeTest {
         rt.bindMcpExecution(turnId, initialWorker, context.assistant.id,
             net.weero.measix.pilot.data.ai.mcp.McpExecutionLease { mcpReleases++ })
         rt.bindTurnContext(turnId, initialWorker, context)
-        val projection = TurnModelContextProjection(entries = emptyList(), locators = emptyMap())
-        rt.bindModelContextProjection(turnId, initialWorker, projection)
         assertSame(context, rt.requireTurnContext(turnId, initialWorker))
-        assertSame(projection, rt.requireTurnModelContextProjection(turnId, initialWorker))
         assertThrows(IllegalStateException::class.java) {
             rt.bindTurnContext(turnId, initialWorker, context)
-        }
-        assertThrows(IllegalStateException::class.java) {
-            rt.bindModelContextProjection(turnId, initialWorker, projection)
         }
         assertThrows(IllegalStateException::class.java) {
             rt.requireTurnContext(Uuid.random(), initialWorker)
@@ -428,7 +421,6 @@ class ConversationRuntimeTest {
         val continuationWorker = Job()
         rt.continueAwaitingUser(handle, continuationWorker)
         assertSame(context, rt.requireTurnContext(turnId, continuationWorker))
-        assertSame(projection, rt.requireTurnModelContextProjection(turnId, continuationWorker))
         rt.releaseTurnWorker(turnId, initialWorker, false)
         assertTrue(inspection.execute { it === net.weero.measix.pilot.test.exampleModelTarget })
         assertEquals(0, mcpReleases)
@@ -477,30 +469,6 @@ class ConversationRuntimeTest {
         val scope = CoroutineScope(Job())
         val rt = runtime(scope)
         val handle = rt.startTurn(Uuid.random(), Uuid.random())
-        rt.retainAwaitingUser(handle)
-
-        assertThrows(IllegalArgumentException::class.java) {
-            rt.continueAwaitingUser(handle, Job())
-        }
-        scope.cancel()
-    }
-
-    @Test
-    fun `approval continuation fails closed when model context projection is missing`() = runTest {
-        val scope = CoroutineScope(Job())
-        val rt = runtime(scope)
-        val turnId = Uuid.random()
-        val handle = rt.startTurn(turnId, Uuid.random())
-        val worker = requireNotNull(rt.currentWorker())
-        val model = Model(modelId = "model", displayName = "Model")
-        val provider = ProviderSetting.OpenAI(models = listOf(model))
-        val assistant = Assistant(id = rt.durable.header.assistantId, enableMemory = false)
-        val context = testTurnContext(
-            settings = Settings(providers = listOf(provider), assistants = listOf(assistant)),
-            model = model, assistant = assistant,
-        )
-        rt.bindModelExecution(turnId, worker, context.assistant.id, context.model.requests as net.weero.measix.pilot.service.runtime.ModelExecutionLease)
-        rt.bindTurnContext(turnId, worker, context)
         rt.retainAwaitingUser(handle)
 
         assertThrows(IllegalArgumentException::class.java) {

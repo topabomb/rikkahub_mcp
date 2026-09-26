@@ -18,7 +18,7 @@ class PlatformSnapshotMapperTest {
     private fun cases() = requireNotNull(javaClass.getResourceAsStream("/contracts/platform/cases.json"))
         .bufferedReader().use { Json.parseToJsonElement(it.readText()).jsonArray }
     private fun fixture(name: String) = cases().first { it.jsonObject.getValue("name").jsonPrimitive.content == name }
-        .jsonObject.getValue("value").toString()
+        .jsonObject.getValue("value").toString().let(::withStarterOpeningMock)
     private val connection get() = PlatformConnection("http://192.168.1.20:8080", PlatformWireCodec.decode(fixture("discovery")))
     private val identity get() = PlatformWireCodec.decode<PlatformBootstrap>(fixture("bootstrap")).let {
         EnterpriseIdentity(connection.authority, it.deployment.name, it.user.userId, it.user.displayName)
@@ -26,10 +26,10 @@ class PlatformSnapshotMapperTest {
     private fun snapshot(name: String = "v4-full") = PlatformWireCodec.decode<PlatformManagedSnapshot>(fixture(name))
     private fun map(snapshot: PlatformManagedSnapshot) = PlatformSnapshotMapper.map(connection, identity, snapshot)
 
-    @Test fun `all published current protocol snapshots map without local bindings or invented defaults`() {
+    @Test fun `Android target mock snapshots map without local bindings or invented defaults`() {
         cases().filter { it.jsonObject.getValue("schema").jsonPrimitive.content == "ManagedSnapshot" && it.jsonObject.getValue("valid").jsonPrimitive.boolean }
             .forEach { value ->
-                val wire = PlatformWireCodec.decode<PlatformManagedSnapshot>(value.jsonObject.getValue("value").toString())
+                val wire = PlatformWireCodec.decode<PlatformManagedSnapshot>(value.jsonObject.getValue("value").toString().let(::withStarterOpeningMock))
                 val candidate = map(wire)
                 assertEquals(wire.managedGeneration, candidate.configuration.generation)
                 assertEquals(wire.policy.defaultModelId, candidate.configuration.defaults.chatModelId)
@@ -126,7 +126,7 @@ class PlatformSnapshotMapperTest {
         shared.forEach { case ->
             val fields = case.jsonObject
             val content = fields.getValue("content").jsonObject.filterKeys { it in base.keys }
-            val wire = PlatformWireCodec.decode<PlatformManagedSnapshot>(JsonObject(base + content).toString())
+            val wire = PlatformWireCodec.decode<PlatformManagedSnapshot>(withStarterOpeningMock(JsonObject(base + content + ("schemaVersion" to JsonPrimitive(4))).toString()))
             if (fields.getValue("expectedCode").jsonPrimitive.content.isEmpty()) map(wire)
             else assertThrows(fields.getValue("name").jsonPrimitive.content, IllegalArgumentException::class.java) { map(wire) }
         }
