@@ -257,6 +257,7 @@ class ConversationQueryService internal constructor(
                     net.weero.measix.pilot.data.enterprise.EnterpriseStarterOpeningSnapshot.serializer(),
                     requireNotNull(opening.definition.openingSnapshot)),
                 net.weero.measix.pilot.data.model.ConversationOpeningCodec.encode(opening),
+                presentation = projectStarterContext(requireNotNull(opening.definition.openingSnapshot)),
             )
         }
         val entry = snapshot.modelContextEntries.single { it.id == item.entryId }
@@ -276,17 +277,12 @@ class ConversationQueryService internal constructor(
             }
         }
         requireCurrentItem()
-        val emptySections = if (entry.payload.source is net.weero.measix.pilot.data.model.ConversationContextSource.Disclosure) {
-            ConversationDisclosureSnapshotService.readSections(text).mapNotNull { (section, value) ->
-                if ((value["rows"] as? kotlinx.serialization.json.JsonArray)?.isEmpty() != true) null else when (section) {
-                    net.weero.measix.pilot.data.model.DisclosureSection.MEMORY -> ConversationContextCategory.MEMORY
-                    net.weero.measix.pilot.data.model.DisclosureSection.SUB_ASSISTANTS -> ConversationContextCategory.ASSISTANTS
-                    net.weero.measix.pilot.data.model.DisclosureSection.ENTERPRISE_MEMORY_SEEDS -> null
-                }
-            }
-        } else emptyList()
+        val presentation = withContext(Dispatchers.Default) {
+            projectConversationContextContent(entry.payload.source, text, snapshot.opening?.definition?.openingSnapshot)
+        }
+        requireCurrentItem()
         ConversationContextContentUiModel(text, kotlinx.serialization.json.Json.encodeToString(
-            net.weero.measix.pilot.data.model.ConversationContextSource.serializer(), entry.payload.source), emptySections)
+            net.weero.measix.pilot.data.model.ConversationContextSource.serializer(), entry.payload.source), presentation = presentation)
     }
 
     fun observeConversation(lease: ConversationViewLease): Flow<ConversationReadState> =

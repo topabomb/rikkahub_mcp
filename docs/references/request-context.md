@@ -76,6 +76,14 @@ input/output 按因果顺序归并为 K，并与当前完整 C 对账。工具�
 且结果足够的操作可以推导效果，未执行不产生效果，不确定或被压缩/移出窗口的效果标为缺失。
 自身已表达效果无需再注入；跨会话或其他未表达差异在下一请求边界补充。没有新请求则不主动生成消息。
 
+`DisclosureSectionChange` 在同一次对账中保存 EXTERNAL_STATE 的逐项差异：新增 ID、修改/移除前的行、
+变化前的属性，以及只读背景的相对顺序变化。比较基准是已归并自身成功工具效果的实际可见 K，
+不是上一条状态包，更不是查看详情时的 Settings。更新后内容由同条 entry 的完整分区正文提供。
+差异仅随 `ConversationContextSource.Disclosure.changes` 与正文一同接纳，服务历史展示；不进入模型输入、
+不改变 format 3、不增加全局事件表或另一份当前配置。这里的移除指退出模型可见集合，不证明资源被物理删除。
+INITIAL/BASELINE_RESTORE 不保存外部差异。历史 source 缺少 changes 时保持 null，详情明确展示当时完整状态，
+不得推断逐项修改。该默认可空字段沿现有 payload version 1 保存，不改 Room schema 或旧正文。
+
 Fork 保留原 `TurnContextSelection` 与 Tool typed result，但不制造新的历史 execution 行。
 `TurnRequestAdmission` 在原 builtin 身份及 namespace 适用时，接受已提交的 `COMPLETED` 结果作为成功证据；
 若本地 execution 存在，仍要求执行与结果均成功。明确 `DENIED` 不产生效果；原 Turn 仍被记录而没有

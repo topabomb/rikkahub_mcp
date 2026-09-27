@@ -3,6 +3,8 @@ package net.weero.measix.pilot.ui.components.message
 import android.content.Context
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
@@ -47,6 +49,7 @@ class ConversationContextAndroidTest {
         val view = ConversationViewLease(Uuid.random(), RealmAccess.Personal, 0L) {}
         val node = MessageNode.of(UIMessage.assistant("Visible answer"))
         var summary by mutableStateOf<MessageContextSummary?>(null)
+        var assistantBubble by mutableStateOf(false)
         var imeVisible = false
         compose.setContent {
             val density = LocalDensity.current
@@ -56,7 +59,7 @@ class ConversationContextAndroidTest {
             SideEffect { imeVisible = ime }
             MaterialTheme { CompositionLocalProvider(
                 LocalDensity provides Density(density.density, 1.8f),
-                LocalSettings provides Settings.dummy(),
+                LocalSettings provides Settings.dummy().let { it.copy(displaySetting = it.displaySetting.copy(showAssistantBubble = assistantBubble)) },
                 LocalToaster provides rememberToasterState(),
                 LocalNavController provides Navigator(rememberNavBackStack()),
             ) {
@@ -87,9 +90,30 @@ class ConversationContextAndroidTest {
             compose.onAllNodesWithContentDescription(description).assertCountEquals(1)
             compose.onNodeWithContentDescription(description).assertIsDisplayed()
             assertEquals(answer, compose.onNodeWithText("Visible answer").getUnclippedBoundsInRoot())
-            compose.runOnIdle { summary = MessageContextSummary(hasContent = true) }
+            val label = compose.onNodeWithText("${context.getString(R.string.context_updated)} ›", useUnmergedTree = true)
+                .getUnclippedBoundsInRoot()
+            assertEquals(answer.left, label.left)
+            compose.onNodeWithContentDescription(description).assertHeightIsEqualTo(32.dp)
+            compose.runOnIdle { assistantBubble = true }
+            assertEquals(compose.onNodeWithText("Visible answer").getUnclippedBoundsInRoot().left,
+                compose.onNodeWithText("${context.getString(R.string.context_updated)} ›", useUnmergedTree = true).getUnclippedBoundsInRoot().left)
+            compose.runOnIdle { summary = MessageContextSummary(hasContent = true); assistantBubble = false }
             assertEquals(baseline, compose.onNodeWithTag("message").getUnclippedBoundsInRoot())
         } finally { view.close() }
+    }
+
+    @Test fun compactUpdateLabelKeepsAnExpandedTouchTarget() {
+        var clicks = 0
+        compose.setContent { MaterialTheme { Column(Modifier.padding(24.dp)) {
+            ContextMessageEntry(true, listOf(ConversationContextCategory.MEMORY)) { clicks++ }
+        } } }
+        val label = context.getString(R.string.context_updated_categories, context.getString(R.string.context_memory))
+        val entry = compose.onNodeWithContentDescription(context.getString(R.string.context_details_accessibility, label))
+        entry.assertHeightIsEqualTo(32.dp)
+        // Six dp above the compact row is inside Compose's 48 dp minimum touch target.
+        val density = context.resources.displayMetrics.density
+        entry.performTouchInput { click(androidx.compose.ui.geometry.Offset(center.x, -6f * density)) }
+        compose.runOnIdle { assertEquals(1, clicks) }
     }
 
     @Test fun aNewRequestDoesNotCollapseTheBodyBeingReadOrOpenItsOwnBody() {
@@ -116,6 +140,57 @@ class ConversationContextAndroidTest {
         compose.onNodeWithText("Reading original body").assertIsDisplayed()
         compose.onNodeWithText(context.getString(R.string.context_request, 1)).performClick()
         compose.onNodeWithText("Reading original body").assertDoesNotExist()
+    }
+
+    @Test fun categoryLabelAndChangeDetailsStayReadableWithoutExposingRawRecords() {
+        val update = item.copy(isCurrentUpdate = true, updatedCategories = item.categories)
+        val system = item.copy(key = "system", entryId = Uuid.random(), categories = listOf(ConversationContextCategory.SYSTEM))
+        val changed = ConversationContextRequestUiModel(Uuid.random(), 0, null, ConversationContextRequestState.ADDED, listOf(system, update))
+        val later = changed.copy(id = Uuid.random(), ordinal = 1, items = listOf(system))
+        val reads = mutableListOf<String>()
+        val original = "<conversation_disclosure_snapshot>raw-json</conversation_disclosure_snapshot>"
+        compose.setContent {
+            val density = LocalDensity.current
+            CompositionLocalProvider(LocalDensity provides Density(density.density, 1.8f)) { MaterialTheme {
+                Column(Modifier.width(320.dp).verticalScroll(rememberScrollState())) {
+                    ContextMessageEntry(true, listOf(ConversationContextCategory.MEMORY, ConversationContextCategory.ASSISTANTS,
+                        ConversationContextCategory.ENTERPRISE_BACKGROUND)) {}
+                    ContextRequestList(ConversationContextDetailsUiModel(listOf(later, changed))) { _, entry ->
+                        reads += entry.key
+                        ConversationContextContentUiModel(original, "internal-source-json", presentation = ConversationContextPresentationUiModel(listOf(
+                            ConversationContextSectionUiModel(category = ConversationContextCategory.MEMORY,
+                                scope = ConversationContextScope.SHARED, reason = ConversationContextReason.EXTERNAL, exactChanges = true,
+                                rows = listOf(
+                                    ConversationContextRowUiModel(id = "7", after = "New shared note", change = ConversationContextChangeKind.ADDED),
+                                    ConversationContextRowUiModel(id = "8", before = "Previous note", after = "Revised note", change = ConversationContextChangeKind.MODIFIED),
+                                    ConversationContextRowUiModel(id = "9", before = "Removed note", change = ConversationContextChangeKind.REMOVED),
+                                )),
+                        )))
+                    }
+                }
+            } }
+        }
+        val label = context.getString(R.string.context_updated_more, context.getString(R.string.context_memory), 3)
+        compose.onNodeWithContentDescription(context.getString(R.string.context_details_accessibility, label)).assertIsDisplayed()
+        compose.onNodeWithText(context.getString(R.string.context_changes_heading)).assertIsDisplayed()
+        compose.onNodeWithText(context.getString(R.string.context_scope_shared)).assertDoesNotExist() // Combined scope and reason.
+        compose.onNodeWithText("${context.getString(R.string.context_scope_shared)} · ${context.getString(R.string.context_reason_external)}")
+            .performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("New shared note").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("Revised note").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("Removed note").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("Previous note").assertDoesNotExist()
+        compose.onNodeWithText(context.getString(R.string.context_before_change)).performScrollTo().performClick()
+        compose.onNodeWithText("Previous note").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText(original).assertDoesNotExist()
+        compose.onNodeWithText("internal-source-json").assertDoesNotExist()
+        compose.onNodeWithText(context.getString(R.string.context_system)).assertDoesNotExist()
+        compose.runOnIdle { assertEquals(listOf(update.key), reads) }
+        compose.onNodeWithText(context.getString(R.string.context_raw_input)).performScrollTo().performClick()
+        compose.onNodeWithText(original).performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText(context.getString(R.string.context_other_inputs)).performScrollTo().performClick()
+        compose.onNodeWithText(context.getString(R.string.context_system)).performScrollTo().assertIsDisplayed()
+        compose.runOnIdle { assertEquals(listOf(update.key), reads) }
     }
 
     @Test fun historicalContentShowsMissingRequestRecordWithoutClaimingItsReadableBodyIsMissing() {

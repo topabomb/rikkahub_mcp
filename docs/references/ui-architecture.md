@@ -714,9 +714,11 @@ Provider/模型名称草稿允许内部空格，保存边界统一 trim 首尾�
 
 UI 消费 `ConversationPresentation` 的消息、typed phase、工具 locator 和附件预览映射，不持有 Runtime Job，也不据显示列表反推 durable 写入。工具交互经 application port 提交；`resultStatus` 表达结果存在性，不能代替活跃执行 phase 或详情页访问门禁。
 
-`ConversationPresentationSnapshot.context` 只携带逐消息的上下文存在性、外部变化和摘要/预置来源标签。`ConversationPresentationProjector` 以订阅内的 durable 引用复用该摘要，纯 streaming 更新不重新扫描历史；durable 更新时以一次性选中分支/因果 USER 与接纳 entry 索引投影，沿 ConversationModelContextApplicability 唯一谓词判断适用性。正文不进入列表模型。`ConversationQueryService.contextDetails` 返回请求和来源目录，`observeContextDetails` 仅在 durable 更新时刷新目录；目录纯计算运行于 Dispatchers.Default，contextContent 只解析指定请求的目录并在展开时读取原文，同一读取前后 durable 引用未变时复用本次定位，变化后重新校验；这些读取保持原 `ConversationViewLease`、域与所选分支，Artifact 文本只经 `ArtifactStore.readContextText` 校验资源身份后读取，IO 结束后再次核对页面与请求关联。摘要与预置内容的 `MessageReference` 直接定位不可变消息 variant，不复制正文或从显示文本推断来源。
+`ConversationPresentationSnapshot.context` 只携带逐消息的上下文存在性、外部变化类别和摘要/预置来源标签。`ConversationPresentationProjector` 以订阅内的 durable 引用复用该摘要，纯 streaming 更新不重新扫描历史；durable 更新时以一次性选中分支/因果 USER 与接纳 entry 索引投影，沿 ConversationModelContextApplicability 唯一谓词判断适用性。正文不进入列表模型。`ConversationQueryService.contextDetails` 返回请求和来源目录，`observeContextDetails` 仅在 durable 更新时刷新目录；目录纯计算运行于 Dispatchers.Default，contextContent 只解析指定请求的目录并在展开时读取原文，同一读取前后 durable 引用未变时复用本次定位，变化后重新校验；这些读取保持原 `ConversationViewLease`、域与所选分支，Artifact 文本只经 `ArtifactStore.readContextText` 校验资源身份后读取，IO 结束后再次核对页面与请求关联。摘要与预置内容的 `MessageReference` 直接定位不可变消息 variant，不复制正文或从显示文本推断来源。
 
-`ChatMessageActionsSheet` 的“上下文”与 `ChatMessage` 正文下的单行“上下文已更新”共用 `ConversationContextDetails` 自适应弹层。初始、时间、提示规则、恢复和自身工具操作不增加主列表行；实际外部变化每个助手消息最多一行，独立于动作栏显隐。空助手不创建头像/气泡，因果 USER 的更多菜单仍可查询。详情首次到达只展开当时最新的请求，所有请求都可通过“请求 N”标题显式切换；展开状态按请求身份保留，新 Step 到来不折叠正在查看的正文或自动展开新请求。时间复用本地日期时间格式；请求与正文分别折叠，协议角色、消息/Step 定位只在原“来源”组展开后显示，不挤入正文区；正文按 entry 身份在弹层内复用，关闭或页面撤权取消读取，读取异常保留原诊断。无接纳凭据的历史仅标“无请求记录”，不能把可读原文标为缺失；预置/摘要等已知保存内容不显示缺请求警告。普通复制、编辑、TTS、分享及附件点击维持原行为。
+`ChatMessageActionsSheet` 的“上下文”与 `ChatMessage` 正文下的单行类别更新标签（如“记忆已更新”）共用 `ConversationContextDetails` 自适应弹层。初始、时间、提示规则、恢复和自身工具操作不增加主列表行；实际外部变化每个助手消息最多一行，独立于动作栏显隐。空助手不创建头像/气泡，因果 USER 的更多菜单仍可查询。详情首次到达优先展开最近有新增外部变化的请求，无变化时展开最新请求，所有请求都可通过“请求 N”标题显式切换；展开状态按请求身份保留，新 Step 到来不折叠正在查看的正文或自动展开新请求。时间复用本地日期时间格式；请求与正文分别折叠，本次变化默认展开，其他输入按需查看；协议角色、消息/Step 定位只在“技术信息”组展开后显示，不挤入正文区；正文按 entry 身份在弹层内复用，关闭或页面撤权取消读取，读取异常保留原诊断。无接纳凭据的历史仅标“无请求记录”，不能把可读原文标为缺失；预置/摘要等已知保存内容不显示缺请求警告。普通复制、编辑、TTS、分享及附件点击维持原行为。
+
+`projectConversationContextContent` 将持久化贡献投影为具备归属、原因、增改移除、修改前后及背景顺序的结构化 UiModel。UI 不解析 payload 或读取当前配置；历史无差异记录明确展示当时完整同步状态。System 按 typed 指令来源分块，模型输入原文单独折叠，长文本八行预览可展开；标签规则及详情层级见 [消息渲染管线](message-rendering-pipeline.md)。
 
 请求目录展示该 Turn 明确选用/追加及同 Turn Step 继承的应用记录；前序 Turn 原文从其原消息查看，
 不提供全部历史应用输入或 HTTP 快照。保存的 USER window/placement variant 只要求仍存在于原节点，

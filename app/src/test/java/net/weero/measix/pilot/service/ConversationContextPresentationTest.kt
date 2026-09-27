@@ -38,12 +38,28 @@ class ConversationContextPresentationTest {
         val state = snapshot(listOf(system, initial, update), listOf(admission(first, listOf(system, initial)), admission(second, listOf(update))))
         val summary = projectConversationContextSummary(state)
         assertTrue(summary.messages.getValue(assistant.currentMessage.id).hasExternalUpdate)
+        assertEquals(listOf(ConversationContextCategory.MEMORY), summary.messages.getValue(assistant.currentMessage.id).externalCategories)
         assertFalse(summary.messages.getValue(user.currentMessage.id).hasExternalUpdate)
         assertTrue(summary.messages.getValue(user.currentMessage.id).hasContent)
         val detail = projectConversationContextDetails(state, user.currentMessage.id)
         assertEquals(listOf(1, 0), detail.requests.map { it.ordinal })
         assertEquals(3, detail.requests.first().items.size)
         assertEquals(2, detail.requests.last().items.size)
+        assertEquals(listOf(update.id), detail.requests.first().items.filter { it.isCurrentUpdate }.map { it.entryId })
+        assertTrue(detail.requests.last().items.none { it.isCurrentUpdate })
+    }
+
+    @Test fun `an inherited external update is not presented as a new change at the next request`() {
+        val update = entry(ConversationContextSource.Disclosure(namespace,
+            linkedMapOf(DisclosureSection.MEMORY to ContextAdmissionReason.EXTERNAL_STATE,
+                DisclosureSection.SUB_ASSISTANTS to ContextAdmissionReason.EXTERNAL_STATE)), 1)
+        val state = snapshot(listOf(system, update), listOf(admission(first, listOf(system, update)), admission(second, emptyList())))
+        val detail = projectConversationContextDetails(state, user.currentMessage.id)
+        assertTrue(detail.requests.first().items.none { it.isCurrentUpdate })
+        assertEquals(listOf(ConversationContextCategory.MEMORY, ConversationContextCategory.ASSISTANTS),
+            detail.requests.last().items.single { it.isCurrentUpdate }.updatedCategories)
+        assertEquals(listOf(ConversationContextCategory.MEMORY, ConversationContextCategory.ASSISTANTS),
+            projectConversationContextSummary(state).messages.getValue(assistant.currentMessage.id).externalCategories)
     }
 
     @Test fun `restoration and unknown historical content never claim external updates`() {

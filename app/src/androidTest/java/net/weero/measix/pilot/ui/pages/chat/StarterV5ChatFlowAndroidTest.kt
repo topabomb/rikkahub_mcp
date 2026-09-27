@@ -219,6 +219,10 @@ class StarterV5ChatFlowAndroidTest {
             assertTrue(admittedSystem.contains(system))
             openContext(uiContext, expectedAnswer)
             compose.onNodeWithText(uiContext.getString(R.string.context_opening)).performScrollTo().performClick()
+            compose.waitUntil(30_000) { compose.onAllNodesWithText(uiContext.getString(R.string.context_raw_input)).fetchSemanticsNodes().isNotEmpty() }
+            compose.onNodeWithText(original).assertDoesNotExist()
+            capture(evidence, "03-opening-structured-detail.png")
+            compose.onNodeWithText(uiContext.getString(R.string.context_raw_input)).performScrollTo().performClick()
             compose.waitUntil(30_000) { compose.onAllNodesWithText(original).fetchSemanticsNodes().isNotEmpty() }
             compose.onNodeWithText(original).performScrollTo().assertIsDisplayed()
             capture(evidence, "03-opening-detail.png")
@@ -236,6 +240,8 @@ class StarterV5ChatFlowAndroidTest {
             compose.waitUntil(30_000) { compose.onAllNodesWithText(expectedAnswer).fetchSemanticsNodes().isNotEmpty() }
             openContext(uiContext, expectedAnswer)
             compose.onNodeWithText(uiContext.getString(R.string.context_opening)).performScrollTo().performClick()
+            compose.waitUntil(30_000) { compose.onAllNodesWithText(uiContext.getString(R.string.context_raw_input)).fetchSemanticsNodes().isNotEmpty() }
+            compose.onNodeWithText(uiContext.getString(R.string.context_raw_input)).performScrollTo().performClick()
             compose.waitUntil(30_000) { compose.onAllNodesWithText(original).fetchSemanticsNodes().isNotEmpty() }
             compose.onNodeWithText(original).performScrollTo().assertIsDisplayed()
             capture(evidence, "04-chat-reopened-detail.png")

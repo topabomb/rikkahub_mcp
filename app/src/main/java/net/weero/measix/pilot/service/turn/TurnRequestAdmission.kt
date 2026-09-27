@@ -272,7 +272,7 @@ internal class TurnRequestAdmission(
             val reconciliation = ConversationDisclosureReconciliation.reconcile(source.read(), plan.disclosureFacts, plan.previouslyDisclosed)
             reconciliation.content?.let { text ->
                 val entry = content(ConversationContextPayload(
-                    source = ConversationContextSource.Disclosure(source.namespace, reconciliation.reasons),
+                    source = ConversationContextSource.Disclosure(source.namespace, reconciliation.reasons, reconciliation.changes),
                     body = ConversationContextBody.Inline(text)), reuse = false)
                 val placement = if (step.ordinal == 0) ContextPlacement.MessagePart(
                     ContextMessageLocator(anchor.id, anchor.currentMessage.id), 0) else ContextPlacement.BeforeStep(stepId)

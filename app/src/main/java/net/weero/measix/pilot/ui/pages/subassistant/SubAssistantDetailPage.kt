@@ -281,7 +281,8 @@ private fun DetailContent(
                             }
                         }
                         if (source != null && state.hasRequestContext) {
-                            ContextMessageEntry(externalUpdate = state.hasExternalContextUpdate) { showContext = true }
+                            ContextMessageEntry(externalUpdate = state.hasExternalContextUpdate,
+                                categories = state.timeline.flatMap { state.child.context.messages[it.currentMessage.id]?.externalCategories.orEmpty() }.distinct()) { showContext = true }
                         }
                     }
                 }

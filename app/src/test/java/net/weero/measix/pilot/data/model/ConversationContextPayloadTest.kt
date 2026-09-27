@@ -1,6 +1,8 @@
 package net.weero.measix.pilot.data.model
 
 import kotlinx.serialization.SerializationException
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonPrimitive
 import me.rerere.ai.core.MessageRole
 import me.rerere.common.configuration.ConfigurationReference
 import org.junit.Assert.assertEquals
@@ -103,5 +105,36 @@ class ConversationContextPayloadTest {
             ContextPlacement.BeforeStep(Uuid.random()), ContextPlacement.MessageOrigin).forEach { placement ->
             assertEquals(placement, ConversationContextCodec.decodePlacement(ConversationContextCodec.encodePlacement(placement)))
         }
+    }
+
+    @Test fun `admitted change facts roundtrip and old payloads retain unknown details`() {
+        val change = DisclosureSectionChange(addedIds = listOf("2"),
+            updatedBefore = listOf(JsonArray(listOf(JsonPrimitive(1), JsonPrimitive("before\r\ntext")))),
+            attributesBefore = mapOf("scope" to JsonPrimitive("local")))
+        val source = ConversationContextSource.Disclosure(null,
+            mapOf(DisclosureSection.MEMORY to ContextAdmissionReason.EXTERNAL_STATE),
+            mapOf(DisclosureSection.MEMORY to change))
+        val payload = ConversationContextPayload(source = source, body = ConversationContextBody.Inline("unchanged model body"))
+        assertEquals(payload, ConversationContextCodec.decode(ConversationContextCodec.encode(payload)))
+        val historical = """{"version":1,"source":{"type":"disclosure","namespace":null,"reasons":{"MEMORY":"EXTERNAL_STATE"}},"body":{"type":"inline","text":"old bytes"}}"""
+        val decoded = ConversationContextCodec.decode(historical)
+        assertEquals(null, (decoded.source as ConversationContextSource.Disclosure).changes)
+        assertEquals("old bytes", (decoded.body as ConversationContextBody.Inline).text)
+    }
+
+    @Test fun `change metadata rejects duplicate identities and invalid section attribution`() {
+        assertThrows(IllegalArgumentException::class.java) {
+            DisclosureSectionChange(addedIds = listOf("1"),
+                removedBefore = listOf(JsonArray(listOf(JsonPrimitive(1), JsonPrimitive("old")))))
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            ConversationContextSource.Disclosure(null, mapOf(DisclosureSection.MEMORY to ContextAdmissionReason.INITIAL),
+                mapOf(DisclosureSection.MEMORY to DisclosureSectionChange(addedIds = listOf("1"))))
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            ConversationContextSource.Disclosure(null, mapOf(DisclosureSection.MEMORY to ContextAdmissionReason.EXTERNAL_STATE),
+                mapOf(DisclosureSection.MEMORY to DisclosureSectionChange(attributesBefore = mapOf("mode" to JsonPrimitive("both")))))
+        }
+        assertThrows(IllegalArgumentException::class.java) { DisclosureSectionChange() }
     }
 }

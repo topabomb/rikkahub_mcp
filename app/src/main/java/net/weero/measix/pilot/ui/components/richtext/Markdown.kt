@@ -275,6 +275,8 @@ fun MarkdownSummary(
         overflow = TextOverflow.Ellipsis, onTextLayout = onTextLayout)
 }
 
+internal val MarkdownContentInset = 4.dp
+
 @Composable
 fun MarkdownBlock(
     content: String,
@@ -319,7 +321,7 @@ private fun MarkdownContent(content: String, modifier: Modifier, style: TextStyl
     } else {
         ProvideTextStyle(style) {
             Column(
-                modifier = modifier.padding(horizontal = 4.dp)
+                modifier = modifier.padding(horizontal = MarkdownContentInset)
             ) {
                 data.astTree.children.fastForEach { child ->
                     MarkdownNode(

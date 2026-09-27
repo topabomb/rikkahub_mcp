@@ -16,6 +16,7 @@ data class MessageContextSummary(
     val hasContent: Boolean,
     val hasExternalUpdate: Boolean = false,
     val origin: ConversationContextCategory? = null,
+    val externalCategories: List<ConversationContextCategory> = emptyList(),
 )
 
 data class ConversationContextSummary(
@@ -29,6 +30,8 @@ data class ConversationContextItemUiModel(
     val name: String?,
     val role: String?,
     val location: String?,
+    val isCurrentUpdate: Boolean = false,
+    val updatedCategories: List<ConversationContextCategory> = emptyList(),
 )
 
 data class ConversationContextRequestUiModel(
@@ -43,8 +46,42 @@ data class ConversationContextDetailsUiModel(val requests: List<ConversationCont
 data class ConversationContextContentUiModel(
     val text: String,
     val source: String?,
-    val emptySections: List<ConversationContextCategory> = emptyList(),
+    val presentation: ConversationContextPresentationUiModel = ConversationContextPresentationUiModel(),
 )
+
+enum class ConversationContextScope { SHARED, ASSISTANT, READ_ONLY, DISABLED, UNKNOWN }
+enum class ConversationContextReason { INITIAL, EXTERNAL, RESTORE, HISTORICAL }
+enum class ConversationContextSystemOwner { DOMAIN, CONVERSATION, ENTERPRISE_OPENING, APPLICATION, CONTEXT_SYNC, TOOL, WORKSPACE, PROMPT_RULE }
+enum class ConversationContextChangeKind { ADDED, MODIFIED, REMOVED }
+
+data class ConversationContextPresentationUiModel(val sections: List<ConversationContextSectionUiModel> = emptyList())
+data class ConversationContextSectionUiModel(
+    val category: ConversationContextCategory,
+    val title: String? = null,
+    val scope: ConversationContextScope? = null,
+    val reason: ConversationContextReason? = null,
+    val rows: List<ConversationContextRowUiModel> = emptyList(),
+    val text: String? = null,
+    val systemOwner: ConversationContextSystemOwner? = null,
+    val exactChanges: Boolean = false,
+    val attributes: List<ConversationContextAttributeUiModel> = emptyList(),
+    val orderBefore: List<ConversationContextRowUiModel> = emptyList(),
+    val orderAfter: List<ConversationContextRowUiModel> = emptyList(),
+)
+data class ConversationContextRowUiModel(
+    val id: String? = null,
+    val title: String? = null,
+    val before: String? = null,
+    val after: String? = null,
+    val change: ConversationContextChangeKind? = null,
+)
+data class ConversationContextAttributeUiModel(val name: String, val before: String?, val after: String)
+
+internal fun DisclosureSection.contextCategory(): ConversationContextCategory = when (this) {
+    DisclosureSection.MEMORY -> ConversationContextCategory.MEMORY
+    DisclosureSection.SUB_ASSISTANTS -> ConversationContextCategory.ASSISTANTS
+    DisclosureSection.ENTERPRISE_MEMORY_SEEDS -> ConversationContextCategory.ENTERPRISE_BACKGROUND
+}
 
 internal fun projectConversationContextSummary(snapshot: ConversationAggregateSnapshot): ConversationContextSummary {
     if (snapshot.modelContextEntries.isEmpty() && snapshot.contextAdmissions.isEmpty() && snapshot.opening == null) return ConversationContextSummary()
@@ -56,10 +93,11 @@ internal fun projectConversationContextSummary(snapshot: ConversationAggregateSn
         admissions.flatMapTo(mutableSetOf()) { it.uses.map(ConversationContextUse::entryId) }
     }
     val summaries = linkedMapOf<Uuid, MessageContextSummary>()
-    fun add(id: Uuid, external: Boolean = false, origin: ConversationContextCategory? = null) {
+    fun add(id: Uuid, external: List<ConversationContextCategory> = emptyList(), origin: ConversationContextCategory? = null) {
         if (id !in selected) return
         val old = summaries[id]
-        summaries[id] = MessageContextSummary(true, old?.hasExternalUpdate == true || external, origin ?: old?.origin)
+        summaries[id] = MessageContextSummary(true, old?.hasExternalUpdate == true || external.isNotEmpty(), origin ?: old?.origin,
+            (old?.externalCategories.orEmpty() + external).distinct().sortedBy { it.ordinal })
     }
     entries.forEach { entry ->
         val source = entry.payload.source
@@ -68,8 +106,9 @@ internal fun projectConversationContextSummary(snapshot: ConversationAggregateSn
             is ConversationContextSource.HistorySummary -> ConversationContextCategory.HISTORY_SUMMARY
             else -> null
         }
-        val external = source is ConversationContextSource.Disclosure && ContextAdmissionReason.EXTERNAL_STATE in source.reasons.values &&
-            entry.id in admittedEntries[entry.ownerMessageId].orEmpty()
+        val external = if (source is ConversationContextSource.Disclosure && entry.id in admittedEntries[entry.ownerMessageId].orEmpty()) {
+            source.reasons.filterValues { it == ContextAdmissionReason.EXTERNAL_STATE }.keys.map { it.contextCategory() }
+        } else emptyList()
         add(entry.ownerMessageId, external, origin)
         // The causal USER retains access when the assistant has no renderable content.
         if (origin == null) add(entry.anchorMessageId)
@@ -109,7 +148,8 @@ internal fun projectConversationContextDetails(
         val items = resolveRequestContextUses(snapshot, admission).mapIndexed { index, located ->
             val entry = requireNotNull(entries[located.use.entryId]) { "context_contribution_missing" }
             entry.toUiItem("${admission.id}/${entry.id}/$index", located.use.role.name,
-                "${located.owner.nodeId}/${located.owner.messageId} · ${located.use.placement}")
+                "${located.owner.nodeId}/${located.owner.messageId} · ${located.use.placement}",
+                currentRequest = entry.stepId == admission.stepId && entry.ownerMessageId == admission.owner.messageId)
         }.toMutableList()
         if (snapshot.opening != null && items.none { ConversationContextCategory.OPENING in it.categories }) items.add(0, openingContextItem())
         ConversationContextRequestUiModel(admission.id, step.ordinal, step.startedAt.toString(), when {
@@ -135,7 +175,7 @@ internal fun projectConversationContextDetails(
 
 private fun openingContextItem() = ConversationContextItemUiModel("opening", null, listOf(ConversationContextCategory.OPENING), null, null, null)
 
-private fun ConversationModelContextEntry.toUiItem(key: String, role: String?, location: String?): ConversationContextItemUiModel {
+private fun ConversationModelContextEntry.toUiItem(key: String, role: String?, location: String?, currentRequest: Boolean = false): ConversationContextItemUiModel {
     val source = payload.source
     val categories = when (source) {
         is ConversationContextSource.Disclosure -> when {
@@ -160,5 +200,8 @@ private fun ConversationModelContextEntry.toUiItem(key: String, role: String?, l
         is ConversationContextSource.Attachment -> source.name
         else -> null
     }
-    return ConversationContextItemUiModel(key, id, categories, name, role, location)
+    val updated = if (currentRequest && source is ConversationContextSource.Disclosure) {
+        source.reasons.filterValues { it == ContextAdmissionReason.EXTERNAL_STATE }.keys.map { it.contextCategory() }
+    } else emptyList()
+    return ConversationContextItemUiModel(key, id, categories, name, role, location, updated.isNotEmpty(), updated)
 }

@@ -79,6 +79,7 @@ import net.weero.measix.pilot.data.model.replaceRegexes
 import net.weero.measix.pilot.data.ai.attachments.AttachmentRefs
 import net.weero.measix.pilot.service.terminalMessagePresentation
 import net.weero.measix.pilot.ui.components.richtext.MarkdownBlock
+import net.weero.measix.pilot.ui.components.richtext.MarkdownContentInset
 import net.weero.measix.pilot.ui.components.richtext.ZoomableAsyncImage
 import net.weero.measix.pilot.ui.components.richtext.buildMarkdownPreviewHtml
 import net.weero.measix.pilot.ui.components.ui.ChainOfThought
@@ -97,6 +98,8 @@ import net.weero.measix.pilot.utils.urlDecode
 
 import kotlinx.coroutines.launch
 import kotlin.uuid.Uuid
+
+private val MessageBubbleContentPadding = 8.dp
 
 @Composable
 fun ChatMessage(
@@ -220,7 +223,11 @@ fun ChatMessage(
 
         if (showContextEntry && hasVisibleMessage && detailSource != null && contextConversationId != null && contextSummary?.hasContent == true &&
             contextSummary.hasExternalUpdate) {
-            ContextMessageEntry(contextSummary.hasExternalUpdate) { showContext = true }
+            val hasText = renderableParts.any { it is UIMessagePart.Text && it.text.isNotBlank() }
+            ContextMessageEntry(contextSummary.hasExternalUpdate, contextSummary.externalCategories,
+                modifier = Modifier
+                    .padding(start = if (hasText && settings.showAssistantBubble) MessageBubbleContentPadding else 0.dp)
+                    .padding(start = if (hasText) MarkdownContentInset else 0.dp)) { showContext = true }
         }
 
         val showActions = if (readOnly) {
@@ -540,7 +547,7 @@ private fun MessagePartsBlock(
                                     ),
                                     onClick = { onUserMessageClick?.invoke() },
                                 ) {
-                                    Column(modifier = Modifier.padding(8.dp)) {
+                                    Column(modifier = Modifier.padding(MessageBubbleContentPadding)) {
                                         MarkdownBlock(
                                             content = part.text.replaceRegexes(
                                                 assistant = assistant,
@@ -560,7 +567,7 @@ private fun MessagePartsBlock(
                                             settings.displaySetting.bubbleOpacity,
                                         ),
                                     ) {
-                                        Column(modifier = Modifier.padding(8.dp)) {
+                                        Column(modifier = Modifier.padding(MessageBubbleContentPadding)) {
                                             MarkdownBlock(
                                                 content = part.text.replaceRegexes(
                                                     assistant = assistant,

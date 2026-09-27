@@ -1,4 +1,4 @@
-﻿package net.weero.measix.pilot.ui.components.richtext
+package net.weero.measix.pilot.ui.components.richtext
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -156,7 +156,7 @@ private fun MarkdownHtmlContent(content: String, modifier: Modifier, style: Text
     }
 
     ProvideTextStyle(style) {
-        Column(modifier = modifier.padding(start = 4.dp)) {
+        Column(modifier = modifier.padding(start = MarkdownContentInset)) {
             document.body().childNodes().fastForEach { node ->
                 HtmlBodyNode(node = node, onClickCitation = onClickCitation)
             }

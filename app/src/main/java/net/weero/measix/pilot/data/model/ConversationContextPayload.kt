@@ -62,7 +62,18 @@ internal sealed interface ConversationContextSource {
         /** Null is an explicit unknown in supported historical rows, not the current namespace. */
         val namespace: DisclosureNamespace?,
         val reasons: Map<DisclosureSection, ContextAdmissionReason> = emptyMap(),
-    ) : ConversationContextSource
+        /** Null means historical change details are unknown; it must never be inferred from current settings. */
+        val changes: Map<DisclosureSection, DisclosureSectionChange>? = null,
+    ) : ConversationContextSource {
+        init {
+            changes?.let { entries ->
+                require(entries.keys == reasons.filterValues { it == ContextAdmissionReason.EXTERNAL_STATE }.keys) {
+                    "disclosure_change_reason_mismatch"
+                }
+                entries.forEach { (section, change) -> change.validateSection(section) }
+            }
+        }
+    }
 
     @Serializable
     @SerialName("system")

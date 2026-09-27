@@ -38,6 +38,9 @@ class ConversationDisclosureReconciliationTest {
             DisclosureSection.ENTERPRISE_MEMORY_SEEDS to obj("""{"header":["id","content"],"rows":[]}"""),
         ))
     private fun snapshot(content: String, applicable: Set<DisclosureSection> = all) = DisclosureFact.Snapshot(content, applicable)
+    private fun replaceSection(content: String, section: DisclosureSection, value: JsonObject): String =
+        ConversationDisclosureSnapshotService.renderSections(
+            ConversationDisclosureSnapshotService.readSections(content) + (section to value))
     private fun memory(input: String, output: String? = null,
         outcome: DisclosureToolOutcome = DisclosureToolOutcome.CONFIRMED_SUCCESS,
         applies: Boolean = true) = DisclosureFact.Tool(DisclosureBuiltinTool.MEMORY, applies, outcome,
@@ -183,5 +186,81 @@ class ConversationDisclosureReconciliationTest {
         assertThrows(DisclosureContentException::class.java) { reconcile(partial) }
         val tooLarge = current.replace("one", "x".repeat(ConversationDisclosureSnapshotService.MAX_CANONICAL_CONTENT_UTF8_BYTES))
         assertThrows(DisclosureContentException::class.java) { reconcile(tooLarge, snapshot(current)) }
+    }
+
+    @Test fun `recorded changes compare against confirmed tool effects rather than the last snapshot`() {
+        val baseline = state(listOf(17 to "A", 18 to "remove", 19 to "unchanged"))
+        val own = memory("""{"action":"edit","id":17,"content":"B"}""", """{"success":true,"id":17}""")
+        val current = state(listOf(17 to "B", 19 to "unchanged", 20 to "added"))
+        val delta = reconcile(current, snapshot(baseline), own).changes.getValue(DisclosureSection.MEMORY)
+        assertEquals(listOf("20"), delta.addedIds)
+        assertEquals(emptyList<JsonArray>(), delta.updatedBefore)
+        assertEquals(listOf(JsonArray(listOf(JsonPrimitive(18), JsonPrimitive("remove")))), delta.removedBefore)
+        assertEquals(emptyMap<String, JsonPrimitive>(), delta.attributesBefore)
+        val overwrite = reconcile(state(listOf(17 to "external", 18 to "remove", 19 to "unchanged")),
+            snapshot(baseline), own).changes.getValue(DisclosureSection.MEMORY)
+        assertEquals(listOf(JsonArray(listOf(JsonPrimitive(17), JsonPrimitive("B")))), overwrite.updatedBefore)
+        assertEquals(emptyMap<DisclosureSection, Any>(), reconcile(state(listOf(17 to "B", 18 to "remove", 19 to "unchanged")),
+            snapshot(baseline), own).changes)
+    }
+
+    @Test fun `clear and property-only changes keep actual old rows and old properties`() {
+        val baseline = state(listOf(17 to "old"))
+        val clear = reconcile(state(), snapshot(baseline)).changes.getValue(DisclosureSection.MEMORY)
+        assertEquals(listOf(JsonArray(listOf(JsonPrimitive(17), JsonPrimitive("old")))), clear.removedBefore)
+        assertEquals(emptyMap<String, JsonPrimitive>(), clear.attributesBefore)
+        val disabled = replaceSection(baseline, DisclosureSection.MEMORY,
+            obj("""{"enabled":false,"scope":"disabled","header":["id","content"],"rows":[]}"""))
+        val change = reconcile(disabled, snapshot(baseline)).changes.getValue(DisclosureSection.MEMORY)
+        assertEquals(mapOf("enabled" to JsonPrimitive(true), "scope" to JsonPrimitive("local")), change.attributesBefore)
+        assertEquals(clear.removedBefore, change.removedBefore)
+        val global = replaceSection(state(), DisclosureSection.MEMORY,
+            obj("""{"enabled":true,"scope":"global","header":["id","content"],"rows":[]}"""))
+        assertEquals(mapOf("scope" to JsonPrimitive("local")),
+            reconcile(global, snapshot(state())).changes.getValue(DisclosureSection.MEMORY).attributesBefore)
+        val mode = replaceSection(state(), DisclosureSection.SUB_ASSISTANTS,
+            obj("""{"mode":"delegation_only","header":["id","name","description"],"rows":[]}"""))
+        val modeChange = reconcile(mode, snapshot(state())).changes.getValue(DisclosureSection.SUB_ASSISTANTS)
+        assertEquals(mapOf("mode" to JsonPrimitive("both")), modeChange.attributesBefore)
+        assertEquals(emptyList<String>(), modeChange.addedIds)
+        assertEquals(emptyList<JsonArray>(), modeChange.updatedBefore)
+    }
+
+    @Test fun `seed additions are distinct from actual surviving-row reorder`() {
+        val target = "managed~test~seed_a"
+        val other = "managed~test~seed_b"
+        fun seeds(vararg ids: String) = replaceSection(state(), DisclosureSection.ENTERPRISE_MEMORY_SEEDS,
+            buildJsonObject {
+                put("header", buildJsonArray { add("id"); add("content") })
+                put("rows", JsonArray(ids.map { buildJsonArray { add(it); add("background") } }))
+            })
+        val baseline = seeds(target, other)
+        val reordered = reconcile(seeds(other, target), snapshot(baseline)).changes.getValue(DisclosureSection.ENTERPRISE_MEMORY_SEEDS)
+        assertEquals(listOf(target, other), reordered.orderBefore)
+        assertEquals(emptyList<JsonArray>(), reordered.updatedBefore)
+        assertEquals(emptyList<String>(), reordered.addedIds)
+        val added = reconcile(baseline, snapshot(seeds(other))).changes.getValue(DisclosureSection.ENTERPRISE_MEMORY_SEEDS)
+        assertEquals(listOf(target), added.addedIds)
+        assertNull(added.orderBefore)
+    }
+
+    @Test fun `initial and restored sections never acquire fabricated change details`() {
+        val current = state(listOf(17 to "new"))
+        assertEquals(emptyMap<DisclosureSection, Any>(), reconcile(current).changes)
+        assertEquals(emptyMap<DisclosureSection, Any>(), reconcile(current, previous = all).changes)
+        val result = reconcile(current, snapshot(state()), DisclosureFact.Missing(setOf(DisclosureSection.SUB_ASSISTANTS)))
+        assertEquals(setOf(DisclosureSection.MEMORY), result.changes.keys)
+    }
+
+    @Test fun `assistant change keeps the actual known name after own tool normalization`() {
+        val baseline = state(assistants = listOf(listOf(target, "Original", "old route")))
+        val own = assistant("""{"action":"UPDATE","assistant_id":"$target","name":"  Own   name  "}""",
+            """{"action":"update","id":"$target","applied":{"name":"Own name"}}""")
+        val current = state(assistants = listOf(listOf(target, "Own name", "external route")))
+        val delta = reconcile(current, snapshot(baseline), own).changes.getValue(DisclosureSection.SUB_ASSISTANTS)
+        assertEquals(listOf(JsonArray(listOf(JsonPrimitive(target), JsonPrimitive("Own name"), JsonPrimitive("old route")))),
+            delta.updatedBefore)
+        assertEquals(emptyList<String>(), delta.addedIds)
+        assertEquals(emptyList<JsonArray>(), delta.removedBefore)
     }
 }

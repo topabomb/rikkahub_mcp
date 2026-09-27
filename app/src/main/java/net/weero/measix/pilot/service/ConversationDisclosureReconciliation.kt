@@ -11,6 +11,7 @@ import net.weero.measix.pilot.data.ai.tools.parseAssistantManageArguments
 import net.weero.measix.pilot.data.model.ContextAdmissionReason
 import net.weero.measix.pilot.data.model.DisclosureSection
 import net.weero.measix.pilot.data.model.DisclosureBuiltinTool
+import net.weero.measix.pilot.data.model.DisclosureSectionChange
 import me.rerere.common.configuration.ConfigurationReference
 
 enum class DisclosureToolOutcome { NOT_EXECUTED, CONFIRMED_SUCCESS, UNCONFIRMED_EXECUTION }
@@ -32,14 +33,15 @@ sealed interface DisclosureFact {
     data class Missing(val sections: Set<DisclosureSection>) : DisclosureFact
 }
 
-data class DisclosureReconciliationResult(
+internal data class DisclosureReconciliationResult(
     val content: String?,
     val reasons: Map<DisclosureSection, ContextAdmissionReason>,
+    val changes: Map<DisclosureSection, DisclosureSectionChange>,
 )
 
 /** Pure model-knowledge projection. Durable context and configuration remain owned by their callers. */
 object ConversationDisclosureReconciliation {
-    fun reconcile(
+    internal fun reconcile(
         currentContent: String,
         facts: List<DisclosureFact>,
         previouslyDisclosed: Set<DisclosureSection>,
@@ -97,7 +99,27 @@ object ConversationDisclosureReconciliation {
             content = if (reasons.isEmpty()) null else ConversationDisclosureSnapshotService.renderSections(
                 current.filterKeys { it in reasons }),
             reasons = reasons,
+            changes = reasons.filterValues { it == ContextAdmissionReason.EXTERNAL_STATE }.keys.associateWith { section ->
+                difference(section, known.getValue(section), current.getValue(section))
+            },
         )
+    }
+
+    private fun difference(section: DisclosureSection, before: JsonObject, after: JsonObject): DisclosureSectionChange {
+        fun JsonObject.index() = rows().associateBy { (it[0] as JsonPrimitive).content }
+        val previous = before.index()
+        val current = after.index()
+        val surviving = previous.keys.intersect(current.keys)
+        val reordered = section == DisclosureSection.ENTERPRISE_MEMORY_SEEDS &&
+            previous.keys.filter { it in surviving } != current.keys.filter { it in surviving }
+        return DisclosureSectionChange(
+            addedIds = current.keys.filter { it !in previous },
+            updatedBefore = previous.filter { (id, row) -> id in current && row != current[id] }.values.toList(),
+            removedBefore = previous.filterKeys { it !in current }.values.toList(),
+            attributesBefore = before.filter { (key, value) -> key != "rows" && key != "header" && value != after[key] }
+                .mapValues { (_, value) -> value as JsonPrimitive },
+            orderBefore = if (reordered) previous.keys.toList() else null,
+        ).also { it.validateSection(section) }
     }
 
     private fun applyMemory(baseline: JsonObject, input: JsonObject, output: JsonObject?): JsonObject? {
