@@ -39,7 +39,7 @@ internal fun StarterOpeningContext(key: Any, load: suspend () -> StarterOpeningD
     var detail by remember(key) { mutableStateOf<StarterOpeningDetailUiModel?>(null) }
     var failure by remember(key) { mutableStateOf<String?>(null) }
     LaunchedEffect(key, expanded) {
-        if (expanded && detail == null) try { detail = load() }
+        if (expanded && detail == null) try { failure = null; detail = load() }
         catch (cancelled: CancellationException) { throw cancelled }
         catch (error: Exception) { failure = openingFailure(error) }
     }

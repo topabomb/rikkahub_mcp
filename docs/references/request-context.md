@@ -7,7 +7,7 @@ Turn/checkpoint 归 [`turn-step-execution.md`](turn-step-execution.md)，模型�
 Durable Conversation、Conversation Presentation 和 Model Request Plan 是三个概念。请求投影不能
 成为第二持久化事实源。应用输入的正文、来源、请求接纳与位置属于 Conversation aggregate。Presentation 只提供轻量摘要，
 详情通过授权 query 按需读取；正文不进入会话列表、FTS 或普通消息分享。变化短标签只定位首次接纳该通知的请求，
-详情仅展示该请求新增的 EXTERNAL 分区；沿用历史不新增标签或请求条目。完整模型输入和来源在对应变化详情中折叠查看，
+详情仅展示该请求新增的 EXTERNAL 分区；沿用历史不新增标签或请求条目。该条通知的完整原文和来源在对应变化详情中折叠查看，
 不设消息“更多 → 上下文”入口。此展示筛选不改变接纳记录、请求投影或历史回放。
 
 ## 上下文策略
@@ -186,6 +186,9 @@ Provider `input_tokens`。`ChatSizeChecker` 的预警读取最近一次发送前
 锚定其消息。Fork 映射 node/message/entry/接纳引用，保留未选 variant 的事实；删除或裁剪通过
 `ConversationContextTransition.prune` 收口。被删位置明确关闭，仍被保留请求使用的不可变正文交接给
 合法存活 owner，BeforeStep 只可在同一因果 owner 内收口，不搬入任意 USER。
+
+只有删除消息、截断或替换消息树执行该重整。START、请求接纳、checkpoint 及普通配置命令保留既有
+entries/admissions 的结构共享，不反复重放全部历史来裁剪；Turn checkpoint 只能扩展已提交 Step，不能移除历史身份。
 
 `ConversationContextIntegrity` 在接纳、装载与恢复时检查身份/引用/域边界；Room 对应表保存
 opening、context entry、request admission 和关联；大正文使用分段读取。Settings 1、transcript 3、enterprise

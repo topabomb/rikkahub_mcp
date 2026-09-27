@@ -56,7 +56,7 @@
 
 `ConversationContextIntegrity` 在命令与加载/备份边界验证 entry/request 身份、来源选择、有效定位和因果关系：禁止引用未来节点/Step、同 node 的兄弟 variant，首次接纳必须有来源选择，同 Turn 后续选择保持一致。类型中的原始来源可保留已删除身份作为历史说明，但有效 placement 必须可定位。
 
-`ConversationContextTransition.prune` 与原结构命令同事务收口：较早接纳或创建 Step 删除前，把后续请求仍依赖的来源选择与位置增量物化到首个必要保留边界，零新增 seal 保留。失效 BeforeStep 向首个保留消费者迁移；失效消息位置用 Omitted 关闭对应贡献，不猜另一个消息。仍被引用的正文按原文转交并重映射，兄弟 variant 不共用对方创建的替代记录。Repository 先删除待替换的 admission/use，随后改节点/条目，再 insert-once 新关联；任何失败回滚整笔事务。
+`ConversationContextTransition.prune` 仅随删除消息、截断或替换消息树同事务收口；普通 START、接纳及 checkpoint 不触发全历史重整。较早接纳或创建 Step 删除前，把后续请求仍依赖的来源选择与位置增量物化到首个必要保留边界，零新增 seal 保留。失效 BeforeStep 向首个保留消费者迁移；失效消息位置用 Omitted 关闭对应贡献，不猜另一个消息。仍被引用的正文按原文转交并重映射，兄弟 variant 不共用对方创建的替代记录。Repository 先删除待替换的 admission/use，随后改节点/条目，再 insert-once 新关联；任何失败回滚整笔事务。
 
 迁移由 Room 在事务内执行，新安装直接使用同构 schema。所有角色的消息均须可解码；旧字段的显式 null 按既有缺省语义处理，错误类型、未知 turn 状态或未知消息 part 必须中止迁移，不得置空后继续。备份校验接受受支持的历史数据库，在 staging 内由同一 Room migration 链升级到当前版本并验证后才发布 pending；当前版本在 staging 移除派生的 `room_master_table`，使 Room 打开时执行生成的 schema 校验并重建标记，不能仅凭既有 identity hash 信任表、列和索引。所有版本另行校验外键和 transcript；当前版本不转换 transcript，不为旧文件名引入额外读取路径。
 

@@ -45,6 +45,36 @@ class PlatformControlClientTest {
     }
 
     @Test
+    fun `snapshot size violation is invalid configuration while response read failure remains network`() = runBlocking {
+        for (oversized in listOf(true, false)) {
+            val server = server {
+                if (oversized) reply(200, "x".repeat(EnterpriseConfigurationCodec.MAX_BYTES + 1))
+                else {
+                    sendResponseHeaders(200, 1024)
+                    try { responseBody.write("{".toByteArray()) } finally { close() }
+                }
+            }
+            try {
+                val connection = PlatformConnection(origin(server), PlatformWireCodec.decode(fixture("discovery")))
+                val error = runCatching { client.snapshot(connection, "access", 1, null) }.exceptionOrNull()
+                assertNotNull(error)
+                val failure = net.weero.measix.pilot.service.EnterpriseSynchronizationFailure.from(error as Exception)
+                if (oversized) {
+                    assertTrue(error is EnterpriseSnapshotContentException)
+                    assertEquals("platform_response_too_large", error.cause?.message)
+                    assertEquals(net.weero.measix.pilot.service.EnterpriseSynchronizationIssue.INVALID_CONFIGURATION, failure.issue)
+                    val discoveryError = runCatching { client.discover(origin(server)) }.exceptionOrNull()
+                    assertTrue(discoveryError is java.io.IOException)
+                    assertEquals("platform_response_too_large", discoveryError?.message)
+                } else {
+                    assertTrue(error is java.io.IOException)
+                    assertEquals(net.weero.measix.pilot.service.EnterpriseSynchronizationIssue.NETWORK, failure.issue)
+                }
+            } finally { server.stop(0) }
+        }
+    }
+
+    @Test
     fun `v4 snapshot download preserves original bytes identity and absent opening`() = runBlocking {
         val raw = fixture("v4-full", target = false)
         val original = PlatformWireCodec.decode<PlatformManagedSnapshot>(raw)

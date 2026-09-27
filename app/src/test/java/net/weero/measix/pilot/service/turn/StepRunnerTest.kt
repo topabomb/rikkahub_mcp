@@ -1,6 +1,5 @@
 package net.weero.measix.pilot.service.turn
 
-import net.weero.measix.pilot.service.runtime.disclosurePayload
 import net.weero.measix.pilot.service.turn.TurnRunPhase
 
 import android.content.Context
@@ -38,7 +37,6 @@ import me.rerere.ai.ui.UIMessageChoice
 import me.rerere.ai.ui.UIMessagePart
 import me.rerere.ai.util.HttpException
 import me.rerere.ai.util.ProviderTerminalStatus
-import net.weero.measix.pilot.data.ai.request.DurableMessageLocator
 import net.weero.measix.pilot.data.ai.attachments.AttachmentResolver
 import net.weero.measix.pilot.data.ai.transformers.InputMessageTransformer
 import net.weero.measix.pilot.data.ai.transformers.ThinkTagTransformer
@@ -459,7 +457,7 @@ class StepRunnerTest {
     }
 
     @Test
-    fun `fixed system is admitted before provider and keeps application rules without disclosure`() = runTest {
+    fun `frozen system and application rules are admitted before provider`() = runTest {
         val harness = createProviderHarness()
         val capture = net.weero.measix.pilot.test.TurnRunCapture()
         harness.handler.run(turnRunInputsFixture(

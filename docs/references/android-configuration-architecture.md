@@ -106,7 +106,7 @@ Android v4/v5 的唯一 wire 来源为 Core 导出的 `contracts/platform/client
 长期协议演进与消费者义务集中定义于 [Control Protocol §10.10.3](../../../measix/measix-architecture/docs/10-runtime-foundation/s0/measix-s0-control-protocol.md#10103-snapshot-兼容用户提示与后续演进)；此处只记录 Android 实现落点。
 
 - `EnterpriseSessionController.readPresentation` 的 `canEnterEnterprise` 与 `switchRealm` 共用数据访问规则。有效身份在 CONFIGURATION_PENDING 也可选择企业空间；`EnterpriseAppliedStore` 保存并恢复此选择，无需改变 manifest 格式。个人空间不依赖企业网络配置；过期、撤销、关闭和跨主体限制继续生效。
-- `EnterpriseSnapshotCompatibilityException` 携带服务端版本与客户端支持集合；空集合或混合不匹配不误报客户端过旧。`validateSnapshotContent` 只包围 Snapshot 解码、身份/ETag 和映射校验，把非法内容标记为 `EnterpriseSnapshotContentException` 并保留 cause；网络、HTTP、持久化错误与取消不冒充版本不兼容。
+- `EnterpriseSnapshotCompatibilityException` 携带服务端版本与客户端支持集合；空集合或混合不匹配不误报客户端过旧。Snapshot 成功响应超过 4 MiB 上限，以及 `validateSnapshotContent` 内的解码、身份/ETag、映射校验失败，均标记为 `EnterpriseSnapshotContentException` 并保留 cause。真实读流失败仍为网络错误；HTTP、持久化错误与取消不冒充版本不兼容，其他接口不沿用 Snapshot 的内容错误分类。
 - `EnterpriseSynchronizationService` 是共享同步及其瞬态结果的唯一来源，结果绑定 `RealmAccess.Enterprise`。同一 Session 去重，取消等待者不撤销共享工作；主动取消传播并保留此前失败。发布结果在 StateFlow CAS 中复验 Session，旧任务不得覆盖新主体状态。此结果不是第二份配置或执行许可，不另落盘。
 - Native 同步与接入后的配置同步消费同次 `EnterpriseSynchronizationCommandResult`：成功、失败已呈现或已被替代；失败不再重复发布通用错误或误报接入资料无效。执行调用仍传播原异常，取消不转成命令失败。
 - 启动恢复、手动同步、进入企业空间及执行前补同步复用上述链。空间切换成功后异步同步，不以远端下载成功作为导航条件；兼容性失败保留绑定、Applied 和历史。执行前若已观察到同步失败，须先经同一入口重试，再进行原 Core Managed State/generation 准入；已有 READY 或缓存代际不能绕过失败。

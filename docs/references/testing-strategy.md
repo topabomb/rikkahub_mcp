@@ -141,7 +141,9 @@ AndroidX JSON 的 `sampledMetrics` 保留每轮耗时与 `JavaAllocatedBytesAppr
 
 Starter v4/v5 使用 Core 导出的单一 OpenAPI、manifest 和共享 cases，来源见 [配置架构](android-configuration-architecture.md)。`PlatformContractSourceTest` 验证来源摘要，`PlatformCoreStarterContractTest` 消费 Core v5 canonical opening 并核对字面内容/顺序，`PlatformWireTest` 验证各版本严格解析。`withStarterOpeningMock` 仅为独立网络错误/变化场景构造确定性输入与 Mock hash，不承担 wire schema 权威。`EnterpriseStarterAppliedStoreTest` 在真实临时文件上验证 opening 原文/顺序、历史缺失、Session Discovery `[4]` 与 revision 保全；`PlatformSessionNetworkTest` 覆盖 Bootstrap 仍支持的已知 v4/v5 缓存使用 304、未知或已撤销版本不发送 ETag、意外 304 拒绝且保全 Applied，以及 v4→v5 下载后的原子发布和重开。`EnterpriseStarterPersistenceAndroidTest` 在独立 noBackup 目录使用真实 Android Keystore 和 AtomicFile，验证发布后重开及历史文件原文不被改写。测试存在不表示设备或真实 Core 联调已经通过，须分别记录执行结果。
 
-`StarterOpeningSelectionTest` 覆盖轻量导航、原发布来源保留、定义变更与撤销；`ConversationPageAccessTest` 以真实 runtime/command 链验证提交后 UI 拒收的精确补偿，以及旧选择 token 不能覆盖后来绑定。`StarterOpeningDetailsAndroidTest` 验证默认折叠时不读取正文、展开后的字面文本和重复展开的查询次数；不能据此代替三个完整入口、首发失败及 IME/旋转场景的实际设备验证。
+`StarterOpeningSelectionTest` 覆盖轻量导航、原发布来源保留、定义变更与撤销；`ConversationPageAccessTest` 以真实 runtime/command 链验证提交后 UI 拒收的精确补偿，以及旧选择 token 不能覆盖后来绑定。`StarterOpeningDetailsAndroidTest` 验证默认折叠时不读取正文、首次失败保留诊断、重新展开成功清除旧错误、字面文本及成功后重复展开不重读；不能据此代替三个完整入口、首发失败及 IME/旋转场景的实际设备验证。
+
+`ConversationContextPruneTest` 覆盖删除、截断、替换树时保留消费者所需来源的交接，并验证普通 START、checkpoint、追加、编辑及标题修改不重整已封存历史。`ConversationDisclosureReconciliationTest` 在真实对账入口检查完整状态的 UTF-8 大小上限，包括差异很小但完整状态超限，避免只测试已无生产调用的分区选择函数。`PlatformControlClientTest` 通过 HTTP 区分超限 Snapshot、真实读流失败及其他接口超限，保护配置错误与网络错误的归属。
 
 `StarterEntryFlowAndroidTest` 共用真实 Applied/Keystore、Session、Application、Runtime 和 command owner，遍历 v4/v5 的空间预览、聊天快捷菜单与空白聊天卡片；验证原输入和附件保留、v4 仅填提示词、v5 绑定原定义/发布 hash，以及 Ready 再选仅追加提示词。该测试的 Repository 提交使用明确 ACK mock，落盘保全由 opening Room 与 Applied 设备测试独立覆盖，不能视作完整平台网络或全页面导航验收。
 
@@ -153,13 +155,13 @@ Starter v4/v5 使用 Core 导出的单一 OpenAPI、manifest 和共享 cases，�
 
 `ConversationContextPresentationTest` 以 1000 节点和 500 条接纳的访问计数验证摘要不反复扫描分支且只输出实际变化 marker；覆盖 11 请求一次变化、多次变化按 Step 归属、跨 Turn 沿用无新 marker、混合原因只展示 EXTERNAL 但保留原文，以及 selected variant/streaming 稳定性。恢复与初始不产生通用入口；preset/summary 来源仍沿原投影。`ConversationContextQueryTest` 保留授权目录、按需 Artifact 原文、关闭/分支切换迟到结果拒绝和诊断/取消边界。`ConversationContextAndroidTest` 验证所选请求变化正文、原文/技术来源的独立折叠、关闭取消读取、失败重试与新请求不抢阅读；窄屏、大字体、IME 下核对短标签左对齐、紧凑间距与点击区域。`ChatMessageCotTest` 断言只有通知 Step 分组、标签在完整工具结果后及受影响输出前，普通 Step 连续折叠不变。`SubAssistantDetailPageAndroidTest` 核对子助手在实际消息 Step 展示通知、请求区无聚合入口，以及无正文终态与后续输出的边界稳定。`ChatInputStateAndroidTest` 保留持久提交后清理、迟到回调、同文件重选和编辑输入保全。测试存在不代表已运行，设备结果单独记账。
 
-`ConfigurationFeedbackTest` 区分下一次发送（START）生效的配置与立即呈现的视觉配置，避免背景或视觉正则显示延迟生效。`PromptPageAndroidTest` 通过实际编辑弹层切换位置、修改深度和提交，验证 role 保留、条件显隐与 200dp 正文编辑区不随标签变更而改变；既有 `AssistantPromptPageAndroidTest` 继续验证后台更新后提交使用原编辑基线。
+`ConfigurationFeedbackTest` 区分下一次发送（START）生效的配置与立即呈现的视觉配置，避免背景或视觉正则显示延迟生效。`PromptPageAndroidTest` 通过实际编辑弹层切换位置、修改深度和提交，输入后关闭 IME 并等待布局稳定再检查滚动目标，验证 role 保留、条件显隐与 200dp 正文编辑区不随标签变更而改变；既有 `AssistantPromptPageAndroidTest` 继续验证后台更新后提交使用原编辑基线。
 
 `AdaptiveModalFeedbackAndroidTest` 验证嵌套配置模态只有活动 host 显示一条反馈，父内容不会因暂时隐藏反馈而重建。`ConversationCommandAccessTest` 通过原 worker 清理 barrier 区分接受请求与 Append 已提交：等待期间退出并重新登录不补写旧请求，多次替换必须等待全部原清理且只有最终请求取得 durable receipt。
 
 `TurnWorkloadBenchmarks.renderHundredActiveAssistantUpdatesWithContext` 使用独立 `compose_context_100` 场景：1000 个节点、26 组有效 System/披露与接纳记录，生产 `ConversationPresentationProjector` 和真实 `ChatMessage` 的轻量摘要；仅最后助手出现一条外部更新，100 次流式更新期间正文保持折叠。沿用原 Trace、分配与 frame 指标；原 `compose_100` 场景保留。两者 fixture 的历史角色结构不同，不能把耗时差简单当作上下文功能开销；该场景也不代表详情正文展开、查询或真实模型网络成本。
 
-`ChatContextFlowAndroidTest` 经真实 `RouteActivity`、Settings/Memory/Conversation owner、Room 和 OpenAI 适配器驱动连续三次发送及工具续步；HTTP 仅连接本机 Mock。首请求等待时从原选择器切模型，通过 owner 改 System、提示规则、Memory 和子助手目录；两次记忆写入与一次助手管理沿正式审批执行，验证同 Turn 模型/System/规则固定、完整工具结果先于外部变化、自身操作不额外注入。下一 START 采用新配置，聊天扩展中关闭规则后第三 START 不再含该规则；核对实际 Step 标签、该次变化详情及原文，后续请求不重复展示。测试截图优先保存在 instrumentation `additionalTestOutputDir` 下的 `context-ui-evidence`，未提供参数时才使用应用外部文件目录；fixture 只创建随机身份的助手/Provider/会话，结束后恢复原选择、域与最近会话引用。`SettingsStartupTest` 验证最近会话设值后以 null 清除只影响指定域，不改变其他域或资源选择。
+`ChatContextFlowAndroidTest` 在失败时保留截图、语义树及有界直接/流式查询诊断，诊断异常仅追加到原异常，不重试或改写失败结果。该用例经真实 `RouteActivity`、Settings/Memory/Conversation owner、Room 和 OpenAI 适配器驱动连续三次发送及工具续步；HTTP 仅连接本机 Mock。首请求等待时从原选择器切模型，通过 owner 改 System、提示规则、Memory 和子助手目录；两次记忆写入与一次助手管理沿正式审批执行，验证同 Turn 模型/System/规则固定、完整工具结果先于外部变化、自身操作不额外注入。下一 START 采用新配置，聊天扩展中关闭规则后第三 START 不再含该规则；核对实际 Step 标签、该次变化详情及原文，后续请求不重复展示。测试截图优先保存在 instrumentation `additionalTestOutputDir` 下的 `context-ui-evidence`，未提供参数时才使用应用外部文件目录；fixture 只创建随机身份的助手/Provider/会话，结束后恢复原选择、域与最近会话引用。`SettingsStartupTest` 验证最近会话设值后以 null 清除只影响指定域，不改变其他域或资源选择。
 
 `ChatDocumentContextFlowAndroidTest` 从实际上传菜单导入含占位符和反引号的文档，再经 ChatVM、Room 与 Provider adapter 发送。系统文件选择器的返回 URI 和 HTTP 是 fixture，Artifact 导入与上下文接纳为真实路径。断言用户模板、文档和时间不二次渲染，DOCUMENT_TEXT/REFERENCE_ONLY 保持各自来源与实际位置，授权 query 读取的原文与 wire 一致，Activity 重开保留接纳且无外部更新行；不通过已移除菜单读取附件输入。截图与请求位于 `document-context-ui-evidence`。持久会话基线使用授权 `recentConversations` 查询，不以会先发出 loading 空列表的 Flow 首次发射当作数据库为空。
 

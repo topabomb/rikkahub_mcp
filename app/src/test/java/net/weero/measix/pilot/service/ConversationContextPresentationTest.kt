@@ -39,7 +39,6 @@ class ConversationContextPresentationTest {
         val summary = projectConversationContextSummary(state)
         assertEquals(listOf(ConversationContextUpdateMarker(second.stepId, state.contextAdmissions.last().id,
             listOf(ConversationContextCategory.MEMORY))), summary.messages.getValue(assistant.currentMessage.id).updates)
-        assertEquals(listOf(ConversationContextCategory.MEMORY), summary.messages.getValue(assistant.currentMessage.id).updates.single().categories)
         assertFalse(summary.messages.containsKey(user.currentMessage.id))
         val detail = projectConversationContextDetails(state, user.currentMessage.id)
         assertEquals(listOf(1, 0), detail.requests.map { it.ordinal })
@@ -49,26 +48,10 @@ class ConversationContextPresentationTest {
         assertTrue(detail.requests.last().items.none { it.isCurrentUpdate })
     }
 
-    @Test fun `an inherited external update is not presented as a new change at the next request`() {
+    @Test fun `eleven requests expose only the first newly admitted update`() {
         val update = entry(ConversationContextSource.Disclosure(namespace,
             linkedMapOf(DisclosureSection.MEMORY to ContextAdmissionReason.EXTERNAL_STATE,
                 DisclosureSection.SUB_ASSISTANTS to ContextAdmissionReason.EXTERNAL_STATE)), 1)
-        val state = snapshot(listOf(system, update), listOf(admission(first, listOf(system, update)), admission(second, emptyList())))
-        val detail = projectConversationContextDetails(state, user.currentMessage.id)
-        assertTrue(detail.requests.first().items.none { it.isCurrentUpdate })
-        assertEquals(listOf(first.stepId), projectConversationContextSummary(state).messages.getValue(assistant.currentMessage.id).updates.map { it.stepId })
-        assertTrue(detail.forUpdate(state.contextAdmissions.last().id).requests.isEmpty())
-        assertEquals(listOf(update.id), detail.forUpdate(state.contextAdmissions.first().id).requests.single().items.map { it.entryId })
-        assertEquals(listOf(ConversationContextCategory.MEMORY, ConversationContextCategory.ASSISTANTS),
-            detail.requests.last().items.single { it.isCurrentUpdate }.updatedCategories)
-        assertEquals(listOf(ConversationContextCategory.MEMORY, ConversationContextCategory.ASSISTANTS),
-            projectConversationContextSummary(state).messages.getValue(assistant.currentMessage.id).updates.single().categories)
-    }
-
-
-    @Test fun `eleven requests expose only the first newly admitted update`() {
-        val update = entry(ConversationContextSource.Disclosure(namespace,
-            mapOf(DisclosureSection.MEMORY to ContextAdmissionReason.EXTERNAL_STATE)), 1)
         val steps = listOf(first) + (1..10).map { first.copy(stepId = Uuid.random(), ordinal = it) }
         val owner = assistant.copy(messages = listOf(assistant.currentMessage.copy(parts = steps)))
         val admissions = steps.mapIndexed { index, step -> admission(step, if (index == 0) listOf(system, update) else emptyList()) }
@@ -76,9 +59,12 @@ class ConversationContextPresentationTest {
         val markers = projectConversationContextSummary(state).messages.getValue(owner.currentMessage.id).updates
         assertEquals(listOf(first.stepId), markers.map { it.stepId })
         assertEquals(admissions.first().id, markers.single().requestId)
+        assertEquals(listOf(ConversationContextCategory.MEMORY, ConversationContextCategory.ASSISTANTS), markers.single().categories)
         val details = projectConversationContextDetails(state, owner.currentMessage.id)
         assertEquals(11, details.requests.size)
         assertEquals(listOf(update.id), details.forUpdate(markers.single().requestId).requests.single().items.map { it.entryId })
+        assertEquals(markers.single().categories, details.requests.last().items.single { it.isCurrentUpdate }.updatedCategories)
+        assertTrue(details.requests.dropLast(1).all { request -> request.items.none { it.isCurrentUpdate } })
         admissions.drop(1).forEach { assertTrue(details.forUpdate(it.id).requests.isEmpty()) }
     }
 

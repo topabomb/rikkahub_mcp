@@ -134,17 +134,9 @@ internal data class ConversationMutation(
     val upsertedNodeIndices: List<Int>,
     /** Child conversations are durable but intentionally excluded from the user search index. */
     val indexForSearch: Boolean = true,
-    /**
-     * 本次命令追加的 append-only 模型上下文条目。只有 StartTurn 能填它：Draft materialization、
-     * 普通 append、编辑与纯变体选择都必须为空，因为 context 只随一次真实 START 的 Assistant slot
-     * 原子提交。
-     */
+    /** Immutable application inputs, message origins or bodies handed over from retired owners. */
     val insertedModelContextEntries: List<ConversationModelContextEntry> = emptyList(),
-    /**
-     * 以被删除 message variant 为 owner 或 anchor 的完整条目。删除整个 node 由 FK cascade
-     * 收口，因此这里只表达“node 仍在、variant 没了”的精确删除；携带完整条目以便按
-     * (owner_node_id, owner_message_id) 主键删除，不按全局 message id 误伤其他 Conversation。
-     */
+    /** Exact retired entry identities, including bodies transferred to surviving request owners. */
     val deletedModelContextEntries: List<ConversationModelContextEntry> = emptyList(),
     val insertedContextAdmissions: List<ConversationContextAdmission> = emptyList(),
     val deletedContextAdmissions: List<ConversationContextAdmission> = emptyList(),
@@ -221,8 +213,9 @@ data class ConversationHeader(
  * UI 必须拿 [ConversationPresentationSnapshot]。否则 modelContextEntries 会
  * 随 aggregate 一起泄漏成第二事实源，靠“约定 UI 不读某个字段”维持边界。
  *
- * [modelContextEntries] 是 append-only 模型上下文（Disclosure Snapshot baseline）：不进入
- * [ConversationHeader]、不进入 presentation、不进入 FTS。UI 末节点合并已移到 projector。
+ * [modelContextEntries] holds immutable application input and source facts; [contextAdmissions]
+ * holds their request boundaries. Bodies stay out of headers, presentation and FTS; the projector
+ * exposes only request markers and queries load authorized details on demand.
  */
 internal data class ConversationAggregateSnapshot(
     val conversationId: Uuid,

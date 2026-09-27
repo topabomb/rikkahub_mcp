@@ -23,20 +23,28 @@ class StarterOpeningDetailsAndroidTest {
     private val detail = StarterOpeningDetailUiModel("Task", "Editable starting prompt", "{{user}} original system",
         listOf(StarterContextUiModel("Background", "<data>{{literal}}</data>")), false, true)
 
-    @Test fun contextIsCollapsedAndQueriedOnlyOnDemand() {
+    @Test fun contextLoadsOnDemandAndRetryClearsFailureWithoutReloadingSavedContent() {
         val reads = AtomicInteger()
         compose.setContent {
-            MaterialTheme { Column { StarterOpeningContext("first") { reads.incrementAndGet(); detail } } }
+            MaterialTheme { Column { StarterOpeningContext("first") {
+                if (reads.incrementAndGet() == 1) throw IllegalStateException("opening_read_failed")
+                detail
+            } } }
         }
         compose.onNodeWithText(detail.systemPrompt!!).assertDoesNotExist()
         compose.runOnIdle { assertEquals(0, reads.get()) }
         compose.onNodeWithText(context.getString(R.string.opening_context)).performClick()
+        compose.onNodeWithText("IllegalStateException: opening_read_failed", substring = true).assertIsDisplayed()
+        compose.onNodeWithText(detail.systemPrompt).assertDoesNotExist()
+        compose.onNodeWithText(context.getString(R.string.opening_context)).performClick()
+        compose.onNodeWithText(context.getString(R.string.opening_context)).performClick()
+        compose.onNodeWithText("opening_read_failed", substring = true).assertDoesNotExist()
         compose.onNodeWithText(detail.systemPrompt).assertIsDisplayed()
         compose.onNodeWithText(detail.contexts.single().content).assertIsDisplayed()
-        compose.runOnIdle { assertEquals(1, reads.get()) }
+        compose.runOnIdle { assertEquals(2, reads.get()) }
         compose.onNodeWithText(context.getString(R.string.opening_context)).performClick()
         compose.onNodeWithText(detail.systemPrompt).assertDoesNotExist()
         compose.onNodeWithText(context.getString(R.string.opening_context)).performClick()
-        compose.runOnIdle { assertEquals(1, reads.get()) }
+        compose.runOnIdle { assertEquals(2, reads.get()) }
     }
 }

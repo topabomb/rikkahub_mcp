@@ -17,11 +17,10 @@ import androidx.room.PrimaryKey
  * 可能冲突的事实源。按 Conversation 装载时以 `owner_node_id` JOIN `message_node` 并按
  * `message_node.conversation_id` 过滤。
  *
- * 主键是 (owner_node_id, owner_message_id) 而非自增 id：一个 Assistant request variant 最多
- * 拥有一份聚合 Snapshot，且命令重放必须能被判定为幂等（同 key + 同 content）或冲突
- * （同 key + 不同 content）。唯一性以 owner node 为作用域，因为 Fork / Child clone 保留
- * message id、只重建 node id，同一 message id 合法地存在于多个 Conversation。
- * owner_node_id 前缀查找由主键索引覆盖，因此只显式声明 anchor 索引。
+ * 主键由 (owner_node_id, owner_message_id, occurrence) 派生；同一消息 variant 可拥有多个
+ * 不可变条目，Step 接纳记录另存实际使用位置。insert-once 按完整行判断幂等或冲突。
+ * Fork / Child clone 的新 node 身份形成新的幂等域，保留的 message id 不会跨会话冲突。
+ * owner_node_id 前缀查找由 occurrence 唯一索引覆盖；anchor 索引用于因果引用的级联收口。
  */
 @Entity(
     tableName = "conversation_model_context",

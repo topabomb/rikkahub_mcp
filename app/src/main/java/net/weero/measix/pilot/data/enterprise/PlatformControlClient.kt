@@ -48,6 +48,8 @@ internal fun requirePlatformPath(value: String) {
 internal class PlatformHttpException(val status: Int, val problem: PlatformProblem?, detail: String) :
     IOException("HTTP $status: ${problem?.code ?: "platform_http_error"}: $detail")
 
+private class PlatformResponseTooLargeException : IOException("platform_response_too_large")
+
 internal sealed interface PlatformSnapshotResponse {
     data class Downloaded(val snapshot: PlatformManagedSnapshot) : PlatformSnapshotResponse
     data object NotModified : PlatformSnapshotResponse
@@ -95,7 +97,9 @@ internal class PlatformControlClient(client: OkHttpClient) {
                 PlatformSnapshotResponse.NotModified
             } else {
                 requireStatus(response, 200)
-                val raw = body(response)
+                val raw = try { body(response) } catch (oversized: PlatformResponseTooLargeException) {
+                    throw EnterpriseSnapshotContentException(oversized)
+                }
                 validateSnapshotContent {
                     val snapshot = PlatformWireCodec.decode<PlatformManagedSnapshot>(raw)
                     require(snapshot.deploymentId == connection.discovery.deploymentId && snapshot.managedGeneration == generation) {
@@ -158,7 +162,7 @@ internal class PlatformControlClient(client: OkHttpClient) {
 
     private fun body(response: Response): String {
         val source = response.body.source()
-        if (source.request(EnterpriseConfigurationCodec.MAX_BYTES.toLong() + 1)) throw IOException("platform_response_too_large")
+        if (source.request(EnterpriseConfigurationCodec.MAX_BYTES.toLong() + 1)) throw PlatformResponseTooLargeException()
         return source.readUtf8()
     }
 

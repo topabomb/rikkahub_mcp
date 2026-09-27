@@ -9,6 +9,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.unit.dp
+import androidx.test.espresso.Espresso.closeSoftKeyboard
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import me.rerere.ai.core.MessageRole
 import net.weero.measix.pilot.R
@@ -38,6 +39,8 @@ class PromptPageAndroidTest {
         compose.onNodeWithText(compose.activity.getString(R.string.prompt_page_position_at_depth)).performClick()
         val depthLabel = compose.activity.getString(R.string.prompt_page_inject_depth)
         compose.onNodeWithText(depthLabel).performScrollTo().performTextReplacement("1")
+        closeSoftKeyboard()
+        compose.waitForIdle()
         compose.onNodeWithText(roleLabel).performScrollTo().assertIsDisplayed()
         compose.onNodeWithText("{{literal}}").performScrollTo().assertHeightIsEqualTo(200.dp)
         compose.runOnIdle {

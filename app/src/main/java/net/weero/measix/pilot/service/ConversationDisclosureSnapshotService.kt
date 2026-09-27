@@ -127,15 +127,6 @@ object ConversationDisclosureSnapshotService {
         return canonicalJson.encodeToString(JsonObject.serializer(), envelope).also(::requireCanonical)
     }
 
-    /** Validates the whole state before selecting sections, so a small update cannot bypass the cap. */
-    fun selectSections(completeContent: String, included: Set<DisclosureSection>): String {
-        val sections = readSections(completeContent)
-        if (sections.keys != DisclosureSection.entries.toSet()) {
-            throw DisclosureContentException("current disclosure state must contain every section")
-        }
-        return renderSections(sections.filterKeys { it in included })
-    }
-
     fun readSections(content: String): Map<DisclosureSection, JsonObject> {
         requireDurableEnvelope(content)
         val root = parseEnvelope(content)

@@ -152,7 +152,7 @@ internal data class EnterpriseStarter(
     val description: String? = null,
     val sortOrder: Int = 0,
     val enabled: Boolean = true,
-    /** Absent only in historical Applied data; current network snapshots require an opening. */
+    /** Absent in v4 publications and historical Applied data; v5 publications supply an opening. */
     val openingSnapshot: EnterpriseStarterOpeningSnapshot? = null,
 )
 

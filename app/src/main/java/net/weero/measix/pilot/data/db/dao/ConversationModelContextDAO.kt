@@ -11,7 +11,7 @@ import net.weero.measix.pilot.data.db.entity.ConversationContextAdmissionEntity
 import net.weero.measix.pilot.data.db.entity.ConversationContextUseEntity
 import net.weero.measix.pilot.data.db.entity.ConversationOpeningEntity
 
-/** 同一 owner 已提交不同 content：append-only 历史不能被覆盖，命令必须失败。 */
+/** 同一条目或接纳身份已提交不同内容：不可变历史不能被覆盖，命令必须失败。 */
 class ModelContextConflictException(message: String) : IllegalStateException(message)
 
 /**
@@ -22,7 +22,7 @@ class ModelContextConflictException(message: String) : IllegalStateException(mes
  * 一个 variant 可拥有多个不可变输入，Fork 的新 node 身份决定新的幂等域。
  * - 首次 key 插入成功；
  * - 相同 key + 相同 row 的命令重放幂等；
- * - 相同 key + 任何字段不同（content / anchor）明确冲突，绝不覆盖历史 entry。
+ * - 相同 key + 任何字段不同（payload / anchor）明确冲突，绝不覆盖历史 entry。
  *
  * Conversation 归属只由 owner node 推导，因此装载走 `owner_node_id JOIN message_node`；
  * 本表不保存 `conversation_id`，避免第二个可能冲突的归属事实源。

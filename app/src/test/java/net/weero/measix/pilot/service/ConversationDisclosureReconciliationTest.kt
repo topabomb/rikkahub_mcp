@@ -37,6 +37,8 @@ class ConversationDisclosureReconciliationTest {
             },
             DisclosureSection.ENTERPRISE_MEMORY_SEEDS to obj("""{"header":["id","content"],"rows":[]}"""),
         ))
+    private fun memorySection(content: String) = ConversationDisclosureSnapshotService.renderSections(
+        ConversationDisclosureSnapshotService.readSections(content).filterKeys { it == DisclosureSection.MEMORY })
     private fun snapshot(content: String, applicable: Set<DisclosureSection> = all) = DisclosureFact.Snapshot(content, applicable)
     private fun replaceSection(content: String, section: DisclosureSection, value: JsonObject): String =
         ConversationDisclosureSnapshotService.renderSections(
@@ -82,7 +84,7 @@ class ConversationDisclosureReconciliationTest {
             val current = state(rows)
             val result = reconcile(current, snapshot(baseline), own)
             assertEquals(mapOf(DisclosureSection.MEMORY to ContextAdmissionReason.EXTERNAL_STATE), result.reasons)
-            assertEquals(ConversationDisclosureSnapshotService.selectSections(current, setOf(DisclosureSection.MEMORY)), result.content)
+            assertEquals(memorySection(current), result.content)
         }
         assertNull(reconcile(baseline, snapshot(baseline)).content)
         assertNull(reconcile(state(listOf(17 to "B")), snapshot(baseline), own).content)
@@ -161,7 +163,7 @@ class ConversationDisclosureReconciliationTest {
     @Test fun `partial snapshots and missing markers follow causal order per section`() {
         val baseline = state(listOf(17 to "A"))
         val current = state(listOf(17 to "B"))
-        val memoryOnly = ConversationDisclosureSnapshotService.selectSections(current, setOf(DisclosureSection.MEMORY))
+        val memoryOnly = memorySection(current)
         assertNull(reconcile(current, snapshot(baseline), snapshot(memoryOnly)).content)
         assertNull(reconcile(current, snapshot(baseline), DisclosureFact.Missing(setOf(DisclosureSection.MEMORY)), snapshot(memoryOnly)).content)
         assertEquals(mapOf(DisclosureSection.MEMORY to ContextAdmissionReason.BASELINE_RESTORE),
@@ -182,10 +184,25 @@ class ConversationDisclosureReconciliationTest {
         val current = state(listOf(1 to "one", 2 to "two"), listOf(listOf(target, "A", "a"), listOf(other, "B", "b")))
         val reversed = state(listOf(2 to "two", 1 to "one"), listOf(listOf(other, "B", "b"), listOf(target, "A", "a")))
         assertNull(reconcile(current, snapshot(reversed)).content)
-        val partial = ConversationDisclosureSnapshotService.selectSections(current, setOf(DisclosureSection.MEMORY))
+        val partial = memorySection(current)
         assertThrows(DisclosureContentException::class.java) { reconcile(partial) }
-        val tooLarge = current.replace("one", "x".repeat(ConversationDisclosureSnapshotService.MAX_CANONICAL_CONTENT_UTF8_BYTES))
-        assertThrows(DisclosureContentException::class.java) { reconcile(tooLarge, snapshot(current)) }
+        // Exercise the production reconciliation path: the changed catalog alone is small,
+        // but unchanged UTF-8 memory still participates in the complete candidate size limit.
+        val empty = state(listOf(1 to ""))
+        val remaining = ConversationDisclosureSnapshotService.MAX_CANONICAL_CONTENT_UTF8_BYTES - empty.encodeToByteArray().size
+        val text = "界".repeat(remaining / 3) + "x".repeat(remaining % 3)
+        val atLimit = state(listOf(1 to text))
+        // Construct the historical baseline with small memory; the confirmed own write supplies
+        // the large current value without requiring an oversized historical snapshot.
+        val baseline = state(listOf(1 to "old"), listOf(listOf(target, "A", "a")))
+        val own = DisclosureFact.Tool(DisclosureBuiltinTool.MEMORY, true, DisclosureToolOutcome.CONFIRMED_SUCCESS,
+            buildJsonObject { put("action", "edit"); put("id", 1); put("content", text) },
+            obj("""{"success":true,"id":1}"""))
+        assertEquals(ConversationDisclosureSnapshotService.MAX_CANONICAL_CONTENT_UTF8_BYTES, atLimit.encodeToByteArray().size)
+        assertEquals(mapOf(DisclosureSection.SUB_ASSISTANTS to ContextAdmissionReason.EXTERNAL_STATE),
+            reconcile(atLimit, snapshot(baseline), own).reasons)
+        val tooLarge = atLimit.replace(text, text + "x")
+        assertThrows(DisclosureContentException::class.java) { reconcile(tooLarge, snapshot(baseline), own) }
     }
 
     @Test fun `recorded changes compare against confirmed tool effects rather than the last snapshot`() {

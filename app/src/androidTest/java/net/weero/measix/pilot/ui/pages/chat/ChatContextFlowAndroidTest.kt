@@ -316,6 +316,19 @@ class ChatContextFlowAndroidTest {
                 capture(context, "failure.png")
                 File(outputDirectory(context), "failure-semantics.txt").writeText(compose.onAllNodes(isRoot()).fetchSemanticsNodes().joinToString("\n") { root -> compose.onNode(SemanticsMatcher("root") { it.id == root.id }).printToString() })
             } catch (diagnostic: Throwable) { error.addSuppressed(diagnostic) }
+            try {
+                view?.let { lease ->
+                    val facts = awaitUi(3_000) {
+                        val snapshot = requireNotNull(query.aggregateSnapshot(lease.conversationId))
+                        val message = snapshot.currentMessages().last { it.role == MessageRole.ASSISTANT }
+                        val direct = query.contextDetails(lease, snapshot.conversationId, message.id)
+                        val request = direct.requests.first { it.items.any { item -> item.isCurrentUpdate } }
+                        val observed = query.observeContextDetails(lease, snapshot.conversationId, message.id, requireNotNull(request.id)).first()
+                        "directRequests=${direct.requests.size}; observedOrdinals=${observed.requests.map { it.ordinal }}"
+                    }
+                    File(outputDirectory(context), "failure-query.txt").writeText(facts)
+                }
+            } catch (diagnostic: Throwable) { error.addSuppressed(diagnostic) }
             throw error
         } finally {
             server.releaseFirst.countDown()

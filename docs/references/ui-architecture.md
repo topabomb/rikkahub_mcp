@@ -720,7 +720,7 @@ UI 消费 `ConversationPresentation` 的消息、typed phase、工具 locator �
 
 `ChatMessage` 和子助手只读时间线在实际新增变化的 Step 边界显示短标签；消息“更多”和子助手请求区没有通用“上下文”入口。同一请求合并变化类别；不同通知按各自 Step 放在前一完整工具结果之后、受影响输出之前。首请求的标签在输出开头。仅通知边界切开思考/工具折叠组，普通 Step 不切分；后续请求或 Turn 沿用历史不增加标签。有通知但无生成正文的失败/取消消息仍可查看通知及原终态，没有通知的空消息维持原显隐。
 
-`ConversationContextDetails` 的自适应弹层标题是“上下文变化”，点击 marker 后固定 `requestId`，只展示该请求新产生的 EXTERNAL 条目和分区，不列出继承请求或“其他上下文”。`forUpdate` 在 UiModel 层筛选结构化内容，完整模型输入和技术来源仍按需展开，混合 INITIAL/RESTORE 分区不冒充变化。详情保留唯一请求的时间与实际状态，接纳不代表模型已收到；后续更新不切换当前阅读对象。普通复制、编辑、TTS、分享及附件点击不变，Starter 继续从原开场入口查看，预置/摘要沿原署名位置标明来源。
+`ConversationContextDetails` 的自适应弹层标题是“上下文变化”，点击 marker 后固定 `requestId`，只展示该请求新产生的 EXTERNAL 条目和分区，不列出继承请求或“其他上下文”。`forUpdate` 在 UiModel 层筛选结构化内容，该条通知的完整原文和技术来源仍按需展开，混合 INITIAL/RESTORE 分区不冒充变化。详情保留唯一请求的时间与实际状态，接纳不代表模型已收到；后续更新不切换当前阅读对象。普通复制、编辑、TTS、分享及附件点击不变，Starter 继续从原开场入口查看，预置/摘要沿原署名位置标明来源。
 
 `ConversationQueryService.contextDetails` 保留授权请求目录查询，`observeContextDetails` 只在 durable 更新时刷新；纯投影运行于 Dispatchers.Default。`contextContent` 解析指定请求的目录并按需读取原文，Artifact 文本经 `ArtifactStore.readContextText` 校验资源身份，IO 前后重验页面 lease、域、所选 owner 及请求关联。相同 entry 的正文在弹层内复用，关闭、切域或切换 owner 后取消读取并拒绝迟到结果；异常保留原诊断。query 的全目录能力供既有调用/验证使用，不再作为普通消息通用浏览入口。
 

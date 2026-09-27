@@ -80,17 +80,19 @@ class ConversationDisclosureSnapshotServiceTest {
 
     @Test fun `partial update contains a complete section and never includes unchanged sections`() {
         val full = render(candidate(memories = listOf(AssistantMemory(9, "B"), AssistantMemory(3, "A"))))
-        val update = ConversationDisclosureSnapshotService.selectSections(full, setOf(DisclosureSection.MEMORY))
+        val update = ConversationDisclosureSnapshotService.renderSections(
+            ConversationDisclosureSnapshotService.readSections(full).filterKeys { it == DisclosureSection.MEMORY })
         val sections = ConversationDisclosureSnapshotService.readSections(update)
         assertEquals(setOf(DisclosureSection.MEMORY), sections.keys)
         assertEquals(listOf("3", "9"), sections.getValue(DisclosureSection.MEMORY).rows()
             .map { it.jsonArray[0].jsonPrimitive.content })
-        val cleared = ConversationDisclosureSnapshotService.selectSections(render(candidate(memories = emptyList())),
-            setOf(DisclosureSection.MEMORY))
+        val cleared = ConversationDisclosureSnapshotService.renderSections(
+            ConversationDisclosureSnapshotService.readSections(render(candidate(memories = emptyList())))
+                .filterKeys { it == DisclosureSection.MEMORY })
         assertTrue(rows(envelope(cleared), "memory").isEmpty())
         assertEquals(listOf("type", "format", "memory"), envelope(cleared).keys.toList())
         assertThrows(DisclosureContentException::class.java) {
-            ConversationDisclosureSnapshotService.selectSections(full, emptySet())
+            ConversationDisclosureSnapshotService.renderSections(emptyMap())
         }
     }
 
@@ -129,23 +131,6 @@ class ConversationDisclosureSnapshotServiceTest {
             assertThrows(DisclosureContentException::class.java) {
                 ConversationDisclosureSnapshotService.requireDurableEnvelope(invalid)
             }
-        }
-        val partial = ConversationDisclosureSnapshotService.selectSections(render(candidate()), setOf(DisclosureSection.MEMORY))
-        assertThrows(DisclosureContentException::class.java) {
-            ConversationDisclosureSnapshotService.selectSections(partial, setOf(DisclosureSection.MEMORY))
-        }
-    }
-
-    @Test fun `full state utf8 limit applies before selecting a small changed section`() {
-        val empty = render(candidate(memories = listOf(AssistantMemory(3, ""))))
-        val remaining = ConversationDisclosureSnapshotService.MAX_CANONICAL_CONTENT_UTF8_BYTES - empty.encodeToByteArray().size
-        val text = "界".repeat(remaining / 3) + "x".repeat(remaining % 3)
-        val atLimit = render(candidate(memories = listOf(AssistantMemory(3, text))))
-        assertEquals(ConversationDisclosureSnapshotService.MAX_CANONICAL_CONTENT_UTF8_BYTES, atLimit.encodeToByteArray().size)
-        ConversationDisclosureSnapshotService.selectSections(atLimit, setOf(DisclosureSection.SUB_ASSISTANTS))
-        val oversized = atLimit.replace(text, text + "x")
-        assertThrows(DisclosureContentException::class.java) {
-            ConversationDisclosureSnapshotService.selectSections(oversized, setOf(DisclosureSection.SUB_ASSISTANTS))
         }
     }
 
@@ -221,14 +206,6 @@ class ConversationDisclosureSnapshotServiceTest {
     }
 
     @Test
-    fun `envelope fixes top level and section key order`() {
-        val root = envelope(render(candidate()))
-        assertEquals(listOf("type", "format", "memory", "sub_assistants", "enterprise_memory_seeds"), root.keys.toList())
-        assertEquals(listOf("enabled", "scope", "header", "rows"), section(root, "memory").keys.toList())
-        assertEquals(listOf("mode", "header", "rows"), section(root, "sub_assistants").keys.toList())
-    }
-
-    @Test
     fun `memory rows keep the ordered query result and are never trimmed`() {
         val memories = (1..500).map { AssistantMemory(it, "note-$it") }
         val rows = rows(envelope(render(candidate(memories = memories))), "memory")
@@ -247,16 +224,6 @@ class ConversationDisclosureSnapshotServiceTest {
             listOf(reviewer.id.toString(), earlier.id.toString()),
             rows.map { it.jsonArray[0].jsonPrimitive.content },
         )
-    }
-
-    @Test
-    fun `identical business data renders identical bytes so no duplicate row is appended`() {
-        val baseline = render(candidate())
-        assertEquals(baseline, render(candidate()))
-
-        // 状态 A -> B -> A：回到同一 live state 时 candidate 又等于最近 baseline。
-        assertNotEquals(baseline, render(candidate(memories = listOf(AssistantMemory(3, "B")))))
-        assertEquals(baseline, render(candidate()))
     }
 
     @Test

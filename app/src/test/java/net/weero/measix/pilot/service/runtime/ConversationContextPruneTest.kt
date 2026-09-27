@@ -4,6 +4,8 @@ import me.rerere.ai.core.MessageRole
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
 import net.weero.measix.pilot.data.model.*
+import net.weero.measix.pilot.data.db.entity.TurnExecutionStatus
+import net.weero.measix.pilot.testkit.sampledModelResult
 import org.junit.Assert.*
 import org.junit.Test
 import kotlin.time.Instant
@@ -30,6 +32,29 @@ class ConversationContextPruneTest {
         contextAdmissions = listOf(admission(oldOwner, firstStep, user), admission(nextOwner, secondStep, nextUser)))
     private fun validate(snapshot: ConversationAggregateSnapshot) = ConversationContextIntegrity.validate(snapshot.nodes,
         snapshot.modelContextEntries, snapshot.contextAdmissions, snapshot.opening, snapshot.header.scope)
+
+    @Test fun `ordinary turn progress shares sealed history without replaying or rewriting admissions`() {
+        val original = base().copy(nodes = listOf(user, oldOwner),
+            contextAdmissions = listOf(admission(oldOwner, firstStep, user)))
+        val response = oldOwner.currentMessage.copy(parts = listOf(
+            firstStep.copy(modelResult = sampledModelResult("stop")), UIMessagePart.Text("answer")))
+        val commands = listOf(
+            AppendUserMessage(UIMessage.user("next request")),
+            UpdateHeader(title = "renamed"),
+            EditMessageVariant(user.id, UIMessage.user("edited variant")),
+            TurnTransition.buildStartTurnCommand(original, Uuid.random()),
+            ModelResponseCheckpoint(
+                turn = TurnHandle(original.conversationId, 0, Uuid.random(), oldOwner.currentMessage.id),
+                step = StepHandle(firstStep.stepId), assistantMessage = response,
+                turnStatus = TurnExecutionStatus.RUNNING,
+            ),
+        )
+        commands.forEach { command ->
+            val updated = ConversationTransition.apply(original, command)
+            assertSame(command.toString(), original.modelContextEntries, updated.modelContextEntries)
+            assertSame(command.toString(), original.contextAdmissions, updated.contextAdmissions)
+        }
+    }
 
     @Test fun `retired owner hands shared body to retained request without dangling selection or uses`() {
         val original = base()

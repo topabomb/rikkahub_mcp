@@ -127,10 +127,14 @@ internal object ConversationTransition {
                     command.assistantId != current.header.assistantId) null else current.draftOpeningSelectionToken,
             )
         }
-        // context 生命周期收口的唯一位置：node/variant 一旦被任何树命令删除，其 entry 即从
-        // aggregate 消失（DB 侧由同一 mutation 的显式 owner/anchor 删除与 FK cascade 对齐）。
-        // 选择变体不会剪枝——unselected owner 的 entry 保留，切回时恢复其 baseline。
-        val next = ConversationContextTransition.prune(reduced, current)
+        // Only destructive tree commands can retire a context owner or placement. START adds
+        // a variant; checkpoints and compaction retain message/Step identities. Replaying every
+        // historical admission on those hot paths would make each tool result quadratic in history.
+        val next = when (command) {
+            is DeleteMessage, is TruncateToNodeIndex, is ReplaceMessageTree ->
+                ConversationContextTransition.prune(reduced, current)
+            else -> reduced
+        }
         if (command is ReplaceMessageTree && command.messageOrigins.isNotEmpty()) {
             net.weero.measix.pilot.data.model.ConversationContextIntegrity.validate(
                 next.nodes, next.modelContextEntries, next.contextAdmissions, next.opening, next.header.scope,
@@ -337,8 +341,8 @@ internal object ConversationTransition {
                 }
             }
         }
-        // model-context 窄 delta：插入只来自 StartTurn 的判等结果；删除覆盖
-        // node 级（FK cascade 之外的 anchor 悬挂行）与 variant 级两种收口。
+        // Context identity is immutable. Request admission, message origins and retained-body
+        // handover all use the same exact insert/delete delta alongside the message mutation.
         val oldContextIds = old.modelContextEntries.mapTo(HashSet()) { it.id }
         val insertedContextEntries = new.modelContextEntries.filter {
             it.id !in oldContextIds
