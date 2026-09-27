@@ -94,6 +94,32 @@ class ConversationDisclosureSnapshotServiceTest {
         }
     }
 
+    @Test fun `historical formats retain retired enterprise references without admitting them to current envelopes`() {
+        val hash = "a".repeat(64)
+        val prefix = "managed~platform~$hash~dep_history~"
+        for (format in 1..2) {
+            val seeds = if (format == 2) ",\"enterprise_memory_seeds\":{\"header\":[\"id\",\"content\"],\"rows\":[[\"${prefix}mem_one\",\"original seed\"]]}" else ""
+            val old = """{"type":"conversation_disclosure_snapshot","format":$format,"memory":{"enabled":false,"scope":"disabled","header":["id","content"],"rows":[]},"sub_assistants":{"mode":"delegation_only","header":["id","name","description"],"rows":[["${prefix}asd_child","Child","original description"]]}$seeds}"""
+            assertEquals(format, ConversationDisclosureSnapshotService.requireDurableEnvelope(old))
+            val sections = ConversationDisclosureSnapshotService.readSections(old)
+            assertEquals("${prefix}asd_child", sections.getValue(DisclosureSection.SUB_ASSISTANTS)
+                .getValue("rows").jsonArray.single().jsonArray[0].jsonPrimitive.content)
+            assertThrows(DisclosureContentException::class.java) {
+                ConversationDisclosureSnapshotService.requireCanonical(old)
+            }
+            assertThrows(DisclosureContentException::class.java) {
+                ConversationDisclosureSnapshotService.requireDurableEnvelope(old.replace("\"format\":$format", "\"format\":3"))
+            }
+            assertThrows(DisclosureContentException::class.java) {
+                ConversationDisclosureSnapshotService.requireDurableEnvelope(old.replace(hash, "bad!source"))
+            }
+            val currentIds = old.replace("managed~platform~$hash~", "managed~")
+            assertEquals(format, ConversationDisclosureSnapshotService.requireCanonical(currentIds))
+            assertEquals(format, ConversationDisclosureSnapshotService.requireDurableEnvelope(
+                currentIds.replace("dep_history", "platform")))
+        }
+    }
+
     @Test fun `null empty and incomplete sections cannot masquerade as updates`() {
         listOf(
             """{"type":"conversation_disclosure_snapshot","format":3}""",

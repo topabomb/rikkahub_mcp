@@ -12,11 +12,13 @@ import kotlin.uuid.Uuid
 import me.rerere.ai.core.MessageRole
 import me.rerere.ai.ui.UIMessage
 import net.weero.measix.pilot.data.db.transcript.readTranscriptPayload
+import net.weero.measix.pilot.data.db.transcript.migrateEnterpriseTranscriptReferences
 import net.weero.measix.pilot.utils.JsonInstant
 
 /** Retains historical disclosure bytes without inventing a Step, namespace, reason, or opening. */
 val Migration_13_14 = object : Migration(13, 14) {
     override fun migrate(db: SupportSQLiteDatabase) {
+        migrateEnterpriseTranscriptReferences(db)
         db.execSQL("""
             CREATE TABLE conversation_model_context_new (
                 id TEXT NOT NULL PRIMARY KEY,

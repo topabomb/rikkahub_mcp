@@ -46,6 +46,16 @@ class LegacyTurnTranscriptMigratorTest {
     private fun legacyMessage(parts: String, role: String = "assistant") =
         """[{"id":"$messageId","role":"$role","parts":$parts}]"""
 
+    @Test
+    fun `legacy enterprise model identity upgrades before typed transcript validation`() {
+        val oldModel = "managed~platform~${"a".repeat(64)}~dep_example~mdl_chat"
+        val raw = """[{"id":"$messageId","role":"assistant","modelId":"$oldModel","parts":[{"type":"text","text":"original"}]}]"""
+        val converted = LegacyTurnTranscriptMigrator.convertNode(raw, emptyMap(), json)
+        val message = json.decodeFromString<List<UIMessage>>(converted).single()
+        assertEquals("managed~dep_example~mdl_chat", message.modelId.toString())
+        assertEquals("original", (message.parts.last() as UIMessagePart.Text).text)
+    }
+
     private fun convert(parts: String, turnStatus: Map<Uuid, String> = emptyMap()): List<UIMessagePart> {
         val out = LegacyTurnTranscriptMigrator.convertNode(legacyMessage(parts), turnStatus, json)
         return JsonArray(json.parseToJsonElement(out).jsonArray.first().jsonObject["parts"]!!.jsonArray)

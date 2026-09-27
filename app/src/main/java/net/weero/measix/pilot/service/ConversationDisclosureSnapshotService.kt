@@ -18,6 +18,7 @@ import net.weero.measix.pilot.data.ai.tools.local.LocalToolOption
 import net.weero.measix.pilot.data.model.Assistant
 import net.weero.measix.pilot.data.model.AssistantMemory
 import net.weero.measix.pilot.data.model.DisclosureSection
+import net.weero.measix.pilot.data.configuration.LegacyEnterprisePrincipalEncoding
 import me.rerere.common.configuration.ConfigurationReference
 
 /** canonical envelope 非法：装载或提交必须失败，不得静默把模型基线降级为"没有 context"。 */
@@ -164,7 +165,7 @@ object ConversationDisclosureSnapshotService {
      */
     fun requireDurableEnvelope(content: String): Int {
         requireWithinRequestCapability(content)
-        return validateEnvelope(parseEnvelope(content))
+        return validateEnvelope(parseEnvelope(content), historical = true)
     }
 
     /**
@@ -184,7 +185,7 @@ object ConversationDisclosureSnapshotService {
         return format
     }
 
-    private fun validateEnvelope(root: JsonObject): Int {
+    private fun validateEnvelope(root: JsonObject, historical: Boolean = false): Int {
         val type = requireString(root, "type", "envelope")
         if (type != CONTENT_TYPE) {
             throw DisclosureContentException("unexpected disclosure type \"$type\"")
@@ -202,12 +203,13 @@ object ConversationDisclosureSnapshotService {
         requireKeyOrder(root, keys, "envelope")
         if (keys.size == 2) throw DisclosureContentException("disclosure must contain at least one section")
         if ("memory" in root) validateMemory(requireObject(root, "memory", "envelope"))
-        if ("sub_assistants" in root) validateSubAssistants(requireObject(root, "sub_assistants", "envelope"))
-        if ("enterprise_memory_seeds" in root) validateSeeds(requireObject(root, "enterprise_memory_seeds", "envelope"))
+        val historicalReferences = historical && format in 1..2
+        if ("sub_assistants" in root) validateSubAssistants(requireObject(root, "sub_assistants", "envelope"), historicalReferences)
+        if ("enterprise_memory_seeds" in root) validateSeeds(requireObject(root, "enterprise_memory_seeds", "envelope"), historicalReferences)
         return format
     }
 
-    private fun validateSeeds(section: JsonObject) {
+    private fun validateSeeds(section: JsonObject, historicalReferences: Boolean) {
         requireKeyOrder(section, SEED_KEYS, "enterprise_memory_seeds")
         requireHeader(section, MEMORY_HEADER, "enterprise_memory_seeds")
         val ids = mutableSetOf<String>()
@@ -215,8 +217,8 @@ object ConversationDisclosureSnapshotService {
             val cells = row.asArrayOrThrow("enterprise memory seed row")
             if (cells.size != 2) throw DisclosureContentException("enterprise memory seed row must have 2 cells")
             val id = cells[0].asStringOrThrow("enterprise memory seed id")
-            val reference = runCatching { ConfigurationReference.parse(id) }.getOrNull()
-            if (reference !is ConfigurationReference.Enterprise || reference.toString() != id || !ids.add(id)) {
+            val reference = canonicalReference(id, historicalReferences)
+            if (reference !is ConfigurationReference.Enterprise || !ids.add(id)) {
                 throw DisclosureContentException("enterprise memory seed requires a unique canonical enterprise reference")
             }
             cells[1].asStringOrThrow("enterprise memory seed content")
@@ -325,7 +327,7 @@ object ConversationDisclosureSnapshotService {
         }
     }
 
-    private fun validateSubAssistants(section: JsonObject) {
+    private fun validateSubAssistants(section: JsonObject, historicalReferences: Boolean) {
         requireKeyOrder(section, SUB_ASSISTANT_KEYS, "sub_assistants")
         val mode = requireString(section, "mode", "sub_assistants")
         if (mode !in SUB_ASSISTANT_MODES) {
@@ -346,9 +348,17 @@ object ConversationDisclosureSnapshotService {
             // id 必须是规范配置引用文本，否则无法与 durable Assistant identity 对齐。
             val id = cells[0].asStringOrThrow("sub_assistant id")
             if (!ids.add(id)) throw DisclosureContentException("duplicate sub_assistant id")
-            runCatching { ConfigurationReference.parse(id) }.getOrNull()?.takeIf { it.toString() == id }
+            canonicalReference(id, historicalReferences)
                 ?: throw DisclosureContentException("sub_assistant id is not a canonical configuration reference: $id")
         }
+    }
+
+    /** Formats 1/2 retain their original identity syntax. Validation never rewrites replay bytes. */
+    private fun canonicalReference(id: String, historicalReferences: Boolean): ConfigurationReference? {
+        val encoded = if (historicalReferences && id.count { it == '~' } == 4) {
+            LegacyEnterprisePrincipalEncoding.migrateReference(id) ?: return null
+        } else id
+        return runCatching { ConfigurationReference.parse(encoded) }.getOrNull()?.takeIf { it.toString() == encoded }
     }
 
     private fun parseEnvelope(content: String): JsonObject {

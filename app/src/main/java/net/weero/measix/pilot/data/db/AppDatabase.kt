@@ -44,8 +44,9 @@ import net.weero.measix.pilot.utils.JsonInstant
  * `Migration_11_12` 将既有记录归入个人域，保留原 ID、payload 和引用关系。
  * 消息、turn、tool 和 context 从所属会话取得域，不重复存储第二份主体。
  * v13：企业主体仅由 deploymentId 与 userId 构成，删除 URL 派生的来源字段。
+ * v15：数据迁移补齐历史消息与会话注入引用中的企业身份，表结构与 v14 相同。
  */
-const val APP_DATABASE_VERSION = 14
+const val APP_DATABASE_VERSION = 15
 
 @Database(
     entities = [

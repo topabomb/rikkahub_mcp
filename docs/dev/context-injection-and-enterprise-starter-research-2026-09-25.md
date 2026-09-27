@@ -975,7 +975,7 @@ T41 的发送边界分别注入定义失效、Append 失败、Append 成功后 S
 | W06 | `RequestContextPlanner` 保留因果尾部恢复、工具闭合与窗口规则；`resolveUsesAt` 统一历史接纳查询；重试不重新采样 |
 | W07 | 提示位置、深度与稳定排序统一；规则/模板/应用数据分流，不二次模板渲染；保留原 Settings 数据结构 |
 | W08 | 时间、文档、附件、预置、手动摘要均保留 typed 来源；工具图片路径重建仍能追溯原附件；摘要保留近期节点及其 variant 身份 |
-| W09 | Room 14 的 entry、admission、use 与 opening；正文和轻量查询分离，长正文复用 Artifact，生命周期沿 Conversation/Artifact 原 owner |
+| W09 | Room 的 entry、admission、use 与 opening；v14 引入结构，v15 补齐历史企业引用数据迁移。正文和轻量查询分离，长正文复用 Artifact，生命周期沿 Conversation/Artifact 原 owner |
 | W10 | `Migration_13_14`、真实 Room、备份图和 Artifact context 引用；Settings 1、transcript 3、企业 manifest 6 不变 |
 | W11 | 原消息更多菜单→上下文；每助手消息最多一行外部更新；正文懒读，切域/关闭后迟到结果失效；Child 详情固定原请求区域入口 |
 | W12 | 原提示编辑器只改位置/深度标签；原配置保存反馈说明下次发送生效，即时外观设置不误报；五种语言资源同步 |
@@ -1136,7 +1136,7 @@ Demo AVD 保留数据重启后，实际打开会话 `03cdbcc9-cf7b-4134-bdf0-dd7
 2026-09-27 重新完整阅读本文，并将全部工作树改动分为请求/运行链、持久化/企业协议、UI/文档三组审查。
 请求链和持久化分别由独立上下文审查；最终集成、构建和设备验证由主执行者完成。
 文档删除仅交付设计的过时表述，明确上下文详情限本 Turn 的接纳与继承记录；
-当前参考同时移除附件管线中的旧 Workspace transformer 顺序，补全 Room 14 迁移导航。
+当前参考同时移除附件管线中的旧 Workspace transformer 顺序，补全 Room 迁移导航。
 
 **发送失败与附件所有权。** 首发因 Starter 定义更新而拒绝时，保留输入必须同时保留文件创建权。
 `sendMessage` 在 Append 未提交时先将 `ArtifactSubmission` 归还原草稿，再完成失败回执；
@@ -1243,3 +1243,20 @@ App 完整设备报告为 252 项，238 通过、14 项环境或显式启用跳�
 证据目录为 Android `build/reports/starter-delivery-review/` 和 Core `.artifacts/starter-delivery-review/`。独立模拟器始终为 `emulator-5562`，生产 demo `emulator-5560` 未清理或改配。生成代码、UTF-8/换行、文档真实文件链接和四仓最终 diff 分别检查；没有引入无关 Ent 生成差异。
 
 最终移除探针后，三轮独立 Mock 的首发与 Activity 重开通过；同一生产 SPA/Hub/Relay 的 6 个浏览器用例及 Core Android 用例（24.374 秒）通过，实际 System/背景顺序和截图复查通过。最终 `test assembleDebug lintDebug assembleRelease --no-parallel --max-workers=1` 再次通过（41 秒）；JVM 2,840 项、12 项既有环境跳过、0 失败，Lint 0 errors、322 warnings、6 hints。最终 Debug APK SHA-256 为 `182d9e62bd6d829ac47c04dfd0e7f095301333acdbceffe4d083215e97a02490`，测试 APK 为 `53ff017ec79787fe298bbef5a197fcfc1fdddcf1a26e78e8d1b30cd5c16a5439`。具体发布身份由 Core 方案 §10.6 维护。
+
+
+### 14.6 旧企业会话升级修复
+
+0.0.20 的旧企业会话可能在消息 `modelId` 中保留 `managed~platform~来源~部署~资源`。原 `Migration_12_13` 只转换根表的 scope/assistant_id；`Migration_13_14` 校验历史注入归属时解码整条 UIMessage，因严格解析器只接受新引用而抛出 `invalid_enterprise_reference`，最终阻断应用启动。这是升级迁移遗漏；新安装和仅个人 UUID 的测试无法覆盖它，此前门禁通过不代表这条历史数据路径已经验收。
+
+当前通过显式迁移修复三个身份位置：消息所有 variant 的 modelId、子助手调用 metadata 的 target_assistant_id，以及会话 mode_injection_ids。12→13、13→14 在当前类型解码前转换；≤10 的 transcript 转换也先规范身份；14→15 补齐已经升级到14的遗留记录。v15 与 v14 表结构相同。配置引用的运行时继续使用严格解析器，不接受旧格式，不清除或跳过失败数据，也不把企业数据改归个人域。提示词、工具输入输出文本、Provider metadata 与历史注入正文原样保留。
+
+历史 Disclosure format 1/2 中非空的子助手目录和企业 Seed 也可能保存旧身份。读取按相应历史格式验证这些身份并保留原文；新 canonical 写入及 format 3 仍严格拒绝旧引用。历史 Disclosure 本来就受 256 KiB UTF-8 上限约束，不扩大此能力；超 CursorWindow 的测试只使用合法的大消息 transcript，按 code point 分片读。回归覆盖跨10/12/13/14的实际 Room 链、真实数据库工厂与重开、非法引用事务回滚和修复后重试、正文/未知字段保全。JVM 先加入旧企业消息复现，修复前确认报同一错误。
+
+另用 schema13 企业会话 fixture 启动交付基线 Debug APK，实际出现同样恢复失败页面；保留原应用数据，直接覆盖安装修复 APK 后进入主界面，导出测试库核对会话数量、消息全部字段（仅身份转换）、历史注入正文及外键。该验证不依赖供应商密钥；未读取用户手机数据库，模拟器 fixture 不能替代其手机安装后的确认。证据位于本地 `build/upgrade-*`，不包含生产接入凭据。
+
+完整设备回归中，`ChatDocumentContextFlowAndroidTest` 曾在详情等待处超时；其旧 Compose rule 改为项目已经采用的 `androidx.compose.ui.test.junit4.v2.createEmptyComposeRule`，由该版本默认的 StandardTestDispatcher 驱动 composition。保留原断言、30 秒限时及真实文件上传/首发/重开路径，不增加自动重试。此项是测试调度统一，不据此宣称已证实生产详情加载问题的根因。
+
+最终 `test assembleDebug :app:assembleDebugAndroidTest lintDebug assembleRelease --no-parallel --max-workers=1` 通过，JVM 2,846 项中 12 项既有环境跳过、0 失败。定向 `connectedDebugAndroidTest` 的 71 项 migration 用例通过；最终 APK 经 AndroidJUnitRunner 全量执行 App 257 项，243 通过、14 项环境/显式启用跳过、0 失败。附件上下文用例另有单项 19.625 秒及全量回归证据；完整全量耗时 303.89 秒。App Lint 0 errors、322 warnings、6 hints。
+
+最终 Debug SHA-256 为 `c1be4e595654c911f6d5a69c96ad538faa359a5f51e28b0c90d8f0e71a7fb1e6`，AndroidTest 为 `cfe4904d32475118293457f63d565e3700179e50f816894774df33229770b4e5`，Universal Release 为 `7d34666ffa4533691e9ba0c92dba68fe45058a590a5698805851795658cfa6f6`，Release APK 签名校验通过。日志为 `build/upgrade-release-gate.log`、`build/upgrade-targeted-final.log`、`build/upgrade-device-release-gate.log`；先前失败记录保留。应用版本保持 0.0.20，修复包通过覆盖安装触发迁移，无需清除用户数据。

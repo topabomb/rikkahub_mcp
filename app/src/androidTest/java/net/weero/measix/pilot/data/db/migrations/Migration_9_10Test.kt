@@ -410,7 +410,7 @@ class Migration_9_10Test {
         helper.createDatabase(name, 9).close()
         helper.runMigrationsAndValidate(name, 10, true, Migration_9_10).close()
         val db = Room.databaseBuilder(context, AppDatabase::class.java, name)
-            .addMigrations(Migration_9_10, Migration_10_11, Migration_11_12, Migration_12_13, Migration_13_14)
+            .addMigrations(Migration_9_10, Migration_10_11, Migration_11_12, Migration_12_13, Migration_13_14, Migration_14_15)
             .allowMainThreadQueries()
             .build()
         try {

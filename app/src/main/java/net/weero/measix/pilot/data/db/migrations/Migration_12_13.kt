@@ -3,10 +3,12 @@ package net.weero.measix.pilot.data.db.migrations
 import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 import net.weero.measix.pilot.data.configuration.LegacyEnterprisePrincipalEncoding
+import net.weero.measix.pilot.data.db.transcript.migrateEnterpriseTranscriptReferences
 
 /** Drops the retired URL-derived source from every durable enterprise principal and reference. */
 val Migration_12_13 = object : Migration(12, 13) {
     override fun migrate(db: SupportSQLiteDatabase) {
+        migrateEnterpriseTranscriptReferences(db)
         val scopedTables = listOf(
             "ConversationEntity",
             "MemoryEntity",

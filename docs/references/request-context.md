@@ -84,6 +84,8 @@ Tool execution 的校验拒绝也是未执行。没有原 Turn 记录的失败�
 
 新增包使用 format 3：出现的分区是该分区完整状态，缺省表示未提供，空 rows 表示清空；未变化分区省略。
 完整 C 的 256 KiB UTF-8 校验先于省略，不能以增量小为由绕过。支持的 format 1/2 历史保持原 bytes；
+历史读取按这两个格式的身份语法验证旧地址来源引用，仅用于语法校验，不转换正文，也不作为当前资源选择。
+新写入的 canonical envelope 和 format 3 仍只接受当前规范引用，非法旧身份也明确拒绝。
 未知 namespace 只能证明曾披露、不能证明当前域认知；已知不兼容域不投影。未知格式明确拒绝。
 
 `RequestContextPlanner` 只回放 selected branch、当前请求边界之前、原因果位置仍可见的历史包。
@@ -168,7 +170,7 @@ Provider `input_tokens`。`ChatSizeChecker` 的预警读取最近一次发送前
 `ConversationContextTransition.prune` 收口。被删位置明确关闭，仍被保留请求使用的不可变正文交接给
 合法存活 owner，BeforeStep 只可在同一因果 owner 内收口，不搬入任意 USER。
 
-`ConversationContextIntegrity` 在接纳、装载与恢复时检查身份/引用/域边界；Room 14 对应表保存
+`ConversationContextIntegrity` 在接纳、装载与恢复时检查身份/引用/域边界；Room 对应表保存
 opening、context entry、request admission 和关联；大正文使用分段读取。Settings 1、transcript 3、enterprise
 manifest 6 保持原版本；详见数据库和配置参考。Snapshot 是事实描述，不是授权。
 

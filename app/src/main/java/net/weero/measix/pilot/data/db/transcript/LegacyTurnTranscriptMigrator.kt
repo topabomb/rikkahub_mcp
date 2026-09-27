@@ -54,7 +54,9 @@ object LegacyTurnTranscriptMigrator {
         json: Json,
     ): String {
         val messages = json.decodeFromString<List<JsonObject>>(messagesJson)
-        val converted = messages.map { message -> convertMessage(json, message, turnStatusByAssistantMessageId) }
+        val converted = messages.map { message ->
+            convertMessage(json, LegacyEnterpriseTranscriptMigration.migrateMessage(message), turnStatusByAssistantMessageId)
+        }
         val result = json.encodeToString(converted)
         V3TranscriptValidator.validateNode(result, json, turnStatusByAssistantMessageId.filterValues {
             TurnTerminality.of(it, hasTurnRow = true).isNonTerminal

@@ -48,6 +48,27 @@ class Migration_10_11Test {
     private val unmappableAssistantMessageId = "16fd2706-8baf-433b-82eb-8f7fada847da"
 
     @Test
+    fun historicalEnterpriseMessageReachesCurrentSchemaThroughEveryDecoder() {
+        val name = "migration-v10-enterprise-v15"
+        context.deleteDatabase(name)
+        val oldModel = "managed~platform~${"a".repeat(64)}~dep_upgrade~mdl_chat"
+        val raw = """[{"id":"$assistantMessageId","role":"assistant","modelId":"$oldModel","parts":[{"type":"text","text":"$oldModel"}]}]"""
+        helper.createDatabase(name, 10).use { db ->
+            db.execSQL("INSERT INTO ConversationEntity(id,assistant_id,title,create_at,update_at) VALUES('upgrade-c','0950e2dc-9bd5-4801-afa3-aa887aa36b4e','retained title',1,2)")
+            db.execSQL("INSERT INTO message_node(id,conversation_id,node_index,messages,select_index) VALUES('upgrade-n','upgrade-c',0,?,0)", arrayOf(raw))
+        }
+        helper.runMigrationsAndValidate(name, 15, true, Migration_10_11, Migration_11_12,
+            Migration_12_13, Migration_13_14, Migration_14_15).use { db ->
+            val message = JsonInstant.decodeFromString<List<me.rerere.ai.ui.UIMessage>>(
+                single(db, "SELECT messages FROM message_node WHERE id='upgrade-n'")).single()
+            assertEquals("managed~dep_upgrade~mdl_chat", message.modelId.toString())
+            assertEquals(oldModel, (message.parts.last() as me.rerere.ai.ui.UIMessagePart.Text).text)
+            assertTrue(message.parts.first() is me.rerere.ai.ui.UIMessagePart.Step)
+            assertTrue(rows(db, "PRAGMA foreign_key_check").isEmpty())
+        }
+    }
+
+    @Test
     fun historicalChainReachesFreshV11Schema() {
         val name = "migration-v1-v11-schema"
         context.deleteDatabase(name)

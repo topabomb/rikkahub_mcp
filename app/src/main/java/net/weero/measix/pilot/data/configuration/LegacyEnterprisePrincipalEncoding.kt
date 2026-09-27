@@ -11,7 +11,7 @@ import kotlinx.serialization.json.longOrNull
 import me.rerere.common.configuration.EnterpriseAuthority
 import net.weero.measix.pilot.utils.JsonInstant
 
-/** One-time current-development migration; runtime serializers accept only the deployment-owned shape. */
+/** Retired identity encoding for explicit migrations and historical-envelope validation only. */
 internal object LegacyEnterprisePrincipalEncoding {
     fun migrateSettingsJson(encoded: String): String? {
         val original = JsonInstant.parseToJsonElement(encoded).jsonObject
