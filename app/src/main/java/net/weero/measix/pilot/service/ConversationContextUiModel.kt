@@ -83,11 +83,37 @@ internal fun DisclosureSection.contextCategory(): ConversationContextCategory = 
     DisclosureSection.ENTERPRISE_MEMORY_SEEDS -> ConversationContextCategory.ENTERPRISE_BACKGROUND
 }
 
+/** Viewing saved facts requires their selected owner, not today's replay eligibility of the anchor. */
+private class ContextHistoryIndex(nodes: List<MessageNode>) {
+    private val selected = HashSet<ContextMessageLocator>()
+    private val saved = HashMap<ContextMessageLocator, Pair<Int, MessageRole>>()
+
+    init {
+        nodes.forEachIndexed { index, node ->
+            selected += ContextMessageLocator(node.id, node.currentMessage.id)
+            node.messages.forEach { message ->
+                saved[ContextMessageLocator(node.id, message.id)] = index to message.role
+            }
+        }
+    }
+
+    fun readable(entry: ConversationModelContextEntry): Boolean {
+        val owner = ContextMessageLocator(entry.ownerNodeId, entry.ownerMessageId)
+        val anchor = ContextMessageLocator(entry.anchorNodeId, entry.anchorMessageId)
+        if (owner !in selected) return false
+        val ownerFact = saved[owner] ?: return false
+        val anchorFact = saved[anchor] ?: return false
+        return if (entry.payload.source is ConversationContextSource.Preset || entry.payload.source is ConversationContextSource.HistorySummary) {
+            owner == anchor
+        } else ownerFact.second == MessageRole.ASSISTANT && anchorFact.second == MessageRole.USER && anchorFact.first < ownerFact.first
+    }
+}
+
 internal fun projectConversationContextSummary(snapshot: ConversationAggregateSnapshot): ConversationContextSummary {
     if (snapshot.modelContextEntries.isEmpty() && snapshot.contextAdmissions.isEmpty() && snapshot.opening == null) return ConversationContextSummary()
     val branch = snapshot.currentMessages()
     val branchIndex = ConversationModelContextApplicability.index(branch)
-    val entries = snapshot.modelContextEntries.filter(branchIndex::applicable)
+    val entries = snapshot.modelContextEntries.filter(ContextHistoryIndex(snapshot.nodes)::readable)
     val selected = branchIndex.selectedMessageIds
     val admittedEntries = snapshot.contextAdmissions.groupBy { it.owner.messageId }.mapValues { (_, admissions) ->
         admissions.flatMapTo(mutableSetOf()) { it.uses.map(ConversationContextUse::entryId) }
@@ -110,8 +136,8 @@ internal fun projectConversationContextSummary(snapshot: ConversationAggregateSn
             source.reasons.filterValues { it == ContextAdmissionReason.EXTERNAL_STATE }.keys.map { it.contextCategory() }
         } else emptyList()
         add(entry.ownerMessageId, external, origin)
-        // The causal USER retains access when the assistant has no renderable content.
-        if (origin == null) add(entry.anchorMessageId)
+        // The selected USER can open its following assistant's saved facts even after an edit.
+        if (origin == null) branchIndex.previousUser(entry.ownerMessageId)?.let { add(it) }
     }
     snapshot.contextAdmissions.filter { it.owner.messageId in selected }.forEach { admission ->
         add(admission.owner.messageId)
@@ -137,7 +163,7 @@ internal fun projectConversationContextDetails(
 ): ConversationContextDetailsUiModel {
     val branch = snapshot.currentMessages()
     val ownerId = contextOwnerForMessage(snapshot, messageId)
-    val branchIndex = ConversationModelContextApplicability.index(branch)
+    val historyIndex = ContextHistoryIndex(snapshot.nodes)
     val entries = snapshot.modelContextEntries.associateBy { it.id }
     val steps = branch.single { it.id == ownerId }.parts.filterIsInstance<UIMessagePart.Step>().associateBy { it.stepId }
     val admissions = snapshot.contextAdmissions.filter {
@@ -161,7 +187,7 @@ internal fun projectConversationContextDetails(
     if (requestIds == null || null in requestIds) {
         val admittedEntryIds = snapshot.contextAdmissions.flatMapTo(mutableSetOf()) { admission -> admission.uses.map { it.entryId } }
         val historic = entries.values.filter { entry ->
-            branchIndex.applicable(entry) && (entry.ownerMessageId == ownerId || entry.ownerMessageId == messageId) &&
+            historyIndex.readable(entry) && (entry.ownerMessageId == ownerId || entry.ownerMessageId == messageId) &&
                 entry.id !in admittedEntryIds
         }.map { it.toUiItem(it.id.toString(), null, null) }.toMutableList()
         if (snapshot.opening != null && requests.isEmpty()) historic.add(0, openingContextItem())

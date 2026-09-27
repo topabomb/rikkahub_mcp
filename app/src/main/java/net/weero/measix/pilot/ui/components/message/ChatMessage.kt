@@ -224,7 +224,7 @@ fun ChatMessage(
         if (showContextEntry && hasVisibleMessage && detailSource != null && contextConversationId != null && contextSummary?.hasContent == true &&
             contextSummary.hasExternalUpdate) {
             val hasText = renderableParts.any { it is UIMessagePart.Text && it.text.isNotBlank() }
-            ContextMessageEntry(contextSummary.hasExternalUpdate, contextSummary.externalCategories,
+            ContextMessageEntry(contextSummary.hasExternalUpdate, categories = contextSummary.externalCategories,
                 modifier = Modifier
                     .padding(start = if (hasText && settings.showAssistantBubble) MessageBubbleContentPadding else 0.dp)
                     .padding(start = if (hasText) MarkdownContentInset else 0.dp)) { showContext = true }

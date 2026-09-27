@@ -105,7 +105,7 @@ class ConversationContextAndroidTest {
     @Test fun compactUpdateLabelKeepsAnExpandedTouchTarget() {
         var clicks = 0
         compose.setContent { MaterialTheme { Column(Modifier.padding(24.dp)) {
-            ContextMessageEntry(true, listOf(ConversationContextCategory.MEMORY)) { clicks++ }
+            ContextMessageEntry(true, categories = listOf(ConversationContextCategory.MEMORY)) { clicks++ }
         } } }
         val label = context.getString(R.string.context_updated_categories, context.getString(R.string.context_memory))
         val entry = compose.onNodeWithContentDescription(context.getString(R.string.context_details_accessibility, label))
@@ -153,8 +153,8 @@ class ConversationContextAndroidTest {
             val density = LocalDensity.current
             CompositionLocalProvider(LocalDensity provides Density(density.density, 1.8f)) { MaterialTheme {
                 Column(Modifier.width(320.dp).verticalScroll(rememberScrollState())) {
-                    ContextMessageEntry(true, listOf(ConversationContextCategory.MEMORY, ConversationContextCategory.ASSISTANTS,
-                        ConversationContextCategory.ENTERPRISE_BACKGROUND)) {}
+                    ContextMessageEntry(true, categories = listOf(ConversationContextCategory.ENTERPRISE_BACKGROUND,
+                        ConversationContextCategory.ASSISTANTS, ConversationContextCategory.MEMORY, ConversationContextCategory.ASSISTANTS)) {}
                     ContextRequestList(ConversationContextDetailsUiModel(listOf(later, changed))) { _, entry ->
                         reads += entry.key
                         ConversationContextContentUiModel(original, "internal-source-json", presentation = ConversationContextPresentationUiModel(listOf(
@@ -171,7 +171,11 @@ class ConversationContextAndroidTest {
             } }
         }
         val label = context.getString(R.string.context_updated_more, context.getString(R.string.context_memory), 3)
-        compose.onNodeWithContentDescription(context.getString(R.string.context_details_accessibility, label)).assertIsDisplayed()
+        compose.onNodeWithText("$label ›").assertIsDisplayed()
+        val fullLabel = context.getString(R.string.context_updated_categories,
+            listOf(R.string.context_memory, R.string.context_assistants, R.string.context_enterprise_background)
+                .joinToString(" · ") { context.getString(it) })
+        compose.onNodeWithContentDescription(context.getString(R.string.context_details_accessibility, fullLabel)).assertIsDisplayed()
         compose.onNodeWithText(context.getString(R.string.context_changes_heading)).assertIsDisplayed()
         compose.onNodeWithText(context.getString(R.string.context_scope_shared)).assertDoesNotExist() // Combined scope and reason.
         compose.onNodeWithText("${context.getString(R.string.context_scope_shared)} · ${context.getString(R.string.context_reason_external)}")

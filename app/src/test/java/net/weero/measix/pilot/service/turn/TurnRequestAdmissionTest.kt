@@ -2,6 +2,7 @@ package net.weero.measix.pilot.service.turn
 
 import io.mockk.mockk
 import kotlinx.coroutines.test.runTest
+import kotlinx.datetime.LocalDateTime
 import me.rerere.ai.core.MessageRole
 import me.rerere.ai.core.Tool
 import me.rerere.ai.provider.Model
@@ -12,6 +13,8 @@ import net.weero.measix.pilot.data.ai.request.RequestContextPlanner
 import net.weero.measix.pilot.data.ai.request.resolveUsesAt
 import net.weero.measix.pilot.data.ai.transformers.RequestMessageOriginTracker
 import net.weero.measix.pilot.data.ai.transformers.RequestPartSource
+import net.weero.measix.pilot.data.ai.transformers.TimeReminderTransformer
+import net.weero.measix.pilot.data.ai.transformers.TransformerContext
 import net.weero.measix.pilot.data.configuration.ConfigurationResolver
 import net.weero.measix.pilot.data.configuration.ConfigurationScope
 import net.weero.measix.pilot.data.datastore.Settings
@@ -26,6 +29,39 @@ import org.junit.Test
 import kotlin.uuid.Uuid
 
 class TurnRequestAdmissionTest {
+    @Test fun `predecessor deletion recalculates gap but retains the message first admitted zone`() = runTest {
+        val predecessor = UIMessage.user("earlier").copy(createdAt = LocalDateTime.parse("2026-09-27T10:00:00"))
+        val fixture = Fixture(predecessor = predecessor)
+        fixture.context = fixture.context.copy(promptInputs = fixture.context.promptInputs.copy(
+            enableTimeReminder = true, zoneId = "Asia/Shanghai"))
+        fixture.admit()
+        val original = fixture.snapshot.modelContextEntries.single {
+            (it.payload.source as? ConversationContextSource.MessageTime)?.message?.messageId == fixture.user.id
+        }
+        assertEquals("<time_reminder>Message time: 2026-09-27T12:00:00+08:00; gap: 2 h</time_reminder>",
+            (original.payload.body as ConversationContextBody.Inline).text)
+
+        val before = fixture.snapshot
+        fixture.snapshot = ConversationContextTransition.prune(
+            before.copy(nodes = before.nodes.filterNot { it.currentMessage.id == predecessor.id }), before)
+        fixture.startNextTurn()
+        fixture.context = fixture.context.copy(promptInputs = fixture.context.promptInputs.copy(zoneId = "America/New_York"))
+        fixture.admit()
+        val updated = fixture.snapshot.modelContextEntries.last {
+            (it.payload.source as? ConversationContextSource.MessageTime)?.message?.messageId == fixture.user.id
+        }
+        val time = updated.payload.source as ConversationContextSource.MessageTime
+        assertNull(time.previous)
+        assertEquals("Asia/Shanghai", time.zoneId)
+        assertEquals("<time_reminder>Message time: 2026-09-27T12:00:00+08:00</time_reminder>",
+            (updated.payload.body as ConversationContextBody.Inline).text)
+        assertTrue(fixture.output.any { it.toText() == (updated.payload.body as ConversationContextBody.Inline).text })
+        assertEquals(original, fixture.snapshot.modelContextEntries.single { it.id == original.id })
+        val committed = fixture.snapshot
+        fixture.admit()
+        assertEquals(committed, fixture.snapshot)
+    }
+
     @Test fun `attachment source and actual part index survive a disclosure prefix`() = runTest {
         val fixture = Fixture()
         fixture.admit(includeDocument = true)
@@ -114,14 +150,16 @@ class TurnRequestAdmissionTest {
         assertEquals(1, fixture.snapshot.contextAdmissions.size)
     }
 
-    private class Fixture(tools: List<Tool> = emptyList(), val nestedAttachment: Boolean = false) {
+    private class Fixture(tools: List<Tool> = emptyList(), val nestedAttachment: Boolean = false,
+        predecessor: UIMessage? = null) {
         val model = Model(modelId = "test")
         val assistant = Assistant()
         val settings = Settings(providers = listOf(ProviderSetting.OpenAI(models = listOf(model))))
         val document = UIMessagePart.Document(url = "file:///managed/document.txt", fileName = "document.txt", mime = "text/plain")
-        val user = UIMessage(role = MessageRole.USER, parts = listOf(UIMessagePart.Text("question"), document))
+        val user = UIMessage(role = MessageRole.USER, parts = listOf(UIMessagePart.Text("question"), document),
+            createdAt = LocalDateTime.parse("2026-09-27T12:00:00"))
         val image = UIMessagePart.Image("https://example.com/image.png")
-        val response = UIMessage(role = MessageRole.ASSISTANT, parts = if (!nestedAttachment) listOf(TurnTransition.openStep(0)) else {
+        var response = UIMessage(role = MessageRole.ASSISTANT, parts = if (!nestedAttachment) listOf(TurnTransition.openStep(0)) else {
             val step = TurnTransition.openStep(0)
             listOf(step.copy(modelResult = me.rerere.ai.ui.StepModelResult(
                 finishReason = "tool_calls", usage = me.rerere.ai.ui.StepUsage(), providerRequestCount = 1,
@@ -133,15 +171,16 @@ class TurnRequestAdmissionTest {
                 TurnTransition.openStep(1))
         })
         var snapshot = Conversation.ofId(Uuid.random(), assistant.id)
-            .copy(messageNodes = listOf(MessageNode.of(user), MessageNode.of(response))).toSnapshot()
-        val handle = TurnHandle(snapshot.conversationId, 1, Uuid.random(), response.id)
+            .copy(messageNodes = listOfNotNull(predecessor?.let { MessageNode.of(it) }) +
+                listOf(MessageNode.of(user), MessageNode.of(response))).toSnapshot()
+        var handle = TurnHandle(snapshot.conversationId, 1, Uuid.random(), response.id)
         val artifacts = mockk<ArtifactStore>()
         var samples = 0
         var output = emptyList<UIMessage>()
         val configuration = ConfigurationResolver.resolve(
             UserSettingsDocument.empty().withPersonalSettings(settings.copy(assistants = listOf(assistant))),
             ConfigurationScope.Personal, EnterpriseState.Loading)
-        val context = testTurnContext(settings, model, assistant, tools).copy(
+        var context = testTurnContext(settings, model, assistant, tools).copy(
             disclosure = TurnDisclosureSource.capture(configuration, assistant, DisclosureNamespace(null, assistant.id),
                 readConfiguration = { configuration }, readMemory = { samples++; emptyList() }))
         val access = object : TurnRequestContextAccess {
@@ -174,10 +213,25 @@ class TurnRequestAdmissionTest {
                     message.copy(parts = listOf(message.parts.first(), derived, document))
                 }
             }
-            output = admission.admit(plan, transformed, origins) {
+            val timed = TimeReminderTransformer.transform(TransformerContext(context.realmAccess, mockk(), model,
+                context.assistant, context.promptInputs, origins, registerUnpublishedResource = {}), transformed)
+            output = admission.admit(plan, timed, origins) {
                 check(!failAssembly) { "request_rejected" }
                 it
             }
+        }
+
+        fun startNextTurn() {
+            val old = snapshot.nodes.last()
+            val completed = old.copy(messages = listOf(old.currentMessage.copy(parts = old.currentMessage.parts.map { part ->
+                if (part is UIMessagePart.Step) part.copy(outcome = me.rerere.ai.ui.StepOutcome.Final, finishedAt = part.startedAt)
+                else part
+            })))
+            val nextUser = UIMessage.user("next turn").copy(createdAt = LocalDateTime.parse("2026-09-27T16:00:00"))
+            response = UIMessage(role = MessageRole.ASSISTANT, parts = listOf(TurnTransition.openStep(0)))
+            snapshot = snapshot.copy(nodes = snapshot.nodes.dropLast(1) + completed +
+                listOf(MessageNode.of(nextUser), MessageNode.of(response)))
+            handle = TurnHandle(snapshot.conversationId, 1, Uuid.random(), response.id)
         }
 
         fun nextStep() {

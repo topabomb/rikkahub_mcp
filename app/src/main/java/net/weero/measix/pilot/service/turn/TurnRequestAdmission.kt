@@ -79,9 +79,22 @@ internal class TurnRequestAdmission(
         var previous: UIMessage? = null
         branch.forEach { message ->
             if (message.role == MessageRole.USER && message.id !in applicationMessages) {
-                origins.markPreviousRealUserTime(message.id, previous?.createdAt)
+                origins.markPreviousRealUserTime(message.id, previous)
                 previousUsers[message.id] = previous
                 previous = message
+            }
+        }
+        if (context.promptInputs.enableTimeReminder) {
+            val messagesById = branch.associateBy { it.id }
+            // A predecessor edit invalidates the gap, not the message's first time interpretation.
+            // Keep off-window predecessors too; metadata is sufficient and requires no body IO.
+            snapshot.modelContextEntries.forEach { entry ->
+                if (entry.ownerMessageId !in messagesById) return@forEach
+                val time = entry.payload.source as? ConversationContextSource.MessageTime ?: return@forEach
+                val message = messagesById[time.message.messageId]
+                if (message != null && origins.isRealUser(message) && message.createdAt.toString() == time.messageTime) {
+                    origins.rememberMessageTimeZone(message.id, time.zoneId)
+                }
             }
         }
         // Parse only bodies needed by this window. Older variants and off-window documents
@@ -102,6 +115,7 @@ internal class TurnRequestAdmission(
                     val message = branch.getOrNull(index)
                     val previous = previousUsers[source.message.messageId]
                     if (message?.createdAt?.toString() == source.messageTime &&
+                        source.zoneId == origins.messageTimeZone(source.message.messageId) &&
                         previous?.id == source.previous?.messageId && previous?.createdAt?.toString() == source.previousTime) {
                         origins.rememberMessageTime(source.message.messageId, textOf(entry))
                     }
@@ -210,11 +224,12 @@ internal class TurnRequestAdmission(
                         val timeSource = ConversationContextSource.MessageTime(
                             message = locators.getValue(real.id).contextLocator(), messageTime = real.createdAt.toString(),
                             previous = preceding?.let { locators.getValue(it.id).contextLocator() },
-                            previousTime = preceding?.createdAt?.toString(), zoneId = context.promptInputs.zoneId,
+                            previousTime = preceding?.createdAt?.toString(),
+                            zoneId = origins.messageTimeZone(real.id) ?: context.promptInputs.zoneId,
                         )
                         val saved = entries.firstOrNull { entry ->
                             val original = entry.payload.source as? ConversationContextSource.MessageTime
-                            original != null && original.copy(zoneId = timeSource.zoneId) == timeSource
+                            original == timeSource
                         }
                         use(saved ?: inline(timeSource, text), message.role, syntheticPlacement)
                     }

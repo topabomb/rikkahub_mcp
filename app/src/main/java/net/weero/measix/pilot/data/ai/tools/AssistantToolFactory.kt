@@ -94,7 +94,7 @@ internal fun parseAssistantManageArguments(args: kotlinx.serialization.json.Json
  * - [AssistantDelegation] → [TOOL_ASSISTANT_CALL]
  *
  * 子助手 Catalog 不再经工具 System Prompt 动态注入：可见集合只由
- * ConversationDisclosureSnapshotService 在每次新 START 写入 canonical Snapshot；
+ * TurnDisclosureSource 在新请求边界采样，由 Conversation 请求接纳链提交需要同步的分区；
  * 执行时由各命令 owner 按原域配置和 SubAssistantAccessPolicy 复验授权。
  */
 class AssistantToolFactory internal constructor(

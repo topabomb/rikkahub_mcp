@@ -15,7 +15,8 @@ import kotlin.uuid.Uuid
 class RequestMessageOriginTracker {
     private val origins = mutableMapOf<Uuid, RequestMessageOrigin>()
     private val applicationHistory = mutableSetOf<Uuid>()
-    private val previousUserTimes = mutableMapOf<Uuid, LocalDateTime?>()
+    private val previousUserTimes = mutableMapOf<Uuid, RealUserTime?>()
+    private val messageTimeZones = mutableMapOf<Uuid, String>()
     private val partSources = IdentityHashMap<UIMessagePart, RequestPartSource>()
     private val originalParts = IdentityHashMap<UIMessagePart, UIMessagePart>()
     private val documentInputs = mutableMapOf<Pair<Uuid, Int>, String>()
@@ -37,10 +38,12 @@ class RequestMessageOriginTracker {
     /** Presets and summaries remain durable history, but never reset the real-user clock. */
     fun markApplicationHistory(messageId: Uuid) { applicationHistory += messageId }
     /** Supplied from the selected durable branch before its history window is applied. */
-    fun markPreviousRealUserTime(messageId: Uuid, previousCreatedAt: LocalDateTime?) {
-        previousUserTimes[messageId] = previousCreatedAt
+    internal fun markPreviousRealUserTime(messageId: Uuid, previous: UIMessage?) {
+        previousUserTimes[messageId] = previous?.let { RealUserTime(it.id, it.createdAt) }
     }
-    fun previousRealUserTimes(): Map<Uuid, LocalDateTime?> = previousUserTimes.toMap()
+    internal fun previousRealUserTimes(): Map<Uuid, RealUserTime?> = previousUserTimes.toMap()
+    internal fun rememberMessageTimeZone(messageId: Uuid, zoneId: String) { messageTimeZones.putIfAbsent(messageId, zoneId) }
+    internal fun messageTimeZone(messageId: Uuid): String? = messageTimeZones[messageId]
 
     internal fun rememberDocument(messageId: Uuid, partIndex: Int, text: String) {
         documentInputs[messageId to partIndex] = text
@@ -74,6 +77,9 @@ class RequestMessageOriginTracker {
         source.forEach { if (it.id !in knownIds) markSynthetic(it.id, kind) }
     }
 }
+
+/** A real predecessor can be outside the request window and have its own saved time interpretation. */
+internal data class RealUserTime(val messageId: Uuid, val createdAt: LocalDateTime)
 
 /** Content already rendered by its typed producer must not execute as a user template. */
 sealed interface RequestPartSource {

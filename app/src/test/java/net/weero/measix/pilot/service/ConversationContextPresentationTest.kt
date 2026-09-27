@@ -86,6 +86,51 @@ class ConversationContextPresentationTest {
         assertTrue(projectConversationContextSummary(ordinary).messages.isEmpty())
     }
 
+    @Test fun `legacy context remains readable after changing its saved user anchor selection`() {
+        val old = entry(ConversationContextSource.Disclosure(null), step = null)
+        val original = snapshot(listOf(old), emptyList())
+        val editedUser = user.copy(messages = user.messages + UIMessage.user("edited question"), selectIndex = 1)
+        val edited = original.copy(nodes = listOf(editedUser, assistant))
+
+        assertFalse(ConversationModelContextApplicability.applicable(old, edited.currentMessages()))
+        assertEquals(projectConversationContextDetails(original, assistant.currentMessage.id),
+            projectConversationContextDetails(edited, assistant.currentMessage.id))
+        val detail = projectConversationContextDetails(edited, editedUser.currentMessage.id).requests.single()
+        assertEquals(ConversationContextRequestState.HISTORICAL, detail.state)
+        assertNull(detail.id)
+        assertEquals(old.id, detail.items.single().entryId)
+        val summary = projectConversationContextSummary(edited)
+        assertEquals(setOf(editedUser.currentMessage.id, assistant.currentMessage.id), summary.messages.keys)
+        assertTrue(summary.messages.values.none { it.hasExternalUpdate })
+
+        val sibling = assistant.copy(messages = assistant.messages + UIMessage.assistant("other answer"), selectIndex = 1)
+        val switched = edited.copy(nodes = listOf(editedUser, sibling))
+        assertTrue(projectConversationContextSummary(switched).messages.isEmpty())
+        assertTrue(projectConversationContextDetails(switched, sibling.currentMessage.id).requests.isEmpty())
+        assertThrows(IllegalArgumentException::class.java) {
+            projectConversationContextDetails(switched, assistant.currentMessage.id)
+        }
+
+        val missingAnchor = edited.copy(nodes = listOf(editedUser.copy(messages = listOf(editedUser.currentMessage), selectIndex = 0), assistant))
+        assertTrue(projectConversationContextSummary(missingAnchor).messages.isEmpty())
+        assertTrue(projectConversationContextDetails(missingAnchor, assistant.currentMessage.id).requests.isEmpty())
+    }
+
+    @Test fun `saved external update label survives user variant changes without becoming replay eligible`() {
+        val update = entry(ConversationContextSource.Disclosure(namespace,
+            mapOf(DisclosureSection.MEMORY to ContextAdmissionReason.EXTERNAL_STATE)), 1)
+        val original = snapshot(listOf(system, update), listOf(admission(first, listOf(system, update))))
+        val editedUser = user.copy(messages = user.messages + UIMessage.user("edited question"), selectIndex = 1)
+        val edited = original.copy(nodes = listOf(editedUser, assistant))
+
+        assertFalse(ConversationModelContextApplicability.applicable(update, edited.currentMessages()))
+        assertEquals(projectConversationContextSummary(original).messages.getValue(assistant.currentMessage.id),
+            projectConversationContextSummary(edited).messages.getValue(assistant.currentMessage.id))
+        assertTrue(projectConversationContextSummary(edited).messages.getValue(assistant.currentMessage.id).hasExternalUpdate)
+        assertEquals(projectConversationContextDetails(original, assistant.currentMessage.id),
+            projectConversationContextDetails(edited, assistant.currentMessage.id))
+    }
+
     @Test fun `later omission removes prior attachment without removing its earlier history`() {
         val document = entry(ConversationContextSource.Attachment(user.locator(), 2, "original.txt", AttachmentContextInput.DOCUMENT_TEXT, "attachment:id"), 1)
         val firstAdmission = admission(first, listOf(system, document)).copy(uses = listOf(

@@ -35,19 +35,21 @@ import kotlin.uuid.Uuid
 @Composable
 internal fun ContextMessageEntry(
     externalUpdate: Boolean,
-    categories: List<ConversationContextCategory> = emptyList(),
     modifier: Modifier = Modifier,
+    categories: List<ConversationContextCategory> = emptyList(),
     onClick: () -> Unit,
 ) {
-    val names = categories.distinct().map { contextCategoryText(it) }
+    val names = categories.distinct().sortedBy { it.ordinal }.map { contextCategoryText(it) }
     val label = when {
         !externalUpdate -> stringResource(R.string.context_title)
         names.isEmpty() -> stringResource(R.string.context_updated)
         names.size <= 2 -> stringResource(R.string.context_updated_categories, names.joinToString(" · "))
         else -> stringResource(R.string.context_updated_more, names.first(), names.size)
     }
+    val accessibleLabel = if (externalUpdate && names.isNotEmpty())
+        stringResource(R.string.context_updated_categories, names.joinToString(" · ")) else label
     val description = if (externalUpdate && names.isEmpty()) stringResource(R.string.context_updated_accessibility)
-        else stringResource(R.string.context_details_accessibility, label)
+        else stringResource(R.string.context_details_accessibility, accessibleLabel)
     // A compact text row uses Compose's expanded minimum touch target without button content insets.
     Box(modifier.heightIn(min = 32.dp).clickable(role = Role.Button, onClick = onClick)
         .semantics { contentDescription = description }, contentAlignment = Alignment.CenterStart) {

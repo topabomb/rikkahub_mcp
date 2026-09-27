@@ -63,6 +63,26 @@ class ConversationContextQueryTest {
         coVerify(exactly = 0) { artifacts.readContextText(any(), any()) }
     }
 
+    @Test fun `historical body remains authorized through its selected owner after editing the user anchor`() = runTest {
+        val query = query()
+        val editedUser = user.copy(messages = user.messages + UIMessage.user("edited question"), selectIndex = 1)
+        snapshot = original.copy(nodes = listOf(editedUser, assistant))
+        val text = "Saved attachment {{literal}}"
+        coEvery { artifacts.readContextText(original.header.scope, ConversationContextBody.Artifact(42, "upload/context.txt")) } returns text
+        val request = query.contextDetails(lease, original.conversationId, assistant.currentMessage.id).requests.single()
+        assertNull(request.id)
+        assertEquals(ConversationContextRequestState.HISTORICAL, request.state)
+        val loaded = query.contextContent(lease, original.conversationId, assistant.currentMessage.id, null, request.items.single().key)
+        assertEquals(text, loaded.text)
+        val source = requireNotNull(loaded.source)
+        assertTrue(source.contains(user.currentMessage.id.toString()))
+        assertFalse(source.contains(editedUser.currentMessage.id.toString()))
+        assertFailure<IllegalArgumentException> {
+            query.contextDetails(lease, original.conversationId, user.currentMessage.id)
+        }
+        coVerify(exactly = 1) { artifacts.readContextText(any(), any()) }
+    }
+
     @Test fun `preset and summary details read the exact immutable message variant without a payload copy`() = runTest {
         val query = query()
         val text = "Original summary\r\n{{literal}} <source>"

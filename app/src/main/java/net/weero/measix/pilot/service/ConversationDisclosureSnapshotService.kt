@@ -50,7 +50,7 @@ object ConversationDisclosureSnapshotService {
     val SUPPORTED_FORMATS: Set<Int> = setOf(1, 2, CURRENT_FORMAT)
 
     /**
-     * 固定模型规则：请求携带 Snapshot 时唯一允许进入 System / Developer 的披露说明。
+     * 固定模型规则：在 Turn 捕获时进入 System，不随单个请求是否新增 Snapshot 改变。
      * 只解释 Snapshot 的语义优先级，不引入任何动态内容，保证缓存前缀稳定。
      */
     const val MODEL_RULES: String =
@@ -90,10 +90,10 @@ object ConversationDisclosureSnapshotService {
     private val canonicalJson: Json = Json { prettyPrint = false }
 
     /**
-     * 一次捕获的全部输入。调用方负责给出**同一份**已捕获的生效配置与**一次**已排序
-     * 的 Memory 读取结果；renderer 内部不再解析 live state，因此一次捕获可安全重放。
+     * 一个请求边界的已授权事实。调用方采样当前 Memory/目录，Seed 沿 Turn 捕获值；
+     * renderer 内部不再解析 live state，相同候选可确定性重放。
      *
-     * [assistant] 是本次 START 生效的 Assistant（Master 或 Child 的 Target），
+     * [assistant] 保持 Turn 捕获的 Memory 地址，目录能力取已装配与当前允许能力的交集，
      * [allAssistants] 是当前域准入的助手目录；序列化按完整 reference 排序。
      */
     data class Candidate(

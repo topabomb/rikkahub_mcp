@@ -118,6 +118,11 @@ MessageOrigin 和 Omitted。MessagePart 保存最终请求的 part 偏移，附�
 `ArtifactStore` 暂存为 immutable text，再随同一事务建立 CONTEXT 引用并发布；失败精确释放未发布资源。
 Artifact identity 与路径必须同时匹配，读取仍需原域授权，路径复用不重绑定旧来源。
 
+时间提醒将消息的首次时间解释与前驱间隔分开：同一真实 USER 身份及 createdAt 使用已保存
+`MessageTime.zoneId`，前驱改变只重算 gap；前驱有首次时区时按它自己的时区转换为 Instant，
+不因窗口裁剪或设备切换时区改变已知时间。无已接纳事实时才使用当前 Turn 捕获的时区，
+复用 metadata 不读取窗口外正文，也不建立单独的消息时区存储。
+
 接纳先于 Provider IO。网络重试沿已组装输入，重新进入已接纳 Step 也必须匹配其 selection、窗口和位置，
 不重新采样 C 或默许消失的贡献。接纳表示应用输入已定稿，不代表请求成功或模型已经消费；UI 沿原
 Step/请求状态说明发送结果。进程恢复使用原中断 Turn 终态协议，不承诺精确续跑远端未知结果。
@@ -128,6 +133,8 @@ Step/请求状态说明发送结果。进程恢复使用原中断 Turn 终态协
 `resolveRequestContextUses` 只读取所查看 Turn 明确接纳及同 Turn 继承的贡献，旧 windowStart/placement
 允许定位原 node 内仍保存的 USER variant，owner 仍须当前选中。前序 Turn 的内容从原消息查看；
 不根据今日的历史 Assistant 选择推定旧请求输入，不提供完整历史应用上下文或 HTTP 快照。
+没有 admission 的历史原文及消息摘要也沿选中 owner 展示；保存的 anchor 必须仍存在且因果合法，
+但不要求旧 USER variant 当前选中。它只提供历史查看能力，不放宽 planner 的回放适用性。
 
 ### 手动摘要
 

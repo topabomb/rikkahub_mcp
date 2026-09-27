@@ -720,6 +720,8 @@ UI 消费 `ConversationPresentation` 的消息、typed phase、工具 locator �
 
 `projectConversationContextContent` 将持久化贡献投影为具备归属、原因、增改移除、修改前后及背景顺序的结构化 UiModel。UI 不解析 payload 或读取当前配置；历史无差异记录明确展示当时完整同步状态。System 按 typed 指令来源分块，模型输入原文单独折叠，长文本八行预览可展开；标签规则及详情层级见 [消息渲染管线](message-rendering-pipeline.md)。
 
+历史入口按当前选中 owner 和仍存在的合法来源定位判断，不复用请求回放的 anchor 选择条件。编辑历史 USER 后，原助手回复的上下文及变化标签仍可查；未选中的兄弟回复不可查，无接纳的旧记录不补造请求状态。短标签按固定类别顺序合并，读屏名称保留所有类别。
+
 请求目录展示该 Turn 明确选用/追加及同 Turn Step 继承的应用记录；前序 Turn 原文从其原消息查看，
 不提供全部历史应用输入或 HTTP 快照。保存的 USER window/placement variant 只要求仍存在于原节点，
 不要求当前选中；查看的助手 owner、页面与域授权仍按当前状态校验。不能从当前较早 Assistant variant

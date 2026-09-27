@@ -43,11 +43,11 @@
 
 整段 Conversation 的请求字节不保证不变：下一 START 可以采用新的有效配置，历史窗口、明确的提示放置规则和 rolling compaction 也会影响前缀。当前目标是 Turn 内配置稳定、因果顺序清楚、变化反馈充分而不重复。
 
-## 2. 研究依据与当前缺口
+## 2. 研究依据与基线对照
 
-### 2.1 Android 实现基线与需要补齐的行为
+### 2.1 Android 研究基线与实施调整
 
-| 链路 | 已有实现 | 本方案需要补齐 |
+| 链路 | 研究基线实现 | 实施调整（落点见第 13、14 节） |
 | --- | --- | --- |
 | START | `ConversationTurnService` → `ModelExecutionService.captureTurn` → `TurnContextFactory`；冻结工具 schema/contribution | 保留边界，列清所有输入；不增加整会话配置副本 |
 | 动态事实 | `ConversationDisclosureSnapshotService` 生成 format 2 完整 JSON，包含 Memory、子助手、Seed；相同不写，256 KiB 上限 | 同 Turn 对账，先归并可见的工具 input 与成功 output，自身变更不重复注入 |
@@ -88,9 +88,9 @@ DSH 每个 pre-step 会 assembly；`RuntimeContextProjection` 比较完整 conte
 
 ### 3.2 现有“提示词注入”的实际行为与问题
 
-`TurnContextFactory` 按 enabled 和助手/会话选中 ID 捕获 `ModeInjection`。允许会话选择时使用会话集合，否则使用助手集合；它们不是自动叠加。`PromptInjectionTransformer` 每个请求按消息位置投影：
+`TurnContextFactory` 按 enabled 和助手/会话选中 ID 捕获 `ModeInjection`。允许会话选择时使用会话集合，否则使用助手集合；它们不是自动叠加。下表对照研究基线的问题与已实施决定，当前 `PromptInjectionTransformer` 按第 3.3 节投影：
 
-| 现有行为 | 结论与本期处理 |
+| 研究基线行为 | 实施决定 |
 | --- | --- |
 | BEFORE/AFTER_SYSTEM_PROMPT 将 content 拼到 System，配置 role 在这里不起作用 | 本质是 System 组成项；在 START 渲染并固定，UI 编辑器明确“加入系统指令” |
 | TOP_OF_CHAT 插在第一条 USER 前 | 是当前请求窗口中的位置，不等于只在会话创建时触发；保留位置含义 |
@@ -221,7 +221,7 @@ Enterprise background is read-only and separate from editable memory.
 
 用户配置的提示规则按真实 role 使用；标签不提高指令优先级。新增机制在自己的 typed 契约中定义作用范围、替换/追加语义和必要说明，避免通用 System 不断积累工具清单与同义提醒。
 
-最终 System 在 START 完成组装、渲染与冻结，包括现有 Workspace 提醒；复用已有组成内容的相对次序并记录来源。当前 `StepRunner` 按请求是否有 context projection 决定追加 disclosure 规则，这一判断需要移到 Turn 捕获：后续 Step 没有新状态包或窗口变动不能使规则消失。详情中的“系统指令”查看本 Turn 实际组装文本，不把 Starter 的领域模板冒充最终 System。
+最终 System 由 `freezeTurnSystem` 在 START 完成组装、渲染与冻结，包括 Workspace 提醒；复用组成内容的相对次序并记录来源。`StepRunner` 直接使用冻结文本，后续 Step 没有新状态包或窗口变动不会使固定解释规则消失。详情中的“系统指令”查看本 Turn 实际组装文本，不把 Starter 的领域模板冒充最终 System。
 
 ### 5.3 状态包：只发送变化的完整分区
 
@@ -289,6 +289,8 @@ Enterprise background is read-only and separate from editable memory.
 这些文本是模板定义，花括号字段由对应 typed 输入提供；文件/记忆正文不是再次执行的模板。content/name/path 保持原语言和真实值；协议标记不本地化。文档读取异常仍保留可诊断原因，不作为空文件或成功背景注入。
 
 时间规则是在首条真实 USER、或与前一真实 USER 相隔超过一小时时产生一次，不跟随 Step、其他上下文或 UI 刷新重复生成。“消息时间”不冒充模型回答时的当前时间。
+
+消息时间的首次解释与前驱间隔分别保留：同一真实 USER 身份及 createdAt 沿已接纳 `MessageTime.zoneId` 转换；前驱变化时重算 gap，但不改该消息的时区解释。前驱已有时间事实时使用它自己的首次时区，包括位于窗口外的真实前驱；只读来源 metadata，不为计算 gap 加载窗口外正文。没有时间事实的消息才使用本 Turn 捕获时区，不新增消息级时区表。
 
 “首条”与“前一条”按所选持久分支中的真实 USER 身份确定，不因窗口裁剪或合成消息插入重新编号。间隔严格大于 3600 秒才追加；小于一天向下取整为 h，达到一天向下取整为 d，零或负间隔不追加 gap。消息时间没有时区偏移时采用首次接纳所捕获的时区解释并保存实际文本；回放不能用设备后来切换的时区重新生成旧提醒。
 
@@ -404,6 +406,8 @@ flowchart TD
 
 START、planner、Fork、窗口/摘要、删除共用当前分支的适用性规则；UI 的入口 owner 仍限当前所选消息，但查看已保存请求时允许读取原节点内仍存在的旧 USER variant。状态历史仅在本次保留窗口中按其已成立的因果位置回放，不将后续状态搬到此前的工具调用前。
 
+历史可查看与新请求可回放分别判断。当前所选助手回复的旧来源和外部更新标签不因其因果 USER 切换 variant 而隐藏；没有 admission 的历史原文也遵循此规则，仍标明无请求记录。保存的 owner/anchor 必须存在、角色与因果关系合法；切换助手回复 variant 不得显示兄弟回复的来源。历史查看不会让失效 anchor 重新获得请求回放资格。
+
 编辑或切换历史 USER 后，保留的助手可能仍引用旧 anchor。planner 先从完整条目索引校验引用存在，再判断当前适用性：失效披露不回放，兼容分区在引用它的历史 Step 记为未知，必要时在新 START 尾部恢复当前 C。旧原文与接纳记录不被改写；真实缺失引用仍报错，不能静默略过。已有 seal 的重入仍必须满足原 selection、窗口及位置，分支改变不能借恢复规则悄悄改写该请求。
 
 format 3 需要在实际保留输入中逐分区寻找适用基线，可能来自不同 entry；不能仅取“最近一条 snapshot”便丢弃其省略的分区。读取窗口外记录只用于识别缺口和来源，不使 K 变为已知。需要恢复时接纳当前 C，并记录该分区的恢复原因及当前范围；恢复包实际进入请求后才算补齐，UI 不将它当外部更新。
@@ -430,13 +434,13 @@ format 3 需要在实际保留输入中逐分区寻找适用基线，可能来�
 
 以上选择均发生在定稿前；不通过删除历史来源来关闭规则。同一适用来源的相同内容在多个请求中复用稳定引用。每 Turn 首次接纳保存必要的有效来源选择，后续 Step 继承，实际位置变化只记录必要关联；这与第 10 节“不复制完整 HTTP 历史”一致。
 
-## 7. 用 OpenAI 协议解释当前流程与目标流程
+## 7. 用 OpenAI 协议对照研究基线与已实施流程
 
 本节只是将**协议无关的共同流程**展开为熟悉的 OpenAI 形状。实现落在共有 planner/接纳层；Anthropic、Gemini 等沿自己的合法 role/part/tool-result 编码表达同一语义，不引入 OpenAI 专用通知链，也不要求它们改成 OpenAI 消息格式。
 
 S/T 是本 Turn 固定 System/tools，C0 是初始完整状态包，C1 是本次需要替换的完整分区包，U 是真实用户输入，I/R 是本会话工具 input/output。
 
-| 时点 | 当前项目 | 目标流程 |
+| 时点 | 研究基线流程 | 已实施流程 |
 | --- | --- | --- |
 | START | 捕获 S/T/C0 | 捕获 S/T、Memory 地址及 Seed；初始 C 在首次请求边界采样、对账和接纳，来源随接纳保存 |
 | 请求 1 | S + USER(C0,U)；tools=T | 首次披露时形状相同；已有适用状态时按 K/C 决定是否需要新包，不固定追加 C0 |
@@ -530,7 +534,7 @@ if (hasExternalDifferenceOrMissingBaseline(nextInput, currentState)) {
 | `PromptPage.ModeInjectionEditSheet` | 仅修正现有位置选项和深度标签，真实渲染结果从消息详情查看 | 原名称、列表、字段顺序、弹层边界、200dp 内容编辑区、保存/导入导出；已有 role 条件显隐；不增说明行、高级区、预览面板或 hook UI |
 | 运行中模型/普通配置保存 | 仅在原保存反馈位置使用 `已保存，下次发送生效`；只适用于影响下一 START 的普通运行配置 | 模型选择器布局与默认/指定三态；不同时展示两套模型，不加全局横幅、倒计时或新聊天记录；主题等即时设置不显示此文案 |
 | Android Starter 三个入口 | 依第 9.3 节保留原列表/预览/快捷填充，只新增选定绑定和可选详情 | 输入框高度、发送动作、附件、企业空态整体编排；不加常驻开场卡 |
-| Core Starter 编辑/发布预览（外部对接设计） | 在原 Starter 编辑区增加默认折叠的 `开场上下文`，内含 System 和有序背景；发布预览同样折叠 | 本次不改 Core；Resources/Releases 原页、列表列数、默认筛选与发布步骤保留，不另建模板工作台或独立导航 |
+| Core Starter 编辑/发布预览 | 在原 Starter 编辑区增加默认折叠的 `开场上下文`，内含 System 和有序背景；发布预览同样折叠 | Resources/Releases 原页、列表列数、默认筛选与发布步骤保留，不另建模板工作台或独立导航；实施证据见第 14 节 |
 | 分享/复制/导出 | 普通消息复制、编辑、TTS 保持原正文；专门的上下文详情支持复制原文。现有结构化备份须保全新数据，诊断导出如含上下文须标来源 | 普通图片/PDF/文字分享默认不自动展开或新增企业背景/System 附录，不扩展成新的导出产品 |
 
 ### 8.3 文案、详情与授权
@@ -655,7 +659,7 @@ Draft 的绑定归现有 Conversation runtime，UI 只持有选中摘要和操�
 
 ### 10.1 不变量与保留的信息
 
-当前基线：Room 13、transcript_schema=3、UserSettingsDocument schema 1、Enterprise manifest 6、网络 ManagedSnapshot schema 4。**它们属于不同契约，不能因为同一功能同时各升一级。** 本节确定需要保存什么及迁移约束；SQL 细列名、schema 编号和是否合并小表，在实现时依据最终写入/查询路径确认。
+研究基线为 Room 13、transcript_schema=3、UserSettingsDocument schema 1、Enterprise manifest 6、网络 ManagedSnapshot schema 4。当前 Room 为 15，网络明确支持 4/5，其余上述版本保持不变。**这些是不同契约，不能因为同一功能同时各升一级。** 本节说明持久语义与迁移约束；当前物理结构以 `AppDatabase`、导出 schema 15 和 `database-indexing.md` 为准。
 
 | 事实 | 存储 owner 与决定 |
 | --- | --- |
@@ -732,13 +736,13 @@ Draft 的绑定归现有 Conversation runtime，UI 只持有选中摘要和操�
 
 ### 10.4 迁移策略：按真正改变的契约升级
 
-**Room：需要显式结构迁移，最终编号跟随实施时基线。** 如果届时仍为 v13，则下一 migration 是 13→14；若已有其他变更先落地，顺延，不把本设计当作对 v14 的预约。
+**Room：13→14 引入上下文条目、接纳、关联与开场结构；14→15 补齐旧企业引用的数据迁移，表结构不变。** 历史 12→13、13→14 也在当前类型解码前规范引用，完整保全规则和升级验证见第 14.6 节。以下约束持续适用于迁移和备份恢复。
 
 1. 在事务内创建目标结构；旧 context 每行映射一条新 entry，生成稳定 ID，保持 owner/anchor/原文字节和分支归属。来源标为历史状态披露；旧记录不足以证明是 INITIAL、EXTERNAL_STATE 还是 BASELINE_RESTORE 时原因保持未知，不能全部标成初始或新外部更新。未知创建 Step 也保持未知。
 2. 校验一一映射、行数、内容、外键及逻辑 variant 关系，再替换旧表和创建索引。旧正文 format 1/2 不重写，新请求支持 format 3 分区语义，未知字段/非法值不能通过置空“修复”。
 3. 旧记录没有证明完整 Provider 输入，因此不补造历史 Step 接纳清单、时间提醒或模板来源。新请求才产生新接纳；旧披露仍可查看。
 4. 旧 Starter 预填后形成的聊天没有当时完整开场副本，不根据当前企业配置回填 opening。已有消息、输入、输出、ID、scope 和顺序保持原样。
-5. Room 变更本身不要求 transcript 升版。本期上下文/接纳放在独立 Conversation 结构中，工具仍使用既有 input/output Text，transcript_schema 保持 3；若实现改变消息形状，则必须另给完整 transcript migration，不能隐式增加不可识别 part。
+5. Room 变更本身不要求 transcript 升版。上下文/接纳放在独立 Conversation 结构中，工具仍使用既有 input/output Text，transcript_schema 保持 3；若实现改变消息形状，则必须另给完整 transcript migration，不能隐式增加不可识别 part。
 6. Settings 本期只做内部规则解析与窄结果投影，schema 1 保持；Memory 现有行与索引保持。未来可配置 hook 真正增加字段时，再迁移规则结构并逐项保全原角色、位置、优先级、深度与正文。
 
 **Enterprise 网络契约：必填字段需要明确的新版本。** required openingSnapshot 使用 schema 5，保全已发布 schema 4；版本权威为 Architecture Control Protocol §10.10.1–2。Core discovery/bootstrap、生成 DTO、hash/diff、Android 下载与 mapper 同步采用该契约。`openingSnapshot.format=1` 是内部块格式，不代替网络版本。
@@ -910,7 +914,7 @@ T41 的发送边界分别注入定义失效、Append 失败、Append 成功后 S
 
 ### 11.5 现有测试的保留、改写、合并和移除
 
-以下记录测试调整的准则与对应契约，实际实施和运行证据见第 13 节。替代覆盖通过后才能删除旧断言；保留的历史格式/迁移用例仍测试真实历史输入，不把旧 fixture 全部“升级”成新格式。Core 的测试调整属于外部工作，不计入本次 Android 完成范围。
+以下记录测试调整的准则与对应契约，实际实施和运行证据见第 13 节。替代覆盖通过后才能删除旧断言；保留的历史格式/迁移用例仍测试真实历史输入，不把旧 fixture 全部“升级”成新格式。Core 的测试调整与 Android 分别记账，当前跨端实施结果见第 14 节。
 
 | 现有测试 / 断言 | 确定处理 | 替代或继续保护的契约 |
 | --- | --- | --- |
@@ -1288,3 +1292,29 @@ App 完整设备报告为 252 项，238 通过、14 项环境或显式启用跳�
 最终串行 `test assembleDebug :app:assembleDebugAndroidTest lintDebug assembleRelease` 通过，10 分 56 秒；日志 `build/context-ui-final-gates.log`。JVM 2,862 项，12 项既有环境跳过、0 失败；App Lint 0 errors、324 warnings、6 hints。新增提示为 Compose 可选 modifier 参数顺序建议和仅用于三类以上摘要的复数字符串建议，不影响本次行为。arm64 与 universal Release 的 APK v2 签名校验通过，版本仍为 0.0.20。
 
 最终 Debug SHA-256 为 `7a37e5c9ee0907053907cbd4fd83c1e4f2cecb59838870a3a8596e5674a3708e`，AndroidTest 为 `d8fc042e883afe9035192753a86e7a46c5caeacee6f18ac31cc202c0a5a4786d`，arm64 Release 为 `54b12477e2ea5cfd331b1c8b419c7ba2b323d1178a37a8a36255c8a7ffe15042`，universal Release 为 `64fabd27ec9680c8357f4f31e0d07543d0a4b67955df1a58c8fa4cbf0afba3af`。交付检查覆盖 28 个变更文件、五种语言资源、74 个本地文档链接、UTF-8/CRLF 与 `git diff --check`；构建和截图证据保存在 Git 忽略目录。
+
+### 14.8 Android 语义与架构复核
+
+在 `cc5e741b8` 基线上完整阅读本文，按配置捕获、输入变换、状态对账、接纳/回放、历史存储、Starter 和 UI 查询逐项审查；运行链及存储/UI 由两个独立上下文交叉检查。目标仍为 Turn 内稳定、合法请求边界接纳、本会话工具结果不重复通知、历史事实可准确查看。修复以下可证实问题：
+
+| 问题 | 修复与边界 | 回归落点 |
+| --- | --- | --- |
+| 编辑因果 USER 后，仍保存着的旧原文与变化标签消失 | 历史展示按选中 owner、保存的 owner/anchor 角色和因果关系判断；不要求旧 anchor variant 当前选中。无 admission 的历史仍只标历史内容，兄弟回复隔离；请求回放继续严格判断适用性 | `ConversationContextPresentationTest` 两项及 `ConversationContextQueryTest` 一项，覆盖旧原文授权读取、标签、未选 owner 拒绝、真实缺失 anchor、无伪造 seal |
+| 跨时区且前驱变化时，旧消息时间被重新解释 | 请求 tracker 从已保存的时间 source 取得同消息/createdAt 的首次时区；前驱变化重算 gap，各消息分别按自己的已知时区解释。保留旧原文、使用原接纳事务，不新增持久字段 | `TurnRequestAdmissionTest` 经实际 markOrigins/transformer/admit 验删除前驱、下一 START、时区保全和重试幂等；`TimeReminderTransformerTest` 验不同已知时区及离窗前驱 |
+| 超过两类变化的读屏名称丢失具体类别，子助手合并顺序可能不固定 | 共用入口按类别固定顺序去重；屏幕保持短标签，读屏名称包含全部类别与查看详情。沿用紧凑行、正文对齐和扩展点击区域 | 原 `ConversationContextAndroidTest` 多类别场景加入乱序/重复输入和完整读屏断言，不另建重复组件测试 |
+
+审查未发现需改变现有 owner 或存储协议的理由。System 位置规则在 `materialize` 后从普通规则集合移除，不产生独立冗余规则 entry；自身工具效果仍使用可信执行身份和成功 input/output，分区同步位于完整工具结果之后。Starter 根副本、首次 Append 原子性、历史 v4/v5 消费、Fork/删除引用收口继续沿各自现有 owner。
+
+文档将研究基线与已实施流程明确分列，修正 System 固定规则、Core 实施范围及 Room 当前版本的过时表述；保留第 13、14 节各自构建身份对应的历史证据，不用新结果覆盖原失败或环境边界。`AssistantToolFactory` 和 Disclosure renderer 的注释同步请求边界采样语义。
+
+定向 JVM 四类共 34 项通过；专用 `emulator-5562` 的定向 `connectedDebugAndroidTest` 10 项通过（1 分 46 秒），包括紧凑标签、完整聊天及附件上下文。日志为 `build/context-audit-targeted-jvm.log` 和 `build/context-audit-connected.log`。最初未加引号的 Gradle `-P` 参数被 PowerShell 拆分，任务选择失败，保留为 `build/context-audit-ui-targeted.log`；未执行测试，不计通过。
+
+完整设备首轮 259 项中，244 通过、14 跳过、1 项失败：`ChatContextFlowAndroidTest` 在打开详情后立即检查标题，失败截图和 semantics 显示目录仍在加载。该用例对目录及正文补充 30 秒有界条件等待，不增加自动重试、不改变产品加载逻辑；重新生成测试 APK 后定向复验通过，23.435 秒。失败日志为 `build/context-audit-device-full.log`，截图为 `build/reports/context-audit/full-failure/`；复验日志为 `build/context-audit-chat-final.log`，实际短标签与结构化详情截图为 `build/reports/context-audit/final-chat/`。
+
+完整串行 `test assembleDebug :app:assembleDebugAndroidTest lintDebug assembleRelease` 通过，10 分 55 秒；JVM 2,867 项中 12 项既有环境跳过、0 失败，App Lint 0 errors、323 warnings、6 hints。测试等待调整后的 APK 单独重新构建通过，生产代码未再改动。日志为 `build/context-audit-full-gates.log` 与 `build/context-audit-final-test-apk.log`。arm64/universal Release APK v2 签名校验通过，版本仍为 0.0.20。
+
+最终同一 Debug APK 与重建的 AndroidTest APK 在 `emulator-5562` 上完整执行 259 项：245 通过、14 项环境或显式启用跳过、0 失败，265.147 秒；日志 `build/context-audit-device-final.log`。另显式启用 `starterV5MockLive=true`，开场卡片首发、详情、原文展开、Room 读回及 Activity 重开 1 项通过，12.557 秒，日志 `build/context-audit-starter.log`；它是全量中 opt-in 用例的单独执行，不增加用例身份总数。设备运行使用隔离 fixture 与 HTTP Mock，未改配生产 demo，不代表用户手机或真实供应商成功调用验收。
+
+交付检查覆盖 18 个变更文件、五种语言资源、74 个本地文档链接、生成 wire 一致性、UTF-8/CRLF 和 `git diff --check`。实际标签与详情截图已查看，保留正文左对齐及原动作栏布局；测试和构建证据均保存在 Git 忽略目录。
+
+最终 Debug SHA-256 为 `b6c6e326d6260e3b9ce2dc5ee89ffbf3c3a5f60d2a7b46798179097f273ade90`，AndroidTest 为 `5ee4db010226fb447efcd77d1c032d7334f8db6eb608862711098da4f9553506`，arm64 Release 为 `646cde6116e95193625fafa33256ecdb668eeed29a082172e920640eeb7c24c4`，universal Release 为 `a401d8bbc2ad1a10beb8d02544cddd8cbb69f07b5b68e3ec745ab4a34784b901`。

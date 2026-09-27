@@ -180,8 +180,14 @@ class ChatContextFlowAndroidTest {
             compose.onNodeWithContentDescription(updated).performScrollTo().assertIsDisplayed()
             capture(context, "02-chat-external-context.png")
             compose.onNodeWithContentDescription(updated).performClick()
+            compose.waitUntil(30_000) {
+                compose.onAllNodesWithText(uiContext.getString(R.string.context_changes_heading)).fetchSemanticsNodes().isNotEmpty()
+            }
             compose.onNodeWithText(uiContext.getString(R.string.context_changes_heading)).assertIsDisplayed()
             compose.onNodeWithText(uiContext.getString(R.string.context_system)).assertDoesNotExist()
+            compose.waitUntil(30_000) {
+                compose.onAllNodesWithText("External context added while the model was waiting", substring = true).fetchSemanticsNodes().isNotEmpty()
+            }
             compose.onNodeWithText("External context added while the model was waiting", substring = true).performScrollTo().assertIsDisplayed()
             capture(context, "03-context-changes-detail.png")
             compose.onNodeWithText("Own directory changed by tool", substring = true).assertDoesNotExist()
@@ -233,6 +239,9 @@ class ChatContextFlowAndroidTest {
                 .filter { it.boundsInRoot.bottom <= inputTop }.maxBy { it.boundsInRoot.bottom }
             compose.onNode(SemanticsMatcher("last message More") { it.id == more.id }).performClick()
             compose.onNodeWithText(uiContext.getString(R.string.context_title)).performClick()
+            compose.waitUntil(30_000) {
+                compose.onAllNodesWithText(uiContext.getString(R.string.context_system)).fetchSemanticsNodes().isNotEmpty()
+            }
             compose.onNodeWithText(uiContext.getString(R.string.context_system)).performClick()
             compose.waitUntil(30_000) { compose.onAllNodesWithText("SYSTEM_ASYNC_AFTER", substring = true).fetchSemanticsNodes().isNotEmpty() }
             compose.onNodeWithText(uiContext.getString(R.string.context_owner_conversation)).assertIsDisplayed()
@@ -240,6 +249,7 @@ class ChatContextFlowAndroidTest {
             capture(context, "05-updated-system-detail.png")
             compose.onNodeWithText(uiContext.getString(R.string.context_system)).performClick()
             compose.onNodeWithText("${uiContext.getString(R.string.context_prompt_rule)} · ${rule.name}").performScrollTo().performClick()
+            compose.waitUntil(30_000) { compose.onAllNodesWithText("CONTEXT_RULE_TWO").fetchSemanticsNodes().isNotEmpty() }
             compose.onNodeWithText("CONTEXT_RULE_TWO").assertExists()
             capture(context, "06-rule-detail.png")
             compose.onNodeWithContentDescription(uiContext.getString(R.string.update_card_close)).performClick()

@@ -78,10 +78,22 @@ class TimeReminderTransformerTest {
     @Test
     fun `window retains predecessor time from the complete branch`() {
         val retained = user("retained", "2026-02-22T10:30:00")
-        val predecessor = LocalDateTime.parse("2026-02-22T10:00:00")
+        val predecessor = RealUserTime(kotlin.uuid.Uuid.random(), LocalDateTime.parse("2026-02-22T10:00:00"))
         val result = applyTimeReminder(listOf(retained), "UTC", previousRealUserTimes = mapOf(retained.id to predecessor))
         assertEquals(listOf(retained), result)
         val first = applyTimeReminder(listOf(retained), "UTC", previousRealUserTimes = mapOf(retained.id to null))
         assertEquals(2, first.size)
+    }
+
+    @Test
+    fun `different captured zones determine the real gap even for an off window predecessor`() {
+        val first = user("first", "2026-09-27T10:00:00")
+        val retained = user("retained", "2026-09-27T10:30:00")
+        val zones = mapOf(first.id to "Asia/Shanghai", retained.id to "America/New_York")
+        val result = applyTimeReminder(listOf(retained), "UTC",
+            previousRealUserTimes = mapOf(retained.id to RealUserTime(first.id, first.createdAt)),
+            admittedZone = zones::get)
+        assertEquals("<time_reminder>Message time: 2026-09-27T10:30:00-04:00; gap: 12 h</time_reminder>",
+            result.first().toText())
     }
 }

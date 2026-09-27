@@ -1,6 +1,5 @@
 package net.weero.measix.pilot.data.ai.transformers
 
-import kotlinx.datetime.LocalDateTime
 import kotlinx.datetime.TimeZone
 import kotlinx.datetime.toInstant
 import me.rerere.ai.core.MessageRole
@@ -22,6 +21,7 @@ object TimeReminderTransformer : InputMessageTransformer {
         val transformed = applyTimeReminder(messages, ctx.promptInputs.zoneId,
             isRealUser = ctx.requestOrigins::isRealUser,
             previousRealUserTimes = ctx.requestOrigins.previousRealUserTimes(),
+            admittedZone = ctx.requestOrigins::messageTimeZone,
             admittedText = ctx.requestOrigins::messageTimeText)
         ctx.requestOrigins.markNewMessages(messages, transformed, SyntheticMessageKind.TIME_REMINDER)
         transformed.forEachIndexed { index, message ->
@@ -40,25 +40,28 @@ internal fun applyTimeReminder(
     messages: List<UIMessage>,
     zoneId: String,
     isRealUser: (UIMessage) -> Boolean = { it.role == MessageRole.USER },
-    previousRealUserTimes: Map<Uuid, LocalDateTime?> = emptyMap(),
+    previousRealUserTimes: Map<Uuid, RealUserTime?> = emptyMap(),
+    admittedZone: (Uuid) -> String? = { null },
     admittedText: (Uuid) -> String? = { null },
 ): List<UIMessage> {
-    val timeZone = TimeZone.of(zoneId)
-    val javaZone = ZoneId.of(zoneId)
     var previousUserInstant: Instant? = null
     return buildList {
         for (message in messages) {
             if (isRealUser(message)) {
+                val messageZone = admittedZone(message.id) ?: zoneId
+                val timeZone = TimeZone.of(messageZone)
                 val instant = message.createdAt.toInstant(timeZone)
                 val previous = if (message.id in previousRealUserTimes) {
-                    previousRealUserTimes[message.id]?.toInstant(timeZone)
+                    previousRealUserTimes[message.id]?.let {
+                        it.createdAt.toInstant(TimeZone.of(admittedZone(it.messageId) ?: zoneId))
+                    }
                 } else previousUserInstant
                 val gap = previous?.let { instant - it }
                 val original = admittedText(message.id)
                 if (original != null) {
                     add(UIMessage.user(original))
                 } else if (gap == null || gap > TIME_GAP_THRESHOLD_SECONDS.seconds) {
-                    val time = DateTimeFormatter.ISO_OFFSET_DATE_TIME.format(instant.toJavaInstant().atZone(javaZone))
+                    val time = DateTimeFormatter.ISO_OFFSET_DATE_TIME.format(instant.toJavaInstant().atZone(ZoneId.of(messageZone)))
                     val suffix = gap?.inWholeSeconds?.let { "; gap: ${if (it < 86400) "${it / 3600} h" else "${it / 86400} d"}" }.orEmpty()
                     add(UIMessage.user("<time_reminder>Message time: $time$suffix</time_reminder>"))
                 }
