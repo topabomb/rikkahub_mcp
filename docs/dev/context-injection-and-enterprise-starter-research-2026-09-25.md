@@ -6,6 +6,8 @@
 
 当前实施包含 Android 与 Core v5 Starter 对接，配套架构语义和 Portal 派生契约同步。v4 保留原提示词入口；v5 提供完整开场快照，不能将 v5 缺失字段当成 v4，也不能给 v4 补造开场。本地跨端联调与生产 v4 demo 分别记账；本次 Core v5 未部署生产。
 
+**发布兼容边界：文档创建前 Android `29ecc1093` 只能消费 v4，不能消费新 Core 的 v5 草稿发布，即使该发布没有 Starter。** 升级 Core 程序并保留 v4 可以兼容；发布新草稿前必须先升级需要继续使用的 Android。旧 APK 的 11 场景实测、恢复办法和证据见第 14.9 节。
+
 ## 1. 目标、术语与关键约定
 
 ### 1.1 术语
@@ -1318,3 +1320,42 @@ App 完整设备报告为 252 项，238 通过、14 项环境或显式启用跳�
 交付检查覆盖 18 个变更文件、五种语言资源、74 个本地文档链接、生成 wire 一致性、UTF-8/CRLF 和 `git diff --check`。实际标签与详情截图已查看，保留正文左对齐及原动作栏布局；测试和构建证据均保存在 Git 忽略目录。
 
 最终 Debug SHA-256 为 `b6c6e326d6260e3b9ce2dc5ee89ffbf3c3a5f60d2a7b46798179097f273ade90`，AndroidTest 为 `5ee4db010226fb447efcd77d1c032d7334f8db6eb608862711098da4f9553506`，arm64 Release 为 `646cde6116e95193625fafa33256ecdb668eeed29a082172e920640eeb7c24c4`，universal Release 为 `a401d8bbc2ad1a10beb8d02544cddd8cbb69f07b5b68e3ec745ab4a34784b901`。
+
+### 14.9 文档创建前 Android 与新 Core 发布的反向兼容验证
+
+**结论：旧 Android 可以使用升级后的 Core 所保留的 v4 发布，但不能使用新 Core 从草稿生成的 v5 发布，包括没有 Starter 的发布。** 新 Android 读取旧 v4 的正向兼容证据，不能用来证明旧 Android 能读取新 v5。这里的旧客户端精确指 `29ecc109335c536c6f2b60841e3d4aace35b0dd3`，即本文创建提交 `3d0b726678828d00969aae38d5023f19ee12219e` 的父提交；不将结论泛化到所有名为 0.0.20 的安装包。
+
+#### 版本边界与真实环境
+
+- Android 原生产源码完全不改，在独立 checkout 构建旧 Debug x86_64 APK；增加旧版专用 instrumentation 探针，另补旧 MCP 测试 fixture 两处缺失的 `sessionCallable` 参数。未修改旧 DTO 或放宽校验。
+- 新 Core 为 `2daa739d336c2f03cf631dae00bb9fbebf8a06eb`，实际 `device-demo` 二进制记录 `vcs.modified=false`。旧 Core `1b70fcb` 在独立数据库通过正式 Draft/Publish 创建 v4；原库经当前 migration、当前 Core 启动后继续提供该发布，再通过正式发布和历史 Republish 切换各场景。
+- 专用 `emulator-5562` / API 36 经 adb reverse 访问隔离 Core `127.0.0.1:9124`。使用实际 Hub、Relay、SQLite、认证、下载、Android 同步与持久化 owner；控制面 HTTP 没有 Mock。供应商凭据为无调用用途的 fixture，未验收外部模型响应，未修改共享 device:real 的发布或用户数据。
+- 旧 APK SHA-256：`7b294d52501ab6c3580f95cb82129fbb4b2f5f70ed36af55f350642c5aba52f5`；最终探针 APK：`a876783eb90bd0874013c12288fe6c5a27c6dfaa9056ba60e36a96ceb68064c8`；新 Core 二进制：`18f3835f36d8fbf6c2a78625a21cdc3b1daf0486010a666d117434dffe09a9fa`。
+
+#### 实测矩阵
+
+| 旧 Android 场景 | 确定结果 | 数据与使用边界 |
+| --- | --- | --- |
+| 新 Core 保留历史 v4，新接入并重启 | 通过；READY、2 个助手、2 个模型、3 个 Starter，预填与执行准入均通过 | 重启后 Applied 和完整配置摘要一致 |
+| 已接入 v4，Core 新发布含 Starter 的 v5，再同步/重启 | 拒绝：`unknown_platform_field` | 旧严格字段校验先拒绝 `openingSnapshot`，尚未执行 DTO 的 schemaVersion 校验；旧 Applied/config 保留，新企业执行被阻止 |
+| 已接入 v4，Core 新发布无 Starter 的 v5，再同步/重启 | 拒绝：`invalid_platform_ManagedSnapshot_schemaVersion` | 即使没有新增 Starter 字段，旧 DTO 也只接受 v4；同样保留旧配置并阻止执行 |
+| 空客户端直接接入上述两种 v5，并重启 | 分别返回上述两种 reason，均停在 CONFIGURATION_PENDING | 绑定保留，无 Applied、无可用企业配置；恢复诊断可见，不是接入成功 |
+| v5 接入失败后，Core Republish 历史 v4 | 通过；原 session 不变，无需重新接入或清数据，恢复 READY、预填和执行准入 | Republish 创建新的 release/generation；旧发布原 bytes/hash 不被改写 |
+| 旧 UI 仍显示缓存 v4 的 Starter 时实际点击并发送 | 预填成功，发送显示 `Message generation failed / unknown_platform_field` | 缓存可显示、manifest 仍 READY，不等于能继续企业调用；截图及 UI hierarchy 已留存 |
+
+最后一次完整设备矩阵包含 11 个场景，全部符合预期：v4 接入/重开 2 项，有/无 Starter 的 v5 各 4 项（已有绑定同步/重开、新绑定接入/重开），历史 v4 恢复 1 项。拒绝场景的“通过”表示成功证明不兼容，并非成功使用 v5。使用同一最终旧生产 APK 与最终探针 APK，无自动重试。
+
+原始 v4 为 `rel_5d45e317-e0de-4fc2-ba7f-843dbe7c234b`、generation 1、`sha256:f52b3027c4f057fd0d69eddf8fdcb18b45c30ee9086355250d0dc3dfa0a2673c`；有 Starter 的 v5 原发布为 `rel_edb53f7b-58f4-4df1-a8b8-2e06a19adfff`、generation 2；无 Starter 的 v5 为 `rel_81e95972-456e-4e03-bb43-7494c01e1d0b`、generation 3。最终矩阵从历史 v4 的新发布 generation 5 开始，依次激活 v5 generation 6/7/8，最后恢复 v4 generation 9。每次均走正式发布或 Republish，不手改 schema 或活动代际。
+
+Core 另增 `TestOldClientReleaseVersionAndAppliedBoundary`，四包 `httpapi/capability/runtimecontrol/relay` 共 224 个顶层测试通过、0 失败/跳过，`go vet ./internal/hub/httpapi` 通过。覆盖下载不伪造 Applied、旧 hash/bytes/ETag/304 保全、历史 Republish、Admin PENDING，以及 Relay 拒绝旧 generation 的 428 `managed_snapshot_required` 且不转发。旧 APK 在同步解析处先失败，不把 Relay 单独验证的 428 描述成旧 UI 实际显示的错误。
+
+#### 发布约定与可执行结论
+
+1. **升级 Core 程序与发布新配置必须分开判断。** 仅升级程序、继续激活 v4 可以兼容该旧 Android；当前 Core 的新草稿发布固定 v5，不因 Starter 为空而改变。
+2. **发布新草稿前先升级所有需要继续使用该企业的 Android。** Discovery/Bootstrap 的 `[4,5]` 是服务端格式能力声明，不是按客户端协商。`appVersion=0.0.20` 只是设备记录；新旧实现版本名相同，不能以此判断已经升级。应核对交付 APK 身份或具体构建来源。
+3. 暂时不能升级客户端时，应保留当前 v4；若已发布 v5，可在确认资源/策略退回影响后，经历史 Republish 恢复 v4。该动作影响全平台 active release，不是为个别旧设备建立独立旧代际，也不能承诺保留 v5 新配置的能力。
+4. 如果要求旧 Android 同时消费新版草稿，需要另行确定服务端兼容发布策略和客户端能力协议。不得直接删去 opening、忽略未知字段或重写已发布 bytes/hash 来声称兼容；这些做法会丢失企业开场语义或破坏发布身份。本轮没有改变产品协议或实现自动降级。
+
+复现入口保存在 [`tools/compatibility/README.md`](../../tools/compatibility/README.md) 与同目录旧版 Kotlin 探针。Core 本地证据在 `.artifacts/compat-old-android-20260927/`（11 场景日志、`final-matrix.json`、真实发布记录和 UI 截图）及 `.artifacts/old-android-compat/core-integration.jsonl`。Android 构建日志为 `build/pre-context-old-*.log`。初次缺少 submodule、旧 MCP fixture 缺参和测试资料遗漏 kind/expiresAt 的失败均属于构建/探针准备问题，修正后完整执行上述矩阵，不计为产品兼容结论。
+
+验收范围为精确历史 Debug APK 的控制面兼容、配置持久保全、Starter 预填、执行准入及代表性 UI 失败/恢复；不扩展为 OEM 真机、历史签名 Release/R8、完整旧聊天数据库迁移或真实供应商调用成功验收。
