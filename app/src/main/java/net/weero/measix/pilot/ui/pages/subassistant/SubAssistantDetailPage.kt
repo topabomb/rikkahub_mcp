@@ -49,8 +49,6 @@ import net.weero.measix.pilot.data.ai.subassistant.resolveSubAssistantErrorBody
 import net.weero.measix.pilot.data.model.Avatar
 import net.weero.measix.pilot.data.model.Assistant
 import net.weero.measix.pilot.ui.components.message.ChatMessage
-import net.weero.measix.pilot.ui.components.message.ContextMessageEntry
-import net.weero.measix.pilot.ui.components.message.ConversationContextDetails
 import net.weero.measix.pilot.ui.components.message.LocalAttachmentPreview
 import net.weero.measix.pilot.ui.components.message.LocalConversationImages
 import net.weero.measix.pilot.ui.components.message.collectMessageImages
@@ -177,7 +175,6 @@ private fun DetailContent(
 ) {
     val listState = rememberLazyListState()
     var requestExpanded by remember(state.link.metadata.runId) { mutableStateOf(false) }
-    var showContext by remember(source, state.link.metadata.runId) { mutableStateOf(false) }
     var requestOverflow by remember(state.link.metadata.runId) { mutableStateOf(false) }
     var followLatest by remember(state.link.metadata.runId) { mutableStateOf(true) }
     val isAtBottom by remember {
@@ -280,10 +277,6 @@ private fun DetailContent(
                                 )
                             }
                         }
-                        if (source != null && state.hasRequestContext) {
-                            ContextMessageEntry(externalUpdate = state.hasExternalContextUpdate,
-                                categories = state.timeline.flatMap { state.child.context.messages[it.currentMessage.id]?.externalCategories.orEmpty() }.distinct()) { showContext = true }
-                        }
                     }
                 }
             }
@@ -324,7 +317,6 @@ private fun DetailContent(
                         detailSource = source,
                         contextConversationId = state.child.conversationId,
                         contextSummary = state.child.context.messages[node.currentMessage.id],
-                        showContextEntry = false,
                         modifier = Modifier.padding(horizontal = 8.dp),
                         loading = false,
                         turnFinished = state.child.stream?.assistantMessageId != node.currentMessage.id,
@@ -410,10 +402,6 @@ private fun DetailContent(
                 Text(stringResource(R.string.sub_assistant_card_scroll_to_latest))
             }
         }
-    }
-    if (showContext && source != null) {
-        ConversationContextDetails(source, state.child.conversationId, state.link.childTaskMessageId,
-            onDismiss = { showContext = false })
     }
 }
 

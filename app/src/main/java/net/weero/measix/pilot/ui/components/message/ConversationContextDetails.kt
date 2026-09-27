@@ -34,21 +34,19 @@ import kotlin.uuid.Uuid
 
 @Composable
 internal fun ContextMessageEntry(
-    externalUpdate: Boolean,
     modifier: Modifier = Modifier,
     categories: List<ConversationContextCategory> = emptyList(),
     onClick: () -> Unit,
 ) {
     val names = categories.distinct().sortedBy { it.ordinal }.map { contextCategoryText(it) }
     val label = when {
-        !externalUpdate -> stringResource(R.string.context_title)
         names.isEmpty() -> stringResource(R.string.context_updated)
         names.size <= 2 -> stringResource(R.string.context_updated_categories, names.joinToString(" · "))
         else -> stringResource(R.string.context_updated_more, names.first(), names.size)
     }
-    val accessibleLabel = if (externalUpdate && names.isNotEmpty())
+    val accessibleLabel = if (names.isNotEmpty())
         stringResource(R.string.context_updated_categories, names.joinToString(" · ")) else label
-    val description = if (externalUpdate && names.isEmpty()) stringResource(R.string.context_updated_accessibility)
+    val description = if (names.isEmpty()) stringResource(R.string.context_updated_accessibility)
         else stringResource(R.string.context_details_accessibility, accessibleLabel)
     // A compact text row uses Compose's expanded minimum touch target without button content insets.
     Box(modifier.heightIn(min = 32.dp).clickable(role = Role.Button, onClick = onClick)
@@ -80,33 +78,37 @@ internal fun ConversationContextDetails(
     lease: ConversationViewLease,
     conversationId: Uuid,
     messageId: Uuid,
+    requestId: Uuid,
     onDismiss: () -> Unit,
     query: ConversationQueryService = koinInject(),
 ) {
-    var detail by remember(lease, conversationId, messageId) { mutableStateOf<ConversationContextDetailsUiModel?>(null) }
-    var failure by remember(lease, conversationId, messageId) { mutableStateOf<String?>(null) }
+    var detail by remember(lease, conversationId, messageId, requestId) { mutableStateOf<ConversationContextDetailsUiModel?>(null) }
+    var failure by remember(lease, conversationId, messageId, requestId) { mutableStateOf<String?>(null) }
     val dismiss by rememberUpdatedState(onDismiss)
-    val bodies = remember(lease, conversationId, messageId) { mutableMapOf<Uuid?, ConversationContextContentUiModel>() }
+    val bodies = remember(lease, conversationId, messageId, requestId) { mutableMapOf<Uuid?, ConversationContextContentUiModel>() }
     val bodyReads = remember(lease, conversationId, messageId) { Mutex() }
     LaunchedEffect(lease) { query.observeViewAccess(lease).collect { if (!it) dismiss() } }
-    LaunchedEffect(lease, conversationId, messageId) {
-        try { query.observeContextDetails(lease, conversationId, messageId).collect { detail = it } }
+    LaunchedEffect(lease, conversationId, messageId, requestId) {
+        try { query.observeContextDetails(lease, conversationId, messageId, requestId).collect {
+            if (it.requests.isEmpty()) dismiss() else detail = it
+        } }
         catch (cancelled: CancellationException) { throw cancelled }
         catch (error: Exception) { detail = null; bodies.clear(); failure = contextDiagnostic(error) }
     }
     AdaptiveModal(onDismissRequest = onDismiss) {
         Row(Modifier.fillMaxWidth().padding(8.dp)) {
-            Text(stringResource(R.string.context_title), Modifier.weight(1f).padding(8.dp), style = MaterialTheme.typography.titleLarge)
+            Text(stringResource(R.string.context_changes_title), Modifier.weight(1f).padding(8.dp), style = MaterialTheme.typography.titleLarge)
             IconButton(onClick = onDismiss) { Icon(HugeIcons.Cancel01, stringResource(R.string.update_card_close)) }
         }
         if (detail == null && failure == null) LinearProgressIndicator(Modifier.fillMaxWidth())
         Column(Modifier.weight(1f, fill = false).verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             failure?.let { SelectionContainer { Text(it, color = MaterialTheme.colorScheme.error) } }
             detail?.let { value ->
-                ContextRequestList(value) { request, item ->
+                val request = value.requests.single()
+                ContextUpdateRequest(request) { item ->
                     bodyReads.withLock {
                         bodies[item.entryId] ?: query.contextContent(lease, conversationId, messageId, request.id, item.key)
-                            .also { bodies[item.entryId] = it }
+                            .forUpdate(item.updatedCategories).also { bodies[item.entryId] = it }
                     }
                 }
             }
@@ -115,32 +117,8 @@ internal fun ConversationContextDetails(
 }
 
 @Composable
-internal fun ContextRequestList(
-    detail: ConversationContextDetailsUiModel,
-    load: suspend (ConversationContextRequestUiModel, ConversationContextItemUiModel) -> ConversationContextContentUiModel,
-) {
-    val expanded = remember { mutableStateMapOf<Uuid?, Boolean>() }
-    var initialized by remember { mutableStateOf(false) }
-    LaunchedEffect(detail.requests) {
-        if (!initialized && detail.requests.isNotEmpty()) {
-            val initial = detail.requests.firstOrNull { request -> request.items.any { it.isCurrentUpdate } }
-                ?: detail.requests.first()
-            expanded[initial.id] = true
-            initialized = true
-        }
-    }
-    detail.requests.forEach { request -> key(request.id) {
-        TextButton(onClick = { expanded[request.id] = expanded[request.id] != true }) {
-            Text(if (request.ordinal == null) stringResource(if (request.state == ConversationContextRequestState.SAVED_CONTENT)
-                R.string.context_title else R.string.context_historical)
-                else stringResource(R.string.context_request, request.ordinal + 1))
-        }
-        if (expanded[request.id] == true) ContextRequest(request) { load(request, it) }
-    } }
-}
-
-@Composable
-private fun ContextRequest(request: ConversationContextRequestUiModel, load: suspend (ConversationContextItemUiModel) -> ConversationContextContentUiModel) {
+internal fun ContextUpdateRequest(request: ConversationContextRequestUiModel, load: suspend (ConversationContextItemUiModel) -> ConversationContextContentUiModel) {
+    Text(stringResource(R.string.context_request, requireNotNull(request.ordinal) + 1), style = MaterialTheme.typography.titleSmall)
     val status = when (request.state) {
         ConversationContextRequestState.ADDED -> R.string.context_added
         ConversationContextRequestState.INCOMPLETE -> R.string.context_incomplete
@@ -150,23 +128,12 @@ private fun ContextRequest(request: ConversationContextRequestUiModel, load: sus
     }
     if (status != null) Text(stringResource(status), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
     request.time?.let { Text(Instant.parse(it).toLocalDateTime(), style = MaterialTheme.typography.bodySmall) }
-    val updates = request.items.filter { it.isCurrentUpdate }
-    val other = request.items.filterNot { it.isCurrentUpdate }
-    if (updates.isNotEmpty()) {
-        Text(stringResource(R.string.context_changes_heading), style = MaterialTheme.typography.titleSmall)
-        Text(stringResource(R.string.context_changes_hint), style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant)
-        updates.forEach { item -> key(item.key) { ContextContentItem(item, initiallyExpanded = true) { load(item) } } }
-    }
-    var showOther by remember(request.id) { mutableStateOf(false) }
-    if (other.isNotEmpty()) {
-        if (updates.isNotEmpty()) TextButton(onClick = { showOther = !showOther }) {
-            Text(stringResource(R.string.context_other_inputs))
-        } else Text(stringResource(R.string.context_inputs_heading), style = MaterialTheme.typography.titleSmall)
-        if (updates.isEmpty() || showOther) other.forEach { item -> key(item.key) {
-            ContextContentItem(item) { load(item) }
-        } }
-    }
+    Text(stringResource(R.string.context_changes_hint), style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant)
+    request.items.forEach { item -> key(item.key) {
+        ContextContentItem(item, initiallyExpanded = true) { load(item) }
+    } }
+
 }
 
 @Composable

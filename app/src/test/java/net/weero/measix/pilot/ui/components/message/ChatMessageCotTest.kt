@@ -18,6 +18,26 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ChatMessageCotTest {
+    @Test
+    fun `only new notification boundaries split thinking and remain before request output`() {
+        val first = UIMessagePart.Step(Uuid.random(), 0, kotlin.time.Instant.fromEpochMilliseconds(0))
+        val second = UIMessagePart.Step(Uuid.random(), 1, kotlin.time.Instant.fromEpochMilliseconds(1))
+        val third = UIMessagePart.Step(Uuid.random(), 2, kotlin.time.Instant.fromEpochMilliseconds(2))
+        val update = net.weero.measix.pilot.service.ConversationContextUpdateMarker(second.stepId, Uuid.random(),
+            listOf(net.weero.measix.pilot.service.ConversationContextCategory.MEMORY))
+        val before = tool("memory_tool").copy(stepId = first.stepId)
+        val after = UIMessagePart.Reasoning("after update")
+        val parts = listOf(first, before, second, after, third, UIMessagePart.Reasoning("continued"))
+        val blocks = parts.groupMessageParts(listOf(update))
+        assertEquals(3, blocks.size)
+        assertEquals(listOf(ThinkingStep.ToolStep(before)), (blocks[0] as MessagePartBlock.ThinkingBlock).steps)
+        assertEquals(MessagePartBlock.ContextUpdateBlock(update), blocks[1])
+        assertEquals(2, (blocks[2] as MessagePartBlock.ThinkingBlock).steps.size)
+        // Admission may precede the first streamed output. The marker is still visible.
+        assertEquals(listOf(MessagePartBlock.ContextUpdateBlock(update)), listOf(second).groupMessageParts(listOf(update)))
+        assertTrue(listOf(first).groupMessageParts(listOf(update)).isEmpty())
+    }
+
     private fun tool(
         name: String,
         id: String = name,

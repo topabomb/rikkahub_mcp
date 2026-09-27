@@ -200,9 +200,12 @@ class ConversationQueryService internal constructor(
         lease: ConversationViewLease,
         conversationId: Uuid,
         messageId: Uuid,
+        requestId: Uuid? = null,
     ): ConversationContextDetailsUiModel = withViewAccess(lease) {
         val snapshot = contextSnapshot(lease, conversationId)
-        val detail = withContext(Dispatchers.Default) { projectConversationContextDetails(snapshot, messageId) }
+        val detail = withContext(Dispatchers.Default) {
+            projectConversationContextDetails(snapshot, messageId, requestId?.let { setOf(it) })
+        }
         val current = contextSnapshot(lease, conversationId)
         check(current === snapshot || current.nodes.map { it.currentMessage.id } == snapshot.nodes.map { it.currentMessage.id }) {
             "context_selection_changed_during_read"
@@ -214,6 +217,7 @@ class ConversationQueryService internal constructor(
         lease: ConversationViewLease,
         conversationId: Uuid,
         messageId: Uuid,
+        requestId: Uuid,
     ): Flow<ConversationContextDetailsUiModel> = flow {
         requireViewAccess(lease)
         emitAll(runtimeRegistry.observeRuntimeState(conversationId).flatMapLatest { state ->
@@ -224,7 +228,8 @@ class ConversationQueryService internal constructor(
                 else -> error("context_conversation_unavailable")
             }
             runtime.snapshot.map { it.durable }.distinctUntilChanged { previous, next -> previous === next }
-                .map { contextDetails(lease, conversationId, messageId) }
+                .map { contextDetails(lease, conversationId, messageId, requestId).forUpdate(requestId) }
+                .distinctUntilChanged()
         })
     }
 

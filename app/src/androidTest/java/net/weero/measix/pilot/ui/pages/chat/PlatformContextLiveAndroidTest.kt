@@ -168,7 +168,7 @@ class PlatformContextLiveAndroidTest {
             assertTrue("Real Provider must return nonempty text", answer.toText().isNotBlank())
             assertTrue("This pure-text acceptance request must not execute tools", answer.parts.none { it is UIMessagePart.Tool })
             assertEquals(listOf(prompt), transcript.filter { it.role == MessageRole.USER }.map { it.toText() })
-            assertTrue(completed.snapshot.context.messages.values.none { it.hasExternalUpdate })
+            assertTrue(completed.snapshot.context.messages.values.none { it.updates.isNotEmpty() })
             val durable = runBlocking { requireNotNull(query.aggregateSnapshot(created.id)) }
             assertNull("v4 Starter must not invent a saved opening snapshot", durable.opening)
             assertEquals(1, durable.contextAdmissions.size)
@@ -190,33 +190,15 @@ class PlatformContextLiveAndroidTest {
             }
             compose.onAllNodesWithContentDescription(uiContext.getString(R.string.context_updated_accessibility)).assertCountEquals(0)
             screenshot(evidence, "03-real-provider-completed.png")
-            // Choose the bottom message's existing More action, excluding the input's More button.
-            val inputTop = compose.onNodeWithTag("chat_input").fetchSemanticsNode().boundsInRoot.top
-            val more = compose.onAllNodesWithContentDescription(uiContext.getString(R.string.more_options))
-                .fetchSemanticsNodes().filter { it.boundsInRoot.bottom <= inputTop }.maxBy { it.boundsInRoot.bottom }
-            compose.onNode(SemanticsMatcher("the visible message More action") { it.id == more.id }).performClick()
-            compose.onNodeWithText(uiContext.getString(R.string.context_title)).performClick()
-            compose.waitUntil(30_000) {
-                compose.onAllNodesWithText(uiContext.getString(R.string.context_system)).fetchSemanticsNodes().isNotEmpty()
-            }
-            screenshot(evidence, "04-context-summary.png")
-            compose.onNodeWithText(uiContext.getString(R.string.context_system)).performClick()
-            compose.waitUntil(30_000) { compose.onAllNodesWithText(systemText).fetchSemanticsNodes().isNotEmpty() }
-            screenshot(evidence, "05-real-system-expanded.png")
-            compose.onNodeWithText(uiContext.getString(R.string.context_system)).performClick()
-            initial.firstOrNull()?.let { item ->
-                val title = item.categories.joinToString(" / ") { uiContext.getString(categoryResource(it)) }
+            initial.forEach { item ->
                 val expected = runBlocking { query.contextContent(lease, created.id, answer.id, request.id, item.key).text }
-                compose.onNodeWithText(title).performScrollTo().performClick()
-                compose.waitUntil(30_000) { compose.onAllNodesWithText(expected).fetchSemanticsNodes().isNotEmpty() }
-                screenshot(evidence, "06-initial-information-expanded.png")
-                report.appendText("initial_information_expanded=true\n")
+                assertTrue(expected.isNotBlank())
+                compose.onAllNodesWithText(expected).assertCountEquals(0)
             }
-            compose.onNodeWithContentDescription(uiContext.getString(R.string.update_card_close)).performClick()
             compose.onAllNodesWithText(systemText).assertCountEquals(0)
-            assertEquals("Viewing context must not mutate the transcript", transcript,
+            assertEquals("Reading admitted context must not mutate the transcript", transcript,
                 runBlocking { requireNotNull(query.aggregateSnapshot(created.id)).currentMessages() })
-            report.appendText("more_context_ui=true\ncontext_not_transcript=true\nfirst_model=${answer.modelId}\n")
+            report.appendText("admitted_context_query=true\ncontext_not_transcript=true\nfirst_model=${answer.modelId}\n")
             if (arguments.getString("platformContextModelSwitch") == "true") {
                 val currentConfiguration = requireNotNull(completed.configuration)
                 val firstModel = requireNotNull(currentConfiguration.model)
@@ -269,7 +251,7 @@ class PlatformContextLiveAndroidTest {
                 assertTrue(secondAnswer.parts.none { it is UIMessagePart.Tool })
                 assertEquals(listOf(prompt, secondPrompt), second.snapshot.currentMessages()
                     .filter { it.role == MessageRole.USER }.map { it.toText() })
-                assertTrue(second.snapshot.context.messages.values.none { it.hasExternalUpdate })
+                assertTrue(second.snapshot.context.messages.values.none { it.updates.isNotEmpty() })
                 val afterSwitch = runBlocking { requireNotNull(query.aggregateSnapshot(created.id)) }
                 assertEquals(2, afterSwitch.contextAdmissions.size)
                 assertEquals(2, afterSwitch.contextAdmissions.map { it.owner.messageId }.distinct().size)
@@ -288,18 +270,6 @@ class PlatformContextLiveAndroidTest {
                     query.contextContent(lease, created.id, secondAnswer.id, secondDetails.id, secondSystem.key).text
                 }
                 assertTrue(secondSystemText.isNotBlank())
-                val secondInputTop = compose.onNodeWithTag("chat_input").fetchSemanticsNode().boundsInRoot.top
-                val secondMore = compose.onAllNodesWithContentDescription(uiContext.getString(R.string.more_options))
-                    .fetchSemanticsNodes().filter { it.boundsInRoot.bottom <= secondInputTop }.maxBy { it.boundsInRoot.bottom }
-                compose.onNode(SemanticsMatcher("the second message More action") { it.id == secondMore.id }).performClick()
-                compose.onNodeWithText(uiContext.getString(R.string.context_title)).performClick()
-                compose.waitUntil(30_000) {
-                    compose.onAllNodesWithText(uiContext.getString(R.string.context_system)).fetchSemanticsNodes().isNotEmpty()
-                }
-                compose.onNodeWithText(uiContext.getString(R.string.context_system)).performClick()
-                compose.waitUntil(30_000) { compose.onAllNodesWithText(secondSystemText).fetchSemanticsNodes().isNotEmpty() }
-                screenshot(evidence, "09-second-system-expanded.png")
-                compose.onNodeWithContentDescription(uiContext.getString(R.string.update_card_close)).performClick()
                 compose.onAllNodesWithText(secondSystemText).assertCountEquals(0)
                 assertEquals(afterSwitch.currentMessages(), runBlocking { requireNotNull(query.aggregateSnapshot(created.id)).currentMessages() })
                 report.appendText("model_switch=true\nsecond_model=${secondModel.id}\nsecond_provider_completed=true\n" +
@@ -334,13 +304,6 @@ class PlatformContextLiveAndroidTest {
             compose.waitUntil(timeoutMillis + 5_000) { pending.isCompleted }
             runBlocking { pending.await() }
         } finally { scope.cancel() }
-    }
-
-    private fun categoryResource(category: ConversationContextCategory): Int = when (category) {
-        ConversationContextCategory.MEMORY -> R.string.context_memory
-        ConversationContextCategory.ASSISTANTS -> R.string.context_assistants
-        ConversationContextCategory.ENTERPRISE_BACKGROUND -> R.string.context_enterprise_background
-        else -> error("Unexpected initial context category")
     }
 
     private fun screenshot(directory: File, name: String) {

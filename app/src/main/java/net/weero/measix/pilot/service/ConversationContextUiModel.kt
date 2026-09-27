@@ -11,12 +11,16 @@ import kotlin.uuid.Uuid
 enum class ConversationContextCategory { OPENING, SYSTEM, MEMORY, ASSISTANTS, ENTERPRISE_BACKGROUND, PROMPT_RULE, TIME, RESTORE, ATTACHMENT, HISTORY_SUMMARY, PRESET, HISTORICAL }
 enum class ConversationContextRequestState { ADDED, INCOMPLETE, DELIVERY_UNKNOWN, HISTORICAL, SAVED_CONTENT }
 
-/** Only discovery flags cross the continuously observed message projection. */
+/** Discovery metadata and request boundaries cross the observed projection; bodies remain on demand. */
 data class MessageContextSummary(
-    val hasContent: Boolean,
-    val hasExternalUpdate: Boolean = false,
     val origin: ConversationContextCategory? = null,
-    val externalCategories: List<ConversationContextCategory> = emptyList(),
+    val updates: List<ConversationContextUpdateMarker> = emptyList(),
+)
+
+data class ConversationContextUpdateMarker(
+    val stepId: Uuid,
+    val requestId: Uuid,
+    val categories: List<ConversationContextCategory>,
 )
 
 data class ConversationContextSummary(
@@ -48,6 +52,21 @@ data class ConversationContextContentUiModel(
     val source: String?,
     val presentation: ConversationContextPresentationUiModel = ConversationContextPresentationUiModel(),
 )
+
+/** A notification opens its own newly admitted changes, never inherited request history. */
+fun ConversationContextDetailsUiModel.forUpdate(requestId: Uuid): ConversationContextDetailsUiModel =
+    ConversationContextDetailsUiModel(requests.filter { it.id == requestId }.mapNotNull { request ->
+        val updates = request.items.filter { it.isCurrentUpdate }.map { item ->
+            item.copy(categories = item.updatedCategories)
+        }
+        request.copy(items = updates).takeIf { updates.isNotEmpty() }
+    })
+
+/** Keep the exact model input available while limiting the readable view to changed sections. */
+fun ConversationContextContentUiModel.forUpdate(categories: List<ConversationContextCategory>): ConversationContextContentUiModel =
+    copy(presentation = presentation.copy(sections = presentation.sections.filter {
+        it.category in categories && it.reason == ConversationContextReason.EXTERNAL
+    }))
 
 enum class ConversationContextScope { SHARED, ASSISTANT, READ_ONLY, DISABLED, UNKNOWN }
 enum class ConversationContextReason { INITIAL, EXTERNAL, RESTORE, HISTORICAL }
@@ -110,20 +129,20 @@ private class ContextHistoryIndex(nodes: List<MessageNode>) {
 }
 
 internal fun projectConversationContextSummary(snapshot: ConversationAggregateSnapshot): ConversationContextSummary {
-    if (snapshot.modelContextEntries.isEmpty() && snapshot.contextAdmissions.isEmpty() && snapshot.opening == null) return ConversationContextSummary()
+    if (snapshot.modelContextEntries.isEmpty()) return ConversationContextSummary()
     val branch = snapshot.currentMessages()
-    val branchIndex = ConversationModelContextApplicability.index(branch)
     val entries = snapshot.modelContextEntries.filter(ContextHistoryIndex(snapshot.nodes)::readable)
-    val selected = branchIndex.selectedMessageIds
-    val admittedEntries = snapshot.contextAdmissions.groupBy { it.owner.messageId }.mapValues { (_, admissions) ->
-        admissions.flatMapTo(mutableSetOf()) { it.uses.map(ConversationContextUse::entryId) }
-    }
+    val selected = branch.mapTo(hashSetOf()) { it.id }
+    val entriesById = entries.associateBy { it.id }
     val summaries = linkedMapOf<Uuid, MessageContextSummary>()
-    fun add(id: Uuid, external: List<ConversationContextCategory> = emptyList(), origin: ConversationContextCategory? = null) {
-        if (id !in selected) return
+    fun add(id: Uuid, update: ConversationContextUpdateMarker? = null, origin: ConversationContextCategory? = null) {
+        if (id !in selected || (update == null && origin == null)) return
         val old = summaries[id]
-        summaries[id] = MessageContextSummary(true, old?.hasExternalUpdate == true || external.isNotEmpty(), origin ?: old?.origin,
-            (old?.externalCategories.orEmpty() + external).distinct().sortedBy { it.ordinal })
+        val updates = old?.updates.orEmpty() + listOfNotNull(update)
+        summaries[id] = MessageContextSummary(
+            origin = origin ?: old?.origin,
+            updates = updates,
+        )
     }
     entries.forEach { entry ->
         val source = entry.payload.source
@@ -132,18 +151,20 @@ internal fun projectConversationContextSummary(snapshot: ConversationAggregateSn
             is ConversationContextSource.HistorySummary -> ConversationContextCategory.HISTORY_SUMMARY
             else -> null
         }
-        val external = if (source is ConversationContextSource.Disclosure && entry.id in admittedEntries[entry.ownerMessageId].orEmpty()) {
-            source.reasons.filterValues { it == ContextAdmissionReason.EXTERNAL_STATE }.keys.map { it.contextCategory() }
-        } else emptyList()
-        add(entry.ownerMessageId, external, origin)
-        // The selected USER can open its following assistant's saved facts even after an edit.
-        if (origin == null) branchIndex.previousUser(entry.ownerMessageId)?.let { add(it) }
+        add(entry.ownerMessageId, origin = origin)
     }
     snapshot.contextAdmissions.filter { it.owner.messageId in selected }.forEach { admission ->
-        add(admission.owner.messageId)
-        branchIndex.previousUser(admission.owner.messageId)?.let { add(it) }
+        val categories = admission.uses.asSequence()
+            .filter { it.placement != ContextPlacement.Omitted }
+            .mapNotNull { entriesById[it.entryId] }
+            .filter { it.ownerNodeId == admission.owner.nodeId && it.ownerMessageId == admission.owner.messageId && it.stepId == admission.stepId }
+            .mapNotNull { it.payload.source as? ConversationContextSource.Disclosure }
+            .flatMap { source -> source.reasons.filterValues { it == ContextAdmissionReason.EXTERNAL_STATE }.keys }
+            .map { it.contextCategory() }.distinct().sortedBy { it.ordinal }.toList()
+        add(admission.owner.messageId, update = categories.takeIf { it.isNotEmpty() }?.let {
+            ConversationContextUpdateMarker(admission.stepId, admission.id, it)
+        })
     }
-    if (snapshot.opening != null) branch.forEach { add(it.id) }
     return ConversationContextSummary(summaries)
 }
 

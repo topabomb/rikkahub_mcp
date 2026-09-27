@@ -106,7 +106,7 @@ Tool 的 `stepId` 指向前方最近的 Step，`localCallId` 在 owning Assistan
 槽不持久化，重复或空 wire ID 不会合并不同调用。协议编码见 [AI 协议](protocol-reference.md)。
 
 提交拒绝改写既有 Step 身份、开始时间、已提交 modelResult 与闭合历史；闭合 Tool output 只能经 typed
-压缩 patch 修改。Step 不进入 Provider、FTS、摘要或 UI 内容分组。`RequestAssembler` 移除 Step 时同步
+压缩 patch 修改。Step 不进入 Provider、FTS 或摘要；UI 只用有实际变化通知的 Step 作为标签及折叠分组边界，普通 Step 不切分显示。`RequestAssembler` 移除 Step 时同步
 调整 replay-safe prefix 计数；不同 Step 的连续工具仍按 `Tool.stepId` 分批回放。
 
 ## START 与交互继续

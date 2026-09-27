@@ -47,20 +47,21 @@ import kotlin.uuid.Uuid
 class SubAssistantDetailPageAndroidTest {
     @get:Rule val compose = createAndroidComposeRule<ComponentActivity>()
 
-    @Test fun contextEntryStaysInRequestRegionWhenEmptyCancelledTaskLaterHasOutput() {
+    @Test fun updateStaysAtChildRequestBoundaryThroughPendingCancellationAndOutput() {
         val source = ConversationViewLease(Uuid.random(), RealmAccess.Personal, 0L) {}
         val target = ConfigurationReference.random()
         val task = net.weero.measix.pilot.data.model.MessageNode.of(me.rerere.ai.ui.UIMessage.user("Task"))
-        val cancelled = net.weero.measix.pilot.data.model.MessageNode.of(me.rerere.ai.ui.UIMessage.assistant("").copy(
-            terminalStatus = me.rerere.ai.ui.MessageTerminalStatus.CANCELLED))
-        val child = Conversation(assistantId = target, parentConversationId = source.conversationId, messageNodes = listOf(task, cancelled))
+        val step = me.rerere.ai.ui.UIMessagePart.Step(Uuid.random(), 0, kotlin.time.Instant.fromEpochSeconds(1))
+        val pending = net.weero.measix.pilot.data.model.MessageNode.of(me.rerere.ai.ui.UIMessage.assistant("").copy(parts = listOf(step)))
+        val marker = net.weero.measix.pilot.service.ConversationContextUpdateMarker(step.stepId, Uuid.random(),
+            listOf(net.weero.measix.pilot.service.ConversationContextCategory.MEMORY))
+        val child = Conversation(assistantId = target, parentConversationId = source.conversationId, messageNodes = listOf(task, pending))
         val snapshot = ConversationRuntimeSnapshot(child.toSnapshot(), null).toPresentationSnapshot().copy(
             context = net.weero.measix.pilot.service.ConversationContextSummary(mapOf(
-                task.currentMessage.id to net.weero.measix.pilot.service.MessageContextSummary(true),
-                cancelled.currentMessage.id to net.weero.measix.pilot.service.MessageContextSummary(true, true))))
+                pending.currentMessage.id to net.weero.measix.pilot.service.MessageContextSummary(updates = listOf(marker)))))
         val initial = SubAssistantDetailUiState.Ready(
             SubAssistantDetailLink(buildInitialSubAssistantCallMetadata("run", target, "Target"), "Task", child.id, task.currentMessage.id, target),
-            snapshot, listOf(cancelled))
+            snapshot, listOf(pending))
         val state = MutableStateFlow<SubAssistantDetailUiState>(initial)
         val vm = mockk<SubAssistantDetailVM>()
         every { vm.uiState } returns state
@@ -73,14 +74,30 @@ class SubAssistantDetailPageAndroidTest {
                 SubAssistantDetailPage(source, "run", vm)
             } }
         }
-        val description = compose.activity.getString(R.string.context_updated_accessibility)
-        compose.onAllNodesWithContentDescription(description).assertCountEquals(1)
-        val before = compose.onNodeWithContentDescription(description).getUnclippedBoundsInRoot()
-        val output = cancelled.copy(messages = listOf(cancelled.currentMessage.copy(parts = listOf(me.rerere.ai.ui.UIMessagePart.Text("Later answer")), terminalStatus = null)))
-        compose.runOnIdle { state.value = initial.copy(child = snapshot.copy(nodes = listOf(task, output)), timeline = listOf(output)) }
-        compose.onNodeWithText("Later answer").assertIsDisplayed()
-        compose.onAllNodesWithContentDescription(description).assertCountEquals(1)
-        org.junit.Assert.assertEquals(before.top, compose.onNodeWithContentDescription(description).getUnclippedBoundsInRoot().top)
+        try {
+            val label = compose.activity.getString(R.string.context_updated_categories,
+                compose.activity.getString(R.string.context_memory))
+            val description = compose.activity.getString(R.string.context_details_accessibility, label)
+            compose.onAllNodesWithContentDescription(description).assertCountEquals(1)
+            compose.onNodeWithContentDescription(description).assertIsDisplayed()
+            val before = compose.onNodeWithContentDescription(description).getUnclippedBoundsInRoot()
+            val execution = compose.onNodeWithText(compose.activity.getString(R.string.sub_assistant_detail_execution)).getUnclippedBoundsInRoot()
+            org.junit.Assert.assertTrue("Changes belong in the execution timeline, after the request area", before.top >= execution.bottom)
+            val cancelled = pending.copy(messages = listOf(pending.currentMessage.copy(
+                parts = listOf(step.copy(outcome = me.rerere.ai.ui.StepOutcome.Cancelled)),
+                terminalStatus = me.rerere.ai.ui.MessageTerminalStatus.CANCELLED)))
+            compose.runOnIdle { state.value = initial.copy(child = snapshot.copy(nodes = listOf(task, cancelled)), timeline = listOf(cancelled)) }
+            compose.onAllNodesWithContentDescription(description).assertCountEquals(1)
+            compose.onNodeWithContentDescription(description).assertIsDisplayed()
+            org.junit.Assert.assertEquals(before.top, compose.onNodeWithContentDescription(description).getUnclippedBoundsInRoot().top)
+            val output = pending.copy(messages = listOf(pending.currentMessage.copy(parts = listOf(step, me.rerere.ai.ui.UIMessagePart.Text("Later answer")))))
+            compose.runOnIdle { state.value = initial.copy(child = snapshot.copy(nodes = listOf(task, output)), timeline = listOf(output)) }
+            compose.onNodeWithText("Later answer").assertIsDisplayed()
+            compose.onAllNodesWithContentDescription(description).assertCountEquals(1)
+            val after = compose.onNodeWithContentDescription(description).getUnclippedBoundsInRoot()
+            org.junit.Assert.assertEquals(before.top, after.top)
+            org.junit.Assert.assertTrue(after.bottom <= compose.onNodeWithText("Later answer").getUnclippedBoundsInRoot().top)
+        } finally { source.close() }
     }
 
     @Test fun restoredNavigationCannotDisplayReadyRetainedByTheOldViewModel() {

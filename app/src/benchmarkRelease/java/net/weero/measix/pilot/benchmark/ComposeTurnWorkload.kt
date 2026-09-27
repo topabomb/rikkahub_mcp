@@ -151,7 +151,7 @@ private fun contextFixture(initial: UIMessage): ConversationAggregateSnapshot {
     }
     return base.copy(modelContextEntries = entries, contextAdmissions = admissions).also { snapshot ->
         val summary = ConversationPresentationProjector().project(ConversationRuntimeSnapshot(snapshot, null)).context
-        check(summary.messages.values.count { it.hasExternalUpdate } == 1)
-        check(summary.messages.getValue(initial.id).hasExternalUpdate)
+        check(summary.messages.values.count { it.updates.isNotEmpty() } == 1)
+        check(summary.messages.getValue(initial.id).updates.isNotEmpty())
     }
 }

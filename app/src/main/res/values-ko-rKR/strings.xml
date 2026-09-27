@@ -1881,7 +1881,6 @@
   <string name="opening_not_applicable">이 시작 설정의 시스템 지침은 현재 어시스턴트에 적용되지 않습니다.</string>
   <string name="opening_system">시스템 지침</string>
   <string name="opening_cleared_assistant">어시스턴트를 변경하여 시작 설정을 해제했습니다. 초안 텍스트는 유지됩니다.</string>
-  <string name="context_title">컨텍스트</string>
   <string name="context_updated">컨텍스트 업데이트됨</string>
   <string name="context_updated_accessibility">컨텍스트가 업데이트되었습니다. 상세 내용을 확인할 수 있습니다</string>
   <string name="context_opening">시작 내용</string>
@@ -1907,10 +1906,7 @@
   <string name="context_updated_categories">%1$s 업데이트됨</string>
   <string name="context_updated_more">%1$s 등 %2$d개 유형 업데이트됨</string>
   <string name="context_details_accessibility">%1$s. 상세 보기</string>
-  <string name="context_changes_heading">이번 요청의 변경 사항</string>
   <string name="context_changes_hint">이 요청 전에 동기화된 정보이며 사용자가 보낸 메시지가 아닙니다.</string>
-  <string name="context_other_inputs">이 요청의 다른 컨텍스트</string>
-  <string name="context_inputs_heading">어시스턴트에게 제공된 컨텍스트</string>
   <string name="context_raw_input">모델 입력 원문</string>
   <string name="context_owner_assistant">어시스턴트 지침</string>
   <string name="context_owner_application">앱 규칙</string>
@@ -1956,4 +1952,5 @@
   <string name="enterprise_configuration_attention">설정 확인 필요</string>
   <string name="enterprise_snapshot_update_required">앱 업데이트 필요</string>
   <string name="enterprise_snapshot_invalid">기업 설정 내용에 오류가 있습니다. 관리자에게 문의하세요.</string>
+  <string name="context_changes_title">컨텍스트 변경</string>
 </resources>

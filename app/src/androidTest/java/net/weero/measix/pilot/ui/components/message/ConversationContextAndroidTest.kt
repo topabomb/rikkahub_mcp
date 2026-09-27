@@ -47,7 +47,8 @@ class ConversationContextAndroidTest {
     @OptIn(ExperimentalLayoutApi::class)
     @Test fun narrowLargeFontWithImeAddsNoRowForUnchangedContextAndOnlyOneForExternalUpdate() {
         val view = ConversationViewLease(Uuid.random(), RealmAccess.Personal, 0L) {}
-        val node = MessageNode.of(UIMessage.assistant("Visible answer"))
+        val step = me.rerere.ai.ui.UIMessagePart.Step(Uuid.random(), 0, kotlin.time.Instant.fromEpochMilliseconds(0))
+        val node = MessageNode.of(UIMessage.assistant("Visible answer").copy(parts = listOf(step, me.rerere.ai.ui.UIMessagePart.Text("Visible answer"))))
         var summary by mutableStateOf<MessageContextSummary?>(null)
         var assistantBubble by mutableStateOf(false)
         var imeVisible = false
@@ -83,13 +84,14 @@ class ConversationContextAndroidTest {
             val baseline = compose.onNodeWithTag("message").getUnclippedBoundsInRoot()
             val answer = compose.onNodeWithText("Visible answer").getUnclippedBoundsInRoot()
             val description = context.getString(R.string.context_updated_accessibility)
-            compose.runOnIdle { summary = MessageContextSummary(hasContent = true) }
+            compose.runOnIdle { summary = MessageContextSummary() }
             compose.onAllNodesWithContentDescription(description).assertCountEquals(0)
             assertEquals(baseline, compose.onNodeWithTag("message").getUnclippedBoundsInRoot())
-            compose.runOnIdle { summary = MessageContextSummary(hasContent = true, hasExternalUpdate = true) }
+            compose.runOnIdle { summary = MessageContextSummary(updates = listOf(ConversationContextUpdateMarker(step.stepId, Uuid.random(), emptyList()))) }
             compose.onAllNodesWithContentDescription(description).assertCountEquals(1)
             compose.onNodeWithContentDescription(description).assertIsDisplayed()
-            assertEquals(answer, compose.onNodeWithText("Visible answer").getUnclippedBoundsInRoot())
+            org.junit.Assert.assertTrue(compose.onNodeWithContentDescription(description).getUnclippedBoundsInRoot().bottom <=
+                compose.onNodeWithText("Visible answer").getUnclippedBoundsInRoot().top)
             val label = compose.onNodeWithText("${context.getString(R.string.context_updated)} ›", useUnmergedTree = true)
                 .getUnclippedBoundsInRoot()
             assertEquals(answer.left, label.left)
@@ -97,7 +99,7 @@ class ConversationContextAndroidTest {
             compose.runOnIdle { assistantBubble = true }
             assertEquals(compose.onNodeWithText("Visible answer").getUnclippedBoundsInRoot().left,
                 compose.onNodeWithText("${context.getString(R.string.context_updated)} ›", useUnmergedTree = true).getUnclippedBoundsInRoot().left)
-            compose.runOnIdle { summary = MessageContextSummary(hasContent = true); assistantBubble = false }
+            compose.runOnIdle { summary = MessageContextSummary(); assistantBubble = false }
             assertEquals(baseline, compose.onNodeWithTag("message").getUnclippedBoundsInRoot())
         } finally { view.close() }
     }
@@ -105,7 +107,7 @@ class ConversationContextAndroidTest {
     @Test fun compactUpdateLabelKeepsAnExpandedTouchTarget() {
         var clicks = 0
         compose.setContent { MaterialTheme { Column(Modifier.padding(24.dp)) {
-            ContextMessageEntry(true, categories = listOf(ConversationContextCategory.MEMORY)) { clicks++ }
+            ContextMessageEntry( categories = listOf(ConversationContextCategory.MEMORY)) { clicks++ }
         } } }
         val label = context.getString(R.string.context_updated_categories, context.getString(R.string.context_memory))
         val entry = compose.onNodeWithContentDescription(context.getString(R.string.context_details_accessibility, label))
@@ -116,30 +118,26 @@ class ConversationContextAndroidTest {
         compose.runOnIdle { assertEquals(1, clicks) }
     }
 
-    @Test fun aNewRequestDoesNotCollapseTheBodyBeingReadOrOpenItsOwnBody() {
-        val old = ConversationContextRequestUiModel(Uuid.random(), 0, null, ConversationContextRequestState.ADDED, listOf(item))
-        val nextItem = item.copy(key = "next/item", entryId = Uuid.random(), categories = listOf(ConversationContextCategory.SYSTEM))
-        val next = ConversationContextRequestUiModel(Uuid.random(), 1, null, ConversationContextRequestState.ADDED, listOf(nextItem))
-        var detail by mutableStateOf(ConversationContextDetailsUiModel(listOf(old)))
+    @Test fun laterRequestsDoNotReplaceOrReloadTheSelectedUpdate() {
+        val update = item.copy(isCurrentUpdate = true, updatedCategories = item.categories)
+        val requestId = Uuid.random()
+        val changed = ConversationContextRequestUiModel(requestId, 0, null, ConversationContextRequestState.ADDED, listOf(update))
+        var detail by mutableStateOf(ConversationContextDetailsUiModel(listOf(changed)))
         val reads = AtomicInteger()
         compose.setContent { MaterialTheme { Column {
-            ContextRequestList(detail) { request, _ ->
+            ContextUpdateRequest(detail.forUpdate(requestId).requests.single()) {
                 reads.incrementAndGet()
-                ConversationContextContentUiModel(if (request.id == old.id) "Reading original body" else "Next body", null)
+                ConversationContextContentUiModel("Reading original body", null)
             }
         } } }
-        compose.onNodeWithText(context.getString(R.string.context_memory)).performClick()
         compose.onNodeWithText("Reading original body").assertIsDisplayed()
-        compose.runOnIdle { detail = ConversationContextDetailsUiModel(listOf(next, old)) }
+        compose.runOnIdle { detail = ConversationContextDetailsUiModel((1..10).reversed().map {
+            changed.copy(id = Uuid.random(), ordinal = it, items = listOf(update.copy(isCurrentUpdate = false)))
+        } + changed) }
         compose.onNodeWithText("Reading original body").assertIsDisplayed()
-        compose.onNodeWithText(context.getString(R.string.context_system)).assertDoesNotExist()
+        compose.onNodeWithText(context.getString(R.string.context_request, 11)).assertDoesNotExist()
+        compose.onNodeWithText(context.getString(R.string.context_request, 1)).assertIsDisplayed()
         compose.runOnIdle { assertEquals(1, reads.get()) }
-        compose.onNodeWithText(context.getString(R.string.context_request, 2)).performClick()
-        compose.onNodeWithText(context.getString(R.string.context_system)).performClick()
-        compose.onNodeWithText("Next body").assertIsDisplayed()
-        compose.onNodeWithText("Reading original body").assertIsDisplayed()
-        compose.onNodeWithText(context.getString(R.string.context_request, 1)).performClick()
-        compose.onNodeWithText("Reading original body").assertDoesNotExist()
     }
 
     @Test fun categoryLabelAndChangeDetailsStayReadableWithoutExposingRawRecords() {
@@ -153,9 +151,9 @@ class ConversationContextAndroidTest {
             val density = LocalDensity.current
             CompositionLocalProvider(LocalDensity provides Density(density.density, 1.8f)) { MaterialTheme {
                 Column(Modifier.width(320.dp).verticalScroll(rememberScrollState())) {
-                    ContextMessageEntry(true, categories = listOf(ConversationContextCategory.ENTERPRISE_BACKGROUND,
+                    ContextMessageEntry( categories = listOf(ConversationContextCategory.ENTERPRISE_BACKGROUND,
                         ConversationContextCategory.ASSISTANTS, ConversationContextCategory.MEMORY, ConversationContextCategory.ASSISTANTS)) {}
-                    ContextRequestList(ConversationContextDetailsUiModel(listOf(later, changed))) { _, entry ->
+                    ContextUpdateRequest(ConversationContextDetailsUiModel(listOf(later, changed)).forUpdate(requireNotNull(changed.id)).requests.single()) { entry ->
                         reads += entry.key
                         ConversationContextContentUiModel(original, "internal-source-json", presentation = ConversationContextPresentationUiModel(listOf(
                             ConversationContextSectionUiModel(category = ConversationContextCategory.MEMORY,
@@ -176,7 +174,8 @@ class ConversationContextAndroidTest {
             listOf(R.string.context_memory, R.string.context_assistants, R.string.context_enterprise_background)
                 .joinToString(" · ") { context.getString(it) })
         compose.onNodeWithContentDescription(context.getString(R.string.context_details_accessibility, fullLabel)).assertIsDisplayed()
-        compose.onNodeWithText(context.getString(R.string.context_changes_heading)).assertIsDisplayed()
+        compose.onNodeWithText(context.getString(R.string.context_request, 1)).assertIsDisplayed()
+        compose.onNodeWithText(context.getString(R.string.context_request, 2)).assertDoesNotExist()
         compose.onNodeWithText(context.getString(R.string.context_scope_shared)).assertDoesNotExist() // Combined scope and reason.
         compose.onNodeWithText("${context.getString(R.string.context_scope_shared)} · ${context.getString(R.string.context_reason_external)}")
             .performScrollTo().assertIsDisplayed()
@@ -192,23 +191,8 @@ class ConversationContextAndroidTest {
         compose.runOnIdle { assertEquals(listOf(update.key), reads) }
         compose.onNodeWithText(context.getString(R.string.context_raw_input)).performScrollTo().performClick()
         compose.onNodeWithText(original).performScrollTo().assertIsDisplayed()
-        compose.onNodeWithText(context.getString(R.string.context_other_inputs)).performScrollTo().performClick()
-        compose.onNodeWithText(context.getString(R.string.context_system)).performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText(context.getString(R.string.context_system)).assertDoesNotExist()
         compose.runOnIdle { assertEquals(listOf(update.key), reads) }
-    }
-
-    @Test fun historicalContentShowsMissingRequestRecordWithoutClaimingItsReadableBodyIsMissing() {
-        val historical = ConversationContextRequestUiModel(null, null, null, ConversationContextRequestState.HISTORICAL, listOf(item))
-        var detail by mutableStateOf(ConversationContextDetailsUiModel(listOf(historical)))
-        compose.setContent { MaterialTheme { Column {
-            ContextRequestList(detail) { _, _ -> ConversationContextContentUiModel("Preserved original", null) }
-        } } }
-        compose.onNodeWithText(context.getString(R.string.context_unrecorded_request)).assertIsDisplayed()
-        compose.onNodeWithText(context.getString(R.string.context_memory)).performClick()
-        compose.onNodeWithText("Preserved original").assertIsDisplayed()
-        compose.runOnIdle { detail = ConversationContextDetailsUiModel(listOf(historical.copy(state = ConversationContextRequestState.SAVED_CONTENT))) }
-        compose.onNodeWithText(context.getString(R.string.context_unrecorded_request)).assertDoesNotExist()
-        compose.onNodeWithText("Preserved original").assertIsDisplayed()
     }
 
     @Test fun bodyIsLazyLiteralAndLoadedOnceAcrossExpansion() {

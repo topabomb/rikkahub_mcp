@@ -39,7 +39,7 @@
 3. **跨会话变化按相关事实对账。** 对当前合法 Memory/子助手目录，在下一请求边界采样；Seed 在下一 START 更新。没有相关差异不通知，不按配置版本号广播。
 4. **初始上下文与恢复不叫变更通知。** 首次需要提供完整状态；历史被裁剪而失去必要事实时需要恢复基线。它们不归因为其他会话修改，也不要求模型再次确认自身工具操作。
 5. **模型变更等通过正式请求表达。** 不增加 model_changed、system_changed 或通用 pending_configuration 文本。会话 UI 的“下次发送生效”不进入模型输入。
-6. **所有应用输入可查看，展示保持克制。** 初始内容从现有消息“更多”进入详情；同一助手消息中的外部更新合并为一处提示，详情保留各请求边界。工具自身变更只保留工具卡，不拆分现有思考/工具分组。
+6. **只展示实际变化，归属实际请求。** 在通知首次接纳的 Step 边界显示短标签，点击仅查看该次外部变化；历史沿用、初始和恢复不增加入口。只在有通知的边界分开思考/工具折叠组，自身工具变更沿原工具卡告知，不设消息通用上下文菜单。
 7. **复用现有 owner 与 planner。** Settings/Enterprise/Memory 负责当前事实，Conversation 负责历史输入；不建全局变更日志、消息广播总线或第二份当前状态。
 8. **存储语义先于物理版本。** 保留原配置、实际渲染内容、来源和因果位置；结构按查询需求规范化，迁移版本随真正实现确定。
 
@@ -57,7 +57,7 @@
 | 请求投影 | transformer 后把 disclosure 放在真实 USER 的首个 Text part；Turn 内 entries 固定 | 允许工具批次后追加；固定每 Step 接纳结果 |
 | 用户配置 | `SettingsStore` 提交后发布；有效配置由 `ConfigurationResolver` 按域解析 | 不新增全局事件日志；比较语义内容，不比较 Settings revision |
 | 工具执行 | Memory/助手/MCP 等有自己的实时准入；Skill 正文调用时读取；搜索配置、图像模型、TTS capture 按运行捕获 | 区分固定工具契约与调用时数据，不承诺工具读到的全部外部数据冻结 |
-| UI | `ConversationPresentationSnapshot` 不含 modelContextEntries；`ChatMessageActionsSheet` 已有“更多”；`groupMessageParts` 忽略 Step，不拆折叠时间线 | 新增 typed 轻量摘要与按需详情；复用操作弹层，保留原分组，不暴露 aggregate/DAO |
+| UI | `ConversationPresentationSnapshot` 不含 modelContextEntries；`ChatMessageActionsSheet` 已有“更多”；`groupMessageParts` 忽略 Step，不拆折叠时间线 | typed 轻量摘要定位实际通知 Step，复用详情弹层；仅通知边界分组，不暴露 aggregate/DAO |
 | Starter | 空间页 `EnterpriseStarterPicker` 已有提示词预览；聊天空态和 `PromptPresetButton` 直接追加提示词，后者也用于已有聊天 | Draft 入口统一绑定 opening 并填草稿；已有聊天保留明确的“仅填提示词”用途，不热换 System |
 | 发送与草稿清空 | `SendMessageReceipt` 当前只确认后台请求被接收，`ChatPage` 收到后清空输入；不代表 USER 已落盘 | 首发校验及 Append 提交失败保留草稿/附件；清空依据明确的持久提交结果，不依据 worker 已启动 |
 | 历史摘要 | `ConversationApplicationService.compress` → `GenerationSideEffects` 已有手动摘要，生成 USER 摘要节点；自动会话摘要未实现 | 为新摘要记录应用来源并显示，不能当作真实用户输入 |
@@ -117,7 +117,7 @@ DSH 每个 pre-step 会 assembly；`RuntimeContextProjection` 比较完整 conte
 | 放置 | System 前/后、历史顶部、末条消息前、深度位置；状态更新在当前完整工具批次之后 | “何时评估”与“放到哪里”保持独立；不允许跨越未闭合 Tool Call/Result 边界 |
 | 身份 | rule ID、捕获内容身份、owner/Step、触发点；同请求重试只接纳一次 | 有新触发事件才形成新发生记录；重复回放同内容不新增 UI 通知 |
 
-同位置排序为 priority 降序、原目录顺序作为同优先级次序。深度以保留的持久历史消息为单位（含预置/摘要），不计 System/请求级 synthetic 消息或仅含 Step 标记的空助手占位；一个持久消息为协议回放拆成多段时仍只计一个历史单元，不拆开其中完整工具批次；无合法位置时移到该单元之前的合法边界，实际位置从请求详情查看。修改这两项时更新编辑器说明，保留原 priority/position/depth/role，不擅自重写其值。
+同位置排序为 priority 降序、原目录顺序作为同优先级次序。深度以保留的持久历史消息为单位（含预置/摘要），不计 System/请求级 synthetic 消息或仅含 Step 标记的空助手占位；一个持久消息为协议回放拆成多段时仍只计一个历史单元，不拆开其中完整工具批次；无合法位置时移到该单元之前的合法边界，实际位置由保存的请求接纳与 query 核对。修改这两项时更新编辑器说明，保留原 priority/position/depth/role，不擅自重写其值。
 
 深度按原整数含义归一化为至少 1：1 表示末条持久历史消息之前，超过保留消息数表示历史起点；旧配置的 0/负值仍按 1 执行，不在迁移中改写原值。位置解析先在同一份未插入合成内容的历史上计算，再合并投影；全局编辑器不具备真实请求历史，不能将其位置说明称为“实际位置”。
 
@@ -130,8 +130,8 @@ System 规则在 Turn 内不能被后续 hook 改写。未来 Step 事件规则�
 - 不把 Memory、文件或工具结果中的花括号当模板再执行；替换只发生在声明为模板的内容路径。现有普通消息变换按现有规则保留。
 - 本期不为提示规则开放 Pebble 控制流、正则匹配编辑器、脚本 hook 或任意事件订阅；运行结构留出明确入口即可，不预存大量未实现配置字段。
 - UI 保留现有“提示词注入”名称、列表、字段顺序和编辑弹层；“提示规则”仅是本文的语义名称，不要求全局改名或重排成新的高级区。仅修正“末条消息前”和深度说明。`ModeInjectionEditSheet` 已按位置隐藏无效 role，保留该行为；不新增重复控件。
-- 深度字段沿用原控件，标签使用 `距末条消息（从 1 起）`；完整计数/安全边界语义按第 3.3 节执行，实际落点在请求详情查看。不另加常驻说明行或说明按钮，不为长文案拉高原内容编辑区。
-- 不新增实时预览面板。全局编辑器没有会话历史，只能给出位置/变量说明，不能伪造实际预览；实际渲染正文及位置从已接纳请求的上下文详情查看。未来需要编辑预览时另行定义明确样本与未解析变量，不作为本期 UI 工作。
+- 深度字段沿用原控件，标签使用 `距末条消息（从 1 起）`；完整计数/安全边界语义按第 3.3 节执行，实际落点由请求接纳与 query 核对。不另加常驻说明行或说明按钮，不为长文案拉高原内容编辑区。
+- 不新增实时预览面板。全局编辑器没有会话历史，只能给出位置/变量说明，不能伪造实际预览；实际渲染正文及位置保存在已接纳记录，可由授权 query 核对；不为此新增普通用户入口。未来需要编辑预览时另行定义明确样本与未解析变量，不作为本期 UI 工作。
 - 未来若增加匹配：明确字段、大小写、空值和匹配模式；默认精确匹配。需要正则时用有界的既有安全引擎，匹配错误显式反馈。注入内容不能反过来触发自身，重试不重新匹配。
 
 上述内部规整可保留 `ModeInjection` 的当前落盘字段和 Settings schema；以后真正增加可配置触发器时再做对应字段与迁移，不能仅为了预留能力立即升级存储。
@@ -166,12 +166,12 @@ System 规则在 Turn 内不能被后续 hook 改写。未来 Step 事件规则�
 | 企业 `memorySeedIds`、Seed 内容及绑定顺序 | Seed 固定到 Turn；下一 START 纳入对账 | 完整状态确实改变才披露；不每 Step 热读发布版本 |
 | `modeInjections` 的 content/role/position/injectDepth/priority、enabled/name/id；`modeInjectionIds/allowConversationPromptInjection` | 按第 3 节规整触发/位置/排序/来源/编辑器；捕获选择时保留会话覆盖语义 | 发送实际规则内容；配置修改无独立变更通知；重复投影不新增消息行 |
 | `systemPrompt/customSystemPrompt/allowConversationSystemPrompt` 与新 opening System 的选择 | 增加明确的 Starter 领域指令来源，应用固定解释规则在 START 组装 | 下一 START 使用正式 System，不发 System 修改通知；原受管只读约束保留 |
-| 已捕获 Workspace 提醒和固定 disclosure 规则的组装 | 纳入同一最终 System 及来源记录；固定规则是否启用由 Turn 捕获决定，不随某 Step 是否投影状态包而切换 | Workspace 原读取/工具权限不变；不增加工作区配置通知；其实际指令在系统详情中查看 |
+| 已捕获 Workspace 提醒和固定 disclosure 规则的组装 | 纳入同一最终 System 及来源记录；固定规则是否启用由 Turn 捕获决定，不随某 Step 是否投影状态包而切换 | Workspace 原读取/工具权限不变；不增加工作区配置通知；其实际指令保存在 System 来源记录中 |
 | `messageTemplate`、Placeholder、非 visual regex 的处理边界 | 应用状态/渲染后规则/工具调用记录不被二次改写；规则模板和实际内容均可定位 | 不发模板配置事件；普通消息变换继续按捕获配置执行 |
 | `enableTimeReminder` | 仅认真实 USER；时间改为消息时间，间隔对前一真实 USER 计算；保存来源 | 实际时间上下文可查看；不显示每 Step 的时间更新条 |
 | `presetMessages` | 为新实例化内容标注配置来源，保留原角色/顺序；不回写已有会话 | 统一入口中查看，不能署名为用户真实发言 |
-| 手动摘要产物及其来源；`compressModelId/compressPrompt` 的消费者 | 配置选择仍沿用；仅新摘要产物补来源/原文可查看 | 显示历史摘要入口，不发摘要模型切换通知 |
-| 附件能力投影、`DocumentAsPromptTransformer` | 记录真实 USER 内的应用 part/span 与当时正文/引用，补属性转义、正文围栏及读取失败诊断 | 从“更多 → 上下文 → 附件输入”查看；不单独通知模型/视觉配置变化 |
+| 手动摘要产物及其来源；`compressModelId/compressPrompt` 的消费者 | 配置选择仍沿用；仅新摘要产物补来源/原文可查看 | 保留历史摘要正文及来源标识，不发摘要模型切换通知 |
+| 附件能力投影、`DocumentAsPromptTransformer` | 记录真实 USER 内的应用 part/span 与当时正文/引用，补属性转义、正文围栏及读取失败诊断 | 保存原附件输入供授权 query 核对，不新增通用 UI 入口；不通知模型/视觉配置变化 |
 | `contextMessageLimit` 与 rolling compaction 的消费者 | 统一基线适用性；窗口外/结果已归档时不得把不可见 input/output 算作已告知 | 必要时恢复基线，不把恢复叫外部变化；原长度策略不改 |
 | `memory_tool/assistant_manage` 的结果与历史解析 | 保留精简 input/output；子助手结果只补规范化差异；内置写工具的短成功结果保留 | 不另加自身变更快照；原工具卡负责操作反馈 |
 | 企业 Starter 定义及发布/实例化 | 增加领域 System、有序初始背景和来源；首发事务保存开场 | 起始统一入口；后续企业发布不改写会话 opening |
@@ -223,7 +223,7 @@ Enterprise background is read-only and separate from editable memory.
 
 用户配置的提示规则按真实 role 使用；标签不提高指令优先级。新增机制在自己的 typed 契约中定义作用范围、替换/追加语义和必要说明，避免通用 System 不断积累工具清单与同义提醒。
 
-最终 System 由 `freezeTurnSystem` 在 START 完成组装、渲染与冻结，包括 Workspace 提醒；复用组成内容的相对次序并记录来源。`StepRunner` 直接使用冻结文本，后续 Step 没有新状态包或窗口变动不会使固定解释规则消失。详情中的“系统指令”查看本 Turn 实际组装文本，不把 Starter 的领域模板冒充最终 System。
+最终 System 由 `freezeTurnSystem` 在 START 完成组装、渲染与冻结，包括 Workspace 提醒；复用组成内容的相对次序并记录来源。`StepRunner` 直接使用冻结文本，后续 Step 没有新状态包或窗口变动不会使固定解释规则消失。保存的 System 原文是本 Turn 实际组装文本，不把 Starter 的领域模板冒充最终 System。
 
 ### 5.3 状态包：只发送变化的完整分区
 
@@ -408,7 +408,7 @@ flowchart TD
 
 START、planner、Fork、窗口/摘要、删除共用当前分支的适用性规则；UI 的入口 owner 仍限当前所选消息，但查看已保存请求时允许读取原节点内仍存在的旧 USER variant。状态历史仅在本次保留窗口中按其已成立的因果位置回放，不将后续状态搬到此前的工具调用前。
 
-历史可查看与新请求可回放分别判断。当前所选助手回复的旧来源和外部更新标签不因其因果 USER 切换 variant 而隐藏；没有 admission 的历史原文也遵循此规则，仍标明无请求记录。保存的 owner/anchor 必须存在、角色与因果关系合法；切换助手回复 variant 不得显示兄弟回复的来源。历史查看不会让失效 anchor 重新获得请求回放资格。
+历史可读取与新请求可回放分别判断。当前所选助手回复的外部更新标签不因其因果 USER 切换 variant 而隐藏；没有 admission 的历史原文仍可经授权 query 读取，但不伪造标签或请求。保存的 owner/anchor 必须存在、角色与因果关系合法；切换助手回复 variant 不得显示兄弟回复的来源。历史查看不会让失效 anchor 重新获得请求回放资格。
 
 编辑或切换历史 USER 后，保留的助手可能仍引用旧 anchor。planner 先从完整条目索引校验引用存在，再判断当前适用性：失效披露不回放，兼容分区在引用它的历史 Step 记为未知，必要时在新 START 尾部恢复当前 C。旧原文与接纳记录不被改写；真实缺失引用仍报错，不能静默略过。已有 seal 的重入仍必须满足原 selection、窗口及位置，分支改变不能借恢复规则悄悄改写该请求。
 
@@ -416,13 +416,13 @@ format 3 需要在实际保留输入中逐分区寻找适用基线，可能来�
 
 分区的完整性包括基线之后的状态相关调用链：如果窗口移除了自身成功写入，只留下写入之前的旧基线，该分区仍需恢复，不能将旧基线重新投影后就认定模型已知道最新状态。同理，已归档到模型不可见位置的成功结果不能凭后台读取算作已告知；此时在当前合法尾部补充该分区完整 C，不额外物化另一份历史窗口头状态。该规则避免把被裁剪的自身变更误标成外部更新。
 
-只有基线/调用记录确实不再进入本请求，或已无法解释时，才需要状态恢复。缺失分区的当前 C 放在当前因果尾部的合法边界；基线恢复显示在统一上下文详情中，不伪装为“另一会话修改”。自身完整调用还在请求中时，不得以存储格式变化为由重复追加自身状态。
+只有基线/调用记录确实不再进入本请求，或已无法解释时，才需要状态恢复。缺失分区的当前 C 放在当前因果尾部的合法边界；基线恢复保持单独原因，不显示变化标签，不伪装为“另一会话修改”。自身完整调用还在请求中时，不得以存储格式变化为由重复追加自身状态。
 
 持久状态、已渲染应用内容和工具调用记录不再经过模板/占位符/输入 regex 二次改写。普通消息的既有显式变换与 rolling compaction 保留；后者仍只处理成功请求确实消费的结果。固定 System 内已有日期/模型等占位符不批量迁移，下一 START 变化是既有边界。
 
 ### 6.4 保存历史与本次回放的边界
 
-保存一条应用输入，是保存当次请求事实，不代表以后每次请求都累加它。planner 按来源决定本次是否适用。详情列出**该 Turn 明确选用或追加、且由自身 admission 证明的应用记录**，包括同 Turn 前序 Step 的有效继承；前序 Turn 的原文从其原消息“更多 → 上下文”查看。它不提供本次请求全部历史应用内容或完整 HTTP 快照：当前持久结构没有保存当时所有历史 variant 的选择，不能用今日选中分支重建并冒称旧请求输入，也不为此新增逐 Step 全量历史清单。开场内容沿会话根查看，自身预置/摘要保留原有历史内容入口。
+保存一条应用输入，是保存当次请求事实，不代表以后每次请求都累加它。planner 按来源决定本次是否适用。query 可解析该 Turn 明确选用或追加、由自身 admission 证明的应用记录及同 Turn 有效继承，但不提供完整 HTTP 快照：当前持久结构没有保存当时所有历史 variant 的选择，不能用今日分支重建旧请求输入，也不新增逐 Step 全量历史清单。普通 UI 仅在原通知处查看该次外部变化，不罗列继承请求；开场沿原 Starter 详情查看，预置/摘要沿原正文显示。
 
 | 来源 | 下一请求 / 下一 START 的选择规则 |
 | --- | --- |
@@ -500,77 +500,68 @@ if (hasExternalDifferenceOrMissingBaseline(nextInput, currentState)) {
 
 依据：[ChatCompletionsAPI](../../ai/src/main/java/me/rerere/ai/provider/providers/openai/ChatCompletionsAPI.kt)、[ResponseAPI](../../ai/src/main/java/me/rerere/ai/provider/providers/openai/ResponseAPI.kt)、[OpenAI Function calling](https://developers.openai.com/api/docs/guides/function-calling)、[Conversation state](https://developers.openai.com/api/docs/guides/conversation-state)。
 
-## 8. UI：复用现有布局，新增内容按需查看
+## 8. UI：在实际变化边界按需查看
 
 ### 8.1 固定的展示约定
 
-**模型输入位置与主界面展示粒度分开。** 每条注入仍保存准确的请求/工具批次位置，Provider 按该顺序接收；聊天列表只提供必要的发现入口，不复刻请求日志。保留 `ChatList` 的消息节点、`ChatMessage` 的头像/名称/气泡/动作行，以及 `ChatMessageCot.groupMessageParts` 的现有折叠分组。Step 仍不切断思考与工具时间线。
+**短标签归属首次接纳通知的请求，位于该请求输出之前。** 保留 `ChatList` 的消息节点、`ChatMessage` 的头像/名称/气泡/动作行。通知不新增 USER/ASSISTANT 消息，也不成为 LazyColumn 的独立消息节点。
 
-1. **初始、规则、时间和恢复：不增加常驻行。** 在已有 `ChatMessageActionsSheet` 的“更多”中加一项 `上下文`，打开当前所选消息及其适用开场/初始内容的详情。只有有可查内容时出现；不另加消息头按钮、不强制显示用户已关闭的头像/名称、不向动作 FlowRow 塞入可能换行的新图标。原操作栏在流式期间的显隐规则保持。
-2. **真正的外部变化：每个助手消息最多一个入口。** 在 `ChatMessage` 现有正文下辅助区、动作区之前显示单行类别标签，例如 `记忆已更新 ›`、`记忆 · 助手目录已更新 ›`；超过两类显示 `记忆等 3 类已更新 ›`。类别顺序固定，不创建新的 LazyColumn 消息、不显示资源 ID 或条目数量、不插入工具批次之间。连续多个 Step 更新只更新详情，不增加行数。该入口独立于动作栏显隐，接纳成功后可见；只是应用输入已更新，不表示模型已读。
-3. **自身操作：只有原工具卡。** input/output、审批、失败诊断维持原展示。无状态差异、仅基线恢复或规则重新投影都不产生“已更新”入口。
-4. **详情：复用 `AdaptiveModal`。** 点击入口后读取历史正文，在弹层内展开，不在聊天流原位展开长文本；不新增常驻侧栏、全屏导航或自动弹窗。时间/位置/来源在详情可查，默认聊天列表不显示内部标识。
+1. **只有真正的外部变化显示短标签。** 首个请求前的通知放在该轮输出开头；执行中的通知放在上一完整工具结果批次之后、下一请求的思考/工具/正文之前。同一次请求的类别合并为一个短标签，不同请求分别归位。
+2. **只在有通知的边界分组。** `groupMessageParts` 遇到含变化的 Step 时收口前组，插入轻量 `ContextUpdateBlock`，再处理后续输出；普通 Step 仍透明，不拆分思考/工具折叠组。这样折叠思考后标签仍可见，不改工具卡及审批交互。
+3. **沿用历史不增加展示。** 后续 request/turn 携带同一历史通知，不增加标签、不列出“沿用”或“本次无变化”。首次披露、规则、时间、恢复及自身已表达的工具操作也不生成变化标签。
+4. **仅保留通知入口。** 移除消息“更多 → 上下文”和子助手请求区的聚合入口；子助手直接复用只读消息时间线上的实际变化标签。Starter 继续使用原开场详情入口，预置/摘要保留原正文及来源标识。
+5. **详情只看点击的这一次变化。** 使用原 `AdaptiveModal`，标题为“上下文变化”。以接纳请求身份固定内容，不列出其他请求，不自动跳到后来发生的更新，不出现“本次请求的其他上下文”。
 
 ```text
 [原消息头，按原设置显隐]
-[原思考/工具分组与正文]
-记忆已更新 ›         ← 仅有外部更新时；同一助手消息最多一行
+记忆已更新 ›                 ← 请求 1 前有变化时
+[请求 1 的思考 / 工具调用及完整结果]
+助手目录已更新 ›             ← 请求 2 前确有另一变化时
+[请求 2 及之后没有新变化的输出，沿用原分组规则]
 [原复制 / 重试 / 更多 / 分支操作]
-                      “更多 → 上下文”查看本 Turn 接纳的应用输入
 ```
 
-“布局稳定”不等于新增事实出现时像素绝不变化：首次外部更新最多增加一行是本期允许的变化。不预占空白、不在多个位置间搬动入口、不按变更数量扩高。后续更新不改变该行高度；不触发专用自动滚动或历史消息重排，遵循现有跟随底部/用户停留位置的策略。
+同一通知只首次接纳一次，历史回放仍在原因果位置携带它；这个 UI 调整不改变模型输入、token 预算、通知产生条件、裁剪/恢复或持久化。无变化时原布局不变；有变化时只增加相应边界的一行，不预占空白、不增加专用自动滚动或历史重排，沿用现有跟随底部/用户停留位置策略。
 
 ### 8.2 全部 UI 变更清单
 
-本表为本期界面范围；实现清单和测试不得另外要求编辑器重排、常驻预览或新通知组件。
-
-| 界面 / 原入口 | 本期允许的最小调整 | 明确保留 |
+| 界面 / 原入口 | 确定调整 | 明确保留 |
 | --- | --- | --- |
-| 消息“更多” `ChatMessageActionsSheet` | 增加 `上下文` 操作项，共用一个详情弹层；各类应用输入在其中按来源分组 | 主消息布局、头像设置、原动作位置/顺序、复制/重试/分支交互 |
-| `ChatMessage` 辅助区 | 存在外部更新时增加最多一个单行文本入口；新消息沿其稳定 message identity 创建入口 | `ChatList` 的 node key、COT 分组/折叠、工具卡、正文、token 行；无更新时高度不变 |
-| 只读会话 | 若没有消息“更多”，初始/继承内容只在所选分支首个可渲染消息的辅助区提供一个 `上下文 ›` 入口，覆盖本页适用内容；外部更新入口仍归实际接纳的助手消息，同一消息只显示一个入口 | 不因每条消息继承背景而重复加行；不引入编辑/删除等写操作；沿原页面 lease 查询，无权限就沿现有错误路径 |
-| 子助手详情 | 本页隐藏因果 USER，入口固定在原“请求”区内部：存在已接纳内容时提供一个 `上下文 ›`，本页有外部更新时同处改为对应类别的更新短标签；时间线不再重复加入口 | 保留请求摘要及原展开动作；空输出、取消或后来出现输出都不移动入口、不造空助手气泡；只读查询限本次调用对应历史，沿父页面 lease 校验 |
-| 附件与媒体 | 在统一上下文详情中列 `附件输入`，可查看当时模型文本/引用；已有详情确有扩展位置时可转入同一内容 | 文件/图片点击继续打开原预览；不为增加“模型输入”重造附件详情或改变点击含义 |
-| 新手动摘要、预置消息 | 保留正文/位置；利用原署名位置标明 `历史摘要` / `预置内容`，不冒称用户真实输入；详情从“更多”进入 | 新摘要的协议 envelope 不进入可见正文，只显示 content；头像隐藏时在该应用产物内保留必要来源文字，不为普通用户消息添加标签；不改成另一张折叠卡 |
-| `PromptPage.ModeInjectionEditSheet` | 仅修正现有位置选项和深度标签，真实渲染结果从消息详情查看 | 原名称、列表、字段顺序、弹层边界、200dp 内容编辑区、保存/导入导出；已有 role 条件显隐；不增说明行、高级区、预览面板或 hook UI |
-| 运行中模型/普通配置保存 | 仅在原保存反馈位置使用 `已保存，下次发送生效`；只适用于影响下一 START 的普通运行配置 | 模型选择器布局与默认/指定三态；不同时展示两套模型，不加全局横幅、倒计时或新聊天记录；主题等即时设置不显示此文案 |
-| Android Starter 三个入口 | 依第 9.3 节保留原列表/预览/快捷填充，只新增选定绑定和可选详情 | 输入框高度、发送动作、附件、企业空态整体编排；不加常驻开场卡 |
-| Core Starter 编辑/发布预览 | 在原 Starter 编辑区增加默认折叠的 `开场上下文`，内含 System 和有序背景；发布预览同样折叠 | Resources/Releases 原页、列表列数、默认筛选与发布步骤保留，不另建模板工作台或独立导航；实施证据见第 14 节 |
-| 企业配置兼容与发布版本 | Android 企业连接、抽屉与聊天异常入口共用简短状态，详情按需查看；Core 发布列表、详情和预览显示实际下发协议版本，见[配置架构](../references/android-configuration-architecture.md#配置兼容性与空间导航)和[界面架构](../references/ui-architecture.md) | 属于配置异常反馈，不创建消息、不注入模型上下文、不修改 Starter 开场；正常聊天不额外占位，原发布流程不变 |
-| 分享/复制/导出 | 普通消息复制、编辑、TTS 保持原正文；专门的上下文详情支持复制原文。现有结构化备份须保全新数据，诊断导出如含上下文须标来源 | 普通图片/PDF/文字分享默认不自动展开或新增企业背景/System 附录，不扩展成新的导出产品 |
+| 消息“更多” `ChatMessageActionsSheet` | 删除“上下文”操作项，不新增替代诊断入口 | 原有复制/重试/分支等操作及顺序 |
+| 主聊天 `ChatMessage` | 按 `MessageContextSummary.updates` 在相应 Step 插入单行短标签；同请求合并类别 | node key、头像设置、气泡及动作位置；无变化的 Step 不拆 COT |
+| 只读会话和子助手详情 | 在原消息时间线复用同一变化标签；删除请求区聚合入口与初始通用入口 | 请求摘要、原展开动作、只读性和父页面 lease 授权；不增加写操作 |
+| 变化详情 | 只读取并展示所选请求的新增外部变化；混合原因状态包只显示 EXTERNAL 分区 | 原 AdaptiveModal、加载/异常/取消边界、完整原文及来源折叠查看 |
+| 附件与媒体 | 不因来源记录增加通用详情入口 | 文件/图片原点击含义、原预览及数据保全；不改变模型投影 |
+| 手动摘要、预置消息 | 原署名位置标明 `历史摘要` / `预置内容`，不接入变化详情 | 原正文与位置；头像关闭时保留必要来源文字；不伪装真实用户输入 |
+| `PromptPage.ModeInjectionEditSheet` | 仅修正原位置选项和深度标签 | 原名称、字段顺序、200dp 内容区、role 条件、保存/导入导出；不增预览、说明行或 hook UI |
+| 运行中模型/普通配置保存 | 原保存反馈使用 `已保存，下次发送生效`，只用于下一 START 生效的配置 | 模型默认/指定三态；即时设置不误报；不增加模型配置通知 |
+| Android Starter 三个入口 | 沿第 9.3 节保留列表/预览/快捷填充及可选开场详情 | 输入框、发送、附件与空态布局；不加常驻开场卡 |
+| Core Starter 编辑/发布预览 | 原编辑区和预览默认折叠开场 System 与有序背景 | Resources/Releases 导航、列表和发布步骤；证据见第 14 节 |
+| 企业配置兼容与发布版本 | 连接/抽屉/聊天异常入口共用短状态；Admin 展示实际下发协议版本，规则见配置/UI 架构参考 | 不创建消息、不注入模型、不修改 Starter；正常状态不额外占位 |
+| 分享/复制/导出 | 变化详情按需复制完整原文 | 普通复制、编辑、TTS 和分享使用原正文；结构化备份保全数据，不增加 System/背景附录 |
 
 ### 8.3 文案、详情与授权
 
 | 情况 | 文案 / 内容 |
 | --- | --- |
-| 消息更多菜单 | `上下文` |
-| 同一助手消息有外部更新 | 一类 `记忆已更新 ›`；两类 `记忆 · 助手目录已更新 ›`；更多类 `记忆等 3 类已更新 ›`。点击优先定位最近有新增外部变化的请求；不把继承内容重复算作变化 |
-| 详情首层 | `开场`、`系统指令`、`记忆`、`助手目录`、`企业背景`、`提示词注入`、`消息时间`、`状态恢复`、`附件输入`、`历史摘要`、`预置内容`；仅出现实际有记录的类别，空 rows 的清空记录不能被“没有内容”过滤掉 |
-| 具体状态 | `共享记忆` / `助手记忆` / `此助手可用` / `企业提供 · 只读` 标明归属；`首次提供`、`同步变化`、`恢复上下文 · 非新增修改` 区分原因。空集合显示 `无条目`，不代表此刻设置 |
-| 查看正文 | `本次变化` 默认展开，列 `新增` / `修改` / `移除` 与内容，修改前另点 `查看修改前`。其他输入默认收起；`模型输入原文` 和 `技术信息` 单独展开，`复制原文` 保留完整字面值；长文八行预览，可展开全文 |
-| 请求尚未完成或送达未知 | 仅详情内写 `已加入上下文`、`请求未完成` 或 `发送状态未确认`，主界面沿原错误/执行状态 |
-| 历史没有请求接纳记录 | `无请求记录`；仍可读取已保存原文，不推断发送状态，不从最新配置补造 |
+| 同一请求新增外部变化 | 一类 `记忆已更新 ›`；两类 `记忆 · 助手目录已更新 ›`；更多类 `记忆等 3 类已更新 ›`；类别固定次序，不列 ID/条目数 |
+| 详情标题与请求归属 | `上下文变化`；展示唯一的 `请求 N`、时间与真实请求状态，不提供请求历史列表 |
+| 变化分区 | 仅实际变化的 `记忆`、`助手目录`、`企业背景`；同包 INITIAL/RESTORE 分区不混入 |
+| 归属与内容 | `共享记忆` / `助手记忆` / `此助手可用` / `企业提供 · 只读`；明确新增、修改、移除、属性及顺序变化，修改前内容按需展开 |
+| 长文与诊断 | 八行预览后可展开全文；`模型输入原文`、`技术信息` 默认收起，复制原文保留完整字面值，包括同包其他原因分区 |
+| 接纳与发送状态 | 沿 Step 事实显示 `已加入上下文`、`请求未完成` 或 `发送状态未确认`；不把接纳说成模型已消费 |
 
-主列表只概括类别，不统计“修改 N 条”。详情的新记录精确列出本次 K/C 的增改移除、属性与背景顺序变化；基准 K 已包含本会话已确认工具效果，不能直接与前一状态包比较。差异随同一次接纳保存，旧 source 没有差异时明确显示“这条旧记录未保存逐项差异。以下是当时同步的完整状态，不代表每一项都被修改。”，不读取当前配置或猜测。移除只表示退出本请求可见集合，不等于物理删除。相同内容重试不增加详情项；仅恢复不称为外部修改。USER/ASSISTANT 协议 role 不决定真实发言人，显示身份由 typed 来源决定。
+`ConversationPresentationSnapshot` 的轻量摘要包含每次变化的 `stepId`、接纳 `requestId` 与类别；不加载正文、不扫描 UI payload、不用当前 Settings 重建差异。只有条目的 owner 与创建 Step 匹配该接纳、来源原因为 EXTERNAL_STATE 才形成新标签；跨请求/跨 Turn 的引用不算新变化。
 
-`ConversationPresentationSnapshot` 只输出是否有上下文、是否有外部更新、变化类别及稳定定位等轻量字段；正文和分组条目通过 `ConversationQueryService` 按需读取，校验 lease/域/所选分支。不把“每个 entry”变成主列表 item，不在 Compose 中扫描 payload 或计算差异。主列表稳定展示键为 message identity；详情项使用接纳请求身份与贡献关联身份组成的稳定键，正文按 entry identity 复用。旧记录没有接纳关联时用其 entry identity，不补造请求身份。切换 variant 显示各自内容，旋转/关闭重开不重复接纳。
+`ConversationContextDetailsUiModel.forUpdate(requestId)` 筛选该请求的 `isCurrentUpdate` 条目，条目类别收敛为 `updatedCategories`；`ConversationContextContentUiModel.forUpdate(categories)` 只过滤结构化展示分区，原文和来源保持完整。query 的原有数据保全和授权读取能力不因此删除，但不再作为普通消息的通用上下文浏览产品。
 
-原规则不渲染的空助手消息不为上下文强行增加头像/气泡；主聊天已接纳内容仍由其因果 USER 的“更多 → 上下文”查询，子助手详情使用原“请求”区的固定入口。查看 USER 消息的上下文不改变它的正文或角色。外部更新入口与更多菜单转入同一个详情，不创建重复内容；已终止或未发送成功的内容必须保留真实请求状态。
+差异基准 K 已归并本会话成功工具效果，不能直接与前一状态包比较。旧来源没有逐项差异时明确说明“这条旧记录未保存逐项差异。以下是当时同步的完整状态，不代表每一项都被修改。”，不猜测增删改。移除指退出模型可见集合，不证明物理删除；“同步变化”不推断具体操作者或会话。空 rows 的真实清空变化不能被过滤为无内容。
 
-详情加载在弹层内显示状态；关闭/切域撤销读取，迟到结果不得显示给新页面。原文无法读取时保留诊断，不转成空正文。不为 UI 建第二份状态源或按当前 Settings 重建历史；始终保留 raw modelContextEntries 不对 UI 暴露的架构边界。常见文案同步五种语言。
+详情使用 `ConversationQueryService` 的 lease/域/所选 variant 授权，按所选 request 固定内容；关闭、切域、撤权或切换 owner 后迟到读取失效。编辑因果 USER 不隐藏仍保存的通知，切换助手 variant 不混入兄弟回复；没有 admission 的旧原文不伪造标签或请求。已接纳通知但没有生成正文的失败/取消消息仍在对应 Step 显示入口并保留原终态，不借用因果 USER 菜单或子助手请求区。
 
-详情类别仅用于分组：企业 Seed 归 `企业背景`，Starter 的模板/背景归 `开场`；一次恢复仍可按记忆/助手等分区查看正文，但只保留一个实际贡献，不在多个分类下重复展示。原工具输入和结果由已有工具详情查看，统一入口不复制整份工具日志。
+短标签文字继续与正文左边缘对齐，无按钮左右内容缩进；可见行最小 32dp、上下 4dp 间距，大字体自然撑高，Compose 的最小 48dp 点击区域保留。普通正文及气泡分别沿既有 `MarkdownContentInset`/padding 处理，不缩小字体、不挪动作栏。完整可访问名称包含全部变化类别与“查看详情”，不随可见文字缩略而丢失。
 
-System 详情按持久化贡献分成助手/会话/企业开场指令、应用规则、上下文同步规则、工具说明、工作区说明及提示规则；内部 contribution 名称不直接当标题。记忆详情用 `记忆 #编号` 定位，目录优先显示助手名称，内容保持原语言。只有用户主动展开原文/技术信息时才出现协议封装、内部引用和完整来源 JSON。
-
-首次打开详情优先展开所选消息最近一次新增外部变化的请求及其变化正文；无外部变化时展开最新请求目录，正文仍折叠；各请求用 `请求 N` 开合。展开状态按请求身份保留，新 Step 到来不打断当前阅读。已知预置、摘要或开场只有保存内容时直接展示目录，不误称原文缺失；未知历史才标记 `无请求记录`。不增加主界面的步骤切换器。查看因果 USER 时只关联当前所选分支的助手 variant；重生成产生的兄弟 variant 不混入。相同 entry 在不同请求中复用时，正文只加载一份，但所查请求的实际角色、位置和状态从该次接纳关联读取，不能用 entry 创建时的位置代替。没有接纳记录的旧消息只展示已保存的历史内容，不能由此推断完整输入或模型是否收到。
-
-历史详情按保存的 windowStart/placement 定位原节点中的 variant，不要求旧 USER 仍被选中；当前所查看的助手 owner 仍须被选中且页面/域授权有效。编辑窗口起点或窗口中间的 USER 不删除历史正文，切换所查看助手、删除引用或撤权仍会阻断迟到读取。目录范围遵循第 6.4 节，不从前序助手的当前 variant 推断此请求曾接纳什么；无需增加说明横幅、列表行或新的常驻控件。
-
-布局验收覆盖窄屏、横屏/折叠、大字体、长名称、头像/模型名关闭、streaming、只读页、软键盘显示与恢复。普通聊天无更新时原几何布局不变；有多次更新时只增加一个不换行的入口，超窄空间可省略显示文字但保留完整可访问名称，点击仍满足现有可访问尺寸，关闭详情恢复原滚动锚点。只读页的必要入口及新摘要/预置的来源标识按上表单独验收。不能以缩小字号/触控区或吞掉工具审批来达成低密度。
-
-详情列表只读来源、状态和因果位置，不将内部 cause code 当成主界面标签。只读页的初始入口锚点按消息身份固定，不随滚动到屏幕内的第一条消息搬移；若该消息也有外部更新，使用同一类别短标签，并在同一详情的其他输入中提供初始内容。更新行出现时不播报正文、不增加独立 toast；无障碍名称使用完整类别标签加“查看详情”，省略显示时仍能获知全部标签。
+验证覆盖：11 个请求只有一次变化时仅一个标签且详情只有该请求；多个真实变化分别定位；后续 Turn 回放无新标签；混合原因包只显示外部变化但原文完整；工具完整结果先于标签、受影响输出后于标签；普通 Step 分组不变。窄屏、横屏、大字体、隐藏头像/名称、streaming、只读子助手、失败/取消与切域仍沿原布局及授权验证，结果另行记录，不沿用旧入口测试通过作为新行为的验收。
 
 ## 9. 企业 Starter：从模板到会话开场
 
@@ -645,7 +636,7 @@ v5 wire 的字段校验统一如下，编译后的发布契约与 Android 入站
 | 聊天空态 `EnterpriseStarterRow` | 保留原横向列表、标题与两行提示词；Draft 点选通过 application 绑定开场并按原规则填充草稿，原卡片只增加不改变测量尺寸的选中描边和无障碍选中状态 | 再次点击已选卡打开详情；长名称留在原卡片单行省略，不增加标题行动作或 `开场：名称` 常驻行 |
 | 输入框 `PromptPresetButton` | 保留原按钮与下拉列表。Draft 选择时同样绑定 opening；菜单内已选条目标记选中，菜单增加一项 `开场详情`，不挤占输入框 | 从菜单进入同一详情弹层；键盘出现、空态收起时仍可查看，不另加输入区 chip |
 | 已创建会话的快捷填充 | 保留原提示词追加能力，菜单分组标为 `开场提示词`，说明 `仅填入提示词`；这次操作只引用 prompt，不实例化 opening、不改变已有 System/背景 | 完整新开场仍从原新建 Draft 入口使用；不能将“已填文字”标为“已应用开场上下文” |
-| 首次发送后 | Draft 的选中展示随原空态退出；来源进入“消息更多 → 上下文”，用户气泡仍只有实际发送文字和附件 | 查看会话 opening 副本、原始起始提示词及实际应用内容；不从最新企业配置重建 |
+| 首次发送后 | Draft 的选中展示随原空态退出；从原快捷菜单的“开场详情”查看已实例化副本，用户气泡仍只有实际发送文字和附件 | 查看会话 opening 副本、原始起始提示词及实际应用内容；不从最新企业配置重建 |
 | 已建会话删除全部消息 | 保留 Ready 身份和 opening，原输入快捷菜单提供 `开场详情`；按钮显隐还须考虑已有 opening / Draft 已绑定 opening，快捷消息与 Starter 目录均为空时仍保留原按钮 | 不误当新 Draft，不重新下发开场；即使目录删除该 Starter，仍按当前会话访问权限查看副本，不授予已撤销的企业访问权限 |
 | 后续企业发布 | 已创建会话不增加“开场更新”横幅、toast 或注入 | 历史详情仍显示当时版本；新 Draft 使用新发布 |
 | 已选内容不能发送 | 在现有输入/选择反馈位置展示明确原因和必要动作；保留草稿与附件 | 只有解决版本失效、权限或大小错误时才展示相应细节，不把内部 hash/generation 常驻到界面 |
@@ -743,7 +734,7 @@ Draft 的绑定归现有 Conversation runtime，UI 只持有选中摘要和操�
 
 1. 在事务内创建目标结构；旧 context 每行映射一条新 entry，生成稳定 ID，保持 owner/anchor/原文字节和分支归属。来源标为历史状态披露；旧记录不足以证明是 INITIAL、EXTERNAL_STATE 还是 BASELINE_RESTORE 时原因保持未知，不能全部标成初始或新外部更新。未知创建 Step 也保持未知。
 2. 校验一一映射、行数、内容、外键及逻辑 variant 关系，再替换旧表和创建索引。旧正文 format 1/2 不重写，新请求支持 format 3 分区语义，未知字段/非法值不能通过置空“修复”。
-3. 旧记录没有证明完整 Provider 输入，因此不补造历史 Step 接纳清单、时间提醒或模板来源。新请求才产生新接纳；旧披露仍可查看。
+3. 旧记录没有证明完整 Provider 输入，因此不补造历史 Step 接纳清单、时间提醒或模板来源。新请求才产生新接纳；旧披露仍可由授权 query 读取。
 4. 旧 Starter 预填后形成的聊天没有当时完整开场副本，不根据当前企业配置回填 opening。已有消息、输入、输出、ID、scope 和顺序保持原样。
 5. Room 变更本身不要求 transcript 升版。上下文/接纳放在独立 Conversation 结构中，工具仍使用既有 input/output Text，transcript_schema 保持 3；若实现改变消息形状，则必须另给完整 transcript migration，不能隐式增加不可识别 part。
 6. Settings 本期只做内部规则解析与窄结果投影，schema 1 保持；Memory 现有行与索引保持。未来可配置 hook 真正增加字段时，再迁移规则结构并逐项保全原角色、位置、优先级、深度与正文。
@@ -774,7 +765,7 @@ Draft 的绑定归现有 Conversation runtime，UI 只持有选中摘要和操�
 1. 固化第 1/3/4/5 节语义及实际输入样例；实现 input/output 纯推导，保留 Memory 精简结果，子助手仅补规范化差异。
 2. 在现有 planner 规整提示规则的触发/位置/模板/来源，修正深度和混合 role 排序；外部状态对账使用独立边界。暂不开放通用 hook/正则规则 UI。
 3. 扩展 Conversation 条目、Step 接纳及必要 Room migration，补足原始来源、渲染值、窗口/分支/Fork/删除规则。
-4. 同步交付原消息“更多”中的上下文详情与每助手消息最多一个外部更新入口；保留 Step 因果位置但不逐 Step 改布局，覆盖提示、时间、附件、摘要。
+4. 同步交付实际通知 Step 边界的更新标签和仅该次变化的详情；删除消息通用上下文菜单和子助手请求区聚合入口。提示、时间、附件、摘要仍保留原输入和来源，不因保存事实增加普通用户入口。
 5. Android 实现 v4/v5 解析、来源保全、首发事务和历史读取，消费 Core 权威导出的 schema、fixture 与共享用例。Core 编译/预览/发布及 Admin 编制 UI 纳入当前交付；Mock、确定性本地联调和实际供应商 device:real/真实 Admin 网页分别验收；不预定无必要的 Enterprise manifest 升级。
 6. 功能实现后同步 `request-context.md`、`prompts-and-tools.md`、配置/Turn/UI/数据库参考与静态契约；当前事实文档不提前写成已实现。
 
@@ -793,14 +784,14 @@ Draft 的绑定归现有 Conversation runtime，UI 只持有选中摘要和操�
 | Seed 更新 | Turn 捕获不热换，下一合法 START 按实际内容变化披露 |
 | 分区缺省、空 rows、同时恢复与外部更新 | 缺省保持，空 rows 清空；同包按分区记原因；format 1/2/3 混合历史无状态丢失 |
 | 初始、提示规则、Starter、时间、附件、摘要、外部更新 | 使用第 5 节各自方式与固定文本，无冗余同义通知 |
-| System/顶部/末条消息前/深度规则、相同优先级与混合 role | 位置和顺序确定，详情可查实际结果；工具批次不被拆开，来源不丢失 |
+| System/顶部/末条消息前/深度规则、相同优先级与混合 role | 位置和顺序确定，接纳记录可核对实际结果；工具批次不被拆开，来源不丢失 |
 | 模板含变量，数据中含花括号；时间跨 Step/长工具等待 | 模板只渲染声明路径；工具/文件不再模板化；只认真实 USER 的消息时间 |
 | 同 Step 首次无新增、请求失败重试 | 有定稿标记，复用输入，无重复条目；不再次读取形成新通知 |
 | 窗口、rolling compaction、摘要、分支/Fork | 只使用实际可见的基线和调用；必要恢复不伪装为外部修改；无未来状态倒置 |
 | 保留旧基线但裁剪掉其后的自身写入 | 相应分区标为待恢复，不把自身历史缺口统计成外部修改 |
 | 多种 Provider | 共用语义，adapter 各自合法 wire；OpenAI 示例不成为其他协议的消息格式 |
-| 初始内容多、外部批次多、折叠思考/旋转/切域 | 初始仅更多菜单入口；每助手消息外部更新最多一行；原分组/动作布局不变，详情按边界查询且授权有效 |
-| 修改配置后查看旧详情 | 原始模板/输入与当时正文均可查，不用最新配置重建 |
+| 初始内容多、外部批次多、折叠思考/旋转/切域 | 初始无新增入口；仅真实通知 Step 显示标签并分组，其他 Step/动作布局不变；点击只查所选请求变化且授权有效 |
+| 修改配置后查看旧详情 | 变化详情及授权 query 使用保存事实，不用最新配置重建 |
 | Starter 发布竞态、START 失败、删除首条 USER、后续企业发布 | 首发复验、只实例化一次、开场归根、历史副本稳定 |
 | 旧数据库/备份/企业配置升级 | 原文/来源/关系保全；不伪造旧 opening，不无故升级其他协议或注销会话 |
 | 长正文、大历史、重复 Step | 入口不加载长正文；无每 Step 复制全历史导致的持久膨胀；按实际查询验证索引 |
@@ -815,7 +806,7 @@ Draft 的绑定归现有 Conversation runtime，UI 只持有选中摘要和操�
 
 | 项目 | 主要修改入口与具体工作 | 完成条件 / 关联测试 |
 | --- | --- | --- |
-| W01 Turn 配置与 System | `TurnContextFactory`、`ModelExecutionService.captureTurn`、`TurnToolSetFactory`：列出捕获字段，统一领域指令来源选择，System 位置规则只渲染一次；Workspace/固定 disclosure 规则并入同次组装，不再按 Step projection 有无开关；保留模型三态和会话覆盖语义 | 同 Turn 普通修改不改变请求配置；下一 START 重捕获；审批继续仍是原 handle；历史系统详情为实际文本。T01–T03、T29 |
+| W01 Turn 配置与 System | `TurnContextFactory`、`ModelExecutionService.captureTurn`、`TurnToolSetFactory`：列出捕获字段，统一领域指令来源选择，System 位置规则只渲染一次；Workspace/固定 disclosure 规则并入同次组装，不再按 Step projection 有无开关；保留模型三态和会话覆盖语义 | 同 Turn 普通修改不改变请求配置；下一 START 重捕获；审批继续仍是原 handle；保存的历史 System 为实际文本。T01–T03、T29 |
 | W02 状态格式与规范化 | `ConversationDisclosureSnapshotService`：增加 format 3 分区解析/渲染，保留 1/2 loader；目录按完整 ID 稳定排序；比较类型化事实；完整 C 的大小校验先于省略分区 | 缺省、空值、禁用、清空不混淆；未知版本显式拒绝；不重写旧 bytes。T04–T06 |
 | W03 工具已知效果 | `MemoryTools`、`AssistantToolFactory` 及现有管理结果投影：保持 Memory 精简结果；`assistant_manage` 仅增加必要 `applied`；在纯对账逻辑中按本会话成功调用次序归并 input/output | 从原始入参计算规范化差异，不只比较已规范化参数；短成功结果用既有 PRESERVE 策略；无第二份效果日志。T07–T10 |
 | W04 外部事实对账 | 在 Disclosure service 的纯逻辑中实现各分区 K/C 对账；`MemoryService`、`SubAssistantAccessPolicy` 提供合法当前值；Seed 使用 Turn 捕获值 | 自身已表达效果被消除；只追加剩余差异；权限拒绝/地址失效/查询错误不转成空状态。T11–T14 |
@@ -825,7 +816,7 @@ Draft 的绑定归现有 Conversation runtime，UI 只持有选中摘要和操�
 | W08 时间、预置、摘要和附件 | `TimeReminderTransformer`、预置实例化入口、`GenerationSideEffects`、`AttachmentProjectionTransformer`、`DocumentAsPromptTransformer`：保存应用来源和实际输入；修复时间基准、转义/围栏、多个附件顺序及读取失败诊断 | 八类输入均有来源与准确正文/不可变引用；旧消息不猜测来源；取消传播；不新增无关通知。T26–T28 |
 | W09 Conversation 落盘与生命周期 | `ConversationModelContextEntry/Entity/DAO`、mapper、Repository、Transition：增加条目身份、因果位置、接纳、原始来源；开场归 Conversation 根；分支、Fork、编辑、删除、清理同步调整 | 先给出 schema/唯一键/外键/查询计划，再编写 migration；移除旧 START context 写入依赖，保留历史读取；删除创建 Step 同样收口后续引用和继承基线；只经既有 owner 写入；长正文不进入列表查询。T29–T31、T42 |
 | W10 数据迁移与备份 | `AppDatabase`、schema 导出、migration、Backup staging/验证/恢复：保留旧上下文及原文、历史支持格式、逻辑引用；新结构纳入备份选择与验证 | 实际下一 Room 版本；保持无必要变更的 transcript 3、Settings 1；升级失败保全旧库。T32–T33 |
-| W11 上下文 UI 与详情查询 | `ConversationPresentation`、`ConversationQueryService`、`ChatMessage`、`ChatMessageActionsSheet`：typed 轻量摘要、授权详情；按 message 合并入口，详情保留 entry/Step 定位；`ChatList`/`ChatMessageCot` 保持原节点/分组 | 初始仅菜单项；每助手消息最多一行外部更新；自身写工具零新增行；附件原点击与普通分享行为不变。T34–T36 |
+| W11 上下文 UI 与详情查询 | `ConversationContextUpdateMarker` 提供 request/Step/类别；`ChatMessageCot` 只在通知 Step 插入标签；删除更多菜单和子助手请求区聚合入口；详情按所选 request 过滤 EXTERNAL 分区 | 无通知 Step 保持原分组；同请求合并类别，沿用历史无新标签；完整原文/来源按需查看，未改注入和存储。T34–T36 |
 | W12 配置 UI | `PromptPage.ModeInjectionEditSheet` 仅更新原位置选项/深度标签；`AssistantPromptPage` 沿原关联选择；运行中模型/普通配置沿原保存反馈说明生效边界 | 不改名、不重排字段、不新增预览或常驻说明行；保留已有 role 显隐与内容编辑区；失败不假成功；常见字符串同步五种语言。T23、T37 |
 | W13 Core 权威契约与 Android 消费 | Core 导出 v4/v5 schema、fixture 与共享有效/无效用例；Android 校验来源/hash 并生成 DTO，不保留自有 overlay。同步 Admin/Client schema、发布/hash/diff 和 discovery/bootstrap | v4 成功兼容，v5 缺失/非法 opening 拒绝；不改已发布 bytes/hash；Core 编译/预览/发布和 Android 解码分别验证。T38、T40 |
 | W14 Core Starter 编制 UI | Core `ResourcesPage` 助手详情内部改紧凑横向标签，保留外层资源导航与助手列表；常用入口列表只留摘要及操作，完整长表单用共享大号单列对话框编辑，固定 header/footer、body 滚动，开场上下文默认折叠；使用同一 Draft owner，关闭保留未保存修改，沿页面原保存/验证/发布生效；数字 sortOrder 改本助手列表上移/下移，字段仍保留 | 按 T39 验证错误定位、默认折叠及预览/发布一致性；真实 Admin 网页验收独立记录，Android Mock 不能替代。当前实施与证据见第 14 节 |
@@ -874,19 +865,19 @@ Draft 的绑定归现有 Conversation runtime，UI 只持有选中摘要和操�
 
 | 编号 / 层 | 安排、操作与确定断言 | 测试落点 |
 | --- | --- | --- |
-| T23 / L1+L4 | System 前/后、顶部、末条消息前、depth 为负/0/1/超范围、同优先级与混合 role；合成内容及仅含 Step 的空助手占位不改变深度或窗口条数；同一持久消息分段回放仍只计一次；工具批次保持闭合；实际位置与上下文详情一致 | `PromptInjectionTransformerTest`；新增 `PromptPageAndroidTest` 验原编辑器说明与已有 role 显隐，`AssistantPromptPageAndroidTest` 保留关联选择契约；不测不存在的实时预览 |
+| T23 / L1+L4 | System 前/后、顶部、末条消息前、depth 为负/0/1/超范围、同优先级与混合 role；合成内容及仅含 Step 的空助手占位不改变深度或窗口条数；同一持久消息分段回放仍只计一次；工具批次保持闭合；实际位置与接纳/query 一致 | `PromptInjectionTransformerTest`；新增 `PromptPageAndroidTest` 验原编辑器说明与已有 role 显隐，`AssistantPromptPageAndroidTest` 保留关联选择契约；不测不存在的实时预览 |
 | T24 / L1 | 同优先级保持原目录顺序、不同 role 不被重新分组、相邻同 role 合并后每条来源仍在；无规则返回等价消息内容即可，不把 List 实例身份当业务契约 | `PromptInjectionTransformerTest`，表驱动排序与来源断言 |
 | T25 / L1+L3 | 规则变量只取捕获值；Memory/Tool/文档/已渲染内容含 `{key}`、`{{key}}`、Pebble 语法和 regex 命中串均不被重写；普通消息仍执行其显式模板/regex 规则；新 START 取消规则后不发送旧规则，System 不跨 Turn 叠加；重开后启用/关闭 Turn 的详情依各自选择事实还原 | 现有 transformer 测试及 `RequestContextPlannerTest` 的一次组合管线验证；选择事实重开与 T29 共用真实数据库场景 |
 | T26 / L1 | 第一条真实 USER；与前一真实 USER 间隔负数/3599/3600/3601 秒和跨日；中间有长工具等待、时间/预置/摘要；窗口裁剪不重置首条身份，时区改变不重写已接纳文本，合成消息不触发；下一 START 关闭后不投影，再启用且因果身份未变则复用原文本；删除/切换真实前驱时更新 gap，原请求详情仍保留旧值 | `TimeReminderTransformerTest`，合并重复阈值用例；planner 只补窗口/来源组合验证 |
 | T27 / L2+L3 | 新预置/手动摘要保留来源/角色/原文及产物关系；旧 USER 不靠文本猜测来源；新摘要导致 K 缺失时走恢复；失败摘要不写假产物 | 扩展 `GenerationSideEffectsTest` 并补实际摘要提交的服务用例；持久来源纳入 T29 |
-| T28 / L1+L2 | 文件名含引号/尖括号、正文含连续反引号；围栏正确闭合；多个文档不倒序；disclosure/Starter 前置后各附件的源 locator 与实际 part/span 分别准确；托管文件正文/引用与详情一致；新 START 切换模型能力后采用新附件投影，旧请求详情不变，已定稿重试不重读替换正文；无权路径不读，读取失败保留类型/message/cause，取消继续抛出 | `DocumentAsPromptTransformerTest`、`AttachmentProjectionTransformerTest`；不重复测试解析库自身 |
+| T28 / L1+L2 | 文件名含引号/尖括号、正文含连续反引号；围栏正确闭合；多个文档不倒序；disclosure/Starter 前置后各附件的源 locator 与实际 part/span 分别准确；托管文件正文/引用与授权 query 一致；新 START 切换模型能力后采用新附件投影，旧请求详情不变，已定稿重试不重读替换正文；无权路径不读，读取失败保留类型/message/cause，取消继续抛出 | `DocumentAsPromptTransformerTest`、`AttachmentProjectionTransformerTest`；不重复测试解析库自身 |
 | T29 / L3 | 同 owner 多 entry/Step、零新增 seal、来源原文与渲染值重开一致；最终 System 每 Turn 只存一次，后续配置改动不改变详情；重复提交幂等，冲突 identity 不覆盖；失败事务不留半条记录；列表查询不取正文 | `ConversationWriteDeltaIntegrationTest`、`ConversationStartAtomicityTest`、mapper；新增 Room 查询用例 |
 | T30 / L3+L4 | Fork 保留所复制历史的适用条目，重映射 node/message/entry/Step 引用；源会话不变；opening 随根复制且删除首 USER 后仍在；删会话准确释放其引用 | `ConversationStartAtomicityTest` 已有 clone 用例、`ConversationRepositoryTreeIntegrationTest`；`ConversationForkContextTest` 继续保护 folder/cwd |
 | T31 / L3 | detail 通过 conversation+entry 身份查询并重验 realm；不允许凭另一个会话的 entry ID 读取；原模板后来修改，详情仍展示当时内容；外部不可变引用的资源生命周期不提前释放 | `ScopedConversationQueryTest`、`ConversationQueryServiceTest` 及现有 Artifact 引用集成 fixture |
 | T32 / L4 | 使用真实 schema 13 建 fixture：format 1/2、非 canonical 合法文本、多 variant、长正文；迁至实际新 schema 后逐行比对内容/ID/归属/顺序，检查外键和新装 schema 同构；不补造 opening/seal/首次或外部原因，未知保持未知且不新增更新行 | 新增 `Migration_13_14Test`（仅在实际版本确为 14 时用此名）；保留所有历史 migration tests |
 | T33 / L3+L4 | 旧/新个人备份→staging→校验→pending→启动恢复；损坏 context 引用/来源版本显式拒绝并保全旧库；企业身份/凭据不混入个人备份；长内容分片验证 | `BackupArchiveServiceTest`、`BackupRestoreApplicationServiceTest`、`BackupRestoreMigrationIntegrationTest`、`PersonalBackupGraphAndroidTest` 按各自边界扩展 |
-| T34 / L1+L4 | 初始/恢复/时间/规则仅更多菜单入口；同一助手消息跨 Step 更新仍只一行，详情保留边界及空 rows 清空记录，企业 Seed/Starter/摘要/预置均可定位且分类不重复正文；自身工具无新增行；空助手可由因果 USER 查询；多消息只读页初始入口最多一处，不随滚动搬移。Starter 长 System/背景收起、不进入输入框 | 新增 `ConversationContextPresentationTest`、`ConversationContextAndroidTest`；普通聊天无外部更新不增加主列表行；只读必要入口单测，详情原文/位置/请求状态准确 |
-| T35 / L4 | 窄屏/横屏/大字体/长名称/隐藏头像与模型名/IME 下比较原布局；无更新时 header/action/input 几何位置不变，多个更新只一行；streaming 不拆 COT 或遮审批；展开关闭详情、旋转/分支切换不主动跳滚动，切域后迟到结果丢弃 | `ConversationSnapshotRecompositionTest`、`ChatMessageCotTest`/`AppendScrollContextTest` 保留并补组合场景；断言稳定 key、语义节点数量与几何位置，不绑整屏易碎截图 |
+| T34 / L1+L4 | 11 个请求一次变化仅显示对应标签/详情；多次变化分属实际请求，跨 Turn 沿用无标签；同包 INITIAL/RESTORE 不混入变化正文，完整原文仍可核对；更多菜单和子助手请求区无通用入口；自身工具无新标签；失败/取消无正文但已有通知仍可查看 | `ConversationContextPresentationTest`、`ConversationContextAndroidTest`、完整聊天流用例；Starter 沿开场详情，不把其详情改为变化通知 |
+| T35 / L4 | 窄屏/横屏/大字体/隐藏头像名称/IME 下无更新保持原几何；首个通知位于输出前，中途通知位于完整工具结果后、受影响输出前；仅有通知 Step 拆 COT，其余连续组不变；详情固定所选请求，streaming/新通知不抢阅读；切域和 variant 迟到结果失效 | `ConversationSnapshotRecompositionTest`、`ChatMessageCotTest`、`AppendScrollContextTest` 和消息/详情设备测试；断言边界顺序、稳定 key、左对齐与触控区域，不绑易碎整屏截图 |
 | T36 / L2 | 普通复制/编辑/TTS/图片与 PDF 分享不自动混入 System/背景；上下文详情复制与实际请求文本一致；结构化备份保全来源；附件原点击仍打开预览，新摘要/预置不冒称真实用户 | 在现有消费者测试扩展，采用同一多来源 fixture；不新造导出协议或默认长正文附录 |
 | T37 / L4 | 提示词注入名称、字段顺序、弹层边界、200dp 内容区与选择动作保持；只修标签/选项，保留 role 显隐且不增常驻说明行。运行中修改模型沿原反馈显示“下次发送生效”，失败不假成功；即时 UI 设置不误显示延迟生效 | 新增 `PromptPageAndroidTest` 与现有 `AssistantPromptPageAndroidTest`/配置 fixture 各测其 owner；五种 locale 资源完整性，不额外建立两套模型显示 |
 
@@ -903,7 +894,7 @@ Draft 的绑定归现有 Conversation runtime，UI 只持有选中摘要和操�
 
 竞态用例统一设置可观测 barrier：配置捕获完成、工具副作用完成、结果 checkpoint 前/后、输入接纳 commit 前/后、Provider 请求开始。必须断言已提交状态与调用次数，不能用固定 sleep 或“最终不报错”代替顺序证明。第三方实际响应属于单独 smoke 验收；离线 wire 通过不能表述为真实 Provider 已验证。
 
-T19–T22 使用同一状态轨迹分别验证“下一 START 的真实 USER 前置 part”和“同 Turn 工具后的应用 USER”：两者均在已保留写调用之后，窗口恢复不能把当前 C 插到这些调用之前。T29/T31/T34 联合验证共享 entry 的位置关联：两个请求复用同正文但落点不同，重开后分别查看均准确，较早详情不被最新 placement 覆盖。T41 的选择竞态还覆盖“选择处理中点击发送”和“绑定提交后页面/回调失效”，断言 owner、草稿与后续选择保持一致；不能只断言过期 UI 回调未执行。
+T19–T22 使用同一状态轨迹分别验证“下一 START 的真实 USER 前置 part”和“同 Turn 工具后的应用 USER”：两者均在已保留写调用之后，窗口恢复不能把当前 C 插到这些调用之前。T29/T31 验证共享 entry 的位置关联：两个请求复用同正文但落点不同，重开后授权 query 均准确，较早记录不被最新 placement 覆盖；T34 另验 UI 不列出仅沿用的请求。T41 的选择竞态还覆盖“选择处理中点击发送”和“绑定提交后页面/回调失效”，断言 owner、草稿与后续选择保持一致；不能只断言过期 UI 回调未执行。
 
 T07/T09 补齐完整旧基线缺少目标行的反例：Memory 成功 edit/delete 可确定效果时不恢复；助手 UPDATE 完整目录字段足够时归并，字段不足才恢复，仅改 instructions 不使目录失效。同时验证这些单行操作不能补齐整个未知集合。T40 的 304 用例覆盖 schema 来源已知、未知、旧版本和空 Starter 列表，不能用空目录或最新 discovery 冒充缓存已升级。
 
@@ -911,7 +902,7 @@ T40 覆盖 discovery/bootstrap=[4]、[5]、[4,5] 与无交集、v4 原始完整�
 
 T29/T30 补充“保留 owner variant、只删除创建 Step”和“删除首个来源选择、保留零新增后续请求”：事务后全部有效 locator 可解析，共享正文/来源不变，重开与 Fork 后仍能还原保留请求的选择和位置；失败回滚不留下半转交。按因果次序选择接收者，不能依赖 DAO 未声明的返回顺序。T32/T33 覆盖逻辑上跨会话、错误 role、缺失 variant/Step 的损坏样本，明确拒绝而不只验证 SQL 外键；个人备份排除企业新表，个人恢复保全本机企业开场与引用。
 
-T29/T30 另验 S1 含附件/时间贡献、S2 显式 Omitted、S3 零新增：S3 不复活，S1 的保留详情仍可查看；同边界关闭并放置同 entry 必须拒绝。删除混合关联中的一个消息/Step 落点时，只收口受影响贡献，System、其他合法贡献与零新增 seal 保留；重开/Fork/创建 Step 删除后语义相同。T34/T35 补子助手全空输出、取消及后来开始输出：原“请求”区入口始终在同处，时间线不另造气泡或重复入口。T40 补缓存 v4、最新 Bootstrap=[5] 的撤回支持场景：不发送旧版本条件缓存，异常 304 不接纳、不成功上报，旧 Applied 原样保全。
+T29/T30 另验 S1 含附件/时间贡献、S2 显式 Omitted、S3 零新增：S3 不复活，S1 的保留详情仍可查看；同边界关闭并放置同 entry 必须拒绝。删除混合关联中的一个消息/Step 落点时，只收口受影响贡献，System、其他合法贡献与零新增 seal 保留；重开/Fork/创建 Step 删除后语义相同。T34/T35 补子助手全空输出、取消及后来开始输出：有真实通知时标签固定在所属 Step，没有通知则不增入口；请求区不保留聚合入口。T40 补缓存 v4、最新 Bootstrap=[5] 的撤回支持场景：不发送旧版本条件缓存，异常 304 不接纳、不成功上报，旧 Applied 原样保全。
 
 T41 的发送边界分别注入定义失效、Append 失败、Append 成功后 START/预算失败、提交后返回取消：前两者草稿/附件及 Draft 保留，后两者 USER/opening 恰好一份，沿现有 Ready 重试。等待时追加新文字/附件，迟到完成不得清空新输入；普通发送和仅发送不生成都验证。T32/T40/T42 使用超过常见 CursorWindow 容量、仍满足业务字节限制的多字节 opening/context，覆盖创建、点查、重开、迁移及按域恢复；列表查询不读取其正文，不能用仅 JVM 序列化成功代替设备读取。
 
@@ -935,6 +926,7 @@ T41 的发送边界分别注入定义失效、Append 失败、Append 成功后 S
 | `TimeReminderTransformerTest`：single message 与 first reminder no gap；三种小时阈值；hours/days 文案 | 首条两例合并；阈值做参数化；去掉 `Current time`/`since last message` 等旧文案断言，用第 5 节精简文案及真实 USER 时间；保留多间隔和非用户消息场景 | T26；新增合成 USER/工具等待反例，不只减少测试数量 |
 | `ModelRequestDisclosureWireTest.kt` 的四个协议类 | 保留原始多模态 USER 前缀样例为历史/初始路径；共享 fixture 增加格式 3、工具后追加及 no-update；修正文档中“只能 anchor USER”的限定 | T22；各 adapter 单独断言合法 wire，不能被单一 OpenAI golden 取代 |
 | `ArchitectureDependencyTest` 的 raw modelContextEntries 暴露禁止 | 保留；允许新 typed UI 摘要/详情并不需要放开 durable aggregate；新增新查询/提交边界 | T31/T43；不以要做 UI 为由删 owner 保护 |
+| 消息菜单上下文、每消息聚合入口、子助手请求区入口与所有 Step 均不分组的 UI 断言 | 删除过时菜单/聚合入口断言；System、附件、时间的持久原文改由既有授权 query 核对；保留真实 UI 发送/上传/重开操作；Step 分组按有无通知分别验证 | T34/T35；11 请求一次通知、多边界、混合原因、完整原文、只读子助手及失败终态都有替代覆盖，不把数据保全测试一并移除 |
 | `ConversationForkContextTest` | 保留 folder/workspace cwd 用例；其文件名不代表已覆盖 model context，新增覆盖放已有真实 clone/树集成测试 | T30，避免添加只有 mocked createTree 调用的重复“Fork 测试” |
 | Room 历史 migration、`LegacyTurnTranscriptMigratorTest`、备份恢复、Applied 旧版本迁移 | 全部保留对应仍支持的历史格式；只补新迁移与新引用验证，不以版本旧为由删测试 | T32/T33/T40；不得只测新装数据库 |
 | Core `TestPreviewPreservesStarterContentAndCanonicalOrder`、`TestStagedReleaseContainsManagedAssistantAndStarter`、canonical/Console Starter 用例 | 扩展完整 opening 保全、顺序、发布校验；保留 title/prompt/description/ID/排序等原有断言；生成 fixture 更新从权威源进行 | T38/T39，不能只给 fixture 补字段使测试变绿 |
@@ -969,6 +961,8 @@ T41 的发送边界分别注入定义失效、Append 失败、Append 成功后 S
 
 
 ## 13. Android 实施证据与边界
+
+以下保留各次已执行的历史验收事实。涉及消息“更多 → 上下文”、每消息聚合标签或子助手请求区入口的操作与通过结果，证明当时实现，不代表第 8 节当前入口及定位行为；本次 UI 调整须独立验证，不能改写旧日志为新行为的证据。
 
 本节保留 Android 独立实施轮次的历史证据，代码和构建身份以各执行记录为准；后续 Core v5 对接及当前跨端验收见第 14 节，研究基线仍用于第 2、7 节的原流程对照。以下测试映射列出实际实现的断言落点，不表示第 11 节所有条件的笛卡尔组合均已逐一运行。该轮次未实施 W14/T39 的 Core 工作；此历史边界不代表当前交付范围仍排除 Core。最终运行结果在 13.3 汇总。
 
@@ -1205,7 +1199,9 @@ Starter 更新拒绝后立即 GC/刷新重试、提交前取消及关闭页面�
 并确认只读 Core 仓库仍为上述基线且工作树干净。发送补偿和诊断增量经独立复审未发现阻断项。
 构建、设备及失败诊断证据均保存在 Git 忽略的 `build/reports/context-task/`，不提交生产接入凭据。
 
-## 14. Core v5 对接与当前验证
+## 14. Core v5 对接与验证记录
+
+各小节保留对应运行时的实际路径、结果与限制；其中旧上下文菜单和聚合入口相关 UI 证据属于历史运行。当前通知位置和详情范围以第 8 节为准，新的验证结果独立补录。
 
 本次在 Android 稳定上下文实现和 Core `1b70fcb89` 基础上完成 Core v5 实施与真实本地跨端对接。完整方案、存储保全、Admin 交互和运行证据统一见 Core 仓库的 `docs/starter-opening-snapshots.md`；架构语义同步到 `measix-architecture`，Portal 仅同步必需的生成产物。
 
@@ -1398,3 +1394,28 @@ Core `go test -p 1 ./... -count=1 -json` 的 499 个顶层测试通过（含子�
 证据保存在 Android `build/snapshot-compat/verification.json`、各场景日志/JSON/UI 截图，构建日志 `build/snapshot-compat-final-gate.log`；Core `.artifacts/snapshot-compat-*`、`.artifacts/snapshot-version-*`。凭据只通过私有输入文件传递，完成后删除，不进入证据或 Git。最终 Debug SHA-256 为 `83ded58313fb8ba75cbcbf994c72cc96466b2e540811c91249a28a43063bf135`，AndroidTest 为 `bf26f426775d4acada2f63d694930bf8b60992baae64dbbcd028591c9101aa17`，Universal Release 为 `97d6ef78887830d78b5c8eb01492914dccc0bf67c027ee26b46d32fbde2fd01e`；隔离 Core 二进制为 `742c27e563f3456d31adbfe7ffc60ee5a283cdfa98579a860b56b317c0539bae`。
 
 验收覆盖控制面、配置持久化保全、Starter 预填、执行准入、UI 和构建；不宣称 OEM 真机、Release/R8 的设备运行或真实模型供应商成功响应。版本号与 changelog 未调整。
+
+### 14.11 变化短标签按请求边界呈现的验收
+
+本次只调整 Android 展示和授权查询范围：移除消息更多菜单及子助手请求区的通用上下文入口；
+短标签跟随实际通知的 Step，只有这些边界拆开折叠组。点击后固定该接纳请求，只看新增 EXTERNAL 分区，
+完整原文和技术来源按需展开；后续沿用不显示。清理旧入口专用的 hasContent/聚合标记，保留摘要/预置来源。
+通知对账、Provider 正文、历史裁剪/恢复、数据库及 Core 协议均未修改。当前 UI 约定见第 8 节。
+
+- `test assembleDebug lintDebug assembleRelease :app:assembleDebugAndroidTest --no-parallel --max-workers=1`
+  通过（10m34s）；Debug JVM 共 2887 项，2875 通过、12 跳过、0 失败。Lint 为 0 errors、323 warnings、6 hints，
+  与此前基线一致。ARM64 Release APK 签名校验通过；版本号与 changelog 不变。
+- `:app:compileBenchmarkReleaseKotlin` 通过，仅证明 benchmark 源码仍可编译，不代表重新执行性能基准。
+- 专用 API 36 模拟器 `emulator-5562` 的定向 `:app:connectedDebugAndroidTest` 通过（与 benchmark 编译合计 2m13s）：
+  13 项中 12 通过、1 项真实 Core opt-in 跳过、0 失败；本地 `starterV5MockLive=true` 已显式启用。
+  覆盖 `ConversationContextAndroidTest`、`SubAssistantDetailPageAndroidTest`、`ChatContextFlowAndroidTest`、
+  `ChatDocumentContextFlowAndroidTest`、`StarterV5ChatFlowAndroidTest`。
+- 实际 Compose 流程核对工具结果→更新标签→受影响回答的顺序，详情只显示所点击请求；后续 START 沿用无新标签。
+  另验 320dp、1.8 倍字体与真实 IME、正文左对齐/触控区域、异步正文读取、子助手 pending/空取消/后续输出，
+  文档输入以及 Starter 首次发送、Room 读取和 Activity 重开。全目录诊断菜单的旧操作已移除，数据保全断言保留在 query/协议层。
+- 定向测试中修正了屏外与可见关闭按钮的选择歧义，以及标题已出现但请求正文尚未异步加载完成的测试时序。
+  最终结果以上述通过日志为准，不以中间失败运行或旧入口截图作为验收。
+
+证据位于 `build/context-change-verification/verification.json`、同目录设备 XML 与两张最终界面截图；
+完整日志为 `build/context-change-full-gate.log`、`build/context-change-final-device.log`。
+本次不宣称 OEM 真机、Release 的设备运行、真实 Core 发布或真实供应商调用成功验收；这些边界没有被修改。

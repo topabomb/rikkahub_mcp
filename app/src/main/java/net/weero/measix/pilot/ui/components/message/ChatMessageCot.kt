@@ -26,6 +26,7 @@ sealed interface ThinkingStep {
  * 消息部分块类型，用于保持渲染顺序
  */
 sealed interface MessagePartBlock {
+    data class ContextUpdateBlock(val update: net.weero.measix.pilot.service.ConversationContextUpdateMarker) : MessagePartBlock
     data class ThinkingBlock(val steps: List<ThinkingStep>) : MessagePartBlock
     data class SubAssistantCallBlock(val tool: UIMessagePart.Tool) : MessagePartBlock
     data class ContentBlock(val part: UIMessagePart, val index: Int) : MessagePartBlock
@@ -38,8 +39,11 @@ private const val TOOL_ASSISTANT_CALL = "assistant_call"
  * 连续的 Reasoning 和 Tool（非 assistant_call）会被分组到一个 ThinkingBlock 中
  * assistant_call 工具被拆为独立的 SubAssistantCallBlock，由 SubAssistantCallCard 渲染
  */
-fun List<UIMessagePart>.groupMessageParts(): List<MessagePartBlock> {
+fun List<UIMessagePart>.groupMessageParts(
+    updates: List<net.weero.measix.pilot.service.ConversationContextUpdateMarker> = emptyList(),
+): List<MessagePartBlock> {
     val result = mutableListOf<MessagePartBlock>()
+    val updatesByStep = updates.associateBy { it.stepId }
     var currentThinkingSteps = mutableListOf<ThinkingStep>()
 
     fun flushThinkingSteps() {
@@ -56,7 +60,11 @@ fun List<UIMessagePart>.groupMessageParts(): List<MessagePartBlock> {
             }
 
             is UIMessagePart.Step -> {
-                // 执行边界不参与可见内容分组，连续思考与工具保持同一条折叠时间线。
+                // Only a newly admitted change splits the timeline; ordinary steps remain invisible.
+                updatesByStep[part.stepId]?.let { update ->
+                    flushThinkingSteps()
+                    result.add(MessagePartBlock.ContextUpdateBlock(update))
+                }
             }
 
             is UIMessagePart.Tool -> {

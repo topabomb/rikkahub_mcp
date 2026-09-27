@@ -127,7 +127,6 @@ fun ChatMessage(
     readOnly: Boolean = false,
     contextSummary: net.weero.measix.pilot.service.MessageContextSummary? = null,
     contextConversationId: Uuid? = detailSource?.conversationId,
-    showContextEntry: Boolean = true,
 ) {
     val message = node.messages[node.selectIndex]
     val settings = LocalSettings.current.displaySetting
@@ -139,7 +138,7 @@ fun ChatMessage(
     )
     var showActionsSheet by remember { mutableStateOf(false) }
     var showSelectCopySheet by remember { mutableStateOf(false) }
-    var showContext by remember(message.id, detailSource) { mutableStateOf(false) }
+    var contextRequestId by remember(message.id, detailSource) { mutableStateOf<Uuid?>(null) }
     val navController = LocalNavController.current
     val richTextActions = net.weero.measix.pilot.ui.components.richtext.LocalRichTextActions.current
     val context = LocalContext.current
@@ -148,11 +147,13 @@ fun ChatMessage(
     val renderableParts = remember(message.parts, mediaFailureText) {
         message.parts.withMediaFailurePlaceholders(mediaFailureText)
     }
-    if (shouldHideEmptyCancelledMessage(message, renderableParts)) {
+    val contextUpdates = if (detailSource != null && contextConversationId != null)
+        contextSummary?.updates.orEmpty() else emptyList()
+    if (contextUpdates.isEmpty() && shouldHideEmptyCancelledMessage(message, renderableParts)) {
         return
     }
     val hasRenderableParts = !renderableParts.isEmptyUIMessage()
-    val hasVisibleMessage = hasRenderableParts || message.terminalStatus != null
+    val hasVisibleMessage = hasRenderableParts || contextUpdates.isNotEmpty() || message.terminalStatus != null
     val originLabel = contextSummary?.origin?.let { contextCategoryText(it) }
     val showHeader = shouldShowChatMessageHeader(
         role = message.role,
@@ -210,6 +211,8 @@ fun ChatMessage(
                 onSubAssistantAnswer = if (readOnly) null else onSubAssistantAnswer,
                 toolLivePhases = toolLivePhases,
                 onUserMessageClick = if (!readOnly && message.role == MessageRole.USER) onEdit else null,
+                contextUpdates = contextUpdates,
+                onContextUpdate = { contextRequestId = it },
             )
         }
 
@@ -219,15 +222,6 @@ fun ChatMessage(
                 status = terminalStatus,
                 onShowTerminalError = onShowTerminalError,
             )
-        }
-
-        if (showContextEntry && hasVisibleMessage && detailSource != null && contextConversationId != null && contextSummary?.hasContent == true &&
-            contextSummary.hasExternalUpdate) {
-            val hasText = renderableParts.any { it is UIMessagePart.Text && it.text.isNotBlank() }
-            ContextMessageEntry(contextSummary.hasExternalUpdate, categories = contextSummary.externalCategories,
-                modifier = Modifier
-                    .padding(start = if (hasText && settings.showAssistantBubble) MessageBubbleContentPadding else 0.dp)
-                    .padding(start = if (hasText) MarkdownContentInset else 0.dp)) { showContext = true }
         }
 
         val showActions = if (readOnly) {
@@ -295,9 +289,6 @@ fun ChatMessage(
             },
             isFavorite = isFavorite,
             onToggleFavorite = onToggleFavorite,
-            onContext = if (contextSummary?.hasContent == true && detailSource != null && contextConversationId != null) {
-                { showContext = true }
-            } else null,
             onWebViewPreview = {
                 val textContent = message.parts
                     .filterIsInstance<UIMessagePart.Text>()
@@ -326,9 +317,9 @@ fun ChatMessage(
             }
         )
     }
-    if (showContext && detailSource != null && contextConversationId != null) {
-        ConversationContextDetails(detailSource, contextConversationId, message.id,
-            onDismiss = { showContext = false })
+    if (contextRequestId != null && detailSource != null && contextConversationId != null) {
+        ConversationContextDetails(detailSource, contextConversationId, message.id, requireNotNull(contextRequestId),
+            onDismiss = { contextRequestId = null })
     }
 }
 
@@ -418,6 +409,8 @@ private fun MessagePartsBlock(
     onSubAssistantAnswer: (suspend (runId: String, interactionId: String, answer: String) -> Boolean)? = null,
     toolLivePhases: Map<ToolCallLocator, ToolLivePhase>,
     onUserMessageClick: (() -> Unit)? = null,
+    contextUpdates: List<net.weero.measix.pilot.service.ConversationContextUpdateMarker> = emptyList(),
+    onContextUpdate: (Uuid) -> Unit = {},
 ) {
     val context = LocalContext.current
     val exportService: net.weero.measix.pilot.service.MediaExportService = org.koin.compose.koinInject()
@@ -460,11 +453,17 @@ private fun MessagePartsBlock(
         }
     }
     // Render parts in original order (group thinking/tool as chain-of-thought)
-    val groupedParts = remember(parts) { parts.groupMessageParts() }
+    val groupedParts = remember(parts, contextUpdates) { parts.groupMessageParts(contextUpdates) }
     // 会话级时序相册: 稳定 provider, 点击期由 ZoomableAsyncImage 求值
     val conversationAlbum = LocalConversationImages.current
     groupedParts.fastForEach { block ->
         when (block) {
+            is MessagePartBlock.ContextUpdateBlock -> key(block.update.requestId) {
+                ContextMessageEntry(categories = block.update.categories,
+                    modifier = Modifier
+                        .padding(start = if (settings.displaySetting.showAssistantBubble) MessageBubbleContentPadding else 0.dp)
+                        .padding(start = MarkdownContentInset)) { onContextUpdate(block.update.requestId) }
+            }
             is MessagePartBlock.ThinkingBlock -> {
                 if (block.steps.isNotEmpty()) {
                     val isReasoningOnlyBlock = block.steps.fastAll { it is ThinkingStep.ReasoningStep }

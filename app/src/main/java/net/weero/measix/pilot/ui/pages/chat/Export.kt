@@ -563,6 +563,7 @@ private fun ExportedChatMessage(
         ) {
             groupedParts.forEach { block ->
                 when (block) {
+                    is MessagePartBlock.ContextUpdateBlock -> Unit // Export groups without application update markers.
                     is MessagePartBlock.ThinkingBlock -> {
                         if (block.steps.isNotEmpty()) {
                             ChainOfThought(

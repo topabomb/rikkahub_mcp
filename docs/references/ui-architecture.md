@@ -716,20 +716,17 @@ Provider/模型名称草稿允许内部空格，保存边界统一 trim 首尾�
 
 UI 消费 `ConversationPresentation` 的消息、typed phase、工具 locator 和附件预览映射，不持有 Runtime Job，也不据显示列表反推 durable 写入。工具交互经 application port 提交；`resultStatus` 表达结果存在性，不能代替活跃执行 phase 或详情页访问门禁。
 
-`ConversationPresentationSnapshot.context` 只携带逐消息的上下文存在性、外部变化类别和摘要/预置来源标签。`ConversationPresentationProjector` 以订阅内的 durable 引用复用该摘要，纯 streaming 更新不重新扫描历史；durable 更新时以一次性选中分支/因果 USER 与接纳 entry 索引投影，沿 ConversationModelContextApplicability 唯一谓词判断适用性。正文不进入列表模型。`ConversationQueryService.contextDetails` 返回请求和来源目录，`observeContextDetails` 仅在 durable 更新时刷新目录；目录纯计算运行于 Dispatchers.Default，contextContent 只解析指定请求的目录并在展开时读取原文，同一读取前后 durable 引用未变时复用本次定位，变化后重新校验；这些读取保持原 `ConversationViewLease`、域与所选分支，Artifact 文本只经 `ArtifactStore.readContextText` 校验资源身份后读取，IO 结束后再次核对页面与请求关联。摘要与预置内容的 `MessageReference` 直接定位不可变消息 variant，不复制正文或从显示文本推断来源。
+`ConversationPresentationSnapshot.context` 只携带需要展示的摘要/预置来源标签和外部变化 marker（创建 Step、接纳请求身份、变化类别）；不为 System、初始披露、恢复、开场或因果 USER 生成通用入口标记。`ConversationPresentationProjector` 以订阅内 durable 引用复用摘要，纯 streaming 不重新扫描历史；durable 更新以选中 owner 与接纳 entry 索引投影，不在列表加载正文。历史可读按保存的 owner/anchor 判断，不能与新请求的回放适用性混为一谈。
 
-`ChatMessageActionsSheet` 的“上下文”与 `ChatMessage` 正文下的单行类别更新标签（如“记忆已更新”）共用 `ConversationContextDetails` 自适应弹层。初始、时间、提示规则、恢复和自身工具操作不增加主列表行；实际外部变化每个助手消息最多一行，独立于动作栏显隐。空助手不创建头像/气泡，因果 USER 的更多菜单仍可查询。详情首次到达优先展开最近有新增外部变化的请求，无变化时展开最新请求，所有请求都可通过“请求 N”标题显式切换；展开状态按请求身份保留，新 Step 到来不折叠正在查看的正文或自动展开新请求。时间复用本地日期时间格式；请求与正文分别折叠，本次变化默认展开，其他输入按需查看；协议角色、消息/Step 定位只在“技术信息”组展开后显示，不挤入正文区；正文按 entry 身份在弹层内复用，关闭或页面撤权取消读取，读取异常保留原诊断。无接纳凭据的历史仅标“无请求记录”，不能把可读原文标为缺失；预置/摘要等已知保存内容不显示缺请求警告。普通复制、编辑、TTS、分享及附件点击维持原行为。
+`ChatMessage` 和子助手只读时间线在实际新增变化的 Step 边界显示短标签；消息“更多”和子助手请求区没有通用“上下文”入口。同一请求合并变化类别；不同通知按各自 Step 放在前一完整工具结果之后、受影响输出之前。首请求的标签在输出开头。仅通知边界切开思考/工具折叠组，普通 Step 不切分；后续请求或 Turn 沿用历史不增加标签。有通知但无生成正文的失败/取消消息仍可查看通知及原终态，没有通知的空消息维持原显隐。
 
-`projectConversationContextContent` 将持久化贡献投影为具备归属、原因、增改移除、修改前后及背景顺序的结构化 UiModel。UI 不解析 payload 或读取当前配置；历史无差异记录明确展示当时完整同步状态。System 按 typed 指令来源分块，模型输入原文单独折叠，长文本八行预览可展开；标签规则及详情层级见 [消息渲染管线](message-rendering-pipeline.md)。
+`ConversationContextDetails` 的自适应弹层标题是“上下文变化”，点击 marker 后固定 `requestId`，只展示该请求新产生的 EXTERNAL 条目和分区，不列出继承请求或“其他上下文”。`forUpdate` 在 UiModel 层筛选结构化内容，完整模型输入和技术来源仍按需展开，混合 INITIAL/RESTORE 分区不冒充变化。详情保留唯一请求的时间与实际状态，接纳不代表模型已收到；后续更新不切换当前阅读对象。普通复制、编辑、TTS、分享及附件点击不变，Starter 继续从原开场入口查看，预置/摘要沿原署名位置标明来源。
 
-历史入口按当前选中 owner 和仍存在的合法来源定位判断，不复用请求回放的 anchor 选择条件。编辑历史 USER 后，原助手回复的上下文及变化标签仍可查；未选中的兄弟回复不可查，无接纳的旧记录不补造请求状态。短标签按固定类别顺序合并，读屏名称保留所有类别。
+`ConversationQueryService.contextDetails` 保留授权请求目录查询，`observeContextDetails` 只在 durable 更新时刷新；纯投影运行于 Dispatchers.Default。`contextContent` 解析指定请求的目录并按需读取原文，Artifact 文本经 `ArtifactStore.readContextText` 校验资源身份，IO 前后重验页面 lease、域、所选 owner 及请求关联。相同 entry 的正文在弹层内复用，关闭、切域或切换 owner 后取消读取并拒绝迟到结果；异常保留原诊断。query 的全目录能力供既有调用/验证使用，不再作为普通消息通用浏览入口。
 
-请求目录展示该 Turn 明确选用/追加及同 Turn Step 继承的应用记录；前序 Turn 原文从其原消息查看，
-不提供全部历史应用输入或 HTTP 快照。保存的 USER window/placement variant 只要求仍存在于原节点，
-不要求当前选中；查看的助手 owner、页面与域授权仍按当前状态校验。不能从当前较早 Assistant variant
-推算并归因于历史请求。开场及自身预置/摘要的原文入口保持原语义，无额外常驻说明或列表行。
+`projectConversationContextContent` 从保存的正文和 typed source 投影归属、原因、增改移除、前后内容及背景顺序；不读当前 Settings。旧 EXTERNAL 记录没有差异时明确说明是当时完整同步状态；没有 admission 的历史原文仍可授权读取，但不伪造通知或请求。编辑历史 USER 不隐藏仍保存的所选助手通知，未选兄弟回复隔离；历史读取不会恢复失效 anchor 的回放资格。查询不重建完整 HTTP 快照，也不从今日前序 Assistant variant 推断旧请求内容。
 
-`SubAssistantDetailPage` 把初始与外部变化共用入口固定放在原“请求”区，不跟随输出消息出现而搬移；`SubAssistantDetailUiState.Ready` 提供该任务的发现标记。timeline 不再重复显示上下文入口。新摘要/预置内容在原署名位置标明来源，署名隐藏时仍保留必要标签，不把它们冒充真实用户发言。
+短标签与正文左边缘对齐，固定类别次序，完整读屏名称包含全部类别与“查看详情”；具体间距、分组与正文折叠规则见 [消息渲染管线](message-rendering-pipeline.md)。这些 UI 调整不改变注入、Provider、历史恢复或持久化边界。
 
 `ChatInputState` 的附件单一输入状态为 part 与本次选择 identity。提交捕获这批 identity，持久 Append 完成只清理仍属于本次提交的附件；移除后重新加入即使 payload 相同也属于新选择，迟到完成不得移除。输入框被替换或进入不同消息编辑时，旧提交不能清理新输入。
 

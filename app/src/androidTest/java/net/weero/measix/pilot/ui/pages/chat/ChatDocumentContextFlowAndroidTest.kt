@@ -141,7 +141,7 @@ class ChatDocumentContextFlowAndroidTest {
             assertNull(timeSource.previous)
             assertNull(timeSource.previousTime)
             assertEquals(ContextPlacement.BeforeMessage(source.message), admission.uses.single { it.entryId == time.id }.placement)
-            assertFalse(projectConversationContextSummary(saved).messages.values.any { it.hasExternalUpdate })
+            assertFalse(projectConversationContextSummary(saved).messages.values.any { it.updates.isNotEmpty() })
             compose.onAllNodesWithContentDescription(uiContext.getString(R.string.context_updated_accessibility)).assertCountEquals(0)
             val details = runBlocking { query.contextDetails(lease, row.id, admission.owner.messageId) }.requests.single()
             val documentItem = details.items.single { it.entryId == attachment.id }
@@ -177,24 +177,10 @@ class ChatDocumentContextFlowAndroidTest {
             assertTrue(messages.indexOfFirst { timeBody in textParts(it) } < messages.indexOf(wireUser))
             assertEquals(1, messages.flatMap(::textParts).count { it.startsWith("USER_TEMPLATE[") })
             assertEquals(1, messages.flatMap(::textParts).count { it == documentBody })
-            val attachmentTitle = "${uiContext.getString(R.string.context_attachment)} · ${document.name}"
-            openDetails(uiContext, attachmentTitle)
-            val documentRowIndex = details.items.filter { it.categories == listOf(ConversationContextCategory.ATTACHMENT) &&
-                it.name == document.name }.indexOf(documentItem)
-            compose.onAllNodesWithText(attachmentTitle)[documentRowIndex].performScrollTo().performClick()
-            compose.waitUntil(30_000) { compose.onAllNodesWithText(documentBody).fetchSemanticsNodes().isNotEmpty() }
-            capture(context, "02-document-detail.png")
-            compose.onNodeWithText(uiContext.getString(R.string.context_source)).performScrollTo().performClick()
-            compose.onNodeWithText(requireNotNull(documentContent.source)).performScrollTo().assertIsDisplayed()
-            compose.onNodeWithText(requireNotNull(documentItem.location), substring = true).assertExists()
-            capture(context, "03-document-source-and-position.png")
-            compose.onAllNodesWithText(attachmentTitle)[documentRowIndex].performScrollTo().performClick()
-            compose.onNodeWithText(uiContext.getString(R.string.context_time)).performScrollTo().performClick()
-            compose.waitUntil(30_000) { compose.onAllNodesWithText(timeBody).fetchSemanticsNodes().isNotEmpty() }
-            capture(context, "04-time-detail.png")
-            compose.onNodeWithContentDescription(uiContext.getString(R.string.update_card_close)).performClick()
+            assertNotNull(documentContent.source)
             compose.onAllNodesWithText(documentBody).assertCountEquals(0)
             compose.onAllNodesWithText(timeBody).assertCountEquals(0)
+            capture(context, "02-document-and-time-kept-out-of-transcript.png")
 
             activity.close(); activity = null
             lease.close(); view = null
@@ -214,11 +200,9 @@ class ChatDocumentContextFlowAndroidTest {
                 details.id, documentItem.key).text })
             assertEquals(timeBody, runBlocking { query.contextContent(reopened, row.id, admission.owner.messageId,
                 details.id, timeItem.key).text })
-            openDetails(uiContext, attachmentTitle)
-            compose.onAllNodesWithText(attachmentTitle)[documentRowIndex].performScrollTo().performClick()
-            compose.waitUntil(30_000) { compose.onAllNodesWithText(documentBody).fetchSemanticsNodes().isNotEmpty() }
-            capture(context, "05-reopened-document-detail.png")
-            compose.onNodeWithContentDescription(uiContext.getString(R.string.update_card_close)).performClick()
+            compose.onAllNodesWithText(documentBody).assertCountEquals(0)
+            compose.onAllNodesWithText(timeBody).assertCountEquals(0)
+            capture(context, "03-reopened-document-chat.png")
             compose.onAllNodesWithContentDescription(uiContext.getString(R.string.context_updated_accessibility)).assertCountEquals(0)
             assertEquals(1, server.requests.size)
             assertNull(server.failure)
@@ -264,17 +248,6 @@ class ChatDocumentContextFlowAndroidTest {
             cleanup { check(!document.exists() || document.delete()) { "fixture_document_delete_failed" } }
             cleanup { server.close() }
             cleanupFailure?.let { throw it }
-        }
-    }
-
-    private fun openDetails(context: Context, expectedItemTitle: String) {
-        val inputTop = compose.onNodeWithTag("chat_input").fetchSemanticsNode().boundsInRoot.top
-        val more = compose.onAllNodesWithContentDescription(context.getString(R.string.more_options)).fetchSemanticsNodes()
-            .filter { it.boundsInRoot.bottom <= inputTop }.maxBy { it.boundsInRoot.bottom }
-        compose.onNode(SemanticsMatcher("last message More") { it.id == more.id }).performClick()
-        compose.onNodeWithText(context.getString(R.string.context_title)).performClick()
-        compose.waitUntil(30_000) {
-            compose.onAllNodesWithText(expectedItemTitle).fetchSemanticsNodes().isNotEmpty()
         }
     }
 

@@ -1881,7 +1881,6 @@
   <string name="opening_not_applicable">Системные инструкции этого шаблона не применяются к текущему ассистенту.</string>
   <string name="opening_system">Системные инструкции</string>
   <string name="opening_cleared_assistant">Начальный контекст убран после смены ассистента. Текст черновика сохранён.</string>
-  <string name="context_title">Контекст</string>
   <string name="context_updated">Контекст обновлён</string>
   <string name="context_updated_accessibility">Контекст обновлён. Открыть подробности.</string>
   <string name="context_opening">Начальный контекст</string>
@@ -1907,10 +1906,7 @@
   <string name="context_updated_categories">%1$s обновлены</string>
   <string name="context_updated_more">Обновлено категорий: %2$d, включая %1$s</string>
   <string name="context_details_accessibility">%1$s. Открыть сведения.</string>
-  <string name="context_changes_heading">Изменения в этом запросе</string>
   <string name="context_changes_hint">Синхронизировано перед запросом; это не ваши сообщения.</string>
-  <string name="context_other_inputs">Остальной контекст запроса</string>
-  <string name="context_inputs_heading">Контекст для ассистента</string>
   <string name="context_raw_input">Исходный ввод модели</string>
   <string name="context_owner_assistant">Инструкции ассистента</string>
   <string name="context_owner_application">Правила приложения</string>
@@ -1956,4 +1952,5 @@
   <string name="enterprise_configuration_attention">Требуется проверка конфигурации</string>
   <string name="enterprise_snapshot_update_required">Требуется обновление приложения</string>
   <string name="enterprise_snapshot_invalid">Конфигурация организации содержит ошибки. Обратитесь к администратору.</string>
+  <string name="context_changes_title">Изменения контекста</string>
 </resources>

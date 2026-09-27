@@ -6,7 +6,9 @@ Turn/checkpoint 归 [`turn-step-execution.md`](turn-step-execution.md)，模型�
 
 Durable Conversation、Conversation Presentation 和 Model Request Plan 是三个概念。请求投影不能
 成为第二持久化事实源。应用输入的正文、来源、请求接纳与位置属于 Conversation aggregate。Presentation 只提供轻量摘要，
-详情通过授权 query 按需读取；正文不进入会话列表、FTS 或普通消息分享。
+详情通过授权 query 按需读取；正文不进入会话列表、FTS 或普通消息分享。变化短标签只定位首次接纳该通知的请求，
+详情仅展示该请求新增的 EXTERNAL 分区；沿用历史不新增标签或请求条目。完整模型输入和来源在对应变化详情中折叠查看，
+不设消息“更多 → 上下文”入口。此展示筛选不改变接纳记录、请求投影或历史回放。
 
 ## 上下文策略
 
@@ -131,9 +133,9 @@ Step/请求状态说明发送结果。进程恢复使用原中断 Turn 终态协
 `ConversationModelContextApplicability` 判断是否仍适用。失效披露不回放，其兼容分区在引用它的
 历史 Step 记为 Missing，新 START 必要时于尾部恢复当前 C；真正缺失的引用仍报错。历史原文不改写。
 `resolveRequestContextUses` 只读取所查看 Turn 明确接纳及同 Turn 继承的贡献，旧 windowStart/placement
-允许定位原 node 内仍保存的 USER variant，owner 仍须当前选中。前序 Turn 的内容从原消息查看；
+允许定位原 node 内仍保存的 USER variant，owner 仍须当前选中。前序 Turn 的变化从其原通知查看；其他保存内容仍由 query 按各自用途读取，
 不根据今日的历史 Assistant 选择推定旧请求输入，不提供完整历史应用上下文或 HTTP 快照。
-没有 admission 的历史原文及消息摘要也沿选中 owner 展示；保存的 anchor 必须仍存在且因果合法，
+没有 admission 的历史原文仍可由授权 query 读取，但不补造更新标签或请求边界；保存的 anchor 必须仍存在且因果合法，
 但不要求旧 USER variant 当前选中。它只提供历史查看能力，不放宽 planner 的回放适用性。
 
 ### 手动摘要

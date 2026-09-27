@@ -32,15 +32,15 @@ class ConversationContextPresentationTest {
     private fun snapshot(entries: List<ConversationModelContextEntry>, admissions: List<ConversationContextAdmission>) =
         Conversation.ofId(Uuid.random()).toSnapshot().copy(nodes = listOf(user, assistant), modelContextEntries = entries, contextAdmissions = admissions)
 
-    @Test fun `several external updates produce one message flag and preserve each causal request`() {
+    @Test fun `external update marker identifies its causal request and preserves details`() {
         val initial = entry(ConversationContextSource.Disclosure(namespace, mapOf(DisclosureSection.MEMORY to ContextAdmissionReason.INITIAL)), 1)
         val update = entry(ConversationContextSource.Disclosure(namespace, mapOf(DisclosureSection.MEMORY to ContextAdmissionReason.EXTERNAL_STATE)), 2, second)
         val state = snapshot(listOf(system, initial, update), listOf(admission(first, listOf(system, initial)), admission(second, listOf(update))))
         val summary = projectConversationContextSummary(state)
-        assertTrue(summary.messages.getValue(assistant.currentMessage.id).hasExternalUpdate)
-        assertEquals(listOf(ConversationContextCategory.MEMORY), summary.messages.getValue(assistant.currentMessage.id).externalCategories)
-        assertFalse(summary.messages.getValue(user.currentMessage.id).hasExternalUpdate)
-        assertTrue(summary.messages.getValue(user.currentMessage.id).hasContent)
+        assertEquals(listOf(ConversationContextUpdateMarker(second.stepId, state.contextAdmissions.last().id,
+            listOf(ConversationContextCategory.MEMORY))), summary.messages.getValue(assistant.currentMessage.id).updates)
+        assertEquals(listOf(ConversationContextCategory.MEMORY), summary.messages.getValue(assistant.currentMessage.id).updates.single().categories)
+        assertFalse(summary.messages.containsKey(user.currentMessage.id))
         val detail = projectConversationContextDetails(state, user.currentMessage.id)
         assertEquals(listOf(1, 0), detail.requests.map { it.ordinal })
         assertEquals(3, detail.requests.first().items.size)
@@ -56,23 +56,93 @@ class ConversationContextPresentationTest {
         val state = snapshot(listOf(system, update), listOf(admission(first, listOf(system, update)), admission(second, emptyList())))
         val detail = projectConversationContextDetails(state, user.currentMessage.id)
         assertTrue(detail.requests.first().items.none { it.isCurrentUpdate })
+        assertEquals(listOf(first.stepId), projectConversationContextSummary(state).messages.getValue(assistant.currentMessage.id).updates.map { it.stepId })
+        assertTrue(detail.forUpdate(state.contextAdmissions.last().id).requests.isEmpty())
+        assertEquals(listOf(update.id), detail.forUpdate(state.contextAdmissions.first().id).requests.single().items.map { it.entryId })
         assertEquals(listOf(ConversationContextCategory.MEMORY, ConversationContextCategory.ASSISTANTS),
             detail.requests.last().items.single { it.isCurrentUpdate }.updatedCategories)
         assertEquals(listOf(ConversationContextCategory.MEMORY, ConversationContextCategory.ASSISTANTS),
-            projectConversationContextSummary(state).messages.getValue(assistant.currentMessage.id).externalCategories)
+            projectConversationContextSummary(state).messages.getValue(assistant.currentMessage.id).updates.single().categories)
+    }
+
+
+    @Test fun `eleven requests expose only the first newly admitted update`() {
+        val update = entry(ConversationContextSource.Disclosure(namespace,
+            mapOf(DisclosureSection.MEMORY to ContextAdmissionReason.EXTERNAL_STATE)), 1)
+        val steps = listOf(first) + (1..10).map { first.copy(stepId = Uuid.random(), ordinal = it) }
+        val owner = assistant.copy(messages = listOf(assistant.currentMessage.copy(parts = steps)))
+        val admissions = steps.mapIndexed { index, step -> admission(step, if (index == 0) listOf(system, update) else emptyList()) }
+        val state = snapshot(listOf(system, update), admissions).copy(nodes = listOf(user, owner))
+        val markers = projectConversationContextSummary(state).messages.getValue(owner.currentMessage.id).updates
+        assertEquals(listOf(first.stepId), markers.map { it.stepId })
+        assertEquals(admissions.first().id, markers.single().requestId)
+        val details = projectConversationContextDetails(state, owner.currentMessage.id)
+        assertEquals(11, details.requests.size)
+        assertEquals(listOf(update.id), details.forUpdate(markers.single().requestId).requests.single().items.map { it.entryId })
+        admissions.drop(1).forEach { assertTrue(details.forUpdate(it.id).requests.isEmpty()) }
+    }
+
+    @Test fun `separate updates stay at their request boundaries while categories combine within a request`() {
+        val memory = entry(ConversationContextSource.Disclosure(namespace,
+            mapOf(DisclosureSection.MEMORY to ContextAdmissionReason.EXTERNAL_STATE)), 1)
+        val catalog = entry(ConversationContextSource.Disclosure(namespace,
+            linkedMapOf(DisclosureSection.SUB_ASSISTANTS to ContextAdmissionReason.EXTERNAL_STATE,
+                DisclosureSection.ENTERPRISE_MEMORY_SEEDS to ContextAdmissionReason.EXTERNAL_STATE)), 2, second)
+        val state = snapshot(listOf(system, memory, catalog), listOf(admission(first, listOf(system, memory)), admission(second, listOf(catalog))))
+        val markers = projectConversationContextSummary(state).messages.getValue(assistant.currentMessage.id).updates
+        assertEquals(listOf(first.stepId, second.stepId), markers.map { it.stepId })
+        assertEquals(listOf(ConversationContextCategory.MEMORY), markers.first().categories)
+        assertEquals(listOf(ConversationContextCategory.ASSISTANTS, ConversationContextCategory.ENTERPRISE_BACKGROUND), markers.last().categories)
+        val details = projectConversationContextDetails(state, assistant.currentMessage.id)
+        assertEquals(listOf(memory.id), details.forUpdate(markers.first().requestId).requests.single().items.map { it.entryId })
+        assertEquals(listOf(catalog.id), details.forUpdate(markers.last().requestId).requests.single().items.map { it.entryId })
+    }
+
+    @Test fun `later turn replay cannot create another notification even with the same step identity`() {
+        val update = entry(ConversationContextSource.Disclosure(namespace,
+            mapOf(DisclosureSection.MEMORY to ContextAdmissionReason.EXTERNAL_STATE)), 1)
+        val nextUser = MessageNode.of(UIMessage.user("next question"))
+        val nextAssistant = MessageNode.of(UIMessage(role = MessageRole.ASSISTANT, parts = listOf(first)))
+        val later = admission(first, listOf(system, update)).copy(owner = nextAssistant.locator())
+        val state = snapshot(listOf(system, update), listOf(admission(first, listOf(system, update)), later))
+            .copy(nodes = listOf(user, assistant, nextUser, nextAssistant))
+        val summary = projectConversationContextSummary(state)
+        assertEquals(1, summary.messages.getValue(assistant.currentMessage.id).updates.size)
+        assertFalse(summary.messages.containsKey(nextAssistant.currentMessage.id))
+        assertTrue(projectConversationContextDetails(state, nextAssistant.currentMessage.id).forUpdate(later.id).requests.isEmpty())
+    }
+
+    @Test fun `mixed disclosure details show only external sections while retaining original input`() {
+        val update = entry(ConversationContextSource.Disclosure(namespace,
+            linkedMapOf(DisclosureSection.MEMORY to ContextAdmissionReason.EXTERNAL_STATE,
+                DisclosureSection.SUB_ASSISTANTS to ContextAdmissionReason.INITIAL,
+                DisclosureSection.ENTERPRISE_MEMORY_SEEDS to ContextAdmissionReason.BASELINE_RESTORE)), 1)
+        val state = snapshot(listOf(system, update), listOf(admission(first, listOf(system, update))))
+        val request = state.contextAdmissions.single()
+        val item = projectConversationContextDetails(state, assistant.currentMessage.id).forUpdate(request.id).requests.single().items.single()
+        assertEquals(listOf(ConversationContextCategory.MEMORY), item.categories)
+        val memory = ConversationContextSectionUiModel(ConversationContextCategory.MEMORY, reason = ConversationContextReason.EXTERNAL)
+        val content = ConversationContextContentUiModel("exact complete original input", "saved source",
+            ConversationContextPresentationUiModel(listOf(memory,
+                ConversationContextSectionUiModel(ConversationContextCategory.ASSISTANTS, reason = ConversationContextReason.INITIAL),
+                ConversationContextSectionUiModel(ConversationContextCategory.ENTERPRISE_BACKGROUND, reason = ConversationContextReason.RESTORE))))
+        val filtered = content.forUpdate(item.updatedCategories)
+        assertEquals(listOf(memory), filtered.presentation.sections)
+        assertEquals(content.text, filtered.text)
+        assertEquals(content.source, filtered.source)
     }
 
     @Test fun `restoration and unknown historical content never claim external updates`() {
         val restored = entry(ConversationContextSource.Disclosure(namespace, mapOf(DisclosureSection.MEMORY to ContextAdmissionReason.BASELINE_RESTORE)), 1)
         val state = snapshot(listOf(system, restored), listOf(admission(first, listOf(system, restored))))
-        assertFalse(projectConversationContextSummary(state).messages.values.any { it.hasExternalUpdate })
+        assertFalse(projectConversationContextSummary(state).messages.values.any { it.updates.isNotEmpty() })
         assertEquals(listOf(ConversationContextCategory.RESTORE), projectConversationContextDetails(state, user.currentMessage.id).requests.single().items.last().categories)
         val old = restored.copy(stepId = null, payload = restored.payload.copy(source = ConversationContextSource.Disclosure(null)))
         val historic = snapshot(listOf(old), emptyList())
         val item = projectConversationContextDetails(historic, user.currentMessage.id).requests.single().items.single()
         assertEquals(ConversationContextRequestState.HISTORICAL, projectConversationContextDetails(historic, user.currentMessage.id).requests.single().state)
         assertNull(projectConversationContextDetails(historic, user.currentMessage.id).requests.single().id)
-        assertFalse(projectConversationContextSummary(historic).messages.values.any { it.hasExternalUpdate })
+        assertFalse(projectConversationContextSummary(historic).messages.values.any { it.updates.isNotEmpty() })
     }
 
     @Test fun `switching variant cannot reveal sibling admissions or infer source from user text`() {
@@ -100,8 +170,7 @@ class ConversationContextPresentationTest {
         assertNull(detail.id)
         assertEquals(old.id, detail.items.single().entryId)
         val summary = projectConversationContextSummary(edited)
-        assertEquals(setOf(editedUser.currentMessage.id, assistant.currentMessage.id), summary.messages.keys)
-        assertTrue(summary.messages.values.none { it.hasExternalUpdate })
+        assertTrue(summary.messages.isEmpty())
 
         val sibling = assistant.copy(messages = assistant.messages + UIMessage.assistant("other answer"), selectIndex = 1)
         val switched = edited.copy(nodes = listOf(editedUser, sibling))
@@ -126,7 +195,7 @@ class ConversationContextPresentationTest {
         assertFalse(ConversationModelContextApplicability.applicable(update, edited.currentMessages()))
         assertEquals(projectConversationContextSummary(original).messages.getValue(assistant.currentMessage.id),
             projectConversationContextSummary(edited).messages.getValue(assistant.currentMessage.id))
-        assertTrue(projectConversationContextSummary(edited).messages.getValue(assistant.currentMessage.id).hasExternalUpdate)
+        assertTrue(projectConversationContextSummary(edited).messages.getValue(assistant.currentMessage.id).updates.isNotEmpty())
         assertEquals(projectConversationContextDetails(original, assistant.currentMessage.id),
             projectConversationContextDetails(edited, assistant.currentMessage.id))
     }
@@ -156,7 +225,7 @@ class ConversationContextPresentationTest {
         assertEquals(listOf(system.id), resolveRequestContextUses(state.copy(contextAdmissions = listOf(changed)), changed).map { it.use.entryId })
     }
 
-    @Test fun `summary traverses a large selected branch once while preserving causal user and external flags`() {
+    @Test fun `summary traverses a large selected branch once and retains only real update markers`() {
         val pairs = (0 until 500).map { index ->
             MessageNode.of(UIMessage.user("question $index")) to
                 MessageNode.of(UIMessage(role = MessageRole.ASSISTANT, parts = listOf(first.copy(stepId = Uuid.random()))))
@@ -180,10 +249,10 @@ class ConversationContextPresentationTest {
         }
         val state = snapshot(entries, admissions).copy(nodes = counted)
         val summary = projectConversationContextSummary(state)
-        assertEquals(1000, summary.messages.size)
-        assertEquals(500, summary.messages.values.count { it.hasExternalUpdate })
+        assertEquals(500, summary.messages.size)
+        assertEquals(500, summary.messages.values.count { it.updates.isNotEmpty() })
         assertTrue("Repeated selected-branch traversal: $reads", reads <= nodes.size * 2)
-        assertTrue(pairs.all { summary.messages.getValue(it.first.currentMessage.id).hasContent })
+        assertTrue(pairs.none { summary.messages.containsKey(it.first.currentMessage.id) })
     }
 
     @Test fun `a body request resolves only its chosen request and retains the same contribution directory`() {
@@ -231,8 +300,10 @@ class ConversationContextPresentationTest {
         assertTrue(projectConversationContextDetails(state, assistant.currentMessage.id).requests.single().items.any { it.entryId == memory.id })
     }
 
-    @Test fun `streaming reuses lightweight context while durable admission invalidates it`() {
-        val state = snapshot(listOf(system), listOf(admission(first, listOf(system))))
+    @Test fun `streaming keeps selected variant markers while durable admission invalidates the summary`() {
+        val sibling = UIMessage.assistant("unselected answer")
+        val state = snapshot(listOf(system), listOf(admission(first, listOf(system)))).copy(
+            nodes = listOf(user, assistant.copy(messages = listOf(sibling, assistant.currentMessage), selectIndex = 1)))
         val projector = net.weero.measix.pilot.service.runtime.ConversationPresentationProjector()
         val runtime = net.weero.measix.pilot.service.runtime.ConversationRuntimeSnapshot(state, null)
         val initial = projector.project(runtime)
@@ -248,6 +319,10 @@ class ConversationContextPresentationTest {
         assertEquals(user.currentMessage, projected.nodes.first().currentMessage)
         assertEquals(streamed.stream!!.assistantMessage, projected.nodes.last().currentMessage)
         assertEquals("stream", projected.nodes.last().currentMessage.toText())
-        assertTrue(projected.context.messages.getValue(assistant.currentMessage.id).hasExternalUpdate)
+        assertEquals(1, projected.nodes.last().selectIndex)
+        assertSame(sibling, projected.nodes.last().messages.first())
+        assertEquals(listOf(ConversationContextUpdateMarker(second.stepId, changed.contextAdmissions.last().id,
+            listOf(ConversationContextCategory.MEMORY))), projected.context.messages.getValue(assistant.currentMessage.id).updates)
+        assertFalse(projected.context.messages.containsKey(sibling.id))
     }
 }

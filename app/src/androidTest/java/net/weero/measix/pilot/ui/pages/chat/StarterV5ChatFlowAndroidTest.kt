@@ -183,7 +183,7 @@ class StarterV5ChatFlowAndroidTest {
             assertEquals(StepOutcome.Final, answer.parts.filterIsInstance<UIMessagePart.Step>().last().outcome)
             assertEquals(expectedAnswer, answer.toText())
             assertEquals(listOf(prompt), transcript.filter { it.role == MessageRole.USER }.map { it.toText() })
-            assertTrue(completed.snapshot.context.messages.values.none { it.hasExternalUpdate })
+            assertTrue(completed.snapshot.context.messages.values.none { it.updates.isNotEmpty() })
             val durable = runBlocking { requireNotNull(repository.getConversationSnapshotById(row.id)) }
             val saved = requireNotNull(durable.opening)
             assertEquals(definition, saved.definition)
@@ -217,16 +217,10 @@ class StarterV5ChatFlowAndroidTest {
             val systemItem = details.items.single { ConversationContextCategory.SYSTEM in it.categories }
             val admittedSystem = runBlocking { query.contextContent(lease, row.id, answer.id, details.id, systemItem.key).text }
             assertTrue(admittedSystem.contains(system))
-            openContext(uiContext, expectedAnswer)
-            compose.onNodeWithText(uiContext.getString(R.string.context_opening)).performScrollTo().performClick()
-            compose.waitUntil(30_000) { compose.onAllNodesWithText(uiContext.getString(R.string.context_raw_input)).fetchSemanticsNodes().isNotEmpty() }
             compose.onNodeWithText(original).assertDoesNotExist()
-            capture(evidence, "03-opening-structured-detail.png")
-            compose.onNodeWithText(uiContext.getString(R.string.context_raw_input)).performScrollTo().performClick()
-            compose.waitUntil(30_000) { compose.onAllNodesWithText(original).fetchSemanticsNodes().isNotEmpty() }
-            compose.onNodeWithText(original).performScrollTo().assertIsDisplayed()
-            capture(evidence, "03-opening-detail.png")
-            compose.onNodeWithContentDescription(uiContext.getString(R.string.update_card_close)).performClick()
+            compose.onNodeWithText(admittedSystem).assertDoesNotExist()
+            compose.onAllNodesWithContentDescription(uiContext.getString(R.string.context_updated_accessibility)).assertCountEquals(0)
+            capture(evidence, "03-opening-kept-out-of-transcript.png")
             view.close(); view = null
             activity.close(); activity = null
             // A direct repository read proves Room, independently of whether the runtime has been evicted.
@@ -238,13 +232,16 @@ class StarterV5ChatFlowAndroidTest {
             activity = ActivityScenario.launch(Intent(context, RouteActivity::class.java).putExtra("conversationId", row.id.toString()))
             activity.onActivity { uiContext = it }
             compose.waitUntil(30_000) { compose.onAllNodesWithText(expectedAnswer).fetchSemanticsNodes().isNotEmpty() }
-            openContext(uiContext, expectedAnswer)
-            compose.onNodeWithText(uiContext.getString(R.string.context_opening)).performScrollTo().performClick()
-            compose.waitUntil(30_000) { compose.onAllNodesWithText(uiContext.getString(R.string.context_raw_input)).fetchSemanticsNodes().isNotEmpty() }
-            compose.onNodeWithText(uiContext.getString(R.string.context_raw_input)).performScrollTo().performClick()
-            compose.waitUntil(30_000) { compose.onAllNodesWithText(original).fetchSemanticsNodes().isNotEmpty() }
-            compose.onNodeWithText(original).performScrollTo().assertIsDisplayed()
-            capture(evidence, "04-chat-reopened-detail.png")
+            val reopenedView = runBlocking { conversations.initialize(ConversationOpenRequest.OpenExisting(row.id, access)) }
+            view = reopenedView
+            val reopenedDetails = runBlocking { query.contextDetails(reopenedView, row.id, answer.id) }.requests.single()
+            assertEquals(details, reopenedDetails)
+            assertEquals(original, runBlocking { query.contextContent(reopenedView, row.id, answer.id, details.id, item.key).text })
+            assertEquals(admittedSystem, runBlocking { query.contextContent(reopenedView, row.id, answer.id, details.id, systemItem.key).text })
+            compose.onNodeWithText(original).assertDoesNotExist()
+            compose.onNodeWithText(admittedSystem).assertDoesNotExist()
+            compose.onAllNodesWithContentDescription(uiContext.getString(R.string.context_updated_accessibility)).assertCountEquals(0)
+            capture(evidence, "04-chat-reopened.png")
             File(evidence, "evidence.txt").writeText("schema=5\nhttp_sync=true\nentry=actual_empty_chat_card\n" +
                 "real_chat_vm=true\nprovider_adapter=true\nroom_readback=true\nactivity_reopen=true\nrelease=${saved.releaseId}\n" +
                 "snapshot_hash=${saved.snapshotHash}\nordered_backgrounds=${backgrounds.size}\ncore_http=$core\nresult=PASS\n")
@@ -288,42 +285,6 @@ class StarterV5ChatFlowAndroidTest {
             cleanup { server?.close() }
             if (primaryFailure == null) failure?.let { throw it }
         }
-    }
-
-    private fun openContext(context: Context, expectedAnswer: String) {
-        compose.waitUntil(30_000) { compose.onAllNodesWithTag("chat_input").fetchSemanticsNodes().size == 1 }
-        val moreLabel = context.getString(R.string.more_options)
-        val answerText = hasText(expectedAnswer, substring = false) and !hasClickAction()
-        fun assistantMore(): androidx.compose.ui.semantics.SemanticsNode? {
-            val input = compose.onAllNodesWithTag("chat_input").fetchSemanticsNodes().singleOrNull() ?: return null
-            val inputTop = input.boundsInRoot.top
-            // Auxiliary generation deliberately returns the same text. Its title, suggestion and
-            // hidden drawer entries are clickable; only the displayed message body is the anchor.
-            val answer = compose.onAllNodes(answerText).fetchSemanticsNodes().filter { node ->
-                val bounds = node.boundsInRoot
-                bounds.width > 0f && bounds.height > 0f && bounds.left >= 0f && bounds.top >= 0f &&
-                    bounds.bottom < inputTop && compose.onNode(SemanticsMatcher("visible reply body") {
-                        it.id == node.id
-                    }).isDisplayed()
-            }.singleOrNull() ?: return null
-            return compose.onAllNodesWithContentDescription(moreLabel).fetchSemanticsNodes().filter {
-                it.boundsInRoot.left >= 0f && it.boundsInRoot.width > 0f && it.boundsInRoot.height > 0f &&
-                    it.boundsInRoot.top >= answer.boundsInRoot.bottom && it.boundsInRoot.bottom <= inputTop
-            }.singleOrNull()
-        }
-        // Durable completion precedes the assistant action row's appearance. Never choose the
-        // earlier USER row simply because its More button is already in the semantics tree.
-        compose.waitUntil(30_000) { assistantMore() != null }
-        val more = requireNotNull(assistantMore())
-        compose.onNode(SemanticsMatcher("assistant message More") { it.id == more.id }).assertIsDisplayed().performClick()
-        val contextAction = hasText(context.getString(R.string.context_title)) and hasClickAction()
-        // Modal content is composed before its entrance completes; an off-screen semantic node
-        // is not yet a tappable menu action.
-        compose.waitUntil(30_000) {
-            compose.onAllNodes(contextAction).fetchSemanticsNodes().size == 1 && compose.onNode(contextAction).isDisplayed()
-        }
-        compose.onNode(contextAction).assertIsDisplayed().performClick()
-        compose.waitUntil(30_000) { compose.onAllNodesWithText(context.getString(R.string.context_opening)).fetchSemanticsNodes().isNotEmpty() }
     }
 
     private fun <T> awaitUi(timeout: Long, action: suspend () -> T): T {

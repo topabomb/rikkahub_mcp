@@ -32,32 +32,41 @@ UIMessage.parts[]
 | 全文预览 | `app/src/main/java/net/weero/measix/pilot/ui/components/richtext/MarkdownWeb.kt`、`ui/pages/webview/ContentPreviewPage.kt`、`app/src/main/assets/html/mark.html` |
 | WebView 封装 | `app/src/main/java/net/weero/measix/pilot/ui/components/webview/WebView.kt` |
 
-应用上下文不写入 `UIMessage.parts` 或插入列表节点。`MessageContextSummary` 给原消息更多菜单提供
-“上下文”入口；同一助手消息发生外部变化时最多一行轻量提示，初始状态不增加提示行。
-`externalCategories` 按固定类别次序生成标签：一类为“记忆已更新”，两类为“记忆 · 助手目录已更新”，
-更多为“记忆等 3 类已更新”；不列资源 ID、条目数量或内容。子助手只读页复用同样标签及原请求区唯一入口。
-可访问名称始终包含全部变化类别与“查看详情”，不沿用屏幕上超过两类时的缩略文本。
-短标签文字与正文起始边缘对齐，不使用按钮的左右内容缩进；可见行最小 32dp，上下沿用原消息 4dp 间距，
-大字体可自然撑高。点击仍由 Compose 扩展至最小 48dp 触控区域，不缩小字体或改变下方动作栏。
+应用上下文不写入 `UIMessage.parts` 或插入列表节点。`MessageContextSummary.updates` 只携带实际新增
+外部变化的 `stepId`、`requestId` 和类别；正文由授权 query 按需读取。消息“更多”菜单不设“上下文”项，
+子助手请求区不设聚合入口。主聊天和子助手只读时间线都在实际接纳该通知的 Step 边界显示短标签。
+首个请求的标签在该轮输出开头；中途标签在上一批工具结果之后、下一请求输出之前。
+同一请求的多个变化类别合并为一个标签，不同请求分别归位；历史沿用不增加标签。
+
+`ConversationContextUpdateMarker.categories` 按固定次序生成标签：一类为“记忆已更新”，两类为
+“记忆 · 助手目录已更新”，更多为“记忆等 3 类已更新”；不列资源 ID、条目数量或内容。
+可访问名称包含全部变化类别与“查看详情”。短标签文字与正文起始边缘对齐，不使用按钮左右缩进；
+可见行最小 32dp，上下沿用原消息 4dp 间距，大字体自然撑高，Compose 保留最小 48dp 触控区域。
 主聊天复用两个 Markdown renderer 的 `MarkdownContentInset` 与原气泡内容 padding，分别按原层级应用，
-避免不同密度的像素取整错位；无文本时沿消息容器对齐。子助手入口沿原请求文字起点，不额外缩进。
-详情通过 Conversation query 按请求和来源逐项展开。初次打开优先最近有新增外部变化的请求，否则最新请求；
-“本次变化”默认展开，按记忆/助手目录/企业背景分区，显示归属、增改移除及当前内容，修改前内容另行展开。
-其余输入收在“本次请求的其他上下文”。继承条目不重复标成该请求的新变化；新 Step 不打断正在阅读的内容。
+不改动动作栏。只有含通知的 Step 才结束前面的思考/工具折叠组并插入 `ContextUpdateBlock`；
+普通 Step 继续透明，不拆分时间线。
+
+点击标签打开 `ConversationContextDetails` 的“上下文变化”，以 `requestId` 固定所查看的接纳请求。
+`ConversationContextDetailsUiModel.forUpdate` 仅保留该请求的 `isCurrentUpdate` 条目；
+`ConversationContextContentUiModel.forUpdate` 只展示条目中原因是 EXTERNAL 的变化分区。
+详情不列出其他请求或沿用记录，不混入首次提供、恢复、System、时间及规则内容，也不设置“其他上下文”区。
+混合原因状态包的“模型输入原文”和“技术信息”仍保留完整原文和来源，默认折叠。
+变化按记忆/助手目录/企业背景显示归属、增改移除及当前内容，修改前内容另行展开。
+单段长文默认最多八行，可展开全文；旧记录无逐项差异时说明其内容是当时完整状态，不能猜测差异。
+
 `projectConversationContextContent` 只用已保存正文和 typed source 构建结构化 UiModel，不读取当前配置。
-旧记录无逐项差异时说明其内容是当时完整状态；首次提供、同步变化、恢复上下文分别标明。
-历史入口及更新标签以当前选中的内容 owner 为准；编辑因果 USER 不隐藏仍保存着的旧来源，
-无请求接纳记录的历史原文同样可查。请求回放仍要求 anchor 适用，历史可读不代表可再次发送。
-“同步变化”不声称具体操作者或会话，现有记录没有该项归因；归属指内容作用范围。
-System 按领域/应用/工具/工作区/提示规则分块；模型输入原文和技术信息单独折叠，复制仍返回完整原文。
-单段长文默认最多八行，可展开全文；正文读取沿原 lease 授权和取消边界，不在消息摘要中加载。
-预置/摘要的正文仍沿原消息渲染，来源由旁侧上下文详情解释；`Step` 仍不参与 COT 分组。
+“同步变化”不声称具体操作者或会话，归属表示内容作用范围。摘要与详情以选中助手 variant 为准；
+编辑因果 USER 不隐藏仍保存着的该通知，切换助手 variant 不混入兄弟回复，迟到读取受 lease/域校验。
+请求接纳先于 Provider IO，因此详情保留实际请求状态，不把已接纳说成模型已收到。
+有已接纳通知但无生成正文的失败/取消消息仍展示该边界及原终态；不为没有变化的空消息新增入口。
+预置/摘要沿原正文和来源标识呈现，Starter 沿原开场详情入口查看，不转入变化详情。
+这些变化只收敛 UI 投影与入口，不调整 Provider 输入、通知产生条件、历史回放、裁剪恢复或持久化结构。
 
 ## 2. 第一层：Part 分组与分发
 
 ### 2.1 分组逻辑
 
-`groupMessageParts()`（`ChatMessageCot.kt`）按可见内容顺序将连续 `Reasoning` 和普通 `Tool` 合并为一个 `ThinkingBlock`；`assistant_call` 使用独立的 `SubAssistantCallBlock`，其余内容使用 `ContentBlock`。`UIMessagePart.Step` 是不可见执行标记，既不渲染也不切断折叠时间线。
+`groupMessageParts()`（`ChatMessageCot.kt`）按可见内容顺序将连续 `Reasoning` 和普通 `Tool` 合并为一个 `ThinkingBlock`；`assistant_call` 使用独立的 `SubAssistantCallBlock`，其余内容使用 `ContentBlock`。`UIMessagePart.Step` 是不可见执行标记；仅其 `stepId` 对应已接纳变化时，分组器先收口前组并插入 `ContextUpdateBlock`，让短标签位于受影响输出之前。其余 Step 不渲染、不切断折叠时间线。
 
 流式消息由查询层投影，保留其他 variants 与 `selectIndex`，UI 不改写历史节点。工具卡片 identity 使用 `localCallId`；`ToolLivePhase` 决定运行与交互呈现，不能以 Provider call ID、UI ordinal 或 output 是否为空代替。
 

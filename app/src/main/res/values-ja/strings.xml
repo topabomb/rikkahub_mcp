@@ -1881,7 +1881,6 @@
   <string name="opening_not_applicable">この開始設定のシステム指示は現在のアシスタントに適用されていません。</string>
   <string name="opening_system">システム指示</string>
   <string name="opening_cleared_assistant">アシスタントの切り替えにより開始設定を解除しました。下書きのテキストは保持されています。</string>
-  <string name="context_title">コンテキスト</string>
   <string name="context_updated">コンテキストを更新しました</string>
   <string name="context_updated_accessibility">コンテキストを更新しました。詳細を表示できます</string>
   <string name="context_opening">開始内容</string>
@@ -1907,10 +1906,7 @@
   <string name="context_updated_categories">%1$sを更新</string>
   <string name="context_updated_more">%1$sなど%2$d種類を更新</string>
   <string name="context_details_accessibility">%1$s。詳細を表示</string>
-  <string name="context_changes_heading">このリクエストでの変更</string>
   <string name="context_changes_hint">このリクエストの前に同期した情報です。送信したメッセージではありません。</string>
-  <string name="context_other_inputs">このリクエストの他のコンテキスト</string>
-  <string name="context_inputs_heading">アシスタントに提供したコンテキスト</string>
   <string name="context_raw_input">モデルへの入力原文</string>
   <string name="context_owner_assistant">アシスタントの指示</string>
   <string name="context_owner_application">アプリのルール</string>
@@ -1956,4 +1952,5 @@
   <string name="enterprise_configuration_attention">設定の確認が必要です</string>
   <string name="enterprise_snapshot_update_required">アプリの更新が必要です</string>
   <string name="enterprise_snapshot_invalid">企業設定の内容に問題があります。管理者にお問い合わせください。</string>
+  <string name="context_changes_title">コンテキストの変更</string>
 </resources>

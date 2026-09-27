@@ -1889,7 +1889,6 @@
   <string name="opening_not_applicable">These system instructions do not apply to the current assistant.</string>
   <string name="opening_system">System instructions</string>
   <string name="opening_cleared_assistant">Opening context removed after switching assistants. Your draft text is unchanged.</string>
-  <string name="context_title">Context</string>
   <string name="context_updated">Context updated</string>
   <string name="context_updated_accessibility">Context updated. View details.</string>
   <string name="context_opening">Opening</string>
@@ -1915,10 +1914,7 @@
   <string name="context_updated_categories">%1$s updated</string>
   <string name="context_updated_more">%1$s and others: %2$d categories updated</string>
   <string name="context_details_accessibility">%1$s. View details.</string>
-  <string name="context_changes_heading">Changes in this request</string>
   <string name="context_changes_hint">Synced before this request; these are not messages you sent.</string>
-  <string name="context_other_inputs">Other context in this request</string>
-  <string name="context_inputs_heading">Context provided to the assistant</string>
   <string name="context_raw_input">Original model input</string>
   <string name="context_owner_assistant">Assistant instructions</string>
   <string name="context_owner_application">Application rules</string>
@@ -1964,4 +1960,5 @@
   <string name="enterprise_configuration_attention">Configuration needs attention</string>
   <string name="enterprise_snapshot_update_required">App update required</string>
   <string name="enterprise_snapshot_invalid">The enterprise configuration is invalid. Contact your administrator.</string>
+  <string name="context_changes_title">Context changes</string>
 </resources>
