@@ -147,7 +147,7 @@ pending backup restore
 
 Room/DataStore/文件协议按长期数据保全演进。结构变化必须提供显式 migration、fresh schema 同构与历史数据验证；索引随实体和 migration 维护，不由业务请求临时创建。备份先在 staging 升级和验证，成功后才发布。`BackupDataGraph` 只构建分离的个人备份或恢复 publication，复用生产 Room schema 并重建派生索引；它不成为运行时数据库或文件 owner。冷恢复由 `PendingBackupRestore` 合并最新企业图后执行既有 swap/rollback，禁止用个人包整体覆盖混合域 live 数据库。
 
-兼容只存在于明确的持久化迁移和外部协议解析边界。架构迁移同次删除旧 facade、fallback、deprecated 转发、过渡命名与无调用协议，不能以双路径掩盖不一致。未来配置或工具来源应从既有 `TurnContextFactory` / `TurnToolSetFactory` 接入，有真实消费者后再扩展合同；不预埋无消费者的 schema。当前企业接入以 [Enrollment 合同](enrollment-material-contract.md)、[配置架构](android-configuration-architecture.md)和平台 Control Protocol 为准。
+兼容只存在于明确的持久化迁移和外部协议解析边界。架构迁移同次删除旧 facade、fallback、deprecated 转发、过渡命名与无调用协议，不能以双路径掩盖不一致。未来配置或工具来源应从既有 `TurnContextFactory` / `TurnToolSetFactory` 接入，有真实消费者后再扩展合同；不预埋无消费者的 schema。配置兼容性、空间导航和执行准入分别判断，实现落点见 [配置架构](android-configuration-architecture.md#配置兼容性与空间导航)。当前企业接入以 [Enrollment 合同](enrollment-material-contract.md)、[配置架构](android-configuration-architecture.md)和平台 Control Protocol 为准。
 
 验证分层、失败路径、设备要求及门禁命令统一见 [测试策略](testing-strategy.md)。版本号与 changelog 仅随明确的发布需求更新。
 

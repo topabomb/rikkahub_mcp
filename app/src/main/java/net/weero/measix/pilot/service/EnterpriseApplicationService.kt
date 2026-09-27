@@ -507,6 +507,8 @@ internal data class EnterpriseOverview(
     val resetPath: EnterpriseResetPath? = null,
     val reset: EnterpriseDataResetProgress? = null,
     val enrollmentRecoveryFailure: String? = null,
+    val synchronization: EnterpriseSynchronizationStatus? = null,
+    val canEnterEnterprise: Boolean = false,
     val recoveryLogoutFailure: String? = null,
     val exitReason: EnterpriseExitReason? = null,
     val platformOrigin: String? = null,
@@ -540,8 +542,9 @@ internal class EnterpriseApplicationService(
         scope.launch {
             try {
                 recovery.awaitReady()
-                platform.recoverPlatformAccess()?.let { synchronization.synchronize(it) }
+                val access = platform.recoverPlatformAccess()
                 enrollmentRecoveryFailure.value = null
+                access?.let { synchronizeInBackground(it) }
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: Exception) {
@@ -558,12 +561,12 @@ internal class EnterpriseApplicationService(
 
     // Task progress must remain observable while Session admission waits for host teardown.
     fun observe(): Flow<EnterpriseOverview> = combine(observePresentation(), exit.failure, switching,
-        combine(enrollmentRecoveryFailure, dataReset.progress) { resume, reset -> resume to reset },
+        combine(enrollmentRecoveryFailure, dataReset.progress, synchronization.status) { resume, reset, sync -> Triple(resume, reset, sync) },
         combine(exit.recoveryLogoutFailure, platform.pendingLogoutFailure) { exitFailure, pendingFailure ->
             exitFailure to pendingFailure
         }) {
             presentation, exitFailure, activeSwitch, resumeAndReset, logoutFailures ->
-            val (resumeFailure, resetProgress) = resumeAndReset
+            val (resumeFailure, resetProgress, syncStatus) = resumeAndReset
             val available = presentation.state as? EnterpriseState.Available
             val manifest = available?.manifest
             val identity = manifest?.session?.identity ?: manifest?.lastIdentity
@@ -588,6 +591,8 @@ internal class EnterpriseApplicationService(
                 },
                 reset = resetProgress,
                 enrollmentRecoveryFailure = resumeFailure,
+                synchronization = syncStatus?.takeIf { it.access == access },
+                canEnterEnterprise = presentation.canEnterEnterprise,
                 recoveryLogoutFailure = logoutFailures.first.takeIf { manifest?.session == null } ?: logoutFailures.second,
                 exitReason = manifest?.exitReason,
                 platformOrigin = platformOrigin,
@@ -620,7 +625,7 @@ internal class EnterpriseApplicationService(
         if (pendingJoin?.first == confirmation) pendingJoin = null
     }
 
-    suspend fun confirmJoin(confirmation: EnterpriseJoinConfirmation) {
+    suspend fun confirmJoin(confirmation: EnterpriseJoinConfirmation): EnterpriseSynchronizationCommandResult {
         recovery.awaitReady()
         val material = joinMutex.withLock {
             val pending = pendingJoin?.takeIf { it.first == confirmation }
@@ -630,16 +635,24 @@ internal class EnterpriseApplicationService(
         }
         val access = platform.enroll(material, android.os.Build.MODEL, net.weero.measix.pilot.BuildConfig.VERSION_NAME)
         enrollmentRecoveryFailure.value = null
-        val applied = synchronization.synchronize(access)
-        if (applied.configuration != null) {
-            val selection = requireNotNull(sessions.readPresentation().selection)
-            switchRealm(RealmSwitchRequest(selection, access))
+        val result = synchronization.synchronizeForPresentation(access)
+        if (result != EnterpriseSynchronizationCommandResult.COMPLETED) return result
+        val presentation = sessions.readPresentation()
+        val available = presentation.state as? EnterpriseState.Available
+        val session = available?.manifest?.session
+        if (session?.id != access.sessionId || session.identity.scope != access.scope) {
+            return EnterpriseSynchronizationCommandResult.SUPERSEDED
         }
+        if (available?.configuration != null) {
+            switchRealm(RealmSwitchRequest(requireNotNull(presentation.selection), access))
+        }
+        return result
     }
-    suspend fun synchronize(access: RealmAccess.Enterprise) {
+    suspend fun synchronize(access: RealmAccess.Enterprise): EnterpriseSynchronizationCommandResult {
         recovery.awaitReady()
-        synchronization.synchronize(access)
-        enrollmentRecoveryFailure.value = null
+        val result = synchronization.synchronizeForPresentation(access)
+        if (result == EnterpriseSynchronizationCommandResult.COMPLETED) enrollmentRecoveryFailure.value = null
+        return result
     }
     suspend fun changeAddress(request: EnterpriseAddressChangeRequest, origin: String) {
         portalConnectionMutex.withLock {
@@ -765,6 +778,21 @@ internal class EnterpriseApplicationService(
             withContext(NonCancellable) { mutex.withLock { switching.value = null } }
         }
         failure?.let { throw it }
-        return requireNotNull(selected)
+        return requireNotNull(selected).also { selection ->
+            (selection.access as? RealmAccess.Enterprise)?.let { access ->
+                scope.launch { synchronizeInBackground(access) }
+            }
+        }
+    }
+
+    private suspend fun synchronizeInBackground(access: RealmAccess.Enterprise) {
+        try {
+            synchronization.synchronize(access)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Exception) {
+            // The shared synchronization projection retains the failure for this Session.
+            android.util.Log.e("EnterpriseSynchronization", "Background synchronization did not complete", error)
+        }
     }
 }

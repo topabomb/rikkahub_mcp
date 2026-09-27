@@ -149,16 +149,17 @@ internal class PlatformEnterpriseService(
             "platform_snapshot_target_mismatch"
         }
         if (generation == 0L) return sessions.recordPlatformPending(access)
+        PlatformSnapshotCompatibility.requireAdvertisedSupport(bootstrap.supportedSnapshotSchemaVersions)
         val matching = cached?.takeIf { it.configuration.generation == generation }
         val cachedExecution = matching?.execution as? EnterpriseExecution.Platform
         val cachedSchemaAccepted = cachedExecution?.snapshotSchemaVersion?.let { schema ->
-            schema in PLATFORM_SUPPORTED_SNAPSHOT_SCHEMAS && schema in bootstrap.supportedSnapshotSchemaVersions
+            schema in PlatformSnapshotCompatibility.supportedSchemas && schema in bootstrap.supportedSnapshotSchemaVersions
         } == true
         val response = read(access.sessionId) { current, token ->
             client.snapshot(current, token, generation, cachedExecution?.takeIf { cachedSchemaAccepted }?.snapshotHash)
         }
         val candidate = when (response) {
-            is PlatformSnapshotResponse.Downloaded -> {
+            is PlatformSnapshotResponse.Downloaded -> validateSnapshotContent {
                 require(response.snapshot.schemaVersion in bootstrap.supportedSnapshotSchemaVersions) {
                     "platform_snapshot_schema_not_advertised"
                 }

@@ -93,13 +93,24 @@ updateLocal(latest personalSettings transform)
 
 `PlatformSnapshotMapper` 将受支持的 Snapshot v4/v5 映射为候选；`EnterpriseConfigurationCodec` 在读取 canonical Applied 时再次校验同一领域约束。`ManagedPolicy` 的助手、对话、快速、标题、附件检查、建议、压缩、图片、TTS、ASR 十项默认引用均可省略；缺失表示未设置，不取资源首项，也不复制对话默认。非空模型引用必须指向同一快照内已启用模型，附件检查模型还需 IMAGE 输入。可选 `imageGenerators` 缺失表示空集合；显式 null、未知字段和未知枚举失败关闭。平台 Snapshot 版本与本地 Applied manifest 版本是不同契约，不能混用。
 
-Android v4/v5 的唯一 wire 来源为 Core 导出的 `contracts/platform/client-control.openapi.yaml` 与 `manifest.json`。`tools/generate-enterprise-wire.py` 校验 LF 规范化来源摘要，从 Core 的 ManagedSnapshotV4 与 ManagedSnapshot 合成客户端版本化类型并生成唯一 `PlatformWire.kt`，`--check` 验证漂移。Core 共享 cases 同时覆盖 v4/v5，旧 v4 golden 保留；Android 不再维护目标版本增量 schema。仓库内固定导出使普通构建不依赖 sibling checkout，实际部署能力与本地生成契约仍分别验证。`PLATFORM_SUPPORTED_SNAPSHOT_SCHEMAS` 明确支持 4、5；Discovery 与首次/刷新/地址变更 Bootstrap 须与客户端有版本交集，下载版本还必须出现在本次 Bootstrap 的能力列表中。按外层 schema 严格校验字段，不将非法 v5 当作 v4 继续解析。
+Android v4/v5 的唯一 wire 来源为 Core 导出的 `contracts/platform/client-control.openapi.yaml` 与 `manifest.json`。`tools/generate-enterprise-wire.py` 校验 LF 规范化来源摘要，从 Core 的 ManagedSnapshotV4 与 ManagedSnapshot 合成客户端版本化类型并生成唯一 `PlatformWire.kt`，`--check` 验证漂移。Core 共享 cases 同时覆盖 v4/v5，旧 v4 golden 保留；Android 不再维护目标版本增量 schema。仓库内固定导出使普通构建不依赖 sibling checkout，实际部署能力与本地生成契约仍分别验证。`PlatformSnapshotCompatibility.supportedSchemas` 是客户端实际支持的格式集合，目前为 4、5，不按 App 版本、最高版本或连续范围推断。Discovery 与首次/刷新/地址变更 Bootstrap 校验控制协议与身份，不用 Snapshot 能力拒绝有效身份；非零目标配置同步才检查能力交集，实际下载版本还必须出现在本次 Bootstrap 的能力列表中。`PlatformWireCodec` 对 Snapshot 在有界严格 JSON 解析后、完整 DTO 解码前检查外层正整数 `schemaVersion`，再按受支持格式严格校验字段；不将非法 v5 当作 v4 继续解析。
 
 `PlatformConnection` 的持久构造只校验 origin/身份/路径，不用当前在线能力门禁拒绝旧 Session 中的 Discovery `[4]`。`EnterpriseAppliedStore` 仍使用 manifest 6，先验证原 revision hash 再解码；旧 `EnterpriseStarter.openingSnapshot` 缺失保留为 null，不补造 System、不改原 release/hash，也不因字段增加重写 revision。v4 网络 Starter 不含 openingSnapshot，mapper 保留 null；v5 必须提供 `format=1` 的 openingSnapshot，System 与背景正文允许显式空串，背景数组允许空且保留顺序，块 ID/标题非空白、ID 唯一。v4 携带该字段、v5 缺失或 null 均拒绝；完整响应和 Applied 文件仍共享既有 4 MiB 上限。版本不支持、合法 v4 无 opening 与内容损坏是不同结果；保全旧状态不绕过原远端执行准入。
 
 `EnterpriseExecution.Platform.snapshotSchemaVersion` 保存下载时验证的网络版本，沿原 `StoredEnterpriseExecution` 私有 payload 持久化；历史文件缺失时为 null，不能根据当前 Discovery、字段形状或客户端版本补造。`PlatformEnterpriseService.synchronize` 仅在缓存原版本同时受客户端和最新 Bootstrap 支持时携带 ETag，并允许 304 复用及上报 Applied；已知 v4/v5 均适用。未知版本或服务端不再支持的缓存发起原 generation 的无条件完整下载；异常 304 由 `PlatformControlClient.snapshot` 以 `snapshot_304_without_cache` 拒绝，保全原 Applied，不循环重试或伪造版本。完整响应校验后沿原发布事务保存已验证版本；v4 升级为含开场的 v5 由服务端发布新 generation/release，原发布 hash 不改写。
 
 `EnterpriseSynchronizationService.prepareExecution` 查询 Core Managed State；仅在非零 generation、READY、版本一致且未阻断时，Session owner 才签发执行 lease。版本缺失或不同可通过同一同步入口更新后再查，不能用本机缓存替代权威检查。请求若收到 `ManagedSnapshotRequired`，原 lease 永久关闭，等待原任务停止和释放后再同步；旧请求不重放，也不因新配置到达而复活。
+
+#### 配置兼容性与空间导航
+
+长期协议演进与消费者义务集中定义于 [Control Protocol §10.10.3](../../../measix/measix-architecture/docs/10-runtime-foundation/s0/measix-s0-control-protocol.md#10103-snapshot-兼容用户提示与后续演进)；此处只记录 Android 实现落点。
+
+- `EnterpriseSessionController.readPresentation` 的 `canEnterEnterprise` 与 `switchRealm` 共用数据访问规则。有效身份在 CONFIGURATION_PENDING 也可选择企业空间；`EnterpriseAppliedStore` 保存并恢复此选择，无需改变 manifest 格式。个人空间不依赖企业网络配置；过期、撤销、关闭和跨主体限制继续生效。
+- `EnterpriseSnapshotCompatibilityException` 携带服务端版本与客户端支持集合；空集合或混合不匹配不误报客户端过旧。`validateSnapshotContent` 只包围 Snapshot 解码、身份/ETag 和映射校验，把非法内容标记为 `EnterpriseSnapshotContentException` 并保留 cause；网络、HTTP、持久化错误与取消不冒充版本不兼容。
+- `EnterpriseSynchronizationService` 是共享同步及其瞬态结果的唯一来源，结果绑定 `RealmAccess.Enterprise`。同一 Session 去重，取消等待者不撤销共享工作；主动取消传播并保留此前失败。发布结果在 StateFlow CAS 中复验 Session，旧任务不得覆盖新主体状态。此结果不是第二份配置或执行许可，不另落盘。
+- Native 同步与接入后的配置同步消费同次 `EnterpriseSynchronizationCommandResult`：成功、失败已呈现或已被替代；失败不再重复发布通用错误或误报接入资料无效。执行调用仍传播原异常，取消不转成命令失败。
+- 启动恢复、手动同步、进入企业空间及执行前补同步复用上述链。空间切换成功后异步同步，不以远端下载成功作为导航条件；兼容性失败保留绑定、Applied 和历史。执行前若已观察到同步失败，须先经同一入口重试，再进行原 Core Managed State/generation 准入；已有 READY 或缓存代际不能绕过失败。
+- `EnterpriseApplicationService` 投影同步状态；企业页在原连接区提供简短原因，技术诊断默认折叠且可选择复制，抽屉当前企业入口和企业聊天顶部只增加必要的短提示，点击进入同一企业页面；个人会话不显示该企业异常。较新格式提示更新应用，过旧格式提示管理员处理，非法配置与网络错误分别提示；不捏造最低应用版本或下载地址。成功同步清除对应 Session 的失败，不清库或重新接入。
 
 ### 2.5 按主体解析与使用偏好
 

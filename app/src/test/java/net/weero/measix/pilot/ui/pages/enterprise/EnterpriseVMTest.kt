@@ -33,6 +33,7 @@ class EnterpriseVMTest {
                 overview.value = overview.value.copy(phase = EnterpriseSessionPhase.OFFLINE)
                 overview.value = overview.value.copy(phase = EnterpriseSessionPhase.READY,
                     generation = 2, lastSyncMillis = 2000)
+                EnterpriseSynchronizationCommandResult.COMPLETED
             }
             val vm = EnterpriseVM(service)
             store.put("enterprise", vm)
@@ -50,6 +51,59 @@ class EnterpriseVMTest {
             vm.refreshUpdates()
             runCurrent()
             assertEquals(3, reads)
+        } finally {
+            store.clear()
+            runCurrent()
+            Dispatchers.resetMain()
+        }
+    }
+
+    @Test fun `shared sync failure stays the only error after manual sync or completed enrollment`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val store = ViewModelStore()
+        try {
+            val access = RealmAccess.Enterprise(exampleEnterprisePackage().identity.scope, "session")
+            val selection = RealmSelection(RealmAccess.Personal, 1)
+            val overview = MutableStateFlow(EnterpriseOverview(selection, EnterpriseSessionPhase.CONFIGURATION_PENDING,
+                "Example", "Member", access, null, null, null, null, false))
+            val service = mockk<EnterpriseApplicationService>()
+            every { service.observe() } returns overview
+            val confirmation = EnterpriseJoinConfirmation(kotlin.uuid.Uuid.random(), "https://core.example")
+            coEvery { service.join("enrollment") } returns confirmation
+            val vm = EnterpriseVM(service)
+            store.put("enterprise", vm)
+            backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.error.collect {} }
+            backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.notice.collect {} }
+            runCurrent()
+            for (error in listOf(java.io.IOException("connection closed"),
+                EnterpriseSnapshotContentException(IllegalArgumentException("invalid reference")))) {
+                val failure = EnterpriseSynchronizationFailure.from(error)
+                coEvery { service.synchronize(access) } coAnswers {
+                    overview.value = overview.value.copy(synchronization = EnterpriseSynchronizationStatus(access, false, failure))
+                    EnterpriseSynchronizationCommandResult.FAILURE_PRESENTED
+                }
+                coEvery { service.confirmJoin(confirmation) } returns EnterpriseSynchronizationCommandResult.FAILURE_PRESENTED
+                vm.synchronize()
+                runCurrent()
+                assertEquals(failure, vm.overview.value?.synchronization?.failure)
+                assertNull(vm.error.value)
+                assertNull(vm.notice.value)
+                vm.join("enrollment")
+                runCurrent()
+                vm.confirmJoin()
+                runCurrent()
+                assertNull(vm.error.value)
+                assertNull(vm.notice.value)
+                assertFalse(vm.busy.value)
+            }
+            coEvery { service.synchronize(access) } coAnswers {
+                overview.value = overview.value.copy(synchronization = EnterpriseSynchronizationStatus(access, false))
+                EnterpriseSynchronizationCommandResult.COMPLETED
+            }
+            vm.synchronize()
+            runCurrent()
+            assertNull(vm.error.value)
+            assertEquals(net.weero.measix.pilot.R.string.enterprise_sync_completed, vm.notice.value)
         } finally {
             store.clear()
             runCurrent()
@@ -262,7 +316,7 @@ class EnterpriseVMTest {
                 platformOrigin = "https://core.example"))
             val service = mockk<EnterpriseApplicationService>()
             every { service.observe() } returns overview
-            coEvery { service.synchronize(access) } returns Unit
+            coEvery { service.synchronize(access) } returns EnterpriseSynchronizationCommandResult.COMPLETED
             val vm = EnterpriseVM(service)
             store.put("enterprise", vm)
             backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.notice.collect {} }
@@ -484,7 +538,7 @@ class EnterpriseVMTest {
             val service = mockk<EnterpriseApplicationService>()
             every { service.observe() } returns overview
             val syncing = CompletableDeferred<Unit>()
-            coEvery { service.synchronize(access) } coAnswers { syncing.await() }
+            coEvery { service.synchronize(access) } coAnswers { syncing.await(); EnterpriseSynchronizationCommandResult.COMPLETED }
             val vm = EnterpriseVM(service)
             store.put("enterprise", vm)
             backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.error.collect {} }

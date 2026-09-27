@@ -692,28 +692,31 @@ private fun ChatPageContent(
         Scaffold(
             contentWindowInsets = WindowInsets(0),
             topBar = {
-                TopBar(
-                    model = configuration?.model,
-                    assistant = assistant,
-                    enterpriseName = configuration?.enterpriseName,
-                    snapshot = snapshot,
-                    navigationAction = navigationAction,
-                    onNavigationClick = onNavigationClick ?: {
-                        scope.launch { drawerState.open() }
-                        Unit
-                    },
-                    loading = turnPresentation.isActive,
-                    previewMode = previewMode,
-                    onNewChat = {
-                        chatNavigation.newChat()
-                    },
-                    onClickMenu = {
-                        previewMode = !previewMode
-                    },
-                    onUpdateTitle = {
-                        vm.updateTitle(it)
-                    }
-                )
+                Column {
+                    TopBar(
+                        model = configuration?.model,
+                        assistant = assistant,
+                        enterpriseName = configuration?.enterpriseName,
+                        snapshot = snapshot,
+                        navigationAction = navigationAction,
+                        onNavigationClick = onNavigationClick ?: {
+                            scope.launch { drawerState.open() }
+                            Unit
+                        },
+                        loading = turnPresentation.isActive,
+                        previewMode = previewMode,
+                        onNewChat = {
+                            chatNavigation.newChat()
+                        },
+                        onClickMenu = {
+                            previewMode = !previewMode
+                        },
+                        onUpdateTitle = {
+                            vm.updateTitle(it)
+                        }
+                    )
+                    net.weero.measix.pilot.ui.pages.enterprise.EnterpriseConfigurationStatus(target?.conversation?.selection)
+                }
             },
             bottomBar = {
                 Box(

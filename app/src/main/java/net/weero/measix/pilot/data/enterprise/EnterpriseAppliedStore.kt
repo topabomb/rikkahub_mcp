@@ -343,7 +343,8 @@ internal class EnterpriseAppliedStore(
             EnterpriseSessionPhase.SIGNED_OUT, EnterpriseSessionPhase.REAUTH_REQUIRED ->
                 manifest.session == null && manifest.applied == null && manifest.selectedScope == ConfigurationScope.Personal
             EnterpriseSessionPhase.CONFIGURATION_PENDING ->
-                manifest.session != null && manifest.applied == null && manifest.selectedScope == ConfigurationScope.Personal
+                manifest.session != null && manifest.applied == null &&
+                    (manifest.selectedScope == ConfigurationScope.Personal || manifest.selectedScope == manifest.session.identity.scope)
             EnterpriseSessionPhase.READY, EnterpriseSessionPhase.OFFLINE ->
                 manifest.session != null && manifest.applied != null &&
                     (manifest.selectedScope == ConfigurationScope.Personal || manifest.selectedScope == manifest.session.identity.scope)

@@ -14,17 +14,6 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
 
-internal const val PLATFORM_SNAPSHOT_SCHEMA_VERSION = 5L
-internal val PLATFORM_SUPPORTED_SNAPSHOT_SCHEMAS = setOf(4L, PLATFORM_SNAPSHOT_SCHEMA_VERSION)
-
-internal fun requireCurrentPlatformSnapshotSchema(supported: List<Long>) {
-    if (supported.none { it in PLATFORM_SUPPORTED_SNAPSHOT_SCHEMAS }) {
-        throw EnterpriseConfigurationException("enterprise_configuration_version_unsupported",
-            "The platform advertises snapshot schemas $supported; this client supports $PLATFORM_SUPPORTED_SNAPSHOT_SCHEMAS. " +
-                "Ask the enterprise administrator to upgrade the platform and publish a compatible release.")
-    }
-}
-
 @Serializable
 internal data class PlatformConnection(val origin: String, val discovery: PlatformDiscovery) {
     init {
@@ -72,7 +61,6 @@ internal class PlatformControlClient(client: OkHttpClient) {
     suspend fun discover(origin: String): PlatformConnection {
         val normalized = EnrollmentMaterialParser.normalizeOrigin(origin)
         val discovery = request<PlatformDiscovery>(builder(normalized + "/.well-known/measix").get().build(), 200)
-        requireCurrentPlatformSnapshotSchema(discovery.supportedSnapshotSchemaVersions)
         return PlatformConnection(normalized, discovery)
     }
 
@@ -107,12 +95,15 @@ internal class PlatformControlClient(client: OkHttpClient) {
                 PlatformSnapshotResponse.NotModified
             } else {
                 requireStatus(response, 200)
-                val snapshot = PlatformWireCodec.decode<PlatformManagedSnapshot>(body(response))
-                require(snapshot.deploymentId == connection.discovery.deploymentId && snapshot.managedGeneration == generation) {
-                    "platform_snapshot_identity_mismatch"
+                val raw = body(response)
+                validateSnapshotContent {
+                    val snapshot = PlatformWireCodec.decode<PlatformManagedSnapshot>(raw)
+                    require(snapshot.deploymentId == connection.discovery.deploymentId && snapshot.managedGeneration == generation) {
+                        "platform_snapshot_identity_mismatch"
+                    }
+                    require(response.header("ETag") == "\"${snapshot.snapshotHash}\"") { "platform_snapshot_etag_mismatch" }
+                    PlatformSnapshotResponse.Downloaded(snapshot)
                 }
-                require(response.header("ETag") == "\"${snapshot.snapshotHash}\"") { "platform_snapshot_etag_mismatch" }
-                PlatformSnapshotResponse.Downloaded(snapshot)
             }
         }
     }

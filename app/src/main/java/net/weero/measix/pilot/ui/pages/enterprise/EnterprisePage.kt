@@ -58,6 +58,8 @@ import net.weero.measix.pilot.service.EnterpriseBudgetCompleteness
 import net.weero.measix.pilot.service.EnterpriseBudgetMeterKind
 import net.weero.measix.pilot.service.EnterpriseBudgetPeriodKind
 import net.weero.measix.pilot.service.EnterpriseResetPath
+import net.weero.measix.pilot.service.EnterpriseSynchronizationFailure
+import net.weero.measix.pilot.service.EnterpriseSynchronizationIssue
 import net.weero.measix.pilot.service.EnterpriseConfigurationDefaultKind
 import net.weero.measix.pilot.service.EnterpriseConfigurationDetailsUiModel
 import net.weero.measix.pilot.service.EnterpriseConfigurationPolicyKind
@@ -110,6 +112,54 @@ private data class StarterPresentation(
 
 private enum class EnterpriseConfigurationDetailsSection { DEFAULTS, POLICIES }
 
+private fun synchronizationText(issue: EnterpriseSynchronizationIssue): Int = when (issue) {
+    EnterpriseSynchronizationIssue.UPDATE_APP -> R.string.enterprise_snapshot_update_app
+    EnterpriseSynchronizationIssue.UPDATE_PLATFORM -> R.string.enterprise_snapshot_update_platform
+    EnterpriseSynchronizationIssue.UNSUPPORTED_VERSION -> R.string.enterprise_snapshot_unsupported
+    EnterpriseSynchronizationIssue.NETWORK -> R.string.enterprise_sync_network_failed
+    EnterpriseSynchronizationIssue.INVALID_CONFIGURATION -> R.string.enterprise_snapshot_invalid
+    EnterpriseSynchronizationIssue.FAILED -> R.string.enterprise_sync_failed
+}
+
+/** The current conversation sees the same Session-bound failure as the enterprise space page. */
+@Composable
+internal fun EnterpriseConfigurationStatus(selection: RealmSelection?) {
+    if (selection?.access !is RealmAccess.Enterprise) return
+    val service = org.koin.compose.koinInject<net.weero.measix.pilot.service.EnterpriseApplicationService>()
+    val overview by remember(service) { service.observe() }.collectAsStateWithLifecycle(initialValue = null)
+    val failure = overview?.takeIf { it.selection == selection }?.synchronization?.failure ?: return
+    val nav = LocalNavController.current
+    TextButton(onClick = { nav.navigate(Screen.Enterprise) { launchSingleTop = true } },
+        modifier = Modifier.fillMaxWidth().testTag("enterprise-chat-configuration-status")) {
+        Text(stringResource(if (failure.issue == EnterpriseSynchronizationIssue.UPDATE_APP)
+            R.string.enterprise_snapshot_update_required else R.string.enterprise_configuration_attention),
+            style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.error)
+    }
+}
+
+@Composable
+private fun EnterpriseSynchronizationNotice(failure: EnterpriseSynchronizationFailure) {
+    var expanded by remember(failure) { mutableStateOf(false) }
+    val nav = LocalNavController.current
+    Column(Modifier.fillMaxWidth().testTag("enterprise-synchronization-notice")) {
+        Text(stringResource(synchronizationText(failure.issue)), style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.error)
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            TextButton(onClick = { expanded = !expanded }) {
+                Text(stringResource(R.string.enterprise_configuration_resource_details_title))
+            }
+            if (failure.issue == EnterpriseSynchronizationIssue.UPDATE_APP) {
+                TextButton(onClick = { nav.navigate(Screen.SettingAbout) }) {
+                    Text(stringResource(R.string.setting_page_about))
+                }
+            }
+        }
+        if (expanded) SelectionContainer {
+            Text(failure.diagnostic, style = MaterialTheme.typography.bodySmall)
+        }
+    }
+}
+
 @Composable
 internal fun EnterpriseSpaceButton(
     modifier: Modifier = Modifier,
@@ -139,13 +189,15 @@ internal fun EnterpriseSpaceButton(
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
             ) {
                 OrchelmLogo(Modifier.size(20.dp))
-                Text(
-                    label,
-                    style = MaterialTheme.typography.bodyMedium,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f),
-                )
+                Column(Modifier.weight(1f)) {
+                    Text(label, style = MaterialTheme.typography.bodyMedium, maxLines = 1,
+                        overflow = TextOverflow.Ellipsis)
+                    state?.synchronization?.failure?.takeIf { access is RealmAccess.Enterprise }?.let { failure ->
+                        Text(stringResource(if (failure.issue == EnterpriseSynchronizationIssue.UPDATE_APP)
+                            R.string.enterprise_snapshot_update_required else R.string.enterprise_configuration_attention),
+                            style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.error)
+                    }
+                }
                 Icon(
                     HugeIcons.ArrowRight01,
                     contentDescription = stringResource(R.string.enterprise_current_space, label),
@@ -445,10 +497,7 @@ internal fun EnterprisePage(openUsage: Boolean = false, vm: EnterpriseVM = koinV
                         Text(stringResource(R.string.enterprise_identity_deleted_detail), color = MaterialTheme.colorScheme.error)
                     }
                 }
-                val cachedSyncFailure = state?.enrollmentRecoveryFailure?.takeIf {
-                    state?.access != null && state?.generation != null
-                }
-                val pageRecoveryFailure = state?.enrollmentRecoveryFailure.takeIf { cachedSyncFailure == null }
+                val pageRecoveryFailure = state?.enrollmentRecoveryFailure
                 val feedback = remember { BringIntoViewRequester() }
                 val hasPageFailure = error != null || state?.failure != null || state?.exitFailure != null ||
                     pageRecoveryFailure != null || state?.recoveryLogoutFailure != null
@@ -532,34 +581,23 @@ internal fun EnterprisePage(openUsage: Boolean = false, vm: EnterpriseVM = koinV
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically) {
                             state?.userName?.let { Text(it, modifier = Modifier.weight(1f)) }
-                            Text(stringResource(phaseText(state?.phase)), color = MaterialTheme.colorScheme.primary)
+                            Text(stringResource(if (state?.synchronization?.failure != null)
+                                R.string.enterprise_configuration_attention else phaseText(state?.phase)),
+                                color = MaterialTheme.colorScheme.primary)
                         }
-                        if (state?.phase == EnterpriseSessionPhase.CONFIGURATION_PENDING) {
+                        if (state?.phase == EnterpriseSessionPhase.CONFIGURATION_PENDING && state?.synchronization?.failure == null) {
                             Text(stringResource(R.string.enterprise_pending_next_step), style = MaterialTheme.typography.bodySmall)
                         }
-                        cachedSyncFailure?.let { detail ->
-                            Text(
-                                stringResource(R.string.enterprise_sync_failed_cached),
-                                color = MaterialTheme.colorScheme.error,
-                                style = MaterialTheme.typography.bodySmall,
-                            )
-                            SelectionContainer {
-                                Text(
-                                    detail,
-                                    color = MaterialTheme.colorScheme.error,
-                                    style = MaterialTheme.typography.labelSmall,
-                                )
-                            }
-                        }
+                        state?.synchronization?.failure?.let { EnterpriseSynchronizationNotice(it) }
                         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            if (!inEnterprise && ready) {
+                            if (!inEnterprise && state?.canEnterEnterprise == true) {
                                 Button(onClick = { vm.switchSpace(openChat) }, enabled = !busy,
                                     contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)) {
                                     Text(stringResource(R.string.enterprise_switch_enterprise))
                                 }
                             }
                             FilledTonalButton(onClick = vm::synchronize,
-                                enabled = !busy && state?.phase != EnterpriseSessionPhase.REAUTH_REQUIRED,
+                                enabled = !busy && state?.synchronization?.syncing != true && state?.canEnterEnterprise == true,
                                 contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)) {
                                 Icon(HugeIcons.Refresh, contentDescription = null, modifier = Modifier.size(18.dp))
                                 Spacer(Modifier.width(8.dp))

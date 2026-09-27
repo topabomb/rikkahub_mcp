@@ -537,6 +537,7 @@ if (hasExternalDifferenceOrMissingBaseline(nextInput, currentState)) {
 | 运行中模型/普通配置保存 | 仅在原保存反馈位置使用 `已保存，下次发送生效`；只适用于影响下一 START 的普通运行配置 | 模型选择器布局与默认/指定三态；不同时展示两套模型，不加全局横幅、倒计时或新聊天记录；主题等即时设置不显示此文案 |
 | Android Starter 三个入口 | 依第 9.3 节保留原列表/预览/快捷填充，只新增选定绑定和可选详情 | 输入框高度、发送动作、附件、企业空态整体编排；不加常驻开场卡 |
 | Core Starter 编辑/发布预览 | 在原 Starter 编辑区增加默认折叠的 `开场上下文`，内含 System 和有序背景；发布预览同样折叠 | Resources/Releases 原页、列表列数、默认筛选与发布步骤保留，不另建模板工作台或独立导航；实施证据见第 14 节 |
+| 企业配置兼容与发布版本 | Android 企业连接、抽屉与聊天异常入口共用简短状态，详情按需查看；Core 发布列表、详情和预览显示实际下发协议版本，见[配置架构](../references/android-configuration-architecture.md#配置兼容性与空间导航)和[界面架构](../references/ui-architecture.md) | 属于配置异常反馈，不创建消息、不注入模型上下文、不修改 Starter 开场；正常聊天不额外占位，原发布流程不变 |
 | 分享/复制/导出 | 普通消息复制、编辑、TTS 保持原正文；专门的上下文详情支持复制原文。现有结构化备份须保全新数据，诊断导出如含上下文须标来源 | 普通图片/PDF/文字分享默认不自动展开或新增企业背景/System 附录，不扩展成新的导出产品 |
 
 ### 8.3 文案、详情与授权
@@ -749,11 +750,11 @@ Draft 的绑定归现有 Conversation runtime，UI 只持有选中摘要和操�
 
 **Enterprise 网络契约：必填字段需要明确的新版本。** required openingSnapshot 使用 schema 5，保全已发布 schema 4；版本权威为 Architecture Control Protocol §10.10.1–2。Core discovery/bootstrap、生成 DTO、hash/diff、Android 下载与 mapper 同步采用该契约。`openingSnapshot.format=1` 是内部块格式，不代替网络版本。
 
-- Android 明确支持 v4、v5 两个版本。discovery/bootstrap 与客户端有支持版本交集即可继续；实际下载依其 schemaVersion 严格解析，且该版本必须由当前服务端能力声明支持。原协议没有按请求选择 Snapshot 版本的参数，客户端不擅自增加协商 header 或改写服务器当前 generation。无交集或未知下载版本才拒绝，并保留原 Applied/Session。
+- Android 明确支持 v4、v5 两个版本。Discovery/Bootstrap 的身份与控制信息先按其合同接纳；非零目标 generation 的配置同步再检查支持集合。有交集只允许继续取得目标配置，不证明该发布可消费；实际下载先检查外层 schemaVersion，再按受支持版本严格解析，且该版本必须由本次 Bootstrap 声明支持。原协议没有按请求选择 Snapshot 版本的参数，客户端不增加协商 header 或改写当前 generation。无交集或未知目标版本使本次配置同步失败，保留原 Applied/Session；有效身份下的空间导航不依赖同步成功。长期规则统一见 [Control Protocol §10.10.3](../../../measix/measix-architecture/docs/10-runtime-foundation/s0/measix-s0-control-protocol.md#10103-snapshot-兼容用户提示与后续演进)，Android 落点见 [配置架构](../references/android-configuration-architecture.md#配置兼容性与空间导航)。
 - v4 Starter 按已发布契约不含 openingSnapshot，Android 保留原起始提示词填充及普通聊天能力；三个 Draft 入口均只填 prompt，不绑定 opening、不伪造 System/背景。v5 Starter 必须包含合法 openingSnapshot；v5 缺失/null/非法内容直接拒绝，不退回 v4。v4 携带 v5 专有字段同样拒绝。共享普通字段可以复用 DTO，但字段存在性约束由外层版本确定，测试消费 Core 导出的 v4/v5 schema、fixture 与共享有效/无效用例；Mock 使用同一权威契约。
 - 服务程序升级不等于旧活动 release 已升级。部署后需发布新 schema 的 generation/release；旧缓存的 304 仅表示原发布未变，不补造 opening、不视为新 schema 同步成功。新内容完整验证通过后才沿原协议发布新的 Applied；保留旧状态不意味着绕过现有远端准入。
 - 304 的版本判断使用下载接纳时保存的原 snapshot schema 事实；新 Applied 随原提交保存该值。只有客户端与本次 Bootstrap 均支持的已知 v4/v5 缓存可沿原条件请求使用；旧文件缺失时明确为未知，本次下载不携带 If-None-Match，要求原 generation 的完整响应，经校验后记录真实版本。无条件请求收到 304，或 Bootstrap 已撤去缓存版本时，拒绝接纳及成功上报并保全旧 Applied，不循环重试或补造版本。不能从 discovery、客户端支持版本或空 Starter 目录反推缓存版本；不改写服务端 snapshotHash，也不要求 manifest 升版。
-- **历史读取与当前网络准入分开。** 研究基线中 `PlatformConnection.init` 的 `require(4L in discovery.supportedSnapshotSchemaVersions)` 已移除；Connection 嵌在持久 Session，不能以 require 5 取代并阻断旧 manifest 6 重开。持久构造只校验原 origin/身份/路径等结构，原 discovery 能力列表保留不改；当前能力版本检查在实际网络 discovery/bootstrap/下载接纳边界完成，旧缓存列表不作为已支持新协议的证明。
+- **历史读取与当前网络准入分开。** 研究基线中 `PlatformConnection.init` 的 `require(4L in discovery.supportedSnapshotSchemaVersions)` 已移除；Connection 嵌在持久 Session，不能以 require 5 取代并阻断旧 manifest 6 重开。持久构造只校验原 origin/身份/路径等结构，原 discovery 能力列表保留不改；配置版本检查集中在实际同步的能力检查和下载接纳边界，不参与身份恢复或空间选择；旧缓存能力列表不作为当前发布兼容的证明。
 - 权威生成链同时更新 OpenAPI、版本 fixture 和客户端约束；原 v4 fixture 保留用于在线成功兼容、历史读取和版本不匹配拒绝场景。网络不支持、合法 v4 没有 opening、入站内容损坏是三类不同结果，不能统一清库或统一提示重新登录。
 
 **Enterprise 本地存储：不要求 manifest 6→7。** manifest 管的是 Session、Applied revision、hash 和发布状态；这些语义无需因 openingSnapshot 改变，本期保留 manifest 6 及现有原子发布协议。
@@ -1359,3 +1360,41 @@ Core 另增 `TestOldClientReleaseVersionAndAppliedBoundary`，四包 `httpapi/ca
 复现入口保存在 [`tools/compatibility/README.md`](../../tools/compatibility/README.md) 与同目录旧版 Kotlin 探针。Core 本地证据在 `.artifacts/compat-old-android-20260927/`（11 场景日志、`final-matrix.json`、真实发布记录和 UI 截图）及 `.artifacts/old-android-compat/core-integration.jsonl`。Android 构建日志为 `build/pre-context-old-*.log`。初次缺少 submodule、旧 MCP fixture 缺参和测试资料遗漏 kind/expiresAt 的失败均属于构建/探针准备问题，修正后完整执行上述矩阵，不计为产品兼容结论。
 
 验收范围为精确历史 Debug APK 的控制面兼容、配置持久保全、Starter 预填、执行准入及代表性 UI 失败/恢复；不扩展为 OEM 真机、历史签名 Release/R8、完整旧聊天数据库迁移或真实供应商调用成功验收。
+
+### 14.10 企业快照兼容、空间导航与版本可见性
+
+本轮收敛的是 Android 消费边界及 Admin 可观测性，不改变当前 Client Snapshot v4/v5、发布 bytes/hash、Core 准入或版本协商。长期演进规则唯一维护于 [Control Protocol §10.10.3](../../../measix/measix-architecture/docs/10-runtime-foundation/s0/measix-s0-control-protocol.md#10103-snapshot-兼容用户提示与后续演进)；owner、状态与 UI 落点见 [Android 配置架构](../references/android-configuration-architecture.md#配置兼容性与空间导航)。第 14.9 节的精确旧 APK 结论继续成立，新客户端行为不追溯改变旧安装包。
+
+- `PlatformSnapshotCompatibility` 集中维护明确支持集合；在受限大小、合法 JSON 和重复键校验后，先读取 Snapshot 外层版本，再解码受支持版本。未知合法版本与坏内容分开；受支持版本内的字段、引用、身份和完整性不放宽。未知/缺失缓存版本不冒充已支持格式，仍走完整下载。
+- 身份 bootstrap、空间选择、配置应用和执行准入分别判断。CONFIGURATION_PENDING 可保存本企业选择并在重启后恢复；不新增 manifest 版本。同步失败保全身份、Applied 和历史，依赖配置的执行仍复验权威代际；不要求重新接入或切到个人域执行企业动作。
+- 同步瞬态状态按 Session 归属投影，Native 使用同次操作的类型化结果避免重复错误或把接入后的同步失败误报为无效资料。异常类型、reason、原始 detail/cause 保留在可展开诊断中；取消继续传播。成功同步清除问题，旧 Session 的迟到结果不能影响新主体。
+- Admin 发布列表、发布详情和快照预览各增加一处 `下发协议 vN`。发布版本来自该条不可变发布的实际 Snapshot，预览版本来自同次编译结果；历史 v4 重发仍显示 v4，不取当前编译默认值。只扩展 Admin 只读投影，不修改 Client wire，也不把发布成功当成设备已应用。
+
+验证使用独立 API 36 模拟器 `emulator-5562` 和隔离 Core `127.0.0.1:9124`，未改变共享 device:real 数据。v4/v5 来自正式发布或历史 Republish；版本 6/3 的拒绝场景由仅用于测试的 HTTP 代理构造，不能称为 Core 发布了 v6/v3。供应商调用不属于这些控制面与持久化断言。
+
+最终 Debug 与测试 APK 的联合矩阵为 17 项，全部通过：
+
+| 当前 Android 场景 | 实际证据 |
+| --- | --- |
+| 历史 v4 接入、进程重开 | schema 4、实际 release/hash/generation、三个旧 Starter 预填及执行准入通过 |
+| v4 → 有开场的 v5、进程重开 | schema 5、三个 Starter 的开场绑定与预填通过，原企业主体不变 |
+| 已有配置时未知较新版本、重开、恢复 v5 | 明确 `UPDATE_APP`，不接纳坏目标；Applied、配置摘要和两节点历史内容保留；原 Session 恢复 |
+| 过旧版本、恢复 v4、重开 | 明确 `UPDATE_PLATFORM`，不误导升级 Android；恢复后准入及历史摘要正确 |
+| 首次接入即完全无支持版本交集、重开、恢复 v4 | 有效身份成立，无 Applied，CONFIGURATION_PENDING；企业/个人往返及重开保持有效，原 Session 恢复无需重新接入 |
+| 全新 v5 接入、重开，随后无 Starter 的 v5 同步、重开 | 两种真实 v5 均可应用；空 Starter 目录明确为零，不反推成 v4 |
+
+各场景均走真实 Android application/session/synchronization/query owner，并验证企业→个人→企业往返。成功接入通过会话 command owner 创建一条包含 USER/ASSISTANT 两节点的企业历史；拒绝、重开、恢复比较完整节点规范序列化摘要。该证据证明此非空历史保全，不扩展为全库、附件或数据库迁移验收。
+
+同一最终 APK 另执行未知版本与恢复两项探针，并实际点击聊天异常入口、展开版本诊断；空间页保留返回个人空间入口。首次无配置的企业→个人→企业 UI 往返另有操作证据。Admin 实际网页核对发布列表的 v4/v5、历史 v4 详情和 v5 预览，390px 窄屏无横向溢出；版本信息未增加列表列或发布步骤。
+
+精确旧 APK `29ecc1093` 与本次 Core 二进制也重新执行三项：真实 v4 使用成功；有/无 Starter 的真实 v5 分别拒绝 `unknown_platform_field` / `invalid_platform_ManagedSnapshot_schemaVersion`，保留 v4 Applied 及旧预填能力。拒绝表示证明兼容边界，不代表旧客户端可使用 v5。旧探针最初把“无 Starter 目标”错误用作“保留缓存”的预期数量，修正调用资料为缓存的三项后通过；没有改旧 APK、旧探针或产品校验。
+
+最终 Android `test assembleDebug lintDebug assembleRelease assembleDebugAndroidTest --no-parallel --max-workers=1 --no-daemon` 通过（11m27s）：JVM 2,882 项，0 失败、12 项既有环境跳过；App Lint 0 errors、323 warnings、6 hints。Universal 与 arm64 Release APK 签名验证通过。较早一轮在独立审查补入同步结果修复后主动终止，不作为最终交付证据。
+
+最终 `connectedDebugAndroidTest --no-parallel --max-workers=1 --no-daemon` 通过（6m27s）：App 261 项中 246 通过、15 项环境/显式启用跳过；Speech 16 通过、2 项声学场景跳过；Workspace 11 通过、1 项环境跳过，全部 0 失败。Opt-in 兼容探针在该全量命令中按约定跳过，真实 Core 的 17 项矩阵及两项 UI 探针已独立启用执行；不能把跳过当作这条链路的验收。设备日志为 `build/snapshot-compat-connected.log`，XML 报告及最终 APK 哈希重新核对一致。
+
+Core `go test -p 1 ./... -count=1 -json` 的 499 个顶层测试通过（含子用例共 981 项，0 失败），`go vet -p 1 ./...`、格式检查通过。Console 211 项测试、类型检查及生产构建通过。Admin 生成物重新生成后内容一致；提交前的 `drift` 只检查 Git 是否干净，因本轮合法生成物尚未提交而非零，不作为生成错误。Android wire 生成一致性检查通过。
+
+证据保存在 Android `build/snapshot-compat/verification.json`、各场景日志/JSON/UI 截图，构建日志 `build/snapshot-compat-final-gate.log`；Core `.artifacts/snapshot-compat-*`、`.artifacts/snapshot-version-*`。凭据只通过私有输入文件传递，完成后删除，不进入证据或 Git。最终 Debug SHA-256 为 `83ded58313fb8ba75cbcbf994c72cc96466b2e540811c91249a28a43063bf135`，AndroidTest 为 `bf26f426775d4acada2f63d694930bf8b60992baae64dbbcd028591c9101aa17`，Universal Release 为 `97d6ef78887830d78b5c8eb01492914dccc0bf67c027ee26b46d32fbde2fd01e`；隔离 Core 二进制为 `742c27e563f3456d31adbfe7ffc60ee5a283cdfa98579a860b56b317c0539bae`。
+
+验收覆盖控制面、配置持久化保全、Starter 预填、执行准入、UI 和构建；不宣称 OEM 真机、Release/R8 的设备运行或真实模型供应商成功响应。版本号与 changelog 未调整。

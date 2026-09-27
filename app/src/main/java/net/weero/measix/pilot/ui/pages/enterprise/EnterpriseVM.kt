@@ -219,7 +219,7 @@ internal class EnterpriseVM(private val service: EnterpriseApplicationService) :
     fun synchronize() {
         val selection = overview.value?.selection ?: return
         overview.value?.access?.let { access -> command(isCurrent = { overview.value?.selection == selection }) {
-            service.synchronize(access)
+            if (service.synchronize(access) != net.weero.measix.pilot.service.EnterpriseSynchronizationCommandResult.COMPLETED) return@command
             if (overview.value?.selection == selection && overview.value?.access == access) refreshUpdates()
             if (overview.value?.access == access) _notice.value = Notice(R.string.enterprise_sync_completed, selection)
         } }
@@ -372,7 +372,7 @@ internal class EnterpriseVM(private val service: EnterpriseApplicationService) :
                     enrollment -> R.string.enterprise_invalid_enrollment
                     else -> failureMessage
                 }, overview.value?.selection, detail = when (error) {
-                    is EnterpriseConfigurationException -> error.reason
+                    is EnterpriseConfigurationException -> error.userVisibleDiagnostic()
                     is PlatformHttpException -> error.message
                     else -> error.userVisibleDiagnostic()
                 })

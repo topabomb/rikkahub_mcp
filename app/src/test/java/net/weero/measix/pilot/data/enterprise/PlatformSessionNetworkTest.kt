@@ -593,7 +593,7 @@ class PlatformSessionNetworkTest {
 
             val failure = runCatching { service(sessions).synchronize(access) }.exceptionOrNull()
             assertTrue(failure.toString(), failure is IllegalArgumentException)
-            assertEquals("platform_snapshot_schema_not_advertised", failure?.message)
+            assertEquals("platform_snapshot_schema_not_advertised", failure?.cause?.message)
             assertEquals(0, reports.get())
             val after = enterpriseTestStore(root, credentialCipher = cipher).load()
             assertEquals(before.manifest.applied, after.manifest.applied)

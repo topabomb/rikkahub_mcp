@@ -123,18 +123,72 @@ class PlatformAuthenticationTest {
 
         listOf(
             refreshed.copy(device = refreshed.device.copy(status = PlatformBootstrapDeviceStatus.REVOKED)),
-            refreshed.copy(supportedSnapshotSchemaVersions = emptyList()),
-            refreshed.copy(supportedSnapshotSchemaVersions = listOf(6)),
         ).forEach { unavailable ->
             val unavailableFailure = runCatching {
                 owner.acceptPlatformBootstrap(access, unavailable)
             }.exceptionOrNull()
             assertTrue(unavailableFailure is EnterpriseConfigurationException)
-            val expected = if (unavailable.device.status != PlatformBootstrapDeviceStatus.ACTIVE)
-                "platform_bootstrap_unavailable" else "enterprise_configuration_version_unsupported"
-            assertEquals(expected, (unavailableFailure as EnterpriseConfigurationException).reason)
+            assertEquals("platform_bootstrap_unavailable", (unavailableFailure as EnterpriseConfigurationException).reason)
             assertEquals(after, (owner.state.value as EnterpriseState.Available).manifest)
         }
+    }
+
+    @Test fun `unsupported snapshot capability preserves identity bootstrap refresh address and pending realm navigation`() = runBlocking {
+        val root = temporary.newFolder()
+        val owner = controller(root)
+        val futureConnection = connection.copy(discovery = connection.discovery.copy(supportedSnapshotSchemaVersions = listOf(6)))
+        val id = owner.acceptPlatformEnrollment(owner.beginPlatformEnrollment(), futureConnection, response)
+        val bootstrap = PlatformWireCodec.decode<PlatformBootstrap>(fixture("bootstrap"))
+            .copy(supportedSnapshotSchemaVersions = listOf(6))
+        val access = owner.completePlatformBootstrap(id, bootstrap)
+        assertTrue(owner.readPresentation().canEnterEnterprise)
+        var selection = requireNotNull(owner.readPresentation().selection)
+        selection = owner.switchRealm(RealmSwitchRequest(selection, access)) {}
+        assertEquals(access, selection.access)
+        assertNull((owner.state.value as EnterpriseState.Available).configuration)
+        assertTrue(runCatching { owner.captureExecution(access) }.exceptionOrNull() is EnterpriseConfigurationException)
+
+        owner.acceptPlatformBootstrap(access, bootstrap.copy(user = bootstrap.user.copy(displayName = "Renamed")))
+        assertEquals("Renamed", (owner.state.value as EnterpriseState.Available).manifest.session?.identity?.userName)
+        val relocated = futureConnection.copy(origin = "https://relocated.example")
+        owner.acceptPlatformAddress(EnterpriseAddressChangeRequest(access, selection), relocated, bootstrap)
+        assertEquals(relocated, (owner.state.value as EnterpriseState.Available).manifest.session?.platform?.connection)
+
+        val restored = controller(root)
+        restored.recover()
+        selection = requireNotNull(restored.readPresentation().selection)
+        assertEquals(access, selection.access)
+        selection = restored.switchRealm(RealmSwitchRequest(selection, RealmAccess.Personal)) {}
+        selection = restored.switchRealm(RealmSwitchRequest(selection, access)) {}
+        assertEquals(access, selection.access)
+        assertEquals(EnterpriseSessionPhase.CONFIGURATION_PENDING, (restored.state.value as EnterpriseState.Available).manifest.phase)
+        val token = restored.beginInvalidation(access, EnterpriseExitReason.AUTHORIZATION_REVOKED)
+        assertFalse(restored.readPresentation().canEnterEnterprise)
+        selection = requireNotNull(restored.readPresentation().selection)
+        selection = restored.switchRealm(RealmSwitchRequest(selection, RealmAccess.Personal)) {}
+        val failure = runCatching { restored.switchRealm(RealmSwitchRequest(selection, access)) {} }.exceptionOrNull()
+        assertTrue(failure is EnterpriseConfigurationException)
+        assertEquals("enterprise_data_access_unavailable", (failure as EnterpriseConfigurationException).reason)
+        restored.finishExit(token)
+        Unit
+    }
+
+    @Test fun `pending realm navigation checks expiry again after prior host shutdown`() = runBlocking {
+        var time = 1000L
+        val owner = EnterpriseSessionController(enterpriseTestStore(temporary.newFolder(), credentialCipher = cipher)) { time }
+        val id = owner.acceptPlatformEnrollment(owner.beginPlatformEnrollment(), connection, response)
+        val bootstrap = PlatformWireCodec.decode<PlatformBootstrap>(fixture("bootstrap")).let {
+            it.copy(session = it.session.copy(expiresAt = "1970-01-01T00:00:03Z", sessionIdleExpiresAt = "1970-01-01T00:00:03Z"))
+        }
+        val access = owner.completePlatformBootstrap(id, bootstrap)
+        val selection = requireNotNull(owner.readPresentation().selection)
+        val failure = runCatching {
+            owner.switchRealm(RealmSwitchRequest(selection, access)) { time = 3000L }
+        }.exceptionOrNull()
+        assertEquals("enterprise_session_expired", (failure as EnterpriseConfigurationException).reason)
+        assertEquals(EnterpriseExitReason.AUTHORIZATION_EXPIRED, (owner.state.value as EnterpriseState.Available).manifest.exitReason)
+        assertEquals(RealmAccess.Personal, owner.readPresentation().selection?.access)
+        assertFalse(owner.readPresentation().canEnterEnterprise)
     }
 
     @Test fun `accepted enrollment after identity deletion resumes Bootstrap across restart`() = runBlocking {

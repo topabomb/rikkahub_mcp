@@ -18,21 +18,30 @@ class PlatformControlClientTest {
         .first { it.jsonObject.getValue("name").jsonPrimitive.content == name }.jsonObject.getValue("value").toString().let { if (target) withStarterOpeningMock(it) else it }
 
     @Test
-    fun `live discovery accepts v4 and v5 but rejects an unsupported server`() = runBlocking {
+    fun `discovery preserves advertised snapshot versions without gating identity access`() = runBlocking {
         for (versions in listOf(listOf(4L), listOf(5L), listOf(4L, 5L), listOf(6L))) {
             val discovery = PlatformWireCodec.decode<PlatformDiscovery>(fixture("discovery"))
                 .copy(supportedSnapshotSchemaVersions = versions)
             val server = server { reply(200, PlatformWireCodec.json.encodeToString(PlatformDiscovery.serializer(), discovery)) }
             try {
-                if (versions == listOf(6L)) {
-                    try { client.discover(origin(server)); fail("unsupported discovery accepted") }
-                    catch (error: EnterpriseConfigurationException) {
-                        assertEquals("enterprise_configuration_version_unsupported", error.reason)
-                        assertTrue(error.message.orEmpty().contains("supports [4, 5]"))
-                    }
-                } else assertEquals(versions, client.discover(origin(server)).discovery.supportedSnapshotSchemaVersions)
+                assertEquals(versions, client.discover(origin(server)).discovery.supportedSnapshotSchemaVersions)
             } finally { server.stop(0) }
         }
+    }
+
+    @Test
+    fun `snapshot transport classifies future version before unknown fields and ETag validation`() = runBlocking {
+        val server = server { reply(200, """{"schemaVersion":6,"futurePolicy":{"mode":"new"}}""") }
+        try {
+            val connection = PlatformConnection(origin(server), PlatformWireCodec.decode(fixture("discovery")))
+            val error = try {
+                client.snapshot(connection, "access", 1, null)
+                error("future snapshot accepted")
+            } catch (failure: EnterpriseSnapshotCompatibilityException) { failure }
+            assertEquals(listOf(6L), error.receivedSchemas)
+            assertEquals(setOf(4L, 5L), error.supportedSchemas)
+            assertEquals("enterprise_configuration_version_unsupported", error.reason)
+        } finally { server.stop(0) }
     }
 
     @Test
@@ -143,7 +152,7 @@ class PlatformControlClientTest {
             assertEquals("\"${snapshot.snapshotHash}\"", requests.last().second)
             badEtag = true
             try { client.snapshot(connection, "token", snapshot.managedGeneration, null); fail("bad ETag accepted") }
-            catch (error: IllegalArgumentException) { assertEquals("platform_snapshot_etag_mismatch", error.message) }
+            catch (error: IllegalArgumentException) { assertEquals("platform_snapshot_etag_mismatch", error.cause?.message) }
         } finally { server.stop(0) }
     }
 

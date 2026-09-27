@@ -41,7 +41,11 @@ internal data class EnterpriseAddressChangeRequest(
     val selection: RealmSelection,
 )
 internal data class RealmSwitchRequest(val selection: RealmSelection, val target: RealmAccess)
-internal data class EnterprisePresentation(val state: EnterpriseState, val selection: RealmSelection?)
+internal data class EnterprisePresentation(
+    val state: EnterpriseState,
+    val selection: RealmSelection?,
+    val canEnterEnterprise: Boolean = false,
+)
 internal data class EnterpriseExitToken(val access: RealmAccess.Enterprise, val reason: EnterpriseExitReason)
 internal sealed interface EnterpriseExitSignal {
     data class Closing(val token: EnterpriseExitToken) : EnterpriseExitSignal
@@ -287,7 +291,6 @@ internal class EnterpriseSessionController(
             fail("platform_bootstrap_identity_mismatch")
         }
         if (bootstrap.device.status != PlatformBootstrapDeviceStatus.ACTIVE) fail("platform_bootstrap_unavailable")
-        requireCurrentPlatformSnapshotSchema(bootstrap.supportedSnapshotSchemaVersions)
         val identity = EnterpriseIdentity(pending.platform.connection.authority, bootstrap.deployment.name, pending.userId, bootstrap.user.displayName)
         EnterpriseConfigurationCodec.validateIdentity(identity)
         val expires = minOf(Instant.parse(bootstrap.session.expiresAt).toEpochMilli(), Instant.parse(bootstrap.session.sessionIdleExpiresAt).toEpochMilli())
@@ -316,7 +319,6 @@ internal class EnterpriseSessionController(
             fail("platform_bootstrap_identity_mismatch")
         }
         if (bootstrap.device.status != PlatformBootstrapDeviceStatus.ACTIVE) fail("platform_bootstrap_unavailable")
-        requireCurrentPlatformSnapshotSchema(bootstrap.supportedSnapshotSchemaVersions)
         val identity = session.identity.copy(
             enterpriseName = bootstrap.deployment.name,
             userName = bootstrap.user.displayName,
@@ -356,7 +358,6 @@ internal class EnterpriseSessionController(
             fail("enterprise_address_identity_mismatch")
         }
         if (bootstrap.device.status != PlatformBootstrapDeviceStatus.ACTIVE) fail("platform_bootstrap_unavailable")
-        requireCurrentPlatformSnapshotSchema(bootstrap.supportedSnapshotSchemaVersions)
         val identity = session.identity.copy(
             enterpriseName = bootstrap.deployment.name,
             userName = bootstrap.user.displayName,
@@ -472,11 +473,18 @@ internal class EnterpriseSessionController(
 
     suspend fun readPresentation(): EnterprisePresentation = mutex.withLock {
         val published = state.value
-        EnterprisePresentation(published, when (published) {
-            EnterpriseState.Loading -> null
-            is EnterpriseState.Failed -> RealmSelection(RealmAccess.Personal, selectionRevision.value)
-            is EnterpriseState.Available -> exitSelection(published.manifest)
-        })
+        val manifest = (published as? EnterpriseState.Available)?.manifest
+        EnterprisePresentation(
+            state = published,
+            selection = when (published) {
+                EnterpriseState.Loading -> null
+                is EnterpriseState.Failed -> RealmSelection(RealmAccess.Personal, selectionRevision.value)
+                is EnterpriseState.Available -> exitSelection(published.manifest)
+            },
+            canEnterEnterprise = manifest?.session?.let { session ->
+                allowsDataAccess(manifest, RealmAccess.Enterprise(session.identity.scope, session.id))
+            } == true,
+        )
     }
 
     /** Host shutdown may await OS callbacks here, but original request jobs must be joined outside this lock. */
@@ -491,7 +499,7 @@ internal class EnterpriseSessionController(
                 if (current.manifest.phase != EnterpriseSessionPhase.CLOSING) beginClosing(current.manifest, EnterpriseExitReason.AUTHORIZATION_EXPIRED)
                 fail("enterprise_session_expired")
             }
-            if (current.manifest.phase !in setOf(EnterpriseSessionPhase.READY, EnterpriseSessionPhase.OFFLINE)) fail("enterprise_session_not_ready")
+            if (!allowsDataAccess(current.manifest, request.target)) fail("enterprise_data_access_unavailable")
         }
         if (request.target == selected.access) return@withLock selected
         try {

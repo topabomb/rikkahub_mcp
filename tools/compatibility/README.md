@@ -65,3 +65,62 @@ schema/generation/phase/reason、数量和布尔断言，不含接入凭据或�
 
 探针调用旧 `EnterpriseApplicationService`、同步 owner、配置 query 和会话 Starter 用例，不旁路写 DB，
 不自建简化解码器。它不是供应商调用成功、完整聊天历史保全、OEM 真机或 Release 混淆验收。
+
+
+## 当前 Android 的真实 Core 兼容探针
+
+当前生产代码的 opt-in 测试为
+`app/src/androidTest/java/net/weero/measix/pilot/data/enterprise/PlatformSnapshotCompatibilityLiveAndroidTest.kt`。
+它与上面的旧客户端探针相互独立，不修改旧 APK、旧探针或任何生成 DTO。
+
+输入通过 stdin 写入专用设备应用私有 cache，instrumentation 参数名为 `snapshotCompatibilityInput`。
+凭据仅放输入文件，不放命令行、日志或提交；完成后删除输入文件。
+
+```json
+{
+  "scenario": "join",
+  "expectedSchema": 4,
+  "expectedGeneration": 1,
+  "expectedReleaseId": "<实际 release ID>",
+  "expectedSnapshotHash": "<实际 sha256:hash>",
+  "expectedStarterCount": 3,
+  "enrollment": "<完整接入资料 JSON 字符串>"
+}
+```
+
+- `scenario` 为 `join`、`sync`、`reopen`、`reject` 或 `recover`。
+- 成功场景必填 `expectedSchema`（4 或 5）和 `expectedGeneration`；建议传入真实
+  `expectedReleaseId`、`expectedSnapshotHash` 和 `expectedStarterCount` 作精确断言。
+- `join` 必填 `enrollment`；`seedHistory` 默认 true，通过现有命令 owner 创建明确属于本企业主体的一条
+  USER/ASSISTANT 两节点历史 fixture，不调用供应商，可显式传 false 禁用。
+  `reject` 如带 `enrollment`，表示空应用首次接入失败；不带则检查已有绑定。
+- `reject` 必填 `rejectedSchema`（6 或 3），分别要求 `UPDATE_APP` 或 `UPDATE_PLATFORM`。
+  这两个值是隔离 HTTP 故障注入场景，不是 Core 正式发布的协议版本。
+- `reopen` 必须先 force-stop 再运行，保持服务端发布与基线一致；`recover` 不得清数据或重新接入。
+
+```text
+adb -s <专用设备> shell am instrument -w -r
+  -e class net.weero.measix.pilot.data.enterprise.PlatformSnapshotCompatibilityLiveAndroidTest
+  -e snapshotCompatibilityInput /data/user/0/net.weero/measix/pilot.debug/cache/snapshot-compatibility-input.json
+  net.weero.measix.pilot.debug.test/androidx.test.runner.AndroidJUnitRunner
+```
+
+建议顺序：真实历史 v4 的 `join` → `reopen`；新 Core 正式发布 v5 的 `sync` → `reopen`；
+再正式发布新 generation，通过独立代理仅改 Snapshot 外层版本为 6 并保留新增字段，运行 `reject`；
+切换为版本 3 再运行 `reject`；关闭注入后同 Session `recover`。另外在全新独立测试身份下重复
+`reject`（带 enrollment）→ 重开后的 `reject`（不带 enrollment）→ `recover`，验证首次无 Applied 的企业空间。
+代理必须转发到隔离 Core，并准确记录注入范围，不得把构造的未来版本当作 Core 正式发布证据。
+
+每个场景验证企业 → 个人 → 企业往返、同步状态和执行准入。支持版本验证本地保存的真实 Snapshot
+版本、generation、release/hash，以及 v4 Starter 无开场、v5 Starter 有开场和真实预填用例。
+拒绝场景比较绑定、Applied、配置摘要、域内历史数量和受管助手历史列表摘要，且拒绝执行；恢复沿用
+原 Session。若 join 创建了历史 fixture，还经 Session 授权和会话 owner 核验其主体，再读取完整持久
+节点序列并比较规范序列化 SHA-256；拒绝、重开与恢复均验证其 USER/ASSISTANT 内容及节点身份未变。
+未发起模型供应商调用。
+
+基线保存于私有 `cache/snapshot-compatibility-baseline.json`，跨场景保留；接入凭据不写入基线。
+非敏感结果位于外部 files 的 `snapshot-compatibility-evidence/<scenario>.json`。
+runner 应每次收集后按运行顺序另存，避免同名场景覆盖证据，并检查 `OK (1 test)` 和结果 `passed=true`。
+历史证据记录实际数量和 `historyFixtureNodeCount/historyFixtureDigest`：空历史的摘要验证不能表述为
+非空聊天正文保全；两节点 fixture 仅证明该真实企业历史的节点保全，不代替全库、附件、数据库迁移或
+OEM 真机验收。测试通过与否应以本次 APK、Core 及实际运行报告为准。

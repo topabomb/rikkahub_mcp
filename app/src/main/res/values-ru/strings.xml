@@ -1747,7 +1747,7 @@
   <string name="assistant_enterprise_memory_seed_description">Предоставляется организацией и включается в контекст ассистента. Хранится отдельно от редактируемых записей ниже и не зависит от их отключения или удаления.</string>
   <string name="enterprise_join_options">Подключиться к организации</string>
   <string name="enterprise_connected_enterprise">Организация: %1$s</string>
-  <string name="enterprise_pending_next_step">Вход выполнен, но конфигурация организации ещё не готова. Синхронизируйте конфигурацию, затем переключитесь в пространство организации.</string>
+  <string name="enterprise_pending_next_step">Учётная запись организации подключена. Можно войти в пространство; выполнение операций станет доступно после подготовки конфигурации.</string>
   <string name="enterprise_enrollment_notice">Отсканируйте QR-код, выберите его из фотографий или вставьте данные подключения, предоставленные организацией.</string>
   <string name="enterprise_sync_completed">Конфигурация организации синхронизирована. Действующую версию можно посмотреть в сведениях о конфигурации.</string>
   <string name="assistant_memory_shared_defaults">Общие настройки по умолчанию</string>
@@ -1840,7 +1840,6 @@
   <string name="enterprise_address_edit_supporting">При изменении адреса текущая организация, пользователь, сеанс и локальные данные сохраняются. Новый адрес должен принадлежать этой организации.</string>
   <string name="enterprise_address_changed">Адрес организации изменён</string>
   <string name="enterprise_address_change_failed">Не удалось изменить адрес организации</string>
-  <string name="enterprise_sync_failed_cached">Последняя синхронизация конфигурации не удалась. Локально примененная конфигурация по-прежнему доступна. Повторите попытку, когда корпоративный сервис станет доступен.</string>
   <string name="enterprise_budget_refreshing">Обновление последних данных об использовании...</string>
   <string name="chat_message_tool_read_trimmed_result">Читать сокращённый результат</string>
   <string name="chat_message_tool_search_trimmed_result">Искать в сокращённом результате</string>
@@ -1949,4 +1948,12 @@
   <string name="context_scope_available">Доступно этому ассистенту</string>
   <string name="context_order_before">Предыдущий порядок</string>
   <string name="context_order_after">Текущий порядок</string>
+  <string name="enterprise_snapshot_update_app">Обновите приложение, чтобы использовать актуальную конфигурацию организации.</string>
+  <string name="enterprise_snapshot_update_platform">Конфигурация организации использует устаревший неподдерживаемый формат. Обратитесь к администратору.</string>
+  <string name="enterprise_snapshot_unsupported">Приложение не поддерживает формат конфигурации организации. Обратитесь к администратору.</string>
+  <string name="enterprise_sync_failed">Не удалось синхронизировать конфигурацию организации. Сохранённые данные остаются; выполнение операций по-прежнему требует проверки.</string>
+  <string name="enterprise_sync_network_failed">Не удаётся подключиться к сервису организации. Проверьте сеть и повторите синхронизацию.</string>
+  <string name="enterprise_configuration_attention">Требуется проверка конфигурации</string>
+  <string name="enterprise_snapshot_update_required">Требуется обновление приложения</string>
+  <string name="enterprise_snapshot_invalid">Конфигурация организации содержит ошибки. Обратитесь к администратору.</string>
 </resources>

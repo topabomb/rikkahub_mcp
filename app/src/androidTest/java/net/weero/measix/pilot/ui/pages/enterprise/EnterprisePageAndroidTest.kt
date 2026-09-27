@@ -412,18 +412,44 @@ class EnterprisePageAndroidTest {
     }
 
     @Test
-    fun cachedConfigurationRemainsAvailableWhenStartupSyncFails() {
+    fun syncFailureRetainsDataAndDisclosesTheOriginalDiagnosticOnDemand() {
         val diagnostic = "InterruptedIOException: timeout\nCaused by: SocketException: Socket closed"
         val fixture = Fixture(overview().copy(
-            enrollmentRecoveryFailure = diagnostic,
+            synchronization = EnterpriseSynchronizationStatus(access(), false,
+                EnterpriseSynchronizationFailure(EnterpriseSynchronizationIssue.NETWORK, diagnostic)),
             lastSyncMillis = 1_000,
         ))
         fixture.show()
 
-        compose.onNodeWithText(text(R.string.enterprise_ready)).assertIsDisplayed()
-        compose.onNodeWithText(text(R.string.enterprise_sync_failed_cached)).assertIsDisplayed()
+        compose.onNodeWithText(text(R.string.enterprise_configuration_attention)).assertIsDisplayed()
+        compose.onNodeWithText(text(R.string.enterprise_sync_network_failed)).assertIsDisplayed()
+        compose.onNodeWithText(diagnostic).assertDoesNotExist()
+        click(R.string.enterprise_configuration_resource_details_title)
         compose.onNodeWithText(diagnostic).assertIsDisplayed()
         compose.onNodeWithText(text(R.string.enterprise_failure)).assertDoesNotExist()
+    }
+
+    @Test
+    fun unsupportedConfigurationAllowsEnteringTheEnterpriseSpaceAndShowsVersionDetails() {
+        val diagnostic = "enterprise_configuration_version_unsupported: server [6], client [4, 5]"
+        val personal = RealmSelection(RealmAccess.Personal, 2)
+        val enterprise = RealmSelection(access(), 3)
+        val fixture = Fixture(overview().copy(
+            selection = personal,
+            phase = EnterpriseSessionPhase.CONFIGURATION_PENDING,
+            generation = null,
+            configurationDetails = null,
+            synchronization = EnterpriseSynchronizationStatus(access(), false,
+                EnterpriseSynchronizationFailure(EnterpriseSynchronizationIssue.UPDATE_APP, diagnostic)),
+        ))
+        coEvery { fixture.service.switchRealm(RealmSwitchRequest(personal, access())) } returns enterprise
+        fixture.show()
+        compose.onNodeWithText(text(R.string.enterprise_snapshot_update_app)).assertIsDisplayed()
+        compose.onNodeWithText(diagnostic).assertDoesNotExist()
+        click(R.string.enterprise_configuration_resource_details_title)
+        compose.onNodeWithText(diagnostic).assertIsDisplayed()
+        click(R.string.enterprise_switch_enterprise)
+        coVerify(exactly = 1) { fixture.service.switchRealm(RealmSwitchRequest(personal, access())) }
     }
 
     @Test
@@ -434,7 +460,7 @@ class EnterprisePageAndroidTest {
         val raw = """{"formatVersion":1,"kind":"PLATFORM_ENROLLMENT","platformUrl":"$origin","code":"test-code","expiresAt":"2030-01-01T00:00:00Z"}"""
         coEvery { fixture.service.join(raw) } returns confirmation
         coEvery { fixture.service.dismissJoin(confirmation) } just Runs
-        coEvery { fixture.service.confirmJoin(confirmation) } just Runs
+        coEvery { fixture.service.confirmJoin(confirmation) } returns net.weero.measix.pilot.service.EnterpriseSynchronizationCommandResult.COMPLETED
         fixture.show()
         compose.onNodeWithText(text(R.string.enterprise_join_scan_gallery)).assertIsDisplayed()
         click(R.string.enterprise_join_paste)
@@ -513,7 +539,7 @@ class EnterprisePageAndroidTest {
     fun syncFeedbackDoesNotSurviveTheEnterpriseSelectionThatProducedIt() {
         val original = overview()
         val fixture = Fixture(original)
-        coEvery { fixture.service.synchronize(requireNotNull(original.access)) } just Runs
+        coEvery { fixture.service.synchronize(requireNotNull(original.access)) } returns net.weero.measix.pilot.service.EnterpriseSynchronizationCommandResult.COMPLETED
         fixture.show()
         click(R.string.enterprise_sync)
         compose.waitUntil(5_000) { fixture.vm.notice.value == R.string.enterprise_sync_completed }
@@ -717,6 +743,7 @@ class EnterprisePageAndroidTest {
         enterpriseName = name.takeIf { access != null },
         userName = "Example user".takeIf { access != null },
         access = access,
+        canEnterEnterprise = access != null,
         generation = 1L.takeIf { access != null },
         lastSyncMillis = null,
         failure = null,

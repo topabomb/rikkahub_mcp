@@ -21,8 +21,18 @@ internal object PlatformWireCodec {
 
     inline fun <reified T> decode(raw: String): T {
         val element = StrictJsonValue.parse(raw, EnterpriseConfigurationCodec.MAX_BYTES)
+        if (T::class == PlatformManagedSnapshot::class) requireSnapshotSchema(element)
         requireTypes(element, serializer<T>().descriptor)
         return json.decodeFromJsonElement(element)
+    }
+
+    fun requireSnapshotSchema(element: JsonElement) {
+        val version = (element as? JsonObject)?.get("schemaVersion") as? JsonPrimitive
+        val schema = version?.takeUnless { it.isString }?.longOrNull
+        if (schema == null || schema <= 0) {
+            throw EnterpriseConfigurationException("invalid_platform_snapshot_schema_version")
+        }
+        PlatformSnapshotCompatibility.requireSupportedVersion(schema)
     }
 
     fun requireTypes(element: JsonElement, descriptor: SerialDescriptor) {

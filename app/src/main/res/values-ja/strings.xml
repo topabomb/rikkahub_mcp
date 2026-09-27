@@ -1747,7 +1747,7 @@
   <string name="assistant_enterprise_memory_seed_description">企業から提供され、アシスタントのコンテキストに含まれます。下の編集可能なメモリとは別で、メモリの切り替えや削除の影響を受けません。</string>
   <string name="enterprise_join_options">企業に接続</string>
   <string name="enterprise_connected_enterprise">企業：%1$s</string>
-  <string name="enterprise_pending_next_step">認証済みですが、企業設定の準備ができていません。設定を同期してから企業スペースに切り替えてください。</string>
+  <string name="enterprise_pending_next_step">企業アカウントに接続済みです。スペースに入れます。設定の準備が整うと企業機能を実行できます。</string>
   <string name="enterprise_enrollment_notice">QR コードをスキャンするか写真から選択する、または企業から提供された接続情報を貼り付けてください。</string>
   <string name="enterprise_sync_completed">企業設定を同期しました。適用中のバージョンは設定の詳細で確認できます。</string>
   <string name="assistant_memory_shared_defaults">共有の既定設定</string>
@@ -1840,7 +1840,6 @@
   <string name="enterprise_address_edit_supporting">アドレスを変更しても、現在の企業、ユーザー、セッション、端末内データは維持されます。新しいアドレスはこの企業に属している必要があります。</string>
   <string name="enterprise_address_changed">企業アドレスを変更しました</string>
   <string name="enterprise_address_change_failed">企業アドレスを変更できませんでした</string>
-  <string name="enterprise_sync_failed_cached">最新の設定同期に失敗しました。端末に適用済みの設定は引き続き利用できます。企業サービスが利用可能になってから再試行してください。</string>
   <string name="enterprise_budget_refreshing">最新の使用状況を更新しています...</string>
   <string name="chat_message_tool_read_trimmed_result">圧縮結果を読む</string>
   <string name="chat_message_tool_search_trimmed_result">圧縮結果を検索</string>
@@ -1949,4 +1948,12 @@
   <string name="context_scope_available">このアシスタントが利用可能</string>
   <string name="context_order_before">変更前の順序</string>
   <string name="context_order_after">変更後の順序</string>
+  <string name="enterprise_snapshot_update_app">企業の最新設定を使用するには、アプリを更新してください。</string>
+  <string name="enterprise_snapshot_update_platform">企業設定はサポートされていない古い形式です。管理者にお問い合わせください。</string>
+  <string name="enterprise_snapshot_unsupported">このアプリは企業設定の形式に対応していません。管理者にお問い合わせください。</string>
+  <string name="enterprise_sync_failed">企業設定を同期できませんでした。保存済みデータは保持されます。企業機能の実行には引き続き確認が必要です。</string>
+  <string name="enterprise_sync_network_failed">企業サービスに接続できません。ネットワークを確認して再同期してください。</string>
+  <string name="enterprise_configuration_attention">設定の確認が必要です</string>
+  <string name="enterprise_snapshot_update_required">アプリの更新が必要です</string>
+  <string name="enterprise_snapshot_invalid">企業設定の内容に問題があります。管理者にお問い合わせください。</string>
 </resources>

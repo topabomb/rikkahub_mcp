@@ -1737,7 +1737,7 @@
   <string name="assistant_enterprise_memory_seed_description">Provided by your enterprise and included in assistant context. It is separate from the editable memories below and is not affected by their switch or deletion.</string>
   <string name="enterprise_join_options">Connect to enterprise</string>
   <string name="enterprise_connected_enterprise">Enterprise: %1$s</string>
-  <string name="enterprise_pending_next_step">You are signed in, but enterprise configuration is not ready. Sync the configuration, then switch to the enterprise space.</string>
+  <string name="enterprise_pending_next_step">Your enterprise identity is connected. You can enter the space; enterprise execution will be available when configuration is ready.</string>
   <string name="enterprise_enrollment_notice">Scan a QR code, choose one from photos, or paste the enrollment details provided by your enterprise.</string>
   <string name="enterprise_sync_completed">Enterprise configuration synced. View the active version in configuration details.</string>
   <string name="assistant_memory_shared_defaults">Shared default settings</string>
@@ -1832,7 +1832,6 @@
   <string name="enterprise_address_edit_supporting">Changing the address keeps the current enterprise, user, session, and local data. The new address must belong to this enterprise.</string>
   <string name="enterprise_address_changed">Enterprise address changed</string>
   <string name="enterprise_address_change_failed">Could not change enterprise address</string>
-  <string name="enterprise_sync_failed_cached">The latest configuration sync failed. The locally applied configuration remains available. Retry when the enterprise service is reachable.</string>
   <string name="enterprise_configuration_default_fast_model">Fast model</string>
   <string name="enterprise_configuration_default_title_model">Title model</string>
   <string name="enterprise_configuration_default_attachment_inspection_model">Attachment inspection</string>
@@ -1957,4 +1956,12 @@
   <string name="context_scope_available">Available to this assistant</string>
   <string name="context_order_before">Previous order</string>
   <string name="context_order_after">Current order</string>
+  <string name="enterprise_snapshot_update_app">Update the app to use the latest enterprise configuration.</string>
+  <string name="enterprise_snapshot_update_platform">The enterprise configuration uses an older, unsupported format. Contact your administrator.</string>
+  <string name="enterprise_snapshot_unsupported">This app does not support the enterprise configuration format. Contact your administrator.</string>
+  <string name="enterprise_sync_failed">Enterprise configuration could not be synchronized. Saved data is retained; enterprise execution still requires verification.</string>
+  <string name="enterprise_sync_network_failed">Cannot reach the enterprise service. Check your connection and synchronize again.</string>
+  <string name="enterprise_configuration_attention">Configuration needs attention</string>
+  <string name="enterprise_snapshot_update_required">App update required</string>
+  <string name="enterprise_snapshot_invalid">The enterprise configuration is invalid. Contact your administrator.</string>
 </resources>
