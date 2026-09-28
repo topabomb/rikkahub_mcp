@@ -4,6 +4,8 @@ import net.weero.measix.pilot.utils.plus
 import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.Delete01
 import androidx.compose.foundation.background
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -59,7 +61,8 @@ fun FavoritePage(vm: FavoriteVM = koinViewModel()) {
     val navController = LocalNavController.current
     val scope = rememberCoroutineScope()
     val snackbarHostState = remember { SnackbarHostState() }
-    val favorites = vm.nodeFavorites.collectAsStateWithLifecycle().value
+    val directory = vm.directory.collectAsStateWithLifecycle().value
+    val favorites = directory.items
     val favoriteRemovedText = stringResource(R.string.favorite_page_removed)
     val undoText = stringResource(R.string.history_page_undo)
     val retryText = stringResource(R.string.application_recovery_retry)
@@ -85,6 +88,18 @@ fun FavoritePage(vm: FavoriteVM = koinViewModel()) {
         modifier = Modifier.nestedScroll(scrollBehavior.nestedScrollConnection),
         containerColor = CustomColors.topBarColors.containerColor,
     ) { innerPadding ->
+        if (directory.loading || directory.diagnostic != null) {
+            Column(Modifier.fillMaxSize().padding(innerPadding).verticalScroll(rememberScrollState()).padding(16.dp),
+                verticalArrangement = Arrangement.Center,
+                horizontalAlignment = Alignment.CenterHorizontally) {
+                if (directory.loading) androidx.compose.material3.CircularProgressIndicator()
+                directory.diagnostic?.let { diagnostic ->
+                    SelectionContainer { Text(diagnostic, color = MaterialTheme.colorScheme.error) }
+                    androidx.compose.material3.TextButton(onClick = vm::retry) { Text(retryText) }
+                }
+            }
+            return@Scaffold
+        }
         if (favorites.isEmpty()) {
             Box(
                 modifier = Modifier

@@ -40,6 +40,7 @@ import net.weero.measix.pilot.service.runtime.toPresentationSnapshot
 import net.weero.measix.pilot.service.runtime.TurnLivePhase
 import java.time.Instant
 import kotlin.uuid.Uuid
+import net.weero.measix.pilot.utils.userVisibleDiagnostic
 import net.weero.measix.pilot.data.datastore.SettingsStore
 
 /** Stable list/read model; message trees never cross the query port for list rendering. */
@@ -67,6 +68,7 @@ data class ConversationFolderAccess internal constructor(
 data class ConversationFolderDirectory(
     val access: ConversationFolderAccess,
     val folders: List<Folder>,
+    val diagnostic: String? = null,
 )
 
 /** Snapshot and process-local presentation observed from one Runtime projection. */
@@ -132,17 +134,19 @@ class ConversationQueryService internal constructor(
         emitAll(sessions.observeSelectedRealmSelection())
     }
 
-    private fun <T> selectedRows(empty: T, query: (RealmSelection) -> Flow<T>): Flow<T> =
+    private fun <T> selectedRows(empty: T, query: (RealmSelection) -> Flow<T>): Flow<Result<T>> =
         observeCurrentSelection().flatMapLatest { access ->
-            if (access == null) flowOf(empty) else query(access)
-                .map { rows -> sessions.withSelectedRealmSelection(access) { rows } }
-                .onStart { emit(empty) }
+            if (access == null) flowOf(Result.success(empty)) else flow { emitAll(query(access)) }
+                .map { rows -> sessions.withSelectedRealmSelection(access) { Result.success(rows) } }
+                .onStart { emit(Result.success(empty)) }
                 .catch { error ->
                     if (error is CancellationException) throw error
-                    if (error !is EnterpriseConfigurationException) {
+                    if (error is EnterpriseConfigurationException) emit(Result.success(empty)) else {
                         Log.e("ConversationQuery", "Directory query failed", error)
+                        val result = try { sessions.withSelectedRealmSelection(access) { Result.failure<T>(error) } }
+                        catch (_: EnterpriseConfigurationException) { Result.success(empty) }
+                        emit(result)
                     }
-                    emit(empty)
                 }
         }
 
@@ -432,14 +436,9 @@ class ConversationQueryService internal constructor(
         )
     }
 
-    fun conversationsOfAssistant(assistantId: ConfigurationReference): Flow<List<ConversationSummary>> =
+    fun conversationsOfAssistant(assistantId: ConfigurationReference): Flow<Result<List<ConversationSummary>>> =
         selectedRows(emptyList()) { access ->
             repository.getConversationsOfAssistant(access.access.scope, assistantId).map { list -> list.map { it.toSummary(access) } }
-        }
-
-    fun pinnedConversations(): Flow<List<ConversationSummary>> =
-        selectedRows(emptyList()) { access ->
-            repository.getPinnedConversations(access.access.scope).map { list -> list.map { it.toSummary(access) } }
         }
 
     fun foldersOfAssistant(target: ConversationFolderAccess): Flow<ConversationFolderDirectory?> = flow {
@@ -456,8 +455,15 @@ class ConversationQueryService internal constructor(
                 })
             }.onStart { emit(null) }.catch { error ->
                 if (error is CancellationException) throw error
-                if (error !is EnterpriseConfigurationException) Log.e("ConversationQuery", "Folder query failed", error)
-                emit(null)
+                if (error is EnterpriseConfigurationException) emit(null) else {
+                    Log.e("ConversationQuery", "Folder query failed", error)
+                    val result = try {
+                        sessions.withSelectedRealmSelection(selection) {
+                            ConversationFolderDirectory(target, emptyList(), error.userVisibleDiagnostic())
+                        }
+                    } catch (_: EnterpriseConfigurationException) { null }
+                    emit(result)
+                }
             }
         })
     }

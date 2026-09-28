@@ -4,9 +4,9 @@
 
 ## 持久归属
 
-`MemoryAddress` 包含不可变 `ConfigurationScope` 和 `MemoryOwner`。`RealmShared` 使用既有 `__global__` 存储值，含义是该域主体内共享；Assistant 使用稳定 `ConfigurationReference`。个人与企业、不同企业来源以及同部署的不同用户不能共享运行记忆行。
+`MemoryAddress` 包含不可变 `ConfigurationScope` 和 `MemoryOwner`。`RealmShared` 使用既有 `__global__` 存储值，含义是该域主体内共享；Assistant 使用稳定 `ConfigurationReference`。个人与企业、不同部署以及同部署的不同用户不能共享运行记忆行。
 
-MemoryDAO 的列表、读取、更新、删除均含 scope 和 owner，单行修改还要求 id；列表按 id 升序。工具结果定位仅允许在明确 scope 内按 id 查到 canonical owner，再以完整地址写入，没有跨域裸 ID 删除。已有 schema 12 和旧个人行不变；当前 assistant_id 索引用于缩小 namespace 查询，再应用 scope 条件。
+MemoryDAO 的列表、读取、更新、删除均含 scope 和 owner，单行修改还要求 id；列表按 id 升序。工具结果定位仅允许在明确 scope 内按 id 查到 canonical owner，再以完整地址写入，没有跨域裸 ID 删除。旧个人行保留原归属；`MemoryEntity` 的 `(scope, assistant_id)` 联合索引按主体和 namespace 缩小查询范围。当前 schema 与显式迁移见 [数据库索引](database-indexing.md)。
 
 删除用户助手的记忆清理明确限定 Personal。企业记录保留，不因删除共享助手定义而按 assistant ID 跨域清空。
 
@@ -21,6 +21,8 @@ MemoryRepository 在原 caller 仍有效时进入事务，并在提交决定前�
 ## 查询与调用
 
 MemoryService 的原页面订阅接收 RealmAccess，延迟订阅也不按 scope 重新捕获 Session；共享定义入口仍在订阅时捕获其明确范围。MemoryView 保存授权上下文和记录；编辑/删除使用记录的原上下文。订阅在 Session 退出、主体变化或期限届满时取消数据观察并清空 rows，明确显示不可用。同一旧订阅不因重新登录恢复。配置模式/策略变化只替换当前数据观察，不因一次旧地址的查询失败永久结束外层观察。
+
+目录投影区分访问失效与读取异常：前者关闭访问并提示重新打开，后者在 `MemoryView.diagnostic` 保留异常类型、原始 detail 与 cause，记录原异常栈，并由记忆页面提供可复制文本。两者都清空旧行且禁止编辑；重新打开重新订阅原 owner，取消继续传播，不显示为读取失败。
 
 Master 的 START 使用会话持久 scope 捕获 RealmAccess；Child 继承父调用的 access 并核对父子 scope，不重新取得新 Session。Disclosure 读取与 memory_tool 使用同一捕获的 MemoryAccess；工具每次写入复验。assistant_inspect 使用捕获域的配置核实 caller/target/主从授权，只披露目标的局部记忆；共享或关闭模式返回空 rows。
 

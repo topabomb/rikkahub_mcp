@@ -49,6 +49,7 @@ updateLocal(latest personalSettings transform)
 
 - `userSettings` 用于共享用户定义编辑、公用外观与个人配置读取；不代表企业可用资源或执行授权。
 - 域内目录、使用选择和执行通过 configuration application/query ports 消费 `ConfigurationResolver` 的 `ResolvedConfiguration`，不另落盘镜像。
+- `ConfigurationQueryService` 将原 selection 的读取失败发布为带诊断的不可用状态，保留外层空间订阅；查询等待期间授权到期后，切换空间仍可重新建立目录读取。取消继续传播，失败不发布旧目录或空目录冒充成功。
 - `SettingsStore.observeConfiguration` 的去重同时比较完整投影内容与目录 `catalog.keys` 的迭代顺序：Map 值相同但顺序变化仍发布。目录顺序只从原配置 List 经 Resolver 投影，不增加 order 字段或 UI 排序副本；无关配置变化仍去重。
 - 所有配置修改持有同一 Settings writer lock。首次写入直接读 DataStore，不等待异步 UI 投影；观察器取得写锁后重新读取最新文档，不能用迟到值回退投影。
 - 启动恢复显式等待 `SettingsStore.initializeForRecovery()` 的真实读取、migration 和解码；异常直接进入原应用恢复门禁。同一实例只保留一个发布 `userSettings` 的长期观察 job，重试先在 writer 锁外等待旧观察结束，再在原写锁内读取最新值并发布；合法的配置冷 Flow 仍可独立订阅。失败不重置已有投影、不清空文件或自动写默认配置。
@@ -82,6 +83,8 @@ updateLocal(latest personalSettings transform)
 ### 2.4 企业来源与 Session
 
 平台 Discovery、Enrollment、Bootstrap、Snapshot 和运行请求共用原生 Session，不存在手机端模拟企业来源或第二套企业配置。`EnterpriseSessionController` 串行发布身份、连接和 Applied 版本；`EnterpriseAppliedStore` 在 `noBackupFilesDir/enterprise` 用单 manifest 发布经校验的不可变配置与执行描述。用户定义和偏好仍只由 `SettingsStore` 写入。启动恢复在 Settings 和文件 owner 收口后继续本机企业重置及配置恢复；企业校验失败保留企业不可用诊断，不伪装成空配置。
+
+正式接入入口为扫码、相册识码和粘贴，统一经 `EnrollmentMaterialParser` 解析和用户确认。`PlatformSnapshotMapper` 当前只映射平台 MCP 定义，`gateways` 固定为空；保留的 Gateway 数据类型与使用偏好不代表平台已下发手机端 Gateway 资源。
 
 - Applied manifest 与平台 Snapshot 各有独立版本。Applied 的旧 schema 只经一次性持久迁移进入当前格式；正常读写不双读。manifest 提交需同步文件并核验实际落盘，损坏态不能通过回读旧 manifest 实施重置。
 - 同步由 `EnterpriseSynchronizationService` 合并同一主体/Session 的请求；Session owner 再核验 Bootstrap 身份与候选 Snapshot 后提交。成功保存最近同步时间；已提交配置的 applied 回报失败仍保留配置并暴露诊断，下一次同步可重报。

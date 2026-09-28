@@ -16,6 +16,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
@@ -148,7 +149,7 @@ class PlatformContextLiveAndroidTest {
             }
             compose.onNodeWithTag("chat_send_button").performClick()
             val created = awaitUi(30_000) {
-                query.conversationsOfAssistant(assistant.id).first { rows -> rows.any { it.id !in beforeIds } }
+                query.conversationsOfAssistant(assistant.id).map { it.getOrThrow() }.first { rows -> rows.any { it.id !in beforeIds } }
                     .single { it.id !in beforeIds }
             }
             report.appendText("conversation_id=${created.id}\nconversation_retained=true\n")

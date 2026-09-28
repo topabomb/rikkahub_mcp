@@ -54,16 +54,59 @@ import kotlin.uuid.Uuid
 class FavoriteServiceTest {
     @get:Rule val temporary = TemporaryFolder()
 
+    @Test fun `directory and node flags preserve repository failure and recover on a fresh subscription`() = runTest {
+        fixture { f ->
+            val failure = java.io.IOException("favorites database unreadable")
+            every { f.dao.listByType(any(), any()) } returns kotlinx.coroutines.flow.flow { throw failure }
+            val failed = f.favorites.observeNodeFavorites().first { it.failure != null }
+            assertSame(failure, failed.failure)
+            assertTrue(requireNotNull(failed.diagnostic).contains("IOException: favorites database unreadable"))
+            assertSame(failure, org.robolectric.shadows.ShadowLog.getLogsForTag("FavoriteService").last().throwable)
+            try {
+                f.favorites.observeNodeIds(f.page.commandTarget).drop(1).first()
+                fail("Expected original node flags failure")
+            } catch (actual: java.io.IOException) {
+                assertEquals(failure.message, actual.message)
+                assertTrue(generateSequence<Throwable>(actual) { it.cause }.any { it === failure })
+            }
+            every { f.dao.listByType(any(), any()) } returns f.rows
+            f.favorites.toggleNode(f.page.commandTarget, f.node.id)
+            assertEquals(f.node.id, f.favorites.observeNodeFavorites().first { it.items.isNotEmpty() }.items.single().nodeId)
+        }
+    }
+
+    @Test fun `directory keeps observing selected realm after enterprise read failure`() = runTest {
+        fixture { f ->
+            val failure = java.io.IOException("enterprise favorites unreadable")
+            every { f.dao.listByType(f.enterpriseScope, any()) } returns kotlinx.coroutines.flow.flow { throw failure }
+            val state = MutableStateFlow(FavoriteDirectoryState(loading = true))
+            val collector = f.scope.launch { f.favorites.observeNodeFavorites().collect { state.value = it } }
+            try {
+                runCurrent()
+                assertSame(failure, state.value.failure)
+                f.sessions.selectPersonalFixture()
+                runCurrent()
+                assertNull(state.value.failure)
+                assertNull(state.value.diagnostic)
+                assertFalse(state.value.loading)
+                assertTrue(state.value.items.isEmpty())
+                f.sessions.selectEnterpriseFixture()
+                runCurrent()
+                assertSame(failure, state.value.failure)
+            } finally { collector.cancel() }
+        }
+    }
+
     @Test fun `enterprise favorites derive scope and preview from durable node and directory follows selected realm`() = runTest {
         fixture { f ->
             f.favorites.toggleNode(f.page.commandTarget, f.node.id)
             val row = f.rows.value.single()
             assertEquals(f.enterpriseScope, row.scope)
             assertTrue(row.metaJson!!.contains("durable enterprise text"))
-            val item = f.favorites.observeNodeFavorites().first { it.isNotEmpty() }.single()
+            val item = f.favorites.observeNodeFavorites().first { it.items.isNotEmpty() }.items.single()
             assertEquals(f.node.id, item.nodeId)
             f.sessions.selectPersonalFixture()
-            assertTrue(f.favorites.observeNodeFavorites().drop(1).first().isEmpty())
+            assertTrue(f.favorites.observeNodeFavorites().first { !it.loading }.items.isEmpty())
             rejects<EnterpriseConfigurationException> { f.favorites.removeForUndo(item) }
             rejects<EnterpriseConfigurationException> { f.favorites.openRequest(item) }
             assertEquals(listOf(row), f.rows.value)
@@ -87,14 +130,14 @@ class FavoriteServiceTest {
     @Test fun `undo revalidates original selection and deleted node and does not overwrite a later favorite`() = runTest {
         fixture { f ->
             f.favorites.toggleNode(f.page.commandTarget, f.node.id)
-            val item = f.favorites.observeNodeFavorites().first { it.isNotEmpty() }.single()
+            val item = f.favorites.observeNodeFavorites().first { it.items.isNotEmpty() }.items.single()
             val first = f.favorites.removeForUndo(item)!!
             f.favorites.toggleNode(f.page.commandTarget, f.node.id)
             val later = f.rows.value.single()
             f.favorites.restore(first)
             assertEquals(later, f.rows.value.single())
             rejects<IllegalStateException> { f.favorites.restore(first) }
-            val currentItem = f.favorites.observeNodeFavorites().first { it.isNotEmpty() }.single()
+            val currentItem = f.favorites.observeNodeFavorites().first { it.items.isNotEmpty() }.items.single()
             val removed = f.favorites.removeForUndo(currentItem)!!
             f.coordinator.executeOrThrow(f.id, DeleteMessage(f.node.currentMessage.id))
             rejects<IllegalStateException> { f.favorites.restore(removed) }
@@ -102,7 +145,7 @@ class FavoriteServiceTest {
         }
         fixture { f ->
             f.favorites.toggleNode(f.page.commandTarget, f.node.id)
-            val item = f.favorites.observeNodeFavorites().first { it.isNotEmpty() }.single()
+            val item = f.favorites.observeNodeFavorites().first { it.items.isNotEmpty() }.items.single()
             val token = f.favorites.removeForUndo(item)!!
             f.sessions.selectPersonalFixture()
             f.sessions.selectEnterpriseFixture()
@@ -114,7 +157,7 @@ class FavoriteServiceTest {
     @Test fun `failed undo can retry without losing its original capability`() = runTest {
         fixture { f ->
             f.favorites.toggleNode(f.page.commandTarget, f.node.id)
-            val item = f.favorites.observeNodeFavorites().first { it.isNotEmpty() }.single()
+            val item = f.favorites.observeNodeFavorites().first { it.items.isNotEmpty() }.items.single()
             val token = f.favorites.removeForUndo(item)!!
             f.beforeWrite = { throw java.io.IOException("disk write failed") }
             rejects<java.io.IOException> { f.favorites.restore(token) }

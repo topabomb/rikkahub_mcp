@@ -4,6 +4,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.LocalActivity
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
@@ -196,7 +198,6 @@ fun ChatDrawerContent(
     var folderToDelete by remember { mutableStateOf<Pair<ConversationFolderAccess, Folder>?>(null) }
 
     var folderOperationRunning by remember { mutableStateOf(false) }
-    val operationFailureText = stringResource(R.string.error_title_operation)
     val folderBusyText = stringResource(R.string.chat_page_delete_folder_generating)
     val runFolderOperation: (suspend () -> Unit) -> Unit = { operation ->
         if (!folderOperationRunning) {
@@ -208,7 +209,7 @@ fun ChatDrawerContent(
                     throw cancelled
                 } catch (error: Exception) {
                     android.util.Log.e("ChatDrawer", "Folder command failed", error)
-                    toaster.show(if (error is ConversationFolderBusyException) folderBusyText else operationFailureText, type = ToastType.Warning)
+                    toaster.show(if (error is ConversationFolderBusyException) folderBusyText else error.userVisibleDiagnostic(), type = ToastType.Warning)
                 } finally {
                     folderOperationRunning = false
                 }
@@ -333,7 +334,15 @@ fun ChatDrawerContent(
                 navigateFromDrawer = navigateFromDrawer,
             )
 
-            FolderBar(
+            folderDirectory?.diagnostic?.let { detail ->
+                androidx.compose.foundation.text.selection.SelectionContainer(
+                    Modifier.heightIn(max = 160.dp).verticalScroll(rememberScrollState())
+                ) {
+                    Text(detail, color = MaterialTheme.colorScheme.error)
+                }
+                TextButton(onClick = drawerVm::retryFolders) { Text(stringResource(R.string.application_recovery_retry)) }
+            }
+            if (folderDirectory?.diagnostic == null) FolderBar(
                 access = folderDirectory?.access,
                 folders = folders,
                 selectedFolderId = selectedFolderId,
@@ -380,7 +389,7 @@ fun ChatDrawerContent(
                 onMoveToFolder = {
                     conversationToMoveFolder = it
                     moveFolderDirectory = folderDirectory
-                    showMoveToFolderSheet = folderDirectory != null
+                    showMoveToFolderSheet = folderDirectory != null && folderDirectory.diagnostic == null
                 }
             )
 

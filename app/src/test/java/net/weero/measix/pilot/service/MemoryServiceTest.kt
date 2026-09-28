@@ -51,6 +51,48 @@ import org.robolectric.annotation.Config
 class MemoryServiceTest {
     @get:Rule val temporary = TemporaryFolder()
 
+    @Test fun `directory failure retains diagnosis and reopening can recover without stale rows`() = runTest {
+        environment { env ->
+            val failure = IllegalStateException("memory query failed", java.io.IOException("database page unreadable"))
+            every { env.repository.observe(any()) } returns kotlinx.coroutines.flow.flow { throw failure }
+            val failed = env.memory.observe(ConfigurationScope.Personal, env.target.id).first()
+            assertNull(failed.access)
+            assertTrue(failed.records.isEmpty())
+            assertEquals("memory_read_failed", failed.unavailableReason)
+            assertTrue(requireNotNull(failed.diagnostic).contains("IllegalStateException: memory query failed"))
+            assertTrue(requireNotNull(failed.diagnostic).contains("Caused by: IOException: database page unreadable"))
+            assertSame(failure, org.robolectric.shadows.ShadowLog.getLogsForTag("MemoryService").last().throwable)
+
+            every { env.repository.observe(any()) } returns kotlinx.coroutines.flow.flowOf(listOf(AssistantMemory(1, "recovered")))
+            val recovered = env.memory.observe(ConfigurationScope.Personal, env.target.id).first()
+            assertNotNull(recovered.access)
+            assertNull(recovered.diagnostic)
+            assertNull(recovered.unavailableReason)
+            assertEquals("recovered", recovered.records.single().content)
+        }
+    }
+
+    @Test fun `directory cancellation propagates without a failure projection`() = runTest {
+        environment { env ->
+            val subscribed = kotlinx.coroutines.CompletableDeferred<Unit>()
+            val cleaned = kotlinx.coroutines.CompletableDeferred<Unit>()
+            val projected = MutableStateFlow<MemoryView?>(null)
+            every { env.repository.observe(any()) } returns kotlinx.coroutines.flow.flow {
+                subscribed.complete(Unit)
+                try { kotlinx.coroutines.awaitCancellation() }
+                finally { cleaned.complete(Unit) }
+            }
+            val collector = env.scope.launch {
+                env.memory.observe(ConfigurationScope.Personal, env.target.id).collect { projected.value = it }
+            }
+            subscribed.await()
+            collector.cancelAndJoin()
+            assertTrue(collector.isCancelled)
+            assertTrue(cleaned.isCompleted)
+            assertNull(projected.value)
+        }
+    }
+
     @Test fun `enterprise directory shows runtime rows separately from seeds and rejects selection round trip`() = kotlinx.coroutines.runBlocking {
         environment { env ->
             val packet = exampleEnterprisePackage()

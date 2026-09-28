@@ -15,6 +15,7 @@ import androidx.test.espresso.Espresso.closeSoftKeyboard
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.first
 import kotlinx.serialization.json.*
 import me.rerere.ai.core.MessageRole
@@ -110,7 +111,7 @@ class ChatDocumentContextFlowAndroidTest {
             compose.waitUntil(30_000) { compose.onAllNodes(hasTestTag("chat_send_button") and isEnabled()).fetchSemanticsNodes().size == 1 }
             compose.onNodeWithTag("chat_send_button").performClick()
             compose.waitUntil(60_000) { compose.onAllNodesWithText("Document context answer", substring = true).fetchSemanticsNodes().isNotEmpty() }
-            val row = awaitUi { query.conversationsOfAssistant(assistant.id).first { it.isNotEmpty() }.single() }
+            val row = awaitUi { query.conversationsOfAssistant(assistant.id).map { it.getOrThrow() }.first { it.isNotEmpty() }.single() }
             val lease = runBlocking { conversations.initialize(ConversationOpenRequest.OpenExisting(row.id, RealmAccess.Personal)) }
             view = lease
             awaitUi { query.conversationUiModel(lease).first { it != null && it.presentation.activeTurnId == null } }

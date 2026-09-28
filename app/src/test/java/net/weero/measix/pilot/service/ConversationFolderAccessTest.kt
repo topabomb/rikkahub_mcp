@@ -168,6 +168,28 @@ class ConversationFolderAccessTest {
         }
     }
 
+    @Test fun `folder query failure retains diagnosis clears on switch and reopening retries`() = runTest {
+        fixture { f ->
+            val target = f.directory().access
+            val failure = IOException("folder database unreadable", IllegalStateException("folder cause"))
+            every { f.folderDao.getFoldersOfAssistant(any(), any()) } returns kotlinx.coroutines.flow.flow { throw failure }
+            var latest: ConversationFolderDirectory? = null
+            val job = backgroundScope.launch { f.query.foldersOfAssistant(target).collect { latest = it } }
+            runCurrent()
+            assertTrue(requireNotNull(latest?.diagnostic).contains("IOException: folder database unreadable"))
+            assertTrue(requireNotNull(latest?.diagnostic).contains("IllegalStateException: folder cause"))
+            assertSame(failure, org.robolectric.shadows.ShadowLog.getLogsForTag("ConversationQuery").last().throwable)
+            assertTrue(job.isActive)
+            f.sessions.selectPersonalFixture()
+            runCurrent()
+            assertNull(latest)
+            assertTrue(job.isActive)
+            every { f.folderDao.getFoldersOfAssistant(any(), any()) } returns kotlinx.coroutines.flow.flowOf(emptyList())
+            assertNull(f.directory().diagnostic)
+            job.cancel()
+        }
+    }
+
     @Test fun `directory requires a new target after conflated round trip and does not revive old emissions`() = runTest {
         fixture { f ->
             var latest: ConversationFolderDirectory? = null

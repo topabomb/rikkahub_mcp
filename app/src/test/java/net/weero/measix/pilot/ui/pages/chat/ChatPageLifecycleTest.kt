@@ -44,6 +44,21 @@ import kotlin.uuid.Uuid
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class ChatPageLifecycleTest {
+    @Test fun `favorite read failure is visible on its authorized chat page`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val fixture = Fixture()
+        val failure = java.io.IOException("favorite index unreadable")
+        every { fixture.favorites.observeNodeIds(any()) } returns kotlinx.coroutines.flow.flow { throw failure }
+        coEvery { fixture.query.requireViewAccess(fixture.lease) } returns Unit
+        try {
+            val vm = fixture.create()
+            runCurrent()
+            assertTrue(vm.favoriteNodeIds.value.isEmpty())
+            assertEquals("IOException: favorite index unreadable", fixture.errors.errors.value.single().detail)
+            assertEquals(fixture.lease.conversationId, fixture.errors.errors.value.single().conversationId)
+        } finally { fixture.store.clear(); Dispatchers.resetMain() }
+    }
+
     @Test fun `configuration failure returns its cause to the active control without a hidden chat error`() = runTest {
         Dispatchers.setMain(StandardTestDispatcher(testScheduler))
         val fixture = Fixture()

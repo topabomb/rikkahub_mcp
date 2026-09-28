@@ -6,6 +6,7 @@ import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
@@ -61,6 +62,7 @@ import net.weero.measix.pilot.service.runtime.ToolInteractionDecision
 import net.weero.measix.pilot.ui.hooks.ChatInputState
 import net.weero.measix.pilot.utils.UpdateChecker
 import net.weero.measix.pilot.utils.base64Decode
+import net.weero.measix.pilot.utils.userVisibleDiagnostic
 import kotlin.uuid.Uuid
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -112,6 +114,13 @@ class ChatVM internal constructor(
     val favoriteNodeIds: StateFlow<Set<Uuid>> = fromPage(emptySet()) { state ->
         conversationQueryService.observeForView(state.lease, emptySet()) {
             favoriteService.observeNodeIds(state.lease.commandTarget)
+                .catch { error ->
+                    if (error is CancellationException) throw error
+                    conversationQueryService.requireViewAccess(state.lease)
+                    android.util.Log.e("ChatVM", "Favorite directory unavailable", error)
+                    chatErrorStore.add(ChatError(detail = error.userVisibleDiagnostic(), conversationId = _conversationId))
+                    emit(emptySet())
+                }
         }
     }.stateIn(viewModelScope, SharingStarted.Eagerly, emptySet())
 

@@ -5,14 +5,14 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.flowOf
-import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.onEach
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.combine
 import net.weero.measix.pilot.service.ConfigurationQueryService
 import net.weero.measix.pilot.service.ConversationApplicationService
 import net.weero.measix.pilot.service.ConversationQueryService
@@ -31,14 +31,19 @@ class HistoryVM internal constructor(
         .stateIn(viewModelScope, SharingStarted.Eagerly, AssistantCatalogReadState.Loading)
     private val _readFailure = MutableStateFlow<String?>(null)
     internal val readFailure = _readFailure.asStateFlow()
-    val conversations = assistantCatalog.flatMapLatest { state ->
+    private val refresh = MutableStateFlow(0)
+    fun retry() { refresh.value += 1 }
+    val conversations = combine(assistantCatalog, refresh) { state, _ -> state }.flatMapLatest { state ->
         val reference = (state as? AssistantCatalogReadState.Available)?.catalog?.selected?.reference
-        if (reference == null) flowOf(emptyList()) else conversationQueryService.conversationsOfAssistant(reference)
-    }.onEach { _readFailure.value = null }.catch { error ->
-        if (error is CancellationException) throw error
-        Log.e(TAG, "Conversation history query failed", error)
-        _readFailure.value = error.userVisibleDiagnostic()
-        emit(emptyList())
+        (if (reference == null) flowOf(Result.success(emptyList())) else conversationQueryService.conversationsOfAssistant(reference))
+            .catch { error ->
+                if (error is CancellationException) throw error
+                Log.e(TAG, "Conversation history query failed", error)
+                emit(Result.failure(error))
+            }
+    }.map { result ->
+        _readFailure.value = result.exceptionOrNull()?.userVisibleDiagnostic()
+        result.getOrDefault(emptyList())
     }.stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
 
     suspend fun deleteForUndo(conversation: ConversationSummary): ConversationApplicationService.RestoreToken =
@@ -49,9 +54,6 @@ class HistoryVM internal constructor(
 
     suspend fun togglePinStatus(conversation: ConversationSummary) =
         conversationApplicationService.togglePin(conversation.commandTarget)
-
-    fun getPinnedConversations(): Flow<List<ConversationSummary>> =
-        conversationQueryService.pinnedConversations()
 
     suspend fun restoreConversation(token: ConversationApplicationService.RestoreToken) =
         conversationApplicationService.restore(token)

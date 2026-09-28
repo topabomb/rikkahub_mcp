@@ -27,13 +27,15 @@ RouteActivity (ComponentActivity)
 - `ConfigurationReference` 在 Lazy/拖动列表的 Saveable key 边界转为字符串；业务选择和命令仍用类型化引用，同一个 item 与拖动容器使用同一 key。
 - 配置目录的 Loading、Available、预期不可用和非预期失败保持可区分；失败保留可操作原因和必要诊断，取消不展示为失败。空间与资源来源有文字或本地化说明，不能只靠颜色/图标；可点击图标有 content description。
 
+历史列表与会话文件夹的读取失败保留原异常诊断，不以空目录表示读取成功。失败只结束原 selection 的数据订阅，外层空间观察继续工作；历史页和抽屉提供显式重试，文件夹长诊断可滚动和复制。切域清除旧内容与旧诊断，新空间重新读取。文件夹命令沿原授权提交，非预期错误显示原 detail/cause，取消继续传播。
+
 ### 列表动作与收藏撤销
 
 列表主动作保留页面语义；`ItemActionMenu` 只呈现次动作，删除项置底并强调，确认与业务授权仍归原页面和 owner。`longPressReorder` 只共享现有 reorder scope 的长按、触感和缩放，不管理排序事实。正文编辑区保留文本选择；搜索过滤期间禁用列表排序。
 
 语音配置卡片点击用于编辑，独立单选按钮用于选择默认项；单选按钮以配置名称提供无障碍标签，名称为空的系统语音配置使用已本地化的协议说明。标签不清除原单选角色、选中状态或执行时的准入规则。
 
-`FavoritePage` 在卡片 `settledValue` 到达删除侧后，由页面 coroutine scope 执行删除、复位和 snackbar，item effect 不等待复位。撤销失败保留同一个原域 `RestoreToken`，重试成功、用户关闭或离页后结束；异常类型、detail/cause 沿 `userVisibleDiagnostic` 显示并可选择复制，取消继续传播。列表读取异常的既有空态行为不属于此命令诊断保证。
+`FavoritePage` 在卡片 `settledValue` 到达删除侧后，由页面 coroutine scope 执行删除、复位和 snackbar，item effect 不等待复位。撤销失败保留同一个原域 `RestoreToken`，重试成功、用户关闭或离页后结束；异常类型、detail/cause 沿 `userVisibleDiagnostic` 显示并可选择复制，取消继续传播。收藏目录由 `FavoriteService` 发布 `FavoriteDirectoryState`，读取异常保留原 Throwable 并清空旧列表，诊断从原异常派生，页面显示可复制错误与重试入口。失败在原选择的订阅内收口，切换空间继续订阅新域并清除旧诊断；重试重新订阅当前选中域，不把读取失败当作没有收藏。聊天的收藏标记读取失败进入原页面的 `ChatErrorStore`，关闭或切域后的迟到异常不进入新页面。
 
 删除手势状态只在卡片 composition 内 `remember(item.id)`，不保存到 Lazy item 的 saved state；撤销复用相同收藏 ID 时从 Settled 开始，不能恢复已经删除卡片的位移。收藏数据仍只来自 FavoriteService 投影。
 

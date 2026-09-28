@@ -809,12 +809,6 @@ class ConversationRepository(
         )
     }
 
-    fun getPinnedConversations(scope: ConfigurationScope): Flow<List<ConversationListRecord>> {
-        return conversationDAO
-            .getPinnedConversations(scope)
-            .map { entities -> entities.map(::conversationEntityToListRecord) }
-    }
-
     private fun conversationEntityToListRecord(entity: ConversationEntity): ConversationListRecord =
         ConversationListRecord(
             id = Uuid.parse(entity.id),

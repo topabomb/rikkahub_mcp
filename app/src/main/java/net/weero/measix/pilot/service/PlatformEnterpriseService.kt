@@ -44,8 +44,7 @@ internal class PlatformEnterpriseService(
                 catch (error: Exception) { _pendingLogoutFailure.value = error.userVisibleDiagnostic() }
                 sessions.abandonPendingPlatformEnrollment(pending.sessionId)
             } else try {
-                val response = read(pending.sessionId) { connection, token -> client.bootstrap(connection, token) }
-                return@withLock sessions.completePlatformBootstrap(pending.sessionId, response)
+                return@withLock bootstrap(pending.sessionId)
             } catch (error: Exception) {
                 if (!error.isTerminalPendingEnrollmentFailure()) throw error
                 if (!now().isBefore(material.expiresAt)) throw EnterpriseConfigurationException(ENROLLMENT_EXPIRED)

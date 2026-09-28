@@ -27,6 +27,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import net.weero.measix.pilot.R
 
 import net.weero.measix.pilot.service.FavoriteService
+import net.weero.measix.pilot.service.FavoriteDirectoryState
 
 import net.weero.measix.pilot.service.NodeFavoriteItem
 
@@ -60,7 +61,7 @@ class FavoritePageAndroidTest {
 
     private val second = item("second")
 
-    private val favorites = MutableStateFlow(listOf(first, second))
+    private val favorites = MutableStateFlow(FavoriteDirectoryState(items = listOf(first, second)))
 
     private val vm = mockk<FavoriteVM>()
 
@@ -70,13 +71,13 @@ class FavoritePageAndroidTest {
 
     private fun show() {
 
-        every { vm.nodeFavorites } returns favorites
+        every { vm.directory } returns favorites
 
         coEvery { vm.removeForUndo(any()) } coAnswers {
 
             val item = firstArg<NodeFavoriteItem>()
 
-            favorites.value = favorites.value.filterNot { it.id == item.id }
+            favorites.value = favorites.value.copy(items = favorites.value.items.filterNot { it.id == item.id })
 
             tokens.getValue(item)
 
@@ -86,7 +87,7 @@ class FavoritePageAndroidTest {
 
             val item = tokens.entries.single { it.value === firstArg<FavoriteService.RestoreToken>() }.key
 
-            favorites.value += item
+            favorites.value = favorites.value.copy(items = favorites.value.items + item)
 
         }
 
@@ -108,6 +109,21 @@ class FavoritePageAndroidTest {
 
 
 
+    @Test fun failedDirectoryShowsDiagnosisAndRetryRestoresTheList() {
+        favorites.value = FavoriteDirectoryState(failure = IOException("favorites unreadable",
+            IllegalStateException("database cause\n" + (1..80).joinToString("\n") { "Diagnostic detail $it" })))
+        every { vm.retry() } answers {
+            favorites.value = FavoriteDirectoryState(items = listOf(first, second))
+        }
+        show()
+        compose.onNodeWithText("favorites unreadable", substring = true).assertIsDisplayed()
+        compose.onNodeWithText("database cause", substring = true).assertIsDisplayed()
+        compose.onNodeWithText(compose.activity.getString(R.string.favorite_page_no_favorites)).assertDoesNotExist()
+        compose.onNodeWithText(compose.activity.getString(R.string.application_recovery_retry)).performScrollTo().assertIsDisplayed().performClick()
+        compose.onNodeWithTag("favorite-first").assertIsDisplayed()
+        compose.onNodeWithText("favorites unreadable", substring = true).assertDoesNotExist()
+    }
+
     @Test fun swipeRemovesOnceAndImmediateUndoRestoresSameIdToSettledCard() {
 
         show()
@@ -118,7 +134,7 @@ class FavoritePageAndroidTest {
 
         compose.onNodeWithTag("favorite-first").assertIsDisplayed()
 
-        compose.runOnIdle { assertEquals(2, favorites.value.size) }
+        compose.runOnIdle { assertEquals(2, favorites.value.items.size) }
 
         coVerify(exactly = 1) { vm.removeForUndo(first) }
 
@@ -144,7 +160,7 @@ class FavoritePageAndroidTest {
 
         undo()
 
-        compose.runOnIdle { assertEquals(setOf("first", "second"), favorites.value.map { it.id }.toSet()) }
+        compose.runOnIdle { assertEquals(setOf("first", "second"), favorites.value.items.map { it.id }.toSet()) }
 
         coVerify(exactly = 1) { vm.removeForUndo(first) }
 
@@ -170,7 +186,7 @@ class FavoritePageAndroidTest {
 
             if (attempts == 1) throw IOException("favorite disk unavailable", IllegalStateException("store cause"))
 
-            favorites.value = favorites.value.filterNot { it === first }
+            favorites.value = favorites.value.copy(items = favorites.value.items.filterNot { it === first })
 
             tokens.getValue(first)
 
@@ -186,7 +202,7 @@ class FavoritePageAndroidTest {
 
         swipe(first)
 
-        compose.waitUntil { favorites.value.none { it === first } }
+        compose.waitUntil { favorites.value.items.none { it === first } }
 
         compose.runOnIdle { assertEquals(2, attempts) }
 
@@ -210,7 +226,7 @@ class FavoritePageAndroidTest {
 
             if (attempts == 1) throw IOException("restore unavailable", IllegalStateException("disk cause"))
 
-            favorites.value += first
+            favorites.value = favorites.value.copy(items = favorites.value.items + first)
 
         }
 
@@ -242,7 +258,7 @@ class FavoritePageAndroidTest {
 
         compose.onNodeWithText("realm_selection_revoked", substring = true).assertIsDisplayed()
 
-        compose.runOnIdle { assertEquals(listOf(second), favorites.value) }
+        compose.runOnIdle { assertEquals(listOf(second), favorites.value.items) }
 
         coVerify(exactly = 1) { vm.restoreFavorite(tokens.getValue(first)) }
 

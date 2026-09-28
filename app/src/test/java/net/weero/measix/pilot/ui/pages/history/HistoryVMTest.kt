@@ -27,6 +27,39 @@ import org.junit.Assert.assertEquals
 import org.junit.Test
 
 class HistoryVMTest {
+    @Test fun `history failure exposes cause and retry restores rows without recreating the page`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val store = ViewModelStore()
+        try {
+            val assistant = ConfigurationReference.random()
+            val selection = RealmSelection(RealmAccess.Personal, 1)
+            val configuration = mockk<ConfigurationQueryService>()
+            every { configuration.observeAssistantCatalog() } returns flowOf(AssistantCatalogReadState.Available(
+                AssistantCatalogUiModel(selection, ConfigurationSelection(assistant, null), emptyMap(), emptyList())))
+            val conversations = mockk<ConversationQueryService>()
+            val row = mockk<ConversationSummary>()
+            var failed = true
+            every { conversations.conversationsOfAssistant(assistant) } answers {
+                flowOf(if (failed) Result.failure(IllegalStateException("history unreadable", java.io.IOException("disk cause")))
+                    else Result.success(listOf(row)))
+            }
+            val vm = HistoryVM(conversations, configuration, mockk())
+            store.put("history", vm)
+            runCurrent()
+            org.junit.Assert.assertTrue(vm.conversations.value.isEmpty())
+            org.junit.Assert.assertTrue(requireNotNull(vm.readFailure.value).contains("IllegalStateException: history unreadable"))
+            org.junit.Assert.assertTrue(requireNotNull(vm.readFailure.value).contains("IOException: disk cause"))
+            failed = false
+            vm.retry()
+            runCurrent()
+            assertEquals(listOf(row), vm.conversations.value)
+            org.junit.Assert.assertNull(vm.readFailure.value)
+        } finally {
+            store.clear()
+            Dispatchers.resetMain()
+        }
+    }
+
     @Test fun `unavailable assistant still reads authorized history and revoked realm clears it`() = runTest {
         Dispatchers.setMain(StandardTestDispatcher(testScheduler))
         val store = ViewModelStore()
@@ -42,7 +75,7 @@ class HistoryVMTest {
             every { configuration.observeAssistantCatalog() } returns catalog
             val conversations = mockk<ConversationQueryService>()
             val row = mockk<ConversationSummary>()
-            every { conversations.conversationsOfAssistant(assistant) } returns flowOf(listOf(row))
+            every { conversations.conversationsOfAssistant(assistant) } returns flowOf(Result.success(listOf(row)))
             val vm = HistoryVM(conversations, configuration, mockk())
             store.put("history", vm)
             runCurrent()

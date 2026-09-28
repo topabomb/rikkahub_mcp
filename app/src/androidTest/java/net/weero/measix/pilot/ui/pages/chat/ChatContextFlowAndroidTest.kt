@@ -10,6 +10,7 @@ import androidx.test.core.app.ActivityScenario
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
@@ -126,7 +127,7 @@ class ChatContextFlowAndroidTest {
             compose.onNodeWithTag("chat_send_button").assertIsEnabled().performClick()
             // Keep advancing Compose while the click's coroutine starts the real request.
             compose.waitUntil(30_000) { server.firstRequest.count == 0L }
-            val row = awaitUi(30_000) { query.conversationsOfAssistant(assistant.id).first { it.isNotEmpty() }.single() }
+            val row = awaitUi(30_000) { query.conversationsOfAssistant(assistant.id).map { it.getOrThrow() }.first { it.isNotEmpty() }.single() }
             val lease = runBlocking { conversations.initialize(ConversationOpenRequest.OpenExisting(row.id, RealmAccess.Personal)) }
             view = lease
             val original = runBlocking { requireNotNull(query.aggregateSnapshot(row.id)) }

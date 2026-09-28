@@ -70,7 +70,9 @@ class ChatDrawerVM internal constructor(
         conversationApplicationService.moveToAssistant(
             net.weero.measix.pilot.service.ConversationAssistantTarget(conversation.commandTarget, conversation.assistantId), assistantId, selectForNewChats)
 
-    val folderDirectory: StateFlow<ConversationFolderDirectory?> = assistantTarget
+    private val folderRefresh = MutableStateFlow(0)
+    fun retryFolders() { folderRefresh.value += 1 }
+    val folderDirectory: StateFlow<ConversationFolderDirectory?> = combine(assistantTarget, folderRefresh) { target, _ -> target }
         .flatMapLatest { if (it == null) flowOf(null) else conversationQueryService.foldersOfAssistant(it) }
         .stateIn(viewModelScope, SharingStarted.Eagerly, null)
 

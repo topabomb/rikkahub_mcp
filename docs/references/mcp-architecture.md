@@ -60,6 +60,7 @@ Direct MCP 只装配已解析助手选中的服务；企业固定引用不可删
 企业策略禁用用户 MCP 时，准备结果保留 `POLICY_BLOCKED` 结果供界面提示，但不建立连接或阻断对话；设置页仍显示原选择并允许移除。
 其他显式引用不可执行时准备失败。Gateway 独立装配完整工具对，REQUIRED 目录未就绪时拒绝准备。
 Gateway 使用开关只影响新 interaction；在途执行仍复验原 Session、助手和资源是否存在。
+当前 Core Snapshot 映射只提供普通受管 MCP，`PlatformSnapshotMapper` 的 Gateway 目录为空；下述 Gateway 校验描述已有类型与执行约束，不代表当前平台接入已提供独立 Gateway 资源。
 受管 namespace 由稳定资源引用摘要派生，避免本地化名称或长资源 ID 破坏 Provider 工具名。
 
 受管 Streamable HTTP 使用禁止重定向、关闭透明请求重试并带 `PrivateRequest` 的专用共享 client。

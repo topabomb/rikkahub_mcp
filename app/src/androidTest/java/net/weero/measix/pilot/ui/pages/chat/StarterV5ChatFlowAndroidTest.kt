@@ -17,6 +17,7 @@ import androidx.test.espresso.Espresso.closeSoftKeyboard
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.first
 import kotlinx.serialization.json.*
 import me.rerere.ai.core.MessageRole
@@ -271,7 +272,7 @@ class StarterV5ChatFlowAndroidTest {
                 compose.onAllNodes(hasTestTag("chat_send_button") and isEnabled()).fetchSemanticsNodes().size == 1
             }
             compose.onNodeWithTag("chat_send_button").performClick()
-            val row = awaitUi(30_000) { query.conversationsOfAssistant(assistant.id).first { it.isNotEmpty() }.single() }
+            val row = awaitUi(30_000) { query.conversationsOfAssistant(assistant.id).map { it.getOrThrow() }.first { it.isNotEmpty() }.single() }
             createdId = row.id
             val lease = runBlocking { conversations.initialize(ConversationOpenRequest.OpenExisting(row.id, access)) }
             view = lease
@@ -418,11 +419,11 @@ class StarterV5ChatFlowAndroidTest {
 
                 // Fork the first answer after a later START: the real owner must prune the suffix
                 // and remap its retained admissions, without changing the original enterprise tree.
-                val beforeForkIds = awaitUi(30_000) { query.conversationsOfAssistant(assistant.id)
+                val beforeForkIds = awaitUi(30_000) { query.conversationsOfAssistant(assistant.id).map { it.getOrThrow() }
                     .first { rows -> rows.any { it.id == row.id } }.map { it.id }.toSet() }
                 clickMessageAction(uiContext, expectedAnswer, nextDurable.currentMessages().map { it.toText() }.toSet(), R.string.more_options)
                 compose.onNodeWithText(uiContext.getString(R.string.create_fork)).assertIsDisplayed().performClick()
-                val forkId = awaitUi(30_000) { query.conversationsOfAssistant(assistant.id)
+                val forkId = awaitUi(30_000) { query.conversationsOfAssistant(assistant.id).map { it.getOrThrow() }
                     .first { rows -> rows.any { it.id !in beforeForkIds } }.single { it.id !in beforeForkIds }.id }
                 forkedId = forkId
                 compose.waitUntil(30_000) { runBlocking { settings.lastConversation(access.scope) } == forkId }
@@ -1291,7 +1292,7 @@ private class StarterV5HttpMock(private val fixture: JsonObject) : AutoCloseable
         val roles = messages.map { it.getValue("role").jsonPrimitive.content }
         val streaming = request["stream"]?.jsonPrimitive?.booleanOrNull == true
         val tools = request["tools"]?.jsonArray?.size ?: 0
-        val auxiliary = roles == listOf("user") && !streaming && tools == 0
+        val auxiliary = roles == listOf("user") && tools == 0
         val chat = messages.any { it["role"]?.jsonPrimitive?.content in setOf("system", "developer") &&
             contentText(it["content"]).contains(openingSystem) } && "user" in roles
         recordDiagnostic("route=${if (path.startsWith("/user/")) "direct" else "managed"} " +
@@ -1367,8 +1368,12 @@ private class StarterV5HttpMock(private val fixture: JsonObject) : AutoCloseable
             Json.parseToJsonElement(bytes.decodeToString()).jsonObject
         } else null
         val body = when {
-            request != null && isAuxiliaryRequest(path, request) ->
-                """{"id":"mock-auxiliary","model":"starter-v5-mock","choices":[{"index":0,"message":{"role":"assistant","content":""},"finish_reason":"stop"}]}"""
+            request != null && isAuxiliaryRequest(path, request) -> {
+                if (request["stream"]?.jsonPrimitive?.booleanOrNull == true) {
+                    type = "text/event-stream"
+                    "data: {\"id\":\"mock-auxiliary\",\"model\":\"starter-v5-mock\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n"
+                } else """{"id":"mock-auxiliary","model":"starter-v5-mock","choices":[{"index":0,"message":{"role":"assistant","content":""},"finish_reason":"stop"}]}"""
+            }
             path == "/.well-known/measix" -> fixture.getValue("discovery").toString()
             path.endsWith("/enrollments/exchange") -> {
                 val code = Json.parseToJsonElement(bytes.decodeToString()).jsonObject.getValue("code").jsonPrimitive.content

@@ -111,20 +111,22 @@ class ScopedConversationQueryTest {
             }
         }
         every { repository.getConversationsOfAssistant(ConfigurationScope.Personal, assistant) } returns flowOf(listOf(personalRow))
-        var latest: List<ConversationSummary> = emptyList()
+        var latest: Result<List<ConversationSummary>> = Result.success(emptyList())
         val job = backgroundScope.launch { service(repository, sessions).conversationsOfAssistant(assistant).collect { latest = it } }
         runCurrent()
-        assertEquals(listOf("enterprise"), latest.map { it.title })
+        assertEquals(listOf("enterprise"), latest.getOrThrow().map { it.title })
         sessions.selectPersonalFixture()
         runCurrent()
-        assertEquals(listOf("personal"), latest.map { it.title })
+        assertEquals(listOf("personal"), latest.getOrThrow().map { it.title })
         failEnterprise = true
         sessions.selectEnterpriseFixture()
         runCurrent()
-        assertTrue(latest.isEmpty())
+        assertTrue(latest.isFailure)
+        assertEquals("read failure", latest.exceptionOrNull()?.message)
+        assertTrue(job.isActive)
         sessions.selectPersonalFixture()
         runCurrent()
-        assertEquals(listOf("personal"), latest.map { it.title })
+        assertEquals(listOf("personal"), latest.getOrThrow().map { it.title })
         job.cancel()
     }
 

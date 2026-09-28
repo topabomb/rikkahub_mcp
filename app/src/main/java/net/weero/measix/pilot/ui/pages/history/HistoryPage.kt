@@ -140,6 +140,7 @@ fun HistoryPage(vm: HistoryVM = koinViewModel()) {
                     androidx.compose.foundation.text.selection.SelectionContainer {
                         Text(detail, color = MaterialTheme.colorScheme.error)
                     }
+                    TextButton(onClick = vm::retry) { Text(stringResource(R.string.application_recovery_retry)) }
                 }
             }
             items(conversations, key = { it.id }) { conversation ->

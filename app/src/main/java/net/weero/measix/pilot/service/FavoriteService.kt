@@ -15,7 +15,16 @@ import net.weero.measix.pilot.data.enterprise.RealmSelection
 import net.weero.measix.pilot.data.favorite.NodeFavoriteAdapter
 import net.weero.measix.pilot.data.model.FavoriteType
 import net.weero.measix.pilot.data.repository.FavoriteRepository
+import net.weero.measix.pilot.utils.userVisibleDiagnostic
 import kotlin.uuid.Uuid
+
+data class FavoriteDirectoryState(
+    val items: List<NodeFavoriteItem> = emptyList(),
+    val loading: Boolean = false,
+    val failure: Throwable? = null,
+) {
+    val diagnostic: String? get() = failure?.userVisibleDiagnostic()
+}
 
 class NodeFavoriteItem internal constructor(
     val id: String,
@@ -45,15 +54,15 @@ class FavoriteService internal constructor(
         internal fun complete() { consumed = true }
     }
 
-    fun observeNodeFavorites(): Flow<List<NodeFavoriteItem>> = flow {
+    fun observeNodeFavorites(): Flow<FavoriteDirectoryState> = flow {
         recoveryGate.awaitReady()
         emitAll(sessions.observeSelectedRealmSelection().flatMapLatest { selection ->
-            if (selection == null) flowOf(emptyList()) else observeSelection(selection)
+            if (selection == null) flowOf(FavoriteDirectoryState()) else observeSelection(selection)
         })
-    }
+    }.catch { error -> emit(directoryFailure(error)) }
 
-    private fun observeSelection(selection: RealmSelection): Flow<List<NodeFavoriteItem>> =
-        repository.listByType(selection.access.scope, FavoriteType.NODE).map { favorites ->
+    private fun observeSelection(selection: RealmSelection): Flow<FavoriteDirectoryState> =
+        flow { emitAll(repository.listByType(selection.access.scope, FavoriteType.NODE)) }.map { favorites ->
             sessions.withSelectedRealmSelection(selection) {
                 favorites.mapNotNull { entity ->
                     check(entity.scope == selection.access.scope) { "favorite_scope_mismatch" }
@@ -71,20 +80,24 @@ class FavoriteService internal constructor(
                     )
                 }
             }
-        }.onStart { emit(emptyList()) }.catch { error ->
-            if (error is CancellationException) throw error
-            android.util.Log.e("FavoriteService", "Favorite directory unavailable", error)
-            emit(emptyList())
+        }.map { FavoriteDirectoryState(items = it) }
+        .onStart { emit(FavoriteDirectoryState(loading = true)) }.catch { error ->
+            emit(directoryFailure(error))
         }
 
+    private fun directoryFailure(error: Throwable): FavoriteDirectoryState {
+        if (error is CancellationException) throw error
+        if (error is net.weero.measix.pilot.data.enterprise.EnterpriseConfigurationException) return FavoriteDirectoryState()
+        android.util.Log.e("FavoriteService", "Favorite directory unavailable", error)
+        return FavoriteDirectoryState(failure = error)
+    }
+
     fun observeNodeIds(target: ConversationCommandTarget): Flow<Set<Uuid>> =
-        observeNodeFavorites().map { items ->
+        observeNodeFavorites().map { state ->
             target.requireOpen()
-            items.filter { it.target.selection == target.selection && it.conversationId == target.conversationId }
+            state.failure?.let { throw it }
+            state.items.filter { it.target.selection == target.selection && it.conversationId == target.conversationId }
                 .map { it.nodeId }.toSet()
-        }.catch { error ->
-            if (error is CancellationException) throw error
-            emit(emptySet())
         }
 
     suspend fun toggleNode(target: ConversationCommandTarget, nodeId: Uuid) =

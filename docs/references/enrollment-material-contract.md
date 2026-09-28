@@ -12,7 +12,7 @@ Core 使用 `enrollment_expired` 区分过期资料，并区分两个 409：一�
 
 ## Session 与恢复
 
-`PlatformEnterpriseService` 编排网络 I/O，`EnterpriseSessionController` 是身份、pending enrollment 和 Applied 状态的串行写 owner。兑换成功后先保存 pending；Bootstrap 核对 Session/User/Device/Deployment 才发布企业身份。临时网络失败保留 pending 并在应用恢复后继续 Bootstrap，不重复兑换一次性 code。若前一 principal 已被管理员删除，pending 阶段继续保留 `IDENTITY_DELETED` 终态；只有 Bootstrap 确认 Core 签发的新 principal 后，Session owner 才在同一 manifest 提交中发布新 Session 并清除旧 reason。若 pending 所属 principal 在 Bootstrap 前也被删除，删除响应会原子移除 pending credential 并保留 `SIGNED_OUT + IDENTITY_DELETED`，下一份新接入资料可重新兑换。相同 username 不代表相同 principal，旧 Access/Refresh credential 和旧域数据不会因此恢复。
+`PlatformEnterpriseService` 编排网络 I/O，`EnterpriseSessionController` 是身份、pending enrollment 和 Applied 状态的串行写 owner。兑换成功后先保存 pending；Bootstrap 核对 Session/User/Device/Deployment 才发布企业身份。临时网络失败保留 pending 并在应用恢复后继续 Bootstrap，不重复兑换一次性 code。若前一 principal 已被管理员删除，pending 阶段继续保留 `IDENTITY_DELETED` 终态；只有 Bootstrap 确认 Core 签发的新 principal 后，Session owner 才在同一 manifest 提交中发布新 Session 并清除旧 reason。首次兑换、手动重试与启动恢复共用同一 Bootstrap 终态处理。若 pending 所属 principal 在 Bootstrap 前也被删除，删除响应会原子移除 pending credential 并保留 `SIGNED_OUT + IDENTITY_DELETED`，下一份新接入资料可重新兑换。相同 username 不代表相同 principal，旧 Access/Refresh credential 和旧域数据不会因此恢复。
 
 installation ID 在一次本机企业连接生命周期内稳定，不能为绕过跨用户限制而自动更换。refresh credential 与 pending idempotency key 由 `EnterpriseAppliedStore` 加密、原子持久化；access token 只在内存。退出或 reset 的具体边界见 [Android 配置架构](android-configuration-architecture.md)。
 

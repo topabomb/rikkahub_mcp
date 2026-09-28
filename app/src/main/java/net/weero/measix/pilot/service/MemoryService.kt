@@ -30,6 +30,7 @@ import net.weero.measix.pilot.data.model.MemoryAddress
 import net.weero.measix.pilot.data.model.memoryAddress
 import net.weero.measix.pilot.data.repository.MemoryRepository
 import net.weero.measix.pilot.data.enterprise.EnterpriseConfigurationException
+import net.weero.measix.pilot.utils.userVisibleDiagnostic
 
 internal class MemoryAccessRejectedException(val reason: String) : IllegalStateException(reason)
 
@@ -66,7 +67,12 @@ class MemoryToolRecord internal constructor(
         this.conversationId == conversationId && this.locator == locator
 }
 
-data class MemoryView(val access: MemoryAccess?, val records: List<MemoryRecord>, val unavailableReason: String? = null) {
+data class MemoryView(
+    val access: MemoryAccess?,
+    val records: List<MemoryRecord>,
+    val unavailableReason: String? = null,
+    val diagnostic: String? = null,
+) {
     companion object { val Loading = MemoryView(null, emptyList()) }
 }
 
@@ -167,8 +173,7 @@ class MemoryService internal constructor(
         recovery.awaitReady()
         emitAll(observe(sessions.captureRealmAccess(scope), assistantId, enabledOnly))
     }.catch { error ->
-        if (error is CancellationException) throw error
-        emit(MemoryView(null, emptyList(), "memory_access_unavailable"))
+        emit(unavailableView(error))
     }
 
     fun observe(view: ConversationViewLease, assistantId: ConfigurationReference): Flow<MemoryView> =
@@ -201,15 +206,22 @@ class MemoryService internal constructor(
                     repository.observe(access.address).map { rows ->
                         authorized(access) { MemoryView(access, rows.map { MemoryRecord(access, it.id, it.content) }) }
                     }.catch { error ->
-                        if (error is CancellationException) throw error
-                        emit(MemoryView(null, emptyList(), "memory_access_unavailable"))
+                        emit(unavailableView(error))
                     }
                 }
             }
         })
     }.catch { error ->
+        emit(unavailableView(error))
+    }
+
+    private fun unavailableView(error: Throwable): MemoryView {
         if (error is CancellationException) throw error
-        emit(MemoryView(null, emptyList(), "memory_access_unavailable"))
+        if (error is MemoryAccessRejectedException || error is EnterpriseConfigurationException) {
+            return MemoryView(null, emptyList(), "memory_access_unavailable")
+        }
+        android.util.Log.e("MemoryService", "Memory directory unavailable", error)
+        return MemoryView(null, emptyList(), "memory_read_failed", error.userVisibleDiagnostic())
     }
 
     suspend fun read(access: MemoryAccess): List<AssistantMemory> = authorized(access) { checkOwner -> repository.read(access.address).also { checkOwner() } }

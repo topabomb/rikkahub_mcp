@@ -570,6 +570,39 @@ class ConfigurationApplicationServiceTest {
         } finally { env.scope.cancel() }
     }
 
+    @Test
+    fun `catalog subscription survives expiry during projection and follows the next realm`() = runTest {
+        val env = environment()
+        try {
+            env.initialize()
+            val held = CompletableDeferred<Unit>()
+            val release = CompletableDeferred<Unit>()
+            val holder = launch {
+                env.settings.withResolvedConfiguration(ConfigurationScope.Personal, env.sessions.state.value) {
+                    held.complete(Unit)
+                    release.await()
+                }
+            }
+            held.await()
+            val states = kotlinx.coroutines.channels.Channel<ModelCatalogReadState>(kotlinx.coroutines.channels.Channel.UNLIMITED)
+            val observer = backgroundScope.launch {
+                env.queries.observeModelCatalog().collect { states.send(it) }
+            }
+            // Projection holds the Session boundary while waiting for the Settings writer.
+            runCurrent()
+            env.now = (env.sessions.state.value as EnterpriseState.Available).manifest.session!!.expiresAtMillis
+            release.complete(Unit)
+            holder.join()
+            assertTrue(states.receive() is ModelCatalogReadState.Unavailable)
+            runCurrent()
+            assertTrue("An expired selection must not terminate the catalog subscription", observer.isActive)
+            env.sessions.selectPersonalFixture()
+            var next = states.receive()
+            while (next !is ModelCatalogReadState.Available) next = states.receive()
+            assertEquals(ConfigurationScope.Personal, requireNotNull(next.catalog.selection).access.scope)
+        } finally { env.scope.cancel() }
+    }
+
     private class Environment(root: File, val scope: AppScope) {
         var intercept: (suspend () -> Unit)? = null
         private val preferencesFile = File(root, "settings.preferences_pb")

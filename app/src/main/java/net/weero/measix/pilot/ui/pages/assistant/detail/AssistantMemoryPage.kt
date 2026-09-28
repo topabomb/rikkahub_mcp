@@ -332,7 +332,10 @@ internal fun AssistantMemoryContent(
         Text(stringResource(R.string.assistant_runtime_memory_notice), style = MaterialTheme.typography.bodySmall)
 
         if (memories.unavailableReason != null) {
-            Text(stringResource(R.string.memory_access_unavailable), color = MaterialTheme.colorScheme.error)
+            androidx.compose.foundation.text.selection.SelectionContainer {
+                Text(memories.diagnostic ?: stringResource(R.string.memory_access_unavailable),
+                    color = MaterialTheme.colorScheme.error)
+            }
         }
         if (memories.access != null && memories.records.isEmpty()) {
             Text(stringResource(R.string.assistant_runtime_memory_empty), style = MaterialTheme.typography.bodySmall)

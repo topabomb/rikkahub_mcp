@@ -105,7 +105,11 @@ internal class ConfigurationQueryService(
                         enterpriseSessions.requirePublishedSelection(selection)
                         project(configuration, selection)
                     }
-                } }
+                } }.catch { error ->
+                    if (error is CancellationException) throw error
+                    Log.e("ConfigurationQuery", "Selected configuration projection failed", error)
+                    emit(unavailable(ConfigurationReadFailure.Unexpected(error.userVisibleDiagnostic())))
+                }
         })
     }.catch { error ->
         if (error is CancellationException) throw error

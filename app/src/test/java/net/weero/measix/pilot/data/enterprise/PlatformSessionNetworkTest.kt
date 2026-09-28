@@ -322,6 +322,49 @@ class PlatformSessionNetworkTest {
         } finally { server.stop(0) }
     }
 
+    @Test fun `manual retry retires a pending principal deleted after temporary Bootstrap failure`() = runBlocking {
+        val exchanges = AtomicInteger()
+        val bootstraps = AtomicInteger()
+        val server = server {
+            when (requestURI.path) {
+                "/.well-known/measix" -> reply(200, fixture("discovery"))
+                "/api/client/v1/enrollments/exchange" -> {
+                    exchanges.incrementAndGet()
+                    reply(201, fixture("enrollment-response"))
+                }
+                "/api/client/v1/bootstrap" -> when (bootstraps.incrementAndGet()) {
+                    1 -> reply(503, "temporarily unavailable")
+                    2 -> reply(401, """{"type":"about:blank","title":"Deleted","status":401,"code":"enterprise_identity_deleted"}""")
+                    else -> reply(200, fixture("bootstrap"))
+                }
+                else -> reply(404, "unexpected route")
+            }
+        }
+        try {
+            val sessions = owner(temporary.newFolder())
+            val platform = service(sessions)
+            val material = EnrollmentMaterial.Platform(
+                "http://127.0.0.1:${server.address.port}", "first-code", Instant.parse("2030-01-01T00:00:00Z"))
+            assertThrows(PlatformHttpException::class.java) {
+                runBlocking { platform.enroll(material, "Android", "test") }
+            }
+            assertNotNull(sessions.pendingPlatformEnrollment())
+
+            val failure = assertThrows(PlatformHttpException::class.java) {
+                runBlocking { platform.enroll(material.copy(code = "fresh-code"), "Android", "test") }
+            }
+            assertEquals(EnterpriseRuntimeProblemCodes.IDENTITY_DELETED, failure.problem?.code)
+            val retired = (sessions.state.value as EnterpriseState.Available).manifest
+            assertNull(retired.pendingEnrollment)
+            assertEquals(EnterpriseExitReason.IDENTITY_DELETED, retired.exitReason)
+            assertEquals(1, exchanges.get())
+
+            platform.enroll(material.copy(code = "fresh-code"), "Android", "test")
+            assertEquals(2, exchanges.get())
+            assertNull((sessions.state.value as EnterpriseState.Available).manifest.exitReason)
+        } finally { server.stop(0) }
+    }
+
     @Test fun `terminal pending Bootstrap permits confirmed new code after restart`() = runBlocking {
         for (revokedCode in listOf("user_disabled", "device_revoked", "session_revoked")) {
             val exchanges = AtomicInteger()

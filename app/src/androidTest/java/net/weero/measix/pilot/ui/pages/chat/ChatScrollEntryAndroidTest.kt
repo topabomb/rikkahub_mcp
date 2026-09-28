@@ -244,8 +244,8 @@ class ChatScrollEntryAndroidTest {
             runBlocking { favorites.toggleNode(lease.commandTarget, first.nodes[3]) }
             item = runBlocking { withTimeout(30_000) {
                 favorites.observeNodeFavorites().first { entries ->
-                    entries.any { it.conversationId == first.id && it.nodeId == first.nodes[3] }
-                }.single { it.conversationId == first.id && it.nodeId == first.nodes[3] }
+                    entries.items.any { it.conversationId == first.id && it.nodeId == first.nodes[3] }
+                }.items.single { it.conversationId == first.id && it.nodeId == first.nodes[3] }
             } }
             val favorite = requireNotNull(item)
             launch(first.route())
@@ -261,8 +261,8 @@ class ChatScrollEntryAndroidTest {
             compose.waitForIdle()
             assertHistory(first, 3)
             val retained = runBlocking { withTimeout(30_000) {
-                favorites.observeNodeFavorites().first { entries -> entries.any { it.id == favorite.id } }
-            } }.single { it.id == favorite.id }
+                favorites.observeNodeFavorites().first { entries -> entries.items.any { it.id == favorite.id } }
+            } }.items.single { it.id == favorite.id }
             assertEquals(favorite.refKey, retained.refKey)
             assertEquals(favorite.preview, retained.preview)
             assertEquals(favorite.nodeId, retained.nodeId)
