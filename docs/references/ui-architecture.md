@@ -1,809 +1,215 @@
-# 界面架构与自适应布局参考
+# 界面架构与自适应布局
 
-本文描述 Compose 页面边界、导航、主题、自适应布局和覆盖层。消息节点渲染见 [消息渲染管线](message-rendering-pipeline.md)，执行与持久化协议见 [Turn/Step 执行链路](turn-step-execution.md)。
+本文维护页面状态、导航授权、用户交互与窗口布局的职责。消息内容如何分组和渲染见
+[消息渲染管线](message-rendering-pipeline.md)；配置解析、执行与持久化分别见
+[配置架构](android-configuration-architecture.md)、[Turn/Step 执行链路](turn-step-execution.md)。
 
----
+## 1. 页面状态与授权
 
-## 1. 架构总览
+`RouteActivity` 在 `MeasixTheme` 下承载 Navigation 3 的 `NavDisplay`；`Navigator` 管理返回栈，
+`Screen` 定义路由参数，entry decorators 管理页面状态和 ViewModel 生命周期。具体路由以
+`Screen` 与 `RouteActivity` 的注册为准，不在文档复制清单。
 
-```
-RouteActivity (ComponentActivity)
-  └─ MeasixTheme (主题入口)
-       ├─ LocalDarkMode / LocalExtendColors (主题状态)
-       └─ AppRoutes() (导航根)
-            ├─ CompositionLocalProvider (应用状态注入)
-            │    ├─ LocalAdaptiveLayoutInfo  — 窗口尺寸/折叠姿态/布局策略
-            │    ├─ LocalNavController       — 导航控制器
-            │    ├─ LocalSettings            — 全局设置
-            │    ├─ LocalSharedTransitionScope — 共享元素动画
-            │    └─ LocalToaster / LocalTTSState / LocalASRState
-            └─ NavDisplay (Navigation 3)
-                 └─ entry<Screen.*> (全屏逐页导航)
-```
+页面消费 application/query UiModel 并提交类型化命令，不持有 Runtime Job，不从渲染列表推断持久化状态。
+`ConversationPresentation` 提供消息、执行阶段、工具定位和附件预览；工具结果是否存在不能代替执行阶段或访问权限。
+Koin 只负责装配依赖，不作为 UI 的服务定位器。`LocalSettings` 来自 `SettingsStore.userSettings`，
+提供个人配置与通用显示偏好；企业资源和会话使用配置来自按域查询投影。
 
-### 页面与状态边界
+页面打开时捕获的 `RealmSelection`、`ConversationViewLease` 或 Portal 文档身份贯穿异步操作。
+切域、退出、授权到期或关闭页面会撤销旧投影和操作；返回同一空间不恢复旧权限。
+`selectionRevision` 区分实际发生过的域切换，即使 StateFlow 合并中间状态也不能恢复旧页面。
+凭据、WebView、lease 和大段正文不进入导航或 Activity saved state。Lazy 列表使用稳定业务 ID；
+类型化引用仅在 Saveable key 边界转成 Bundle 支持的标量，不改变业务命令类型。
 
-- UI/ViewModel 只消费 application/query UiModel 并提交 typed 命令。页面打开时捕获的 `RealmSelection`、会话 lease 或 Portal 文档身份贯穿异步操作；切域、退出、离页及地址变化撤销旧投影，返回同一空间不复活旧写权限。接入凭据、WebView 和领域授权对象不写进导航或 Activity saved state。
-- `ConfigurationReference` 在 Lazy/拖动列表的 Saveable key 边界转为字符串；业务选择和命令仍用类型化引用，同一个 item 与拖动容器使用同一 key。
-- 配置目录的 Loading、Available、预期不可用和非预期失败保持可区分；失败保留可操作原因和必要诊断，取消不展示为失败。空间与资源来源有文字或本地化说明，不能只靠颜色/图标；可点击图标有 content description。
+### 聊天导航与页面恢复
 
-历史列表与会话文件夹的读取失败保留原异常诊断，不以空目录表示读取成功。失败只结束原 selection 的数据订阅，外层空间观察继续工作；历史页和抽屉提供显式重试，文件夹长诊断可滚动和复制。切域清除旧内容与旧诊断，新空间重新读取。文件夹命令沿原授权提交，非预期错误显示原 detail/cause，取消继续传播。
+`ConversationOpenRequest.NewDraft` 固定会话 ID、原域与助手；`OpenExisting` 只打开已有根会话。
+历史、搜索、收藏和通知使用已有会话请求，分享和新建显式创建 Draft。失效的历史 ID 不转成新聊天。
+冷启动等待应用恢复后，由 `ConversationApplicationService.initialRequest` 选择最近会话或合法的新聊天入口；
+缺少有效企业默认助手时进入空间页，不自动选目录首项或改写失效引用。
 
-### 列表动作与收藏撤销
+`ChatVM.initialize` 取得页面 lease 后才订阅聊天、收藏、错误和附件预览，并创建附件导入作用域。
+Missing/Failed 状态提供重试和显式新建；重试撤销旧作用域，释放其未提交资源。
+分享输入由 ViewModel 串行消费一次，只预填、不自动发送；旋转不重复导入，恢复到已持久聊天时不重放输入。
+未发送 Draft 不另行持久化。
 
-列表主动作保留页面语义；`ItemActionMenu` 只呈现次动作，删除项置底并强调，确认与业务授权仍归原页面和 owner。`longPressReorder` 只共享现有 reorder scope 的长按、触感和缩放，不管理排序事实。正文编辑区保留文本选择；搜索过滤期间禁用列表排序。
+子助手详情借用父聊天的 lease；内容预览借用原渲染来源。导航仅保存稳定条目身份，借用能力为 transient。
+保存恢复后必须从原页面重新打开，不能凭会话 ID、runId 或缓存 ID 重建授权。
 
-语音配置卡片点击用于编辑，独立单选按钮用于选择默认项；单选按钮以配置名称提供无障碍标签，名称为空的系统语音配置使用已本地化的协议说明。标签不清除原单选角色、选中状态或执行时的准入规则。
+### 加载、失败与重试
 
-`FavoritePage` 在卡片 `settledValue` 到达删除侧后，由页面 coroutine scope 执行删除、复位和 snackbar，item effect 不等待复位。撤销失败保留同一个原域 `RestoreToken`，重试成功、用户关闭或离页后结束；异常类型、detail/cause 沿 `userVisibleDiagnostic` 显示并可选择复制，取消继续传播。收藏目录由 `FavoriteService` 发布 `FavoriteDirectoryState`，读取异常保留原 Throwable 并清空旧列表，诊断从原异常派生，页面显示可复制错误与重试入口。失败在原选择的订阅内收口，切换空间继续订阅新域并清除旧诊断；重试重新订阅当前选中域，不把读取失败当作没有收藏。聊天的收藏标记读取失败进入原页面的 `ChatErrorStore`，关闭或切域后的迟到异常不进入新页面。
+目录必须区分加载、可用、预期不可用和非预期失败。历史、文件夹、收藏的读取失败清除旧列表并保留原异常，
+不能伪装成空目录；页面提供可复制诊断和重试。单次订阅失败不终止外层空间观察，切域后重新读取并清除旧诊断。
+取消继续传播，不展示为业务失败。资源来源与不可用原因使用文字说明，可点击图标提供无障碍名称。
 
-删除手势状态只在卡片 composition 内 `remember(item.id)`，不保存到 Lazy item 的 saved state；撤销复用相同收藏 ID 时从 Settled 开始，不能恢复已经删除卡片的位移。收藏数据仍只来自 FavoriteService 投影。
+收藏滑动删除由页面协程执行；撤销失败保留原域 `RestoreToken` 供重试，离页后失效。
+手势位移只在卡片 composition 内保存，撤销恢复同一 ID 时不能恢复“已删除”的位移。
+列表次动作不拥有业务事实；排序、删除和确认仍通过原命令，过滤期间禁用排序。
+
+## 2. 配置与企业入口
+
+已有会话的助手来自 `ConversationUiModel.snapshot.header.assistantId`。
+`ConversationConfigurationUiModel` 将该助手的标题、模型、背景及能力选择一并投影，
+定义删除或撤权时保留历史与不可用原因，不回退全局助手。抽屉目录、文件夹筛选和移动助手操作携带原域目标；
+切域或换助手先丢弃旧筛选，异步完成不能改变新页面。
+
+聊天配置通过 `ConversationAssistantTarget` 编辑当前域的使用偏好，字段命令只修改最新值中的目标字段。
+企业固定定义只读；共享用户定义从企业上下文编辑时明确提示影响，并复用原编辑器。
+未选候选只提供只读详情，不构造虚假会话目标。模型的助手默认、空间默认、指定模型三态直接消费类型化投影，
+失效显式引用保留诊断，不能从最终显示值反推或静默替换。具体解析规则见
+[助手配置](assistant-configuration.md)。
+
+`ModelListSheet` 在聊天页稳定根部只组合一次，与助手详情和引导入口共用 `ModelListState`，
+不随 IME 显隐销毁。选择提交成功才关闭，提交中拒绝重复选择，失败保留原选择；目录选择身份变化关闭旧弹层。
+配置反馈在发起操作的弹层显示，嵌套弹层隐藏父反馈而不销毁父内容。
+运行中修改影响请求的配置后显示“下次发送生效”；头像、背景等即时显示修改不显示该提示。
+
+### Starter 与空态
+
+个人空态提供现有能力配置入口；企业空态突出助手、模型、适用 Starter 和已绑定 Workspace，其他能力从助手详情查看。
+Starter 在 Draft 中先绑定开场再追加提示词，保留原文字和附件，不自动发送；Ready 中只追加提示词。
+再次点击已选项打开详情，刷新开场不重复填充提示词。目录只提供轻量摘要，正文默认折叠并按需查询；
+已保存开场的查看入口不因当前目录删除该项而消失。开场持久化及首发校验见
+[配置架构](android-configuration-architecture.md)。
 
 ### 企业空间与工作台
 
-`EnterprisePage` 是接入、同步、切换、退出和本机企业重置的正式入口，只经 `EnterpriseApplicationService` 读取身份与状态。聊天顶部只显示由当前会话派生的非交互空间标记；空间切换归抽屉和设置入口。空间页区分当前身份、企业连接、最近动态、预算提醒和只读配置详情；可用值、加载、刷新、陈旧与失败不能用同一个空态表示。重置先选择保留或清空历史，再确认；执行期间展示进度和重试，不自动执行删除。个人备份入口说明仅包含个人数据。
+`EnterprisePage` 经 `EnterpriseApplicationService` 提供接入、同步、切换、退出与本机重置。
+聊天的空间标记不兼任切换动作；连接异常入口消费 Session 归属的同步投影并导航到空间页。
+预算只显示真实能力限制，不相加不同计量维度或周期；配置详情渐进展示，不暴露凭据和运行路由。
+已连接企业在个人空间可只读查看，不能借个人选择执行企业业务。个人备份与企业数据隔离见
+[个人备份与恢复](data-persistence.md#个人备份与恢复)。
+
+Android 工作台只承载 Core `/portal/`，不维护另一套网页。每个 `PortalDocument` 绑定原 Session、选择与独立文档身份；
+关闭先撤销授权，再销毁 WebView 并等待站点数据清理。网页外链与退出走原生确认，媒体采集归当前文档的硬件和文件所有者。
+关闭工作台保留登录，退出另走 Session 命令。详细准入见 [配置架构](android-configuration-architecture.md)。
+
+## 3. 窗口、主题与自适应布局
+
+`AdaptiveLayoutPolicy` 以实际可用宽高、姿态和有效 separating hinge 作决策；
+`AdaptiveLayoutInfo` 在根级计算并传递，尺寸由 `AdaptiveLayoutDefaults` 维护。
+自适应改变承载方式，不改变业务身份或权限；双栏仅属于聊天，其他页面保持全屏逐页导航。
 
-预算页按 MODEL、IMAGE_GENERATION、TTS、ASR、MCP 展示能力级摘要。每项只选一条实际限制作为主显示，不能把不同 meter/周期相加；无限额不伪造剩余量。详细调用记录仍由 Portal 展示。配置详情按默认值、策略和资源渐进披露，不显示凭据、路由、内部 ID 或提示词正文；已连接企业在个人空间可只读查看，但不能借个人 selection 执行企业业务。
+| 条件 | 聊天与弹层 |
+| --- | --- |
+| 宽度不足 600dp，或高度不足 480dp | 单栏；普通姿态使用底部 Sheet，矮窗口使用紧凑输入 |
+| 宽度至少 600dp、高度至少 480dp，且非 Tabletop | 会话列表与详情双栏，居中 Dialog |
+| 双栏且有有效竖向分隔铰链 | 按真实铰链分区，侧栏不可折叠，弹层限于详情区 |
+| Tabletop（桌面半折） | 单栏与受限 Dialog；有有效横向铰链时限于上半屏，否则不猜测裁切位置 |
+
+普通双栏侧栏使用保存的 `chat_sidebar_expanded` 偏好；铰链分区优先于折叠偏好。
+不能依据机型、横竖屏名称或宽度分档跳过高度和姿态约束。
+
+`AdaptiveModal` 统一承载短期选择器，调用方持有可见状态；Dialog 分支不组合 BottomSheet。
+`AdaptiveDialogContainer` 以独立 scrim 接收关闭动作，内容表面阻止穿透，同时保留子控件的点击和滚动。
+窗口、内容与底部操作区的点击边界必须实际验证。
 
-配置兼容性提示与空间导航的实现约定见 [配置架构](android-configuration-architecture.md#配置兼容性与空间导航)。企业连接区、当前企业抽屉入口和企业聊天顶部的简短异常入口共用 Session 归属的同步投影；正常状态不额外占位，点击异常入口进入企业空间页，诊断按需展开，不另建阻塞全应用的升级页。异常入口不改变原非交互空间标记的用途。
+`AppearancePolicy` 解析明暗、动态配色和 AMOLED；`MeasixTheme` 只提供颜色及 CompositionLocal。
+`WindowSystemBars` 由 `RouteActivity` 与 `SafeModeActivity` 根宿主管理，终端可使用独立深色系统栏，
+嵌套主题与离屏导出不写 Window、不维护恢复颜色栈。
+聊天背景透明度由 `ChatSurfacePolicy` 与 `ChatOverlaySurface` 管理：消息容器、输入/播放覆盖层、正文产物分别处理，
+不能把文字、图片、代码和工具输出一起降低透明度。
 
-Android 只承载 Core `/portal/` 的文档，不维护第二套网页。`PortalDocument` 绑定原 Session/选择和每次打开的独立身份；关闭先撤销授权，再在 WebView 回调返回后销毁宿主并等待站点数据清理。外链和网页退出使用原生确认；拍照/录音归当前文档的硬件与文件 owner，页面只持有操作投影。关闭工作台保留登录，退出另走正式 Session 命令。
+聊天 Scaffold 与 TopAppBar 分工处理系统栏，输入区负责导航栏和 IME 避让，不重复累计 inset。
+IME 目标显示时将发送/取消或录音停止移入输入框，隐藏能力动作行；目标隐藏后恢复，
+不根据动画中间帧反复重组，任何状态都保留唯一可达的终止动作。
 
-### 聊天配置入口
+## 4. 输入、滚动与运行反馈
 
-聊天配置消费 `ConversationConfigurationUiModel`。助手、模型、Starter、MCP、Workspace 等短任务使用同一自适应弹层；标题、关闭及管理入口保持可达，长列表只滚动内容区。企业助手的固定定义只读，当前空间使用偏好通过原 `ConversationAssistantTarget` 编辑；共享用户定义从企业上下文编辑时提示影响，不复制第二套编辑器。
+### 提交与草稿
 
-模型选择只使用聊天页根部的一张 `ModelListSheet`：默认来源与显式模型在同一列表，企业助手默认/空间默认/指定模型三态由 typed 投影区分，不能由最终显示模型反推。Starter 在 Draft 中绑定开场并追加提示词，保留原草稿/附件，不自动发送；Ready 中仅追加提示词。配置命令失败在发起操作的弹层或页面显示原始诊断，保留原选择；不能仅把错误写到被弹层遮住的聊天列表。
+普通发送和仅发送不生成通过 `ChatVM.handleMessageSend` 与 Starter 共用的操作锁捕获输入。
+`SendMessageReceipt` 表示 USER 已提交；随后 `ChatInputState.completeSubmission` 只清理匹配的文字和原附件实例，
+不等待模型响应。等待期间编辑的文字、新增或重新添加的附件保留；清空、替换或进入历史编辑使旧提交不能清理新草稿。
+提交前失败不清理输入，重复点击不排队发送同一份内容。附件创建权归还与提交事务见
+[多模态与资源持久化](multimodal-context-and-turn-durability.md)。
 
-开场目录只带 `ConversationOpeningSummary` 等轻量投影。`EnterpriseStarterPicker` 原预览内部增加默认折叠的 `StarterOpeningContext`；聊天卡片仅以描边及无障碍选中状态表达选择，再点已选项打开详情。`PromptPresetButton` 保持原入口，在已有开场时显示详情菜单项，即使目录已无该项也不隐藏入口。`StarterOpeningDetails` 使用原 `AdaptiveModal`，正文按需查询，不在空态或输入框常驻 System、背景、发布身份；刷新和取消开场只位于详情，刷新不再次填充提示词。切换助手清除 Draft 开场时使用一次原 toast 提示，保留用户文字。Ready 开场不随企业新发布改变。
+输入内容以最终 parts 判断是否为空，空白 Text 不形成输入；编辑历史保留非文本附件及顺序。
+导入结果交给输入框前复验原目标，失败或取消只释放本批新文件。
 
-### 技术栈
+### 滚动意图
 
-| 层面 | 技术 |
-|------|------|
-| UI 框架 | Jetpack Compose + Material Expressive (M3) |
-| 导航 | Navigation 3 (`NavDisplay` / `NavKey` / `entryProvider`) |
-| 依赖注入 | Koin (`koinInject` / `koinViewModel`) |
-| 持久化 | Room (数据库) + DataStore (偏好) + SharedPreferences (快捷 KV) |
-| 网络 | OkHttp (SSE 流式) |
-| 图片 | Coil3 (SVG / GIF / 动画解码) |
-| 动画 | SharedTransitionLayout + animateDpAsState |
-| 模糊效果 | Haze (对话背景毛玻璃) |
+`ChatScrollIntent` 是页面内唯一滚动意图，普通列表与预览共用。默认打开、明确回到末端以及新消息追加完成可进入
+`FOLLOW_TAIL`；历史定位、无障碍/滚轮阅读和用户拖动撤销自动跟随。拖动停止后只有列表实际空闲且到底才恢复跟随，
+新历史操作会撤销这项资格。内容增长、惯性滚动和 IME 动画不能反推用户意图。
 
----
+发送后的滚动绑定 command 返回的 USER ID 与原分支，等待该节点出现在匹配 snapshot、布局就绪及 IME 隐藏后才执行。
+新发送、会话切换或分支变化取消旧请求；不以临时列表项数量或固定延迟猜测提交完成。
+自动跟随不要求 Turn 活跃，但空 Draft 的引导卡不触发；IME 补偿仍由 `ImeLazyListAutoScroller` 负责。
 
-## 2. 导航体系
+### 活动状态、诊断与提示
 
-### 2.1 RouteActivity
+`ChatPageContent` 根据 `ConversationPresentation.isActive` 统一管理屏幕唤醒，包含准备、生成、工具、待交互和停止清理。
+`IDLE` 或离页释放；输入按钮不管理 Window flag。`STOPPING` 时停止提供审批和回答 callback。
 
-`RouteActivity` 是唯一的 Activity 入口，职责：
+`ErrorCardsDisplay` 展示主聊天诊断。回复失败或未完成保留可手动关闭卡片，消息终态条可重新打开保存的 `terminalDetail`；
+普通命令失败使用短期反馈。错误绑定原 conversation/selection；工具和子助手在自己的卡片显示领域失败，不重复投递主卡。
+取消使用中性状态，不以通用“重试”文案替代真实异常。上下文变化的展示与按需查询统一见
+[消息渲染管线](message-rendering-pipeline.md)。
 
-- `enableEdgeToEdge()` + `disableNavigationBarContrast()` 实现 edge-to-edge 全屏
-- `CrashHandler` 崩溃检测 → 崩溃后跳转 `SafeModeActivity`
-- `setContent { MeasixTheme { AppRoutes() } }` 启动 Compose 树
-- `ShareHandler` 监听 `ACTION_SEND` / `ACTION_PROCESS_TEXT` Intent
-- `onNewIntent` 处理外部 `conversationId` 跳转
-- `volumeKeyListeners` 注册音量键监听（最后注册者优先）
+前台触觉由聊天页稳定组合位置的 `TurnHapticFeedback` 管理，直接消费同版本 `turnFeedback` 查询投影，
+不依赖消息项是否在视口或自行解析 metadata。仅 RESUMED 且设置允许时工作；新输出触发限频反馈，
+无输出时的慢心跳只表示本地请求仍在处理或等待，不证明远端进度。新待审批/回答交互提醒一次后暂停工作心跳。
+首次观察、恢复前台、重开设置和切换 Turn 只建立基线；停止、离页或失去前台立即取消后续反馈。
+平台适配器尊重系统触觉设置，无振动器时静默。
 
-### 2.2 导航模型
+声音由 `GenerationSideEffects` 管理；完成 Step 音与交互提示按身份去重，待交互提示必须在 checkpoint 成功后播放。
+继续执行不重播旧提示，播放失败不回滚已提交事实。更新提醒和 MCP 刷新分别消费既有应用服务状态，
+页面不为浏览或重复组合创建后台工作；具体生命周期见 [更新机制](update-mechanism.md) 与 [MCP 架构](mcp-architecture.md)。
 
-```kotlin
-class Navigator(private val backStack: MutableList<NavKey>) {
-    fun navigate(screen: Screen, builder: NavigateOptionsBuilder.() -> Unit = {})
-    fun clearAndNavigate(screen: Screen)
-    fun popBackStack()
-}
-```
+### 播放覆盖层
 
-- `Screen` 是 `sealed interface : NavKey`，路由均为可序列化的 data class/object
-- 路由以**全屏页面切换**为主，`fadeIn/fadeOut` 用于根级切换，`slideInHorizontally + scaleOut` 用于层级切换
-- `entryDecorators` 包含 `rememberSaveableStateHolderNavEntryDecorator()` 和 `rememberViewModelStoreNavEntryDecorator()`，保证页面状态保持与 ViewModel 生命周期正确
+TTS 控制条消费 `SpeechApplicationService` 的播放投影，暂停仍可见，承载页面变化不改变播放所有权。
+聊天中以输入面板的实测上沿定位，并遵守详情栏、Tabletop 和窗口安全区，不猜测输入高度或重复叠加 IME inset。
+只有当前活动 NavKey 的聊天组合控制条，退出动画中的旧页不能留下第二条；无输入面板的页面由根宿主承载。
+覆盖层之外不拦截触摸，大字体下操作仍可达；独立 Activity/Dialog 不承载该覆盖层。
+队列、主/子助手共享会话和取消见 [语音架构](speech-architecture.md) 与 [子助手架构](sub-assistant-architecture.md)。
 
-### 2.3 路由边界
+## 5. 图片查看与操作
 
-`Screen` 的密封层次与 `RouteActivity` 的 `entry<Screen.*>` 注册是路由清单的唯一权威来源。
-路由按职责分为聊天/分享、历史与收藏、助手配置、设置、扩展与 Workspace，以及内容预览、备份、
-图片生成和调试页面。带业务身份的页面把 ID 放入可序列化路由参数；聊天使用 `ConversationOpenRequest`，
-子助手详情携带 `runId` 与原聊天页面借出的 `ConversationViewLease`；lease 标为导航序列化的 transient，保存恢复后必须从父聊天重新打开详情，不凭会话 ID 重建授权。工作区文件编辑使用 Workspace ID、区域和路径。
+`ImagePreviewDialog` 是统一的全屏查看器，不套用 `AdaptiveModal`。它只负责相册浏览、缩放、信息和动作呈现，
+业务命令由宿主注入。空集合关闭，初始页校正到合法范围；放大后拖动为平移，未放大时竖向拖动可关闭，
+水平翻页和多指缩放不能被关闭手势抢占。信息面板打开时不触发拖拽关闭。
 
-`ConversationOpenRequest.NewDraft` 固定会话 ID、原 `RealmAccess` 与助手引用；`OpenExisting` 只打开已有根会话。
-历史、搜索、收藏和通知使用已有会话请求；分享和新建按钮显式创建 Draft。`rememberChatNavigation` 的回调保留渲染时的域，
-助手切换由 `selectAssistantRequest` 在同一授权边界完成选择和最近会话查询，等待后不重新捕获 Session。
-系统分享页复用 `ConfigurationQueryService.observeAssistantCatalog` 显示当前空间的企业与用户助手及不可用原因；创建 Draft 使用所显示目录的原 `RealmSelection`，切域往返或授权到期后拒绝旧选择。分享只预填输入，不自动发送，也不改默认助手。
+查看器内的进度和结果通过 Dialog 自己的 Toaster 呈现，避免被窗口遮挡。
+信息面板打开后才从当前 `ImageSource` 读取有界内容；来源名称由文件服务提供，不扫描路径推断归属。
+缩略图、相册、信息、保存共享同一读取能力，URL 不是授权。
+聊天相册如何收集、Markdown 图片和导出来源见 [消息渲染管线](message-rendering-pipeline.md)；
+Gallery、文件管理与生成页面传入各自可见集合。
 
-冷启动由 `ConversationApplicationService.initialRequest` 返回类型化入口：已有最近会话继续打开；新会话使用本域有效的用户选择，无选择时使用企业下发的 `policy.defaultAssistantId`。企业未下发默认助手或已保存的选择失效时，`RouteActivity` 打开已有空间页，不创建空会话、不自动选目录首项、不重写失效引用。空间“开始对话”的 `EnterpriseStarterPicker` 复用个人 `AssistantPicker` 与同一助手目录、选择命令；推荐开场仍可预览后打开，推荐开场为空时也能选择可用助手创建普通新聊天。个人空间沿用原默认助手规则。
-抽屉切换使用助手目录捕获的 `RealmSelection`，由 `ChatDrawerVM` 等待命令后导航；不通过另一条全局助手状态或导航写入分支。
-冷启动的 `Screen.Startup` 在恢复完成后读取本域的最近会话或生成新请求，再替换为稳定的聊天导航项。
+设背景通过 `AssistantBackgroundService` 创建独立副本，原宿主决定编辑共享定义还是当前域偏好。
+需要选择助手时使用本域目录；确认绑定原目标，切域撤销选择与确认。查看器不自己解析助手或写配置。
+仅有独立删除语义的宿主注入删除动作，聊天消息图片不提供该动作；删除成功后调整页序，集合清空则关闭，
+失败保留相册与可见诊断。资源读取、相册发布及临时导出补偿归
+[资源持久化](multimodal-context-and-turn-durability.md) 中的文件服务。
 
-`ChatVM` 在 `initialize` 成功取得 `ConversationViewLease` 后才订阅聊天、收藏、错误与附件预览，并创建附件导入作用域。
-切域、退出、到期或关闭 lease 会清空页面投影；同主体重登不能复活旧请求。Missing/Failed 页面提供重试和显式新建按钮，
-不会把失效的历史 ID 当作新聊天。分享初始输入由 ViewModel 串行消费一次，保留 ViewModel 的旋转不会重复导入或覆盖用户编辑；
-若恢复的请求已对应持久聊天则不重放输入。未发送 Draft 不另行持久化。
-页面失效或重试会清空旧导入作用域拥有的未提交输入，新作用域重新接收分享输入；不跨已关闭的 owner 复用附件 URI。
-Session owner 的进程内 `selectionRevision` 记录实际选中域/Session 的变化，页面 lease 必须仍匹配该值，
-因此即使 StateFlow 合并快速离开再返回的中间状态，也不会恢复旧页面权限。它不属于配置 generation 或 Feed revision。
+查看器仍依附宿主 composition：Lazy 列表项离开视口可能使其关闭；单击关闭与双击识别也受图片库手势时序影响。
+不能把查看器当成独立的页面或资源生命周期所有者。
 
-新增路由必须同时补齐 `Screen` 定义、entry 注册、参数恢复和返回行为；不要在参考文档维护一份易漂移的逐项副本。
+## 6. 文件编辑正文的生命周期
 
-`ChatPage` 持有与会话绑定、仅存于页面的 `ChatScrollIntent`，普通列表和预览共享同一状态。显式历史定位在滚动前设置 VIEW_HISTORY 并取消待完成的 append 滚动；默认打开、明确回到末端及 append 的分支/布局/IME 等待成功后设置 FOLLOW_TAIL。真实 DragInteraction.Start 进入 DRAGGING，Stop 仅将仍在拖动的意图转为 AFTER_DRAG；因 Stop 可能早于 fling，只有随后实际空闲且到底才恢复跟随。新的历史操作撤销这项资格，不用延时猜测惯性结束。
+Workspace 和 Skill 的文件编辑入口共用 `FileEditorState` / `FileTextEditor`，正文只在当前 composition 内存中保存。
+路径、名称等小状态可以保存，大段正文不放入 rememberSaveable、SavedStateHandle、导航参数或原生 View state。
+Activity 重建或进程恢复后重新读取已发布文件，不承诺恢复未保存正文；普通后台停留未重建时保留内存内容。
 
-`ChatListNormal` 的自动 effect 直接读取同一 State，在自动滚动设置开启且消息非空时，只在 FOLLOW_TAIL、非滚动且仍可向后时请求末端；不要求 turn 活跃，静态历史首次进入及终态后的输入区/内容布局变化也沿同一意图保持末端。空 Draft 的配置与 Starter 卡不触发自动回尾。到底不重复请求测量。内容增长与通用 isScrollInProgress 不反推用户意图，IME 补偿仍归 `ImeLazyListAutoScroller`。collector 按列表 state 和会话取消；不改变 AWAITING_USER 活跃定义，也不保存到 Settings、Room 或 Turn。
+`FileEditorState` 与原生 `FileEditText` 共用一个 Editable，派生 revision 和提交 snapshot 不构成第二份可写正文。
+只读切换保留原 buffer。`FileEditorInputConnection` 只限制 IME 查询窗口，不截断文件；
+过大选区/快照不返回伪造截断结果，全文 extracted text/monitor 和可产生大回包的几何查询不注册。
+输入、组合、删除、选择使用原生协议，复制与保存仍读取完整正文。
 
-列表的 `NestedScrollConnection` 只观察垂直 `UserInput`，返回零消费量。没有 DragInteraction 的无障碍/滚轮输入沿原 `readHistory` 撤销自动跟随和待完成 append 滚动；真实拖动继续使用 DRAGGING/AFTER_DRAG，惯性与 IME 不借此推导用户意图。
+编辑任务绑定原文件身份和 composition 生命周期。读写异常保留原 cause，保存失败保留正文，
+取消和失败均恢复提交状态；命令成功后才关闭编辑或删除窗口。文件访问和 Workspace 导出契约见
+[Workspace](workspace-architecture.md)。
 
----
+## 7. 验证边界
 
-## 3. 主题系统
+页面变更需验证实际路径，不能只确认节点存在：
 
-### 3.1 MeasixTheme
+- 授权撤销、快速切域往返、Activity 重建与迟到回调不能复活旧投影、导航能力或待提交操作。
+- 首发失败、提交期间继续编辑、附件重新添加、旋转及取消不得误清理新草稿。
+- 窗口边界、矮横屏、普通宽屏、有效/无效铰链、Tabletop 与 IME 切换保持动作可达；Dialog 内容点击不误关闭。
+- 历史阅读不被流式增长或 IME 拉回末端，提交滚动只针对对应 USER。
+- 图片浏览、放大/翻页/关闭、Dialog 内反馈、导出失败及文件编辑的大正文/IME 场景需要实际 Compose 与设备证据。
 
-外观判定集中在 `AppearancePolicy`，`MeasixTheme` 只负责取色并提供 CompositionLocal：
-
-```
-MeasixTheme(colorMode)
-  ├─ ColorMode（SharedPreferences `colorMode`）→ AppearancePolicy.resolveDarkTheme
-  ├─ 读取 Settings (dynamicColor, themeId, customThemes)
-  ├─ 读取 AMOLED（SharedPreferences `amoledDark`）
-  ├─ 颜色方案选择：
-  │    ├─ 动态色仅在 Android 12+ 且开关开启时生效
-  │    └─ 否则 findThemeById → getColorScheme(dark)；未知 id 回退 Sakura
-  ├─ AMOLED 暗色: AppearancePolicy.applyAmoledDark（仅 dark + amoled）
-  ├─ 系统栏图标: isAppearanceLightStatusBars / isAppearanceLightNavigationBars = !darkTheme
-  └─ MaterialExpressiveTheme(colorScheme, typography, motionScheme.expressive())
-```
-
-### 3.2 颜色模式
-
-```kotlin
-enum class ColorMode { SYSTEM, LIGHT, DARK }
-```
-
-- `SYSTEM` 跟随系统暗色模式；`LIGHT` / `DARK` 强制浅色或深色
-- 动态色、预设/自定义主题、AMOLED 与颜色模式在「偏好 → 主题」页集中展示；设置首页保留颜色模式快捷入口
-- Android 12 以下动态色开关不可用，主题选择器始终可选
-- AMOLED 暗色模式在普通暗色基础上将 `background` 和 `surface` 设为纯黑，其他 tonal 色（`surfaceContainerHighest` 等）不受影响。强制浅色时开关禁用；跟随系统时偏好会保留，只在实际暗色时生效
-- **注意**：AMOLED 下 `surfaceColorAtElevation` 会贴近纯黑导致选中项不可辨；对比表面使用 `surfaceContainer` / `High` / `Highest`
-
-### 3.3 助手背景上的卡片透明度
-
-助手开启背景图或渐变后，聊天页通过 `ProvideChatSurfacePolicy` 写入 `LocalChatChromeAlpha`：
-
-- **消息层 Chrome**（思考过程 `ChainOfThought`、用户/助手气泡、子助手卡、空态 readiness、建议胶囊）：使用 `ChatSurfacePolicy.chromeAlpha`。有背景时封顶为 `BACKGROUND_CHROME_MAX_ALPHA`，用户仍可通过气泡不透明度滑条再调低
-- **输入卡片与 TTS 工具条**：共用 `ChatOverlaySurface` 和 `surfaceContainerLow` 底色。关闭模糊时只用 `pageChromeAlpha`（有背景 `0.82`，无背景 `1.0`），不跟随气泡滑条；开启模糊时共用聊天页背景源和 12dp 模糊参数。只处理容器背景，不降低按钮和文字的不透明度
-- **产物与正文**（代码块、Mermaid/HTML 预览、表格、块级公式、图片/音视频/文档芯片、工具输出正文）：保持完全不透明，不套 chrome alpha
-- 没有助手背景时，消息层 chrome 继续只跟随 `DisplaySetting.bubbleOpacity`（默认 1.0）
-
-### 3.4 预设主题
-
-| 主题 | 文件 |
-|------|------|
-| Spring | `presets/SpringTheme.kt` |
-| Sakura | `presets/SakuraTheme.kt` |
-| Ocean | `presets/OceanTheme.kt` |
-| Minimal | `presets/MinimalTheme.kt` |
-| Claude | `presets/ClaudeTheme.kt` |
-| Black | `presets/BlackTheme.kt` |
-| Autumn | `presets/AutumnTheme.kt` |
-
-自定义主题通过 `CustomTheme.kt` 支持，存储在 Settings 的 `customThemes` 列表中。
-
-### 3.5 扩展颜色
-
-`LocalExtendColors` 提供随明暗切换的语义状态色（成功/警告/信息等），定义在 `Color.kt`。代码高亮使用 `AtomOneDarkPalette` / `AtomOneLightPalette`，不走扩展色板。
-
----
-
-## 4. 自适应布局系统
-
-### 4.1 设计原则
-
-- 以窗口的**实际可用宽高**和**折叠姿态**为输入，不依赖"手机/平板"名称或横竖屏判断
-- 自适应只改变**承载方式**，不迁移或删减功能
-- 旋转、分屏、折叠和展开只重排界面，不丢失当前会话、输入草稿、滚动位置或导航状态
-- 物理铰链、系统栏和显示切口始终作为不可用区域处理
-- **聊天主界面**最多两栏，不设计永久三栏模式
-- **次要页面**（设置、历史、统计等）保持全屏逐页导航，不纳入自适应改造
-
-### 4.2 AdaptiveLayoutInfo
-
-根级统一计算一次，通过 `LocalAdaptiveLayoutInfo` CompositionLocal 注入所有页面：
-
-```kotlin
-@Immutable
-data class AdaptiveLayoutInfo(
-    val windowSize: DpSize,
-    val windowAdaptiveInfo: WindowAdaptiveInfo,
-    val separatingVerticalHingeBounds: List<AdaptiveHingeBounds>,
-    val separatingHorizontalHingeBounds: List<AdaptiveHingeBounds>,
-) {
-    val widthClass: AdaptiveWidthClass          // Compact/Medium/Expanded/Large/ExtraLarge
-    val primaryVerticalHingeBounds: AdaptiveHingeBounds?   // 真实竖向铰链窗口坐标（dp）
-    val primaryHorizontalHingeBounds: AdaptiveHingeBounds? // 真实横向铰链窗口坐标（dp）
-    val hasSeparatingVerticalHinge: Boolean
-    val isTabletop: Boolean                      // 是否为桌面半折姿态
-    val chatLayoutMode: ChatLayoutMode           // SinglePane / ListDetail
-    val useExpandedModal: Boolean                // 居中 Dialog vs 底部 Sheet
-    val canCollapseChatSidebar: Boolean          // 侧栏是否可折叠
-    val verticalPaneSplit: VerticalPaneSplit
-    val useCompactChatInput: Boolean             // 紧凑输入模式
-    val listPaneWidth: Dp                        // 平面窗口 300/360dp；铰链窗口为 hinge.left
-    val verticalHingeSpacerWidth: Dp             // 物理铰链宽度
-    val tabletopContentHeight: Dp?               // Tabletop 上半屏可用高度
-}
-```
-
-### 4.3 策略阈值（AdaptiveLayoutPolicy）
-
-所有阈值集中在 `AdaptiveLayoutPolicy` 纯函数对象中，可独立单元测试：
-
-```
-MediumWidthBreakpoint = 600f    // Compact ↔ Medium
-ExpandedWidthBreakpoint = 840f  // Medium ↔ Expanded
-LargeWidthBreakpoint = 1200f    // Expanded ↔ Large
-ExtraLargeWidthBreakpoint = 1600f
-MinimumDualPaneHeight = 480f    // 双栏/弹层/紧凑输入共用的高度阈值
-```
-
-### 4.4 项目宽度分档与聊天策略
-
-| Width Class | dp 范围 | 高度 ≥480dp 且非 Tabletop 时的聊天模式 |
-|-------------|---------|------------------------------------------|
-| Compact | 0–599 | SinglePane |
-| Medium | 600–839 | ListDetail |
-| Expanded | 840–1199 | ListDetail |
-| Large | 1200–1599 | ListDetail |
-| ExtraLarge | 1600+ | ListDetail |
-
-宽度分档只负责描述窗口；最终布局还必须同时满足高度和姿态条件。项目从 600dp 起允许聊天双栏，使中等宽度窗口也能利用横向空间，而设置等次要页面不随该分档改成双栏。
-
-### 4.5 核心策略函数
-
-```kotlin
-// 聊天布局模式
-chatLayoutMode(widthDp, heightDp, isTabletop):
-  if (isTabletop || heightDp < 480) → SinglePane
-  if (widthDp >= 600) → ListDetail
-  else → SinglePane
-
-// 弹层模式；Tabletop 强制使用受限 Dialog，避免 BottomSheet 穿过横向铰链
-useExpandedModal(widthDp, heightDp, isTabletop):
-  isTabletop || (widthDp >= 600 && heightDp >= 480)
-
-// 紧凑输入（矮横屏）
-useCompactChatInput(heightDp): heightDp < 480
-
-// 侧栏可折叠（铰链场景不可折叠）
-canCollapseChatSidebar(widthDp, heightDp, hasHinge, isTabletop):
-  chatLayoutMode == ListDetail && !hasSeparatingVerticalHinge
-
-// 竖向铰链分区
-verticalPaneSplit(windowWidthDp, fallbackListWidthDp, hingeBounds):
-  flat → fallbackListWidth + 0 + remainingWidth
-  hinge → hinge.left + hinge.width + (windowWidth - hinge.right)
-```
-
-### 4.6 布局常量（AdaptiveLayoutDefaults）
-
-| 常量 | 值 | 用途 |
-|------|-----|------|
-| `ReadableContentMaxWidth` | 840.dp | 消息/输入框最大可读宽度 |
-| `SheetMaxWidth` | 640.dp | 居中 Dialog 默认最大宽度 |
-| `SheetMaxHeight` | 760.dp | 居中 Dialog 默认最大高度 |
-| `ListPaneWidth` | 300.dp | Medium/Expanded 侧栏宽度（与 ModalDrawerSheet 一致） |
-| `WideListPaneWidth` | 360.dp | Large/ExtraLarge 侧栏宽度 |
-| `DialogPadding` | 24.dp | Dialog 外边距 |
-
-### 4.7 AdaptiveModal
-
-短生命周期选择器使用 `AdaptiveModal` 包裹，页面本身仍保持全屏逐页导航：
-
-- **宽屏**（`useExpandedModal = true`）：居中 `Dialog`，限制最大宽高
-- **竖向铰链**：根据真实 `hinge.right` 将 Dialog 限制在右侧 detail pane
-- **Tabletop**：根据真实 `hinge.top` 将 Dialog 限制在上半屏
-- **窄屏**：`ModalBottomSheet`，贴底弹层
-
-聊天链路中的助手、模型、文件、MCP、搜索、推理、Workspace、扩展与导出等临时内容均复用该容器；设置等页面也可以复用 `AdaptiveModal`，但这不会改变其页面导航结构。
-
-空会话引导卡片的 MCP 行与输入框“＋”菜单中的 MCP 项必须打开同一个 `McpPickerSheet`，直接修改当前助手的 MCP 选择，
-不能把引导卡片旁路到 Assistant 或全局设置页。该 Sheet 的标题左对齐，右侧“管理 MCP 服务器”按钮关闭 Sheet 后导航到
-`Screen.SettingMcp`；即使尚未登记 Server 或所有 Server 都已禁用，Sheet 仍显示空状态和这个管理入口。
-
-全屏图片查看器不走 `AdaptiveModal`，契约见 §4.8。
-
-### 4.8 全屏图片查看器
-
-全局唯一大图查看器是 `ImagePreviewDialog`。它是全屏 `Dialog`（`usePlatformDefaultWidth = false`、
-`decorFitsSystemWindows = false`），不套用 `AdaptiveModal`：相册式浏览需要完整屏幕与手势域，半屏 Sheet /
-有界卡片会与缩放、翻页和竖直拖拽关闭冲突。纯黑背景与图片手势层铺满窗口；页码、操作栏、信息面板和 Toast
-单独应用 `safeDrawing`。
-
-```kotlin
-@Composable
-fun ImagePreviewDialog(
-    images: List<ImageSource>,
-    onDismissRequest: () -> Unit,
-    initialIndex: Int = 0,
-    extraActions: List<ImagePreviewAction> = emptyList(),
-    deleteAction: ImagePreviewDeleteAction? = null,
-    overlay: (@Composable () -> Unit)? = null,
-)
-```
-
-空列表立即 `onDismissRequest()`，不组合 0 页查看器。`initialIndex` 收敛到合法页。查看器只做浏览、保存、
-信息面板，以及调用方注入的轻量动作；它不理解助手、Gallery 或文件管理差异，也不直连删除 owner。
-
-#### 手势
-
-| 手势 | 行为 |
-|------|------|
-| 单指左右滑 | 翻页（库 `ImagePager`） |
-| 双指捏合 / 双击 | 缩放 / 还原 |
-| 放大后单指拖动 | 平移 |
-| 单击 | 关闭（`PagerGestureScope.onTap`） |
-| 系统返回 | 关闭 |
-| 未放大时竖直拖拽 | 拖拽关闭 |
-
-竖直拖拽关闭在父层以 `PointerEventPass.Initial` 检测：当前页 `scale == 1`、单指、`|dy| > slop` 且
-`|dy| > |dx| * 1.5`（`VERTICAL_DOMINANCE_RATIO`）。向上或向下都允许。页尚未组合完成时不触发。
-判定为竖直拖拽后消费指针；水平滑动不消费，翻页/捏合/双击不受影响。`pointerInput` 必须位于
-`graphicsLayer` 之外，避免坐标被图层逆变换。
-
-跟手反馈：`translationY = dy`，`translationX = dx / 2`，`scale = 1 - progress * 0.35`，
-背景透明度 `1 - progress * 0.75`，底部栏与页码按 `1 - 2 * progress` 淡出。释放时
-`|dy| > 容器高 * 0.2` 或同向 `|velocityY| > 2000 px/s` 则沿拖动方向滑出后关闭，否则 spring 回弹。
-多指按下或手势取消立即回弹。
-
-#### 视觉与反馈
-
-- 页码：`TopCenter`，仅 `images.size > 1` 时显示 `n / m`。
-- 底部按钮组：信息 → 保存 → `extraActions` → 可选删除，`BottomCenter`。
-- Dialog 内自建 `Toaster` 并覆盖 `LocalToaster`。进行中与结果共用同一 toast id；应用根 `Toaster`
-  在全屏 Dialog 下层会被挡住。
-- 信息面板打开后才通过当前 `ImageSource` 读取有界字节，解析尺寸、MIME 与大小；来源和名称使用 owner 提供的描述，不再扫描路径猜测归属。网络图片在此操作中可能再次读取。面板打开时拖拽关闭早退。
-
-#### 相册与入口
-
-聊天内按**会话级时序相册**聚合，不按单条消息或单个工具 output 分组。宿主
-（`ChatList` / `SubAssistantDetailPage` / `AssistantPromptPage`）提供稳定
-`LocalConversationImages: () -> List<ImageSource>`，点击期求值当前分支消息顺序 × 消息内 part 顺序；
-`collectMessageImages` 收集顶层 Image 与 `Tool.output` 中的 Image，过滤
-`isImagePartLoading`（空白 url 或 base64 空壳）。`ZoomableAsyncImage` 打开时求值相册，命中则从该张
-浏览整本，未命中或为空则单图打开。Markdown/HTML 正文图不在 part 层，仍单张打开。助手背景、聊天背景
-和附件 chips 是装饰 / 输入态，不接入查看器。Workspace 详情 IMAGE 维持单张，不注入设背景。
-
-缩略图、相册、信息与保存传递同一读取能力。`LocalImageSourceResolver` 使 Markdown/HTML 在原 ConversationViewLease 下解析 URL，解析失败没有个人文件回退。助手共享定义 Prompt 预览仅解析仍被个人配置引用的文件；企业使用预览携带原 ConversationViewLease，解析本主体或共享配置根。网络/内联图片也经相同读取入口。Workspace 图片通过既有 WorkspaceApplicationService 按原工作空间、区域与文件元信息读取，不为预览导出临时副本。
-
-图片保存由 `MediaExportService` 保留原始编码及 MIME，写入系统相册 pending 项，在发布前复验读取权限，失败或取消删除未发布项，补偿失败保留原错误。聊天截图与 Markdown 分享另携带原 ConversationViewLease；渲染后、相册发布及分享前通过查询 owner 验证原页面，文件编码、临时文件与发布收口归同一导出服务。
-
-聊天和子助手的文档、音频、视频点击通过 `MediaExportService.openAttachment` 打开独立临时副本。`AttachmentPreview` 携带原页面与 Artifact ID，文件应用服务验证原选择，Artifact 在生命周期锁内流式复制；最终 Intent 在重新取得原选择的接受边界内发送。UI 不再把原附件路径直接授予其他应用；无处理应用、取消和拒绝均回收未交付副本，成功交付的副本保留到后续启动清理。
-
-Mermaid 导出按代码、原图片解析器与主题绑定整个 WebView 文档。新文档不消费旧导出计数，原生桥只接收匹配当前显式请求 ID 的结果；JS 未就绪可以重试，旧回调不能完成新请求。图片经原解析器和 `MediaExportService.saveImage` 读取、校验与发布，组件销毁取消未完成导出，不直接在桥接线程解码或写入相册。
-
-其余入口把当前可见集合传入查看器：文生图当次结果（1–4 张，两两一行）、Gallery 已加载快照、
-文件管理 Upload Tab 的 `image/*` 与文生图 Tab 的全部产物。非图片 Upload 项不可点开。
-
-#### 调用方注入
-
-| 通道 | 职责 |
-|------|------|
-| `ImagePreviewAction` / `LocalImagePreviewActions` | 查看器只画按钮，把当前页 `ImageSource` 与 Dialog 内 Toaster 交回调用方 |
-| `LocalImagePreviewOverlay` | 确认框 / 助手选择器，盖在全屏查看器之上 |
-| `rememberImageBackgroundHost` | 设为背景：从同一图片读取对象取得字节后由 `AssistantBackgroundService.replaceUserSelectedBackground` 拷独立副本。聊天相关入口助手已知，跳过选择器；文生图橱窗与文件管理先弹 `AssistantPickerSheet`。助手确定后一律再确认一次。选择器使用当前域目录及不可用原因，确认保留原域目标；切域清除待选和确认。Prompt 配置编辑器明确编辑共享定义，聊天和图库编辑当前域使用偏好 |
-| `ImagePreviewDeleteAction` | 仅当宿主已有独立删除语义时传入。查看器承载确认、执行中、失败提示和相册页序列更新；typed suspend action 仍调用既有领域删除 API。成功删除中间项后显示原下一项，删除末项后显示新末项，清空后关闭。聊天消息图片不传该 action |
-
-#### 已知限制与非目标
-
-- 库的单击回调约 270ms 延迟以区分双击：单击后立刻竖直拖拽时，延迟关闭可能在拖拽中触发。
-- 查看器宿主若是 LazyColumn item，流式自动滚动把宿主滚出视口会使 Dialog 随组合销毁而关闭。
-- 不提供共享元素转场、长按菜单、分享按钮或宽屏键鼠翻页；复制 prompt 留在文生图卡片，不进入查看器。
-
-消息区相册收集见 [消息渲染管线](message-rendering-pipeline.md)。
-
-### 4.9 AdaptiveDialogContainer
-
-全屏 Dialog 容器，解决 Compose 平台 outside-click 无法检测自定义全屏 Dialog 外部点击的问题。采用**显式 scrim 双层方案**：
-
-- 底层 scrim：铺满整个窗口的 `clickable` 层，任何落到其上的点击触发 `onDismissRequest`
-- 上层内容层：`clipToBounds()` 防止浮动工具栏等子内容溢出 Dialog 边界；内部通过 `detectTapGestures` 吸收落在表面空白区的点击，使它们不会穿透到 scrim；子控件（按钮/输入框/分段按钮/滚动区）优先消费各自手势，不受影响
-
-该分层避免依赖内容测量边界，并固定“点击 scrim 关闭、点击内容不关闭、底部操作可执行”三项交互契约。
-
----
-
-## 5. 聊天主界面架构
-
-聊天主界面是自适应改造的核心，也是唯一实现双栏的页面。
-
-### 5.1 ChatPage 布局分支
-
-```kotlin
-when (adaptiveLayoutInfo.chatLayoutMode) {
-    ListDetail -> Row {
-        // 左侧：会话列表侧栏（宽度动画 + clipToBounds）
-        Surface(width = sidebarWidth, color = surfaceContainerLow) {
-            ChatDrawerContent(permanent = true, onCollapse = ...)
-        }
-        Spacer(width = verticalHingeSpacerWidth) // 平面窗口为 0dp
-        // 右侧：聊天详情区（weight(1f)）
-        Box {
-            ChatPageContent(navigationAction = ExpandSidebar / None)
-        }
-    }
-
-    SinglePane -> ModalNavigationDrawer(drawerContent = {
-        ChatDrawerContent(navigateFromDrawer = { close drawer then navigate })
-    }) {
-        ChatPageContent(navigationAction = OpenDrawer)
-    }
-}
-```
-
-Tabletop 且存在有效横向铰链坐标时，以上单栏内容再由外层容器限制到 `hinge.top`，不会跨入下半屏。
-
-### 5.2 侧栏折叠动画
-
-采用**宽度动画**（`animateDpAsState`）而非 `ListDetailPaneScaffold` 或 `AnimatedVisibility`：
-
-- `ListDetailPaneScaffold` 的 `adaptStrategies` 默认"有空间就展示所有 pane"，用户手动折叠后 pane 仍被强制展开
-- `AnimatedVisibility` 在 Row 中 exit 动画期间内容仍占满宽度，表现为"先留白占位再消失"
-- **当前方案**：侧栏 `Surface` 宽度在 `0.dp` 和 `listPaneWidth` 之间使用 `animateDpAsState` + `clipToBounds()`；动画期间内容随容器裁剪，宽度到 0 后停止组合侧栏内容。会话列表数据与滚动状态由 Activity 级 `ChatDrawerVM` 管理
-
-侧栏展开状态持久化到 SharedPreferences（key `chat_sidebar_expanded`，默认展开）。折叠后 TopBar 显示 `PanelLeftOpen` 按钮恢复侧栏。
-
-### 5.3 展开与折叠图标
-
-| 按钮 | 图标 | 场景 |
-|------|------|------|
-| 窄屏打开抽屉 | `Menu03`（汉堡菜单） | SinglePane 模式 |
-| 宽屏展开侧栏 | `PanelLeftOpen` | ListDetail + 侧栏已折叠 |
-| 宽屏折叠侧栏 | `PanelLeftClose` | ListDetail + 侧栏已展开 |
-
-### 5.4 ChatDrawerContent 结构
-
-```
-ChatDrawerContent
-  ├─ permanent = true  → Surface + statusBarsPadding
-  ├─ permanent = false → ModalDrawerSheet（外层 ModalNavigationDrawer 由 ChatPage 持有）
-  └─ Column (drawerBody)
-       ├─ 用户资料行 (UIAvatar 50dp + 昵称/问候语 + 编辑入口)
-       ├─ 当前空间入口
-       ├─ 条件式应用更新卡片
-       ├─ DrawerActions (搜索入口 + 历史入口，两个独立 Surface)
-       ├─ FolderBar (文件夹选择栏)
-       ├─ ConversationList (LazyColumn, weight(1f))
-       │    ├─ PinnedHeader (置顶会话分组)
-       │    ├─ DateHeaderItem (日期分组)
-       │    └─ ConversationItem (单个会话条目)
-       └─ AssistantPicker (底部助手选择器)
-```
-
-`FolderBar` 的动态条目以 durable `Folder.id` 作为 Lazy key，使菜单展开等 item-local 状态在插入、删除或重排后仍绑定原文件夹；不得退化为位置 key。
-
-### 5.5 ChatPageContent 结构
-
-```
-ChatPageContent
-  ├─ Surface(background)
-  │    ├─ AssistantBackground (hazeSource 毛玻璃背景)
-  │    └─ Scaffold(contentWindowInsets = 0)
-  │         ├─ topBar: TopBar
-  │         │    ├─ 导航按钮 (Menu03 / PanelLeftOpen / PanelLeftClose)
-  │         │    ├─ 会话标题 (titleMedium) + 副标题 (bodySmall)
-  │         │    ├─ 头像 (UIAvatar 40dp)
-  │         │    └─ 操作按钮 (新建聊天 / 预览模式 / 菜单)
-  │         ├─ content: ChatList
-  │         │    ├─ LazyColumn (消息列表, widthIn(max = ReadableContentMaxWidth))
-  │         │    ├─ 滚动控制 (跳转底部 / 搜索消息)
-  │         │    └─ 空会话引导卡片 (ConversationReadiness)
-  │         └─ bottomBar: ChatInput
-  │              ├─ 紧凑模式 (useCompactChatInput): 收紧输入框与 action row 间距
-  │              ├─ 正常模式: 附件预览 + 输入框 + action row
-  │              ├─ IME 目标显示时隐藏 action row；正常态发送/取消、录音态 ASR 停止进入 TextField trailing
-  │              └─ AdaptiveModal pickers (助手/模型/文件/MCP/搜索/推理/Workspace)
-```
-
-`ChatPageContent` 是会话 turn 期间屏幕唤醒的唯一 UI owner。它直接绑定
-`ConversationPresentation.isActive`：准备、模型生成、工具执行、等待审批和停止收口阶段均保持亮屏，
-只有 turn 进入 `IDLE` 或页面退出组合时才释放；`STOPPING` 期间工具审批、工具回答和子助手回答 callback 统一为空，不向正在收口的 turn 发命令。可因 IME 和自适应布局切换位置的 `ChatInput` 按钮不管理 Window flag。
-模型选择 sheet（`ModelListSheet`）由输入区的稳定根级组合一次，不随 action row 的 IME 显隐分支进入或离开组合；同一页面只存在一个 `ModelListState`，选择、清空与 dismiss 都只修改同一状态。
-
-`ChatPage` 在模型与普通请求配置保存成功、当前 Turn 仍运行时，沿原 toaster 显示“已保存，下次发送生效”；失败仍进入原配置错误反馈，不显示成功。`AssistantPreferenceChange.affectsNextSend` 区分请求字段与立即呈现的头像、背景、标签、快捷输入和视觉正则；纯视觉修改不显示延迟生效。提示词注入编辑仍使用 `ModeInjectionEditSheet` 的原字段顺序、role 条件显隐和 200dp 内容编辑区，末条消息前与从 1 起的深度含义仅通过原标签表达，不增加说明行或预览。
-
-运行中配置模态使用 `AdaptiveModal.feedback` 承载调用方原有的独立 `ToasterState`，默认关闭。助手使用设置、MCP 和文件扩展把成功提示发送到当前模态；文件弹层打开 MCP 或扩展子弹层时，以 `feedbackVisible` 隐藏父 host，保留父内容的 composition，避免重复显示或销毁正在打开的子弹层。该能力只叠放反馈，不增加常驻布局，也不改变保存与关闭语义。
-
-共享模型选择器消费 `ModelCatalogUiModel` 的可选投影：隐藏不可选模型和因此为空的来源组，收藏只显示仍可选择的引用；当前显式选择失效时在列表顶部保留一张不可操作、保持选中外观的诊断卡。模型项只显示名称、必要能力图标、收藏或取消收藏，以及当前选择状态；收藏保持加入顺序，不在移动端模型选择流程提供拖拽排序。来源标题随内容普通滚动；搜索覆盖列表宽度，无结果时只显示空态与清除搜索。来源快捷导航仅在组数与模型数都较多时出现，Provider 编辑和余额留在设置页。默认来源只有一张列表卡：个人域直接选择设置默认，企业域用卡片菜单切换助手默认与空间默认；卡片主动作优先使用当前默认模式，否则选择第一个可用默认模式，不持久化虚假的“上次默认模式”。显式模型和默认卡统一用右侧勾选反馈，不混用左侧单选圆圈。助手详情和 readiness 进入模型选择时分别显式选择完整或精简模式，并复用聊天页根部同一个 `ModelListState` 与 `ModelListSheet`；关闭一次弹层不会改变后续入口的模式。`ModelListSheet` 等待选择命令成功才关闭；提交中只接受一个选择，失败保留弹窗并恢复重试。目录的 `RealmSelection` 变化会关闭旧弹窗，异步错误属于原选择。
-
-模型 Logo 先按现有品牌规则匹配；未命中时个人域保留模型名首字母，企业域使用 Noetral 图形。模型目录直接从自身 `RealmSelection` 选择该纯展示策略，聊天消息从会话快照的 `ConversationHeader.scope` 选择；图标组件不读取全局空间，也不持有 Realm、Session 或配置职责。Provider、搜索和语音图标继续使用通用首字母回退。
-
-`SettingModelPage` 的模型页通过 `ModelSettingsVM` 订阅当前域目录；显示原覆盖、当前选择与不可用原因，清除企业覆盖只继承企业默认。个人页区分未配置、跟随聊天模型、跟随快速模型和未启用附件识别，不将默认哨兵当成丢失资源。建议开关写当前域偏好，关闭后仍保留模型选择。提示词管理页仍编辑共享用户内容；企业聊天使用 AssistantUsageEditor 编辑原主体偏好，独立图片生成通过原域模型请求执行。
-
-前台 turn 触觉只由 `ChatPage` 的 `TurnHapticFeedback` 管理，调用位于自适应布局分支之外，不依赖消息列表项的组合生命周期。
-它直接收集 `ChatVM` 既有热流中的 `ConversationUiModel.turnFeedback` 同版本查询投影与设置，不经渲染快照转发，避免恢复前台时旧组合值造成误提醒；投影尚未就绪时静默，UI 不解析子助手 metadata 或读取 Runtime Job。
-`enableMessageGenerationHapticEffect` 统一控制触觉；页面内的 `AndroidTurnHapticPlayer` 只将 `WORK` / `ATTENTION` 映射到平台效果，不管理节拍或运行状态，不影响声音或通知。
-工作反馈沿用 `KeyboardTap`；待处理提醒使用 `VIBRATE` 权限播放系统预定义 `EFFECT_HEAVY_CLICK`，Android 8/9 使用 35ms 默认强度短脉冲。每次重击都检查 View 触觉开关；Android 13 起交由系统通过 `USAGE_TOUCH` 应用触觉偏好，不再读取已废弃的 `HAPTIC_FEEDBACK_ENABLED`；旧版逐次读取该开关并使用 `USAGE_ASSISTANCE_SONIFICATION`。不绕过系统限制，无振动器时静默。双击由可取消的页面协程逐次播放，不提交不可单独取消第二下的整段波形。
-页面处于 `RESUMED` 时，`runTurnHapticFeedback` 根据查询投影的 `outputCharacters` 增长触发轻振：观察后的首份新输出立即反馈，随后累计约 24 个新增字符且距上次振动至少 0.75 秒时反馈；不足 24 字但间隔已达 3 秒时，只随下一次新输出反馈，不定时补振。
-相邻投影长度正增长计入输出量；尚无 Assistant 槽位时长度为未知，首次取得槽位只建立基线，文本转换造成长度缩短时清空累计并从新长度继续。大块输出只振一次，不保留振动欠账。投影输出长度无变化且请求仍在工作时，每 5 秒轻振一次；重复快照不推迟心跳。输出与等待反馈共享最近振动时间，心跳后也遵守输出最短间隔。
-慢心跳只表示本地请求仍在处理或等待，不证明远端进展；没有速度档位、token 统计或新增配置。
-新的待审批或当前执行子助手的待回答交互重击两次，间隔 200ms，表达“需要用户处理”，随后暂停工作心跳，不周期催促；交互身份在当前观察期间去重。
-初次观察、恢复前台、重新开启设置和切换 turn 只建立现状基线，不重播既有输出或待处理提示。
-进入 `STOPPING`、`IDLE`，离开页面、失去 `RESUMED` 或关闭开关时取消所有后续触觉，包括双振的第二下。
-前台声音由 `GenerationSideEffects` 的 `GenerationSoundTracker` 管理：流式消息只触发新完成的 step 音，待审批与子助手待回答音在对应 checkpoint 成功提交后按交互身份去重播放；播放失败只记录日志，不回滚已提交的 checkpoint；续跑以已有 Assistant 消息建立基线，不重播旧提醒或 step。
-
-MCP 设置页只保留列表下拉刷新，避免顶部栏重复入口。下拉只调用 `McpApplicationService.refreshAll()`，指示器偏移到可折叠
-TopAppBar 下方；它最多绑定 20 秒用户 receipt，不绑定 AppScope 中可能持续数分钟的后台恢复。receipt 结束时若仍有 server
-继续执行，页面停止 spinner、给出后台继续提示，并由各 server 卡片持续显示真实状态。单 server 失败卡片保留独立重试入口。
-
-### 5.6 顶部/底部留白
-
-| 位置 | 值 | 说明 |
-|------|-----|------|
-| Scaffold `contentWindowInsets` | `WindowInsets(0)` | 让 TopAppBar 自己处理状态栏避让，避免双重留白 |
-| ChatList contentPadding top | 0dp；配置提示存在时 8dp | TopAppBar 已提供主要间距 |
-| ChatList contentPadding bottom | 24dp | 输入框上方滚动余量 |
-| ChatDrawer body padding | horizontal 8dp | 侧栏左右边距 |
-| ChatInput bottom padding | 8dp | 另由 `navigationBarsPadding()` 与 `imePadding()` 处理系统区域；IME 动画不切换这一本地间距 |
-
-发送后的到底部请求持有 command 返回的 user message id，并以会话分支和该 durable 节点追加为准，不把
-loading、配置提示等临时 LazyColumn item 数量变化当作消息提交。请求在目标分支出现目标消息、LazyColumn item
-结构与当前 snapshot 对齐且 IME 实际到达隐藏终态后滚动到底部 sentinel；新发送、会话切换或节点分支变化会
-取消旧请求，不使用固定时间延迟猜测布局完成。
-
-会话底部 `ErrorCardsDisplay` 是需要展示明确诊断原文的主通道。普通命令和标题/建议/压缩等边缘失败维持 5 秒自动关闭；
-Master 回复 `FAILED` / `INCOMPLETE` 使用手动关闭卡片，并按当前 `conversationId` 过滤。消息终态条只显示 durable
-reason 对应的短状态，取消使用中性色而不冒充错误；失败或未完成条可再次打开消息 `terminalDetail`。工具与子助手卡片
-自行显示其领域失败，不向主会话重复投递卡片。
-
----
-
-## 6. 组件层次
-
-### 6.1 UI 组件目录
-
-`ui/components/` 按职责分层：`ai/` 负责聊天输入和能力选择器，`message/` 负责消息、分支、
-推理与工具卡片，`richtext/` 负责 Markdown、代码、LaTeX、Mermaid、HTML 和图片，`webview/`
-封装 WebView 生命周期，`ui/`、`table/`、`nav/` 提供通用组件。具体文件以目录和调用点为准，
-不在本文复制文件清单。
-
-### 6.2 页面目录
-
-`ui/pages/` 按路由域组织。聊天自适应只在 `chat/` 内实现；`assistant/` 同时包含助手配置和只读
-子助手详情；`extensions/` 承载 Skill 与 Workspace；设置、历史、收藏、搜索、备份、分享等页面
-保持独立的全屏导航职责。页面目录不应反向依赖具体组件文件名。
-
-### 6.3 全局上下文 (CompositionLocal)
-
-| Local | 类型 | 提供位置 | 用途 |
-|-------|------|---------|------|
-| `LocalAdaptiveLayoutInfo` | `AdaptiveLayoutInfo` | RouteActivity | 窗口尺寸/布局策略 |
-| `LocalNavController` | `Navigator` | RouteActivity | 页面导航 |
-| `LocalSettings` | `Settings` | RouteActivity | 全局设置 |
-| `LocalSharedTransitionScope` | `SharedTransitionScope` | RouteActivity | 共享元素动画 |
-| `LocalToaster` | `ToasterState` | RouteActivity | Toast 消息 |
-| `LocalTTSState` / `LocalASRState` | TTS/ASR 状态 | RouteActivity | 语音 |
-| `LocalDarkMode` | `Boolean` | MeasixTheme | 暗色模式 |
-| `LocalExtendColors` | `ExtendColors` | MeasixTheme | 扩展色板 |
-
----
-
-## 7. 数据流与状态管理
-
-### 7.1 ViewModel 层
-
-页面通过 Koin 注入 ViewModel。ViewModel 只持有页面状态、调用 application command 并消费 query/read model，不得直连
-DAO、Repository、Runtime Registry 或持久化 owner。`ChatVM` 不持有 Runtime Job；`SubAssistantDetailVM` 只消费专用 query port 输出的只读详情；设置、统计、工作区、备份等页面也必须经各自的 typed application/query port。
-
-### 7.2 依赖注入
-
-Koin 只负责装配 AppScope owner、coordinator 与 UI port，不能被 UI 当作 service locator。会话、MCP、文件管理都向
-Compose 暴露 application/query service；恢复由 `ApplicationRecoveryCoordinator` 统一 fail-closed。`UpdateChecker` 的
-`StateFlow` 在 AppScope 共享，切换会话不得重复请求。文件列表的保存键只在 Compose 边界提取为 Bundle 支持的标量，
-不得为适配 UI 而让应用层 typed identity 实现 `Parcelable` 或 `Serializable`。
-
-### 7.3 会话助手归属
-
-已创建会话的助手归属来自 `ConversationUiModel.snapshot.header.assistantId`。`ConversationQueryService` 在原页面 lease 的 Session → Settings 边界捕获配置，随同一会话投影提供 `ConversationConfigurationUiModel`。标题、背景、模型、搜索、推理、快捷消息、MCP 和生成前检查共用这个助手；定义删除或撤权时保留历史和不可用原因，不回退到全局助手。
-
-聊天模型目录按用途与准入显示；企业和用户助手均可选择本域获准模型、跟随本域默认，或在企业域恢复继承助手定义模型。企业定义只读不等于使用模型不可选择。搜索保留用户开关，即使当前模型失效也显示已选而不可用；传输能力来自模型实际 binding，UI 不读取企业地址或凭据。MCP 显示目录准入与真实 runtime 状态，固定绑定不可移除，已有失效引用可取消；聊天页“就绪”数量只计入当前会话可调用且有本地启用工具的服务器，离线保留的目录仍展示工具但不冒充已连接。企业策略禁用已选个人 MCP 时，本轮跳过该工具并显示一条短提示，对话继续；必需企业工具不可用时才阻止生成，并给出刷新配置或联系管理员的操作说明。
-
-`ConversationAssistantTarget` 冻结原页面和助手。模型弹窗、助手/工具弹层及输入导入按原目标持有状态；字段命令只更新最新值中的指定字段。会话系统提示、注入与目录仍由 `ConversationApplicationService` 写原会话，提交时复验助手；目录还核对原 Workspace。实际换助手在同一会话命令清空 folder 与 cwd，重新选择同一助手不清空。导入结果在交给输入框前再次验证原目标，失效或取消只释放本批新文件。
-
-新聊天空态按域编排。个人域保留既有完整引导卡：助手标题、模型、MCP、记忆、本地工具和 Workspace 均保持原状态、单行作用说明与原功能入口，避免企业改造削弱个人配置能力；说明只解释用户能获得什么，不展示内部机制。企业域使用低密度卡片，只常驻当前助手、带“对话模型”说明的模型、适用于该助手的 Starter，以及已绑定 Workspace；MCP、本地工具和记忆从助手详情渐进查看。Starter 保持可横向浏览的标题、两行提示词预览；Draft 点选先经 application 绑定开场再追加提示词，已选同项只打开详情，保留附件，不自动发送。企业域当前助手主体打开详情，“切换”是独立文字动作，避免查看与切换竞争同一点击区域。
-
-本地工具使用既有 `AssistantLocalToolContent`，个人定义编辑和聊天本域使用分别调用各自命令。普通助手详情、当前会话助手和未选候选共用 `AssistantSettingsSectionList` 的分组结构；当前会话由 `AssistantUsageEditor` 复用原基本参数、提示词、扩展、记忆、请求、MCP 和本地工具内容组件，并通过原 `ConversationAssistantTarget` 编辑本域参数、头像、背景、扩展及额外子助手引用。首页只显示头像、名称、真实来源、描述和设置分组，机制说明进入对应设置项或失败诊断。未选候选只在同一分组表面展示目录快照中的只读值，不构造可写页面或第二配置 owner。企业固定的子助手绑定不可移除。企业助手定义只读，模型使用选择只写原主体偏好；用户助手可在确认共享影响并复验原目标后进入原共享定义编辑页；目标失效作为操作失败展示。恢复默认只在企业域出现，清除本域使用覆盖且不修改共享定义。新建会话的默认选择不直接驱动已有会话。
-
-抽屉的助手选择、文件夹和会话列表来自同一个按域助手目录。底部当前助手卡主体打开选择器，右侧独立配置图标打开当前助手详情，延续原有的选择与配置分工；选择器只显示可选候选，当前已失效候选作为唯一例外保留诊断，引用已丢失时显示明确诊断而不静默换成默认助手。可用候选提供同一助手配置分组的只读查看入口；失效当前项不暴露空详情动作。用户助手可从详情确认后进入原共享定义编辑，企业助手不会路由到个人 Settings 编辑器。搜索或标签筛选无结果时只显示空态和清除筛选。`ChatDrawerVM` 保留原 `ConversationFolderAccess`，筛选也绑定该目标；切域或换助手先丢弃旧筛选，旧目录不能在新空间继续查询。移动到助手复用同一选择组件，等待原会话命令成功后关闭；提交期间禁用重复选择和定义管理。
-
-### 7.4 更新检查状态流
-
-```kotlin
-class UpdateChecker(...) {
-    val updateState: StateFlow<UiState<UpdateInfo>> by lazy {
-        checkUpdate().stateInOnce(appScope, UiState.Loading)
-    }
-}
-
-stateInOnce(scope, initialValue) =
-    stateIn(scope, SharingStarted.Lazily, initialValue)
-```
-
-所有 `ChatVM` 共享 Koin 单例 `UpdateChecker` 的同一 `StateFlow`。`ChatDrawer` 仅在 `DisplaySetting.areUpdateChecksEnabled()` 为真且非 Play Store 安装时组合 `UpdateCard`。首次订阅时才启动检查；启动后即使订阅暂时消失也不会重建冷 Flow，因此同一 App 进程内最多请求一次。成功版本的关闭状态写入 `Settings.ignoredUpdateVersion`，只有版本变化后才再次提示；失败卡片的关闭状态保存在 `UpdateChecker.errorDismissed`，下次进程启动可重试。
-
----
-
-## 8. 屏幕适配方案
-
-### 8.1 普通窄屏（widthDp < 600dp）
-
-| 方面 | 方案 |
-|------|------|
-| 聊天布局 | `ModalNavigationDrawer` + 单栏聊天 |
-| 抽屉触发 | TopBar 汉堡按钮 `Menu03` |
-| 弹层 | `ModalBottomSheet`（贴底） |
-| 输入区 | 高度 ≥480dp 时为正常布局；低于 480dp 时为紧凑布局 |
-| 次要页面 | 全屏逐页导航 |
-| 安全区 | `safeDrawingPadding` / 系统栏避让 |
-
-### 8.2 普通宽屏（widthDp ≥ 600dp、heightDp ≥ 480dp、非 Tabletop）
-
-| 方面 | 方案 |
-|------|------|
-| 聊天布局 | `Row` 双栏：永久侧栏 + 聊天详情 |
-| 侧栏宽度 | Medium/Expanded: 300dp；Large/ExtraLarge: 360dp |
-| 侧栏折叠 | `animateDpAsState` 宽度动画 + `clipToBounds` + `PanelLeftClose/Open` 按钮 |
-| 弹层 | `AdaptiveModal` 居中 `Dialog`（最大 640×760dp） |
-| 输入区 | 正常两行布局，`widthIn(max = 840dp)` 居中限宽 |
-| 消息列表 | `widthIn(max = 840dp)` 居中限宽 |
-| 次要页面 | 全屏逐页导航（不做双栏） |
-| 安全区 | `Scaffold(contentWindowInsets = 0)` + TopAppBar 自避让 |
-
-### 8.3 折叠屏（Foldable）
-
-#### 有竖向分隔铰链
-
-| 方面 | 方案 |
-|------|------|
-| 聊天布局 | 使用真实铰链坐标分为 `hinge.left + hinge.width + detail`，会话列表和聊天严格位于铰链两侧 |
-| 侧栏折叠 | **不可折叠**（`canCollapseChatSidebar = false`），避免聊天面板跨越铰链 |
-| 弹层 | `AdaptiveModal` 使用 `Alignment.CenterEnd`，限制到铰链真实右边界之后 |
-| 弹层宽度 | `min(SheetMaxWidth, windowWidth - hinge.right - safeInsets - 2×DialogPadding)` |
-
-#### 无竖向分隔铰链
-
-回到纯尺寸策略：满足普通宽屏条件时使用可折叠双栏，否则使用单栏；不会根据设备型号或“展开/闭合”名称猜测布局。
-
-#### 桌面半折（Tabletop）
-
-`isTabletop = true` 时强制 `SinglePane`。存在有效横向铰链坐标时，聊天页限制在 `hinge.top` 以上，输入区按上半屏实际高度决定是否紧凑，临时弹层使用上半屏受限 Dialog。若平台只报告 Tabletop 姿态而未提供有效坐标，仍保持单栏和 Dialog，但无法进一步按铰链位置裁切。
-
-### 8.4 矮横屏（heightDp < 480dp）
-
-- `useCompactChatInput = true`：收紧附件、输入框和 action row 的垂直间距；IME 隐藏时能力操作仍在 action row
-- IME 动画目标为显示时隐藏 action row；正常态把发送/取消放入 TextField trailing，ASR 录音态则放置 ASR 停止动作，保证任一组合态都有唯一可达的终止操作；目标隐藏时恢复 action row，避免依据当前帧 inset 来回抖动
-- 功能不删减，恢复正常高度后回到普通间距
-- 聊天保持单栏（`heightDp < 480` → `SinglePane`）
-
-### 8.5 各形态适配矩阵
-
-| 场景 | widthDp | heightDp | chatLayoutMode | 弹层 | 输入 | 侧栏折叠 |
-|------|---------|----------|---------------|------|------|---------|
-| 普通窄屏 | 390 | 844 | SinglePane | BottomSheet | 正常 | N/A |
-| 普通矮横屏 | 844 | 390 | SinglePane | BottomSheet | 紧凑 | N/A |
-| 竖向铰链窗口 | 900 | 800 | ListDetail | 右侧 Dialog | 正常 | 不可折叠 |
-| 中等宽屏边界 | 600 | 480 | ListDetail | Dialog | 正常 | 可折叠 |
-| 大宽屏 | 1280 | 800 | ListDetail | Dialog | 正常 | 可折叠 |
-| Tabletop（有横向铰链） | 1000 | 800 | SinglePane（上半屏） | 上半屏 Dialog | 按上半屏高度 | N/A |
-
----
-
-## 9. 导航图标方向
-
-| 按钮 | 图标 | 箭头方向 | 说明 |
-|------|------|---------|------|
-| 窄屏打开抽屉 | `Menu03` | 无 | 移动端惯例 |
-| 宽屏展开侧栏 | `PanelLeftOpen` | 朝左 | 指向面板方向，与 VS Code/Android Studio 一致 |
-| 宽屏折叠侧栏 | `PanelLeftClose` | 朝右 | 收起方向，与 VS Code/Android Studio 一致 |
-
----
-
-## 10. 安全区与窗口插入
-
-`MeasixTheme` 只提供页面配色和 CompositionLocal。`WindowSystemBars` 由 `RouteActivity.AppRoutes` 与 `SafeModeActivity` 的根宿主调用；Route 仅在恢复 Ready 且当前顶部为 WorkspaceTerminal 时使用深色系统栏，其余跟随根主题。嵌套主题及导出组合树不写 Window，也不维护恢复颜色栈。
-
-聊天抽屉展开、会话长按时先清除焦点再隐藏 IME。`ChatInputState.getContents` 不产生空白 Text，编辑历史时保留非空旧文本与附件顺序，纯附件可补正文；`isEmpty` 以最终 parts 为准，原附件释放仍交给原 owner。
-
-普通发送与仅发送不生成由 `ChatVM.handleMessageSend` 在 Starter 选择共用的操作锁内捕获输入。
-`SendMessageReceipt` 表示 USER 已提交；同一页面才用 `ChatInputState.completeSubmission` 清理匹配的文字和原附件实例。
-等待期间改写的文字、新增或重新添加的附件保留；清空/替换输入或进入历史编辑会使旧提交无法清理新草稿。
-提交前失败不调用清理，重复点击不排队追加同一输入；清理不等待模型响应，也不增加界面确认步骤。
-
-Provider/模型名称草稿允许内部空格，保存边界统一 trim 首尾；模型 ID 和并发目录不被改写。通用播放倍速仅在一般偏好的 TTS 组设置，复用 `defaultTTSPlaybackSpeed`，语音资源页不重复提供此入口。
-
-- 聊天页 `Scaffold` 设置 `contentWindowInsets = WindowInsets(0)`，让 TopAppBar 自己处理状态栏避让，避免 Scaffold 与 TopAppBar 重复计算状态栏高度导致顶部留白过多
-- 永久会话栏使用 `statusBarsPadding()` 处理顶部安全区
-- `ChatInput` 使用 `navigationBarsPadding()` 与 `imePadding()` 处理底部系统栏和软键盘
-- `AdaptiveModal` 居中 Dialog 使用 `safeDrawingPadding()` 确保不与系统栏重叠
-- edge-to-edge 模式下 `disableNavigationBarContrast()` 关闭系统导航栏对比度强制
-
----
-
-## 11. 渲染边界
-
-`ChatMessage` 消费 `ConversationPresentation` 的有序 Part，展示分组不得改写 durable transcript；工具审批、待执行和子助手卡片仍保持原 Step 的语义位置。Markdown、WebView、媒体及富文本交互的具体渲染 owner 由 [消息渲染管线](message-rendering-pipeline.md)说明，本篇只定义页面承载、导航与授权边界。
-
-## 12. 显示投影与生成管道的边界
-
-UI 消费 `ConversationPresentation` 的消息、typed phase、工具 locator 和附件预览映射，不持有 Runtime Job，也不据显示列表反推 durable 写入。工具交互经 application port 提交；`resultStatus` 表达结果存在性，不能代替活跃执行 phase 或详情页访问门禁。
-
-`ConversationPresentationSnapshot.context` 只携带需要展示的摘要/预置来源标签和外部变化 marker（创建 Step、接纳请求身份、变化类别）；不为 System、初始披露、恢复、开场或因果 USER 生成通用入口标记。`ConversationPresentationProjector` 以订阅内 durable 引用复用摘要，纯 streaming 不重新扫描历史；durable 更新以选中 owner 与接纳 entry 索引投影，不在列表加载正文。历史可读按保存的 owner/anchor 判断，不能与新请求的回放适用性混为一谈。
-
-`ChatMessage` 和子助手只读时间线在实际新增变化的 Step 边界显示短标签；消息“更多”和子助手请求区没有通用“上下文”入口。同一请求合并变化类别；不同通知按各自 Step 放在前一完整工具结果之后、受影响输出之前。首请求的标签在输出开头。仅通知边界切开思考/工具折叠组，普通 Step 不切分；后续请求或 Turn 沿用历史不增加标签。有通知但无生成正文的失败/取消消息仍可查看通知及原终态，没有通知的空消息维持原显隐。
-
-`ConversationContextDetails` 的自适应弹层标题是“上下文变化”，点击 marker 后固定 `requestId`，只展示该请求新产生的 EXTERNAL 条目和分区，不列出继承请求或“其他上下文”。`forUpdate` 在 UiModel 层筛选结构化内容，该条通知的完整原文和技术来源仍按需展开，混合 INITIAL/RESTORE 分区不冒充变化。详情保留唯一请求的时间与实际状态，接纳不代表模型已收到；后续更新不切换当前阅读对象。普通复制、编辑、TTS、分享及附件点击不变，Starter 继续从原开场入口查看，预置/摘要沿原署名位置标明来源。
-
-`ConversationQueryService.contextDetails` 保留授权请求目录查询，`observeContextDetails` 只在 durable 更新时刷新；纯投影运行于 Dispatchers.Default。`contextContent` 解析指定请求的目录并按需读取原文，Artifact 文本经 `ArtifactStore.readContextText` 校验资源身份，IO 前后重验页面 lease、域、所选 owner 及请求关联。相同 entry 的正文在弹层内复用，关闭、切域或切换 owner 后取消读取并拒绝迟到结果；异常保留原诊断。query 的全目录能力供既有调用/验证使用，不再作为普通消息通用浏览入口。
-
-`projectConversationContextContent` 从保存的正文和 typed source 投影归属、原因、增改移除、前后内容及背景顺序；不读当前 Settings。旧 EXTERNAL 记录没有差异时明确说明是当时完整同步状态；没有 admission 的历史原文仍可授权读取，但不伪造通知或请求。编辑历史 USER 不隐藏仍保存的所选助手通知，未选兄弟回复隔离；历史读取不会恢复失效 anchor 的回放资格。查询不重建完整 HTTP 快照，也不从今日前序 Assistant variant 推断旧请求内容。
-
-短标签与正文左边缘对齐，固定类别次序，完整读屏名称包含全部类别与“查看详情”；具体间距、分组与正文折叠规则见 [消息渲染管线](message-rendering-pipeline.md)。这些 UI 调整不改变注入、Provider、历史恢复或持久化边界。
-
-`ChatInputState` 的附件单一输入状态为 part 与本次选择 identity。提交捕获这批 identity，持久 Append 完成只清理仍属于本次提交的附件；移除后重新加入即使 payload 相同也属于新选择，迟到完成不得移除。输入框被替换或进入不同消息编辑时，旧提交不能清理新输入。
-
-`visualTransform()` 只形成流式显示投影，输入转换和终态输出处理归生成管道。Transformer 装配、顺序与提交时机统一见 [Turn/Step 执行链路](turn-step-execution.md)；图片请求表示与资源交接见 [多模态上下文与资源持久化](multimodal-context-and-turn-durability.md)。
-
----
-
-## 13. 验证边界
-
-自适应 UI 修改至少验证 Width Class 与 600dp/480dp 边界、手机竖屏、矮横屏、普通宽屏、平板、竖向折叠、
-Tabletop、无效或多个铰链，以及 Dialog 的 scrim、内容区和底部操作区点击契约。设备验收还应覆盖：
-
-- 普通窄屏、普通宽屏、竖向铰链展开、折叠外屏和 Tabletop 姿态切换
-- 会话栏折叠/展开、单栏抽屉、宽屏 Dialog 与窄屏 BottomSheet
-- 切换会话助手后标题、模型、搜索、推理、快捷消息及实际请求模型保持一致
-- 设置等非聊天页面在宽屏下仍沿用原有全屏布局
-- 聊天会话相册从被点图片翻页、Markdown 正文图仍单张、文生图 1–4 张结果与 Gallery/文件管理集合浏览
-- 查看器单击关闭、未放大竖直拖拽关闭、放大后只平移、保存/设背景 Toast 画在 Dialog 内
-
----
-
-## 14. 设计边界与平台回退
-
-- 双栏只属于聊天主界面；设置、历史、统计等页面保持原有全屏逐页导航，这是当前职责边界，不是待补齐的自适应场景
-- 折叠策略只使用 WindowManager 实际报告且通过窗口边界校验的 separating hinge；未报告铰链时按普通窗口处理，不根据机型、分辨率或屏幕比例猜测
-- `chat_sidebar_expanded` 是持久化的用户偏好；普通宽屏恢复时沿用上次状态，竖向分隔铰链场景则无条件显示两侧面板
-- Tabletop 需要有效横向铰链坐标才能裁切到上半屏；只有姿态而没有坐标时采用安全回退：单栏 + Dialog，但不执行位置猜测
-- Dialog 分支不组合 BottomSheet，调用方必须维护自己的可见状态；传入的 `sheetState` 只对 BottomSheet 分支有实际 UI 含义
-
----
-
-## 15. 子助手入口与语音控制
-
-Assistant 配置页提供 Target 类别、全局可见与 Caller 访问范围设置；关闭 Target 类别时会原子清理全局可见和反向授权。普通选择器默认隐藏 Target，可通过筛选显式显示；搜索同时匹配名称与路由描述。
-
-主聊天把 `assistant_call` 渲染为独立 `SubAssistantCallCard`。卡片显示 Target、request、运行状态、有界文本预览和桥接的 `ask_user`，整卡携带原页面 lease 进入 `SubAssistantDetail(runId, source)`。`SubAssistantDetailReader` 校验原域、run 与 Child 关系，详情页通过 `ChatMessage(readOnly = true)` 与不提供输入区来禁止修改型交互。
-
-TTS 控制条由当前 worker 的 `isSpeaking` 决定可见性，暂停不隐藏。暂停优先于底层播放器状态。同 turn 新内容继续入队，新 turn 替换整条队列；`stop` 释放所有权。控制条只在当前播放来源为 Target 且该 Assistant 开启 `useAssistantAvatar` 时显示 Target 头像。
-
-聊天页在 `ChatPageContent` 的 `Scaffold` 内容层承载 `TTSController`，以 `innerPadding` 提供的输入面板实测上沿为底边，
-再留出 8dp 间距。工具条与输入卡片使用相同的 8dp 横向外边距，起始边缘对齐。
-两者共用 `ChatOverlaySurface` 的透明度与模糊规则；工具条不叠加独立的 tonal elevation 或阴影。
-输入面板已包含 IME 和导航栏避让；工具条消费同一 `contentPadding` 后才处理剩余 `safeDrawing` 与 `ime`
-insets，不能重复加上键盘高度。多行、编辑态、附件及键盘变化均跟随本次布局的实测边界，不记录坐标或猜测输入高度。
-工具条与输入区使用相同的居中可读宽度，位于聊天详情栏和 Tabletop 内容边界内；不占用聊天布局空间，也不覆盖输入面板。
-非聊天页面由 `RouteActivity` 承载窗口安全底部覆盖层，聊天 Loading/Missing/Failed 状态也保留这类无输入面板的播放控制。
-只有精确匹配当前活动 NavKey 的聊天页面组合工具条，退出动画中的旧页面不保留第二条控制栏。工具条不支持自由拖动，
-工具条以外的区域不拦截页面触摸。
-窄窗口或大字体下可横向滚动工具条，保持展开后的所有操作可达。头像读取根层提供的 `LocalSettings`，
-不自行订阅配置 Store。承载页面切换不改变播放 owner；其他 Activity 和独立 Dialog 窗口不承载此覆盖层。
-
-完整配置、执行状态、详情解析和生命周期见 [sub-assistant-architecture.md](sub-assistant-architecture.md)。
-
-### 文件编辑正文的生命周期
-
-WorkspaceFileEditorPage、SkillDetailPage 的 EditFileDialog/AddFileDialog、SkillsPage 的 AddSkillDialog 只在当前 composition 内存中保留正文，不将正文放入 rememberSaveable、SavedStateHandle 或导航参数。小路径、名称、查询和显示状态可保存；Activity 重建与进程恢复后的未保存正文不承诺恢复，文件编辑重新读取 owner 已发布内容。普通后台停留未重建 Activity 时仍保留内存正文。
-
-四个入口共用 FileEditorState/FileTextEditor。FileEditorState 持有一个 Editable，通过 Editable.Factory 与原生 FileEditText 共用；revision 只用于驱动派生投影，snapshot 用于解析和提交，不另存可写正文。FileEditText 同时禁用自身及父级 View 状态保存，避免原生 EditText 把完整正文再次塞进 Bundle；只读切换保留同一个 buffer。Workspace 使用有限全屏视口，Skill 弹层保留各自行数范围。样式由 Compose 显式传入；纯文本文件编辑保留平台 EditText 的 buffer/输入协议，不引入 AppCompat 的 emoji/content adapters，AppCompatCustomView 仅在该类精确豁免，其他 Lint 检查保持。
-
-FileEditorInputConnection 只限制 IME 查询传输，不截断文件正文。before/after 各最多 4096 字符；surrounding 前后窗口各最多 2048 字符，含选区的返回文本超过 4096 时不提供结果，selected/snapshot 同样拒绝过大结果，避免截断后伪造 offset/selection。全文 extracted text 及 MONITOR 不注册，防止后续全文推送绕过查询限制。可选光标几何更新不注册（requestCursorUpdates 返回 false），手写几何查询经传入 executor 回调 CODE_UNSUPPORTED，避免大 composing span 或覆盖全文的矩形形成巨型几何回包。输入、组合、删除和选择沿原生连接执行；复制与文件保存读取完整正文，不受 IME 窗口限额影响。
-
-Workspace 编辑以 workspaceId/area/path、Skill 编辑以 skillName 绑定 composition 与协程生命周期。读写异常保留原 cause，保存失败保留正文；busy 防止重复确认，取消和失败用 finally 收口。配置命令成功才关闭 Skills、Workspace 和快捷消息的编辑/删除窗口。快捷消息整项删除仍由原 Settings 更新同时移除 assistant.quickMessageIds，不复制引用清理逻辑。
+纯布局与投影策略先做 JVM 验证，系统窗口、键盘、触觉和交互绑定由设备测试证明，分层要求见
+[测试策略](testing-strategy.md)。

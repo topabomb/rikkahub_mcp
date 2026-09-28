@@ -1,6 +1,6 @@
 # 助手配置参考
 
-本文说明 Assistant 的持久化字段、默认值、解析规则和配置消费边界。内部受管 overlay 与本地 shadow 的关系统一见 [Android 配置架构](android-configuration-architecture.md)；生成协议见 [Turn/Step 执行](turn-step-execution.md)，子助手运行见 [子助手架构](sub-assistant-architecture.md)。
+本文说明 Assistant 的持久化字段、默认值、解析规则和配置消费边界。用户定义、企业发布定义与本域使用偏好的关系统一见 [Android 配置架构](android-configuration-architecture.md)；生成协议见 [Turn/Step 执行](turn-step-execution.md)，子助手运行见 [子助手架构](sub-assistant-architecture.md)。
 
 ## 1. 数据归属与解析
 
@@ -59,7 +59,7 @@
 | `modeInjectionIds` | 空集合 | 关联的 `PromptInjection` |
 | `enableTimeReminder` | `false` | 是否注入跨时段提醒 |
 | `allowConversationSystemPrompt` | `false` | 是否允许会话覆盖 System Prompt |
-| `allowConversationPromptInjection` | `false` | 是否允许会话追加注入项 |
+| `allowConversationPromptInjection` | `false` | 是否改用会话选择的注入集合；开启后不合并助手集合 |
 
 `systemPrompt` 的占位符、`messageTemplate` 变量、注入位置及最终请求顺序统一由
 [提示词、上下文注入与工具描述](prompts-and-tools.md) 维护。
@@ -167,7 +167,7 @@ code point 限制长度。关闭 `allowAsSubAssistant` 时，`normalizeForPersis
 | `AssistantDelegation` | `assistant_call` |
 | `TextToImage` | `generate_image`（默认图片模型有效时；Master 与 Target 均可） |
 
-工具是否需要审批由具体 `Tool.needsApproval` 决定，而不是由枚举统一决定。`generate_image` 仅在 `set_as_background=true` 时审批。Target 非交互下该审批仍返回 `tool_not_permitted`。
+工具是否需要审批由参数解析与纯校验后的 `Tool.interactionRequirement` 决定，而不是由枚举统一决定。`generate_image` 仅在 `set_as_background=true` 时审批。Target 非交互下该审批仍返回 `tool_not_permitted`。
 
 ### `PromptInjection`
 
@@ -181,11 +181,15 @@ code point 限制长度。关闭 `allowAsSubAssistant` 时，`normalizeForPersis
 |----|----------|
 | `BEFORE_SYSTEM_PROMPT` | System Prompt 之前 |
 | `AFTER_SYSTEM_PROMPT` | System Prompt 之后 |
-| `TOP_OF_CHAT` | 聊天消息顶部 |
-| `BOTTOM_OF_CHAT` | 最新输入之前 |
-| `AT_DEPTH` | 从最新消息向前按 `injectDepth` 定位 |
+| `TOP_OF_CHAT` | 保留历史中首条 USER 前；不存在 USER 时在历史末尾 |
+| `BOTTOM_OF_CHAT` | 保留历史中末条消息前，不等同于最新 USER 前 |
+| `AT_DEPTH` | 从保留历史末尾按持久化消息计数，深度最小为 1 |
 
-同位置注入按 `priority` 排序；已禁用或未被助手/会话选中的项不进入请求。
+`allowConversationPromptInjection=true` 时使用会话选择集，否则使用助手选择集，两者不合并。
+仅启用且被选中的规则进入请求；按 priority 降序，同优先级保留目录顺序。同一插入点只合并相邻且 role 相同的规则。
+深度不计 System、请求合成消息和仅含 Step 的占位消息。规则不得拆开工具调用/结果的安全边界，
+也不能插在时间提醒与其 USER 之间；位置由 `PromptInjectionTransformer` 统一计算。
+这是显式选择与位置规则，不是关键字触发或事件订阅机制。
 
 ## 4. 默认助手与工具创建助手
 

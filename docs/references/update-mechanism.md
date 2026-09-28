@@ -39,24 +39,8 @@ ChatDrawer 组合
 MeasixPilot <VERSION_NAME> #<VERSION_CODE>
 ```
 
-远程 JSON 映射为：
-
-```kotlin
-@Serializable
-data class UpdateInfo(
-    val version: String,
-    val publishedAt: String,
-    val changelog: String,
-    val downloads: List<UpdateDownload>,
-)
-
-@Serializable
-data class UpdateDownload(
-    val name: String,
-    val url: String,
-    val size: String,
-)
-```
+远程 JSON 的 `UpdateInfo` 包含版本、发布时间、changelog 和下载项；每项 `UpdateDownload`
+包含展示名称、URL 与大小字符串。类型和默认值由 `UpdateChecker.kt` 维护。
 
 未知 JSON 字段会被忽略；HTTP 非成功状态、网络异常或反序列化失败都转换为 `UiState.Error`，不影响聊天功能。
 

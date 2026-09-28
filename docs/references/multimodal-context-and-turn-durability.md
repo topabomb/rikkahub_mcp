@@ -2,13 +2,13 @@
 
 本文定义附件身份、请求级媒体投影，以及 Artifact 与工具输出资源的持久化交接。通用 checkpoint 和取消协议见
 [Turn/Step 执行链路](turn-step-execution.md)；子助手特有的入站和交付物见
-[子助手多模态](sub-assistant-multimodal.md)。
+[子助手附件交付](sub-assistant-architecture.md#附件输入与交付)。
 
 ## 1. 行为总览
 
 ```text
 用户上传 / 工具产出媒体
-    │  AttachmentRefs.ensureAttachmentRef() 盖章（持久事实，一次性）
+    │  AttachmentRefs.ensureAttachmentRef() 写入附件元数据（持久事实，一次性）
     ▼
 durable Conversation
     Image part（url + metadata.attachment_ref）+ Artifact
@@ -31,7 +31,7 @@ Tool Result checkpoint（消息与 Artifact 引用同事务）
 
 ## 2. 附件事实
 
-### 2.1 stable attachment ref
+### 2.1 稳定附件引用
 
 - 格式：`attachment:<uuid>`（`AttachmentRefs` 前缀常量）。
 - 存储：多媒体 part 的 `metadata` 中的 `attachment_ref` 键，merge 语义（保留其他 metadata 键）。
@@ -42,17 +42,17 @@ Tool Result checkpoint（消息与 Artifact 引用同事务）
 - `AttachmentReferenceLookup` 只索引多媒体 part 的合法 ref；同一 ref 同时出现在 `Tool.output` 直接媒体与
   `sub_assistant_call.artifacts[]` manifest 是正常双表示，直接媒体优先、manifest 作为回退。等价资源的重复声明复用同一逻辑附件；多个不同 direct 资源或仅 manifest 间的不一致声明 fail-closed，不按遍历顺序选取。
 
-### 2.2 盖章位置
+### 2.2 附件元数据写入位置
 
 媒体进入持久消息的入口都调用 `ensureAttachmentRef`：
 
 | 入口 | 说明 |
 |------|------|
 | 用户上传 / 编辑消息 | `ConversationApplicationService` / `ConversationTurnService` 提交前 |
-| `generate_image` 产出 | 工具成功时对 Image part 盖章 |
+| `generate_image` 产出 | 工具成功时对 Image part 写入附件元数据 |
 | MCP 图片内容 | `McpToolCallExecutor` 转本地文件时 |
-| base64 图片 | `Base64ImageToLocalFileTransformer` 经 `ArtifactStore` 终态落盘并盖章 |
-| `assistant_call` 注入 Child | 为新 Image part 盖章；原文件身份不变，不复制 payload |
+| base64 图片 | `Base64ImageToLocalFileTransformer` 经 `ArtifactStore` 终态落盘并写入附件元数据 |
+| `assistant_call` 注入 Child | 为新 Image part 写入附件元数据；原文件身份不变，不复制 payload |
 | 历史消息补章 | 仅在 `ConversationTurnService` 的 START structural preflight 由 `planDurableAttachmentRefBackfills` / `BackfillAttachmentRefs` 执行；会话加载与恢复只做校验，不由 UI/query 旁路补章 |
 
 所有字节型图片入口都在创建 durable artifact 前限制输入规模并校验实际内容：
@@ -74,7 +74,7 @@ Tool Result checkpoint（消息与 Artifact 引用同事务）
 | 托管文件路径 | `/upload/<file>` | 识别、委托与 workspace 读取使用同一路径；前两者不依赖工作区 | `[Attachment path=...]`、Tool Result `file.path`、子助手 `artifacts[].path` |
 | 工作产物路径 | `/workspace/...` | workspace 工具族读写 | workspace 工具结果；不属于附件识别输入 |
 
-`/upload` 挂载会话共享的只读文件（用户上传与生成媒体）。内部数据库 id 不进入模型可见 JSON。
+`/upload` 是受管文件的工具访问路径，读取由 ArtifactStore 授权。Shell 只获得本次 `uploads` 显式列出的本域授权副本，PTY 不挂载 upload；具体见 [Workspace](workspace-architecture.md)。内部数据库 ID 不进入模型可见 JSON。
 
 新托管文件由 `AssetFileNames.candidates()` 生成四个随机候选主体，顺序固定为 base36 的 6、7、8 位及 base62 的 8 位。字符集分别为 `0-9a-z` 与 `0-9a-zA-Z`；每档使用 `ThreadLocalRandom.current().nextLong(bound)` 整体取样后定宽编码，不查重、不做 IO。候选、最终落盘文件名和模型引用均无来源前缀，来源继续由既有 `ArtifactOrigin` metadata 表达。扩展名经 `FileUtils.safeExtension` 校验，生图按实际图片格式确定。
 
@@ -84,7 +84,7 @@ Tool Result checkpoint（消息与 Artifact 引用同事务）
 
 图库原件与聊天副本各自归原 owner，允许有不同短名；模型只披露聊天副本的真实 `/upload` 路径，不再重复披露 `name` 或混入图库原名。用户可见的原始上传名称仍保存在现有 displayName。已有文件、UUID、metadata 字段与内容均不改；旧长路径按同一规则使用，不建别名、不按相似名称或忽略大小写纠错。
 
-路径查重沿用 Artifact 的 `relative_path` 唯一索引；图库使用 `GenMediaEntity.path` 普通索引。schema、索引与备份升级边界见 [database-indexing.md](database-indexing.md)。
+路径查重沿用 Artifact 的 `relative_path` 唯一索引；图库使用 `GenMediaEntity.path` 普通索引。schema、索引与备份升级边界见 [数据持久化](data-persistence.md)。
 
 ### 2.4 文件可用性
 
@@ -98,10 +98,9 @@ Tool Result checkpoint（消息与 Artifact 引用同事务）
 
 消息引用提取统一使用 `collectArtifactReferences`，递归覆盖媒体 part、工具直接 artifact，以及 `sub_assistant_call.artifacts[].artifact`；模型请求不读取 archive marker 的原文，其归档 payload 仍由独立工具读取边界保护。
 
-
 会话预览投影沿 durable header 的 scope 校验文件；子助手终态交付沿原执行 scope 校验图片和文档等媒体。Artifact 的预览入口在 lifecycle lock 内统一验证 ACTIVE、完整主体、已解除创建 pin、匹配的 MIME 和 upload/images canonical 根；图片另做有界内容校验。返回的 URL 只是投影结果，不能替代后续解码或导出的授权。创建 pin 解除后，原 owner 通过 `lifecycleChanges` 合并内存发布通知和两个目录的数据库变化，使先于交接完成的空预览重新计算；该通知不保存文件事实、不推进配置 generation。
 
-会话写入在原 Artifact lifecycle lock 内，用 durable header 的 scope 准备引用 delta；跨域文件使提交失败，不静默删除引用。启动时 `ensureReferenceProjection` 同样核验归属，并在全量准备成功后才事务替换投影与完成标记。v19 迁移将既有行归为个人，保留文件、ID 和路径。
+会话写入在原 Artifact lifecycle lock 内，用 durable header 的 scope 准备引用 delta；跨域文件使提交失败，不静默删除引用。启动时 `ensureReferenceProjection` 同样核验归属，并在全量准备成功后才事务替换投影与完成标记。`Migration_11_12` 将既有行归为个人，保留文件、ID 和路径。
 
 - 文件被清理后，历史消息仍保留 Image part 与 ref；请求投影不为失效本地资源披露可用路径。历史文本中的旧引用若被再次调用，Resolver 按真实可用性失败，不伪造内容。
 - 模型读到 `[Attachment path=...]` 表示投影时存在可用受管路径，不保证后续调用时文件仍然存在；工具执行必须重新校验。
@@ -115,7 +114,7 @@ Tool Result checkpoint（消息与 Artifact 引用同事务）
 - Resolver 只接受安全 `/upload` 路径，由 `ArtifactStore.withUploadImages` 校验 ACTIVE、已发布、文件存在、受管根目录、大小与实际图片内容；仅 payload 存在不能认领孤儿文件。路径读取不要求当前会话引用，不依赖 Workspace。
 - Fork/Child clone 只按本次已经取得的文件复制映射，重绑定 `inspect_attachments` 与 `assistant_call` 的
   `attachments` 输入数组中的 `/upload` 路径，使工具卡查询和后续引用指向新会话副本。UUID、其他字段与正文不改，
-  未复制的路径不触发额外文件复制，查询层不增加源路径别名；详见子助手多模态参考的文件寿命与 fork 协议。
+  未复制的路径不触发额外文件复制，查询层不增加源路径别名；分支复制及引用保全见 [子助手](sub-assistant-architecture.md#附件输入与交付)。
 
 助手预设消息进入主聊天或子助手时，`ArtifactStore.materializeConfigurationMessages` 先按已提交的共享/本主体配置根校验并保留源，再去重复制为目标 scope 的独立附件。现有 `AttachmentCloner` 使用这份复制映射重写媒体、工具交付 metadata、嵌套输出与归档 ID/marker；复制后的每个文件必须仍有消息引用。源 scope、原消息和逻辑附件 handle 不变，不新增表或目录别名。
 
@@ -140,17 +139,17 @@ Draft 预览、读图和附件导出通过原 `ConversationViewLease` 查询其 
 上传 Artifact 与图库生成媒体保持独立 owner，不存在共享目录扫描删除器：
 
 - 上传文件由 `ArtifactStore` 从 durable metadata 选取候选，在同一 lifecycle lock 内重验 retention pin、消息引用和 Settings roots，并复用单项 CREATING / ACTIVE / DELETING 状态机；
-- 图库媒体由 `GeneratedMediaStore` 从 canonical row 选取候选，在 persist lock 内复用单项删除协议。row 删除成功而 payload 暂未清除时返回 `cleanupPending`，保留删除 tombstone，由启动 reconcile 继续收口；row 删除失败则恢复原 payload 身份；
+- 图库媒体由 `GeneratedMediaStore` 从 canonical row 选取候选，在 persist lock 内复用单项删除协议。row 删除成功而 payload 暂未清除时返回 `cleanupPending`，保留删除 tombstone，由启动恢复继续清理；row 删除失败则恢复原 payload 身份；
 - 文件目录和候选 SQL 都限定明确 scope；单项删除在 owner 锁内复验 metadata 归属，不能用本域令牌操作其他域的 ID。恢复和 GC 仍由全局 owner 遍历全部主体。
 - FileManagementQueryService 将上传和生成媒体合成携带原 RealmSelection 的目录；统计以该目录的登记条目为准，生成媒体大小读取对应原件，不扫描未登记文件。查询失败有明确失败状态和同域重试入口，统计不可用显示 `—`。
 - 设置文件页按选择重建确认框和预览；图库分页与会话目录复用 selectedRealmPaging，切换时撤销旧数据源，迟到消费不发布已撤权行；删除始终携带原选择，即使离开后回到同域也不能复活旧确认。
 - 候选计数只用于确认提示，不锁定待删集合；真正执行时由 owner 在锁内重新取候选。取消在单项之间传播，已经取得删除所有权的单项按既有终态或补偿协议完成；
 - 两个领域分别返回结构化结果。`FileManagementApplicationService` 只映射为 UI 所需的 `deleted`、`cleanupPending`、`skippedInProgress` 与 `failed`，不把部分成功压成 Boolean，也不为没有该状态的领域伪造结果；
-- `FileManagementApplicationService` 的 owner 命令与 `FileManagementQueryService` 中会读取 row/payload 状态的列表、分页、统计和检查均等待全局 `ApplicationRecoveryGate`。纯 canonical-root 路径分类不读取 row 或 payload 状态，只用于本地图片来源标签。`ApplicationRecoveryCoordinator` 在发布文件读写能力前依次完成 Artifact 与 GeneratedMedia reconcile，页面不会观察或操作尚未收口的 tombstone、staging 或孤儿 payload。
+- `FileManagementApplicationService` 的 owner 命令与 `FileManagementQueryService` 中会读取 row/payload 状态的列表、分页、统计和检查均等待全局 `ApplicationRecoveryGate`。纯 canonical-root 路径分类不读取 row 或 payload 状态，只用于本地图片来源标签。`ApplicationRecoveryCoordinator` 在发布文件读写能力前依次完成 Artifact 与 GeneratedMedia reconcile，页面不会观察或操作尚未完成恢复处理的 tombstone、staging 或孤儿 payload。
 
 图片生成页的参考图由 `ImgGenVM` 一次性消费打开时的 `ImageReferenceImport`；`FileManagementApplicationService.importImageReference` 在复制前后验证原选择并沿用 `TemporaryImage` 的图片校验与失败清理。缩略图借用带原选择和任务身份的 `ImageSource`，不直接读取文件路径。只有已交给生成请求的副本按实际任务借用延迟删除，其余副本立即清理。
 
-输入框由原 `ArtifactDraftScope.describeInputs` 同时投影附件名称和图片 `ImageSource`；按规范化路径和 scope 匹配，不订阅全局上传目录，也不按 basename 反查其他文件。草稿新导入的图片必须同时通过原 draft 所有权和 Artifact 创建 token 校验；编辑已有图片则验证同域已发布 ID，不能读取其他创建者尚未发布的文件。读取遵守 Session → Draft → Artifact 锁序，返回前复验原页面、选择和草稿状态。提交认领后原草稿不能读取已交出的图片；拒绝退回由同一 owner 恢复原创建权。`ConversationTurnService.sendMessage` 在安装被拒绝或首条 Append 未提交时，通过 `ArtifactDraftScope.returnToDraft` 归还创建权；首发失败回执必须等待归还完成。编辑器已关闭时释放创建 pin，仍打开时保留输入及附件供重试。取消若发生在 Append 提交期间，以 Runtime 已发布的 USER 身份判定提交成功；已提交消息的附件不退回草稿，后续发布失败仍由 durable 引用保护。`startRequest` 的准备、发布与清理失败通过 `userVisibleDiagnostic` 保留异常类型、原始 message 与 cause，写入 `ChatError` 并记录完整异常栈；取消继续传播而不显示为错误。`inputRevision` 仅通知同一草稿的所有权变更，驱动查询与输入缩略图重试，不保存第二份附件事实，也不推进企业配置 generation。名称读取失败可回退显示，取消继续传播。生成 partial 的文件与图片对象由同一次创建返回；预览借用 enqueue 外层请求 Job，在短期 collector 结束后仍可读取，创建检查原 RealmAccess，显示检查原 RealmSelection。图像页切域仍显式取消并清空本页请求。图像页取消沿 enqueue 的原请求收口，Coordinator 的取消返回前等待真实执行结束；下个页面请求等待旧协程完成，旧图片投影不能跨选择继续展示。
+输入框由原 `ArtifactDraftScope.describeInputs` 同时投影附件名称和图片 `ImageSource`；按规范化路径和 scope 匹配，不订阅全局上传目录，也不按 basename 反查其他文件。草稿新导入的图片必须同时通过原 draft 所有权和 Artifact 创建 token 校验；编辑已有图片则验证同域已发布 ID，不能读取其他创建者尚未发布的文件。读取遵守 Session → Draft → Artifact 锁序，返回前复验原页面、选择和草稿状态。提交认领后原草稿不能读取已交出的图片；拒绝退回由同一 owner 恢复原创建权。`ConversationTurnService.sendMessage` 在安装被拒绝或首条 Append 未提交时，通过 `ArtifactDraftScope.returnToDraft` 归还创建权；首发失败回执必须等待归还完成。编辑器已关闭时释放创建 pin，仍打开时保留输入及附件供重试。取消若发生在 Append 提交期间，以 Runtime 已发布的 USER 身份判定提交成功；已提交消息的附件不退回草稿，后续发布失败仍由 durable 引用保护。`startRequest` 的准备、发布与清理失败通过 `userVisibleDiagnostic` 保留异常类型、原始 message 与 cause，写入 `ChatError` 并记录完整异常栈；取消继续传播而不显示为错误。`inputRevision` 仅通知同一草稿的所有权变更，驱动查询与输入缩略图重试，不保存第二份附件事实，也不推进企业配置 generation。名称读取失败可回退显示，取消继续传播。生成 partial 的文件与图片对象由同一次创建返回；预览借用 enqueue 外层请求 Job，在短期 collector 结束后仍可读取，创建检查原 RealmAccess，显示检查原 RealmSelection。图像页切域仍显式取消并清空本页请求。图像页取消通过 enqueue 的原请求完成取消与清理，Coordinator 的取消返回前等待真实执行结束；下个页面请求等待旧协程完成，旧图片投影不能跨选择继续展示。
 
 ## 3. 请求级投影（`AttachmentProjectionTransformer`）
 
@@ -202,7 +201,7 @@ Draft 预览、读图和附件导出通过原 `ConversationViewLease` 查询其 
 | 工具产出 | 原 `UIMessagePart.Tool.output` | Chat `role=tool`、Responses `function_call_output`、Claude `tool_result`、Gemini `functionResponse` |
 | 助手原生产出 | 原 ASSISTANT message 的 parts | assistant/model content；Responses 有原始 `response.output` 时先无损回放，再追加 request-only assistant 事实 |
 
-`role` 只存在于消息层；`parts` 内没有第二层 role。投影器因此不创建伪造的 USER 消息，而是在已有来源容器内替换或前置对应 Image 的事实文本。工具结果在 Claude/Gemini 外层虽然使用 user role，但由 typed `tool_result` / `functionResponse` 明确标识，模型不会把它当普通用户输入。
+`role` 只存在于消息层；`parts` 内没有第二层 role。投影器因此不创建伪造的 USER 消息，而是在已有来源容器内替换或前置对应 Image 的事实文本。工具结果在 Claude/Gemini 外层虽然使用 user role，但由 typed `tool_result` / `functionResponse` 在线协议中明确标为工具结果；客户端不据此保证模型的理解或遵循行为。
 
 ## 4. `inspect_attachments`（按需识别）
 
@@ -234,13 +233,13 @@ Draft 预览、读图和附件导出通过原 `ConversationViewLease` 查询其 
 
 - `AttachmentInspectionTool` 通过捕获的 `ModelRequests` 发起独立识图请求；借用视图只提供执行能力，原 Runtime 的 `ModelExecutionLease` 唯一持有并释放共享企业 binding，关闭后全部角色立即不可再准入。工具不持有另一份凭据 owner。
   各请求复验原助手、原模型及 Child caller/target 授权，保持原 endpoint/protocol/model shape。CHAT 使用原助手的有效模型选择，识图使用本域识图选择；两者分别冻结，不受后续用户选择变动影响。用户凭据从原 owner 刷新，企业私有 header/凭据走相同受管请求边界。
-  `RequestMediaCapabilities` 在捕获时冻结，IMAGE 模型必须提供结构化 USER 图片编码；远端不兼容由真实 Provider 分类错误表达。企业本地示例接收同样的图片请求并明确返回模拟结果，不调用网络或声称真实识图。
+  `RequestMediaCapabilities` 在捕获时冻结，IMAGE 模型必须提供结构化 USER 图片编码；远端不兼容由真实 Provider 分类错误表达。企业执行沿原平台 binding 和准入协议，测试中的模拟响应不代表产品中的独立执行来源。
 - paths 与产出 1:1、顺序稳定，重复路径保留对应图片位置；内部标签使用原请求路径。识图与委托入口均不接受 UUID、HTTP(S)、file URI、workspace 或越界路径，不提供旧参数兼容入口。
 - `ArtifactStore` 在同一 lifecycle lock 内校验原操作 scope、ACTIVE/已发布并取得既有 retention pin，锁外读取；成功、失败和取消都在 finally 释放。
   识图内存快照复用 FileEncoder 的压缩、EXIF 方向和格式转换，不以 raw data URI 绕过现有图片编码；网络调用不持有磁盘文件，也不创建副本。
 - 未注入 resolver 的执行环境统一返回 `attachment_resolution_unavailable`，不静默成功。
 - 识别无缓存；结果作为显式 Tool Result 已是正确的历史记录。
-- 失败 reason 原样透传（表见 [prompts-and-tools.md](prompts-and-tools.md)）。
+- 失败 reason 原样透传，代码含义见 [提示词与工具](prompts-and-tools.md)。
 
 ### 4.3 设置与迁移
 
@@ -252,7 +251,7 @@ Draft 预览、读图和附件导出通过原 `ConversationViewLease` 查询其 
 | 链路 | Transformer 顺序要点 |
 |------|---------------------|
 | Master 聊天 | `DocumentAsPromptTransformer` → Template → 可选 `ToolArtifactReplayTransformer` → `AttachmentProjectionTransformer`；Workspace 说明在 START 并入冻结 System |
-| `generate_image` 产出 | 成功时 Image part 落入本次 Tool.output 并盖章；下一个 step 的请求由投影管线回放（原图或引用行）。识别这张图 = 把它的 `file.path` 传给 `inspect_attachments` |
+| `generate_image` 产出 | 成功时 Image part 落入本次 Tool.output 并写入附件元数据；下一个 step 的请求由投影管线回放（原图或引用行）。识别这张图 = 把它的 `file.path` 传给 `inspect_attachments` |
 | Target（`assistant_call`） | Child 拥有完整 Assistant 级 transformer 链 + 自己的 resolved model；入站只校验 path / 资产，视觉能力由 Target run 自己的投影与工具集表达；`AttachmentProjectionTransformer` 同样位于动态模板之后、Provider 序列化之前 |
 
 披露快照、条数窗口和请求规划由 [request-context.md](request-context.md) 定义；附件投影只处理已有媒体事实，不生成披露 entry 或会话摘要。
@@ -263,13 +262,13 @@ Draft 预览、读图和附件导出通过原 `ConversationViewLease` 查询其 
 
 同一次 base64 output transform 产生的多个 Artifact 只注册一个 `unpublishedBatchLease`。`ArtifactStore.publishAllUnpublished` 在交接前验证整批 durable roots 与 ownership token；失败或取消精确清理该 owner 取得的未发布资源，不留下半批发布状态。
 
-Artifact metadata、引用和生命周期归 `ArtifactStore`；`ArtifactPayloadStore` 只处理磁盘 IO。启动时按 CREATING / ACTIVE / DELETING 状态与 durable roots 收口，不能仅凭 payload 存在认领资源。图库生成媒体由 `GeneratedMediaStore` 独立恢复；全局恢复门禁在两者完成前阻止文件查询和写入。
+Artifact metadata、引用和生命周期归 `ArtifactStore`；`ArtifactPayloadStore` 只处理磁盘 IO。启动时按 CREATING / ACTIVE / DELETING 状态与持久化根引用完成恢复，不能仅凭 payload 存在认领资源。图库生成媒体由 `GeneratedMediaStore` 独立恢复；全局恢复门禁在两者完成前阻止文件查询和写入。
 
 `ConversationContextBody.Artifact` 以 Artifact ID 与相对路径共同定位已渲染的不可变正文。`ArtifactStore.readContextText` 在生命周期锁内校验原 scope、ACTIVE、发布状态、ID/path、文本类型及真实文件；旧路径复用不能替换历史正文。读取返回原文本，不再次执行模板。接纳前创建仍返回 `OwnedArtifact`，Conversation 提交 durable root 后才由原资源 lease 发布，失败或取消精确回收尚未交接的正文。
 
-上下文正文使用原 `artifact_reference` 的 `CONTEXT` 类型，引用归 entry 的 owner node；无需另一张引用表。`prepareReferenceDelta` 分开替换消息附件引用和上下文引用：普通消息更新保留上下文，context-only 提交也取得同一个生命周期锁并在 Conversation 事务更新引用。Fork 各自建立节点引用，删除一个 owner 不释放其他消费者使用的正文；最后引用消失后由原 GC 收口。启动投影版本 `artifact_reference_projection_context_v4` 从消息树与上下文条目共同重建。备份先在完整来源库验证上下文 Artifact scope，再按会话域过滤、重建引用；个人恢复保留本机企业正文及引用。显式删除的文件保持历史不可用，不因路径相同重新绑定另一个 Artifact。
+上下文正文使用原 `artifact_reference` 的 `CONTEXT` 类型，引用归 entry 的 owner node；无需另一张引用表。`prepareReferenceDelta` 分开替换消息附件引用和上下文引用：普通消息更新保留上下文，context-only 提交也取得同一个生命周期锁并在 Conversation 事务更新引用。Fork 各自建立节点引用，删除一个 owner 不释放其他消费者使用的正文；最后引用消失后由原 GC 回收。启动投影版本 `artifact_reference_projection_context_v4` 从消息树与上下文条目共同重建。备份先在完整来源库验证上下文 Artifact scope，再按会话域过滤、重建引用；个人恢复保留本机企业正文及引用。显式删除的文件保持历史不可用，不因路径相同重新绑定另一个 Artifact。
 
-工具副作用之前的 STARTED、checkpoint、终态 CAS、UNKNOWN 与父子恢复顺序统一见 [turn-step-execution.md](turn-step-execution.md)。资源 durability 复用这条提交链，不建立第二张执行表或旁路写协议。
+工具副作用之前的 STARTED、checkpoint、终态 CAS、UNKNOWN 与父子恢复顺序统一见 [turn-step-execution.md](turn-step-execution.md)。资源持久化保证 复用这条提交链，不建立第二张执行表或旁路写协议。
 
 `GeneratedMediaStore.commit` 以同步 `receiveChatArtifact` 回调明确聊天副本的接收者，图库 row 提交后、可取消返回边界前交给原 `ToolExecutionContext.registerUnpublishedResource`。接收后由工具 checkpoint 协议发布或丢弃；接收失败只清理未交付副本，保留已提交图库。未提供接收者的页面任务只生成图库原件，不先创建无人管理的聊天副本。
 
@@ -293,10 +292,10 @@ Artifact metadata、引用和生命周期归 `ArtifactStore`；`ArtifactPayloadS
 | ToolOutputStore | Artifact-backed Tool Output staging、marker、conversation-scoped bounded read/grep |
 | `ArtifactStore` / `ArtifactPayloadStore` | 附件 metadata、引用与生命周期 / 受管磁盘 IO |
 | `GeneratedMediaStore` | 图库生成媒体的 canonical row、payload 与删除恢复 |
-| `ConversationApplicationService` / `ConversationTurnService` / `SubAssistantRunCoordinator` | 各消息入口的附件盖章与资源交接 |
+| `ConversationApplicationService` / `ConversationTurnService` / `SubAssistantRunCoordinator` | 各消息入口的附件元数据写入与资源交接 |
 | `SettingsOcrMigration` / `migrateLegacySettingsJson` | 旧 OCR 设置迁移边界 |
 
-## 9. Tool Output 压缩 durability
+## 9. 工具输出压缩的持久化
 
 归档与折叠的触发阈值、保护窗口、净回收要求和成功消费 receipt 统一见 [request-context.md](request-context.md)。本领域只执行资源 staging 与提交交接：
 
@@ -307,6 +306,6 @@ Artifact metadata、引用和生命周期归 `ArtifactStore`；`ArtifactPayloadS
 `ArtifactStore.withToolOutputText` 在 lifecycle lock 内同时验证 ACTIVE、`tool_outputs` folder、`text/plain`、当前 conversation
 的 `TOOL_OUTPUT` reference 并取得 retention pin，锁外流式读取，finally 释放。ref 猜测、其他会话、payload 缺失都统一
 fail-closed。fork 的节点引用同一 Artifact；删除任一会话只移除自己的 reference，最后引用消失后才允许 GC。backup/restore
-包含 `tool_outputs` durable directory，启动恢复按 Artifact 既有 CREATING/DELETING 协议收口。
+包含 `tool_outputs` durable directory，启动恢复按 Artifact 既有 CREATING/DELETING 协议提交终态。
 
 富文本的文件链接与文档选择器复用 `FileManagementApplicationService` / `MediaExportService`：原会话链接保留页面 lease，共享定义链接检查仍有效的个人配置 root；二者都由 Artifact 生命周期锁内复制。渲染器只传冻结内容与来源，不以 URL 或当前空间作为读权限。完整 HTML 预览不再落盘缓存；应用启动退役旧预览缓存与上次进程的临时导出文件。聊天截图由原导出协程拥有离屏 Compose 树，取消时立即拆除并回收未交付 Bitmap。

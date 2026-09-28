@@ -25,7 +25,8 @@ MCP 的“工具能力”和“当前能否连通”是两类正交事实：
 
 | 事实 | 唯一 owner | 存储 | 读取边界 |
 | --- | --- | --- | --- |
-| Server definition、启用状态、工具 enable/approval policy | `SettingsStore` | Settings DataStore | Coordinator、Query、run capture |
+| 用户 MCP 定义、启用状态与工具 enable/approval policy | `SettingsStore` | Settings DataStore | Coordinator、Query、Turn 捕获 |
+| 企业 MCP 定义与执行描述 | `EnterpriseAppliedStore` / `EnterpriseSessionController` | Applied manifest 与不可变配置 | `ConfigurationResolver` 解析；平台 binding 不转换为用户配置 |
 | 完整非空远端工具目录 | `McpCatalogStore` | `mcp_catalog` DataStore | Runtime 启动恢复和提交 |
 | 跨 server 注册表、触发汇流和并发预算 | `McpRuntimeCoordinator` | AppScope 内存 | application / turn |
 | client、generation、授权 Job、刷新与恢复调度、连接健康 | 每 `McpRuntimeKey` 一个 `McpServerRuntime` | AppScope 内存 | `McpRuntimeStateStore` |
@@ -37,6 +38,8 @@ MCP 的“工具能力”和“当前能否连通”是两类正交事实：
 
 `McpCommonOptions.toolPolicies` 只保存工具名、enable 和 needsApproval。远端 description/input schema 不写回
 Settings；导入、编辑、OAuth 更新也无权覆盖 Catalog。
+
+### 配置读取与执行租约
 
 个人连接维护和 OAuth 只读取 `SettingsStore.userMcpDefinitions` / `withUserMcpDefinitions`，不读取全局
 个人 `userSettings` 投影。两入口复用既有定义规范化规则；观察流只触发收敛，不能代替调用准入。
@@ -54,7 +57,9 @@ Session 锁可阻止退出状态并发写入，但不能阻止墙上时钟越过
 `McpExecutionLease` 在捕获 binding 前交给原 Turn owner，等待用户期间保留，CONTINUE 转交同一租约。
 终态与退出在原 owner 上关闭并等待全部 transport，之后释放 binding；失败保留清理所有权。
 
-平台来源使用 `McpConnectionDefinition.ManagedPlatform`，本地包使用 `ManagedLocal`。平台连接消费同一顶层模型捕获的 AppliedVersion 与 interactionId，以原 Session 签发执行 lease；完整 URL 来自 Platform execution，不构造 Local binding。`McpProtocolClientFactory` 仍唯一创建 SDK transport/client，平台 Bearer 由原 lease 的请求回调在每个 POST/GET 之前取得，刷新 I/O 不进入配置/Runtime 锁。平台 catalog digest 只含身份、公开 route、release/hash、generation 和 authOwnership，token 轮换不改变目录或连接身份。只读目录检查使用 `readExecution`，不要求网络或额外执行 lease。
+### 企业平台连接
+
+平台连接使用 `McpConnectionDefinition.ManagedPlatform`。平台连接消费同一顶层模型捕获的 AppliedVersion 与 interactionId，以原 Session 签发执行 lease；完整 URL 来自 Platform execution，不构造 Local binding。`McpProtocolClientFactory` 仍唯一创建 SDK transport/client，平台 Bearer 由原 lease 的请求回调在每个 POST/GET 之前取得，刷新 I/O 不进入配置/Runtime 锁。平台 catalog digest 只含身份、公开 route、release/hash、generation 和 authOwnership，token 轮换不改变目录或连接身份。只读目录检查使用 `readExecution`，不要求网络或额外执行 lease。
 
 Direct MCP 只装配已解析助手选中的服务；企业固定引用不可删，允许的扩展来自本域偏好。
 企业策略禁用用户 MCP 时，准备结果保留 `POLICY_BLOCKED` 结果供界面提示，但不建立连接或阻断对话；设置页仍显示原选择并允许移除。
@@ -68,7 +73,9 @@ Gateway 使用开关只影响新 interaction；在途执行仍复验原 Session�
 受管连接失败保留异常类型、原始 message/detail 和 cause；`McpStatus.Error` 使用 `userVisibleDiagnostic` 与脱敏堆栈供诊断。仅删除凭据、令牌和认证字段，不能用通用连接错误替代实际 HTTP 状态或底层原因。`McpToolCallExecutor` 继续携带原异常，取消保持传播。
 POST 与通知/恢复 GET 都解析有效 `428 managed_snapshot_required`，先封闭该 Runtime 的连接/调用准入，随后由原 `TurnFinalizer.stopInteraction`
 按 Runtime/turnId 捕获当前 worker、提交终态并等待租约清理，成功后才走既有同步服务。
-暂停已完成的 worker 和 CONTINUE 后的新 worker 都走这一收口；不等待过时的 START Job，也不停止后续新 turn。
+暂停已完成的 worker 和 CONTINUE 后的新 worker 都执行上述终止与清理；不等待过时的 START Job，也不停止后续新 turn。
+
+### 传输与完整目录解码
 
 `McpProtocolClientFactory` 在首次真实 transport 创建时同步且唯一地初始化共享 Ktor client，调用位于现有 server 的 IO 连接任务；
 不在 Application/DI 构造阶段初始化 Ktor，也不为测试 override 初始化真实 transport。初始化返回后复查取消，超时/取消的连接
@@ -90,7 +97,7 @@ POST 使用 Ktor streaming `execute` 作用域，在预读整个 body 之前执�
 
 `McpStreamableHttpTransport` 与 `McpSseTransport` 从 [kotlin-sdk 0.15.0](https://github.com/modelcontextprotocol/kotlin-sdk/tree/0.15.0)
 的对应 transport 源码适配，复用 SDK `AbstractClientTransport`、RPC Client、重连参数和错误类型；
-本地修改集中在上述完整 JSON 解码、capture 收口、传输 I/O 所有权和不记录请求正文，移除未使用的上游构造/发送重载。
+本地修改集中在上述完整 JSON 解码、capture 释放、传输 I/O 所有权和不记录请求正文，移除未使用的上游构造/发送重载。
 `McpClientTransport` 持有自己的 I/O Job；初始化、POST 和 GET 都在该 Job 下运行，关闭必须取消并等待实际 I/O。
 GET 使用 streaming `prepareGet().execute`，不使用会在共享 HttpClient scope 留下任务的 SSE session builder。
 SDK 提前进入终态或断开 Client 引用不能代替实际清理；原 transport 的重复关闭仍等待同一 I/O owner，
@@ -101,6 +108,8 @@ SDK 提前进入终态或断开 Client 引用不能代替实际清理；原 tran
 上游许可证全文随应用放在 `assets/licenses/mcp-kotlin-sdk-LICENSE.txt`。
 
 协调器可以从恢复 IO 线程构造；ProcessLifecycleOwner 观察者通过 AppScope 的主线程任务注册，不能在构造调用线程直接注册。
+
+### OAuth 信任边界
 
 编辑或同名导入只在 transport、canonical resource 和静态 headers 都未变化时保留原 OAuth 状态。任一信任边界变化都会
 清除旧 access/refresh token 与 client secret，避免旧资源凭据发送到新 endpoint。`definitionDigest` 包含全部静态 headers
@@ -116,17 +125,19 @@ token 与 registration endpoint 必须保持 HTTPS，不接受 fragment 或 user
 全部保留：callback 到达后、token 持久化前再次校验信任边界与 revision，旧回调不能写入新 definition。
 回调或 refresh 响应跨越任一信任边界变化时只能丢弃。重复启动授权必须先取消并等待旧 Job 完成，再推进 revision 后启动新流程。
 
+### 目录持久化与版本
+
 从曾将完整 schema 写在 Settings 的版本升级时，DataStore migration 在重写 policy-only Settings 的同一事务中生成一次性
 catalog staging；`McpCatalogStore` 只接收完整、非空候选，提交后删除 staging，不保留旧 schema 读取旁路。手工备份 v4/v5 将
-`mcp_catalogs.json` 作为 manifest 必需根；恢复 v3 时执行同样的一次性提取。备份恢复先让已经取得租约的旧迁移收口，再用
+`mcp_catalogs.json` 作为 manifest 必需根；恢复 v3 时执行同样的一次性提取。备份恢复先让已经取得租约的旧迁移完成，再用
 备份目录替换个人 Catalog，保留企业主体的目录，避免旧 staging 在恢复后写回孤儿目录。
 
-Catalog 初始化只执行一次迁移、读取和发布；全部命令等待这次初始化收口。后续目录仅由 `McpCatalogStore` 的
+Catalog 初始化只执行一次迁移、读取和发布；全部命令等待这次初始化完成。后续目录仅由 `McpCatalogStore` 的
 `commitMutex` 内提交协议发布，不再由常驻 DataStore collector 回写内存。初始化取消或迁移失败明确拒绝命令；
-目录读取失败不伪装为空备份。个人恢复不能绕过未成功收口的旧迁移。
+目录读取失败不伪装为空备份。个人恢复不能绕过尚未成功完成的旧迁移。
 
 `McpCatalogKey` 由 `ConfigurationScope` 与 server reference 组成：用户资源的目录归个人，企业资源的目录归
-来源、Deployment、User 完整主体；Session 不进入持久化目录身份。`catalog_document` 保存版本化目录，
+Deployment、User 完整主体；Session 不进入持久化目录身份。`catalog_document` 保存版本化目录，
 已发布的个人 `catalogs` 数组只在一次性迁移或旧备份导入时读取，成功后原键删除。版本化文档存在时不回退旧键。
 个人备份仅导出与用户 definition 匹配的个人目录；恢复入口统一拒绝企业记录，在同一提交锁内重新读取并保留
 当前所有企业目录。仅旧个人键损坏可由明确的个人恢复替换；新文档损坏或读取失败必须拒绝写入，不能把企业事实
@@ -139,6 +150,8 @@ Gateway surface 改变被拒绝。私有 binding 可在同 generation 轮换而�
 旧 interaction 可保留原 binding 与已确认目录；发布不再获准时只能沿用匹配的已确认目录，无目录则明确失败。
 相同工具随新 generation 发布时仍持久化新 generation。这不能代替原 Session 的执行准入或服务端 428 barrier。
 
+### Gateway 目录约束
+
 Gateway 的 `McpGatewaySurface` 校验固定顺序 `discover_tools` / `invoke_tool` 两个完整 Tool 对象，
 包含 outputSchema、annotations、`_meta` 和扩展字段；先验证再做目录排序。
 采用 [java-json-canonicalization](https://github.com/erdtman/java-json-canonicalization) 的 RFC 8785 JCS
@@ -148,6 +161,8 @@ Gateway 的 `McpGatewaySurface` 校验固定顺序 `discover_tools` / `invoke_to
 Gateway 的目录 digest 使用已验证的 canonical surface digest；仅 JSON 对象键顺序变化不推进目录 revision，
 保留已确认 Tool 对象和请求前缀。个人与 Direct MCP 的既有目录摘要算法保持。
 
+### 运行状态发布
+
 `McpRuntimeCoordinator.runtimeCapabilities` 是 runtime 的唯一公开状态源；底层由 `McpRuntimeStateStore` 对每个键以一个 immutable
 `McpRuntimeCapability(status, catalog, sessionCallable)` 原子发布。Settings、Catalog DataStore flow 和 UI 不再形成第二条 runtime
 读写路径。status 可变化而 catalog 保持不变，这正是离线仍披露 LKG 工具的协议。
@@ -156,7 +171,7 @@ Gateway 的目录 digest 使用已验证的 canonical surface digest；仅 JSON 
 
 `validateMcpHeaders` 是配置与连接共用的纯校验规则：name 必须是非空 HTTP token，value 只允许可打印 ASCII 与水平制表符，不 trim 或改写合法值。`McpHeaderValidationException` 保留稳定 reason、从 1 开始的行号与可选导入服务器序号，诊断不含 header value。`McpApplicationService.upsert/importServers/overwriteByName` 在 Settings 写入前校验；批量导入先验证全部候选，再执行原子提交。
 
-历史非法配置不会在 `connectionFingerprint`、`mcpDefinitionDigest` 或 `resolvedConnectionHeaders` 身份投影中抛出新校验异常。`McpServerRuntime.runConnectionOperation` 在原异常收口内、OAuth refresh 前校验静态头；`McpProtocolClientFactory.createTransport` 在 transport override 和 HTTP client 创建前再次校验最终 resolved headers。错误只影响原 server 的状态，不打断其他 server 的协调。`ManagedPlatform.requestHeaders` 每次取得认证凭据后复验，避免初次通过后轮换出非法请求头；受管错误不借用户 Settings 修补。
+历史非法配置不会在 `connectionFingerprint`、`mcpDefinitionDigest` 或 `resolvedConnectionHeaders` 身份投影中抛出新校验异常。`McpServerRuntime.runConnectionOperation` 在原异常处理边界内、OAuth refresh 前校验静态头；`McpProtocolClientFactory.createTransport` 在 transport override 和 HTTP client 创建前再次校验最终 resolved headers。错误只影响原 server 的状态，不打断其他 server 的协调。`ManagedPlatform.requestHeaders` 每次取得认证凭据后复验，避免初次通过后轮换出非法请求头；受管错误不借用户 Settings 修补。
 
 MCP 编辑器仅忽略本次新增且完全空的草稿行，已存空行仍需明确修正或删除。保存等待 application 成功才关闭；行校验和写入失败保留草稿、错误行与可复制的完整诊断。JSON 导入分别显示解析错误与配置业务错误，失败保留输入，不把 header 校验包装成 JSON 解析失败。取消沿原协程传播。
 
@@ -193,7 +208,7 @@ Catalog Store 对 commit/no-op/rejection 都推进进程内 head token。若 Ser
 只允许在 snapshot identity 与 head token 仍匹配时精确回滚；旧 operation 不能覆盖更新的目录事实。
 
 候选校验或写盘失败不推进 head token。提交取得所有权后，Store 等待 DataStore ack、目录投影和 token 更新全部结束，
-再传播调用者取消；Runtime 对提交凭据的接收、原连接 lease 复验和必要补偿也在同一收口边界内完成。已接受的新目录
+再传播调用者取消；Runtime 对提交凭据的接收、原连接 lease 复验和必要补偿也在同一提交与补偿边界内完成。已接受的新目录
 不会因紧随其后的取消或超时被 Runtime 恢复成旧目录；尚未接受的提交仍按原 snapshot/token 精确补偿。
 
 ## 5. 明确刷新与意外失败
@@ -231,7 +246,7 @@ Catalog Store 对 commit/no-op/rejection 都推进进程内 head token。若 Ser
   SSE 的 GET/POST HTTP 错误保留状态码，OAuth 响应/协议错误不伪装成网络 I/O；OAuth endpoint 的 404
   属于配置/协议失败，不按 MCP transport 的 404 恢复；通知流耗尽使用明确异常。
   已排队的恢复操作独占 `RetryScheduled`/`WaitingNetwork` 状态，后续调用失败不能覆盖等待状态；
-  已承诺调用返回授权错误时取消该代的恢复与目录刷新；迟到的 close、通知流错误和刷新收口不得覆盖
+  已承诺调用返回授权错误时取消该代的恢复与目录刷新；迟到的 close、通知流错误和刷新完成回调不得覆盖
   `NeedsAuthorization`，由用户授权或显式重试重新建立连接；
 - 当前 SDK 的 `StreamableHttpError` 不暴露响应头，故暂时无法读取 `Retry-After`；若 SDK 暴露该字段，应由同一调度器
   将其作为服务端最小等待时间，而不是新增第二个 timer。

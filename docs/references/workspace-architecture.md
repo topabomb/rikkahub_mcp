@@ -1,8 +1,8 @@
 # 工作区架构与执行参考
 
-本文档描述当前 Workspace 的持久化、Rootfs、PRoot 进程、AI 工具与交互终端边界。消息生成如何装配这些工具见 [turn-step-execution.md](turn-step-execution.md)，模型可见文案见 [prompts-and-tools.md](prompts-and-tools.md)。
+本文档描述当前 Workspace 的持久化、Rootfs、PRoot 进程、AI 工具与交互终端边界。消息生成如何装配这些工具见 [turn-step-execution.md](turn-step-execution.md)，工具参数与结果契约见 [prompts-and-tools.md](prompts-and-tools.md)。
 
-## 1. 目标与边界
+## 1. 能力与隔离边界
 
 Workspace 为 Assistant 提供应用私有的 Linux Rootfs 和用户文件区。PRoot 在无 root 权限的 Android 进程中完成路径翻译和 bind mount；它是用户态隔离层，不等同于内核容器或安全虚拟机。
 
@@ -149,7 +149,7 @@ Workspace 或工具权限后，当前 Turn 的 Provider schema 仍使用 START �
 
 ### Shell 工具
 
-`workspace_shell` 的 `uploads` 显式列出本次需要的 `/upload/<file>`，最多 `MAX_WORKSPACE_UPLOADS` 个，总量不超过 `MAX_WORKSPACE_UPLOAD_BYTES`。参数解析拒绝无效路径和规范化重复；ArtifactStore 在生命周期锁内复验并复制，WorkspaceApplicationService 持有单次临时目录。空列表也绑定空目录，不暴露历史输入。副本可修改，原 Artifact 不变；需要保留的结果须明确写到共享 `/workspace`。复制及命令取消均沿原调用收口，目录清理不跟随符号链接。
+`workspace_shell` 的 `uploads` 显式列出本次需要的 `/upload/<file>`，最多 `MAX_WORKSPACE_UPLOADS` 个，总量不超过 `MAX_WORKSPACE_UPLOAD_BYTES`。参数解析拒绝无效路径和规范化重复；ArtifactStore 在生命周期锁内复验并复制，WorkspaceApplicationService 持有单次临时目录。空列表也绑定空目录，不暴露历史输入。副本可修改，原 Artifact 不变；需要保留的结果须明确写到共享 `/workspace`。复制及命令取消均由原调用完成取消与清理，目录清理不跟随符号链接。
 
 `workspace_shell` 的 cwd 相对 `/workspace`；默认超时来自 `WorkspaceManager.DEFAULT_COMMAND_TIMEOUT_MS`，调用参数可在工具上限内覆盖。结果为：
 
@@ -198,15 +198,15 @@ Workspace 删除而消失时自动清除 pending，不发送无意义命令。
 
 Workspace command 仍由 `WorkspaceApplicationService` 拥有；持久化列表/文件预览和 terminal 聚合投影都由 `WorkspaceQueryService` 提供，其中 terminal 读口是 `observeTerminal(workspaceId)`。Query 不获得写能力，也不反向调用 ApplicationService。`WorkspaceTerminalViewport` 只表达 UI viewport capability，不是 session facade 或第二生命周期 owner。
 
-条目按 Workspace root 与原 RealmAccess（含完整企业 Session）投影，所有条目和 viewport 状态限制在 Main。创建中为 `PREPARING`，成功后为 `READY`；关闭先变为 `CLOSING` 并退休视图，实际进程退出且 writer 完成后才移除。关闭失败保留原条目供重试。尚未首次布局的 PID 0 不发送进程信号。单 Workspace 跨域合计最多六个 Tab，配置与数据库不保存运行态。
+条目按 Workspace root 与原 RealmAccess（含完整企业 Session）投影，所有条目和 viewport 状态限制在 Main。创建中为 `PREPARING`，成功后为 `READY`；关闭先变为 `CLOSING` 并关闭视图访问，实际进程退出且 writer 完成后才移除。关闭失败保留原条目供重试。尚未首次布局的 PID 0 不发送进程信号。单 Workspace 跨域合计最多六个 Tab，配置与数据库不保存运行态。
 
-页面操作捕获原 RealmSelection。绑定、resize、按键、粘贴与 UI 命令等待 Session 准入；锁忙不等于授权失效。切域在发布新选择前永久退休旧 viewport、IME、选择句柄和延迟滚动回调，并取消尚未准入的操作。切回同一有效 Session 时用新视图接回原 PTY。切换在退休后失败或取消时，Session owner 保留原域但推进选择版本，旧视图永不复活。退出通过原 PTY owner 关闭该企业 Session 的终端。
+页面操作捕获原 RealmSelection。绑定、resize、按键、粘贴与 UI 命令等待 Session 准入；锁忙不等于授权失效。切域在发布新选择前永久关闭旧 viewport 的访问、IME、选择句柄和延迟滚动回调，并取消尚未准入的操作。切回同一有效 Session 时用新视图接回原 PTY。切换在关闭旧视图访问后失败或取消时，Session owner 保留原域但推进选择版本，旧视图永不复活。退出通过原 PTY owner 关闭该企业 Session 的终端。
 
 Termux view 与 emulator 源码在既有 Workspace 模块维护，来源和修改见 `workspace/TERMINAL-SOURCE.md`。协议编码、屏幕更新与自动响应仍在 Main；`WorkspacePtySession.write(byte[], offset, count)` 是唯一字节交付边界，原条目复制字节并由串行 IO writer 排空。Main 使用单个字节缓冲区合并逐字符输入，以单个合并唤醒信号驱动 writer，不为每个字符保留队列节点。待交付总字节量包含正在写入的批次，超限明确关闭并提示失败。Session 锁不包住可能阻塞的 ByteQueue 写入；取消先停止 PTY 以释放阻塞写，再等待 writer 完成。已编码的输入和自动回复始终归原 PTY，不改投新域。
 
 Rootfs/PTY 异步失败由 runtime 在同一 Workspace projection 发布带唯一 id 的 typed `lastFailure`，VM 只映射新 failure。创建准备、模型工具执行和 `WorkspaceApplicationService` 的 UI 文件命令/install/delete 使用同一组固定条带 mutex，不按历史 Workspace id 无限保留锁对象。
 
-`WorkspaceApplicationService.installRootfs` 与 `deleteWorkspace` 必须在同一 Workspace command gate 内先 `closeWorkspace` 并等待全部创建 Job/PTY 收口，再调用 Repository。删除与故障恢复协议见下文“状态与删除”。
+`WorkspaceApplicationService.installRootfs` 与 `deleteWorkspace` 必须在同一 Workspace command gate 内先 `closeWorkspace` 并等待全部创建 Job/PTY 退出，再调用 Repository。删除与故障恢复协议见下文“状态与删除”。
 
 shell 工具与交互终端都消费同一份 `ProotLaunchSpec`：executable、loader、kernel spoof、`/workspace` bind、应用级 `/skills`、内核文件系统以及 `PWD` 都来自该值对象。二者只把 spec 交给各自进程 adapter，不再手写第二套 argv/env/bind。Shell 另传单次调用的 `/upload` 副本挂载；全局挂载表与 PTY 均不包含应用上传目录。受管 Tool Output 不挂载到 Rootfs；模型只能使用 conversation-scoped `read_tool_output` / `grep_tool_output` 回查。
 
@@ -240,7 +240,7 @@ ensureWorkspace
 
 ## 9. 状态与删除
 
-Workspace shell 状态使用 `DISABLED`、`INSTALLING`、`READY` 和 `BROKEN`。只有 READY 注册工具和打开终端；安装失败进入 BROKEN，READY 的 Rootfs 缺失可回到 DISABLED。启动时残留 INSTALLING 一律收口 BROKEN 并保留原文件，允许重新安装；旧 root 仍有效不能证明被中断的安装已成功发布，也不能使界面永久停留在安装中。
+Workspace shell 状态使用 `DISABLED`、`INSTALLING`、`READY` 和 `BROKEN`。只有 READY 注册工具和打开终端；安装失败进入 BROKEN，READY 的 Rootfs 缺失可回到 DISABLED。启动时残留 INSTALLING 一律转为 BROKEN 并保留原文件，允许重新安装；旧 root 仍有效不能证明被中断的安装已成功发布，也不能使界面永久停留在安装中。
 
 删除 Workspace 时先把 Room 状态持久化为 `BROKEN`，再将磁盘目录移到 Manager-owned 暂存位置并写入删除 journal；Settings 成功清理所有 Assistant 的 `workspaceId` 引用后才标记并删除暂存树，最后由 `WorkspaceDAO.deleteById` 确认删除 Room 实体。Settings 拒绝或删除尚未开始时中断，完整性检查按 journal 恢复目录、原引用和原 shell 状态。标记物理删除后，递归删除失败或中断都不能假定目录完整：journal 与 `BROKEN` 状态保留，后续删除继续清理，只有树已不存在且 DAO 确认删到一行才清 journal。失败时保留 durable identity 供幂等重试。删除或状态变化后，下一次工具装配不会继续暴露旧 Workspace。
 

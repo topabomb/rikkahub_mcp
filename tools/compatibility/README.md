@@ -1,8 +1,9 @@
-# 文档创建前 Android 的 Core 兼容探针
+# 历史 Android 客户端的 Core 兼容探针
 
 此目录保存针对 **Android `29ecc109335c536c6f2b60841e3d4aace35b0dd3`** 的设备探针。
 它不属于当前 App 测试源集，不应改为使用当前 DTO 后再声称验证了旧客户端。
-实际结果与发布顺序见 [研究文档第 14.9 节](../../docs/dev/context-injection-and-enterprise-starter-research-2026-09-25.md)。
+执行顺序由本文维护，验证分层见 [测试策略](../../docs/references/testing-strategy.md)。
+通过与否以当次 APK、Core 身份及实际运行报告为准，不将历史结果作为当前验收。
 
 ## 构建旧客户端
 

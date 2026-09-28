@@ -1,7 +1,7 @@
-# Token 用量统计架构
+# Token 用量与缓存统计
 
-本文定义 Token 用量的单请求归一化、Turn 累计、持久化和展示口径。线协议字段由
-[`protocol-reference.md`](protocol-reference.md) 解释；Turn 的提交时机由
+本文定义 Token 用量的单请求归一化、Turn 累计、持久化和展示口径。四种协议的 usage 映射由本文统一维护；请求与回放协议见
+[AI 协议](protocol-reference.md)；Turn 的提交时机由
 [`turn-step-execution.md`](turn-step-execution.md) 定义。
 
 ## 1. 事实层级与唯一所有者
@@ -94,7 +94,7 @@ turn 聚合规则：
 - `peakRequestContextTokens` 对每个完整请求计算 `input + output` 后取最大值；后续请求只能提高或保持峰值。历史 turn
   已经有请求但未保存峰值时，审批续跑仍保持峰值未知，不能拿续跑后的局部请求冒充整轮峰值。
 - `totalTokens` 按各请求的权威 total 求和，不在 turn 末尾用累计 input + output 重写。
-- 已收口最新请求的 canonical input、output、cache read 和输出阶段 duration 一次性覆盖四个 `latestRequest*`
+- 已终结的最新请求的 canonical input、output、cache read 和输出阶段 duration 一次性覆盖四个 `latestRequest*`
   审计字段；usage 没有报告的字段覆盖为 `null`，不能继承上一请求。
 - 审计字段分别刷新：canonical input 在请求关闭后覆盖，估算在发送前覆盖，TTFT 在首个有效输出到达时刷新。
   latest cache rate 与 tok/s 在请求关闭且所需字段明确时刷新，缺字段写
@@ -103,7 +103,7 @@ turn 聚合规则：
 - `initialRequestTimeToFirstOutputMillis` 仍只记录本 turn 第一次请求，供历史/聚合审计；footer 使用每请求刷新的
   `latestRequestTimeToFirstOutputMillis`。
 - 没有 usage 的失败请求仍计入 `observedProviderRequestCount`，但不增加 `observedUsageReportedRequestCount`，并使相关 turn 完整性降级。
-- Provider 内容已经返回时，即使随后失败、取消或响应 incomplete，已收到的 usage 仍随原 turn 收口；取消异常继续传播。
+- Provider 内容已经返回时，即使随后失败、取消或响应 incomplete，已收到的 usage 仍随原 turn 提交；取消异常继续传播。
 - Google / Responses 的非流式 HTTP 成功但协议失败响应先解码可用内容和 usage，再抛出携带该快照的
   `ProviderResponseException`。`StepRunner` 先接收快照，再沿原失败链关闭请求；不执行失败响应中的工具。
   其他 `generateText` 调用者仍收到异常，不会把 partial 响应当成成功。
@@ -176,42 +176,21 @@ nullable usage 字段缺失时默认 `null`。Turn 累计字段不猜测回填�
 
 ## 8. 消费者口径
 
-### 聊天消息底部
+### 聊天消息统计
 
-`ChatMessageNerdLine` 只在 owning Assistant 消息持有 usage 且摘要至少有一项时显示。
-布局与活动状态见 [UI 架构](ui-architecture.md)。
+`ChatMessageNerdLine` 只消费 owning Assistant 的 usage。当前请求状态量与 Turn 累计量不可混算：
 
-第一行按关注度排列四项，分两种粒度：第一项是状态量（只能取单请求），后三项是 turn 级总结。
+| 指标 | 口径与缺失处理 |
+| --- | --- |
+| 上下文 | 最近已关闭请求的 canonical input；无实测 input 时用最近发送前估算并标 `~`。下一请求进行中保留最近已关闭实测；请求关闭却未报告 input 时清空该实测，不沿用更早值 |
+| 缓存命中率 | Turn 累计 cache read / input；两者完整性均为 COMPLETE、input > 0 且 cache read ≤ input 时才显示。`latestRequestCacheHitPercent` 仅供审计 |
+| 工具输出压缩次数 | 本 Turn 随 checkpoint 成功提交的压缩批次数，一批多个结果仍计 1 |
+| Turn 耗时 | 从 createdAt 到当前时间；`FinalizeTurn` / `RecoverInterruptedTurn` 提交终态后使用 finishedAt 冻结，包含工具、审批与输入等待 |
+| Input / Output / Cached | Turn 累计值，分别由 input/core/cache-read 完整性控制，非 COMPLETE 不显示数值 |
+| Provider 耗时 / 请求数 | 前者累计 Provider 请求墙钟，不含工具和审批；后者包含成功、失败和取消的已关闭请求 |
+| tok/s / TTFT | tok/s 取最近已关闭请求的 output / 输出阶段时间；TTFT 取最近实际产生首个有效输出的请求，空输出不覆盖旧值；均不可累计 |
 
-- `[Layers] x`：上下文。取最近一次已关闭请求的 canonical input；尚无实测值时退回该请求发送前的稳定估算，并加 `~`
-  前缀。下一请求进行中，已有最近已关闭请求的实测 input 仍优先；请求关闭但未报告 input 时清空实测，
-  改用最近发送前估算，不继承前一请求的实测 input。
-- `[Database] y%`：缓存命中率，等于本 turn 累计 cache read ÷ 累计 input，也就是第二行 `Cached` 与 `Input` 之比。
-  只有 input 和 cache-read 完整性均为 COMPLETE、input > 0 且 cache read 不超过 input 时显示。
-  `latestRequestCacheHitPercent` 只作审计字段，footer 不读取。
-- `[Scissors] n`：本 turn 成功随 checkpoint 提交的滚动裁剪批次数，大于零才出现，出现即以主题主色高亮，一批裁掉多个
-  结果仍只计 1。
-- `[Clock] t`：本 turn 端到端耗时。`turnFinished` 为假时用 `now - createdAt` 每秒刷新；`FinalizeTurn` /
-  `RecoverInterruptedTurn` 冻结 `finishedAt` 后改用 `finishedAt - createdAt` 并停止刷新。它包含工具、审批和用户
-  输入等待，与下面第二行的 Provider 墙钟是两个不同的口径。
-
-第二行默认隐藏，点击第一行后展开，宽度不足时换行；各项目有值才渲染，缺失项不占位。项目语义为
-`[Upload] Input · [Download] Output · [Database] Cached · [Cloud] Provider · Req · [Zap] tok/s · TTFT`：
-
-- Input / Output / Cached 是本 turn 累计值，分别受 `inputCompleteness` / `coreCompleteness` /
-  `cacheReadCompleteness` 门控，非 `COMPLETE` 不显示数值；Cached 同时是第一行命中率的分子。
-- Provider 只累计 Provider 请求墙钟，不含工具执行与审批等待。
-- Req 包括成功、失败和取消的已关闭请求。
-- `tok/s` 与 `TTFT` 是单请求指标（速度无法累计）：`tok/s = 该请求 output / 输出阶段时间`，取最近一次已关闭请求；
-  TTFT 取最近一次**实际产生首个有效模型输出**的请求，空输出请求不覆盖旧值。
-
-共性规则：
-
-- 全部项目都不把缺失当零；显式 cache read 零仍显示 `0.0%`。
-- 新 `START` 建立 `usage=null` 的 Assistant 槽，因此全部摘要与 Tool trims 都不继承上一 turn；审批继续复用原槽。
-- turn 终态后数值冻结；中间 Provider step 不具有 turn 终止权，只有 `FinalizeTurn` / `RecoverInterruptedTurn` 的
-  终态提交会覆盖并冻结 `finishedAt`。
-- Turn 活动状态不进入 usage footer；关闭 token 显示不隐藏活动状态。
+缺失不等于零，明确的 cache read 零仍可显示 `0.0%`。新 START 创建 `usage=null` 的 Assistant 槽，不继承上一轮；交互继续复用原槽。中间 Step 不能冻结 Turn 耗时，活动状态也不从统计字段推导。布局和展开交互由 [UI 架构](ui-architecture.md)维护。
 
 ### 上下文预警
 

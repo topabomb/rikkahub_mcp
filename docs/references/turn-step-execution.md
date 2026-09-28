@@ -1,8 +1,8 @@
 # Turn / Step 执行链路
 
-本文说明会话命令、Turn / Step 状态、checkpoint 与中断收口。总体依赖边界见
+本文说明会话命令、Turn / Step 状态、检查点提交与中断终结。总体依赖边界见
 [应用架构](application-architecture.md)，请求窗口与压缩见 [请求上下文](request-context.md)，
-模型文案见 [提示词与工具](prompts-and-tools.md)，文件交接见
+模型输入格式与工具契约见 [提示词与工具](prompts-and-tools.md)，文件交接见
 [多模态与持久化](multimodal-context-and-turn-durability.md)。
 
 ## 职责与主链
@@ -19,7 +19,7 @@
 | `TurnContextFactory` | START 前捕获 `TurnLaunchPlan`，START 后绑定冻结 `TurnContext` |
 | `TurnRunner` / `StepRunner` / `ToolBatchRunner` | 多 Step 循环、单次采样、工具批次门禁与串行执行 |
 | `TurnCommitter` | START、continue、checkpoint、stream 与终态提交适配 |
-| `TurnFinalizer` / `TurnRecovery` | 正常停止、失败和 supersede 收口 / 进程重启恢复 |
+| `TurnFinalizer` / `TurnRecovery` | 正常停止、失败和 被新请求替代时的终止与清理 / 进程重启恢复 |
 
 ```text
 ConversationTurnService / SubAssistantRunCoordinator
@@ -129,7 +129,7 @@ worker 在授权锁外先进入清理范围，再等待唯一 installation 结�
 
 输入附件通过 `ArtifactSubmission` 从编辑器转交本次请求：未接受时归还原编辑器，编辑器已经关闭则释放创建 pin；
 接受后由请求持有，USER 提交后发布实际引用，失败或取消时释放。每个请求独立持有输入 Artifact 的 retention lease，连续提交相同附件也不会因前驱结束而提前失去保护；创建 token 仍只有一个 owner。页面关闭不能提前释放已经转交的 pin。
-START 持久提交与 `TurnCommitter` 认领在同一不可取消边界内完成，提交后收到取消仍由原 committer 收口终态。
+START 持久提交与 `TurnCommitter` 认领在同一不可取消边界内完成，提交后收到取消仍由原 committer 提交终态。
 
 USER 预处理按原 RealmAccess 的已解析助手执行。START 前由 `ModelExecutionService` 在 Session → Settings 锁序下捕获助手、模型、媒体能力与用户文档内容 revision，随后 `TurnContextFactory` 冻结 prompt inputs、有序工具定义与执行绑定。同一 Turn 的 Step 和审批继续复用原上下文，不跟随全局当前域或选择。
 
@@ -170,7 +170,7 @@ Pending 是整批屏障，任何自动工具都不抢先执行。合法 Denied /
 | `ToolExecutionStartedCheckpoint` | 副作用前 STARTED 与 Turn / Step / Call 身份；成功返回后才执行 |
 | `ToolExecutionUpdatedCheckpoint` | Child link 或必须持久化的中间事实 |
 | `ToolResultCheckpoint` | Result、execution 终态、metadata、Artifact roots；最后结果可关闭/预开 Step |
-| `FinalizeTurn` | 最新 owning Assistant、Step / Turn 终态及执行收口；无工具最终采样也在此提交 |
+| `FinalizeTurn` | 最新 owning Assistant、Step / Turn 终态及执行终结；无工具最终采样也在此提交 |
 | `RecoverInterruptedTurn` | 进程恢复的 owning Assistant 与终态事实 |
 
 Room transaction 同时覆盖消息 delta、turn/tool execution、Artifact 引用与 FTS。提交失败向上传播，

@@ -42,7 +42,7 @@ Fixed 请求带 `PrivateRequest` 网络标记，宿主日志入口不记录其 H
 
 `ClaudeProvider` 不记录请求 body、逐条 messages、SSE data 或错误响应 body；OpenAI Chat/Responses 与 Google 流式回调也不把异常 message/原始响应记录到 Log，Google 不记录引用元数据。企业 Routed 和私有 Fixed 请求因此不会通过 Provider 自身的日志绕过 `PrivateRequest` 的网络日志边界。错误仍按原解析结果和 cause 传给调用方，日志仅记录异常类型及 HTTP 状态。
 
-非流式文本、图片生成/编辑及结果下载、模型目录、余额和 embedding 的完整响应读取统一使用 `Call.readResponse`，由同一调用持有 HTTP Call 到响应体消费并关闭为止。取消等待响应头或阻塞读取成功/错误响应体都会取消原 Call；退出不依赖网络读取超时收口。流式请求继续由各协议的 EventSource 生命周期负责取消。
+非流式文本、图片生成/编辑及结果下载、模型目录、余额和 embedding 的完整响应读取统一使用 `Call.readResponse`，由同一调用持有 HTTP Call 到响应体消费并关闭为止。取消等待响应头或阻塞读取成功/错误响应体都会取消原 Call；退出不依赖网络读取超时才结束。流式请求继续由各协议的 EventSource 生命周期负责取消。
 
 ### 工具 JSON Schema 边界
 
@@ -56,7 +56,7 @@ OpenAI-compatible 端点要求 function tool 的 `parameters` 至少是 object s
 
 `UIMessageChoice.toolCallSlots` 是只存在于 Provider `MessageChunk` 的 typed transport 关联：Chat 使用 `tool_calls[].index`，Claude 使用 content block index，Responses 使用 response-local 输出槽（`item_id` / `output_index` 是槽的别名），Gemini 完整 functionCall 按响应到达顺序分配槽。完整非流式 message 使用工具数组顺序。`StepOutputAccumulator` 在当前 Step 内将槽首次映射为新的 `localCallId`，之后仅按槽拼接；重复或空的 `providerCallId` 不会把不同调用混为一个。transport 槽不写入 durable Tool JSON。
 
-流结束必须有协议完成证据。Chat 必须有真实 `finish_reason`；Claude 必须有 `message_stop` 和 `stop_reason`；Google 必须有候选的 `finishReason`；Responses 必须有 typed terminal event 或支持的 `[DONE]`。EOF 不能当作成功，已接收内容保留并以 INCOMPLETE 收口。token 上限类终态同样不执行未完成响应里的工具。真实 finish reason 进入 StepModelResult，不能用合成的 `unknown` 或 null 覆盖。
+流结束必须有协议完成证据。Chat 必须有真实 `finish_reason`；Claude 必须有 `message_stop` 和 `stop_reason`；Google 必须有候选的 `finishReason`；Responses 必须有 typed terminal event 或支持的 `[DONE]`。EOF 不能当作成功，已接收内容保留并以 INCOMPLETE 结束。token 上限类终态同样不执行未完成响应里的工具。真实 finish reason 进入 StepModelResult，不能用合成的 `unknown` 或 null 覆盖。
 
 ## 2. 统一消息模型
 
@@ -163,7 +163,7 @@ xAI Imagine 使用相同信封或顶层 `code`/`message`，并可能在 200 响�
 | 请求线 | builder-owned 保留字段 |
 |---|---|
 | OpenAI Chat Completions | `model`, `messages`, `tools`, `stream`, `stream_options`, `session_id` |
-| OpenAI Responses | `model`, `input`, `tools`, `stream`, `store`, `include`, `previous_response_id`, `session_id` |
+| OpenAI Responses | `model`, `instructions`, `input`, `tools`, `stream`, `store`, `include`, `previous_response_id`, `session_id` |
 | Anthropic Messages | `model`, `messages`, `system`, `tools`, `stream` |
 | Gemini Generate Content | `contents`, `systemInstruction`, `tools`；另保留会改变响应形状的 `generationConfig.candidateCount`、`generationConfig.responseModalities`、`toolConfig.functionCallingConfig.streamFunctionCallArguments` |
 
@@ -294,7 +294,7 @@ added、argument delta、arguments.done 和 output_item.done 共用参数状态�
 
 非流式 HTTP 200 的 `failed` / `incomplete` 响应同样不是成功结果：Adapter 先解码可用 output 和 usage，
 再抛出 `ProviderResponseException`。它只在数据属性中携带 `MessageChunk`，异常文本不包含该 payload，
-原 `HttpException` 保留为分类 cause；生成循环接收已返回的内容与 usage 后继续失败收口，不能执行其中的工具。
+原 `HttpException` 保留为分类 cause；生成循环接收已返回的内容与 usage 后继续提交失败终态，不能执行其中的工具。
 
 ### DeepSeek Responses effort
 
@@ -347,7 +347,7 @@ TOOL 能力，不发送 thinking。
 `GoogleProvider` 使用 `systemInstruction`、`contents[].parts`、`functionCall` 和 `functionResponse`。认证支持 AI Studio API key、Vertex API key 与 Service Account OAuth。
 `buildContents` 在编完 `contents` 后合并相邻同 `role` 的项（`parts` 按序拼接）。这是 Gemini 要求 `user` / `model`
 交替的线协议规范化，不是请求规划层的 USER 合并。TimeReminder、USER 角色注入，以及 `functionResponse` 后紧跟
-下一条 USER，都在这一处收口。contents 级合并只拼接已编码的 parts 数组，不把两个 Part 合成一个，因此带
+下一条 USER，都在这一处完成相邻角色合并。contents 级合并只拼接已编码的 parts 数组，不把两个 Part 合成一个，因此带
 `thoughtSignature` 的 Part 仍保持独立。
 
 ### Thinking 与签名
@@ -402,20 +402,12 @@ Gemini 支持的 `enum`。grounding metadata 转为 `UIMessageAnnotation.UrlCita
 
 ## 8. ModelRegistry 的职责
 
-`deepseek-v4.1-flash`、`deepseek-flash` 按精确型号登记图片输入、工具和 reasoning，并进入 `DEEPSEEK_V4` 的兼容网关工具回放策略；旧 V4 Flash 与未经确认的后缀型号不因此取得视觉能力。登记不自动修改已有用户模型配置。
+`ModelRegistry` 按 modelId 推断输入/输出模态、TOOL/REASONING 能力及已知模型组的请求参数差异。
+精确型号、家族和别名由注册表及相应测试维护；新增登记不自动改写用户已保存的模型配置。
 
-`step-5-preview`、`mimo-v2.6-pro`、`mimo-v2.6-flash`、`mimo-v2.6-pro-ultraspeed` 按精确 ID 登记 TEXT+IMAGE 输入及 TOOL+REASONING；未确认后缀不取得这些新增能力，不改变已有模型配置或 contextLength。`AIIconMatcher` 将独立 HY / HY 数字前缀识别为混元图标；它只影响显示，不参与 Provider 路由或模型能力判定。
-
-`ModelRegistry` 根据 modelId 推断：
-
-- 输入/输出模态；
-- TOOL / REASONING 能力；
-- 已知模型组的请求参数差异。
-
-它不决定 Provider 类型或 wire format。模型组应服务于稳定、可测试的行为差异；易变在线清单不能成为 endpoint 选择或请求硬阻断条件。匹配规则必须测试相邻版本和别名，避免 `gpt-5.10` 被误判为 `gpt-5.1` 一类的前缀错误。
-`QWEN_3_8` family（`qwen3.8-max` / `qwen3.8-flash`，常见分隔符与大小写）声明原生视觉输入；不含 `3.8` 的
-旧家族（如 `qwen3-max-2026-*`）不得被误标为视觉。能力仍只由 `Model.inputModalities` 派生，不在投影或
-endpoint host 另设第二套例外。
+注册表不决定 Provider 类型或线协议。模型组应服务于可测试的行为差异，在线型号清单不能成为
+endpoint 选择或请求硬阻断条件。匹配测试必须覆盖相邻版本和别名，避免把 `gpt-5.10` 当作 `gpt-5.1`。
+请求媒体能力从 `Model.inputModalities` 派生，不在投影或 endpoint host 另建例外清单；图标匹配只影响显示。
 
 ## 9. 协议保真原则
 

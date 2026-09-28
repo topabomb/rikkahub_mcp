@@ -1,6 +1,6 @@
 # Android 配置架构与资源边界
 
-本文定义 Android 当前配置的 owner、持久化载体、字段目录、引用关系及个人/企业域边界。Assistant 逐字段运行语义见 [助手配置](assistant-configuration.md)，总体依赖与启动恢复见 [应用架构](application-architecture.md)，平台接入见 [Enrollment 合同](enrollment-material-contract.md)。
+本文定义 Android 当前配置的 owner、持久化载体、字段目录、引用关系及个人/企业域边界。Assistant 逐字段运行语义见 [助手配置](assistant-configuration.md)，总体依赖与启动恢复见 [应用架构](application-architecture.md)。
 
 ## 1. 配置组成
 
@@ -82,7 +82,7 @@ updateLocal(latest personalSettings transform)
 
 ### 2.4 企业来源与 Session
 
-平台 Discovery、Enrollment、Bootstrap、Snapshot 和运行请求共用原生 Session，不存在手机端模拟企业来源或第二套企业配置。`EnterpriseSessionController` 串行发布身份、连接和 Applied 版本；`EnterpriseAppliedStore` 在 `noBackupFilesDir/enterprise` 用单 manifest 发布经校验的不可变配置与执行描述。用户定义和偏好仍只由 `SettingsStore` 写入。启动恢复在 Settings 和文件 owner 收口后继续本机企业重置及配置恢复；企业校验失败保留企业不可用诊断，不伪装成空配置。
+平台 Discovery、Enrollment、Bootstrap、Snapshot 和运行请求共用原生 Session，不存在手机端模拟企业来源或第二套企业配置。`EnterpriseSessionController` 串行发布身份、连接和 Applied 版本；`EnterpriseAppliedStore` 在 `noBackupFilesDir/enterprise` 用单 manifest 发布经校验的不可变配置与执行描述。用户定义和偏好仍只由 `SettingsStore` 写入。启动恢复在 Settings 和文件 owner 完成恢复后继续本机企业重置及配置恢复；企业校验失败保留企业不可用诊断，不伪装成空配置。
 
 正式接入入口为扫码、相册识码和粘贴，统一经 `EnrollmentMaterialParser` 解析和用户确认。`PlatformSnapshotMapper` 当前只映射平台 MCP 定义，`gateways` 固定为空；保留的 Gateway 数据类型与使用偏好不代表平台已下发手机端 Gateway 资源。
 
@@ -92,8 +92,8 @@ updateLocal(latest personalSettings transform)
 
 平台地址是 Session 的可变连接参数，不是 deployment 身份。`PlatformEnterpriseService.changeAddress` 先验证同一 deployment、原用户/设备/Session，再由 Session owner 一次提交新地址及必要的轮换凭据；失败保留已确认连接。退出、撤销与身份删除先持久发布 CLOSING，停止新操作并等待已有 operation/execution lease；`EnterpriseExitService` 只完成原 Session 的退出。永久身份删除由 `EnterpriseIdentityDataDisposer` 编排各 owner 精确清除该 principal，个人数据不进入范围。全设备本机重置由 `EnterpriseDataResetService` 持久化 reset intent，复用同一关闭屏障并在重启后继续，不能用清日志或空列表表示完成。
 
-- 地址切换期间，已捕获的请求继续使用原连接；新连接只供提交后的请求。候选地址验证失败不关闭原 Portal。成功后旧 Portal 的关闭和站点清理由同一屏障确认。候选地址若已完成凭据轮换，失败收口不能回退到已失效凭据。
-- 主动退出、到期、撤销和身份删除都绑定原 Session；重复请求合并。`IDENTITY_DELETED` 是更强的持久终态，不能被重启或较弱的退出原因覆盖。远端注销失败仍须完成可恢复的本机收口并保留原诊断。
+- 地址切换期间，已捕获的请求继续使用原连接；新连接只供提交后的请求。候选地址验证失败不关闭原 Portal。成功后旧 Portal 的关闭和站点清理由同一屏障确认。候选地址若已完成凭据轮换，失败处理不能回退到已失效凭据。
+- 主动退出、到期、撤销和身份删除都绑定原 Session；重复请求合并。`IDENTITY_DELETED` 是更强的持久终态，不能被重启或较弱的退出原因覆盖。远端注销失败仍须完成可恢复的本机退出与清理并保留原诊断。
 - 本机重置区分“仅删除接入”与“接入和全部企业历史”，范围先写入 intent，再由原数据 owner 清理；强删除终态到达时扩大清理范围，重启继续。两个分支都不删除个人域，也不依赖 Core logout 成功。
 
 `PlatformSnapshotMapper` 将受支持的 Snapshot v4/v5 映射为候选；`EnterpriseConfigurationCodec` 在读取 canonical Applied 时再次校验同一领域约束。`ManagedPolicy` 的助手、对话、快速、标题、附件检查、建议、压缩、图片、TTS、ASR 十项默认引用均可省略；缺失表示未设置，不取资源首项，也不复制对话默认。非空模型引用必须指向同一快照内已启用模型，附件检查模型还需 IMAGE 输入。可选 `imageGenerators` 缺失表示空集合；显式 null、未知字段和未知枚举失败关闭。平台 Snapshot 版本与本地 Applied manifest 版本是不同契约，不能混用。
@@ -108,7 +108,7 @@ Android v4/v5 的唯一 wire 来源为 Core 导出的 `contracts/platform/client
 
 #### 配置兼容性与空间导航
 
-长期协议演进与消费者义务集中定义于 [Control Protocol §10.10.3](../../../measix/measix-architecture/docs/10-runtime-foundation/s0/measix-s0-control-protocol.md#10103-snapshot-兼容用户提示与后续演进)；此处只记录 Android 实现落点。
+长期协议演进与消费者义务集中定义于 [Control Protocol §10.10.3](../../../measix/measix-architecture/docs/10-runtime-foundation/s0/measix-s0-control-protocol.md#10103-snapshot-兼容用户提示与后续演进)；此处只记录 Android 实现入口。
 
 - `EnterpriseSessionController.readPresentation` 的 `canEnterEnterprise` 与 `switchRealm` 共用数据访问规则。有效身份在 CONFIGURATION_PENDING 也可选择企业空间；`EnterpriseAppliedStore` 保存并恢复此选择，无需改变 manifest 格式。个人空间不依赖企业网络配置；过期、撤销、关闭和跨主体限制继续生效。
 - `EnterpriseSnapshotCompatibilityException` 携带服务端版本与客户端支持集合；空集合或混合不匹配不误报客户端过旧。Snapshot 成功响应超过 4 MiB 上限，以及 `validateSnapshotContent` 内的解码、身份/ETag、映射校验失败，均标记为 `EnterpriseSnapshotContentException` 并保留 cause。真实读流失败仍为网络错误；HTTP、持久化错误与取消不冒充版本不兼容，其他接口不沿用 Snapshot 的内容错误分类。
@@ -116,6 +116,30 @@ Android v4/v5 的唯一 wire 来源为 Core 导出的 `contracts/platform/client
 - Native 同步与接入后的配置同步消费同次 `EnterpriseSynchronizationCommandResult`：成功、失败已呈现或已被替代；失败不再重复发布通用错误或误报接入资料无效。执行调用仍传播原异常，取消不转成命令失败。
 - 启动恢复、手动同步、进入企业空间及执行前补同步复用上述链。空间切换成功后异步同步，不以远端下载成功作为导航条件；兼容性失败保留绑定、Applied 和历史。执行前若已观察到同步失败，须先经同一入口重试，再进行原 Core Managed State/generation 准入；已有 READY 或缓存代际不能绕过失败。
 - `EnterpriseApplicationService` 投影同步状态；企业页在原连接区提供简短原因，技术诊断默认折叠且可选择复制，抽屉当前企业入口和企业聊天顶部只增加必要的短提示，点击进入同一企业页面；个人会话不显示该企业异常。较新格式提示更新应用，过旧格式提示管理员处理，非法配置与网络错误分别提示；不捏造最低应用版本或下载地址。成功同步清除对应 Session 的失败，不清库或重新接入。
+
+### 企业接入资料与身份建立
+
+当前接入只有 Core 平台来源。实现入口为 `EnrollmentMaterialParser`、`EnterpriseApplicationService`、`PlatformEnterpriseService` 与 `EnterpriseSessionController`；协议权威是平台架构仓库的 [Control Protocol §8](../../../measix/measix-architecture/docs/10-runtime-foundation/s0/measix-s0-control-protocol.md)。接入成功只建立身份，不替代后续配置同步和执行准入。
+
+#### 格式与信任
+
+Enrollment material 使用 `formatVersion=1`、`kind=PLATFORM_ENROLLMENT`，必填 `platformUrl`、`code`、`expiresAt`，拒绝未知字段、重复解码键、null、未知版本/kind 和非法时间。原始 UTF-8 输入最多 2048 字节；code 为 1–128 个 Unicode 字符。`expiresAt` 接受当前 RFC3339 UTC 子集并按 `Instant` 判断到期。
+
+`platformUrl` 必须是规范化的 HTTP/HTTPS origin，可使用域名、局域网 IP、IPv6 和显式端口；拒绝 userinfo、query、fragment、非根 path 与非法端口。扫码、相册和粘贴都进入同一解析器。解析成功只产生带规范化 origin 的 `EnterpriseJoinConfirmation`，用户确认后才执行 Discovery、Enrollment exchange、Bootstrap 与 Snapshot 同步；取消或被替换的确认不发网络请求。
+
+Core 使用 `enrollment_expired` 区分过期资料，并区分两个 409：一次性码已使用为 `enrollment_already_used`；本机 installation 已绑定另一用户为 `installation_user_conflict`，且不消费新码。Android 的本地到期预检与 Core 响应使用同一过期 reason，并为过期、已使用、格式无效和 installation 冲突显示各自稳定、可操作的主文案；历史手机端来源不再进入提示。普通换用户需要用户在“重置与数据处置”中重置企业连接，使 `EnterpriseAppliedStore.resetLocalState()` 删除本机 installation ID；仅撤销 Core 设备不会改变手机 installation 身份。管理员 hard delete COMPLETED 后是明确例外：旧 Device 已由 Core 删除，同一 installation 可用新 Enrollment 绑定新 principal，不要求 Android 为绕过校验而轮换 installation ID。
+
+#### Session 与恢复
+
+`PlatformEnterpriseService` 编排网络 I/O，`EnterpriseSessionController` 是身份、pending enrollment 和 Applied 状态的串行写 owner。兑换成功后先保存 pending；Bootstrap 核对 Session/User/Device/Deployment 才发布企业身份。临时网络失败保留 pending 并在应用恢复后继续 Bootstrap，不重复兑换一次性 code。若前一 principal 已被管理员删除，pending 阶段继续保留 `IDENTITY_DELETED` 终态；只有 Bootstrap 确认 Core 签发的新 principal 后，Session owner 才在同一 manifest 提交中发布新 Session 并清除旧 reason。首次兑换、手动重试与启动恢复共用同一 Bootstrap 终态处理。若 pending 所属 principal 在 Bootstrap 前也被删除，删除响应会原子移除 pending credential 并保留 `SIGNED_OUT + IDENTITY_DELETED`，下一份新接入资料可重新兑换。相同 username 不代表相同 principal，旧 Access/Refresh credential 和旧域数据不会因此恢复。
+
+installation ID 在一次本机企业连接生命周期内稳定，不能为绕过跨用户限制而自动更换。refresh credential 与 pending idempotency key 由 `EnterpriseAppliedStore` 加密、原子持久化；access token 只在内存。退出与本机重置使用本节前述关闭屏障。
+
+#### 契约同步与验证
+
+Core `api/generated/android/portal/` 是唯一消费输入，Android 在 `app/src/test/resources/contracts/portal/` 固定其 manifest 和当前六份 artifact：Portal contract、Client Feed schema、native/feed vectors、platform enrollment fixture 与 enrollment cases。普通 Android 构建不依赖 sibling checkout；消费副本不得独立演进。
+
+`EnrollmentMaterialParserTest` 验证严格字段、重复键、UTF-8/字符限制、UTC 与 origin；`EnrollmentSharedCasesTest` 直接消费 Core 共享 raw cases；`PlatformSessionNetworkTest` 使用真实本机 HTTP 验证兑换、Bootstrap 恢复、刷新与撤销。二维码库 round-trip、JVM 和本机 HTTP 都不能替代真实 Core + Android 相机/相册/发行版设备验收。
 
 ### 2.5 按主体解析与使用偏好
 
@@ -137,126 +161,34 @@ Portal 原生媒体的暂存、额度、取消交接与删除恢复归 `PortalMe
 
 Conversation、Memory、Artifact、GeneratedMedia、收藏、分页与统计中的 durable 行均带完整 scope。个人备份只构建个人数据及其共享资源闭合图；恢复时保留最新企业图，文件由各自 owner 交接。系统备份和设备迁移不直接复制混合域存储。具体备份格式、旧数据迁移与字段目录见下文对应载体；文件与会话的写协议仍归各自专题。
 
-## 3. Local Settings 顶层结构
+## 3. 用户配置结构
 
-下表的 DataStore key 列记录旧迁移输入键，正常落盘已统一为 `user_settings` 的类型化结构。下表中的“读取默认”以空 DataStore 的真实迁移/读取/物化结果为准，不以 `Settings()` 中为序列化兼容而存在的随机 UUID
-占位值为准。配置演进时必须分别检查四种语义：Kotlin 构造默认、DataStore key 缺失默认、`materializeForRead()`
-后的有效默认、Managed 字段未提供；它们不能相互代替。当前 JSON codec 使用 `ignoreUnknownKeys=true` 和
-`encodeDefaults=true`。
+`UserSettingsDocument.configuration` 是用户可编辑配置的持久事实；`Settings` 还包含运行消费所需的投影。
+字段定义位于 `SettingsStore.kt`，迁移与读取规范化分别由 `UserSettingsMigration`、`SettingsNormalization` 维护。
+不在这里复制完整属性清单，但必须区分四种默认语义：Kotlin 构造默认、旧 DataStore key 缺失默认、
+`materializeForRead()` 后的有效默认、企业字段未提供。不能用其中一种推断另一种。
+例如 `Settings()` 的 `modeInjections` 构造默认包含 `DEFAULT_MODE_INJECTIONS`，空存储经过迁移后却为
+空列表，读取规范化不会补回 Learning Mode。正常持久化写入 `user_settings` 的类型化结构；
+JSON codec 使用 `ignoreUnknownKeys=true` 和 `encodeDefaults=true`。
 
-### 3.1 外观与显示
+| 配置类别 | 语义与边界 |
+| --- | --- |
+| 显示与主题 | `DisplaySetting`、主题及自定义主题是用户偏好；系统栏和布局由 [UI 策略](ui-architecture.md)解析 |
+| 模型与派生任务 | Chat、标题、摘要、建议、生图、附件识别等选择分别解析，不能用当前聊天模型替代失效的显式引用 |
+| 资源目录 | Provider、Assistant、提示规则、MCP、语音和搜索定义保留各自 ID；目录存在不表示当前域获准使用 |
+| 本域使用选择 | `ResourceSelections` 与助手使用偏好按主体保存，不能反写企业受管定义或全局用户选择 |
+| 备份与内部状态 | 用户备份配置与提醒独立于同步、清理和恢复状态；内部状态不成为 UI 可任意回写的聚合 |
 
-| `Settings` 字段 | 类型 | DataStore key | 读取默认 | 说明 |
-|---|---|---|---|---|
-| `dynamicColor` | `Boolean` | `dynamic_color` | `true` | Android 动态色 |
-| `themeId` | `String` | `theme_id` | 首个预设主题 ID | 非动态色时的主题 |
-| `customThemes` | `List<CustomTheme>` | `custom_themes` | `[]` | 用户自定义主题 |
-| `displaySetting` | `DisplaySetting` | `display_setting` | `DisplaySetting()` | 聊天显示、通知、TTS 播放和输入偏好 |
+`null`、空集合、未设置和显式失效引用必须按各字段协议区分；不得根据显示文本反推配置语义。
+助手模型的三态、工具和提示字段见 [助手配置](assistant-configuration.md)。
 
-### 3.2 模型选择、提示与派生任务
+## 4. 资源定义与专题边界
 
-| `Settings` 字段 | 类型 | DataStore key | 读取默认 | 引用/用途 |
-|---|---|---|---|---|
-| `favoriteModels` | `List<ConfigurationReference>` | `favorite_models` | `[]` | 按域保存引用；失效引用保留并可取消收藏 |
-| `chatModelId` | `ConfigurationReference` | `chat_model` | `DEFAULT_AUTO_MODEL_ID` | 全局 Chat 默认；Assistant 可覆盖 |
-| `fastModelId` | `ConfigurationReference` | `fast_model` | `DEFAULT_AUTO_MODEL_ID` | 快速任务默认 |
-| `titleModelId` | `ConfigurationReference?` | `title_model` | `null` | 标题生成显式选择 |
-| `imageGenerationModelId` | `ConfigurationReference` | `image_generation_model` | `DEFAULT_AUTO_MODEL_ID` | Local standalone image generation |
-| `titlePrompt` | `String` | `title_prompt` | `DEFAULT_TITLE_PROMPT` | 标题生成 prompt |
-| `enableSuggestion` | `Boolean` | `enable_suggestion` | `true` | 是否生成后续建议 |
-| `suggestionModelId` | `ConfigurationReference?` | `suggestion_model` | `null` | 建议生成显式模型 |
-| `suggestionPrompt` | `String` | `suggestion_prompt` | `DEFAULT_SUGGESTION_PROMPT` | 建议生成 prompt |
-| `attachmentInspectionModelId` | `ConfigurationReference?` | `attachment_inspection_model` | `null` | 文本模型无法原生看图时的配置化视觉模型 |
-| `compressModelId` | `ConfigurationReference` | `compress_model` | `DEFAULT_AUTO_MODEL_ID` | 历史压缩模型 |
-| `compressPrompt` | `String` | `compress_prompt` | `DEFAULT_COMPRESS_PROMPT` | 历史压缩 prompt |
+### 4.1 显示偏好
 
-旧 `ocr_model` / `ocr_prompt` 只存在于一次性迁移：合法的 image-input 模型迁移到
-`attachmentInspectionModelId`，旧 OCR prompt 不迁移；旧 key 随迁移删除。
-
-另一个必须保留的兼容差异：`Settings()` 构造器默认带 `DEFAULT_MODE_INJECTIONS`，但空 DataStore 的
-`mode_injections` 实际读取为 `[]`，读取物化也不会自动补 Learning Mode。不能用构造默认推断新安装持久状态。
-
-### 3.3 可引用资源目录与选择项
-
-| `Settings` 字段 | 类型 | DataStore key | 读取默认 | 说明 |
-|---|---|---|---|---|
-| `providers` | `List<ProviderSetting>` | `providers` | 读取后补齐 `DEFAULT_PROVIDERS` | Local Provider + Model 目录 |
-| `assistants` | `List<Assistant>` | `assistants` | 读取后补齐 `DEFAULT_ASSISTANTS` | Assistant 定义目录 |
-| `assistantId` | `ConfigurationReference` | `select_assistant` | `DEFAULT_ASSISTANT_ID` | 新会话/全局入口当前选择，不覆盖已有会话归属 |
-| `assistantTags` | `List<Tag>` | `assistant_tags` | `[]` | Assistant 分组标签 |
-| `searchServices` | `List<SearchServiceOptions>` | `search_services` | 至少物化 `SearchServiceOptions.DEFAULT` | Local Search provider 目录 |
-| `searchCommonOptions` | `SearchCommonOptions` | `search_common` | `resultSize=10` | 公共搜索参数 |
-| `selectedSearchServiceId` | `ConfigurationReference?` | `selected_search_service_id` | 个人未指定由 Resolver 派生首个已配置服务；企业未指定不回退 | 按域稳定 ID 选择；旧 index key 已迁移 |
-| `mcpServers` | `List<McpServerConfig>` | `mcp_servers` | `[]` | Local MCP definition、headers、OAuth、工具策略；远端目录独立持久化 |
-| `ttsProviders` | `List<TTSProviderSetting>` | `tts_providers` | 读取后补齐 System TTS | Local TTS 目录 |
-| `selectedTTSProviderId` | `ConfigurationReference` | `selected_tts_provider` | `DEFAULT_SYSTEM_TTS_ID` | 当前 TTS 选择 |
-| `defaultTTSPlaybackSpeed` | `Float` | `default_tts_playback_speed` | `1.0`，持久化限制 `0.5..2.0` | 公共播放速度 |
-| `asrProviders` | `List<ASRProviderSetting>` | `asr_providers` | `[]` | 当前只有 Local realtime ASR 类型 |
-| `selectedASRProviderId` | `ConfigurationReference?` | `selected_asr_provider` | 首个有效项或 `null` | 当前 ASR 选择 |
-| `modeInjections` | `List<ModeInjection>` | `mode_injections` | `[]` | Prompt Injection 目录 |
-| `quickMessages` | `List<QuickMessage>` | `quick_messages` | `[]` | 快捷消息目录 |
-
-### 3.4 备份、统计和内部状态
-
-| `Settings` 字段 | 类型 | DataStore key | 读取默认 | 分类 |
-|---|---|---|---|---|
-| `webDavConfig` | `WebDavConfig` | `webdav_config` | `WebDavConfig()` | Local backup credential/config，不得企业下发 |
-| `s3Config` | `S3Config` | `s3_config` | `S3Config()` | Local backup credential/config，不得企业下发 |
-| `backupReminderConfig` | `BackupReminderConfig` | `backup_reminder_config` | disabled / 7 days / never | 用户提醒偏好 + 上次备份状态 |
-| `launchCount` | `Int` | `launch_count` | `0` | 运行统计，不是策略配置 |
-| `ignoredUpdateVersion` | `String` | `ignored_update_version` | `""` | 用户更新提示状态 |
-| `pendingAssistantDeletions` | `List<PendingAssistantDeletion>` | `pending_assistant_deletions` | `[]` | 内部恢复 tombstone；不进入 `Settings` JSON 序列化 |
-
-`Settings.init` 也是 `@Transient`，只标记不可保存的初始化 dummy，不是配置字段。
-
-## 4. Local 嵌套配置结构
-
-### 4.1 `DisplaySetting`
-
-| 字段 | 默认值 | 语义 |
-|---|---|---|
-| `userAvatar` | `Avatar.Dummy` | 用户头像 |
-| `userNickname` | `""` | 用户昵称及 prompt 占位符来源 |
-| `useAppIconStyleLoadingIndicator` | `true` | App 图标风格加载动画 |
-| `showUserAvatar` | `true` | 显示用户头像 |
-| `showAssistantBubble` | `false` | 显示 Assistant 气泡 |
-| `bubbleOpacity` | `1.0` | 气泡不透明度 |
-| `showModelIcon` | `true` | 显示模型图标 |
-| `showModelName` | `true` | 显示模型名 |
-| `showDateTimeInMessage` | `false` | 显示消息时间 |
-| `showTokenUsage` | `true` | 显示 token usage |
-| `showThinkingContent` | `true` | 显示推理内容 |
-| `autoCloseThinking` | `true` | 自动折叠已完成推理 |
-| `showUpdates` | `true` | 允许更新检查/提示 |
-| `updateCheckDisabledUntilEpochMillis` | `0` | 更新检查临时暂停截止时间 |
-| `showMessageJumper` | `true` | 显示消息跳转器 |
-| `messageJumperOnLeft` | `false` | 跳转器位置 |
-| `fontSizeRatio` | `1.0` | 聊天字号比例 |
-| `enableMessageGenerationHapticEffect` | `true` | 生成触觉反馈 |
-| `enableMessageGenerationSoundEffect` | `true` | 生成音效 |
-| `skipCropImage` | `true` | 选择图片时跳过裁剪 |
-| `enableNotificationOnMessageGeneration` | `true` | 后台生成完成通知 |
-| `enableLiveUpdateNotification` | `true` | 生成过程实时通知 |
-| `codeBlockAutoWrap` | `true` | 代码块自动换行 |
-| `codeBlockAutoCollapse` | `true` | 代码块自动折叠 |
-| `showLineNumbers` | `false` | 代码行号 |
-| `ttsOnlyReadQuoted` | `false` | TTS 只读引用部分 |
-| `ttsOnlyReadOutsideBrackets` | `false` | TTS 跳过括号内容 |
-| `autoPlayTTSAfterGeneration` | `false` | 生成完成自动播放 TTS |
-| `ttsToolSequentialPlayback` | `true` | 工具 TTS 按 turn 顺序播放 |
-| `pasteLongTextAsFile` | `false` | 长文本粘贴转文件 |
-| `pasteLongTextThreshold` | `1000` | 转文件字符阈值 |
-| `sendOnEnter` | `false` | Enter 直接发送 |
-| `enableAutoScroll` | `true` | 生成时自动滚动 |
-| `enableLatexRendering` | `true` | LaTeX 渲染 |
-| `enableBlurEffect` | `false` | 模糊效果 |
-| `chatFontFamily` | `DEFAULT` | `DEFAULT/SERIF/MONOSPACE/CUSTOM` |
-| `chatCustomFontPath` | `""` | 应用内部字体文件域中的本地路径 |
-| `chatCustomFontName` | `""` | 自定义字体显示名 |
-| `enableVolumeKeyScroll` | `false` | 音量键滚动 |
-| `volumeKeyScrollRatio` | `1.0` | 音量键滚动倍率 |
-
-`CustomTheme` 为 `{id, name, primaryColorArgb, secondaryColorArgb?, tertiaryColorArgb?}`。
+`DisplaySetting` 保存消息外观、自动滚动、触觉、更新提示等显示偏好。页面消费 query/UiModel，
+外观选择由 `AppearancePolicy` 统一解释；颜色模式和 AMOLED 的 SharedPreferences 归属见下文。
+显示正则、字体或气泡设置不修改 durable 消息或 Provider 请求；请求侧正则另见 [助手配置](assistant-configuration.md)。
 
 ### 4.2 Provider 与 Model
 
@@ -300,7 +232,33 @@ Model
 
 `ConversationApplicationService` 是 Draft 开场选择、刷新、清除的 application 入口；`BindDraftOpening` 在原 Conversation owner 中保存唯一绑定，并以非持久 selection token 做 CAS。选择提交后的输入接纳失败只补偿本 token，不能清掉后续选择；`ChatVM` 使用同一输入 Mutex 串行选择、刷新、清除、切助手和首次发送。跨页 `StarterOpeningReference` 只含定义摘要和原发布来源，初始化复验完整定义摘要后绑定，不传 System/背景正文。`requireCurrentStarterOpening` 首发比较仍获准的完整定义，独立 generation 变化不阻断；内容变化或撤销保留草稿并给出原因。目录与选择摘要均不复制长正文，详情由原授权查询按需投影。
 
-### 4.4 Search
+### 4.4 企业 Starter 与会话开场
+
+Starter 是企业发布的任务入口；`prompt` 是供用户编辑的起始输入，Opening 是会话绑定的开场定义副本。
+二者都不是运行记忆。Snapshot v4 的 Starter 只预填提示词；v5 要求 `openingSnapshot`，包含完整
+`systemPrompt` 和有序 `initialContexts(id,title,content)`。严格解析拒绝版本与字段不匹配、重复背景 ID；
+Android 保留发布值的空串、空白、顺序和字面内容，不把已发布的空 System 重新解释成“继承助手”。
+发布端如何编制默认值归 Core 合同；Android 消费 Core 导出的样例，不在客户端重新编译发布定义。
+
+| 阶段 | 当前行为与负责入口 |
+| --- | --- |
+| 浏览与导航 | 目录包含标题、描述、完整起始 prompt 与 opening 可用性；`StarterOpeningReference` 仅携带定义摘要与原发布身份，opening 的 System/背景正文经授权 query 按需读取 |
+| Draft 选择 | `ConversationApplicationService` 经 `BindDraftOpening` 在内存绑定；selection token 比较并交换（CAS）防止迟到选择覆盖新选择，输入拒收只补偿本次 token |
+| 显式刷新 | 复验最新完整定义并更新绑定，不再次追加起始提示词；选择 v4 入口会清除已有 Draft opening |
+| 首次发送 | `requireCurrentStarterOpening` 比较助手、当前准入和完整 Starter 定义；单独 generation 改变不拒绝，定义变更/撤销则保留草稿与附件并报告原因 |
+| 持久化 | 首次 `AppendUserMessage` 在同一事务保存会话根、opening 和用户实际输入；START 是之后的独立命令，其失败不撤销已提交输入 |
+| 已有会话 | 再选 Starter 只追加提示词，不替换根 opening；删除首条消息不删除根 opening，Fork 复制该事实而不复制执行任务 |
+
+`ConversationOpening` 保存原助手、releaseId、generation、snapshotHash 和完整 Starter 定义，
+不保存凭据、Session 或执行租约。原始 prompt 与用户编辑后发送的 USER 是不同事实；未发送 Draft 不落库。
+三个界面入口（空间预览、聊天快捷菜单、空白聊天卡片）使用同一 application 协议，不自动发送。
+
+Opening 的 System 只在当前会话助手等于原助手时参与选择，优先级低于合法非空会话覆盖、高于助手定义；
+切走后不应用，切回且获准时可再次应用。模板每个 START 按当次变量渲染，同一 Turn 固定。
+背景仍是会话输入，按请求窗口投影，不因换助手变成新用户指令。其模型格式和位置见
+[提示词与工具](prompts-and-tools.md)，接纳与历史来源见 [请求上下文](request-context.md)。
+
+### 4.5 搜索配置
 
 ```text
 SearchCommonOptions
@@ -315,50 +273,11 @@ SearchServiceOptions
 Search 包含本地用户 API key/URL/账号，不作为 Model/MCP 路由或企业凭据载体。
 当前 `SearchServiceOptions.DEFAULT` 在类加载时由 `BingLocalOptions()` 产生随机 UUID，不具备跨安装/跨设备稳定性。
 
-### 4.5 TTS
+### 4.6 语音配置
 
-所有 Local TTS 类型都有 `id/name`，类型特有字段如下：
-
-| Local 类型 | 字段 |
-|---|---|
-| `OpenAI` | `id, name, apiKey, baseUrl, model, voice` |
-| `Gemini` | `id, name, apiKey, baseUrl, model, voiceName` |
-| `SystemTTS` | `id, name, speechRate, pitch` |
-| `MiMo` | `id, name, apiKey, baseUrl, model, voice, voiceDesignPrompt` |
-
-`selectedTTSProviderId` 选中一个 provider；`defaultTTSPlaybackSpeed` 是播放层公共速度，不是服务端 TTS voice。
-
-公共倍速位于一般偏好的 TTS 组，保持既有字段和播放层设置协议。`TtsController` 仅预取当前位置之后两段；同 turn 的追加只补足该窗口，不能按上次预取位置继续前推。没有自动合成重试或跳过队列项的旁路。远端 TTS 可并发预取；`SystemTTSProvider` 通过单一 `SystemTtsSynthesisCoordinator` 串行访问设备引擎，避免厂商实现同时绑定和合成多个分片。
-
-企业公开定义使用 `EnterpriseTtsResource`，共同字段为 `id/name/enabled/protocol`；云端协议携带 `modelId/voice` 等条件字段，System TTS 只携带 `speechRate/pitch`。云端 `voice` 必须按协议显式提供，不补 Android 默认音色。企业定义与用户 `TTSProviderSetting`、私有 `EnterpriseRuntimeBinding` 分别保存。
-
-`TtsController` 统一管理分片、预取与播放；每个 `TtsPlaybackSession` 提供合成和播放准入回调。停止取消并返回同一组任务的清理回执，恢复播放复验原 worker，销毁等待整个 controller 协程作用域，包含旧队列尚未退出的合成。`SpeechApplicationService` 为唯一应用语音 owner，提供 `SpeechPlayback` / `SpeechRecognition` UI 端口；页面不创建 controller 或通过 AppEvent 发出播放请求。系统 TTS 在主线程创建和调用引擎，初始化、参数、语言、启动、带错误码终态、主动停止、空输出、超时和关闭都产生明确诊断；回调只接受第一个匹配 utterance 的终态，取消仍向上传播。System TTS 的 speech rate 固定为 `0.1..3.0`，pitch 固定为 `0.1..2.0`，个人与企业定义共用该校验。OpenAI/Gemini HTTP 合成使用 `Call.readResponse`，取消实际网络 Call，并等待响应正文读取退出后关闭响应。
-
-### 4.6 ASR
-
-所有 Local ASR 类型都有 `id/name`，类型特有字段如下：
-
-| Local 类型 | 字段 |
-|---|---|
-| `OpenAIRealtime` | `id, name, apiKey, websocketUrl, model, language, prompt, sampleRate, vadThreshold, prefixPaddingMs, silenceDurationMs` |
-| `DashScope` | `id, name, apiKey, websocketUrl, model, language, sampleRate, vadThreshold, silenceDurationMs` |
-
-当前 Local ASR 使用 WebSocket/realtime controller 配置，HTTP transcription 不由这些 realtime 类型承载。
-
-`RealtimeAsrController` 统一管理两种个人实时协议的连接、消息投影和停止流程，各自的 endpoint/session 编码仍取对应配置类型。`PcmAudioCapture` 独占一只麦克风及阻塞读循环。用户停止、服务端结束和关闭帧共用一次读循环等待与关闭握手；销毁等待所有已取消录音及原连接的 WebSocket 终态回调。`SpeechApplicationService` 保留原 Recognition、转写交付任务和第一次销毁回执；正常结束先完成最终交付，再等待 controller/录音/网络退出并释放 binding。取消或替换后，旧回调不得更新新输入或错误投影。`HttpAsrController` 使用同一 PcmAudioCapture 写入临时 WAV；停止后在写 WAV 头和上传前累计检查 PCM 的 RMS、峰值和非零样本数。无有效信号抛出 `NoSpeechDetectedException`，应用显示“未检测到语音，请重试。”且不会调用 transport；所有路径最终回收原文件，清理失败保留原文件与 owner 供重试。
-
-企业公开定义独立使用 `EnterpriseAsrResource`，共同字段为 `id/name/enabled/modelId/language/protocol`，其中 `language` 可省略，提供时必须非空。`EnterpriseSpeechDefinition.validate` 按协议校验条件字段：OpenAI/DashScope HTTP 禁止实时字段，OpenAI realtime 与 DashScope realtime 分别要求各自采样率、VAD 等参数，不跨协议补值。
-
-平台云端 TTS 通过 `SpeechHttpTransport` 把完整资源地址、平台头和请求 client 传给现有 OpenAI/Gemini/MiMo 编解码器，`TTSRequest.transport` 只在内存使用，不进入序列化配置。`TtsSynthesizer` 和 `TtsController` 共用个人空间的音频合成、播放、暂停、停止流程。系统朗读只使用现有 SystemTTS 引擎的 speechRate/pitch，不取得远端 binding；它仍属于企业定义，禁止个人 TTS 不会禁用它。
-
-平台文件识别通过原 `HttpAsrController` 录制 WAV：`FileTranscription` 对 OpenAI 构造 multipart，对 DashScope 构造 Data URI JSON 并读取 output.text。`maxFileTranscriptionAudioBytes` 按实际协议开销从请求上限反算录音文件上限，录音达到上限明确失败并回收原文件，不静默截断或自动重新上传。
-
-平台实时识别复用 `RealtimeAsrController` 的协议编码、PCM 采集和停止流程，`RealtimeAsrTransport` 只在内存传递完整平台握手请求。`SingleAttemptWebSocketFactory` 用公开 HTTP upgrade socket API 保留原 WebSocket 编解码器，在握手 follow-up 前拒绝失败响应；取消同时关闭原握手 Call 与 WebSocket。升级连接的 sink 累计实际写入字节，自动 pong 和关闭帧也计入平台上限。发送拥堵、超限及上游失败明确结束识别，不静默丢弃录音，不自动重连或重放。
-
-独立语音交互先经权威 Managed State 检查再冻结配置；工具朗读沿用父 turn 的上下文。平台租约以原 AppliedVersion 获取，请求前取得当前 Session 令牌并复验原语音 owner。模型与语音共用 `common.http.withExplicitRoute` 的完整地址、请求体上限、禁止自动重放和真实 HTTP 诊断；有效 428 仍由原语音 owner 终止与同步。播放器和文件识别的失败由应用提供 `userVisibleDiagnostic`，保留异常类型与 cause，不以通用语音失败替换。
-
-`EnterpriseSpeechTransport` 按平台 Snapshot 的协议编码 TTS 与 ASR 请求，注入原 generation/interaction；Runtime endpoint 与认证只归 platform execution transport。HTTP client 不重定向或自动重试。共享 `ManagedSnapshotRequired` 解析 428 barrier，严格 JSON 解码归 `StrictJsonValue`。应用 owner 在原 `RealmSelection` 下捕获资源和完整 AppliedVersion，队列/录音自行持有 execution lease 至实际清理完成。独立播放/录音创建交互，工具和主/子助手共用原 turn 的冻结语音上下文。完成事件携带原回复和该上下文，自动朗读不查询新 turn 的全局选择。428 永久终止原语音交互，分别收口父 turn、语音资源与同步，不重放；文件清理失败不能跳过父 turn 停止或同步。空间切换在 Session 锁内只撤销和停止硬件，锁外等待清理。
-
+用户语音定义保存在 Settings，企业 TTS/ASR 定义保存在 Applied 配置，平台执行绑定单独管理。
+`selectedTTSProviderId` 与 ASR 选择由本域解析；公共播放倍速属于播放偏好，不是服务端 voice。
+类型、协议条件、交互冻结、取消与硬件清理统一见 [语音架构](speech-architecture.md)。
 
 ### 4.7 MCP
 
@@ -395,56 +314,30 @@ Local OAuth/headers 保持 Local。Managed MCP 只能携带平台 `runtimePath` 
 
 MCP 配置写入口由 `McpApplicationService` 统一调用 `validateMcpHeaders`；批量导入全部校验后才原子写入，合法 header value 不 trim。仅编辑器本次新增的完全空行可作为未保存草稿忽略；历史非法行不会被静默删除。稳定 reason 与行号不包含凭据值，保存/导入失败保留编辑输入。连接前与企业每请求复验边界见 [MCP 架构](mcp-architecture.md)。
 
-### 4.8 Backup
+### 4.8 备份配置
 
-```text
-WebDavConfig { url, username, password, path="measix_pilot_backups", items=[DATABASE,FILES] }
-S3Config     { endpoint, accessKeyId, secretAccessKey, bucket, region="auto",
-               pathStyle=true, items=[DATABASE,FILES] }
-BackupReminderConfig { enabled=false, intervalDays=7, lastBackupTime=0 }
-```
-
-普通备份的 `settings.json` 是用户文档的个人配置投影，当前会序列化 Local Provider/Search/TTS/ASR/MCP/WebDAV/S3 中的本地凭据。
-这再次说明 Enterprise credential 不能进入 `Settings`。Managed Snapshot/Binding/credential 也不属于普通备份域。
-
-当前手工完整备份格式为 `rikkahub-personal-v1`，包含个人 `settings.json`、个人 `mcp_catalogs.json`、个人数据图的 `measix_pilot.db`、按图收集的 payload 和完整性 manifest。设置投影仍含用户自己的 Provider/Search/TTS/ASR/MCP/WebDAV/S3 凭据；企业配置、binding、Session、Feed、企业偏好和企业数据均不进入个人包。ZIP 未加密、未签名，SHA-256 仅校验完整性。
-
-`BackupArchiveService` 在既有文件锁与 snapshot barrier 内取得 SQLite 一致快照，`BackupDataGraph` 将个人根及其 Message/Turn/Tool/Context 复制到新建数据库，按显式列名复制并保留自增 ID 高水位；不携带源库空闲页、未知表或旧全文索引。Artifact 引用和 FTS 从保留的消息重建。个人 Artifact 包含未挂接聊天的用户文件；payload 清单只来自保留的 metadata、生命周期 receipt，以及共享 Skill/字体配置，不扫描整份 upload/images。Workspace 注册信息属于共享配置，Workspace 目录内容不进入该包。
-
-个人格式最低要求带 durable scope 的 Room schema 12，不绑定后续 App 或当前 Room 版本；升级继续使用同一迁移链。恢复仍接受已发布的 durable-v3/v4/v5 和原有无 manifest 个人备份，使用同一 Room migration/物理 schema 校验；旧格式缺失的头像、背景和预设资产仅在显式恢复入口按 `ArtifactReferencePolicy.detach` 回退默认。新格式要求配置根完整，已持久化的 DELETING 根保留给 Artifact 恢复 owner。正常用户删除附件留下的历史消息仍有效，不重建已经失效的活引用。
-
-`PendingBackupRestore` 保留原始个人输入。冷启动在应用 Room 和运行写入开放前读取最新数据库与同一 Settings DataStore，将“备份个人图 + 最新企业图 + 企业偏好仍引用的共享个人资产”构建为独立 publication。共享 Workspace 注册使用最新本地值。相同主键但不同内容、不同文件 owner 的路径冲突、非规范路径或跨域引用均拒绝，不覆盖企业行；同一共享 Artifact 仅在 metadata 与 payload 均相同时合并。物理发布仍使用既有 swap/rollback；重试先恢复原图，再重新读取最新企业状态。升级时遇到已发布个人版本留下的 prepared 输入，在 publication 副本上走生产 Room migration，保留原输入字节；若旧个人恢复已开始直接交换 pending 文件，先按原交换来源回滚，再进入合并。CREATING/DELETING（包含 payload 已清除但 metadata 补偿未完成的状态）和图库 `.pending`/`.deleting` receipt 交回原 owner 恢复，不在备份层执行生命周期动作。Settings 恢复只替换个人投影，保留企业使用偏好与内部清理状态。旧个人 prepared 输入的失效配置资产在合并企业图前归一化；派生结果保存在 pending 的独立文件，实际 Settings owner 消费同一结果，原 settings.json 与数据库字节不变。恢复 owner 完成后先原子退休 pending，再删除 rollback、publication 与退休目录；清理中断不重放恢复。
-
-Settings-only 包只有个人 Settings 与 MCP Catalog，不携带会话数据或本地 payload 引用。系统备份与设备迁移已显式排除混合域存储，见本文“系统备份边界”。
+WebDAV、S3 和提醒配置属于用户 Settings。个人备份包含用户自己的服务凭据，不能纳入企业
+Snapshot、执行绑定或 Session。归档格式、混合域隔离、冷恢复和系统备份排除规则统一见
+[备份与恢复](data-persistence.md#个人备份与恢复)。
 
 ## 5. Settings 之外的 Android 配置
 
 ### 5.1 SharedPreferences
 
-| Key | 默认 | 分类 |
-|---|---|---|
-| `colorMode` | `SYSTEM` | Local 外观偏好 |
-| `amoledDark` | `false` | Local 外观偏好 |
-| `appLanguage` | `SYSTEM` | Local 语言偏好 |
-| `create_new_conversation_on_start` | `true` | Local 启动行为 |
-| `chat_sidebar_expanded` | `true` | Local 布局偏好 |
-| `search_page_sort_order` | `RELEVANCE` | Local 查询显示偏好 |
-
-CrashHandler 的独立 `crash_handler` SharedPreferences 保存 `crashed` 和截断后的 `stacktrace`，属于崩溃恢复状态，
-不是产品配置。
+主题、语言、启动行为、侧栏和搜索排序属于本机显示偏好，由各自的偏好入口读写，不进入企业发布配置。
+CrashHandler 的独立 `crash_handler` SharedPreferences 保存 `crashed` 和截断后的 `stacktrace`，属于崩溃恢复状态。
+字段名与默认值以相应声明为准，不能将崩溃标记当成用户配置迁移。
 
 ### 5.2 Room 中的配置性事实
 
 - `WorkspaceEntity`：`id/name/root/shellStatus/toolApprovals/createdAt/updatedAt/lastAccessAt`；
 - `ConversationEntity`：以 `assistantId` 固定会话归属，并可保存 `customSystemPrompt`、`modeInjectionIds`、`workspaceCwd`；
-- `conversation_model_context`：由 Assistant request variant 拥有、锚定因果 USER 的 canonical 会话披露事实；不属于 Settings、UI 投影或独立导出域；
+- `conversation_model_context`：类型化的模型上下文条目；请求贡献由 Assistant variant 拥有并保存因果定位，预置/摘要来源指向自身消息；不属于 Settings、UI 投影或独立导出域；
 - `FolderEntity`：`id/assistantId/name/sortIndex/createAt`，作为某个 Assistant 下的 Local 会话分组；
 - Workspace shell 状态和时间戳是生命周期状态，`toolApprovals` 是 Local 用户覆盖；
 - 会话覆盖只有在 Assistant 对应 allow 字段开启时才生效。
 
-Workspace 文件系统另有代码内置的 `WorkspaceConfig` 运行限制：`maxReadBytes=512 KiB`、
-`maxWriteBytes=2 MiB`、`maxListEntries=500`、`maxSearchResults=100`。它们当前不是持久化字段，也没有
-企业下发入口；如果以后改成策略，必须先明确由 Local、Managed Policy 还是 Runtime owner 持有。
+`WorkspaceConfig` 的文件读写、列表与搜索上限是代码内置运行限制，不是持久化 Settings，也没有企业下发入口。具体执行边界由 [Workspace](workspace-architecture.md)维护。
 
 这些事实归原配置或用户数据 owner，企业域按完整主体保存会话与文件夹；Workspace 注册及目录为显式共享配置，不属于企业 Snapshot 或远端会话同步。
 
@@ -463,7 +356,7 @@ ZIP bundle 完整解析并拒绝重复 Skill name 后，复制整个 Skill root�
 
 SkillManager 的 `saveSkill`、`saveSkillFile`、`saveSkillFileBytesAtomically` 与 `deleteSkillFile` 使用单一 suspend 写入口，在 staging 校验完成、发布前检查取消。预期拒绝返回稳定结果码，非预期 IO 抛出原异常，补偿失败保留 suppressed；不再通过 nullable metadata、Boolean 或无 cause 的 IO_FAILURE 丢失原因。GitHub HTTP 429 或带明确限流信号的 403 归为 RATE_LIMITED，普通 403 保留 HTTP 拒绝；status、有限长度响应 detail 与网络 cause 进入同一可复制诊断。搜索只按 name/description 过滤当前 metadata 展示，不更改 enabledSkills 或文件身份。
 
-## 6. 当前引用图与运行依赖
+## 6. 用户配置引用图与运行依赖
 
 ```text
 Settings.providers[].id
@@ -473,9 +366,9 @@ Settings.providers[].id
        └─ Assistant.chatModelId
 
 Settings.assistants[].id
-  ├─ Settings.assistantId                    # 新会话/全局选择
+  ├─ Settings.assistantId                    # 个人新会话选择
   ├─ Conversation.assistantId                # 已有会话权威归属
-  ├─ Folder.assistantId                      # Local 会话分组
+  ├─ Folder.assistantId                      # 同一 scope 内会话分组
   └─ Assistant.allowedSubAssistantIds
 
 Assistant

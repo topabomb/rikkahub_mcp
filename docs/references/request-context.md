@@ -61,6 +61,19 @@ Provider opaque replay、Denied / Answered 和无终态调用不参与。整批�
 模型通过 `read_tool_output` / `grep_tool_output` 回查；注册名、参数、输出上限及工具策略见
 [提示词与工具](prompts-and-tools.md)。回查仍校验当前 conversation 的 TOOL_OUTPUT reference，ref 不是授权。
 
+### 输入的生命周期
+
+| 输入 | 采样或持久化边界 | 后续使用 |
+| --- | --- | --- |
+| System、模型参数、工具定义、提示规则、变量、Workspace 说明 | 每次 START 捕获 | 同一 Turn 的 Step、重试与交互继续复用；下一 START 可更新 |
+| 运行记忆、可见子助手目录 | 每个新请求在当前权限内读取 | 与请求可见历史对账，仅补充未表达或已丢失的状态 |
+| 企业只读 Memory Seed | START 捕获 | 本 Turn 固定；不是可写记忆记录 |
+| Starter opening | 首次用户提交保存到会话根 | System 按助手适用性选择，背景按窗口投影；不重新读取发布定义替换历史 |
+| 预置消息、手动摘要 | 原会话命令持久化 | 按自身消息来源和分支回放，不在每次请求重新实例化 |
+| 时间、文档与附件 | 请求变换后接纳来源和实际文本 | 已保存原文用于历史查看；新请求仍按窗口、当前媒体能力和授权决定适用性 |
+
+冻结模型输入不冻结执行权限：实际模型、工具、文件和企业请求仍由原 owner 复验准入。
+
 ### Turn 冻结与状态同步
 
 `TurnContextFactory.prepareLaunch` 捕获配置、变量、Workspace、工具定义和地址；`materialize` 以
@@ -73,10 +86,15 @@ Provider opaque replay、Denied / Answered 和无终态调用不参与。整批�
 不能凭历史描述扩权。发送重试前仍复验调用者、Memory 和 Artifact 权限，不重新采样输入。
 
 `ConversationDisclosureReconciliation` 将最终请求中实际可见的历史状态包及已确认的内置工具
-input/output 按因果顺序归并为 K，并与当前完整 C 对账。工具身份由本地 producer 的
+input/output 按因果顺序归并为“可见历史已表达状态”（K），并与“当前合法状态”（C）对账。
+这里的 K 是应用可以从输入证明的事实，不是对模型内部记忆的推测；C 也不是跨所有 owner 的全局事务快照。工具身份由本地 producer 的
 `executionIdentity` 固定到 `TurnContextSelection`；同名 MCP 不获得内置写效果语义。只有已提交成功
 且结果足够的操作可以推导效果，未执行不产生效果，不确定或被压缩/移出窗口的效果标为缺失。
 自身已表达效果无需再注入；跨会话或其他未表达差异在下一请求边界补充。没有新请求则不主动生成消息。
+
+例如，历史已表达 A，本会话工具成功把它改成 B，随后外部又改回 A：基准已经是 B，下一请求应披露 A。
+若外部在两次采样间 A→B→A 且 B 从未进入请求，则无需通知。通过设置页进行的修改没有当前请求工具证据，
+仍属于外部变化；子助手的自然语言总结也不能证明共享记忆的精确写入。
 
 `DisclosureSectionChange` 在同一次对账中保存 EXTERNAL_STATE 的逐项差异：新增 ID、修改/移除前的行、
 变化前的属性，以及只读背景的相对顺序变化。比较基准是已归并自身成功工具效果的实际可见 K，
@@ -184,8 +202,8 @@ Provider `input_tokens`。`ChatSizeChecker` 的预警读取最近一次发送前
 
 `ConversationModelContextApplicability` 统一 selected variant 与因果 anchor 适用性；预置/摘要自身拥有并
 锚定其消息。Fork 映射 node/message/entry/接纳引用，保留未选 variant 的事实；删除或裁剪通过
-`ConversationContextTransition.prune` 收口。被删位置明确关闭，仍被保留请求使用的不可变正文交接给
-合法存活 owner，BeforeStep 只可在同一因果 owner 内收口，不搬入任意 USER。
+`ConversationContextTransition.prune` 清理无效引用并保全存活来源。被删位置明确关闭，仍被保留请求使用的不可变正文交接给
+合法存活 owner，BeforeStep 只可在同一因果 owner 内重新定位，不搬入任意 USER。
 
 只有删除消息、截断或替换消息树执行该重整。START、请求接纳、checkpoint 及普通配置命令保留既有
 entries/admissions 的结构共享，不反复重放全部历史来裁剪；Turn checkpoint 只能扩展已提交 Step，不能移除历史身份。

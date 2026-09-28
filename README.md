@@ -81,28 +81,10 @@ common/       通用工具
 
 ### 参考文档（`docs/references/`）
 
-| 文档 | 说明 |
-|------|------|
-| [应用总体架构](docs/references/application-architecture.md) | durable owner、命令写协议、应用服务与 UI 边界 |
-| [界面架构参考](docs/references/ui-architecture.md) | UI 架构层次、导航体系、自适应布局策略、折叠屏适配方案 |
-| [消息渲染管线](docs/references/message-rendering-pipeline.md) | UIMessage.parts 到像素的完整渲染管线、Markdown 双路径、WebView 封装 |
-| [助手配置参考](docs/references/assistant-configuration.md) | Assistant 字段、默认模板、解析/持久化规则与配置消费边界 |
-| [Android 配置架构与资源边界](docs/references/android-configuration-architecture.md) | 当前配置目录、有效投影、持久化、资源与引用边界 |
-| [测试策略](docs/references/testing-strategy.md) | 测试分层、owner、确定性与验证门禁 |
-| [请求上下文](docs/references/request-context.md) | 条数窗口、滚动压缩、披露与手动摘要 |
-| [Turn/Step 执行链路](docs/references/turn-step-execution.md) | 从用户发送到模型回复落盘的完整数据流 |
-| [多模态与持久化](docs/references/multimodal-context-and-turn-durability.md) | 附件身份、文件路径、请求投影与资源持久化 |
-| [AI 协议参考](docs/references/protocol-reference.md) | 四类基础协议规范、Provider 差异映射、模型级适配 |
-| [Token 与缓存统计](docs/references/token-usage-accounting.md) | 请求、turn 累计、上下文与缓存展示口径 |
-| [MCP 架构](docs/references/mcp-architecture.md) | 工具目录、连接运行态、OAuth 与审批边界 |
-| [数据库索引](docs/references/database-indexing.md) | 查询覆盖、索引职责与迁移边界 |
-| [工作区架构](docs/references/workspace-architecture.md) | Rootfs/挂载边界、PRoot 执行、文件工具、终端与安装生命周期 |
-| [更新与发行](docs/references/update-mechanism.md) | 更新检查、宽松版本排序、下载委托、签名与 CI 发行契约 |
-| [子助手架构](docs/references/sub-assistant-architecture.md) | Target 访问、同步调用、Child lineage、撤权、恢复与只读详情 |
-| [子助手多模态](docs/references/sub-assistant-multimodal.md) | 图片输入、产出清单、附件交付与主助手请求投影 |
-| [提示词与工具](docs/references/prompts-and-tools.md) | 模型可见的系统注入、实际工具名、参数和 Tool Result 形状 |
-| [运行记忆](docs/references/memory-architecture.md) | 记忆的域归属、授权与写入边界 |
-| [企业接入资料](docs/references/enrollment-material-contract.md) | 原生接入格式、信任与恢复契约 |
+从 [应用架构与分组导航](docs/references/application-architecture.md) 开始，了解模块职责、持久化事实、
+执行协议和术语，再进入配置、会话请求、数据资源、工具运行时、UI、测试与发行专题。
+参考文档只维护当前契约；具体字段和默认值以代码为准，历史设计与交付记录位于 `docs/dev/`。
+
 
 ### 开发文档（`docs/dev/`）
 

@@ -1,424 +1,163 @@
-# 消息渲染管线参考
+# 消息渲染管线
 
-> 本文档以 Measix Pilot 当前代码为准，描述 LLM 回复内容从 `UIMessage.parts` 到最终像素的完整渲染管线，
-> 涵盖各内容类型的渲染方式、WebView 的生命周期/交互/布局机制。
->
-> **相关文档**：[界面架构参考](ui-architecture.md) | [Turn/Step 执行链路](turn-step-execution.md)
+本文描述已授权的消息显示投影如何成为原生 Compose 内容或 WebView 文档，以及交互、导出和销毁的边界。
+页面导航与窗口承载见 [界面架构](ui-architecture.md)；请求转换见 [请求上下文](request-context.md)，
+文件登记与生命周期见 [多模态与资源持久化](multimodal-context-and-turn-durability.md)。
 
----
+## 1. 数据流与消息分组
 
-## 1. 架构总览
-
-LLM 回复渲染经过 **两层分发**：
-
-```
-UIMessage.parts[]
-  │
-  ├─ 第一层: ChatMessage.kt → groupMessageParts() 分组
-  │     将 parts 分为 ThinkingBlock（推理+普通工具）、SubAssistantCallBlock 与 ContentBlock（正文/媒体）
-  │
-  └─ 第二层: MarkdownBlock / MarkdownNew → AST 或 HTML DOM 逐节点分发
-        Text part 的文本被解析为 Markdown，再按节点类型分发到各渲染组件
+```text
+ConversationPresentation 的有序消息、阶段和预览能力
+  → ChatMessage / groupMessageParts：按消息部分分组
+  → 原生正文、工具/子助手卡片、Markdown 或媒体
+  → 需要脚本渲染时，由原来源创建独立 WebView 文档
 ```
 
-## 1.1 关键架构文件
-
-| 边界 | 文件 |
-| --- | --- |
-| Part 分组与分发 | `app/src/main/java/net/weero/measix/pilot/ui/components/message/ChatMessage.kt`、`ChatMessageCot.kt` |
-| Markdown AST / HTML DOM | `app/src/main/java/net/weero/measix/pilot/ui/components/richtext/Markdown.kt`、`MarkdownNew.kt` |
-| 代码、Mermaid、LaTeX | `app/src/main/java/net/weero/measix/pilot/ui/components/richtext/HighlightCodeBlock.kt`、`Mermaid.kt`、`LatexText.kt`、`MathBlock.kt` |
-| HTML、Diff 与图片 | `app/src/main/java/net/weero/measix/pilot/ui/components/richtext/SimpleHtmlBlock.kt`、`DiffView.kt`、`ZoomableAsyncImage.kt` |
-| 全文预览 | `app/src/main/java/net/weero/measix/pilot/ui/components/richtext/MarkdownWeb.kt`、`ui/pages/webview/ContentPreviewPage.kt`、`app/src/main/assets/html/mark.html` |
-| WebView 封装 | `app/src/main/java/net/weero/measix/pilot/ui/components/webview/WebView.kt` |
-
-应用上下文不写入 `UIMessage.parts` 或插入列表节点。`MessageContextSummary.updates` 只携带实际新增
-外部变化的 `stepId`、`requestId` 和类别；正文由授权 query 按需读取。消息“更多”菜单不设“上下文”项，
-子助手请求区不设聚合入口。主聊天和子助手只读时间线都在实际接纳该通知的 Step 边界显示短标签。
-首个请求的标签在该轮输出开头；中途标签在上一批工具结果之后、下一请求输出之前。
-同一请求的多个变化类别合并为一个标签，不同请求分别归位；历史沿用不增加标签。
+渲染只消费查询投影，不修改持久消息、选择分支或工具状态。流式投影保留其他 variants 与 selectIndex；
+`visualTransform()` 只改变显示，不能代替输入转换或终态提交。UI 工具身份使用 `localCallId`，
+运行与交互由 `ToolLivePhase` 决定，不能用 Provider call ID、列表位置或 output 是否为空推断。
 
-`ConversationContextUpdateMarker.categories` 按固定次序生成标签：一类为“记忆已更新”，两类为
-“记忆 · 助手目录已更新”，更多为“记忆等 3 类已更新”；不列资源 ID、条目数量或内容。
-可访问名称包含全部变化类别与“查看详情”。短标签文字与正文起始边缘对齐，不使用按钮左右缩进；
-可见行最小 32dp，上下沿用原消息 4dp 间距，大字体自然撑高，Compose 保留最小 48dp 触控区域。
-主聊天复用两个 Markdown renderer 的 `MarkdownContentInset` 与原气泡内容 padding，分别按原层级应用，
-不改动动作栏。只有含通知的 Step 才结束前面的思考/工具折叠组并插入 `ContextUpdateBlock`；
-普通 Step 继续透明，不拆分时间线。
+`groupMessageParts` 将连续推理和普通工具合成 `ThinkingBlock`；`assistant_call` 单独形成
+`SubAssistantCallBlock`，正文和媒体使用 `ContentBlock`。`UIMessagePart.Step` 通常不可见，
+仅当其对应已接纳的上下文变化时结束前组并插入 `ContextUpdateBlock`。
+普通 Step 不切断折叠时间线，展示分组不改变原消息顺序。
 
-点击标签打开 `ConversationContextDetails` 的“上下文变化”，以 `requestId` 固定所查看的接纳请求。
-`ConversationContextDetailsUiModel.forUpdate` 仅保留该请求的 `isCurrentUpdate` 条目；
-`ConversationContextContentUiModel.forUpdate` 只展示条目中原因是 EXTERNAL 的变化分区。
-详情不列出其他请求或沿用记录，不混入首次提供、恢复、System、时间及规则内容，也不设置“其他上下文”区。
-混合原因状态包的“模型输入原文”和“技术信息”仍保留完整原文和来源，默认折叠。
-变化按记忆/助手目录/企业背景显示归属、增改移除及当前内容，修改前内容另行展开。
-单段长文默认最多八行，可展开全文；旧记录无逐项差异时说明其内容是当时完整状态，不能猜测差异。
+折叠推理块时，待审批/待回答工具以及 `generate_image` 保持可见，保证用户操作和图片结果仍在原时间线位置。
+工具调用本身属于可见内容，即使尚未执行或没有结果；空白文本仍为空。
+子助手卡片只显示目标、任务、阶段、有界回答预览及待回答问题，不以过程文本或百分比冒充完成结果。
+卡片导航借用父页面授权，具体详情与执行状态由 [子助手架构](sub-assistant-architecture.md) 维护。
+
+工作区产出提示只从 `workspace_write_file` / `workspace_edit_file` 的成功且结构有效结果提取，
+不从请求参数或“存在结果”推断写入成功；统一 diff 来自显示 metadata，不混入 Provider 工具文本。
+工具的本地化名称只用于显示，协议名仍是执行和持久化身份。
 
-`projectConversationContextContent` 只用已保存正文和 typed source 构建结构化 UiModel，不读取当前配置。
-“同步变化”不声称具体操作者或会话，归属表示内容作用范围。摘要与详情以选中助手 variant 为准；
-编辑因果 USER 不隐藏仍保存着的该通知，切换助手 variant 不混入兄弟回复，迟到读取受 lease/域校验。
-请求接纳先于 Provider IO，因此详情保留实际请求状态，不把已接纳说成模型已收到。
-有已接纳通知但无生成正文的失败/取消消息仍展示该边界及原终态；不为没有变化的空消息新增入口。
-预置/摘要沿原正文和来源标识呈现，Starter 沿原开场详情入口查看，不转入变化详情。
-这些变化只收敛 UI 投影与入口，不调整 Provider 输入、通知产生条件、历史回放、裁剪恢复或持久化结构。
+## 2. 应用上下文变化展示
 
-## 2. 第一层：Part 分组与分发
+应用上下文条目不作为额外消息节点插入列表。`ConversationPresentationSnapshot.context` 提供轻量摘要和来源标记，
+`MessageContextSummary.updates` 只包含实际新增 EXTERNAL 变化的 Step、requestId 和类别，正文按授权查询读取。
+纯 streaming 不重新扫描全部历史或读取正文。
 
-### 2.1 分组逻辑
+主聊天与子助手时间线在实际接纳通知的 Step 边界显示标签：首请求位于输出开头，中途位于上一批工具结果之后、
+受影响输出之前。同一请求合并变化类别，不同请求分别定位，沿用历史不生成新标签。
+有通知但无正文的失败/取消消息仍显示该边界和原终态；没有变化的空消息不增加入口。
 
-`groupMessageParts()`（`ChatMessageCot.kt`）按可见内容顺序将连续 `Reasoning` 和普通 `Tool` 合并为一个 `ThinkingBlock`；`assistant_call` 使用独立的 `SubAssistantCallBlock`，其余内容使用 `ContentBlock`。`UIMessagePart.Step` 是不可见执行标记；仅其 `stepId` 对应已接纳变化时，分组器先收口前组并插入 `ContextUpdateBlock`，让短标签位于受影响输出之前。其余 Step 不渲染、不切断折叠时间线。
+标签使用稳定类别次序与完整无障碍名称，不列资源 ID 或数量。消息“更多”菜单和子助手请求区不提供聚合上下文入口。
+预置/摘要沿原正文来源显示，Starter 沿开场详情入口查看；它们不转成“上下文变化”。
 
-流式消息由查询层投影，保留其他 variants 与 `selectIndex`，UI 不改写历史节点。工具卡片 identity 使用 `localCallId`；`ToolLivePhase` 决定运行与交互呈现，不能以 Provider call ID、UI ordinal 或 output 是否为空代替。
+`ConversationContextDetails` 固定用户打开时的 requestId，后续更新不切换阅读对象。
+`forUpdate` 只展示该请求新增的 EXTERNAL 条目和分区；不混入初始披露、恢复、System、时间或规则。
+混合状态包的完整原文和技术来源仍可按需展开；旧记录没有逐项差异时明确是当时完整状态，不推测修改前内容。
+长正文渐进展开，结构化内容只由保存的正文和类型化来源生成，不读取当前 Settings 重新解释历史。
 
-```
-输入: [Reasoning, Tool, Tool, Text, Image, Reasoning, Text]
-输出: [ThinkingBlock(R, T, T), ContentBlock(Text), ContentBlock(Image),
-       ThinkingBlock(R), ContentBlock(Text)]
-```
+`ConversationQueryService.contextDetails` / `contextContent` 提供目录与按需正文。
+读取前后复验页面 lease、域、选中 Assistant variant 和请求关联；相同 entry 在弹层内复用，
+关闭、切域或切换所选回复后取消读取并拒绝迟到结果，失败保留原诊断。
+编辑因果 USER 不隐藏仍保存的所选回复通知，兄弟回复之间不混合。
+没有 admission 的历史原文可被授权读取，但不伪造通知、请求记录或完整 HTTP 快照。
 
-### 2.2 ContentBlock 分发
+请求接纳早于 Provider IO，详情展示实际状态，不把“已接纳”说成模型已收到。
+历史可读与新请求可回放是不同判断，规则见 [请求上下文](request-context.md)。
 
-`ChatMessageEditedFiles.editedWorkspaceFilePaths` 只从 `workspace_write_file` / `workspace_edit_file` 的成功结果提取产出路径，
-不从原请求或单纯 `hasReplayResult` 推断写入成功。坏 JSON/类型、错误和拒绝结果不显示文件提示；成功结果必须包含有效
-`path` 与文件元数据，写入结果确认非目录，编辑结果确认正数替换次数。该纯投影不访问 Workspace 或文件 owner。
+## 3. Markdown、代码与原生媒体
 
-`MessagePartsBlock()`（`ChatMessage.kt`）对 `ContentBlock` 内的 part 按类型分发：
+Text 先经过助手的视觉正则，再进入 `MarkdownBlock`；视觉规则与生成管道的持久化转换是不同机制。
+流式生成期间禁用文本选择，避免不断重建的 selectable 与选择工具栏产生竞争；生成结束后恢复。
 
-| Part 类型 | 渲染组件 | 方式 |
-|---|---|---|
-| `Text` | `MarkdownBlock` | 进入第二层 Markdown 解析 |
-| `Image` | `ZoomableAsyncImage` | 原生 Coil3 |
-| `Video` | Surface + Icon，点击 Intent 打开 | 原生 |
-| `Audio` | Surface + Icon，点击 Intent 打开 | 原生 |
-| `Document` | Surface + Icon + 文件名，点击 Intent 打开 | 原生 |
-`List<UIMessagePart>.isEmptyUIMessage()` 把 `UIMessagePart.Tool` 判为可见：工具调用本身有卡片与操作入口，
-与是否执行、是否产出无关；真正空白 Text 仍为空。`isEmptyInputMessage()` 是独立的"用户可输入内容"判定，不受影响。
+`MarkdownBlock` 预处理 LaTeX 分隔符时避开代码块。首次同步解析，后续通过
+`snapshotFlow`、`mapLatest` 与后台 dispatcher 更新 AST，旧解析不能覆盖新内容。
 
-会话宿主通过 `LocalConversationImages` 提供点击时求值的时序相册。`collectMessageImages` 按原顺序递归收集顶层与 Tool.output 图片，过滤 loading 占位；图片通过 `LocalAttachmentPreview` 获取原页面的 `ImageSource`；网络/内联图片同样保留原页面权限。本地路径不能直接作为解码或导出权限。占位图片显示 shimmer 且不可点击。Markdown/HTML 正文图通过原宿主的 `LocalImageSourceResolver` 解析，不进入 part 相册，仍单张浏览。
+| 内容 | 渲染路径 | 主要边界 |
+| --- | --- | --- |
+| 普通 Markdown | IntelliJ Markdown AST → 原生 Compose | 文本、列表、引用、表格、代码和公式按节点分发 |
+| 含 HTML 的 Markdown | `MarkdownNew` → HtmlGenerator → Jsoup DOM → Compose | 独立预处理；支持选定标签和内联文本样式，不是浏览器完整 CSS 布局 |
+| 普通代码 | `HighlightCodeBlock` → `highlight` 模块 | 行号不进入复制文本；显示换行、折叠与字体连字不修改原文 |
+| LaTeX | JLatexMath 原生 Canvas | 行内拆分支持换行，失败保留单体公式；块公式可横向滚动 |
+| Image part | `ZoomableAsyncImage` / Coil | 使用已授权 ImageSource，加载占位不可点击 |
+| Document / Audio / Video | 原生附件入口 | 经文件应用服务导出独立副本后交给外部应用 |
 
-`ZoomableAsyncImage` 透传宿主的操作和覆盖层；查看器手势、设背景、删除与非聊天入口统一见 [界面架构](ui-architecture.md)。文生图工具详情可复制完整提示词，调用 JSON 使用共用 `ToolCallJsonDetails`。
-> 用户消息（`MessageRole.USER`）的 Text 额外包一层 `Surface`（primaryContainer 气泡）；
-> 助手消息可选气泡（`showAssistantBubble` 设置项）。
+企业动态摘要的 `MarkdownSummary` 只投影文字和样式，不交付链接或媒体动作，展开后才使用完整 Markdown 渲染。
+摘要不是读取企业文件或聊天历史的权限。
 
-#### 文本预处理（replaceRegexes）
+### 代码预览与完整性
 
-Text part 在传入 `MarkdownBlock` 之前，先经过 `replaceRegexes()` 处理，应用助手配置的正则替换规则：
+`HighlightCodeBlock` 只为已闭合代码围栏提供 Mermaid 或 HTML/SVG 预览；流式未闭合内容统一显示源码高亮。
+HTML/SVG 默认源码，用户显式切换预览；Mermaid 完整后渲染图形。
+HTML 代码直接成为文档内容，SVG 包装为展示文档；两者均使用下述文档隔离与授权规则。
 
-- `scope = AssistantAffectScope.USER`：用户消息的替换规则
-- `scope = AssistantAffectScope.ASSISTANT`：助手消息的替换规则
-- `visual = true`：只应用 `visualOnly` 规则，供 UI 显示使用；发送给模型和持久化路径使用
-  `visual = false`。这与 Output Transformer 的 `visualTransform()` / `transforms()` /
-  `onGenerationFinish()` 生命周期是两套不同机制。
+内联 Mermaid 的 `buildMermaidHtml` 转义代码并加载本地 `mermaid.min.js`，不依赖 CDN；
+当前主题映射到 `themeVariables`。代码、主题或来源变化重建整个文档及原生桥，避免旧实例复用新输入。
 
-#### 流式期间禁用文本选择
+Markdown 全文预览另经 `buildMarkdownPreviewHtml` 和 `assets/html/mark.html` 构建，
+只提取消息顶层 Text，随原宿主进入全屏预览。该模板从 CDN 加载 Markdown、公式、高亮及图表依赖，
+不具有内联 Mermaid 的离线保证；其图表主题使用媒体查询而非内联 M3 配色映射。
+依赖版本与模板参数以资源文件为准，不在参考文档复制版本清单。
 
-流式生成期间（`loading == true`），`SelectionContainer` 被禁用。原因：Markdown 在不断重渲染时，
-内部可选择的 `Text` 会频繁注册/注销，与 Compose 选择工具栏在绘制阶段对 selectable 列表的排序
-产生并发修改，导致 `ConcurrentModificationException`。生成结束后内容稳定，再启用文本选择。
+## 4. 图片、链接与导出来源
 
-### 2.3 ThinkingBlock 渲染
+`RichTextHost` 为渲染树提供链接、预览和唯一待处理文档选择器。聊天/子助手借用 `ConversationViewLease`，
+共享用户配置预览使用 `UserConfiguration`，开发示例与更新说明使用 `Static`。
+渲染组件不访问 Store、不根据当前空间重新推断来源；缺少交互宿主的离屏树只显示内容，不能借系统默认 URI handler 打开资源。
+两个 Markdown 引擎及 HTML 链接共用原宿主的 URI handler。
 
-`ChainOfThoughtStepContent` 分别绘制标题行的上下连接线与正文连接线，在节点区域留空；不以不透明背景遮线，不使用 Offscreen/Clear。坐标随布局方向镜像，透明卡片沿原 `LocalChatChromeAlpha`。受控 `contentVisible` 独立于 `expanded`，折叠仍保留 `keepVisibleWhenCollapsed` 选出的审批和待交互步骤。
+`LocalConversationImages` 在点击时按当前分支顺序收集顶层和 Tool.output 中的图片，过滤空加载占位，
+形成会话相册；未命中相册时单图打开。Markdown/HTML 正文图经 `LocalImageSourceResolver` 解析，仍按单图浏览。
+背景和输入附件不并入消息相册。查看器窗口与动作承载见 [界面架构](ui-architecture.md)。
 
-`ThinkingBlock` 通过 `ChainOfThought` 组件渲染为可折叠的推理卡片，内部步骤交替显示：
+图片预览、信息与保存沿用同一 `ImageSource`。本地路径不能代替文件 ID 和原页面授权；
+解析失败不回退直接读文件。共享配置图片必须仍被个人配置引用，网络与内联图片也保留宿主权限。
+非图片附件通过 `MediaExportService.openAttachment` 交付独立临时副本，不向外部应用授予原件路径。
+文件复制、最终交付复验及失败/取消补偿见 [资源持久化](multimodal-context-and-turn-durability.md)。
 
-- `ReasoningStep` → `ChatMessageReasoningStep`（推理文本）
-- `ToolStep` → `ChatMessageToolStep`（工具调用卡片，含输入/输出/审批）
+代码和表格下载在点击时冻结正文、文件名、MIME 与来源。选择器返回由 `MediaExportService` 接收，
+包括宿主已取消或原请求缺失的情况；失败清理新文档，取消继续传播。
+旧选择器未返回前不被新点击替换，晚到回调不能导出新页面内容。
 
-工具协议名继续作为执行与持久化身份；`ToolUIRenderer.displayName` 只提供用户可见身份。内置的
-`read_tool_output` / `grep_tool_output` 在聊天卡片、展开详情和图片/PDF 导出中分别显示本地化的
-“读剪裁结果”与“搜剪裁结果”，诊断型原始导出仍保留协议名。
+聊天截图的离屏 Compose 树只携带原来源和预览投影，不安装交互选择器。
+`BitmapComposer` 归导出协程直接持有，捕获完成或取消都拆除组合树，未交付 Bitmap 被回收；
+不存在独立 Handler 或第二协程作用域延续导出。
 
-折叠只隐藏普通的早期步骤。`isPending`（无结果且 interaction 为 `AwaitingApproval` / `AwaitingInput`）的 Tool step 与 `generate_image` 都被固定
-展示，且不计入隐藏数量。前者保证 HITL 审批不会被「再显示 N 步」收走；后者保证穿插在搜索/读写/
-shell 中间的文生图结果仍留在时间线原位。`generate_image` 不拆成 `SubAssistantCallBlock`：它没有
-Child 会话身份和导航，只是普通 Tool step。
+## 5. WebView 文档与生命周期
 
-> 工具步骤中，工作空间文件编辑工具（`workspace_edit_file`）的输出通过 `DiffView`
-> （`DiffView.kt`）渲染统一 diff，支持折叠摘要与展开全量视图。
+富文本和 Mermaid 共用 `RenderedContentWebView` / `rememberRenderedContentState`，企业 Portal 使用独立宿主。
+每份渲染文档拥有随机 `.invalid` origin，关闭 DOM Storage，隔离 Cookie、IndexedDB 与浏览器缓存身份；
+不修改 Portal 的浏览器状态。原来源尚未授权或已撤销时不创建 WebView，旧来源的授权结果不能给新文档使用。
 
-### 2.4 SubAssistantCallCard 渲染
+本地图片通过文件服务授权读取，`file:` 与 `/upload` 资源映射到当前文档的绝对虚拟 origin，
+包含动态节点与 CSS；外部 `<base>` 不能把本地路径改发网络。
+WebView 不得自行读取任意 file/content 路径，链接交由原宿主处理。模型 HTML 不获得 Portal Bridge；
+HTML/SVG 预览不注入业务 JavaScript 接口。
 
-`assistant_call` 在 `groupMessageParts` 中从普通 COT block 拆出，由 `SubAssistantCallCard` 独立渲染 Target 身份、request、状态、当前文本预览与等待中的 `ask_user`。
+`WebView.kt` 封装 AndroidView 的生命周期：
 
-卡片不显示百分比、ETA、推理文本或工具 JSON。预览来自本次 Child task 的顶层 Text 投影，按可用高度限制显示且不内嵌滚动；纯非文本完成态显示本地化提示。整卡仅在 Child link 有效时导航到只读详情页，交互问题区会消费点击，避免误触详情导航。
+- 创建时配置客户端、设置与文档需要的接口；数据比较避免普通重组重复加载，刷新可显式重新加载。
+- `onReset` 停止加载并移除接口；重新使用前不能保留旧文档的交互能力。
+- `onRelease` 只清空匹配实例的状态引用，停止加载、移除接口与客户端、清理内容后销毁原生 WebView。
 
-状态模型、preview reducer、Child link 校验和只读策略见 [sub-assistant-architecture.md](sub-assistant-architecture.md)。
+来源、代码或主题替换后，迟到的加载/桥接回调不能写入新文档状态。
+`ContentPreviewPage` 只持有进程内 `RenderedContent` 和原来源；导航不保存 HTML 或授权对象。
+重建后显示不可用并要求从原页面打开，不读磁盘缓存重建能力。刷新复验来源，撤权销毁 WebView，
+关闭预览不主动关闭借来的父页面 lease。该页面提供预览与诊断，不成为通用浏览器。
 
----
+### Mermaid 导出
 
-## 3. 第二层：Markdown 解析与节点分发
+PNG 导出由用户动作产生请求 ID，经 `exportSvgToPng(requestId)` 返回原生桥；
+只接受当前待处理请求的一次结果。脚本未就绪可重试，旧回调不能完成新请求，新文档不重放旧导出计数。
+结果通过原宿主 ImageSource 和 `MediaExportService.saveImage` 验证、读取及发布；
+不在桥接线程直接解码或写相册。组件销毁取消未完成导出，失败保留诊断及重试能力。
 
-### 3.1 预处理
+## 6. 验证与实现入口
 
-`MarkdownBlock`（`Markdown.kt`）在解析前执行 `preProcess()`：
+消息分组从 `ChatMessage` / `ChatMessageCot` 进入，文本解析从 `Markdown` / `MarkdownNew` 进入，
+文档预览从 `HighlightCodeBlock`、`Mermaid` 与 `RenderedContentWebView` 进入；
+正文查询和导出始终使用上述应用端口，不能在新 renderer 中复制权限判断。
 
-1. 找出所有代码块范围（避免代码块内的内容被替换）
-2. 将 `\(...\)` 替换为 `$...$`（行内 LaTeX）
-3. 将 `\[...\]` 替换为 `$$...$$`（块级 LaTeX）
+验证应覆盖：
 
-### 3.2 异步 AST 解析
+- 流式更新、普通 Step 和变化 Step 的分组；折叠不能隐藏待处理交互，失败空消息仍能查看已接纳变化。
+- 查询使用保存的来源及正确 variant；关闭详情、撤权和迟到结果不混入新页面。
+- 两种 Markdown 路径、未闭合代码、图片占位与相册顺序，复制内容保持原文。
+- 文档替换、重组、全屏返回与销毁不重复加载或复用旧桥；本地资源映射、撤权和动态节点仍遵守原来源。
+- 选择器迟到回交、导出取消、补偿失败和 Mermaid 旧请求回调不能错误交付。
 
-`MarkdownBlock` 使用 `snapshotFlow` + `mapLatest` + `flowOn(Dispatchers.Default)` 在后台线程解析 AST 树，
-防止流式更新频繁重组时掉帧。初次渲染使用同步解析结果（`parseMarkdown(content)`），后续更新通过
-Flow 异步收集。
-
-企业动态的折叠正文使用 `MarkdownSummary`：复用 `parseMarkdown` 与行内样式构造，将块内容投影到一个原生
-`Text`，默认三行并使用省略号。摘要只保留文字和样式，不交付链接或媒体交互；展开后使用 `MarkdownBlock`
-显示全文结构。动态请求与展开状态随原选择或企业授权变化撤销；保留企业登录时可在个人空间重新读取，退出后清除，不作为聊天内容或文件读取授权。
-
-### 3.3 双路径分发
-
-解析 AST 后，检查是否包含 HTML 节点（`HTML_BLOCK` 或 `HTML_TAG`）：
-
-- **路径 A（无 HTML）**：直接遍历 AST 子节点，每个节点对应一个 Composable
-- **路径 B（含 HTML）**：调用 `MarkdownNew`，传入 **原始 `content`**（非预处理后的数据），
-  `MarkdownNew` 内部独立执行 `preProcess()` 后，用 `HtmlGenerator` 生成 HTML 字符串 → Jsoup 解析为 DOM → 遍历 DOM 节点
-
-两条路径的节点分发对照：
-
-| 内容类型 | 路径 A（AST 节点） | 路径 B（HTML 标签） | 渲染方式 |
-|---|---|---|---|
-| 段落 | `PARAGRAPH` | `<p>` | 原生 `Text` + `AnnotatedString` |
-| 标题 | `ATX_1~6` | `<h1>~<h6>` | 原生 `Text` + `HeaderStyle` |
-| 围栏代码块 | `CODE_FENCE` | `<pre>` | → `HighlightCodeBlock`（见第 4 节） |
-| 缩进代码块 | `CODE_BLOCK` | — | 原生 `Text`（无语法高亮） |
-| 行内代码 | `CODE_SPAN` | `<code>` | 原生 `Text`（JetbrainsMono） |
-| 行内公式 | `INLINE_MATH` | `<span class="math" inline="true">` | 原生 Canvas；AST 使用 inline drawable，DOM 使用 `MathInline` |
-| 块级公式 | `BLOCK_MATH` | `<span class="math" inline!="true">` | → `MathBlock`（原生 Canvas） |
-| 图片 | `IMAGE` | `<img>` | → `ZoomableAsyncImage`（Coil3） |
-| 表格 | `TABLE` | `<table>` | → `DataTable`（原生 Compose） |
-| 引用块 | `BLOCK_QUOTE` | `<blockquote>` | 原生 `Column` + `drawWithContent` |
-| 列表 | `UNORDERED_LIST` / `ORDERED_LIST` | `<ul>` / `<ol>` | 原生 `Column`（递归） |
-| HTML 块 | `HTML_BLOCK` | — | → `SimpleHtmlBlock`（Jsoup → Compose） |
-| 分割线 | `HORIZONTAL_RULE` | `<hr>` | 原生 `HorizontalDivider` |
-| 折叠块 | — | `<details>` | 原生 `Column` + `AnimatedVisibility` |
-| 进度条 | — | `<progress>` | 原生 `LinearProgressIndicator` |
-
-> 路径 B 支持更丰富的 HTML 标签（`<details>`、`<progress>`、内联 `style` 属性解析等），
-> 因为 Jsoup DOM 比 IntelliJ AST 能更精确地表达 HTML 语义。
-> 路径 B 中还支持 `<font>` 标签的 color/size 属性、CSS style 属性的完整解析
->（font-size、font-weight、text-align、line-height 等）。
->
-> **流式安全性**：`CODE_FENCE` 节点通过检查 `CODE_FENCE_END` token 判断代码块是否完整（`completeCodeBlock`），
-> 传入 `HighlightCodeBlock`。流式生成中未闭合的代码块不会触发 Mermaid/HTML 预览，避免渲染半成品。
-
-`LatexText` 使用 JLatexMath 在原生 Canvas 绘制公式；Markdown AST 的行内公式通过 `splitLatex()` 按顶层运算符拆分以支持文本流换行，拆分失败回退为单体内联公式。块级公式通过 `MathBlock` 支持横向滚动。
-
-两条路径共用紧凑的块级纵向节奏：相邻段落保留半个正文 font size，标题按级别使用 3–8dp，块级公式、表格和 HTML
-图片外沿使用 4dp，分割线使用 8dp。代码块、WebView、表格、媒体和工具详情内部仍各自保留可读 padding；这里收紧的是
-它们与上下正文之间的重复外部留白。`<details>` 等可点击标题行维持原有内边距，固定预览高度也不变。
-
----
-
-### 富文本动作与来源
-
-`RichTextHost` 在聊天/子助手宿主借用 `ConversationViewLease`，用户配置预览明确使用 `UserConfiguration`，开发示例和更新说明明确使用 `Static`。它为整棵渲染树提供统一链接、预览和一个待处理文档选择器；渲染组件不读写文件、不从当前空间重新推断来源。两个 Markdown 引擎与 HTML 链接均经同一 URI handler；缺少交互宿主的离屏树只显示内容，不借系统默认 URI handler 获得打开权限。
-
-代码/表格下载在点击时冻结正文、文件名、MIME 和原来源。选择器返回后由 `MediaExportService` 接收 URI，包括缺失请求与已取消宿主；失败清理新建文档，取消原样传播。旧选择器未回交前不会被新点击替换。共享配置文件仍需 Artifact owner 验证个人配置的持久 root，不能读取任意个人历史附件。
-
-聊天图片导出的独立 Compose 树只传递原来源及图片投影，不安装交互选择器。`BitmapComposer` 由调用导出协程直接拥有；捕获完成或取消都移除临时 Compose 树，未交付 Bitmap 被回收，不留下独立 Handler 回调或第二协程作用域。
-
-
-## 4. 代码块渲染（HighlightCodeBlock）
-
-`Markdown` 的两条 CODE_SPAN、`MarkdownNew` 和 `SimpleHtmlBlock` 的 code span 关闭 `calt/liga/clig` 连字，仅改变字体呈现；原文与复制内容保持不变。
-
-`HighlightCodeBlock`（`HighlightCodeBlock.kt`）根据代码语言进入三条路径：
-
-```
-HighlightCodeBlock(code, language, completeCodeBlock)
-  │
-  ├─ canInlinePreview = completeCodeBlock && language ∈ {html, svg}
-  │    └─ canInlinePreview && previewMode → CodeBlockPreview (WebView 内联预览)
-  │         默认源码模式，用户显式切换"代码/预览"
-  │         └─ 全屏: RichTextHost → Screen.ContentPreview(document)
-  │
-  ├─ completeCodeBlock && language == "mermaid" → Mermaid (WebView 渲染)
-  │    └─ 全屏: RichTextHost → Screen.ContentPreview(document)
-  │
-  └─ 其他（或代码块未闭合）→ 原生 CodeHighlightText (语法高亮)
-        ├─ autoWrap + showLineNumbers → 逐行渲染 (CodeBlockWithLineNumbersWrapped)
-        └─ 其他组合 → 整体渲染 + horizontalScroll (CodeBlockDefault)
-```
-
-> **流式降级**：`completeCodeBlock` 在流式生成中为 `false`（代码围栏未闭合），此时 Mermaid/HTML 预览
-> 均不可用，统一走原生语法高亮路径。围栏闭合后 Mermaid 渲染图形，HTML/SVG 保持源码直到用户显式选择预览。
-
-### 4.1 普通代码块 — 原生渲染
-
-`CodeBlockWithLineNumbersWrapped` 的行号在 `DisableSelection` 内，跨行选择仅包含代码；非折行路径仍将行号放在代码选择容器外。
-
-- **语法高亮**：`highlight` 模块（`CodeHighlightText` / `Highlighter`）
-- **配色**：`AtomOneDarkPalette` / `AtomOneLightPalette`（跟随 `LocalDarkMode`）
-- **字体**：`JetbrainsMono`；`CodeHighlightText` 禁用 `calt`、`liga`、`clig`，保留代码字符的独立字形。
-- **功能**：复制、下载（`CreateDocument`）、折叠/展开（`codeBlockAutoCollapse` 开启时超过阈值自动折叠）
-- **行号**：`showLineNumbers` 开关控制
-- **换行**：`codeBlockAutoWrap` 开关控制
-
-### 4.2 Mermaid — WebView 渲染（详见第 5 节）
-
-### 4.3 HTML/SVG — WebView 渲染（详见第 6 节）
-
----
-
-## 5. Mermaid WebView 渲染
-
-### 5.1 数据注入
-
-`Mermaid.kt` 中 `buildMermaidHtml()` 动态构建完整 HTML 文档：
-
-- Mermaid 代码经 `escapeHtml()` 转义后嵌入 `<pre class="mermaid">` 标签
-- 加载 Mermaid 脚本：通过 `WEB_VIEW_ASSET_URL` 从本地 assets 加载 `mermaid.min.js`（离线可用，不依赖 CDN）
-- `mermaid.initialize()` 配置 `theme: 'base'`，通过 `themeVariables` 注入 M3 配色
-
-### 5.2 配色同步
-
-从 `MaterialTheme.colorScheme` 提取颜色，通过 `toCssHex()`（`ComposeExt.kt`）转为 CSS Hex 字符串：
-
-| M3 颜色 | Mermaid themeVariable |
-|---|---|
-| `primaryContainer` | `primaryColor` / `primaryBorderColor` / `mainBkg` / `nodeBorder` / `actorBorder` / `actorLineColor` / `clusterBorder` / `taskBorderColor` / `taskBkgColor` |
-| `onPrimaryContainer` | `primaryTextColor` / `taskTextLightColor` |
-| `secondaryContainer` | `secondaryColor` / `secondBkg` / `secondaryBorderColor` |
-| `onSecondaryContainer` | `secondaryTextColor` |
-| `tertiaryContainer` | `tertiaryColor` / `tertiaryBorderColor` |
-| `onTertiaryContainer` | `tertiaryTextColor` |
-| `background` | `background`（body + canvas 填充） |
-| `surface` | `nodeBkg` / `clusterBkg` / `actorBkg` |
-| `onBackground` | `lineColor` / `textColor` / `labelColor` / `taskTextDarkColor` / `actorTextColor` |
-| `error` | `errorBkgColor` |
-| `onError` | `errorTextColor` |
-
-`remember(code, colorScheme, darkMode)` 确保主题或代码变化时 HTML 重新构建。
-
-### 5.3 JS ↔ Kotlin 交互
-
-- **接口注入**：`MermaidInterface` 类通过 `@JavascriptInterface` 注入，名为 `AndroidInterface`
-- **导出 PNG**：Header 的显式递增请求号触发 `exportSvgToPng(requestId)`。JS 经 SVG/Canvas 返回 `AndroidInterface.exportImage(requestId, base64Image)`，只接受当前待处理请求一次；函数缺失允许下次重试，旧回调不能完成新请求。
-- Kotlin 侧通过原宿主 `ImageSource` 与 `MediaExportService.saveImage` 验证来源、读取和相册发布。整个 WebView/bridge 随代码、来源及主题重建，新实例不重放旧导出计数。
-- **全屏预览**：Header 把同一 HTML 与原来源交给 `RichTextHost`，经 `Screen.ContentPreview(document)` 借用到新页面，不写磁盘缓存。
-
-### 5.4 布局
-
-- 内联预览：`Modifier.height(200.dp)` 固定高度
-- `useWideViewPort = true` + `loadWithOverviewMode = true` 自适应内容宽度
-- 圆角裁剪：`Modifier.clip(RoundedCornerShape(4.dp))`
-- View 与导出入口归代码块 Header；200dp WebView 内没有覆盖层，预览下方没有第二行操作栏
-- 调试页与消息正文均通过 `HighlightCodeBlock(language = "mermaid")` 接入，复用同一套全屏与导出操作。
-
----
-
-## 6. HTML/SVG 代码预览
-
-### 6.1 数据注入
-
-`CodeBlockPreview()`（`HighlightCodeBlock.kt`）调用 `buildCodePreviewHtml()` 构建最小 HTML：
-
-- **SVG**：包裹在 `<!DOCTYPE html><html><body style="margin:0;display:flex;justify-content:center;align-items:center;min-height:100vh;">$svgCode</body></html>` 中，居中显示
-- **HTML**：直接使用原始代码作为 HTML 内容
-
-`RenderedContentWebView` 与全屏页共用 `rememberRenderedContentState`。每份文档使用独立的随机 `.invalid` origin，禁用 DOM Storage，避免 Cookie/IndexedDB/浏览器缓存成为跨来源存储；不修改 Portal 的浏览器状态。原来源尚未授权或已经撤销时不创建 WebView，授权结果必须匹配具体来源，不能继承旧文档的 true。
-
-本地图片经原文件服务解析、读取，`file:` 和 `/upload` 资源由文档内映射转到该文档的绝对虚拟 origin（含动态节点与 CSS）；外部 `<base>` 不能把原本地路径改发网络。`/upload` 链接归回原来源。平台 WebView 禁止自行访问任意 file/content 路径；用户点击链接交给原宿主文件/外链动作。模型 HTML 不取得 Portal Bridge。
-
-### 6.2 布局与交互
-
-- 内联预览：`Modifier.height(200.dp)` 固定高度（与 Mermaid 一致）
-- `useWideViewPort` + `loadWithOverviewMode` + `builtInZoomControls`（隐藏缩放按钮）
-- 可在"代码/预览"模式间切换（`previewMode` 状态）
-- 全屏预览：通过 `Screen.ContentPreview` 导航到 `ContentPreviewPage`
-- **无 JS 接口**：纯展示，不需要 `@JavascriptInterface`
-
----
-
-## 7. WebView 核心封装层
-
-`WebView.kt` 是富文本预览和 Mermaid 的平台视图封装（企业 Portal 使用独立宿主），通过 `AndroidView` 包装原生 `WebView`。
-
-### 7.1 状态管理（WebViewState）
-
-```
-WebViewState
-  ├─ content: WebContent        ─ 密封类: Url / Data / NavigatorOnly
-  ├─ isLoading / loadingProgress ─ 加载状态（WebChromeClient 驱动）
-  ├─ webView: WebView?           ─ 持有原生实例引用（用于 JS 交互）
-  ├─ interfaces: Map<String, Any> ─ JS 接口映射
-  ├─ consoleMessages             ─ 控制台日志（有上限）
-  └─ settings: WebSettings.() -> Unit ─ WebSettings 配置块
-```
-
-### 7.2 生命周期
-
-| 阶段 | 回调 | 行为 |
-|------|------|------|
-| 创建 | `factory` | 创建 WebView，配置 WebSettings（JS、DOM Storage、缩放等），注入 JS 接口，设置 Client |
-| 更新 | `update` | 内容变化时通过 `loadDataWithBaseURL` 或 `loadUrl` 加载；重新注入 JS 接口 |
-| 重置 | `onReset` | 停止加载、移除 JS 接口（AndroidView 从组合中移除但未释放时） |
-| 释放 | `onRelease` | 仅清空匹配实例的 `state.webView`，停止加载并移除接口、清除 Client，加载空白页、清历史与子 View，最后 `destroy()` |
-
-### 7.3 防重复加载机制
-
-- `WebContent.Data` 通过 `lastLoadedData` 记录上次加载的数据，避免 Compose 重组时重复触发 `loadDataWithBaseURL`
-- `forceReload` 标志可强制重新加载
-
-### 7.4 加载进度
-
-`MyWebChromeClient.onProgressChanged` 驱动 `loadingProgress`，在 `isLoading` 为 true 时顶部显示 `LinearProgressIndicator`。
-
----
-
-## 8. 全屏 WebView 页面
-
-`ContentPreviewPage` 接收进程内 `RenderedContent`，复用原页面来源。导航只序列化稳定条目 ID，HTML/来源标为 transient；保存恢复后显示不可用，必须从原页面重新打开，不能凭旧缓存 ID 重建访问。
-
-页面保留返回、刷新和分级 Console Logs。刷新复验原来源；链接经宿主授权后交给原生处理，预览页不成为通用浏览器。来源撤销后移除并销毁原 WebView，关闭预览不主动关闭父页面的 lease。
-
----
-
-## 9. Markdown 全文预览
-
-### 9.1 触发方式
-
-在聊天消息的长按操作菜单中，`onWebViewPreview` 提取所有 `UIMessagePart.Text` 的文本，调用 `buildMarkdownPreviewHtml()` 生成 HTML，通过宿主导航到 `ContentPreviewPage` 全屏渲染。
-
-### 9.2 HTML 模板（mark.html）
-
-`MarkdownWeb.kt` 读取 `assets/html/mark.html` 模板，替换占位符：
-
-- `{{MARKDOWN_BASE64}}` — Markdown 内容（Base64 编码）
-- M3 配色变量：`BACKGROUND_COLOR`、`ON_BACKGROUND_COLOR`、`SURFACE_COLOR`、`ON_SURFACE_COLOR`、
-  `SURFACE_VARIANT_COLOR`、`ON_SURFACE_VARIANT_COLOR`、`PRIMARY_COLOR`、`OUTLINE_COLOR`、`OUTLINE_VARIANT_COLOR`
-
-模板内部集成：
-
-| 库 | CDN | 用途 |
-|---|---|---|
-| markdown-it@14.0.0 | esm.sh | Markdown 解析 |
-| @vscode/markdown-it-katex | esm.sh | LaTeX 公式（KaTeX 渲染） |
-| katex@0.16.8 + mhchem | esm.sh + jsdelivr (CSS) | 化学公式 `\ce{}` |
-| highlight.js@11.9.0 | esm.sh + jsdelivr (CSS) | 语法高亮 |
-| mermaid@10.6.1 | esm.sh | Mermaid 图表 |
-| markdown-it-task-lists@2.1.1 | esm.sh | 任务列表 |
-| js-base64@3.7.5 | esm.sh | Base64 解码 |
-
-> 全文预览的 Mermaid 主题通过 `prefers-color-scheme` 媒体查询自动适配深色/浅色，
-> 而非像内联 Mermaid 那样注入 M3 变量。
-
----
-
-## 10. 渲染方式汇总
-
-| 内容类型 | 渲染方式 | 关键组件 | 技术 |
-|---|---|---|---|
-| 普通文本 / Markdown | 原生 | `MarkdownBlock` / `MarkdownNew` | IntelliJ Markdown AST / Jsoup DOM |
-| 代码块（普通语言） | 原生 | `HighlightCodeBlock` → `CodeHighlightText` | highlight 模块 |
-| LaTeX 行内公式 | 原生 Canvas | `MathInline` → `LatexText` | JLatexMathDrawable |
-| LaTeX 块级公式 | 原生 Canvas | `MathBlock` → `LatexText` | JLatexMathDrawable |
-| Mermaid 图表 | WebView | `Mermaid` | 本地 mermaid.min.js + JS Bridge |
-| HTML/SVG 代码 | WebView | `CodeBlockPreview` | loadDataWithBaseURL |
-| 图片 | 原生 | `ZoomableAsyncImage`（点击进入全屏多图查看器） | Coil3 |
-| 表格 | 原生 | `DataTable` | Compose 自定义布局 |
-| HTML 块 | 原生 | `SimpleHtmlBlock` / `MarkdownNew` | Jsoup → Compose |
-| 全屏预览 | WebView | `ContentPreviewPage` | 独立页面 |
-| Markdown 全文预览 | WebView | `mark.html` 模板 | markdown-it + KaTeX + Mermaid + highlight.js |
+纯分组/投影由单元测试证明；WebView、Compose 选择、图片解码和系统文件交付需要对应 Android 场景。
+完整分层见 [测试策略](testing-strategy.md)，测试存在不等于设备或真实服务验收完成。
