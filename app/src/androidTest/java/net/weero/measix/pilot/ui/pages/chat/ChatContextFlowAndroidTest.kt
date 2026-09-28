@@ -3,6 +3,7 @@ package net.weero.measix.pilot.ui.pages.chat
 import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
+import androidx.compose.ui.semantics.SemanticsNode
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.test.core.app.ActivityScenario
@@ -33,6 +34,7 @@ import net.weero.measix.pilot.data.model.InjectionPosition
 import net.weero.measix.pilot.data.model.ConversationContextSource
 import net.weero.measix.pilot.data.model.ContextAdmissionReason
 import net.weero.measix.pilot.data.model.DisclosureSection
+import net.weero.measix.pilot.data.repository.ConversationRepository
 import net.weero.measix.pilot.data.ai.tools.local.LocalToolOption
 import me.rerere.ai.core.MessageRole
 import net.weero.measix.pilot.service.*
@@ -306,6 +308,95 @@ class ChatContextFlowAndroidTest {
             assertEquals(changed, disabledSnapshot.modelContextEntries.filter { it.payload.source is ConversationContextSource.Disclosure })
             assertEquals(1, projectConversationContextSummary(disabledSnapshot).messages.values.count { it.updates.isNotEmpty() })
             capture(context, "08-next-start-rule-disabled.png")
+
+            // Regenerate from the middle USER through its own action row, preserving the first Turn.
+            val repository = koin.get<ConversationRepository>()
+            val beforeRegenerate = runBlocking { requireNotNull(query.aggregateSnapshot(row.id)) }
+            val beforeRegenerateRoom = runBlocking { requireNotNull(repository.getConversationSnapshotById(row.id)) }
+            val targetText = "Next START uses updated configuration"
+            val targetIndex = beforeRegenerate.nodes.indexOfFirst {
+                it.currentMessage.role == MessageRole.USER && it.currentMessage.toText() == targetText
+            }
+            assertTrue(targetIndex > 0)
+            val retainedNodes = beforeRegenerate.nodes.take(targetIndex + 1)
+            val removedNodes = beforeRegenerate.nodes.drop(targetIndex + 1)
+            assertEquals(listOf(MessageRole.ASSISTANT, MessageRole.USER, MessageRole.ASSISTANT),
+                removedNodes.map { it.currentMessage.role })
+            val removedMessageIds = removedNodes.flatMap { it.messages }.map { it.id }.toSet()
+            val oldTexts = beforeRegenerate.currentMessages().map { it.toText() }.toSet()
+            val warning = uiContext.getString(R.string.regenerate_confirm_message)
+            clickMessageRegenerate(uiContext, targetText, oldTexts)
+            compose.onNodeWithText(warning).assertIsDisplayed()
+            capture(context, "09-user-regenerate-confirmation.png")
+            compose.onNode(hasText(uiContext.getString(R.string.cancel)) and hasClickAction() and hasAnyAncestor(isDialog()))
+                .performClick()
+            compose.onNodeWithText(warning).assertDoesNotExist()
+            assertEquals(beforeRegenerate, runBlocking { query.aggregateSnapshot(row.id) })
+            assertEquals(beforeRegenerateRoom, runBlocking { repository.getConversationSnapshotById(row.id) })
+            assertEquals(4, server.mainRequests.size)
+
+            clickMessageRegenerate(uiContext, targetText, oldTexts)
+            compose.onNodeWithText(warning).assertIsDisplayed()
+            compose.onNode(hasText(uiContext.getString(R.string.confirm)) and hasClickAction() and hasAnyAncestor(isDialog()))
+                .performClick()
+            compose.waitUntil(60_000) { server.mainRequests.size == 5 }
+            awaitUi(30_000) { query.conversationUiModel(lease).first {
+                it != null && it.presentation.activeTurnId == null &&
+                    it.snapshot.currentMessages().lastOrNull()?.toText() == "Context user regenerated answer"
+            } }
+            compose.onNodeWithText(warning).assertDoesNotExist()
+            val regenerated = runBlocking { requireNotNull(query.aggregateSnapshot(row.id)) }
+            assertEquals(retainedNodes, regenerated.nodes.take(retainedNodes.size))
+            assertEquals(retainedNodes.size + 1, regenerated.nodes.size)
+            assertTrue(regenerated.nodes.none { node -> node.messages.any { it.id in removedMessageIds } })
+            assertEquals(listOf("Context integration request", targetText),
+                regenerated.currentMessages().filter { it.role == MessageRole.USER }.map { it.toText() })
+            val retainedAdmissions = beforeRegenerate.contextAdmissions.filter { it.owner.messageId !in removedMessageIds }
+            assertEquals(2, retainedAdmissions.size)
+            assertEquals(retainedAdmissions.associateBy { it.id }, regenerated.contextAdmissions
+                .filter { it.id in retainedAdmissions.map { admission -> admission.id } }.associateBy { it.id })
+            assertEquals(3, regenerated.contextAdmissions.size)
+            assertTrue(regenerated.contextAdmissions.none { it.owner.messageId in removedMessageIds })
+            assertEquals(regenerated.nodes.last().currentMessage.id, regenerated.contextAdmissions.last().owner.messageId)
+            assertTrue(requireNotNull(regenerated.contextAdmissions.last().selection).ruleEntryIds.isEmpty())
+            val retainedEntries = beforeRegenerate.modelContextEntries.filter {
+                it.ownerMessageId !in removedMessageIds && it.anchorMessageId !in removedMessageIds
+            }.associateBy { it.id }
+            assertEquals(retainedEntries, regenerated.modelContextEntries.filter { it.id in retainedEntries }.associateBy { it.id })
+            assertTrue(regenerated.modelContextEntries.none {
+                it.ownerMessageId in removedMessageIds || it.anchorMessageId in removedMessageIds
+            })
+            val regeneratedEntryIds = regenerated.modelContextEntries.map { it.id }.toSet()
+            assertTrue(regenerated.contextAdmissions.all { admission ->
+                admission.uses.all { it.entryId in regeneratedEntryIds } &&
+                    admission.selection?.let { selection -> selection.systemEntryId in regeneratedEntryIds &&
+                        selection.ruleEntryIds.all { it in regeneratedEntryIds } } != false
+            })
+            val regeneratedRoom = runBlocking { requireNotNull(repository.getConversationSnapshotById(row.id)) }
+            assertEquals(regenerated.nodes, regeneratedRoom.nodes)
+            assertEquals(regenerated.modelContextEntries.associateBy { it.id }, regeneratedRoom.modelContextEntries.associateBy { it.id })
+            assertEquals(regenerated.contextAdmissions.associateBy { it.id }, regeneratedRoom.contextAdmissions.associateBy { it.id })
+            val regeneratedRequest = messages(server.mainRequests.toList().last()).toString()
+            assertTrue(regeneratedRequest.contains(targetText))
+            listOf("Context second answer", "Next START has the rule disabled", "Context third answer", "CONTEXT_RULE_TWO")
+                .forEach { assertFalse("Retired content replayed: $it", regeneratedRequest.contains(it)) }
+            capture(context, "10-user-regenerated-history-pruned.png")
+
+            // ASSISTANT regeneration starts immediately and retains the previous answer as a variant.
+            clickMessageRegenerate(uiContext, "Context user regenerated answer", regenerated.currentMessages().map { it.toText() }.toSet())
+            compose.onNodeWithText(warning).assertDoesNotExist()
+            compose.waitUntil(60_000) { server.mainRequests.size == 6 }
+            awaitUi(30_000) { query.conversationUiModel(lease).first {
+                it != null && it.presentation.activeTurnId == null &&
+                    it.snapshot.currentMessages().lastOrNull()?.toText() == "Context assistant regenerated answer"
+            } }
+            val assistantRegenerated = runBlocking { requireNotNull(repository.getConversationSnapshotById(row.id)) }
+            assertEquals(regenerated.nodes.dropLast(1), assistantRegenerated.nodes.dropLast(1))
+            assertEquals(regenerated.nodes.last().id, assistantRegenerated.nodes.last().id)
+            assertEquals(regenerated.nodes.last().messages.size + 1, assistantRegenerated.nodes.last().messages.size)
+            assertTrue(assistantRegenerated.nodes.last().messages.containsAll(regenerated.nodes.last().messages))
+            assertEquals("Context assistant regenerated answer", assistantRegenerated.nodes.last().currentMessage.toText())
+            capture(context, "11-assistant-regenerated-without-confirmation.png")
             assertNull(server.failure)
             File(outputDirectory(context), "requests.json").writeText(
                 buildJsonArray { server.mainRequests.toList().forEach(::add) }.toString(), Charsets.UTF_8,
@@ -368,6 +459,26 @@ class ChatContextFlowAndroidTest {
             cleanup { server.close() }
             cleanupFailure?.let { throw it }
         }
+    }
+
+    private fun clickMessageRegenerate(context: Context, messageText: String, transcriptTexts: Set<String>) {
+        val historyMatcher = hasScrollToIndexAction() and SemanticsMatcher("visible chat history") {
+            it.boundsInRoot.left >= 0f && it.boundsInRoot.right > 0f
+        }
+        compose.onNode(historyMatcher).performScrollToNode(hasText(messageText))
+        fun flatten(node: SemanticsNode): List<SemanticsNode> = listOf(node) + node.children.flatMap(::flatten)
+        val nodes = flatten(compose.onNode(historyMatcher, useUnmergedTree = true).fetchSemanticsNode())
+        val textNode = nodes.single { hasText(messageText).matches(it) }
+        val actionMatcher = hasContentDescription(context.getString(R.string.regenerate)) and hasClickAction()
+        // ChatMessage lays out its body before its action row. Stop at any other transcript body,
+        // so a missing action cannot accidentally click the next message's regenerate button.
+        val following = nodes.drop(nodes.indexOf(textNode) + 1)
+        val action = following.first { node ->
+            actionMatcher.matches(node) || transcriptTexts.any { it != messageText && hasText(it).matches(node) }
+        }
+        check(actionMatcher.matches(action)) { "message_regenerate_action_missing: $messageText" }
+        compose.onNode(SemanticsMatcher("regenerate for $messageText") { it.id == action.id }, useUnmergedTree = true)
+            .performScrollTo().assertIsDisplayed().performClick()
     }
 
     private fun <T> awaitUi(timeoutMillis: Long, action: suspend () -> T): T {
@@ -435,7 +546,14 @@ private class ContextMockServer(private val childId: String) : AutoCloseable {
                 }.toString()) }
             } }
         } else buildJsonObject { put("role", "assistant"); put("content", if (!main) "Context UI test"
-            else when (mainRequests.size) { 2 -> "Context mock answer"; 3 -> "Context second answer"; else -> "Context third answer" }) }
+            else when (mainRequests.size) {
+                2 -> "Context mock answer"
+                3 -> "Context second answer"
+                4 -> "Context third answer"
+                5 -> "Context user regenerated answer"
+                6 -> "Context assistant regenerated answer"
+                else -> error("unexpected_context_request: ${mainRequests.size}")
+            }) }
         val response = buildJsonObject {
             put("id", "context-local-mock"); put("object", "chat.completion"); put("created", 1); put("model", request.getValue("model"))
             putJsonArray("choices") { addJsonObject { put("index", 0); put("message", message); put("finish_reason", if (tool) "tool_calls" else "stop") } }

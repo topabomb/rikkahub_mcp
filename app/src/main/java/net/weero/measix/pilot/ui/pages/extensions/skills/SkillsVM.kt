@@ -2,6 +2,10 @@ package net.weero.measix.pilot.ui.pages.extensions.skills
 
 import android.content.Context
 import android.net.Uri
+import android.util.Log
+import java.io.IOException
+import net.weero.measix.pilot.data.files.SkillFileSaveResult
+import net.weero.measix.pilot.data.files.SkillFileDeleteResult
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import java.io.ByteArrayInputStream
@@ -40,42 +44,38 @@ import kotlin.collections.iterator
 class SkillsVM internal constructor(
     private val skillManager: SkillManager,
     private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
-    private val gitHubSource: SkillGitHubSource = NetworkSkillGitHubSource,
+    private val gitHubSource: SkillGitHubSource = NetworkSkillGitHubSource(),
 ) : ViewModel() {
     private val _skills = MutableStateFlow<List<SkillMetadata>>(emptyList())
     val skills = _skills.asStateFlow()
-    private val _lockedChanges = MutableSharedFlow<SettingsLockedException>(extraBufferCapacity = 1)
-    val lockedChanges = _lockedChanges.asSharedFlow()
-
-    init {
-        loadSkills()
+    private val _failure = MutableStateFlow<Exception?>(null)
+    val failure = _failure.asStateFlow()
+    fun dismissFailure() { _failure.value = null }
+    private fun reportFailure(error: Exception) {
+        Log.e("SkillsVM", "Skill operation failed", error)
+        _failure.value = error
     }
+
+    init { loadSkills() }
 
     private fun loadSkills() {
         viewModelScope.launch(ioDispatcher) {
-            _skills.value = skillManager.listSkills()
+            try { _skills.value = skillManager.listSkills() }
+            catch (cancelled: CancellationException) { throw cancelled }
+            catch (error: Exception) { reportFailure(error) }
         }
     }
 
-    fun saveSkill(name: String, content: String, onResult: (Boolean) -> Unit) {
-        viewModelScope.launch(ioDispatcher) {
-            val result = skillManager.saveSkill(name, content)
-            _skills.value = skillManager.listSkills()
-            withContext(Dispatchers.Main) {
-                onResult(result != null)
-            }
-        }
+    suspend fun saveSkill(name: String, content: String): SkillFileSaveResult = withContext(ioDispatcher) {
+        val result = skillManager.saveSkill(name, content)
+        if (result == SkillFileSaveResult.SUCCESS) _skills.value = skillManager.listSkills()
+        result
     }
 
-    fun deleteSkill(name: String) {
-        viewModelScope.launch(ioDispatcher) {
-            try {
-                skillManager.deleteSkill(name)
-                _skills.value = skillManager.listSkills()
-            } catch (error: SettingsLockedException) {
-                _lockedChanges.emit(error)
-            }
-        }
+    suspend fun deleteSkill(name: String): SkillFileDeleteResult = withContext(ioDispatcher) {
+        val result = skillManager.deleteSkill(name)
+        if (result == SkillFileDeleteResult.SUCCESS) _skills.value = skillManager.listSkills()
+        result
     }
 
     fun importSkillFromFile(context: Context, uri: Uri, onResult: (SkillImportOutcome) -> Unit) =
@@ -105,9 +105,10 @@ class SkillsVM internal constructor(
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: SkillImportException) {
-                withContext(Dispatchers.Main) { onResult(SkillImportOutcome.Failure(error.reason)) }
+                withContext(Dispatchers.Main) { onResult(SkillImportOutcome.Failure(error.reason, error.takeIf { it.message != null })) }
             } catch (e: Exception) {
-                withContext(Dispatchers.Main) { onResult(SkillImportOutcome.Failure(SkillImportFailure.UNKNOWN)) }
+                Log.e("SkillsVM", "Skill import failed", e)
+                withContext(Dispatchers.Main) { onResult(SkillImportOutcome.Failure((e as? SkillHttpException)?.let { if (it.rateLimited) SkillImportFailure.RATE_LIMITED else SkillImportFailure.HTTP_REJECTED } ?: SkillImportFailure.UNKNOWN, e)) }
             }
     }
 
@@ -119,7 +120,6 @@ class SkillsVM internal constructor(
 
                 currentCoroutineContext().ensureActive()
                 val files = gitHubSource.listFiles(info.owner, info.repo, info.branch, info.path)
-                    ?: throw SkillImportException(SkillImportFailure.GITHUB_LIST_FAILED)
                 if (files.size > SkillImportLimits.MAX_ENTRIES) {
                     throw SkillImportException(SkillImportFailure.RESOURCE_LIMIT)
                 }
@@ -129,7 +129,6 @@ class SkillsVM internal constructor(
                     ?: throw SkillImportException(SkillImportFailure.SKILL_FILE_MISSING)
 
                 val skillMdBytes = gitHubSource.downloadBytes(skillMdEntry.downloadUrl)
-                    ?: throw SkillImportException(SkillImportFailure.DOWNLOAD_FAILED)
                 currentCoroutineContext().ensureActive()
                 val skillMdContent = skillMdBytes.decodeUtf8Strict()
                     ?: throw SkillImportException(SkillImportFailure.INVALID_SKILL)
@@ -144,7 +143,6 @@ class SkillsVM internal constructor(
                         skillMdBytes
                     } else {
                         gitHubSource.downloadBytes(downloadUrl)
-                            ?: throw SkillImportException(SkillImportFailure.DOWNLOAD_FAILED)
                     }
                     currentCoroutineContext().ensureActive()
                     if (contentBytes.size > SkillImportLimits.MAX_ENTRY_BYTES) {
@@ -158,8 +156,8 @@ class SkillsVM internal constructor(
                 }
 
                 currentCoroutineContext().ensureActive()
-                val saved = skillManager.importSkillFileBytesAtomically(name, fileContents)
-                if (!saved) throw SkillImportException(SkillImportFailure.SAVE_FAILED)
+                val saved = skillManager.saveSkillFileBytesAtomically(name, fileContents)
+                if (saved != SkillFileSaveResult.SUCCESS) throw SkillImportException(SkillImportFailure.SAVE_FAILED, saved.name)
 
                 currentCoroutineContext().ensureActive()
                 _skills.value = skillManager.listSkills()
@@ -168,9 +166,10 @@ class SkillsVM internal constructor(
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: SkillImportException) {
-                withContext(Dispatchers.Main) { onResult(SkillImportOutcome.Failure(error.reason)) }
+                withContext(Dispatchers.Main) { onResult(SkillImportOutcome.Failure(error.reason, error.takeIf { it.message != null })) }
             } catch (e: Exception) {
-                withContext(Dispatchers.Main) { onResult(SkillImportOutcome.Failure(SkillImportFailure.UNKNOWN)) }
+                Log.e("SkillsVM", "Skill import failed", e)
+                withContext(Dispatchers.Main) { onResult(SkillImportOutcome.Failure((e as? SkillHttpException)?.let { if (it.rateLimited) SkillImportFailure.RATE_LIMITED else SkillImportFailure.HTTP_REJECTED } ?: SkillImportFailure.UNKNOWN, e)) }
             }
         }
 
@@ -183,10 +182,10 @@ class SkillsVM internal constructor(
         val frontmatter = parseSkillDocument(content).frontmatter
         val name = frontmatter.name
         currentCoroutineContext().ensureActive()
-        val saved = skillManager.importSkill(name, content)
-            ?: throw SkillImportException(SkillImportFailure.SAVE_FAILED)
+        val saved = skillManager.saveSkill(name, content)
+        if (saved != SkillFileSaveResult.SUCCESS) throw SkillImportException(SkillImportFailure.SAVE_FAILED, saved.name)
         currentCoroutineContext().ensureActive()
-        return listOf(saved.name)
+        return listOf(name)
     }
 
     private suspend fun importSkillsFromZip(bytes: ByteArray): List<String> {
@@ -267,7 +266,6 @@ class SkillsVM internal constructor(
             SkillBundleImportResult.DUPLICATE_NAME,
             SkillBundleImportResult.INVALID_BUNDLE,
             -> throw SkillImportException(SkillImportFailure.INVALID_SKILL)
-            SkillBundleImportResult.IO_FAILURE -> throw SkillImportException(SkillImportFailure.SAVE_FAILED)
         }
         currentCoroutineContext().ensureActive()
         return bundleEntries.map { it.name }
@@ -345,31 +343,43 @@ class SkillsVM internal constructor(
 internal data class SkillGitHubFile(val relativePath: String, val downloadUrl: String)
 
 internal interface SkillGitHubSource {
-    suspend fun listFiles(owner: String, repo: String, branch: String, path: String): List<SkillGitHubFile>?
-    suspend fun downloadBytes(url: String): ByteArray?
+    suspend fun listFiles(owner: String, repo: String, branch: String, path: String): List<SkillGitHubFile>
+    suspend fun downloadBytes(url: String): ByteArray
 }
 
-private object NetworkSkillGitHubSource : SkillGitHubSource {
+internal class NetworkSkillGitHubSource(
+    private val connectionFactory: (URL) -> HttpURLConnection = { it.openConnection() as HttpURLConnection },
+) : SkillGitHubSource {
     override suspend fun listFiles(
         owner: String,
         repo: String,
         branch: String,
         path: String,
-    ): List<SkillGitHubFile>? {
+    ): List<SkillGitHubFile> {
         val result = mutableListOf<SkillGitHubFile>()
-        return if (listFilesRecursively(owner, repo, branch, path, path, result)) result else null
+        listFilesRecursively(owner, repo, branch, path, path, result)
+        return result
     }
 
-    override suspend fun downloadBytes(url: String): ByteArray? = runInterruptible(Dispatchers.IO) {
-        val connection = URL(url).openConnection() as HttpURLConnection
+    override suspend fun downloadBytes(url: String): ByteArray = runInterruptible(Dispatchers.IO) {
+        val connection = connectionFactory(URL(url))
         try {
             connection.connectTimeout = 10_000
             connection.readTimeout = 30_000
             connection.setRequestProperty("Accept", "application/vnd.github+json")
-            if (connection.responseCode == 200) {
-                connection.inputStream.use { it.readBytesLimited(SkillImportLimits.MAX_ENTRY_BYTES) }
+            val status = connection.responseCode
+            if (status != 200) {
+                val headerLimited = status == 429 || (status == 403 && (
+                    connection.getHeaderField("X-RateLimit-Remaining") == "0" ||
+                    !connection.getHeaderField("Retry-After").isNullOrBlank()
+                ))
+                val detail = try { connection.errorStream?.use { it.readErrorDetail().toString(Charsets.UTF_8) }.orEmpty() }
+                catch (cancelled: CancellationException) { throw cancelled }
+                catch (error: Exception) { throw SkillHttpException(status, headerLimited, "Unable to read HTTP response detail", error) }
+                val rateLimited = headerLimited || (status == 403 && detail.contains("rate limit", ignoreCase = true))
+                throw SkillHttpException(status, rateLimited, detail)
             }
-            else null
+            connection.inputStream.use { it.readBytesLimited(SkillImportLimits.MAX_ENTRY_BYTES) }
         } finally {
             connection.disconnect()
         }
@@ -382,9 +392,9 @@ private object NetworkSkillGitHubSource : SkillGitHubSource {
         dirPath: String,
         basePath: String,
         result: MutableList<SkillGitHubFile>,
-    ): Boolean {
+    ) {
         val apiUrl = "https://api.github.com/repos/$owner/$repo/contents/$dirPath?ref=$branch"
-        val json = downloadBytes(apiUrl)?.decodeUtf8Strict() ?: return false
+        val json = downloadBytes(apiUrl).decodeUtf8Strict() ?: throw IOException("GitHub listing is not UTF-8")
         val array = JSONArray(json)
         for (i in 0 until array.length()) {
             val item = array.getJSONObject(i)
@@ -393,38 +403,38 @@ private object NetworkSkillGitHubSource : SkillGitHubSource {
             val relativePath = itemPath.removePrefix("$basePath/").removePrefix(basePath)
             when (type) {
                 "file" -> {
-                    if (result.size >= SkillImportLimits.MAX_ENTRIES) return false
+                    if (result.size >= SkillImportLimits.MAX_ENTRIES) throw SkillImportException(SkillImportFailure.RESOURCE_LIMIT)
                     val downloadUrl = item.optString("download_url").takeIf { it.isNotBlank() }
-                        ?: return false
+                        ?: throw IOException("GitHub file has no download URL: $itemPath")
                     result += SkillGitHubFile(relativePath, downloadUrl)
                 }
-                "dir" -> if (!listFilesRecursively(owner, repo, branch, itemPath, basePath, result)) {
-                    return false
-                }
+                "dir" -> listFilesRecursively(owner, repo, branch, itemPath, basePath, result)
             }
         }
-        return true
     }
 }
 
+internal class SkillHttpException(val status: Int, val rateLimited: Boolean, detail: String, cause: Exception? = null) :
+    IOException("GitHub HTTP $status${if (rateLimited) " (RATE_LIMITED)" else ""}: $detail", cause)
+
 sealed interface SkillImportOutcome {
     data class Success(val names: String) : SkillImportOutcome
-    data class Failure(val reason: SkillImportFailure) : SkillImportOutcome
+    data class Failure(val reason: SkillImportFailure, val cause: Exception? = null) : SkillImportOutcome
 }
 
 enum class SkillImportFailure {
     READ_SOURCE,
     INVALID_GITHUB_URL,
-    GITHUB_LIST_FAILED,
     SKILL_FILE_MISSING,
-    DOWNLOAD_FAILED,
     INVALID_SKILL,
     SAVE_FAILED,
     RESOURCE_LIMIT,
+    RATE_LIMITED,
+    HTTP_REJECTED,
     UNKNOWN,
 }
 
-private class SkillImportException(val reason: SkillImportFailure) : IllegalArgumentException()
+private class SkillImportException(val reason: SkillImportFailure, detail: String? = null) : IllegalArgumentException(detail)
 
 private object SkillImportLimits {
     const val MAX_SOURCE_BYTES = 16 * 1024 * 1024
@@ -447,10 +457,21 @@ private fun InputStream.readBytesLimited(limit: Int): ByteArray {
     return output.toByteArray()
 }
 
-private fun ByteArray.decodeUtf8Strict(): String? = runCatching {
+private fun ByteArray.decodeUtf8Strict(): String? = try {
     Charsets.UTF_8.newDecoder()
         .onMalformedInput(CodingErrorAction.REPORT)
         .onUnmappableCharacter(CodingErrorAction.REPORT)
         .decode(ByteBuffer.wrap(this))
         .toString()
-}.getOrNull()
+} catch (_: java.nio.charset.CharacterCodingException) { null }
+
+private fun InputStream.readErrorDetail(): ByteArray {
+    val output = ByteArrayOutputStream()
+    val buffer = ByteArray(4096)
+    while (output.size() < 64 * 1024) {
+        val read = read(buffer, 0, minOf(buffer.size, 64 * 1024 - output.size()))
+        if (read < 0) break
+        output.write(buffer, 0, read)
+    }
+    return output.toByteArray()
+}

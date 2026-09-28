@@ -1,7 +1,7 @@
 """Integration tests for AI translation quality.
 
 These tests call the real API and verify translation results meet expectations.
-Run with: uv run pytest tests/test_translator.py -v
+Run only when explicitly authorized: uv run pytest --run-live tests/test_translator.py -v
 """
 
 import sys
@@ -15,12 +15,17 @@ from config import Config
 from services.translator import AITranslator
 
 CONFIG_PATH = Path(__file__).parent.parent / "config.yml"
+pytestmark = pytest.mark.live_api
 
 
-@pytest.fixture(scope="module")
-def translator():
+@pytest.fixture
+async def translator():
     config = Config.load(CONFIG_PATH)
-    return AITranslator(config)
+    translator = AITranslator(config)
+    try:
+        yield translator
+    finally:
+        await translator.close()
 
 
 @pytest.mark.asyncio

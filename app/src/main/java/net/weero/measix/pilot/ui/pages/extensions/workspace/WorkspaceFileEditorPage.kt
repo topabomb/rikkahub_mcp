@@ -4,22 +4,22 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.text.input.TextFieldLineLimits
-import androidx.compose.foundation.text.input.rememberTextFieldState
-import androidx.compose.foundation.text.input.setTextAndPlaceCursorAtEnd
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.TextField
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.key
+import androidx.compose.material3.AlertDialog
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -27,7 +27,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import com.dokar.sonner.ToastType
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
@@ -38,7 +37,9 @@ import net.weero.measix.pilot.service.workspace.WorkspaceTextPreviewResult
 import net.weero.measix.pilot.ui.components.nav.BackButton
 import net.weero.measix.pilot.ui.context.LocalToaster
 import net.weero.measix.pilot.ui.theme.CustomColors
-import net.weero.measix.pilot.ui.theme.JetbrainsMono
+import net.weero.measix.pilot.ui.components.ui.FileEditorState
+import net.weero.measix.pilot.ui.components.ui.FileTextEditor
+import net.weero.measix.pilot.utils.userVisibleDiagnostic
 import me.rerere.workspace.WorkspaceStorageArea
 import org.koin.compose.koinInject
 
@@ -52,43 +53,57 @@ fun WorkspaceFileEditorPage(
     id: String,
     area: WorkspaceStorageArea,
     path: String,
+    applicationService: WorkspaceApplicationService = koinInject(),
+    queryService: WorkspaceQueryService = koinInject(),
 ) {
-    val applicationService = koinInject<WorkspaceApplicationService>()
-    val queryService = koinInject<WorkspaceQueryService>()
+    key(id, area, path) {
+        WorkspaceFileEditorContent(id, area, path, applicationService, queryService)
+    }
+}
+
+@Composable
+private fun WorkspaceFileEditorContent(
+    id: String, area: WorkspaceStorageArea, path: String,
+    applicationService: WorkspaceApplicationService, queryService: WorkspaceQueryService,
+) {
     val toaster = LocalToaster.current
     val scope = rememberCoroutineScope()
     val editable = area == WorkspaceStorageArea.FILES
     val fileName = path.substringAfterLast('/').ifBlank { path }
 
-    val readFailedText = stringResource(R.string.workspace_file_editor_read_failed)
     val savedText = stringResource(R.string.workspace_file_editor_saved)
-    val saveFailedText = stringResource(R.string.workspace_file_editor_save_failed)
     val saveButtonText = stringResource(R.string.common_save)
     val tooLargeText = stringResource(R.string.workspace_file_editor_too_large)
 
-    val textState = rememberTextFieldState()
-    var loading by remember { mutableStateOf(true) }
-    var loadError by remember { mutableStateOf<String?>(null) }
-    var saving by remember { mutableStateOf(false) }
+    val textState = remember(id, area, path) { FileEditorState() }
+    var loading by remember(id, area, path) { mutableStateOf(true) }
+    var loadError by remember(id, area, path) { mutableStateOf<String?>(null) }
+    var saveError by remember { mutableStateOf<String?>(null) }
+    var saving by remember(id, area, path) { mutableStateOf(false) }
 
     LaunchedEffect(id, area, path) {
         loading = true
         loadError = null
         try {
             when (val result = queryService.readTextForPreview(id, area, path)) {
-                is WorkspaceTextPreviewResult.Success -> textState.setTextAndPlaceCursorAtEnd(result.content)
+                is WorkspaceTextPreviewResult.Success -> textState.replaceText(result.content)
                 is WorkspaceTextPreviewResult.TooLarge -> loadError = tooLargeText.format(result.sizeBytes)
-                WorkspaceTextPreviewResult.Unavailable -> loadError = readFailedText
+                is WorkspaceTextPreviewResult.Unavailable -> {
+                    android.util.Log.e("WorkspaceFileEditor", "Read failed", result.cause)
+                    loadError = result.cause.userVisibleDiagnostic()
+                }
             }
-            loading = false
         } catch (cancelled: CancellationException) {
             throw cancelled
-        } catch (_: Exception) {
-            loadError = readFailedText
+        } catch (error: Exception) {
+            android.util.Log.e("WorkspaceFileEditor", "Read failed", error)
+            loadError = error.userVisibleDiagnostic()
+        } finally {
             loading = false
         }
     }
 
+    val showSaveAction = editable && !loading && loadError == null
     Scaffold(
         topBar = {
             TopAppBar(
@@ -101,7 +116,7 @@ fun WorkspaceFileEditorPage(
                 },
                 navigationIcon = { BackButton() },
                 actions = {
-                    if (editable && !loading && loadError == null) {
+                    if (showSaveAction) {
                         TextButton(
                             onClick = {
                                 if (saving) return@TextButton
@@ -111,18 +126,15 @@ fun WorkspaceFileEditorPage(
                                         applicationService.writeText(
                                             workspaceId = id,
                                             path = path,
-                                            text = textState.text.toString(),
+                                            text = textState.snapshot(),
                                         )
                                         toaster.show(savedText, type = ToastType.Success)
                                     } catch (cancelled: CancellationException) {
                                         throw cancelled
-                                    } catch (_: Exception) {
-                                        toaster.show(
-                                            saveFailedText,
-                                            type = ToastType.Error
-                                        )
-                                    }
-                                    saving = false
+                                    } catch (error: Exception) {
+                                        android.util.Log.e("WorkspaceFileEditor", "Save failed", error)
+                                        saveError = error.userVisibleDiagnostic()
+                                    } finally { saving = false }
                                 }
                             },
                             enabled = !saving,
@@ -152,26 +164,30 @@ fun WorkspaceFileEditorPage(
                     .padding(innerPadding)
                     .padding(16.dp),
             ) {
-                Text(
-                    text = loadError ?: "",
-                    color = MaterialTheme.colorScheme.error,
-                )
+                SelectionContainer {
+                    Text(text = loadError.orEmpty(), color = MaterialTheme.colorScheme.error)
+                }
             }
 
-            else -> TextField(
+            else -> FileTextEditor(
                 state = textState,
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(innerPadding)
                     .imePadding(),
-                readOnly = !editable,
-                lineLimits = TextFieldLineLimits.MultiLine(),
-                textStyle = LocalTextStyle.current.copy(
-                    fontFamily = JetbrainsMono,
-                    fontSize = 13.sp,
-                    lineHeight = 18.sp,
-                ),
+                readOnly = !editable || saving,
+                minLines = 1,
+                maxLines = Int.MAX_VALUE,
+                fillViewport = true,
             )
         }
     }
+    saveError?.let { detail ->
+        AlertDialog(
+            onDismissRequest = { saveError = null },
+            text = { SelectionContainer { Text(detail, Modifier.verticalScroll(rememberScrollState())) } },
+            confirmButton = { TextButton(onClick = { saveError = null }) { Text(stringResource(R.string.confirm)) } },
+        )
+    }
+
 }

@@ -10,6 +10,8 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import net.weero.measix.pilot.ui.components.ui.FileEditorState
+import net.weero.measix.pilot.ui.components.ui.FileTextEditor
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
@@ -39,6 +41,17 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.CancellationException
+import net.weero.measix.pilot.data.files.SkillFileSaveResult
+import net.weero.measix.pilot.data.files.SkillFileDeleteResult
+import net.weero.measix.pilot.utils.userVisibleDiagnostic
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -87,31 +100,49 @@ fun SkillsPage() {
     val importSuccessFmt = stringResource(R.string.skills_page_import_success)
     val importFailedFmt = stringResource(R.string.skills_page_import_failed)
     val saveFailedText = stringResource(R.string.skills_page_save_failed)
-    val lockedMessage = stringResource(R.string.configuration_change_rejected, "{reason}")
-    LaunchedEffect(vm) {
-        vm.lockedChanges.collect { error ->
-            toaster.show(lockedMessage.replace("{reason}", error.reason), type = ToastType.Error)
+    val scope = rememberCoroutineScope()
+    var busy by remember { mutableStateOf(false) }
+    var importJob by remember { mutableStateOf<Job?>(null) }
+    var diagnostic by remember { mutableStateOf<String?>(null) }
+    val failure by vm.failure.collectAsStateWithLifecycle()
+    var query by rememberSaveable { mutableStateOf("") }
+    val filtered = remember(skills, query) { filterSkills(skills, query) }
+    DisposableEffect(vm) { onDispose { importJob?.cancel() } }
+    fun operation(block: suspend () -> Unit) {
+        if (busy) return
+        busy = true
+        scope.launch {
+            try { block() }
+            catch (cancelled: CancellationException) { throw cancelled }
+            catch (error: Exception) {
+                android.util.Log.e("SkillsPage", "Skill operation failed", error)
+                diagnostic = error.userVisibleDiagnostic()
+            } finally { busy = false }
         }
     }
     val importFailureMessages = mapOf(
         SkillImportFailure.READ_SOURCE to stringResource(R.string.skills_page_import_read_failed),
         SkillImportFailure.INVALID_GITHUB_URL to stringResource(R.string.skills_page_import_invalid_github_url),
-        SkillImportFailure.GITHUB_LIST_FAILED to stringResource(R.string.skills_page_import_github_list_failed),
         SkillImportFailure.SKILL_FILE_MISSING to stringResource(R.string.skills_page_import_skill_file_missing),
-        SkillImportFailure.DOWNLOAD_FAILED to stringResource(R.string.skills_page_import_download_failed),
         SkillImportFailure.INVALID_SKILL to stringResource(R.string.skills_page_import_invalid_skill),
         SkillImportFailure.SAVE_FAILED to stringResource(R.string.skills_page_save_failed),
         SkillImportFailure.RESOURCE_LIMIT to stringResource(R.string.skills_page_import_resource_limit),
+        SkillImportFailure.RATE_LIMITED to stringResource(R.string.skills_import_rate_limited),
+        SkillImportFailure.HTTP_REJECTED to stringResource(R.string.skills_page_import_github_list_failed),
         SkillImportFailure.UNKNOWN to stringResource(R.string.skills_page_import_unknown_failed),
     )
     val fileImportLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument()
     ) { uri ->
         uri ?: return@rememberLauncherForActivityResult
-        vm.importSkillFromFile(context, uri) { outcome ->
+        if (busy) return@rememberLauncherForActivityResult
+        busy = true
+        importJob = vm.importSkillFromFile(context, uri) { outcome ->
+            busy = false
             when (outcome) {
                 is SkillImportOutcome.Success -> toaster.show(importSuccessFmt.format(outcome.names))
                 is SkillImportOutcome.Failure -> {
+                    diagnostic = outcome.cause?.userVisibleDiagnostic()
                     toaster.show(importFailedFmt.format(importFailureMessages.getValue(outcome.reason)))
                 }
             }
@@ -128,8 +159,8 @@ fun SkillsPage() {
             )
         },
         floatingActionButton = {
-            FloatingActionButton(onClick = { showImportSheet = true }) {
-                Icon(HugeIcons.Add01, contentDescription = null)
+            FloatingActionButton(onClick = { if (!busy) showImportSheet = true }) {
+                Icon(HugeIcons.Add01, contentDescription = stringResource(R.string.skills_page_add_title))
             }
         },
         modifier = Modifier.nestedScroll(scrollBehavior.nestedScrollConnection),
@@ -145,6 +176,21 @@ fun SkillsPage() {
             ),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
+            item {
+                OutlinedTextField(
+                    value = query,
+                    onValueChange = { query = it },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                    label = { Text(stringResource(R.string.skills_search_hint)) },
+                    trailingIcon = {
+                        if (query.isNotEmpty()) TextButton(onClick = { query = "" }) { Text(stringResource(R.string.clear_search)) }
+                    },
+                )
+            }
+            if (skills.isNotEmpty() && filtered.isEmpty()) {
+                item { Text(stringResource(R.string.skills_search_empty), Modifier.padding(16.dp)) }
+            }
             if (skills.isEmpty()) {
                 item {
                     Column(
@@ -174,11 +220,11 @@ fun SkillsPage() {
                 }
             }
 
-            items(skills, key = SkillMetadata::name) { skill ->
+            items(filtered, key = SkillMetadata::name) { skill ->
                 SkillCard(
                     skill = skill,
                     onClick = { navController.navigate(Screen.SkillDetail(skill.name)) },
-                    onDelete = { deleteTarget = skill },
+                    onDelete = { if (!busy) deleteTarget = skill },
                 )
             }
         }
@@ -211,13 +257,13 @@ fun SkillsPage() {
 
     if (showAddDialog) {
         AddSkillDialog(
+            busy = busy,
             onDismiss = { showAddDialog = false },
             onConfirm = { name, content ->
-                vm.saveSkill(name, content) { success ->
-                    showAddDialog = false
-                    if (!success) {
-                        toaster.show(saveFailedText)
-                    }
+                operation {
+                    val result = vm.saveSkill(name, content)
+                    if (result == SkillFileSaveResult.SUCCESS) showAddDialog = false
+                    else toaster.show("$saveFailedText (${result.name})")
                 }
             },
         )
@@ -225,16 +271,24 @@ fun SkillsPage() {
 
     if (showImportDialog) {
         ImportSkillDialog(
+            loading = busy,
             onDismiss = { showImportDialog = false },
             onConfirm = { repoUrl ->
-                vm.importSkillFromGitHub(repoUrl) { outcome ->
-                    showImportDialog = false
+                if (!busy) {
+                    busy = true
+                    importJob = vm.importSkillFromGitHub(repoUrl) { outcome ->
+                    busy = false
                     when (outcome) {
-                        is SkillImportOutcome.Success -> toaster.show(importSuccessFmt.format(outcome.names))
+                        is SkillImportOutcome.Success -> {
+                            showImportDialog = false
+                            toaster.show(importSuccessFmt.format(outcome.names))
+                        }
                         is SkillImportOutcome.Failure -> {
+                            diagnostic = outcome.cause?.userVisibleDiagnostic()
                             toaster.show(importFailedFmt.format(importFailureMessages.getValue(outcome.reason)))
                         }
                     }
+                }
                 }
             },
         )
@@ -246,13 +300,24 @@ fun SkillsPage() {
         confirmText = stringResource(R.string.delete),
         dismissText = stringResource(R.string.cancel),
         onConfirm = {
-            deleteTarget?.let { vm.deleteSkill(it.name) }
-            deleteTarget = null
+            deleteTarget?.let { target -> operation {
+                val result = vm.deleteSkill(target.name)
+                if (result == SkillFileDeleteResult.SUCCESS) deleteTarget = null
+                else toaster.show(result.name)
+            } }
         },
-        onDismiss = { deleteTarget = null },
+        onDismiss = { if (!busy) deleteTarget = null },
     ) {
         Text(stringResource(R.string.skills_page_delete_message, deleteTarget?.name ?: ""))
     }
+    (diagnostic ?: failure?.userVisibleDiagnostic())?.let { detail ->
+        AlertDialog(
+            onDismissRequest = { diagnostic = null; vm.dismissFailure() },
+            text = { SelectionContainer { Text(detail, Modifier.verticalScroll(rememberScrollState())) } },
+            confirmButton = { TextButton(onClick = { diagnostic = null; vm.dismissFailure() }) { Text(stringResource(R.string.confirm)) } },
+        )
+    }
+
 }
 
 @Composable
@@ -393,11 +458,13 @@ private fun SkillImportSheetItem(
 }
 
 @Composable
-private fun AddSkillDialog(
+internal fun AddSkillDialog(
+    busy: Boolean,
     onDismiss: () -> Unit,
     onConfirm: (name: String, content: String) -> Unit,
 ) {
-    var content by rememberSaveable { mutableStateOf("") }
+    val contentState = remember { FileEditorState() }
+    val content = remember(contentState.revision) { contentState.snapshot() }
 
     val parsed = remember(content) { SkillFrontmatterParser.parseDocument(content) }
     val name = (parsed as? SkillParseResult.Success)?.document?.frontmatter?.name.orEmpty()
@@ -411,19 +478,14 @@ private fun AddSkillDialog(
     val nameError = content.isNotBlank() && name.isBlank()
 
     AlertDialog(
-        onDismissRequest = onDismiss,
+        onDismissRequest = { if (!busy) onDismiss() },
         title = { Text(stringResource(R.string.skills_page_add_title)) },
         text = {
-            OutlinedTextField(
-                value = content,
-                onValueChange = { content = it },
-                label = { Text(stringResource(R.string.skills_page_skill_content_label)) },
-                placeholder = {
-                    Text(
-                        stringResource(R.string.skills_page_content_placeholder),
-                        fontFamily = FontFamily.Monospace,
-                    )
-                },
+            FileTextEditor(
+                state = contentState,
+                enabled = !busy,
+                label = stringResource(R.string.skills_page_skill_content_label),
+                placeholder = stringResource(R.string.skills_page_content_placeholder),
                 supportingText = {
                     if (nameError) Text(
                         parseError ?: stringResource(R.string.skills_page_name_error),
@@ -435,31 +497,30 @@ private fun AddSkillDialog(
                 isError = nameError,
                 minLines = 8,
                 maxLines = 14,
-                textStyle = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
                 modifier = Modifier.fillMaxWidth(),
             )
         },
         confirmButton = {
             TextButton(
                 onClick = { onConfirm(name, content) },
-                enabled = name.isNotBlank() && !nameError,
+                enabled = !busy && name.isNotBlank() && !nameError,
             ) {
                 Text(stringResource(R.string.skills_page_save))
             }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) { Text(stringResource(R.string.cancel)) }
+            TextButton(onClick = onDismiss, enabled = !busy) { Text(stringResource(R.string.cancel)) }
         },
     )
 }
 
 @Composable
 private fun ImportSkillDialog(
+    loading: Boolean,
     onDismiss: () -> Unit,
     onConfirm: (repoUrl: String) -> Unit,
 ) {
     var url by rememberSaveable { mutableStateOf("") }
-    var loading by remember { mutableStateOf(false) }
 
     AlertDialog(
         onDismissRequest = { if (!loading) onDismiss() },
@@ -499,7 +560,6 @@ private fun ImportSkillDialog(
         confirmButton = {
             TextButton(
                 onClick = {
-                    loading = true
                     onConfirm(url)
                 },
                 enabled = url.isNotBlank() && !loading,
@@ -511,4 +571,11 @@ private fun ImportSkillDialog(
             TextButton(onClick = onDismiss, enabled = !loading) { Text(stringResource(R.string.cancel)) }
         },
     )
+}
+
+internal fun filterSkills(skills: List<SkillMetadata>, query: String): List<SkillMetadata> {
+    val term = query.trim()
+    return if (term.isEmpty()) skills else skills.filter {
+        it.name.contains(term, ignoreCase = true) || it.description.contains(term, ignoreCase = true)
+    }
 }

@@ -54,7 +54,7 @@ OpenAI-compatible 端点要求 function tool 的 `parameters` 至少是 object s
 
 ### 流式调用身份与完成证据
 
-`UIMessageChoice.toolCallSlots` 是只存在于 Provider `MessageChunk` 的 typed transport 关联：Chat 使用 `tool_calls[].index`，Claude 使用 content block index，Responses 使用输出 item ID，Gemini 完整 functionCall 按响应到达顺序分配槽。完整非流式 message 使用工具数组顺序。`StepOutputAccumulator` 在当前 Step 内将槽首次映射为新的 `localCallId`，之后仅按槽拼接；重复或空的 `providerCallId` 不会把不同调用混为一个。transport 槽不写入 durable Tool JSON。
+`UIMessageChoice.toolCallSlots` 是只存在于 Provider `MessageChunk` 的 typed transport 关联：Chat 使用 `tool_calls[].index`，Claude 使用 content block index，Responses 使用 response-local 输出槽（`item_id` / `output_index` 是槽的别名），Gemini 完整 functionCall 按响应到达顺序分配槽。完整非流式 message 使用工具数组顺序。`StepOutputAccumulator` 在当前 Step 内将槽首次映射为新的 `localCallId`，之后仅按槽拼接；重复或空的 `providerCallId` 不会把不同调用混为一个。transport 槽不写入 durable Tool JSON。
 
 流结束必须有协议完成证据。Chat 必须有真实 `finish_reason`；Claude 必须有 `message_stop` 和 `stop_reason`；Google 必须有候选的 `finishReason`；Responses 必须有 typed terminal event 或支持的 `[DONE]`。EOF 不能当作成功，已接收内容保留并以 INCOMPLETE 收口。token 上限类终态同样不执行未完成响应里的工具。真实 finish reason 进入 StepModelResult，不能用合成的 `unknown` 或 null 覆盖。
 
@@ -200,6 +200,10 @@ OpenRouter 直连 host（`openrouter.ai`）若返回结构化 `reasoning_details
 
 ### Chat reasoning 回放策略
 
+Chat 的 `role=tool` 结果只写 `tool_call_id` 和内容，不写 `name`；assistant 的 `tool_calls[].function.name` 继续保留。
+
+DashScope 直连 `dashscope.aliyuncs.com` 的已确认型号 `qwen3.8-max`、`qwen3.8-max-0902`、`qwen3.8-flash`、`qwen3.8-2.4t-a95b`、`qwen3.8-27b`、`qwen3.8-omni-flash` 使用 `reasoning_effort`：AUTO 省略，OFF 为 `none`，LOW/MEDIUM 为 `low`/`medium`，HIGH/XHIGH/MAX 为 `xhigh`。自动字段仍由模型 `REASONING` 能力控制。其他 DashScope 型号保留 `enable_thinking` / `thinking_budget`（AUTO 只写前者）。custom body 仍最后合并；上述精确分支最终同时含 `reasoning_effort` 与 `thinking_budget` 时报告 `dashscope_reasoning_parameter_conflict`，不静默删改用户字段。其他 host、企业平台 origin 和未知网关不因 Qwen 模型名继承该协议；兼容端点 OFF 仍使用既有 `low` 映射。
+
 Chat Completions 的 `ChatReasoningReplayPolicy` 由 `resolveChatReasoningReplayPolicy()` 统一解析。
 策略有三个正交维度：`VisibleReasoningReplay` 控制可见 `reasoning_content`，`OpaqueReasoningReplay` 控制
 source-isolated 不透明状态，`TerminalAssistantReplay` 控制非成功 Assistant 使用兼容 partial text 还是只使用完整
@@ -282,7 +286,11 @@ OpenRouter `reasoning_details` 继续 source-isolated：存在 details 时不降
 路径是否存在不代替图片能力判定。按需识图读取 ArtifactStore 校验后的内存快照，经共用 FileEncoder 规范化为 data URI，四种协议仍使用其标准
 USER 图片编码；这不需要 Workspace、额外磁盘文件或专用 Provider 编码旁路。
 
-流式状态用 item ID 关联 reasoning、text 和 function arguments，并在终态把完整 output items 写回 metadata。连接在未收到协议终态时关闭视为异常，不能把半个 response 当作成功。
+`ResponseStreamState` 在每次请求内统一解析输出身份；function arguments 的 `item_id` 与 `output_index` 指向同一 transient 槽，后续事件可补充别名。只有 `call_id` 唯一对应现有槽时才允许按它关联；缺失、未知、歧义或互相冲突的身份显式报错，不回退到最近工具。`call_id` 只用于 wire 回放，`StepOutputAccumulator` 按 transport 槽分配 durable `localCallId`，不得用 `call_id` 合并并行调用，也不把 synthetic item ID 写入原始 JSON。
+
+added、argument delta、arguments.done 和 output_item.done 共用参数状态。done 完整参数与已发出参数必须一致；只收到 added 而没有参数 delta 时，done 发出一次完整参数。重复 done 幂等。成功的 `response.completed` 或 `[DONE]` 必须具备完整参数证据，并把最终完整参数写入原始 function item；缺少完整 output 时只允许回放已由 done 闭合的状态，不能回放 added 时的空 arguments。完整 terminal output 必须恰好覆盖已发出的工具；重复 `call_id` 的相对顺序必须与本地工具顺序相同，否则显式失败，防止按 occurrence 回放时交换工具结果。
+
+`response.failed` / `response.incomplete` 不执行成功回放校验，保留 Provider 原始 reason/detail、usage 和此前已发出的部分内容。连接在未收到协议终态时关闭视为异常，不能把半个 response 当作成功。
 
 非流式 HTTP 200 的 `failed` / `incomplete` 响应同样不是成功结果：Adapter 先解码可用 output 和 usage，
 再抛出 `ProviderResponseException`。它只在数据属性中携带 `MessageChunk`，异常文本不包含该 payload，
@@ -395,6 +403,8 @@ Gemini 支持的 `enum`。grounding metadata 转为 `UIMessageAnnotation.UrlCita
 ## 8. ModelRegistry 的职责
 
 `deepseek-v4.1-flash`、`deepseek-flash` 按精确型号登记图片输入、工具和 reasoning，并进入 `DEEPSEEK_V4` 的兼容网关工具回放策略；旧 V4 Flash 与未经确认的后缀型号不因此取得视觉能力。登记不自动修改已有用户模型配置。
+
+`step-5-preview`、`mimo-v2.6-pro`、`mimo-v2.6-flash`、`mimo-v2.6-pro-ultraspeed` 按精确 ID 登记 TEXT+IMAGE 输入及 TOOL+REASONING；未确认后缀不取得这些新增能力，不改变已有模型配置或 contextLength。`AIIconMatcher` 将独立 HY / HY 数字前缀识别为混元图标；它只影响显示，不参与 Provider 路由或模型能力判定。
 
 `ModelRegistry` 根据 modelId 推断：
 

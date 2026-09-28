@@ -11,8 +11,8 @@ from textual.containers import Container, Horizontal, Vertical
 from textual.binding import Binding
 from textual import work
 
-from models.entry import TranslationEntry
-from services.xml_parser import StringsXmlParser
+from models.entry import TranslationEntry, entries_from_documents
+from services.xml_parser import StringsXmlParser, ResourceError, describe_error, normalize_value, validate_translation
 from services.translator import AITranslator
 from services.dead_entry_finder import DeadEntryFinder
 
@@ -44,7 +44,25 @@ class TranslationTableScreen(Screen):
         self.show_dead_only = False
         self.show_missing_only = False
         self.search_query = ""
-        self.has_unsaved_changes = False
+        self.documents = {}
+        self.baselines = {}
+        # Generated drafts retain provenance across refresh/failure until saved or explicitly edited.
+        self.automatic_sources: dict[tuple[str, str], str] = {}
+        self.load_failed = True
+        self.translating = False
+        self.discard_confirmed = False
+
+    @property
+    def has_unsaved_changes(self):
+        return any(self.dirty_values(code) for code in self.config.get_language_codes())
+
+    def dirty_values(self, code):
+        baseline = self.baselines.get(code, {})
+        return {entry.key: entry.get_translation(code) for entry in self.entries
+                if entry.get_translation(code) is not None and entry.get_translation(code) != baseline.get(entry.key)}
+
+    def file_path(self, code):
+        return self.config.project_root / self.module.res_path / code / "strings.xml"
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -90,28 +108,32 @@ class TranslationTableScreen(Screen):
 
     def load_entries(self) -> None:
         """Load all translation entries."""
-        self.entries = []
-        all_keys: set[str] = set()
-        translations_by_lang: dict[str, dict[str, str]] = {}
-
-        # Collect translations from all languages
-        for lang in self.config.languages:
-            path = (
-                self.config.project_root
-                / self.module.res_path
-                / lang.code
-                / "strings.xml"
-            )
-            translations = StringsXmlParser.parse(path)
-            translations_by_lang[lang.code] = translations
-            all_keys.update(translations.keys())
-
-        # Create entries
-        for key in sorted(all_keys):
-            entry = TranslationEntry(key=key)
-            for lang_code, translations in translations_by_lang.items():
-                entry.translations[lang_code] = translations.get(key)
-            self.entries.append(entry)
+        source = self.config.get_source_language().code
+        try:
+            if not self.file_path(source).is_file():
+                raise ResourceError(f"Source file missing: {self.file_path(source)}")
+            documents = {lang.code: StringsXmlParser.read(self.file_path(lang.code)) for lang in self.config.languages}
+            entries = entries_from_documents(documents, source)
+        except (OSError, ResourceError) as error:
+            self.load_failed = True
+            self.notify(f"Read failed: {describe_error(error)}", severity="error")
+            return
+        baselines = {code: dict(document.values) for code, document in documents.items()}
+        by_key = {entry.key: entry for entry in entries}
+        # Refresh may recover a failed read, but must never discard an existing draft.
+        for code in self.config.get_language_codes():
+            for key, value in self.dirty_values(code).items():
+                if key not in by_key:
+                    by_key[key] = TranslationEntry(key, source_code=source)
+                by_key[key].set_translation(code, value)
+                baselines[code][key] = self.baselines.get(code, {}).get(key)
+        self.documents = documents
+        self.baselines = baselines
+        self.entries = sorted(by_key.values(), key=lambda entry: entry.key)
+        self.load_failed = False
+        for code, document in documents.items():
+            for key, reason in document.unsupported.items():
+                self.notify(f"Not edited: {code}/{key}: {reason}")
 
         # Mark dead entries
         if self.module.source_patterns:
@@ -162,7 +184,7 @@ class TranslationTableScreen(Screen):
             for lang in self.config.languages:
                 value = entry.translations.get(lang.code, "")
                 # Highlight missing translations
-                if not value and lang.code != "values":
+                if value is None and entry.can_translate(lang.code):
                     row_data.append("[red]MISSING[/red]")
                 elif entry.is_dead:
                     row_data.append(f"[dim]{value or ''}[/dim]")
@@ -211,12 +233,13 @@ class TranslationTableScreen(Screen):
 
     def action_go_back(self) -> None:
         """Go back to previous screen."""
-        if self.has_unsaved_changes:
+        if self.has_unsaved_changes and not self.discard_confirmed:
             self.notify(
                 "You have unsaved changes! Press 's' to save or 'escape' again to discard."
             )
-            self.has_unsaved_changes = False  # Allow second escape to exit
+            self.discard_confirmed = True
         else:
+            self.workers.cancel_all()
             self.app.pop_screen()
 
     def action_focus_search(self) -> None:
@@ -239,10 +262,13 @@ class TranslationTableScreen(Screen):
 
     def action_edit_entry(self) -> None:
         """Edit current selected entry."""
+        if self.translating or self.load_failed:
+            self.notify("Wait for translation or refresh the failed resource read", severity="warning")
+            return
         from widgets.edit_modal import EditModal
 
         table = self.query_one("#table", DataTable)
-        if table.cursor_row is None:
+        if not table.row_count:
             return
 
         row_key, _ = table.coordinate_to_cell_key(table.cursor_coordinate)
@@ -259,46 +285,74 @@ class TranslationTableScreen(Screen):
             entry_key = result["key"]
             entry = next((e for e in self.entries if e.key == entry_key), None)
             if entry:
-                for lang_code, value in result["translations"].items():
+                updates = {}
+                source_code = self.config.get_source_language().code
+                source = result["translations"].get(source_code, entry.get_translation(source_code))
+                try:
+                    for lang_code, value in result["translations"].items():
+                        previous = entry.get_translation(lang_code)
+                        if value == previous or (previous is None and value == ""):
+                            continue
+                        if entry_key in self.documents[lang_code].unsupported:
+                            raise ResourceError(f"{lang_code}/{entry_key}: unsupported XML is not editable")
+                        updates[lang_code] = (validate_translation(source, value)
+                                              if lang_code != source_code and source is not None
+                                              else normalize_value(value))
+                except (ValueError, ResourceError) as error:
+                    self.notify(f"Invalid value: {describe_error(error)}", severity="error")
+                    return
+                for lang_code, value in updates.items():
                     entry.set_translation(lang_code, value)
-                self.has_unsaved_changes = True
+                    self.automatic_sources.pop((lang_code, entry_key), None)
+                self.discard_confirmed = False
                 self.refresh_table()
                 self.update_status()
                 self.notify(f"Updated: {entry_key}")
 
     def action_delete_entry(self) -> None:
         """Delete current selected entry."""
+        if self.translating or self.load_failed:
+            self.notify("Wait for translation or refresh the failed resource read", severity="warning")
+            return
         table = self.query_one("#table", DataTable)
-        if table.cursor_row is None:
+        if not table.row_count:
             return
 
         row_key, _ = table.coordinate_to_cell_key(table.cursor_coordinate)
         entry_key = row_key.value
 
-        # Delete from all language files
+        entry = next(item for item in self.entries if item.key == entry_key)
+        failures = []
         for lang in self.config.languages:
-            path = (
-                self.config.project_root
-                / self.module.res_path
-                / lang.code
-                / "strings.xml"
-            )
-            StringsXmlParser.delete_entry(path, entry_key)
+            try:
+                StringsXmlParser.delete_entry(self.file_path(lang.code), entry_key)
+                self.baselines[lang.code].pop(entry_key, None)
+                entry.translations[lang.code] = None
+                self.automatic_sources.pop((lang.code, entry_key), None)
+            except (OSError, ResourceError) as error:
+                failures.append(f"{lang.code}/{entry_key}: {describe_error(error)}")
 
         # Delete from memory
-        self.entries = [e for e in self.entries if e.key != entry_key]
+        if not failures:
+            self.entries = [e for e in self.entries if e.key != entry_key]
         self.apply_filters()
         self.update_status()
-        self.notify(f"Deleted: {entry_key}")
+        self.notify("\n".join(failures) if failures else f"Deleted: {entry_key}",
+                    severity="error" if failures else "information")
 
-    @work(exclusive=True)
+    @work()
     async def action_translate_missing(self) -> None:
         """Translate all missing entries."""
-        translator = AITranslator(self.config)
+        if self.translating or self.load_failed:
+            self.notify("Wait for translation or refresh the failed resource read", severity="warning")
+            return
+        self.translating = True
+        translator = None
         progress = self.query_one("#progress", ProgressBar)
         progress.display = True
 
         try:
+            translator = AITranslator(self.config)
             # Collect entries needing translation
             entries_to_translate = [
                 e
@@ -319,47 +373,64 @@ class TranslationTableScreen(Screen):
                 progress.update(progress=(current / total) * 100)
                 self.query_one("#status", Static).update(message)
 
-            count = await translator.translate_all_missing(
+            sources = {entry.key: entry.get_translation(entry.source_code) for entry in entries_to_translate}
+            result = await translator.translate_all_missing(
                 entries_to_translate,
                 self.config.get_language_codes(),
                 progress_callback=update_progress,
             )
+            for code, values in result.successes.items():
+                for key in values:
+                    self.automatic_sources[code, key] = sources[key]
 
-            self.has_unsaved_changes = True
+            self.discard_confirmed = False
             self.refresh_table()
             self.update_status()
-            self.notify(f"Translated {count} entries!")
+            self.notify(f"Translated {result.count}; failed {len(result.failures)}. Press Save to write changes.")
+            for (code, key), error in result.failures.items():
+                self.notify(f"{code}/{key}: {describe_error(error)}", severity="error")
 
         except Exception as e:
-            self.notify(f"Translation failed: {e}", severity="error")
+            self.notify(f"Translation failed: {describe_error(e)}", severity="error")
         finally:
             progress.display = False
+            self.translating = False
+            if translator is not None:
+                await translator.close()
 
     def action_save_all(self) -> None:
         """Save all changes."""
-        for lang in self.config.languages:
-            path = (
-                self.config.project_root
-                / self.module.res_path
-                / lang.code
-                / "strings.xml"
-            )
-
-            # Collect translations for this language
-            translations = {}
-            for entry in self.entries:
-                value = entry.get_translation(lang.code)
-                if value:
-                    translations[entry.key] = value
-
+        if self.translating or self.load_failed:
+            self.notify("Wait for translation or refresh the failed resource read", severity="warning")
+            return
+        failures = []
+        source_code = self.config.get_source_language().code
+        # Publish edited source drafts before checking translations derived from those drafts.
+        for lang in sorted(self.config.languages, key=lambda item: item.code != source_code):
+            translations = self.dirty_values(lang.code)
             if translations:
-                StringsXmlParser.write(path, translations)
-
-        self.has_unsaved_changes = False
+                try:
+                    source_values = {key: self.automatic_sources[lang.code, key] for key in translations
+                                     if (lang.code, key) in self.automatic_sources}
+                    StringsXmlParser.update_entries(self.file_path(lang.code), translations,
+                        expected={key: self.baselines[lang.code].get(key) for key in translations},
+                        translation_source=(self.file_path(source_code), source_values)
+                        if source_values else None)
+                    self.baselines[lang.code].update(translations)
+                    for key in translations:
+                        self.automatic_sources.pop((lang.code, key), None)
+                except (OSError, ResourceError) as error:
+                    failures.append(f"{lang.code}: {describe_error(error)}")
+        self.discard_confirmed = False
         self.update_status()
-        self.notify("All changes saved!")
+        self.notify("\n".join(failures) if failures else "All changes saved!",
+                    severity="error" if failures else "information")
 
     def action_refresh(self) -> None:
         """Refresh data."""
+        if self.translating:
+            self.notify("Wait for translation before refreshing", severity="warning")
+            return
         self.load_entries()
-        self.notify("Data refreshed!")
+        if not self.load_failed:
+            self.notify("Data refreshed; existing drafts preserved")

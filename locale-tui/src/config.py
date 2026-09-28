@@ -45,6 +45,29 @@ class Config:
     # Display configuration
     column_widths: dict[str, int]
     page_size: int
+    concurrency: int = 4
+    retries: int = 3
+    glossary: dict[str, dict[str, str]] = field(default_factory=dict)
+
+    def validate(self) -> None:
+        for name in ("batch_size", "concurrency", "retries"):
+            value = getattr(self, name)
+            if type(value) is not int or value < 1:
+                raise ValueError(f"{name} must be a positive integer")
+        if len([lang for lang in self.languages if lang.is_source]) != 1:
+            raise ValueError("Configure exactly one source language")
+        if not self.modules:
+            raise ValueError("Configure at least one module")
+        for values in ([module.name for module in self.modules], self.get_language_codes()):
+            if len(values) != len(set(values)):
+                raise ValueError("Duplicate module or language")
+        if not isinstance(self.glossary, dict):
+            raise ValueError("glossary must map language codes to terminology")
+        for code, terms in self.glossary.items():
+            if code not in self.get_language_codes() or not isinstance(terms, dict):
+                raise ValueError(f"Invalid glossary language: {code}")
+            if not all(isinstance(k, str) and isinstance(v, str) for k, v in terms.items()):
+                raise ValueError(f"Glossary terms must be strings: {code}")
 
     @classmethod
     def load(cls, config_path: Path) -> "Config":
@@ -84,7 +107,7 @@ class Config:
         # Display configuration
         display_config = data.get("display", {})
 
-        return cls(
+        config = cls(
             openai_api_key=os.getenv("OPENAI_API_KEY", ""),
             openai_base_url=os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1"),
             project_root=project_root,
@@ -97,7 +120,12 @@ class Config:
                 "column_widths", {"key": 30, "translation": 25}
             ),
             page_size=display_config.get("page_size", 50),
+            concurrency=trans_config.get("concurrency", 4),
+            retries=trans_config.get("retries", 3),
+            glossary=trans_config.get("glossary", {}),
         )
+        config.validate()
+        return config
 
     def get_language_name(self, code: str) -> str:
         """Get language display name."""

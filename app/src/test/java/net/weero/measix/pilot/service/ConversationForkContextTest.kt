@@ -34,11 +34,21 @@ import kotlin.uuid.Uuid
 class ConversationForkContextTest {
     @get:org.junit.Rule val temporary = org.junit.rules.TemporaryFolder()
     @Test
-    fun `fork passes committed folder and workspace cwd through createTree`() = runTest {
+    fun `fork passes committed folder and workspace cwd through createTree`() = runTest { verifyFork(false) }
+
+    @Test
+    fun `failed fork creation discards only its cloned artifact and retains the source`() = runTest { verifyFork(true) }
+
+    private suspend fun kotlinx.coroutines.test.TestScope.verifyFork(failCreate: Boolean) {
         val sourceId = Uuid.random()
         val assistantId = ConfigurationReference.random()
         val folderId = Uuid.random()
-        val anchor = UIMessage.user("fork here")
+        val sourceFile = temporary.newFile("source.png").apply { writeBytes(byteArrayOf(1, 2, 3)) }
+        val sourceRef = net.weero.measix.pilot.data.files.LocalArtifactRef(relativePath = "upload/source.png", mimeType = "image/png")
+        val anchor = UIMessage.user("fork here").let { message ->
+            if (failCreate) message.copy(parts = message.parts + me.rerere.ai.ui.UIMessagePart.Image(android.net.Uri.fromFile(sourceFile).toString()))
+            else message
+        }
         val owner = UIMessage.assistant("answer")
         val futureAnchor = UIMessage.user("future")
         val futureOwner = UIMessage.assistant("future answer")
@@ -103,10 +113,22 @@ class ConversationForkContextTest {
         coEvery { repository.getChildConversationIds(sourceId) } returns emptyList()
         coEvery { repository.getChildConversationSnapshots(sourceId) } returns emptyList()
         coEvery { repository.existsConversationById(any()) } returns false
-        coEvery { repository.insertConversationTree(capture(created), any()) } returns Unit
+        coEvery { repository.getRootConversationTitles(snapshot.header.scope, assistantId) } returns listOf("Source", "Source(1)", "Source(3)")
+        val createFailure = java.io.IOException("createTree failed")
+        coEvery { repository.insertConversationTree(capture(created), any()) } coAnswers {
+            if (failCreate) throw createFailure
+        }
+        coEvery { repository.getConversationHeader(match { it != sourceId }) } returns null
         val lifecycle = mockk<SubAssistantLifecycle>()
         coEvery { lifecycle.requireClosedRunsBeforeTreeMutation(snapshot) } returns snapshot
-        val artifactStore = mockk<ArtifactStore>(relaxed = true)
+        val artifactStore = mockk<ArtifactStore>()
+        val owned = mockk<net.weero.measix.pilot.data.files.OwnedArtifact>()
+        io.mockk.every { owned.uri } returns android.net.Uri.fromFile(temporary.newFile("copied.png"))
+        io.mockk.every { artifactStore.file(sourceRef) } returns sourceFile
+        coEvery { artifactStore.resolveManagedReference(sourceFile) } returns sourceRef
+        coEvery { artifactStore.copyFilePreservingOrigin(sourceFile, "image/png", sourceFile.name, any()) } returns owned
+        coEvery { artifactStore.publishAllUnpublished(any()) } returns Unit
+        coEvery { artifactStore.discardUnpublished(owned) } returns net.weero.measix.pilot.data.files.ArtifactDeleteResult.Completed(7)
 
         val service = ConversationApplicationService(
             settingsStore = mockk(relaxed = true),
@@ -122,7 +144,7 @@ class ConversationForkContextTest {
             turnFinalizer = TurnFinalizer(repository, registry, commandCoordinator, Json),
             json = Json,
             toolArtifactRewriter = mockk<ToolArtifactRewriter>(),
-            titleCoordinator = mockk<ConversationTitleCoordinator>(),
+            titleCoordinator = ConversationTitleCoordinator(),
             sessions = sessions,
             subAssistantRunGate = mockk(),
         )
@@ -130,9 +152,24 @@ class ConversationForkContextTest {
         try {
             val selection = sessions.observeSelectedRealmSelection().first { it != null }!!
             val page = ConversationViewLease(sourceId, selection.access, selection.revision) {}
+            if (failCreate) {
+                try {
+                    service.forkAtMessage(page.commandTarget, owner.id)
+                    org.junit.Assert.fail("create failure must propagate")
+                } catch (error: java.io.IOException) {
+                    org.junit.Assert.assertTrue(generateSequence<Throwable>(error) { it.cause }.any { it === createFailure })
+                    assertEquals(createFailure.message, error.message)
+                    assertEquals(0, error.suppressed.size)
+                }
+                coVerify(exactly = 1) { artifactStore.discardUnpublished(owned) }
+                coVerify(exactly = 0) { artifactStore.publishAllUnpublished(any()) }
+                org.junit.Assert.assertArrayEquals(byteArrayOf(1, 2, 3), sourceFile.readBytes())
+                return
+            }
             service.forkAtMessage(page.commandTarget, owner.id)
 
             val fork = created.captured
+            assertEquals("Source(2)", fork.header.title)
             assertEquals(folderId, fork.header.folderId)
             assertEquals("src/main", fork.header.workspaceCwd)
             assertEquals(1, fork.modelContextEntries.size)

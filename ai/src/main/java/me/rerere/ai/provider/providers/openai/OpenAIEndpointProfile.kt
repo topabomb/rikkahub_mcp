@@ -436,3 +436,17 @@ internal fun mapMiMoResponsesReasoningEffort(level: ReasoningLevel): String? {
         ReasoningLevel.HIGH, ReasoningLevel.XHIGH, ReasoningLevel.MAX -> "high"
     }
 }
+
+// Only these confirmed DashScope model ids use the effort protocol. Gateways keep their own dialect.
+internal fun usesDashScopeQwen38Effort(modelId: String): Boolean = modelId.lowercase() in setOf(
+    "qwen3.8-max", "qwen3.8-max-0902", "qwen3.8-flash", "qwen3.8-2.4t-a95b",
+    "qwen3.8-27b", "qwen3.8-omni-flash",
+)
+
+internal fun mapDashScopeQwen38Effort(level: ReasoningLevel): String? = when (level) {
+    ReasoningLevel.AUTO -> null
+    ReasoningLevel.OFF -> "none"
+    ReasoningLevel.LOW -> "low"
+    ReasoningLevel.MEDIUM -> "medium"
+    ReasoningLevel.HIGH, ReasoningLevel.XHIGH, ReasoningLevel.MAX -> "xhigh"
+}

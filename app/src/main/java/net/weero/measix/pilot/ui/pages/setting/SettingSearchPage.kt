@@ -1,10 +1,12 @@
 package net.weero.measix.pilot.ui.pages.setting
 
+import net.weero.measix.pilot.ui.components.ui.longPressReorder
+import net.weero.measix.pilot.ui.components.ui.ConfirmDialog
+import net.weero.measix.pilot.ui.components.ui.ItemActionMenu
+import net.weero.measix.pilot.ui.components.ui.ItemAction
 import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.Add01
-import me.rerere.hugeicons.stroke.PencilEdit01
 import me.rerere.hugeicons.stroke.Delete01
-import me.rerere.hugeicons.stroke.MoreVertical
 import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -22,8 +24,6 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LargeFlexibleTopAppBar
@@ -40,10 +40,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.scale
-import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.nestedscroll.nestedScroll
-import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -124,7 +121,6 @@ fun SettingSearchPage(vm: SettingVM = koinViewModel()) {
                 }
             }
         }
-        val haptic = LocalHapticFeedback.current
 
         LazyColumn(
             modifier = Modifier
@@ -154,17 +150,7 @@ fun SettingSearchPage(vm: SettingVM = koinViewModel()) {
                             }
                         },
                         canDelete = settings.searchServices.size > 1,
-                        modifier = Modifier
-                            .scale(if (isDragging) 0.95f else 1f)
-                            .animateItem()
-                            .longPressDraggableHandle(
-                                onDragStarted = {
-                                    haptic.performHapticFeedback(HapticFeedbackType.GestureThresholdActivate)
-                                },
-                                onDragStopped = {
-                                    haptic.performHapticFeedback(HapticFeedbackType.GestureEnd)
-                                }
-                            )
+                        modifier = Modifier.animateItem().then(longPressReorder(isDragging))
                     )
                 }
             }
@@ -270,16 +256,17 @@ private fun AddProviderDialog(
 }
 
 @Composable
-private fun SearchProviderCard(
+internal fun SearchProviderCard(
     service: SearchServiceOptions,
     onEdit: () -> Unit,
     onDelete: () -> Unit,
     canDelete: Boolean,
     modifier: Modifier = Modifier,
 ) {
-    var showMenu by remember { mutableStateOf(false) }
+    var showDeleteDialog by remember { mutableStateOf(false) }
 
     Card(
+        onClick = onEdit,
         modifier = modifier,
         colors = CardDefaults.cardColors(
             containerColor = CustomColors.listItemColors.containerColor
@@ -308,41 +295,21 @@ private fun SearchProviderCard(
                 SearchAbilityTagLine(options = service)
             }
 
-            IconButton(onClick = { showMenu = true }) {
-                Icon(
-                    imageVector = HugeIcons.MoreVertical,
-                    contentDescription = null
-                )
-                DropdownMenu(
-                    expanded = showMenu,
-                    onDismissRequest = { showMenu = false }
-                ) {
-                    DropdownMenuItem(
-                        text = { Text(stringResource(R.string.edit)) },
-                        onClick = {
-                            showMenu = false
-                            onEdit()
-                        },
-                        leadingIcon = {
-                            Icon(HugeIcons.PencilEdit01, contentDescription = null)
-                        }
-                    )
-                    DropdownMenuItem(
-                        text = { Text(stringResource(R.string.delete)) },
-                        onClick = {
-                            showMenu = false
-                            onDelete()
-                        },
-                        leadingIcon = {
-                            Icon(HugeIcons.Delete01, contentDescription = null)
-                        },
-                        enabled = canDelete
-                    )
-                }
-            }
+            ItemActionMenu(listOf(ItemAction(
+                text = stringResource(R.string.delete), icon = HugeIcons.Delete01,
+                destructive = true, enabled = canDelete, onClick = { showDeleteDialog = true },
+            )))
 
         }
     }
+    ConfirmDialog(
+        show = showDeleteDialog,
+        title = stringResource(R.string.confirm_delete),
+        confirmText = stringResource(R.string.delete),
+        dismissText = stringResource(R.string.cancel),
+        onConfirm = { showDeleteDialog = false; onDelete() },
+        onDismiss = { showDeleteDialog = false },
+    ) { Text(stringResource(R.string.common_delete_confirm_message, service.displayName)) }
 }
 
 @Composable

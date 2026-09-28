@@ -127,6 +127,7 @@ class ForkDisclosureReplayTest {
         coEvery { repository.getChildConversationIds(snapshot.conversationId) } returns emptyList()
         coEvery { repository.getChildConversationSnapshots(snapshot.conversationId) } returns emptyList()
         coEvery { repository.existsConversationById(any()) } returns false
+        coEvery { repository.getRootConversationTitles(snapshot.header.scope, snapshot.header.assistantId) } returns emptyList()
         coEvery { repository.insertConversationTree(capture(created), any()) } returns Unit
         val lifecycle = mockk<SubAssistantLifecycle>()
         coEvery { lifecycle.requireClosedRunsBeforeTreeMutation(snapshot) } returns snapshot
@@ -137,7 +138,7 @@ class ForkDisclosureReplayTest {
             subAssistantLifecycle = lifecycle, sideEffects = mockk(), artifactStore = artifacts,
             artifactUseCase = mockk(), turnFinalizer = TurnFinalizer(repository, registry, coordinator, Json), json = Json,
             toolArtifactRewriter = ToolArtifactRewriter(temporary.newFolder(), artifacts),
-            titleCoordinator = mockk(), sessions = sessions, subAssistantRunGate = mockk(),
+            titleCoordinator = net.weero.measix.pilot.service.ConversationTitleCoordinator(), sessions = sessions, subAssistantRunGate = mockk(),
         )
         try {
             val selected = sessions.observeSelectedRealmSelection().first { it != null }!!

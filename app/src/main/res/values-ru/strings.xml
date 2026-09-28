@@ -1,4 +1,4 @@
-<?xml version='1.0' encoding='UTF-8'?>
+<?xml version='1.0' encoding='utf-8'?>
 <resources>
   <string name="about_page_license">Лицензия</string>
   <string name="about_page_documentation">Документация</string>
@@ -492,7 +492,7 @@
   <string name="model_list_no_providers">Нет доступных поставщиков ИИ, добавьте их в настройках</string>
   <string name="model_list_search_placeholder">Введите название модели для поиска</string>
   <string name="model_list_select_model">Выбрать модель</string>
-  <string name="more_options">Дополнительные параметры</string>
+  <string name="more_options">Другие действия</string>
   <string name="no_text_content_to_copy">Нет доступного текста для копирования</string>
   <string name="notification_channel_chat_completed">Чат завершён</string>
   <string name="notification_channel_chat_live_update">Прогресс генерации чата</string>
@@ -601,7 +601,7 @@
   <string name="reasoning_xhigh">Очень высокий</string>
   <string name="reasoning_max">Максимум</string>
   <string name="regenerate">Сгенерировать заново</string>
-  <string name="regenerate_confirm_message">Вы уверены, что хотите перегенерировать это сообщение?</string>
+  <string name="regenerate_confirm_message">Сгенерировать это сообщение заново? Все сообщения после него будут удалены.</string>
   <string name="render_with_webview">Отображать в WebView</string>
   <string name="safe_mode_assistants">Помощники</string>
   <string name="safe_mode_copy">Копировать</string>
@@ -1953,4 +1953,18 @@
   <string name="enterprise_snapshot_update_required">Требуется обновление приложения</string>
   <string name="enterprise_snapshot_invalid">Конфигурация организации содержит ошибки. Обратитесь к администратору.</string>
   <string name="context_changes_title">Изменения контекста</string>
+  <string name="setting_mcp_page_header_name_required">Введите имя заголовка или удалите эту строку</string>
+  <string name="setting_mcp_page_header_name_invalid">В имени заголовка допустимы только символы токена HTTP</string>
+  <string name="setting_mcp_page_header_value_invalid">Удалите из значения заголовка управляющие символы и символы вне ASCII</string>
+  <string name="workspace_export_selected">Выбрано: %1$d</string>
+  <string name="workspace_export_progress">%1$d / %2$d</string>
+  <string name="workspace_export_result">Экспортировано: %1$d, ошибок: %2$d</string>
+  <string name="workspace_export_cancelled">Экспорт отменён</string>
+  <string name="common_delete_confirm_message">Удалить «%1$s»? Это действие нельзя отменить.</string>
+  <string name="skills_search_hint">Поиск навыков</string>
+  <string name="skills_search_empty">Подходящие навыки не найдены</string>
+  <string name="skills_import_rate_limited">Достигнут лимит запросов GitHub. Повторите попытку позже.</string>
+  <string name="chat_page_scroll_to_top">Прокрутить вверх</string>
+  <string name="chat_page_previous_message">Предыдущее сообщение</string>
+  <string name="chat_page_next_message">Следующее сообщение</string>
 </resources>

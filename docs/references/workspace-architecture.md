@@ -260,3 +260,13 @@ PRoot 的 hash/ELF 静态契约不等同于设备验收。各支持 ABI 仍需�
 PRoot 兼容参数（`-k` kernel spoof、seccomp 策略、环境变量与 flags）的唯一 owner 是 `ProotLaunchSpec`；
 两个入口只把它交给各自的进程 adapter（`ProcessBuilder` 与 Termux PTY）。调整兼容参数只需修改并验证
 `ProotLaunchSpec`；调整业务挂载时按 `ProotLaunchSpec.appBindMounts` 的暴露边界评估。
+
+### 文件导出与编辑草稿
+
+`WorkspaceApplicationService.exportFiles` 接收固定的 workspaceId、area 和相对路径集合，逐项创建 SAF document，记录 provider 返回的 URI 与实际名称；不查找覆盖同名外部文件，不持久化树授权。源 stat 与复制使用原 per-workspace gate，外部 provider 的 create/open/close/delete 在 gate 外，避免目标也是本应用 DocumentsProvider 时回入同一 gate。源在复制开始时重新校验，不承诺选择时的内容快照。
+
+`WorkspaceManager.exportFile` 复用 `WorkspaceDirectoryHandle.open` 的逐层 NOFOLLOW 与 regular-file 校验，关闭输入描述符，借用输出流；因此普通导出、Linux 文本预览、图片读取和消息文件分享都拒绝源路径中的符号链接。Repository 用 `runInterruptible` 调度复制，循环按块检查中断；任意外部 provider 的阻塞 IO 不保证即时结束。
+
+批量结果只有在输出 close 成功后才记为成功。取消停止后续项，保留已完成文档，只清理本项取得且未完成的 document；清理失败作为 suppressed 保留。单文件/分享由打开方关闭输出并展示原诊断。选择与 picker 请求保存在内存；重建后缺少原请求身份的回调被拒绝。运行中的批量任务由 WorkspaceDetailVM 持有，旋转可继续观察结果，离开其生命周期取消。
+
+WorkspaceFileEditorPage 的正文使用以 id/area/path 为键的普通 FileEditorState，通过共享 FileTextEditor 展示。FileEditorState 与原生 EditText 共用一个 Editable；页面使用 fillViewport 占用可用高度，正文在有限视口内滚动。保存仍调用 WorkspaceApplicationService.writeText，失败保留正文与可复制诊断，取消在 finally 恢复操作状态。未保存正文不进入 Activity Bundle，也没有 durable draft；Activity 重建或进程恢复后重新读取已发布文件。输入法查询边界见 [UI 架构](ui-architecture.md) 的文件编辑正文生命周期。

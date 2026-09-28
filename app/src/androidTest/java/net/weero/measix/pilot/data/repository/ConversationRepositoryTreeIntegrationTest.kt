@@ -95,6 +95,31 @@ class ConversationRepositoryTreeIntegrationTest {
         )
     }
 
+    @Test
+    fun forkTitleProjectionIncludesOnlyRootsOfTheOriginalScopeAndAssistant() = runBlocking {
+        val assistant = ConfigurationReference.random()
+        val otherAssistant = ConfigurationReference.random()
+        val alice = ConfigurationScope.Enterprise(EnterpriseAuthority("dep_example"), "alice")
+        val bob = alice.copy(userId = "bob")
+        suspend fun insert(title: String, scope: ConfigurationScope, owner: ConfigurationReference = assistant,
+                           parent: String? = null): String {
+            val id = Uuid.random().toString()
+            database.conversationDao().insert(net.weero.measix.pilot.data.db.entity.ConversationEntity(
+                id = id, assistantId = owner.toString(), title = title, createAt = 1, updateAt = 1,
+                chatSuggestions = "[]", isPinned = false, parentConversationId = parent, scope = scope,
+            ))
+            return id
+        }
+        val root = insert("Source(1)", alice)
+        insert("Source(2)", alice, parent = root)
+        insert("Source(3)", alice, owner = otherAssistant)
+        insert("Source(4)", bob)
+        insert("Source(5)", ConfigurationScope.Personal)
+        insert("Source(6)", alice)
+        assertEquals(setOf("Source(1)", "Source(6)"), repository.getRootConversationTitles(alice, assistant).toSet())
+        assertEquals(listOf("Source(5)"), repository.getRootConversationTitles(ConfigurationScope.Personal, assistant))
+    }
+
     @After
     fun tearDown() {
         if (::appScope.isInitialized) appScope.cancel()

@@ -22,7 +22,22 @@ class SkillManagerTest {
     val temporaryFolder = TemporaryFolder()
 
     @Test
-    fun `list exposes only skills accepted by the typed parser`() {
+    fun `unexpected staged IO failure preserves published bytes and can retry`() = runTest {
+        val manager = manager()
+        val original = document("stable", "original")
+        assertEquals(SkillFileSaveResult.SUCCESS, manager.saveSkill("stable", original))
+        assertEquals(SkillFileSaveResult.SUCCESS, manager.saveSkillFile("stable", "blocking", "original support"))
+        val error = runCatching { manager.saveSkillFile("stable", "blocking/child", "replacement") }.exceptionOrNull()
+        assertTrue(error is java.io.IOException)
+        assertTrue(error!!.message!!.contains("blocking"))
+        assertEquals(original, skillsRoot().resolve("stable/SKILL.md").readText())
+        assertEquals("original support", skillsRoot().resolve("stable/blocking").readText())
+        assertTrue(skillsRoot().listFiles().orEmpty().none { ".staging." in it.name })
+        assertEquals(SkillFileSaveResult.SUCCESS, manager.saveSkillFile("stable", "valid/child", "retry"))
+    }
+
+    @Test
+    fun `list exposes only skills accepted by the typed parser`() = runTest {
         val manager = manager()
         val root = skillsRoot()
         File(root, "valid").apply { mkdirs() }.resolve("SKILL.md").writeText(document("valid", "ok"))
@@ -36,10 +51,10 @@ class SkillManagerTest {
     }
 
     @Test
-    fun `failed atomic save preserves the previously published skill`() {
+    fun `failed atomic save preserves the previously published skill`() = runTest {
         val manager = manager()
         val original = document("stable", "original")
-        assertNotNull(manager.saveSkill("stable", original))
+        assertEquals(SkillFileSaveResult.SUCCESS, manager.saveSkill("stable", original))
 
         val saved = manager.saveSkillFileBytesAtomically(
             "stable",
@@ -49,24 +64,26 @@ class SkillManagerTest {
             ),
         )
 
-        assertFalse(saved)
+        assertEquals(SkillFileSaveResult.INVALID_PATH, saved)
         assertEquals(original, skillsRoot().resolve("stable/SKILL.md").readText())
         assertTrue(skillsRoot().listFiles().orEmpty().none { it.name.contains(".staging.") })
     }
 
     @Test
-    fun `invalid or mismatched staged skill never replaces the published skill`() {
+    fun `invalid or mismatched staged skill never replaces the published skill`() = runTest {
         val manager = manager()
         val original = document("stable", "original")
-        assertNotNull(manager.saveSkill("stable", original))
+        assertEquals(SkillFileSaveResult.SUCCESS, manager.saveSkill("stable", original))
 
-        assertFalse(
+        assertEquals(
+            SkillFileSaveResult.INVALID_SKILL,
             manager.saveSkillFileBytesAtomically(
                 "stable",
                 mapOf("SKILL.md" to "---\nname: stable\ndescription: [invalid]\n---\nbody".toByteArray()),
             )
         )
-        assertFalse(
+        assertEquals(
+            SkillFileSaveResult.NAME_MISMATCH,
             manager.saveSkillFileBytesAtomically(
                 "stable",
                 mapOf("SKILL.md" to document("different", "wrong name").toByteArray()),
@@ -77,22 +94,23 @@ class SkillManagerTest {
     }
 
     @Test
-    fun `valid replacement atomically swaps the published skill`() {
+    fun `valid replacement atomically swaps the published skill`() = runTest {
         val manager = manager()
-        assertNotNull(manager.saveSkill("stable", document("stable", "original")))
+        assertEquals(SkillFileSaveResult.SUCCESS, manager.saveSkill("stable", document("stable", "original")))
         val replacement = document("stable", "replacement")
 
-        assertTrue(manager.saveSkillFileBytesAtomically("stable", mapOf("SKILL.md" to replacement.toByteArray())))
+        assertEquals(SkillFileSaveResult.SUCCESS, manager.saveSkillFileBytesAtomically("stable", mapOf("SKILL.md" to replacement.toByteArray())))
 
         assertEquals(replacement, skillsRoot().resolve("stable/SKILL.md").readText())
     }
 
     @Test
-    fun `binary support files are published byte identical`() {
+    fun `binary support files are published byte identical`() = runTest {
         val manager = manager()
         val binary = byteArrayOf(0x00, 0xFF.toByte(), 0xC3.toByte(), 0x28)
 
-        assertTrue(
+        assertEquals(
+            SkillFileSaveResult.SUCCESS,
             manager.saveSkillFileBytesAtomically(
                 "binary-skill",
                 mapOf(
@@ -106,15 +124,15 @@ class SkillManagerTest {
     }
 
     @Test
-    fun `editing the skill document preserves support files`() {
+    fun `editing the skill document preserves support files`() = runTest {
         val manager = manager()
-        assertNotNull(manager.saveSkill("stable", document("stable", "original")))
+        assertEquals(SkillFileSaveResult.SUCCESS, manager.saveSkill("stable", document("stable", "original")))
         assertEquals(
             SkillFileSaveResult.SUCCESS,
             manager.saveSkillFile("stable", "references/notes.md", "keep me"),
         )
 
-        assertNotNull(manager.saveSkill("stable", document("stable", "updated")))
+        assertEquals(SkillFileSaveResult.SUCCESS, manager.saveSkill("stable", document("stable", "updated")))
 
         assertEquals(
             SkillContentReadResult.Success("keep me"),
@@ -123,9 +141,9 @@ class SkillManagerTest {
     }
 
     @Test
-    fun `support file deletion is staged and skill document deletion is rejected`() {
+    fun `support file deletion is staged and skill document deletion is rejected`() = runTest {
         val manager = manager()
-        assertNotNull(manager.saveSkill("stable", document("stable", "original")))
+        assertEquals(SkillFileSaveResult.SUCCESS, manager.saveSkill("stable", document("stable", "original")))
         assertEquals(SkillFileSaveResult.SUCCESS, manager.saveSkillFile("stable", "notes.md", "body"))
 
         assertEquals(
@@ -143,10 +161,10 @@ class SkillManagerTest {
     }
 
     @Test
-    fun `orphan backup is recovered before the skill is listed`() {
+    fun `orphan backup is recovered before the skill is listed`() = runTest {
         val manager = manager()
         val original = document("stable", "original")
-        assertNotNull(manager.saveSkill("stable", original))
+        assertEquals(SkillFileSaveResult.SUCCESS, manager.saveSkill("stable", original))
         val target = skillsRoot().resolve("stable")
         val backup = skillsRoot().resolve(".${"stable".hashCode().toUInt().toString(16)}.backup.0.tmp")
         assertTrue(target.renameTo(backup))
@@ -162,7 +180,7 @@ class SkillManagerTest {
         val settingsStore = mockk<SettingsStore>()
         coEvery { settingsStore.updateLocal(any()) } throws SettingsLockedException("records/assistants", "Managed")
         val manager = manager(settingsStore)
-        assertNotNull(manager.saveSkill("stable", document("stable", "original")))
+        assertEquals(SkillFileSaveResult.SUCCESS, manager.saveSkill("stable", document("stable", "original")))
 
         val error = runCatching { manager.deleteSkill("stable") }.exceptionOrNull()
 
@@ -172,9 +190,9 @@ class SkillManagerTest {
     }
 
     @Test
-    fun `orphan bundle backup restores the complete previous root`() {
+    fun `orphan bundle backup restores the complete previous root`() = runTest {
         val manager = manager()
-        assertNotNull(manager.saveSkill("first", document("first", "original")))
+        assertEquals(SkillFileSaveResult.SUCCESS, manager.saveSkill("first", document("first", "original")))
         val root = skillsRoot()
         val backup = temporaryFolder.root.resolve(".${FileFolders.SKILLS}.bundle.backup.0.tmp")
         assertTrue(root.renameTo(backup))
@@ -190,8 +208,8 @@ class SkillManagerTest {
         val manager = manager()
         val first = document("first", "old first")
         val second = document("second", "old second")
-        assertNotNull(manager.saveSkill("first", first))
-        assertNotNull(manager.saveSkill("second", second))
+        assertEquals(SkillFileSaveResult.SUCCESS, manager.saveSkill("first", first))
+        assertEquals(SkillFileSaveResult.SUCCESS, manager.saveSkill("second", second))
 
         val result = manager.importSkillBundleAtomically(
             listOf(
@@ -209,8 +227,8 @@ class SkillManagerTest {
     @Test
     fun `valid bundle replaces all members through one root publication`() = runTest {
         val manager = manager()
-        assertNotNull(manager.saveSkill("first", document("first", "old first")))
-        assertNotNull(manager.saveSkill("second", document("second", "old second")))
+        assertEquals(SkillFileSaveResult.SUCCESS, manager.saveSkill("first", document("first", "old first")))
+        assertEquals(SkillFileSaveResult.SUCCESS, manager.saveSkill("second", document("second", "old second")))
 
         val result = manager.importSkillBundleAtomically(
             listOf(
@@ -232,7 +250,7 @@ class SkillManagerTest {
     }
 
     @Test
-    fun `oversized and invalid UTF-8 files fail before text parsing`() {
+    fun `oversized and invalid UTF-8 files fail before text parsing`() = runTest {
         val manager = manager()
         val skillDir = skillsRoot().resolve("bounded").apply { mkdirs() }
         skillDir.resolve("SKILL.md").writeBytes(ByteArray(4 * 1024 * 1024 + 1) { 'a'.code.toByte() })

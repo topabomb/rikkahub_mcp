@@ -31,12 +31,15 @@ internal class McpProtocolClientFactory(
         currentCoroutineContext().ensureActive()
         return when (definition) {
             is McpConnectionDefinition.User -> {
+                val headers = definition.config.resolvedConnectionHeaders()
+                validateMcpHeaders(headers)
                 transportOverride?.let { return it(definition.config) }
                 val shared = httpClient
                 currentCoroutineContext().ensureActive()
-                userTransport(definition.config, shared)
+                userTransport(definition.config, shared, headers)
             }
             is McpConnectionDefinition.ManagedPlatform -> {
+                definition.requestHeaders()
                 val shared = managedHttpClient
                 currentCoroutineContext().ensureActive()
                 McpStreamableHttpTransport(url = definition.url, client = shared, managed = true,
@@ -52,9 +55,9 @@ internal class McpProtocolClientFactory(
             options = ClientOptions(capabilities = ClientCapabilities()),
         )
 
-    private fun userTransport(config: McpServerConfig, httpClient: HttpClient): AbstractTransport {
+    private fun userTransport(config: McpServerConfig, httpClient: HttpClient, resolvedHeaders: List<Pair<String, String>>): AbstractTransport {
         val customHeaders = StringValues.build {
-            config.resolvedConnectionHeaders().forEach { append(it.first, it.second) }
+            resolvedHeaders.forEach { append(it.first, it.second) }
         }
         return when (config) {
             is McpServerConfig.SseTransportServer -> McpSseTransport(

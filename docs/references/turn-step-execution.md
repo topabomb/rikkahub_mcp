@@ -223,6 +223,10 @@ Job 后可清理 Runtime。前台服务只通过 query port 观察活动，保�
 
 ## 标题与子助手
 
+`ConversationApplicationService.forkAtMessage` 在主子树和 Artifact clone 后，按 Session → 源标题协调 → 新树命令锁顺序提交。
+`ConversationTitleCoordinator.createForkWithTitle` 复用源会话的标题 commit mutex，将同域、同助手根会话的窄标题查询与 `createTree` 串行：从捕获的源标题选择首个空闲 `(n)` 后缀，空标题为 `(1)`；失败不预留编号，也不改变源标题的 generation token/阶段。
+编号是创建时可用的显示名称，允许不同源会话与手动标题重名，不设置全局唯一约束。clone 继续映射 `modelContextEntries` 和 `contextAdmissions`，标题修改不 prune 历史。
+
 `GenerationSideEffects` 将标题、建议和手动摘要登记到原 `ConversationRuntime`，每个 worker 持有原
 `RealmAccess`、原助手身份与输入快照。登记在原 Session 与会话准入锁内完成；模型捕获在锁外交给 `ModelExecutionService`，请求、结果和错误发布复验原 Session 与 worker。
 切换所选空间不改写已登记任务的身份；退出或重新接入后，旧 Session 的结果不能提交。

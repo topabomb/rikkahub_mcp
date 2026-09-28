@@ -900,7 +900,7 @@ class ChatCompletionsAPISerializerTest {
         val nextMsg = result[assistantIndex + 1].jsonObject
         assertEquals("tool", nextMsg["role"]?.jsonPrimitive?.content)
         assertEquals("call_abc", nextMsg["tool_call_id"]?.jsonPrimitive?.content)
-        assertEquals("my_tool", nextMsg["name"]?.jsonPrimitive?.content)
+        assertFalse(nextMsg.containsKey("name"))
     }
 
     @Test
@@ -1690,5 +1690,83 @@ class ChatCompletionsAPISerializerTest {
         }
         assertTrue("Partial answer should survive when no tools", allContent.contains("Partial answer"))
     }
-}
 
+    @Test
+    fun `tool results omit name while assistant calls retain it`() {
+        val wire = invokeBuildMessages(me.rerere.ai.testsupport.consecutiveToolSteps()).map { it.jsonObject }
+        wire.filter { it["role"]!!.jsonPrimitive.content == "tool" }.forEach {
+            assertFalse("name" in it)
+            assertTrue("tool_call_id" in it)
+        }
+        wire.filter { it["role"]!!.jsonPrimitive.content == "assistant" }.forEach {
+            assertTrue(it["tool_calls"]!!.jsonArray.single().jsonObject["function"]!!.jsonObject["name"]!!.jsonPrimitive.content.isNotEmpty())
+        }
+    }
+
+    private fun dashScopeBody(
+        level: ReasoningLevel,
+        id: String = "qwen3.8-max",
+        host: String = "dashscope.aliyuncs.com",
+        reasoning: Boolean = true,
+        custom: List<me.rerere.ai.provider.CustomBody> = emptyList(),
+        routed: Boolean = false,
+    ) = invokeBuildRequest(
+        messages = listOf(UIMessage.user("hello")),
+        params = TextGenerationParams(
+            model = Model(modelId = id, displayName = id, abilities = if (reasoning) listOf(ModelAbility.REASONING) else emptyList()),
+            reasoningLevel = level,
+            customBody = custom,
+            credentials = if (routed) me.rerere.ai.provider.RequestCredentials.Routed("https://platform.example/runtime/chat", "test-token")
+                else me.rerere.ai.provider.RequestCredentials.UserSettings,
+        ),
+        providerSetting = ProviderSetting.OpenAI(baseUrl = "https://$host/v1"),
+    )
+
+    @Test
+    fun `confirmed DashScope Qwen38 ids use exact effort mapping`() {
+        val values = listOf(null, "none", "low", "medium", "xhigh", "xhigh", "xhigh")
+        val levels = listOf(ReasoningLevel.AUTO, ReasoningLevel.OFF, ReasoningLevel.LOW, ReasoningLevel.MEDIUM, ReasoningLevel.HIGH, ReasoningLevel.XHIGH, ReasoningLevel.MAX)
+        for (id in listOf("qwen3.8-max", "qwen3.8-max-0902", "qwen3.8-flash", "qwen3.8-2.4t-a95b", "qwen3.8-27b", "qwen3.8-omni-flash")) {
+            levels.zip(values).forEach { (level, expected) ->
+                val body = dashScopeBody(level, id)
+                assertEquals(expected, body["reasoning_effort"]?.jsonPrimitive?.content)
+                assertFalse("enable_thinking" in body)
+                assertFalse("thinking_budget" in body)
+            }
+        }
+    }
+
+    @Test
+    fun `older and unknown DashScope models retain legacy controls and gateways remain compatible`() {
+        for (id in listOf("qwen3-max", "qwen3.8-unknown", "qwen3.8-max-future")) {
+            for (level in ReasoningLevel.entries) {
+                val body = dashScopeBody(level, id)
+                assertEquals(level.isEnabled.toString(), body["enable_thinking"]!!.jsonPrimitive.content)
+                assertEquals(if (level == ReasoningLevel.AUTO) null else level.budgetTokens.toString(), body["thinking_budget"]?.jsonPrimitive?.content)
+            }
+        }
+        for (host in listOf("platform.example", "dashscope-intl.aliyuncs.com", "proxy.example")) {
+            val body = dashScopeBody(ReasoningLevel.HIGH, host = host, routed = host == "platform.example")
+            assertFalse("enable_thinking" in body)
+            assertFalse("thinking_budget" in body)
+            assertEquals("high", body["reasoning_effort"]?.jsonPrimitive?.content)
+        }
+        assertFalse("reasoning_effort" in dashScopeBody(ReasoningLevel.HIGH, reasoning = false))
+        assertEquals("low", dashScopeBody(ReasoningLevel.OFF, id = "step-5-preview", host = "api.stepfun.com")["reasoning_effort"]!!.jsonPrimitive.content)
+    }
+
+    @Test
+    fun `DashScope custom body override remains explicit and conflicting controls fail after merge`() {
+        val effort = me.rerere.ai.provider.CustomBody("reasoning_effort", JsonPrimitive("low"))
+        val budget = me.rerere.ai.provider.CustomBody("thinking_budget", JsonPrimitive(128))
+        assertEquals("low", dashScopeBody(ReasoningLevel.HIGH, custom = listOf(effort))["reasoning_effort"]!!.jsonPrimitive.content)
+        assertEquals("128", dashScopeBody(ReasoningLevel.AUTO, custom = listOf(budget))["thinking_budget"]!!.jsonPrimitive.content)
+        for (reasoning in listOf(true, false)) {
+            val error = assertThrows(IllegalArgumentException::class.java) {
+                dashScopeBody(ReasoningLevel.AUTO, reasoning = reasoning, custom = listOf(effort, budget))
+            }
+            assertTrue(error.message!!.contains("dashscope_reasoning_parameter_conflict"))
+        }
+        assertThrows(IllegalArgumentException::class.java) { dashScopeBody(ReasoningLevel.HIGH, custom = listOf(budget)) }
+    }
+}

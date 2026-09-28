@@ -79,4 +79,23 @@ class McpProtocolClientFactoryTest {
             later.close()
         } finally { http.close() }
     }
+
+    @Test fun `static and resolved header failures precede overrides and HTTP creation for both transports`() = runTest {
+        val factory = McpProtocolClientFactory(
+            createHttpClient = { error("must not construct HTTP") },
+            createManagedHttpClient = { error("must not construct managed HTTP") },
+            transportOverride = { error("must not reach transport override") },
+        )
+        for (sse in listOf(true, false)) {
+            for (options in listOf(
+                McpCommonOptions(headers = listOf("" to "secret")),
+                McpCommonOptions(oauth = McpOAuthState(enabled = true, accessToken = "secret\ninvalid")),
+            )) {
+                val config = if (sse) McpServerConfig.SseTransportServer(commonOptions = options)
+                    else McpServerConfig.StreamableHTTPServer(commonOptions = options)
+                try { factory.createTransport(McpConnectionDefinition.User(config)); fail("invalid header accepted") }
+                catch (error: McpHeaderValidationException) { assertFalse(error.message!!.contains("secret")) }
+            }
+        }
+    }
 }

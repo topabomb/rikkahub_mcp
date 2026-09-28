@@ -30,4 +30,14 @@ class AIIconMatcherTest {
         assertNull(resolveModelIconPath("factory-model", ModelIconFallback.INITIALS))
         assertEquals("noetral.svg", resolveModelIconPath("factory-model", ModelIconFallback.NOETRAL))
     }
+
+    @Test
+    fun hyNamesUseHunyuanWithoutMatchingUnrelatedWords() {
+        listOf("hy", "HY3", "vendor/hy-3-preview", "hunyuan", "tencent").forEach {
+            assertEquals("hunyuan-color.svg", computeAIIconByName(it))
+        }
+        listOf("hybrid", "why", "rhythm").forEach { assertNull(computeAIIconByName(it)) }
+        assertEquals("openai.svg", computeAIIconByName("gpt-5-hy"))
+        assertEquals("hunyuan-color.svg", resolveModelIconPath("hy3", ModelIconFallback.NOETRAL))
+    }
 }

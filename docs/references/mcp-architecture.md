@@ -153,6 +153,12 @@ Gateway 的目录 digest 使用已验证的 canonical surface digest；仅 JSON 
 
 ## 3. 进程启动与按需激活
 
+`validateMcpHeaders` 是配置与连接共用的纯校验规则：name 必须是非空 HTTP token，value 只允许可打印 ASCII 与水平制表符，不 trim 或改写合法值。`McpHeaderValidationException` 保留稳定 reason、从 1 开始的行号与可选导入服务器序号，诊断不含 header value。`McpApplicationService.upsert/importServers/overwriteByName` 在 Settings 写入前校验；批量导入先验证全部候选，再执行原子提交。
+
+历史非法配置不会在 `connectionFingerprint`、`mcpDefinitionDigest` 或 `resolvedConnectionHeaders` 身份投影中抛出新校验异常。`McpServerRuntime.runConnectionOperation` 在原异常收口内、OAuth refresh 前校验静态头；`McpProtocolClientFactory.createTransport` 在 transport override 和 HTTP client 创建前再次校验最终 resolved headers。错误只影响原 server 的状态，不打断其他 server 的协调。`ManagedPlatform.requestHeaders` 每次取得认证凭据后复验，避免初次通过后轮换出非法请求头；受管错误不借用户 Settings 修补。
+
+MCP 编辑器仅忽略本次新增且完全空的草稿行，已存空行仍需明确修正或删除。保存等待 application 成功才关闭；行校验和写入失败保留草稿、错误行与可复制的完整诊断。JSON 导入分别显示解析错误与配置业务错误，失败保留输入，不把 header 校验包装成 JSON 解析失败。取消沿原协程传播。
+
 启动时先从 `McpCatalogStore` 恢复与当前 `definitionDigest` 匹配的 durable LKG。恢复目录不需要网络，也不会把全部
 已登记 server 排进连接队列。新对话开始时只激活该 Assistant 选择的 server；新建、重新启用或修改 definition 的
 server 会主动建立其自身连接。用户全局刷新显式激活全部 enabled server。

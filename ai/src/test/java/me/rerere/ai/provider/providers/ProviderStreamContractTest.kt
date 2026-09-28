@@ -253,18 +253,21 @@ class ProviderStreamContractTest {
             Wire.RESPONSES to listOf(
                 """{"type":"response.output_item.added","output_index":0,"item":{"type":"function_call","id":"item_a","call_id":"same","name":"a","arguments":""}}""",
                 """{"type":"response.output_item.added","output_index":1,"item":{"type":"function_call","id":"item_b","call_id":"same","name":"b","arguments":""}}""",
+                """{"type":"response.function_call_arguments.done","output_index":1,"item_id":"item_b","arguments":"{}"}""",
                 """{"type":"response.function_call_arguments.delta","output_index":0,"item_id":"item_a","delta":"{}"}""",
+                """{"type":"response.function_call_arguments.done","output_index":0,"item_id":"item_a","arguments":"{}"}""",
             ),
         )
         cases.forEach { (wire, events) ->
-            val (chunks, error) = collect(wire, events + terminal(wire))
+            val ending = if (wire == Wire.RESPONSES) listOf("""{"type":"response.completed","response":{"status":"completed"}}""") else terminal(wire)
+            val (chunks, error) = collect(wire, events + ending)
             assertEquals("$wire failed", null, error)
             val choices = chunks.flatMap { it.choices }.filter { it.toolCallSlots.isNotEmpty() }
             val slots = choices.flatMap { it.toolCallSlots }
             assertEquals("$wire collapsed calls", 2, slots.distinct().size)
             assertEquals(listOf("same", "same"), choices.flatMap { it.delta!!.getTools() }.take(2).map { it.providerCallId })
             if (wire != Wire.GOOGLE) assertEquals(slots.first(), slots.last())
-            if (wire == Wire.RESPONSES) assertTrue(slots.first() is ProviderToolCallSlot.Item)
+            if (wire == Wire.RESPONSES) assertTrue(slots.first() is ProviderToolCallSlot.Index)
         }
     }
 }

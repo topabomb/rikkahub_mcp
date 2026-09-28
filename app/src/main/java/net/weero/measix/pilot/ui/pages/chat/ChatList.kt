@@ -23,6 +23,7 @@ import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.DragInteraction
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
@@ -39,7 +40,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.LazyListItemInfo
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
@@ -55,6 +55,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.State
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -68,6 +69,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.runtime.DisposableEffect
@@ -75,6 +80,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalScrollCaptureInProgress
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
@@ -121,8 +127,14 @@ import net.weero.measix.pilot.ui.components.ui.RabbitLoadingIndicator
 import net.weero.measix.pilot.ui.components.ui.Tooltip
 import net.weero.measix.pilot.ui.hooks.ImeLazyListAutoScroller
 import net.weero.measix.pilot.ui.theme.ChatFontProvider
-import kotlin.math.roundToInt
 import kotlin.uuid.Uuid
+
+internal enum class ChatScrollIntent {
+    FOLLOW_TAIL,
+    VIEW_HISTORY,
+    DRAGGING,
+    AFTER_DRAG,
+}
 
 private const val TAG = "ChatList"
 private const val LoadingIndicatorKey = "LoadingIndicator"
@@ -135,6 +147,9 @@ internal fun ChatList(
     snapshot: ConversationPresentationSnapshot,
     favoriteNodeIds: Set<Uuid>,
     state: LazyListState,
+    scrollIntent: State<ChatScrollIntent>,
+    onScrollIntentChange: (ChatScrollIntent) -> Unit,
+    onReadHistory: () -> Unit,
     turnPresentation: ConversationPresentation,
     attachmentPreviews: Map<String, net.weero.measix.pilot.service.AttachmentPreview>,
     previewMode: Boolean,
@@ -193,6 +208,9 @@ internal fun ChatList(
                 snapshot = snapshot,
                 favoriteNodeIds = favoriteNodeIds,
                 state = state,
+                scrollIntent = scrollIntent,
+                onScrollIntentChange = onScrollIntentChange,
+                onReadHistory = onReadHistory,
                 turnPresentation = turnPresentation,
                 attachmentPreviews = attachmentPreviews,
                 settings = settings,
@@ -237,6 +255,9 @@ private fun ChatListNormal(
     snapshot: ConversationPresentationSnapshot,
     favoriteNodeIds: Set<Uuid>,
     state: LazyListState,
+    scrollIntent: State<ChatScrollIntent>,
+    onScrollIntentChange: (ChatScrollIntent) -> Unit,
+    onReadHistory: () -> Unit,
     turnPresentation: ConversationPresentation,
     attachmentPreviews: Map<String, net.weero.measix.pilot.service.AttachmentPreview>,
     settings: Settings,
@@ -272,10 +293,43 @@ private fun ChatListNormal(
 ) {
     val scope = rememberCoroutineScope()
     val loading = turnPresentation.isActive
-    val loadingState by rememberUpdatedState(loading)
+    val readHistory by rememberUpdatedState(onReadHistory)
+    val changeScrollIntent by rememberUpdatedState(onScrollIntentChange)
     var isRecentScroll by remember { mutableStateOf(false) }
     val density = LocalDensity.current
     val activity = androidx.activity.compose.LocalActivity.current as? net.weero.measix.pilot.RouteActivity
+    val historyScrollConnection = remember(state, snapshot.conversationId) {
+        object : NestedScrollConnection {
+            override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
+                // Accessibility and wheel input do not emit DragInteraction. They also revoke
+                // a pending append scroll; flings and IME compensation keep their own protocol.
+                if (source == NestedScrollSource.UserInput && available.y != 0f &&
+                    scrollIntent.value != ChatScrollIntent.DRAGGING
+                ) {
+                    readHistory()
+                }
+                return Offset.Zero
+            }
+        }
+    }
+
+    LaunchedEffect(state, snapshot.conversationId) {
+        state.interactionSource.interactions.collect { interaction ->
+            when (interaction) {
+                is DragInteraction.Start -> {
+                    readHistory()
+                    changeScrollIntent(ChatScrollIntent.DRAGGING)
+                }
+                is DragInteraction.Stop -> if (scrollIntent.value == ChatScrollIntent.DRAGGING) {
+                    changeScrollIntent(ChatScrollIntent.AFTER_DRAG)
+                }
+                is DragInteraction.Cancel -> if (scrollIntent.value == ChatScrollIntent.DRAGGING) {
+                    readHistory()
+                }
+                else -> Unit
+            }
+        }
+    }
 
     DisposableEffect(Unit) {
         val listener: (Boolean) -> Boolean = { isVolumeUp ->
@@ -285,7 +339,11 @@ private fun ChatListNormal(
                 }
                 val scrollAmount = (state.layoutInfo.viewportSize.height - bottomPaddingPx) *
                     settings.displaySetting.volumeKeyScrollRatio
-                scope.launch { state.scrollBy(if (isVolumeUp) -scrollAmount else scrollAmount) }
+                readHistory()
+                scope.launch {
+                    state.scrollBy(if (isVolumeUp) -scrollAmount else scrollAmount)
+                    changeScrollIntent(if (state.canScrollForward) ChatScrollIntent.VIEW_HISTORY else ChatScrollIntent.FOLLOW_TAIL)
+                }
                 true
             } else false
         }
@@ -293,15 +351,6 @@ private fun ChatListNormal(
         onDispose {
             activity?.volumeKeyListeners?.remove(listener)
         }
-    }
-
-    fun List<LazyListItemInfo>.isAtBottom(): Boolean {
-        val lastItem = lastOrNull() ?: return false
-        val inputBarHeight = with(density) { innerPadding.calculateBottomPadding().toPx() }
-        val lastPos = lastItem.offset + lastItem.size
-        val inputPos = (state.layoutInfo.viewportEndOffset - inputBarHeight.roundToInt())
-        // println("lastPos = $lastPos, inputPos = $inputPos  | ${lastPos <= inputPos - 8}")
-        return lastPos <= inputPos - 8
     }
 
     // 聊天选择
@@ -343,13 +392,18 @@ private fun ChatListNormal(
     ) {
         // 自动滚动到底部
         if (settings.displaySetting.enableAutoScroll) {
-            LaunchedEffect(state) {
-                snapshotFlow { state.layoutInfo.visibleItemsInfo }.collect { visibleItemsInfo ->
-                    // println("is bottom = ${visibleItemsInfo.isAtBottom()}, scroll = ${state.isScrollInProgress}, can_scroll = ${state.canScrollForward}, loading = $loading")
-                    if (!state.isScrollInProgress && loadingState) {
-                        if (visibleItemsInfo.isAtBottom()) {
-                            state.requestScrollToItem(snapshotNodesUpdated.lastIndex + 10)
-                        }
+            LaunchedEffect(state, snapshot.conversationId) {
+                snapshotFlow {
+                    Triple(scrollIntent.value, state.isScrollInProgress, state.canScrollForward) to
+                        snapshotNodesUpdated.isNotEmpty()
+                }.collect { (scroll, hasMessages) ->
+                    val (intent, scrolling, canScrollForward) = scroll
+                    // Stop can precede fling. Keep the user's eligibility until the actual tail,
+                    // while explicit history navigation revokes it even before the next layout.
+                    if (intent == ChatScrollIntent.AFTER_DRAG && !scrolling && !canScrollForward) {
+                        changeScrollIntent(ChatScrollIntent.FOLLOW_TAIL)
+                    } else if (hasMessages && intent == ChatScrollIntent.FOLLOW_TAIL && !scrolling && canScrollForward) {
+                        state.requestScrollToItem(snapshotNodesUpdated.lastIndex + 10)
                     }
                 }
             }
@@ -406,6 +460,7 @@ private fun ChatListNormal(
                     .widthIn(max = AdaptiveLayoutDefaults.ReadableContentMaxWidth)
                     .fillMaxWidth()
                     .fillMaxHeight()
+                    .nestedScroll(historyScrollConnection)
                     .hazeSource(state = hazeState)
                     .padding(top = innerPadding.calculateTopPadding()),
                 ) {
@@ -676,7 +731,9 @@ private fun ChatListNormal(
                 show = isRecentScroll && !state.isScrollInProgress && settings.displaySetting.showMessageJumper && !captureProgress,
                 onLeft = settings.displaySetting.messageJumperOnLeft,
                 scope = scope,
-                state = state
+                state = state,
+                onReadHistory = onReadHistory,
+                onScrollIntentChange = onScrollIntentChange,
             )
 
             // Suggestion
@@ -929,7 +986,9 @@ private fun BoxScope.MessageJumper(
     show: Boolean,
     onLeft: Boolean,
     scope: CoroutineScope,
-    state: LazyListState
+    state: LazyListState,
+    onReadHistory: () -> Unit,
+    onScrollIntentChange: (ChatScrollIntent) -> Unit,
 ) {
     AnimatedVisibility(
         visible = show,
@@ -946,7 +1005,9 @@ private fun BoxScope.MessageJumper(
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             Surface(
+                modifier = Modifier.testTag("ChatMessageJumperStart"),
                 onClick = {
+                    onReadHistory()
                     scope.launch {
                         state.scrollToItem(0)
                     }
@@ -957,19 +1018,21 @@ private fun BoxScope.MessageJumper(
             ) {
                 Icon(
                     imageVector = HugeIcons.ArrowUpDouble,
-                    contentDescription = null,
+                    contentDescription = stringResource(R.string.chat_page_scroll_to_top),
                     modifier = Modifier
                         .padding(4.dp)
                 )
             }
             Surface(
                 onClick = {
+                    onReadHistory()
                     scope.launch {
                         state.animateScrollToItem(
                             (state.firstVisibleItemIndex - 1).fastCoerceAtLeast(
                                 0
                             )
                         )
+                        onScrollIntentChange(if (state.canScrollForward) ChatScrollIntent.VIEW_HISTORY else ChatScrollIntent.FOLLOW_TAIL)
                     }
                 },
                 shape = CircleShape,
@@ -978,15 +1041,17 @@ private fun BoxScope.MessageJumper(
             ) {
                 Icon(
                     imageVector = HugeIcons.ArrowUp01,
-                    contentDescription = null,
+                    contentDescription = stringResource(R.string.chat_page_previous_message),
                     modifier = Modifier
                         .padding(4.dp)
                 )
             }
             Surface(
                 onClick = {
+                    onReadHistory()
                     scope.launch {
                         state.animateScrollToItem(state.firstVisibleItemIndex + 1)
+                        onScrollIntentChange(if (state.canScrollForward) ChatScrollIntent.VIEW_HISTORY else ChatScrollIntent.FOLLOW_TAIL)
                     }
                 },
                 shape = CircleShape,
@@ -994,15 +1059,17 @@ private fun BoxScope.MessageJumper(
             ) {
                 Icon(
                     imageVector = HugeIcons.ArrowDown01,
-                    contentDescription = null,
+                    contentDescription = stringResource(R.string.chat_page_next_message),
                     modifier = Modifier
                         .padding(4.dp)
                 )
             }
             Surface(
                 onClick = {
+                    onReadHistory()
                     scope.launch {
                         state.scrollToItem(state.layoutInfo.totalItemsCount - 1)
+                        onScrollIntentChange(ChatScrollIntent.FOLLOW_TAIL)
                     }
                 },
                 shape = CircleShape,

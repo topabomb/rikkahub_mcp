@@ -51,7 +51,8 @@ class WorkspaceVMTest {
         val application = mockk<WorkspaceApplicationService>()
         val workspace = WorkspaceUiModel("id", "Old", WorkspaceShellStatus.READY)
         coEvery { application.renameWorkspace("id", "New") } returns false
-        coEvery { application.deleteWorkspace("id") } throws IllegalStateException("raw diagnostic")
+        val failure = IllegalStateException("raw diagnostic")
+        coEvery { application.deleteWorkspace("id") } throws failure
         val vm = WorkspaceVM(application, query())
         val results = mutableListOf<WorkspaceMutationResult>()
 
@@ -62,7 +63,7 @@ class WorkspaceVMTest {
         assertEquals(
             listOf(
                 WorkspaceMutationResult.Failure(WorkspaceMutationOperation.RENAME),
-                WorkspaceMutationResult.Failure(WorkspaceMutationOperation.DELETE),
+                WorkspaceMutationResult.Failure(WorkspaceMutationOperation.DELETE, failure),
             ),
             results,
         )

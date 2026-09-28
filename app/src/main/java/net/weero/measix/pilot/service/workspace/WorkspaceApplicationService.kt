@@ -3,6 +3,12 @@ package net.weero.measix.pilot.service.workspace
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.runInterruptible
+import android.content.ContentResolver
+import android.net.Uri
+import android.provider.DocumentsContract
+import java.io.IOException
 import me.rerere.workspace.ProotLaunchSpec
 import me.rerere.workspace.RootfsPath
 import me.rerere.workspace.WorkspaceBindMount
@@ -114,6 +120,65 @@ class WorkspaceApplicationService internal constructor(
         path: String,
         output: OutputStream,
     ) = gated(workspaceId) { repository.exportFile(workspaceId, area, path, output) }
+
+    suspend fun exportFiles(
+        request: WorkspaceExportRequest,
+        destination: WorkspaceExportDestination,
+        onItem: (WorkspaceExportItem) -> Unit,
+    ) {
+        recovery.awaitReady()
+        require(request.paths.isNotEmpty() && request.paths.distinct().size == request.paths.size) { "Invalid export selection" }
+        for (path in request.paths) {
+            currentCoroutineContext().ensureActive()
+            val result = try {
+                exportOne(request, path, destination)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                android.util.Log.e("WorkspaceExport", "Export failed: $path", error)
+                WorkspaceExportItem.Failed(path, error)
+            }
+            onItem(result)
+        }
+    }
+
+    private suspend fun exportOne(
+        request: WorkspaceExportRequest,
+        path: String,
+        destination: WorkspaceExportDestination,
+    ): WorkspaceExportItem.Exported {
+        var document: Uri? = null
+        var output: OutputStream? = null
+        var completed = false
+        var failure: Throwable? = null
+        try {
+            val entry = gated(request.workspaceId) { repository.statFile(request.workspaceId, request.area, path) }
+            require(!entry.isDirectory) { "Only files can be exported: $path" }
+            runInterruptible(Dispatchers.IO) { document = destination.create(entry.name) }
+            val uri = requireNotNull(document)
+            val name = runInterruptible(Dispatchers.IO) { destination.displayName(uri) }
+            runInterruptible(Dispatchers.IO) { output = destination.open(uri) }
+            exportFile(request.workspaceId, request.area, path, requireNotNull(output))
+            val closing = output.also { output = null }
+            withContext(NonCancellable + Dispatchers.IO) { closing?.close() }
+            currentCoroutineContext().ensureActive()
+            completed = true
+            return WorkspaceExportItem.Exported(path, uri, name)
+        } catch (error: Throwable) {
+            failure = error
+            throw error
+        } finally {
+            withContext(NonCancellable + Dispatchers.IO) {
+                var cleanupFailure: Throwable? = null
+                try { output?.close() } catch (error: Throwable) { cleanupFailure = error }
+                if (!completed) {
+                    try { document?.let { destination.delete(it) } }
+                    catch (error: Throwable) { cleanupFailure?.addSuppressed(error) ?: run { cleanupFailure = error } }
+                }
+                cleanupFailure?.let { cleanup -> failure?.addSuppressed(cleanup) ?: throw cleanup }
+            }
+        }
+    }
 
     fun imageSource(workspaceId: String, area: WorkspaceStorageArea, entry: WorkspaceFileEntry): ImageSource {
         suspend fun requireEntry() {
@@ -306,6 +371,37 @@ class WorkspaceApplicationService internal constructor(
 }
 
 data class WorkspaceCreated(val workspaceId: String)
+
+data class WorkspaceExportRequest(val workspaceId: String, val area: WorkspaceStorageArea, val paths: List<String>)
+
+sealed interface WorkspaceExportItem {
+    val path: String
+    data class Exported(override val path: String, val uri: Uri, val name: String) : WorkspaceExportItem
+    data class Failed(override val path: String, val cause: Exception) : WorkspaceExportItem
+}
+
+/** A destination capability for this picker grant; created documents are owned until close succeeds. */
+interface WorkspaceExportDestination {
+    fun create(name: String): Uri
+    fun displayName(uri: Uri): String
+    fun open(uri: Uri): OutputStream
+    fun delete(uri: Uri)
+}
+
+class WorkspaceDocumentTreeDestination(private val resolver: ContentResolver, tree: Uri) : WorkspaceExportDestination {
+    private val parent = DocumentsContract.buildDocumentUriUsingTree(tree, DocumentsContract.getTreeDocumentId(tree))
+    override fun create(name: String): Uri = DocumentsContract.createDocument(resolver, parent, "application/octet-stream", name)
+        ?: throw IOException("Document provider did not create '$name'")
+    override fun displayName(uri: Uri): String = resolver.query(uri,
+        arrayOf(DocumentsContract.Document.COLUMN_DISPLAY_NAME), null, null, null)?.use { cursor ->
+        if (cursor.moveToFirst()) cursor.getString(0) else null
+    } ?: throw IOException("Document provider did not return a display name: $uri")
+    override fun open(uri: Uri): OutputStream = resolver.openOutputStream(uri, "w")
+        ?: throw IOException("Document provider did not open output: $uri")
+    override fun delete(uri: Uri) {
+        if (!DocumentsContract.deleteDocument(resolver, uri)) throw IOException("Document provider did not delete incomplete output: $uri")
+    }
+}
 
 interface WorkspaceToolSession {
     suspend fun readRootfsBytes(path: String, maxBytes: Long): ByteArray

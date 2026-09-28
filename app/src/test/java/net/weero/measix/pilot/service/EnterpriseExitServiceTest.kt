@@ -2,16 +2,13 @@ package net.weero.measix.pilot.service
 
 import io.mockk.coEvery
 import io.mockk.coVerify
-import io.mockk.every
 import io.mockk.mockk
 import java.io.File
 import java.io.IOException
 import kotlinx.coroutines.*
-import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.*
-import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.datastore.SettingsStore
 import net.weero.measix.pilot.data.enterprise.*
 import net.weero.measix.pilot.data.files.ArtifactStore
@@ -303,7 +300,7 @@ class EnterpriseExitServiceTest {
         fun recovery(): ApplicationRecoveryCoordinator = ApplicationRecoveryCoordinator(
             appScope = scope,
             settingsStore = mockk<SettingsStore> {
-                every { userSettings } returns MutableStateFlow(Settings(init = false))
+                coEvery { initializeForRecovery() } returns Unit
             },
             artifactStore = mockk<ArtifactStore> {
                 coEvery { reconcileStartup() } returns Unit

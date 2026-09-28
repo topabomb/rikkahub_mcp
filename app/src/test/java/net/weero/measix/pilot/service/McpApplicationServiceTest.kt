@@ -165,4 +165,28 @@ class McpApplicationServiceTest {
         ),
         url = url,
     )
+
+    @Test fun `every config write rejects unsafe headers and batch validation is atomic`() = runTest {
+        val existing = remote(name = "existing")
+        local = Settings(mcpServers = listOf(existing))
+        effective.value = local
+        val bad = remote(name = "existing", headers = listOf("" to "credential-secret"))
+        val good = remote(name = "new")
+        val commands: List<suspend () -> Unit> = listOf(
+            { service.upsert(bad) },
+            { service.importServers(listOf(good, bad)); Unit },
+            { service.overwriteByName(listOf(good, bad)) },
+        )
+        for (command in commands) {
+            try { command(); org.junit.Assert.fail("invalid headers must fail before writing") }
+            catch (error: net.weero.measix.pilot.data.ai.mcp.McpHeaderValidationException) {
+                assertEquals(1, error.row)
+                org.junit.Assert.assertFalse(error.message!!.contains("credential-secret"))
+            }
+            assertEquals(listOf(existing), local.mcpServers)
+        }
+        val corrected = bad.clone(commonOptions = bad.commonOptions.copy(headers = listOf("Authorization" to "  Bearer unchanged  ")))
+        service.overwriteByName(listOf(corrected))
+        assertEquals("  Bearer unchanged  ", local.mcpServers.single().commonOptions.headers.single().second)
+    }
 }

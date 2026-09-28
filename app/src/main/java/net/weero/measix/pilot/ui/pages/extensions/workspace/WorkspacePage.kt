@@ -1,5 +1,9 @@
 package net.weero.measix.pilot.ui.pages.extensions.workspace
 
+import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import net.weero.measix.pilot.utils.userVisibleDiagnostic
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -65,6 +69,8 @@ fun WorkspacePage(vm: WorkspaceVM = koinViewModel()) {
     var showAddDialog by rememberSaveable { mutableStateOf(false) }
     var editTarget by remember { mutableStateOf<WorkspaceUiModel?>(null) }
     var deleteTarget by remember { mutableStateOf<WorkspaceUiModel?>(null) }
+    var busy by remember { mutableStateOf(false) }
+    var diagnostic by remember { mutableStateOf<String?>(null) }
     val mutationFailureMessages = mapOf(
         WorkspaceMutationOperation.CREATE to stringResource(R.string.workspace_page_create_failed),
         WorkspaceMutationOperation.RENAME to stringResource(R.string.workspace_page_rename_failed),
@@ -72,10 +78,14 @@ fun WorkspacePage(vm: WorkspaceVM = koinViewModel()) {
     )
     val lockedMessage = stringResource(R.string.configuration_change_rejected, "{reason}")
     fun handleMutationResult(result: WorkspaceMutationResult, onSuccess: () -> Unit) {
+        busy = false
         when (result) {
             WorkspaceMutationResult.Success -> onSuccess()
             is WorkspaceMutationResult.Locked -> toaster.show(lockedMessage.replace("{reason}", result.reason))
-            is WorkspaceMutationResult.Failure -> toaster.show(mutationFailureMessages.getValue(result.operation))
+            is WorkspaceMutationResult.Failure -> {
+                if (result.cause != null) diagnostic = result.cause.userVisibleDiagnostic()
+                else toaster.show(mutationFailureMessages.getValue(result.operation))
+            }
         }
     }
 
@@ -90,7 +100,7 @@ fun WorkspacePage(vm: WorkspaceVM = koinViewModel()) {
         },
         floatingActionButton = {
             FloatingActionButton(onClick = { showAddDialog = true }) {
-                Icon(HugeIcons.Add01, contentDescription = null)
+                Icon(HugeIcons.Add01, contentDescription = stringResource(R.string.workspace_page_create))
             }
         },
         modifier = Modifier.nestedScroll(scrollBehavior.nestedScrollConnection),
@@ -120,24 +130,26 @@ fun WorkspacePage(vm: WorkspaceVM = koinViewModel()) {
 
     if (showAddDialog) {
         EditWorkspaceDialog(
+            busy = busy,
             title = stringResource(R.string.workspace_page_create),
             initialName = "",
             existingNames = workspaces.map { it.name.trim() }.toSet(),
             onDismiss = { showAddDialog = false },
             onConfirm = { name ->
-                vm.create(name) { result -> handleMutationResult(result) { showAddDialog = false } }
+                if (!busy) { busy = true; vm.create(name) { result -> handleMutationResult(result) { showAddDialog = false } } }
             },
         )
     }
 
     editTarget?.let { workspace ->
         EditWorkspaceDialog(
+            busy = busy,
             title = stringResource(R.string.workspace_page_rename),
             initialName = workspace.name,
             existingNames = workspaces.filter { it.id != workspace.id }.map { it.name.trim() }.toSet(),
             onDismiss = { editTarget = null },
             onConfirm = { name ->
-                vm.rename(workspace, name) { result -> handleMutationResult(result) { editTarget = null } }
+                if (!busy) { busy = true; vm.rename(workspace, name) { result -> handleMutationResult(result) { editTarget = null } } }
             },
         )
     }
@@ -149,13 +161,21 @@ fun WorkspacePage(vm: WorkspaceVM = koinViewModel()) {
         dismissText = stringResource(R.string.common_cancel),
         onConfirm = {
             deleteTarget?.let { workspace ->
-                vm.delete(workspace) { result -> handleMutationResult(result) { deleteTarget = null } }
+                if (!busy) { busy = true; vm.delete(workspace) { result -> handleMutationResult(result) { deleteTarget = null } } }
             }
         },
-        onDismiss = { deleteTarget = null },
+        onDismiss = { if (!busy) deleteTarget = null },
     ) {
         Text(stringResource(R.string.workspace_page_delete_confirm))
     }
+    diagnostic?.let { detail ->
+        AlertDialog(
+            onDismissRequest = { diagnostic = null },
+            text = { SelectionContainer { Text(detail, Modifier.verticalScroll(rememberScrollState())) } },
+            confirmButton = { TextButton(onClick = { diagnostic = null }) { Text(stringResource(R.string.confirm)) } },
+        )
+    }
+
 }
 
 @Composable
@@ -238,7 +258,7 @@ private fun WorkspaceCard(
                 }
                 Box {
                     IconButton(onClick = { menuExpanded = true }) {
-                        Icon(HugeIcons.MoreVertical, contentDescription = null)
+                        Icon(HugeIcons.MoreVertical, contentDescription = stringResource(R.string.more_options))
                     }
                     DropdownMenu(
                         expanded = menuExpanded,
@@ -275,6 +295,7 @@ private fun WorkspaceCard(
 
 @Composable
 private fun EditWorkspaceDialog(
+    busy: Boolean,
     title: String,
     initialName: String,
     existingNames: Set<String>,
@@ -286,12 +307,13 @@ private fun EditWorkspaceDialog(
     val isDuplicate = trimmedName.isNotEmpty() && trimmedName in existingNames
 
     AlertDialog(
-        onDismissRequest = onDismiss,
+        onDismissRequest = { if (!busy) onDismiss() },
         title = { Text(title) },
         text = {
             OutlinedTextField(
                 value = name,
                 onValueChange = { name = it },
+                enabled = !busy,
                 modifier = Modifier.fillMaxWidth(),
                 label = { Text(stringResource(R.string.workspace_page_name)) },
                 singleLine = true,
@@ -304,13 +326,13 @@ private fun EditWorkspaceDialog(
         confirmButton = {
             TextButton(
                 onClick = { onConfirm(trimmedName) },
-                enabled = name.isNotBlank() && !isDuplicate,
+                enabled = !busy && name.isNotBlank() && !isDuplicate,
             ) {
                 Text(stringResource(R.string.common_save))
             }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) {
+            TextButton(onClick = onDismiss, enabled = !busy) {
                 Text(stringResource(R.string.common_cancel))
             }
         },

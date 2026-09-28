@@ -1,4 +1,4 @@
-﻿package net.weero.measix.pilot.ui.components.richtext
+package net.weero.measix.pilot.ui.components.richtext
 
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.clickable
@@ -370,6 +370,7 @@ private fun processElementNodes(
                         builder.addStyle(
                             SpanStyle(
                                 fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                                fontFeatureSettings = "'calt' 0, 'liga' 0, 'clig' 0",
                                 background = Color.Gray.copy(alpha = 0.2f)
                             ),
                             start,

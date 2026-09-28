@@ -4,10 +4,8 @@ import androidx.activity.ComponentActivity
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.CompositionLocalProvider
-import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
-import androidx.compose.ui.test.onNodeWithText
-import androidx.compose.ui.test.performTextReplacement
 import androidx.navigation3.runtime.rememberNavBackStack
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.dokar.sonner.rememberToasterState
@@ -15,9 +13,16 @@ import io.mockk.every
 import io.mockk.mockk
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import me.rerere.common.configuration.ConfigurationReference
+import me.rerere.ai.core.MessageRole
+import me.rerere.ai.ui.UIMessage
+import me.rerere.ai.ui.UIMessagePart
 import net.weero.measix.pilot.R
 import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.model.Assistant
+import net.weero.measix.pilot.data.model.AssistantRegex
+import net.weero.measix.pilot.ui.adaptive.LocalAdaptiveLayoutInfo
+import net.weero.measix.pilot.ui.adaptive.rememberAdaptiveLayoutInfo
 import net.weero.measix.pilot.ui.context.LocalNavController
 import net.weero.measix.pilot.ui.context.LocalSettings
 import net.weero.measix.pilot.ui.context.LocalTTSState
@@ -33,6 +38,63 @@ import org.junit.runner.RunWith
 @RunWith(AndroidJUnit4::class)
 class AssistantPromptPageAndroidTest {
     @get:Rule val compose = createAndroidComposeRule<ComponentActivity>()
+
+    @Test fun namedPresetAndRegexActionsAddOnlyTheirOwnObjects() {
+        val preset = UIMessage(role = MessageRole.USER, parts = listOf(UIMessagePart.Text("Keep original preset")))
+        val regex = AssistantRegex(id = ConfigurationReference.random(), name = "Keep original regex",
+            findRegex = "original", replaceString = "retained")
+        val original = Assistant(name = "Definition", systemPrompt = "Keep system prompt",
+            presetMessages = listOf(preset), regexes = listOf(regex))
+        val assistant = MutableStateFlow(original)
+        val settings = MutableStateFlow(Settings(assistants = listOf(original)))
+        val vm = mockk<AssistantDetailVM>()
+        every { vm.assistant } returns assistant
+        every { vm.settings } returns settings
+        every { vm.lockedSettingsChanges } returns MutableSharedFlow()
+        every { vm.update(any(), any()) } answers {
+            assistant.value = secondArg()
+            settings.value = settings.value.copy(assistants = listOf(assistant.value))
+        }
+        val tts = mockk<SpeechPlayback>()
+        every { tts.isSpeaking } returns MutableStateFlow(false)
+        every { tts.isAvailable } returns MutableStateFlow(false)
+        compose.setContent {
+            MaterialTheme {
+                CompositionLocalProvider(
+                    LocalNavController provides Navigator(rememberNavBackStack()),
+                    LocalSettings provides settings.collectAsState().value,
+                    LocalToaster provides rememberToasterState(),
+                    LocalTTSState provides tts,
+                    LocalAdaptiveLayoutInfo provides rememberAdaptiveLayoutInfo(),
+                ) { AssistantPromptPage(original.id.toString(), vm) }
+            }
+        }
+        val add = compose.activity.getString(R.string.add)
+        val presetLabel = "$add: ${compose.activity.getString(R.string.assistant_page_preset_messages)}"
+        val regexLabel = "$add: ${compose.activity.getString(R.string.assistant_page_regex_title)}"
+        compose.onNodeWithContentDescription(presetLabel).performScrollTo().assertIsDisplayed().performClick()
+        compose.waitForIdle()
+        lateinit var afterPreset: Assistant
+        compose.runOnIdle {
+            afterPreset = assistant.value
+            assertEquals(2, afterPreset.presetMessages.size)
+            assertEquals(preset, afterPreset.presetMessages.first())
+            val added = afterPreset.presetMessages.last()
+            assertTrue(added.id != preset.id)
+            assertEquals(MessageRole.ASSISTANT, added.role)
+            assertEquals(listOf(UIMessagePart.Text("")), added.parts)
+            assertEquals(original.copy(presetMessages = afterPreset.presetMessages), afterPreset)
+        }
+        compose.onNodeWithContentDescription(regexLabel).performScrollTo().assertIsDisplayed().performClick()
+        compose.waitForIdle()
+        compose.runOnIdle {
+            val updated = assistant.value
+            assertEquals(2, updated.regexes.size)
+            assertEquals(regex, updated.regexes.first())
+            assertTrue(updated.regexes.last().id != regex.id)
+            assertEquals(afterPreset.copy(regexes = updated.regexes), updated)
+        }
+    }
 
     @Test fun promptCallbackRetainsItsRenderedBaselineAcrossBackgroundUpdates() {
         val original = Assistant(name = "Definition", systemPrompt = "Initial prompt")

@@ -1,320 +1,238 @@
 #!/usr/bin/env python3
-"""Android Locale Manager TUI Application."""
-
-import sys
+"""Android Locale Manager CLI and TUI entry point."""
 import asyncio
+import functools
+import re
+import sys
 from pathlib import Path
 
-# Add src to path for imports
 sys.path.insert(0, str(Path(__file__).parent))
 
 import click
-from config import Config
 from app import LocaleTuiApp
-from services.xml_parser import StringsXmlParser
-from services.translator import AITranslator
-from models.entry import TranslationEntry
+from config import Config
+from models.entry import entries_from_documents
+from services.translator import AITranslator, select_entries
+from services.xml_parser import ResourceError, StringsXmlParser, describe_error, normalize_value, validate_translation
+
+
+def guard(function):
+    @functools.wraps(function)
+    def wrapped(*args, **kwargs):
+        try:
+            return function(*args, **kwargs)
+        except click.ClickException:
+            raise
+        except Exception as error:
+            raise click.ClickException(describe_error(error)) from error
+    return wrapped
 
 
 def load_config() -> Config:
-    """Load configuration from file."""
-    config_path = Path(__file__).parent.parent / "config.yml"
+    return Config.load(Path(__file__).parent.parent / "config.yml")
 
-    if not config_path.exists():
-        click.echo(f"错误：未找到配置文件 {config_path}", err=True)
-        click.echo("请基于模板创建 config.yml 文件。", err=True)
-        sys.exit(1)
 
+def resource_directory(config, module):
+    config.validate()
+    selected = next((item for item in config.modules if item.name == module), None) if module else config.modules[0]
+    if selected is None:
+        raise click.BadParameter(f"Unknown module: {module}", param_hint="--module")
+    path = config.project_root / selected.res_path
+    if not path.is_dir():
+        raise ResourceError(f"Resource directory does not exist: {path}")
+    return path
+
+
+def target_languages(config, requested):
+    source = config.get_source_language().code
+    targets = list(dict.fromkeys(requested)) if requested else [lang.code for lang in config.languages if not lang.is_source]
+    for code in targets:
+        if code not in config.get_language_codes() or code == source:
+            raise click.BadParameter(f"Invalid target language: {code}", param_hint="--lang")
+    return targets
+
+
+def read_documents(directory, codes, source_code, *, require_source=True):
+    if require_source and not (directory / source_code / "strings.xml").is_file():
+        raise ResourceError(f"Source file missing: {directory / source_code / 'strings.xml'}")
+    documents = {code: StringsXmlParser.read(directory / code / "strings.xml") for code in dict.fromkeys([source_code, *codes])}
+    for code, document in documents.items():
+        for key, reason in document.unsupported.items():
+            click.echo(f"Skipped {code}/{key}: {reason}", err=True)
+    return documents
+
+
+async def translate(config, selected):
+    translator = AITranslator(config)
     try:
-        config = Config.load(config_path)
-    except Exception as e:
-        click.echo(f"错误：加载配置失败 - {e}", err=True)
-        sys.exit(1)
+        return await translator.translate_many(selected)
+    finally:
+        await translator.close()
 
-    # Validate configuration
-    if not config.openai_api_key:
-        click.echo("警告：未设置 OPENAI_API_KEY。AI 翻译功能将无法使用。", err=True)
 
-    return config
+def publish_result(directory, documents, source, result):
+    failures = dict(result.failures)
+    count = 0
+    for code, values in result.successes.items():
+        path = directory / code / "strings.xml"
+        try:
+            StringsXmlParser.update_entries(path, values,
+                expected={key: documents[code].values.get(key) for key in values},
+                translation_source=(directory / source / "strings.xml",
+                                    {key: documents[source].values[key] for key in values}))
+            count += len(values)
+        except (OSError, ResourceError) as error:
+            failures.update({(code, key): error for key in values})
+    click.echo(f"Saved {count} translation(s); failed {len(failures)}")
+    for (code, key), error in failures.items():
+        click.echo(f"{code}/{key}: {describe_error(error)}", err=True)
+    if failures:
+        raise click.ClickException("Some translations were not saved; successful items were preserved")
 
 
 @click.group(invoke_without_command=True)
 @click.pass_context
+@guard
 def cli(ctx):
-    """Android Locale Manager - 管理和翻译 Android 字符串资源
-
-    不带参数启动 TUI 界面，使用子命令进行命令行操作。
-    """
+    """Android string resources. Without a subcommand, launch the TUI."""
     if ctx.invoked_subcommand is None:
-        # No command provided, launch TUI
-        config = load_config()
-        app = LocaleTuiApp(config)
-        app.run()
+        LocaleTuiApp(load_config()).run()
 
 
 @cli.command("test-connection")
+@guard
 def test_connection():
-    """测试 AI 服务连接
-
-    \b
-    示例：
-        locale-tui test-connection
-    """
-    config = load_config()
-
-    if not config.openai_api_key:
-        click.echo("错误：未设置 OPENAI_API_KEY，无法测试连接。", err=True)
-        sys.exit(1)
-
-    click.echo("AI 服务配置：")
-    click.echo(f"  Base URL: {config.openai_base_url}")
-    click.echo(f"  Model: {config.translation_model}")
-    click.echo("正在测试连接...")
-
-    async def test_async():
-        translator = AITranslator(config)
-        return await translator.test_connection()
-
+    """Explicitly test the configured real AI service."""
+    async def run():
+        translator = AITranslator(load_config())
+        try:
+            return await translator.test_connection()
+        finally:
+            await translator.close()
     try:
-        content = asyncio.run(test_async())
-        click.echo("✓ 连接成功")
-        if content:
-            click.echo(f"响应: {content}")
-        else:
-            click.echo("响应为空，但 API 已返回有效结果。")
-    except Exception as e:
-        click.echo(f"✗ 连接失败: {e}", err=True)
-        sys.exit(1)
+        click.echo(asyncio.run(run()) or "Connected")
+    except Exception as error:
+        raise click.ClickException(describe_error(error)) from error
+
+
+def batch_options(function):
+    for decorator in (
+        click.option("--module", "-m"),
+        click.option("--lang", "-l", multiple=True, help="Target code; repeat to select several languages"),
+        click.option("--dry-run", is_flag=True, help="List selected keys without creating an API client or writing"),
+        click.option("--concurrency", type=click.IntRange(min=1)),
+        click.option("--retries", type=click.IntRange(min=1), help="Maximum attempts per failed batch, including the first"),
+        click.option("--batch-size", type=click.IntRange(min=1)),
+    ):
+        function = decorator(function)
+    return function
+
+
+def run_batch(module, lang, dry_run, concurrency, retries, batch_size, *, keys=(), regex=None, retranslate=False):
+    if retranslate and not keys and regex is None:
+        raise click.UsageError("retranslate requires --key or --regex")
+    try:
+        pattern = re.compile(regex) if regex is not None else None
+    except re.error as error:
+        raise click.BadParameter(str(error), param_hint="--regex") from error
+    config = load_config()
+    for name, value in (("concurrency", concurrency), ("retries", retries), ("batch_size", batch_size)):
+        if value is not None:
+            setattr(config, name, value)
+    directory = resource_directory(config, module)
+    targets = target_languages(config, lang)
+    source = config.get_source_language().code
+    documents = read_documents(directory, targets, source)
+    entries = entries_from_documents(documents, source)
+    selected = select_entries(entries, targets, retranslate=retranslate, keys=keys, pattern=pattern)
+    for code, values in selected.items():
+        click.echo(f"{code}: {len(values)} selected")
+        if dry_run:
+            for key in values:
+                click.echo(f"  {key}")
+    if dry_run or not any(selected.values()):
+        return
+    publish_result(directory, documents, source, asyncio.run(translate(config, selected)))
+
+
+@cli.command("translate-missing")
+@batch_options
+@guard
+def translate_missing(**options):
+    """Translate absent plain strings; preserve explicit empty and protected entries."""
+    run_batch(**options)
+
+
+@cli.command("retranslate")
+@batch_options
+@click.option("--key", "keys", multiple=True, help="Existing key; repeatable and combined with --regex")
+@click.option("--regex", help="Select existing keys by regular expression")
+@guard
+def retranslate(**options):
+    """Retranslate selected existing targets only."""
+    run_batch(**options, retranslate=True)
 
 
 @cli.command()
 @click.argument("key")
 @click.argument("value")
-@click.option(
-    "--module",
-    "-m",
-    default=None,
-    help="模块名称（默认使用配置文件中的第一个模块）",
-)
-@click.option("--skip-translate", is_flag=True, help="跳过自动翻译，仅添加源语言条目")
-def add(key: str, value: str, module: str, skip_translate: bool):
-    """添加新的语言条目并自动翻译
-
-    \b
-    示例：
-        locale-tui add hello_world "Hello, World!"
-        locale-tui add greeting "Welcome" -m app
-        locale-tui add test_key "Test" --skip-translate
-    """
+@click.option("--module", "-m")
+@click.option("--skip-translate", is_flag=True)
+@guard
+def add(key, value, module, skip_translate):
+    """Add/update source text; translate missing targets through the same batch pipeline."""
     config = load_config()
-
-    # Select module
-    if module:
-        selected_module = next((m for m in config.modules if m.name == module), None)
-        if not selected_module:
-            click.echo(f"错误：未找到模块 '{module}'", err=True)
-            click.echo(f"可用模块：{', '.join(m.name for m in config.modules)}", err=True)
-            sys.exit(1)
-    else:
-        if not config.modules:
-            click.echo("错误：配置文件中未定义模块", err=True)
-            sys.exit(1)
-        selected_module = config.modules[0]
-
-    click.echo(f"使用模块: {selected_module.name}")
-
-    # Get source language
-    source_lang = config.get_source_language()
-    if not source_lang:
-        click.echo("错误：未配置源语言", err=True)
-        sys.exit(1)
-
-    # Resolve res directory
-    res_dir = config.project_root / selected_module.res_path
-    if not res_dir.exists():
-        click.echo(f"错误：资源目录不存在 {res_dir}", err=True)
-        sys.exit(1)
-
-    # Add entry to source language file
-    source_file = res_dir / "values" / "strings.xml"
-    click.echo(f"添加条目到 {source_file.relative_to(config.project_root)}...")
-
-    try:
-        StringsXmlParser.update_entry(source_file, key, value)
-        click.echo(f"✓ 已添加条目: {key} = {value}")
-    except Exception as e:
-        click.echo(f"错误：添加条目失败 - {e}", err=True)
-        sys.exit(1)
-
-    # Translate to other languages
-    if not skip_translate:
-        target_languages = [lang.code for lang in config.languages if not lang.is_source]
-
-        if not target_languages:
-            click.echo("未配置目标语言，跳过翻译。")
-            return
-
-        click.echo(f"开始翻译到 {len(target_languages)} 种语言...")
-
-        # Create entry for translation
-        entry = TranslationEntry(key=key, translations={"values": value})
-
-        async def translate_async():
-            translator = AITranslator(config)
-
-            async def translate_one(lang_code: str):
-                lang_name = config.get_language_name(lang_code)
-
-                try:
-                    translations = await translator.translate_batch(
-                        {key: value}, lang_name
-                    )
-
-                    if key in translations:
-                        return lang_code, lang_name, translations[key], None
-                    return lang_code, lang_name, None, "翻译失败（未返回结果）"
-                except Exception as e:
-                    return lang_code, lang_name, None, str(e)
-
-            tasks = [translate_one(lang_code) for lang_code in target_languages]
-            results = await asyncio.gather(*tasks)
-
-            for lang_code, lang_name, translated_value, error in results:
-                click.echo(f"翻译到 {lang_name}...", nl=False)
-
-                if error:
-                    click.echo(f" ✗ 错误: {error}", err=True)
-                    continue
-
-                entry.set_translation(lang_code, translated_value)
-
-                # Save to file
-                target_file = res_dir / lang_code / "strings.xml"
-                StringsXmlParser.update_entry(target_file, key, translated_value)
-
-                click.echo(f" ✓ {translated_value}")
-
-        asyncio.run(translate_async())
-        click.echo("完成！")
+    directory = resource_directory(config, module)
+    source = config.get_source_language().code
+    targets = target_languages(config, ()) if not skip_translate else []
+    documents = read_documents(directory, targets, source, require_source=False)
+    value = normalize_value(value)
+    StringsXmlParser.update_entry(directory / source / "strings.xml", key, value)
+    click.echo(f"Saved {source}/{key}")
+    if targets:
+        documents[source] = StringsXmlParser.read(directory / source / "strings.xml")
+        entries = [entry for entry in entries_from_documents(documents, source) if entry.key == key]
+        selected = select_entries(entries, targets)
+        if any(selected.values()):
+            publish_result(directory, documents, source, asyncio.run(translate(config, selected)))
 
 
-@cli.command()
+@cli.command("set")
 @click.argument("key")
 @click.argument("value")
-@click.option(
-    "--lang",
-    "-l",
-    default=None,
-    help="语言代码（例如：values, values-zh, values-ja），默认为源语言",
-)
-@click.option(
-    "--module",
-    "-m",
-    default=None,
-    help="模块名称（默认使用配置文件中的第一个模块）",
-)
-def set(key: str, value: str, lang: str, module: str):
-    """手动设置指定语言的条目值
-
-    \b
-    示例：
-        locale-tui set hello_world "你好，世界！" -l values-zh
-        locale-tui set greeting "Welcome" -l values
-        locale-tui set test_key "テスト" -l values-ja -m app
-    """
+@click.option("--lang", "-l")
+@click.option("--module", "-m")
+@guard
+def set_value(key, value, lang, module):
+    """Manually patch one string, without calling an AI service."""
     config = load_config()
-
-    # Select module
-    if module:
-        selected_module = next((m for m in config.modules if m.name == module), None)
-        if not selected_module:
-            click.echo(f"错误：未找到模块 '{module}'", err=True)
-            click.echo(f"可用模块：{', '.join(m.name for m in config.modules)}", err=True)
-            sys.exit(1)
-    else:
-        if not config.modules:
-            click.echo("错误：配置文件中未定义模块", err=True)
-            sys.exit(1)
-        selected_module = config.modules[0]
-
-    # Resolve language directory
-    if lang is None:
-        lang = "values"  # Default to source language
-
-    # Resolve res directory
-    res_dir = config.project_root / selected_module.res_path
-    if not res_dir.exists():
-        click.echo(f"错误：资源目录不存在 {res_dir}", err=True)
-        sys.exit(1)
-
-    # Target file
-    target_file = res_dir / lang / "strings.xml"
-    lang_name = config.get_language_name(lang) if lang != "values" else "源语言"
-
-    click.echo(f"设置 {lang_name} 的条目: {key} = {value}")
-    click.echo(f"目标文件: {target_file.relative_to(config.project_root)}")
-
-    try:
-        StringsXmlParser.update_entry(target_file, key, value)
-        click.echo(f"✓ 设置成功")
-    except Exception as e:
-        click.echo(f"错误：设置失败 - {e}", err=True)
-        sys.exit(1)
+    directory = resource_directory(config, module)
+    source = config.get_source_language().code
+    lang = lang or source
+    if lang not in config.get_language_codes():
+        raise click.BadParameter(f"Unknown language: {lang}", param_hint="--lang")
+    documents = read_documents(directory, [lang], source)
+    if lang != source:
+        if key not in documents[source].values:
+            raise ResourceError(f"No editable source string for {key}")
+        value = validate_translation(documents[source].values[key], value)
+    StringsXmlParser.update_entry(directory / lang / "strings.xml", key, value)
+    click.echo(f"Saved {lang}/{key}")
 
 
-@cli.command()
-@click.option(
-    "--module",
-    "-m",
-    default=None,
-    help="模块名称（默认使用配置文件中的第一个模块）",
-)
-def list_keys(module: str):
-    """列出所有语言条目的键
-
-    \b
-    示例：
-        locale-tui list-keys
-        locale-tui list-keys -m app
-    """
+@cli.command("list-keys")
+@click.option("--module", "-m")
+@guard
+def list_keys(module):
     config = load_config()
-
-    # Select module
-    if module:
-        selected_module = next((m for m in config.modules if m.name == module), None)
-        if not selected_module:
-            click.echo(f"错误：未找到模块 '{module}'", err=True)
-            sys.exit(1)
-    else:
-        if not config.modules:
-            click.echo("错误：配置文件中未定义模块", err=True)
-            sys.exit(1)
-        selected_module = config.modules[0]
-
-    # Resolve res directory
-    res_dir = config.project_root / selected_module.res_path
-    source_file = res_dir / "values" / "strings.xml"
-
-    if not source_file.exists():
-        click.echo(f"错误：源文件不存在 {source_file}", err=True)
-        sys.exit(1)
-
-    # Parse and display
-    entries = StringsXmlParser.parse(source_file)
-
-    click.echo(f"模块 '{selected_module.name}' 共有 {len(entries)} 个条目：")
-    click.echo()
-
-    for key in sorted(entries.keys()):
-        value = entries[key]
-        # Truncate long values
-        if len(value) > 60:
-            value = value[:57] + "..."
-        click.echo(f"  {key:40} {value}")
+    directory = resource_directory(config, module)
+    source = config.get_source_language().code
+    document = read_documents(directory, [], source)[source]
+    for key, value in document.values.items():
+        click.echo(f"{key}: {value[:60]}")
 
 
 def main():
-    """Main entry point."""
     cli()
 
 

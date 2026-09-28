@@ -192,6 +192,82 @@ class ConversationTitleCoordinatorTest {
         assertTrue(coordinator.begin(id, false, true, "") is ConversationTitleBeginResult.Granted)
     }
 
+    @Test
+    fun `fork chooses first free suffix including empty source and failed creation leaves no reservation`() = runTest {
+        val coordinator = ConversationTitleCoordinator()
+        val id = Uuid.random()
+        val titles = mutableListOf("(1)", "(3)")
+        val failure = java.io.IOException("createTree unavailable")
+        try {
+            coordinator.createForkWithTitle(id, "", { titles }) { name ->
+                assertEquals("(2)", name)
+                throw failure
+            }
+            org.junit.Assert.fail("must preserve failure")
+        } catch (error: java.io.IOException) {
+            org.junit.Assert.assertSame(failure, error)
+        }
+        assertEquals("(2)", coordinator.createForkWithTitle(id, "", { titles }) { name -> titles.add(name); name })
+        assertEquals("(4)", coordinator.createForkWithTitle(id, "", { titles }) { it })
+    }
+
+    @Test
+    fun `concurrent forks serialize query through create without cancelling source generation`() = runTest {
+        val coordinator = ConversationTitleCoordinator()
+        val id = Uuid.random()
+        coordinator.synchronize(id, "Source", "Source")
+        val token = coordinator.granted(id, false, true, "Source")
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val titles = mutableListOf<String>()
+        var queries = 0
+        val first = async {
+            coordinator.createForkWithTitle(id, "Source", { queries++; titles }) { name ->
+                entered.complete(Unit)
+                release.await()
+                titles.add(name)
+                name
+            }
+        }
+        entered.await()
+        val second = async {
+            coordinator.createForkWithTitle(id, "Source", { queries++; titles }) { name -> titles.add(name); name }
+        }
+        runCurrent()
+        assertEquals(1, queries)
+        assertEquals(ConversationTitlePhase.MODEL_GENERATING, coordinator.phaseOf(id))
+        release.complete(Unit)
+        assertEquals("Source(1)", first.await())
+        assertEquals("Source(2)", second.await())
+        assertTrue(coordinator.commitGeneratedTitle(token, "Model") { _, _ -> true })
+    }
+
+    @Test
+    fun `manual source title waits for fork commit while captured fork title stays unchanged`() = runTest {
+        val coordinator = ConversationTitleCoordinator()
+        val id = Uuid.random()
+        coordinator.synchronize(id, "Before", null)
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        var manualCommitted = false
+        val fork = async {
+            coordinator.createForkWithTitle(id, "Before", { emptyList() }) { name ->
+                entered.complete(Unit)
+                release.await()
+                name
+            }
+        }
+        entered.await()
+        val manual = launch { coordinator.commitManualTitle(id, "After") { manualCommitted = true } }
+        runCurrent()
+        assertFalse(manualCommitted)
+        release.complete(Unit)
+        assertEquals("Before(1)", fork.await())
+        manual.join()
+        assertTrue(manualCommitted)
+        assertEquals(ConversationTitlePhase.RESOLVED, coordinator.phaseOf(id))
+    }
+
     private fun ConversationTitleCoordinator.granted(
         id: Uuid,
         force: Boolean,

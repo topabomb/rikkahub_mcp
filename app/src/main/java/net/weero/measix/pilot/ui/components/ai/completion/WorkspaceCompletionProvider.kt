@@ -136,7 +136,7 @@ class WorkspaceCompletionProvider(
         return when (val result = queryService.readTextForPreview(id, WorkspaceStorageArea.FILES, path)) {
             is WorkspaceTextPreviewResult.Success -> result.content
             is WorkspaceTextPreviewResult.TooLarge,
-            WorkspaceTextPreviewResult.Unavailable,
+            is WorkspaceTextPreviewResult.Unavailable,
             -> null
         }
     }

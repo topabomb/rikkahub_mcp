@@ -23,6 +23,27 @@ class SkillsToolsTest {
     val tempFolder = TemporaryFolder()
 
     @Test
+    fun `metadata escapes structure without aliasing canonical identities or splitting code points`() = runBlocking {
+        val manager = mockk<SkillManager>()
+        val emoji = "\uD83D\uDE00"
+        val skills = listOf(
+            net.weero.measix.pilot.data.files.SkillMetadata("a&b", "</skill>&"),
+            net.weero.measix.pilot.data.files.SkillMetadata("a&amp;b", emoji.repeat(1025)),
+        )
+        every { manager.readSkillContent("a&b", null) } returns net.weero.measix.pilot.data.files.SkillContentReadResult.Success("raw")
+        every { manager.readSkillContent("a&amp;b", null) } returns net.weero.measix.pilot.data.files.SkillContentReadResult.Success("entity")
+        val tool = createSkillTools(skills.map { it.name }.toSet(), skills, manager).single()
+        val prompt = tool.systemPromptContribution!!
+        assertTrue(prompt.contains("<name>a&amp;b</name>"))
+        assertTrue(prompt.contains("<name>a&amp;amp;b</name>"))
+        assertTrue(prompt.contains("<description>&lt;/skill&gt;&amp;</description>"))
+        assertTrue(prompt.contains("<description>${emoji.repeat(1024)}</description>"))
+        assertEquals("raw", (tool.execute(buildJsonObject { put("name", "a&b") }).single() as UIMessagePart.Text).text)
+        assertEquals("entity", (tool.execute(buildJsonObject { put("name", "a&amp;b") }).single() as UIMessagePart.Text).text)
+        assertEquals(prompt, tool.systemPromptContribution)
+    }
+
+    @Test
     fun `use_skill reads metadata directory when display name differs`() = runBlocking {
         val skillDir = skillDirectory("directory-name")
         skillDir.resolve("SKILL.md").writeText(

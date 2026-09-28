@@ -1,6 +1,7 @@
 package net.weero.measix.pilot.service
 import net.weero.measix.pilot.service.turn.TurnRecovery
 
+import android.util.Log
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
@@ -48,7 +49,7 @@ class ApplicationRecoveryGate internal constructor() {
 }
 
 /**
- * 唯一启动恢复入口。顺序固定为 Settings → artifact/generated-media reconcile → enterprise data reset →
+ * 唯一启动恢复入口。顺序固定为 pending backup restore → Settings → artifact/generated-media reconcile → enterprise data reset →
  * enterprise configuration → projection → interrupted run/turn → pending assistant deletion；任一步失败都保持
  * fail-closed，可显式 retry。
  */
@@ -99,7 +100,7 @@ class ApplicationRecoveryCoordinator(
             gate.loading()
             try {
                 restorePendingBackup()
-                settingsStore.userSettings.first { !it.init }
+                settingsStore.initializeForRecovery()
                 artifactStore.reconcileStartup()
                 generatedMediaStore.reconcile()
                 recoverEnterpriseDataReset()
@@ -118,9 +119,9 @@ class ApplicationRecoveryCoordinator(
                 completePendingBackup()
                 gate.ready()
             } catch (cancelled: CancellationException) {
-                gate.failed(cancelled)
                 throw cancelled
             } catch (error: Exception) {
+                Log.e("ApplicationRecovery", "Application recovery failed", error)
                 gate.failed(error)
             }
         }

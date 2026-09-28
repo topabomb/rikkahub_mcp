@@ -1,10 +1,10 @@
 package net.weero.measix.pilot.ui.pages.setting
 
+import net.weero.measix.pilot.ui.components.ui.longPressReorder
 import me.rerere.common.configuration.ConfigurationReference
 import android.net.Uri
 import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.Camera01
-import me.rerere.hugeicons.stroke.DragDropHorizontal
 import me.rerere.hugeicons.stroke.Image02
 import me.rerere.hugeicons.stroke.FileImport
 import me.rerere.hugeicons.stroke.Add01
@@ -54,11 +54,8 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.scale
-import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -96,11 +93,8 @@ fun SettingProviderPage(vm: SettingVM = koinViewModel()) {
     var searchQuery by remember { mutableStateOf("") }
     val lazyListState = rememberLazyListState()
     val reorderableState = rememberReorderableLazyListState(lazyListState) { from, to ->
-        val visibleProviders = if (searchQuery.isBlank()) {
-            settings.providers
-        } else {
-            settings.providers.filter { it.name.contains(searchQuery, ignoreCase = true) }
-        }
+        if (searchQuery.isNotBlank()) return@rememberReorderableLazyListState
+        val visibleProviders = settings.providers
         val fromId = visibleProviders.getOrNull(from.index)?.id ?: return@rememberReorderableLazyListState
         val toId = visibleProviders.getOrNull(to.index)?.id ?: return@rememberReorderableLazyListState
         vm.updateSettings { current ->
@@ -203,29 +197,9 @@ fun SettingProviderPage(vm: SettingVM = koinViewModel()) {
                     ) { isDragging ->
                         ProviderItem(
                             modifier = Modifier
-                                .scale(if (isDragging) 0.95f else 1f)
-                                .fillMaxWidth(),
+                                .fillMaxWidth()
+                                .then(longPressReorder(isDragging, enabled = searchQuery.isBlank())),
                             provider = provider,
-                            dragHandle = {
-                                val haptic = LocalHapticFeedback.current
-                                IconButton(
-                                    onClick = {},
-                                    modifier = Modifier
-                                        .longPressDraggableHandle(
-                                            onDragStarted = {
-                                                haptic.performHapticFeedback(HapticFeedbackType.GestureThresholdActivate)
-                                            },
-                                            onDragStopped = {
-                                                haptic.performHapticFeedback(HapticFeedbackType.GestureEnd)
-                                            }
-                                        )
-                                ) {
-                                    Icon(
-                                        imageVector = HugeIcons.DragDropHorizontal,
-                                        contentDescription = null
-                                    )
-                                }
-                            },
                             onClick = {
                                 navController.navigate(Screen.SettingProviderDetail(providerId = provider.id.toString()))
                             }
@@ -553,7 +527,6 @@ private fun AddButton(onAdd: (ProviderSetting) -> Unit) {
 private fun ProviderItem(
     provider: ProviderSetting,
     modifier: Modifier = Modifier,
-    dragHandle: @Composable () -> Unit,
     onClick: () -> Unit
 ) {
     Card(
@@ -608,7 +581,6 @@ private fun ProviderItem(
                     }
                 }
             }
-            dragHandle()
         }
     }
 }

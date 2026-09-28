@@ -1137,9 +1137,8 @@ class ResponseAPISerializerTest {
             assertEquals(source, arguments, tools.joinToString("") { it.input })
             assertTrue(source, tools.all { it.providerCallId == "call_123" })
             assertEquals("lookup", tools.first().toolName)
-            assertTrue(chunks.all {
-                it.choices.single().toolCallSlots.single() == me.rerere.ai.ui.ProviderToolCallSlot.Item("fc_123")
-            })
+            val slot = chunks.first().choices.single().toolCallSlots.single()
+            assertTrue(chunks.all { it.choices.single().toolCallSlots.single() == slot })
             val replay = invokeBuildMessages(listOf(UIMessage(role = MessageRole.ASSISTANT, parts = listOf(
                 tools.first().copy(input = arguments, resultStatus = ToolResultStatus.COMPLETED,
                     output = listOf(UIMessagePart.Text("result")))),

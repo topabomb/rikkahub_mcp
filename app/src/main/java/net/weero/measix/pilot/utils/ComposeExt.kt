@@ -1,4 +1,4 @@
-﻿package net.weero.measix.pilot.utils
+package net.weero.measix.pilot.utils
 
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.calculateEndPadding
@@ -6,12 +6,20 @@ import androidx.compose.foundation.layout.calculateStartPadding
 import androidx.compose.foundation.text.input.TextFieldState
 import androidx.compose.foundation.text.input.insert
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
+
+/** For explicitly directional icons whose ImageVector does not already mirror itself. */
+@Composable
+fun Modifier.mirrorInRtl(): Modifier =
+    if (LocalLayoutDirection.current == LayoutDirection.Rtl) graphicsLayer { scaleX = -1f } else this
 
 @Composable
 operator fun PaddingValues.plus(other: PaddingValues): PaddingValues {

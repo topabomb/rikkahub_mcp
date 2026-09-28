@@ -792,8 +792,16 @@ class ConversationApplicationService internal constructor(
                 )
             }
             withCommandTarget(target) {
-                createAttempted = true
-                commandCoordinator.createTree(fork, children, target::requireOpen)
+                titleCoordinator.createForkWithTitle(
+                    sourceId = current.conversationId,
+                    sourceTitle = current.header.title,
+                    occupiedTitles = {
+                        conversationRepo.getRootConversationTitles(current.header.scope, current.header.assistantId)
+                    },
+                ) { title ->
+                    createAttempted = true
+                    commandCoordinator.createTree(fork.copy(header = fork.header.copy(title = title)), children, target::requireOpen)
+                }
                 artifactStore.publishAllUnpublished(owned)
                 committed = true
             }

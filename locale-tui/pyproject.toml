@@ -25,3 +25,4 @@ dev = [
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+markers = ["live_api: explicitly opted-in tests that call the real translation API"]

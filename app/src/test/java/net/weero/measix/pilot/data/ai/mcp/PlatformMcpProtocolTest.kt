@@ -17,6 +17,7 @@ import kotlin.uuid.Uuid
 class PlatformMcpProtocolTest {
     @Test fun `platform SDK discovery and call keep route and catalog while refreshing bearer per HTTP request`() = runBlocking {
         val received = CopyOnWriteArrayList<Triple<String, String?, String?>>()
+        val toolCalls = java.util.concurrent.atomic.AtomicInteger()
         val server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
         val resource = "mcp_${Uuid.random()}"
         val path = "/runtime/v1/resources/$resource/mcp/v1"
@@ -29,7 +30,10 @@ class PlatformMcpProtocolTest {
                     "initialize" -> """{"protocolVersion":"2025-11-25","serverInfo":{"name":"platform","version":"1"},"capabilities":{"tools":{}}}"""
                     "notifications/initialized" -> null
                     "tools/list" -> """{"tools":[{"name":"read_status","inputSchema":{"type":"object"},"annotations":{"readOnlyHint":true}}]}"""
-                    "tools/call" -> """{"content":[{"type":"text","text":"ready"}]}"""
+                    "tools/call" -> {
+                        toolCalls.incrementAndGet()
+                        """{"content":[{"type":"text","text":"ready"}]}"""
+                    }
                     else -> error("unexpected method")
                 }
                 if (result == null) it.sendResponseHeaders(202, -1) else {
@@ -70,6 +74,27 @@ class PlatformMcpProtocolTest {
                 assertEquals("Bearer second-token", received.last().second)
                 assertTrue(received.any { it.second == "Bearer first-token" })
                 assertTrue(received.all { it.first == path && it.third == interaction })
+                token.set("secret\ninvalid")
+                try {
+                    client.callTool(io.modelcontextprotocol.kotlin.sdk.types.CallToolRequest(
+                        params = io.modelcontextprotocol.kotlin.sdk.types.CallToolRequestParams(name = "read_status")))
+                    fail("rotated malformed credentials must be rejected before HTTP")
+                } catch (error: io.modelcontextprotocol.kotlin.sdk.types.McpException) {
+                    val validation = error.cause as? McpHeaderValidationException
+                        ?: throw AssertionError("SDK must preserve the header validation cause", error)
+                    assertEquals(McpHeaderValidationReason.INVALID_VALUE, validation.reason)
+                    assertEquals(3, validation.row)
+                    assertTrue(error.message!!.contains("mcp_header_invalid_value"))
+                    assertFalse(error.stackTraceToString().contains("secret"))
+                }
+                assertEquals(1, toolCalls.get())
+                assertEquals(fingerprint, definition.connectionFingerprint())
+                assertEquals(digest, definition.mcpDefinitionDigest())
+                token.set("third-token")
+                client.callTool(io.modelcontextprotocol.kotlin.sdk.types.CallToolRequest(
+                    params = io.modelcontextprotocol.kotlin.sdk.types.CallToolRequestParams(name = "read_status")))
+                assertEquals(2, toolCalls.get())
+                assertEquals("Bearer third-token", received.last().second)
             }
         } finally { client.close(); http.close(); server.stop(0) }
     }

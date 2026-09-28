@@ -9,7 +9,6 @@ modules:
     res_path: "app/src/main/res"
     source_patterns:
       - "app/src/main/java/**/*.kt"
-      - "app/src/main/java/**/*.java"
       - "app/src/main/AndroidManifest.xml"
       - "app/src/main/res/xml/*.xml"
   - name: "workspace"
@@ -17,29 +16,6 @@ modules:
     source_patterns:
       - "workspace/src/main/**/*.kt"
       - "workspace/src/main/**/*.java"
-  - name: "ai"
-    res_path: "ai/src/main/res"
-    source_patterns:
-      - "ai/src/main/java/**/*.kt"
-      - "ai/src/main/java/**/*.java"
-  - name: "highlight"
-    res_path: "highlight/src/main/res"
-    source_patterns:
-      - "highlight/src/main/java/**/*.kt"
-      - "highlight/src/main/java/**/*.java"
-      - "highlight/src/main/AndroidManifest.xml"
-  - name: "search"
-    res_path: "search/src/main/res"
-    source_patterns:
-      - "search/src/main/java/**/*.kt"
-      - "search/src/main/java/**/*.java"
-      - "search/src/main/AndroidManifest.xml"
-  - name: "rag"
-    res_path: "rag/src/main/res"
-    source_patterns:
-      - "rag/src/main/java/**/*.kt"
-      - "rag/src/main/java/**/*.java"
-      - "rag/src/main/AndroidManifest.xml"
 
 # 支持的语言列表
 languages:
@@ -58,6 +34,15 @@ languages:
 # AI 翻译配置
 translation:
   batch_size: 10
+  concurrency: 4
+  retries: 3
+  glossary:
+    values-zh:
+      prompt: "提示词"
+      context: "上下文"
+      model: "模型"
+      inference: "推理"
+      Token: "Token"
   model: "deepseek-v4-flash"
   prompt_template: |
     You are a professional translator specializing in mobile app localization.
@@ -72,7 +57,7 @@ translation:
     3. Maintain the same tone and style (formal/informal) as the source
     4. For UI text, keep it concise
     5. Do not translate brand names or technical terms that should remain in English (e.g. OpenAI, Anthropic, Token, API)
-    6. Use AI/LLM-specific terminology: translate "prompt" as "提示词" (not "提示"), "context" as "上下文", "model" as "模型", "inference" as "推理"
+    6. Apply this target-language terminology (JSON): {glossary}
 
     Source strings (JSON format):
     {source_strings}

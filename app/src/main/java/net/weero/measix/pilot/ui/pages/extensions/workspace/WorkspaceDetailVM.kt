@@ -3,6 +3,7 @@ package net.weero.measix.pilot.ui.pages.extensions.workspace
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
@@ -14,6 +15,10 @@ import java.io.OutputStream
 import net.weero.measix.pilot.service.workspace.WorkspaceApplicationService
 import net.weero.measix.pilot.service.workspace.WorkspaceQueryService
 import net.weero.measix.pilot.service.workspace.WorkspaceUiModel
+import net.weero.measix.pilot.service.workspace.WorkspaceExportRequest
+import net.weero.measix.pilot.service.workspace.WorkspaceExportDestination
+import net.weero.measix.pilot.service.workspace.WorkspaceExportItem
+import net.weero.measix.pilot.utils.userVisibleDiagnostic
 import me.rerere.workspace.RootfsInstallProgress
 import me.rerere.workspace.RootfsInstallStage
 import me.rerere.workspace.WorkspaceFileEntry
@@ -35,6 +40,41 @@ class WorkspaceDetailVM(
     private val _installError = MutableStateFlow<String?>(null)
     val installError = _installError.asStateFlow()
 
+    private val _exportState = MutableStateFlow<WorkspaceExportState?>(null)
+    val exportState = _exportState.asStateFlow()
+    private var exportJob: Job? = null
+
+    fun exportFiles(request: WorkspaceExportRequest, destination: WorkspaceExportDestination) {
+        if (exportJob?.isActive == true) return
+        require(request.workspaceId == id) { "Workspace export target changed" }
+        _exportState.value = WorkspaceExportState(request, running = true)
+        exportJob = viewModelScope.launch {
+            try {
+                workspaceApplicationService.exportFiles(request, destination) { item ->
+                    _exportState.update { it?.copy(items = it.items + item) }
+                }
+            } catch (cancelled: CancellationException) {
+                cancelled.suppressed.forEach { cleanup ->
+                    android.util.Log.e("WorkspaceExport", "Cancellation cleanup failed", cleanup)
+                }
+                _exportState.update { it?.copy(cancelled = true, cleanupDiagnostic = cancelled.suppressed
+                    .takeIf { failures -> failures.isNotEmpty() }?.joinToString("\n") { failure -> failure.userVisibleDiagnostic() }) }
+                throw cancelled
+            } catch (error: Exception) {
+                android.util.Log.e("WorkspaceExport", "Export request failed", error)
+                _exportState.update { it?.copy(cleanupDiagnostic = error.userVisibleDiagnostic()) }
+            } finally { _exportState.update { it?.copy(running = false) } }
+        }
+    }
+
+    fun cancelExport() { exportJob?.cancel() }
+    fun dismissExportResult() { if (exportJob?.isActive != true) _exportState.value = null }
+
+    fun reportExportFailure(error: Exception) {
+        android.util.Log.e("WorkspaceExport", "Export failed", error)
+        _state.update { it.copy(error = WorkspaceOperation.EXPORT, diagnostic = error.userVisibleDiagnostic()) }
+    }
+
     init {
         viewModelScope.launch {
             if (loadWorkspaceNow()) refreshNow()
@@ -48,6 +88,7 @@ class WorkspaceDetailVM(
                 path = "",
                 entries = emptyList(),
                 error = null,
+                diagnostic = null,
             )
         }
         refresh()
@@ -55,7 +96,7 @@ class WorkspaceDetailVM(
 
     fun open(entry: WorkspaceFileEntry) {
         if (!entry.isDirectory) return
-        _state.update { it.copy(path = entry.path, entries = emptyList(), error = null) }
+        _state.update { it.copy(path = entry.path, entries = emptyList(), error = null, diagnostic = null) }
         refresh()
     }
 
@@ -67,6 +108,7 @@ class WorkspaceDetailVM(
                 path = path.substringBeforeLast('/', missingDelimiterValue = ""),
                 entries = emptyList(),
                 error = null,
+                diagnostic = null,
             )
         }
         refresh()
@@ -99,24 +141,18 @@ class WorkspaceDetailVM(
     }
 
     private suspend fun refreshNow() {
-        _state.update { it.copy(loading = true, error = null) }
+        val target = state.value
+        _state.update { it.copy(loading = true, error = null, diagnostic = null) }
         try {
-            val entries = workspaceQueryService.listFiles(
-                workspaceId = id,
-                area = state.value.area,
-                path = state.value.path,
-            )
-            _state.update { it.copy(entries = entries, loading = false) }
-        } catch (cancelled: CancellationException) {
-            throw cancelled
-        } catch (_: Exception) {
-            _state.update {
-                it.copy(
-                    entries = emptyList(),
-                    loading = false,
-                    error = WorkspaceOperation.LOAD_FILES,
-                )
-            }
+            val entries = workspaceQueryService.listFiles(id, target.area, target.path)
+            _state.update { if (it.area == target.area && it.path == target.path) it.copy(entries = entries) else it }
+        } catch (cancelled: CancellationException) { throw cancelled }
+        catch (error: Exception) {
+            android.util.Log.e("WorkspaceDetail", "Unable to list files", error)
+            _state.update { if (it.area == target.area && it.path == target.path)
+                it.copy(entries = emptyList(), error = WorkspaceOperation.LOAD_FILES, diagnostic = error.userVisibleDiagnostic()) else it }
+        } finally {
+            _state.update { if (it.area == target.area && it.path == target.path) it.copy(loading = false) else it }
         }
     }
 
@@ -144,25 +180,8 @@ class WorkspaceDetailVM(
     fun imageSource(entry: WorkspaceFileEntry, area: WorkspaceStorageArea): net.weero.measix.pilot.service.ImageSource =
         workspaceApplicationService.imageSource(id, area, entry)
 
-    fun exportFile(entry: WorkspaceFileEntry, outputStream: OutputStream) {
-        val area = state.value.area
-        viewModelScope.launch {
-            try {
-                outputStream.use { output ->
-                    workspaceApplicationService.exportFile(
-                        workspaceId = id,
-                        area = area,
-                        path = entry.path,
-                        output = output,
-                    )
-                }
-            } catch (cancelled: CancellationException) {
-                throw cancelled
-            } catch (_: Exception) {
-                _state.update { it.copy(error = WorkspaceOperation.EXPORT) }
-            }
-        }
-    }
+    suspend fun exportFile(entry: WorkspaceFileEntry, area: WorkspaceStorageArea, outputStream: OutputStream) =
+        workspaceApplicationService.exportFile(id, area, entry.path, outputStream)
 
     /**
      * 把当前区域下的文件导出到 cacheDir 的临时文件, 完成后回调 [onReady].
@@ -188,11 +207,11 @@ class WorkspaceDetailVM(
                 onReady(exported)
                 file = null
             } catch (cancelled: CancellationException) {
-                file?.delete()
+                file?.let { if (it.exists() && !it.delete()) cancelled.addSuppressed(java.io.IOException("Unable to delete partial share file: $it")) }
                 throw cancelled
-            } catch (_: Exception) {
-                file?.delete()
-                _state.update { it.copy(error = WorkspaceOperation.EXPORT) }
+            } catch (error: Exception) {
+                file?.let { if (it.exists() && !it.delete()) error.addSuppressed(java.io.IOException("Unable to delete partial share file: $it")) }
+                reportExportFailure(error)
             }
         }
     }
@@ -262,4 +281,13 @@ data class WorkspaceDetailState(
     val entries: List<WorkspaceFileEntry> = emptyList(),
     val loading: Boolean = false,
     val error: WorkspaceOperation? = null,
+    val diagnostic: String? = null,
+)
+
+data class WorkspaceExportState(
+    val request: WorkspaceExportRequest,
+    val running: Boolean,
+    val items: List<WorkspaceExportItem> = emptyList(),
+    val cleanupDiagnostic: String? = null,
+    val cancelled: Boolean = false,
 )

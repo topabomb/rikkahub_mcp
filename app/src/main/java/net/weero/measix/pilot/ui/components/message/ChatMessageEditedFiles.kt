@@ -14,6 +14,11 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Card
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.TextButton
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import net.weero.measix.pilot.ui.adaptive.AdaptiveModal
@@ -36,6 +41,9 @@ import androidx.compose.ui.unit.dp
 import androidx.core.content.FileProvider
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import net.weero.measix.pilot.utils.userVisibleDiagnostic
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
@@ -72,6 +80,12 @@ internal fun EditedFilesList(
     val workspaceApplicationService: WorkspaceApplicationService = koinInject()
 
     var selectedPath by remember { mutableStateOf<String?>(null) }
+    var pendingExport by remember { mutableStateOf<Pair<String, String>?>(null) }
+    var operationFailure by remember { mutableStateOf<Exception?>(null) }
+    fun reportFailure(error: Exception) {
+        android.util.Log.e("WorkspaceEditedFiles", "Export/share failed", error)
+        operationFailure = error
+    }
     var expanded by remember { mutableStateOf(false) }
     val visibleFiles = if (expanded) editedFiles else editedFiles.take(DEFAULT_VISIBLE_COUNT)
     val hasMore = editedFiles.size > DEFAULT_VISIBLE_COUNT
@@ -79,19 +93,24 @@ internal fun EditedFilesList(
     val exportLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.CreateDocument("*/*"),
     ) { uri ->
-        val path = selectedPath.also { selectedPath = null } ?: return@rememberLauncherForActivityResult
+        val (capturedWorkspace, path) = pendingExport.also { pendingExport = null }
+            ?: return@rememberLauncherForActivityResult
+        selectedPath = null
         if (uri == null) return@rememberLauncherForActivityResult
-        val outputStream = context.contentResolver.openOutputStream(uri) ?: return@rememberLauncherForActivityResult
         scope.launch {
             try {
                 val (area, relativePath) = resolveWorkspacePath(path)
-                outputStream.use { output ->
-                    workspaceApplicationService.exportFile(workspaceId, area, relativePath, output)
+                withContext(Dispatchers.IO) {
+                    val outputStream = context.contentResolver.openOutputStream(uri)
+                        ?: throw java.io.IOException("Document provider did not open output: $uri")
+                    outputStream.use { output ->
+                        workspaceApplicationService.exportFile(capturedWorkspace, area, relativePath, output)
+                    }
                 }
             } catch (cancelled: CancellationException) {
                 throw cancelled
-            } catch (_: Exception) {
-                // Export failures leave the message content unchanged.
+            } catch (error: Exception) {
+                reportFailure(error)
             }
         }
     }
@@ -167,6 +186,7 @@ internal fun EditedFilesList(
                 Card(
                     onClick = {
                         val p = selectedPath ?: return@Card
+                        pendingExport = workspaceId to p
                         exportLauncher.launch(p.substringAfterLast('/'))
                     },
                     shape = MaterialTheme.shapes.medium,
@@ -194,12 +214,16 @@ internal fun EditedFilesList(
                         val p = selectedPath ?: return@Card
                         selectedPath = null
                         scope.launch {
+                            var pendingFile: File? = null
                             try {
                                 val (area, relativePath) = resolveWorkspacePath(p)
-                                val dir = File(context.cacheDir, "workspace_share").apply { mkdirs() }
-                                val file = File(dir, p.substringAfterLast('/'))
-                                file.outputStream().use { output ->
-                                    workspaceApplicationService.exportFile(workspaceId, area, relativePath, output)
+                                val file = withContext(Dispatchers.IO) {
+                                    val dir = File(context.cacheDir, "workspace_share")
+                                    check(dir.isDirectory || dir.mkdirs()) { "Unable to create share directory: $dir" }
+                                    File(dir, "${java.util.UUID.randomUUID()}_${p.substringAfterLast('/')}").also { file ->
+                                        pendingFile = file
+                                        file.outputStream().use { output -> workspaceApplicationService.exportFile(workspaceId, area, relativePath, output) }
+                                    }
                                 }
                                 val uri = FileProvider.getUriForFile(
                                     context,
@@ -212,10 +236,13 @@ internal fun EditedFilesList(
                                     addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                                 }
                                 context.startActivity(Intent.createChooser(intent, null))
+                                pendingFile = null
                             } catch (cancelled: CancellationException) {
+                                pendingFile?.let { if (it.exists() && !it.delete()) cancelled.addSuppressed(java.io.IOException("Unable to delete partial share: $it")) }
                                 throw cancelled
-                            } catch (_: Exception) {
-                                // Export/share failures leave the message content unchanged.
+                            } catch (error: Exception) {
+                                pendingFile?.let { if (it.exists() && !it.delete()) error.addSuppressed(java.io.IOException("Unable to delete partial share: $it")) }
+                                reportFailure(error)
                             }
                         }
                     },
@@ -241,6 +268,16 @@ internal fun EditedFilesList(
                 }
             }
         }
+    }
+    operationFailure?.let { failure ->
+        AlertDialog(
+            onDismissRequest = { operationFailure = null },
+            title = { Text(stringResource(R.string.error_title_operation)) },
+            text = { SelectionContainer { Text(failure.userVisibleDiagnostic(), Modifier.verticalScroll(rememberScrollState())) } },
+            confirmButton = {
+                TextButton(onClick = { operationFailure = null }) { Text(stringResource(R.string.common_confirm)) }
+            },
+        )
     }
 }
 

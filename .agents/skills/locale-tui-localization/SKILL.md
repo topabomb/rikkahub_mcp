@@ -5,41 +5,35 @@ description: Use this skill when users request i18n/localization updates for And
 
 # Locale TUI Localization
 
-Use this skill for Android localization tasks that should be handled by `locale-tui`.
-
-## When to use
-
-- The user asks to add a new localized string key.
-- The user asks to translate/update `strings.xml` across multiple locales.
-- The user mentions i18n/l10n or `locale-tui`.
+Use the existing locale-tui resource owner for Android string edits and translation. User instructions about scope, offline work or skipping translation take precedence.
 
 ## Workflow
 
-1. Confirm the target module (for example `app`).
-2. Create/update strings with `locale-tui` instead of editing all locale files by hand.
-3. Prefer auto-translation unless the user asks to skip it.
-4. Verify generated changes in affected `values-*/strings.xml` files.
-5. Report the exact files changed and what was added/updated.
+1. Determine the requested module, keys and languages from the task; the configured targets are the source of available choices.
+2. For batch work, run `translate-missing --dry-run` or `retranslate --key/--regex --dry-run` first. Dry-run creates no API client and requires no key.
+3. Translate only the authorized selection. Automatic translation uses the configured glossary for each target language. Use `--skip-translate` or `set` when translation is not requested or not allowed.
+4. Check the per-language/key result and exit code. Partial failures preserve successful files and return nonzero; do not report complete success. Never print or commit credentials.
+5. Inspect selected resource changes and run appropriate resource compilation/lint. Report actual changes and any unexecuted real-service or device checks.
 
 ## Commands
 
 ```bash
-# Add a new string resource with automatic translation
-uv run --directory locale-tui src/main.py add <key> "<English Value>" [OPTIONS]
-
-# Examples
-uv run --directory locale-tui src/main.py add hello_world "Hello, World!"
-uv run --directory locale-tui src/main.py add greeting "Welcome" -m app
-uv run --directory locale-tui src/main.py add test_key "Test" --skip-translate
+uv run --directory locale-tui --python 3.12 src/main.py add greeting "Welcome" -m app
+uv run --directory locale-tui --python 3.12 src/main.py add greeting "Welcome" -m app --skip-translate
+uv run --directory locale-tui --python 3.12 src/main.py set greeting "欢迎" -m app -l values-zh
+uv run --directory locale-tui --python 3.12 src/main.py translate-missing -m app --dry-run
+uv run --directory locale-tui --python 3.12 src/main.py retranslate -m app --key greeting --dry-run
+uv run --directory locale-tui --python 3.12 --group dev pytest -q
 ```
 
-## Options
+`--lang` is repeatable for batch commands. `--key` and `--regex` form a union for retranslation and match only existing target entries; no selection or no match must never trigger an unrestricted rewrite. Positive `--batch-size`, `--concurrency` and `--retries` may override config.
 
-- `--module, -m`: Specify module name (defaults to first module in config)
-- `--skip-translate`: Add only to source language and skip translations
+## Resource and test boundaries
 
-## Constraints
-
-- Input value should be English.
-- If user explicitly requests localization, ensure all configured languages are updated.
-- Do not commit secrets or API keys.
+- `add` saves the source and translates only missing targets; existing translations require explicit `retranslate`.
+- An explicit empty value is a valid present string. `translatable=false` on source or target blocks automatic translation. Unsupported inline XML/xliff, plurals and arrays are reported and left intact.
+- Pass XML-decoded Android text (`&`, not an already encoded `&amp;`). Keep placeholders and newline semantics. The shared XML writer preserves unrelated nodes and attributes and publishes each file through staging/replace; cross-language writes are not one transaction.
+- Keep Java Formatter argument bindings: ordinary/relative placeholders retain consuming order; purely explicit numbered placeholders may reorder. `%%` and `%n` consume no argument.
+- TUI translation changes memory only. Save commits dirty entries, keeps failed drafts, and does not overwrite corrupt files. Delete is an explicit immediate action through the same writer.
+- Automatic drafts retain source text across refresh. The shared writer rechecks source text and source/target translation eligibility before publication; protection changes reject the save without discarding drafts. Explicitly edited target values become manual drafts, still subject to XML and stale-value checks. Reopen to discard obsolete generated drafts before translating a permanently changed source.
+- Tests are offline by default. Real API tests require separate explicit authorization and `--run-live`; never use real translation tests as a substitute for local XML safety tests.

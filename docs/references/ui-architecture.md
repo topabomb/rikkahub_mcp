@@ -27,6 +27,16 @@ RouteActivity (ComponentActivity)
 - `ConfigurationReference` 在 Lazy/拖动列表的 Saveable key 边界转为字符串；业务选择和命令仍用类型化引用，同一个 item 与拖动容器使用同一 key。
 - 配置目录的 Loading、Available、预期不可用和非预期失败保持可区分；失败保留可操作原因和必要诊断，取消不展示为失败。空间与资源来源有文字或本地化说明，不能只靠颜色/图标；可点击图标有 content description。
 
+### 列表动作与收藏撤销
+
+列表主动作保留页面语义；`ItemActionMenu` 只呈现次动作，删除项置底并强调，确认与业务授权仍归原页面和 owner。`longPressReorder` 只共享现有 reorder scope 的长按、触感和缩放，不管理排序事实。正文编辑区保留文本选择；搜索过滤期间禁用列表排序。
+
+语音配置卡片点击用于编辑，独立单选按钮用于选择默认项；单选按钮以配置名称提供无障碍标签，名称为空的系统语音配置使用已本地化的协议说明。标签不清除原单选角色、选中状态或执行时的准入规则。
+
+`FavoritePage` 在卡片 `settledValue` 到达删除侧后，由页面 coroutine scope 执行删除、复位和 snackbar，item effect 不等待复位。撤销失败保留同一个原域 `RestoreToken`，重试成功、用户关闭或离页后结束；异常类型、detail/cause 沿 `userVisibleDiagnostic` 显示并可选择复制，取消继续传播。列表读取异常的既有空态行为不属于此命令诊断保证。
+
+删除手势状态只在卡片 composition 内 `remember(item.id)`，不保存到 Lazy item 的 saved state；撤销复用相同收藏 ID 时从 Settled 开始，不能恢复已经删除卡片的位移。收藏数据仍只来自 FavoriteService 投影。
+
 ### 企业空间与工作台
 
 `EnterprisePage` 是接入、同步、切换、退出和本机企业重置的正式入口，只经 `EnterpriseApplicationService` 读取身份与状态。聊天顶部只显示由当前会话派生的非交互空间标记；空间切换归抽屉和设置入口。空间页区分当前身份、企业连接、最近动态、预算提醒和只读配置详情；可用值、加载、刷新、陈旧与失败不能用同一个空态表示。重置先选择保留或清空历史，再确认；执行期间展示进度和重试，不自动执行删除。个人备份入口说明仅包含个人数据。
@@ -112,6 +122,12 @@ Session owner 的进程内 `selectionRevision` 记录实际选中域/Session 的
 因此即使 StateFlow 合并快速离开再返回的中间状态，也不会恢复旧页面权限。它不属于配置 generation 或 Feed revision。
 
 新增路由必须同时补齐 `Screen` 定义、entry 注册、参数恢复和返回行为；不要在参考文档维护一份易漂移的逐项副本。
+
+`ChatPage` 持有与会话绑定、仅存于页面的 `ChatScrollIntent`，普通列表和预览共享同一状态。显式历史定位在滚动前设置 VIEW_HISTORY 并取消待完成的 append 滚动；默认打开、明确回到末端及 append 的分支/布局/IME 等待成功后设置 FOLLOW_TAIL。真实 DragInteraction.Start 进入 DRAGGING，Stop 仅将仍在拖动的意图转为 AFTER_DRAG；因 Stop 可能早于 fling，只有随后实际空闲且到底才恢复跟随。新的历史操作撤销这项资格，不用延时猜测惯性结束。
+
+`ChatListNormal` 的自动 effect 直接读取同一 State，在自动滚动设置开启且消息非空时，只在 FOLLOW_TAIL、非滚动且仍可向后时请求末端；不要求 turn 活跃，静态历史首次进入及终态后的输入区/内容布局变化也沿同一意图保持末端。空 Draft 的配置与 Starter 卡不触发自动回尾。到底不重复请求测量。内容增长与通用 isScrollInProgress 不反推用户意图，IME 补偿仍归 `ImeLazyListAutoScroller`。collector 按列表 state 和会话取消；不改变 AWAITING_USER 活跃定义，也不保存到 Settings、Room 或 Turn。
+
+列表的 `NestedScrollConnection` 只观察垂直 `UserInput`，返回零消费量。没有 DragInteraction 的无障碍/滚轮输入沿原 `readHistory` 撤销自动跟随和待完成 append 滚动；真实拖动继续使用 DRAGGING/AFTER_DRAG，惯性与 IME 不借此推导用户意图。
 
 ---
 
@@ -779,3 +795,13 @@ insets，不能重复加上键盘高度。多行、编辑态、附件及键盘�
 不自行订阅配置 Store。承载页面切换不改变播放 owner；其他 Activity 和独立 Dialog 窗口不承载此覆盖层。
 
 完整配置、执行状态、详情解析和生命周期见 [sub-assistant-architecture.md](sub-assistant-architecture.md)。
+
+### 文件编辑正文的生命周期
+
+WorkspaceFileEditorPage、SkillDetailPage 的 EditFileDialog/AddFileDialog、SkillsPage 的 AddSkillDialog 只在当前 composition 内存中保留正文，不将正文放入 rememberSaveable、SavedStateHandle 或导航参数。小路径、名称、查询和显示状态可保存；Activity 重建与进程恢复后的未保存正文不承诺恢复，文件编辑重新读取 owner 已发布内容。普通后台停留未重建 Activity 时仍保留内存正文。
+
+四个入口共用 FileEditorState/FileTextEditor。FileEditorState 持有一个 Editable，通过 Editable.Factory 与原生 FileEditText 共用；revision 只用于驱动派生投影，snapshot 用于解析和提交，不另存可写正文。FileEditText 同时禁用自身及父级 View 状态保存，避免原生 EditText 把完整正文再次塞进 Bundle；只读切换保留同一个 buffer。Workspace 使用有限全屏视口，Skill 弹层保留各自行数范围。样式由 Compose 显式传入；纯文本文件编辑保留平台 EditText 的 buffer/输入协议，不引入 AppCompat 的 emoji/content adapters，AppCompatCustomView 仅在该类精确豁免，其他 Lint 检查保持。
+
+FileEditorInputConnection 只限制 IME 查询传输，不截断文件正文。before/after 各最多 4096 字符；surrounding 前后窗口各最多 2048 字符，含选区的返回文本超过 4096 时不提供结果，selected/snapshot 同样拒绝过大结果，避免截断后伪造 offset/selection。全文 extracted text 及 MONITOR 不注册，防止后续全文推送绕过查询限制。可选光标几何更新不注册（requestCursorUpdates 返回 false），手写几何查询经传入 executor 回调 CODE_UNSUPPORTED，避免大 composing span 或覆盖全文的矩形形成巨型几何回包。输入、组合、删除和选择沿原生连接执行；复制与文件保存读取完整正文，不受 IME 窗口限额影响。
+
+Workspace 编辑以 workspaceId/area/path、Skill 编辑以 skillName 绑定 composition 与协程生命周期。读写异常保留原 cause，保存失败保留正文；busy 防止重复确认，取消和失败用 finally 收口。配置命令成功才关闭 Skills、Workspace 和快捷消息的编辑/删除窗口。快捷消息整项删除仍由原 Settings 更新同时移除 assistant.quickMessageIds，不复制引用清理逻辑。

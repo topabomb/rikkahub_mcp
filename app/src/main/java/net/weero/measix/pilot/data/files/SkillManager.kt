@@ -4,6 +4,7 @@ import android.content.Context
 import android.util.Log
 import java.io.ByteArrayOutputStream
 import java.io.File
+import java.io.IOException
 import java.nio.ByteBuffer
 import java.nio.charset.CharacterCodingException
 import java.nio.charset.CodingErrorAction
@@ -36,8 +37,9 @@ class SkillManager(
         val dir = context.filesDir.resolve(FileFolders.SKILLS)
         val rootIsSafe = recoverInterruptedBundlePublish(dir)
         if (!dir.exists() && rootIsSafe && !dir.mkdirs()) {
-            Log.e(TAG, "getSkillsDir: Failed to create skills directory")
+            throw IOException("Unable to create Skill root: $dir")
         }
+        if (!rootIsSafe || !dir.isDirectory) throw IOException("Skill root recovery is incomplete: $dir")
         return dir
     }
 
@@ -55,7 +57,7 @@ class SkillManager(
                 if (!skillFile.exists()) return@mapNotNull null
                 parseSkillFile(skillFile)
             }
-            ?: emptyList()
+            ?: throw IOException("Unable to list Skill root: $skillsDir")
     }
 
     /**
@@ -85,11 +87,7 @@ class SkillManager(
         skills
     }
 
-    fun saveSkill(name: String, content: String): SkillMetadata? {
-        return BackupSnapshotBarrier.withBlockingLock { saveSkillUnlocked(name, content) }
-    }
-
-    suspend fun importSkill(name: String, content: String): SkillMetadata? = withContext(Dispatchers.IO) {
+    suspend fun saveSkill(name: String, content: String): SkillFileSaveResult = withContext(Dispatchers.IO) {
         val job = currentCoroutineContext()[Job]
         BackupSnapshotBarrier.withLock {
             saveSkillUnlocked(name, content) { job?.ensureActive() }
@@ -100,28 +98,26 @@ class SkillManager(
         name: String,
         content: String,
         beforePublish: () -> Unit = {},
-    ): SkillMetadata? {
+    ): SkillFileSaveResult {
         val existing = findPublishedSkillDir(name)
-        val saved = if (existing == null) {
+        return if (existing == null) {
             saveSkillFileBytesAtomicallyUnlocked(
                 name,
                 mapOf("SKILL.md" to content.toByteArray()),
                 beforePublish,
             )
         } else {
-            saveSkillFileUnlocked(name, "SKILL.md", content, beforePublish) == SkillFileSaveResult.SUCCESS
+            saveSkillFileUnlocked(name, "SKILL.md", content, beforePublish)
         }
-        if (!saved) return null
-        val skillDir = findPublishedSkillDir(name) ?: return null
-        return parseSkillFile(skillDir.resolve("SKILL.md"))
     }
 
-    suspend fun deleteSkill(name: String): Boolean = withContext(Dispatchers.IO) {
+    suspend fun deleteSkill(name: String): SkillFileDeleteResult = withContext(Dispatchers.IO) {
         BackupSnapshotBarrier.withLock lock@{
         val skillsDir = getSkillsDir()
-        val skillDir = findPublishedSkillDir(name) ?: return@lock false
-        val backupDir = createTempSkillPath(skillsDir, name, "backup") ?: return@lock false
-        if (!skillDir.renameTo(backupDir)) return@lock false
+        val skillDir = findPublishedSkillDir(name) ?: return@lock SkillFileDeleteResult.NOT_FOUND
+        val backupDir = createTempSkillPath(skillsDir, name, "backup")
+            ?: throw IOException("Unable to reserve Skill deletion backup: $name")
+        if (!skillDir.renameTo(backupDir)) throw IOException("Unable to stage Skill deletion: $name")
         try {
             settingsStore.updateLocal { settings ->
                 settings.copy(
@@ -143,8 +139,9 @@ class SkillManager(
             throw error
         }
         withContext(NonCancellable) {
-            backupDir.deleteRecursively()
+            removeOwnedTree(backupDir)
         }
+        SkillFileDeleteResult.SUCCESS
         }
     }
 
@@ -184,11 +181,13 @@ class SkillManager(
             }
         }
 
-    fun saveSkillFile(skillName: String, relativePath: String, content: String): SkillFileSaveResult {
-        return BackupSnapshotBarrier.withBlockingLock {
-            saveSkillFileUnlocked(skillName, relativePath, content)
+    suspend fun saveSkillFile(skillName: String, relativePath: String, content: String): SkillFileSaveResult =
+        withContext(Dispatchers.IO) {
+            val job = currentCoroutineContext()[Job]
+            BackupSnapshotBarrier.withLock {
+                saveSkillFileUnlocked(skillName, relativePath, content) { job?.ensureActive() }
+            }
         }
-    }
 
     private fun saveSkillFileUnlocked(
         skillName: String,
@@ -203,17 +202,14 @@ class SkillManager(
                 ?: return@mutateSkillTree SkillFileSaveResult.INVALID_PATH
             val parent = target.parentFile
             if (parent != null && !parent.isDirectory && !parent.mkdirs()) {
-                return@mutateSkillTree SkillFileSaveResult.IO_FAILURE
+                throw IOException("Unable to modify staged Skill file: ${target.path}")
             }
             target.writeText(content)
             null
         }
     }
 
-    fun saveSkillFileBytesAtomically(skillName: String, files: Map<String, ByteArray>): Boolean =
-        BackupSnapshotBarrier.withBlockingLock { saveSkillFileBytesAtomicallyUnlocked(skillName, files) }
-
-    suspend fun importSkillFileBytesAtomically(skillName: String, files: Map<String, ByteArray>): Boolean =
+    suspend fun saveSkillFileBytesAtomically(skillName: String, files: Map<String, ByteArray>): SkillFileSaveResult =
         withContext(Dispatchers.IO) {
             val job = currentCoroutineContext()[Job]
             BackupSnapshotBarrier.withLock {
@@ -241,27 +237,28 @@ class SkillManager(
         val bundleFiles = entries.asSequence().flatMap { it.files.values.asSequence() }.asIterable()
         if (!isWithinFilePayloadLimits(bundleFiles)) return SkillBundleImportResult.INVALID_BUNDLE
         val skillsDir = getSkillsDir()
-        if (!skillsDir.isDirectory) return SkillBundleImportResult.IO_FAILURE
+        if (!skillsDir.isDirectory) throw IOException("Skill root is unavailable: $skillsDir")
         recoverInterruptedSkillPublishes(skillsDir)
-        val skillsParent = skillsDir.parentFile ?: return SkillBundleImportResult.IO_FAILURE
+        val skillsParent = skillsDir.parentFile ?: throw IOException("Skill root has no parent: $skillsDir")
         val stagingRoot = createBundleTempDir(skillsParent, "staging")
-            ?: return SkillBundleImportResult.IO_FAILURE
+            ?: throw IOException("Unable to create Skill bundle staging directory")
+        var failure: Throwable? = null
         try {
-            if (!copySkillTree(skillsDir, stagingRoot)) return SkillBundleImportResult.IO_FAILURE
+            if (!copySkillTree(skillsDir, stagingRoot)) return SkillBundleImportResult.INVALID_BUNDLE
             for (entry in entries) {
                 val existing = findPublishedSkillDirIn(stagingRoot, entry.name)
                 val target = existing ?: SkillPaths.resolveSkillDir(stagingRoot, entry.name)
                     ?: return SkillBundleImportResult.INVALID_BUNDLE
                 if (existing != null && !existing.deleteRecursively()) {
-                    return SkillBundleImportResult.IO_FAILURE
+                    throw IOException("Unable to modify Skill bundle staging tree")
                 }
-                if (target.exists() || !target.mkdirs()) return SkillBundleImportResult.IO_FAILURE
+                if (target.exists() || !target.mkdirs()) throw IOException("Unable to modify Skill bundle staging tree")
                 for ((relativePath, content) in entry.files) {
                     val file = SkillPaths.resolveSkillFile(target, relativePath)
                         ?: return SkillBundleImportResult.INVALID_BUNDLE
                     val parent = file.parentFile
                     if (parent != null && !parent.isDirectory && !parent.mkdirs()) {
-                        return SkillBundleImportResult.IO_FAILURE
+                        throw IOException("Unable to modify Skill bundle staging tree")
                     }
                     file.writeBytes(content)
                 }
@@ -270,18 +267,17 @@ class SkillManager(
                 }
             }
             beforePublish()
-            return if (publishStagedSkillsRoot(skillsDir, stagingRoot)) {
-                SkillBundleImportResult.SUCCESS
-            } else {
-                SkillBundleImportResult.IO_FAILURE
-            }
+            publishStagedSkillsRoot(skillsDir, stagingRoot)
+            return SkillBundleImportResult.SUCCESS
         } catch (cancelled: CancellationException) {
+            failure = cancelled
             throw cancelled
         } catch (error: Exception) {
             Log.w(TAG, "importSkillBundle: Failed to publish bundle", error)
-            return SkillBundleImportResult.IO_FAILURE
+            failure = error
+            throw error
         } finally {
-            if (stagingRoot.exists()) stagingRoot.deleteRecursively()
+            removeOwnedTree(stagingRoot, failure)
         }
     }
 
@@ -289,39 +285,40 @@ class SkillManager(
         skillName: String,
         files: Map<String, ByteArray>,
         beforePublish: () -> Unit = {},
-    ): Boolean {
-        if (!isWithinFilePayloadLimits(files.values)) return false
-        val targetDir = findPublishedSkillDir(skillName) ?: resolveSkillTargetDir(skillName) ?: return false
+    ): SkillFileSaveResult {
+        if (!isWithinFilePayloadLimits(files.values)) return SkillFileSaveResult.INVALID_SKILL
+        val targetDir = findPublishedSkillDir(skillName) ?: resolveSkillTargetDir(skillName) ?: return SkillFileSaveResult.INVALID_PATH
         return mutateSkillTree(skillName, targetDir, copyPublished = false, beforePublish) { stagingDir ->
             for ((relativePath, content) in files) {
                 val target = SkillPaths.resolveSkillFile(stagingDir, relativePath)
                     ?: return@mutateSkillTree SkillFileSaveResult.INVALID_PATH
                 val parent = target.parentFile
                 if (parent != null && !parent.isDirectory && !parent.mkdirs()) {
-                    return@mutateSkillTree SkillFileSaveResult.IO_FAILURE
+                    throw IOException("Unable to modify staged Skill file: ${target.path}")
                 }
                 target.writeBytes(content)
             }
             null
-        } == SkillFileSaveResult.SUCCESS
+        }
     }
 
-    fun deleteSkillFile(skillName: String, relativePath: String): SkillFileDeleteResult {
-        return BackupSnapshotBarrier.withBlockingLock {
+    suspend fun deleteSkillFile(skillName: String, relativePath: String): SkillFileDeleteResult = withContext(Dispatchers.IO) {
+        val job = currentCoroutineContext()[Job]
+        BackupSnapshotBarrier.withLock {
             if (relativePath.replace('\\', '/').equals("SKILL.md", ignoreCase = true)) {
-                return@withBlockingLock SkillFileDeleteResult.PROTECTED_SKILL_FILE
+                return@withLock SkillFileDeleteResult.PROTECTED_SKILL_FILE
             }
             val targetDir = findPublishedSkillDir(skillName)
-                ?: return@withBlockingLock SkillFileDeleteResult.NOT_FOUND
+                ?: return@withLock SkillFileDeleteResult.NOT_FOUND
             when (
-                mutateSkillTree(skillName, targetDir, copyPublished = true) { stagingDir ->
+                mutateSkillTree(skillName, targetDir, copyPublished = true, beforePublish = { job?.ensureActive() }) { stagingDir ->
                     val target = SkillPaths.resolveSkillFile(stagingDir, relativePath)
                         ?: return@mutateSkillTree SkillFileSaveResult.INVALID_PATH
                     if (!target.isFile) {
                         return@mutateSkillTree SkillFileSaveResult.NOT_FOUND
                     }
                     if (!target.delete()) {
-                        return@mutateSkillTree SkillFileSaveResult.IO_FAILURE
+                        throw IOException("Unable to modify staged Skill file: ${target.path}")
                     }
                     null
                 }
@@ -331,7 +328,6 @@ class SkillManager(
                 SkillFileSaveResult.INVALID_PATH -> SkillFileDeleteResult.INVALID_PATH
                 SkillFileSaveResult.INVALID_SKILL, SkillFileSaveResult.NAME_MISMATCH ->
                     SkillFileDeleteResult.INVALID_SKILL
-                else -> SkillFileDeleteResult.IO_FAILURE
             }
         }
     }
@@ -349,19 +345,18 @@ class SkillManager(
     ): SkillFileSaveResult {
         val skillsDir = getSkillsDir()
         val stagingDir = createTempSkillDir(skillsDir, skillName, "staging")
-            ?: return SkillFileSaveResult.IO_FAILURE
+            ?: throw IOException("Unable to create Skill staging directory: $skillName")
+        var failure: Throwable? = null
         return try {
             if (copyPublished && !copySkillTree(targetDir, stagingDir)) {
-                return SkillFileSaveResult.IO_FAILURE
+                return SkillFileSaveResult.INVALID_PATH
             }
             mutate(stagingDir) ?: validateAndPublish(stagingDir, targetDir, skillsDir, skillName, beforePublish)
-        } catch (cancelled: CancellationException) {
-            throw cancelled
-        } catch (error: Exception) {
-            Log.w(TAG, "mutateSkillTree: Failed to update $skillName", error)
-            return SkillFileSaveResult.IO_FAILURE
+        } catch (error: Throwable) {
+            failure = error
+            throw error
         } finally {
-            if (stagingDir.exists()) stagingDir.deleteRecursively()
+            removeOwnedTree(stagingDir, failure)
         }
     }
 
@@ -375,11 +370,8 @@ class SkillManager(
         val validation = validateStagedSkill(stagingDir, skillName)
         if (validation != SkillFileSaveResult.SUCCESS) return validation
         beforePublish()
-        return if (publishStagedSkill(targetDir, stagingDir, skillsDir, skillName)) {
-            SkillFileSaveResult.SUCCESS
-        } else {
-            SkillFileSaveResult.IO_FAILURE
-        }
+        publishStagedSkill(targetDir, stagingDir, skillsDir, skillName)
+        return SkillFileSaveResult.SUCCESS
     }
 
     private fun resolveSkillTargetDir(skillName: String): File? {
@@ -489,7 +481,7 @@ class SkillManager(
     }
 
     private fun buildSkillTree(root: File, directory: File): List<SkillFileNode> {
-        val items = directory.listFiles()?.toList().orEmpty()
+        val items = directory.listFiles()?.toList() ?: throw IOException("Unable to list Skill directory: $directory")
         val files = items
             .filter(File::isFile)
             .sortedWith(compareBy({ it.name != "SKILL.md" }, File::getName))
@@ -515,30 +507,32 @@ class SkillManager(
         return directories + files
     }
 
-    private fun copySkillTree(source: File, destination: File): Boolean = runCatching {
-        source.walkTopDown().forEach { current ->
-            if (Files.isSymbolicLink(current.toPath())) return@runCatching false
-            if (current == source) return@forEach
-            val relativePath = current.relativeTo(source).path.replace(File.separatorChar, '/')
-            val target = SkillPaths.resolveSkillFile(destination, relativePath) ?: return@runCatching false
-            if (current.isDirectory) {
-                if (!target.isDirectory && !target.mkdirs()) return@runCatching false
-            } else if (current.isFile) {
-                val parent = target.parentFile
-                if (parent != null && !parent.isDirectory && !parent.mkdirs()) return@runCatching false
-                current.copyTo(target, overwrite = false)
+    private fun copySkillTree(source: File, destination: File): Boolean {
+        source.walkTopDown().onFail { file, error -> throw IOException("Unable to list Skill directory: $file", error) }
+            .forEach { current ->
+                if (Files.isSymbolicLink(current.toPath())) return false
+                if (current == source) return@forEach
+                val relativePath = current.relativeTo(source).path.replace(File.separatorChar, '/')
+                val target = SkillPaths.resolveSkillFile(destination, relativePath) ?: return false
+                if (current.isDirectory) {
+                    if (!target.isDirectory && !target.mkdirs()) throw IOException("Unable to create Skill directory: $target")
+                } else if (current.isFile) {
+                    current.copyTo(target, overwrite = false)
+                } else {
+                    throw IOException("Unsupported Skill filesystem entry: $current")
+                }
             }
-        }
-        true
-    }.getOrElse {
-        Log.w(TAG, "copySkillTree: Failed to stage ${source.name}", it)
-        false
+        return true
     }
 
     private fun validateStagedSkill(stagingDir: File, skillName: String): SkillFileSaveResult {
         val skillFile = stagingDir.resolve("SKILL.md")
-        val content = (skillFile.readUtf8Limited() as? SkillTextRead.Success)?.content
-            ?: return SkillFileSaveResult.INVALID_SKILL
+        if (!skillFile.isFile) return SkillFileSaveResult.INVALID_SKILL
+        val content = when (val read = skillFile.readUtf8Limited()) {
+            is SkillTextRead.Success -> read.content
+            is SkillTextRead.ReadFailure -> throw read.cause
+            else -> return SkillFileSaveResult.INVALID_SKILL
+        }
         return when (val parsed = SkillFrontmatterParser.parseDocument(content)) {
             is SkillParseResult.Success -> {
                 if (parsed.document.frontmatter.name == skillName) {
@@ -553,46 +547,43 @@ class SkillManager(
         }
     }
 
-    private fun publishStagedSkill(
-        targetDir: File,
-        stagingDir: File,
-        skillsDir: File,
-        skillName: String,
-    ): Boolean {
-        var backupDir: File? = null
-        if (targetDir.exists()) {
-            backupDir = createTempSkillPath(skillsDir, skillName, "backup") ?: return false
-            if (!targetDir.renameTo(backupDir)) return false
-        }
-        if (!stagingDir.renameTo(targetDir)) {
-            if (backupDir != null && !targetDir.exists() && !backupDir.renameTo(targetDir)) {
-                Log.e(TAG, "publishStagedSkill: Failed to restore $skillName after publish failure")
-            }
-            return false
-        }
-        if (backupDir?.deleteRecursively() == false) {
-            Log.w(TAG, "publishStagedSkill: Published $skillName but failed to remove its backup")
-        }
-        return true
+    private fun publishStagedSkill(targetDir: File, stagingDir: File, skillsDir: File, skillName: String) {
+        val backup = if (targetDir.exists()) {
+            createTempSkillPath(skillsDir, skillName, "backup")
+                ?: throw IOException("Unable to reserve Skill backup: $skillName")
+        } else null
+        publishTree(targetDir, stagingDir, backup)
     }
 
-    private fun publishStagedSkillsRoot(skillsDir: File, stagingRoot: File): Boolean {
-        val parent = skillsDir.parentFile ?: return false
-        val backupRoot = parent.resolve(".${FileFolders.SKILLS}.bundle.backup.0.tmp")
-        if (backupRoot.exists() || !skillsDir.renameTo(backupRoot)) return false
-        if (!stagingRoot.renameTo(skillsDir)) {
-            if (!skillsDir.exists() && !backupRoot.renameTo(skillsDir)) {
-                Log.e(TAG, "Failed to restore Skill root after bundle publish failure")
+    private fun publishStagedSkillsRoot(skillsDir: File, stagingRoot: File) {
+        val parent = skillsDir.parentFile ?: throw IOException("Skill root has no parent")
+        publishTree(skillsDir, stagingRoot, parent.resolve(".${FileFolders.SKILLS}.bundle.backup.0.tmp"))
+    }
+
+    private fun publishTree(target: File, staging: File, backup: File?) {
+        if (backup != null && (backup.exists() || !target.renameTo(backup))) {
+            throw IOException("Unable to stage Skill backup: $target")
+        }
+        if (!staging.renameTo(target)) {
+            val error = IOException("Unable to publish staged Skill tree: $target")
+            if (backup != null && !target.exists() && !backup.renameTo(target)) {
+                error.addSuppressed(IOException("Unable to restore Skill backup: $backup"))
             }
-            return false
+            throw error
         }
-        if (!backupRoot.deleteRecursively()) {
-            Log.w(TAG, "Published Skill bundle but failed to remove its backup")
+        if (backup != null) removeOwnedTree(backup)
+    }
+
+    private fun removeOwnedTree(file: File, failure: Throwable? = null) {
+        try {
+            if (file.exists() && !file.deleteRecursively()) throw IOException("Unable to remove owned Skill temporary directory: $file")
+        } catch (cleanup: Exception) {
+            if (failure != null) failure.addSuppressed(cleanup) else throw cleanup
         }
-        return true
     }
 
     private fun parseSkillFile(skillFile: File): SkillMetadata? {
+        if (!skillFile.exists()) return null
         return try {
             val content = when (val read = skillFile.readUtf8Limited()) {
                 is SkillTextRead.Success -> read.content
@@ -604,7 +595,7 @@ class SkillManager(
                     Log.w(TAG, "parseSkillFile: SKILL.md exceeds the byte limit")
                     return null
                 }
-                is SkillTextRead.ReadFailure -> return null
+                is SkillTextRead.ReadFailure -> throw read.cause
             }
             when (val result = SkillFrontmatterParser.parseDocument(content)) {
                 is SkillParseResult.Success -> SkillMetadata(
@@ -623,7 +614,7 @@ class SkillManager(
             }
         } catch (error: Exception) {
             Log.w(TAG, "parseSkillFile: Failed to read ${skillFile.absolutePath}", error)
-            null
+            throw error
         }
     }
 
@@ -650,6 +641,8 @@ class SkillManager(
             SkillTextRead.Success(decoder.decode(ByteBuffer.wrap(bytes)).toString())
         } catch (_: CharacterCodingException) {
             SkillTextRead.InvalidEncoding
+        } catch (cancelled: CancellationException) {
+            throw cancelled
         } catch (error: Exception) {
             Log.w(TAG, "Failed to read bounded Skill text", error)
             SkillTextRead.ReadFailure(error)
@@ -699,7 +692,6 @@ enum class SkillBundleImportResult {
     SUCCESS,
     DUPLICATE_NAME,
     INVALID_BUNDLE,
-    IO_FAILURE,
 }
 
 sealed class SkillFileNode {
@@ -717,7 +709,6 @@ enum class SkillFileSaveResult {
     INVALID_PATH,
     INVALID_SKILL,
     NAME_MISMATCH,
-    IO_FAILURE,
 }
 
 enum class SkillFileDeleteResult {
@@ -726,7 +717,6 @@ enum class SkillFileDeleteResult {
     INVALID_PATH,
     PROTECTED_SKILL_FILE,
     INVALID_SKILL,
-    IO_FAILURE,
 }
 
 sealed interface SkillContentReadResult {

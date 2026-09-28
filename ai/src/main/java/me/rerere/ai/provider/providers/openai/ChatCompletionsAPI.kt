@@ -358,8 +358,12 @@ class ChatCompletionsAPI(
                     OpenAIEndpointVendor.DASHSCOPE -> {
                         // 阿里云百炼
                         // https://bailian.console.aliyun.com/console?tab=doc#/doc/?type=model&url=https%3A%2F%2Fhelp.aliyun.com%2Fdocument_detail%2F2870973.html&renderType=iframe
-                        put("enable_thinking", level.isEnabled)
-                        if (level != ReasoningLevel.AUTO) put("thinking_budget", level.budgetTokens)
+                        if (usesDashScopeQwen38Effort(params.model.modelId)) {
+                            mapDashScopeQwen38Effort(level)?.let { put("reasoning_effort", it) }
+                        } else {
+                            put("enable_thinking", level.isEnabled)
+                            if (level != ReasoningLevel.AUTO) put("thinking_budget", level.budgetTokens)
+                        }
                     }
 
                     OpenAIEndpointVendor.VOLC_ARK -> {
@@ -504,7 +508,15 @@ class ChatCompletionsAPI(
         }.mergeCustomBody(
             params.customBody,
             CHAT_COMPLETIONS_OWNERSHIP,
-        )
+        ).also { body ->
+            if (endpointVendor == OpenAIEndpointVendor.DASHSCOPE &&
+                usesDashScopeQwen38Effort(params.model.modelId)
+            ) {
+                require("reasoning_effort" !in body || "thinking_budget" !in body) {
+                    "dashscope_reasoning_parameter_conflict: reasoning_effort and thinking_budget cannot be combined; remove one custom body field"
+                }
+            }
+        }
     }
 
     private fun isModelAllowTemperature(
@@ -603,7 +615,6 @@ class ChatCompletionsAPI(
                     group.tools.forEach { tool ->
                         add(buildJsonObject {
                             put("role", "tool")
-                            put("name", tool.toolName)
                             put("tool_call_id", tool.providerCallId)
                             put("content", tool.toToolResultContent(mediaCapabilities))
                         })

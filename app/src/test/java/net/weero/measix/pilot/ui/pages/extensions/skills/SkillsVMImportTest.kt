@@ -22,6 +22,7 @@ import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.joinAll
+import net.weero.measix.pilot.data.files.SkillFileSaveResult
 import net.weero.measix.pilot.data.files.SkillManager
 import net.weero.measix.pilot.data.files.SkillBundleImportResult
 import net.weero.measix.pilot.data.files.SkillMetadata
@@ -43,18 +44,38 @@ class SkillsVMImportTest {
     fun tearDown() = Dispatchers.resetMain()
 
     @Test
+    fun `GitHub failure retains original cause and retry can publish`() = runTest(dispatcher) {
+        val manager = mockk<SkillManager>()
+        every { manager.listSkills() } returns emptyList()
+        val source = mockk<SkillGitHubSource>()
+        val failure = java.io.IOException("transport detail", IllegalStateException("original cause"))
+        coEvery { source.listFiles("owner", "repo", "HEAD", "") } throws failure andThen listOf(SkillGitHubFile("SKILL.md", "skill-url"))
+        coEvery { source.downloadBytes("skill-url") } returns "---\nname: retry\ndescription: valid\n---\nbody".toByteArray()
+        coEvery { manager.saveSkillFileBytesAtomically("retry", any()) } returns SkillFileSaveResult.SUCCESS
+        val vm = SkillsVM(manager, dispatcher, source)
+        val first = CompletableDeferred<SkillImportOutcome>()
+        vm.importSkillFromGitHub("https://github.com/owner/repo", first::complete)
+        val rejected = first.await() as SkillImportOutcome.Failure
+        org.junit.Assert.assertSame(failure, rejected.cause)
+        assertEquals(SkillImportFailure.UNKNOWN, rejected.reason)
+        val retry = CompletableDeferred<SkillImportOutcome>()
+        vm.importSkillFromGitHub("https://github.com/owner/repo", retry::complete)
+        assertEquals(SkillImportOutcome.Success("retry"), retry.await())
+    }
+
+    @Test
     fun `markdown import uses typed name and the single-skill atomic owner`() = runTest(dispatcher) {
         val content = "---\nname: markdown-skill\ndescription: typed\n---\nbody"
         val manager = mockk<SkillManager>()
         every { manager.listSkills() } returns emptyList()
-        coEvery { manager.importSkill("markdown-skill", content) } returns metadata("markdown-skill")
+        coEvery { manager.saveSkill("markdown-skill", content) } returns SkillFileSaveResult.SUCCESS
         val (context, uri) = fileInput("SKILL.md", content.toByteArray())
         val result = CompletableDeferred<SkillImportOutcome>()
 
         SkillsVM(manager, dispatcher).importSkillFromFile(context, uri, result::complete)
 
         assertEquals(SkillImportOutcome.Success("markdown-skill"), withTimeout(5_000) { result.await() })
-        coVerify(exactly = 1) { manager.importSkill("markdown-skill", content) }
+        coVerify(exactly = 1) { manager.saveSkill("markdown-skill", content) }
     }
 
     @Test
@@ -100,8 +121,8 @@ class SkillsVMImportTest {
             SkillImportOutcome.Failure(SkillImportFailure.INVALID_SKILL),
             withTimeout(5_000) { result.await() },
         )
-        coVerify(exactly = 0) { manager.importSkill(any(), any()) }
-        coVerify(exactly = 0) { manager.importSkillFileBytesAtomically(any(), any()) }
+        coVerify(exactly = 0) { manager.saveSkill(any(), any()) }
+        coVerify(exactly = 0) { manager.saveSkillFileBytesAtomically(any(), any()) }
         coVerify(exactly = 0) { manager.importSkillBundleAtomically(any()) }
     }
 
@@ -138,7 +159,7 @@ class SkillsVMImportTest {
             SkillImportOutcome.Failure(SkillImportFailure.RESOURCE_LIMIT),
             withTimeout(5_000) { result.await() },
         )
-        coVerify(exactly = 0) { manager.importSkill(any(), any()) }
+        coVerify(exactly = 0) { manager.saveSkill(any(), any()) }
         coVerify(exactly = 0) { manager.importSkillBundleAtomically(any()) }
     }
 
@@ -188,9 +209,9 @@ class SkillsVMImportTest {
         val source = mockk<SkillGitHubSource>()
         every { manager.listSkills() } returns emptyList()
         lateinit var published: Map<String, ByteArray>
-        coEvery { manager.importSkillFileBytesAtomically("github-skill", any()) } coAnswers {
+        coEvery { manager.saveSkillFileBytesAtomically("github-skill", any()) } coAnswers {
             published = secondArg()
-            true
+            SkillFileSaveResult.SUCCESS
         }
         coEvery { source.listFiles("owner", "repo", "main", "skills/example") } returns listOf(
             SkillGitHubFile("SKILL.md", "skill-url"),
@@ -208,7 +229,7 @@ class SkillsVMImportTest {
         )
 
         assertEquals(SkillImportOutcome.Success("github-skill"), withTimeout(5_000) { result.await() })
-        coVerify(exactly = 1) { manager.importSkillFileBytesAtomically("github-skill", any()) }
+        coVerify(exactly = 1) { manager.saveSkillFileBytesAtomically("github-skill", any()) }
         assertArrayEquals(skillDocument, published.getValue("SKILL.md"))
         assertArrayEquals(binaryReference, published.getValue("references/info.md"))
     }
@@ -240,8 +261,8 @@ class SkillsVMImportTest {
         releaseSecondDownload.complete(Unit)
         joinAll(job)
 
-        coVerify(exactly = 0) { manager.importSkillFileBytesAtomically(any(), any()) }
-        coVerify(exactly = 0) { manager.importSkill(any(), any()) }
+        coVerify(exactly = 0) { manager.saveSkillFileBytesAtomically(any(), any()) }
+        coVerify(exactly = 0) { manager.saveSkill(any(), any()) }
     }
 
     private fun fileInput(fileName: String, bytes: ByteArray): Pair<Context, Uri> {

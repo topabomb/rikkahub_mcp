@@ -63,4 +63,38 @@ class GatewayToolCardAndroidTest {
         compose.onAllNodesWithText("secret_should_not_render", substring = true).assertCountEquals(0)
         compose.onAllNodesWithText("untrusted_argument_name", substring = true).assertCountEquals(0)
     }
+
+    @Test
+    fun pendingTypedApprovalRemainsActionableWhenOlderCompletedStepsAreCollapsed() {
+        val pending = UIMessagePart.Tool(localCallId = Uuid.random(), stepId = Uuid.random(),
+            providerCallId = "pending", toolName = "approval_probe", input = "{}")
+        val completed = (1..3).map { index -> UIMessagePart.Tool(
+            localCallId = Uuid.random(), stepId = pending.stepId, providerCallId = "done-$index",
+            toolName = "done_$index", input = "{}", output = listOf(UIMessagePart.Text("ok")), resultStatus = ToolResultStatus.COMPLETED,
+        ) }
+        val locator = ToolCallLocator(Uuid.random(), pending.stepId, pending.localCallId)
+        var submitted: ToolCallLocator? = null
+        var approved = false
+        compose.setContent {
+            MaterialTheme {
+                CompositionLocalProvider(LocalAdaptiveLayoutInfo provides rememberAdaptiveLayoutInfo(), LocalSettings provides Settings.dummy()) {
+                    ChainOfThought(steps = listOf(pending) + completed, collapsedVisibleCount = 1,
+                        keepVisibleWhenCollapsed = { it.localCallId == pending.localCallId }) { tool ->
+                        ChatMessageToolStep(tool, if (tool == pending) locator else locator.copy(localCallId = tool.localCallId),
+                            if (tool == pending) ToolLivePhase.AWAITING_APPROVAL else ToolLivePhase.COMPLETED,
+                            onToolDecision = { target, decision ->
+                                submitted = target
+                                approved = decision == net.weero.measix.pilot.service.runtime.ToolInteractionDecision.Approve
+                                true
+                            })
+                    }
+                }
+            }
+        }
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        compose.onNodeWithText(context.getString(R.string.chain_of_thought_show_more_steps, 2)).assertIsDisplayed()
+        compose.onNodeWithContentDescription(context.getString(R.string.chat_message_tool_approve)).assertIsDisplayed().performClick()
+        compose.runOnIdle { org.junit.Assert.assertEquals(locator, submitted); org.junit.Assert.assertTrue(approved) }
+    }
+
 }

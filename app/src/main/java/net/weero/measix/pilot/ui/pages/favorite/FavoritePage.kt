@@ -21,13 +21,15 @@ import androidx.compose.material3.LargeFlexibleTopAppBar
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.Snackbar
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.SwipeToDismissBox
 import androidx.compose.material3.SwipeToDismissBoxValue
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBarDefaults
-import androidx.compose.material3.rememberSwipeToDismissBoxState
+import androidx.compose.material3.SwipeToDismissBoxDefaults
+import androidx.compose.material3.SwipeToDismissBoxState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
@@ -35,6 +37,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -45,6 +48,7 @@ import net.weero.measix.pilot.ui.components.nav.BackButton
 import net.weero.measix.pilot.ui.context.LocalNavController
 import net.weero.measix.pilot.ui.theme.CustomColors
 import net.weero.measix.pilot.service.NodeFavoriteItem
+import net.weero.measix.pilot.utils.userVisibleDiagnostic
 import net.weero.measix.pilot.utils.toLocalDateTime
 import org.koin.androidx.compose.koinViewModel
 import java.time.Instant
@@ -58,7 +62,7 @@ fun FavoritePage(vm: FavoriteVM = koinViewModel()) {
     val favorites = vm.nodeFavorites.collectAsStateWithLifecycle().value
     val favoriteRemovedText = stringResource(R.string.favorite_page_removed)
     val undoText = stringResource(R.string.history_page_undo)
-    val operationFailed = stringResource(R.string.error_title_operation)
+    val retryText = stringResource(R.string.application_recovery_retry)
 
     Scaffold(
         topBar = {
@@ -74,7 +78,9 @@ fun FavoritePage(vm: FavoriteVM = koinViewModel()) {
             )
         },
         snackbarHost = {
-            SnackbarHost(hostState = snackbarHostState)
+            SnackbarHost(hostState = snackbarHostState) { data ->
+                SelectionContainer { Snackbar(data) }
+            }
         },
         modifier = Modifier.nestedScroll(scrollBehavior.nestedScrollConnection),
         containerColor = CustomColors.topBarColors.containerColor,
@@ -111,25 +117,45 @@ fun FavoritePage(vm: FavoriteVM = koinViewModel()) {
                                 throw cancelled
                             } catch (error: Exception) {
                                 android.util.Log.e("FavoritePage", "Favorite navigation failed", error)
-                                snackbarHostState.showSnackbar(operationFailed)
+                                snackbarHostState.showSnackbar(error.userVisibleDiagnostic(), withDismissAction = true)
                             }
                         }
                     },
-                    onDelete = {
+                    onDelete = { reset ->
+                        // The page owns removal and undo; item disposal or reset cannot cancel either.
                         scope.launch {
-                            try {
-                                val restoreToken = vm.removeForUndo(item) ?: return@launch
-                                val result = snackbarHostState.showSnackbar(
-                                    message = favoriteRemovedText,
-                                    actionLabel = undoText,
-                                    withDismissAction = true,
-                                )
-                                if (result == SnackbarResult.ActionPerformed) vm.restoreFavorite(restoreToken)
+                            val restoreToken = try {
+                                try {
+                                    vm.removeForUndo(item)
+                                } finally {
+                                    reset()
+                                }
                             } catch (cancelled: kotlinx.coroutines.CancellationException) {
                                 throw cancelled
                             } catch (error: Exception) {
-                                android.util.Log.e("FavoritePage", "Favorite command failed", error)
-                                snackbarHostState.showSnackbar(operationFailed)
+                                android.util.Log.e("FavoritePage", "Favorite removal failed", error)
+                                snackbarHostState.showSnackbar(error.userVisibleDiagnostic(), withDismissAction = true)
+                                return@launch
+                            } ?: return@launch
+                            if (snackbarHostState.showSnackbar(
+                                message = favoriteRemovedText,
+                                actionLabel = undoText,
+                                withDismissAction = true,
+                            ) != SnackbarResult.ActionPerformed) return@launch
+                            while (true) {
+                                try {
+                                    vm.restoreFavorite(restoreToken)
+                                    break
+                                } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                                    throw cancelled
+                                } catch (error: Exception) {
+                                    android.util.Log.e("FavoritePage", "Favorite restore failed", error)
+                                    if (snackbarHostState.showSnackbar(
+                                        message = error.userVisibleDiagnostic(),
+                                        actionLabel = retryText,
+                                        withDismissAction = true,
+                                    ) != SnackbarResult.ActionPerformed) break
+                                }
                             }
                         }
                     },
@@ -147,17 +173,19 @@ fun FavoritePage(vm: FavoriteVM = koinViewModel()) {
 private fun SwipeableFavoriteCard(
     item: NodeFavoriteItem,
     onClick: () -> Unit,
-    onDelete: () -> Unit,
+    onDelete: (suspend () -> Unit) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val dismissState = rememberSwipeToDismissBoxState(
-        initialValue = SwipeToDismissBoxValue.Settled,
-    )
+    val positionalThreshold = SwipeToDismissBoxDefaults.positionalThreshold
+    // Undo reuses the favorite ID, but must not restore the removed card's saved swipe offset.
+    val dismissState = remember(item.id) {
+        SwipeToDismissBoxState(SwipeToDismissBoxValue.Settled, positionalThreshold)
+    }
 
-    LaunchedEffect(dismissState.currentValue) {
-        when (dismissState.currentValue) {
+    LaunchedEffect(dismissState.settledValue) {
+        when (dismissState.settledValue) {
             SwipeToDismissBoxValue.EndToStart -> {
-                onDelete()
+                onDelete { dismissState.reset() }
             }
 
             else -> {}
@@ -185,7 +213,7 @@ private fun SwipeableFavoriteCard(
             }
         },
         enableDismissFromStartToEnd = false,
-        modifier = modifier,
+        modifier = modifier.testTag("favorite-${item.id}"),
     ) {
         FavoriteCard(
             item = item,

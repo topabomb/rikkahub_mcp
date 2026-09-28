@@ -383,6 +383,9 @@ internal class McpServerRuntime(
             lifecycleOperationSemaphore.withPermit {
                 withTimeout(policy.connectionOperationTimeoutMs) {
                     closeConnectionsBefore(assignedGeneration)
+                    if (requestedConfig is McpConnectionDefinition.User) {
+                        validateMcpHeaders(requestedConfig.config.commonOptions.headers)
+                    }
                     val config = refreshCredentials(requestedConfig)
                     if (!matchesDesiredDefinition(assignedGeneration, config)) {
                         requestReconcile(refreshTools = false)

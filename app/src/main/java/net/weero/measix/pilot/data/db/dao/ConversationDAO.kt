@@ -13,6 +13,9 @@ interface ConversationDAO {
     @Query("SELECT * FROM conversationentity WHERE scope = :scope AND parent_conversation_id IS NULL AND assistant_id = :assistantId ORDER BY is_pinned DESC, update_at DESC")
     fun getConversationsOfAssistant(scope: ConfigurationScope, assistantId: String): Flow<List<ConversationEntity>>
 
+    @Query("SELECT title FROM conversationentity WHERE scope = :scope AND parent_conversation_id IS NULL AND assistant_id = :assistantId")
+    suspend fun getRootConversationTitles(scope: ConfigurationScope, assistantId: String): List<String>
+
     @Query("SELECT id, assistant_id as assistantId, title, is_pinned as isPinned, create_at as createAt, update_at as updateAt, folder_id as folderId, scope FROM conversationentity WHERE scope = :scope AND parent_conversation_id IS NULL AND assistant_id = :assistantId AND folder_id = '' ORDER BY is_pinned DESC, update_at DESC")
     fun getUnfiledConversationsOfAssistantPaging(scope: ConfigurationScope, assistantId: String): PagingSource<Int, LightConversationEntity>
 

@@ -24,6 +24,123 @@ class WorkspaceApplicationServiceTest {
         temporary.newFolder(), net.weero.measix.pilot.service.ApplicationRecoveryGate().apply { ready() },
     )
 
+    @Test fun `batch export captures area and uses provider names with one close per successful item`() = runTest {
+        val repository = mockk<WorkspaceRepository>()
+        val area = me.rerere.workspace.WorkspaceStorageArea.FILES
+        coEvery { repository.statFile("id", area, any()) } coAnswers {
+            val path = thirdArg<String>()
+            me.rerere.workspace.WorkspaceFileEntry(path, path, false, 3, 1)
+        }
+        coEvery { repository.exportFile("id", area, any(), any()) } coAnswers {
+            arg<java.io.OutputStream>(3).write(byteArrayOf(1, 2, 3))
+        }
+        val destination = ExportDestination()
+        val results = mutableListOf<WorkspaceExportItem>()
+        workspaceService(repository, mockk()).exportFiles(WorkspaceExportRequest("id", area, listOf("a", "b")), destination, results::add)
+        assertEquals(listOf("a (1)", "b (1)"), results.map { (it as WorkspaceExportItem.Exported).name })
+        assertEquals(listOf(1, 1), destination.outputs.map { it.closes })
+        assertTrue(destination.deleted.isEmpty())
+        assertEquals(listOf(3, 3), destination.outputs.map { it.size() })
+    }
+
+    @Test fun `batch close failure deletes only incomplete document and preserves cleanup cause`() = runTest {
+        val repository = mockk<WorkspaceRepository>()
+        val area = me.rerere.workspace.WorkspaceStorageArea.FILES
+        coEvery { repository.statFile("id", area, any()) } coAnswers {
+            val path = thirdArg<String>()
+            me.rerere.workspace.WorkspaceFileEntry(path, path, false, 1, 1)
+        }
+        coEvery { repository.exportFile("id", area, any(), any()) } coAnswers { arg<java.io.OutputStream>(3).write(1) }
+        val destination = ExportDestination(failCloseIndex = 1, failDelete = true)
+        val results = mutableListOf<WorkspaceExportItem>()
+        workspaceService(repository, mockk()).exportFiles(WorkspaceExportRequest("id", area, listOf("ok", "bad", "next")), destination, results::add)
+        assertTrue(results[0] is WorkspaceExportItem.Exported)
+        assertTrue(results[2] is WorkspaceExportItem.Exported)
+        val failure = (results[1] as WorkspaceExportItem.Failed).cause
+        assertEquals("close failed", failure.message)
+        assertEquals("delete denied", failure.suppressed.single().message)
+        assertEquals(listOf(destination.uris[1]), destination.deleted)
+        assertEquals(listOf(1, 1, 1), destination.outputs.map { it.closes })
+    }
+
+    @Test fun `batch cancellation keeps completed document and cleans partial without starting next file`() = runTest {
+        val repository = mockk<WorkspaceRepository>()
+        val area = me.rerere.workspace.WorkspaceStorageArea.FILES
+        val copying = CompletableDeferred<Unit>()
+        coEvery { repository.statFile("id", area, any()) } coAnswers {
+            val path = thirdArg<String>()
+            me.rerere.workspace.WorkspaceFileEntry(path, path, false, 1, 1)
+        }
+        coEvery { repository.exportFile("id", area, any(), any()) } coAnswers {
+            arg<java.io.OutputStream>(3).write(1)
+            if (thirdArg<String>() == "partial") { copying.complete(Unit); kotlinx.coroutines.awaitCancellation() }
+        }
+        val destination = ExportDestination()
+        val results = mutableListOf<WorkspaceExportItem>()
+        val job = async { workspaceService(repository, mockk()).exportFiles(WorkspaceExportRequest("id", area, listOf("ok", "partial", "next")), destination, results::add) }
+        copying.await()
+        job.cancel()
+        job.join()
+        assertTrue(job.isCancelled)
+        assertEquals(1, results.size)
+        assertEquals(listOf(destination.uris[1]), destination.deleted)
+        assertEquals(listOf(1, 1), destination.outputs.map { it.closes })
+        coVerify(exactly = 0) { repository.statFile("id", area, "next") }
+    }
+
+    @Test fun `batch destination failures retain their cause and only clean a created document`() = runTest {
+        for (stage in listOf("create", "name", "open", "write")) {
+            val repository = mockk<WorkspaceRepository>()
+            val area = me.rerere.workspace.WorkspaceStorageArea.FILES
+            val failure = java.io.IOException("destination $stage refused")
+            coEvery { repository.statFile("id", area, "file") } returns
+                me.rerere.workspace.WorkspaceFileEntry("file", "file", false, 3, 1)
+            coEvery { repository.exportFile("id", area, "file", any()) } coAnswers { throw failure }
+            val output = ExportOutput(false)
+            val uri = mockk<android.net.Uri>()
+            val deleted = mutableListOf<android.net.Uri>()
+            val destination = object : WorkspaceExportDestination {
+                override fun create(name: String): android.net.Uri {
+                    if (stage == "create") throw failure
+                    return uri
+                }
+                override fun displayName(uri: android.net.Uri): String {
+                    if (stage == "name") throw failure
+                    return "provider name"
+                }
+                override fun open(uri: android.net.Uri): java.io.OutputStream {
+                    if (stage == "open") throw failure
+                    return output
+                }
+                override fun delete(uri: android.net.Uri) { deleted += uri }
+            }
+            val results = mutableListOf<WorkspaceExportItem>()
+            workspaceService(repository, mockk()).exportFiles(
+                WorkspaceExportRequest("id", area, listOf("file")), destination, results::add,
+            )
+            assertTrue(results.single() is WorkspaceExportItem.Failed)
+            val error = (results.single() as WorkspaceExportItem.Failed).cause
+            assertTrue(generateSequence<Throwable>(error) { it.cause }.any { it === failure })
+            assertEquals(if (stage == "create") emptyList() else listOf(uri), deleted)
+            assertEquals(if (stage == "write") 1 else 0, output.closes)
+        }
+    }
+
+    private class ExportDestination(private val failCloseIndex: Int = -1, private val failDelete: Boolean = false) : WorkspaceExportDestination {
+        val uris = mutableListOf<android.net.Uri>()
+        val names = mutableListOf<String>()
+        val outputs = mutableListOf<ExportOutput>()
+        val deleted = mutableListOf<android.net.Uri>()
+        override fun create(name: String): android.net.Uri = mockk<android.net.Uri>().also { uris += it; names += name }
+        override fun displayName(uri: android.net.Uri) = names[uris.indexOf(uri)] + " (1)"
+        override fun open(uri: android.net.Uri): java.io.OutputStream = ExportOutput(uris.indexOf(uri) == failCloseIndex).also { outputs += it }
+        override fun delete(uri: android.net.Uri) { deleted += uri; if (failDelete) throw java.io.IOException("delete denied") }
+    }
+    private class ExportOutput(private val fail: Boolean) : java.io.ByteArrayOutputStream() {
+        var closes = 0
+        override fun close() { closes++; if (fail) throw java.io.IOException("close failed"); super.close() }
+    }
+
     @Test fun `model tool sees typed workspace absence and shell readiness refusals`() = runTest {
         val repository = mockk<WorkspaceRepository>()
         val service = workspaceService(repository, mockk())

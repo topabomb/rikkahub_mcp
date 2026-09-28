@@ -363,4 +363,24 @@ class McpConfigTest {
         // enable should not be in the JSON
         assertTrue(!serverObj.containsKey("enable"))
     }
+
+    @Test fun `header validation preserves legal values and rejects incomplete or unsafe rows without secrets`() {
+        val legal = listOf("x-api_key!" to "  value \t ", "authorization" to "Bearer secret", "Empty" to "")
+        validateMcpHeaders(legal)
+        assertEquals("  value \t ", legal.first().second)
+        val privateValue = "credential_fixture_9a7fd2"
+        val failures = listOf("" to privateValue, "Bad Name" to privateValue, "X-Test" to "$privateValue\r\ninjected", "X-Test" to "$privateValue\u0000", "X-Test" to "$privateValue\u007f")
+        failures.forEach { header ->
+            val error = org.junit.Assert.assertThrows(McpHeaderValidationException::class.java) {
+                validateMcpHeaders(listOf("Valid" to "ok", header), serverIndex = 3)
+            }
+            assertEquals(2, error.row)
+            assertEquals(3, error.serverIndex)
+            org.junit.Assert.assertFalse(error.stackTraceToString().contains(privateValue))
+        }
+        val legacy = McpServerConfig.StreamableHTTPServer(commonOptions = McpCommonOptions(headers = listOf("" to "bad")))
+        legacy.connectionFingerprint()
+        legacy.mcpDefinitionDigest()
+        assertEquals(listOf("" to "bad"), legacy.resolvedConnectionHeaders())
+    }
 }

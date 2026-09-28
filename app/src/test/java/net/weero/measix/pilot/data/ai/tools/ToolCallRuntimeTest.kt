@@ -23,6 +23,7 @@ import me.rerere.ai.ui.ToolResultStatus
 import me.rerere.ai.ui.ToolRuntimeState
 import me.rerere.ai.ui.UIMessagePart
 import net.weero.measix.pilot.data.ai.tools.local.buildAskUserTool
+import net.weero.measix.pilot.data.ai.tools.local.buildJavascriptTool
 import net.weero.measix.pilot.service.runtime.ToolLivePhase
 import net.weero.measix.pilot.service.runtime.resolveToolLivePhase
 import org.junit.Assert.assertEquals
@@ -83,6 +84,16 @@ class ToolCallRuntimeTest {
     /** The batch as it stands after replacements (keyed by stable localCallId) are applied. */
     private fun List<UIMessagePart.Tool>.after(preparation: ToolBatchPreparation): List<UIMessagePart.Tool> =
         map { tool -> preparation.replacements[tool.localCallId] ?: tool }
+
+    @Test
+    fun `native javascript output limit commits a failed replay result`() = kotlinx.coroutines.runBlocking {
+        val input = buildJsonObject { put("code", "'x'.repeat(2*1024*1024)") }.toString()
+        val outcome = runtime.execute(prepared(buildJavascriptTool(), input), hooks())
+        assertEquals(ToolResultStatus.FAILED, outcome.resultStatus)
+        val output = Json.parseToJsonElement((outcome.output.single() as UIMessagePart.Text).text).jsonObject
+        assertEquals("failed", output.getValue("status").jsonPrimitive.content)
+        assertEquals("javascript_output_limit", output.getValue("reason").jsonPrimitive.content)
+    }
 
     @Test
     fun `unexpected preparation error becomes a bounded failed tool result`() {
@@ -520,10 +531,10 @@ class ToolCallRuntimeTest {
     }
 
     /** 通过正式 gate 构造 PreparedToolCall，避免测试绕过参数解析与批次身份规则。 */
-    private fun prepared(tool: Tool): PreparedToolCall {
+    private fun prepared(tool: Tool, input: String = "{}"): PreparedToolCall {
         val source = UIMessagePart.Tool(
             localCallId = Uuid.random(), stepId = Uuid.random(), providerCallId = "call",
-            toolName = tool.name, input = "{}",
+            toolName = tool.name, input = input,
         )
         val preparation = runtime.prepareBatch(
             messageId = Uuid.random(),

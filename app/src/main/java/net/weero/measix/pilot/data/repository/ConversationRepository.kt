@@ -92,6 +92,11 @@ class ConversationRepository(
         limit = limit,
     ).map(::conversationEntityToListRecord)
 
+    internal suspend fun getRootConversationTitles(
+        scope: ConfigurationScope,
+        assistantId: ConfigurationReference,
+    ): List<String> = conversationDAO.getRootConversationTitles(scope, assistantId.toString())
+
     fun getConversationsOfAssistant(scope: ConfigurationScope, assistantId: ConfigurationReference): Flow<List<ConversationListRecord>> {
         return conversationDAO
             .getConversationsOfAssistant(scope, assistantId.toString())

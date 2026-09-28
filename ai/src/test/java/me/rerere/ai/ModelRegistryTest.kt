@@ -288,4 +288,20 @@ class ModelRegistryTest {
         assertEquals(listOf(Modality.TEXT), ModelRegistry.MODEL_INPUT_MODALITIES.getData("deepseek-v4-flash-vision"))
         assertEquals(listOf(Modality.TEXT), ModelRegistry.MODEL_INPUT_MODALITIES.getData("deepseek-v4-flash-vision-experimental"))
     }
+
+    @Test
+    fun confirmedStep5AndMiMo26IdsHaveExactVisionCapabilities() {
+        val confirmed = listOf("step-5-preview", "mimo-v2.6-pro", "mimo-v2.6-flash", "mimo-v2.6-pro-ultraspeed")
+        confirmed.flatMap { listOf(it, it.uppercase(java.util.Locale.ROOT)) }.forEach { id ->
+            assertEquals(id, listOf(Modality.TEXT, Modality.IMAGE), ModelRegistry.MODEL_INPUT_MODALITIES.getData(id))
+            assertEquals(id, listOf(ModelAbility.TOOL, ModelAbility.REASONING), ModelRegistry.MODEL_ABILITIES.getData(id))
+        }
+        listOf(
+            "step-5", "step-50", "step-50-preview", "step-5-preview-extra", "step-5-preview-distill", "step-4.5-preview",
+            "mimo-v2.6", "mimo-v2.60", "mimo-v2.60-pro", "mimo-v2.6-unknown", "mimo-v2.6-pro-future",
+            "mimo-v2.6-pro-distill", "mimo-v2.6-flash-distill", "mimo-v2.6-pro-ultraspeed-distill",
+        ).forEach { id ->
+            assertFalse(id, Modality.IMAGE in ModelRegistry.MODEL_INPUT_MODALITIES.getData(id).orEmpty())
+        }
+    }
 }

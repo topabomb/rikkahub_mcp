@@ -29,40 +29,40 @@ class SkillDetailVM(
         loadFiles()
     }
 
+    private val _failure = MutableStateFlow<Exception?>(null)
+    val failure = _failure.asStateFlow()
+    fun dismissFailure() { _failure.value = null }
+
     fun loadFiles() {
+        val name = skillName
         viewModelScope.launch(Dispatchers.IO) {
-            _tree.value = skillManager.listSkillFiles(skillName)
-        }
-    }
-
-    fun readFile(skillFile: SkillFile, onResult: (SkillFileLoadResult) -> Unit) {
-        viewModelScope.launch(Dispatchers.IO) {
-            val result = when (val read = skillManager.readSkillContent(skillName, skillFile.relativePath)) {
-                is SkillContentReadResult.Success -> SkillFileLoadResult.Success(read.content)
-                else -> SkillFileLoadResult.Failure
+            try { reload(name) }
+            catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+            catch (error: Exception) {
+                android.util.Log.e("SkillDetailVM", "Unable to list Skill files", error)
+                _failure.value = error
             }
-            withContext(Dispatchers.Main) { onResult(result) }
         }
     }
 
-    fun saveFile(relativePath: String, content: String, onResult: (SkillFileSaveResult) -> Unit) {
-        viewModelScope.launch(Dispatchers.IO) {
-            val result = skillManager.saveSkillFile(skillName, relativePath, content)
-            if (result == SkillFileSaveResult.SUCCESS) loadFiles()
-            withContext(Dispatchers.Main) { onResult(result) }
-        }
+    private fun reload(name: String) {
+        val files = skillManager.listSkillFiles(name)
+        if (name == skillName) _tree.value = files
     }
 
-    fun deleteFile(skillFile: SkillFile, onResult: (SkillFileDeleteResult) -> Unit) {
-        viewModelScope.launch(Dispatchers.IO) {
-            val result = skillManager.deleteSkillFile(skillName, skillFile.relativePath)
-            if (result == SkillFileDeleteResult.SUCCESS) loadFiles()
-            withContext(Dispatchers.Main) { onResult(result) }
-        }
+    suspend fun readFile(name: String, skillFile: SkillFile): SkillContentReadResult = withContext(Dispatchers.IO) {
+        skillManager.readSkillContent(name, skillFile.relativePath)
     }
-}
 
-sealed interface SkillFileLoadResult {
-    data class Success(val content: String) : SkillFileLoadResult
-    data object Failure : SkillFileLoadResult
+    suspend fun saveFile(name: String, relativePath: String, content: String): SkillFileSaveResult = withContext(Dispatchers.IO) {
+        val result = skillManager.saveSkillFile(name, relativePath, content)
+        if (result == SkillFileSaveResult.SUCCESS) reload(name)
+        result
+    }
+
+    suspend fun deleteFile(name: String, skillFile: SkillFile): SkillFileDeleteResult = withContext(Dispatchers.IO) {
+        val result = skillManager.deleteSkillFile(name, skillFile.relativePath)
+        if (result == SkillFileDeleteResult.SUCCESS) reload(name)
+        result
+    }
 }

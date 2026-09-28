@@ -15,6 +15,7 @@ import me.rerere.hugeicons.stroke.Refresh03
 import me.rerere.hugeicons.stroke.DragDropVertical
 import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -82,6 +83,9 @@ import me.rerere.ai.core.MessageRole
 import me.rerere.ai.provider.Model
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
+import net.weero.measix.pilot.ui.components.ui.ItemAction
+import net.weero.measix.pilot.ui.components.ui.ItemActionMenu
+import net.weero.measix.pilot.ui.components.ui.ConfirmDialog
 import net.weero.measix.pilot.R
 import net.weero.measix.pilot.data.ai.transformers.DefaultPlaceholderProvider
 import net.weero.measix.pilot.data.ai.transformers.RequestMessageOriginTracker
@@ -571,7 +575,10 @@ internal fun AssistantPromptContent(
                     },
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    Icon(HugeIcons.Add01, null)
+                    Icon(
+                        HugeIcons.Add01,
+                        contentDescription = "${stringResource(R.string.add)}: ${stringResource(R.string.assistant_page_preset_messages)}",
+                    )
                 }
             }
         }
@@ -602,7 +609,7 @@ internal fun AssistantPromptContent(
                         onUpdate(assistant.copy(regexes = regexes))
                     },
                     verticalArrangement = Arrangement.spacedBy(16.dp),
-                ) { index, regex, isDragging ->
+                ) { _, regex, isDragging ->
                     key(regex.id) {
                         ReorderableItem(
                             modifier = Modifier.fillMaxWidth()
@@ -611,7 +618,6 @@ internal fun AssistantPromptContent(
                                 regex = regex,
                                 onUpdate = onUpdate,
                                 assistant = assistant,
-                                index = index,
                                 modifier = Modifier.scale(if (isDragging) 0.95f else 1f),
                                 dragHandleModifier = Modifier
                                     .size(48.dp)
@@ -642,7 +648,10 @@ internal fun AssistantPromptContent(
                     },
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    Icon(HugeIcons.Add01, null)
+                    Icon(
+                        HugeIcons.Add01,
+                        contentDescription = "${stringResource(R.string.add)}: ${stringResource(R.string.assistant_page_regex_title)}",
+                    )
                 }
             }
         }
@@ -654,13 +663,13 @@ private fun AssistantRegexCard(
     regex: AssistantRegex,
     onUpdate: (Assistant) -> Unit,
     assistant: Assistant,
-    index: Int,
     modifier: Modifier = Modifier,
     dragHandleModifier: Modifier = Modifier,
 ) {
     var expanded by remember {
         mutableStateOf(false)
     }
+    var showDeleteDialog by remember { mutableStateOf(false) }
     ElevatedCard(
         modifier = modifier.fillMaxWidth()
     ) {
@@ -671,6 +680,7 @@ private fun AssistantRegexCard(
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             Row(
+                modifier = Modifier.clickable { expanded = !expanded },
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Box(
@@ -695,8 +705,8 @@ private fun AssistantRegexCard(
                     onCheckedChange = { enabled ->
                         onUpdate(
                             assistant.copy(
-                                regexes = assistant.regexes.mapIndexed { i, reg ->
-                                    if (i == index) {
+                                regexes = assistant.regexes.map { reg ->
+                                    if (reg.id == regex.id) {
                                         reg.copy(enabled = enabled)
                                     } else {
                                         reg
@@ -717,6 +727,10 @@ private fun AssistantRegexCard(
                         contentDescription = null
                     )
                 }
+                ItemActionMenu(listOf(
+                    ItemAction(stringResource(R.string.delete), HugeIcons.Delete01,
+                        destructive = true, onClick = { showDeleteDialog = true }),
+                ))
             }
 
             if (expanded) {
@@ -726,8 +740,8 @@ private fun AssistantRegexCard(
                     onValueChange = { name ->
                         onUpdate(
                             assistant.copy(
-                                regexes = assistant.regexes.mapIndexed { i, reg ->
-                                    if (i == index) {
+                                regexes = assistant.regexes.map { reg ->
+                                    if (reg.id == regex.id) {
                                         reg.copy(name = name)
                                     } else {
                                         reg
@@ -745,8 +759,8 @@ private fun AssistantRegexCard(
                     onValueChange = { findRegex ->
                         onUpdate(
                             assistant.copy(
-                                regexes = assistant.regexes.mapIndexed { i, reg ->
-                                    if (i == index) {
+                                regexes = assistant.regexes.map { reg ->
+                                    if (reg.id == regex.id) {
                                         reg.copy(findRegex = findRegex.trim())
                                     } else {
                                         reg
@@ -765,8 +779,8 @@ private fun AssistantRegexCard(
                     onValueChange = { replaceString ->
                         onUpdate(
                             assistant.copy(
-                                regexes = assistant.regexes.mapIndexed { i, reg ->
-                                    if (i == index) {
+                                regexes = assistant.regexes.map { reg ->
+                                    if (reg.id == regex.id) {
                                         reg.copy(replaceString = replaceString)
                                     } else {
                                         reg
@@ -803,8 +817,8 @@ private fun AssistantRegexCard(
                                         }
                                         onUpdate(
                                             assistant.copy(
-                                                regexes = assistant.regexes.mapIndexed { i, reg ->
-                                                    if (i == index) {
+                                                regexes = assistant.regexes.map { reg ->
+                                                    if (reg.id == regex.id) {
                                                         reg.copy(affectingScope = newScopes)
                                                     } else {
                                                         reg
@@ -832,8 +846,8 @@ private fun AssistantRegexCard(
                         onCheckedChange = { visualOnly ->
                             onUpdate(
                                 assistant.copy(
-                                    regexes = assistant.regexes.mapIndexed { i, reg ->
-                                        if (i == index) {
+                                    regexes = assistant.regexes.map { reg ->
+                                        if (reg.id == regex.id) {
                                             reg.copy(visualOnly = visualOnly)
                                         } else {
                                             reg
@@ -849,28 +863,22 @@ private fun AssistantRegexCard(
                     )
                 }
 
-                TextButton(
-                    onClick = {
-                        onUpdate(
-                            assistant.copy(
-                                regexes = assistant.regexes.filterIndexed { i, _ ->
-                                    i != index
-                                }
-                            )
-                        )
-                    }
-                ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(4.dp),
-                    ) {
-                        Icon(HugeIcons.Delete01, null)
-                        Text(stringResource(R.string.delete))
-                    }
-                }
+
             }
         }
     }
+    ConfirmDialog(
+        show = showDeleteDialog,
+        title = stringResource(R.string.confirm_delete),
+        confirmText = stringResource(R.string.confirm),
+        dismissText = stringResource(R.string.cancel),
+        onConfirm = {
+            onUpdate(assistant.copy(regexes = assistant.regexes.filterNot { it.id == regex.id }))
+            showDeleteDialog = false
+        },
+        onDismiss = { showDeleteDialog = false },
+        text = { Text(stringResource(R.string.common_delete_confirm_message, regex.name)) },
+    )
 }
 
 /** Editing the visible text preserves media, tool parts and message metadata. */

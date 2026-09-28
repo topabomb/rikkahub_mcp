@@ -1,4 +1,4 @@
-﻿package net.weero.measix.pilot.utils
+package net.weero.measix.pilot.utils
 
 private val iconCache = mutableMapOf<String, String>()
 
@@ -78,7 +78,7 @@ private val PATTERN_OPENROUTER = Regex("openrouter")
 private val PATTERN_ZHIPU = Regex("zhipu|智谱|glm")
 private val PATTERN_MISTRAL = Regex("mistral")
 private val PATTERN_META = Regex("meta\\b|(?<!o)llama|muse")
-private val PATTERN_HUNYUAN = Regex("hunyuan|tencent")
+private val PATTERN_HUNYUAN = Regex("hunyuan|tencent|\\bhy(\\b|\\d)")
 private val PATTERN_GEMMA = Regex("gemma")
 private val PATTERN_PERPLEXITY = Regex("perplexity")
 private val PATTERN_BYTEDANCE = Regex("bytedance|火山")

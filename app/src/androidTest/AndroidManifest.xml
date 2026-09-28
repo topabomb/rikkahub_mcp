@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+  <application>
+    <!-- Runs in the test APK's own UID, outside the instrumented application's process. -->
+    <receiver
+      android:name="net.weero.measix.pilot.data.provider.DocumentGrantProbeReceiver"
+      android:exported="true"
+      android:process=":documentGrantProbe" />
+    <provider
+      android:name="net.weero.measix.pilot.data.provider.ExportTargetDocumentsProvider"
+      android:authorities="net.weero.measix.pilot.test.exporttarget"
+      android:exported="true"
+      android:grantUriPermissions="true"
+      android:permission="android.permission.MANAGE_DOCUMENTS"
+      android:process=":exportTarget">
+      <intent-filter>
+        <action android:name="android.content.action.DOCUMENTS_PROVIDER" />
+      </intent-filter>
+    </provider>
+    <receiver
+      android:name="net.weero.measix.pilot.data.provider.ExportTargetControlReceiver"
+      android:exported="true"
+      android:process=":exportTarget" />
+  </application>
+</manifest>

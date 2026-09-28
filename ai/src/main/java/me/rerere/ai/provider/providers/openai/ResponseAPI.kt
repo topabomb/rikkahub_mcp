@@ -83,7 +83,6 @@ import okhttp3.Response
 import okhttp3.sse.EventSource
 import okhttp3.sse.EventSourceListener
 import okhttp3.sse.EventSources
-import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.time.Clock
 
 private const val TAG = "ResponseAPI"
@@ -98,35 +97,6 @@ internal fun responsesEndpoint(setting: ProviderSetting.OpenAI): String {
         } && !Regex("%2f|%5c", RegexOption.IGNORE_CASE).containsMatchIn(path)
     ) { "invalid_responses_path" }
     return setting.baseUrl.trimEnd('/') + path
-}
-
-internal class ResponseStreamState {
-    val toolCallIdsByItemId = mutableMapOf<String, String>()
-    val toolArgumentsEmittedByItemId = mutableSetOf<String>()
-    val reasoningTextEmittedByItemId = mutableSetOf<String>()
-    private val outputItemsById = linkedMapOf<String, JsonObject>()
-    private val terminalSeen = AtomicBoolean(false)
-
-    fun recordOutputItem(item: JsonObject) {
-        val id = item["id"]?.jsonPrimitive?.contentOrNull ?: return
-        // Replacing an existing key in LinkedHashMap preserves the original output order.
-        outputItemsById[id] = item
-    }
-
-    fun outputItems(): List<JsonObject> = outputItemsById.values.toList()
-
-    fun markTerminal() {
-        terminalSeen.set(true)
-    }
-
-    fun prematureCloseError(): HttpException? = if (terminalSeen.get()) {
-        null
-    } else {
-        HttpException(
-            message = "Response stream closed before a terminal event",
-            terminalStatus = ProviderTerminalStatus.INCOMPLETE,
-        )
-    }
 }
 
 class ResponseAPI(
@@ -187,8 +157,7 @@ class ResponseAPI(
         messages: List<ModelRequestMessage>,
         params: TextGenerationParams
     ): Flow<MessageChunk> = callbackFlow {
-        // 每个 SSE 请求独立维护 item_id -> call_id 映射。OpenAI 的 fc_* 输出项 ID
-        // 与下一轮 function_call_output 必须使用的 call_* ID 是两个不同字段，不能混用。
+        // Output aliases and argument completion live only for this response, independently of call_id.
         val streamState = ResponseStreamState()
         val endpointProfile = resolveResponseEndpointProfile(providerSetting.baseUrl.toHttpUrl().host)
         val requestBody = buildRequestBody(
@@ -215,23 +184,23 @@ class ResponseAPI(
                 type: String?,
                 data: String
             ) {
-                if (data == "[DONE]") {
-                    // Legacy-compatible endpoints may still emit [DONE]. Treat it as an explicit terminal marker,
-                    // while official Responses endpoints terminate with a typed response.completed event.
-                    buildResponseOutputStateChunk(
-                        outputItems = streamState.outputItems(),
-                        endpointProfile = endpointProfile,
-                        finishReason = "done",
-                    ).let { chunk ->
-                        trySend(chunk).onFailure {
-                            Log.w(TAG, "onEvent: terminal protocol state dropped")
-                        }
-                    }
-                    streamState.markTerminal()
-                    close()
-                    return
-                }
                 try {
+                    if (data == "[DONE]") {
+                        // Legacy-compatible endpoints may still emit [DONE]. Treat it as an explicit terminal marker,
+                        // while official Responses endpoints terminate with a typed response.completed event.
+                        buildResponseOutputStateChunk(
+                            outputItems = streamState.outputItems(),
+                            endpointProfile = endpointProfile,
+                            finishReason = "done",
+                        ).let { chunk ->
+                            trySend(chunk).onFailure {
+                                Log.w(TAG, "onEvent: terminal protocol state dropped")
+                            }
+                        }
+                        streamState.markTerminal()
+                        close()
+                        return
+                    }
                     val eventJson = json.parseToJsonElement(data).jsonObject
                     val eventType = eventJson["type"]?.jsonPrimitive?.contentOrNull
                         ?: error("response event type not found")
@@ -702,15 +671,7 @@ class ResponseAPI(
             ))
         }
         chunk.copy(choices = choices.map { choice ->
-            val calls = choice.delta?.getTools().orEmpty()
-            val slots = if (calls.isEmpty()) choice.toolCallSlots else {
-                val itemId = jsonObject["item_id"]?.jsonPrimitive?.contentOrNull
-                    ?: jsonObject["item"]?.jsonObject?.get("id")?.jsonPrimitive?.contentOrNull
-                calls.map {
-                    ProviderToolCallSlot.Item(requireNotNull(itemId) { "Responses Tool delta is missing item identity" })
-                }
-            }
-            choice.copy(toolCallSlots = slots, finishReason = terminalReason ?: choice.finishReason)
+            choice.copy(finishReason = terminalReason ?: choice.finishReason)
         })
     }
 
@@ -720,6 +681,14 @@ class ResponseAPI(
         endpointProfile: ResponseEndpointProfile = ResponseEndpointProfile.OPENAI,
     ): MessageChunk? {
         val chunkType = jsonObject["type"]?.jsonPrimitive?.content ?: error("chunk type not found")
+
+        val item = jsonObject["item"]?.jsonObjectOrNull
+        if (chunkType in setOf("response.function_call_arguments.delta", "response.function_call_arguments.done") ||
+            (chunkType in setOf("response.output_item.added", "response.output_item.done") &&
+                item?.get("type")?.jsonPrimitive?.contentOrNull == "function_call")
+        ) {
+            return parseToolDelta(jsonObject, streamState)
+        }
 
         when (chunkType) {
             "response.output_text.delta", "response.refusal.delta" -> {
@@ -766,42 +735,10 @@ class ResponseAPI(
 
             "response.output_item.added" -> {
                 val item = jsonObject["item"]?.jsonObject ?: error("chunk item not found")
-                streamState.recordOutputItem(item)
+                streamState.recordOutputItem(jsonObject)
                 val type = item["type"]?.jsonPrimitive?.content ?: error("chunk type not found")
                 val id = item["id"]?.jsonPrimitive?.content ?: error("chunk id not found")
-                if (type == "function_call") {
-                    val callId = item["call_id"]?.jsonPrimitive?.contentOrNull ?: id
-                    streamState.toolCallIdsByItemId[id] = callId
-                    if (!item["arguments"]?.jsonPrimitive?.contentOrNull.isNullOrEmpty()) {
-                        streamState.toolArgumentsEmittedByItemId += id
-                    }
-                    return MessageChunk(
-                        id = id,
-                        model = "",
-                        choices = listOf(
-                            UIMessageChoice(
-                                index = 0,
-                                message = null,
-                                delta = UIMessage(
-                                    role = MessageRole.ASSISTANT,
-                                    parts = listOf(
-                                        UIMessagePart.Tool(
-                                            // call_id is the wire correlation; item_id identifies the transient output slot.
-                                            localCallId = Uuid.NIL,
-                                            stepId = Uuid.NIL,
-                                            providerCallId = callId,
-                                            toolName = item["name"]?.jsonPrimitive?.content ?: "",
-                                            input = item["arguments"]?.jsonPrimitive?.content
-                                                ?: "",
-                                            output = emptyList()
-                                        )
-                                    )
-                                ),
-                                finishReason = null
-                            )
-                        )
-                    )
-                } else if (type == "image_generation_call") {
+                if (type == "image_generation_call") {
                     return MessageChunk(
                         id = id,
                         model = "",
@@ -850,7 +787,7 @@ class ResponseAPI(
 
             "response.output_item.done" -> {
                 val item = jsonObject["item"]?.jsonObject ?: error("chunk item not found")
-                streamState.recordOutputItem(item)
+                streamState.recordOutputItem(jsonObject)
                 val type = item["type"]?.jsonPrimitive?.content ?: error("chunk type not found")
                 val id = item["id"]?.jsonPrimitive?.content ?: error("chunk id not found")
                 if (type == "reasoning") {
@@ -910,40 +847,6 @@ class ResponseAPI(
                 }
             }
 
-            "response.function_call_arguments.done" -> {
-                val itemId = jsonObject["item_id"]?.jsonPrimitive?.content ?: error("item_id not found")
-                val toolCallId = streamState.toolCallIdsByItemId.remove(itemId) ?: itemId
-                val argumentsAlreadyEmitted = streamState.toolArgumentsEmittedByItemId.remove(itemId)
-                val arguments =
-                    jsonObject["arguments"]?.jsonPrimitive?.content ?: error("arguments not found")
-                // added 或 delta 已发出的参数不能再追加 done 的完整副本；仅 done 提供正文时才发出。
-                if (argumentsAlreadyEmitted) return null
-                return MessageChunk(
-                    id = itemId,
-                    model = "",
-                    choices = listOf(
-                        UIMessageChoice(
-                            index = 0,
-                            delta = UIMessage(
-                                role = MessageRole.ASSISTANT,
-                                parts = listOf(
-                                    UIMessagePart.Tool(
-                                        localCallId = Uuid.NIL,
-                                        stepId = Uuid.NIL,
-                                        providerCallId = toolCallId,
-                                        toolName = "",
-                                        input = arguments,
-                                        output = emptyList()
-                                    )
-                                )
-                            ),
-                            message = null,
-                            finishReason = null
-                        )
-                    ),
-                )
-            }
-
             "response.reasoning_text.delta" -> {
                 val itemId = jsonObject["item_id"]?.jsonPrimitive?.contentOrNull.orEmpty()
                 val delta = jsonObject["delta"]?.jsonPrimitive?.contentOrNull.orEmpty()
@@ -963,50 +866,13 @@ class ResponseAPI(
                 return reasoningTextChunk(itemId, text)
             }
 
-            "response.function_call_arguments.delta" -> {
-                val itemId = jsonObject["item_id"]?.jsonPrimitive?.content ?: error("item_id not found")
-                val toolCallId = streamState.toolCallIdsByItemId[itemId] ?: itemId
-                val delta = jsonObject["delta"]?.jsonPrimitive?.contentOrNull.orEmpty()
-                if (delta.isNotEmpty()) {
-                    streamState.toolArgumentsEmittedByItemId += itemId
-                }
-                return MessageChunk(
-                    id = itemId,
-                    model = "",
-                    choices = listOf(
-                        UIMessageChoice(
-                            index = 0,
-                            delta = UIMessage(
-                                role = MessageRole.ASSISTANT,
-                                parts = listOf(
-                                    UIMessagePart.Tool(
-                                        localCallId = Uuid.NIL,
-                                        stepId = Uuid.NIL,
-                                        providerCallId = toolCallId,
-                                        toolName = "",
-                                        input = delta,
-                                        output = emptyList(),
-                                    )
-                                )
-                            ),
-                            message = null,
-                            finishReason = null,
-                        )
-                    )
-                )
-            }
-
             "response.completed", "response.incomplete", "response.failed" -> {
                 val response = jsonObject["response"]?.jsonObjectOrNull
-                val outputItems = response?.get("output")?.jsonArray
-                    ?.map { it.jsonObject }
-                    ?.ifEmpty { null }
-                    ?: streamState.outputItems()
                 val usage = parseTokenUsage(response?.get("usage")?.jsonObjectOrNull)
                 return if (chunkType == "response.completed") {
                     buildResponseOutputStateChunk(
                         responseId = response?.get("id")?.jsonPrimitiveOrNull?.contentOrNull.orEmpty(),
-                        outputItems = outputItems,
+                        outputItems = streamState.outputItems(response?.get("output")?.jsonArray?.map { it.jsonObject }),
                         endpointProfile = endpointProfile,
                         usage = usage,
                     )
@@ -1017,6 +883,54 @@ class ResponseAPI(
         }
 
         return null
+    }
+
+    private fun parseToolDelta(event: JsonObject, state: ResponseStreamState): MessageChunk? {
+        val type = event["type"]!!.jsonPrimitive.content
+        val added = type == "response.output_item.added"
+        val output = state.output(event, allowNew = added)
+        check(output.item["type"]?.jsonPrimitive?.content == "function_call") {
+            "responses_identity_conflict: arguments target a non-tool output"
+        }
+        val callId = requireNotNull(output.callId) { "responses_call_id_missing: function_call needs a wire call_id" }
+        val input: String
+        var name = ""
+        when (type) {
+            "response.output_item.added" -> {
+                val args = event["item"]!!.jsonObject["arguments"]?.jsonPrimitive?.contentOrNull.orEmpty()
+                if (output.started) {
+                    check(args.isEmpty() || args == output.arguments) { "responses_arguments_conflict: repeated added arguments differ" }
+                    return null
+                }
+                output.started = true
+                output.arguments = args
+                input = args
+                name = output.item["name"]?.jsonPrimitive?.contentOrNull.orEmpty()
+            }
+            "response.function_call_arguments.delta" -> {
+                check(output.started && !output.argumentsComplete) { "responses_arguments_closed: delta has no active tool" }
+                input = event["delta"]?.jsonPrimitive?.contentOrNull.orEmpty()
+                output.arguments += input
+            }
+            else -> {
+                check(output.started) { "responses_unstarted_tool: done has no added tool" }
+                val args = (event["arguments"] ?: event["item"]?.jsonObject?.get("arguments"))
+                    ?.jsonPrimitive?.contentOrNull ?: error("responses_arguments_missing: done has no arguments")
+                input = output.finishArguments(args)
+                if (input.isEmpty()) return null
+            }
+        }
+        return MessageChunk(
+            id = output.itemId.orEmpty(), model = "",
+            choices = listOf(UIMessageChoice(
+                index = 0, message = null, finishReason = null,
+                toolCallSlots = listOf(output.slot),
+                delta = UIMessage(role = MessageRole.ASSISTANT, parts = listOf(UIMessagePart.Tool(
+                    localCallId = Uuid.NIL, stepId = Uuid.NIL, providerCallId = callId,
+                    toolName = name, input = input, output = emptyList(),
+                ))),
+            )),
+        )
     }
 
     private fun buildResponseOutputStateChunk(

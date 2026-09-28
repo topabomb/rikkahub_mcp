@@ -1,4 +1,4 @@
-<?xml version='1.0' encoding='UTF-8'?>
+<?xml version='1.0' encoding='utf-8'?>
 <resources>
   <string name="about_page_license">License</string>
   <string name="about_page_documentation">使用文档</string>
@@ -603,7 +603,7 @@
   <string name="reasoning_xhigh">超高</string>
   <string name="reasoning_max">最大</string>
   <string name="regenerate">重新生成</string>
-  <string name="regenerate_confirm_message">确定要重新生成此消息吗？</string>
+  <string name="regenerate_confirm_message">确定要重新生成此消息吗？此消息之后的所有消息都将被删除。</string>
   <string name="render_with_webview">网页视图渲染</string>
   <string name="safe_mode_assistants">助手</string>
   <string name="safe_mode_copy">复制</string>
@@ -1953,4 +1953,18 @@
   <string name="enterprise_snapshot_update_required">需要更新应用</string>
   <string name="enterprise_snapshot_invalid">企业配置内容有误，请联系管理员。</string>
   <string name="context_changes_title">上下文变化</string>
+  <string name="setting_mcp_page_header_name_required">请输入请求头名称或删除此行</string>
+  <string name="setting_mcp_page_header_name_invalid">请求头名称只能包含 HTTP token 允许的字符</string>
+  <string name="setting_mcp_page_header_value_invalid">请移除请求头值中的控制字符和非 ASCII 字符</string>
+  <string name="workspace_export_selected">已选择 %1$d 项</string>
+  <string name="workspace_export_progress">%1$d / %2$d</string>
+  <string name="workspace_export_result">已导出 %1$d 项，失败 %2$d 项</string>
+  <string name="workspace_export_cancelled">导出已取消</string>
+  <string name="common_delete_confirm_message">删除“%1$s”？此操作无法撤销。</string>
+  <string name="skills_search_hint">搜索技能</string>
+  <string name="skills_search_empty">没有匹配的技能</string>
+  <string name="skills_import_rate_limited">已达到 GitHub 请求频率限制，请稍后重试。</string>
+  <string name="chat_page_scroll_to_top">滚动到顶部</string>
+  <string name="chat_page_previous_message">上一条消息</string>
+  <string name="chat_page_next_message">下一条消息</string>
 </resources>

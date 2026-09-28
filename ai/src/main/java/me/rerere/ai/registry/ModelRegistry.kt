@@ -509,6 +509,30 @@ object ModelRegistry {
         toolReasoningAbility()
     }
 
+    private val STEP_5_PREVIEW = defineModel {
+        exact("step-5-preview")
+        visionInput()
+        toolReasoningAbility()
+    }
+
+    private val MIMO_V2_6_PRO = defineModel {
+        exact("mimo-v2.6-pro")
+        visionInput()
+        toolReasoningAbility()
+    }
+
+    private val MIMO_V2_6_FLASH = defineModel {
+        exact("mimo-v2.6-flash")
+        visionInput()
+        toolReasoningAbility()
+    }
+
+    private val MIMO_V2_6_PRO_ULTRASPEED = defineModel {
+        exact("mimo-v2.6-pro-ultraspeed")
+        visionInput()
+        toolReasoningAbility()
+    }
+
     private val STEP_3 = defineModel {
         tokens("step", "3")
         visionInput()
@@ -703,6 +727,10 @@ object ModelRegistry {
         KIMI_K2_6,
         KIMI_K3,
         KIMI_K3_ALIAS,
+        STEP_5_PREVIEW,
+        MIMO_V2_6_PRO,
+        MIMO_V2_6_FLASH,
+        MIMO_V2_6_PRO_ULTRASPEED,
         STEP_3,
         STEP_3_7_FLASH,
         INTERN_S1,

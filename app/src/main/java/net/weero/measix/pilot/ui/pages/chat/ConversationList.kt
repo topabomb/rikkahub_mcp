@@ -1,5 +1,6 @@
 package net.weero.measix.pilot.ui.pages.chat
 
+import net.weero.measix.pilot.utils.mirrorInRtl
 import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.Folder01
 import me.rerere.hugeicons.stroke.Forward02
@@ -327,7 +328,7 @@ private fun ConversationItem(
                         showDropdownMenu = false
                     },
                     leadingIcon = {
-                        Icon(HugeIcons.Forward02, null)
+                        Icon(HugeIcons.Forward02, null, modifier = Modifier.mirrorInRtl())
                     }
                 )
 

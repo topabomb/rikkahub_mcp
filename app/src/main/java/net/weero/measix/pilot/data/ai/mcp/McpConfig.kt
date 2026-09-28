@@ -284,3 +284,32 @@ fun McpServerConfig.encodeForShare(): String {
     }
     return Json.encodeToString(JsonObject.serializer(), root)
 }
+
+/** The row is one-based. Header values never enter diagnostics, including credential headers. */
+class McpHeaderValidationException(
+    val row: Int,
+    val reason: McpHeaderValidationReason,
+    val serverIndex: Int? = null,
+) : IllegalArgumentException(
+    "${reason.code}: ${serverIndex?.let { "server $it, " }.orEmpty()}header row $row: ${reason.detail}"
+)
+
+enum class McpHeaderValidationReason(val code: String, val detail: String) {
+    EMPTY_NAME("mcp_header_empty_name", "Enter a header name or remove this row"),
+    INVALID_NAME("mcp_header_invalid_name", "Header names must contain only HTTP token characters"),
+    INVALID_VALUE("mcp_header_invalid_value", "Header values must contain only printable ASCII or horizontal tabs; remove control characters"),
+}
+
+/** Validation only: never trim values, rewrite authentication or silently discard durable rows. */
+fun validateMcpHeaders(headers: List<Pair<String, String>>, serverIndex: Int? = null) {
+    headers.forEachIndexed { index, (name, value) ->
+        val reason = when {
+            name.isEmpty() -> McpHeaderValidationReason.EMPTY_NAME
+            name.any { it !in 'a'..'z' && it !in 'A'..'Z' && it !in '0'..'9' && it !in "!#$%&'*+-.^_`|~" } ->
+                McpHeaderValidationReason.INVALID_NAME
+            value.any { it != '\t' && it !in ' '..'~' } -> McpHeaderValidationReason.INVALID_VALUE
+            else -> null
+        }
+        if (reason != null) throw McpHeaderValidationException(index + 1, reason, serverIndex)
+    }
+}

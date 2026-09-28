@@ -4,19 +4,17 @@ import net.weero.measix.pilot.service.turn.TurnRecovery
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.coVerifySequence
-import io.mockk.every
 import io.mockk.mockk
 import java.util.concurrent.Executors
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.CompletableDeferred
-import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runTest
-import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.datastore.SettingsStore
 import net.weero.measix.pilot.data.files.ArtifactStore
 import net.weero.measix.pilot.data.imggen.GeneratedMediaStore
@@ -36,6 +34,7 @@ class ApplicationRecoveryCoordinatorTest {
 
         assertEquals(ApplicationRecoveryState.Ready, env.gate.state.value)
         coVerifySequence {
+            env.settingsStore.initializeForRecovery()
             env.artifactStore.reconcileStartup()
             env.generatedMediaStore.reconcile(any())
             env.artifactStore.ensureReferenceProjection()
@@ -58,6 +57,7 @@ class ApplicationRecoveryCoordinatorTest {
             postRecoveryMaintenance = { events += "maintenance" },
             completePendingBackup = { events += "complete" },
         )
+        coEvery { env.settingsStore.initializeForRecovery() } coAnswers { events += "settings" }
         coEvery { env.artifactStore.reconcileStartup() } coAnswers { events += "artifact" }
         coEvery { env.generatedMediaStore.reconcile(any()) } coAnswers { events += "generated" }
         coEvery { env.artifactStore.ensureReferenceProjection() } coAnswers { events += "references" }
@@ -73,6 +73,7 @@ class ApplicationRecoveryCoordinatorTest {
         assertEquals(
             listOf(
                 "restore",
+                "settings",
                 "artifact",
                 "generated",
                 "reset",
@@ -89,6 +90,38 @@ class ApplicationRecoveryCoordinatorTest {
             ),
             events,
         )
+        assertEquals(ApplicationRecoveryState.Ready, env.gate.state.value)
+    }
+
+    @Test
+    fun `settings failure preserves its cause and retry resumes the existing recovery owner`() = runTest {
+        val env = Env(this)
+        val failure = java.io.IOException("settings read denied", IllegalStateException("volume unavailable"))
+        coEvery { env.settingsStore.initializeForRecovery() } throws failure
+        env.coordinator.retry()
+        advanceUntilIdle()
+        assertEquals(failure, (env.gate.state.value as ApplicationRecoveryState.Failed).error)
+        val rejection = runCatching { env.gate.awaitReady() }.exceptionOrNull()
+        assertEquals(failure, rejection?.cause)
+        coVerify(exactly = 0) { env.artifactStore.reconcileStartup() }
+        coEvery { env.settingsStore.initializeForRecovery() } returns Unit
+        env.coordinator.retry()
+        advanceUntilIdle()
+        assertEquals(ApplicationRecoveryState.Ready, env.gate.state.value)
+        coVerify(exactly = 1) { env.artifactStore.reconcileStartup() }
+    }
+
+    @Test
+    fun `cancelled settings recovery stays closed without presenting a failure and can retry`() = runTest {
+        val env = Env(this)
+        coEvery { env.settingsStore.initializeForRecovery() } throws CancellationException("caller cancelled")
+        env.coordinator.retry()
+        advanceUntilIdle()
+        assertEquals(ApplicationRecoveryState.Loading, env.gate.state.value)
+        coVerify(exactly = 0) { env.artifactStore.reconcileStartup() }
+        coEvery { env.settingsStore.initializeForRecovery() } returns Unit
+        env.coordinator.retry()
+        advanceUntilIdle()
         assertEquals(ApplicationRecoveryState.Ready, env.gate.state.value)
     }
 
@@ -186,13 +219,12 @@ class ApplicationRecoveryCoordinatorTest {
         val repository = mockk<ConversationRepository>()
         val turnRecovery = mockk<TurnRecovery>()
         val assistantManagement = mockk<AssistantManagementService>()
-        private val settingsStore = mockk<SettingsStore>()
+        val settingsStore = mockk<SettingsStore>()
         val assistantDependency = lazy { onAssistantInitialization(); assistantManagement }
         val coordinator: ApplicationRecoveryCoordinator
 
         init {
-            every { settingsStore.userSettings } returns
-                MutableStateFlow(Settings(init = false))
+            coEvery { settingsStore.initializeForRecovery() } returns Unit
             coEvery { artifactStore.reconcileStartup() } returns Unit
             coEvery { generatedMediaStore.reconcile(any()) } returns Unit
             coEvery { artifactStore.ensureReferenceProjection() } returns Unit

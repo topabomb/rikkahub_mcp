@@ -7,6 +7,10 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -23,6 +27,7 @@ import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
@@ -63,6 +68,13 @@ import androidx.core.content.FileProvider
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import java.io.File
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import net.weero.measix.pilot.service.workspace.WorkspaceExportRequest
+import net.weero.measix.pilot.service.workspace.WorkspaceExportItem
+import net.weero.measix.pilot.service.workspace.WorkspaceDocumentTreeDestination
+import net.weero.measix.pilot.utils.userVisibleDiagnostic
 import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.ArrowTurnBackward
 import me.rerere.hugeicons.stroke.Bash
@@ -104,6 +116,9 @@ fun WorkspaceDetailPage(id: String) {
     val state by vm.state.collectAsStateWithLifecycle()
     val installProgress by vm.installProgress.collectAsStateWithLifecycle()
     val installError by vm.installError.collectAsStateWithLifecycle()
+    val exportState by vm.exportState.collectAsStateWithLifecycle()
+    var selectedFiles by remember(id, state.area, state.path) { mutableStateOf(emptySet<String>()) }
+    var pendingBatch by remember(id) { mutableStateOf<WorkspaceExportRequest?>(null) }
     val pagerState = rememberPagerState { 2 }
     val scope = rememberCoroutineScope()
     var deleteTarget by remember { mutableStateOf<WorkspaceFileEntry?>(null) }
@@ -125,18 +140,34 @@ fun WorkspaceDetailPage(id: String) {
         val inputStream = context.contentResolver.openInputStream(uri) ?: return@rememberLauncherForActivityResult
         vm.importFile(inputStream, fileName)
     }
-    var exportTarget by remember { mutableStateOf<WorkspaceFileEntry?>(null) }
+    var exportTarget by remember(id) { mutableStateOf<Pair<WorkspaceStorageArea, WorkspaceFileEntry>?>(null) }
     val exportLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.CreateDocument("*/*"),
     ) { uri ->
-        val entry = exportTarget.also { exportTarget = null } ?: return@rememberLauncherForActivityResult
+        val (area, entry) = exportTarget.also { exportTarget = null } ?: return@rememberLauncherForActivityResult
         if (uri == null) return@rememberLauncherForActivityResult
-        val outputStream = context.contentResolver.openOutputStream(uri) ?: return@rememberLauncherForActivityResult
-        vm.exportFile(entry, outputStream)
+        scope.launch {
+            try {
+                withContext(Dispatchers.IO) {
+                    val output = context.contentResolver.openOutputStream(uri)
+                        ?: throw java.io.IOException("Document provider did not open output: $uri")
+                    output.use { vm.exportFile(entry, area, it) }
+                }
+            } catch (cancelled: CancellationException) { throw cancelled }
+            catch (error: Exception) { vm.reportExportFailure(error) }
+        }
+    }
+    val batchLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
+        val request = pendingBatch.also { pendingBatch = null } ?: return@rememberLauncherForActivityResult
+        if (uri != null) {
+            selectedFiles = emptySet()
+            try { vm.exportFiles(request, WorkspaceDocumentTreeDestination(context.contentResolver, uri)) }
+            catch (error: Exception) { vm.reportExportFailure(error) }
+        }
     }
 
-    BackHandler(enabled = pagerState.currentPage == 1 && state.path.isNotBlank()) {
-        vm.goUp()
+    BackHandler(enabled = pagerState.currentPage == 1 && (selectedFiles.isNotEmpty() || state.path.isNotBlank())) {
+        if (selectedFiles.isNotEmpty()) selectedFiles = emptySet() else vm.goUp()
     }
 
     Scaffold(
@@ -144,13 +175,26 @@ fun WorkspaceDetailPage(id: String) {
             TopAppBar(
                 title = {
                     Text(
-                        text = state.workspace?.name ?: stringResource(R.string.workspace_detail_title),
+                        text = if (selectedFiles.isNotEmpty()) stringResource(R.string.workspace_export_selected, selectedFiles.size)
+                            else state.workspace?.name ?: stringResource(R.string.workspace_detail_title),
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
                 },
-                navigationIcon = { BackButton() },
+                navigationIcon = {
+                    if (selectedFiles.isNotEmpty()) TextButton(onClick = { selectedFiles = emptySet() }) {
+                        Text(stringResource(R.string.common_cancel))
+                    } else BackButton()
+                },
                 actions = {
+                    if (exportState?.running == true) {
+                        TextButton(onClick = vm::cancelExport) { Text(stringResource(R.string.common_cancel)) }
+                    } else if (selectedFiles.isNotEmpty()) {
+                        TextButton(enabled = pendingBatch == null, onClick = {
+                            pendingBatch = WorkspaceExportRequest(id, state.area, selectedFiles.toList())
+                            batchLauncher.launch(null)
+                        }) { Text(stringResource(R.string.common_export)) }
+                    }
                     if (pagerState.currentPage == 1) {
                         IconButton(onClick = { filePicker.launch(arrayOf("*/*")) }) {
                             Icon(
@@ -205,6 +249,11 @@ fun WorkspaceDetailPage(id: String) {
 
                 1 -> WorkspaceFilesPage(
                     state = state,
+                    selected = selectedFiles,
+                    onToggleSelection = { entry ->
+                        if (!entry.isDirectory) selectedFiles = if (entry.path in selectedFiles)
+                            selectedFiles - entry.path else selectedFiles + entry.path
+                    },
                     imageSource = vm::imageSource,
                     contentPadding = PaddingValues(),
                     onSelectArea = vm::selectArea,
@@ -244,7 +293,7 @@ fun WorkspaceDetailPage(id: String) {
                     },
                     onDelete = { deleteTarget = it },
                     onExport = { entry ->
-                        exportTarget = entry
+                        exportTarget = state.area to entry
                         exportLauncher.launch(entry.name)
                     },
                     onShare = { entry ->
@@ -265,6 +314,34 @@ fun WorkspaceDetailPage(id: String) {
                 )
             }
         }
+    }
+
+    exportState?.let { exporting ->
+        AlertDialog(
+            onDismissRequest = { if (!exporting.running) vm.dismissExportResult() },
+            title = { Text(stringResource(R.string.common_export)) },
+            text = {
+                Column(Modifier.verticalScroll(rememberScrollState())) {
+                    Text(stringResource(R.string.workspace_export_progress, exporting.items.size, exporting.request.paths.size))
+                    if (exporting.running) LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                    else Text(stringResource(R.string.workspace_export_result,
+                        exporting.items.count { it is WorkspaceExportItem.Exported },
+                        exporting.items.count { it is WorkspaceExportItem.Failed }))
+                    if (exporting.cancelled) Text(stringResource(R.string.workspace_export_cancelled))
+                    SelectionContainer {
+                        Text(exporting.items.joinToString("\n") { item -> when (item) {
+                            is WorkspaceExportItem.Exported -> item.name
+                            is WorkspaceExportItem.Failed -> "${item.path}: ${item.cause.userVisibleDiagnostic()}"
+                        } } + exporting.cleanupDiagnostic?.let { "\n$it" }.orEmpty())
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { if (exporting.running) vm.cancelExport() else vm.dismissExportResult() }) {
+                    Text(stringResource(if (exporting.running) R.string.common_cancel else R.string.common_confirm))
+                }
+            },
+        )
     }
 
     state.workspace?.let { workspace ->
@@ -618,6 +695,8 @@ private fun InstallRootfsDialog(
 @Composable
 private fun WorkspaceFilesPage(
     state: WorkspaceDetailState,
+    selected: Set<String>,
+    onToggleSelection: (WorkspaceFileEntry) -> Unit,
     imageSource: (WorkspaceFileEntry, WorkspaceStorageArea) -> ImageSource,
     contentPadding: PaddingValues,
     onSelectArea: (WorkspaceStorageArea) -> Unit,
@@ -649,7 +728,7 @@ private fun WorkspaceFilesPage(
 
         state.error?.let { error ->
             item {
-                ErrorCard(workspaceErrorMessage(error))
+                ErrorCard(state.diagnostic ?: workspaceErrorMessage(error))
             }
         }
 
@@ -662,6 +741,9 @@ private fun WorkspaceFilesPage(
         items(state.entries, key = { "${state.area.name}:${it.path}" }) { entry ->
             WorkspaceFileCard(
                 entry = entry,
+                selected = entry.path in selected,
+                selecting = selected.isNotEmpty(),
+                onSelect = { onToggleSelection(entry) },
                 image = if (!entry.isDirectory && entry.detectFileType() == WorkspaceFileType.IMAGE) {
                     remember(entry, state.area, imageSource) { imageSource(entry, state.area) }
                 } else null,
@@ -727,6 +809,9 @@ private fun WorkspacePathBar(
 @Composable
 private fun WorkspaceFileCard(
     entry: WorkspaceFileEntry,
+    selected: Boolean,
+    selecting: Boolean,
+    onSelect: () -> Unit,
     image: ImageSource?,
     onOpen: () -> Unit,
     onDelete: () -> Unit,
@@ -738,7 +823,10 @@ private fun WorkspaceFileCard(
     Card(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(onClick = onOpen),
+            .combinedClickable(
+                onClick = { if (selecting) onSelect() else onOpen() },
+                onLongClick = if (!entry.isDirectory) onSelect else null,
+            ),
         colors = CustomColors.cardColorsOnSurfaceContainer,
     ) {
         Row(
@@ -747,7 +835,9 @@ private fun WorkspaceFileCard(
                 .padding(start = 16.dp, top = 12.dp, bottom = 12.dp, end = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            if (image != null) {
+            if (selecting && !entry.isDirectory) {
+                Checkbox(checked = selected, onCheckedChange = { onSelect() })
+            } else if (image != null) {
                 val placeholder = rememberVectorPainter(HugeIcons.File02)
                 AsyncImage(
                     model = image,
@@ -789,9 +879,9 @@ private fun WorkspaceFileCard(
                     overflow = TextOverflow.Ellipsis,
                 )
             }
-            Box {
+            if (!selecting) Box {
                 IconButton(onClick = { menuExpanded = true }) {
-                    Icon(HugeIcons.MoreVertical, contentDescription = null)
+                    Icon(HugeIcons.MoreVertical, contentDescription = stringResource(R.string.more_options))
                 }
                 DropdownMenu(
                     expanded = menuExpanded,

@@ -1,5 +1,8 @@
 package net.weero.measix.pilot.ui.pages.setting
 
+import net.weero.measix.pilot.ui.components.ui.ConfirmDialog
+import net.weero.measix.pilot.ui.components.ui.ItemActionMenu
+import net.weero.measix.pilot.ui.components.ui.ItemAction
 import me.rerere.common.configuration.ConfigurationReference
 
 import me.rerere.hugeicons.HugeIcons
@@ -11,7 +14,6 @@ import me.rerere.hugeicons.stroke.FileImport
 import me.rerere.hugeicons.stroke.Image02
 import me.rerere.hugeicons.stroke.MessageBlocked
 import me.rerere.hugeicons.stroke.Add01
-import me.rerere.hugeicons.stroke.Settings03
 import me.rerere.hugeicons.stroke.Console
 import me.rerere.hugeicons.stroke.Delete01
 import me.rerere.hugeicons.stroke.Upload02
@@ -67,7 +69,6 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.FilledTonalIconButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -80,7 +81,6 @@ import androidx.compose.material3.SecondaryTabRow
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
-import androidx.compose.material3.SwipeToDismissBox
 import net.weero.measix.pilot.ui.components.ui.Switch
 import net.weero.measix.pilot.ui.components.ui.SwitchSize
 import androidx.compose.material3.Tab
@@ -90,7 +90,6 @@ import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.material3.pulltorefresh.PullToRefreshDefaults
 import androidx.compose.material3.pulltorefresh.rememberPullToRefreshState
-import androidx.compose.material3.rememberSwipeToDismissBoxState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -120,6 +119,10 @@ import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.contentOrNull
 import me.rerere.hugeicons.stroke.McpServer
 import net.weero.measix.pilot.R
+import net.weero.measix.pilot.data.ai.mcp.McpHeaderValidationException
+import net.weero.measix.pilot.data.ai.mcp.McpHeaderValidationReason
+import net.weero.measix.pilot.data.ai.mcp.validateMcpHeaders
+import net.weero.measix.pilot.utils.userVisibleDiagnostic
 import net.weero.measix.pilot.data.ai.mcp.McpParseResult
 import net.weero.measix.pilot.data.ai.mcp.McpRefreshReceipt
 import net.weero.measix.pilot.data.ai.mcp.McpServerConfig
@@ -164,24 +167,8 @@ internal fun SettingMcpPage(
     val toaster = LocalToaster.current
     val context = LocalContext.current
     val resources = LocalResources.current
-    val mutationFailedText = stringResource(R.string.error_title_operation)
-    val submitConfig: (McpServerConfig) -> Unit = { newConfig ->
-        pageScope.launch {
-            try {
-                mcpApplicationService.upsert(newConfig)
-            } catch (cancelled: kotlinx.coroutines.CancellationException) {
-                throw cancelled
-            } catch (error: Throwable) {
-                toaster.show(error.message ?: mutationFailedText, type = ToastType.Error)
-            }
-        }
-    }
-    val creationState = useEditState<McpServerConfig> { newConfig ->
-        submitConfig(newConfig)
-    }
-    val editState = useEditState<McpServerConfig> { newConfig ->
-        submitConfig(newConfig)
-    }
+    val creationState = useEditState<McpServerConfig> { }
+    val editState = useEditState<McpServerConfig> { }
     var showImportDialog by remember { mutableStateOf(false) }
     var showImportMethodDialog by remember { mutableStateOf(false) }
     var pendingConflicts by remember { mutableStateOf<List<Pair<McpServerConfig, McpServerConfig>>?>(null) }
@@ -221,7 +208,7 @@ internal fun SettingMcpPage(
                 } catch (cancelled: kotlinx.coroutines.CancellationException) {
                     throw cancelled
                 } catch (error: Throwable) {
-                    toaster.show(error.message ?: mutationFailedText, type = ToastType.Error)
+                    toaster.show(error.userVisibleDiagnostic(), type = ToastType.Error)
                 } finally {
                     userRefreshRunning = false
                 }
@@ -360,7 +347,7 @@ internal fun SettingMcpPage(
                                 } catch (cancelled: kotlinx.coroutines.CancellationException) {
                                     throw cancelled
                                 } catch (error: Throwable) {
-                                    toaster.show(error.message ?: mutationFailedText, type = ToastType.Error)
+                                    toaster.show(error.userVisibleDiagnostic(), type = ToastType.Error)
                                 }
                             }
                         },
@@ -371,7 +358,7 @@ internal fun SettingMcpPage(
                                 } catch (cancelled: kotlinx.coroutines.CancellationException) {
                                     throw cancelled
                                 } catch (error: Throwable) {
-                                    toaster.show(error.message ?: mutationFailedText, type = ToastType.Error)
+                                    toaster.show(error.userVisibleDiagnostic(), type = ToastType.Error)
                                 }
                             }
                         },
@@ -398,8 +385,8 @@ internal fun SettingMcpPage(
             }
         }
     }
-    McpServerConfigModal(creationState)
-    McpServerConfigModal(editState)
+    McpServerConfigModal(creationState, mcpApplicationService::upsert)
+    McpServerConfigModal(editState, mcpApplicationService::upsert)
 
     shareConfig?.let { config ->
         McpShareSheet(
@@ -430,11 +417,8 @@ internal fun SettingMcpPage(
         McpImportModal(
             onDismiss = { showImportDialog = false },
             onImport = { jsonText ->
-                showImportDialog = false
-                pageScope.launch {
-                    handleMcpImport(jsonText, mcpApplicationService, toaster, context) { conflicts ->
-                        pendingConflicts = conflicts
-                    }
+                handleMcpImport(jsonText, mcpApplicationService, toaster, context) { conflicts ->
+                    pendingConflicts = conflicts
                 }
             }
         )
@@ -452,7 +436,7 @@ internal fun SettingMcpPage(
                     } catch (cancelled: kotlinx.coroutines.CancellationException) {
                         throw cancelled
                     } catch (error: Throwable) {
-                        toaster.show(error.message ?: mutationFailedText, type = ToastType.Error)
+                        toaster.show(error.userVisibleDiagnostic(), type = ToastType.Error)
                     }
                 }
             },
@@ -524,7 +508,7 @@ private fun McpServerItem(
     onShare: () -> Unit,
 ) {
     val status = presentation?.status ?: McpStatus.Idle
-    val dismissBoxState = rememberSwipeToDismissBoxState()
+    var showDeleteDialog by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     var errorDetail by remember { mutableStateOf<McpStatus.Error?>(null) }
     val context = LocalContext.current
@@ -562,343 +546,317 @@ private fun McpServerItem(
             },
         )
     }
-    SwipeToDismissBox(
-        state = dismissBoxState,
-        backgroundContent = {
-            Row(
-                modifier = Modifier.fillMaxSize(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
-            ) {
-                FilledTonalIconButton(
-                    onClick = {
-                        scope.launch { dismissBoxState.reset() }
-                    }
-                ) {
-                    Icon(HugeIcons.Cancel01, null)
+    Card(
+        onClick = { onEdit(item) },
+        modifier = modifier,
+        colors = CardDefaults.cardColors(
+            containerColor = CustomColors.listItemColors.containerColor
+        )
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalAlignment = Alignment.Top,
+        ) {
+            when (status) {
+                McpStatus.Idle -> Icon(HugeIcons.MessageBlocked, null)
+                McpStatus.Connecting -> if (presentation?.hasCatalogTools == true) {
+                    Icon(HugeIcons.McpServer, null)
+                } else {
+                    CircularProgressIndicator(modifier = Modifier.size(24.dp))
                 }
-                FilledTonalIconButton(
-                    onClick = {
-                        onDelete()
-                    }
-                ) {
-                    Icon(HugeIcons.Delete01, null)
+
+                McpStatus.Discovering -> if (presentation?.hasCatalogTools == true) {
+                    Icon(HugeIcons.McpServer, null)
+                } else {
+                    CircularProgressIndicator(modifier = Modifier.size(24.dp))
+                }
+                is McpStatus.Ready -> Icon(HugeIcons.McpServer, null)
+                is McpStatus.Reconnecting -> if (status.maintenance || presentation?.hasCatalogTools == true) {
+                    Icon(HugeIcons.Clock02, null)
+                } else {
+                    CircularProgressIndicator(modifier = Modifier.size(24.dp))
+                }
+                is McpStatus.RetryScheduled,
+                McpStatus.WaitingNetwork,
+                is McpStatus.CatalogStale -> Icon(HugeIcons.Clock02, null)
+                McpStatus.CatalogRejectedEmpty,
+                is McpStatus.Error -> Icon(HugeIcons.AlertCircle, null)
+                McpStatus.NeedsAuthorization -> Icon(HugeIcons.AlertCircle, null)
+                McpStatus.Authorizing -> if (presentation?.hasCatalogTools == true) {
+                    Icon(HugeIcons.Clock02, null)
+                } else {
+                    CircularProgressIndicator(modifier = Modifier.size(24.dp))
                 }
             }
-        },
-        enableDismissFromStartToEnd = false,
-        enableDismissFromEndToStart = true,
-        modifier = modifier
-    ) {
-        Card(
-            colors = CardDefaults.cardColors(
-                containerColor = CustomColors.listItemColors.containerColor
-            )
-        ) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(16.dp),
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-                verticalAlignment = Alignment.Top,
+
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                when (status) {
-                    McpStatus.Idle -> Icon(HugeIcons.MessageBlocked, null)
-                    McpStatus.Connecting -> if (presentation?.hasCatalogTools == true) {
-                        Icon(HugeIcons.McpServer, null)
-                    } else {
-                        CircularProgressIndicator(modifier = Modifier.size(24.dp))
-                    }
-
-                    McpStatus.Discovering -> if (presentation?.hasCatalogTools == true) {
-                        Icon(HugeIcons.McpServer, null)
-                    } else {
-                        CircularProgressIndicator(modifier = Modifier.size(24.dp))
-                    }
-                    is McpStatus.Ready -> Icon(HugeIcons.McpServer, null)
-                    is McpStatus.Reconnecting -> if (status.maintenance || presentation?.hasCatalogTools == true) {
-                        Icon(HugeIcons.Clock02, null)
-                    } else {
-                        CircularProgressIndicator(modifier = Modifier.size(24.dp))
-                    }
-                    is McpStatus.RetryScheduled,
-                    McpStatus.WaitingNetwork,
-                    is McpStatus.CatalogStale -> Icon(HugeIcons.Clock02, null)
-                    McpStatus.CatalogRejectedEmpty,
-                    is McpStatus.Error -> Icon(HugeIcons.AlertCircle, null)
-                    McpStatus.NeedsAuthorization -> Icon(HugeIcons.AlertCircle, null)
-                    McpStatus.Authorizing -> if (presentation?.hasCatalogTools == true) {
-                        Icon(HugeIcons.Clock02, null)
-                    } else {
-                        CircularProgressIndicator(modifier = Modifier.size(24.dp))
-                    }
-                }
-
-                Column(
-                    modifier = Modifier.weight(1f),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        Text(
-                            text = item.commonOptions.name,
-                            style = MaterialTheme.typography.titleLarge,
-                        )
-                        if (presentation?.scope is ConfigurationScope.Enterprise) {
-                            Tag(type = TagType.INFO) { Text(stringResource(R.string.managed_configuration_source_local)) }
-                        }
-                        presentation?.unavailableReason?.let { reason ->
-                            Tag(type = TagType.WARNING) { Text(configurationUnavailableText(reason)) }
-                        }
-                        val dotColor =
-                            if (item.commonOptions.enable) MaterialTheme.extendColors.green6 else MaterialTheme.extendColors.red6
-                        Box(
-                            modifier = Modifier
-                                .size(8.dp)
-                                .drawWithContent {
-                                    drawCircle(
-                                        color = dotColor
-                                    )
-                                }
-                        )
+                    Text(
+                        text = item.commonOptions.name,
+                        style = MaterialTheme.typography.titleLarge,
+                    )
+                    if (presentation?.scope is ConfigurationScope.Enterprise) {
+                        Tag(type = TagType.INFO) { Text(stringResource(R.string.managed_configuration_source_local)) }
                     }
-
-                    Row(
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Tag(type = TagType.SUCCESS) {
-                            when (item) {
-                                is McpServerConfig.SseTransportServer -> Text("SSE")
-                                is McpServerConfig.StreamableHTTPServer -> Text("Streamable HTTP")
+                    presentation?.unavailableReason?.let { reason ->
+                        Tag(type = TagType.WARNING) { Text(configurationUnavailableText(reason)) }
+                    }
+                    val dotColor =
+                        if (item.commonOptions.enable) MaterialTheme.extendColors.green6 else MaterialTheme.extendColors.red6
+                    Box(
+                        modifier = Modifier
+                            .size(8.dp)
+                            .drawWithContent {
+                                drawCircle(
+                                    color = dotColor
+                                )
                             }
-                        }
-                        val oauthState = item.commonOptions.oauth
-                        if (oauthState?.enabled == true) {
-                            Icon(
-                                imageVector = HugeIcons.ShieldKey,
-                                contentDescription = null,
-                                modifier = Modifier.size(16.dp),
-                                tint = if (oauthState.isAuthorized) MaterialTheme.extendColors.green6
-                                       else MaterialTheme.colorScheme.error,
-                            )
-                        }
-                    }
-                    if (presentation?.hasCatalogTools == true) {
-                        val enabledToolCount = presentation.tools.count { it.enabled }
-                        Tag(type = TagType.INFO) {
-                            Text(
-                                stringResource(
-                                    R.string.mcp_enabled_tools_count,
-                                    enabledToolCount,
-                                    presentation.tools.size,
-                                )
-                            )
-                        }
-                    }
-                    when (status) {
-                        McpStatus.Discovering -> Text(
-                            stringResource(R.string.mcp_status_discovering),
-                            style = MaterialTheme.typography.labelSmall,
-                        )
-                        McpStatus.WaitingNetwork -> Text(
-                            stringResource(R.string.mcp_status_waiting_network),
-                            style = MaterialTheme.typography.labelSmall,
-                        )
-                        McpStatus.CatalogRejectedEmpty -> Text(
-                            stringResource(R.string.mcp_status_catalog_rejected_empty),
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.error,
-                        )
-                        is McpStatus.CatalogStale -> Text(
-                            stringResource(R.string.mcp_status_catalog_stale, status.lastKnownGoodCount),
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                        else -> Unit
-                    }
-                    if (status is McpStatus.Error) {
-                        val error = status
-                        Text(
-                            text = error.message ?: stringResource(R.string.error_title_operation),
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.error,
-                            maxLines = 3,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.clickable { errorDetail = error },
-                        )
-                        TextButton(
-                            onClick = onRestart,
-                            contentPadding = PaddingValues(horizontal = 0.dp, vertical = 0.dp),
-                        ) {
-                            Text(
-                                text = stringResource(R.string.mcp_retry),
-                                style = MaterialTheme.typography.labelSmall,
-                            )
-                        }
-                    }
-                    if (status is McpStatus.Reconnecting) {
-                        Text(
-                            text = if (status.maintenance) {
-                                stringResource(R.string.mcp_status_maintenance_reconnecting)
-                            } else {
-                                stringResource(R.string.mcp_status_reconnecting, status.attempt, status.maxAttempts)
-                            },
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                    }
-                    if (status is McpStatus.RetryScheduled) {
-                        Text(
-                            text = if (status.maintenance) {
-                                stringResource(
-                                    R.string.mcp_status_maintenance_retry,
-                                    (status.retryInMs / 1000).toInt(),
-                                )
-                            } else {
-                                stringResource(
-                                    R.string.mcp_status_retry_scheduled,
-                                    status.attempt,
-                                    status.maxAttempts,
-                                    (status.retryInMs / 1000).toInt(),
-                                )
-                            },
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.error,
-                            maxLines = 3,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                    }
-                    if (status == McpStatus.NeedsAuthorization) {
-                        val context = LocalContext.current
-                        var showManualConfig by remember { mutableStateOf(false) }
-                        var clientIdText by remember(item.id) {
-                            mutableStateOf(item.commonOptions.oauth?.clientId ?: "")
-                        }
-                        var clientSecretText by remember(item.id) {
-                            mutableStateOf(item.commonOptions.oauth?.clientSecret ?: "")
-                        }
-                        Text(
-                            text = stringResource(R.string.mcp_status_needs_authorization),
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.error,
-                        )
-                        // 主授权按钮：尝试 DCR 动态注册
-                        Button(
-                            onClick = { mcpApplicationService.authorize(item.id, context) },
-                            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp),
-                        ) {
-                            Text(stringResource(R.string.mcp_oauth_authorize))
-                        }
-                        // 展开服务器配置（用于不支持 DCR 的服务器，如 GitHub）
-                        TextButton(
-                            onClick = { showManualConfig = !showManualConfig },
-                            contentPadding = PaddingValues(horizontal = 0.dp, vertical = 0.dp),
-                        ) {
-                            Text(
-                                text = stringResource(R.string.mcp_oauth_server_config),
-                                style = MaterialTheme.typography.labelSmall,
-                            )
-                        }
-                        if (showManualConfig) {
-                            OutlinedTextField(
-                                value = clientIdText,
-                                onValueChange = { clientIdText = it },
-                                label = { Text(stringResource(R.string.mcp_oauth_client_id)) },
-                                modifier = Modifier.fillMaxWidth(),
-                                singleLine = true,
-                                supportingText = { Text(stringResource(R.string.mcp_oauth_client_id_hint)) },
-                            )
-                            OutlinedTextField(
-                                value = clientSecretText,
-                                onValueChange = { clientSecretText = it },
-                                label = { Text(stringResource(R.string.mcp_oauth_client_secret)) },
-                                modifier = Modifier.fillMaxWidth(),
-                                singleLine = true,
-                            )
-                            Button(
-                                onClick = {
-                                    scope.launch {
-                                        mcpApplicationService.setOAuthClientCredentials(
-                                            item.id,
-                                            clientIdText.trim(),
-                                            clientSecretText.trim().ifBlank { null },
-                                        )
-                                        mcpApplicationService.authorize(item.id, context)
-                                    }
-                                },
-                                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp),
-                            ) {
-                                Text(stringResource(R.string.mcp_oauth_authorize_with_credentials))
-                            }
-                        }
-                    }
-                    if (status == McpStatus.Authorizing) {
-                        Text(
-                            text = stringResource(R.string.mcp_oauth_authorizing_hint),
-                            style = MaterialTheme.typography.labelSmall,
-                        )
-                        TextButton(
-                            onClick = { mcpApplicationService.cancelAuthorization(item.id) },
-                            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp),
-                        ) {
-                            Text(stringResource(R.string.mcp_oauth_cancel_authorization))
-                        }
-                    }
-                    // 已授权时提供取消授权入口（非授权中/非需要授权状态）
-                    if (status != McpStatus.NeedsAuthorization &&
-                        status != McpStatus.Authorizing &&
-                        item.commonOptions.oauth?.isAuthorized == true) {
-                        TextButton(
-                            onClick = { scope.launch { mcpApplicationService.clearAuthorization(item.id) } },
-                            contentPadding = PaddingValues(horizontal = 0.dp, vertical = 0.dp),
-                        ) {
-                            Icon(
-                                imageVector = HugeIcons.Logout01,
-                                contentDescription = null,
-                                modifier = Modifier.size(14.dp),
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                            Spacer(Modifier.width(4.dp))
-                            Text(
-                                text = stringResource(R.string.mcp_oauth_clear),
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                    }
+                    )
                 }
 
                 Row(
-                    horizontalArrangement = Arrangement.spacedBy(2.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    IconButton(
-                        onClick = onShare,
-                        modifier = Modifier.size(36.dp),
-                    ) {
-                        Icon(HugeIcons.Share01, null, modifier = Modifier.size(18.dp))
+                    Tag(type = TagType.SUCCESS) {
+                        when (item) {
+                            is McpServerConfig.SseTransportServer -> Text("SSE")
+                            is McpServerConfig.StreamableHTTPServer -> Text("Streamable HTTP")
+                        }
                     }
-                    IconButton(
-                        onClick = { onEdit(item) },
-                        modifier = Modifier.size(36.dp),
+                    val oauthState = item.commonOptions.oauth
+                    if (oauthState?.enabled == true) {
+                        Icon(
+                            imageVector = HugeIcons.ShieldKey,
+                            contentDescription = null,
+                            modifier = Modifier.size(16.dp),
+                            tint = if (oauthState.isAuthorized) MaterialTheme.extendColors.green6
+                                   else MaterialTheme.colorScheme.error,
+                        )
+                    }
+                }
+                if (presentation?.hasCatalogTools == true) {
+                    val enabledToolCount = presentation.tools.count { it.enabled }
+                    Tag(type = TagType.INFO) {
+                        Text(
+                            stringResource(
+                                R.string.mcp_enabled_tools_count,
+                                enabledToolCount,
+                                presentation.tools.size,
+                            )
+                        )
+                    }
+                }
+                when (status) {
+                    McpStatus.Discovering -> Text(
+                        stringResource(R.string.mcp_status_discovering),
+                        style = MaterialTheme.typography.labelSmall,
+                    )
+                    McpStatus.WaitingNetwork -> Text(
+                        stringResource(R.string.mcp_status_waiting_network),
+                        style = MaterialTheme.typography.labelSmall,
+                    )
+                    McpStatus.CatalogRejectedEmpty -> Text(
+                        stringResource(R.string.mcp_status_catalog_rejected_empty),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                    is McpStatus.CatalogStale -> Text(
+                        stringResource(R.string.mcp_status_catalog_stale, status.lastKnownGoodCount),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    else -> Unit
+                }
+                if (status is McpStatus.Error) {
+                    val error = status
+                    Text(
+                        text = error.message ?: stringResource(R.string.error_title_operation),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.error,
+                        maxLines = 3,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.clickable { errorDetail = error },
+                    )
+                    TextButton(
+                        onClick = onRestart,
+                        contentPadding = PaddingValues(horizontal = 0.dp, vertical = 0.dp),
                     ) {
-                        Icon(HugeIcons.Settings03, null, modifier = Modifier.size(18.dp))
+                        Text(
+                            text = stringResource(R.string.mcp_retry),
+                            style = MaterialTheme.typography.labelSmall,
+                        )
+                    }
+                }
+                if (status is McpStatus.Reconnecting) {
+                    Text(
+                        text = if (status.maintenance) {
+                            stringResource(R.string.mcp_status_maintenance_reconnecting)
+                        } else {
+                            stringResource(R.string.mcp_status_reconnecting, status.attempt, status.maxAttempts)
+                        },
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                if (status is McpStatus.RetryScheduled) {
+                    Text(
+                        text = if (status.maintenance) {
+                            stringResource(
+                                R.string.mcp_status_maintenance_retry,
+                                (status.retryInMs / 1000).toInt(),
+                            )
+                        } else {
+                            stringResource(
+                                R.string.mcp_status_retry_scheduled,
+                                status.attempt,
+                                status.maxAttempts,
+                                (status.retryInMs / 1000).toInt(),
+                            )
+                        },
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.error,
+                        maxLines = 3,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                if (status == McpStatus.NeedsAuthorization) {
+                    val context = LocalContext.current
+                    var showManualConfig by remember { mutableStateOf(false) }
+                    var clientIdText by remember(item.id) {
+                        mutableStateOf(item.commonOptions.oauth?.clientId ?: "")
+                    }
+                    var clientSecretText by remember(item.id) {
+                        mutableStateOf(item.commonOptions.oauth?.clientSecret ?: "")
+                    }
+                    Text(
+                        text = stringResource(R.string.mcp_status_needs_authorization),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                    // 主授权按钮：尝试 DCR 动态注册
+                    Button(
+                        onClick = { mcpApplicationService.authorize(item.id, context) },
+                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp),
+                    ) {
+                        Text(stringResource(R.string.mcp_oauth_authorize))
+                    }
+                    // 展开服务器配置（用于不支持 DCR 的服务器，如 GitHub）
+                    TextButton(
+                        onClick = { showManualConfig = !showManualConfig },
+                        contentPadding = PaddingValues(horizontal = 0.dp, vertical = 0.dp),
+                    ) {
+                        Text(
+                            text = stringResource(R.string.mcp_oauth_server_config),
+                            style = MaterialTheme.typography.labelSmall,
+                        )
+                    }
+                    if (showManualConfig) {
+                        OutlinedTextField(
+                            value = clientIdText,
+                            onValueChange = { clientIdText = it },
+                            label = { Text(stringResource(R.string.mcp_oauth_client_id)) },
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true,
+                            supportingText = { Text(stringResource(R.string.mcp_oauth_client_id_hint)) },
+                        )
+                        OutlinedTextField(
+                            value = clientSecretText,
+                            onValueChange = { clientSecretText = it },
+                            label = { Text(stringResource(R.string.mcp_oauth_client_secret)) },
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true,
+                        )
+                        Button(
+                            onClick = {
+                                scope.launch {
+                                    mcpApplicationService.setOAuthClientCredentials(
+                                        item.id,
+                                        clientIdText.trim(),
+                                        clientSecretText.trim().ifBlank { null },
+                                    )
+                                    mcpApplicationService.authorize(item.id, context)
+                                }
+                            },
+                            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp),
+                        ) {
+                            Text(stringResource(R.string.mcp_oauth_authorize_with_credentials))
+                        }
+                    }
+                }
+                if (status == McpStatus.Authorizing) {
+                    Text(
+                        text = stringResource(R.string.mcp_oauth_authorizing_hint),
+                        style = MaterialTheme.typography.labelSmall,
+                    )
+                    TextButton(
+                        onClick = { mcpApplicationService.cancelAuthorization(item.id) },
+                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp),
+                    ) {
+                        Text(stringResource(R.string.mcp_oauth_cancel_authorization))
+                    }
+                }
+                // 已授权时提供取消授权入口（非授权中/非需要授权状态）
+                if (status != McpStatus.NeedsAuthorization &&
+                    status != McpStatus.Authorizing &&
+                    item.commonOptions.oauth?.isAuthorized == true) {
+                    TextButton(
+                        onClick = { scope.launch { mcpApplicationService.clearAuthorization(item.id) } },
+                        contentPadding = PaddingValues(horizontal = 0.dp, vertical = 0.dp),
+                    ) {
+                        Icon(
+                            imageVector = HugeIcons.Logout01,
+                            contentDescription = null,
+                            modifier = Modifier.size(14.dp),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Spacer(Modifier.width(4.dp))
+                        Text(
+                            text = stringResource(R.string.mcp_oauth_clear),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
                     }
                 }
             }
+
+            ItemActionMenu(listOf(
+                ItemAction(text = stringResource(R.string.share), icon = HugeIcons.Share01, onClick = onShare),
+                ItemAction(text = stringResource(R.string.delete), icon = HugeIcons.Delete01,
+                    destructive = true, onClick = { showDeleteDialog = true }),
+            ))
         }
     }
+    ConfirmDialog(
+        show = showDeleteDialog,
+        title = stringResource(R.string.confirm_delete),
+        confirmText = stringResource(R.string.delete),
+        dismissText = stringResource(R.string.cancel),
+        onConfirm = { showDeleteDialog = false; onDelete() },
+        onDismiss = { showDeleteDialog = false },
+    ) { Text(stringResource(R.string.common_delete_confirm_message, item.commonOptions.name)) }
 }
 
 @Composable
-private fun McpServerConfigModal(state: EditState<McpServerConfig>) {
+internal fun McpServerConfigModal(state: EditState<McpServerConfig>, save: suspend (McpServerConfig) -> Unit) {
     state.EditStateContent { config, updateValue ->
         val pagerState = rememberPagerState { 2 }
         val scope = rememberCoroutineScope()
+        var saving by remember { mutableStateOf(false) }
+        var error by remember { mutableStateOf<Throwable?>(null) }
+        var newHeaderRows by remember { mutableStateOf(emptySet<Int>()) }
+        val update: (McpServerConfig) -> Unit = { updated -> error = null; updateValue(updated) }
         AdaptiveModal(
             onDismissRequest = state::dismiss,
             dialogMaxWidth = 840.dp,
@@ -948,17 +906,23 @@ private fun McpServerConfigModal(state: EditState<McpServerConfig>) {
                         0 -> {
                             McpCommonOptionsConfigure(
                                 config = config,
-                                update = updateValue
+                                update = update,
+                                headerError = error as? McpHeaderValidationException,
+                                onHeaderAdded = { newHeaderRows = newHeaderRows + it },
+                                onHeaderRemoved = { newHeaderRows = remapVisibleHeaderIndicesAfterRemoval(newHeaderRows, it) },
                             )
                         }
 
                         1 -> {
                             McpToolsConfigure(
                                 config = config,
-                                update = updateValue,
+                                update = update,
                             )
                         }
                     }
+                }
+                error?.let { failure ->
+                    SelectionContainer { Text(failure.userVisibleDiagnostic(), color = MaterialTheme.colorScheme.error) }
                 }
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -968,9 +932,38 @@ private fun McpServerConfigModal(state: EditState<McpServerConfig>) {
                         Text(stringResource(R.string.cancel))
                     }
                     TextButton(
+                        enabled = !saving,
                         onClick = {
                             if (config.commonOptions.name.isNotBlank() && isValidMcpName(config.commonOptions.name)) {
-                                state.confirm()
+                                scope.launch {
+                                    saving = true
+                                    error = null
+                                    try {
+                                        val headers = config.commonOptions.headers.filterIndexed { index, header ->
+                                            if (index in newHeaderRows && header.first.isEmpty() && header.second.isEmpty()) {
+                                                false
+                                            } else {
+                                                try { validateMcpHeaders(listOf(header)) }
+                                                catch (invalid: McpHeaderValidationException) {
+                                                    throw McpHeaderValidationException(index + 1, invalid.reason)
+                                                }
+                                                true
+                                            }
+                                        }
+                                        save(config.clone(commonOptions = config.commonOptions.copy(headers = headers)))
+                                        if (state.currentState == config) state.dismiss()
+                                    } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                                        throw cancelled
+                                    } catch (failure: Throwable) {
+                                        if (failure !is McpHeaderValidationException) {
+                                            android.util.Log.e("SettingMcpPage", me.rerere.ai.core.ToolErrorProtocol.redactSecrets(failure.stackTraceToString()))
+                                        }
+                                        error = failure
+                                        pagerState.scrollToPage(0)
+                                    } finally {
+                                        saving = false
+                                    }
+                                }
                             }
                         }
                     ) {
@@ -985,7 +978,10 @@ private fun McpServerConfigModal(state: EditState<McpServerConfig>) {
 @Composable
 private fun McpCommonOptionsConfigure(
     config: McpServerConfig,
-    update: (McpServerConfig) -> Unit
+    update: (McpServerConfig) -> Unit,
+    headerError: McpHeaderValidationException?,
+    onHeaderAdded: (Int) -> Unit,
+    onHeaderRemoved: (Int) -> Unit,
 ) {
     Column(
         modifier = Modifier
@@ -1196,12 +1192,17 @@ private fun McpCommonOptionsConfigure(
                         Column(modifier = Modifier.weight(1f)) {
                             OutlinedTextField(
                                 value = headerName,
+                                isError = headerError != null && headerError.row == index + 1 && headerError.reason != McpHeaderValidationReason.INVALID_VALUE,
+                                supportingText = if (headerError != null && headerError.row == index + 1 && headerError.reason != McpHeaderValidationReason.INVALID_VALUE) {
+                                    { Text(stringResource(if (headerError.reason == McpHeaderValidationReason.EMPTY_NAME)
+                                        R.string.setting_mcp_page_header_name_required else R.string.setting_mcp_page_header_name_invalid)) }
+                                } else null,
                                 onValueChange = {
                                     headerName = it
                                     val updatedHeaders =
                                         config.commonOptions.headers.toMutableList()
                                     updatedHeaders[index] =
-                                        it.trim() to updatedHeaders[index].second
+                                        it to updatedHeaders[index].second
                                     update(
                                         when (config) {
                                             is McpServerConfig.SseTransportServer -> config.copy(
@@ -1221,11 +1222,15 @@ private fun McpCommonOptionsConfigure(
                             Spacer(Modifier.height(8.dp))
                             OutlinedTextField(
                                 value = headerValue,
+                                isError = headerError != null && headerError.row == index + 1 && headerError.reason == McpHeaderValidationReason.INVALID_VALUE,
+                                supportingText = if (headerError != null && headerError.row == index + 1 && headerError.reason == McpHeaderValidationReason.INVALID_VALUE) {
+                                    { Text(stringResource(R.string.setting_mcp_page_header_value_invalid)) }
+                                } else null,
                                 onValueChange = {
                                     headerValue = it
                                     val updatedHeaders =
                                         config.commonOptions.headers.toMutableList()
-                                    updatedHeaders[index] = updatedHeaders[index].first to it.trim()
+                                    updatedHeaders[index] = updatedHeaders[index].first to it
                                     update(
                                         when (config) {
                                             is McpServerConfig.SseTransportServer -> config.copy(
@@ -1274,6 +1279,7 @@ private fun McpCommonOptionsConfigure(
                         IconButton(onClick = {
                             val updatedHeaders = config.commonOptions.headers.toMutableList()
                             updatedHeaders.removeAt(index)
+                            onHeaderRemoved(index)
                             visibleHeaderIndices = remapVisibleHeaderIndicesAfterRemoval(
                                 visibleHeaderIndices,
                                 index
@@ -1307,6 +1313,7 @@ private fun McpCommonOptionsConfigure(
                         } else {
                             "" to ""
                         }
+                        onHeaderAdded(updatedHeaders.size)
                         updatedHeaders.add(newHeader)
                         update(
                             when (config) {
@@ -1528,11 +1535,14 @@ private fun isValidMcpName(name: String): Boolean {
 }
 
 @Composable
-private fun McpImportModal(
+internal fun McpImportModal(
     onDismiss: () -> Unit,
-    onImport: (String) -> Unit,
+    onImport: suspend (String) -> String?,
 ) {
     var jsonText by remember { mutableStateOf("") }
+    var error by remember { mutableStateOf<String?>(null) }
+    var importing by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
 
     AdaptiveModal(
         onDismissRequest = onDismiss,
@@ -1554,12 +1564,13 @@ private fun McpImportModal(
             )
             OutlinedTextField(
                 value = jsonText,
-                onValueChange = { jsonText = it },
+                onValueChange = { jsonText = it; error = null },
                 modifier = Modifier
                     .fillMaxWidth()
                     .weight(1f),
                 placeholder = { Text("{ \"mcpServers\": { ... } }") },
             )
+            error?.let { detail -> SelectionContainer { Text(detail, color = MaterialTheme.colorScheme.error) } }
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End)
@@ -1568,7 +1579,17 @@ private fun McpImportModal(
                     Text(stringResource(R.string.cancel))
                 }
                 Button(
-                    onClick = { onImport(jsonText.trim()) }
+                    enabled = !importing,
+                    onClick = {
+                        scope.launch {
+                            importing = true
+                            val submitted = jsonText
+                            try {
+                                error = onImport(submitted.trim())
+                                if (error == null && jsonText == submitted) onDismiss()
+                            } finally { importing = false }
+                        }
+                    }
                 ) {
                     Text(stringResource(R.string.setting_mcp_page_import_confirm))
                 }
@@ -1580,18 +1601,27 @@ private fun McpImportModal(
 /**
  * 处理 MCP JSON 导入：解析 → 导入合并 → 反馈结果 → 回调冲突
  */
-private suspend fun handleMcpImport(
+internal suspend fun handleMcpImport(
     json: String,
     mcpApplicationService: McpApplicationService,
     toaster: com.dokar.sonner.ToasterState,
     context: android.content.Context,
     onConflicts: (List<Pair<McpServerConfig, McpServerConfig>>) -> Unit,
-) {
+): String? {
+    val result = try {
+        parseMcpServersFromJson(json)
+    } catch (cancelled: kotlinx.coroutines.CancellationException) {
+        throw cancelled
+    } catch (failure: Throwable) {
+        val detail = context.getString(R.string.setting_mcp_page_import_parse_error, failure.userVisibleDiagnostic())
+        toaster.show(detail, type = ToastType.Error)
+        return detail
+    }
     try {
-        val result = parseMcpServersFromJson(json)
         if (result.servers.isEmpty() && result.unsupportedNames.isEmpty()) {
-            toaster.show(context.getString(R.string.setting_mcp_page_import_no_valid_config), type = ToastType.Error)
-            return
+            val detail = context.getString(R.string.setting_mcp_page_import_no_valid_config)
+            toaster.show(detail, type = ToastType.Error)
+            return detail
         }
 
         val importResult = mcpApplicationService.importServers(result.servers)
@@ -1610,11 +1640,11 @@ private suspend fun handleMcpImport(
     } catch (cancelled: kotlinx.coroutines.CancellationException) {
         throw cancelled
     } catch (error: Throwable) {
-        toaster.show(
-            context.getString(R.string.setting_mcp_page_import_parse_error, error.message ?: ""),
-            type = ToastType.Error
-        )
+        val detail = error.userVisibleDiagnostic()
+        toaster.show(detail, type = ToastType.Error)
+        return detail
     }
+    return null
 }
 
 @Composable

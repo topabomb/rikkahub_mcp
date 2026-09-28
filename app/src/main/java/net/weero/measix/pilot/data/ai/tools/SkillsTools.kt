@@ -33,8 +33,8 @@ fun createSkillTools(
                 appendLine("<available_skills>")
                 available.forEach { skill ->
                     appendLine("  <skill>")
-                    appendLine("    <name>${skill.name}</name>")
-                    appendLine("    <description>${skill.description}</description>")
+                    appendLine("    <name>${skill.name.escapeSkillXml()}</name>")
+                    appendLine("    <description>${skill.description.takeSkillCodePoints(1024).escapeSkillXml()}</description>")
                     appendLine("  </skill>")
                 }
                 append("</available_skills>")
@@ -89,3 +89,7 @@ fun createSkillTools(
         )
     )
 }
+
+private fun String.escapeSkillXml(): String = replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+private fun String.takeSkillCodePoints(limit: Int): String = substring(0, offsetByCodePoints(0, minOf(limit, codePointCount(0, length))))

@@ -199,6 +199,22 @@ class ConversationTitleCoordinator internal constructor(
         }
     }
 
+    /** The source title lock serializes naming and durable creation without changing its title token. */
+    internal suspend fun <T> createForkWithTitle(
+        sourceId: Uuid,
+        sourceTitle: String,
+        occupiedTitles: suspend () -> List<String>,
+        create: suspend (String) -> T,
+    ): T {
+        val state = states.getOrPut(sourceId) { State() }
+        return state.commitMutex.withLock {
+            val occupied = occupiedTitles().toHashSet()
+            var sequence = 1
+            while ("$sourceTitle($sequence)" in occupied) sequence++
+            create("$sourceTitle($sequence)")
+        }
+    }
+
     internal suspend fun commitGeneratedTitle(
         token: ConversationTitleGenerationToken,
         title: String,

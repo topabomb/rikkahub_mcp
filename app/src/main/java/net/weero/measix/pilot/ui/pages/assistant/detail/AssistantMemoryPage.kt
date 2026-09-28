@@ -49,6 +49,8 @@ import net.weero.measix.pilot.service.MemoryRecord
 import net.weero.measix.pilot.service.MemoryView
 import net.weero.measix.pilot.ui.components.nav.BackButton
 import net.weero.measix.pilot.ui.components.ui.CardGroup
+import net.weero.measix.pilot.ui.components.ui.ItemAction
+import net.weero.measix.pilot.ui.components.ui.ItemActionMenu
 import net.weero.measix.pilot.ui.components.ui.ConfirmDialog
 import net.weero.measix.pilot.ui.hooks.EditStateContent
 import net.weero.measix.pilot.ui.hooks.useEditState
@@ -377,6 +379,7 @@ private fun MemoryItem(
     onDeleteMemory: (MemoryRecord) -> Unit
 ) {
     Card(
+        onClick = { onEditMemory(memory) },
         modifier = Modifier.fillMaxWidth(),
         colors = CustomColors.cardColorsOnSurfaceContainer
     ) {
@@ -399,19 +402,14 @@ private fun MemoryItem(
                     style = MaterialTheme.typography.bodySmall,
                 )
             }
-            IconButton(
-                onClick = { onEditMemory(memory) }
-            ) {
-                Icon(HugeIcons.PencilEdit01, stringResource(R.string.edit))
-            }
-            IconButton(
-                onClick = { onDeleteMemory(memory) }
-            ) {
-                Icon(
-                    HugeIcons.Delete01,
-                    stringResource(R.string.assistant_page_delete)
-                )
-            }
+            ItemActionMenu(listOf(
+                ItemAction(
+                    text = stringResource(R.string.assistant_page_delete),
+                    icon = HugeIcons.Delete01,
+                    destructive = true,
+                    onClick = { onDeleteMemory(memory) },
+                ),
+            ))
         }
     }
 }

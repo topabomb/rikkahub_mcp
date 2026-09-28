@@ -186,10 +186,18 @@ class WorkspaceManager(
         area: WorkspaceStorageArea = WorkspaceStorageArea.FILES,
         outputStream: OutputStream,
     ) {
-        val file = fileSystem.resolve(areaDir(root, area), path)
-        require(file.exists()) { "File does not exist: $path" }
-        require(file.isFile) { "Path is not a file: $path" }
-        outputStream.use { out -> file.inputStream().use { it.copyTo(out) } }
+        val descriptor = WorkspaceDirectoryHandle(areaDir(root, area)).use {
+            it.open(path, android.os.ParcelFileDescriptor.MODE_READ_ONLY)
+        }
+        android.os.ParcelFileDescriptor.AutoCloseInputStream(descriptor).use { input ->
+            val buffer = ByteArray(64 * 1024)
+            while (true) {
+                if (Thread.currentThread().isInterrupted) throw java.io.InterruptedIOException("Workspace export cancelled")
+                val count = input.read(buffer)
+                if (count < 0) break
+                outputStream.write(buffer, 0, count)
+            }
+        }
     }
 
     /**

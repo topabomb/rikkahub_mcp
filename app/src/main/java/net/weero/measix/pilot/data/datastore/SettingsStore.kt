@@ -15,6 +15,8 @@ import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
@@ -250,7 +252,10 @@ class SettingsStore internal constructor(
     ): Flow<ResolvedConfiguration> = combine(userDocuments, enterpriseState) { document, enterprise ->
         val selectedScope = (enterprise as? EnterpriseState.Available)?.manifest?.selectedScope ?: ConfigurationScope.Personal
         ConfigurationResolver.resolve(document, requestedScope ?: selectedScope, enterprise)
-    }.distinctUntilChanged()
+    }.distinctUntilChanged { previous, current ->
+        // Catalog iteration order is visible to consumers, but Map equality ignores pure reorders.
+        previous == current && previous.catalog.keys.toList() == current.catalog.keys.toList()
+    }
 
     /** Lock order is session, user configuration, then the caller's durable data transaction. */
     internal suspend fun <T> withResolvedConfiguration(
@@ -414,12 +419,24 @@ class SettingsStore internal constructor(
         caller.ensureActive()
     }
 
-    init {
-        scope.launch {
-            userDocuments.collect {
-                // Read again under the writer so a delayed observer cannot regress a committed projection.
-                updateMutex.withLock { publishUserSettings() }
-            }
+    private val observationMutex = Mutex()
+    private var observationJob: Job? = observeUserSettings()
+
+    /** Recovery awaits the actual read, including migrations and decoding, rather than a stale UI projection. */
+    internal suspend fun initializeForRecovery() = observationMutex.withLock {
+        // The observer also needs the writer lock; join it before acquiring that lock.
+        observationJob?.cancelAndJoin()
+        observationJob = null
+        scope.coroutineContext.ensureActive()
+        updateMutex.withLock { publishUserSettings() }
+        currentCoroutineContext().ensureActive()
+        observationJob = observeUserSettings()
+    }
+
+    private fun observeUserSettings(): Job = scope.launch {
+        userDocuments.collect {
+            // Read again under the writer so a delayed observer cannot regress a committed projection.
+            updateMutex.withLock { publishUserSettings() }
         }
     }
 

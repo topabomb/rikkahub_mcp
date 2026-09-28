@@ -25,8 +25,9 @@ class WorkspaceVM(
                 onResult(WorkspaceMutationResult.Success)
             } catch (cancelled: CancellationException) {
                 throw cancelled
-            } catch (_: Exception) {
-                onResult(WorkspaceMutationResult.Failure(WorkspaceMutationOperation.CREATE))
+            } catch (error: Exception) {
+                android.util.Log.e("WorkspaceVM", "Create failed", error)
+                onResult(WorkspaceMutationResult.Failure(WorkspaceMutationOperation.CREATE, error))
             }
         }
     }
@@ -41,8 +42,9 @@ class WorkspaceVM(
                 )
             } catch (cancelled: CancellationException) {
                 throw cancelled
-            } catch (_: Exception) {
-                onResult(WorkspaceMutationResult.Failure(WorkspaceMutationOperation.RENAME))
+            } catch (error: Exception) {
+                android.util.Log.e("WorkspaceVM", "Rename failed", error)
+                onResult(WorkspaceMutationResult.Failure(WorkspaceMutationOperation.RENAME, error))
             }
         }
     }
@@ -59,8 +61,9 @@ class WorkspaceVM(
                 throw cancelled
             } catch (error: SettingsLockedException) {
                 onResult(WorkspaceMutationResult.Locked(error.reason))
-            } catch (_: Exception) {
-                onResult(WorkspaceMutationResult.Failure(WorkspaceMutationOperation.DELETE))
+            } catch (error: Exception) {
+                android.util.Log.e("WorkspaceVM", "Delete failed", error)
+                onResult(WorkspaceMutationResult.Failure(WorkspaceMutationOperation.DELETE, error))
             }
         }
     }
@@ -70,6 +73,6 @@ enum class WorkspaceMutationOperation { CREATE, RENAME, DELETE }
 
 sealed interface WorkspaceMutationResult {
     data object Success : WorkspaceMutationResult
-    data class Failure(val operation: WorkspaceMutationOperation) : WorkspaceMutationResult
+    data class Failure(val operation: WorkspaceMutationOperation, val cause: Exception? = null) : WorkspaceMutationResult
     data class Locked(val reason: String) : WorkspaceMutationResult
 }

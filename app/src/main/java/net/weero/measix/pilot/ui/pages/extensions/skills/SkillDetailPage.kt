@@ -29,6 +29,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.runtime.key
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
@@ -36,10 +37,18 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.foundation.text.selection.SelectionContainer
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.CancellationException
+import net.weero.measix.pilot.data.files.SkillContentReadResult
+import net.weero.measix.pilot.utils.userVisibleDiagnostic
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import net.weero.measix.pilot.ui.components.ui.FileEditorState
+import net.weero.measix.pilot.ui.components.ui.FileTextEditor
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
@@ -70,6 +79,11 @@ import org.koin.androidx.compose.koinViewModel
 
 @Composable
 fun SkillDetailPage(skillName: String) {
+    key(skillName) { SkillDetailContent(skillName) }
+}
+
+@Composable
+private fun SkillDetailContent(skillName: String) {
     val vm = koinViewModel<SkillDetailVM>()
     LaunchedEffect(skillName) { vm.init(skillName) }
 
@@ -77,9 +91,25 @@ fun SkillDetailPage(skillName: String) {
     val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
     val toaster = LocalToaster.current
 
-    var editingFile by remember { mutableStateOf<SkillFileEditor?>(null) }
-    var showAddDialog by rememberSaveable { mutableStateOf(false) }
-    var deleteTarget by remember { mutableStateOf<SkillFile?>(null) }
+    val scope = rememberCoroutineScope()
+    var busy by remember(skillName) { mutableStateOf(false) }
+    var diagnostic by remember(skillName) { mutableStateOf<String?>(null) }
+    val failure by vm.failure.collectAsStateWithLifecycle()
+    fun operation(block: suspend () -> Unit) {
+        if (busy) return
+        busy = true
+        scope.launch {
+            try { block() }
+            catch (cancelled: CancellationException) { throw cancelled }
+            catch (error: Exception) {
+                android.util.Log.e("SkillDetailPage", "Skill operation failed", error)
+                diagnostic = error.userVisibleDiagnostic()
+            } finally { busy = false }
+        }
+    }
+    var editingFile by remember(skillName) { mutableStateOf<SkillFileEditor?>(null) }
+    var showAddDialog by rememberSaveable(skillName) { mutableStateOf(false) }
+    var deleteTarget by remember(skillName) { mutableStateOf<SkillFile?>(null) }
     val deleteFailedMsg = stringResource(R.string.skill_detail_page_delete_failed)
     val deleteProtectedMsg = stringResource(R.string.skill_detail_page_delete_skill_file_forbidden)
     val loadFailedMsg = stringResource(R.string.skill_detail_page_load_failed)
@@ -88,7 +118,6 @@ fun SkillDetailPage(skillName: String) {
         SkillFileSaveResult.INVALID_PATH to stringResource(R.string.skill_detail_page_invalid_path),
         SkillFileSaveResult.INVALID_SKILL to stringResource(R.string.skill_detail_page_invalid_skill),
         SkillFileSaveResult.NAME_MISMATCH to stringResource(R.string.skill_detail_page_name_mismatch, skillName),
-        SkillFileSaveResult.IO_FAILURE to stringResource(R.string.skill_detail_page_save_failed),
     )
 
     val scrollState = rememberScrollState()
@@ -116,8 +145,8 @@ fun SkillDetailPage(skillName: String) {
                 enter = fadeIn() + scaleIn(),
                 exit = fadeOut() + scaleOut(),
             ) {
-                FloatingActionButton(onClick = { showAddDialog = true }) {
-                    Icon(Lucide.Plus, contentDescription = null)
+                FloatingActionButton(onClick = { if (!busy) showAddDialog = true }) {
+                    Icon(Lucide.Plus, contentDescription = stringResource(R.string.skill_detail_page_new_file))
                 }
             }
         },
@@ -134,25 +163,28 @@ fun SkillDetailPage(skillName: String) {
                 nodes = tree,
                 depth = 0,
                 onEdit = { skillFile ->
-                    vm.readFile(skillFile) { result ->
-                        when (result) {
-                            is SkillFileLoadResult.Success -> editingFile = SkillFileEditor(skillFile, result.content)
-                            SkillFileLoadResult.Failure -> toaster.show(loadFailedMsg)
+                    operation {
+                        when (val result = vm.readFile(skillName, skillFile)) {
+                            is SkillContentReadResult.Success -> editingFile = SkillFileEditor(skillFile, result.content)
+                            is SkillContentReadResult.ReadFailure -> throw result.cause
+                            else -> toaster.show("$loadFailedMsg (${result.javaClass.simpleName})")
                         }
                     }
                 },
-                onDelete = { deleteTarget = it },
+                onDelete = { if (!busy) deleteTarget = it },
             )
         }
     }
 
     editingFile?.let { editor ->
         EditFileDialog(
+            busy = busy,
             skillFile = editor.skillFile,
             initialContent = editor.content,
             onDismiss = { editingFile = null },
             onConfirm = { content ->
-                vm.saveFile(editor.skillFile.relativePath, content) { result ->
+                operation {
+                    val result = vm.saveFile(skillName, editor.skillFile.relativePath, content)
                     if (result == SkillFileSaveResult.SUCCESS) editingFile = null
                     else toaster.show(saveErrorMessages.getValue(result))
                 }
@@ -162,9 +194,11 @@ fun SkillDetailPage(skillName: String) {
 
     if (showAddDialog) {
         AddFileDialog(
+            busy = busy,
             onDismiss = { showAddDialog = false },
             onConfirm = { fileName, content ->
-                vm.saveFile(fileName, content) { result ->
+                operation {
+                    val result = vm.saveFile(skillName, fileName, content)
                     if (result == SkillFileSaveResult.SUCCESS) showAddDialog = false
                     else toaster.show(saveErrorMessages.getValue(result))
                 }
@@ -179,20 +213,27 @@ fun SkillDetailPage(skillName: String) {
         dismissText = stringResource(R.string.cancel),
         onConfirm = {
             deleteTarget?.let { skillFile ->
-                vm.deleteFile(skillFile) { result ->
-                    when (result) {
-                        SkillFileDeleteResult.SUCCESS -> Unit
+                operation {
+                    when (val result = vm.deleteFile(skillName, skillFile)) {
+                        SkillFileDeleteResult.SUCCESS -> deleteTarget = null
                         SkillFileDeleteResult.PROTECTED_SKILL_FILE -> toaster.show(deleteProtectedMsg)
-                        else -> toaster.show(deleteFailedMsg)
+                        else -> toaster.show("$deleteFailedMsg (${result.name})")
                     }
                 }
             }
-            deleteTarget = null
         },
-        onDismiss = { deleteTarget = null },
+        onDismiss = { if (!busy) deleteTarget = null },
     ) {
         Text(stringResource(R.string.skill_detail_page_delete_confirm, deleteTarget?.relativePath ?: ""))
     }
+    (diagnostic ?: failure?.userVisibleDiagnostic())?.let { detail ->
+        AlertDialog(
+            onDismissRequest = { diagnostic = null; vm.dismissFailure() },
+            text = { SelectionContainer { Text(detail, Modifier.verticalScroll(rememberScrollState())) } },
+            confirmButton = { TextButton(onClick = { diagnostic = null; vm.dismissFailure() }) { Text(stringResource(R.string.confirm)) } },
+        )
+    }
+
 }
 
 private data class SkillFileEditor(
@@ -340,48 +381,51 @@ private fun DirItem(
 }
 
 @Composable
-private fun EditFileDialog(
+internal fun EditFileDialog(
+    busy: Boolean,
     skillFile: SkillFile,
     initialContent: String,
     onDismiss: () -> Unit,
     onConfirm: (content: String) -> Unit,
 ) {
-    var content by rememberSaveable(skillFile.relativePath) { mutableStateOf(initialContent) }
+    val contentState = remember(skillFile.relativePath) {
+        FileEditorState(initialContent)
+    }
 
     AlertDialog(
-        onDismissRequest = onDismiss,
+        onDismissRequest = { if (!busy) onDismiss() },
         title = { Text(skillFile.relativePath, fontFamily = FontFamily.Monospace) },
         text = {
-            OutlinedTextField(
-                value = content,
-                onValueChange = { content = it },
-                label = { Text(stringResource(R.string.skill_detail_page_content)) },
+            FileTextEditor(
+                state = contentState,
+                enabled = !busy,
+                label = stringResource(R.string.skill_detail_page_content),
                 minLines = 10,
                 maxLines = 20,
-                textStyle = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
                 modifier = Modifier.fillMaxWidth(),
             )
         },
         confirmButton = {
-            TextButton(onClick = { onConfirm(content) }) { Text(stringResource(R.string.skill_detail_page_save)) }
+            TextButton(onClick = { onConfirm(contentState.snapshot()) }, enabled = !busy) { Text(stringResource(R.string.skill_detail_page_save)) }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) { Text(stringResource(R.string.cancel)) }
+            TextButton(onClick = onDismiss, enabled = !busy) { Text(stringResource(R.string.cancel)) }
         },
     )
 }
 
 @Composable
-private fun AddFileDialog(
+internal fun AddFileDialog(
+    busy: Boolean,
     onDismiss: () -> Unit,
     onConfirm: (fileName: String, content: String) -> Unit,
 ) {
     var fileName by rememberSaveable { mutableStateOf("") }
-    var content by rememberSaveable { mutableStateOf("") }
+    val contentState = remember { FileEditorState() }
     val fileNameError = fileName.isNotBlank() && (fileName.contains('\\'))
 
     AlertDialog(
-        onDismissRequest = onDismiss,
+        onDismissRequest = { if (!busy) onDismiss() },
         title = { Text(stringResource(R.string.skill_detail_page_new_file)) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -402,27 +446,26 @@ private fun AddFileDialog(
                     textStyle = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
                     modifier = Modifier.fillMaxWidth(),
                 )
-                OutlinedTextField(
-                    value = content,
-                    onValueChange = { content = it },
-                    label = { Text(stringResource(R.string.skill_detail_page_content)) },
+                FileTextEditor(
+                    state = contentState,
+                    enabled = !busy,
+                    label = stringResource(R.string.skill_detail_page_content),
                     minLines = 6,
                     maxLines = 14,
-                    textStyle = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
                     modifier = Modifier.fillMaxWidth(),
                 )
             }
         },
         confirmButton = {
             TextButton(
-                onClick = { onConfirm(fileName.trim(), content) },
-                enabled = fileName.isNotBlank() && !fileNameError,
+                onClick = { onConfirm(fileName.trim(), contentState.snapshot()) },
+                enabled = !busy && fileName.isNotBlank() && !fileNameError,
             ) {
                 Text(stringResource(R.string.skill_detail_page_create))
             }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) { Text(stringResource(R.string.cancel)) }
+            TextButton(onClick = onDismiss, enabled = !busy) { Text(stringResource(R.string.cancel)) }
         },
     )
 }

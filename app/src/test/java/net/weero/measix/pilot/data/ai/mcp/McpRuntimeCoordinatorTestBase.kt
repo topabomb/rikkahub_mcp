@@ -67,6 +67,8 @@ internal abstract class McpRuntimeCoordinatorTestBase {
     protected var foregroundAction: (() -> Unit)? = null
     protected lateinit var manager: McpRuntimeCoordinator
     protected lateinit var oauthCoordinator: McpOAuthCoordinator
+    // Unconfigured refreshes must fail rather than fabricate a relaxed token response and mutate shared settings.
+    protected val connectionOAuthClient = mockk<McpOAuthClient>()
 
     @Before
     fun setUp() {
@@ -143,7 +145,7 @@ internal abstract class McpRuntimeCoordinatorTestBase {
             transportOverride = { FakeTransport().also(createdTransports::add) },
             clientOverride = { config -> fakeClient(config) },
             oauthCallbackKeepAlive = NoOpOAuthCallbackKeepAlive,
-            retryJitter = { it }, platform = io.mockk.mockk())
+            retryJitter = { it }, oauthClientOverride = connectionOAuthClient, platform = io.mockk.mockk())
     }
 
     @After

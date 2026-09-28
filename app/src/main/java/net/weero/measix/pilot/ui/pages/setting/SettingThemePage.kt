@@ -72,6 +72,8 @@ import me.rerere.hugeicons.stroke.Edit02
 import me.rerere.hugeicons.stroke.FileImport
 import me.rerere.hugeicons.stroke.PlusSign
 import me.rerere.hugeicons.stroke.Tick01
+import net.weero.measix.pilot.ui.components.ui.ItemAction
+import net.weero.measix.pilot.ui.components.ui.ItemActionMenu
 import net.weero.measix.pilot.R
 import net.weero.measix.pilot.ui.components.nav.BackButton
 import net.weero.measix.pilot.ui.components.ui.ConfirmDialog
@@ -363,21 +365,11 @@ private fun CustomThemeItem(
             }
         },
         trailingContent = {
-            Row {
-                IconButton(onClick = onExport) {
-                    Icon(HugeIcons.Copy01, null)
-                }
-                IconButton(onClick = onEdit) {
-                    Icon(HugeIcons.Edit02, null)
-                }
-                IconButton(onClick = onDelete) {
-                    Icon(
-                        HugeIcons.Delete02,
-                        null,
-                        tint = MaterialTheme.colorScheme.error
-                    )
-                }
-            }
+            ItemActionMenu(listOf(
+                ItemAction(stringResource(R.string.edit), HugeIcons.Edit02, onClick = onEdit),
+                ItemAction(stringResource(R.string.export_title), HugeIcons.Copy01, onClick = onExport),
+                ItemAction(stringResource(R.string.delete), HugeIcons.Delete02, destructive = true, onClick = onDelete),
+            ))
         },
         colors = CustomColors.listItemColors,
     )

@@ -53,7 +53,7 @@ internal sealed interface McpConnectionDefinition {
             "X-Measix-Managed-Generation" to version.generation.toString(),
             "X-Measix-Interaction-Id" to interactionId,
         )
-        suspend fun requestHeaders() = publicHeaders + ("Authorization" to "Bearer ${credential()}")
+        suspend fun requestHeaders() = (publicHeaders + ("Authorization" to "Bearer ${credential()}")).also { validateMcpHeaders(it) }
         override fun connectionFingerprint() = McpConnectionFingerprint("platform_streamable_http", url, name, publicHeaders)
         override fun mcpDefinitionDigest() = platformMcpDefinitionDigest(id, name, execution, version.generation, authOwnership)
         override fun toolPolicy(name: String): McpToolPolicy? = null

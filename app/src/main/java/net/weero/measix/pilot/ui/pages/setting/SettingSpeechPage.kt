@@ -1,13 +1,15 @@
 package net.weero.measix.pilot.ui.pages.setting
 
+import androidx.compose.foundation.clickable
+import net.weero.measix.pilot.ui.components.ui.longPressReorder
+import net.weero.measix.pilot.ui.components.ui.ConfirmDialog
+import net.weero.measix.pilot.ui.components.ui.ItemActionMenu
+import net.weero.measix.pilot.ui.components.ui.ItemAction
 import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.Tick01
 import me.rerere.hugeicons.stroke.StopCircle
-import me.rerere.hugeicons.stroke.DragDropHorizontal
-import me.rerere.hugeicons.stroke.PencilEdit01
 import me.rerere.hugeicons.stroke.Add01
 import me.rerere.hugeicons.stroke.Mic01
-import me.rerere.hugeicons.stroke.Tools
 import me.rerere.hugeicons.stroke.Delete01
 import me.rerere.hugeicons.stroke.VolumeHigh
 import androidx.compose.foundation.layout.Arrangement
@@ -54,11 +56,10 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.scale
-import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.nestedscroll.nestedScroll
-import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import net.weero.measix.pilot.R
@@ -585,9 +586,10 @@ private fun SpeechProviderList(
             ReorderableItem(reorder, key = reference.toString()) { dragging ->
                 SpeechProviderItem(resource, details, selected?.reference == reference,
                     showSource = catalog?.selection?.access is net.weero.measix.pilot.data.enterprise.RealmAccess.Enterprise,
-                    modifier = Modifier.fillMaxWidth().scale(if (dragging) .95f else 1f),
+                    modifier = Modifier.fillMaxWidth().then(longPressReorder(dragging,
+                        enabled = reference is ConfigurationReference.User && resource.access.canEditDefinition)),
                     onSelect = { onSelect(reference) },
-                    onEdit = if (tts != null) ({ onEditTts(tts) }) else if (asr != null) ({ onEditAsr(asr) }) else null,
+                    onEdit = if (!resource.access.canEditDefinition) null else if (tts != null) ({ onEditTts(tts) }) else if (asr != null) ({ onEditAsr(asr) }) else null,
                     onDelete = if (resource.access.canEditDefinition && reference != DEFAULT_SYSTEM_TTS_ID) ({
                         onUpdateSettings { current ->
                             if (category == ConfigurationCategory.TTS) current.copy(ttsProviders = current.ttsProviders.filterNot { it.id == reference })
@@ -600,23 +602,14 @@ private fun SpeechProviderList(
                                 contentDescription = stringResource(if (speaking) R.string.stop else R.string.test_tts))
                         }
                     }) else null,
-                    dragHandle = {
-                        if (reference !is ConfigurationReference.Enterprise) {
-                            val haptic = LocalHapticFeedback.current
-                            IconButton(onClick = {}, modifier = Modifier.longPressDraggableHandle(
-                                onDragStarted = { haptic.performHapticFeedback(HapticFeedbackType.GestureThresholdActivate) },
-                                onDragStopped = { haptic.performHapticFeedback(HapticFeedbackType.GestureEnd) })) {
-                                Icon(HugeIcons.DragDropHorizontal, contentDescription = null)
-                            }
-                        }
-                    })
+                )
             }
         }
     }
 }
 
 @Composable
-private fun SpeechProviderItem(
+internal fun SpeechProviderItem(
     resource: ConfigurationCatalogItem,
     details: String,
     selected: Boolean,
@@ -626,9 +619,9 @@ private fun SpeechProviderItem(
     onEdit: (() -> Unit)?,
     onDelete: (() -> Unit)?,
     test: (@Composable () -> Unit)?,
-    dragHandle: @Composable () -> Unit,
 ) {
-    Card(modifier, colors = CardDefaults.cardColors(containerColor = if (selected) MaterialTheme.colorScheme.primaryContainer else CustomColors.listItemColors.containerColor)) {
+    var showDeleteDialog by remember { mutableStateOf(false) }
+    Card(modifier.then(onEdit?.let { Modifier.clickable(onClick = it) } ?: Modifier), colors = CardDefaults.cardColors(containerColor = if (selected) MaterialTheme.colorScheme.primaryContainer else CustomColors.listItemColors.containerColor)) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 AutoAIIcon(resource.name, modifier = Modifier.size(32.dp))
@@ -636,8 +629,14 @@ private fun SpeechProviderItem(
                     Text(resource.name, style = MaterialTheme.typography.titleMedium)
                     Text(details, style = MaterialTheme.typography.bodySmall)
                 }
-                RadioButton(selected, onSelect, enabled = resource.access.canSelect)
-                dragHandle()
+                RadioButton(selected, onSelect, enabled = resource.access.canSelect,
+                    modifier = Modifier.semantics { contentDescription = resource.name.ifBlank { details } })
+                if (onDelete != null) {
+                    ItemActionMenu(listOf(ItemAction(
+                        text = stringResource(R.string.delete), icon = HugeIcons.Delete01,
+                        destructive = true, onClick = { showDeleteDialog = true },
+                    )))
+                }
             }
             if (showSource) {
                 Text(stringResource(when (resource.key.reference) {
@@ -646,11 +645,17 @@ private fun SpeechProviderItem(
                 }), style = MaterialTheme.typography.labelMedium)
             }
             resource.access.unavailableReason?.let { Text(configurationUnavailableText(it), color = MaterialTheme.colorScheme.error) }
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                test?.invoke()
-                onEdit?.let { IconButton(it) { Icon(HugeIcons.PencilEdit01, stringResource(R.string.edit)) } }
-                onDelete?.let { IconButton(it) { Icon(HugeIcons.Delete01, stringResource(R.string.delete)) } }
+            test?.let { preview ->
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) { preview() }
             }
         }
     }
+    ConfirmDialog(
+        show = showDeleteDialog && onDelete != null,
+        title = stringResource(R.string.confirm_delete),
+        confirmText = stringResource(R.string.delete),
+        dismissText = stringResource(R.string.cancel),
+        onConfirm = { showDeleteDialog = false; onDelete?.invoke() },
+        onDismiss = { showDeleteDialog = false },
+    ) { Text(stringResource(R.string.common_delete_confirm_message, resource.name)) }
 }

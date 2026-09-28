@@ -1,6 +1,7 @@
 package net.weero.measix.pilot
 
 import android.app.Application
+import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
@@ -22,7 +23,6 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import com.whl.quickjs.android.QuickJSLoader
 import net.weero.measix.pilot.di.appModule
 import net.weero.measix.pilot.di.dataSourceModule
 import net.weero.measix.pilot.di.repositoryModule
@@ -40,15 +40,45 @@ import org.koin.android.ext.koin.androidContext
 import org.koin.android.ext.koin.androidLogger
 import org.koin.androidx.workmanager.koin.workManagerFactory
 import org.koin.core.context.startKoin
+import coil3.ImageLoader
+import coil3.SingletonImageLoader
+import coil3.annotation.ExperimentalCoilApi
+import coil3.gif.AnimatedImageDecoder
+import coil3.gif.GifDecoder
+import coil3.network.cachecontrol.CacheControlCacheStrategy
+import coil3.network.okhttp.OkHttpNetworkFetcherFactory
+import coil3.request.crossfade
+import coil3.svg.SvgDecoder
+import okhttp3.OkHttpClient
 
 private const val TAG = "MeasixPilotApp"
 
 const val CHAT_COMPLETED_NOTIFICATION_CHANNEL_ID = "chat_completed"
 const val CHAT_LIVE_UPDATE_NOTIFICATION_CHANNEL_ID = "chat_live_update"
 
-class MeasixPilotApp : Application(), WorkspaceDocumentsDependencies {
+class MeasixPilotApp : Application(), WorkspaceDocumentsDependencies, SingletonImageLoader.Factory {
     override val workspaceCommands: WorkspaceApplicationService by lazy(LazyThreadSafetyMode.SYNCHRONIZED) { get() }
     override val workspaceQueries: WorkspaceQueryService by lazy(LazyThreadSafetyMode.SYNCHRONIZED) { get() }
+
+    @OptIn(ExperimentalCoilApi::class)
+    override fun newImageLoader(context: Context): ImageLoader = ImageLoader.Builder(context)
+        .crossfade(true)
+        .components {
+            add(net.weero.measix.pilot.service.ImageSourceInterceptor)
+            add(net.weero.measix.pilot.service.ImageSourceKeyer)
+            add(net.weero.measix.pilot.service.ImageSourceFetcherFactory)
+            add(OkHttpNetworkFetcherFactory(
+                callFactory = { get<OkHttpClient>() },
+                cacheStrategy = { CacheControlCacheStrategy() },
+            ))
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                add(AnimatedImageDecoder.Factory())
+            } else {
+                add(GifDecoder.Factory())
+            }
+            add(SvgDecoder.Factory(scaleToDensity = true))
+        }
+        .build()
 
     override fun onCreate() {
         super.onCreate()
@@ -68,8 +98,6 @@ class MeasixPilotApp : Application(), WorkspaceDocumentsDependencies {
         // install crash handler
         CrashHandler.install(this)
 
-        // Init QuickJS native library
-        QuickJSLoader.init()
 
         // delete temp files
         deleteTempFiles(retiredTempFolders)

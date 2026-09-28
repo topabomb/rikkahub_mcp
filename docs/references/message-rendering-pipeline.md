@@ -118,6 +118,8 @@ Text part 在传入 `MarkdownBlock` 之前，先经过 `replaceRegexes()` 处理
 
 ### 2.3 ThinkingBlock 渲染
 
+`ChainOfThoughtStepContent` 分别绘制标题行的上下连接线与正文连接线，在节点区域留空；不以不透明背景遮线，不使用 Offscreen/Clear。坐标随布局方向镜像，透明卡片沿原 `LocalChatChromeAlpha`。受控 `contentVisible` 独立于 `expanded`，折叠仍保留 `keepVisibleWhenCollapsed` 选出的审批和待交互步骤。
+
 `ThinkingBlock` 通过 `ChainOfThought` 组件渲染为可折叠的推理卡片，内部步骤交替显示：
 
 - `ReasoningStep` → `ChatMessageReasoningStep`（推理文本）
@@ -220,6 +222,8 @@ Flow 异步收集。
 
 ## 4. 代码块渲染（HighlightCodeBlock）
 
+`Markdown` 的两条 CODE_SPAN、`MarkdownNew` 和 `SimpleHtmlBlock` 的 code span 关闭 `calt/liga/clig` 连字，仅改变字体呈现；原文与复制内容保持不变。
+
 `HighlightCodeBlock`（`HighlightCodeBlock.kt`）根据代码语言进入三条路径：
 
 ```
@@ -242,6 +246,8 @@ HighlightCodeBlock(code, language, completeCodeBlock)
 > 均不可用，统一走原生语法高亮路径。围栏闭合后 Mermaid 渲染图形，HTML/SVG 保持源码直到用户显式选择预览。
 
 ### 4.1 普通代码块 — 原生渲染
+
+`CodeBlockWithLineNumbersWrapped` 的行号在 `DisableSelection` 内，跨行选择仅包含代码；非折行路径仍将行号放在代码选择容器外。
 
 - **语法高亮**：`highlight` 模块（`CodeHighlightText` / `Highlighter`）
 - **配色**：`AtomOneDarkPalette` / `AtomOneLightPalette`（跟随 `LocalDarkMode`）

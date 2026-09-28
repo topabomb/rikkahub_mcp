@@ -2,6 +2,12 @@
 
 package net.weero.measix.pilot
 
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.foundation.layout.heightIn
+import net.weero.measix.pilot.utils.userVisibleDiagnostic
+
 import androidx.compose.runtime.getValue
 import me.rerere.common.configuration.ConfigurationReference
 import android.annotation.SuppressLint
@@ -59,15 +65,6 @@ import androidx.navigation3.runtime.entryProvider
 import androidx.navigation3.runtime.rememberNavBackStack
 import androidx.navigation3.runtime.rememberSaveableStateHolderNavEntryDecorator
 import androidx.navigation3.ui.NavDisplay
-import coil3.ImageLoader
-import coil3.annotation.ExperimentalCoilApi
-import coil3.compose.setSingletonImageLoaderFactory
-import coil3.gif.AnimatedImageDecoder
-import coil3.gif.GifDecoder
-import coil3.network.cachecontrol.CacheControlCacheStrategy
-import coil3.network.okhttp.OkHttpNetworkFetcherFactory
-import coil3.request.crossfade
-import coil3.svg.SvgDecoder
 import com.dokar.sonner.Toaster
 import com.dokar.sonner.rememberToasterState
 import kotlinx.serialization.Serializable
@@ -144,7 +141,6 @@ import net.weero.measix.pilot.ui.theme.MeasixTheme
 import net.weero.measix.pilot.ui.theme.WindowSystemBars
 import net.weero.measix.pilot.utils.CrashHandler
 import net.weero.measix.pilot.utils.openUsageAccessSettings
-import okhttp3.OkHttpClient
 import org.koin.android.ext.android.inject
 import org.koin.compose.koinInject
 import kotlin.uuid.Uuid
@@ -153,7 +149,6 @@ import androidx.compose.runtime.setValue
 private const val TAG = "RouteActivity"
 
 class RouteActivity : ComponentActivity() {
-    private val okHttpClient by inject<OkHttpClient>()
     private val settingsStore by inject<SettingsStore>()
     private val conversations by inject<ConversationApplicationService>()
     private val conversationQueries by inject<ConversationQueryService>()
@@ -191,27 +186,6 @@ class RouteActivity : ComponentActivity() {
         }
         setContent {
             MeasixTheme {
-                setSingletonImageLoaderFactory { context ->
-                    ImageLoader.Builder(context)
-                        .crossfade(true)
-                        .components {
-                            add(net.weero.measix.pilot.service.ImageSourceInterceptor)
-                            add(net.weero.measix.pilot.service.ImageSourceKeyer)
-                            add(net.weero.measix.pilot.service.ImageSourceFetcherFactory)
-                            @OptIn(ExperimentalCoilApi::class)
-                            add(OkHttpNetworkFetcherFactory(
-                                callFactory = { okHttpClient },
-                                cacheStrategy = { CacheControlCacheStrategy() },
-                            ))
-                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-                                add(AnimatedImageDecoder.Factory())
-                            } else {
-                                add(GifDecoder.Factory())
-                            }
-                            add(SvgDecoder.Factory(scaleToDensity = true))
-                        }
-                        .build()
-                }
                 AppRoutes()
             }
         }
@@ -265,7 +239,7 @@ class RouteActivity : ComponentActivity() {
         }
     }
 
-    @OptIn(ExperimentalComposeUiApi::class, ExperimentalCoilApi::class)
+    @OptIn(ExperimentalComposeUiApi::class)
     @Suppress("OPT_IN_IS_NOT_ENABLED")
     @Composable
     fun AppRoutes() {
@@ -681,11 +655,14 @@ class RouteActivity : ComponentActivity() {
                             style = MaterialTheme.typography.titleMedium,
                             color = MaterialTheme.colorScheme.error,
                         )
-                        Text(
-                            text = state.error.message ?: state.error::class.simpleName.orEmpty(),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
+                        SelectionContainer {
+                            Text(
+                                text = state.error.userVisibleDiagnostic(),
+                                modifier = Modifier.heightIn(max = 240.dp).verticalScroll(rememberScrollState()),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
                         Button(onClick = onRetry) {
                             Text(stringResource(R.string.application_recovery_retry))
                         }

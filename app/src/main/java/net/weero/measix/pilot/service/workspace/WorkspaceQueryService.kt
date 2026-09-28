@@ -79,8 +79,8 @@ class WorkspaceQueryService internal constructor(
         throw cancelled
     } catch (tooLarge: FileTooLargeException) {
         WorkspaceTextPreviewResult.TooLarge(tooLarge.size)
-    } catch (_: Exception) {
-        WorkspaceTextPreviewResult.Unavailable
+    } catch (error: Exception) {
+        WorkspaceTextPreviewResult.Unavailable(error)
     }
 
     private fun WorkspaceEntity.toUiModel() = WorkspaceUiModel(
@@ -101,7 +101,7 @@ data class WorkspaceUiModel(
 sealed interface WorkspaceTextPreviewResult {
     data class Success(val content: String) : WorkspaceTextPreviewResult
     data class TooLarge(val sizeBytes: Long) : WorkspaceTextPreviewResult
-    data object Unavailable : WorkspaceTextPreviewResult
+    data class Unavailable(val cause: Exception) : WorkspaceTextPreviewResult
 }
 
 data class WorkspaceTerminalScreenUiModel(

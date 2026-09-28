@@ -32,8 +32,6 @@ dependencies {
     implementation(libs.androidx.appcompat)
     implementation(libs.material)
 
-    // quickjs
-    api(libs.quickjs)
 
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)

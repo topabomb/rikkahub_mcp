@@ -26,6 +26,8 @@
 
 一项语义先找最近的生产 owner，由它的行为测试锁定成功、拒绝、失败、取消和恢复。跨 owner 的提交与补偿再用集成测试观察真实边界；依赖 Android SQLite、系统组件、Compose 或硬件的行为必须由对应设备测试证明。不要为了“每层都有一个测试”复制同一断言，也不要用静态源码扫描代替运行行为。
 
+`JavascriptToolTest` 通过真实桌面 QuickJS native runtime 验证执行截止时间、父取消、格式化陷阱及输出限额，`JavascriptRuntimeAndroidTest` 验证 Android JNI 的中断与关闭后再次执行；前者不能代替双 ABI、Release R8 或设备证据。`SettingsStartupTest` 使用真实 DataStore 文件和 migration 验证损坏/失败后保全与重试，并用可控数据源验证同一 SettingsStore 的 observer 归属；`ApplicationRecoveryCoordinatorTest` 验证恢复门禁顺序、取消和 retry。
+
 | 契约 | 最近的测试 owner | 必要的跨边界证据 |
 | --- | --- | --- |
 | Conversation 树、Turn/Step/Tool 状态与事务发布 | `ConversationTransitionTest`、`TurnTransitionTest`、`ConversationCommandCoordinatorTest`、`TurnCommitterTest` | 真实 Room/恢复测试核验 schema、事务、分支与失败重试 |

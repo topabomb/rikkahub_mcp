@@ -823,4 +823,23 @@ internal class McpConnectionLifecycleTest : McpRuntimeCoordinatorTestBase() {
         )
         assertFalse(McpProtocolFailureClassifier.isConnectionError(budgetProblem))
     }
+
+    @Test fun `legacy unsafe headers fail before expired OAuth refresh without blocking other servers and can be corrected`() = runTest(dispatcher) {
+        val expired = McpOAuthState(enabled = true, clientId = "id", accessToken = "old", refreshToken = "refresh-secret",
+            expiresAt = 1L, tokenEndpoint = "https://example.com/token")
+        val bad = serverConfig(headers = listOf("" to "secret"), oauth = expired)
+        val other = serverConfig().clone(id = ConfigurationReference.random(), commonOptions = McpCommonOptions(name = "other"))
+        emit(listOf(bad, other))
+        advanceUntilIdle()
+        val status = manager.syncingStatus.value[SERVER_ID] as McpStatus.Error
+        assertTrue(status.message!!.contains("mcp_header_empty_name"))
+        assertFalse(status.detail!!.contains("refresh-secret"))
+        coVerify(exactly = 0) { connectionOAuthClient.refreshToken(any(), any(), any(), any(), any(), any()) }
+        assertTrue(manager.syncingStatus.value[other.id] is McpStatus.Ready)
+        assertEquals(1, createdClients.size)
+        emit(listOf(serverConfig(headers = listOf("Authorization" to "Bearer fixed")), other))
+        advanceUntilIdle()
+        assertTrue(manager.syncingStatus.value[SERVER_ID] is McpStatus.Ready)
+        assertEquals(2, createdClients.size)
+    }
 }

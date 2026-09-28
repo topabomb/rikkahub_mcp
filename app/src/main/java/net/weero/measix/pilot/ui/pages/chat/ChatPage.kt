@@ -47,6 +47,7 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.State
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.mutableStateOf
@@ -289,6 +290,9 @@ fun ChatPage(
     }
 
     val chatListState = rememberLazyListState()
+    val scrollIntent = remember(currentSnapshot.conversationId) {
+        mutableStateOf(if (nodeId == null) ChatScrollIntent.FOLLOW_TAIL else ChatScrollIntent.VIEW_HISTORY)
+    }
     var assistantDetailsRequest by remember(currentSnapshot.conversationId) { mutableIntStateOf(0) }
     var initializedChatListKey by remember { mutableStateOf<ChatListInitializationKey?>(null) }
     LaunchedEffect(nodeId, currentSnapshot.nodes.size) {
@@ -297,11 +301,14 @@ fun ChatPage(
             if (nodeId != null) {
                 val index = currentSnapshot.nodes.indexOfFirst { it.id == nodeId }
                 if (index >= 0) {
+                    scrollIntent.value = ChatScrollIntent.VIEW_HISTORY
                     chatListState.scrollToItem(index)
                 } else {
+                    scrollIntent.value = ChatScrollIntent.FOLLOW_TAIL
                     chatListState.requestScrollToItem(currentSnapshot.currentMessages().size + 5)
                 }
             } else {
+                scrollIntent.value = ChatScrollIntent.FOLLOW_TAIL
                 chatListState.requestScrollToItem(currentSnapshot.currentMessages().size + 5)
             }
             initializedChatListKey = key
@@ -369,6 +376,8 @@ fun ChatPage(
                             navController = navController,
                             vm = vm,
                             chatListState = chatListState,
+                            scrollIntent = scrollIntent,
+                            onScrollIntentChange = { scrollIntent.value = it },
 
                             navigationAction = if (canCollapseSidebar && !sidebarExpanded) {
                                 ChatNavigationAction.ExpandSidebar
@@ -421,6 +430,8 @@ fun ChatPage(
                         navController = navController,
                         vm = vm,
                         chatListState = chatListState,
+                        scrollIntent = scrollIntent,
+                        onScrollIntentChange = { scrollIntent.value = it },
 
                         navigationAction = ChatNavigationAction.OpenDrawer,
                         errors = errors,
@@ -498,6 +509,8 @@ private fun ChatPageContent(
     navController: Navigator,
     vm: ChatVM,
     chatListState: LazyListState,
+    scrollIntent: State<ChatScrollIntent>,
+    onScrollIntentChange: (ChatScrollIntent) -> Unit,
     errors: List<ChatError>,
     onNavigationClick: (() -> Unit)? = null,
     onDismissError: (Uuid) -> Unit,
@@ -649,6 +662,7 @@ private fun ChatPageContent(
 
     fun requestAppendScroll(requestContext: AppendScrollContext) {
         appendScrollJob?.cancel()
+        onScrollIntentChange(ChatScrollIntent.VIEW_HISTORY)
         appendScrollJob = scope.launch {
             chatListState.scrollToAppendedItem(
                 requestContext = requestContext,
@@ -663,7 +677,13 @@ private fun ChatPageContent(
                 },
                 currentImeBottom = { imeInsets.getBottom(density) },
             )
+            onScrollIntentChange(ChatScrollIntent.FOLLOW_TAIL)
         }
+    }
+
+    fun readHistory() {
+        appendScrollJob?.cancel()
+        onScrollIntentChange(ChatScrollIntent.VIEW_HISTORY)
     }
 
     val completionProviders = remember(assistant?.workspaceId, snapshot.header.workspaceCwd, workspaceQueryService) {
@@ -860,6 +880,9 @@ private fun ChatPageContent(
                 snapshot = snapshot,
                 favoriteNodeIds = favoriteNodeIds,
                 state = chatListState,
+                scrollIntent = scrollIntent,
+                onScrollIntentChange = onScrollIntentChange,
+                onReadHistory = ::readHistory,
                 turnPresentation = turnPresentation,
                 attachmentPreviews = conversationUiModel?.attachmentPreviews.orEmpty(),
                 previewMode = previewMode,
@@ -901,6 +924,7 @@ private fun ChatPageContent(
                     inputState.setMessageText(suggestion)
                 },
                 onJumpToMessage = { index ->
+                    readHistory()
                     previewMode = false
                     scope.launch {
                         chatListState.requestScrollToItem(index)

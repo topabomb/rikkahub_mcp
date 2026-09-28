@@ -97,7 +97,7 @@ import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.Add01
 import me.rerere.hugeicons.stroke.ArrowUp02
 import me.rerere.hugeicons.stroke.Cancel01
-import me.rerere.hugeicons.stroke.FullScreen
+import me.rerere.hugeicons.stroke.Fullscreen
 import me.rerere.hugeicons.stroke.Zap
 import net.weero.measix.pilot.R
 import net.weero.measix.pilot.data.datastore.Settings
@@ -682,7 +682,7 @@ private fun TextInputRow(
                         IconButton(
                             onClick = { isFullScreen = !isFullScreen },
                         ) {
-                            Icon(HugeIcons.FullScreen, null)
+                            Icon(HugeIcons.Fullscreen, null)
                         }
                     }
                     trailingContent()

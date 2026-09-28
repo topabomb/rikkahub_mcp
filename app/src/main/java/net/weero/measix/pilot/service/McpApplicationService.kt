@@ -6,6 +6,7 @@ import net.weero.measix.pilot.data.ai.mcp.McpRefreshReceipt
 import net.weero.measix.pilot.data.ai.mcp.McpRuntimeCoordinator
 import net.weero.measix.pilot.data.ai.mcp.McpServerConfig
 import net.weero.measix.pilot.data.ai.mcp.hasSameOAuthTrustBoundary
+import net.weero.measix.pilot.data.ai.mcp.validateMcpHeaders
 import net.weero.measix.pilot.data.ai.mcp.toolPolicyByName
 import net.weero.measix.pilot.data.datastore.SettingsStore
 
@@ -30,6 +31,7 @@ class McpApplicationService(
 
     suspend fun upsert(config: McpServerConfig) {
         userReference(config.id)
+        validateMcpHeaders(config.commonOptions.headers)
         settingsStore.updateLocal { settings ->
             requireUniqueName(settings.mcpServers, config)
             val existing = settings.mcpServers.firstOrNull { it.id == config.id }
@@ -42,7 +44,10 @@ class McpApplicationService(
     }
 
     suspend fun importServers(newConfigs: List<McpServerConfig>): McpImportResult {
-        newConfigs.forEach { userReference(it.id) }
+        newConfigs.forEachIndexed { index, config ->
+            userReference(config.id)
+            validateMcpHeaders(config.commonOptions.headers, serverIndex = index + 1)
+        }
         var result = McpImportResult(emptyList(), emptyList())
         settingsStore.updateLocal { local ->
             val existingByName = local.mcpServers
@@ -67,7 +72,10 @@ class McpApplicationService(
     }
 
     suspend fun overwriteByName(configs: List<McpServerConfig>) {
-        configs.forEach { userReference(it.id) }
+        configs.forEachIndexed { index, config ->
+            userReference(config.id)
+            validateMcpHeaders(config.commonOptions.headers, serverIndex = index + 1)
+        }
         val imports = configs.associateBy(::normalizedName)
         settingsStore.updateLocal { settings ->
             settings.copy(

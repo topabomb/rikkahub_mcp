@@ -219,7 +219,7 @@ class WorkspaceRepository(
                 val size = manager.fileSize(workspace.root, path, area)
                 if (size > MAX_PREVIEW_BYTES) throw FileTooLargeException(size)
                 ByteArrayOutputStream().use { out ->
-                    manager.exportFile(workspace.root, path, area, out)
+                    runInterruptible { manager.exportFile(workspace.root, path, area, out) }
                     out.toString(Charsets.UTF_8.name())
                 }
             }
@@ -271,7 +271,7 @@ class WorkspaceRepository(
         outputStream: OutputStream,
     ) = withContext(Dispatchers.IO) {
         val workspace = dao.getById(id) ?: error("Workspace not found: $id")
-        manager.exportFile(workspace.root, path, area, outputStream)
+        runInterruptible { manager.exportFile(workspace.root, path, area, outputStream) }
     }
 
     suspend fun readRootfsBytes(

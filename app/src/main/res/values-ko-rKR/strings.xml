@@ -1,4 +1,4 @@
-<?xml version='1.0' encoding='UTF-8'?>
+<?xml version='1.0' encoding='utf-8'?>
 <resources>
   <string name="about_page_license">라이선스</string>
   <string name="about_page_documentation">문서</string>
@@ -601,7 +601,7 @@
   <string name="reasoning_xhigh">XHigh</string>
   <string name="reasoning_max">최대</string>
   <string name="regenerate">다시 생성</string>
-  <string name="regenerate_confirm_message">이 메시지를 다시 생성하시겠습니까?</string>
+  <string name="regenerate_confirm_message">이 메시지를 다시 생성할까요? 이 메시지 이후의 모든 메시지가 삭제됩니다.</string>
   <string name="render_with_webview">WebView로 렌더링</string>
   <string name="safe_mode_assistants">도우미</string>
   <string name="safe_mode_copy">복사</string>
@@ -1953,4 +1953,18 @@
   <string name="enterprise_snapshot_update_required">앱 업데이트 필요</string>
   <string name="enterprise_snapshot_invalid">기업 설정 내용에 오류가 있습니다. 관리자에게 문의하세요.</string>
   <string name="context_changes_title">컨텍스트 변경</string>
+  <string name="setting_mcp_page_header_name_required">헤더 이름을 입력하거나 이 행을 삭제하세요</string>
+  <string name="setting_mcp_page_header_name_invalid">헤더 이름에는 HTTP 토큰에 허용된 문자만 사용할 수 있습니다</string>
+  <string name="setting_mcp_page_header_value_invalid">헤더 값에서 제어 문자와 ASCII가 아닌 문자를 제거하세요</string>
+  <string name="workspace_export_selected">%1$d개 선택됨</string>
+  <string name="workspace_export_progress">%1$d / %2$d</string>
+  <string name="workspace_export_result">%1$d개 내보냄, %2$d개 실패</string>
+  <string name="workspace_export_cancelled">내보내기 취소됨</string>
+  <string name="common_delete_confirm_message">“%1$s”을(를) 삭제할까요? 이 작업은 되돌릴 수 없습니다.</string>
+  <string name="skills_search_hint">스킬 검색</string>
+  <string name="skills_search_empty">일치하는 스킬이 없습니다</string>
+  <string name="skills_import_rate_limited">GitHub 요청 한도에 도달했습니다. 나중에 다시 시도하세요.</string>
+  <string name="chat_page_scroll_to_top">맨 위로 스크롤</string>
+  <string name="chat_page_previous_message">이전 메시지</string>
+  <string name="chat_page_next_message">다음 메시지</string>
 </resources>

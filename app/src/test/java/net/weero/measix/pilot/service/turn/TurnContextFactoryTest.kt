@@ -29,6 +29,30 @@ class TurnContextFactoryTest {
     private val zoneId: ZoneId = ZoneId.of("Asia/Shanghai")
 
     @Test
+    fun `skill metadata changes are captured only by a new turn materialization`() {
+        val metadata = mutableListOf(net.weero.measix.pilot.data.files.SkillMetadata("a&b", "before <change>"))
+        fun plan() = TurnLaunchPlan(
+            realmAccess = net.weero.measix.pilot.data.enterprise.RealmAccess.Personal,
+            assistant = Assistant(),
+            model = io.mockk.mockk(),
+            mediaCapabilities = me.rerere.ai.provider.RequestMediaCapabilities.NONE,
+            promptInputs = net.weero.measix.pilot.test.testPromptInputs(),
+            tools = net.weero.measix.pilot.data.ai.tools.createSkillTools(setOf("a&b"), metadata, io.mockk.mockk()),
+            disclosure = io.mockk.mockk { io.mockk.every { withInstalledTools(any()) } returns this },
+        )
+        val factory = TurnContextFactory(io.mockk.mockk())
+        val first = factory.materialize(plan())
+        val original = first.system
+        metadata[0] = metadata.single().copy(description = "after <change>")
+        val next = factory.materialize(plan())
+        assertTrue(first.system.text.contains("before &lt;change&gt;"))
+        assertTrue(!first.system.text.contains("after &lt;change&gt;"))
+        assertTrue(next.system.text.contains("after &lt;change&gt;"))
+        assertEquals(original, first.system)
+        assertTrue(first.system.text.contains("<name>a&amp;b</name>"))
+    }
+
+    @Test
     fun `materialize freezes final system and removes system producers from step inputs`() {
         val assistant = Assistant(systemPrompt = "domain {{user}}")
         val systemRule = net.weero.measix.pilot.service.turn.ResolvedPromptInjection(

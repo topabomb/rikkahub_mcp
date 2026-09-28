@@ -30,6 +30,14 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.CancellationException
+import net.weero.measix.pilot.data.datastore.SettingsLockedException
+import net.weero.measix.pilot.utils.userVisibleDiagnostic
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -66,9 +74,20 @@ fun QuickMessagesPage(vm: QuickMessagesVM = koinViewModel()) {
     var editTarget by remember { mutableStateOf<QuickMessage?>(null) }
     var deleteTarget by remember { mutableStateOf<QuickMessage?>(null) }
 
-    LaunchedEffect(vm, toaster, lockedMessage) {
-        vm.lockedChanges.collect { error ->
-            toaster.show(lockedMessage.replace("{reason}", error.reason), type = ToastType.Error)
+    val scope = rememberCoroutineScope()
+    var busy by remember { mutableStateOf(false) }
+    var diagnostic by remember { mutableStateOf<String?>(null) }
+    fun operation(block: suspend () -> Unit) {
+        if (busy) return
+        busy = true
+        scope.launch {
+            try { block() }
+            catch (cancelled: CancellationException) { throw cancelled }
+            catch (error: SettingsLockedException) { toaster.show(lockedMessage.replace("{reason}", error.reason), type = ToastType.Error) }
+            catch (error: Exception) {
+                android.util.Log.e("QuickMessagesPage", "Quick message operation failed", error)
+                diagnostic = error.userVisibleDiagnostic()
+            } finally { busy = false }
         }
     }
 
@@ -83,7 +102,7 @@ fun QuickMessagesPage(vm: QuickMessagesVM = koinViewModel()) {
         },
         floatingActionButton = {
             FloatingActionButton(onClick = { showAddDialog = true }) {
-                Icon(HugeIcons.Add01, contentDescription = null)
+                Icon(HugeIcons.Add01, contentDescription = stringResource(R.string.quick_messages_page_add_title))
             }
         },
         modifier = Modifier.nestedScroll(scrollBehavior.nestedScrollConnection),
@@ -135,22 +154,27 @@ fun QuickMessagesPage(vm: QuickMessagesVM = koinViewModel()) {
 
     if (showAddDialog) {
         EditQuickMessageDialog(
+            busy = busy,
             title = stringResource(R.string.quick_messages_page_add_title),
             initialQuickMessage = null,
-            onDismiss = { showAddDialog = false },
+            onDismiss = { if (!busy) showAddDialog = false },
             onConfirm = { title, content ->
-                vm.addQuickMessage(title, content)
-                showAddDialog = false
+                operation {
+                    vm.addQuickMessage(title, content)
+                    showAddDialog = false
+                }
             },
         )
     }
 
     editTarget?.let { quickMessage ->
         EditQuickMessageDialog(
+            busy = busy,
             title = stringResource(R.string.quick_messages_page_edit_title),
             initialQuickMessage = quickMessage,
-            onDismiss = { editTarget = null },
+            onDismiss = { if (!busy) editTarget = null },
             onConfirm = { title, content ->
+                operation {
                 vm.updateQuickMessage(
                     quickMessage.copy(
                         title = title,
@@ -158,6 +182,7 @@ fun QuickMessagesPage(vm: QuickMessagesVM = koinViewModel()) {
                     )
                 )
                 editTarget = null
+                }
             },
         )
     }
@@ -168,13 +193,23 @@ fun QuickMessagesPage(vm: QuickMessagesVM = koinViewModel()) {
         confirmText = stringResource(R.string.delete),
         dismissText = stringResource(R.string.cancel),
         onConfirm = {
-            deleteTarget?.let { vm.deleteQuickMessage(it.id) }
-            deleteTarget = null
+            deleteTarget?.let { target -> operation {
+                vm.deleteQuickMessage(target.id)
+                deleteTarget = null
+            } }
         },
-        onDismiss = { deleteTarget = null },
+        onDismiss = { if (!busy) deleteTarget = null },
     ) {
         Text(stringResource(R.string.quick_messages_page_delete_message, deleteTarget?.title ?: ""))
     }
+    diagnostic?.let { detail ->
+        AlertDialog(
+            onDismissRequest = { diagnostic = null },
+            text = { SelectionContainer { Text(detail, Modifier.verticalScroll(rememberScrollState())) } },
+            confirmButton = { TextButton(onClick = { diagnostic = null }) { Text(stringResource(R.string.confirm)) } },
+        )
+    }
+
 }
 
 @Composable
@@ -186,6 +221,7 @@ private fun QuickMessageCard(
     var menuExpanded by remember { mutableStateOf(false) }
 
     Card(
+        onClick = onEdit,
         modifier = Modifier.fillMaxWidth(),
         colors = CustomColors.cardColorsOnSurfaceContainer,
     ) {
@@ -267,6 +303,7 @@ private fun QuickMessageCard(
 
 @Composable
 private fun EditQuickMessageDialog(
+    busy: Boolean,
     title: String,
     initialQuickMessage: QuickMessage?,
     onDismiss: () -> Unit,
@@ -280,7 +317,7 @@ private fun EditQuickMessageDialog(
     }
 
     AlertDialog(
-        onDismissRequest = onDismiss,
+        onDismissRequest = { if (!busy) onDismiss() },
         title = { Text(title) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -304,13 +341,13 @@ private fun EditQuickMessageDialog(
         confirmButton = {
             TextButton(
                 onClick = { onConfirm(quickMessageTitle.trim(), quickMessageContent.trim()) },
-                enabled = quickMessageTitle.isNotBlank() && quickMessageContent.isNotBlank(),
+                enabled = !busy && quickMessageTitle.isNotBlank() && quickMessageContent.isNotBlank(),
             ) {
                 Text(stringResource(R.string.assistant_page_save))
             }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) {
+            TextButton(onClick = onDismiss, enabled = !busy) {
                 Text(stringResource(R.string.cancel))
             }
         },

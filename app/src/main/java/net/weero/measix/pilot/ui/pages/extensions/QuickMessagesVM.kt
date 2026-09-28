@@ -18,38 +18,31 @@ import net.weero.measix.pilot.data.model.QuickMessage
 class QuickMessagesVM(
     private val settingsStore: SettingsStore
 ) : ViewModel() {
-    private val _lockedChanges = MutableSharedFlow<SettingsLockedException>(extraBufferCapacity = 1)
-    val lockedChanges = _lockedChanges.asSharedFlow()
     val settings = settingsStore.userSettings
         .stateIn(viewModelScope, SharingStarted.Lazily, Settings.dummy())
 
-    fun addQuickMessage(title: String, content: String) {
+    suspend fun addQuickMessage(title: String, content: String) {
         val quickMessage = QuickMessage(
             title = title,
             content = content,
         )
-        updateSettings {
-            settingsStore.updateLocal { current ->
+        settingsStore.updateLocal { current ->
                 current.copy(quickMessages = current.quickMessages + quickMessage)
-            }
         }
     }
 
-    fun updateQuickMessage(updated: QuickMessage) {
-        updateSettings {
-            settingsStore.updateLocal { current ->
+    suspend fun updateQuickMessage(updated: QuickMessage) {
+        settingsStore.updateLocal { current ->
                 current.copy(
                     quickMessages = current.quickMessages.map { quickMessage ->
                         if (quickMessage.id == updated.id) updated else quickMessage
                     }
                 )
-            }
         }
     }
 
-    fun deleteQuickMessage(id: ConfigurationReference) {
-        updateSettings {
-            settingsStore.updateLocal { current ->
+    suspend fun deleteQuickMessage(id: ConfigurationReference) {
+        settingsStore.updateLocal { current ->
                 current.copy(
                     quickMessages = current.quickMessages.filterNot { it.id == id },
                     assistants = current.assistants.map { assistant ->
@@ -60,17 +53,7 @@ class QuickMessagesVM(
                         }
                     }
                 )
-            }
         }
     }
 
-    private fun updateSettings(update: suspend () -> Unit) {
-        viewModelScope.launch {
-            try {
-                update()
-            } catch (error: SettingsLockedException) {
-                _lockedChanges.emit(error)
-            }
-        }
-    }
 }

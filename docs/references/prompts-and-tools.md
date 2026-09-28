@@ -176,6 +176,8 @@ name / description。`SkillManager` 是 Skill 文件树和读取 owner，`use_sk
 获得文本。文本读取先限制为 4 MiB，再 strict UTF-8 解码；超限、非法编码和 IO 错误明确返回。
 文件导入、原子发布与中断恢复见 [Android 配置架构](android-configuration-architecture.md)。
 
+`createSkillTools` 只在生成 available_skills contribution 时对 name/description 转义 `&<>`，description 先限制为 1024 个 Unicode code point，再转义；不拆分 surrogate pair 或 XML entity。磁盘 metadata 与正文不被截断，`use_skill` 始终按原始 canonical name 精确查询，`a&b` 与 `a&amp;b` 是不同身份。贡献在工具装配时形成字符串快照，既有 START 冻结链保持不变；转义保护结构边界，不代表消除所有指令注入。当前没有内置 Skill 的第二来源、启动覆盖或同名回退。
+
 `enabledSkills` 非空时：
 
 ```text
@@ -574,6 +576,12 @@ read：`{"text":"..."}`。write：`{"success":true}`。
 参数：`code`。成功结果使用真实换行的行式文本：有控制台输出时先给出 `[console]` 段，每次 console 调用保持独立物理行，
 最后给出 `[result]` 段。它不把多行日志再次塞入 JSON 字符串，因此归档后的 `read_tool_output` / `grep_tool_output`
 行号直接对应实际日志行。
+
+每次调用独占 quickjs-kt runtime，退出时在原生执行停止后关闭；不提供网络 fetch。`evaluateJavascript` 同时设置
+10 秒调用期限和原生 evaluation deadline、64 MiB 堆及 256 KiB 栈上限。getter/toJSON、结果 stringify 与 console
+格式化均处于同一次可中断执行内，主动取消继续传播。日志最多保留 64 Ki 字符并明确标注截断，结果最多 1 Mi 字符；
+超时/结果超限经 `ToolExecutionFailure` 提交 `javascript_timeout` / `javascript_output_limit`，不是成功文本中的错误。
+原生内存/栈耗尽和其他 QuickJS 异常保留原类型、message 与堆栈，沿原 Runtime 的 `runtime_error` 协议收口。
 
 ### `memory_tool`
 

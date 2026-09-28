@@ -177,8 +177,7 @@ class ResponseAPIParserTest {
         assertEquals("call_delta", tools.first().providerCallId)
         assertEquals("lookup", tools.first().toolName)
         assertEquals("{\"query\":\"test\"}", tools.drop(1).joinToString(separator = "") { it.input })
-        assertTrue(streamState.toolCallIdsByItemId.isEmpty())
-        assertTrue(streamState.toolArgumentsEmittedByItemId.isEmpty())
+        assertEquals("{\"query\":\"test\"}", streamState.outputItems().single()["arguments"]!!.jsonPrimitive.content)
     }
 
     @Test
@@ -413,5 +412,126 @@ class ResponseAPIParserTest {
                 .metadataAs<OpenAIReasoningMetadata>()!!.reasoningId,
         )
         assertTrue(streamState.reasoningTextEmittedByItemId.isEmpty())
+    }
+
+    private fun parseEvent(text: String, state: ResponseStreamState) =
+        api.parseResponseDelta(Json.parseToJsonElement(text).jsonObject, state)
+
+    private fun addTool(state: ResponseStreamState, index: Int, id: String? = null, callId: String = "same") =
+        parseEvent("""{"type":"response.output_item.added","output_index":$index,"item":{${id?.let { "\"id\":\"$it\"," }.orEmpty()}"type":"function_call","call_id":"$callId","name":"lookup","arguments":""}}""", state)!!
+
+    @Test
+    fun `index only events keep repeated call ids distinct and done is idempotent`() {
+        val state = ResponseStreamState()
+        val first = addTool(state, 2)
+        val second = addTool(state, 7)
+        assertTrue(first.choices.single().toolCallSlots != second.choices.single().toolCallSlots)
+        val done = """{"type":"response.function_call_arguments.done","output_index":7,"arguments":"{\"b\":2}"}"""
+        assertEquals("{\"b\":2}", parseEvent(done, state)!!.choices.single().delta!!.getTools().single().input)
+        assertEquals(null, parseEvent(done, state))
+        parseEvent("""{"type":"response.function_call_arguments.done","output_index":2,"arguments":"{\"a\":1}"}""", state)
+        val items = state.outputItems()
+        assertTrue(items.none { "id" in it })
+        assertEquals(listOf("{\"a\":1}", "{\"b\":2}"), items.map { it["arguments"]!!.jsonPrimitive.content })
+    }
+
+    @Test
+    fun `identity conflicts unknown done and ambiguous call id fail explicitly`() {
+        val state = ResponseStreamState()
+        addTool(state, 0, "fc_a")
+        addTool(state, 1, "fc_b")
+        listOf(
+            """{"type":"response.function_call_arguments.done","item_id":"missing","arguments":"{}"}""",
+            """{"type":"response.function_call_arguments.done","arguments":"{}"}""",
+            """{"type":"response.function_call_arguments.done","call_id":"same","arguments":"{}"}""",
+            """{"type":"response.function_call_arguments.done","item_id":"fc_a","output_index":1,"arguments":"{}"}""",
+        ).forEach { event ->
+            org.junit.Assert.assertThrows(IllegalStateException::class.java) { parseEvent(event, state) }
+        }
+    }
+
+    @Test
+    fun `unique call id and late item alias resolve the existing slot`() {
+        val state = ResponseStreamState()
+        val added = addTool(state, 4, callId = "unique")
+        val chunk = parseEvent("""{"type":"response.function_call_arguments.delta","item_id":"late_id","output_index":4,"delta":"{}"}""", state)!!
+        assertEquals(added.choices.single().toolCallSlots, chunk.choices.single().toolCallSlots)
+        assertEquals(null, parseEvent("""{"type":"response.function_call_arguments.done","call_id":"unique","arguments":"{}"}""", state))
+        assertEquals("{}", state.outputItems().single()["arguments"]!!.jsonPrimitive.content)
+    }
+
+    @Test
+    fun `call id alone cannot create or deduplicate added output`() {
+        val event = """{"type":"response.output_item.added","item":{"type":"function_call","call_id":"same","name":"lookup","arguments":""}}"""
+        for (alreadyBound in listOf(false, true)) {
+            val state = ResponseStreamState()
+            if (alreadyBound) addTool(state, 0)
+            val error = org.junit.Assert.assertThrows(IllegalStateException::class.java) { parseEvent(event, state) }
+            assertTrue(error.message!!.contains("responses_identity_missing"))
+        }
+    }
+
+    @Test
+    fun `successful terminal rejects incomplete parameters and reversed duplicate calls`() {
+        val incomplete = ResponseStreamState()
+        addTool(incomplete, 0)
+        parseEvent("""{"type":"response.function_call_arguments.delta","output_index":0,"delta":"{}"}""", incomplete)
+        org.junit.Assert.assertThrows(IllegalStateException::class.java) { incomplete.outputItems() }
+        org.junit.Assert.assertThrows(IllegalStateException::class.java) {
+            parseEvent("""{"type":"response.completed","response":{"status":"completed"}}""", incomplete)
+        }
+        val reversed = ResponseStreamState()
+        addTool(reversed, 1, "fc_b")
+        addTool(reversed, 0, "fc_a")
+        for (index in 0..1) parseEvent("""{"type":"response.function_call_arguments.done","output_index":$index,"arguments":"{}"}""", reversed)
+        org.junit.Assert.assertThrows(IllegalStateException::class.java) { reversed.outputItems() }
+        org.junit.Assert.assertThrows(IllegalStateException::class.java) {
+            parseEvent("""{"type":"response.completed","response":{"output":[{"id":"fc_a","type":"function_call","call_id":"same","name":"lookup","arguments":"{}"},{"id":"fc_b","type":"function_call","call_id":"same","name":"lookup","arguments":"{}"}]}}""", reversed)
+        }
+    }
+
+    @Test
+    fun `item done completes raw args once and failed terminal preserves provider diagnostics`() {
+        val state = ResponseStreamState()
+        addTool(state, 0, "fc_a")
+        val done = """{"type":"response.output_item.done","output_index":0,"item":{"id":"fc_a","type":"function_call","call_id":"same","name":"lookup","arguments":"{}","opaque":"keep"}}"""
+        assertEquals("{}", parseEvent(done, state)!!.choices.single().delta!!.getTools().single().input)
+        assertEquals(null, parseEvent(done, state))
+        assertEquals("keep", state.outputItems().single()["opaque"]!!.jsonPrimitive.content)
+        val broken = ResponseStreamState()
+        addTool(broken, 0)
+        val failure = Json.parseToJsonElement("""{"type":"response.failed","response":{"status":"failed","error":{"code":"server_error","message":"original detail"},"usage":{"input_tokens":3,"output_tokens":2,"total_tokens":5}}}""").jsonObject
+        assertEquals(5L, api.parseResponseDelta(failure, broken)!!.usage!!.totalTokens)
+        assertTrue(api.parseResponseStreamError(failure)!!.message!!.contains("original detail"))
+        val incomplete = Json.parseToJsonElement("""{"type":"response.incomplete","response":{"status":"incomplete","incomplete_details":{"reason":"max_output_tokens"}}}""").jsonObject
+        assertEquals("incomplete", api.parseResponseDelta(incomplete, broken)!!.choices.single().finishReason)
+        assertTrue(api.parseResponseStreamError(incomplete)!!.message!!.contains("max_output_tokens"))
+    }
+
+    @Test
+    fun `full terminal can bind late id but cannot change emitted arguments`() {
+        val state = ResponseStreamState()
+        addTool(state, 0)
+        parseEvent("""{"type":"response.function_call_arguments.delta","output_index":0,"delta":"{}"}""", state)
+        val terminal = """{"type":"response.completed","response":{"output":[{"id":"late","type":"function_call","call_id":"same","name":"lookup","arguments":"{}"}]}}"""
+        val result = parseEvent(terminal, state)!!.choices.single().delta!!.metadataAs<OpenAIResponseMetadata>()!!
+        assertEquals("late", result.outputItemGroups.single().single()["id"]!!.jsonPrimitive.content)
+        org.junit.Assert.assertThrows(IllegalStateException::class.java) {
+            parseEvent(terminal.replace("\"arguments\":\"{}\"", "\"arguments\":\"{ }\""), state)
+        }
+    }
+
+    @Test
+    fun `added complete arguments emit once with repeated done and state never leaks between responses`() {
+        repeat(2) {
+            val state = ResponseStreamState()
+            val added = """{"type":"response.output_item.added","item":{"id":"same_item","type":"function_call","call_id":"same","name":"lookup","arguments":"{}"}}"""
+            assertEquals("{}", parseEvent(added, state)!!.choices.single().delta!!.getTools().single().input)
+            val done = """{"type":"response.function_call_arguments.done","item_id":"same_item","arguments":"{}"}"""
+            assertEquals(null, parseEvent(done, state))
+            assertEquals(null, parseEvent(done, state))
+            assertEquals(null, parseEvent(added, state))
+            assertEquals("{}", state.outputItems().single()["arguments"]!!.jsonPrimitive.content)
+        }
     }
 }
