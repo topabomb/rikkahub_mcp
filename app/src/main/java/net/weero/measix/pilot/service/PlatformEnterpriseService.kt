@@ -294,6 +294,9 @@ internal class PlatformEnterpriseService(
         }
     }
 
+    /** File writes are never replayed; only stable Core identity codes enter the existing exit protocol. */
+    suspend fun workspaceFailure(access: RealmAccess.Enterprise, error: PlatformHttpException) = notifyRevoked(access, error)
+
     private suspend fun notifyRevoked(access: RealmAccess.Enterprise, error: PlatformHttpException) {
         val reason = when {
             error.status == 403 && error.problem?.code in EnterpriseRuntimeProblemCodes.authorizationRevoked ->

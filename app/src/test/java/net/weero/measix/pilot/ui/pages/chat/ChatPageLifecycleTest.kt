@@ -309,7 +309,7 @@ class ChatPageLifecycleTest {
             @Suppress("UNCHECKED_CAST")
             override fun <T : ViewModel> create(modelClass: Class<T>): T = ChatVM(
                 request, mockk<Application> { every { getString(net.weero.measix.pilot.R.string.error_title_operation) } returns "Operation failed" }, settings, turns, application,
-                query, updater, artifacts, favorites, errors, configuration,
+                query, updater, artifacts, favorites, errors, configuration, mockk { every { summary } returns kotlinx.coroutines.flow.MutableStateFlow(null) },
             ) as T
         })[ChatVM::class.java]
     }

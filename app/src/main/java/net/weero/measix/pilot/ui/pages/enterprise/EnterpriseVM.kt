@@ -68,7 +68,29 @@ private data class EnterpriseUpdatesTarget(
     val platformOrigin: String?,
 )
 
-internal class EnterpriseVM(private val service: EnterpriseApplicationService) : ViewModel() {
+internal class EnterpriseVM(private val service: EnterpriseApplicationService,
+    private val remoteWorkspace: net.weero.measix.pilot.service.remoteworkspace.RemoteWorkspaceService,
+) : ViewModel() {
+    val workspaceSummary = remoteWorkspace.summary
+    fun refreshWorkspace() { overview.value?.selection?.takeIf { it.access is RealmAccess.Enterprise }?.let { selection ->
+        viewModelScope.launch {
+            try {
+                remoteWorkspace.refresh(selection)
+                if (_error.value?.let { it.selection == selection && it.resource == R.string.remote_workspace_failed } == true) {
+                    _error.value = null
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                currentCoroutineContext().ensureActive()
+                android.util.Log.e("EnterpriseVM", "Remote workspace refresh failed", error)
+                if (overview.value?.selection == selection) {
+                    _error.value = Failure(R.string.remote_workspace_failed, selection, detail = error.userVisibleDiagnostic())
+                }
+            }
+        }
+    } }
+    suspend fun workspaceNavigation(selection: RealmSelection) = remoteWorkspace.requireNavigation(selection)
     val overview = service.observe().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
     val configurationDetails = overview.map { it?.configurationDetails }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)

@@ -103,14 +103,16 @@ fun HighlightCodeBlock(
     val settings = LocalSettings.current
     val colorScheme = MaterialTheme.colorScheme
     val normalizedLanguage = remember(language) { language.lowercase() }
-    val canInlinePreview = completeCodeBlock && normalizedLanguage in PREVIEWABLE_LANGUAGES
+    val allowPreview = LocalMarkdownHtmlAllowed.current
+    val canInlinePreview = allowPreview && completeCodeBlock && normalizedLanguage in PREVIEWABLE_LANGUAGES
     val fullScreenPreviewContent = remember(
+        allowPreview,
         completeCodeBlock,
         normalizedLanguage,
         code,
         colorScheme,
     ) {
-        if (!completeCodeBlock) {
+        if (!allowPreview || !completeCodeBlock) {
             null
         } else if (normalizedLanguage in PREVIEWABLE_LANGUAGES) {
             buildCodePreviewHtml(code = code, language = normalizedLanguage)
@@ -155,7 +157,7 @@ fun HighlightCodeBlock(
                 previewMode = previewMode,
                 canInlinePreview = canInlinePreview,
                 onExportRenderedPreview = if (
-                    activity != null && completeCodeBlock && normalizedLanguage == "mermaid"
+                    allowPreview && activity != null && completeCodeBlock && normalizedLanguage == "mermaid"
                 ) {
                     { mermaidExportRequestKey++ }
                 } else {
@@ -179,7 +181,7 @@ fun HighlightCodeBlock(
                             .height(200.dp),
                     )
                 }
-                completeCodeBlock && normalizedLanguage == "mermaid" -> {
+                allowPreview && completeCodeBlock && normalizedLanguage == "mermaid" -> {
                     Mermaid(
                         code = code,
                         exportRequestKey = mermaidExportRequestKey,

@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "serviceState": "ENABLED",
+  "state": "CONNECTED",
+  "bindingRevision": 1,
+  "agentSpaceId": "spc_550e8400-e29b-41d4-a716-446655440000",
+  "mcpAvailable": false,
+  "filesAvailable": true,
+  "mcpReason": "mcp_not_published",
+  "filesReason": "available"
+}

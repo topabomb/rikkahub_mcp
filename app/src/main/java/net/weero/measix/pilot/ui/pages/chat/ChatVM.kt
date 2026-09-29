@@ -78,7 +78,20 @@ class ChatVM internal constructor(
     private val favoriteService: FavoriteService,
     private val chatErrorStore: ChatErrorStore,
     private val configurationApplicationService: ConfigurationApplicationService,
+    private val remoteWorkspace: net.weero.measix.pilot.service.remoteworkspace.RemoteWorkspaceService,
 ) : ViewModel() {
+    internal val remoteWorkspaceSummary = remoteWorkspace.summary
+    internal suspend fun refreshRemoteWorkspace(target: ConversationAssistantTarget) {
+        requireConfigurationTarget(target)
+        if (target.conversation.selection.access is net.weero.measix.pilot.data.enterprise.RealmAccess.Enterprise)
+            remoteWorkspace.refresh(target.conversation.selection)
+    }
+    internal suspend fun remoteWorkspaceNavigation(target: ConversationAssistantTarget): net.weero.measix.pilot.data.enterprise.RealmSelection {
+        requireConfigurationTarget(target)
+        remoteWorkspace.requireNavigation(target.conversation.selection, filesRequired = true)
+        requireConfigurationTarget(target)
+        return target.conversation.selection
+    }
     private val _conversationId: Uuid = request.id
     private sealed interface PageState {
         data object Loading : PageState

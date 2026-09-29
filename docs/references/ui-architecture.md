@@ -203,6 +203,12 @@ Activity 重建或进程恢复后重新读取已发布文件，不承诺恢复�
 
 ## 7. 验证边界
 
+企业远程文件入口由 `RemoteWorkspaceService.summary` 统一投影：企业页在连接之后显示紧凑摘要，聊天附件面板
+在本地 Workspace 之后显示独立远程行。只有原企业聊天目标仍有效且文件可用时显示快捷行；导航保留原聊天草稿。
+两处使用 `Screen.RemoteWorkspace`，导航不序列化管理 handle。页面及 `RemoteWorkspaceVM` 提交应用命令，
+不访问 DAO、DAV 或凭据。文件行复用 `ui/components/files/FileRow`，正文复用 FileTextEditor，Markdown 使用受限策略，
+PDF 使用有界逐页渲染。身份、条件写入及系统交付约束见 [远程文件](workspace-architecture.md#11-企业远程文件)。
+
 页面变更需验证实际路径，不能只确认节点存在：
 
 - 授权撤销、快速切域往返、Activity 重建与迟到回调不能复活旧投影、导航能力或待提交操作。

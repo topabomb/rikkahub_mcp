@@ -1,6 +1,6 @@
 # 工作区架构与执行参考
 
-本文档描述当前 Workspace 的持久化、Rootfs、PRoot 进程、AI 工具与交互终端边界。消息生成如何装配这些工具见 [turn-step-execution.md](turn-step-execution.md)，工具参数与结果契约见 [prompts-and-tools.md](prompts-and-tools.md)。
+本文档描述本地 Workspace 的持久化、Rootfs、PRoot 进程、AI 工具与交互终端，以及企业远程文件管理的独立边界。消息生成如何装配工具见 [turn-step-execution.md](turn-step-execution.md)，工具参数与结果契约见 [prompts-and-tools.md](prompts-and-tools.md)。
 
 ## 1. 能力与隔离边界
 
@@ -270,3 +270,41 @@ PRoot 兼容参数（`-k` kernel spoof、seccomp 策略、环境变量与 flags�
 批量结果只有在输出 close 成功后才记为成功。取消停止后续项，保留已完成文档，只清理本项取得且未完成的 document；清理失败作为 suppressed 保留。单文件/分享由打开方关闭输出并展示原诊断。选择与 picker 请求保存在内存；重建后缺少原请求身份的回调被拒绝。运行中的批量任务由 WorkspaceDetailVM 持有，旋转可继续观察结果，离开其生命周期取消。
 
 WorkspaceFileEditorPage 的正文使用以 id/area/path 为键的普通 FileEditorState，通过共享 FileTextEditor 展示。FileEditorState 与原生 EditText 共用一个 Editable；页面使用 fillViewport 占用可用高度，正文在有限视口内滚动。保存仍调用 WorkspaceApplicationService.writeText，失败保留正文与可复制诊断，取消在 finally 恢复操作状态。未保存正文不进入 Activity Bundle，也没有 durable draft；Activity 重建或进程恢复后重新读取已发布文件。输入法查询边界见 [UI 架构](ui-architecture.md) 的文件编辑正文生命周期。
+
+## 11. 企业远程文件
+
+远程文件不属于本地 Workspace、Assistant.workspaceId 或 PRoot。`RemoteWorkspaceService` 拥有客户端请求、
+临时管理会话和未交付副本；远端文件事实仍由 Core/Agent Space 管理。`PlatformWorkspaceClient` 通过原
+`PlatformConnection.control` 和企业 Bearer 访问 workspace 状态、目录、内容及条件写入，不直连 DAV，
+不依赖 MCP 发布、Applied Snapshot 或模型执行准入。线类型由 `generate-enterprise-wire.py` 消费合同生成。
+
+早期 Core 兼容只在 workspace 状态读取边界处理：精确识别缺路由响应和已发布的旧投影，隐藏可选入口，
+不影响原企业功能。缺少 `serviceState` 的旧协议尚未校验文件请求的固定空间身份，不能补默认值后启用。
+后续主动刷新会重新探测以发现服务升级；业务 404、认证错误、代理错误页和其他合同错误仍保留真实诊断。
+
+两个入口消费同一摘要。状态刷新按 RealmSelection、Session、连接上下文合并并防止旧结果发布；实际读取失败
+保留独立读取错误，只有状态复验及显式目录读取成功才恢复文件入口。状态刷新不下载文件或启动常驻轮询。
+管理 handle 固定选择版本、Session、连接、agentSpaceId 与 bindingRevision，只存在内存。
+切域在 Session 锁内撤销并取消、锁外等待实际请求及清理；退出等待远程请求后才排空平台租约。
+变更地址期间禁止登记新操作。普通状态刷新不会撤销正在进行且身份仍有效的读取，但阻止新写入抢先使用旧结果。
+新请求先登记原会话任务；遇到同身份刷新时在锁外等待，完成后重新校验原 handle 再准入。
+因此 SAF 返回与前台状态刷新可以并发，等待期间撤权仍会取消任务并清理本次创建的文档。
+
+GET 只接纳完整 200；列表响应有界，文件内容按 64 KiB 块传输，不建立内存大文件缓存。
+重定向、认证器重发和连接自动重试关闭；写入 body 为 one-shot。新文件用 If-None-Match，已有普通文件
+必须有强 ETag，覆盖目标也必须使用用户确认的目标版本。目录递归删除必须显式确认。
+UNKNOWN 与异常成功状态、发送后 IO 中断均不能当作失败后可重试；同身份、连接和空间的目标在当前进程内
+保留待核实记录，读取目标并由用户确认后才解除。关闭页面不会清除此记录，进程重启不自动恢复或重放任务。
+
+`RemoteWorkspaceVM` 串行执行批量命令并保留逐项结果。SAF 文档在完整输出关闭后才交付；失败只删除本项新建文档，
+清理错误附加到原诊断。取消同时关闭已取得的本地流和网络 Call，并等待工作退出。系统 Provider 自身阻塞在打开/关闭
+调用时仍取决于该 Provider 返回，不能用 UI 提前结束替代资源退出。
+分享使用 FileProvider 只读 URI，系统接收成功前副本仍归 service，失败或撤权清理；已交付 share 副本保留 24 小时，
+后续启动清理过期文件。预览关闭删除其副本，启动清理上次进程遗留的未交付预览。
+
+文本只支持严格 UTF-8、2 MiB 内及统一换行；一个 BOM 作为元信息，第二个 U+FEFF 保留正文。
+保存沿读取正文那次 GET 的 ETag，失败保留草稿，另存使用新文件条件。
+`RemoteWorkspaceVM` 持有单个原 handle/path 的内存编辑会话，界面重建复用同一 FileEditorState 和读取版本，
+关闭或撤权清除；进程死亡不从 Bundle/磁盘恢复正文或授权。分享副本使用短随机私有文件名，FileProvider 保留原展示名。
+图片内容校验像素上限，PDF 逐页原生渲染，资源均有上限；HTML/SVG 交给外部应用。`RestrictedMarkdown` 禁止原始 HTML、HTML/SVG/Mermaid 预览及外部图片，
+相对图片仍经原 handle 授权读取；不会向富文本渲染器暴露 Bearer URL。

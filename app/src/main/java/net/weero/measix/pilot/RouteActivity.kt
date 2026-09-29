@@ -405,6 +405,10 @@ class RouteActivity : ComponentActivity() {
                                 net.weero.measix.pilot.ui.pages.enterprise.EnterprisePage()
                             }
 
+                            entry<Screen.RemoteWorkspace> { key ->
+                                net.weero.measix.pilot.ui.pages.remoteworkspace.RemoteWorkspacePage(key.selection)
+                            }
+
                             entry<Screen.EnterpriseUsage> {
                                 net.weero.measix.pilot.ui.pages.enterprise.EnterprisePage(openUsage = true)
                             }
@@ -680,6 +684,12 @@ sealed interface Screen : NavKey {
 
     @Serializable
     data object EnterpriseUsage : Screen
+
+    @Serializable
+    data class RemoteWorkspace(
+        val id: String = java.util.UUID.randomUUID().toString(),
+        @kotlinx.serialization.Transient internal val selection: net.weero.measix.pilot.data.enterprise.RealmSelection? = null,
+    ) : Screen
 
     @Serializable
     data class Startup(val notificationId: String? = null) : Screen

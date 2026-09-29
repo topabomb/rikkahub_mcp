@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 1,
+  "serviceState": "ENABLED",
+  "state": "UNPROVISIONED",
+  "bindingRevision": 0,
+  "mcpAvailable": false,
+  "filesAvailable": false,
+  "mcpReason": "not_provisioned",
+  "filesReason": "not_provisioned"
+}

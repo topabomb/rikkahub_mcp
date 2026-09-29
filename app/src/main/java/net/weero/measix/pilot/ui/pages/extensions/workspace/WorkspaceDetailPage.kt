@@ -818,120 +818,26 @@ private fun WorkspaceFileCard(
     onExport: () -> Unit,
     onShare: () -> Unit,
 ) {
-    var menuExpanded by remember { mutableStateOf(false) }
-
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .combinedClickable(
-                onClick = { if (selecting) onSelect() else onOpen() },
-                onLongClick = if (!entry.isDirectory) onSelect else null,
-            ),
-        colors = CustomColors.cardColorsOnSurfaceContainer,
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(start = 16.dp, top = 12.dp, bottom = 12.dp, end = 4.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            if (selecting && !entry.isDirectory) {
-                Checkbox(checked = selected, onCheckedChange = { onSelect() })
-            } else if (image != null) {
-                val placeholder = rememberVectorPainter(HugeIcons.File02)
-                AsyncImage(
-                    model = image,
-                    contentDescription = null,
-                    placeholder = placeholder,
-                    error = placeholder,
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier.size(40.dp).clip(MaterialTheme.shapes.small),
-                )
-            } else {
-                Icon(
-                    imageVector = if (entry.isDirectory) HugeIcons.Folder01 else HugeIcons.File02,
-                    contentDescription = null,
-                    modifier = Modifier.size(22.dp),
-                    tint = if (entry.isDirectory) {
-                        MaterialTheme.colorScheme.primary
-                    } else {
-                        MaterialTheme.colorScheme.onSurfaceVariant
-                    },
-                )
-            }
-            Column(
-                modifier = Modifier
-                    .weight(1f)
-                    .padding(horizontal = 12.dp),
-                verticalArrangement = Arrangement.spacedBy(4.dp),
-            ) {
-                Text(
-                    text = entry.name,
-                    style = MaterialTheme.typography.titleSmallEmphasized,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                Text(
-                    text = if (entry.isDirectory) entry.path else "${entry.path} · ${entry.sizeBytes.fileSizeToString()}",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
-            if (!selecting) Box {
-                IconButton(onClick = { menuExpanded = true }) {
-                    Icon(HugeIcons.MoreVertical, contentDescription = stringResource(R.string.more_options))
-                }
-                DropdownMenu(
-                    expanded = menuExpanded,
-                    onDismissRequest = { menuExpanded = false },
-                ) {
-                    if (!entry.isDirectory) {
-                        DropdownMenuItem(
-                            text = { Text(stringResource(R.string.common_export)) },
-                            leadingIcon = {
-                                Icon(
-                                    imageVector = HugeIcons.FileImport,
-                                    contentDescription = null,
-                                )
-                            },
-                            onClick = {
-                                menuExpanded = false
-                                onExport()
-                            },
-                        )
-                        DropdownMenuItem(
-                            text = { Text(stringResource(R.string.common_share)) },
-                            leadingIcon = {
-                                Icon(
-                                    imageVector = HugeIcons.Share08,
-                                    contentDescription = null,
-                                )
-                            },
-                            onClick = {
-                                menuExpanded = false
-                                onShare()
-                            },
-                        )
-                    }
-                    DropdownMenuItem(
-                        text = { Text(stringResource(R.string.common_delete), color = MaterialTheme.colorScheme.error) },
-                        leadingIcon = {
-                            Icon(
-                                imageVector = HugeIcons.Delete01,
-                                contentDescription = null,
-                                tint = MaterialTheme.colorScheme.error,
-                            )
-                        },
-                        onClick = {
-                            menuExpanded = false
-                            onDelete()
-                        },
-                    )
-                }
-            }
+    net.weero.measix.pilot.ui.components.files.FileRow(
+        name = entry.name,
+        detail = if (entry.isDirectory) entry.path else "${entry.path} · ${entry.sizeBytes.fileSizeToString()}",
+        directory = entry.isDirectory, selected = selected, selecting = selecting,
+        onOpen = onOpen, onSelect = onSelect.takeUnless { entry.isDirectory },
+        thumbnail = image?.let { source -> {
+            val placeholder = rememberVectorPainter(HugeIcons.File02)
+            AsyncImage(model = source, contentDescription = null, placeholder = placeholder, error = placeholder,
+                contentScale = ContentScale.Crop, modifier = Modifier.size(40.dp).clip(MaterialTheme.shapes.small))
+        } },
+    ) { dismiss ->
+        if (!entry.isDirectory) {
+            DropdownMenuItem(text = { Text(stringResource(R.string.common_export)) },
+                leadingIcon = { Icon(HugeIcons.FileImport, null) }, onClick = { dismiss(); onExport() })
+            DropdownMenuItem(text = { Text(stringResource(R.string.common_share)) },
+                leadingIcon = { Icon(HugeIcons.Share08, null) }, onClick = { dismiss(); onShare() })
         }
+        DropdownMenuItem(text = { Text(stringResource(R.string.common_delete), color = MaterialTheme.colorScheme.error) },
+            leadingIcon = { Icon(HugeIcons.Delete01, null, tint = MaterialTheme.colorScheme.error) },
+            onClick = { dismiss(); onDelete() })
     }
 }
 

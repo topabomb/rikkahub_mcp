@@ -173,6 +173,7 @@ Debug 包私有数据，测试的 finally 无法保护包级卸载；不得对�
 | Starter v5 隔离 Mock | `starterV5MockLive=true`；专用且从未绑定企业的设备 | 实际 UI、Applied、Session、Room 与 adapter；HTTP 为 Mock |
 | Starter v5 Core 联调 | `starterV5CoreLive=true` 与 `coreStarterInput` | Core 提供真实 Snapshot、目标 Starter、临时接入资料；分别记录确定性 adapter 或实际供应商环境；输入文件读取后删除 |
 | 已接入平台上下文 | `platformContextLive=true`；可选 `platformContextModelSwitch=true` | 使用当前发布资源；记录 release/hash、实际版本及 Provider 结果，v4 不能证明 v5 opening |
+| 远程文件真实链路 | `remoteWorkspaceInput` 指向专用设备应用 cache 内 JSON，包含 `enrollment` 字符串；可选 `lifecycle: true` | `RemoteWorkspaceLiveAndroidTest` 要求未接入测试设备和独立 Core/Agent Space；输入读取后删除。验证无 Applied/MCP 的文件入口、64 MiB 摘要往返、双编辑者冲突与另存、慢下载取消、原生预览与真实目录渲染。生命周期模式在 cache 写出 `remote-workspace-step.txt`，主机按 disconnect、restore、files、replace 对专属测试用户执行管理动作，完成后写入对应 `remote-workspace-<step>.done`（内容 `ok`）；验证恢复时文件资格和替换空间后的旧句柄拒绝 |
 | Linux Rootfs | `prootRootfsUrl` 指向匹配 ABI 的已核验镜像 | `WorkspaceProotAndroidTest`；系统 shell 的 native PTY 测试不证明 PRoot；4 KB/16 KB 与 arm64/x86_64 分别记账 |
 | HTTP ASR 完整上传 | `httpAsrLiveAudio=true`；持续有效麦克风输入 | `HttpAsrLifecycleInstrumentedTest` 的上传/上传中取消；模拟器底噪不满足有效信号检查，跳过不能记为上传成功 |
 

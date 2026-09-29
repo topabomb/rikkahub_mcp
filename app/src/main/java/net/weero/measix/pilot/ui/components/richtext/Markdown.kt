@@ -284,13 +284,16 @@ fun MarkdownBlock(
     style: TextStyle = LocalTextStyle.current,
     onClickCitation: (String) -> Unit = {},
     source: net.weero.measix.pilot.service.RenderedContentSource? = null,
+    allowHtml: Boolean = LocalMarkdownHtmlAllowed.current,
 ) {
     if (source != null) {
-        RichTextHost(source) { MarkdownBlock(content, modifier, style, onClickCitation) }
+        RichTextHost(source) { MarkdownBlock(content, modifier, style, onClickCitation, allowHtml = allowHtml) }
     } else {
         CompositionLocalProvider(androidx.compose.ui.platform.LocalUriHandler provides
             (LocalRichTextActions.current?.uriHandler ?: UnavailableContentUriHandler)) {
-            MarkdownContent(content, modifier, style, onClickCitation)
+            CompositionLocalProvider(LocalMarkdownHtmlAllowed provides allowHtml) {
+                MarkdownContent(content, modifier, style, onClickCitation)
+            }
         }
     }
 }
@@ -311,7 +314,7 @@ private fun MarkdownContent(content: String, modifier: Modifier, style: TextStyl
             .collect { setData(it) }
     }
 
-    if (data.hasHtml) {
+    if (data.hasHtml && LocalMarkdownHtmlAllowed.current) {
         MarkdownNew(
             content = content,
             modifier = modifier,
@@ -689,9 +692,8 @@ private fun MarkdownNode(
 
         MarkdownElementTypes.HTML_BLOCK -> {
             val text = node.getTextInNode(content)
-            SimpleHtmlBlock(
-                html = text, modifier = modifier
-            )
+            if (LocalMarkdownHtmlAllowed.current) SimpleHtmlBlock(html = text, modifier = modifier)
+            else Text(text, modifier = modifier)
         }
 
         // 其他类型的节点，递归处理子节点

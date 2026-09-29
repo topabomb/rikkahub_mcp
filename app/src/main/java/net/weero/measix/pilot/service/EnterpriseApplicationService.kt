@@ -528,6 +528,7 @@ internal class EnterpriseApplicationService(
     private val terminals: net.weero.measix.pilot.service.workspace.WorkspaceTerminalRuntime,
     private val speech: SpeechApplicationService,
     private val platform: PlatformEnterpriseService,
+    private val remoteWorkspace: net.weero.measix.pilot.service.remoteworkspace.RemoteWorkspaceService,
 ) {
     private data class Switching(val request: RealmSwitchRequest, val result: Deferred<RealmSelection>)
     private val mutex = Mutex()
@@ -662,8 +663,10 @@ internal class EnterpriseApplicationService(
             }
             val normalized = EnrollmentMaterialParser.normalizeOrigin(origin)
             if (sessions.platformContext(request.access.sessionId).platform.connection.origin == normalized) return
-            platform.changeAddress(request, normalized)
-            portals.closeAndAwait(request.access, PortalCloseReason.CONNECTION_CHANGED)
+            remoteWorkspace.changeConnection(request.access) {
+                platform.changeAddress(request, normalized)
+                portals.closeAndAwait(request.access, PortalCloseReason.CONNECTION_CHANGED)
+            }
         }
     }
     suspend fun recentUpdates(selection: RealmSelection, access: RealmAccess.Enterprise): EnterpriseUpdatesUiModel {
@@ -746,10 +749,12 @@ internal class EnterpriseApplicationService(
 
     private suspend fun performSwitch(request: RealmSwitchRequest): RealmSelection {
         var receipt: PortalCloseReceipt? = null
+        var remoteReceipt: net.weero.measix.pilot.service.remoteworkspace.RemoteWorkspaceRevocation? = null
         var selected: RealmSelection? = null
         var failure: Exception? = null
         try {
             selected = sessions.switchRealm(request) { previous ->
+                remoteReceipt = remoteWorkspace.revoke(previous)
                 speech.revoke(previous)
                 terminals.revokeViewports(previous)
                 if (previous is RealmAccess.Enterprise) {
@@ -766,7 +771,10 @@ internal class EnterpriseApplicationService(
             // The accepted switch owns this receipt even if its caller or application scope is cancelled.
             withContext(NonCancellable) {
                 var portalFailure: Exception? = null
-                try { receipt?.awaitClosed() } catch (error: Exception) { portalFailure = error }
+                try { remoteReceipt?.awaitClosed() } catch (error: Exception) { portalFailure = error }
+                try { receipt?.awaitClosed() } catch (error: Exception) {
+                    if (portalFailure == null) portalFailure = error else portalFailure.addSuppressed(error)
+                }
                 try { speech.closeRealm(request.selection.access) } catch (error: Exception) {
                     if (portalFailure == null) throw error else portalFailure.addSuppressed(error)
                 }

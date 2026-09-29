@@ -461,7 +461,7 @@ class EnterpriseDataResetServiceTest {
                 mockk(relaxed = true), terminals = mockk { io.mockk.coEvery { closeRealm(any()) } returns Unit },
                 mcp = mockk { io.mockk.coEvery { closeRealm(any()) } returns Unit }, speech = mockk(relaxed = true),
                 identityData = mockk(relaxed = true),
-                platformLogout = { logoutCalls++ })
+                remoteWorkspace = mockk { io.mockk.coEvery { cancelAndAwait(any()) } returns Unit }, platformLogout = { logoutCalls++ })
             val reset = EnterpriseDataResetService(store, sessions, exits, conversations, settings, memories,
                 catalogs, files, gate) { now }
             return Triple(sessions, exits, reset)

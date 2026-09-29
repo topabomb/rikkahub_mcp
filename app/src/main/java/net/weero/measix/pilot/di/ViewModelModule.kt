@@ -42,12 +42,14 @@ val viewModelModule = module {
             favoriteService = get(),
             chatErrorStore = get(),
             configurationApplicationService = get(),
+            remoteWorkspace = get(),
         )
     }
     viewModelOf(::ChatDrawerVM)
     viewModelOf(::SettingVM)
     viewModelOf(::ModelSettingsVM)
     viewModelOf(::EnterpriseVM)
+    viewModel { parameters -> net.weero.measix.pilot.ui.pages.remoteworkspace.RemoteWorkspaceVM(parameters.getOrNull(), get(), get()) }
     viewModel<ProviderSettingsVM> {
         ProviderSettingsVM(providerId = it.get(), service = get())
     }

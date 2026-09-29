@@ -351,11 +351,13 @@ val appModule = module {
             me.rerere.tts.controller.TtsController(get()) { it.userVisibleDiagnostic() }, get())
     }
     single { net.weero.measix.pilot.service.EnterpriseIdentityDataDisposer(get(), get(), get(), get(), get()) }
-    single { net.weero.measix.pilot.service.EnterpriseExitService(get(), get(), get(), get(), get<AppScope>(), get(), get(), get(), get(), get(), get()) { get<PlatformEnterpriseService>().logout(it) } }
+    single { net.weero.measix.pilot.service.remoteworkspace.RemoteWorkspaceService(get(), get(), get(), get(), get<AppScope>(),
+        java.io.File(get<Context>().cacheDir, "remote_workspace")) }
+    single { net.weero.measix.pilot.service.EnterpriseExitService(get(), get(), get(), get(), get<AppScope>(), get(), get(), get(), get(), get(), get(), get()) { get<PlatformEnterpriseService>().logout(it) } }
     single { net.weero.measix.pilot.service.EnterpriseDataResetService(get(), get(), get(), get(), get(), get(), get(), get(), get()) }
     single(createdAtStart = true) { net.weero.measix.pilot.service.EnterpriseApplicationService(
         sessions = get(), synchronization = get(), exit = get(), dataReset = get(), portals = get(), recovery = get(),
-        scope = get<AppScope>(), media = get(), terminals = get(), speech = get(), platform = get(),
+        scope = get<AppScope>(), media = get(), terminals = get(), speech = get(), platform = get(), remoteWorkspace = get(),
     ) }
 
     single {

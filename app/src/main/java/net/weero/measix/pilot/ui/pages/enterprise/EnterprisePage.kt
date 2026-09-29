@@ -103,6 +103,7 @@ import java.time.format.FormatStyle
 import java.util.Date
 import java.util.Locale
 import net.weero.measix.pilot.utils.base64Encode
+import net.weero.measix.pilot.utils.userVisibleDiagnostic
 import net.weero.measix.pilot.utils.ImageUtils
 
 private data class StarterPresentation(
@@ -352,7 +353,7 @@ internal fun EnterprisePage(openUsage: Boolean = false, vm: EnterpriseVM = koinV
     }
     DisposableEffect(lifecycleOwner, state?.access, state?.platformOrigin) {
         val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_RESUME && state?.access != null) vm.refreshBudgets()
+            if (event == Lifecycle.Event.ON_RESUME && state?.access != null) { vm.refreshBudgets(); vm.refreshWorkspace() }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
@@ -624,6 +625,21 @@ internal fun EnterprisePage(openUsage: Boolean = false, vm: EnterpriseVM = koinV
                                 } }) {
                                     Icon(HugeIcons.Copy01, stringResource(R.string.copy), modifier = Modifier.size(20.dp))
                                 }
+                            }
+                        }
+                    }
+                }
+                val workspaceSummary by vm.workspaceSummary.collectAsStateWithLifecycle()
+                workspaceSummary?.takeIf { it.selection == state?.selection && inEnterprise }?.let { workspace ->
+                    net.weero.measix.pilot.ui.pages.remoteworkspace.RemoteWorkspaceCard(workspace) {
+                        pageScope.launch {
+                            try {
+                                vm.workspaceNavigation(workspace.selection)
+                                nav.navigate(Screen.RemoteWorkspace(selection = workspace.selection))
+                            } catch (cancelled: CancellationException) { throw cancelled }
+                            catch (error: Exception) {
+                                android.util.Log.e("RemoteWorkspace", "Navigation expired", error)
+                                toaster.show(error.userVisibleDiagnostic(), type = ToastType.Error)
                             }
                         }
                     }

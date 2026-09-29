@@ -114,6 +114,7 @@ internal fun FilesPicker(
     onPickFile: () -> Unit,
     feedback: com.dokar.sonner.ToasterState? = null,
     onMcpPickerVisibilityChange: (Boolean) -> Unit = {},
+    onOpenRemoteWorkspace: (() -> Unit)? = null,
 ) {
     val settings = LocalSettings.current
     val navController = LocalNavController.current
@@ -165,6 +166,12 @@ internal fun FilesPicker(
                     onManageSharedConfiguration(Screen.Workspaces)
                 },
             )
+        }
+
+        if (onOpenRemoteWorkspace != null) {
+            ListItem(headlineContent = { Text(stringResource(R.string.remote_workspace_title)) },
+                leadingContent = { Icon(HugeIcons.Folder01, null) }, trailingContent = { Text("›") },
+                modifier = Modifier.clickable(onClick = onOpenRemoteWorkspace))
         }
 
         McpPickerListItem(

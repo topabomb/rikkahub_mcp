@@ -30,7 +30,8 @@ SCHEMAS["AssistantStarterDefinition"]["required"] = SCHEMAS["AssistantStarterDef
 ROOTS = ["Discovery", "EnrollmentExchangeRequest", "EnrollmentExchangeResponse",
          "RefreshRequest", "RefreshResponse", "ManagedState", "Bootstrap",
          "ManagedSnapshot", "ManagedAppliedReport", "PortalGrant", "UserBudgetView",
-         "Problem", "EnterpriseUpdateFeed"]
+         "Problem", "EnterpriseUpdateFeed", "WorkspaceProjection",
+         "WorkspaceFileList", "WorkspaceFileMutation", "WorkspaceFileResult"]
 definitions = {}
 
 

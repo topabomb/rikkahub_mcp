@@ -426,3 +426,7 @@ Conversation.folderId            → Folder.id
 - UI 与运行时只消费同一个 effective read model，不建立第二 owner。
 
 构建/JVM 验证不替代真实平台存储、签名资源和恢复场景的设备验收。新增生产同步路径时，应补充对应的服务端互操作验证。
+
+企业远程文件能力独立于 Applied 配置及 MCP 发布。CONFIGURATION_PENDING 中的有效 Session 可查询工作区并管理文件，
+不得为此放宽模型执行准入或向 Settings 写入另一份工作区状态。客户端请求随原 RealmSelection、Session 和连接变化撤销；
+退出与地址变更通过 `RemoteWorkspaceService` 排空请求及未交付资源，详见 [Workspace](workspace-architecture.md#11-企业远程文件)。

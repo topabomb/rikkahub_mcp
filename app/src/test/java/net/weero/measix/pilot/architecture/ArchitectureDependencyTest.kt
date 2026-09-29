@@ -173,7 +173,8 @@ class ArchitectureDependencyTest {
 
     @Test
     fun `image read capabilities are issued by their existing application owners`() {
-        val allowed = setOf("service/ImageSource.kt", "service/FileManagementApplicationService.kt", "service/ArtifactUseCase.kt", "service/workspace/WorkspaceApplicationService.kt")
+        val allowed = setOf("service/ImageSource.kt", "service/FileManagementApplicationService.kt", "service/ArtifactUseCase.kt",
+            "service/workspace/WorkspaceApplicationService.kt", "service/remoteworkspace/RemoteWorkspaceService.kt")
         val constructor = Regex("""(?<![\w])ImageSource\s*\(""")
         val violations = architectureSources.filter { constructor.containsMatchIn(it.readText()) }
             .map { it.relativeTo(architectureSourceRoot).invariantSeparatorsPath }.filterNot(allowed::contains)

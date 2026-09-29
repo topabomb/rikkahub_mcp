@@ -1318,6 +1318,16 @@ private fun ChatFilesPickerSheet(
     val fileReadFailedFormat = stringResource(R.string.chat_input_file_read_failed)
     val unsupportedFileTypeFormat = stringResource(R.string.chat_input_unsupported_file_type)
     val originalTarget = remember { configuration.target }
+    val remoteWorkspace by vm.remoteWorkspaceSummary.collectAsStateWithLifecycle()
+    val remoteNav = LocalNavController.current
+    LaunchedEffect(originalTarget) {
+        try { vm.refreshRemoteWorkspace(originalTarget) }
+        catch (cancelled: CancellationException) { throw cancelled }
+        catch (error: Exception) {
+            Log.e("ChatFilesPicker", "Remote workspace refresh failed", error)
+            feedback.show(error.userVisibleDiagnostic(), type = ToastType.Error)
+        }
+    }
 
     fun dismissAll() {
         showInjectionSheet = false
@@ -1550,6 +1560,16 @@ private fun ChatFilesPickerSheet(
         feedbackVisible = !showInjectionSheet && !showNestedMcpPicker,
     ) {
         FilesPicker(
+            onOpenRemoteWorkspace = if (remoteWorkspace?.selection == originalTarget.conversation.selection && remoteWorkspace?.canOpenFiles == true) {
+                { scope.launch {
+                    try {
+                        val selection = vm.remoteWorkspaceNavigation(originalTarget)
+                        dismissAll()
+                        remoteNav.navigate(Screen.RemoteWorkspace(selection = selection))
+                    } catch (cancelled: CancellationException) { throw cancelled }
+                    catch (error: Exception) { feedback.show(error.userVisibleDiagnostic(), type = ToastType.Error) }
+                }; Unit }
+            } else null,
             feedback = feedback,
             onMcpPickerVisibilityChange = { showNestedMcpPicker = it },
             conversationModeInjectionIds = snapshot.header.modeInjectionIds,

@@ -522,8 +522,826 @@ paths:
           $ref: '#/components/responses/Problem'
         '404':
           $ref: '#/components/responses/Problem'
+  /api/client/v1/workspace:
+    get:
+      operationId: getWorkspace
+      parameters: []
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceProjection'
+        default:
+          $ref: '#/components/responses/Problem'
+  /api/client/v1/workspace/files:
+    get:
+      operationId: listClientWorkspaceFiles
+      parameters:
+      - name: path
+        in: query
+        required: false
+        schema:
+          type: string
+      - name: agentSpaceId
+        in: query
+        required: true
+        description: Expected space from WorkspaceProjection; mismatch is 409. Never selects a user.
+        schema:
+          $ref: '#/components/schemas/AgentSpaceId'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceFileList'
+        default:
+          $ref: '#/components/responses/Problem'
+        '400':
+          description: invalid_file_path, invalid_file_condition, file_condition_required, invalid_file_destination or invalid_workspace_request;
+            correct the request.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '401':
+          description: Core authentication invalid. Refresh/sign in through the existing session lifecycle.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '403':
+          description: Core permission denied.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '404':
+          description: file_not_found; refresh parent. Missing deployment routes are not an empty directory.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '409':
+          description: workspace_space_mismatch, file_version_conflict, file_conflict or file_locked; refresh the target, preserve
+            edits and never overwrite automatically.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '429':
+          description: file_transfer_limit; bounded concurrent transfers exceeded. Queue reads; do not replay writes automatically.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '503':
+          description: workspace_unavailable, dav_credential_unavailable, file_service_unavailable, file_transport_unavailable
+            or workspace_result_unknown. DAV failures do not invalidate Core login. Unknown writes require re-reading; do not
+            retry automatically.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '507':
+          description: file_storage_full; free space before a new explicit attempt.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '422':
+          description: file_listing_limit; directory response exceeds the supported bound, never interpret as empty.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+      description: 'Paths are relative to the workspace root, encoded once as query values. Writes are never automatically retried. '
+    post:
+      operationId: mutateClientWorkspaceFile
+      parameters:
+      - name: agentSpaceId
+        in: query
+        required: true
+        description: Expected space from WorkspaceProjection; mismatch is 409. Never selects a user.
+        schema:
+          $ref: '#/components/schemas/AgentSpaceId'
+      responses:
+        '200':
+          description: 'Inspect outcome: SUCCEEDED, PARTIAL or UNKNOWN. HTTP 200 alone does not mean every mutation succeeded.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceFileResult'
+        default:
+          $ref: '#/components/responses/Problem'
+        '400':
+          description: invalid_file_path, invalid_file_condition, file_condition_required, invalid_file_destination or invalid_workspace_request;
+            correct the request.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '401':
+          description: Core authentication invalid. Refresh/sign in through the existing session lifecycle.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '403':
+          description: Core permission denied.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '404':
+          description: file_not_found; refresh parent. Missing deployment routes are not an empty directory.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '409':
+          description: workspace_space_mismatch, file_version_conflict, file_conflict or file_locked; refresh the target, preserve
+            edits and never overwrite automatically.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '429':
+          description: file_transfer_limit; bounded concurrent transfers exceeded. Queue reads; do not replay writes automatically.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '503':
+          description: workspace_unavailable, dav_credential_unavailable, file_service_unavailable, file_transport_unavailable
+            or workspace_result_unknown. DAV failures do not invalidate Core login. Unknown writes require re-reading; do not
+            retry automatically.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '507':
+          description: file_storage_full; free space before a new explicit attempt.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '422':
+          description: file_listing_limit; directory response exceeds the supported bound, never interpret as empty.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WorkspaceFileMutation'
+      description: 'Paths are relative to the workspace root, encoded once as query values. Writes are never automatically retried. '
+  /api/client/v1/workspace/content:
+    get:
+      operationId: downloadClientWorkspaceFile
+      parameters:
+      - name: path
+        in: query
+        required: false
+        schema:
+          type: string
+      - name: Range
+        in: header
+        required: false
+        schema:
+          type: string
+      - name: If-Match
+        in: header
+        required: false
+        schema:
+          type: string
+      - name: If-None-Match
+        in: header
+        required: false
+        schema:
+          type: string
+      - name: agentSpaceId
+        in: query
+        required: true
+        description: Expected space from WorkspaceProjection; mismatch is 409. Never selects a user.
+        schema:
+          $ref: '#/components/schemas/AgentSpaceId'
+      responses:
+        '200':
+          description: Full content or HEAD metadata.
+          headers:
+            ETag:
+              description: Opaque version of these bytes; preserve quotes. Use with If-Match for editing and resumed downloads.
+              schema:
+                type: string
+            Last-Modified:
+              description: Remote HTTP modification date when available.
+              schema:
+                type: string
+            Content-Length:
+              description: Response byte length when known.
+              schema:
+                type: string
+            Content-Range:
+              description: Selected range for 206.
+              schema:
+                type: string
+            Accept-Ranges:
+              description: Remote byte range support.
+              schema:
+                type: string
+            Content-Disposition:
+              description: Attachment filename; never execute as same-origin HTML.
+              schema:
+                type: string
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        default:
+          $ref: '#/components/responses/Problem'
+        '400':
+          description: invalid_file_path, invalid_file_condition, file_condition_required, invalid_file_destination or invalid_workspace_request;
+            correct the request.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '401':
+          description: Core authentication invalid. Refresh/sign in through the existing session lifecycle.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '403':
+          description: Core permission denied.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '404':
+          description: file_not_found; refresh parent. Missing deployment routes are not an empty directory.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '409':
+          description: workspace_space_mismatch, file_version_conflict, file_conflict or file_locked; refresh the target, preserve
+            edits and never overwrite automatically.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '429':
+          description: file_transfer_limit; bounded concurrent transfers exceeded. Queue reads; do not replay writes automatically.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '503':
+          description: workspace_unavailable, dav_credential_unavailable, file_service_unavailable, file_transport_unavailable
+            or workspace_result_unknown. DAV failures do not invalidate Core login. Unknown writes require re-reading; do not
+            retry automatically.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '507':
+          description: file_storage_full; free space before a new explicit attempt.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '422':
+          description: file_listing_limit; directory response exceeds the supported bound, never interpret as empty.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '206':
+          description: Partial byte range.
+          headers:
+            ETag:
+              description: Opaque version of these bytes; preserve quotes. Use with If-Match for editing and resumed downloads.
+              schema:
+                type: string
+            Last-Modified:
+              description: Remote HTTP modification date when available.
+              schema:
+                type: string
+            Content-Length:
+              description: Response byte length when known.
+              schema:
+                type: string
+            Content-Range:
+              description: Selected range for 206.
+              schema:
+                type: string
+            Accept-Ranges:
+              description: Remote byte range support.
+              schema:
+                type: string
+            Content-Disposition:
+              description: Attachment filename; never execute as same-origin HTML.
+              schema:
+                type: string
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        '304':
+          description: Not modified; no body.
+          headers:
+            ETag:
+              description: Opaque version of these bytes; preserve quotes. Use with If-Match for editing and resumed downloads.
+              schema:
+                type: string
+            Last-Modified:
+              description: Remote HTTP modification date when available.
+              schema:
+                type: string
+            Content-Length:
+              description: Response byte length when known.
+              schema:
+                type: string
+            Content-Range:
+              description: Selected range for 206.
+              schema:
+                type: string
+            Accept-Ranges:
+              description: Remote byte range support.
+              schema:
+                type: string
+            Content-Disposition:
+              description: Attachment filename; never execute as same-origin HTML.
+              schema:
+                type: string
+        '416':
+          description: file_range_invalid; requested range cannot be served.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+      description: 'Paths are relative to the workspace root, encoded once as query values. Writes are never automatically retried.
+        Range supports byte downloads. Resume only with the same ETag in If-Match; do not append a full 200 response to partial
+        bytes. '
+    put:
+      operationId: uploadClientWorkspaceFile
+      parameters:
+      - name: path
+        in: query
+        required: false
+        schema:
+          type: string
+      - name: If-Match
+        in: header
+        required: false
+        schema:
+          type: string
+      - name: If-None-Match
+        in: header
+        required: false
+        schema:
+          type: string
+      - name: agentSpaceId
+        in: query
+        required: true
+        description: Expected space from WorkspaceProjection; mismatch is 409. Never selects a user.
+        schema:
+          $ref: '#/components/schemas/AgentSpaceId'
+      responses:
+        '200':
+          description: 'Inspect outcome: SUCCEEDED, PARTIAL or UNKNOWN. HTTP 200 alone does not mean every mutation succeeded.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceFileResult'
+        default:
+          $ref: '#/components/responses/Problem'
+        '400':
+          description: invalid_file_path, invalid_file_condition, file_condition_required, invalid_file_destination or invalid_workspace_request;
+            correct the request.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '401':
+          description: Core authentication invalid. Refresh/sign in through the existing session lifecycle.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '403':
+          description: Core permission denied.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '404':
+          description: file_not_found; refresh parent. Missing deployment routes are not an empty directory.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '409':
+          description: workspace_space_mismatch, file_version_conflict, file_conflict or file_locked; refresh the target, preserve
+            edits and never overwrite automatically.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '429':
+          description: file_transfer_limit; bounded concurrent transfers exceeded. Queue reads; do not replay writes automatically.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '503':
+          description: workspace_unavailable, dav_credential_unavailable, file_service_unavailable, file_transport_unavailable
+            or workspace_result_unknown. DAV failures do not invalidate Core login. Unknown writes require re-reading; do not
+            retry automatically.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '507':
+          description: file_storage_full; free space before a new explicit attempt.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '422':
+          description: file_listing_limit; directory response exceeds the supported bound, never interpret as empty.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema:
+              type: string
+              format: binary
+      description: 'Paths are relative to the workspace root, encoded once as query values. Writes are never automatically retried.
+        PUT requires exactly one of If-None-Match: * (create) or a strong If-Match ETag from the content GET (replace). A lost
+        response may mean the write committed; re-read before deciding. '
+    head:
+      operationId: headClientWorkspaceFile
+      parameters:
+      - name: path
+        in: query
+        required: false
+        schema:
+          type: string
+      - name: Range
+        in: header
+        required: false
+        schema:
+          type: string
+      - name: If-Match
+        in: header
+        required: false
+        schema:
+          type: string
+      - name: If-None-Match
+        in: header
+        required: false
+        schema:
+          type: string
+      - name: agentSpaceId
+        in: query
+        required: true
+        description: Expected space from WorkspaceProjection; mismatch is 409. Never selects a user.
+        schema:
+          $ref: '#/components/schemas/AgentSpaceId'
+      responses:
+        '200':
+          description: Full content or HEAD metadata.
+          headers:
+            ETag:
+              description: Opaque version of these bytes; preserve quotes. Use with If-Match for editing and resumed downloads.
+              schema:
+                type: string
+            Last-Modified:
+              description: Remote HTTP modification date when available.
+              schema:
+                type: string
+            Content-Length:
+              description: Response byte length when known.
+              schema:
+                type: string
+            Content-Range:
+              description: Selected range for 206.
+              schema:
+                type: string
+            Accept-Ranges:
+              description: Remote byte range support.
+              schema:
+                type: string
+            Content-Disposition:
+              description: Attachment filename; never execute as same-origin HTML.
+              schema:
+                type: string
+        default:
+          $ref: '#/components/responses/Problem'
+        '400':
+          description: invalid_file_path, invalid_file_condition, file_condition_required, invalid_file_destination or invalid_workspace_request;
+            correct the request.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '401':
+          description: Core authentication invalid. Refresh/sign in through the existing session lifecycle.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '403':
+          description: Core permission denied.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '404':
+          description: file_not_found; refresh parent. Missing deployment routes are not an empty directory.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '409':
+          description: workspace_space_mismatch, file_version_conflict, file_conflict or file_locked; refresh the target, preserve
+            edits and never overwrite automatically.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '429':
+          description: file_transfer_limit; bounded concurrent transfers exceeded. Queue reads; do not replay writes automatically.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '503':
+          description: workspace_unavailable, dav_credential_unavailable, file_service_unavailable, file_transport_unavailable
+            or workspace_result_unknown. DAV failures do not invalidate Core login. Unknown writes require re-reading; do not
+            retry automatically.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '507':
+          description: file_storage_full; free space before a new explicit attempt.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '422':
+          description: file_listing_limit; directory response exceeds the supported bound, never interpret as empty.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '206':
+          description: Partial byte range.
+          headers:
+            ETag:
+              description: Opaque version of these bytes; preserve quotes. Use with If-Match for editing and resumed downloads.
+              schema:
+                type: string
+            Last-Modified:
+              description: Remote HTTP modification date when available.
+              schema:
+                type: string
+            Content-Length:
+              description: Response byte length when known.
+              schema:
+                type: string
+            Content-Range:
+              description: Selected range for 206.
+              schema:
+                type: string
+            Accept-Ranges:
+              description: Remote byte range support.
+              schema:
+                type: string
+            Content-Disposition:
+              description: Attachment filename; never execute as same-origin HTML.
+              schema:
+                type: string
+        '304':
+          description: Not modified; no body.
+          headers:
+            ETag:
+              description: Opaque version of these bytes; preserve quotes. Use with If-Match for editing and resumed downloads.
+              schema:
+                type: string
+            Last-Modified:
+              description: Remote HTTP modification date when available.
+              schema:
+                type: string
+            Content-Length:
+              description: Response byte length when known.
+              schema:
+                type: string
+            Content-Range:
+              description: Selected range for 206.
+              schema:
+                type: string
+            Accept-Ranges:
+              description: Remote byte range support.
+              schema:
+                type: string
+            Content-Disposition:
+              description: Attachment filename; never execute as same-origin HTML.
+              schema:
+                type: string
+        '416':
+          description: file_range_invalid; requested range cannot be served.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+      description: 'Paths are relative to the workspace root, encoded once as query values. Writes are never automatically retried.
+        Range supports byte downloads. Resume only with the same ETag in If-Match; do not append a full 200 response to partial
+        bytes. '
 components:
   schemas:
+    WorkspaceServiceId:
+      type: string
+      pattern: ^wss_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$
+    AgentSpaceId:
+      type: string
+      pattern: ^spc_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$
+    WorkspaceOperationId:
+      type: string
+      pattern: ^wop_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$
+    WorkspaceFileEntry:
+      type: object
+      additionalProperties: false
+      required:
+      - path
+      - kind
+      properties:
+        path:
+          type: string
+        kind:
+          type: string
+          enum:
+          - FILE
+          - DIRECTORY
+        size:
+          type: integer
+          format: int64
+          minimum: 0
+        modifiedAt:
+          type: string
+          format: date-time
+        etag:
+          type: string
+    WorkspaceFileList:
+      type: object
+      additionalProperties: false
+      required:
+      - entries
+      properties:
+        entries:
+          type: array
+          items:
+            $ref: '#/components/schemas/WorkspaceFileEntry'
+        usedBytes:
+          type: integer
+          format: int64
+          minimum: 0
+        availableBytes:
+          type: integer
+          format: int64
+          minimum: 0
+    WorkspaceFileMutation:
+      type: object
+      additionalProperties: false
+      required:
+      - action
+      - path
+      properties:
+        action:
+          type: string
+          enum:
+          - MKCOL
+          - MOVE
+          - COPY
+          - DELETE
+        path:
+          type: string
+        destination:
+          type: string
+        sourceEtag:
+          type: string
+        targetEtag:
+          type: string
+        overwrite:
+          type: boolean
+        recursiveConfirmed:
+          type: boolean
+    WorkspaceFileFailure:
+      type: object
+      additionalProperties: false
+      required:
+      - path
+      - status
+      - code
+      properties:
+        path:
+          type: string
+        status:
+          type: integer
+        code:
+          type: string
+    WorkspaceFileResult:
+      type: object
+      additionalProperties: false
+      required:
+      - outcome
+      - failures
+      - truncated
+      properties:
+        outcome:
+          type: string
+          enum:
+          - SUCCEEDED
+          - PARTIAL
+          - UNKNOWN
+        failures:
+          type: array
+          items:
+            $ref: '#/components/schemas/WorkspaceFileFailure'
+        truncated:
+          type: boolean
+    WorkspaceProjection:
+      type: object
+      additionalProperties: false
+      required:
+      - schemaVersion
+      - serviceState
+      - state
+      - bindingRevision
+      - mcpAvailable
+      - filesAvailable
+      - mcpReason
+      - filesReason
+      properties:
+        schemaVersion:
+          type: integer
+          enum:
+          - 1
+        state:
+          type: string
+          enum:
+          - UNPROVISIONED
+          - CONNECTING
+          - CONNECTED
+          - DISCONNECTING
+          - DISCONNECTED
+          - RESTORING
+          - DELETING
+          - DELETED
+          - NEEDS_ATTENTION
+        bindingRevision:
+          type: integer
+          minimum: 0
+        agentSpaceId:
+          $ref: '#/components/schemas/AgentSpaceId'
+        mcpServerId:
+          $ref: '#/components/schemas/McpServerId'
+        mcpAvailable:
+          type: boolean
+        filesAvailable:
+          type: boolean
+        mcpReason:
+          type: string
+        filesReason:
+          type: string
+        observedAt:
+          type: string
+          format: date-time
+        operationId:
+          $ref: '#/components/schemas/WorkspaceOperationId'
+        serviceState:
+          type: string
+          enum:
+          - NOT_CONFIGURED
+          - DISABLED
+          - ENABLED
+          description: Configured enable intent, independent of this user lifecycle and remote health. ENABLED does not imply
+            filesAvailable.
     ManagedAppliedReport:
       type: object
       additionalProperties: false

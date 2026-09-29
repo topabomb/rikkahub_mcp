@@ -798,7 +798,7 @@ class EnterprisePageAndroidTest {
             every { service.runtimeUsageChanges() } returns emptyFlow()
             coEvery { service.recentUpdates(any(), any()) } returns recentUpdates
             compose.runOnUiThread {
-                vm = EnterpriseVM(service)
+                vm = EnterpriseVM(service, mockk { every { summary } returns kotlinx.coroutines.flow.MutableStateFlow(null); coEvery { refresh(any()) } returns Unit })
                 viewModels.put("enterprise", vm)
             }
             val navigator = Navigator(backStack)

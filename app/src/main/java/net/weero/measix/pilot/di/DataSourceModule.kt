@@ -53,6 +53,7 @@ val dataSourceModule = module {
     single { EnterpriseSessionController(get()) }
     single { net.weero.measix.pilot.data.enterprise.EnterpriseDataResetStore(File(get<Context>().noBackupFilesDir, "enterprise-reset")) }
     single { PlatformControlClient(get()) }
+    single { net.weero.measix.pilot.data.enterprise.PlatformWorkspaceClient(get()) }
     single {
         PlatformEnterpriseService(get(), get(), onSessionInvalidated = { access, reason ->
             get<EnterpriseExitService>().acceptInvalidation(access, reason)
