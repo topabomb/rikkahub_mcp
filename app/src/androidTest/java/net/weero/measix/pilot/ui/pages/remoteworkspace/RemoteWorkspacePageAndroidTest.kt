@@ -7,6 +7,8 @@ import androidx.activity.ComponentActivity
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.test.*
+import androidx.compose.ui.semantics.ProgressBarRangeInfo
+import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.junit4.StateRestorationTester
 import androidx.lifecycle.ViewModelStore
@@ -115,9 +117,17 @@ class RemoteWorkspacePageAndroidTest {
         compose.waitUntil(5_000) { compose.onNodeWithText("result.txt").isDisplayed() }
         compose.onNodeWithText("result.txt").assertIsDisplayed()
         compose.onNodeWithText(text(R.string.remote_workspace_root)).performClick()
-        compose.onNodeWithText("＋").performClick()
+        compose.onNodeWithContentDescription(text(R.string.add)).performClick()
         compose.onNodeWithText(text(R.string.remote_workspace_new_folder)).performClick()
-        compose.onNodeWithText(text(R.string.remote_workspace_name)).performTextReplacement("new-folder")
+        compose.waitUntil(5_000) {
+            compose.onNodeWithContentDescription(text(R.string.remote_workspace_name)).fetchSemanticsNode()
+                .config.getOrNull(androidx.compose.ui.semantics.SemanticsProperties.Focused) == true
+        }
+        compose.onNodeWithContentDescription(text(R.string.remote_workspace_name)).performTextReplacement("invalid/name")
+        compose.onNodeWithText(text(R.string.common_confirm)).performClick()
+        compose.onNodeWithText("invalid_workspace_name", substring = true).assertIsDisplayed()
+        coVerify(exactly = 0) { f.service.createDirectory(any(), any()) }
+        compose.onNodeWithContentDescription(text(R.string.remote_workspace_name)).performTextReplacement("new-folder")
         compose.onNodeWithText(text(R.string.common_confirm)).performClick()
         compose.waitUntil(5_000) { f.vm.state.value.directory?.files?.any { it.name == "new-folder" } == true }
         onView(isRoot()).perform(closeSoftKeyboard())
@@ -181,16 +191,16 @@ class RemoteWorkspacePageAndroidTest {
         val f = Fixture()
         f.show()
         compose.onNodeWithText(file.name).assertIsDisplayed()
-        compose.onNodeWithText("＋").performClick()
+        compose.onNodeWithContentDescription(text(R.string.add)).performClick()
         compose.onNodeWithText(text(R.string.remote_workspace_new_folder)).performClick()
-        compose.onNodeWithText(text(R.string.remote_workspace_name)).performTextReplacement("must-not-create")
+        compose.onNodeWithContentDescription(text(R.string.remote_workspace_name)).performTextReplacement("must-not-create")
         compose.runOnIdle {
             coEvery { f.service.isValid(f.handle) } returns false
             f.summary.value = null
         }
         compose.waitUntil(5_000) { f.vm.state.value.revoked }
         compose.onNodeWithText(file.name).assertDoesNotExist()
-        compose.onNodeWithText(text(R.string.remote_workspace_name)).assertDoesNotExist()
+        compose.onNodeWithContentDescription(text(R.string.remote_workspace_name)).assertDoesNotExist()
         compose.onNodeWithText(text(R.string.remote_workspace_revoked)).assertIsDisplayed()
         capture("remote-workspace-revoked.png")
         coVerify(exactly = 0) { f.service.createDirectory(any(), any()) }
@@ -368,6 +378,39 @@ class RemoteWorkspacePageAndroidTest {
             assertTrue(f.vm.state.value.error!!.contains("invalid_workspace_path"))
         }
         coVerify(exactly = 0) { f.service.mutate(any(), any(), any(), any(), any(), any()) }
+    }
+
+    @Test fun corruptPdfStopsLoadingReleasesItsCopyAndCanRetryAFreshAuthorizedRead() {
+        val f = Fixture()
+        val pdf = RemoteFile("report.pdf", false, 128, null, "\"pdf-v1\"")
+        val broken = java.io.File(compose.activity.cacheDir, "broken-preview.pdf").apply { writeText("not a PDF") }
+        val valid = java.io.File(compose.activity.cacheDir, "valid-preview.pdf")
+        val document = android.graphics.pdf.PdfDocument()
+        try {
+            val page = document.startPage(android.graphics.pdf.PdfDocument.PageInfo.Builder(300, 400, 1).create())
+            page.canvas.drawText("PDF recovered", 20f, 40f, android.graphics.Paint())
+            document.finishPage(page)
+            valid.outputStream().use(document::writeTo)
+        } finally { document.close() }
+        coEvery { f.service.list(f.handle, "") } returns RemoteDirectory("", listOf(pdf), null, null)
+        coEvery { f.service.previewCopy(f.handle, pdf) } returnsMany listOf(broken, valid)
+        try {
+            f.show()
+            compose.onNodeWithText(pdf.name).performClick()
+            compose.waitUntil(10_000) { compose.onNodeWithText(text(R.string.remote_workspace_operation_failed)).isDisplayed() }
+            compose.onNodeWithText("1 / 0").assertDoesNotExist()
+            compose.onAllNodes(hasProgressBarRangeInfo(ProgressBarRangeInfo.Indeterminate)).assertCountEquals(0)
+            compose.onNodeWithText(text(R.string.remote_workspace_details)).performClick()
+            compose.onNodeWithText("IOException", substring = true).assertIsDisplayed()
+            compose.onNodeWithText(text(R.string.enterprise_budget_refresh)).performClick()
+            compose.waitUntil(10_000) { compose.onNodeWithText("1 / 1").isDisplayed() }
+            compose.onNodeWithText(text(R.string.remote_workspace_operation_failed)).assertDoesNotExist()
+            coVerifyOrder { f.service.previewCopy(f.handle, pdf); f.service.refresh(f.selection); f.service.previewCopy(f.handle, pdf) }
+            verify(exactly = 1) { f.service.releaseCopyLater(broken) }
+            compose.onNodeWithContentDescription(text(R.string.back)).performClick()
+            compose.waitForIdle()
+            verify(exactly = 1) { f.service.releaseCopyLater(valid) }
+        } finally { broken.delete(); valid.delete() }
     }
 
     private fun text(id: Int) = compose.activity.getString(id)

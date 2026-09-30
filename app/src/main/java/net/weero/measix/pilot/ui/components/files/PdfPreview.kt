@@ -3,14 +3,17 @@ package net.weero.measix.pilot.ui.components.files
 import android.graphics.Bitmap
 import android.graphics.pdf.PdfRenderer
 import android.os.ParcelFileDescriptor
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.unit.dp
+import com.jvziyaoyao.scale.image.viewer.ImageViewer
+import com.jvziyaoyao.scale.zoomable.zoomable.ZoomableGestureScope
+import com.jvziyaoyao.scale.zoomable.zoomable.rememberZoomableState
 import java.io.File
 import kotlinx.coroutines.*
 
@@ -22,6 +25,7 @@ internal fun PdfPreview(file: File, modifier: Modifier = Modifier, onFailure: (T
     var bitmap by remember(file) { mutableStateOf<Bitmap?>(null) }
     DisposableEffect(file) { onDispose { bitmap?.recycle(); bitmap = null } }
     LaunchedEffect(file, page) {
+        bitmap?.recycle(); bitmap = null
         var rendered: Bitmap? = null
         try {
             val result = withContext(Dispatchers.IO) {
@@ -43,13 +47,19 @@ internal fun PdfPreview(file: File, modifier: Modifier = Modifier, onFailure: (T
             ensureActive()
             bitmap?.recycle(); bitmap = rendered; rendered = null; count = result
         } catch (cancelled: CancellationException) { throw cancelled }
-        catch (error: Exception) { onFailure(error) }
+        catch (error: Exception) { error.printStackTrace(); onFailure(error) }
         finally { rendered?.recycle() }
     }
     Column(modifier, horizontalAlignment = Alignment.CenterHorizontally) {
-        bitmap?.let { Image(it.asImageBitmap(), null, Modifier.weight(1f).fillMaxWidth()) }
+        bitmap?.let { key(file, page) {
+            val zoom = rememberZoomableState(Size(it.width.toFloat(), it.height.toFloat()))
+            val scope = rememberCoroutineScope()
+            DisposableEffect(zoom) { onDispose { zoom.cancel() } }
+            ImageViewer(Modifier.weight(1f).fillMaxWidth(), it.asImageBitmap(), zoom,
+                detectGesture = ZoomableGestureScope(onDoubleTap = { offset -> scope.launch { zoom.toggleScale(offset) } }))
+        } }
             ?: Box(Modifier.weight(1f)) { CircularProgressIndicator() }
-        Row(Modifier.padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
+        if (count > 0) Row(Modifier.padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
             TextButton({ page-- }, enabled = page > 0) { Text("‹") }
             Text("${page + 1} / $count")
             TextButton({ page++ }, enabled = page + 1 < count) { Text("›") }

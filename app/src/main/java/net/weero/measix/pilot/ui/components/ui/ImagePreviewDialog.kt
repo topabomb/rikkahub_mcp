@@ -25,6 +25,8 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -282,14 +284,18 @@ fun ImagePreviewDialog(
                             color = Color.White.copy(alpha = 0.7f),
                             modifier = Modifier
                                 .align(Alignment.TopCenter)
-                                .padding(top = 12.dp),
+                                .padding(top = 12.dp)
+                                .background(Color.Black.copy(alpha = 0.55f), CircleShape)
+                                .padding(horizontal = 8.dp, vertical = 4.dp),
                         )
                     }
 
-                    Row(
+                    if (!infoVisible) Row(
                         modifier = Modifier
                             .align(Alignment.BottomCenter)
-                            .padding(8.dp),
+                            .padding(8.dp)
+                            .background(Color.Black.copy(alpha = 0.55f), CircleShape)
+                            .padding(horizontal = 4.dp),
                         horizontalArrangement = Arrangement.spacedBy(16.dp),
                     ) {
                         IconButton(
@@ -738,6 +744,7 @@ private fun ImageInfoPanel(
     val loaded = info
     Column(
         modifier = modifier
+            .widthIn(max = 560.dp)
             .fillMaxWidth()
             .heightIn(max = 480.dp)
             .clip(RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp))

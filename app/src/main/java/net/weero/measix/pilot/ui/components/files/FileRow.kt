@@ -23,16 +23,19 @@ internal fun FileRow(
     onOpen: () -> Unit, onSelect: (() -> Unit)?,
     thumbnail: (@Composable () -> Unit)? = null,
     compact: Boolean = false,
+    metadata: (@Composable () -> Unit)? = null,
     actions: @Composable ColumnScope.(dismiss: () -> Unit) -> Unit,
 ) {
     var expanded by remember { mutableStateOf(false) }
+    val verticalPadding = if (compact) { if (metadata != null) 0.dp else 4.dp } else 12.dp
     Card(Modifier.fillMaxWidth().combinedClickable(
         onClick = { if (selecting && onSelect != null) onSelect() else onOpen() }, onLongClick = onSelect,
     ), shape = if (compact) androidx.compose.ui.graphics.RectangleShape else MaterialTheme.shapes.medium,
         colors = if (compact) CardDefaults.cardColors(containerColor = if (selected) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surface)
         else CustomColors.cardColorsOnSurfaceContainer) {
-        Row(Modifier.fillMaxWidth().heightIn(min = if (compact) 64.dp else 0.dp).padding(start = if (compact) 12.dp else 16.dp,
-            top = if (compact) 4.dp else 12.dp, bottom = if (compact) 4.dp else 12.dp, end = 4.dp),
+        Row(Modifier.fillMaxWidth().heightIn(min = if (compact) { if (metadata != null) 48.dp else 64.dp } else 0.dp)
+            .padding(start = if (compact) 12.dp else 16.dp,
+                top = verticalPadding, bottom = verticalPadding, end = 4.dp),
             verticalAlignment = Alignment.CenterVertically) {
             if (selecting && onSelect != null) Checkbox(selected, { onSelect() })
             else if (thumbnail != null) thumbnail()
@@ -43,10 +46,12 @@ internal fun FileRow(
                 if (detail.isNotBlank()) Text(detail, style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
+            metadata?.invoke()
             if (!selecting) Box {
                 IconButton({ expanded = true }) { Icon(HugeIcons.MoreVertical, stringResource(R.string.more_options)) }
                 DropdownMenu(expanded, { expanded = false }) { actions { expanded = false } }
             }
+            else if (metadata != null) Spacer(Modifier.width(48.dp))
         }
     }
 }
