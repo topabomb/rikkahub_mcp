@@ -42,8 +42,12 @@ internal object WorkspaceFileRules {
             '?' !in reference && '#' !in reference && !aliases.containsMatchIn(reference)) {
             "invalid_workspace_image_reference"
         }
+        val decoded = decodeImageReference(reference)
+        require(!decoded.startsWith('/') && '\\' !in decoded && ':' !in decoded && '?' !in decoded && '#' !in decoded) {
+            "invalid_workspace_image_reference"
+        }
         val segments = document.substringBeforeLast('/', "").split('/').filter(String::isNotEmpty).toMutableList()
-        reference.split('/').forEach {
+        decoded.split('/').forEach {
             when (it) {
                 "." -> Unit
                 ".." -> { require(segments.isNotEmpty()) { "workspace_image_outside_root" }; segments.removeAt(segments.lastIndex) }
@@ -51,6 +55,28 @@ internal object WorkspaceFileRules {
             }
         }
         return path(segments.joinToString("/"))
+    }
+
+    /** Markdown destinations are URLs. HTTP callers still pass logical paths without decoding them. */
+    private fun decodeImageReference(value: String): String = try {
+        val input = Charsets.UTF_8.newEncoder().onMalformedInput(CodingErrorAction.REPORT)
+            .onUnmappableCharacter(CodingErrorAction.REPORT).encode(CharBuffer.wrap(value))
+        val bytes = ByteArray(input.remaining())
+        var count = 0
+        while (input.hasRemaining()) {
+            val next = input.get()
+            if (next == '%'.code.toByte()) {
+                require(input.remaining() >= 2) { "invalid_workspace_image_reference" }
+                val high = input.get().toInt().toChar().digitToIntOrNull(16)
+                val low = input.get().toInt().toChar().digitToIntOrNull(16)
+                require(high != null && low != null) { "invalid_workspace_image_reference" }
+                bytes[count++] = ((high shl 4) or low).toByte()
+            } else bytes[count++] = next
+        }
+        Charsets.UTF_8.newDecoder().onMalformedInput(CodingErrorAction.REPORT)
+            .onUnmappableCharacter(CodingErrorAction.REPORT).decode(ByteBuffer.wrap(bytes, 0, count)).toString()
+    } catch (error: java.nio.charset.CharacterCodingException) {
+        throw IllegalArgumentException("invalid_workspace_image_reference", error)
     }
 }
 

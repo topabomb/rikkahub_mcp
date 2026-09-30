@@ -187,6 +187,79 @@ class RemoteWorkspacePageAndroidTest {
         coVerifyOrder { f.service.readText(f.handle, file); f.service.refresh(f.selection); f.service.readText(f.handle, file) }
     }
 
+    @Test fun saveAsValidationKeepsTheEnteredNameAndDraftAcrossErrorPublication() {
+        val f = Fixture()
+        coEvery { f.service.save(f.handle, document, "retained draft", "copied.txt") } returns
+            RemoteOperationResult("copied.txt", RemoteOutcome.FAILED, "HTTP 409 file_version_conflict")
+        f.show()
+        compose.onNodeWithText(file.name).performClick()
+        compose.onNodeWithText(text(R.string.edit)).performClick()
+        onView(isAssignableFrom(EditText::class.java)).perform(replaceText("retained draft"), closeSoftKeyboard())
+        compose.onNodeWithContentDescription(text(R.string.more_options)).performClick()
+        compose.onNodeWithText(text(R.string.remote_workspace_save_as)).performClick()
+        val name = compose.onNodeWithContentDescription(text(R.string.remote_workspace_name))
+        name.performTextReplacement("invalid/name")
+        compose.onNodeWithText(text(R.string.common_confirm)).performClick()
+        compose.waitForIdle()
+        name.assert(hasText("invalid/name"))
+        compose.onNode(hasText("invalid_workspace_name", substring = true) and hasAnyAncestor(isDialog())).assertIsDisplayed()
+        name.performTextReplacement(file.name)
+        compose.onNodeWithText(text(R.string.common_confirm)).performClick()
+        compose.waitForIdle()
+        name.assert(hasText(file.name))
+        compose.onNode(hasText("workspace_save_as_requires_new_name", substring = true) and hasAnyAncestor(isDialog())).assertIsDisplayed()
+        coVerify(exactly = 0) { f.service.save(any(), any(), any(), any()) }
+        name.performTextReplacement("copied.txt")
+        compose.onNodeWithText(text(R.string.common_confirm)).performClick()
+        compose.waitUntil(5_000) { f.vm.state.value.save?.result?.outcome == RemoteOutcome.FAILED }
+        onView(isAssignableFrom(EditText::class.java)).check(matches(withText("retained draft")))
+        coVerify(exactly = 1) { f.service.save(f.handle, document, "retained draft", "copied.txt") }
+    }
+
+    @Test fun completedBatchCannotExposeTheOldDirectoryWhileAuthorizationAndRefreshWait() {
+        val f = Fixture()
+        val release = CompletableDeferred<Unit>()
+        var completed = false
+        coEvery { f.service.refresh(f.selection) } coAnswers { if (completed) release.await() }
+        coEvery { f.service.isValid(f.handle) } coAnswers {
+            if (completed && !f.vm.state.value.running && f.vm.state.value.directory != null) release.await()
+            true
+        }
+        f.show()
+        try {
+            compose.runOnIdle {
+                f.vm.execute(listOf(file.path), f.handle) { _, _ ->
+                    completed = true
+                    RemoteOperationResult(file.path, RemoteOutcome.SUCCEEDED)
+                }
+            }
+            compose.waitUntil(5_000) { !f.vm.state.value.running && f.vm.state.value.results.isNotEmpty() }
+            compose.runOnIdle { assertNull(f.vm.state.value.directory) }
+            compose.onNodeWithText(file.name).assertDoesNotExist()
+        } finally { release.complete(Unit) }
+    }
+
+    @Test fun directoryRefreshKeepsOnlySelectionsWhoseFilesStillExist() {
+        val f = Fixture()
+        val remaining = RemoteFile("remaining.txt", false, 8, null, "\"remaining\"")
+        coEvery { f.service.list(f.handle, "") } returns RemoteDirectory("", listOf(file, remaining), null, null)
+        f.show()
+        compose.onNodeWithText(file.name).performTouchInput { longClick() }
+        compose.onNodeWithText(remaining.name).performClick()
+        compose.onNodeWithText(compose.activity.getString(R.string.remote_workspace_selected, 2)).assertIsDisplayed()
+        coEvery { f.service.list(f.handle, "") } returns RemoteDirectory("", listOf(remaining), null, null)
+        compose.runOnIdle { f.vm.retry() }
+        compose.waitUntil(5_000) { f.vm.state.value.directory?.files == listOf(remaining) }
+        compose.onNodeWithText(compose.activity.getString(R.string.remote_workspace_selected, 1)).assertIsDisplayed()
+        compose.onNodeWithText(file.name).assertDoesNotExist()
+        coEvery { f.service.list(f.handle, "") } returns RemoteDirectory("", emptyList(), null, null)
+        compose.runOnIdle { f.vm.retry() }
+        compose.waitUntil(5_000) { f.vm.state.value.directory?.files?.isEmpty() == true }
+        compose.onNodeWithText(text(R.string.remote_workspace_title)).assertIsDisplayed()
+        compose.onNodeWithText(text(R.string.remote_workspace_empty)).assertIsDisplayed()
+        coVerify(exactly = 0) { f.service.mutate(any(), any(), any(), any(), any(), any()) }
+    }
+
     @Test fun authorizationRevocationClearsOldFilesAndAnOpenMutationPrompt() {
         val f = Fixture()
         f.show()

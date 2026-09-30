@@ -326,4 +326,37 @@ class PlatformWorkspaceClientTest {
         }
         assertThrows(IllegalArgumentException::class.java) { WorkspaceText("", true, "\n").encode("a".repeat(WorkspaceFileRules.TEXT_LIMIT)) }
     }
+
+    @Test fun `markdown image URLs decode once before logical paths enter HTTP`() = runBlocking {
+        val paths = mutableListOf<String>()
+        val server = server {
+            val encoded = requestURI.rawQuery.split('&').single { it.startsWith("path=") }.substringAfter('=')
+            paths += java.net.URLDecoder.decode(encoded, "UTF-8")
+            reply(200, "image")
+        }
+        try {
+            for ((reference, path) in listOf(
+                "images/a%20b.png" to "docs/images/a b.png",
+                "../images/%E4%B8%AD%E6%96%87.png" to "images/中文.png",
+                "images/a+b.png" to "docs/images/a+b.png",
+                "images/中文.png" to "docs/images/中文.png",
+            )) {
+                val resolved = WorkspaceFileRules.relativeImage("docs/readme.md", reference)
+                assertEquals(path, resolved)
+                client.download(connection(server), "token", space, resolved, ByteArrayOutputStream())
+            }
+            assertEquals(listOf("docs/images/a b.png", "images/中文.png", "docs/images/a+b.png", "docs/images/中文.png"), paths)
+        } finally { server.stop(0) }
+    }
+
+    @Test fun `markdown image URLs reject malformed encodings and path aliases`() {
+        for (reference in listOf(
+            "/secret.png", "https://example.test/a.png", "//example.test/a.png", "../../secret.png", "a\\b.png",
+            "a%2fsecret.png", "%2E%2e/secret.png", "%5csecret.png", "%252e%252e/secret.png", "%00.png",
+            "a%.png", "a%2", "a%GG.png", "%C3", "%C0%AE", "%E0%80%AE", "%ED%A0%80", "%F4%90%80%80",
+            "%0d.png", "%0a.png", "%3a.png", "%3f.png", "%23.png", "\uD800.png",
+        )) {
+            assertThrows(reference, IllegalArgumentException::class.java) { WorkspaceFileRules.relativeImage("docs/readme.md", reference) }
+        }
+    }
 }

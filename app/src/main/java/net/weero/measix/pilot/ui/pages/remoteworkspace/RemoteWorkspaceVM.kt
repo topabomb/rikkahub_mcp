@@ -171,10 +171,11 @@ internal class RemoteWorkspaceVM(
                 }
             } finally {
                 overwriteAnswer?.cancel(); overwriteAnswer = null
+                // A completed or cancelled batch may have changed rows; retire them before allowing new actions.
                 _state.update { if (it.handle !== original) it.copy(running = false, overwrite = null, activeIndex = null)
-                    else it.copy(running = false, overwrite = null, activeIndex = null,
+                    else it.copy(running = false, overwrite = null, activeIndex = null, directory = null,
                         results = retainUnverified(it.results.take(paths.size), unverified)) }
-                if (isActive && service.isValid(original)) retry()
+                if (isActive && _state.value.handle === original) retry()
             }
         }
     }

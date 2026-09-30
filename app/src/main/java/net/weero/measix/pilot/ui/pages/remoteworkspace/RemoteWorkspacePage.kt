@@ -159,6 +159,9 @@ internal fun RemoteWorkspacePage(selection: RealmSelection?, vm: RemoteWorkspace
             if (order != 0) order else a.name.compareTo(b.name, ignoreCase = true)
         }) }
     val selectedFiles = state.directory?.files.orEmpty().filter { it.path in selected }
+    LaunchedEffect(state.directory) {
+        state.directory?.let { selected = selected.intersect(it.files.map { file -> file.path }.toSet()) }
+    }
 
     fun exit() { if (state.running) leave = true else scope.launch { vm.leave(); nav.popBackStack() } }
     fun back() {
@@ -268,12 +271,12 @@ internal fun RemoteWorkspacePage(selection: RealmSelection?, vm: RemoteWorkspace
                     DropdownMenu(menu, { menu = false }) {
                         if (selected.isNotEmpty()) {
                             DropdownMenuItem(text = { Text(stringResource(R.string.remote_workspace_download)) },
-                                enabled = !state.running && selectedFiles.none { it.directory }, onClick = { menu = false; export(selectedFiles) })
+                                enabled = !state.running && selectedFiles.isNotEmpty() && selectedFiles.none { it.directory }, onClick = { menu = false; export(selectedFiles) })
                             for ((label, action) in listOf(R.string.remote_workspace_move to RemoteFileAction.MOVE, R.string.remote_workspace_copy to RemoteFileAction.COPY)) {
-                                DropdownMenuItem(text = { Text(stringResource(label)) }, enabled = !state.running && selectedFiles.all { it.directory || it.versioned },
+                                DropdownMenuItem(text = { Text(stringResource(label)) }, enabled = !state.running && selectedFiles.isNotEmpty() && selectedFiles.all { it.directory || it.versioned },
                                     onClick = { menu = false; state.handle?.let { folder = FolderPrompt(label, it, selectedFiles, action) } })
                             }
-                            DropdownMenuItem(text = { Text(stringResource(R.string.common_delete)) }, enabled = !state.running && selectedFiles.all { it.directory || it.versioned },
+                            DropdownMenuItem(text = { Text(stringResource(R.string.common_delete)) }, enabled = !state.running && selectedFiles.isNotEmpty() && selectedFiles.all { it.directory || it.versioned },
                                 onClick = { menu = false; state.handle?.let { delete = it to selectedFiles } })
                             HorizontalDivider()
                         }
