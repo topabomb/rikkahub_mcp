@@ -132,6 +132,66 @@ class PlatformWorkspaceClientTest {
         } finally { server.stop(0) }
     }
 
+    @Test fun `safe GET reconnects when a reused connection closes before response headers`() = runBlocking {
+        val projection = javaClass.getResourceAsStream("/contracts/workspace/projection-files-only.json")!!.bufferedReader().use { it.readText() }
+        val calls = AtomicInteger()
+        val drop = AtomicBoolean()
+        val server = server {
+            assertEquals("GET", requestMethod)
+            calls.incrementAndGet()
+            if (drop.getAndSet(false)) close()
+            else when {
+                requestURI.path.endsWith("/files") -> reply(200, """{"entries":[]}""")
+                requestURI.path.endsWith("/content") -> reply(200, "content")
+                else -> reply(200, projection)
+            }
+        }
+        try {
+            val connection = connection(server)
+            assertTrue(client.state(connection, "token").filesAvailable)
+            drop.set(true)
+            assertTrue(client.state(connection, "token").filesAvailable)
+            drop.set(true)
+            assertTrue(client.list(connection, "token", space, "").entries.isEmpty())
+            drop.set(true)
+            val output = ByteArrayOutputStream()
+            client.download(connection, "token", space, "a.txt", output)
+            assertEquals("content", output.toString("UTF-8"))
+            assertEquals(7, calls.get())
+        } finally { server.stop(0) }
+    }
+
+    @Test fun `GET recovery does not replay an incomplete response body`() = runBlocking {
+        val calls = AtomicInteger()
+        val server = server {
+            calls.incrementAndGet()
+            sendResponseHeaders(200, 100)
+            responseBody.write("partial".toByteArray())
+        }
+        try {
+            val output = ByteArrayOutputStream()
+            try { client.download(connection(server), "token", space, "a.txt", output); fail("incomplete download accepted") }
+            catch (_: IOException) { }
+            assertEquals(1, calls.get())
+            assertEquals("partial", output.toString("UTF-8"))
+        } finally { server.stop(0) }
+    }
+
+    @Test fun `writes are not replayed after sending to a connection that closes without confirmation`() = runBlocking {
+        for (put in listOf(true, false)) {
+            val calls = AtomicInteger()
+            val server = server { calls.incrementAndGet(); requestBody.readBytes(); close() }
+            try {
+                try {
+                    if (put) client.upload(connection(server), "token", space, "a.txt", null, 1, { byteArrayOf(1).inputStream() })
+                    else client.mutate(connection(server), "token", space, PlatformWorkspaceFileMutation(PlatformWorkspaceFileMutationAction.MKCOL, "dir"))
+                    fail("unconfirmed write accepted")
+                } catch (_: IOException) { }
+                assertEquals(1, calls.get())
+            } finally { server.stop(0) }
+        }
+    }
+
     @Test fun `writes never follow redirects or 408 and 503 retries`() = runBlocking {
         for (status in listOf(301, 302, 307, 308, 401, 408, 503, 507)) {
             val count = AtomicInteger()

@@ -2033,4 +2033,16 @@
   <string name="remote_workspace_reread_confirm">최신 내용으로 편집기를 바꿀까요? 유지할 변경 사항을 먼저 복사하세요. 읽기에 실패하면 현재 텍스트를 유지합니다.</string>
   <string name="remote_workspace_cancelled">취소됨</string>
   <string name="remote_workspace_verify_excerpt">처음 8192자를 표시합니다. 전체 내용을 확인하려면 다운로드하세요.</string>
+  <string name="remote_workspace_selected">%1$d개 선택됨</string>
+  <string name="remote_workspace_item_count">%1$d개 항목</string>
+  <string name="remote_workspace_filtered_count">%1$d / %2$d개 항목</string>
+  <string name="remote_workspace_used">사용 %1$s</string>
+  <string name="remote_workspace_free">사용 가능 %1$s</string>
+  <string name="remote_workspace_active_item">%1$d / %2$d · %3$s</string>
+  <string name="remote_workspace_results">작업 결과</string>
+  <string name="remote_workspace_no_subfolders">하위 폴더가 없습니다</string>
+  <string name="image_viewer_info_load_failed">이미지 정보를 읽을 수 없습니다</string>
+  <string name="remote_workspace_completed_count">%1$d개 완료</string>
+  <string name="remote_workspace_problem_count">%1$d개 확인 필요</string>
+  <string name="remote_workspace_verification_count">%1$d개 검증 필요</string>
 </resources>

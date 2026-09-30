@@ -2033,4 +2033,16 @@
   <string name="remote_workspace_reread_confirm">Заменить содержимое редактора свежей копией? Сначала скопируйте нужные изменения. При ошибке чтения текущий текст сохранится.</string>
   <string name="remote_workspace_cancelled">Отменено</string>
   <string name="remote_workspace_verify_excerpt">Показаны первые 8192 символа. Для полной проверки скачайте файл.</string>
+  <string name="remote_workspace_selected">Выбрано: %1$d</string>
+  <string name="remote_workspace_item_count">Элементов: %1$d</string>
+  <string name="remote_workspace_filtered_count">Элементов: %1$d / %2$d</string>
+  <string name="remote_workspace_used">Занято %1$s</string>
+  <string name="remote_workspace_free">Доступно %1$s</string>
+  <string name="remote_workspace_active_item">%1$d / %2$d · %3$s</string>
+  <string name="remote_workspace_results">Результаты операций</string>
+  <string name="remote_workspace_no_subfolders">Подпапок нет</string>
+  <string name="image_viewer_info_load_failed">Не удалось прочитать сведения об изображении</string>
+  <string name="remote_workspace_completed_count">Завершено: %1$d</string>
+  <string name="remote_workspace_problem_count">Требуют внимания: %1$d</string>
+  <string name="remote_workspace_verification_count">Требуют проверки: %1$d</string>
 </resources>

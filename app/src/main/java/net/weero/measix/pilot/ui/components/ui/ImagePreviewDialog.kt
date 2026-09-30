@@ -9,6 +9,9 @@ import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -21,6 +24,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -89,6 +93,7 @@ import net.weero.measix.pilot.service.IMAGE_SAVE_PERMISSION_REQUIRED
 import net.weero.measix.pilot.ui.context.LocalToaster
 import net.weero.measix.pilot.utils.fileSizeToString
 import net.weero.measix.pilot.utils.toLocalDateTime
+import net.weero.measix.pilot.utils.userVisibleDiagnostic
 import org.koin.compose.koinInject
 import java.time.Instant
 import kotlin.math.abs
@@ -130,6 +135,7 @@ fun ImagePreviewDialog(
     extraActions: List<ImagePreviewAction> = emptyList(),
     deleteAction: ImagePreviewDeleteAction? = null,
     overlay: (@Composable () -> Unit)? = null,
+    onInfoRetry: suspend () -> Unit = {},
 ) {
     if (images.isEmpty()) {
         LaunchedEffect(Unit) { onDismissRequest() }
@@ -143,6 +149,7 @@ fun ImagePreviewDialog(
     val extraActionsState = rememberUpdatedState(extraActions)
     val deleteActionState = rememberUpdatedState(deleteAction)
     val overlayState = rememberUpdatedState(overlay)
+    val infoRetryState = rememberUpdatedState(onInfoRetry)
     val savingToast = stringResource(R.string.image_viewer_saving)
     val savedToast = stringResource(R.string.image_viewer_saved)
     val saveFailedFormat = stringResource(R.string.image_viewer_save_failed)
@@ -184,14 +191,23 @@ fun ImagePreviewDialog(
     }
     val currentUrl = viewerImages.getOrNull(state.currentPage)
     var imageInfo by remember(currentUrl) { mutableStateOf<ImageInfo?>(null) }
-    LaunchedEffect(currentUrl, infoVisible) {
+    var imageInfoError by remember(currentUrl) { mutableStateOf<String?>(null) }
+    var infoRevision by remember(currentUrl) { mutableStateOf(0) }
+    LaunchedEffect(currentUrl, infoVisible, infoRevision) {
         if (!infoVisible) return@LaunchedEffect
         val url = currentUrl ?: return@LaunchedEffect
+        imageInfoError = null
+        imageInfo = null
         imageInfo = try {
+            if (infoRevision > 0) infoRetryState.value()
             withContext(Dispatchers.IO) { resolveImageInfo(url) }
         } catch (cancelled: kotlinx.coroutines.CancellationException) {
             throw cancelled
-        } catch (_: Exception) { null }
+        } catch (error: Exception) {
+            android.util.Log.e("ImagePreview", "Image information read failed", error)
+            imageInfoError = error.userVisibleDiagnostic()
+            null
+        }
     }
     val infoBlocked = rememberUpdatedState(infoVisible)
 
@@ -405,6 +421,8 @@ fun ImagePreviewDialog(
                     )
                     ImageInfoPanel(
                         info = imageInfo,
+                        error = imageInfoError,
+                        onRetry = { infoRevision++ },
                         onClose = { infoVisible = false },
                         modifier = Modifier
                             .align(Alignment.BottomCenter)
@@ -712,6 +730,8 @@ internal suspend fun resolveImageInfo(image: ImageSource): ImageInfo {
 @Composable
 private fun ImageInfoPanel(
     info: ImageInfo?,
+    error: String?,
+    onRetry: () -> Unit,
     onClose: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -719,8 +739,10 @@ private fun ImageInfoPanel(
     Column(
         modifier = modifier
             .fillMaxWidth()
+            .heightIn(max = 480.dp)
             .clip(RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp))
             .background(Color.Black.copy(alpha = 0.72f))
+            .verticalScroll(rememberScrollState())
             .clickable(
                 interactionSource = remember { MutableInteractionSource() },
                 indication = null,
@@ -746,19 +768,32 @@ private fun ImageInfoPanel(
                 )
             }
         }
-        ImageInfoRow(stringResource(R.string.image_viewer_info_source)) {
-            loaded?.source?.let { stringResource(it.labelRes) }
+        if (error != null) {
+            Text(stringResource(R.string.image_viewer_info_load_failed), color = Color.White)
+            SelectionContainer {
+                Text(error, Modifier.heightIn(max = 160.dp).verticalScroll(rememberScrollState()),
+                    style = MaterialTheme.typography.bodySmall, color = Color.White)
+            }
+            TextButton(onRetry) { Text(stringResource(R.string.enterprise_budget_refresh), color = Color.White) }
+            return@Column
         }
-        ImageInfoRow(stringResource(R.string.image_viewer_info_filename)) { loaded?.fileName }
+        if (loaded == null) {
+            CircularProgressIndicator(Modifier.padding(8.dp).size(24.dp), color = Color.White)
+            return@Column
+        }
+        ImageInfoRow(stringResource(R.string.image_viewer_info_source)) {
+            stringResource(loaded.source.labelRes)
+        }
+        ImageInfoRow(stringResource(R.string.image_viewer_info_filename)) { loaded.fileName }
         ImageInfoRow(stringResource(R.string.image_viewer_info_dimensions)) {
-            loaded?.takeIf { it.width != null && it.height != null }?.let { "${it.width} × ${it.height}" }
+            loaded.takeIf { it.width != null && it.height != null }?.let { "${it.width} × ${it.height}" }
         }
         ImageInfoRow(stringResource(R.string.image_viewer_info_size)) {
-            loaded?.sizeBytes?.takeIf { it > 0 }?.fileSizeToString()
+            loaded.sizeBytes?.takeIf { it > 0 }?.fileSizeToString()
         }
-        ImageInfoRow(stringResource(R.string.image_viewer_info_format)) { loaded?.mimeType }
+        ImageInfoRow(stringResource(R.string.image_viewer_info_format)) { loaded.mimeType }
         ImageInfoRow(stringResource(R.string.image_viewer_info_modified)) {
-            loaded?.lastModifiedMs?.takeIf { it > 0 }?.let { Instant.ofEpochMilli(it).toLocalDateTime() }
+            loaded.lastModifiedMs?.takeIf { it > 0 }?.let { Instant.ofEpochMilli(it).toLocalDateTime() }
         }
     }
 }

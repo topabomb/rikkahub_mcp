@@ -2033,4 +2033,16 @@
   <string name="remote_workspace_reread_confirm">重新读取并替换编辑内容？请先复制需要保留的修改。读取失败时仍保留当前正文。</string>
   <string name="remote_workspace_cancelled">已取消</string>
   <string name="remote_workspace_verify_excerpt">仅显示前 8192 个字符，完整核对请下载文件。</string>
+  <string name="remote_workspace_selected">已选择 %1$d 项</string>
+  <string name="remote_workspace_item_count">%1$d 项</string>
+  <string name="remote_workspace_filtered_count">%1$d / %2$d 项</string>
+  <string name="remote_workspace_used">已用 %1$s</string>
+  <string name="remote_workspace_free">可用 %1$s</string>
+  <string name="remote_workspace_active_item">%1$d / %2$d · %3$s</string>
+  <string name="remote_workspace_results">操作结果</string>
+  <string name="remote_workspace_no_subfolders">此处没有子文件夹</string>
+  <string name="image_viewer_info_load_failed">无法读取图片信息</string>
+  <string name="remote_workspace_completed_count">已完成 %1$d 项</string>
+  <string name="remote_workspace_problem_count">%1$d 项需要处理</string>
+  <string name="remote_workspace_verification_count">%1$d 项待核实</string>
 </resources>

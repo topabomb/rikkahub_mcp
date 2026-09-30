@@ -22,6 +22,7 @@ import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.swipe
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
@@ -125,6 +126,31 @@ class ImagePreviewDialogTest {
     fun viewerFromThumbnailFillsWindow() {
         openViewer()
         assertFullWindow()
+    }
+
+    @Test fun imageInformationFailureKeepsDiagnosticAndCanBeRetried() {
+        val bytes = android.util.Base64.decode("R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==", android.util.Base64.DEFAULT)
+        val fail = java.util.concurrent.atomic.AtomicBoolean(false)
+        val retries = java.util.concurrent.atomic.AtomicInteger()
+        val source = net.weero.measix.pilot.service.ImageSource("retry-image-info", net.weero.measix.pilot.service.ImageOrigin.NETWORK,
+            displayName = "remote.gif", verifyAccess = {}, readPayload = {
+                if (fail.get()) throw java.io.IOException("HTTP 503 image information unavailable")
+                bytes
+            })
+        compose.setContent { MaterialTheme { ImagePreviewDialog(listOf(source), {}, onInfoRetry = {
+            retries.incrementAndGet(); fail.set(false)
+        }) } }
+        compose.runOnIdle { fail.set(true) }
+        compose.onNodeWithContentDescription(compose.activity.getString(R.string.image_viewer_info_content_description)).performClick()
+        compose.waitUntil(5_000) {
+            compose.onAllNodes(androidx.compose.ui.test.hasText(compose.activity.getString(R.string.image_viewer_info_load_failed))).fetchSemanticsNodes().isNotEmpty()
+        }
+        compose.onNodeWithText("HTTP 503 image information unavailable", substring = true).assertExists()
+        assertEquals(0, retries.get())
+        compose.onNodeWithText(compose.activity.getString(R.string.enterprise_budget_refresh)).performClick()
+        compose.waitUntil(5_000) { compose.onAllNodes(androidx.compose.ui.test.hasText("remote.gif")).fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithText("1 × 1").assertExists()
+        assertEquals(1, retries.get())
     }
 
     @Test

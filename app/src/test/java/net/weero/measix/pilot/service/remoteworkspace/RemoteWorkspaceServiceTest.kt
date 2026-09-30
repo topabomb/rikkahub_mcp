@@ -261,7 +261,10 @@ class RemoteWorkspaceServiceTest {
         runCurrent(); assertFalse(export.isCompleted)
         releaseQuery.complete(Unit); refreshing.await()
         try { export.await(); fail("old projection admitted download after failed refresh") }
-        catch (error: IllegalStateException) { assertEquals("workspace_status_unavailable", error.message) }
+        catch (error: IllegalStateException) {
+            assertTrue(error.message!!.contains("workspace_status_unavailable"))
+            assertTrue(error.message!!.contains("IOException: foreground status unavailable"))
+        }
         assertEquals(1, deletes.get())
         assertEquals(RemoteWorkspaceStatus.FAILED, f.service.summary.value!!.status)
         assertTrue(f.service.summary.value!!.diagnostic!!.contains("foreground status unavailable"))
@@ -405,21 +408,23 @@ class RemoteWorkspaceServiceTest {
 
     @Test fun `sharing a long Unicode remote name uses an independent short private basename`() = runTest {
         val f = fixture(); val handle = f.service.open(f.selection)
-        val longName = "文".repeat(83) + ".txt"
-        val remote = file.copy(path = longName)
-        coEvery { f.client.download(any(), any(), any(), longName, any(), any(), any()) } coAnswers {
+        coEvery { f.client.download(any(), any(), any(), any(), any(), any(), any()) } coAnswers {
             arg<java.io.OutputStream>(4).write(byteArrayOf(7))
             WorkspaceContentMetadata(file.etag, 1, null)
         }
-        var delivered: java.io.File? = null
-        f.service.share(handle, remote) { copy ->
-            delivered = copy
-            assertTrue(copy.name.startsWith("share-"))
-            assertTrue(copy.name.toByteArray(Charsets.UTF_8).size < 64)
-            assertFalse(copy.name.contains(longName))
-            assertArrayEquals(byteArrayOf(7), copy.readBytes())
+        for ((name, extension) in listOf("文".repeat(83) + ".txt" to "txt", "image.PNG" to "png",
+            "notes.TXT" to "txt", "untitled" to "", "notes." + "x".repeat(200) to "", "notes.文" to "")) {
+            var delivered: java.io.File? = null
+            f.service.share(handle, file.copy(path = name)) { copy ->
+                delivered = copy
+                assertTrue(copy.name.startsWith("share-"))
+                assertTrue(copy.name.toByteArray(Charsets.UTF_8).size < 64)
+                assertFalse(copy.name.contains(name))
+                assertEquals(extension, copy.extension)
+                assertArrayEquals(byteArrayOf(7), copy.readBytes())
+            }
+            assertNotNull(delivered)
         }
-        assertNotNull(delivered)
     }
 
     @Test fun `revocation waits for SAF cleanup even when export was cancelled before first execution`() = runTest {

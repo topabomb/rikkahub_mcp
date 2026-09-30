@@ -2033,4 +2033,16 @@
   <string name="remote_workspace_reread_confirm">最新の内容で置き換えますか？残したい変更は先にコピーしてください。読み込みに失敗した場合は現在の内容を保持します。</string>
   <string name="remote_workspace_cancelled">キャンセル済み</string>
   <string name="remote_workspace_verify_excerpt">先頭の8192文字を表示しています。全内容の確認はダウンロードしてください。</string>
+  <string name="remote_workspace_selected">%1$d 件選択中</string>
+  <string name="remote_workspace_item_count">%1$d 件</string>
+  <string name="remote_workspace_filtered_count">%1$d / %2$d 件</string>
+  <string name="remote_workspace_used">使用中 %1$s</string>
+  <string name="remote_workspace_free">利用可能 %1$s</string>
+  <string name="remote_workspace_active_item">%1$d / %2$d · %3$s</string>
+  <string name="remote_workspace_results">操作結果</string>
+  <string name="remote_workspace_no_subfolders">サブフォルダはありません</string>
+  <string name="image_viewer_info_load_failed">画像情報を読み取れませんでした</string>
+  <string name="remote_workspace_completed_count">%1$d 件完了</string>
+  <string name="remote_workspace_problem_count">%1$d 件の確認が必要</string>
+  <string name="remote_workspace_verification_count">%1$d 件の検証が必要</string>
 </resources>

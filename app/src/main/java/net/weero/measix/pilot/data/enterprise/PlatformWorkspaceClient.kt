@@ -36,9 +36,12 @@ internal class PlatformWorkspaceClient(client: OkHttpClient) {
         .retryOnConnectionFailure(false).authenticator(Authenticator.NONE).proxyAuthenticator(Authenticator.NONE)
         .callTimeout(0, TimeUnit.MILLISECONDS).connectTimeout(20, TimeUnit.SECONDS)
         .readTimeout(60, TimeUnit.SECONDS).writeTimeout(60, TimeUnit.SECONDS).cache(null).build()
+    // A picker can outlive a pooled connection. GET may reconnect before receiving a response;
+    // body consumption and every side-effecting request remain outside that recovery path.
+    private val readClient = this.client.newBuilder().retryOnConnectionFailure(true).build()
 
     suspend fun state(connection: PlatformConnection, token: String): PlatformWorkspaceProjection =
-        client.newCall(builder(connection.control("/workspace"), token).get().build()).readResponse { response ->
+        readClient.newCall(builder(connection.control("/workspace"), token).get().build()).readResponse { response ->
             val raw = body(response)
             // Pre-workspace Core uses chi's unmodified Go NotFound response. A domain Problem or
             // a proxy's HTML error is still a real failure; never hide every 404 as an old server.
@@ -103,7 +106,7 @@ internal class PlatformWorkspaceClient(client: OkHttpClient) {
         WorkspaceFileRules.path(path)
         return withStreamCancellation { streams ->
         streams.register(output)
-        client.newCall(builder(url(connection, "content", space, path), token).get().build()).readResponse { response ->
+        readClient.newCall(builder(url(connection, "content", space, path), token).get().build()).readResponse { response ->
             requireStatus(response)
             val expected = response.body.contentLength().takeIf { it >= 0 }
             require(expected == null || expected <= maxBytes) { "workspace_preview_limit" }
@@ -190,7 +193,9 @@ internal class PlatformWorkspaceClient(client: OkHttpClient) {
         .header("Authorization", "Bearer $token")
 
     private suspend inline fun <reified T> json(request: Request): T =
-        client.newCall(request).readResponse { response -> requireStatus(response); PlatformWireCodec.decode<T>(body(response)) }
+        (if (request.method == "GET") readClient else client).newCall(request).readResponse { response ->
+            requireStatus(response); PlatformWireCodec.decode<T>(body(response))
+        }
 
     private fun body(response: Response): String {
         val source = response.body.source()

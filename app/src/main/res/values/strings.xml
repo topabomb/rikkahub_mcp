@@ -2041,4 +2041,16 @@
   <string name="remote_workspace_reread_confirm">Replace the editor with a fresh copy? Copy any changes you want to keep first. Your current text is retained if reading fails.</string>
   <string name="remote_workspace_cancelled">Cancelled</string>
   <string name="remote_workspace_verify_excerpt">Showing the first 8,192 characters. Download the file to review all content.</string>
+  <string name="remote_workspace_selected">%1$d selected</string>
+  <string name="remote_workspace_item_count">Items: %1$d</string>
+  <string name="remote_workspace_filtered_count">%1$d / %2$d items</string>
+  <string name="remote_workspace_used">Used %1$s</string>
+  <string name="remote_workspace_free">Available %1$s</string>
+  <string name="remote_workspace_active_item">%1$d / %2$d · %3$s</string>
+  <string name="remote_workspace_results">Operation results</string>
+  <string name="remote_workspace_no_subfolders">No subfolders here</string>
+  <string name="image_viewer_info_load_failed">Image information could not be read</string>
+  <string name="remote_workspace_completed_count">Completed: %1$d</string>
+  <string name="remote_workspace_problem_count">%1$d need attention</string>
+  <string name="remote_workspace_verification_count">%1$d need verification</string>
 </resources>

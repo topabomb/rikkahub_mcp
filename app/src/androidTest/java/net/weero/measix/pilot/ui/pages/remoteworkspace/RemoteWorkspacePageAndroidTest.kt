@@ -103,11 +103,12 @@ class RemoteWorkspacePageAndroidTest {
         compose.onNodeWithText("reports").assertIsDisplayed()
         compose.onNodeWithText(".hidden.txt").assertDoesNotExist()
         capture("remote-workspace-files.png")
-        compose.onNodeWithText(text(R.string.remote_workspace_filter)).performTextReplacement("notes")
+        compose.onNodeWithContentDescription(text(R.string.remote_workspace_filter)).performClick()
+        compose.onNodeWithContentDescription(text(R.string.remote_workspace_filter)).performTextReplacement("notes")
         compose.onNodeWithText(file.name).assertIsDisplayed()
         compose.onNodeWithText("reports").assertDoesNotExist()
-        compose.onNodeWithText(text(R.string.remote_workspace_filter)).performTextReplacement("")
-        compose.onNodeWithText(text(R.string.remote_workspace_filter)).performImeAction()
+        compose.onNodeWithContentDescription(text(R.string.remote_workspace_filter)).performTextReplacement("")
+        compose.onNodeWithContentDescription(text(R.string.remote_workspace_filter)).performImeAction()
         onView(isRoot()).perform(closeSoftKeyboard())
         compose.waitUntil(5_000) { compose.onNodeWithText("reports").isDisplayed() }
         compose.onNodeWithText("reports").performClick()
@@ -120,11 +121,11 @@ class RemoteWorkspacePageAndroidTest {
         compose.onNodeWithText(text(R.string.common_confirm)).performClick()
         compose.waitUntil(5_000) { f.vm.state.value.directory?.files?.any { it.name == "new-folder" } == true }
         onView(isRoot()).perform(closeSoftKeyboard())
-        compose.onNodeWithText(text(R.string.common_confirm)).performClick()
+        compose.onNodeWithContentDescription(text(R.string.common_confirm)).performClick()
         compose.onNodeWithTag("remote-file-list").performScrollToNode(hasText("new-folder"))
         compose.onNodeWithText("new-folder").assertIsDisplayed()
         coVerify(exactly = 1) { f.service.createDirectory(f.handle, "new-folder") }
-        compose.onAllNodesWithContentDescription(text(R.string.more_options))[0].performClick()
+        compose.onNodeWithTag("remote-browser-menu").performClick()
         compose.onNodeWithText(text(R.string.remote_workspace_details)).performClick()
         compose.onNodeWithText(compose.activity.getString(R.string.remote_workspace_owner, "https://workspace.example")).assertIsDisplayed()
         capture("remote-workspace-details.png")
@@ -147,11 +148,33 @@ class RemoteWorkspacePageAndroidTest {
         compose.onNodeWithText(text(R.string.remote_workspace_save_close)).performClick()
         compose.waitUntil(5_000) { f.vm.state.value.save?.result?.outcome == RemoteOutcome.FAILED }
         onView(isAssignableFrom(EditText::class.java)).check(matches(withText("preserve my changes")))
-        compose.onNodeWithText(text(R.string.remote_workspace_save_as)).assertIsDisplayed()
         capture("remote-workspace-editor-conflict.png")
         compose.onNodeWithContentDescription(text(R.string.more_options)).performClick()
+        compose.onNodeWithText(text(R.string.remote_workspace_save_as)).assertIsDisplayed()
         compose.onNodeWithText(text(R.string.remote_workspace_reread)).assertIsDisplayed()
         coVerify(exactly = 1) { f.service.save(f.handle, document, "preserve my changes", file.path) }
+    }
+
+    @Test fun failedTextReadShowsDiagnosticAndRetryWithoutClaimingUnsupportedFormat() {
+        val f = Fixture()
+        coEvery { f.service.readText(f.handle, file) } throws java.io.IOException("HTTP 503 preview read unavailable")
+        f.show()
+        compose.onNodeWithText(file.name).performClick()
+        compose.onNodeWithText(text(R.string.enterprise_budget_refresh)).assertIsDisplayed()
+        compose.onNodeWithText(text(R.string.remote_workspace_preview_unsupported)).assertDoesNotExist()
+        compose.onNodeWithText(text(R.string.remote_workspace_details)).performClick()
+        compose.onNodeWithText("IOException: HTTP 503 preview read unavailable", substring = true).assertIsDisplayed()
+        compose.runOnIdle { f.summary.value = RemoteWorkspaceSummary(f.selection, RemoteWorkspaceStatus.FAILED) }
+        coEvery { f.service.refresh(f.selection) } coAnswers {
+            f.summary.value = RemoteWorkspaceSummary(f.selection, RemoteWorkspaceStatus.AVAILABLE)
+            coEvery { f.service.readText(f.handle, file) } returns document
+        }
+        compose.onNodeWithText(text(R.string.enterprise_budget_refresh)).performClick()
+        compose.waitUntil(5_000) { f.vm.state.value.editorSession?.document != null }
+        onView(isAssignableFrom(EditText::class.java)).check(matches(withText("original")))
+        compose.onNodeWithText(text(R.string.remote_workspace_operation_failed)).assertDoesNotExist()
+        coVerify(exactly = 2) { f.service.readText(f.handle, file) }
+        coVerifyOrder { f.service.readText(f.handle, file); f.service.refresh(f.selection); f.service.readText(f.handle, file) }
     }
 
     @Test fun authorizationRevocationClearsOldFilesAndAnOpenMutationPrompt() {
@@ -189,8 +212,8 @@ class RemoteWorkspacePageAndroidTest {
         }
         compose.waitUntil(5_000) { !f.vm.state.value.running }
         onView(isAssignableFrom(EditText::class.java)).check(matches(withText("submitted draft")))
-        compose.onNodeWithText(compose.activity.getString(R.string.remote_workspace_save_as)).assertIsDisplayed()
         compose.onNodeWithContentDescription(text(R.string.more_options)).performClick()
+        compose.onNodeWithText(compose.activity.getString(R.string.remote_workspace_save_as)).assertIsDisplayed()
         compose.onNodeWithText(text(R.string.remote_workspace_reread)).assertIsDisplayed()
         coVerify(exactly = 1) { f.service.save(f.handle, document, "submitted draft", file.path) }
         coVerify(exactly = 0) { f.service.readText(any(), any()) }
@@ -261,6 +284,10 @@ class RemoteWorkspacePageAndroidTest {
             f.vm.execute(listOf(file.path), f.handle) { _, _ -> RemoteOperationResult(file.path, RemoteOutcome.UNKNOWN) }
         }
         compose.waitUntil(5_000) { !f.vm.state.value.running && f.vm.state.value.results.isNotEmpty() }
+        compose.runOnIdle { f.vm.execute(listOf("another.txt"), f.handle) { _, _ -> RemoteOperationResult("another.txt", RemoteOutcome.SUCCEEDED) } }
+        compose.waitUntil(5_000) { !f.vm.state.value.running && f.vm.state.value.results.any { it.path == "another.txt" } }
+        compose.runOnIdle { f.vm.clearResults(); assertEquals(RemoteOutcome.UNKNOWN, f.vm.state.value.results.single().outcome) }
+        compose.onNodeWithText(text(R.string.remote_workspace_details)).performClick()
         compose.onNodeWithText(compose.activity.getString(R.string.remote_workspace_read_verify)).performClick()
         compose.onNodeWithText("original").performScrollTo().assertIsDisplayed()
         coVerify(exactly = 0) { f.service.acknowledgeVerified(any(), any()) }
@@ -268,6 +295,7 @@ class RemoteWorkspacePageAndroidTest {
         compose.waitForIdle()
         coVerify(exactly = 1) { f.service.verifyUnknown(f.handle, file.path) }
         coVerify(exactly = 1) { f.service.acknowledgeVerified(f.handle, file.path) }
+        compose.runOnIdle { assertTrue(f.vm.state.value.results.isEmpty()) }
         coVerify(exactly = 0) { f.service.upload(any(), any(), any(), any(), any(), any()) }
     }
 
@@ -285,6 +313,61 @@ class RemoteWorkspacePageAndroidTest {
         compose.onNodeWithText(compose.activity.getString(R.string.common_confirm)).performClick()
         compose.waitUntil(5_000) { !f.vm.state.value.running }
         coVerify(exactly = 1) { f.service.mutate(f.handle, RemoteFileAction.MOVE, file, target.path, target, false) }
+    }
+
+    @Test fun folderChoiceRejectsTheOriginalLocationAndFilteringDoesNotLeakIntoAnotherDirectory() {
+        val f = Fixture()
+        val folder = RemoteFile("reports", true, null, null, null)
+        val nested = RemoteFile("reports/result.txt", false, 12, null, "\"result\"")
+        coEvery { f.service.list(f.handle, "") } returns RemoteDirectory("", listOf(file, folder), null, null)
+        coEvery { f.service.list(f.handle, "reports") } returns RemoteDirectory("reports", listOf(nested), null, null)
+        f.show()
+        compose.onNodeWithContentDescription(text(R.string.remote_workspace_filter)).performClick()
+        compose.onNodeWithContentDescription(text(R.string.remote_workspace_filter)).performTextReplacement("notes")
+        compose.onNodeWithContentDescription(text(R.string.remote_workspace_filter)).performImeAction()
+        compose.onNodeWithText("reports").assertDoesNotExist()
+        compose.runOnIdle { f.vm.browse("reports") }
+        compose.waitUntil(5_000) { compose.onNodeWithText("result.txt").isDisplayed() }
+        compose.onNodeWithText(text(R.string.remote_workspace_filter)).assertDoesNotExist()
+        compose.onNodeWithContentDescription(text(R.string.back)).performClick()
+        compose.waitUntil(5_000) { compose.onNodeWithText(file.name).isDisplayed() }
+        compose.onNode(hasContentDescription(text(R.string.more_options)) and hasAnyAncestor(hasText(file.name))).performClick()
+        compose.onNodeWithText(text(R.string.remote_workspace_copy)).performClick()
+        compose.waitUntil(5_000) { compose.onNodeWithText(text(R.string.remote_workspace_select_folder)).isDisplayed() }
+        compose.onNodeWithText(text(R.string.remote_workspace_select_folder)).assertIsNotEnabled()
+        compose.onNode(hasText("reports") and hasAnyAncestor(isDialog())).performClick()
+        compose.waitUntil(5_000) { compose.onNodeWithText(text(R.string.remote_workspace_no_subfolders)).isDisplayed() }
+        compose.onNodeWithText(text(R.string.remote_workspace_select_folder)).assertIsEnabled()
+        coVerify(exactly = 0) { f.service.mutate(any(), any(), any(), any(), any(), any()) }
+    }
+
+    @Test fun batchShowsTheActualActiveItemAndCancellationKeepsPendingItemsUnstarted() {
+        val f = Fixture()
+        val pending = CompletableDeferred<RemoteOperationResult>()
+        every { f.service.outcomeAfterCancellation(f.handle, file.path) } returns RemoteOutcome.CANCELLED
+        f.show()
+        compose.runOnIdle { f.vm.execute(listOf(file.path, "second.txt"), f.handle) { _, _ -> pending.await() } }
+        compose.waitUntil(5_000) { f.vm.state.value.activeIndex == 0 }
+        compose.onNodeWithText(compose.activity.getString(R.string.remote_workspace_active_item, 1, 2, file.name)).assertIsDisplayed()
+        compose.onNodeWithText(text(R.string.common_cancel)).performClick()
+        compose.waitUntil(5_000) { !f.vm.state.value.running }
+        compose.runOnIdle {
+            assertNull(f.vm.state.value.activeIndex)
+            assertEquals(listOf(RemoteOutcome.CANCELLED, RemoteOutcome.NOT_STARTED), f.vm.state.value.results.map { it.outcome })
+        }
+        compose.onNodeWithText(text(R.string.remote_workspace_details)).performClick()
+        compose.onNodeWithText(text(R.string.remote_workspace_not_started)).assertIsDisplayed()
+    }
+
+    @Test fun oversizedDestinationIsReportedWithoutStartingAMutationOrCrashing() {
+        val f = Fixture()
+        f.show()
+        compose.runOnIdle {
+            f.vm.mutate(RemoteFileAction.COPY, listOf(file), "x".repeat(4096), f.handle)
+            assertFalse(f.vm.state.value.running)
+            assertTrue(f.vm.state.value.error!!.contains("invalid_workspace_path"))
+        }
+        coVerify(exactly = 0) { f.service.mutate(any(), any(), any(), any(), any(), any()) }
     }
 
     private fun text(id: Int) = compose.activity.getString(id)

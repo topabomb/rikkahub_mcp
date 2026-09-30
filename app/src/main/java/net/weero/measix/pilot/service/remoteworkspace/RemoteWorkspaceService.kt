@@ -411,9 +411,11 @@ internal class RemoteWorkspaceService(
             try {
                 withContext(Dispatchers.IO) {
                     temporaryRoot.mkdirs()
-                    // The display name is supplied at the FileProvider handoff. Remote names may
-                    // already occupy the filesystem's full component limit, so never prefix them.
-                    owned = File(temporaryRoot, "share-${Uuid.random()}")
+                    // Keep a short private name but preserve a safe extension: FileProvider MIME
+                    // detection uses the actual filename, independently of its displayName.
+                    val extension = file.name.substringAfterLast('.', "").lowercase(java.util.Locale.ROOT)
+                        .takeIf { it.matches(Regex("[a-z0-9]{1,16}")) }
+                    owned = File(temporaryRoot, "share-${Uuid.random()}${extension?.let { ".$it" }.orEmpty()}")
                     val copy = requireNotNull(owned)
                     synchronized(monitor) { copies[copy] = handle }
                     withOutput(copy::outputStream) { client.download(handle.connection, token, handle.space, file.path, it) }
@@ -440,6 +442,9 @@ internal class RemoteWorkspaceService(
         net.weero.measix.pilot.service.ImageSource(
             cacheIdentity = "remote:${handle.id}:${file.path}:${file.etag ?: Uuid.random()}",
             origin = net.weero.measix.pilot.service.ImageOrigin.NETWORK, displayName = file.name,
+            modifiedAtMillis = file.modifiedAt?.let { value ->
+                try { java.time.Instant.parse(value).toEpochMilli() } catch (_: java.time.DateTimeException) { null }
+            },
             verifyAccess = { validate(handle) },
             readPayload = {
                 operation(handle) { token ->
@@ -579,7 +584,9 @@ internal class RemoteWorkspaceService(
                         check(refresh != null && !refresh.isCompleted) { "workspace_status_unavailable" }
                         refresh
                     } else {
-                        check(_summary.value?.status != RemoteWorkspaceStatus.FAILED) { "workspace_status_unavailable" }
+                        check(_summary.value?.status != RemoteWorkspaceStatus.FAILED) {
+                            listOfNotNull("workspace_status_unavailable", _summary.value?.diagnostic).joinToString("\n")
+                        }
                         check(!writing || current?.readError == null) { "workspace_verify_file_access_first" }
                         null
                     }

@@ -45,6 +45,8 @@ internal data class RemoteBrowserState(
     val running: Boolean = false,
     val progress: Long = 0,
     val total: Long? = null,
+    val activeIndex: Int? = null,
+    val batchSize: Int = 0,
     val results: List<RemoteOperationResult> = emptyList(),
     val preview: RemoteFile? = null,
     val editorSession: RemoteEditorSession? = null,
@@ -76,7 +78,7 @@ internal class RemoteWorkspaceVM(
                 if (handle != null && (summary?.selection != selection || !service.isValid(handle))) {
                     overwriteAnswer?.cancel()
                     _state.update { it.copy(handle = null, directory = null, revoked = true, error = null,
-                        preview = null, editorSession = null, save = null, overwrite = null, results = emptyList(), progress = 0, total = null) }
+                        preview = null, editorSession = null, save = null, overwrite = null, results = emptyList(), progress = 0, total = null, activeIndex = null) }
                     service.close(handle)
                 }
             }
@@ -129,7 +131,10 @@ internal class RemoteWorkspaceVM(
 
     fun clearSave() { if (!_state.value.running) _state.update { it.copy(save = null) } }
     fun cancel() { readJob?.cancel(); work?.cancel(); overwriteAnswer?.cancel() }
-    fun clearResults() { if (!_state.value.running) _state.update { it.copy(results = emptyList()) } }
+    fun clearResults() { if (!_state.value.running) _state.update { state -> state.copy(results = state.results.filter { it.outcome == RemoteOutcome.UNKNOWN }) } }
+    fun dismissVerifiedResult(handle: RemoteWorkspaceHandle, path: String) {
+        _state.update { if (it.running || it.handle !== handle) it else it.copy(results = it.results.filterNot { result -> result.path == path }) }
+    }
 
     fun report(error: Throwable) {
         android.util.Log.e("RemoteWorkspacePage", "Remote file operation failed", error)
@@ -141,13 +146,15 @@ internal class RemoteWorkspaceVM(
         action: suspend (Int, RemoteWorkspaceHandle) -> RemoteOperationResult,
     ) {
         if (work?.isActive == true || original == null || _state.value.handle !== original) return
+        val unverified = _state.value.results.filter { it.outcome == RemoteOutcome.UNKNOWN }.distinctBy { it.path }
         val results = paths.map { RemoteOperationResult(it, RemoteOutcome.NOT_STARTED) }
-        _state.update { it.copy(running = true, results = results, error = null, progress = 0, total = null) }
+        _state.update { it.copy(running = true, results = retainUnverified(results, unverified), error = null,
+            progress = 0, total = null, activeIndex = null, batchSize = paths.size) }
         work = viewModelScope.launch {
             try {
                 paths.indices.forEach { index ->
                     ensureActive()
-                    _state.update { it.copy(progress = 0, total = null) }
+                    _state.update { it.copy(progress = 0, total = null, activeIndex = index) }
                     val result = try { action(index, original) }
                     catch (cancelled: CancellationException) {
                         _state.update { state -> if (state.handle !== original) state else state.copy(results = state.results.toMutableList().also {
@@ -164,11 +171,17 @@ internal class RemoteWorkspaceVM(
                 }
             } finally {
                 overwriteAnswer?.cancel(); overwriteAnswer = null
-                _state.update { it.copy(running = false, overwrite = null) }
+                _state.update { if (it.handle !== original) it.copy(running = false, overwrite = null, activeIndex = null)
+                    else it.copy(running = false, overwrite = null, activeIndex = null,
+                        results = retainUnverified(it.results.take(paths.size), unverified)) }
                 if (isActive && service.isValid(original)) retry()
             }
         }
     }
+
+    /** Current batch indexes stay at the front; earlier uncertain results remain reviewable until acknowledged. */
+    private fun retainUnverified(batch: List<RemoteOperationResult>, unverified: List<RemoteOperationResult>) =
+        batch + unverified.filter { previous -> batch.none { it.path == previous.path && it.outcome == RemoteOutcome.UNKNOWN } }
 
     fun save(handle: RemoteWorkspaceHandle, document: RemoteTextDocument, text: String, destination: String) {
         if (_state.value.running || _state.value.handle !== handle) return
@@ -231,7 +244,9 @@ internal class RemoteWorkspaceVM(
         original: RemoteWorkspaceHandle? = _state.value.handle,
     ) {
         val roots = files.filter { child -> files.none { parent -> parent.directory && child.path.startsWith(parent.path + "/") } }
-        execute(roots.map { destination?.let { path -> WorkspaceFileRules.child(path, it.name) } ?: it.path }, original) { index, handle ->
+        val paths = try { roots.map { destination?.let { path -> WorkspaceFileRules.child(path, it.name) } ?: it.path } }
+        catch (error: IllegalArgumentException) { report(error); return }
+        execute(paths, original) { index, handle ->
             val file = roots[index]
             mutateOne(handle, action, file, destination?.let { WorkspaceFileRules.child(it, file.name) })
         }
@@ -295,7 +310,9 @@ internal class RemoteWorkspaceVM(
     @OptIn(ExperimentalCoroutinesApi::class)
     private fun downloadSingle(file: RemoteFile, original: RemoteWorkspaceHandle, uri: Uri) {
         val transfer = service.acceptExport(original, file, destination(uri), ::progress)
-        _state.update { it.copy(running = true, results = listOf(RemoteOperationResult(file.path, RemoteOutcome.NOT_STARTED)), error = null) }
+        val unverified = _state.value.results.filter { it.outcome == RemoteOutcome.UNKNOWN }.distinctBy { it.path }
+        _state.update { it.copy(running = true, results = retainUnverified(listOf(RemoteOperationResult(file.path, RemoteOutcome.NOT_STARTED)), unverified), error = null,
+            progress = 0, total = null, activeIndex = 0, batchSize = 1) }
         work = viewModelScope.launch(start = CoroutineStart.ATOMIC) {
             var result = RemoteOperationResult(file.path, RemoteOutcome.CANCELLED)
             try {
@@ -308,7 +325,8 @@ internal class RemoteWorkspaceVM(
                 withContext(NonCancellable) { if (!transfer.isCompleted) transfer.cancelAndJoin() }
                 val cleanup = transfer.getCompletionExceptionOrNull()?.takeIf { it.suppressed.isNotEmpty() }
                 if (cleanup != null) { report(cleanup); result = result.copy(diagnostic = cleanup.userVisibleDiagnostic()) }
-                _state.update { if (it.handle !== original) it.copy(running = false) else it.copy(running = false, results = listOf(result)) }
+                _state.update { if (it.handle !== original) it.copy(running = false, activeIndex = null) else it.copy(running = false, activeIndex = null,
+                    results = retainUnverified(listOf(result), unverified)) }
             }
         }
     }

@@ -22,19 +22,23 @@ internal fun FileRow(
     name: String, detail: String, directory: Boolean, selected: Boolean, selecting: Boolean,
     onOpen: () -> Unit, onSelect: (() -> Unit)?,
     thumbnail: (@Composable () -> Unit)? = null,
+    compact: Boolean = false,
     actions: @Composable ColumnScope.(dismiss: () -> Unit) -> Unit,
 ) {
     var expanded by remember { mutableStateOf(false) }
     Card(Modifier.fillMaxWidth().combinedClickable(
         onClick = { if (selecting && onSelect != null) onSelect() else onOpen() }, onLongClick = onSelect,
-    ), colors = CustomColors.cardColorsOnSurfaceContainer) {
-        Row(Modifier.fillMaxWidth().padding(start = 16.dp, top = 12.dp, bottom = 12.dp, end = 4.dp),
+    ), shape = if (compact) androidx.compose.ui.graphics.RectangleShape else MaterialTheme.shapes.medium,
+        colors = if (compact) CardDefaults.cardColors(containerColor = if (selected) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surface)
+        else CustomColors.cardColorsOnSurfaceContainer) {
+        Row(Modifier.fillMaxWidth().heightIn(min = if (compact) 64.dp else 0.dp).padding(start = if (compact) 12.dp else 16.dp,
+            top = if (compact) 4.dp else 12.dp, bottom = if (compact) 4.dp else 12.dp, end = 4.dp),
             verticalAlignment = Alignment.CenterVertically) {
             if (selecting && onSelect != null) Checkbox(selected, { onSelect() })
             else if (thumbnail != null) thumbnail()
             else Icon(if (directory) HugeIcons.Folder01 else HugeIcons.File02, null, Modifier.size(22.dp),
                 tint = if (directory) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
-            Column(Modifier.weight(1f).padding(horizontal = 12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Column(Modifier.weight(1f).padding(horizontal = 12.dp), verticalArrangement = Arrangement.spacedBy(if (compact) 2.dp else 4.dp)) {
                 Text(name, style = MaterialTheme.typography.titleSmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
                 if (detail.isNotBlank()) Text(detail, style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
