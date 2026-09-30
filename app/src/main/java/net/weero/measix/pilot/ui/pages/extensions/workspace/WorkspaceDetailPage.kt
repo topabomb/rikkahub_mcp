@@ -13,6 +13,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -20,6 +21,9 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.pager.HorizontalPager
@@ -34,8 +38,8 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.NavigationBar
-import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.PrimaryTabRow
+import androidx.compose.material3.Tab
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SegmentedButton
@@ -45,8 +49,10 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -62,10 +68,15 @@ import coil3.compose.AsyncImage
 import net.weero.measix.pilot.service.ImageSource
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalResources
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.content.FileProvider
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
+import androidx.lifecycle.Lifecycle
 import java.io.File
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.CancellationException
@@ -79,13 +90,14 @@ import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.ArrowTurnBackward
 import me.rerere.hugeicons.stroke.Bash
 import me.rerere.hugeicons.stroke.ComputerTerminal01
+import me.rerere.hugeicons.stroke.Cancel01
+import me.rerere.hugeicons.stroke.Download01
 import me.rerere.hugeicons.stroke.Delete01
 import me.rerere.hugeicons.stroke.File02
 import me.rerere.hugeicons.stroke.FileImport
 import me.rerere.hugeicons.stroke.Folder01
 import me.rerere.hugeicons.stroke.MoreVertical
 import me.rerere.hugeicons.stroke.Refresh01
-import me.rerere.hugeicons.stroke.Settings03
 import me.rerere.hugeicons.stroke.Share08
 import net.weero.measix.pilot.Screen
 import net.weero.measix.pilot.data.ai.tools.resolveWorkspaceToolApproval
@@ -94,6 +106,7 @@ import androidx.compose.ui.res.stringResource
 import net.weero.measix.pilot.R
 import net.weero.measix.pilot.ui.components.nav.BackButton
 import net.weero.measix.pilot.ui.components.ui.ConfirmDialog
+import net.weero.measix.pilot.ui.components.ui.Tooltip
 import net.weero.measix.pilot.ui.components.ui.ImagePreviewDialog
 import net.weero.measix.pilot.ui.components.ui.ImagePreviewDeleteAction
 import net.weero.measix.pilot.ui.components.ui.ImagePreviewDeleteResult
@@ -108,6 +121,10 @@ import me.rerere.workspace.WorkspaceShellStatus
 import me.rerere.workspace.WorkspaceStorageArea
 import org.koin.androidx.compose.koinViewModel
 import org.koin.core.parameter.parametersOf
+import java.time.Instant
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
+import java.time.format.FormatStyle
 
 @Composable
 fun WorkspaceDetailPage(id: String) {
@@ -117,9 +134,15 @@ fun WorkspaceDetailPage(id: String) {
     val installProgress by vm.installProgress.collectAsStateWithLifecycle()
     val installError by vm.installError.collectAsStateWithLifecycle()
     val exportState by vm.exportState.collectAsStateWithLifecycle()
+    // Returning from an editor or external document app must read the latest committed file metadata.
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { vm.refresh() }
     var selectedFiles by remember(id, state.area, state.path) { mutableStateOf(emptySet<String>()) }
     var pendingBatch by remember(id) { mutableStateOf<WorkspaceExportRequest?>(null) }
     val pagerState = rememberPagerState { 2 }
+    LaunchedEffect(pagerState.currentPage) {
+        if (pagerState.currentPage == 0) selectedFiles = emptySet()
+    }
+    val compactToolbar = with(LocalDensity.current) { LocalWindowInfo.current.containerSize.height.toDp() < 480.dp }
     val scope = rememberCoroutineScope()
     var deleteTarget by remember { mutableStateOf<WorkspaceFileEntry?>(null) }
     var showInstallDialog by remember { mutableStateOf(false) }
@@ -182,20 +205,22 @@ fun WorkspaceDetailPage(id: String) {
                     )
                 },
                 navigationIcon = {
-                    if (selectedFiles.isNotEmpty()) TextButton(onClick = { selectedFiles = emptySet() }) {
-                        Text(stringResource(R.string.common_cancel))
+                    if (selectedFiles.isNotEmpty()) IconButton(onClick = { selectedFiles = emptySet() }) {
+                        Icon(HugeIcons.Cancel01, stringResource(R.string.common_cancel))
                     } else BackButton()
                 },
                 actions = {
                     if (exportState?.running == true) {
-                        TextButton(onClick = vm::cancelExport) { Text(stringResource(R.string.common_cancel)) }
+                        IconButton(onClick = vm::cancelExport) { Icon(HugeIcons.Cancel01, stringResource(R.string.common_cancel)) }
                     } else if (selectedFiles.isNotEmpty()) {
-                        TextButton(enabled = pendingBatch == null, onClick = {
-                            pendingBatch = WorkspaceExportRequest(id, state.area, selectedFiles.toList())
-                            batchLauncher.launch(null)
-                        }) { Text(stringResource(R.string.common_export)) }
+                        Tooltip(tooltip = { Text(stringResource(R.string.common_export)) }) {
+                            IconButton(enabled = pendingBatch == null, onClick = {
+                                pendingBatch = WorkspaceExportRequest(id, state.area, selectedFiles.toList())
+                                batchLauncher.launch(null)
+                            }) { Icon(HugeIcons.Download01, stringResource(R.string.common_export)) }
+                        }
                     }
-                    if (pagerState.currentPage == 1) {
+                    if (pagerState.currentPage == 1 && selectedFiles.isEmpty()) {
                         IconButton(onClick = { filePicker.launch(arrayOf("*/*")) }) {
                             Icon(
                                 HugeIcons.FileImport,
@@ -204,29 +229,30 @@ fun WorkspaceDetailPage(id: String) {
                         }
                     }
                     IconButton(onClick = { vm.refresh() }) {
-                        Icon(HugeIcons.Refresh01, contentDescription = null)
+                        Icon(HugeIcons.Refresh01, contentDescription = stringResource(R.string.enterprise_budget_refresh))
                     }
-                    if (state.workspace?.shellStatus != WorkspaceShellStatus.DISABLED) {
+                    if (selectedFiles.isEmpty() && state.workspace?.shellStatus != WorkspaceShellStatus.DISABLED) {
                         IconButton(onClick = { navController.navigate(Screen.WorkspaceTerminal(id)) }) {
-                            Icon(HugeIcons.ComputerTerminal01, contentDescription = null)
+                            Icon(HugeIcons.ComputerTerminal01, contentDescription = stringResource(R.string.workspace_terminal))
                         }
                     }
                 },
                 colors = CustomColors.topBarColors,
+                expandedHeight = if (compactToolbar) 48.dp else TopAppBarDefaults.TopAppBarExpandedHeight,
             )
         },
         bottomBar = {
-            NavigationBar {
-                NavigationBarItem(
+            PrimaryTabRow(selectedTabIndex = pagerState.currentPage, modifier = Modifier.navigationBarsPadding()) {
+                Tab(
                     selected = pagerState.currentPage == 0,
-                    label = { Text(stringResource(R.string.workspace_detail_tab_basic)) },
-                    icon = { Icon(HugeIcons.Settings03, contentDescription = null) },
+                    text = { Text(stringResource(R.string.workspace_detail_tab_basic), maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                    modifier = Modifier.heightIn(min = 48.dp),
                     onClick = { scope.launch { pagerState.animateScrollToPage(0) } },
                 )
-                NavigationBarItem(
+                Tab(
                     selected = pagerState.currentPage == 1,
-                    label = { Text(stringResource(R.string.workspace_detail_tab_files)) },
-                    icon = { Icon(HugeIcons.File02, contentDescription = null) },
+                    text = { Text(stringResource(R.string.workspace_detail_tab_files), maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                    modifier = Modifier.heightIn(min = 48.dp),
                     onClick = { scope.launch { pagerState.animateScrollToPage(1) } },
                 )
             }
@@ -708,22 +734,19 @@ private fun WorkspaceFilesPage(
 ) {
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
-        contentPadding = contentPadding + PaddingValues(16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
+        contentPadding = contentPadding + PaddingValues(horizontal = 12.dp, vertical = 8.dp),
     ) {
         item {
-            WorkspaceAreaSelector(
-                selected = state.area,
-                onSelected = onSelectArea,
-            )
-        }
-
-        item {
-            WorkspacePathBar(
-                path = state.path,
-                canGoUp = state.path.isNotBlank(),
-                onGoUp = onGoUp,
-            )
+            BoxWithConstraints(Modifier.fillMaxWidth().padding(bottom = 8.dp)) {
+                val wide = maxWidth >= 600.dp && LocalDensity.current.fontScale < 1.3f
+                if (wide) Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    WorkspaceAreaSelector(state.area, onSelectArea, Modifier.width(280.dp))
+                    WorkspacePathBar(state.path, state.path.isNotBlank(), onGoUp, Modifier.weight(1f))
+                } else Column {
+                    WorkspaceAreaSelector(state.area, onSelectArea)
+                    WorkspacePathBar(state.path, state.path.isNotBlank(), onGoUp)
+                }
+            }
         }
 
         state.error?.let { error ->
@@ -760,14 +783,16 @@ private fun WorkspaceFilesPage(
 private fun WorkspaceAreaSelector(
     selected: WorkspaceStorageArea,
     onSelected: (WorkspaceStorageArea) -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     val areas = listOf(
         WorkspaceStorageArea.FILES to stringResource(R.string.workspace_detail_area_files),
         WorkspaceStorageArea.LINUX to stringResource(R.string.workspace_detail_area_rootfs),
     )
-    SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+    SingleChoiceSegmentedButtonRow(modifier = modifier.fillMaxWidth()) {
         areas.forEachIndexed { index, (area, label) ->
             SegmentedButton(
+                modifier = Modifier.heightIn(min = 48.dp),
                 selected = selected == area,
                 onClick = { onSelected(area) },
                 shape = SegmentedButtonDefaults.itemShape(index, areas.size),
@@ -783,9 +808,10 @@ private fun WorkspacePathBar(
     path: String,
     canGoUp: Boolean,
     onGoUp: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     Row(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
@@ -793,7 +819,7 @@ private fun WorkspacePathBar(
             enabled = canGoUp,
             onClick = onGoUp,
         ) {
-            Icon(HugeIcons.ArrowTurnBackward, contentDescription = null)
+            Icon(HugeIcons.ArrowTurnBackward, contentDescription = stringResource(R.string.file_browser_parent_folder))
         }
         Text(
             text = path.ifBlank { "/" },
@@ -818,9 +844,15 @@ private fun WorkspaceFileCard(
     onExport: () -> Unit,
     onShare: () -> Unit,
 ) {
+    val locale = LocalConfiguration.current.locales[0]
+    val modified = remember(entry.updatedAt, locale) {
+        DateTimeFormatter.ofLocalizedDateTime(FormatStyle.SHORT).withLocale(locale)
+            .format(Instant.ofEpochMilli(entry.updatedAt).atZone(ZoneId.systemDefault()))
+    }
     net.weero.measix.pilot.ui.components.files.FileRow(
         name = entry.name,
-        detail = if (entry.isDirectory) entry.path else "${entry.path} · ${entry.sizeBytes.fileSizeToString()}",
+        detail = if (entry.isDirectory) modified else "${entry.sizeBytes.fileSizeToString()} · $modified",
+        compact = true,
         directory = entry.isDirectory, selected = selected, selecting = selecting,
         onOpen = onOpen, onSelect = onSelect.takeUnless { entry.isDirectory },
         thumbnail = image?.let { source -> {

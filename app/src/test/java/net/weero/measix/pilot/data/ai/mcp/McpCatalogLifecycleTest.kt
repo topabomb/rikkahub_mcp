@@ -558,7 +558,6 @@ internal class McpCatalogLifecycleTest : McpRuntimeCoordinatorTestBase() {
         val restartClients = mutableListOf<Client>()
         val restarted = McpRuntimeCoordinator(
             sessions = io.mockk.mockk(),
-            synchronization = io.mockk.mockk(),
             settingsStore = isolatedSettingsStore,
             catalogStore = isolatedCatalogStore,
             appScope = AppScope(dispatcher),

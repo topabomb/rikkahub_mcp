@@ -15,6 +15,7 @@ import kotlinx.coroutines.flow.update
 import net.weero.measix.pilot.data.enterprise.RealmAccess
 import net.weero.measix.pilot.data.enterprise.EnterpriseSessionController
 import net.weero.measix.pilot.data.enterprise.EnterpriseState
+import net.weero.measix.pilot.data.enterprise.EnterpriseConfigurationException
 import net.weero.measix.pilot.data.enterprise.EnterpriseSnapshotCompatibilityException
 import net.weero.measix.pilot.data.enterprise.PlatformHttpException
 import net.weero.measix.pilot.data.enterprise.EnterpriseSnapshotContentException
@@ -78,10 +79,13 @@ internal class EnterpriseSynchronizationService(
     }
 
     suspend fun prepareExecution(access: RealmAccess.Enterprise): net.weero.measix.pilot.data.enterprise.EnterpriseAppliedVersion {
-        // A retained Applied generation is not permission to bypass an observed sync failure.
-        // Retry through the same owner; only the subsequent Core check can admit execution.
-        if (_status.value?.takeIf { it.access == access }?.failure != null) synchronize(access)
-        return platform.prepareExecution(access) { synchronize(access) }
+        // Failed synchronization remains an explicit recovery boundary, never an implicit retry on send.
+        _status.value?.takeIf { it.access == access }?.failure?.let { failure ->
+            sessions.withRealmAccess(access) { Unit }
+            throw EnterpriseConfigurationException("platform_runtime_synchronization_required",
+                "Synchronize enterprise configuration manually before starting another operation. ${failure.diagnostic}")
+        }
+        return platform.prepareExecution(access)
     }
 
     suspend fun cancelAndAwait(access: RealmAccess.Enterprise) {

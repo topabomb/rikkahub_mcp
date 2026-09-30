@@ -50,6 +50,7 @@ import net.weero.measix.pilot.ui.context.LocalSettings
 import net.weero.measix.pilot.ui.context.LocalToaster
 import net.weero.measix.pilot.ui.context.Navigator
 import net.weero.measix.pilot.ui.theme.LocalDarkMode
+import net.weero.measix.pilot.utils.fileSizeToString
 import org.junit.Assert.*
 import org.junit.Rule
 import org.junit.Test
@@ -60,6 +61,10 @@ import org.koin.core.parameter.parametersOf
 import java.io.FilterOutputStream
 import java.io.OutputStream
 import java.util.UUID
+import java.time.Instant
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
+import java.time.format.FormatStyle
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArrayList
@@ -73,6 +78,76 @@ class WorkspaceExportLifecycleAndroidTest {
     private val observedVm = AtomicReference<WorkspaceDetailVM>()
 
     @Test
+    fun resumingFilesPageRefreshesMetadataAfterOwnerCommitsWhileStopped() = fixture { files ->
+        val picker = showPage(files.source)
+        val originalActivity = compose.activity
+        val originalVm = requireNotNull(observedVm.get())
+        compose.onNode(
+            hasText(compose.activity.getString(R.string.workspace_detail_tab_files)) and
+                SemanticsMatcher.expectValue(SemanticsProperties.Role, Role.Tab)
+        ).performClick().assertIsSelected()
+        compose.onNodeWithText("first.txt").performScrollTo().assertIsDisplayed()
+        val original = originalVm.state.value.entries.single { it.path == "first.txt" }
+        val locale = compose.activity.resources.configuration.locales[0]
+        fun metadata(entry: me.rerere.workspace.WorkspaceFileEntry): String {
+            val modified = DateTimeFormatter.ofLocalizedDateTime(FormatStyle.SHORT).withLocale(locale)
+                .format(Instant.ofEpochMilli(entry.updatedAt).atZone(ZoneId.systemDefault()))
+            return "${entry.sizeBytes.fileSizeToString()} · $modified"
+        }
+        val originalMetadata = metadata(original)
+        compose.onNodeWithText(originalMetadata).assertIsDisplayed()
+
+        // The same list owner stays in memory while its page is stopped, as when an editor or
+        // external document app covers it. Only the application command commits the file change.
+        compose.activityRule.scenario.moveToState(Lifecycle.State.CREATED)
+        val commands = (files.context.applicationContext as WorkspaceDocumentsDependencies).workspaceCommands
+        val body = "Owner committed while page stopped.\n".repeat(64)
+        val committed = runBlocking { withTimeout(15_000) {
+            commands.writeText(files.source, "first.txt", body)
+        } }
+        assertEquals(body.toByteArray(Charsets.UTF_8).size.toLong(), committed.sizeBytes)
+        assertNotEquals(original.sizeBytes, committed.sizeBytes)
+        assertEquals("A stopped page must still have its original read projection", original,
+            originalVm.state.value.entries.single { it.path == "first.txt" })
+
+        compose.activityRule.scenario.moveToState(Lifecycle.State.RESUMED)
+        compose.waitUntil(15_000) {
+            originalVm.state.value.let { state ->
+                !state.loading && state.entries.singleOrNull { it.path == "first.txt" } == committed
+            }
+        }
+        compose.runOnIdle {
+            assertSame(originalActivity, compose.activity)
+            assertSame(originalVm, observedVm.get())
+        }
+        compose.onNodeWithText("first.txt").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText(metadata(committed)).assertIsDisplayed()
+        compose.onNodeWithText(originalMetadata).assertDoesNotExist()
+        assertTrue("Resuming the list must not open a document picker", picker.launches.isEmpty())
+        assertNull(originalVm.exportState.value)
+        assertEquals(WorkspaceTextPreviewResult.Success(body), runBlocking { withTimeout(10_000) {
+            files.queries.readTextForPreview(files.source, WorkspaceStorageArea.FILES, "first.txt")
+        } })
+    }
+
+    @Test
+    fun leavingFilesTabClearsSelectionAndReturningAllowsFreshExportSelection() = fixture { files ->
+        val picker = showPage(files.source)
+        selectFile("first.txt")
+        compose.onNodeWithContentDescription(compose.activity.getString(R.string.common_export)).assertIsEnabled()
+        compose.onNode(
+            hasText(compose.activity.getString(R.string.workspace_detail_tab_basic)) and
+                SemanticsMatcher.expectValue(SemanticsProperties.Role, Role.Tab)
+        ).performClick().assertIsSelected()
+        compose.onNodeWithText(compose.activity.getString(R.string.workspace_export_selected, 1)).assertDoesNotExist()
+        compose.onNodeWithContentDescription(compose.activity.getString(R.string.common_export)).assertDoesNotExist()
+        selectFile("first.txt")
+        compose.onNodeWithContentDescription(compose.activity.getString(R.string.common_export)).assertIsEnabled()
+        assertTrue("Changing tabs must not launch an export picker", picker.launches.isEmpty())
+        compose.runOnIdle { assertNull(observedVm.get().exportState.value) }
+    }
+
+    @Test
     fun directoryChangeBeforePickerReplyKeepsTheCapturedSourceRequest() = fixture { files ->
         val commands = (files.context.applicationContext as WorkspaceDocumentsDependencies).workspaceCommands
         runBlocking { withTimeout(15_000) {
@@ -80,7 +155,7 @@ class WorkspaceExportLifecycleAndroidTest {
         } }
         val picker = showPage(files.source)
         selectFile("first.txt")
-        compose.onNodeWithText(compose.activity.getString(R.string.common_export)).performClick()
+        compose.onNodeWithContentDescription(compose.activity.getString(R.string.common_export)).performClick()
         val pending = picker.launches.single()
         val originalVm = observedVm.get()
 
@@ -111,7 +186,7 @@ class WorkspaceExportLifecycleAndroidTest {
     fun recreatedPageRejectsLatePickerResultWithoutExportingItsNewSelection() = fixture { files ->
         val firstPicker = showPage(files.source)
         selectFile("first.txt")
-        compose.onNodeWithText(compose.activity.getString(R.string.common_export)).performClick()
+        compose.onNodeWithContentDescription(compose.activity.getString(R.string.common_export)).performClick()
         val oldRequest = firstPicker.launches.single()
         assertEquals(Intent.ACTION_OPEN_DOCUMENT_TREE, oldRequest.second.action)
         val originalActivity = compose.activity
@@ -136,7 +211,7 @@ class WorkspaceExportLifecycleAndroidTest {
 
         // A fresh launch proves that callbacks are still registered after recreation, rather
         // than making the old-result assertion pass because every result was disconnected.
-        compose.onNodeWithText(compose.activity.getString(R.string.common_export)).performClick()
+        compose.onNodeWithContentDescription(compose.activity.getString(R.string.common_export)).performClick()
         val freshRequest = restoredPicker.launches.single()
         assertEquals("The restored launcher must still own the original request code", oldRequest.first, freshRequest.first)
         assertEquals(Intent.ACTION_OPEN_DOCUMENT_TREE, freshRequest.second.action)
@@ -373,7 +448,7 @@ class WorkspaceExportLifecycleAndroidTest {
             selectFile("first.txt")
             compose.onNodeWithText("retry.txt").performScrollTo().performClick()
             compose.onNodeWithText(compose.activity.getString(R.string.workspace_export_selected, 2)).assertIsDisplayed()
-            compose.onNodeWithText(compose.activity.getString(R.string.common_export)).performClick()
+            compose.onNodeWithContentDescription(compose.activity.getString(R.string.common_export)).performClick()
             val launched = picker.launches.single()
             assertEquals(Intent.ACTION_OPEN_DOCUMENT_TREE, launched.second.action)
             control("grant")

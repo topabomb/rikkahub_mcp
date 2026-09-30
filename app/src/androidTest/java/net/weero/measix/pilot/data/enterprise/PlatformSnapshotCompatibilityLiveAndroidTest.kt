@@ -116,12 +116,13 @@ class PlatformSnapshotCompatibilityLiveAndroidTest {
                 val failure = try { block(); null }
                 catch (cancelled: CancellationException) { throw cancelled }
                 catch (error: Exception) { error }
-                assertNotNull("Unsupported snapshot must be rejected", failure)
-                val typed = generateSequence<Throwable>(failure) { it.cause }
-                    .filterIsInstance<EnterpriseSnapshotCompatibilityException>().firstOrNull()
-                assertNotNull("Rejection must preserve typed compatibility evidence", typed)
-                assertTrue(requireNotNull(typed).receivedSchemas.contains(input.getLong("rejectedSchema")))
-                assertEquals("enterprise_configuration_version_unsupported", typed.reason)
+                assertNotNull("Unsupported snapshot must remain rejected until manual synchronization", failure)
+                assertEquals("platform_runtime_synchronization_required", (failure as EnterpriseConfigurationException).reason)
+                val retained = requireNotNull(synchronization.status.value?.failure)
+                assertTrue(failure.message.orEmpty().contains(retained.diagnostic))
+                assertTrue(retained.diagnostic.contains("enterprise_configuration_version_unsupported"))
+                assertTrue(retained.diagnostic.contains("snapshot schemas"))
+                assertTrue(retained.diagnostic.contains(input.getLong("rejectedSchema").toString()))
             }
 
             if (scenario == "reject") {

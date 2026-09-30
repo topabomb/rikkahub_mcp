@@ -84,8 +84,8 @@ fun FileTextEditor(
         Column(
             Modifier.fillMaxWidth()
                 .then(if (fillViewport) Modifier.weight(1f) else Modifier)
-                .border(BorderStroke(1.dp, borderColor), MaterialTheme.shapes.extraSmall)
-                .padding(12.dp),
+                .then(if (fillViewport) Modifier else Modifier.border(BorderStroke(1.dp, borderColor), MaterialTheme.shapes.extraSmall))
+                .padding(if (fillViewport) 8.dp else 12.dp),
             verticalArrangement = Arrangement.spacedBy(4.dp),
         ) {
             label?.let {

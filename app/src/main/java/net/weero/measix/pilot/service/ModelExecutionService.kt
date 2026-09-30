@@ -236,15 +236,14 @@ internal class ModelExecutionService(
         }
     }
 
-    /** The original owner stops and releases outside request/admission locks; no failed request is replayed. */
+    /** The original owner stops and releases outside request/admission locks; configuration recovery is explicit. */
     private fun barrier(access: RealmAccess, revoke: () -> Unit, stop: suspend () -> Unit): () -> Unit = {
         revoke()
         if (access is RealmAccess.Enterprise) appScope.launch {
             try {
                 stop()
-                synchronization.synchronize(access)
             } catch (cancelled: CancellationException) { throw cancelled }
-            catch (error: Exception) { android.util.Log.e("ModelExecutionService", "Model barrier cleanup or synchronization failed", error) }
+            catch (error: Exception) { android.util.Log.e("ModelExecutionService", "Model barrier cleanup failed", error) }
         }
     }
 

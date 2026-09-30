@@ -60,8 +60,8 @@ class RemoteWorkspaceLiveAndroidTest {
                     check(initial.session == null && initial.pendingEnrollment == null && initial.lastIdentity == null) {
                         "remote_workspace_live_requires_unbound_test_device"
                     }
-                    // Exercise the real enrollment owner. Startup recovery may synchronize a published
-                    // snapshot concurrently; only the unpublished fixture requires no Applied state.
+                    // Exercise the real enrollment owner; synchronize the deployed publication explicitly.
+                    // Only the unpublished fixture requires no Applied state.
                     // Opt-in material already confirms its origin.
                     val platform = koin.get<PlatformEnterpriseService>()
                     val access = platform.enroll(EnrollmentMaterialParser().parse(input.getString("enrollment")),
@@ -80,7 +80,7 @@ class RemoteWorkspaceLiveAndroidTest {
                     }
                     val before = requireNotNull(sessions.readPresentation().selection)
                     // No prior views or resources exist on this unbound test device. Select through
-                    // the Session owner here without scheduling configuration in the application switch.
+                    // the Session owner here; realm selection does not synchronize configuration.
                     if (before.access != access) sessions.switchRealm(RealmSwitchRequest(before, access)) {}
                     var selection = requireNotNull(sessions.readPresentation().selection)
                     var opened = remote.open(selection).also { handle = it }

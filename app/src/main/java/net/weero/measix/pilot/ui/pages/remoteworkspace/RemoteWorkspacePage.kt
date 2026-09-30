@@ -55,6 +55,7 @@ import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.ArrowLeft01
 import me.rerere.hugeicons.stroke.Add01
 import me.rerere.hugeicons.stroke.ArrowRight01
+import me.rerere.hugeicons.stroke.SquareArrowUpRight
 import me.rerere.hugeicons.stroke.Folder01
 import me.rerere.hugeicons.stroke.MoreVertical
 import me.rerere.hugeicons.stroke.Refresh
@@ -63,6 +64,8 @@ import me.rerere.hugeicons.stroke.Cancel01
 import me.rerere.hugeicons.stroke.Tick02
 import me.rerere.hugeicons.stroke.File02
 import me.rerere.hugeicons.stroke.FileEdit
+import me.rerere.hugeicons.stroke.FloppyDisk
+import me.rerere.hugeicons.stroke.Download01
 import me.rerere.hugeicons.stroke.Image01
 import me.rerere.hugeicons.stroke.Pdf01
 import net.weero.measix.pilot.R
@@ -74,6 +77,7 @@ import net.weero.measix.pilot.ui.components.files.FileRow
 import net.weero.measix.pilot.ui.components.files.PdfPreview
 import net.weero.measix.pilot.ui.components.richtext.RestrictedMarkdown
 import net.weero.measix.pilot.ui.components.ui.FileTextEditor
+import net.weero.measix.pilot.ui.components.ui.Tooltip
 import net.weero.measix.pilot.ui.components.ui.ImagePreviewDialog
 import net.weero.measix.pilot.ui.context.LocalNavController
 import net.weero.measix.pilot.utils.fileSizeToString
@@ -273,12 +277,16 @@ internal fun RemoteWorkspacePage(selection: RealmSelection?, vm: RemoteWorkspace
                 if (selected.isEmpty() && filtering) IconButton({ filter = ""; filtering = false; focus.clearFocus(); keyboard?.hide() }) {
                     Icon(HugeIcons.Cancel01, stringResource(R.string.common_cancel))
                 }
+                if (selected.isNotEmpty()) Tooltip(tooltip = { Text(stringResource(R.string.remote_workspace_download)) }) {
+                    IconButton({ export(selectedFiles) }, enabled = !state.running && !state.loading &&
+                        selectedFiles.isNotEmpty() && selectedFiles.none { it.directory }) {
+                        Icon(HugeIcons.Download01, stringResource(R.string.remote_workspace_download))
+                    }
+                }
                 Box {
                     IconButton({ menu = true }, modifier = Modifier.testTag("remote-browser-menu")) { Icon(HugeIcons.MoreVertical, stringResource(R.string.more_options)) }
                     DropdownMenu(menu, { menu = false }) {
                         if (selected.isNotEmpty()) {
-                            DropdownMenuItem(text = { Text(stringResource(R.string.remote_workspace_download)) },
-                                enabled = !state.running && selectedFiles.isNotEmpty() && selectedFiles.none { it.directory }, onClick = { menu = false; export(selectedFiles) })
                             for ((label, action) in listOf(R.string.remote_workspace_move to RemoteFileAction.MOVE, R.string.remote_workspace_copy to RemoteFileAction.COPY)) {
                                 DropdownMenuItem(text = { Text(stringResource(label)) }, enabled = !state.running && selectedFiles.isNotEmpty() && selectedFiles.all { it.directory || it.versioned },
                                     onClick = { menu = false; state.handle?.let { folder = FolderPrompt(label, it, selectedFiles, action) } })
@@ -751,6 +759,9 @@ private fun RemoteFilePreview(file: RemoteFile, handle: RemoteWorkspaceHandle, v
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val document = editorSession.document
+    val density = LocalDensity.current
+    val compactToolbar = with(density) { LocalWindowInfo.current.containerSize.height.toDp() < 480.dp } ||
+        WindowInsets.ime.getBottom(density) > 0
     var pdf by remember(file, handle) { mutableStateOf<File?>(null) }
     var error by remember(file, handle) { mutableStateOf<String?>(null) }
     var loading by remember(file, handle) { mutableStateOf(document == null) }
@@ -810,7 +821,7 @@ private fun RemoteFilePreview(file: RemoteFile, handle: RemoteWorkspaceHandle, v
         val source = remember(file, handle) { vm.service.imageSource(handle, file) }
         ImagePreviewDialog(listOf(source), onDismissRequest = onClose,
             onInfoRetry = { vm.service.refresh(handle.selection) }, extraActions = listOf(
-            net.weero.measix.pilot.ui.components.ui.ImagePreviewAction(HugeIcons.ArrowRight01,
+            net.weero.measix.pilot.ui.components.ui.ImagePreviewAction(HugeIcons.SquareArrowUpRight,
                 stringResource(R.string.remote_workspace_open_external)) { _, _ -> if (!state.running) onShare(true) },
         ), overlay = {
             if (state.running) Surface {
@@ -825,9 +836,15 @@ private fun RemoteFilePreview(file: RemoteFile, handle: RemoteWorkspaceHandle, v
     Scaffold(topBar = { TopAppBar(title = { Text(file.name, maxLines = 1, overflow = TextOverflow.Ellipsis) },
         navigationIcon = { IconButton({ close() }, enabled = !saving) { Icon(HugeIcons.ArrowLeft01, stringResource(R.string.back)) } },
         actions = {
-            if (document != null && !editing) TextButton({ editorSession.editing = true }, enabled = !state.running && !loading) { Text(stringResource(R.string.edit)) }
-            if (editing) TextButton({ save(file.path) }, enabled = !state.running && !loading && document?.file?.versioned == true && result?.outcome != RemoteOutcome.UNKNOWN) {
-                Text(stringResource(R.string.remote_workspace_save_close))
+            if (document != null && !editing) Tooltip(tooltip = { Text(stringResource(R.string.edit)) }) {
+                IconButton({ editorSession.editing = true }, enabled = !state.running && !loading) {
+                    Icon(HugeIcons.FileEdit, stringResource(R.string.edit))
+                }
+            }
+            if (editing) Tooltip(tooltip = { Text(stringResource(R.string.remote_workspace_save_close)) }) {
+                IconButton({ save(file.path) }, enabled = !state.running && !loading && document?.file?.versioned == true && result?.outcome != RemoteOutcome.UNKNOWN) {
+                    Icon(HugeIcons.FloppyDisk, stringResource(R.string.remote_workspace_save_close))
+                }
             }
             Box {
             IconButton({ actions = true }, enabled = !state.running) { Icon(HugeIcons.MoreVertical, stringResource(R.string.more_options)) }
@@ -840,8 +857,10 @@ private fun RemoteFilePreview(file: RemoteFile, handle: RemoteWorkspaceHandle, v
                 DropdownMenuItem(text = { Text(stringResource(R.string.common_share)) }, onClick = { actions = false; onShare(false) })
                 DropdownMenuItem(text = { Text(stringResource(R.string.remote_workspace_open_external)) }, onClick = { actions = false; onShare(true) })
             }
-        } }) }) { padding ->
-        Column(Modifier.fillMaxSize().padding(padding).padding(horizontal = 12.dp, vertical = 4.dp).imePadding(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        } }, expandedHeight = if (compactToolbar) 48.dp else TopAppBarDefaults.TopAppBarExpandedHeight) }) { padding ->
+        Column(Modifier.fillMaxSize().padding(padding)
+            .padding(horizontal = if (document != null && (editing || !markdown)) 0.dp else 12.dp, vertical = 4.dp)
+            .imePadding(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             if (loading) LinearProgressIndicator(Modifier.fillMaxWidth())
             if (state.running) TransferStatus(state, vm::cancel)
             val unavailable = !loading && document == null && pdf == null

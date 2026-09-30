@@ -72,7 +72,7 @@ Gateway 使用开关只影响新 interaction；在途执行仍复验原 Session�
 原 generation 与 interaction headers 来自捕获的 binding owner，私有包不能覆盖这些协议头。
 受管连接失败保留异常类型、原始 message/detail 和 cause；`McpStatus.Error` 使用 `userVisibleDiagnostic` 与脱敏堆栈供诊断。仅删除凭据、令牌和认证字段，不能用通用连接错误替代实际 HTTP 状态或底层原因。`McpToolCallExecutor` 继续携带原异常，取消保持传播。
 POST 与通知/恢复 GET 都解析有效 `428 managed_snapshot_required`，先封闭该 Runtime 的连接/调用准入，随后由原 `TurnFinalizer.stopInteraction`
-按 Runtime/turnId 捕获当前 worker、提交终态并等待租约清理，成功后才走既有同步服务。
+按 Runtime/turnId 捕获当前 worker、提交终态并等待租约清理；随后由用户在空间页手动同步配置，barrier 不自动下载 Snapshot。
 暂停已完成的 worker 和 CONTINUE 后的新 worker 都执行上述终止与清理；不等待过时的 START Job，也不停止后续新 turn。
 
 ### 传输与完整目录解码

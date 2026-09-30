@@ -5,11 +5,13 @@ import io.mockk.coVerify
 import io.mockk.every
 import io.mockk.mockk
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.test.runCurrent
 import me.rerere.ai.provider.ProviderManager
 import me.rerere.ai.provider.RequestCredentials
 import me.rerere.ai.provider.ModelType
@@ -18,6 +20,7 @@ import net.weero.measix.pilot.AppScope
 import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.datastore.SettingsStore
 import net.weero.measix.pilot.data.enterprise.EnterpriseExecution
+import net.weero.measix.pilot.data.enterprise.ManagedSnapshotRequired
 import net.weero.measix.pilot.data.enterprise.EnterpriseSessionController
 import net.weero.measix.pilot.data.enterprise.PlatformAccessToken
 import net.weero.measix.pilot.data.enterprise.RealmAccess
@@ -108,6 +111,66 @@ class ModelExecutionServiceImageTest {
             assertEquals(ModelType.IMAGE, snapshot.model.type)
         } finally {
             owner?.release()
+            appScope.cancel()
+        }
+    }
+
+    @Test fun `managed image barrier cancels original worker and awaits owner cleanup without synchronizing or replaying`() = runTest {
+        val appScope = AppScope(StandardTestDispatcher(testScheduler))
+        val sessions = EnterpriseSessionController(enterpriseTestStore(temporary.newFolder()))
+        val packet = exampleEnterprisePackage()
+        val available = sessions.enrollFixture(packet)
+        val selection = requireNotNull(sessions.readPresentation().selection)
+        val access = selection.access as RealmAccess.Enterprise
+        val settings = mockk<SettingsStore>()
+        every { settings.userSettings } returns MutableStateFlow(Settings())
+        installExecutionConfigurationFixture(settings)
+        val synchronization = mockk<EnterpriseSynchronizationService>()
+        coEvery { synchronization.prepareExecution(access) } returns requireNotNull(available.manifest.applied)
+        val platform = mockk<PlatformEnterpriseService>()
+        coEvery { platform.accessToken(access.sessionId, any()) } returns PlatformAccessToken("fixture-token", Long.MAX_VALUE)
+        coEvery { platform.managedRuntimeFailure(access, any()) } coAnswers { secondArg() }
+        every { platform.runtimeCompleted(access) } returns Unit
+        val service = ModelExecutionService(settings, sessions, ApplicationRecoveryGate().apply { ready() },
+            mockk(), appScope, synchronization, platform)
+        val worker = Job()
+        val cleanupStarted = CompletableDeferred<Unit>()
+        val finishCleanup = CompletableDeferred<Unit>()
+        val cleanupFinished = CompletableDeferred<Unit>()
+        var owner: ModelExecutionLease? = null
+        var calls = 0
+        try {
+            val snapshot = service.capturePageImage(selection, worker, packet.identity.reference(packet.configuration.imageGenerators.single().id),
+                stopRequest = {
+                    cleanupStarted.complete(Unit)
+                    finishCleanup.await()
+                    requireNotNull(owner).release()
+                    cleanupFinished.complete(Unit)
+                }, bindOwner = { owner = it })
+            val failure = runCatching { snapshot.requests.execute<Unit> {
+                calls++
+                throw ManagedSnapshotRequired(packet.configuration.generation + 1, "req_manual_sync")
+            } }.exceptionOrNull()
+            assertTrue(generateSequence(failure) { it.cause }.any { it is ManagedSnapshotRequired })
+            assertTrue(worker.isCancelled)
+            runCurrent()
+            assertTrue(cleanupStarted.isCompleted)
+            assertFalse(cleanupFinished.isCompleted)
+            val replay = runCatching { snapshot.requests.execute { calls++ } }.exceptionOrNull()
+            assertEquals("model_execution_lease_closed", replay?.message)
+            assertEquals(1, calls)
+            coVerify(exactly = 0) { synchronization.synchronize(any()) }
+
+            finishCleanup.complete(Unit)
+            cleanupFinished.await()
+            assertTrue(cleanupFinished.isCompleted)
+            coVerify(exactly = 0) { synchronization.synchronize(any()) }
+            assertEquals(available.manifest.applied, (sessions.state.value as net.weero.measix.pilot.data.enterprise.EnterpriseState.Available).manifest.applied)
+        } finally {
+            finishCleanup.complete(Unit)
+            runCurrent()
+            owner?.release()
+            worker.cancel()
             appScope.cancel()
         }
     }

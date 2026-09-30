@@ -104,7 +104,7 @@ Android v4/v5 的唯一 wire 来源为 Core 导出的 `contracts/platform/client
 
 `EnterpriseExecution.Platform.snapshotSchemaVersion` 保存下载时验证的网络版本，沿原 `StoredEnterpriseExecution` 私有 payload 持久化；历史文件缺失时为 null，不能根据当前 Discovery、字段形状或客户端版本补造。`PlatformEnterpriseService.synchronize` 仅在缓存原版本同时受客户端和最新 Bootstrap 支持时携带 ETag，并允许 304 复用及上报 Applied；已知 v4/v5 均适用。未知版本或服务端不再支持的缓存发起原 generation 的无条件完整下载；异常 304 由 `PlatformControlClient.snapshot` 以 `snapshot_304_without_cache` 拒绝，保全原 Applied，不循环重试或伪造版本。完整响应校验后沿原发布事务保存已验证版本；v4 升级为含开场的 v5 由服务端发布新 generation/release，原发布 hash 不改写。
 
-`EnterpriseSynchronizationService.prepareExecution` 查询 Core Managed State；仅在非零 generation、READY、版本一致且未阻断时，Session owner 才签发执行 lease。版本缺失或不同可通过同一同步入口更新后再查，不能用本机缓存替代权威检查。请求若收到 `ManagedSnapshotRequired`，原 lease 永久关闭，等待原任务停止和释放后再同步；旧请求不重放，也不因新配置到达而复活。
+`EnterpriseSynchronizationService.prepareExecution` 查询 Core Managed State；仅在非零 generation、READY、版本一致且未阻断时，Session owner 才签发执行 lease。缺少配置、版本不同或 Core 要求同步时拒绝本次执行，保留原 Applied，提示用户在空间页手动同步；执行准入不下载或发布 Snapshot。本机缓存足以呈现目录和历史，不代替权威执行检查。请求若收到 `ManagedSnapshotRequired`，原 lease 永久关闭，等待原任务停止和资源释放；更新配置由用户显式触发，旧请求不重放，也不因新配置到达而复活。
 
 #### 配置兼容性与空间导航
 
@@ -113,8 +113,10 @@ Android v4/v5 的唯一 wire 来源为 Core 导出的 `contracts/platform/client
 - `EnterpriseSessionController.readPresentation` 的 `canEnterEnterprise` 与 `switchRealm` 共用数据访问规则。有效身份在 CONFIGURATION_PENDING 也可选择企业空间；`EnterpriseAppliedStore` 保存并恢复此选择，无需改变 manifest 格式。个人空间不依赖企业网络配置；过期、撤销、关闭和跨主体限制继续生效。
 - `EnterpriseSnapshotCompatibilityException` 携带服务端版本与客户端支持集合；空集合或混合不匹配不误报客户端过旧。Snapshot 成功响应超过 4 MiB 上限，以及 `validateSnapshotContent` 内的解码、身份/ETag、映射校验失败，均标记为 `EnterpriseSnapshotContentException` 并保留 cause。真实读流失败仍为网络错误；HTTP、持久化错误与取消不冒充版本不兼容，其他接口不沿用 Snapshot 的内容错误分类。
 - `EnterpriseSynchronizationService` 是共享同步及其瞬态结果的唯一来源，结果绑定 `RealmAccess.Enterprise`。同一 Session 去重，取消等待者不撤销共享工作；主动取消传播并保留此前失败。发布结果在 StateFlow CAS 中复验 Session，旧任务不得覆盖新主体状态。此结果不是第二份配置或执行许可，不另落盘。
-- Native 同步与接入后的配置同步消费同次 `EnterpriseSynchronizationCommandResult`：成功、失败已呈现或已被替代；失败不再重复发布通用错误或误报接入资料无效。执行调用仍传播原异常，取消不转成命令失败。
-- 启动恢复、手动同步、进入企业空间及执行前补同步复用上述链。空间切换成功后异步同步，不以远端下载成功作为导航条件；兼容性失败保留绑定、Applied 和历史。执行前若已观察到同步失败，须先经同一入口重试，再进行原 Core Managed State/generation 准入；已有 READY 或缓存代际不能绕过失败。
+- Native 同步与接入后的配置同步消费同次 `EnterpriseSynchronizationCommandResult`：成功、失败已呈现或已被替代；失败不再重复发布通用错误或误报接入资料无效。主动同步保留原异常；执行准入遇到本 Session 已观察到的同步失败时，以 `platform_runtime_synchronization_required` 和原完整诊断拒绝，等待用户手动恢复，取消不转成命令失败。
+- 配置同步触发点只有原生空间页的显式同步、Portal 的显式 `refresh` 命令、用户确认首次接入或重新登录后的初始化，以及启动时刚完成同一 Session 未完成 Enrollment Bootstrap 后的一次初始化。初始化失败或配置尚未发布时不自动重试；用户可在空间页手动同步。
+- Pending Enrollment 的 Bootstrap 恢复诊断绑定原 Session，只在同一 pending enrollment 或已完成的同一 Session 下呈现。首次初始化的同步失败仍由共享同步投影呈现；Session 被替换后的准入拒绝只记录原异常，不能写入新 Session 的接入恢复错误。
+- 已有会话启动恢复、空间切换、页面进入、前后台切换、Portal 打开或关闭、执行准入及模型/MCP/语音的代际 barrier 均不自动同步 Snapshot。启动恢复从 Applied manifest 保留 Session phase、绑定和配置；有效 READY 会话在 Core state 一致时可正常签发 lease。按需刷新凭据、Bootstrap 身份校验、工作区状态和预算查询仍由各自 owner 执行，不属于配置同步。已观察到的同步失败只由成功的显式同步清除，READY 或缓存代际不能绕过本 Session 的失败。
 - `EnterpriseApplicationService` 投影同步状态；企业页在原连接区提供简短原因，技术诊断默认折叠且可选择复制，抽屉当前企业入口和企业聊天顶部只增加必要的短提示，点击进入同一企业页面；个人会话不显示该企业异常。较新格式提示更新应用，过旧格式提示管理员处理，非法配置与网络错误分别提示；不捏造最低应用版本或下载地址。成功同步清除对应 Session 的失败，不清库或重新接入。
 
 ### 企业接入资料与身份建立

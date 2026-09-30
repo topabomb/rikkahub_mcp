@@ -154,10 +154,10 @@ class RemoteWorkspacePageAndroidTest {
             assertNull((view as EditText).keyListener)
             assertEquals("original", view.text.toString())
         }
-        compose.onNodeWithText(text(R.string.remote_workspace_save_close)).assertDoesNotExist()
-        compose.onNodeWithText(text(R.string.edit)).performClick()
+        compose.onNodeWithContentDescription(text(R.string.remote_workspace_save_close)).assertDoesNotExist()
+        compose.onNodeWithContentDescription(text(R.string.edit)).performClick()
         onView(isAssignableFrom(EditText::class.java)).perform(replaceText("preserve my changes"), closeSoftKeyboard())
-        compose.onNodeWithText(text(R.string.remote_workspace_save_close)).performClick()
+        compose.onNodeWithContentDescription(text(R.string.remote_workspace_save_close)).performClick()
         compose.waitUntil(5_000) { f.vm.state.value.save?.result?.outcome == RemoteOutcome.FAILED }
         onView(isAssignableFrom(EditText::class.java)).check(matches(withText("preserve my changes")))
         capture("remote-workspace-editor-conflict.png")
@@ -195,7 +195,7 @@ class RemoteWorkspacePageAndroidTest {
             RemoteOperationResult("copied.txt", RemoteOutcome.FAILED, "HTTP 409 file_version_conflict")
         f.show()
         compose.onNodeWithText(file.name).performClick()
-        compose.onNodeWithText(text(R.string.edit)).performClick()
+        compose.onNodeWithContentDescription(text(R.string.edit)).performClick()
         onView(isAssignableFrom(EditText::class.java)).perform(replaceText("retained draft"), closeSoftKeyboard())
         compose.onNodeWithContentDescription(text(R.string.more_options)).performClick()
         compose.onNodeWithText(text(R.string.remote_workspace_save_as)).performClick()
@@ -313,7 +313,7 @@ class RemoteWorkspacePageAndroidTest {
         val restoration = StateRestorationTester(compose)
         f.show(restoration)
         compose.onNodeWithText(file.name).performClick()
-        compose.onNodeWithText(text(R.string.edit)).performClick()
+        compose.onNodeWithContentDescription(text(R.string.edit)).performClick()
         onView(isAssignableFrom(EditText::class.java)).perform(replaceText("draft never submitted"), closeSoftKeyboard())
         val owner = f.vm.state.value.editorSession
         assertNotNull(owner)
@@ -330,7 +330,7 @@ class RemoteWorkspacePageAndroidTest {
             assertEquals("draft never submitted", (view as EditText).text.toString())
             assertNotNull(view.keyListener)
         }
-        compose.onNodeWithText(text(R.string.remote_workspace_save_close)).assertIsDisplayed()
+        compose.onNodeWithContentDescription(text(R.string.remote_workspace_save_close)).assertIsDisplayed()
         coVerify(exactly = 1) { f.service.readText(f.handle, file) }
         coVerify(exactly = 0) { f.service.save(any(), any(), any(), any()) }
         compose.onNodeWithContentDescription(text(R.string.back)).performClick()
@@ -347,7 +347,7 @@ class RemoteWorkspacePageAndroidTest {
         val f = Fixture()
         f.show()
         compose.onNodeWithText(file.name).performClick()
-        compose.onNodeWithText(text(R.string.edit)).performClick()
+        compose.onNodeWithContentDescription(text(R.string.edit)).performClick()
         onView(isAssignableFrom(EditText::class.java)).perform(replaceText("private unsaved draft"), closeSoftKeyboard())
         compose.runOnIdle {
             assertEquals("private unsaved draft", f.vm.state.value.editorSession!!.editor.snapshot())
@@ -361,7 +361,7 @@ class RemoteWorkspacePageAndroidTest {
             assertNull(f.vm.state.value.save)
         }
         compose.onNodeWithText(text(R.string.remote_workspace_revoked)).assertIsDisplayed()
-        compose.onNodeWithText(text(R.string.remote_workspace_save_close)).assertDoesNotExist()
+        compose.onNodeWithContentDescription(text(R.string.remote_workspace_save_close)).assertDoesNotExist()
         coVerify(exactly = 0) { f.service.save(any(), any(), any(), any()) }
     }
 
@@ -466,9 +466,11 @@ class RemoteWorkspacePageAndroidTest {
         val valid = java.io.File(compose.activity.cacheDir, "valid-preview.pdf")
         val document = android.graphics.pdf.PdfDocument()
         try {
-            val page = document.startPage(android.graphics.pdf.PdfDocument.PageInfo.Builder(300, 400, 1).create())
-            page.canvas.drawText("PDF recovered", 20f, 40f, android.graphics.Paint())
-            document.finishPage(page)
+            repeat(2) { index ->
+                val page = document.startPage(android.graphics.pdf.PdfDocument.PageInfo.Builder(300, 400, index + 1).create())
+                page.canvas.drawText("PDF recovered ${index + 1}", 20f, 40f, android.graphics.Paint())
+                document.finishPage(page)
+            }
             valid.outputStream().use(document::writeTo)
         } finally { document.close() }
         coEvery { f.service.list(f.handle, "") } returns RemoteDirectory("", listOf(pdf), null, null)
@@ -482,7 +484,13 @@ class RemoteWorkspacePageAndroidTest {
             compose.onNodeWithText(text(R.string.remote_workspace_details)).performClick()
             compose.onNodeWithText("IOException", substring = true).assertIsDisplayed()
             compose.onNodeWithText(text(R.string.enterprise_budget_refresh)).performClick()
-            compose.waitUntil(10_000) { compose.onNodeWithText("1 / 1").isDisplayed() }
+            compose.waitUntil(10_000) { compose.onNodeWithText("1 / 2").isDisplayed() }
+            compose.onNodeWithContentDescription(text(R.string.file_preview_previous_page)).assertIsNotEnabled()
+            compose.onNodeWithContentDescription(text(R.string.file_preview_next_page)).performClick()
+            compose.onNodeWithText("2 / 2").assertIsDisplayed()
+            compose.onNodeWithContentDescription(text(R.string.file_preview_next_page)).assertIsNotEnabled()
+            compose.onNodeWithContentDescription(text(R.string.file_preview_previous_page)).performClick()
+            compose.onNodeWithText("1 / 2").assertIsDisplayed()
             compose.onNodeWithText(text(R.string.remote_workspace_operation_failed)).assertDoesNotExist()
             coVerifyOrder { f.service.previewCopy(f.handle, pdf); f.service.refresh(f.selection); f.service.previewCopy(f.handle, pdf) }
             verify(exactly = 1) { f.service.releaseCopyLater(broken) }

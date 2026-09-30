@@ -68,14 +68,19 @@ class EnterpriseSynchronizationServiceTest {
             assertEquals(EnterpriseSynchronizationIssue.FAILED, status.failure?.issue)
             assertTrue(status.failure?.diagnostic.orEmpty().contains("source detail"))
             val rejected = runCatching { f.service.prepareExecution(access) }.exceptionOrNull()
-            assertTrue(generateSequence(rejected) { it.cause }.any { it === original })
-            coVerify(exactly = 0) { f.platform.prepareExecution(access, any()) }
+            assertEquals("platform_runtime_synchronization_required", (rejected as EnterpriseConfigurationException).reason)
+            assertTrue(rejected.message.orEmpty().contains("source detail"))
+            coVerify(exactly = 1) { f.platform.synchronize(access) }
+            coVerify(exactly = 0) { f.platform.prepareExecution(access) }
 
             val snapshot = f.current()
             coEvery { f.platform.synchronize(access) } returns snapshot
             assertSame(snapshot, f.service.synchronize(access))
             assertEquals(EnterpriseSynchronizationStatus(access, syncing = false), f.service.status.value)
-            coVerify(exactly = 3) { f.platform.synchronize(access) }
+            coEvery { f.platform.prepareExecution(access) } returns requireNotNull(snapshot.manifest.applied)
+            assertEquals(snapshot.manifest.applied, f.service.prepareExecution(access))
+            coVerify(exactly = 2) { f.platform.synchronize(access) }
+            coVerify(exactly = 1) { f.platform.prepareExecution(access) }
         } finally { f.scope.cancel() }
     }
 
@@ -104,6 +109,29 @@ class EnterpriseSynchronizationServiceTest {
                     f.service.synchronizeForPresentation(access))
                 assertNull(f.service.status.value?.failure)
             }
+        } finally { f.scope.cancel() }
+    }
+
+    @Test fun `a cached synchronization failure cannot misdiagnose a revoked original session or block its replacement`() = runTest {
+        val f = Fixture(StandardTestDispatcher(testScheduler))
+        try {
+            val original = f.enroll()
+            coEvery { f.platform.synchronize(original) } throws IOException("original_sync_failure")
+            assertTrue(runCatching { f.service.synchronize(original) }.isFailure)
+            f.sessions.finishExit(f.sessions.beginInvalidation(original, EnterpriseExitReason.AUTHORIZATION_REVOKED))
+            val replacement = f.enroll()
+            assertNotEquals(original, replacement)
+            val revoked = runCatching { f.service.prepareExecution(original) }.exceptionOrNull() as EnterpriseConfigurationException
+            assertEquals("enterprise_data_access_unavailable", revoked.reason)
+            assertEquals(original, f.service.status.value?.access)
+            coVerify(exactly = 1) { f.platform.synchronize(any()) }
+            coVerify(exactly = 0) { f.platform.prepareExecution(original) }
+
+            val version = requireNotNull(f.current().manifest.applied)
+            coEvery { f.platform.prepareExecution(replacement) } returns version
+            assertEquals(version, f.service.prepareExecution(replacement))
+            coVerify(exactly = 1) { f.platform.prepareExecution(replacement) }
+            coVerify(exactly = 1) { f.platform.synchronize(any()) }
         } finally { f.scope.cancel() }
     }
 

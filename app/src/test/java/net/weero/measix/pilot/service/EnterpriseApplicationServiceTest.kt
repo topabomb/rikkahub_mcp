@@ -35,6 +35,7 @@ class EnterpriseApplicationServiceTest {
             coEvery { this@mockk.selection } answers { current }
         }
         coEvery { sessions.readPresentation() } returns presentation
+        coEvery { sessions.pendingPlatformEnrollment() } returns null
         coEvery { platform.recoverPlatformAccess() } returns null
         val response = CompletableDeferred<net.weero.measix.pilot.data.enterprise.PlatformEnterpriseUpdateFeed>()
         coEvery { platform.recentUpdates(access) } coAnswers { response.await() }
@@ -106,6 +107,7 @@ class EnterpriseApplicationServiceTest {
         val context = mockk<PlatformSessionContext>()
         coEvery { context.platform.connection.origin } returns "https://old.example"
         coEvery { sessions.readPresentation() } returns presentation
+        coEvery { sessions.pendingPlatformEnrollment() } returns null
         coEvery { sessions.platformContext(access.sessionId) } returns context
         coEvery { platform.recoverPlatformAccess() } returns null
         val grantStarted = CompletableDeferred<Unit>()

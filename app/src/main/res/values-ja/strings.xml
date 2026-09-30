@@ -2051,4 +2051,7 @@
   <string name="markdown_table_download">ダウンロード</string>
   <string name="remote_workspace_invalid_name">パス区切り文字や予約名を含まない有効な名前を入力してください。</string>
   <string name="remote_workspace_save_as_new_name">元のファイルを残すには、別の名前を使用してください。</string>
+  <string name="file_preview_previous_page">前のページ</string>
+  <string name="file_preview_next_page">次のページ</string>
+  <string name="file_browser_parent_folder">親フォルダー</string>
 </resources>

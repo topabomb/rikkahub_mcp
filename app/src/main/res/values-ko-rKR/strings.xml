@@ -2051,4 +2051,7 @@
   <string name="markdown_table_download">다운로드</string>
   <string name="remote_workspace_invalid_name">경로 구분자나 예약 이름이 없는 유효한 이름을 입력하세요.</string>
   <string name="remote_workspace_save_as_new_name">원본 파일을 유지하려면 다른 이름을 사용하세요.</string>
+  <string name="file_preview_previous_page">이전 페이지</string>
+  <string name="file_preview_next_page">다음 페이지</string>
+  <string name="file_browser_parent_folder">상위 폴더</string>
 </resources>

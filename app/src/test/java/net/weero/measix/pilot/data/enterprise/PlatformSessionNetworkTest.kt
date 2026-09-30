@@ -999,13 +999,17 @@ class PlatformSessionNetworkTest {
         val checks = AtomicInteger()
         val status = java.util.concurrent.atomic.AtomicReference("READY")
         val server = server {
-            checks.incrementAndGet()
-            assertEquals("/api/client/v1/managed/state", requestURI.path)
-            assertEquals(snapshot.managedGeneration.toString(), requestHeaders.getFirst("X-Measix-Applied-Managed-Generation"))
-            reply(200, """{"runtimeStatus":"${status.get()}","activeManagedGeneration":${snapshot.managedGeneration},"managedStateRevision":1,"syncRequired":false,"runtimeBlocked":${status.get() != "READY"}}""")
+            if (requestURI.path == "/api/client/v1/sessions/refresh") reply(200, fixture("refresh-response"))
+            else {
+                checks.incrementAndGet()
+                assertEquals("/api/client/v1/managed/state", requestURI.path)
+                assertEquals(snapshot.managedGeneration.toString(), requestHeaders.getFirst("X-Measix-Applied-Managed-Generation"))
+                reply(200, """{"runtimeStatus":"${status.get()}","activeManagedGeneration":${snapshot.managedGeneration},"managedStateRevision":1,"syncRequired":false,"runtimeBlocked":${status.get() != "READY"}}""")
+            }
         }
         try {
-            val first = owner(temporary.newFolder())
+            val root = temporary.newFolder()
+            val first = owner(root)
             val connection = PlatformConnection("http://127.0.0.1:${server.address.port}", PlatformWireCodec.decode(fixture("discovery")))
             val id = first.acceptPlatformEnrollment(first.beginPlatformEnrollment(), connection, PlatformWireCodec.decode(fixture("enrollment-response")))
             val access = first.completePlatformBootstrap(id, PlatformWireCodec.decode(fixture("bootstrap")))
@@ -1013,7 +1017,7 @@ class PlatformSessionNetworkTest {
             val candidate = PlatformSnapshotMapper.map(connection, input.session.identity, snapshot)
             val applied = first.synchronize(access, candidate)
             val platform = service(first)
-            repeat(2) { assertEquals(applied.manifest.applied, platform.prepareExecution(access) { fail("unexpected synchronization") }) }
+            repeat(2) { assertEquals(applied.manifest.applied, platform.prepareExecution(access)) }
             try { first.captureExecution(access); fail("platform lease issued without checked version") }
             catch (error: EnterpriseConfigurationException) { assertEquals("enterprise_configuration_changed_during_preflight", error.reason) }
             val lease = first.captureExecution(access, applied.manifest.applied)
@@ -1021,13 +1025,99 @@ class PlatformSessionNetworkTest {
             assertEquals(candidate.configuration, lease.configuration)
             assertTrue(lease.execution is EnterpriseExecution.Platform)
             status.set("DEGRADED")
-            try { platform.prepareExecution(access) { fail("unexpected synchronization") }; fail("degraded runtime admitted") }
+            try { platform.prepareExecution(access); fail("degraded runtime admitted") }
             catch (error: EnterpriseConfigurationException) { assertEquals("platform_runtime_degraded", error.reason) }
             assertEquals(3, checks.get())
             assertEquals(applied.configuration, (first.state.value as EnterpriseState.Available).configuration)
             lease.release()
             assertThrows(EnterpriseConfigurationException::class.java) { lease.execution }
+            status.set("READY")
+            val restored = owner(root)
+            restored.recover()
+            assertEquals(EnterpriseSessionPhase.READY, (restored.state.value as EnterpriseState.Available).manifest.phase)
+            assertEquals(applied.manifest.applied, service(restored).prepareExecution(access))
+            assertEquals(4, checks.get())
             Unit
+        } finally { server.stop(0) }
+    }
+
+    @Test fun `changed generation preflight only rejects and explicit synchronization restores execution`() = runBlocking {
+        val base = PlatformWireCodec.decode<PlatformManagedSnapshot>(fixture("v4-full"))
+        val bootstrap = PlatformWireCodec.decode<PlatformBootstrap>(fixture("bootstrap"))
+        val nextBody = JsonObject(PlatformWireCodec.json.parseToJsonElement(fixture("v4-full")).jsonObject + mapOf(
+            "managedGeneration" to JsonPrimitive(base.managedGeneration + 1),
+            "releaseId" to JsonPrimitive("rel_00000000-0000-4000-8000-000000000099"),
+        ) - "snapshotHash")
+        val hash = MessageDigest.getInstance("SHA-256").digest(nextBody.toString().toByteArray())
+            .joinToString("") { "%02x".format(it) }
+        val nextRaw = JsonObject(nextBody + ("snapshotHash" to JsonPrimitive("sha256:$hash"))).toString()
+        val next = PlatformWireCodec.decode<PlatformManagedSnapshot>(nextRaw)
+        val activeGeneration = AtomicReference(next.managedGeneration)
+        val appliedReported = AtomicBoolean(false)
+        val stateReads = AtomicInteger()
+        val bootstrapReads = AtomicInteger()
+        val snapshotReads = AtomicInteger()
+        val reports = AtomicInteger()
+        val server = server {
+            when (requestURI.path) {
+                "/api/client/v1/managed/state" -> {
+                    stateReads.incrementAndGet()
+                    reply(200, """{"runtimeStatus":"READY","activeManagedGeneration":${activeGeneration.get()},"managedStateRevision":2,"syncRequired":${!appliedReported.get()},"runtimeBlocked":${!appliedReported.get()}}""")
+                }
+                "/api/client/v1/bootstrap" -> {
+                    bootstrapReads.incrementAndGet()
+                    reply(200, PlatformWireCodec.json.encodeToString(bootstrap.copy(managedState = bootstrap.managedState.copy(
+                        activeManagedGeneration = next.managedGeneration, targetManagedGeneration = next.managedGeneration,
+                    ))))
+                }
+                "/api/client/v1/managed/snapshots/${next.managedGeneration}" -> {
+                    snapshotReads.incrementAndGet()
+                    responseHeaders.set("ETag", "\"${next.snapshotHash}\"")
+                    reply(200, nextRaw)
+                }
+                "/api/client/v1/managed/applied" -> {
+                    reports.incrementAndGet()
+                    assertEquals(PlatformManagedAppliedReport(next.managedGeneration, next.snapshotHash),
+                        PlatformWireCodec.decode<PlatformManagedAppliedReport>(requestBody.bufferedReader().readText()))
+                    appliedReported.set(true)
+                    sendResponseHeaders(204, -1)
+                }
+                else -> reply(404, "unexpected route")
+            }
+        }
+        try {
+            val sessions = owner(temporary.newFolder())
+            val connection = PlatformConnection("http://127.0.0.1:${server.address.port}", PlatformWireCodec.decode(fixture("discovery")))
+            val sessionId = sessions.acceptPlatformEnrollment(sessions.beginPlatformEnrollment(), connection,
+                PlatformWireCodec.decode(fixture("enrollment-response")))
+            val access = sessions.completePlatformBootstrap(sessionId, bootstrap)
+            val candidate = PlatformSnapshotMapper.map(connection, sessions.platformConfiguration(access).session.identity, base)
+            val old = sessions.synchronize(access, candidate)
+            val platform = service(sessions)
+            repeat(2) {
+                val rejected = runCatching { platform.prepareExecution(access) }.exceptionOrNull() as EnterpriseConfigurationException
+                assertEquals("platform_runtime_synchronization_required", rejected.reason)
+                assertTrue(rejected.message.orEmpty().contains("Applied generation=${base.managedGeneration}"))
+                assertEquals(old.manifest.applied, (sessions.state.value as EnterpriseState.Available).manifest.applied)
+            }
+            assertEquals(2, stateReads.get())
+            assertEquals(0, bootstrapReads.get())
+            assertEquals(0, snapshotReads.get())
+            assertEquals(0, reports.get())
+
+            val updated = platform.synchronize(access)
+            assertEquals(next.managedGeneration, updated.manifest.applied?.generation)
+            assertEquals(updated.manifest.applied, platform.prepareExecution(access))
+            assertEquals(3, stateReads.get())
+            assertEquals(1, bootstrapReads.get())
+            assertEquals(1, snapshotReads.get())
+            assertEquals(1, reports.get())
+
+            activeGeneration.set(0L)
+            val noConfiguration = runCatching { platform.prepareExecution(access) }.exceptionOrNull() as EnterpriseConfigurationException
+            assertEquals("enterprise_configuration_not_ready", noConfiguration.reason)
+            assertEquals(1, snapshotReads.get())
+            assertEquals(updated.manifest.applied, (sessions.state.value as EnterpriseState.Available).manifest.applied)
         } finally { server.stop(0) }
     }
 

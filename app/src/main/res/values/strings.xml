@@ -2059,4 +2059,7 @@
   <string name="markdown_table_download">Download</string>
   <string name="remote_workspace_invalid_name">Enter a valid name without path separators or reserved names.</string>
   <string name="remote_workspace_save_as_new_name">Use a different name to keep the original file.</string>
+  <string name="file_preview_previous_page">Previous page</string>
+  <string name="file_preview_next_page">Next page</string>
+  <string name="file_browser_parent_folder">Parent folder</string>
 </resources>

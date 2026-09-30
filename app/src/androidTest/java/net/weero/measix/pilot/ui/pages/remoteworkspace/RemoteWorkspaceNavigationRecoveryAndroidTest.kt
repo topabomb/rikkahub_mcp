@@ -164,7 +164,7 @@ class RemoteWorkspaceNavigationRecoveryAndroidTest {
 
         fun edit(text: String) {
             compose.onNodeWithText(file.name).performClick()
-            compose.onNodeWithText(label(R.string.edit)).performClick()
+            compose.onNodeWithContentDescription(label(R.string.edit)).performClick()
             onView(isAssignableFrom(EditText::class.java)).perform(replaceText(text), closeSoftKeyboard())
         }
 
@@ -238,7 +238,7 @@ class RemoteWorkspaceNavigationRecoveryAndroidTest {
         }
         compose.waitUntil(5_000) { !original.state.value.running }
         onView(isAssignableFrom(EditText::class.java)).check(matches(withText("submitted draft")))
-        compose.onNodeWithText(label(R.string.remote_workspace_save_close)).assertIsNotEnabled()
+        compose.onNodeWithContentDescription(label(R.string.remote_workspace_save_close)).assertIsNotEnabled()
         compose.runOnIdle {
             assertEquals(RemoteOutcome.UNKNOWN, original.state.value.save!!.result!!.outcome)
             assertEquals("submitted draft", original.state.value.save!!.text)

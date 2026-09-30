@@ -2051,4 +2051,7 @@
   <string name="markdown_table_download">下载</string>
   <string name="remote_workspace_invalid_name">请输入有效名称，不要包含路径分隔符或使用保留名称。</string>
   <string name="remote_workspace_save_as_new_name">请使用其他名称，以保留原文件。</string>
+  <string name="file_preview_previous_page">上一页</string>
+  <string name="file_preview_next_page">下一页</string>
+  <string name="file_browser_parent_folder">上级文件夹</string>
 </resources>

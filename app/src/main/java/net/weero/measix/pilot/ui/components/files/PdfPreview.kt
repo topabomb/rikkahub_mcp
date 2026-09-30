@@ -10,7 +10,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
+import me.rerere.hugeicons.HugeIcons
+import me.rerere.hugeicons.stroke.ArrowLeft01
+import me.rerere.hugeicons.stroke.ArrowRight01
+import net.weero.measix.pilot.R
 import com.jvziyaoyao.scale.image.viewer.ImageViewer
 import com.jvziyaoyao.scale.zoomable.zoomable.ZoomableGestureScope
 import com.jvziyaoyao.scale.zoomable.zoomable.rememberZoomableState
@@ -50,19 +55,37 @@ internal fun PdfPreview(file: File, modifier: Modifier = Modifier, onFailure: (T
         catch (error: Exception) { error.printStackTrace(); onFailure(error) }
         finally { rendered?.recycle() }
     }
-    Column(modifier, horizontalAlignment = Alignment.CenterHorizontally) {
+    BoxWithConstraints(modifier) {
+        val sideControls = maxWidth >= 600.dp && maxHeight < 480.dp
+        val controls = if (count == 0) 0.dp else 48.dp
+        val viewport = Modifier.fillMaxSize().padding(
+            end = if (sideControls) controls else 0.dp,
+            bottom = if (sideControls) 0.dp else controls,
+        )
         bitmap?.let { key(file, page) {
             val zoom = rememberZoomableState(Size(it.width.toFloat(), it.height.toFloat()))
             val scope = rememberCoroutineScope()
             DisposableEffect(zoom) { onDispose { zoom.cancel() } }
-            ImageViewer(Modifier.weight(1f).fillMaxWidth(), it.asImageBitmap(), zoom,
+            ImageViewer(viewport, it.asImageBitmap(), zoom,
                 detectGesture = ZoomableGestureScope(onDoubleTap = { offset -> scope.launch { zoom.toggleScale(offset) } }))
         } }
-            ?: Box(Modifier.weight(1f)) { CircularProgressIndicator() }
-        if (count > 0) Row(Modifier.padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
-            TextButton({ page-- }, enabled = page > 0) { Text("‹") }
-            Text("${page + 1} / $count")
-            TextButton({ page++ }, enabled = page + 1 < count) { Text("›") }
+            ?: Box(viewport, contentAlignment = Alignment.Center) { CircularProgressIndicator() }
+        if (count > 0) FlowRow(
+            Modifier.align(if (sideControls) Alignment.CenterEnd else Alignment.BottomCenter)
+                .then(if (sideControls) Modifier.width(48.dp) else Modifier.height(48.dp)),
+            maxItemsInEachRow = if (sideControls) 1 else 3,
+            horizontalArrangement = Arrangement.Center,
+            verticalArrangement = Arrangement.Center,
+        ) {
+            IconButton({ page-- }, enabled = page > 0) {
+                Icon(HugeIcons.ArrowLeft01, stringResource(R.string.file_preview_previous_page))
+            }
+            Box(Modifier.heightIn(min = 48.dp), contentAlignment = Alignment.Center) {
+                Text("${page + 1} / $count", style = MaterialTheme.typography.labelMedium)
+            }
+            IconButton({ page++ }, enabled = page + 1 < count) {
+                Icon(HugeIcons.ArrowRight01, stringResource(R.string.file_preview_next_page))
+            }
         }
     }
 }

@@ -147,7 +147,6 @@ val dataSourceModule = module {
         McpRuntimeCoordinator(
             settingsStore = get(),
             sessions = get(),
-            synchronization = get(),
             catalogStore = get(),
             appScope = get(),
             artifactStore = get(),

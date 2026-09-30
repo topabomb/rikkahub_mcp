@@ -2051,4 +2051,7 @@
   <string name="markdown_table_download">Скачать</string>
   <string name="remote_workspace_invalid_name">Введите допустимое имя без разделителей пути и зарезервированных имён.</string>
   <string name="remote_workspace_save_as_new_name">Используйте другое имя, чтобы сохранить исходный файл.</string>
+  <string name="file_preview_previous_page">Предыдущая страница</string>
+  <string name="file_preview_next_page">Следующая страница</string>
+  <string name="file_browser_parent_folder">Родительская папка</string>
 </resources>

@@ -43,9 +43,9 @@
 
 平台实时识别复用 `RealtimeAsrController` 的协议编码、PCM 采集和停止流程，`RealtimeAsrTransport` 只在内存传递完整平台握手请求。`SingleAttemptWebSocketFactory` 用公开 HTTP upgrade socket API 保留原 WebSocket 编解码器，在握手 follow-up 前拒绝失败响应；取消同时关闭原握手 Call 与 WebSocket。升级连接的 sink 累计实际写入字节，自动 pong 和关闭帧也计入平台上限。发送拥堵、超限及上游失败明确结束识别，不静默丢弃录音，不自动重连或重放。
 
-独立语音交互先经权威 Managed State 检查再冻结配置；工具朗读沿用父 turn 的上下文。平台租约以原 AppliedVersion 获取，请求前取得当前 Session 令牌并复验原语音 owner。模型与语音共用 `common.http.withExplicitRoute` 的完整地址、请求体上限、禁止自动重放和真实 HTTP 诊断；有效 428 仍由原语音 owner 终止与同步。播放器和文件识别的失败由应用提供 `userVisibleDiagnostic`，保留异常类型与 cause，不以通用语音失败替换。
+独立语音交互先经权威 Managed State 检查再冻结配置；缺少配置、版本不同或同步失败时拒绝本次操作，等待用户手动同步，不在录音或播放入口自动下载 Snapshot。工具朗读沿用父 turn 的上下文。平台租约以原 AppliedVersion 获取，请求前取得当前 Session 令牌并复验原语音 owner。模型与语音共用 `common.http.withExplicitRoute` 的完整地址、请求体上限、禁止自动重放和真实 HTTP 诊断；有效 428 仍由原语音 owner 终止与清理。播放器和文件识别的失败由应用提供 `userVisibleDiagnostic`，保留异常类型与 cause，不以通用语音失败替换。
 
-`EnterpriseSpeechTransport` 按平台 Snapshot 的协议编码 TTS 与 ASR 请求，注入原 generation/interaction；Runtime endpoint 与认证只归 platform execution transport。HTTP client 不重定向或自动重试。共享 `ManagedSnapshotRequired` 解析 428 barrier，严格 JSON 解码归 `StrictJsonValue`。应用 owner 在原 `RealmSelection` 下捕获资源和完整 AppliedVersion，队列/录音自行持有 execution lease 至实际清理完成。独立播放/录音创建交互，工具和主/子助手共用原 turn 的冻结语音上下文。完成事件携带原回复和该上下文，自动朗读不查询新 turn 的全局选择。428 永久终止原语音交互，分别终止父 turn、释放语音资源并同步配置，不重放；文件清理失败不能跳过父 turn 停止或同步。空间切换在 Session 锁内只撤销和停止硬件，锁外等待清理。
+`EnterpriseSpeechTransport` 按平台 Snapshot 的协议编码 TTS 与 ASR 请求，注入原 generation/interaction；Runtime endpoint 与认证只归 platform execution transport。HTTP client 不重定向或自动重试。共享 `ManagedSnapshotRequired` 解析 428 barrier，严格 JSON 解码归 `StrictJsonValue`。应用 owner 在原 `RealmSelection` 下捕获资源和完整 AppliedVersion，队列/录音自行持有 execution lease 至实际清理完成。独立播放/录音创建交互，工具和主/子助手共用原 turn 的冻结语音上下文。完成事件携带原回复和该上下文，自动朗读不查询新 turn 的全局选择。428 永久终止原语音交互，分别终止父 turn、释放语音资源并提示手动同步，不自动同步或重放；父 turn 停止与语音资源清理各自执行并汇总失败，任一路失败不跳过另一路。空间切换在 Session 锁内只撤销和停止硬件，锁外等待清理。
 
 ## 实现与验证
 

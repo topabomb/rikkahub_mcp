@@ -53,6 +53,7 @@ import io.mockk.mockk
 import me.rerere.workspace.WorkspaceFileEntry
 import me.rerere.workspace.WorkspaceStorageArea
 import net.weero.measix.pilot.R
+import net.weero.measix.pilot.Screen
 import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.files.SkillFile
 import net.weero.measix.pilot.service.workspace.*
@@ -81,7 +82,7 @@ class EditorDraftAndroidTest {
         }
         compose.setContent { host { WorkspaceFileEditorPage("id", WorkspaceStorageArea.FILES, "large.txt", commands, queries) } }
         compose.waitUntil(5_000) { reads == 1 }
-        compose.onNodeWithText(compose.activity.getString(R.string.common_save)).assertDoesNotExist()
+        compose.onNodeWithContentDescription(compose.activity.getString(R.string.common_save)).assertDoesNotExist()
         loaded.complete(WorkspaceTextPreviewResult.Success(published))
         waitForWorkspaceEditor { reads == 1 }
         replaceEditorBody(published + "unsaved")
@@ -133,7 +134,7 @@ class EditorDraftAndroidTest {
         restoration.emulateSavedInstanceStateRestore()
         waitForWorkspaceEditor { reads == 2 }
         assertEditorBody("published")
-        compose.onNodeWithText(compose.activity.getString(R.string.common_save)).assertIsEnabled()
+        compose.onNodeWithContentDescription(compose.activity.getString(R.string.common_save)).assertIsEnabled()
     }
 
     @Test
@@ -206,7 +207,7 @@ class EditorDraftAndroidTest {
             }
             waitForWorkspaceEditor()
             assertEditorBody("latest published owner content")
-            compose.onNodeWithText(compose.activity.getString(R.string.common_save)).assertIsEnabled()
+            compose.onNodeWithContentDescription(compose.activity.getString(R.string.common_save)).assertIsEnabled()
         } catch (error: Throwable) {
             error.addSuppressed(AssertionError(visibleLabels() + "\n" + compose.onRoot(useUnmergedTree = true).printToString().take(12_000)))
             primaryFailure = error
@@ -270,8 +271,8 @@ class EditorDraftAndroidTest {
             val errorText = "${actualIoFailure.javaClass.simpleName}: ${actualIoFailure.message}"
             val causeText = "Caused by: ${originalCause.javaClass.simpleName}: ${originalCause.message}"
             val save = compose.activity.getString(R.string.common_save)
-            compose.waitUntil(10_000) { compose.onAllNodesWithText(save).fetchSemanticsNodes().isNotEmpty() }
-            compose.onNodeWithText(save).performClick()
+            compose.waitUntil(10_000) { compose.onAllNodesWithContentDescription(save).fetchSemanticsNodes().isNotEmpty() }
+            compose.onNodeWithContentDescription(save).performClick()
             compose.waitUntil(10_000) {
                 compose.onAllNodesWithText(errorText, substring = true).fetchSemanticsNodes().isNotEmpty()
             }
@@ -282,7 +283,7 @@ class EditorDraftAndroidTest {
             })
             compose.onNodeWithText(compose.activity.getString(R.string.confirm)).performClick()
             assertEditorBody(draft)
-            compose.onNodeWithText(save).assertIsEnabled()
+            compose.onNodeWithContentDescription(save).assertIsEnabled()
             runBlocking { withTimeout(10_000) {
                 assertTrue(commands.deleteFile(workspaceId, WorkspaceStorageArea.FILES, "parent", recursive = false))
                 commands.writeText(workspaceId, path, published)
@@ -290,13 +291,13 @@ class EditorDraftAndroidTest {
             } }
             // Repairing owner state must not replace the existing composition's unsaved text.
             assertEditorBody(draft)
-            compose.onNodeWithText(save).performClick()
+            compose.onNodeWithContentDescription(save).performClick()
             compose.waitUntil(10_000) {
                 runBlocking { withTimeout(5_000) {
                     queries.readTextForPreview(workspaceId, WorkspaceStorageArea.FILES, path) == WorkspaceTextPreviewResult.Success(draft)
                 } }
             }
-            compose.onNodeWithText(save).assertIsEnabled()
+            compose.onNodeWithContentDescription(save).assertIsEnabled()
             assertEditorBody(draft)
             compose.onNodeWithText(errorText, substring = true).assertDoesNotExist()
         } catch (error: Throwable) {
@@ -338,18 +339,84 @@ class EditorDraftAndroidTest {
         waitForWorkspaceEditor()
         replaceEditorBody("retained draft")
         val save = compose.activity.getString(R.string.common_save)
-        compose.onNodeWithText(save).performClick()
+        compose.onNodeWithContentDescription(save).performClick()
         compose.onNodeWithText("IOException: workspace write detail", substring = true).assertIsDisplayed()
         compose.onNodeWithText("IllegalStateException: original storage cause", substring = true).assertIsDisplayed()
         compose.onNodeWithText(compose.activity.getString(R.string.confirm)).performClick()
         assertEditorBody("retained draft")
-        compose.onNodeWithText(save).assertIsEnabled().performClick()
+        compose.onNodeWithContentDescription(save).assertIsEnabled().performClick()
         compose.waitUntil(5_000) { committed.size == 1 }
-        compose.onNodeWithText(save).assertIsEnabled()
+        compose.onNodeWithContentDescription(save).assertIsEnabled()
         assertEditorBody("retained draft")
         compose.onNodeWithText("workspace write detail", substring = true).assertDoesNotExist()
         assertEquals(listOf("retained draft"), committed.toList())
         coVerify(exactly = 2) { commands.writeText("id", "text.txt", "retained draft") }
+    }
+
+    @Test fun cancellingDiscardKeepsNativeDraftAndConfirmedSystemBackLeavesWithoutWriting() {
+        val queries = mockk<WorkspaceQueryService>()
+        val commands = mockk<WorkspaceApplicationService>()
+        coEvery { queries.readTextForPreview("id", WorkspaceStorageArea.FILES, "text.txt") } returns
+            WorkspaceTextPreviewResult.Success("published")
+        val editorPage = Screen.WorkspaceFileEditor("id", WorkspaceStorageArea.FILES.name, "text.txt")
+        val backStack = mutableStateListOf<NavKey>(Screen.WorkspaceDetail("id"), editorPage)
+        compose.setContent { host(backStack) {
+            if (backStack.last() == editorPage) WorkspaceFileEditorPage("id", WorkspaceStorageArea.FILES, "text.txt", commands, queries)
+            else androidx.compose.material3.Text("Returned to files")
+        } }
+        waitForWorkspaceEditor()
+        replaceEditorBody("unsaved native draft")
+        compose.onNodeWithContentDescription(compose.activity.getString(R.string.back)).performClick()
+        compose.onNodeWithText(compose.activity.getString(R.string.remote_workspace_unsaved)).assertIsDisplayed()
+        compose.onNodeWithText(compose.activity.getString(R.string.common_cancel)).performClick()
+        assertEditorBody("unsaved native draft")
+        compose.runOnIdle { assertEquals(2, backStack.size) }
+        compose.runOnUiThread { compose.activity.onBackPressedDispatcher.onBackPressed() }
+        compose.onNodeWithText(compose.activity.getString(R.string.remote_workspace_unsaved)).assertIsDisplayed()
+        compose.onNodeWithText(compose.activity.getString(R.string.common_confirm)).performClick()
+        compose.onNodeWithText("Returned to files").assertIsDisplayed()
+        compose.runOnIdle { assertEquals(listOf(Screen.WorkspaceDetail("id")), backStack.toList()) }
+        coVerify(exactly = 0) { commands.writeText(any(), any(), any()) }
+    }
+
+    @Test fun saveBlocksBothBackRoutesAndSuccessfulCommitClearsDiscardRequirement() {
+        val queries = mockk<WorkspaceQueryService>()
+        val commands = mockk<WorkspaceApplicationService>()
+        val started = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val committed = ConcurrentLinkedQueue<String>()
+        coEvery { queries.readTextForPreview("id", WorkspaceStorageArea.FILES, "text.txt") } returns
+            WorkspaceTextPreviewResult.Success("published")
+        coEvery { commands.writeText("id", "text.txt", any()) } coAnswers {
+            val body = thirdArg<String>()
+            started.complete(Unit)
+            release.await()
+            committed.add(body)
+            WorkspaceFileEntry("text.txt", "text.txt", false, body.length.toLong(), 1L)
+        }
+        val editorPage = Screen.WorkspaceFileEditor("id", WorkspaceStorageArea.FILES.name, "text.txt")
+        val backStack = mutableStateListOf<NavKey>(Screen.WorkspaceDetail("id"), editorPage)
+        compose.setContent { host(backStack) {
+            if (backStack.last() == editorPage) WorkspaceFileEditorPage("id", WorkspaceStorageArea.FILES, "text.txt", commands, queries)
+            else androidx.compose.material3.Text("Returned to files")
+        } }
+        waitForWorkspaceEditor()
+        replaceEditorBody("draft to commit")
+        val save = compose.activity.getString(R.string.common_save)
+        compose.onNodeWithContentDescription(save).performClick()
+        compose.waitUntil(5_000) { started.isCompleted }
+        compose.onNodeWithContentDescription(compose.activity.getString(R.string.back)).assertIsNotEnabled()
+        compose.runOnUiThread { compose.activity.onBackPressedDispatcher.onBackPressed() }
+        compose.onNodeWithText(compose.activity.getString(R.string.remote_workspace_unsaved)).assertDoesNotExist()
+        assertEditorBody("draft to commit")
+        compose.runOnIdle { assertEquals(2, backStack.size) }
+        release.complete(Unit)
+        compose.waitUntil(5_000) { committed.size == 1 }
+        compose.onNodeWithContentDescription(save).assertIsEnabled()
+        compose.onNodeWithContentDescription(compose.activity.getString(R.string.back)).performClick()
+        compose.onNodeWithText("Returned to files").assertIsDisplayed()
+        compose.onNodeWithText(compose.activity.getString(R.string.remote_workspace_unsaved)).assertDoesNotExist()
+        coVerify(exactly = 1) { commands.writeText("id", "text.txt", "draft to commit") }
     }
 
     @Test fun switchingPathCancelsInFlightSaveAndNewPathCanSave() {
@@ -393,14 +460,14 @@ class EditorDraftAndroidTest {
         waitForWorkspaceEditor()
         replaceEditorBody("old draft")
         val save = compose.activity.getString(R.string.common_save)
-        compose.onNodeWithText(save).performClick()
+        compose.onNodeWithContentDescription(save).performClick()
         compose.waitUntil(5_000) { started.isCompleted }
-        compose.onNodeWithText(save).assertIsNotEnabled()
+        compose.onNodeWithContentDescription(save).assertIsNotEnabled()
         assertEditorBody("old draft")
         if (disposeFirst) {
             compose.runOnIdle { visible.value = false }
             compose.waitUntil(5_000) { cancelled.isCompleted }
-            compose.onNodeWithText(save).assertDoesNotExist()
+            compose.onNodeWithContentDescription(save).assertDoesNotExist()
             compose.runOnIdle { path.value = "new.txt"; visible.value = true }
         } else {
             compose.runOnIdle { path.value = "new.txt" }
@@ -410,12 +477,12 @@ class EditorDraftAndroidTest {
         releaseOldWrite.complete(Unit)
         waitForWorkspaceEditor()
         assertEditorBody("published new.txt")
-        compose.onNodeWithText(save).assertIsEnabled()
+        compose.onNodeWithContentDescription(save).assertIsEnabled()
         assertTrue(committed.isEmpty())
         replaceEditorBody("new draft")
-        compose.onNodeWithText(save).performClick()
+        compose.onNodeWithContentDescription(save).performClick()
         compose.waitUntil(5_000) { committed.size == 1 }
-        compose.onNodeWithText(save).assertIsEnabled()
+        compose.onNodeWithContentDescription(save).assertIsEnabled()
         assertEquals(listOf("new.txt" to "new draft"), committed.toList())
         coVerify(exactly = 1) { commands.writeText("id", "old.txt", "old draft") }
         coVerify(exactly = 1) { commands.writeText("id", "new.txt", "new draft") }
@@ -452,7 +519,7 @@ class EditorDraftAndroidTest {
             compose.activityRule.scenario.onActivity { activity ->
                 editorPresent = containsVisibleEditor(activity.window.decorView)
             }
-            editorPresent && additionalCondition() && compose.onAllNodesWithText(
+            editorPresent && additionalCondition() && compose.onAllNodesWithContentDescription(
                 compose.activity.getString(R.string.common_save),
             ).fetchSemanticsNodes().isNotEmpty()
         }
@@ -482,11 +549,11 @@ class EditorDraftAndroidTest {
         } finally { parcel.recycle() }
     }
 
-    @Composable private fun host(content: @Composable () -> Unit) {
+    @Composable private fun host(backStack: MutableList<NavKey>? = null, content: @Composable () -> Unit) {
         MaterialTheme { CompositionLocalProvider(
             LocalAdaptiveLayoutInfo provides rememberAdaptiveLayoutInfo(),
             LocalSettings provides Settings.dummy(), LocalDarkMode provides false,
-            LocalNavController provides Navigator(remember { mutableStateListOf<NavKey>() }),
+            LocalNavController provides Navigator(backStack ?: remember { mutableStateListOf<NavKey>() }),
             LocalToaster provides rememberToasterState(), content = content,
         ) }
     }

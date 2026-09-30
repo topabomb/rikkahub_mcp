@@ -107,7 +107,6 @@ private val ProcessForegroundState = MutableStateFlow(true)
 class McpRuntimeCoordinator internal constructor(
     private val settingsStore: SettingsStore,
     private val sessions: net.weero.measix.pilot.data.enterprise.EnterpriseSessionController,
-    private val synchronization: net.weero.measix.pilot.service.EnterpriseSynchronizationService,
     private val catalogStore: McpCatalogStore,
     private val appScope: AppScope,
     private val artifactStore: ArtifactStore,
@@ -523,10 +522,9 @@ class McpRuntimeCoordinator internal constructor(
                     appScope.launch {
                         try {
                             stopInteraction()
-                            synchronization.synchronize(access)
                         }
                         catch (cancelled: CancellationException) { throw cancelled }
-                        catch (_: Exception) { logMcp(definition.name, "Enterprise generation barrier cleanup or synchronization failed") }
+                        catch (error: Exception) { Log.e(TAG, "[${definition.name}] Enterprise generation barrier cleanup failed", error) }
                     }
                 }.also(owned::add)
             }

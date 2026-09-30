@@ -537,20 +537,33 @@ internal class EnterpriseApplicationService(
     /** Prevents an old-origin Portal document from registering after a new connection is committed. */
     private val portalConnectionMutex = Mutex()
     private var pendingJoin: Pair<EnterpriseJoinConfirmation, EnrollmentMaterial.Platform>? = null
-    private val enrollmentRecoveryFailure = MutableStateFlow<String?>(null)
+    private data class EnrollmentRecoveryFailure(val sessionId: String, val diagnostic: String)
+    private val enrollmentRecoveryFailure = MutableStateFlow<EnrollmentRecoveryFailure?>(null)
 
     init {
         scope.launch {
-            try {
+            var pending: PendingPlatformEnrollment? = null
+            val access = try {
                 recovery.awaitReady()
-                val access = platform.recoverPlatformAccess()
-                enrollmentRecoveryFailure.value = null
-                access?.let { synchronizeInBackground(it) }
+                pending = sessions.pendingPlatformEnrollment()
+                platform.recoverPlatformAccess()
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: Exception) {
-                android.util.Log.e("EnterpriseEnrollment", "Platform session recovery could not synchronize", error)
-                enrollmentRecoveryFailure.value = error.userVisibleDiagnostic()
+                android.util.Log.e("EnterpriseEnrollment", "Pending platform enrollment recovery failed", error)
+                pending?.let { enrollmentRecoveryFailure.value = EnrollmentRecoveryFailure(it.sessionId, error.userVisibleDiagnostic()) }
+                return@launch
+            }
+            if (pending != null && access != null && access.sessionId == pending.sessionId) {
+                if (enrollmentRecoveryFailure.value?.sessionId == access.sessionId) enrollmentRecoveryFailure.value = null
+                try {
+                    synchronization.synchronizeForPresentation(access)
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (error: Exception) {
+                    // Rejected admission has no shared sync receipt and cannot become another Session's enrollment error.
+                    android.util.Log.e("EnterpriseSynchronization", "Recovered enrollment initialization did not complete", error)
+                }
             }
         }
     }
@@ -591,7 +604,9 @@ internal class EnterpriseApplicationService(
                     else -> EnterpriseResetPath.CONNECTED
                 },
                 reset = resetProgress,
-                enrollmentRecoveryFailure = resumeFailure,
+                enrollmentRecoveryFailure = resumeFailure?.takeIf {
+                    it.sessionId == (manifest?.pendingEnrollment?.sessionId ?: manifest?.session?.id)
+                }?.diagnostic,
                 synchronization = syncStatus?.takeIf { it.access == access },
                 canEnterEnterprise = presentation.canEnterEnterprise,
                 recoveryLogoutFailure = logoutFailures.first.takeIf { manifest?.session == null } ?: logoutFailures.second,
@@ -786,21 +801,6 @@ internal class EnterpriseApplicationService(
             withContext(NonCancellable) { mutex.withLock { switching.value = null } }
         }
         failure?.let { throw it }
-        return requireNotNull(selected).also { selection ->
-            (selection.access as? RealmAccess.Enterprise)?.let { access ->
-                scope.launch { synchronizeInBackground(access) }
-            }
-        }
-    }
-
-    private suspend fun synchronizeInBackground(access: RealmAccess.Enterprise) {
-        try {
-            synchronization.synchronize(access)
-        } catch (cancelled: CancellationException) {
-            throw cancelled
-        } catch (error: Exception) {
-            // The shared synchronization projection retains the failure for this Session.
-            android.util.Log.e("EnterpriseSynchronization", "Background synchronization did not complete", error)
-        }
+        return requireNotNull(selected)
     }
 }

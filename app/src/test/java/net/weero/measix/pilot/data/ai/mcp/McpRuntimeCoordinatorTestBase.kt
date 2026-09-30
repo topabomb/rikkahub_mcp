@@ -134,7 +134,6 @@ internal abstract class McpRuntimeCoordinatorTestBase {
         )
         manager = McpRuntimeCoordinator(
             sessions = sessions,
-            synchronization = io.mockk.mockk(),
             settingsStore = settingsStore,
             catalogStore = catalogStore,
             appScope = AppScope(dispatcher),

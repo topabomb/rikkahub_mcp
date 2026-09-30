@@ -467,7 +467,7 @@ internal class SpeechApplicationService(
         submit {
             tts?.takeIf { it.capture === capture }?.let(::stopPlayback)
             asr?.takeIf { it.capture === capture }?.let(::stopRecognition)
-            // This accepted barrier owns termination; a failed file/lease cleanup must not skip parent stop or sync.
+            // This accepted barrier owns termination; each original resource is cleaned even if another cleanup fails.
             withContext(NonCancellable) {
                 var failure: Exception? = null
                 suspend fun attempt(action: suspend () -> Unit) {
@@ -480,10 +480,9 @@ internal class SpeechApplicationService(
                     if (tts?.capture === capture) closePlayback()
                     if (asr?.capture === capture) closeRecognition()
                 } }
-                attempt { synchronization.synchronize(capture.selection.access as RealmAccess.Enterprise) }
                 failure?.let { throw it }
             }
-            failure.value = context.getString(R.string.speech_operation_unavailable)
+            failure.value = "managed_snapshot_required: " + context.getString(R.string.enterprise_sync)
         }
     }
 

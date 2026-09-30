@@ -187,28 +187,20 @@ internal class PlatformEnterpriseService(
     }
 
     /** Every new interaction checks authority; a captured version is consumed by the Session lease CAS. */
-    suspend fun prepareExecution(access: RealmAccess.Enterprise, synchronize: suspend () -> Unit): EnterpriseAppliedVersion {
-        suspend fun check(): Pair<PlatformManagedState, PlatformConfigurationInput> {
-            val input = sessions.platformConfiguration(access)
-            val state = read(access.sessionId) { connection, token ->
-                client.state(connection, token, input.candidate?.configuration?.generation)
-            }
-            return state to input
-        }
-        var (state, input) = check()
-        if (state.activeManagedGeneration > 0 &&
-            (state.syncRequired || input.candidate?.configuration?.generation != state.activeManagedGeneration)) {
-            synchronize()
-            val checked = check()
-            state = checked.first
-            input = checked.second
+    suspend fun prepareExecution(access: RealmAccess.Enterprise): EnterpriseAppliedVersion {
+        val input = sessions.platformConfiguration(access)
+        val state = read(access.sessionId) { connection, token ->
+            client.state(connection, token, input.candidate?.configuration?.generation)
         }
         if (state.activeManagedGeneration == 0L) throw EnterpriseConfigurationException("enterprise_configuration_not_ready")
         if (state.runtimeStatus != PlatformManagedStateRuntimeStatus.READY) {
             throw EnterpriseConfigurationException("platform_runtime_${state.runtimeStatus.name.lowercase()}")
         }
         if (state.runtimeBlocked || state.syncRequired || input.candidate?.configuration?.generation != state.activeManagedGeneration) {
-            throw EnterpriseConfigurationException("platform_runtime_synchronization_required")
+            throw EnterpriseConfigurationException("platform_runtime_synchronization_required",
+                "Synchronize enterprise configuration manually before starting another operation. " +
+                    "Applied generation=${input.candidate?.configuration?.generation}; " +
+                    "active generation=${state.activeManagedGeneration}; syncRequired=${state.syncRequired}.")
         }
         return sessions.confirmPlatformExecution(access, requireNotNull(input.candidate))
     }
