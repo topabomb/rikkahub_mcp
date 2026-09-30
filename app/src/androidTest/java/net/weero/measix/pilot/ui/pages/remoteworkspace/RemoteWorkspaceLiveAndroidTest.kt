@@ -36,7 +36,7 @@ import org.koin.core.context.GlobalContext
 class RemoteWorkspaceLiveAndroidTest {
     @get:Rule val compose = createAndroidComposeRule<ComponentActivity>()
 
-    @Test fun filesOnlyRoundTripConflictCancellationAndRealFilePage() {
+    @Test fun realFileRoundTripConditionsLifecycleAndNativePage() {
         val inputPath = InstrumentationRegistry.getArguments().getString("remoteWorkspaceInput")
         assumeTrue(inputPath != null)
         val context = InstrumentationRegistry.getInstrumentation().targetContext
@@ -60,35 +60,88 @@ class RemoteWorkspaceLiveAndroidTest {
                     check(initial.session == null && initial.pendingEnrollment == null && initial.lastIdentity == null) {
                         "remote_workspace_live_requires_unbound_test_device"
                     }
-                    enterprise.confirmJoin(requireNotNull(enterprise.join(input.getString("enrollment"))))
+                    // Exercise the real enrollment owner. Startup recovery may synchronize a published
+                    // snapshot concurrently; only the unpublished fixture requires no Applied state.
+                    // Opt-in material already confirms its origin.
+                    val platform = koin.get<PlatformEnterpriseService>()
+                    val access = platform.enroll(EnrollmentMaterialParser().parse(input.getString("enrollment")),
+                        android.os.Build.MODEL, net.weero.measix.pilot.BuildConfig.VERSION_NAME)
                     val available = sessions.state.value as EnterpriseState.Available
-                    assertEquals(EnterpriseSessionPhase.CONFIGURATION_PENDING, available.manifest.phase)
-                    assertNull(available.manifest.applied)
-                    val session = requireNotNull(available.manifest.session)
-                    val access = RealmAccess.Enterprise(session.identity.scope, session.id)
+                    val configurationPublished = input.optBoolean("configurationPublished", false)
+                    if (!configurationPublished) {
+                        assertEquals(EnterpriseSessionPhase.CONFIGURATION_PENDING, available.manifest.phase)
+                        assertNull(available.manifest.applied)
+                    }
+                    if (configurationPublished) {
+                        assertEquals(EnterpriseSynchronizationCommandResult.COMPLETED, enterprise.synchronize(access))
+                        val synchronized = (sessions.state.value as EnterpriseState.Available).manifest
+                        assertEquals(EnterpriseSessionPhase.READY, synchronized.phase)
+                        assertNotNull(synchronized.applied)
+                    }
                     val before = requireNotNull(sessions.readPresentation().selection)
-                    if (before.access != access) enterprise.switchRealm(RealmSwitchRequest(before, access))
-                    val selection = requireNotNull(sessions.readPresentation().selection)
-                    val opened = remote.open(selection).also { handle = it }
+                    // No prior views or resources exist on this unbound test device. Select through
+                    // the Session owner here without scheduling configuration in the application switch.
+                    if (before.access != access) sessions.switchRealm(RealmSwitchRequest(before, access)) {}
+                    var selection = requireNotNull(sessions.readPresentation().selection)
+                    var opened = remote.open(selection).also { handle = it }
                     assertTrue(remote.summary.value!!.canOpenFiles)
-                    assertFalse(remote.summary.value!!.mcpAvailable)
-                    evidence.put("configurationPendingFilesOnly", true)
+                    assertEquals(input.optBoolean("expectedMcpAvailable", false), remote.summary.value!!.mcpAvailable)
+                    evidence.put("mcpAvailable", remote.summary.value!!.mcpAvailable)
                     val folder = "android-validation-${System.currentTimeMillis()}"
                     assertEquals(RemoteOutcome.SUCCEEDED, remote.createDirectory(opened, folder).outcome)
                     val textPath = "$folder/notes.txt"
                     val original = byteArrayOf(0xef.toByte(), 0xbb.toByte(), 0xbf.toByte()) +
-                        "# Android remote workspace\r\n\r\nFiles are available without MCP.\r\n".toByteArray()
+                        "# Android remote workspace\r\n\r\nBody \uFEFF marker. Files before configuration.\r\n".toByteArray()
                     assertEquals(RemoteOutcome.SUCCEEDED, remote.upload(opened, textPath, null, original.size.toLong(), { original.inputStream() }).outcome)
                     var file = remote.list(opened, folder).files.single()
+                    assertConflict(remote.upload(opened, textPath, null, 5, { "wrong".byteInputStream() }))
+                    assertArrayEquals(original, readBytes(remote, opened, file))
                     val document = remote.readText(opened, file)
                     assertTrue(document.content.bom)
+                    val afterRead = (sessions.state.value as EnterpriseState.Available).manifest
+                    if (configurationPublished) {
+                        assertEquals(EnterpriseSessionPhase.READY, afterRead.phase)
+                        assertNotNull(afterRead.applied)
+                    } else {
+                        assertEquals(EnterpriseSessionPhase.CONFIGURATION_PENDING, afterRead.phase)
+                        assertNull(afterRead.applied)
+                    }
+                    evidence.put("configurationPendingWithoutAppliedSnapshot", !configurationPublished)
+                        .put("configurationPublished", configurationPublished)
                     val competing = remote.readText(opened, file)
                     assertEquals(RemoteOutcome.SUCCEEDED, remote.save(opened, competing, competing.content.text + "Second editor\n").outcome)
                     val conflict = remote.save(opened, document, document.content.text + "My unsaved draft\n")
                     assertEquals(RemoteOutcome.FAILED, conflict.outcome)
                     assertTrue(conflict.diagnostic.orEmpty().contains("409") || conflict.diagnostic.orEmpty().contains("412"))
                     assertEquals(RemoteOutcome.SUCCEEDED, remote.save(opened, document, "My unsaved draft\n", "$folder/draft-copy.txt").outcome)
-                    evidence.put("doubleEditorConflictAndSaveAs", true)
+                    val copied = remote.list(opened, folder).files.single { it.name == "draft-copy.txt" }
+                    assertArrayEquals(byteArrayOf(0xef.toByte(), 0xbb.toByte(), 0xbf.toByte()) +
+                        "My unsaved draft\r\n".toByteArray(), readBytes(remote, opened, copied))
+                    val currentText = remote.list(opened, folder).files.single { it.path == textPath }
+                    assertArrayEquals(original + "Second editor\r\n".toByteArray(), readBytes(remote, opened, currentText))
+                    evidence.put("doubleEditorConflictAndSaveAs", true).put("bomBodyMarkerAndCrLfPreserved", true)
+                    val sourcePath = "$folder/source.txt"
+                    val targetPath = "$folder/target.txt"
+                    put(remote, opened, sourcePath, "original source".toByteArray())
+                    put(remote, opened, targetPath, "original target".toByteArray())
+                    val staleSource = remote.list(opened, folder).files.single { it.path == sourcePath }
+                    put(remote, opened, sourcePath, "updated source".toByteArray(), staleSource.etag)
+                    for (action in listOf(RemoteFileAction.COPY, RemoteFileAction.MOVE)) {
+                        assertConflict(remote.mutate(opened, action, staleSource, "$folder/stale-${action.name}.txt"))
+                        assertFalse(remote.list(opened, folder).files.any { it.name == "stale-${action.name}.txt" })
+                    }
+                    val currentSource = remote.list(opened, folder).files.single { it.path == sourcePath }
+                    assertArrayEquals("updated source".toByteArray(), readBytes(remote, opened, currentSource))
+                    assertEquals(RemoteOutcome.SUCCEEDED, remote.mutate(opened, RemoteFileAction.COPY, currentSource,
+                        "$folder/copied.txt").outcome)
+                    assertEquals(RemoteOutcome.SUCCEEDED, remote.mutate(opened, RemoteFileAction.MOVE, currentSource,
+                        "$folder/moved.txt").outcome)
+                    assertFalse(remote.list(opened, folder).files.any { it.path == sourcePath })
+                    for (name in listOf("copied.txt", "moved.txt")) {
+                        assertArrayEquals("updated source".toByteArray(), readBytes(remote, opened,
+                            remote.list(opened, folder).files.single { it.name == name }))
+                    }
+                    evidence.put("createAndStaleCopyMoveConditions", true)
                     val length = 64L * 1024 * 1024
                     val uploadDigest = MessageDigest.getInstance("SHA-256")
                     val largePath = "$folder/64MiB.bin"
@@ -133,6 +186,30 @@ class RemoteWorkspaceLiveAndroidTest {
                     withTimeout(10_000) { slow.cancelAndJoin() }
                     assertTrue(closed)
                     evidence.put("slowDownloadCancelledAndClosed", true)
+                    val beforeSwitch = opened
+                    val switchStarted = CompletableDeferred<Unit>()
+                    var switchClosed = false
+                    val switchingRead = launch {
+                        remote.download(beforeSwitch, file, { object : OutputStream() {
+                            override fun write(value: Int) = Unit
+                            override fun write(bytes: ByteArray, offset: Int, count: Int) {
+                                switchStarted.complete(Unit); Thread.sleep(25)
+                            }
+                            override fun close() { switchClosed = true }
+                        } })
+                    }
+                    switchStarted.await()
+                    enterprise.switchRealm(RealmSwitchRequest(selection, RealmAccess.Personal))
+                    withTimeout(10_000) { switchingRead.join() }
+                    assertTrue(switchClosed)
+                    assertTrue(switchingRead.isCancelled)
+                    assertFalse(remote.isValid(beforeSwitch))
+                    enterprise.switchRealm(RealmSwitchRequest(requireNotNull(sessions.readPresentation().selection), access))
+                    selection = requireNotNull(sessions.readPresentation().selection)
+                    assertFalse(remote.isValid(beforeSwitch))
+                    remote.close(beforeSwitch)
+                    opened = remote.open(selection).also { handle = it }
+                    evidence.put("switchRealmCancelsAndClosesInFlightRead", true)
                     val client = koin.get<PlatformWorkspaceClient>()
                     val token = koin.get<PlatformEnterpriseService>().accessToken(access.sessionId, opened.connection)
                     try {
@@ -156,8 +233,17 @@ class RemoteWorkspaceLiveAndroidTest {
                             pdf.finishPage(page); pdf.writeTo(bytes)
                         } finally { pdf.close() }
                     }.toByteArray()
-                    val markdown = "# Remote Markdown\n\n![Authorized relative image](sample.png)\n".toByteArray()
-                    for ((name, bytes) in listOf("sample.png" to picture, "sample.pdf" to pdf, "readme.md" to markdown)) {
+                    val markdown = "# Remote Markdown\n\n![Space image](images/space%20name.png)\n\n" +
+                        "![Chinese image](images/%E4%B8%AD%E6%96%87.png)\n\n![Plus image](images/a+b.png)\n"
+                    assertEquals(RemoteOutcome.SUCCEEDED, remote.createDirectory(opened, "$folder/images").outcome)
+                    assertEquals(RemoteOutcome.SUCCEEDED, remote.createDirectory(opened, "$folder/docs").outcome)
+                    for (name in listOf("space name.png", "中文.png", "a+b.png")) {
+                        put(remote, opened, "$folder/images/$name", picture)
+                    }
+                    put(remote, opened, "$folder/docs/parent.md",
+                        "# Parent image\n\n![Parent image](../images/space%20name.png)\n".toByteArray())
+                    for (name in listOf("selected-a.txt", "selected-b.txt")) put(remote, opened, "$folder/$name", name.toByteArray())
+                    for ((name, bytes) in listOf("sample.png" to picture, "sample.pdf" to pdf, "readme.md" to markdown.toByteArray())) {
                         assertEquals(RemoteOutcome.SUCCEEDED, remote.upload(opened, "$folder/$name", null,
                             bytes.size.toLong(), { bytes.inputStream() }).outcome)
                     }
@@ -171,30 +257,78 @@ class RemoteWorkspaceLiveAndroidTest {
                         }
                     }
                     compose.waitUntil(30_000) { vm.state.value.directory != null }
-                    compose.onNodeWithText(folder).performClick()
+                    fileNode(folder).performClick()
                     compose.waitUntil(30_000) { vm.state.value.directory?.path == folder }
-                    compose.onNodeWithText("notes.txt").assertIsDisplayed()
+                    fileNode("notes.txt").assertIsDisplayed()
                     capture("remote-live-files.png")
-                    compose.onNodeWithText("sample.pdf").performClick()
+                    fileNode("sample.pdf").performClick()
                     compose.waitUntil(10_000) { compose.onAllNodesWithText("1 / 1").fetchSemanticsNodes().isNotEmpty() }
                     capture("remote-live-pdf.png")
                     androidx.test.espresso.Espresso.pressBack()
-                    compose.onNodeWithText("sample.png").performClick()
+                    fileNode("sample.png").performClick()
                     compose.waitUntil(10_000) { compose.onAllNodesWithContentDescription(context.getString(net.weero.measix.pilot.R.string.image_viewer_info_content_description)).fetchSemanticsNodes().isNotEmpty() }
                     compose.onNodeWithContentDescription(context.getString(net.weero.measix.pilot.R.string.image_viewer_info_content_description)).performClick()
                     compose.waitUntil(10_000) { compose.onAllNodesWithText("512 × 320").fetchSemanticsNodes().isNotEmpty() }
                     androidx.test.espresso.Espresso.pressBack()
                     capture("remote-live-image.png")
                     androidx.test.espresso.Espresso.pressBack()
-                    compose.onNodeWithText("readme.md").performClick()
+                    fileNode("readme.md").performClick()
                     compose.waitUntil(10_000) { compose.onAllNodesWithText("Remote Markdown").fetchSemanticsNodes().isNotEmpty() }
                     compose.onAllNodesWithText("Remote Markdown").onFirst().assertIsDisplayed()
-                    // The square placeholder is replaced only after the authorized 512x320 image decodes.
-                    compose.waitUntil(10_000) {
-                        compose.onAllNodesWithContentDescription("Authorized relative image", substring = true).fetchSemanticsNodes()
-                            .any { it.boundsInRoot.width / it.boundsInRoot.height > 1.5f }
+                    for (description in listOf("Space image", "Chinese image", "Plus image")) {
+                        compose.onNodeWithContentDescription(description, substring = true).performScrollTo()
+                        assertDecodedImage(description)
                     }
                     capture("remote-live-markdown.png")
+                    androidx.test.espresso.Espresso.pressBack()
+                    fileNode("docs").performClick()
+                    compose.waitUntil(10_000) { vm.state.value.directory?.path == "$folder/docs" }
+                    fileNode("parent.md").performClick()
+                    assertDecodedImage("Parent image")
+                    androidx.test.espresso.Espresso.pressBack()
+                    compose.runOnIdle { vm.browse(folder) }
+                    compose.waitUntil(10_000) { vm.state.value.directory?.path == folder }
+                    val peer = remote.open(selection).also { handle = it }
+                    fileNode("selected-a.txt").performTouchInput { longClick() }
+                    fileNode("selected-b.txt").performClick()
+                    compose.onNodeWithText(context.getString(net.weero.measix.pilot.R.string.remote_workspace_selected, 2)).assertIsDisplayed()
+                    for ((name, remaining) in listOf("selected-a.txt" to 1, "selected-b.txt" to 0)) {
+                        val selectedFile = remote.list(peer, folder).files.single { it.name == name }
+                        assertEquals(RemoteOutcome.SUCCEEDED, remote.mutate(peer, RemoteFileAction.DELETE, selectedFile).outcome)
+                        compose.runOnIdle { vm.retry() }
+                        compose.waitUntil(10_000) { vm.state.value.directory?.files?.none { it.name == name } == true }
+                        compose.onNodeWithText(name).assertDoesNotExist()
+                        if (remaining > 0) compose.onNodeWithText(context.getString(net.weero.measix.pilot.R.string.remote_workspace_selected, remaining)).assertIsDisplayed()
+                        else compose.onNodeWithText(context.getString(net.weero.measix.pilot.R.string.remote_workspace_title)).assertIsDisplayed()
+                    }
+                    val source = remote.list(peer, folder).files.single { it.name == "moved.txt" }
+                    val target = remote.list(peer, folder).files.single { it.name == "target.txt" }
+                    compose.runOnIdle { vm.rename(requireNotNull(vm.state.value.handle), source, target.path) }
+                    compose.waitUntil(10_000) { vm.state.value.overwrite != null }
+                    put(remote, peer, target.path, "changed while confirming".toByteArray(), target.etag)
+                    compose.onNodeWithText(context.getString(net.weero.measix.pilot.R.string.common_confirm)).performClick()
+                    compose.waitUntil(10_000) { !vm.state.value.running && vm.state.value.results.isNotEmpty() && vm.state.value.directory != null }
+                    assertConflict(vm.state.value.results.first())
+                    assertArrayEquals("changed while confirming".toByteArray(), readBytes(remote, peer,
+                        remote.list(peer, folder).files.single { it.path == target.path }))
+                    assertArrayEquals("updated source".toByteArray(), readBytes(remote, peer,
+                        remote.list(peer, folder).files.single { it.path == source.path }))
+                    compose.runOnIdle { vm.clearResults() }
+                    compose.runOnIdle { vm.rename(requireNotNull(vm.state.value.handle), source, target.path) }
+                    compose.waitUntil(10_000) { vm.state.value.overwrite != null }
+                    compose.onNodeWithText(context.getString(net.weero.measix.pilot.R.string.common_confirm)).performClick()
+                    compose.waitUntil(10_000) {
+                        !vm.state.value.running && vm.state.value.results.firstOrNull()?.outcome == RemoteOutcome.SUCCEEDED &&
+                            vm.state.value.directory?.files?.none { it.path == source.path } == true
+                    }
+                    compose.onNodeWithText(source.name).assertDoesNotExist()
+                    assertArrayEquals("updated source".toByteArray(), readBytes(remote, peer,
+                        remote.list(peer, folder).files.single { it.path == target.path }))
+                    remote.close(peer); handle = null
+                    capture("remote-live-updated-files.png")
+                    evidence.put("realSelectionReconciliationAndMutationRefresh", true)
+                        .put("overwriteConfirmationRacePreservesBothFiles", true)
+                        .put("encodedSpaceChinesePlusAndParentMarkdownImages", true)
                     evidence.put("nativePdfAndImagePreviews", true).put("restrictedMarkdownRendered", true)
                     evidence.put("realDirectoryRendered", true).put("folder", folder)
                     if (input.optBoolean("lifecycle")) {
@@ -224,19 +358,64 @@ class RemoteWorkspaceLiveAndroidTest {
                         } catch (error: PlatformHttpException) {
                             assertEquals("workspace_space_mismatch", error.problem?.code)
                         }
+                        try {
+                            val currentToken = platform.accessToken(access.sessionId, restored.connection)
+                            client.upload(restored.connection, currentToken.value, restored.space, "old-space-write.txt", null, 3,
+                                { "bad".byteInputStream() })
+                            fail("An old pinned space must reject a write")
+                        } catch (error: PlatformHttpException) { assertEquals("workspace_space_mismatch", error.problem?.code) }
                         assertFalse(remote.isValid(restored))
                         remote.close(restored)
                         val replacement = remote.open(selection).also { handle = it }
                         assertNotEquals(restored.space, replacement.space)
                         assertTrue(remote.list(replacement, "").files.isEmpty())
-                        evidence.put("replacedSpaceRejectsOriginalHandle", true)
+                        evidence.put("replacedSpaceRejectsOriginalReadAndWrite", true)
                     }
+                    assertEquals(EnterpriseSynchronizationCommandResult.COMPLETED, enterprise.synchronize(access))
+                    val finalManifest = (sessions.state.value as EnterpriseState.Available).manifest
+                    if (configurationPublished) {
+                        assertEquals(EnterpriseSessionPhase.READY, finalManifest.phase)
+                        assertNotNull(finalManifest.applied)
+                    } else {
+                        assertEquals(EnterpriseSessionPhase.CONFIGURATION_PENDING, finalManifest.phase)
+                        assertNull(finalManifest.applied)
+                    }
+                    evidence.put("currentPublishedConfigurationSynchronized", configurationPublished)
+                        .put("unpublishedConfigurationRemainsPending", !configurationPublished)
                 }
             }
         } finally {
             runBlocking { handle?.let { remote.close(it) } }
             compose.runOnUiThread { store.clear() }
             File(context.cacheDir, "remote-workspace-live-evidence.json").writeText(evidence.toString(2))
+        }
+    }
+
+    private suspend fun put(remote: RemoteWorkspaceService, handle: RemoteWorkspaceHandle,
+        path: String, bytes: ByteArray, etag: String? = null,
+    ) {
+        val result = remote.upload(handle, path, etag, bytes.size.toLong(), { bytes.inputStream() })
+        assertEquals(result.diagnostic, RemoteOutcome.SUCCEEDED, result.outcome)
+    }
+
+    private suspend fun readBytes(remote: RemoteWorkspaceService, handle: RemoteWorkspaceHandle, file: RemoteFile): ByteArray =
+        java.io.ByteArrayOutputStream().also { bytes -> remote.download(handle, file, { bytes }) }.toByteArray()
+
+    private fun assertConflict(result: RemoteOperationResult) {
+        assertEquals(result.diagnostic, RemoteOutcome.FAILED, result.outcome)
+        assertTrue(result.diagnostic, result.diagnostic.orEmpty().contains("409") || result.diagnostic.orEmpty().contains("412"))
+    }
+
+    private fun fileNode(name: String): SemanticsNodeInteraction {
+        compose.onNodeWithTag("remote-file-list").performScrollToNode(hasText(name))
+        return compose.onNodeWithText(name)
+    }
+
+    private fun assertDecodedImage(description: String) {
+        // The square placeholder is replaced only after the authorized 512x320 image decodes.
+        compose.waitUntil(15_000) {
+            compose.onAllNodesWithContentDescription(description, substring = true).fetchSemanticsNodes()
+                .any { it.boundsInRoot.width / it.boundsInRoot.height > 1.5f }
         }
     }
 
@@ -253,12 +432,20 @@ class RemoteWorkspaceLiveAndroidTest {
         compose.waitForIdle()
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         val bitmap = requireNotNull(InstrumentationRegistry.getInstrumentation().uiAutomation.takeScreenshot())
-        val uri = context.contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, ContentValues().apply {
-            put(MediaStore.MediaColumns.DISPLAY_NAME, name)
-            put(MediaStore.MediaColumns.MIME_TYPE, "image/png")
-            put(MediaStore.MediaColumns.RELATIVE_PATH, "Download/CodexRemoteWorkspace")
-        })!!
-        context.contentResolver.openOutputStream(uri)!!.use { bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) }
-        bitmap.recycle()
+        try {
+            val uri = requireNotNull(context.contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, ContentValues().apply {
+                put(MediaStore.MediaColumns.DISPLAY_NAME, "${name.removeSuffix(".png")}-${java.util.UUID.randomUUID()}.png")
+                put(MediaStore.MediaColumns.MIME_TYPE, "image/png")
+                put(MediaStore.MediaColumns.RELATIVE_PATH, "Download/CodexRemoteWorkspace")
+            }))
+            try {
+                requireNotNull(context.contentResolver.openOutputStream(uri)).use {
+                    assertTrue(bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it))
+                }
+            } catch (error: Throwable) {
+                context.contentResolver.delete(uri, null, null)
+                throw error
+            }
+        } finally { bitmap.recycle() }
     }
 }

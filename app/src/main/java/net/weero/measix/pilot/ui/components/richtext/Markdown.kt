@@ -56,6 +56,7 @@ import androidx.compose.ui.platform.ClipEntry
 import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.LinkAnnotation
 import androidx.compose.ui.text.Placeholder
@@ -90,6 +91,7 @@ import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.Copy01
 import me.rerere.hugeicons.stroke.Download04
 import me.rerere.hugeicons.stroke.Tick01
+import net.weero.measix.pilot.R
 import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.ui.components.table.DataTable
 import net.weero.measix.pilot.ui.context.LocalSettings
@@ -960,7 +962,7 @@ private fun TableNode(node: ASTNode, content: String, modifier: Modifier = Modif
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
-                text = "表格",
+                text = stringResource(R.string.markdown_table_title),
                 fontSize = 12.sp,
                 lineHeight = 12.sp,
                 fontWeight = FontWeight.SemiBold,
@@ -976,7 +978,7 @@ private fun TableNode(node: ASTNode, content: String, modifier: Modifier = Modif
 
                 Icon(
                     imageVector = HugeIcons.Copy01,
-                    contentDescription = "Copy",
+                    contentDescription = stringResource(R.string.copy),
                     tint = iconTint,
                     modifier = Modifier
                         .clip(RoundedCornerShape(4.dp))
@@ -989,22 +991,24 @@ private fun TableNode(node: ASTNode, content: String, modifier: Modifier = Modif
                         .size(iconSize)
                 )
 
-                Icon(
-                    imageVector = HugeIcons.Download04,
-                    contentDescription = "Download",
-                    tint = iconTint,
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(4.dp))
-                        .onClick {
-                            actions?.exportText?.invoke(tableCsv,
-                                "table_${
-                                    Clock.System.now().toLocalDateTime(TimeZone.currentSystemDefault())
-                                }.csv", "text/csv"
-                            )
-                        }
-                        .padding(4.dp)
-                        .size(iconSize)
-                )
+                actions?.exportText?.let { export ->
+                    Icon(
+                        imageVector = HugeIcons.Download04,
+                        contentDescription = stringResource(R.string.markdown_table_download),
+                        tint = iconTint,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(4.dp))
+                            .onClick {
+                                export(tableCsv,
+                                    "table_${
+                                        Clock.System.now().toLocalDateTime(TimeZone.currentSystemDefault())
+                                    }.csv", "text/csv"
+                                )
+                            }
+                            .padding(4.dp)
+                            .size(iconSize)
+                    )
+                }
             }
         }
         DataTable(

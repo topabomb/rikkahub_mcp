@@ -231,7 +231,7 @@
   <string name="chat_conversation_missing_title">Conversation unavailable</string>
   <string name="chat_conversation_missing_message">This conversation could not be found. Retry to initialize it again.</string>
   <string name="chat_conversation_load_failed_title">Unable to load conversation</string>
-  <string name="chat_conversation_load_failed_message">The conversation data could not be loaded: %1$s</string>
+  <string name="chat_conversation_load_failed_message">The conversation data could not be loaded. Retry or open Spaces to check the current connection.</string>
   <string name="chat_message_add_favorite">Add Favorite</string>
   <string name="chat_message_remove_favorite">Remove Favorite</string>
   <string name="chat_message_tool_approve">Approve</string>
@@ -2053,4 +2053,10 @@
   <string name="remote_workspace_completed_count">Completed: %1$d</string>
   <string name="remote_workspace_problem_count">%1$d need attention</string>
   <string name="remote_workspace_verification_count">%1$d need verification</string>
+  <string name="chat_conversation_access_changed_message">This page can no longer use its original space or sign-in access. Open Spaces to check the current connection or start a new chat.</string>
+  <string name="chat_conversation_diagnostics">Technical information</string>
+  <string name="markdown_table_title">Table</string>
+  <string name="markdown_table_download">Download</string>
+  <string name="remote_workspace_invalid_name">Enter a valid name without path separators or reserved names.</string>
+  <string name="remote_workspace_save_as_new_name">Use a different name to keep the original file.</string>
 </resources>

@@ -233,6 +233,7 @@ class ChatVM internal constructor(
                 } catch (_: net.weero.measix.pilot.service.runtime.ConversationNotFoundException) {
                     publish(PageState.Missing)
                 } catch (error: Exception) {
+                    android.util.Log.e("ChatVM", "Conversation page initialization failed for ${request.id} with ${request.access}", error)
                     publish(PageState.Failed(error))
                 } finally {
                     opened?.close()

@@ -159,7 +159,7 @@ class RichTextHostAndroidTest {
         compose.waitUntil(5_000) { received.size == 2 }
         assertNull(received[1])
         compose.runOnIdle { table.value = "| Name | Value |\n| --- | --- |\n| original | 1 |" }
-        compose.onNodeWithContentDescription("Download").performClick()
+        compose.onNodeWithContentDescription(compose.activity.getString(R.string.markdown_table_download)).performClick()
         assertEquals("text/csv", intents.last().type)
         compose.runOnIdle {
             table.value = "| Name | Value |\n| --- | --- |\n| replacement | 2 |"

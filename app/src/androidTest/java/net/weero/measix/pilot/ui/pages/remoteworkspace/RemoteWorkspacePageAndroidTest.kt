@@ -125,6 +125,8 @@ class RemoteWorkspacePageAndroidTest {
         }
         compose.onNodeWithContentDescription(text(R.string.remote_workspace_name)).performTextReplacement("invalid/name")
         compose.onNodeWithText(text(R.string.common_confirm)).performClick()
+        compose.onNodeWithText(text(R.string.remote_workspace_invalid_name)).assertIsDisplayed()
+        compose.onNode(hasText(text(R.string.remote_workspace_details)) and hasAnyAncestor(isDialog())).performClick()
         compose.onNodeWithText("invalid_workspace_name", substring = true).assertIsDisplayed()
         coVerify(exactly = 0) { f.service.createDirectory(any(), any()) }
         compose.onNodeWithContentDescription(text(R.string.remote_workspace_name)).performTextReplacement("new-folder")
@@ -202,11 +204,15 @@ class RemoteWorkspacePageAndroidTest {
         compose.onNodeWithText(text(R.string.common_confirm)).performClick()
         compose.waitForIdle()
         name.assert(hasText("invalid/name"))
+        compose.onNodeWithText(text(R.string.remote_workspace_invalid_name)).assertIsDisplayed()
+        compose.onNode(hasText(text(R.string.remote_workspace_details)) and hasAnyAncestor(isDialog())).performClick()
         compose.onNode(hasText("invalid_workspace_name", substring = true) and hasAnyAncestor(isDialog())).assertIsDisplayed()
         name.performTextReplacement(file.name)
         compose.onNodeWithText(text(R.string.common_confirm)).performClick()
         compose.waitForIdle()
         name.assert(hasText(file.name))
+        compose.onNodeWithText(text(R.string.remote_workspace_save_as_new_name)).assertIsDisplayed()
+        compose.onNode(hasText(text(R.string.remote_workspace_details)) and hasAnyAncestor(isDialog())).performClick()
         compose.onNode(hasText("workspace_save_as_requires_new_name", substring = true) and hasAnyAncestor(isDialog())).assertIsDisplayed()
         coVerify(exactly = 0) { f.service.save(any(), any(), any(), any()) }
         name.performTextReplacement("copied.txt")
@@ -494,7 +500,7 @@ class RemoteWorkspacePageAndroidTest {
         val bitmap = requireNotNull(InstrumentationRegistry.getInstrumentation().uiAutomation.takeScreenshot())
         val resolver = compose.activity.contentResolver
         val uri = requireNotNull(resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, ContentValues().apply {
-            put(MediaStore.MediaColumns.DISPLAY_NAME, name)
+            put(MediaStore.MediaColumns.DISPLAY_NAME, "${name.removeSuffix(".png")}-${java.util.UUID.randomUUID()}.png")
             put(MediaStore.MediaColumns.MIME_TYPE, "image/png")
             put(MediaStore.MediaColumns.RELATIVE_PATH, "Download/CodexRemoteWorkspace")
         }))

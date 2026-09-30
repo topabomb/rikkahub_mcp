@@ -26,7 +26,7 @@ internal val LocalRichTextActions = staticCompositionLocalOf<RichTextActions?> {
 
 internal class RichTextActions(
     val uriHandler: UriHandler,
-    val exportText: (String, String, String) -> Unit,
+    val exportText: ((String, String, String) -> Unit)?,
     val preview: (String) -> Unit,
 )
 

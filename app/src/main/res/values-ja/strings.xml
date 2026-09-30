@@ -229,7 +229,7 @@
   <string name="chat_conversation_missing_title">会話を利用できません</string>
   <string name="chat_conversation_missing_message">この会話が見つかりません。再試行して初期化してください。</string>
   <string name="chat_conversation_load_failed_title">会話を読み込めません</string>
-  <string name="chat_conversation_load_failed_message">会話データを読み込めませんでした: %1$s</string>
+  <string name="chat_conversation_load_failed_message">会話データを読み込めませんでした。再試行するか、スペースを開いて現在の接続を確認してください。</string>
   <string name="chat_message_add_favorite">お気に入りに追加</string>
   <string name="chat_message_remove_favorite">お気に入りから削除</string>
   <string name="chat_message_tool_approve">承認</string>
@@ -2045,4 +2045,10 @@
   <string name="remote_workspace_completed_count">%1$d 件完了</string>
   <string name="remote_workspace_problem_count">%1$d 件の確認が必要</string>
   <string name="remote_workspace_verification_count">%1$d 件の検証が必要</string>
+  <string name="chat_conversation_access_changed_message">このページで使用していたスペースまたはログイン権限は、現在利用できません。スペースを開いて現在の接続を確認するか、新しいチャットを開始してください。</string>
+  <string name="chat_conversation_diagnostics">技術情報</string>
+  <string name="markdown_table_title">表</string>
+  <string name="markdown_table_download">ダウンロード</string>
+  <string name="remote_workspace_invalid_name">パス区切り文字や予約名を含まない有効な名前を入力してください。</string>
+  <string name="remote_workspace_save_as_new_name">元のファイルを残すには、別の名前を使用してください。</string>
 </resources>

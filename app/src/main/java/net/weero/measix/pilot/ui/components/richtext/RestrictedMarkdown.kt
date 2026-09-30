@@ -18,7 +18,7 @@ internal fun RestrictedMarkdown(
             override fun openUri(uri: String) {
                 if (android.net.Uri.parse(uri).scheme?.lowercase() in setOf("https", "http", "mailto")) openLink(uri)
             }
-        }, exportText = { _, _, _ -> }, preview = {})
+        }, exportText = null, preview = {})
     }
     CompositionLocalProvider(LocalRichTextActions provides actions, LocalImageSourceResolver provides images) {
         MarkdownBlock(content, modifier, allowHtml = false)

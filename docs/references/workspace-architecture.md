@@ -306,8 +306,10 @@ UNKNOWN 与异常成功状态、发送后 IO 中断均不能当作失败后可�
 
 文本只支持严格 UTF-8、2 MiB 内及统一换行；一个 BOM 作为元信息，第二个 U+FEFF 保留正文。
 保存沿读取正文那次 GET 的 ETag，失败保留草稿，另存使用新文件条件。
-`RemoteWorkspaceVM` 持有单个原 handle/path 的内存编辑会话，界面重建复用同一 FileEditorState 和读取版本，
-关闭或撤权清除；进程死亡不从 Bundle/磁盘恢复正文或授权。分享副本使用短随机私有名和安全短扩展名，
+`RemoteWorkspaceVM` 持有单个原 handle/path 的内存编辑会话。`remoteWorkspaceEntry` 使用页面 UUID 作为
+Nav3 的 `clazzContentKey`，窗口或 Activity 重建复用原 VM、FileEditorState、读取版本及待处理 SAF 请求，
+恢复后的刷新仍使用 VM 捕获的原 selection。关闭或撤权清除；替换 Session 不复活旧授权，UNKNOWN 写入不重放。
+进程死亡没有原 VM，导航 key 不恢复临时 selection，文件页要求显式返回重开；不从 Bundle/磁盘恢复正文或授权。分享副本使用短随机私有名和安全短扩展名，
 FileProvider 保留原展示名；Intent 使用 URI 实际 MIME，避免真实副本类型与接收应用看到的类型不一致。
 图片内容校验像素上限，PDF 逐页原生渲染，资源均有上限；HTML/SVG 交给外部应用。`RestrictedMarkdown` 禁止原始 HTML、HTML/SVG/Mermaid 预览及外部图片，
 相对图片仍经原 handle 授权读取；不会向富文本渲染器暴露 Bearer URL。
@@ -322,6 +324,8 @@ FileProvider 保留原展示名；Intent 使用 URI 实际 MIME，避免真实�
 路径、筛选入口与新增入口共用一行；筛选按需在标题栏输入，避免矮横屏被键盘盖住，收起键盘后保留结果。
 筛选仅作用于当前目录；跳转目录清除筛选。
 长按选择后标题显示数量，批量动作由标题栏菜单提供，返回先退出选择模式。
+名称校验在提交前沿 `WorkspaceFileRules.child` 执行；非法名称及另存同源名称的预期拒绝留在原对话框，
+保留输入、可行动说明与可展开原诊断，不发远程写入或污染全页失败状态；其他异常仍报告完整诊断。
 批次结束或取消时先清空旧目录再开放动作，保留结果、待核实记录和编辑草稿；只有未取消且原句柄仍在使用时刷新。
 刷新沿原选择与句柄复验权限，新目录发布后仅保留仍存在的选择，空选择不能触发批量动作。
 目录选择不能选择源位置、源目录自身或内部；源目录不出现在可进入的目标列表中。

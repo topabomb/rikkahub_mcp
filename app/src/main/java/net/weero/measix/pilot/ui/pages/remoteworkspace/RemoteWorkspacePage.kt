@@ -44,6 +44,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.core.content.FileProvider
+import androidx.navigation3.runtime.EntryProviderScope
+import androidx.navigation3.runtime.NavKey
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -121,6 +123,10 @@ internal fun RemoteWorkspaceCard(summary: RemoteWorkspaceSummary, onOpen: () -> 
 private data class NamePrompt(val title: Int, val handle: RemoteWorkspaceHandle, val initial: String = "", val submit: (String) -> Unit)
 private data class FolderPrompt(val title: Int, val handle: RemoteWorkspaceHandle, val files: List<RemoteFile>, val action: RemoteFileAction)
 
+internal fun EntryProviderScope<NavKey>.remoteWorkspaceEntry() {
+    entry<Screen.RemoteWorkspace>(clazzContentKey = { it.id }) { key -> RemoteWorkspacePage(key.selection) }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun RemoteWorkspacePage(selection: RealmSelection?, vm: RemoteWorkspaceVM = koinViewModel { parametersOf(selection) }) {
@@ -186,10 +192,11 @@ internal fun RemoteWorkspacePage(selection: RealmSelection?, vm: RemoteWorkspace
         if (state.revoked) { detailFile = null; details = false; results = false }
     }
     val lifecycle = LocalLifecycleOwner.current
-    DisposableEffect(lifecycle, selection) {
+    DisposableEffect(lifecycle, vm) {
         val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_RESUME && selection != null) scope.launch {
-                try { vm.service.refresh(selection) }
+            val originalSelection = vm.selection
+            if (event == Lifecycle.Event.ON_RESUME && originalSelection != null) scope.launch {
+                try { vm.service.refresh(originalSelection) }
                 catch (cancelled: CancellationException) { throw cancelled }
                 catch (error: Exception) { vm.report(error) }
             }
@@ -300,7 +307,7 @@ internal fun RemoteWorkspacePage(selection: RealmSelection?, vm: RemoteWorkspace
             Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 if (state.revoked) Text(stringResource(R.string.remote_workspace_revoked))
                 else if (state.handle == null) {
-                    summary?.takeIf { it.selection == selection }?.let { Text(remoteWorkspaceStatusText(it.status)) }
+                    summary?.takeIf { it.selection == vm.selection }?.let { Text(remoteWorkspaceStatusText(it.status)) }
                     Button(vm::retry, enabled = !state.loading) { Text(stringResource(R.string.enterprise_budget_refresh)) }
                 } else {
                     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -535,14 +542,25 @@ private fun NameDialog(prompt: NamePrompt, dismiss: () -> Unit, report: (Throwab
     var value by remember(prompt) { mutableStateOf(TextFieldValue(prompt.initial, TextRange(0, prompt.initial.length))) }
     val focus = remember { FocusRequester() }
     var error by remember(prompt) { mutableStateOf<String?>(null) }
+    var hint by remember(prompt) { mutableStateOf<String?>(null) }
+    val invalidName = stringResource(R.string.remote_workspace_invalid_name)
+    val newName = stringResource(R.string.remote_workspace_save_as_new_name)
     val enabled = value.text.isNotBlank() && (prompt.title != R.string.remote_workspace_rename || value.text != prompt.initial)
     Dialog(onDismissRequest = dismiss, properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
         val keyboard = LocalSoftwareKeyboardController.current
         val focusManager = LocalFocusManager.current
         fun submit() {
             try { WorkspaceFileRules.child("", value.text); prompt.submit(value.text); dismiss() }
+            catch (cancelled: CancellationException) { throw cancelled }
             catch (failure: Exception) {
-                error = failure.userVisibleDiagnostic(); keyboard?.hide(); focusManager.clearFocus(); report(failure)
+                error = failure.userVisibleDiagnostic()
+                hint = if (failure is IllegalArgumentException) when (failure.message) {
+                    "invalid_workspace_name", "invalid_workspace_path" -> invalidName
+                    "workspace_save_as_requires_new_name" -> newName
+                    else -> null
+                } else null
+                keyboard?.hide(); focusManager.clearFocus()
+                if (hint == null) report(failure)
             }
         }
         val window = LocalWindowInfo.current
@@ -568,7 +586,7 @@ private fun NameDialog(prompt: NamePrompt, dismiss: () -> Unit, report: (Throwab
                     // Only the buttons move: the field keeps its composition position and IME connection.
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         val label = stringResource(R.string.remote_workspace_name)
-                        OutlinedTextField(value, { value = it; error = null },
+                        OutlinedTextField(value, { value = it; error = null; hint = null },
                             Modifier.weight(1f).focusRequester(focus).semantics { contentDescription = label },
                             singleLine = true, label = { Text(stringResource(if (compact) prompt.title else R.string.remote_workspace_name),
                                 maxLines = 1, overflow = TextOverflow.Ellipsis) },
@@ -576,8 +594,9 @@ private fun NameDialog(prompt: NamePrompt, dismiss: () -> Unit, report: (Throwab
                             keyboardActions = KeyboardActions(onDone = { keyboard?.hide(); focusManager.clearFocus() }))
                         if (compact) buttons()
                     }
-                    error?.let { SelectionContainer(Modifier.weight(1f, fill = false).heightIn(max = errorHeight).verticalScroll(rememberScrollState())) {
-                        Text(it, color = MaterialTheme.colorScheme.error)
+                    error?.let { diagnostic -> Column(Modifier.weight(1f, fill = false).heightIn(max = errorHeight).verticalScroll(rememberScrollState())) {
+                        hint?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+                        Diagnostic(diagnostic)
                     } }
                     if (!compact) Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End, content = buttons)
                 }

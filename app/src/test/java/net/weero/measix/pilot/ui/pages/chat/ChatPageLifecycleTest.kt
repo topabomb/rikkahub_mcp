@@ -24,6 +24,7 @@ import me.rerere.ai.ui.UIMessagePart
 import me.rerere.common.configuration.ConfigurationReference
 import net.weero.measix.pilot.data.datastore.SettingsStore
 import net.weero.measix.pilot.data.enterprise.RealmAccess
+import net.weero.measix.pilot.data.enterprise.EnterpriseConfigurationException
 import net.weero.measix.pilot.data.model.Conversation
 import net.weero.measix.pilot.service.*
 import net.weero.measix.pilot.service.runtime.ConversationNotFoundException
@@ -133,6 +134,31 @@ class ChatPageLifecycleTest {
             vm.retryConversationLoad()
             runCurrent()
             assertTrue(vm.conversationState.value is ConversationReadState.Ready)
+        } finally { fixture.store.clear(); Dispatchers.resetMain() }
+    }
+
+    @Test fun `retry of a rejected original request never captures current access or opens attachments`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val fixture = Fixture()
+        val failure = EnterpriseConfigurationException("enterprise_data_access_unavailable")
+        coEvery { fixture.application.initialize(fixture.request) } throws failure
+        try {
+            val vm = fixture.create()
+            runCurrent()
+            assertSame(failure, (vm.conversationState.value as ConversationReadState.Failed).error)
+            vm.retryConversationLoad()
+            runCurrent()
+            assertSame(failure, (vm.conversationState.value as ConversationReadState.Failed).error)
+            assertNull(vm.snapshot.value)
+            assertTrue(vm.inputState.textContent.text.isEmpty())
+            assertTrue(vm.inputState.messageContent.isEmpty())
+            coVerify(exactly = 2) { fixture.application.initialize(fixture.request) }
+            coVerify(exactly = 0) { fixture.query.captureCurrentAccess() }
+            coVerify(exactly = 0) { fixture.application.newDraftRequest(any<RealmAccess>()) }
+            coVerify(exactly = 0) { fixture.application.newDraftRequest(any<net.weero.measix.pilot.data.enterprise.RealmSelection>()) }
+            verify(exactly = 0) { fixture.artifacts.openDraftScope(any()) }
+            verify(exactly = 0) { fixture.query.observeConversation(any()) }
+            verify(exactly = 0) { fixture.favorites.observeNodeIds(any()) }
         } finally { fixture.store.clear(); Dispatchers.resetMain() }
     }
 

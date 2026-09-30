@@ -2,6 +2,7 @@ package net.weero.measix.pilot.ui.pages.chat
 
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
+import android.content.ClipData
 import android.net.Uri
 import android.util.Log
 import androidx.activity.compose.BackHandler
@@ -12,6 +13,7 @@ import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -19,6 +21,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.size
@@ -26,6 +29,8 @@ import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.text.selection.SelectionContainer
@@ -60,7 +65,10 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.ClipEntry
+import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.res.stringResource
@@ -95,6 +103,7 @@ import me.rerere.hugeicons.stroke.PanelLeftOpen
 import net.weero.measix.pilot.R
 import net.weero.measix.pilot.ui.components.ui.TTSController
 import net.weero.measix.pilot.Screen
+import net.weero.measix.pilot.data.enterprise.EnterpriseConfigurationException
 import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.datastore.findProvider
 import net.weero.measix.pilot.data.datastore.getAssistantById
@@ -205,11 +214,11 @@ fun ChatPage(
             return
         }
         is ConversationReadState.Failed -> {
-            val diagnostic = state.error.message ?: state.error::class.simpleName.orEmpty()
             Box(Modifier.fillMaxSize()) {
                 ConversationUnavailable(
                     title = stringResource(R.string.chat_conversation_load_failed_title),
-                    message = stringResource(R.string.chat_conversation_load_failed_message, diagnostic),
+                    message = stringResource(conversationLoadFailureMessage(state.error)),
+                    diagnostic = state.error.userVisibleDiagnostic(),
                     onRetry = vm::retryConversationLoad,
                     onNewChat = { chatNavigation.newChat() },
                 )
@@ -466,31 +475,69 @@ private data class ChatListInitializationKey(
     val nodeId: Uuid?,
 )
 
+internal fun conversationLoadFailureMessage(error: Throwable): Int {
+    val accessChanged = when (error) {
+        is EnterpriseConfigurationException -> error.reason == "enterprise_data_access_unavailable"
+        is IllegalStateException -> error.message == "conversation_view_unavailable"
+        else -> false
+    }
+    return if (accessChanged) R.string.chat_conversation_access_changed_message
+        else R.string.chat_conversation_load_failed_message
+}
+
 @Composable
-private fun ConversationUnavailable(
+internal fun ConversationUnavailable(
     title: String,
     message: String,
     onRetry: () -> Unit,
-    onNewChat: () -> Unit,
+    onNewChat: (() -> Unit)? = null,
+    diagnostic: String? = null,
 ) {
-    Column(
-        modifier = Modifier.fillMaxSize(),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center,
+    val nav = LocalNavController.current
+    val clipboard = LocalClipboard.current
+    val scope = rememberCoroutineScope()
+    var detailsOpen by remember(diagnostic) { mutableStateOf(false) }
+    Box(
+        modifier = Modifier.fillMaxSize().safeDrawingPadding().padding(horizontal = 24.dp),
+        contentAlignment = Alignment.Center,
     ) {
-        Text(text = title, style = MaterialTheme.typography.titleMedium)
-        Spacer(Modifier.height(8.dp))
-        Text(
-            text = message,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            style = MaterialTheme.typography.bodyMedium,
-        )
-        Spacer(Modifier.height(4.dp))
-        TextButton(onClick = onRetry) {
-            Text(stringResource(R.string.application_recovery_retry))
-        }
-        TextButton(onClick = onNewChat) {
-            Text(stringResource(R.string.chat_page_new_chat))
+        Column(
+            modifier = Modifier.widthIn(max = 640.dp).fillMaxWidth()
+                .verticalScroll(rememberScrollState()).padding(vertical = 24.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text(text = title, style = MaterialTheme.typography.titleMedium)
+            Text(text = message, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                style = MaterialTheme.typography.bodyMedium)
+            FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
+                TextButton(onClick = onRetry) { Text(stringResource(R.string.application_recovery_retry)) }
+                onNewChat?.let { action ->
+                    TextButton(onClick = action) { Text(stringResource(R.string.chat_page_new_chat)) }
+                }
+                TextButton(
+                    onClick = { nav.navigate(Screen.Enterprise) { launchSingleTop = true } },
+                    modifier = Modifier.testTag("conversation-recovery-spaces"),
+                ) { Text(stringResource(R.string.enterprise_spaces)) }
+            }
+            diagnostic?.let { detail ->
+                TextButton(onClick = { detailsOpen = !detailsOpen },
+                    modifier = Modifier.testTag("conversation-recovery-diagnostics")) {
+                    Text(stringResource(R.string.chat_conversation_diagnostics))
+                }
+                if (detailsOpen) {
+                    TextButton(onClick = {
+                        scope.launch { clipboard.setClipEntry(ClipEntry(ClipData.newPlainText("Conversation error", detail))) }
+                    }, modifier = Modifier.testTag("conversation-recovery-copy")) {
+                        Text(stringResource(R.string.chat_page_copy_error))
+                    }
+                    SelectionContainer {
+                        Text(detail, modifier = Modifier.fillMaxWidth().testTag("conversation-recovery-detail"),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            style = MaterialTheme.typography.bodySmall)
+                    }
+                }
+            }
         }
     }
 }

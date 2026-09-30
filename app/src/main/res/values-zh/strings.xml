@@ -231,7 +231,7 @@
   <string name="chat_conversation_missing_title">会话不可用</string>
   <string name="chat_conversation_missing_message">找不到此会话。请重试以重新初始化。</string>
   <string name="chat_conversation_load_failed_title">无法加载会话</string>
-  <string name="chat_conversation_load_failed_message">无法读取会话数据：%1$s</string>
+  <string name="chat_conversation_load_failed_message">无法读取会话数据。请重试，或打开空间查看当前连接。</string>
   <string name="chat_message_add_favorite">添加收藏</string>
   <string name="chat_message_remove_favorite">取消收藏</string>
   <string name="chat_message_tool_approve">批准</string>
@@ -2045,4 +2045,10 @@
   <string name="remote_workspace_completed_count">已完成 %1$d 项</string>
   <string name="remote_workspace_problem_count">%1$d 项需要处理</string>
   <string name="remote_workspace_verification_count">%1$d 项待核实</string>
+  <string name="chat_conversation_access_changed_message">此页面无法继续使用原有的空间或登录授权。请打开空间查看当前连接，或新建聊天。</string>
+  <string name="chat_conversation_diagnostics">技术信息</string>
+  <string name="markdown_table_title">表格</string>
+  <string name="markdown_table_download">下载</string>
+  <string name="remote_workspace_invalid_name">请输入有效名称，不要包含路径分隔符或使用保留名称。</string>
+  <string name="remote_workspace_save_as_new_name">请使用其他名称，以保留原文件。</string>
 </resources>

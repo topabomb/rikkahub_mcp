@@ -7,6 +7,7 @@ import io.mockk.mockk
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.*
+import kotlinx.serialization.json.Json
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
 import me.rerere.common.configuration.ConfigurationReference
@@ -58,6 +59,62 @@ class ConversationCommandAccessTest {
             assertEquals(InitialConversationRequest.Open(ConversationOpenRequest.OpenExisting(f.rootId, access)),
                 f.application.initialRequest(false))
             coVerify(exactly = 0) { f.repository.commit(any()) }
+        }
+    }
+
+    @Test fun `restored request keeps its old Session while the same scope has valid replacement access`() = runTest {
+        fixture { f ->
+            val original = ConversationOpenRequest.OpenExisting(f.rootId, f.page.access)
+            val restored = Json.decodeFromString<ConversationOpenRequest>(
+                Json.encodeToString<ConversationOpenRequest>(original),
+            )
+            f.sessions.finishExit(f.sessions.beginExit(requireNotNull(f.sessions.captureExitRequest())))
+            f.sessions.enrollFixture(exampleEnterprisePackage())
+            val current = f.sessions.captureSelectedRealmAccess() as RealmAccess.Enterprise
+            assertEquals(original.access.scope, current.scope)
+            assertNotEquals(original.access, current)
+            assertEquals(EnterpriseSessionPhase.READY, (f.sessions.state.value as EnterpriseState.Available).manifest.phase)
+            assertTrue(f.sessions.observeRealmAccess(current).first())
+            repeat(2) {
+                try {
+                    f.application.initialize(restored).close()
+                    fail("The restored request must not acquire the replacement Session")
+                } catch (error: EnterpriseConfigurationException) {
+                    assertEquals("enterprise_data_access_unavailable", error.reason)
+                }
+                assertEquals(current, f.sessions.captureSelectedRealmAccess())
+                assertEquals(original, restored)
+            }
+            val fresh = f.application.initialize(ConversationOpenRequest.OpenExisting(f.rootId, current))
+            try {
+                assertEquals(f.rootId, fresh.conversationId)
+                assertEquals(current, fresh.access)
+            } finally { fresh.close() }
+            coEvery { f.settings.lastConversation(f.scope) } returns null
+            val next = (f.application.initialRequest(true) as InitialConversationRequest.Open).request
+            assertEquals(current, next.access)
+            assertNotEquals(original.id, next.id)
+            assertEquals(1, f.rows.size)
+            coVerify(exactly = 0) { f.repository.commit(any()) }
+            coVerify(exactly = 0) { f.artifactStore.materializeConfigurationMessages(any(), any(), any()) }
+        }
+    }
+
+    @Test fun `personal request remains rejected after joining a valid selected enterprise space`() = runTest {
+        fixture { f ->
+            val personal = ConversationOpenRequest.NewDraft(Uuid.random(), RealmAccess.Personal, DEFAULT_ASSISTANT_ID)
+            val current = f.sessions.captureSelectedRealmAccess()
+            try {
+                f.application.initialize(personal).close()
+                fail("The personal request must not acquire enterprise access")
+            } catch (error: EnterpriseConfigurationException) {
+                assertEquals("enterprise_data_access_unavailable", error.reason)
+            }
+            assertEquals(current, f.sessions.captureSelectedRealmAccess())
+            assertTrue(f.sessions.observeRealmAccess(current as RealmAccess.Enterprise).first())
+            assertFalse(f.rows.containsKey(personal.id))
+            coVerify(exactly = 0) { f.repository.commit(any()) }
+            coVerify(exactly = 0) { f.artifactStore.materializeConfigurationMessages(any(), any(), any()) }
         }
     }
 

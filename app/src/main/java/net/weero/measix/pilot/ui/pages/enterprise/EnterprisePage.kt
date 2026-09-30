@@ -12,6 +12,7 @@ import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.listSaver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.Alignment
@@ -45,6 +46,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.github.g00fy2.quickie.QRResult
 import io.github.g00fy2.quickie.ScanQRCode
 import kotlinx.coroutines.*
+import kotlinx.serialization.json.Json
 import net.weero.measix.pilot.R
 import net.weero.measix.pilot.Screen
 import net.weero.measix.pilot.data.enterprise.EnterpriseSessionPhase
@@ -252,8 +254,18 @@ internal fun EnterprisePage(openUsage: Boolean = false, vm: EnterpriseVM = koinV
     val configurationDetails by vm.configurationDetails.collectAsStateWithLifecycle()
     val lifecycleOwner = LocalLifecycleOwner.current
     val nav = LocalNavController.current
-    var initialSelection by remember { mutableStateOf<RealmSelection?>(null) }
-    var initialSelectionCaptured by remember { mutableStateOf(false) }
+    // Back must retain the entry's original selection across recreation, including its Session identity.
+    var initialSelection by rememberSaveable(stateSaver = listSaver<RealmSelection?, Any>(
+        save = { selection ->
+            selection?.let { listOf(Json.encodeToString(it.access), it.revision) } ?: emptyList()
+        },
+        restore = { saved ->
+            if (saved.isEmpty()) null else RealmSelection(
+                Json.decodeFromString<RealmAccess>(saved[0] as String), saved[1] as Long,
+            )
+        },
+    )) { mutableStateOf<RealmSelection?>(null) }
+    var initialSelectionCaptured by rememberSaveable { mutableStateOf(false) }
     var usageDestinationOpened by remember { mutableStateOf(false) }
     LaunchedEffect(state) {
         if (!initialSelectionCaptured && state != null) {

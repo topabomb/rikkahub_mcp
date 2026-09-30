@@ -55,7 +55,7 @@ internal data class RemoteBrowserState(
 )
 
 internal class RemoteWorkspaceVM(
-    private val selection: RealmSelection?,
+    val selection: RealmSelection?,
     val service: RemoteWorkspaceService,
     private val context: Context,
 ) : ViewModel() {

@@ -152,7 +152,7 @@ fun HighlightCodeBlock(
                 scope = scope,
                 clipboardManager = clipboardManager,
                 code = code,
-                onExport = { name -> actions?.exportText?.invoke(code, name, "text/plain") },
+                onExport = actions?.exportText?.let { export -> { name -> export(code, name, "text/plain") } },
                 fullScreenPreviewContent = fullScreenPreviewContent,
                 previewMode = previewMode,
                 canInlinePreview = canInlinePreview,
@@ -368,7 +368,7 @@ private fun HighlightCodeActions(
     scope: CoroutineScope,
     clipboardManager: Clipboard,
     code: String,
-    onExport: (String) -> Unit,
+    onExport: ((String) -> Unit)?,
     fullScreenPreviewContent: String? = null,
     previewMode: Boolean = false,
     canInlinePreview: Boolean = false,
@@ -396,41 +396,43 @@ private fun HighlightCodeActions(
             val iconSize = 16.dp
             val iconTint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
 
-            Icon(
-                imageVector = HugeIcons.Download04,
-                contentDescription = stringResource(id = R.string.chat_page_save),
-                tint = iconTint,
-                modifier = Modifier
-                    .clip(RoundedCornerShape(4.dp))
-                    .onClick {
-                        val extension = when (language.lowercase()) {
-                            "kotlin" -> "kt"
-                            "java" -> "java"
-                            "python" -> "py"
-                            "javascript" -> "js"
-                            "typescript" -> "ts"
-                            "cpp", "c++" -> "cpp"
-                            "c" -> "c"
-                            "html" -> "html"
-                            "css" -> "css"
-                            "xml" -> "xml"
-                            "json" -> "json"
-                            "yaml", "yml" -> "yml"
-                            "markdown", "md" -> "md"
-                            "sql" -> "sql"
-                            "sh", "bash" -> "sh"
-                            "svg" -> "svg"
-                            else -> "txt"
+            if (onExport != null) {
+                Icon(
+                    imageVector = HugeIcons.Download04,
+                    contentDescription = stringResource(id = R.string.chat_page_save),
+                    tint = iconTint,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(4.dp))
+                        .onClick {
+                            val extension = when (language.lowercase()) {
+                                "kotlin" -> "kt"
+                                "java" -> "java"
+                                "python" -> "py"
+                                "javascript" -> "js"
+                                "typescript" -> "ts"
+                                "cpp", "c++" -> "cpp"
+                                "c" -> "c"
+                                "html" -> "html"
+                                "css" -> "css"
+                                "xml" -> "xml"
+                                "json" -> "json"
+                                "yaml", "yml" -> "yml"
+                                "markdown", "md" -> "md"
+                                "sql" -> "sql"
+                                "sh", "bash" -> "sh"
+                                "svg" -> "svg"
+                                else -> "txt"
+                            }
+                            onExport(
+                                "code_${
+                                    Clock.System.now().toLocalDateTime(TimeZone.currentSystemDefault())
+                                }.$extension"
+                            )
                         }
-                        onExport(
-                            "code_${
-                                Clock.System.now().toLocalDateTime(TimeZone.currentSystemDefault())
-                            }.$extension"
-                        )
-                    }
-                    .padding(4.dp)
-                    .size(iconSize)
-            )
+                        .padding(4.dp)
+                        .size(iconSize)
+                )
+            }
 
             Icon(
                 imageVector = HugeIcons.Copy01,

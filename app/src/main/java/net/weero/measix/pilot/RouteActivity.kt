@@ -14,6 +14,7 @@ import android.annotation.SuppressLint
 import android.content.Intent
 import android.os.Build
 import android.os.Bundle
+import android.util.Log
 import android.view.KeyEvent
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -100,7 +101,10 @@ import net.weero.measix.pilot.ui.pages.assistant.detail.AssistantMemoryPage
 import net.weero.measix.pilot.ui.pages.assistant.detail.AssistantPromptPage
 import net.weero.measix.pilot.ui.pages.assistant.detail.AssistantRequestPage
 import net.weero.measix.pilot.ui.pages.backup.BackupPage
+import net.weero.measix.pilot.ui.pages.remoteworkspace.remoteWorkspaceEntry
 import net.weero.measix.pilot.ui.pages.chat.ChatPage
+import net.weero.measix.pilot.ui.pages.chat.ConversationUnavailable
+import net.weero.measix.pilot.ui.pages.chat.conversationLoadFailureMessage
 import net.weero.measix.pilot.ui.pages.debug.DebugPage
 import net.weero.measix.pilot.ui.pages.extensions.ExtensionsPage
 import net.weero.measix.pilot.ui.pages.extensions.PromptPage
@@ -405,9 +409,7 @@ class RouteActivity : ComponentActivity() {
                                 net.weero.measix.pilot.ui.pages.enterprise.EnterprisePage()
                             }
 
-                            entry<Screen.RemoteWorkspace> { key ->
-                                net.weero.measix.pilot.ui.pages.remoteworkspace.RemoteWorkspacePage(key.selection)
-                            }
+                            remoteWorkspaceEntry()
 
                             entry<Screen.EnterpriseUsage> {
                                 net.weero.measix.pilot.ui.pages.enterprise.EnterprisePage(openUsage = true)
@@ -626,14 +628,20 @@ class RouteActivity : ComponentActivity() {
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: Exception) {
+                Log.e(TAG, "Initial conversation request failed", error)
                 failure = error
             }
         }
-        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            if (failure == null) CircularProgressIndicator() else Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                Text(stringResource(R.string.chat_conversation_load_failed_title))
-                Button(onClick = { retry++ }) { Text(stringResource(R.string.application_recovery_retry)) }
-            }
+        val error = failure
+        if (error == null) {
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
+        } else {
+            ConversationUnavailable(
+                title = stringResource(R.string.chat_conversation_load_failed_title),
+                message = stringResource(conversationLoadFailureMessage(error)),
+                diagnostic = error.userVisibleDiagnostic(),
+                onRetry = { retry++ },
+            )
         }
     }
 

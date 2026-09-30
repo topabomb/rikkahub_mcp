@@ -94,7 +94,9 @@ Markdown 全文预览另经 `buildMarkdownPreviewHtml` 和 `assets/html/mark.htm
 
 ## 4. 图片、链接与导出来源
 
-`RichTextHost` 为渲染树提供链接、预览和唯一待处理文档选择器。聊天/子助手借用 `ConversationViewLease`，
+`RichTextHost` 为渲染树提供链接、预览和唯一待处理文档选择器。
+`RichTextActions.exportText` 未提供时，表格和代码块只保留复制，不显示没有处理者的保存/下载动作；
+远程文件的 `RestrictedMarkdown` 使用这一边界，正文文件下载仍由文件页负责。聊天/子助手借用 `ConversationViewLease`，
 共享用户配置预览使用 `UserConfiguration`，开发示例与更新说明使用 `Static`。
 渲染组件不访问 Store、不根据当前空间重新推断来源；缺少交互宿主的离屏树只显示内容，不能借系统默认 URI handler 打开资源。
 两个 Markdown 引擎及 HTML 链接共用原宿主的 URI handler。

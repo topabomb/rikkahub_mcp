@@ -2,6 +2,7 @@ package net.weero.measix.pilot.ui.pages.enterprise
 
 import androidx.activity.ComponentActivity
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.test.assertIsDisplayed
@@ -9,6 +10,7 @@ import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.test.junit4.StateRestorationTester
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
@@ -536,6 +538,80 @@ class EnterprisePageAndroidTest {
     }
 
     @Test
+    fun replacementSessionAfterStateRestorationCannotReturnToThePreviousChat() {
+        val original = overview()
+        val request = ConversationOpenRequest.NewDraft(
+            kotlin.uuid.Uuid.random(), requireNotNull(original.access),
+            me.rerere.common.configuration.ConfigurationReference.random(),
+        )
+        val fixture = Fixture(original, mutableListOf(Screen.Chat(request), Screen.Enterprise))
+        val restoration = StateRestorationTester(compose)
+        fixture.show(restoration = restoration)
+        val replacement = overview(access = access("replacement-session"), revision = 2L)
+        fixture.state.value = replacement
+        compose.waitUntil(5_000) { fixture.vm.overview.value == replacement }
+        compose.waitForIdle()
+        restoration.emulateSavedInstanceStateRestore()
+        compose.onNodeWithContentDescription(text(R.string.back)).performClick()
+        compose.runOnIdle { assertEquals(listOf(Screen.Startup()), fixture.backStack) }
+    }
+
+    @Test
+    fun firstEnrollmentAfterStateRestorationCannotReturnToThePersonalChat() {
+        val request = ConversationOpenRequest.NewDraft(
+            kotlin.uuid.Uuid.random(), RealmAccess.Personal,
+            me.rerere.common.configuration.ConfigurationReference.random(),
+        )
+        val fixture = Fixture(overview(access = null), mutableListOf(Screen.Chat(request), Screen.Enterprise))
+        val joined = overview(revision = 2L)
+        val confirmation = EnterpriseJoinConfirmation(kotlin.uuid.Uuid.random(), "https://core.example")
+        coEvery { fixture.service.join("test enrollment") } returns confirmation
+        coEvery { fixture.service.confirmJoin(confirmation) } coAnswers {
+            fixture.state.value = joined
+            EnterpriseSynchronizationCommandResult.COMPLETED
+        }
+        val restoration = StateRestorationTester(compose)
+        fixture.show(restoration = restoration)
+        click(R.string.enterprise_join_paste)
+        compose.onNode(hasSetTextAction()).performTextInput("test enrollment")
+        compose.onNodeWithText(text(R.string.enterprise_join_submit)).performClick()
+        compose.waitUntil(5_000) { fixture.vm.joinConfirmation.value == confirmation }
+        compose.onNodeWithText(text(R.string.confirm)).performClick()
+        compose.waitUntil(5_000) { fixture.vm.overview.value == joined && !fixture.vm.busy.value }
+        compose.runOnIdle { assertEquals(listOf(Screen.Chat(request), Screen.Enterprise), fixture.backStack) }
+        restoration.emulateSavedInstanceStateRestore()
+        compose.onNodeWithContentDescription(text(R.string.back)).performClick()
+        compose.runOnIdle { assertEquals(listOf(Screen.Startup()), fixture.backStack) }
+        coVerify(exactly = 1) { fixture.service.confirmJoin(confirmation) }
+    }
+
+    @Test
+    fun selectionRoundTripAfterStateRestorationInterceptsSystemBack() {
+        val original = overview()
+        val fixture = Fixture(original, mutableListOf(Screen.Setting, Screen.Enterprise))
+        val restoration = StateRestorationTester(compose)
+        fixture.show(restoration = restoration)
+        fixture.state.value = overview(access = null, revision = 2L)
+        compose.waitUntil(5_000) { fixture.vm.overview.value == fixture.state.value }
+        fixture.state.value = original.copy(selection = RealmSelection(requireNotNull(original.access), 3L))
+        compose.waitUntil(5_000) { fixture.vm.overview.value == fixture.state.value }
+        compose.waitForIdle()
+        restoration.emulateSavedInstanceStateRestore()
+        compose.runOnUiThread { compose.activity.onBackPressedDispatcher.onBackPressed() }
+        compose.runOnIdle { assertEquals(listOf(Screen.Startup()), fixture.backStack) }
+    }
+
+    @Test
+    fun unchangedSelectionAfterStateRestorationReturnsToTheOpeningPage() {
+        val fixture = Fixture(overview(), mutableListOf(Screen.Setting, Screen.Enterprise))
+        val restoration = StateRestorationTester(compose)
+        fixture.show(restoration = restoration)
+        restoration.emulateSavedInstanceStateRestore()
+        compose.onNodeWithContentDescription(text(R.string.back)).performClick()
+        compose.runOnIdle { assertEquals(listOf(Screen.Setting), fixture.backStack) }
+    }
+
+    @Test
     fun syncFeedbackDoesNotSurviveTheEnterpriseSelectionThatProducedIt() {
         val original = overview()
         val fixture = Fixture(original)
@@ -793,7 +869,7 @@ class EnterprisePageAndroidTest {
         val service = mockk<EnterpriseApplicationService>()
         lateinit var vm: EnterpriseVM
 
-        fun show(withVerticalHinge: Boolean = false) {
+        fun show(withVerticalHinge: Boolean = false, restoration: StateRestorationTester? = null) {
             every { service.observe() } returns state
             every { service.runtimeUsageChanges() } returns emptyFlow()
             coEvery { service.recentUpdates(any(), any()) } returns recentUpdates
@@ -802,7 +878,7 @@ class EnterprisePageAndroidTest {
                 viewModels.put("enterprise", vm)
             }
             val navigator = Navigator(backStack)
-            compose.setContent {
+            val content: @Composable () -> Unit = {
                 val toaster = rememberToasterState()
                 val measuredAdaptive = rememberAdaptiveLayoutInfo()
                 val adaptive = if (withVerticalHinge) {
@@ -828,6 +904,7 @@ class EnterprisePageAndroidTest {
                     }
                 }
             }
+            if (restoration == null) compose.setContent(content) else restoration.setContent(content)
             compose.waitUntil(5_000) { vm.overview.value == state.value }
         }
     }
