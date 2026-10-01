@@ -231,7 +231,7 @@
   <string name="chat_conversation_missing_title">Conversation unavailable</string>
   <string name="chat_conversation_missing_message">This conversation could not be found. Retry to initialize it again.</string>
   <string name="chat_conversation_load_failed_title">Unable to load conversation</string>
-  <string name="chat_conversation_load_failed_message">The conversation data could not be loaded. Retry or open Spaces to check the current connection.</string>
+  <string name="chat_conversation_load_failed_message">The chat could not be read. Retry or expand the error details to see the cause.</string>
   <string name="chat_message_add_favorite">Add Favorite</string>
   <string name="chat_message_remove_favorite">Remove Favorite</string>
   <string name="chat_message_tool_approve">Approve</string>
@@ -2062,4 +2062,5 @@
   <string name="file_preview_previous_page">Previous page</string>
   <string name="file_preview_next_page">Next page</string>
   <string name="file_browser_parent_folder">Parent folder</string>
+  <string name="chat_recent_conversation_save_failed">Could not update the most recently opened chat. You can keep using this chat; reopen it to try again.\n\n%1$s</string>
 </resources>

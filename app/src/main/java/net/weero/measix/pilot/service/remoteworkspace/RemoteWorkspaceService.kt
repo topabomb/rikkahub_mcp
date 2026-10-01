@@ -238,7 +238,7 @@ internal class RemoteWorkspaceService(
         }
     }
 
-    suspend fun list(handle: RemoteWorkspaceHandle, path: String): RemoteDirectory = operation(handle) { token ->
+    suspend fun list(handle: RemoteWorkspaceHandle, path: String): RemoteDirectory = operation(handle, retryRejectedToken = true) { token ->
         val result = client.list(handle.connection, token, handle.space, path)
         validate(handle)
         synchronized(monitor) {
@@ -253,7 +253,7 @@ internal class RemoteWorkspaceService(
             it.size, it.modifiedAt, it.etag) }, result.usedBytes, result.availableBytes)
     }
 
-    suspend fun readText(handle: RemoteWorkspaceHandle, file: RemoteFile): RemoteTextDocument = operation(handle) { token ->
+    suspend fun readText(handle: RemoteWorkspaceHandle, file: RemoteFile): RemoteTextDocument = operation(handle, retryRejectedToken = true) { token ->
         val buffer = ByteArrayOutputStream()
         val metadata = client.download(handle.connection, token, handle.space, file.path, buffer, WorkspaceFileRules.TEXT_LIMIT.toLong())
         RemoteTextDocument(file.copy(etag = metadata.etag, size = metadata.length), WorkspaceText.decode(buffer.toByteArray()))
@@ -447,7 +447,7 @@ internal class RemoteWorkspaceService(
             },
             verifyAccess = { validate(handle) },
             readPayload = {
-                operation(handle) { token ->
+                operation(handle, retryRejectedToken = true) { token ->
                     val buffer = ByteArrayOutputStream()
                     client.download(handle.connection, token, handle.space, file.path, buffer, maxBytes)
                     buffer.toByteArray().also { bytes ->
@@ -497,21 +497,27 @@ internal class RemoteWorkspaceService(
         send: suspend (String) -> PlatformWorkspaceFileResult,
     ): RemoteOperationResult {
         var sent = false
+        var confirmedRejection = false
         return try {
             operation(handle, writing = true) { token ->
                 if (synchronized(monitor) { path in uncertain[handle.writeTarget()].orEmpty() }) {
                     return@operation RemoteOperationResult(path, RemoteOutcome.UNKNOWN, "workspace_verify_unknown_result_first")
                 }
                 sent = true
-                val result = send(token)
+                val result = try {
+                    send(token)
+                } catch (error: PlatformHttpException) {
+                    // Credential recovery may be cancelled after Core has already confirmed this rejection.
+                    confirmedRejection = !unknownWriteFailure(error)
+                    throw error
+                }
                 val outcome = RemoteOutcome.valueOf(result.outcome.name)
                 if (outcome == RemoteOutcome.UNKNOWN) synchronized(monitor) { uncertain.getOrPut(handle.writeTarget()) { mutableSetOf() } += path }
                 RemoteOperationResult(path, outcome, result.failures.joinToString("\n") { "${it.path}: HTTP ${it.status} ${it.code}" }
                     .let { if (result.truncated) "$it\nworkspace_failure_details_truncated" else it }.ifBlank { null })
             }
         } catch (error: Exception) {
-            val unknown = sent && (error !is PlatformHttpException || error.problem?.code == "workspace_result_unknown" ||
-                error.status !in setOf(400, 401, 403, 404, 409, 412, 413, 422, 423, 429, 507))
+            val unknown = sent && !confirmedRejection && unknownWriteFailure(error)
             if (unknown) synchronized(monitor) { uncertain.getOrPut(handle.writeTarget()) { mutableSetOf() } += path }
             if (error is CancellationException) throw error
             android.util.Log.e("RemoteWorkspace", "File write failed", error)
@@ -519,9 +525,13 @@ internal class RemoteWorkspaceService(
         }
     }
 
+    private fun unknownWriteFailure(error: Throwable): Boolean = error !is PlatformHttpException ||
+        error.problem?.code == "workspace_result_unknown" ||
+        error.status !in setOf(400, 401, 403, 404, 409, 412, 413, 422, 423, 429, 507)
+
     @OptIn(ExperimentalCoroutinesApi::class)
     private suspend fun <T> operation(handle: RemoteWorkspaceHandle, writing: Boolean = false,
-        onFailure: suspend (Throwable) -> Unit = {}, action: suspend (String) -> T,
+        retryRejectedToken: Boolean = false, onFailure: suspend (Throwable) -> Unit = {}, action: suspend (String) -> T,
     ): T {
         val cleaned = AtomicBoolean(false)
         suspend fun cleanup(error: Throwable) {
@@ -545,7 +555,23 @@ internal class RemoteWorkspaceService(
                         validate(handle)
                         val token = platform.accessToken(access.sessionId, handle.connection)
                         validate(handle)
-                        val result = action(token.value)
+                        val result = try {
+                            action(token.value)
+                        } catch (error: PlatformHttpException) {
+                            if (error.status != 401 || error.problem?.code != "invalid_credential") throw error
+                            val replacement = try {
+                                platform.recoverWorkspaceAccessToken(access, handle.connection, token)
+                            } catch (cancelled: CancellationException) {
+                                throw cancelled
+                            } catch (recoveryFailure: Exception) {
+                                error.addSuppressed(recoveryFailure)
+                                throw error
+                            }
+                            validate(handle)
+                            // Streaming reads own SAF/output resources, so only calls with fresh resources may retry.
+                            if (writing || !retryRejectedToken) throw error
+                            action(replacement.value)
+                        }
                         validate(handle)
                         result
                     } catch (error: Throwable) {

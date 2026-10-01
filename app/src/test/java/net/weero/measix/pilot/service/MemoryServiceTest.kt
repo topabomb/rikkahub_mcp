@@ -72,6 +72,23 @@ class MemoryServiceTest {
         }
     }
 
+    @Test fun `conversation read boundary failure remains a local memory diagnostic`() = runTest {
+        environment { env ->
+            val page = ConversationViewLease(kotlin.uuid.Uuid.random(), RealmAccess.Personal, env.sessions.selectionRevision.value) {}
+            val failure = java.io.IOException("page authorization read failed", IllegalStateException("original detail"))
+            every { env.conversations.observeForView<MemoryView>(any(), any(), any()) } returns
+                kotlinx.coroutines.flow.flow { throw failure }
+            val failed = env.memory.observe(page, env.target.id).first()
+            assertEquals("memory_read_failed", failed.unavailableReason)
+            assertNull(failed.access)
+            assertTrue(failed.records.isEmpty())
+            assertTrue(requireNotNull(failed.diagnostic).contains("IOException: page authorization read failed"))
+            assertTrue(requireNotNull(failed.diagnostic).contains("Caused by: IllegalStateException: original detail"))
+            assertSame(failure, org.robolectric.shadows.ShadowLog.getLogsForTag("MemoryService").last().throwable)
+            assertFalse(page.closed.value)
+        }
+    }
+
     @Test fun `directory cancellation propagates without a failure projection`() = runTest {
         environment { env ->
             val subscribed = kotlinx.coroutines.CompletableDeferred<Unit>()

@@ -1,6 +1,7 @@
 package net.weero.measix.pilot.service
 
 import io.mockk.*
+import androidx.lifecycle.ViewModelStore
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.test.*
@@ -13,12 +14,16 @@ import net.weero.measix.pilot.AppScope
 import net.weero.measix.pilot.Screen
 import net.weero.measix.pilot.data.ai.subassistant.*
 import net.weero.measix.pilot.data.configuration.ConfigurationScope
+import net.weero.measix.pilot.data.datastore.Settings
+import net.weero.measix.pilot.data.datastore.SettingsStore
 import net.weero.measix.pilot.data.enterprise.*
 import net.weero.measix.pilot.data.model.Conversation
 import net.weero.measix.pilot.data.model.toMessageNode
 import net.weero.measix.pilot.data.repository.ConversationRepository
 import net.weero.measix.pilot.service.runtime.*
 import net.weero.measix.pilot.utils.JsonInstant
+import net.weero.measix.pilot.utils.userVisibleDiagnostic
+import net.weero.measix.pilot.ui.pages.subassistant.SubAssistantDetailVM
 import org.junit.Assert.*
 import org.junit.Rule
 import org.junit.Test
@@ -87,6 +92,99 @@ class SubAssistantDetailReaderTest {
         assertFalse(f.source.closed.value)
         coVerify(exactly = 0) { f.registry.loadRuntime(f.child.id) }
         coVerify(exactly = 0) { f.projector.project(any(), any()) }
+    }
+
+    @Test fun `child header read failure retains its diagnostic without closing parent`() = runTest {
+        val f = fixture()
+        val failure = java.io.IOException("child header unreadable", IllegalStateException("database detail"))
+        coEvery { f.repository.getConversationHeader(f.child.id) } throws failure
+        val states = mutableListOf<SubAssistantDetailUiState>()
+        backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { f.reader.observe(f.source, "run").toList(states) }
+        runCurrent()
+        assertFailurePreserved(failure, (states.last() as SubAssistantDetailUiState.Failed).error)
+        assertFalse(f.source.closed.value)
+        assertFailurePreserved(failure, requireNotNull(org.robolectric.shadows.ShadowLog.getLogsForTag("SubAssistantDetail").last().throwable))
+        coVerify(exactly = 0) { f.registry.loadRuntime(f.child.id) }
+    }
+
+    @Test fun `parent and child failed reads retain their original diagnostic locally`() = runTest {
+        for (failParent in listOf(true, false)) {
+            val f = fixture()
+            val failure = java.io.IOException("stored ${if (failParent) "parent" else "child"} unreadable",
+                IllegalArgumentException("invalid message encoding")).apply {
+                    addSuppressed(IllegalStateException("cleanup detail"))
+                }
+            val states = mutableListOf<SubAssistantDetailUiState>()
+            val job = backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) {
+                f.reader.observe(f.source, "run").toList(states)
+            }
+            runCurrent()
+            assertTrue(states.last() is SubAssistantDetailUiState.Ready)
+            (if (failParent) f.masterState else f.childState).value = ConversationRuntimeState.Failed(failure)
+            runCurrent()
+            assertFailurePreserved(failure, (states.last() as SubAssistantDetailUiState.Failed).error)
+            assertFalse(f.source.closed.value)
+            assertEquals(0, f.parentCloseCount)
+            verify(exactly = 1) { f.childLease.close() }
+            job.cancelAndJoin()
+        }
+    }
+
+    @Test fun `detail retry keeps its borrowed parent and cannot revive it after realm reselection`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val store = ViewModelStore()
+        try {
+            val f = fixture()
+            val failure = java.io.IOException("detail index unreadable", IllegalStateException("index detail"))
+            coEvery { f.repository.getConversationHeader(f.child.id) } throws failure
+            val settings = mockk<SettingsStore>()
+            every { settings.userSettings } returns MutableStateFlow(Settings.dummy())
+            val vm = SubAssistantDetailVM(f.source, "run", f.reader, settings)
+            store.put("detail", vm)
+            runCurrent()
+            assertFailurePreserved(failure, (vm.uiState.value as SubAssistantDetailUiState.Failed).error)
+            assertFalse(f.source.closed.value)
+            coVerify(exactly = 0) { f.registry.acquireRegisteredRuntime(any(), any()) }
+
+            coEvery { f.repository.getConversationHeader(f.child.id) } returns f.child.toSnapshot().header
+            vm.retry()
+            runCurrent()
+            assertTrue(vm.uiState.value is SubAssistantDetailUiState.Ready)
+            assertFalse(f.source.closed.value)
+            assertEquals(0, f.parentCloseCount)
+            coVerify(exactly = 1) { f.registry.acquireRegisteredRuntime(f.child.id, any()) }
+            coVerify(exactly = 0) { f.registry.acquireRegisteredRuntime(f.master.id, any()) }
+
+            f.sessions.selectPersonalFixture()
+            f.sessions.selectEnterpriseFixture()
+            vm.retry()
+            runCurrent()
+            assertEquals(SubAssistantDetailUiState.Unavailable, vm.uiState.value)
+            assertTrue(f.source.closed.value)
+            coVerify(exactly = 1) { f.registry.acquireRegisteredRuntime(f.child.id, any()) }
+            verify(exactly = 1) { f.childLease.close() }
+        } finally { store.clear(); Dispatchers.resetMain() }
+    }
+
+    @Test fun `collector cancellation completes child cleanup without publishing failure or closing parent`() = runTest {
+        val f = fixture()
+        val entered = CompletableDeferred<Unit>()
+        val exited = CompletableDeferred<Unit>()
+        coEvery { f.projector.project(any(), any()) } coAnswers {
+            entered.complete(Unit)
+            try { awaitCancellation() } finally { exited.complete(Unit) }
+        }
+        val states = mutableListOf<SubAssistantDetailUiState>()
+        val job = backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) {
+            f.reader.observe(f.source, "run").toList(states)
+        }
+        entered.await()
+        job.cancelAndJoin()
+        exited.await()
+        assertTrue(job.isCancelled)
+        assertTrue(states.none { it is SubAssistantDetailUiState.Failed || it is SubAssistantDetailUiState.Unavailable })
+        assertFalse(f.source.closed.value)
+        verify(exactly = 1) { f.childLease.close() }
     }
 
     @Test fun `parent and child deletion invalidate detail without revoking an otherwise open parent`() = runTest {
@@ -233,6 +331,22 @@ class SubAssistantDetailReaderTest {
             source.close()
             appScope.cancel()
         }
+    }
+
+    private fun assertFailurePreserved(expected: Throwable, actual: Throwable) {
+        assertEquals(expected.javaClass, actual.javaClass)
+        assertEquals(expected.message, actual.message)
+        expected.cause?.let { cause ->
+            assertTrue(generateSequence(actual.cause) { it.cause }.any {
+                it.javaClass == cause.javaClass && it.message == cause.message
+            })
+        }
+        expected.suppressed.forEach { expectedSuppressed ->
+            assertTrue(generateSequence(actual) { it.cause }.flatMap { it.suppressed.asSequence() }.any {
+                it.javaClass == expectedSuppressed.javaClass && it.message == expectedSuppressed.message
+            })
+        }
+        assertTrue(actual.userVisibleDiagnostic().contains(expected.userVisibleDiagnostic()))
     }
 
     private suspend fun TestScope.fixture(): Fixture {

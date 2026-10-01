@@ -10,6 +10,8 @@ import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.onStart
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.filter
@@ -107,6 +109,7 @@ class ChatVM internal constructor(
     private val initializationOwner = Any()
     private var initializationJob: Job? = null
     private var initializationAttempt = 0L
+    private val readRevision = MutableStateFlow(0L)
 
     private fun <T> fromPage(empty: T, source: (PageState.Open) -> Flow<T>): Flow<T> =
         page.flatMapLatest { state -> if (state is PageState.Open) source(state) else flowOf(empty) }
@@ -116,7 +119,22 @@ class ChatVM internal constructor(
             PageState.Loading -> flowOf(ConversationReadState.Loading)
             PageState.Missing -> flowOf(ConversationReadState.Missing)
             is PageState.Failed -> flowOf(ConversationReadState.Failed(state.error))
-            is PageState.Open -> conversationQueryService.observeConversation(state.lease)
+            is PageState.Open -> readRevision.flatMapLatest {
+                combine(
+                    conversationQueryService.observeConversation(state.lease),
+                    conversationQueryService.conversationUiModel(state.lease).onStart { emit(null) },
+                ) { read, model ->
+                    if (read is ConversationReadState.Ready) {
+                        if (model == null) ConversationReadState.Loading
+                        else ConversationReadState.Ready(model.snapshot, model)
+                    } else read
+                }.onStart { emit(ConversationReadState.Loading) }
+                    .catch { error ->
+                        if (error is CancellationException) throw error
+                        android.util.Log.e("ChatVM", "Conversation projection failed for ${request.id}", error)
+                        emit(ConversationReadState.Failed(error))
+                    }
+            }
         }
     }.stateIn(viewModelScope, SharingStarted.Eagerly, ConversationReadState.Loading)
 
@@ -127,13 +145,11 @@ class ChatVM internal constructor(
     val favoriteNodeIds: StateFlow<Set<Uuid>> = fromPage(emptySet()) { state ->
         conversationQueryService.observeForView(state.lease, emptySet()) {
             favoriteService.observeNodeIds(state.lease.commandTarget)
-                .catch { error ->
-                    if (error is CancellationException) throw error
-                    conversationQueryService.requireViewAccess(state.lease)
-                    android.util.Log.e("ChatVM", "Favorite directory unavailable", error)
-                    chatErrorStore.add(ChatError(detail = error.userVisibleDiagnostic(), conversationId = _conversationId))
-                    emit(emptySet())
-                }
+        }.catch { error ->
+            if (error is CancellationException) throw error
+            android.util.Log.e("ChatVM", "Favorite directory unavailable", error)
+            chatErrorStore.add(ChatError(detail = error.userVisibleDiagnostic(), conversationId = _conversationId))
+            emit(emptySet())
         }
     }.stateIn(viewModelScope, SharingStarted.Eagerly, emptySet())
 
@@ -175,18 +191,23 @@ class ChatVM internal constructor(
         initialInputConsumed = true
     }
 
-    val turnPresentation: StateFlow<ConversationPresentation> = fromPage(ConversationPresentation.IDLE) { state ->
-        conversationQueryService.turnPresentation(state.lease)
-    }.stateIn(viewModelScope, SharingStarted.Eagerly, ConversationPresentation.IDLE)
+    val turnPresentation: StateFlow<ConversationPresentation> = conversationState
+        .map { (it as? ConversationReadState.Ready)?.uiModel?.presentation ?: ConversationPresentation.IDLE }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, ConversationPresentation.IDLE)
 
-    val conversationUiModel: StateFlow<ConversationUiModel?> = fromPage<ConversationUiModel?>(null) { state ->
-        conversationQueryService.conversationUiModel(state.lease)
-    }.stateIn(viewModelScope, SharingStarted.Eagerly, null)
+    val conversationUiModel: StateFlow<ConversationUiModel?> = conversationState
+        .map { (it as? ConversationReadState.Ready)?.uiModel }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, null)
 
     init { acquireViewLease() }
 
     fun retryConversationLoad() {
         synchronized(initializationOwner) {
+            if (page.value is PageState.Open && conversationState.value != ConversationReadState.Missing) {
+                // The restarted query revalidates the original owner before subscribing or publishing.
+                readRevision.update { it + 1 }
+                return
+            }
             initializationJob?.cancel()
             (page.value as? PageState.Open)?.close()
             discardInput()
@@ -221,7 +242,13 @@ class ChatVM internal constructor(
                             conversationQueryService.observeConversation(lease)
                                 .map { it is ConversationReadState.Ready && !it.snapshot.header.newConversation }
                                 .distinctUntilChanged().filter { it }.collect {
-                                    conversationApplicationService.rememberConversation(lease)
+                                    try {
+                                        conversationApplicationService.rememberConversation(lease)
+                                    } catch (cancelled: CancellationException) {
+                                        throw cancelled
+                                    } catch (error: Exception) {
+                                        reportRecentConversationFailure(state, error)
+                                    }
                                 }
                         }
                         conversationQueryService.observeViewAccess(lease).first { !it }
@@ -254,6 +281,27 @@ class ChatVM internal constructor(
     private fun discardInput() {
         inputState.clearInput()
         initialInputConsumed = false
+    }
+
+    private suspend fun reportRecentConversationFailure(state: PageState.Open, error: Exception) {
+        try {
+            conversationQueryService.requireViewAccess(state.lease)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: net.weero.measix.pilot.data.enterprise.EnterpriseConfigurationException) {
+            return
+        } catch (validation: Exception) {
+            if (validation is IllegalStateException &&
+                validation.message in setOf("conversation_view_closed", "conversation_view_revoked")) return
+            if (validation !== error) error.addSuppressed(validation)
+        }
+        if (page.value !== state) return
+        android.util.Log.e("ChatVM", "Recent conversation preference write failed for ${request.id}", error)
+        chatErrorStore.add(ChatError(
+            detail = context.getString(R.string.chat_recent_conversation_save_failed, error.userVisibleDiagnostic()),
+            conversationId = _conversationId,
+            retention = net.weero.measix.pilot.service.ChatErrorRetention.UNTIL_DISMISSED,
+        ))
     }
 
     val settings: StateFlow<Settings> =

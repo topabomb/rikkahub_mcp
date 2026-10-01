@@ -29,7 +29,8 @@ class RemoteWorkspaceServiceTest {
     private val success = PlatformWorkspaceFileResult(PlatformWorkspaceFileResultOutcome.SUCCEEDED, emptyList(), false)
 
     private inner class Fixture(val sessions: EnterpriseSessionController, val service: RemoteWorkspaceService,
-        val client: PlatformWorkspaceClient, val selection: RealmSelection)
+        val client: PlatformWorkspaceClient, val selection: RealmSelection, val control: PlatformControlClient,
+        val invalidations: MutableList<Pair<RealmAccess.Enterprise, EnterpriseExitReason>>)
 
     private suspend fun TestScope.fixture(): Fixture {
         val sessions = EnterpriseSessionController(enterpriseTestStore(temporary.newFolder()))
@@ -37,12 +38,204 @@ class RemoteWorkspaceServiceTest {
         val client = mockk<PlatformWorkspaceClient>()
         coEvery { client.state(any(), any()) } returns ready
         coEvery { client.list(any(), any(), any(), any()) } returns PlatformWorkspaceFileList(emptyList())
-        val platform = PlatformEnterpriseService(sessions, mockk())
+        val control = mockk<PlatformControlClient>()
+        val invalidations = mutableListOf<Pair<RealmAccess.Enterprise, EnterpriseExitReason>>()
+        val platform = PlatformEnterpriseService(sessions, control,
+            onSessionInvalidated = { access, reason -> invalidations += access to reason })
         val service = RemoteWorkspaceService(sessions, platform, client, ApplicationRecoveryGate().apply { ready() },
             CoroutineScope(backgroundScope.coroutineContext + SupervisorJob(backgroundScope.coroutineContext[Job])), temporary.newFolder())
         val selection = sessions.readPresentation().selection!!
         service.summary.first { it?.status == RemoteWorkspaceStatus.AVAILABLE }
-        return Fixture(sessions, service, client, selection)
+        return Fixture(sessions, service, client, selection, control, invalidations)
+    }
+
+    private fun refreshedToken() = PlatformRefreshResponse("replacement-access", "2099-01-01T00:00:00Z",
+        "replacement-refresh", "2099-01-08T00:00:00Z", "2099-01-01T00:00:00Z")
+
+    private fun accessRejected() = PlatformHttpException(401,
+        PlatformProblem("about:blank", "Unauthorized", 401, "invalid_credential"), "Access token expired")
+
+    @Test fun `directory access rejection refreshes once without retiring the session`() = runTest {
+        val f = fixture(); val handle = f.service.open(f.selection)
+        val rejected = accessRejected()
+        coEvery { f.control.refresh(any(), any(), any()) } returns refreshedToken()
+        coEvery { f.client.list(any(), any(), any(), any()) } coAnswers {
+            if (arg<String>(1) != "replacement-access") throw rejected
+            PlatformWorkspaceFileList(emptyList())
+        }
+        assertTrue(f.service.list(handle, "").files.isEmpty())
+        coVerify(exactly = 2) { f.client.list(any(), any(), any(), any()) }
+        coVerify(exactly = 1) { f.control.refresh(any(), any(), any()) }
+        assertTrue(f.invalidations.isEmpty())
+        assertEquals(f.selection, f.sessions.readPresentation().selection)
+        assertEquals(RemoteWorkspaceStatus.AVAILABLE, f.service.summary.value!!.status)
+    }
+
+    @Test fun `write access rejection refreshes credentials but only a new explicit attempt sends again`() = runTest {
+        val f = fixture(); val handle = f.service.open(f.selection)
+        coEvery { f.control.refresh(any(), any(), any()) } returns refreshedToken()
+        coEvery { f.client.upload(any(), any(), any(), any(), any(), any(), any(), any()) } coAnswers {
+            if (arg<String>(1) != "replacement-access") throw accessRejected()
+            success
+        }
+        val failed = f.service.upload(handle, file.path, file.etag, 1, { byteArrayOf(1).inputStream() })
+        assertEquals(RemoteOutcome.FAILED, failed.outcome)
+        assertTrue(failed.diagnostic!!.contains("invalid_credential"))
+        coVerify(exactly = 1) { f.client.upload(any(), any(), any(), any(), any(), any(), any(), any()) }
+        coVerify(exactly = 1) { f.control.refresh(any(), any(), any()) }
+        assertTrue(f.invalidations.isEmpty())
+        assertEquals(f.selection, f.sessions.readPresentation().selection)
+
+        assertEquals(RemoteOutcome.SUCCEEDED,
+            f.service.upload(handle, file.path, file.etag, 1, { byteArrayOf(1).inputStream() }).outcome)
+        coVerify(exactly = 2) { f.client.upload(any(), any(), any(), any(), any(), any(), any(), any()) }
+        coVerify(exactly = 1) { f.control.refresh(any(), any(), any()) }
+    }
+
+    @Test fun `cancelling credential recovery after a confirmed write rejection leaves the target retryable`() = runTest {
+        val f = fixture(); val handle = f.service.open(f.selection)
+        val refreshing = CompletableDeferred<Unit>()
+        coEvery { f.control.refresh(any(), any(), any()) } coAnswers {
+            refreshing.complete(Unit)
+            awaitCancellation()
+        }
+        coEvery { f.client.upload(any(), any(), any(), any(), any(), any(), any(), any()) } throws accessRejected()
+        val first = async { f.service.upload(handle, file.path, file.etag, 1, { byteArrayOf(1).inputStream() }) }
+        refreshing.await()
+        first.cancelAndJoin()
+        assertTrue(first.isCancelled)
+        assertEquals(RemoteOutcome.CANCELLED, f.service.outcomeAfterCancellation(handle, file.path))
+        coVerify(exactly = 1) { f.client.upload(any(), any(), any(), any(), any(), any(), any(), any()) }
+        assertTrue(f.invalidations.isEmpty())
+        assertEquals(f.selection, f.sessions.readPresentation().selection)
+
+        coEvery { f.control.refresh(any(), any(), any()) } returns refreshedToken()
+        coEvery { f.client.upload(any(), any(), any(), any(), any(), any(), any(), any()) } returns success
+        assertEquals(RemoteOutcome.SUCCEEDED,
+            f.service.upload(handle, file.path, file.etag, 1, { byteArrayOf(1).inputStream() }).outcome)
+        coVerify(exactly = 2) { f.client.upload(any(), any(), any(), any(), any(), any(), any(), any()) }
+        coVerify(exactly = 2) { f.control.refresh(any(), any(), any()) }
+    }
+
+    @Test fun `cancellation during send remains unknown and blocks an explicit resend`() = runTest {
+        val f = fixture(); val handle = f.service.open(f.selection)
+        val sendEntered = CompletableDeferred<Unit>()
+        val sendExited = CompletableDeferred<Unit>()
+        val cancellationReachedCaller = CompletableDeferred<CancellationException>()
+        coEvery { f.client.upload(any(), any(), any(), any(), any(), any(), any(), any()) } coAnswers {
+            sendEntered.complete(Unit)
+            try { awaitCancellation() } finally { sendExited.complete(Unit) }
+        }
+        val first = async {
+            try {
+                f.service.upload(handle, file.path, file.etag, 1, { byteArrayOf(1).inputStream() })
+            } catch (cancelled: CancellationException) {
+                cancellationReachedCaller.complete(cancelled)
+                throw cancelled
+            }
+        }
+        sendEntered.await()
+        first.cancelAndJoin()
+        assertTrue(first.isCancelled)
+        assertTrue(cancellationReachedCaller.isCompleted)
+        assertTrue(sendExited.isCompleted)
+        assertEquals(RemoteOutcome.UNKNOWN, f.service.outcomeAfterCancellation(handle, file.path))
+        coEvery { f.client.upload(any(), any(), any(), any(), any(), any(), any(), any()) } returns success
+        val blocked = f.service.upload(handle, file.path, file.etag, 1, { byteArrayOf(1).inputStream() })
+        assertEquals(RemoteOutcome.UNKNOWN, blocked.outcome)
+        assertEquals("workspace_verify_unknown_result_first", blocked.diagnostic)
+        coVerify(exactly = 1) { f.client.upload(any(), any(), any(), any(), any(), any(), any(), any()) }
+        coVerify(exactly = 0) { f.control.refresh(any(), any(), any()) }
+        assertTrue(f.invalidations.isEmpty())
+        assertEquals(f.selection, f.sessions.readPresentation().selection)
+    }
+
+    @Test fun `IO failure during send remains unknown and blocks an explicit resend`() = runTest {
+        val f = fixture(); val handle = f.service.open(f.selection)
+        val sendEntered = CompletableDeferred<Unit>()
+        coEvery { f.client.upload(any(), any(), any(), any(), any(), any(), any(), any()) } coAnswers {
+            sendEntered.complete(Unit)
+            throw IOException("connection reset before a write response")
+        }
+        val result = f.service.upload(handle, file.path, file.etag, 1, { byteArrayOf(1).inputStream() })
+        assertTrue(sendEntered.isCompleted)
+        assertEquals(RemoteOutcome.UNKNOWN, result.outcome)
+        assertTrue(result.diagnostic!!.contains("IOException"))
+        assertTrue(result.diagnostic!!.contains("connection reset before a write response"))
+        assertEquals(RemoteOutcome.UNKNOWN, f.service.outcomeAfterCancellation(handle, file.path))
+        coEvery { f.client.upload(any(), any(), any(), any(), any(), any(), any(), any()) } returns success
+        val blocked = f.service.upload(handle, file.path, file.etag, 1, { byteArrayOf(1).inputStream() })
+        assertEquals(RemoteOutcome.UNKNOWN, blocked.outcome)
+        assertEquals("workspace_verify_unknown_result_first", blocked.diagnostic)
+        coVerify(exactly = 1) { f.client.upload(any(), any(), any(), any(), any(), any(), any(), any()) }
+        coVerify(exactly = 0) { f.control.refresh(any(), any(), any()) }
+        assertTrue(f.invalidations.isEmpty())
+        assertEquals(f.selection, f.sessions.readPresentation().selection)
+    }
+
+    @Test fun `export access rejection preserves the error and cleans its output without replay`() = runTest {
+        val f = fixture(); val handle = f.service.open(f.selection)
+        val rejected = accessRejected()
+        var closes = 0
+        var deletes = 0
+        val destination = object : RemoteExportDestination {
+            override val description = "content://owned/export/rejected"
+            override fun open() = object : ByteArrayOutputStream() {
+                override fun close() { closes++; super.close() }
+            }
+            override fun delete(): Boolean { deletes++; return true }
+        }
+        coEvery { f.control.refresh(any(), any(), any()) } returns refreshedToken()
+        coEvery { f.client.download(any(), any(), any(), any(), any(), any(), any()) } throws rejected
+        try { f.service.export(handle, file, destination); fail("rejected export succeeded") }
+        catch (error: PlatformHttpException) { assertSame(rejected, error) }
+        assertEquals(1, closes)
+        assertEquals(1, deletes)
+        coVerify(exactly = 1) { f.client.download(any(), any(), any(), any(), any(), any(), any()) }
+        coVerify(exactly = 1) { f.control.refresh(any(), any(), any()) }
+        assertTrue(f.invalidations.isEmpty())
+        assertEquals(f.selection, f.sessions.readPresentation().selection)
+    }
+
+    @Test fun `temporary token recovery failure retains the original access diagnostic`() = runTest {
+        val f = fixture(); val handle = f.service.open(f.selection)
+        val rejected = accessRejected()
+        val recoveryFailure = IOException("refresh endpoint unavailable")
+        coEvery { f.control.refresh(any(), any(), any()) } throws recoveryFailure
+        coEvery { f.client.list(any(), any(), any(), any()) } throws rejected
+        try { f.service.list(handle, ""); fail("failed token recovery hidden") }
+        catch (error: PlatformHttpException) {
+            assertSame(rejected, error)
+            assertTrue(error.suppressed.any { it === recoveryFailure })
+        }
+        coVerify(exactly = 1) { f.client.list(any(), any(), any(), any()) }
+        assertTrue(f.invalidations.isEmpty())
+        assertEquals(f.selection, f.sessions.readPresentation().selection)
+    }
+
+    @Test fun `token recovery cancellation propagates without becoming an access failure`() = runTest {
+        val f = fixture(); val handle = f.service.open(f.selection)
+        val rejected = accessRejected()
+        coEvery { f.control.refresh(any(), any(), any()) } throws CancellationException("refresh cancelled")
+        coEvery { f.client.list(any(), any(), any(), any()) } throws rejected
+        try { f.service.list(handle, ""); fail("token recovery cancellation swallowed") }
+        catch (_: CancellationException) { }
+        assertTrue(rejected.suppressed.isEmpty())
+        assertTrue(f.invalidations.isEmpty())
+        assertEquals(f.selection, f.sessions.readPresentation().selection)
+    }
+
+    @Test fun `only a terminal refresh rejection retires a file access token session`() = runTest {
+        val f = fixture(); val handle = f.service.open(f.selection)
+        val rejected = accessRejected()
+        val terminal = PlatformHttpException(401,
+            PlatformProblem("about:blank", "Unauthorized", 401, "invalid_credential"), "Refresh credential invalid")
+        coEvery { f.control.refresh(any(), any(), any()) } throws terminal
+        coEvery { f.client.list(any(), any(), any(), any()) } throws rejected
+        try { f.service.list(handle, ""); fail("terminal refresh rejection hidden") }
+        catch (error: PlatformHttpException) { assertSame(rejected, error); assertTrue(error.suppressed.contains(terminal)) }
+        assertEquals(listOf(f.selection.access to EnterpriseExitReason.AUTHORIZATION_EXPIRED), f.invalidations)
+        coVerify(exactly = 1) { f.client.list(any(), any(), any(), any()) }
     }
 
     @Test fun `files without MCP open and a read failure requires successful explicit reading`() = runTest {

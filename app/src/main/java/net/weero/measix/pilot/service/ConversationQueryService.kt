@@ -84,7 +84,10 @@ data class ConversationUiModel internal constructor(
 
 sealed interface ConversationReadState {
     data object Loading : ConversationReadState
-    data class Ready(val snapshot: ConversationPresentationSnapshot) : ConversationReadState
+    data class Ready(
+        val snapshot: ConversationPresentationSnapshot,
+        internal val uiModel: ConversationUiModel? = null,
+    ) : ConversationReadState
     data object Missing : ConversationReadState
     data class Failed(val error: Throwable) : ConversationReadState
 }
@@ -158,8 +161,8 @@ class ConversationQueryService internal constructor(
     }
 
     fun observeViewAccess(lease: ConversationViewLease): Flow<Boolean> = combine(
-        observeCurrentAccess(), lease.closed, sessions.selectionRevision,
-    ) { selected, closed, revision -> !closed && selected == lease.access && revision == lease.selectionRevision }
+        observeCurrentSelection(), lease.closed,
+    ) { selected, closed -> !closed && selected == lease.commandTarget.selection }
         .distinctUntilChanged()
         .onEach { active -> if (!active) lease.close() }
 
@@ -171,10 +174,27 @@ class ConversationQueryService internal constructor(
                 emitAll(values.map { value -> withViewAccess(lease) { value } })
             }.catch { error ->
                 if (error is CancellationException) throw error
+                if (viewAvailableAfterFailure(lease, error)) throw error
                 lease.close()
                 emit(empty)
             }
         }
+
+    private suspend fun viewAvailableAfterFailure(lease: ConversationViewLease, original: Throwable): Boolean = try {
+        withViewAccess(lease) { }
+        true
+    } catch (cancelled: CancellationException) {
+        throw cancelled
+    } catch (_: EnterpriseConfigurationException) {
+        false
+    } catch (error: Exception) {
+        if (error is IllegalStateException && error.message in setOf("conversation_view_closed", "conversation_view_revoked")) {
+            false
+        } else {
+            if (error !== original) original.addSuppressed(error)
+            throw original
+        }
+    }
 
     private suspend fun <T> withViewAccess(lease: ConversationViewLease, action: suspend () -> T): T =
         sessions.withSelectedRealmAccess(lease.access) {
@@ -300,6 +320,10 @@ class ConversationQueryService internal constructor(
                 if (state is ConversationReadState.Ready) requireViewSnapshot(lease, state.snapshot)
                 state
             }
+        }.catch { error ->
+            if (error is CancellationException) throw error
+            Log.e("ConversationQuery", "Conversation read failed for ${lease.conversationId}", error)
+            emit(ConversationReadState.Failed(error))
         }
 
     private fun requireViewSnapshot(lease: ConversationViewLease, snapshot: ConversationPresentationSnapshot) {
@@ -312,16 +336,13 @@ class ConversationQueryService internal constructor(
         runtimeRegistry.observeRuntimeState(conversationId).flatMapLatest { state ->
             val projector = net.weero.measix.pilot.service.runtime.ConversationPresentationProjector()
             when (state) {
-                is ConversationRuntimeState.Draft -> state.runtime.snapshot.map(projector::project).map(ConversationReadState::Ready)
-                is ConversationRuntimeState.Ready -> state.runtime.snapshot.map(projector::project).map(ConversationReadState::Ready)
+                is ConversationRuntimeState.Draft -> state.runtime.snapshot.map(projector::project).map { ConversationReadState.Ready(it) }
+                is ConversationRuntimeState.Ready -> state.runtime.snapshot.map(projector::project).map { ConversationReadState.Ready(it) }
                 ConversationRuntimeState.Loading -> flowOf(ConversationReadState.Loading)
                 ConversationRuntimeState.Missing -> flowOf(ConversationReadState.Missing)
                 is ConversationRuntimeState.Failed -> flowOf(ConversationReadState.Failed(state.error))
             }
         }
-
-    fun turnPresentation(lease: ConversationViewLease): Flow<ConversationPresentation> =
-        observeForView(lease, ConversationPresentation.IDLE) { runtimeRegistry.getTurnPresentationFlow(lease.conversationId) }
 
     fun conversationUiModel(lease: ConversationViewLease): Flow<ConversationUiModel?> =
         observeForView<ConversationUiModel?>(lease, null) {
@@ -373,7 +394,8 @@ class ConversationQueryService internal constructor(
                             }
                         }
                         ConversationReadState.Loading -> null
-                        else -> error("sub_assistant_child_unavailable")
+                        is ConversationReadState.Failed -> throw read.error
+                        ConversationReadState.Missing -> error("sub_assistant_child_unavailable")
                     }
                 }
             })

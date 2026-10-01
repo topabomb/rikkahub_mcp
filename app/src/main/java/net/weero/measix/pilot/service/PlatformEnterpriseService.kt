@@ -224,7 +224,27 @@ internal class PlatformEnterpriseService(
             }
             currentAccessToken(sessionId, frozen)
         } catch (error: PlatformHttpException) {
-            operation.access?.let { notifyRevoked(it, error) }
+            operation.access?.let { notifyRevoked(it, error, invalidCredentialIsTerminal = true) }
+            throw error
+        } finally {
+            operation.release()
+        }
+    }
+
+    /** An access-token rejection does not retire its Session; only failed refresh proves credential termination. */
+    suspend fun recoverWorkspaceAccessToken(
+        access: RealmAccess.Enterprise,
+        connection: PlatformConnection,
+        rejectedToken: PlatformAccessToken,
+    ): PlatformAccessToken {
+        val operation = sessions.capturePlatformOperation(access.sessionId)
+        return try {
+            check(operation.access == access && connection.authority == operation.context.platform.connection.authority) {
+                "enterprise_platform_authority_changed"
+            }
+            replacementAccessToken(access.sessionId, connection, rejectedToken)
+        } catch (error: PlatformHttpException) {
+            notifyRevoked(access, error, invalidCredentialIsTerminal = true)
             throw error
         } finally {
             operation.release()
@@ -287,19 +307,32 @@ internal class PlatformEnterpriseService(
     }
 
     /** File writes are never replayed; only stable Core identity codes enter the existing exit protocol. */
-    suspend fun workspaceFailure(access: RealmAccess.Enterprise, error: PlatformHttpException) = notifyRevoked(access, error)
+    suspend fun workspaceFailure(access: RealmAccess.Enterprise, error: PlatformHttpException) =
+        notifyRevoked(access, error, invalidCredentialIsTerminal = false)
 
-    private suspend fun notifyRevoked(access: RealmAccess.Enterprise, error: PlatformHttpException) {
+    private suspend fun notifyRevoked(access: RealmAccess.Enterprise, error: PlatformHttpException,
+        invalidCredentialIsTerminal: Boolean,
+    ) {
         val reason = when {
             error.status == 403 && error.problem?.code in EnterpriseRuntimeProblemCodes.authorizationRevoked ->
                 EnterpriseExitReason.AUTHORIZATION_REVOKED
             error.status == 401 && error.problem?.code == EnterpriseRuntimeProblemCodes.IDENTITY_DELETED ->
                 EnterpriseExitReason.IDENTITY_DELETED
-            error.status == 401 && error.problem?.code in setOf("session_expired", "invalid_credential") ->
+            error.status == 401 && (error.problem?.code == "session_expired" ||
+                invalidCredentialIsTerminal && error.problem?.code == "invalid_credential") ->
                 EnterpriseExitReason.AUTHORIZATION_EXPIRED
             else -> return
         }
         onSessionInvalidated(access, reason)
+    }
+
+    private suspend fun replacementAccessToken(
+        sessionId: String,
+        connection: PlatformConnection,
+        rejectedToken: PlatformAccessToken,
+    ): PlatformAccessToken = refresh.withLock {
+        val latest = sessions.platformAccessToken(sessionId)
+        if (latest != null && latest !== rejectedToken) latest else refreshLocked(sessionId, connection)
     }
 
     private suspend fun refreshLocked(
@@ -327,22 +360,30 @@ internal class PlatformEnterpriseService(
     /** Only side-effect-free Client reads may use this retry; Runtime and code exchange never do. */
     suspend fun <T> read(sessionId: String, request: suspend (PlatformConnection, String) -> T): T {
         val operation = sessions.capturePlatformOperation(sessionId)
+        var failureFromRefresh = false
         return try {
             val connection = operation.context.platform.connection
-            val token = currentAccessToken(sessionId, connection)
+            val token = try {
+                currentAccessToken(sessionId, connection)
+            } catch (error: PlatformHttpException) {
+                failureFromRefresh = true
+                throw error
+            }
             try {
                 request(connection, token.value)
             } catch (error: PlatformHttpException) {
                 if (error.status != 401 || error.problem?.code != "invalid_credential") throw error
-                val replacement = refresh.withLock {
-                    val latest = sessions.platformAccessToken(sessionId)
-                    if (latest != null && latest !== token) latest else refreshLocked(sessionId, connection)
+                val replacement = try {
+                    replacementAccessToken(sessionId, connection, token)
+                } catch (refreshFailure: PlatformHttpException) {
+                    failureFromRefresh = true
+                    throw refreshFailure
                 }
                 sessions.platformContext(sessionId)
                 request(connection, replacement.value)
             }
         } catch (error: PlatformHttpException) {
-            operation.access?.let { notifyRevoked(it, error) }
+            operation.access?.let { notifyRevoked(it, error, invalidCredentialIsTerminal = failureFromRefresh) }
             throw error
         } finally {
             operation.release()

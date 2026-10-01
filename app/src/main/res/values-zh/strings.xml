@@ -231,7 +231,7 @@
   <string name="chat_conversation_missing_title">会话不可用</string>
   <string name="chat_conversation_missing_message">找不到此会话。请重试以重新初始化。</string>
   <string name="chat_conversation_load_failed_title">无法加载会话</string>
-  <string name="chat_conversation_load_failed_message">无法读取会话数据。请重试，或打开空间查看当前连接。</string>
+  <string name="chat_conversation_load_failed_message">无法读取聊天。请重试，或展开错误详情查看原因。</string>
   <string name="chat_message_add_favorite">添加收藏</string>
   <string name="chat_message_remove_favorite">取消收藏</string>
   <string name="chat_message_tool_approve">批准</string>
@@ -2054,4 +2054,5 @@
   <string name="file_preview_previous_page">上一页</string>
   <string name="file_preview_next_page">下一页</string>
   <string name="file_browser_parent_folder">上级文件夹</string>
+  <string name="chat_recent_conversation_save_failed">未能更新最近打开的聊天。聊天仍可使用；稍后重新打开此聊天可重试。\n\n%1$s</string>
 </resources>

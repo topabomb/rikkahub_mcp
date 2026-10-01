@@ -124,7 +124,7 @@ class ChatContextFlowAndroidTest {
             compose.waitUntil(30_000) {
                 compose.onAllNodes(hasTestTag("chat_send_button") and isEnabled()).fetchSemanticsNodes().size == 1
             }
-            compose.onNodeWithTag("chat_send_button").assertIsEnabled().performClick()
+            compose.onNode(hasTestTag("chat_send_button") and isEnabled()).assertIsDisplayed().performClick()
             // Keep advancing Compose while the click's coroutine starts the real request.
             compose.waitUntil(30_000) { server.firstRequest.count == 0L }
             val row = awaitUi(30_000) { query.conversationsOfAssistant(assistant.id).map { it.getOrThrow() }.first { it.isNotEmpty() }.single() }
@@ -235,7 +235,7 @@ class ChatContextFlowAndroidTest {
             compose.onNodeWithTag("chat_input").performTextInput("Next START uses updated configuration")
             closeSoftKeyboard()
             compose.waitUntil(30_000) { compose.onAllNodes(hasTestTag("chat_send_button") and isEnabled()).fetchSemanticsNodes().size == 1 }
-            compose.onNodeWithTag("chat_send_button").performClick()
+            compose.onNode(hasTestTag("chat_send_button") and isEnabled()).assertIsDisplayed().performClick()
             compose.waitUntil(60_000) { compose.onAllNodesWithText("Context second answer", substring = true).fetchSemanticsNodes().isNotEmpty() }
             awaitUi(30_000) { query.conversationUiModel(lease).first { it != null && it.presentation.activeTurnId == null } }
             val nextRequest = server.mainRequests.toList().last()
@@ -296,7 +296,7 @@ class ChatContextFlowAndroidTest {
             compose.onNodeWithTag("chat_input").performTextInput("Next START has the rule disabled")
             closeSoftKeyboard()
             compose.waitUntil(30_000) { compose.onAllNodes(hasTestTag("chat_send_button") and isEnabled()).fetchSemanticsNodes().size == 1 }
-            compose.onNodeWithTag("chat_send_button").performClick()
+            compose.onNode(hasTestTag("chat_send_button") and isEnabled()).assertIsDisplayed().performClick()
             compose.waitUntil(60_000) { compose.onAllNodesWithText("Context third answer", substring = true).fetchSemanticsNodes().isNotEmpty() }
             awaitUi(30_000) { query.conversationUiModel(lease).first { it != null && it.presentation.activeTurnId == null } }
             val disabledSnapshot = runBlocking { requireNotNull(query.aggregateSnapshot(row.id)) }

@@ -94,6 +94,8 @@ updateLocal(latest personalSettings transform)
 
 - 地址切换期间，已捕获的请求继续使用原连接；新连接只供提交后的请求。候选地址验证失败不关闭原 Portal。成功后旧 Portal 的关闭和站点清理由同一屏障确认。候选地址若已完成凭据轮换，失败处理不能回退到已失效凭据。
 - 主动退出、到期、撤销和身份删除都绑定原 Session；重复请求合并。`IDENTITY_DELETED` 是更强的持久终态，不能被重启或较弱的退出原因覆盖。远端注销失败仍须完成可恢复的本机退出与清理并保留原诊断。
+- 本地到期计时只唤醒检查，`EnterpriseSessionController.expireIfCurrent` 在 Session 锁内复核原身份与最新截止时间；已经续期的会话不接受旧到期事件。到期提交失败的显式重试仍保留本地到期来源并再次复核，不能变成无条件撤权。服务端明确的 `session_expired`、撤销或身份删除继续沿原失效协议处理，不受本地旧截止限制。
+- Core 的 `401 invalid_credential` 可以表示短期 access token 被拒绝，并不证明 Session 到期。平台服务按原 Session/连接串行恢复凭据，只有 refresh credential 的明确终态拒绝或服务端会话/主体终态才退出企业连接。访问接口再次拒绝新 token 时保留原诊断，不将其伪装为登录到期。
 - 本机重置区分“仅删除接入”与“接入和全部企业历史”，范围先写入 intent，再由原数据 owner 清理；强删除终态到达时扩大清理范围，重启继续。两个分支都不删除个人域，也不依赖 Core logout 成功。
 
 `PlatformSnapshotMapper` 将受支持的 Snapshot v4/v5 映射为候选；`EnterpriseConfigurationCodec` 在读取 canonical Applied 时再次校验同一领域约束。`ManagedPolicy` 的助手、对话、快速、标题、附件检查、建议、压缩、图片、TTS、ASR 十项默认引用均可省略；缺失表示未设置，不取资源首项，也不复制对话默认。非空模型引用必须指向同一快照内已启用模型，附件检查模型还需 IMAGE 输入。可选 `imageGenerators` 缺失表示空集合；显式 null、未知字段和未知枚举失败关闭。平台 Snapshot 版本与本地 Applied manifest 版本是不同契约，不能混用。

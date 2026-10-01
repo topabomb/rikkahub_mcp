@@ -32,6 +32,7 @@ import net.weero.measix.pilot.data.ai.subassistant.getSubAssistantCallMetadata
 import net.weero.measix.pilot.data.ai.subassistant.parseRuntimeErrorDetailFromToolOutput
 import net.weero.measix.pilot.data.model.MessageNode
 import net.weero.measix.pilot.service.runtime.ConversationPresentationSnapshot
+import net.weero.measix.pilot.service.runtime.ConversationNotFoundException
 import net.weero.measix.pilot.utils.JsonInstant
 import kotlin.uuid.Uuid
 
@@ -143,6 +144,7 @@ internal fun resolveSubAssistantTimeline(
 sealed interface SubAssistantDetailUiState {
     data object Loading : SubAssistantDetailUiState
     data object Unavailable : SubAssistantDetailUiState
+    data class Failed(val error: Throwable) : SubAssistantDetailUiState
     data class Ready(
         val link: SubAssistantDetailLink,
         val child: ConversationPresentationSnapshot,
@@ -166,7 +168,8 @@ class SubAssistantDetailReader(
                     when (read) {
                         is ConversationReadState.Ready -> read.snapshot
                         ConversationReadState.Loading -> null
-                        else -> error("sub_assistant_master_unavailable")
+                        is ConversationReadState.Failed -> throw read.error
+                        ConversationReadState.Missing -> error("sub_assistant_master_unavailable")
                     }
                 }.map { resolveSubAssistantDetailLink(it, runId, JsonInstant) }
                     .flowOn(projectionDispatcher)
@@ -211,10 +214,19 @@ class SubAssistantDetailReader(
                         }
                     }
                 }
-            }.catch { error ->
-                if (error is CancellationException) throw error
-                // Child read failures cannot close the borrowed parent page capability.
-                emit(SubAssistantDetailUiState.Unavailable)
+            }
+        }.catch { error ->
+            if (error is CancellationException) throw error
+            // Content and read-boundary failures remain local to this borrowed subscription.
+            val unavailable = error is ConversationNotFoundException ||
+                (error is IllegalStateException && error.message in setOf(
+                    "sub_assistant_master_unavailable", "sub_assistant_link_unavailable", "sub_assistant_link_changed",
+                    "sub_assistant_child_unavailable", "sub_assistant_child_scope_mismatch",
+                    "sub_assistant_child_link_mismatch", "sub_assistant_preview_scope_mismatch",
+                ))
+            if (unavailable) emit(SubAssistantDetailUiState.Unavailable) else {
+                android.util.Log.e("SubAssistantDetail", "Detail read failed for $runId", error)
+                emit(SubAssistantDetailUiState.Failed(error))
             }
         }
     }

@@ -17,6 +17,7 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.FilledTonalIconButton
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -40,6 +41,7 @@ import androidx.compose.ui.unit.dp
 import me.rerere.ai.provider.ModelType
 import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.ArrowRight01
+import me.rerere.hugeicons.stroke.ArrowDown01
 import me.rerere.hugeicons.stroke.Brain02
 import me.rerere.hugeicons.stroke.Codesandbox
 import me.rerere.hugeicons.stroke.Edit03
@@ -55,6 +57,7 @@ import net.weero.measix.pilot.data.model.Assistant
 import net.weero.measix.pilot.ui.adaptive.ChatLayoutMode
 import net.weero.measix.pilot.ui.adaptive.LocalAdaptiveLayoutInfo
 import net.weero.measix.pilot.ui.components.ui.UIAvatar
+import net.weero.measix.pilot.ui.components.ui.Tooltip
 import net.weero.measix.pilot.ui.theme.LocalChatFontSizeRatio
 import net.weero.measix.pilot.ui.theme.asChatChrome
 import net.weero.measix.pilot.service.AssistantMcpChoice
@@ -708,6 +711,8 @@ private fun EnterpriseReadinessTitleRow(
                         stringResource(R.string.assistant_picker_current),
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
                     )
                     Text(
                         text = displayName,
@@ -725,8 +730,10 @@ private fun EnterpriseReadinessTitleRow(
                 )
             }
         }
-        TextButton(onClick = onSwitchAssistant) {
-            Text(stringResource(R.string.safe_mode_switch_assistant))
+        Tooltip(tooltip = { Text(stringResource(R.string.safe_mode_switch_assistant)) }) {
+            IconButton(onClick = onSwitchAssistant) {
+                Icon(HugeIcons.ArrowDown01, contentDescription = stringResource(R.string.safe_mode_switch_assistant))
+            }
         }
     }
 }

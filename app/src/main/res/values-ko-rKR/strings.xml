@@ -229,7 +229,7 @@
   <string name="chat_conversation_missing_title">대화를 사용할 수 없음</string>
   <string name="chat_conversation_missing_message">이 대화를 찾을 수 없습니다. 다시 시도하여 초기화하세요.</string>
   <string name="chat_conversation_load_failed_title">대화를 불러올 수 없음</string>
-  <string name="chat_conversation_load_failed_message">대화 데이터를 불러올 수 없습니다. 다시 시도하거나 스페이스를 열어 현재 연결을 확인하세요.</string>
+  <string name="chat_conversation_load_failed_message">대화를 읽지 못했습니다. 다시 시도하거나 오류 상세 정보를 펼쳐 원인을 확인하세요.</string>
   <string name="chat_message_add_favorite">즐겨찌기 추가</string>
   <string name="chat_message_remove_favorite">즐겨찾기 제거</string>
   <string name="chat_message_tool_approve">승인</string>
@@ -2054,4 +2054,5 @@
   <string name="file_preview_previous_page">이전 페이지</string>
   <string name="file_preview_next_page">다음 페이지</string>
   <string name="file_browser_parent_folder">상위 폴더</string>
+  <string name="chat_recent_conversation_save_failed">최근에 연 대화를 기록하지 못했습니다. 이 대화는 계속 사용할 수 있습니다. 나중에 대화를 다시 열어 재시도하세요.\n\n%1$s</string>
 </resources>

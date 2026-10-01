@@ -28,6 +28,7 @@ internal sealed interface EnterpriseExitFailure {
         val access: RealmAccess.Enterprise,
         val exitReason: EnterpriseExitReason,
         override val reason: String,
+        val localExpiry: Boolean = false,
     ) : EnterpriseExitFailure
 }
 internal data class EnterpriseExitResult(val maintenanceFailure: String? = null, val remoteLogoutFailure: String? = null)
@@ -68,7 +69,7 @@ internal class EnterpriseExitService(
                 try {
                     when (signal) {
                         is EnterpriseExitSignal.Closing -> resumeClosing(signal.token)
-                        is EnterpriseExitSignal.Expired -> invalidate(signal.access, EnterpriseExitReason.AUTHORIZATION_EXPIRED)
+                        is EnterpriseExitSignal.Expired -> expireIfCurrent(signal.access)
                     }
                 } catch (cancelled: CancellationException) {
                     throw cancelled
@@ -96,6 +97,34 @@ internal class EnterpriseExitService(
             return enqueueIdentityDeletion(token).result.await()
         }
         return enqueue(access, reason, invalidationReason = reason) { sessions.beginInvalidation(access, reason) }.result.await()
+    }
+
+    internal suspend fun expireIfCurrent(access: RealmAccess.Enterprise): EnterpriseExitResult {
+        recoveryGate.awaitReady()
+        val token = try {
+            sessions.expireIfCurrent(access)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Exception) {
+            val manifest = (sessions.state.value as? EnterpriseState.Available)?.manifest
+            if (manifest?.session?.id == access.sessionId && manifest.session.identity.scope == access.scope) {
+                _failure.value = EnterpriseExitFailure.Invalidation(access, EnterpriseExitReason.AUTHORIZATION_EXPIRED,
+                    reason(error), localExpiry = true)
+            }
+            throw error
+        }
+        if (token == null) {
+            _failure.value?.takeIf { it is EnterpriseExitFailure.Invalidation && it.access == access && it.localExpiry }
+                ?.let { _failure.compareAndSet(it, null) }
+            return EnterpriseExitResult()
+        }
+        val task = withContext(NonCancellable) {
+            enqueue(token.access, token.reason) {
+                sessions.withClosingSession(token) {}
+                token
+            }
+        }
+        return task.result.await()
     }
 
     /** Returns once CLOSING is durable; cleanup remains owned by this service. */
@@ -138,7 +167,8 @@ internal class EnterpriseExitService(
 
     suspend fun retry(failure: EnterpriseExitFailure): EnterpriseExitResult = when (failure) {
         is EnterpriseExitFailure.Closing -> retry(failure.token)
-        is EnterpriseExitFailure.Invalidation -> invalidate(failure.access, failure.exitReason)
+        is EnterpriseExitFailure.Invalidation -> if (failure.localExpiry) expireIfCurrent(failure.access)
+            else invalidate(failure.access, failure.exitReason)
     }
 
     suspend fun retry(token: EnterpriseExitToken): EnterpriseExitResult {

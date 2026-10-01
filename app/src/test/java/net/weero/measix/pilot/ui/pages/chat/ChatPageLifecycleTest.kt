@@ -35,6 +35,7 @@ import net.weero.measix.pilot.service.runtime.toSnapshot
 import net.weero.measix.pilot.utils.UiState
 import net.weero.measix.pilot.utils.UpdateChecker
 import net.weero.measix.pilot.utils.base64Encode
+import net.weero.measix.pilot.utils.userVisibleDiagnostic
 import org.junit.Assert.*
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -45,6 +46,141 @@ import kotlin.uuid.Uuid
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class ChatPageLifecycleTest {
+    @Test fun `ready snapshot waits for its joined configuration instead of reporting a missing resource`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val fixture = Fixture()
+        fixture.models.value = null
+        try {
+            val vm = fixture.create()
+            runCurrent()
+            assertSame(ConversationReadState.Loading, vm.conversationState.value)
+            assertNull(vm.snapshot.value)
+            assertNull(vm.conversationUiModel.value)
+            assertFalse(fixture.lease.closed.value)
+            vm.inputState.setMessageText("Draft while the projection loads")
+            fixture.models.value = fixture.model
+            runCurrent()
+            assertTrue(vm.conversationState.value is ConversationReadState.Ready)
+            assertSame(fixture.model, vm.conversationUiModel.value)
+            assertEquals("Draft while the projection loads", vm.inputState.textContent.text.toString())
+            assertSame(fixture.imports, vm.artifactDraftScope)
+            coVerify(exactly = 1) { fixture.application.initialize(fixture.request) }
+            verify(exactly = 0) { fixture.imports.close() }
+        } finally { fixture.store.clear(); Dispatchers.resetMain() }
+    }
+
+    @Test fun `joined projection failure keeps its diagnostic and retry preserves the input editor`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val fixture = Fixture()
+        val failure = java.io.IOException("configuration projection unreadable", IllegalStateException("original detail"))
+        try {
+            val vm = fixture.create()
+            runCurrent()
+            vm.inputState.setMessageText("unsent edits")
+            vm.inputState.messageContent = listOf(UIMessagePart.Image("file:///owned/input"))
+            every { fixture.query.conversationUiModel(fixture.lease) } returns kotlinx.coroutines.flow.flow { throw failure }
+            vm.retryConversationLoad()
+            runCurrent()
+            val observedError = (vm.conversationState.value as ConversationReadState.Failed).error
+            assertEquals(failure.javaClass, observedError.javaClass)
+            assertEquals(failure.message, observedError.message)
+            assertTrue(generateSequence(observedError.cause) { it.cause }.any {
+                it is IllegalStateException && it.message == "original detail"
+            })
+            assertTrue(observedError.userVisibleDiagnostic().contains(failure.userVisibleDiagnostic()))
+            assertNull(vm.snapshot.value)
+            assertNull(vm.conversationUiModel.value)
+            assertFalse(fixture.lease.closed.value)
+            assertSame(fixture.imports, vm.artifactDraftScope)
+            assertEquals("unsent edits", vm.inputState.textContent.text.toString())
+            assertEquals(listOf(UIMessagePart.Image("file:///owned/input")), vm.inputState.messageContent)
+            verify(exactly = 0) { fixture.imports.close() }
+            every { fixture.query.conversationUiModel(fixture.lease) } returns fixture.models
+            vm.retryConversationLoad()
+            runCurrent()
+            assertTrue(vm.conversationState.value is ConversationReadState.Ready)
+            assertSame(fixture.model, vm.conversationUiModel.value)
+            assertEquals("unsent edits", vm.inputState.textContent.text.toString())
+            assertEquals(listOf(UIMessagePart.Image("file:///owned/input")), vm.inputState.messageContent)
+            coVerify(exactly = 1) { fixture.application.initialize(fixture.request) }
+            verify(exactly = 1) { fixture.artifacts.openDraftScope(fixture.lease) }
+        } finally { fixture.store.clear(); Dispatchers.resetMain() }
+    }
+
+    @Test fun `primary read failure cannot be covered by an older joined ready model`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val fixture = Fixture()
+        val failure = java.io.IOException("conversation snapshot unreadable")
+        try {
+            val vm = fixture.create()
+            runCurrent()
+            vm.inputState.setMessageText("keep draft")
+            fixture.reads.value = ConversationReadState.Failed(failure)
+            runCurrent()
+            assertSame(failure, (vm.conversationState.value as ConversationReadState.Failed).error)
+            assertNull(vm.snapshot.value)
+            assertNull(vm.conversationUiModel.value)
+            assertFalse(fixture.lease.closed.value)
+            fixture.reads.value = ConversationReadState.Ready(fixture.snapshot)
+            vm.retryConversationLoad()
+            runCurrent()
+            assertTrue(vm.conversationState.value is ConversationReadState.Ready)
+            assertEquals("keep draft", vm.inputState.textContent.text.toString())
+            verify(exactly = 0) { fixture.imports.close() }
+            coVerify(exactly = 1) { fixture.application.initialize(fixture.request) }
+        } finally { fixture.store.clear(); Dispatchers.resetMain() }
+    }
+
+    @Test fun `recent chat write failure stays actionable without revoking the ready chat or clearing input`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val fixture = Fixture(draft = false)
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val failure = java.io.IOException("recent preference write denied", IllegalStateException("disk detail"))
+        coEvery { fixture.application.rememberConversation(fixture.lease) } coAnswers {
+            entered.complete(Unit)
+            release.await()
+            throw failure
+        }
+        try {
+            val vm = fixture.create()
+            runCurrent()
+            assertTrue(entered.isCompleted)
+            vm.inputState.setMessageText("unsent message")
+            vm.inputState.messageContent = listOf(UIMessagePart.Image("file:///owned/input"))
+            release.complete(Unit)
+            runCurrent()
+            assertTrue(vm.conversationState.value is ConversationReadState.Ready)
+            assertEquals("unsent message", vm.inputState.textContent.text.toString())
+            assertEquals(listOf(UIMessagePart.Image("file:///owned/input")), vm.inputState.messageContent)
+            assertSame(fixture.imports, vm.artifactDraftScope)
+            assertFalse(fixture.lease.closed.value)
+            val reported = fixture.errors.errors.value.single()
+            assertEquals(fixture.request.id, reported.conversationId)
+            assertTrue(reported.detail.contains("reopen"))
+            assertTrue(reported.detail.contains(failure.userVisibleDiagnostic()))
+            verify(exactly = 0) { fixture.imports.close() }
+            vm.retryConversationLoad()
+            runCurrent()
+            coVerify(exactly = 1) { fixture.application.rememberConversation(fixture.lease) }
+        } finally { fixture.store.clear(); Dispatchers.resetMain() }
+    }
+
+    @Test fun `recent chat cancellation does not become a chat error or close the page`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val fixture = Fixture(draft = false)
+        coEvery { fixture.application.rememberConversation(fixture.lease) } throws kotlinx.coroutines.CancellationException("write cancelled")
+        try {
+            val vm = fixture.create()
+            runCurrent()
+            assertTrue(vm.conversationState.value is ConversationReadState.Ready)
+            assertFalse(fixture.lease.closed.value)
+            assertTrue(fixture.errors.errors.value.isEmpty())
+            assertSame(fixture.imports, vm.artifactDraftScope)
+            verify(exactly = 0) { fixture.imports.close() }
+        } finally { fixture.store.clear(); Dispatchers.resetMain() }
+    }
+
     @Test fun `favorite read failure is visible on its authorized chat page`() = runTest {
         Dispatchers.setMain(StandardTestDispatcher(testScheduler))
         val fixture = Fixture()
@@ -57,6 +193,23 @@ class ChatPageLifecycleTest {
             assertTrue(vm.favoriteNodeIds.value.isEmpty())
             assertEquals("IOException: favorite index unreadable", fixture.errors.errors.value.single().detail)
             assertEquals(fixture.lease.conversationId, fixture.errors.errors.value.single().conversationId)
+        } finally { fixture.store.clear(); Dispatchers.resetMain() }
+    }
+
+    @Test fun `favorite read boundary failure stays local to favorites`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val fixture = Fixture()
+        val failure = java.io.IOException("favorite authorization read unavailable")
+        every { fixture.query.observeForView(fixture.lease, emptySet<Uuid>(), any()) } returns
+            kotlinx.coroutines.flow.flow { throw failure }
+        try {
+            val vm = fixture.create()
+            runCurrent()
+            assertTrue(vm.conversationState.value is ConversationReadState.Ready)
+            assertTrue(vm.favoriteNodeIds.value.isEmpty())
+            assertTrue(fixture.errors.errors.value.single().detail.contains(failure.userVisibleDiagnostic()))
+            assertFalse(fixture.lease.closed.value)
+            verify(exactly = 0) { fixture.imports.close() }
         } finally { fixture.store.clear(); Dispatchers.resetMain() }
     }
 
@@ -256,8 +409,11 @@ class ChatPageLifecycleTest {
             val vm = fixture.create()
             runCurrent()
             val oldHandler = requireNotNull(vm.subAssistantAnswerHandler())
+            fixture.access.value = false
+            runCurrent()
             val nextLease = ConversationViewLease(fixture.request.id, fixture.request.access, 1) {}
             coEvery { fixture.application.initialize(fixture.request) } returns nextLease
+            fixture.access.value = true
             vm.retryConversationLoad()
             runCurrent()
             coEvery { fixture.application.answerSubAssistant(any(), "run", "ask", "answer") } coAnswers {
@@ -283,8 +439,11 @@ class ChatPageLifecycleTest {
             val handler = requireNotNull(vm.toolDecisionHandler())
             val locator = me.rerere.ai.core.ToolCallLocator(Uuid.random(), Uuid.random(), Uuid.random())
             val decision = net.weero.measix.pilot.service.runtime.ToolInteractionDecision.Approve
+            fixture.access.value = false
+            runCurrent()
             val nextLease = ConversationViewLease(fixture.request.id, fixture.request.access, 1) {}
             coEvery { fixture.application.initialize(fixture.request) } returns nextLease
+            fixture.access.value = true
             vm.retryConversationLoad(); runCurrent()
             coEvery { fixture.turns.submitToolDecision(fixture.lease.commandTarget, locator, decision) } throws IllegalStateException("closed")
             assertFalse(handler(locator, decision))
@@ -313,6 +472,12 @@ class ChatPageLifecycleTest {
         val configuration = mockk<ConfigurationApplicationService>()
         val turns = mockk<net.weero.measix.pilot.service.ConversationTurnService>()
         private val updater = mockk<UpdateChecker>()
+        val snapshot = ConversationRuntimeSnapshot(
+            Conversation.ofId(request.id, request.assistantId, newConversation = draft).toSnapshot(), null,
+        ).toPresentationSnapshot()
+        val model = ConversationUiModel(snapshot, ConversationPresentation.IDLE)
+        val reads = MutableStateFlow<ConversationReadState>(ConversationReadState.Ready(snapshot))
+        val models = MutableStateFlow<ConversationUiModel?>(model)
         init {
             coEvery { application.initialize(request) } returns lease
             coEvery { application.rememberConversation(lease) } returns Unit
@@ -322,19 +487,21 @@ class ChatPageLifecycleTest {
             every { updater.updateState } returns MutableStateFlow(UiState.Idle)
             every { favorites.observeNodeIds(any()) } returns flowOf(setOf(Uuid.random()))
             every { query.observeViewAccess(any()) } returns access
+            coEvery { query.requireViewAccess(any()) } returns Unit
             every { query.observeForView<Any?>(any(), any(), any()) } answers { thirdArg<() -> Flow<Any?>>()() }
-            val snapshot = ConversationRuntimeSnapshot(
-                Conversation.ofId(request.id, request.assistantId, newConversation = draft).toSnapshot(), null,
-            ).toPresentationSnapshot()
-            every { query.observeConversation(any()) } returns flowOf(ConversationReadState.Ready(snapshot))
-            every { query.turnPresentation(any()) } returns flowOf(ConversationPresentation.IDLE)
-            every { query.conversationUiModel(any()) } returns flowOf(ConversationUiModel(snapshot, ConversationPresentation.IDLE))
+            every { query.observeConversation(any()) } returns reads
+            every { query.conversationUiModel(any()) } returns models
         }
 
         fun create(): ChatVM = ViewModelProvider(store, object : ViewModelProvider.Factory {
             @Suppress("UNCHECKED_CAST")
             override fun <T : ViewModel> create(modelClass: Class<T>): T = ChatVM(
-                request, mockk<Application> { every { getString(net.weero.measix.pilot.R.string.error_title_operation) } returns "Operation failed" }, settings, turns, application,
+                request, mockk<Application> {
+                    every { getString(net.weero.measix.pilot.R.string.error_title_operation) } returns "Operation failed"
+                    every { getString(net.weero.measix.pilot.R.string.chat_recent_conversation_save_failed, *anyVararg()) } answers {
+                        "Recent chat preference could not be saved; reopen to retry.\n\n" + secondArg<Array<Any>>().single()
+                    }
+                }, settings, turns, application,
                 query, updater, artifacts, favorites, errors, configuration, mockk { every { summary } returns kotlinx.coroutines.flow.MutableStateFlow(null) },
             ) as T
         })[ChatVM::class.java]

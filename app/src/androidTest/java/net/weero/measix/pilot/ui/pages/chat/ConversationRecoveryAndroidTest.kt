@@ -7,6 +7,8 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
+import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalDensity
@@ -66,7 +68,8 @@ class ConversationRecoveryAndroidTest {
         val stack = mutableListOf<NavKey>(Screen.Startup())
         var retries = 0
         show(stack, text(conversationLoadFailureMessage(failure)), diagnostic,
-            onRetry = { retries++ }, shortScreen = true)
+            onRetry = { retries++ }, shortScreen = true, dark = true)
+        capture("conversation-recovery-dark.png")
         compose.onNodeWithText(text(R.string.application_recovery_retry)).performScrollTo().performClick()
         compose.runOnIdle { assertEquals(1, retries) }
         compose.onNodeWithTag("conversation-recovery-detail").assertDoesNotExist()
@@ -101,26 +104,41 @@ class ConversationRecoveryAndroidTest {
         onRetry: () -> Unit = {},
         onNewChat: (() -> Unit)? = null,
         shortScreen: Boolean = false,
+        dark: Boolean = false,
     ) {
         compose.setContent {
             val density = LocalDensity.current
-            MaterialTheme {
+            val colors = if (dark) darkColorScheme() else MaterialTheme.colorScheme
+            MaterialTheme(colorScheme = colors) {
                 CompositionLocalProvider(
                     LocalNavController provides Navigator(stack),
                     LocalDensity provides Density(density.density, if (shortScreen) 1.5f else density.fontScale),
                 ) {
-                    Box(if (shortScreen) Modifier.fillMaxWidth().height(240.dp) else Modifier) {
-                        ConversationUnavailable(
-                            title = text(R.string.chat_conversation_load_failed_title),
-                            message = message,
-                            diagnostic = diagnostic,
-                            onRetry = onRetry,
-                            onNewChat = onNewChat,
-                        )
+                    Surface {
+                        Box(if (shortScreen) Modifier.fillMaxWidth().height(240.dp) else Modifier) {
+                            ConversationUnavailable(
+                                title = text(R.string.chat_conversation_load_failed_title),
+                                message = message,
+                                diagnostic = diagnostic,
+                                onRetry = onRetry,
+                                onNewChat = onNewChat,
+                            )
+                        }
                     }
                 }
             }
         }
+    }
+
+    private fun capture(name: String) {
+        compose.waitForIdle()
+        val context = androidx.test.platform.app.InstrumentationRegistry.getInstrumentation().targetContext
+        val bitmap = requireNotNull(androidx.test.platform.app.InstrumentationRegistry.getInstrumentation().uiAutomation.takeScreenshot())
+        try {
+            java.io.File(context.cacheDir, name).outputStream().use {
+                org.junit.Assert.assertTrue(bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it))
+            }
+        } finally { bitmap.recycle() }
     }
 
     private fun text(resource: Int): String = compose.activity.getString(resource)

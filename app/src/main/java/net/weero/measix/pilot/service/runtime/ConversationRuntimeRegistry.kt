@@ -220,19 +220,6 @@ class ConversationRuntimeRegistry(
         installed
     }
 
-    fun getTurnPresentationFlow(conversationId: Uuid): Flow<ConversationPresentation> =
-        observeRuntimeState(conversationId).flatMapLatest { state ->
-            state.runtimeOrNull()?.let { runtime ->
-                combine(runtime.activeTurnRevision, runtime.snapshot) { _, snapshot ->
-                    resolveConversationPresentation(
-                        runtime.activeTurnPresentationFacts(),
-                        snapshot,
-                        runtime.lastTerminatedRequestTurnId(),
-                    )
-                }
-            } ?: flowOf(ConversationPresentation.IDLE)
-        }
-
     /**
      * Snapshot and turn presentation joined at the Runtime owner. Consumers that need to
      * correlate a receipt with its durable target must not combine two independent UI flows.

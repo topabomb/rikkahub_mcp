@@ -295,6 +295,11 @@ WorkspaceFileEditorPage 的正文使用以 id/area/path 为键的普通 FileEdit
 GET 只接纳完整 200；列表响应有界，文件内容按 64 KiB 块传输，不建立内存大文件缓存。
 重定向和认证器重发关闭。GET 沿 `readClient` 的 OkHttp 只读恢复策略，在响应头接收前恢复可恢复连接失败，
 也可能对 408 或 `Retry-After: 0` 的 503 再次请求；正文读取中断不重放下载。
+文件接口的 `401 invalid_credential` 只说明本次 access token 被拒绝。`PlatformEnterpriseService` 在原 Session
+及连接下复用刷新锁与 token 比较替换，只有 refresh credential 明确失效、远端 Session 到期或身份撤销才进入企业退出。
+目录、文本和内存图片读取在恢复 token 后最多重试一次，每次重建本次缓冲；持有 SAF/预览/分享输出资源的下载及所有写入
+不重新发送，保留原错误，恢复失败作为 suppressed cause 保留。第二次 access token 拒绝仍是本次请求失败，不能据此关闭整个空间。
+写入已收到确定拒绝后，取消后续凭据恢复不把该结果改为 UNKNOWN；未得到确定结果的发送后取消仍保留待核实目标。
 写请求关闭连接自动重试且 body 为 one-shot。新文件用 If-None-Match，已有普通文件
 必须有强 ETag，覆盖目标也必须使用用户确认的目标版本。目录递归删除必须显式确认。
 UNKNOWN 与异常成功状态、发送后 IO 中断均不能当作失败后可重试；同身份、连接和空间的目标在当前进程内

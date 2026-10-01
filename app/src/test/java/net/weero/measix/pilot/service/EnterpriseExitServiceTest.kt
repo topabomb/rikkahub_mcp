@@ -171,6 +171,7 @@ class EnterpriseExitServiceTest {
             val failure = f.service.failure.filterNotNull().first() as EnterpriseExitFailure.Invalidation
             assertEquals(access, failure.access)
             assertEquals(EnterpriseExitReason.AUTHORIZATION_EXPIRED, failure.exitReason)
+            assertTrue(failure.localExpiry)
             assertEquals(EnterpriseSessionPhase.READY, f.manifest.phase)
             assertNull(f.sessions.pendingExit())
             assertFalse(f.sessions.observeRealmAccess(access).first())
@@ -179,6 +180,68 @@ class EnterpriseExitServiceTest {
             f.service.retry(failure)
             assertEquals(EnterpriseSessionPhase.REAUTH_REQUIRED, f.manifest.phase)
             assertNull(f.service.failure.value)
+        }
+    }
+
+    @Test fun `local expiry timer reschedules its original session after the clock moves back`() = runTest {
+        fixture(virtualTime = true) { f ->
+            f.sessions.enrollFixture(exampleEnterprisePackage(), java.time.Instant.ofEpochMilli(3000L))
+            f.gate.ready()
+            runCurrent()
+            f.now = 2000L
+            advanceTimeBy(2000L)
+            runCurrent()
+            assertEquals(EnterpriseSessionPhase.READY, f.manifest.phase)
+            coVerify(exactly = 0) { f.conversations.stopEnterpriseWork(any()) }
+
+            f.now = 3000L
+            advanceTimeBy(1000L)
+            f.sessions.state.first { (it as? EnterpriseState.Available)?.manifest?.phase == EnterpriseSessionPhase.REAUTH_REQUIRED }
+            coVerify(exactly = 1) { f.conversations.stopEnterpriseWork(any()) }
+        }
+    }
+
+    @Test fun `delivered local expiry event cannot close a renewed original session`() = runTest {
+        fixture(virtualTime = true) { f ->
+            f.sessions.enrollFixture(exampleEnterprisePackage(), java.time.Instant.ofEpochMilli(3000L))
+            val access = f.sessions.captureSelectedRealmAccess() as RealmAccess.Enterprise
+            val selection = f.sessions.readPresentation().selection
+            val refresh = f.sessions.beginPlatformRefresh(access.sessionId)
+            f.sessions.acceptPlatformRefresh(refresh, PlatformRefreshResponse("new-access", "2099-01-01T00:00:00Z",
+                "new-refresh", "2099-01-08T00:00:00Z", "1970-01-01T00:00:10Z"))
+            f.now = 3000L
+            f.gate.ready()
+            f.service.expireIfCurrent(access)
+            assertEquals(EnterpriseSessionPhase.READY, f.manifest.phase)
+            assertEquals(selection, f.sessions.readPresentation().selection)
+            assertNull(f.service.failure.value)
+            coVerify(exactly = 0) { f.conversations.stopEnterpriseWork(any()) }
+        }
+    }
+
+    @Test fun `retrying failed local expiry after clock correction and renewal rechecks the current deadline`() = runTest {
+        fixture(virtualTime = true) { f ->
+            f.sessions.enrollFixture(exampleEnterprisePackage(), java.time.Instant.ofEpochMilli(3000L))
+            val access = f.sessions.captureSelectedRealmAccess() as RealmAccess.Enterprise
+            f.gate.ready()
+            runCurrent()
+            f.now = 3000L
+            f.failCommit = true
+            advanceTimeBy(2000L)
+            val failure = f.service.failure.filterNotNull().first() as EnterpriseExitFailure.Invalidation
+            assertTrue(failure.localExpiry)
+
+            f.failCommit = false
+            f.now = 2000L
+            val refresh = f.sessions.beginPlatformRefresh(access.sessionId)
+            f.sessions.acceptPlatformRefresh(refresh, PlatformRefreshResponse("new-access", "2099-01-01T00:00:00Z",
+                "new-refresh", "2099-01-08T00:00:00Z", "1970-01-01T00:00:10Z"))
+            f.now = 3000L
+            f.service.retry(failure)
+            assertEquals(EnterpriseSessionPhase.READY, f.manifest.phase)
+            assertEquals(access, f.sessions.captureSelectedRealmAccess())
+            assertNull(f.service.failure.value)
+            coVerify(exactly = 0) { f.conversations.stopEnterpriseWork(any()) }
         }
     }
 

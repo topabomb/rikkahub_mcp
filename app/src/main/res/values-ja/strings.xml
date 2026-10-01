@@ -229,7 +229,7 @@
   <string name="chat_conversation_missing_title">会話を利用できません</string>
   <string name="chat_conversation_missing_message">この会話が見つかりません。再試行して初期化してください。</string>
   <string name="chat_conversation_load_failed_title">会話を読み込めません</string>
-  <string name="chat_conversation_load_failed_message">会話データを読み込めませんでした。再試行するか、スペースを開いて現在の接続を確認してください。</string>
+  <string name="chat_conversation_load_failed_message">会話を読み込めませんでした。再試行するか、エラーの詳細を開いて原因を確認してください。</string>
   <string name="chat_message_add_favorite">お気に入りに追加</string>
   <string name="chat_message_remove_favorite">お気に入りから削除</string>
   <string name="chat_message_tool_approve">承認</string>
@@ -2054,4 +2054,5 @@
   <string name="file_preview_previous_page">前のページ</string>
   <string name="file_preview_next_page">次のページ</string>
   <string name="file_browser_parent_folder">親フォルダー</string>
+  <string name="chat_recent_conversation_save_failed">最近開いた会話を記録できませんでした。この会話は引き続き使用できます。後で会話を開き直すと再試行できます。\n\n%1$s</string>
 </resources>

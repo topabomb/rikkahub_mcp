@@ -63,7 +63,9 @@ import net.weero.measix.pilot.ui.context.LocalNavController
 import net.weero.measix.pilot.service.ConversationViewLease
 import net.weero.measix.pilot.service.SubAssistantDetailUiState
 import net.weero.measix.pilot.ui.context.LocalSettings
+import net.weero.measix.pilot.ui.pages.chat.ConversationUnavailable
 import net.weero.measix.pilot.ui.theme.CustomColors
+import net.weero.measix.pilot.utils.userVisibleDiagnostic
 import org.koin.androidx.compose.koinViewModel
 import org.koin.core.parameter.parametersOf
 
@@ -145,6 +147,15 @@ fun SubAssistantDetailPage(
         when (val state = uiState) {
             SubAssistantDetailUiState.Loading -> DetailLoading(Modifier.padding(innerPadding))
             SubAssistantDetailUiState.Unavailable -> DetailUnavailable(Modifier.padding(innerPadding))
+            is SubAssistantDetailUiState.Failed -> Box(Modifier.padding(innerPadding)) {
+                ConversationUnavailable(
+                    title = stringResource(R.string.sub_assistant_detail_unavailable),
+                    message = stringResource(R.string.chat_conversation_load_failed_message),
+                    onRetry = vm::retry,
+                    diagnostic = state.error.userVisibleDiagnostic(),
+                    showSpaces = false,
+                )
+            }
             is SubAssistantDetailUiState.Ready -> DetailContent(
                 source = source,
                 state = state,

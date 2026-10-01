@@ -492,6 +492,7 @@ internal fun ConversationUnavailable(
     onRetry: () -> Unit,
     onNewChat: (() -> Unit)? = null,
     diagnostic: String? = null,
+    showSpaces: Boolean = true,
 ) {
     val nav = LocalNavController.current
     val clipboard = LocalClipboard.current
@@ -507,7 +508,7 @@ internal fun ConversationUnavailable(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            Text(text = title, style = MaterialTheme.typography.titleMedium)
+            Text(text = title, color = MaterialTheme.colorScheme.onSurface, style = MaterialTheme.typography.titleMedium)
             Text(text = message, color = MaterialTheme.colorScheme.onSurfaceVariant,
                 style = MaterialTheme.typography.bodyMedium)
             FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
@@ -515,10 +516,12 @@ internal fun ConversationUnavailable(
                 onNewChat?.let { action ->
                     TextButton(onClick = action) { Text(stringResource(R.string.chat_page_new_chat)) }
                 }
-                TextButton(
-                    onClick = { nav.navigate(Screen.Enterprise) { launchSingleTop = true } },
-                    modifier = Modifier.testTag("conversation-recovery-spaces"),
-                ) { Text(stringResource(R.string.enterprise_spaces)) }
+                if (showSpaces) {
+                    TextButton(
+                        onClick = { nav.navigate(Screen.Enterprise) { launchSingleTop = true } },
+                        modifier = Modifier.testTag("conversation-recovery-spaces"),
+                    ) { Text(stringResource(R.string.enterprise_spaces)) }
+                }
             }
             diagnostic?.let { detail ->
                 TextButton(onClick = { detailsOpen = !detailsOpen },

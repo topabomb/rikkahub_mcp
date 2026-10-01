@@ -1,6 +1,10 @@
 package net.weero.measix.pilot.data.enterprise
 
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.async
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import net.weero.measix.pilot.data.configuration.ConfigurationScope
@@ -16,6 +20,71 @@ import org.robolectric.annotation.Config
 @Config(sdk = [34])
 class RealmAccessTest {
     @get:Rule val temporary = TemporaryFolder()
+
+    @Test
+    fun `old access deadline waits for a renewal publication before denying the session`() = runTest {
+        val now = java.util.concurrent.atomic.AtomicLong(1000L)
+        val blockCommit = java.util.concurrent.atomic.AtomicBoolean(false)
+        val entered = CompletableDeferred<Unit>()
+        val release = java.util.concurrent.CountDownLatch(1)
+        val controller = EnterpriseSessionController(enterpriseTestStore(temporary.newFolder()) { checkpoint ->
+            if (blockCommit.get() && checkpoint == EnterpriseStorageCheckpoint.BEFORE_MANIFEST_COMMIT) {
+                entered.complete(Unit)
+                check(release.await(10, java.util.concurrent.TimeUnit.SECONDS)) { "renewal commit did not resume" }
+            }
+        }) { now.get() }
+        controller.enrollFixture(exampleEnterprisePackage(), java.time.Instant.ofEpochMilli(3000L))
+        val access = controller.captureSelectedRealmAccess() as RealmAccess.Enterprise
+        val allowed = mutableListOf<Boolean>()
+        val observed = CompletableDeferred<Unit>()
+        backgroundScope.launch {
+            controller.observeRealmAccess(access).collect { allowed += it; observed.complete(Unit) }
+        }
+        observed.await()
+        val refresh = controller.beginPlatformRefresh(access.sessionId)
+        runCurrent()
+        blockCommit.set(true)
+        val renewal = async(Dispatchers.Default) {
+            controller.acceptPlatformRefresh(refresh, PlatformRefreshResponse("new-access", "2099-01-01T00:00:00Z",
+                "new-refresh", "2099-01-08T00:00:00Z", "1970-01-01T00:00:10Z"))
+        }
+        try {
+            entered.await()
+            now.set(3000L)
+            advanceTimeBy(2000L)
+            runCurrent()
+            assertEquals(listOf(true), allowed)
+        } finally {
+            release.countDown()
+            renewal.await()
+        }
+        runCurrent()
+        assertEquals(listOf(true), allowed)
+        assertNull(controller.expireIfCurrent(access))
+        assertTrue(controller.withRealmAccess(access) { true })
+
+        now.set(10_000L)
+        advanceTimeBy(7000L)
+        runCurrent()
+        assertEquals(listOf(true, false), allowed)
+    }
+
+    @Test
+    fun `local expiry respects renewal while a remote session expiry remains terminal`() = runTest {
+        var now = 1000L
+        val controller = EnterpriseSessionController(enterpriseTestStore(temporary.newFolder())) { now }
+        controller.enrollFixture(exampleEnterprisePackage(), java.time.Instant.ofEpochMilli(3000L))
+        val access = controller.captureSelectedRealmAccess() as RealmAccess.Enterprise
+        val refresh = controller.beginPlatformRefresh(access.sessionId)
+        controller.acceptPlatformRefresh(refresh, PlatformRefreshResponse("new-access", "2099-01-01T00:00:00Z",
+            "new-refresh", "2099-01-08T00:00:00Z", "1970-01-01T00:00:10Z"))
+        now = 3000L
+        assertNull(controller.expireIfCurrent(access))
+        assertTrue(controller.withRealmAccess(access) { true })
+        assertEquals(EnterpriseExitReason.AUTHORIZATION_EXPIRED,
+            controller.beginInvalidation(access, EnterpriseExitReason.AUTHORIZATION_EXPIRED).reason)
+        expectDenied { controller.withRealmAccess(access) { fail("remote expiry ignored") } }
+    }
 
     @Test
     fun `captured identity survives switching but not exit and same principal reenrollment`() = runTest {

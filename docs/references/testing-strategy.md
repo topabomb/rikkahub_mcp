@@ -84,6 +84,12 @@ Portal、企业退出和平台接入按同一证据边界分层：
 
 离线 Core fixture 保护十项可选默认、模型引用闭包、generation 和拒绝语义；真实平台结果要记录所用 Core/Provider 身份与场景。失败注入必须观察已提交事实，不能让返回空集合的替身掩盖退出、清理或恢复错误。
 
+企业和聊天恢复的行为入口为 `RealmAccessTest`、`EnterpriseExitServiceTest`、`PlatformSessionNetworkTest`、
+`RemoteWorkspaceServiceTest`、`ConversationQueryServiceTest` 与 `ChatPageLifecycleTest`。应分别验证旧到期事件及失败重试
+不会关闭已续期 Session、时钟回拨后仍最终到期、access token 拒绝与 refresh credential 终态的区别、不可重放输出和写入、
+仍有权限的读失败保留原异常与输入并只重订阅读取，以及最近聊天记录失败不撤销页面或丢失导入。真实撤权仍必须关闭原 lease，
+取消不能显示为失败；Mock HTTP 和 JVM 错误注入不代替真实 Core/Agent Space 或页面交互验收。
+
 - **禁止 wall-clock 等待**：不用 `Thread.sleep`、固定 `delay` 后猜状态、轮询到 timeout。用 `runTest`、`CompletableDeferred`、`Channel`、`Mutex` barrier、`TestCoroutineScheduler`、`advanceUntilIdle`。
 - 真实平台的负行为测试可保留明确的观察窗口（如暂停期间不得开始播放）；窗口只观察该时间段的禁止行为，不能用它猜测合成或 collector 已完成。完成与顺序断言等待真实可观测状态，跨线程记录用 StateFlow/Channel 交接。
 - **竞态测试必须有显式交接点**：说明它控制的 barrier（START commit 前/后、Provider 首输出前、response 后 pending checkpoint 前、Tool STARTED commit 后 side effect 前、result commit 后 Artifact publish 前、terminal commit 中），不依赖调度器"碰巧"切换。

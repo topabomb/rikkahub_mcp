@@ -758,6 +758,70 @@ class PlatformSessionNetworkTest {
         } finally { server.stop(0) }
     }
 
+    @Test fun `control access rejection after successful refresh does not retire the session`() = runBlocking {
+        val refreshes = AtomicInteger()
+        val server = server {
+            assertEquals("/api/client/v1/sessions/refresh", requestURI.path)
+            refreshes.incrementAndGet()
+            reply(200, fixture("refresh-response"))
+        }
+        try {
+            val sessions = owner(temporary.newFolder())
+            val connection = PlatformConnection("http://127.0.0.1:${server.address.port}",
+                PlatformWireCodec.decode(fixture("discovery")))
+            val id = sessions.acceptPlatformEnrollment(sessions.beginPlatformEnrollment(), connection,
+                PlatformWireCodec.decode(fixture("enrollment-response")))
+            val access = sessions.completePlatformBootstrap(id, PlatformWireCodec.decode(fixture("bootstrap")))
+            val invalidated = mutableListOf<Pair<RealmAccess.Enterprise, EnterpriseExitReason>>()
+            val platform = PlatformEnterpriseService(sessions, PlatformControlClient(OkHttpClient()),
+                onSessionInvalidated = { captured, reason -> invalidated += captured to reason })
+            var requests = 0
+            val failure = runCatching {
+                platform.read<Unit>(id) { _, _ ->
+                    requests++
+                    throw PlatformHttpException(401,
+                        PlatformProblem("about:blank", "Unauthorized", 401, "invalid_credential"), "Access token rejected")
+                }
+            }.exceptionOrNull()
+            assertTrue(failure is PlatformHttpException)
+            assertEquals("invalid_credential", (failure as PlatformHttpException).problem?.code)
+            assertEquals(2, requests)
+            assertEquals(1, refreshes.get())
+            assertTrue(invalidated.isEmpty())
+            assertTrue(sessions.withRealmAccess(access) { true })
+        } finally { server.stop(0) }
+    }
+
+    @Test fun `control access recovery retires only a terminal refresh credential`() = runBlocking {
+        val server = server {
+            assertEquals("/api/client/v1/sessions/refresh", requestURI.path)
+            reply(401, """{"type":"about:blank","title":"Unauthorized","status":401,"code":"invalid_credential","detail":"Refresh credential invalid"}""")
+        }
+        try {
+            val sessions = owner(temporary.newFolder())
+            val connection = PlatformConnection("http://127.0.0.1:${server.address.port}",
+                PlatformWireCodec.decode(fixture("discovery")))
+            val id = sessions.acceptPlatformEnrollment(sessions.beginPlatformEnrollment(), connection,
+                PlatformWireCodec.decode(fixture("enrollment-response")))
+            val access = sessions.completePlatformBootstrap(id, PlatformWireCodec.decode(fixture("bootstrap")))
+            val invalidated = mutableListOf<Pair<RealmAccess.Enterprise, EnterpriseExitReason>>()
+            val platform = PlatformEnterpriseService(sessions, PlatformControlClient(OkHttpClient()),
+                onSessionInvalidated = { captured, reason -> invalidated += captured to reason })
+            var requests = 0
+            val failure = runCatching {
+                platform.read<Unit>(id) { _, _ ->
+                    requests++
+                    throw PlatformHttpException(401,
+                        PlatformProblem("about:blank", "Unauthorized", 401, "invalid_credential"), "Access token rejected")
+                }
+            }.exceptionOrNull()
+            assertTrue(failure is PlatformHttpException)
+            assertTrue(failure!!.message!!.contains("Refresh credential invalid"))
+            assertEquals(1, requests)
+            assertEquals(listOf(access to EnterpriseExitReason.AUTHORIZATION_EXPIRED), invalidated)
+        } finally { server.stop(0) }
+    }
+
     @Test fun `terminal active session signals the application exit owner with the exact reason`() = runBlocking {
         val cases = listOf(
             Triple(403, "user_disabled", EnterpriseExitReason.AUTHORIZATION_REVOKED),

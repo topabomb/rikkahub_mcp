@@ -641,17 +641,21 @@ internal class EnterpriseSessionController(
     }
 
     /** A captured subscription expires even when no command changes the manifest. New sessions cannot revive it. */
-    fun observeRealmAccess(access: RealmAccess): Flow<Boolean> = state.flatMapLatest { published ->
+    fun observeRealmAccess(access: RealmAccess): Flow<Boolean> = state.flatMapLatest {
         flow {
             if (access == RealmAccess.Personal) {
                 emit(true)
             } else {
-                val manifest = (published as? EnterpriseState.Available)?.manifest
-                val allowed = manifest != null && allowsDataAccess(manifest, access as RealmAccess.Enterprise)
-                emit(allowed)
-                if (allowed) {
-                    delay((requireNotNull(manifest.session).expiresAtMillis - nowMillis()).coerceAtLeast(1))
-                    emit(false)
+                while (true) {
+                    val remaining = mutex.withLock {
+                        val manifest = (state.value as? EnterpriseState.Available)?.manifest
+                        manifest?.takeIf { allowsDataAccess(it, access as RealmAccess.Enterprise) }
+                            ?.session?.let { (it.expiresAtMillis - nowMillis()).coerceAtLeast(1) }
+                    }
+                    emit(remaining != null)
+                    if (remaining == null) break
+                    // A previous deadline is only a wake-up; renewal and clock changes need a fresh owner read.
+                    delay(remaining)
                 }
             }
         }
@@ -705,6 +709,15 @@ internal class EnterpriseSessionController(
         }
     }
 
+    /** A local timer cannot invalidate a renewed Session, including when its event was already delivered. */
+    suspend fun expireIfCurrent(access: RealmAccess.Enterprise): EnterpriseExitToken? = mutex.withLock {
+        val manifest = manifestForExit()
+        val session = manifest.session
+        if (session?.id != access.sessionId || session.identity.scope != access.scope ||
+            manifest.phase == EnterpriseSessionPhase.CLOSING || session.expiresAtMillis > nowMillis()) return@withLock null
+        beginClosing(manifest, EnterpriseExitReason.AUTHORIZATION_EXPIRED)
+    }
+
     suspend fun pendingExit(): EnterpriseExitToken? = mutex.withLock {
         manifestForExit().takeIf { it.phase == EnterpriseSessionPhase.CLOSING }?.let(::closingToken)
     }
@@ -735,8 +748,20 @@ internal class EnterpriseSessionController(
             }
         }
         else {
-            delay((session.expiresAtMillis - nowMillis()).coerceAtLeast(0))
-            emit(EnterpriseExitSignal.Expired(RealmAccess.Enterprise(session.identity.scope, session.id)))
+            val access = RealmAccess.Enterprise(session.identity.scope, session.id)
+            while (true) {
+                val remaining = mutex.withLock {
+                    (state.value as? EnterpriseState.Available)?.manifest
+                        ?.takeUnless { it.phase == EnterpriseSessionPhase.CLOSING }?.session
+                        ?.takeIf { it.id == access.sessionId && it.identity.scope == access.scope }
+                        ?.let { it.expiresAtMillis - nowMillis() }
+                } ?: return@flow
+                if (remaining <= 0) {
+                    emit(EnterpriseExitSignal.Expired(access))
+                    break
+                }
+                delay(remaining)
+            }
         }
     } }
 

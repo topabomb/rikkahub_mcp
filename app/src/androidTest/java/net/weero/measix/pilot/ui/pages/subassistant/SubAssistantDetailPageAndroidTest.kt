@@ -2,11 +2,18 @@ package net.weero.measix.pilot.ui.pages.subassistant
 
 import androidx.activity.ComponentActivity
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.StateRestorationTester
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.onNodeWithContentDescription
@@ -15,6 +22,7 @@ import androidx.navigation3.runtime.rememberNavBackStack
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import io.mockk.every
 import io.mockk.mockk
+import io.mockk.verify
 import kotlinx.coroutines.flow.MutableStateFlow
 import me.rerere.common.configuration.ConfigurationReference
 import net.weero.measix.pilot.R
@@ -35,6 +43,8 @@ import net.weero.measix.pilot.ui.context.LocalToaster
 import com.dokar.sonner.rememberToasterState
 import net.weero.measix.pilot.ui.context.LocalSettings
 import net.weero.measix.pilot.ui.context.Navigator
+import net.weero.measix.pilot.utils.userVisibleDiagnostic
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
@@ -46,6 +56,42 @@ import kotlin.uuid.Uuid
 @RunWith(AndroidJUnit4::class)
 class SubAssistantDetailPageAndroidTest {
     @get:Rule val compose = createAndroidComposeRule<ComponentActivity>()
+
+    @Test fun failedDetailShowsCopyableDiagnosisAndRetryOnAShortScreenWithoutClosingParent() {
+        var parentCloses = 0
+        val source = ConversationViewLease(Uuid.random(), RealmAccess.Personal, 0L) { parentCloses++ }
+        val failure = java.io.IOException("Child header unreadable", IllegalStateException("Database row detail")).apply {
+            addSuppressed(IllegalArgumentException("Cleanup detail"))
+        }
+        val state = MutableStateFlow<SubAssistantDetailUiState>(SubAssistantDetailUiState.Failed(failure))
+        val vm = mockk<SubAssistantDetailVM>()
+        every { vm.uiState } returns state
+        every { vm.settings } returns MutableStateFlow(Settings.dummy())
+        every { vm.retry() } answers { state.value = SubAssistantDetailUiState.Loading }
+        compose.setContent {
+            val backStack = rememberNavBackStack(Screen.SubAssistantDetail("run", source))
+            MaterialTheme {
+                CompositionLocalProvider(LocalNavController provides Navigator(backStack),
+                    LocalSettings provides Settings.dummy(), LocalToaster provides rememberToasterState()) {
+                    Box(Modifier.fillMaxWidth().height(360.dp)) { SubAssistantDetailPage(source, "run", vm) }
+                }
+            }
+        }
+        try {
+            compose.onNodeWithText(compose.activity.getString(R.string.sub_assistant_detail_unavailable)).assertIsDisplayed()
+            compose.onNodeWithText(compose.activity.getString(R.string.enterprise_spaces)).assertDoesNotExist()
+            compose.onNodeWithText(compose.activity.getString(R.string.chat_conversation_diagnostics)).performScrollTo().performClick()
+            compose.onNodeWithText(compose.activity.getString(R.string.chat_page_copy_error)).performScrollTo().performClick()
+            val clipboard = compose.activity.getSystemService(android.content.ClipboardManager::class.java)
+            compose.waitUntil { clipboard.primaryClip?.getItemAt(0)?.text?.toString() == failure.userVisibleDiagnostic() }
+            compose.onNodeWithText(compose.activity.getString(R.string.application_recovery_retry)).performScrollTo().performClick()
+            compose.runOnIdle {
+                verify(exactly = 1) { vm.retry() }
+                assertFalse(source.closed.value)
+                assertEquals(0, parentCloses)
+            }
+        } finally { source.close() }
+    }
 
     @Test fun updateStaysAtChildRequestBoundaryThroughPendingCancellationAndOutput() {
         val source = ConversationViewLease(Uuid.random(), RealmAccess.Personal, 0L) {}

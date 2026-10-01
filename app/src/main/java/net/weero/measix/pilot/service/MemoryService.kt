@@ -179,6 +179,8 @@ class MemoryService internal constructor(
     fun observe(view: ConversationViewLease, assistantId: ConfigurationReference): Flow<MemoryView> =
         conversations.observeForView(view, MemoryView(null, emptyList(), "memory_access_unavailable")) {
             observe(view.access, assistantId, false, RealmSelection(view.access, view.selectionRevision), view::requireOpen)
+        }.catch { error ->
+            emit(unavailableView(error))
         }
 
     fun observe(realm: RealmAccess, assistantId: ConfigurationReference, enabledOnly: Boolean = false): Flow<MemoryView> =
