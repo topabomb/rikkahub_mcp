@@ -4,10 +4,14 @@ import kotlinx.coroutines.flow.map
 import me.rerere.common.configuration.ConfigurationReference
 
 import android.net.Uri
+import android.util.Log
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.every
 import io.mockk.mockk
+import io.mockk.mockkStatic
+import io.mockk.unmockkStatic
+import io.mockk.verify
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.take
@@ -28,6 +32,7 @@ import net.weero.measix.pilot.data.ai.subassistant.mergeSubAssistantCallMetadata
 import net.weero.measix.pilot.data.datastore.DEFAULT_ASSISTANT_ID
 import net.weero.measix.pilot.data.db.entity.ArtifactEntity
 import net.weero.measix.pilot.data.files.ArtifactMediaPreview
+import net.weero.measix.pilot.data.files.ArtifactProjectionException
 import net.weero.measix.pilot.data.enterprise.RealmAccess
 import net.weero.measix.pilot.data.files.ArtifactStore
 import net.weero.measix.pilot.data.files.AttachmentCloner
@@ -43,9 +48,13 @@ import net.weero.measix.pilot.service.runtime.toSnapshot
 import net.weero.measix.pilot.utils.JsonInstant
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertSame
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.File
+import java.io.IOException
 import kotlin.uuid.Uuid
 
 class ConversationAttachmentPreviewProjectorTest {
@@ -382,12 +391,13 @@ class ConversationAttachmentPreviewProjectorTest {
         val store = mockk<ArtifactStore>()
         coEvery { store.resolveImagePreviewForArtifact(net.weero.measix.pilot.data.configuration.ConfigurationScope.Personal, managed) } throws IllegalStateException("database unavailable")
 
-        assertEquals(
-            emptyMap<String, String>(),
-            ConversationAttachmentPreviewProjector(store, imageFiles()).projectUrls(
-                snapshotOf(listOf(UIMessage(role = MessageRole.ASSISTANT, parts = listOf(tool)))),
-            ),
-        )
+        val snapshot = snapshotOf(listOf(UIMessage(role = MessageRole.ASSISTANT, parts = listOf(tool))))
+        val view = ConversationViewLease(snapshot.conversationId, RealmAccess.Personal, 0) {}
+        val failure = ConversationAttachmentPreviewProjector(store, imageFiles()).project(snapshot, view).getValue(ref)
+        assertEquals("IllegalStateException: database unavailable", failure.diagnostic)
+        assertEquals("", failure.uri)
+        assertNull(failure.image)
+        assertNull(failure.fileTarget)
     }
 
     @Test
@@ -464,6 +474,134 @@ class ConversationAttachmentPreviewProjectorTest {
         )))
     }
 
+    @Test
+    fun `unexpected file read preserves redacted diagnostic and stack without stopping other attachments`() = runTest {
+        val failedRef = AttachmentRefs.format(Uuid.random())
+        val failedUrl = "file:///managed/failed.png"
+        val goodRef = AttachmentRefs.format(Uuid.random())
+        val goodUrl = "file:///managed/good.png"
+        val failure = IOException("metadata read failed token=private-token", IllegalStateException("database locked"))
+            .apply { addSuppressed(IOException("cleanup denied")) }
+        val store = mockk<ArtifactStore>()
+        coEvery { store.resolveImagePreviewForFile(net.weero.measix.pilot.data.configuration.ConfigurationScope.Personal, AttachmentRefs.parseFileUrl(failedUrl)!!) } throws failure
+        coEvery { store.resolveImagePreviewForFile(net.weero.measix.pilot.data.configuration.ConfigurationScope.Personal, AttachmentRefs.parseFileUrl(goodUrl)!!) } returns ArtifactMediaPreview(2, goodUrl)
+        coEvery { store.resolveManagedReference(AttachmentRefs.parseFileUrl(goodUrl)!!) } returns null
+        val snapshot = snapshotOf(listOf(UIMessage(role = MessageRole.USER, parts = listOf(
+            stampedImage(failedUrl, failedRef), stampedImage(goodUrl, goodRef),
+        ))))
+        val view = ConversationViewLease(snapshot.conversationId, RealmAccess.Personal, 0) {}
+        mockkStatic(Log::class)
+        try {
+            val logged = mutableListOf<String>()
+            every { Log.e("AttachmentPreview", capture(logged)) } returns 0
+            val result = ConversationAttachmentPreviewProjector(store, imageFiles()).project(snapshot, view)
+            val failed = result.getValue(failedRef)
+            assertSame(failed, result[failedUrl])
+            assertEquals("", failed.uri)
+            assertNull(failed.image)
+            assertNull(failed.fileTarget)
+            val diagnostic = requireNotNull(failed.diagnostic)
+            assertTrue(diagnostic.contains("IOException: metadata read failed token=<redacted>"))
+            assertTrue(diagnostic.contains("Caused by: IllegalStateException: database locked"))
+            assertTrue(diagnostic.contains("Suppressed: IOException: cleanup denied"))
+            assertFalse(diagnostic.contains("private-token"))
+            assertEquals(goodUrl, result[goodRef]?.uri)
+            val completeLog = logged.joinToString("")
+            assertTrue(completeLog.contains("IOException: metadata read failed token=<redacted>"))
+            assertTrue(completeLog.contains("Caused by: java.lang.IllegalStateException: database locked"))
+            assertTrue(completeLog.contains("Suppressed: java.io.IOException: cleanup denied"))
+            assertTrue(completeLog.contains("ConversationAttachmentPreviewProjectorTest"))
+            assertFalse(completeLog.contains("private-token"))
+        } finally {
+            unmockkStatic(Log::class)
+        }
+    }
+
+    @Test
+    fun `expected unavailable or denied file creates no diagnostic or access`() = runTest {
+        val deniedUrl = "file:///managed/denied.png"
+        val missingUrl = "file:///managed/missing.png"
+        val store = mockk<ArtifactStore>()
+        coEvery { store.resolveImagePreviewForFile(net.weero.measix.pilot.data.configuration.ConfigurationScope.Personal, AttachmentRefs.parseFileUrl(deniedUrl)!!) } throws ArtifactProjectionException("artifact_scope_mismatch")
+        coEvery { store.resolveImagePreviewForFile(net.weero.measix.pilot.data.configuration.ConfigurationScope.Personal, AttachmentRefs.parseFileUrl(missingUrl)!!) } returns null
+        val snapshot = snapshotOf(listOf(UIMessage(role = MessageRole.USER, parts = listOf(
+            stampedImage(deniedUrl, AttachmentRefs.format(Uuid.random())),
+            stampedImage(missingUrl, AttachmentRefs.format(Uuid.random())),
+        ))))
+        val view = ConversationViewLease(snapshot.conversationId, RealmAccess.Personal, 0) {}
+        assertTrue(ConversationAttachmentPreviewProjector(store, imageFiles()).project(snapshot, view).isEmpty())
+    }
+
+    @Test
+    fun `tool input lookup failures have diagnostic while denied paths stay inaccessible`() = runTest {
+        val failedPath = "/upload/failed.png"
+        val deniedPath = "/upload/denied.png"
+        val store = mockk<ArtifactStore>()
+        coEvery { store.resolveToolPath(failedPath) } throws IOException("artifact index unavailable")
+        coEvery { store.resolveToolPath(deniedPath) } throws ArtifactProjectionException("artifact_scope_mismatch")
+        val tool = UIMessagePart.Tool(localCallId = Uuid.random(), stepId = Uuid.random(), providerCallId = "inspection",
+            toolName = "inspect_attachments", input = """{"attachments":["$failedPath","$deniedPath"]}""")
+        val snapshot = snapshotOf(listOf(UIMessage(role = MessageRole.ASSISTANT, parts = listOf(tool))))
+        val view = ConversationViewLease(snapshot.conversationId, RealmAccess.Personal, 0) {}
+        val result = ConversationAttachmentPreviewProjector(store, imageFiles()).project(snapshot, view)
+        assertEquals(setOf(failedPath), result.keys)
+        assertEquals("IOException: artifact index unavailable", result[failedPath]?.diagnostic)
+        assertEquals("", result[failedPath]?.uri)
+        assertNull(result[failedPath]?.image)
+        assertNull(result[failedPath]?.fileTarget)
+        coVerify(exactly = 0) { store.resolveImagePreviewForFile(any(), any(), any()) }
+    }
+
+    @Test
+    fun `tool input lookup cancellation propagates without reading following attachment`() = runTest {
+        val cancelled = CancellationException("conversation switched")
+        val store = mockk<ArtifactStore>()
+        coEvery { store.resolveToolPath("/upload/cancelled.png") } throws cancelled
+        val tool = UIMessagePart.Tool(localCallId = Uuid.random(), stepId = Uuid.random(), providerCallId = "inspection",
+            toolName = "inspect_attachments", input = """{"attachments":["/upload/cancelled.png","/upload/following.png"]}""")
+        val snapshot = snapshotOf(listOf(UIMessage(role = MessageRole.ASSISTANT, parts = listOf(tool))))
+        val view = ConversationViewLease(snapshot.conversationId, RealmAccess.Personal, 0) {}
+        try {
+            ConversationAttachmentPreviewProjector(store, imageFiles()).project(snapshot, view)
+            org.junit.Assert.fail("cancellation must propagate")
+        } catch (actual: CancellationException) {
+            assertSame(cancelled, actual)
+        }
+        coVerify(exactly = 0) { store.resolveToolPath("/upload/following.png") }
+    }
+
+    @Test
+    fun `explicit projection retry uses original lease and closed lease cannot restore access`() = runTest {
+        val ref = AttachmentRefs.format(Uuid.random())
+        val url = "file:///managed/retry.png"
+        val file = AttachmentRefs.parseFileUrl(url)!!
+        val store = mockk<ArtifactStore>()
+        coEvery { store.resolveImagePreviewForFile(net.weero.measix.pilot.data.configuration.ConfigurationScope.Personal, file) } throws IOException("database unavailable")
+        val files = imageFiles()
+        val snapshot = snapshotOf(listOf(UIMessage(role = MessageRole.USER, parts = listOf(stampedImage(url, ref)))))
+        val view = ConversationViewLease(snapshot.conversationId, RealmAccess.Personal, 0) {}
+        val projector = ConversationAttachmentPreviewProjector(store, files)
+        assertNotNull(projector.project(snapshot, view)[ref]?.diagnostic)
+        coVerify(exactly = 1) { store.resolveImagePreviewForFile(any(), any(), any()) }
+
+        coEvery { store.resolveImagePreviewForFile(net.weero.measix.pilot.data.configuration.ConfigurationScope.Personal, file) } returns ArtifactMediaPreview(1, url)
+        coEvery { store.resolveManagedReference(file) } returns null
+        val image = ImageSource("original-lease", ImageOrigin.UPLOAD, verifyAccess = view::requireOpen, readPayload = { byteArrayOf() })
+        every { files.conversationImageSource(view, 1, null, null) } returns image
+        val retried = projector.project(snapshot, view).getValue(ref)
+        assertNull(retried.diagnostic)
+        assertSame(image, retried.image)
+        assertSame(view, (retried.fileTarget?.source as RenderedContentSource.Conversation).view)
+        view.close()
+        try {
+            projector.project(snapshot, view)
+            org.junit.Assert.fail("an expired page cannot authorize a retry")
+        } catch (error: IllegalStateException) {
+            assertEquals("conversation_view_closed", error.message)
+        }
+        coVerify(exactly = 2) { store.resolveImagePreviewForFile(any(), any(), any()) }
+    }
+
     private fun imageFiles(): FileManagementApplicationService = mockk(relaxed = true) {
         every { externalImageSource(any<ConversationViewLease>(), any()) } answers {
             val url = secondArg<String>()
@@ -475,7 +613,7 @@ class ConversationAttachmentPreviewProjectorTest {
 
     private suspend fun ConversationAttachmentPreviewProjector.projectUrls(snapshot: ConversationPresentationSnapshot): Map<String, String> {
         val view = ConversationViewLease(snapshot.conversationId, RealmAccess.Personal, 0) {}
-        return project(snapshot, view).mapValues { it.value.uri }
+        return project(snapshot, view).filterValues { it.uri.isNotBlank() }.mapValues { it.value.uri }
     }
 
     private fun stampedImage(url: String, ref: String) = AttachmentRefs.withMetadata(

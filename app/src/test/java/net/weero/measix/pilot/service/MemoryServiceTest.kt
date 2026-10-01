@@ -53,7 +53,7 @@ class MemoryServiceTest {
 
     @Test fun `directory failure retains diagnosis and reopening can recover without stale rows`() = runTest {
         environment { env ->
-            val failure = IllegalStateException("memory query failed", java.io.IOException("database page unreadable"))
+            val failure = IllegalStateException("memory query failed token=private-token", java.io.IOException("database page unreadable"))
             every { env.repository.observe(any()) } returns kotlinx.coroutines.flow.flow { throw failure }
             val failed = env.memory.observe(ConfigurationScope.Personal, env.target.id).first()
             assertNull(failed.access)
@@ -61,7 +61,13 @@ class MemoryServiceTest {
             assertEquals("memory_read_failed", failed.unavailableReason)
             assertTrue(requireNotNull(failed.diagnostic).contains("IllegalStateException: memory query failed"))
             assertTrue(requireNotNull(failed.diagnostic).contains("Caused by: IOException: database page unreadable"))
-            assertSame(failure, org.robolectric.shadows.ShadowLog.getLogsForTag("MemoryService").last().throwable)
+            val logs = org.robolectric.shadows.ShadowLog.getLogsForTag("MemoryService")
+            assertTrue(logs.all { it.throwable == null })
+            val completeLog = logs.joinToString("") { it.msg }
+            assertTrue(completeLog.contains("IllegalStateException: memory query failed token=<redacted>"))
+            assertTrue(completeLog.contains("Caused by: java.io.IOException: database page unreadable"))
+            assertTrue(completeLog.contains("MemoryServiceTest"))
+            assertFalse(completeLog.contains("private-token"))
 
             every { env.repository.observe(any()) } returns kotlinx.coroutines.flow.flowOf(listOf(AssistantMemory(1, "recovered")))
             val recovered = env.memory.observe(ConfigurationScope.Personal, env.target.id).first()
@@ -84,7 +90,12 @@ class MemoryServiceTest {
             assertTrue(failed.records.isEmpty())
             assertTrue(requireNotNull(failed.diagnostic).contains("IOException: page authorization read failed"))
             assertTrue(requireNotNull(failed.diagnostic).contains("Caused by: IllegalStateException: original detail"))
-            assertSame(failure, org.robolectric.shadows.ShadowLog.getLogsForTag("MemoryService").last().throwable)
+            val logs = org.robolectric.shadows.ShadowLog.getLogsForTag("MemoryService")
+            assertTrue(logs.all { it.throwable == null })
+            val completeLog = logs.joinToString("") { it.msg }
+            assertTrue(completeLog.contains("IOException: page authorization read failed"))
+            assertTrue(completeLog.contains("Caused by: java.lang.IllegalStateException: original detail"))
+            assertTrue(completeLog.contains("MemoryServiceTest"))
             assertFalse(page.closed.value)
         }
     }

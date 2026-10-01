@@ -16,6 +16,20 @@ import kotlin.uuid.Uuid
 
 class ConversationReadinessTest {
     @Test
+    fun `optional reads do not claim empty configuration or memory before success`() {
+        val assistant = Assistant(enableMemory = true, workspaceId = Uuid.random())
+        fun readiness(memory: MemoryReadiness, workspace: WorkspaceReadiness?) = Settings().buildConversationReadiness(
+            assistant, emptyMap(), 0, selectedModel = null, hasAvailableChatModel = true,
+            memoryReadiness = memory, workspaceReadiness = workspace)
+        assertEquals(MemoryReadiness.LOADING, readiness(MemoryReadiness.LOADING, WorkspaceReadiness.LOADING).memoryState)
+        assertEquals(WorkspaceReadiness.LOADING, readiness(MemoryReadiness.LOADING, WorkspaceReadiness.LOADING).workspaceState)
+        assertEquals(MemoryReadiness.FAILED, readiness(MemoryReadiness.FAILED, WorkspaceReadiness.FAILED).memoryState)
+        assertEquals(WorkspaceReadiness.FAILED, readiness(MemoryReadiness.FAILED, WorkspaceReadiness.FAILED).workspaceState)
+        assertEquals(WorkspaceReadiness.BOUND_UNAVAILABLE, readiness(MemoryReadiness.READY, null).workspaceState)
+        assertEquals(MemoryReadiness.UNAVAILABLE, readiness(MemoryReadiness.UNAVAILABLE, null).memoryState)
+    }
+
+    @Test
     fun `removed assistant cannot send despite other available models and does not suggest configuring a provider`() {
         val readiness = Settings().buildConversationReadiness(null, emptyMap(), 0,
             selectedModel = null, hasAvailableChatModel = true, modelUnavailableReason = ConfigurationUnavailableReason.REFERENCE_MISSING)

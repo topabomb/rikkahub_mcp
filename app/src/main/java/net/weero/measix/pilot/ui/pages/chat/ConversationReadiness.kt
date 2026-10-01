@@ -73,6 +73,7 @@ internal enum class ModelReadiness {
 }
 
 internal enum class McpReadiness {
+    FAILED,
     NOT_CONFIGURED,
     ALL_DISABLED,
     NONE_SELECTED,
@@ -85,12 +86,18 @@ internal enum class McpReadiness {
 }
 
 internal enum class WorkspaceReadiness {
+    LOADING,
+    FAILED,
+    BOUND_UNAVAILABLE,
     NOT_CONFIGURED,
     NOT_BOUND,
     READY,
 }
 
 internal enum class MemoryReadiness {
+    LOADING,
+    FAILED,
+    UNAVAILABLE,
     DISABLED,
     READY,
 }
@@ -133,6 +140,9 @@ internal fun Settings.buildConversationReadiness(
     selectedModel: Model?,
     hasAvailableChatModel: Boolean,
     modelUnavailableReason: net.weero.measix.pilot.data.configuration.ConfigurationUnavailableReason? = null,
+    memoryReadiness: MemoryReadiness = MemoryReadiness.READY,
+    mcpReadFailed: Boolean = false,
+    workspaceReadiness: WorkspaceReadiness? = null,
 ): ConversationReadiness {
     val modelState = when {
         assistant == null -> ModelReadiness.NOT_SELECTED
@@ -147,6 +157,7 @@ internal fun Settings.buildConversationReadiness(
     val readyMcpCount = selectedMcpServers.count { it.isCallable }
     val selectedStatuses = selectedMcpServers.map { it.status }
     val mcpState = when {
+        mcpReadFailed -> McpReadiness.FAILED
         mcpServers.isEmpty() -> McpReadiness.NOT_CONFIGURED
         enabledMcpServers.isEmpty() -> McpReadiness.ALL_DISABLED
         selectedMcpCount == 0 -> McpReadiness.NONE_SELECTED
@@ -165,13 +176,14 @@ internal fun Settings.buildConversationReadiness(
     }
 
     val workspaceName = assistant?.workspaceId?.let(workspaceNamesById::get)
-    val workspaceState = when {
+    val workspaceState = workspaceReadiness ?: when {
+        assistant?.workspaceId != null && workspaceName == null -> WorkspaceReadiness.BOUND_UNAVAILABLE
         workspaceNamesById.isEmpty() -> WorkspaceReadiness.NOT_CONFIGURED
         workspaceName == null -> WorkspaceReadiness.NOT_BOUND
         else -> WorkspaceReadiness.READY
     }
 
-    val memoryState = if (assistant?.enableMemory == true) MemoryReadiness.READY else MemoryReadiness.DISABLED
+    val memoryState = if (assistant?.enableMemory == true) memoryReadiness else MemoryReadiness.DISABLED
 
     return ConversationReadiness(
         modelState = modelState,
@@ -248,11 +260,11 @@ internal fun ConversationReadinessCard(
                 if (!compact && starters.isNotEmpty()) {
                     EnterpriseStarterRow(starters, scale, onStarterClick)
                 }
-                if (!compact && readiness.workspaceState == WorkspaceReadiness.READY) {
+                if (!compact && readiness.workspaceState in setOf(WorkspaceReadiness.READY, WorkspaceReadiness.BOUND_UNAVAILABLE)) {
                     CompactReadinessRow(
                         icon = HugeIcons.Codesandbox,
                         label = stringResource(R.string.chat_readiness_workspace_title),
-                        status = readiness.workspaceName.orEmpty(),
+                        status = workspaceStatus(readiness),
                         onClick = onWorkspaceClick,
                         scale = scale,
                     )
@@ -295,6 +307,7 @@ private fun PersonalReadinessRows(
         icon = HugeIcons.McpServer,
         label = stringResource(R.string.chat_readiness_mcp_title),
         status = when (readiness.mcpState) {
+            McpReadiness.FAILED -> stringResource(R.string.chat_readiness_read_failed)
             McpReadiness.NOT_CONFIGURED -> stringResource(R.string.chat_readiness_mcp_not_configured)
             McpReadiness.ALL_DISABLED -> stringResource(R.string.chat_readiness_mcp_all_disabled)
             McpReadiness.NONE_SELECTED -> stringResource(R.string.chat_readiness_mcp_none_selected)
@@ -321,6 +334,9 @@ private fun PersonalReadinessRows(
         icon = HugeIcons.Brain02,
         label = stringResource(R.string.chat_readiness_memory_title),
         status = when (readiness.memoryState) {
+            MemoryReadiness.LOADING -> stringResource(R.string.chat_readiness_loading)
+            MemoryReadiness.FAILED -> stringResource(R.string.chat_readiness_read_failed)
+            MemoryReadiness.UNAVAILABLE -> stringResource(R.string.chat_readiness_unavailable)
             MemoryReadiness.DISABLED -> stringResource(R.string.chat_readiness_memory_disabled)
             MemoryReadiness.READY -> stringResource(R.string.chat_readiness_memory_count, readiness.memoryCount)
         },
@@ -347,11 +363,7 @@ private fun PersonalReadinessRows(
     DetailedReadinessRow(
         icon = HugeIcons.Codesandbox,
         label = stringResource(R.string.chat_readiness_workspace_title),
-        status = when (readiness.workspaceState) {
-            WorkspaceReadiness.NOT_CONFIGURED -> stringResource(R.string.chat_readiness_workspace_not_configured)
-            WorkspaceReadiness.NOT_BOUND -> stringResource(R.string.chat_readiness_workspace_not_bound)
-            WorkspaceReadiness.READY -> readiness.workspaceName.orEmpty()
-        },
+        status = workspaceStatus(readiness),
         description = stringResource(R.string.chat_readiness_workspace_description),
         onClick = onWorkspaceClick,
         scale = scale,
@@ -736,4 +748,14 @@ private fun EnterpriseReadinessTitleRow(
             }
         }
     }
+}
+
+@Composable
+private fun workspaceStatus(readiness: ConversationReadiness): String = when (readiness.workspaceState) {
+    WorkspaceReadiness.LOADING -> stringResource(R.string.chat_readiness_loading)
+    WorkspaceReadiness.FAILED -> stringResource(R.string.chat_readiness_read_failed)
+    WorkspaceReadiness.BOUND_UNAVAILABLE -> stringResource(R.string.chat_readiness_workspace_bound_unavailable)
+    WorkspaceReadiness.NOT_CONFIGURED -> stringResource(R.string.chat_readiness_workspace_not_configured)
+    WorkspaceReadiness.NOT_BOUND -> stringResource(R.string.chat_readiness_workspace_not_bound)
+    WorkspaceReadiness.READY -> readiness.workspaceName.orEmpty()
 }

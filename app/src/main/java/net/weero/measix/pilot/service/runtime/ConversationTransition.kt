@@ -133,6 +133,9 @@ internal object ConversationTransition {
         val next = when (command) {
             is DeleteMessage, is TruncateToNodeIndex, is ReplaceMessageTree ->
                 ConversationContextTransition.prune(reduced, current)
+            is EditMessageVariant -> if (command.truncateAfterNode) {
+                ConversationContextTransition.prune(reduced, current)
+            } else reduced
             else -> reduced
         }
         if (command is ReplaceMessageTree && command.messageOrigins.isNotEmpty()) {
@@ -295,7 +298,15 @@ internal object ConversationTransition {
                 }
                 if (index >= 0) upsert(index, new.nodes[index])
             }
-            is EditMessageVariant -> nodeById(command.nodeId)
+            is EditMessageVariant -> {
+                nodeById(command.nodeId)
+                if (command.truncateAfterNode) {
+                    val nodeIndex = old.nodes.indexOfFirst { it.id == command.nodeId }
+                    if (nodeIndex >= 0 && new.nodes.size < old.nodes.size) {
+                        old.nodes.drop(nodeIndex + 1).forEach { deletedNodeIds += it.id }
+                    }
+                }
+            }
             is SelectNodeVariant -> nodeById(command.nodeId)
             is DeleteMessage -> {
                 val oldIndex = old.nodes.indexOfFirst { node ->
@@ -476,7 +487,7 @@ internal object ConversationTransition {
         if (node.messages.any { it.id == command.variant.id }) return current
         val newMessages = node.messages + command.variant
         return current.copy(
-            nodes = current.nodes.mapIndexed { i, n ->
+            nodes = (if (command.truncateAfterNode) current.nodes.take(nodeIndex + 1) else current.nodes).mapIndexed { i, n ->
                 if (i != nodeIndex) n else node.copy(
                     messages = newMessages,
                     selectIndex = newMessages.lastIndex,

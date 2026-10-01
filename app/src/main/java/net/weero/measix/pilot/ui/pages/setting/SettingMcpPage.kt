@@ -1,6 +1,8 @@
 package net.weero.measix.pilot.ui.pages.setting
 
 import net.weero.measix.pilot.ui.components.ui.ConfirmDialog
+import net.weero.measix.pilot.ui.components.ui.ErrorCard
+import net.weero.measix.pilot.utils.logDiagnosticFailure
 import net.weero.measix.pilot.ui.components.ui.ItemActionMenu
 import net.weero.measix.pilot.ui.components.ui.ItemAction
 import me.rerere.common.configuration.ConfigurationReference
@@ -130,6 +132,9 @@ import net.weero.measix.pilot.data.ai.mcp.McpCommonOptions
 import net.weero.measix.pilot.data.ai.mcp.McpStatus
 import net.weero.measix.pilot.data.ai.mcp.McpToolPolicy
 import net.weero.measix.pilot.service.McpApplicationService
+import net.weero.measix.pilot.service.ChatError
+import net.weero.measix.pilot.service.ChatErrorRetention
+import net.weero.measix.pilot.service.McpCatalogReadState
 import net.weero.measix.pilot.service.McpQueryService
 import net.weero.measix.pilot.service.McpServerPresentation
 import net.weero.measix.pilot.service.ConfigurationApplicationService
@@ -175,10 +180,14 @@ internal fun SettingMcpPage(
     var shareConfig by remember { mutableStateOf<McpServerConfig?>(null) }
     val userServers by mcpQueryService.userServers.collectAsStateWithLifecycle()
     val catalog by mcpQueryService.catalog.collectAsStateWithLifecycle()
+    var catalogRetryRunning by remember { mutableStateOf(false) }
+    var catalogRetryFailure by remember(catalog?.selection) { mutableStateOf<Throwable?>(null) }
     val managedServers = catalog?.servers.orEmpty().filter { it.definition == null }
     val mcpPresentations = userServers.map { server ->
         val admission = catalog?.servers?.singleOrNull { it.serverId == server.serverId }
-        server.copy(access = admission?.access ?: server.access, unavailableReason = admission?.unavailableReason)
+        if (catalog?.content is McpCatalogReadState.Failed) {
+            server.copy(access = requireNotNull(catalog).selection.access, sessionCallable = false, tools = emptyList())
+        } else server.copy(access = admission?.access ?: server.access, unavailableReason = admission?.unavailableReason)
     }
     val mcpConfigs = userServers.mapNotNull { it.definition }
 
@@ -310,6 +319,31 @@ internal fun SettingMcpPage(
             ) {
                 if (catalog?.content == net.weero.measix.pilot.service.McpCatalogReadState.Unavailable) {
                     item { Text(stringResource(R.string.configuration_reason_not_ready), color = MaterialTheme.colorScheme.error) }
+                }
+                val failedCatalog = catalog?.takeIf { it.content is McpCatalogReadState.Failed }
+                if (failedCatalog != null) {
+                    item {
+                        val error = catalogRetryFailure ?: (failedCatalog.content as McpCatalogReadState.Failed).error
+                        val title = stringResource(R.string.chat_readiness_read_failed)
+                        ErrorCard(
+                            error = remember(error, title) { ChatError(title = title, detail = error.userVisibleDiagnostic(),
+                                retention = ChatErrorRetention.UNTIL_DISMISSED) },
+                            onRetry = if (catalogRetryRunning) null else { {
+                                if (!catalogRetryRunning) {
+                                    catalogRetryRunning = true
+                                    catalogRetryFailure = null
+                                    scope.launch {
+                                        try { mcpQueryService.retryCatalog(failedCatalog.selection) }
+                                        catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+                                        catch (failure: Exception) {
+                                            logDiagnosticFailure("SettingMcpPage", "MCP catalog retry failed", failure)
+                                            if (catalog?.selection == failedCatalog.selection) catalogRetryFailure = failure
+                                        } finally { catalogRetryRunning = false }
+                                    }
+                                }
+                            } },
+                        )
+                    }
                 }
                 if (managedServers.isNotEmpty()) {
                     item {

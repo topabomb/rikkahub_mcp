@@ -283,6 +283,9 @@ fun ChainOfThoughtScope.ChatMessageToolStep(
                                 }
                             }
                         }
+                        images.forEach { image ->
+                            AttachmentPreviewDiagnostic(resolveAttachmentPreview(image, attachmentPreview))
+                        }
                     }
                     if (isDenied) {
                         val reason = (displayTool.interactionState as ToolInteractionState.Denied).reason

@@ -112,7 +112,9 @@ class EditorDraftAndroidTest {
 
     @Test fun newSkillFileBodyStaysOutOfBundle() {
         compose.setContent { host { AddFileDialog(false, {}, { _, _ -> }) } }
-        compose.onNode(hasSetTextAction()).performTextReplacement("notes.md")
+        val name = compose.onNode(hasSetTextAction())
+        name.performTextReplacement("notes.md")
+        name.performImeAction()
         val body = largeBundleBody(paragraphCount = 2_000)
         replaceEditorBody(body, inDialog = true)
         assertEditorBody(body)

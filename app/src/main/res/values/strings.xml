@@ -227,7 +227,6 @@
   <string name="chain_of_thought_show_more_steps">Show %d more steps</string>
   <string name="chat_input_placeholder">Chat with AI</string>
   <string name="chat_input_unsupported_file_type">Unsupported file type: %s</string>
-  <string name="chat_input_file_read_failed">Failed to read file: %s</string>
   <string name="chat_conversation_missing_title">Conversation unavailable</string>
   <string name="chat_conversation_missing_message">This conversation could not be found. Retry to initialize it again.</string>
   <string name="chat_conversation_load_failed_title">Unable to load conversation</string>
@@ -2063,4 +2062,12 @@
   <string name="file_preview_next_page">Next page</string>
   <string name="file_browser_parent_folder">Parent folder</string>
   <string name="chat_recent_conversation_save_failed">Could not update the most recently opened chat. You can keep using this chat; reopen it to try again.\n\n%1$s</string>
+  <string name="chat_readiness_loading">Loading…</string>
+  <string name="chat_readiness_read_failed">Read failed</string>
+  <string name="chat_readiness_unavailable">Unavailable</string>
+  <string name="chat_readiness_workspace_bound_unavailable">Linked workspace unavailable</string>
+  <string name="rendered_content_read_failed">Unable to read this preview</string>
+  <string name="assistant_usage_skills_read_failed">Unable to read skills</string>
+  <string name="assistant_usage_skills_unavailable">Skills are no longer available from this page. Open settings again from the current chat.</string>
+  <string name="chat_enterprise_model_service_configuration">Contact your enterprise administrator to check this model\'s service configuration.</string>
 </resources>

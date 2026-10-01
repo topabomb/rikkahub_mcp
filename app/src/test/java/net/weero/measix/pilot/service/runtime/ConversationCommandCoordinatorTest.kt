@@ -128,6 +128,30 @@ class ConversationCommandCoordinatorTest {
     }
 
     @Test
+    fun `failed edit and resend transaction preserves selected variant and trailing history`() = runTest {
+        val id = Uuid.random()
+        val edited = MessageNode.of(UIMessage.user("original question"))
+        val trailing = MessageNode.of(UIMessage.assistant("original answer"))
+        val scope = CoroutineScope(Job())
+        val runtime = ConversationRuntime(id, Conversation.ofId(id).copy(messageNodes = listOf(edited, trailing)).toSnapshot(), scope, {})
+        val registry = mockk<ConversationRuntimeRegistry>()
+        val repository = mockk<ConversationRepository>()
+        every { registry.findRuntime(id) } returns runtime
+        every { registry.isDraft(id) } returns false
+        coEvery { repository.commit(any()) } throws java.io.IOException("atomic edit rejected")
+        val coordinator = coordinator(registry, repository)
+        val before = runtime.snapshot.value
+
+        val result = coordinator.execute(id, EditMessageVariant(edited.id, UIMessage.user("replacement"), truncateAfterNode = true))
+
+        assertTrue(result is ConversationCommandResult.Failure)
+        assertSame(before, runtime.snapshot.value)
+        assertEquals(listOf(edited, trailing), runtime.durable.nodes)
+        coVerify(exactly = 1) { repository.commit(any()) }
+        scope.cancel()
+    }
+
+    @Test
     fun `identity conflict is Conflict not Failure`() = runTest {
         val conversation = Conversation.ofId(Uuid.random())
         val scope = CoroutineScope(Job())

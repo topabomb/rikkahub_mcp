@@ -1,5 +1,7 @@
 package net.weero.measix.pilot.ui.pages.chat
 
+import net.weero.measix.pilot.utils.logDiagnosticFailure
+
 import android.content.Context
 import android.graphics.Bitmap
 import android.net.Uri
@@ -93,16 +95,21 @@ import net.weero.measix.pilot.ui.components.ui.ChainOfThought
 import net.weero.measix.pilot.ui.components.ui.ChainOfThoughtScope
 import net.weero.measix.pilot.ui.components.ui.ModelIcon
 import net.weero.measix.pilot.ui.components.ui.ModelIconFallback
+import net.weero.measix.pilot.ui.components.ui.ErrorDetails
 import net.weero.measix.pilot.ui.context.LocalNavController
 import net.weero.measix.pilot.ui.context.LocalSettings
 import com.dokar.sonner.rememberToasterState
 import net.weero.measix.pilot.ui.context.LocalToaster
 import net.weero.measix.pilot.service.MediaExportService
+import net.weero.measix.pilot.service.ChatError
+import net.weero.measix.pilot.service.ChatErrorRetention
+import net.weero.measix.pilot.service.ConversationQueryService
 import net.weero.measix.pilot.ui.theme.MeasixTheme
 import net.weero.measix.pilot.utils.getActivity
 import net.weero.measix.pilot.utils.JsonInstantPretty
 import net.weero.measix.pilot.utils.jsonPrimitiveOrNull
 import net.weero.measix.pilot.utils.toLocalString
+import net.weero.measix.pilot.utils.userVisibleDiagnostic
 import java.time.LocalDateTime
 import kotlin.time.Duration.Companion.seconds
 import kotlin.time.DurationUnit
@@ -116,13 +123,13 @@ fun ChatExportSheet(
     conversationTitle: String,
     selectedMessages: List<UIMessage>,
     attachmentPreviews: Map<String, net.weero.measix.pilot.service.AttachmentPreview> = emptyMap(),
+    queries: ConversationQueryService = org.koin.compose.koinInject(),
 ) {
     val context = LocalContext.current
     val toaster = LocalToaster.current
     val scope = rememberCoroutineScope()
     val density = LocalDensity.current
     val settings = LocalSettings.current
-    val queries: net.weero.measix.pilot.service.ConversationQueryService = org.koin.compose.koinInject()
     val verifyAccess: suspend () -> Unit = remember(source, queries) {
         { queries.requireViewAccess(requireNotNull(source) { "conversation_view_unavailable" }) }
     }
@@ -137,6 +144,7 @@ fun ChatExportSheet(
     }
     var imageExportOptions by remember { mutableStateOf(ImageExportOptions()) }
     var exporting by remember { mutableStateOf(false) }
+    var exportFailure by remember(source, visible) { mutableStateOf<ChatError?>(null) }
     val exportFailedFormat = stringResource(R.string.chat_page_export_failed)
 
     if (visible) {
@@ -167,9 +175,10 @@ fun ChatExportSheet(
                             } catch (cancelled: CancellationException) {
                                 throw cancelled
                             } catch (error: Exception) {
-                                toaster.show(
-                                    exportFailedFormat.format(error.message.orEmpty()),
-                                    type = ToastType.Error,
+                                logDiagnosticFailure("ChatExport", "Markdown export failed", error)
+                                exportFailure = ChatError(
+                                    detail = exportFailedFormat.format(error.userVisibleDiagnostic()),
+                                    retention = ChatErrorRetention.UNTIL_DISMISSED,
                                 )
                             } finally {
                                 exporting = false
@@ -254,9 +263,10 @@ fun ChatExportSheet(
                                         } catch (cancelled: CancellationException) {
                                             throw cancelled
                                         } catch (error: Exception) {
-                                            toaster.show(
-                                                message = exportFailedFormat.format(error.message.orEmpty()),
-                                                type = ToastType.Error,
+                                            logDiagnosticFailure("ChatExport", "Image export failed", error)
+                                            exportFailure = ChatError(
+                                                detail = exportFailedFormat.format(error.userVisibleDiagnostic()),
+                                                retention = ChatErrorRetention.UNTIL_DISMISSED,
                                             )
                                         } finally {
                                             exporting = false
@@ -271,6 +281,9 @@ fun ChatExportSheet(
                     }
                 }
             }
+        }
+        exportFailure?.let { error ->
+            ErrorDetails(error, onDismiss = { exportFailure = null })
         }
     }
 }

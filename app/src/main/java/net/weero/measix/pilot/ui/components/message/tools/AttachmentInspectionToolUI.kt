@@ -35,6 +35,7 @@ import net.weero.measix.pilot.R
 import net.weero.measix.pilot.data.ai.attachments.attachmentInspectionFailureStringRes
 import net.weero.measix.pilot.data.ai.tools.ATTACHMENT_INSPECTION_TOOL_NAME
 import net.weero.measix.pilot.ui.components.message.LocalAttachmentPreview
+import net.weero.measix.pilot.ui.components.message.AttachmentPreviewDiagnostic
 import net.weero.measix.pilot.ui.components.message.LocalConversationImages
 import net.weero.measix.pilot.ui.components.richtext.ZoomableAsyncImage
 import net.weero.measix.pilot.utils.jsonPrimitiveOrNull
@@ -118,6 +119,7 @@ object AttachmentInspectionToolUI : ToolUIRenderer {
                         }
                     }
                 }
+                refs.forEach { ref -> AttachmentPreviewDiagnostic(previewResolver(ref)) }
             }
         }
     }

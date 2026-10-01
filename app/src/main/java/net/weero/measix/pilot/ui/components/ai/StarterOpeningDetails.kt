@@ -1,5 +1,7 @@
 package net.weero.measix.pilot.ui.components.ai
 
+import net.weero.measix.pilot.utils.logDiagnosticFailure
+
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.selection.SelectionContainer
@@ -14,13 +16,16 @@ import kotlinx.coroutines.launch
 import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.Cancel01
 import net.weero.measix.pilot.R
+import net.weero.measix.pilot.service.ChatError
+import net.weero.measix.pilot.service.ChatErrorRetention
 import net.weero.measix.pilot.service.StarterOpeningDetailUiModel
 import net.weero.measix.pilot.service.StarterOpeningIssue
 import net.weero.measix.pilot.ui.adaptive.AdaptiveModal
+import net.weero.measix.pilot.ui.components.ui.ErrorCard
 import net.weero.measix.pilot.utils.userVisibleDiagnostic
 
 private fun openingFailure(error: Exception): String {
-    android.util.Log.e("StarterOpening", "Opening detail operation failed", error)
+    logDiagnosticFailure("StarterOpening", "Opening detail operation failed", error)
     return error.userVisibleDiagnostic()
 }
 
@@ -38,14 +43,18 @@ internal fun StarterOpeningContext(key: Any, load: suspend () -> StarterOpeningD
     var expanded by remember(key) { mutableStateOf(false) }
     var detail by remember(key) { mutableStateOf<StarterOpeningDetailUiModel?>(null) }
     var failure by remember(key) { mutableStateOf<String?>(null) }
-    LaunchedEffect(key, expanded) {
+    var readRevision by remember(key) { mutableIntStateOf(0) }
+    LaunchedEffect(key, expanded, readRevision) {
         if (expanded && detail == null) try { failure = null; detail = load() }
         catch (cancelled: CancellationException) { throw cancelled }
         catch (error: Exception) { failure = openingFailure(error) }
     }
     TextButton(onClick = { expanded = !expanded }) { Text(stringResource(R.string.opening_context)) }
     if (expanded) {
-        failure?.let { SelectionContainer { Text(it, color = MaterialTheme.colorScheme.error) } }
+        failure?.let { diagnostic ->
+                    ErrorCard(remember(diagnostic) { ChatError(detail = diagnostic, retention = ChatErrorRetention.UNTIL_DISMISSED) },
+                        onRetry = { readRevision++ })
+                }
         if (detail != null) OpeningBody(requireNotNull(detail))
         else if (failure == null) LinearProgressIndicator(Modifier.fillMaxWidth())
     }
@@ -84,38 +93,54 @@ internal fun StarterOpeningDetails(
         catch (cancelled: CancellationException) { throw cancelled }
         catch (error: Exception) { failure = openingFailure(error) }
     }
-    LaunchedEffect(key) { read() }
+    var readRevision by remember(key) { mutableIntStateOf(0) }
+    LaunchedEffect(key, readRevision) {
+        busy = true
+        try { failure = null; read() } finally { busy = false }
+    }
+    val shownDetail = detail
+    val shownFailure = failure
+    val shownBusy = busy
     AdaptiveModal(onDismissRequest = onDismiss) {
         Column(Modifier.fillMaxWidth()) {
             Row(Modifier.fillMaxWidth().padding(8.dp)) {
                 Text(stringResource(R.string.opening_details), Modifier.weight(1f).padding(8.dp), style = MaterialTheme.typography.titleLarge)
                 IconButton(onClick = onDismiss) { Icon(HugeIcons.Cancel01, stringResource(R.string.update_card_close)) }
             }
-            if (detail == null && failure == null || busy) LinearProgressIndicator(Modifier.fillMaxWidth())
+            if (shownDetail == null && shownFailure == null || shownBusy) LinearProgressIndicator(Modifier.fillMaxWidth())
             Column(Modifier.weight(1f, fill = false).verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                failure?.let { SelectionContainer { Text(it, color = MaterialTheme.colorScheme.error) } }
-                detail?.let { value ->
+                shownFailure?.let { diagnostic ->
+                    ErrorCard(remember(diagnostic) { ChatError(detail = diagnostic, retention = ChatErrorRetention.UNTIL_DISMISSED) },
+                        onRetry = if (shownBusy) null else { {
+                            if (!busy) { busy = true; readRevision++ }
+                        } })
+                }
+                shownDetail?.let { value ->
                     Text(value.title, style = MaterialTheme.typography.titleMedium)
                     SelectionContainer { Text(value.prompt) }
                     value.issue?.let { Text(starterOpeningIssueText(it), color = MaterialTheme.colorScheme.error) }
                     TextButton(onClick = { expanded = !expanded }) { Text(stringResource(R.string.opening_context)) }
                     if (expanded) OpeningBody(value.copy(issue = null))
-                    if (value.canRefresh) TextButton(enabled = !busy, onClick = {
-                        busy = true
-                        scope.launch {
-                            try { refresh(); read() }
-                            catch (cancelled: CancellationException) { throw cancelled }
-                            catch (error: Exception) { failure = openingFailure(error) }
-                            finally { busy = false }
+                    if (value.canRefresh) TextButton(enabled = !shownBusy, onClick = {
+                        if (!busy) {
+                            busy = true
+                            scope.launch {
+                                try { refresh(); read() }
+                                catch (cancelled: CancellationException) { throw cancelled }
+                                catch (error: Exception) { failure = openingFailure(error) }
+                                finally { busy = false }
+                            }
                         }
                     }) { Text(stringResource(R.string.opening_update)) }
-                    if (value.isDraft) TextButton(enabled = !busy, onClick = {
-                        busy = true
-                        scope.launch {
-                            try { clear(); onDismiss() }
-                            catch (cancelled: CancellationException) { throw cancelled }
-                            catch (error: Exception) { failure = openingFailure(error) }
-                            finally { busy = false }
+                    if (value.isDraft) TextButton(enabled = !shownBusy, onClick = {
+                        if (!busy) {
+                            busy = true
+                            scope.launch {
+                                try { clear(); onDismiss() }
+                                catch (cancelled: CancellationException) { throw cancelled }
+                                catch (error: Exception) { failure = openingFailure(error) }
+                                finally { busy = false }
+                            }
                         }
                     }) { Text(stringResource(R.string.opening_remove)) }
                 }

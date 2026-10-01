@@ -1,4 +1,6 @@
 package net.weero.measix.pilot.service.turn
+
+import net.weero.measix.pilot.utils.logDiagnosticFailure
 import me.rerere.ai.ui.UIMessagePart
 
 import android.content.Context
@@ -87,6 +89,9 @@ class TurnRunner(
     internal suspend fun run(inputs: TurnRunInputs): TurnRunResult = withContext(Dispatchers.IO) {
         val state = TurnRunState(inputs, context)
         val result = try {
+            // Preserve the attempted model even when Provider IO fails before its first chunk.
+            val assistant = state.messages.last()
+            state.replaceMessages(state.messages.withAssistant(assistant.copy(modelId = assistant.modelId ?: state.model.id)))
             inputs.onAssistantObserved(state.messages.last())
             runLoop(state)
         } catch (error: CancellationException) {
@@ -100,6 +105,7 @@ class TurnRunner(
             state.unpublishedResources.discardAll()?.let { error.addSuppressed(it) }
             throw error
         } catch (error: Throwable) {
+            logDiagnosticFailure(TAG, "Turn execution failed", error)
             TurnOutcome.fromFailure(error)
         }
         // 结果提交在生成 try 之外：终态落库失败直接向上抛给 owner 的兜底，不再被误判为生成失败而二次提交。

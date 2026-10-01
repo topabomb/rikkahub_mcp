@@ -1,5 +1,7 @@
 package net.weero.measix.pilot.ui.components.message
 
+import net.weero.measix.pilot.utils.logDiagnosticFailure
+
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.fadeIn
@@ -67,6 +69,7 @@ import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.File02
 import me.rerere.hugeicons.stroke.MusicNote03
 import me.rerere.hugeicons.stroke.Video01
+import net.weero.measix.pilot.utils.userVisibleDiagnostic
 import net.weero.measix.pilot.R
 import net.weero.measix.pilot.Screen
 import net.weero.measix.pilot.data.model.Assistant
@@ -417,12 +420,21 @@ private fun MessagePartsBlock(
     val exportScope = androidx.compose.runtime.rememberCoroutineScope()
     val toaster = net.weero.measix.pilot.ui.context.LocalToaster.current
     val openFailureText = stringResource(R.string.chat_message_attachment_open_failed)
+    var attachmentOpenFailure by remember(detailSource, messageId) { mutableStateOf<Throwable?>(null) }
+    attachmentOpenFailure?.let { error ->
+        net.weero.measix.pilot.ui.components.ui.ErrorDetails(
+            remember(error, openFailureText) { net.weero.measix.pilot.service.ChatError(title = openFailureText, detail = error.userVisibleDiagnostic()) },
+            onDismiss = { attachmentOpenFailure = null })
+    }
     fun openAttachment(preview: net.weero.measix.pilot.service.AttachmentPreview?) {
         if (preview == null) { toaster.show(openFailureText, type = com.dokar.sonner.ToastType.Error); return }
         exportScope.launch {
             try { exportService.openAttachment(context, preview) }
             catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
-            catch (_: Exception) { toaster.show(openFailureText, type = com.dokar.sonner.ToastType.Error) }
+            catch (error: Exception) {
+                logDiagnosticFailure("ChatMessage", "Attachment export or opening failed", error)
+                attachmentOpenFailure = error
+            }
         }
     }
 
@@ -534,7 +546,10 @@ private fun MessagePartsBlock(
             }
 
             is MessagePartBlock.ContentBlock -> key(block.index) {
-                when (val part = block.part) {
+                val preview = resolveAttachmentPreview(block.part, attachmentPreview)
+                if (preview?.diagnostic != null) {
+                    AttachmentPreviewDiagnostic(preview)
+                } else when (val part = block.part) {
                     is UIMessagePart.Text -> {
                         val textContent = @Composable {
                             if (role == MessageRole.USER) {

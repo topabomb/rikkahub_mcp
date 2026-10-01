@@ -1,5 +1,7 @@
 package net.weero.measix.pilot.ui.pages.chat
 
+import net.weero.measix.pilot.utils.logDiagnosticFailure
+
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
 import androidx.activity.ComponentActivity
@@ -97,9 +99,7 @@ import net.weero.measix.pilot.ui.components.ui.Tooltip
 import net.weero.measix.pilot.ui.components.ui.UIAvatar
 import net.weero.measix.pilot.ui.components.ui.SharedConfigurationEditDialog
 import net.weero.measix.pilot.ui.components.ui.UpdateCard
-import net.weero.measix.pilot.ui.context.LocalToaster
 import net.weero.measix.pilot.ui.context.Navigator
-import com.dokar.sonner.ToastType
 import net.weero.measix.pilot.ui.hooks.EditStateContent
 import net.weero.measix.pilot.ui.hooks.readBooleanPreference
 import net.weero.measix.pilot.ui.hooks.rememberIsPlayStoreVersion
@@ -122,13 +122,13 @@ fun ChatDrawerContent(
     onViewCurrentAssistant: () -> Unit,
     modifier: Modifier = Modifier,
     permanent: Boolean = false,
+    showErrors: Boolean = false,
     onCollapse: (() -> Unit)? = null,
     navigateFromDrawer: ((() -> Unit) -> Unit) = { navigate -> navigate() },
 ) {
     val scope = rememberCoroutineScope()
     val chatNavigation = rememberChatNavigation(navController)
     val context = LocalContext.current
-    val toaster = LocalToaster.current
     val isPlayStore = rememberIsPlayStoreVersion()
     val conversationQueryService = koinInject<ConversationQueryService>()
 
@@ -197,8 +197,16 @@ fun ChatDrawerContent(
     var folderToRename by remember { mutableStateOf<Pair<ConversationFolderAccess, Folder>?>(null) }
     var folderToDelete by remember { mutableStateOf<Pair<ConversationFolderAccess, Folder>?>(null) }
 
+    var drawerFailure by remember(assistantCatalog?.selection) { mutableStateOf<Throwable?>(null) }
+    val drawerErrors by vm.errors.collectAsStateWithLifecycle()
+    drawerFailure?.let { error ->
+        val title = if (error is ConversationFolderBusyException)
+            stringResource(R.string.chat_page_delete_folder_generating) else null
+        net.weero.measix.pilot.ui.components.ui.ErrorDetails(
+            remember(error, title) { net.weero.measix.pilot.service.ChatError(title = title, detail = error.userVisibleDiagnostic()) },
+            onDismiss = { drawerFailure = null })
+    }
     var folderOperationRunning by remember { mutableStateOf(false) }
-    val folderBusyText = stringResource(R.string.chat_page_delete_folder_generating)
     val runFolderOperation: (suspend () -> Unit) -> Unit = { operation ->
         if (!folderOperationRunning) {
             folderOperationRunning = true
@@ -208,8 +216,8 @@ fun ChatDrawerContent(
                 } catch (cancelled: CancellationException) {
                     throw cancelled
                 } catch (error: Exception) {
-                    android.util.Log.e("ChatDrawer", "Folder command failed", error)
-                    toaster.show(if (error is ConversationFolderBusyException) folderBusyText else error.userVisibleDiagnostic(), type = ToastType.Warning)
+                    logDiagnosticFailure("ChatDrawer", "Folder command failed", error)
+                    drawerFailure = error
                 } finally {
                     folderOperationRunning = false
                 }
@@ -221,8 +229,9 @@ fun ChatDrawerContent(
     var showMenuPopup by remember { mutableStateOf(false) }
 
     val drawerBody: @Composable (Modifier) -> Unit = { bodyModifier ->
+        Box(bodyModifier.fillMaxSize()) {
         Column(
-            modifier = bodyModifier
+            modifier = Modifier
                 .fillMaxSize()
                 .padding(horizontal = 8.dp),
             verticalArrangement = Arrangement.spacedBy(2.dp),
@@ -407,8 +416,8 @@ fun ChatDrawerContent(
                             true
                         } catch (cancelled: CancellationException) { throw cancelled }
                         catch (error: Exception) {
-                            android.util.Log.e("ChatDrawer", "Assistant selection failed", error)
-                            toaster.show(error.userVisibleDiagnostic(), type = ToastType.Error)
+                            logDiagnosticFailure("ChatDrawer", "Assistant selection failed", error)
+                            drawerFailure = error
                             false
                         }
                     },
@@ -509,6 +518,10 @@ fun ChatDrawerContent(
                     },
                 )
             }
+        }
+        if (showErrors) net.weero.measix.pilot.ui.components.ui.ErrorCardsDisplay(
+            errors = drawerErrors, onDismissError = vm::dismissError, onClearAllErrors = vm::clearAllErrors,
+            onRetryReads = vm::retryConversationLoad, modifier = Modifier.align(Alignment.BottomCenter))
         }
     }
 
@@ -778,8 +791,8 @@ fun ChatDrawerContent(
                             conversationToMove = null
                         } catch (cancelled: CancellationException) { throw cancelled }
                         catch (error: Exception) {
-                            android.util.Log.e("ChatDrawer", "Moving conversation to assistant failed", error)
-                            toaster.show(error.userVisibleDiagnostic(), type = ToastType.Error)
+                            logDiagnosticFailure("ChatDrawer", "Moving conversation to assistant failed", error)
+                            drawerFailure = error
                         }
                         finally { submitting = false }
                     }

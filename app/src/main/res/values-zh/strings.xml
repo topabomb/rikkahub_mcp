@@ -227,7 +227,6 @@
   <string name="chain_of_thought_show_more_steps">再显示 %d 步</string>
   <string name="chat_input_placeholder">输入消息与AI聊天</string>
   <string name="chat_input_unsupported_file_type">不支持的文件类型：%s</string>
-  <string name="chat_input_file_read_failed">文件读取失败：%s</string>
   <string name="chat_conversation_missing_title">会话不可用</string>
   <string name="chat_conversation_missing_message">找不到此会话。请重试以重新初始化。</string>
   <string name="chat_conversation_load_failed_title">无法加载会话</string>
@@ -2055,4 +2054,12 @@
   <string name="file_preview_next_page">下一页</string>
   <string name="file_browser_parent_folder">上级文件夹</string>
   <string name="chat_recent_conversation_save_failed">未能更新最近打开的聊天。聊天仍可使用；稍后重新打开此聊天可重试。\n\n%1$s</string>
+  <string name="chat_readiness_loading">加载中…</string>
+  <string name="chat_readiness_read_failed">读取失败</string>
+  <string name="chat_readiness_unavailable">不可用</string>
+  <string name="chat_readiness_workspace_bound_unavailable">已绑定的工作区不可用</string>
+  <string name="rendered_content_read_failed">无法读取内容预览</string>
+  <string name="assistant_usage_skills_read_failed">无法读取技能目录</string>
+  <string name="assistant_usage_skills_unavailable">此页面已无法访问技能。请从当前会话重新打开设置。</string>
+  <string name="chat_enterprise_model_service_configuration">请联系企业管理员检查此模型的服务配置。</string>
 </resources>

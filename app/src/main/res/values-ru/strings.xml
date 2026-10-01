@@ -225,7 +225,6 @@
   <string name="chain_of_thought_show_more_steps">Показать ещё %d шагов</string>
   <string name="chat_input_placeholder">Общайтесь с ИИ</string>
   <string name="chat_input_unsupported_file_type">Неподдерживаемый тип файла: %s</string>
-  <string name="chat_input_file_read_failed">Не удалось прочитать файл: %s</string>
   <string name="chat_conversation_missing_title">Диалог недоступен</string>
   <string name="chat_conversation_missing_message">Этот диалог не найден. Повторите попытку, чтобы инициализировать его снова.</string>
   <string name="chat_conversation_load_failed_title">Не удалось загрузить диалог</string>
@@ -2055,4 +2054,12 @@
   <string name="file_preview_next_page">Следующая страница</string>
   <string name="file_browser_parent_folder">Родительская папка</string>
   <string name="chat_recent_conversation_save_failed">Не удалось записать последний открытый диалог. Вы можете продолжать пользоваться им. Откройте диалог снова, чтобы повторить попытку.\n\n%1$s</string>
+  <string name="chat_readiness_loading">Загрузка…</string>
+  <string name="chat_readiness_read_failed">Ошибка чтения</string>
+  <string name="chat_readiness_unavailable">Недоступно</string>
+  <string name="chat_readiness_workspace_bound_unavailable">Связанное рабочее пространство недоступно</string>
+  <string name="rendered_content_read_failed">Не удалось прочитать предпросмотр</string>
+  <string name="assistant_usage_skills_read_failed">Не удалось прочитать список навыков</string>
+  <string name="assistant_usage_skills_unavailable">С этой страницы навыки больше недоступны. Откройте настройки снова из текущего чата.</string>
+  <string name="chat_enterprise_model_service_configuration">Обратитесь к администратору организации, чтобы проверить настройки сервиса этой модели.</string>
 </resources>

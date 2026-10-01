@@ -88,7 +88,8 @@ class McpQueryServiceTest {
             val seen = mutableListOf<McpCatalogReadState>()
             val collector = backgroundScope.launch { query.observe(access).collect { seen += it } }
             runCurrent()
-            org.junit.Assert.assertEquals(listOf(McpCatalogReadState.Unavailable), seen)
+            assertTrue(seen.single() is McpCatalogReadState.Failed)
+            org.junit.Assert.assertEquals("read_failed", (seen.single() as McpCatalogReadState.Failed).error.message)
             failing = false
             states.value = enterprise.copy(manifest = manifest.copy(applied = net.weero.measix.pilot.data.enterprise.EnterpriseAppliedVersion("rotated", packet.configuration.generation, "config", "binding2")))
             runCurrent()
@@ -115,6 +116,18 @@ class McpQueryServiceTest {
             val firstView = backgroundScope.launch { query.catalog.collect {} }
             runCurrent()
             org.junit.Assert.assertEquals(access, query.catalog.value?.selection?.access)
+            val originalSelection = requireNotNull(query.catalog.value).selection
+            val readFailure = java.io.IOException("configuration observation ended")
+            io.mockk.every { queries.observe(scope) } returns kotlinx.coroutines.flow.flow { throw readFailure }
+            query.retryCatalog(originalSelection)
+            runCurrent()
+            val reported = (query.catalog.value?.content as McpCatalogReadState.Failed).error
+            org.junit.Assert.assertEquals(readFailure.javaClass, reported.javaClass)
+            org.junit.Assert.assertEquals(readFailure.message, reported.message)
+            io.mockk.every { queries.observe(scope) } returns kotlinx.coroutines.flow.MutableStateFlow(resolved)
+            query.retryCatalog(originalSelection)
+            runCurrent()
+            assertTrue(query.catalog.value?.content is McpCatalogReadState.Available)
             firstView.cancel()
             runCurrent()
             org.junit.Assert.assertNull(query.catalog.value)
@@ -125,6 +138,10 @@ class McpQueryServiceTest {
             io.mockk.coEvery { queries.readExecution(personal) } returns personalSnapshot
             io.mockk.coEvery { coordinator.readCatalogCapabilities(personal, personalSnapshot) } returns emptyMap()
             selected.value = net.weero.measix.pilot.data.enterprise.RealmSelection(personal, 2)
+            try {
+                query.retryCatalog(originalSelection)
+                org.junit.Assert.fail("old selection must not restart a replacement realm's query")
+            } catch (_: IllegalStateException) { }
             val resumed = mutableListOf<McpCatalogUiModel?>()
             val secondView = backgroundScope.launch { query.catalog.collect { resumed += it } }
             runCurrent()

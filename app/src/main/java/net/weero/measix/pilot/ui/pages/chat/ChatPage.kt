@@ -1,5 +1,7 @@
 package net.weero.measix.pilot.ui.pages.chat
 
+import net.weero.measix.pilot.utils.logDiagnosticFailure
+
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
 import android.content.ClipData
@@ -82,6 +84,7 @@ import com.dokar.sonner.ToastType
 import com.dokar.sonner.rememberToasterState
 import dev.chrisbanes.haze.hazeSource
 import dev.chrisbanes.haze.rememberHazeState
+import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.combine
@@ -161,6 +164,7 @@ import net.weero.measix.pilot.ui.hooks.rememberSharedPreferenceBoolean
 import net.weero.measix.pilot.ui.hooks.useEditState
 import net.weero.measix.pilot.utils.ImageUtils
 import net.weero.measix.pilot.utils.isAllowedFileType
+import net.weero.measix.pilot.utils.UiState
 import net.weero.measix.pilot.utils.userVisibleDiagnostic
 import net.weero.measix.pilot.ui.context.rememberChatNavigation
 import org.koin.androidx.compose.koinViewModel
@@ -184,12 +188,10 @@ fun ChatPage(
             parametersOf(request)
         }
     )
-    val artifactUseCase: ArtifactUseCase = koinInject()
     val navController = LocalNavController.current
     val chatNavigation = rememberChatNavigation(navController)
     val toaster = LocalToaster.current
     val scope = rememberCoroutineScope()
-    val fileReadFailedFormat = stringResource(R.string.chat_input_file_read_failed)
 
     val setting by vm.settings.collectAsStateWithLifecycle()
     val conversationState by vm.conversationState.collectAsStateWithLifecycle()
@@ -290,11 +292,7 @@ fun ChatPage(
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (error: Exception) {
-            val displayName = files.firstOrNull()?.let { uri ->
-                artifactUseCase.displayName(uri) ?: uri.lastPathSegment ?: uri.toString()
-            }.orEmpty()
-            Log.e("ChatPage", "Failed to initialize shared input", error)
-            toaster.show(fileReadFailedFormat.format(displayName), type = ToastType.Error)
+            logDiagnosticFailure("ChatPage", "Failed to initialize shared input", error)
         }
     }
 
@@ -417,6 +415,7 @@ fun ChatPage(
                                 } else assistantDetailsRequest++
                             },
                             vm = vm,
+                            showErrors = drawerState.isOpen,
                             settings = setting,
                             navigateFromDrawer = { navigate ->
                                 scope.launch {
@@ -443,7 +442,7 @@ fun ChatPage(
                         onScrollIntentChange = { scrollIntent.value = it },
 
                         navigationAction = ChatNavigationAction.OpenDrawer,
-                        errors = errors,
+                        errors = if (drawerState.isOpen) emptyList() else errors,
                         onDismissError = { vm.dismissError(it) },
                         onClearAllErrors = { vm.clearAllErrors() },
                         assistantDetailsRequest = assistantDetailsRequest,
@@ -581,17 +580,17 @@ private fun ChatPageContent(
     val toaster = LocalToaster.current
     val workspaceQueryService: WorkspaceQueryService = koinInject()
     val mcpQueryService: McpQueryService = koinInject()
-    val workspaces by workspaceQueryService.observeWorkspaces()
-        .collectAsStateWithLifecycle(initialValue = emptyList())
+
     var previewMode by rememberSaveable { mutableStateOf(false) }
     val hazeState = rememberHazeState()
     val configuration = conversationUiModel?.configuration
     val target = configuration?.target
-    val mcpFlow = remember(mcpQueryService, target?.conversation?.selection) {
+    val readRetryRevision by vm.readRetryRevision.collectAsStateWithLifecycle()
+    val mcpFlow = remember(mcpQueryService, target?.conversation?.selection, readRetryRevision) {
         target?.conversation?.selection?.access?.let(mcpQueryService::observe)
             ?: kotlinx.coroutines.flow.flowOf(net.weero.measix.pilot.service.McpCatalogReadState.Unavailable)
     }
-    val mcpCatalog by mcpFlow.collectAsStateWithLifecycle(initialValue = net.weero.measix.pilot.service.McpCatalogReadState.Unavailable)
+    val mcpCatalog by key(target, readRetryRevision) { mcpFlow.collectAsStateWithLifecycle(initialValue = net.weero.measix.pilot.service.McpCatalogReadState.Unavailable) }
     val mcpPresentations = (mcpCatalog as? net.weero.measix.pilot.service.McpCatalogReadState.Available)?.servers.orEmpty()
     val assistant = configuration?.assistant
     val inputImports = target?.let(vm::importsFor)
@@ -612,7 +611,7 @@ private fun ChatPageContent(
             try { vm.selectStarter(target, starter) }
             catch (cancelled: CancellationException) { throw cancelled }
             catch (error: Exception) {
-                Log.e("ChatPage", "Opening selection failed", error)
+                logDiagnosticFailure("ChatPage", "Opening selection failed", error)
                 configurationError = error
             }
         }
@@ -624,7 +623,7 @@ private fun ChatPageContent(
     }
     val acceptConfigurationResult: (Result<Unit>) -> Boolean = { result ->
         configurationError = result.exceptionOrNull()?.also { error ->
-            Log.e("ChatPage", "Conversation configuration command failed", error)
+            logDiagnosticFailure("ChatPage", "Conversation configuration command failed", error)
         }
         result.isSuccess
     }
@@ -653,39 +652,67 @@ private fun ChatPageContent(
     val navigateToSharedConfiguration: (Screen) -> Unit = { destination ->
         if (enterpriseContext) pendingSharedNavigation = destination else navController.navigate(destination)
     }
-    val workspaceNamesById = remember(workspaces) {
-        workspaces.mapNotNull { workspace ->
-            runCatching { Uuid.parse(workspace.id) }
-                .getOrNull()
-                ?.let { it to workspace.name }
-        }.toMap()
+    val workspaceFlow = remember(target, workspaceQueryService, readRetryRevision) {
+        kotlinx.coroutines.flow.flow<UiState<List<net.weero.measix.pilot.service.workspace.WorkspaceUiModel>>> {
+            emit(UiState.Loading)
+            workspaceQueryService.observeWorkspaces().collect { rows ->
+                rows.forEach { Uuid.parse(it.id) }
+                emit(UiState.Success(rows))
+            }
+        }.catch { error ->
+            if (error is CancellationException) throw error
+            logDiagnosticFailure("ChatPage", "Workspace directory read failed", error)
+            emit(UiState.Error(error))
+        }
     }
+    val workspaceState by key(target, readRetryRevision) { workspaceFlow.collectAsStateWithLifecycle(initialValue = UiState.Loading) }
+    val workspaces = (workspaceState as? UiState.Success)?.data.orEmpty()
+    val workspaceNamesById = remember(workspaces) { workspaces.associate { Uuid.parse(it.id) to it.name } }
     val memoryService: MemoryService = koinInject()
-    val memoryCountFlow = remember(snapshot.header.scope, snapshot.header.assistantId) {
-        memoryService.observe(snapshot.header.scope, snapshot.header.assistantId, enabledOnly = true)
-            .map { it.records.size }
+    val memoryFlow = remember(target, memoryService, readRetryRevision) {
+        target?.let(vm::detailSource)?.let { memoryService.observe(it, snapshot.header.assistantId, enabledOnly = true) }
+            ?: kotlinx.coroutines.flow.flowOf(net.weero.measix.pilot.service.MemoryView.Loading)
     }
-    val memoryCount by memoryCountFlow.collectAsStateWithLifecycle(initialValue = 0)
+    val memory by key(target, readRetryRevision) { memoryFlow.collectAsStateWithLifecycle(initialValue = net.weero.measix.pilot.service.MemoryView.Loading) }
     val imageGenerationAvailable = configuration?.imageGenerationAvailable == true
     val readiness = remember(
         setting,
         assistant,
         workspaceNamesById,
-        memoryCount,
+        memory,
+        workspaceState,
         imageGenerationAvailable,
         mcpChoices,
+        mcpCatalog,
         configuration,
     ) {
         setting.buildConversationReadiness(
             assistant = assistant,
             workspaceNamesById = workspaceNamesById,
-            memoryCount = memoryCount,
+            memoryCount = memory.records.size,
+            memoryReadiness = when {
+                memory.access != null -> MemoryReadiness.READY
+                memory.diagnostic != null -> MemoryReadiness.FAILED
+                memory.unavailableReason != null -> MemoryReadiness.UNAVAILABLE
+                else -> MemoryReadiness.LOADING
+            },
+            workspaceReadiness = when (workspaceState) {
+                is UiState.Success -> null
+                is UiState.Error -> WorkspaceReadiness.FAILED
+                else -> WorkspaceReadiness.LOADING
+            },
             imageGenerationAvailable = imageGenerationAvailable,
             mcpServers = mcpChoices,
+            mcpReadFailed = mcpCatalog is net.weero.measix.pilot.service.McpCatalogReadState.Failed,
             selectedModel = configuration?.model,
             modelUnavailableReason = configuration?.assistantUnavailableReason ?: configuration?.modelSelection?.unavailableReason,
             hasAvailableChatModel = configuration?.modelCatalog?.groups?.any { group -> group.models.any { it.canSelect && it.model.type == ModelType.CHAT } } == true,
         )
+    }
+    val readDiagnostics = listOfNotNull((workspaceState as? UiState.Error)?.error?.userVisibleDiagnostic(), memory.diagnostic,
+        (mcpCatalog as? net.weero.measix.pilot.service.McpCatalogReadState.Failed)?.error?.userVisibleDiagnostic()).distinct()
+    LaunchedEffect(target, readRetryRevision, readDiagnostics) {
+        if (target != null) readDiagnostics.forEach { vm.reportReadFailure(target, it) }
     }
     val latestReadiness by rememberUpdatedState(readiness)
     val latestAllowConversationSystemPrompt by rememberUpdatedState(
@@ -835,7 +862,6 @@ private fun ChatPageContent(
                             }
                             if (inputState.isEditing()) {
                                 val editingMessageId = inputState.editingMessage!!
-                                val contents = inputState.getContents()
                                 val editingRole = snapshot.nodes
                                     .firstOrNull { node -> node.messages.any { it.id == editingMessageId } }
                                     ?.messages
@@ -843,8 +869,7 @@ private fun ChatPageContent(
                                     ?.role
                                 if (editingRole == MessageRole.USER) {
                                     scope.launch {
-                                        vm.handleMessageEditAndSend(contents, editingMessageId)?.let { receipt ->
-                                            inputState.clearInput()
+                                        vm.handleMessageEditAndSend(configuration.target)?.let { receipt ->
                                             requestAppendScroll(
                                                 AppendScrollContext.from(
                                                     snapshot = snapshot,
@@ -856,11 +881,7 @@ private fun ChatPageContent(
                                     }
                                     return@ChatInput
                                 }
-                                vm.handleMessageEdit(
-                                    parts = contents,
-                                    messageId = editingMessageId,
-                                )
-                                inputState.clearInput()
+                                scope.launch { vm.handleMessageEdit(configuration.target) }
                             } else {
                                 scope.launch {
                                     vm.handleMessageSend(configuration.target)?.let { receipt ->
@@ -882,10 +903,7 @@ private fun ChatPageContent(
                                 return@ChatInput
                             }
                             if (inputState.isEditing()) {
-                                vm.handleMessageEdit(
-                                    parts = inputState.getContents(),
-                                    messageId = inputState.editingMessage!!,
-                                )
+                                scope.launch { vm.handleMessageEdit(configuration.target) }
                             } else {
                                 scope.launch {
                                     vm.handleMessageSend(target = configuration.target, answer = false)?.let { receipt ->
@@ -900,7 +918,6 @@ private fun ChatPageContent(
                                 }
                                 return@ChatInput
                             }
-                            inputState.clearInput()
                         },
                         onUpdateChatModel = { commitPreference(configuration.target, AssistantPreferenceChange.Model(it.id)).getOrThrow() },
                         onUpdateReasoning = { changePreference(AssistantPreferenceChange.Reasoning(it)) },
@@ -945,6 +962,7 @@ private fun ChatPageContent(
                 errors = errors,
                 onDismissError = onDismissError,
                 onClearAllErrors = onClearAllErrors,
+                onRetryReads = vm::retryConversationLoad,
                 onRegenerate = {
                     if (readiness.canSend) vm.regenerateAtMessage(it)
                 },
@@ -1059,6 +1077,8 @@ private fun ChatPageContent(
                 vm = vm,
                 configuration = configuration,
                 originalImports = inputImports,
+                workspaceState = workspaceState,
+                onRetryReads = vm::retryConversationLoad,
                 mcpChoices = mcpChoices,
                 onPreferenceChange = { change -> scope.launch {
                     acceptConfigurationResult(commitPreference(configuration.target, change) { modalToaster.show(configurationSavedMessage) })
@@ -1192,23 +1212,13 @@ private fun ChatPageContent(
             )
         }
         configurationError?.let { error ->
-            AlertDialog(
-                onDismissRequest = { configurationError = null },
-                title = { Text(stringResource(R.string.error_title_operation)) },
-                text = {
-                    SelectionContainer {
-                        Column {
-                            if (error is net.weero.measix.pilot.service.StarterOpeningException) {
-                                Text(net.weero.measix.pilot.ui.components.ai.starterOpeningIssueText(error.issue))
-                            }
-                            Text(error.userVisibleDiagnostic())
-                        }
-                    }
-                },
-                confirmButton = {
-                    TextButton(onClick = { configurationError = null }) { Text(stringResource(android.R.string.ok)) }
-                },
-            )
+            val issue = (error as? net.weero.measix.pilot.service.StarterOpeningException)?.let {
+                net.weero.measix.pilot.ui.components.ai.starterOpeningIssueText(it.issue) + "\n\n"
+            }.orEmpty()
+            val title = stringResource(R.string.error_title_operation)
+            net.weero.measix.pilot.ui.components.ui.ErrorDetails(
+                remember(error, issue, title) { net.weero.measix.pilot.service.ChatError(title = title, detail = issue + error.userVisibleDiagnostic()) },
+                onDismiss = { configurationError = null })
         }
         pendingSharedNavigation?.let { destination ->
             SharedConfigurationEditDialog(
@@ -1351,6 +1361,8 @@ private fun ChatFilesPickerSheet(
     vm: ChatVM,
     configuration: ConversationConfigurationUiModel,
     originalImports: net.weero.measix.pilot.service.ArtifactDraftScope,
+    workspaceState: UiState<List<net.weero.measix.pilot.service.workspace.WorkspaceUiModel>>,
+    onRetryReads: () -> Unit,
     mcpChoices: List<net.weero.measix.pilot.service.AssistantMcpChoice>,
     onPreferenceChange: (AssistantPreferenceChange) -> Unit,
     onConfigurationResult: (Result<Unit>) -> Boolean,
@@ -1365,7 +1377,7 @@ private fun ChatFilesPickerSheet(
     var showInjectionSheet by remember { mutableStateOf(false) }
     var showNestedMcpPicker by remember { mutableStateOf(false) }
     var showCompressDialog by remember { mutableStateOf(false) }
-    val fileReadFailedFormat = stringResource(R.string.chat_input_file_read_failed)
+    var pickerFailure by remember(originalImports) { mutableStateOf<Throwable?>(null) }
     val unsupportedFileTypeFormat = stringResource(R.string.chat_input_unsupported_file_type)
     val originalTarget = remember { configuration.target }
     val remoteWorkspace by vm.remoteWorkspaceSummary.collectAsStateWithLifecycle()
@@ -1374,8 +1386,8 @@ private fun ChatFilesPickerSheet(
         try { vm.refreshRemoteWorkspace(originalTarget) }
         catch (cancelled: CancellationException) { throw cancelled }
         catch (error: Exception) {
-            Log.e("ChatFilesPicker", "Remote workspace refresh failed", error)
-            feedback.show(error.userVisibleDiagnostic(), type = ToastType.Error)
+            logDiagnosticFailure("ChatFilesPicker", "Remote workspace refresh failed", error)
+            pickerFailure = error
         }
     }
 
@@ -1394,9 +1406,8 @@ private fun ChatFilesPickerSheet(
     } catch (cancelled: CancellationException) {
         throw cancelled
     } catch (error: Exception) {
-        val displayName = uris.firstOrNull()?.let(::attachmentDisplayName).orEmpty()
-        Log.e("ChatFilesPicker", "Failed to import attachment", error)
-        toaster.show(fileReadFailedFormat.format(displayName), type = ToastType.Error)
+        logDiagnosticFailure("ChatFilesPicker", "Failed to import attachment", error)
+        pickerFailure = error
         null
     }
 
@@ -1609,15 +1620,26 @@ private fun ChatFilesPickerSheet(
         feedback = feedback,
         feedbackVisible = !showInjectionSheet && !showNestedMcpPicker,
     ) {
+        pickerFailure?.let { error ->
+            net.weero.measix.pilot.ui.components.ui.ErrorCard(
+                remember(error) { net.weero.measix.pilot.service.ChatError(detail = error.userVisibleDiagnostic(),
+                    retention = net.weero.measix.pilot.service.ChatErrorRetention.UNTIL_DISMISSED) },
+                onDismiss = { pickerFailure = null })
+        }
         FilesPicker(
+            workspaceState = workspaceState,
+            onRetryReads = onRetryReads,
             onOpenRemoteWorkspace = if (remoteWorkspace?.selection == originalTarget.conversation.selection && remoteWorkspace?.canOpenFiles == true) {
                 { scope.launch {
                     try {
                         val selection = vm.remoteWorkspaceNavigation(originalTarget)
-                        dismissAll()
                         remoteNav.navigate(Screen.RemoteWorkspace(selection = selection))
+                        dismissAll()
                     } catch (cancelled: CancellationException) { throw cancelled }
-                    catch (error: Exception) { feedback.show(error.userVisibleDiagnostic(), type = ToastType.Error) }
+                    catch (error: Exception) {
+                        logDiagnosticFailure("ChatFilesPicker", "Remote workspace navigation failed", error)
+                        pickerFailure = error
+                    }
                 }; Unit }
             } else null,
             feedback = feedback,

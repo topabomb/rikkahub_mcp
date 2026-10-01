@@ -225,7 +225,6 @@
   <string name="chain_of_thought_show_more_steps">%d단계 더 보기</string>
   <string name="chat_input_placeholder">AI와 채팅하기</string>
   <string name="chat_input_unsupported_file_type">지원되지 않는 파일 형식: %s</string>
-  <string name="chat_input_file_read_failed">파일 읽기 실패: %s</string>
   <string name="chat_conversation_missing_title">대화를 사용할 수 없음</string>
   <string name="chat_conversation_missing_message">이 대화를 찾을 수 없습니다. 다시 시도하여 초기화하세요.</string>
   <string name="chat_conversation_load_failed_title">대화를 불러올 수 없음</string>
@@ -2055,4 +2054,12 @@
   <string name="file_preview_next_page">다음 페이지</string>
   <string name="file_browser_parent_folder">상위 폴더</string>
   <string name="chat_recent_conversation_save_failed">최근에 연 대화를 기록하지 못했습니다. 이 대화는 계속 사용할 수 있습니다. 나중에 대화를 다시 열어 재시도하세요.\n\n%1$s</string>
+  <string name="chat_readiness_loading">불러오는 중…</string>
+  <string name="chat_readiness_read_failed">읽기 실패</string>
+  <string name="chat_readiness_unavailable">사용할 수 없음</string>
+  <string name="chat_readiness_workspace_bound_unavailable">연결된 작업 공간을 사용할 수 없습니다</string>
+  <string name="rendered_content_read_failed">미리보기를 읽을 수 없습니다</string>
+  <string name="assistant_usage_skills_read_failed">스킬 목록을 읽을 수 없습니다</string>
+  <string name="assistant_usage_skills_unavailable">이 페이지에서 더 이상 스킬에 접근할 수 없습니다. 현재 채팅에서 설정을 다시 여세요.</string>
+  <string name="chat_enterprise_model_service_configuration">기업 관리자에게 이 모델의 서비스 설정을 확인해 달라고 요청하세요.</string>
 </resources>

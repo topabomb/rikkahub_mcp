@@ -38,6 +38,13 @@ ConversationTurnService / SubAssistantRunCoordinator
 `ConversationPresentationSnapshot`，不持有 Repository、Runtime Registry 或 worker Job。
 `ConversationAggregateSnapshot` 保存 header、nodes、opening、model-context entries 与 request admissions；streaming 不进入它。
 
+历史 USER 编辑重发由 `EditMessageVariant(truncateAfterNode = true)` 在同一会话 mutation 中插入新 variant、
+删除后续节点并通过原上下文 transition 剪枝；提交失败不发布部分截断，目标旧 variants 保留。
+普通保存沿默认 `truncateAfterNode = false` 保持后文。完整树锁与关闭的子助手核验仍由原执行链负责，
+retention 在父会话成功提交后维护，不成为另一条消息提交路径。
+`ConversationTurnService.editAndResend` 等待编辑提交才返回 `SendMessageReceipt`；提交前失败先将本次附件归还原 Draft，
+取消按已持久用户消息身份区分是否已经提交，不能让迟到取消删除已提交消息的附件。
+
 ## 会话文件夹命令
 
 `ConversationQueryService.foldersOfAssistant` 发布 `ConversationFolderDirectory`，即使目录为空也保留原助手及
@@ -132,6 +139,13 @@ worker 在授权锁外先进入清理范围，再等待唯一 installation 结�
 START 持久提交与 `TurnCommitter` 认领在同一不可取消边界内完成，提交后收到取消仍由原 committer 提交终态。
 
 USER 预处理按原 RealmAccess 的已解析助手执行。START 前由 `ModelExecutionService` 在 Session → Settings 锁序下捕获助手、模型、媒体能力与用户文档内容 revision，随后 `TurnContextFactory` 冻结 prompt inputs、有序工具定义与执行绑定。同一 Turn 的 Step 和审批继续复用原上下文，不跟随全局当前域或选择。
+`TurnRunner` 在首次 Assistant 草稿交接时记录冻结模型的 `modelId`，不能等待首个 Provider chunk；首片段前失败或取消也保留本次尝试的模型归属。
+该字段沿原草稿、checkpoint 和终态提交链发布，不另行回写历史；未知旧消息不按当前模型补填归属。
+
+`TurnOutcome.fromFailure` 使用 Provider 分类器确定 reason，终态 detail 保存脱敏的完整异常类型、message、cause 和 suppressed，
+不使用模型可见错误摘要的截断规则。嵌套 Provider incomplete 仍保持独立终态，诊断保全外层和协议原因；
+受信任的企业运行 Problem 继续保存原结构化 detail，供预算与授权诊断解析。
+完整诊断与运行边界堆栈继续隐藏凭据字段、裸 Provider key 和嵌入图片 payload，不截断定位所需的普通正文。
 
 企业 MCP 的 `McpExecutionLease` 与模型 lease 都归原 ActiveTurnSession，CONTINUE 转交相同资源。
 资源版本屏障通过 `TurnFinalizer.stopInteraction` 精确停止原 Runtime/turnId；包括已经结束 worker 的 AWAITING_USER。

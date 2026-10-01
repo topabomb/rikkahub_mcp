@@ -14,6 +14,7 @@ import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.util.HttpException
 import me.rerere.ai.util.ProviderTerminalStatus
 import me.rerere.ai.util.classifyProviderFailure
+import net.weero.measix.pilot.utils.userVisibleDiagnostic
 import net.weero.measix.pilot.data.ai.ToolOutputCompactionPatch
 import net.weero.measix.pilot.data.ai.tools.PendingToolInteraction
 import net.weero.measix.pilot.data.ai.transformers.AttachmentProjectionTransformer
@@ -296,20 +297,17 @@ sealed interface TurnOutcome : TurnRunResult {
                 .filterIsInstance<HttpException>()
                 .firstOrNull { it.terminalStatus == ProviderTerminalStatus.INCOMPLETE }
             val classified = classifyProviderFailure(error)
+            val diagnostic = error.userVisibleDiagnostic()
             return if (incompleteProviderFailure != null) {
-                // A wrapper can describe the transport/runtime boundary while the nested
-                // HttpException owns the protocol terminal detail. Preserve that provider
-                // diagnostic instead of letting the wrapper hide why the response was incomplete.
-                val incompleteDetail = classifyProviderFailure(incompleteProviderFailure).detail
                 Incomplete(
                     terminalReason = TurnTerminalReasons.PROVIDER_INCOMPLETE,
-                    terminalDetail = incompleteDetail.ifBlank { classified.detail },
+                    terminalDetail = diagnostic,
                 )
             } else {
                 Failed(
                     error = error,
                     terminalReason = classified.kind.reason,
-                    terminalDetail = classified.detail,
+                    terminalDetail = diagnostic,
                 )
             }
         }

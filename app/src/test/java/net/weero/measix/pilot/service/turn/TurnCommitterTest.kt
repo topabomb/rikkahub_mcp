@@ -204,7 +204,7 @@ class TurnCommitterTest {
     }
 
     @Test
-    fun `runtime failure submits classified detail and retains the exception`() = runTest {
+    fun `runtime failure submits diagnostic detail and retains the exception`() = runTest {
         val harness = harness()
         val failure = IllegalStateException("provider failed")
         val partial = msg("partial after checkpoint").copy(id = harness.handle.assistantMessageId)
@@ -217,14 +217,14 @@ class TurnCommitterTest {
         outcome as TurnOutcome.Failed
         assertEquals(failure, outcome.error)
         assertEquals(ProviderFailureKind.RUNTIME_ERROR.reason, outcome.terminalReason)
-        assertEquals("provider failed", outcome.terminalDetail)
+        assertEquals("IllegalStateException: provider failed", outcome.terminalDetail)
         val commands = mutableListOf<ConversationCommand>()
         coVerify { harness.coordinator.executeOrThrow(any(), capture(commands)) }
         val finalize = commands.filterIsInstance<FinalizeTurn>().single()
         assertEquals(TurnExecutionStatus.FAILED, finalize.terminalStatus)
         assertEquals(partial, finalize.assistantMessage)
         assertEquals(ProviderFailureKind.RUNTIME_ERROR.reason, finalize.terminalReason)
-        assertEquals("provider failed", finalize.terminalDetail)
+        assertEquals("IllegalStateException: provider failed", finalize.terminalDetail)
     }
 
     @Test
@@ -256,7 +256,7 @@ class TurnCommitterTest {
         harness.turnCommitter.commitRunResult(outcome)
 
         assertEquals(ProviderFailureKind.RATE_LIMITED.reason, outcome.terminalReason)
-        assertEquals("Please retry after 2 seconds. secret …", outcome.terminalDetail)
+        assertEquals("HttpException: Please retry after 2 seconds. secret …", outcome.terminalDetail)
         val command = slot<ConversationCommand>()
         coVerify { harness.coordinator.executeOrThrow(any(), capture(command)) }
         assertEquals(outcome.terminalDetail, (command.captured as FinalizeTurn).terminalDetail)
@@ -275,7 +275,7 @@ class TurnCommitterTest {
 
         outcome as TurnOutcome.Incomplete
         assertEquals(TurnTerminalReasons.PROVIDER_INCOMPLETE, outcome.terminalReason)
-        assertEquals("Response incomplete: max_output_tokens", outcome.terminalDetail)
+        assertEquals("HttpException: Response incomplete: max_output_tokens", outcome.terminalDetail)
         val command = slot<ConversationCommand>()
         coVerify { harness.coordinator.executeOrThrow(any(), capture(command)) }
         assertEquals(TurnExecutionStatus.INCOMPLETE, (command.captured as FinalizeTurn).terminalStatus)
@@ -294,10 +294,27 @@ class TurnCommitterTest {
 
         outcome as TurnOutcome.Incomplete
         assertEquals(TurnTerminalReasons.PROVIDER_INCOMPLETE, outcome.terminalReason)
-        assertEquals("Response incomplete: max_output_tokens", outcome.terminalDetail)
+        assertEquals("IllegalStateException: provider wrapper\nCaused by: HttpException: Response incomplete: max_output_tokens", outcome.terminalDetail)
         val command = slot<ConversationCommand>()
         coVerify { harness.coordinator.executeOrThrow(any(), capture(command)) }
         assertEquals(TurnExecutionStatus.INCOMPLETE, (command.captured as FinalizeTurn).terminalStatus)
+    }
+
+    @Test
+    fun `terminal commit retains long cause and cleanup diagnostic with credentials redacted`() = runTest {
+        val harness = harness()
+        val upstreamDetail = "Upstream rejection " + "x".repeat(600) + " final diagnostic"
+        val failure = java.io.IOException("transport wrapper", HttpException(upstreamDetail, statusCode = 401))
+        failure.addSuppressed(IllegalStateException("cleanup failed sk-abcdefghijklmnop"))
+        val outcome = TurnOutcome.fromFailure(failure) as TurnOutcome.Failed
+        harness.turnCommitter.commitRunResult(outcome)
+
+        assertEquals(ProviderFailureKind.AUTH_FAILED.reason, outcome.terminalReason)
+        val expected = "IOException: transport wrapper\nCaused by: HttpException: $upstreamDetail\nSuppressed: IllegalStateException: cleanup failed …"
+        assertEquals(expected, outcome.terminalDetail)
+        val command = slot<ConversationCommand>()
+        coVerify { harness.coordinator.executeOrThrow(any(), capture(command)) }
+        assertEquals(expected, (command.captured as FinalizeTurn).terminalDetail)
     }
 
     @Test

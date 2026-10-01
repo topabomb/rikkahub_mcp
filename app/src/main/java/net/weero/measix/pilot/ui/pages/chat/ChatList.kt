@@ -162,6 +162,7 @@ internal fun ChatList(
     errors: List<ChatError> = emptyList(),
     onDismissError: (Uuid) -> Unit = {},
     onClearAllErrors: () -> Unit = {},
+    onRetryReads: () -> Unit = {},
     onRegenerate: (UIMessage) -> Unit = {},
     onEdit: (UIMessage) -> Unit = {},
     onForkMessage: (UIMessage) -> Unit = {},
@@ -222,6 +223,7 @@ internal fun ChatList(
                 errors = errors,
                 onDismissError = onDismissError,
                 onClearAllErrors = onClearAllErrors,
+                onRetryReads = onRetryReads,
                 onRegenerate = onRegenerate,
                 onEdit = onEdit,
                 onForkMessage = onForkMessage,
@@ -269,6 +271,7 @@ private fun ChatListNormal(
     errors: List<ChatError>,
     onDismissError: (Uuid) -> Unit,
     onClearAllErrors: () -> Unit,
+    onRetryReads: () -> Unit,
     onRegenerate: (UIMessage) -> Unit,
     onEdit: (UIMessage) -> Unit,
     onForkMessage: (UIMessage) -> Unit,
@@ -442,6 +445,7 @@ private fun ChatListNormal(
             net.weero.measix.pilot.ui.components.message.tools.LocalToolConversationId provides snapshot.header.id,
             LocalConversationImages provides conversationAlbum,
             LocalAttachmentPreview provides attachmentPreviewProvider,
+            net.weero.measix.pilot.ui.components.message.LocalAttachmentPreviewRetry provides onRetryReads,
             LocalImagePreviewActions provides previewActions,
             LocalImagePreviewOverlay provides backgroundHost.overlay,
         ) {
@@ -637,6 +641,7 @@ private fun ChatListNormal(
                 errors = errors,
                 onDismissError = onDismissError,
                 onClearAllErrors = onClearAllErrors,
+                onRetryReads = onRetryReads,
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
                     .zIndex(5f)

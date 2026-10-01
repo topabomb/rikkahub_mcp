@@ -1,5 +1,7 @@
 package net.weero.measix.pilot.ui.pages.assistant.detail
 
+import net.weero.measix.pilot.utils.logDiagnosticFailure
+
 import android.net.Uri
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.*
@@ -12,18 +14,26 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import me.rerere.common.configuration.ConfigurationReference
 import net.weero.measix.pilot.R
 import net.weero.measix.pilot.data.configuration.AssistantPreferenceChange
 import net.weero.measix.pilot.data.configuration.ConfigurationCategory
 import net.weero.measix.pilot.data.configuration.ConfigurationScope
 import net.weero.measix.pilot.data.datastore.Settings
+import net.weero.measix.pilot.data.enterprise.EnterpriseConfigurationException
 import net.weero.measix.pilot.data.files.SkillManager
 import net.weero.measix.pilot.data.files.SkillMetadata
+import net.weero.measix.pilot.utils.UiState
+import net.weero.measix.pilot.utils.userVisibleDiagnostic
 import net.weero.measix.pilot.service.*
 import net.weero.measix.pilot.service.workspace.WorkspaceUiModel
 import net.weero.measix.pilot.ui.components.ai.*
+import net.weero.measix.pilot.ui.components.ui.ErrorCard
 import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.ArrowLeft01
 import org.koin.compose.koinInject
@@ -52,8 +62,6 @@ internal fun AssistantUsageEditor(
     val scope = rememberCoroutineScope()
     val memory: MemoryService = koinInject()
     val files: FileManagementApplicationService = koinInject()
-    val skillManager: SkillManager = koinInject()
-    val skills by produceState<List<SkillMetadata>>(emptyList(), skillManager) { value = skillManager.listSkills() }
     val memories by remember(view, assistant.id) { memory.observe(view, assistant.id) }
         .collectAsStateWithLifecycle(MemoryView.Loading)
     val imageResolver: suspend (String) -> ImageSource? = remember(files, view) { { files.resolveConfigurationImage(it, view) } }
@@ -186,7 +194,7 @@ internal fun AssistantUsageEditor(
                                     onToggle = { id, enabled -> change(AssistantPreferenceChange.QuickMessage(id, enabled)) }, onManage = onManageQuickMessages)
                                 1 -> ModeInjectionsContent(settings.modeInjections, assistant.modeInjectionIds,
                                     onToggle = { id, enabled -> change(AssistantPreferenceChange.PromptInjection(id, enabled)) }, onManage = onManagePrompts)
-                                else -> SkillsContent(skills, assistant.enabledSkills,
+                                else -> AssistantUsageSkills(view, requireOriginal, assistant.enabledSkills,
                                     onToggle = { name, enabled -> change(AssistantPreferenceChange.Skill(name, enabled)) }, onManage = onManageSkills)
                             }
                         }
@@ -226,4 +234,53 @@ internal fun AssistantUsageEditor(
             catch (error: Exception) { editShared = false; onFailure(error) }
         }) { Text(stringResource(android.R.string.ok)) } },
         dismissButton = { TextButton(onClick = { editShared = false }) { Text(stringResource(android.R.string.cancel)) } })
+}
+
+/** The Skill directory is read only while its tab is present; a read failure cannot disable unrelated sections. */
+@Composable
+internal fun AssistantUsageSkills(
+    view: ConversationViewLease,
+    requireOriginal: () -> Unit,
+    selectedSkills: Set<String>,
+    onToggle: (String, Boolean) -> Unit,
+    onManage: () -> Unit,
+    skillManager: SkillManager = koinInject(),
+) {
+    var revision by remember(view) { mutableIntStateOf(0) }
+    val requireCurrent by rememberUpdatedState(requireOriginal)
+    val skills by key(view, skillManager, revision) {
+        produceState<UiState<List<SkillMetadata>>?>(UiState.Loading) {
+            value = try {
+                requireCurrent()
+                val rows = withContext(Dispatchers.IO) { skillManager.listSkills() }
+                requireCurrent()
+                UiState.Success(rows)
+            } catch (cancelled: CancellationException) { throw cancelled }
+            catch (error: Exception) {
+                currentCoroutineContext().ensureActive()
+                val unavailable = error is IllegalStateException && error.message in setOf(
+                    "conversation_view_closed", "conversation_view_unavailable", "conversation_configuration_target_changed",
+                ) || error is EnterpriseConfigurationException && error.reason in setOf(
+                    "enterprise_data_access_unavailable", "enterprise_selection_revoked", "enterprise_session_required",
+                )
+                if (unavailable) null else {
+                    logDiagnosticFailure("AssistantUsage", "Skill directory read failed", error)
+                    UiState.Error(error)
+                }
+            }
+        }
+    }
+    when (val current = skills) {
+        null -> Text(stringResource(R.string.assistant_usage_skills_unavailable), Modifier.padding(16.dp))
+        UiState.Loading, UiState.Idle -> LinearProgressIndicator(Modifier.fillMaxWidth())
+        is UiState.Success -> SkillsContent(current.data, selectedSkills, onToggle, onManage = onManage)
+        is UiState.Error -> {
+            val diagnostic = remember(current.error) { current.error.userVisibleDiagnostic() }
+            val title = stringResource(R.string.assistant_usage_skills_read_failed)
+            val displayError = remember(diagnostic, title) {
+                ChatError(title = title, detail = diagnostic, retention = ChatErrorRetention.UNTIL_DISMISSED)
+            }
+            ErrorCard(displayError, modifier = Modifier.padding(16.dp), onRetry = { revision++ })
+        }
+    }
 }

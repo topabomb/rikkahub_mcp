@@ -36,8 +36,7 @@ class StarterOpeningDetailsAndroidTest {
         compose.onNodeWithText(context.getString(R.string.opening_context)).performClick()
         compose.onNodeWithText("IllegalStateException: opening_read_failed", substring = true).assertIsDisplayed()
         compose.onNodeWithText(detail.systemPrompt).assertDoesNotExist()
-        compose.onNodeWithText(context.getString(R.string.opening_context)).performClick()
-        compose.onNodeWithText(context.getString(R.string.opening_context)).performClick()
+        compose.onNodeWithText(context.getString(R.string.application_recovery_retry)).performClick()
         compose.onNodeWithText("opening_read_failed", substring = true).assertDoesNotExist()
         compose.onNodeWithText(detail.systemPrompt).assertIsDisplayed()
         compose.onNodeWithText(detail.contexts.single().content).assertIsDisplayed()
@@ -47,4 +46,51 @@ class StarterOpeningDetailsAndroidTest {
         compose.onNodeWithText(context.getString(R.string.opening_context)).performClick()
         compose.runOnIdle { assertEquals(2, reads.get()) }
     }
+    @Test fun initialModalFailureCanRetryReadWithoutRefreshingOpening() {
+        val reads = AtomicInteger()
+        val writes = AtomicInteger()
+        compose.setContent { MaterialTheme { androidx.compose.runtime.CompositionLocalProvider(
+            net.weero.measix.pilot.ui.adaptive.LocalAdaptiveLayoutInfo provides net.weero.measix.pilot.ui.adaptive.rememberAdaptiveLayoutInfo()) {
+            StarterOpeningDetails("modal", load = {
+                if (reads.incrementAndGet() == 1) throw java.io.IOException("opening_read_failed")
+                detail
+            }, refresh = { writes.incrementAndGet() }, clear = { writes.incrementAndGet() }, onDismiss = {})
+        } } }
+        compose.onNodeWithText("IOException: opening_read_failed", substring = true).assertIsDisplayed()
+        compose.onNodeWithText(context.getString(R.string.application_recovery_retry)).performClick()
+        compose.onNodeWithText(detail.prompt).assertIsDisplayed()
+        compose.runOnIdle { assertEquals(2, reads.get()); assertEquals(0, writes.get()) }
+    }
+
+    @Test fun readRetryCannotOverlapPendingOpeningUpdate() {
+        val reads = AtomicInteger()
+        val updates = AtomicInteger()
+        val removals = AtomicInteger()
+        val finishUpdate = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val draft = detail.copy(isDraft = true, canRefresh = true)
+        compose.setContent { MaterialTheme { androidx.compose.runtime.CompositionLocalProvider(
+            net.weero.measix.pilot.ui.adaptive.LocalAdaptiveLayoutInfo provides net.weero.measix.pilot.ui.adaptive.rememberAdaptiveLayoutInfo()) {
+            StarterOpeningDetails("original-opening", load = { reads.incrementAndGet(); draft }, refresh = {
+                if (updates.incrementAndGet() == 1) throw java.io.IOException("opening_update_failed")
+                finishUpdate.await()
+            }, clear = { removals.incrementAndGet() }, onDismiss = {})
+        } } }
+        val update = compose.onNodeWithText(context.getString(R.string.opening_update))
+        update.performScrollTo().performClick()
+        val diagnostic = "IOException: opening_update_failed"
+        compose.onNodeWithText(diagnostic).assertIsDisplayed()
+        compose.onNodeWithText(context.getString(R.string.application_recovery_retry)).assertExists()
+        update.performScrollTo().performClick()
+        compose.waitUntil { updates.get() == 2 }
+        compose.onNodeWithText(diagnostic).assertExists()
+        compose.onNodeWithText(context.getString(R.string.application_recovery_retry)).assertDoesNotExist()
+        update.assertIsNotEnabled()
+        compose.onNodeWithText(context.getString(R.string.opening_remove)).assertIsNotEnabled()
+        compose.runOnIdle { assertEquals(1, reads.get()); assertEquals(0, removals.get()); finishUpdate.complete(Unit) }
+        compose.onNodeWithText(diagnostic).assertDoesNotExist()
+        update.assertIsEnabled()
+        compose.onNodeWithText(context.getString(R.string.opening_remove)).assertIsEnabled()
+        compose.runOnIdle { assertEquals(2, reads.get()); assertEquals(2, updates.get()); assertEquals(0, removals.get()) }
+    }
+
 }

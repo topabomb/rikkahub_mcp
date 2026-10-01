@@ -50,6 +50,7 @@ import net.weero.measix.pilot.data.model.Avatar
 import net.weero.measix.pilot.data.model.Assistant
 import net.weero.measix.pilot.ui.components.message.ChatMessage
 import net.weero.measix.pilot.ui.components.message.LocalAttachmentPreview
+import net.weero.measix.pilot.ui.components.message.LocalAttachmentPreviewRetry
 import net.weero.measix.pilot.ui.components.message.LocalConversationImages
 import net.weero.measix.pilot.ui.components.message.collectMessageImages
 import net.weero.measix.pilot.ui.components.ui.LocalImagePreviewActions
@@ -161,6 +162,7 @@ fun SubAssistantDetailPage(
                 state = state,
                 targetAssistant = targetAssistant,
                 attachmentPreviews = vm.attachmentPreviews(),
+                onRetryReads = vm::retry,
                 modifier = Modifier.padding(innerPadding),
             )
         }
@@ -182,6 +184,7 @@ private fun DetailContent(
     state: SubAssistantDetailUiState.Ready,
     targetAssistant: Assistant?,
     attachmentPreviews: Map<String, net.weero.measix.pilot.service.AttachmentPreview>,
+    onRetryReads: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val listState = rememberLazyListState()
@@ -246,6 +249,7 @@ private fun DetailContent(
             source?.let { net.weero.measix.pilot.service.RenderedContentSource.Conversation(it) },
             LocalConversationImages provides timelineAlbum,
             LocalAttachmentPreview provides attachmentPreviewProvider,
+            LocalAttachmentPreviewRetry provides onRetryReads,
             LocalImagePreviewActions provides previewActions,
             LocalImagePreviewOverlay provides if (targetAssistant?.id == null) null else backgroundHost.overlay,
         ) {

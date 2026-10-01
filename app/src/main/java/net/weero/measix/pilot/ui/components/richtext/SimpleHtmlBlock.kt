@@ -280,8 +280,8 @@ private fun RenderImage(
                 .padding(vertical = 4.dp),
             contentAlignment = Alignment.Center
         ) {
-            ZoomableAsyncImage(
-                model = rememberResolvedImageSource(src),
+            ResolvedImage(
+                url = src,
                 contentDescription = alt.takeIf { it.isNotEmpty() },
                 modifier = Modifier
                     .fillMaxWidth()

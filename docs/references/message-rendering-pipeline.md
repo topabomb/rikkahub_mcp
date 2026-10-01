@@ -118,11 +118,21 @@ Markdown 全文预览另经 `buildMarkdownPreviewHtml` 和 `assets/html/mark.htm
 `BitmapComposer` 归导出协程直接持有，捕获完成或取消都拆除组合树，未交付 Bitmap 被回收；
 不存在独立 Handler 或第二协程作用域延续导出。
 
+单附件查询的预期缺失或 `ArtifactProjectionException` 仍关闭访问，不中止整段聊天。
+非预期数据库或 payload IO 故障保留完整日志，并在 `AttachmentPreview.diagnostic` 提供脱敏诊断；
+失败投影的 URI、ImageSource 和 fileTarget 均不提供能力，也不能通过原 URL 再次降级为未校验图片读取。
+原附件/工具/富文本位置使用 `AttachmentPreviewDiagnostic` 显示紧凑摘要及可展开、复制的详情。
+`LocalAttachmentPreviewRetry` 只由主聊天或借用详情宿主提供原查询重试；无宿主的只读导出不安装重试动作。
+
 ## 5. WebView 文档与生命周期
 
 富文本和 Mermaid 共用 `RenderedContentWebView` / `rememberRenderedContentState`，企业 Portal 使用独立宿主。
 每份渲染文档拥有随机 `.invalid` origin，关闭 DOM Storage，隔离 Cookie、IndexedDB 与浏览器缓存身份；
 不修改 Portal 的浏览器状态。原来源尚未授权或已撤销时不创建 WebView，旧来源的授权结果不能给新文档使用。
+`RenderedContentReadState` 区分 Loading、Unavailable、Failed 与 Ready；授权读取尚未完成时不显示不可用。
+非预期初始化、刷新或文档资源读取异常保留完整诊断，显式重试复用原 RenderedContent 与来源，不能重建失效能力。
+旧 WebView 回调只更新其原读取尝试，不能覆盖新文档或新尝试；预览失败或销毁不主动关闭借用父 lease，
+确认撤权沿原查询门禁关闭失效 lease 并释放预览。
 
 本地图片通过文件服务授权读取，`file:` 与 `/upload` 资源映射到当前文档的绝对虚拟 origin，
 包含动态节点与 CSS；外部 `<base>` 不能把本地路径改发网络。

@@ -105,17 +105,20 @@ class StepRunnerTest {
                 providerManager = manager, json = Json,
                 attachmentResolver = mockk(relaxed = true), toolOutputStore = mockk(relaxed = true),
             )
+            val observed = mutableListOf<UIMessage>()
             val execution = async {
                 handler.run(turnRunInputsFixture(
                     conversationId = Uuid.random(),
                     settings = Settings(providers = listOf(setting), assistants = listOf(assistant)),
                     model = model, assistant = assistant, messages = listOf(UIMessage.user("hello")),
                     inputTransformers = listOf(transformer), promptInputs = testPromptInputs(), maxSteps = 1,
+                    onAssistantObserved = { observed += it },
                     mediaCapabilities = RequestMediaCapabilities.NONE,
                 ))
             }
             entered.await()
             assertTrue(held)
+            assertEquals("Model ownership must exist before the first Provider chunk", model.id, observed.first().modelId)
             if (outcome == "cancel") {
                 execution.cancel()
                 execution.join()

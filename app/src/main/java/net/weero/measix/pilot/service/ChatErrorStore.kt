@@ -1,5 +1,7 @@
 package net.weero.measix.pilot.service
 
+import net.weero.measix.pilot.utils.logDiagnosticFailure
+
 import android.content.Context
 import java.text.DateFormat
 import java.time.Instant
@@ -13,8 +15,8 @@ import kotlinx.coroutines.flow.update
 import me.rerere.ai.ui.MessageTerminalStatus
 import me.rerere.ai.ui.TurnTerminalReasons
 import me.rerere.ai.util.ProviderFailureKind
-import me.rerere.ai.util.classifyProviderFailure
 import net.weero.measix.pilot.R
+import net.weero.measix.pilot.utils.userVisibleDiagnostic
 import net.weero.measix.pilot.data.enterprise.EnterpriseRuntimeProblemException
 import net.weero.measix.pilot.data.enterprise.PlatformBudgetCapability
 import net.weero.measix.pilot.data.enterprise.PlatformBudgetPeriod
@@ -37,6 +39,7 @@ enum class ChatErrorSolution {
     CheckTitleModelSettings,
     CheckProviderSettings,
     ViewEnterpriseUsage,
+    RetryConversationReads,
 }
 
 enum class ChatErrorRetention {
@@ -60,10 +63,11 @@ class ChatErrorStore {
         retention: ChatErrorRetention = ChatErrorRetention.TRANSIENT,
     ) {
         if (error is CancellationException) return
+        logDiagnosticFailure("ChatErrorStore", "Chat operation failed", error)
         add(
             ChatError(
                 title = title,
-                detail = classifyProviderFailure(error).detail,
+                detail = error.userVisibleDiagnostic(),
                 conversationId = conversationId,
                 solution = solution,
                 retention = retention,
@@ -73,6 +77,9 @@ class ChatErrorStore {
 
     fun add(error: ChatError) {
         _errors.update { current ->
+            if (error.solution == ChatErrorSolution.RetryConversationReads && current.any {
+                it.conversationId == error.conversationId && it.solution == error.solution && it.detail == error.detail
+            }) return@update current
             val withoutDuplicate = error.sourceMessageId?.let { sourceMessageId ->
                 current.filterNot {
                     it.conversationId == error.conversationId && it.sourceMessageId == sourceMessageId
@@ -261,19 +268,27 @@ fun terminalChatError(
     status: MessageTerminalStatus,
     reason: String?,
     detail: String?,
+    modelId: me.rerere.common.configuration.ConfigurationReference? = null,
 ): ChatError? {
     if (status != MessageTerminalStatus.FAILED && status != MessageTerminalStatus.INCOMPLETE) {
         return null
     }
     val presentation = terminalMessagePresentation(status, reason)
     val structured = EnterpriseRuntimeProblemException.parseTerminalDetail(detail)
+    val providerConfigurationFailure = presentation.solution == ChatErrorSolution.CheckProviderSettings
+    val managedModel = modelId is me.rerere.common.configuration.ConfigurationReference.Enterprise
+    val diagnostic = structured?.let { enterpriseRuntimeDetail(context, it, presentation.fallbackDetailResource) }
+        ?: detail?.trim()?.takeIf(String::isNotEmpty)
+        ?: context.getString(presentation.fallbackDetailResource)
     return ChatError(
         title = context.getString(presentation.titleResource),
-        detail = structured?.let { enterpriseRuntimeDetail(context, it, presentation.fallbackDetailResource) }
-            ?: detail?.trim()?.takeIf(String::isNotEmpty)
-            ?: context.getString(presentation.fallbackDetailResource),
+        detail = if (providerConfigurationFailure && managedModel) {
+            context.getString(R.string.chat_enterprise_model_service_configuration) + "\n\n" + diagnostic
+        } else diagnostic,
         conversationId = conversationId,
-        solution = presentation.solution,
+        // A historical message's model owns this action; current space or model selection does not.
+        solution = if (providerConfigurationFailure && modelId !is me.rerere.common.configuration.ConfigurationReference.User) null
+            else presentation.solution,
         retention = ChatErrorRetention.UNTIL_DISMISSED,
         sourceMessageId = messageId,
     )

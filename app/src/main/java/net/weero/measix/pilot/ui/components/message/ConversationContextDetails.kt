@@ -1,5 +1,7 @@
 package net.weero.measix.pilot.ui.components.message
 
+import net.weero.measix.pilot.utils.logDiagnosticFailure
+
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.rememberScrollState
@@ -26,6 +28,7 @@ import me.rerere.hugeicons.stroke.Cancel01
 import net.weero.measix.pilot.R
 import net.weero.measix.pilot.service.*
 import net.weero.measix.pilot.ui.adaptive.AdaptiveModal
+import net.weero.measix.pilot.ui.components.ui.ErrorCard
 import net.weero.measix.pilot.utils.userVisibleDiagnostic
 import net.weero.measix.pilot.utils.toLocalDateTime
 import java.time.Instant
@@ -88,22 +91,31 @@ internal fun ConversationContextDetails(
     val bodies = remember(lease, conversationId, messageId, requestId) { mutableMapOf<Uuid?, ConversationContextContentUiModel>() }
     val bodyReads = remember(lease, conversationId, messageId) { Mutex() }
     LaunchedEffect(lease) { query.observeViewAccess(lease).collect { if (!it) dismiss() } }
-    LaunchedEffect(lease, conversationId, messageId, requestId) {
+    var readRevision by remember(lease, conversationId, messageId, requestId) { mutableIntStateOf(0) }
+    LaunchedEffect(lease, conversationId, messageId, requestId, readRevision) {
+        failure = null
+        detail = null
+        bodies.clear()
         try { query.observeContextDetails(lease, conversationId, messageId, requestId).collect {
             if (it.requests.isEmpty()) dismiss() else detail = it
         } }
         catch (cancelled: CancellationException) { throw cancelled }
         catch (error: Exception) { detail = null; bodies.clear(); failure = contextDiagnostic(error) }
     }
+    val shownDetail = detail
+    val shownFailure = failure
     AdaptiveModal(onDismissRequest = onDismiss) {
         Row(Modifier.fillMaxWidth().padding(8.dp)) {
             Text(stringResource(R.string.context_changes_title), Modifier.weight(1f).padding(8.dp), style = MaterialTheme.typography.titleLarge)
             IconButton(onClick = onDismiss) { Icon(HugeIcons.Cancel01, stringResource(R.string.update_card_close)) }
         }
-        if (detail == null && failure == null) LinearProgressIndicator(Modifier.fillMaxWidth())
+        if (shownDetail == null && shownFailure == null) LinearProgressIndicator(Modifier.fillMaxWidth())
         Column(Modifier.weight(1f, fill = false).verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            failure?.let { SelectionContainer { Text(it, color = MaterialTheme.colorScheme.error) } }
-            detail?.let { value ->
+            shownFailure?.let { diagnostic ->
+                    ErrorCard(remember(diagnostic) { ChatError(detail = diagnostic, retention = ChatErrorRetention.UNTIL_DISMISSED) },
+                        onRetry = { readRevision++ })
+                }
+            shownDetail?.let { value ->
                 val request = value.requests.single()
                 ContextUpdateRequest(request) { item ->
                     bodyReads.withLock {
@@ -145,8 +157,9 @@ internal fun ContextContentItem(item: ConversationContextItemUiModel, initiallyE
     var failure by remember(item.key) { mutableStateOf<String?>(null) }
     val clipboard = LocalClipboard.current
     val scope = rememberCoroutineScope()
-    LaunchedEffect(expanded, item.key) {
-        if (expanded && content == null) try { content = load(); failure = null }
+    var readRevision by remember(item.entryId, item.key) { mutableIntStateOf(0) }
+    LaunchedEffect(expanded, item.entryId, item.key, readRevision) {
+        if (expanded && content == null) try { failure = null; content = load() }
         catch (cancelled: CancellationException) { throw cancelled }
         catch (error: Exception) { failure = contextDiagnostic(error) }
     }
@@ -159,7 +172,10 @@ internal fun ContextContentItem(item: ConversationContextItemUiModel, initiallyE
             }
             if (expanded) {
                 if (content == null && failure == null) LinearProgressIndicator(Modifier.fillMaxWidth())
-                failure?.let { SelectionContainer { Text(it, color = MaterialTheme.colorScheme.error) } }
+                failure?.let { diagnostic ->
+                    ErrorCard(remember(diagnostic) { ChatError(detail = diagnostic, retention = ChatErrorRetention.UNTIL_DISMISSED) },
+                        onRetry = { readRevision++ })
+                }
                 content?.let { value ->
                     if (value.presentation.sections.isNotEmpty()) {
                         value.presentation.sections.forEach { section -> ContextSection(section) }
@@ -302,6 +318,6 @@ private fun ContextLiteral(text: String) {
 }
 
 private fun contextDiagnostic(error: Exception): String {
-    android.util.Log.e("ConversationContext", "Context detail read failed", error)
+    logDiagnosticFailure("ConversationContext", "Context detail read failed", error)
     return error.userVisibleDiagnostic()
 }

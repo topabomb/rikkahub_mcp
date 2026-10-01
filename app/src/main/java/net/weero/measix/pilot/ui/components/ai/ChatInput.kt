@@ -1,5 +1,7 @@
 package net.weero.measix.pilot.ui.components.ai
 
+import net.weero.measix.pilot.utils.logDiagnosticFailure
+
 import net.weero.measix.pilot.data.configuration.AssistantSearchMode
 import me.rerere.common.configuration.ConfigurationReference
 import androidx.compose.animation.AnimatedVisibility
@@ -99,6 +101,7 @@ import me.rerere.hugeicons.stroke.ArrowUp02
 import me.rerere.hugeicons.stroke.Cancel01
 import me.rerere.hugeicons.stroke.Fullscreen
 import me.rerere.hugeicons.stroke.Zap
+import net.weero.measix.pilot.utils.userVisibleDiagnostic
 import net.weero.measix.pilot.R
 import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.datastore.getChatModel
@@ -507,9 +510,7 @@ private fun TextInputRow(
     trailingContent: @Composable () -> Unit = {},
 ) {
     val settings = LocalSettings.current
-    val toaster = LocalToaster.current
-    val imageImportFailed = stringResource(R.string.image_import_failed)
-    val textImportFailed = stringResource(R.string.chat_input_file_read_failed, "pasted_text.txt")
+    var importFailure by remember(artifactDraftScope, state) { mutableStateOf<Throwable?>(null) }
     val scope = rememberCoroutineScope()
     val quickMessages = remember(settings.quickMessages, assistant.quickMessageIds) {
         settings.getQuickMessagesOfAssistant(assistant)
@@ -519,6 +520,11 @@ private fun TextInputRow(
         modifier = modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(4.dp)
     ) {
+        importFailure?.let { error ->
+            net.weero.measix.pilot.ui.components.ui.ErrorDetails(
+                remember(error) { net.weero.measix.pilot.service.ChatError(detail = error.userVisibleDiagnostic()) },
+                onDismiss = { importFailure = null })
+        }
         if (state.isEditing()) {
             Surface(
                 shape = RoundedCornerShape(16.dp),
@@ -560,8 +566,9 @@ private fun TextInputRow(
                                         state.addImages(imported)
                                     } catch (cancelled: CancellationException) {
                                         throw cancelled
-                                    } catch (_: Exception) {
-                                        toaster.show(imageImportFailed, type = ToastType.Error)
+                                    } catch (error: Exception) {
+                                        logDiagnosticFailure("ChatInput", "Image paste failed", error)
+                                        importFailure = error
                                     }
                                 }
                             }
@@ -579,8 +586,9 @@ private fun TextInputRow(
                                         state.addFiles(listOf(imported))
                                     } catch (cancelled: CancellationException) {
                                         throw cancelled
-                                    } catch (_: Exception) {
-                                        toaster.show(textImportFailed, type = ToastType.Error)
+                                    } catch (error: Exception) {
+                                        logDiagnosticFailure("ChatInput", "Text paste failed", error)
+                                        importFailure = error
                                     }
                                 }
                                 true
@@ -613,7 +621,8 @@ private fun TextInputRow(
                             ?.takeIf { it.items.isNotEmpty() }
                     } catch (e: CancellationException) {
                         throw e
-                    } catch (_: Exception) {
+                    } catch (error: Exception) {
+                        logDiagnosticFailure("ChatInput", "Completion provider failed", error)
                         null
                     }
                 }
@@ -796,8 +805,7 @@ internal fun PromptPresetButton(
     onOpeningDetails: () -> Unit,
 ) {
     var expanded by remember { mutableStateOf(false) }
-    val toaster = LocalToaster.current
-    val failed = stringResource(R.string.error_title_operation)
+    var presetFailure by remember(state) { mutableStateOf<Throwable?>(null) }
     fun append(content: String, separate: Boolean) {
         try {
             requireInputOwner()
@@ -805,7 +813,15 @@ internal fun PromptPresetButton(
             state.appendText(spacer + content)
             expanded = false
         } catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
-        catch (_: Exception) { toaster.show(failed, type = ToastType.Error) }
+        catch (error: Exception) {
+            logDiagnosticFailure("ChatInput", "Preset insertion failed", error)
+            presetFailure = error
+        }
+    }
+    presetFailure?.let { error ->
+        net.weero.measix.pilot.ui.components.ui.ErrorDetails(
+            remember(error) { net.weero.measix.pilot.service.ChatError(detail = error.userVisibleDiagnostic()) },
+            onDismiss = { presetFailure = null })
     }
     IconButton(onClick = { expanded = !expanded }) {
         Icon(HugeIcons.Zap, stringResource(R.string.chat_input_presets))

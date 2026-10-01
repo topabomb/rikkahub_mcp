@@ -1,5 +1,7 @@
 package net.weero.measix.pilot.ui.components.ui
 
+import net.weero.measix.pilot.utils.logDiagnosticFailure
+
 import net.weero.measix.pilot.service.ImageSource
 import net.weero.measix.pilot.service.ImageOrigin
 import android.graphics.BitmapFactory
@@ -90,6 +92,7 @@ import me.rerere.hugeicons.stroke.Download01
 import me.rerere.hugeicons.stroke.Delete01
 import me.rerere.hugeicons.stroke.InformationCircle
 import net.weero.measix.pilot.R
+import net.weero.measix.pilot.service.ChatError
 import net.weero.measix.pilot.service.MediaExportService
 import net.weero.measix.pilot.service.IMAGE_SAVE_PERMISSION_REQUIRED
 import net.weero.measix.pilot.ui.context.LocalToaster
@@ -163,6 +166,7 @@ fun ImagePreviewDialog(
     var saving by remember { mutableStateOf(false) }
     var deleting by remember { mutableStateOf(false) }
     var pendingDelete by remember { mutableStateOf<PendingImagePreviewDelete?>(null) }
+    var actionFailure by remember { mutableStateOf<Throwable?>(null) }
     val viewerImages = remember { mutableStateListOf<ImageSource>().apply { addAll(images) } }
     var locallyDeleted by remember { mutableStateOf(emptySet<ImageSource>()) }
     val pagerGestureScope = remember {
@@ -331,16 +335,21 @@ fun ImagePreviewDialog(
                                     } catch (cancelled: CancellationException) {
                                         throw cancelled
                                     } catch (error: Exception) {
-                                        error.printStackTrace()
-                                        dialogToaster.show(
-                                            message = imageSaveErrorMessage(
-                                                message = error.message,
-                                                permissionText = savePermissionText,
-                                                failedFormat = saveFailedFormat,
-                                            ),
-                                            type = ToastType.Error,
-                                            id = toastId,
-                                        )
+                                        if (error.message == IMAGE_SAVE_PERMISSION_REQUIRED) {
+                                            dialogToaster.show(
+                                                message = imageSaveErrorMessage(
+                                                    message = error.message,
+                                                    permissionText = savePermissionText,
+                                                    failedFormat = saveFailedFormat,
+                                                ),
+                                                type = ToastType.Error,
+                                                id = toastId,
+                                            )
+                                        } else {
+                                            logDiagnosticFailure("ImagePreview", "Image save failed", error)
+                                            dialogToaster.dismiss(toastId)
+                                            actionFailure = error
+                                        }
                                     } finally {
                                         saving = false
                                     }
@@ -369,11 +378,8 @@ fun ImagePreviewDialog(
                                             } catch (cancelled: CancellationException) {
                                                 throw cancelled
                                             } catch (error: Exception) {
-                                                dialogToaster.show(
-                                                    message = error.message?.takeIf(String::isNotBlank)
-                                                        ?: deleteFailedMessage,
-                                                    type = ToastType.Error,
-                                                )
+                                                logDiagnosticFailure("ImagePreview", "Image deletion preparation failed", error)
+                                                actionFailure = error
                                             } finally {
                                                 deleting = false
                                             }
@@ -475,9 +481,10 @@ fun ImagePreviewDialog(
                                 } catch (cancelled: CancellationException) {
                                     throw cancelled
                                 } catch (error: Exception) {
-                                    ImagePreviewDeleteResult.Failed(
-                                        error.message?.takeIf(String::isNotBlank) ?: deleteFailedMessage,
-                                    )
+                                    logDiagnosticFailure("ImagePreview", "Image deletion failed", error)
+                                    pendingDelete = null
+                                    actionFailure = error
+                                    return@launch
                                 }
                                 when (result) {
                                     ImagePreviewDeleteResult.Deleted -> {
@@ -528,6 +535,10 @@ fun ImagePreviewDialog(
                 }
             },
         )
+    }
+    actionFailure?.let { error ->
+        ErrorDetails(remember(error) { ChatError(detail = error.userVisibleDiagnostic()) },
+            onDismiss = { actionFailure = null })
     }
 }
 

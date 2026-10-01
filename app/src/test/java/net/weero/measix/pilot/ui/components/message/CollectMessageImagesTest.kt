@@ -52,4 +52,17 @@ class CollectMessageImagesTest {
         assertFalse(isImagePartLoading("data:image/png;base64,QUJD"))
         assertFalse(isImagePartLoading("https://example.test/image.png"))
     }
+
+    @Test fun `failed stable projection does not fall back to path capability or advertise export url`() {
+        val ref = AttachmentRefs.format(Uuid.random())
+        val url = "file:///managed/failed.png"
+        val image = UIMessagePart.Image(url, metadata = buildJsonObject { put(AttachmentRefs.METADATA_KEY, ref) })
+        val failed = AttachmentPreview("", null, diagnostic = "IOException: metadata unavailable")
+        val previews = mapOf(ref to failed, url to AttachmentPreview(url, source("stale-path")))
+
+        assertSame(failed, resolveAttachmentPreview(image, previews::get))
+        assertNull(resolveAttachmentImageSource(image, previews::get))
+        assertTrue(collectMessageImages(listOf(image), previews::get).isEmpty())
+        assertNull(resolveAttachmentMediaUrl(url, image, previews::get))
+    }
 }

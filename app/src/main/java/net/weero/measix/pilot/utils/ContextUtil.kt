@@ -1,4 +1,4 @@
-﻿package net.weero.measix.pilot.utils
+package net.weero.measix.pilot.utils
 
 import android.Manifest
 import android.app.Activity
@@ -212,8 +212,8 @@ suspend fun Context.exportImageBytes(
         throw cancelled
     } catch (error: Exception) {
         failure = error
-        Log.e(TAG, "Failed to save image", error)
-        ImageExportResult.Failed
+        logDiagnosticFailure(TAG, "Failed to save image", error)
+        throw error
     } finally {
         if (!published) {
             try {

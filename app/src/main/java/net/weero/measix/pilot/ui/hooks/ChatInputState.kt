@@ -39,12 +39,15 @@ class ChatInputState {
         inputIdentity, textContent.text.toString(), attachments.mapTo(mutableSetOf()) { it.identity }, editingMessage, getContents(),
     )
 
-    /** A completed append owns its captured input, never edits made while it was waiting. */
+    /** A committed submission owns its captured input, never edits made while it was waiting. */
     internal fun completeSubmission(submission: Submission) {
         if (submission.identity !== inputIdentity || submission.editingMessage != editingMessage) return
         if (textContent.text.toString() == submission.text) textContent.setTextAndPlaceCursorAtEnd("")
         // Equal file payloads can be removed and selected again while append is pending.
         attachments = attachments.filterNot { it.identity in submission.attachmentIdentities }
+        editingMessage = null
+        editingParts = null
+        editingAttachmentUrls = emptySet()
         inputIdentity = Any()
     }
 

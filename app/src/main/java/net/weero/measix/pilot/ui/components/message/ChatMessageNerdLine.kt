@@ -334,7 +334,9 @@ private fun UsageDetailItem(metric: UsageDetailMetric) {
                 modifier = Modifier.size(12.dp),
             )
         }
-        metric.label?.let { Text(it, maxLines = 1, softWrap = false) }
+        metric.label?.let {
+            Text(it, modifier = Modifier.padding(end = 3.dp), maxLines = 1, softWrap = false)
+        }
         Text(metric.value, maxLines = 1, softWrap = false)
     }
 }

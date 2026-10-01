@@ -319,6 +319,9 @@ fun SubAssistantCallCard(
                         }
                     }
                 }
+                imagePreviews.forEach { preview ->
+                    AttachmentPreviewDiagnostic(attachmentPreview(preview.ref))
+                }
 
                 val previewText = metadata.preview.takeUnless { it.isNullOrBlank() } ?: if (
                     shouldShowNonTextOutputPlaceholder(

@@ -1,5 +1,7 @@
 package net.weero.measix.pilot.service
 
+import net.weero.measix.pilot.utils.logDiagnosticFailure
+
 import net.weero.measix.pilot.service.turn.TurnFinalizer
 import net.weero.measix.pilot.service.subassistant.SubAssistantLifecycle
 import net.weero.measix.pilot.service.turn.TurnContextFactory
@@ -290,7 +292,7 @@ internal fun retainValidMessageNodes(nodes: List<MessageNode>): List<MessageNode
     return messagesNodes.filter { it.messages.isNotEmpty() }
 }
 
-/** Stable append identity. sendMessage returns it after commit; generation completion is separate. */
+/** Stable committed USER identity for append or edit/resend; generation completion is separate. */
 data class SendMessageReceipt(
     val conversationId: Uuid,
     val turnId: Uuid,
@@ -413,7 +415,7 @@ class ConversationTurnService internal constructor(
     ): Uuid {
         recoveryGate.awaitReady()
         fun reportFailure(error: Exception) {
-            android.util.Log.e(TAG, "Conversation request preparation or cleanup failed", error)
+            logDiagnosticFailure(TAG, "Conversation request preparation or cleanup failed", error)
             chatErrorStore.add(ChatError(
                 title = context.getString(errorTitle),
                 detail = error.userVisibleDiagnostic(),
@@ -560,7 +562,25 @@ class ConversationTurnService internal constructor(
         if (content.isEmptyInputMessage()) return null
         val userMessageId = Uuid.random()
         val access = target.selection.access
-        val turnId = startRequest(target, content, artifactDraftScope, R.string.error_title_send_message) { runtime, turnId, submission ->
+        val edited = CompletableDeferred<Boolean>()
+        val turnId = startRequest(target, content, artifactDraftScope, R.string.error_title_send_message,
+            onFailure = { error, submission ->
+                if (!edited.isCompleted) {
+                    val committed = runtimeRegistry.findRuntime(target.conversationId)?.durable?.nodes?.any { node ->
+                        node.messages.any { message -> message.id == userMessageId }
+                    } == true
+                    try {
+                        if (!committed && submission != null) {
+                            requireNotNull(artifactDraftScope).returnToDraft(submission)
+                        }
+                        edited.complete(committed)
+                    } catch (cleanup: Throwable) {
+                        error.addSuppressed(cleanup)
+                        edited.completeExceptionally(error)
+                    }
+                }
+            },
+        ) { runtime, turnId, submission ->
             val configuration = modelExecutions.read(access).configuration
             val processed = withRequest(access, runtime, turnId, tree = true) {
                 val snapshot = subAssistantLifecycle.requireClosedRunsBeforeTreeMutation(runtime.durable)
@@ -570,16 +590,16 @@ class ConversationTurnService internal constructor(
                 check(node.messages.first { it.id == messageId }.role == MessageRole.USER) { "edit-and-resend requires a USER message" }
                 val assistant = configuration.assistants[snapshot.header.assistantId] ?: error("conversation_assistant_unavailable")
                 val parts = preprocessUserInputParts(content, assistant)
-                commandCoordinator.executeOrThrow(runtime.id, TruncateToNodeIndex(nodeIndexInclusive = nodeIndex))
-                subAssistantLifecycle.applyRetentionAfterTreeMutation(runtime.id)
                 commandCoordinator.executeOrThrow(runtime.id, EditMessageVariant(node.id,
-                    UIMessage(id = userMessageId, role = MessageRole.USER, parts = parts)))
+                    UIMessage(id = userMessageId, role = MessageRole.USER, parts = parts), truncateAfterNode = true))
+                edited.complete(true)
+                subAssistantLifecycle.applyRetentionAfterTreeMutation(runtime.id)
                 parts
             }
             submission?.publishCommittedReferences(processed)
             launchRun(runtime.id, turnId, launch = TurnLaunch.Start(access))
         }
-        return SendMessageReceipt(target.conversationId, turnId, userMessageId)
+        return if (edited.await()) SendMessageReceipt(target.conversationId, turnId, userMessageId) else null
     }
 
     suspend fun regenerateAtMessage(
@@ -1041,8 +1061,8 @@ class ConversationTurnService internal constructor(
                 reportedError = finalizationError
                 outcome = TurnOutcome.fromFailure(finalizationError)
             }
-            Logging.log(TAG, "launchRun failed: ${reportedError.message}")
-            Logging.log(TAG, reportedError.stackTraceToString().lines().take(6).joinToString("\n"))
+            logDiagnosticFailure(TAG, "launchRun failed", reportedError)
+            Logging.log(TAG, reportedError.userVisibleDiagnostic())
             if (isForeground.value && generationSoundEnabled) {
                 sideEffects.playTurnFailedSound()
             }
@@ -1091,6 +1111,7 @@ class ConversationTurnService internal constructor(
                     status = finalMessage?.terminalStatus ?: terminalStatus,
                     reason = finalMessage?.terminalReason ?: outcome.terminalReason,
                     detail = finalMessage?.terminalDetail ?: outcome.terminalDetail,
+                    modelId = finalMessage?.modelId,
                 )?.let(chatErrorStore::add)
             } else if (result is TurnOutcome.Failed) {
                 chatErrorStore.add(

@@ -225,7 +225,6 @@
   <string name="chain_of_thought_show_more_steps">あと %d ステップを表示</string>
   <string name="chat_input_placeholder">AIとチャットするメッセージを入力</string>
   <string name="chat_input_unsupported_file_type">サポートされていないファイルタイプ: %s</string>
-  <string name="chat_input_file_read_failed">ファイルの読み取りに失敗しました: %s</string>
   <string name="chat_conversation_missing_title">会話を利用できません</string>
   <string name="chat_conversation_missing_message">この会話が見つかりません。再試行して初期化してください。</string>
   <string name="chat_conversation_load_failed_title">会話を読み込めません</string>
@@ -2055,4 +2054,12 @@
   <string name="file_preview_next_page">次のページ</string>
   <string name="file_browser_parent_folder">親フォルダー</string>
   <string name="chat_recent_conversation_save_failed">最近開いた会話を記録できませんでした。この会話は引き続き使用できます。後で会話を開き直すと再試行できます。\n\n%1$s</string>
+  <string name="chat_readiness_loading">読み込み中…</string>
+  <string name="chat_readiness_read_failed">読み込みに失敗</string>
+  <string name="chat_readiness_unavailable">利用できません</string>
+  <string name="chat_readiness_workspace_bound_unavailable">リンクしたワークスペースは利用できません</string>
+  <string name="rendered_content_read_failed">プレビューを読み込めません</string>
+  <string name="assistant_usage_skills_read_failed">スキル一覧を読み込めません</string>
+  <string name="assistant_usage_skills_unavailable">このページからはスキルにアクセスできません。現在のチャットから設定を開き直してください。</string>
+  <string name="chat_enterprise_model_service_configuration">このモデルのサービス設定を確認するよう、企業管理者に連絡してください。</string>
 </resources>

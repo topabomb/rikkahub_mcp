@@ -125,8 +125,23 @@ internal fun collectMessageImages(
 internal fun resolveAttachmentImageSource(
     image: UIMessagePart.Image,
     attachmentPreview: ((String) -> AttachmentPreview?)?,
-): ImageSource? = (AttachmentRefs.getStableRef(image)?.let { attachmentPreview?.invoke(it) }
-    ?: attachmentPreview?.invoke(image.url))?.image
+): ImageSource? = resolveAttachmentPreview(image, attachmentPreview)?.image
+
+internal fun resolveAttachmentPreview(
+    part: UIMessagePart,
+    attachmentPreview: ((String) -> AttachmentPreview?)?,
+): AttachmentPreview? {
+    val stable = AttachmentRefs.getStableRef(part)?.let { attachmentPreview?.invoke(it) }
+    if (stable != null) return stable
+    val url = when (part) {
+        is UIMessagePart.Image -> part.url
+        is UIMessagePart.Document -> part.url
+        is UIMessagePart.Audio -> part.url
+        is UIMessagePart.Video -> part.url
+        else -> return null
+    }
+    return attachmentPreview?.invoke(url)
+}
 
 /** Local media is only renderable after the query owner validates its stable reference. */
 internal fun resolveAttachmentMediaUrl(
@@ -135,7 +150,8 @@ internal fun resolveAttachmentMediaUrl(
     attachmentPreview: ((String) -> AttachmentPreview?)?,
 ): String? {
     if (!url.startsWith("file:", ignoreCase = true)) return url
-    return AttachmentRefs.getStableRef(part)?.let { ref -> attachmentPreview?.invoke(ref)?.uri }
+    return resolveAttachmentPreview(part, attachmentPreview)?.takeIf { it.diagnostic == null }
+        ?.uri?.takeIf(String::isNotBlank)
 }
 
 /**
@@ -160,3 +176,6 @@ private val NoAttachmentPreview: (String) -> AttachmentPreview? = { null }
 val LocalAttachmentPreview = compositionLocalOf<(String) -> AttachmentPreview?> {
     NoAttachmentPreview
 }
+
+/** Explicit read retry keeps the host's original conversation lease and never replays a command. */
+val LocalAttachmentPreviewRetry = compositionLocalOf<(() -> Unit)?> { null }

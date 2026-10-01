@@ -1,5 +1,7 @@
 package net.weero.measix.pilot.service
 
+import net.weero.measix.pilot.utils.logDiagnosticFailure
+
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.Flow
@@ -176,9 +178,9 @@ class MemoryService internal constructor(
         emit(unavailableView(error))
     }
 
-    fun observe(view: ConversationViewLease, assistantId: ConfigurationReference): Flow<MemoryView> =
+    fun observe(view: ConversationViewLease, assistantId: ConfigurationReference, enabledOnly: Boolean = false): Flow<MemoryView> =
         conversations.observeForView(view, MemoryView(null, emptyList(), "memory_access_unavailable")) {
-            observe(view.access, assistantId, false, RealmSelection(view.access, view.selectionRevision), view::requireOpen)
+            observe(view.access, assistantId, enabledOnly, RealmSelection(view.access, view.selectionRevision), view::requireOpen)
         }.catch { error ->
             emit(unavailableView(error))
         }
@@ -222,7 +224,7 @@ class MemoryService internal constructor(
         if (error is MemoryAccessRejectedException || error is EnterpriseConfigurationException) {
             return MemoryView(null, emptyList(), "memory_access_unavailable")
         }
-        android.util.Log.e("MemoryService", "Memory directory unavailable", error)
+        logDiagnosticFailure("MemoryService", "Memory directory unavailable", error)
         return MemoryView(null, emptyList(), "memory_read_failed", error.userVisibleDiagnostic())
     }
 

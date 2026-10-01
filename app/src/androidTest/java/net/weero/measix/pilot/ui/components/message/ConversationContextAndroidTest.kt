@@ -28,6 +28,15 @@ import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.flowOf
+import io.mockk.coEvery
+import io.mockk.every
+import io.mockk.mockk
+import androidx.compose.ui.semantics.ProgressBarRangeInfo
+import net.weero.measix.pilot.ui.adaptive.LocalAdaptiveLayoutInfo
+import net.weero.measix.pilot.ui.adaptive.rememberAdaptiveLayoutInfo
 import net.weero.measix.pilot.R
 import net.weero.measix.pilot.service.*
 import org.junit.Assert.assertEquals
@@ -43,6 +52,100 @@ class ConversationContextAndroidTest {
     private val context = ApplicationProvider.getApplicationContext<Context>()
     private val item = ConversationContextItemUiModel("request/item", Uuid.random(),
         listOf(ConversationContextCategory.MEMORY), null, "USER", "BeforeStep(saved-step)")
+
+    private class ModalRead {
+        val lease = ConversationViewLease(Uuid.random(), RealmAccess.Personal, 0L) {}
+        val conversationId = Uuid.random()
+        val messageId = Uuid.random()
+        val requestId = Uuid.random()
+        val reads = AtomicInteger()
+        val bodyReads = AtomicInteger()
+        val query = mockk<ConversationQueryService>()
+    }
+
+    private fun modalRead(observe: (ConversationContextDetailsUiModel) -> Flow<ConversationContextDetailsUiModel>): ModalRead {
+        val read = ModalRead()
+        val update = item.copy(isCurrentUpdate = true, updatedCategories = item.categories)
+        val detail = ConversationContextDetailsUiModel(listOf(ConversationContextRequestUiModel(
+            read.requestId, 0, null, ConversationContextRequestState.ADDED, listOf(update))))
+        every { read.query.observeViewAccess(read.lease) } returns flowOf(true)
+        every { read.query.observeContextDetails(read.lease, read.conversationId, read.messageId, read.requestId) } answers {
+            read.reads.incrementAndGet()
+            observe(detail)
+        }
+        coEvery { read.query.contextContent(read.lease, read.conversationId, read.messageId, read.requestId, update.key) } answers {
+            read.bodyReads.incrementAndGet()
+            ConversationContextContentUiModel("Original request body", null)
+        }
+        return read
+    }
+
+    @Test fun immediateModalResultSurvivesUnrelatedParentRecompositionWithoutAnotherRead() {
+        val read = modalRead { flowOf(it) }
+        var parentRevision by mutableIntStateOf(0)
+        compose.setContent { MaterialTheme {
+            CompositionLocalProvider(LocalAdaptiveLayoutInfo provides rememberAdaptiveLayoutInfo()) {
+                androidx.compose.material3.Text("Parent $parentRevision")
+                ConversationContextDetails(read.lease, read.conversationId, read.messageId, read.requestId, {}, read.query)
+            }
+        } }
+        try {
+            compose.onNodeWithText(context.getString(R.string.context_request, 1)).assertIsDisplayed()
+            compose.onNodeWithText("Original request body").assertIsDisplayed()
+            compose.runOnIdle { parentRevision++ }
+            compose.onNodeWithText("Original request body").assertIsDisplayed()
+            compose.onAllNodes(hasProgressBarRangeInfo(ProgressBarRangeInfo.Indeterminate)).assertCountEquals(0)
+            compose.runOnIdle { assertEquals(1, read.reads.get()); assertEquals(1, read.bodyReads.get()) }
+        } finally { read.lease.close() }
+    }
+
+    @Test fun delayedModalResultReplacesLoadingUnderTheOriginalViewLease() {
+        val release = CompletableDeferred<Unit>()
+        val read = modalRead { detail -> flow { release.await(); emit(detail) } }
+        compose.setContent { MaterialTheme {
+            CompositionLocalProvider(LocalAdaptiveLayoutInfo provides rememberAdaptiveLayoutInfo()) {
+                ConversationContextDetails(read.lease, read.conversationId, read.messageId, read.requestId, {}, read.query)
+            }
+        } }
+        try {
+            compose.onAllNodes(hasProgressBarRangeInfo(ProgressBarRangeInfo.Indeterminate)).assertCountEquals(1)
+            compose.runOnIdle { assertEquals(1, read.reads.get()); release.complete(Unit) }
+            compose.onNodeWithText("Original request body").assertIsDisplayed()
+            compose.onAllNodes(hasProgressBarRangeInfo(ProgressBarRangeInfo.Indeterminate)).assertCountEquals(0)
+            compose.runOnIdle { assertEquals(1, read.reads.get()); assertEquals(1, read.bodyReads.get()) }
+        } finally { read.lease.close() }
+    }
+
+    @Test fun modalReadFailureCopiesFullCauseAndOnlyRetriesAfterExplicitAction() {
+        var attempts = 0
+        val read = modalRead { detail -> flow {
+            if (++attempts == 1) throw java.io.IOException("context read failed", IllegalStateException("original source unavailable"))
+            emit(detail)
+        } }
+        compose.setContent { MaterialTheme {
+            CompositionLocalProvider(LocalAdaptiveLayoutInfo provides rememberAdaptiveLayoutInfo()) {
+                ConversationContextDetails(read.lease, read.conversationId, read.messageId, read.requestId, {}, read.query)
+            }
+        } }
+        try {
+            val diagnostic = "IOException: context read failed\nCaused by: IllegalStateException: original source unavailable"
+            compose.onNodeWithText(diagnostic).assertIsDisplayed()
+            compose.runOnIdle { assertEquals(1, read.reads.get()); assertEquals(0, read.bodyReads.get()) }
+            compose.onNodeWithContentDescription(context.getString(R.string.chat_page_copy_error)).performClick()
+            compose.runOnIdle {
+                val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                assertEquals(diagnostic, clipboard.primaryClip?.getItemAt(0)?.text?.toString())
+                assertEquals(1, read.reads.get())
+            }
+            compose.onNodeWithText(context.getString(R.string.application_recovery_retry)).performClick()
+            compose.onNodeWithText(diagnostic).assertDoesNotExist()
+            compose.onNodeWithText("Original request body").assertIsDisplayed()
+            compose.runOnIdle { assertEquals(2, read.reads.get()); assertEquals(1, read.bodyReads.get()) }
+        } finally {
+            read.lease.close()
+            (context.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager).clearPrimaryClip()
+        }
+    }
 
     @OptIn(ExperimentalLayoutApi::class)
     @Test fun narrowLargeFontWithImeAddsNoRowForUnchangedContextAndOnlyOneForExternalUpdate() {

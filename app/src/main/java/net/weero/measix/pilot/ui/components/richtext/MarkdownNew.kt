@@ -256,8 +256,8 @@ private fun HtmlBlockElement(
             val alt = element.attr("alt")
             if (src.isNotEmpty()) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    ZoomableAsyncImage(
-                        model = rememberResolvedImageSource(src),
+                    ResolvedImage(
+                        url = src,
                         contentDescription = alt.takeIf { it.isNotEmpty() },
                         modifier = Modifier
                             .clip(RoundedCornerShape(8.dp))
@@ -761,8 +761,8 @@ private fun HtmlInlineAsComposable(node: Node, onClickCitation: (String) -> Unit
                     val src = node.attr("src")
                     val alt = node.attr("alt")
                     if (src.isNotEmpty()) {
-                        ZoomableAsyncImage(
-                            model = rememberResolvedImageSource(src),
+                        ResolvedImage(
+                            url = src,
                             contentDescription = alt.takeIf { it.isNotEmpty() },
                             modifier = Modifier
                                 .clip(RoundedCornerShape(8.dp))

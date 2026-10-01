@@ -98,12 +98,32 @@ internal fun resolveViewerImages(album: List<ImageSource>, model: ImageSource?):
 val LocalImageSourceResolver = androidx.compose.runtime.compositionLocalOf<(suspend (String) -> ImageSource?)?> { null }
 
 @Composable
+internal fun ResolvedImage(
+    url: String?,
+    contentDescription: String?,
+    modifier: Modifier = Modifier,
+    contentScale: ContentScale = ContentScale.Fit,
+) {
+    val preview = url?.let(net.weero.measix.pilot.ui.components.message.LocalAttachmentPreview.current)
+    if (preview?.diagnostic != null) {
+        net.weero.measix.pilot.ui.components.message.AttachmentPreviewDiagnostic(preview)
+    } else {
+        ZoomableAsyncImage(
+            model = rememberResolvedImageSource(url),
+            contentDescription = contentDescription,
+            modifier = modifier,
+            contentScale = contentScale,
+        )
+    }
+}
+
+@Composable
 internal fun rememberResolvedImageSource(url: String?): ImageSource? {
     val preview = net.weero.measix.pilot.ui.components.message.LocalAttachmentPreview.current
     val resolver = LocalImageSourceResolver.current
     val files: net.weero.measix.pilot.service.FileManagementApplicationService = org.koin.compose.koinInject()
-    val projected = url?.let(preview)?.image
-    if (projected != null) return projected
+    val projected = url?.let(preview)
+    if (projected != null) return projected.image
     return androidx.compose.runtime.key(url, resolver) {
         val image by androidx.compose.runtime.produceState<ImageSource?>(null, url, resolver, files) {
             value = try {

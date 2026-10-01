@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.size
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -16,6 +17,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.toPixelMap
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.test.captureToImage
+import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.doubleClick
 import androidx.compose.ui.test.isDialog
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
@@ -39,6 +41,8 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import java.io.File
 import net.weero.measix.pilot.R
+import net.weero.measix.pilot.ui.adaptive.LocalAdaptiveLayoutInfo
+import net.weero.measix.pilot.ui.adaptive.rememberAdaptiveLayoutInfo
 
 @RunWith(AndroidJUnit4::class)
 @SdkSuppress(minSdkVersion = 30)
@@ -104,18 +108,25 @@ class ImagePreviewDialogTest {
         for (cancel in listOf(false, true)) {
             val name = "viewer-rejected-${java.util.UUID.randomUUID()}.png"
             var sawPending = false
+            val failure = IllegalStateException("original image access ended", java.io.IOException("publication authority rejected"))
             val result = runCatching {
                 context.exportImageBytes(context, byteArrayOf(1, 2, 3), "image/png", name) {
                     queryExport(name, "is_pending").use {
                         sawPending = it.moveToFirst() && it.getInt(0) == 1
                     }
                     if (cancel) throw kotlinx.coroutines.CancellationException("cancel export")
-                    error("original image access ended")
+                    throw failure
                 }
             }
             assertTrue(sawPending)
             if (cancel) assertTrue(result.exceptionOrNull() is kotlinx.coroutines.CancellationException)
-            else assertEquals(net.weero.measix.pilot.utils.ImageExportResult.Failed, result.getOrThrow())
+            else {
+                val reported = requireNotNull(result.exceptionOrNull())
+                assertEquals(failure.javaClass, reported.javaClass)
+                assertEquals(failure.message, reported.message)
+                assertEquals(failure.cause?.javaClass, reported.cause?.javaClass)
+                assertEquals(failure.cause?.message, reported.cause?.message)
+            }
             queryExport(name, "_id").use {
                 assertFalse(it.moveToFirst())
             }
@@ -126,6 +137,53 @@ class ImagePreviewDialogTest {
     fun viewerFromThumbnailFillsWindow() {
         openViewer()
         assertFullWindow()
+    }
+
+    @Test fun saveReadFailureKeepsCopyableCauseAndTheOriginalPreviewLeaseWithoutRetrying() {
+        val bytes = android.util.Base64.decode("R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==", android.util.Base64.DEFAULT)
+        val lease = net.weero.measix.pilot.service.ConversationViewLease(kotlin.uuid.Uuid.random(),
+            net.weero.measix.pilot.data.enterprise.RealmAccess.Personal, 0L) {}
+        val fail = java.util.concurrent.atomic.AtomicBoolean(false)
+        val successfulReads = java.util.concurrent.atomic.AtomicInteger()
+        val failedReads = java.util.concurrent.atomic.AtomicInteger()
+        val failure = java.io.IOException("save payload failed token=private-token",
+            IllegalStateException("original image payload unavailable"))
+        val source = net.weero.measix.pilot.service.ImageSource("save-read-failure", net.weero.measix.pilot.service.ImageOrigin.INLINE,
+            verifyAccess = { lease.requireOpen() }, readPayload = {
+                lease.requireOpen()
+                if (fail.get()) { failedReads.incrementAndGet(); throw failure }
+                successfulReads.incrementAndGet()
+                bytes
+            })
+        val clipboard = compose.activity.getSystemService(android.content.ClipboardManager::class.java)
+        compose.setContent { MaterialTheme {
+            CompositionLocalProvider(LocalAdaptiveLayoutInfo provides rememberAdaptiveLayoutInfo()) {
+                if (visible) ImagePreviewDialog(listOf(source), { visible = false })
+            }
+        } }
+        try {
+            compose.waitUntil(5_000) { successfulReads.get() > 0 }
+            compose.runOnIdle { fail.set(true) }
+            val saveDescription = compose.activity.getString(R.string.image_viewer_save_content_description)
+            compose.onNodeWithContentDescription(saveDescription).performClick()
+            val diagnostic = "IOException: save payload failed token=<redacted>\n" +
+                "Caused by: IllegalStateException: original image payload unavailable"
+            compose.waitUntil(5_000) {
+                compose.onAllNodes(androidx.compose.ui.test.hasText(diagnostic)).fetchSemanticsNodes().isNotEmpty()
+            }
+            compose.onNodeWithText(diagnostic).assertIsDisplayed()
+            compose.onNodeWithText("private-token", substring = true).assertDoesNotExist()
+            compose.onNodeWithText(compose.activity.getString(R.string.application_recovery_retry)).assertDoesNotExist()
+            compose.onNodeWithContentDescription(compose.activity.getString(R.string.chat_page_copy_error)).performClick()
+            compose.waitUntil(5_000) { clipboard.primaryClip?.getItemAt(0)?.text?.toString() == diagnostic }
+            compose.runOnIdle { assertTrue(visible); assertFalse(lease.closed.value); assertEquals(1, failedReads.get()) }
+            compose.onNodeWithContentDescription(compose.activity.getString(R.string.update_card_close)).performClick()
+            compose.onNodeWithContentDescription(saveDescription).assertIsDisplayed()
+            compose.runOnIdle { assertTrue(visible); assertFalse(lease.closed.value); assertEquals(1, failedReads.get()) }
+        } finally {
+            lease.close()
+            clipboard.clearPrimaryClip()
+        }
     }
 
     @Test fun imageInformationFailureKeepsDiagnosticAndCanBeRetried() {

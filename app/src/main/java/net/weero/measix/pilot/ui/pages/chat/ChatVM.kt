@@ -1,10 +1,13 @@
 package net.weero.measix.pilot.ui.pages.chat
 
+import net.weero.measix.pilot.utils.logDiagnosticFailure
+
 import me.rerere.common.configuration.ConfigurationReference
 import android.app.Application
 import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -35,7 +38,6 @@ import me.rerere.ai.ui.UIMessagePart
 import me.rerere.ai.ui.isEmptyInputMessage
 import net.weero.measix.pilot.R
 import net.weero.measix.pilot.data.datastore.Settings
-import net.weero.measix.pilot.data.datastore.SettingsLockedException
 import net.weero.measix.pilot.data.datastore.SettingsStore
 import net.weero.measix.pilot.data.model.Assistant
 import net.weero.measix.pilot.data.model.Avatar
@@ -110,6 +112,7 @@ class ChatVM internal constructor(
     private var initializationJob: Job? = null
     private var initializationAttempt = 0L
     private val readRevision = MutableStateFlow(0L)
+    internal val readRetryRevision = readRevision.asStateFlow()
 
     private fun <T> fromPage(empty: T, source: (PageState.Open) -> Flow<T>): Flow<T> =
         page.flatMapLatest { state -> if (state is PageState.Open) source(state) else flowOf(empty) }
@@ -131,7 +134,7 @@ class ChatVM internal constructor(
                 }.onStart { emit(ConversationReadState.Loading) }
                     .catch { error ->
                         if (error is CancellationException) throw error
-                        android.util.Log.e("ChatVM", "Conversation projection failed for ${request.id}", error)
+                        logDiagnosticFailure("ChatVM", "Conversation projection failed for ${request.id}", error)
                         emit(ConversationReadState.Failed(error))
                     }
             }
@@ -143,13 +146,14 @@ class ChatVM internal constructor(
         .stateIn(viewModelScope, SharingStarted.Eagerly, null)
 
     val favoriteNodeIds: StateFlow<Set<Uuid>> = fromPage(emptySet()) { state ->
-        conversationQueryService.observeForView(state.lease, emptySet()) {
-            favoriteService.observeNodeIds(state.lease.commandTarget)
-        }.catch { error ->
-            if (error is CancellationException) throw error
-            android.util.Log.e("ChatVM", "Favorite directory unavailable", error)
-            chatErrorStore.add(ChatError(detail = error.userVisibleDiagnostic(), conversationId = _conversationId))
-            emit(emptySet())
+        readRevision.flatMapLatest {
+            conversationQueryService.observeForView(state.lease, emptySet()) {
+                favoriteService.observeNodeIds(state.lease.commandTarget)
+            }.catch { error ->
+                if (error is CancellationException) throw error
+                reportCommandError(state, error, solution = net.weero.measix.pilot.service.ChatErrorSolution.RetryConversationReads)
+                emit(emptySet())
+            }
         }
     }.stateIn(viewModelScope, SharingStarted.Eagerly, emptySet())
 
@@ -174,21 +178,34 @@ class ChatVM internal constructor(
             initialInputConsumed = true
             return@withLock
         }
-        val decoded = text?.base64Decode()
-        val imported = current.imports.importUrisOrThrow(files)
-        check(requirePage() === current) { "conversation_view_unavailable" }
-        if (files.isNotEmpty()) {
-            inputState.messageContent = imported.mapNotNull { artifact ->
-                when {
-                    artifact.mimeType.startsWith("image/") -> UIMessagePart.Image(url = artifact.uri.toString())
-                    artifact.mimeType.startsWith("video/") -> UIMessagePart.Video(url = artifact.uri.toString())
-                    artifact.mimeType.startsWith("audio/") -> UIMessagePart.Audio(url = artifact.uri.toString())
-                    else -> null
+        try {
+            val decoded = text?.base64Decode()
+            if (!decoded.isNullOrEmpty() && inputState.textContent.text.isEmpty()) {
+                inputState.setMessageText(decoded)
+            }
+            // This one-time share is attempted once; read retries must not replay an interrupted import.
+            initialInputConsumed = true
+            val imported = current.imports.importUrisOrThrow(files)
+            check(requirePage() === current) { "conversation_view_unavailable" }
+            if (imported.isNotEmpty()) {
+                inputState.messageContent = inputState.messageContent + imported.map { artifact ->
+                    when {
+                        artifact.mimeType.startsWith("image/") -> UIMessagePart.Image(url = artifact.uri.toString())
+                        artifact.mimeType.startsWith("video/") -> UIMessagePart.Video(url = artifact.uri.toString())
+                        artifact.mimeType.startsWith("audio/") -> UIMessagePart.Audio(url = artifact.uri.toString())
+                        else -> UIMessagePart.Document(
+                            url = artifact.uri.toString(), fileName = artifact.displayName, mime = artifact.mimeType,
+                        )
+                    }
                 }
             }
+        } catch (cancelled: CancellationException) { throw cancelled }
+        catch (error: Exception) {
+            // Shared input is consumed once; a read retry must not silently repeat imports.
+            if (page.value === current) initialInputConsumed = true
+            reportCommandError(current, error)
+            throw error
         }
-        if (!decoded.isNullOrEmpty()) inputState.setMessageText(decoded)
-        initialInputConsumed = true
     }
 
     val turnPresentation: StateFlow<ConversationPresentation> = conversationState
@@ -260,7 +277,7 @@ class ChatVM internal constructor(
                 } catch (_: net.weero.measix.pilot.service.runtime.ConversationNotFoundException) {
                     publish(PageState.Missing)
                 } catch (error: Exception) {
-                    android.util.Log.e("ChatVM", "Conversation page initialization failed for ${request.id} with ${request.access}", error)
+                    logDiagnosticFailure("ChatVM", "Conversation page initialization failed for ${request.id} with ${request.access}", error)
                     publish(PageState.Failed(error))
                 } finally {
                     opened?.close()
@@ -283,20 +300,23 @@ class ChatVM internal constructor(
         initialInputConsumed = false
     }
 
-    private suspend fun reportRecentConversationFailure(state: PageState.Open, error: Exception) {
+    private suspend fun mayReportFailure(state: PageState.Open?, error: Throwable): Boolean {
+        if (state == null || page.value !== state) return false
         try {
             conversationQueryService.requireViewAccess(state.lease)
-        } catch (cancelled: CancellationException) {
-            throw cancelled
-        } catch (_: net.weero.measix.pilot.data.enterprise.EnterpriseConfigurationException) {
-            return
-        } catch (validation: Exception) {
-            if (validation is IllegalStateException &&
-                validation.message in setOf("conversation_view_closed", "conversation_view_revoked")) return
+        } catch (cancelled: CancellationException) { throw cancelled }
+        catch (_: net.weero.measix.pilot.data.enterprise.EnterpriseConfigurationException) { return false }
+        catch (validation: Exception) {
+            if (validation is IllegalStateException && validation.message in
+                setOf("conversation_view_closed", "conversation_view_revoked")) return false
             if (validation !== error) error.addSuppressed(validation)
         }
-        if (page.value !== state) return
-        android.util.Log.e("ChatVM", "Recent conversation preference write failed for ${request.id}", error)
+        return page.value === state
+    }
+
+    private suspend fun reportRecentConversationFailure(state: PageState.Open, error: Exception) {
+        if (!mayReportFailure(state, error)) return
+        logDiagnosticFailure("ChatVM", "Recent conversation preference write failed for ${request.id}", error)
         chatErrorStore.add(ChatError(
             detail = context.getString(R.string.chat_recent_conversation_save_failed, error.userVisibleDiagnostic()),
             conversationId = _conversationId,
@@ -309,7 +329,14 @@ class ChatVM internal constructor(
 
     // 错误状态
     val errors: StateFlow<List<ChatError>> = fromPage(emptyList()) { state ->
-        conversationQueryService.observeForView(state.lease, emptyList()) { chatErrorStore.errorsFor(_conversationId) }
+        conversationQueryService.observeForView(state.lease, emptyList()) {
+            combine(chatErrorStore.errorsFor(_conversationId), conversationState) { current, read ->
+                // Only Ready identifies the selected tree; temporary read states cannot retire errors.
+                val ready = read as? ConversationReadState.Ready ?: return@combine current
+                val selectedMessages = ready.snapshot.currentMessages().mapTo(mutableSetOf()) { it.id }
+                current.filter { it.sourceMessageId == null || it.sourceMessageId in selectedMessages }
+            }
+        }
     }.stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
 
     fun dismissError(id: Uuid) = chatErrorStore.dismiss(id)
@@ -325,6 +352,7 @@ class ChatVM internal constructor(
             status = status,
             reason = message.terminalReason,
             detail = message.terminalDetail,
+            modelId = message.modelId,
         )?.let(chatErrorStore::add)
     }
 
@@ -336,6 +364,7 @@ class ChatVM internal constructor(
         }.filterNotNull()
 
     fun updateSettings(transform: (Settings) -> Settings): Job {
+        val original = page.value as? PageState.Open
         return viewModelScope.launch {
             try {
                 var previousAvatar: Avatar? = null
@@ -347,9 +376,8 @@ class ChatVM internal constructor(
                 previousAvatar?.let { oldAvatar ->
                     if (oldAvatar != committed.displaySetting.userAvatar) artifactUseCase.maintainStorage()
                 }
-            } catch (error: SettingsLockedException) {
-                reportLockedSettingsChange(error)
-            }
+            } catch (cancelled: CancellationException) { throw cancelled }
+            catch (error: Exception) { reportCommandError(original, error) }
         }
     }
 
@@ -438,14 +466,6 @@ class ChatVM internal constructor(
     internal fun importsFor(target: ConversationAssistantTarget): ArtifactDraftScope? =
         (page.value as? PageState.Open)?.takeIf { it.lease.commandTarget === target.conversation }?.imports
 
-    private fun reportLockedSettingsChange(error: SettingsLockedException) {
-        chatErrorStore.add(
-            error = error,
-            conversationId = _conversationId,
-            title = context.getString(R.string.error_title_operation),
-        )
-    }
-
     // Update checker — 共享 UpdateChecker 的缓存 StateFlow，App 生命周期内只请求一次
     val updateState = updateChecker.updateState
 
@@ -456,6 +476,16 @@ class ChatVM internal constructor(
      * @return 已持久提交的消息身份；提交前失败或页面已变化返回 null。
      */
     internal suspend fun handleMessageSend(target: ConversationAssistantTarget, answer: Boolean = true): net.weero.measix.pilot.service.SendMessageReceipt? {
+        return submitInput(target) { opened, submission ->
+            turnService.sendMessage(opened.lease.commandTarget, submission.contents, answer, opened.imports)
+        }
+    }
+
+    private suspend fun <T : Any> submitInput(
+        target: ConversationAssistantTarget,
+        submit: suspend (PageState.Open, ChatInputState.Submission) -> T?,
+    ): T? {
+        val original = page.value as? PageState.Open
         if (inputSubmissionPending) return null
         inputSubmissionPending = true
         try {
@@ -464,50 +494,56 @@ class ChatVM internal constructor(
                     it.lease.commandTarget === target.conversation && snapshot.value?.header?.assistantId == target.assistantId
                 } ?: return@withLock null
                 val submission = inputState.captureSubmission()
-                val receipt = turnService.sendMessage(opened.lease.commandTarget, submission.contents, answer, opened.imports)
+                val result = submit(opened, submission)
                     ?: return@withLock null
                 if (page.value !== opened) return@withLock null
                 inputState.completeSubmission(submission)
-                receipt
+                result
             }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Exception) {
+            reportCommandError(original, error)
+            return null
         } finally {
             inputSubmissionPending = false
         }
     }
 
-    fun handleMessageEdit(parts: List<UIMessagePart>, messageId: Uuid) {
-        if (parts.isEmptyInputMessage()) return
-        launchPageCommand { opened ->
-            conversationApplicationService.editMessage(opened.lease.commandTarget, messageId, parts, opened.imports)
-        }
-    }
+    internal suspend fun handleMessageEdit(target: ConversationAssistantTarget): Boolean =
+        submitInput(target) { opened, submission ->
+            val messageId = submission.editingMessage ?: return@submitInput null
+            if (submission.contents.isEmptyInputMessage()) return@submitInput null
+            conversationApplicationService.editMessage(opened.lease.commandTarget, messageId, submission.contents, opened.imports)
+            true
+        } == true
 
-    /** 编辑 USER 后发送：截断到该消息并启动新的 START；receipt 身份是新的 USER variant。 */
-    suspend fun handleMessageEditAndSend(parts: List<UIMessagePart>, messageId: Uuid) =
-        requirePage().let { turnService.editAndResend(it.lease.commandTarget, messageId, parts, it.imports) }
+    /** Editing USER input is released only after its replacement variant has committed. */
+    internal suspend fun handleMessageEditAndSend(target: ConversationAssistantTarget): net.weero.measix.pilot.service.SendMessageReceipt? =
+        submitInput(target) { opened, submission ->
+            val messageId = submission.editingMessage ?: return@submitInput null
+            turnService.editAndResend(opened.lease.commandTarget, messageId, submission.contents, opened.imports)
+        }
 
     fun handleCompressContext(additionalPrompt: String, targetTokens: Int, keepRecentMessages: Int): Job {
-        val target = requirePage().lease.commandTarget
+        val original = requirePage()
+        val target = original.lease.commandTarget
         return launchCommand(target) {
             conversationApplicationService.compress(
                 target,
                 additionalPrompt,
                 targetTokens,
                 keepRecentMessages
-            ).onFailure {
-                chatErrorStore.add(
-                    error = it,
-                    conversationId = target.conversationId,
-                    title = context.getString(R.string.error_title_compress_conversation),
-                )
-            }
+            ).onFailure { reportCommandError(original, it, title = context.getString(R.string.error_title_compress_conversation)) }
         }
     }
 
-    suspend fun forkMessage(message: UIMessage): Uuid? = try {
-        conversationApplicationService.forkAtMessage(requirePage().lease.commandTarget, message.id)
-    } catch (cancelled: CancellationException) { throw cancelled }
-    catch (error: Exception) { reportCommandError(_conversationId, error); null }
+    suspend fun forkMessage(message: UIMessage): Uuid? {
+        val original = page.value as? PageState.Open ?: return null
+        return try { conversationApplicationService.forkAtMessage(original.lease.commandTarget, message.id) }
+        catch (cancelled: CancellationException) { throw cancelled }
+        catch (error: Exception) { reportCommandError(original, error); null }
+    }
 
     fun deleteMessage(message: UIMessage) {
         launchPageCommand { opened -> conversationApplicationService.deleteMessage(opened.lease.commandTarget, message) }
@@ -529,18 +565,20 @@ class ChatVM internal constructor(
     }
 
     fun toolDecisionHandler(): (suspend (ToolCallLocator, ToolInteractionDecision) -> Boolean)? {
-        val target = (page.value as? PageState.Open)?.lease?.commandTarget ?: return null
+        val original = page.value as? PageState.Open ?: return null
+        val target = original.lease.commandTarget
         return { locator, decision ->
             try {
                 turnService.submitToolDecision(target, locator, decision)
                 true
             } catch (cancelled: CancellationException) { throw cancelled }
-            catch (error: Exception) { reportCommandError(target.conversationId, error); false }
+            catch (error: Exception) { reportCommandError(original, error); false }
         }
     }
 
     fun subAssistantAnswerHandler(): (suspend (String, String, String) -> Boolean)? {
-        val target = (page.value as? PageState.Open)?.lease?.commandTarget ?: return null
+        val original = page.value as? PageState.Open ?: return null
+        val target = original.lease.commandTarget
         return { runId, interactionId, answer ->
             try {
                 check(conversationApplicationService.answerSubAssistant(target, runId, interactionId, answer)) {
@@ -548,14 +586,17 @@ class ChatVM internal constructor(
                 }
                 true
             } catch (cancelled: CancellationException) { throw cancelled }
-            catch (error: Exception) { reportCommandError(target.conversationId, error); false }
+            catch (error: Exception) { reportCommandError(original, error); false }
         }
     }
 
-    private fun launchCommand(target: ConversationCommandTarget, action: suspend () -> Unit): Job = viewModelScope.launch {
-        try { action() }
-        catch (cancelled: CancellationException) { throw cancelled }
-        catch (error: Exception) { reportCommandError(target.conversationId, error) }
+    private fun launchCommand(target: ConversationCommandTarget, action: suspend () -> Unit): Job {
+        val original = (page.value as? PageState.Open)?.takeIf { it.lease.commandTarget.selection == target.selection }
+        return viewModelScope.launch {
+            try { action() }
+            catch (cancelled: CancellationException) { throw cancelled }
+            catch (error: Exception) { reportCommandError(original, error) }
+        }
     }
 
     private fun launchPageCommand(action: suspend (PageState.Open) -> Unit) {
@@ -563,8 +604,26 @@ class ChatVM internal constructor(
         launchCommand(opened.lease.commandTarget) { action(opened) }
     }
 
-    private fun reportCommandError(id: Uuid, error: Exception) {
-        chatErrorStore.add(error = error, conversationId = id, title = context.getString(R.string.error_title_operation))
+    private suspend fun reportCommandError(
+        original: PageState.Open?, error: Throwable,
+        title: String = context.getString(R.string.error_title_operation),
+        solution: net.weero.measix.pilot.service.ChatErrorSolution? = null,
+    ) {
+        if (!mayReportFailure(original, error)) {
+            logDiagnosticFailure("ChatVM", "Operation ended after its originating page closed", error)
+            return
+        }
+        chatErrorStore.add(error = error, conversationId = _conversationId, title = title, solution = solution,
+            retention = if (solution == null) net.weero.measix.pilot.service.ChatErrorRetention.TRANSIENT
+                else net.weero.measix.pilot.service.ChatErrorRetention.UNTIL_DISMISSED)
+    }
+
+    internal suspend fun reportReadFailure(target: ConversationAssistantTarget, diagnostic: String) {
+        val original = (page.value as? PageState.Open)?.takeIf { it.lease.commandTarget === target.conversation } ?: return
+        if (!mayReportFailure(original, IllegalStateException(diagnostic))) return
+        chatErrorStore.add(ChatError(detail = diagnostic, conversationId = _conversationId,
+            solution = net.weero.measix.pilot.service.ChatErrorSolution.RetryConversationReads,
+            retention = net.weero.measix.pilot.service.ChatErrorRetention.UNTIL_DISMISSED))
     }
 
     fun stopGeneration() {
@@ -575,11 +634,12 @@ class ChatVM internal constructor(
         launchPageCommand { opened -> conversationApplicationService.updateTitle(opened.lease.commandTarget, title) }
     }
 
-    suspend fun deleteConversation(conversation: ConversationSummary): Boolean = try {
-        conversationApplicationService.delete(conversation.commandTarget)
-        true
-    } catch (cancelled: CancellationException) { throw cancelled }
-    catch (error: Exception) { reportCommandError(conversation.id, error); false }
+    suspend fun deleteConversation(conversation: ConversationSummary): Boolean {
+        val original = (page.value as? PageState.Open)?.takeIf { it.lease.commandTarget.selection == conversation.commandTarget.selection }
+        return try { conversationApplicationService.delete(conversation.commandTarget); true }
+        catch (cancelled: CancellationException) { throw cancelled }
+        catch (error: Exception) { reportCommandError(original, error); false }
+    }
 
     fun updatePinnedStatus(conversation: ConversationSummary) {
         val target = conversation.commandTarget

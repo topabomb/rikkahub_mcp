@@ -143,4 +143,26 @@ internal class ConversationTransitionTest : ConversationTransitionTestBase() {
         assertSame(n0, r.nodes[0])
         assertSame(n1, r.nodes[1])
     }
+
+    @Test
+    fun `edit and resend commits the new selected variant and trailing node removal in one mutation`() {
+        val retained = MessageNode.of(user(Uuid.random()))
+        val edited = MessageNode.of(user(Uuid.random()))
+        val removed = MessageNode.of(assistant(Uuid.random()))
+        val original = Conversation.ofId(Uuid.random()).copy(messageNodes = listOf(retained, edited, removed)).toSnapshot()
+        val replacement = user(Uuid.random())
+        val command = EditMessageVariant(edited.id, replacement, truncateAfterNode = true)
+
+        val change = ConversationTransition.plan(original, command, original.header.updateAt) as ConversationChange.Durable
+        val mutation = (change.write as ConversationWrite.Mutate).mutation
+
+        assertEquals(listOf(retained.id, edited.id), change.snapshot.nodes.map { it.id })
+        assertSame(retained, change.snapshot.nodes.first())
+        assertEquals(listOf(edited.currentMessage, replacement), change.snapshot.nodes.last().messages)
+        assertEquals(replacement, change.snapshot.nodes.last().currentMessage)
+        assertEquals(listOf(edited.id), mutation.upsertedNodes.map { it.id })
+        assertEquals(listOf(removed.id), mutation.deletedNodeIds)
+        assertSame(change.snapshot, ConversationTransition.apply(change.snapshot, command))
+        assertEquals(3, original.nodes.size)
+    }
 }

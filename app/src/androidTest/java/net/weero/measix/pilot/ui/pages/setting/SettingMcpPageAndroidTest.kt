@@ -42,6 +42,53 @@ class SettingMcpPageAndroidTest {
     @get:Rule val compose = createAndroidComposeRule<ComponentActivity>()
 
     @Test
+    fun failedCatalogShowsFullDiagnosisAndRetriesOnlyTheOriginalRead() {
+        val authority = EnterpriseAuthority("deployment")
+        val access = RealmAccess.Enterprise(ConfigurationScope.Enterprise(authority, "user"), "original")
+        val selection = RealmSelection(access, 1)
+        val failure = java.io.IOException("catalog unavailable token=private-token", IllegalStateException("original cause"))
+        val state = MutableStateFlow<McpCatalogUiModel?>(McpCatalogUiModel(selection, McpCatalogReadState.Failed(failure)))
+        val query = mockk<McpQueryService>()
+        every { query.userServers } returns MutableStateFlow(emptyList())
+        every { query.catalog } returns state
+        val recovered = McpServerPresentation(ConfigurationReference.Enterprise(authority, "mcp_profile"), "Recovered enterprise tools", true,
+            null, access, requiredEnabled = true, status = McpStatus.Idle, sessionCallable = false, tools = emptyList())
+        var attempts = 0
+        coEvery { query.retryCatalog(selection) } coAnswers {
+            attempts++
+            if (attempts == 1) throw java.io.IOException("retry original detail", IllegalStateException("retry cause"))
+            if (attempts == 2) {
+                state.value = McpCatalogUiModel(selection, McpCatalogReadState.Failed(java.io.IOException("new read failure")))
+                return@coAnswers Unit
+            }
+            state.value = McpCatalogUiModel(selection, McpCatalogReadState.Available(listOf(recovered)))
+        }
+        val commands = mockk<McpApplicationService>()
+        compose.setContent {
+            McpTestTheme {
+                CompositionLocalProvider(
+                    LocalToaster provides rememberToasterState(),
+                    LocalNavController provides Navigator(mutableListOf<NavKey>(Screen.Startup())),
+                ) { SettingMcpPage(commands, query, mockk<ConfigurationApplicationService>()) }
+            }
+        }
+        compose.onNodeWithText("original cause", substring = true).assertIsDisplayed()
+        compose.onNodeWithText("private-token", substring = true).assertDoesNotExist()
+        val retry = compose.activity.getString(R.string.application_recovery_retry)
+        compose.onNodeWithText(retry).performClick()
+        compose.onNodeWithText("retry original detail", substring = true).assertIsDisplayed()
+        compose.onNodeWithText("retry cause", substring = true).assertIsDisplayed()
+        compose.onNodeWithText(retry).performClick()
+        compose.onNodeWithText("new read failure", substring = true).assertIsDisplayed()
+        compose.onNodeWithText("retry original detail", substring = true).assertDoesNotExist()
+        compose.onNodeWithText(retry).performClick()
+        compose.onNodeWithText("Recovered enterprise tools").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("retry original detail", substring = true).assertDoesNotExist()
+        coVerify(exactly = 3) { query.retryCatalog(selection) }
+        coVerify(exactly = 0) { commands.refreshAll() }
+    }
+
+    @Test
     fun managedToolsStayReadOnlyAndGatewayUsesTheRenderedSelectionBeforeLeavingTheRealm() {
         val authority = EnterpriseAuthority("deployment")
         val access = RealmAccess.Enterprise(ConfigurationScope.Enterprise(authority, "user"), "original")

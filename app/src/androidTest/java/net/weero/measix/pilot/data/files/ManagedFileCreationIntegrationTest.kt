@@ -215,7 +215,8 @@ class ManagedFileCreationIntegrationTest {
         val queries = io.mockk.mockk<ConversationQueryService>()
         compose.setContent {
             val current = document.value
-            val state = net.weero.measix.pilot.ui.components.webview.rememberRenderedContentState(current, files, queries)
+            val read = net.weero.measix.pilot.ui.components.webview.rememberRenderedContentState(current, files, queries)
+            val state = (read as? net.weero.measix.pilot.ui.components.webview.RenderedContentReadState.Ready)?.webView
             androidx.compose.runtime.SideEffect { states += current.source to (state != null) }
             if (state != null) androidx.compose.runtime.key(state) {
                 net.weero.measix.pilot.ui.components.webview.WebView(state)

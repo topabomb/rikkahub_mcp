@@ -1,13 +1,17 @@
 package net.weero.measix.pilot.service
 
+import net.weero.measix.pilot.utils.logDiagnosticFailure
+
 import me.rerere.common.configuration.ConfigurationReference
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.update
 import kotlinx.serialization.json.JsonObject
 import net.weero.measix.pilot.AppScope
 import net.weero.measix.pilot.data.ai.mcp.McpRuntimeCoordinator
@@ -19,6 +23,7 @@ import net.weero.measix.pilot.data.ai.mcp.toolPolicyByName
 import net.weero.measix.pilot.data.datastore.SettingsStore
 
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flow
@@ -63,6 +68,7 @@ internal data class McpServerPresentation(
 internal sealed interface McpCatalogReadState {
     data class Available(val servers: List<McpServerPresentation>) : McpCatalogReadState
     data object Unavailable : McpCatalogReadState
+    data class Failed(val error: Throwable) : McpCatalogReadState
 }
 
 internal data class McpCatalogUiModel(val selection: RealmSelection, val content: McpCatalogReadState) {
@@ -85,9 +91,11 @@ internal class McpQueryService(
         })
     }.stateIn(scope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
+    private val catalogReadRevision = MutableStateFlow(0L)
+
     val catalog: StateFlow<McpCatalogUiModel?> = flow {
         configurationQueries.requireAccess(RealmAccess.Personal)
-        emitAll(sessions.observeSelectedRealmSelection().flatMapLatest { selection ->
+        emitAll(combine(sessions.observeSelectedRealmSelection(), catalogReadRevision) { selection, _ -> selection }.flatMapLatest { selection ->
             if (selection == null) flowOf(null)
             else flow<McpCatalogUiModel?> {
                 emit(null)
@@ -102,6 +110,11 @@ internal class McpQueryService(
         })
     }.stateIn(scope, SharingStarted.WhileSubscribed(stopTimeoutMillis = 0, replayExpirationMillis = 0), null)
 
+    /** Restart only this query; a stale settings page cannot retry under a replacement selection. */
+    suspend fun retryCatalog(selection: RealmSelection) {
+        sessions.withSelectedRealmSelection(selection) { catalogReadRevision.update { it + 1 } }
+    }
+
     fun observe(access: RealmAccess): Flow<McpCatalogReadState> = combine(
         configurationQueries.observe(access.scope), coordinator.runtimeCapabilities, coordinator.catalogs, sessions.state,
     ) { _, _, _, _ -> Unit }.map {
@@ -110,9 +123,16 @@ internal class McpQueryService(
             McpCatalogReadState.Available(snapshot.mcpPresentations(access, coordinator.readCatalogCapabilities(access, snapshot)))
         } catch (error: Exception) {
             if (error is CancellationException) throw error
-            McpCatalogReadState.Unavailable
+            mcpReadFailure(error)
         }
-    }.distinctUntilChanged()
+    }.catch { emit(mcpReadFailure(it)) }.distinctUntilChanged()
+
+    private fun mcpReadFailure(error: Throwable): McpCatalogReadState {
+        if (error is CancellationException) throw error
+        if (error is net.weero.measix.pilot.data.enterprise.EnterpriseConfigurationException) return McpCatalogReadState.Unavailable
+        logDiagnosticFailure("McpQueryService", "MCP catalog read failed", error)
+        return McpCatalogReadState.Failed(error)
+    }
 
     fun observeUserServer(serverId: ConfigurationReference): Flow<McpServerPresentation?> = userServers
         .map { rows -> rows.firstOrNull { it.serverId == serverId } }

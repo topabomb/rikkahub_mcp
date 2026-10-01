@@ -33,7 +33,6 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -67,13 +66,13 @@ import me.rerere.hugeicons.stroke.Package
 import me.rerere.hugeicons.stroke.Package01
 import me.rerere.hugeicons.stroke.Settings02
 import me.rerere.hugeicons.stroke.Video01
+import net.weero.measix.pilot.utils.userVisibleDiagnostic
 import net.weero.measix.pilot.R
 import net.weero.measix.pilot.Screen
 import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.datastore.getChatModel
 import net.weero.measix.pilot.data.datastore.findProvider
 import net.weero.measix.pilot.data.model.Assistant
-import net.weero.measix.pilot.service.workspace.WorkspaceQueryService
 import net.weero.measix.pilot.service.McpQueryService
 import net.weero.measix.pilot.service.workspace.WorkspaceUiModel
 import net.weero.measix.pilot.ui.components.ui.ExtensionSelector
@@ -85,11 +84,12 @@ import net.weero.measix.pilot.ui.context.LocalNavController
 import net.weero.measix.pilot.ui.context.LocalSettings
 import net.weero.measix.pilot.ui.hooks.ChatInputState
 import me.rerere.workspace.WorkspaceShellStatus
-import org.koin.compose.koinInject
 import kotlin.uuid.Uuid
 
 @Composable
 internal fun FilesPicker(
+    workspaceState: net.weero.measix.pilot.utils.UiState<List<WorkspaceUiModel>>,
+    onRetryReads: () -> Unit,
     conversationModeInjectionIds: Set<ConfigurationReference>,
     messageNodeCount: Int,
     workspaceCwd: String?,
@@ -118,8 +118,7 @@ internal fun FilesPicker(
 ) {
     val settings = LocalSettings.current
     val navController = LocalNavController.current
-    val workspaceQueryService: WorkspaceQueryService = koinInject()
-    val workspaces by workspaceQueryService.observeWorkspaces().collectAsState(initial = emptyList())
+    val workspaces = (workspaceState as? net.weero.measix.pilot.utils.UiState.Success)?.data.orEmpty()
 
     Column(
         modifier = Modifier
@@ -146,6 +145,13 @@ internal fun FilesPicker(
             modifier = Modifier.fillMaxWidth()
         )
 
+        when (workspaceState) {
+            is net.weero.measix.pilot.utils.UiState.Error -> net.weero.measix.pilot.ui.components.ui.ErrorCard(
+                remember(workspaceState) { net.weero.measix.pilot.service.ChatError(detail = workspaceState.error.userVisibleDiagnostic(),
+                    retention = net.weero.measix.pilot.service.ChatErrorRetention.UNTIL_DISMISSED) }, onRetry = onRetryReads)
+            is net.weero.measix.pilot.utils.UiState.Success -> Unit
+            else -> androidx.compose.material3.LinearProgressIndicator(Modifier.fillMaxWidth())
+        }
         if (workspaces.isNotEmpty()) {
             WorkspacePickerListItem(
                 assistant = assistant,

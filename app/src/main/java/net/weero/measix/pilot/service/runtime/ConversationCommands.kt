@@ -48,8 +48,12 @@ data class AppendUserMessage(
     val initialTitle: String? = null,
 ) : ConversationCommand
 
-/** 编辑某节点的一个消息变体 */
-data class EditMessageVariant(val nodeId: Uuid, val variant: UIMessage) : ConversationCommand
+/** Adds a selected variant; edit/resend removes following nodes in this same transaction. */
+data class EditMessageVariant(
+    val nodeId: Uuid,
+    val variant: UIMessage,
+    val truncateAfterNode: Boolean = false,
+) : ConversationCommand
 
 /** 删除整条消息（按消息 id 定位节点，删除整个节点） */
 data class DeleteMessage(val messageId: Uuid) : ConversationCommand

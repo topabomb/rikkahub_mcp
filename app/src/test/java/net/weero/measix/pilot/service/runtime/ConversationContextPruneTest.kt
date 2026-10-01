@@ -72,6 +72,25 @@ class ConversationContextPruneTest {
         assertEquals(pruned, ConversationContextTransition.prune(pruned))
     }
 
+    @Test fun `edit and resend retires removed request owners but preserves earlier sealed context`() {
+        val original = base()
+        val replacement = UIMessage.user("edited next request")
+        val command = EditMessageVariant(nextUser.id, replacement, truncateAfterNode = true)
+
+        val change = ConversationTransition.plan(original, command, original.header.updateAt) as ConversationChange.Durable
+        val updated = change.snapshot
+        val mutation = (change.write as ConversationWrite.Mutate).mutation
+
+        validate(updated)
+        assertEquals(listOf(user.id, oldOwner.id, nextUser.id), updated.nodes.map { it.id })
+        assertEquals(replacement, updated.nodes.last().currentMessage)
+        assertEquals(listOf(entry), updated.modelContextEntries)
+        assertEquals(listOf(original.contextAdmissions.first()), updated.contextAdmissions)
+        assertEquals(listOf(nextOwner.id), mutation.deletedNodeIds)
+        assertEquals(listOf(original.contextAdmissions.last()), mutation.deletedContextAdmissions)
+        assertEquals(2, original.contextAdmissions.size)
+    }
+
     @Test fun `zero contribution boundary survives and still retains selection body`() {
         val original = base().copy(contextAdmissions = listOf(admission(nextOwner, secondStep, nextUser, withUse = false)))
         val pruned = ConversationContextTransition.prune(original.copy(nodes = listOf(nextUser, nextOwner)))
