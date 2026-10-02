@@ -95,20 +95,20 @@ schema/generation/phase/reason、数量和布尔断言，不含接入凭据或�
 - `join` 必填 `enrollment`；`seedHistory` 默认 true，通过现有命令 owner 创建明确属于本企业主体的一条
   USER/ASSISTANT 两节点历史 fixture，不调用供应商，可显式传 false 禁用。
   `reject` 如带 `enrollment`，表示空应用首次接入失败；不带则检查已有绑定。
-- `reject` 必填 `rejectedSchema`（6 或 3），分别要求 `UPDATE_APP` 或 `UPDATE_PLATFORM`。
-  这两个值是隔离 HTTP 故障注入场景，不是 Core 正式发布的协议版本。
-- `reopen` 必须先 force-stop 再运行，保持服务端发布与基线一致；`recover` 不得清数据或重新接入。
+- `reject` 必填 `rejectedSchema`（6、7 或 3）；6/7 要求 `UPDATE_APP`，3 要求 `UPDATE_PLATFORM`。
+  这些值是隔离 HTTP 故障注入场景，不是 Core 正式发布的协议版本。
+- `reopen` 必须先 force-stop 再运行，保持服务端发布与基线一致；探针先核对本地恢复，不调用同步来掩盖恢复故障，然后验证执行准入。`recover` 不得清数据或重新接入。
 
 ```text
 adb -s <专用设备> shell am instrument -w -r
   -e class net.weero.measix.pilot.data.enterprise.PlatformSnapshotCompatibilityLiveAndroidTest
-  -e snapshotCompatibilityInput /data/user/0/net.weero/measix/pilot.debug/cache/snapshot-compatibility-input.json
+  -e snapshotCompatibilityInput /data/user/0/net.weero.measix.pilot.debug/cache/snapshot-compatibility-input.json
   net.weero.measix.pilot.debug.test/androidx.test.runner.AndroidJUnitRunner
 ```
 
 建议顺序：真实历史 v4 的 `join` → `reopen`；新 Core 正式发布 v5 的 `sync` → `reopen`；
 再正式发布新 generation，通过独立代理仅改 Snapshot 外层版本为 6 并保留新增字段，运行 `reject`；
-切换为版本 3 再运行 `reject`；关闭注入后同 Session `recover`。另外在全新独立测试身份下重复
+切换为版本 7、3 分别运行 `reject`；关闭注入后同 Session `recover`。另外在全新独立测试身份下重复
 `reject`（带 enrollment）→ 重开后的 `reject`（不带 enrollment）→ `recover`，验证首次无 Applied 的企业空间。
 代理必须转发到隔离 Core，并准确记录注入范围，不得把构造的未来版本当作 Core 正式发布证据。
 
@@ -118,6 +118,20 @@ adb -s <专用设备> shell am instrument -w -r
 原 Session。若 join 创建了历史 fixture，还经 Session 授权和会话 owner 核验其主体，再读取完整持久
 节点序列并比较规范序列化 SHA-256；拒绝、重开与恢复均验证其 USER/ASSISTANT 内容及节点身份未变。
 未发起模型供应商调用。
+
+### v4 APK 覆盖安装
+
+`PlatformCoverInstallationLiveAndroidTest.kt` 位于当前 `app/src/androidTest/.../data/enterprise/`。
+将同一源文件复制到上文固定旧 checkout 的对应测试目录；只修正文已列出的旧测试 fixture，旧生产源码保持不变。
+使用新的专用设备先安装旧 Debug APK 及其测试 APK，通过 `v4_join` 接入真实历史 v4 发布。
+以 `-e coverInstallation seed` 执行该类，沿原 owner 保存企业与个人各一条两节点历史、个人主题和禁用的个人 MCP 定义。
+然后 force-stop，使用 `adb install -r` 覆盖安装当前 Debug APK 及当前测试 APK，不清数据、不重新接入；
+以 `-e coverInstallation verify` 执行同一类。先比较本地恢复的 Session、Applied、节点身份/正文和个人设置，
+再显式同步并检查执行准入。旧本地执行描述没有 Snapshot 版本字段，不能伪造版本来跳过完整同步。
+
+保留两份 APK 的 SHA-256、旧源码/子模块提交、生产源文件未修改的审计结果及真实 release/generation/hash。
+私有 `cache/cover-installation-baseline.json` 跨安装保留，外部 `cover-installation-seed.json` 与
+`cover-installation-verify.json` 只输出断言结果。该验证覆盖 Debug 安装升级，不代表生产签名或 OEM 真机验证。
 
 基线保存于私有 `cache/snapshot-compatibility-baseline.json`，跨场景保留；接入凭据不写入基线。
 非敏感结果位于外部 files 的 `snapshot-compatibility-evidence/<scenario>.json`。

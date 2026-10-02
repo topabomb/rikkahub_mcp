@@ -125,8 +125,14 @@ class EnterpriseStarterAppliedStoreTest {
         val originalManifest = File(folder, "manifest.json").readBytes()
         val changed = file.readText().replace("\"format\":1", "\"format\":2").toByteArray()
         file.writeBytes(changed)
-        val error = assertThrows(EnterpriseStorageException::class.java) { enterpriseTestStore(folder).load() }
+        val store = enterpriseTestStore(folder)
+        val loaded = store.load()
+        assertEquals(manifest, loaded.manifest)
+        assertNull(loaded.configuration)
+        val error = requireNotNull(loaded.configurationError)
         assertTrue(error.message.orEmpty().contains("enterprise_revision_hash_mismatch"))
+        assertThrows(EnterpriseStorageException::class.java) { store.execution(manifest) }
+        assertThrows(EnterpriseStorageException::class.java) { store.commit(manifest) }
         assertArrayEquals(originalManifest, File(folder, "manifest.json").readBytes())
         assertArrayEquals(changed, file.readBytes())
     }

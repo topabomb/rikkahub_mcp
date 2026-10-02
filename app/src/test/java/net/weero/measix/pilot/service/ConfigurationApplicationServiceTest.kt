@@ -227,6 +227,32 @@ class ConfigurationApplicationServiceTest {
     }
 
     @Test
+    fun `enterprise history projection survives unavailable configuration without borrowing personal defaults`() = runTest {
+        val env = environment()
+        try {
+            env.initialize()
+            val packet = exampleEnterprisePackage()
+            val assistantId = packet.identity.reference(packet.configuration.assistants.first().id)
+            val message = me.rerere.ai.ui.UIMessage.user("Saved enterprise history")
+            val lease = env.historyView(assistantId, message)
+            val original = env.chatQuery.conversationUiModel(lease).first { it != null }!!
+            assertEquals(listOf(message), original.snapshot.currentMessages())
+            env.corruptConfiguration()
+            val unavailable = env.chatQuery.conversationUiModel(lease).first { it != null }!!
+            assertEquals(original.snapshot, unavailable.snapshot)
+            assertNull(unavailable.configuration!!.assistant)
+            assertNull(unavailable.configuration.model)
+            assertNotNull(unavailable.configuration.assistantUnavailableReason)
+            lease.requireOpen()
+            env.sessions.selectPersonalFixture()
+            val personal = env.queries.observeCurrent().first()
+            assertEquals(ConfigurationScope.Personal, personal.scope)
+            assertEquals(env.model.id, personal.selections.chatModelId)
+            lease.close()
+        } finally { env.scope.cancel() }
+    }
+
+    @Test
     fun `conversation query retains the original snapshot when its assistant is removed and permits a model repair`() = runTest {
         val env = environment()
         try {
@@ -622,7 +648,8 @@ class ConfigurationApplicationServiceTest {
         }
         val settings = SettingsStore(context, scope, dataStore = preferences)
         var now = System.currentTimeMillis()
-        val sessions = EnterpriseSessionController(net.weero.measix.pilot.data.enterprise.enterpriseTestStore(File(root, "enterprise"))) { now }
+        private val enterpriseRoot = File(root, "enterprise")
+        val sessions = EnterpriseSessionController(net.weero.measix.pilot.data.enterprise.enterpriseTestStore(enterpriseRoot)) { now }
         private val gate = ApplicationRecoveryGate()
         lateinit var access: RealmAccess.Enterprise
         lateinit var target: ConversationAssistantTarget
@@ -665,6 +692,21 @@ class ConfigurationApplicationServiceTest {
             val conversation = Conversation.ofId(Uuid.random(), assistant.id).copy(scope = selected.access.scope, newConversation = true)
             registry.installDraft(conversation)
             return ConversationViewLease(conversation.id, selected.access, selected.revision) {}
+        }
+
+        suspend fun historyView(assistantId: ConfigurationReference, message: me.rerere.ai.ui.UIMessage): ConversationViewLease {
+            val selected = requireNotNull(sessions.observeSelectedRealmSelection().first())
+            val conversation = Conversation.ofId(Uuid.random(), assistantId).copy(scope = selected.access.scope)
+                .updateCurrentMessages(listOf(message))
+            coEvery { repository.getConversationSnapshotById(conversation.id) } returns conversation.toSnapshot()
+            registry.loadRuntime(conversation.id)
+            return ConversationViewLease(conversation.id, selected.access, selected.revision) {}
+        }
+
+        suspend fun corruptConfiguration() {
+            val state = sessions.state.value as EnterpriseState.Available
+            File(enterpriseRoot, "revisions/${state.manifest.applied!!.revision}/configuration.json").writeText("broken")
+            assertNull(sessions.platformConfiguration(access).candidate)
         }
 
         suspend fun chatTarget(assistantId: ConfigurationReference = assistant.id, cwd: String? = null): ConversationAssistantTarget {

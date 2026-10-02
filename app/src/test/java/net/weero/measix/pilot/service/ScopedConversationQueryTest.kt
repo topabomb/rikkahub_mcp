@@ -50,6 +50,27 @@ class ScopedConversationQueryTest {
     @get:Rule val temporary = TemporaryFolder()
     private val assistant = ConfigurationReference.random()
 
+    @Test fun `realm history is pinned to selection and cannot follow a switch or reentry`() = runTest {
+        val sessions = sessions()
+        val packet = exampleEnterprisePackage()
+        sessions.enrollFixture(packet)
+        val selection = requireNotNull(sessions.observeSelectedRealmSelection().first())
+        val repository = mockk<ConversationRepository>()
+        every { repository.getRootConversations(packet.identity.scope) } returns flowOf(listOf(row(packet.identity.scope, "saved enterprise")))
+        var latest: Result<List<ConversationSummary>> = Result.success(emptyList())
+        val job = backgroundScope.launch { service(repository, sessions).conversationsInRealm(selection).collect { latest = it } }
+        runCurrent()
+        assertEquals(listOf("saved enterprise"), latest.getOrThrow().map { it.title })
+        sessions.selectPersonalFixture()
+        runCurrent()
+        assertTrue(latest.getOrThrow().isEmpty())
+        sessions.selectEnterpriseFixture()
+        runCurrent()
+        assertTrue(latest.getOrThrow().isEmpty())
+        io.mockk.verify(exactly = 1) { repository.getRootConversations(any()) }
+        job.cancel()
+    }
+
     @Test fun `conversation tools cannot return history when their session expires during the query`() = runTest {
         var now = 1000L
         val sessions = EnterpriseSessionController(net.weero.measix.pilot.data.enterprise.enterpriseTestStore(temporary.newFolder())) { now }

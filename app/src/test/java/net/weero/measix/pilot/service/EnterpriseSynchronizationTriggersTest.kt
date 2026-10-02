@@ -30,6 +30,26 @@ import org.robolectric.annotation.Config
 class EnterpriseSynchronizationTriggersTest {
     @get:Rule val temporary = TemporaryFolder()
 
+    @Test fun `unreadable applied configuration shows a sync diagnostic without disabling the identity or auto syncing`() = runTest {
+        val root = temporary.newFolder()
+        val original = EnterpriseSessionController(enterpriseTestStore(root)).enrollFixture(exampleEnterprisePackage())
+        java.io.File(root, "revisions/${original.manifest.applied!!.revision}/configuration.json").writeText("broken")
+        val sessions = EnterpriseSessionController(enterpriseTestStore(root))
+        sessions.recover()
+        val fixture = Fixture(this, sessions)
+        val service = fixture.create()
+        runCurrent()
+        val overview = service.observe().first()
+        assertNull(overview.failure)
+        assertTrue(overview.canEnterEnterprise)
+        assertEquals(EnterpriseResetPath.CONNECTED, overview.resetPath)
+        assertEquals(EnterpriseSynchronizationIssue.INVALID_CONFIGURATION, overview.synchronization?.failure?.issue)
+        assertTrue(overview.synchronization!!.failure!!.diagnostic.contains("enterprise_revision_hash_mismatch"))
+        assertNull(overview.configurationDetails)
+        coVerify(exactly = 0) { fixture.sync.synchronizeForPresentation(any()) }
+        coVerify(exactly = 0) { fixture.sync.synchronize(any()) }
+    }
+
     @Test fun `restored applied session and realm switching never synchronize configuration`() = runTest {
         val sessions = EnterpriseSessionController(enterpriseTestStore(temporary.newFolder())) { 1000L }
         val available = sessions.enrollFixture(exampleEnterprisePackage())

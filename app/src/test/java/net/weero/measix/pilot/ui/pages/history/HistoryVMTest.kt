@@ -27,6 +27,38 @@ import org.junit.Assert.assertEquals
 import org.junit.Test
 
 class HistoryVMTest {
+    @Test fun `missing enterprise configuration reads realm history without choosing a personal assistant`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val store = ViewModelStore()
+        try {
+            val scope = ConfigurationScope.Enterprise(EnterpriseAuthority("dep_history"), "user")
+            val selection = RealmSelection(RealmAccess.Enterprise(scope, "session"), 1)
+            val catalog = MutableStateFlow<AssistantCatalogReadState>(AssistantCatalogReadState.Available(
+                AssistantCatalogUiModel(selection, ConfigurationSelection(null, null), emptyMap(), emptyList())))
+            val configuration = mockk<ConfigurationQueryService>()
+            every { configuration.observeAssistantCatalog() } returns catalog
+            val conversations = mockk<ConversationQueryService>()
+            val selected = MutableStateFlow<RealmSelection?>(selection)
+            every { conversations.observeCurrentSelection() } returns selected
+            val row = mockk<ConversationSummary>()
+            every { conversations.conversationsInRealm(selection) } returns flowOf(Result.success(listOf(row)))
+            val vm = HistoryVM(conversations, configuration, mockk())
+            store.put("history", vm)
+            runCurrent()
+            assertEquals(listOf(row), vm.conversations.value)
+            io.mockk.verify(exactly = 0) { conversations.conversationsOfAssistant(any()) }
+            catalog.value = AssistantCatalogReadState.Unavailable("configuration unreadable")
+            runCurrent()
+            assertEquals(listOf(row), vm.conversations.value)
+            selected.value = null
+            runCurrent()
+            assertEquals(emptyList<ConversationSummary>(), vm.conversations.value)
+        } finally {
+            store.clear()
+            Dispatchers.resetMain()
+        }
+    }
+
     @Test fun `history failure exposes cause and retry restores rows without recreating the page`() = runTest {
         Dispatchers.setMain(StandardTestDispatcher(testScheduler))
         val store = ViewModelStore()
@@ -37,6 +69,7 @@ class HistoryVMTest {
             every { configuration.observeAssistantCatalog() } returns flowOf(AssistantCatalogReadState.Available(
                 AssistantCatalogUiModel(selection, ConfigurationSelection(assistant, null), emptyMap(), emptyList())))
             val conversations = mockk<ConversationQueryService>()
+            every { conversations.observeCurrentSelection() } returns flowOf(selection)
             val row = mockk<ConversationSummary>()
             var failed = true
             every { conversations.conversationsOfAssistant(assistant) } answers {
@@ -74,13 +107,16 @@ class HistoryVMTest {
             val configuration = mockk<ConfigurationQueryService>()
             every { configuration.observeAssistantCatalog() } returns catalog
             val conversations = mockk<ConversationQueryService>()
+            val selected = MutableStateFlow<RealmSelection?>(selection)
+            every { conversations.observeCurrentSelection() } returns selected
             val row = mockk<ConversationSummary>()
-            every { conversations.conversationsOfAssistant(assistant) } returns flowOf(Result.success(listOf(row)))
+            every { conversations.conversationsInRealm(selection) } returns flowOf(Result.success(listOf(row)))
             val vm = HistoryVM(conversations, configuration, mockk())
             store.put("history", vm)
             runCurrent()
             assertEquals(listOf(row), vm.conversations.value)
             catalog.value = AssistantCatalogReadState.Unavailable("revoked")
+            selected.value = null
             runCurrent()
             assertEquals(emptyList<ConversationSummary>(), vm.conversations.value)
         } finally {

@@ -87,7 +87,11 @@ updateLocal(latest personalSettings transform)
 正式接入入口为扫码、相册识码和粘贴，统一经 `EnrollmentMaterialParser` 解析和用户确认。`PlatformSnapshotMapper` 当前只映射平台 MCP 定义，`gateways` 固定为空；保留的 Gateway 数据类型与使用偏好不代表平台已下发手机端 Gateway 资源。
 
 - Applied manifest 与平台 Snapshot 各有独立版本。Applied 的旧 schema 只经一次性持久迁移进入当前格式；正常读写不双读。manifest 提交需同步文件并核验实际落盘，损坏态不能通过回读旧 manifest 实施重置。
+- 身份与 Applied 正文分别恢复：manifest 和凭据有效时，配置文件读取、hash 或领域校验失败保留原 Session、Applied 引用和空间选择，以 `configurationError` 携带诊断，配置为空。保留同一 Session/主体和 Applied 的身份或导航提交不依赖正文可读；发布新 Applied 仍须完整校验，失败不能改写 manifest。企业历史的数据访问继续校验原主体和身份时效，配置错误不授予执行权限。
+- 企业页把本地配置读取诊断投影到现有同步提示，不显示身份存储重置错误；已有同步失败优先展示。历史查询继续通过 `ConfigurationResolver` 呈现缺失引用，正文投影不等待当前企业定义，缺失助手/模型不替换为个人默认值。该诊断由本地状态重建，不触发自动同步。
+- 企业空间页保留独立聊天历史入口。`HistoryVM` 根据有效 `RealmSelection` 读取企业空间的已保存根会话，不以当前助手目录或选中助手作为前提；个人历史继续使用个人助手筛选。查询绑定原选择，切域、重新进入或身份失效后旧结果不可继续使用。该入口复用原历史页面和会话查询 owner，不增加第二份历史存储。
 - 同步由 `EnterpriseSynchronizationService` 合并同一主体/Session 的请求；Session owner 再核验 Bootstrap 身份与候选 Snapshot 后提交。成功保存最近同步时间；已提交配置的 applied 回报失败仍保留配置并暴露诊断，下一次同步可重报。
+- 同步读取缓存失败会发布配置不可用诊断，并以有效 Session 请求完整配置。旧配置不可读时，同 generation 的完整已验证候选可写入新 revision 修复；低 generation 仍拒绝，旧执行描述可独立校验时仍比较 release/hash/runtime paths，冲突不能借修复放行。正常可读配置继续完整比较；新的 manifest 提交成功前原 Applied 保持权威。
 - `EnterpriseExecutionLease` 捕获原 Session、Applied binding 与连接；退出等待其真实清理，清理失败保留 owner 供重试。lease 本身不等于远端执行准入。
 
 平台地址是 Session 的可变连接参数，不是 deployment 身份。`PlatformEnterpriseService.changeAddress` 先验证同一 deployment、原用户/设备/Session，再由 Session owner 一次提交新地址及必要的轮换凭据；失败保留已确认连接。退出、撤销与身份删除先持久发布 CLOSING，停止新操作并等待已有 operation/execution lease；`EnterpriseExitService` 只完成原 Session 的退出。永久身份删除由 `EnterpriseIdentityDataDisposer` 编排各 owner 精确清除该 principal，个人数据不进入范围。全设备本机重置由 `EnterpriseDataResetService` 持久化 reset intent，复用同一关闭屏障并在重启后继续，不能用清日志或空列表表示完成。
@@ -105,6 +109,8 @@ Android v4/v5 的唯一 wire 来源为 Core 导出的 `contracts/platform/client
 `PlatformConnection` 的持久构造只校验 origin/身份/路径，不用当前在线能力门禁拒绝旧 Session 中的 Discovery `[4]`。`EnterpriseAppliedStore` 仍使用 manifest 6，先验证原 revision hash 再解码；旧 `EnterpriseStarter.openingSnapshot` 缺失保留为 null，不补造 System、不改原 release/hash，也不因字段增加重写 revision。v4 网络 Starter 不含 openingSnapshot，mapper 保留 null；v5 必须提供 `format=1` 的 openingSnapshot，System 与背景正文允许显式空串，背景数组允许空且保留顺序，块 ID/标题非空白、ID 唯一。v4 携带该字段、v5 缺失或 null 均拒绝；完整响应和 Applied 文件仍共享既有 4 MiB 上限。版本不支持、合法 v4 无 opening 与内容损坏是不同结果；保全旧状态不绕过原远端执行准入。
 
 `EnterpriseExecution.Platform.snapshotSchemaVersion` 保存下载时验证的网络版本，沿原 `StoredEnterpriseExecution` 私有 payload 持久化；历史文件缺失时为 null，不能根据当前 Discovery、字段形状或客户端版本补造。`PlatformEnterpriseService.synchronize` 仅在缓存原版本同时受客户端和最新 Bootstrap 支持时携带 ETag，并允许 304 复用及上报 Applied；已知 v4/v5 均适用。未知版本或服务端不再支持的缓存发起原 generation 的无条件完整下载；异常 304 由 `PlatformControlClient.snapshot` 以 `snapshot_304_without_cache` 拒绝，保全原 Applied，不循环重试或伪造版本。完整响应校验后沿原发布事务保存已验证版本；v4 升级为含开场的 v5 由服务端发布新 generation/release，原发布 hash 不改写。
+
+`PlatformSnapshotCompatibility.requireExecutionSupport` 在原 Session 的开场准备、执行确认、执行读取与租约获取入口检查持久化版本。canonical 数据可读不等于旧网络格式仍受支持；未知或已退役版本拒绝企业执行，缺少版本证据时要求显式同步，不能推定为 v4/v5。该检查不影响身份、历史投影或本地退出，同 generation 的完整同步可以补齐原来缺失的版本证据。
 
 `EnterpriseSynchronizationService.prepareExecution` 查询 Core Managed State；仅在非零 generation、READY、版本一致且未阻断时，Session owner 才签发执行 lease。缺少配置、版本不同或 Core 要求同步时拒绝本次执行，保留原 Applied，提示用户在空间页手动同步；执行准入不下载或发布 Snapshot。本机缓存足以呈现目录和历史，不代替权威执行检查。请求若收到 `ManagedSnapshotRequired`，原 lease 永久关闭，等待原任务停止和资源释放；更新配置由用户显式触发，旧请求不重放，也不因新配置到达而复活。
 

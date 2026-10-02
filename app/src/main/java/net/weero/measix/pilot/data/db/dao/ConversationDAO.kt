@@ -10,6 +10,9 @@ import net.weero.measix.pilot.data.configuration.ConfigurationScope
 
 @Dao
 interface ConversationDAO {
+    @Query("SELECT * FROM conversationentity WHERE scope = :scope AND parent_conversation_id IS NULL ORDER BY is_pinned DESC, update_at DESC")
+    fun getRootConversations(scope: ConfigurationScope): Flow<List<ConversationEntity>>
+
     @Query("SELECT * FROM conversationentity WHERE scope = :scope AND parent_conversation_id IS NULL AND assistant_id = :assistantId ORDER BY is_pinned DESC, update_at DESC")
     fun getConversationsOfAssistant(scope: ConfigurationScope, assistantId: String): Flow<List<ConversationEntity>>
 

@@ -463,6 +463,12 @@ class ConversationQueryService internal constructor(
             repository.getConversationsOfAssistant(access.access.scope, assistantId).map { list -> list.map { it.toSummary(access) } }
         }
 
+    fun conversationsInRealm(selection: RealmSelection): Flow<Result<List<ConversationSummary>>> =
+        selectedRows(emptyList()) { current ->
+            if (current != selection) flowOf(emptyList()) else
+                repository.getRootConversations(selection.access.scope).map { list -> list.map { it.toSummary(selection) } }
+        }
+
     fun foldersOfAssistant(target: ConversationFolderAccess): Flow<ConversationFolderDirectory?> = flow {
         recoveryGate.awaitReady()
         emitAll(sessions.observeSelectedRealmSelection().flatMapLatest { selection ->

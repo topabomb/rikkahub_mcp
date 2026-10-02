@@ -434,6 +434,22 @@ class EnterprisePageAndroidTest {
     }
 
     @Test
+    fun historyRemainsReachableWithoutAnAppliedConfiguration() {
+        val fixture = Fixture(overview().copy(
+            phase = EnterpriseSessionPhase.CONFIGURATION_PENDING,
+            generation = null,
+            configurationDetails = null,
+            synchronization = EnterpriseSynchronizationStatus(access(), false,
+                EnterpriseSynchronizationFailure(EnterpriseSynchronizationIssue.INVALID_CONFIGURATION,
+                    "enterprise_configuration_unreadable")),
+        ))
+        fixture.show()
+        compose.onNodeWithText(text(R.string.history_page_title)).assertIsDisplayed().performClick()
+        compose.runOnIdle { assertEquals(listOf(Screen.Enterprise, Screen.History), fixture.backStack) }
+        coVerify(exactly = 0) { fixture.service.synchronize(any()) }
+    }
+
+    @Test
     fun unsupportedConfigurationAllowsEnteringTheEnterpriseSpaceAndShowsVersionDetails() {
         val diagnostic = "enterprise_configuration_version_unsupported: server [6], client [4, 5]"
         val personal = RealmSelection(RealmAccess.Personal, 2)

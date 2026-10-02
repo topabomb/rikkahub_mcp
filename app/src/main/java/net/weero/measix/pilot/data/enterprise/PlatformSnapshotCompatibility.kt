@@ -19,6 +19,18 @@ internal object PlatformSnapshotCompatibility {
     fun requireSupportedVersion(schema: Long) {
         if (schema !in supportedSchemas) throw EnterpriseSnapshotCompatibilityException(listOf(schema))
     }
+
+    /** Canonical disk data may remain readable after its wire decoder is retired. It is not an execution permit. */
+    fun requireExecutionSupport(execution: EnterpriseExecution) {
+        when (execution) {
+            is EnterpriseExecution.Platform -> {
+                val schema = execution.snapshotSchemaVersion
+                    ?: throw EnterpriseConfigurationException("enterprise_snapshot_version_unverified",
+                        "Synchronize enterprise configuration to verify its format before execution.")
+                requireSupportedVersion(schema)
+            }
+        }
+    }
 }
 
 /** Only parsing and domain validation run here; transport, storage and cancellation keep their own meaning. */

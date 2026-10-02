@@ -103,6 +103,9 @@ class ConversationRepository(
             .map { entities -> entities.map(::conversationEntityToListRecord) }
     }
 
+    fun getRootConversations(scope: ConfigurationScope): Flow<List<ConversationListRecord>> =
+        conversationDAO.getRootConversations(scope).map { entities -> entities.map(::conversationEntityToListRecord) }
+
     fun unfiledPagingSource(scope: ConfigurationScope, assistantId: ConfigurationReference): PagingSource<Int, LightConversationEntity> =
         conversationDAO.getUnfiledConversationsOfAssistantPaging(scope, assistantId.toString())
 

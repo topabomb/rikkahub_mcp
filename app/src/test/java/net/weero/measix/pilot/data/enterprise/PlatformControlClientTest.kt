@@ -18,6 +18,39 @@ class PlatformControlClientTest {
         .first { it.jsonObject.getValue("name").jsonPrimitive.content == name }.jsonObject.getValue("value").toString().let { if (target) withStarterOpeningMock(it) else it }
 
     @Test
+    fun `shared Core reception cases retain their classification through HTTP`() = runBlocking {
+        val cases = requireNotNull(javaClass.getResourceAsStream("/contracts/platform/snapshot-reception-cases.json"))
+            .bufferedReader().use { Json.parseToJsonElement(it.readText()).jsonArray }
+        val outcomes = mutableSetOf<String>()
+        for (entry in cases) {
+            val case = entry.jsonObject
+            val context = case.getValue("context").jsonObject
+            val expected = case.getValue("outcome").jsonPrimitive.content
+            val raw = case.getValue("snapshot").toString()
+            val server = server {
+                responseHeaders.set("ETag", context.getValue("etag").jsonPrimitive.content)
+                reply(200, raw)
+            }
+            try {
+                val discovery = PlatformWireCodec.decode<PlatformDiscovery>(fixture("discovery"))
+                    .copy(deploymentId = context.getValue("deploymentId").jsonPrimitive.content)
+                val actual = try {
+                    client.snapshot(PlatformConnection(origin(server), discovery), "test-access",
+                        context.getValue("generation").jsonPrimitive.long, null)
+                    "accepted"
+                } catch (_: EnterpriseSnapshotCompatibilityException) {
+                    "unsupported_version"
+                } catch (_: EnterpriseSnapshotContentException) {
+                    "invalid_configuration"
+                }
+                assertEquals(case.getValue("name").jsonPrimitive.content, expected, actual)
+                outcomes += actual
+            } finally { server.stop(0) }
+        }
+        assertEquals(setOf("accepted", "unsupported_version", "invalid_configuration"), outcomes)
+    }
+
+    @Test
     fun `discovery preserves advertised snapshot versions without gating identity access`() = runBlocking {
         for (versions in listOf(listOf(4L), listOf(5L), listOf(4L, 5L), listOf(6L))) {
             val discovery = PlatformWireCodec.decode<PlatformDiscovery>(fixture("discovery"))

@@ -2,6 +2,13 @@ openapi: 3.0.3
 info:
   title: MEASIX Client Control API
   version: 1.0.0
+  description: >-
+    Discovery, Enrollment, Bootstrap (including Managed State), Refresh, Logout and identity Problems
+    form a stable control profile independent of Snapshot schema versions. Publishing a newer Snapshot
+    must not require a client to understand that configuration before restoring identity, refreshing
+    credentials or logging out. Changes to this profile require verification with supported client builds;
+    even optional additions can break strict consumers. Breaking control changes require an independently
+    versioned API and retention of the supported control path, not automatic Snapshot downgrade.
 paths:
   /api/client/v1/managed/applied:
     put:

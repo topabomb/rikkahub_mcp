@@ -31,6 +31,7 @@ internal sealed interface EnterpriseState {
         val manifest: EnterpriseManifest,
         val configuration: EnterpriseConfiguration?,
         val modelCapabilities: Map<String, me.rerere.ai.provider.ChatTransportCapabilities> = emptyMap(),
+        val configurationError: Exception? = null,
     ) : EnterpriseState
     data class Failed(val reason: String) : EnterpriseState
 }
@@ -395,7 +396,13 @@ internal class EnterpriseSessionController(
         if (!allowsDataAccess(current.manifest, access)) fail("enterprise_data_access_unavailable")
         val session = requireNotNull(current.manifest.session)
         if (session.platform == null) fail("platform_session_required")
-        PlatformConfigurationInput(session, withContext(Dispatchers.IO) { store.appliedCandidate(current.manifest) })
+        val cache = withContext(Dispatchers.IO) { store.synchronizationCandidate(current.manifest) }
+        cache.exceptionOrNull()?.let { error ->
+            val unavailable = current.copy(configuration = null, modelCapabilities = emptyMap(), configurationError = error as Exception)
+            loaded = unavailable
+            publishState(unavailable.toAvailable())
+        }
+        PlatformConfigurationInput(session, cache.getOrNull())
     }
 
     /** Keeps the selected publication and its provenance together while preparing a local opening. */
@@ -405,6 +412,7 @@ internal class EnterpriseSessionController(
         if (selection.access !is RealmAccess.Enterprise) fail("enterprise_session_required")
         val candidate = withContext(Dispatchers.IO) { store.appliedCandidate(current.manifest) }
             ?: fail("enterprise_configuration_not_ready")
+        PlatformSnapshotCompatibility.requireExecutionSupport(candidate.execution)
         operation(candidate)
     }
 
@@ -421,6 +429,7 @@ internal class EnterpriseSessionController(
         if (!allowsDataAccess(current.manifest, access)) fail("enterprise_data_access_unavailable")
         val latest = withContext(Dispatchers.IO) { store.appliedCandidate(current.manifest) }
         if (latest != checked) fail("enterprise_configuration_changed_during_preflight")
+        PlatformSnapshotCompatibility.requireExecutionSupport(checked.execution)
         requireNotNull(current.manifest.applied)
     }
 
@@ -441,14 +450,18 @@ internal class EnterpriseSessionController(
         requireSamePrincipal(manifest, candidate.identity)
         manifest.applied?.let { version ->
             if (candidate.configuration.generation < version.generation) fail("enterprise_generation_regression")
-            if (candidate.configuration.generation == version.generation && current.configuration != candidate.configuration) {
+            if (candidate.configuration.generation == version.generation && current.configuration != null &&
+                current.configuration != candidate.configuration) {
                 fail("enterprise_generation_conflict")
             }
             if (candidate.configuration.generation == version.generation && candidate.execution is EnterpriseExecution.Platform) {
-                val previous = withContext(Dispatchers.IO) { store.execution(manifest) } as? EnterpriseExecution.Platform
-                    ?: fail("enterprise_source_changed")
-                if (previous.releaseId != candidate.execution.releaseId || previous.snapshotHash != candidate.execution.snapshotHash ||
-                    previous.runtimePaths != candidate.execution.runtimePaths) fail("enterprise_generation_conflict")
+                val previous = withContext(Dispatchers.IO) {
+                    if (current.configurationError != null) store.repairExecution(manifest)
+                    else store.execution(manifest) as EnterpriseExecution.Platform
+                }
+                if (previous != null && (previous.releaseId != candidate.execution.releaseId ||
+                    previous.snapshotHash != candidate.execution.snapshotHash ||
+                    previous.runtimePaths != candidate.execution.runtimePaths)) fail("enterprise_generation_conflict")
             }
         }
         prune(manifest)
@@ -859,6 +872,7 @@ internal class EnterpriseSessionController(
         val current = requireSession(allowOffline = true)
         if (!allowsDataAccess(current.manifest, access)) fail("enterprise_data_access_unavailable")
         val execution = withContext(Dispatchers.IO) { store.execution(current.manifest) }
+        PlatformSnapshotCompatibility.requireExecutionSupport(execution)
         currentCoroutineContext().ensureActive()
         requireSession(allowOffline = true)
         project(requireNotNull(current.manifest.applied), execution)
@@ -872,6 +886,7 @@ internal class EnterpriseSessionController(
             fail("enterprise_configuration_changed_during_preflight")
         }
         val candidate = withContext(Dispatchers.IO) { requireNotNull(store.appliedCandidate(current.manifest)) }
+        PlatformSnapshotCompatibility.requireExecutionSupport(candidate.execution)
         // Disk reads can outlive the session even while publication is serialized.
         currentCoroutineContext().ensureActive()
         requireSession(allowOffline = false)
@@ -922,7 +937,10 @@ internal class EnterpriseSessionController(
     private suspend fun publish(manifest: EnterpriseManifest): EnterpriseState.Available {
         currentCoroutineContext().ensureActive()
         return withContext(NonCancellable + Dispatchers.IO) {
-            val committed = store.commit(manifest)
+            val retainedApplied = loaded?.manifest?.takeIf {
+                it.session?.id == manifest.session?.id && it.session?.identity?.scope == manifest.session?.identity?.scope
+            }?.applied
+            val committed = store.commit(manifest, retainedApplied)
             loaded = committed
             if (manifest.phase !in setOf(EnterpriseSessionPhase.READY, EnterpriseSessionPhase.OFFLINE)) {
                 leases.values.forEach(EnterpriseExecutionLease::revoke)

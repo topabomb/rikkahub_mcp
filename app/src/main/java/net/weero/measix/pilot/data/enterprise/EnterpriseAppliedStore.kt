@@ -96,8 +96,9 @@ internal data class LoadedEnterpriseState(
     val manifest: EnterpriseManifest,
     val configuration: EnterpriseConfiguration?,
     val modelCapabilities: Map<String, ChatTransportCapabilities> = emptyMap(),
+    val configurationError: Exception? = null,
 ) {
-    fun toAvailable() = EnterpriseState.Available(manifest, configuration, modelCapabilities)
+    fun toAvailable() = EnterpriseState.Available(manifest, configuration, modelCapabilities, configurationError)
 }
 
 private fun EnterpriseCandidate?.loaded(manifest: EnterpriseManifest) = LoadedEnterpriseState(
@@ -167,8 +168,27 @@ internal class EnterpriseAppliedStore(
         val manifest = readManifest()
         manifest.session?.platform?.let { credential(it.credential, requireNotNull(manifest.session).id) }
         manifest.pendingEnrollment?.let { credential(it.platform.credential, it.sessionId) }
-        val candidate = manifest.applied?.let { readCandidate(manifest, it) }
-        return candidate.loaded(manifest)
+        return loadConfiguration(manifest)
+    }
+
+    /** Identity is already validated; a broken Applied body only disables configuration-dependent work. */
+    private fun loadConfiguration(manifest: EnterpriseManifest): LoadedEnterpriseState =
+        readConfigurationValue { manifest.applied?.let { readCandidate(manifest, it) } }.fold(
+            onSuccess = { it.loaded(manifest) },
+            onFailure = { LoadedEnterpriseState(manifest, null, configurationError = it as Exception) },
+        )
+
+    private fun <T> readConfigurationValue(read: () -> T): Result<T> = try {
+        Result.success(read())
+    } catch (error: IOException) {
+        configurationFailure(error)
+    } catch (error: IllegalArgumentException) {
+        configurationFailure(error)
+    }
+
+    private fun <T> configurationFailure(error: Exception): Result<T> {
+        android.util.Log.e("EnterpriseAppliedStore", "Cannot read applied enterprise configuration", error)
+        return Result.failure(error)
     }
 
     fun readManifest(): EnterpriseManifest {
@@ -202,13 +222,18 @@ internal class EnterpriseAppliedStore(
         return EnterpriseAppliedVersion(revision, value.configuration.generation, hash(configuration), hash(executionBytes))
     }
 
-    fun commit(manifest: EnterpriseManifest): LoadedEnterpriseState {
+    fun commit(manifest: EnterpriseManifest, retainedApplied: EnterpriseAppliedVersion? = null): LoadedEnterpriseState {
         validateManifest(manifest)
         manifest.session?.platform?.let { credential(it.credential, requireNotNull(manifest.session).id) }
         manifest.pendingEnrollment?.let { credential(it.platform.credential, it.sessionId) }
-        val candidate = manifest.applied?.let { readCandidate(manifest, it) }
+        // Only an unchanged publication may survive a read failure. New Applied revisions remain strict.
+        val loaded = if (retainedApplied != null && manifest.applied == retainedApplied) {
+            loadConfiguration(manifest)
+        } else {
+            manifest.applied?.let { readCandidate(manifest, it) }.loaded(manifest)
+        }
         writeManifest(manifest)
-        return candidate.loaded(manifest)
+        return loaded
     }
 
     private fun writeManifest(manifest: EnterpriseManifest) {
@@ -238,6 +263,14 @@ internal class EnterpriseAppliedStore(
 
     fun appliedCandidate(manifest: EnterpriseManifest): EnterpriseCandidate? =
         manifest.applied?.let { readCandidate(manifest, it).also { checkpoint(EnterpriseStorageCheckpoint.EXECUTION_READ) } }
+
+    /** A missing or unreadable cache requires an authenticated full download, never a conditional request. */
+    fun synchronizationCandidate(manifest: EnterpriseManifest): Result<EnterpriseCandidate?> =
+        readConfigurationValue { appliedCandidate(manifest) }
+
+    /** Preserve independently verifiable release facts when repairing a damaged configuration body. */
+    fun repairExecution(manifest: EnterpriseManifest): EnterpriseExecution.Platform? =
+        readConfigurationValue { manifest.applied?.let { readExecutionDescriptor(manifest, it) } }.getOrNull()
 
     /** Keep the active revision and every in-flight lease; uncommitted staging has no authority. */
     fun prune(retainedRevisions: Set<String>) {
@@ -285,28 +318,33 @@ internal class EnterpriseAppliedStore(
     private fun readCandidate(manifest: EnterpriseManifest, version: EnterpriseAppliedVersion): EnterpriseCandidate {
         val directory = revisionDirectory(version.revision)
         val configurationBytes = readBounded(File(directory, "configuration.json"))
-        val executionBytes = readBounded(File(directory, "execution.json"))
-        if (hash(configurationBytes) != version.configurationHash || hash(executionBytes) != version.executionHash) {
+        if (hash(configurationBytes) != version.configurationHash) {
             throw EnterpriseStorageException("enterprise_revision_hash_mismatch")
         }
         val public = decode<StoredEnterpriseConfiguration>(configurationBytes)
-        val private = decode<StoredEnterpriseExecution>(executionBytes)
-        if (public.revision != version.revision || private.revision != version.revision ||
-            public.configuration.generation != version.generation) {
+        if (public.revision != version.revision || public.configuration.generation != version.generation) {
             throw EnterpriseStorageException("enterprise_revision_identity_mismatch")
         }
         val identity = manifest.session?.identity
             ?: throw EnterpriseStorageException("enterprise_session_required")
-        val connection = manifest.session.platform?.connection
+        return EnterpriseCandidate(identity, public.configuration, readExecutionDescriptor(manifest, version))
+            .also(EnterpriseCandidate::validate)
+    }
+
+    private fun readExecutionDescriptor(manifest: EnterpriseManifest, version: EnterpriseAppliedVersion): EnterpriseExecution.Platform {
+        val bytes = readBounded(File(revisionDirectory(version.revision), "execution.json"))
+        if (hash(bytes) != version.executionHash) throw EnterpriseStorageException("enterprise_revision_hash_mismatch")
+        val stored = decode<StoredEnterpriseExecution>(bytes)
+        if (stored.revision != version.revision) throw EnterpriseStorageException("enterprise_revision_identity_mismatch")
+        val connection = manifest.session?.platform?.connection
             ?: throw EnterpriseStorageException("platform_session_required")
-        val execution = EnterpriseExecution.Platform(
+        return EnterpriseExecution.Platform(
             connection,
-            private.releaseId,
-            private.snapshotHash,
-            private.runtimePaths,
-            private.snapshotSchemaVersion,
+            stored.releaseId,
+            stored.snapshotHash,
+            stored.runtimePaths,
+            stored.snapshotSchemaVersion,
         )
-        return EnterpriseCandidate(identity, public.configuration, execution).also(EnterpriseCandidate::validate)
     }
 
     private fun validateManifest(manifest: EnterpriseManifest) {

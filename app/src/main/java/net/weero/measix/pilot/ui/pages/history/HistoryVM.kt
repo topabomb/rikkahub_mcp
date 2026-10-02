@@ -18,6 +18,7 @@ import net.weero.measix.pilot.service.ConversationApplicationService
 import net.weero.measix.pilot.service.ConversationQueryService
 import net.weero.measix.pilot.service.ConversationSummary
 import net.weero.measix.pilot.service.AssistantCatalogReadState
+import net.weero.measix.pilot.data.enterprise.RealmAccess
 import net.weero.measix.pilot.utils.userVisibleDiagnostic
 
 private const val TAG = "HistoryVM"
@@ -33,9 +34,16 @@ class HistoryVM internal constructor(
     internal val readFailure = _readFailure.asStateFlow()
     private val refresh = MutableStateFlow(0)
     fun retry() { refresh.value += 1 }
-    val conversations = combine(assistantCatalog, refresh) { state, _ -> state }.flatMapLatest { state ->
-        val reference = (state as? AssistantCatalogReadState.Available)?.catalog?.selected?.reference
-        (if (reference == null) flowOf(Result.success(emptyList())) else conversationQueryService.conversationsOfAssistant(reference))
+    val conversations = combine(conversationQueryService.observeCurrentSelection(), assistantCatalog, refresh) {
+        selection, catalog, _ -> selection to catalog
+    }.flatMapLatest { (selection, state) ->
+        val catalog = (state as? AssistantCatalogReadState.Available)?.catalog?.takeIf { it.selection == selection }
+        val reference = catalog?.selected?.reference
+        (when {
+            selection?.access is RealmAccess.Enterprise -> conversationQueryService.conversationsInRealm(selection)
+            reference != null -> conversationQueryService.conversationsOfAssistant(reference)
+            else -> flowOf(Result.success(emptyList()))
+        })
             .catch { error ->
                 if (error is CancellationException) throw error
                 Log.e(TAG, "Conversation history query failed", error)

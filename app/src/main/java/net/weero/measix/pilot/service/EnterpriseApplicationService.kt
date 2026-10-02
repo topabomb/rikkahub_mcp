@@ -587,6 +587,14 @@ internal class EnterpriseApplicationService(
             val access = manifest?.session?.let { RealmAccess.Enterprise(it.identity.scope, it.id) }
             val selection = presentation.selection
             val platformOrigin = manifest?.session?.platform?.connection?.origin
+            val currentSync = syncStatus?.takeIf { it.access == access }
+            val configurationError = available?.configurationError
+            val displayedSync = if (access != null && configurationError != null && currentSync?.failure == null) {
+                (currentSync ?: EnterpriseSynchronizationStatus(access, syncing = false)).copy(
+                    failure = EnterpriseSynchronizationFailure(EnterpriseSynchronizationIssue.INVALID_CONFIGURATION,
+                        configurationError.userVisibleDiagnostic()),
+                )
+            } else currentSync
             EnterpriseOverview(
                 selection = selection,
                 phase = manifest?.phase,
@@ -607,7 +615,7 @@ internal class EnterpriseApplicationService(
                 enrollmentRecoveryFailure = resumeFailure?.takeIf {
                     it.sessionId == (manifest?.pendingEnrollment?.sessionId ?: manifest?.session?.id)
                 }?.diagnostic,
-                synchronization = syncStatus?.takeIf { it.access == access },
+                synchronization = displayedSync,
                 canEnterEnterprise = presentation.canEnterEnterprise,
                 recoveryLogoutFailure = logoutFailures.first.takeIf { manifest?.session == null } ?: logoutFailures.second,
                 exitReason = manifest?.exitReason,

@@ -479,6 +479,9 @@ internal fun EnterprisePage(openUsage: Boolean = false, vm: EnterpriseVM = koinV
                     },
                 ) {
                     if (inEnterprise) FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        TextButton(onClick = { nav.navigate(Screen.History) }, enabled = !busy) {
+                            Text(stringResource(R.string.history_page_title))
+                        }
                         if (ready) {
                             Button(onClick = vm::showPortal, enabled = !busy,
                                 contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)) {
@@ -578,9 +581,8 @@ internal fun EnterprisePage(openUsage: Boolean = false, vm: EnterpriseVM = koinV
                             }
                         },
                     ) {
-                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically) {
-                            state?.userName?.let { Text(it, modifier = Modifier.weight(1f)) }
+                        Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            state?.userName?.let { Text(it) }
                             Text(stringResource(if (state?.synchronization?.failure != null)
                                 R.string.enterprise_configuration_attention else phaseText(state?.phase)),
                                 color = MaterialTheme.colorScheme.primary)

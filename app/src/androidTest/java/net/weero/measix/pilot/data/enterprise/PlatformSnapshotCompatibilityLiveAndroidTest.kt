@@ -117,16 +117,18 @@ class PlatformSnapshotCompatibilityLiveAndroidTest {
                 catch (cancelled: CancellationException) { throw cancelled }
                 catch (error: Exception) { error }
                 assertNotNull("Unsupported snapshot must remain rejected until manual synchronization", failure)
-                assertEquals("platform_runtime_synchronization_required", (failure as EnterpriseConfigurationException).reason)
+                assertTrue("Execution must fail before starting an operation", failure is EnterprisePreparationException)
+                val cause = requireNotNull(failure?.cause) as EnterpriseConfigurationException
+                assertEquals("platform_runtime_synchronization_required", cause.reason)
                 val retained = requireNotNull(synchronization.status.value?.failure)
-                assertTrue(failure.message.orEmpty().contains(retained.diagnostic))
+                assertTrue(cause.message.orEmpty().contains(retained.diagnostic))
                 assertTrue(retained.diagnostic.contains("enterprise_configuration_version_unsupported"))
                 assertTrue(retained.diagnostic.contains("snapshot schemas"))
                 assertTrue(retained.diagnostic.contains(input.getLong("rejectedSchema").toString()))
             }
 
             if (scenario == "reject") {
-                require(input.getLong("rejectedSchema") in setOf(3L, 6L))
+                require(input.getLong("rejectedSchema") in setOf(3L, 6L, 7L))
                 if (input.has("enrollment")) {
                     assertNull(available().manifest.applied)
                     assertEquals(EnterpriseSynchronizationCommandResult.FAILURE_PRESENTED,
@@ -144,7 +146,7 @@ class PlatformSnapshotCompatibilityLiveAndroidTest {
                 assertRetained(snapshot, summary())
                 val status = synchronization.status.first { it?.access == target && !it.syncing && it.failure != null }
                 val issue = requireNotNull(requireNotNull(status).failure)
-                val expected = if (input.getLong("rejectedSchema") == 6L) EnterpriseSynchronizationIssue.UPDATE_APP
+                val expected = if (input.getLong("rejectedSchema") > 5L) EnterpriseSynchronizationIssue.UPDATE_APP
                     else EnterpriseSynchronizationIssue.UPDATE_PLATFORM
                 assertEquals(expected, issue.issue)
                 assertTrue(issue.diagnostic.contains("enterprise_configuration_version_unsupported"))
@@ -163,11 +165,15 @@ class PlatformSnapshotCompatibilityLiveAndroidTest {
                 } else {
                     val target = access()
                     assertEquals(requireNotNull(prior).getString("sessionId"), target.sessionId)
-                    assertEquals(EnterpriseSynchronizationCommandResult.COMPLETED, service.synchronize(target))
+                    if (scenario == "reopen") {
+                        assertRetained(prior, summary())
+                        evidence.put("restoredBeforeSynchronization", true)
+                    } else {
+                        assertEquals(EnterpriseSynchronizationCommandResult.COMPLETED, service.synchronize(target))
+                    }
                 }
                 val target = access()
                 roundTrip(target)
-                assertEquals(EnterpriseSynchronizationCommandResult.COMPLETED, service.synchronize(target))
                 val state = available()
                 assertEquals(EnterpriseSessionPhase.READY, state.manifest.phase)
                 val candidate = requireNotNull(sessions.platformConfiguration(target).candidate)
@@ -193,8 +199,8 @@ class PlatformSnapshotCompatibilityLiveAndroidTest {
                     }
                 }
                 assertEquals(state.manifest.applied, synchronization.prepareExecution(target))
-                val status = synchronization.status.first { it?.access == target && !it.syncing }
-                assertNull(requireNotNull(status).failure)
+                val status = synchronization.status.value
+                assertTrue(status == null || (status.access == target && !status.syncing && status.failure == null))
                 if (scenario == "join" && input.optBoolean("seedHistory", true)) {
                     assertNull(historyFixtureId)
                     val assistant = candidate.configuration.assistants.first { it.enabled }
