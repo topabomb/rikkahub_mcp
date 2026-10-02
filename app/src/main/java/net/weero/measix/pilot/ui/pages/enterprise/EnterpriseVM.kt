@@ -17,6 +17,7 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.transformLatest
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import net.weero.measix.pilot.R
 import net.weero.measix.pilot.data.enterprise.*
@@ -72,20 +73,19 @@ internal class EnterpriseVM(private val service: EnterpriseApplicationService,
     private val remoteWorkspace: net.weero.measix.pilot.service.remoteworkspace.RemoteWorkspaceService,
 ) : ViewModel() {
     val workspaceSummary = remoteWorkspace.summary
+    val workspaceQuery = remoteWorkspace.queryState
     fun refreshWorkspace() { overview.value?.selection?.takeIf { it.access is RealmAccess.Enterprise }?.let { selection ->
         viewModelScope.launch {
             try {
                 remoteWorkspace.refresh(selection)
-                if (_error.value?.let { it.selection == selection && it.resource == R.string.remote_workspace_failed } == true) {
-                    _error.value = null
-                }
+                if (_workspaceFailure.value?.selection == selection) _workspaceFailure.value = null
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: Exception) {
                 currentCoroutineContext().ensureActive()
                 android.util.Log.e("EnterpriseVM", "Remote workspace refresh failed", error)
                 if (overview.value?.selection == selection) {
-                    _error.value = Failure(R.string.remote_workspace_failed, selection, detail = error.userVisibleDiagnostic())
+                    _workspaceFailure.value = Failure(R.string.remote_workspace_failed, selection, detail = error.userVisibleDiagnostic())
                 }
             }
         }
@@ -103,6 +103,9 @@ internal class EnterpriseVM(private val service: EnterpriseApplicationService,
         val detail: String? = null,
     )
     private val _error = MutableStateFlow<Failure?>(null)
+    private val _workspaceFailure = MutableStateFlow<Failure?>(null)
+    val workspaceFailure = combine(_workspaceFailure, overview) { value, state -> value?.takeIf { it.selection == state?.selection } }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
     val error = combine(_error, overview) { value, state ->
         value?.takeIf { it.selection == null || it.selection == state?.selection }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
@@ -129,33 +132,57 @@ internal class EnterpriseVM(private val service: EnterpriseApplicationService,
             it.platformOrigin == state.platformOrigin }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
 
-    private val updatesRefresh = MutableStateFlow(0L)
-    val updates: StateFlow<EnterpriseUpdatesPresentation?> = combine(overview.map { state ->
-        val selection = state?.selection
-        val access = state?.access
-        if (selection == null || access == null) null
-        else EnterpriseUpdatesTarget(selection, access, state.platformOrigin)
-    }.distinctUntilChanged(), updatesRefresh) { target, _ -> target }
-        .transformLatest { target ->
-            if (target == null) {
-                emit(null)
-                return@transformLatest
-            }
-            val (selection, access, platformOrigin) = target
-            emit(EnterpriseUpdatesPresentation(selection, access, platformOrigin, loading = true))
+    private val foreground = MutableStateFlow(false)
+    private val _updates = MutableStateFlow<EnterpriseUpdatesPresentation?>(null)
+    val updates = combine(_updates, overview) { value, state ->
+        value?.takeIf { it.selection == state?.selection && it.access == state.access && it.platformOrigin == state.platformOrigin }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
+    private var updatesJob: Job? = null
+    private var updatesTarget: EnterpriseUpdatesTarget? = null
+    init {
+        viewModelScope.launch {
+            combine(overview.map { state ->
+                val selection = state?.selection
+                val access = state?.access
+                if (selection == null || access == null) null
+                else EnterpriseUpdatesTarget(selection, access, state.platformOrigin)
+            }.distinctUntilChanged(), foreground) { target, visible -> target.takeIf { visible } }
+                .distinctUntilChanged().collectLatest { target ->
+                    if (target != null) refreshStatus()
+                    else { updatesJob?.cancel(); budgetRefreshJob?.cancel() }
+                }
+        }
+    }
+    fun setForeground(visible: Boolean) { foreground.value = visible }
+    fun refreshStatus() { refreshWorkspace(); refreshUpdates(); refreshBudgets() }
+
+    fun refreshUpdates() {
+        val state = overview.value ?: return
+        val target = EnterpriseUpdatesTarget(state.selection ?: return, state.access ?: return, state.platformOrigin)
+        if (updatesJob?.isActive == true) {
+            if (updatesTarget == target) return
+            updatesJob?.cancel()
+        }
+        val (selection, access, platformOrigin) = target
+        val previous = _updates.value?.takeIf { it.selection == selection && it.access == access && it.platformOrigin == platformOrigin }
+        _updates.value = EnterpriseUpdatesPresentation(selection, access, platformOrigin, loading = true, value = previous?.value)
+        updatesTarget = target
+        updatesJob = viewModelScope.launch {
             try {
                 val value = service.recentUpdates(selection, access)
-                emit(EnterpriseUpdatesPresentation(selection, access, platformOrigin, value = value))
+                if (overview.value?.selection == selection && overview.value?.access == access && overview.value?.platformOrigin == platformOrigin)
+                    _updates.value = EnterpriseUpdatesPresentation(selection, access, platformOrigin, value = value)
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: Exception) {
                 currentCoroutineContext().ensureActive()
                 android.util.Log.e("EnterpriseVM", "Enterprise updates failed", error)
-                emit(EnterpriseUpdatesPresentation(selection, access, platformOrigin, failure = error.userVisibleDiagnostic()))
+                if (overview.value?.selection == selection && overview.value?.access == access && overview.value?.platformOrigin == platformOrigin)
+                    _updates.value = EnterpriseUpdatesPresentation(selection, access, platformOrigin,
+                        value = previous?.value, failure = error.userVisibleDiagnostic())
             }
-        }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
-
-    fun refreshUpdates() { updatesRefresh.value += 1 }
+        }
+    }
 
     private data class BudgetTarget(
         val selection: RealmSelection,
@@ -167,12 +194,13 @@ internal class EnterpriseVM(private val service: EnterpriseApplicationService,
     private var budgetRefreshTarget: BudgetTarget? = null
     private var budgetRefreshPending = false
 
-    fun refreshBudgets() {
+    fun refreshBudgets() = refreshBudgets(queueAfterCurrent = false)
+    private fun refreshBudgets(queueAfterCurrent: Boolean) {
         if (!budgetListenerStarted) {
             budgetListenerStarted = true
             viewModelScope.launch {
                 service.runtimeUsageChanges().collect { access ->
-                    if (overview.value?.access == access) refreshBudgets()
+                    if (foreground.value && overview.value?.access == access) refreshBudgets(queueAfterCurrent = true)
                 }
             }
         }
@@ -183,7 +211,7 @@ internal class EnterpriseVM(private val service: EnterpriseApplicationService,
         val target = BudgetTarget(selection, access, platformOrigin)
         budgetRefreshJob?.takeIf { it.isActive }?.let { active ->
             if (budgetRefreshTarget == target) {
-                budgetRefreshPending = true
+                if (queueAfterCurrent) budgetRefreshPending = true
                 return
             }
             active.cancel()
@@ -211,7 +239,7 @@ internal class EnterpriseVM(private val service: EnterpriseApplicationService,
                 }
             } finally {
                 if (budgetRefreshJob === launched) {
-                    val rerun = budgetRefreshPending && isCurrent(target)
+                    val rerun = budgetRefreshPending && foreground.value && isCurrent(target)
                     budgetRefreshJob = null
                     budgetRefreshTarget = null
                     budgetRefreshPending = false
@@ -242,7 +270,7 @@ internal class EnterpriseVM(private val service: EnterpriseApplicationService,
         val selection = overview.value?.selection ?: return
         overview.value?.access?.let { access -> command(isCurrent = { overview.value?.selection == selection }) {
             if (service.synchronize(access) != net.weero.measix.pilot.service.EnterpriseSynchronizationCommandResult.COMPLETED) return@command
-            if (overview.value?.selection == selection && overview.value?.access == access) refreshUpdates()
+            if (overview.value?.selection == selection && overview.value?.access == access) refreshStatus()
             if (overview.value?.access == access) _notice.value = Notice(R.string.enterprise_sync_completed, selection)
         } }
     }

@@ -27,8 +27,30 @@ sealed interface ConversationOpenRequest {
     data class OpenExisting(
         override val id: Uuid,
         override val access: RealmAccess,
+        val startupResume: StartupConversationResume? = null,
     ) : ConversationOpenRequest
 }
+
+/** Only a verified implicit startup may recover a deletion between lookup and opening. */
+@Serializable
+data class StartupConversationResume(
+    val assistantId: ConfigurationReference,
+    val selectionRevision: Long,
+)
+
+/** The database deletion is committed even when subsequent preference maintenance failed. */
+class ConversationDeletionReceipt internal constructor(
+    val conversationId: Uuid,
+    val assistantId: ConfigurationReference,
+    internal val selection: RealmSelection,
+    val maintenanceFailure: Throwable? = null,
+)
+
+@ConsistentCopyVisibility
+data class ConversationContinuation internal constructor(
+    val request: ConversationOpenRequest.NewDraft?,
+    val unavailableReason: String? = null,
+)
 
 /** Navigation carries content identity and provenance, never enterprise prompt bodies. */
 @Serializable

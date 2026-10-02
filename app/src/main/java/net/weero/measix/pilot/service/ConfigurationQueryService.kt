@@ -33,6 +33,46 @@ internal class ConfigurationQueryService(
     private val enterpriseSessions: EnterpriseSessionController,
     private val recoveryGate: ApplicationRecoveryGate,
 ) {
+    private suspend fun <T> readEnterpriseResource(target: EnterpriseResourceDetailTarget, project: (ResolvedConfiguration) -> T): T {
+        recoveryGate.awaitReady()
+        return enterpriseSessions.withSelectedRealmSelection(target.selection) {
+            enterpriseSessions.requirePublishedRealmAccess(target.access)
+            settings.withResolvedConfiguration(target.access.scope, enterpriseSessions.state.value) { configuration ->
+                check(configuration.enterpriseConfiguration?.generation == target.generation &&
+                    configuration.enterpriseIdentity?.authority == target.reference.authority) { "enterprise_configuration_changed" }
+                enterpriseSessions.requirePublishedSelection(target.selection)
+                enterpriseSessions.requirePublishedRealmAccess(target.access)
+                project(configuration)
+            }
+        }
+    }
+
+    internal suspend fun readEnterpriseAssistantDefinition(target: EnterpriseResourceDetailTarget): Pair<Assistant, AssistantModelSummary> =
+        readEnterpriseResource(target) { configuration ->
+            check(target.kind == EnterpriseConfigurationResourceKind.ASSISTANT)
+            val definition = requireNotNull(configuration.enterpriseConfiguration).assistants.single { it.id == target.reference.id }
+            val assistant = net.weero.measix.pilot.data.configuration.resolveEnterpriseAssistantUsage(
+                requireNotNull(configuration.enterpriseIdentity), definition, null)
+            assistant to configuration.modelCatalog(target.selection).modelSummaryFor(assistant)
+        }
+
+    internal suspend fun readEnterpriseStarterDetails(target: EnterpriseResourceDetailTarget): StarterOpeningDetailUiModel =
+        readEnterpriseResource(target) { configuration ->
+            check(target.kind == EnterpriseConfigurationResourceKind.STARTER)
+            val starter = configuration.enterpriseConfiguration?.starters?.singleOrNull { it.id == target.reference.id }
+                ?: throw StarterOpeningException(StarterOpeningIssue.UNAVAILABLE)
+            starter.details(isDraft = false)
+        }
+
+    internal suspend fun readEnterpriseResourcePrompt(target: EnterpriseResourceDetailTarget): String? =
+        readEnterpriseResource(target) { configuration ->
+            val definitions = requireNotNull(configuration.enterpriseConfiguration)
+            when (target.kind) {
+                EnterpriseConfigurationResourceKind.TTS -> definitions.tts.single { it.id == target.reference.id }.voiceDesignPrompt
+                EnterpriseConfigurationResourceKind.ASR -> definitions.asr.single { it.id == target.reference.id }.prompt
+                else -> error("enterprise_resource_prompt_not_applicable")
+            }
+        }
     fun observePersonalModelFavorites() = settings.observeConfiguration(enterpriseSessions.state, ConfigurationScope.Personal)
         .map { it.selections.favoriteModels }
 

@@ -56,9 +56,60 @@ class ConversationCommandAccessTest {
             )).toCandidate())
             assertEquals(InitialConversationRequest.SelectEnterpriseAssistant, f.application.initialRequest(true))
             coEvery { f.settings.lastConversation(f.scope) } returns f.rootId
-            assertEquals(InitialConversationRequest.Open(ConversationOpenRequest.OpenExisting(f.rootId, access)),
-                f.application.initialRequest(false))
+            val resumed = (f.application.initialRequest(false) as InitialConversationRequest.Open).request as ConversationOpenRequest.OpenExisting
+            assertEquals(f.rootId, resumed.id)
+            assertEquals(access, resumed.access)
+            assertEquals(f.rows.getValue(f.rootId).header.assistantId, resumed.startupResume?.assistantId)
             coVerify(exactly = 0) { f.repository.commit(any()) }
+        }
+    }
+
+    @Test fun `committed deletion preserves its original assistant when preference cleanup fails`() = runTest {
+        fixture { f ->
+            val cleanup = java.io.IOException("preferences write failed")
+            coEvery { f.settings.forgetConversation(f.scope, f.rootId) } throws cleanup
+            val originalAssistant = f.rows.getValue(f.rootId).header.assistantId
+            val receipt = f.application.delete(f.page.commandTarget)
+            assertFalse(f.rows.containsKey(f.rootId))
+            assertSame(cleanup, receipt.maintenanceFailure)
+            assertEquals(originalAssistant, receipt.assistantId)
+            val next = requireNotNull(f.application.deletionContinuation(receipt).request)
+            assertEquals(originalAssistant, next.assistantId)
+            assertEquals(f.page.access, next.access)
+            assertNotEquals(f.rootId, next.id)
+            assertFalse(f.rows.containsKey(next.id))
+            coVerify(exactly = 1) { f.repository.deleteConversation(f.rootId) }
+            coVerify(exactly = 0) { f.repository.insertConversationSnapshot(any()) }
+        }
+    }
+
+    @Test fun `missing recent pointer falls back but a foreign or child pointer is rejected`() = runTest {
+        fixture { f ->
+            coEvery { f.settings.lastConversation(f.scope) } returns Uuid.random()
+            assertTrue((f.application.initialRequest(false) as InitialConversationRequest.Open).request is ConversationOpenRequest.NewDraft)
+            val foreign = f.put(ConfigurationScope.Personal)
+            coEvery { f.settings.lastConversation(f.scope) } returns foreign
+            rejects<IllegalStateException> { f.application.initialRequest(false) }
+            val child = f.put(f.scope, f.rootId)
+            coEvery { f.settings.lastConversation(f.scope) } returns child
+            rejects<IllegalStateException> { f.application.initialRequest(false) }
+            coEvery { f.settings.lastConversation(f.scope) } throws java.io.IOException("read failed")
+            rejects<java.io.IOException> { f.application.initialRequest(false) }
+        }
+    }
+
+    @Test fun `startup deletion race may resume only its verified original context`() = runTest {
+        fixture { f ->
+            coEvery { f.settings.lastConversation(f.scope) } returns f.rootId
+            val request = (f.application.initialRequest(false) as InitialConversationRequest.Open).request as ConversationOpenRequest.OpenExisting
+            f.application.delete(f.page.commandTarget)
+            rejects<ConversationNotFoundException> { f.application.initialize(request) }
+            val next = requireNotNull(f.application.startupContinuation(request).request)
+            assertEquals(request.startupResume!!.assistantId, next.assistantId)
+            assertEquals(request.access, next.access)
+            rejects<IllegalArgumentException> { f.application.startupContinuation(request.copy(startupResume = null)) }
+            f.sessions.switchRealm(RealmSwitchRequest(f.page.commandTarget.selection, RealmAccess.Personal)) {}
+            rejects<EnterpriseConfigurationException> { f.application.startupContinuation(request) }
         }
     }
 
@@ -907,6 +958,7 @@ class ConversationCommandAccessTest {
             every { settings.userSettings } returns kotlinx.coroutines.flow.MutableStateFlow(
                 net.weero.measix.pilot.data.datastore.Settings())
             net.weero.measix.pilot.test.installExecutionConfigurationFixture(settings)
+            coEvery { settings.forgetConversation(any(), any()) } returns Unit
             coEvery { repository.getConversationHeader(any()) } answers { rows[firstArg()]?.header }
             coEvery { repository.getConversationSnapshotById(any()) } answers { rows[firstArg()] }
             coEvery { repository.getChildConversationIds(any()) } answers {

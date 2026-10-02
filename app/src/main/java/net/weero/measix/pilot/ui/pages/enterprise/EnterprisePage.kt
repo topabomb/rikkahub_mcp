@@ -12,6 +12,10 @@ import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.lifecycle.repeatOnLifecycle
+import kotlinx.coroutines.awaitCancellation
+import me.rerere.hugeicons.stroke.MessageAdd01
+import net.weero.measix.pilot.ui.components.ui.Tooltip
 import androidx.compose.runtime.saveable.listSaver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
@@ -24,6 +28,8 @@ import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.platform.testTag
@@ -245,6 +251,7 @@ internal fun EnterprisePage(openUsage: Boolean = false, vm: EnterpriseVM = koinV
     val resetConfirmation by vm.resetConfirmation.collectAsStateWithLifecycle()
     val budgets by vm.budgets.collectAsStateWithLifecycle()
     val updates by vm.updates.collectAsStateWithLifecycle()
+    val workspaceQuery by vm.workspaceQuery.collectAsStateWithLifecycle()
     val configurationDetails by vm.configurationDetails.collectAsStateWithLifecycle()
     val lifecycleOwner = LocalLifecycleOwner.current
     val nav = LocalNavController.current
@@ -323,6 +330,7 @@ internal fun EnterprisePage(openUsage: Boolean = false, vm: EnterpriseVM = koinV
     }
     val busy = working || state?.switching == true || state?.phase == EnterpriseSessionPhase.CLOSING
     val inEnterprise = state?.selection?.access is RealmAccess.Enterprise
+    val personalChatNavigation = if (!inEnterprise) net.weero.measix.pilot.ui.context.rememberChatNavigation(nav, state?.selection) else null
     val ready = state?.phase in setOf(EnterpriseSessionPhase.READY, EnterpriseSessionPhase.OFFLINE)
     val openChat = { nav.clearAndNavigate(Screen.Startup()) }
     val leavePage = {
@@ -341,9 +349,6 @@ internal fun EnterprisePage(openUsage: Boolean = false, vm: EnterpriseVM = koinV
     BackHandler(enabled = portal == null && configurationDetailsOpen) { closeConfigurationDetailsLayer() }
     BackHandler(enabled = portal == null && !configurationDetailsOpen && !usageOpen &&
         initialSelectionCaptured && state?.selection != initialSelection) { leavePage() }
-    LaunchedEffect(state?.selection, state?.access, state?.platformOrigin) {
-        if (state?.access != null) vm.refreshBudgets()
-    }
     LaunchedEffect(openUsage, state?.selection) {
         if (openUsage && !usageDestinationOpened && state?.selection?.access is RealmAccess.Enterprise) {
             usageDestinationOpened = true
@@ -351,18 +356,21 @@ internal fun EnterprisePage(openUsage: Boolean = false, vm: EnterpriseVM = koinV
         }
     }
     val budgetInFlight = budgets?.value?.totalInFlightRequests ?: 0L
-    LaunchedEffect(state?.selection, state?.access, state?.platformOrigin, budgetInFlight) {
-        while (budgetInFlight > 0) {
-            kotlinx.coroutines.delay(30_000)
-            vm.refreshBudgets()
+    LaunchedEffect(lifecycleOwner, portal, configurationDetailsOpen) {
+        lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
+            if (portal == null && !configurationDetailsOpen) {
+                vm.setForeground(true)
+                try { awaitCancellation() } finally { vm.setForeground(false) }
+            }
         }
     }
-    DisposableEffect(lifecycleOwner, state?.access, state?.platformOrigin) {
-        val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_RESUME && state?.access != null) { vm.refreshBudgets(); vm.refreshWorkspace() }
+    LaunchedEffect(lifecycleOwner, portal, configurationDetailsOpen, budgetInFlight) {
+        lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
+            while (portal == null && !configurationDetailsOpen && budgetInFlight > 0) {
+                kotlinx.coroutines.delay(30_000)
+                vm.refreshBudgets()
+            }
         }
-        lifecycleOwner.lifecycle.addObserver(observer)
-        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
     Scaffold(topBar = {
@@ -384,11 +392,27 @@ internal fun EnterprisePage(openUsage: Boolean = false, vm: EnterpriseVM = koinV
                 Icon(HugeIcons.ArrowLeft01, stringResource(R.string.back))
             } }, actions = {
                 if (portal == null && !configurationDetailsOpen && !usageOpen) {
+                    val refreshStatusLabel = stringResource(R.string.enterprise_refresh_status)
+                    Tooltip(tooltip = { Text(stringResource(R.string.enterprise_refresh_status)) }) {
+                        IconButton(onClick = vm::refreshStatus, enabled = state?.access != null,
+                            modifier = Modifier.semantics { contentDescription = refreshStatusLabel }) {
+                            val refreshing = updates?.loading == true || budgets?.loading == true ||
+                                workspaceQuery?.takeIf { it.selection == state?.selection && inEnterprise }?.refreshing == true
+                            if (refreshing) {
+                                CircularProgressIndicator(Modifier.size(24.dp), strokeWidth = 2.dp)
+                            } else Icon(HugeIcons.Refresh, null)
+                        }
+                    }
                     Box {
                         IconButton(onClick = { pageMenuOpen = true }, modifier = Modifier.testTag("enterprise-page-menu")) {
                             Icon(HugeIcons.MoreVertical, stringResource(R.string.more_options))
                         }
                         DropdownMenu(expanded = pageMenuOpen, onDismissRequest = { pageMenuOpen = false }) {
+                            DropdownMenuItem(
+                                text = { Text(stringResource(if (inEnterprise) R.string.enterprise_all_chat_history else R.string.history_page_title)) },
+                                enabled = !busy,
+                                onClick = { pageMenuOpen = false; nav.navigate(Screen.History) },
+                            )
                             DropdownMenuItem(
                                 text = { Text(stringResource(R.string.enterprise_budget_title)) },
                                 enabled = state?.access != null && !busy,
@@ -450,9 +474,9 @@ internal fun EnterprisePage(openUsage: Boolean = false, vm: EnterpriseVM = koinV
                     configurationResourceKey = null
                 },
                 onResource = { configurationResourceKey = it },
-                onCopyAddress = { origin ->
+                onCopyVerification = { verification ->
                     pageScope.launch {
-                        clipboard.setClipEntry(ClipEntry(ClipData.newPlainText("Enterprise address", origin)))
+                        clipboard.setClipEntry(ClipEntry(ClipData.newPlainText("Enterprise verification", verification)))
                     }
                     toaster.show(copiedText, type = ToastType.Success)
                 },
@@ -471,17 +495,18 @@ internal fun EnterprisePage(openUsage: Boolean = false, vm: EnterpriseVM = koinV
                         else Icon(HugeIcons.User, contentDescription = null, modifier = Modifier.size(20.dp))
                     },
                     trailingContent = {
-                        if (!inEnterprise) {
-                            TextButton(onClick = openChat, enabled = !busy && state?.selection != null) {
-                                Text(stringResource(R.string.enterprise_start_conversation))
+                        Tooltip(tooltip = { Text(stringResource(R.string.enterprise_start_conversation)) }) {
+                            IconButton(onClick = {
+                                if (inEnterprise) state?.selection?.let { starterPicker = StarterPresentation(it) }
+                                else personalChatNavigation?.newChat()
+                            }, enabled = !busy && state?.selection != null && (!inEnterprise || ready),
+                                modifier = Modifier.testTag("space-start-conversation")) {
+                                Icon(HugeIcons.MessageAdd01, stringResource(R.string.enterprise_start_conversation))
                             }
                         }
                     },
                 ) {
                     if (inEnterprise) FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        TextButton(onClick = { nav.navigate(Screen.History) }, enabled = !busy) {
-                            Text(stringResource(R.string.history_page_title))
-                        }
                         if (ready) {
                             Button(onClick = vm::showPortal, enabled = !busy,
                                 contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)) {
@@ -493,11 +518,6 @@ internal fun EnterprisePage(openUsage: Boolean = false, vm: EnterpriseVM = koinV
                                 contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)) {
                                 Text(stringResource(R.string.enterprise_switch_personal))
                             }
-                        }
-                        if (ready) {
-                            TextButton(onClick = {
-                                state?.selection?.let { starterPicker = StarterPresentation(it) }
-                            }, enabled = !busy) { Text(stringResource(R.string.enterprise_start_conversation)) }
                         }
                     }
                 }
@@ -563,7 +583,7 @@ internal fun EnterprisePage(openUsage: Boolean = false, vm: EnterpriseVM = koinV
                         trailingContent = {
                             Box {
                                 IconButton(onClick = { connectionMenuOpen = true }, enabled = !busy,
-                                    modifier = Modifier.size(28.dp).testTag("enterprise-connection-menu")) {
+                                    modifier = Modifier.testTag("enterprise-connection-menu")) {
                                     Icon(HugeIcons.MoreVertical, stringResource(R.string.more_options))
                                 }
                                 DropdownMenu(expanded = connectionMenuOpen, onDismissRequest = { connectionMenuOpen = false }) {
@@ -591,6 +611,22 @@ internal fun EnterprisePage(openUsage: Boolean = false, vm: EnterpriseVM = koinV
                             Text(stringResource(R.string.enterprise_pending_next_step), style = MaterialTheme.typography.bodySmall)
                         }
                         state?.synchronization?.failure?.let { EnterpriseSynchronizationNotice(it) }
+                        state?.generation?.let { generation ->
+                            Text(stringResource(R.string.enterprise_applied_version_summary, generation),
+                                style = MaterialTheme.typography.bodyMedium)
+                            Text(stringResource(R.string.enterprise_configuration_last_sync) + "  " +
+                                (state?.lastSyncMillis?.let { DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT, currentLocale()).format(Date(it)) }
+                                    ?: stringResource(R.string.enterprise_configuration_not_available)),
+                                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        val localWorkspace by vm.workspaceSummary.collectAsStateWithLifecycle()
+                        val workspaceFailure by vm.workspaceFailure.collectAsStateWithLifecycle()
+                        (workspaceFailure?.takeIf { inEnterprise }?.detail ?: workspaceQuery
+                            ?.takeIf { inEnterprise && it.selection == state?.selection && localWorkspace == null }?.diagnostic)?.let { detail ->
+                                Text(stringResource(R.string.remote_workspace_query_failed), color = MaterialTheme.colorScheme.error)
+                                net.weero.measix.pilot.ui.components.ui.DiagnosticDisclosure(detail)
+                                TextButton(onClick = vm::refreshWorkspace) { Text(stringResource(R.string.application_recovery_retry)) }
+                            }
                         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             if (!inEnterprise && state?.canEnterEnterprise == true) {
                                 Button(onClick = { vm.switchSpace(openChat) }, enabled = !busy,
@@ -598,7 +634,7 @@ internal fun EnterprisePage(openUsage: Boolean = false, vm: EnterpriseVM = koinV
                                     Text(stringResource(R.string.enterprise_switch_enterprise))
                                 }
                             }
-                            FilledTonalButton(onClick = vm::synchronize,
+                            TextButton(onClick = vm::synchronize,
                                 enabled = !busy && state?.synchronization?.syncing != true && state?.canEnterEnterprise == true,
                                 contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)) {
                                 Icon(HugeIcons.Refresh, contentDescription = null, modifier = Modifier.size(18.dp))
@@ -652,14 +688,15 @@ internal fun EnterprisePage(openUsage: Boolean = false, vm: EnterpriseVM = koinV
                     if (recent.loading || recent.failure != null || recent.value?.items?.isNotEmpty() == true) {
                         EnterpriseSection(if (recent.value == null) stringResource(R.string.enterprise_recent_updates)
                             else stringResource(R.string.enterprise_recent_updates_count, recent.value.items.size), trailingContent = {
-                            IconButton(onClick = vm::refreshUpdates, enabled = !recent.loading && !busy,
-                                modifier = Modifier.size(28.dp)) {
+                            IconButton(onClick = vm::refreshUpdates, enabled = !recent.loading && !busy) {
                                 Icon(HugeIcons.Refresh, stringResource(R.string.enterprise_budget_refresh), modifier = Modifier.size(20.dp))
                             }
                         }) {
                             if (recent.loading) LinearProgressIndicator(Modifier.fillMaxWidth())
                             recent.failure?.let { detail ->
-                                Text(stringResource(R.string.enterprise_failure), color = MaterialTheme.colorScheme.error,
+                                Text(stringResource(if (recent.value?.items?.isNotEmpty() == true)
+                                    R.string.enterprise_updates_refresh_failed_stale else R.string.enterprise_updates_refresh_failed),
+                                    color = MaterialTheme.colorScheme.error,
                                     style = MaterialTheme.typography.bodySmall)
                                 net.weero.measix.pilot.ui.components.ui.DiagnosticDisclosure(detail)
                             }
@@ -824,7 +861,7 @@ private fun EnterpriseConfigurationDetailsPage(
     onSection: (EnterpriseConfigurationDetailsSection) -> Unit,
     onResourceKind: (EnterpriseConfigurationResourceKind) -> Unit,
     onResource: (String) -> Unit,
-    onCopyAddress: (String) -> Unit,
+    onCopyVerification: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val group = details.resources.firstOrNull { it.kind == resourceKind }
@@ -860,11 +897,11 @@ private fun EnterpriseConfigurationDetailsPage(
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             when {
-                resource != null -> EnterpriseConfigurationResourceDetails(resource, requireNotNull(resourceKind))
+                resource != null -> EnterpriseConfigurationResourceDetails(resource, requireNotNull(resourceKind), details.enterpriseName)
                 group != null -> EnterpriseConfigurationResourceGroup(group, onResource)
                 section == EnterpriseConfigurationDetailsSection.DEFAULTS -> EnterpriseConfigurationDefaults(details)
                 section == EnterpriseConfigurationDetailsSection.POLICIES -> EnterpriseConfigurationPolicies(details)
-                else -> EnterpriseConfigurationDetailsOverview(details, onSection, onResourceKind, onCopyAddress)
+                else -> EnterpriseConfigurationDetailsOverview(details, onSection, onResourceKind, onCopyVerification)
             }
         }
     }
@@ -875,9 +912,37 @@ private fun EnterpriseConfigurationDetailsOverview(
     details: EnterpriseConfigurationDetailsUiModel,
     onSection: (EnterpriseConfigurationDetailsSection) -> Unit,
     onResourceKind: (EnterpriseConfigurationResourceKind) -> Unit,
-    onCopyAddress: (String) -> Unit,
+    onCopyVerification: (String) -> Unit,
 ) {
     Text(details.enterpriseName, style = MaterialTheme.typography.headlineSmall, modifier = Modifier.widthIn(max = 720.dp).fillMaxWidth())
+    val notRecorded = stringResource(R.string.enterprise_configuration_not_available)
+    val versionLabel = stringResource(R.string.enterprise_configuration_generation)
+    val syncLabel = stringResource(R.string.enterprise_configuration_last_sync)
+    val releaseLabel = stringResource(R.string.enterprise_publication_release)
+    val hashLabel = stringResource(R.string.enterprise_publication_hash)
+    val schemaLabel = stringResource(R.string.enterprise_publication_schema)
+    val originLabel = stringResource(R.string.enterprise_address)
+    val syncTime = details.lastSyncMillis?.let { DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT, currentLocale()).format(Date(it)) } ?: notRecorded
+    val verification = listOf(details.enterpriseName, "$versionLabel: ${details.generation}", "$syncLabel: $syncTime",
+        "$releaseLabel: ${details.publication?.releaseId ?: notRecorded}", "$hashLabel: ${details.publication?.snapshotHash ?: notRecorded}",
+        "$schemaLabel: ${details.publication?.schemaVersion ?: notRecorded}", "$originLabel: ${details.platformOrigin}").joinToString("\n")
+    var publicationExpanded by remember(details.generation, details.publication) { mutableStateOf(false) }
+    EnterpriseSection(versionLabel) {
+        Text(details.generation.toString(), style = MaterialTheme.typography.headlineMedium, color = MaterialTheme.colorScheme.primary)
+        ConfigurationValueRow(syncLabel, syncTime)
+        ConfigurationValueRow(stringResource(R.string.enterprise_configuration_status), stringResource(phaseText(details.phase)))
+        FlowRow {
+            TextButton(onClick = { publicationExpanded = !publicationExpanded }) { Text(stringResource(R.string.enterprise_publication_details)) }
+            TextButton(onClick = { onCopyVerification(verification) }) { Text(stringResource(R.string.enterprise_publication_copy)) }
+        }
+        if (publicationExpanded) {
+            ConfigurationValueRow(releaseLabel, details.publication?.releaseId ?: notRecorded)
+            ConfigurationValueRow(hashLabel, details.publication?.snapshotHash ?: notRecorded)
+            ConfigurationValueRow(schemaLabel, details.publication?.schemaVersion?.toString() ?: notRecorded)
+            ConfigurationValueRow(originLabel, details.platformOrigin)
+            details.publicationFailure?.let { net.weero.measix.pilot.ui.components.ui.DiagnosticDisclosure(it) }
+        }
+    }
     if (details.phase == EnterpriseSessionPhase.OFFLINE) {
         Text(
             stringResource(R.string.enterprise_configuration_details_offline),
@@ -938,30 +1003,6 @@ private fun EnterpriseConfigurationDetailsOverview(
                     Text(resourceGroup.itemCount.toString(), style = MaterialTheme.typography.labelLarge)
                     Icon(HugeIcons.ArrowRight01, contentDescription = null, modifier = Modifier.size(18.dp))
                 }
-            }
-        }
-    }
-    EnterpriseSection(stringResource(R.string.enterprise_configuration_diagnostics_title)) {
-        ConfigurationValueRow(
-            stringResource(R.string.enterprise_configuration_status),
-            stringResource(phaseText(details.phase)),
-        )
-        ConfigurationValueRow(
-            stringResource(R.string.enterprise_configuration_generation),
-            details.generation.toString(),
-        )
-        ConfigurationValueRow(
-            stringResource(R.string.enterprise_configuration_last_sync),
-            details.lastSyncMillis?.let { DateFormat.getDateTimeInstance().format(Date(it)) }
-                ?: stringResource(R.string.enterprise_configuration_not_available),
-        )
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                Text(stringResource(R.string.enterprise_address), style = MaterialTheme.typography.labelMedium)
-                SelectionContainer { Text(details.platformOrigin, style = MaterialTheme.typography.bodySmall) }
-            }
-            IconButton(onClick = { onCopyAddress(details.platformOrigin) }) {
-                Icon(HugeIcons.Copy01, contentDescription = stringResource(R.string.copy))
             }
         }
     }
@@ -1051,7 +1092,35 @@ private fun EnterpriseConfigurationResourceGroup(
 private fun EnterpriseConfigurationResourceDetails(
     resource: EnterpriseConfigurationResourceUiModel,
     kind: EnterpriseConfigurationResourceKind,
+    enterpriseName: String?,
 ) {
+    val queries = org.koin.compose.koinInject<net.weero.measix.pilot.service.ConfigurationQueryService>()
+    val target = resource.target
+    var expanded by remember(target) { mutableStateOf(false) }
+    var loading by remember(target) { mutableStateOf(false) }
+    var failure by remember(target) { mutableStateOf<String?>(null) }
+    var assistant by remember(target) { mutableStateOf<Pair<net.weero.measix.pilot.data.model.Assistant, net.weero.measix.pilot.service.AssistantModelSummary>?>(null) }
+    var starter by remember(target) { mutableStateOf<net.weero.measix.pilot.service.StarterOpeningDetailUiModel?>(null) }
+    var prompt by remember(target) { mutableStateOf<String?>(null) }
+    LaunchedEffect(target, expanded) {
+        if (target != null && expanded) {
+            loading = true
+            try {
+                failure = null
+                when (kind) {
+                    EnterpriseConfigurationResourceKind.ASSISTANT -> assistant = queries.readEnterpriseAssistantDefinition(target)
+                    EnterpriseConfigurationResourceKind.STARTER -> starter = queries.readEnterpriseStarterDetails(target)
+                    EnterpriseConfigurationResourceKind.TTS, EnterpriseConfigurationResourceKind.ASR -> prompt = queries.readEnterpriseResourcePrompt(target)
+                    else -> Unit
+                }
+            } catch (cancelled: CancellationException) { throw cancelled }
+            catch (error: Exception) {
+                net.weero.measix.pilot.utils.logDiagnosticFailure("EnterpriseDetails", "Enterprise resource detail query failed", error)
+                failure = error.userVisibleDiagnostic()
+            }
+            finally { loading = false }
+        }
+    }
     Text(
         resource.displayName,
         style = MaterialTheme.typography.headlineSmall,
@@ -1063,9 +1132,52 @@ private fun EnterpriseConfigurationResourceDetails(
             stringResource(if (resource.enabled) R.string.enterprise_configuration_enabled else R.string.enterprise_configuration_disabled),
         )
         resource.facts.forEach { value ->
-            ConfigurationValueRow(stringResource(configurationResourceFactResource(value.kind)), value.value)
+            ConfigurationValueRow(stringResource(configurationResourceFactResource(value.kind)),
+                configurationResourceFactValue(value.kind, value.value))
+        }
+        if (target != null && kind in setOf(EnterpriseConfigurationResourceKind.ASSISTANT, EnterpriseConfigurationResourceKind.STARTER,
+                EnterpriseConfigurationResourceKind.TTS, EnterpriseConfigurationResourceKind.ASR)) {
+            TextButton(onClick = { expanded = !expanded }) { Text(stringResource(R.string.enterprise_resource_definition)) }
+            if (expanded) {
+                if (loading) LinearProgressIndicator(Modifier.fillMaxWidth())
+                failure?.let { net.weero.measix.pilot.ui.components.ui.DiagnosticDisclosure(it) }
+                starter?.let { detail ->
+                    EnterpriseStarterDefinitionContent(detail.prompt, target) { queries.readEnterpriseStarterDetails(target) }
+                }
+                if (!loading && failure == null && (kind == EnterpriseConfigurationResourceKind.TTS || kind == EnterpriseConfigurationResourceKind.ASR)) {
+                    ConfigurationValueRow(stringResource(R.string.enterprise_configuration_fact_prompt), prompt ?: stringResource(R.string.enterprise_configuration_not_available))
+                }
+            }
         }
     }
+    if (expanded) assistant?.let { (definition, summary) ->
+        net.weero.measix.pilot.ui.components.ai.AssistantCatalogDetails(definition, summary, enterpriseName,
+            onDismiss = { expanded = false; assistant = null })
+    }
+}
+
+@Composable
+private fun configurationResourceFactValue(kind: EnterpriseConfigurationResourceFactKind, value: String): String {
+    when (kind) {
+        EnterpriseConfigurationResourceFactKind.SAMPLE_RATE -> return "$value Hz"
+        EnterpriseConfigurationResourceFactKind.SILENCE_DURATION, EnterpriseConfigurationResourceFactKind.PREFIX_PADDING -> return "$value ms"
+        EnterpriseConfigurationResourceFactKind.AUTH_OWNERSHIP -> return when (value) {
+            "ENTERPRISE_MANAGED" -> stringResource(R.string.enterprise_configuration_auth_managed)
+            "NONE" -> stringResource(R.string.enterprise_configuration_auth_none)
+            else -> value
+        }
+        else -> Unit
+    }
+    val labels = when (kind) {
+        EnterpriseConfigurationResourceFactKind.INPUT_TYPES, EnterpriseConfigurationResourceFactKind.OUTPUT_TYPES ->
+            mapOf("TEXT" to R.string.setting_provider_page_text, "IMAGE" to R.string.setting_provider_page_image)
+        EnterpriseConfigurationResourceFactKind.ABILITIES ->
+            mapOf("TOOL" to R.string.setting_provider_page_tool, "REASONING" to R.string.setting_provider_page_reasoning)
+        else -> return value
+    }
+    return value.split(',').map { it.trim() }.map { token ->
+        labels[token]?.let { stringResource(it) } ?: token
+    }.joinToString()
 }
 
 @Composable
@@ -1116,6 +1228,23 @@ private fun configurationResourceFactResource(kind: EnterpriseConfigurationResou
     EnterpriseConfigurationResourceFactKind.ALLOWED_SIZES -> R.string.enterprise_configuration_fact_allowed_sizes
     EnterpriseConfigurationResourceFactKind.ASSISTANT -> R.string.enterprise_configuration_fact_assistant
     EnterpriseConfigurationResourceFactKind.DESCRIPTION -> R.string.enterprise_configuration_fact_description
+    EnterpriseConfigurationResourceFactKind.RESOURCE_ID -> R.string.enterprise_configuration_fact_id
+    EnterpriseConfigurationResourceFactKind.PROTOCOL -> R.string.enterprise_configuration_fact_protocol
+    EnterpriseConfigurationResourceFactKind.MODEL_ID -> R.string.enterprise_configuration_fact_model
+    EnterpriseConfigurationResourceFactKind.INPUT_TYPES -> R.string.setting_provider_page_input_modality
+    EnterpriseConfigurationResourceFactKind.OUTPUT_TYPES -> R.string.setting_provider_page_output_modality
+    EnterpriseConfigurationResourceFactKind.ABILITIES -> R.string.enterprise_configuration_fact_abilities
+    EnterpriseConfigurationResourceFactKind.VOICE -> R.string.enterprise_configuration_fact_voice
+    EnterpriseConfigurationResourceFactKind.SPEECH_RATE -> R.string.enterprise_configuration_fact_rate
+    EnterpriseConfigurationResourceFactKind.PITCH -> R.string.enterprise_configuration_fact_pitch
+    EnterpriseConfigurationResourceFactKind.LANGUAGE -> R.string.enterprise_configuration_fact_language
+    EnterpriseConfigurationResourceFactKind.SAMPLE_RATE -> R.string.enterprise_configuration_fact_sample_rate
+    EnterpriseConfigurationResourceFactKind.VAD_THRESHOLD -> R.string.setting_asr_configure_vad_threshold
+    EnterpriseConfigurationResourceFactKind.SILENCE_DURATION -> R.string.setting_asr_configure_silence_duration
+    EnterpriseConfigurationResourceFactKind.PREFIX_PADDING -> R.string.setting_asr_configure_prefix_padding
+    EnterpriseConfigurationResourceFactKind.AUTH_OWNERSHIP -> R.string.enterprise_configuration_fact_auth
+    EnterpriseConfigurationResourceFactKind.SURFACE_VERSION -> R.string.enterprise_configuration_fact_surface_version
+    EnterpriseConfigurationResourceFactKind.SURFACE_HASH -> R.string.enterprise_configuration_fact_surface_hash
 }
 
 @Composable

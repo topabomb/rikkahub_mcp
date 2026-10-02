@@ -108,6 +108,25 @@ class ChatVM internal constructor(
 
     private val cleared = AtomicBoolean(false)
     private val page = MutableStateFlow<PageState>(PageState.Loading)
+    internal data class ConversationHandoff(
+        val selection: net.weero.measix.pilot.data.enterprise.RealmSelection,
+        val continuation: net.weero.measix.pilot.service.ConversationContinuation? = null,
+        val diagnostic: String? = null,
+        val failure: Throwable? = null,
+    )
+    private val _handoff = MutableStateFlow<ConversationHandoff?>(null)
+    internal val handoff = _handoff.asStateFlow()
+
+    internal fun consumeHandoff(expected: ConversationHandoff, navigate: (ConversationHandoff) -> Unit) {
+        if (expected.continuation == null) return
+        viewModelScope.launch {
+            if (conversationQueryService.observeCurrentSelection().first() != expected.selection) {
+                _handoff.compareAndSet(expected, null)
+                return@launch
+            }
+            if (_handoff.compareAndSet(expected, null)) navigate(expected)
+        }
+    }
     private val initializationOwner = Any()
     private var initializationJob: Job? = null
     private var initializationAttempt = 0L
@@ -275,7 +294,20 @@ class ChatVM internal constructor(
                 } catch (cancelled: CancellationException) {
                     throw cancelled
                 } catch (_: net.weero.measix.pilot.service.runtime.ConversationNotFoundException) {
-                    publish(PageState.Missing)
+                    val existing = request as? net.weero.measix.pilot.service.ConversationOpenRequest.OpenExisting
+                    val resume = existing?.startupResume
+                    if (resume == null) publish(PageState.Missing)
+                    else {
+                        try {
+                            val continuation = conversationApplicationService.startupContinuation(existing)
+                            _handoff.value = ConversationHandoff(
+                                net.weero.measix.pilot.data.enterprise.RealmSelection(existing.access, resume.selectionRevision), continuation)
+                        } catch (cancelled: CancellationException) { throw cancelled }
+                        catch (error: Exception) {
+                            logDiagnosticFailure("ChatVM", "Startup conversation continuation failed", error)
+                            publish(PageState.Failed(error))
+                        }
+                    }
                 } catch (error: Exception) {
                     logDiagnosticFailure("ChatVM", "Conversation page initialization failed for ${request.id} with ${request.access}", error)
                     publish(PageState.Failed(error))
@@ -634,11 +666,34 @@ class ChatVM internal constructor(
         launchPageCommand { opened -> conversationApplicationService.updateTitle(opened.lease.commandTarget, title) }
     }
 
-    suspend fun deleteConversation(conversation: ConversationSummary): Boolean {
+    fun deleteConversation(conversation: ConversationSummary) {
         val original = (page.value as? PageState.Open)?.takeIf { it.lease.commandTarget.selection == conversation.commandTarget.selection }
-        return try { conversationApplicationService.delete(conversation.commandTarget); true }
-        catch (cancelled: CancellationException) { throw cancelled }
-        catch (error: Exception) { reportCommandError(original, error); false }
+            ?: return
+        val current = conversation.id == request.id
+        if (_handoff.value != null) return
+        if (current) _handoff.value = ConversationHandoff(conversation.commandTarget.selection)
+        viewModelScope.launch {
+            var committed: net.weero.measix.pilot.service.ConversationDeletionReceipt? = null
+            try {
+                val receipt = conversationApplicationService.delete(conversation.commandTarget)
+                committed = receipt
+                if (current) {
+                    val continuation = conversationApplicationService.deletionContinuation(receipt)
+                    _handoff.value = ConversationHandoff(receipt.selection, continuation,
+                        receipt.maintenanceFailure?.userVisibleDiagnostic())
+                } else receipt.maintenanceFailure?.let { reportCommandError(original, it) }
+            } catch (cancelled: CancellationException) {
+                if (current) _handoff.value = null
+                throw cancelled
+            }
+            catch (error: Exception) {
+                if (current && committed != null) {
+                    logDiagnosticFailure("ChatVM", "Deleted conversation continuation failed", error)
+                    _handoff.value = ConversationHandoff(conversation.commandTarget.selection, failure = error)
+                }
+                else { if (current) _handoff.value = null; reportCommandError(original, error) }
+            }
+        }
     }
 
     fun updatePinnedStatus(conversation: ConversationSummary) {

@@ -28,6 +28,11 @@ internal data class RemoteWorkspaceSummary(
 ) {
     val canOpenFiles: Boolean get() = status == RemoteWorkspaceStatus.AVAILABLE
 }
+internal data class RemoteWorkspaceQueryState(
+    val selection: RealmSelection,
+    val refreshing: Boolean,
+    val diagnostic: String? = null,
+)
 internal data class RemoteFile(
     val path: String, val directory: Boolean, val size: Long?, val modifiedAt: String?, val etag: String?,
 ) {
@@ -83,6 +88,8 @@ internal class RemoteWorkspaceService(
     private var refreshing: Pair<Identity, Deferred<Unit>>? = null
     private val _summary = MutableStateFlow<RemoteWorkspaceSummary?>(null)
     val summary: StateFlow<RemoteWorkspaceSummary?> = _summary.asStateFlow()
+    private val _queryState = MutableStateFlow<RemoteWorkspaceQueryState?>(null)
+    val queryState = _queryState.asStateFlow()
 
     init {
         scope.launch {
@@ -95,7 +102,7 @@ internal class RemoteWorkspaceService(
                 val previous = synchronized(monitor) { current?.identity }
                 if (previous != identity) {
                     previous?.let { revoke(it.selection.access).awaitClosed() }
-                    synchronized(monitor) { current = identity?.let { State(it, null) }; _summary.value = null }
+                    synchronized(monitor) { current = identity?.let { State(it, null) }; _summary.value = null; _queryState.value = null }
                 }
                 if (identity != null && synchronized(monitor) { identity.selection.access !in changingConnections }) {
                     try { refresh(identity.selection) }
@@ -111,7 +118,7 @@ internal class RemoteWorkspaceService(
         generation++
         handles.removeAll { it.selection.access == access }
         verified.keys.removeAll { it.selection.access == access }
-        if (current?.identity?.selection?.access == access) { current = null; _summary.value = null; refreshing = null }
+        if (current?.identity?.selection?.access == access) { current = null; _summary.value = null; _queryState.value = null; refreshing = null }
         val captured = jobs.filter { it.selection.access == access }.map { it.job }
         captured.forEach { it.cancel() }
         RemoteWorkspaceRevocation(captured) { cleanupCopies { it.selection.access == access } }
@@ -143,7 +150,8 @@ internal class RemoteWorkspaceService(
                     val stamp = ++generation
                     val old = current?.takeIf { it.identity == identity }
                     current = old ?: State(identity, null)
-                    _summary.value = RemoteWorkspaceSummary(selection, RemoteWorkspaceStatus.CHECKING)
+                    _summary.value = old?.let(::project)?.copy(status = RemoteWorkspaceStatus.CHECKING)
+                    _queryState.value = RemoteWorkspaceQueryState(selection, refreshing = true)
                     tracked<Unit>(selection, null) {
                         try {
                             val projection = platform.read((selection.access as RealmAccess.Enterprise).sessionId) { connection, token ->
@@ -159,6 +167,7 @@ internal class RemoteWorkspaceService(
                                     }
                                     current = State(identity, projection, current?.takeIf { it.identity == identity }?.readError)
                                     _summary.value = project(requireNotNull(current))
+                                    _queryState.value = RemoteWorkspaceQueryState(selection, refreshing = false)
                                 }
                             }
                         } catch (cancelled: CancellationException) { throw cancelled }
@@ -172,6 +181,7 @@ internal class RemoteWorkspaceService(
                                     handles.filter { it.selection == selection }.toList().forEach(::revokeHandleLocked)
                                     current = null
                                     _summary.value = null
+                                    _queryState.value = RemoteWorkspaceQueryState(selection, refreshing = false)
                                 }
                             }
                             android.util.Log.i("RemoteWorkspace", "Optional workspace protocol unavailable: ${unsupported.message}")
@@ -179,11 +189,27 @@ internal class RemoteWorkspaceService(
                         catch (error: Exception) {
                             android.util.Log.e("RemoteWorkspace", "Status query failed", error)
                             synchronized(monitor) {
-                                if (generation == stamp) _summary.value = RemoteWorkspaceSummary(selection,
-                                    RemoteWorkspaceStatus.FAILED, diagnostic = error.userVisibleDiagnostic())
+                                if (generation == stamp) {
+                                    val diagnostic = error.userVisibleDiagnostic()
+                                    _summary.value = old?.let(::project)?.copy(status = RemoteWorkspaceStatus.FAILED, diagnostic = diagnostic)
+                                    _queryState.value = RemoteWorkspaceQueryState(selection, refreshing = false, diagnostic = diagnostic)
+                                }
                             }
                         }
-                    }.also { refreshing = identity to it; it.start() }
+                    }.also { task ->
+                        refreshing = identity to task
+                        task.invokeOnCompletion {
+                            synchronized(monitor) {
+                                // File failures can supersede the projection without ending this query.
+                                if (refreshing?.second === task) {
+                                    refreshing = null
+                                    _queryState.value = _queryState.value?.takeIf { it.selection == selection }
+                                        ?.copy(refreshing = false)
+                                }
+                            }
+                        }
+                        task.start()
+                    }
                 }
             }
         }
@@ -689,8 +715,9 @@ internal class RemoteWorkspaceService(
     }
 
     private fun project(state: State): RemoteWorkspaceSummary? {
-        val p = state.projection ?: return RemoteWorkspaceSummary(state.identity.selection, RemoteWorkspaceStatus.CHECKING)
-        if (p.agentSpaceId == null && p.serviceState != PlatformWorkspaceProjectionServiceState.ENABLED) return null
+        val p = state.projection ?: return null
+        if (p.agentSpaceId == null || p.state == PlatformWorkspaceProjectionState.DELETED ||
+            p.state == PlatformWorkspaceProjectionState.UNPROVISIONED) return null
         val status = when {
             p.state == PlatformWorkspaceProjectionState.DELETING -> RemoteWorkspaceStatus.DELETING
             p.state == PlatformWorkspaceProjectionState.NEEDS_ATTENTION -> RemoteWorkspaceStatus.NEEDS_ATTENTION

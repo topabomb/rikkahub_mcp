@@ -24,6 +24,7 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import net.weero.measix.pilot.data.configuration.ConfigurationScope
 import kotlin.uuid.Uuid
+import net.weero.measix.pilot.utils.userVisibleDiagnostic
 
 internal sealed interface EnterpriseState {
     data object Loading : EnterpriseState
@@ -46,6 +47,13 @@ internal data class EnterprisePresentation(
     val state: EnterpriseState,
     val selection: RealmSelection?,
     val canEnterEnterprise: Boolean = false,
+    val publication: EnterprisePublicationSummary? = null,
+    val publicationFailure: String? = null,
+)
+internal data class EnterprisePublicationSummary(
+    val releaseId: String,
+    val snapshotHash: String,
+    val schemaVersion: Long?,
 )
 internal data class EnterpriseExitToken(val access: RealmAccess.Enterprise, val reason: EnterpriseExitReason)
 internal sealed interface EnterpriseExitSignal {
@@ -487,8 +495,25 @@ internal class EnterpriseSessionController(
     suspend fun readPresentation(): EnterprisePresentation = mutex.withLock {
         val published = state.value
         val manifest = (published as? EnterpriseState.Available)?.manifest
+        var publicationFailure: String? = null
+        val publication = if (manifest?.session != null && manifest.applied != null &&
+            allowsDataAccess(manifest, RealmAccess.Enterprise(manifest.session.identity.scope, manifest.session.id))) {
+            try {
+                // Diagnostic metadata belongs to this manifest revision and needs no execution admission.
+                val execution = withContext(Dispatchers.IO) { store.execution(manifest) } as EnterpriseExecution.Platform
+                currentCoroutineContext().ensureActive()
+                EnterprisePublicationSummary(execution.releaseId, execution.snapshotHash, execution.snapshotSchemaVersion)
+            } catch (cancelled: CancellationException) { throw cancelled }
+            catch (error: Exception) {
+                android.util.Log.e("EnterpriseSession", "Publication metadata read failed", error)
+                publicationFailure = error.userVisibleDiagnostic()
+                null
+            }
+        } else null
         EnterprisePresentation(
             state = published,
+            publication = publication,
+            publicationFailure = publicationFailure,
             selection = when (published) {
                 EnterpriseState.Loading -> null
                 is EnterpriseState.Failed -> RealmSelection(RealmAccess.Personal, selectionRevision.value)

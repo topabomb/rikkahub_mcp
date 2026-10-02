@@ -133,10 +133,9 @@ class ChatScrollEntryAndroidTest {
     @Test fun namedMessageJumpersMoveThroughHistoryAndReturnToItsStart() = withHistory { first, _ ->
         launch(first.route())
         assertTail(first)
-        val context = ApplicationProvider.getApplicationContext<Context>()
-        val previous = context.getString(R.string.chat_page_previous_message)
-        val next = context.getString(R.string.chat_page_next_message)
-        val start = context.getString(R.string.chat_page_scroll_to_top)
+        val previous = activityText(R.string.chat_page_previous_message)
+        val next = activityText(R.string.chat_page_next_message)
+        val start = activityText(R.string.chat_page_scroll_to_top)
         val observations = mutableListOf<String>()
         fun observe(label: String) {
             observations += "$label: value=${position()}, max=${maximum()}, " +
@@ -305,15 +304,15 @@ class ChatScrollEntryAndroidTest {
             launch(Screen.Chat(request), contentHeight = 300.dp)
             compose.waitUntil(30_000) { maximum() > 0f }
             compose.waitForIdle()
-            val context = ApplicationProvider.getApplicationContext<Context>()
             val title = compose.onNode(hasText("Scroll entry fixture") and hasAnyAncestor(historyMatcher()),
                 useUnmergedTree = true).getUnclippedBoundsInRoot()
-            val last = compose.onNode(hasText(context.getString(R.string.chat_readiness_workspace_title)) and
+            val last = compose.onNode(hasText(activityText(R.string.chat_readiness_workspace_title)) and
                 hasAnyAncestor(historyMatcher()), useUnmergedTree = true).getUnclippedBoundsInRoot()
             val viewport = history().getUnclippedBoundsInRoot()
             assertTrue("The production setup must exceed the actual list viewport",
                 last.bottom - title.top > viewport.bottom - viewport.top)
             assertEquals("An empty draft must open at the start of its setup", 0f, position(), 0f)
+            capture("empty-draft-setup")
             val initial = runBlocking { query.conversationUiModel(lease).first { it != null }!! }
             assertTrue(initial.snapshot.nodes.isEmpty())
             assertNull(initial.presentation.activeTurnId)
@@ -512,6 +511,26 @@ class ChatScrollEntryAndroidTest {
     }
 
     private fun history() = compose.onNode(historyMatcher())
+
+    private fun activityText(resource: Int): String {
+        var text = ""
+        requireNotNull(activity).onActivity { text = it.getString(resource) }
+        return text
+    }
+
+    private fun capture(name: String) {
+        val output = InstrumentationRegistry.getArguments().getString("additionalTestOutputDir")
+            ?: ApplicationProvider.getApplicationContext<Context>().cacheDir.absolutePath
+        val directory = java.io.File(output, "scroll-entry").apply { mkdirs() }
+        java.io.File(directory, "$name.png").outputStream().use { stream ->
+            val screenshot = requireNotNull(InstrumentationRegistry.getInstrumentation().uiAutomation.takeScreenshot())
+            try {
+                check(screenshot.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, stream))
+            } finally {
+                screenshot.recycle()
+            }
+        }
+    }
 
     private fun position() = history().fetchSemanticsNode().config[SemanticsProperties.VerticalScrollAxisRange].value()
     private fun maximum() = history().fetchSemanticsNode().config[SemanticsProperties.VerticalScrollAxisRange].maxValue()

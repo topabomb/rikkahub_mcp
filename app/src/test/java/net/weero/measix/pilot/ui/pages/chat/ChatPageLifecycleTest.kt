@@ -53,6 +53,57 @@ import kotlin.uuid.Uuid
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class ChatPageLifecycleTest {
+    @Test fun `cancelled drawer deletion releases its busy handoff without reporting a failure`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val fixture = Fixture(draft = false)
+        coEvery { fixture.application.delete(any()) } throws kotlinx.coroutines.CancellationException("cancelled before commit")
+        try {
+            val vm = fixture.create(); runCurrent()
+            val row = ConversationSummary(fixture.request.id, fixture.request.assistantId, "Current", null, false,
+                java.time.Instant.EPOCH, java.time.Instant.EPOCH, fixture.lease.commandTarget.selection)
+            vm.deleteConversation(row); runCurrent()
+            assertNull(vm.handoff.value)
+            coVerify(exactly = 0) { fixture.application.deletionContinuation(any()) }
+            assertSame(fixture.model, vm.conversationUiModel.value)
+        } finally { fixture.store.clear(); Dispatchers.resetMain() }
+    }
+
+    @Test fun `current drawer deletion survives Missing before completion and its handoff is consumed once`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val fixture = Fixture(draft = false)
+        val submitted = CompletableDeferred<Unit>()
+        val commit = CompletableDeferred<Unit>()
+        val receipt = net.weero.measix.pilot.service.ConversationDeletionReceipt(fixture.request.id, fixture.request.assistantId, fixture.lease.commandTarget.selection)
+        coEvery { fixture.application.delete(any()) } coAnswers {
+            submitted.complete(Unit)
+            fixture.reads.value = ConversationReadState.Missing
+            commit.await()
+            receipt
+        }
+        val next = fixture.request.copy(id = Uuid.random())
+        coEvery { fixture.application.deletionContinuation(receipt) } returns net.weero.measix.pilot.service.ConversationContinuation(next)
+        every { fixture.query.observeCurrentSelection() } returns flowOf(fixture.lease.commandTarget.selection)
+        try {
+            val vm = fixture.create(); runCurrent()
+            val row = ConversationSummary(fixture.request.id, fixture.request.assistantId, "Current", null, false,
+                java.time.Instant.EPOCH, java.time.Instant.EPOCH, fixture.lease.commandTarget.selection)
+            vm.deleteConversation(row)
+            submitted.await(); runCurrent()
+            assertSame(ConversationReadState.Missing, vm.conversationState.value)
+            assertNotNull(vm.handoff.value)
+            assertNull(vm.handoff.value?.continuation)
+            commit.complete(Unit); runCurrent()
+            val handoff = requireNotNull(vm.handoff.value)
+            var navigations = 0
+            vm.consumeHandoff(handoff) { assertEquals(next, it.continuation?.request); navigations++ }
+            vm.consumeHandoff(handoff) { navigations++ }
+            runCurrent()
+            assertEquals(1, navigations)
+            assertNull(vm.handoff.value)
+            coVerify(exactly = 1) { fixture.application.delete(any()) }
+        } finally { fixture.store.clear(); Dispatchers.resetMain() }
+    }
+
     @Test fun `ready snapshot waits for its joined configuration instead of reporting a missing resource`() = runTest {
         Dispatchers.setMain(StandardTestDispatcher(testScheduler))
         val fixture = Fixture()
@@ -786,7 +837,7 @@ class ChatPageLifecycleTest {
         coEvery { fixture.application.delete(any()) } throws java.io.IOException("other chat delete failed")
         try {
             val vm = fixture.create(); runCurrent()
-            assertFalse(vm.deleteConversation(row)); runCurrent()
+            vm.deleteConversation(row); runCurrent()
             val error = vm.errors.value.single()
             assertEquals(fixture.request.id, error.conversationId)
             assertTrue(error.detail.contains("IOException: other chat delete failed"))

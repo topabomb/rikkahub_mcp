@@ -16,6 +16,51 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class EnterpriseVMTest {
+    @Test fun `updates keep last successful content during one deduplicated refresh and clear on confirmed empty result`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val store = ViewModelStore()
+        try {
+            val access = RealmAccess.Enterprise(exampleEnterprisePackage().identity.scope, "session")
+            val selection = RealmSelection(access, 1)
+            val overview = MutableStateFlow(EnterpriseOverview(selection, EnterpriseSessionPhase.READY,
+                "Example", "Member", access, 1, 1000, null, null, false, platformOrigin = "https://core.example"))
+            val service = mockk<EnterpriseApplicationService>()
+            every { service.observe() } returns overview
+            every { service.runtimeUsageChanges() } returns kotlinx.coroutines.flow.emptyFlow()
+            coEvery { service.budgets(any(), any()) } throws java.io.IOException("budget unavailable")
+            val old = EnterpriseUpdatesUiModel("UTC", listOf(EnterpriseUpdateSummaryUiModel("notice", "Notice",
+                "2026-09-22T00:00:00Z", "Details", false, EnterpriseUpdateCategory.NOTICE, EnterpriseUpdateSeverity.INFO)))
+            val delayed = CompletableDeferred<EnterpriseUpdatesUiModel>()
+            var reads = 0
+            coEvery { service.recentUpdates(selection, access) } coAnswers {
+                when (++reads) { 1 -> old; 2 -> delayed.await(); else -> old.copy(items = emptyList()) }
+            }
+            val remote = mockk<net.weero.measix.pilot.service.remoteworkspace.RemoteWorkspaceService> {
+                every { summary } returns MutableStateFlow(null)
+                every { queryState } returns MutableStateFlow(null)
+                coEvery { refresh(any()) } returns Unit
+            }
+            val vm = EnterpriseVM(service, remote)
+            store.put("enterprise", vm)
+            backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.updates.collect {} }
+            vm.setForeground(true); runCurrent()
+            vm.refreshUpdates(); runCurrent()
+            vm.refreshUpdates(); runCurrent()
+            assertEquals(2, reads)
+            assertEquals(old, vm.updates.value?.value)
+            assertTrue(vm.updates.value?.loading == true)
+            delayed.completeExceptionally(java.io.IOException("feed unavailable")); runCurrent()
+            assertEquals(old, vm.updates.value?.value)
+            assertTrue(vm.updates.value?.failure?.contains("feed unavailable") == true)
+            vm.refreshUpdates(); runCurrent()
+            assertTrue(vm.updates.value!!.value!!.items.isEmpty())
+            assertNull(vm.updates.value?.failure)
+            vm.setForeground(false); runCurrent()
+            overview.value = overview.value.copy(selection = RealmSelection(access, 2)); runCurrent()
+            assertEquals(3, reads)
+        } finally { store.clear(); runCurrent(); Dispatchers.resetMain() }
+    }
+
     @Test fun `workspace admission failure is visible and a successful retry clears it`() = runTest {
         Dispatchers.setMain(StandardTestDispatcher(testScheduler))
         val store = ViewModelStore()
@@ -26,20 +71,22 @@ class EnterpriseVMTest {
                 "Example", "Member", access, 1, 1000, null, null, false))
             val service = mockk<EnterpriseApplicationService>()
             every { service.observe() } returns overview
+            every { service.runtimeUsageChanges() } returns kotlinx.coroutines.flow.emptyFlow()
             val remote = mockk<net.weero.measix.pilot.service.remoteworkspace.RemoteWorkspaceService>()
             every { remote.summary } returns MutableStateFlow(null)
+            every { remote.queryState } returns MutableStateFlow(null)
             coEvery { remote.refresh(selection) } throws EnterpriseConfigurationException("enterprise_selection_revoked")
             val vm = EnterpriseVM(service, remote)
             store.put("enterprise", vm)
-            backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.error.collect {} }
+            backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.workspaceFailure.collect {} }
             runCurrent()
             vm.refreshWorkspace(); runCurrent()
-            assertEquals(net.weero.measix.pilot.R.string.remote_workspace_failed, vm.error.value?.resource)
-            assertEquals(selection, vm.error.value?.selection)
-            assertTrue(vm.error.value?.detail?.contains("enterprise_selection_revoked") == true)
+            assertEquals(net.weero.measix.pilot.R.string.remote_workspace_failed, vm.workspaceFailure.value?.resource)
+            assertEquals(selection, vm.workspaceFailure.value?.selection)
+            assertTrue(vm.workspaceFailure.value?.detail?.contains("enterprise_selection_revoked") == true)
             coEvery { remote.refresh(selection) } returns Unit
             vm.refreshWorkspace(); runCurrent()
-            assertNull(vm.error.value)
+            assertNull(vm.workspaceFailure.value)
         } finally { store.clear(); runCurrent(); Dispatchers.resetMain() }
     }
 
@@ -53,15 +100,17 @@ class EnterpriseVMTest {
                 "Example", "Member", access, 1, 1000, null, null, false))
             val service = mockk<EnterpriseApplicationService>()
             every { service.observe() } returns overview
+            every { service.runtimeUsageChanges() } returns kotlinx.coroutines.flow.emptyFlow()
             val remote = mockk<net.weero.measix.pilot.service.remoteworkspace.RemoteWorkspaceService>()
             every { remote.summary } returns MutableStateFlow(null)
+            every { remote.queryState } returns MutableStateFlow(null)
             coEvery { remote.refresh(selection) } throws kotlinx.coroutines.CancellationException("refresh cancelled")
             val vm = EnterpriseVM(service, remote)
             store.put("enterprise", vm)
-            backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.error.collect {} }
+            backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.workspaceFailure.collect {} }
             runCurrent()
             vm.refreshWorkspace(); runCurrent()
-            assertNull(vm.error.value)
+            assertNull(vm.workspaceFailure.value)
             val delayed = CompletableDeferred<Unit>()
             coEvery { remote.refresh(selection) } coAnswers { delayed.await() }
             vm.refreshWorkspace(); runCurrent()
@@ -69,7 +118,7 @@ class EnterpriseVMTest {
             runCurrent()
             delayed.completeExceptionally(IllegalStateException("old workspace connection rejected"))
             runCurrent()
-            assertNull(vm.error.value)
+            assertNull(vm.workspaceFailure.value)
         } finally { store.clear(); runCurrent(); Dispatchers.resetMain() }
     }
 
@@ -83,6 +132,7 @@ class EnterpriseVMTest {
                 "Example", "Member", access, 1, 1000, null, null, false, platformOrigin = "https://core.example"))
             val service = mockk<EnterpriseApplicationService>()
             every { service.observe() } returns overview
+            every { service.runtimeUsageChanges() } returns kotlinx.coroutines.flow.emptyFlow()
             val feed = EnterpriseUpdatesUiModel("UTC", emptyList())
             var reads = 0
             coEvery { service.recentUpdates(selection, access) } coAnswers { reads++; feed }
@@ -92,9 +142,10 @@ class EnterpriseVMTest {
                     generation = 2, lastSyncMillis = 2000)
                 EnterpriseSynchronizationCommandResult.COMPLETED
             }
-            val vm = EnterpriseVM(service, mockk { every { summary } returns kotlinx.coroutines.flow.MutableStateFlow(null); coEvery { refresh(any()) } returns Unit })
+            val vm = EnterpriseVM(service, mockk { every { summary } returns kotlinx.coroutines.flow.MutableStateFlow(null); every { queryState } returns kotlinx.coroutines.flow.MutableStateFlow(null); coEvery { refresh(any()) } returns Unit })
             store.put("enterprise", vm)
             backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.updates.collect {} }
+            vm.setForeground(true)
             runCurrent()
             assertEquals(1, reads)
 
@@ -125,9 +176,10 @@ class EnterpriseVMTest {
                 "Example", "Member", access, null, null, null, null, false))
             val service = mockk<EnterpriseApplicationService>()
             every { service.observe() } returns overview
+            every { service.runtimeUsageChanges() } returns kotlinx.coroutines.flow.emptyFlow()
             val confirmation = EnterpriseJoinConfirmation(kotlin.uuid.Uuid.random(), "https://core.example")
             coEvery { service.join("enrollment") } returns confirmation
-            val vm = EnterpriseVM(service, mockk { every { summary } returns kotlinx.coroutines.flow.MutableStateFlow(null); coEvery { refresh(any()) } returns Unit })
+            val vm = EnterpriseVM(service, mockk { every { summary } returns kotlinx.coroutines.flow.MutableStateFlow(null); every { queryState } returns kotlinx.coroutines.flow.MutableStateFlow(null); coEvery { refresh(any()) } returns Unit })
             store.put("enterprise", vm)
             backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.error.collect {} }
             backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.notice.collect {} }
@@ -178,6 +230,7 @@ class EnterpriseVMTest {
                 "Example", "Member", access, 1, 1000, null, null, false, platformOrigin = "https://core.example"))
             val service = mockk<EnterpriseApplicationService>()
             every { service.observe() } returns overview
+            every { service.runtimeUsageChanges() } returns kotlinx.coroutines.flow.emptyFlow()
             val delayed = CompletableDeferred<EnterpriseUpdatesUiModel>()
             val value = EnterpriseUpdatesUiModel("UTC", listOf(EnterpriseUpdateSummaryUiModel("notice", "Notice", "2026-09-22T00:00:00Z", "Details", false,
                 EnterpriseUpdateCategory.NOTICE, EnterpriseUpdateSeverity.INFO)))
@@ -189,9 +242,10 @@ class EnterpriseVMTest {
                     else -> value
                 }
             }
-            val vm = EnterpriseVM(service, mockk { every { summary } returns kotlinx.coroutines.flow.MutableStateFlow(null); coEvery { refresh(any()) } returns Unit })
+            val vm = EnterpriseVM(service, mockk { every { summary } returns kotlinx.coroutines.flow.MutableStateFlow(null); every { queryState } returns kotlinx.coroutines.flow.MutableStateFlow(null); coEvery { refresh(any()) } returns Unit })
             store.put("enterprise", vm)
             backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.updates.collect {} }
+            vm.setForeground(true)
             runCurrent()
             assertTrue(vm.updates.value?.failure?.contains("IllegalStateException") == true)
             assertTrue(vm.updates.value?.failure?.contains("connection closed") == true)
@@ -236,12 +290,13 @@ class EnterpriseVMTest {
             var calls = 0
             val service = mockk<EnterpriseApplicationService>()
             every { service.observe() } returns overview
+            every { service.runtimeUsageChanges() } returns kotlinx.coroutines.flow.emptyFlow()
             every { service.runtimeUsageChanges() } returns changes
             coEvery { service.budgets(selection, access) } coAnswers {
                 calls++
                 if (calls == 1) cached else retry.await()
             }
-            val vm = EnterpriseVM(service, mockk { every { summary } returns kotlinx.coroutines.flow.MutableStateFlow(null); coEvery { refresh(any()) } returns Unit })
+            val vm = EnterpriseVM(service, mockk { every { summary } returns kotlinx.coroutines.flow.MutableStateFlow(null); every { queryState } returns kotlinx.coroutines.flow.MutableStateFlow(null); coEvery { refresh(any()) } returns Unit })
             store.put("enterprise", vm)
             backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.budgets.collect {} }
             runCurrent()
@@ -288,13 +343,15 @@ class EnterpriseVMTest {
             var calls = 0
             val service = mockk<EnterpriseApplicationService>()
             every { service.observe() } returns overview
+            every { service.runtimeUsageChanges() } returns kotlinx.coroutines.flow.emptyFlow()
             every { service.runtimeUsageChanges() } returns changes
             coEvery { service.budgets(selection, access) } coAnswers {
                 calls++
                 if (calls == 1) first.await() else secondView
             }
-            val vm = EnterpriseVM(service, mockk { every { summary } returns kotlinx.coroutines.flow.MutableStateFlow(null); coEvery { refresh(any()) } returns Unit })
+            val vm = EnterpriseVM(service, mockk { every { summary } returns kotlinx.coroutines.flow.MutableStateFlow(null); every { queryState } returns kotlinx.coroutines.flow.MutableStateFlow(null); coEvery { refresh(any()) } returns Unit })
             store.put("enterprise", vm)
+            vm.setForeground(true)
             backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.budgets.collect {} }
             runCurrent()
 
@@ -331,12 +388,13 @@ class EnterpriseVMTest {
             var calls = 0
             val service = mockk<EnterpriseApplicationService>()
             every { service.observe() } returns overview
+            every { service.runtimeUsageChanges() } returns kotlinx.coroutines.flow.emptyFlow()
             every { service.runtimeUsageChanges() } returns changes
             coEvery { service.budgets(selection, access) } coAnswers {
                 calls++
                 if (calls == 1) old.await() else current
             }
-            val vm = EnterpriseVM(service, mockk { every { summary } returns kotlinx.coroutines.flow.MutableStateFlow(null); coEvery { refresh(any()) } returns Unit })
+            val vm = EnterpriseVM(service, mockk { every { summary } returns kotlinx.coroutines.flow.MutableStateFlow(null); every { queryState } returns kotlinx.coroutines.flow.MutableStateFlow(null); coEvery { refresh(any()) } returns Unit })
             store.put("enterprise", vm)
             backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.budgets.collect {} }
             runCurrent()
@@ -373,8 +431,9 @@ class EnterpriseVMTest {
                 platformOrigin = "https://core.example"))
             val service = mockk<EnterpriseApplicationService>()
             every { service.observe() } returns overview
+            every { service.runtimeUsageChanges() } returns kotlinx.coroutines.flow.emptyFlow()
             coEvery { service.synchronize(access) } returns EnterpriseSynchronizationCommandResult.COMPLETED
-            val vm = EnterpriseVM(service, mockk { every { summary } returns kotlinx.coroutines.flow.MutableStateFlow(null); coEvery { refresh(any()) } returns Unit })
+            val vm = EnterpriseVM(service, mockk { every { summary } returns kotlinx.coroutines.flow.MutableStateFlow(null); every { queryState } returns kotlinx.coroutines.flow.MutableStateFlow(null); coEvery { refresh(any()) } returns Unit })
             store.put("enterprise", vm)
             backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.notice.collect {} }
             backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.error.collect {} }
@@ -420,13 +479,14 @@ class EnterpriseVMTest {
             val remote = EnterpriseJoinConfirmation(kotlin.uuid.Uuid.random(), "https://platform.example")
             val service = mockk<EnterpriseApplicationService>()
             every { service.observe() } returns overview
+            every { service.runtimeUsageChanges() } returns kotlinx.coroutines.flow.emptyFlow()
             coEvery { service.join("local-expired") } returns local
             coEvery { service.confirmJoin(local) } throws EnterpriseConfigurationException("enrollment_expired")
             coEvery { service.join("remote-expired") } returns remote
             coEvery { service.confirmJoin(remote) } throws PlatformHttpException(401,
                 PlatformProblem("about:blank", "Enrollment code expired", 401, "enrollment_expired"),
                 "Enrollment code expired")
-            val vm = EnterpriseVM(service, mockk { every { summary } returns kotlinx.coroutines.flow.MutableStateFlow(null); coEvery { refresh(any()) } returns Unit })
+            val vm = EnterpriseVM(service, mockk { every { summary } returns kotlinx.coroutines.flow.MutableStateFlow(null); every { queryState } returns kotlinx.coroutines.flow.MutableStateFlow(null); coEvery { refresh(any()) } returns Unit })
             store.put("enterprise", vm)
             backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.error.collect {} }
 
@@ -459,12 +519,13 @@ class EnterpriseVMTest {
             val confirmation = EnterpriseJoinConfirmation(kotlin.uuid.Uuid.random(), "https://platform.example")
             val service = mockk<EnterpriseApplicationService>()
             every { service.observe() } returns overview
+            every { service.runtimeUsageChanges() } returns kotlinx.coroutines.flow.emptyFlow()
             coEvery { service.join("payload") } returns confirmation
             coEvery { service.confirmJoin(confirmation) } throws PlatformHttpException(409,
                 PlatformProblem("about:blank", "Installation is already bound to another user", 409,
                     "installation_user_conflict"),
                 "Installation is already bound to another user")
-            val vm = EnterpriseVM(service, mockk { every { summary } returns kotlinx.coroutines.flow.MutableStateFlow(null); coEvery { refresh(any()) } returns Unit })
+            val vm = EnterpriseVM(service, mockk { every { summary } returns kotlinx.coroutines.flow.MutableStateFlow(null); every { queryState } returns kotlinx.coroutines.flow.MutableStateFlow(null); coEvery { refresh(any()) } returns Unit })
             store.put("enterprise", vm)
             backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.error.collect {} }
 
@@ -519,7 +580,8 @@ class EnterpriseVMTest {
                 "Example", "Member", access, 1, 1000, null, null, false))
             val service = mockk<EnterpriseApplicationService>()
             every { service.observe() } returns overview
-            val vm = EnterpriseVM(service, mockk { every { summary } returns kotlinx.coroutines.flow.MutableStateFlow(null); coEvery { refresh(any()) } returns Unit })
+            every { service.runtimeUsageChanges() } returns kotlinx.coroutines.flow.emptyFlow()
+            val vm = EnterpriseVM(service, mockk { every { summary } returns kotlinx.coroutines.flow.MutableStateFlow(null); every { queryState } returns kotlinx.coroutines.flow.MutableStateFlow(null); coEvery { refresh(any()) } returns Unit })
             store.put("enterprise", vm)
             backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.error.collect {} }
             runCurrent()
@@ -555,7 +617,8 @@ class EnterpriseVMTest {
                 "Example", "Member", access, 1, 1000, null, null, false))
             val service = mockk<EnterpriseApplicationService>()
             every { service.observe() } returns overview
-            val vm = EnterpriseVM(service, mockk { every { summary } returns kotlinx.coroutines.flow.MutableStateFlow(null); coEvery { refresh(any()) } returns Unit })
+            every { service.runtimeUsageChanges() } returns kotlinx.coroutines.flow.emptyFlow()
+            val vm = EnterpriseVM(service, mockk { every { summary } returns kotlinx.coroutines.flow.MutableStateFlow(null); every { queryState } returns kotlinx.coroutines.flow.MutableStateFlow(null); coEvery { refresh(any()) } returns Unit })
             store.put("enterprise", vm)
             backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.error.collect {} }
             runCurrent()
@@ -594,9 +657,10 @@ class EnterpriseVMTest {
                 "Example", "Member", access, 1, 1000, null, null, false))
             val service = mockk<EnterpriseApplicationService>()
             every { service.observe() } returns overview
+            every { service.runtimeUsageChanges() } returns kotlinx.coroutines.flow.emptyFlow()
             val syncing = CompletableDeferred<Unit>()
             coEvery { service.synchronize(access) } coAnswers { syncing.await(); EnterpriseSynchronizationCommandResult.COMPLETED }
-            val vm = EnterpriseVM(service, mockk { every { summary } returns kotlinx.coroutines.flow.MutableStateFlow(null); coEvery { refresh(any()) } returns Unit })
+            val vm = EnterpriseVM(service, mockk { every { summary } returns kotlinx.coroutines.flow.MutableStateFlow(null); every { queryState } returns kotlinx.coroutines.flow.MutableStateFlow(null); coEvery { refresh(any()) } returns Unit })
             store.put("enterprise", vm)
             backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.error.collect {} }
             runCurrent()
@@ -680,10 +744,10 @@ class EnterpriseVMTest {
         )
         assertTrue(projected.resources.single { it.kind == EnterpriseConfigurationResourceKind.IMAGE_GENERATOR }
             .items.single().facts.any { it.kind == EnterpriseConfigurationResourceFactKind.MAX_IMAGES && it.value == "3" })
-        assertFalse(projected.toString().contains(image.id))
+        assertTrue(projected.toString().contains(image.id))
         assertFalse(projected.toString().contains("mdl_missing"))
-        assertFalse(projected.toString().contains("OPENAI_IMAGES_GENERATIONS"))
-        assertFalse(projected.toString().contains("private-upstream-model"))
+        assertTrue(projected.toString().contains("OPENAI_IMAGES_GENERATIONS"))
+        assertTrue(projected.toString().contains("private-upstream-model"))
         assertFalse(projected.toString().contains("private-system-prompt"))
         assertFalse(projected.toString().contains("private-memory-seed"))
     }

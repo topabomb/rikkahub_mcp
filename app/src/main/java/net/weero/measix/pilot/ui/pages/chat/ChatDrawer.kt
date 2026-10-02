@@ -378,15 +378,7 @@ fun ChatDrawerContent(
                     vm.generateTitle(it, true)
                 },
                 onDelete = {
-                    scope.launch {
-                        if (!vm.deleteConversation(it)) return@launch
-                        conversations.refresh()
-                        if (it.id == currentConversationId) {
-                            navigateFromDrawer {
-                                chatNavigation.newChat()
-                            }
-                        }
-                    }
+                    vm.deleteConversation(it)
                 },
                 onPin = {
                     vm.updatePinnedStatus(it)

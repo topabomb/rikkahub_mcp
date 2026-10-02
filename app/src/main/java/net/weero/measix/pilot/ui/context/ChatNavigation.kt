@@ -31,18 +31,21 @@ class ChatNavigation internal constructor(
 
 /** Click handlers retain the rendered realm; delayed navigation never recaptures a newer session. */
 @Composable
-fun rememberChatNavigation(navigator: Navigator = LocalNavController.current): ChatNavigation {
+fun rememberChatNavigation(
+    navigator: Navigator = LocalNavController.current,
+    renderedSelection: net.weero.measix.pilot.data.enterprise.RealmSelection? = null,
+): ChatNavigation {
     val query = koinInject<ConversationQueryService>()
     val application = koinInject<ConversationApplicationService>()
-    val access by remember(query) { query.observeCurrentAccess() }.collectAsStateWithLifecycle(null)
+    val selection by remember(query) { query.observeCurrentSelection() }.collectAsStateWithLifecycle(null)
     val scope = rememberCoroutineScope()
     val toaster = LocalToaster.current
     val failure = stringResource(R.string.error_title_operation)
-    val capturedAccess = access
-    return remember(navigator, capturedAccess, application, scope, toaster, failure) {
+    val capturedSelection = renderedSelection ?: selection
+    return remember(navigator, capturedSelection, application, scope, toaster, failure) {
         ChatNavigation(
             create = { assistant, text, files ->
-                val original = capturedAccess
+                val original = capturedSelection
                 if (original == null) toaster.show(failure, type = ToastType.Error) else scope.launch {
                     try {
                         val request = application.newDraftRequest(original, assistant)
@@ -55,9 +58,9 @@ fun rememberChatNavigation(navigator: Navigator = LocalNavController.current): C
                 }
             },
             open = { id, node ->
-                val original = capturedAccess
+                val original = capturedSelection
                 if (original == null) toaster.show(failure, type = ToastType.Error) else {
-                    navigator.clearAndNavigate(Screen.Chat(ConversationOpenRequest.OpenExisting(id, original), nodeId = node?.toString()))
+                    navigator.clearAndNavigate(Screen.Chat(ConversationOpenRequest.OpenExisting(id, original.access), nodeId = node?.toString()))
                 }
             },
         )

@@ -75,8 +75,9 @@ class StarterEntryFlowAndroidTest {
                 if (surface == Entry.QUICK) compose.onNodeWithContentDescription(compose.activity.getString(R.string.chat_input_presets)).performClick()
                 compose.onNodeWithText(current.definition.title).performClick()
                 if (surface == Entry.SPACE) {
-                    if (historical) compose.onNodeWithText(compose.activity.getString(R.string.opening_context)).assertDoesNotExist()
-                    else compose.onNodeWithText(compose.activity.getString(R.string.opening_context)).assertIsDisplayed()
+                    compose.onNodeWithText(compose.activity.getString(R.string.opening_context)).performClick()
+                    if (historical) compose.onNodeWithText(compose.activity.getString(R.string.opening_missing)).assertIsDisplayed()
+                    else compose.onNodeWithText(compose.activity.getString(R.string.opening_system)).assertIsDisplayed()
                     compose.onNodeWithText(compose.activity.getString(R.string.enterprise_starter_open)).performClick()
                 }
                 compose.waitUntil(10_000) { current.accepted == 1 || current.failure != null }
@@ -152,7 +153,7 @@ class StarterEntryFlowAndroidTest {
             every { queries.observeAssistantCatalog() } returns MutableStateFlow(AssistantCatalogReadState.Available(
                 AssistantCatalogUiModel(selection, ConfigurationSelection(assistant, null), resolved.assistants, emptyList())))
             coEvery { queries.requireSelection(selection) } returns Unit
-            coEvery { queries.readEnterpriseStarterDetails(any()) } returns definition.details(true)
+            coEvery { queries.readEnterpriseStarterDetails(any<EnterpriseStarterTarget>()) } returns definition.details(true)
         }
         fun snapshot() = registry.requireRuntime(requireNotNull(view).conversationId).durable
         suspend fun open(request: StarterDraftRequest) = attempt {

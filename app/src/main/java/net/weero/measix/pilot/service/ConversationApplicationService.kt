@@ -83,6 +83,7 @@ class ConversationApplicationService internal constructor(
         internal val children: List<ConversationAggregateSnapshot>,
         internal val selection: RealmSelection,
         private val artifactRetention: ArtifactRetentionLease,
+        val deletion: ConversationDeletionReceipt,
     ) : AutoCloseable {
         private val state = AtomicInteger(0)
         internal fun claim() { check(state.compareAndSet(0, 1)) { "conversation_restore_token_consumed" } }
@@ -344,8 +345,11 @@ class ConversationApplicationService internal constructor(
         val access = sessions.captureSelectedRealmAccess()
         return sessions.withSelectedRealmAccess(access) {
             val existing = settingsStore.lastConversation(access.scope)
-            if (!createNew && existing != null) {
-                InitialConversationRequest.Open(ConversationOpenRequest.OpenExisting(existing, access))
+            val header = if (!createNew && existing != null) conversationRepo.getConversationHeader(existing) else null
+            if (header != null) {
+                check(header.scope == access.scope && header.parentConversationId == null) { "conversation_scope_mismatch" }
+                InitialConversationRequest.Open(ConversationOpenRequest.OpenExisting(requireNotNull(existing), access,
+                    StartupConversationResume(header.assistantId, sessions.selectionRevision.value)))
             } else settingsStore.withResolvedConfiguration(access.scope, sessions.state.value) { configuration ->
                 sessions.requirePublishedRealmAccess(access)
                 val selected = configuration.selections.assistantId
@@ -534,14 +538,46 @@ class ConversationApplicationService internal constructor(
         }
     }
 
-    suspend fun delete(target: ConversationCommandTarget) {
+    suspend fun delete(target: ConversationCommandTarget): ConversationDeletionReceipt {
         stopGeneration(target)
-        withTreeCommand(target) {
+        val assistantId = withTreeCommand(target) {
+            val header = requireNotNull(conversationRepo.getConversationHeader(target.conversationId)) { "conversation_not_found" }
             val childIds = conversationRepo.getChildConversationIds(target.conversationId)
             commandCoordinator.deleteOrThrow(target.conversationId)
             (childIds + target.conversationId).forEach(sideEffects::clearTitleTracking)
+            header.assistantId
         }
+        return deletionReceipt(target, assistantId)
     }
+
+    private suspend fun deletionReceipt(target: ConversationCommandTarget, assistantId: ConfigurationReference): ConversationDeletionReceipt =
+        withContext(NonCancellable) {
+            val failure = try { settingsStore.forgetConversation(target.selection.access.scope, target.conversationId); null }
+            catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+            catch (error: Exception) {
+                net.weero.measix.pilot.utils.logDiagnosticFailure("ConversationApplication", "Deleted conversation shortcut cleanup failed", error)
+                error
+            }
+            ConversationDeletionReceipt(target.conversationId, assistantId, target.selection, failure)
+        }
+
+    suspend fun deletionContinuation(receipt: ConversationDeletionReceipt): ConversationContinuation =
+        continuation(receipt.selection, receipt.assistantId)
+
+    suspend fun startupContinuation(request: ConversationOpenRequest.OpenExisting): ConversationContinuation {
+        val resume = requireNotNull(request.startupResume) { "conversation_explicit_open_missing" }
+        return continuation(RealmSelection(request.access, resume.selectionRevision), resume.assistantId)
+    }
+
+    private suspend fun continuation(selection: RealmSelection, assistantId: ConfigurationReference): ConversationContinuation =
+        sessions.withSelectedRealmSelection(selection) {
+            settingsStore.withResolvedConfiguration(selection.access.scope, sessions.state.value) { configuration ->
+                sessions.requirePublishedSelection(selection)
+                val result = configuration.selection(ConfigurationCategory.ASSISTANT, assistantId)
+                if (!result.isAvailable) ConversationContinuation(null, "conversation_assistant_unavailable")
+                else ConversationContinuation(ConversationOpenRequest.NewDraft(Uuid.random(), selection.access, assistantId))
+            }
+        }
 
     suspend fun deleteForUndo(target: ConversationCommandTarget): RestoreToken {
         stopGeneration(target)
@@ -552,7 +588,8 @@ class ConversationApplicationService internal constructor(
                     retention = artifactStore.retainNodesForUndo(tree.root.header.scope, (listOf(tree.root) + tree.children).map { it.nodes })
                 }
                 (deleted.children.map { it.conversationId } + deleted.root.conversationId).forEach(sideEffects::clearTitleTracking)
-                RestoreToken(deleted.root, deleted.children, target.selection, requireNotNull(retention))
+                val receipt = deletionReceipt(target, deleted.root.header.assistantId)
+                RestoreToken(deleted.root, deleted.children, target.selection, requireNotNull(retention), receipt)
             }
         } catch (error: Throwable) {
             retention?.close()
@@ -576,14 +613,14 @@ class ConversationApplicationService internal constructor(
     fun discardRestoreToken(token: RestoreToken) = token.close()
 
     /** Deletes the set the user reviewed; conversations created later are not silently included. */
-    suspend fun deleteConversations(targets: List<ConversationCommandTarget>) {
+    suspend fun deleteConversations(targets: List<ConversationCommandTarget>, onDeleted: suspend (ConversationDeletionReceipt) -> Unit = {}) {
         val first = targets.firstOrNull() ?: return
         withCommandTarget(first) {
             check(targets.all { it.selection == first.selection }) { "conversation_selection_mismatch" }
             targets.forEach { it.requireOpen() }
             commandCoordinator.withRootHeaders(first.selection.access.scope, targets.map { it.conversationId }) {}
         }
-        targets.distinctBy { it.conversationId }.forEach { delete(it) }
+        targets.distinctBy { it.conversationId }.forEach { onDeleted(delete(it)) }
     }
 
     internal suspend fun cancelGenerationsForAssistant(assistantId: ConfigurationReference, reason: String) {

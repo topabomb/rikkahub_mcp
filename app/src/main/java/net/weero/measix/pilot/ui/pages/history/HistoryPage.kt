@@ -41,15 +41,12 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.launch
 import net.weero.measix.pilot.R
 import net.weero.measix.pilot.Screen
 import net.weero.measix.pilot.service.ConversationSummary
@@ -64,23 +61,25 @@ import org.koin.androidx.compose.koinViewModel
 fun HistoryPage(vm: HistoryVM = koinViewModel()) {
     val navController = LocalNavController.current
     val chatNavigation = rememberChatNavigation(navController)
-    val scope = rememberCoroutineScope()
     val snackbarHostState = remember { SnackbarHostState() }
     var deletionCandidates by remember { mutableStateOf<List<ConversationSummary>?>(null) }
-    var operationRunning by remember { mutableStateOf(false) }
-    val operationFailed = stringResource(R.string.error_title_operation)
-    val runOperation: (suspend () -> Unit) -> Unit = { operation ->
-        if (!operationRunning) {
-            operationRunning = true
-            scope.launch {
-                try { operation() }
-                catch (cancelled: CancellationException) { throw cancelled }
-                catch (error: Exception) {
-                    android.util.Log.e("HistoryPage", "Conversation command failed", error)
-                    snackbarHostState.showSnackbar(operationFailed)
-                } finally { operationRunning = false }
-            }
-        }
+    val operationRunning by vm.running.collectAsStateWithLifecycle()
+    val commandFailure by vm.commandFailure.collectAsStateWithLifecycle()
+    val continuationUnavailable by vm.continuationUnavailable.collectAsStateWithLifecycle()
+    val deletedNavigation by vm.deletedNavigation.collectAsStateWithLifecycle()
+    val undo by vm.undo.collectAsStateWithLifecycle()
+    val snackMessageDeleted = stringResource(R.string.history_page_conversation_deleted)
+    val snackMessageUndo = stringResource(R.string.history_page_undo)
+    LaunchedEffect(deletedNavigation) {
+        deletedNavigation.forEach { result -> vm.applyDeletedNavigation(result) {
+            navController.replaceDeletedConversation(result.receipt, result.continuation)
+        } }
+    }
+    LaunchedEffect(undo) {
+        val token = undo ?: return@LaunchedEffect
+        val result = snackbarHostState.showSnackbar(snackMessageDeleted, snackMessageUndo, withDismissAction = true)
+        if (result == SnackbarResult.ActionPerformed) vm.restoreConversation(token)
+        else vm.discardRestoreToken(token)
     }
 
     val conversations = vm.conversations.collectAsStateWithLifecycle().value
@@ -122,12 +121,16 @@ fun HistoryPage(vm: HistoryVM = koinViewModel()) {
             SnackbarHost(hostState = snackbarHostState)
         }
     ) { contentPadding ->
-        val snackMessageDeleted = stringResource(R.string.history_page_conversation_deleted)
-        val snackMessageUndo = stringResource(R.string.history_page_undo)
         LazyColumn(
             contentPadding = contentPadding + PaddingValues(16.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
+            if (continuationUnavailable) item("continuation_unavailable") {
+                Text(stringResource(R.string.chat_deleted_assistant_unavailable), color = MaterialTheme.colorScheme.error)
+            }
+            commandFailure?.let { detail -> item("command_failure") {
+                net.weero.measix.pilot.ui.components.ui.DiagnosticDisclosure(detail)
+            } }
             (assistantCatalog as? AssistantCatalogReadState.Unavailable)?.let { unavailable ->
                 item("configuration_failure") {
                     androidx.compose.foundation.text.selection.SelectionContainer {
@@ -150,23 +153,9 @@ fun HistoryPage(vm: HistoryVM = koinViewModel()) {
                         chatNavigation.existingChat(conversation.id)
                     },
                     onDelete = {
-                        runOperation {
-                            val restoreToken = vm.deleteForUndo(conversation)
-                            try {
-                                val result = snackbarHostState.showSnackbar(
-                                    message = snackMessageDeleted,
-                                    actionLabel = snackMessageUndo,
-                                    withDismissAction = true,
-                                )
-                                if (result == SnackbarResult.ActionPerformed) {
-                                    vm.restoreConversation(restoreToken)
-                                }
-                            } finally {
-                                vm.discardRestoreToken(restoreToken)
-                            }
-                        }
+                        vm.deleteForUndo(conversation)
                     },
-                    onTogglePin = { runOperation { vm.togglePinStatus(conversation) } },
+                    onTogglePin = { vm.togglePinStatus(conversation) },
                     modifier = Modifier
                         .fillMaxWidth()
                         .animateItem()
@@ -183,10 +172,8 @@ fun HistoryPage(vm: HistoryVM = koinViewModel()) {
             confirmButton = {
                 TextButton(
                     onClick = {
-                        runOperation {
-                            try { vm.deleteConversations(candidates) }
-                            finally { deletionCandidates = null }
-                        }
+                        vm.deleteConversations(candidates)
+                        deletionCandidates = null
                     },
                     enabled = !operationRunning && candidates.isNotEmpty(),
                 ) {

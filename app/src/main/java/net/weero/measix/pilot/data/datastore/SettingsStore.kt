@@ -231,6 +231,15 @@ class SettingsStore internal constructor(
         }
     }
 
+    /** A completed deletion must not clear a newer conversation remembered in this scope. */
+    internal suspend fun forgetConversation(scope: ConfigurationScope, expectedId: kotlin.uuid.Uuid) = updateMutex.withLock {
+        commitUserDocument { document ->
+            if (document.preferences.lastConversation(scope) == expectedId)
+                document.copy(preferences = document.preferences.withLastConversation(scope, null))
+            else document
+        }
+    }
+
     internal val userMcpDefinitions = userDocuments
         .map { it.configuration.mcpServers.normalizeMcpDefinitions() }
         .distinctUntilChanged()

@@ -100,6 +100,11 @@ class EnterpriseConfigurationRecoveryTest {
             assertTrue(controller.recover() is EnterpriseState.Available)
             val access = controller.captureSelectedRealmAccess() as RealmAccess.Enterprise
             assertTrue(controller.withRealmAccess(access) { true })
+            val presentation = controller.readPresentation()
+            assertEquals(version, presentation.publication?.schemaVersion)
+            assertEquals((candidate.execution as EnterpriseExecution.Platform).releaseId, presentation.publication?.releaseId)
+            assertEquals((candidate.execution as EnterpriseExecution.Platform).snapshotHash, presentation.publication?.snapshotHash)
+            assertNull(presentation.publicationFailure)
             val attempts: List<suspend () -> Unit> = listOf(
                 { controller.readExecution(access) { _, _ -> Unit } },
                 { controller.confirmPlatformExecution(access, candidate) },

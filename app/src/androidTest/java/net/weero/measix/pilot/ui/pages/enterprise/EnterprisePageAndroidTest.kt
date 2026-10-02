@@ -6,6 +6,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.hasSetTextAction
@@ -72,6 +73,15 @@ import org.junit.Assert.*
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
+import org.koin.compose.KoinIsolatedContext
+import org.koin.dsl.koinApplication
+import org.koin.dsl.module
+import kotlinx.coroutines.flow.map
+import me.rerere.common.configuration.ConfigurationReference
+import kotlin.uuid.Uuid
+import net.weero.measix.pilot.service.remoteworkspace.RemoteWorkspaceQueryState
+import net.weero.measix.pilot.service.remoteworkspace.RemoteWorkspaceSummary
+import net.weero.measix.pilot.service.remoteworkspace.RemoteWorkspaceStatus
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
 
@@ -80,10 +90,50 @@ import java.util.concurrent.atomic.AtomicReference
 class EnterprisePageAndroidTest {
     @get:Rule val compose = createAndroidComposeRule<ComponentActivity>()
     private val viewModels = ViewModelStore()
+    private val isolatedContexts = mutableListOf<org.koin.core.KoinApplication>()
 
     @After
     fun clearViewModels() {
         compose.runOnUiThread { viewModels.clear() }
+        isolatedContexts.forEach { it.close() }
+    }
+
+    @Test
+    fun personalTitleActionExplicitlyCreatesADraftInItsRenderedSelection() {
+        val selection = RealmSelection(RealmAccess.Personal, 2)
+        val fixture = Fixture(overview().copy(selection = selection))
+        val request = ConversationOpenRequest.NewDraft(Uuid.random(), RealmAccess.Personal, ConfigurationReference.random())
+        coEvery { fixture.conversations.newDraftRequest(selection, null) } returns request
+        fixture.show()
+        compose.onNodeWithTag("space-start-conversation").assertIsDisplayed().performClick()
+        compose.waitUntil(5_000) { fixture.backStack.lastOrNull() == Screen.Chat(request) }
+        coVerify(exactly = 1) { fixture.conversations.newDraftRequest(selection, null) }
+        coVerify(exactly = 0) { fixture.conversations.initialRequest(any()) }
+    }
+
+    @Test
+    fun unknownWorkspaceStaysHiddenAndItsFirstFailureIsLocalToTheConnection() {
+        val fixture = Fixture(overview())
+        val selection = requireNotNull(fixture.state.value.selection)
+        fixture.workspaceQuery.value = RemoteWorkspaceQueryState(selection, true)
+        fixture.show()
+        compose.onNodeWithText(text(R.string.remote_workspace_title)).assertDoesNotExist()
+        fixture.workspaceQuery.value = RemoteWorkspaceQueryState(selection, false, "IOException: status unavailable")
+        compose.onNodeWithText(text(R.string.remote_workspace_query_failed)).assertIsDisplayed()
+        compose.onNodeWithText(text(R.string.remote_workspace_title)).assertDoesNotExist()
+        capturePage("enterprise-workspace-first-failure.png")
+        fixture.workspaceQuery.value = RemoteWorkspaceQueryState(selection, false)
+        fixture.workspaceSummary.value = RemoteWorkspaceSummary(selection, RemoteWorkspaceStatus.AVAILABLE)
+        compose.onNodeWithText(text(R.string.remote_workspace_title)).assertIsDisplayed()
+        fixture.workspaceSummary.value = RemoteWorkspaceSummary(selection, RemoteWorkspaceStatus.CHECKING)
+        compose.onNodeWithText(text(R.string.remote_workspace_title)).assertIsDisplayed()
+        capturePage("enterprise-workspace-refreshing.png")
+        fixture.workspaceSummary.value = RemoteWorkspaceSummary(selection, RemoteWorkspaceStatus.FAILED, diagnostic = "IOException: retry failed")
+        compose.onNodeWithText(text(R.string.remote_workspace_title)).assertIsDisplayed()
+        capturePage("enterprise-workspace-retained-failure.png")
+        fixture.workspaceSummary.value = null
+        compose.onNodeWithText(text(R.string.remote_workspace_title)).assertDoesNotExist()
+        compose.onNodeWithText(text(R.string.remote_workspace_query_failed)).assertDoesNotExist()
     }
 
     @Test
@@ -265,6 +315,35 @@ class EnterprisePageAndroidTest {
     }
 
     @Test
+    fun disabledStarterDefinitionRemainsReadableWithoutOfferingADraftAction() {
+        val initial = overview().copy(selection = RealmSelection(RealmAccess.Personal, 2))
+        val target = EnterpriseResourceDetailTarget(requireNotNull(initial.selection), requireNotNull(initial.access), 1,
+            ConfigurationReference.Enterprise(initial.access!!.scope.authority, "starter_disabled"), EnterpriseConfigurationResourceKind.STARTER)
+        val resource = EnterpriseConfigurationResourceUiModel("disabled-starter", "Disabled inspection topic", false, target = target)
+        val fixture = Fixture(initial.copy(configurationDetails = initial.configurationDetails!!.copy(
+            resources = listOf(EnterpriseConfigurationResourceGroupUiModel(EnterpriseConfigurationResourceKind.STARTER, listOf(resource))))))
+        val detail = StarterOpeningDetailUiModel(resource.displayName, "Review the inspection report.", "Published opening system.",
+            listOf(StarterContextUiModel("Inspection background", "Published opening background.")), false, true)
+        coEvery { fixture.configurationQueries.readEnterpriseStarterDetails(target) } returns detail
+        fixture.show()
+        click(R.string.enterprise_configuration_details_open)
+        click(R.string.enterprise_configuration_resource_starters)
+        compose.onNodeWithText(resource.displayName).performClick()
+        compose.onNodeWithText(text(R.string.enterprise_configuration_disabled)).assertIsDisplayed()
+        click(R.string.enterprise_resource_definition)
+        compose.onNodeWithText(detail.prompt).performScrollTo().assertIsDisplayed()
+        compose.onAllNodesWithText(resource.displayName).assertCountEquals(1)
+        compose.onNodeWithText(text(R.string.enterprise_starters_description)).assertDoesNotExist()
+        compose.onNodeWithText(text(R.string.enterprise_starter_open)).assertDoesNotExist()
+        click(R.string.opening_context)
+        compose.onNodeWithText("Published opening system.").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("Published opening background.").performScrollTo().assertIsDisplayed()
+        capturePage("enterprise-disabled-starter-definition.png")
+        compose.onNodeWithContentDescription(text(R.string.back)).performClick()
+        compose.onNodeWithText(resource.displayName).assertIsDisplayed()
+    }
+
+    @Test
     fun configurationDetailsShowTheEnterpriseAddressAndCopyAction() {
         val origin = "https://core.example"
         val initial = overview()
@@ -275,10 +354,11 @@ class EnterprisePageAndroidTest {
         fixture.show()
 
         click(R.string.enterprise_configuration_details_open)
-        compose.onNodeWithText(text(R.string.enterprise_configuration_diagnostics_title)).performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText(text(R.string.enterprise_configuration_generation)).assertIsDisplayed()
+        compose.onNodeWithText(text(R.string.enterprise_publication_details)).performScrollTo().performClick()
         compose.onNodeWithText(text(R.string.enterprise_address)).performScrollTo().assertIsDisplayed()
         compose.onNodeWithText(origin).performScrollTo().assertIsDisplayed()
-        compose.onNodeWithContentDescription(text(R.string.copy)).performScrollTo().assertIsDisplayed().performClick()
+        compose.onNodeWithText(text(R.string.enterprise_publication_copy)).performScrollTo().assertIsDisplayed().performClick()
         compose.onNodeWithText(text(R.string.copied)).assertIsDisplayed()
     }
 
@@ -444,7 +524,8 @@ class EnterprisePageAndroidTest {
                     "enterprise_configuration_unreadable")),
         ))
         fixture.show()
-        compose.onNodeWithText(text(R.string.history_page_title)).assertIsDisplayed().performClick()
+        compose.onNodeWithTag("enterprise-page-menu").performClick()
+        compose.onNodeWithText(text(R.string.enterprise_all_chat_history)).assertIsDisplayed().performClick()
         compose.runOnIdle { assertEquals(listOf(Screen.Enterprise, Screen.History), fixture.backStack) }
         coVerify(exactly = 0) { fixture.service.synchronize(any()) }
     }
@@ -889,14 +970,25 @@ class EnterprisePageAndroidTest {
     ) {
         val state = MutableStateFlow(initial)
         val service = mockk<EnterpriseApplicationService>()
+        val workspaceSummary = MutableStateFlow<RemoteWorkspaceSummary?>(null)
+        val workspaceQuery = MutableStateFlow<RemoteWorkspaceQueryState?>(null)
+        val conversations = mockk<ConversationApplicationService>()
+        private val conversationQuery = mockk<ConversationQueryService>()
+        val configurationQueries = mockk<ConfigurationQueryService>()
+        private val isolated = koinApplication { modules(module {
+            single { conversations }
+            single { conversationQuery }
+            single { configurationQueries }
+        }) }.also { isolatedContexts += it }
         lateinit var vm: EnterpriseVM
 
         fun show(withVerticalHinge: Boolean = false, restoration: StateRestorationTester? = null) {
+            every { conversationQuery.observeCurrentSelection() } returns state.map { it.selection }
             every { service.observe() } returns state
             every { service.runtimeUsageChanges() } returns emptyFlow()
             coEvery { service.recentUpdates(any(), any()) } returns recentUpdates
             compose.runOnUiThread {
-                vm = EnterpriseVM(service, mockk { every { summary } returns kotlinx.coroutines.flow.MutableStateFlow(null); coEvery { refresh(any()) } returns Unit })
+                vm = EnterpriseVM(service, mockk { every { summary } returns workspaceSummary; every { queryState } returns workspaceQuery; coEvery { refresh(any()) } returns Unit })
                 viewModels.put("enterprise", vm)
             }
             val navigator = Navigator(backStack)
@@ -914,7 +1006,7 @@ class EnterprisePageAndroidTest {
                 } else {
                     measuredAdaptive
                 }
-                MaterialTheme {
+                KoinIsolatedContext(isolated) { MaterialTheme {
                     CompositionLocalProvider(
                         LocalNavController provides navigator,
                         LocalToaster provides toaster,
@@ -924,7 +1016,7 @@ class EnterprisePageAndroidTest {
                         Toaster(state = toaster, alignment = Alignment.TopCenter)
                         EnterprisePage(vm = vm)
                     }
-                }
+                } }
             }
             if (restoration == null) compose.setContent(content) else restoration.setContent(content)
             compose.waitUntil(5_000) { vm.overview.value == state.value }

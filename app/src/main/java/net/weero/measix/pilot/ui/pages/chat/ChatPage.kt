@@ -191,6 +191,36 @@ fun ChatPage(
 
     val setting by vm.settings.collectAsStateWithLifecycle()
     val conversationState by vm.conversationState.collectAsStateWithLifecycle()
+    val handoff by vm.handoff.collectAsStateWithLifecycle()
+    val activeRoute by rememberUpdatedState(isActiveRoute)
+    val assistantUnavailable = stringResource(R.string.chat_deleted_assistant_unavailable)
+    val navigateHandoff: (ChatVM.ConversationHandoff) -> Unit = { result ->
+        if (activeRoute && navController.isCurrentConversation(request)) {
+            val next = result.continuation?.request
+            if (next != null) navController.clearAndNavigate(Screen.Chat(next))
+            else {
+                toaster.show(assistantUnavailable, type = ToastType.Error)
+                navController.clearAndNavigate(Screen.Enterprise)
+            }
+        }
+    }
+    LaunchedEffect(handoff, isActiveRoute) {
+        val expected = handoff ?: return@LaunchedEffect
+        if (isActiveRoute && expected.diagnostic == null) vm.consumeHandoff(expected, navigateHandoff)
+    }
+    handoff?.let { pending ->
+        if (pending.failure != null) ConversationUnavailable(
+            title = stringResource(R.string.history_page_conversation_deleted),
+            message = stringResource(R.string.chat_deleted_continuation_failed),
+            diagnostic = pending.failure.userVisibleDiagnostic(),
+        ) else if (pending.diagnostic != null) ConversationUnavailable(
+            title = stringResource(R.string.history_page_conversation_deleted),
+            message = stringResource(R.string.chat_deleted_maintenance_failed),
+            diagnostic = pending.diagnostic,
+            onNewChat = { vm.consumeHandoff(pending, navigateHandoff) },
+        ) else Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
+        return
+    }
     val stateSnapshot = when (val state = conversationState) {
         ConversationReadState.Loading -> {
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -204,7 +234,6 @@ fun ChatPage(
                 ConversationUnavailable(
                     title = stringResource(R.string.chat_conversation_missing_title),
                     message = stringResource(R.string.chat_conversation_missing_message),
-                    onRetry = vm::retryConversationLoad,
                     onNewChat = { chatNavigation.newChat() },
                 )
                 if (isActiveRoute) TTSController()
@@ -484,7 +513,7 @@ internal fun conversationLoadFailureMessage(error: Throwable): Int {
 internal fun ConversationUnavailable(
     title: String,
     message: String,
-    onRetry: () -> Unit,
+    onRetry: (() -> Unit)? = null,
     onNewChat: (() -> Unit)? = null,
     diagnostic: String? = null,
     showSpaces: Boolean = true,
@@ -504,7 +533,7 @@ internal fun ConversationUnavailable(
             Text(text = message, color = MaterialTheme.colorScheme.onSurfaceVariant,
                 style = MaterialTheme.typography.bodyMedium)
             FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
-                TextButton(onClick = onRetry) { Text(stringResource(R.string.application_recovery_retry)) }
+                onRetry?.let { action -> TextButton(onClick = action) { Text(stringResource(R.string.application_recovery_retry)) } }
                 onNewChat?.let { action ->
                     TextButton(onClick = action) { Text(stringResource(R.string.chat_page_new_chat)) }
                 }

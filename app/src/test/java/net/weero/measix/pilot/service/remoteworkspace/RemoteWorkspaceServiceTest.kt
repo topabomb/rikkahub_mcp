@@ -32,11 +32,12 @@ class RemoteWorkspaceServiceTest {
         val client: PlatformWorkspaceClient, val selection: RealmSelection, val control: PlatformControlClient,
         val invalidations: MutableList<Pair<RealmAccess.Enterprise, EnterpriseExitReason>>)
 
-    private suspend fun TestScope.fixture(): Fixture {
+    private suspend fun TestScope.fixture(initial: PlatformWorkspaceProjection = ready, initialError: Exception? = null): Fixture {
         val sessions = EnterpriseSessionController(enterpriseTestStore(temporary.newFolder()))
         sessions.enrollFixture(exampleEnterprisePackage())
         val client = mockk<PlatformWorkspaceClient>()
-        coEvery { client.state(any(), any()) } returns ready
+        if (initialError == null) coEvery { client.state(any(), any()) } returns initial
+        else coEvery { client.state(any(), any()) } throws initialError
         coEvery { client.list(any(), any(), any(), any()) } returns PlatformWorkspaceFileList(emptyList())
         val control = mockk<PlatformControlClient>()
         val invalidations = mutableListOf<Pair<RealmAccess.Enterprise, EnterpriseExitReason>>()
@@ -45,8 +46,115 @@ class RemoteWorkspaceServiceTest {
         val service = RemoteWorkspaceService(sessions, platform, client, ApplicationRecoveryGate().apply { ready() },
             CoroutineScope(backgroundScope.coroutineContext + SupervisorJob(backgroundScope.coroutineContext[Job])), temporary.newFolder())
         val selection = sessions.readPresentation().selection!!
-        service.summary.first { it?.status == RemoteWorkspaceStatus.AVAILABLE }
+        service.queryState.first { it?.refreshing == false }
         return Fixture(sessions, service, client, selection, control, invalidations)
+    }
+
+    @Test fun `unknown failure stays outside resource cards and a later successful query discovers provisioned files`() = runTest {
+        val f = fixture(initialError = IOException("state endpoint unavailable"))
+        assertNull(f.service.summary.value)
+        assertTrue(f.service.queryState.value!!.diagnostic!!.contains("state endpoint unavailable"))
+        coEvery { f.client.state(any(), any()) } returns ready
+        f.service.refresh(f.selection)
+        assertTrue(f.service.summary.value!!.canOpenFiles)
+        assertNull(f.service.queryState.value!!.diagnostic)
+    }
+
+    @Test fun `enabled service without a user resource stays hidden and successful removal replaces earlier facts`() = runTest {
+        val unprovisioned = ready.copy(agentSpaceId = null, state = PlatformWorkspaceProjectionState.UNPROVISIONED, filesAvailable = false)
+        val f = fixture(unprovisioned)
+        assertNull(f.service.summary.value)
+        coEvery { f.client.state(any(), any()) } returns ready
+        val handle = f.service.open(f.selection)
+        coEvery { f.client.state(any(), any()) } returns unprovisioned
+        f.service.refresh(f.selection)
+        assertNull(f.service.summary.value)
+        assertFalse(f.service.isValid(handle))
+    }
+
+    @Test fun `refresh retains a known resource while withholding file actions and merging concurrent queries`() = runTest {
+        val f = fixture()
+        val entered = CompletableDeferred<Unit>()
+        val complete = CompletableDeferred<Unit>()
+        coEvery { f.client.state(any(), any()) } coAnswers { entered.complete(Unit); complete.await(); ready }
+        val first = async { f.service.refresh(f.selection) }
+        entered.await()
+        assertEquals(RemoteWorkspaceStatus.CHECKING, f.service.summary.value!!.status)
+        assertFalse(f.service.summary.value!!.canOpenFiles)
+        val second = async { f.service.refresh(f.selection) }
+        runCurrent()
+        coVerify(exactly = 2) { f.client.state(any(), any()) }
+        try { f.service.requireNavigation(f.selection, filesRequired = true); fail("stale file capability was admitted") }
+        catch (_: IllegalStateException) { }
+        complete.complete(Unit)
+        first.await(); second.await()
+        assertTrue(f.service.summary.value!!.canOpenFiles)
+    }
+
+    @Test fun `file failure supersedes a status response but the completed query always stops refreshing`() = runTest {
+        for (readError in listOf(PlatformHttpException(503, null, "DAV unavailable"), IOException("DAV connection closed"))) {
+            for (queryError in listOf<Exception?>(null, IOException("state endpoint unavailable"))) {
+                val f = fixture()
+                val handle = f.service.open(f.selection)
+                val readEntered = CompletableDeferred<Unit>()
+                val releaseRead = CompletableDeferred<Unit>()
+                coEvery { f.client.list(any(), any(), any(), any()) } coAnswers {
+                    readEntered.complete(Unit); releaseRead.await(); throw readError
+                }
+                val reading = async { runCatching { f.service.list(handle, "") } }
+                readEntered.await()
+                val queryEntered = CompletableDeferred<Unit>()
+                val releaseQuery = CompletableDeferred<Unit>()
+                coEvery { f.client.state(any(), any()) } coAnswers {
+                    queryEntered.complete(Unit); releaseQuery.await()
+                    if (queryError != null) throw queryError
+                    ready
+                }
+                val refreshing = async { f.service.refresh(f.selection) }
+                queryEntered.await()
+                releaseRead.complete(Unit)
+                assertTrue(reading.await().isFailure)
+                assertEquals(RemoteWorkspaceStatus.READ_FAILED, f.service.summary.value!!.status)
+                assertTrue(f.service.queryState.value!!.refreshing)
+                releaseQuery.complete(Unit)
+                refreshing.await()
+                assertFalse(f.service.queryState.value!!.refreshing)
+                assertEquals(RemoteWorkspaceStatus.READ_FAILED, f.service.summary.value!!.status)
+                assertFalse(f.service.summary.value!!.canOpenFiles)
+                assertTrue(f.service.summary.value!!.diagnostic!!.contains(readError.message!!))
+            }
+        }
+    }
+
+    @Test fun `completion of a revoked query cannot stop a newer query for the same selection`() = runTest {
+        val f = fixture()
+        val oldEntered = CompletableDeferred<Unit>()
+        val releaseOld = CompletableDeferred<Unit>()
+        val newEntered = CompletableDeferred<Unit>()
+        val releaseNew = CompletableDeferred<Unit>()
+        var calls = 0
+        coEvery { f.client.state(any(), any()) } coAnswers {
+            if (++calls == 1) {
+                oldEntered.complete(Unit)
+                withContext(NonCancellable) { releaseOld.await() }
+            } else {
+                newEntered.complete(Unit); releaseNew.await()
+            }
+            ready
+        }
+        val oldQuery = async { runCatching { f.service.refresh(f.selection) } }
+        oldEntered.await()
+        val revocation = f.service.revoke(f.selection.access)
+        val newQuery = async { f.service.refresh(f.selection) }
+        newEntered.await()
+        releaseOld.complete(Unit)
+        assertTrue(oldQuery.await().exceptionOrNull() is CancellationException)
+        revocation.awaitClosed()
+        assertTrue(f.service.queryState.value!!.refreshing)
+        releaseNew.complete(Unit)
+        newQuery.await()
+        assertFalse(f.service.queryState.value!!.refreshing)
+        assertTrue(f.service.summary.value!!.canOpenFiles)
     }
 
     private fun refreshedToken() = PlatformRefreshResponse("replacement-access", "2099-01-01T00:00:00Z",

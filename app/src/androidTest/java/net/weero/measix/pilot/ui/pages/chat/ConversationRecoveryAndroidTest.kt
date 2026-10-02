@@ -48,6 +48,31 @@ class ConversationRecoveryAndroidTest {
     @get:Rule val compose = createAndroidComposeRule<ComponentActivity>()
 
     @Test
+    fun deletedRecentShortcutFailureKeepsAnExplicitContinuationAndCopyableDiagnostic() {
+        val next = Screen.Chat(ConversationOpenRequest.NewDraft(
+            Uuid.random(), RealmAccess.Personal, ConfigurationReference.random(),
+        ))
+        val stack = mutableListOf<NavKey>(Screen.Startup())
+        val diagnostic = IOException("recent-chat preference commit failed", IllegalStateException("storage unavailable"))
+            .userVisibleDiagnostic()
+        show(stack, text(R.string.chat_deleted_maintenance_failed), diagnostic,
+            onNewChat = { Navigator(stack).clearAndNavigate(next) }, titleResource = R.string.history_page_conversation_deleted)
+        compose.onNodeWithText(text(R.string.history_page_conversation_deleted)).assertIsDisplayed()
+        compose.onNodeWithText(text(R.string.application_recovery_retry)).assertDoesNotExist()
+        compose.onNodeWithTag("conversation-recovery-diagnostics").performClick()
+        compose.onNode(hasText(diagnostic) and hasAnyAncestor(isDialog())).assertIsDisplayed()
+        compose.onNodeWithContentDescription(text(R.string.chat_page_copy_error)).performClick()
+        compose.runOnIdle {
+            val clipboard = compose.activity.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+            assertEquals(diagnostic, clipboard.primaryClip?.getItemAt(0)?.text?.toString())
+        }
+        compose.onNodeWithContentDescription(text(R.string.update_card_close)).performClick()
+        capture("conversation-deleted-maintenance.png")
+        compose.onNodeWithText(text(R.string.chat_page_new_chat)).performClick()
+        compose.runOnIdle { assertEquals(listOf(next), stack) }
+    }
+
+    @Test
     fun missingConversationKeepsSpaceNavigationWhenNewChatCannotNavigate() {
         val original = Screen.Chat(ConversationOpenRequest.NewDraft(
             Uuid.random(), RealmAccess.Personal, ConfigurationReference.random(),
@@ -55,6 +80,7 @@ class ConversationRecoveryAndroidTest {
         val stack = mutableListOf<NavKey>(original)
         var attempts = 0
         show(stack, message = text(R.string.chat_conversation_missing_message), onNewChat = { attempts++ })
+        compose.onNodeWithText(text(R.string.application_recovery_retry)).assertDoesNotExist()
         compose.onNodeWithText(text(R.string.chat_page_new_chat)).performClick()
         compose.runOnIdle {
             assertEquals(1, attempts)
@@ -107,10 +133,11 @@ class ConversationRecoveryAndroidTest {
         stack: MutableList<NavKey>,
         message: String,
         diagnostic: String? = null,
-        onRetry: () -> Unit = {},
+        onRetry: (() -> Unit)? = null,
         onNewChat: (() -> Unit)? = null,
         shortScreen: Boolean = false,
         dark: Boolean = false,
+        titleResource: Int = R.string.chat_conversation_load_failed_title,
     ) {
         compose.setContent {
             val density = LocalDensity.current
@@ -124,7 +151,7 @@ class ConversationRecoveryAndroidTest {
                     Surface {
                         Box(if (shortScreen) Modifier.fillMaxWidth().height(240.dp) else Modifier) {
                             ConversationUnavailable(
-                                title = text(R.string.chat_conversation_load_failed_title),
+                                title = text(titleResource),
                                 message = message,
                                 diagnostic = diagnostic,
                                 onRetry = onRetry,

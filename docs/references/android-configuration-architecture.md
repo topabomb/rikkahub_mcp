@@ -37,6 +37,14 @@ UserSettingsDocument（用户定义 + 公用/按域偏好）+ Applied Enterprise
 ### 2.2 单一读写路径
 
 `SettingsStore` 是用户配置与偏好的唯一写入 owner。企业配置归独立的 EnterpriseAppliedStore / EnterpriseSessionController。
+空间配置详情中的公开发布摘要由 `EnterpriseSessionController.readPresentation` 在原 Session 锁内读取同一 manifest
+引用的 execution revision，只投影 releaseId、snapshotHash 和已保存的 snapshotSchemaVersion。
+诊断读取不调用可执行兼容准入，不提供 runtimePaths 或凭据；读取失败保留原状态和诊断。
+格式版本为历史 null 时显示未记录，当前生效 generation 不表示服务端最新版本，也不等于 APK 版本。
+`ConfigurationQueryService` 的 `EnterpriseResourceDetailTarget` 固定原选择、Session、generation 和真实资源引用，
+公开定义正文按需复验后读取；个人空间查看已连接企业沿原数据授权，不授予企业执行资格。
+Settings 等待结束后同时复验原选择与企业数据授权；配置核对可读取禁用的 Starter 定义，任务入口仍按准入过滤。
+发布时间未保存在 Applied 中，详情不以同步时间或动态时间代替。
 
 ```text
 updateLocal(latest personalSettings transform)

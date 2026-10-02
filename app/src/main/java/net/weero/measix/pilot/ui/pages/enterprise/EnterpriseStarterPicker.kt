@@ -171,10 +171,8 @@ internal fun EnterpriseStarterPicker(
                     Text(starter.title, style = MaterialTheme.typography.titleLarge)
                     Text(starter.assistantName, style = MaterialTheme.typography.labelLarge)
                     starter.description?.let { Text(it) }
-                    Text(stringResource(R.string.enterprise_starter_preview), style = MaterialTheme.typography.titleMedium)
-                    SelectionContainer { Text(starter.prompt) }
                     Text(stringResource(R.string.enterprise_starters_description), style = MaterialTheme.typography.bodySmall)
-                    if (starter.openingAvailable) net.weero.measix.pilot.ui.components.ai.StarterOpeningContext(starter.target) {
+                    EnterpriseStarterDefinitionContent(starter.prompt, starter.target) {
                         queries.readEnterpriseStarterDetails(starter.target)
                     }
                 }
@@ -207,4 +205,16 @@ internal fun EnterpriseStarterPicker(
             }
         }
     }
+}
+
+/** Shared read-only definition content; full opening text stays behind its original disclosure. */
+@Composable
+internal fun EnterpriseStarterDefinitionContent(
+    prompt: String,
+    key: Any,
+    load: suspend () -> net.weero.measix.pilot.service.StarterOpeningDetailUiModel,
+) {
+    Text(stringResource(R.string.enterprise_starter_preview), style = MaterialTheme.typography.titleMedium)
+    SelectionContainer { Text(prompt) }
+    net.weero.measix.pilot.ui.components.ai.StarterOpeningContext(key, load)
 }

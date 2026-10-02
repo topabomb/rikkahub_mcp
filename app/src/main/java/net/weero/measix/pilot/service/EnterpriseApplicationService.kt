@@ -69,7 +69,17 @@ internal enum class EnterpriseConfigurationResourceFactKind {
     ALLOWED_SIZES,
     ASSISTANT,
     DESCRIPTION,
+    RESOURCE_ID, PROTOCOL, MODEL_ID, INPUT_TYPES, OUTPUT_TYPES, ABILITIES, VOICE, SPEECH_RATE, PITCH,
+    LANGUAGE, SAMPLE_RATE, VAD_THRESHOLD, SILENCE_DURATION, PREFIX_PADDING, AUTH_OWNERSHIP,
+    SURFACE_VERSION, SURFACE_HASH,
 }
+internal data class EnterpriseResourceDetailTarget(
+    val selection: RealmSelection,
+    val access: RealmAccess.Enterprise,
+    val generation: Long,
+    val reference: me.rerere.common.configuration.ConfigurationReference.Enterprise,
+    val kind: EnterpriseConfigurationResourceKind,
+)
 
 internal data class EnterpriseConfigurationResourceFactUiModel(
     val kind: EnterpriseConfigurationResourceFactKind,
@@ -81,6 +91,7 @@ internal data class EnterpriseConfigurationResourceUiModel(
     val displayName: String,
     val enabled: Boolean,
     val facts: List<EnterpriseConfigurationResourceFactUiModel> = emptyList(),
+    val target: EnterpriseResourceDetailTarget? = null,
 )
 
 internal data class EnterpriseConfigurationResourceGroupUiModel(
@@ -101,6 +112,8 @@ internal data class EnterpriseConfigurationDetailsUiModel(
     val defaults: List<EnterpriseConfigurationDefaultUiModel>,
     val policies: List<EnterpriseConfigurationPolicyUiModel>,
     val resources: List<EnterpriseConfigurationResourceGroupUiModel>,
+    val publication: EnterprisePublicationSummary? = null,
+    val publicationFailure: String? = null,
 )
 
 internal enum class EnterpriseUpdateCategory { ANNOUNCEMENT, MAINTENANCE, NOTICE }
@@ -296,6 +309,8 @@ internal fun projectEnterpriseConfigurationDetails(
     lastSyncMillis: Long?,
     platformOrigin: String,
     configuration: EnterpriseConfiguration,
+    selection: RealmSelection? = null,
+    access: RealmAccess.Enterprise? = null,
 ): EnterpriseConfigurationDetailsUiModel {
     require(phase in setOf(EnterpriseSessionPhase.READY, EnterpriseSessionPhase.OFFLINE))
 
@@ -318,8 +333,19 @@ internal fun projectEnterpriseConfigurationDetails(
 
     fun fact(kind: EnterpriseConfigurationResourceFactKind, value: String?): EnterpriseConfigurationResourceFactUiModel? =
         value?.takeIf(String::isNotBlank)?.let { EnterpriseConfigurationResourceFactUiModel(kind, it) }
-    fun resourceKey(kind: EnterpriseConfigurationResourceKind, index: Int): String =
-        "$generation:${kind.name}:$index"
+    fun resourceId(kind: EnterpriseConfigurationResourceKind, index: Int): String = when (kind) {
+        EnterpriseConfigurationResourceKind.PROVIDER -> configuration.providers[index].id
+        EnterpriseConfigurationResourceKind.CHAT_MODEL -> configuration.models.filter { it.type == me.rerere.ai.provider.ModelType.CHAT }[index].id
+        EnterpriseConfigurationResourceKind.IMAGE_GENERATOR -> configuration.imageGenerators[index].id
+        EnterpriseConfigurationResourceKind.TTS -> configuration.tts[index].id
+        EnterpriseConfigurationResourceKind.ASR -> configuration.asr[index].id
+        EnterpriseConfigurationResourceKind.MCP -> configuration.mcpServers[index].id
+        EnterpriseConfigurationResourceKind.ASSISTANT -> configuration.assistants[index].id
+        EnterpriseConfigurationResourceKind.STARTER -> configuration.starters[index].id
+        EnterpriseConfigurationResourceKind.GATEWAY -> configuration.gateways[index].id
+        EnterpriseConfigurationResourceKind.MEMORY_SEED -> error("count_only_resource")
+    }
+    fun resourceKey(kind: EnterpriseConfigurationResourceKind, index: Int): String = "$generation:${kind.name}:${resourceId(kind, index)}"
 
     val providers = configuration.providers.map { EnterpriseConfigurationReferenceTarget(it.id, it.name, it.enabled) }
     val chatModels = configuration.models.filter { it.type == me.rerere.ai.provider.ModelType.CHAT }
@@ -340,6 +366,7 @@ internal fun projectEnterpriseConfigurationDetails(
                     key = resourceKey(EnterpriseConfigurationResourceKind.PROVIDER, index),
                     displayName = provider.name,
                     enabled = provider.enabled,
+                    facts = listOfNotNull(fact(EnterpriseConfigurationResourceFactKind.PROTOCOL, provider.protocol.name)),
                 )
             },
         ),
@@ -352,6 +379,10 @@ internal fun projectEnterpriseConfigurationDetails(
                     enabled = model.enabled,
                     facts = listOfNotNull(
                         fact(EnterpriseConfigurationResourceFactKind.PROVIDER, model.providerId?.let(providerNames::get)),
+                        fact(EnterpriseConfigurationResourceFactKind.MODEL_ID, model.modelId),
+                        fact(EnterpriseConfigurationResourceFactKind.INPUT_TYPES, model.inputModalities.joinToString { it.name }),
+                        fact(EnterpriseConfigurationResourceFactKind.OUTPUT_TYPES, model.outputModalities.joinToString { it.name }),
+                        fact(EnterpriseConfigurationResourceFactKind.ABILITIES, model.abilities.joinToString { it.name }),
                     ),
                 )
             },
@@ -364,6 +395,8 @@ internal fun projectEnterpriseConfigurationDetails(
                     displayName = image.name,
                     enabled = image.enabled,
                     facts = listOfNotNull(
+                        fact(EnterpriseConfigurationResourceFactKind.MODEL_ID, image.modelId),
+                        fact(EnterpriseConfigurationResourceFactKind.PROTOCOL, image.protocol.name),
                         fact(EnterpriseConfigurationResourceFactKind.MAX_IMAGES, image.maxImagesPerRequest.toString()),
                         fact(EnterpriseConfigurationResourceFactKind.ALLOWED_SIZES, image.allowedSizes.joinToString()),
                     ),
@@ -377,6 +410,13 @@ internal fun projectEnterpriseConfigurationDetails(
                     resourceKey(EnterpriseConfigurationResourceKind.TTS, index),
                     value.name,
                     value.enabled,
+                    listOfNotNull(
+                        fact(EnterpriseConfigurationResourceFactKind.PROTOCOL, value.protocol.name),
+                        fact(EnterpriseConfigurationResourceFactKind.MODEL_ID, value.modelId),
+                        fact(EnterpriseConfigurationResourceFactKind.VOICE, value.voice),
+                        fact(EnterpriseConfigurationResourceFactKind.SPEECH_RATE, value.speechRate?.toString()),
+                        fact(EnterpriseConfigurationResourceFactKind.PITCH, value.pitch?.toString()),
+                    ),
                 )
             },
         ),
@@ -387,6 +427,15 @@ internal fun projectEnterpriseConfigurationDetails(
                     resourceKey(EnterpriseConfigurationResourceKind.ASR, index),
                     value.name,
                     value.enabled,
+                    listOfNotNull(
+                        fact(EnterpriseConfigurationResourceFactKind.PROTOCOL, value.protocol.name),
+                        fact(EnterpriseConfigurationResourceFactKind.MODEL_ID, value.modelId),
+                        fact(EnterpriseConfigurationResourceFactKind.LANGUAGE, value.language),
+                        fact(EnterpriseConfigurationResourceFactKind.SAMPLE_RATE, value.sampleRate?.toString()),
+                        fact(EnterpriseConfigurationResourceFactKind.VAD_THRESHOLD, value.vadThreshold?.toString()),
+                        fact(EnterpriseConfigurationResourceFactKind.SILENCE_DURATION, value.silenceDurationMs?.toString()),
+                        fact(EnterpriseConfigurationResourceFactKind.PREFIX_PADDING, value.prefixPaddingMs?.toString()),
+                    ),
                 )
             },
         ),
@@ -397,6 +446,7 @@ internal fun projectEnterpriseConfigurationDetails(
                     resourceKey(EnterpriseConfigurationResourceKind.MCP, index),
                     value.name,
                     value.enabled,
+                    listOfNotNull(fact(EnterpriseConfigurationResourceFactKind.AUTH_OWNERSHIP, value.authOwnership?.name)),
                 )
             },
         ),
@@ -440,6 +490,10 @@ internal fun projectEnterpriseConfigurationDetails(
                     resourceKey(EnterpriseConfigurationResourceKind.GATEWAY, index),
                     value.name,
                     enabled = true,
+                    facts = listOfNotNull(
+                        fact(EnterpriseConfigurationResourceFactKind.SURFACE_VERSION, value.surfaceVersion.toString()),
+                        fact(EnterpriseConfigurationResourceFactKind.SURFACE_HASH, value.surfaceHash),
+                    ),
                 )
             },
         ),
@@ -489,7 +543,11 @@ internal fun projectEnterpriseConfigurationDetails(
                 configuration.policy.allowLocalAssistants,
             ),
         ),
-        resources = resourceGroups,
+        resources = resourceGroups.map { group -> group.copy(items = group.items.mapIndexed { index, item ->
+            val id = resourceId(group.kind, index)
+            item.copy(facts = listOf(EnterpriseConfigurationResourceFactUiModel(EnterpriseConfigurationResourceFactKind.RESOURCE_ID, id)) + item.facts,
+                target = if (selection != null && access != null) EnterpriseResourceDetailTarget(selection, access, generation, identity.reference(id), group.kind) else null)
+        }) },
     )
 }
 
@@ -632,7 +690,9 @@ internal class EnterpriseApplicationService(
                         lastSyncMillis = manifest.lastConfigurationSyncMillis,
                         platformOrigin = platformOrigin,
                         configuration = available.configuration,
-                    )
+                        selection = selection,
+                        access = access,
+                    ).copy(publication = presentation.publication, publicationFailure = presentation.publicationFailure)
                 } else null,
             )
         }.distinctUntilChanged()

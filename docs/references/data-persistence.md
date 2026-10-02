@@ -1,5 +1,9 @@
 # 数据持久化、隔离与恢复
 
+最近会话引用仍由 `SettingsStore` 按 scope 写入。`forgetConversation(scope, expectedId)` 在原提交锁内比较并清理，
+不能清掉并发记住的新会话或其他主体引用。Room 删除提交先于 DataStore 维护，两者不是一个原子事务；
+维护失败保留已删除事实与原诊断。进程在两步间退出由启动时 scoped 根 header 存在性核验恢复。
+
 本文集中说明 Room 数据结构、按域存储与运行记忆、历史迁移和个人备份恢复。Settings 文档及企业 Session 的持久化由 [配置架构](android-configuration-architecture.md)维护；文件生命周期由 [多模态资源](multimodal-context-and-turn-durability.md)维护。
 
 `AppDatabase` 是业务 Room 数据库；`APP_DATABASE_VERSION`、实体注解、导出 schema 与显式 migration 必须一致。索引只服务既有 DAO 查询，不改变 durable owner 或写协议。下文括号内字段按索引顺序排列。
