@@ -68,8 +68,8 @@ class EnterpriseSynchronizationServiceTest {
             assertEquals(EnterpriseSynchronizationIssue.FAILED, status.failure?.issue)
             assertTrue(status.failure?.diagnostic.orEmpty().contains("source detail"))
             val rejected = runCatching { f.service.prepareExecution(access) }.exceptionOrNull()
-            assertEquals("platform_runtime_synchronization_required", (rejected as EnterpriseConfigurationException).reason)
-            assertTrue(rejected.message.orEmpty().contains("source detail"))
+            assertEquals("platform_runtime_synchronization_required", ((rejected as EnterprisePreparationException).cause as EnterpriseConfigurationException).reason)
+            assertTrue(rejected.cause?.message.orEmpty().contains("source detail"))
             coVerify(exactly = 1) { f.platform.synchronize(access) }
             coVerify(exactly = 0) { f.platform.prepareExecution(access) }
 
@@ -121,7 +121,7 @@ class EnterpriseSynchronizationServiceTest {
             f.sessions.finishExit(f.sessions.beginInvalidation(original, EnterpriseExitReason.AUTHORIZATION_REVOKED))
             val replacement = f.enroll()
             assertNotEquals(original, replacement)
-            val revoked = runCatching { f.service.prepareExecution(original) }.exceptionOrNull() as EnterpriseConfigurationException
+            val revoked = (runCatching { f.service.prepareExecution(original) }.exceptionOrNull() as EnterprisePreparationException).cause as EnterpriseConfigurationException
             assertEquals("enterprise_data_access_unavailable", revoked.reason)
             assertEquals(original, f.service.status.value?.access)
             coVerify(exactly = 1) { f.platform.synchronize(any()) }
@@ -132,6 +132,21 @@ class EnterpriseSynchronizationServiceTest {
             assertEquals(version, f.service.prepareExecution(replacement))
             coVerify(exactly = 1) { f.platform.prepareExecution(replacement) }
             coVerify(exactly = 1) { f.platform.synchronize(any()) }
+        } finally { f.scope.cancel() }
+    }
+
+    @Test fun `preparation preserves original failure and never wraps cancellation`() = runTest {
+        val f = Fixture(StandardTestDispatcher(testScheduler))
+        try {
+            val access = f.enroll()
+            val original = java.net.ConnectException("192.168.1.8:9100 EHOSTUNREACH")
+            coEvery { f.platform.prepareExecution(access) } throws original
+            val error = runCatching { f.service.prepareExecution(access) }.exceptionOrNull() as EnterprisePreparationException
+            assertSame(original, error.cause)
+            coVerify(exactly = 0) { f.platform.synchronize(any()) }
+            val cancelled = CancellationException("operation cancelled")
+            coEvery { f.platform.prepareExecution(access) } throws cancelled
+            assertSame(cancelled, runCatching { f.service.prepareExecution(access) }.exceptionOrNull())
         } finally { f.scope.cancel() }
     }
 

@@ -439,7 +439,7 @@ class TtsControllerLayoutTest {
     private class TestTtsState : SpeechPlayback {
         override val isAvailable = MutableStateFlow(true)
         override val isSpeaking = MutableStateFlow(true)
-        override val error = MutableStateFlow<String?>(null)
+        override val error = MutableStateFlow<net.weero.measix.pilot.service.ChatError?>(null)
         override val currentChunk = MutableStateFlow(0)
         override val totalChunks = MutableStateFlow(1)
         override val playbackState = MutableStateFlow(PlaybackState(status = PlaybackStatus.Playing))

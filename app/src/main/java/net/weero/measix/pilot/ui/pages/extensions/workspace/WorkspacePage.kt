@@ -1,8 +1,5 @@
 package net.weero.measix.pilot.ui.pages.extensions.workspace
 
-import androidx.compose.foundation.text.selection.SelectionContainer
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import net.weero.measix.pilot.utils.userVisibleDiagnostic
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -169,11 +166,9 @@ fun WorkspacePage(vm: WorkspaceVM = koinViewModel()) {
         Text(stringResource(R.string.workspace_page_delete_confirm))
     }
     diagnostic?.let { detail ->
-        AlertDialog(
-            onDismissRequest = { diagnostic = null },
-            text = { SelectionContainer { Text(detail, Modifier.verticalScroll(rememberScrollState())) } },
-            confirmButton = { TextButton(onClick = { diagnostic = null }) { Text(stringResource(R.string.confirm)) } },
-        )
+        net.weero.measix.pilot.ui.components.ui.ErrorDetails(
+            remember(detail) { net.weero.measix.pilot.service.ChatError(detail = detail) },
+            onDismiss = { diagnostic = null })
     }
 
 }

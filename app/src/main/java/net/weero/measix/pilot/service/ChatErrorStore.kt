@@ -6,6 +6,13 @@ import android.content.Context
 import java.text.DateFormat
 import java.time.Instant
 import java.util.Date
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.encodeToJsonElement
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -17,6 +24,7 @@ import me.rerere.ai.ui.TurnTerminalReasons
 import me.rerere.ai.util.ProviderFailureKind
 import net.weero.measix.pilot.R
 import net.weero.measix.pilot.utils.userVisibleDiagnostic
+import net.weero.measix.pilot.utils.redactDiagnosticSecrets
 import net.weero.measix.pilot.data.enterprise.EnterpriseRuntimeProblemException
 import net.weero.measix.pilot.data.enterprise.PlatformBudgetCapability
 import net.weero.measix.pilot.data.enterprise.PlatformBudgetPeriod
@@ -33,6 +41,7 @@ data class ChatError(
     val solution: ChatErrorSolution? = null,
     val retention: ChatErrorRetention = ChatErrorRetention.TRANSIENT,
     val sourceMessageId: Uuid? = null,
+    val summary: String? = null,
 )
 
 enum class ChatErrorSolution {
@@ -40,6 +49,7 @@ enum class ChatErrorSolution {
     CheckProviderSettings,
     ViewEnterpriseUsage,
     RetryConversationReads,
+    ViewEnterpriseSpace,
 }
 
 enum class ChatErrorRetention {
@@ -61,11 +71,13 @@ class ChatErrorStore {
         title: String? = null,
         solution: ChatErrorSolution? = null,
         retention: ChatErrorRetention = ChatErrorRetention.TRANSIENT,
+        context: Context? = null,
     ) {
         if (error is CancellationException) return
         logDiagnosticFailure("ChatErrorStore", "Chat operation failed", error)
+        val preparation = (error as? EnterprisePreparationException)?.takeIf { context != null }
         add(
-            ChatError(
+            if (preparation != null) enterprisePreparationError(requireNotNull(context), preparation, conversationId) else ChatError(
                 title = title,
                 detail = error.userVisibleDiagnostic(),
                 conversationId = conversationId,
@@ -98,6 +110,28 @@ class ChatErrorStore {
             list.filterNot { it.conversationId == null || it.conversationId == conversationId }
         }
     }
+}
+
+/** Presentation follows the failed operation's boundary, never the current model or selected space. */
+internal fun enterprisePreparationError(context: Context, error: EnterprisePreparationException, conversationId: Uuid? = null): ChatError {
+    val cause = error.cause
+    val resource = when {
+        cause is net.weero.measix.pilot.data.enterprise.EnterpriseConfigurationException &&
+            cause.reason == "platform_runtime_synchronization_required" -> R.string.enterprise_prepare_sync
+        cause is net.weero.measix.pilot.data.enterprise.PlatformHttpException ->
+            if (cause.status == 401 || cause.status == 403) R.string.enterprise_prepare_session else R.string.enterprise_prepare_rejected
+        cause is java.io.IOException -> R.string.enterprise_prepare_connection
+        else -> R.string.enterprise_prepare_unavailable
+    }
+    return ChatError(
+        title = context.getString(if (resource == R.string.enterprise_prepare_connection)
+            R.string.enterprise_prepare_connection_title else R.string.enterprise_prepare_title),
+        summary = context.getString(resource),
+        detail = error.userVisibleDiagnostic(),
+        conversationId = conversationId,
+        solution = ChatErrorSolution.ViewEnterpriseSpace,
+        retention = ChatErrorRetention.UNTIL_DISMISSED,
+    )
 }
 
 data class TerminalMessagePresentation(
@@ -263,7 +297,7 @@ private fun terminalPresentation(
 
 fun terminalChatError(
     context: Context,
-    conversationId: Uuid,
+    conversationId: Uuid?,
     messageId: Uuid?,
     status: MessageTerminalStatus,
     reason: String?,
@@ -277,14 +311,18 @@ fun terminalChatError(
     val structured = EnterpriseRuntimeProblemException.parseTerminalDetail(detail)
     val providerConfigurationFailure = presentation.solution == ChatErrorSolution.CheckProviderSettings
     val managedModel = modelId is me.rerere.common.configuration.ConfigurationReference.Enterprise
-    val diagnostic = structured?.let { enterpriseRuntimeDetail(context, it, presentation.fallbackDetailResource) }
+    val diagnostic = structured?.let(::enterpriseRuntimeDiagnostic)
         ?: detail?.trim()?.takeIf(String::isNotEmpty)
         ?: context.getString(presentation.fallbackDetailResource)
     return ChatError(
         title = context.getString(presentation.titleResource),
-        detail = if (providerConfigurationFailure && managedModel) {
-            context.getString(R.string.chat_enterprise_model_service_configuration) + "\n\n" + diagnostic
-        } else diagnostic,
+        detail = if (structured != null) diagnostic else redactDiagnosticSecrets(diagnostic),
+        summary = when {
+            providerConfigurationFailure && managedModel -> context.getString(R.string.chat_enterprise_model_service_configuration)
+            structured != null -> redactDiagnosticSecrets(enterpriseRuntimeDetail(context, structured, presentation.fallbackDetailResource))
+            presentation.fallbackDetailResource != R.string.chat_error_detail_unavailable -> context.getString(presentation.fallbackDetailResource)
+            else -> null
+        },
         conversationId = conversationId,
         // A historical message's model owns this action; current space or model selection does not.
         solution = if (providerConfigurationFailure && modelId !is me.rerere.common.configuration.ConfigurationReference.User) null
@@ -296,7 +334,7 @@ fun terminalChatError(
 
 private fun enterpriseRuntimeDetail(context: Context, problem: PlatformProblem, fallback: Int): String {
     if (problem.code != net.weero.measix.pilot.data.enterprise.EnterpriseRuntimeProblemCodes.BUDGET_EXHAUSTED) {
-        return problem.detail?.trim()?.takeIf(String::isNotEmpty) ?: context.getString(fallback)
+        return context.getString(fallback)
     }
     val budget = problem.budget ?: return context.getString(fallback)
     return buildList {
@@ -325,6 +363,18 @@ private fun enterpriseRuntimeDetail(context: Context, problem: PlatformProblem, 
         if (problem.forwarded == false) add(context.getString(R.string.enterprise_budget_request_not_forwarded))
         problem.requestId?.let { add(context.getString(R.string.enterprise_runtime_request_id, it)) }
     }.joinToString("\n")
+}
+
+private val runtimeDiagnosticJson = Json(net.weero.measix.pilot.data.enterprise.PlatformWireCodec.json) { prettyPrint = true }
+
+private fun enterpriseRuntimeDiagnostic(problem: PlatformProblem): String {
+    // Redact decoded strings so escaped newlines cannot make a header consume JSON syntax or other details.
+    fun redact(value: JsonElement): JsonElement = when (value) {
+        is JsonObject -> JsonObject(value.mapValues { redact(it.value) })
+        is JsonArray -> JsonArray(value.map(::redact))
+        is JsonPrimitive -> if (value.isString) JsonPrimitive(redactDiagnosticSecrets(value.content)) else value
+    }
+    return runtimeDiagnosticJson.encodeToString(redact(runtimeDiagnosticJson.encodeToJsonElement(problem)))
 }
 
 private fun capabilityResource(value: PlatformBudgetCapability): Int = when (value) {

@@ -25,8 +25,6 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.key
 import androidx.compose.material3.AlertDialog
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -53,6 +51,7 @@ import net.weero.measix.pilot.ui.components.ui.FileEditorState
 import net.weero.measix.pilot.ui.components.ui.FileTextEditor
 import net.weero.measix.pilot.ui.components.ui.Tooltip
 import net.weero.measix.pilot.utils.userVisibleDiagnostic
+import net.weero.measix.pilot.utils.logDiagnosticFailure
 import me.rerere.workspace.WorkspaceStorageArea
 import org.koin.compose.koinInject
 
@@ -120,14 +119,14 @@ private fun WorkspaceFileEditorContent(
                 }
                 is WorkspaceTextPreviewResult.TooLarge -> loadError = tooLargeText.format(result.sizeBytes)
                 is WorkspaceTextPreviewResult.Unavailable -> {
-                    android.util.Log.e("WorkspaceFileEditor", "Read failed", result.cause)
+                    logDiagnosticFailure("WorkspaceFileEditor", "Read failed", result.cause)
                     loadError = result.cause.userVisibleDiagnostic()
                 }
             }
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (error: Exception) {
-            android.util.Log.e("WorkspaceFileEditor", "Read failed", error)
+            logDiagnosticFailure("WorkspaceFileEditor", "Read failed", error)
             loadError = error.userVisibleDiagnostic()
         } finally {
             loading = false
@@ -170,7 +169,7 @@ private fun WorkspaceFileEditorContent(
                                         } catch (cancelled: CancellationException) {
                                             throw cancelled
                                         } catch (error: Exception) {
-                                            android.util.Log.e("WorkspaceFileEditor", "Save failed", error)
+                                            logDiagnosticFailure("WorkspaceFileEditor", "Save failed", error)
                                             saveError = error.userVisibleDiagnostic()
                                         } finally { saving = false }
                                     }
@@ -235,11 +234,9 @@ private fun WorkspaceFileEditorContent(
         },
     )
     saveError?.let { detail ->
-        AlertDialog(
-            onDismissRequest = { saveError = null },
-            text = { SelectionContainer { Text(detail, Modifier.verticalScroll(rememberScrollState())) } },
-            confirmButton = { TextButton(onClick = { saveError = null }) { Text(stringResource(R.string.confirm)) } },
-        )
+        net.weero.measix.pilot.ui.components.ui.ErrorDetails(
+            remember(detail) { net.weero.measix.pilot.service.ChatError(detail = detail) },
+            onDismiss = { saveError = null })
     }
 
 }

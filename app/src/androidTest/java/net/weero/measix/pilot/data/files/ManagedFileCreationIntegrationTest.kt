@@ -197,7 +197,11 @@ class ManagedFileCreationIntegrationTest {
             ApplicationRecoveryGate().apply { ready() }, sessions)
         val own = store.createFromBytes(ConfigurationScope.Personal, pngBytes(), "configuration.png", "image/png", origin = ArtifactOrigin.USER)
         val foreign = store.createFromBytes(scopeFor(1), pngBytes(), "foreign.png", "image/png", origin = ArtifactOrigin.USER)
+        val scopeFailure = runCatching { files.resolveContentAttachment(RenderedContentSource.UserConfiguration, foreign.uri.toString()) }.exceptionOrNull()
+        assertEquals("configuration_media_scope_mismatch", scopeFailure?.message)
         store.abandonUnpublished(foreign)
+        // Releasing a creation pin does not delete the resource; finish owner cleanup before loading its stale URL.
+        store.deleteUserRequested(scopeFor(1), foreign.entity.id).requireDiscarded("remove rejected rendered fixture")
         store.updateSettingsReferences { it.copy(assistants = it.assistants + Assistant(background = own.uri.toString())) }
         val attachment = requireNotNull(files.resolveContentAttachment(RenderedContentSource.UserConfiguration, requireNotNull(own.localRef.toolPath())))
         val copied = java.io.ByteArrayOutputStream()

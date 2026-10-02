@@ -1,35 +1,23 @@
 package net.weero.measix.pilot.ui.pages.setting.components
 
 import me.rerere.common.configuration.ConfigurationReference
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearWavyProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import net.weero.measix.pilot.ui.adaptive.AdaptiveModal
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.SheetValue
-import androidx.compose.material3.rememberBottomSheetState
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import me.rerere.ai.provider.ModelType
@@ -44,6 +32,8 @@ import net.weero.measix.pilot.ui.components.ai.rememberModelListState
 import net.weero.measix.pilot.ui.pages.setting.ProviderSettingsUiState
 import net.weero.measix.pilot.ui.theme.extendColors
 import net.weero.measix.pilot.utils.UiState
+import net.weero.measix.pilot.utils.redactDiagnosticSecrets
+import net.weero.measix.pilot.ui.components.ui.DiagnosticDisclosure
 
 @Composable
 fun ProviderConnectionTester(
@@ -135,8 +125,6 @@ private fun TestResultItem(
     state: UiState<*>,
     resultText: String
 ) {
-    var showErrorSheet by remember { mutableStateOf(false) }
-
     Row(
         modifier = Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.Top,
@@ -173,51 +161,18 @@ private fun TestResultItem(
                     )
                 }
             }
-            is UiState.Error -> Text(
-                text = state.error.message ?: "Error",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.extendColors.red6,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier
-                    .weight(1f)
-                    .clickable { showErrorSheet = true }
-            )
-        }
-    }
-
-    if (showErrorSheet && state is UiState.Error) {
-        val sheetState = rememberBottomSheetState(initialValue = SheetValue.Hidden, enabledValues = setOf(SheetValue.Hidden, SheetValue.Expanded))
-        val stackTrace = remember(state.error) {
-            state.error.stackTraceToString()
-        }
-        AdaptiveModal(
-            onDismissRequest = { showErrorSheet = false },
-            sheetState = sheetState,
-        ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .fillMaxHeight(0.8f)
-                    .padding(16.dp)
-                    .verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
+            is UiState.Error -> Column(Modifier.weight(1f)) {
+                val diagnostic = remember(state.error) { redactDiagnosticSecrets(state.error.stackTraceToString()) }
                 Text(
-                    text = label,
-                    style = MaterialTheme.typography.titleMedium
+                    text = redactDiagnosticSecrets(state.error.message ?: stringResource(R.string.error_title_operation)),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
                 )
-                Text(
-                    text = state.error.message ?: "Error",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.extendColors.red6
-                )
-                Text(
-                    text = stackTrace,
-                    style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
+                DiagnosticDisclosure(diagnostic, title = label)
             }
         }
     }
+
 }

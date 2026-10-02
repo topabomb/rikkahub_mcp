@@ -426,8 +426,10 @@ class EnterprisePageAndroidTest {
         compose.onNodeWithText(text(R.string.enterprise_configuration_attention)).assertIsDisplayed()
         compose.onNodeWithText(text(R.string.enterprise_sync_network_failed)).assertIsDisplayed()
         compose.onNodeWithText(diagnostic).assertDoesNotExist()
-        click(R.string.enterprise_configuration_resource_details_title)
+        click(R.string.chat_conversation_diagnostics)
         compose.onNodeWithText(diagnostic).assertIsDisplayed()
+        capturePage("enterprise-sync-network-diagnostic.png")
+        compose.onNodeWithContentDescription(text(R.string.update_card_close)).performClick()
         compose.onNodeWithText(text(R.string.enterprise_failure)).assertDoesNotExist()
     }
 
@@ -448,8 +450,10 @@ class EnterprisePageAndroidTest {
         fixture.show()
         compose.onNodeWithText(text(R.string.enterprise_snapshot_update_app)).assertIsDisplayed()
         compose.onNodeWithText(diagnostic).assertDoesNotExist()
-        click(R.string.enterprise_configuration_resource_details_title)
+        click(R.string.chat_conversation_diagnostics)
         compose.onNodeWithText(diagnostic).assertIsDisplayed()
+        capturePage("enterprise-sync-version-diagnostic.png")
+        compose.onNodeWithContentDescription(text(R.string.update_card_close)).performClick()
         click(R.string.enterprise_switch_enterprise)
         coVerify(exactly = 1) { fixture.service.switchRealm(RealmSwitchRequest(personal, access())) }
     }
@@ -791,7 +795,9 @@ class EnterprisePageAndroidTest {
         // Window transitions are rendered outside Compose's idle tracking.
         android.os.SystemClock.sleep(1_000)
         val screenshot = requireNotNull(instrumentation.uiAutomation.takeScreenshot())
-        java.io.File(compose.activity.cacheDir, name).outputStream().use {
+        val directory = androidx.test.platform.app.InstrumentationRegistry.getArguments().getString("additionalTestOutputDir")?.let { java.io.File(it) }
+            ?: compose.activity.cacheDir
+        java.io.File(directory, name).outputStream().use {
             screenshot.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it)
         }
         screenshot.recycle()

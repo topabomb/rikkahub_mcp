@@ -1118,6 +1118,7 @@ class ConversationTurnService internal constructor(
                     error = result.error,
                     conversationId = conversationId,
                     title = context.getString(R.string.error_title_generation),
+                    context = context,
                 )
             }
             val pendingToolLocalCallId = (result as? TurnPause)

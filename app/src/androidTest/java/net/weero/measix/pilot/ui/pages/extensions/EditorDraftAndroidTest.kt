@@ -283,7 +283,7 @@ class EditorDraftAndroidTest {
             assertEquals(WorkspaceTextPreviewResult.Success("test-owned blocker"), runBlocking {
                 withTimeout(10_000) { queries.readTextForPreview(workspaceId, WorkspaceStorageArea.FILES, "parent") }
             })
-            compose.onNodeWithText(compose.activity.getString(R.string.confirm)).performClick()
+            compose.onNodeWithContentDescription(compose.activity.getString(R.string.update_card_close)).performClick()
             assertEditorBody(draft)
             compose.onNodeWithContentDescription(save).assertIsEnabled()
             runBlocking { withTimeout(10_000) {
@@ -344,7 +344,7 @@ class EditorDraftAndroidTest {
         compose.onNodeWithContentDescription(save).performClick()
         compose.onNodeWithText("IOException: workspace write detail", substring = true).assertIsDisplayed()
         compose.onNodeWithText("IllegalStateException: original storage cause", substring = true).assertIsDisplayed()
-        compose.onNodeWithText(compose.activity.getString(R.string.confirm)).performClick()
+        compose.onNodeWithContentDescription(compose.activity.getString(R.string.update_card_close)).performClick()
         assertEditorBody("retained draft")
         compose.onNodeWithContentDescription(save).assertIsEnabled().performClick()
         compose.waitUntil(5_000) { committed.size == 1 }

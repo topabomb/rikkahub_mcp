@@ -2062,4 +2062,11 @@
   <string name="assistant_usage_skills_read_failed">Не удалось прочитать список навыков</string>
   <string name="assistant_usage_skills_unavailable">С этой страницы навыки больше недоступны. Откройте настройки снова из текущего чата.</string>
   <string name="chat_enterprise_model_service_configuration">Обратитесь к администратору организации, чтобы проверить настройки сервиса этой модели.</string>
+  <string name="enterprise_prepare_title">Не удалось проверить пространство организации</string>
+  <string name="enterprise_prepare_connection_title">Не удалось подключиться к сервису организации</string>
+  <string name="enterprise_prepare_connection">Операция ещё не началась. Проверьте сеть и подключение к сервису организации. Пространства организации проверяют текущие настройки и права доступа также при использовании личных ресурсов.</string>
+  <string name="enterprise_prepare_sync">Операция ещё не началась. Откройте пространство организации и синхронизируйте настройки перед повторной попыткой.</string>
+  <string name="enterprise_prepare_session">Сервис организации отклонил проверку доступа. Операция ещё не началась. Проверьте вход и права доступа в пространстве организации.</string>
+  <string name="enterprise_prepare_rejected">Сервис организации не смог завершить проверку. Операция ещё не началась. Откройте пространство организации и просмотрите техническую информацию.</string>
+  <string name="enterprise_prepare_unavailable">Пространство организации не готово к этой операции. Операция ещё не началась. Откройте пространство организации и просмотрите техническую информацию.</string>
 </resources>

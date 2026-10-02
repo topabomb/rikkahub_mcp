@@ -16,6 +16,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import net.weero.measix.pilot.R
 import net.weero.measix.pilot.service.ChatError
 import net.weero.measix.pilot.service.ChatErrorRetention
+import net.weero.measix.pilot.service.ChatErrorSolution
 import org.junit.Assert.*
 import org.junit.Rule
 import org.junit.Test
@@ -78,6 +79,48 @@ class ChatErrorCardAndroidTest {
         compose.runOnIdle { assertEquals(1, retries) }
         compose.onNodeWithContentDescription(context.getString(R.string.chat_page_dismiss_error)).assertDoesNotExist()
     }
+
+    @Test fun summaryAndLongTechnicalDetailsHaveOneViewportWithPersistentCopyAndClose() {
+        val diagnostic = "ConnectException: Failed to connect to /192.168.1.8:9100\n" +
+            (1..80).joinToString("\n") { "Caused by: IOException: diagnostic $it /192.168.1.4 EHOSTUNREACH" }
+        val error = ChatError(title = context.getString(R.string.enterprise_prepare_connection_title),
+            summary = context.getString(R.string.enterprise_prepare_connection), detail = diagnostic,
+            solution = ChatErrorSolution.ViewEnterpriseSpace,
+            retention = ChatErrorRetention.UNTIL_DISMISSED)
+        compose.setContent {
+            val density = LocalDensity.current
+            MaterialTheme(colorScheme = androidx.compose.material3.darkColorScheme()) {
+                CompositionLocalProvider(LocalDensity provides Density(density.density, 1.8f),
+                    net.weero.measix.pilot.ui.adaptive.LocalAdaptiveLayoutInfo provides net.weero.measix.pilot.ui.adaptive.rememberAdaptiveLayoutInfo(),
+                    net.weero.measix.pilot.ui.context.LocalNavController provides net.weero.measix.pilot.ui.context.Navigator(
+                        mutableListOf<androidx.navigation3.runtime.NavKey>(net.weero.measix.pilot.Screen.Startup()))) {
+                    ErrorCard(error)
+                }
+            }
+        }
+        compose.onNodeWithText(error.summary!!).assertIsDisplayed()
+        compose.onNodeWithText(diagnostic).assertDoesNotExist()
+        capture("enterprise-preparation-card-dark.png")
+        compose.onNodeWithContentDescription(context.getString(R.string.chat_conversation_diagnostics)).performClick()
+        compose.onAllNodes(hasScrollAction() and hasAnyAncestor(isDialog())).assertCountEquals(1)
+        val viewport = compose.onNode(hasScrollAction() and hasAnyAncestor(isDialog()))
+        capture("enterprise-preparation-details-dark.png")
+        viewport.performScrollToNode(hasText(diagnostic))
+        val scrolling = viewport.fetchSemanticsNode().config[androidx.compose.ui.semantics.SemanticsProperties.VerticalScrollAxisRange]
+        compose.runOnIdle { assertTrue(scrolling.maxValue() > 0f) }
+        repeat(10) { viewport.performTouchInput { swipeUp() } }
+        capture("enterprise-preparation-details-end.png")
+        compose.onNode(hasText(context.getString(R.string.enterprise_spaces)) and hasAnyAncestor(isDialog())).assertIsDisplayed()
+        compose.onNode(hasContentDescription(context.getString(R.string.chat_page_copy_error)) and hasAnyAncestor(isDialog()))
+            .assertIsDisplayed().performClick()
+        compose.runOnIdle {
+            val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+            assertEquals(diagnostic, clipboard.primaryClip?.getItemAt(0)?.text?.toString())
+        }
+        compose.onNodeWithContentDescription(context.getString(R.string.update_card_close)).assertIsDisplayed().performClick()
+        compose.onNodeWithText(error.summary!!).assertIsDisplayed()
+        (context.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager).clearPrimaryClip()
+    }
     @Test fun rejectedPresetUsesDialogAndPreservesInputAndIconSlot() {
         val input = net.weero.measix.pilot.ui.hooks.ChatInputState().apply { setMessageText("Unsent draft") }
         val diagnostic = "IllegalStateException: original input owner rejected insertion"
@@ -120,7 +163,9 @@ class ChatErrorCardAndroidTest {
         android.os.SystemClock.sleep(750)
         androidx.test.platform.app.InstrumentationRegistry.getInstrumentation().uiAutomation.waitForIdle(250, 5_000)
         val screenshot = androidx.test.platform.app.InstrumentationRegistry.getInstrumentation().uiAutomation.takeScreenshot()
-        java.io.File(context.getExternalFilesDir(null), name).outputStream().use {
+        val arguments = androidx.test.platform.app.InstrumentationRegistry.getArguments()
+        val directory = arguments.getString("additionalTestOutputDir")?.let { java.io.File(it) } ?: context.getExternalFilesDir(null)
+        java.io.File(directory, name).outputStream().use {
             screenshot.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it)
         }
         screenshot.recycle()

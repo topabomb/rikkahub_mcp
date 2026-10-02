@@ -287,6 +287,7 @@ Assistant 选择
 持有 slot mutex 执行 I/O，因此不会把不同 server 的网络操作重新串行化。
 
 `McpRuntimeCoordinator.callTool()` 先从对应 `McpServerRuntime` 取得冻结 invocation lease，再由 `McpToolCallExecutor` 执行。
+调用结束的企业额度刷新按原调用的 `McpConnectionDefinition.ManagedPlatform` 判断；企业空间中的 `User` 连接不发送该信号。
 失败使用 `ToolExecutionFailure` 向 TurnRunner 返回稳定的 Agent 可见结果，并把 durable tool terminal 记录为 FAILED。
 Agent 看到[工具错误返回协议](prompts-and-tools.md#5-工具错误返回协议)的 `status + reason`，必要时有 `detail`：
 

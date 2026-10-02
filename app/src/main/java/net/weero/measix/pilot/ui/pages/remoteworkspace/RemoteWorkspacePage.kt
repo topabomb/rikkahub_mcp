@@ -531,9 +531,7 @@ private fun RemotePathBar(path: String, enabled: Boolean = true, modifier: Modif
 
 @Composable
 private fun Diagnostic(value: String, label: String = stringResource(R.string.remote_workspace_details)) {
-    var expanded by remember(value) { mutableStateOf(false) }
-    TextButton({ expanded = !expanded }) { Text(label) }
-    if (expanded) SelectionContainer { Text(value, Modifier.heightIn(max = 200.dp).verticalScroll(rememberScrollState()), style = MaterialTheme.typography.bodySmall) }
+    net.weero.measix.pilot.ui.components.ui.DiagnosticDisclosure(value, label)
 }
 
 @Composable

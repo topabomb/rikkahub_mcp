@@ -4,7 +4,6 @@ import net.weero.measix.pilot.utils.logDiagnosticFailure
 
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
-import android.content.ClipData
 import android.net.Uri
 import android.util.Log
 import androidx.activity.compose.BackHandler
@@ -35,7 +34,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DrawerState
 import androidx.compose.material3.DrawerValue
@@ -67,8 +65,6 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.ClipEntry
-import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.platform.LocalDensity
@@ -494,9 +490,6 @@ internal fun ConversationUnavailable(
     showSpaces: Boolean = true,
 ) {
     val nav = LocalNavController.current
-    val clipboard = LocalClipboard.current
-    val scope = rememberCoroutineScope()
-    var detailsOpen by remember(diagnostic) { mutableStateOf(false) }
     Box(
         modifier = Modifier.fillMaxSize().safeDrawingPadding().padding(horizontal = 24.dp),
         contentAlignment = Alignment.Center,
@@ -523,22 +516,8 @@ internal fun ConversationUnavailable(
                 }
             }
             diagnostic?.let { detail ->
-                TextButton(onClick = { detailsOpen = !detailsOpen },
-                    modifier = Modifier.testTag("conversation-recovery-diagnostics")) {
-                    Text(stringResource(R.string.chat_conversation_diagnostics))
-                }
-                if (detailsOpen) {
-                    TextButton(onClick = {
-                        scope.launch { clipboard.setClipEntry(ClipEntry(ClipData.newPlainText("Conversation error", detail))) }
-                    }, modifier = Modifier.testTag("conversation-recovery-copy")) {
-                        Text(stringResource(R.string.chat_page_copy_error))
-                    }
-                    SelectionContainer {
-                        Text(detail, modifier = Modifier.fillMaxWidth().testTag("conversation-recovery-detail"),
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            style = MaterialTheme.typography.bodySmall)
-                    }
-                }
+                net.weero.measix.pilot.ui.components.ui.DiagnosticDisclosure(detail,
+                    modifier = Modifier.testTag("conversation-recovery-diagnostics"))
             }
         }
     }

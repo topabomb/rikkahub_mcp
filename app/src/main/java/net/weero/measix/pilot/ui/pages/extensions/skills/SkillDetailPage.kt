@@ -38,11 +38,11 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.foundation.text.selection.SelectionContainer
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.CancellationException
 import net.weero.measix.pilot.data.files.SkillContentReadResult
 import net.weero.measix.pilot.utils.userVisibleDiagnostic
+import net.weero.measix.pilot.utils.logDiagnosticFailure
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -102,7 +102,7 @@ private fun SkillDetailContent(skillName: String) {
             try { block() }
             catch (cancelled: CancellationException) { throw cancelled }
             catch (error: Exception) {
-                android.util.Log.e("SkillDetailPage", "Skill operation failed", error)
+                logDiagnosticFailure("SkillDetailPage", "Skill operation failed", error)
                 diagnostic = error.userVisibleDiagnostic()
             } finally { busy = false }
         }
@@ -227,11 +227,9 @@ private fun SkillDetailContent(skillName: String) {
         Text(stringResource(R.string.skill_detail_page_delete_confirm, deleteTarget?.relativePath ?: ""))
     }
     (diagnostic ?: failure?.userVisibleDiagnostic())?.let { detail ->
-        AlertDialog(
-            onDismissRequest = { diagnostic = null; vm.dismissFailure() },
-            text = { SelectionContainer { Text(detail, Modifier.verticalScroll(rememberScrollState())) } },
-            confirmButton = { TextButton(onClick = { diagnostic = null; vm.dismissFailure() }) { Text(stringResource(R.string.confirm)) } },
-        )
+        net.weero.measix.pilot.ui.components.ui.ErrorDetails(
+            remember(detail) { net.weero.measix.pilot.service.ChatError(detail = detail) },
+            onDismiss = { diagnostic = null; vm.dismissFailure() })
     }
 
 }

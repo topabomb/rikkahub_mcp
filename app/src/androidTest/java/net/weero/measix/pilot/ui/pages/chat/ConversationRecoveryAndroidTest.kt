@@ -14,6 +14,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertTextEquals
+import androidx.compose.ui.test.hasText
+import androidx.compose.ui.test.hasAnyAncestor
+import androidx.compose.ui.test.isDialog
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
@@ -72,14 +76,15 @@ class ConversationRecoveryAndroidTest {
         capture("conversation-recovery-dark.png")
         compose.onNodeWithText(text(R.string.application_recovery_retry)).performScrollTo().performClick()
         compose.runOnIdle { assertEquals(1, retries) }
-        compose.onNodeWithTag("conversation-recovery-detail").assertDoesNotExist()
+        compose.onNodeWithText(diagnostic).assertDoesNotExist()
         compose.onNodeWithTag("conversation-recovery-diagnostics").performScrollTo().performClick()
-        compose.onNodeWithTag("conversation-recovery-detail").assertTextEquals(diagnostic)
-        compose.onNodeWithTag("conversation-recovery-copy").performScrollTo().assertIsDisplayed().performClick()
+        compose.onNode(hasText(diagnostic) and hasAnyAncestor(isDialog())).assertIsDisplayed()
+        compose.onNodeWithContentDescription(text(R.string.chat_page_copy_error)).assertIsDisplayed().performClick()
         compose.runOnIdle {
             val clipboard = compose.activity.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
             assertEquals(diagnostic, clipboard.primaryClip?.getItemAt(0)?.text?.toString())
         }
+        compose.onNodeWithContentDescription(text(R.string.update_card_close)).performClick()
         compose.onNodeWithTag("conversation-recovery-spaces").performScrollTo().assertIsDisplayed().performClick()
         compose.runOnIdle { assertEquals(Screen.Enterprise, stack.last()) }
     }
@@ -92,7 +97,8 @@ class ConversationRecoveryAndroidTest {
         compose.onNodeWithText(text(R.string.chat_conversation_access_changed_message)).assertIsDisplayed()
         compose.onNodeWithText(text(R.string.chat_page_new_chat)).assertDoesNotExist()
         compose.onNodeWithTag("conversation-recovery-diagnostics").performClick()
-        compose.onNodeWithTag("conversation-recovery-detail").assertTextEquals(failure.userVisibleDiagnostic())
+        compose.onNode(hasText(failure.userVisibleDiagnostic()) and hasAnyAncestor(isDialog())).assertIsDisplayed()
+        compose.onNodeWithContentDescription(text(R.string.update_card_close)).performClick()
         compose.onNodeWithTag("conversation-recovery-spaces").performClick()
         compose.runOnIdle { assertEquals(listOf(Screen.Startup(), Screen.Enterprise), stack) }
     }
@@ -113,6 +119,7 @@ class ConversationRecoveryAndroidTest {
                 CompositionLocalProvider(
                     LocalNavController provides Navigator(stack),
                     LocalDensity provides Density(density.density, if (shortScreen) 1.5f else density.fontScale),
+                    net.weero.measix.pilot.ui.adaptive.LocalAdaptiveLayoutInfo provides net.weero.measix.pilot.ui.adaptive.rememberAdaptiveLayoutInfo(),
                 ) {
                     Surface {
                         Box(if (shortScreen) Modifier.fillMaxWidth().height(240.dp) else Modifier) {

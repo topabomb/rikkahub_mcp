@@ -38,6 +38,7 @@
 ## 企业语音执行与授权
 
 平台云端 TTS 通过 `SpeechHttpTransport` 把完整资源地址、平台头和请求 client 传给现有 OpenAI/Gemini/MiMo 编解码器，`TTSRequest.transport` 只在内存使用，不进入序列化配置。`TtsSynthesizer` 和 `TtsController` 共用个人空间的音频合成、播放、暂停、停止流程。系统朗读只使用现有 SystemTTS 引擎的 speechRate/pitch，不取得远端 binding；它仍属于企业定义，禁止个人 TTS 不会禁用它。
+只有平台云端 TTS 与平台 ASR 完成时发出原企业 access 的额度刷新信号，个人语音和企业 System TTS 不刷新平台额度。
 
 平台文件识别通过原 `HttpAsrController` 录制 WAV：`FileTranscription` 对 OpenAI 构造 multipart，对 DashScope 构造 Data URI JSON 并读取 output.text。`maxFileTranscriptionAudioBytes` 按实际协议开销从请求上限反算录音文件上限，录音达到上限明确失败并回收原文件，不静默截断或自动重新上传。
 

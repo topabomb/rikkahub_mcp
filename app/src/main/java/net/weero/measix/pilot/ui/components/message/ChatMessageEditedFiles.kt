@@ -14,11 +14,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Card
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.TextButton
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
-import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import net.weero.measix.pilot.ui.adaptive.AdaptiveModal
@@ -44,6 +39,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import net.weero.measix.pilot.utils.userVisibleDiagnostic
+import net.weero.measix.pilot.utils.logDiagnosticFailure
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
@@ -83,7 +79,7 @@ internal fun EditedFilesList(
     var pendingExport by remember { mutableStateOf<Pair<String, String>?>(null) }
     var operationFailure by remember { mutableStateOf<Exception?>(null) }
     fun reportFailure(error: Exception) {
-        android.util.Log.e("WorkspaceEditedFiles", "Export/share failed", error)
+        logDiagnosticFailure("WorkspaceEditedFiles", "Export/share failed", error)
         operationFailure = error
     }
     var expanded by remember { mutableStateOf(false) }
@@ -270,14 +266,9 @@ internal fun EditedFilesList(
         }
     }
     operationFailure?.let { failure ->
-        AlertDialog(
-            onDismissRequest = { operationFailure = null },
-            title = { Text(stringResource(R.string.error_title_operation)) },
-            text = { SelectionContainer { Text(failure.userVisibleDiagnostic(), Modifier.verticalScroll(rememberScrollState())) } },
-            confirmButton = {
-                TextButton(onClick = { operationFailure = null }) { Text(stringResource(R.string.common_confirm)) }
-            },
-        )
+        net.weero.measix.pilot.ui.components.ui.ErrorDetails(
+            remember(failure) { net.weero.measix.pilot.service.ChatError(detail = failure.userVisibleDiagnostic()) },
+            onDismiss = { operationFailure = null })
     }
 }
 

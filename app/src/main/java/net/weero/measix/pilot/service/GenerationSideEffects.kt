@@ -278,6 +278,7 @@ class GenerationSideEffects internal constructor(
                     conversationId = conversationId,
                     title = context.getString(R.string.error_title_generate_title),
                     solution = ChatErrorSolution.CheckTitleModelSettings,
+                    context = context,
                 )
             }
         } finally {
@@ -334,6 +335,7 @@ class GenerationSideEffects internal constructor(
                     error = error,
                     conversationId = conversationId,
                     title = context.getString(R.string.error_title_generate_suggestion),
+                    context = context,
                 )
             }
         }

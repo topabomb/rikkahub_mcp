@@ -86,7 +86,6 @@ import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.DialogProperties
-import com.dokar.sonner.ToastType
 import dev.chrisbanes.haze.HazeState
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.collectLatest
@@ -124,7 +123,6 @@ import net.weero.measix.pilot.ui.context.LocalASRState
 import net.weero.measix.pilot.ui.context.LocalSettings
 import net.weero.measix.pilot.ui.components.ui.ChatOverlaySurface
 import net.weero.measix.pilot.ui.theme.hasVisibleChatBackground
-import net.weero.measix.pilot.ui.context.LocalToaster
 import net.weero.measix.pilot.ui.hooks.ChatInputState
 import net.weero.measix.pilot.utils.SoundEffectPlayer
 import org.koin.compose.koinInject
@@ -166,7 +164,6 @@ internal fun ChatInput(
     onSendClick: () -> Unit,
     onLongSendClick: () -> Unit,
 ) {
-    val toaster = LocalToaster.current
     val useCompactHeightLayout = LocalAdaptiveLayoutInfo.current.useCompactChatInput
 
     val keyboardController = LocalSoftwareKeyboardController.current
@@ -241,12 +238,6 @@ internal fun ChatInput(
             else -> {}
         }
     }
-    LaunchedEffect(asrState.errorMessage) {
-        asrState.errorMessage?.takeIf { it.isNotBlank() }?.let { message ->
-            toaster.show(message = message, type = ToastType.Error)
-        }
-    }
-
     Surface(
         color = Color.Transparent,
     ) {

@@ -708,7 +708,9 @@ class McpRuntimeCoordinator internal constructor(
             }
             throw problem
         } finally {
-            (realmAccess as? RealmAccess.Enterprise)?.let(platform::runtimeCompleted)
+            if (freshConfig is McpConnectionDefinition.ManagedPlatform) {
+                (realmAccess as? RealmAccess.Enterprise)?.let(platform::runtimeCompleted)
+            }
         }
         return when (outcome) {
             is McpInvocationOutcome.Succeeded -> outcome.content.also {

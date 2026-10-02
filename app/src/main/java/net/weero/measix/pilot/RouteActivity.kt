@@ -256,9 +256,10 @@ class RouteActivity : ComponentActivity() {
         val eventBus = koinInject<AppEventBus>()
         val recoveryCoordinator = koinInject<ApplicationRecoveryCoordinator>()
         val recoveryState by recoveryCoordinator.state.collectAsStateWithLifecycle()
+        var speechError by remember { mutableStateOf<net.weero.measix.pilot.service.ChatError?>(null) }
         LaunchedEffect(tts, toastState) {
             tts.error.collect { message ->
-                if (message != null) toastState.show(message, type = com.dokar.sonner.ToastType.Error)
+                if (message != null) speechError = message
             }
         }
         LaunchedEffect(eventBus) {
@@ -293,6 +294,12 @@ class RouteActivity : ComponentActivity() {
                 LocalASRState provides asr,
                 LocalAdaptiveLayoutInfo provides adaptiveLayoutInfo,
             ) {
+                speechError?.let { error ->
+                    net.weero.measix.pilot.ui.components.ui.ErrorDetails(
+                        error,
+                        onDismiss = { speech.dismissError(error.id); if (speechError?.id == error.id) speechError = null },
+                    )
+                }
                 Toaster(
                     state = toastState,
                     darkTheme = LocalDarkMode.current,

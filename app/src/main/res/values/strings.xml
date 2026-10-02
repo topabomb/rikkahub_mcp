@@ -2070,4 +2070,11 @@
   <string name="assistant_usage_skills_read_failed">Unable to read skills</string>
   <string name="assistant_usage_skills_unavailable">Skills are no longer available from this page. Open settings again from the current chat.</string>
   <string name="chat_enterprise_model_service_configuration">Contact your enterprise administrator to check this model\'s service configuration.</string>
+  <string name="enterprise_prepare_title">Enterprise space check failed</string>
+  <string name="enterprise_prepare_connection_title">Cannot connect to enterprise service</string>
+  <string name="enterprise_prepare_connection">This operation has not started. Check the network and enterprise service connection. Enterprise spaces also verify current configuration and access when using personal resources.</string>
+  <string name="enterprise_prepare_sync">This operation has not started. Open the enterprise space and synchronize its configuration before trying again.</string>
+  <string name="enterprise_prepare_session">The enterprise service rejected the access check. This operation has not started. Open the enterprise space to check your sign-in and access.</string>
+  <string name="enterprise_prepare_rejected">The enterprise service could not complete the check. This operation has not started. Open the enterprise space and review the technical information.</string>
+  <string name="enterprise_prepare_unavailable">The enterprise space is not ready for this operation. This operation has not started. Open the enterprise space and review the technical information.</string>
 </resources>

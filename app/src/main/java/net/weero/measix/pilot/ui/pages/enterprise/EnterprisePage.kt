@@ -142,23 +142,17 @@ internal fun EnterpriseConfigurationStatus(selection: RealmSelection?) {
 
 @Composable
 private fun EnterpriseSynchronizationNotice(failure: EnterpriseSynchronizationFailure) {
-    var expanded by remember(failure) { mutableStateOf(false) }
     val nav = LocalNavController.current
     Column(Modifier.fillMaxWidth().testTag("enterprise-synchronization-notice")) {
         Text(stringResource(synchronizationText(failure.issue)), style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.error)
         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            TextButton(onClick = { expanded = !expanded }) {
-                Text(stringResource(R.string.enterprise_configuration_resource_details_title))
-            }
+            net.weero.measix.pilot.ui.components.ui.DiagnosticDisclosure(failure.diagnostic)
             if (failure.issue == EnterpriseSynchronizationIssue.UPDATE_APP) {
                 TextButton(onClick = { nav.navigate(Screen.SettingAbout) }) {
                     Text(stringResource(R.string.setting_page_about))
                 }
             }
-        }
-        if (expanded) SelectionContainer {
-            Text(failure.diagnostic, style = MaterialTheme.typography.bodySmall)
         }
     }
 }
@@ -437,7 +431,7 @@ internal fun EnterprisePage(openUsage: Boolean = false, vm: EnterpriseVM = koinV
                     error?.let { failure ->
                         Text(stringResource(failure.resource, *failure.arguments.toTypedArray()),
                             color = MaterialTheme.colorScheme.error)
-                        failure.detail?.let { SelectionContainer { Text(it, color = MaterialTheme.colorScheme.error) } }
+                        failure.detail?.let { net.weero.measix.pilot.ui.components.ui.DiagnosticDisclosure(it) }
                     }
                 } else {
                     Text(stringResource(R.string.enterprise_signed_out))
@@ -527,14 +521,8 @@ internal fun EnterprisePage(openUsage: Boolean = false, vm: EnterpriseVM = koinV
                                 listOfNotNull(error?.detail, state?.failure, state?.exitFailure?.reason,
                                     pageRecoveryFailure, state?.recoveryLogoutFailure)
                                     .distinct()
-                                    .forEach { detail ->
-                                        SelectionContainer {
-                                            Text(
-                                                detail,
-                                                style = MaterialTheme.typography.bodySmall,
-                                                color = MaterialTheme.colorScheme.error,
-                                            )
-                                        }
+                                    .takeIf { it.isNotEmpty() }?.joinToString("\n\n")?.let { detail ->
+                                        net.weero.measix.pilot.ui.components.ui.DiagnosticDisclosure(detail)
                                     }
                             }
                         }
@@ -554,8 +542,7 @@ internal fun EnterprisePage(openUsage: Boolean = false, vm: EnterpriseVM = koinV
                     if (reset.failure != null) {
                         Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                             Text(stringResource(R.string.enterprise_reset_failed), color = MaterialTheme.colorScheme.error)
-                            reset.failure.let { SelectionContainer { Text(it, style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.error) } }
+                            net.weero.measix.pilot.ui.components.ui.DiagnosticDisclosure(reset.failure)
                             Button(onClick = vm::retryReset, enabled = !working) { Text(stringResource(R.string.application_recovery_retry)) }
                         }
                     } else {
@@ -670,8 +657,9 @@ internal fun EnterprisePage(openUsage: Boolean = false, vm: EnterpriseVM = koinV
                         }) {
                             if (recent.loading) LinearProgressIndicator(Modifier.fillMaxWidth())
                             recent.failure?.let { detail ->
-                                SelectionContainer { Text(detail, style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.error) }
+                                Text(stringResource(R.string.enterprise_failure), color = MaterialTheme.colorScheme.error,
+                                    style = MaterialTheme.typography.bodySmall)
+                                net.weero.measix.pilot.ui.components.ui.DiagnosticDisclosure(detail)
                             }
                             recent.value?.let { feed ->
                                 feed.items.forEachIndexed { index, item ->
@@ -1254,7 +1242,9 @@ private fun EnterpriseBudgetSection(
             }
         }
         state?.failure?.let {
-            SelectionContainer { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
+            Text(stringResource(R.string.enterprise_failure), color = MaterialTheme.colorScheme.error,
+                style = MaterialTheme.typography.bodySmall)
+            net.weero.measix.pilot.ui.components.ui.DiagnosticDisclosure(it)
         }
         Surface(
             onClick = onDetails,

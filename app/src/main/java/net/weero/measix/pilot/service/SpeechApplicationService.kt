@@ -25,6 +25,8 @@ import net.weero.measix.pilot.data.datastore.SettingsStore
 import net.weero.measix.pilot.data.enterprise.*
 import net.weero.measix.pilot.utils.stripMarkdown
 import net.weero.measix.pilot.utils.userVisibleDiagnostic
+import net.weero.measix.pilot.utils.logDiagnosticFailure
+import net.weero.measix.pilot.utils.redactDiagnosticSecrets
 import okhttp3.OkHttpClient
 import kotlin.uuid.Uuid
 
@@ -53,7 +55,7 @@ class SpeechCapture internal constructor(
 interface SpeechPlayback {
     val isAvailable: StateFlow<Boolean>
     val isSpeaking: StateFlow<Boolean>
-    val error: StateFlow<String?>
+    val error: StateFlow<ChatError?>
     val currentChunk: StateFlow<Int>
     val totalChunks: StateFlow<Int>
     val playbackState: StateFlow<PlaybackState>
@@ -92,7 +94,7 @@ internal class SpeechApplicationService(
     private val commands = Mutex()
     private val synthesizer = TtsSynthesizer(manager)
     private val available = MutableStateFlow(false)
-    private val failure = MutableStateFlow<String?>(null)
+    private val failure = MutableStateFlow<ChatError?>(null)
     private val asrState = MutableStateFlow(ASRState())
     private var tts: Playback? = null
     private var asr: Recognition? = null
@@ -176,7 +178,7 @@ internal class SpeechApplicationService(
                 }
             }
         }
-        scope.launch(Dispatchers.Main.immediate) { player.error.collect { if (it != null) failure.value = it } }
+        scope.launch(Dispatchers.Main.immediate) { player.error.collect { if (it != null) failure.value = speechFailure(it) } }
     }
 
     internal fun captureTurn(captured: CapturedModelConfiguration, access: RealmAccess, stopParent: suspend () -> Unit): SpeechCapture =
@@ -337,9 +339,12 @@ internal class SpeechApplicationService(
                                 admit(capture) { if (asr === original && !original.revoked) deliver(text) }
                             } catch (cancelled: CancellationException) { throw cancelled }
                             catch (error: Exception) {
-                                android.util.Log.e("SpeechApplication", "Transcript delivery failed", error)
-                                if (asr === original && !original.revoked) asrState.value = ASRState(
-                                    status = ASRStatus.Error, isAvailable = asrAvailable, errorMessage = error.userVisibleDiagnostic())
+                                logDiagnosticFailure("SpeechApplication", "Transcript delivery failed", error)
+                                if (asr === original && !original.revoked) {
+                                    failure.value = speechFailure(error)
+                                    asrState.value = ASRState(status = ASRStatus.Error, isAvailable = asrAvailable,
+                                        errorMessage = error.userVisibleDiagnostic())
+                                }
                             }
                         }
                     }
@@ -349,6 +354,7 @@ internal class SpeechApplicationService(
                             if (asr === original && !original.revoked) {
                                 if (state.isRecording) recordingObserved = true
                                 asrState.value = state
+                                state.errorMessage?.let { failure.value = speechFailure(it) }
                                 if (!state.isRecording) audioManager.abandonAudioFocusRequest(audioFocus)
                                 if (state.status in setOf(ASRStatus.Idle, ASRStatus.Error)) submit {
                                     if (recordingObserved) {
@@ -403,7 +409,9 @@ internal class SpeechApplicationService(
 
     private fun notifyManagedRuntimeFinished(capture: SpeechCapture) {
         val access = capture.selection.access as? RealmAccess.Enterprise ?: return
-        if (capture.reference is ConfigurationReference.Enterprise) platform.runtimeCompleted(access)
+        if (capture.enterpriseAsr != null || capture.enterpriseTts?.protocol?.let { it != EnterpriseTtsProtocol.SYSTEM } == true) {
+            platform.runtimeCompleted(access)
+        }
     }
 
     private suspend fun <T> admit(capture: SpeechCapture, accept: (ExecutionConfigurationSnapshot) -> T): T =
@@ -482,7 +490,7 @@ internal class SpeechApplicationService(
                 } }
                 failure?.let { throw it }
             }
-            failure.value = "managed_snapshot_required: " + context.getString(R.string.enterprise_sync)
+            failure.value = speechFailure("managed_snapshot_required: " + context.getString(R.string.enterprise_sync))
         }
     }
 
@@ -490,11 +498,26 @@ internal class SpeechApplicationService(
         scope.launch(Dispatchers.Main.immediate) {
             try { action() } catch (cancelled: CancellationException) { throw cancelled }
             catch (error: Exception) {
-                android.util.Log.e("SpeechApplication", "Speech operation failed", error)
-                failure.value = error.userVisibleDiagnostic()
+                logDiagnosticFailure("SpeechApplication", "Speech operation failed", error)
+                failure.value = speechFailure(error)
             }
         }
     }
+
+    fun dismissError(id: Uuid) { failure.update { current -> current?.takeUnless { it.id == id } } }
+
+    private fun speechFailure(detail: String) = ChatError(title = context.getString(R.string.error_title_operation),
+        detail = redactDiagnosticSecrets(detail), retention = ChatErrorRetention.UNTIL_DISMISSED)
+
+    private fun speechFailure(error: Throwable): ChatError {
+        if (error is EnterprisePreparationException) return enterprisePreparationError(context, error)
+        EnterpriseRuntimeProblemException.find(error)?.let { problem ->
+            return requireNotNull(terminalChatError(context, null, null, me.rerere.ai.ui.MessageTerminalStatus.FAILED,
+                problem.code, problem.terminalDetail()))
+        }
+        return speechFailure(error.userVisibleDiagnostic())
+    }
+
     private fun submitRecognition(action: suspend () -> Unit) = submit {
         try { action() } catch (cancelled: CancellationException) { throw cancelled }
         catch (error: Exception) {

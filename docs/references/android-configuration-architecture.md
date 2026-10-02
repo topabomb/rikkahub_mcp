@@ -157,6 +157,10 @@ Core `api/generated/android/portal/` 是唯一消费输入，Android 在 `app/sr
 
 生产用量、预算和阻断事实归 Core。`PlatformControlClient.budgets` 经原 Session 查询，Android 不持久化预算；`EnterpriseVM` 的投影绑定原 selection 与 origin，刷新中保留最近成功值，只有请求实际失败才标记 stale 并保留原诊断。MODEL、IMAGE_GENERATION、TTS、ASR、MCP 均按平台 Problem 精确分类；个人请求不能被普通远端 429 冒充企业额度失败。
 
+`runtimeCompleted` 仅由实际使用平台路由的模型、MCP、云端 TTS 和 ASR 调用触发，并保留原企业 access。
+企业空间中的个人 MCP、个人模型/语音和设备 System TTS 不触发企业额度刷新；该条件不改变新企业操作的配置及权限检查，
+也不取消企业页面打开或用户手动发起的预算查询。刷新信号和查询投影均归 Android，Core 用量统计与协议没有变化。
+
 平台 Problem 仅在 routed 请求、稳定 code、HTTP status 和 `forwarded=false` 匹配时进入企业失败链；保留 blocker、resetAt、requestId、resourceId 和原 detail。失败不回退个人资源或自动重放业务请求。陈旧预算只供显示，执行仍由 Core 准入。
 
 Portal 文档和消息由 `PortalDocument`、`PortalDocumentRegistry` 与原 `RealmSelection`/Session 共同授权；Bridge v3 严格解码，重复键、未知操作或不匹配的文档身份失败关闭。Android 始终打开 Core `/portal/`；标准或企业自定义页面由 Core 选择。旧文档关闭、站点数据清理和地址切换在同一发布屏障内等待确认，迟到回复不能进入新页面。原生媒体和外链动作均由当前文档 owner 再次授权，Portal 不成为配置或会话 writer。

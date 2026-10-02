@@ -31,13 +31,11 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.foundation.text.selection.SelectionContainer
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.CancellationException
 import net.weero.measix.pilot.data.datastore.SettingsLockedException
 import net.weero.measix.pilot.utils.userVisibleDiagnostic
+import net.weero.measix.pilot.utils.logDiagnosticFailure
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -85,7 +83,7 @@ fun QuickMessagesPage(vm: QuickMessagesVM = koinViewModel()) {
             catch (cancelled: CancellationException) { throw cancelled }
             catch (error: SettingsLockedException) { toaster.show(lockedMessage.replace("{reason}", error.reason), type = ToastType.Error) }
             catch (error: Exception) {
-                android.util.Log.e("QuickMessagesPage", "Quick message operation failed", error)
+                logDiagnosticFailure("QuickMessagesPage", "Quick message operation failed", error)
                 diagnostic = error.userVisibleDiagnostic()
             } finally { busy = false }
         }
@@ -203,11 +201,9 @@ fun QuickMessagesPage(vm: QuickMessagesVM = koinViewModel()) {
         Text(stringResource(R.string.quick_messages_page_delete_message, deleteTarget?.title ?: ""))
     }
     diagnostic?.let { detail ->
-        AlertDialog(
-            onDismissRequest = { diagnostic = null },
-            text = { SelectionContainer { Text(detail, Modifier.verticalScroll(rememberScrollState())) } },
-            confirmButton = { TextButton(onClick = { diagnostic = null }) { Text(stringResource(R.string.confirm)) } },
-        )
+        net.weero.measix.pilot.ui.components.ui.ErrorDetails(
+            remember(detail) { net.weero.measix.pilot.service.ChatError(detail = detail) },
+            onDismiss = { diagnostic = null })
     }
 
 }

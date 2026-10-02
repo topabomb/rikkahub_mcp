@@ -43,15 +43,13 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.DisposableEffect
-import androidx.compose.foundation.text.selection.SelectionContainer
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.CancellationException
 import net.weero.measix.pilot.data.files.SkillFileSaveResult
 import net.weero.measix.pilot.data.files.SkillFileDeleteResult
 import net.weero.measix.pilot.utils.userVisibleDiagnostic
+import net.weero.measix.pilot.utils.logDiagnosticFailure
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -115,7 +113,7 @@ fun SkillsPage() {
             try { block() }
             catch (cancelled: CancellationException) { throw cancelled }
             catch (error: Exception) {
-                android.util.Log.e("SkillsPage", "Skill operation failed", error)
+                logDiagnosticFailure("SkillsPage", "Skill operation failed", error)
                 diagnostic = error.userVisibleDiagnostic()
             } finally { busy = false }
         }
@@ -311,11 +309,9 @@ fun SkillsPage() {
         Text(stringResource(R.string.skills_page_delete_message, deleteTarget?.name ?: ""))
     }
     (diagnostic ?: failure?.userVisibleDiagnostic())?.let { detail ->
-        AlertDialog(
-            onDismissRequest = { diagnostic = null; vm.dismissFailure() },
-            text = { SelectionContainer { Text(detail, Modifier.verticalScroll(rememberScrollState())) } },
-            confirmButton = { TextButton(onClick = { diagnostic = null; vm.dismissFailure() }) { Text(stringResource(R.string.confirm)) } },
-        )
+        net.weero.measix.pilot.ui.components.ui.ErrorDetails(
+            remember(detail) { net.weero.measix.pilot.service.ChatError(detail = detail) },
+            onDismiss = { diagnostic = null; vm.dismissFailure() })
     }
 
 }

@@ -2062,4 +2062,11 @@
   <string name="assistant_usage_skills_read_failed">无法读取技能目录</string>
   <string name="assistant_usage_skills_unavailable">此页面已无法访问技能。请从当前会话重新打开设置。</string>
   <string name="chat_enterprise_model_service_configuration">请联系企业管理员检查此模型的服务配置。</string>
+  <string name="enterprise_prepare_title">企业空间检查未通过</string>
+  <string name="enterprise_prepare_connection_title">无法连接企业服务</string>
+  <string name="enterprise_prepare_connection">本次操作尚未开始，请检查网络和企业服务连接。企业空间使用个人资源时，也需先确认配置和访问权限。</string>
+  <string name="enterprise_prepare_sync">本次操作尚未开始。请打开企业空间，同步配置后再尝试。</string>
+  <string name="enterprise_prepare_session">企业服务拒绝了访问检查，本次操作尚未开始。请打开企业空间，检查登录状态和访问权限。</string>
+  <string name="enterprise_prepare_rejected">企业服务未能完成检查，本次操作尚未开始。请打开企业空间，并查看技术信息。</string>
+  <string name="enterprise_prepare_unavailable">企业空间当前无法开始此操作。请打开企业空间，并查看技术信息；本次操作尚未开始。</string>
 </resources>

@@ -80,7 +80,10 @@ class RemoteWorkspacePageAndroidTest {
                 MaterialTheme(colorScheme = if (androidx.compose.foundation.isSystemInDarkTheme())
                     androidx.compose.material3.darkColorScheme() else androidx.compose.material3.lightColorScheme()) {
                     CompositionLocalProvider(LocalNavController provides Navigator(mutableListOf(Screen.Enterprise)),
-                        LocalSettings provides Settings()) { RemoteWorkspacePage(selection, vm) }
+                        LocalSettings provides Settings(),
+                        net.weero.measix.pilot.ui.adaptive.LocalAdaptiveLayoutInfo provides net.weero.measix.pilot.ui.adaptive.rememberAdaptiveLayoutInfo()) {
+                        RemoteWorkspacePage(selection, vm)
+                    }
                 }
             }
             if (restoration == null) compose.setContent(content) else restoration.setContent(content)
@@ -129,6 +132,7 @@ class RemoteWorkspacePageAndroidTest {
         compose.onNode(hasText(text(R.string.remote_workspace_details)) and hasAnyAncestor(isDialog())).performClick()
         compose.onNodeWithText("invalid_workspace_name", substring = true).assertIsDisplayed()
         coVerify(exactly = 0) { f.service.createDirectory(any(), any()) }
+        compose.onNodeWithContentDescription(text(R.string.update_card_close)).performClick()
         compose.onNodeWithContentDescription(text(R.string.remote_workspace_name)).performTextReplacement("new-folder")
         compose.onNodeWithText(text(R.string.common_confirm)).performClick()
         compose.waitUntil(5_000) { f.vm.state.value.directory?.files?.any { it.name == "new-folder" } == true }
@@ -176,6 +180,8 @@ class RemoteWorkspacePageAndroidTest {
         compose.onNodeWithText(text(R.string.remote_workspace_preview_unsupported)).assertDoesNotExist()
         compose.onNodeWithText(text(R.string.remote_workspace_details)).performClick()
         compose.onNodeWithText("IOException: HTTP 503 preview read unavailable", substring = true).assertIsDisplayed()
+        capture("remote-workspace-read-diagnostic.png")
+        compose.onNodeWithContentDescription(text(R.string.update_card_close)).performClick()
         compose.runOnIdle { f.summary.value = RemoteWorkspaceSummary(f.selection, RemoteWorkspaceStatus.FAILED) }
         coEvery { f.service.refresh(f.selection) } coAnswers {
             f.summary.value = RemoteWorkspaceSummary(f.selection, RemoteWorkspaceStatus.AVAILABLE)
@@ -207,6 +213,7 @@ class RemoteWorkspacePageAndroidTest {
         compose.onNodeWithText(text(R.string.remote_workspace_invalid_name)).assertIsDisplayed()
         compose.onNode(hasText(text(R.string.remote_workspace_details)) and hasAnyAncestor(isDialog())).performClick()
         compose.onNode(hasText("invalid_workspace_name", substring = true) and hasAnyAncestor(isDialog())).assertIsDisplayed()
+        compose.onNodeWithContentDescription(text(R.string.update_card_close)).performClick()
         name.performTextReplacement(file.name)
         compose.onNodeWithText(text(R.string.common_confirm)).performClick()
         compose.waitForIdle()
@@ -214,6 +221,7 @@ class RemoteWorkspacePageAndroidTest {
         compose.onNodeWithText(text(R.string.remote_workspace_save_as_new_name)).assertIsDisplayed()
         compose.onNode(hasText(text(R.string.remote_workspace_details)) and hasAnyAncestor(isDialog())).performClick()
         compose.onNode(hasText("workspace_save_as_requires_new_name", substring = true) and hasAnyAncestor(isDialog())).assertIsDisplayed()
+        compose.onNodeWithContentDescription(text(R.string.update_card_close)).performClick()
         coVerify(exactly = 0) { f.service.save(any(), any(), any(), any()) }
         name.performTextReplacement("copied.txt")
         compose.onNodeWithText(text(R.string.common_confirm)).performClick()
@@ -483,6 +491,7 @@ class RemoteWorkspacePageAndroidTest {
             compose.onAllNodes(hasProgressBarRangeInfo(ProgressBarRangeInfo.Indeterminate)).assertCountEquals(0)
             compose.onNodeWithText(text(R.string.remote_workspace_details)).performClick()
             compose.onNodeWithText("IOException", substring = true).assertIsDisplayed()
+            compose.onNodeWithContentDescription(text(R.string.update_card_close)).performClick()
             compose.onNodeWithText(text(R.string.enterprise_budget_refresh)).performClick()
             compose.waitUntil(10_000) { compose.onNodeWithText("1 / 2").isDisplayed() }
             compose.onNodeWithContentDescription(text(R.string.file_preview_previous_page)).assertIsNotEnabled()

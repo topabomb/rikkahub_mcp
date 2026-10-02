@@ -2062,4 +2062,11 @@
   <string name="assistant_usage_skills_read_failed">スキル一覧を読み込めません</string>
   <string name="assistant_usage_skills_unavailable">このページからはスキルにアクセスできません。現在のチャットから設定を開き直してください。</string>
   <string name="chat_enterprise_model_service_configuration">このモデルのサービス設定を確認するよう、企業管理者に連絡してください。</string>
+  <string name="enterprise_prepare_title">企業スペースの確認に失敗しました</string>
+  <string name="enterprise_prepare_connection_title">企業サービスに接続できません</string>
+  <string name="enterprise_prepare_connection">この操作はまだ開始されていません。ネットワークと企業サービスへの接続を確認してください。企業スペースでは個人リソースを使う場合も、現在の設定とアクセス権を確認します。</string>
+  <string name="enterprise_prepare_sync">この操作はまだ開始されていません。企業スペースを開き、設定を同期してから再試行してください。</string>
+  <string name="enterprise_prepare_session">企業サービスがアクセス確認を拒否しました。この操作はまだ開始されていません。企業スペースでログイン状態とアクセス権を確認してください。</string>
+  <string name="enterprise_prepare_rejected">企業サービスで確認を完了できませんでした。この操作はまだ開始されていません。企業スペースを開き、技術情報を確認してください。</string>
+  <string name="enterprise_prepare_unavailable">企業スペースでこの操作を開始できる状態になっていません。操作はまだ開始されていません。企業スペースを開き、技術情報を確認してください。</string>
 </resources>

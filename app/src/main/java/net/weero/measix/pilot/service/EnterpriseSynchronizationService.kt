@@ -56,6 +56,11 @@ internal data class EnterpriseSynchronizationStatus(
 /** UI command receipts refer to this attempt; a replaced Session receives neither its notice nor its failure. */
 internal enum class EnterpriseSynchronizationCommandResult { COMPLETED, FAILURE_PRESENTED, SUPERSEDED }
 
+/** Only this boundary can establish that the requested operation has not started. */
+internal class EnterprisePreparationException(cause: Exception) : java.io.IOException(
+    "Enterprise space verification failed before the requested operation started.", cause,
+)
+
 /** Native and Portal callers share one synchronization. Cancelling a waiter does not replay or undo the work. */
 internal class EnterpriseSynchronizationService(
     private val sessions: EnterpriseSessionController,
@@ -78,14 +83,18 @@ internal class EnterpriseSynchronizationService(
         return published
     }
 
-    suspend fun prepareExecution(access: RealmAccess.Enterprise): net.weero.measix.pilot.data.enterprise.EnterpriseAppliedVersion {
+    suspend fun prepareExecution(access: RealmAccess.Enterprise): net.weero.measix.pilot.data.enterprise.EnterpriseAppliedVersion = try {
         // Failed synchronization remains an explicit recovery boundary, never an implicit retry on send.
         _status.value?.takeIf { it.access == access }?.failure?.let { failure ->
             sessions.withRealmAccess(access) { Unit }
             throw EnterpriseConfigurationException("platform_runtime_synchronization_required",
                 "Synchronize enterprise configuration manually before starting another operation. ${failure.diagnostic}")
         }
-        return platform.prepareExecution(access)
+        platform.prepareExecution(access)
+    } catch (cancelled: CancellationException) {
+        throw cancelled
+    } catch (error: Exception) {
+        throw EnterprisePreparationException(error)
     }
 
     suspend fun cancelAndAwait(access: RealmAccess.Enterprise) {

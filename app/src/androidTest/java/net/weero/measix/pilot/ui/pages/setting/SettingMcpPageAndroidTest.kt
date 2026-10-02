@@ -42,6 +42,48 @@ class SettingMcpPageAndroidTest {
     @get:Rule val compose = createAndroidComposeRule<ComponentActivity>()
 
     @Test
+    fun connectionDiagnosticsUseTheSharedViewerAndCopyKeepsTheServerAndDetailsOpen() {
+        val diagnostic = "ConnectException: /192.168.1.8:9100\n" + (1..60).joinToString("\n") { "Caused by: IOException: original MCP detail $it" }
+        val config = McpServerConfig.StreamableHTTPServer(commonOptions = McpCommonOptions(name = "Personal MCP"), url = "https://example.test/mcp")
+        val row = config.toPresentation(McpRuntimeCapability.EMPTY).copy(status = McpStatus.Error("Connection failed", diagnostic))
+        val query = mockk<McpQueryService>()
+        every { query.userServers } returns MutableStateFlow(listOf(row))
+        every { query.catalog } returns MutableStateFlow<McpCatalogUiModel?>(
+            McpCatalogUiModel(RealmSelection(RealmAccess.Personal, 1), McpCatalogReadState.Available(listOf(row))),
+        )
+        compose.setContent {
+            McpTestTheme {
+                CompositionLocalProvider(LocalToaster provides rememberToasterState(),
+                    LocalNavController provides Navigator(mutableListOf<NavKey>(Screen.Startup()))) {
+                    SettingMcpPage(mockk<McpApplicationService>(), query, mockk<ConfigurationApplicationService>())
+                }
+            }
+        }
+        compose.onNodeWithText(compose.activity.getString(R.string.chat_conversation_diagnostics)).performScrollTo().performClick()
+        compose.onAllNodes(hasScrollAction() and hasAnyAncestor(isDialog())).assertCountEquals(1)
+        compose.onNode(hasText(diagnostic) and hasAnyAncestor(isDialog())).assertIsDisplayed()
+        compose.mainClock.advanceTimeBy(1_000)
+        compose.waitForIdle()
+        android.os.SystemClock.sleep(750)
+        val instrumentation = androidx.test.platform.app.InstrumentationRegistry.getInstrumentation()
+        instrumentation.uiAutomation.waitForIdle(250, 5_000)
+        val image = instrumentation.uiAutomation.takeScreenshot()
+        val directory = androidx.test.platform.app.InstrumentationRegistry.getArguments().getString("additionalTestOutputDir")
+            ?.let { java.io.File(it) } ?: compose.activity.getExternalFilesDir(null)
+        java.io.File(directory, "mcp-connection-diagnostics.png").outputStream().use { image.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) }
+        image.recycle()
+        compose.onNode(hasContentDescription(compose.activity.getString(R.string.chat_page_copy_error)) and hasAnyAncestor(isDialog())).performClick()
+        compose.runOnIdle {
+            val clipboard = compose.activity.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+            org.junit.Assert.assertEquals(diagnostic, clipboard.primaryClip?.getItemAt(0)?.text?.toString())
+        }
+        compose.onNode(hasText("Personal MCP") and hasAnyAncestor(isDialog())).assertIsDisplayed()
+        compose.onNodeWithContentDescription(compose.activity.getString(R.string.update_card_close)).performClick()
+        compose.onNodeWithText("Personal MCP").assertIsDisplayed()
+        (compose.activity.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager).clearPrimaryClip()
+    }
+
+    @Test
     fun failedCatalogShowsFullDiagnosisAndRetriesOnlyTheOriginalRead() {
         val authority = EnterpriseAuthority("deployment")
         val access = RealmAccess.Enterprise(ConfigurationScope.Enterprise(authority, "user"), "original")

@@ -72,7 +72,8 @@ class SubAssistantDetailPageAndroidTest {
             val backStack = rememberNavBackStack(Screen.SubAssistantDetail("run", source))
             MaterialTheme {
                 CompositionLocalProvider(LocalNavController provides Navigator(backStack),
-                    LocalSettings provides Settings.dummy(), LocalToaster provides rememberToasterState()) {
+                    LocalSettings provides Settings.dummy(), LocalToaster provides rememberToasterState(),
+                    net.weero.measix.pilot.ui.adaptive.LocalAdaptiveLayoutInfo provides net.weero.measix.pilot.ui.adaptive.rememberAdaptiveLayoutInfo()) {
                     Box(Modifier.fillMaxWidth().height(360.dp)) { SubAssistantDetailPage(source, "run", vm) }
                 }
             }
@@ -81,9 +82,10 @@ class SubAssistantDetailPageAndroidTest {
             compose.onNodeWithText(compose.activity.getString(R.string.sub_assistant_detail_unavailable)).assertIsDisplayed()
             compose.onNodeWithText(compose.activity.getString(R.string.enterprise_spaces)).assertDoesNotExist()
             compose.onNodeWithText(compose.activity.getString(R.string.chat_conversation_diagnostics)).performScrollTo().performClick()
-            compose.onNodeWithText(compose.activity.getString(R.string.chat_page_copy_error)).performScrollTo().performClick()
+            compose.onNodeWithText(compose.activity.getString(R.string.chat_page_copy_error)).assertIsDisplayed().performClick()
             val clipboard = compose.activity.getSystemService(android.content.ClipboardManager::class.java)
             compose.waitUntil { clipboard.primaryClip?.getItemAt(0)?.text?.toString() == failure.userVisibleDiagnostic() }
+            compose.onNodeWithContentDescription(compose.activity.getString(R.string.update_card_close)).performClick()
             compose.onNodeWithText(compose.activity.getString(R.string.application_recovery_retry)).performScrollTo().performClick()
             compose.runOnIdle {
                 verify(exactly = 1) { vm.retry() }

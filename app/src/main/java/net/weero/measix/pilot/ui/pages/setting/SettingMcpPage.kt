@@ -2,6 +2,7 @@ package net.weero.measix.pilot.ui.pages.setting
 
 import net.weero.measix.pilot.ui.components.ui.ConfirmDialog
 import net.weero.measix.pilot.ui.components.ui.ErrorCard
+import net.weero.measix.pilot.ui.components.ui.DiagnosticDisclosure
 import net.weero.measix.pilot.utils.logDiagnosticFailure
 import net.weero.measix.pilot.ui.components.ui.ItemActionMenu
 import net.weero.measix.pilot.ui.components.ui.ItemAction
@@ -159,7 +160,6 @@ import net.weero.measix.pilot.ui.hooks.EditStateContent
 import net.weero.measix.pilot.ui.hooks.useEditState
 import net.weero.measix.pilot.ui.theme.CustomColors
 import net.weero.measix.pilot.ui.theme.extendColors
-import net.weero.measix.pilot.utils.writeClipboardText
 import org.koin.compose.koinInject
 
 @Composable
@@ -544,42 +544,6 @@ private fun McpServerItem(
     val status = presentation?.status ?: McpStatus.Idle
     var showDeleteDialog by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
-    var errorDetail by remember { mutableStateOf<McpStatus.Error?>(null) }
-    val context = LocalContext.current
-
-    errorDetail?.let { error ->
-        val fullText = error.detail ?: error.message ?: stringResource(R.string.error_title_operation)
-        AlertDialog(
-            onDismissRequest = { errorDetail = null },
-            title = { Text(item.commonOptions.name.ifBlank { "MCP" }) },
-            text = {
-                SelectionContainer {
-                    Text(
-                        text = fullText,
-                        style = MaterialTheme.typography.bodySmall,
-                        modifier = Modifier
-                            .heightIn(max = 320.dp)
-                            .verticalScroll(rememberScrollState()),
-                    )
-                }
-            },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        context.writeClipboardText(fullText)
-                        errorDetail = null
-                    }
-                ) {
-                    Text(stringResource(R.string.copy))
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { errorDetail = null }) {
-                    Text(stringResource(R.string.cancel))
-                }
-            },
-        )
-    }
     Card(
         onClick = { onEdit(item) },
         modifier = modifier,
@@ -719,7 +683,10 @@ private fun McpServerItem(
                         color = MaterialTheme.colorScheme.error,
                         maxLines = 3,
                         overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.clickable { errorDetail = error },
+                    )
+                    DiagnosticDisclosure(
+                        detail = error.detail ?: error.message ?: stringResource(R.string.error_title_operation),
+                        title = item.commonOptions.name.ifBlank { "MCP" },
                     )
                     TextButton(
                         onClick = onRestart,

@@ -10,7 +10,9 @@ import net.weero.measix.pilot.R
 import io.mockk.every
 import io.mockk.mockk
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import kotlin.uuid.Uuid
@@ -129,7 +131,8 @@ class ChatErrorStoreTest {
             ))
             val enterpriseError = failure(managed)
             assertEquals(null, enterpriseError.solution)
-            assertEquals("resource-${R.string.chat_enterprise_model_service_configuration}\n\nHTTP 401: original upstream diagnostic", enterpriseError.detail)
+            assertEquals("resource-${R.string.chat_enterprise_model_service_configuration}", enterpriseError.summary)
+            assertEquals("HTTP 401: original upstream diagnostic", enterpriseError.detail)
             val userError = failure(personal)
             assertEquals(ChatErrorSolution.CheckProviderSettings, userError.solution)
             assertEquals("HTTP 401: original upstream diagnostic", userError.detail)
@@ -138,6 +141,69 @@ class ChatErrorStoreTest {
         val budget = requireNotNull(terminalChatError(context, Uuid.random(), Uuid.random(), MessageTerminalStatus.FAILED,
             net.weero.measix.pilot.data.enterprise.EnterpriseRuntimeProblemCodes.BUDGET_EXHAUSTED, "budget rejected", managed))
         assertEquals(ChatErrorSolution.ViewEnterpriseUsage, budget.solution)
+    }
+
+    @Test fun `enterprise preparation presentation follows its boundary and preserves original causes`() {
+        val context = mockk<android.content.Context> {
+            every { getString(any()) } answers { "resource-${firstArg<Int>()}" }
+        }
+        val store = ChatErrorStore()
+        val original = java.net.ConnectException("192.168.1.8:9100 EHOSTUNREACH").apply {
+            initCause(java.io.IOException("No route to host"))
+            addSuppressed(IllegalStateException("cleanup detail"))
+        }
+        store.add(EnterprisePreparationException(original), context = context, solution = ChatErrorSolution.CheckTitleModelSettings)
+        val error = store.errors.value.single()
+        assertEquals("resource-${R.string.enterprise_prepare_connection_title}", error.title)
+        assertEquals("resource-${R.string.enterprise_prepare_connection}", error.summary)
+        assertEquals(ChatErrorSolution.ViewEnterpriseSpace, error.solution)
+        assertEquals(ChatErrorRetention.UNTIL_DISMISSED, error.retention)
+        assertTrue(error.detail.contains("ConnectException: 192.168.1.8:9100 EHOSTUNREACH"))
+        assertTrue(error.detail.contains("No route to host"))
+        assertTrue(error.detail.contains("cleanup detail"))
+        store.add(original, context = context)
+        assertNull(store.errors.value.last().summary)
+        assertNull(store.errors.value.last().solution)
+        val sync = enterprisePreparationError(context, EnterprisePreparationException(
+            net.weero.measix.pilot.data.enterprise.EnterpriseConfigurationException("platform_runtime_synchronization_required")))
+        assertEquals("resource-${R.string.enterprise_prepare_sync}", sync.summary)
+        val http = enterprisePreparationError(context, EnterprisePreparationException(
+            net.weero.measix.pilot.data.enterprise.PlatformHttpException(403, null, "device_revoked")))
+        assertEquals("resource-${R.string.enterprise_prepare_session}", http.summary)
+        assertTrue(http.detail.contains("HTTP 403: platform_http_error: device_revoked"))
+    }
+
+    @Test fun `runtime problem retains complete structured diagnostics separately from localized explanation`() {
+        val context = mockk<android.content.Context> {
+            every { getString(any()) } answers { "resource-${firstArg<Int>()}" }
+        }
+        val problem = net.weero.measix.pilot.data.enterprise.PlatformProblem(
+            type = "https://example.test/problems/usage_meter_unavailable", title = "Usage meter unavailable", status = 422,
+            code = "usage_meter_unavailable", detail = "Original relay diagnostic", forwarded = false,
+            requestId = "req_00000000-0000-4000-8000-000000000001",
+        )
+        val encoded = net.weero.measix.pilot.data.enterprise.EnterpriseRuntimeProblemException(422, problem).terminalDetail()
+        val error = requireNotNull(terminalChatError(context, Uuid.random(), Uuid.random(), MessageTerminalStatus.FAILED,
+            problem.code, encoded))
+        assertEquals("resource-${R.string.enterprise_usage_meter_unavailable_detail}", error.summary)
+        val decoded = net.weero.measix.pilot.data.enterprise.PlatformWireCodec.decode<net.weero.measix.pilot.data.enterprise.PlatformProblem>(error.detail)
+        assertEquals(problem, decoded)
+    }
+
+    @Test fun `structured secret redaction preserves valid JSON and diagnostics after the header`() {
+        val context = mockk<android.content.Context> {
+            every { getString(any()) } answers { "resource-${firstArg<Int>()}" }
+        }
+        val problem = net.weero.measix.pilot.data.enterprise.PlatformProblem(
+            type = "https://example.test/problems/usage_meter_unavailable", title = "Usage meter unavailable", status = 422,
+            code = "usage_meter_unavailable", detail = "Original detail\nAuthorization: Bearer fixture-secret\nOriginal lower cause /192.168.1.8:9100",
+            forwarded = false, requestId = "req_00000000-0000-4000-8000-000000000001",
+        )
+        val error = requireNotNull(terminalChatError(context, Uuid.random(), Uuid.random(), MessageTerminalStatus.FAILED,
+            problem.code, net.weero.measix.pilot.data.enterprise.EnterpriseRuntimeProblemException(422, problem).terminalDetail()))
+        assertFalse(error.detail.contains("fixture-secret"))
+        val decoded = net.weero.measix.pilot.data.enterprise.PlatformWireCodec.decode<net.weero.measix.pilot.data.enterprise.PlatformProblem>(error.detail)
+        assertEquals(problem.copy(detail = "Original detail\nAuthorization: <redacted>\nOriginal lower cause /192.168.1.8:9100"), decoded)
     }
 
     @Test

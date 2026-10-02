@@ -61,6 +61,7 @@ internal abstract class McpRuntimeCoordinatorTestBase {
     }
     protected val settingsStore = mockk<SettingsStore>()
     protected val sessions = mockk<net.weero.measix.pilot.data.enterprise.EnterpriseSessionController>()
+    protected val platform = mockk<net.weero.measix.pilot.service.PlatformEnterpriseService>(relaxed = true)
     protected val catalogs = MutableStateFlow<Map<McpCatalogKey, McpCatalogSnapshot>>(emptyMap())
     protected val catalogStore = mockk<McpCatalogStore>()
     protected lateinit var networkOnline: MutableStateFlow<Boolean>
@@ -98,6 +99,7 @@ internal abstract class McpRuntimeCoordinatorTestBase {
                     definitionDigest = candidate.definitionDigest,
                     catalogDigest = candidate.tools.joinToString { it.name },
                     tools = candidate.tools,
+                    managed = candidate.managed,
                 )
                 catalogs.value = catalogs.value + (candidate.key to snapshot)
                 McpCatalogCommitResult.Committed(snapshot, previous, snapshot.revision)
@@ -144,7 +146,7 @@ internal abstract class McpRuntimeCoordinatorTestBase {
             transportOverride = { FakeTransport().also(createdTransports::add) },
             clientOverride = { config -> fakeClient(config) },
             oauthCallbackKeepAlive = NoOpOAuthCallbackKeepAlive,
-            retryJitter = { it }, oauthClientOverride = connectionOAuthClient, platform = io.mockk.mockk())
+            retryJitter = { it }, oauthClientOverride = connectionOAuthClient, platform = platform)
     }
 
     @After
