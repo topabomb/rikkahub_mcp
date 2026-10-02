@@ -145,6 +145,11 @@ class ClaudeProviderMessageTest {
         // 5. user message with [tool_result(calculate)]
         // 6. assistant message with [text]
 
+        assertEquals(
+            listOf("user", "assistant", "user", "assistant", "user", "assistant"),
+            result.map { it.jsonObject["role"]!!.jsonPrimitive.content },
+        )
+
         // Find all tool_use blocks
         val toolUseBlocks = mutableListOf<kotlinx.serialization.json.JsonObject>()
         val toolResultBlocks = mutableListOf<kotlinx.serialization.json.JsonObject>()
@@ -175,47 +180,15 @@ class ClaudeProviderMessageTest {
         // Verify tool_result contents
         assertEquals("call_1", toolResultBlocks[0]["tool_use_id"]?.jsonPrimitive?.content)
         assertEquals("call_2", toolResultBlocks[1]["tool_use_id"]?.jsonPrimitive?.content)
-    }
 
-    @Test
-    fun `tool_use in assistant should be immediately followed by user message with tool_result`() {
-        val assistantMessage = UIMessage(
-            role = MessageRole.ASSISTANT,
-            parts = listOf(
-                UIMessagePart.Text("Using tool"),
-                executedTool("call_abc", "my_tool", "{}", "Tool output")
-            )
-        )
-
-        val messages = listOf(
-            UIMessage.user("Use a tool"),
-            assistantMessage
-        )
-
-        val result = invokeBuildMessages(messages)
-
-        // Find assistant message with tool_use
-        var assistantWithToolUseIndex = -1
-        for (i in result.indices) {
-            val msg = result[i].jsonObject
-            if (msg["role"]?.jsonPrimitive?.content == "assistant") {
-                val content = msg["content"]?.jsonArray ?: continue
-                if (content.any { it.jsonObject["type"]?.jsonPrimitive?.content == "tool_use" }) {
-                    assistantWithToolUseIndex = i
-                    break
-                }
-            }
+        listOf("call_1", "call_2").forEachIndexed { index, callId ->
+            val callContent = result[1 + index * 2].jsonObject["content"]!!.jsonArray
+            val responseContent = result[2 + index * 2].jsonObject["content"]!!.jsonArray
+            assertEquals(callId, callContent.single { it.jsonObject["type"]?.jsonPrimitive?.content == "tool_use" }
+                .jsonObject["id"]!!.jsonPrimitive.content)
+            assertEquals(callId, responseContent.single { it.jsonObject["type"]?.jsonPrimitive?.content == "tool_result" }
+                .jsonObject["tool_use_id"]!!.jsonPrimitive.content)
         }
-
-        assertTrue("Should find assistant with tool_use", assistantWithToolUseIndex >= 0)
-        assertTrue("Should not be last message", assistantWithToolUseIndex < result.size - 1)
-
-        // Next message should be user with tool_result
-        val nextMsg = result[assistantWithToolUseIndex + 1].jsonObject
-        assertEquals("user", nextMsg["role"]?.jsonPrimitive?.content)
-        val nextContent = nextMsg["content"]?.jsonArray
-        assertTrue("Next message should have tool_result",
-            nextContent?.any { it.jsonObject["type"]?.jsonPrimitive?.content == "tool_result" } == true)
     }
 
     @Test
@@ -306,8 +279,12 @@ class ClaudeProviderMessageTest {
 
         assertEquals("Should have 2 tool_use blocks", 2, toolUseCount)
         assertEquals("Should have 2 tool_result blocks", 2, toolResultCount)
-        // Note: Not all reasoning may be included depending on implementation
-        assertTrue("Should have thinking blocks", thinkingCount >= 0)
+        assertEquals("All three reasoning segments must survive", 3, thinkingCount)
+        assertEquals(
+            listOf("Step 1: Search for info", "Step 2: Analyze the data", "Step 3: Present results"),
+            result.flatMap { it.jsonObject["content"]!!.jsonArray }
+                .mapNotNull { it.jsonObject["thinking"]?.jsonPrimitive?.content },
+        )
 
         // Verify tool_use -> tool_result order
         for (i in 0 until result.size - 1) {

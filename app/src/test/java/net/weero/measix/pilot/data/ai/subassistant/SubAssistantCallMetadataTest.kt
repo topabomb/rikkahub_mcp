@@ -28,72 +28,33 @@ class SubAssistantCallMetadataTest {
     // ---- State transitions ----
 
     @Test
-    fun `starting can transition to running`() {
-        assertTrue(SubAssistantCallState.STARTING.canTransitionTo(SubAssistantCallState.RUNNING))
-    }
-
-    @Test
-    fun `starting can transition to unavailable`() {
-        assertTrue(SubAssistantCallState.STARTING.canTransitionTo(SubAssistantCallState.UNAVAILABLE))
-    }
-
-    @Test
-    fun `starting can transition to failed`() {
-        assertTrue(SubAssistantCallState.STARTING.canTransitionTo(SubAssistantCallState.FAILED))
-    }
-
-    @Test
-    fun `starting can transition to stopped`() {
-        assertTrue(SubAssistantCallState.STARTING.canTransitionTo(SubAssistantCallState.STOPPED))
-    }
-
-    @Test
-    fun `starting cannot transition directly to completed`() {
-        assertFalse(SubAssistantCallState.STARTING.canTransitionTo(SubAssistantCallState.COMPLETED))
-    }
-
-    @Test
-    fun `running can transition to completed`() {
-        assertTrue(SubAssistantCallState.RUNNING.canTransitionTo(SubAssistantCallState.COMPLETED))
-    }
-
-    @Test
-    fun `running can transition to failed`() {
-        assertTrue(SubAssistantCallState.RUNNING.canTransitionTo(SubAssistantCallState.FAILED))
-    }
-
-    @Test
-    fun `running can transition to stopped`() {
-        assertTrue(SubAssistantCallState.RUNNING.canTransitionTo(SubAssistantCallState.STOPPED))
-    }
-
-    @Test
-    fun `terminal state cannot transition back to running`() {
-        assertFalse(SubAssistantCallState.COMPLETED.canTransitionTo(SubAssistantCallState.RUNNING))
-        assertFalse(SubAssistantCallState.FAILED.canTransitionTo(SubAssistantCallState.RUNNING))
-        assertFalse(SubAssistantCallState.STOPPED.canTransitionTo(SubAssistantCallState.RUNNING))
-        assertFalse(SubAssistantCallState.UNAVAILABLE.canTransitionTo(SubAssistantCallState.RUNNING))
-    }
-
-    @Test
-    fun `same state is valid transition`() {
-        for (state in SubAssistantCallState.entries) {
-            assertTrue("$state should transition to itself", state.canTransitionTo(state))
+    fun `state transitions preserve idempotence and forbid leaving a terminal state`() {
+        val allowed = mapOf(
+            SubAssistantCallState.STARTING to setOf(SubAssistantCallState.STARTING,
+                SubAssistantCallState.RUNNING, SubAssistantCallState.UNAVAILABLE,
+                SubAssistantCallState.FAILED, SubAssistantCallState.STOPPED),
+            SubAssistantCallState.RUNNING to setOf(SubAssistantCallState.RUNNING,
+                SubAssistantCallState.COMPLETED, SubAssistantCallState.FAILED, SubAssistantCallState.STOPPED),
+            SubAssistantCallState.COMPLETED to setOf(SubAssistantCallState.COMPLETED),
+            SubAssistantCallState.FAILED to setOf(SubAssistantCallState.FAILED),
+            SubAssistantCallState.STOPPED to setOf(SubAssistantCallState.STOPPED),
+            SubAssistantCallState.UNAVAILABLE to setOf(SubAssistantCallState.UNAVAILABLE),
+        )
+        assertEquals(SubAssistantCallState.entries.toSet(), allowed.keys)
+        for (from in SubAssistantCallState.entries) {
+            for (to in SubAssistantCallState.entries) {
+                assertEquals("$from -> $to", to in allowed.getValue(from), from.canTransitionTo(to))
+            }
         }
     }
 
     @Test
-    fun `isTerminal returns true for terminal states`() {
-        assertTrue(SubAssistantCallState.COMPLETED.isTerminal())
-        assertTrue(SubAssistantCallState.FAILED.isTerminal())
-        assertTrue(SubAssistantCallState.STOPPED.isTerminal())
-        assertTrue(SubAssistantCallState.UNAVAILABLE.isTerminal())
-    }
-
-    @Test
-    fun `isTerminal returns false for non-terminal states`() {
-        assertFalse(SubAssistantCallState.STARTING.isTerminal())
-        assertFalse(SubAssistantCallState.RUNNING.isTerminal())
+    fun `only completed failed stopped and unavailable states are terminal`() {
+        val terminal = setOf(SubAssistantCallState.COMPLETED, SubAssistantCallState.FAILED,
+            SubAssistantCallState.STOPPED, SubAssistantCallState.UNAVAILABLE)
+        SubAssistantCallState.entries.forEach { state ->
+            assertEquals(state.name, state in terminal, state.isTerminal())
+        }
     }
 
     // ---- Metadata merge ----
@@ -376,17 +337,6 @@ class SubAssistantCallMetadataTest {
         )
         assertFalse(result.contains("artifacts"))
         assertFalse(result.contains("has_non_text_output"))
-    }
-
-    @Test
-    fun `result never includes artifact_delivery`() {
-        val result = buildSubAssistantCallResult(
-            json = json,
-            status = "completed",
-            assistantName = "Helper",
-            content = "Done.",
-        )
-        assertFalse(result.contains("artifact_delivery"))
     }
 
     @Test

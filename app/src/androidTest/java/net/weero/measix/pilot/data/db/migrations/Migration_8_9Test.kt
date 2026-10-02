@@ -77,28 +77,6 @@ class Migration_8_9Test {
     }
 
     @Test
-    fun historicalChainReachesFreshV9Schema() {
-        val name = "migration-v1-v9-schema"
-        helper.createDatabase(name, 1).close()
-        val migrated = helper.runMigrationsAndValidate(
-            name, 9, true,
-            Migration_1_2, Migration_2_3, Migration_3_4, Migration_4_5,
-            Migration_5_6, Migration_6_7, Migration_7_8, Migration_8_9,
-        )
-        val fresh = helper.createDatabase("migration-v9-fresh-schema", 9)
-        assertEquals(tableNames(fresh), tableNames(migrated))
-        tableNames(fresh).forEach { table ->
-            // Historical ALTER TABLE appends columns; their physical order is not a Room contract.
-            fun columns(db: SupportSQLiteDatabase) = rows(db, "PRAGMA table_info(`$table`)")
-                .associate { column -> requireNotNull(column[1]) to column.drop(2) }
-            assertEquals(columns(fresh), columns(migrated))
-            assertEquals(indexInfo(fresh, table), indexInfo(migrated, table))
-        }
-        migrated.close()
-        fresh.close()
-    }
-
-    @Test
     fun indexedReadPathsAvoidUnnecessarySorting() {
         val name = "migration-v8-v9-query-plans"
         helper.createDatabase(name, 8).close()

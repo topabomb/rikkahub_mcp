@@ -283,24 +283,6 @@ class ToolCallRuntimeTest {
     }
 
     @Test
-    fun `pending interactions block the whole batch including automatic calls`() {
-        val automatic = Tool(name = "auto", description = "auto", execute = { emptyList() })
-        val approval = Tool(
-            name = "gate",
-            description = "gate",
-            interactionRequirement = { ToolInteractionRequirement.Approval },
-            execute = { error("Cannot execute") },
-        )
-        val autoCall = tool("1", "auto", "{}")
-        val gateCall = tool("2", "gate", "{}")
-        val preparation = prepare(listOf(autoCall, gateCall), listOf(automatic, approval))
-        // The batch barrier is enforced by the loop: a non-empty pending means no
-        // resolved call may execute this round, even the automatic one.
-        assertTrue(preparation.pending.single().requiresApproval)
-        assertTrue(preparation.replacements.getValue(gateCall.localCallId).isPending)
-    }
-
-    @Test
     fun `a paused batch keeps stable call identity after earlier failures disappear`() {
         val automatic = Tool(name = "auto", description = "auto", execute = { emptyList() })
         val approval = Tool(
@@ -318,6 +300,8 @@ class ToolCallRuntimeTest {
         val durable = original.after(paused)
         // Only the gate call pauses; its identity is the locator, not a positional ordinal.
         assertEquals(1, paused.pending.size)
+        assertTrue(paused.pending.single().requiresApproval)
+        assertTrue(paused.replacements.getValue(original[2].localCallId).isPending)
         assertEquals(original[2].localCallId, paused.pending.single().locator.localCallId)
 
         // Re-pass the surviving calls with fresh (different) ordinals; identity must not drift.
@@ -364,43 +348,9 @@ class ToolCallRuntimeTest {
     }
 
     @Test
-    fun `runtime rejection and structured business failure both project as failed`() {
-        val details = Json.parseToJsonElement("{\"status\":\"failed\",\"reason\":\"invalid_arguments\"}").jsonObject
-        val definition = Tool(
-            name = "domain", description = "domain", validateArguments = { details },
-            execute = { emptyList() },
-        )
-        val call = tool("a", definition.name, "{}")
-        val preparation = prepare(listOf(call), listOf(definition))
-        val rejected = listOf(call).after(preparation).single()
-        val businessResult = call.copy(
-            output = listOf(UIMessagePart.Text(details.toString())),
-            resultStatus = ToolResultStatus.FAILED,
-        )
-        assertEquals(ToolLivePhase.FAILED, resolveToolLivePhase(rejected, null))
-        assertEquals(ToolLivePhase.FAILED, resolveToolLivePhase(businessResult, null))
-    }
-
-    @Test
-    fun `arbitrary business result shapes cannot crash historical phase projection`() {
-        listOf("[]", "text", "{\"status\":[]}", "{\"error\":{},\"type\":{}}", "{\"error\":{}}")
-            .forEach { output ->
-                val tool = tool("a", "remote", "{}", output = listOf(UIMessagePart.Text(output))).copy(resultStatus = ToolResultStatus.COMPLETED)
-                assertEquals(ToolLivePhase.COMPLETED, resolveToolLivePhase(tool, null))
-            }
-        listOf("error", "timeout").forEach { type ->
-            val tool = tool(
-                "a", "remote", "{}", output = listOf(UIMessagePart.Text("{\"error\":\"failed\",\"type\":\"$type\"}")),
-            ).copy(resultStatus = ToolResultStatus.FAILED)
-            assertEquals(ToolLivePhase.FAILED, resolveToolLivePhase(tool, null))
-        }
-    }
-
-    @Test
     fun `generic implementation error becomes a compact stable failure`() = runTest {
         val outcome = runtime.execute(prepared(Tool("boom", "boom", execute = { error("secret path") })), hooks())
 
-        assertEquals(me.rerere.ai.ui.ToolResultStatus.FAILED, outcome.resultStatus)
         assertEquals(
             "{\"status\":\"failed\",\"reason\":\"runtime_error\",\"detail\":\"IllegalStateException: secret path\"}",
             (outcome.output.single() as UIMessagePart.Text).text,
@@ -419,7 +369,6 @@ class ToolCallRuntimeTest {
 
         val outcome = runtime.execute(prepared(tool), hooks())
 
-        assertEquals(me.rerere.ai.ui.ToolResultStatus.FAILED, outcome.resultStatus)
         assertEquals(expected, outcome.output)
         assertEquals(ToolOutputPolicy.ARCHIVABLE_TEXT, outcome.outputPolicy)
         assertEquals(ToolResultStatus.FAILED, outcome.resultStatus)

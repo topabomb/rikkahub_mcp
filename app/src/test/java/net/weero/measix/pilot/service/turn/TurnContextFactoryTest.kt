@@ -166,8 +166,9 @@ class TurnContextFactoryTest {
     fun `only enabled injections linked to the effective mode set are frozen`() {
         val linked = ConfigurationReference.random()
         val unlinked = ConfigurationReference.random()
+        val disabled = ConfigurationReference.random()
         val assistant = Assistant(
-            modeInjectionIds = setOf(linked),
+            modeInjectionIds = setOf(linked, disabled),
             allowConversationPromptInjection = false,
         )
         val settings = Settings().copy(
@@ -178,7 +179,7 @@ class TurnContextFactoryTest {
                     priority = 1,
                 ),
                 PromptInjection.ModeInjection(id = unlinked, content = "unlinked"),
-                PromptInjection.ModeInjection(id = ConfigurationReference.random(), content = "disabled", enabled = false),
+                PromptInjection.ModeInjection(id = disabled, content = "disabled", enabled = false),
             ),
         )
         val frozen = freeze(settings = settings, assistant = assistant)

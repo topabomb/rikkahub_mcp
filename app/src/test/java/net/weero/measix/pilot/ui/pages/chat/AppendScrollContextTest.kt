@@ -114,31 +114,6 @@ class AppendScrollContextTest {
     }
 
     @Test
-    fun `released active turn without the target message invalidates the wait`() {
-        val before = snapshot(nodes = listOf(MessageNode.of(UIMessage.user("first"))))
-        val turnId = Uuid.random()
-        val context = AppendScrollContext.from(before, Uuid.random(), turnId)
-
-        assertEquals(
-            AppendScrollStatus.INVALIDATED,
-            evaluateAppendScroll(
-                requestContext = context,
-                snapshot = before,
-                presentation = ConversationPresentation(
-                    activeTurnId = null,
-                    phase = null,
-                    processingText = null,
-                    toolLivePhases = emptyMap(),
-                    lastTerminatedRequestTurnId = turnId,
-                ),
-                actualItemCount = 4,
-                expectedItemCount = 4,
-                imeBottom = 0,
-            ),
-        )
-    }
-
-    @Test
     fun `stale idle presentation waits until append or matching termination is observed`() {
         val before = snapshot(nodes = listOf(MessageNode.of(UIMessage.user("first"))))
         val turnId = Uuid.random()

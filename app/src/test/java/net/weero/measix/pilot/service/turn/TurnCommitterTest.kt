@@ -176,7 +176,9 @@ class TurnCommitterTest {
         harness.turnCommitter.commitRunResult(TurnOutcome.Completed(assistantMessage = checkpointAssistant))
 
         assertEquals(listOf(ModelResponseCheckpoint::class, FinalizeTurn::class), recorded.map { it::class })
-        assertEquals(checkpointAssistant, (recorded.last() as FinalizeTurn).assistantMessage)
+        val finalized = recorded.last() as FinalizeTurn
+        assertEquals(checkpointAssistant, finalized.assistantMessage)
+        assertEquals(TurnExecutionStatus.COMPLETED, finalized.terminalStatus)
     }
 
     @Test
@@ -190,17 +192,6 @@ class TurnCommitterTest {
 
         coVerify(exactly = 1) { harness.coordinator.executeOrThrow(any(), any()) }
         io.mockk.verify(exactly = 1) { harness.runtime.applyStreamingDelta(harness.handle, assistant) }
-    }
-
-    @Test
-    fun `completed outcome submits the sealed completed finalization`() = runTest {
-        val harness = harness()
-
-        harness.turnCommitter.commitRunResult(TurnOutcome.Completed(assistantMessage = msg("done")))
-
-        val command = slot<ConversationCommand>()
-        coVerify { harness.coordinator.executeOrThrow(any(), capture(command)) }
-        assertEquals(TurnExecutionStatus.COMPLETED, (command.captured as FinalizeTurn).terminalStatus)
     }
 
     @Test
@@ -344,30 +335,6 @@ class TurnCommitterTest {
         val finalize = commands.filterIsInstance<FinalizeTurn>().single()
         assertEquals(TurnExecutionStatus.CANCELLED, finalize.terminalStatus)
         assertEquals(partial, finalize.assistantMessage)
-    }
-
-    @Test
-    fun `master and target use identical command shapes`() = runTest {
-        suspend fun drive(): List<ConversationCommand> {
-            val harness = harness()
-            val recorded = mutableListOf<ConversationCommand>()
-            coEvery { harness.coordinator.executeOrThrow(any(), capture(recorded)) } returns Unit
-            harness.turnCommitter.onCheckpoint(
-                ModelResponseCheckpoint(
-                    turn = harness.handle,
-                    step = StepHandle(Uuid.random()),
-                    assistantMessage = msg("checkpoint"),
-                    turnStatus = TurnExecutionStatus.RUNNING,
-                )
-            )
-            harness.turnCommitter.commitRunResult(TurnOutcome.Completed(assistantMessage = msg("checkpoint")))
-            return recorded
-        }
-
-        val master = drive()
-        val target = drive()
-        assertEquals(master.map { it::class }, target.map { it::class })
-        assertEquals(listOf(ModelResponseCheckpoint::class, FinalizeTurn::class), master.map { it::class })
     }
 
     @Test

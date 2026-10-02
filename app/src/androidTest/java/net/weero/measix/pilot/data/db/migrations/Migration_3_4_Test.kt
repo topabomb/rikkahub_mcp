@@ -14,16 +14,7 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 
-/**
- * Conversation schema v4 迁移回归测试。
- *
- * 覆盖：
- * - v1/v2 均存在到 v4 的完整历史迁移链；
- * - v3 → v4 additive column/indices 迁移后 parentConversationId == null 且 Conversation/MessageNode 完整；
- * - parent 与 assistant 索引名均与 Room schema 一致（大小写敏感）；
- * - 可插入多个相同 parent/target 的 Child lineage；
- * - 数据完整性：已有会话不丢失。
- */
+/** Migration v2/v3 to v4: preserved conversations and nodes, nullable parent defaults and non-unique child lineage. Schema validation runs with each migration. */
 @RunWith(AndroidJUnit4::class)
 class Migration_3_4_Test {
     private val TEST_DB = "migration-test-3-4"
@@ -35,20 +26,6 @@ class Migration_3_4_Test {
         emptyList(),
         FrameworkSQLiteOpenHelperFactory()
     )
-
-    @Test
-    fun migrate1To4_hasCompleteHistoricalPath() {
-        helper.createDatabase(TEST_DB, 1).apply { close() }
-
-        helper.runMigrationsAndValidate(
-            TEST_DB,
-            4,
-            true,
-            Migration_1_2,
-            Migration_2_3,
-            Migration_3_4,
-        ).close()
-    }
 
     @Test
     fun migrate2To4_preservesConversationAndAddsFolderAndParentColumns() {
@@ -88,53 +65,6 @@ class Migration_3_4_Test {
         assertNull(cursor.getString(2))
         cursor.close()
         migratedDb.close()
-    }
-
-    @Test
-    fun migrate3To4_addsParentConversationIdColumn() {
-        // 创建 v3 数据库
-        helper.createDatabase(TEST_DB, 3).apply { close() }
-
-        // 运行迁移到 v4
-        val db = helper.runMigrationsAndValidate(TEST_DB, 4, true, Migration_3_4)
-
-        // 验证 parent_conversation_id 列存在
-        val cursor = db.query("SELECT * FROM ConversationEntity LIMIT 0")
-        val columnNames = cursor.columnNames.toList()
-        cursor.close()
-
-        assertTrue(
-            "ConversationEntity should have 'parent_conversation_id' column after migration",
-            columnNames.contains("parent_conversation_id")
-        )
-
-        db.close()
-    }
-
-    @Test
-    fun migrate3To4_indicesHaveCorrectNames() {
-        helper.createDatabase(TEST_DB, 3).apply { close() }
-
-        val db = helper.runMigrationsAndValidate(TEST_DB, 4, true, Migration_3_4)
-
-        // 验证索引存在且名称正确（大小写敏感，与 Room schema 一致）
-        val cursor = db.query("SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='ConversationEntity'")
-        val indexNames = mutableListOf<String>()
-        while (cursor.moveToNext()) {
-            indexNames.add(cursor.getString(0))
-        }
-        cursor.close()
-
-        assertTrue(
-            "Index 'index_ConversationEntity_parent_conversation_id' must exist",
-            indexNames.contains("index_ConversationEntity_parent_conversation_id")
-        )
-        assertTrue(
-            "Index 'index_ConversationEntity_assistant_id' must exist",
-            indexNames.contains("index_ConversationEntity_assistant_id")
-        )
-
-        db.close()
     }
 
     @Test

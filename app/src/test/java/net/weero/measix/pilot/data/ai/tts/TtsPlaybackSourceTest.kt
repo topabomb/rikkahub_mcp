@@ -53,20 +53,4 @@ class TtsPlaybackSourceTest {
         assertNotEquals(master.assistantId, target.assistantId)
         assertNotEquals(master.type, target.type)
     }
-
-    @Test
-    fun `different master turns have different queue identities`() {
-        val assistantId = ConfigurationReference.random()
-        val first = TtsToolPlaybackContext(
-            capture = io.mockk.mockk(),
-            sessionId = "turn-1",
-            assistantId = assistantId,
-            assistantName = "Master",
-            sourceType = TtsPlaybackSource.SourceType.NORMAL,
-        )
-        val second = first.copy(sessionId = "turn-2")
-
-        assertNotEquals(first.sessionId, second.sessionId)
-        assertNotEquals(first, second)
-    }
 }

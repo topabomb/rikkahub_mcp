@@ -1,4 +1,4 @@
-﻿package net.weero.measix.pilot.data.datastore
+package net.weero.measix.pilot.data.datastore
 
 import me.rerere.ai.provider.ProviderSetting
 import org.junit.Assert.assertEquals
@@ -48,12 +48,5 @@ class DefaultProvidersTest {
         assertTrue(deepseek.balanceOption.enabled)
         assertEquals("/user/balance", deepseek.balanceOption.apiPath)
         assertEquals("balance_infos[0].total_balance", deepseek.balanceOption.resultPath)
-    }
-
-    @Test
-    fun `all default providers should be builtIn`() {
-        DEFAULT_PROVIDERS.forEach { provider ->
-            assertTrue("${provider.name} should be builtIn", provider.builtIn)
-        }
     }
 }

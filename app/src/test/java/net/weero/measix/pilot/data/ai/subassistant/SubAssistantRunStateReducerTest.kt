@@ -5,7 +5,6 @@ import me.rerere.common.configuration.ConfigurationReference
 import kotlinx.coroutines.test.runTest
 import kotlin.uuid.Uuid
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -58,6 +57,7 @@ class SubAssistantRunStateReducerTest {
         reducer.updatePhase(SubAssistantCallPhase.TOOL_EXECUTING, "workspace_read_file")
 
         val snap = reducer.snapshot()
+        assertEquals(SubAssistantCallState.RUNNING, snap.state)
         assertEquals("workspace_read_file", snap.activeToolName)
     }
 
@@ -150,16 +150,6 @@ class SubAssistantRunStateReducerTest {
         val snap = reducer.snapshot()
         assertEquals(SubAssistantCallState.COMPLETED, snap.state) // 先到先得
         assertEquals("first", snap.preview)
-    }
-
-    @Test
-    fun `running cannot go back to starting`() = runTest {
-        val reducer = SubAssistantRunStateReducer(makeInitial())
-        reducer.updateRunningState()
-
-        // 尝试回到 starting（不应改变）
-        val snap = reducer.snapshot()
-        assertEquals(SubAssistantCallState.RUNNING, snap.state)
     }
 
     @Test

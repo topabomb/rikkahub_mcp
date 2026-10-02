@@ -320,29 +320,6 @@ class MessageTest {
     }
 
     @Test
-    fun `terminal replay keeps complete prefix reasoning for deepseek v4 strict history`() {
-        val completedTool = toolPart(name = "search", output = listOf(UIMessagePart.Text("result")))
-        val terminal = UIMessage(
-            role = MessageRole.ASSISTANT,
-            parts = listOf(
-                step(outcome = StepOutcome.Continue),
-                UIMessagePart.Reasoning(reasoning = "Step reasoning"),
-                UIMessagePart.Text("Calling search"),
-                completedTool,
-                step(1),
-                UIMessagePart.Reasoning(reasoning = "Tail reasoning"),
-                UIMessagePart.Text("Partial answer"),
-            ),
-            terminalStatus = MessageTerminalStatus.FAILED,
-            terminalReason = TurnTerminalReasons.PROVIDER_FAILED,
-        )
-        val projected = terminal.replaySafeProjection()!!
-        val projection = projected.providerReplayProjection!!
-        val completePrefix = projected.parts.take(projection.completePartCount)
-        assertTrue(completePrefix.any { it is UIMessagePart.Reasoning })
-    }
-
-    @Test
     fun `provider replay projection is not persisted through serialization`() {
         val terminal = UIMessage(
             role = MessageRole.ASSISTANT,

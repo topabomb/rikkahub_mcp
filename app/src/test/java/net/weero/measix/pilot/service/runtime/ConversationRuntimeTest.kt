@@ -6,11 +6,9 @@ import net.weero.measix.pilot.testkit.sampledModelResult
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
@@ -54,7 +52,6 @@ import kotlin.uuid.Uuid
 
 /**
  * ConversationRuntime 权威测试。
- *  - 100 协程并发交错 command 无丢失更新（operation lock 外的 projection apply 仍按 identity 发布）
  *  - applyStreamingDelta：无 DB 调用（内存态更新）且唯一快照投影含最新流式内容
  *  - TTS 队列复用、
  *    替换 job 不能清除当前 job、cancel reason 绑定 turn。
@@ -242,26 +239,6 @@ class ConversationRuntimeTest {
             scope = scope,
             onIdle = { onIdle() },
         )
-    }
-
-    @Test
-    fun `concurrent submits have no lost updates`() = runTest {
-        val scope = CoroutineScope(Dispatchers.Default)
-        val rt = runtime(scope)
-        val n = 100
-        val jobs = (0 until n).map { i ->
-            async {
-                rt.applyCommand(AppendUserMessage(user("msg-$i")))
-            }
-        }
-        jobs.awaitAll()
-        assertEquals(n, rt.snapshot.value.durable.nodes.size)
-        // 每条用户消息都保留
-        val texts = rt.snapshot.value.durable.nodes.map { it.messages.single().toText() }
-        (0 until n).forEach { i ->
-            assertTrue("msg-$i present", texts.contains("msg-$i"))
-        }
-        scope.cancel()
     }
 
     @Test

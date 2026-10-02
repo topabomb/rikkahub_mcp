@@ -1,6 +1,5 @@
 package me.rerere.ai.provider.providers.openai
 
-import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
@@ -147,6 +146,7 @@ class ChatCompletionsAPIToolSchemaTest {
     fun `responses preserves JSON Schema definitions and references`() {
         val api = ResponseAPI(OkHttpClient(), KeyRoulette.default())
         val schema = buildJsonObject {
+            put("\$schema", "https://json-schema.org/draft/2020-12/schema")
             put("type", "object")
             put("properties", buildJsonObject {
                 put("value", buildJsonObject { put("\$ref", "#/\$defs/value") })
@@ -178,6 +178,6 @@ class ChatCompletionsAPIToolSchemaTest {
             "#/\$defs/value",
             sent["properties"]!!.jsonObject["value"]!!.jsonObject["\$ref"]!!.jsonPrimitive.content,
         )
-        assertEquals("number", sent["\$defs"]!!.jsonObject["value"]!!.jsonObject["type"]!!.jsonPrimitive.content)
+        assertEquals(schema, sent)
     }
 }

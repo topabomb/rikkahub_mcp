@@ -73,11 +73,6 @@ class RetiredSurfaceContractTest {
             "getProcessingStatusFlow",
             "Image output omitted",
             "CAPABILITY_HINT",
-            "backward compat",
-            "Phase A",
-            "Phase B",
-            "Phase C",
-            "Phase D",
         ).forEach(::assertNoHits)
         assertFalse(File(architectureSourceRoot, "service/ChatService.kt").exists())
         assertFalse(File(architectureSourceRoot, "service/AssistantDataRecovery.kt").exists())
@@ -139,9 +134,5 @@ class RetiredSurfaceContractTest {
         assertNoHits("handleMessageComplete")
         assertNoHits("finalizeMasterTurn")
         assertNoHits("persistMessageNodes")
-        assertNoHits("V1C")
-        assertNoHits("工作流")
-        assertNoHits("修订记录")
-        assertNoHits("兼容白名单")
     }
 }

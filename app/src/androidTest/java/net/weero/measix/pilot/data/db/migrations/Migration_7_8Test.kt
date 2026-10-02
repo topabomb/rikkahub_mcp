@@ -114,24 +114,6 @@ class Migration_7_8Test {
         migrated.close()
     }
 
-    @Test
-    fun migratedV8ArtifactSchemaMatchesFreshV8Schema() {
-        val old = helper.createDatabase("migration-v8-schema-migrated", 7)
-        old.close()
-        val migrated = helper.runMigrationsAndValidate(
-            "migration-v8-schema-migrated",
-            8,
-            true,
-            Migration_7_8,
-        )
-        val fresh = helper.createDatabase("migration-v8-schema-fresh", 8)
-
-        assertEquals(tableInfo(fresh, "artifact"), tableInfo(migrated, "artifact"))
-        assertEquals(indexInfo(fresh, "artifact"), indexInfo(migrated, "artifact"))
-        migrated.close()
-        fresh.close()
-    }
-
     private fun seedArtifact(db: SupportSQLiteDatabase, path: String, origin: String) {
         db.execSQL(
             "INSERT INTO artifact " +
@@ -180,23 +162,6 @@ class Migration_7_8Test {
             }
         }
         return result.sorted()
-    }
-
-    private fun indexInfo(db: SupportSQLiteDatabase, table: String): Map<String, List<String>> {
-        val result = sortedMapOf<String, List<String>>()
-        query(db, "PRAGMA index_list($table)").use { cursor ->
-            while (cursor.moveToNext()) {
-                val name = cursor.getString(cursor.getColumnIndexOrThrow("name"))
-                val columns = mutableListOf<String>()
-                query(db, "PRAGMA index_info($name)").use { indexCursor ->
-                    while (indexCursor.moveToNext()) {
-                        columns += indexCursor.getString(indexCursor.getColumnIndexOrThrow("name"))
-                    }
-                }
-                result[name] = columns
-            }
-        }
-        return result
     }
 
     private fun query(db: SupportSQLiteDatabase, sql: String): Cursor = db.query(sql, emptyArray<Any?>())

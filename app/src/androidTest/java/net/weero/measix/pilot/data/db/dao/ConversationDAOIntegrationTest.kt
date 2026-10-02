@@ -9,6 +9,9 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import net.weero.measix.pilot.data.db.AppDatabase
 import net.weero.measix.pilot.data.db.entity.ConversationEntity
+import net.weero.measix.pilot.data.db.entity.ArtifactEntity
+import net.weero.measix.pilot.data.db.entity.ArtifactReferenceEntity
+import net.weero.measix.pilot.data.db.entity.ArtifactReferenceType
 import net.weero.measix.pilot.data.db.entity.MessageNodeEntity
 import net.weero.measix.pilot.data.db.entity.FolderEntity
 import me.rerere.common.configuration.EnterpriseAuthority
@@ -71,6 +74,7 @@ class ConversationDAOIntegrationTest {
             assertEquals(listOf("unfiled-$index"), loadIds(dao.getUnfiledConversationsOfAssistantPaging(scope, assistant)))
             assertEquals(listOf("folder-$index"), database.folderDao().getFoldersOfAssistant(scope, assistant).first().map { it.id })
             assertEquals(2, dao.countAll(scope))
+            assertEquals(listOf("child-$index"), dao.getChildConversations(root.id).map { it.id })
             val stats = database.messageNodeDao().getTokenStats(scope)
             assertEquals(1, stats.totalMessages)
             assertEquals(11L * (index + 1), stats.inputTokens)
@@ -78,85 +82,9 @@ class ConversationDAOIntegrationTest {
             assertEquals(8L, stats.cacheReadInputTokens)
             assertEquals(1, database.messageNodeDao().getMessageCountPerDay(scope, "2026-01-01").sumOf { it.count })
         }
-    }
-
-    @Test
-    fun normalQueriesExcludeChildWhileControlledQueriesIncludeIt() = runBlocking {
-        val assistantId = "0950e2dc-9bd5-4801-afa3-aa887aa36b4e"
-        val master = conversation(
-            id = "00000000-0000-0000-0000-000000000101",
-            assistantId = assistantId,
-            title = "Visible matching conversation",
-            folderId = "00000000-0000-0000-0000-000000000201",
-            isPinned = true,
-        )
-        val child = conversation(
-            id = "00000000-0000-0000-0000-000000000102",
-            assistantId = assistantId,
-            title = "Hidden matching conversation",
-            folderId = master.folderId,
-            isPinned = true,
-            parentConversationId = master.id,
-        )
-        dao.insert(master)
-        dao.insert(child)
-
-        assertEquals(listOf(master.id), dao.getConversationsOfAssistant(ConfigurationScope.Personal, assistantId).first().map { it.id })
-        assertEquals(listOf(master.id), dao.getRecentConversationsOfAssistant(ConfigurationScope.Personal, assistantId, 10).map { it.id })
-        assertEquals(listOf(master.id), dao.getPinnedConversations(ConfigurationScope.Personal).first().map { it.id })
-        assertEquals(listOf(master.id), dao.getAllIds())
-        assertEquals(1, dao.countAll(ConfigurationScope.Personal))
-        assertEquals(listOf(master.id), loadIds(dao.getConversationsOfFolderPaging(ConfigurationScope.Personal, master.folderId)))
-
-        assertEquals(listOf(child.id), dao.getChildConversations(master.id).map { it.id })
-        assertEquals(setOf(master.id, child.id), dao.getAllConversations().map { it.id }.toSet())
-    }
-
-    @Test
-    fun visibleMessageCountsExcludeChildWhileTokenUsageIncludesIt() = runBlocking {
-        val master = conversation(
-            id = "00000000-0000-0000-0000-000000000301",
-            assistantId = "0950e2dc-9bd5-4801-afa3-aa887aa36b4e",
-            title = "Master",
-            folderId = "",
-            isPinned = false,
-        )
-        val child = conversation(
-            id = "00000000-0000-0000-0000-000000000302",
-            assistantId = master.assistantId,
-            title = "Child",
-            folderId = "",
-            isPinned = false,
-            parentConversationId = master.id,
-        )
-        dao.insert(master)
-        dao.insert(child)
-        val messageNodeDao = database.messageNodeDao()
-        messageNodeDao.insertAll(
-            listOf(
-                node(
-                    id = "master-node",
-                    conversationId = master.id,
-                    inputTokens = 10,
-                    outputTokens = 2,
-                    cacheReadInputTokens = 3,
-                ),
-                node(
-                    id = "child-node",
-                    conversationId = child.id,
-                    inputTokens = 20,
-                    outputTokens = 4,
-                    cacheReadInputTokens = 5,
-                ),
-            )
-        )
-
-        val stats = messageNodeDao.getTokenStats(ConfigurationScope.Personal)
-        assertEquals(1, stats.totalMessages)
-        assertEquals(30L, stats.inputTokens)
-        assertEquals(6L, stats.outputTokens)
-        assertEquals(8L, stats.cacheReadInputTokens)
-        assertEquals(1, messageNodeDao.getMessageCountPerDay(ConfigurationScope.Personal, "2026-01-01").sumOf { it.count })
+        val rootIds = roots.flatMapIndexed { index, root -> listOf(root.id, "unfiled-$index") }.toSet()
+        assertEquals(rootIds, dao.getAllIds().toSet())
+        assertEquals(rootIds + scopes.indices.map { "child-$it" }, dao.getAllConversations().map { it.id }.toSet())
     }
 
     @Test
@@ -234,6 +162,35 @@ class ConversationDAOIntegrationTest {
         assertEquals(listOf("shared-node-id"), firstHeaders.map { it.id })
         assertEquals(0, firstHeaders.single().nodeIndex)
         assertTrue(messageNodeDao.getNodeHeadersOfConversation(second.id).isEmpty())
+    }
+
+    @Test
+    fun messageNodeUpsertPreservesArtifactReferencesAndUpdatesPayload() = runBlocking {
+        val owner = conversation("upsert-owner", "assistant", "Upsert", "", false)
+        dao.insert(owner)
+        val nodes = database.messageNodeDao()
+        val original = MessageNodeEntity("upsert-node", owner.id, 0, "[]", 0)
+        nodes.insertAll(listOf(original))
+        val artifactId = database.artifactDao().insert(ArtifactEntity(
+            folder = "upload", relativePath = "upload/upsert.png", displayName = "upsert.png",
+            mimeType = "image/png", sizeBytes = 1, createdAt = 1, updatedAt = 1,
+        ))
+        val references = database.artifactReferenceDao()
+        references.insertAll(listOf(ArtifactReferenceEntity(
+            artifactId = artifactId, nodeId = original.id, referenceType = ArtifactReferenceType.ATTACHMENT.name,
+        )))
+        assertTrue(references.existsInConversation(artifactId, owner.id, ArtifactReferenceType.ATTACHMENT.name))
+
+        val updated = original.copy(nodeIndex = 2, messages = """[{"role":"user","parts":[{"type":"text","text":"updated"}]}]""")
+        // Exercise the production upsert: REPLACE would silently delete the existing FK reference.
+        nodes.upsertAll(listOf(updated))
+
+        assertEquals(2, nodes.getNodeHeadersOfConversation(owner.id).single().nodeIndex)
+        assertEquals(updated.messages, nodes.getMessagesSlice(original.id, 1, updated.messages.length))
+        assertTrue(references.existsInConversation(artifactId, owner.id, ArtifactReferenceType.ATTACHMENT.name))
+        // Prove that the fixture's cascade is active, so preservation cannot pass with FK checks disabled.
+        nodes.deleteById(original.id)
+        assertEquals(false, references.existsByArtifactId(artifactId))
     }
 
     private suspend fun loadIds(source: PagingSource<Int, LightConversationEntity>): List<String> {

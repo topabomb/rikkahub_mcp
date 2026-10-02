@@ -83,21 +83,6 @@ class Migration_4_5_Test {
         db.close()
     }
 
-    @Test
-    fun migrate1To5HasCompleteHistoricalPath() {
-        helper.createDatabase(testDb, 1).close()
-
-        helper.runMigrationsAndValidate(
-            testDb,
-            5,
-            true,
-            Migration_1_2,
-            Migration_2_3,
-            Migration_3_4,
-            Migration_4_5,
-        ).close()
-    }
-
     private fun scalarCount(database: androidx.sqlite.db.SupportSQLiteDatabase, query: String): Int =
         database.query(query).use { cursor ->
             check(cursor.moveToFirst())

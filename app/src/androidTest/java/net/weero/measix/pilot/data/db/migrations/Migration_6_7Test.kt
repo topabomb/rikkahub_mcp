@@ -15,19 +15,7 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 
-/**
- * Migration v6→v7 权威测试。
- *
- * 对齐 Migration_5_6Test 范式。用例：
- *  - M1  孤儿清理：parent 悬挂的 Child 被删除（含其消息节点），正常主/子全保留
- *  - M2  数据完整：nodes 死列删除，其余列逐字段保留
- *  - M3  FK 级联：删 Master → Child → Child 的 message_node 逐级级联消失
- *  - M4  FK 约束：parent 悬挂的 Child 插入被数据库拒绝（孤儿结构性不可能）
- *  - M5  tool_execution.child_conversation_id 列存在且可写
- *  - M6  schema 校验：runMigrationsAndValidate 走 Room 迁移算法
- *  - M7  迁移库与直接 v7 新建库 schema 语义同构
- *  - M8  v5→v7 全链路：managed_files→artifact 改名数据、会话树、消息节点全部无损到达 v7
- */
+/** Migration v6 to v7: orphan cleanup, preserved columns and tree data, foreign-key rejection/cascades and tool child links. Seeded v5-to-v7 coverage retains the historical chain; each fixture validates the exported Room schema. */
 @RunWith(AndroidJUnit4::class)
 class Migration_6_7Test {
     private val TEST_DB = "migration-test-v6-v7"
@@ -189,41 +177,6 @@ class Migration_6_7Test {
     }
 
     @Test
-    fun m6_schemaMatchesV7EntityDeclarations() {
-        // runMigrationsAndValidate 已在 migratedWithData() 内部执行（Room 迁移算法校验含 FK/索引/默认值）
-        val db = migratedWithData()
-        val names = mutableSetOf<String>()
-        query(db, "SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name IN ('ConversationEntity', 'tool_execution')").use { c ->
-            while (c.moveToNext()) names.add(c.getString(0))
-        }
-        assertTrue("index_ConversationEntity_parent_conversation_id", "index_ConversationEntity_parent_conversation_id" in names)
-        assertTrue("index_ConversationEntity_assistant_id", "index_ConversationEntity_assistant_id" in names)
-        assertTrue("index_tool_execution_child_conversation_id", "index_tool_execution_child_conversation_id" in names)
-        // FK 声明以 PRAGMA 语义校验
-        query(db, "PRAGMA foreign_key_list(ConversationEntity)").use { c ->
-            assertTrue(c.moveToFirst())
-            assertEquals("parent_conversation_id", c.getString(c.getColumnIndexOrThrow("from")))
-            assertEquals("id", c.getString(c.getColumnIndexOrThrow("to")))
-            assertEquals("CASCADE", c.getString(c.getColumnIndexOrThrow("on_delete")))
-        }
-        db.close()
-    }
-
-    @Test
-    fun m7_migratedSchemaEqualsFreshV7Schema() {
-        val migratedDb = migratedWithData("migration-test-v7-migrated")
-        val freshDb = helper.createDatabase("migration-test-v7-fresh", 7)
-        assertEquals("migrated vs fresh v7 tables", dumpTables(freshDb), dumpTables(migratedDb))
-        assertEquals("migrated vs fresh v7 indices", dumpIndices(freshDb), dumpIndices(migratedDb))
-        migratedDb.close()
-        freshDb.close()
-    }
-
-    /**
-     * v5→v7 全链路：从 v5 库（managed_files 时代）一路迁移到 v7。
-     * 验证 artifact 改名数据、会话表数据、消息节点在两级迁移后全部无损，且 v7 关系约束生效。
-     */
-    @Test
     fun m8_v5ToV7FullChainPreservesAllData() {
         val db = helper.createDatabase("migration-test-v5-v7", 5)
         db.execSQL(
@@ -326,37 +279,6 @@ class Migration_6_7Test {
         migrated.close()
     }
 
-    /**
-     * M10 upsert 不触发级联：FK ON 下对已存在节点做 IGNORE+UPDATE upsert，
-     * 该节点的 artifact_reference 行必须保留（REPLACE 的 DELETE 语义会级联清引用，
-     * 在事务提交与引用重建之间留下 GC 误删窗口——v7 修复的行为锁定）。
-     */
-    @Test
-    fun m10_nodeUpsertDoesNotCascadeReferenceRows() {
-        val db = migratedWithData("migration-test-upsert-cascade")
-        db.execSQL("PRAGMA foreign_keys = ON")
-        // 前置：artifact 行（引用行的 FK 目标）
-        db.execSQL(
-            "INSERT INTO artifact (folder, relative_path, display_name, mime_type, size_bytes, created_at, updated_at, state) " +
-                "VALUES ('upload', 'upload/u.png', 'u.png', 'image/png', 1, 1000, 1000, 'ACTIVE')"
-        )
-        db.execSQL(
-            "INSERT INTO artifact_reference (artifact_id, node_id, reference_type) " +
-                "VALUES ((SELECT id FROM artifact WHERE relative_path = 'upload/u.png'), 'node-m1', 'ATTACHMENT')"
-        )
-        // 对已存在节点执行 INSERT OR IGNORE + UPDATE（MessageNodeDAO.upsertAll 的实际 SQL 语义）
-        db.execSQL(
-            "INSERT OR IGNORE INTO message_node (id, conversation_id, node_index, messages, select_index) " +
-                "VALUES ('node-m1', 'master-1', 0, '[{\"id\":\"updated\"}]', 0)"
-        )
-        db.execSQL(
-            "UPDATE message_node SET messages = '[{\"id\":\"updated\"}]' WHERE id = 'node-m1'"
-        )
-        // IGNORE+UPDATE 路径：引用行必须保留（INSERT OR REPLACE 的 DELETE 语义会级联清引用）
-        assertEquals(1, count(db, "artifact_reference", "node_id = 'node-m1'"))
-        db.close()
-    }
-
     private fun query(db: SupportSQLiteDatabase, sql: String): Cursor =
         db.query(sql, emptyArray<Any?>())
 
@@ -377,60 +299,5 @@ class Migration_6_7Test {
             while (c.moveToNext()) cols.add(c.getString(c.getColumnIndexOrThrow("name")))
         }
         return cols
-    }
-
-    private fun dumpTables(db: SupportSQLiteDatabase): Map<String, List<String>> {
-        val tables = mutableListOf<String>()
-        query(
-            db,
-            "SELECT name FROM sqlite_master " +
-                "WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE 'android_%' " +
-                "AND name != 'room_master_table' AND name != 'message_fts' " +
-                "ORDER BY name"
-        ).use { c ->
-            while (c.moveToNext()) tables.add(c.getString(0))
-        }
-        return tables.associateWith { table -> tableStructure(db, table) }
-    }
-
-    private fun tableStructure(db: SupportSQLiteDatabase, table: String): List<String> {
-        val cols = mutableListOf<String>()
-        query(db, "PRAGMA table_info($table)").use { c ->
-            val nameIdx = c.getColumnIndexOrThrow("name")
-            val typeIdx = c.getColumnIndexOrThrow("type")
-            val notNullIdx = c.getColumnIndexOrThrow("notnull")
-            val pkIdx = c.getColumnIndexOrThrow("pk")
-            while (c.moveToNext()) {
-                cols.add("${c.getString(nameIdx)}:${c.getString(typeIdx)}:${c.getInt(notNullIdx)}:${c.getInt(pkIdx)}")
-            }
-        }
-        return cols.sorted()
-    }
-
-    private fun dumpIndices(db: SupportSQLiteDatabase): Map<String, String> {
-        val indices = mutableMapOf<String, String>()
-        val tables = mutableListOf<String>()
-        query(
-            db,
-            "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' " +
-                "AND name NOT LIKE 'android_%' AND name != 'room_master_table' AND name != 'message_fts' ORDER BY name"
-        ).use { c -> while (c.moveToNext()) tables.add(c.getString(0)) }
-        tables.forEach { table ->
-            val indexEntries = mutableListOf<Pair<String, Boolean>>()
-            query(db, "PRAGMA index_list($table)").use { c ->
-                val nameIdx = c.getColumnIndexOrThrow("name")
-                val uniqueIdx = c.getColumnIndexOrThrow("unique")
-                while (c.moveToNext()) indexEntries.add(c.getString(nameIdx) to (c.getInt(uniqueIdx) != 0))
-            }
-            indexEntries.sortedBy { it.first }.forEach { (indexName, unique) ->
-                val cols = mutableListOf<String>()
-                query(db, "PRAGMA index_info($indexName)").use { c ->
-                    val colIdx = c.getColumnIndexOrThrow("name")
-                    while (c.moveToNext()) cols.add(c.getString(colIdx))
-                }
-                indices[indexName] = "$table|unique=$unique|cols=${cols.sorted()}"
-            }
-        }
-        return indices
     }
 }

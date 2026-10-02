@@ -17,7 +17,6 @@ import kotlinx.coroutines.runBlocking
 import net.weero.measix.pilot.data.db.AppDatabase
 import net.weero.measix.pilot.data.db.dao.ModelContextConflictException
 import net.weero.measix.pilot.data.db.entity.ConversationEntity
-import net.weero.measix.pilot.data.db.entity.ConversationModelContextEntity
 import net.weero.measix.pilot.data.db.entity.MessageNodeEntity
 import net.weero.measix.pilot.data.db.fts.MessageFtsManager
 import net.weero.measix.pilot.data.files.ArtifactStore
@@ -75,68 +74,6 @@ class Migration_9_10Test {
         assertTrue(rows(migrated, "PRAGMA foreign_key_check").isEmpty())
         migrated.close()
     }
-
-    @Test
-    fun historicalChainReachesFreshV10Schema() {
-        val name = "migration-v1-v10-schema"
-        helper.createDatabase(name, 1).close()
-        val migrated = helper.runMigrationsAndValidate(
-            name,
-            10,
-            true,
-            Migration_1_2,
-            Migration_2_3,
-            Migration_3_4,
-            Migration_4_5,
-            Migration_5_6,
-            Migration_6_7,
-            Migration_7_8,
-            Migration_8_9,
-            Migration_9_10,
-        )
-        val fresh = helper.createDatabase("migration-v10-fresh-schema", 10)
-        assertEquals(tableNames(fresh), tableNames(migrated))
-        tableNames(fresh).forEach { table ->
-            fun columns(db: SupportSQLiteDatabase) = rows(db, "PRAGMA table_info(`$table`)")
-                .associate { column -> requireNotNull(column[1]) to column.drop(2) }
-            assertEquals(columns(fresh), columns(migrated))
-            assertEquals(indexInfo(fresh, table), indexInfo(migrated, table))
-            assertEquals(foreignKeyInfo(fresh, table), foreignKeyInfo(migrated, table))
-        }
-        migrated.close()
-        fresh.close()
-    }
-
-    @Test
-    fun newTableDeclaresOwnerAnchorAndContentWithoutAConversationColumn() {
-        val name = "migration-v9-v10-shape"
-        helper.createDatabase(name, 9).close()
-        val db = helper.runMigrationsAndValidate(name, 10, true, Migration_9_10)
-
-        val columns = rows(db, "PRAGMA table_info(`" + CONTEXT_TABLE + "`)")
-        assertEquals(
-            listOf("owner_node_id", "owner_message_id", "anchor_node_id", "anchor_message_id", "content"),
-            columns.map { it[1] },
-        )
-        assertTrue("every column must be NOT NULL", columns.all { it[3] == "1" })
-        // 复合主键 (owner_node_id, owner_message_id)：一个 Assistant request variant 最多一份
-        // 聚合 Snapshot，且唯一性以 owner node 为作用域（克隆保留 message id）。
-        assertEquals(
-            listOf("owner_node_id", "owner_message_id"),
-            columns.filter { it[5] != "0" }.map { it[1] },
-        )
-        // 归属只由 owner node 推导，不重复保存一个可能冲突的 Conversation 事实源。
-        assertTrue("conversation_id must not be duplicated here", "conversation_id" !in columns.map { it[1]!! })
-        assertEquals(
-            setOf("index_" + CONTEXT_TABLE + "_anchor_node_id"),
-            // 只断言显式声明的索引；owner 前缀查找与唯一性都由主键 autoindex 承担。
-            explicitIndexNames(db, CONTEXT_TABLE),
-        )
-        assertEquals(2, foreignKeyInfo(db, CONTEXT_TABLE).size)
-        assertTrue(foreignKeyInfo(db, CONTEXT_TABLE).values.all { it == "message_node:CASCADE" })
-        db.close()
-    }
-    // ---- lifecycle on the Room-generated schema ----
 
     @Test
     fun deletingOwnerNodeCascadesTheEntry() = runBlocking {
@@ -536,34 +473,6 @@ class Migration_9_10Test {
             "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' " +
                 "AND name != 'room_master_table' ORDER BY name",
         ).map { requireNotNull(it.single()) }
-
-    private fun explicitIndexNames(db: SupportSQLiteDatabase, table: String): Set<String> =
-        indexInfo(db, table).keys.map { it.substringBefore(":") }.filterNot { it.startsWith("sqlite_autoindex_") }.toSet()
-
-    private fun indexInfo(db: SupportSQLiteDatabase, table: String): Map<String, List<List<String?>>> = buildMap {
-        db.query("PRAGMA index_list(`" + table + "`)").use { cursor ->
-            while (cursor.moveToNext()) {
-                val indexName = cursor.getString(cursor.getColumnIndexOrThrow("name"))
-                val unique = cursor.getInt(cursor.getColumnIndexOrThrow("unique"))
-                put(indexName + ":" + unique, rows(db, "PRAGMA index_info(`" + indexName + "`)").map { column ->
-                    listOf(column[0], column[2])
-                })
-            }
-        }
-    }
-
-    private fun foreignKeyInfo(db: SupportSQLiteDatabase, table: String): Map<String, String> = buildMap {
-        db.query("PRAGMA foreign_key_list(`" + table + "`)").use { cursor ->
-            val idColumn = cursor.getColumnIndexOrThrow("id")
-            val targetColumn = cursor.getColumnIndexOrThrow("table")
-            val fromColumn = cursor.getColumnIndexOrThrow("from")
-            val onDelete = cursor.getColumnIndexOrThrow("on_delete")
-            while (cursor.moveToNext()) {
-                val key = cursor.getInt(idColumn).toString() + ":" + cursor.getString(fromColumn)
-                put(key, cursor.getString(targetColumn) + ":" + cursor.getString(onDelete))
-            }
-        }
-    }
 
     private fun rows(db: SupportSQLiteDatabase, sql: String): List<List<String?>> = buildList {
         db.query(sql).use { cursor ->

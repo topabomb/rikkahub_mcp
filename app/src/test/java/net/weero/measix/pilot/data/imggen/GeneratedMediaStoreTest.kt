@@ -182,17 +182,20 @@ class GeneratedMediaStoreTest {
     fun `room insert failure deletes canonical file`() = runTest {
         val filesDir = tempDir("media-fail")
         val repository = mockk<GenMediaRepository> { coEvery { existsByPath(any()) } returns false }
-        every { repository.insertMedia(any()) } throws IllegalStateException("db")
+        val expectedFailure = IllegalStateException("db")
+        every { repository.insertMedia(any()) } throws expectedFailure
         val store = GeneratedMediaStore(filesDir, repository, mockk(relaxed = true))
-        runCatching {
+        val failure = runCatching {
             store.commit(ConfigurationScope.Personal,
                 item = item(TINY_PNG, "image/png"),
                 prompt = "cat",
                 modelLabel = "model",
             )
-        }
+        }.exceptionOrNull()
+        assertTrue(failure is IllegalStateException)
+        assertEquals(expectedFailure.message, failure?.message)
         val leftovers = File(filesDir, "images").listFiles().orEmpty().filter { it.isFile }
-        assertTrue(leftovers.none { !it.name.endsWith(".pending") })
+        assertTrue("Failed commit must not leak final or pending files: $leftovers", leftovers.isEmpty())
         filesDir.deleteRecursively()
     }
 
@@ -218,7 +221,7 @@ class GeneratedMediaStoreTest {
         }.await()
         assertTrue(result.exceptionOrNull() is CancellationException)
         val leftovers = File(filesDir, "images").listFiles().orEmpty().filter { it.isFile }
-        assertTrue(leftovers.none { !it.name.endsWith(".pending") })
+        assertTrue("Cancelled commit must not leak final or pending files: $leftovers", leftovers.isEmpty())
         coVerify(exactly = 1) { artifactStore.discardUnpublished(owned) }
         filesDir.deleteRecursively()
     }

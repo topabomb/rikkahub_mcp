@@ -19,7 +19,7 @@ import org.junit.Test
  * Assistant 配置兼容性回归测试。
  *
  * 覆盖：历史 JSON 缺字段时普通类别、非全局可见、允许列表为空；
- * 关闭类别清理授权；克隆保留类别但重置全局与允许列表。
+ * 关闭类别清理授权；描述规范化与内部删除状态保全。
  */
 class AssistantConfigCompatibilityTest {
     private val json = Json {
@@ -77,57 +77,12 @@ class AssistantConfigCompatibilityTest {
 
     @Test
     fun `normalizeDescription - truncates at 240 code points without breaking surrogate pairs`() {
-        // 构造一个超过 240 个 code point 的字符串，末尾放一个 emoji（surrogate pair）
-        val base = "a".repeat(250)
-        val emoji = "🎉" // U+1F389，需要 surrogate pair
-        val input = base + emoji
-        val result = normalizeDescription(input)
-        // 不应超过 240 个 code point
-        val codePoints = result.codePoints().toArray()
-        assertTrue(codePoints.size <= 240)
-        // 不应包含不完整的 surrogate（String.length 不抛异常即说明编码完整）
-        assertTrue(result.isNotEmpty())
-    }
+        val prefix = "a".repeat(239)
+        val result = normalizeDescription(prefix + "🎉" + "tail")
 
-    @Test
-    fun `clone resets globally visible and allowed list`() {
-        val targetId = ConfigurationReference.random()
-        val original = Assistant(
-            id = ConfigurationReference.random(),
-            name = "Original",
-            description = "test",
-            allowAsSubAssistant = true,
-            isSubAssistantGloballyVisible = true,
-            allowedSubAssistantIds = setOf(targetId),
-        )
-        // 模拟 clone 逻辑
-        val cloned = original.copy(
-            id = ConfigurationReference.random(),
-            name = "${original.name} (Clone)",
-            isSubAssistantGloballyVisible = false,
-            allowedSubAssistantIds = emptySet(),
-        )
-        assertTrue(cloned.allowAsSubAssistant) // 类别保留
-        assertFalse(cloned.isSubAssistantGloballyVisible) // 全局可见重置
-        assertTrue(cloned.allowedSubAssistantIds.isEmpty()) // 允许列表重置
-    }
-
-    @Test
-    fun `clone does not auto-add to any allowed list`() {
-        val original = Assistant(
-            id = ConfigurationReference.random(),
-            name = "Original",
-            description = "test",
-            allowAsSubAssistant = true,
-        )
-        val cloned = original.copy(
-            id = ConfigurationReference.random(),
-            name = "${original.name} (Clone)",
-            isSubAssistantGloballyVisible = false,
-            allowedSubAssistantIds = emptySet(),
-        )
-        // 克隆不是工具创建行为，不自动加入任何允许列表
-        assertTrue(cloned.allowedSubAssistantIds.isEmpty())
+        assertEquals(prefix + "🎉", result)
+        assertEquals(240, result.codePointCount(0, result.length))
+        assertEquals(241, result.length)
     }
 
     @Test

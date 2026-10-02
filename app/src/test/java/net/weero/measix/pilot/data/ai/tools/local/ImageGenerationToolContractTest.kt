@@ -93,7 +93,7 @@ class ImageGenerationToolContractTest {
     }
 
     @Test
-    fun `failed result includes clipped detail when provided`() {
+    fun `failed result preserves provided detail`() {
         val parts = assertThrows(ToolExecutionFailure::class.java) {
             failedResult("rate_limited", "Please retry after 2 seconds.")
         }.output
@@ -101,11 +101,5 @@ class ImageGenerationToolContractTest {
         assertEquals("failed", json["status"]?.jsonPrimitive?.content)
         assertEquals("rate_limited", json["reason"]?.jsonPrimitive?.content)
         assertEquals("Please retry after 2 seconds.", json["detail"]?.jsonPrimitive?.content)
-    }
-
-    @Test
-    fun `metadata unknown version is ignored by ui helper contract`() {
-        val metadata = ImageGenerationToolMetadata(version = 99, phase = "queued")
-        assertTrue(metadata.version != ImageGenerationToolMetadata.CURRENT_VERSION)
     }
 }

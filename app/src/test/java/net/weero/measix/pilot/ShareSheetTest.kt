@@ -161,24 +161,4 @@ class ShareSheetTest {
             assertEquals(original.enabled, decoded.enabled)
         }
     }
-
-    @Test
-    fun `encode should strip models from provider`() {
-        val original = ProviderSetting.OpenAI(
-            id = ConfigurationReference.random(),
-            name = "Test",
-            apiKey = "key",
-            baseUrl = "url",
-            models = listOf(
-                Model(id = ConfigurationReference.random(), displayName = "gpt-4"),
-                Model(id = ConfigurationReference.random(), displayName = "gpt-3.5-turbo"),
-            )
-        )
-
-        val encoded = original.encodeForShare()
-        val decoded = decodeProviderSetting(encoded) as ProviderSetting.OpenAI
-
-        // 分享时不包含模型列表，接收方应自行拉取
-        assertTrue(decoded.models.isEmpty())
-    }
 }

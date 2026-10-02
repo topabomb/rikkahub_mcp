@@ -1,4 +1,4 @@
-﻿package net.weero.measix.pilot.data.db.migrations
+package net.weero.measix.pilot.data.db.migrations
 
 import android.content.ContentValues
 import android.database.sqlite.SQLiteDatabase
@@ -13,13 +13,7 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 
-/**
- * Migration_1_2 样本测试
- *
- * 验证 v1→v2 迁移（新增 conversations.tags 列）的正确性：
- * 1. schema 正确性：tags 列存在且有默认值
- * 2. 数据完整性：已有对话数据不丢失，tags 自动填充默认值
- */
+/** Migration v1 to v2: exported schema validation and preservation of conversation data with default tags. */
 @RunWith(AndroidJUnit4::class)
 class Migration_1_2_Test {
     private val TEST_DB = "migration-test"
@@ -31,26 +25,6 @@ class Migration_1_2_Test {
         emptyList(),
         FrameworkSQLiteOpenHelperFactory()
     )
-
-    @Test
-    fun migrate1To2_addsTagsColumnWithCorrectSchema() {
-        // 创建版本 1 的数据库
-        helper.createDatabase(TEST_DB, 1).apply {
-            close()
-        }
-
-        // 运行迁移到版本 2
-        val db = helper.runMigrationsAndValidate(TEST_DB, 2, true, Migration_1_2)
-
-        // 验证 tags 列存在
-        val cursor = db.query("SELECT * FROM ConversationEntity LIMIT 0")
-        val columnNames = cursor.columnNames.toList()
-        cursor.close()
-
-        assertTrue("conversations table should have 'tags' column", columnNames.contains("tags"))
-
-        db.close()
-    }
 
     @Test
     fun migrate1To2_preservesExistingDataAndSetsDefaultTags() {

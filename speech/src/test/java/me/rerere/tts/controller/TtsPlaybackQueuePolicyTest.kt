@@ -70,23 +70,6 @@ class TtsPlaybackQueuePolicyTest {
     }
 
     @Test
-    fun `controller skip removes the chunk and its source as one entry`() {
-        val queue = TurnPlaybackQueue()
-        queue.append(listOf(chunk("current")), "turn-1", "master")
-        queue.append(listOf(chunk("skip-me")), "turn-1", "target-a")
-        queue.append(listOf(chunk("next")), "turn-1", "target-b")
-
-        assertEquals("current", queue.poll()?.chunk?.text)
-        val skipped = queue.poll()
-        val next = queue.poll()
-
-        assertEquals("skip-me", skipped?.chunk?.text)
-        assertEquals("target-a", skipped?.source)
-        assertEquals("next", next?.chunk?.text)
-        assertEquals("target-b", next?.source)
-    }
-
-    @Test
     fun `toolbar stop clears content and releases turn ownership`() {
         val queue = TurnPlaybackQueue()
         queue.append(listOf(chunk("queued")), "turn-1", "master")

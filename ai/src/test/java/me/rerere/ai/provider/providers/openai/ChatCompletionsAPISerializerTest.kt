@@ -2,7 +2,6 @@ package me.rerere.ai.provider.providers.openai
 import me.rerere.ai.testsupport.executedTool
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
-import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.add
 import kotlinx.serialization.json.buildJsonArray
@@ -26,12 +25,10 @@ import me.rerere.ai.provider.TextGenerationParams
 import me.rerere.ai.provider.providers.ClaudeProvider
 import me.rerere.ai.provider.providers.GoogleProvider
 import me.rerere.ai.provider.providers.OpenAIProvider
-import me.rerere.ai.ui.MessageChunk
 import me.rerere.ai.testsupport.toModelRequests
 import me.rerere.ai.ui.MessageTerminalStatus
 import me.rerere.ai.ui.TurnTerminalReasons
 import me.rerere.ai.ui.UIMessage
-import me.rerere.ai.ui.UIMessageChoice
 import me.rerere.ai.ui.UIMessagePart
 import me.rerere.ai.ui.ToolResultStatus
 import me.rerere.ai.ui.OpenRouterReasoningMetadata
@@ -40,7 +37,6 @@ import kotlin.uuid.Uuid
 import me.rerere.ai.ui.metadataAs
 import me.rerere.ai.ui.replaySafeProjection
 import me.rerere.ai.util.KeyRoulette
-import me.rerere.common.http.jsonPrimitiveOrNull
 import okhttp3.OkHttpClient
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertThrows
@@ -197,7 +193,7 @@ class ChatCompletionsAPISerializerTest {
         // 5. Tool result for calculate
         // 6. Assistant message with final text
 
-        assertTrue("Should have at least 6 messages", result.size >= 6)
+        assertEquals("Should have exactly 6 messages", 6, result.size)
 
         // Verify user message
         val userMsg = result[0].jsonObject
@@ -443,7 +439,7 @@ class ChatCompletionsAPISerializerTest {
     }
 
     @Test
-    fun `deepseek replay should survive tool delta arriving before reasoning and content`() {
+    fun `direct DeepSeek history replays reasoning and content beside completed tool`() {
         // The provider parser emits tool/reasoning/content deltas out of order; the merged transcript
         // (owned by the app StepOutputAccumulator) is built directly here so this test stays focused
         // on the deepseek buildMessages wire contract.
@@ -867,94 +863,6 @@ class ChatCompletionsAPISerializerTest {
     }
 
     @Test
-    fun `tool_call followed by tool result should maintain correct order`() {
-        // Verify the pattern: assistant (with tool_calls) -> tool (result)
-        val assistantMessage = UIMessage(
-            role = MessageRole.ASSISTANT,
-            parts = listOf(
-                UIMessagePart.Text("Calling tool"),
-                executedTool("call_abc", "my_tool", """{"param": "value"}""", "Tool output")
-            )
-        )
-
-        val messages = listOf(
-            UIMessage.user("Use a tool"),
-            assistantMessage
-        )
-
-        val result = invokeBuildMessages(messages)
-
-        // Find the assistant message with tool_calls
-        var assistantIndex = -1
-        for (i in result.indices) {
-            val msg = result[i].jsonObject
-            if (msg["role"]?.jsonPrimitive?.content == "assistant" && msg.containsKey("tool_calls")) {
-                assistantIndex = i
-                break
-            }
-        }
-
-        assertTrue("Should find assistant with tool_calls", assistantIndex >= 0)
-
-        // The next message should be the tool result
-        val nextMsg = result[assistantIndex + 1].jsonObject
-        assertEquals("tool", nextMsg["role"]?.jsonPrimitive?.content)
-        assertEquals("call_abc", nextMsg["tool_call_id"]?.jsonPrimitive?.content)
-        assertFalse(nextMsg.containsKey("name"))
-    }
-
-    @Test
-    fun `complex multi-round conversation with interleaved reasoning and tools`() {
-        // Complex scenario simulating agent conversation
-        val messages = listOf(
-            UIMessage.user("Plan and execute a task"),
-            UIMessage(
-                role = MessageRole.ASSISTANT,
-                parts = listOf(
-                    UIMessagePart.Reasoning(reasoning = "Step 1: Analyze the task"),
-                    UIMessagePart.Text("First, I'll gather information"),
-                    executedTool("call_1", "gather_info", "{}", "Info gathered"),
-                    UIMessagePart.Reasoning(reasoning = "Step 2: Process the information"),
-                    UIMessagePart.Text("Now processing..."),
-                    executedTool("call_2", "process", "{}", "Processed"),
-                    UIMessagePart.Reasoning(reasoning = "Step 3: Generate output"),
-                    UIMessagePart.Text("Here is the result")
-                )
-            )
-        )
-
-        val result = invokeBuildMessages(messages)
-
-        // Verify structure:
-        // 1. user message
-        // 2. assistant (reasoning + text + tool_calls)
-        // 3. tool result
-        // 4. assistant (reasoning + text + tool_calls)
-        // 5. tool result
-        // 6. assistant (reasoning + text)
-
-        // Count message types
-        val userCount = result.count { it.jsonObject["role"]?.jsonPrimitive?.content == "user" }
-        val assistantCount = result.count { it.jsonObject["role"]?.jsonPrimitive?.content == "assistant" }
-        val toolCount = result.count { it.jsonObject["role"]?.jsonPrimitive?.content == "tool" }
-
-        assertEquals("Should have 1 user message", 1, userCount)
-        assertEquals("Should have 2 tool results", 2, toolCount)
-        assertTrue("Should have at least 3 assistant messages", assistantCount >= 3)
-
-        // Verify order: each tool_calls should be immediately followed by tool result
-        for (i in result.indices) {
-            val msg = result[i].jsonObject
-            if (msg["role"]?.jsonPrimitive?.content == "assistant" && msg.containsKey("tool_calls")) {
-                assertTrue("Index should not be last", i < result.size - 1)
-                val nextMsg = result[i + 1].jsonObject
-                assertEquals("Tool result should follow tool_calls",
-                    "tool", nextMsg["role"]?.jsonPrimitive?.content)
-            }
-        }
-    }
-
-    @Test
     fun `assistant with only reasoning and empty text should be filtered out when history reasoning disabled`() {
         val messages = listOf(
             UIMessage.user("Question 1"),
@@ -1083,7 +991,7 @@ class ChatCompletionsAPISerializerTest {
     }
 
     @Test
-    fun `streamed openrouter reasoning details are concatenated before tool replay`() {
+    fun `merged OpenRouter reasoning details are replayed unchanged beside tool calls`() {
         // The merged transcript (reasoning details concatenated, tool replayed) is built directly;
         // the streaming concatenation is the app StepOutputAccumulator's contract. This test locks the
         // openrouter buildMessages replay of reasoning_details alongside a tool call.
@@ -1426,8 +1334,7 @@ class ChatCompletionsAPISerializerTest {
             ),
             providerSetting = ProviderSetting.OpenAI(baseUrl = "https://proxy.example.com/v1"),
         )
-        // temperature is not reserved, so it should be present
-        // (it may be overridden by the builder's own temperature logic, but no exception)
+        assertEquals(JsonPrimitive(0.5), body["temperature"])
     }
 
     // ==================== Chat Request-Level Terminal Replay Tests ====================

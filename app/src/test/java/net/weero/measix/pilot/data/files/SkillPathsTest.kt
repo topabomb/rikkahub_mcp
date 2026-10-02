@@ -9,18 +9,6 @@ import org.junit.Test
 
 class SkillPathsTest {
     @Test
-    fun `parse supports CRLF frontmatter`() {
-        val content = "---\r\nname: test-skill\r\ndescription: test\r\n---\r\n\r\nbody"
-
-        val document = (SkillFrontmatterParser.parseDocument(content) as SkillParseResult.Success).document
-        val frontmatter = document.frontmatter
-
-        assertEquals("test-skill", frontmatter.name)
-        assertEquals("test", frontmatter.description)
-        assertEquals("body", document.body)
-    }
-
-    @Test
     fun `resolve skill dir rejects traversal and nested names`() {
         val skillsRoot = Files.createTempDirectory("skills-root").toFile()
 

@@ -119,6 +119,12 @@ class ResponseAPISerializerTest {
 
         val result = invokeBuildMessages(messages)
 
+        assertEquals(
+            listOf("message", "message", "function_call", "function_call_output",
+                "message", "function_call", "function_call_output", "message"),
+            result.map { it.jsonObject["type"]?.jsonPrimitive?.content ?: "message" },
+        )
+
         // Verify structure for ResponseAPI:
         // 1. user message
         // 2. assistant content (text)
@@ -160,39 +166,6 @@ class ResponseAPISerializerTest {
         val output2 = functionOutputs[1].jsonObject
         assertEquals("call_2", output2["call_id"]?.jsonPrimitive?.content)
         assertTrue(output2["output"]?.jsonPrimitive?.content?.contains("4") == true)
-    }
-
-    @Test
-    fun `function_call should be immediately followed by function_call_output`() {
-        val assistantMessage = UIMessage(
-            role = MessageRole.ASSISTANT,
-            parts = listOf(
-                executedTool("call_abc", "my_tool", """{"x": 1}""", "result")
-            )
-        )
-
-        val messages = listOf(
-            UIMessage.user("Use tool"),
-            assistantMessage
-        )
-
-        val result = invokeBuildMessages(messages)
-
-        // Find function_call index
-        var functionCallIndex = -1
-        for (i in result.indices) {
-            if (result[i].jsonObject["type"]?.jsonPrimitive?.content == "function_call") {
-                functionCallIndex = i
-                break
-            }
-        }
-
-        assertTrue("Should find function_call", functionCallIndex >= 0)
-        assertTrue("function_call_output should follow", functionCallIndex < result.size - 1)
-
-        val nextItem = result[functionCallIndex + 1].jsonObject
-        assertEquals("function_call_output", nextItem["type"]?.jsonPrimitive?.content)
-        assertEquals("call_abc", nextItem["call_id"]?.jsonPrimitive?.content)
     }
 
     @Test
@@ -284,62 +257,6 @@ class ResponseAPISerializerTest {
             else -> false
         }
         assertTrue("First assistant should contain 'Hello'", hasHello)
-    }
-
-    @Test
-    fun `complex multi-round scenario with text and tools interleaved`() {
-        val messages = listOf(
-            UIMessage.user("Execute a complex task"),
-            UIMessage(
-                role = MessageRole.ASSISTANT,
-                parts = listOf(
-                    UIMessagePart.Text("Starting task"),
-                    executedTool("step1", "init", "{}", "initialized"),
-                    UIMessagePart.Text("Processing..."),
-                    executedTool("step2", "process", """{"data": "test"}""", "processed"),
-                    UIMessagePart.Text("Finalizing..."),
-                    executedTool("step3", "finalize", "{}", "done"),
-                    UIMessagePart.Text("Task completed successfully")
-                )
-            )
-        )
-
-        val result = invokeBuildMessages(messages)
-
-        // Count items
-        val userMessages = result.count {
-            it.jsonObject["role"]?.jsonPrimitive?.content == "user"
-        }
-        val assistantMessages = result.count {
-            it.jsonObject["role"]?.jsonPrimitive?.content == "assistant"
-        }
-        val functionCalls = result.count {
-            it.jsonObject["type"]?.jsonPrimitive?.content == "function_call"
-        }
-        val functionOutputs = result.count {
-            it.jsonObject["type"]?.jsonPrimitive?.content == "function_call_output"
-        }
-
-        assertEquals("Should have 1 user message", 1, userMessages)
-        assertEquals("Should have 3 function_calls", 3, functionCalls)
-        assertEquals("Should have 3 function_call_outputs", 3, functionOutputs)
-        assertTrue("Should have multiple assistant messages", assistantMessages >= 1)
-
-        // Verify the order: each function_call immediately followed by function_call_output
-        var lastCallIndex = -1
-        for (i in result.indices) {
-            val item = result[i].jsonObject
-            if (item["type"]?.jsonPrimitive?.content == "function_call") {
-                assertTrue("function_call should not be last", i < result.size - 1)
-                val next = result[i + 1].jsonObject
-                assertEquals("function_call_output should follow",
-                    "function_call_output", next["type"]?.jsonPrimitive?.content)
-                assertTrue("call_id should match",
-                    item["call_id"]?.jsonPrimitive?.content == next["call_id"]?.jsonPrimitive?.content)
-                assertTrue("Order should be maintained", i > lastCallIndex)
-                lastCallIndex = i
-            }
-        }
     }
 
     @Test
@@ -1192,36 +1109,6 @@ class ResponseAPISerializerTest {
         assertEquals("function", tools!![0].jsonObject["type"]?.jsonPrimitive?.content)
         assertEquals("get_weather", tools[0].jsonObject["name"]?.jsonPrimitive?.content)
         assertFalse(tools[0].jsonObject["strict"]?.jsonPrimitive?.content?.toBoolean() ?: true)
-    }
-
-    @Test
-    fun `response function tool preserves JSON Schema definitions and references`() {
-        val schema = buildJsonObject {
-            put("\$schema", "https://json-schema.org/draft/2020-12/schema")
-            put("type", "object")
-            put("properties", buildJsonObject {
-                put("query", buildJsonObject { put("\$ref", "#/\$defs/query") })
-            })
-            put("\$defs", buildJsonObject {
-                put("query", buildJsonObject { put("type", "string") })
-            })
-        }
-        val tool = Tool(
-            name = "search",
-            description = "search",
-            parameters = { schema },
-            execute = { emptyList() },
-        )
-
-        val body = invokeBuildRequestBody(
-            providerSetting = ProviderSetting.OpenAI(baseUrl = "https://api.x.ai/v1"),
-            params = createToolParams(tools = listOf(tool)),
-        )
-        val sent = body["tools"]!!.jsonArray.single().jsonObject["parameters"]!!.jsonObject
-
-        assertEquals("#/\$defs/query", sent["properties"]!!.jsonObject["query"]!!.jsonObject["\$ref"]!!.jsonPrimitive.content)
-        assertEquals("string", sent["\$defs"]!!.jsonObject["query"]!!.jsonObject["type"]!!.jsonPrimitive.content)
-        assertEquals("https://json-schema.org/draft/2020-12/schema", sent["\$schema"]!!.jsonPrimitive.content)
     }
 
     @Test

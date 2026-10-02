@@ -14,8 +14,6 @@ import me.rerere.ai.util.KeyRoulette
 import okhttp3.OkHttpClient
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
-import org.junit.Assert.assertNull
-import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
@@ -129,14 +127,6 @@ class MiMoEndpointContractTest {
     }
 
     @Test
-    fun `MiMo Chat token-plan-cn host is also recognized`() {
-        val body = buildChatRequest(mimoTokenPlanProvider, ReasoningLevel.HIGH)
-
-        val thinking = body["thinking"]!!.jsonObject
-        assertEquals("enabled", thinking["type"]!!.jsonPrimitive.content)
-    }
-
-    @Test
     fun `both MiMo hosts preserve endpoint contract in streaming and non-streaming requests`() {
         listOf(mimoProvider, mimoTokenPlanProvider).forEach { provider ->
             listOf(false, true).forEach { stream ->
@@ -190,14 +180,6 @@ class MiMoEndpointContractTest {
 
         assertFalse(body.containsKey("reasoning"))
         assertFalse(body.containsKey("store"))
-    }
-
-    @Test
-    fun `MiMo Responses HIGH maps to reasoning effort high`() {
-        val body = buildResponsesRequest(mimoProvider, ReasoningLevel.HIGH)
-
-        val reasoning = body["reasoning"]!!.jsonObject
-        assertEquals("high", reasoning["effort"]!!.jsonPrimitive.content)
     }
 
     @Test
@@ -274,11 +256,6 @@ class MiMoEndpointContractTest {
             OpenAIEndpointVendor.MIMO, "mimo-v3", requestHasTools = true, includeHistoryReasoning = false,
         )
         assertEquals(VisibleReasoningReplay.TOOL_ASSISTANT_ENVELOPES, policy1.visible)
-
-        val policy2 = resolveChatReasoningReplayPolicy(
-            OpenAIEndpointVendor.MIMO, "mimo-v3", requestHasTools = true, includeHistoryReasoning = false,
-        )
-        assertEquals(VisibleReasoningReplay.TOOL_ASSISTANT_ENVELOPES, policy2.visible)
     }
 
     @Test

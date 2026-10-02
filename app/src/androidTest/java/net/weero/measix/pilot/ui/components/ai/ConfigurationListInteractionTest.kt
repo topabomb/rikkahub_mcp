@@ -4,9 +4,10 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.test.junit4.StateRestorationTester
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.assertIsOn
+import androidx.compose.ui.test.assertIsOff
 import androidx.compose.ui.test.isToggleable
 import androidx.compose.ui.test.performClick
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -18,16 +19,15 @@ import org.junit.Test
 import org.junit.runner.RunWith
 
 @RunWith(AndroidJUnit4::class)
-class ConfigurationListStateTest {
+class ConfigurationListInteractionTest {
     @get:Rule
     val compose = createComposeRule()
 
     @Test
-    fun configurationListCanComposeSelectAndRestoreItsSaveableState() {
+    fun quickMessageToggleReportsOriginalReferenceAndRenderedSelection() {
         val reference = ConfigurationReference.parse("managed~dep_example~quick_example")
         var selected by mutableStateOf(emptySet<ConfigurationReference>())
-        val restoration = StateRestorationTester(compose)
-        restoration.setContent {
+        compose.setContent {
             MaterialTheme {
                 QuickMessagesContent(
                     quickMessages = listOf(QuickMessage(id = reference, title = "Example quick message")),
@@ -37,11 +37,10 @@ class ConfigurationListStateTest {
             }
         }
         compose.onNodeWithText("Example quick message").assertExists()
-        compose.onNode(isToggleable()).performClick()
+        compose.onNode(isToggleable()).assertIsOff().performClick()
         compose.runOnIdle { assertEquals(setOf(reference), selected) }
-        restoration.emulateSavedInstanceStateRestore()
-        compose.onNodeWithText("Example quick message").assertExists()
-        compose.onNode(isToggleable()).performClick()
+        compose.onNode(isToggleable()).assertIsOn().performClick()
         compose.runOnIdle { assertEquals(emptySet<ConfigurationReference>(), selected) }
+        compose.onNode(isToggleable()).assertIsOff()
     }
 }

@@ -168,7 +168,7 @@ class ChatCompletionsAPIParserTest {
     }
 
     @Test
-    fun `indexed continuation of reused tool id preserves earlier request arguments`() {
+    fun `one payload preserves distinct indexed tool calls`() {
         // The parser maps each official index to its provider call id even when the id is reused from
         // an earlier completed call. That the completed tool is never reopened is the app
         // StepOutputAccumulator's contract (covered in StepOutputAccumulatorTest).

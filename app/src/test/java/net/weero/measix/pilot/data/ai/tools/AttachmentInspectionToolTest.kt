@@ -363,6 +363,7 @@ class AttachmentInspectionToolTest {
             refs.mapIndexed { index, ref -> "[Image ${index + 1} path=$ref]" } + "what is in the image",
             sent.last().parts.filterIsInstance<UIMessagePart.Text>().map { it.text },
         )
+        assertEquals(2, sent.last().parts.count { it is UIMessagePart.Image })
         coVerify(exactly = 1) { provider.generateText(any(), any(), any()) }
     }
 
@@ -370,6 +371,8 @@ class AttachmentInspectionToolTest {
     fun `success returns observation text with a single model call`() = runTest {
         val (model, providerSetting, provider) = resolveInspectionContract(visionModel)
         every { providerManager.getProviderByType(any()) } returns provider
+        val resolvedImage = image("a.png")
+        var sentParams: TextGenerationParams? = null
         var calls = 0
         var sent: List<ModelRequestMessage>? = null
         coEvery {
@@ -377,6 +380,7 @@ class AttachmentInspectionToolTest {
         } answers {
             calls++
             sent = secondArg()
+            sentParams = thirdArg()
             successChunk("a red square")
         }
 
@@ -384,7 +388,7 @@ class AttachmentInspectionToolTest {
             args = args(listOf("/upload/a.png")),
             captured = capturedModel(model, providerSetting, inspectionCapabilities),
             providerManager = providerManager,
-            resolveAttachments = { ToolAttachmentResolution(parts = listOf(image("a.png"))) },
+            resolveAttachments = { ToolAttachmentResolution(parts = listOf(resolvedImage)) },
         )
 
         assertEquals(1, calls)
@@ -396,7 +400,9 @@ class AttachmentInspectionToolTest {
         val userTexts = user.parts.filterIsInstance<UIMessagePart.Text>().map { it.text }
         assertEquals("[Image 1 path=/upload/a.png]", userTexts.first())
         assertEquals("what is in the image", userTexts.last())
-        assertTrue(user.parts.any { it is UIMessagePart.Image })
+        assertEquals(listOf(resolvedImage), user.parts.filterIsInstance<UIMessagePart.Image>())
+        assertEquals(RequestImageSupport.STRUCTURED, sentParams?.mediaCapabilities?.userImages)
+        assertEquals(ReasoningLevel.AUTO, sentParams?.reasoningLevel)
     }
 
     @Test
@@ -428,56 +434,6 @@ class AttachmentInspectionToolTest {
         val label = sent!![1].parts.filterIsInstance<UIMessagePart.Text>().first()
         assertEquals("[Image 1 path=/upload/shared.png]", label.text)
         assertEquals(ref, AttachmentRefs.getStableRef(sent!![1].parts.filterIsInstance<UIMessagePart.Image>().single()))
-    }
-
-    @Test
-    fun `inspection call negotiates native user image capability`() = runTest {
-        val (model, providerSetting, provider) = resolveInspectionContract(visionModel)
-        every { providerManager.getProviderByType(any()) } returns provider
-        var sentParams: TextGenerationParams? = null
-        coEvery {
-            provider.generateText(any(), any(), any<TextGenerationParams>())
-        } answers {
-            sentParams = thirdArg()
-            successChunk("ok")
-        }
-
-        val result = executeInspection(
-            args = args(listOf("/upload/a.png")),
-            captured = capturedModel(model, providerSetting, inspectionCapabilities),
-            providerManager = providerManager,
-            resolveAttachments = {
-                ToolAttachmentResolution(parts = listOf(UIMessagePart.Image(url = "file:///tmp/a.png")))
-            },
-        )
-
-        assertEquals("ok", (result.single() as UIMessagePart.Text).text)
-        assertEquals(RequestImageSupport.STRUCTURED, sentParams?.mediaCapabilities?.userImages)
-    }
-
-    @Test
-    fun `inspection call sends native image into USER request`() = runTest {
-        val (model, providerSetting, provider) = resolveInspectionContract(visionModel)
-        every { providerManager.getProviderByType(any()) } returns provider
-        var sent: List<ModelRequestMessage>? = null
-        coEvery {
-            provider.generateText(any(), any(), any<TextGenerationParams>())
-        } answers {
-            sent = secondArg()
-            successChunk("ok")
-        }
-
-        executeInspection(
-            args = args(listOf("/upload/a.png")),
-            captured = capturedModel(model, providerSetting, inspectionCapabilities),
-            providerManager = providerManager,
-            resolveAttachments = {
-                ToolAttachmentResolution(parts = listOf(UIMessagePart.Image(url = "file:///tmp/a.png")))
-            },
-        )
-
-        val user = sent!![1]
-        assertTrue(user.parts.any { it is UIMessagePart.Image })
     }
 
     @Test
@@ -564,73 +520,6 @@ class AttachmentInspectionToolTest {
         } catch (e: kotlinx.coroutines.CancellationException) {
             // expected
         }
-    }
-
-    @Test
-    fun `multiple images are inspected in one call with ordered labels`() = runTest {
-        val (model, providerSetting, provider) = resolveInspectionContract(visionModel)
-        every { providerManager.getProviderByType(any()) } returns provider
-        var calls = 0
-        var sent: List<ModelRequestMessage>? = null
-        coEvery {
-            provider.generateText(any(), any(), any<TextGenerationParams>())
-        } answers {
-            calls++
-            sent = secondArg()
-            successChunk("two squares")
-        }
-
-        val result = executeInspection(
-            args = args(
-                listOf(
-                    "/upload/a.png",
-                    "/upload/b.png",
-                ),
-            ),
-            captured = capturedModel(model, providerSetting, inspectionCapabilities),
-            providerManager = providerManager,
-            resolveAttachments = {
-                ToolAttachmentResolution(
-                    parts = listOf(
-                        UIMessagePart.Image(url = "file:///tmp/a.png"),
-                        UIMessagePart.Image(url = "file:///tmp/b.png"),
-                    ),
-                )
-            },
-        )
-
-        assertEquals(1, calls)
-        assertEquals("two squares", (result.single() as UIMessagePart.Text).text)
-        val user = sent!![1]
-        val labelTexts = user.parts.filterIsInstance<UIMessagePart.Text>().map { it.text }
-        assertTrue(labelTexts.any { it.startsWith("[Image 1") })
-        assertTrue(labelTexts.any { it.startsWith("[Image 2") })
-        assertEquals(2, user.parts.count { it is UIMessagePart.Image })
-    }
-
-    @Test
-    fun `inspection call requests reasoningLevel auto`() = runTest {
-        val (model, providerSetting, provider) = resolveInspectionContract(visionModel)
-        every { providerManager.getProviderByType(any()) } returns provider
-        var sentParams: TextGenerationParams? = null
-        coEvery {
-            provider.generateText(any(), any(), any<TextGenerationParams>())
-        } answers {
-            sentParams = thirdArg()
-            successChunk("ok")
-        }
-
-        val result = executeInspection(
-            args = args(listOf("/upload/a.png")),
-            captured = capturedModel(model, providerSetting, inspectionCapabilities),
-            providerManager = providerManager,
-            resolveAttachments = {
-                ToolAttachmentResolution(parts = listOf(UIMessagePart.Image(url = "file:///tmp/a.png")))
-            },
-        )
-
-        assertEquals("ok", (result.single() as UIMessagePart.Text).text)
-        assertEquals(ReasoningLevel.AUTO, sentParams?.reasoningLevel)
     }
 
     private fun image(url: String) = UIMessagePart.Image(url = url)

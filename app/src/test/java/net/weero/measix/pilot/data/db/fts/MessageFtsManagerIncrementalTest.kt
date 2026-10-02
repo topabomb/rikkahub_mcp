@@ -6,7 +6,6 @@ import android.content.Context
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
-import java.time.Instant
 import java.util.concurrent.atomic.AtomicLong
 import kotlin.uuid.Uuid
 import kotlinx.coroutines.test.runTest
@@ -27,7 +26,7 @@ import org.robolectric.annotation.Config
 /**
  * FTS 增量索引权威测试。
  * 验证 node 级增量（reindexNodes / deleteNodesIndex）的投影一致性：
- * 单 node 变更只影响该 node、删除清空、增量终态 == 全量 rebuild、会话删除清空。
+ * 单 node 变更只影响该 node、删除清空、增量终态 == 全量 rebuild。
  */
 @RunWith(AndroidJUnit4::class)
 @Config(sdk = [34])
@@ -147,21 +146,5 @@ class MessageFtsManagerIncrementalTest {
 
         assertEquals(rebuilt.sorted(), incremental.sorted())
         assertTrue(rebuilt.contains("alpha updated"))
-    }
-
-    @Test
-    fun `F4 conversation deletion clears all fts rows`() = runTest {
-        val conversationId = Uuid.random().toString()
-        val nodeA = node("alpha")
-        val nodeB = node("bravo")
-        fts.reindexNodesInTransaction(conversationId, "t", seq.incrementAndGet(), listOf(nodeA, nodeB))
-        assertEquals(2, ftsCount())
-
-        // 会话删除：清空该会话全部 FTS 行
-        database.openHelper.writableDatabase.execSQL(
-            "DELETE FROM message_fts WHERE conversation_id = ?",
-            arrayOf(conversationId),
-        )
-        assertEquals(0, ftsCount())
     }
 }

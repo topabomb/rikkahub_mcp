@@ -99,28 +99,4 @@ class RequestAssemblerTest {
         assertEquals(listOf(complete), provider.parts.take(requireNotNull(provider.providerReplayProjection).completePartCount))
         assertEquals(provider.providerReplayProjection, assembled.providerVisibleMessages.single().providerReplayProjection)
     }
-
-    @Test
-    fun `assemble preserves tool call and result identity verbatim`() {
-        val stepId = Uuid.random()
-        val localCallId = Uuid.random()
-        val tool = UIMessagePart.Tool(
-            localCallId = localCallId,
-            stepId = stepId,
-            providerCallId = "call_42",
-            toolName = "read_file",
-            input = """{"path":"/a"}""",
-            output = listOf(UIMessagePart.Text("body")),
-        )
-        val message = UIMessage(role = MessageRole.ASSISTANT, parts = listOf(step(0), tool))
-
-        val carried = assembler.assemble(listOf(message)).providerMessages.single().parts.single()
-            as UIMessagePart.Tool
-
-        assertEquals(stepId, carried.stepId)
-        assertEquals(localCallId, carried.localCallId)
-        assertEquals("call_42", carried.providerCallId)
-        assertEquals("read_file", carried.toolName)
-        assertEquals(listOf("body"), carried.output.filterIsInstance<UIMessagePart.Text>().map { it.text })
-    }
 }

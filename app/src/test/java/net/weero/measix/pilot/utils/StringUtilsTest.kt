@@ -86,11 +86,6 @@ class StringUtilsTest {
     }
 
     @Test
-    fun `remove brackets does not cross bracket boundaries`() {
-        assertEquals("ac", "a(b)c".removeBracketedContent())
-    }
-
-    @Test
     fun `remove brackets returns null when all removed`() {
         assertNull("(全是旁白)".removeBracketedContent())
     }

@@ -168,18 +168,21 @@ class AttachmentProjectionTransformerTest {
             LocalArtifactRef(relativePath = "upload/${firstArg<String>().substringAfterLast('/')}", mimeType = "application/octet-stream")
         }
 
-        val projected = transformer.transform(
-            ctxFor(textModel), listOf(UIMessage(role = MessageRole.USER, parts = source)),
-        ).single().parts
+        listOf(textModel, visionModel).forEach { model ->
+            val projected = transformer.transform(
+                ctxFor(model), listOf(UIMessage(role = MessageRole.USER, parts = source)),
+            ).single().parts
 
-        val names = listOf("u7km2n4p.pdf", "u4nz8q2a.wav", "u9rv3c6t.mp4")
-        val types = listOf("document", "audio", "video")
-        names.forEachIndexed { index, name ->
-            assertEquals(
-                "[Attachment path=/upload/$name type=${types[index]}]",
-                (projected[index * 2] as UIMessagePart.Text).text,
-            )
-            assertEquals(source[index], projected[index * 2 + 1])
+            val names = listOf("u7km2n4p.pdf", "u4nz8q2a.wav", "u9rv3c6t.mp4")
+            val types = listOf("document", "audio", "video")
+            names.forEachIndexed { index, name ->
+                assertEquals(
+                    "[Attachment path=/upload/$name type=${types[index]}]",
+                    (projected[index * 2] as UIMessagePart.Text).text,
+                )
+                assertEquals(source[index], projected[index * 2 + 1])
+                assertTrue((projected[index * 2] as UIMessagePart.Text).isProjectionText())
+            }
         }
     }
 
@@ -434,36 +437,6 @@ class AttachmentProjectionTransformerTest {
             "[Attachment path=/upload/direct.png type=image input=reference_only]",
             (projected.parts[3] as UIMessagePart.Text).text,
         )
-    }
-
-    @Test
-    fun `document audio video retain source parts and get projection markers`() = runTest {
-        val ref = AttachmentRefs.format(Uuid.random())
-        val document = UIMessagePart.Document(
-            url = "file:///tmp/report.pdf",
-            fileName = "report.pdf",
-            metadata = buildJsonObject { put(AttachmentRefs.METADATA_KEY, ref) },
-        )
-        val audio = UIMessagePart.Audio(
-            url = "file:///tmp/voice.wav",
-            metadata = buildJsonObject { put(AttachmentRefs.METADATA_KEY, ref) },
-        )
-        val video = UIMessagePart.Video(
-            url = "file:///tmp/clip.mp4",
-            metadata = buildJsonObject { put(AttachmentRefs.METADATA_KEY, ref) },
-        )
-        val message = UIMessage(role = MessageRole.USER, parts = listOf(document, audio, video))
-
-        val projected = transformer.transform(ctxFor(visionModel), listOf(message)).single()
-
-        assertEquals(6, projected.parts.size)
-        assertTrue((projected.parts[0] as UIMessagePart.Text).text.contains("type=document"))
-        assertTrue(projected.parts[1] is UIMessagePart.Document)
-        assertTrue((projected.parts[2] as UIMessagePart.Text).text.contains("type=audio"))
-        assertTrue(projected.parts[3] is UIMessagePart.Audio)
-        assertTrue((projected.parts[4] as UIMessagePart.Text).text.contains("type=video"))
-        assertTrue(projected.parts[5] is UIMessagePart.Video)
-        projected.parts.filterIsInstance<UIMessagePart.Text>().forEach { assertTrue(it.isProjectionText()) }
     }
 
     @Test

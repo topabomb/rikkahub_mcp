@@ -2,7 +2,6 @@ package me.rerere.ai.ui
 
 import kotlinx.serialization.json.Json
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import kotlin.uuid.Uuid
@@ -55,29 +54,25 @@ class ToolInteractionStateTest {
     )
 
     @Test
-    fun `only awaiting states are pending`() {
-        assertTrue(tool(ToolInteractionState.AwaitingApproval).isPending)
-        assertTrue(tool(ToolInteractionState.AwaitingInput).isPending)
-        assertFalse(tool(ToolInteractionState.NotRequired).isPending)
-        assertFalse(tool(ToolInteractionState.Approved).isPending)
-        assertFalse(tool(ToolInteractionState.Denied("x")).isPending)
-        assertFalse(tool(ToolInteractionState.Answered("x")).isPending)
-    }
-
-    @Test
-    fun `resolved gates without a replay result can resume assembly`() {
-        assertTrue(tool(ToolInteractionState.Approved).canResumeResultAssembly)
-        assertTrue(tool(ToolInteractionState.Denied("x")).canResumeResultAssembly)
-        assertTrue(tool(ToolInteractionState.Answered("x")).canResumeResultAssembly)
-        assertFalse(tool(ToolInteractionState.AwaitingApproval).canResumeResultAssembly)
-        assertFalse(tool(ToolInteractionState.AwaitingInput).canResumeResultAssembly)
-        assertFalse(tool(ToolInteractionState.NotRequired).canResumeResultAssembly)
-    }
-
-    @Test
-    fun `a replay result always blocks re-assembly`() {
-        val withResult = tool(ToolInteractionState.Approved).copy(resultStatus = ToolResultStatus.COMPLETED)
-        assertTrue(withResult.hasReplayResult)
-        assertFalse(withResult.canResumeResultAssembly)
+    fun `interaction gates depend on typed result status rather than output presence`() {
+        val cases = listOf(
+            Triple(ToolInteractionState.NotRequired, false, false),
+            Triple(ToolInteractionState.AwaitingApproval, true, false),
+            Triple(ToolInteractionState.AwaitingInput, true, false),
+            Triple(ToolInteractionState.Approved, false, true),
+            Triple(ToolInteractionState.Denied("x"), false, true),
+            Triple(ToolInteractionState.Answered("x"), false, true),
+        )
+        for ((state, pending, resumable) in cases) {
+            for (status in listOf(null) + ToolResultStatus.entries) {
+                for (output in listOf(emptyList(), listOf(UIMessagePart.Text("result")))) {
+                    val call = tool(state, output).copy(resultStatus = status)
+                    val label = "$state status=$status output=$output"
+                    assertEquals(label, status != null, call.hasReplayResult)
+                    assertEquals(label, status == null && pending, call.isPending)
+                    assertEquals(label, status == null && resumable, call.canResumeResultAssembly)
+                }
+            }
+        }
     }
 }

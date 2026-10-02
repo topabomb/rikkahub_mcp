@@ -81,6 +81,28 @@ class ProotLaunchSpecTest {
         assertFalse(terminal.arguments.contains("ls"))
         assertEquals("/bin/bash", terminal.arguments.last())
         assertFalse(shell.environment.containsKey("PROOT_NO_SECCOMP"))
+        assertEquals(
+            mapOf(
+                "PROOT_LOADER" to shell.loader.absolutePath,
+                "PROOT_TMP_DIR" to tempDir.absolutePath,
+                "TMPDIR" to tempDir.absolutePath,
+            ),
+            shell.environment,
+        )
+        for (spec in listOf(shell, terminal)) {
+            val arguments = spec.arguments
+            assertTrue(arguments.containsAll(listOf("--root-id", "--link2symlink", "--kill-on-exit")))
+            assertEquals("4.14.0", arguments[arguments.indexOf("-k") + 1])
+            assertEquals(linuxDir.absolutePath, arguments[arguments.indexOf("-r") + 1])
+            assertEquals("PWD=${cwdOf(spec)}", arguments.single { it.startsWith("PWD=") })
+            assertEquals("-i", arguments[arguments.indexOf("/usr/bin/env") + 1])
+            assertTrue(arguments.containsAll(listOf("LANG=C.UTF-8", "LC_ALL=C.UTF-8")))
+            assertEquals(
+                "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+                arguments.single { it.startsWith("PATH=") },
+            )
+        }
+        assertEquals(listOf("/bin/bash", "-c", "eval \"\$1\"", "MeasixPilot", "ls"), shell.arguments.takeLast(5))
     }
 
     @Test

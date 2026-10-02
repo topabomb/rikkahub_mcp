@@ -11,18 +11,6 @@ import org.junit.Test
 
 class ToolLivePhaseTest {
     @Test
-    fun `recovered execution envelopes retain interrupted and cancelled meaning`() {
-        assertEquals(
-            ToolLivePhase.INTERRUPTED,
-            resolveToolLivePhase(tool("""{"status":"interrupted"}""", resultStatus = ToolResultStatus.INTERRUPTED), null),
-        )
-        assertEquals(
-            ToolLivePhase.CANCELLED,
-            resolveToolLivePhase(tool("""{"status":"cancelled"}""", resultStatus = ToolResultStatus.CANCELLED), null),
-        )
-    }
-
-    @Test
     fun `explicit denial wins over its synthetic cancelled output`() {
         assertEquals(
             ToolLivePhase.DENIED,
@@ -33,22 +21,6 @@ class ToolLivePhaseTest {
                 ),
                 null,
             ),
-        )
-    }
-
-    @Test
-    fun `generic error envelopes are failures rather than completed calls`() {
-        assertEquals(
-            ToolLivePhase.FAILED,
-            resolveToolLivePhase(tool("""{"type":"timeout","error":"timed out"}""", resultStatus = ToolResultStatus.FAILED), null),
-        )
-    }
-
-    @Test
-    fun `standard domain failure envelope is a failed call`() {
-        assertEquals(
-            ToolLivePhase.FAILED,
-            resolveToolLivePhase(tool("""{"status":"failed","reason":"provider_error"}""", resultStatus = ToolResultStatus.FAILED), null),
         )
     }
 
@@ -71,6 +43,8 @@ class ToolLivePhaseTest {
             ToolResultStatus.FAILED to ToolLivePhase.FAILED,
             ToolResultStatus.DENIED to ToolLivePhase.DENIED,
             ToolResultStatus.ANSWERED to ToolLivePhase.ANSWERED,
+            ToolResultStatus.INTERRUPTED to ToolLivePhase.INTERRUPTED,
+            ToolResultStatus.CANCELLED to ToolLivePhase.CANCELLED,
         )
         cases.forEach { (status, expected) ->
             val tool = tool(archived).copy(resultStatus = status)

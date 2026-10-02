@@ -40,20 +40,6 @@ class RecoveryCostDecouplingTest {
     )
 
     @Test
-    fun `recovery reads only the non-terminal turn execution index`() = runTest {
-        val repo = mockk<ConversationRepository>(relaxed = true)
-        val runGate = mockk<SubAssistantRunGate>(relaxed = true)
-        coEvery { repo.getNonTerminalTurnExecutionsWithScope() } returns emptyList()
-
-        val recovery = turnRecovery(repo, runGate)
-        recovery.recoverInterruptedRuns()
-
-        // 唯一允许的恢复输入：turn_execution 状态索引（JOIN 区分 Master/Child）
-        coVerify(exactly = 1) { repo.getNonTerminalTurnExecutionsWithScope() }
-        coVerify(exactly = 0) { repo.getConversationById(any()) }
-    }
-
-    @Test
     fun `empty index short-circuits without loading any conversation`() = runTest {
         val repo = mockk<ConversationRepository>(relaxed = true)
         val runGate = mockk<SubAssistantRunGate>(relaxed = true)
@@ -62,6 +48,7 @@ class RecoveryCostDecouplingTest {
         val recovery = turnRecovery(repo, runGate)
         recovery.recoverInterruptedRuns()
 
+        coVerify(exactly = 1) { repo.getNonTerminalTurnExecutionsWithScope() }
         // 健康库（无非终态 turn）：零会话加载、零恢复树写入
         coVerify(exactly = 0) { repo.getConversationById(any()) }
         // 恢复入口取消全部运行中资源（lease + pending ask_user）

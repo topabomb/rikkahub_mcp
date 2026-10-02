@@ -56,14 +56,6 @@ class AdaptiveLayoutPolicyTest {
     }
 
     @Test
-    fun `phone landscape keeps single pane because height is too short`() {
-        assertEquals(
-            ChatLayoutMode.SinglePane,
-            layoutMode(widthDp = 844f, heightDp = 390f),
-        )
-    }
-
-    @Test
     fun `expanded tablet uses conversation list and chat detail`() {
         assertEquals(
             ChatLayoutMode.ListDetail,

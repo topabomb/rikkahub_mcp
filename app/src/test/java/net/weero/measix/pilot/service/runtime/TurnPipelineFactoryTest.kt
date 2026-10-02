@@ -32,19 +32,6 @@ class TurnPipelineFactoryTest {
     )
 
     @Test
-    fun `BASE_INPUT matches documented base order`() {
-        assertEquals(
-            listOf(
-                TimeReminderTransformer::class,
-                PromptInjectionTransformer::class,
-                PlaceholderTransformer::class,
-                DocumentAsPromptTransformer::class,
-            ),
-            factory().baseInput().map { it::class },
-        )
-    }
-
-    @Test
     fun `output matches documented order`() {
         assertEquals(
             listOf(

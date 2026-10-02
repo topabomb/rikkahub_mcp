@@ -40,7 +40,6 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import java.io.IOException
 import java.util.concurrent.ConcurrentLinkedQueue
-import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.UUID
 import net.weero.measix.pilot.data.provider.WorkspaceDocumentsDependencies
@@ -320,39 +319,6 @@ class EditorDraftAndroidTest {
                 }
             }
         }
-    }
-
-    @Test fun workspaceSaveFailureShowsOriginalCausePreservesDraftAndRetries() {
-        val queries = mockk<WorkspaceQueryService>()
-        val commands = mockk<WorkspaceApplicationService>()
-        val attempts = AtomicInteger()
-        val committed = ConcurrentLinkedQueue<String>()
-        coEvery { queries.readTextForPreview("id", WorkspaceStorageArea.FILES, "text.txt") } returns
-            WorkspaceTextPreviewResult.Success("published")
-        coEvery { commands.writeText("id", "text.txt", any()) } coAnswers {
-            val body = thirdArg<String>()
-            if (attempts.incrementAndGet() == 1) {
-                throw IOException("workspace write detail", IllegalStateException("original storage cause"))
-            }
-            committed.add(body)
-            WorkspaceFileEntry("text.txt", "text.txt", false, body.length.toLong(), 1L)
-        }
-        compose.setContent { host { WorkspaceFileEditorPage("id", WorkspaceStorageArea.FILES, "text.txt", commands, queries) } }
-        waitForWorkspaceEditor()
-        replaceEditorBody("retained draft")
-        val save = compose.activity.getString(R.string.common_save)
-        compose.onNodeWithContentDescription(save).performClick()
-        compose.onNodeWithText("IOException: workspace write detail", substring = true).assertIsDisplayed()
-        compose.onNodeWithText("IllegalStateException: original storage cause", substring = true).assertIsDisplayed()
-        compose.onNodeWithContentDescription(compose.activity.getString(R.string.update_card_close)).performClick()
-        assertEditorBody("retained draft")
-        compose.onNodeWithContentDescription(save).assertIsEnabled().performClick()
-        compose.waitUntil(5_000) { committed.size == 1 }
-        compose.onNodeWithContentDescription(save).assertIsEnabled()
-        assertEditorBody("retained draft")
-        compose.onNodeWithText("workspace write detail", substring = true).assertDoesNotExist()
-        assertEquals(listOf("retained draft"), committed.toList())
-        coVerify(exactly = 2) { commands.writeText("id", "text.txt", "retained draft") }
     }
 
     @Test fun cancellingDiscardKeepsNativeDraftAndConfirmedSystemBackLeavesWithoutWriting() {

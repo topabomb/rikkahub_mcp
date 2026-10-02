@@ -87,29 +87,6 @@ class Migration_13_14Test {
         }
     }
 
-    @Test fun migratedSchemaIsIsomorphicWithFreshFourteenIncludingIndexesAndForeignKeys() {
-        val name = "migration-context-v14-schema"
-        val freshName = "migration-context-v14-fresh"
-        context.deleteDatabase(name)
-        context.deleteDatabase(freshName)
-        helper.createDatabase(name, 13).close()
-        helper.runMigrationsAndValidate(name, 14, true, Migration_13_14).use { migrated ->
-            helper.createDatabase(freshName, 14).use { fresh ->
-                val tables = listOf("conversation_model_context", "conversation_context_admission", "conversation_context_use", "conversation_opening")
-                for (table in tables) {
-                    fun columns(db: SupportSQLiteDatabase) = rows(db, "PRAGMA table_info($table)").associate { it[1] to it.drop(2) }
-                    assertEquals("columns $table", columns(fresh), columns(migrated))
-                    assertEquals("foreign keys $table", rows(fresh, "PRAGMA foreign_key_list($table)").map { it.drop(1) }.toSet(),
-                        rows(migrated, "PRAGMA foreign_key_list($table)").map { it.drop(1) }.toSet())
-                    fun indexes(db: SupportSQLiteDatabase) = rows(db, "PRAGMA index_list($table)")
-                        .filter { it[1]?.startsWith("sqlite_autoindex_") != true }
-                        .associate { row -> row[1] to (row.drop(2) + rows(db, "PRAGMA index_info(${row[1]})").flatten()) }
-                    assertEquals("indexes $table", indexes(fresh), indexes(migrated))
-                }
-            }
-        }
-    }
-
     @Test fun invalidEnvelopeAbortsAndRoomRollsBackOriginalFile() {
         val name = "migration-context-invalid-envelope"
         val invalid = oldOne.replace("\"format\":1", "\"format\":99")

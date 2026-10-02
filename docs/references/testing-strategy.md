@@ -104,6 +104,12 @@ Portal、企业退出和平台接入按同一证据边界分层：
 **删除**须满足至少一项：对应能力已从实现中删除；相同语义已被更靠近 owner、诊断更好的测试完整覆盖；类型系统/DB 约束已使该错误无法构造；只检查私有函数/字段名/文件位置/exact source snippet；无可导致业务失败的断言；只是模板；重复验证框架自身；依赖已被当前执行路径替代的旧 fixture。
 **不得**因文件小/大、测试旧、migration 版本旧、跑得慢但验真实 Android/Room 契约、"看起来不会再改"而单独删除。
 
+合并前逐项核对输入边界、实际调用的生产入口和断言；把独有断言转入保留用例，再删除重复 fixture。
+有限状态或 endpoint 参数矩阵可在同一用例中逐行验证，并在断言中标出失败输入；不同 adapter 的 wire 契约仍分别保留。
+迁移的数据保全用例已通过 `MigrationTestHelper.runMigrationsAndValidate` 验证同一路径时，可合并仅重复列、外键与索引语义的 schema 用例；独有约束与失败路径仍需保留。
+Room 对默认 `index_` 前缀的索引名不逐字比较，旧名清理等确有意义的名字约束需保留显式断言。
+DAO 行为调用实际 DAO，不把测试内手写的同形 SQL 当成生产更新协议；Compose 恢复测试必须让被测状态由真实保存机制持有，外部变量存活只证明交互绑定。
+
 ## 9. 验证命令
 
 - Windows 用 `gradlew.bat`，macOS/Linux 用 `./gradlew`；本仓库串行运行：`--no-parallel --max-workers=1`。
@@ -173,6 +179,8 @@ Activity 重开不等于数据库关闭后重开或进程重启。fixture 的 Re
 `connectedDebugAndroidTest` 使用独立测试 AVD，并以 `ANDROID_SERIAL` 明确目标。AGP 安装/卸载可能清理
 Debug 包私有数据，测试的 finally 无法保护包级卸载；不得对保存日常或生产演示数据的设备直接运行。
 先完成普通设备门禁，再为需要已接入状态的 live 用例采用保留数据的安装与直接 instrumentation。
+本机 HTTP Mock 场景使用设备内的 loopback 服务；门禁前检查专用 AVD 的系统 HTTP 代理，临时禁用继承的不可用代理，
+并在验证结束后还原原值。代理连接失败不能归为 UI 点击或恢复门禁超时，也不能用重跑或放宽等待掩盖。
 
 | 场景 | 启用参数与前提 | 证据限制 |
 | --- | --- | --- |

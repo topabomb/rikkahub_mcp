@@ -3,7 +3,6 @@ import net.weero.measix.pilot.service.turn.TurnRecovery
 
 import io.mockk.coEvery
 import io.mockk.coVerify
-import io.mockk.coVerifySequence
 import io.mockk.mockk
 import java.util.concurrent.Executors
 import kotlinx.coroutines.CoroutineDispatcher
@@ -24,27 +23,6 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ApplicationRecoveryCoordinatorTest {
-    @Test
-    fun `recovery executes the only valid order before opening the gate`() = runTest {
-        val env = Env(this)
-
-        org.junit.Assert.assertFalse(env.assistantDependency.isInitialized())
-        env.coordinator.recoverNow()
-        assertTrue(env.assistantDependency.isInitialized())
-
-        assertEquals(ApplicationRecoveryState.Ready, env.gate.state.value)
-        coVerifySequence {
-            env.settingsStore.initializeForRecovery()
-            env.artifactStore.reconcileStartup()
-            env.generatedMediaStore.reconcile(any())
-            env.artifactStore.ensureReferenceProjection()
-            env.repository.ensureSearchProjection()
-            env.turnRecovery.recoverInterruptedRuns()
-            env.turnRecovery.recoverInterruptedTurns()
-            env.assistantManagement.performPendingDeletionCleanupDuringRecovery()
-        }
-    }
-
     @Test
     fun `pending backup is completed only after recovery maintenance succeeds`() = runTest {
         val events = mutableListOf<String>()
@@ -68,7 +46,9 @@ class ApplicationRecoveryCoordinatorTest {
             events += "assistants"
         }
 
+        org.junit.Assert.assertFalse(env.assistantDependency.isInitialized())
         env.coordinator.recoverNow()
+        assertTrue(env.assistantDependency.isInitialized())
 
         assertEquals(
             listOf(
