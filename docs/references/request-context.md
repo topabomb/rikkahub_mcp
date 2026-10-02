@@ -1,6 +1,6 @@
 # 请求上下文
 
-本文定义条数窗口、Tool Result 滚动压缩、Disclosure Snapshot 和手动摘要在一次 Provider 请求中的叠加顺序。
+本文维护应用上下文从捕获、请求接纳到历史回放的生命周期，以及条数窗口、Tool Result 滚动压缩和手动摘要的边界。
 Turn/checkpoint 归 [`turn-step-execution.md`](turn-step-execution.md)，模型可见文案与工具形状归
 [`prompts-and-tools.md`](prompts-and-tools.md)；其余依赖在对应规则处引用。
 
@@ -61,7 +61,7 @@ Provider opaque replay、Denied / Answered 和无终态调用不参与。整批�
 模型通过 `read_tool_output` / `grep_tool_output` 回查；注册名、参数、输出上限及工具策略见
 [提示词与工具](prompts-and-tools.md)。回查仍校验当前 conversation 的 TOOL_OUTPUT reference，ref 不是授权。
 
-### 输入的生命周期
+## 输入生命周期与冻结
 
 | 输入 | 采样或持久化边界 | 后续使用 |
 | --- | --- | --- |
@@ -121,7 +121,7 @@ Tool execution 的校验拒绝也是未执行。没有原 Turn 记录的失败�
 初始信息、外部变化和窗口恢复分别记录 INITIAL、EXTERNAL、RESTORE，正文保持同一种状态格式。
 每个完整工具批次的结果之后，才能在下一 Step 前插入 USER 内容；不能插进 call/result 中间。
 
-### 请求接纳与来源
+## 请求接纳与来源
 
 `TurnRequestAdmission` 在最终输入变换、位置计算和 `RequestAssembler.assemble` 校验后，调用
 `AdmitRequestContext`，经原 Conversation command/transition/committer 事务提交。内容由消息 variant
@@ -156,7 +156,7 @@ Step/请求状态说明发送结果。进程恢复使用原中断 Turn 终态协
 没有 admission 的历史原文仍可由授权 query 读取，但不补造更新标签或请求边界；保存的 anchor 必须仍存在且因果合法，
 但不要求旧 USER variant 当前选中。它只提供历史查看能力，不放宽 planner 的回放适用性。
 
-### 手动摘要
+## 手动摘要
 
 `ConversationApplicationService.compress()` 经 `GenerationSideEffects.compressConversation()` 生成摘要，
 再以 durable tree command 替换历史。它由用户显式触发、持久化且不可撤销，不挂到自动发送链路。
@@ -175,7 +175,7 @@ Step/请求状态说明发送结果。进程恢复使用原中断 Turn 终态协
 ```text
 durable selected branch + 已提交请求来源/接纳
   → replay-safe projection → limitContext（完整 USER 轮次）
-  → 本 Turn 冻结 System + Input Transformers（模板仅用于真实用户内容）
+  → 本 Turn 冻结 System + Input Transformers（普通持久消息应用模板，应用来源内容按字面投影）
   → 合法 C / 实际可见 K 对账 → 原位置历史 + 本次因果尾部应用输入
   → RequestAssembler 校验、授权文件校验、稳定 token 粗估
   → AdmitRequestContext 事务（内容 + selection/位置差异 + 零变化接纳）
@@ -191,14 +191,7 @@ messageTemplate 或 Placeholder 二次解释。完整工具批次可以将历史
 用同一条 `estimateStableTextTokens`，但只加本次可见的 inline tool 正文，不看整包请求估算或
 Provider `input_tokens`。`ChatSizeChecker` 的预警读取最近一次发送前估算，也不参与压缩决策。
 
-## 策略叠加与生命周期
-
-- 窗口只决定本请求可见历史；窗口外原文仍在库里，不自动归档，也不搬动旧状态包。
-- 滚动压缩只改已消费 tool output，导致事实缺失时，下一个新请求在因果尾部恢复当前状态。
-- 自身工具成功结果提供的事实在后续 Step/START 继续生效；不能每轮把相同状态重新通知一次。
-- 下一 START 可因模型、System、工具、规则或 Workspace 配置变化而更新前缀；同一 Turn 的普通配置不更新。
-- 外部 Memory/目录差异只追加尾部状态；Seed 变更在下一 START 纳入。
-- 手动摘要替换消息树；新摘要有来源，保留节点及其原身份不变。
+## 分支变更与事实保全
 
 `ConversationModelContextApplicability` 统一 selected variant 与因果 anchor 适用性；预置/摘要自身拥有并
 锚定其消息。Fork 映射 node/message/entry/接纳引用，保留未选 variant 的事实；删除或裁剪通过
@@ -209,8 +202,8 @@ Provider `input_tokens`。`ChatSizeChecker` 的预警读取最近一次发送前
 entries/admissions 的结构共享，不反复重放全部历史来裁剪；Turn checkpoint 只能扩展已提交 Step，不能移除历史身份。
 
 `ConversationContextIntegrity` 在接纳、装载与恢复时检查身份/引用/域边界；Room 对应表保存
-opening、context entry、request admission 和关联；大正文使用分段读取。Settings 1、transcript 3、enterprise
-manifest 6 保持原版本；详见数据库和配置参考。Snapshot 是事实描述，不是授权。
+opening、context entry、request admission 和关联；大正文使用分段读取。格式版本和迁移由
+[数据持久化](data-persistence.md)与[配置架构](android-configuration-architecture.md)维护。Snapshot 是事实描述，不是授权。
 
 ## 跨协议请求形状
 
@@ -236,18 +229,3 @@ ASSISTANT: 下一次模型响应
   token，连续 ASCII 符号段约 2 字 / token，其他 Unicode code point 各 1。
 - Provider 报窗口错误时保留原始错误，引导用户开条数窗口或手动摘要；不得为了重发静默覆盖历史。
 - 不为缓存失效判断增加 Settings revision、Memory revision 或 Conversation 头部 disclosure 字段。
-
-## 实现入口
-
-| 边界 | 符号 |
-| --- | --- |
-| 请求前规划 | `RequestContextPlanner.planRequest` / `applyContextProjections` |
-| 压缩规划 | `ToolOutputCompactionPlanner.planAfterSuccessfulRequest` |
-| Turn 冻结 | `TurnContextFactory`、`FrozenTurnSystem`、`TurnDisclosureSource` |
-| 请求接纳 | `TurnRequestAdmission`、`ConversationContextTransition`、`resolveUsesAt` |
-| 预算 | `ContextBudget`、`estimateStableTextTokens` |
-| 归档 | `ToolOutputStore.stageCompaction`，回查 `read_tool_output` / `grep_tool_output` |
-| 披露 | `ConversationDisclosureSnapshotService`，表 `conversation_model_context` |
-| 适用谓词 | `ConversationModelContextApplicability` |
-| 条数旋钮 | `Assistant.contextMessageLimit`、`effectiveContextMessageLimit()` |
-| 手动摘要 | `ConversationApplicationService.compress()` → `GenerationSideEffects.compressConversation()` |

@@ -33,6 +33,10 @@ System
 
 `APPLICATION_CONTEXT_RULES` 与 `MODEL_RULES` 不随本 Step 是否新增状态披露而变化。
 主助手与子助手共用 `TurnPipelineFactory`，子助手管线不包含 `ToolArtifactReplayTransformer`。
+输出管线依次为 `ThinkTagTransformer`、`Base64ImageToLocalFileTransformer`、`RegexOutputTransformer`，只处理当前 open Step；
+采样提交后的工具阶段不再次转换正文。`ThinkTagTransformer` 仅在本 Step 没有 Provider 原生 Reasoning 时，
+解释首个非空 Text 开头的 `<think>`：从 Step 开始时间计时，首次闭合时固定结束时间，流结束只补未闭合时间。
+生成文件的提交与回滚仍沿[Turn/Step 执行](turn-step-execution.md)的资源交接。
 工具操作规则由 description/参数说明提供，状态由结构化上下文提供，不把相同规则重复加入两处。
 
 ## 2. 模板、位置与字面内容
@@ -212,8 +216,8 @@ create 只返回 `id`，edit/delete 返回 `success+id`；正文已在 input，�
 `status/assistant_name/content`，必要时有 `has_non_text_output`；有持久交付物时始终返回轻量
 `artifacts[].path/type/mime`，超出交付上限时记录 `artifacts_omitted`。
 
-默认清单只有 Text JSON，没有 Image 或附件事实行，但可直接用其路径识图，无需重跑子助手。
-`extras=artifacts` 追加可持久化 Image，下一请求再按 Caller 媒体能力投影；它不触发识图。
+默认清单只有 Text JSON，没有 Image 或附件事实行；Caller 可把合法路径交给 `inspect_attachments`，无需重跑子助手。
+`extras=artifacts` 追加可持久化 Image，下一请求按 Caller 的 Tool.output 能力与文件当前可读性投影；缺失文件不因模型支持图片而恢复可读，它也不触发自动识图。
 有朗读调用时默认返回 `tts_stats`，`extras=tts` 返回朗读文本，`extras=tool_calls` 返回本次 run 工具计数。
 非 completed 终态不返回交付物清单；失败保持公共 status/reason，不能把 Child 失败伪装为成功。
 
@@ -313,11 +317,7 @@ server/tool、transport、generation、retryable、request_sent 不进入模型�
 结果仅返回 input 尚未表达的执行结果或实际差异。写记忆、剪贴板、文件和助手配置不重复回显原正文；
 assistant_manage 的 applied 只返回实际规范化差异，clipboard read 的 text 和 assistant_call 的 content 属于新数据。
 
-压缩时机、预算和事务交接归 [请求上下文](request-context.md)。模型可见替换格式为：
-
-- ARCHIVABLE_TEXT：`[Archived tool result: ref=...]`，原文可回查。
-- REGENERABLE_TEXT：`[Derived tool result folded]`，原 input 保留，不创建归档副本。
-- PRESERVE：原结果保留。
+压缩策略、marker 格式、预算与事务交接统一见[请求上下文](request-context.md)；本文维护具体工具的结果保留资格与回查协议。
 
 登记过未发布 Artifact 的结果成功或失败均强制 PRESERVE。assistant_call 默认 PRESERVE，只有单 Text、
 completed、assistant_name/content 为字符串且没有 artifacts manifest 的结果才可归档；带交付物、混合媒体、

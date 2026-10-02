@@ -64,13 +64,6 @@ MeasixPilot <VERSION_NAME> #<VERSION_CODE>
 
 ## 4. UI 与下载
 
-更新入口位于聊天抽屉，必须同时满足：
-
-```text
-DisplaySetting.areUpdateChecksEnabled()
-&& !PlayStoreUtil.isInstalledFromPlayStore(context)
-```
-
 成功且发现新版本时，卡片显示版本号。点击卡片打开 `AdaptiveModal`：窄屏使用 BottomSheet，宽屏使用居中 Dialog；内容包括发布时间、Markdown changelog 和下载列表。
 
 点击下载项后，`UpdateChecker.downloadUpdate()`：
@@ -81,17 +74,15 @@ DisplaySetting.areUpdateChecksEnabled()
 4. 由系统通知展示下载进度和完成状态；
 5. enqueue 失败时显示本地化错误并用浏览器打开下载 URL。
 
-应用不自行维护下载进度，也不自动触发安装。下载地址和文件大小完全来自受信任的更新 API，因此后端必须只发布 HTTPS 地址和预期 APK。
-
-## 5. Play Store 安装来源
+应用不维护下载进度或自动安装。下载地址、名称与大小直接来自更新 API；客户端没有额外的下载域名、大小或 APK 签名校验，发行端必须保证列表指向预期 HTTPS APK。安装资格最终仍由 Android 校验。
 
 `PlayStoreUtil` 在 Android 11 及以上使用 `PackageManager.getInstallSourceInfo()`，旧版本使用 `getInstallerPackageName()`；安装包名为 `com.android.vending` 时视为 Play Store 来源。查询异常按“非 Play Store”回退，使侧载包仍能使用应用内更新。
 
-## 6. Release 构建契约
+## 5. Release 构建契约
 
 `app/build.gradle.kts` 的发行相关约束：
 
-- `versionCode` 与 `versionName` 是客户端版本和 Release 命名的唯一来源；
+- 客户端版本来自 `versionCode` 与 `versionName`；tag 发布时 Release 名称取 tag，手动发布时取 `versionName`，发版必须核对二者一致；
 - APK 构建启用 `arm64-v8a`、`x86_64` 与 universal 输出，App Bundle 构建时关闭 ABI splits；
 - `assembleRelease` 完成后把 `app-*.apk` 重命名为 `MeasixPilot_<version>_*.apk`；
 - Release 使用 AGP optimization/R8；必要 keep rules 位于 `app/src/main/keepRules/rikkahub.keep`；
@@ -99,7 +90,7 @@ DisplaySetting.areUpdateChecksEnabled()
 
 没有签名配置的本地 `assembleRelease` 可以生成未签名产物，但它不构成可发布版本。
 
-## 7. GitHub Actions 发行流程
+## 6. GitHub Actions 发行流程
 
 `.github/workflows/release.yml` 支持版本 tag 和手动触发：
 
@@ -119,7 +110,7 @@ DisplaySetting.areUpdateChecksEnabled()
 
 正式发布包括 tag 触发和手动 `publish_release=true`。这两种情况必须提供 `KEY_BASE64` 与 `SIGNING_CONFIG`，并且所有 APK 必须通过 `apksigner verify` 后才能上传。手动的非发布 Artifact 构建允许不提供签名，产物不得当作正式版本分发。
 
-Release notes 从 `docs/dev/changelog.md` 中提取与版本号匹配的 `## <version>` 段落。GitHub Release 发布后，`release.yml` 自动通过 `repository_dispatch` 触发网站仓库（`measix-pilot-website`）的 `sync-from-release` 工作流，将版本信息、changelog 和下载列表写入静态 `version.json`。App 通过请求该静态文件检查更新，无需动态后端。
+Release notes 从 `docs/dev/changelog.md` 提取版本段落，未找到时回退为 `Release <version>`。GitHub Release 发布后，本工作流通过 `repository_dispatch` 向 `measix-pilot-website` 发送 `app-release` 事件，包含版本、changelog 和 APK 列表；这一步需要 `WEBSITE_SYNC_TOKEN`。网站是否成功更新静态 `version.json` 是另一仓库的执行结果，dispatch 成功本身不能证明线上内容已更新。
 
 ### 签名配置形状
 
@@ -134,7 +125,7 @@ keyPassword=<password>
 
 签名文件、`local.properties` 和可选 `google-services.json` 都是临时 CI 输入，不得提交到仓库。
 
-## 8. 维护与验证
+## 7. 维护与验证
 
 修改客户端更新链路时至少验证：
 
@@ -145,7 +136,7 @@ keyPassword=<password>
 
 正式发版还必须验证 Release 构建、所有 APK 签名、版本号、ABI 产物、changelog 提取结果、`repository_dispatch` 触发成功以及线上 `version.json` 内容正确。GitHub Actions 成功不替代真实安装与升级验证。
 
-## 9. 关键架构文件
+## 8. 关键架构文件
 
 | 边界 | 文件 |
 | --- | --- |

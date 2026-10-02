@@ -15,13 +15,13 @@
 
 `selectedTTSProviderId` 选中一个 provider；`defaultTTSPlaybackSpeed` 是播放层公共速度，不是服务端 TTS voice。
 
-公共倍速位于一般偏好的 TTS 组，保持既有字段和播放层设置协议。`TtsController` 仅预取当前位置之后两段；同 turn 的追加只补足该窗口，不能按上次预取位置继续前推。没有自动合成重试或跳过队列项的旁路。远端 TTS 可并发预取；`SystemTTSProvider` 通过单一 `SystemTtsSynthesisCoordinator` 串行访问设备引擎，避免厂商实现同时绑定和合成多个分片。
+`TtsController` 仅预取当前位置之后两段；同 turn 的追加只补足该窗口，不能按上次预取位置继续前推。没有自动合成重试或跳过队列项的旁路。远端 TTS 可并发预取；`SystemTTSProvider` 通过单一 `SystemTtsSynthesisCoordinator` 串行访问设备引擎，避免厂商实现同时绑定和合成多个分片。
 
-企业公开定义使用 `EnterpriseTtsResource`，共同字段为 `id/name/enabled/protocol`；云端协议携带 `modelId/voice` 等条件字段，System TTS 只携带 `speechRate/pitch`。云端 `voice` 必须按协议显式提供，不补 Android 默认音色。企业定义与用户 `TTSProviderSetting`、私有 `EnterpriseRuntimeBinding` 分别保存。
+企业公开定义使用 `EnterpriseTtsResource`，共同字段为 `id/name/enabled/protocol`；云端协议携带 `modelId/voice` 等条件字段，System TTS 只携带 `speechRate/pitch`。云端 `voice` 必须按协议显式提供，不补 Android 默认音色。企业定义、用户 `TTSProviderSetting` 与平台执行描述 `EnterpriseExecution.Platform` 分开保存，短期凭据由 Session owner 提供。
 
-`TtsController` 统一管理分片、预取与播放；每个 `TtsPlaybackSession` 提供合成和播放准入回调。停止取消并返回同一组任务的清理回执，恢复播放复验原 worker，销毁等待整个 controller 协程作用域，包含旧队列尚未退出的合成。`SpeechApplicationService` 为唯一应用语音 owner，提供 `SpeechPlayback` / `SpeechRecognition` UI 端口；页面不创建 controller 或通过 AppEvent 发出播放请求。系统 TTS 在主线程创建和调用引擎，初始化、参数、语言、启动、带错误码终态、主动停止、空输出、超时和关闭都产生明确诊断；回调只接受第一个匹配 utterance 的终态，取消仍向上传播。System TTS 的 speech rate 固定为 `0.1..3.0`，pitch 固定为 `0.1..2.0`，个人与企业定义共用该校验。OpenAI/Gemini HTTP 合成使用 `Call.readResponse`，取消实际网络 Call，并等待响应正文读取退出后关闭响应。
+`TtsController` 统一管理分片、预取与播放；每个 `TtsPlaybackSession` 提供合成和播放准入回调。停止取消并返回同一组任务的清理回执，恢复播放复验原 worker，销毁等待整个 controller 协程作用域，包含旧队列尚未退出的合成。系统 TTS 在主线程创建和调用引擎，初始化、参数、语言、启动、带错误码终态、主动停止、空输出、超时和关闭都产生明确诊断；回调只接受第一个匹配 utterance 的终态，取消仍向上传播。System TTS 的 speech rate 固定为 `0.1..3.0`，pitch 固定为 `0.1..2.0`，个人与企业定义共用该校验。OpenAI/Gemini HTTP 合成使用 `Call.readResponse`，取消实际网络 Call，并等待响应正文读取退出后关闭响应。
 
-### 播放队列与调用来源
+### 队列归属与调用来源
 
 `TtsToolPlaybackContext.sessionId` 是工具播放队列的边界，Master 与该 Turn 内的 Target 共用，交互继续不更换。`TtsController` 同时只有一个 session 拥有队列：新 session 替换旧队列；同 session 按顺序开关追加或替换。每个 chunk 入队时绑定来源，UI 的 `activeSource` 不参与队列仲裁。
 
@@ -44,9 +44,9 @@
 
 平台实时识别复用 `RealtimeAsrController` 的协议编码、PCM 采集和停止流程，`RealtimeAsrTransport` 只在内存传递完整平台握手请求。`SingleAttemptWebSocketFactory` 用公开 HTTP upgrade socket API 保留原 WebSocket 编解码器，在握手 follow-up 前拒绝失败响应；取消同时关闭原握手 Call 与 WebSocket。升级连接的 sink 累计实际写入字节，自动 pong 和关闭帧也计入平台上限。发送拥堵、超限及上游失败明确结束识别，不静默丢弃录音，不自动重连或重放。
 
-独立语音交互先经权威 Managed State 检查再冻结配置；缺少配置、版本不同或同步失败时拒绝本次操作，等待用户手动同步，不在录音或播放入口自动下载 Snapshot。工具朗读沿用父 turn 的上下文。平台租约以原 AppliedVersion 获取，请求前取得当前 Session 令牌并复验原语音 owner。模型与语音共用 `common.http.withExplicitRoute` 的完整地址、请求体上限、禁止自动重放和真实 HTTP 诊断；有效 428 仍由原语音 owner 终止与清理。播放器和文件识别的失败由应用提供 `userVisibleDiagnostic`，保留异常类型与 cause，不以通用语音失败替换。
+独立语音交互沿 [企业执行准入](android-configuration-architecture.md)检查 Managed State 后冻结配置；工具和自动朗读使用原 Turn 的语音上下文，不重新读取全局选择。租约固定原 AppliedVersion，请求前取得当前 Session 令牌并复验语音 owner。模型与语音共用 `common.http.withExplicitRoute` 的完整地址、请求体上限和禁止重放规则；失败以 `userVisibleDiagnostic` 保留异常类型与 cause。
 
-`EnterpriseSpeechTransport` 按平台 Snapshot 的协议编码 TTS 与 ASR 请求，注入原 generation/interaction；Runtime endpoint 与认证只归 platform execution transport。HTTP client 不重定向或自动重试。共享 `ManagedSnapshotRequired` 解析 428 barrier，严格 JSON 解码归 `StrictJsonValue`。应用 owner 在原 `RealmSelection` 下捕获资源和完整 AppliedVersion，队列/录音自行持有 execution lease 至实际清理完成。独立播放/录音创建交互，工具和主/子助手共用原 turn 的冻结语音上下文。完成事件携带原回复和该上下文，自动朗读不查询新 turn 的全局选择。428 永久终止原语音交互，分别终止父 turn、释放语音资源并提示手动同步，不自动同步或重放；父 turn 停止与语音资源清理各自执行并汇总失败，任一路失败不跳过另一路。空间切换在 Session 锁内只撤销和停止硬件，锁外等待清理。
+`EnterpriseSpeechTransport` 注入原 generation/interaction，runtime endpoint 和认证只归平台执行 transport；HTTP 不重定向或自动重试。队列与录音持有原 execution lease 至实际清理完成。有效 `ManagedSnapshotRequired` 永久终止原语音交互，并分别停止父 Turn、释放语音资源；任一清理失败不跳过另一项，汇总诊断并提示手动同步。空间切换在 Session 锁内撤销和停止硬件，锁外等待实际清理。
 
 ## 实现与验证
 

@@ -1,202 +1,180 @@
 # 测试策略与验证边界
 
-本文描述本仓库**当前**的测试分层、所有权与稳定性约定，是新增/审查测试时的稳定依据。
-它不记录迁移过程，只描述长期成立的规则。生产语义与参考文档冲突时以代码为准。
+本文说明如何选择测试、定位现有覆盖和执行验证。领域行为由对应参考文档维护；发现文档与实现不一致时，
+沿生产入口和测试查明原因，再同步修正。测试存在、测试通过和真实服务验收是不同证据，不能互相替代。
 
-## 1. 分层（按运行位置与真实依赖选择）
+## 1. 选择测试边界
 
-| 层 | 运行位置 | 覆盖 | 约束 |
-| --- | --- | --- | --- |
-| L1 纯协议/纯函数 | JVM | `ConversationTransition`、`TurnTransition` 的 transcript/step 不变量、`ToolResultStatus`/交互状态、Request Context 选择、`ContextBudget`、compaction plan、sub-assistant policy/lineage/projection、Provider-independent replay projection、字符串/路径/解析算法 | 不需 Android Context；不 mock Room；不启动协程 Job（除非被测即协程协议）；table-driven；关键状态使用确定性时间与 ID |
-| L2 组件/应用服务 | JVM（必要时 Robolectric） | `TurnRunner`、`StepRunner`、`ToolBatchRunner`、`TurnCommitter`、`ConversationTurnService`、`ConversationRuntime`、`SubAssistantRunCoordinator`、SettingsStore commit-then-publish、Artifact/MCP runtime owner | 用确定性 fake，不得把依赖整体设成 `relaxed = true` |
-| L3 持久化/协议集成 | Robolectric 或 instrumentation | Room 事务、DAO SQL、FTS、conversation delta、artifact 引用、tool execution facts、backup staging、Provider request JSON 与 parser、transcript 序列化 | 只在真实 DB/平台行为有价值时进入；不 mock SQL 后再断言 SQL 字符串；同一 SQL 契约不同时保留"字符串包含"与"真实执行"两套 |
-| L4 Android 平台/Compose | instrumentation | Room Migration、ContentResolver/Uri、Bitmap/Exif、进程生命周期、前台服务、Haptic/Vibrator adapter、System TTS、Compose semantics/焦点/IME/自适应布局、Intent/剪贴板/分享 | 只验证 JVM 无法可靠证明的事实；UI policy 先在 JVM 测，instrumentation 只验 adapter 与真实 Compose 绑定；不重复测纯函数决策 |
-| L5 性能/长期稳定性 | controlled benchmark / nightly | stream chunk 吞吐、活跃 Assistant 分配、checkpoint 写次数、tool output read/grep、大会话 request assembly、migration 大数据量、Compose recomposition、长 TTS 队列 | 普通单测只验证**结构性复杂度**（如 `TurnPersistenceDeltaTest` 断言写次数而非耗时）；时间与内存放 benchmark |
+先找负责该语义的生产组件，用最近的行为测试观察成功、拒绝、失败、取消和恢复；跨组件提交与补偿再补集成测试。
+不为凑齐层级复制断言，不用源码扫描证明运行行为。
 
-## 2. 目录与命名约定
-
-- 不新增 Gradle module；测试 package 与生产 package 对齐。
-- `app/src/test/.../pilot/architecture/`：跨切面静态契约测试（见 §5）。
-- `app/src/test/.../pilot/service/turn/`、`service/runtime/`、`service/`、`service/subassistant/`：Turn/Step/Runtime/子助手编排。
-- `app/src/test/.../pilot/data/ai/request/`、`data/ai/tools/`、`data/ai/subassistant/`：请求装配、工具与 compaction、子助手投影。
-- `ai/src/test/.../provider/providers/`：各 adapter 的 wire 契约（见 §4）。
-- 测试类以 `*Test` 结尾；名称使用领域术语（Turn/Step/Tool/Interaction/Execution/Result），不用批次或事故编号。
-
-## 3. 契约归属与覆盖选择
-
-一项语义先找最近的生产 owner，由它的行为测试锁定成功、拒绝、失败、取消和恢复。跨 owner 的提交与补偿再用集成测试观察真实边界；依赖 Android SQLite、系统组件、Compose 或硬件的行为必须由对应设备测试证明。不要为了“每层都有一个测试”复制同一断言，也不要用静态源码扫描代替运行行为。
-
-`JavascriptToolTest` 通过真实桌面 QuickJS native runtime 验证执行截止时间、父取消、格式化陷阱及输出限额，`JavascriptRuntimeAndroidTest` 验证 Android JNI 的中断与关闭后再次执行；前者不能代替双 ABI、Release R8 或设备证据。`SettingsStartupTest` 使用真实 DataStore 文件和 migration 验证损坏/失败后保全与重试，并用可控数据源验证同一 SettingsStore 的 observer 归属；`ApplicationRecoveryCoordinatorTest` 验证恢复门禁顺序、取消和 retry。
-
-| 契约 | 最近的测试 owner | 必要的跨边界证据 |
+| 层次 | 运行位置 | 适合证明的事实 |
 | --- | --- | --- |
-| Conversation 树、Turn/Step/Tool 状态与事务发布 | `ConversationTransitionTest`、`TurnTransitionTest`、`ConversationCommandCoordinatorTest`、`TurnCommitterTest` | 真实 Room/恢复测试核验 schema、事务、分支与失败重试 |
-| Provider 请求、流式解析、opaque 回放与 usage | `RequestAssemblerTest`、各 Adapter 的 serializer/parser 测试、`RequestUsageReducerTest` | 本机 HTTP/SSE fixture 验证传输终态；真实服务另行验收 |
-| Settings、按域解析与企业 Session | `SettingsStore`/`ConfigurationResolver`/`EnterpriseSessionController` 的行为测试 | DataStore/Applied 重开、Core 合同样例、旧 Session 与撤权竞态 |
-| Artifact、GeneratedMedia、备份与 migration | 各 Store、`BackupArchiveService`、显式 migration 测试 | Android SQLite 的 schema/数据保全、文件交换和恢复测试 |
-| MCP、Workspace、Speech、子助手 | 各自 runtime/coordinator 的状态与失败测试 | 实际 SDK、进程、系统服务或设备场景按风险补足 |
-| Compose 页面与授权后的用户路径 | ViewModel 投影测试 | 正式页面 instrumentation；不能以节点存在代替可见、可点或可完成 |
+| 纯协议与算法 | JVM | 状态迁移、请求选择与预算、压缩计划、解析与路径规则；不引入无关 Android 或数据库依赖 |
+| 组件与应用服务 | JVM，必要时 Robolectric | Turn/Step/工具编排、commit-then-publish、Session 与资源生命周期；用可控 fake 驱动依赖 |
+| 持久化与线协议集成 | JVM、Robolectric 或 instrumentation，按真实依赖选择 | Provider JSON/SSE、序列化、真实 Room 事务/DAO/FTS、备份与引用恢复；不 mock SQL 后断言字符串 |
+| Android 与 Compose | instrumentation | SQLite migration、ContentResolver、Bitmap/Exif、Keystore、系统服务、WebView、焦点/IME、分享及真实页面绑定 |
+| 性能 | 受控 benchmark | 耗时、分配和帧分布；普通测试只锁写入次数等结构性复杂度，不用耗时阈值猜测性能 |
 
-`app/src/test/.../pilot/architecture/` 的静态契约只锁 owner、依赖方向和已移除的接口。`ArchitectureDependencyTest`、`RetiredSurfaceContractTest`、`TurnStepProtocolContractTest` 是该层的入口；运行语义仍由最近 owner 的行为测试证明。新增测试前先核对现有覆盖，避免把同一规则散落到多个实现细节测试中。
+JVM 适合先验证 UI 决策和投影，设备测试验证平台适配与真实页面交互。节点存在不等于可见、可点击或流程可完成；
+Activity 重开不等于数据库关闭重开或进程重启，Repository ACK 不等于已落盘，确定性 HTTP adapter 不等于真实 Provider。
 
-## 4. Provider contract suite（两层）
+测试放在对应模块和生产 package 下，类名用 `*Test` 与领域术语，不新增仅为分层服务的 Gradle module。
+`app/src/test/.../pilot/architecture/` 保存静态边界测试，`ai/src/test/.../provider/providers/` 保存 adapter 线协议测试；
+其余行为测试随 service、runtime、data 等现有目录归属。
 
-配置选择分别由 application service、UiModel、Compose 和 Store 测试验证提交、投影、交互与持久化失败；UI 注入的提交失败不能冒充设备磁盘写入失败。
+## 2. 契约归属与主要入口
 
-- **Provider-independent**：请求装配、内容顺序、`Tool.stepId`、历史选择与 receipt 归共享模型和 app 测试；媒体输入由对应 transformer 测试。
-- **Adapter-specific**：每个 adapter 分开验证自身请求序列化、响应/usage 解析和必要的 replay 往返；endpoint profile 不混入 parser。
-- **共享 fixture**：`ProviderRequestContractFixtures.kt` 提供相同的多轮工具输入，各 adapter 分别断言 wire，不建立复杂 abstract base test。
-- **传输边界**：跨 chunk 参数和 reasoning 合并归 `StepOutputAccumulator`；adapter parser 验证 wire 投影，本进程 HTTP/SSE 测试验证 listener 的 EOF、终态、重复 ID 与交错调用槽。
+以下入口用于定位覆盖，不代表已执行结果，也不要求每次修改运行全部用例。
 
-## 5. 架构契约测试
-
-`app/src/test/.../pilot/architecture/` 用源码扫描（非运行时）锁定 owner 与已移除的接口，共享扫描器 `ArchitectureSources.kt`
-（`architectureSourceRoot`/`architectureSources`/`sourcesUnder`/`hits`/`assertNoHits`）：
-
-- `ArchitectureDependencyTest`：分层与所有权——UI 只经 application/query ports（包含 ArtifactStore/ToolOutputStore 禁令）、durable 写入单一 caller graph、runtime 加载受限、标题 CAS、MCP query 边界、`ArtifactDAO` 单 owner。
-- `RetiredSurfaceContractTest`：已移除的兼容接口不得回归（`ToolSetRunMode`、`runCatching` 吞取消、`@Deprecated` 转发、`getKoin` 服务定位器、已移除的 MCP/master 文件）。
-- `TurnStepProtocolContractTest`：只锁 turn owner 不得回引 Workspace output 路径、恢复与生命周期不得消费 render overlay。UI 依赖归 ArchitectureDependencyTest；旧 generation Job 符号归 RetiredSurfaceContractTest，不在两处重复扫描；不以符号或代码行顺序冒充运行行为验证。
-
-架构契约测试只锁定 owner、依赖方向与已移除的符号，**不**用 exact source snippet 代替运行时/UI 行为测试；
-具体 Compose 渲染与内联运行时逻辑归各自行为测试。durable 只读 snapshot 与 UI import 边界并入 `ArchitectureDependencyTest`；
-checkpoint 写放大是行为事实，归 `service/turn/TurnPersistenceDeltaTest`（非源码扫描）。
-
-这些测试断言的是**架构不变量**，失败信息须定位到 owner 与被破坏的约定。
-
-## 6. 关键不变量的测试锚点
-
-三条不可打折的不变量各有明确锚点：
-
-- **工具输出滚动裁剪（含所有工具与 MCP 工具）**：`ToolOutputCompactionPlannerTest` 锁 eligibility（只压缩本次成功请求确实可见、已消费的历史 inline tool result）、`ToolOutputPolicy` 三形态（archiving/folding/PRESERVE）不混用、保护窗口与净回收阈值；阈值唯一来源 `ContextBudget`。`ToolOutputProtocolTest` 锁 marker 与协议上限。
-- **Prompt cache 前缀稳定**：`ClaudeProviderPromptCacheTest` 锁 cache_control 断点；compaction 只在预算触发时改写已消费历史，保护窗口内最近批次/最近 token 不参与——前缀失效是预算触发的预期代价，不得靠"不压缩"换取。
-- **工具审批语义与子助手 `ask_user`**：`ToolApprovalReducerTest`/`ToolCallRuntimeTest` 锁交互 gate，`TurnInteractionContinuationIntegrationTest` 验证真实 Room 的 continuation；`SubAssistantRunCoordinatorTest` 保护 Child 编排与中断终结。mock Runner 的委托测试只证明入口调用，不代表 Parent/Child 完整执行链或界面绑定已经验收。
-
-## 7. 确定性、竞态、取消与所有权规则
-
-Portal、企业退出和平台接入按同一证据边界分层：
-
-| 边界 | 应验证的事实 | 不能据此宣称 |
+| 契约 | 主要入口 | 需要区分的证据 |
 | --- | --- | --- |
-| JVM 状态与本机 HTTP | 文档/Session 绑定、CLOSING 屏障、迟到结果、媒体额度与回交、一次性兑换、Snapshot 校验、刷新与退出重试 | Android WebView、硬件或真实 Core 已验收 |
-| 真实 Store/Room 与受控竞态 | 企业退出后的主/子运行、lease、终态及清理恢复；到期查询返回前复验原 Session，保留其他主体数据 | 正式页面或远端服务行为已验收 |
-| Android instrumentation | WebView detach 与迟到请求、媒体采集和释放、AndroidKeyStore、Applied manifest 重开 | 真实平台、外链、权限弹窗及后台完整用户路径已验收 |
-| 显式 live 场景 | 新建的一次性 Enrollment、真实 Core/Provider、已发布模型和媒体的跨端路径 | 未执行的资源、声学输入、Realtime ASR、remote Portal 或 Release 首次接入已验收 |
+| 会话与事务发布 | `ConversationTransitionTest`、`TurnTransitionTest`、`ConversationCommandCoordinatorTest`、`TurnCommitterTest`、`TurnPersistenceDeltaTest` | 状态与写入次数由行为测试证明；schema、事务、分支与恢复另用真实 Room |
+| 请求冻结与上下文 | `TurnRequestAdmissionTest`、`ConversationDisclosureReconciliationTest`、`TimeReminderTransformerTest`；`ConversationContextPayloadTest`、`ConversationContextPruneTest`、`ConversationContextQueryTest`、`ConversationContextPresentationTest` | 重试输入不变、来源保全、variant 适用性、无 admission 历史、按需读取与迟到结果 |
+| 工具压缩与缓存 | `ToolOutputCompactionPlannerTest`、`ToolOutputProtocolTest`、`ClaudeProviderPromptCacheTest` | 只处理本次成功请求可见且已消费的历史结果；三种保留策略、保护窗口和净回收阈值由 `ContextBudget` 约束，缓存稳定不能阻止必要压缩 |
+| 工具交互与子助手 | `ToolApprovalReducerTest`、`ToolCallRuntimeTest`、`TurnInteractionContinuationIntegrationTest`、`SubAssistantRunCoordinatorTest` | Mock Runner 委托只证明入口；continuation、Parent/Child 终态与正式页面需观察真实边界 |
+| Settings 与启动恢复 | `SettingsStartupTest`、`ApplicationRecoveryCoordinatorTest` | 真实 DataStore 文件/migration 的保全重试、observer 归属，以及恢复顺序、门禁、取消与 retry |
+| 企业 Session、退出与页面恢复 | `RealmAccessTest`、`EnterpriseExitServiceTest`、`PlatformSessionNetworkTest`、`RemoteWorkspaceServiceTest`、`ConversationQueryServiceTest`、`ChatPageLifecycleTest` | 旧到期事件、撤权、迟到结果和重试不误用新 Session；读失败保留原异常与输入，真实撤权关闭原 lease |
+| Starter 与平台合同 | `StarterOpeningSelectionTest`、`StarterOpeningConcurrencyTest`、`ConversationPageAccessTest`；`PlatformContractSourceTest`、`PlatformCoreStarterContractTest`、`PlatformWireTest`、`EnterpriseStarterAppliedStoreTest` | 完整定义比较、原发布身份、选择 CAS、精确补偿、v4/v5 消费、ETag/304 与 Applied 重开 |
+| Android 上下文与首发 | `EnterpriseStarterPersistenceAndroidTest`、`StarterSubmissionOwnershipAndroidTest`；`ChatContextFlowAndroidTest`、`ChatDocumentContextFlowAndroidTest`、`ConversationContextAndroidTest`、`StarterEntryFlowAndroidTest`、`StarterV5ChatFlowAndroidTest` | Keystore/AtomicFile、Room、附件归还、取消和页面重开；分别标明 Mock 的配置、网络与 Provider 边界 |
+| JavaScript 工具 | `JavascriptToolTest`、`JavascriptRuntimeAndroidTest` | 前者使用桌面 QuickJS 验证截止、取消、格式化陷阱及限额；Android JNI、双 ABI 和 Release R8 需独立证据 |
 
-离线 Core fixture 保护十项可选默认、模型引用闭包、generation 和拒绝语义；真实平台结果要记录所用 Core/Provider 身份与场景。失败注入必须观察已提交事实，不能让返回空集合的替身掩盖退出、清理或恢复错误。
+Artifact、GeneratedMedia、备份、MCP、Workspace 与 Speech 的行为测试随各自 Store、service 或 runtime 定位。
+Portal 的 JVM/本机 HTTP 测试观察文档及 Session 绑定、迟到请求、一次性兑换和媒体额度；WebView detach、
+媒体采集释放、AndroidKeyStore 与正式权限/后台路径仍需 Android 或显式 live 场景。
+配置提交失败注入不能冒充设备磁盘故障，返回空集合的替身不能掩盖退出、清理或恢复错误。
 
-企业和聊天恢复的行为入口为 `RealmAccessTest`、`EnterpriseExitServiceTest`、`PlatformSessionNetworkTest`、
-`RemoteWorkspaceServiceTest`、`ConversationQueryServiceTest` 与 `ChatPageLifecycleTest`。应分别验证旧到期事件及失败重试
-不会关闭已续期 Session、时钟回拨后仍最终到期、access token 拒绝与 refresh credential 终态的区别、不可重放输出和写入、
-仍有权限的读失败保留原异常与输入并只重订阅读取，以及最近聊天记录失败不撤销页面或丢失导入。真实撤权仍必须关闭原 lease，
-取消不能显示为失败；Mock HTTP 和 JVM 错误注入不代替真实 Core/Agent Space 或页面交互验收。
+### Provider 线协议
 
-- **禁止 wall-clock 等待**：不用 `Thread.sleep`、固定 `delay` 后猜状态、轮询到 timeout。用 `runTest`、`CompletableDeferred`、`Channel`、`Mutex` barrier、`TestCoroutineScheduler`、`advanceUntilIdle`。
-- 真实平台的负行为测试可保留明确的观察窗口（如暂停期间不得开始播放）；窗口只观察该时间段的禁止行为，不能用它猜测合成或 collector 已完成。完成与顺序断言等待真实可观测状态，跨线程记录用 StateFlow/Channel 交接。
-- **竞态测试必须有显式交接点**：说明它控制的 barrier（START commit 前/后、Provider 首输出前、response 后 pending checkpoint 前、Tool STARTED commit 后 side effect 前、result commit 后 Artifact publish 前、terminal commit 中），不依赖调度器"碰巧"切换。
-- **取消原因 first-wins**：覆盖 user stop、superseded、parent cancelled、policy revoked、process restart、provider failure 与 cancel 并发；只测一次最终 durable outcome，UI presentation 不重复推导 terminal truth。
-- **资源所有权**：Artifact/Tool resource 测试观察 lease 状态机（unpublished→checkpointed→published→discarded/retained），不能只验文件"存在/不存在"。
-- **Mock vs Fake**：核心状态机禁止大面积 `relaxed = true`。Mock 适合单次 leaf call、Android framework adapter、无状态查询 port；Fake 适合 Provider stream、Tool execution、commit protocol、Repository transaction、Artifact lease、MCP runtime state。
+- 共享请求装配、历史选择、内容顺序、`Tool.stepId` 与 receipt 由 app/共享模型测试负责，媒体由 transformer 测试负责。
+- 各 adapter 分别验证序列化、响应/usage 解析及 opaque replay；`ProviderRequestContractFixtures.kt` 共享输入，不用复杂基类合并不同 wire。
+- `StepOutputAccumulator` 验证跨 chunk 参数与 reasoning 合并，本机 HTTP/SSE fixture 验证 listener 的 EOF、终态、重复 ID 与交错调用槽。
 
-## 8. 单个测试的取舍标准
+Core Snapshot、manifest 和共享 cases 的来源见 [配置架构](android-configuration-architecture.md)。
+`contracts/runtime/managed-snapshot-required.json` 来自 platform-core 同名 Problem fixture；Android 自有 Mock 不是跨端合同的权威来源。
 
-**保留**须至少保护一项：durable 数据完整性、Provider wire 正确性、安全/授权/路径边界、用户可见关键行为、并发/取消/恢复/事务/资源所有权、曾真实发生且易回归的输入边界、明确的跨版本兼容；且观察稳定结果而非私有实现、失败能说明破坏了哪条契约、与其他测试无完全相同保护范围、能确定运行。短测试不自动低价值。
+### 静态架构边界
 
-**删除**须满足至少一项：对应能力已从实现中删除；相同语义已被更靠近 owner、诊断更好的测试完整覆盖；类型系统/DB 约束已使该错误无法构造；只检查私有函数/字段名/文件位置/exact source snippet；无可导致业务失败的断言；只是模板；重复验证框架自身；依赖已被当前执行路径替代的旧 fixture。
-**不得**因文件小/大、测试旧、migration 版本旧、跑得慢但验真实 Android/Room 契约、"看起来不会再改"而单独删除。
+`ArchitectureDependencyTest` 锁定 UI/application/query 依赖方向和唯一写入职责；`RetiredSurfaceContractTest` 防止已移除接口回归；
+`TurnStepProtocolContractTest` 限制 Turn 对 Workspace 输出路径和恢复对 render overlay 的依赖。
+三者复用 `ArchitectureSources.kt`，只约束 owner、依赖方向和退休接口；不复制源码片段或代码行顺序来证明 CAS、取消或 UI 行为。
+失败信息应定位被破坏的约定，避免同一禁令散落到多份扫描测试。
 
-合并前逐项核对输入边界、实际调用的生产入口和断言；把独有断言转入保留用例，再删除重复 fixture。
-有限状态或 endpoint 参数矩阵可在同一用例中逐行验证，并在断言中标出失败输入；不同 adapter 的 wire 契约仍分别保留。
-迁移的数据保全用例已通过 `MigrationTestHelper.runMigrationsAndValidate` 验证同一路径时，可合并仅重复列、外键与索引语义的 schema 用例；独有约束与失败路径仍需保留。
-Room 对默认 `index_` 前缀的索引名不逐字比较，旧名清理等确有意义的名字约束需保留显式断言。
-DAO 行为调用实际 DAO，不把测试内手写的同形 SQL 当成生产更新协议；Compose 恢复测试必须让被测状态由真实保存机制持有，外部变量存活只证明交互绑定。
+## 3. 确定性与测试取舍
 
-## 9. 验证命令
+JVM 竞态测试用 `runTest`、`CompletableDeferred`、`Channel`、`Mutex` barrier 和测试调度器控制交接，
+不靠固定 sleep/delay 猜测完成。注明控制的生产边界，例如 START 提交、Provider 首输出、工具 STARTED 提交、
+结果提交与资源发布；跨线程状态通过 StateFlow/Channel 等可观察机制交接。
 
-- Windows 用 `gradlew.bat`，macOS/Linux 用 `./gradlew`；本仓库串行运行：`--no-parallel --max-workers=1`。
-- 定向验证：`gradlew.bat :app:testDebugUnitTest --tests "<FQCN>" --no-parallel --max-workers=1`（或 `:ai:` 等对应 module）。
-- 架构或跨模块变更的完整门禁：
-  `gradlew.bat test assembleDebug lintDebug assembleRelease --no-parallel --max-workers=1`。
-- 设备/DB migration/Compose instrumentation/真实系统集成用 `connectedDebugAndroidTest` 及对应真机/模拟器场景；构建或 JVM 通过不等于设备验收通过。
-- 无 ignored/quarantined critical test，无永久 retry。
+取消测试覆盖 first-wins 的停止原因及失败并发，观察最终持久结果和资源实际退出，不从 UI 再推导一次终态。
+资源测试观察资源取得、提交、发布和回滚的所有权，不只检查文件是否存在。
+核心状态机使用确定性 fake；Mock 用于叶子调用、平台适配和无状态查询，避免依赖整体 `relaxed = true`。
 
-## 10. CI 与性能证据
+设备或外部进程可用有界条件等待真实状态。负行为允许明确的观察窗口，如暂停期间不得播放；
+窗口不能证明合成或 collector 已结束。Compose 持锁 IO 通过后台交接，不嵌套 `runBlocking` 阻断持锁协程。
+失败后重跑通过只证明该次重跑，不得用自动 retry、扩大等待或放宽断言代替根因分析。
 
-`.github/workflows/verify.yml` 在 PR、主分支 push 和手动运行时执行全模块 JVM、Debug/Release 构建、lint、diff 检查和 Room schema 生成一致性检查，再在 Android 模拟器运行完整 `connectedDebugAndroidTest`。设备门禁适用于所有 PR，包含数据库、Runtime、Artifact、子助手和 UI 变更；失败保留测试报告，不自动 retry。`release.yml` 复用该门禁，成功后才进入签名与发布。
+保留能保护数据完整性、wire、授权/路径边界、关键用户行为、并发恢复或真实兼容性的测试，观察稳定结果并给出可定位失败。
+删除或合并前核对实际生产入口、输入边界和独有断言；仅当能力已移除、保护范围完全重叠或断言没有业务价值时删除。
+文件大小、年代、migration 版本或运行速度本身不是删除理由。
 
-性能入口复用 `:app:baselineprofile:connectedBenchmarkReleaseAndroidTest`：`StartupBenchmarks` 测量冷启动；`TurnWorkloadBenchmarks` 使用 AndroidX Macrobenchmark 的 `TurnWorkloadMetric`（`TraceMetric`），通过真实生产 owner 执行以下场景：
+- 有限状态矩阵可在同一用例逐项断言并标明失败输入；不同 adapter 的 wire 仍分开保护。
+- `MigrationTestHelper.runMigrationsAndValidate` 已覆盖的重复 schema 断言可合并，数据保全、独有约束与失败路径仍保留。
+- Room 默认 `index_` 名称不必逐字比较；旧索引清理等真实兼容约束需明确断言。
+- DAO 测试调用实际 DAO，不能以手写同形 SQL 替代；Compose 保存恢复让真实保存机制持有状态，不能靠测试外部变量存活。
 
-- 10,000 次活跃 Assistant chunk 合并。
-- 1,000 条历史的请求规划与装配。
-- 100 个大型 Tool Result 的 rolling compaction 规划。
-- 50 个 Tool schema 冻结与请求预算计算。
-- 1,000 个含大型 legacy transcript 的真实 Room 迁移，使用导出的 v10 schema 建立隔离数据库。
-- 100 MB 工具输出经真实 ArtifactStore/ToolOutputStore 的 read 与 grep。
-- 1,000 条历史下的 100 次活跃 Assistant 更新，通过真实 presentation 与 ChatMessage 渲染，并采集 `FrameTimingMetric`。
+## 4. 验证命令与 CI
 
-输入构造在 Trace 测量段外，使用完整编译并重复采样。`measureWorkload` 是同步 workload 唯一测量边界：Perfetto slice 记录耗时，边界前后的 ART `art.gc.bytes-allocated` 差值记录近似 Java/Kotlin 分配字节；Compose 从首帧完成后到第 100 次更新完成记录同口径分配。该平台统计是进程范围、近似且可能延迟，包含区间内其他线程与测量开销，不是精确对象计数、native allocation、存活堆或峰值内存。缺少平台统计直接失败，不记为零。驱动 Activity、数据库与 payload 隔离 fixture 仅在 `app/src/benchmarkRelease`，不会进入正式 Debug/Release APK；不用 synthetic legacy implementation 作为对照。
+先运行最近的定向测试，再按风险扩大。纯文档只需事实、链接、编码与最终 diff 检查；
+架构或跨模块/数据契约变更需完整门禁，Android 平台、数据库迁移或 Compose 变更还需设备门禁。
+Windows PowerShell 使用以下命令，macOS/Linux 将入口换为 `./gradlew`；所有 Gradle 验证串行执行：
 
-在已连接设备上定向执行：
-
-```text
-gradlew :app:baselineprofile:connectedBenchmarkReleaseAndroidTest '-Pandroid.testInstrumentationRunnerArguments.class=me.rerere.baselineprofile.TurnWorkloadBenchmarks' --no-parallel --max-workers=1
+```powershell
+.\gradlew.bat :app:testDebugUnitTest --tests "<完整测试类名>" --no-parallel --max-workers=1
+.\gradlew.bat test assembleDebug lintDebug assembleRelease --no-parallel --max-workers=1
+.\gradlew.bat connectedDebugAndroidTest --no-parallel --max-workers=1
 ```
 
-`TurnWorkloadMetric` 用当前迭代的目标进程查询 Perfetto：同步 workload 必须恰好有一个 slice 和一个 allocation counter；Compose 汇总所有活跃消息 slice 并读取最终 composition counter，分配 counter 仍必须恰好一个。每次冷启动采集独立 trace，不跨迭代保存计数。设备要求 API 29+（平台 `Trace.setCounter`）。
+定向任务按实际模块替换。关键测试不能永久忽略、隔离或自动重试；需要外部资源的 opt-in 场景按下一节单独记录。
 
-AndroidX JSON 的 `sampledMetrics` 保留每轮耗时与 `JavaAllocatedBytesApprox` 的 `runs` 原始样本，并由库写出 `P50/P90/P95/P99`；Compose 同时保留 `FrameTimingMetric` 的逐帧分布。`migratedRows` 是 SQL 验证出的迁移行数，`toolOutputInputBytes` 是扫描输入文件大小，`activeAssistantCompositions` 是活跃消息已提交的 composition 次数（含初始 composition）。文件大小不是操作系统实际 IO 字节，composition 次数不是 Compose 内部所有函数的重组次数；这些口径不能互相代替。各 measurement 可回查同次 `.perfetto-trace` 的 slice/counter。
+`.github/workflows/verify.yml` 在 PR、主分支 push、手动或复用调用时运行全模块 JVM、Debug/Release 构建、lint、diff
+和 Room schema 生成一致性检查，再运行模拟器 `connectedDebugAndroidTest`，失败仍上传报告。
+`release.yml` 复用该门禁，通过后才签名与发布。CI 关闭模拟器硬键盘；普通 CI 不提供下述 opt-in live 环境。
 
-`.github/workflows/benchmark.yml` 提供手动模拟器诊断，保留 AndroidX JSON 与 Perfetto trace。它不设性能 pass/fail 阈值。固定实机与固定系统上采集的结果才能与同环境 baseline 比较；模拟器或开发机结果不能冒充受控门禁，执行入口存在也不代表已经采集基线。
+## 5. 设备与显式集成场景
 
-指标 API 依据：[Android Debug runtime statistics](https://developer.android.com/reference/android/os/Debug#getRuntimeStat(java.lang.String))、[AndroidX TraceMetric](https://developer.android.com/reference/androidx/benchmark/macro/TraceMetric)、[Metric.Measurement](https://developer.android.com/reference/androidx/benchmark/macro/Metric.Measurement)。
+`connectedDebugAndroidTest` 使用专用测试 AVD，并用 `ANDROID_SERIAL` 明确目标。AGP 安装/卸载可能清理 Debug
+私有数据，测试内 finally 无法保护包级卸载，不能直接用于日常或演示设备。先运行普通门禁；需要已接入状态的 live
+用例采用保留数据的安装与直接 instrumentation。检查设备 loopback Mock 所需的网络条件和系统 HTTP 代理，
+临时设置验证后还原。IME 场景要求实际非零 inset 的停靠软键盘，键盘未出现不能改为跳过或修改生产输入配置。
 
-## 11. 上下文与 Starter 的验证入口
-
-以下是测试定位表，不是执行结果。测试实现存在、JVM 通过、设备通过和真实服务通过必须分别记录。
-
-| 契约 | 主要测试入口 | 必须观察的边界 |
+| 场景 | 启用参数与前提 | 证据边界 |
 | --- | --- | --- |
-| 请求冻结、状态对账与重试 | `TurnRequestAdmissionTest`、`ConversationDisclosureReconciliationTest`、`TimeReminderTransformerTest` | 自身成功工具效果、外部变化、缺失状态恢复、完整状态大小、时间来源与重试输入不变 |
-| 上下文存储与历史查看 | `ConversationContextPayloadTest`、`ConversationContextPruneTest`、`ConversationContextQueryTest`、`ConversationContextPresentationTest` | 原文保全、分支/variant 适用性、无 admission 的历史、迟到结果拒绝和按需读取 |
-| 开场选择与首发 | `StarterOpeningSelectionTest`、`StarterOpeningConcurrencyTest`、`ConversationPageAccessTest` | 完整定义比较、原发布身份、选择 CAS、精确补偿、v4 清除旧绑定 |
-| 平台合同与 Applied | `PlatformContractSourceTest`、`PlatformCoreStarterContractTest`、`PlatformWireTest`、`PlatformSessionNetworkTest`、`EnterpriseStarterAppliedStoreTest` | Core 导出来源、v4/v5 严格消费、ETag/304、拒绝后保全及文件重开 |
-| Android 持久化与输入所有权 | `EnterpriseStarterPersistenceAndroidTest`、`StarterSubmissionOwnershipAndroidTest` | 真实 Keystore/AtomicFile、Room、附件归还、提交中取消与恢复 |
-| 实际聊天与详情 | `ChatContextFlowAndroidTest`、`ChatDocumentContextFlowAndroidTest`、`ConversationContextAndroidTest`、`StarterEntryFlowAndroidTest`、`StarterV5ChatFlowAndroidTest` | 实际发送输入、更新位置、原文按需查询、三个入口、首发和 Activity 重开；明确各用例的 Mock 边界 |
+| Starter v5 隔离 Mock | `starterV5MockLive=true`；专用且从未绑定企业的设备 | 实际 UI、Applied、Session、Room 与 adapter，HTTP 为 Mock |
+| Starter v5 Core | `starterV5CoreLive=true` 与 `coreStarterInput` | 真实 Snapshot/Starter/临时接入资料，输入读取后删除；区分确定性 adapter 和实际 Provider |
+| 已接入平台上下文 | `platformContextLive=true`；可选 `platformContextModelSwitch=true` | 记录发布身份、实际版本与 Provider 结果；v4 不证明 v5 opening |
+| 远程文件 | `remoteWorkspaceInput`；未接入专用设备和独立 Core/Agent Space | 配置文件与主机配合步骤见下文，普通门禁无输入时跳过 |
+| Linux Rootfs | `prootRootfsUrl`；匹配 ABI 的已核验镜像 | `WorkspaceProotAndroidTest` 使用临时 Workspace；native PTY 不证明 PRoot，页大小和 ABI 分别记录 |
+| HTTP ASR 上传 | `httpAsrLiveAudio=true`；持续有效麦克风输入 | `HttpAsrLifecycleInstrumentedTest`；模拟器底噪不满足有效信号，跳过不算上传成功 |
 
-Core Snapshot、manifest 与共享 cases 的来源由 [配置架构](android-configuration-architecture.md)维护。
-`contracts/runtime/managed-snapshot-required.json` 来自 platform-core 同名 Problem fixture，
-供平台 Runtime/MCP 测试消费；Android 自有 Mock 不成为跨端合同的权威来源。
+Gradle 参数用 `'-Pandroid.testInstrumentationRunnerArguments.<name>=<value>'`，避免 PowerShell 拆分。
+缺 Rootfs fixture 明确跳过；ASR 录音中取消与准入撤销可独立于完整上传验证。
+旧/当前客户端的 Core 兼容探针由 [兼容性验证工具](../../tools/compatibility/README.md)维护，入口是
+`PlatformSnapshotCompatibilityLiveAndroidTest`。旧 APK 使用其固定提交和独立探针，不能换用当前 DTO 声称覆盖旧客户端；
+版本故障注入不等于 Core 正式发布。
 
-Activity 重开不等于数据库关闭后重开或进程重启。fixture 的 Repository ACK 不能代替落盘证据，
-确定性 HTTP adapter 也不能代替真实 Provider 成功响应。设备测试等待可观测条件，不能用固定延迟、
-自动重试或放宽断言隐藏失败；一次失败后重跑通过只证明该次重跑通过。
+### 远程文件 live 的准备与运行
 
-## 12. 设备与显式集成场景
+`RemoteWorkspaceLiveAndroidTest` 从目标应用 cache 内读取 `remoteWorkspaceInput` 指定的 JSON，随即删除输入文件。
+设备必须没有 Session、待接入资料或旧身份。通过真实 enrollment owner 接入；主机只操作专属测试用户，不改变全局发布。
 
-旧客户端与当前客户端的 Core 兼容探针由 [兼容性验证工具](../../tools/compatibility/README.md)维护。
-`PlatformSnapshotCompatibilityLiveAndroidTest` 验证实际发布身份、支持版本、拒绝后的 Applied/历史保全与同 Session 恢复；
-历史 APK 使用固定提交和独立探针，不能换用当前 DTO 后声称验证旧客户端。版本故障注入不冒充 Core 正式发布。
+| JSON 字段 | 含义 |
+| --- | --- |
+| `enrollment` | 必填，真实临时接入字符串 |
+| `configurationPublished` | 默认 `false`；未发布环境要求 `activeManagedGeneration=0` 并断言 Pending/无 Applied；已发布环境设 `true`，显式同步后断言 READY/Applied |
+| `expectedMcpAvailable` | 默认 `false`，须与隔离用户的真实 MCP 投影一致；文件资格与 MCP 分别断言 |
+| `lifecycle` | 默认 `false`；设 `true` 时需要主机配合断开、恢复及空间替换 |
 
-`connectedDebugAndroidTest` 使用独立测试 AVD，并以 `ANDROID_SERIAL` 明确目标。AGP 安装/卸载可能清理
-Debug 包私有数据，测试的 finally 无法保护包级卸载；不得对保存日常或生产演示数据的设备直接运行。
-先完成普通设备门禁，再为需要已接入状态的 live 用例采用保留数据的安装与直接 instrumentation。
-本机 HTTP Mock 场景使用设备内的 loopback 服务；门禁前检查专用 AVD 的系统 HTTP 代理，临时禁用继承的不可用代理，
-并在验证结束后还原原值。代理连接失败不能归为 UI 点击或恢复门禁超时，也不能用重跑或放宽等待掩盖。
+用例覆盖 64 MiB 摘要往返、BOM/正文标记/CRLF、创建/复制/移动条件写入、覆盖确认竞态、双编辑者冲突与另存、
+慢下载取消和切域关闭，以及原生预览、编码 Markdown 相对图片和真实目录选择对账。
 
-| 场景 | 启用参数与前提 | 证据限制 |
-| --- | --- | --- |
-| Starter v5 隔离 Mock | `starterV5MockLive=true`；专用且从未绑定企业的设备 | 实际 UI、Applied、Session、Room 与 adapter；HTTP 为 Mock |
-| Starter v5 Core 联调 | `starterV5CoreLive=true` 与 `coreStarterInput` | Core 提供真实 Snapshot、目标 Starter、临时接入资料；分别记录确定性 adapter 或实际供应商环境；输入文件读取后删除 |
-| 已接入平台上下文 | `platformContextLive=true`；可选 `platformContextModelSwitch=true` | 使用当前发布资源；记录 release/hash、实际版本及 Provider 结果，v4 不能证明 v5 opening |
-| 远程文件真实链路 | `remoteWorkspaceInput` 指向专用设备应用 cache 内 JSON，包含 `enrollment` 字符串；可选 `lifecycle: true`、`expectedMcpAvailable`（默认 false，必须与隔离用户实际投影一致）、`configurationPublished`（默认 false） | `RemoteWorkspaceLiveAndroidTest` 要求未接入测试设备和独立 Core/Agent Space；输入读取后删除。通过真实 enrollment owner 接入；未发布配置环境要求 `activeManagedGeneration=0`，断言 Pending 且无 Applied 并验证文件读写，已发布配置环境使用 `configurationPublished: true` 显式同步后断言 READY 和 Applied，不能把初始化或显式同步后的 READY 记作无 Applied。单独断言实际 MCP 投影，不更改 Core 的全局发布。验证 64 MiB 摘要往返、BOM/正文标记/CRLF、创建及复制移动条件写入、覆盖确认竞态、双编辑者冲突与另存、慢下载取消和切域关闭、原生预览、编码 Markdown 相对图片、真实目录选择对账。生命周期模式在 cache 写出 `remote-workspace-step.txt`，主机按 disconnect、restore、files、replace 对专属测试用户执行管理动作，完成后先写同目录临时文件，再原子重命名为对应 `remote-workspace-<step>.done`（内容 `ok`），避免设备看见尚未写完的回执；验证恢复时文件资格和替换空间后的旧句柄读写拒绝；最后按输入断言已发布配置保持 READY 或未发布配置仍 Pending。普通设备门禁仍条件跳过，不能替代显式真实服务联调 |
-| Linux Rootfs | `prootRootfsUrl` 指向匹配 ABI 的已核验镜像 | `WorkspaceProotAndroidTest`；系统 shell 的 native PTY 测试不证明 PRoot；4 KB/16 KB 与 arm64/x86_64 分别记账 |
-| HTTP ASR 完整上传 | `httpAsrLiveAudio=true`；持续有效麦克风输入 | `HttpAsrLifecycleInstrumentedTest` 的上传/上传中取消；模拟器底噪不满足有效信号检查，跳过不能记为上传成功 |
+生命周期模式在 cache 写出 `remote-workspace-step.txt`，主机依次响应 `disconnect`、`restore`、`files`、`replace`：
+完成对应专属用户管理动作后，在同目录写临时回执，再原子重命名为 `remote-workspace-<step>.done`，内容必须为 `ok`。
+设备先检查旧回执不存在，再等待并消费新回执；避免预写或让它看到未完成内容。
+用例观察恢复时文件资格和替换空间后的旧句柄读写拒绝，最后同步并按 `configurationPublished` 断言最终配置状态。
 
-参数通过带引号的 `'-Pandroid.testInstrumentationRunnerArguments.<name>=<value>'` 传入 Gradle，避免 PowerShell
-拆分。Rootfs 场景使用独立临时 Workspace，缺 fixture 明确跳过；ASR 的录音中取消与准入撤销仍可独立验证。
+cache 中的 `remote-workspace-live-evidence.json` 在 finally 写出，失败时可能只有部分结果；保留它和测试报告、截图一起判断，
+文件存在不能单独证明通过。测试创建的远端验证目录与企业绑定不会自动清理，运行后由专用环境管理流程处理。
 
-IME 用例要求实际非零 inset 的停靠软键盘，CI 关闭硬键盘；未出现键盘不能转为跳过或修改生产输入配置。
-临时系统设置必须在 finally 恢复。Compose 测试中的持锁 IO 使用后台交接和有界条件等待，不嵌套
-`runBlocking` 阻断持锁协程；UI 操作与等待应遵循当前 Compose 测试调度器。
+每次交付记录源码/构建身份、设备和 ABI、报告、失败与跳过原因，以及实际 Core/Provider 身份。
+设备、真实服务、声学输入与生产环境分别说明；参考文档维护验证方法，不累计历史通过数量。
 
-每次交付保留对应源码/构建身份、测试报告、失败记录及跳过原因，设备、声学输入、真实服务和生产环境
-分别说明。参考文档只维护如何验证，不累计历史通过数量或把旧 APK 的结果写成当前验收。
+## 6. 性能证据
+
+性能入口为 `:app:baselineprofile:connectedBenchmarkReleaseAndroidTest`：`StartupBenchmarks` 测冷启动，
+`TurnWorkloadBenchmarks` 以完整编译、冷启动和重复采样调用真实生产 owner：
+
+- 10,000 次活跃 Assistant chunk 合并、1,000 条历史请求装配、100 个大型工具结果压缩计划、50 个工具 schema 冻结与预算。
+- 从导出 v10 schema 建库，迁移 1,000 个含大型 legacy transcript 的节点；通过实际迁移链、schema 校验和 SQL 检查结果。
+- 100 MB 工具输出经 ArtifactStore/ToolOutputStore 执行 read 与 grep。
+- 1,000 条历史下进行 100 次活跃 Assistant 更新，分别测有/无上下文投影，并采集 `FrameTimingMetric`。
+
+驱动 Activity、数据库与 payload fixture 位于 `app/src/benchmarkRelease`，不进入正式 Debug/Release APK。
+输入构造在测量段外，设备要求 API 29+。在已连接专用设备上执行：
+
+```powershell
+.\gradlew.bat :app:baselineprofile:connectedBenchmarkReleaseAndroidTest '-Pandroid.testInstrumentationRunnerArguments.class=me.rerere.baselineprofile.TurnWorkloadBenchmarks' --no-parallel --max-workers=1
+```
+
+`measureWorkload` 用 Perfetto slice 记录同步耗时，边界前后 ART `art.gc.bytes-allocated` 差值记录近似 Java/Kotlin 分配。
+Compose 从首帧完成至 100 次更新完成记录同口径分配。统计是进程级近似值，包含其他线程与测量开销，
+不是精确对象计数、native 分配、存活堆或峰值内存；缺少统计直接失败，不记零。
+
+`TurnWorkloadMetric` 只查询当前迭代的目标进程：每个同步测量段恰有一个 slice 和一个分配 counter，
+Compose 汇总活跃消息 slice，读取最终 composition counter 和一个分配 counter，不跨迭代保存计数。
+AndroidX JSON 的 `sampledMetrics` 保留耗时与分配的原始 `runs` 及分位数，Compose 另保留逐帧分布；同次 Perfetto trace 可核对口径。
+`migratedRows` 是 SQL 验证行数，`toolOutputInputBytes` 是输入文件大小，`activeAssistantCompositions` 是含初次渲染的活跃消息 composition 次数，
+后两者分别不代表操作系统 IO 字节或 Compose 内全部函数重组次数。
+
+`.github/workflows/benchmark.yml` 仅供手动模拟器诊断，保留 JSON 与 trace，不设性能通过阈值。
+只有固定实机和系统下的结果适合与同环境 baseline 比较；有执行入口不代表已经采集基线。

@@ -43,29 +43,22 @@ Provider wire usage event
 | `totalTokens` | Provider 权威总量，或由 Adapter 明确授权后在单请求边界安全推导 |
 | `canDeriveTotalFromInputAndOutput` | 瞬态 Adapter 策略，不进入 durable `TokenUsage` |
 
-`TokenUsage` 保存 turn 累计 input/output/cache/细分/total，以及：
+`TokenUsage` 保存 Turn 累计 input/output/cache/细分/total。请求审计与累计字段按以下边界更新：
 
-- `peakRequestContextTokens`：本 turn 所有已关闭请求中 `inputTokens + outputTokens` 的最大值，只增不减。
-- `latestRequestContextTokens`：只覆盖为最新一次请求的 canonical input；最新请求未报告时写 `null`，不能继承旧值。
-- `latestRequestOutputTokens`：只覆盖为最新一次请求的 output；缺失写 `null`，不能拿 turn 累计 output 代替。
-- `latestRequestCacheReadInputTokens`：只覆盖为最新一次请求的 cache read；缺失写 `null`，显式零保留为零。
-- `latestRequestOutputDurationMillis`：只覆盖为最新一次已关闭请求从首个模型输出到响应流关闭的输出阶段时间；用于
-  canonical 请求审计，不包含 TTFT。
-- `latestRequestEstimatedContextTokens`：每次 Provider 请求发出前，对经过输入 transformer 的最终消息投影和工具 schema
-  做出的稳定 token 粗估；请求一旦发出就刷新，不等待 Provider usage。
-- `latestRequestTimeToFirstOutputMillis`：本 turn 最近一次实际产生首个有效模型输出的请求 TTFT；无输出请求不覆盖旧值。
-- `latestRequestCacheHitPercent`：只覆盖为最新一次已关闭请求的命中率，由该请求的 cache read 与 canonical input 得出；
-  缺字段写 `null`，不能继承上一请求。它与 `latestRequestContextTokens` 严格同属一次请求，因此命中率的分母始终是摘要
-  中显示的那个上下文值。
-- `latestRequestTokensPerSecond`：只覆盖为最新一次已关闭请求的吞吐率，由该请求的 output 与输出阶段时长得出；缺字段写
-  `null`，不能继承上一请求。
-- `observedProviderRequestCount`：当前 turn 中已经关闭并加入累计的 Provider 请求数。
-- `observedUsageReportedRequestCount`：上述请求中至少报告一个 usage 字段的请求数。
-- `providerRequestDurationMillis`：各 Provider 请求从发起到响应流关闭的墙钟时间之和，不包含工具执行和审批等待。
-- `initialRequestTimeToFirstOutputMillis`：本 turn 第一次 Provider 请求发起到首个有效模型输出 chunk 的时间；只记录 ordinal 1，后续请求不累计、不覆盖。
-- `successfulToolOutputCompactionBatchCount`：当前 turn 成功随 checkpoint 提交的 Tool Output 滚动裁剪批次数；一批替换多个结果仍只加一。
-- `inputCompleteness`、`coreCompleteness` 与 `cacheReadCompleteness`：输入、核心量与 cache-read 各自独立的完整性。
-- `semanticsVersion`：当前新记录为版本 6；缺少该字段的历史记录解释为版本 1。
+| 字段 | 更新边界与缺失语义 |
+| --- | --- |
+| `latestRequestContextTokens`、`latestRequestOutputTokens`、`latestRequestCacheReadInputTokens` | 最新请求关闭时同时覆盖；分别为该请求 input、output、cache read，缺失写 null |
+| `latestRequestOutputDurationMillis` | 最新请求首个有效输出至关闭的时间，不含 TTFT；无输出则 null |
+| `latestRequestCacheHitPercent`、`latestRequestTokensPerSecond` | 最新已关闭请求的 cache read/input、output/输出阶段时长；所需字段不全则 null，不沿用旧值。前者仅供请求审计，底栏另用 Turn 累计命中率 |
+| `latestRequestEstimatedContextTokens` | 请求发送前按最终消息和工具 Schema 粗估，不等待 Provider usage；不是计费 token |
+| `latestRequestTimeToFirstOutputMillis` | 最近实际产生首个有效输出的请求 TTFT；无输出请求不覆盖旧值 |
+| `initialRequestTimeToFirstOutputMillis` | 仅记录本 Turn 第一个请求的 TTFT；后续请求不能补填 |
+| `peakRequestContextTokens` | 已知请求 input + output 的最大值；已有请求却无历史峰值时保持未知 |
+| `observedProviderRequestCount` / `observedUsageReportedRequestCount` | 已关闭请求数 / 其中报告 usage 的请求数 |
+| `providerRequestDurationMillis` | 所有请求从发起到关闭的墙钟时间之和，不包含工具执行或审批等待 |
+| `successfulToolOutputCompactionBatchCount` | 成功随 checkpoint 提交的非空滚动压缩批次数，一批多个结果仍只计一次 |
+| `inputCompleteness`、`coreCompleteness`、`cacheReadCompleteness` | 输入、核心量与 cache read 分别判定完整性 |
+| `semanticsVersion` | 当前写入版本 6；缺失时解释为历史版本 1 |
 
 所有加法使用 checked `Long`。负值、子集大于父项、可验证的 total 不一致或溢出不能被修成看似精确的数字；保留仍可证明的字段，记录 typed diagnostic，并只降低受影响的完整性。Provider 已报告的 total 不被公共层覆盖。
 
@@ -91,17 +84,8 @@ Provider wire usage event
 turn 聚合规则：
 
 - input、output、cache read/write、reasoning、tool-use 和 Provider request duration 分别按请求求和。
-- `peakRequestContextTokens` 对每个完整请求计算 `input + output` 后取最大值；后续请求只能提高或保持峰值。历史 turn
-  已经有请求但未保存峰值时，审批续跑仍保持峰值未知，不能拿续跑后的局部请求冒充整轮峰值。
-- `totalTokens` 按各请求的权威 total 求和，不在 turn 末尾用累计 input + output 重写。
-- 已终结的最新请求的 canonical input、output、cache read 和输出阶段 duration 一次性覆盖四个 `latestRequest*`
-  审计字段；usage 没有报告的字段覆盖为 `null`，不能继承上一请求。
-- 审计字段分别刷新：canonical input 在请求关闭后覆盖，估算在发送前覆盖，TTFT 在首个有效输出到达时刷新。
-  latest cache rate 与 tok/s 在请求关闭且所需字段明确时刷新，缺字段写
-  `null`，不继承上一请求；TTFT 表示最近一次实际产生首个有效模型输出的请求，无输出请求不覆盖旧值。任何摘要都不把缺失
-  解释为零。
-- `initialRequestTimeToFirstOutputMillis` 仍只记录本 turn 第一次请求，供历史/聚合审计；footer 使用每请求刷新的
-  `latestRequestTimeToFirstOutputMillis`。
+- `totalTokens` 按各请求的权威 total 求和，不在 Turn 末尾用累计 input + output 重写。
+- 最近请求字段、TTFT 与峰值按上表各自的边界更新，不能混用请求状态与累计值，也不能将缺失解释为零。
 - 没有 usage 的失败请求仍计入 `observedProviderRequestCount`，但不增加 `observedUsageReportedRequestCount`，并使相关 turn 完整性降级。
 - Provider 内容已经返回时，即使随后失败、取消或响应 incomplete，已收到的 usage 仍随原 turn 提交；取消异常继续传播。
 - Google / Responses 的非流式 HTTP 成功但协议失败响应先解码可用内容和 usage，再抛出携带该快照的
@@ -114,12 +98,12 @@ turn 聚合规则：
 
 ## 4. 四种线协议映射
 
-字段语义以供应商当前官方协议为准：[OpenAI Chat Completions](https://developers.openai.com/api/reference/resources/chat)、
-[OpenAI Responses](https://developers.openai.com/api/reference/cli/resources/responses/methods/create)、
+下表描述当前 Adapter 的映射；供应商协议入口：[OpenAI Chat Completions](https://developers.openai.com/api/reference/resources/chat)、
+[OpenAI Responses](https://platform.openai.com/docs/api-reference/responses)、
 [Anthropic prompt caching](https://platform.claude.com/docs/en/build-with-claude/prompt-caching)、
 [Gemini GenerateContent](https://ai.google.dev/api/generate-content) 与
 [Vertex GenerateContentResponse](https://cloud.google.com/vertex-ai/generative-ai/docs/reference/rest/v1/GenerateContentResponse)。
-兼容 endpoint 只有经过 `OpenAIEndpointProfile` 识别的 vendor 才能启用其专有 cache 方言。
+兼容 endpoint 只有经过 `resolveOpenAIEndpointVendor` 识别的 vendor 才能启用其专有 cache 方言。
 
 | 线协议 | canonical input / context | canonical output | cache read / write | total |
 | --- | --- | --- | --- | --- |
@@ -211,18 +195,11 @@ Stats 表示“当前域在数据库仍保留的 Provider usage”，不是账�
 - core/cache-read 非精确记录分别计数；存在 legacy、partial、none 或缺失 usage 时，以一行短说明标明统计包含旧版或不完整记录。
 - cache 已知累计为零时不显示缓存卡，避免把未知误呈现为精确零。
 
-## 9. 关键架构文件
+## 9. 修改边界
 
-| 边界 | 文件 |
-| --- | --- |
-| Canonical usage model / request snapshot | `ai/src/main/java/me/rerere/ai/core/Usage.kt` |
-| 四线协议 adapter | `ai/src/main/java/me/rerere/ai/provider/providers/openai/ChatCompletionsAPI.kt`、`ResponseAPI.kt`、`provider/providers/ClaudeProvider.kt`、`GoogleProvider.kt` |
-| Request reducer / turn accumulator | `app/src/main/java/net/weero/measix/pilot/data/ai/TokenUsageAccounting.kt` |
-| Provider 请求循环 | `app/src/main/java/net/weero/measix/pilot/service/turn/TurnRunner.kt`（多 Step 循环）、`StepRunner.kt`（单 Step 采样与 Provider 请求）、`TurnRunState.kt`（草稿与 checkpoint 交接） |
-| Checkpoint / continue owner | `app/src/main/java/net/weero/measix/pilot/service/turn/TurnCommitter.kt` |
-| 紧凑底栏与上下文预警 | `app/src/main/java/net/weero/measix/pilot/ui/components/message/ChatMessageNerdLine.kt`、`ui/pages/chat/ChatSizeChecker.kt` |
-| Stats durable SQL 投影 | `app/src/main/java/net/weero/measix/pilot/data/db/dao/MessageNodeDAO.kt` |
-| Stats query / UI 投影 | `app/src/main/java/net/weero/measix/pilot/service/StatsQueryService.kt`、`ui/pages/stats/StatsVM.kt`、`StatsPage.kt` |
+核心模型由 `Usage.kt` 的 `TokenUsage` / `ProviderUsageSnapshot` 定义，合并和累计在 `TokenUsageAccounting.kt`；Provider Adapter 产生单请求快照，
+`StepRunner` 交给原 Turn 提交链。变更计量语义时，核对 `RequestUsageReducerTest`、`TurnUsageTest`、
+协议 usage 测试及 `ChatMessageNerdLine` / `MessageNodeDAO` / `StatsQueryService` 的消费者口径。
 
 协议映射由 Adapter 负责，累计和完整性只由 request / Turn owner 负责。修改字段时需同步
 Stats SQL、序列化与消费者；测试分层和门禁见 [测试策略](testing-strategy.md)。

@@ -19,7 +19,7 @@
 | `TurnContextFactory` | START 前捕获 `TurnLaunchPlan`，START 后绑定冻结 `TurnContext` |
 | `TurnRunner` / `StepRunner` / `ToolBatchRunner` | 多 Step 循环、单次采样、工具批次门禁与串行执行 |
 | `TurnCommitter` | START、continue、checkpoint、stream 与终态提交适配 |
-| `TurnFinalizer` / `TurnRecovery` | 正常停止、失败和 被新请求替代时的终止与清理 / 进程重启恢复 |
+| `TurnFinalizer` / `TurnRecovery` | 正常停止、失败及被新请求替代时的终止与清理 / 进程重启恢复 |
 
 ```text
 ConversationTurnService / SubAssistantRunCoordinator
@@ -45,7 +45,9 @@ retention 在父会话成功提交后维护，不成为另一条消息提交路�
 `ConversationTurnService.editAndResend` 等待编辑提交才返回 `SendMessageReceipt`；提交前失败先将本次附件归还原 Draft，
 取消按已持久用户消息身份区分是否已经提交，不能让迟到取消删除已提交消息的附件。
 
-## 会话文件夹命令
+## 会话命令与授权
+
+### 文件夹命令
 
 `ConversationQueryService.foldersOfAssistant` 发布 `ConversationFolderDirectory`，即使目录为空也保留原助手及
 `RealmSelection`。抽屉在打开创建、重命名、删除或移动界面时固定此授权；确认不重新读取全局选中域。
@@ -62,7 +64,7 @@ retention 在父会话成功提交后维护，不成为另一条消息提交路�
 UI 等待命令结果后关闭对话框，错误可见，取消继续传播。
 移动到另一助手沿原 `MoveToAssistant` 同时清空 folder 和 Workspace cwd；重新选择同一助手不清空。
 
-## 普通会话操作授权
+### 普通会话操作
 
 页面通过 `ConversationViewLease.commandTarget` 取得原会话、RealmSelection 与页面生命周期检查；目录行通过
 自身 `ConversationSummary.commandTarget` 保留原选择。工具的只读摘要不能签发 UI 命令。手工标题、系统提示词、
@@ -118,6 +120,8 @@ Tool 的 `stepId` 指向前方最近的 Step，`localCallId` 在 owning Assistan
 
 ## START 与交互继续
 
+### Draft 与首条提交
+
 新聊天先是非持久化 Draft，首条 `AppendUserMessage` 单事务创建会话并原位晋升 Ready。共享预设附件在安装 Draft 前由 ArtifactStore 复制到目标域，创建令牌随原 Runtime 保留；重复打开不重复复制。提交失败保持 Draft 与附件，提交后沿原会话协议发布，闲置丢弃时同步交还 GC。细节见多模态持久化参考。
 页面打开通过 `ConversationApplicationService.initialize` 校验原 selected RealmAccess，再由 `openForView` 在会话锁内先检查
 resident/Room header 的完整 scope 与根会话身份，之后才加载消息树或安装显式 Draft。已有会话不存在时返回 Missing，禁止回退新建。
@@ -126,6 +130,13 @@ resident/Room header 的完整 scope 与根会话身份，之后才加载消息�
 最近聊天偏好只在观察到持久 Ready 并复查 Room header 后保存，空 Draft 不写最近聊天 ID。
 空 Draft 不进入数据库、列表或 Turn。发送先结束旧 owner、预处理输入和稳定附件，再提交 USER。
 START 前准备失败可以留下已提交 USER，但不能伪造已经开始的 Assistant Turn。
+
+`sendMessage` 返回的 `SendMessageReceipt.userMessageId` 是已持久提交 USER 的稳定身份；worker
+仅安装尚不足以返回成功。Draft 首条 USER 与 opening 同事务晋升 Ready，UI 只清理本次提交的文字/附件，
+不清理等待期间的新输入。START 或 Provider 后续失败保留已提交 USER，通过 Ready 重试。`editAndResend` 截断到目标 USER node、
+提交新 variant 后 START；纯 `editMessage` 不启动 Turn，也不创建 model-context entry。
+
+### 请求安装与输入交接
 
 发送、编辑重发和重生成必须携带原页面 `ConversationCommandTarget`；安装 worker 前在原 selection/Session 与根会话锁下复验。
 接受后的 worker 属于 AppScope，后续 USER/结构修改和 START 仍使用原 `RealmAccess`，页面关闭或切域不会改写其来源；退出重登不能恢复旧请求权限。
@@ -137,6 +148,8 @@ worker 在授权锁外先进入清理范围，再等待唯一 installation 结�
 输入附件通过 `ArtifactSubmission` 从编辑器转交本次请求：未接受时归还原编辑器，编辑器已经关闭则释放创建 pin；
 接受后由请求持有，USER 提交后发布实际引用，失败或取消时释放。每个请求独立持有输入 Artifact 的 retention lease，连续提交相同附件也不会因前驱结束而提前失去保护；创建 token 仍只有一个 owner。页面关闭不能提前释放已经转交的 pin。
 START 持久提交与 `TurnCommitter` 认领在同一不可取消边界内完成，提交后收到取消仍由原 committer 提交终态。
+
+### 冻结上下文与执行资源
 
 USER 预处理按原 RealmAccess 的已解析助手执行。START 前由 `ModelExecutionService` 在 Session → Settings 锁序下捕获助手、模型、媒体能力与用户文档内容 revision，随后 `TurnContextFactory` 冻结 prompt inputs、有序工具定义与执行绑定。同一 Turn 的 Step 和审批继续复用原上下文，不跟随全局当前域或选择。
 `TurnRunner` 在首次 Assistant 草稿交接时记录冻结模型的 `modelId`，不能等待首个 Provider chunk；首片段前失败或取消也保留本次尝试的模型归属。
@@ -155,10 +168,7 @@ USER 预处理按原 RealmAccess 的已解析助手执行。START 前由 `ModelE
 
 等待用户时，继续 worker 接手同一上下文及 lease；旧 worker 的结束不能释放它。终态或准备失败的资源释放在 Session/会话锁外等待；清理失败保留原 Runtime owner 供 stop 重试。持有执行 lease 的 Runtime 不得被空闲回收、显式驱逐或删除，清理成功后才移除 owner。
 
-`sendMessage` 返回的 `SendMessageReceipt.userMessageId` 是已持久提交 USER 的稳定身份；worker
-仅安装尚不足以返回成功。Draft 首条 USER 与 opening 同事务晋升 Ready，UI 只清理本次提交的文字/附件，
-不清理等待期间的新输入。START 或 Provider 后续失败保留已提交 USER，通过 Ready 重试。`editAndResend` 截断到目标 USER node、
-提交新 variant 后 START；纯 `editMessage` 不启动 Turn，也不创建 model-context entry。
+### 用户交互继续
 
 `TurnEntry.START` 可执行建议清理、无效消息清理和附件引用回填；`CONTINUE_USER_INTERACTION`
 保留原 owner，不执行这些结构预检。`ResolveToolInteraction` 校验完整 locator 和等待类型，事务提交后才
@@ -206,10 +216,6 @@ Turn 状态使用 insert-once 与合法 CAS；终态不可回退，重复同终�
 [提示词与工具](prompts-and-tools.md)。输出正则、think 标签与媒体落盘只处理当前 open Step。
 模型采样提交后，工具阶段发布已转换正文与工具 metadata，不再次套用流式正文变换。
 
-`ThinkTagTransformer` 只解释当前 Step 首个非空 Text 开头的 `<think>`；当前 Step 有 Provider 原生 Reasoning
-时不启用 fallback。派生 Reasoning 从 `Step.startedAt` 计时，闭合标签首次到达时固定 finishedAt，后续投影
-复用它；流结束只补未闭合标签的时间。阶段判定使用相同 raw message 语义。
-
 拥有新资源的 checkpoint 先检查取消，再在不可取消交接段内提交 durable root、更新 Assistant 槽、发布 lease。
 无工具 Final Step 的资源随 `FinalizeTurn` 落根。提交前取消或失败回滚未发布资源；提交已成功而 lease 发布
 失败时保留 durable 消息，不退回旧草稿。失败准备把未落盘 base64 转为 typed 失败占位。文件 owner、引用与
@@ -231,15 +237,24 @@ Assistant 落盘；达到 Step 上限为 Incomplete。
 先 Child 后 Master；无待恢复 Turn 时不加载会话树。缺失 owning Assistant、损坏 transcript 或非法
 model-context owner/anchor 使恢复失败关闭，不能以空会话或只改 execution 状态掩盖。
 
-Header command 不清除 active owner；冲突树命令必须结束或拒绝当前 owner。Registry 在无页面引用且无活跃
-Job 后可清理 Runtime。前台服务只通过 query port 观察活动，保活、通知与 UI 阶段不成为第二执行 owner，
+Header command 不清除 active owner；冲突树命令必须结束或拒绝当前 owner。Registry 只回收没有页面引用、活动
+任务和待释放执行资源的闲置 Runtime；Job 已结束不代表 stream 或资源清理已完成。前台服务只通过 query port 观察活动，保活、通知与 UI 阶段不成为第二执行 owner，
 具体投影见 [UI 架构](ui-architecture.md)。
 
-## 标题与子助手
+## 辅助生成、标题与摘要
+
+### 标题提交
+
+`ConversationTitleCoordinator` 拥有标题阶段、去重和有限重试。首条 USER 的确定性本地标题随
+`AppendUserMessage` 提交。模型标题使用 generation token + expected-title CAS，手动标题与模型提交共用
+Coordinator mutex；手动提交失效旧 token，因此 force 或迟到模型结果也不能覆盖它。重启后非空标题按
+RESOLVED 保护，不猜历史 provenance。
 
 `ConversationApplicationService.forkAtMessage` 在主子树和 Artifact clone 后，按 Session → 源标题协调 → 新树命令锁顺序提交。
 `ConversationTitleCoordinator.createForkWithTitle` 复用源会话的标题 commit mutex，将同域、同助手根会话的窄标题查询与 `createTree` 串行：从捕获的源标题选择首个空闲 `(n)` 后缀，空标题为 `(1)`；失败不预留编号，也不改变源标题的 generation token/阶段。
 编号是创建时可用的显示名称，允许不同源会话与手动标题重名，不设置全局唯一约束。clone 继续映射 `modelContextEntries` 和 `contextAdmissions`，标题修改不 prune 历史。
+
+### 后台任务与摘要提交
 
 `GenerationSideEffects` 将标题、建议和手动摘要登记到原 `ConversationRuntime`，每个 worker 持有原
 `RealmAccess`、原助手身份与输入快照。登记在原 Session 与会话准入锁内完成；模型捕获在锁外交给 `ModelExecutionService`，请求、结果和错误发布复验原 Session 与 worker。
@@ -258,10 +273,7 @@ Runtime 只有在任务完成且模型 lease 释放成功后才移除登记，�
 Artifact 垃圾清理由既有维护入口处理，不改变摘要已提交的结果。后台资源配置仍从有效设置读取，
 Provider/binding 的执行装配从冻结的原域配置与 Session 取得；任务身份验证不能代替实际资源准入、请求发送和结果提交。
 
-`ConversationTitleCoordinator` 拥有标题阶段、去重和有限重试。首条 USER 的确定性本地标题随
-`AppendUserMessage` 提交。模型标题使用 generation token + expected-title CAS，手动标题与模型提交共用
-Coordinator mutex；手动提交失效旧 token，因此 force 或迟到模型结果也不能覆盖它。重启后非空标题按
-RESOLVED 保护，不猜历史 provenance。
+## 子助手执行边界
 
 Child 与用户会话共用 TurnRunner / StepRunner / TurnCommitter。父 `assistant_call` 等待 Child 终态；
 Child ask_user 暂停原 Child Turn / Step，父 Turn 保持 RUNNING、execution 保持 STARTED。决定写入 Child，

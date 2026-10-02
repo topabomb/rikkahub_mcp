@@ -1,6 +1,6 @@
 # 应用架构
 
-本文定义 Pilot 当前的产品语义、模块边界、事实所有权和跨领域协议，是专题参考的总入口。具体字段、状态矩阵、线协议与界面规则由相应专题维护，不在总览重复。代码与静态契约是实现事实；发现不一致时核对代码并同步修正文档。
+本文定义 Pilot 当前的产品语义、模块边界、事实所有权和跨领域协议，是专题参考的总入口。具体字段、状态矩阵、线协议与界面规则由相应专题维护，不在总览重复。实现以当前代码和行为测试核实，静态契约只约束依赖与所有权；发现不一致时先查明原因，再同步修正文档。
 
 ## 产品语义
 
@@ -53,52 +53,37 @@ UI / ViewModel
 
 UI 不持有 DAO、ConversationRepository、Runtime Registry、Artifact/GeneratedMedia Store、payload 层或 Provider 容器。Query 组合只读事实，不反向发起 mutation；application service 负责编排，不创建第二套持久化协议。
 
-进程图片加载器由 `MeasixPilotApp` 的 `SingletonImageLoader.Factory` 提供，不依赖某个 Activity 首次组合或重新注册。受管图片仍经 `ImageSourceInterceptor` 在缓存读取前与结果交付后复验原读取能力；工厂不持有界面生命周期，也不把 cache key 当成授权。
-
-聊天页面通过携带原域授权的 `ConversationOpenRequest` 显式区分新建与打开已有会话，Application 校验成功后交付
-`ConversationViewLease`。Query 以该 lease 约束页面投影，ViewModel 负责关闭页面导入资源；域或 Session 变化使旧页面失效。
-此页面边界与会话命令、Turn 和文件 owner 各自的授权职责分开，不能用页面检查替代执行时的授权。
+聊天通过 `ConversationOpenRequest` 区分新建与打开已有会话，Application 校验后交付
+`ConversationViewLease`。页面、命令、Turn 与文件读取分别复验各自持有的原域身份，不能互相替代授权。
+导航、页面恢复和进程级 UI 宿主见 [UI 架构](ui-architecture.md)。
 
 边界按事实所有权和操作语义选择：单 owner 的操作直接扩展既有 typed contract；跨 owner、补偿或外部 SDK 流程才增加 application 编排。SettingsStore 和 SkillManager 可通过各自 typed contract 服务配置编辑；不能为了层数增加无语义的透传 facade。页面草稿、弹窗和选择态归 UI，跨页面存活的 Job、session 与资源归 application owner。
 
 ## 事实与唯一 owner
 
-| 事实或流程 | 唯一 owner 与入口 |
+| 事实或流程 | 责任组件与协作边界 |
 | --- | --- |
-| Conversation 命令串行化与 commit-then-publish | `ConversationCommandCoordinator`；application services 与领域 coordinator 提交命令 |
-| Conversation header/tree/variant | `ConversationTransition`；只产生结构 mutation |
-| Turn/Step/Tool transcript | `TurnTransition`；通过同一 command gate 与 Room 事务提交 |
-| Resident snapshot、streaming、active session | `ConversationRuntime`；`ConversationRuntimeRegistry` 管加载与生命周期，UI 只消费 presentation |
-| Conversation 事务持久化 | `ConversationRepository`；执行 command 产生的精确 delta 与 execution facts |
-| Turn 输入与上下文冻结 | `ConversationTurnService` / `TurnContextFactory`；工具集合由 `TurnToolSetFactory` 一次装配 |
-| 多 Step / 单 Step / 工具批次 | `TurnRunner` / `StepRunner` / `ToolBatchRunner`；单 Call 解析与执行包装归 `ToolCallRuntime` |
-| start、checkpoint、stream 与结果提交适配 | `TurnCommitter`；用户与 Child 共用 |
-| stop、failure、cancel 终态准备 | `TurnFinalizer`；恢复使用 `TurnRecovery` |
-| 子助手 run / lineage 与 retention | `SubAssistantRunCoordinator` / `SubAssistantLifecycle`；run 并发归 `SubAssistantRunGate` |
-| 标题 | `ConversationTitleCoordinator`；模型结果与手动标题串行，token + expected-title CAS |
-| 标题/建议/手动摘要任务 | `GenerationSideEffects` 绑定原 Runtime，`ModelExecutionService` 负责原域模型准入；树变更经原会话写协议 |
-| 会话读模型 | `ConversationQueryService` 与专用 reader/query port；目录与 Pager 归 Query，Repository/DAO 提供带 scope 的查询及 PagingSource，原 Session 校验归 EnterpriseSessionController |
-| 当前域统计 | `StatsQueryService` 在原选中域/Session 内聚合；StatsVM 负责取消旧查询及清空旧显示 |
-| 运行记忆 | `MemoryRepository` 唯一写入；`MemoryService` 编排原域 Session、配置授权和 UI 投影 |
-| Artifact metadata、reference、生命周期 | `ArtifactStore`；`ArtifactPayloadStore` 只做磁盘 IO，不持有 DAO |
-| 配置文件引用 | `SettingsStore` 唯一写入；`ArtifactSettingsCoordinator` 适配 Settings → Artifact 提交与清理协议，不另持锁或状态 |
-| 图库生成媒体 row、payload 与删除恢复 | `GeneratedMediaStore` |
-| 跨文件 owner 命令与列表 | `FileManagementApplicationService` / `FileManagementQueryService`；不成为第三个文件 owner |
-| 内部 attachment handle 索引 | `AttachmentReferenceLookup`；查询投影，不是文件读取授权 |
-| 用户定义、公用与按域偏好 | `SettingsStore`；`UserSettingsDocument` 单事务提交，个人 Settings 为只读投影 |
-| 企业身份、Session 与 Applied State | `EnterpriseSessionController` 串行写入 `EnterpriseAppliedStore`；平台 Discovery/Enrollment/Snapshot I/O 归 `PlatformEnterpriseService` |
-| 企业生产用量与预算 | Core 负责准入、结算和持久事实；Android 只提供绑定原 Session 的只读投影 |
-| 企业图片生成定义与执行 | Enterprise 定义与 resolver 目录；`ModelExecutionService` 捕获 route，`ImageGenerationCoordinator` 与 `GeneratedMediaStore` 管执行和媒体 |
-| 按域有效配置 | `ConfigurationResolver` 纯派生 `ResolvedConfiguration`；application/query ports 读取，不持久化镜像 |
-| Provider 配置与连接探测 | `ProviderSettingsApplicationService`；协调 SDK 与 SettingsStore |
-| Skill 身份、文件树与发布 | `SkillManager`；typed parse、导入、读取和可恢复目录事务 |
-| MCP definition / catalog / runtime / OAuth | 分别归 `SettingsStore` / `McpCatalogStore` / `McpServerRuntime` / `McpOAuthCoordinator`；`McpRuntimeCoordinator` 跨 server 编排 |
-| Workspace 命令、只读投影、PTY | `WorkspaceApplicationService` / `WorkspaceQueryService` / `WorkspaceTerminalRuntime`；模型与 UI mutation 共用 Workspace command gate |
-| 备份恢复请求与 archive staging | `BackupRestoreApplicationService` / `BackupArchiveService`；`PendingBackupRestore` 执行可恢复发布 |
-| 应用启动恢复与全局写门禁 | `ApplicationRecoveryCoordinator` / `ApplicationRecoveryGate` |
-| 企业退出、到期与身份删除 | `EnterpriseExitService` 完成原 Session 的关闭；`EnterpriseIdentityDataDisposer` 调用数据 owner 清除原 principal，Session manifest 保持唯一持久状态 |
-| 本机企业连接重置与数据清理 | `EnterpriseDataResetService` 持久化 reset intent，经关闭屏障调用各 owner；个人 scope 不进入清理范围 |
-| 生成期后台保活 | `ChatGenerationForegroundService` / `GenerationForegroundLifetime`；只消费活动投影，不拥有运行事实 |
+| 会话持久状态 | `ConversationCommandCoordinator` 串行命令；`ConversationTransition` / `TurnTransition` 产生 mutation，`ConversationRepository` 同事务提交 |
+| 会话内存状态与生命周期 | `ConversationRuntime` 管 resident snapshot、streaming 与 active session；`ConversationRuntimeRegistry` 管加载和释放 |
+| Turn 输入与执行 | `ConversationTurnService` / `TurnContextFactory` 捕获输入，`TurnToolSetFactory` 装配工具；`TurnRunner` / `StepRunner` / `ToolBatchRunner` 执行，`TurnCommitter` 提交，`TurnFinalizer` / `TurnRecovery` 分别处理运行终态与恢复 |
+| 子助手 | `SubAssistantRunCoordinator` 编排 run；`SubAssistantLifecycle` 管分支关联与 retention；复用会话和 Turn 写协议 |
+| 标题与辅助生成 | `ConversationTitleCoordinator` 管标题 CAS；`GenerationSideEffects` 绑定原 Runtime，`ModelExecutionService` 管原域模型准入 |
+| 会话与统计查询 | `ConversationQueryService` / `StatsQueryService` 组合带 scope 的只读结果；Session owner 复验访问，UI 不反向写回聚合 |
+| 运行记忆 | `MemoryRepository` 唯一写入；`MemoryService` 编排 Session、配置授权与投影 |
+| Artifact | `ArtifactStore` 管 metadata、引用与生命周期；`ArtifactPayloadStore` 只做磁盘 IO；`AttachmentReferenceLookup` 只提供内部附件索引 |
+| 生成媒体与文件应用服务 | `GeneratedMediaStore` 管图库 row、payload 与删除恢复；`FileManagementApplicationService` / `FileManagementQueryService` 跨文件 owner 编排与查询 |
+| 用户配置与配置文件引用 | `SettingsStore` 提交 `UserSettingsDocument`；`ArtifactSettingsCoordinator` 适配同一 Settings 写协议和 Artifact 交接 |
+| 企业身份、Session 与 Applied | `EnterpriseSessionController` 串行写入 `EnterpriseAppliedStore`；`PlatformEnterpriseService` 执行 Discovery、Enrollment 与 Snapshot IO |
+| 企业退出与本机清理 | `EnterpriseExitService` 关闭原 Session；`EnterpriseIdentityDataDisposer` / `EnterpriseDataResetService` 调用原数据 owner，保留可恢复的退出或 reset intent |
+| 有效配置与模型执行 | `ConfigurationResolver` 纯派生；`ModelExecutionService` 捕获请求路由与准入，图片执行由 `ImageGenerationCoordinator` 编排 |
+| Skill | `SkillManager` 管身份、文件树与可恢复发布 |
+| MCP | `SettingsStore` / `McpCatalogStore` / `McpServerRuntime` / `McpOAuthCoordinator` 分别管 definition、catalog、runtime 与 OAuth；`McpRuntimeCoordinator` 跨 server 编排 |
+| 本地 Workspace | `WorkspaceApplicationService` / `WorkspaceQueryService` / `WorkspaceTerminalRuntime` 分别管命令、投影与 PTY |
+| 企业远程文件 | `RemoteWorkspaceService` 管原 Session 下的文件会话与操作；Core/Agent Space 保持服务端工作区与文件所有权 |
+| 备份与启动恢复 | `BackupRestoreApplicationService` / `BackupArchiveService` 编排副本与请求；`PendingBackupRestore` 发布；`ApplicationRecoveryCoordinator` / `ApplicationRecoveryGate` 控制启动顺序与全局门禁 |
+
+企业生产用量与预算由 Core 准入、结算和持久化，Android 仅提供原 Session 的只读投影。
+`ChatGenerationForegroundService` 只消费活动状态维持后台运行，不拥有 Turn 事实。
 
 同一 durable 事实只有一个 owner 和一个写协议。禁止旁路 DAO/Repository 写入、整聚合回写、服务定位器、兼容转发和第二状态源。
 
@@ -165,9 +150,9 @@ Settings 步骤直接等待 `SettingsStore.initializeForRecovery()`，包括首�
 
 Room、DataStore 与文件格式按长期数据保全演进。结构变化须提供显式迁移、与新安装同构的 schema 和历史数据验证；索引由实体与迁移维护，不由业务请求临时创建。个人备份在独立数据图中升级、校验，恢复时保留最新企业数据，不能整体覆盖混合域存储。数据结构、记忆隔离、迁移及备份发布统一见 [数据持久化](data-persistence.md)。
 
-兼容处理限于明确的持久化迁移和外部协议解析边界；内部重构应同次移除无调用旧路径，不保留双写、fallback 或转发层掩盖不一致。未来配置与工具来源在有真实消费者后扩展既有 `TurnContextFactory` / `TurnToolSetFactory`。
+兼容处理限于明确的持久化迁移和外部协议解析边界；内部重构应同次移除无调用旧路径，不保留双写、fallback 或转发层掩盖不一致。
 
-企业接入、配置兼容性、空间导航和执行准入由 [配置架构](android-configuration-architecture.md)分别定义。测试分层与运行入口见 [测试策略](testing-strategy.md)，版本号与 changelog 仅随明确发布需求更新。
+企业接入、配置兼容性、空间导航和执行准入由 [配置架构](android-configuration-architecture.md)分别定义。测试分层与运行入口见 [测试策略](testing-strategy.md)，构建与发布契约见 [更新发行](update-mechanism.md)。
 
 ## 专题参考
 
@@ -176,7 +161,7 @@ Room、DataStore 与文件格式按长期数据保全演进。结构变化须提
 | 领域 | 参考文档及维护范围 |
 | --- | --- |
 | 配置与企业接入 | [Android 配置](android-configuration-architecture.md)：配置 owner、企业接入、Session、平台发布与 Starter；[助手配置](assistant-configuration.md)：字段与使用偏好 |
-| 会话与模型请求 | [Turn/Step 执行](turn-step-execution.md)：命令、审批、提交、取消与恢复；[请求上下文](request-context.md)：窗口、冻结、对账、接纳与回放；[提示词与工具](prompts-and-tools.md)：模型输入格式和工具合同 |
+| 会话与模型请求 | [Turn/Step 执行](turn-step-execution.md)：命令、审批、提交、取消与恢复；[请求上下文](request-context.md)：窗口、冻结、对账、接纳与回放；[提示词与工具](prompts-and-tools.md)：模型输入格式和工具契约 |
 | Provider 与计量 | [线协议](protocol-reference.md)：请求编码、流式终态和历史回放；[Token 统计](token-usage-accounting.md)：规范 usage、累计及显示口径 |
 | 数据与资源 | [数据持久化](data-persistence.md)：结构、域隔离、运行记忆、迁移与备份恢复；[多模态资源](multimodal-context-and-turn-durability.md)：附件投影与文件生命周期 |
 | 工具运行时 | [MCP](mcp-architecture.md)：目录、连接、OAuth、调用准入；[Workspace](workspace-architecture.md)：文件、PRoot、终端；[语音](speech-architecture.md)：合成、录音、播放与清理 |

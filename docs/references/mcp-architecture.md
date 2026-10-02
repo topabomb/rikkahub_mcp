@@ -19,7 +19,7 @@ MCP 的“工具能力”和“当前能否连通”是两类正交事实：
 - 当前运行中的 turn 只使用 run-start 快照。目录刷新、网络变化或 Settings revision 不会改写已经发给 Provider 的工具前缀；
 - 用户禁用/删除 server、修改连接 definition、禁用工具或收紧审批，是本地明确撤销。旧快照在远端副作用前 fail-closed；
 - 工具已经通过不可撤销调用承诺后，不因随后发生的配置或会话变化丢弃成功结果。承诺后 transport failure/timeout 返回
-  `outcome=unknown`，不得自动重放可能有副作用的调用。
+  `status=unknown`，不得自动重放可能有副作用的调用。
 
 ## 2. 事实与唯一 owner
 
@@ -204,8 +204,7 @@ session 的 catalog refresh 共用一个全局 semaphore，最多 4 路并行；
 7. 空目录不会成为稳定目录，也不会覆盖 LKG；相同 digest 是 no-op；
 8. definition 已变化时旧目录不再匹配，不能借 LKG 伪装新 server 已发现。
 
-Catalog Store 对 commit/no-op/rejection 都推进进程内 head token。若 Server Runtime 在持久化后发现 connection lease 已过期，
-只允许在 snapshot identity 与 head token 仍匹配时精确回滚；旧 operation 不能覆盖更新的目录事实。
+Catalog Store 对成功提交、相同目录的 no-op 和空目录拒绝推进进程内 head token；低 generation 拒绝不推进 token，不能夺取较新提交的补偿权。若 Server Runtime 在持久化后发现 connection lease 已过期，只允许在 snapshot identity 与 head token 仍匹配时精确回滚；旧 operation 不能覆盖更新的目录事实。
 
 候选校验或写盘失败不推进 head token。提交取得所有权后，Store 等待 DataStore ack、目录投影和 token 更新全部结束，
 再传播调用者取消；Runtime 对提交凭据的接收、原连接 lease 复验和必要补偿也在同一提交与补偿边界内完成。已接受的新目录
@@ -248,16 +247,9 @@ Catalog Store 对 commit/no-op/rejection 都推进进程内 head token。若 Ser
   已排队的恢复操作独占 `RetryScheduled`/`WaitingNetwork` 状态，后续调用失败不能覆盖等待状态；
   已承诺调用返回授权错误时取消该代的恢复与目录刷新；迟到的 close、通知流错误和刷新完成回调不得覆盖
   `NeedsAuthorization`，由用户授权或显式重试重新建立连接；
-- 当前 SDK 的 `StreamableHttpError` 不暴露响应头，故暂时无法读取 `Retry-After`；若 SDK 暴露该字段，应由同一调度器
-  将其作为服务端最小等待时间，而不是新增第二个 timer。
+- 当前 SDK 的 `StreamableHttpError` 不暴露响应头，恢复调度尚不消费 `Retry-After`。
 
-该策略遵循移动端的事件驱动原则：Android default network 必须同时具备 `INTERNET + VALIDATED`；后台不维持无意义的
-常连接风暴；恢复采用有界并发和 jitter，避免多个 server 同时惊群。参考：
-
-- [Android NetworkCallback](https://developer.android.com/reference/android/net/ConnectivityManager.NetworkCallback)
-- [Android Doze and App Standby](https://developer.android.com/training/monitoring-device-state/doze-standby)
-- [AWS Exponential Backoff and Jitter](https://aws.amazon.com/blogs/architecture/exponential-backoff-and-jitter/)
-- [RFC 9110 Retry-After](https://www.rfc-editor.org/rfc/rfc9110.html#name-retry-after)
+Android default network 必须同时具备 `INTERNET + VALIDATED`；前后台和网络事件只唤醒同一有界恢复调度器。
 
 ## 7. Run 快照与调用结果
 
@@ -332,13 +324,11 @@ Gateway 按发布 policy 对完整工具对启停，REQUIRED 只读；写入携�
 `com.measix/resolvedTool` 的安全元数据随原工具 checkpoint 持久化；默认工具卡用其业务 name，详情仅展示 gatewayToolId/name/status/requestId。
 显示不解析下游输出猜测身份、不再次请求 Gateway，输出归档不删除这份业务身份。
 
-## 9. 企业平台执行与只读检查
+## 9. 企业调用与只读检查
 
-企业 Direct MCP 使用 Snapshot 中的 `runtimePath`、`authOwnership` 与当前 Applied generation，经 Core Relay 的 Streamable HTTP 进入既有 MCP Client/Runtime/Catalog 链。Android 不持有企业上游凭据，不创建本地 engine，也不将平台资料转换为用户 MCP 定义。Managed State 与 428 在执行准入前验证，不能先执行业务再报告版本屏障。
+`assistant_inspect` 与管理页面共用 `readCatalogCapabilities` 的目录匹配规则：用户目录要求 definition digest 匹配；企业目录还要求原主体、generation、surface 与当前 execution 描述匹配。检查只读原域配置和已确认目录，不连接、不创建 execution lease，也不构成调用授权。
 
-助手 `assistant_inspect` 只读取原域配置和已确认 Catalog，不建立连接，也不借用当前页面配置。用户目录要求 definition digest 匹配；企业目录还要求原主体、generation 和当前 platform execution 描述匹配。该查询不创建 execution lease、不缓存凭据，也不能充当调用授权。MCP 管理页面与助手检查复用同一目录匹配规则。
-
-实际调用仍由 `TurnToolSetFactory`、`TurnRunner` 和 MCP owner 完成。流式调用携带正常 Provider transport slot，Step accumulator 分配 durable 身份；安全业务元数据经 `ToolExecutionContext` 的 deferred metadata 协议提交，不另写执行记录。发现、调用或 428 失败不自动重试、不回退到同名用户工具，也不从名称猜测资源身份。受管 Streamable HTTP 的 POST 与 SSE GET 在转成 SDK 通用错误前先解析 Core Problem；额度/计量/核对阻断抛回统一企业运行时错误，身份删除触发正式 Session 退出。该解析器不装配到个人 MCP，不能把普通远端 429 重分类为企业额度。
+企业调用沿既有 `TurnToolSetFactory`、`TurnRunner` 和 MCP owner 执行。安全业务元数据经 `ToolExecutionContext` 的 deferred metadata 随 checkpoint 提交，不另写执行记录。受管 POST 与 SSE GET 在转换 SDK 错误前解析 Core Problem：额度、计量与核对阻断进入统一企业运行时错误；身份删除进入正式 Session 退出。个人 MCP 不使用该解析器，普通远端 429 不能变成企业额度错误。业务调用和 428 不自动重放，也不回退同名用户工具；可恢复的连接与发现失败仍按本篇恢复策略处理。
 
 ## 10. 验证边界
 

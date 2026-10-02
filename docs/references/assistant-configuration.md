@@ -103,10 +103,7 @@
 企业使用偏好的同名字段缺失表示继承用户助手定义，`UsageValue(null)` 表示改为继承本域所选模型。
 显式 true/false 仅影响该主体的助手使用设置。该字段为可选扩展，不改变 Room 或接入资料格式版本。
 
-MCP 还必须与 definition 匹配的完整非空 LKG Catalog 和用户工具策略求交，连接健康不参与 schema 注入；Master/Target 在 run 开始时冻结
-`TurnMcpCapabilitySnapshot`，同一 run 不跟随远端目录通知漂移。
-Memory Tools 与其他工具一样在新 Turn START 前按固定 namespace 装配并冻结 definitions/bindings；同一 Turn 不按 step 重建。Target Run 进一步过滤子助手管理/委托工具；执行时仍重验权限、资源与 Memory namespace，撤销后 live fail-closed。
-`generate_image` 在 Assistant 已开启 `TextToImage`、且默认文生图模型当前有效时注册；Master 与 Target Run 同一规则。
+MCP 的可见 schema 由匹配 definition 的完整非空 LKG Catalog 与用户工具策略决定，当前连通性另行投影；目录捕获和执行撤权见 [MCP 架构](mcp-architecture.md)。所有工具在 START 冻结 definitions/bindings，执行时仍复验权限与资源；子助手额外过滤管理/委托能力，见 [子助手架构](sub-assistant-architecture.md)。`generate_image` 仅在启用 `TextToImage` 且默认文生图模型有效时注册，Master 与 Target 使用同一规则。
 
 当前 Quick Message 点击调用 `ChatInputState.appendText(quickMessage.content)`，只向输入草稿追加内容，不触发发送或工具执行。
 
@@ -171,25 +168,7 @@ code point 限制长度。关闭 `allowAsSubAssistant` 时，`normalizeForPersis
 
 ### `PromptInjection`
 
-`PromptInjection` 是密封类，当前持久化实现为嵌套的
-`PromptInjection.ModeInjection`。公共字段包括 `id`、`name`、`enabled`、`priority`、
-`position`、`content`、`injectDepth` 和 `role`。
-
-`InjectionPosition` 的语义：
-
-| 值 | 插入位置 |
-|----|----------|
-| `BEFORE_SYSTEM_PROMPT` | System Prompt 之前 |
-| `AFTER_SYSTEM_PROMPT` | System Prompt 之后 |
-| `TOP_OF_CHAT` | 保留历史中首条 USER 前；不存在 USER 时在历史末尾 |
-| `BOTTOM_OF_CHAT` | 保留历史中末条消息前，不等同于最新 USER 前 |
-| `AT_DEPTH` | 从保留历史末尾按持久化消息计数，深度最小为 1 |
-
-`allowConversationPromptInjection=true` 时使用会话选择集，否则使用助手选择集，两者不合并。
-仅启用且被选中的规则进入请求；按 priority 降序，同优先级保留目录顺序。同一插入点只合并相邻且 role 相同的规则。
-深度不计 System、请求合成消息和仅含 Step 的占位消息。规则不得拆开工具调用/结果的安全边界，
-也不能插在时间提醒与其 USER 之间；位置由 `PromptInjectionTransformer` 统一计算。
-这是显式选择与位置规则，不是关键字触发或事件订阅机制。
+当前持久化类型为 `PromptInjection.ModeInjection`，保存启用状态、优先级、插入位置、内容、深度和角色。助手通过 `modeInjectionIds` 选择规则；开启 `allowConversationPromptInjection` 后改用会话选择集，不合并助手集合。位置计算、顺序及工具调用安全边界统一见 [提示词与工具](prompts-and-tools.md)，不在此重复维护。
 
 ## 4. 默认助手与工具创建助手
 
@@ -210,7 +189,7 @@ code point 限制长度。关闭 `allowAsSubAssistant` 时，`normalizeForPersis
 
 用户 Assistant 定义保存在 UserSettingsDocument.configuration；企业定义归 Applied Enterprise State。企业域的用户使用选择保存在同一用户文档的 scoped preferences，不复制整份 Assistant，也不修改企业固定定义。
 
-`SettingsStore.updateLocal()` 持写锁读取最新个人投影，执行 transform、持久化规范化与 DataStore 提交，回执成功后发布 `userSettings`。企业目录和执行使用 `ConfigurationResolver` 的按域结果；共享定义编辑器明确编辑用户定义，不将个人读取投影视作企业授权。跨助手权限清理、选择修正和删除 tombstone 必须在同一事务完成。
+用户配置沿 [Settings 提交协议](android-configuration-architecture.md)写入，持久化成功后才发布；跨助手权限清理、选择修正和删除 tombstone 必须在同一次配置提交完成。共享定义编辑器明确编辑用户定义，不将个人读取投影视作企业授权。
 
 `Settings.normalizeForPersistence()` 在每次写入前运行，只负责规范化
 `Assistant.description`、在未开启子助手类别时强制关闭全局可见、按 `assistantId` 去重
@@ -226,26 +205,19 @@ code point 限制长度。关闭 `allowAsSubAssistant` 时，`normalizeForPersis
 删除 Assistant 由 `AssistantManagementService` 协调：先写 tombstone，再取消相关生成和子助手运行，
 清理记忆与会话，最后提交 Settings 清理。中断后由 tombstone 恢复流程继续完成，不能把列表移除视为删除完成。
 
-## 6. 配置消费边界
+## 6. 本域使用编辑
 
-`Assistant` 数据模型定义持久字段与默认语义；用户配置的读取物化和提交归 Settings owner；企业状态归 Enterprise owner；按域生效解析归 ConfigurationResolver。会话助手归属只经 `ConversationApplicationService` 迁移；模型 readiness 与主生成工具装配归
-`ConversationTurnService` 和 `TurnToolSetFactory`；请求映射、工具循环与 Transformer 归 `TurnRunner` / `StepRunner` / `ToolBatchRunner`；助手的
-创建、修改和删除归 `AssistantManagementService`。子助手的运行过滤、执行与恢复分别归 `SubAssistantRunPolicy`、
-`SubAssistantRunCoordinator`、`TurnRecovery` 和 `ApplicationRecoveryCoordinator`。
+`AssistantUsageEditor` 使用原 `ConversationAssistantTarget` 与 `ConversationViewLease` 编辑当前会话助手。未选候选只展示目录快照，不构造写目标；企业助手不进入个人 Settings 编辑器。详情与普通助手配置共用分组和内容组件，用户助手可明确进入原共享定义编辑器，并说明跨空间影响。
 
-UI 和 Provider adapter 只消费 typed 配置与有效读模型，不成为配置写入 owner。
+名称、描述、System Prompt、子助手身份和企业固定 MCP 只读。继承的子助手引用不可移除；本域额外引用按目录准入选择。`ResetUsage` 只在企业域出现，只删除原主体对该助手的使用覆盖。
 
-维护配置时应从“持久化默认值 → UI/工具创建入口 → 解析与归一化 → 请求消费 → 测试/文档”完整检查，
-避免只修改数据类或单一页面。
-`contextMessageLimit` 编辑器使用独立草稿状态：合法值为 `0` 或 `40..512`，仅在 IME Done 或失焦时提交；关闭写 `0`，重新启用写默认值 `80`。开关提交会抑制随后一次失焦对旧草稿的重复写入，Done 与失焦也不会重复提交同一值。编辑中收到外部设置更新时保留当前输入缓冲，但更新去重基线；未聚焦时同步 durable 值。最终写入仍走 Assistant 配置既有 typed 更新链。
+模型使用 `AssistantModelPreferenceMode` 区分“继承助手定义”“跟随本域默认”“指定模型”，不从最终解析出的引用反推。显式失效引用保留原值和原因。聊天输入区与详情共用 `ModelListSheet`；显式 null 在直接聊天中继承本域默认，在子助手中按共用协议借用 Caller 模型及参数。模型随 Turn 捕获，后续修改不改写在途 Turn，执行仍复验原模型资源与 Session。
 
-## 7. 本域使用编辑
+页面向 `ConfigurationApplicationService` 提交 `AssistantPreferenceChange`。`EditUsage` 比较页面基线与编辑值，只将实际变化字段应用到锁内最新偏好，未修改字段保持继承；不存在整份解析助手回写。标签目录仍共享，清理需统计所有主体的引用。头像和背景沿 [配置资产提交协议](android-configuration-architecture.md)交接，预设文本编辑保留非文本 parts 与 metadata。
 
-聊天中的助手主体和抽屉候选详情入口统一打开原助手配置分组表面：普通助手详情、当前会话助手与候选详情共用 `AssistantSettingsSectionList`，当前会话助手再使用原基本参数、提示词、扩展、记忆、请求、本地工具和 MCP 内容组件。当前会话助手使用原 `ConversationAssistantTarget` 与 `ConversationViewLease` 进入 `AssistantUsageEditor`；未选候选只把当前域目录快照投影到相同分组中的只读值，不构造虚假会话目标、写回调或第二配置 owner。企业助手绝不进入个人 Settings 编辑器。首页只显示头像、名称、真实来源、描述和分组入口，单项详情保留返回和关闭，避免移动端同时堆叠全部类别。名称、描述、系统提示词与子助手身份只读；用户助手可明确进入原共享定义编辑，并确认对其他空间的影响。固定子助手引用不可移除，本域额外引用按目录准入选择。企业和用户助手均可选择本域获准模型、跟随本域默认模型，或恢复继承助手定义模型；`AssistantModelPreferenceMode` 直接投影这三态，UI 不从最终引用反推，显式失效引用保留原引用和失败原因。聊天输入区与详情中的模型入口复用聊天页根部唯一的 `ModelListSheet`；默认来源在列表中只占一张卡，企业域的助手默认与空间默认由该卡菜单切换，显式模型仍在同一序列中选择，不提供第二条快捷恢复路径，也不嵌套弹层。重置使用设置只对企业域显示并只影响原主体。模型选择显式 null 时，直接聊天继承本域默认；作为子助手 Target 时按共用协议借用 Caller 模型及参数。模型在请求开始时冻结；后续选择影响新请求，不改写在途 Turn，执行仍逐次复验原模型资源与原 Session 授权。
+`contextMessageLimit` 的输入草稿仅在完成编辑或失焦时提交，合法值为 `0` 或 `40..512`；关闭写 `0`，重新启用写默认值 `80`。外部更新不覆盖正在输入的草稿，重复完成事件不会重复提交。算法和请求窗口见 [请求上下文](request-context.md)。
 
-页面向 `ConfigurationApplicationService` 提交 `AssistantPreferenceChange`。页面回调通过基线差量保留并发未编辑字段，资产仍经 Artifact 引用事务；不存在整份解析助手回写。搜索模式和资源选择继续使用聊天的现有选择器。预设文本编辑保留其他消息部分，媒体预览按原配置来源读取，不读取个人历史。
-
-## 8. 关键架构文件
+## 7. 实现与验证
 
 | 边界 | 文件 |
 | --- | --- |
@@ -255,3 +227,5 @@ UI 和 Provider adapter 只消费 typed 配置与有效读模型，不成为配�
 | 会话归属与生成装配 | `app/src/main/java/net/weero/measix/pilot/service/ConversationApplicationService.kt`、`ConversationTurnService.kt`、`service/turn/TurnRunner.kt`、`service/turn/StepRunner.kt`、`service/turn/ToolBatchRunner.kt`、`service/turn/TurnRunState.kt`、`data/ai/tools/TurnToolSetFactory.kt` |
 | 助手管理工具 | `app/src/main/java/net/weero/measix/pilot/service/AssistantManagementService.kt`、`data/ai/tools/AssistantToolFactory.kt` |
 | 子助手策略与执行 | `app/src/main/java/net/weero/measix/pilot/data/ai/subassistant/SubAssistantRunPolicy.kt`、`service/subassistant/SubAssistantRunCoordinator.kt` |
+
+维护配置时从持久化默认值、UI/工具创建入口、解析与归一化到请求消费核对同一语义。重点验证旧 JSON 缺失字段、模型三态、跨主体偏好隔离、并发差量写入和助手删除恢复；生成与子助手的验证边界见各自专题。

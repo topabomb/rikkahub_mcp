@@ -1,42 +1,38 @@
 # 数据持久化、隔离与恢复
 
+本文集中说明 Room 数据结构、按域存储与运行记忆、历史迁移和个人备份恢复。Settings 文档及企业 Session 的持久化由 [配置架构](android-configuration-architecture.md)维护；文件生命周期由 [多模态资源](multimodal-context-and-turn-durability.md)维护。
+
+`AppDatabase` 是业务 Room 数据库；`APP_DATABASE_VERSION`、实体注解、导出 schema 与显式 migration 必须一致。索引只服务既有 DAO 查询，不改变 durable owner 或写协议。完整列、索引及约束以实体和 `app/schemas/` 为准；本文只解释影响查询、归属与恢复的结构。
+
+## 数据归属与查询
+
+Conversation、Memory、Artifact、生成媒体、会话文件夹和收藏根记录保存完整 `scope`；消息、Turn、Tool 与上下文
+经所属会话取得归属，不重复保存第二份主体。按 ID 查询不能代替授权，列表和搜索必须在 SQL 限额之前过滤 scope。
+
+| 数据 | 查询与结构边界 |
+| --- | --- |
+| 会话、文件夹与收藏 | 会话列表排除 Child，按助手、文件夹、置顶和更新时间筛选；助手全列表与未归档列表有独立复合索引，避免中间的 `folder_id` 打断排序。Child 关系另保留外键索引；全文搜索使用原 `message_fts` 投影 |
+| 消息与执行记录 | `message_node` 按会话和 node_index 排序；`turn_execution` 支持会话查询和非终态恢复；`tool_execution` 以 `(turn_id, local_call_id)` 唯一约束调用，保留 Child 关系查询 |
+| 上下文与开场 | entry 归 owner node/variant，admission 按 owner/Step 唯一，use 保存本次贡献顺序；opening 一会话一份，删除消息不删除 opening，整会话删除级联 |
+| 运行记忆 | `(scope, assistant_id)` 定位主体及 namespace，行按 `id ASC` 读取 |
+| 文件与生成媒体 | Artifact 路径唯一，生成媒体路径只建普通索引；域内目录与全库状态恢复各有查询索引。`artifact_reference` 按来源类别精确替换，消息节点删除级联，唯一索引覆盖引用检查 |
+| Workspace 与系统标记 | Workspace root 唯一，SAF 复用注册表；`system_meta` 以主键点查，不另建派生事实 |
+
+上下文正文通过轻量 header 和 SQLite 字符分片按需读取，避免单行大 payload 超过 Android CursorWindow。
+`conversation_context_use` 的 entry 外键为 NO ACTION，删除正文前须先调整关联；`Omitted` 关闭继承贡献，不产生正文。
+`ConversationContextIntegrity` 的因果与分支规则见下文。
+
+`ConversationRepository.getContextToolHistory` 经 `ToolExecutionDAO.getConversationOutcomes` 一次 LEFT JOIN
+读取已记录的 Assistant owner 和工具终态。没有 Tool 行的已记录 Turn 仍保留，用于区分审批前拒绝与只复制 transcript、
+没有本地执行记录的 Fork 历史；不逐条查询或复制 execution 行。
+
+`ConversationQueryService` 管选中域订阅，`SelectedRealmPagingSource` 对每次惰性加载重新验证原 Session；
+切域或订阅结束使旧源失效。FTS 在排序和限额前经所属根会话过滤 scope，不能在 UI 拿到跨域结果后再过滤。
+索引服务查询而非授权；前置通配符搜索、JSON 聚合和低频恢复也不因补齐普通索引就免除扫描。
+
 最近会话引用仍由 `SettingsStore` 按 scope 写入。`forgetConversation(scope, expectedId)` 在原提交锁内比较并清理，
 不能清掉并发记住的新会话或其他主体引用。Room 删除提交先于 DataStore 维护，两者不是一个原子事务；
 维护失败保留已删除事实与原诊断。进程在两步间退出由启动时 scoped 根 header 存在性核验恢复。
-
-本文集中说明 Room 数据结构、按域存储与运行记忆、历史迁移和个人备份恢复。Settings 文档及企业 Session 的持久化由 [配置架构](android-configuration-architecture.md)维护；文件生命周期由 [多模态资源](multimodal-context-and-turn-durability.md)维护。
-
-`AppDatabase` 是业务 Room 数据库；`APP_DATABASE_VERSION`、实体注解、导出 schema 与显式 migration 必须一致。索引只服务既有 DAO 查询，不改变 durable owner 或写协议。下文括号内字段按索引顺序排列。
-
-## 查询覆盖
-
-| 表 | 索引与用途 |
-| --- | --- |
-| `ConversationEntity` | `(scope, assistant_id, parent_conversation_id, is_pinned, update_at)` 支持域内助手列表与最近会话；`(scope, assistant_id, parent_conversation_id, folder_id, is_pinned, update_at)` 支持域内未归档分页；`(scope, folder_id, parent_conversation_id, is_pinned, update_at)` 支持域内文件夹分页；`(scope, parent_conversation_id, is_pinned, update_at)` 支持域内置顶、根会话与统计入口；`(parent_conversation_id)` 单独覆盖 Child 查询和自引用外键级联 |
-| `message_node` | `(conversation_id, node_index)` 按会话读取有序消息节点，同时覆盖会话外键 |
-| `conversation_model_context` | stable `id` 主键用于正文点查；`(owner_node_id, owner_message_id, occurrence)` 唯一索引支持同 variant 多条，`(anchor_node_id)` 支持按因果锚点查询和清理。按会话经 owner node JOIN，不重复保存 conversation/realm；正文由轻量 header 与字符分片查询组装 |
-| `conversation_context_admission` | stable `id` 主键；`(owner_node_id, owner_message_id, step_id)` 唯一，请求零新增也保存边界。来源选择是轻量版本化 payload，窗口起点保留真实 node/message locator |
-| `conversation_context_use` | `(admission_id, ordinal)` 主键保存本边界贡献顺序，`(entry_id)` 索引支持正文引用。entry 外键为 NO ACTION，必须先调整关联再删除正文；`Omitted` 明确关闭继承贡献，不产生模型正文 |
-| `conversation_opening` | `conversation_id` 主键/外键，同一会话最多一份；删除消息节点不删 opening，整会话删除级联。完整发布定义为冷 payload，通过 header 与字符分片按需读取 |
-| `MemoryEntity` | `(scope, assistant_id)` 直接定位企业用户范围与 owner，列表按主键 `id ASC` |
-| `GenMediaEntity` | `(path)` 支持文件名查重；`(create_at)` 支持全库恢复读取；`(scope, create_at)` 支持域内图库分页、观察与清理候选 |
-| `artifact` | 保留 `relative_path` 唯一索引；`(folder, created_at)` 支持跨域生命周期恢复；`(state, created_at)` 支持状态候选；`(scope, folder, created_at)` 支持域内目录列表与清理；`(scope, created_at)` 支持整域读取与清理。目录查询的状态条件可作为剩余过滤，不破坏时间顺序 |
-| `artifact_reference` | 保留 `(artifact_id, node_id, reference_type)` 唯一索引与 `(node_id)`；`CONTEXT` 与附件/工具归档共用此表，按来源类别精确替换，node 删除沿原外键级联清理。唯一索引的左前缀同时覆盖引用检查与外键，不另存同列普通索引 |
-| `conversation_folder` | `(scope, assistant_id, sort_index, create_at)` 支持域内助手文件夹排序 |
-| `favorites` | 保留 `ref_key` 唯一索引与 `(created_at)`；`(scope, type, created_at)` 支持域内分类后的时间排序 |
-| `turn_execution` | 保留 `(conversation_id)` 与 `(status)`，分别支持归属查询、非终态恢复 |
-| `tool_execution` | `(turn_id)` 支持归属查询；唯一 `(turn_id, local_call_id)` 约束调用身份；`(child_conversation_id)` 保留 Child 关系查询。恢复按 `turn_id` 读取执行事实并验证 Child Turn/run，不为无独立查询的 `child_turn_id`、`sub_assistant_run_id` 建索引；无全局 status 查询，不建 status 索引 |
-| `workspaces` | 保留 `root` 唯一索引与 `(updated_at)`，支持路径唯一性、SAF 的 `getByRoot` 注册查找及列表排序；主键用于 Workspace 点查，SAF 不新增表或索引 |
-| `system_meta` | 现有主键满足 key 点查，无额外业务筛选索引 |
-
-复合索引优先让等值筛选字段位于排序字段前。助手全列表与未归档列表分别建索引：后者需要 `folder_id` 参与范围定位，前者不能被中间的 `folder_id` 打断排序。全部排序方向一致时 SQLite 可反向扫描，无需另外建立 DESC 镜像索引。
-
-`ConversationRepository.getContextToolHistory` 经 `ToolExecutionDAO.getConversationOutcomes` 一次
-`turn_execution LEFT JOIN tool_execution` 同时读取已记录的 Assistant owner 与工具执行终态。
-没有 Tool 行的已记录 Turn 仍出现在结果中，以区分审批前拒绝与 Fork 仅复制 transcript、没有本地执行记录的历史。
-该查询沿现有 conversation/turn 索引，不逐 entry 查询、不复制 execution 行，也不新增持久状态。
-
-索引不是按字段数量补齐：全量导出、低频恢复的小结果集排序不额外增加写入负担；包含前置通配符的文本搜索、JSON 展开聚合不能靠普通 B-tree 索引消除扫描。会话全文搜索继续由既有 FTS 投影负责，不新增第二搜索表或维护协议。
 
 ## 运行记忆的存储与授权
 
@@ -88,9 +84,7 @@ Master 的 START 使用会话持久 scope 捕获 RealmAccess；Child 继承父�
 
 `Migration_11_12` 给 Conversation、Memory、Artifact、生成媒体、会话文件夹和收藏六类根记录追加 `scope TEXT NOT NULL DEFAULT 'personal'`。旧行的 ID、payload、引用、索引和外键不变；消息、turn、tool 和 context 通过所属会话确定域，不重复保存。ConfigurationScopeConverter 使用当时的来源、部署与用户编码，非法编码不能回退个人域。
 
-`Migration_12_13` 先验证上述六类根记录中的全部非 Personal scope，以及 Conversation、Memory 与文件夹中的全部 managed ConfigurationReference；任一旧值不规范即回滚。验证通过后，把企业 scope 从 `enterprise~sourceNamespace~deploymentId~userId` 一次性改写为 `enterprise~deploymentId~userId`，并把企业引用改写为 `managed~deploymentId~resourceId`。同一次迁移把高频域内读取索引改为以 `scope` 开头，避免地址变化后保留下来的多企业数据在列表、分页、记忆、文件、媒体、文件夹和收藏查询中互相扩大扫描；Child 外键、全库恢复、生命周期状态与唯一性查询继续保留各自不带 scope 的必要索引。迁移不改变 deploymentId、userId、资源 ID、主键、关系或内容；运行时转换器只接受新格式。
-
-会话助手列表、最近聊天、置顶、未归类/文件夹分页、文件夹列表和统计均在 SQL 内过滤完整 scope。FTS 在排序与限额之前经所属会话过滤 scope 和主会话，包含全局搜索与助手内搜索；索引仍是既有 message_fts 投影，不复制域数据。ConversationQueryService 负责选中域订阅及原 Session 授权，SelectedRealmPagingSource 对每次惰性加载重新校验，切域或结束订阅使旧源失效。此查询调整不改变 schema 或索引；按 ID 的页面与命令授权另由对应 application owner 校验，不能以索引代替访问授权。
+`Migration_12_13` 在同一事务中逐表验证并转换上述六类根记录的非 Personal scope，以及 Conversation、Memory 与文件夹中的 managed ConfigurationReference；任一旧值不规范即整笔回滚。企业 scope 从 `enterprise~sourceNamespace~deploymentId~userId` 一次性改写为 `enterprise~deploymentId~userId`，企业引用改写为 `managed~deploymentId~resourceId`。同一次迁移把高频域内读取索引改为以 `scope` 开头，避免地址变化后保留下来的多企业数据在列表、分页、记忆、文件、媒体、文件夹和收藏查询中互相扩大扫描；Child 外键、全库恢复、生命周期状态与唯一性查询继续保留各自不带 scope 的必要索引。迁移不改变 deploymentId、userId、资源 ID、主键、关系或内容；运行时转换器只接受新格式。
 
 ### 上下文与开场持久化
 
@@ -115,7 +109,6 @@ Master 的 START 使用会话持久 scope 捕获 RealmAccess；Child 继承父�
 迁移由 Room 在事务内执行，新安装直接使用同构 schema。所有角色的消息均须可解码；旧字段的显式 null 按既有缺省语义处理，错误类型、未知 turn 状态或未知消息 part 必须中止迁移，不得置空后继续。备份校验接受受支持的历史数据库，在 staging 内由同一 Room migration 链升级到当前版本并验证后才发布 pending；当前版本在 staging 移除派生的 `room_master_table`，使 Room 打开时执行生成的 schema 校验并重建标记，不能仅凭既有 identity hash 信任表、列和索引。所有版本另行校验外键和 transcript；当前版本不转换 transcript，不为旧文件名引入额外读取路径。
 
 实现入口为 `AppDatabase`、`AppDatabaseFactory`、各实体/DAO 与显式 `Migration_*`。迁移验证覆盖历史链、新旧 schema、数据与约束保全，并用 Android SQLite 的 `EXPLAIN QUERY PLAN` 检查主要查询的索引和排序行为；查询计划验证不等于设备耗时基准。
-
 
 ## 个人备份与恢复
 

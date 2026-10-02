@@ -52,8 +52,6 @@ Compose、ViewModel、聊天文件补全、cwd 选择和已编辑文件导出都
 
 ## 3. 文件系统与挂载
 
-文件列表图片缩略图和全屏预览均使用 `WorkspaceApplicationService.imageSource`，由既有 ImageSource/Coil 管线读取。读取前复验 workspace、文件修订及大小；UI 不持有裸文件、不复制临时缩略图、不建立第二缓存 owner，行级打开和删除沿原命令。
-
 每个 Workspace 使用独立 root 名称，名称只允许字母、数字、点、下划线和连字符：
 
 ```text
@@ -75,6 +73,18 @@ Rootfs 内的主要映射：
 `WorkspaceManager.resolveRootfsPath()` 负责把规范化的 Rootfs 绝对路径映射回宿主文件。`RootfsPath.parse` 消除 `.` / `..` 与重复分隔符，拒绝越过 guest 根、NUL 和反斜线；审批与执行共用规范化后的路径。bind mount 按目标路径长度降序匹配，避免较短前缀抢先命中；`/workspace` 映射到当前 Workspace 文件区，其他路径落到 `linux/`。`/upload` 是保留入口：`WorkspaceToolSession` 将读取交给 ArtifactStore，校验原 RealmAccess 的主体、ACTIVE 和发布状态；WorkspaceManager 拒绝直接解析及任何写入/编辑，即使已审批也不能回落到 Linux 同名目录。内核文件系统只能通过 shell 访问。
 
 `WorkspaceStorageArea.FILES` 和 `LINUX` 用于管理页面的直接文件操作；AI 工具使用 Rootfs 绝对路径，以便与 shell 看到同一命名空间。
+
+### 文件导出与编辑草稿
+
+`WorkspaceApplicationService.exportFiles` 接收固定的 workspaceId、area 和相对路径集合，逐项创建 SAF document，记录 provider 返回的 URI 与实际名称；不查找覆盖同名外部文件，不持久化树授权。源 stat 与复制使用原 per-workspace gate，外部 provider 的 create/open/close/delete 在 gate 外，避免目标也是本应用 DocumentsProvider 时回入同一 gate。源在复制开始时重新校验，不承诺选择时的内容快照。
+
+`WorkspaceManager.exportFile` 复用 `WorkspaceDirectoryHandle.open` 的逐层 NOFOLLOW 与 regular-file 校验，关闭输入描述符，借用输出流；因此普通导出、Linux 文本预览、图片读取和消息文件分享都拒绝源路径中的符号链接。Repository 用 `runInterruptible` 调度复制，循环按块检查中断；任意外部 provider 的阻塞 IO 不保证即时结束。
+
+批量结果只有在输出 close 成功后才记为成功。取消停止后续项，保留已完成文档，只清理本项取得且未完成的 document；清理失败作为 suppressed 保留。单文件/分享由打开方关闭输出并展示原诊断。选择与 picker 请求保存在内存；重建后缺少原请求身份的回调被拒绝。运行中的批量任务由 WorkspaceDetailVM 持有，旋转可继续观察结果，离开其生命周期取消。
+
+`WorkspaceDetailVM` 在恢复前台时刷新当前目录，避免外部修改后沿用旧大小和修改时间。文件图片通过 `WorkspaceApplicationService.imageSource` 绑定 workspace/area/entry，直接 stat 复验修订和实际字节上限，不依赖有数量上限的目录列表，不另建预览副本或缓存 owner。
+
+本地编辑正文由以 id/area/path 为键的 `FileEditorState` 持有，保存走 `WorkspaceApplicationService.writeText`，成功后更新原正文基线。未保存退出需确认，保存期间禁止退出；失败保留正文和诊断，取消恢复操作状态。该草稿不进入 Bundle 或 durable store，Activity/进程重建重新读取已发布文件。共享正文视口和输入法规则见 [UI 架构](ui-architecture.md)。
 
 ## 4. PRoot 执行契约
 
@@ -194,10 +204,6 @@ Workspace 删除而消失时自动清除 pending，不发送无意义命令。
 
 零 tab 显示已退出，只有 PREPARING 显示创建中；退出后不自动重试。非主动关闭的非零进程退出由 Runtime 发布既有 typed failure，正常退出与主动 close 的进程终止保持普通空态。
 
-图片查看借用 `WorkspaceApplicationService.imageSource`：绑定原 workspace/area/entry，通过 FileSystem 的单路径 stat 复验，读取前后检查目标未变化并限制实际字节数。它不依赖有数量上限的目录列表，也不另创建预览临时文件。
-
-Workspace command 仍由 `WorkspaceApplicationService` 拥有；持久化列表/文件预览和 terminal 聚合投影都由 `WorkspaceQueryService` 提供，其中 terminal 读口是 `observeTerminal(workspaceId)`。Query 不获得写能力，也不反向调用 ApplicationService。`WorkspaceTerminalViewport` 只表达 UI viewport capability，不是 session facade 或第二生命周期 owner。
-
 条目按 Workspace root 与原 RealmAccess（含完整企业 Session）投影，所有条目和 viewport 状态限制在 Main。创建中为 `PREPARING`，成功后为 `READY`；关闭先变为 `CLOSING` 并关闭视图访问，实际进程退出且 writer 完成后才移除。关闭失败保留原条目供重试。尚未首次布局的 PID 0 不发送进程信号。单 Workspace 跨域合计最多六个 Tab，配置与数据库不保存运行态。
 
 页面操作捕获原 RealmSelection。绑定、resize、按键、粘贴与 UI 命令等待 Session 准入；锁忙不等于授权失效。切域在发布新选择前永久关闭旧 viewport 的访问、IME、选择句柄和延迟滚动回调，并取消尚未准入的操作。切回同一有效 Session 时用新视图接回原 PTY。切换在关闭旧视图访问后失败或取消时，Session owner 保留原域但推进选择版本，旧视图永不复活。退出通过原 PTY owner 关闭该企业 Session 的终端。
@@ -238,42 +244,13 @@ ensureWorkspace
 
 应用启动时 `cleanupAllTempDirs()` 清理每个 Workspace 的 PRoot temp、Rootfs `/tmp` 与 `/var/tmp`；后续执行或 patch 会按需重建。
 
-## 9. 状态与删除
+## 9. 安装状态与删除
 
 Workspace shell 状态使用 `DISABLED`、`INSTALLING`、`READY` 和 `BROKEN`。只有 READY 注册工具和打开终端；安装失败进入 BROKEN，READY 的 Rootfs 缺失可回到 DISABLED。启动时残留 INSTALLING 一律转为 BROKEN 并保留原文件，允许重新安装；旧 root 仍有效不能证明被中断的安装已成功发布，也不能使界面永久停留在安装中。
 
 删除 Workspace 时先把 Room 状态持久化为 `BROKEN`，再将磁盘目录移到 Manager-owned 暂存位置并写入删除 journal；Settings 成功清理所有 Assistant 的 `workspaceId` 引用后才标记并删除暂存树，最后由 `WorkspaceDAO.deleteById` 确认删除 Room 实体。Settings 拒绝或删除尚未开始时中断，完整性检查按 journal 恢复目录、原引用和原 shell 状态。标记物理删除后，递归删除失败或中断都不能假定目录完整：journal 与 `BROKEN` 状态保留，后续删除继续清理，只有树已不存在且 DAO 确认删到一行才清 journal。失败时保留 durable identity 供幂等重试。删除或状态变化后，下一次工具装配不会继续暴露旧 Workspace。
 
-## 10. 维护与验证
-
-修改 Workspace 时应覆盖：
-
-- 路径逃逸、bind mount 优先级与内核文件系统限制；
-- 真实工具注册名、审批覆盖、安全写根、结果 schema 与文本替换；
-- 命令参数、环境、超时、输出排空与中断；
-- Rootfs 归档逃逸、链接、取消与幂等修补；
-- 真实设备上的匹配架构 Rootfs、Android 14+ shell、交互终端和取消清理。
-
-PRoot 的 hash/ELF 静态契约不等同于设备验收。各支持 ABI 仍需在匹配 Rootfs 的真实 Android 环境验证 cwd、
-文件操作、挂载、DNS/netlink、SysV shared memory、超时/取消、长输出和双 PTY；覆盖完成前必须明确标记为设备待验证。
-
-PRoot 兼容参数（`-k` kernel spoof、seccomp 策略、环境变量与 flags）的唯一 owner 是 `ProotLaunchSpec`；
-两个入口只把它交给各自的进程 adapter（`ProcessBuilder` 与 Termux PTY）。调整兼容参数只需修改并验证
-`ProotLaunchSpec`；调整业务挂载时按 `ProotLaunchSpec.appBindMounts` 的暴露边界评估。
-
-### 文件导出与编辑草稿
-
-`WorkspaceApplicationService.exportFiles` 接收固定的 workspaceId、area 和相对路径集合，逐项创建 SAF document，记录 provider 返回的 URI 与实际名称；不查找覆盖同名外部文件，不持久化树授权。源 stat 与复制使用原 per-workspace gate，外部 provider 的 create/open/close/delete 在 gate 外，避免目标也是本应用 DocumentsProvider 时回入同一 gate。源在复制开始时重新校验，不承诺选择时的内容快照。
-
-`WorkspaceManager.exportFile` 复用 `WorkspaceDirectoryHandle.open` 的逐层 NOFOLLOW 与 regular-file 校验，关闭输入描述符，借用输出流；因此普通导出、Linux 文本预览、图片读取和消息文件分享都拒绝源路径中的符号链接。Repository 用 `runInterruptible` 调度复制，循环按块检查中断；任意外部 provider 的阻塞 IO 不保证即时结束。
-
-批量结果只有在输出 close 成功后才记为成功。取消停止后续项，保留已完成文档，只清理本项取得且未完成的 document；清理失败作为 suppressed 保留。单文件/分享由打开方关闭输出并展示原诊断。选择与 picker 请求保存在内存；重建后缺少原请求身份的回调被拒绝。运行中的批量任务由 WorkspaceDetailVM 持有，旋转可继续观察结果，离开其生命周期取消。
-
-`WorkspaceDetailPage` 的基本与文件页复用原 Pager，底部使用 48dp 文本标签栏并保留系统导航安全区。文件页复用紧凑 `FileRow`，在页面路径下显示名称、大小与本地化修改时间，不逐项重复完整路径；宽屏将存储区切换与路径并排，大字体与窄屏上下排列。多选导出、取消、刷新和终端使用有名称的图标按钮；离开文件标签清除选择，已捕获的 SAF 导出请求不借用新选择。恢复前台时 `LifecycleEventEffect(ON_RESUME)` 通过原 `WorkspaceDetailVM.refresh` 重新读取当前存储区与目录，更新从编辑器或外部应用返回后的文件大小和修改时间。
-
-WorkspaceFileEditorPage 的正文使用以 id/area/path 为键的普通 FileEditorState，通过共享 FileTextEditor 展示。FileEditorState 与原生 EditText 共用一个 Editable；页面使用 fillViewport 占用可用高度，正文在有限视口内滚动。保存仍调用 WorkspaceApplicationService.writeText，成功提交后更新原正文基线；未保存时顶部返回和系统返回均需确认，保存期间禁止退出。失败保留正文与可复制诊断，取消在 finally 恢复操作状态。编辑与只读预览的正文不套用表单边框，矮窗口和键盘显示期间标题栏收拢至 48dp。未保存正文不进入 Activity Bundle，也没有 durable draft；Activity 重建或进程恢复后重新读取已发布文件。输入法查询边界见 [UI 架构](ui-architecture.md) 的文件编辑正文生命周期。
-
-## 11. 企业远程文件
+## 10. 企业远程文件
 
 远程文件不属于本地 Workspace、Assistant.workspaceId 或 PRoot。`RemoteWorkspaceService` 拥有客户端请求、
 临时管理会话和未交付副本；远端文件事实仍由 Core/Agent Space 管理。`PlatformWorkspaceClient` 通过原
@@ -328,35 +305,25 @@ FileProvider 保留原展示名；Intent 使用 URI 实际 MIME，避免真实�
 `WorkspaceFileRules.relativeImage` 只在 Markdown URL 边界严格解码一次百分编码，支持编码的空格和中文，
 保持字面加号；非法转义、非法 UTF-8、编码路径别名及越根引用仍拒绝。HTTP 调用始终传逻辑路径，由 URL builder 编码。
 
-### 文件管理呈现
+### 文件管理与预览
 
-远程列表复用 `FileRow` 的紧凑样式；长名称最多两行，修改时间按设备语言和时区显示，详情保留完整时间。
-可用宽度至少 600dp 且字体比例小于 1.3 时，名称、修改时间、大小按列对齐，行高至少 48dp；
-选择态保留菜单占位，使列位置稳定，宽屏缺失字段显示横线。窄屏或大字体将实际存在的元信息放在名称下，行高至少 64dp。
-路径、筛选入口与新增入口共用一行；筛选按需在标题栏输入，避免矮横屏被键盘盖住，收起键盘后保留结果。
-筛选仅作用于当前目录；跳转目录清除筛选。
-长按选择后标题显示数量，批量下载使用标题栏图标，其余批量动作由菜单提供，返回先退出选择模式。
-名称校验在提交前沿 `WorkspaceFileRules.child` 执行；非法名称及另存同源名称的预期拒绝留在原对话框，
-保留输入、可行动说明与可展开原诊断，不发远程写入或污染全页失败状态；其他异常仍报告完整诊断。
-批次结束或取消时先清空旧目录再开放动作，保留结果、待核实记录和编辑草稿；只有未取消且原句柄仍在使用时刷新。
-刷新沿原选择与句柄复验权限，新目录发布后仅保留仍存在的选择，空选择不能触发批量动作。
-目录选择不能选择源位置、源目录自身或内部；源目录不出现在可进入的目标列表中。
-名称弹窗随可用高度调整：正常高度按标题、输入、动作排列，矮窗口把输入与动作放在同一行。
-布局切换保留同一输入框及焦点；确认仍显式提交，输入法完成只收起键盘。校验失败保留名称和可滚动诊断。
-删除、停止与重新读取使用短标题，完整说明和名称放在可滚动正文中，保持短屏动作可达。
+列表复用 `FileRow`，窄屏与大字体保留必要元信息，宽屏按列对齐；筛选只作用于当前目录，切目录时清除。长按进入多选，返回先退出选择。批次进度由实际循环的 `activeIndex/batchSize` 和当前目标发布，只在已知长度时显示传输比例，字节传完仍等待远端结果。完成后提供汇总及逐项诊断，UNKNOWN 保留读取核验入口；新批次或清除已知结果不能删除未核实路径。
 
-列表摘要显示当前可见项目数量，以及目录响应提供的可选 `usedBytes`、`availableBytes`。
-它们是 DAV 对当前目录报告的容量，缺失时省略；不从文件大小求和、计算企业总配额或假设缺失为零。
-Core 的 CPU、内存、VM 状态采样与配置磁盘容量仅在 Admin 资源接口提供，Android 客户端不调用该接口。
+`WorkspaceFileRules.child` 在提交前校验名称。非法名称和另存同源的预期拒绝保留原对话框、输入和可展开诊断，不发远程写入；其他异常保留完整诊断。目录目标不能是源位置、源目录自身或其内部。批次结束或取消先清空旧目录再开放动作，同时保留结果、待核实记录和编辑草稿；仅未取消且原句柄仍有效时刷新。新目录发布后只保留仍存在的选择，空选择不执行批量操作。
 
-批次进度的 `activeIndex`、`batchSize` 由实际执行循环发布，配合当前目标与文件数量展示；已知传输长度才显示比例，
-字节结束后仍等待远端结果。完成后列表只保留汇总，操作结果对话框保留逐项状态、诊断和 UNKNOWN 读取核验。
-开始新批次保留原 handle 中尚未核实的结果；清除已知结果不能删除 UNKNOWN，核实成功后才移除对应路径。
-预览与编辑的主要动作位于标题栏，编辑与保存使用具有完整操作名称和长按提示的图标，另存及重新读取在菜单中。
-文本正文使用无边框的全页视口；矮窗口或键盘出现时标题栏收拢为 48dp。不支持预览的文件展示元信息、下载和外部打开。
-读取失败保留诊断和显式刷新，不显示为不支持格式；状态查询失败导致准入拒绝时，诊断包含原查询错误。
-图片信息沿原 `ImageSource` 授权读取，读取错误保留日志、可复制诊断与重试，不以空字段代替失败。
-图片控制使用深色背景保持亮图上的对比度，信息面板在宽屏限制宽度。PDF 支持逐页缩放和平移，
-翻页使用带上一页/下一页语义的图标，首尾按钮禁用；普通窗口使用 48dp 底部页控，矮宽窗口使用侧边页控。
-翻页重建缩放状态并释放旧 bitmap；加载失败释放本次副本，显示原始诊断及刷新。刷新先复验原状态和句柄再重新读取，
-不自动重复写入；缩放不提高渲染分辨率或资源上限。
+列表摘要显示可见项目数，以及目录响应提供的可选 `usedBytes/availableBytes`。它们是 DAV 对当前目录报告的容量，缺失时省略；不从文件大小求和或推算企业总配额。Android 不调用 Core Admin 的资源采样接口。
+
+预览与编辑使用共享文件正文组件，布局和动作可达性见 [UI 架构](ui-architecture.md)。不支持格式时显示元信息、下载和外部打开；读取失败显示原诊断与刷新，不能冒充格式不支持。图片信息沿原 `ImageSource` 授权，失败可重试；PDF 逐页缩放/平移，翻页释放旧 bitmap 并重建缩放状态，首尾禁用对应动作。加载失败回收本次副本，刷新复验原状态与句柄；缩放不提高渲染分辨率或资源上限。
+
+## 11. 维护与验证
+
+修改 Workspace 时应覆盖：
+
+- 路径逃逸、bind mount 优先级与内核文件系统限制；
+- 真实工具注册名、审批覆盖、安全写根、结果 schema 与文本替换；
+- 命令参数、环境、超时、输出排空与中断；
+- Rootfs 归档逃逸、链接、取消与幂等修补；
+- 真实设备上的匹配架构 Rootfs、Android 14+ shell、交互终端和取消清理。
+
+PRoot 的 hash/ELF 静态契约不等同于设备验收。各支持 ABI 仍需在匹配 Rootfs 的真实 Android 环境验证 cwd、
+文件操作、挂载、DNS/netlink、SysV shared memory、超时/取消、长输出和双 PTY；覆盖完成前必须明确标记为设备待验证。

@@ -2,7 +2,7 @@
 
 本文档描述当前代码支持的线协议、统一消息模型、不透明状态回放和 endpoint/model 适配边界。在线模型能力不由本文保证；Adapter 的能力声明与请求编码以当前实现为准。
 
-## 1. 协议拓扑
+## 协议拓扑
 
 项目有三类 Provider 配置和四种线协议：
 
@@ -24,7 +24,9 @@ ProviderSetting
 
 Provider 类型决定原生协议族，`useResponseApi` 只选择 OpenAI 子协议，host 只选择已证实的 endpoint 差异，modelId 只决定模型能力和参数约束。未知 OpenAI-compatible host 不会因为模型名称被重新解释为某个供应商。
 
-### 请求级认证
+## 共用请求边界
+
+### 传输与认证
 
 四条文本协议的流式请求装配（包括文件编码）在 `Dispatchers.IO` 执行，`flowOn` 不改变下游收集上下文；非流式请求也在 IO 装配和读取。装配结束、创建 EventSource 之前复验协程仍 active，避免编码期间已取消的请求继续启动 HTTP。SSE 与 `readResponse` 继续拥有取消和关闭，无第二请求循环。
 
@@ -34,15 +36,43 @@ OpenAI 的 `chatCompletionsPath` 与 `responsesPath` 分别配置两种协议的
 
 `TextGenerationParams`、`ImageGenerationParams` 与 `ImageEditParams` 的 `credentials` 是不参与序列化的 `RequestCredentials`。`UserSettings` 继续使用原 Provider 的 KeyRoulette；`Fixed` 使用单次请求的原始凭据，不按空白或逗号拆分，不访问轮换缓存。未提供固定 credential 时由私有 headers 提供认证；若同时出现自动认证同名 header 则在发请求前拒绝。四种文本协议及个人 OpenAI 图片生成/编辑共用该认证选择；企业图片不制造持久化 ProviderSetting，而由 `ManagedImageGenerationProvider` 按冻结 protocol 构造唯一 typed wire。
 
-`Routed` 表示平台 Relay 的完整 HTTP/HTTPS endpoint 与单请求 Bearer。`ModelExecutionService` 从冻结的 Platform execution、资源 ID 和 runtimePath 装配 URL，Google 流式额外保留 `alt=sse`，四种现有文本编码器和企业图片 typed client 直接使用此 URL，不再次拼接供应商后缀，也不读取用户 KeyRoulette。generation 与 interaction headers 由原捕获上下文提供，刷新只替换认证，不改变路径、模型或代际。`OPENAI_IMAGES_GENERATIONS` 发送顶层 `model/prompt/n/size`；`DASHSCOPE_MULTIMODAL_GENERATION` 发送 `model/input.messages/parameters`，把冻结 canonical `宽x高` 只在 wire builder 转为 `宽*高`，并固定 `watermark=false`。两者的 URL 结果都只允许安全 HTTPS 公网目标，每跳重验并固定 DNS，不携带 Relay Bearer/Cookie，按图片上限有界读取且校验 MIME 与签名。平台辅助文本生成复用流式编码器、`StepOutputAccumulator` 和 `RequestUsageReducer`，返回聚合结果，不建立第二持久会话。
+### 企业路由与私有请求
+
+`Routed` 表示平台 Relay 的完整 HTTP/HTTPS endpoint 与单请求 Bearer。`ModelExecutionService` 从冻结的 Platform execution、资源 ID 和 runtimePath 装配 URL，Google 流式额外保留 `alt=sse`，四种现有文本编码器和企业图片 typed client 直接使用此 URL，不再次拼接供应商后缀，也不读取用户 KeyRoulette。generation 与 interaction headers 由原捕获上下文提供，刷新只替换认证，不改变路径、模型或代际。
+
+`OPENAI_IMAGES_GENERATIONS` 发送顶层 `model/prompt/n/size`；`DASHSCOPE_MULTIMODAL_GENERATION` 发送 `model/input.messages/parameters`，把冻结 canonical `宽x高` 只在 wire builder 转为 `宽*高`，并固定 `watermark=false`。两者的 URL 结果都只允许安全 HTTPS 公网目标，每跳重验并固定 DNS，不携带 Relay Bearer/Cookie，按图片上限有界读取且校验 MIME 与签名。
+
+平台辅助文本生成复用流式编码器、`StepOutputAccumulator` 和 `RequestUsageReducer`，返回聚合结果，不建立第二持久会话。
 
 Routed 请求带 `PrivateRequest`，禁止重定向、自动认证和透明重放，body 上限 10 MiB；非成功响应保留状态与脱敏后的原始 detail。只有 status=428 且 body 严格满足 `managed_snapshot_required`、forwarded=false、正 target generation 和合法 requestId 时，才触发原 interaction 停止及资源清理，并提示用户显式同步配置；不自动同步或重发业务请求。
 
 Fixed 请求带 `PrivateRequest` 网络标记，宿主日志入口不记录其 HTTP 内容，`PrivateRequestBoundaryInterceptor` 在实际重定向边界拒绝跨 origin 转发。Responses 的 `instructions` 与 model/input/tools 一样归协议装配 owner，custom body 不能覆盖已组装系统提示。
 
+### 日志与响应关闭
+
 `ClaudeProvider` 不记录请求 body、逐条 messages、SSE data 或错误响应 body；OpenAI Chat/Responses 与 Google 流式回调也不把异常 message/原始响应记录到 Log，Google 不记录引用元数据。企业 Routed 和私有 Fixed 请求因此不会通过 Provider 自身的日志绕过 `PrivateRequest` 的网络日志边界。错误仍按原解析结果和 cause 传给调用方，日志仅记录异常类型及 HTTP 状态。
 
 非流式文本、图片生成/编辑及结果下载、模型目录、余额和 embedding 的完整响应读取统一使用 `Call.readResponse`，由同一调用持有 HTTP Call 到响应体消费并关闭为止。取消等待响应头或阻塞读取成功/错误响应体都会取消原 Call；退出不依赖网络读取超时才结束。流式请求继续由各协议的 EventSource 生命周期负责取消。
+
+### customBody 所有权
+
+请求体的结构性字段只有 Provider builder 一个 owner。`customBody` 只提供高级扩展参数，不拥有结构性协议字段。
+各 builder 声明自身保留字段集合（`RequestBodyOwnership`），`mergeCustomBody()` 必须接收 ownership 契约。
+
+| 请求线 | builder-owned 保留字段 |
+|---|---|
+| OpenAI Chat Completions | `model`, `messages`, `tools`, `stream`, `stream_options`, `session_id` |
+| OpenAI Responses | `model`, `instructions`, `input`, `tools`, `stream`, `store`, `include`, `previous_response_id`, `session_id` |
+| Anthropic Messages | `model`, `messages`, `system`, `tools`, `stream` |
+| Gemini Generate Content | `contents`, `systemInstruction`, `tools`；另保留会改变响应形状的 `generationConfig.candidateCount`、`generationConfig.responseModalities`、`toolConfig.functionCallingConfig.streamFunctionCallArguments` |
+
+发生冲突时在 HTTP 前抛出 typed 本地异常（`CustomBodyReservedKeyException`），stable reason 为 `custom_body_reserved_key`。
+custom body 可以递归合并 builder object 的非保留 leaf，但不能用 scalar/array 替换 builder 已建立的 object shape；
+这种 shape replacement 同样作为本地 ownership 冲突报告。
+允许 custom body 继续配置的典型字段：`temperature`、`top_p`、token 上限、`reasoning_effort`、`thinking`、
+`response_format`、`tool_choice`、`parallel_tool_calls`、路由/缓存/实验开关等 Provider 扩展字段。
+Assistant 级 custom body 可随默认模型和 Provider override 切换协议，因此 UI 不维护跨协议保留键并集；
+实际请求 builder 按当前协议 ownership 做唯一权威校验，避免把另一个协议的合法扩展误报为错误。
 
 ### 工具 JSON Schema 边界
 
@@ -58,7 +88,7 @@ OpenAI-compatible 端点要求 function tool 的 `parameters` 至少是 object s
 
 流结束必须有协议完成证据。Chat 必须有真实 `finish_reason`；Claude 必须有 `message_stop` 和 `stop_reason`；Google 必须有候选的 `finishReason`；Responses 必须有 typed terminal event 或支持的 `[DONE]`。EOF 不能当作成功，已接收内容保留并以 INCOMPLETE 结束。token 上限类终态同样不执行未完成响应里的工具。真实 finish reason 进入 StepModelResult，不能用合成的 `unknown` 或 null 覆盖。
 
-## 2. 统一消息模型
+## 统一消息模型
 
 `UIMessage` 是协议无关的持久化中间表示：
 
@@ -119,7 +149,7 @@ Disclosure Snapshot 由共有 planner 在接纳位置投影：START 的初始内
 
 不透明状态不能从可见 Text/Reasoning 无损重建，也不能跨来源随意复用。metadata 字段保持可空并向后兼容旧会话；更新工具 metadata 时必须 merge，不能覆盖 Provider 状态。
 
-## 3. OpenAI endpoint 身份
+## OpenAI endpoint 身份
 
 `OpenAIEndpointProfile.kt` 是 host 到内部 endpoint 身份的唯一来源。已识别 host 用于选择经验证的参数或 wire 差异；其他 host 为 `COMPATIBLE`。
 
@@ -144,7 +174,7 @@ OpenAI Images 使用 `error.code`（如 `moderation_blocked`、`content_policy_v
 xAI Imagine 使用相同信封或顶层 `code`/`message`，并可能在 200 响应里用 `respect_moderation=false` 标记审核未通过。
 分类与工具回传见 [`turn-step-execution.md`](turn-step-execution.md) 与 [`prompts-and-tools.md`](prompts-and-tools.md)。
 
-## 4. Chat Completions
+## Chat Completions
 
 `ChatCompletionsAPI` 负责：
 
@@ -155,26 +185,6 @@ xAI Imagine 使用相同信封或顶层 `code`/`message`，并可能在 200 响�
 - endpoint/model 特定的 reasoning、temperature、token limit 和 stream 参数；
 - `ChatReasoningReplayPolicy` 的唯一解析与消费（`resolveChatReasoningReplayPolicy()`）。
 
-### customBody 所有权
-
-请求体的结构性字段只有 Provider builder 一个 owner。`customBody` 只提供高级扩展参数，不拥有结构性协议字段。
-各 builder 声明自身保留字段集合（`RequestBodyOwnership`），`mergeCustomBody()` 必须接收 ownership 契约。
-
-| 请求线 | builder-owned 保留字段 |
-|---|---|
-| OpenAI Chat Completions | `model`, `messages`, `tools`, `stream`, `stream_options`, `session_id` |
-| OpenAI Responses | `model`, `instructions`, `input`, `tools`, `stream`, `store`, `include`, `previous_response_id`, `session_id` |
-| Anthropic Messages | `model`, `messages`, `system`, `tools`, `stream` |
-| Gemini Generate Content | `contents`, `systemInstruction`, `tools`；另保留会改变响应形状的 `generationConfig.candidateCount`、`generationConfig.responseModalities`、`toolConfig.functionCallingConfig.streamFunctionCallArguments` |
-
-发生冲突时在 HTTP 前抛出 typed 本地异常（`CustomBodyReservedKeyException`），stable reason 为 `custom_body_reserved_key`。
-custom body 可以递归合并 builder object 的非保留 leaf，但不能用 scalar/array 替换 builder 已建立的 object shape；
-这种 shape replacement 同样作为本地 ownership 冲突报告。
-允许 custom body 继续配置的典型字段：`temperature`、`top_p`、token 上限、`reasoning_effort`、`thinking`、
-`response_format`、`tool_choice`、`parallel_tool_calls`、路由/缓存/实验开关等 Provider 扩展字段。
-Assistant 级 custom body 可随默认模型和 Provider override 切换协议，因此 UI 不维护跨协议保留键并集；
-实际请求 builder 按当前协议 ownership 做唯一权威校验，避免把另一个协议的合法扩展误报为错误。
-
 ### System role 与 token limit
 
 官方 OpenAI reasoning 模型需要 developer role 时由 `useDeveloperRoleForSystemMessages` 决定；兼容服务默认保持 system role。官方 endpoint 使用 `max_completion_tokens`，兼容服务仍使用 `max_tokens`。
@@ -183,7 +193,7 @@ Assistant 级 custom body 可随默认模型和 Provider override 切换协议�
 
 项目级 `ReasoningLevel` 是统一 UI 枚举，不代表所有模型接受相同字符串。官方 OpenAI 变体由 `mapOfficialOpenAIReasoningEffort()` 映射；AUTO 省略参数，让 endpoint 使用默认值。
 
-DeepSeek 直连的 Chat Completions 还发送 `thinking.type`：OFF 为 `disabled`，其他级别为 `enabled`。effort 以官方 Thinking Mode 文档为准：请求字段接受 `low` / `high` / `max`，兼容别名 `medium → high`、`xhigh → high`。
+DeepSeek 直连的 Chat Completions 还发送 `thinking.type`：OFF 为 `disabled`，其他级别为 `enabled`。当前 Adapter 的 effort 映射如下，供应商协议入口见文末。
 
 | 项目级别 | Chat `reasoning_effort` |
 |----------|-------------------------|
@@ -192,7 +202,7 @@ DeepSeek 直连的 Chat Completions 还发送 `thinking.type`：OFF 为 `disable
 | MEDIUM / HIGH / XHIGH | `high` |
 | MAX | `max` |
 
-XHIGH 保持文档别名 `high`，只有独立的 MAX 级别才发送 `max`。官方 OpenAI 不接受 `max`，因此 `mapOfficialOpenAIReasoningEffort()` 把 MAX 落到该模型支持的最高档（`high` 或 `xhigh`）。
+DeepSeek 的 XHIGH 映射为 `high`，只有独立 MAX 才发送 `max`。OpenAI 的 `mapOfficialOpenAIReasoningEffort()` 则把 MAX 映射为注册模型对应的 `high` 或 `xhigh`；两种 wire 映射不能混用。
 
 兼容网关可能把 `choices`、`delta`、`message` 或 `tool_calls` 显式写成 JSON `null`。Chat Completions 流式解析必须用 `jsonArrayOrNull` / `jsonObjectOrNull`，不能对 `JsonNull` 强制取数组或对象，否则会中断整轮生成。`tool_calls` 数组里的空槽、`function: null`，以及 Mistral thinking 的非对象首元素，同样按空值跳过，不能强制 `jsonObject`。
 
@@ -202,7 +212,7 @@ OpenRouter 直连 host（`openrouter.ai`）若返回结构化 `reasoning_details
 
 Chat 的 `role=tool` 结果只写 `tool_call_id` 和内容，不写 `name`；assistant 的 `tool_calls[].function.name` 继续保留。
 
-DashScope 直连 `dashscope.aliyuncs.com` 的已确认型号 `qwen3.8-max`、`qwen3.8-max-0902`、`qwen3.8-flash`、`qwen3.8-2.4t-a95b`、`qwen3.8-27b`、`qwen3.8-omni-flash` 使用 `reasoning_effort`：AUTO 省略，OFF 为 `none`，LOW/MEDIUM 为 `low`/`medium`，HIGH/XHIGH/MAX 为 `xhigh`。自动字段仍由模型 `REASONING` 能力控制。其他 DashScope 型号保留 `enable_thinking` / `thinking_budget`（AUTO 只写前者）。custom body 仍最后合并；上述精确分支最终同时含 `reasoning_effort` 与 `thinking_budget` 时报告 `dashscope_reasoning_parameter_conflict`，不静默删改用户字段。其他 host、企业平台 origin 和未知网关不因 Qwen 模型名继承该协议；兼容端点 OFF 仍使用既有 `low` 映射。
+DashScope 直连仅对 `usesDashScopeQwen38Effort` 精确登记的型号使用 `reasoning_effort`：AUTO 省略，OFF 为 `none`，LOW/MEDIUM 为 `low`/`medium`，HIGH/XHIGH/MAX 为 `xhigh`。自动字段仍由模型 `REASONING` 能力控制。其他 DashScope 型号保留 `enable_thinking` / `thinking_budget`（AUTO 只写前者）。custom body 仍最后合并；上述精确分支最终同时含 `reasoning_effort` 与 `thinking_budget` 时报告 `dashscope_reasoning_parameter_conflict`，不静默删改用户字段。其他 host、企业平台 origin 和未知网关不因 Qwen 模型名继承该协议；兼容端点 OFF 仍使用既有 `low` 映射。
 
 Chat Completions 的 `ChatReasoningReplayPolicy` 由 `resolveChatReasoningReplayPolicy()` 统一解析。
 策略有三个正交维度：`VisibleReasoningReplay` 控制可见 `reasoning_content`，`OpaqueReasoningReplay` 控制
@@ -248,9 +258,9 @@ OpenRouter `reasoning_details` 继续 source-isolated：存在 details 时不降
 
 ### OpenRouter session_id
 
-`TextGenerationParams.providerSessionId` 是 request-scoped 的 nullable typed 字段，不进入 Settings、Conversation、Room 或 backup。用户会话使用自身 conversation UUID，子助手使用 child conversation UUID；同一 turn 的多 step 与 `CONTINUE_USER_INTERACTION` 复用同一个值，fork 因新 conversation UUID 自然隔离。只有 `OpenAIEndpointVendor.OPENROUTER` 的 Chat Completions 和 Responses builder 把非空、长度不超过 256 的值写为顶层 `session_id`。标题生成、建议问题、附件检查、Provider 连接测试等无 conversation owner 的后台调用传 null。
+`TextGenerationParams.providerSessionId` 是 request-scoped 的 nullable typed 字段，不进入 Settings、Conversation、Room 或 backup。用户会话使用自身 conversation UUID，子助手使用 child conversation UUID；同一 turn 的多 step 与 `CONTINUE_USER_INTERACTION` 复用同一个值，fork 因新 conversation UUID 自然隔离。只有 `OpenAIEndpointVendor.OPENROUTER` 的 Chat Completions 和 Responses builder 把非空、长度不超过 256 的值写为顶层 `session_id`。标题、建议、附件检查和 Provider 连接测试等辅助请求不传该字段；这不改变标题/建议任务本身的原会话归属。
 
-## 5. Responses API
+## Responses API
 
 `ResponseAPI` 始终使用本地无状态完整历史回放，不使用 `previous_response_id`。默认端点显式发送 `store=false`；MiMo 不支持该字段，因此省略 `store`，但仍发送完整历史并保持同一无状态语义。这样 Provider 切换、持久化与离线恢复不依赖服务端会话。
 
@@ -310,7 +320,7 @@ DeepSeek profile 不请求 OpenAI summary 或 encrypted content，并使用 `rea
 
 OpenAI / 兼容 / Ark 路径重建 reasoning item 时：若 part 带有同源 `encrypted_content`，只回传 `id` 和加密状态，不附带可见 `summary` 明文。DeepSeek 的 `reasoning_text` 路径不受影响。
 
-## 6. Anthropic Messages
+## Anthropic Messages
 
 `ClaudeProvider` 把 System 放在顶层 `system`，把 assistant 内容表示为 `text`、`thinking`、`redacted_thinking` 和 `tool_use` blocks；工具结果放入 user `tool_result` blocks。
 
@@ -318,16 +328,16 @@ OpenAI / 兼容 / Ark 路径重建 reasoning item 时：若 part 带有同源 `e
 
 Claude thinking 不是一个可对所有历史模型统一发送的结构：
 
-| 模型组 | AUTO | LOW～XHIGH | OFF |
+| 模型组 | AUTO | 显式强度 | OFF |
 |--------|------|------------|-----|
 | `ModelRegistry.CLAUDE_ADAPTIVE_THINKING` | `thinking.type=adaptive` | adaptive + `output_config.effort` | `disabled` |
 | 较早的 reasoning 模型 | 省略 thinking | `enabled + budget_tokens` | `disabled` |
 
-当前 adaptive 组覆盖已注册的 Claude 4.6 及更新型号。项目级 XHIGH 在支持该值的 Opus 4.7/4.8
-发送 `xhigh`，在 4.6 映射为该型号支持的 `max`。手动 thinking 的 budget 至少为协议下限且必须
-小于 `max_tokens`；过小的显式 `maxTokens` 会在请求构建时失败，而不是发送无效参数。
-Opus 4.5 同时发送受支持的 effort 与 manual budget，其他旧型号只使用 budget。Claude 3.5 只注册
-TOOL 能力，不发送 thinking。
+`buildClaudeThinkingFields` 使用注册模型组选择形状：adaptive 模式下 MAX 为 `max`；XHIGH 仅对
+`CLAUDE_XHIGH_EFFORT` 发送 `xhigh`，其他 adaptive 型号映射为 `max`。启用 thinking 时设置 `display=summarized`。
+手动 budget 至少为协议下限且必须小于 `max_tokens`，过小的显式上限在构建时拒绝。
+`CLAUDE_MANUAL_THINKING_WITH_EFFORT` 额外发送 effort，XHIGH/MAX 映射为 `high`；其余手动模型只使用 budget。
+模型未声明 REASONING 时不发送 thinking。具体型号由 `ModelRegistry` 及兼容测试维护。
 
 当 thinking 实际启用时不发送 temperature；legacy AUTO 因为省略 thinking，可以正常发送 temperature。
 
@@ -342,7 +352,7 @@ TOOL 能力，不发送 thinking。
 
 开启 `promptCaching` 时，Provider 同时支持顶层 automatic `cache_control` 和显式 block 断点：最后一个 System block、最后一个 Tool，以及倒数第二条可缓存 user message。TTL 由 `ClaudePromptCacheTtl` 选择。
 
-## 7. Google Gemini
+## Google Gemini
 
 `GoogleProvider` 使用 `systemInstruction`、`contents[].parts`、`functionCall` 和 `functionResponse`。认证支持 AI Studio API key、Vertex API key 与 Service Account OAuth。
 `buildContents` 在编完 `contents` 后合并相邻同 `role` 的项（`parts` 按序拼接）。这是 Gemini 要求 `user` / `model`
@@ -354,9 +364,8 @@ TOOL 能力，不发送 thinking。
 
 - Gemini 2.5 使用 `thinkingBudget`；Pro 型号不能保证完全关闭时不会强行发送 `0`。MAX 的 32000 预算在 Flash/Flash-Lite 上钳到 24576，Pro 钳到 32768。
 - `ModelRegistry.GEMINI_3_SERIES` 使用 `thinkingLevel`，项目 XHIGH / MAX 收敛为 HIGH。
-- `GEMINI_3_NO_MINIMAL_THINKING`（3.1 Pro 全形态 + 3.7 Flash）不支持 `minimal`（官方 API 校验错误，
-  无法停用思考），`ReasoningLevel.OFF` 降级为 `low`。`GEMINI_3_PRO` 通过 `notTokens("1")` 排除
-  3.1 Pro 的 subsequence 宽匹配，版本号优先由 `GEMINI_3_1_PRO` 独立接管。
+- `GEMINI_3_NO_MINIMAL_THINKING` 组的 OFF 映射为 `low`，其他已登记 Gemini 3 型号映射为 `minimal`。
+  分组和相邻版本匹配由 `ModelRegistry` 维护，不在 serializer 复制型号名单。
 - `GoogleThoughtMetadata` 在 Text、Reasoning、Image 和 FunctionCall 等 Part 上保留 `thoughtSignature`，并绑定
   产生它的 model ID 与 transport + 实际请求 endpoint host source profile；Vertex 使用
   实际固定的 `aiplatform.googleapis.com`。旧的无来源 opaque state
@@ -370,9 +379,6 @@ TOOL 能力，不发送 thinking。
 所有 SYSTEM 文本按消息和 Part 顺序用换行合入一个 text-only `systemInstruction`，包括图片输出模型。
 函数声明与模型内置工具合并到同一个 `tools` 数组。Schema 清理只移除当前适配明确不使用的兼容字段，保留
 Gemini 支持的 `enum`。grounding metadata 转为 `UIMessageAnnotation.UrlCitation`。
-
-公共 `RequestMediaCapabilities` 当前只声明原生图片容器；Google 的 Audio/Video 因此只保留附件引用文本，
-不由 Provider 私自 base64 发送或硬编码 MIME。恢复原生音视频前必须先扩展公共 capability 和真实 MIME owner。
 
 ### 响应终态与流关闭
 
@@ -391,16 +397,13 @@ Gemini 支持的 `enum`。grounding metadata 转为 `UIMessageAnnotation.UrlCita
 显式失败并只报告排序后的字段名，不写入原始 payload。当前客户端 function-call 增量仍只接受完整 `args` object；
 会启用 partial args、多候选或新输出模态的 custom body path 被 ownership 拒绝，直到对应 decoder 明确实现。
 
-### 未实现边界
+### 支持边界
 
-当前 thinking 参数由 `GoogleProvider` 与 `ModelRegistry` 的模型组选择，没有独立
-`GeminiThinkingProfile`。未知模型省略显式 thinking 控制。
+未知模型省略显式 thinking 控制。decoder 不支持 server-side tool、code execution、partial function args
+和未知 Part union，收到这些内容时明确失败。公共 `RequestMediaCapabilities` 只声明原生图片；
+音频、视频和文档由应用层附件投影处理，不由 Google adapter 私自编码媒体或猜测 MIME。
 
-当前 decoder 不支持 server-side tool、code execution、partial function args 和未知 Part union，
-这些输入失败关闭。公共 `RequestMediaCapabilities` 只声明原生图片；音频、视频和文档使用应用层附件
-投影，不由 Google adapter 建立私有媒体路径。
-
-## 8. ModelRegistry 的职责
+## ModelRegistry 的职责
 
 `ModelRegistry` 按 modelId 推断输入/输出模态、TOOL/REASONING 能力及已知模型组的请求参数差异。
 精确型号、家族和别名由注册表及相应测试维护；新增登记不自动改写用户已保存的模型配置。
@@ -409,33 +412,14 @@ Gemini 支持的 `enum`。grounding metadata 转为 `UIMessageAnnotation.UrlCita
 endpoint 选择或请求硬阻断条件。匹配测试必须覆盖相邻版本和别名，避免把 `gpt-5.10` 当作 `gpt-5.1`。
 请求媒体能力从 `Model.inputModalities` 派生，不在投影或 endpoint host 另建例外清单；图标匹配只影响显示。
 
-## 9. 协议保真原则
+## 维护与验证
 
-1. **保留完整顺序**：Reasoning、Text、并行 Tool、Tool Result 的相对顺序是协议数据。
-2. **不透明状态原样回放**：signature、encrypted content、raw output items 不做解释或拼接。
-3. **不跨来源复用**：wire format 和 source profile 都兼容时才回放原始 Responses items。
-4. **UI 投影不是协议真相**：可见 Text/Reasoning 可用于回退重建，但不能代替服务端原始状态。
-5. **host、model、provider 正交**：只在各自职责层做判断。
-6. **未知 endpoint 遵循所选兼容协议**：保持 compatible 默认，不猜供应商，也不否决显式 USER 图片能力。
-7. **失败必须可见**：协议终态缺失、签名错误或来源不兼容不得静默伪装成功。
+协议修改从 `OpenAIEndpointProfile.kt`、对应 Adapter 和 `ModelRegistry` 的现有职责进入；
+公共 role/part 转换由 `ProviderMessageUtils` 维护，消息和 metadata 位于 `ai/ui`。
+测试应覆盖完整顺序、工具槽身份、来源隔离、不完整终态与取消，不能只验证可见正文。
+Adapter fixture、设备与真实 endpoint 的证据分别记录，见[测试策略](testing-strategy.md)。
 
-Adapter / serializer 的测试分层与设备、远端验证边界见
-[测试策略](testing-strategy.md)。
-
-## 10. 实现入口
-
-| 边界 | 文件 |
-| --- | --- |
-| OpenAI endpoint 身份 | `ai/src/main/java/me/rerere/ai/provider/providers/openai/OpenAIEndpointProfile.kt` |
-| Chat Completions / Responses wire | `ai/src/main/java/me/rerere/ai/provider/providers/openai/ChatCompletionsAPI.kt`、`ResponseAPI.kt` |
-| Provider adapter | `ai/src/main/java/me/rerere/ai/provider/providers/OpenAIProvider.kt`、`ClaudeProvider.kt`、`GoogleProvider.kt` |
-| 共用消息转换 | `ai/src/main/java/me/rerere/ai/provider/providers/ProviderMessageUtils.kt` |
-| 错误协议 | `ai/src/main/java/me/rerere/ai/util/ErrorParser.kt`、`ProviderFailure.kt` |
-| 模型能力注册 | `ai/src/main/java/me/rerere/ai/registry/ModelRegistry.kt` |
-| Canonical message / metadata | `ai/src/main/java/me/rerere/ai/ui/Message.kt`、`MessageMetadata.kt` |
-| 图片响应解析 | `ai/src/main/java/me/rerere/ai/provider/images/ImageGenerationResponseParser.kt` |
-
-## 11. 官方协议入口
+## 官方协议入口
 
 - [OpenAI Chat Completions API](https://platform.openai.com/docs/api-reference/chat)
 - [OpenAI Responses API](https://platform.openai.com/docs/api-reference/responses)
